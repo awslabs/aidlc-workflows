@@ -1544,6 +1544,11 @@ export function subgraphForScope(scope: string): GraphStage[] {
  *  overlap. Shared by `ars` (against the complete mechanical screen grid) and
  *  `validate-grid` (against the composer's proposal); only the latter is a
  *  front/report stock-match authority. */
+/** The stock scopes a code-findings report can run on (`validate-grid
+ *  --report`): the composer contract's report rule, bugfix, or security-patch
+ *  when a hotspot must deploy. */
+const REPORT_FIX_SCOPES: readonly string[] = ["bugfix", "security-patch"];
+
 export function nearestStockScopes(
   grid: Record<string, "EXECUTE" | "SKIP">
 ): Array<{ scope: string; diff: number; differs: string[] }> {
@@ -3511,7 +3516,7 @@ const COMMANDS: Record<string, Handler> = {
     process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
   },
   // validate-grid [--proposal <path>] [--strict] [--project-type <bg>]
-  // [--keywords <csv>] [--matched <stock> | --custom] - validate an ARBITRARY
+  // [--keywords <csv>] [--report] [--matched <stock> | --custom] - validate an ARBITRARY
   // {slug: EXECUTE|SKIP} grid
   // (the composer's proposal JSON; also accepts a { stages: {...} } wrapper
   // matching a scope-grid entry). Without --proposal it reads the file the
@@ -3592,6 +3597,20 @@ const COMMANDS: Record<string, Handler> = {
     const grid: Record<string, string> = {};
     for (const [slug, action] of Object.entries(gridRaw)) grid[slug] = String(action);
     const r = validateGrid(grid, { strict, projectType });
+    // A code-findings report is a fix: its stock match, and a custom plan's
+    // base, come only from the fix scopes, never from a lighter scope whose
+    // grid happens to sit nearer (express has no reviewers or plan approval).
+    const report = args.includes("--report");
+    const nearestAll = r.nearest_stock ?? [];
+    if (report) {
+      r.nearest_stock = nearestAll.filter((row) => REPORT_FIX_SCOPES.includes(row.scope));
+      if (matched !== undefined && !REPORT_FIX_SCOPES.includes(matched)) {
+        r.errors.push(
+          `A code-findings report runs on ${REPORT_FIX_SCOPES.join(" or ")}, so it cannot be matched to "${matched}". ` +
+            "Adopt the nearest of those, or propose it as custom.",
+        );
+      }
+    }
     if (kwRaw !== undefined) {
       const granted = kwRaw.split(",").map((k) => k.trim()).filter(Boolean);
       for (const err of keywordCollisions(granted)) r.errors.push(err);
@@ -3660,7 +3679,7 @@ const COMMANDS: Record<string, Handler> = {
         matched ?? null,
         { scopeSettings: obj.scopeSettings !== undefined, guardPolicy: ccRaw !== undefined },
         r.guard_policy ?? null,
-        r.nearest_stock ?? [],
+        nearestAll,
         r.scope_settings ?? null,
       );
       r.errors.push(...routeErrors);
@@ -3814,11 +3833,12 @@ Common forms:
   aidlc-graph cycles --scope <name>    Cycle check on scope sub-DAG
   aidlc-graph scope <name>             Stages on a scope's path
   aidlc-graph validate-scope <name>    Validate scope dependencies
-  aidlc-graph validate-grid [--proposal <path>] [--strict] [--project-type <t>] [--keywords <csv>] [--matched <stock> | --custom]
+  aidlc-graph validate-grid [--proposal <path>] [--strict] [--project-type <t>] [--keywords <csv>] [--report] [--matched <stock> | --custom]
                                        Validate an arbitrary EXECUTE/SKIP grid
                                        (no --proposal reads the proposalPath detect --json prints;
                                        --strict rejects a starved required input;
-                                       --keywords rejects keywords an existing scope claims)
+                                       --keywords rejects keywords an existing scope claims;
+                                       --report matches a code-findings report to bugfix or security-patch only)
   aidlc-graph ars --iae <s> --csu <s> --ve <s> --r <s> --ua <s> [--completed <csv>] [--project-type <t>]
                                        Deterministic ARS arithmetic: composite + bands,
                                        per-stage EV screen, nearest stock scopes, and the

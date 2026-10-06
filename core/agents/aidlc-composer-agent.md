@@ -565,6 +565,12 @@ harnesses' file tools cannot write outside the project. Then run:
 ```
 With no `--proposal`, the validator reads `proposalPath`, so every run checks
 the grid you last wrote there.
+On the Report branch, add `--report` to every run: `nearest_stock` then ranks
+only the fix scopes (`bugfix`, `security-patch`), a custom plan's `base_scope`
+comes from them, and `--matched` with any other scope is refused, so a
+code-findings report never lands on a lighter scope whose grid sits nearer.
+When the person names the scope for the report themselves, that is their
+call: run without `--report` and match the scope they named.
 When the dispatch selected a workflow explicitly, pass that same space and
 intent so Guard Policy validation reads that workflow's memory. For a
 front/report proposal, write the file as `{ "stages": <grid>, "scopeSettings":
