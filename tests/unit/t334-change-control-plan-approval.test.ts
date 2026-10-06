@@ -427,6 +427,9 @@ describe("t334 (6) F16: lowered fences allow post-approval content edits without
   for (const { mode, fence, lowered } of settings) {
     for (const member of ["plan", "test instructions", "Testing Contract"] as const) {
       const setting = `${mode}${fence ? ` with guard.plan-approval ${fence}` : ""}`;
+      // Guard Policy off records each pass and says nothing; relaxed and a
+      // person's own switch say it in one line.
+      const speaks = lowered && mode !== "off";
       test(`${setting} ${lowered ? "permits" : "blocks"} ${member} edits after a real approval`, () => {
         const project = createProject(mode, fence);
         const questions = presentPlan(project);
@@ -564,7 +567,8 @@ describe("t334 (6) F16: lowered fences allow post-approval content edits without
             `${guarded.stderr}\n${guarded.stdout}\n${hookDrops(project)}`,
           ).toBe(lowered ? 0 : 2);
           if (lowered) {
-            expect(guarded.stdout).toContain("Continuing past the plan-approval check");
+            if (speaks) expect(guarded.stdout).toContain("Continuing past the plan-approval check");
+            else expect(guarded.stdout).not.toContain("Continuing past");
             expect(guarded.stderr).not.toContain('"ask_type":"guard-recovery"');
             const rows = stoodAsideRows();
             expect(rows).toHaveLength(rowsBefore + 1);
@@ -603,7 +607,8 @@ describe("t334 (6) F16: lowered fences allow post-approval content edits without
           expect(handoff.stdout).toContain("## Current unit-test instructions");
           expect(handoff.stdout).not.toContain("## Approved plan");
           expect(handoff.stdout).not.toContain("## Approved unit-test instructions");
-          expect(handoff.stderr).toContain("Continuing past the plan-approval check");
+          if (speaks) expect(handoff.stderr).toContain("Continuing past the plan-approval check");
+          else expect(handoff.stderr).not.toContain("Continuing past");
           expect(stoodAsideRows()).toHaveLength(beforeBrief + 1);
           const row = stoodAsideRows()[beforeBrief];
           expect(auditBlockField(row.block, "Tool")).toBe("testing-posture brief");
@@ -627,8 +632,8 @@ describe("t334 (6) F16: lowered fences allow post-approval content edits without
           expect(started.code, started.stderr).toBe(0);
           expect(JSON.parse(started.stdout.trim().split("\n").pop() ?? "{}").status).toBe("generation");
           const notices = changeNotices(started.stdout);
-          expect(notices).toHaveLength(1);
-          expect(notices[0]).toContain("Continuing past the plan-approval check");
+          expect(notices).toHaveLength(speaks ? 1 : 0);
+          if (speaks) expect(notices[0]).toContain("Continuing past the plan-approval check");
           expect(stoodAsideRows()).toHaveLength(beforeBegin + 1);
           const row = stoodAsideRows()[beforeBegin];
           expect(auditBlockField(row.block, "Tool")).toBe("testing-posture begin");
@@ -851,13 +856,14 @@ describe("t334 F20 an unreadable source never reopens the approval, and with the
           expect(blockedBegin.code, `${blockedBegin.stdout}\n${blockedBegin.stderr}`).not.toBe(0);
           if (fault === "audit" && edited) {
             // The brief's stand-aside row is the lowered fence's own account,
-            // not approval evidence: the brief still hands over the edited plan
-            // and says the row was not recorded. The start above still refuses,
-            // because the source change it carries must be recorded.
+            // not approval evidence: the brief still hands over the edited plan.
+            // Under Guard Policy off it says nothing about the row; the doctor
+            // lists the miss. The start above still refuses, because the source
+            // change it carries must be recorded.
             const unrecordedBrief = brief(project);
             expect(unrecordedBrief.code, unrecordedBrief.stderr).toBe(0);
             expect(unrecordedBrief.stdout.split("\n")[0]).toBe("AIDLC-STAGE: code-generation");
-            expect(unrecordedBrief.stderr).toContain("Not recorded in the audit trail, which was busy or could not be written");
+            expect(unrecordedBrief.stderr).not.toContain("Continuing past");
           }
           for (const [tool, input] of [
             ["Write", { file_path: join(project, "src/base.ts"), content: "export const base = 2;\n" }],
