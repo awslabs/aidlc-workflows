@@ -305,7 +305,7 @@ describe("t-checkpoint-wave-edit: an approved Unit's document edited after a wav
         const said = [...build(p, "beta"), ...approve(p, "beta")].filter((line) => line.includes("alpha"));
         expect(said).toHaveLength(1);
         // A hand edit leaves no write record naming the file (t335 pins its line).
-        if (by === "agent") expect(said[0]).toBe(`${file} changed after Unit alpha's review; carrying on.`);
+        if (by === "agent") expect(said[0]).toBe(`${file} changed after the alpha Unit was reviewed; carrying on.`);
         expect(acceptedFor(p, "alpha")).toHaveLength(1);
         expect(approved(p, "alpha")).toBe(true);
         expect(rejected(p)).toEqual([]);
@@ -337,7 +337,7 @@ describe("t-checkpoint-wave-edit: an approved Unit's document edited after a wav
     const beat = next(p);
     expect(beat.construction_checkpoint, JSON.stringify(beat)).toMatchObject({ unit: "alpha", ready: true });
     expect(beat.construction_checkpoint?.rereview).toBeUndefined();
-    expect(approve(p, "alpha")).toEqual([`${file} changed after Unit alpha's review; carrying on.`]);
+    expect(approve(p, "alpha")).toEqual([`${file} changed after the alpha Unit was reviewed; carrying on.`]);
     expect(next(p)).toMatchObject({ stage: "functional-design", unit: "beta" });
     expect(acceptedFor(p, "alpha")).toHaveLength(1);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
