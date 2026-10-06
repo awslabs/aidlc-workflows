@@ -130,11 +130,43 @@ export const riskyFormDenyLines = (prefixes: readonly string[]): string[] => [
   ...prefixes.flatMap((prefix) => RISKY_SHELL_FORMS.map((form) => `        - "${prefix}*${form}*"`)),
 ];
 
-export const shellDenyLines = ({ match, exclude }: ShellDeny): string[] => [
-  "    - capability: shell",
-  "      effect: deny",
-  "      match:",
-  ...match.map((pattern) => `        - "${pattern}"`),
-  "      exclude:",
-  ...exclude.map((pattern) => `        - "${pattern}"`),
-];
+// Kiro compiles each match pattern into one Cedar policy that holds every
+// exclude of its rule, and its bundled cedar-wasm traps evaluating a long one
+// (t148 pins the limit), which leaves the chat asking before every command. So
+// the deny is written as one rule per command an exclude names (a tool file, or
+// an engine route group: the word after a match prefix) holding only that
+// command's excludes, plus one rule that denies the rest of the allow and
+// lifts those commands whole. Kiro matches a command from its start, so a
+// command falls under at most one of the per-command rules, and the rules deny
+// exactly what the single rule would.
+export function splitShellDeny({ match, exclude }: ShellDeny): ShellDeny[] {
+  const prefixes = match.filter((pattern) => pattern.endsWith("*"))
+    .map((pattern) => pattern.slice(0, -1))
+    .sort((a, b) => b.length - a.length);
+  const commands = new Map<string, string[]>();
+  const unsplit: string[] = [];
+  for (const pattern of exclude) {
+    const prefix = prefixes.find((candidate) => pattern.startsWith(candidate));
+    const word = prefix === undefined ? "" : pattern.slice(prefix.length).split(" ")[0];
+    if (word === "" || /[*?]/.test(word)) {
+      unsplit.push(pattern);
+      continue;
+    }
+    const command = `${prefix}${word}`;
+    commands.set(command, [...commands.get(command) ?? [], pattern]);
+  }
+  return [
+    { match, exclude: [...unsplit, ...[...commands.keys()].flatMap(both)] },
+    ...[...commands].map(([command, excludes]) => ({ match: [`${command} *`], exclude: excludes })),
+  ];
+}
+
+export const shellDenyLines = (deny: ShellDeny): string[] =>
+  splitShellDeny(deny).flatMap(({ match, exclude }) => [
+    "    - capability: shell",
+    "      effect: deny",
+    "      match:",
+    ...match.map((pattern) => `        - "${pattern}"`),
+    "      exclude:",
+    ...exclude.map((pattern) => `        - "${pattern}"`),
+  ]);

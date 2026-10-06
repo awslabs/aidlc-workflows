@@ -1440,6 +1440,10 @@ Bolt worktree create, merge, discard and restore for pipeline-deploy only, a
 role limit the guard itself does not apply where a call names its agent)
 and the workspace query forms the workspace parser recognises, each where the
 guard does not refuse it, so a verb no one classified stays denied there. That rule does not follow the fence switch.
+It ships split into one rule per command its excludes name, behind a rule that
+denies the rest of the allow, because Kiro compiles each rule's excludes into one
+Cedar condition chain and its bundled evaluator traps on a long one, leaving the
+chat asking before every command (`t148` pins the length).
 
 The command-position parser recursively normalizes recognized execution
 wrappers (`command`, `exec`, `time`, `env`, `nice`, and `nohup`) before applying
