@@ -29329,10 +29329,7 @@ export function guardRefusalStreakView(
         ? {
             ...ask,
             reason_codes: codes,
-            question:
-              `The same guard state for "${refusal.stage}" has refused ` +
-              `${refusal.blockedAction} ${count} times. Choose one ` +
-              "authority-preserving recovery action.",
+            question: guardRecoveryQuestion(refusal, true),
           }
         : ask,
     };
@@ -29376,13 +29373,31 @@ export function recordGuardRefusal(
   return streak;
 }
 
+// The stage, and its Unit when there is one, as the person knows them. The
+// way-out question must never fail to build, so an unreadable stage graph
+// leaves the stage named as it is stored.
+function guardRefusalTarget(refusal: GuardRefusal): string {
+  let name = refusal.stage;
+  try {
+    name = findStageBySlug(refusal.stage)?.name ?? refusal.stage;
+  } catch {
+    // The stage graph is unreadable here: keep the stored name.
+  }
+  return refusal.unit ? `${name} for ${refusal.unit}` : name;
+}
+
+// The one line the person reads above the ways on; the options carry the
+// detail and the reason codes stay in the ask's fields. A repeat says so.
+function guardRecoveryQuestion(refusal: GuardRefusal, again = false): string {
+  return `${guardRefusalTarget(refusal)}${again ? " still" : ""} can't go ahead as things ` +
+    "stand: which way would you like to go on?";
+}
+
 // The ask for a refusal that has at least one executable remedy: the remedies
 // the conductor may offer now, and nothing else.
 export function guardRecoveryAskForRefusal(
   refusal: GuardRefusal,
-  question =
-    `The next action for "${refusal.stage}" would be refused. Choose one ` +
-    "authority-preserving recovery action.",
+  question = guardRecoveryQuestion(refusal),
 ): GuardRecoveryAskData | null {
   const remedies = refusal.remedies.filter((remedy) => remedy.executableNow);
   if (remedies.length === 0) return null;
@@ -29415,9 +29430,7 @@ export function guardTerminalAskForRefusal(
   // In the person's terms: where the work stopped and that it needs them. The
   // refusal code and the state signature stay in the ask's fields (and the
   // signature at the end of a repeated stop, for a report).
-  const target = refusal.unit
-    ? `unit ${refusal.unit}'s "${refusal.stage}"`
-    : `"${refusal.stage}"`;
+  const target = guardRefusalTarget(refusal);
   const why = refusal.userMessage.trim().length > 0 ? ` ${refusal.userMessage.trim()}` : "";
   const situation =
     `I stopped at ${target}: this step cannot go ahead, and there is ` +

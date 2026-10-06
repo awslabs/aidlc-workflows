@@ -1546,7 +1546,11 @@ valid re-confirmation can finish an unchanged pending review without another
 rejection or a new stage attempt.
 
 **One rule for first occurrence, at both sites.** A refusal renders as a
-guard-recovery `ask` the first time it happens. The router emits it as the
+guard-recovery `ask` the first time it happens. Its question is one line in the
+person's words, naming the stage (and the Unit) as they know it: "Functional
+Design for alpha can't go ahead as things stand: which way would you like to go
+on?", with "still" when the same state repeats; the options carry the detail
+and the reason codes stay in the ask's fields. The router emits it as the
 directive; an enforcing tool prints the human sentence and then the same ask as
 the last line of its refusal, which the router parses back into the directive it
 would have emitted itself. The `.aidlc-engine/guard-refusals/` record beside the other
