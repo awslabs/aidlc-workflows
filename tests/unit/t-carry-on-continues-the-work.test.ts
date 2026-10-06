@@ -13,7 +13,7 @@
 
 import { afterEach, beforeAll, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { rmSync } from "node:fs";
+import { readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS } from "../harness/test-budget.ts";
 import {
@@ -26,6 +26,7 @@ import {
   removeWorkspaceRecord,
   resetAidlcEnv,
   runOrchestrateNext,
+  seededStateFile,
   seedStateFile,
 } from "../harness/fixtures.ts";
 
@@ -150,6 +151,31 @@ describe("t-carry-on-continues-the-work: work in progress carries on", () => {
       expect(d.question).toContain('You said: "carry on with a login page"');
     });
   }
+});
+
+describe("t-carry-on-continues-the-work: what is waiting on the person stays as it is", () => {
+  test("at an open approval the words are still read as its possible answer", () => {
+    proj = activeProject();
+    const state = seededStateFile(proj);
+    writeFileSync(state, readFileSync(state, "utf-8").replace("- [-] feasibility", "- [?] feasibility"));
+    const d = next(CLAUDE_TOOLS, proj, ["carry", "on"]);
+    expect(d.kind, JSON.stringify(d).slice(0, 300)).toBe("print");
+    expect(String(d.message)).toContain('Stage "feasibility" is waiting for the person\'s approval, and their reply may answer it.');
+  });
+
+  test("parked work still says it is parked", () => {
+    proj = activeProject();
+    const state = seededStateFile(proj);
+    writeFileSync(
+      state,
+      readFileSync(state, "utf-8").replace(
+        "- **Current Stage**: feasibility",
+        "- **Current Stage**: feasibility\n- **Parked**: 2026-10-06T00:00:00Z\n- **Parked At Stage**: feasibility",
+      ),
+    );
+    expect(next(CLAUDE_TOOLS, proj, []).kind).toBe("parked");
+    expect(next(CLAUDE_TOOLS, proj, ["carry", "on"]).kind).toBe("parked");
+  });
 });
 
 describe("t-carry-on-continues-the-work: work here but none selected", () => {

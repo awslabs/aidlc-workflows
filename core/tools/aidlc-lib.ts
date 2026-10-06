@@ -1045,6 +1045,20 @@ export function withoutEntryWord(args: readonly string[]): string[] {
   return args.length > 0 && ENTRY_WORD_ARG.test(args[0]) ? args.slice(1) : [...args];
 }
 
+// The words that, said on their own, only ask for the work in progress to go
+// on. The one list the engine reads, so every tool agrees on it.
+export const CONTINUATION_PHRASES = ["carry on", "continue", "keep going", "go on", "resume"] as const;
+
+// True only when the text is one of those phrases and nothing more, with or
+// without "please" before or after it. Case, spacing, a comma beside "please"
+// and a closing "." or "!" do not matter; any other word makes it a request
+// of its own.
+export function isBareContinuationPhrase(text: string): boolean {
+  const words = text.toLowerCase().replace(/\s+/g, " ").trim().replace(/[.!]+$/, "").trim();
+  const phrase = words.replace(/^please,? /, "").replace(/,? please$/, "");
+  return (CONTINUATION_PHRASES as readonly string[]).includes(phrase);
+}
+
 // One rule for the Copilot adapter claim gate and isTerminalUtilityNext, mirroring
 // parseNextFlags/routeNext's terminal early returns and engine-marker exclusion.
 export function isReadOnlyNextArgv(argv: readonly string[]): boolean {
