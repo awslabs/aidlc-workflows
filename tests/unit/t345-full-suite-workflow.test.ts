@@ -78,6 +78,19 @@ function steps(job: { steps?: Step[] }): Step[] {
   return job.steps ?? [];
 }
 
+/**
+ * The env for a fixture run of a checked-in step: the parent env without any
+ * variable the step declares, plus `vars`. A CI job running this file has the
+ * step's own variables set (a selected macOS shard sets SELECTION_MODE and
+ * SELECTION_EXCLUDE, and the step rewrites TEST_EXCLUDE), and none of them
+ * may reach the fixture run.
+ */
+function stepRunEnv(step: Step, vars: Record<string, string>, parent: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  const env = { ...parent };
+  for (const key of Object.keys(step.env ?? {})) delete env[key];
+  return { ...env, ...vars };
+}
+
 function aliases(file: string): string[] {
   const parts = file.split("/");
   const name = basename(file, ".test.ts");
@@ -165,10 +178,10 @@ function runMacosSelect(root: string, output: string, shard: string): Record<str
   writeFileSync(output, "");
   const result = spawnSync("bash", ["--noprofile", "--norc", "-e", "-o", "pipefail", "-c", select.run!], {
     cwd: root, encoding: "utf8", timeout: NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
-    env: {
-      ...process.env, PATH: `${dirname(process.execPath)}${process.platform === "win32" ? ";" : ":"}${process.env.PATH}`,
+    env: stepRunEnv(select, {
+      PATH: `${dirname(process.execPath)}${process.platform === "win32" ? ";" : ":"}${process.env.PATH}`,
       GITHUB_OUTPUT: output, UNIT_SHARD: shard,
-    },
+    }),
   });
   expect(result.status, result.stdout + result.stderr).toBe(0);
   return outputEntries(readFileSync(output, "utf8"));
@@ -548,6 +561,42 @@ describe("t345 complete nightly coverage", () => {
     expect(seen.sort()).toEqual(named);
   });
 
+  // This file runs inside the shared step on CI, so a selected macOS shard's
+  // own variables are in its env; a fixture run must not take them.
+  test("a fixture run of the shared tier step never takes the CI job's own step variables", () => {
+    const step = steps(deterministic.jobs.test).find((step) => step.name === "Run deterministic tier")!;
+    const leaked = {
+      ...process.env, SELECTION_MODE: "selected", TEST_FILTER: "^t-leak$", TEST_EXCLUDE: "^t-leak$", UNIT_SHARD: "9/12",
+      SELECTION_EXCLUDE: "^(?!(?:unit-)?(?:t345-full-suite-workflow)(?:\\.test\\.ts)?$)", RETRY_ONCE: "true",
+    };
+    const vars = { TEST_TIER: "unit", UNIT_SHARD: "3/8", TEST_FILTER: "", RETRY_ONCE: "false" };
+    const env = stepRunEnv(step, vars, leaked);
+    expect(["SELECTION_MODE", "SELECTION_EXCLUDE", "TEST_EXCLUDE"].filter((key) => env[key] !== undefined)).toEqual([]);
+    expect(env).toMatchObject(vars);
+    const root = mkdtempSync(join(tmpdir(), "t345-step-env-"));
+    try {
+      mkdirSync(join(root, "tests"));
+      writeFileSync(join(root, "tests/run-tests.sh"), [
+        "#!/bin/bash",
+        'printf "%s\\0" "$@" > "$GITHUB_WORKSPACE/argv.bin"',
+        'stamp="$GITHUB_WORKSPACE/tests/logs/fixture"',
+        'mkdir -p "$stamp"',
+        'echo "Verbose mode: logging to $stamp"',
+        'printf "Test files: 1\\n" > "$stamp/summary.txt"',
+      ].join("\n"));
+      const result = spawnSync("bash", ["-c", step.run!], {
+        cwd: root, encoding: "utf8", timeout: NATIVE_STARTUP_TIMEOUT_MS,
+        env: stepRunEnv(step, { ...vars, GITHUB_WORKSPACE: root.replaceAll("\\", "/") }, leaked),
+      });
+      expect(result.status, result.stdout + result.stderr).toBe(0);
+      expect(readFileSync(join(root, "argv.bin"), "utf8").split("\0").filter(Boolean)).toEqual([
+        "--debug", "-P", "8", "--no-llm", "--unit", "--shard", "3/8", "--file-timeout", "7200", "--run-timeout", "14400",
+      ]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
   test("a selected macOS shard runs its share unsharded, and an empty selection keeps the shard", () => {
     const step = steps(deterministic.jobs.test).find((step) => step.name === "Run deterministic tier")!;
     expect(step.env).toMatchObject({
@@ -577,10 +626,10 @@ describe("t345 complete nightly coverage", () => {
         rmSync(join(root, "tests/logs"), { recursive: true, force: true });
         const result = spawnSync("bash", ["-c", step.run!], {
           cwd: root, encoding: "utf8", timeout: NATIVE_STARTUP_TIMEOUT_MS,
-          env: {
-            ...process.env, GITHUB_WORKSPACE: root.replaceAll("\\", "/"), TEST_TIER: "unit", UNIT_SHARD: "3/12",
+          env: stepRunEnv(step, {
+            GITHUB_WORKSPACE: root.replaceAll("\\", "/"), TEST_TIER: "unit", UNIT_SHARD: "3/12",
             TEST_FILTER: "", TEST_EXCLUDE: matrixExclude, RETRY_ONCE: "true", SELECTION_MODE: mode, SELECTION_EXCLUDE: selected,
-          },
+          }),
         });
         expect(result.status, result.stdout + result.stderr).toBe(0);
         expect(readFileSync(join(root, "argv.bin"), "utf8").split("\0").filter(Boolean), `${mode} ${selected}`).toEqual([
@@ -628,7 +677,7 @@ describe("t345 complete nightly coverage", () => {
           rmSync(join(root, "tests/logs"), { recursive: true, force: true });
           const result = spawnSync("bash", ["-c", step.run!], {
             cwd: root, encoding: "utf8", timeout: NATIVE_STARTUP_TIMEOUT_MS,
-            env: { ...process.env, GITHUB_WORKSPACE: root.replaceAll("\\", "/"), TEST_TIER: tier, UNIT_SHARD: shard, TEST_FILTER: filter, RETRY_ONCE: retry, FIXTURE_EXIT: exit, OMIT_SUMMARY: omit },
+            env: stepRunEnv(step, { GITHUB_WORKSPACE: root.replaceAll("\\", "/"), TEST_TIER: tier, UNIT_SHARD: shard, TEST_FILTER: filter, RETRY_ONCE: retry, FIXTURE_EXIT: exit, OMIT_SUMMARY: omit }),
           });
           expect(result.status, result.stdout + result.stderr).toBe(expectedStatus);
           expect(readFileSync(join(root, "argv.bin"), "utf8").split("\0").filter(Boolean))
