@@ -2022,6 +2022,22 @@ function sameDirectory(left: string, right: string): boolean {
   return canonical(left) === canonical(right);
 }
 
+// The shell tool under every name a hook payload or transcript gives it: Bash
+// (Claude Code, and Codex hook payloads), execute_bash (Kiro), and the names a
+// Codex transcript records: shell, local_shell_call, shell_command and, from
+// Codex 0.160, exec_command.
+export function isShellToolName(name: string): boolean {
+  return /^(bash|shell|execute_bash|local_shell_call|shell_command|exec_command)$/i.test(name);
+}
+
+// The command a shell call carries: `command`, or `cmd` where Codex's
+// exec_command puts it. Null when the input names neither as text.
+export function shellCommandText(input: unknown): string | null {
+  if (input === null || typeof input !== "object") return null;
+  const { command, cmd } = input as Record<string, unknown>;
+  return typeof command === "string" ? command : typeof cmd === "string" ? cmd : null;
+}
+
 // A workflow-engine tool call: a Bash invocation of legacy
 // aidlc-orchestrate/aidlc-state, a new-grammar `aidlc ...` engine command, or a
 // tool whose name itself references aidlc. These are the calls that mean "the
@@ -2034,13 +2050,9 @@ export function isEngineToolCall(
   observedOutput?: unknown,
   projectDir?: string,
 ): boolean {
-  const cmd =
-    input !== null && typeof input === "object"
-      ? String((input as Record<string, unknown>).command ?? "")
-      : "";
-  // The command text to inspect: a Bash/Shell command, or (for harnesses that
-  // surface the tool by name) the tool name itself.
-  const rawText = /^(bash|shell|execute_bash)$/i.test(name) ? cmd : name;
+  // The command text to inspect: a shell call's command, or (for harnesses
+  // that surface the tool by name) the tool name itself.
+  const rawText = isShellToolName(name) ? shellCommandText(input) ?? "" : name;
   // Correlated output can prove only one literal engine invocation terminal.
   // A directory-only prelude and explicit --project-dir must each resolve to the
   // known active project directory. Resolve a relative --project-dir against the

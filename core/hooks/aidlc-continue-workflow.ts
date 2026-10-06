@@ -167,6 +167,8 @@ import {
   hasPendingDecision,
   hookChildEnv,
   isEngineToolCall,
+  isShellToolName,
+  shellCommandText,
   hooksHealthDir,
   writeHookStatusFile,
   isoTimestamp,
@@ -1153,18 +1155,18 @@ function transcriptIsConversational(transcriptPath: string, format: "claude" | "
           parsedArgs = args as Record<string, unknown>;
         }
         // Normalise the command field so isEngineToolCall sees the full command
-        // text (Codex may key it `command`, or carry it as the raw arguments
-        // string). Routing it ALL through isEngineToolCall keeps the read-only
-        // exemption (--status etc.) consistent across both transcript formats,
-        // rather than a loose regex that would re-flag a read-only query.
+        // text (Codex may key it `command`, key it `cmd` as exec_command does,
+        // or carry it as the raw arguments string). Routing it ALL through
+        // isEngineToolCall keeps the read-only exemption (--status etc.)
+        // consistent across both transcript formats, rather than a loose regex
+        // that would re-flag a read-only query.
         if (typeof parsedArgs.command !== "string") {
-          parsedArgs = { ...parsedArgs, command: typeof args === "string" ? args : JSON.stringify(args) };
+          parsedArgs = {
+            ...parsedArgs,
+            command: shellCommandText(parsedArgs) ?? (typeof args === "string" ? args : JSON.stringify(args)),
+          };
         }
-        recordCall(
-          payload.call_id,
-          /^(bash|shell|execute_bash|local_shell_call)$/i.test(name) ? "Bash" : name,
-          parsedArgs,
-        );
+        recordCall(payload.call_id, isShellToolName(name) ? "Bash" : name, parsedArgs);
       } else if (ptype === "function_call_output") {
         recordResult(payload.call_id, payload.output, payload.is_error);
       }
