@@ -78,6 +78,7 @@ aggregate is a structural divergence).
 
 Emit executable tests into the workspace, using the language/tooling the tech environment declares
 (e.g. JVM → ArchUnit; TS/JS → dependency-cruiser / ts-arch; Python → import-linter / pytest-arch):
+
 - **rule-0 conformance** → architecture/boundary/naming tests;
 - **`kind: invariant`** → property-based tests, and verify the runtime assertion injected at
   code-generation is present **in the root of the aggregate the rule's `aggregate:` names** (that
@@ -98,6 +99,7 @@ element / rule id) and `ddd-conformance-results.md` (pass/fail per rule). Emit m
 ### Step 6: Adjudicate Violations (fix code vs amend model)
 
 If all pass, proceed to the gate. If any fail, TRIAGE each violation with the human:
+
 - **Fix the code** — the code violates a legitimate model rule. Correct the code and re-run.
 - **Amend the model** — the rule itself is wrong (invariant too strict, FSM edge missing, term
   renamed). This is a BUSINESS decision: capture the amendment, get PM / stakeholder sign-off, and

@@ -91,6 +91,7 @@ aggregates small.
 
 Reach for the most structured form each rule fits — it elevates the rule to hard, deterministic
 enforcement:
+
 - **Finite state machine** (`state_machine` on an aggregate) for lifecycles — disallowed transitions
   become derived rule-0 checks (no authored rule per forbidden edge).
 - **Invariant predicate** (`kind: invariant`, `expr`) for data/cardinality rules — compiles to a
