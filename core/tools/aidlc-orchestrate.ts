@@ -404,7 +404,7 @@ import {
 import { terminalDispatcherArgv } from "./aidlc.ts";
 import { appendAuditEntries } from "./aidlc-audit.ts";
 import { inspectRequiredArtifactInstances } from "./aidlc-artifact-resolution.ts";
-import { sameGuardOperation } from "./aidlc-guard-operation.ts";
+import { renderEngineInvocation, sameGuardOperation } from "./aidlc-guard-operation.ts";
 import {
   isPlanApprovalBeat,
   legacyPlanApprovalOffNotice,
@@ -8442,6 +8442,73 @@ function nextUncoveredUnit(
   return { unit: uncovered[0], uncovered };
 }
 
+// The step a Unit still owes when its work for this stage is done: every
+// required file is on disk and a fresh READY review of them is recorded in this
+// attempt, but its completion receipt was never written (receipt mode settles a
+// Unit only on UNIT_COMPLETED). Handing back the stage body, or "run next",
+// only loops, so the step names the receipt's exact commands. The fresh review
+// is the evidence the files are this attempt's: a reopened or redone Unit's
+// earlier files never carry one. Null whenever anything but the receipt is
+// left, or a wave owns the stage's completions.
+function unitReceiptOnlyStep(
+  projectDir: string,
+  node: GraphStage,
+  unit: string,
+  recordPrefix: string | null,
+  codekbCtx: CodekbCtx,
+  unitKind: string | null,
+  ledger: UnitLedger,
+  stateContent: string | null,
+  scope: string,
+): string | null {
+  if (stateContent === null || !node.reviewer) return null;
+  if (!ledger.inUse || ledger.receipts.has(unit) || ledger.skipped.has(unit)) return null;
+  if (kindVacuous(node, unitKind) || ledger.mode === "wave" || ledger.mode === "mixed") return null;
+  const unitMajor = getField(stateContent, "Construction Iteration")?.trim() === "unit-major";
+  if (!unitMajor && waveEligible(node) && ledger.mode === "none" && ledger.checkpoint === null) return null;
+  const own = ledger.open.find((entry) => entry.unit === unit);
+  if (own?.state === "paused") return null;
+  if (ledger.checkpoint !== null && ledger.checkpoint.unit !== unit) return null;
+  if (!unitCovered(projectDir, node, unit, recordPrefix, codekbCtx, unitKind)) return null;
+  if (redoChosenForUnitStep(projectDir, node.slug, unit)) return null;
+  const reviewClass = resolveReviewClass(node.review_class ?? "adversarial", scope, stateContent);
+  if (reviewClass === "none") return null;
+  const review = freshReviewReceipts(projectDir, stateContent, node, { reviewClass });
+  if (review.unitVerdicts.get(unit) !== "READY") return null;
+  const command = (action: string): string =>
+    `\`${renderEngineInvocation({ route: "state", args: ["unit", action, "--stage", node.slug, "--unit", unit] })}\``;
+  const steps = own ? command("complete") : `${command("start")}, then ${command("complete")}`;
+  return `Unit "${unit}"'s ${node.name} work is written and reviewed, but its completion is not recorded: run ${steps}.`;
+}
+
+// `next` for a Unit that owes only its completion receipt: that step, then
+// `next` again. A read-only route check (the one `unit start` runs) still sees
+// the Unit's stage, so the named start command matches the engine's route.
+function emitUnitStepOrStage(step: string | null, directive: Directive): void {
+  if (step === null || isReadOnlyEngineProbe()) {
+    emit(directive);
+    return;
+  }
+  emit(printDirective(`${step} Then run \`${aidlcToolInvocation("orchestrate")} next\`.`));
+}
+
+// The receipt step for one named Unit of a solo per-unit stage, or null.
+function soloUnitReceiptStep(
+  projectDir: string,
+  node: GraphStage,
+  unit: string,
+  scope: string,
+  stateContent: string,
+): string | null {
+  if (!isPerUnit(node) || usesStageLevelPerUnitArtifacts(scope, stateContent)) return null;
+  const resolution = resolveBoltBatches(projectDir);
+  if (resolution.state !== "ok" || !resolution.batches.flat().includes(unit)) return null;
+  return unitReceiptOnlyStep(
+    projectDir, node, unit, engineRelativeRecordDir(projectDir), codekbCtxFor(projectDir),
+    resolution.unitKinds?.get(unit) ?? null, unitLedgerFor(projectDir, node.slug), stateContent, scope,
+  );
+}
+
 const WAVE_ELIGIBLE_STAGES: ReadonlySet<string> = new Set([
   "functional-design",
   "nfr-requirements",
@@ -9019,7 +9086,13 @@ function emitPerUnitRunStage(
   // the rest of the directive (paths, reviewer, persona) is unchanged.
   directive.gate = false;
   directive.unit = pick.unit;
-  emit(directive);
+  emitUnitStepOrStage(
+    unitReceiptOnlyStep(
+      projectDir, node, pick.unit, recordPrefix, codekbCtx, kinds?.get(pick.unit) ?? null,
+      ledger, stateContent, scope,
+    ),
+    directive,
+  );
 }
 
 // The in-scope, not-yet-settled per-unit Construction stages, in GRAPH order.
@@ -10435,7 +10508,13 @@ function emitUnitMajorRunStage(
     if (redoChosenForUnitStep(projectDir, step.stage.slug, step.unit)) {
       directive.artifact_reuse = { decision: "redo", unit: step.unit };
     }
-    emit(directive);
+    emitUnitStepOrStage(
+      unitReceiptOnlyStep(
+        projectDir, step.stage, step.unit, recordPrefix, codekbCtx, kinds?.get(step.unit) ?? null,
+        unitLedgerFor(projectDir, step.stage.slug), stateContent, scope,
+      ),
+      directive,
+    );
     return;
   }
   if (step.kind === "summary") {
@@ -11678,7 +11757,8 @@ function syntheticWorkflowId(slug: string): string {
 
 type EnsembleEvidenceResult =
   | { ok: true }
-  | { ok: false; message: string };
+  // `step`: the message is the agent's next step (a print), not an error.
+  | { ok: false; message: string; step?: true };
 
 function checkSingleCodekbArtifacts(
   node: GraphStage,
@@ -11942,6 +12022,28 @@ function checkStageCompletionEvidence(
         return { ok: false, message: pick.error };
       }
       if (pick !== null) {
+        // A Unit whose work is done owes only its completion receipt: name
+        // that step for the agent rather than a "run next" that hands the
+        // same Unit's stage back.
+        const owed = pick.uncovered.map((unit) => ({
+          unit,
+          step: unitReceiptOnlyStep(
+            pd, node, unit, recordPrefix, codekbCtxFor(pd), unitKinds?.get(unit) ?? null,
+            ledger, stateContent, scope,
+          ),
+        }));
+        const steps = owed.flatMap((entry) => entry.step === null ? [] : [entry.step]);
+        if (steps.length > 0) {
+          const left = owed.filter((entry) => entry.step === null).map((entry) => entry.unit);
+          const nextCommand = `\`${aidlcToolInvocation("orchestrate")} next\``;
+          return {
+            ok: false,
+            step: true,
+            message:
+              `${steps.join(" ")} Then run ${nextCommand}` +
+              (left.length > 0 ? ` to finish the other work items (${left.join(", ")}).` : "."),
+          };
+        }
         return {
           ok: false,
           message:
@@ -13019,7 +13121,12 @@ function handleReport(args: string[], projectDir: string | undefined): void {
       return;
     }
   } else if (flags.unit) {
-    emit(errorDirective("--unit gate reporting requires Unit Ownership: team."));
+    // A solo Unit cannot be reported on its own; when its work is done and
+    // only its completion receipt is missing, that receipt is the step.
+    const owed = soloUnitReceiptStep(pd, node, flags.unit, scope, stateContent);
+    emit(owed !== null
+      ? printDirective(`${owed} Then run \`${aidlcToolInvocation("orchestrate")} next\`.`)
+      : errorDirective("--unit gate reporting requires Unit Ownership: team."));
     return;
   }
 
@@ -13102,7 +13209,7 @@ function handleReport(args: string[], projectDir: string | undefined): void {
         pd,
       );
       if (!evidence.ok) {
-        emit(errorDirective(evidence.message));
+        emit(evidence.step ? printDirective(evidence.message) : errorDirective(evidence.message));
         return;
       }
     }
@@ -13244,7 +13351,7 @@ function handleReport(args: string[], projectDir: string | undefined): void {
       pd,
     );
     if (!evidence.ok) {
-      emit(errorDirective(evidence.message));
+      emit(evidence.step ? printDirective(evidence.message) : errorDirective(evidence.message));
       return;
     }
   }

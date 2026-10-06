@@ -186,9 +186,11 @@ describe("t-unit-receipt-only-step: a Unit done but not recorded gets its receip
     const completed = unitVerb(proj, "complete", "unit-b");
     expect(completed.rc, completed.out).toBe(0);
     expect(unitCompletedReceipts(proj, SLUG).has("unit-b")).toBe(true);
+    // Every Unit is settled now, so next presents the stage's own gate.
     const after = next(proj);
     expect(JSON.stringify(after)).not.toContain(START_B);
-    expect(after.unit === "unit-b" && after.kind === "run-stage").toBe(false);
+    expect(after.kind, JSON.stringify(after)).toBe("run-stage");
+    expect(after.gate).toBe(true);
   });
 
   test("a Unit already started gets only its complete command", () => {
@@ -217,6 +219,14 @@ describe("t-unit-receipt-only-step: a Unit done but not recorded gets its receip
       expect(String(d.message)).not.toContain("Run `next` to finish");
     }
     expect(readAllAuditShards(proj)).not.toContain("GATE_APPROVED");
+
+    // Reporting the one Unit directly is a team-only form; for this solo Unit
+    // the refusal names the same receipt step.
+    const byUnit = run(ORCHESTRATE, ["report", "--stage", SLUG, "--result", "approved", "--unit", "unit-b", "--user-input", "Approve"], proj);
+    const d = directiveOf(byUnit.out);
+    expect(d.kind, byUnit.out).toBe("print");
+    expect(String(d.message)).toContain(COMPLETE_B);
+    expect(String(d.message)).not.toContain("Unit Ownership: team");
   });
 });
 
@@ -240,6 +250,12 @@ describe("t-unit-receipt-only-step: work genuinely left keeps Run next", () => {
       expect(String(refusal.message)).toContain("1 of 2 work items are not complete (unit-b)");
       expect(String(refusal.message)).toContain("Run `next`");
       expect(String(refusal.message)).not.toContain(COMPLETE_B);
+
+      const byUnit = directiveOf(
+        run(ORCHESTRATE, ["report", "--stage", SLUG, "--result", "approved", "--unit", "unit-b", "--user-input", "Approve"], proj).out,
+      );
+      expect(byUnit.kind).toBe("error");
+      expect(String(byUnit.message)).toContain("Unit Ownership: team");
     });
   }
 
