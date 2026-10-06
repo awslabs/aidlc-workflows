@@ -873,6 +873,12 @@ function prepareEmission(directive: Directive): PreparedEmission {
   if (switchOff.length > 0) {
     directive = withChangeNotices(directive, [...switchOff, ...(directive.change_notices ?? [])]);
   }
+  // The lines the reports of gates this `next` settled itself printed. A line
+  // said more than once (a report can add the hook health line this step
+  // already has) is said once.
+  if (settledNotices.length > 0) {
+    directive = withChangeNotices(directive, [...new Set([...(directive.change_notices ?? []), ...settledNotices])]);
+  }
   if (activeStageValidityAdvisory) {
     directive = {
       ...directive,
@@ -6352,17 +6358,23 @@ function routingEvidenceFor(projectDir: string, stateContent: string | null): Co
 // bookkeeping gate itself (settleBookkeepingGate), and how many it settled.
 let routingArgs: string[] | null = null;
 let settledGates = 0;
+// The lines for the person the reports of those settled gates printed (a
+// change their Guard Policy accepted), said with the step this `next` hands
+// over (prepareEmission).
+let settledNotices: string[] = [];
 
 function handleNext(args: string[], projectDir: string | undefined): void {
   routingPassActive = true;
   routingArgs = args;
   settledGates = 0;
+  settledNotices = [];
   try {
     routeNext(args, projectDir);
   } finally {
     routingEvidence = null;
     routingPassActive = false;
     routingArgs = null;
+    settledNotices = [];
   }
 }
 
@@ -9563,6 +9575,7 @@ function settleBookkeepingGate(
         ));
       return true;
     }
+    settledNotices.push(...(reported?.change_notices ?? []));
   }
   settledGates++;
   routingEvidence = null;
