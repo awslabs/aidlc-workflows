@@ -979,7 +979,7 @@ describe("t135 referee - autonomous reviewer receipt is a finalize precondition"
   test("9: a claimed unit whose artifact changed after review is refused before merge", () => {
     setupStaleReviewRefusal();
     expect(staleReviewStatus).toBe(2);
-    expect(staleReviewOut).toContain("current artifact fingerprint");
+    expect(staleReviewOut).toContain("Code Generation documents changed after its review");
     expect(staleReviewOut).toContain('"converged": 0');
     expect(staleReviewOut).toContain('"failed": 1');
     expect(staleReviewAudit).not.toContain("**Event**: SWARM_UNIT_CONVERGED");
