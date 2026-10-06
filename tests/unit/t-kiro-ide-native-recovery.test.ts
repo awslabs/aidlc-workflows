@@ -390,10 +390,12 @@ describe("native Kiro IDE recovery from a stale upstream directive", () => {
       "\nAlso handle repeated punctuation.\n");
     const continuation = sourceWrite();
     expect(continuation.code, continuation.stderr).toBe(policy === "strict" ? 2 : 0);
-    if (policy !== "strict") {
+    if (policy === "relaxed") {
       expect(continuation.stdout).toContain(
-        `Continuing past the plan-approval check because it is off for this piece of work (guard policy ${policy} (from scope poc))`,
+        "Continuing past the plan-approval check because it is off for this piece of work (guard policy relaxed (from scope poc))",
       );
+    } else if (policy === "off") {
+      expect(continuation.stdout).not.toContain("Continuing past");
     }
     expect(stoodAsideRows(project)).toBe(policy === "strict" ? 0 : 1);
     expect(readFileSync(questions, "utf-8")).toBe(approvedQuestions);

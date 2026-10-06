@@ -673,14 +673,14 @@ function runHook(
   proj: string,
   payload: Record<string, unknown>,
   env: Record<string, string> = {},
-): { code: number; stderr: string } {
+): { code: number; stdout: string; stderr: string } {
   const r = spawnSync(BUN, [join(proj, ".claude", "hooks", "aidlc-reviewer-scope.ts")], {
     timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     input: JSON.stringify(payload),
     env: { ...process.env, CLAUDE_PROJECT_DIR: proj, ...env },
     encoding: "utf-8",
   });
-  return { code: r.status ?? -1, stderr: r.stderr ?? "" };
+  return { code: r.status ?? -1, stdout: r.stdout ?? "", stderr: r.stderr ?? "" };
 }
 
 const SIBLING_SWEEP = {
@@ -889,6 +889,10 @@ describe("t221 (b) dispatch-record lifecycle (shipped hook, subprocess)", () => 
       expect(audit.match(/\*\*Event\*\*: GUARD_STOOD_ASIDE\b/g)).toHaveLength(1);
       expect(audit).toContain("**Guard**: reviewer-scope");
       expect(audit).not.toContain("REVIEWER_SCOPE_BLOCKED");
+      // Guard Policy off records the pass and says nothing; the person's own
+      // switch under relaxed keeps its one line.
+      if (policy === "off") expect(result.stdout).not.toContain("Continuing past");
+      else expect(result.stdout).toContain("Continuing past the reviewer-scope check");
     } else {
       expect(result.stderr).toContain("This review cannot open");
       expect(audit).toContain("REVIEWER_SCOPE_BLOCKED");

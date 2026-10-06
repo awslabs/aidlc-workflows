@@ -1979,6 +1979,35 @@ describe("t242 state-transition ownership guard", () => {
     expect(rows[0]).toContain("**Details**: aidlc-state.ts checkbox");
   });
 
+  test("under Guard Policy off the state CLI carries a direct transition through without a line", () => {
+    const project = createTestProject();
+    projects.push(project);
+    seedStateFile(project, join(FIXTURES_DIR, "state-mid-ideation.md"));
+    seedAuditFile(project);
+    const statePath = seededStateFile(project);
+    writeFileSync(
+      statePath,
+      readFileSync(statePath, "utf-8").replace(/^- \*\*Change Control\*\*:.*$/m, "- **Guard Policy**: off (set by you)"),
+    );
+    const r = spawnSync(
+      process.execPath,
+      [STATE, "checkbox", "scope-definition=in-progress", "--project-dir", project],
+      {
+        encoding: "utf-8",
+        env: { ...unownedEnv(), AIDLC_ALLOW_DIRECT_STATE_TRANSITIONS: "0" },
+      },
+    );
+    expect(r.status, `${r.stdout}${r.stderr}`).toBe(0);
+    expect(JSON.parse(r.stdout).updated).toBe(true);
+    // Off means off: the row records the pass and nothing is said.
+    expect(r.stderr).not.toContain("Continuing past");
+    const rows = readFileSync(seededAuditShard(project), "utf-8")
+      .split("\n## ")
+      .filter((row) => row.includes("**Event**: GUARD_STOOD_ASIDE"));
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toContain("**Guard**: state-transition");
+  });
+
   test("a conversation that has not joined the workflow is not stopped by the hook with an offer to turn off a check that is off", () => {
     // The hook kept the check up for a chat outside the workflow and offered to
     // turn it off, though Guard Policy off already had. The state tool's own
@@ -2008,6 +2037,38 @@ describe("t242 state-transition ownership guard", () => {
     });
     expect(r.status, r.stderr).toBe(0);
     expect(r.stderr).not.toContain("offer to turn the state-transition check off");
+  });
+
+  test("under Guard Policy off the hook lets a direct state command through without a line", () => {
+    const project = createTestProject();
+    projects.push(project);
+    seedStateFile(project, join(FIXTURES_DIR, "state-mid-ideation.md"));
+    seedAuditFile(project);
+    const statePath = seededStateFile(project);
+    writeFileSync(
+      statePath,
+      readFileSync(statePath, "utf-8").replace(/^- \*\*Change Control\*\*:.*$/m, "- **Guard Policy**: off (set by you)"),
+    );
+    const r = spawnSync(process.execPath, [HOOK], {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+      input: JSON.stringify({
+        hook_event_name: "PreToolUse",
+        tool_name: "Bash",
+        session_id: "11111111-2222-4333-8444-555555555555",
+        tool_input: { command: "bun .claude/tools/aidlc-state.ts approve feasibility" },
+      }),
+      encoding: "utf-8",
+      env: { ...unownedEnv(), CLAUDE_PROJECT_DIR: project, AIDLC_PROJECT_DIR: project },
+    });
+    expect(r.status, r.stderr).toBe(0);
+    // Off means off: the row records the pass and nothing is said.
+    expect(`${r.stdout}${r.stderr}`).not.toContain("Continuing past");
+    const rows = readFileSync(seededAuditShard(project), "utf-8")
+      .split("\n## ")
+      .filter((row) => row.includes("**Event**: GUARD_STOOD_ASIDE"));
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toContain("**Guard**: state-transition");
+    expect(rows[0]).toContain("**Tool**: Bash");
   });
 
   test("the state CLI refuses direct transitions when the state-transition fence is not lowered", () => {

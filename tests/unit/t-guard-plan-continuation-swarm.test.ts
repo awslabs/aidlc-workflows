@@ -333,7 +333,7 @@ function checkWorkerCommands(worker: string, unit: string, allowed: boolean): vo
   }
 }
 
-function checkWorkerWriteHook(worker: string, unit: string, allowed: boolean): void {
+function checkWorkerWriteHook(worker: string, unit: string, allowed: boolean, speaks = true): void {
   const source = join(worker, "src", `${unit}.ts`);
   const sourceBefore = readFileSync(source, "utf-8");
   const notices = () => readAuditShardEvents(worker).filter((row) => row.event === "GUARD_STOOD_ASIDE" &&
@@ -362,7 +362,9 @@ function checkWorkerWriteHook(worker: string, unit: string, allowed: boolean): v
   expect(notices()).toHaveLength(noticesBefore + (allowed ? 1 : 0));
   expect(blocks()).toHaveLength(blocksBefore + (allowed ? 0 : 1));
   if (allowed) {
-    expect(out).toContain("Continuing past the plan-approval check");
+    // Relaxed says it carried on in one line; off records the row and says nothing.
+    if (speaks) expect(out).toContain("Continuing past the plan-approval check");
+    else expect(out).not.toContain("Continuing past");
     expect(err).not.toContain('"ask_type":"guard-recovery"');
     const notice = notices().at(-1)!;
     expect(auditBlockField(notice.block, "Stage")).toBe(STAGE);
@@ -740,7 +742,7 @@ describe("delegated continuation follows the parent approval and live fence", ()
     writeFileSync(parentState, setGuardPolicyLine(readFileSync(parentState, "utf-8"), `${mode} (set by you)`));
     publish(pd);
     revise(worker, true);
-    checkWorkerWriteHook(worker, UNIT, true);
+    checkWorkerWriteHook(worker, UNIT, true, mode !== "off");
     checkWorkerCommands(worker, UNIT, true);
     // The parent choice is effective without re-forking or rewriting child state.
     expect(readFileSync(workerState, "utf-8")).toBe(strictWorkerState);

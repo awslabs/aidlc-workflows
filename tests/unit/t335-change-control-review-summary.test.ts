@@ -1186,10 +1186,13 @@ describe("t335 (3) never relaxed: the human gate, the plan stop, and an in-progr
     appendFileSync(plan, "\nAlso cover the adjacent edge case.\n");
     const continuation = dispatch();
     expect(continuation.code, continuation.stderr).toBe(mode === "strict" ? 2 : 0);
-    if (mode !== "strict") {
+    if (mode === "relaxed") {
       expect(continuation.stdout).toContain(
-        `Continuing past the plan-approval check because it is off for this piece of work (guard policy ${mode} (set by you)). Recorded in the audit trail: dispatch of aidlc-developer-agent`,
+        "Continuing past the plan-approval check because it is off for this piece of work (guard policy relaxed (set by you)). Recorded in the audit trail: dispatch of aidlc-developer-agent",
       );
+    } else if (mode === "off") {
+      // Off means off: the row records the pass and nothing is said.
+      expect(continuation.stdout).not.toContain("Continuing past");
     }
     expect(stoodAside()).toHaveLength(mode === "strict" ? 0 : 1);
     expect(approvalRows()).toEqual(approvals);
