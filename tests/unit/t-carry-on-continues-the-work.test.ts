@@ -15,7 +15,8 @@ import { afterEach, beforeAll, describe, expect, test, setDefaultTimeout } from 
 import { spawnSync } from "node:child_process";
 import { readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS } from "../harness/test-budget.ts";
+import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS, NATIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "../harness/test-budget.ts";
+import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import {
   AIDLC_SRC,
   REPO_ROOT,
@@ -216,5 +217,47 @@ describe("t-carry-on-continues-the-work: no work in progress is unchanged", () =
     expect(next(CLAUDE_TOOLS, proj, []).kind).toBe("done");
     const d = next(CLAUDE_TOOLS, proj, ["carry", "on"]);
     expect(d.ask_type, JSON.stringify(d).slice(0, 300)).toBe("compose-offer");
+  });
+});
+
+describe("t-carry-on-continues-the-work: beside the re-entry reading", () => {
+  // The person parked ("stop for now") and came back: a bare next carries the
+  // work on through the unpark step, and so does a continuation phrase.
+  function parkThenComeBack(p: string): void {
+    appendAuditEntry("HUMAN_TURN", {}, p);
+    const r = spawnSync(process.execPath, [join(CLAUDE_TOOLS, "aidlc-state.ts"), "park", "--project-dir", p], {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+      encoding: "utf-8",
+      cwd: p,
+      env: { ...process.env, AIDLC_ALLOW_DIRECT_STATE_TRANSITIONS: "1" },
+    });
+    expect(r.status, `${r.stdout}${r.stderr}`).toBe(0);
+    appendAuditEntry("HUMAN_TURN", {}, p);
+  }
+
+  test("after a park, with the person back, the phrase gets exactly what a bare next gets", () => {
+    proj = activeProject();
+    parkThenComeBack(proj);
+    const bare = next(CLAUDE_TOOLS, proj, []);
+    expect(bare.kind).toBe("print");
+    expect(String(bare.message)).toContain("unpark");
+    for (const words of [["resume"], ["carry", "on"], ["please keep going"]]) {
+      expect(next(CLAUDE_TOOLS, proj, words), words.join(" ")).toEqual(bare);
+    }
+  });
+
+  test("while the work is active the phrase never gets the re-entry reading or the routing question", () => {
+    proj = activeProject();
+    const d = next(CLAUDE_TOOLS, proj, ["carry", "on"]);
+    expect(d.kind, JSON.stringify(d).slice(0, 300)).toBe("run-stage");
+    expect(JSON.stringify(d)).not.toContain("report --result resumed");
+    expect(d.ask_type).not.toBe("new-work-routing");
+  });
+
+  test("words that ask to go back are still read as a re-entry", () => {
+    proj = activeProject();
+    const d = next(CLAUDE_TOOLS, proj, ["take me back to requirements analysis"]);
+    expect(d.kind, JSON.stringify(d).slice(0, 300)).toBe("print");
+    expect(String(d.message)).toContain("report --result resumed --choice <redo|jump|fresh>");
   });
 });
