@@ -5,7 +5,9 @@ description: >
   development lifecycle. Scopes are defined one file per scope under
   `.codex/scopes/`; run
   `{{INVOKE}} engine orchestrate help` for the authoritative list
-  and descriptions. Utilities: --status, --doctor, --config [section], --stage,
+  and descriptions. Utilities, each an argument to
+  `{{INVOKE}} engine orchestrate next` and never a command of its own:
+  --status, --doctor, --config [section], --stage,
   --phase, --scope, --depth, --test-strategy, --project-type, --review, --guard-policy, --sensors on|off, --learnings on|off,
   --summary-confirmation on|off, --version,
   --help, plus the intent and space verbs.

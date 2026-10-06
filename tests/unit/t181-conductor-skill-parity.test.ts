@@ -375,6 +375,23 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
     ]);
   });
 
+  test("every shipped conductor SKILL names its utilities as arguments to next, never commands of their own", () => {
+    // A live Kiro IDE agent asked to show the settings ran `aidlc --config`, a
+    // command that does not exist, because the utility list in the skill's
+    // description read like the command-line tool's own commands. Every utility
+    // goes to the loop's first `next`, as step 1 says.
+    const lead =
+      "Utilities, each an argument to `{{INVOKE}} engine orchestrate next` and never a command of its own: --status, --doctor, --config [section],";
+    const missing: string[] = [];
+    for (const rel of skills) {
+      const body = readFileSync(join(REPO_ROOT, rel), "utf-8");
+      const frontmatter = body.slice(0, body.indexOf("\n---", 4)).replace(/\s+/g, " ");
+      if (!frontmatter.includes(lead)) missing.push(`${rel}  utility list does not say where the utilities go`);
+      if (/\{\{INVOKE\}\} --config\b/.test(body)) missing.push(`${rel}  names --config as a command of its own`);
+    }
+    expect(missing).toEqual([]);
+  });
+
   test("every SKILL and the onboarding switch a check when the person asks, with no typing for them", () => {
     // A live Claude chat followed the onboarding's old "name the exact command
     // for them to type" over the SKILL's rule and refused a plain request.
