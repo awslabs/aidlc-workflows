@@ -175,13 +175,15 @@ function onlyLatest(rows: readonly AuditShardEvent[]): AuditShardEvent | null {
 }
 
 // A Redo answer names its Unit, or (recorded by `state reuse-artifact`) lists
-// only that Unit's own documents.
+// only that Unit's own documents: by record path (`construction/<unit>/...`)
+// or by the path from the project, which the stage directive names.
 function reuseIsForUnit(row: AuditShardEvent, unit: string): boolean {
   const named = auditBlockField(row.block, "Unit");
   if (named !== null) return named === unit;
   const artifacts = (auditBlockField(row.block, "Artifacts") ?? "").split(",")
     .map((path) => path.trim().replaceAll("\\", "/")).filter((path) => path.length > 0);
-  return artifacts.length > 0 && artifacts.every((path) => path.startsWith(`construction/${unit}/`));
+  return artifacts.length > 0 && artifacts.every((path) =>
+    /(?:^|\/)construction\/([^/]+)\//.exec(path)?.[1] === unit);
 }
 
 function stagesInRow(row: AuditShardEvent): string[] {
