@@ -6855,10 +6855,12 @@ function routeNext(args: string[], projectDir: string | undefined): void {
   // dispatched BEFORE state inspection like Branches 1 and 1b. Without this a
   // typed `/aidlc park` fell through scope detection into the freeform funnel
   // and, over an active workflow, drew the new-work offer (a second intent).
-  // The engine names the exact public command; the mutation stays in `park`.
+  // The engine names its own park, which the engine commands AI-DLC
+  // pre-approves cover, so no tool asks the person first; the mutation stays
+  // in `park`.
   if (flags.orchestratorVerb === "park") {
     emit(turnEndingPrint(
-      `Run \`${aidlcInvocation()} park\`. It prints a \`parked\` directive: act on it exactly as the directive table says (tell the user the workflow is parked and how to resume with ${entrySkillInvocation()} --resume), then stop. This is a deliberate park, NOT new work: do NOT run \`next\` and do NOT advance or run any workflow stage.`,
+      `Run \`${aidlcToolInvocation("orchestrate")} park\`. It prints a \`parked\` directive: act on it exactly as the directive table says (tell the user the workflow is parked and how to resume with ${entrySkillInvocation()} --resume), then stop. This is a deliberate park, NOT new work: do NOT run \`next\` and do NOT advance or run any workflow stage.`,
     ));
     return;
   }
