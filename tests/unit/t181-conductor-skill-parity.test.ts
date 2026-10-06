@@ -1160,6 +1160,16 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
   // one, and the work's own files keep their paths.
   // The person's Plan Approval pick is matched on the choice labels, so they
   // stay exactly as given even when the rest of the question is translated.
+  // Kiro shows the presence floor's line to the person too, so it is one
+  // sentence for them, and every conductor keys its own step on it.
+  test("every conductor waits for the person on the approval floor's line", () => {
+    for (const rel of skills) {
+      expect(readFileSync(join(REPO_ROOT, rel), "utf-8"), rel).toContain(
+        'A refusal that reads "Nothing runs until you answer the approval question." means the person has not answered the approval question yet: show that question again if it is not on screen and end the turn; never run the call again before they reply.',
+      );
+    }
+  });
+
   test("every conductor keeps the Plan Approval choice labels exactly as given", () => {
     for (const rel of skills) {
       const body = readFileSync(join(REPO_ROOT, rel), "utf-8");

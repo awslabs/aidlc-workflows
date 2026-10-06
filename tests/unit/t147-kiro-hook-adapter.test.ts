@@ -2391,7 +2391,9 @@ describe("t147 Kiro CLI presence floor holds only at a gate the person must answ
   const guard = (dir: string, command: string) =>
     runAdapter(dir, "guard-tool-call", { cwd: dir, tool_name: "execute_bash", tool_input: { command } }, [], presence);
   const approveGate = "bun .kiro/tools/aidlc.ts engine orchestrate report --stage requirements-analysis --result approved";
-  const APPROVAL_WAITS = "An approval is waiting for the person's answer, so nothing runs until they give it: end the turn.";
+  // One line the person can read wherever Kiro shows it; the agent's step is
+  // keyed on the same sentence in the SKILL.
+  const APPROVAL_WAITS = "Nothing runs until you answer the approval question.";
   const toUnitMajor = "bun .kiro/tools/aidlc.ts engine state set-construction-iteration unit-major";
 
   test("a gate the person must answer, with no turn of theirs since it opened, refuses the call", () => {
@@ -2405,6 +2407,33 @@ describe("t147 Kiro CLI presence floor holds only at a gate the person must answ
       const ideSource = readFileSync(join(REPO_ROOT, "harness/kiro-ide/hooks/aidlc-kiro-adapter.ts"), "utf-8");
       expect(ideSource.replace(/"\s*\+\s*"/g, "")).toContain(APPROVAL_WAITS);
       expect(refused.stderr).not.toContain("no human has acted since it opened");
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+
+  // The protocol prints the Review brief at the gate, before the question: it
+  // only reads, so the floor lets that call through and the person never sees
+  // the floor's line in the normal flow. Anything around it still waits.
+  test("the Review brief prints while the gate waits for the person", () => {
+    const dir = scratchProject(true);
+    try {
+      gateOpen(dir);
+      for (const brief of [
+        "bun .kiro/tools/aidlc-review-brief.ts review --stage requirements-analysis --why first",
+        'bun .kiro/tools/aidlc-review-brief.ts review --stage "requirements-analysis" --why first',
+        "aidlc engine review-brief review --stage requirements-analysis --why first",
+        "bun .kiro/tools/aidlc.ts engine review-brief summary --stage requirements-analysis --questions-file q.md",
+      ]) {
+        const printed = guard(dir, brief);
+        expect(printed.code, `${brief}\n${printed.stderr}`).toBe(0);
+      }
+      for (const command of [
+        `bun .kiro/tools/aidlc-review-brief.ts review --stage requirements-analysis --why first && ${approveGate}`,
+        "bun .kiro/tools/aidlc-review-brief.ts context --stage requirements-analysis",
+        "bun .kiro/tools/aidlc-review-brief.ts review --stage requirements-analysis --why first > out.md",
+        approveGate,
+      ]) {
+        expect(guard(dir, command).code, command).toBe(2);
+      }
     } finally { rmSync(dir, { recursive: true, force: true }); }
   });
 
