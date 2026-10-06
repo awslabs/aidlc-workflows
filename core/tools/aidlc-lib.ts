@@ -25510,31 +25510,14 @@ export function clearGateWords(projectDir: string): void {
   }
 }
 
-// The messages this chat's person typed since the stage's latest presentation,
-// in order, or null. `unit` names a team Unit gate. The presentation must be
-// the latest lifecycle row for the stage (and Unit), so a gate already
-// answered, a stage restarted, or a gate never presented (the direct Active to
-// Revising path) has no words. Another question answered after the
-// presentation moves the start past its reply.
-export function gateWordsSincePresentation(
-  projectDir: string,
-  session: string,
-  gate: { stage: string; unit?: string },
-): string[] | null {
-  const record = readGateWords(projectDir, session);
-  if (record === null || record.messages.length === 0) return null;
-  const shardPath = auditFilePath(projectDir);
-  if (projectRelativePath(projectDir, shardPath) !== record.shard) return null;
-  let content: string;
-  try {
-    content = readAppendOnlyFileNoFollowOrThrow(shardPath, "audit shard").toString("utf-8");
-  } catch {
-    return null;
-  }
+// Where a stage's gate words may begin in `content` (an audit shard): its
+// latest presentation, or the latest answer to another question after it. Null
+// when the latest lifecycle row for the stage (and Unit) is not a presentation:
+// a gate already answered, a stage restarted, or a gate never presented (the
+// direct Active to Revising path).
+function gatePresentationStart(content: string, gate: { stage: string; unit?: string }): number | null {
   const separator = /\r?\n---\r?\n/g;
   let start = 0;
-  // Where this gate's words may begin: its presentation, or the latest answer
-  // to another question after it.
   let from: number | null = null;
   for (;;) {
     const match = separator.exec(content);
@@ -25552,6 +25535,28 @@ export function gateWordsSincePresentation(
     if (match === null) break;
     start = match.index + match[0].length;
   }
+  return from;
+}
+
+// The messages this chat's person typed since the stage's latest presentation,
+// in order, or null. `unit` names a team Unit gate. Another question answered
+// after the presentation moves the start past its reply.
+export function gateWordsSincePresentation(
+  projectDir: string,
+  session: string,
+  gate: { stage: string; unit?: string },
+): string[] | null {
+  const record = readGateWords(projectDir, session);
+  if (record === null || record.messages.length === 0) return null;
+  const shardPath = auditFilePath(projectDir);
+  if (projectRelativePath(projectDir, shardPath) !== record.shard) return null;
+  let content: string;
+  try {
+    content = readAppendOnlyFileNoFollowOrThrow(shardPath, "audit shard").toString("utf-8");
+  } catch {
+    return null;
+  }
+  const from = gatePresentationStart(content, gate);
   if (from === null) return null;
   const floor = Buffer.byteLength(content.slice(0, from), "utf-8");
   // A message typed after the presentation was not kept: the words that were
@@ -25559,6 +25564,27 @@ export function gateWordsSincePresentation(
   if (record.dropped > floor) return null;
   const words = record.messages.filter((message) => message.offset > floor).map((message) => message.text);
   return words.length > 0 ? words : null;
+}
+
+// Whether the person replied to the stage's approval question: a reply turn is
+// on this clone's record after its latest presentation (and after any other
+// question's answer since). A turn sent before the question was put to them is
+// no reply to it. Null when the stage is not waiting on that question (never
+// put to them, or already answered), and when the record cannot be read.
+export function personRepliedSincePresentation(
+  projectDir: string,
+  gate: { stage: string; unit?: string },
+): boolean | null {
+  let content: string;
+  try {
+    content = readAppendOnlyFileNoFollowOrThrow(auditFilePath(projectDir), "audit shard").toString("utf-8");
+  } catch {
+    return null;
+  }
+  const from = gatePresentationStart(content, gate);
+  if (from === null) return null;
+  return auditShardBlocks(content.slice(from))
+    .some((block) => isReplyTurn({ event: auditBlockField(block, "Event") ?? "", block }));
 }
 
 // The person's latest chat turn in this clone's ledger for the selected work:

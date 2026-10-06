@@ -105,6 +105,7 @@ import {
   humanPresenceGuardDisabled,
   humanTurnMintAllowed,
   hookActivation,
+  personRepliedSincePresentation,
   personSpokeSinceGate,
   fenceSwitchSentence,
   decideFence,
@@ -6528,10 +6529,17 @@ function handleReject(args: string[]): void {
     !teamGate &&
     autonomousMode &&
     reviewRecoverySpentInCurrentAttempt(pd, content, stage);
+  // Once the approval question is put to the person, only their reply to it
+  // rejects: a turn they sent before it (an earlier question's answer, a
+  // remark while the stage ran) is no reply to it. A stage still running, and
+  // a guard-recovery choice (it binds its own reply above), keep the check
+  // above alone, so "that's wrong, redo it" mid-stage still rejects.
+  const repliedToGate = feedbackStatus !== "not-applicable" ||
+    personRepliedSincePresentation(pd, { stage: slug, ...(teamGate ? { unit: teamGate.unit } : {}) }) !== false;
   if (
     (!autonomousDecision || recoveryResetNeedsHuman) &&
     !humanPresenceGuardDisabled() &&
-    !humanRepliedSinceGate(pd)
+    (!humanRepliedSinceGate(pd) || (!autonomousDecision && !repliedToGate))
   ) {
     if (recoveryResetNeedsHuman) {
       refuseForAgent(
