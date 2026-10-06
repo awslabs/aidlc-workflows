@@ -546,6 +546,35 @@ describe("t118 engine differential corpus — aidlc-orchestrate next (migrated f
       expect(r.directive.kind).not.toBe("ask");
     });
 
+    // (1b) A plan name with a colon is the person naming the plan, whether the
+    // agent quotes the whole request as one argument (Kiro IDE's PowerShell
+    // does) or passes words: "/aidlc classic: Build a notes app" starts the
+    // classic plan with no question, in any letter case.
+    test("no-state '<scope>: description' -> direct creation, also as one quoted argument", () => {
+      for (const args of [
+        ["bugfix: Fix duplicate todo persistence"],
+        ["bugfix:", "Fix", "duplicate", "todo", "persistence"],
+        ["Bugfix: Fix duplicate todo persistence"],
+      ]) {
+        const r = emitNextNoState(...args);
+        expect(r.directive.kind).toBe("print");
+        expect(r.directive.message ?? "").toContain("intent create --scope bugfix");
+        expect(questionText(r)).toBe("Fix duplicate todo persistence");
+      }
+    });
+
+    // (1c) One quoted argument that only OPENS with a plan's name and no colon
+    // stays the person's request: "classic car rental website" describes a car
+    // site, and only the agent, reading the person's words, may split a plan
+    // name off as its own argument.
+    test("no-state one quoted argument opening with a scope word and no colon -> not read as the plan", () => {
+      for (const text of ["classic car rental website", "note: build a classic car site"]) {
+        const r = emitNextNoState(text);
+        expect(r.directive.message ?? "").not.toContain("intent create --scope classic");
+        expect(r.directive.kind).toBe("ask");
+      }
+    });
+
     // (2) Freeform (<=5-word) intent: `next add dark mode toggle` — genuine prose,
     // NOT a scope name. The engine emits an `ask` (scope confirmation, the
     // read-only stand-in for the conductor's detect-scope + confirm). The control

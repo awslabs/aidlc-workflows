@@ -316,6 +316,26 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
     expect(missing).toEqual([]);
   });
 
+  // Kiro IDE's agent quoted "/aidlc classic: ..." whole as one argument, so the
+  // person was asked which plan to use after naming it. Every SKILL that passes
+  // the request on verbatim has the agent give a named plan its own argument;
+  // Codex already forwards the words as separate arguments.
+  test("every shipped conductor SKILL gives a plan the person named its own argument", () => {
+    const passOn = "Pass `$ARGUMENTS` through to the first `next` verbatim - the engine parses flags";
+    const named = "The one thing you read first is whether the request opens with the name of a plan, as in " +
+      "`/aidlc classic Build a notes app` or `/aidlc express: add a version flag`: give that name its own argument before the rest, " +
+      "which you quote as usual (`next classic 'Build a notes app'`), so the person is not asked for the plan they already named; " +
+      "when the opening word is part of what they want built (`/aidlc classic car rental website`), it stays in the request.";
+    const missing = skills.flatMap((rel) => {
+      const body = readFileSync(join(REPO_ROOT, rel), "utf-8");
+      if (!body.includes(passOn)) {
+        return body.includes("as separate arguments, never re-quoted into one string") ? [] : [`${rel}: no pass-on rule`];
+      }
+      return body.includes(named) ? [] : [rel];
+    });
+    expect(missing).toEqual([]);
+  });
+
   // Claude Code shows the stop note to the person ("Stop hook error"), so it
   // is one plain line with no command; what the agent does with it lives here.
   test("every shipped conductor SKILL says what to do when a stop note ends its turn", () => {
