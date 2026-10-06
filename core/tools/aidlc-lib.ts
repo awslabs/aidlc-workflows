@@ -14354,7 +14354,8 @@ export interface FreshReviewReceipts {
   /** Units whose review's source binding relaxed and off keep although it
    *  cannot be compared path by path here: the reviewed listing is not on this
    *  machine, the Unit's list of files changed after its review, or the
-   *  project source cannot be read. Each is said once. */
+   *  project source cannot be read, now or when it was reviewed. Each is said
+   *  once. */
   unitSourceKept: Set<string>;
   /** Units the person approved at their checkpoint after their latest
    *  re-check: that approval opens a fresh one, so their progress above
@@ -19133,8 +19134,12 @@ export function freshReviewReceipts(
       // could not be bound: strict holds it stale; relaxed and off keep it.
       const unchecked = receipt.bypass || receipt.fingerprint === UNBINDABLE_FINGERPRINT;
       if (unchecked) {
-        if (isRelaxed()) acceptUncheckedSource(unit, receipt.fingerprint ?? "(not recorded)", null);
-        else stale = true;
+        if (isRelaxed()) {
+          acceptUncheckedSource(unit, receipt.fingerprint ?? "(not recorded)", null);
+          // A review that could not bind the source keeps its binding now that
+          // the source reads: the checkpoint holds its verdict the same way.
+          if (receipt.fingerprint === UNBINDABLE_FINGERPRINT) unitSourceKept.add(unit);
+        } else stale = true;
       }
       if (!unchecked && receipt.fingerprint !== null) {
         const snapshot = readUnitSourceSnapshot(
