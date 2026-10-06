@@ -155,13 +155,16 @@ export function releaseApiUrl(baseUrl: string, explicit?: string): string {
   return `https://api.github.com/repos/${match[1]}/${match[2]}/releases`;
 }
 
-function progress(url: string, complete: boolean): void {
+// When output is captured, only the release asset itself gets a line: the
+// metadata files read to verify it (version.json, checksums, the attestation,
+// a .sha256 sidecar) would each add one more.
+function progress(url: string, complete: boolean, metadata: boolean): void {
   if (process.env.AIDLC_ROUTE_OUTPUT_MODE !== "human") return;
   const name = basename(new URL(url).pathname) || "release asset";
   const message = complete ? `Downloaded ${name}` : `Downloading ${name}...`;
   if (process.stderr.isTTY) {
     process.stderr.write(`\r${message.slice(0, PROGRESS_WIDTH).padEnd(PROGRESS_WIDTH)}${complete ? "\n" : ""}`);
-  } else if (complete) {
+  } else if (complete && !metadata) {
     process.stderr.write(`${message}\n`);
   }
 }
@@ -607,7 +610,9 @@ async function download(
   contentTypes: readonly string[] = [],
   reportedTimeoutMs = timeoutMs,
 ): Promise<void> {
-  progress(url, false);
+  // Every metadata file is fetched under the metadata size cap.
+  const metadata = maxBytes <= MAX_METADATA_BYTES;
+  progress(url, false, metadata);
   try {
     const { bytes } = await fetchBytes(url, {
       timeoutMs,
@@ -617,7 +622,7 @@ async function download(
       reportedTimeoutMs,
     });
     writeFileSync(path, bytes);
-    progress(url, true);
+    progress(url, true, metadata);
   } catch (error) {
     if (process.env.AIDLC_ROUTE_OUTPUT_MODE === "human" && process.stderr.isTTY) {
       process.stderr.write(`\r${"".padEnd(PROGRESS_WIDTH)}\r`);
