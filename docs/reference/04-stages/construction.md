@@ -366,9 +366,9 @@ feasibility input.
    - Business rules, constraints, and validation logic
    - Data flow and transformations
    - Integration points with other units or external systems
-   - Error handling and edge cases (swept per component against the product
-     agent's `corner-checklist.md`; corners the requirements already settled
-     carry forward)
+   - Error handling and edge cases (at Standard and Comprehensive depth, swept
+     per component against the product agent's `corner-checklist.md`; corners
+     the requirements already settled carry forward)
    - Frontend components (component hierarchy, props/state, interaction flows,
      form validation)
    - Business scenarios (end-to-end user journeys, happy/unhappy paths,
