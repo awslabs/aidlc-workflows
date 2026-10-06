@@ -221,10 +221,13 @@ describe("t345 complete nightly coverage", () => {
     expect(ci.jobs.deterministic).toMatchObject({
       uses, with: {
         ref: `\${{ github.sha }}`, runner: `\${{ matrix.runner }}`,
-        tier: `\${{ matrix.suite.tier }}`, "unit-shard": `\${{ matrix.suite.shard || '' }}`,
+        tier: `\${{ matrix.suite.tier }}`,
         "artifact-label": `ci-deterministic-\${{ matrix.suite.name }}`,
       },
     });
+    // Every job but the merge queue's two macOS unit jobs keeps its matrix
+    // shard (the matrix case below evaluates each one).
+    expect(ci.jobs.deterministic.with?.["unit-shard"]).toEndWith("|| matrix.suite.shard || '' }}");
     expect(ci.jobs.deterministic.steps).toBeUndefined();
     expect(ci.jobs.deterministic["runs-on"]).toBeUndefined();
     expect(ci.jobs.deterministic.needs).toBeUndefined();
@@ -421,10 +424,16 @@ describe("t345 complete nightly coverage", () => {
       // nightly runs them on every OS.
       const scopeRuns = { name: "scope-runs", tier: "integration", filter: "^t-scope-run-" };
       const guardMatrix = { name: "guard-matrix", tier: "integration", filter: "^t-guard-matrix-" };
+      // In the queue, macOS runs its selected unit files in two jobs, unit-1 and unit-2.
+      const queue = event === "merge_group";
+      const macosUnitsLeftOut = Array.from({ length: 10 }, (_, index) => ({
+        runner: "macos-15", suite: { name: `unit-${index + 3}`, tier: "unit", shard: `${index + 3}/12` },
+      }));
       expect(excluded).toEqual(expanded
         ? [
           { runner: "macos-15", suite: scopeRuns }, { runner: "windows-latest", suite: scopeRuns },
           { runner: "macos-15", suite: guardMatrix }, { runner: "windows-latest", suite: guardMatrix },
+          ...(queue ? macosUnitsLeftOut : []),
         ]
         : [{ suite: { name: "e2e", tier: "e2e" } }]);
       const suitesOn = (runner: string) => matrix.suite!.filter((suite) =>
@@ -433,8 +442,26 @@ describe("t345 complete nightly coverage", () => {
       expect(runners).toEqual(expanded ? ["ubuntu-latest", "macos-15", "windows-latest"] : ["ubuntu-latest"]);
       expect(suites.map((suite) => suite.tier)).toEqual(["smoke", ...Array(12).fill("unit"), "integration", "integration", "integration", ...(expanded ? ["e2e"] : [])]);
       expect(suites.filter((suite) => suite.tier === "unit").map((suite) => suite.shard)).toEqual(Array.from({ length: 12 }, (_, index) => `${index + 1}/12`));
-      expect(new Set(runners.flatMap((runner) => suitesOn(runner).map((suite) => `${runner}/${suite.name}`))).size).toBe(expanded ? 47 : 16);
-      if (expanded) expect(suites).toEqual(matrixOf(workflow.jobs.deterministic).suite!);
+      expect(new Set(runners.flatMap((runner) => suitesOn(runner).map((suite) => `${runner}/${suite.name}`))).size).toBe(queue ? 37 : expanded ? 47 : 16);
+      if (expanded) {
+        expect(suites).toEqual(matrixOf(workflow.jobs.deterministic).suite!);
+        expect(suitesOn("windows-latest").map((suite) => suite.name)).toEqual(suitesOn("ubuntu-latest").map((suite) => suite.name).filter((name) => name !== "scope-runs" && name !== "guard-matrix"));
+        expect(suitesOn("macos-15").map((suite) => suite.name)).toEqual(queue
+          ? ["smoke", "unit-1", "unit-2", "integration", "e2e"]
+          : suitesOn("windows-latest").map((suite) => suite.name));
+      }
+      // Each job's unit shard: the queue's two macOS unit jobs split the
+      // selection in halves; every other job keeps its matrix shard.
+      const shardExpression = (ci.jobs.deterministic.with?.["unit-shard"] ?? "").match(/^\$\{\{([\s\S]+)\}\}$/)?.[1];
+      expect(shardExpression).toBeDefined();
+      const shardOf = new Function("github", "matrix", `return (${shardExpression});`);
+      for (const runner of runners) {
+        for (const suite of suitesOn(runner)) {
+          const queueMacos = queue && runner === "macos-15" && suite.tier === "unit";
+          expect(shardOf({ event_name: event }, { runner, suite }), `${event} ${runner} ${suite.name}`)
+            .toBe(queueMacos ? { "unit-1": "1/2", "unit-2": "2/2" }[suite.name as "unit-1" | "unit-2"] : suite.shard ?? "");
+        }
+      }
     }
     // One integration job runs everything but the scope runs and the guard
     // matrix; the other two run only those.
