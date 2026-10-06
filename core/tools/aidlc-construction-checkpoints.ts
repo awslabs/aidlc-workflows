@@ -612,10 +612,14 @@ function snapshot(
       ) {
         errors.push(`${slug}: current artifact/source-bound terminal review evidence is required.`);
         // Only the reviewed code or documents moved (no review is waiting):
-        // the one recovery review re-checks them.
+        // the one recovery review re-checks them. So does readable code the
+        // review no longer binds (its list of files changed, or the listing it
+        // saw is not on this machine).
         const moved = receipts.unitSourceMoved.get(unit) ??
-          (review && auditBlockField(review.block, "Artifact Fingerprint") !== artifact
-            ? receipts.unitStaleProgress.get(unit) : undefined);
+          (review && (
+            auditBlockField(review.block, "Artifact Fingerprint") !== artifact ||
+            (receipts.unitStale.has(unit) && listing !== null)
+          ) ? receipts.unitStaleProgress.get(unit) : undefined);
         if (review && moved && !moved.recoverySpent && !receipts.unitPending.has(unit)) {
           const reviewer = stage.reviewer!;
           const iteration = moved.nextIteration;

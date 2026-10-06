@@ -266,4 +266,23 @@ describe("t-checkpoint-off-machine: an approved Unit whose reviewed evidence can
       console.log(`t-checkpoint-off-machine strict ${name}: status ${JSON.stringify({ errors: status.errors, rereview: status.rereview })} next ${JSON.stringify(next.directive ?? next.stderr).slice(0, 1500)}`);
     }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
   }
+
+  // Strict holds a Unit whose code no longer matches what its review saw: the
+  // code is re-checked once, then the person approves the Unit once, never
+  // stuck at a checkpoint nothing can clear.
+  for (const name of ["manifest-changed", "snapshot-absent-then-edit"]) {
+    const { what, act } = cases[name];
+    test(`Guard Policy strict, ${what}: the code is re-checked once, then alpha is approved again`, () => {
+      const p = fixture(STRICT);
+      const reviews = build(p, "alpha");
+      approve(p, "alpha");
+      act(p, reviews);
+      const status = checkpointStatus(p, "alpha");
+      expect(status.rereview?.stage, JSON.stringify(status)).toBe("code-generation");
+      reviewThroughLog(p, ["review", "--stage", "code-generation", "--reviewer", REVIEWER, "--unit", "alpha", "--iteration", "2"]);
+      approve(p, "alpha");
+      expect(checkpointStatus(p, "alpha").approved).toBe(true);
+      expect(readAuditShardEvents(p).filter((row) => row.event === "GATE_REJECTED")).toEqual([]);
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+  }
 });
