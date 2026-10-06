@@ -4236,6 +4236,30 @@ describe("t243 project initialization", () => {
     expect(readFileSync(file, "utf-8")).toBe(shipped);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
+  // The command a conflict names is the one of the harness being set up, not
+  // the first install a project shows: a first Codex install names Codex's own.
+  test("a first install's conflict names the command of the harness being set up", () => {
+    for (const [harness, release, agent] of [
+      ["codex", CODEX_RELEASE, join(".codex", "agents", "aidlc-developer-agent.toml")],
+      ["claude", CLAUDE_RELEASE, join(".claude", "agents", "aidlc-developer-agent.md")],
+    ] as const) {
+      const project = temp(`aidlc-t243-first-conflict-${harness}-`);
+      mkdirSync(join(project, ".git"));
+      mkdirSync(join(project, dirname(agent)), { recursive: true });
+      writeFileSync(join(project, agent), "my own agent\n");
+      const refused = run(INIT, [
+        "config", "--project-dir", project, "--from", release, "--harness", harness, "--mcp", "none",
+      ], project);
+      expect(refused.status, `${harness}: ${refused.stdout}${refused.stderr}`).toBe(4);
+      const out = refused.stdout.replace(/\s+/g, " ");
+      expect(out).toContain(`${agent} (locally modified or unowned)`);
+      const dir = harness === "codex" ? ".codex" : ".claude";
+      expect(out, harness).toContain(`\`bun ${dir}/tools/aidlc.ts config --dry-run --verbose\` lists every change first`);
+      if (harness === "codex") expect(out).not.toContain(".claude/tools/aidlc.ts");
+      expect(readFileSync(join(project, agent), "utf-8")).toBe("my own agent\n");
+    }
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
   test("unmarked gitignore hiding committed records configures with a warning naming the rule", () => {
     const project = temp("aidlc-t243-hidden-records-");
     expect(spawnSync("git", ["init", "-q", project]).status).toBe(0);

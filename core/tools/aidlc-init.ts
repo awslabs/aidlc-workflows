@@ -2286,23 +2286,31 @@ function sameFile(left: string, right: string): boolean {
   }
 }
 
+// The harness this config run sets up or refreshes, once it is known. No
+// projection names one in the source tree, so the commands this run prints
+// name this harness's tool there, not the first install the project shows.
+let configTargetHarnessDir: string | null = null;
+
 // How a printed command starts so it runs from where the user is: `aidlc`, or
 // the Bun tool that ran this command. The project's own tool is named from the
 // project when run there and by its path in the project when not. Any other
 // tool (a runtime unpacked elsewhere, which may be adding a harness the project
 // does not have yet) is named by its own path, unless it is the one under the
-// working directory. In the source tree the project's own tool stands in.
+// working directory. In the source tree the project's own tool of the harness
+// being set up stands in.
 function configInvocationFor(projectDir = process.cwd()): string {
   const invocation = aidlcInvocation();
   if (invocation === "aidlc") return invocation;
   const ran = projectedDispatcher();
   // A projection's relative invocation names the harness directory it was
   // built for, whatever the environment says the harness is.
-  const harnessDir = ran === null ? runtimeHarnessDir() : basename(dirname(dirname(ran)));
+  const harnessDir = ran === null
+    ? configTargetHarnessDir ?? runtimeHarnessDir()
+    : basename(dirname(dirname(ran)));
   const toolIn = (root: string) => join(root, harnessDir, "tools", "aidlc.ts");
   if (ran === null || sameFile(ran, toolIn(projectDir))) {
     return ranFromProject(projectDir)
-      ? invocation
+      ? ran === null ? `bun ${harnessDir}/tools/aidlc.ts` : invocation
       : `bun ${quoteCommandArgument(toolIn(projectDir))}`;
   }
   return sameFile(ran, toolIn(process.cwd())) ? invocation : `bun ${quoteCommandArgument(ran)}`;
@@ -10079,6 +10087,8 @@ export async function main(
   input: string[],
   internal: ConfigMainInternal = {},
 ): Promise<void> {
+  // A setup walk's own sections run inside the walk, for the harness it set up.
+  if (!internal.setupWalkChild) configTargetHarnessDir = null;
   let argv = stripVerb(input);
   const options = globalOptions(argv);
   const positionals = configPositionals(argv);
@@ -10642,6 +10652,7 @@ export async function main(
       }
     }
     const { stamp, descriptor } = selected;
+    configTargetHarnessDir = descriptor.harnessDir;
     if (existing.distribution && existing.distribution !== stamp.distribution) {
       throw new Error(`project uses ${existing.distribution}; refusing ${stamp.distribution}`);
     }
