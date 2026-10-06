@@ -12029,26 +12029,20 @@ function checkStageCompletionEvidence(
       if (pick !== null) {
         // A Unit whose work is done owes only its completion receipt: name
         // that step for the agent rather than a "run next" that hands the
-        // same Unit's stage back. Units are named in route order up to the
-        // first with work left, since `unit start` takes only the routed Unit.
-        const order = [pick.unit, ...pick.uncovered.filter((unit) => unit !== pick.unit)];
-        const steps: string[] = [];
-        for (const unit of order) {
-          const step = unitReceiptOnlyStep(
-            pd, node, unit, recordPrefix, codekbCtxFor(pd), unitKinds?.get(unit) ?? null,
-            ledger, stateContent, scope,
-          );
-          if (step === null) break;
-          steps.push(step);
-        }
-        if (steps.length > 0) {
-          const left = order.slice(steps.length);
+        // same Unit's stage back. Only the routed Unit is named, since `unit
+        // start` takes only the Unit the engine routes; `next` names the rest.
+        const step = unitReceiptOnlyStep(
+          pd, node, pick.unit, recordPrefix, codekbCtxFor(pd), unitKinds?.get(pick.unit) ?? null,
+          ledger, stateContent, scope,
+        );
+        if (step !== null) {
+          const left = pick.uncovered.filter((unit) => unit !== pick.unit);
           const nextCommand = `\`${aidlcToolInvocation("orchestrate")} next\``;
           return {
             ok: false,
             step: true,
             message:
-              `${steps.join(" ")} Then run ` +
+              `${step} Then run ` +
               (left.length > 0
                 ? `${nextCommand} to finish the other work items (${left.join(", ")}).`
                 : `${retry ?? nextCommand}.`),
@@ -13362,6 +13356,11 @@ function handleReport(args: string[], projectDir: string | undefined): void {
       scope,
       stateContent,
       pd,
+      // The person's approval stands: once the receipt step is done, the same
+      // report applies it, so they are never asked again.
+      flags.result === "approved"
+        ? `\`${renderEngineInvocation({ route: "orchestrate", args: ["report", ...args] })}\` again`
+        : undefined,
     );
     if (!evidence.ok) {
       emit(evidence.step ? printDirective(evidence.message) : errorDirective(evidence.message));
