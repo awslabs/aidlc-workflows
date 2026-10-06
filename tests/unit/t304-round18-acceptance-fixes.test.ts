@@ -31,8 +31,10 @@ import { acquireRelease, digest } from "../../core/tools/aidlc-release.ts";
 import { quoteCommandArgument as quoteForShell } from "../../core/tools/aidlc-runtime-paths.ts";
 import { serveReleaseFixture, writeReleaseFixture } from "../harness/release-fixture.ts";
 import { AIDLC_VERSION } from "../../core/tools/aidlc-version.ts";
+import { doctorCommandLines, vscodeVisibleOutput } from "../harness/vscode-output-trim.ts";
 import {
   canonicalPolicyPath,
+  installedExecutablePath,
   machineTransactionRoot,
 } from "../../core/tools/aidlc-install-paths.ts";
 import {
@@ -1637,6 +1639,27 @@ describe("t304 diagnostics and release truthfulness", () => {
     }));
     expect(check.fix).not.toContain("restore");
     expect(check.fix).toContain(OTHER_VERSION);
+    // With that release installed, the fix names where it is. Neither fix
+    // repeats the doctor command line, which VS Code would cut the report at (#1411).
+    const prior = process.env.AIDLC_INSTALL_ROOT;
+    process.env.AIDLC_INSTALL_ROOT = join(temp("aidlc-t304-newer-answers-"), "share", "aidlc");
+    let installed: ReturnType<typeof providerDoctorCheck>;
+    try {
+      const executable = installedExecutablePath(OTHER_VERSION);
+      mkdirSync(join(executable, ".."), { recursive: true });
+      writeFileSync(executable, "");
+      installed = providerDoctorCheck(project);
+      expect(installed.fix).toContain(`run doctor with aidlc ${OTHER_VERSION} to check them; it is at \`${executable}\``);
+    } finally {
+      if (prior === undefined) delete process.env.AIDLC_INSTALL_ROOT;
+      else process.env.AIDLC_INSTALL_ROOT = prior;
+    }
+    for (const row of [check, installed]) {
+      const printed = `${row.label}\n  fix: ${row.fix}\n`;
+      for (const commandLine of doctorCommandLines(".claude")) {
+        expect(vscodeVisibleOutput(printed, commandLine), commandLine).toBe(printed);
+      }
+    }
   });
 
   test("doctor judges the project stamp against the pinned engine", () => {

@@ -3306,8 +3306,9 @@ export function providerDoctorCheck(
         pass: false,
         severity: "warn",
         label: `Providers: recorded answers are from aidlc ${writer}, newer than this aidlc ${AIDLC_VERSION}`,
+        // Not the doctor command line itself: VS Code drops output up to a line that repeats it (#1411).
         fix: (existsSync(executable)
-          ? `check them with that release's doctor: \`${executable} doctor\``
+          ? `run doctor with aidlc ${writer} to check them; it is at \`${executable}\``
           : `install aidlc ${writer} with \`${aidlcInvocation()} update --version ${writer}\`, then rerun doctor`) +
           ` (${detail})`,
       };
