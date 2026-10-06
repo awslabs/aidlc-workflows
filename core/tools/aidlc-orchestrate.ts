@@ -8314,8 +8314,10 @@ function unitLedgerFor(
   const policyState = stateContent ?? loadStateFileIfPresent(projectDir);
   const receiptsRequired = policyState !== null && checkpointPolicyEnabled(policyState);
   // A Unit's checkpoint re-checks or accepts a change to its completed work,
-  // so the stage is not handed back for it.
-  const keepChangedWaveCompletions = receiptsRequired;
+  // and a Guard Policy of relaxed or off accepts it at the stage's gate, so the
+  // stage is not handed back for it.
+  const keepChangedWaveCompletions = receiptsRequired ||
+    (policyState !== null && guardPolicyAcceptsChanges(projectDir, policyState));
   if (auditRows && stateContent) {
     const snapshot = unitLifecycleSnapshot(projectDir, slug, auditRows, stateContent, { keepChangedWaveCompletions });
     return { ...snapshot, inUse: snapshot.inUse || receiptsRequired };
