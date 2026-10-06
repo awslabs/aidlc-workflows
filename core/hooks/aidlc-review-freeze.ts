@@ -63,6 +63,7 @@ import {
   decideFence,
   errorMessage,
   evaluateGuardRefusal,
+  guardStandAsideSpeaks,
   guardStoodAsideLine,
   recordGuardStoodAside,
   freshReviewReceipts,
@@ -327,7 +328,9 @@ async function checkFreeze(input: string, projectDir: string): Promise<number> {
     }
     if (gate?.decision === "stand-aside") {
       const detail = verdict.target ?? "";
-      writeGuardStoodAside(guardStoodAsideLine("review-freeze", gate.source, detail));
+      if (guardStandAsideSpeaks(gate)) {
+        writeGuardStoodAside(guardStoodAsideLine("review-freeze", gate.source, detail));
+      }
       recordGuardStoodAside(projectDir, {
         fence: "review-freeze",
         authority: gate.authority,

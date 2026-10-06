@@ -37416,6 +37416,17 @@ export function guardStoodAsideLine(
 }
 
 /**
+ * Whether a lowered fence says that it stood aside. Under Guard Policy off it
+ * says nothing: off means off, and the person heard the one line when the
+ * policy was set. The GUARD_STOOD_ASIDE row still records every pass.
+ * Relaxed and strict keep their line, including for a fence the person
+ * switched off themselves.
+ */
+export function guardStandAsideSpeaks(gate: { policy: GuardPolicy }): boolean {
+  return gate.policy !== "off";
+}
+
+/**
  * Claude Code shows systemMessage to the user while exit-0 plain stdout is
  * transcript-only; other harnesses read the plain line.
  */
