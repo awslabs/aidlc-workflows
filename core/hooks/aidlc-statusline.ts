@@ -448,6 +448,32 @@ function agentDisplayMap(projectDir: string): Record<string, string> {
   };
 }
 
+// The step the person is on. Working one Unit at a time, Current Stage stays
+// on the block's first stage while the person is at a later step of a Unit:
+// that step is the Unit Stage field, or else the one the engine last put to
+// them, from its active-directive file when nothing has written the state
+// since (the lib's digest check is too heavy for this hot path).
+function shownStep(stateFile: string, state: string, stage: string): { stage: string; unit: string } {
+  const slug = /^[a-z0-9][a-z0-9-]*$/;
+  const unitStage = extractField(state, "Unit Stage");
+  if (slug.test(unitStage)) return { stage: unitStage, unit: "" };
+  try {
+    const path = join(dirname(stateFile), ".aidlc-engine", "active-directive.json");
+    if (statSync(path).mtimeMs < statSync(stateFile).mtimeMs) return { stage, unit: "" };
+    const marker = JSON.parse(readFileSync(path, "utf-8")) as { stage?: unknown; unit?: unknown; delivery?: unknown };
+    if (typeof marker.stage !== "string" || !slug.test(marker.stage) || marker.delivery === "superseded") {
+      return { stage, unit: "" };
+    }
+    // The file is writable, so only a real Unit name reaches the line.
+    const unit = typeof marker.unit === "string" && marker.unit.length <= 64 && /^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(marker.unit)
+      ? marker.unit
+      : "";
+    return { stage: marker.stage, unit };
+  } catch {
+    return { stage, unit: "" };
+  }
+}
+
 function extractField(text: string, label: string): string {
   // Match the Markdown list field pattern used throughout aidlc-state.md:
   //   - **Lifecycle Phase**: IDEATION
@@ -666,8 +692,12 @@ async function main(stdinText: string): Promise<void> {
   const statusMatch = state.match(/^-\s*\*\*Status\*\*:\s*(.+)$/m);
   const status = statusMatch ? statusMatch[1].replace(/\r$/, "").trim() : "";
 
-  const stageDisplay = STAGE_DISPLAY[stage] ?? stage;
-  const agentDisplay = agentDisplayMap(projectDir)[agent] ?? agent;
+  const shown = shownStep(stateFile, state, stage);
+  const stageDisplay = shown.stage === ""
+    ? ""
+    : `${STAGE_DISPLAY[shown.stage] ?? shown.stage}${shown.unit ? ` for ${shown.unit}` : ""}`;
+  // Active Agent follows Current Stage, so it is not shown beside another step.
+  const agentDisplay = shown.stage === stage ? agentDisplayMap(projectDir)[agent] ?? agent : "";
   const { done, total } = phaseProgress(state, phase);
   const bar = total > 0 ? progressBar(done, total) : "";
   const phaseProg = total > 0 ? `${done}/${total}` : "";
