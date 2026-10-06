@@ -481,7 +481,8 @@ describe("t194 recompose - the jump readers honour the recomposed plan", () => {
       "execute", "--target", String(before), "--direction", "backward",
     ]);
     expect(back.status).toBe(0);
-    expect((JSON.parse(back.out) as { notice?: string }).notice).toBeUndefined();
+    // No chat holds the way back here, so the backward jump's output carries it.
+    expect((JSON.parse(back.out) as { notice?: string }).notice).toStartWith("Moved back to ");
   });
 
   test("a forward jump names a plugin's stage by its slug, never by its own display text", () => {
