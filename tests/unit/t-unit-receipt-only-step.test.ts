@@ -263,6 +263,8 @@ describe("t-unit-receipt-only-step: a Unit done but not recorded gets its receip
       CONSTRUCTION_STATE.replace("- [-] functional-design", "- [R] functional-design"),
       "utf-8",
     );
+    // The gate takes both Units' reviews.
+    reviewReady(proj, "unit-a");
     writeUnitArtifacts(proj, "unit-b");
     reviewReady(proj, "unit-b");
 
