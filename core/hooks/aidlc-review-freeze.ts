@@ -69,7 +69,7 @@ import {
   freshReviewReceipts,
   getField,
   guardAttemptState,
-  guardRefusalOutput,
+  guardRefusalHookNote,
   humanAuthorityState,
   hooksHealthDir,
   writeHookStatusFile,
@@ -429,7 +429,7 @@ async function checkFreeze(input: string, projectDir: string): Promise<number> {
     userMessage: blockReason(verdict, guidance),
   };
   process.stderr.write(
-    `${guardRefusalOutput(projectDir, refusal, snapshot.attempt, snapshot.resources)}\n`,
+    `${guardRefusalHookNote(projectDir, refusal, snapshot.attempt, snapshot.resources)}\n`,
   );
   return 2; // harness PreToolUse reject contract: exit 2 + stderr blocks
 }

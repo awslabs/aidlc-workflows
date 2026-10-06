@@ -1020,9 +1020,14 @@ describe("t278 engine-emitted wave contract", () => {
     expect(frozen.status, frozen.out).toBe(2);
     expect(frozen.out).toContain("Finish the current revision");
     expect(frozen.out).toContain("--result revised");
-    expect(frozen.out).toContain("/aidlc --stage functional-design");
     expect(frozen.out).not.toContain("Request Changes");
     expect(frozen.out).not.toContain("--result rejected");
+    // The recovery question the refusal left is what the next `next` asks.
+    const asked = JSON.stringify(next(proj).directive);
+    expect(asked).toContain('"ask_type":"guard-recovery"');
+    expect(asked).toContain("/aidlc --stage functional-design");
+    expect(asked).not.toContain("Request Changes");
+    expect(asked).not.toContain("--result rejected");
 
     writeFileSync(artifact, "# changed before recovery\n");
     review(proj, "alpha", "READY", 2);

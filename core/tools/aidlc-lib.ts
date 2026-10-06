@@ -29146,6 +29146,11 @@ export interface GuardRefusalRecord {
   resetToken: string;
   refusal: GuardRefusal;
   updatedAt: string;
+  // A hook refusal's recovery question, left for the next `next` to ask (the
+  // hook's own message only names `next`), and the stage's latest approval when
+  // it was left: an approval since then retires the question.
+  pendingAsk?: GuardRecoveryAskData;
+  pendingApproval?: string;
 }
 
 export interface GuardRecoveryAskData {
@@ -29180,9 +29185,10 @@ function guardRefusalResetToken(
   projectDir: string,
   stage: string,
   unit?: string,
+  events: AuditShardEvent[] = readAuditShardEvents(projectDir),
 ): string {
   const resetEvents = sortAttemptEvents(
-    readAuditShardEvents(projectDir).filter((event) => {
+    events.filter((event) => {
       if (
         event.event === "SESSION_STARTED" ||
         event.event === "SESSION_RESUMED" ||
@@ -29191,18 +29197,7 @@ function guardRefusalResetToken(
       ) {
         return true;
       }
-      if (event.event === "GATE_REJECTED") {
-        const stages = (
-          auditBlockField(event.block, "Gate Stages") ??
-            auditBlockField(event.block, "Stage") ??
-            ""
-        )
-          .split(",")
-          .map((value) => value.trim());
-        if (!stages.includes(stage)) return false;
-        const eventUnit = auditBlockField(event.block, "Unit") ?? undefined;
-        return eventUnit === undefined || eventUnit === unit;
-      }
+      if (event.event === "GATE_REJECTED") return gateEventCovers(event, stage, unit);
       if (event.event === "BOLT_STARTED" && unit !== undefined) {
         return (auditBlockField(event.block, "Bolt names") ?? "")
           .split(",")
@@ -29216,6 +29211,33 @@ function guardRefusalResetToken(
   return latest === undefined
     ? ""
     : `${latest.event}\0${latest.timestamp}\0${latest.shard}\0${latest.pos}`;
+}
+
+// A gate decision for this stage, and for this Unit or every Unit.
+function gateEventCovers(event: AuditShardEvent, stage: string, unit?: string): boolean {
+  const stages = (
+    auditBlockField(event.block, "Gate Stages") ??
+      auditBlockField(event.block, "Stage") ??
+      ""
+  )
+    .split(",")
+    .map((value) => value.trim());
+  if (!stages.includes(stage)) return false;
+  const eventUnit = auditBlockField(event.block, "Unit") ?? undefined;
+  return eventUnit === undefined || eventUnit === unit;
+}
+
+// The latest approval of this stage (or this Unit's step), so a question left
+// before it can tell that the step it was about was approved since.
+function guardRefusalApprovalToken(
+  events: AuditShardEvent[],
+  stage: string,
+  unit?: string,
+): string {
+  const latest = sortAttemptEvents(
+    events.filter((event) => event.event === "GATE_APPROVED" && gateEventCovers(event, stage, unit)),
+  ).at(-1);
+  return latest === undefined ? "" : `${latest.timestamp}\0${latest.shard}\0${latest.pos}`;
 }
 
 function readGuardRefusalRecord(path: string): GuardRefusalRecord | null {
@@ -29232,7 +29254,9 @@ function readGuardRefusalRecord(path: string): GuardRefusalRecord | null {
       !value.codes.every((code) => typeof code === "string") ||
       typeof value.resetToken !== "string" ||
       typeof value.updatedAt !== "string" ||
-      !isPlainObject(value.refusal)
+      !isPlainObject(value.refusal) ||
+      (value.pendingAsk !== undefined && !isPlainObject(value.pendingAsk)) ||
+      (value.pendingApproval !== undefined && typeof value.pendingApproval !== "string")
     ) {
       return null;
     }
@@ -29341,12 +29365,14 @@ export function guardRefusalStreakView(
 // Record one refusal against the streak for its stage and Unit, and return the
 // ask that renders it. The record is the only write; it lives beside the other
 // gitignored runtime files and carries no authority, so a persistence failure
-// can only under-count, never relax a guard.
+// can only under-count, never relax a guard. `leaveAsk` keeps the ask in the
+// record for the next `next` to put to the person (a hook refusal).
 export function recordGuardRefusal(
   projectDir: string,
   refusal: GuardRefusal,
   attempt: GuardAttemptState,
   resourceFingerprints: ReadonlyArray<string> = [],
+  leaveAsk = false,
 ): GuardRefusalStreak {
   const { record, ...streak } = guardRefusalStreakView(
     projectDir,
@@ -29356,8 +29382,19 @@ export function recordGuardRefusal(
   );
   const path = guardRefusalPath(projectDir, refusal.stage, refusal.unit);
   try {
+    const left: GuardRefusalRecord = leaveAsk
+      ? {
+          ...record,
+          pendingAsk: streak.ask,
+          pendingApproval: guardRefusalApprovalToken(
+            readAuditShardEvents(projectDir),
+            refusal.stage,
+            refusal.unit,
+          ),
+        }
+      : record;
     mkdirSync(dirname(path), { recursive: true });
-    writeFileSync(path, `${JSON.stringify(record, null, 2)}\n`, "utf-8");
+    writeFileSync(path, `${JSON.stringify(left, null, 2)}\n`, "utf-8");
   } catch {
     // Persistence failure under-counts repetitions; it never relaxes a guard.
   }
@@ -29442,6 +29479,105 @@ export function guardRefusalOutput(
     resourceFingerprints,
   );
   return `${refusal.userMessage}\n${JSON.stringify(streak.ask)}`;
+}
+
+// The refusal as a PreToolUse hook prints it: what was refused, then the step
+// to take. The tool shows hook output to the person, so it carries no JSON; the
+// recovery question waits in the refusal record and the next `next` asks it.
+export function guardRefusalHookNote(
+  projectDir: string,
+  refusal: GuardRefusal,
+  attempt: GuardAttemptState,
+  resourceFingerprints: ReadonlyArray<string> = [],
+): string {
+  recordGuardRefusal(projectDir, refusal, attempt, resourceFingerprints, true);
+  return `${refusal.userMessage} Next: \`${aidlcToolInvocation("orchestrate")} next\`.`;
+}
+
+// Whether the review freeze would still refuse the write it refused: the
+// check is still up and a final review (or a pending recovery review) still
+// covers that stage or Unit. Unknown reads as no, so a question is never asked
+// about a refusal that may be gone.
+function reviewFreezeRefusalStands(
+  projectDir: string,
+  stateContent: string,
+  refusal: GuardRefusal,
+): boolean {
+  try {
+    if (resolveProjectFlag("AIDLC_DISABLE_REVIEW_FREEZE_HOOK") === "1") return false;
+    if (decideFence(projectDir, "review-freeze", { stateContent }).decision === "stand-aside") return false;
+    const stage = loadStageGraph().find((entry) => entry.slug === refusal.stage);
+    if (!stage?.reviewer) return false;
+    const receipts = freshReviewReceipts(projectDir, stateContent, stage, {
+      reviewClass: resolveReviewClass(
+        stage.review_class ?? "adversarial",
+        getField(stateContent, "Scope") ?? "",
+        stateContent,
+      ),
+    });
+    if (refusal.unit !== undefined) {
+      return receipts.unitVerdicts.has(refusal.unit) ||
+        receipts.unitPending.get(refusal.unit)?.recovery === true;
+    }
+    return receipts.stageVerdict !== null || receipts.stagePending?.recovery === true;
+  } catch {
+    return false;
+  }
+}
+
+// The newest recovery question a hook refusal left that still stands: the same
+// reset boundary, no approval of that step since, the stage still open, and the
+// refusing check still holding. With `take` that question is cleared, so it is
+// asked once; with `prune` every question that no longer stands is cleared.
+// Neither writes anything for a read-only probe.
+export function pendingGuardRecoveryAsk(
+  projectDir: string,
+  stateContent: string,
+  options: { take: boolean; prune: boolean },
+): GuardRecoveryAskData | null {
+  const dir = join(engineDir(projectDir), "guard-refusals");
+  let names: string[];
+  try {
+    names = readdirSync(dir).filter((name) => name.endsWith(".json"));
+  } catch {
+    return null;
+  }
+  const pending: { path: string; record: GuardRefusalRecord }[] = [];
+  for (const name of names) {
+    const path = join(dir, name);
+    const record = readGuardRefusalRecord(path);
+    if (record?.pendingAsk !== undefined) pending.push({ path, record });
+  }
+  if (pending.length === 0) return null;
+  const events = readAuditShardEvents(projectDir);
+  const closed = new Set(
+    parseCheckboxes(stateContent)
+      .filter((entry) => entry.state === "completed" || entry.state === "skipped")
+      .map((entry) => entry.slug),
+  );
+  const stands = ({ record }: { record: GuardRefusalRecord }): boolean => {
+    const { stage, unit } = record.refusal;
+    return !closed.has(stage) &&
+      record.resetToken === guardRefusalResetToken(projectDir, stage, unit, events) &&
+      (record.pendingApproval ?? "") === guardRefusalApprovalToken(events, stage, unit) &&
+      (record.refusal.code !== "REVIEW_FREEZE_ACTIVE" ||
+        reviewFreezeRefusalStands(projectDir, stateContent, record.refusal));
+  };
+  const standing = pending.filter(stands).sort((a, b) => a.record.updatedAt.localeCompare(b.record.updatedAt));
+  const asked = standing.at(-1) ?? null;
+  const cleared = [
+    ...(options.prune ? pending.filter((entry) => !standing.includes(entry)) : []),
+    ...(options.take && asked ? [asked] : []),
+  ];
+  for (const { path, record } of cleared) {
+    const { pendingAsk: _ask, pendingApproval: _approval, ...rest } = record;
+    try {
+      writeFileSync(path, `${JSON.stringify(rest, null, 2)}\n`, "utf-8");
+    } catch {
+      // A question that cannot be cleared may be asked again; it never relaxes a guard.
+    }
+  }
+  return asked?.record.pendingAsk ?? null;
 }
 
 // The guard-recovery ask carried on the last line of a tool refusal, if any.

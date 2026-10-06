@@ -181,7 +181,9 @@ import {
   guardPolicyStateField,
   SKELETON_STANCES,
   guardRefusalStreakView,
+  pendingGuardRecoveryAsk,
   type GuardRemedy,
+  type GuardRecoveryAskData,
   humanAuthorityState,
   latestMainWorkflowStageRunFloorForProject,
   latestReviewRecordRefs,
@@ -7534,6 +7536,17 @@ function routeNext(args: string[], projectDir: string | undefined): void {
   const checkboxes = parseCheckboxes(stateContent);
   const currentState = checkboxStateOf(checkboxes, currentSlug);
 
+  // A guard hook refused a step and left its recovery question here.
+  const pendingRecovery = pendingGuardRecoveryDirective(
+    pd,
+    stateContent,
+    currentState === "awaiting-approval",
+  );
+  if (pendingRecovery) {
+    emit(pendingRecovery);
+    return;
+  }
+
   // A folder set up as a new project gained code before Construction: ask the
   // person which it is, at a stage boundary rather than over an open gate.
   // Never flipped here; either answer records the type as theirs.
@@ -11502,7 +11515,30 @@ function retiredGuardPolicyNotice(projectDir: string, stateContent: string): str
 function guardRecoveryAskFromToolOutput(
   output: string,
 ): GuardRecoveryAskDirective | null {
-  const ask = guardRecoveryAskFromRefusalText(output);
+  return validGuardRecoveryAsk(guardRecoveryAskFromRefusalText(output));
+}
+
+// The recovery question a hook refusal left for this `next` (the hook's own
+// message names only `next`). It waits behind a question already put to the
+// person: the open gate, or an engine question still being answered. A
+// read-only probe reads it and writes nothing.
+function pendingGuardRecoveryDirective(
+  projectDir: string,
+  stateContent: string,
+  gateOpen: boolean,
+): GuardRecoveryAskDirective | null {
+  const held = gateOpen || readActiveDirectiveMarker(projectDir, stateContent)?.kind === "ask";
+  const probe = isReadOnlyEngineProbe();
+  const ask = pendingGuardRecoveryAsk(projectDir, stateContent, {
+    take: !probe && !held,
+    prune: !probe,
+  });
+  return held ? null : validGuardRecoveryAsk(ask);
+}
+
+function validGuardRecoveryAsk(
+  ask: GuardRecoveryAskData | null,
+): GuardRecoveryAskDirective | null {
   if (ask === null) return null;
   const result = validateDirective(ask);
   if (

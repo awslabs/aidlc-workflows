@@ -1,4 +1,4 @@
-// covers: hook:aidlc-review-freeze, file:hooks/aidlc-kiro-adapter.ts, hook:review-freeze-command, function:freshReviewReceipts, function:producesArtifactFile, function:producesArtifactUnit, audit:REVIEW_FREEZE_BLOCKED
+// covers: hook:aidlc-review-freeze, file:hooks/aidlc-kiro-adapter.ts, hook:review-freeze-command, function:freshReviewReceipts, function:producesArtifactFile, function:producesArtifactUnit, audit:REVIEW_FREEZE_BLOCKED, function:guardRefusalHookNote, function:pendingGuardRecoveryAsk
 //
 // t264 - the deterministic PreToolUse enforcement of the §12a terminal-receipt
 // ordering (the receipt-invalidation loop's hook half; the prose half is
