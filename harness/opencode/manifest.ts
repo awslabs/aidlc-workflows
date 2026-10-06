@@ -92,13 +92,22 @@ const manifest: HarnessManifest = {
       },
     },
     {
+      // The team's own opencode.json (model, provider, instructions,
+      // permission rules) keeps everything it has: AI-DLC adds only its own
+      // entries and leaves a permission map's "*" rule to the team. Its part
+      // ships in root-blocks; a copy leaves the file out and its setup adds
+      // the part. A file AI-DLC wrote whole before is adopted by the
+      // signatures below.
       path: "opencode.json",
-      policy: "whole-file",
+      policy: "json-entries",
       legacySignatures: {
         wholeFileHashes: [
           // The pre-neutral shipped variant (#1268 changed this file).
           "sha256:3be60b2be72b7a423fdaa90fd7d0d9d19613875c05ad5f1a2b6e20fcb54cd1e5",
           "sha256:bc216975f2d614214fc6b6cc612c78f7da3f2b3f56492f0c252297fdc51fb928",
+          // The file 2.10.0 wrote whole, Bun-shaped copy and native release.
+          "sha256:d8118ed1ea8d76b2b89c55fdf87bc0405325c03c2f72fee5dd689c59fc745a78",
+          "sha256:34904172eae6868a8bcf99cddab1b17639d98d022cb32339a5a05c5b2d096ba1",
         ],
       },
     },

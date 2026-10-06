@@ -2525,22 +2525,26 @@ describe("t294 instruction-file doctor row", () => {
     expect(modified.label).toContain("hand-modified - conflict");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-  test("whole-file instruction surface reports intact, missing, and modified", () => {
+  test("the team's opencode.json reports intact, missing, and edited by AI-DLC's entries", () => {
     const project = install("opencode");
     const path = join(project, "opencode.json");
     const original = readFileSync(path, "utf-8");
     const intact = instructionFileDoctorCheck(project, ".aidlc");
     expect(intact.pass).toBe(true);
-    expect(intact.label).toContain("framework-owned file intact");
+    expect(intact.label).toContain("block present, user content preserved");
 
     rmSync(path);
     const missing = instructionFileDoctorCheck(project, ".aidlc");
     expect(missing.label).toContain("block or file missing (opencode.json)");
     expect(missing.fix).toContain("bun .aidlc/tools/aidlc.ts config");
 
+    // The team's own setting is theirs, not a conflict.
     writeFileSync(path, original.replace('"permission"', '"localSetting": true,\n  "permission"'));
+    expect(instructionFileDoctorCheck(project, ".aidlc").pass).toBe(true);
+    // Without AI-DLC's onboarding instruction, the file is missing its part.
+    writeFileSync(path, original.replace('".aidlc/onboarding.md", ', ""));
     expect(instructionFileDoctorCheck(project, ".aidlc").label)
-      .toContain("hand-modified - conflict");
+      .toContain("block or file missing (opencode.json)");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("instruction row selects the invoking harness in a dual-harness project", () => {
@@ -4128,12 +4132,15 @@ process.exit(0);
     ], fresh, runtimeEnv());
     expect(upgraded.status, upgraded.stdout + upgraded.stderr).toBe(0);
     expect(readFileSync(freshPath, "utf-8")).toBe(`\uFEFF${readFileSync(join(source, "opencode.json"), "utf-8")}`);
-    // Their own edit, mark or not, is still theirs.
+    // Their own edit, mark or not, is still theirs: kept, with the mark.
     writeFileSync(freshPath, `\uFEFF${JSON.stringify({ ...shipped, theme: "mine" }, null, 2)}\n`);
     const edited = run([
       "config", "--project-dir", fresh, "--from", join(DIST_RELEASE, "opencode"), "--harness", "opencode", "--yes",
     ], fresh, runtimeEnv());
-    expect(edited.stdout + edited.stderr).toContain("opencode.json (unowned whole file)");
+    expect(edited.status, edited.stdout + edited.stderr).toBe(0);
+    const kept = readFileSync(freshPath, "utf-8");
+    expect(kept.startsWith("\uFEFF")).toBe(true);
+    expect(JSON.parse(kept.slice(1)).theme).toBe("mine");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("Claude refresh preserves a wired project hook whose filename starts with aidlc-", () => {
@@ -4397,11 +4404,12 @@ process.exit(0);
           const settings = JSON.parse(readFileSync(path, "utf-8"));
           expect(settings.mcp).toEqual(JSON.parse(current).mcp);
           expect(settings.provider["amazon-bedrock"].options.region).toBe("eu-west-1");
-          if (modified) {
-            expect(after.rootContributions[rel]).toEqual(before.rootContributions[rel]);
-          } else {
-            expect(after.rootContributions[rel]).not.toEqual(before.rootContributions[rel]);
-          }
+          // The team's own MCP server is never recorded as AI-DLC's; the
+          // provider region AI-DLC wrote is.
+          const entries = after.rootContributions[rel].entries as Record<string, string>;
+          expect(Object.keys(entries).some((id) => id.includes('"mcp"'))).toBe(false);
+          expect(entries).toMatchObject(before.rootContributions[rel].entries);
+          expect(entries[JSON.stringify({ path: ["provider", "amazon-bedrock", "options", "region"] })]).toBeDefined();
         }
         const refresh = run([
           "config",
@@ -4411,12 +4419,13 @@ process.exit(0);
           harness,
           "--yes",
         ], project, env);
-        expect(refresh.status, refresh.stdout + refresh.stderr).toBe(modified ? 4 : 0);
-        if (modified) {
+        // A Claude hook edit is a conflict; the team's opencode.json entries are theirs to keep.
+        expect(refresh.status, refresh.stdout + refresh.stderr).toBe(modified && harness === "claude" ? 4 : 0);
+        if (modified && harness === "claude") {
           expect(refresh.stdout).toContain(rel);
-          expect(refresh.stdout).toContain(
-            harness === "claude" ? "locally modified or unowned" : "unowned whole file",
-          );
+          expect(refresh.stdout).toContain("locally modified or unowned");
+        } else if (modified) {
+          expect(JSON.parse(readFileSync(path, "utf-8")).mcp["team-service"]).toEqual({ type: "local", command: ["team-tool"] });
         }
       }
     }

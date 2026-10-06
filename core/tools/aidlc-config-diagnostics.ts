@@ -22,6 +22,7 @@ import {
   managedBlockIsSafe,
   managedBlockMarkers,
   mergeBlock,
+  missingJsonEntries,
   readJsonFile,
   type RootIntegration,
   rootBlockPath,
@@ -2176,7 +2177,7 @@ export function providerSurfaceIssues(
         }
       } else if (harness === "opencode" && record.provider === "other") {
         const path = join(projectDir, "opencode.json");
-        const value = readJsonFile(path) as Record<string, unknown>;
+        const value = readTeamJsonFile(path) as Record<string, unknown>;
         const providers = isRecord(value.provider) ? value.provider : {};
         if (Object.hasOwn(providers, "amazon-bedrock")) {
           warning(
@@ -2245,7 +2246,7 @@ export function providerSurfaceIssues(
       }
     } else if (harness === "opencode" && record.opencodeDefault) {
       const path = join(projectDir, "opencode.json");
-      const value = readJsonFile(path) as Record<string, unknown>;
+      const value = readTeamJsonFile(path) as Record<string, unknown>;
       const providers = isRecord(value.provider) ? value.provider : {};
       const bedrock = isRecord(providers["amazon-bedrock"]) ? providers["amazon-bedrock"] : {};
       const options = isRecord(bedrock.options) ? bedrock.options : {};
@@ -2720,9 +2721,16 @@ export function postApplyOutstandingActions(
 
 export { managedBlockMarkers };
 
+// The team's own opencode.json may hold comments and trailing commas, as
+// opencode allows.
+function readTeamJsonFile(path: string): unknown {
+  return Bun.JSONC.parse(readFileSync(path, "utf-8").replace(/^\uFEFF/, ""));
+}
+
 type RecordedInstructionContribution =
   | { policy: "managed-block"; hash: string; marker?: string }
-  | { policy: "whole-file"; hash: string };
+  | { policy: "whole-file"; hash: string }
+  | { policy: "json-entries"; entries: Record<string, string> };
 
 type RecordedInstructionBaseline = {
   files?: Record<string, string>;
@@ -2731,7 +2739,7 @@ type RecordedInstructionBaseline = {
 
 type InstructionState = {
   path: string;
-  kind: "managed-block" | "whole-file";
+  kind: "managed-block" | "whole-file" | "json-entries";
   state: "intact" | "missing" | "conflict";
 };
 
@@ -2842,7 +2850,7 @@ function instructionStates(
   )) {
     if (
       path === "AGENTS.md" ||
-      (path === "opencode.json" && contribution.policy === "whole-file")
+      (path === "opencode.json" && (contribution.policy === "whole-file" || contribution.policy === "json-entries"))
     ) {
       tracked.push({ path, contribution });
     }
@@ -2879,6 +2887,23 @@ function instructionStates(
         path,
         kind: contribution.policy,
         state: sha256Bytes(content) === contribution.hash ? "intact" : "conflict",
+      };
+    }
+    if (contribution.policy === "json-entries") {
+      // The team's own file: AI-DLC's instructions and skills entries must be
+      // there; everything else in it is theirs.
+      let shipped: string;
+      try {
+        assertProjectionPathHasNoSymlinks(projectDir, `${harnessDir}/tools/data/root-blocks/${path}`);
+        shipped = readFileSync(join(projectDir, harnessDir, "tools", "data", "root-blocks", path), "utf-8");
+      } catch {
+        return { path, kind: contribution.policy, state: "intact" };
+      }
+      const missing = missingJsonEntries(content.toString("utf-8"), shipped, ["instructions", "skills"]);
+      return {
+        path,
+        kind: contribution.policy,
+        state: missing === null ? "conflict" : missing.length > 0 ? "missing" : "intact",
       };
     }
     const text = content.toString("utf-8");
@@ -2960,7 +2985,7 @@ export function instructionFileDoctorCheck(
       fix: `run \`${invoke} config\``,
     };
   }
-  const managed = states.some((item) => item.kind === "managed-block");
+  const managed = states.some((item) => item.kind === "managed-block" || item.kind === "json-entries");
   const whole = states.some((item) => item.kind === "whole-file");
   return {
     pass: true,

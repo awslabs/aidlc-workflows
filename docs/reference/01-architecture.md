@@ -366,12 +366,16 @@ under `tools/data/`:
 - `aidlc-projection.json` is the exhaustive install descriptor. It classifies
   every top-level output as a framework-managed directory or a root integration
   with one typed merge policy (`managed-block`, `json-map`, `json-array`,
-  `whole-file`, or `jsonc-settings`, which edits an editor's JSONC settings
+  `whole-file`, `jsonc-settings`, which edits an editor's JSONC settings
   file key by key: it adds a shipped key only when absent, keeps every other
-  key and comment, and is left out of the copy runtime). A 2.10.0 install
+  key and comment, and is left out of the copy runtime, or `json-entries`,
+  which does the same at any depth for a team's JSON file such as
+  `opencode.json`: AI-DLC's values and array strings are added when absent and
+  followed or removed only while unchanged, its part ships in root-blocks, and
+  the copy runtime leaves the file out). A 2.10.0 install
   refuses a release whose descriptor names a policy it does not know, so a
-  policy added since (`jsonc-settings`) is written as `whole-file` with the real
-  one in `extendedPolicy`, and every reader puts it back
+  policy added since (`jsonc-settings`, `json-entries`) is written as
+  `whole-file` with the real one in `extendedPolicy`, and every reader puts it back
   (`writtenRootIntegration` and `readRootIntegrations` in
   `core/tools/aidlc-distribution.ts`;
   `tests/unit/t-previous-release-validates-runtime.test.ts` runs 2.10.0's own

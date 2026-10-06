@@ -13,7 +13,8 @@ export type ProjectionStamp = {
 export type RootIntegration = {
   path: string;
   /** jsonc-settings adds each shipped top-level key that is absent and never changes a key someone else set. */
-  policy: "managed-block" | "json-map" | "json-array" | "whole-file" | "jsonc-settings";
+  /** json-entries adds AI-DLC's own entries (values and array strings, at any depth) to a team's JSON file. */
+  policy: "managed-block" | "json-map" | "json-array" | "whole-file" | "jsonc-settings" | "json-entries";
   marker?: string;
   /** union combines shipped line sets (.gitignore); identical lets any declaring harness own byte-identical content; absent is exclusive. */
   shared?: "union" | "identical";
@@ -31,7 +32,7 @@ export type RootIntegration = {
 // with "whole-file", which 2.10.0 accepts, in `policy`; reading a projection
 // puts the real policy back when this release knows it, and otherwise keeps
 // "whole-file", so this release can install a later one in turn.
-const EXTENDED_POLICIES: readonly string[] = ["jsonc-settings"];
+const EXTENDED_POLICIES: readonly string[] = ["jsonc-settings", "json-entries"];
 
 export function writtenRootIntegration<T extends { policy: string }>(
   integration: T,
@@ -341,6 +342,16 @@ export function managedBlockIsSafe(integration: Pick<RootIntegration, "path" | "
     /^[a-z0-9-]+$/.test(integration.marker);
 }
 
+/** A json-entries integration the engine may add to: one plain file at the project root. */
+export function jsonEntriesIsSafe(integration: Pick<RootIntegration, "path" | "policy">): boolean {
+  try {
+    safeRelativePath(integration.path, "root integration path", true);
+  } catch {
+    return false;
+  }
+  return integration.policy === "json-entries";
+}
+
 export function validateProjectionDescriptor(
   root: string,
   stamp: ProjectionStamp,
@@ -463,8 +474,19 @@ export function validateProjectionDescriptor(
     if (!existsSync(path) || !lstatSync(path).isFile()) {
       throw new Error(`${root}: root integration is missing or invalid: ${safe}`);
     }
-    if (!["managed-block", "json-map", "json-array", "whole-file", "jsonc-settings"].includes(integration.policy)) {
+    if (!["managed-block", "json-map", "json-array", "whole-file", "jsonc-settings", "json-entries"].includes(integration.policy)) {
       throw new Error(`${root}: ${safe} has an invalid integration policy`);
+    }
+    if (integration.policy === "json-entries") {
+      let shipped: unknown;
+      try {
+        shipped = readJsonFile(path);
+      } catch {
+        shipped = undefined;
+      }
+      if (!plainObject(shipped) || Object.keys(shipped).length === 0) {
+        throw new Error(`${root}: ${safe} must ship a JSON object with at least one entry`);
+      }
     }
     if (integration.policy === "jsonc-settings" && !jsoncRootMembers(readFileSync(path, "utf-8"))?.members.length) {
       throw new Error(`${root}: ${safe} must ship a JSON object with at least one setting`);
@@ -491,7 +513,7 @@ export function validateProjectionDescriptor(
         throw new Error(`${root}: ${safe} has invalid legacy signature fields`);
       }
       if (legacy.wholeFileHashes !== undefined) {
-        if (integration.policy !== "managed-block" && integration.policy !== "whole-file") {
+        if (integration.policy !== "managed-block" && integration.policy !== "whole-file" && integration.policy !== "json-entries") {
           throw new Error(`${root}: ${safe} cannot use legacy whole-file signatures`);
         }
         validateHashes(legacy.wholeFileHashes, `${root}: ${safe} legacy whole-file signatures`);
@@ -527,18 +549,17 @@ export const TEAM_MEMORY_FILES = ["team.md", "project.md"] as const;
 // step to merge anything, so its archive leaves out each file a copy would
 // replace with the shipped one: a file a team's editor owns (a jsonc-settings
 // integration such as .vscode/settings.json), a team file AI-DLC adds its own
-// part to (a managed-block integration such as .gitignore or AGENTS.md; its
-// part ships in root-blocks and is added by config or the engine), the team's
-// memory files, and the person's chosen space (aidlc/active-space; a missing
-// one reads as "default").
+// part to (a managed-block integration such as .gitignore or AGENTS.md, or a
+// json-entries one such as opencode.json; its part ships in root-blocks and
+// is added by config or the engine), the team's memory files, and the
+// person's chosen space (aidlc/active-space; a missing one reads as "default").
 export function copyChannelOmits(
   descriptor: Pick<ProjectionDescriptor, "rootIntegrations">,
 ): Set<string> {
   return new Set([
     ...descriptor.rootIntegrations
       .filter((integration) =>
-        integration.policy === "jsonc-settings" || integration.policy === "managed-block" ||
-        copyStartsWithout(integration))
+        integration.policy === "jsonc-settings" || shipsRootBlock(integration))
       .map((integration) => integration.path),
     ...TEAM_MEMORY_FILES.map((name) => `aidlc/spaces/default/memory/${name}`),
     "aidlc/active-space",
@@ -552,10 +573,15 @@ export function copyStartsWithout(integration: Pick<RootIntegration, "policy" | 
   return integration.policy === "json-map" && integration.optional === true;
 }
 
-// Every managed-block root file a release ships, and every file a copy starts
-// without, is also copied, byte for byte, to
+// Every managed-block and json-entries root file a release ships, and every
+// file a copy starts without, is also copied, byte for byte, to
 // <harnessDir>/tools/data/root-blocks/<marker or file name>, inside the
 // harness folder a copy brings along. Only a managed block has a marker.
+export function shipsRootBlock(integration: Pick<RootIntegration, "policy" | "optional">): boolean {
+  return integration.policy === "managed-block" || integration.policy === "json-entries" ||
+    copyStartsWithout(integration);
+}
+
 export function rootBlockPath(
   harnessRoot: string,
   integration: Pick<RootIntegration, "path" | "marker" | "policy">,
@@ -574,7 +600,7 @@ export function shippedRootIntegrationPath(
   integration: Pick<RootIntegration, "path" | "marker" | "policy" | "optional">,
 ): string {
   const path = join(root, integration.path);
-  if ((integration.policy !== "managed-block" && !copyStartsWithout(integration)) || existsSync(path)) return path;
+  if (!shipsRootBlock(integration) || existsSync(path)) return path;
   const block = rootBlockPath(join(root, harnessDir), integration);
   return existsSync(block) ? block : path;
 }
@@ -972,4 +998,523 @@ export function removeJsoncSetting(text: string, key: string): string | null {
     next = `${next.slice(0, previous.end - 1)}${next.slice(previous.end)}`;
   }
   return next;
+}
+
+// --- AI-DLC's entries in a team's JSON file (opencode.json) -----------------
+// A json-entries integration is a file the team owns (opencode.json: their
+// model, provider, instructions, and permission rules) that AI-DLC adds its
+// own entries to. An entry is one value at a path of object keys, or one
+// string in a string array. AI-DLC adds each of its entries that is absent,
+// follows one it added while nobody changed it, and removes only those; every
+// other key, value, comment, and layout byte stays the team's. A permission
+// map's "*" rule is one more entry, so AI-DLC's is added only to a map that has
+// none, and first in it: opencode applies the last matching rule, so the
+// team's own rules after it still decide.
+
+type JsoncNode = {
+  kind: "object" | "array" | "value";
+  start: number;
+  end: number;
+  members: JsoncNodeMember[];
+  items: JsoncNodeItem[];
+};
+
+type JsoncNodeMember = {
+  key: string;
+  start: number;
+  valueStart: number;
+  valueEnd: number;
+  /** After the member's trailing comma when it has one, else valueEnd. */
+  end: number;
+  node: JsoncNode;
+};
+
+type JsoncNodeItem = { start: number; valueStart: number; valueEnd: number; end: number; node: JsoncNode };
+
+function parseJsoncNode(text: string, at: number): JsoncNode | null {
+  const open = text[at];
+  if (open !== "{" && open !== "[") {
+    const end = skipJsoncValue(text, at);
+    return end < 0 ? null : { kind: "value", start: at, end, members: [], items: [] };
+  }
+  const node: JsoncNode = { kind: open === "{" ? "object" : "array", start: at, end: -1, members: [], items: [] };
+  const close = open === "{" ? "}" : "]";
+  let index = skipJsoncTrivia(text, at + 1);
+  while (index >= 0 && index < text.length && text[index] !== close) {
+    let key = "";
+    const start = index;
+    let valueStart = index;
+    if (node.kind === "object") {
+      if (text[index] !== '"') return null;
+      const keyEnd = skipJsoncString(text, index);
+      if (keyEnd < 0) return null;
+      try {
+        key = String(JSON.parse(text.slice(index, keyEnd)));
+      } catch {
+        return null;
+      }
+      index = skipJsoncTrivia(text, keyEnd);
+      if (index < 0 || text[index] !== ":") return null;
+      valueStart = skipJsoncTrivia(text, index + 1);
+      if (valueStart < 0 || valueStart >= text.length) return null;
+    }
+    const value = parseJsoncNode(text, valueStart);
+    if (!value) return null;
+    index = skipJsoncTrivia(text, value.end);
+    if (index < 0) return null;
+    let end = value.end;
+    if (text[index] === ",") {
+      end = index + 1;
+      index = skipJsoncTrivia(text, index + 1);
+      if (index < 0) return null;
+    } else if (text[index] !== close) {
+      return null;
+    }
+    if (node.kind === "object") node.members.push({ key, start, valueStart, valueEnd: value.end, end, node: value });
+    else node.items.push({ start, valueStart, valueEnd: value.end, end, node: value });
+  }
+  if (index < 0 || text[index] !== close) return null;
+  node.end = index + 1;
+  return node;
+}
+
+/** The whole text as one JSONC value with its positions, or null when it is not one. */
+function jsoncTree(text: string): JsoncNode | null {
+  const at = skipJsoncTrivia(text, 0);
+  if (at < 0 || at >= text.length) return null;
+  const node = parseJsoncNode(text, at);
+  return node && skipJsoncTrivia(text, node.end) === text.length ? node : null;
+}
+
+function jsoncNodeValue(text: string, node: JsoncNode): unknown {
+  try {
+    return Bun.JSONC.parse(text.slice(node.start, node.end));
+  } catch {
+    return undefined;
+  }
+}
+
+function plainObject(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+type JsonLayout = { eol: string; unit: string };
+
+function lineStartOf(text: string, position: number): number {
+  return text.lastIndexOf("\n", position - 1) + 1;
+}
+
+function lineIndentOf(text: string, position: number): string {
+  return /^[ \t]*/.exec(text.slice(lineStartOf(text, position)))?.[0] ?? "";
+}
+
+function startsItsLine(text: string, position: number): boolean {
+  return text.slice(lineStartOf(text, position), position).trim() === "";
+}
+
+function singleLine(text: string, node: JsoncNode): boolean {
+  return !text.slice(node.start, node.end).includes("\n");
+}
+
+function jsonLayout(text: string, root: JsoncNode): JsonLayout {
+  const first = root.members[0];
+  const indent = first && startsItsLine(text, first.start) ? lineIndentOf(text, first.start) : "";
+  return { eol: text.includes("\r\n") ? "\r\n" : "\n", unit: indent || "  " };
+}
+
+function jsonValueText(value: unknown, indent: string, layout: JsonLayout, inline: boolean): string {
+  return inline
+    ? JSON.stringify(value)
+    : JSON.stringify(value, null, layout.unit).split("\n").join(`${layout.eol}${indent}`);
+}
+
+// Add one member to an object (first, or after the last), or one string to an
+// array, in the layout around it, keeping every other byte.
+function insertJsoncEntry(
+  text: string,
+  layout: JsonLayout,
+  container: JsoncNode,
+  parentInline: boolean,
+  key: string | undefined,
+  value: unknown,
+  first: boolean,
+): string {
+  const entries = container.kind === "object" ? container.members : container.items;
+  const close = container.end - 1;
+  const inline = singleLine(text, container) && (entries.length > 0 || parentInline || container.kind === "array");
+  const entryText = (indent: string) =>
+    `${key === undefined ? "" : `${JSON.stringify(key)}: `}${jsonValueText(value, indent, layout, inline)}`;
+  if (inline) {
+    if (entries.length === 0) return `${text.slice(0, container.start + 1)}${entryText("")}${text.slice(close)}`;
+    if (first) return `${text.slice(0, entries[0].start)}${entryText("")}, ${text.slice(entries[0].start)}`;
+    const last = entries[entries.length - 1];
+    return last.end !== last.valueEnd
+      ? `${text.slice(0, last.end)} ${entryText("")}${text.slice(last.end)}`
+      : `${text.slice(0, last.valueEnd)}, ${entryText("")}${text.slice(last.valueEnd)}`;
+  }
+  const outer = lineIndentOf(text, container.start);
+  const head = entries[0];
+  const indent = head && startsItsLine(text, head.start) ? lineIndentOf(text, head.start) : `${outer}${layout.unit}`;
+  if (head && first) {
+    return startsItsLine(text, head.start)
+      ? `${text.slice(0, lineStartOf(text, head.start))}${indent}${entryText(indent)},${layout.eol}${text.slice(lineStartOf(text, head.start))}`
+      : `${text.slice(0, head.start)}${entryText(indent)},${layout.eol}${indent}${text.slice(head.start)}`;
+  }
+  const closeLine = lineStartOf(text, close);
+  let next = closeLine > container.start && text.slice(closeLine, close).trim() === ""
+    ? `${text.slice(0, closeLine)}${indent}${entryText(indent)}${layout.eol}${text.slice(closeLine)}`
+    : `${text.slice(0, close).trimEnd()}${layout.eol}${indent}${entryText(indent)}${layout.eol}${outer}${text.slice(close)}`;
+  const last = entries[entries.length - 1];
+  if (last && last.end === last.valueEnd) next = `${next.slice(0, last.valueEnd)},${next.slice(last.valueEnd)}`;
+  return next;
+}
+
+function replaceJsoncNode(text: string, layout: JsonLayout, node: JsoncNode, value: unknown): string {
+  return `${text.slice(0, node.start)}${jsonValueText(value, lineIndentOf(text, node.start), layout, singleLine(text, node) && !plainObject(value))}${text.slice(node.end)}`;
+}
+
+// Take one member or item out (with its line when it stood alone), keeping
+// every other byte.
+function removeJsoncEntry(text: string, entries: Array<{ start: number; valueEnd: number; end: number }>, at: number): string {
+  const entry = entries[at];
+  const previous = entries[at - 1];
+  const following = entries[at + 1];
+  const lineStart = lineStartOf(text, entry.start);
+  let after = entry.end;
+  while (text[after] === " " || text[after] === "\t") after++;
+  const lineEnd = text[after] === "\r" && text[after + 1] === "\n" ? after + 2 : text[after] === "\n" ? after + 1 : -1;
+  if (startsItsLine(text, entry.start) && lineEnd >= 0) {
+    let next = `${text.slice(0, lineStart)}${text.slice(lineEnd)}`;
+    // The last one had no comma of its own: drop the one before it instead.
+    if (!following && entry.end === entry.valueEnd && previous && previous.end !== previous.valueEnd) {
+      next = `${next.slice(0, previous.end - 1)}${next.slice(previous.end)}`;
+    }
+    return next;
+  }
+  if (following) return `${text.slice(0, entry.start)}${text.slice(following.start)}`;
+  if (previous) return `${text.slice(0, previous.valueEnd)}${text.slice(entry.end)}`;
+  return `${text.slice(0, entry.start)}${text.slice(entry.end)}`;
+}
+
+// `/aidlc space <name>` points the method glob at the chosen space, so any
+// space's glob fills AI-DLC's one method entry.
+const METHOD_INSTRUCTION = /^aidlc\/spaces\/[^/"]+\/memory\/\*\*\/\*\.md$/;
+const METHOD_SLOT = "aidlc/spaces/*/memory/**/*.md";
+
+function itemSlot(path: readonly string[], item: string): string {
+  return path.length === 1 && path[0] === "instructions" && METHOD_INSTRUCTION.test(item) ? METHOD_SLOT : item;
+}
+
+type JsonEntry = { id: string; path: string[]; item?: string; value: unknown; hash: string };
+
+function jsonEntriesOf(value: Record<string, unknown>, path: string[] = []): JsonEntry[] {
+  const entries: JsonEntry[] = [];
+  const seen = new Set<string>();
+  const add = (entry: JsonEntry) => {
+    if (seen.has(entry.id)) return;
+    seen.add(entry.id);
+    entries.push(entry);
+  };
+  for (const [key, child] of Object.entries(value)) {
+    const at = [...path, key];
+    if (plainObject(child) && Object.keys(child).length > 0) {
+      for (const entry of jsonEntriesOf(child, at)) add(entry);
+    } else if (Array.isArray(child) && child.length > 0 && child.every((item) => typeof item === "string")) {
+      for (const item of child as string[]) {
+        const slot = itemSlot(at, item);
+        add({ id: JSON.stringify({ path: at, item: slot }), path: at, item, value: item, hash: sha256Bytes(canonical(slot)) });
+      }
+    } else {
+      add({ id: JSON.stringify({ path: at }), path: at, value: child, hash: sha256Bytes(canonical(child)) });
+    }
+  }
+  return entries;
+}
+
+function entryAddress(id: string): { path: string[]; item?: string } | null {
+  try {
+    const parsed = JSON.parse(id) as unknown;
+    if (
+      !plainObject(parsed) || !Array.isArray(parsed.path) || parsed.path.length === 0 ||
+      !parsed.path.every((part) => typeof part === "string") ||
+      (parsed.item !== undefined && typeof parsed.item !== "string")
+    ) {
+      return null;
+    }
+    return { path: parsed.path as string[], ...(typeof parsed.item === "string" ? { item: parsed.item } : {}) };
+  } catch {
+    return null;
+  }
+}
+
+// Entries only AI-DLC writes: they name its own folders or commands.
+function aidlcOwnEntry(entry: Pick<JsonEntry, "path" | "item">): boolean {
+  return [...entry.path, ...(entry.item === undefined ? [] : [entry.item])].some((part) =>
+    part.includes(".aidlc/") || part.startsWith("aidlc/spaces/") || part.startsWith("aidlc ")
+  );
+}
+
+/** Who owns the entries already in the file before this merge. */
+export type JsonEntriesOwnership =
+  /** The entries AI-DLC recorded, with the value hash it wrote. */
+  | { kind: "recorded"; entries: Record<string, string> }
+  /** The whole file is one AI-DLC wrote (a whole-file record or signature that matches). */
+  | { kind: "whole" }
+  /** AI-DLC wrote the whole file once and the team has edited it since. */
+  | { kind: "matching" }
+  /** No record: only an entry naming AI-DLC's own folders or commands is AI-DLC's. */
+  | { kind: "none" };
+
+export type JsonEntriesResult =
+  | { conflict: string }
+  | { text: string; entries: Record<string, string>; whole: boolean };
+
+function containerAt(
+  text: string,
+  root: JsoncNode,
+  path: readonly string[],
+): { node: JsoncNode; parentInline: boolean; member: JsoncNodeMember } | undefined {
+  let node = root;
+  let parentInline = false;
+  let member: JsoncNodeMember | undefined;
+  for (const key of path) {
+    if (node.kind !== "object") return undefined;
+    member = node.members.findLast((candidate) => candidate.key === key);
+    if (!member) return undefined;
+    parentInline = singleLine(text, node);
+    node = member.node;
+  }
+  return member ? { node, parentInline, member } : undefined;
+}
+
+function valueAt(value: Record<string, unknown>, path: readonly string[]): unknown {
+  let at: unknown = value;
+  for (const key of path) at = plainObject(at) ? at[key] : undefined;
+  return at;
+}
+
+function sameItem(text: string, node: JsoncNode, path: readonly string[], slot: string): boolean {
+  const value = jsoncNodeValue(text, node);
+  return typeof value === "string" && itemSlot(path, value) === slot;
+}
+
+// One shipped entry, added, followed, or left as the team has it. A key
+// missing on the way is added with everything AI-DLC ships under it.
+function applyJsonEntry(
+  text: string,
+  layout: JsonLayout,
+  entry: JsonEntry,
+  shippedValue: Record<string, unknown>,
+  shipped: readonly JsonEntry[],
+  prior: Record<string, string>,
+  force: boolean,
+  next: Record<string, string>,
+): { text: string } | { conflict: string } {
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const root = jsoncTree(text);
+    if (root?.kind !== "object") return { conflict: "malformed JSON" };
+    const containerPath = entry.item === undefined ? entry.path.slice(0, -1) : entry.path;
+    let node = root;
+    let parentInline = false;
+    let converted = false;
+    for (let depth = 0; depth < containerPath.length; depth++) {
+      const key = containerPath[depth];
+      const prefix = containerPath.slice(0, depth + 1);
+      const member = node.members.findLast((candidate) => candidate.key === key);
+      if (!member) {
+        for (const other of shipped) {
+          if (prefix.every((part, index) => other.path[index] === part)) next[other.id] = other.hash;
+        }
+        return { text: insertJsoncEntry(text, layout, node, parentInline, key, valueAt(shippedValue, prefix), false) };
+      }
+      const wantArray = entry.item !== undefined && depth === containerPath.length - 1;
+      if (wantArray ? member.node.kind !== "array" : member.node.kind !== "object") {
+        const value = jsoncNodeValue(text, member.node);
+        // opencode reads `"bash": "ask"` as the map `{"*": "ask"}`.
+        if (!wantArray && prefix.length === 2 && prefix[0] === "permission" && typeof value === "string") {
+          text = replaceJsoncNode(text, layout, member.node, { "*": value });
+          converted = true;
+          break;
+        }
+        return { conflict: `${prefix.join(".")} must be a JSON ${wantArray ? "array" : "object"}` };
+      }
+      parentInline = singleLine(text, node);
+      node = member.node;
+    }
+    if (converted) continue;
+    if (entry.item !== undefined) {
+      const slot = itemSlot(entry.path, entry.item);
+      if (node.items.some((item) => sameItem(text, item.node, entry.path, slot))) {
+        if (prior[entry.id] !== undefined) next[entry.id] = entry.hash;
+        return { text };
+      }
+      next[entry.id] = entry.hash;
+      return { text: insertJsoncEntry(text, layout, node, parentInline, undefined, entry.item, false) };
+    }
+    const key = entry.path[entry.path.length - 1];
+    const member = node.members.findLast((candidate) => candidate.key === key);
+    if (!member) {
+      next[entry.id] = entry.hash;
+      return { text: insertJsoncEntry(text, layout, node, parentInline, key, entry.value, key === "*") };
+    }
+    const currentHash = sha256Bytes(canonical(jsoncNodeValue(text, member.node)));
+    const priorHash = prior[entry.id];
+    if (priorHash !== undefined && (currentHash === priorHash || force)) {
+      next[entry.id] = entry.hash;
+      return { text: currentHash === entry.hash ? text : replaceJsoncNode(text, layout, member.node, entry.value) };
+    }
+    if (priorHash !== undefined && currentHash === entry.hash) next[entry.id] = entry.hash;
+    return { text };
+  }
+  return { conflict: "malformed JSON" };
+}
+
+// Remove one recorded entry while it still has the value AI-DLC wrote (any
+// value with force), then any object or array that removal left empty.
+function removeRecordedJsonEntry(text: string, id: string, hash: string, force: boolean): string {
+  const address = entryAddress(id);
+  const root = jsoncTree(text);
+  if (!address || !root || root.kind !== "object") return text;
+  const containerPath = address.item === undefined ? address.path.slice(0, -1) : address.path;
+  const container = containerPath.length === 0 ? { node: root } : containerAt(text, root, containerPath);
+  if (!container) return text;
+  let next = text;
+  if (address.item !== undefined) {
+    if (container.node.kind !== "array") return text;
+    const at = container.node.items.findIndex((item) => sameItem(text, item.node, address.path, address.item as string));
+    if (at < 0 || (sha256Bytes(canonical(address.item)) !== hash && !force)) return text;
+    next = removeJsoncEntry(text, container.node.items, at);
+  } else {
+    if (container.node.kind !== "object") return text;
+    const key = address.path[address.path.length - 1];
+    const at = container.node.members.findLastIndex((member) => member.key === key);
+    if (at < 0) return text;
+    if (sha256Bytes(canonical(jsoncNodeValue(text, container.node.members[at].node))) !== hash && !force) return text;
+    next = removeJsoncEntry(text, container.node.members, at);
+  }
+  for (let depth = containerPath.length; depth > 0; depth--) {
+    const tree = jsoncTree(next);
+    const emptied = tree && containerAt(next, tree, containerPath.slice(0, depth));
+    if (!tree || !emptied || emptied.node.members.length + emptied.node.items.length > 0) break;
+    const parent = depth === 1 ? { node: tree } : containerAt(next, tree, containerPath.slice(0, depth - 1));
+    if (parent?.node.kind !== "object") break;
+    const at = parent.node.members.findLastIndex((member) => member.key === containerPath[depth - 1]);
+    if (at < 0) break;
+    next = removeJsoncEntry(next, parent.node.members, at);
+  }
+  return next;
+}
+
+/**
+ * Merge AI-DLC's part (the shipped file) into the team's file. The result
+ * records each entry AI-DLC owns afterwards, with the value hash it wrote.
+ * A file that holds only AI-DLC's unchanged entries (or none) becomes the
+ * shipped file as it is. A shape AI-DLC cannot add to is a conflict, never a
+ * guess.
+ */
+export function mergeJsonEntries(
+  current: string,
+  shippedText: string,
+  ownership: JsonEntriesOwnership,
+  force = false,
+): JsonEntriesResult {
+  let shippedValue: unknown;
+  try {
+    shippedValue = JSON.parse(withoutBom(shippedText));
+  } catch {
+    return { conflict: "shipped JSON is malformed" };
+  }
+  if (!plainObject(shippedValue)) return { conflict: "shipped JSON root must be an object" };
+  const shipped = jsonEntriesOf(shippedValue);
+  const all = Object.fromEntries(shipped.map((entry) => [entry.id, entry.hash]));
+  const bom = current.startsWith(BOM) ? BOM : "";
+  const asShipped = `${bom}${withoutBom(shippedText)}`;
+  if (current.trim() === "") return { text: asShipped, entries: all, whole: true };
+  const root = jsoncTree(current);
+  const currentValue = root ? jsoncNodeValue(current, root) : undefined;
+  if (!root || currentValue === undefined) return { conflict: "malformed JSON" };
+  if (root.kind !== "object" || !plainObject(currentValue)) return { conflict: "JSON root must be an object" };
+  const present = jsonEntriesOf(currentValue);
+  const presentHashes = new Map(present.map((entry) => [entry.id, entry.hash]));
+  const prior: Record<string, string> = ownership.kind === "recorded"
+    ? ownership.entries
+    : ownership.kind === "whole"
+    ? Object.fromEntries(presentHashes)
+    : Object.fromEntries(
+      shipped
+        .filter((entry) => presentHashes.get(entry.id) === entry.hash && (ownership.kind === "matching" || aidlcOwnEntry(entry)))
+        .map((entry) => [entry.id, entry.hash]),
+    );
+  let plain = true;
+  try {
+    JSON.parse(withoutBom(current));
+  } catch {
+    plain = false;
+  }
+  // An empty object, or only AI-DLC's unchanged entries with no comments and
+  // no method glob pointed at another space: the shipped file itself.
+  const shippedItems = new Set(shipped.flatMap((entry) => entry.item === undefined ? [] : [entry.item]));
+  const repointed = (entry: JsonEntry) =>
+    entry.item !== undefined && itemSlot(entry.path, entry.item) !== entry.item && !shippedItems.has(entry.item);
+  if (
+    plain && (present.length > 0 || root.members.length === 0) &&
+    present.every((entry) => prior[entry.id] === entry.hash && !repointed(entry))
+  ) {
+    return { text: asShipped, entries: all, whole: true };
+  }
+  const layout = jsonLayout(current, root);
+  const next: Record<string, string> = {};
+  let text = current;
+  for (const entry of shipped) {
+    if (next[entry.id] !== undefined) continue;
+    const step = applyJsonEntry(text, layout, entry, shippedValue, shipped, prior, force, next);
+    if ("conflict" in step) return step;
+    text = step.text;
+  }
+  // AI-DLC's entries this release no longer ships go, unless someone changed them.
+  for (const [id, hash] of Object.entries(prior)) {
+    if (all[id] === undefined) text = removeRecordedJsonEntry(text, id, hash, force);
+  }
+  return { text, entries: next, whole: false };
+}
+
+/** Remove every recorded entry that still has the value AI-DLC wrote; null when the file is unreadable. */
+export function removeJsonEntries(current: string, entries: Record<string, string>, force = false): string | null {
+  if (jsoncTree(current)?.kind !== "object") return null;
+  let text = current;
+  for (const [id, hash] of Object.entries(entries)) text = removeRecordedJsonEntry(text, id, hash, force);
+  return text;
+}
+
+/** True when the text is an object with no members (whitespace and a byte order mark aside). */
+export function emptyJsonObject(text: string): boolean {
+  return withoutBom(text).replace(/\s/g, "") === "{}";
+}
+
+/**
+ * The shipped entries under the given top-level keys that the team's file
+ * lacks (any value counts as present); null when the file is unreadable.
+ */
+export function missingJsonEntries(current: string, shippedText: string, under: readonly string[]): string[] | null {
+  let shippedValue: unknown;
+  try {
+    shippedValue = JSON.parse(withoutBom(shippedText));
+  } catch {
+    return null;
+  }
+  const root = jsoncTree(current);
+  if (!plainObject(shippedValue) || !root || root.kind !== "object") return null;
+  return jsonEntriesOf(shippedValue)
+    .filter((entry) => under.includes(entry.path[0]))
+    .filter((entry) => {
+      const containerPath = entry.item === undefined ? entry.path.slice(0, -1) : entry.path;
+      const container = containerPath.length === 0 ? { node: root } : containerAt(current, root, containerPath);
+      if (!container) return true;
+      if (entry.item !== undefined) {
+        const slot = itemSlot(entry.path, entry.item);
+        return !container.node.items.some((item) => sameItem(current, item.node, entry.path, slot));
+      }
+      return !container.node.members.some((member) => member.key === entry.path[entry.path.length - 1]);
+    })
+    .map((entry) => entry.id);
 }
