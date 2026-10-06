@@ -2528,6 +2528,11 @@ describe("t147 Kiro CLI reads what the person typed from the expanded skill body
       const quoted = `engine orchestrate next say "it's done" 'now;' really`;
       expect(apostrophe.stdout).toContain(`${quoted}\n`);
       expect(guard(`bun .kiro/tools/aidlc.ts ${quoted}`).code).toBe(0);
+      // A word a shell would read as a comment or a glob is quoted too.
+      const hashed = runAdapter(dir, "verb-intercept", { cwd: dir, session_id: session, prompt: expanded("fix bug #123 in *.ts") }, [], env);
+      const literal = "engine orchestrate next fix bug '#123' in '*.ts'";
+      expect(hashed.stdout).toContain(`${literal}\n`);
+      expect(guard(`bun .kiro/tools/aidlc.ts ${literal}`).code).toBe(0);
     } finally { rmSync(dir, { recursive: true, force: true }); }
   });
 
