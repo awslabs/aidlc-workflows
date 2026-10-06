@@ -99,8 +99,8 @@ first hour from answering questions into checking answers.
 - **A vision note**: one paragraph on what they are building and for whom,
   the features in the first release, what is not in it, and the questions
   they already know are open. On the day it goes into the first request:
-  `/aidlc Read ./vision.md and build what it describes` (`$aidlc` on Codex
-  CLI). See [Writing a Vision Document](writing-inputs/vision-document-guide.md).
+  `/aidlc workshop Read ./vision.md and build what it describes`
+  (`$aidlc workshop ...` on Codex CLI). See [Writing a Vision Document](writing-inputs/vision-document-guide.md).
 - **A tech-environment note**: language and version, framework, test tool,
   cloud and deployment model (or "local only"), prohibited libraries with the
   reason and what to use instead, the security basics, and one short example
@@ -110,7 +110,8 @@ first hour from answering questions into checking answers.
   [Writing a Technical Environment Document](writing-inputs/technical-environment-guide.md).
 
 Each guide starts with a short version; for a workshop that is enough. Teams
-working on an existing codebase add what must not change, in both notes.
+working on an existing codebase add what this work must not change to the
+vision note.
 
 ---
 

@@ -23,10 +23,11 @@ document belongs where every stage reads it: your space's team knowledge.
    file in `aidlc-shared/` is part of every stage's context. The
    [Knowledge](../08-knowledge.md) chapter calls this folder
    `aidlc/knowledge/aidlc-shared/`.
-2. Optionally, move the parts only one agent needs into that agent's folder
-   next to it, for example security into `aidlc-devsecops-agent/`, testing
-   into `aidlc-quality-agent/`, and cloud services into
-   `aidlc-aws-platform-agent/`. See
+2. Keep all of it in `aidlc-shared/`. Security, testing and cloud standards
+   are read by stages that different agents lead (Code Generation, for one,
+   runs as the developer agent), and an agent's own folder is read only while
+   that agent works. Use an agent folder only for material one agent alone
+   needs; see
    [Adding Company Standards](../08-knowledge.md#adding-company-standards)
    for the folder names.
 3. Put the few rules that must never be broken (a prohibited library, a
@@ -65,16 +66,24 @@ basics.
 
 ```text
 1. Existing stack: language, framework, database, infrastructure, with versions
-2. What to add: new services, tables, components
-3. What must stay unchanged: services, schemas, contracts, configuration not to touch
-4. Prohibited patterns: libraries or approaches that conflict with the existing code
-5. Security basics: how sign-in and secrets work in the existing system
-6. Example code taken from the existing codebase
+2. What never changes: services, schemas, contracts, configuration no piece of work may touch
+3. Prohibited patterns: libraries or approaches that conflict with the existing code
+4. Security basics: how sign-in and secrets work in the existing system
+5. Example code taken from the existing codebase
 ```
 
 Take the examples from real files, so new code looks like it belongs.
 Reverse Engineering also reads the code, but it cannot tell which patterns you
 want kept and which you are moving away from.
+
+What this piece of work adds or changes, and anything only it must leave
+alone, goes in the
+[vision note](vision-document-guide.md#for-work-on-an-existing-codebase): this
+document stays in the space, and every later piece of work reads it.
+
+Whether the project is new or existing comes from the code in the project
+folder, not from this document. If AI-DLC calls an existing project new, say
+so in your request, or start with `/aidlc --project-type brownfield`.
 
 ---
 
@@ -243,9 +252,8 @@ later names the gap and the phase.
 | General software | CIS Controls v8, SANS Top 25 |
 
 For a framework with ten categories or fewer, put the full table in this
-document. For a large one, keep it in a file of its own in the same knowledge
-folder, for example `aidlc-devsecops-agent/nist-800-53-compliance.md`, and
-link it from here.
+document. For a large one, keep it in a file of its own next to this one, for
+example `aidlc-shared/nist-800-53-compliance.md`, and link it from here.
 
 ### 7. Testing (Both)
 
@@ -346,7 +354,7 @@ replacement.
 
 | Section | Stage | How it is used |
 |---------|-------|----------------|
-| Project Technical Summary | Workspace Detection, Practices Discovery | Project classification and team practices |
+| Project Technical Summary | Practices Discovery | Team practices and skills |
 | Languages, Frameworks and Libraries | NFR Design, Code Generation | What is used, at which version, and what is never added |
 | Cloud Services | Feasibility & Constraints, Infrastructure Design | Which services the design may use |
 | Architecture and Patterns | Domain Design, Contract Design, Functional Design | Structure, API and data decisions |

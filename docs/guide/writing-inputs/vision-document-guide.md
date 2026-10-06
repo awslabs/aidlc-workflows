@@ -2,8 +2,8 @@
 
 A vision document says **what to build, for whom, and why**, and where the
 first release stops. It is the main input to a new workflow: Intent Capture,
-Scope Definition and Requirements Analysis read it, and every question it
-already answers is one the workflow does not have to ask you.
+Scope Definition and Requirements Analysis plan from it, so the questions they
+ask become quick checks of what you already wrote.
 
 You do not need one to start. `/aidlc Build a REST API for inventory
 management` is a complete request. A vision document pays off when several
