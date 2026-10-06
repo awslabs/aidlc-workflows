@@ -17496,6 +17496,9 @@ export function reviewAttemptWindow(
 export interface ReviewAttemptAccounting {
   floor: string;
   requestCount: number;
+  // The requests the review budget counts: requestCount, less those made
+  // before the Unit started again a step it had finished.
+  budgetCount: number;
   boltStarted: boolean;
   boltBatch: string | null;
   boltSlug: string | null;
@@ -17779,7 +17782,30 @@ export function reviewAttemptAccounting(
     }
   }
 
+  // A solo unit-major walk hands a Unit's finished step back when its work is
+  // gone, and the Unit starts that step again. That run of the step gets the
+  // stage's review passes again, so a redo the engine asked for can finish
+  // under any review cap. The passes keep their numbers, and the attempt and
+  // its records stay as they are.
+  let restart: AuditShardEvent | null = null;
+  if (unitMajor && !isTeamUnitOwnership(stateContent) && unit !== undefined && workflow === undefined) {
+    const floorRow = floor < 0 ? null : events[floor];
+    let finished = false;
+    for (const row of sortAttemptEvents(attemptView.allEvents.filter((candidate) =>
+      (candidate.event === "UNIT_STARTED" || candidate.event === "UNIT_COMPLETED") &&
+      auditBlockField(candidate.block, "Stage") === stage.slug &&
+      auditBlockField(candidate.block, "Unit") === unit &&
+      (options.eventFilter?.(candidate) ?? true)))) {
+      if (floorRow !== null && !attemptEventDefinitelyBefore(floorRow, row)) continue;
+      if (row.event === "UNIT_COMPLETED") finished = true;
+      else if (finished) {
+        restart = row;
+        finished = false;
+      }
+    }
+  }
   let requestCount = 0;
+  let budgetCount = 0;
   let recoveryIteration: number | null = null;
   let recoverySpent = false;
   const pendingIterations = new Set<number>();
@@ -17830,6 +17856,7 @@ export function reviewAttemptAccounting(
       const replacement = reviewRequestReplaces(entry.block, previous);
       if (auditBlockField(entry.block, "Retry") !== "pending-request" && !replacement) {
         requestCount++;
+        if (restart === null || attemptEventDefinitelyBefore(restart, entry)) budgetCount++;
       }
       if (auditBlockField(entry.block, "Recovery") === "stale-receipt") {
         recoveryIteration = iteration;
@@ -17867,6 +17894,7 @@ export function reviewAttemptAccounting(
         ? ""
         : `${events[floor].event}:${events[floor].timestamp}:${events[floor].shard}:${events[floor].pos}`,
     requestCount,
+    budgetCount,
     boltStarted,
     boltBatch,
     boltSlug,
@@ -28350,6 +28378,34 @@ function reopenUnitStepRemedy(stage: string, unit: string): GuardRemedy {
   };
 }
 
+// The Unit's step finished with the review it has, when no review pass is
+// left: its open findings go to the person with the Unit's work.
+function finishUnitStepRemedy(stage: string, unit: string): GuardRemedy {
+  const operation = guardOperation({ kind: "record-unit-completion", stage, unit });
+  return {
+    op: "record-unit-completion",
+    action:
+      `Finish "${stage}" for unit "${unit}" with the review it has: run \`${operation.command}\`, ` +
+      `then re-run next. The open findings go to the person when unit "${unit}"'s work comes up for approval.`,
+    ...operation,
+    requiresHuman: false,
+    executableNow: true,
+  };
+}
+
+// The Unit a refusal is about when it is part way through its step in a solo
+// unit-major walk (`unit start` recorded it on this stage), or null.
+function unitStepInProgress(
+  input: Pick<GuardRefusalInput, "stateContent" | "stage" | "unit" | "teamGate">,
+): string | null {
+  const walk = soloUnitMajorRefusal(input);
+  if (walk === null || walk.unit === null || !walk.live) return null;
+  return getField(input.stateContent, "Active Unit")?.trim() === walk.unit &&
+      getField(input.stateContent, "Unit State")?.trim() === "in-progress"
+    ? walk.unit
+    : null;
+}
+
 // What a stage-wide reset still offered in a solo unit-major walk throws away,
 // said where it is offered: it reaches every Unit, not just this one.
 function unitMajorResetCost(reset: "jump" | "reject", stage: string): string {
@@ -28654,7 +28710,16 @@ export function evaluateGuardRefusal(
     const reviewBudgetAvailable =
       input.attempt.reviewBudget === undefined ||
       input.attempt.reviewBudget.used < input.attempt.reviewBudget.limit;
-    if (
+    // A Unit part way through its step in a solo unit-major walk: no gate opens
+    // before that step is done, and an approved stage leaves only a stage-wide
+    // reset. The ways on are the Unit's own: finish the step with the review it
+    // has, or start the step again for that Unit.
+    const midStep = !reviewBudgetAvailable && input.attempt.reviewCoverage === "current"
+      ? unitStepInProgress(input)
+      : null;
+    if (midStep !== null) {
+      remedies.push(finishUnitStepRemedy(input.stage, midStep), reopenUnitStepRemedy(input.stage, midStep));
+    } else if (
       !reviewBudgetAvailable &&
       input.attempt.reviewCoverage === "current" &&
       openForWork
@@ -28741,7 +28806,8 @@ export function evaluateGuardRefusal(
         executableNow: openForWork || state === "revising",
       });
     }
-    remedies.push(...lifecycleResetRemedies(input, state));
+    remedies.push(...lifecycleResetRemedies(input, state)
+      .filter((remedy) => !remedies.some((offered) => offered.op === remedy.op)));
   }
 
   // The fence's own way out, always LAST: the workflow's own remedies come
@@ -28942,7 +29008,7 @@ export function guardAttemptState(
         : `${floorEvent.event}:${floorEvent.timestamp}:${floorEvent.shard}:${floorEvent.pos}`),
     ...(budget === null || accounting === null
       ? {}
-      : { reviewBudget: { used: accounting.requestCount, limit: budget } }),
+      : { reviewBudget: { used: accounting.budgetCount, limit: budget } }),
     recovery: pending?.recovery === true
       ? "pending"
       : recoverySpent

@@ -2302,18 +2302,25 @@ describe("t342 a unit-major recovery keeps every Unit's finished work", () => {
 
     const handedBack = next(p);
     expect(handedBack, JSON.stringify(handedBack).slice(0, 800)).toMatchObject({ stage: design.slug, unit: "alpha" });
+    // The conductor's run of the step: start it, make the document, review it
+    // at the next pass, complete it.
+    const started = tool(p, "state", ["unit", "start", "--stage", design.slug, "--unit", "alpha"]);
+    expect(started.status, started.out).toBe(0);
     cover(p, "alpha", [design.slug], false);
-    const review = (iteration: string) => reviewThroughLog(p, [
-      "review", "--stage", design.slug, "--reviewer", design.reviewer!, "--unit", "alpha", "--iteration", iteration,
+    const redone = reviewThroughLog(p, [
+      "review", "--stage", design.slug, "--reviewer", design.reviewer!, "--unit", "alpha", "--iteration", "2",
     ]);
-    let redone = review("1");
-    const retry = /Retry with --iteration (\d+)/.exec(redone.out)?.[1];
-    if (redone.status !== 0 && retry !== undefined) redone = review(retry);
     expect(redone.status, redone.out).toBe(0);
-    cover(p, "alpha", [design.slug]);
-    const after = next(p) as unknown as { kind: string; message?: string };
-    expect(after.kind, JSON.stringify(after).slice(0, 800)).not.toBe("error");
-    expect(JSON.stringify(after)).not.toContain("allows 1 review pass");
+    // The redo has the one pass, not more.
+    const again = reviewThroughLog(p, [
+      "review", "--stage", design.slug, "--reviewer", design.reviewer!, "--unit", "alpha", "--iteration", "3",
+    ]);
+    expect(again.status).not.toBe(0);
+    expect(again.out).toContain("allows 1 review pass");
+    const completed = tool(p, "state", ["unit", "complete", "--stage", design.slug, "--unit", "alpha"]);
+    expect(completed.status, completed.out).toBe(0);
+    const after = next(p);
+    expect(after, JSON.stringify(after).slice(0, 800)).toMatchObject({ stage: "functional-design", unit: "beta" });
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   // A Unit built as a run records it: each stage's outputs, its review through

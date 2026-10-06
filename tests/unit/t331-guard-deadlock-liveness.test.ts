@@ -1713,6 +1713,49 @@ describe("AttemptView projections and refusal streaks", () => {
     expect(accounting.requestCount).toBe(0);
   });
 
+  // A solo unit-major walk hands a Unit's finished step back when its work is
+  // gone, and the Unit starts the step again: that run gets the stage's review
+  // passes again, whether the step was finished one Unit at a time or in a
+  // wave. The passes keep their numbers and the attempt stays the same.
+  test("a Unit that starts a finished step again has the stage's review passes again", () => {
+    const fd = { Stage: "functional-design", Unit: "alpha" };
+    const request = (timestamp: string, iteration: string, pos: number) => event("REVIEW_REQUESTED", timestamp, {
+      Stage: "functional-design", Reviewer: "reviewer", Unit: "alpha", Iteration: iteration,
+      "Artifact Fingerprint": `sha256:${"a".repeat(64)}`,
+    }, "main.md", 0, pos);
+    for (const finished of [{}, { Mode: "wave" }]) {
+      const rows = [
+        event("WORKFLOW_STARTED", "2026-08-28T00:00:00Z", {}, "main.md", 0, 0),
+        request("2026-08-28T00:00:01Z", "1", 1),
+        event("UNIT_COMPLETED", "2026-08-28T00:00:02Z", { ...fd, ...finished }, "main.md", 0, 2),
+        event("UNIT_STARTED", "2026-08-28T00:00:03Z", { ...fd, Unit: "beta" }, "main.md", 0, 3),
+        event("UNIT_STARTED", "2026-08-28T00:00:04Z", fd, "main.md", 0, 4),
+      ];
+      const accounting = (count: number, unit = "alpha", stateContent = state("-")) => {
+        const view: AttemptView = {
+          allEvents: rows.slice(0, count),
+          events: rows.slice(0, count),
+          floorIdx: 0,
+          mergedBoltUnits: new Set(),
+          openBoltUnits: new Set(),
+        };
+        return reviewAttemptAccounting(
+          "", view, stateContent, { slug: "functional-design", for_each: "unit-of-work" }, "reviewer", unit, undefined,
+        );
+      };
+      const label = JSON.stringify(finished);
+      // Another Unit's start is not this Unit's.
+      expect(accounting(4), label).toMatchObject({ requestCount: 1, budgetCount: 1 });
+      const again = accounting(5);
+      expect(again, label).toMatchObject({ requestCount: 1, budgetCount: 0 });
+      expect(again.floor, label).toBe(accounting(4).floor);
+      // Team-owned Units keep their Bolt floors.
+      expect(accounting(5, "alpha", `${state("-")}- **Unit Ownership**: team\n`).budgetCount, label).toBe(1);
+      rows.push(request("2026-08-28T00:00:05Z", "2", 5));
+      expect(accounting(6), label).toMatchObject({ requestCount: 2, budgetCount: 1 });
+    }
+  });
+
   test("worktree review projection owns the Bolt boundary event set", () => {
     const projection = worktreeReviewAttemptProjection(
       "",
@@ -2738,5 +2781,26 @@ describe("the gate a spent review budget offers is a step the walk accepts", () 
       "Present the unresolved review findings at the approval gate for the " +
         "human instead of starting another review pass.",
     );
+  });
+
+  // Part way through the Unit's step (`unit start` recorded it), no gate opens
+  // yet, and an approved stage (design stage by stage, then one Unit at a time)
+  // offers only a stage-wide reset. The ways on are that Unit's own.
+  test("part way through a Unit's step it offers finishing or redoing that step for the Unit", () => {
+    const midStep = checkpointWalk(true)
+      .replace("- **Unit Stage**: code-generation", "- **Unit Stage**: code-generation\n- **Unit State**: in-progress");
+    const approved = midStep.replace("- [-] code-generation \u2014 EXECUTE", "- [x] code-generation \u2014 EXECUTE");
+    for (const [stateContent, lifecycle] of [[midStep, "in-progress"], [approved, "completed"]] as const) {
+      const refusal = budgetRefusal(stateContent);
+      expect(refusal.state).toBe(lifecycle);
+      expect(refusal.remedies.slice(0, 2).map((remedy) => remedy.op), lifecycle)
+        .toEqual(["record-unit-completion", "reopen-unit-step"]);
+      expect(gate(refusal), lifecycle).toBeUndefined();
+      const [finish, redo] = refusal.remedies;
+      expect(finish.executableNow, lifecycle).toBe(true);
+      expect(finish.interaction, lifecycle).toBe("command");
+      expect(finish.command, lifecycle).toMatch(/aidlc-state(?:\.ts)? unit complete --stage code-generation --unit extra$/);
+      expect(redo.command, lifecycle).toMatch(/aidlc-jump(?:\.ts)? reopen --target code-generation --units extra$/);
+    }
   });
 });

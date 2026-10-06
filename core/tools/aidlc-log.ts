@@ -3356,7 +3356,9 @@ function handleReview(args: string[]): void {
               "repeat the same iteration with --retry-pending if the reviewer did not run.",
           );
         }
-        // The budget is measured against `expected` ONLY. `iteration` is the
+        // The budget is measured against the attempt's own count ONLY (`expected`,
+        // less the passes before a Unit started a finished step again: that run
+        // gets the stage's passes again). `iteration` is the
         // caller's claim about which pass this is, and it is validated against
         // `expected` further down with a message that names the right ordinal.
         // Measuring the budget against the claim instead turned a recoverable
@@ -3370,11 +3372,12 @@ function handleReview(args: string[]): void {
         // REVIEW_EVIDENCE_MISSING, because the revision path needs the fresh
         // receipt the refusal just forbade. The only remedy left is a redo jump,
         // which discards the attempt the human was mid-revision on.
-        if (!recoveryEligible && budget !== null && expected > budget && !personAsked()) {
+        const pass = attempt.budgetCount + 1;
+        if (!recoveryEligible && budget !== null && pass > budget && !personAsked()) {
           refuseAttemptGuard(
             "REVIEW_BUDGET_EXHAUSTED",
             "Review requests do not exceed the configured attempt budget.",
-            reviewBudgetMessage(flags.stage, expected, budget),
+            reviewBudgetMessage(flags.stage, pass, budget),
           );
         }
         if (iteration !== expected) {
