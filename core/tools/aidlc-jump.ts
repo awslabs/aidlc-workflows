@@ -6,7 +6,9 @@ import { appendAuditEntry } from "./aidlc-audit.ts";
 import { readReviewArtifactContexts } from "./aidlc-review-brief.ts";
 import { DEFAULT_SUBPROCESS_TIMEOUT_MS } from "./aidlc-runtime-budget.ts";
 import { isCompiledExecutable } from "./aidlc-runtime-paths.ts";
+import { stageLabel } from "./aidlc-validity.ts";
 import {
+  addPendingPersonLines,
   type CheckboxState,
   countCheckboxes,
   emitError,
@@ -24,10 +26,12 @@ import {
   PHASES,
   parseCheckboxes,
   parseStateStageSuffixes,
+  readActiveDirectiveMarker,
   readStateFile,
   reviewArtifactEntries,
   resolveProjectDir,
   resolveStage,
+  resolveWorkflowSelection,
   type StageEntry,
   setCheckbox,
   removeField,
@@ -38,6 +42,8 @@ import {
   toPosix,
   UNIT_NAME_REGEX,
   writeStateFile,
+  entrySkillInvocation,
+  REDO_REUSE_SOURCE,
 } from "./aidlc-lib.js";
 
 // The EFFECTIVE per-stage action: the live state file's EXECUTE/SKIP suffix
@@ -155,6 +161,34 @@ export function main(argv: string[]): void {
   }
 }
 
+// A forward jump says, in the person's terms, what it passed over and how to
+// come back: jumping back to where they were resets those stages again. The
+// agent repeats this as written, so a plugin's stage is named by its slug,
+// never by its own display text.
+export function forwardJumpNotice(
+  target: { slug: string; name: string; plugin?: string },
+  skipped: readonly { slug: string; name: string; plugin?: string }[],
+  cameFrom: string,
+): string {
+  const names = skipped
+    .map((node) => stageLabel(node, node.slug))
+    .filter((name): name is string => name !== null);
+  const list = names.length <= 1 ? names.join("") : `${names.slice(0, -1).join(", ")} and ${names.at(-1)}`;
+  return `Moved to ${stageLabel(target, target.slug) ?? "that stage"}${list ? `; skipped ${list}` : ""}. ` +
+    `To go back, type \`${entrySkillInvocation()} --stage ${cameFrom}\`.`;
+}
+
+// A backward jump says where it moved and how to return: the forward jump back
+// to the step the person was on. It rides the next step the agent speaks from,
+// because the backward instruction stays as the guard recovery knows it.
+export function backwardJumpNotice(
+  target: { slug: string; name: string; plugin?: string },
+  from: { slug: string; name: string; plugin?: string },
+): string {
+  return `Moved back to ${stageLabel(target, target.slug) ?? "that stage"}. ` +
+    `To return to ${stageLabel(from, from.slug) ?? "where you were"}, type \`${entrySkillInvocation()} --stage ${from.slug}\`.`;
+}
+
 if (import.meta.main) {
   main(process.argv.slice(2));
 }
@@ -195,7 +229,7 @@ function handleReopen(args: string[]): void {
   if (!targetSlug || units.length === 0) {
     error("Usage: reopen --target <slug> [--stages <slug[,slug...]>] --units <unit[,unit...]> [--via redo] [--scope <scope>]");
   }
-  // `--via redo`: the person chose Redo on the resume menu, not a jump.
+  // `--via redo`: the person asked to redo the step on re-entry, not a jump.
   if (flags.via !== undefined && flags.via !== "redo") error(`Unknown --via: ${flags.via} (only "redo")`);
   const targetStage = findStageBySlug(targetSlug);
   if (!targetStage || !isPerUnitStage(targetStage)) error(`Not a per-unit stage: ${targetSlug}`);
@@ -217,7 +251,7 @@ function handleReopen(args: string[]): void {
       "Gate Scope": "unit-end",
       Unit: unit,
       Feedback: flags.via === "redo"
-        ? `Redid ${stageName} for unit ${unit} at the person's request (Redo on the resume menu).`
+        ? `Redid ${stageName} for unit ${unit} at the person's request (redo on re-entry).`
         : `Reopened ${stageName} for unit ${unit} at the person's request (/aidlc --stage ${targetSlug}).`,
     });
     // Redo is the person's answer to the re-use question for this Unit's step
@@ -228,7 +262,7 @@ function handleReopen(args: string[]): void {
         Decision: "redo",
         Artifacts: `construction/${unit}/${targetSlug}/`,
         Unit: unit,
-        Source: "Redo on the resume menu",
+        Source: REDO_REUSE_SOURCE,
       });
     }
   }
@@ -423,6 +457,14 @@ function handleExecute(args: string[]): void {
 
   // Get current stage for audit
   const currentSlug = getField(content, "Current Stage") || "state-init";
+  // Where the person was: the active Unit's own step in a unit-at-a-time walk,
+  // which Current Stage does not name, or else the step the engine last put to
+  // them (a Unit's code plan, say) while it still matches this state.
+  const unitStage = getField(content, "Unit Stage")?.trim() ?? "";
+  const shownStage = readActiveDirectiveMarker(pd, content)?.stage?.trim() ?? "";
+  const cameFrom = graph.some((node) => node.slug === unitStage)
+    ? unitStage
+    : shownStage !== targetSlug && graph.some((node) => node.slug === shownStage) ? shownStage : currentSlug;
 
   // States that count as "in-flight" (skip on forward jump, reset on backward jump)
   const IN_FLIGHT_STATES: CheckboxState[] = [
@@ -659,11 +701,29 @@ function handleExecute(args: string[]): void {
 
   writeStateFile(pd, content);
 
+  // The jump is done, so the way back can never fail it. When no chat can
+  // hold the line for the next step, it rides the tool's output instead.
+  const from = graph.find((node) => node.slug === cameFrom);
+  let backNotice: string | undefined;
+  if (direction === "backward" && from) {
+    backNotice = backwardJumpNotice(targetStage, from);
+    try {
+      const session = resolveWorkflowSelection(pd).sessionId;
+      if (session && addPendingPersonLines(pd, session, [backNotice])) backNotice = undefined;
+    } catch {
+      // No chat to hold it: the output carries it.
+    }
+  }
+  const notice = direction === "forward"
+    ? forwardJumpNotice(targetStage, graph.filter((node) => stagesSkipped.includes(node.slug)), cameFrom)
+    : backNotice;
+
   console.log(
     JSON.stringify({
       direction,
       target: targetSlug,
       target_phase: targetStage.phase.toUpperCase(),
+      ...(notice ? { notice } : {}),
       stages_skipped: stagesSkipped,
       stages_reset: stagesReset,
       state_updated: true,

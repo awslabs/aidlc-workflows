@@ -989,7 +989,7 @@ describe("t-ide-kiro-checkpoint (live Kiro IDE: human-presence gate enforced on 
           blockedGateOpens: gateOpenedCountFor(sandbox, BLOCKED_SLUG),
           snapshots: await snapshotChatDom(handle.port),
         });
-        // The refusal reaches the conductor as an error directive on stdout, in
+        // The refusal reaches the conductor as its next step on stdout, in
         // the human's words, naming the wait rather than an internal code.
         const refusal = `${fabricated.stdout ?? ""}${fabricated.stderr ?? ""}`;
         expect(refusal, refusal).toContain("no new human reply");

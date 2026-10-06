@@ -83,7 +83,7 @@ Affirm a stricter posture in `team.md` if the team commits to one.
 
 ## Guard Policy
 
-<!-- Mode: strict, relaxed, or off. Strict here holds for every intent in this space and cannot be changed from chat. A section under the retired Change Control heading, written by an earlier release, is still read. -->
+<!-- Mode: strict, relaxed, or off. Strict here holds for every intent in this space, whatever one person asks in chat; relaxed or off here applies to every intent whose policy came from its scope, unless a narrower layer or the person sets another; changing this line changes it. A section under the retired Change Control heading, written by an earlier release, is still read. -->
 
 ## Deployment
 

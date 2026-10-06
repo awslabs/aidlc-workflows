@@ -236,12 +236,12 @@ The intent-configuration handlers share a single mutation path:
 
 | Dispatcher route | Utility handler | Contract |
 |------------------|-----------------|----------|
-| `aidlc engine config get <key>` | `config-get` | Read one of `depth`, `test-strategy`, `review`, `guard-policy`, `sensors`, `learnings`, `summary-confirmation`, or one of the four `guard.<fence>` keys; the retired key `change-control` resolves to `guard-policy` |
-| `aidlc engine config list [--json]` | `config-list` | Read all twelve settings in that order; Guard Policy, fence, and ceremony values include effective sources |
+| `aidlc engine config get <key>` | `config-get` | Read one of `depth`, `test-strategy`, `review`, `guard-policy`, `sensors`, `learnings`, `summary-confirmation`, `collaborators`, or one of the four `guard.<fence>` keys; the retired key `change-control` resolves to `guard-policy` |
+| `aidlc engine config list [--json]` | `config-list` | Read all thirteen settings in that order; Guard Policy, fence, and ceremony values include effective sources |
 | `aidlc engine config set <key> <value> [--key value ...]` | `config-change --<key> <value> ...` | Apply all supplied setting flags in one transaction; every key uses this route |
-| `aidlc engine scope change --scope <name> [--key value ...]` | `scope-change --scope <name> ...` | Re-plan scope and apply any of the same eleven settings in the same transaction, including when the requested scope is already current |
+| `aidlc engine scope change --scope <name> [--key value ...]` | `scope-change --scope <name> ...` | Re-plan scope and apply any of the same twelve settings in the same transaction, including when the requested scope is already current |
 
-`config-change` accepts only the eleven setting flags plus `--intent`, `--space`,
+`config-change` accepts only the twelve setting flags plus `--intent`, `--space`,
 and `--project-dir`, and requires at least one setting. Reject unknown flags by
 name and validate all values before any mutation. A shared utility applier
 returns candidate content, `AuditEntryInput[]`, and output lines in canonical
@@ -251,9 +251,10 @@ single state write. When the Guard Policy value moves, call
 `assertChangeControlLedgerWritable` before any write. A memory layer's
 `Mode: strict` refuses an explicit `--guard-policy relaxed` or `--guard-policy
 off` for the entire command, including companion settings and scope changes.
-Scope changes may raise a scope-owned Guard Policy automatically, but preserve
-the current stored value when the new default is lower; memory continues to
-control the effective value.
+Scope changes may raise a scope-owned Guard Policy automatically. A lower
+default follows the new scope only when the person asked for the scope change;
+otherwise the current stored value stays and the output says so in one line.
+Memory continues to control the effective value.
 
 Preserve state and event contracts: `review adversarial` stores an empty
 `Review Override`; explicit Guard Policy values use `(set by you)`, explicit
@@ -283,7 +284,9 @@ The `codekb-path`, `codekb-snapshot`, `codekb-publish`, and
 `bun <harness-dir>/tools/aidlc-utility.ts <verb>`, not `/aidlc <verb>`
 (`codekb-path` is also reachable through the dispatcher as
 `aidlc engine workspace codekb`).
-`codekb-path` and `codekb-scope-diff` are read-only. `codekb-snapshot` may
+`codekb-path` is read-only, and so is `codekb-scope-diff` except that a
+`--compare` removes the repo's own `scope-draft-<repo>.md` from the active
+intent record's `inception/reverse-engineering/`. `codekb-snapshot` may
 recover an interrupted prior CodeKB directory swap before returning the
 source/store generations. `codekb-publish` is the sole shared-store writer: it
 validates a complete nine-file candidate and commits it under a space+repo
@@ -320,7 +323,7 @@ because it runs the extractor.
 
 ### LLM-driven handlers
 For handlers that benefit from agent reasoning (filesystem scanning, decision-making):
-1. **Task tracking** -- Create tasks via `TaskCreate` for each logical step, transition them with `TaskUpdate` (`in_progress` -> `completed`) as work progresses. This drives the task sidebar in Claude Code.
+1. **Task tracking** -- When the session offers `TaskCreate` and `TaskUpdate` (or the plan or todo tool the harness's skill maps them to), create tasks via `TaskCreate` for each logical step and transition them with `TaskUpdate` (`in_progress` -> `completed`) as work progresses. This drives the task sidebar in Claude Code; without those tools the step is skipped silently.
 2. **Statusline update** -- If the active intent's `aidlc-state.md` exists, temporarily set `Current Stage` to describe the running utility (e.g., `running health check`), then restore the original value when done. The `aidlc-statusline.ts` hook reads this field for the terminal status bar.
 3. **Audit logging** -- Invoke the appropriate semantic native dispatcher route, whose backing handler calls `appendAuditEntry` internally. Never hand-write `**Event**:` markdown blocks from LLM prose — see [State Machine: Forbidden patterns](12-state-machine.md).
 
@@ -342,7 +345,7 @@ A scope is authored as a file (its identity) plus a per-stage membership tag. Th
    - `runner` (optional): set `true` to include the scope in the default generated runner set.
    - `existing_code` (optional): `true` | `false`, absent means false. `true` marks a scope that changes code that already exists (`bugfix`, `refactor`, `security-patch`): a new project's custom plan runs on another scope when one fits, and creation in a folder that scans as a new project notes it when it drops the scope's Reverse Engineering. The loader rejects any other value.
    - `freeform_default` (optional): set `true` to nominate this scope when the preferred core default (`classic`) is not enabled. At most one enabled scope may claim it; graph compilation rejects ambiguous selected plugin sets. Unknown explicit `AWS_AIDLC_DEFAULT_SCOPE` values still fail validation.
-   - `guard_policy` (optional): `strict` | `relaxed` | `off`. The Guard Policy default every new intent on the scope starts with: what happens when an input changes after a human approved or confirmed something (strict reopens the approval; relaxed and off record the change once and continue), and which authority fences hold (strict lowers none; relaxed lowers `plan-approval` and `review-freeze`; off lowers those two plus `state-transition` and `reviewer-scope`; `human-presence` is never lowered by the word). Absence means strict. Validated like `skeleton` (the loader names the file and the three values). A memory layer's `## Guard Policy` `Mode: strict` wins over any scope default. `change_control` is the retired spelling, read for one release; naming both keys with different values is rejected.
+   - `guard_policy` (optional): `strict` | `relaxed` | `off`. The Guard Policy default every new intent on the scope starts with: what happens when an input changes after a human approved or confirmed something (strict reopens the approval; relaxed and off record the change once and continue), and which authority fences hold (strict lowers none; relaxed lowers `plan-approval` and `review-freeze`; off lowers those two plus `state-transition` and `reviewer-scope`; `human-presence` is never lowered by the word). Absence means off, the default of every shipped scope but `enterprise`. Validated like `skeleton` (the loader names the file and the three values). A memory layer's `## Guard Policy` `Mode: strict` wins over any scope default; its `Mode: relaxed` or `Mode: off` replaces a scope default too. `change_control` is the retired spelling, read for one release; naming both keys with different values is rejected.
    - `sensors` (optional): `on` | `off`, absent means on. Controls sensor execution and sensor gate checks. Per-intent flag: `/aidlc --sensors on|off`; global kill switch: `AIDLC_DISABLE_SENSORS=1`.
    - `learnings` (optional): `on` | `off`, absent means on. Controls the stage learnings ritual. Per-intent flag: `/aidlc --learnings on|off`; global kill switch: `AIDLC_DISABLE_LEARNINGS=1`.
    - `summary_confirmation` (optional): `on` | `off`, absent means on. Controls the separate pre-output summary confirmation, not stage approval. Per-intent flag: `/aidlc --summary-confirmation on|off`; global kill switch: `AIDLC_DISABLE_SUMMARY_CONFIRMATION=1`. Scope values are distinct from the stage's `required` | `if-present` declaration.
@@ -413,7 +416,7 @@ A stage is authored as a Markdown file with YAML frontmatter under `core/aidlc-c
 
 5. **Update scope-aware and stage-aware documentation** — a new stage changes the stage count and the per-scope plans. Update `docs/guide/05-scopes-and-depth.md` (the Stage-by-Scope Matrix — its cells are drift-guarded by `tests/unit/t244-scope-matrix-doc-sync.test.ts`), `docs/reference/16-artifact-vocabulary.md` (the non-initialisation stage count), the Harness Engineer Guide's stage chapters, and any scope reference that enumerates the plan. Per the documentation policy at the end of this chapter, do it in the same PR.
 
-6. **Add a test and refresh coverage** — author a `t*.test.ts` for the stage's behaviour (the suite is discovered, so dropping the file under the right level directory is all the runner needs — there is no registry row to add). Then regenerate the coverage index with `bun tests/gen-coverage-registry.ts` and confirm `bun tests/gen-coverage-registry.ts --check` is clean. The stage-runner drift guard `tests/unit/t129-stage-runner-drift.test.ts` asserts the generated runner set equals the compiled stage set, and `tests/integration/t55-test-suite-drift.test.ts` sweeps for stale paths and markers.
+6. **Add a test and refresh coverage** — author a `t*.test.ts` for the stage's behaviour (the suite is discovered, so dropping the file under the right level directory is all the runner needs — there is no registry row to add). Then confirm `bun tests/gen-coverage-registry.ts --check --base origin/main` is clean: it fails only when a unit main covers lost its claim, and there is no coverage file to regenerate or commit. The stage-runner drift guard `tests/unit/t129-stage-runner-drift.test.ts` asserts the generated runner set equals the compiled stage set, and `tests/integration/t55-test-suite-drift.test.ts` sweeps for stale paths and markers.
 
 ### What validates automatically
 
@@ -487,9 +490,12 @@ When adding, removing, or renaming files, directories, commands, or flags:
 Plan Approval, review, gate, and Unit lifecycle receipts bind to content and stage
 attempt, never to the identity of the directive that issued a prompt and never to
 event order. Plan Approval is held by the engine, not the conductor: `next`
-publishes the question and records what was asked, never an answer, and only the
-human-turn hook records the answer, taking the fingerprint of the plan files as
-they are when the person answers. No conductor-run command writes a Plan Approval
+publishes the question and records what was asked, never an answer. An answer
+is recorded only from the person's reply: the human-turn hook records an exact
+pick, and the conductor's `log answer --checkpoint plan-approval` records the
+choice it read, accepted only after a reply since the question was shown. Either
+way the engine takes the fingerprint of the plan files as they are when the
+answer is recorded. No other conductor-run command writes a Plan Approval
 answer, receipt, or fingerprint tag in that flow. The two rules are stated in
 [`12-state-machine.md`](12-state-machine.md#authority-invariants). Before
 submitting, answer these:

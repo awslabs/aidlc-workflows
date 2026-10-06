@@ -26,7 +26,7 @@
 //            the intent record, aidlc-state.md, WORKFLOW_STARTED audited, and
 //            the created intent's scope resolving through the on-disk
 //            registry. A composed plan writes no scope file: a CUSTOM plan runs
-//            a stock scope with a `Plan: custom, based on <scope>` line, and
+//            a stock scope with a `Plan: <name>` line (the name the gate showed), and
 //            `.codex/scopes/` keeps its stock files.
 //
 // The task is the one the sibling compose-front journeys use (t192, t-tui,
@@ -67,7 +67,7 @@ import { join } from "node:path";
 import { getField } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { codexBedrockConfig, codexHeadlessArgs, codexWindowsSandboxConfig } from "../harness/exec-drive.ts";
 import { REPO_ROOT } from "../harness/fixtures.ts";
-import { codexExecDiagnostic, codexExecTimeout, recordCodexExec, withCodexFixture } from "../harness/codex-test-lifecycle.ts";
+import { codexExecDiagnostic, codexExecTimeout, codexPersonTurn, recordCodexExec, withCodexFixture } from "../harness/codex-test-lifecycle.ts";
 import { gateText, turnEvidence, type CodexTurn } from "../harness/codex-turn-evidence.ts";
 
 function completedStartupProbe<T extends { error?: Error }>(result: T): T {
@@ -199,6 +199,7 @@ function codexTurn(
 ): CodexTurn {
   const argv = opts.resume ? ["exec", "resume", "--last", "--json", prompt] : ["exec", "--json", prompt];
   const commandArgs = codexHeadlessArgs(...argv);
+  const turn = codexPersonTurn(proj, prompt);
   const r = spawnSync(CODEX_BIN, commandArgs, {
     cwd: proj,
     encoding: "utf-8",
@@ -207,7 +208,7 @@ function codexTurn(
     timeout: codexExecTimeout(TEST_TIMEOUT_MS),
   });
   const result = { rc: r.status ?? -1, stdout: r.stdout ?? "", stderr: r.stderr ?? "", signal: r.signal, error: r.error?.message };
-  recordCodexExec("compose-front", proj, [CODEX_BIN, ...commandArgs], result);
+  recordCodexExec("compose-front", proj, [CODEX_BIN, ...commandArgs], result, turn);
   return { ...result, ...(result.rc === 0 ? turnEvidence(result.stdout) : { agentMessages: [] }) };
 }
 
@@ -309,7 +310,8 @@ describe("t-exec-codex-compose-front - interactive compose over exec + exec resu
         );
         expect(Object.keys(grid)).toContain(scope);
         expect(scopeFiles(proj).filter((s) => !STOCK_SCOPES.has(s))).toEqual([]);
-        expect(state).toContain(`- **Plan**: custom, based on ${scope}`);
+        // The plan is named as the gate showed it, never after the scope it runs on.
+        expect(state).toMatch(/^- \*\*Plan\*\*: (?:[a-z0-9][a-z0-9-]*|tailored plan)$/m);
       }, deadlineMs);
     },
     TEST_TIMEOUT_MS,

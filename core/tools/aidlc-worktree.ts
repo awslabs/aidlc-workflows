@@ -34,6 +34,7 @@ import {
   filteredRawIndexEntries,
   findAllEvents,
   getField,
+  guardPolicyAcceptsChanges,
   GIT_PLATFORM_ARGS,
   legacyBoltIdentity,
   gitCommitSourceListing,
@@ -52,6 +53,8 @@ import {
   readAllAuditShards,
   readAuditShardEvents,
   readStateFile,
+  recordAcceptedChanges,
+  renderChangedPaths,
   recoveryRepoCandidates,
   relativeRecordDir,
   relativeRecordDirForSelection,
@@ -2026,6 +2029,20 @@ function assertAggregateSourceBeforeMerge(
 } | null {
   if (!record || record.kind === "bypass") return null;
   const current = workspaceSourceState(pd, intent, space);
+  // Under relaxed or off the person's own edits to the main checkout during
+  // the build are kept: the merge starts from the checkout as it is, and the
+  // change is recorded once so the merge chain stays readable.
+  const keepChange = (recorded: string, changed: string[] | null) => {
+    const notice = changed && changed.length > 0
+      ? `You changed ${renderChangedPaths(changed)} during the build; kept them and merged unit ${record.unit}.`
+      : `The main checkout changed during the build; kept it and merged unit ${record.unit}.`;
+    for (const line of recordAcceptedChanges(pd, [{
+      checkpoint: "swarm-batch", stage: record.stage, unit: record.unit, changed,
+      recorded, current: current!.fingerprint, notice,
+    }], { intent, space })) process.stderr.write(`note: ${line}\n`);
+    return { state: current!, openingFingerprint: current!.fingerprint };
+  };
+  const acceptsChanges = current !== null && guardPolicyAcceptsChanges(pd, undefined, { selection: { intent, space } });
   if (current === null) {
     errorWithSlug(
       slug,
@@ -2052,9 +2069,12 @@ function assertAggregateSourceBeforeMerge(
       );
     }
     if (!sameWorkspaceSource(chain.fingerprint, current.fingerprint)) {
+      if (acceptsChanges) return keepChange(chain.fingerprint, null);
       errorWithSlug(
         slug,
-        "refusing to merge: the main checkout source changed after the previous reviewed-source merge",
+        "refusing to merge: the main checkout source changed after the previous reviewed-source merge. " +
+          "Undo those changes in the main checkout and run the merge again, or say 'guard policy relaxed' " +
+          "for this piece of work to keep them, then run the merge again.",
       );
     }
     return {
@@ -2087,18 +2107,22 @@ function assertAggregateSourceBeforeMerge(
       current.listing,
       openingListing,
     );
+    if (acceptsChanges) return keepChange(opening.fingerprint, changed);
     errorWithSlug(
       slug,
-      `refusing to merge: the main checkout source changed since the stage-entry baseline (${changed.join(", ") || "unknown paths"})`,
+      `refusing to merge: the main checkout source changed since the stage-entry baseline (${renderChangedPaths(changed) || "unknown paths"}). ` +
+        "Undo those changes and run the merge again, or say 'guard policy relaxed' for this piece of work to keep them, then run the merge again.",
     );
   }
   if (
     opening.source === "prior-accepted" &&
     !sameWorkspaceSource(opening.fingerprint, current.fingerprint)
   ) {
+    if (acceptsChanges) return keepChange(opening.fingerprint, null);
     errorWithSlug(
       slug,
-      "refusing to merge: the main checkout source does not match the prior attempt's final reviewed aggregate",
+      "refusing to merge: the main checkout source does not match the prior attempt's final reviewed aggregate. " +
+        "Undo the changes made since then and run the merge again, or say 'guard policy relaxed' for this piece of work to keep them, then run the merge again.",
     );
   }
   return {

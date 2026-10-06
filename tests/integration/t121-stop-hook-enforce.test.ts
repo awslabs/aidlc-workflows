@@ -426,7 +426,10 @@ if (kind === "done") {
 } else if (kind === "invoke-swarm") {
   console.log(JSON.stringify({ kind, stage, units }));
 } else {
-  console.log(JSON.stringify({ kind, stage, ...(unit ? { unit } : {}), ...(wave ? { wave } : {}) }));
+  const policy = process.env.MOCK_OFFER_AUTONOMY === "1"
+    ? { construction_policy: { offer_autonomy: true } }
+    : process.env.MOCK_OFFER_AUTONOMY === "0" ? { construction_policy: { offer_autonomy: false } } : {};
+  console.log(JSON.stringify({ kind, stage, ...(unit ? { unit } : {}), ...(wave ? { wave } : {}), ...policy }));
 }
 process.exit(0);
 `;
@@ -706,6 +709,8 @@ type TranscriptEntry =
   | { kind: "human"; text: string }
   | { kind: "text" }
   | { kind: "bash"; command: string; id?: string }
+  | { kind: "exec"; cmd: string; id?: string }
+  | { kind: "localShell"; argv: string[]; id?: string }
   | { kind: "bashBatch"; calls: Array<{ command: string; id: string }> }
   | { kind: "result"; id: string; output: unknown; failed?: boolean }
   | { kind: "meta"; text: string }
@@ -764,6 +769,18 @@ function seedTranscriptEntries(
             }),
           );
           break;
+        case "exec":
+        case "localShell": {
+          const command = e.kind === "exec" ? e.cmd : e.argv.join(" ");
+          lines.push(JSON.stringify({
+            type: "assistant",
+            message: {
+              role: "assistant",
+              content: [{ type: "tool_use", ...(e.id ? { id: e.id } : {}), name: "Bash", input: { command } }],
+            },
+          }));
+          break;
+        }
         case "bashBatch":
           lines.push(JSON.stringify({
             type: "assistant",
@@ -839,6 +856,30 @@ function seedTranscriptEntries(
               },
             }),
           );
+          break;
+        case "exec":
+          // Codex 0.160's shell call, as a live rollout records it.
+          lines.push(JSON.stringify({
+            type: "response_item",
+            payload: {
+              type: "function_call",
+              name: "exec_command",
+              arguments: JSON.stringify({ cmd: e.cmd, max_output_tokens: 12000 }),
+              ...(e.id ? { call_id: e.id } : {}),
+            },
+          }));
+          break;
+        case "localShell":
+          // The shell call older Codex recorded: the command as an argv list.
+          lines.push(JSON.stringify({
+            type: "response_item",
+            payload: {
+              type: "local_shell_call",
+              ...(e.id ? { call_id: e.id } : {}),
+              status: "completed",
+              action: { type: "exec", command: e.argv },
+            },
+          }));
           break;
         case "bashBatch":
           for (const call of e.calls) {
@@ -1161,19 +1202,13 @@ describe("t121 aidlc-continue-workflow hook — forwarding-loop enforcement (mig
     seedActive(proj, "requirements-analysis");
     const r = runHook(proj, '{"stop_hook_active":false}', "run-stage");
     const reason = (JSON.parse(r.out) as { reason: string }).reason;
-    // The stage context is carried into the continuation, in plain words: the
-    // agent repeats what it is told, so no hook, section, or engine term.
-    expect(reason).toStartWith('The AI-DLC workflow is not finished (current stage "requirements-analysis"). ');
+    // The person sees the note too (Claude Code shows it as "Stop hook error"):
+    // one line naming the open step by its name and the one command the agent
+    // runs next, with no hook, section, or engine term. What the agent does
+    // when its own question waits, or the person asked to stop, is in every
+    // conductor SKILL (t181).
+    expect(reason).toMatch(/^Requirements Analysis is not finished yet\. Next: `[^`]*aidlc-orchestrate[^`]* next`\.$/);
     expect(reason).not.toMatch(/hook|\u00a7|forwarding|directive|delivered|rubber-stamp|receipt|run-stage|loop/i);
-    // A question shown before it was recorded is recorded, never asked again.
-    expect(reason).toContain(
-      'If you just asked the person a question and are waiting for the answer, run `',
-    );
-    expect(reason).toContain(
-      "engine log decision --stage requirements-analysis --decision \"<the question>\" --options \"<the choices>\"`, adding any `--single`, `--checkpoint` or `--questions-file` flags that question's own instructions use, and end your turn without asking it again.",
-    );
-    expect(reason).toContain("If the person asked to stop here, run `");
-    expect(reason).toContain("tell the person nothing about this note");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("(a) reason is a sanctioned continuation (re-feeds the loop, no override verbs)", () => {
@@ -1202,9 +1237,7 @@ describe("t121 aidlc-continue-workflow hook — forwarding-loop enforcement (mig
     };
     expect(parsed.decision).toBe("block");
     const reasonText = parsed.reason ?? "";
-    expect(reasonText).toContain("continue steering-token-495");
-    expect(reasonText).toContain("follow each step it returns until it answers `run-stage`");
-    expect(reasonText).toContain("Do not summarise or narrate rule chunks");
+    expect(reasonText).toMatch(/^Requirements Analysis is not finished yet\. Next: `[^`]* continue steering-token-495`\.$/);
 
     // The payload never rides along: neither the rule text nor its path.
     expect(reasonText).not.toContain("ALWAYS preserve this exact stop-recovered policy.");
@@ -1238,7 +1271,8 @@ describe("t121 aidlc-continue-workflow hook — forwarding-loop enforcement (mig
     };
     expect(first.rc).toBe(0);
     expect(parsed.decision).toBe("block");
-    expect(parsed.reason).toContain(message);
+    // The engine's own sentence, worded for the person, behind one short lead.
+    expect(parsed.reason).toBe(`The last AI-DLC step stopped on a problem: ${message}`);
     expect(parsed.reason).not.toMatch(/\breport\b/i);
     expect(parsed.reason).not.toMatch(/repeat until/i);
     expect(parsed.reason).not.toContain("repeat-until-done");
@@ -1399,7 +1433,10 @@ describe("t121 aidlc-continue-workflow hook — forwarding-loop enforcement (mig
     const proj = makeProject();
     seedActive(proj);
     const result = runHook(proj, '{"session_id":"error-utf8"}', "error", "", "", "requirements-analysis", "", false, { MOCK_MESSAGE: message });
-    const diagnostic = JSON.parse(result.out).reason.split("--- begin engine diagnostic ---\n")[1].split("\n--- end engine diagnostic ---")[0];
+    const lead = "The last AI-DLC step stopped on a problem: ";
+    const reason = String(JSON.parse(result.out).reason);
+    expect(reason.startsWith(lead)).toBe(true);
+    const diagnostic = reason.slice(lead.length);
     expect(diagnostic).toBe(expected);
     expect(readFileSync(pinnedShardPath(proj), "utf-8")).toContain(`**Error**: ${expected}\n`);
   });
@@ -2253,6 +2290,27 @@ describe("t121 aidlc-continue-workflow hook — forwarding-loop enforcement (mig
     expect(r.out).toBe("");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
+  test("(f3) the turn ends at the Construction autonomy question: the step still offers the choice", () => {
+    // On a host that asks in numbered prose, the agent asks "Continue
+    // automatically" or "Review each checkpoint" and ends its turn without
+    // logging a question (only set-autonomy records the answer). The hook
+    // blocked that stop and pushed the agent on right after asking.
+    const proj = makeProject();
+    seedActive(proj, "functional-design");
+    const offered = runHook(proj, '{"stop_hook_active":false}', "run-stage", "", "", "functional-design", "", false, {
+      MOCK_OFFER_AUTONOMY: "1",
+    });
+    expect(offered.rc, offered.diagnostic).toBe(0);
+    expect(offered.out).toBe("");
+    const trace = readFileSync(join(seededRecordDir(proj), ".aidlc-engine/hooks-health", "continue-workflow.trace"), "utf-8");
+    expect(trace).toContain("autonomy-question carve-out");
+    // Once a choice is on record the step stops offering it, and an ordinary quit is nudged again.
+    const chosen = runHook(proj, '{"stop_hook_active":false}', "run-stage", "", "", "functional-design", "", false, {
+      MOCK_OFFER_AUTONOMY: "0",
+    });
+    expect(chosen.out).toContain('"decision":"block"');
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
   test("(f2) solo unit-major keeps Current Stage authority and the legacy trace message", () => {
     const proj = makeProject();
     seedInProgressWithQuestions(proj, {
@@ -2400,11 +2458,10 @@ describe("t121 aidlc-continue-workflow hook — forwarding-loop enforcement (mig
     );
     const stop = () => runHook(proj, '{"stop_hook_active":false}', "run-stage", "", "alpha", "code-generation");
     const reminder = (JSON.parse(stop().out) as { reason: string }).reason;
-    // A team Unit's wait matches only a record for that Unit, so the record
-    // step names it.
-    expect(reminder).toContain(
-      "engine log decision --stage code-generation --unit alpha --decision \"<the question>\" --options \"<the choices>\"`, adding any `--single`, `--checkpoint` or `--questions-file` flags that question's own instructions use, and end your turn without asking it again.",
-    );
+    // The note names the Unit. A team Unit's wait matches only a record for
+    // that Unit, so the SKILL's record step adds `--unit` in team-owned Unit
+    // work (t181), and that record then ends the turn.
+    expect(reminder).toMatch(/^Code Generation for alpha is not finished yet\. Next: `[^`]* next`\.$/);
     seedInteractionAudit(proj, [{ event: "DECISION_RECORDED", stage: "code-generation", unit: "alpha" }]);
     expect(stop().out).toBe("");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
@@ -3416,7 +3473,7 @@ describe("t121 aidlc-continue-workflow hook — forwarding-loop enforcement (mig
   const policyNext = "bun .claude/tools/aidlc.ts engine orchestrate next --guard-policy relaxed";
   const configSet = "bun .claude/tools/aidlc.ts engine config set guard-policy relaxed";
   const refusedLowering =
-    "Setting Guard Policy relaxed lowers fences and is the person's move: they type `/aidlc --guard-policy relaxed` and the harness applies it as they say it.";
+    "Setting Guard Policy relaxed lowers fences, which is the person's call. No reply from the person has arrived since the last decision: run it when they ask for it. They can also type `/aidlc --guard-policy relaxed`.";
   const workflowNext = "bun .claude/tools/aidlc.ts engine orchestrate next";
   const bashStartupDiagnostic = "bash.exe: warning: could not find /tmp, please create!";
   const policyCall: TranscriptEntry = { kind: "bash", id: "policy-call", command: policyNext };
@@ -3911,6 +3968,65 @@ describe("t121 aidlc-continue-workflow hook — forwarding-loop enforcement (mig
     );
     expect(r.rc).toBe(0);
     expect((JSON.parse(r.out) as { decision?: string }).decision).toBe("block");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  // Codex 0.160 names its shell call exec_command and carries the command
+  // under `cmd`; the Stop hook must read it as the shell call it is.
+  const codexStop = (proj: string, entries: TranscriptEntry[]) => runHook(
+    proj,
+    JSON.stringify({ stop_hook_active: false, transcript_path: seedTranscriptEntries(proj, "codex", entries) }),
+    "run-stage",
+  );
+
+  test("(h) Codex 0.160: an exec_command `next` after the prompt BLOCKS", () => {
+    const proj = makeProject();
+    seedActive(proj, "requirements-analysis");
+    const r = codexStop(proj, [
+      { kind: "human", text: "Run AI-DLC's next step and tell me in one line what it asks for." },
+      { kind: "exec", id: "call_next", cmd: "bun .codex/tools/aidlc.ts engine orchestrate next" },
+      {
+        kind: "result",
+        id: "call_next",
+        output: "Chunk ID: 8964f2\nWall time: 1.1062 seconds\nProcess exited with code 0\nOutput:\n{\"kind\":\"run-stage\"}",
+      },
+      { kind: "text" },
+    ]);
+    expect(r.rc).toBe(0);
+    expect((JSON.parse(r.out || "{}") as { decision?: string }).decision).toBe("block");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("(h) Codex 0.160: an exec_command `aidlc-state approve` BLOCKS", () => {
+    const proj = makeProject();
+    seedActive(proj, "requirements-analysis");
+    const r = codexStop(proj, [
+      { kind: "human", text: "approve" },
+      { kind: "exec", cmd: "bun .codex/tools/aidlc-state.ts approve requirements-analysis" },
+    ]);
+    expect(r.rc).toBe(0);
+    expect((JSON.parse(r.out || "{}") as { decision?: string }).decision).toBe("block");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("(h) Codex 0.160: an exec_command read-only `next --status` allows the stop", () => {
+    const proj = makeProject();
+    seedActive(proj, "requirements-analysis");
+    const r = codexStop(proj, [
+      { kind: "human", text: "where is this run?" },
+      { kind: "exec", cmd: "bun .codex/tools/aidlc.ts engine orchestrate next --status" },
+      { kind: "text" },
+    ]);
+    expect(r.rc).toBe(0);
+    expect(r.out).toBe("");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("(h) Codex: an older local_shell_call `next` still BLOCKS", () => {
+    const proj = makeProject();
+    seedActive(proj, "requirements-analysis");
+    const r = codexStop(proj, [
+      { kind: "human", text: "continue" },
+      { kind: "localShell", argv: ["bash", "-lc", "bun .codex/tools/aidlc-orchestrate.ts next"] },
+    ]);
+    expect(r.rc).toBe(0);
+    expect((JSON.parse(r.out || "{}") as { decision?: string }).decision).toBe("block");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   // =========================================================================

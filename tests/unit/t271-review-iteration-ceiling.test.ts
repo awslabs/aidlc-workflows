@@ -456,6 +456,12 @@ describe("t271 review iteration ceiling", () => {
     const ok = runReview(proj, first);
     expect(ok.status).toBe(0);
     expect(ok.stdout).toContain("REVIEW_REQUESTED");
+    // The request opens an empty slot whose folder already exists, so the
+    // reviewer writes one file and makes no folder.
+    const slot = (JSON.parse(ok.stdout.trim().split("\n").at(-1) ?? "{}") as { reviewFile?: string }).reviewFile;
+    expect(typeof slot).toBe("string");
+    expect(existsSync(dirname(join(proj, slot as string)))).toBe(true);
+    expect(existsSync(join(proj, slot as string))).toBe(false);
     // The pass is spent once its review returns (a pending one is still
     // waiting, which has its own refusal below).
     expect(runReview(proj, [...first, "--verdict", "READY"]).status).toBe(0);

@@ -9,7 +9,6 @@ permissions:
       match:
         - "bun {{HARNESS_DIR}}/tools/aidlc-*"
         - "{{INVOKE}} engine *"
-        - "date -u *"
         - "bun --version"
     - capability: shell
       effect: ask
@@ -24,7 +23,6 @@ permissions:
         - "*@(*"
         - "*@{*"
         - "*\n*"
-        - "*\r*"
         - "*aidlc-doctor.ts*"
         - "*aidlc-init.ts*"
         - "*aidlc-lifecycle.ts*"

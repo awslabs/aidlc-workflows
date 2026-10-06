@@ -15,6 +15,9 @@
       },
     },
   },
+  "overrides": {
+    "proxy-addr": "2.0.8",
+  },
   "packages": {
     "@anthropic-ai/claude-agent-sdk": ["@anthropic-ai/claude-agent-sdk@0.3.158", "", { "optionalDependencies": { "@anthropic-ai/claude-agent-sdk-darwin-arm64": "0.3.158", "@anthropic-ai/claude-agent-sdk-darwin-x64": "0.3.158", "@anthropic-ai/claude-agent-sdk-linux-arm64": "0.3.158", "@anthropic-ai/claude-agent-sdk-linux-arm64-musl": "0.3.158", "@anthropic-ai/claude-agent-sdk-linux-x64": "0.3.158", "@anthropic-ai/claude-agent-sdk-linux-x64-musl": "0.3.158", "@anthropic-ai/claude-agent-sdk-win32-arm64": "0.3.158", "@anthropic-ai/claude-agent-sdk-win32-x64": "0.3.158" }, "peerDependencies": { "@anthropic-ai/sdk": ">=0.93.0", "@modelcontextprotocol/sdk": "^1.29.0", "zod": "^4.0.0" } }, "sha512-Rht8Ui7HBsVdBCG6SYs9b+JmJWAVoDXPD2pWNVMSFrzyAS4nizwdz3HtUnAobFumgzbT3LbpWzHdLfUDu4gM4w=="],
 
@@ -316,7 +319,7 @@
 
     "prelude-ls": ["prelude-ls@1.2.1", "", {}, "sha512-vkcDPrRZo1QZLbn5RLGPpg/WmIQ65qoWWhcGKf/b5eplkkarX0m9z8ppCat4mlOqUsWpyNuYgO3VRyrYHSzX5g=="],
 
-    "proxy-addr": ["proxy-addr@2.0.7", "", { "dependencies": { "forwarded": "0.2.0", "ipaddr.js": "1.9.1" } }, "sha512-llQsMLSUDUPT44jdrU/O37qlnifitDP+ZwrmmZcoSKyLKvtZxpyV0n2/bD/N4tBAAZ/gJEdZU7KMraoK1+XYAg=="],
+    "proxy-addr": ["proxy-addr@2.0.8", "", { "dependencies": { "forwarded": "0.2.0", "ipaddr.js": "1.9.1" } }, "sha512-5nnx0yGyVUcY6t9RnWcARWtwT9F1D8O9rt08htPvnd49W1IgZtmLkhu9WfMzQj1cFxjHIO6connUNVW5k7AVyQ=="],
 
     "punycode": ["punycode@2.3.1", "", {}, "sha512-vYt7UD1U9Wg6138shLtLOvdAu+8DsC/ilFtEVHcH+wydcSpNE20AfSOduf6MkRFahL5FY7X1oU7nKVZFtfq8Fg=="],
 

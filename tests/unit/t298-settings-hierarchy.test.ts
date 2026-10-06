@@ -40,6 +40,7 @@ const BUN = process.execPath;
 const INIT = join(REPO_ROOT, "core", "tools", "aidlc-init.ts");
 const DIST_RELEASE = join(REPO_ROOT, "dist-release");
 const temporary: string[] = [];
+const originalInstallRoot = process.env.AIDLC_INSTALL_ROOT;
 
 beforeEach(() => {
   _resetSettingsCacheForTests();
@@ -47,7 +48,8 @@ beforeEach(() => {
 
 afterEach(() => {
   _resetSettingsCacheForTests();
-  delete process.env.AIDLC_INSTALL_ROOT;
+  if (originalInstallRoot === undefined) delete process.env.AIDLC_INSTALL_ROOT;
+  else process.env.AIDLC_INSTALL_ROOT = originalInstallRoot;
   for (const path of temporary.splice(0)) {
     rmSync(path, { recursive: true, force: true });
   }

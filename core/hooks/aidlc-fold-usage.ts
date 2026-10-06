@@ -41,17 +41,16 @@ async function isLifecycleBoundaryToolCall(
   name: string,
   input: unknown,
 ): Promise<boolean> {
-  const [{ isEngineToolCall }, { isLifecycleBoundaryCommand }] =
+  const [{ isEngineToolCall, isShellToolName, shellCommandText }, { isLifecycleBoundaryCommand }] =
     await Promise.all([
       import("../tools/aidlc-lib.ts"),
       import("./aidlc-state-transition-guard.ts"),
     ]);
-  if (!/^(bash|shell|execute_bash)$/i.test(name)) {
+  if (!isShellToolName(name)) {
     return isEngineToolCall(name, input);
   }
-  if (input === null || typeof input !== "object") return false;
-  const command = (input as Record<string, unknown>).command;
-  return typeof command === "string" && isLifecycleBoundaryCommand(command);
+  const command = shellCommandText(input);
+  return command !== null && isLifecycleBoundaryCommand(command);
 }
 
 // Null-intent bindings a session records by staying out of a record or leaving

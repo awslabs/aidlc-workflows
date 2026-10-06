@@ -36,7 +36,7 @@ import { spawnSync } from "node:child_process";
 import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { codexBedrockConfig, codexHeadlessArgs, codexWindowsSandboxConfig } from "../harness/exec-drive.ts";
-import { codexExecDiagnostic, type CodexExecution, codexExecTimeout, recordCodexExec, withCodexFixture } from "../harness/codex-test-lifecycle.ts";
+import { codexExecDiagnostic, type CodexExecution, codexExecTimeout, codexPersonTurn, recordCodexExec, withCodexFixture } from "../harness/codex-test-lifecycle.ts";
 import { createCodexWorkspaceFailureCapture, turnEvidence } from "../harness/codex-turn-evidence.ts";
 import {
   expectCliSuccess, expectCreatedIntent, expectSpaceInclude, workflowStartedCount,
@@ -167,6 +167,7 @@ function execCodex(
 ): CodexExecution & { stdout: string } {
   const argv = ["exec", "--json", prompt];
   const commandArgs = codexHeadlessArgs(...argv);
+  const turn = codexPersonTurn(proj, prompt);
   const r = spawnSync(CODEX_BIN, commandArgs, {
     cwd: proj,
     encoding: "utf-8",
@@ -177,7 +178,7 @@ function execCodex(
   });
   const out = `${r.stdout ?? ""}\n${r.stderr ?? ""}\n${r.error?.message ?? ""}`;
   const result = { rc: r.status ?? -1, stdout: r.stdout ?? "", out, signal: r.signal, error: r.error?.message };
-  recordCodexExec("workspace", proj, [CODEX_BIN, ...commandArgs], result);
+  recordCodexExec("workspace", proj, [CODEX_BIN, ...commandArgs], result, turn);
   return result;
 }
 

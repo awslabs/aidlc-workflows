@@ -23,6 +23,9 @@ build/
 # Test verbose logs
 tests/logs/
 
+# The coverage registry: tests/gen-coverage-registry.ts builds it fresh; never committed
+tests/.coverage-registry.json
+
 # Claude worktrees
 .claude/worktrees
 

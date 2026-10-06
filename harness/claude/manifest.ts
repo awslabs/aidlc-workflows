@@ -18,7 +18,47 @@ import onboardingFills from "./onboarding.fills.ts";
 const manifest: HarnessManifest = {
   name: "claude",
   productName: "Claude Code",
-  configNextStep: "open Claude Code in this project and run `/aidlc --doctor`",
+  // A Claude Code session open before setup has no /aidlc and runs none of
+  // its hooks until it starts again.
+  configNextStep:
+    "open Claude Code in this project (if it is already open in this folder, exit it and start it again) " +
+    "and run `/aidlc --doctor`",
+  // Its Bash PreToolUse hooks beat in the record before each engine command,
+  // and reviewer-scope beats before its own off switch. Measured live: a
+  // project's .claude/settings.local.json outranks the project and user files,
+  // so one `"disableAllHooks": false` there covers a switch-off in any of them
+  // without touching the person's user settings, and it takes effect in the
+  // same chat (no restart; /hooks is not the step).
+  hookActivation: {
+    recovery:
+      'Set "disableAllHooks": false in this project\'s .claude/settings.local.json; it works in ' +
+      "the same chat. If you started Claude Code with a setting that turns hooks off, start it " +
+      "again without that setting. If your organization's Claude Code settings block this " +
+      "project, ask your Claude Code administrator to allow project hooks. If AI-DLC was set up " +
+      "while Claude Code was open, exit Claude Code and start it again in this folder, then type " +
+      "<entry>.",
+    agentStepEdits: ".claude/settings.local.json",
+    // The human-turn hook leaves a heartbeat on every message, before the
+    // first workflow too.
+    notRunYet:
+      "This is expected before your first Claude Code chat in this folder. If you already started one, set " +
+      '"disableAllHooks": false in this project\'s .claude/settings.local.json (it works in the same chat). If ' +
+      "you started Claude Code with a setting that turns hooks off, start it again without that setting; if " +
+      "AI-DLC was set up while Claude Code was open, exit Claude Code and start it again in this folder. Then " +
+      "run doctor again.",
+    agentStep:
+      "Claude Code is not running AI-DLC's hooks in this project. First show the person this " +
+      'line: "Choose Yes when Claude Code asks to change this project\'s settings, then answer ' +
+      'the question below." Then set `"disableAllHooks": false` in this project\'s ' +
+      "`.claude/settings.local.json`, keep every other key as it is, and create the file if it " +
+      "does not exist; Claude Code asks the person before it changes its settings. It works in " +
+      "this chat: do not ask for a restart and do not mention /hooks. Then run <next> and act " +
+      "on what it returns, so the waiting question shows again. If it brings back this same " +
+      "message, the hooks are still off from outside this project: show this line instead and " +
+      'end your turn: "Claude Code is still starting with its hooks off. If you started it with a ' +
+      "setting that turns hooks off, start it again without that setting; otherwise ask your " +
+      'Claude Code administrator to allow project hooks."',
+  },
   harnessDir: ".claude",
   orchestratorSkillPath: ".claude/skills/aidlc/SKILL.md",
   tierFlavor: "claude",

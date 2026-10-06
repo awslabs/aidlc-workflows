@@ -555,6 +555,13 @@ describe("t230 dispatcher route parity", () => {
       fixture: true,
     },
     {
+      name: "config collaborators maps to config-change",
+      routerArgs: ["engine", "config", "set", "collaborators", "off"],
+      tool: "aidlc-utility.ts",
+      toolArgs: ["config-change", "--collaborators", "off"],
+      fixture: true,
+    },
+    {
       name: "config summary confirmation maps to config-change",
       routerArgs: ["engine", "config", "set", "summary-confirmation", "off"],
       tool: "aidlc-utility.ts",
@@ -2273,6 +2280,7 @@ describe("t230 dispatcher route completeness", () => {
       [["engine", "config", "set", "depth"], "config"],
       [["engine", "status"], "top-status"],
       [["engine", "recompose"], "top-recompose"],
+      [["engine", "now"], "top-now"],
     ];
     for (const [args, routeId] of semanticRoutes) {
       expect(routePolicyFor(args)?.id, args.join(" ")).toBe(routeId);
@@ -2333,6 +2341,11 @@ describe("t230 dispatcher route completeness", () => {
       type: "delegate",
       tool: TOOLS.utility,
       args: ["status"],
+    });
+    expect(resolveAction(["engine", "now"])).toEqual({
+      type: "delegate",
+      tool: TOOLS.utility,
+      args: ["now"],
     });
     expect(resolveAction(["engine", "recompose", "--skip", "market-research"]))
       .toEqual({
@@ -3025,6 +3038,40 @@ describe("t230 dispatcher help and errors", () => {
   });
 });
 
+// A copy runs its tools through `bun <harness>/tools/aidlc.ts`, which spawns
+// each tool. Input piped to the command reaches the tool, read to its end even
+// when the writer is slow, as in the compiled binary.
+describe("t230 a tool run through the dispatcher reads piped input", () => {
+  test("validate-grid reads a proposal written slowly to stdin", async () => {
+    const projectDir = mkdtempSync(join(tmpdir(), "aidlc-t230-stdin-"));
+    tempProjects.add(projectDir);
+    cpSync(join(REPO_ROOT, "dist", "claude"), projectDir, { recursive: true });
+    const graph = JSON.parse(
+      readFileSync(join(projectDir, ".claude", "tools", "data", "stage-graph.json"), "utf-8"),
+    ) as Array<{ slug: string }>;
+    const proposal = JSON.stringify({ stages: Object.fromEntries(graph.map(({ slug }) => [slug, "EXECUTE"])) });
+    // A pipe, as a shell or a script's subprocess gives it.
+    const child = Bun.spawn([
+      BUN,
+      join(projectDir, ".claude", "tools", "aidlc.ts"),
+      "engine", "graph", "validate-grid", "--project-type", "greenfield", "--proposal", "/dev/stdin",
+    ], { cwd: projectDir, stdin: "pipe", stdout: "pipe", stderr: "pipe" });
+    const half = Math.floor(proposal.length / 2);
+    child.stdin.write(proposal.slice(0, half));
+    child.stdin.flush();
+    await new Promise((wait) => setTimeout(wait, 400));
+    child.stdin.write(proposal.slice(half));
+    child.stdin.end();
+    const [code, stdout, stderr] = await Promise.all([
+      child.exited,
+      new Response(child.stdout).text(),
+      new Response(child.stderr).text(),
+    ]);
+    expect(code, `${stdout}${stderr}`).toBe(0);
+    expect(JSON.parse(stdout).valid, stdout).toBe(true);
+  });
+});
+
 describe("t230 dispatcher hook routing", () => {
   test("adapter routing separates harness, target, and extra arguments", () => {
     const codex = resolveAction( ["engine", "adapter", "codex", "session-start"]);
@@ -3113,6 +3160,32 @@ describe("t230 dispatcher hook routing", () => {
       existsSync(join(seededRecordDir(projectDir), ".aidlc-engine/hooks-health", heartbeat)) ||
         existsSync(join(dirname(seededRecordDir(projectDir)), ".aidlc-engine/hooks-health", heartbeat)),
     ).toBe(true);
+  });
+
+  // Claude Code shows a blocking hook's stderr behind "[<hook command>]: ";
+  // its deny decision shows only the reason. Exit 2 still blocks on its own.
+  test("a guard refusal on Claude Code also carries Claude's deny, with the same words", () => {
+    const projectDir = makeProject();
+    const input = JSON.stringify({
+      hook_event_name: "PreToolUse",
+      session_id: "t230-guard-deny",
+      cwd: projectDir,
+      tool_name: "Bash",
+      tool_input: { command: "bun .claude/tools/aidlc-state.ts approve intent-capture" },
+    });
+    const claude = viaDispatcher(["engine", "hook", "state-transition-guard"], projectDir, { AIDLC_HARNESS_NAME: "claude" }, input);
+    expect(claude.exitCode, claude.stderr.toString("utf-8")).toBe(2);
+    const reason = claude.stderr.toString("utf-8").trim();
+    expect(reason).toContain("Stage status cannot be changed");
+    expect(JSON.parse(claude.stdout.toString("utf-8"))).toEqual({
+      hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: reason },
+    });
+
+    // Another tool's adapter reads stderr only: nothing changes there.
+    const kiro = viaDispatcher(["engine", "hook", "state-transition-guard"], projectDir, { AIDLC_HARNESS_NAME: "kiro" }, input);
+    expect(kiro.exitCode).toBe(2);
+    expect(kiro.stdout.toString("utf-8")).toBe("");
+    expect(kiro.stderr.toString("utf-8")).toContain("Stage status cannot be changed");
   });
 
   test("statusline dispatches to run(input) and renders a line", () => {

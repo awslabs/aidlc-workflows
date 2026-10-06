@@ -775,11 +775,43 @@ function quarantineOrphanStaging(root: string, current: string): void {
       entry !== basename(current) &&
       /^\.aidlc-txn-[0-9a-f]{8}-[0-9a-f-]{27}$/.test(entry)
     ) {
+      // A committed plan's staging folder holds nothing to recover.
+      if (existsSync(join(root, entry, STAGING_COMMITTED))) {
+        removeStaging(join(root, entry));
+        continue;
+      }
       renameSync(
         join(root, entry),
         join(root, `.aidlc-recovery-${Date.now()}-${randomUUID()}`),
       );
       syncPath(root);
+    }
+  }
+}
+
+// Marks a staging folder whose plan committed, so a folder left behind is
+// removed by the next run instead of kept as recovery evidence.
+const STAGING_COMMITTED = "committed";
+const BUSY_REMOVE_CODES = new Set(["EBUSY", "EPERM", "EACCES", "ENOTEMPTY"]);
+const STAGING_REMOVE_ATTEMPTS = 30;
+const STAGING_REMOVE_RETRY_MS = 100;
+
+// On Windows an editor's file watcher or a virus scan can hold a file in the
+// staging folder for a moment after the plan committed. Bun's rmSync ignores
+// maxRetries, so retry here. False when the folder is still there.
+function removeStaging(staging: string): boolean {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      rmSync(staging, { recursive: true, force: true });
+      return true;
+    } catch (error) {
+      if (
+        !BUSY_REMOVE_CODES.has((error as NodeJS.ErrnoException).code ?? "") ||
+        attempt >= STAGING_REMOVE_ATTEMPTS
+      ) {
+        return false;
+      }
+      Bun.sleepSync(STAGING_REMOVE_RETRY_MS);
     }
   }
 }
@@ -867,6 +899,9 @@ export function executePlan(
   const staging = join(root, `.aidlc-txn-${randomUUID()}`);
   withTransactionLock(root, staging, (lock) => {
   let preserveStaging = false;
+  // Every operation is in place: what is left in the staging folder is only
+  // its scratch, and a failure to remove it never undoes or fails the plan.
+  let committedPlan = false;
   const committed: Array<{
     rel: string;
     existed: boolean;
@@ -964,7 +999,7 @@ export function executePlan(
     failpoint(options, "before-committed-validation");
     options.validateCommitted?.();
     failpoint(options, "after-committed-validation");
-    rmSync(staging, { recursive: true, force: true });
+    committedPlan = true;
   } catch (error) {
     const rollbackErrors: unknown[] = [];
     for (const entry of [...committed].reverse()) {
@@ -1000,7 +1035,18 @@ export function executePlan(
     }
     throw error;
   } finally {
-    if (!preserveStaging) rmSync(staging, { recursive: true, force: true });
+    if (committedPlan) {
+      try {
+        writeFileSync(join(staging, STAGING_COMMITTED), "");
+      } catch {
+        // Unmarked, a folder left behind is kept as recovery evidence instead.
+      }
+      removeStaging(staging);
+    } else if (!preserveStaging) {
+      // A busy folder must not hide the error that stopped the plan; one left
+      // here is unmarked, so the next run keeps it as recovery evidence.
+      removeStaging(staging);
+    }
   }
   });
 }

@@ -740,6 +740,26 @@ describe("t209 opt-in unit-major construction design iteration", () => {
     expect(runNext(proj)).toMatchObject({ kind: "parked", stage: "code-generation" });
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
+  test("11c: a park the run cannot take says why in words, with no raw JSON", () => {
+    const proj = seedProject("unit-major");
+    seedBoltDag(proj, ["alpha", "beta"]);
+    writeFileSync(seededStateFile(proj), readFileSync(seededStateFile(proj), "utf-8").replace(
+      "- **Revision Count**: 0\n",
+      "- **Revision Count**: 0\n- **Construction Autonomy Mode**: autonomous\n",
+    ));
+    const park = spawnSync(BUN, [ORCH, "park", "--project-dir", proj], {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+      encoding: "utf-8",
+      env: { ...process.env, AIDLC_UNATTENDED: "1" },
+    });
+    const refused = JSON.parse((park.stdout ?? "").trim()) as Directive;
+    expect(refused.kind).toBe("error");
+    const message = String((refused as { message?: unknown }).message);
+    expect(message).toStartWith("Cannot park the workflow: Refusing to park:");
+    expect(message).not.toContain("{");
+    expect(message).not.toContain('"error"');
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
   test("12: a skip of a step the walk is not running is refused and names the step and unit", () => {
     const proj = seedProject("unit-major");
     seedBoltDag(proj, ["alpha", "beta"]);

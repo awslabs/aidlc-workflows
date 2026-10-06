@@ -33,6 +33,23 @@ const manifest: HarnessManifest = {
   name: "opencode",
   productName: "opencode",
   configNextStep: "run `opencode`, then `/aidlc --doctor`",
+  // Its tool.execute.before hooks for bash beat in the record before each
+  // engine command, review-freeze and plan-approval-guard before their own off
+  // switches. Measured live: the plugin does not load under `--pure` or from a
+  // start in a subfolder, and a plain `opencode` in the project folder loads it.
+  hookActivation: {
+    recovery:
+      "Quit opencode and start it again with just `opencode` in <folder>, then type <entry> to carry on.",
+    // The plugin's human-turn hook leaves a heartbeat on every message, before
+    // the first workflow too.
+    notRunYet:
+      "This is expected before your first opencode chat in this folder. If you already started one, quit " +
+      "opencode and start it again with just `opencode` in <folder>, then run doctor again.",
+    agentStep:
+      "AI-DLC's opencode plugin is not loaded in this session. Do not retry and do not ask the " +
+      "person to answer again. Show the person this line and end your turn: " +
+      '"Quit opencode and start it again with just `opencode` in <folder>, then type <entry> to carry on."',
+  },
   harnessDir: ".aidlc",
   orchestratorSkillPath: ".aidlc/skills/aidlc/SKILL.md",
   tierFlavor: "opencode",
@@ -69,17 +86,28 @@ const manifest: HarnessManifest = {
           "sha256:db6e65ed85d6b47ca47d72b5a323ddc4dca76d021cce92591c1a28b26d9f237a",
           // The pre-neutral shipped variant (#1268 made the root block harness-neutral).
           "sha256:c5b990429fe6dfa084d58fc592d1d22c1170cc35aa98f9cbb2c82b9924520eda",
+          // The variant shipped before the onboarding waited for the person to invoke AI-DLC.
+          "sha256:6de1298dfa4c2b6916f66d372b844faf23481c8f258eedd595c1423dab8e106d",
         ],
       },
     },
     {
+      // The team's own opencode.json (model, provider, instructions,
+      // permission rules) keeps everything it has: AI-DLC adds only its own
+      // entries and leaves a permission map's "*" rule to the team. Its part
+      // ships in root-blocks; a copy leaves the file out and its setup adds
+      // the part. A file AI-DLC wrote whole before is adopted by the
+      // signatures below.
       path: "opencode.json",
-      policy: "whole-file",
+      policy: "json-entries",
       legacySignatures: {
         wholeFileHashes: [
           // The pre-neutral shipped variant (#1268 changed this file).
           "sha256:3be60b2be72b7a423fdaa90fd7d0d9d19613875c05ad5f1a2b6e20fcb54cd1e5",
           "sha256:bc216975f2d614214fc6b6cc612c78f7da3f2b3f56492f0c252297fdc51fb928",
+          // The file 2.10.0 wrote whole, Bun-shaped copy and native release.
+          "sha256:d8118ed1ea8d76b2b89c55fdf87bc0405325c03c2f72fee5dd689c59fc745a78",
+          "sha256:34904172eae6868a8bcf99cddab1b17639d98d022cb32339a5a05c5b2d096ba1",
         ],
       },
     },

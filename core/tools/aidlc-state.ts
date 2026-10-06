@@ -41,8 +41,9 @@ import {
   withdrawProtectedQuestions,
   VERIFICATION_COMMAND_CHECKPOINT,
   VERIFICATION_COMMAND_RECOVERY,
-  authorizedConstructionPolicyChange,
+  constructionPolicyChangeAuthority,
   CONSTRUCTION_POLICY_RECOVERY,
+  latestPersonTurn,
   auditShardName,
   appendSlug,
   appendUnderHeading,
@@ -55,7 +56,9 @@ import {
   checkSummaryConfirmationEvidence,
   type AcceptedChange,
   governedChangeControl,
+  guardPolicyAcceptsChanges,
   recordAcceptedChanges,
+  inertPath,
   resolveChangeControl,
   resolveCeremony,
   claimAttemptFields,
@@ -67,6 +70,7 @@ import {
   currentSwarmAttemptObligations,
   effectiveUnitGateRhythm,
   emitError,
+  type EmitErrorMessage,
   errorMessage,
   evaluateGuardRefusal,
   eventMatchesClaimAttempt,
@@ -85,6 +89,8 @@ import {
   selectedGuardRecoveryRemedyAction,
   normalizeGuardRecoveryText,
   personsGateFeedback,
+  personsGateWords,
+  personsLatestGatePick,
   resolveInvokingSessionId,
   type GuardAttemptState,
   type StageEntry,
@@ -94,10 +100,17 @@ import {
   humanAuthorityState,
   hasUnsafeSingleLineCharacter,
   holdsAuditLock,
-  humanActedSinceGate,
+  commandTurnHint,
+  humanRepliedSinceGate,
   humanPresenceGuardDisabled,
+  memoryStrictHoldsGuardPolicy,
+  humanTurnMintAllowed,
+  hookActivation,
+  personRepliedSincePresentation,
+  personSpokeSinceGate,
   fenceSwitchSentence,
   decideFence,
+  guardStandAsideSpeaks,
   guardStoodAsideLine,
   recordGuardStoodAside,
   unattendedHumanPresenceHint,
@@ -111,7 +124,6 @@ import {
   isAutonomousSwarmStage,
   isTeamUnitOwnership,
   isNonAnswer,
-  isRequestChangesChoice,
   isRegularFile,
   isoTimestamp,
   KNOWN_CODEKB_STAGES,
@@ -128,6 +140,7 @@ import {
   parseRefsList,
   parseStateStageSuffixes,
   pipelineLinkEvidence,
+  effectiveSupportAgentsForProject,
   producesArtifactFile,
   readAllAuditShards,
   readApplicableTeamUnitScopeStamp,
@@ -156,6 +169,7 @@ import {
   resolveProjectFlag,
   resolveWorkflowSelection,
   sourceClaimCovers,
+  aidlcOwnedSourceKey,
   sourceBaselineAuditFields,
   sourceListingEntriesEqual,
   resolveProjectDir,
@@ -167,8 +181,7 @@ import {
   setPhaseProgress,
   singleStageAttemptIsOpen,
   stagesInScope,
-  readStageGateReply,
-  stageGateReplyBound,
+  stageGateApproval,
   swarmConvergedUnits,
   teamUnitGateStatus,
   unitCompletedReceipts,
@@ -204,6 +217,8 @@ import {
   workflowUsageAuditFields,
 } from "./aidlc-usage.ts";
 import { deriveTeamUnitProgressModel } from "./aidlc-orchestrate.ts";
+import { promotableTestingPosture } from "./aidlc-testing-posture.ts";
+import { approvedUnitChanges } from "./aidlc-construction-checkpoints.ts";
 
 // All valid checkbox states (lib.ts adds [?] awaiting-approval and [R] revising)
 const VALID_CHECKBOX_STATES: CheckboxState[] = [
@@ -278,6 +293,34 @@ function emitAudit(
 // person's recorded words became the Feedback and the two differ. Declared at
 // module top: the command dispatch below runs before later consts initialise.
 const CONDUCTOR_SUMMARY_FIELD = "Conductor Summary";
+// The person's exact pick at a gate, or null; reading it never blocks a decision.
+function personsLatestGatePickSafe(
+  pd: string, slug: string, unit?: string, acceptAsIs = false,
+): ReturnType<typeof personsLatestGatePick> {
+  try {
+    return personsLatestGatePick(pd, resolveInvokingSessionId(pd), { stage: slug, ...(unit ? { unit } : {}) }, acceptAsIs);
+  } catch {
+    return null;
+  }
+}
+
+function revisionCountOf(content: string): number {
+  const parsed = parseInt(getField(content, "Revision Count") ?? "0", 10);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+// The person's own words at a gate they answered: every message they typed
+// since it was shown, kept verbatim by the human-turn hook. The conductor read
+// them and reported the choice; the receipt carries both.
+const PERSONS_WORDS_FIELD = "Person Reply";
+function personsWordsFields(pd: string, slug: string, unit?: string): Record<string, string> {
+  try {
+    const words = personsGateWords(pd, resolveInvokingSessionId(pd), { stage: slug, ...(unit ? { unit } : {}) });
+    return words ? { [PERSONS_WORDS_FIELD]: words } : {};
+  } catch {
+    return {};
+  }
+}
 
 // Per-stage token/cost rollup fields for STAGE_COMPLETED / WORKFLOW_COMPLETED.
 // Wraps aidlc-usage's ledger-read helper (a ledger read only: NO transcript
@@ -707,6 +750,20 @@ class StateCommandError extends Error {}
 // the original refusal without waiting again on the same unavailable audit.
 class StateAuditUnavailableError extends StateCommandError {}
 
+// A decision refused because the person has not made it, or made another one.
+// The message is the agent's next step, not news for the person, so the error
+// JSON marks it and the router hands it to the agent: with the question still
+// open, or, when the person's own choice is on record, to record that choice.
+class DecisionNotMadeError extends StateCommandError {
+  constructor(msg: string, readonly personDecided: boolean) {
+    super(msg);
+  }
+}
+
+function refuseForAgent(msg: string, options: { personDecided?: boolean } = {}): never {
+  throw new DecisionNotMadeError(msg, options.personDecided === true);
+}
+
 function assertWorkflowNotArchived(content: string, operation: string): void {
   if (getField(content, "Status") !== "Archived") return;
   error(
@@ -777,9 +834,11 @@ export function main(argv: string[]): void {
       // Unreadable state or policy cannot lower the ownership fence.
     }
     if (gate?.decision === "stand-aside") {
-      process.stderr.write(
-        guardStoodAsideLine("state-transition", gate.source, `aidlc-state.ts ${subcommand}`) + "\n",
-      );
+      if (guardStandAsideSpeaks(gate)) {
+        process.stderr.write(
+          guardStoodAsideLine("state-transition", gate.source, `aidlc-state.ts ${subcommand}`) + "\n",
+        );
+      }
       recordGuardStoodAside(pd, {
         fence: "state-transition",
         authority: gate.authority,
@@ -956,6 +1015,13 @@ export function main(argv: string[]): void {
         ),
       );
     }
+    if (e instanceof DecisionNotMadeError) {
+      exitWithError({
+        message: e.message,
+        auditMessage: e.message,
+        agentGuidance: e.personDecided ? "person-decided" : "question-open",
+      });
+    }
     exitWithError(errorMessage(e));
   }
 }
@@ -1056,7 +1122,14 @@ function handleSetConstructionVerificationCommand(args: string[]): void {
       error("No current VERIFICATION_COMMAND_RECORDED with matching Command SHA-256 and User Input: Approve authorizes this command. " + VERIFICATION_COMMAND_RECOVERY);
     }
     writeStateFile(pd, updated);
-    console.log(JSON.stringify({ updated: true, command_sha256: command.sha256, command_label: command.label }));
+    // A new command checks the Units and batches still to be approved; the
+    // ones already approved keep their approval.
+    const previous = getField(content, VERIFICATION_COMMAND_CHECKPOINT);
+    const notice = previous !== null && previous.trim() !== "" && previous !== command.command
+      ? `Using \`${command.label}\` from here on.` : null;
+    console.log(JSON.stringify({
+      updated: true, command_sha256: command.sha256, command_label: command.label, ...(notice ? { notice } : {}),
+    }));
   });
 }
 
@@ -1085,12 +1158,56 @@ function handleSetConstructionPolicy(field: string, args: string[]): void {
     const content = readStateFile(pd);
     const updated = setConstructionPolicyField(content, field, args[0]);
     if (updated !== content) {
-      requireHumanConstructionPolicyChange(pd, content, field, args[0]);
-      emitConstructionPolicySet(pd, content, updated, field, args[0]);
+      const words = requireHumanConstructionPolicyChange(pd, content, field, args[0]);
+      emitConstructionPolicySet(pd, content, updated, field, args[0], words);
     }
     writeStateFile(pd, updated);
-    console.log(JSON.stringify({ updated: true, field, value: args[0] }));
+    console.log(JSON.stringify({ updated: true, field, value: args[0], ...constructionPolicyNotice(content, updated, field) }));
   });
+}
+
+// The one line the person hears for a Construction setting they asked for:
+// what it is now, what it was, and the words that bring the old value back, or
+// that it already was so. Each entry says the value as it is now, as it was,
+// how to ask for it, and that nothing changed.
+function constructionPolicyNotice(before: string, after: string, field: string): { notice?: string } {
+  const previous = getField(before, field)?.trim() ?? "";
+  const value = getField(after, field)?.trim() ?? "";
+  const lines: Record<string, { now: string; was: string; undo: string; already: string }> = {
+    enabled: {
+      now: "Construction checkpoints are on for this work now", was: "they were on", undo: "turn checkpoints back on",
+      already: "Construction checkpoints are already on for this work",
+    },
+    disabled: {
+      now: "Construction checkpoints are off for this work now", was: "they were off", undo: "turn checkpoints off",
+      already: "Construction checkpoints are already off for this work",
+    },
+    "unit-major": {
+      now: "Construction now builds one Unit at a time", was: "it built one Unit at a time", undo: "build one Unit at a time",
+      already: "Construction already builds one Unit at a time",
+    },
+    "stage-major": {
+      now: "Construction now goes stage by stage", was: "it went stage by stage", undo: "go stage by stage",
+      already: "Construction already goes stage by stage",
+    },
+    swarm: {
+      now: "Construction now builds the Units in parallel", was: "it built the Units in parallel", undo: "build the Units in parallel",
+      already: "Construction already builds the Units in parallel",
+    },
+    serial: {
+      now: "Construction now builds the Units one after another", was: "it built the Units one after another",
+      undo: "build the Units one after another", already: "Construction already builds the Units one after another",
+    },
+  };
+  const other: Record<string, string> = {
+    enabled: "disabled", disabled: "enabled", "unit-major": "stage-major", "stage-major": "unit-major",
+    swarm: "serial", serial: "swarm",
+  };
+  const line = lines[value];
+  if (previous === value) return { notice: line ? `${line.already}.` : `${field} is already ${value}.` };
+  if (!line) return { notice: `${field} is now ${value}.` };
+  const was = lines[previous];
+  return { notice: `${line.now}${was ? ` (${was.was})` : ""}. Say '${(was ?? lines[other[value]]).undo}' to undo.` };
 }
 
 // Every applied Construction policy change is in the audit with the value it
@@ -1098,7 +1215,9 @@ function handleSetConstructionPolicy(field: string, args: string[]): void {
 // floor reads them so switching to unit-major iteration or turning checkpoints
 // on keeps the Units already finished: a stage start recorded while stage
 // starts were attempt boundaries stays the boundary it was.
-function emitConstructionPolicySet(pd: string, before: string, after: string, field: string, value: string): void {
+function emitConstructionPolicySet(
+  pd: string, before: string, after: string, field: string, value: string, words: string | null = null,
+): void {
   const current = (content: string, name: string): string => getField(content, name)?.trim() || "unset";
   emitAudit(pd, "CONSTRUCTION_POLICY_SET", {
     Field: field,
@@ -1106,16 +1225,30 @@ function emitConstructionPolicySet(pd: string, before: string, after: string, fi
     "Previous Value": current(before, field),
     "Construction Iteration": current(after, "Construction Iteration"),
     "Construction Checkpoints": current(after, "Construction Checkpoints"),
+    ...(words ? { [PERSONS_WORDS_FIELD]: words } : {}),
   });
 }
 
-function requireHumanConstructionPolicyChange(pd: string, content: string, field: string, value: string): void {
-  if (
-    getField(content, "Lifecycle Phase")?.toLowerCase() === "construction" &&
-    !humanPresenceGuardDisabled() && !authorizedConstructionPolicyChange(pd, content, field, value)
-  ) {
-    error(`No current unconsumed CONSTRUCTION_POLICY_RECORDED with Field: ${field}, Value: ${value}, and User Input: Approve authorizes this change. ` + CONSTRUCTION_POLICY_RECOVERY);
+// During Construction a policy change is the person's: they asked for it in
+// their own words since the last decision (the conductor read it), or chose it
+// at an older policy question. Returns the words of the turn that asked, for
+// the record, or null.
+function requireHumanConstructionPolicyChange(pd: string, content: string, field: string, value: string): string | null {
+  if (getField(content, "Lifecycle Phase")?.toLowerCase() !== "construction") return null;
+  // An unattended run never changes it on its own, whatever presence bypass is
+  // in force: only a choice the person recorded earlier counts there.
+  if (process.env.AIDLC_UNATTENDED === "1" && constructionPolicyChangeAuthority(pd, content, field, value) !== "receipt") {
+    error(`An unattended run does not change ${field}: it changes when the person asks for it. ` + CONSTRUCTION_POLICY_RECOVERY);
   }
+  if (humanPresenceGuardDisabled()) return null;
+  const authority = constructionPolicyChangeAuthority(pd, content, field, value);
+  if (authority === null) {
+    error(
+      `No message from the person since the last decision asks to change ${field}. Change it only when they ask ` +
+        "for it, never to clear a refusal or on your own. " + CONSTRUCTION_POLICY_RECOVERY,
+    );
+  }
+  return authority === "asked" ? latestPersonTurn(pd)?.words ?? null : null;
 }
 
 // set-skeleton-stance <on|off|scope-dependent> — record the conductor's
@@ -1209,11 +1342,13 @@ function handleSetConstructionIteration(args: string[]): void {
     value,
   );
   if (updated !== content) {
-    requireHumanConstructionPolicyChange(pd, content, "Construction Iteration", value);
-    emitConstructionPolicySet(pd, content, updated, "Construction Iteration", value);
+    const words = requireHumanConstructionPolicyChange(pd, content, "Construction Iteration", value);
+    emitConstructionPolicySet(pd, content, updated, "Construction Iteration", value, words);
   }
   writeStateFile(pd, updated);
-  console.log(JSON.stringify({ updated: true, construction_iteration: value }));
+  console.log(JSON.stringify({
+    updated: true, construction_iteration: value, ...constructionPolicyNotice(content, updated, "Construction Iteration"),
+  }));
   });
 }
 
@@ -2005,11 +2140,10 @@ function handleSyncUnitScopeStage(args: string[]): void {
 // hook-side only; park's `aidlc-state.ts park` is directly invocable, so the
 // tool refusal closes a path #365 did not have.)
 //
-// `attended` is the one exception: the reply AIDLC just read asked to stop
-// there ("Approve, but let's stop for today"), so a person is present and their
-// stop wins over the autonomous grant (#1411). Only in-process callers that read
-// that reply pass it: the human-turn hook after Plan Approval and the engine's
-// `report` after a gate a person answered. The CLI never does.
+// `attended` is the one exception: a person asked to stop, so their stop wins
+// over the autonomous grant (#1411). It is set when a person has typed since the
+// last gate resolution (the conductor read their reply and ran park, or
+// reported their approval with --park after a gate they answered).
 export interface ParkResult {
   parked: true;
   stage?: string;
@@ -2018,20 +2152,51 @@ export interface ParkResult {
   checkout_local?: true;
 }
 
+// A park the person asked for, in their own words, is theirs: when a person
+// has typed since the last gate resolution, the stop wins over the autonomous
+// grant and is recorded as theirs. On a host whose hooks can miss a reply
+// (its hookActivation says so), an attended session's stop under the
+// autonomous grant is theirs too, with a note that no reply was on record. A
+// park no person stands behind still never stops an unattended autonomous run:
+// AIDLC_UNATTENDED is never attended, and a reply means a HUMAN_TURN on record
+// (an empty ledger is not one).
 function handlePark(_args: string[]): void {
-  console.log(JSON.stringify(parkWorkflow(resolveProjectDir(projectDir))));
+  const pd = resolveProjectDir(projectDir);
+  const attendedSession = humanTurnMintAllowed();
+  // Their stop outlives the run's own approvals after it (personSpokeSinceGate).
+  const replied = attendedSession && personSpokeSinceGate(pd, { outlivesApproval: true });
+  const activation = hookActivation();
+  const missedReply = attendedSession && !replied &&
+    (activation?.missedReply !== undefined || activation?.missesReplies === true) &&
+    getField(readStateFile(pd), "Construction Autonomy Mode")?.trim() === "autonomous";
+  const result = parkWorkflow(pd, { attended: replied || missedReply });
+  console.log(JSON.stringify(missedReply
+    ? {
+      ...result,
+      note: "No reply from the person was on record (this host can miss one), so this stop is recorded as theirs. " +
+        "Tell them in one line that the work is parked and resumes when they ask.",
+    }
+    : result));
 }
 
 export function parkWorkflow(pd: string, opts: { attended?: boolean } = {}): ParkResult {
   const initialContent = readStateFile(pd);
-  if (
-    opts.attended !== true &&
-    getField(initialContent, "Construction Autonomy Mode")?.trim() ===
-      "autonomous"
-  ) {
+  const autonomous = getField(initialContent, "Construction Autonomy Mode")?.trim() === "autonomous";
+  // One owner for every caller: an unattended run has nobody to resume it, so
+  // it never parks itself under the autonomous grant, whatever the caller says.
+  if (autonomous && !humanTurnMintAllowed()) {
     error(
-      "Refusing to park: Construction Autonomy Mode is autonomous. An unattended " +
-        "autonomous run has no human to resume it and must keep moving - do not park it.",
+      "Refusing to park: AIDLC_UNATTENDED=1 is set and Construction Autonomy Mode is autonomous, so nobody is " +
+        "here to resume the run; it keeps moving.",
+    );
+  }
+  if (opts.attended !== true && autonomous) {
+    error(
+      "Refusing to park: Construction Autonomy Mode is autonomous and no reply from the person is on record " +
+        "since the last decision, so the run keeps moving. When the person asks to stop, park then: their " +
+        "stop wins over the autonomous grant. If their stop is not on record, run " +
+        `\`${aidlcToolInvocation("bolt")} set-autonomy --mode gated\` (Construction then stops for approval at ` +
+        "each Bolt), then park.",
     );
   }
   const scopeStamp = validateLiveUnitScope(pd);
@@ -2967,6 +3132,17 @@ function verifySettledSwarmSourceBinding(
     );
   }
   const current = workspaceSourceState(pd);
+  if (current !== null && !sameWorkspaceSource(chain.fingerprint, current.fingerprint) && guardPolicyAcceptsChanges(pd)) {
+    // Kept under relaxed or off: edits made after the last merge stay, once recorded.
+    if (changeControlPreflight) return;
+    const notices = recordAcceptedChanges(pd, [{
+      checkpoint: "swarm-batch", stage: stage.slug, unit: null, changed: null,
+      recorded: chain.fingerprint, current: current.fingerprint,
+      notice: "Files in the main checkout changed after the last unit was merged. Kept them.",
+    }]);
+    if (notices.length > 0) console.log(JSON.stringify({ change_notices: notices }));
+    return;
+  }
   if (current === null || !sameWorkspaceSource(chain.fingerprint, current.fingerprint)) {
     error(
       `Refusing to complete "${stage.slug}": the main checkout source no longer matches the final reviewed swarm merge (source-fingerprint mismatch). Revert the unreviewed edit or restart and re-review the affected Bolt.`,
@@ -3540,7 +3716,9 @@ function enforceBlockingGateSensors(
       error(
         `Refusing blocking sensor override for "${slug}": Construction Autonomy Mode ` +
           "is autonomous. Unattended runs must halt on blocking sensor findings or " +
-          "unavailable evaluations.",
+          "unavailable evaluations. When the person chooses the override, run " +
+          `\`${aidlcToolInvocation("bolt")} set-autonomy --mode gated\` (Construction then stops for ` +
+          "approval at each Bolt), then report with the override again.",
       );
     }
     if (overrideInput?.trim() !== BLOCKING_SENSOR_OVERRIDE_CHOICE) {
@@ -3597,12 +3775,13 @@ function verifyGateOpeningGuards(
   pd: string,
   content: string,
   stage: NonNullable<ReturnType<typeof findStageBySlug>>,
+  personCall?: PersonApproval,
 ): void {
   verifyStageArtifacts(pd, stage, "present-approval-gate");
   verifySummaryConfirmationPrecondition(pd, content, stage);
   verifyPipelineLinkPrecondition(pd, stage);
   if (!reviewerGateGuardDisabled()) {
-    verifyReviewerPrecondition(pd, content, stage, "present-approval-gate");
+    verifyReviewerPrecondition(pd, content, stage, "present-approval-gate", true, personCall);
   }
 }
 
@@ -3793,7 +3972,9 @@ function verifyStageArtifacts(
         `(workspace_requires) but no source work is evident outside the aidlc/ ` +
         `workspace tree. In a git workspace this means no uncommitted change and no ` +
         `code in the last commit; otherwise no source file exists. Planning docs alone ` +
-        `do not satisfy ${stage.name} - write the code to the workspace.`;
+        `do not satisfy ${stage.name} - write the code to the workspace (a source change ` +
+        `not committed yet counts, as does code in the last commit), or the person can ` +
+        `choose Request Changes and say what is missing.`;
     refuseStateGuard(pd, stateContent ?? readStateFile(pd), stage, {
       code: "REQUIRED_SOURCE_WORK_MISSING",
       blockedAction: action,
@@ -3837,6 +4018,12 @@ function observeChangeControl(
     changeControlSelection,
   );
   if (notices.length > 0) console.log(JSON.stringify({ change_notices: notices }));
+}
+
+// A change outside every unit's work that relaxed or off keeps: recorded once
+// and said once, the same way the receipt scan's accepted changes are.
+function acceptOutsideUnitChanges(pd: string, content: string, change: AcceptedChange): void {
+  observeChangeControl(pd, content, { changeControlRead: true, acceptedChanges: [change] });
 }
 
 function verifySummaryConfirmationPrecondition(
@@ -3959,6 +4146,51 @@ function refuseStateGuard(
   throw new StateGuardRefusalError(refusal, snapshot.attempt, snapshot.resources);
 }
 
+// The person's own approval, carried through the admission chain. It goes over
+// a review the agent asked for that has no verdict yet; the chain sets
+// overUnfinishedReview when it did, so the approval is recorded that way.
+export interface PersonApproval {
+  overUnfinishedReview: boolean;
+}
+
+// Whether the person's approval may go over an unfinished review here. A team
+// that locks Guard Policy strict keeps every review required; asking for the
+// review again always works. The one place that says which lock counts.
+function personMayApproveOverUnfinishedReview(pd: string, content: string): boolean {
+  return !memoryStrictHoldsGuardPolicy(pd, content);
+}
+
+// A review request with no verdict yet that the person may approve over. A
+// recovery review in flight, or a result that could not be verified, still
+// finishes first.
+function approvableUnfinishedReview(
+  pd: string,
+  content: string,
+  receipts: ReturnType<typeof freshReviewReceipts>,
+  personCall: PersonApproval | undefined,
+  unit?: string,
+): boolean {
+  if (personCall === undefined) return false;
+  const pending = unit === undefined ? receipts.stagePending : receipts.unitPending.get(unit);
+  if (
+    receipts.awaitingVerdict?.has(unit ?? "") !== true ||
+    pending === null ||
+    pending === undefined ||
+    pending.recovery ||
+    pending.verificationFailed === true ||
+    !personMayApproveOverUnfinishedReview(pd, content)
+  ) {
+    return false;
+  }
+  personCall.overUnfinishedReview = true;
+  return true;
+}
+
+// The one line the person hears when their approval went over that review.
+function unfinishedReviewNotice(stage: { name: string }, unit?: string): string {
+  return `Approved. The ${stage.name} review${unit ? ` for ${unit}` : ""} did not finish.`;
+}
+
 function verifyReviewerPrecondition(
   pd: string,
   content: string,
@@ -3978,6 +4210,7 @@ function verifyReviewerPrecondition(
   },
   action: ReviewerPreconditionAction = "complete",
   requireReceiptExistence = true,
+  personCall?: PersonApproval,
 ): void {
   if (!stage.reviewer) return; // stage declares no reviewer — nothing to enforce
 
@@ -4119,8 +4352,13 @@ function verifyReviewerPrecondition(
       if (!baseline.has(pathKey)) baselineChanged.add(pathKey);
     }
     const claimModels = [...receipts.freshUnitClaims.values()];
+    // AI-DLC's own files (its .gitignore block, AGENTS.md, a second tool's
+    // install) are no Unit's to claim.
+    const aidlcOwned = aidlcOwnedSourceKey(pd);
     baselineUnclaimed = [...baselineChanged]
-      .filter((pathKey) => !claimModels.some((claims) => sourceClaimCovers(pathKey, claims)))
+      .filter((pathKey) =>
+        !aidlcOwned(pathKey) && !claimModels.some((claims) => sourceClaimCovers(pathKey, claims))
+      )
       .sort();
   }
   const resolutionForReconciliation = perUnit ? resolveBoltDag(pd) : null;
@@ -4178,6 +4416,7 @@ function verifyReviewerPrecondition(
 
   if (!perUnit) {
     if (!sawStageReview) {
+      if (approvableUnfinishedReview(pd, content, receipts, personCall)) return;
       if (receipts.stageStale) {
         staleReviewPreconditionError(
           pd,
@@ -4206,7 +4445,7 @@ function verifyReviewerPrecondition(
   const noDagObserved = resolution.state === "none";
   if (noDagObserved) {
     if (receipts.mergedBoltUnits.size === 0) {
-      if (!sawStageReview) {
+      if (!sawStageReview && !approvableUnfinishedReview(pd, content, receipts, personCall)) {
         reviewerPreconditionError(pd, content, stage, reviewer, receipts, action);
       }
       return;
@@ -4214,7 +4453,7 @@ function verifyReviewerPrecondition(
     if (sawStageReview) return;
     reviewUnits = [...receipts.mergedBoltUnits].sort();
   } else if (resolution.units.length === 0) {
-    if (!sawStageReview) {
+    if (!sawStageReview && !approvableUnfinishedReview(pd, content, receipts, personCall)) {
       reviewerPreconditionError(pd, content, stage, reviewer, receipts, action);
     }
     return;
@@ -4237,7 +4476,9 @@ function verifyReviewerPrecondition(
   }
   if (reviewUnits.length === 0) return;
 
-  const missing = reviewUnits.filter((u) => !reviewedUnits.has(u));
+  const missing = reviewUnits.filter(
+    (u) => !reviewedUnits.has(u) && !approvableUnfinishedReview(pd, content, receipts, personCall, u),
+  );
   if (missing.length > 0) {
     if (noDagObserved) {
       const requestCommands = missing.flatMap((unit) => {
@@ -4341,16 +4582,29 @@ function verifyReviewerPrecondition(
     stage.workspace_requires === true && !sourceFreshnessOff && !settledSwarm;
   if (!attributionApplies) return;
 
+  // Under relaxed or off, what changed outside the units is kept and said once;
+  // only strict holds completion on it.
+  const acceptsChanges = guardPolicyAcceptsChanges(pd, content);
   if (
     receipts.sourceBaseline.state === "unbindable" ||
     receipts.sourceBaseline.state === "invalid"
   ) {
+    if (acceptsChanges) {
+      acceptOutsideUnitChanges(pd, content, {
+        checkpoint: "review-receipt",
+        stage: stage.slug,
+        unit: null,
+        changed: null,
+        recorded: "(stage start unavailable)",
+        current: "(not checked)",
+        notice: `I could not check ${stage.name} for files changed outside the units on this machine; carrying on.`,
+      });
+      return;
+    }
     error(
-      `Refusing to complete "${stage.slug}": the stage's source baseline snapshot is missing, ` +
-        `inconsistent with other modern source-binding evidence, or does not match its recorded hash, ` +
-        `so unclaimed source changes cannot be verified. Re-enter the stage ` +
-        `(a stage jump records a fresh baseline) or set AIDLC_SKIP_SOURCE_FRESHNESS=1 to bypass ` +
-        `deterministically.`,
+      `Refusing to complete "${stage.slug}": the record of what this stage started from is missing or ` +
+        `does not match on this machine, so changes outside the units cannot be checked. Restart the ` +
+        `stage with \`${entrySkillInvocation()} --stage ${stage.slug}\` to check again from here.`,
     );
   }
   if (
@@ -4363,9 +4617,23 @@ function verifyReviewerPrecondition(
         const separator = key.indexOf("\0");
         const repo = key.slice(0, separator);
         const path = key.slice(separator + 1);
-        return repo ? `${repo}/${path}` : path;
+        return inertPath(repo ? `${repo}/${path}` : path);
       });
-      const more = unclaimed.length > 10 ? ` … and ${unclaimed.length - 10} more` : "";
+      const more = unclaimed.length > 10 ? ` and ${unclaimed.length - 10} more` : "";
+      if (acceptsChanges) {
+        const listing = receipts.currentSourceListing;
+        const entries = unclaimed.map((key) => `${key}\t${listing.get(key) ?? "-"}`).join("\n");
+        acceptOutsideUnitChanges(pd, content, {
+          checkpoint: "review-receipt",
+          stage: stage.slug,
+          unit: null,
+          changed: rendered,
+          recorded: "(outside the units)",
+          current: `sha256:${createHash("sha256").update(entries).digest("hex")}`,
+          notice: `These files changed outside any unit's work in ${stage.name}: ${rendered.join(", ")}${more}. Kept them.`,
+        });
+        return;
+      }
       error(
         `Refusing to complete "${stage.slug}": ${unclaimed.length} application-source path(s) changed during this stage run ` +
           `that no reviewed unit's source manifest claims (${rendered.join(", ")}${more}). Add each path to the owning ` +
@@ -4415,6 +4683,20 @@ function staleSourcePreconditionError(
       code: "SOURCE_BOUNDARY_UNBINDABLE",
       blockedAction: action,
       invariant: "Reviewed source is bound to a reproducible workspace boundary.",
+      userMessage: message,
+      receipts,
+    });
+  }
+  if (reason === "source-unreadable") {
+    const message =
+      `Refusing to complete "${slug}": the project source could not be read on this machine to ` +
+        `check it against the review by ${reviewer}; nothing is known to have changed. Run ` +
+        `\`${entrySkillInvocation()} --doctor\`, which names the path that could not be read, fix that ` +
+        "path, then try again.";
+    refuseStateGuard(pd, content, stage, {
+      code: "SOURCE_REVIEW_STALE",
+      blockedAction: action,
+      invariant: "The current source remains covered by reviewer evidence.",
       userMessage: message,
       receipts,
     });
@@ -5244,6 +5526,7 @@ function verifyReviewerPreconditionForUnit(
   stage: NonNullable<ReturnType<typeof findStageBySlug>>,
   unit: string,
   action: ReviewerPreconditionAction,
+  personCall?: PersonApproval,
 ): void {
   if (!stage.reviewer) return;
   const reviewClass = resolveReviewClass(
@@ -5255,7 +5538,7 @@ function verifyReviewerPreconditionForUnit(
   // The same governed checkpoint as the stage-level verifier, for one Unit.
   const receipts = freshReviewReceipts(pd, content, stage, { reviewClass });
   observeChangeControl(pd, content, receipts);
-  if (!receipts.unitVerdicts.has(unit)) {
+  if (!receipts.unitVerdicts.has(unit) && !approvableUnfinishedReview(pd, content, receipts, personCall, unit)) {
     const message =
       `Refusing gate for unit "${unit}" of "${stage.slug}": no fresh ` +
       `REVIEW_COMPLETED receipt from ${stage.reviewer} is recorded for this unit.`;
@@ -5275,6 +5558,7 @@ function verifyTeamUnitGateEvidence(
   content: string,
   context: TeamGateContext,
   action: ReviewerPreconditionAction = "present-approval-gate",
+  personCall?: PersonApproval,
 ): void {
   for (const stage of context.stages) {
     if (applicableUnitProduces(pd, stage, context.unit).length === 0) continue;
@@ -5325,6 +5609,7 @@ function verifyTeamUnitGateEvidence(
       stage,
       context.unit,
       action,
+      personCall,
     );
     if (stage.workspace_requires) verifyStageArtifacts(pd, stage, action);
   }
@@ -5358,6 +5643,8 @@ export type StageAdmissionOptions = {
   action: Exclude<GuardPreflightAction, "review-request">;
   unit?: string;
   entrypoint?: "approve" | "advance" | "finalize" | "complete-workflow";
+  // The person's own approval (gate opening for it, or approve itself).
+  personCall?: PersonApproval;
 };
 
 function verifyConstructionCheckpointPrecondition(
@@ -5368,6 +5655,9 @@ function verifyConstructionCheckpointPrecondition(
 ): void {
   if (artifactGuardDisabled(pd)) return;
   const gaps = constructionCheckpointGaps(pd, stateContent, stage);
+  // A change to an approved Unit's work its Guard Policy accepted, made after
+  // its checkpoint and not said yet, is recorded and said once here.
+  if (gaps !== null) observeChangeControl(pd, stateContent, approvedUnitChanges(pd, stateContent));
   if (gaps === null || gaps.length === 0) return;
   refuseStateGuard(pd, stateContent, stage, {
     code: "CONSTRUCTION_CHECKPOINTS_MISSING",
@@ -5415,6 +5705,7 @@ function admitStageAction(
           stateContent,
           team,
           options.action === "complete" ? "complete" : "present-approval-gate",
+          options.personCall,
         );
         if (options.action !== "complete") {
           verifyTeamUnitGatePipelinePrecondition(pd, team);
@@ -5424,7 +5715,7 @@ function admitStageAction(
     }
 
     if (options.action !== "complete") {
-      verifyGateOpeningGuards(pd, stateContent, stage);
+      verifyGateOpeningGuards(pd, stateContent, stage, options.personCall);
       verifyConstructionCheckpointPrecondition(pd, stateContent, stage, options.action);
       return;
     }
@@ -5436,7 +5727,7 @@ function admitStageAction(
       verifyStageArtifacts(pd, stage);
       verifySummaryConfirmationPrecondition(pd, stateContent, stage);
       verifyPipelineLinkPrecondition(pd, stage);
-      verifyReviewerPrecondition(pd, stateContent, stage);
+      verifyReviewerPrecondition(pd, stateContent, stage, "complete", true, options.personCall);
       if (!alreadyCompleted) {
         verifyConstructionCheckpointPrecondition(pd, stateContent, stage, options.action);
       }
@@ -5472,6 +5763,7 @@ export function guardPreflight(
     action: GuardPreflightAction;
     unit?: string;
     entrypoint?: "approve" | "advance" | "finalize" | "complete-workflow";
+    personApproves?: boolean;
   },
 ): GuardPreflightResult {
   if (options.action === "review-request") {
@@ -5486,6 +5778,7 @@ export function guardPreflight(
       action: options.action,
       ...(options.unit !== undefined ? { unit: options.unit } : {}),
       ...(options.entrypoint ? { entrypoint: options.entrypoint } : {}),
+      ...(options.personApproves ? { personCall: { overUnfinishedReview: false } } : {}),
     });
     return { executable: true };
   } catch (error) {
@@ -5528,7 +5821,7 @@ function handleGateStart(args: string[]): void {
   if (args.length < 1) {
     error(
       "Usage: aidlc-state.ts gate-start <slug> [--artifacts <csv>] " +
-        "[--recovered] [--override-blocking-sensors] [--user-input <choice>]",
+        "[--recovered [--person-approves]] [--override-blocking-sensors] [--user-input <choice>]",
     );
   }
   const slug = args[0];
@@ -5559,9 +5852,20 @@ function handleGateStart(args: string[]): void {
       ["in-progress", "awaiting-approval"],
     );
   }
+  // A gate backfilled for the person's own approval (report approved with their
+  // reply) opens for it over a review that never finished. It counts only when
+  // the person replied since the last decision; the agent alone cannot use it.
+  const personApproves =
+    recovered &&
+    args.includes("--person-approves") &&
+    (preflightTeamGate !== null || !isAutonomousConstructionGate(preflightContent, preflightStage, pd)) &&
+    (humanPresenceGuardDisabled() || humanRepliedSinceGate(pd));
+  const personCall = (): PersonApproval | undefined =>
+    personApproves ? { overUnfinishedReview: false } : undefined;
   admitStageAction(pd, preflightContent, preflightStage, {
     action: "present-approval-gate",
     ...(preflightTeamGate ? { unit: preflightTeamGate.unit } : {}),
+    personCall: personCall(),
   });
   const gateSensorEvaluation = fireGateSensors(
     pd,
@@ -5592,6 +5896,7 @@ function handleGateStart(args: string[]): void {
     admitStageAction(pd, content, stage, {
       action: "present-approval-gate",
       unit: teamGate.unit,
+      personCall: personCall(),
     });
     verifyGateSensorArtifactsUnchanged(slug, gateSensorEvaluation);
     const status = unitGateStatus(
@@ -5641,7 +5946,7 @@ function handleGateStart(args: string[]): void {
   }
   validateSlugInState(content, slug, ["in-progress", "awaiting-approval"]);
   const alreadyAwaiting = getSlugState(content, slug) === "awaiting-approval";
-  admitStageAction(pd, content, stage, { action: "present-approval-gate" });
+  admitStageAction(pd, content, stage, { action: "present-approval-gate", personCall: personCall() });
   verifyGateSensorArtifactsUnchanged(slug, gateSensorEvaluation);
   if (alreadyAwaiting) {
     if (
@@ -5721,7 +6026,7 @@ function verifyApprovalDecision(
       ? null
       : selfAttributedDecisionMarker(approvalInput, "approval");
   if (approvalAuthorship) {
-    error(
+    refuseForAgent(
       `Cannot approve "${stage.slug}" because --user-input says the choice came from the ` +
         `assistant (${approvalAuthorship.category}: "${approvalAuthorship.phrase}"). ` +
         "This check looks for explicit assistant provenance; it does not prove who wrote " +
@@ -5738,32 +6043,48 @@ function verifyApprovalDecision(
     const revisionCount = Number.isFinite(parsedRevisionCount)
       ? parsedRevisionCount
       : 0;
-    // The person's reply in their own words; the receipt records the
-    // approval it names.
-    const reply = readStageGateReply(stage.slug, approvalInput, {
-      acceptAsIs: revisionCount >= 3,
-      bound: stageGateReplyBound(pd, stage.slug),
-      unit,
-    });
-    if (reply.approval === null) {
-      error(
-        `Cannot approve "${stage.slug}" because the reply ` +
-          `${formatReceivedReply(approvalInput)} ` +
-          (reply.reading === "unclear" ? "did not match one of the offered choices" : "did not approve it") +
-          `. ${reply.followUp}`,
+    // The conductor read the person's reply and reports the approval it made;
+    // the receipt records that choice, and the person's own words ride on it.
+    // Host cancellation text is no reply, and a latest message that is exactly
+    // Request Changes is their pick.
+    if (approvalInput && isNonAnswer(approvalInput)) {
+      refuseForAgent(
+        `Cannot approve "${stage.slug}" because the reply ${formatReceivedReply(approvalInput)} is ` +
+          "cancellation boilerplate, not a decision. Re-present the original held gate with every offered " +
+          "choice and wait for the human to choose one.",
       );
     }
-    approvalInput = reply.approval;
+    const pick = personsLatestGatePickSafe(pd, stage.slug, unit, revisionCount >= 3);
+    if (pick === "Request Changes") {
+      refuseForAgent(
+        `The person picked Request Changes at the "${stage.slug}" gate. Report that, or ask them if you read ` +
+          "their words differently.",
+        { personDecided: true },
+      );
+    }
+    // Their exact pick names which approval it is.
+    approvalInput = pick ?? stageGateApproval(approvalInput, revisionCount >= 3);
   }
   if (
     !autonomousDecision &&
     !humanPresenceGuardDisabled() &&
-    !humanActedSinceGate(pd)
+    !humanRepliedSinceGate(pd)
   ) {
-    error(
+    refuseForAgent(
       `Cannot approve "${stage.slug}" because no new human reply has been received for ` +
         "this approval question. Wait for the human to type their choice, then retry the " +
-        `approval.${unattendedHumanPresenceHint()}`,
+        `approval.${commandTurnHint(pd)}${unattendedHumanPresenceHint(pd)}`,
+    );
+  }
+  // The conductor reports the choice the person made; a report that names none
+  // records nothing. They have replied by now (checked above), so the step is
+  // to report the choice their reply makes, not to ask them again.
+  if (!autonomousDecision && !humanPresenceGuardDisabled() && !userInput?.trim()) {
+    refuseForAgent(
+      `Cannot approve "${stage.slug}" because no choice was passed. The person replied after the question ` +
+        'was shown: report the choice their reply makes with --user-input (for example "Approve"), or ask ' +
+        "them if their reply is unclear.",
+      { personDecided: true },
     );
   }
   return { approvalInput, autonomousDecision };
@@ -5799,6 +6120,7 @@ function handleApprove(args: string[]): void {
       action: "complete",
       entrypoint: "approve",
       unit: preflightTeamGate.unit,
+      personCall: { overUnfinishedReview: false },
     });
   } else {
     verifyStageArtifacts(pd, preflightStage);
@@ -5808,10 +6130,14 @@ function handleApprove(args: string[]): void {
       preflightStage,
     );
   }
+  // Under Guard Policy relaxed or off an edit at the open gate is a change the
+  // person's Approve accepts (the review scan names it once), never a Request
+  // Changes they did not give.
   const preflightBackstop =
     preflightTeamGate === null &&
     !revisionBackstopDisabled() &&
     !preflightDecision.autonomousDecision &&
+    !guardPolicyAcceptsChanges(pd, preflightContent) &&
     unrecordedRevisionSinceGateOpen(pd, preflightStage);
   const backstopSensorEvaluation = preflightBackstop
     ? fireGateSensors(pd, preflightStage, preflightContent)
@@ -5849,10 +6175,13 @@ function handleApprove(args: string[]): void {
   );
 
   if (teamGate) {
+    // A team Unit gate is always the person's to approve (checked above and below).
+    const teamPersonCall: PersonApproval = { overUnfinishedReview: false };
     admitStageAction(pd, content, stage, {
       action: "complete",
       entrypoint: "approve",
       unit: teamGate.unit,
+      personCall: teamPersonCall,
     });
     const reviewFindingDispositions = acceptedRiskDispositionField(
       pd,
@@ -5873,11 +6202,11 @@ function handleApprove(args: string[]): void {
     }
     if (
       !humanPresenceGuardDisabled() &&
-      !humanActedSinceGate(pd)
+      !humanRepliedSinceGate(pd)
     ) {
-      error(
+      refuseForAgent(
         `Refusing to approve unit "${teamGate.unit}" for "${slug}": a real human ` +
-          "has not acted at this gate since it opened.",
+          `has not acted at this gate since it opened.${commandTurnHint(pd)}`,
       );
     }
     const timestamp = isoTimestamp();
@@ -5886,12 +6215,14 @@ function handleApprove(args: string[]): void {
       emitAudit(pd, "GATE_APPROVED", {
         ...teamGateFields(stage, teamGate),
         ...(approvalInput ? { "User Input": approvalInput } : {}),
+        ...personsWordsFields(pd, slug, teamGate.unit),
         ...(reviewFindingDispositions
           ? {
               [REVIEW_FINDING_DISPOSITIONS_FIELD]:
                 reviewFindingDispositions,
             }
           : {}),
+        ...(teamPersonCall.overUnfinishedReview ? { Review: "not finished" } : {}),
       });
     } catch (e) {
       error(`Audit emission failed: ${errorMessage(e)}`);
@@ -5903,6 +6234,9 @@ function handleApprove(args: string[]): void {
       gate_scope: teamGate.scope,
       approved: true,
       timestamp,
+      ...(teamPersonCall.overUnfinishedReview
+        ? { change_notices: [unfinishedReviewNotice(stage, teamGate.unit)] }
+        : {}),
     }));
     return;
   }
@@ -5931,6 +6265,7 @@ function handleApprove(args: string[]): void {
   const backstopNow =
     !revisionBackstopDisabled() &&
     !autonomousDecision &&
+    !guardPolicyAcceptsChanges(pd, content) &&
     unrecordedRevisionSinceGateOpen(pd, stage);
   if (backstopNow && !preflightBackstop) {
     error(
@@ -5996,9 +6331,14 @@ function handleApprove(args: string[]): void {
   // The shared admission chain for approve: artifacts and summary again (they
   // ran before the backstop above and are re-read here), then pipeline and
   // reviewer evidence. The router preflights `approve` through the same call.
+  // The person's own approval goes over a review that never finished.
+  const personCall: PersonApproval | undefined = autonomousDecision
+    ? undefined
+    : { overUnfinishedReview: false };
   admitStageAction(pd, content, stage, {
     action: "complete",
     entrypoint: "approve",
+    personCall,
   });
   const reviewFindingDispositions = acceptedRiskDispositionField(pd, stage);
 
@@ -6038,10 +6378,12 @@ function handleApprove(args: string[]): void {
   try {
     const gateFields: Record<string, string> = { Stage: slug };
     if (approvalInput) gateFields["User Input"] = approvalInput;
+    if (!autonomousDecision) Object.assign(gateFields, personsWordsFields(pd, slug));
     if (reviewFindingDispositions) {
       gateFields[REVIEW_FINDING_DISPOSITIONS_FIELD] =
         reviewFindingDispositions;
     }
+    if (personCall?.overUnfinishedReview) gateFields.Review = "not finished";
     emitAudit(pd, "GATE_APPROVED", gateFields);
 
     emitAudit(pd, "STAGE_COMPLETED", {
@@ -6055,6 +6397,9 @@ function handleApprove(args: string[]): void {
   }
 
   writeStateFile(pd, content);
+  if (personCall?.overUnfinishedReview) {
+    console.log(JSON.stringify({ change_notices: [unfinishedReviewNotice(stage)] }));
+  }
 
   // No explicit consume step (ledger-event design): the GATE_APPROVED
   // emitted by this commit IS the freshness boundary for the next gate. A second
@@ -6155,7 +6500,6 @@ function handleReject(args: string[]): void {
     );
   }
   const slug = args[0];
-  const decision = getFlagValue(args.slice(1), "--user-input")?.trim();
   let feedback =
     (getTextFlagValue(args.slice(1), "--feedback") ??
       getTextFlagValue(args.slice(1), "--reason"))?.trim();
@@ -6198,14 +6542,15 @@ function handleReject(args: string[]): void {
       slug,
       teamGate?.unit,
     );
-    error(
+    refuseForAgent(
       `Refusing to reject "${slug}": the recovery-question choice was not Request Changes.` +
         (selectedAction ? ` The selected action was "${selectedAction}".` : "") +
         " Carry out that action, or re-present the recovery question and wait for the human to choose Request Changes.",
+      { personDecided: true },
     );
   }
   if (feedbackStatus === "awaiting-feedback") {
-    error(
+    refuseForAgent(
       `Refusing to reject "${slug}": the guard-recovery choice is not revision ` +
         `feedback. Ask "What should change?", end the turn, and wait for the ` +
         "human's separate response before retrying.",
@@ -6215,26 +6560,15 @@ function handleReject(args: string[]): void {
     !teamGate &&
     getField(content, "Construction Checkpoints") !== "enabled" &&
     isAutonomousConstructionGate(content, stage, pd);
-  if (
-    !autonomousDecision &&
-    feedbackStatus === "not-applicable" &&
-    !humanPresenceGuardDisabled() &&
-    !isRequestChangesChoice(decision)
-  ) {
-    // The person's reply in their own words: a change request is one, and
-    // what it says to change is the feedback when none was passed.
-    const reply = readStageGateReply(slug, decision, { acceptAsIs: false, bound: true, unit: teamGate?.unit });
-    if (reply.reading !== "request-changes") {
-      error(
-        `Refusing to reject "${slug}": received reply ${formatReceivedReply(decision)} ` +
-          (reply.reading === "approve"
-            ? "approves the stage, so nothing was rejected. Report it as their approval with " +
-              `--result approved and the same --user-input.`
-            : (reply.reading === "unclear" ? "did not match an offered choice at the held gate. " : "") +
-              reply.followUp),
-      );
-    }
-    feedback ||= reply.feedback ?? undefined;
+  const rejectPick = !autonomousDecision && feedbackStatus === "not-applicable"
+    ? personsLatestGatePickSafe(pd, slug, teamGate?.unit, revisionCountOf(content) >= 3)
+    : null;
+  if (rejectPick === "Approve" || rejectPick === "Accept as-is") {
+    refuseForAgent(
+      `Refusing to reject "${slug}": the person picked ${rejectPick} at this gate. Report that, or ask them if you ` +
+        "read their words differently.",
+      { personDecided: true },
+    );
   }
   // The person's own words. When this chat's human-turn hook recorded what they
   // typed after the stage's latest presentation, those words are the feedback,
@@ -6246,11 +6580,9 @@ function handleReject(args: string[]): void {
   let personsWords: string | null = null;
   if (!autonomousDecision && feedbackStatus === "not-applicable") {
     try {
-      const revisionCount = parseInt(getField(content, "Revision Count") ?? "", 10);
       personsWords = personsGateFeedback(pd, resolveInvokingSessionId(pd), {
         stage: slug,
         ...(teamGate ? { unit: teamGate.unit } : {}),
-        acceptAsIs: Number.isFinite(revisionCount) && revisionCount >= 3,
       });
     } catch {
       personsWords = null;
@@ -6263,23 +6595,24 @@ function handleReject(args: string[]): void {
       : undefined;
   if (personsWords !== null) feedback = personsWords;
   if (!feedback) {
-    error(
+    refuseForAgent(
       `Refusing to reject "${slug}": Request Changes requires nonblank revision feedback in ` +
         "--feedback (or --reason through aidlc-orchestrate.ts report). Ask \"What should change?\", " +
         "end the turn, and pass their answer.",
     );
   }
   if (isNonAnswer(feedback)) {
-    error(
+    refuseForAgent(
       `Refusing to reject "${slug}": revision feedback ${formatReceivedReply(feedback)} is ` +
         "cancellation boilerplate. Re-present the original held gate with every offered choice " +
         "and wait for the human to choose one.",
     );
   }
   if (feedbackStatus === "mismatch") {
-    error(
+    refuseForAgent(
       `Refusing to reject "${slug}": --feedback does not exactly match the ` +
         "human's separate guard-recovery response. Pass their text unchanged.",
+      { personDecided: true },
     );
   }
 
@@ -6288,22 +6621,29 @@ function handleReject(args: string[]): void {
     !teamGate &&
     autonomousMode &&
     reviewRecoverySpentInCurrentAttempt(pd, content, stage);
+  // Once the approval question is put to the person, only their reply to it
+  // rejects: a turn they sent before it (an earlier question's answer, a
+  // remark while the stage ran) is no reply to it. A stage still running, and
+  // a guard-recovery choice (it binds its own reply above), keep the check
+  // above alone, so "that's wrong, redo it" mid-stage still rejects.
+  const repliedToGate = feedbackStatus !== "not-applicable" ||
+    personRepliedSincePresentation(pd, { stage: slug, ...(teamGate ? { unit: teamGate.unit } : {}) }) !== false;
   if (
     (!autonomousDecision || recoveryResetNeedsHuman) &&
     !humanPresenceGuardDisabled() &&
-    !humanActedSinceGate(pd)
+    (!humanRepliedSinceGate(pd) || (!autonomousDecision && !repliedToGate))
   ) {
     if (recoveryResetNeedsHuman) {
-      error(
+      refuseForAgent(
         `Cannot request changes for "${slug}" because its recovery review has already ` +
           `been used and only a new human choice can start another review attempt. Present ` +
-          `the situation at the approval question and wait for a typed Request Changes choice.${unattendedHumanPresenceHint()}`,
+          `the situation at the approval question and wait for a typed Request Changes choice.${unattendedHumanPresenceHint(pd)}`,
       );
     }
-    error(
+    refuseForAgent(
       `Cannot request changes for "${slug}" because no new human reply has been received ` +
         `for this approval question. Wait for the human to type Request Changes and their ` +
-        `feedback, then retry.${unattendedHumanPresenceHint()}`,
+        `feedback, then retry.${commandTurnHint(pd)}${unattendedHumanPresenceHint(pd)}`,
     );
   }
 
@@ -6321,7 +6661,7 @@ function handleReject(args: string[]): void {
       ? null
       : selfAttributedDecisionMarker(conductorFeedback, "rejection");
   if (rejectionAuthorship) {
-    error(
+    refuseForAgent(
       `Cannot request changes for "${slug}" because --feedback says it was written by the ` +
         `assistant (${rejectionAuthorship.category}: "${rejectionAuthorship.phrase}"). ` +
         `Requesting changes is the human's decision. Explain why another review is needed at ` +
@@ -7233,8 +7573,12 @@ function handlePracticesPromote(args: string[]): void {
   if (dirname(discoveredRulesPath) !== draftDir) {
     fail("team-practices and discovered-rules drafts must share one stage directory");
   }
+  // Honour the collaborators switch: a lead-only practices-discovery run (the
+  // `collaborators` ceremony off for this scope) has no spokes and therefore no
+  // contribution files to revalidate. Same switch owner the gate and dispatch
+  // read, so promotion can never demand evidence the stage never produced.
   const missingContributions: string[] = [];
-  for (const agent of practicesStage!.support_agents ?? []) {
+  for (const agent of effectiveSupportAgentsForProject(pd, practicesStage!)) {
     const contribution = join(draftDir, "contributions", `${agent}.md`);
     let firstLine = "";
     try {
@@ -7296,11 +7640,23 @@ function handlePracticesPromote(args: string[]): void {
   ];
   let newTeamMd = teamMd;
   for (const heading of TEAM_SECTIONS) {
-    const draftSection = extractMarkdownSection(teamPracticesDraft, heading);
+    let draftSection = extractMarkdownSection(teamPracticesDraft, heading);
     if (draftSection === "") {
       // Section absent from draft → leave the live file's section alone.
       // Useful for partial re-runs that only change one practice area.
       continue;
+    }
+    // team.md gets only a Testing Posture the Code Generation renderer reads:
+    // a Methodology given with its reasons is split into the bare value and a
+    // `Methodology evidence` line; one that cannot be read stops here, before
+    // any write.
+    if (heading === "## Testing Posture") {
+      const promotable = promotableTestingPosture(draftSection);
+      if (promotable.problem !== null) {
+        fail(promotable.problem);
+        return;
+      }
+      draftSection = promotable.section;
     }
     try {
       newTeamMd = replaceSection(newTeamMd, heading, draftSection);
@@ -8048,7 +8404,7 @@ function error(msg: string): never {
   throw new StateCommandError(msg);
 }
 
-function exitWithError(msg: string): never {
+function exitWithError(msg: EmitErrorMessage): never {
   // Honor module-level projectDir (set from --project-dir in main) so test
   // fixtures and explicit overrides propagate to ERROR_LOGGED.
   const pd = resolveProjectDir(projectDir);

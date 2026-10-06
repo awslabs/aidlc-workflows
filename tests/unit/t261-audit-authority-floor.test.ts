@@ -399,6 +399,18 @@ describe("t261 set-autonomy escalation requires and consumes a human turn", () =
     expect(granted.out).toContain('"state_updated":true');
   });
 
+  // The grant answers the ladder prompt: a turn that was only a command to
+  // AIDLC ("skip plan approval?") is no answer to it.
+  test("escalation after only a command turn refuses; the person's reply commits it", () => {
+    proj = constructionProject();
+    appendAuditEntry("HUMAN_TURN", { Reply: "command" }, proj);
+    const refused = guarded(BOLT, ["set-autonomy", "--mode", "autonomous"], proj);
+    expect(refused.rc).not.toBe(0);
+    expect(refused.out).toContain("a command to AIDLC, not a reply to this question");
+    mintHumanTurn(proj);
+    expect(guarded(BOLT, ["set-autonomy", "--mode", "autonomous"], proj).rc).toBe(0);
+  });
+
   test("the grant consumes the turn: re-escalation refuses without a fresh turn", () => {
     proj = constructionProject();
     mintHumanTurn(proj);
@@ -628,10 +640,10 @@ describe("t261 cancellation boilerplate is not a decision", () => {
       proj,
     );
     expect(r.rc).not.toBe(0);
-    expect(r.out).toContain('reply \\"Maybe the defaults ');
+    expect(r.out).toContain('--details \\"Maybe the defaults ');
     expect(r.out).toContain('...\\"');
     expect(r.out).not.toContain(invalid);
-    expect(r.out).toContain("Looks correct (1), or Request changes (2)");
+    expect(r.out).toContain('\\"Looks correct\\" or \\"Request changes\\"');
     expect(readAllAuditShards(proj)).not.toContain("SUMMARY_CONFIRMATION_RECORDED");
   });
 

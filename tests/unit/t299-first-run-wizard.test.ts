@@ -92,10 +92,12 @@ function detection(
     claude: { found: true, version: "claude 2.1.220" },
   },
   runtimeIssue = false,
+  // Harnesses left to the real `--version` probe of the stubs on PATH.
+  probed: readonly string[] = [],
 ): string {
   return JSON.stringify({
     harnesses: Object.fromEntries(
-      HARNESS_NAMES.map((name) => {
+      HARNESS_NAMES.filter((name) => !probed.includes(name)).map((name) => {
         const value = harnesses[name] ?? {
           found: false,
           probed: name !== "kiro-ide",
@@ -388,6 +390,7 @@ function runWizard(
     preload?: string;
     // More `config` arguments, such as a `--harness ... --yes` setup.
     configArgs?: string[];
+    probed?: readonly string[];
   } = {},
 ): CliContext & CliResult {
   const project = realpathSync(options.project ?? temp("aidlc-t299-project-"));
@@ -418,6 +421,7 @@ function runWizard(
         bin,
         options.harnesses,
         options.runtimeIssue,
+        options.probed,
       ),
       ...options.env,
       AIDLC_T299_PROJECT_DIR: project,
@@ -969,6 +973,39 @@ describe("t299 first-run setup wizard", () => {
     expect(existsSync(join(result.project, ".codex"))).toBe(true);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
+  // Both Kiro rows probe `kiro-cli`. The kiro-ide row counts it only from
+  // 2.24.1, the oldest Kiro CLI it has been checked on; below that, down to the
+  // kiro row's 2.6, the kiro row is the one detected, so setup takes it
+  // without asking. The real probe runs the stub `kiro-cli`, a POSIX shell
+  // script Windows does not resolve as an executable; t294 covers the floor
+  // itself on every platform.
+  test.skipIf(process.platform === "win32")("a Kiro CLI below the kiro-ide floor detects only the kiro row", () => {
+    const old = runWizard("\n", {
+      harnesses: { claude: { found: false }, kiro: { found: true, version: "kiro-cli 2.24.0" } },
+      probed: ["kiro", "kiro-ide"],
+    });
+    expect(old.stdout).not.toContain("Choose the harness for this project first.");
+    expect(old.status, old.stdout + old.stderr).toBe(0);
+    expect(existsSync(join(old.project, ".kiro", "agents", "aidlc.json"))).toBe(true);
+
+    const supported = runWizard("\n\n", {
+      harnesses: { claude: { found: false }, kiro: { found: true, version: "kiro-cli 2.24.1" } },
+      probed: ["kiro", "kiro-ide"],
+    });
+    expect(supported.status, supported.stdout + supported.stderr).toBe(0);
+    expect(supported.stdout).toContain("Choose the harness for this project first.");
+
+    // Below the kiro row's own 2.6 floor neither Kiro row is detected, so
+    // setup asks instead of taking one; the person still can choose Kiro CLI.
+    const unsupported = runWizard("5\n\n", {
+      harnesses: { claude: { found: false }, kiro: { found: true, version: "kiro-cli 2.5.9" } },
+      probed: ["kiro", "kiro-ide"],
+    });
+    expect(unsupported.stdout).toContain("No supported harness CLI was detected. Choose one to configure:");
+    expect(unsupported.status, unsupported.stdout + unsupported.stderr).toBe(0);
+    expect(existsSync(join(unsupported.project, ".kiro", "agents", "aidlc.json"))).toBe(true);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
   test("Kiro IDE's terminal selects Kiro IDE and ends with trust, reload, and agent steps", () => {
     const result = runWizard("\n", {
       harnesses: { claude: { found: false } },
@@ -1405,15 +1442,15 @@ describe("t299 first-run setup wizard", () => {
   // First-run setup stops in plain words: before any question when the
   // project's storage lacks an operation transactions need (a hard-link
   // rejection alone now falls back to a directory lock), and after apply when a
-  // step fails, here on a settings file the user owns. The stop and its fix
+  // step fails, here on an AI-DLC file the user wrote over. The stop and its fix
   // wrap the same way; a fix that is a command stays whole.
   const firstRunStops = (env: NodeJS.ProcessEnv = {}) => ({
     lock: runWizard("", { preload: filesystemPreload(REQUIRED_FILESYSTEM_FAILURES[0]).preload, env }),
     conflict: runWizard("\n", {
       env,
       prepare: (project) => {
-        mkdirSync(join(project, ".claude"));
-        writeFileSync(join(project, ".claude", "settings.json"), '{"userOwned":true}\n');
+        mkdirSync(join(project, ".claude", "agents"), { recursive: true });
+        writeFileSync(join(project, ".claude", "agents", "aidlc-developer-agent.md"), "my own notes\n");
       },
     }),
   });
@@ -1433,7 +1470,9 @@ describe("t299 first-run setup wizard", () => {
     expect(lock.stdout).toContain(
       `\n  fix: ${new TransactionFilesystemError("", "", "", null).remediation}\n  Nothing written.\n`,
     );
-    expect(conflict.stdout).toMatch(/\n {2}fix: (?:aidlc|bun) \S.* --dry-run --verbose\n {2}No setup changes were kept\.\n/);
+    expect(conflict.stdout).toMatch(
+      /\n {2}fix: to keep your version, move \S+ somewhere else and run the same command again; .*--force\. `(?:aidlc|bun) \S.* --dry-run --verbose` lists every change first\.\n {2}No setup changes were kept\.\n/,
+    );
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   for (const width of [62, 79]) {
@@ -1444,9 +1483,9 @@ describe("t299 first-run setup wizard", () => {
         expect(narrow[stop].status, `${stop}: ${narrow[stop].stdout}${narrow[stop].stderr}`).toBe(1);
         expectWrappedLike(narrow[stop], wide[stop], width, stop);
       }
-      // The conflict's fix is the dry-run command, checked whole above.
+      // The conflict's fix names the dry-run command, checked whole above.
       expect(commandsIn(sameRun(wide.conflict)).some((command) =>
-        command.endsWith("--dry-run --verbose")
+        command.endsWith("--dry-run --verbose`")
       )).toBe(true);
       // The storage fix continues under its own text, after "fix: ".
       const fixLines = screenLines(narrow.lock.stdout);
@@ -1557,12 +1596,12 @@ describe("t299 first-run setup wizard", () => {
     }));
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-  test("a preexisting settings conflict renders the child's message and fix without its JSON plan", () => {
+  test("a preexisting AI-DLC file conflict renders the child's message and fix without its JSON plan", () => {
     let before: Record<string, string> = {};
     const result = runWizard("\n", {
       prepare: (project) => {
-        mkdirSync(join(project, ".claude"));
-        writeFileSync(join(project, ".claude", "settings.json"), '{"userOwned":true}\n');
+        mkdirSync(join(project, ".claude", "agents"), { recursive: true });
+        writeFileSync(join(project, ".claude", "agents", "aidlc-developer-agent.md"), "my own notes\n");
         writeFileSync(join(project, ".gitignore"), "# keep my ignores\nnode_modules/\n");
         before = treeSnapshot(project);
       },
@@ -1571,7 +1610,7 @@ describe("t299 first-run setup wizard", () => {
     expect(result.status, output).toBe(1);
     expect(output).toContain("Setup stopped:");
     expect(output).toContain("config conflict(s)");
-    expect(output).toContain(".claude/settings.json");
+    expect(output).toContain(".claude/agents/aidlc-developer-agent.md");
     expect(output).toContain("locally modified or unowned");
     expect(output).toMatch(/fix:/i);
     expect(output).toContain("--dry-run --verbose");
@@ -1992,9 +2031,9 @@ describe("t299 first-run setup wizard", () => {
 });
 
 describe("t299 first-run guidance helpers", () => {
-  // Kiro CLI also ships hook-activation advice (#1487): its v2 and v3 engines read
-  // disjoint hook registrations, so the generic restart advice cannot work.
-  test("only Kiro IDE ships first-run steps and an editor name; only the Kiro and Copilot trees ship hook-activation advice", () => {
+  // Every tree but Cursor's ships hook-activation advice: each names the step
+  // that got its hooks running live, which the generic restart advice is not.
+  test("only Kiro IDE ships first-run steps and an editor name; every tree but Cursor's ships hook-activation advice", () => {
     for (const harness of HARNESS_NAMES) {
       const root = join(RUNTIME, harness);
       const harnessDir = readdirSync(root).find((entry) =>
@@ -2008,10 +2047,13 @@ describe("t299 first-run guidance helpers", () => {
       expect(Object.hasOwn(projection, "firstRunSteps"), harness).toBe(kiroIde);
       expect(Object.hasOwn(projection, "editorTerminalApp"), harness).toBe(kiroIde);
       const copilot = harness === "copilot";
-      expect(Object.hasOwn(shipped, "hookActivation"), harness).toBe(kiroIde || harness === "kiro" || copilot);
-      // notRunYet needs a heartbeat on the first chat message; the Kiro IDE and
-      // Copilot adapters leave one.
-      expect(Object.hasOwn(shipped.hookActivation ?? {}, "notRunYet"), harness).toBe(kiroIde || copilot);
+      expect(Object.hasOwn(shipped, "hookActivation"), harness).toBe(harness !== "cursor");
+      // The agent's own step needs a hook on its shell command that beats in
+      // the record before the engine runs; Kiro IDE's does not.
+      expect(Object.hasOwn(shipped.hookActivation ?? {}, "agentStep"), harness).toBe(harness !== "cursor" && !kiroIde);
+      // notRunYet needs a heartbeat on the first chat message: the human-turn
+      // hook leaves one, and the Kiro IDE and Copilot adapters too.
+      expect(Object.hasOwn(shipped.hookActivation ?? {}, "notRunYet"), harness).toBe(harness !== "cursor");
       // notRunInWorkflow needs a guard heartbeat before each engine command;
       // only Copilot pins one.
       expect(Object.hasOwn(shipped.hookActivation ?? {}, "notRunInWorkflow"), harness).toBe(copilot);

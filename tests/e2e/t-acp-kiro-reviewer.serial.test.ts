@@ -199,22 +199,19 @@ describe("t-acp-kiro-reviewer (live §12a reviewer fires on the shipped dist/kir
       });
       const session = new AcpSession(proj, "aidlc", true);
       try {
-        // Self-answer permission is granted for THIS stage only, up front —
-        // the ACP driver cannot answer prose-rendered structured questions, so
-        // waiting on one would burn the whole budget (the autonomy rule allows
-        // exactly this: explicit permission for this specific stage).
+        // The stage's questions are the person's to answer. The ACP driver
+        // cannot answer prose-rendered structured questions, so the first turn
+        // ends on them and the second turn answers them, as a person does:
+        // answers chosen up front would be the agent's, not the person's.
         const r1 = await driveUntilReview(
           session,
           proj,
           `/aidlc --scope poc --stage requirements-analysis --single` +
-            ` — for any clarifying question this stage asks, choose the` +
-            ` recommended option yourself and continue; do not wait for me.` +
             ` Run the stage to completion including the reviewer step.`,
         );
 
-        // Bounded second turn: if the model still ended its turn to ask the
-        // stage's questions (live models sometimes do despite the grant),
-        // answer once with the defaults and let the disk poll finish the job.
+        // Bounded second turn: the person answers the questions the stage
+        // asked with the defaults, and the disk poll finishes the job.
         let r2: Awaited<ReturnType<typeof driveKiroAcp>> | undefined;
         if (!completedReview(proj) && r1.stopReason === "end_turn") {
           r2 = await driveUntilReview(

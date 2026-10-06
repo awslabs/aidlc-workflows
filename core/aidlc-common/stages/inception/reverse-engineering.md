@@ -40,14 +40,25 @@ outputs: "aidlc/spaces/<active-space>/codekb/<repo>/ (9 artifacts: business-over
 
 # Reverse Engineering
 
-This stage runs `mode: pipeline` (stage-protocol-ensemble.md §5): a two-link chain in
-which each link advances the work product directly. The developer lead (link
-1) scans and returns structured results; the architect (link 2, the final
-link) synthesizes those results and writes the 9 artifacts. The final link
-leaving the `produces[]` artifacts complete plus both tool-owned link receipts
-is the pipeline contract — no contribution files on pipeline stages. On resume,
-read `directive.pipeline.completed` and dispatch only the first missing link;
-multi-repo entries are qualified as `<repo>:<agent>`.
+This stage runs `mode: pipeline` (stage-protocol-ensemble.md §5): a chain in
+which each link advances the work product directly. The links are exactly
+`directive.pipeline.links` — the engine builds them from the directive's
+effective `support_agents`, so the collaborators switch governs the chain. With
+the full roster the chain is two links: the developer lead (link 1) scans and
+returns structured results; the architect (link 2, the final link) synthesizes
+those results and writes the 9 artifacts.
+
+**When the architect is switched off (collaborators off for this scope),
+`directive.pipeline.links` is just the developer lead, and the lead is then the
+sole and final link: it both scans AND synthesizes the results into the 9
+artifacts itself** (§5 lead-only rule). Either way, the FINAL link leaves the
+`produces[]` artifacts complete; that plus the tool-owned link receipt(s) for
+the links actually dispatched is the pipeline contract — no contribution files
+on pipeline stages. On resume, read `directive.pipeline.completed` and dispatch
+only the first missing link; multi-repo entries are qualified as
+`<repo>:<agent>`. The store checks,
+snapshots, staging, publishing, and link records below are silent: the person
+hears only what the scan found in their code.
 
 ## Steps
 
@@ -239,14 +250,14 @@ not to scan or document it:
   `.agents/` (Codex): the `aidlc`-named ones, and every skill whose `SKILL.md`
   frontmatter says `generated-by: aidlc-runner-gen` (stage runners, plugin
   stages included);
-- the root files AI-DLC writes whole: Cursor's `install.ts` beside `.cursor/`
-  and opencode's `opencode.json` beside `.opencode/`;
+- the root file AI-DLC writes whole: Cursor's `install.ts` beside `.cursor/`;
 - AI-DLC's marked sections of shared root files such as `AGENTS.md` and
-  `.gitignore`, and the MCP servers it adds to `.mcp.json` (named under
-  `rootContributions` in `<harness directory>/tools/data/aidlc-manifest.json`).
+  `.gitignore`, the MCP servers it adds to `.mcp.json`, and its entries in
+  opencode's `opencode.json` (named under `rootContributions` in
+  `<harness directory>/tools/data/aidlc-manifest.json`).
 
-The rest of `.github/`, `.agents/`, `AGENTS.md`, and `.gitignore` is the
-project's own and is scanned as usual.
+The rest of `.github/`, `.agents/`, `AGENTS.md`, `.gitignore`, and
+`opencode.json` is the project's own and is scanned as usual.
 
 Tell the developer to scan only what people wrote: follow the repo's
 `.gitignore` files, and skip build outputs, dependency folders, and IDE and
@@ -272,19 +283,26 @@ the handoff path and any concerns only; it does not repeat the scan body.
 
 After the developer return has been read, verify the handoff file exists and
 contains `## Developer Code Scan Results`, `### Scan Coverage`, and
-`## Handoff Summary`. Then mint link 1 before dispatching the architect:
+`## Handoff Summary`. Then record link 1 before dispatching the architect:
 
 ```
 bun {{HARNESS_DIR}}/tools/aidlc-log.ts link --stage reverse-engineering --link aidlc-developer-agent --artifact "<developer scan handoff path>" [--repo <repo>] [--single]
 ```
 
-The logger requires the handoff to have been written in the current stage
-attempt and binds the receipt to its path, write time, and SHA-256. A
-rejection/resume cannot reuse the old file, and any edit after the receipt
-invalidates this link plus every downstream pipeline link until the developer
-and architect run again.
+Record it from the handoff this attempt wrote, at the path above; a rejection
+or resume cannot reuse an older file. Never rename, move, or edit the handoff
+afterwards: any change to it means the developer and the architect run again.
 
 ### Step 3: Architect Synthesis
+
+**Run this step only when `aidlc-architect-agent` is in `directive.pipeline.links`.**
+When the chain is lead-only (collaborators off, so the links are just the
+developer lead), do NOT dispatch an architect. Instead, the developer lead is
+the sole and final link and must itself produce the complete 9-artifact
+candidate described in this step: dispatch the developer with a brief that
+covers both the Step 2 scan AND this step's synthesis spec (same write-behavior
+rules, same staging-directory contract below), then mint only the developer
+link and continue to Step 4. The rest of this step is the full-roster path.
 
 Delegate to Task tool with aidlc-architect-agent:
 - subagent_type="aidlc-architect-agent"
@@ -378,10 +396,10 @@ directory for a merge, but do not write the candidate there directly.
 
 **Coverage backstop - run BEFORE writing (the compare needs the prior store
 unchanged).** When the Step 1 guard found an existing store (any verdict but
-NO_STORE), write the new or merged timestamp content to
-`<record>/inception/reverse-engineering/scope-draft-<repo>.md` (one draft per
-repo; NOT the timestamp filename - record-dir placement checks key on the
-artifact stems) and run
+NO_STORE), write the new or merged timestamp content with your file-write
+tool to `<record>/inception/reverse-engineering/scope-draft-<repo>.md` (one
+draft per repo; NOT the timestamp filename - record-dir placement checks key on
+the artifact stems) and run, as a command of its own,
 
 ```
 {{INVOKE}} engine workspace codekb-scope-diff --repo <repo> --compare <record>/inception/reverse-engineering/scope-draft-<repo>.md
@@ -391,9 +409,10 @@ Keep the output keyed by `<repo>` for Step 5's completion summary. This is the
 deterministic backstop for the requested breadth and the focused-merge rules:
 COVERS means the incoming block preserved the prior verified coverage;
 NARROWER identifies coverage that was demoted or lost. A focused run after a
-"Full rescan" choice also surfaces here as NARROWER, before approval. Delete
-that repo's `scope-draft-<repo>.md` immediately after preserving the compare
-output; scope drafts are temporary and MUST NOT remain in the intent record.
+"Full rescan" choice also surfaces here as NARROWER, before approval. The
+compare removes that repo's `scope-draft-<repo>.md` once it has read it ("The
+scope draft has been removed."); scope drafts are temporary and never stay in
+the intent record, so do not delete one yourself.
 
 Publish the complete candidate through the compare-and-swap utility, using the
 exact snapshot values captured immediately before Step 2:
@@ -434,13 +453,16 @@ directory remains the durable per-repo code knowledge base shared across every
 intent in the space.
 
 After the architect return has been read and all 9 artifacts for that repo are
-present, mint the final-link receipt:
+present, record the final link (full-roster path only: on a lead-only
+run the developer already wrote the artifacts and its link is the final one):
 
 ```
 bun {{HARNESS_DIR}}/tools/aidlc-log.ts link --stage reverse-engineering --link aidlc-architect-agent [--repo <repo>] [--single]
 ```
 
-Do not report completion until every selected repo's chain has both receipts.
+Do not report completion until every selected repo's chain has a receipt for
+each link in `directive.pipeline.links` — both links on the full-roster path,
+the developer link alone on a lead-only run.
 
 ### Step 4: Completion Handoff
 

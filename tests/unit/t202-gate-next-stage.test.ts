@@ -316,6 +316,8 @@ describe("t202 gate next-stage name (issue: approval option always said Code Gen
     expect(d.kind).toBe("error");
     expect(d.stage).toBeUndefined();
     expect(d.message).toContain("Refusing to emit run-stage");
+    // It names the one step that tells the person the fix.
+    expect(d.message).toContain("doctor` for the exact fix");
     expect(readFileSync(seededStateFile(proj), "utf-8")).toBe(before);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 

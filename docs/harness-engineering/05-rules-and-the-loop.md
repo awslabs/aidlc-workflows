@@ -69,9 +69,9 @@ plan was approved is recorded and continued under every value. And which authori
 `strict` lowers none, `relaxed` lowers `plan-approval` and `review-freeze`, and
 `off` lowers those two plus `state-transition` and `reviewer-scope`.
 `human-presence` is never lowered by the word. By default each intent takes its
-scope's value. To lower it from chat, a person must type the exact policy switch,
-such as `/aidlc --guard-policy relaxed` or `guard policy off`; an unrelated
-message is not a switch. To hold `strict` for everyone, put one line under the
+scope's value. To lower it from chat, a person asks in their own words and the
+conductor runs the setter, or types the switch (`/aidlc --guard-policy relaxed`
+or `guard policy off`) for the hook to apply. To hold `strict` for everyone, put one line under the
 heading in `team.md` (or `org.md`, or `project.md` for one project):
 
 ```markdown

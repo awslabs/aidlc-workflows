@@ -91,6 +91,12 @@ characters is not read directly; the workflow asks you for a supported file.
 Document paths, filenames, and content are always treated as untrusted data,
 never as instructions.
 
+[Writing a Vision Document](writing-inputs/vision-document-guide.md) covers
+what to put in one, and
+[Writing a Technical Environment Document](writing-inputs/technical-environment-guide.md)
+covers the stack and its rules, which go in your space's team knowledge
+rather than the request.
+
 ---
 
 ## Initialization Phase (Automatic)
@@ -342,7 +348,7 @@ sequenceDiagram
 
 ### Subagent Delegation
 
-Four stages dispatch to background subagents — 2.1 Reverse Engineering (pipeline: developer scan, then architect synthesis-and-write), 2.2 Practices Discovery (subagent hub-and-spoke: lead draft, three mutually blind support reviews, human interview, lead integration), 2.4 User Stories (mob: collaborators contribute in parallel, and judgment-call disagreements may surface to you mid-stage), and 3.5 Code Generation (subagent). Practices Discovery deliberately brings you into the room between the spokes and final integration; the User Stories mob may also surface judgment calls mid-stage. Workspace detection (0.2) runs deterministically inside `aidlc-utility intent-create` rather than as a subagent.
+Four stages dispatch to background subagents — 2.1 Reverse Engineering (pipeline: developer scan, then architect synthesis-and-write), 2.2 Practices Discovery (subagent hub-and-spoke: lead draft, three mutually blind support reviews, human interview, lead integration), 2.4 User Stories (mob: collaborators contribute in parallel, and judgment-call disagreements may surface to you mid-stage), and 3.5 Code Generation (subagent). Practices Discovery deliberately brings you into the room between the spokes and final integration; the User Stories mob may also surface judgment calls mid-stage. Those support agents take part when collaborators are on (the `collaborators` setting, shipped on only for `enterprise`; `/aidlc --collaborators on` turns it on for one piece of work). With collaborators off, the scope line says `lead agent only` and each of these stages runs its lead alone: the developer both scans the code and writes the code knowledge base, Practices Discovery goes from the lead's draft straight to your interview, and User Stories has no mob round. Workspace detection (0.2) runs deterministically inside `aidlc-utility intent-create` rather than as a subagent.
 
 ```mermaid
 sequenceDiagram

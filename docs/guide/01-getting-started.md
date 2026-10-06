@@ -107,7 +107,7 @@ still apply.
 | --- | --- | --- |
 | Claude Code | Configure a supported provider; AI-DLC preserves the current selection | [Claude setup below](#aws-bedrock-setup) |
 | Kiro CLI >= 2.6 | Sign in with `kiro-cli login` | [Kiro CLI](harnesses/kiro-cli.md) |
-| Kiro IDE | Sign in and open the configured project | [Kiro IDE](harnesses/kiro-ide.md) |
+| Kiro IDE >= 1.1.70 (or Kiro CLI >= 2.24.1) | Sign in and open the configured project | [Kiro IDE](harnesses/kiro-ide.md) |
 | Codex CLI >= 0.145.0 | Use a Git repository and approve project hook trust | [Codex CLI](harnesses/codex-cli.md) |
 | Cursor | Sign in to the IDE or CLI | [Cursor](harnesses/cursor.md) |
 | opencode >= 1.17 | Configure the session provider globally | [opencode](harnesses/opencode.md) |
@@ -198,7 +198,7 @@ After config, complete any action named in its output:
 
 | Harness | Typical action |
 | --- | --- |
-| Claude Code | Approve project hooks through `/hooks`, then restart Claude Code |
+| Claude Code | If Claude Code is already open in this folder, exit it and start it again |
 | Kiro CLI | Start `kiro-cli chat`; the project selects the AI-DLC agent |
 | Kiro IDE | Open the configured project, then choose **aidlc** in the chat panel's agent picker |
 | Codex CLI | Approve the hook trust prompt or apply the generated trust seed |
@@ -226,9 +226,9 @@ aidlc doctor
 aidlc config
 ```
 
-Config preserves project-owned content and refuses to refresh while a workflow
-is active. Projects using plugins should run `/aidlc plugin sync` after an
-engine refresh.
+Config preserves project-owned content, and a refresh while a workflow is open
+is done and says whether that work carries on. Projects using plugins should run
+`/aidlc plugin sync` after an engine refresh.
 
 For version selection, project pins, offline installation, mirrors, custom CAs,
 release authentication, automation, and uninstall, see

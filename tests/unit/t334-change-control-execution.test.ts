@@ -125,7 +125,7 @@ describe("t334 F22 initial execution requirements survive a lowered fence", () =
         }));
         expect(guarded.code, `${guarded.stdout}\n${guarded.stderr}`).toBe(2);
         expect(guarded.stdout).not.toContain("Continuing past");
-        expect(guarded.stderr).toContain("CODE_GENERATION_EXECUTION_INELIGIBLE");
+        expect(guarded.stderr).toContain(" The plan-approval setting is unchanged.");
       }
       expect(receiptFiles(project)).toEqual(receipts);
       expect(approvalRows(project)).toEqual(approvals);

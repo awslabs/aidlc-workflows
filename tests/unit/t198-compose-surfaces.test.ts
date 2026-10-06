@@ -372,6 +372,11 @@ describe("t198 Branch 8: inference confirm + compose offer", () => {
     expect(d.proposed_scope).toBe("bugfix");
     expect(String(d.question)).toContain('This looks like "bugfix" work');
     expect(String(d.question)).toContain("Say go ahead");
+    // The answers a host shows as options, worded for the person.
+    expect(d.choices).toEqual([
+      { label: 'Go ahead with the "bugfix" plan', command: d.confirm_command },
+      { label: "Tailor a plan to this task", command: d.compose_command },
+    ]);
   });
 
   test("depth and test strategy typed with the description survive the plan offer", () => {
@@ -716,8 +721,9 @@ describe("t198 Branch 8: inference confirm + compose offer", () => {
     expect(create).toContain("--depth minimal");
     expect(create).not.toContain("--guard-policy");
     expect(String(separate.narration)).toContain("The new work starts at the default Guard Policy");
+    // Continuing the active work instead takes the typed Guard Policy with it.
     const kept = directiveOf(runNext(proj, ["1"]).out);
-    expect(String(kept.message)).toContain("config set depth minimal` to update the configuration");
+    expect(String(kept.message)).toContain("config set depth minimal --guard-policy relaxed` to update the configuration");
   });
 
   test.each([
@@ -773,9 +779,10 @@ describe("t198 Branch 8: inference confirm + compose offer", () => {
     ]).out);
     expect(ask.ask_type).toBe("new-work-routing");
     expect(String(ask.new_intent_command)).toContain("--guard-policy relaxed");
-    // The person's words already set it on the active work.
-    expect(String(ask.continue_command)).not.toContain("--guard-policy");
-    expect(String(ask.compose_command)).not.toContain("--guard-policy");
+    // It lands on the work the person picks: continuing or reshaping the active
+    // work applies it there.
+    expect(String(ask.continue_command)).toContain("--guard-policy relaxed");
+    expect(String(ask.compose_command)).toContain("--guard-policy relaxed");
     const created = runEmitted(String(ask.new_intent_command));
     expect(String(created.message)).not.toContain("--guard-policy");
     expect(String(created.message)).not.toContain("config set");

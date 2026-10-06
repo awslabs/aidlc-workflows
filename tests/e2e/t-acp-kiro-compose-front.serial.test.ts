@@ -21,7 +21,7 @@
 // Disk assertions (the same P2 contract as t192/SDK + t-tui):
 //   - .kiro/scopes/ and scope-grid.json keep their stock entries only;
 //   - the created aidlc-state.md runs a stock scope with a
-//     `Plan: custom, based on <scope>` line.
+//     `Plan: <name>` line (the name the gate showed).
 //
 // KNOWN RISK (plan §7): Kiro-ACP conductor forwarding is fragile (prior live
 // runs dropped $ARGUMENTS / ran the wrong tool). If this leg proves flaky the
@@ -150,7 +150,8 @@ describe("t-acp-kiro compose front journey (live Kiro ACP)", () => {
         const state = readFileSync(join(intentsDir, rec, "aidlc-state.md"), "utf-8");
         const scope = /^- \*\*Scope\*\*: (\S+)$/m.exec(state)?.[1] ?? "";
         expect(STOCK_SCOPES.has(scope)).toBe(true);
-        expect(state).toContain(`- **Plan**: custom, based on ${scope}`);
+        // The plan is named as the gate showed it, never after the scope it runs on.
+        expect(state).toMatch(/^- \*\*Plan\*\*: (?:[a-z0-9][a-z0-9-]*|tailored plan)$/m);
       } finally {
         session.close();
         cleanupTuiProject(root);

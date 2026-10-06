@@ -1,8 +1,13 @@
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { appendAuditEntries, type AuditEntryInput } from "./aidlc-audit.ts";
 import { firstFrontQuestionSince, latestFrontQuestionId, readQuestion } from "./aidlc-question-store.ts";
 import {
+  guardPolicyAtLeast,
+  latestPersonTurn,
+  personSpokeSinceGate,
   assertChangeControlLedgerWritable,
+  auditBlockField,
+  auditFilePath,
   CEREMONY_ENV,
   CEREMONY_FIELDS,
   CEREMONY_FLAGS,
@@ -26,6 +31,7 @@ import {
   guardPolicyMemoryStrictRefusal,
   type GuardSwitch,
   guardSwitchRefusal,
+  isKillSwitchSource,
   isoTimestamp,
   listIntentDirs,
   loadScopeMetadata,
@@ -60,6 +66,8 @@ import {
   writeStateFile,
   parseGuardPolicyStateLine,
 } from "./aidlc-lib.ts";
+import { quoted } from "./aidlc-recorded-switches.ts";
+import { entrySkillInvocation } from "./aidlc-runtime-paths.ts";
 
 function throwSettingsError(message: string): never {
   throw new Error(message);
@@ -88,6 +96,7 @@ export const CONFIG_KEYS = [
   "learnings",
   "summary-confirmation",
   "plan-approval",
+  "collaborators",
   ...GUARD_FENCE_CONFIG_KEYS,
 ] as const;
 export type ConfigKey = (typeof CONFIG_KEYS)[number];
@@ -223,6 +232,32 @@ function setCeremonyField(content: string, key: CeremonyKey, value: CeremonySett
 
 // Pure state transformation plus audit/output preparation. CLI setters and the
 // human-turn hook call this under the intent lock and commit audit before state.
+// The old value of the Guard Policy row the human-turn hook wrote for `value`
+// as this turn's message arrived: it applies a typed `--guard-policy` before
+// recording the turn, so the row sits just before the latest HUMAN_TURN. A
+// setter run for the same value then says what changed, not that it was
+// "already" so. A row after that turn is the agent's own earlier run.
+function guardPolicyTypedThisTurn(projectDir: string, value: string, intent?: string, space?: string): string | null {
+  let blocks: string[];
+  try {
+    blocks = readFileSync(auditFilePath(projectDir, intent, space), "utf-8").replace(/\r\n/g, "\n").split("\n---\n");
+  } catch {
+    return null;
+  }
+  let turns = 0;
+  for (let index = blocks.length - 1; index >= 0; index--) {
+    const event = auditBlockField(blocks[index], "Event");
+    if (event === "HUMAN_TURN" && ++turns === 2) return null;
+    if (event === "GUARD_POLICY_SET") {
+      return turns === 1 && auditBlockField(blocks[index], "New Value") === value &&
+          auditBlockField(blocks[index], "Source") === "you"
+        ? auditBlockField(blocks[index], "Old Value")
+        : null;
+    }
+  }
+  return null;
+}
+
 export function applyIntentSettings(
   projectDir: string,
   content: string,
@@ -311,8 +346,8 @@ export function applyIntentSettings(
     if (loweredFence !== undefined) {
       const section = cc.memoryStrict.heading.replace(/^## /, "");
       die(
-        `Guard Policy is set to strict in ${cc.memoryStrict.path} (section: ${section}), ` +
-          `so ${loweredFence.fence} cannot be turned off from chat. Edit that line to change it for everyone on this repo.`,
+        `Your team set Guard Policy to strict in ${cc.memoryStrict.path} (section: ${section}), ` +
+          `so ${loweredFence.fence} stays on for everyone on this repo. Changing that line there changes it.`,
       );
     }
   }
@@ -333,8 +368,40 @@ export function applyIntentSettings(
       }
     }
   }
+  // The person's Guard Policy word covers every check in its own direction:
+  // off clears this work's checks kept on, strict its checks turned off, and
+  // relaxed neither, so relaxed never turns a check back on or off. A check
+  // this command names keeps its own setting. A check they had kept on that
+  // the word turns off is a lowering too.
+  const wholePolicy = ccRequest?.source === "you" && changeControl !== null;
+  const namedFences = new Set(fenceRequests.map((request) => request.fence));
+  const withoutPerCheckEntries = (text: string): string => {
+    const off = parseGuardsOffLine(getField(text, GUARDS_OFF_FIELD));
+    const on = parseGuardsOnLine(getField(text, GUARDS_ON_FIELD));
+    const keepOff = changeControl === "strict" ? off.filter((fence) => namedFences.has(fence)) : off;
+    const keepOn = changeControl === "off" ? on.filter((fence) => namedFences.has(fence)) : on;
+    let updated = text;
+    if (keepOff.length !== off.length) updated = setGuardsOffLine(updated, keepOff);
+    if (keepOn.length !== on.length) updated = setGuardsOnLine(updated, keepOn);
+    return updated;
+  };
+  if (wholePolicy) {
+    const policyContent = setGuardPolicyLine(content, formatGuardPolicy(changeControl, ccRequest.source));
+    const cleared = withoutPerCheckEntries(policyContent);
+    if (cleared !== policyContent) {
+      const now = resolveFences(cc, content);
+      const after = resolveFences(resolveGuardPolicy(projectDir, cleared, { selection }), cleared);
+      for (const fence of SWITCHABLE_GUARD_FENCES) {
+        if (!namedFences.has(fence) && now[fence].value === "on" && after[fence].value === "off") {
+          lowering.push({ key: `guard.${fence}`, value: "off" });
+        }
+      }
+    }
+  }
+  // Only a value below the one in force lowers anything: off to relaxed raises
+  // the checks, and needs no one's word.
   if (ccRequest?.source === "you" && (changeControl === "relaxed" || changeControl === "off") &&
-    (cc.rawStateValue !== formatGuardPolicy(changeControl, ccRequest.source) || cc.conflict !== undefined)) {
+    !guardPolicyAtLeast(changeControl, cc.value)) {
     lowering.push({ key: "guard-policy", value: changeControl });
   }
   // Summary confirmation off removes the person's `Looks correct` checkpoint,
@@ -368,9 +435,25 @@ export function applyIntentSettings(
   if (lowering.length > 0 && process.env.AIDLC_UNATTENDED === "1") {
     die(guardSwitchRefusal(lowering[0], "config"));
   }
-  if (lowering.length > 0 && !typedByPerson && !fenceKeyBypassed(projectDir, sessionId)) {
-    die(guardSwitchRefusal(lowering[0], "config"));
+  // Lowering a fence is the person's call. Their typed switch carries it out,
+  // and so does this setter when a person has spoken since the last decision
+  // (the approval they gave in the same message leaves the rest of it standing):
+  // the conductor runs what they asked for, in their own words.
+  if (
+    lowering.length > 0 && !typedByPerson && !fenceKeyBypassed(projectDir, sessionId) &&
+    !personSpokeSinceGate(projectDir, { requests: true, outlivesApproval: true })
+  ) {
+    // A question about the switch ("skip plan approval?") asks for nothing.
+    die(guardSwitchRefusal(lowering[0], "config", personSpokeSinceGate(projectDir)));
   }
+  // The setter carries out what the person asked: their words go on the record.
+  const askedIn = lowering.length > 0 && !typedByPerson ? latestPersonTurn(projectDir)?.words ?? null : null;
+  // Asked for in the chat (not typed): each check it turns off is said in one
+  // line, in their words, with the way back, instead of the setter's own line.
+  const askedInChat = lowering.length > 0 && !typedByPerson &&
+    personSpokeSinceGate(projectDir, { requests: true, outlivesApproval: true });
+  const saidAsAsked = (key: string): boolean =>
+    askedInChat && key !== "plan-approval" && lowering.some((item) => item.key === key);
 
   const audit: AuditEntryInput[] = [];
   const lines: string[] = [];
@@ -423,8 +506,13 @@ export function applyIntentSettings(
   if (ccRequest !== undefined && changeControl !== null) {
     const previous = cc.rawStateValue;
     const line = formatGuardPolicy(changeControl, ccRequest.source);
+    const alreadyLine = (): string => {
+      const appliedFrom = guardPolicyTypedThisTurn(projectDir, changeControl, selection.intent, selection.space);
+      if (appliedFrom === null) return `Guard Policy is already ${line}`;
+      return appliedFrom === changeControl ? `Guard Policy is ${line}` : `Guard Policy changed: ${appliedFrom} to ${line}`;
+    };
     if (previous === line && cc.stateField === GUARD_POLICY_FIELD && getField(content, CHANGE_CONTROL_FIELD) === null) {
-      if (!scopeDefault("guard-policy")) lines.push(`Guard Policy is already ${line}`);
+      if (!scopeDefault("guard-policy")) lines.push(alreadyLine());
     } else {
       // Every write keeps only the Guard Policy line, even when its stored text is unchanged.
       // Resolving a conflict records one GUARD_POLICY_SET from the prior effective policy, not a name-only rename.
@@ -436,16 +524,47 @@ export function applyIntentSettings(
         if (oldValue !== changeControl || cc.conflict !== undefined || !scopeDefault("guard-policy")) {
           audit.push({
             eventType: "GUARD_POLICY_SET",
-            fields: { "Old Value": oldValue, "New Value": changeControl, Source: ccRequest.source },
+            fields: {
+              "Old Value": oldValue, "New Value": changeControl, Source: ccRequest.source,
+              ...(askedIn && lowering.some((item) => item.key === "guard-policy") ? { "Person Reply": askedIn } : {}),
+            },
           });
         }
         const oldDisplay = cc.conflict === undefined && cc.intent === null && cc.rawStateValue !== null
           ? cc.rawStateValue : formatGuardPolicy(cc.value, cc.source);
-        if (oldValue !== changeControl || !scopeDefault("guard-policy")) {
+        if ((oldValue !== changeControl || !scopeDefault("guard-policy")) && !saidAsAsked("guard-policy")) {
           lines.push(`Guard Policy changed: ${oldDisplay} to ${line}`);
         }
       } else if (!scopeDefault("guard-policy")) {
-        lines.push(`Guard Policy is already ${line}`);
+        lines.push(alreadyLine());
+      }
+    }
+  }
+  if (wholePolicy) {
+    const cleared = withoutPerCheckEntries(content);
+    if (cleared !== content) {
+      const policy = resolveGuardPolicy(projectDir, content, { selection });
+      const before = resolveFences(policy, content);
+      const after = resolveFences(policy, cleared);
+      content = cleared;
+      for (const fence of SWITCHABLE_GUARD_FENCES) {
+        if (before[fence].value === after[fence].value) continue;
+        const fenceFields = {
+          Guard: fence, Scope: getField(content, "Scope") ?? "", Source: ccRequest.source,
+          ...(askedIn && after[fence].value === "off" ? { "Person Reply": askedIn } : {}),
+        };
+        audit.push(
+          after[fence].value === "off"
+            ? { eventType: "GUARD_DISABLED", fields: fenceFields }
+            : { eventType: "GUARD_RESTORED", fields: fenceFields },
+        );
+        if (!saidAsAsked(`guard.${fence}`)) {
+          lines.push(
+            after[fence].value === "off"
+              ? `The ${checkLabel(fence)} is off for this piece of work (logged; back on for the next one)`
+              : `The ${checkLabel(fence)} is back on for this piece of work`,
+          );
+        }
       }
     }
   }
@@ -475,17 +594,22 @@ export function applyIntentSettings(
       // Each event named literally at its own call, not through a ternary on
       // eventType: the emitter drift guard reads these call sites as text, and a
       // computed event name is invisible to it.
-      const fenceFields = { Guard: request.fence, Scope: scopeName, Source: request.source };
+      const fenceFields = {
+        Guard: request.fence, Scope: scopeName, Source: request.source,
+        ...(askedIn && after.value === "off" ? { "Person Reply": askedIn } : {}),
+      };
       audit.push(
         after.value === "off"
           ? { eventType: "GUARD_DISABLED", fields: fenceFields }
           : { eventType: "GUARD_RESTORED", fields: fenceFields },
       );
-      lines.push(
-        after.value === "off"
-          ? `Fence ${request.fence} is off for this piece of work (logged; back on for the next one)`
-          : `Fence ${request.fence} is back on for this piece of work`,
-      );
+      if (!saidAsAsked(`guard.${request.fence}`)) {
+        lines.push(
+          after.value === "off"
+            ? `Fence ${request.fence} is off for this piece of work (logged; back on for the next one)`
+            : `Fence ${request.fence} is back on for this piece of work`,
+        );
+      }
     }
   }
   for (const key of CEREMONY_KEYS) {
@@ -509,17 +633,46 @@ export function applyIntentSettings(
     const oldValue = resolution.intent?.value ?? resolution.rawStateValue ?? resolution.scopeDefault;
     // Same as Guard Policy: a scope's default that keeps the value writes no row.
     if (oldValue === value && scopeDefault(flag)) continue;
-    audit.push({ eventType: "CEREMONY_SET", fields: { Key: key, Old: oldValue, New: value, Source: source } });
+    audit.push({
+      eventType: "CEREMONY_SET",
+      fields: {
+        Key: key, Old: oldValue, New: value, Source: source,
+        ...(askedIn && source === "command" && value === "off" ? { "Person Reply": askedIn } : {}),
+      },
+    });
     const oldDisplay = resolution.intent === null && resolution.rawStateValue !== null
       ? resolution.rawStateValue : formatCeremony(resolution.value, resolution.source);
-    lines.push(`${field} changed: ${oldDisplay} to ${line}`);
+    if (!saidAsAsked(flag)) lines.push(`${field} changed: ${oldDisplay} to ${line}`);
     if (key === "plan_approval") {
       lines.push(value === "off"
         ? "Each code plan is now built without asking. Say 'review the plan first' to look at one before it is built."
         : "Each code plan is now shown for approval before it is built.");
     }
   }
+  for (const item of lowering) {
+    if (saidAsAsked(item.key)) lines.push(askedSwitchLine(item, askedIn, cc.value));
+  }
   return { content, audit, lines };
+}
+
+// A check as the person knows it: "review freeze check", "reviewer read scope check".
+function checkLabel(fence: string): string {
+  return `${fence.replace("reviewer-scope", "reviewer read scope").replaceAll("-", " ")} check`;
+}
+
+// What the person hears when the agent turned one of their checks off because
+// they asked in the chat: what is off, for this piece of work, in their words,
+// and the way back.
+function askedSwitchLine(item: GuardSwitch, words: string | null, previousPolicy: string): string {
+  const entry = entrySkillInvocation();
+  const why = words ? `because you said: "${quoted(words)}"` : "as you asked in the chat";
+  if (item.key === "guard-policy") {
+    return `Guard Policy is ${item.value} for this piece of work, ${why}. ` +
+      `Say "put Guard Policy back to ${previousPolicy}" to restore it (${entry} --guard-policy ${previousPolicy}).`;
+  }
+  const label = item.key === "summary-confirmation" ? "summary confirmation" : checkLabel(item.key.slice("guard.".length));
+  return `The ${label} is off for this piece of work, ${why}. ` +
+    `Say "turn it back on" to restore it (${entry} config set ${item.key} on).`;
 }
 
 export interface TypedGuardSwitchOutcome {
@@ -539,18 +692,46 @@ export function applyTypedGuardSwitchPrompt(
   projectDir: string,
   sessionId: string,
   prompt: string,
+  options: { wordsAnswer?: boolean } = {},
 ): TypedGuardSwitchOutcome | null {
-  const parsed = parseTypedGuardSwitchRequest(prompt);
+  const parsed = parseTypedGuardSwitchRequest(prompt, options);
   if (process.env.AIDLC_UNATTENDED === "1") return null;
   // Plan approval back on, typed before the work exists, withdraws an earlier off.
   if (parsed.settings.some((setting) => setting.key === "plan-approval" && setting.value === "on")) {
     consumePlanApprovalCreationGrant(projectDir, sessionId);
   }
-  if (parsed.newWorkPlanApprovalOff === true && parsed.error === null) {
-    const outcome = grantPlanApprovalOffAtCreation(projectDir, sessionId, parsed.space);
-    if (parsed.switches.length === 0) return outcome;
+  // So does Guard Policy strict for an earlier relaxed or off: the latest word stands.
+  if (parsed.settings.some((setting) => setting.key === "guard-policy" && setting.value === "strict")) {
+    consumeGuardPolicyCreationGrant(projectDir, sessionId);
   }
-  if (parsed.switches.length === 0) return null;
+  const forNewWork: TypedGuardSwitchOutcome[] = [];
+  if (parsed.newWorkPlanApprovalOff === true && parsed.error === null) {
+    forNewWork.push(grantPlanApprovalOffAtCreation(projectDir, sessionId, parsed.space, true));
+  }
+  if (parsed.newWorkGuardPolicy !== undefined && parsed.error === null) {
+    forNewWork.push(grantGuardPolicyAtCreation(projectDir, sessionId, parsed.space, parsed.newWorkGuardPolicy, true));
+  }
+  // Sensors, learnings or summary confirmation typed with the new work, or
+  // before any work exists, are the person's: the work this chat creates next
+  // says they were set by them.
+  if (parsed.error === null) {
+    if (parsed.newWorkCeremonies !== undefined) {
+      recordCeremoniesAtCreation(projectDir, sessionId, parsed.newWorkCeremonies, true);
+    } else if (parsed.words === undefined) {
+      const typed = Object.fromEntries(parsed.settings
+        .filter((setting) => CREATION_CEREMONY_FLAGS.includes(setting.key) && (setting.value === "on" || setting.value === "off"))
+        .map((setting) => [setting.key, setting.value as "on" | "off"]));
+      if (Object.keys(typed).length > 0 && noWorkSelected(projectDir, sessionId, parsed)) {
+        recordCeremoniesAtCreation(projectDir, sessionId, typed, false);
+      }
+    }
+  }
+  if (forNewWork.length > 0 && parsed.switches.length === 0) {
+    return { applied: forNewWork.every((outcome) => outcome.applied), lines: forNewWork.flatMap((outcome) => outcome.lines) };
+  }
+  // A raise typed with the answer to the open code plan question is for this
+  // work too ("/aidlc --guard-policy strict Approve Plan").
+  if (parsed.switches.length === 0 && !(options.wordsAnswer === true && parsed.settings.length > 0)) return null;
   if (parsed.error !== null) return { applied: false, lines: [parsed.error] };
   if (parsed.scope !== null && !validScopes().has(parsed.scope)) {
     return { applied: false, lines: [`Unknown scope "${parsed.scope}".`] };
@@ -575,6 +756,10 @@ export function applyTypedGuardSwitchPrompt(
       // confirmation): the work this chat creates next starts with it off.
       if (guardSwitches.length === 0 && parsed.switches.some((wanted) => wanted.key === "plan-approval")) {
         return grantPlanApprovalOffAtCreation(projectDir, sessionId, space);
+      }
+      const policy = guardSwitches.find((wanted) => wanted.key === "guard-policy");
+      if (policy !== undefined && guardSwitches.length === 1 && (policy.value === "relaxed" || policy.value === "off")) {
+        return grantGuardPolicyAtCreation(projectDir, sessionId, space, policy.value);
       }
       const wanted = guardSwitches[0];
       if (wanted === undefined) return null;
@@ -639,11 +824,11 @@ export function resolvePlanApprovalSetting(
   selection: { intent?: string; space?: string; sessionId?: string } = {},
 ): PlanApprovalSetting {
   const env = planApprovalEnv(projectDir, selection.sessionId ?? null);
-  const resolution = resolveCeremony("plan_approval", getField(stateContent ?? "", "Scope"), stateContent, env);
-  // The machine switch is read from the environment itself, never from saved text.
-  const machineOff = `env ${CEREMONY_ENV.plan_approval}`;
-  if (resolution.source === machineOff && resolveProjectFlag(CEREMONY_ENV.plan_approval, env) === "1") {
-    return { value: "off", source: machineOff };
+  const resolution = resolveCeremony("plan_approval", getField(stateContent ?? "", "Scope"), stateContent, env, projectDir);
+  // The machine switch is read from the environment or the settings files
+  // themselves, never from saved state text.
+  if (isKillSwitchSource(resolution.source) && resolveProjectFlag(CEREMONY_ENV.plan_approval, env, projectDir) === "1") {
+    return { value: "off", source: resolution.source };
   }
   // The source is repeated to the person word for word, so only the forms the
   // engine writes pass; anything else a hand-edited state line carries does not.
@@ -667,8 +852,9 @@ export function resolvePlanApprovalSetting(
 
 /**
  * The environment plan approval resolves against. The machine switch counts
- * when the harness launched with it or it is recorded in settings; a command
- * that sets it for itself is read as unset.
+ * when the harness launched with it; a command that sets it for itself is read
+ * as unset. A switch recorded in settings is read from its file by the
+ * resolver, which names that file.
  */
 export function planApprovalEnv(projectDir: string, sessionId: string | null): NodeJS.ProcessEnv {
   let session = sessionId;
@@ -683,8 +869,6 @@ export function planApprovalEnv(projectDir: string, sessionId: string | null): N
   const env: NodeJS.ProcessEnv = { ...process.env };
   // A value other than 1 can only keep the stop, so it stands as given.
   if (env[name] === "1" && !planApprovalMachineSwitchTrusted(projectDir, session)) delete env[name];
-  // Recorded with `config flags --bypass` for this project.
-  if (env[name] === undefined && resolveProjectFlag(name, {}, projectDir) === "1") env[name] = "1";
   return env;
 }
 
@@ -696,8 +880,8 @@ export function formatPlanApprovalSetting(setting: PlanApprovalSetting): string 
 }
 
 export function planApprovalMemoryLockRefusal(path: string): string {
-  return `Guard Policy is set to strict in ${path}, so plan approval stays on for everyone on this repo and ` +
-    "cannot be turned off from chat. Edit that file to change it.";
+  return `Your team set Guard Policy to strict in ${path}, so plan approval stays on for everyone on this ` +
+    "repo. Changing that line there changes it.";
 }
 
 // --- Plan approval off, asked before the piece of work exists ----------------
@@ -717,6 +901,12 @@ interface PlanApprovalCreationGrant {
    */
   request: string | null;
   recordedAt: string;
+  /**
+   * Typed together with the description of the new work: the words answer the
+   * question that description becomes, whichever kind it is (the routing
+   * question beside open work included), never an older one.
+   */
+  withDescription?: true;
 }
 
 // A reply belongs to the question asked in this sitting, not to one left open for days.
@@ -731,6 +921,7 @@ function grantPlanApprovalOffAtCreation(
   projectDir: string,
   sessionId: string,
   space: string | null,
+  withDescription = false,
 ): TypedGuardSwitchOutcome {
   try {
     const memoryStrict = memoryGuardPolicyDeclarations(projectDir, { ...(space === null ? {} : { space }), sessionId })
@@ -738,7 +929,7 @@ function grantPlanApprovalOffAtCreation(
     if (memoryStrict !== undefined) {
       return { applied: false, lines: [planApprovalMemoryLockRefusal(memoryStrict.path)] };
     }
-    recordPlanApprovalCreationGrant(projectDir, sessionId);
+    recordPlanApprovalCreationGrant(projectDir, sessionId, withDescription);
   } catch (error) {
     return { applied: false, lines: [errorMessage(error)] };
   }
@@ -751,12 +942,13 @@ function grantPlanApprovalOffAtCreation(
   };
 }
 
-export function recordPlanApprovalCreationGrant(projectDir: string, sessionId: string): void {
+export function recordPlanApprovalCreationGrant(projectDir: string, sessionId: string, withDescription = false): void {
   const grant: PlanApprovalCreationGrant = {
     version: 1,
     session: sessionId,
-    request: latestFrontQuestionId(projectDir, OPEN_QUESTION_WINDOW_MS),
+    request: withDescription ? null : latestFrontQuestionId(projectDir, OPEN_QUESTION_WINDOW_MS),
     recordedAt: isoTimestamp(),
+    ...(withDescription ? { withDescription: true as const } : {}),
   };
   writePlanApprovalRuntimeRecord(projectDir, planApprovalCreationGrantPath(projectDir, sessionId), `${JSON.stringify(grant)}\n`);
 }
@@ -778,7 +970,7 @@ export function planApprovalCreationGranted(
     );
     if (grant?.version !== 1 || grant.session !== sessionId || request === null) return false;
     const answered = grant.request ??
-      firstFrontQuestionSince(projectDir, grant.recordedAt, OPEN_QUESTION_WINDOW_MS);
+      firstFrontQuestionSince(projectDir, grant.recordedAt, OPEN_QUESTION_WINDOW_MS, { routing: grant.withDescription === true });
     // Words said at a report-only or task-less composition's gate answer that
     // composition, so they reach the request its approval described, and no other.
     return answered !== null &&
@@ -812,4 +1004,177 @@ export function planApprovalOffForOpenRequest(projectDir: string, sessionId: str
 export function consumePlanApprovalCreationGrant(projectDir: string, sessionId: string | null): void {
   if (!sessionId) return;
   removePlanApprovalRuntimeRecord(planApprovalCreationGrantPath(projectDir, sessionId));
+}
+
+// Guard Policy relaxed or off, typed by the person with the new work or before
+// any work exists, is theirs for the piece of work this chat creates next, the
+// same way as plan approval off: their words, kept by the human-turn hook, and
+// bound to the request they answered.
+interface GuardPolicyCreationGrant extends PlanApprovalCreationGrant {
+  value: "relaxed" | "off";
+}
+
+function guardPolicyCreationGrantPath(projectDir: string, sessionId: string): string {
+  const segment = sessionId.replace(/[^A-Za-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 96);
+  return planApprovalRuntimeFile(projectDir, `guard-policy-at-creation-${segment}.json`);
+}
+
+function grantGuardPolicyAtCreation(
+  projectDir: string,
+  sessionId: string,
+  space: string | null,
+  value: "relaxed" | "off",
+  withDescription = false,
+): TypedGuardSwitchOutcome {
+  try {
+    const memoryStrict = memoryGuardPolicyDeclarations(projectDir, { ...(space === null ? {} : { space }), sessionId })
+      .find((declaration) => declaration.value === "strict");
+    if (memoryStrict !== undefined) return { applied: false, lines: [guardPolicyMemoryStrictRefusal(memoryStrict)] };
+    const grant: GuardPolicyCreationGrant = {
+      version: 1,
+      session: sessionId,
+      value,
+      request: withDescription ? null : latestFrontQuestionId(projectDir, OPEN_QUESTION_WINDOW_MS),
+      recordedAt: isoTimestamp(),
+      ...(withDescription ? { withDescription: true as const } : {}),
+    };
+    writePlanApprovalRuntimeRecord(projectDir, guardPolicyCreationGrantPath(projectDir, sessionId), `${JSON.stringify(grant)}\n`);
+  } catch (error) {
+    return { applied: false, lines: [errorMessage(error)] };
+  }
+  return {
+    applied: true,
+    lines: [withDescription
+      ? `Guard Policy ${value} for the work you are asking for (set by you).`
+      : `Guard Policy ${value} for the piece of work you start now (set by you).`],
+  };
+}
+
+/** The Guard Policy the person asked for in this chat before this work existed, for the request it answered. */
+export function guardPolicyCreationGranted(
+  projectDir: string,
+  sessionId: string | null,
+  request: string | null = null,
+): "relaxed" | "off" | null {
+  if (!sessionId || request === null || process.env.AIDLC_UNATTENDED === "1") return null;
+  try {
+    const grant = readPlanApprovalRuntimeRecord<GuardPolicyCreationGrant>(
+      guardPolicyCreationGrantPath(projectDir, sessionId),
+      "Guard Policy creation grant",
+    );
+    if (grant?.version !== 1 || grant.session !== sessionId || (grant.value !== "relaxed" && grant.value !== "off")) {
+      return null;
+    }
+    const answered = grant.request ??
+      firstFrontQuestionSince(projectDir, grant.recordedAt, OPEN_QUESTION_WINDOW_MS, { routing: grant.withDescription === true });
+    return answered !== null && (answered === request || readQuestion(projectDir, request)?.composedFrom === answered)
+      ? grant.value : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Spent by the next piece of work this chat creates, as plan approval off is. */
+export function consumeGuardPolicyCreationGrant(projectDir: string, sessionId: string | null): void {
+  if (!sessionId) return;
+  removePlanApprovalRuntimeRecord(guardPolicyCreationGrantPath(projectDir, sessionId));
+}
+
+// Sensors, learnings and summary confirmation the person typed with the new
+// work, or before any work existed: their words, kept by the human-turn hook,
+// so the work this chat creates for that request says they set them.
+const CREATION_CEREMONY_FLAGS = ["sensors", "learnings", "summary-confirmation"];
+
+interface CeremoniesCreationGrant extends PlanApprovalCreationGrant {
+  settings: Record<string, "on" | "off">;
+}
+
+function ceremoniesCreationGrantPath(projectDir: string, sessionId: string): string {
+  const segment = sessionId.replace(/[^A-Za-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 96);
+  return planApprovalRuntimeFile(projectDir, `ceremonies-at-creation-${segment}.json`);
+}
+
+function readCeremoniesCreationGrant(projectDir: string, sessionId: string): CeremoniesCreationGrant | null {
+  const grant = readPlanApprovalRuntimeRecord<CeremoniesCreationGrant>(
+    ceremoniesCreationGrantPath(projectDir, sessionId),
+    "ceremony creation grant",
+  );
+  return grant?.version === 1 && grant.session === sessionId && typeof grant.settings === "object" && grant.settings !== null
+    ? grant : null;
+}
+
+// No piece of work is selected for this chat, or it has no state yet.
+function noWorkSelected(
+  projectDir: string,
+  sessionId: string,
+  parsed: { space: string | null; intent: string | null },
+): boolean {
+  try {
+    const selection = resolveWorkflowSelection(projectDir, {
+      sessionId,
+      ...(parsed.space === null ? {} : { space: parsed.space }),
+      ...(parsed.intent === null ? {} : { intent: parsed.intent }),
+    });
+    return selection.intent === null || !existsSync(stateFilePath(projectDir, selection.intent, selection.space));
+  } catch {
+    return false;
+  }
+}
+
+function recordCeremoniesAtCreation(
+  projectDir: string,
+  sessionId: string,
+  settings: Record<string, "on" | "off">,
+  withDescription: boolean,
+): void {
+  try {
+    // A later word on one setting replaces the earlier one; the others stay.
+    let earlier: Record<string, "on" | "off"> = {};
+    try {
+      earlier = readCeremoniesCreationGrant(projectDir, sessionId)?.settings ?? {};
+    } catch {
+      // An unreadable earlier record is replaced by this one.
+    }
+    const grant: CeremoniesCreationGrant = {
+      version: 1,
+      session: sessionId,
+      settings: { ...earlier, ...settings },
+      request: withDescription ? null : latestFrontQuestionId(projectDir, OPEN_QUESTION_WINDOW_MS),
+      recordedAt: isoTimestamp(),
+      ...(withDescription ? { withDescription: true as const } : {}),
+    };
+    writePlanApprovalRuntimeRecord(projectDir, ceremoniesCreationGrantPath(projectDir, sessionId), `${JSON.stringify(grant)}\n`);
+  } catch {
+    // The label is the only thing at stake: a record that cannot be written leaves "set by a command".
+  }
+}
+
+/** The ceremonies the person typed in this chat for the request it answered, by ceremony key. */
+export function ceremoniesCreationGranted(
+  projectDir: string,
+  sessionId: string | null,
+  request: string | null = null,
+): Partial<Record<CeremonyKey, "on" | "off">> {
+  if (!sessionId || request === null || process.env.AIDLC_UNATTENDED === "1") return {};
+  try {
+    const grant = readCeremoniesCreationGrant(projectDir, sessionId);
+    if (grant === null) return {};
+    const answered = grant.request ??
+      firstFrontQuestionSince(projectDir, grant.recordedAt, OPEN_QUESTION_WINDOW_MS, { routing: grant.withDescription === true });
+    if (answered === null || (answered !== request && readQuestion(projectDir, request)?.composedFrom !== answered)) return {};
+    const out: Partial<Record<CeremonyKey, "on" | "off">> = {};
+    for (const [flag, value] of Object.entries(grant.settings)) {
+      const key = CEREMONY_KEYS.find((candidate) => CEREMONY_FLAGS[candidate] === `--${flag}`);
+      if (key !== undefined && key !== "plan_approval" && (value === "on" || value === "off")) out[key] = value;
+    }
+    return out;
+  } catch {
+    return {};
+  }
+}
+
+/** Spent by the next piece of work this chat creates, as Guard Policy is. */
+export function consumeCeremoniesCreationGrant(projectDir: string, sessionId: string | null): void {
+  if (!sessionId) return;
+  removePlanApprovalRuntimeRecord(ceremoniesCreationGrantPath(projectDir, sessionId));
 }

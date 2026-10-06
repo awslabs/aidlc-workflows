@@ -71,6 +71,7 @@ const ORCHESTRATE = join(AIDLC_SRC, "tools", "aidlc-orchestrate.ts");
 const POSTURE = join(AIDLC_SRC, "tools", "aidlc-testing-posture.ts");
 const DISPATCHER = join(AIDLC_SRC, "tools", "aidlc.ts");
 const GUARD = join(AIDLC_SRC, "hooks", "aidlc-plan-approval-guard.ts");
+const LOG = join(AIDLC_SRC, "tools", "aidlc-log.ts");
 const SESSION = "01995000-7a11-7000-8000-00000000c0de";
 const UNIT = "unit-2";
 const STEPS = Array.from({ length: 9 }, (_, index) => `Step ${index + 1}: build part ${index + 1} in \`src/part${index + 1}.ts\``);
@@ -201,6 +202,26 @@ function reply(proj: string, prompt: string): string {
   return result.stdout ?? "";
 }
 
+// What the agent runs after reading the person's reply: the choice they made.
+function answer(proj: string, details: string): ReturnType<typeof spawnSync> {
+  return spawnSync(BUN, [
+    LOG, "answer", "--stage", "code-generation", "--checkpoint", "plan-approval", "--details", details,
+    "--project-dir", proj,
+  ], {
+    cwd: proj,
+    env: env(proj),
+    encoding: "utf-8",
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+  });
+}
+
+/** The person approves in their own words; the agent records that choice. */
+function approve(proj: string): void {
+  reply(proj, "approve");
+  const recorded = answer(proj, "Approve Plan");
+  expect(recorded.status, `${recorded.stdout}${recorded.stderr}`).toBe(0);
+}
+
 function posture(proj: string, args: string[]): ReturnType<typeof spawnSync> {
   return spawnSync(BUN, [POSTURE, ...args, "--project-dir", proj], {
     cwd: proj,
@@ -240,7 +261,7 @@ function approvedBuild(proj: string, unit: string | null = UNIT): { build: Emitt
   const ask = next(proj);
   expect(ask.kind, JSON.stringify(ask)).toBe("ask");
   expect(ask.ask_type).toBe("plan-approval");
-  expect(reply(proj, "approve")).toContain("Approve Plan");
+  approve(proj);
   const build = next(proj);
   expect(build.kind).toBe("run-stage");
   expect(build.unit).toBe(unit ?? undefined);
@@ -274,7 +295,7 @@ describe("an interrupted build picks up at the first unticked step", () => {
     expect(resumed).toContain("## Progress before the interruption");
     for (const number of [1, 2, 3, 4]) expect(resumed).toContain(`\n${number}. ${STEPS[number - 1]}\n`);
     expect(resumed).not.toContain(`\n5. ${STEPS[4]}\n`);
-    expect(resumed).not.toContain("Redo step");
+    expect(resumed).not.toContain("not in the project");
     expect(resumed).toContain(`\nContinue at step 5 of 9: "${STEPS[4]}".`);
     expect(resumed).toContain("check that the files it names exist; redo any ticked step whose files are missing");
     // The approved plan the worker executes is the same as before, every
@@ -299,17 +320,19 @@ describe("an interrupted build picks up at the first unticked step", () => {
     expect(again.narration).toBe(`Picking up ${UNIT}'s code at step 5 of 9 (1-4 done).`);
   });
 
-  test("a ticked step whose files are missing is redone, and the person hears which", () => {
+  test("a ticked step whose file is not in the project: the worker is told the fact, the person hears only where it picks up", () => {
     const proj = project();
     interrupted(proj, 1, 2, 3, 4);
     rmSync(join(proj, "src", "part3.ts"));
     const resumed = brief(proj);
     expect(resumed).toContain(`\n3. ${STEPS[2]}\n`);
-    expect(resumed).toContain("\nRedo step 3: `src/part3.ts` is missing.\n");
+    expect(resumed).toContain(
+      "\nStep 3 names `src/part3.ts`, which is not in the project: redo step 3 first if it should have made that file.\n",
+    );
     expect(resumed).toContain(`\nThen continue at step 5 of 9: "${STEPS[4]}".`);
-    expect(next(proj).narration).toBe(`Picking up ${UNIT}'s code at step 5 of 9 (1-4 done; redoing 3, its files were missing).`);
+    expect(next(proj).narration).toBe(`Picking up ${UNIT}'s code at step 5 of 9 (1-4 done).`);
     rmSync(join(proj, "src", "part4.ts"));
-    expect(next(proj).narration).toBe(`Picking up ${UNIT}'s code at step 5 of 9 (1-4 done; redoing 3-4, their files were missing).`);
+    expect(next(proj).narration).toBe(`Picking up ${UNIT}'s code at step 5 of 9 (1-4 done).`);
   });
 
   test("ticks out of order: the first unticked step is where it continues", () => {
@@ -324,9 +347,11 @@ describe("an interrupted build picks up at the first unticked step", () => {
     interrupted(proj, 1, 2, 4);
     rmSync(join(proj, "src", "part4.ts"));
     const resumed = brief(proj);
-    expect(resumed).not.toContain("Redo step 4:");
+    expect(resumed).not.toContain("redo step 4 first");
     expect(resumed).toContain(`\nContinue at step 3 of 9: "${STEPS[2]}".`);
-    expect(resumed).toContain("\nStep 4 is ticked, but `src/part4.ts` is missing: redo it when you reach it.\n");
+    expect(resumed).toContain(
+      "\nStep 4 is ticked and names `src/part4.ts`, which is not in the project: when you reach it, redo it if it should have made that file.\n",
+    );
     expect(resumed.indexOf("Continue at step 3")).toBeLessThan(resumed.indexOf("Step 4 is ticked"));
   });
 
@@ -339,8 +364,10 @@ describe("an interrupted build picks up at the first unticked step", () => {
     expect(resumed).not.toContain("ontinue at step");
     expect(next(proj).narration).toBe(`Picking up ${UNIT}'s code: all 9 steps are done, checking their files.`);
     rmSync(join(proj, "src", "part9.ts"));
-    expect(brief(proj)).toContain("\nRedo step 9: `src/part9.ts` is missing.\n");
-    expect(next(proj).narration).toBe(`Picking up ${UNIT}'s code: all 9 steps are done; redoing 9, its files were missing.`);
+    expect(brief(proj)).toContain(
+      "\nStep 9 names `src/part9.ts`, which is not in the project: redo step 9 first if it should have made that file.\n",
+    );
+    expect(next(proj).narration).toBe(`Picking up ${UNIT}'s code: all 9 steps are done, checking their files.`);
   });
 
   test("a resumed build keeps its ticks when it starts again", () => {
@@ -438,7 +465,7 @@ describe("a fresh start for the steps", () => {
     writeFileSync(planPath(proj), readFileSync(planPath(proj), "utf-8")
       .replace("- [ ] Step 9:", "- [ ] Step 10: log every part\n- [ ] Step 9:"), "utf-8");
     expect(next(proj).ask_type).toBe("plan-approval");
-    reply(proj, "approve");
+    approve(proj);
     const build = next(proj);
     expect(build.plan_approval).toEqual({ status: "approved" });
     expect(build.narration ?? "").not.toContain(PICK_UP);
@@ -451,7 +478,7 @@ describe("a fresh start for the steps", () => {
     interrupted(proj, 1, 2, 3, 4);
     appendAuditEntry("STAGE_JUMPED", { Stage: "code-generation", Direction: "redo" }, proj);
     expect(next(proj).ask_type).toBe("plan-approval");
-    reply(proj, "approve");
+    approve(proj);
     const build = next(proj);
     expect(build.plan_approval).toEqual({ status: "approved" });
     expect(build.narration ?? "").not.toContain(PICK_UP);
@@ -461,9 +488,13 @@ describe("a fresh start for the steps", () => {
   test("the person re-approves the plan: its build starts fresh", () => {
     const proj = project();
     interrupted(proj, 1, 2, 3, 4);
-    expect(reply(proj, "review the plan first")).toContain("asked to review the plan");
+    // The agent reads the request and records it: the plan is asked about again.
+    reply(proj, "review the plan first");
+    const review = answer(proj, "Review the plan");
+    expect(review.status, `${review.stdout}${review.stderr}`).toBe(0);
+    expect(String(review.stdout)).toContain("review the plan");
     expect(next(proj).ask_type).toBe("plan-approval");
-    reply(proj, "approve");
+    approve(proj);
     const build = next(proj);
     expect(build.plan_approval).toEqual({ status: "approved" });
     expect(build.narration ?? "").not.toContain(PICK_UP);
@@ -529,7 +560,9 @@ describe("a swarm batch keeps its own continuation rule", () => {
     expect(ask.kind).toBe("ask");
     writeActiveDirectiveMarker(pd, { kind: "ask", stage: "code-generation", ask_type: "plan-approval", units: group, state_sha256: state() });
     publishPlanApprovalAsk(pd, ask as Parameters<typeof publishPlanApprovalAsk>[1]);
-    expect(reply(pd, "approve all")).toContain("Approve Plan");
+    // "Approve all" is the question's own choice: the hook records it as typed.
+    reply(pd, "approve all");
+    for (const unit of group) expect(evaluateCodeGenerationApproval(pd, { unit }).ok).toBe(true);
     writeActiveDirectiveMarker(pd, { ...swarm, state_sha256: state() });
     const first = brief(pd, "alpha");
     tick(pd, "alpha", 1);
@@ -639,5 +672,177 @@ describe("the plan's steps", () => {
         paths: [],
       },
     ]);
+  });
+});
+
+/** Plan, approve and start a build of a plan with these steps (instead of the nine parts). */
+function startedBuildOf(proj: string, steps: string[], plan = planText(proj, steps)): void {
+  mkdirSync(codeGenerationRecordDir(proj, UNIT), { recursive: true });
+  writeFileSync(planPath(proj), plan, "utf-8");
+  writeFileSync(
+    join(codeGenerationRecordDir(proj, UNIT), "unit-test-instructions.md"),
+    "# Unit Test Instructions\n\nRun `bun test src/parts.test.ts`.\n",
+    "utf-8",
+  );
+  expect(next(proj).ask_type).toBe("plan-approval");
+  approve(proj);
+  expect(next(proj).plan_approval).toEqual({ status: "approved" });
+  dispatch(proj, brief(proj));
+}
+
+function tickOnly(proj: string, ...numbers: number[]): void {
+  let plan = readFileSync(planPath(proj), "utf-8");
+  for (const number of numbers) plan = plan.replace(`- [ ] Step ${number}: `, `- [x] Step ${number}: `);
+  writeFileSync(planPath(proj), plan, "utf-8");
+}
+
+// The pick-up reports facts the engine can check (a step's box, a file in the
+// project, a file written since the build started), never a judgement about
+// the step: whether a named file that is not there means a redo is the
+// worker's call, and the person hears only what is certain.
+describe("the pick-up says only what is certain", () => {
+  test("a bare file name counts as present when a file of that name is anywhere in the project", () => {
+    const proj = project();
+    mkdirSync(join(proj, "web", "src"), { recursive: true });
+    writeFileSync(join(proj, "web", "src", "filter.ts"), "export const filter = 0;\n", "utf-8");
+    startedBuildOf(proj, [
+      "Step 1: fix the filter in `filter.ts`",
+      "Step 2: add the export in `exporter.ts`",
+      "Step 3: wire both up",
+    ]);
+    writeFileSync(join(proj, "web", "src", "filter.ts"), "export const filter = 1;\n", "utf-8");
+    tickOnly(proj, 1);
+    expect(brief(proj)).not.toContain("not in the project");
+    expect(next(proj).narration).toBe(`Picking up ${UNIT}'s code at step 2 of 3 (1 done).`);
+    // A bare name with no such file anywhere is reported as a fact.
+    tickOnly(proj, 2);
+    expect(brief(proj)).toContain(
+      "\nStep 2 names `exporter.ts`, which is not in the project: redo step 2 first if it should have made that file.\n",
+    );
+    expect(next(proj).narration).toBe(`Picking up ${UNIT}'s code at step 3 of 3 (1-2 done).`);
+  });
+
+  test("a step that says not to add a file: the worker reads it, and nothing tells it to redo the step", () => {
+    const proj = project();
+    const forbids = "Step 1: No new runner, config, `tsconfig.json`, or dependency is added (team Code Style Q4, project Forbidden)";
+    startedBuildOf(proj, [forbids, "Step 2: build part 2 in `src/part2.ts`"]);
+    tickOnly(proj, 1);
+    const resumed = brief(proj);
+    expect(resumed).toContain(
+      "\nStep 1 names `tsconfig.json`, which is not in the project: redo step 1 first if it should have made that file.\n",
+    );
+    expect(resumed).not.toMatch(/Redo step|is missing/);
+    const line = next(proj).narration ?? "";
+    expect(line).toBe(`Picking up ${UNIT}'s code at step 2 of 2 (1 done).`);
+    expect(line).not.toContain("redoing");
+  });
+
+  test("nothing ticked but the files written: the build picks up after the last step whose files changed", () => {
+    const proj = project();
+    interrupted(proj);
+    for (const number of [1, 2, 3, 4]) {
+      writeFileSync(join(proj, "src", `part${number}.ts`), `export const part${number} = ${number};\n`, "utf-8");
+    }
+    const resumed = brief(proj);
+    expect(resumed).toContain(
+      "The plan file ticks none of its 9 steps, but the files steps 1-4 name changed since the build started:",
+    );
+    expect(resumed).toContain(`\n4. ${STEPS[3]}\n`);
+    expect(resumed).toContain("Check each of those steps and tick the box of each one that is done.");
+    expect(resumed).toContain(`\nContinue at step 5 of 9: "${STEPS[4]}".`);
+    expect(next(proj).narration).toBe(`Picking up ${UNIT}'s code at step 5 of 9 (1-4 wrote their files).`);
+    // Ticks, once there are any, are the record again.
+    tickOnly(proj, 1, 2);
+    expect(next(proj).narration).toBe(`Picking up ${UNIT}'s code at step 3 of 9 (1-2 done).`);
+  });
+
+  test("the line is about the build being issued, whatever directive is on disk", () => {
+    // A copied or moved project, or a step put out of date, leaves a directive
+    // on disk that names another stage; the pick-up line must not depend on it,
+    // or a repeated `next` and the `continue` of its rules disagree.
+    const proj = project();
+    interrupted(proj, 1, 2);
+    writeActiveDirectiveMarker(proj, {
+      kind: "error",
+      stage: "functional-design",
+      message: "stand-in",
+      state_sha256: stateDigest(readFileSync(seededStateFile(proj), "utf-8")),
+    });
+    expect(next(proj).narration).toBe(`Picking up ${UNIT}'s code at step 3 of 9 (1-2 done).`);
+  });
+});
+
+// One owner for the count. The agent once counted the plan's "Step N" headings
+// ("Generating code for 4 plan steps") while the pick-up counted its boxes
+// ("step 7 of 19"). The engine now says both lines from one reading of the plan.
+describe("the start line and the pick-up line count the plan the same way", () => {
+  const GROUPED = [
+    "## Step 1: Fix the filter",
+    "- [ ] Task 1: change `src/part1.ts`",
+    "- [ ] Task 2: change `src/part2.ts`",
+    "## Step 2: Tests",
+    "- [ ] Task 3: test `src/part3.ts`",
+    "- [ ] Task 4: test `src/part4.ts`",
+    "- [ ] Task 5: test `src/part5.ts`",
+  ].join("\n");
+
+  function tickTasks(proj: string, ...numbers: number[]): void {
+    let plan = readFileSync(planPath(proj), "utf-8");
+    for (const number of numbers) plan = plan.replace(`- [ ] Task ${number}: `, `- [x] Task ${number}: `);
+    writeFileSync(planPath(proj), plan, "utf-8");
+  }
+
+  function groupedPlan(proj: string): string {
+    return "# Code Generation Plan\n\n## Summary\n\n- Builds: five parts\n- Touches: src/\n- Tests: 3 unit tests\n\n" +
+      `${GROUPED}\n\n${renderTestingContract(resolveTestingPosture(proj))}`;
+  }
+
+  test("a plan with no Step headings: N plan steps at the start, step N of M at the pick-up", () => {
+    const proj = project();
+    const { build } = approvedBuild(proj);
+    expect(build.narration).toBe(
+      `Generating ${UNIT}'s code for 9 plan steps. This may take several minutes depending on project complexity. ` +
+        "I'll show a summary when complete.",
+    );
+    dispatch(proj, brief(proj));
+    tick(proj, UNIT, 1, 2);
+    expect(next(proj).narration).toBe(`Picking up ${UNIT}'s code at step 3 of 9 (1-2 done).`);
+  });
+
+  test("a plan grouped under Step headings: tasks within the steps, and the heading the next task is in", () => {
+    const proj = project();
+    startedBuildOf(proj, [], groupedPlan(proj));
+    tickTasks(proj, 1, 2);
+    expect(next(proj).narration).toBe(`Picking up ${UNIT}'s code at task 3 of 5, in Step 2 (tasks 1-2 done).`);
+    tickTasks(proj, 3, 4, 5);
+    expect(next(proj).narration).toBe(`Picking up ${UNIT}'s code: all 5 tasks are done, checking their files.`);
+  });
+
+  test("the start line of a grouped plan names its tasks and its steps", () => {
+    const proj = project();
+    mkdirSync(codeGenerationRecordDir(proj, UNIT), { recursive: true });
+    writeFileSync(planPath(proj), groupedPlan(proj), "utf-8");
+    writeFileSync(
+      join(codeGenerationRecordDir(proj, UNIT), "unit-test-instructions.md"),
+      "# Unit Test Instructions\n\nRun `bun test src/parts.test.ts`.\n",
+      "utf-8",
+    );
+    expect(next(proj).ask_type).toBe("plan-approval");
+    approve(proj);
+    expect(next(proj).narration).toBe(
+      `Generating ${UNIT}'s code for the 5 tasks in 2 plan steps. This may take several minutes depending on ` +
+        "project complexity. I'll show a summary when complete.",
+    );
+    const steps = planSteps(groupedPlan(proj));
+    expect(steps.map((step) => step.heading)).toEqual(["Step 1", "Step 1", "Step 2", "Step 2", "Step 2"]);
+  });
+
+  test("zero-Unit work starts with the same count", () => {
+    const proj = stageLevelProject();
+    const { build } = approvedBuild(proj, null);
+    expect(build.narration).toBe(
+      "Generating code for 9 plan steps. This may take several minutes depending on project complexity. " +
+        "I'll show a summary when complete.",
+    );
   });
 });

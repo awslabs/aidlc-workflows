@@ -1,5 +1,5 @@
-import { type Dirent, existsSync, readFileSync, readdirSync, statSync } from "node:fs";
-import { basename, dirname, isAbsolute, join, resolve } from "node:path";
+import { type Dirent, existsSync, lstatSync, readFileSync, readdirSync, statSync } from "node:fs";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const MODULE_TOOLS_DIR = dirname(fileURLToPath(import.meta.url));
@@ -386,9 +386,8 @@ export function packagedDistributionRoot(
 /**
  * The running release's own copy of a project harness's tools/data/harness.json,
  * or null. A native engine reads the project's file, which an older release may
- * have written and `aidlc config` will not refresh while a workflow runs; the
- * runtime it ships beside itself holds the same harness as this release writes
- * it. The harness is the one the project's file names. A Bun engine reads its
+ * have written and which stays so until the next `aidlc config`; the runtime it
+ * ships beside itself holds the same harness as this release writes it. The harness is the one the project's file names. A Bun engine reads its
  * own tree already and ships no such copy. Any failure reads as no copy.
  */
 export function releasedHarnessData(projectHarnessData: string): Record<string, unknown> | null {
@@ -485,6 +484,54 @@ export function directiveLimitFor(harnessData: string[], projectDir?: string): D
   return smallest;
 }
 
+// AI-DLC writes its own files only into real folders: a write through a link
+// lands wherever the link points, which can be outside this project. The
+// first folder (or file) on the way from the project to `target`, `target`
+// included, that is a link, relative to the project, or null. A target that is
+// not inside the project is not this check's to judge.
+export function linkOnTheWay(projectDir: string, target: string): string | null {
+  const rel = relative(projectDir, target);
+  if (rel === "" || rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute(rel)) return null;
+  let path = projectDir;
+  for (const part of rel.split(/[\\/]/).filter(Boolean)) {
+    path = join(path, part);
+    try {
+      if (lstatSync(path).isSymbolicLink()) return relative(projectDir, path);
+    } catch {
+      return null;
+    }
+  }
+  return null;
+}
+
+// The folder names AI-DLC itself gives its tree. The line shows a path only
+// as far as it is made of these, so no name a repository chose reaches the
+// reader: a link deeper down is named by the AI-DLC folder that holds it.
+const AIDLC_FOLDER_NAMES = new Set([
+  ".aidlc", ".agents", ".claude", ".codex", ".cursor", ".github", ".kiro", ".opencode",
+  "agents", "aidlc", "aidlc-common", "command", "data", "hooks", "knowledge", "plugin",
+  "rules", "scopes", "sensors", "settings", "skills", "spaces", "stages", "steering", "tools",
+]);
+
+export class LinkedFolderError extends Error {
+  constructor(readonly folder: string) {
+    const parts = folder.split(/[\\/]/);
+    const known = parts.findIndex((part) => !AIDLC_FOLDER_NAMES.has(part));
+    super(
+      known === -1
+        ? `${folder} is a link, so AI-DLC changed nothing there. ` +
+          "Replace the link with a real folder or file, then run this again."
+        : `${known === 0 ? "This project" : parts.slice(0, known).join(sep)} holds a link, so AI-DLC changed nothing there. ` +
+          "Replace the link with a real folder or file, then run this again.",
+    );
+  }
+}
+
+export function refuseLinkOnTheWay(projectDir: string, target: string): void {
+  const link = linkOnTheWay(projectDir, target);
+  if (link !== null) throw new LinkedFolderError(link);
+}
+
 export function resolveHarnessRoot(location: HarnessLocation = {}): string {
   const projectDir = location.projectDir ?? runtimeProjectDir();
   const harnessDir = location.harnessDir ?? runtimeHarnessDir(projectDir);
@@ -498,11 +545,11 @@ export function resolveHarnessRoot(location: HarnessLocation = {}): string {
   // Mutation is project-owned. Explicit/module/packaged roots are read
   // fallbacks only and must never become a write target.
   if (location.mutable) {
-    if (location.projectDir !== undefined || explicitRuntimeProjectDir()) {
-      return projectRoot;
-    }
-    const moduleRoot = moduleHarnessRoot(harnessDir);
-    return moduleRoot ?? projectRoot;
+    const root = location.projectDir !== undefined || explicitRuntimeProjectDir()
+      ? projectRoot
+      : moduleHarnessRoot(harnessDir) ?? projectRoot;
+    refuseLinkOnTheWay(projectDir, root);
+    return root;
   }
 
   const explicit = explicitHarnessRoot(harnessDir, distribution);
@@ -521,7 +568,9 @@ export function resolveHarnessPath(
   segments: readonly string[],
   location: HarnessLocation = {},
 ): string {
-  return join(resolveHarnessRoot(location), ...segments);
+  const path = join(resolveHarnessRoot(location), ...segments);
+  if (location.mutable) refuseLinkOnTheWay(location.projectDir ?? runtimeProjectDir(), path);
+  return path;
 }
 
 export function resolveSkillsPath(
@@ -541,13 +590,14 @@ export function resolveSkillsPath(
     harnessDir,
     distribution,
   }));
-  if (distribution === "copilot") {
-    return join(distributionRoot, ".github", "skills", ...segments);
-  }
-  if (distribution === "codex" && !existsSync(harnessSkills)) {
-    return join(distributionRoot, ".agents", "skills", ...segments);
-  }
-  return harnessSkills;
+  const shared = distribution === "copilot"
+    ? join(distributionRoot, ".github", "skills", ...segments)
+    : distribution === "codex" && !existsSync(harnessSkills)
+    ? join(distributionRoot, ".agents", "skills", ...segments)
+    : null;
+  if (shared === null) return harnessSkills;
+  if (location.mutable) refuseLinkOnTheWay(projectDir, shared);
+  return shared;
 }
 
 export function resolveDistributionPath(

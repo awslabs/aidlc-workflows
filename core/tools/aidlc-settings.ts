@@ -492,6 +492,27 @@ export function readSettingsTarget(
   return readCached(settingsPathForTarget(projectDir, target), layerForTarget(target));
 }
 
+/**
+ * The settings file nearest the project that records a bypass (this clone,
+ * then the project, then the machine): where it is turned back on. An
+ * unreadable file records nothing.
+ */
+export function bypassRecordedIn(
+  projectDir: string,
+  name: string,
+): { target: SettingsTarget; path: string } | null {
+  for (const target of ["local", "project", "global"] as const) {
+    try {
+      if ((readSettingsTarget(projectDir, target)?.flags?.bypasses ?? []).includes(name as RecordableProjectBypass)) {
+        return { target, path: settingsPathForTarget(projectDir, target) };
+      }
+    } catch {
+      // An unreadable file names no switch.
+    }
+  }
+  return null;
+}
+
 function mergeLeafValues(
   target: Record<string, unknown>,
   source: Record<string, unknown>,

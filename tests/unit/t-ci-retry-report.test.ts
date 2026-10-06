@@ -9,8 +9,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { type RetryRecord, retryReport } from "../../scripts/ci-retry-report.ts";
 import {
-  ISOLATED_RETRY_MAX_MS, ORDINARY_RETRY_MAX_MS, preserveFirstAttempt, RETRY_DEADLINE_RESERVE_MS, type RetryEvidence, retryEligible,
-  retryPassed,
+  CASE_TIMEOUT_RETRY_MAX_MS, ISOLATED_RETRY_MAX_MS, ORDINARY_RETRY_MAX_MS, onlyCaseTimeouts, preserveFirstAttempt,
+  RETRY_DEADLINE_RESERVE_MS, type RetryEvidence, retryEligible, retryPassed,
 } from "../lib/file-retry.ts";
 
 const roots: string[] = [];
@@ -45,6 +45,37 @@ describe("the retry rule", () => {
     expect(retryEligible({ ...failed, wallTimeMs: ORDINARY_RETRY_MAX_MS }, ORDINARY_RETRY_MAX_MS)).toBe(true);
     expect(retryEligible({ ...failed, wallTimeMs: ORDINARY_RETRY_MAX_MS + 1 }, ORDINARY_RETRY_MAX_MS)).toBe(false);
     expect(retryEligible({ ...failed, wallTimeMs: ORDINARY_RETRY_MAX_MS + 1 }, ISOLATED_RETRY_MAX_MS)).toBe(true);
+  });
+
+  // A slow Windows runner times out cases in files that run longer than ten
+  // minutes there (one t244 ran 33 minutes); such a file still earns its one retry.
+  test("a file whose only failures are case timeouts earns its retry up to 45 minutes; any other failure keeps the ten", () => {
+    expect(CASE_TIMEOUT_RETRY_MAX_MS).toBe(45 * 60_000);
+    const slow = { ...failed, wallTimeMs: 15 * 60_000 };
+    expect(retryEligible({ ...slow, caseTimeoutsOnly: true }, ORDINARY_RETRY_MAX_MS)).toBe(true);
+    expect(retryEligible({ ...slow, caseTimeoutsOnly: false }, ORDINARY_RETRY_MAX_MS)).toBe(false);
+    expect(retryEligible(slow, ORDINARY_RETRY_MAX_MS)).toBe(false);
+    expect(retryEligible({ ...failed, caseTimeoutsOnly: true, wallTimeMs: 33 * 60_000 }, ORDINARY_RETRY_MAX_MS)).toBe(true);
+    expect(retryEligible({ ...failed, caseTimeoutsOnly: true, wallTimeMs: CASE_TIMEOUT_RETRY_MAX_MS + 1 }, ORDINARY_RETRY_MAX_MS)).toBe(false);
+    // The five minutes left in the run still bound it.
+    expect(retryEligible({ ...failed, caseTimeoutsOnly: true, wallTimeMs: 33 * 60_000 }, ORDINARY_RETRY_MAX_MS, 5 * 60_000)).toBe(false);
+    // An isolated live file keeps its own 25 minutes.
+    expect(retryEligible({ ...failed, caseTimeoutsOnly: true, wallTimeMs: ISOLATED_RETRY_MAX_MS + 1 }, ISOLATED_RETRY_MAX_MS)).toBe(false);
+    // A file that ran past its own deadline is still never retried.
+    expect(retryEligible({ ...failed, caseTimeoutsOnly: true, timedOut: true }, ORDINARY_RETRY_MAX_MS)).toBe(false);
+  });
+
+  test("reads case timeouts off bun's JUnit report", () => {
+    const report = (cases: string) => `<?xml version="1.0"?><testsuites><testsuite name="x">${cases}</testsuite></testsuites>`;
+    const timeout = '<testcase name="a" time="30.0"><failure type="TimeoutError" message="test timed out" /></testcase>';
+    const assertion = '<testcase name="b" time="0.1"><failure type="AssertionError" message="expected 1 to be 2" /></testcase>';
+    const passed = '<testcase name="c" time="0.1" />';
+    expect(onlyCaseTimeouts(report(timeout + passed))).toBe(true);
+    expect(onlyCaseTimeouts(report(timeout + timeout))).toBe(true);
+    expect(onlyCaseTimeouts(report(timeout + assertion))).toBe(false);
+    expect(onlyCaseTimeouts(report(assertion))).toBe(false);
+    expect(onlyCaseTimeouts(report(passed))).toBe(false);
+    expect(onlyCaseTimeouts("")).toBe(false);
   });
 
   test("never starts a second attempt the run deadline would cut short", () => {

@@ -13,17 +13,18 @@
 //      enumerator returning [] would otherwise report "100% covered, 0 units".
 //   2. The GUARANTEE-PRINCIPLE GATE rejects an under-mechanism claim — a `none`
 //      test cannot legitimately cover a unit whose minMechanism is `cli`.
-//   3. `--check` exits 1 (naming the gap) when a NEW uncovered unit is injected
-//      into a temp copy of the source, and exits 0 when the temp tree is clean.
-//   4. The RATCHET names a unit the committed registry covers that lost its
-//      claim, and the committed file carries no totals, so two PRs that add
-//      different units merge with git into exactly the regenerated registry.
+//   3. `--check` builds the registry fresh and needs no committed file: a NEW
+//      uncovered unit injected into a temp copy of the source is named, never
+//      a failure, because coverage did not drop.
+//   4. The RATCHET names a unit the base covers that lost its claim, whether
+//      the base is a registry file (`--baseline`) or a commit built fresh with
+//      its own packager and generator (`--base`). Nothing is committed.
 //   5. The SUBCOMMAND CROSS-CHECK (anti-rot guard b) holds for real source:
 //      the structured parser count equals the independent dispatch-site count.
 //
 // The injection tests use the AIDLC_COVERAGE_* env-var seams to redirect the
-// source root + committed-baseline paths at a temp tree — the real shipped
-// source and the real tests/.coverage-registry.json are NEVER mutated.
+// source root + registry paths at a temp tree, so the real shipped source and
+// the developer's local tests/.coverage-registry.json are NEVER mutated.
 
 import {
   NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS,
@@ -34,6 +35,7 @@ import { describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
   cpSync,
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -62,7 +64,6 @@ import {
   lostClaims,
   type RegistryRow,
   registryJson,
-  sortRegistryRows,
   subcommandCrossCheck,
   UNIT_CLASSES,
 } from "../gen-coverage-registry.ts";
@@ -238,15 +239,13 @@ describe("guarantee-principle gate (mechanism >= minMechanism)", () => {
 });
 
 // ---------------------------------------------------------------------------
-// 3. --check exits 1 on an injected NEW uncovered unit; exits 0 when clean.
-//    This is the PROVE-THE-RATCHET assignment requirement, done in-test
-//    against a TEMP COPY of the source — the real source is untouched.
+// 3. --check builds the registry fresh: no committed file, and a NEW uncovered
+//    unit is not a coverage drop. Driven against a TEMP COPY of the source; the
+//    real source is untouched.
 // ---------------------------------------------------------------------------
-describe("--check freshness diff (the ratchet mechanism)", () => {
+describe("--check builds the registry fresh (nothing committed)", () => {
   // Build a self-contained temp tree: copy the shipped source subtree we
-  // enumerate from, plus a copy of the current tests dir for claim discovery,
-  // and committed baselines generated FROM that temp tree (so the clean run is
-  // green before injection).
+  // enumerate from. Claims are still discovered from the real tests dir.
   function buildTempTree(): {
     root: string;
     srcRoot: string;
@@ -289,8 +288,8 @@ describe("--check freshness diff (the ratchet mechanism)", () => {
   }
 
   function genInto(t: ReturnType<typeof buildTempTree>) {
-    // Generate baselines from the temp tree (claims still read from the REAL
-    // tests dir so the registry has the same claim set as production).
+    // Write a registry built from the temp tree: the baseline a later check
+    // compares against.
     return spawnSync(process.execPath, [TOOL], {
       timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
       encoding: "utf-8",
@@ -302,8 +301,8 @@ describe("--check freshness diff (the ratchet mechanism)", () => {
     });
   }
 
-  function checkAgainst(t: ReturnType<typeof buildTempTree>) {
-    return spawnSync(process.execPath, [TOOL, "--check"], {
+  function checkAgainst(t: ReturnType<typeof buildTempTree>, args: string[] = []) {
+    return spawnSync(process.execPath, [TOOL, "--check", ...args], {
       timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
       encoding: "utf-8",
       env: {
@@ -314,23 +313,21 @@ describe("--check freshness diff (the ratchet mechanism)", () => {
     });
   }
 
-  test("clean temp tree: --check exits 0", () => {
+  test("a tree with no registry file anywhere: --check exits 0", () => {
     const t = buildTempTree();
     try {
-      const gen = genInto(t);
-      expect(gen.status).toBe(0);
       const chk = checkAgainst(t);
-      expect(chk.status).toBe(0);
+      expect(chk.status, chk.stderr).toBe(0);
       expect(chk.stdout).toContain("OK");
     } finally {
       rmSync(t.root, { recursive: true, force: true });
     }
   });
 
-  test("inject a NEW audit event into the temp source: --check exits 1 naming the gap", () => {
+  test("a NEW audit event with no claim is not a coverage drop: --check passes and names it", () => {
     const t = buildTempTree();
     try {
-      // Baseline FIRST (clean), so the committed registry omits the new event.
+      // The baseline FIRST (clean), so it omits the new event.
       expect(genInto(t).status).toBe(0);
 
       // Now inject a fake new audit event into the TEMP source's
@@ -344,19 +341,16 @@ describe("--check freshness diff (the ratchet mechanism)", () => {
       expect(injected).not.toBe(audit); // the anchor really matched
       writeFileSync(t.auditPath, injected);
 
-      // The enumerated universe now has one more audit unit (uncovered) that
-      // the committed registry does not — freshness diff must fail.
-      const chk = checkAgainst(t);
-      expect(chk.status).toBe(1);
-      expect(chk.stderr).toContain("FRESHNESS DIFF FAILED");
-      // The diff names the new unit.
-      expect(chk.stderr).toContain("FAKE_INJECTED_EVENT");
+      expect(checkAgainst(t).status).toBe(0);
+      const chk = checkAgainst(t, ["--baseline", t.registry]);
+      expect(chk.status, chk.stderr).toBe(0);
+      expect(chk.stdout).toContain('new audit unit "FAKE_INJECTED_EVENT" has no covers: claim');
     } finally {
       rmSync(t.root, { recursive: true, force: true });
     }
   });
 
-  test("inject a NEW subcommand into the temp source: --check exits 1 naming the gap", () => {
+  test("a NEW subcommand with no claim is not a coverage drop, and guard (b) still counts it", () => {
     const t = buildTempTree();
     try {
       expect(genInto(t).status).toBe(0);
@@ -371,22 +365,21 @@ describe("--check freshness diff (the ratchet mechanism)", () => {
       expect(injected).not.toBe(audit);
       writeFileSync(t.auditPath, injected);
 
-      const chk = checkAgainst(t);
-      expect(chk.status).toBe(1);
-      expect(chk.stderr).toContain("FRESHNESS DIFF FAILED");
-      expect(chk.stderr).toContain("fake-injected-sub");
+      const chk = checkAgainst(t, ["--baseline", t.registry]);
+      expect(chk.status, chk.stderr).toBe(0);
+      expect(chk.stdout).toContain("fake-injected-sub");
     } finally {
       rmSync(t.root, { recursive: true, force: true });
     }
   });
 
-  test("missing committed registry: --check exits 1", () => {
+  test("a baseline that is not a registry: --check exits 1 naming it", () => {
     const t = buildTempTree();
     try {
-      // Never generate, just check.
-      const chk = checkAgainst(t);
+      writeFileSync(t.registry, "not json\n");
+      const chk = checkAgainst(t, ["--baseline", t.registry]);
       expect(chk.status).toBe(1);
-      expect(chk.stderr).toMatch(/does not exist/);
+      expect(chk.stderr).toContain(`${t.registry} is not a readable registry`);
     } finally {
       rmSync(t.root, { recursive: true, force: true });
     }
@@ -394,35 +387,35 @@ describe("--check freshness diff (the ratchet mechanism)", () => {
 });
 
 // ---------------------------------------------------------------------------
-// 4. The RATCHET names a lost claim; the committed file merges cleanly.
+// 4. THE RATCHET: a unit the base covers cannot silently lose its claim.
 // ---------------------------------------------------------------------------
 describe("ratchet anti-regression (a covered unit cannot silently lose its claim)", () => {
-  test("a unit the committed registry covers but the source no longer does fails --check by name", () => {
+  test("a unit the baseline covers but the source no longer does fails --check by name", () => {
     const root = mkdtempSync(join(tmpdir(), "cov-ratchet-"));
     try {
-      // Reuse the real source via the default root (no SRC override) but point
-      // the committed registry at a temp file we control.
+      // Reuse the real source via the default root (no SRC override) but write
+      // the baseline to a temp file we control.
       const registry = join(root, ".coverage-registry.json");
       const env = { ...process.env, AIDLC_COVERAGE_REGISTRY: registry };
       const run = (args: string[]) => spawnSync(process.execPath, [TOOL, ...args], {
         timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8", env,
       });
       expect(run([]).status).toBe(0);
-      // SIMULATE a lost claim: the committed registry says covered, reality does not.
+      // SIMULATE a lost claim: the baseline says covered, reality does not.
       const doc = JSON.parse(readFileSync(registry, "utf-8")) as { units: RegistryRow[] };
       const victim = doc.units.find((unit) => unit.status === "UNCOVERED")!;
       victim.status = "covered";
       victim.coveredBy = [{ file: "tests/unit/t-gone.test.ts", mechanism: "none" }];
       writeFileSync(registry, `${JSON.stringify(doc, null, 2)}\n`);
-      const chk = run(["--check"]);
+      const chk = run(["--check", "--baseline", registry]);
       expect(chk.status).toBe(1);
-      expect(chk.stderr).toContain(`RATCHET FAILED: ${victim.unitClass} unit "${victim.unitId}" is covered in the committed registry but now UNCOVERED`);
+      expect(chk.stderr).toContain(`COVERAGE DROPPED: ${victim.unitClass} unit "${victim.unitId}" is covered on the base but now UNCOVERED`);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
   });
 
-  test("a covered unit whose code was deleted or renamed is a freshness change, never a ratchet failure", () => {
+  test("a covered unit whose code was deleted or renamed is no coverage drop", () => {
     const root = mkdtempSync(join(tmpdir(), "cov-ratchet-gone-"));
     try {
       const registry = join(root, ".coverage-registry.json");
@@ -431,17 +424,16 @@ describe("ratchet anti-regression (a covered unit cannot silently lose its claim
         timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8", env,
       });
       expect(run([]).status).toBe(0);
-      // The committed registry still lists a covered unit the source no longer has.
+      // The baseline still lists a covered unit the source no longer has.
       const doc = JSON.parse(readFileSync(registry, "utf-8")) as { units: RegistryRow[] };
       doc.units.push({
         unitClass: "function", unitId: "function:deletedOrRenamedHelper", minMechanism: "none",
         coveredBy: [{ file: "tests/unit/t-deleted.test.ts", mechanism: "none" }], status: "covered",
       });
       writeFileSync(registry, `${JSON.stringify(doc, null, 2)}\n`);
-      const chk = run(["--check"]);
-      expect(chk.status).toBe(1);
-      expect(chk.stderr).toContain("FRESHNESS DIFF FAILED");
-      expect(chk.stderr).not.toContain("RATCHET FAILED");
+      const chk = run(["--check", "--baseline", registry]);
+      expect(chk.status, chk.stderr).toBe(0);
+      expect(chk.stderr).not.toContain("COVERAGE DROPPED");
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -455,131 +447,81 @@ describe("ratchet anti-regression (a covered unit cannot silently lose its claim
     expect(lostClaims(committed, fresh).map((r) => r.unitId)).toEqual(["LOST"]);
   });
 
-  test("classCounts derives per-class totals from the rows; the committed file stores none", () => {
+  test("classCounts derives per-class totals from the rows; the registry stores none", () => {
     const { rows } = buildRegistry();
     const counts = classCounts(rows);
     expect(counts.function.covered).toBe(rows.filter((x) => x.unitClass === "function" && x.status === "covered").length);
     expect(Object.values(counts).reduce((n, c) => n + c.total, 0)).toBe(rows.length);
-    const committed = JSON.parse(readFileSync(join(TESTS_DIR, ".coverage-registry.json"), "utf-8"));
-    expect(Object.keys(committed)).toEqual(["generator", "generatedFrom", "unitClasses", "minMechanism", "units"]);
+    expect(Object.keys(JSON.parse(registryJson(rows)))).toEqual(["generator", "generatedFrom", "unitClasses", "minMechanism", "units"]);
   });
 
-  test("two PRs that each add or cover a different unit merge with git, in either order, into exactly the regenerated registry", () => {
-    const { rows } = buildRegistry();
-    const clone = (list: RegistryRow[]): RegistryRow[] => list.map((r) => ({ ...r, coveredBy: [...r.coveredBy] }));
-    const probe = (unitId: string): RegistryRow => ({
-      unitClass: "function", unitId, minMechanism: "none",
-      coveredBy: [{ file: `tests/unit/t-${unitId.split(":")[1]}.test.ts`, mechanism: "none" }], status: "covered",
-    });
-    const cover = (list: RegistryRow[], index: number): RegistryRow[] => {
-      const out = clone(list);
-      out[index] = { ...out[index], status: "covered", coveredBy: [{ file: "tests/unit/t-probe.test.ts", mechanism: "cli" }] };
-      return out;
+  test("the registry is never committed: git does not track it and ignores it", () => {
+    const git = (...args: string[]) =>
+      spawnSync("git", args, { cwd: REPO_ROOT, encoding: "utf-8", timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS) });
+    expect(git("ls-files", "--", "tests/.coverage-registry.json").stdout.trim()).toBe("");
+    expect(git("check-ignore", "-q", "--no-index", "tests/.coverage-registry.json").status).toBe(0);
+  });
+
+  test("--base <ref> builds that commit fresh, with its own packager and generator, and never touches the checkout", () => {
+    const root = mkdtempSync(join(tmpdir(), "cov-base-"));
+    try {
+      const repo = join(root, "repo");
+      cpSync(join(REPO_ROOT, "dist", "claude", ".claude", "tools"), join(repo, "dist", "claude", ".claude", "tools"), { recursive: true });
+      cpSync(join(REPO_ROOT, "dist", "claude", ".claude", "hooks"), join(repo, "dist", "claude", ".claude", "hooks"), { recursive: true });
+      cpSync(join(REPO_ROOT, "dist", "claude", ".claude", "aidlc-common", "stages"), join(repo, "dist", "claude", ".claude", "aidlc-common", "stages"), { recursive: true });
+      // The base commit's own packager and generator. The packager leaves a
+      // marker in the tree it ran in; the generator refuses to run anywhere
+      // the packager did not, or under this check's seams, and prints a
+      // registry in which one unit this tree leaves uncovered is covered.
+      const victim = buildRegistry().rows.find((r) => r.status === "UNCOVERED")!;
+      mkdirSync(join(repo, "scripts"));
+      mkdirSync(join(repo, "tests"));
+      writeFileSync(join(repo, "scripts", "package.ts"), [
+        'import { writeFileSync } from "node:fs";',
+        'if (process.argv[2] !== "claude") process.exit(2);',
+        'writeFileSync("packaged-here", "");',
+        "",
+      ].join("\n"));
+      const baseDoc = { units: [{ ...victim, status: "covered", coveredBy: [{ file: "tests/unit/t-gone.test.ts", mechanism: "none" }] }] };
+      writeFileSync(join(repo, "tests", "gen-coverage-registry.ts"), [
+        'import { existsSync } from "node:fs";',
+        'if (!existsSync("packaged-here") || process.env.AIDLC_COVERAGE_SRC_ROOT !== undefined || process.argv[2] !== "--print") process.exit(3);',
+        `process.stdout.write(${JSON.stringify(JSON.stringify(baseDoc))});`,
+        "",
+      ].join("\n"));
+      const git = (...args: string[]) =>
+        spawnSync("git", args, { cwd: repo, encoding: "utf-8", timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS) });
+      expect(git("init", "-q", "-b", "main").status).toBe(0);
+      expect(git("add", "scripts", "tests").status).toBe(0);
+      expect(git("-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "-c", "commit.gpgsign=false", "commit", "-qm", "base").status).toBe(0);
+      const before = git("status", "--porcelain").stdout;
+
+      const run = (ref: string) => spawnSync(process.execPath, [TOOL, "--check", "--base", ref], {
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8",
+        env: { ...process.env, AIDLC_COVERAGE_SRC_ROOT: repo, AIDLC_COVERAGE_REGISTRY: join(root, "unused.json") },
+      });
+      const chk = run("HEAD");
+      expect(chk.status, `${chk.stdout}${chk.stderr}`).toBe(1);
+      expect(chk.stderr).toContain(`COVERAGE DROPPED: ${victim.unitClass} unit "${victim.unitId}" is covered on the base but now UNCOVERED`);
+      expect(git("status", "--porcelain").stdout).toBe(before);
+      expect(existsSync(join(repo, "packaged-here"))).toBe(false);
+
+      const missing = run("no-such-ref");
+      expect(missing.status).toBe(1);
+      expect(missing.stderr).toContain('the base "no-such-ref" is not a commit in this repository');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("CI's required check runs the ratchet against the commit's first parent", () => {
+    const ci = Bun.YAML.parse(readFileSync(join(REPO_ROOT, ".github", "workflows", "ci.yml"), "utf-8")) as {
+      jobs: Record<string, { needs?: string[]; steps?: Array<{ run?: string; with?: Record<string, unknown> }> }>;
     };
-    // Two adjacent UNCOVERED units: the closest two edits can sit.
-    const gap = rows.findIndex((r, i) => r.status === "UNCOVERED" && rows[i + 1]?.status === "UNCOVERED");
-    expect(gap).toBeGreaterThanOrEqual(0);
-    const cases: Array<[string, RegistryRow[], RegistryRow[], RegistryRow[]]> = [
-      ["new units in different places", sortRegistryRows([...clone(rows), probe("function:aaaMergeProbeA")]),
-        sortRegistryRows([...clone(rows), probe("function:zzzMergeProbeB")]),
-        sortRegistryRows([...clone(rows), probe("function:aaaMergeProbeA"), probe("function:zzzMergeProbeB")])],
-      ["claims for two neighbouring units", cover(rows, gap), cover(rows, gap + 1), cover(cover(rows, gap), gap + 1)],
-    ];
-    for (const [label, a, b, both] of cases) {
-      for (const [first, second] of [[a, b], [b, a]]) {
-        const repo = mkdtempSync(join(tmpdir(), "cov-merge-"));
-        try {
-          const git = (...args: string[]) => {
-            const r = spawnSync("git", args, { cwd: repo, encoding: "utf-8", timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS) });
-            return r;
-          };
-          const commit = (doc: RegistryRow[], message: string) => {
-            writeFileSync(join(repo, "registry.json"), registryJson(doc));
-            expect(git("add", "registry.json").status).toBe(0);
-            expect(git("-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "-c", "commit.gpgsign=false", "commit", "-qm", message).status).toBe(0);
-          };
-          expect(git("init", "-q", "-b", "main").status).toBe(0);
-          expect(git("config", "core.autocrlf", "false").status).toBe(0);
-          commit(rows, "base");
-          expect(git("checkout", "-qb", "first").status).toBe(0);
-          commit(first, "first PR");
-          expect(git("checkout", "-q", "main").status).toBe(0);
-          expect(git("checkout", "-qb", "second").status).toBe(0);
-          commit(second, "second PR");
-          const merge = git("-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "merge", "-q", "--no-edit", "first");
-          expect(merge.status, `${label}: ${merge.stdout}${merge.stderr}`).toBe(0);
-          expect(readFileSync(join(repo, "registry.json"), "utf-8"), label).toBe(registryJson(both));
-        } finally {
-          rmSync(repo, { recursive: true, force: true });
-        }
-      }
-    }
-  });
-
-  test("two PRs that each add a CLI-spawning test merge with git, in either order: each touches only its own file and its generated registry", () => {
-    const { rows } = buildRegistry();
-    // Two audit units that sit next to each other in the registry: the closest two claims can sit.
-    const at = rows.findIndex((r, i) => r.unitClass === "audit" && rows[i + 1]?.unitClass === "audit");
-    expect(at).toBeGreaterThanOrEqual(0);
-    const sides = [
-      { name: "t-spawn-a", claim: `audit:${rows[at].unitId}` },
-      { name: "t-spawn-b", claim: `audit:${rows[at + 1].unitId}` },
-    ];
-    const spawner = (claim: string) => [
-      `// covers: ${claim}`,
-      'import { spawnSync } from "node:child_process";',
-      "const BUN = process.execPath;",
-      'const TOOL = "../../dist/claude/.claude/tools/aidlc-state.ts";',
-      'test("x", () => { expect(spawnSync(BUN, [TOOL, "show"]).status).toBe(0); });',
-      "",
-    ].join("\n");
-    for (const [first, second] of [[sides[0], sides[1]], [sides[1], sides[0]]]) {
-      const repo = mkdtempSync(join(tmpdir(), "cov-merge-spawners-"));
-      try {
-        const registry = join(repo, "registry.json");
-        const git = (...args: string[]) => spawnSync("git", args, { cwd: repo, encoding: "utf-8", timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS) });
-        // The real generator, reading claims from this repo's tiers and writing its registry here.
-        const generate = () => {
-          const run = spawnSync(process.execPath, [TOOL], {
-            encoding: "utf-8", timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
-            env: { ...process.env, AIDLC_COVERAGE_TESTS_DIR: repo, AIDLC_COVERAGE_REGISTRY: registry },
-          });
-          expect(run.status, run.stderr).toBe(0);
-        };
-        const commit = (message: string) => {
-          expect(git("add", "-A").status).toBe(0);
-          expect(git("-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "-c", "commit.gpgsign=false", "commit", "-qm", message).status).toBe(0);
-        };
-        const pr = (side: { name: string; claim: string }) => {
-          expect(git("checkout", "-q", "main").status).toBe(0);
-          expect(git("checkout", "-qb", side.name).status).toBe(0);
-          writeFileSync(join(repo, "unit", `${side.name}.test.ts`), spawner(side.claim));
-          generate();
-          commit(side.name);
-          // The PR's whole diff: its own test file and the regenerated registry, nothing shared besides.
-          expect(git("diff", "--name-only", "main", side.name).stdout.trim().split("\n")).toEqual(["registry.json", `unit/${side.name}.test.ts`]);
-        };
-        expect(git("init", "-q", "-b", "main").status).toBe(0);
-        expect(git("config", "core.autocrlf", "false").status).toBe(0);
-        mkdirSync(join(repo, "unit"));
-        writeFileSync(join(repo, "unit", "t-existing.test.ts"), 'test("x", () => {});\n');
-        generate();
-        commit("base");
-        pr(first);
-        pr(second);
-        const merge = git("-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "merge", "-q", "--no-edit", first.name);
-        expect(merge.status, `${merge.stdout}${merge.stderr}`).toBe(0);
-        const merged = readFileSync(registry, "utf-8");
-        for (const side of sides) {
-          const unit = (JSON.parse(merged) as { units: RegistryRow[] }).units.find((r) => `audit:${r.unitId}` === side.claim)!;
-          expect(unit).toMatchObject({ status: "covered", coveredBy: [{ file: `tests/unit/${side.name}.test.ts`, mechanism: "cli" }] });
-        }
-        generate();
-        expect(readFileSync(registry, "utf-8")).toBe(merged);
-      } finally {
-        rmSync(repo, { recursive: true, force: true });
-      }
-    }
+    const job = ci.jobs.coverage_ratchet;
+    expect(job.steps?.[0]?.with?.["fetch-depth"]).toBe(2);
+    expect(job.steps?.map((step) => step.run)).toContain("bun tests/gen-coverage-registry.ts --check --base HEAD^1");
+    expect(ci.jobs.test.needs).toContain("coverage_ratchet");
   });
 });
 
@@ -720,31 +662,19 @@ describe("determinism", () => {
   });
 });
 
-// THE LIVE RATCHET — runs `--check` against the REAL committed registry (no
-// env seam). Every other --check test above drives a synthetic temp tree; this
-// one gates the actual tests/.coverage-registry.json on disk, so a clean checkout whose committed registry has drifted from the
-// real source (e.g. a new subcommand/event/scope landed without regenerating)
-// FAILS the suite. Without this, the ratchet's "cannot silently rot" promise is
-// unenforced — the committed artifact can drift while the suite stays green.
-describe("committed coverage registry is fresh (the live CI ratchet)", () => {
-  test("`gen-coverage-registry.ts --check` exits 0 against the real committed files", () => {
+// THE REAL TREE: `--check` with no env seam builds the registry fresh from
+// this checkout and runs both anti-rot guards. Every other --check test above
+// drives a synthetic temp tree. Whether coverage dropped against the base
+// commit is CI's coverage ratchet job (`--check --base HEAD^1`).
+describe("the real tree passes --check", () => {
+  test("`gen-coverage-registry.ts --check` exits 0 on this checkout", () => {
     const chk = spawnSync(process.execPath, [TOOL, "--check"], {
       timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
       encoding: "utf-8",
       cwd: REPO_ROOT,
-      // NO AIDLC_COVERAGE_* overrides — this checks the genuine on-disk registry.
+      // NO AIDLC_COVERAGE_* overrides: this builds the genuine tree.
     });
-    if (chk.status !== 0) {
-      // Surface the drift diff so the failure is self-explaining: the fix is
-      // `bun tests/gen-coverage-registry.ts` to regenerate + commit the files.
-      throw new Error(
-        "committed coverage registry is STALE — run `bun tests/gen-coverage-registry.ts` " +
-          "to regenerate tests/.coverage-registry.json.\n" +
-          (chk.stdout || "") +
-          (chk.stderr || ""),
-      );
-    }
-    expect(chk.status).toBe(0);
+    expect(chk.status, `${chk.stdout}${chk.stderr}`).toBe(0);
   });
 });
 
@@ -763,10 +693,10 @@ describe("committed coverage registry is fresh (the live CI ratchet)", () => {
 //       is not a drive and stays none.
 //   (b) WHOLE TREE: there is no hand-kept list of spawner files. A mechanism
 //       matters only through a coverage claim, and every claim's mechanism is
-//       pinned twice: by the committed registry (`--check` fails when a
-//       predicate change moves any claim), and by (c). A list that every
+//       pinned twice: by the coverage ratchet (`--check --base` fails when a
+//       predicate change drops any claim below its unit's bar), and by (c). A list that every
 //       spawner-adding PR appended to only made those PRs collide.
-//   (c) HONESTY: derived == recorded — for every committed coverage claim, the
+//   (c) HONESTY: derived == recorded. For every coverage claim, the
 //       mechanism the registry stored equals mechanismsOf(body) recomputed live,
 //       so the registry can never record a mechanism the body does not drive.
 // ---------------------------------------------------------------------------
@@ -951,15 +881,13 @@ describe("mechanismsOf is body-derived (milestone 3)", () => {
     expect(mechanismsOf("t99.test.ts", src)).toEqual(["none"]);
   });
 
-  // (c) HONESTY — derived == recorded over the whole committed registry. Every
-  // coverage claim stored a `mechanism`; recompute mechanismsOf(body) for that
+  // (c) HONESTY: derived == recorded over the whole registry, built fresh.
+  // Every coverage claim stores a `mechanism`; recompute mechanismsOf(body) for that
   // claim's file and assert the stored scalar is a MEMBER of the derived set.
   // (The registry serialises the set's strongest representative; membership is
   // the honest invariant — a recorded mechanism the body does not drive is a lie.)
   test("every recorded coverage mechanism is one the body actually derives", () => {
-    const registry = JSON.parse(
-      readFileSync(join(TESTS_DIR, ".coverage-registry.json"), "utf-8"),
-    );
+    const registry = JSON.parse(registryJson(buildRegistry().rows));
     // Collect (file, mechanism) pairs from every unit's coveredBy[].
     const pairs = new Map<string, Set<string>>(); // file -> recorded mechanisms
     const collect = (node: unknown): void => {

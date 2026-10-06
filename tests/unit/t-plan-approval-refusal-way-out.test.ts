@@ -67,6 +67,7 @@ setDefaultTimeout(120_000);
 
 const BUN = process.execPath;
 const DISPATCHER = join(AIDLC_SRC, "tools", "aidlc.ts");
+const LOG = join(AIDLC_SRC, "tools", "aidlc-log.ts");
 const GUARD = join(AIDLC_SRC, "hooks", "aidlc-plan-approval-guard.ts");
 const RELEASE_GUARD = join(REPO_ROOT, "dist-release", "claude", ".claude", "hooks", "aidlc-plan-approval-guard.ts");
 const SESSION = "01995000-7a11-7000-8000-0000000000a1";
@@ -192,8 +193,25 @@ function say(proj: string, prompt: string): string {
   return result.stdout ?? "";
 }
 
+// What the agent runs after reading the person's reply: the choice they made.
+function answer(proj: string, details: string): string {
+  const recorded = spawnSync(BUN, [
+    LOG, "answer", "--stage", "code-generation", "--checkpoint", "plan-approval", "--details", details,
+    "--project-dir", proj,
+  ], {
+    cwd: proj,
+    env: { ...process.env, CLAUDE_PROJECT_DIR: proj, AIDLC_PROJECT_DIR: proj, AIDLC_UNATTENDED: "0" },
+    encoding: "utf-8",
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+  });
+  expect(recorded.status, `${recorded.stdout}${recorded.stderr}`).toBe(0);
+  return recorded.stdout ?? "";
+}
+
+// The person approves in their own words; the agent records the choice it read.
 function reply(proj: string, prompt: string): void {
-  expect(say(proj, prompt)).toContain('recorded \\"Approve Plan\\"');
+  say(proj, prompt);
+  expect(answer(proj, "Approve Plan")).toContain('Recorded \\"Approve Plan\\"');
 }
 
 function guard(
@@ -407,8 +425,7 @@ describe("the person already answered: the refusal does not send the agent back 
     writePlan(proj);
     expect(next(proj)).toMatchObject({ kind: "ask", ask_type: "plan-approval" });
     const write = said(writeSource(proj));
-    expect(write).toContain("The plan is waiting for the person to approve it.");
-    expect(write).toContain(`after they answer, run \`${SOURCE_NEXT}\` ${ON_ITS_OWN}`);
+    expect(write.trim()).toBe("Nothing is built or changed while the plan waits for your approval.");
   });
 
   test("approved while the question is open, then a handoff naming two targets: no claim it is unapproved", () => {
@@ -428,7 +445,9 @@ describe("the person answered the plan question another way, and the agent write
     const proj = project("strict");
     writePlan(proj);
     expect(next(proj)).toMatchObject({ kind: "ask", ask_type: "plan-approval" });
-    expect(say(proj, "rename slugify to toSlug")).toContain('recorded \\"Request Changes\\"');
+    say(proj, "rename slugify to toSlug");
+    // The agent reads the change request and records it.
+    expect(answer(proj, "Request Changes")).toContain('Recorded \\"Request Changes\\"');
     const write = said(writeSource(proj));
     expect(write).toContain("The person has answered the plan question.");
     expect(write).toContain("Do not show them the question again.");
@@ -443,7 +462,8 @@ describe("the person answered the plan question another way, and the agent write
     const proj = project("off");
     writePlan(proj);
     expect(next(proj)).toMatchObject({ kind: "ask", ask_type: "plan-approval" });
-    expect(say(proj, "I'll edit the files")).toContain("edit the files themselves");
+    // "I'll edit the files" is the question's own choice: the hook records it as typed.
+    say(proj, "I'll edit the files");
     const write = said(guard(proj, "Write", { file_path: join(stageDir(proj, null), "code-generation-plan.md"), content: "x\n" }));
     expect(write).toContain("The person is editing the plan files themselves: leave those files to them.");
     expect(write).not.toContain("Show them the question from the last");
@@ -556,8 +576,8 @@ describe("while the rules arrive in parts", () => {
 // not approval evidence: a ledger that cannot take it never refuses the build.
 describe("a lowered fence never refuses because its audit row could not be written", () => {
   // Approved, built, then edited: with the fence lowered the edited plan builds.
-  function editedAfterApproval(): string {
-    const proj = project("off");
+  function editedAfterApproval(mode: "off" | "relaxed" = "off"): string {
+    const proj = project(mode);
     writePlan(proj);
     expect(next(proj)).toMatchObject({ kind: "ask", ask_type: "plan-approval" });
     reply(proj, "approve");
@@ -576,17 +596,22 @@ describe("a lowered fence never refuses because its audit row could not be writt
     expect(stoodAside(proj)).toBe(before + 1);
   });
 
-  test("the ledger cannot take it: the build still goes on, and the line and the doctor say so", () => {
-    const proj = editedAfterApproval();
+  test.each(["relaxed", "off"] as const)("the ledger cannot take it under %s: the build still goes on, and the doctor says so", (mode) => {
+    const proj = editedAfterApproval(mode);
     const shard = auditFilePath(proj);
     expect(existsSync(shard)).toBe(true);
     renameSync(shard, `${shard}.away`);
     const write = guardOut(proj, "Write", { file_path: join(proj, "src", "slugify.ts"), content: "x\n" });
     expect(write.code, write.stderr).toBe(0);
-    expect(write.stdout).toContain(
-      "Not recorded in the audit trail, which was busy or could not be written; " +
-        "`bun .claude/tools/aidlc.ts doctor` lists it",
-    );
+    if (mode === "relaxed") {
+      expect(write.stdout).toContain(
+        "Not recorded in the audit trail, which was busy or could not be written; " +
+          "`bun .claude/tools/aidlc.ts doctor` lists it",
+      );
+    } else {
+      // Off says nothing; the doctor still lists the row it could not write.
+      expect(write.stdout).not.toContain("Continuing past");
+    }
     expect(readFileSync(join(hooksHealthDir(proj), "plan-approval-guard.drops"), "utf-8"))
       .toContain("GUARD_STOOD_ASIDE row not recorded");
     // The brief for the edited plan goes through the same way.

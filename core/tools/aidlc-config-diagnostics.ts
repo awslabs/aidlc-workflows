@@ -16,11 +16,14 @@ import { delimiter, dirname, extname, join, relative, resolve } from "node:path"
 import {
   assertProjectionPathHasNoSymlinks,
   isSafeOnboardingPath,
+  jsonFileText,
   jsoncRootMembers,
   jsoncSettingValue,
   managedBlockIsSafe,
   managedBlockMarkers,
   mergeBlock,
+  missingJsonEntries,
+  readJsonFile,
   type RootIntegration,
   rootBlockPath,
   sha256Bytes,
@@ -487,7 +490,7 @@ export function normalizeProjectChoicesRecord(
 
 export function readConfigDiagnosticRecords(harnessRoot: string): ConfigDiagnosticRecords {
   const path = join(harnessRoot, "tools", "data", "harness.json");
-  const value = JSON.parse(readFileSync(path, "utf-8")) as Record<string, unknown>;
+  const value = readJsonFile(path) as Record<string, unknown>;
   const policyKeys = ["models", "flags"].filter((key) => Object.hasOwn(value, key));
   if (policyKeys.length > 0) {
     throw new Error(
@@ -771,40 +774,37 @@ function runtimePathSurfaces(platform: NodeJS.Platform): string {
 function runtimeRemediation(
   name: "bun" | "aidlc",
   platform: NodeJS.Platform,
+  harness: ModelHarness,
   status: "interactive-only" | "missing" = "missing",
   foundAt?: string,
 ): string {
+  const tool = HARNESS_PRODUCT_NAMES[harness];
   if (status === "interactive-only" && platform !== "win32") {
-    // Found on this shell's PATH: a harness started from a terminal hands that
+    // Found on this shell's PATH: a tool started from a terminal hands that
     // PATH to its hooks, so only a desktop or service launch can miss it. The
     // baseline reads no shell rc file, so editing one never clears this row.
-    const channel = name === "bun"
-      ? "This project is a copy-channel projection, so its hooks run through Bun; " +
-        "a native install runs them through the aidlc command instead. "
-      : "";
     const dir = foundAt ? dirname(foundAt) : name === "bun" ? "~/.bun/bin" : "~/.local/bin";
-    return `${channel}A harness you start from a terminal normally hands that terminal's PATH to its hooks, so nothing needs changing for it. ` +
-      `If you start the harness from a desktop icon, the dock, or a service and its hooks do not run, add ${dir} to ${runtimePathSurfaces(platform)}, then restart the harness. ` +
+    return `Nothing needs changing when you start ${tool} from a terminal: it hands that terminal's PATH to AI-DLC's hooks. ` +
+      `If you start it from a desktop icon, the dock, or a service and AI-DLC's hooks do not run, add ${dir} to ${runtimePathSurfaces(platform)}, then restart ${tool}. ` +
       "Editing .bashrc or .zshrc does not change this check.";
   }
   if (name === "bun") {
-    // Only a copy-channel projection runs its hooks through bun; a native
-    // install routes them through `aidlc`. Say so, because a user who never
-    // chose the copy channel cannot otherwise tell why Bun is being asked for.
-    const channel =
-      "This project is a copy-channel projection, so its hooks run through Bun; " +
-      "a native install runs them through the aidlc command instead. ";
+    // Only a copied AI-DLC runs its hooks through bun; an installed one routes
+    // them through `aidlc`. Say so, because a user who never chose to copy it
+    // cannot otherwise tell why Bun is being asked for.
+    const why = "AI-DLC in this project runs on Bun (the installed aidlc command does not need it). ";
     return platform === "win32"
-      ? `${channel}Install Bun, then add its install directory to the Windows User or Machine PATH, not only a shell profile.`
-      : `${channel}Install Bun, then add ~/.bun/bin to the login-independent PATH the harness inherits (${runtimePathSurfaces(platform)}), not only .zshrc or .bash_profile.`;
+      ? `${why}Install Bun, then add its install directory to the Windows User or Machine PATH, not only a shell profile.`
+      : `${why}Install Bun, then add ~/.bun/bin to the PATH ${tool} starts with (${runtimePathSurfaces(platform)}), not only .zshrc or .bash_profile.`;
   }
   return platform === "win32"
     ? "Add the aidlc command directory to the Windows User or Machine PATH."
-    : `Add ~/.local/bin to the login-independent PATH the harness inherits (${runtimePathSurfaces(platform)}), not only an interactive shell rc file.`;
+    : `Add ~/.local/bin to the PATH ${tool} starts with (${runtimePathSurfaces(platform)}), not only an interactive shell rc file.`;
 }
 
 function binaryProbe(
   name: "bun" | "aidlc",
+  harness: ModelHarness,
   required: boolean,
   baselinePath: string,
   interactivePath: string,
@@ -831,14 +831,14 @@ function binaryProbe(
       required,
       status: "interactive-only",
       interactivePath: interactive,
-      remediation: runtimeRemediation(name, platform, "interactive-only", interactive),
+      remediation: runtimeRemediation(name, platform, harness, "interactive-only", interactive),
     };
   }
   return {
     name,
     required,
     status: "missing",
-    remediation: runtimeRemediation(name, platform),
+    remediation: runtimeRemediation(name, platform, harness),
   };
 }
 
@@ -876,17 +876,24 @@ const HARNESS_CLI: Record<
     required: false,
     install: "Install the Cursor CLI and ensure `cursor --version` works; IDE-only installs may omit it.",
   },
+  // The 2.x line is where the hooks, skills and workspace default agent this
+  // distribution relies on shipped; the guide asks for 2.6 or later.
   kiro: {
     command: "kiro-cli",
     required: true,
-    install: "Install Kiro CLI and ensure `kiro-cli --version` works.",
+    minimumVersion: "2.6.0",
+    install: "Install or upgrade Kiro CLI to 2.6.0 or later.",
   },
-  // Probed so a machine with only Kiro CLI detects this row next to the kiro
-  // row: first-run setup then asks instead of silently choosing the legacy one.
+  // Probed so a machine with only a supported Kiro CLI detects this row next to
+  // the kiro row: first-run setup then asks instead of silently choosing the
+  // legacy one. 2.24.1 is the oldest Kiro CLI this row has been checked on (its
+  // v3 engine runs the hooks, and `/aidlc --doctor` reports no problem); an
+  // older one counts only for the kiro row, and doctor warns about it here.
   "kiro-ide": {
     command: "kiro-cli",
     required: false,
-    install: "Kiro CLI is optional here: install it only to run AI-DLC from a terminal, and ensure `kiro-cli --version` works.",
+    minimumVersion: "2.24.1",
+    install: "Kiro CLI is optional here: to run AI-DLC from a terminal, install or upgrade Kiro CLI to 2.24.1 or later; Kiro IDE-only installs may omit it.",
   },
   opencode: {
     command: "opencode",
@@ -1021,8 +1028,8 @@ export function probeRuntime(
     baselinePath,
     commandFiles,
     binaries: [
-      binaryProbe("bun", requirements.bun, baselinePath, interactivePath, options),
-      binaryProbe("aidlc", requirements.aidlc, baselinePath, interactivePath, options),
+      binaryProbe("bun", harness, requirements.bun, baselinePath, interactivePath, options),
+      binaryProbe("aidlc", harness, requirements.aidlc, baselinePath, interactivePath, options),
     ],
     cli: options.includeHarnessCli === false
       ? {
@@ -1224,8 +1231,9 @@ export function pendingProviderIssues(
     });
 }
 
+// The file keeps the byte order mark it had.
 function writeJson(path: string, value: unknown): void {
-  writeFileSync(path, `${JSON.stringify(value, null, 2)}\n`);
+  writeFileSync(path, jsonFileText(value, existsSync(path) ? readFileSync(path, "utf-8") : ""));
 }
 
 function writeClaudeProvider(
@@ -1234,7 +1242,7 @@ function writeClaudeProvider(
   record: ProvidersRecord,
 ): void {
   const settingsPath = join(projectionRoot, harnessDir, "settings.json");
-  const settings = JSON.parse(readFileSync(settingsPath, "utf-8")) as Record<string, unknown>;
+  const settings = readJsonFile(settingsPath) as Record<string, unknown>;
   const env = isRecord(settings.env) ? { ...settings.env } : {};
   stripLegacyClaudeModelAliases(env);
   env.CLAUDE_CODE_USE_BEDROCK = "1";
@@ -1246,7 +1254,7 @@ function writeClaudeProvider(
 
   const mcpPath = join(projectionRoot, ".mcp.json");
   if (!existsSync(mcpPath)) return;
-  const mcp = JSON.parse(readFileSync(mcpPath, "utf-8")) as Record<string, unknown>;
+  const mcp = readJsonFile(mcpPath) as Record<string, unknown>;
   if (applyMcpRegion(mcp, record.region as string)) writeJson(mcpPath, mcp);
 }
 
@@ -1316,7 +1324,7 @@ function clearClaudeProvider(
   harnessDir: string,
 ): void {
   const settingsPath = join(projectionRoot, harnessDir, "settings.json");
-  const settings = JSON.parse(readFileSync(settingsPath, "utf-8")) as Record<string, unknown>;
+  const settings = readJsonFile(settingsPath) as Record<string, unknown>;
   const env = isRecord(settings.env) ? { ...settings.env } : {};
   const legacy = hasLegacyClaudeProviderConfig(env);
   let changed = false;
@@ -1450,7 +1458,7 @@ export function preserveKiroMcpRegion(
   const awsArgs = (path: string): { value: Record<string, unknown>; args: unknown[] } | null => {
     let value: Record<string, unknown>;
     try {
-      value = JSON.parse(readFileSync(path, "utf-8")) as Record<string, unknown>;
+      value = readJsonFile(path) as Record<string, unknown>;
     } catch {
       return null;
     }
@@ -1495,7 +1503,7 @@ function writeOpenCodeProvider(
 ): void {
   if (!record.opencodeDefault) return;
   const path = join(projectionRoot, "opencode.json");
-  const value = JSON.parse(readFileSync(path, "utf-8")) as Record<string, unknown>;
+  const value = readJsonFile(path) as Record<string, unknown>;
   const providers = isRecord(value.provider) ? { ...value.provider } : {};
   const existing = isRecord(providers["amazon-bedrock"])
     ? providers["amazon-bedrock"]
@@ -1540,7 +1548,7 @@ function clearOpenCodeProvider(
 ): void {
   const path = join(projectionRoot, "opencode.json");
   if (!existsSync(path)) return;
-  const value = JSON.parse(readFileSync(path, "utf-8")) as Record<string, unknown>;
+  const value = readJsonFile(path) as Record<string, unknown>;
   if (!isRecord(value.provider)) return;
   const providers = { ...value.provider };
   if (!openCodeProviderMatchesRecord(
@@ -1568,7 +1576,7 @@ function writeClaudeFlags(
 ): void {
   if (!record.defaultScope) return;
   const path = join(projectionRoot, harnessDir, "settings.json");
-  const value = JSON.parse(readFileSync(path, "utf-8")) as Record<string, unknown>;
+  const value = readJsonFile(path) as Record<string, unknown>;
   const env = isRecord(value.env) ? { ...value.env } : {};
   env.AWS_AIDLC_DEFAULT_SCOPE = record.defaultScope;
   value.env = env;
@@ -1827,7 +1835,7 @@ export function flagIssues(
   if (record.defaultScope && harness === "claude") {
     const path = join(projectDir, harnessDir, "settings.json");
     try {
-      const value = JSON.parse(readFileSync(path, "utf-8")) as Record<string, unknown>;
+      const value = readJsonFile(path) as Record<string, unknown>;
       const settingsEnv = isRecord(value.env) ? value.env : {};
       if (settingsEnv.AWS_AIDLC_DEFAULT_SCOPE !== record.defaultScope) {
         issues.push({
@@ -1881,7 +1889,7 @@ export function discoverInstalledPluginNames(
     const graphPath = join(dataDir, "stage-graph.json");
     if (existsSync(graphPath)) {
       try {
-        collectPluginNames(JSON.parse(readFileSync(graphPath, "utf-8")), names);
+        collectPluginNames(readJsonFile(graphPath), names);
       } catch {
         // Sidecars and scope files remain available when the graph is stale.
       }
@@ -1901,7 +1909,7 @@ export function discoverInstalledPluginNames(
 
 export function readPluginSelection(harnessRoot: string): string[] | null {
   const path = join(harnessRoot, "tools", "data", "harness.json");
-  const value = JSON.parse(readFileSync(path, "utf-8")) as Record<string, unknown>;
+  const value = readJsonFile(path) as Record<string, unknown>;
   if (!Object.hasOwn(value, "plugins")) return null;
   if (
     !Array.isArray(value.plugins) ||
@@ -2033,7 +2041,7 @@ export function projectChoiceIssues(
   let servers = new Set<string>();
   if (existsSync(path)) {
     try {
-      const value = JSON.parse(readFileSync(path, "utf-8")) as Record<string, unknown>;
+      const value = readJsonFile(path) as Record<string, unknown>;
       servers = new Set(
         isRecord(value.mcpServers) ? Object.keys(value.mcpServers) : [],
       );
@@ -2091,7 +2099,7 @@ export function providerSurfaceIssues(
     if (record.provider === "current" || record.provider === "other") {
       if (harness === "claude") {
         const path = join(projectDir, harnessDir, "settings.json");
-        const value = JSON.parse(readFileSync(path, "utf-8")) as Record<string, unknown>;
+        const value = readJsonFile(path) as Record<string, unknown>;
         const env = isRecord(value.env) ? value.env : {};
         if (hasLegacyClaudeProviderConfig(env)) {
           mismatch(
@@ -2112,9 +2120,7 @@ export function providerSurfaceIssues(
         }
         const localPath = join(projectDir, harnessDir, "settings.local.json");
         if (existsSync(localPath)) {
-          const local = JSON.parse(
-            readFileSync(localPath, "utf-8"),
-          ) as Record<string, unknown>;
+          const local = readJsonFile(localPath) as Record<string, unknown>;
           const localEnv = isRecord(local.env) ? local.env : {};
           const localOverrides: string[] = CLAUDE_BEDROCK_MODEL_KEYS.filter(
             (key) => Object.hasOwn(localEnv, key),
@@ -2171,7 +2177,7 @@ export function providerSurfaceIssues(
         }
       } else if (harness === "opencode" && record.provider === "other") {
         const path = join(projectDir, "opencode.json");
-        const value = JSON.parse(readFileSync(path, "utf-8")) as Record<string, unknown>;
+        const value = readTeamJsonFile(path) as Record<string, unknown>;
         const providers = isRecord(value.provider) ? value.provider : {};
         if (Object.hasOwn(providers, "amazon-bedrock")) {
           warning(
@@ -2192,7 +2198,7 @@ export function providerSurfaceIssues(
       );
     } else if (harness === "claude") {
       const settingsPath = join(projectDir, harnessDir, "settings.json");
-      const settings = JSON.parse(readFileSync(settingsPath, "utf-8")) as Record<string, unknown>;
+      const settings = readJsonFile(settingsPath) as Record<string, unknown>;
       const env = isRecord(settings.env) ? settings.env : {};
       if (
         env.CLAUDE_CODE_USE_BEDROCK !== "1" ||
@@ -2203,7 +2209,7 @@ export function providerSurfaceIssues(
       }
       const localPath = join(projectDir, harnessDir, "settings.local.json");
       if (existsSync(localPath)) {
-        const local = JSON.parse(readFileSync(localPath, "utf-8")) as Record<string, unknown>;
+        const local = readJsonFile(localPath) as Record<string, unknown>;
         const localEnv = isRecord(local.env) ? local.env : {};
         const conflicts = [
           ...(Object.hasOwn(localEnv, "CLAUDE_CODE_USE_BEDROCK") &&
@@ -2240,7 +2246,7 @@ export function providerSurfaceIssues(
       }
     } else if (harness === "opencode" && record.opencodeDefault) {
       const path = join(projectDir, "opencode.json");
-      const value = JSON.parse(readFileSync(path, "utf-8")) as Record<string, unknown>;
+      const value = readTeamJsonFile(path) as Record<string, unknown>;
       const providers = isRecord(value.provider) ? value.provider : {};
       const bedrock = isRecord(providers["amazon-bedrock"]) ? providers["amazon-bedrock"] : {};
       const options = isRecord(bedrock.options) ? bedrock.options : {};
@@ -2632,6 +2638,20 @@ export type ConfigOutstandingAction = {
   command: string;
 };
 
+// The runtimes this shell finds that the system-wide PATH does not. A harness
+// started from this terminal hands them to its hooks, so setup lists no step
+// for them and says where to start the harness instead.
+export function shellOnlyRuntimes(
+  projectDir: string,
+  harnessDir: string,
+  harness: ModelHarness,
+  options: RuntimeProbeOptions = {},
+): string[] {
+  return probeRuntime(projectDir, harnessDir, harness, { ...options, includeHarnessCli: false }).binaries
+    .filter((binary) => binary.status === "interactive-only")
+    .map((binary) => binary.name);
+}
+
 export function postApplyOutstandingActions(
   projectDir: string,
   harnessDir: string,
@@ -2650,7 +2670,13 @@ export function postApplyOutstandingActions(
       ...options.runtime,
       includeHarnessCli: false,
     });
-    actions.push(...runtimeIssues(diagnostics).map((issue) => ({
+    // A runtime found on this shell's PATH needs nothing from a harness started
+    // from a terminal; the doctor says what to do if its hooks never run.
+    const needed = {
+      ...diagnostics,
+      binaries: diagnostics.binaries.filter((binary) => binary.status !== "interactive-only"),
+    };
+    actions.push(...runtimeIssues(needed).map((issue) => ({
       section: "runtime" as const,
       id: issue.id,
       message: issue.message,
@@ -2695,9 +2721,16 @@ export function postApplyOutstandingActions(
 
 export { managedBlockMarkers };
 
+// The team's own opencode.json may hold comments and trailing commas, as
+// opencode allows.
+function readTeamJsonFile(path: string): unknown {
+  return Bun.JSONC.parse(readFileSync(path, "utf-8").replace(/^\uFEFF/, ""));
+}
+
 type RecordedInstructionContribution =
   | { policy: "managed-block"; hash: string; marker?: string }
-  | { policy: "whole-file"; hash: string };
+  | { policy: "whole-file"; hash: string }
+  | { policy: "json-entries"; entries: Record<string, string> };
 
 type RecordedInstructionBaseline = {
   files?: Record<string, string>;
@@ -2706,7 +2739,7 @@ type RecordedInstructionBaseline = {
 
 type InstructionState = {
   path: string;
-  kind: "managed-block" | "whole-file";
+  kind: "managed-block" | "whole-file" | "json-entries";
   state: "intact" | "missing" | "conflict";
 };
 
@@ -2817,7 +2850,7 @@ function instructionStates(
   )) {
     if (
       path === "AGENTS.md" ||
-      (path === "opencode.json" && contribution.policy === "whole-file")
+      (path === "opencode.json" && (contribution.policy === "whole-file" || contribution.policy === "json-entries"))
     ) {
       tracked.push({ path, contribution });
     }
@@ -2854,6 +2887,23 @@ function instructionStates(
         path,
         kind: contribution.policy,
         state: sha256Bytes(content) === contribution.hash ? "intact" : "conflict",
+      };
+    }
+    if (contribution.policy === "json-entries") {
+      // The team's own file: AI-DLC's instructions and skills entries must be
+      // there; everything else in it is theirs.
+      let shipped: string;
+      try {
+        assertProjectionPathHasNoSymlinks(projectDir, `${harnessDir}/tools/data/root-blocks/${path}`);
+        shipped = readFileSync(join(projectDir, harnessDir, "tools", "data", "root-blocks", path), "utf-8");
+      } catch {
+        return { path, kind: contribution.policy, state: "intact" };
+      }
+      const missing = missingJsonEntries(content.toString("utf-8"), shipped, ["instructions", "skills"]);
+      return {
+        path,
+        kind: contribution.policy,
+        state: missing === null ? "conflict" : missing.length > 0 ? "missing" : "intact",
       };
     }
     const text = content.toString("utf-8");
@@ -2935,7 +2985,7 @@ export function instructionFileDoctorCheck(
       fix: `run \`${invoke} config\``,
     };
   }
-  const managed = states.some((item) => item.kind === "managed-block");
+  const managed = states.some((item) => item.kind === "managed-block" || item.kind === "json-entries");
   const whole = states.some((item) => item.kind === "whole-file");
   return {
     pass: true,
@@ -3133,7 +3183,7 @@ const REQUEST_CAP_PAUSES = 'below 100, VS Code stops a long stage to ask "Contin
 // The install's added-once record for .vscode/settings.json.
 function requestCapAddedBefore(harnessRoot: string): boolean {
   try {
-    const baseline = JSON.parse(readFileSync(join(harnessRoot, "tools", "data", "aidlc-manifest.json"), "utf-8")) as {
+    const baseline = readJsonFile(join(harnessRoot, "tools", "data", "aidlc-manifest.json")) as {
       rootContributions?: Record<string, { policy?: string; entries?: Record<string, string>; added?: string[] }>;
     };
     const record = baseline.rootContributions?.[".vscode/settings.json"];

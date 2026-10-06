@@ -160,6 +160,11 @@ and any other setting typed in the same message, applies to the active intent
 as you send the message; the new intent starts at the default Guard Policy, and
 AI-DLC says so when it creates it. Naming the plan first
 (`/aidlc bugfix Fix the timeout`) asks the same question, proposing that plan.
+So does a scope that differs from the active intent's, typed with a
+description (`/aidlc --scope express "add a health endpoint"`), with new work
+first: choose **1** and the description starts new express work, the active
+intent kept as it is, or **2** and the active intent changes to express. A
+scope with no description changes the active intent's scope without asking.
 
 AI-DLC never creates a second intent without asking. If a prompt is genuinely a
 follow-up to the current work — answering a gate, correcting a requirement — it
@@ -211,8 +216,9 @@ Session identity follows one order:
 
 1. The host session id delivered to a hook.
 2. A valid `AIDLC_SESSION_OVERRIDE` inherited from the harness process.
-3. The nearest live PID ancestry entry.
-4. No session identity.
+3. On Codex, the `CODEX_THREAD_ID` Codex gives every command it runs.
+4. The nearest live PID ancestry entry.
+5. No session identity.
 
 Once identity is known, an explicit space or intent selector wins, followed by
 that session's binding, then the shared `active-space` and `active-intent`
@@ -240,7 +246,10 @@ delivery remains future work.
 
 On POSIX, the Codex adapter pins the validated hook payload session into every
 core-hook child and Bash command, so macOS sandbox denial of `ps` does not weaken
-Codex workflow selection. On Windows x64 and arm64, native process handles,
+Codex workflow selection. Codex 0.160 and later also give every command the
+session as `CODEX_THREAD_ID` (but not the hooks), so once an AI-DLC tool has
+seen it there, that session's later commands are left as written and the tools
+read the id from there. On Windows x64 and arm64, native process handles,
 creation times, and parent PIDs identify the owning session within the same
 50 ms / 64-ancestor budget. Reused PID generations and unverified ancestry do not
 select a session; the POSIX command rewrite remains unavailable on Windows.

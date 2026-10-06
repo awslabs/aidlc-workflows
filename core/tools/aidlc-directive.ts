@@ -254,6 +254,12 @@ export interface RunStageDirective {
   // continues with the readable context; rule-delivery failures are blocking
   // error directives instead.
   context_warnings?: string[];
+  // What the person replied to this stage's questions that no answer holds
+  // yet (a chat that ended before the agent wrote or logged it), in order,
+  // the stage's questions and answers already on record before it, and what
+  // the agent does with it. Present only while the stage's questions file
+  // still has a blank answer.
+  kept_replies?: { answered: Array<{ question: string; answer: string }>; replies: string[]; note: string };
   // gate is a boolean for every deterministic case; the string sentinel
   // GATE_UNRESOLVED ("unresolved") appears ONLY for the first Construction Bolt's
   // walking-skeleton gate, which the conductor resolves via report (the
@@ -283,6 +289,12 @@ export interface RunStageDirective {
     proof_path: string;
     verification_command: string | null;
     command_authorized: boolean;
+    // Only the Unit's reviewed code changed since its review: run this review
+    // request now, without asking, then verify again.
+    rereview?: { stage: string; reviewer: string; iteration: number; command: string };
+    // The current review re-checked that changed code or those documents; the
+    // person gets one approval question that says so.
+    rechecked?: { verdict: string; approved_before: boolean; changed: "code" | "documents" };
   };
   swarm_checkpoint?: {
     batch: number;
@@ -294,7 +306,7 @@ export interface RunStageDirective {
     errors: string[];
   };
   // The person's answer to the artifact re-use question for this Unit's step,
-  // recorded by the engine when they chose Redo on the resume menu: the
+  // recorded by the engine when they asked to redo it on re-entry: the
   // conductor redoes the step without asking it again (#1411).
   artifact_reuse?: {
     decision: "redo";
@@ -496,20 +508,29 @@ interface AskDirectiveBase {
   question: string;
 }
 
+/** One plan the person can name instead: its complete command, and its stage count as the person sees it ("17 of 33 stages"). */
+export interface ScopeCommandRow {
+  scope: string;
+  command: string;
+  stages?: string;
+}
+
 export interface ScopeConfirmAskDirective extends AskDirectiveBase {
   ask_type: "scope-confirm";
   response_route: "next";
   proposed_scope: string;
   confirm_command: string;
   compose_command: string;
-  scope_commands: Array<{ scope: string; command: string }>;
+  scope_commands: ScopeCommandRow[];
+  /** The offer's answers as the person sees them, in order: go ahead, then compose. */
+  choices: Array<{ label: string; command: string }>;
 }
 
 export interface ComposeOfferAskDirective extends AskDirectiveBase {
   ask_type: "compose-offer";
   response_route: "next";
   compose_command: string;
-  scope_commands: Array<{ scope: string; command: string }>;
+  scope_commands: ScopeCommandRow[];
 }
 
 export interface IntentPickAskDirective extends AskDirectiveBase {
@@ -552,7 +573,7 @@ export interface NewWorkRoutingAskDirective extends AskDirectiveBase {
   /** Option 2 with the proposed scope. */
   new_intent_command: string;
   /** Option 2 with a human-corrected scope: one complete command per valid scope. */
-  scope_commands: Array<{ scope: string; command: string }>;
+  scope_commands: ScopeCommandRow[];
   /** Option 3, after any required record selection. */
   compose_command: string;
   /** Option 1 for the active workflow the question named; absent when the human selects a record. */
@@ -611,9 +632,10 @@ export interface GuardRecoveryAskDirective extends AskDirectiveBase {
 }
 
 // plan-approval: the engine asks the person to approve a Code Generation plan
-// (or several ready Unit plans at once). The human-turn hook records the reply
-// in the person's own words and takes the fingerprint itself; the conductor
-// shows the question, ends the turn, and runs `next` after the reply.
+// (or several ready Unit plans at once). The human-turn hook keeps the reply in
+// the person's own words and records an exact pick; the conductor shows the
+// question, ends the turn, records the choice the person made with `log answer
+// --checkpoint plan-approval`, and runs `next`.
 export interface PlanApprovalAskDirective extends AskDirectiveBase {
   ask_type: "plan-approval";
   response_route: "next";
@@ -774,6 +796,7 @@ const RUN_STAGE_FIELDS = [
   "single",
   "inline_context_paths",
   "context_warnings",
+  "kept_replies",
   "gate",
   "unit_gate",
   "construction_policy",
@@ -880,6 +903,7 @@ const ASK_FIELDS = [
   "plan_approval",
   "existing_code_command",
   "new_project_command",
+  "choices",
 ] as const;
 const PRINT_FIELDS = ["kind", "message", "next_stage"] as const;
 const ERROR_FIELDS = ["kind", "message"] as const;
@@ -1103,6 +1127,7 @@ export function validateDirective(obj: unknown): ValidationResult {
         "state_signature",
         "existing_code_command",
         "new_project_command",
+        "choices",
       ] as const;
       const rejectUnexpected = (
         askType: string,
@@ -1121,7 +1146,8 @@ export function validateDirective(obj: unknown): ValidationResult {
         checkString(o, "proposed_scope", kind, errors);
         checkString(o, "confirm_command", kind, errors);
         checkString(o, "compose_command", kind, errors);
-        checkCommandRows(o, "scope_commands", "scope", kind, errors);
+        checkCommandRows(o, "scope_commands", "scope", kind, errors, ["stages"]);
+        checkCommandRows(o, "choices", "label", kind, errors);
         rejectUnexpected(
           "scope-confirm",
           {
@@ -1129,6 +1155,7 @@ export function validateDirective(obj: unknown): ValidationResult {
             confirm_command: true,
             compose_command: true,
             scope_commands: true,
+            choices: true,
           },
         );
       } else if (o.ask_type === "compose-offer") {
@@ -1136,7 +1163,7 @@ export function validateDirective(obj: unknown): ValidationResult {
           errors.push(`${kind}: compose-offer response_route must be "next"`);
         }
         checkString(o, "compose_command", kind, errors);
-        checkCommandRows(o, "scope_commands", "scope", kind, errors);
+        checkCommandRows(o, "scope_commands", "scope", kind, errors, ["stages"]);
         rejectUnexpected(
           "compose-offer",
           {
@@ -1183,7 +1210,7 @@ export function validateDirective(obj: unknown): ValidationResult {
         checkString(o, "proposed_scope", kind, errors);
         checkString(o, "numbered_prose_question", kind, errors);
         checkString(o, "new_intent_command", kind, errors);
-        checkCommandRows(o, "scope_commands", "scope", kind, errors);
+        checkCommandRows(o, "scope_commands", "scope", kind, errors, ["stages"]);
         checkString(o, "compose_command", kind, errors);
         if ("available_intents" in o || "select_commands" in o || "reshape_commands" in o) {
           checkStringArray(o, "available_intents", kind, errors);
@@ -1317,6 +1344,7 @@ function checkRunStageShared(
   checkOptionalPipeline(o, kind, errors);
   checkStringArray(o, "inline_context_paths", kind, errors);
   checkOptionalStringArray(o, "context_warnings", kind, errors);
+  checkOptionalKeptReplies(o, kind, errors);
   checkGate(o, "gate", kind, errors);
   checkString(o, "memory_path", kind, errors);
   checkStringArray(o, "consumes", kind, errors);
@@ -1413,6 +1441,17 @@ function checkRunStageShared(
           errors.push(`${kind}: construction_checkpoint.${field} must be a string array`);
         }
       }
+      const rereview = checkpoint.rereview;
+      if (
+        "rereview" in checkpoint &&
+        (!isObject(rereview) || typeof rereview.command !== "string" || !Number.isSafeInteger(rereview.iteration))
+      ) errors.push(`${kind}: construction_checkpoint.rereview must carry its review request`);
+      const rechecked = checkpoint.rechecked;
+      if (
+        "rechecked" in checkpoint &&
+        (!isObject(rechecked) || typeof rechecked.verdict !== "string" || typeof rechecked.approved_before !== "boolean" ||
+          (rechecked.changed !== "code" && rechecked.changed !== "documents"))
+      ) errors.push(`${kind}: construction_checkpoint.rechecked must carry its verdict`);
     }
   }
   if ("artifact_reuse" in o) {
@@ -1870,6 +1909,30 @@ function checkOptionalPipeline(
   checkStringArray(value, "completed", kind, errors);
 }
 
+function checkOptionalKeptReplies(
+  o: Record<string, unknown>,
+  kind: DirectiveKind,
+  errors: string[],
+): void {
+  if (!("kept_replies" in o)) return;
+  const value = o.kept_replies;
+  if (!isPlainObject(value)) {
+    errors.push(`${kind}: kept_replies must be object, got ${describe(value)}`);
+    return;
+  }
+  for (const key of Object.keys(value)) {
+    if (key !== "answered" && key !== "replies" && key !== "note") errors.push(`${kind}: kept_replies unknown key: ${key}`);
+  }
+  const answered = value.answered;
+  if (!Array.isArray(answered) || !answered.every((entry) =>
+    isPlainObject(entry) && typeof entry.question === "string" && typeof entry.answer === "string" &&
+    Object.keys(entry).every((key) => key === "question" || key === "answer"))) {
+    errors.push(`${kind}: kept_replies.answered must be an array of { question, answer } strings`);
+  }
+  checkStringArray(value, "replies", kind, errors);
+  checkString(value, "note", kind, errors);
+}
+
 function checkOptionalTrue(
   o: Record<string, unknown>,
   field: string,
@@ -2307,6 +2370,7 @@ function checkCommandRows(
   key: string,
   kind: DirectiveKind,
   errors: string[],
+  optional: readonly string[] = [],
 ): void {
   if (!(field in o)) {
     errors.push(`${kind}: missing required field: ${field}`);
@@ -2326,8 +2390,10 @@ function checkCommandRows(
       continue;
     }
     for (const rowKey of Object.keys(row)) {
-      if (rowKey !== key && rowKey !== "command") {
+      if (rowKey !== key && rowKey !== "command" && !optional.includes(rowKey)) {
         errors.push(`${kind}: ${field}[${i}] unknown key: ${rowKey}`);
+      } else if (optional.includes(rowKey) && typeof row[rowKey] !== "string") {
+        errors.push(`${kind}: ${field}[${i}].${rowKey} must be string, got ${describe(row[rowKey])}`);
       }
     }
     if (typeof row[key] !== "string") {
@@ -2431,7 +2497,7 @@ if (import.meta.main) {
         "Could not read optional knowledge file example.md; fix its permissions.",
       ],
       sensors_applicable: ["required-sections", "upstream-coverage"],
-      ceremony: { sensors: "on", learnings: "on", summary_confirmation: "on", plan_approval: "on" },
+      ceremony: { sensors: "on", learnings: "on", summary_confirmation: "on", plan_approval: "on", collaborators: "on" },
       stage_file: ".claude/aidlc-common/stages/inception/domain-design.md",
       next_stage: "Units Generation",
     },
@@ -2449,7 +2515,7 @@ if (import.meta.main) {
       produces: ["aidlc-docs/construction/auth/code-generation/code-manifest.md"],
       rules_in_context: ["aidlc-org.md", "aidlc-phase-construction.md"],
       sensors_applicable: ["linter", "type-check"],
-      ceremony: { sensors: "on", learnings: "on", summary_confirmation: "on", plan_approval: "on" },
+      ceremony: { sensors: "on", learnings: "on", summary_confirmation: "on", plan_approval: "on", collaborators: "on" },
       stage_file: ".claude/aidlc-common/stages/construction/code-generation.md",
       worker: "code-generation",
     },
@@ -2485,6 +2551,16 @@ if (import.meta.main) {
           command: "aidlc engine orchestrate next --scope feature --request a1b2c3d4",
         },
       ],
+      choices: [
+        {
+          label: "Go ahead with the \"bugfix\" plan",
+          command: "aidlc engine orchestrate next --scope bugfix --request a1b2c3d4",
+        },
+        {
+          label: "Tailor a plan to this task",
+          command: "aidlc engine orchestrate next compose --request a1b2c3d4",
+        },
+      ],
     },
     { kind: "print", message: "AIDLC framework version 0.0.0" },
     { kind: "error", message: 'Unknown scope: "frobnicate"' },
@@ -2510,7 +2586,7 @@ if (import.meta.main) {
       produces: ["aidlc-docs/construction/{unit-name}/functional-design/functional-spec.md"],
       rules_in_context: ["aidlc-org.md", "aidlc-phase-construction.md"],
       sensors_applicable: ["required-sections"],
-      ceremony: { sensors: "on", learnings: "on", summary_confirmation: "on", plan_approval: "on" },
+      ceremony: { sensors: "on", learnings: "on", summary_confirmation: "on", plan_approval: "on", collaborators: "on" },
       stage_file: ".claude/aidlc-common/stages/construction/functional-design.md",
       conductor_persona: "# The Conductor's Craft …",
     },

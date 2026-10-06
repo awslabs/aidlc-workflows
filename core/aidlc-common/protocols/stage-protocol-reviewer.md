@@ -9,7 +9,7 @@ If the `run-stage` directive includes a `reviewer` field (non-null), the orchest
 The directive's `review_class` field tells you HOW the review runs - the engine has already resolved it (stage declaration, lowered by the scope's `review_cap` and any per-run `--review` override; a `none` resolution omits the reviewer block entirely, so a directive that carries a reviewer always carries a class):
 
 - **`adversarial`** - the refute-and-repair loop below, up to `reviewer_max_iterations` passes with lead fixes between them. The default for Construction stages, where findings are machine-checkable and fix loops converge.
-- **`advisory`** - ONE normal-flow review pass as decision support for the human gate (`reviewer_max_iterations` is 1). Whatever the verdict, do NOT re-invoke the lead and do NOT re-run the reviewer during normal flow: record the terminal receipt, proceed to §13 only when the `learnings` module is listed (otherwise directly to the approval gate), and print the engine's derived findings brief for the human to triage. The bounded stale-receipt recovery below is the only exception. The default for the human-gated ideation/inception prose stages, where readiness is a judgment call that belongs to the human at the gate.
+- **`advisory`** - ONE normal-flow review pass as decision support for the human gate (`reviewer_max_iterations` is 1). Whatever the verdict, do NOT re-invoke the lead and do NOT re-run the reviewer during normal flow: record the terminal receipt, proceed to §13 only when the `learnings` module is listed (otherwise directly to the approval gate), and print the engine's derived findings brief for the human to triage. The bounded stale-receipt recovery below, and a review the person asks for, are the only exceptions. The default for the human-gated ideation/inception prose stages, where readiness is a judgment call that belongs to the human at the gate.
 
 ### What the user hears from this section
 
@@ -241,7 +241,7 @@ through normal recovery; do not rewrite receipts or assume a new receipt format.
    embedded input form is removed in the next minor release. Do not write an
    embedded section; the old section stays where it is as inert content.
 
-   The recorded receipt is TERMINAL whenever no further review pass follows it: do not write reviewed outputs between recording it and gate approval; summary-owned questions follow the separate boundary above; for a per-unit `workspace_requires` stage, also do not write the unit's `source-manifest.json` or any claimed source path (a later write is deterministically invalidated at completion and the engine refuses the gate). A verdict may arrive with optional suggestions riding along; do NOT apply them - quote them verbatim in the completion summary for the human to weigh at the gate. A suggestion is gate input, not a defect (step 2: it is not grounds for NOT-READY, so it is not grounds for editing past the terminal receipt either). Riding suggestions also never change the gate itself: keep the §1 approval question's standard option order (Approve first, Request Changes second) - do not present Request Changes as the recommended or first option because a suggestion exists. On harnesses with PreToolUse enforcement the review-freeze hook refuses writes to those reviewed `produces[]`/`optional_produces[]` outputs (`REVIEW_FREEZE_BLOCKED`); manifest and claimed-source writes are caught by the completion guard rather than the hook. A recorded gate rejection lifts the freeze for the revision path.
+   The recorded receipt is TERMINAL whenever no further review pass follows it: do not write reviewed outputs between recording it and gate approval; summary-owned questions follow the separate boundary above; for a per-unit `workspace_requires` stage, also do not write the unit's `source-manifest.json` or any claimed source path (a later write is deterministically invalidated at completion and the engine refuses the gate). The one exception is a change the person asks for under Guard Policy `relaxed` or `off` (below). A verdict may arrive with optional suggestions riding along; do NOT apply them - quote them verbatim in the completion summary for the human to weigh at the gate. A suggestion is gate input, not a defect (step 2: it is not grounds for NOT-READY, so it is not grounds for editing past the terminal receipt either). Riding suggestions also never change the gate itself: keep the §1 approval question's standard option order (Approve first, Request Changes second) - do not present Request Changes as the recommended or first option because a suggestion exists. On harnesses with PreToolUse enforcement the review-freeze hook refuses writes to those reviewed `produces[]`/`optional_produces[]` outputs (`REVIEW_FREEZE_BLOCKED`); manifest and claimed-source writes are caught by the completion guard rather than the hook. A recorded gate rejection lifts the freeze for the revision path.
    If a write still invalidates the receipt, what happens next is decided by
    the intent's Guard Policy value (`/aidlc --status` shows it). Under
    `strict`, the first request after that stale terminal evidence is exactly
@@ -254,22 +254,46 @@ through normal recovery; do not rewrite receipts or assume a new receipt format.
    brief below with `Why now: Re-check after the artifact changed.` If that
    recovery receipt is invalidated again, request no further review. On an
    interactive stage, present the recovery-spent refusal to the human; only
-   Request Changes (`GATE_REJECTED`) resets the attempt. Under `relaxed` or
-   `off`, the receipt stays valid and no recovery review is requested: the gate or
-   completion records one `CHANGE_ACCEPTED` row, the engine's `report`
+   Request Changes (`GATE_REJECTED`) resets the attempt.
+
+   **A review the person asks for.** When the person asks for a review of a
+   stage, or of a Unit they already approved, record it through AI-DLC the
+   first time they ask, under every Guard Policy (`strict`, `relaxed`, and
+   `off` alike): run step 1's `{{INVOKE}} engine log review` request for that
+   stage (and `--unit`) at the next iteration, dispatch the reviewer, and
+   record its verdict as in step 3. The engine never refuses it for want of
+   passes, past the cap or a spent recovery; the cap and the one recovery
+   bound only the reviews you start on your own. Never write a review file by
+   hand, and never offer to change the Guard Policy to get a review.
+
+   Under `relaxed` or `off`, the receipt stays valid and the engine asks for no
+   recovery review on its own (a review the person asks for still runs, as
+   above): the gate or completion records one `CHANGE_ACCEPTED` row, the engine's `report`
    directive (or the tool's JSON) carries one `change_notices` line for the
    human, and the Review brief below says `Reviewed content differs` with the
-   changed paths. The reviewer's verdict is never altered, and the freeze
-   remains this protocol's obligation under both values; under `relaxed` or
-   `off` the review-freeze fence stands aside for work nobody directed and
-   records `GUARD_STOOD_ASIDE` instead of refusing, so the obligation is met by
-   following this protocol rather than by a refusal.
+   changed paths (a Unit's own brief, with `--unit`, says only that Unit's). The reviewer's verdict is never altered. Under `relaxed` or
+   `off`, a change the person asks for after the verdict ("rename the handler",
+   "fix that answer") is made directly, with no Request Changes round and no
+   new review; the gate then shows the change as above. The freeze stays this
+   protocol's obligation only for changes nobody asked for, such as applying a
+   reviewer's riding suggestions on your own; the review-freeze fence stands
+   aside and records `GUARD_STOOD_ASIDE` instead of refusing, so that
+   obligation is met by following this protocol rather than by a refusal. Construction checkpoints
+   read the same value: under `relaxed` and `off` a change to a Unit's code or
+   documents after their review is accepted there too, with one line, and the
+   Unit's approval stands. Under `strict`, a Unit whose reviewed code or
+   documents changed after their review gets that one recovery review, and its
+   checkpoint directs it (`construction_checkpoint.rereview`); each time the
+   person approves that Unit it gets a fresh one, so a Unit edited again later
+   is re-checked again.
    **Review brief (required at every reviewer-backed human gate).** Before the
    structured approval question, run
    `bun {{HARNESS_DIR}}/tools/aidlc-review-brief.ts review --stage "<directive.stage>" --why <first|revision|stale>`;
    on the final `gate: true` re-entry of a per-unit stage, omit `--unit` because
    that one human decision covers every Unit and approval records dispositions
-   for every Unit's open findings. Unit-filtered `context` output remains mandatory for
+   for every Unit's open findings. At a Unit's own approval (its Construction
+   checkpoint, or its team Unit gate), add `--unit "<unit>"`: that approval covers
+   only that Unit, and the brief shows only its review. Unit-filtered `context` output remains mandatory for
    each reviewer dispatch. Select `first` after the initial review, `revision`
    after a requested revision, and `stale` after artifact/source invalidation or
    a backward jump. Print stdout verbatim. It deterministically renders the
@@ -416,6 +440,10 @@ re-checked.`).
 > After restoration succeeds, announce the returned restored path plainly:
 > **SAY:** "I restored the previous attempt at [returned restored path]."
 > Restoration does not resume the old attempt or make its review current.
+
+### Files and commands
+
+Write and edit files yourself with your file tools, never through the shell (no heredoc, no `echo`, `printf`, or `python3` writing a file, no `sed -i`, no `mkdir`; the file-write tool creates any missing folder). A command the person asks for, or one the plan names (a package install, a build, a scaffolder, a migration, a formatter, a code generator, even a `mkdir`), still runs as written. Read, list, and search (your own knowledge files included) with your file tools where you have them; where the shell is your only way to read, use one plain read command (no `cd` before it, no pipe or second command after it). Run every AI-DLC command exactly as written, as a command of its own (no `cd` before it, no pipe or second command after it): a shell line can stop and ask the person to approve it. The review file's folder already exists: the review request creates it.
 
 ### What the reviewer does NOT do
 

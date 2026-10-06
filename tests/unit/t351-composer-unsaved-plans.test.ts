@@ -1,5 +1,5 @@
 // covers: function:planChangesBetween, function:planWithChanges,
-// function:splitSlugList, function:composedPlanLabel,
+// function:splitSlugList, function:composedPlanLabel, function:PLAN_NAME_PATTERN,
 // function:firstPlannedStageOfPhase, function:customPlanBase, function:customPlanStart,
 // function:guardPolicyAtLeast,
 // function:saveComposedScope, function:writeCompiledGraphLocked,
@@ -30,6 +30,7 @@ import { customPlanBase, customPlanStart, nearestStockScopes, scopeSettingsOf } 
 import {
   auditFilePath,
   composedPlanLabel,
+  PLAN_NAME_PATTERN,
   firstInScopeStageOfPhase,
   firstPlannedStageOfPhase,
   guardPolicyAtLeast,
@@ -65,7 +66,7 @@ const POLICY_ENV = {
   AIDLC_STAGE_GRAPH: join(AIDLC_SRC, "tools", "data", "stage-graph.json"),
   AIDLC_SCOPES_DIR: join(REPO_ROOT, "core", "scopes"),
 };
-const STOCK_ON = { sensors: "on", learnings: "on", summary_confirmation: "on", plan_approval: "on", review_cap: "adversarial" } as const;
+const STOCK_ON = { sensors: "on", learnings: "on", summary_confirmation: "on", plan_approval: "on", collaborators: "off", review_cap: "adversarial" } as const;
 // bugfix plus a design pass, without shipping: the shape the tests compose.
 const ADD = "functional-design";
 const SKIP = "deployment-pipeline,deployment-execution";
@@ -173,7 +174,12 @@ describe("t351 (1) a plan is its scope's grid with its own stage changes", () =>
     });
     expect(splitSlugList(" a, ,b ")).toEqual(["a", "b"]);
     expect(splitSlugList(undefined)).toEqual([]);
-    expect(composedPlanLabel("bugfix")).toBe("custom, based on bugfix");
+    // Named as the gate showed it, never after the scope it runs on.
+    expect(composedPlanLabel("date-parser-fix")).toBe("date-parser-fix");
+    expect(composedPlanLabel()).toBe("tailored plan");
+    expect(composedPlanLabel("Not A Name")).toBe("tailored plan");
+    expect(PLAN_NAME_PATTERN.test("date-parser-fix")).toBe(true);
+    for (const bad of ["Date", "-lead", "a b", "a;b", "x".repeat(64)]) expect(PLAN_NAME_PATTERN.test(bad), bad).toBe(false);
   });
 
   test("the plan's first Construction stage is its skeleton gate", () => {
@@ -391,12 +397,12 @@ describe("t351 (3) creating a composed plan writes it to the work's state, not a
   test("the stages, dirs, audit, and Plan line follow the plan", () => {
     const proj = installedProject();
     const before = scopeFiles(proj);
-    const created = createComposed(proj);
+    const created = createComposed(proj, ["--plan-name", "date-parser-fix"]);
     expect(created.status, created.out).toBe(0);
-    expect(created.out).toContain("Plan: custom, based on bugfix, for this piece of work only (no scope file written)");
+    expect(created.out).toContain("Plan: date-parser-fix, for this piece of work only (no scope file written)");
     const state = stateOf(proj);
     expect(state).toContain("- **Scope**: bugfix");
-    expect(state).toContain("- **Plan**: custom, based on bugfix");
+    expect(state).toContain("- **Plan**: date-parser-fix\n");
     expect(suffixOf(state, ADD)).toBe("EXECUTE");
     expect(suffixOf(state, "deployment-pipeline")).toBe("SKIP");
     expect(suffixOf(state, "deployment-execution")).toBe("SKIP");
@@ -404,7 +410,7 @@ describe("t351 (3) creating a composed plan writes it to the work's state, not a
     expect(existsSync(join(activeRecord(proj), "operation"))).toBe(false);
     expect(existsSync(join(activeRecord(proj), "construction"))).toBe(true);
     const audit = auditOf(proj);
-    expect(audit).toContain("**Plan**: custom, based on bugfix");
+    expect(audit).toContain("**Plan**: date-parser-fix");
     expect(audit).toContain("**Stages skipped**: deployment-pipeline, deployment-execution");
     expect(audit).toContain(`**Stages added**: ${ADD}`);
     expect(audit).toContain("**Reason**: this plan excludes operation");
@@ -413,7 +419,21 @@ describe("t351 (3) creating a composed plan writes it to the work's state, not a
     expect(savedRecords(proj)).toEqual([]);
     // Status names the plan.
     const status = runTool(proj, "aidlc-utility.ts", ["status"]);
-    expect(status.out).toContain("Plan:           custom, based on bugfix (this piece of work only)");
+    expect(status.out).toContain("Plan:           date-parser-fix (this piece of work only)");
+    expect(status.out).not.toContain("based on bugfix");
+  });
+
+  test("without a name the plan reads as tailored, and a name with other characters is refused before anything is created", () => {
+    const proj = installedProject();
+    const created = createComposed(proj);
+    expect(created.status, created.out).toBe(0);
+    expect(created.out).toContain("Plan: tailored plan, for this piece of work only (no scope file written)");
+    expect(stateOf(proj)).toContain("- **Plan**: tailored plan\n");
+    const other = installedProject();
+    const refused = createComposed(other, ["--plan-name", "$(touch pwned)"]);
+    expect(refused.status).not.toBe(0);
+    expect(refused.out).toContain("--plan-name takes lowercase letters, digits and hyphens");
+    expect(existsSync(join(other, "pwned"))).toBe(false);
   });
 
   test("a refused plan creates nothing", () => {
@@ -484,6 +504,9 @@ describe("t351 (4) next carries the plan's typed changes and checks every echoed
     const command = /`([^`]*engine recompose [^`]*)`/.exec(d.message)?.[1] ?? "";
     expect(command.endsWith("engine recompose --skip team-formation"), d.message).toBe(true);
     expect(d.message).toContain('"Skipped team-formation. To undo it, type `/aidlc --add team-formation`."');
+    // The one line is all the person hears: recompose's counts stay out of the reply.
+    expect(d.message).toContain("do not show its output");
+    expect(d.message).not.toContain("print its output verbatim");
     const words = command.split(" ");
     const applied = runTool(proj, "aidlc.ts", words.slice(words.indexOf("engine")));
     expect(applied.status, applied.out).toBe(0);
@@ -502,6 +525,8 @@ describe("t351 (4) next carries the plan's typed changes and checks every echoed
     expect(setting, both.message).toBeGreaterThan(-1);
     expect(setting).toBeLessThan(both.message.indexOf("engine recompose --add team-formation"));
     expect(both.message).toContain("To undo it, type `/aidlc --skip team-formation`.");
+    // The setting's own line is still shown; recompose's counts are not.
+    expect(both.message).toMatch(/config set depth minimal[^`]*` and print its output verbatim, then run `[^`]*engine recompose --add team-formation` to change this workflow's remaining stages as the person asked, and do not show its output/);
 
     const combined = nextDirective(proj, ["compose", "--skip", "team-formation", "trim it"]);
     expect(combined.kind).toBe("error");
@@ -730,7 +755,7 @@ describe("t351 (8) a custom plan starts from classic's ceremony, whatever stock 
   // person gets without composing.
   const CLASSIC = {
     guard_policy: "off",
-    scope_settings: { sensors: "on", learnings: "on", summary_confirmation: "off", plan_approval: "on", review_cap: "advisory" },
+    scope_settings: { sensors: "on", learnings: "on", summary_confirmation: "off", plan_approval: "on", collaborators: "off", review_cap: "advisory" },
   } as const;
   const read = (surface: string) => readFileSync(join(REPO_ROOT, surface), "utf-8").replace(/\s+/g, " ");
 

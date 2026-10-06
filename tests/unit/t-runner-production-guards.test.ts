@@ -116,6 +116,15 @@ describe("runner guard profile options", () => {
     }
   });
 
+  test("--exclude takes a non-empty filename regex and leaves the filter alone", () => {
+    expect(parseRunnerArgs(["--integration", "--exclude", "^t-scope-run-"], {})).toMatchObject({
+      exclude: "^t-scope-run-", filter: "",
+    });
+    expect(parseRunnerArgs(["--integration"], {}).exclude).toBe("");
+    expect(() => parseRunnerArgs(["--exclude"], {})).toThrow(RunnerArgsError);
+    expect(() => parseRunnerArgs(["--exclude", ""], {})).toThrow(RunnerArgsError);
+  });
+
   test("a filter value is not interpreted as a guard option; help still exits parsing", () => {
     expect(parseRunnerArgs(["--filter", "--production-guards"], {}).guardProfile)
       .toBe("fixture");
@@ -407,6 +416,21 @@ describe("explicit runner coverage uses real JUnit execution evidence", () => {
     expect(run.summary).toContain("Skipped files: 1");
     expect(run.failures.trim()).toBe("");
     expect(existsSync(join(fixture.root, "executed.txt"))).toBe(false);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("--exclude leaves a weighted file out of its unit shard and the rest of the shard runs", () => {
+    const fixture = runnerFixture({
+      "unit/t-weighted.test.ts": PASSING_CASE,
+      "unit/t-sibling.test.ts": PASSING_CASE,
+      "unit-shard-weights.json": JSON.stringify({
+        defaultSeconds: 1, weights: { "t-weighted.test.ts": 5, "t-sibling.test.ts": 5 }, affinityGroups: [],
+      }),
+    });
+    const run = fixture.run(["--unit", "--no-llm", "--shard", "1/1", "--exclude", "^t-weighted"]);
+    expect(run.status).toBe(0);
+    expect(run.out).toContain("=== DONE t-sibling.test.ts (PASS) ===");
+    expect(run.out).not.toContain("t-weighted.test.ts");
+    expect(run.summary).toContain("Test files: 1");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("partially skipped files pass when a case really executes, without requiring expect calls", () => {
@@ -770,6 +794,17 @@ test("fails on its first attempt only", () => {
 });`,
   steady: `${RETRY_PRELUDE}
 test("passes", () => expect(1).toBe(1));`,
+  timesOutOnce: `${RETRY_PRELUDE}
+test("runs past its case timeout on its first attempt only", async () => {
+  const marker = join(observer, name + ".timed-out-once");
+  if (!existsSync(marker)) {
+    writeFileSync(marker, "1");
+    await Bun.sleep(3_000);
+  }
+}, 500);`,
+  timeoutBesideFailure: `${RETRY_PRELUDE}
+test("runs past its case timeout", async () => { await Bun.sleep(3_000); }, 500);
+test("fails an assertion", () => expect(1).toBe(2));`,
   alwaysFails: `${RETRY_PRELUDE}
 test("fails every time", () => expect(1).toBe(2));`,
   hangs: `${RETRY_PRELUDE}
@@ -831,6 +866,27 @@ describe("merge-queue retry of ordinary tiers through the public runner", () => 
     for (const retry of report.retries) {
       expect(retry).toMatchObject({ passedOnRetry: true, firstAttempt: { failedCases: 1 }, secondAttempt: { status: "PASS", failedCases: 0 } });
     }
+  });
+
+  test("a file whose only failure is a case timeout is retried, and the retry says so", () => {
+    const { fixture, observer, runs } = retryFixture({ "integration/t-times-out-once.test.ts": RETRY_CASES.timesOutOnce });
+    const result = fixture.run(["--integration", "--no-llm", "--file-retries", "1"], { AIDLC_RETRY_OBSERVER: observer });
+    expect(result.status, result.out + result.failures).toBe(0);
+    expect(runs()).toEqual(["t-times-out-once", "t-times-out-once"]);
+    expect(result.out).toContain("=== RETRY t-times-out-once.test.ts (first attempt failed 1 case(s), each by its case timeout;");
+    const [retry] = JSON.parse(readFileSync(join(result.stamp, "retries.json"), "utf8")).retries;
+    expect(retry).toMatchObject({ passedOnRetry: true, firstAttempt: { failedCases: 1, caseTimeoutsOnly: true } });
+  });
+
+  test("a case timeout beside an assertion failure follows the ordinary rule", () => {
+    const { fixture, observer, runs } = retryFixture({ "integration/t-timeout-beside-failure.test.ts": RETRY_CASES.timeoutBesideFailure });
+    const result = fixture.run(["--integration", "--no-llm", "--file-retries", "1"], { AIDLC_RETRY_OBSERVER: observer });
+    expect(result.status).toBe(1);
+    expect(runs()).toEqual(["t-timeout-beside-failure", "t-timeout-beside-failure"]);
+    expect(result.out).not.toContain("each by its case timeout");
+    const [retry] = JSON.parse(readFileSync(join(result.stamp, "retries.json"), "utf8")).retries;
+    expect(retry.firstAttempt.caseTimeoutsOnly).toBeUndefined();
+    expect(retry).toMatchObject({ passedOnRetry: false, firstAttempt: { failedCases: 2 } });
   });
 
   test("a second failure stays a failure", () => {
