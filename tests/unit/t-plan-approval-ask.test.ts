@@ -2200,6 +2200,9 @@ describe("what the engine names while a plan waits", () => {
     const record = join(intents, readFileSync(join(intents, "active-intent"), "utf-8").trim());
     const reviewFile = ".aidlc-engine/reviews/code-generation/stage/a1/2.0123456789abcdef0123456789abcdef.review.md";
     const dispatch = join(record, ".aidlc-engine", "reviewer-dispatch.json");
+    // The path as an agent types it in bash: from the project, with forward
+    // slashes (bash reads a Windows backslash as an escape).
+    const dispatchInShell = dispatch.slice(proj.length + 1).replace(/\\/g, "/");
     expect(guardWrite(proj, join(record, reviewFile)).code).toBe(2);
     expect(guardWrite(proj, dispatch).code).toBe(2);
     appendAuditEntry("REVIEW_REQUESTED", {
@@ -2208,12 +2211,12 @@ describe("what the engine names while a plan waits", () => {
     }, proj);
     expect(guardWrite(proj, join(record, reviewFile)).code).toBe(0);
     expect(guardWrite(proj, dispatch).code).toBe(0);
-    expect(guardBash(proj, `rm ${dispatch}`).code).toBe(0);
+    expect(guardBash(proj, `rm ${dispatchInShell}`).code).toBe(0);
     // Everything else still waits for the plan answer.
     expect(guardWrite(proj, join(record, ".aidlc-engine", "reviews", "code-generation", "stage", "a1", "3.other.review.md")).code).toBe(2);
     expect(guardWrite(proj, join(record, "construction", "code-generation", "code-summary.md")).code).toBe(2);
     expect(guardWrite(proj, join(proj, "src", "slugify.ts")).code).toBe(2);
-    expect(guardBash(proj, `printf x > ${dispatch}; printf x > src/a.ts`).code).toBe(2);
+    expect(guardBash(proj, `printf x > ${dispatchInShell}; printf x > src/a.ts`).code).toBe(2);
     // Once the review completes, its files wait again.
     appendAuditEntry("REVIEW_COMPLETED", {
       Stage: "code-generation", Reviewer: "aidlc-architecture-reviewer-agent", Iteration: "2", Verdict: "READY",
