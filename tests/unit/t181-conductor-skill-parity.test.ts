@@ -441,25 +441,6 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
     expect(missing).toEqual([]);
   });
 
-  // A live run showed a plan offer of about 200 lines (scores and a 33-row
-  // stage table) before the person could say "go ahead". The offer is short,
-  // and the tables come when asked.
-  test("the plan offer is short, with the stage table and scores on request", () => {
-    const short = "**Keep the offer short: a plain recommendation and the plan, with the details on request.**";
-    const missing = skills.flatMap((rel) => {
-      const body = readFileSync(join(REPO_ROOT, rel), "utf-8");
-      return [
-        ...(body.includes(short) ? [] : [`${rel}: short offer`]),
-        ...(body.includes("the scores and per-stage reasoning must be on screen before the user decides")
-          ? [`${rel}: tables before deciding`] : []),
-      ];
-    });
-    expect(missing).toEqual([]);
-    const orchestrate = readFileSync(join(REPO_ROOT, "core/tools/aidlc-orchestrate.ts"), "utf-8");
-    expect(orchestrate).not.toContain("Render the proposal to the human as THREE blocks");
-    expect(orchestrate).toContain("Render the proposal to the human as a SHORT offer");
-  });
-
   test("the narration rule is worded identically across every harness", () => {
     // Byte-alignment, not just presence: the rule is authored once and ported,
     // so a per-harness reword is drift. Extracted by its own anchors rather than
@@ -522,6 +503,25 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
       }
     }
     expect(failures).toEqual([]);
+  });
+
+  // A live run showed a plan offer of about 200 lines (scores and a 33-row
+  // stage table) before the person could say "go ahead". The offer is short,
+  // and the tables come when asked.
+  test("the plan offer is short, with the stage table and scores on request", () => {
+    const short = "**Keep the offer short: a plain recommendation and the plan, with the details on request.**";
+    const missing = skills.flatMap((rel) => {
+      const body = readFileSync(join(REPO_ROOT, rel), "utf-8");
+      return [
+        ...(body.includes(short) ? [] : [`${rel}: short offer`]),
+        ...(body.includes("the scores and per-stage reasoning must be on screen before the user decides")
+          ? [`${rel}: tables before deciding`] : []),
+      ];
+    });
+    expect(missing).toEqual([]);
+    const orchestrate = readFileSync(join(REPO_ROOT, "core/tools/aidlc-orchestrate.ts"), "utf-8");
+    expect(orchestrate).not.toContain("Render the proposal to the human as THREE blocks");
+    expect(orchestrate).toContain("Render the proposal to the human as a SHORT offer");
   });
 
   test("Codex conductor guidance uses its native $aidlc invocation", () => {
