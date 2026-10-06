@@ -2550,6 +2550,55 @@ describe("t147 Kiro CLI reads what the person typed from the expanded skill body
     } finally { rmSync(dir, { recursive: true, force: true }); }
   });
 
+  // A contraction or a possessive is a word, not a quote: "it's", "don't" and
+  // "users' files" keep their apostrophes, and real quoting keeps working.
+  test("an apostrophe inside or at the end of a word is a letter; one that opens a word still quotes", () => {
+    expect(splitKiroCommandArgs("fix it, it's broken")).toEqual(["fix", "it,", "it's", "broken"]);
+    expect(splitKiroCommandArgs("don't ask me again")).toEqual(["don't", "ask", "me", "again"]);
+    expect(splitKiroCommandArgs("keep the users' files and it's done")).toEqual(["keep", "the", "users'", "files", "and", "it's", "done"]);
+    expect(splitKiroCommandArgs("rock'n'roll")).toEqual(["rock'n'roll"]);
+    expect(splitKiroCommandArgs("fix the 'login' page")).toEqual(["fix", "the", "login", "page"]);
+    expect(splitKiroCommandArgs("--label='my label' now")).toEqual(["--label=my label", "now"]);
+    expect(splitKiroCommandArgs(`"it's quoted" and 'so is this'`)).toEqual(["it's quoted", "and", "so is this"]);
+  });
+
+  test("a request with contractions reaches the engine with them, and the call the agent is told to run does too", () => {
+    const dir = scratchProject(true);
+    try {
+      const said = "fix it, it's broken and don't touch the users' files";
+      const r = runAdapter(dir, "verb-intercept", { cwd: dir, session_id: session, prompt: expanded(said) }, [], env);
+      expect(r.code, r.stderr).toBe(0);
+      const words = ["fix", "it,", "it's", "broken", "and", "don't", "touch", "the", "users'", "files"];
+      const latch = join(dir, "aidlc", ".aidlc-forwarding-latch");
+      expect(JSON.parse(readFileSync(latch, "utf8")).args).toEqual(words);
+      const quoted = `fix it, "it's" broken and "don't" touch the "users'" files`;
+      expect(r.stdout).toContain(`engine orchestrate next ${quoted}\n`);
+      // A shell reads that call as the same words, so running it as told works.
+      const shell = spawnSync("sh", ["-c", `printf '%s\\n' ${quoted}`], { encoding: "utf-8" });
+      expect(shell.stdout.trimEnd().split("\n")).toEqual(words);
+      const guard = (command: string) => runAdapter(dir, "guard-tool-call", {
+        cwd: dir, tool_name: "execute_bash", tool_input: { command },
+      });
+      expect(guard(`bun .kiro/tools/aidlc.ts engine orchestrate next ${quoted}`).code).toBe(0);
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+
+  // On Windows the call runs in PowerShell. Only a word with no `$`, backtick,
+  // double quote or backslash is double-quoted, so PowerShell expands nothing
+  // in it; "$5" is single-quoted, and PowerShell reads every word back as typed.
+  test.skipIf(process.platform !== "win32")("PowerShell reads the quoted call as the same words, a dollar word included", () => {
+    const dir = scratchProject(true);
+    try {
+      const said = "don't touch the users' files it's $5 off";
+      const r = runAdapter(dir, "verb-intercept", { cwd: dir, session_id: session, prompt: expanded(said) }, [], env);
+      expect(r.code, r.stderr).toBe(0);
+      const quoted = `"don't" touch the "users'" files "it's" '$5' off`;
+      expect(r.stdout).toContain(`engine orchestrate next ${quoted}\n`);
+      const pwsh = spawnSync("powershell", ["-NoProfile", "-NonInteractive", "-Command", `& { foreach ($a in $args) { $a } } ${quoted}`], { encoding: "utf-8" });
+      expect(pwsh.stdout.trimEnd().split(/\r?\n/)).toEqual(["don't", "touch", "the", "users'", "files", "it's", "$5", "off"]);
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+
   test("a bare `/aidlc` dispatches nothing, and no `--stage <slug>`", () => {
     const dir = scratchProject(true);
     try {

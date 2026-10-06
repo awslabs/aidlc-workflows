@@ -1368,6 +1368,18 @@ export function splitDoubleQuotedArgs(raw: string): string[] {
 // quote delimiter. In particular, do not collapse `C:\path`, quoted Windows
 // paths, or UNC `\\host` prefixes while still accepting `one\ argument`,
 // `one\;two`, and `\"`/`\'` literals.
+// An apostrophe inside a word is a letter ("it's", "don't", "rock'n'roll"),
+// and so is one that ends a word when nothing later closes it ("users' files").
+// Only an apostrophe that opens a word, or one a later quote closes, quotes.
+function apostropheIsLetter(raw: string, i: number): boolean {
+  const letter = (ch: string | undefined) => ch !== undefined && /[\p{L}\p{N}]/u.test(ch);
+  if (letter(raw[i - 1]) && letter(raw[i + 1])) return true;
+  for (let j = i + 1; j < raw.length; j++) {
+    if (raw[j] === "'" && !(letter(raw[j - 1]) && letter(raw[j + 1]))) return false;
+  }
+  return true;
+}
+
 export function splitKiroCommandArgs(raw: string): string[] {
   const tokens: string[] = [];
   let current = "";
@@ -1432,6 +1444,10 @@ export function splitKiroCommandArgs(raw: string): string[] {
       if (ch === quote) quote = null;
       else current += ch;
       started = true;
+      continue;
+    }
+    if (ch === "'" && started && apostropheIsLetter(raw, i)) {
+      current += ch;
       continue;
     }
     if (ch === "'" || ch === '"') {

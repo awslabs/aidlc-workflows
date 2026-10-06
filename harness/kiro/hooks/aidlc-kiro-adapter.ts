@@ -342,12 +342,12 @@ function anchoredArgs(prompt: string): string | null {
 
 // The engine call the agent is told to run: plain typed words as they are, or,
 // when they hold anything else a shell reads (a line break, a backtick, `$`,
-// `#`, a glob), each argument quoted, so the call carries every word and runs
-// none. Single quotes are literal in sh and in PowerShell alike; a word with an
-// apostrophe takes double quotes when nothing in it expands there, and
-// otherwise this host's own shell form.
+// `#`, a glob, an apostrophe), each argument quoted, so the call carries every
+// word and runs none. Single quotes are literal in sh and in PowerShell alike;
+// a word with an apostrophe takes double quotes when nothing in it expands
+// there, and otherwise this host's own shell form.
 function forwardedArgs(raw: string, args: string[]): string {
-  if (/^[A-Za-z0-9_@%+=:,./ \t"'-]*$/.test(raw)) return raw;
+  if (/^[A-Za-z0-9_@%+=:,./ \t"-]*$/.test(raw)) return raw;
   const quote = (arg: string): string => {
     if (/^[A-Za-z0-9_@%+=:,./-]+$/.test(arg)) return arg;
     if (!arg.includes("'")) return `'${arg}'`;
