@@ -629,6 +629,12 @@ export interface GuardRecoveryAskDirective extends AskDirectiveBase {
   // Present only on the terminal ask (empty remedies): the signature of the
   // guard state that has no authority-preserving exit, for escalation.
   state_signature?: string;
+  // The ways on are the conductor's own work: it carries out the first that
+  // applies without putting the question to the person. Never published.
+  agent_work?: true;
+  // Terminal ask only: the refusal as the tool told it, for the conductor. The
+  // question carries the person's words.
+  detail?: string;
   new_work_description?: undefined;
   proposed_scope?: undefined;
   available_intents?: undefined;
@@ -910,6 +916,8 @@ const ASK_FIELDS = [
   "reason_codes",
   "remedies",
   "state_signature",
+  "agent_work",
+  "detail",
   "plan_approval",
   "existing_code_command",
   "new_project_command",
@@ -1135,6 +1143,8 @@ export function validateDirective(obj: unknown): ValidationResult {
         "reason_codes",
         "remedies",
         "state_signature",
+        "agent_work",
+        "detail",
         "existing_code_command",
         "new_project_command",
         "choices",
@@ -1287,6 +1297,10 @@ export function validateDirective(obj: unknown): ValidationResult {
         checkString(o, "stage", kind, errors);
         checkOptionalString(o, "unit", kind, errors);
         checkStringArray(o, "reason_codes", kind, errors);
+        checkOptionalString(o, "detail", kind, errors);
+        if ("agent_work" in o && o.agent_work !== true) {
+          errors.push(`${kind}: guard-recovery agent_work must be true when present`);
+        }
         checkGuardRemedies(o, kind, errors);
         rejectUnexpected(
           "guard-recovery",
@@ -1296,6 +1310,8 @@ export function validateDirective(obj: unknown): ValidationResult {
             reason_codes: true,
             remedies: true,
             state_signature: true,
+            agent_work: true,
+            detail: true,
           },
         );
       }
@@ -1561,7 +1577,9 @@ function checkOptionalStageValidity(
 }
 
 // The remedies of a guard-recovery ask. Every remedy names a closed `op`, which
-// is what routing compares; the sentence beside it is presentation. An EMPTY
+// is what routing compares; `action` instructs the conductor, and a remedy put
+// to the person carries the `label` and `description` they read. An
+// `agent_work` ask holds only the conductor's own ways on. An EMPTY
 // remedies array is the terminal ask and must carry `state_signature`: the
 // engine found no authority-preserving exit, and the human is told so with the
 // exact situation to escalate instead of being shown an error.
@@ -1579,6 +1597,12 @@ function checkGuardRemedies(
     return;
   }
   const terminal = "state_signature" in o;
+  if ("detail" in o && !terminal) {
+    errors.push(`${kind}: detail is valid only on a terminal guard-recovery ask`);
+  }
+  if (o.agent_work === true && terminal) {
+    errors.push(`${kind}: a terminal guard-recovery ask is never the conductor's own work`);
+  }
   if (terminal) {
     if (
       typeof o.state_signature !== "string" ||
@@ -1601,6 +1625,8 @@ function checkGuardRemedies(
   }
   const allowed = new Set([
     "op",
+    "label",
+    "description",
     "action",
     "operation",
     "interaction",
@@ -1627,6 +1653,23 @@ function checkGuardRemedies(
     }
     if (typeof remedy.action !== "string" || remedy.action.length === 0) {
       errors.push(`${kind}: remedies[${index}].action must be non-empty string`);
+    }
+    // The interaction the remedy's shape implies when it does not say (as
+    // evaluateGuardRefusal derives it): only `external-work` is the
+    // conductor's own; anything else is put to the person in their words.
+    const implied = "interaction" in remedy
+      ? String(remedy.interaction)
+      : "operation" in remedy ? "command" : remedy.requiresHuman === true ? "human-input" : "external-work";
+    if (o.agent_work === true) {
+      if (implied !== "external-work") {
+        errors.push(`${kind}: remedies[${index}] of the conductor's own work must be external-work`);
+      }
+    } else if (implied !== "external-work") {
+      for (const field of ["label", "description"] as const) {
+        if (typeof remedy[field] !== "string" || remedy[field].length === 0) {
+          errors.push(`${kind}: remedies[${index}].${field} must be non-empty string`);
+        }
+      }
     }
     if (
       "interaction" in remedy &&

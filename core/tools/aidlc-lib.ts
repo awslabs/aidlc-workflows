@@ -27,11 +27,14 @@ import {
 } from "./aidlc-runtime-paths.ts";
 export { entrySkillInvocation, SPACE_NAME_REGEX } from "./aidlc-runtime-paths.ts";
 import {
+  GUARD_REMEDY_WORDING,
   guardOperationInvocation,
   guardOperationMatchesEngineArgs,
   guardOperationMatchesRemedy,
   type GuardRecoveryInteraction,
   type GuardRecoveryOperation,
+  type GuardRemedyWording,
+  type GuardRemedyWordingContext,
   isGuardRecoveryOperation,
   renderEngineInvocation,
   renderGuardOperation,
@@ -7465,6 +7468,8 @@ export interface ActiveDirectiveOutOfDate {
 
 export interface ActiveDirectiveGuardRemedy {
   op: GuardRemedyOp;
+  // The name the person was shown, so typing it back is an exact pick.
+  label?: string;
   action: string;
   operation?: GuardRecoveryOperation;
   interaction?: GuardRecoveryInteraction;
@@ -8254,9 +8259,10 @@ function validActiveDirectiveGuardRemedies(
   return Array.isArray(value) && value.every((remedy) => {
     if (!isPlainObject(remedy)) return false;
     return Object.keys(remedy).every((key) =>
-      ["op", "action", "operation", "interaction"].includes(key)
+      ["op", "label", "action", "operation", "interaction"].includes(key)
     ) &&
       isGuardRemedyOp(remedy.op) &&
+      (!("label" in remedy) || typeof remedy.label === "string") &&
       typeof remedy.action === "string" &&
       (!("operation" in remedy) || isGuardRecoveryOperation(remedy.operation)) &&
       (!("interaction" in remedy) ||
@@ -9264,10 +9270,12 @@ export function consumeSharedDirectiveAsk(
     const response = marker.guard_recovery_response;
     // A reply that is exactly one remedy ("2", its label) is the person's pick:
     // syntax, recorded now. Any other reply waits for the conductor's reading.
-    // The person sees the agent's rendering of each remedy: its number, the op
-    // as written or in plain words ("Request Changes"), or its action text.
+    // The person sees each remedy by its number and the name the engine wrote
+    // for them (`label`); an older rendering showed the op as written or in
+    // plain words ("Request Changes"), or its action text.
     const remedies = marker.remedies ?? [];
-    const pick = exactOptionPick(humanResponseText, remedies.map((remedy) => remedy.action)) ??
+    const pick = exactOptionPick(humanResponseText, remedies.map((remedy) => remedy.label ?? remedy.action)) ??
+      exactOptionPick(humanResponseText, remedies.map((remedy) => remedy.action)) ??
       exactOptionPick(humanResponseText, remedies.map((remedy) => remedy.op)) ??
       exactOptionPick(humanResponseText, remedies.map((remedy) => remedy.op.replace(/-/g, " ")));
     const picked = pick === null ? null : remedies[pick];
@@ -9386,6 +9394,7 @@ function offeredGuardRemedy(
   const head = text.split(/[:;]/)[0].trim();
   const matches = remedies.filter((remedy) =>
     remedy.op === head || remedy.op.replace(/-/g, " ") === head ||
+    (remedy.label !== undefined && remedy.label.trim().toLowerCase() === head) ||
     stripRecommendedDecorator(remedy.action).trim().toLowerCase() === head);
   return matches.length === 1 ? matches[0] : null;
 }
@@ -9441,7 +9450,7 @@ export function recordGuardRecoveryChoice(
     if (response.picked_by === "person" && response.selected_op && response.selected_op !== remedy.op) {
       const theirs = (marker.remedies ?? []).find((offered) => offered.op === response.selected_op);
       throw new Error(
-        `The person picked "${theirs?.action ?? response.selected_op}" on this question. Carry that out, or ask ` +
+        `The person picked "${theirs?.label ?? theirs?.action ?? response.selected_op}" on this question. Carry that out, or ask ` +
           "them if they meant something else.",
       );
     }
@@ -28508,6 +28517,11 @@ export type GuardRemedyOp = (typeof GUARD_REMEDY_OPS)[number];
 
 export interface GuardRemedy {
   op: GuardRemedyOp;
+  // A way on put to the person: its name and one line saying what happens,
+  // in their words (GUARD_REMEDY_WORDING). The conductor's own ways on
+  // (`external-work`) carry none; it does them without asking.
+  label?: string;
+  description?: string;
   action: string;
   operation?: GuardRecoveryOperation;
   interaction?: GuardRecoveryInteraction;
@@ -29057,6 +29071,20 @@ function remedyInteraction(remedy: GuardRemedy): GuardRecoveryInteraction {
   return remedy.operation ? "command" : remedy.requiresHuman ? "human-input" : "external-work";
 }
 
+// The stage as the person knows it. The way-on question must never fail to
+// build, so an unreadable stage graph leaves the stage named as it is stored.
+function guardStageName(stage: string): string {
+  try {
+    return findStageBySlug(stage)?.name ?? stage;
+  } catch {
+    return stage;
+  }
+}
+
+// Every op decides what the person reads (or that it is the conductor's own
+// work): a new op cannot compile without an entry.
+const GUARD_REMEDY_WORDING_BY_OP: Record<GuardRemedyOp, GuardRemedyWording> = GUARD_REMEDY_WORDING;
+
 // Pure: reads nothing from disk. The same input always yields the same refusal,
 // which is what lets the enforcing tool and the router agree.
 export function evaluateGuardRefusal(
@@ -29295,6 +29323,17 @@ export function evaluateGuardRefusal(
     remedies.push(lowerFenceRemedy(input.fence));
   }
 
+  const wordingUnit = input.unit ?? input.autonomousBolt?.unit;
+  const stageName = guardStageName(input.stage);
+  const wording: GuardRemedyWordingContext = {
+    code: input.code,
+    stage: stageName,
+    target: wordingUnit ? `${stageName} for ${wordingUnit}` : stageName,
+    ...(wordingUnit ? { unit: wordingUnit } : {}),
+    ...(input.fence ? { fence: input.fence } : {}),
+    sourceUnbindable: input.attempt.sourceCoverage === "unbindable",
+    everyUnit: soloUnitMajorRefusal(input) !== null,
+  };
   return {
     code: input.code,
     blockedAction: input.blockedAction,
@@ -29303,7 +29342,11 @@ export function evaluateGuardRefusal(
     state,
     invariant: input.invariant,
     userMessage: input.userMessage,
-    remedies: remedies.map((remedy) => ({ ...remedy, interaction: remedyInteraction(remedy) })),
+    remedies: remedies.map((remedy) => {
+      const interaction = remedyInteraction(remedy);
+      const words = interaction === "external-work" ? null : GUARD_REMEDY_WORDING_BY_OP[remedy.op]?.(wording);
+      return { ...(words ? { op: remedy.op, ...words } : {}), ...remedy, interaction };
+    }),
   };
 }
 
@@ -29563,6 +29606,11 @@ export interface GuardRecoveryAskData {
   // Present only on the terminal ask: the same guard state has refused past the
   // cap with no executable remedy. Names the situation for escalation.
   state_signature?: string;
+  // The ways on are the conductor's own work: it carries out the first that
+  // applies without asking. Never published as the person's question.
+  agent_work?: true;
+  // Terminal ask only: the refusal as the tool told it, for the conductor.
+  detail?: string;
 }
 
 function guardRefusalPath(
@@ -29729,7 +29777,18 @@ export function guardRefusalStreakView(
     refusal,
     updatedAt: isoTimestamp(),
   };
-  const ask = guardRecoveryAskForRefusal(refusal);
+  // The conductor takes the ways on it can do itself, the first time. Only
+  // when the same refusal comes back, or there are none, is the person asked,
+  // and then only with the ways on that need them.
+  const own = (remedy: GuardRemedy) => (remedy.interaction ?? remedyInteraction(remedy)) === "external-work";
+  const theirs = refusal.remedies.filter((remedy) => !own(remedy));
+  const ownWork = count === 1
+    ? guardRecoveryAskForRefusal({ ...refusal, remedies: refusal.remedies.filter(own) })
+    : null;
+  if (ownWork !== null) {
+    return { count, signature, record, ask: { ...ownWork, agent_work: true } };
+  }
+  const ask = guardRecoveryAskForRefusal({ ...refusal, remedies: theirs });
   if (ask !== null) {
     return {
       count,
@@ -29796,16 +29855,9 @@ export function recordGuardRefusal(
   return streak;
 }
 
-// The stage, and its Unit when there is one, as the person knows them. The
-// way-out question must never fail to build, so an unreadable stage graph
-// leaves the stage named as it is stored.
+// The stage, and its Unit when there is one, as the person knows them.
 function guardRefusalTarget(refusal: GuardRefusal): string {
-  let name = refusal.stage;
-  try {
-    name = findStageBySlug(refusal.stage)?.name ?? refusal.stage;
-  } catch {
-    // The stage graph is unreadable here: keep the stored name.
-  }
+  const name = guardStageName(refusal.stage);
   return refusal.unit ? `${name} for ${refusal.unit}` : name;
 }
 
@@ -29852,12 +29904,13 @@ export function guardTerminalAskForRefusal(
 ): GuardRecoveryAskData {
   // In the person's terms: where the work stopped and that it needs them. The
   // refusal code and the state signature stay in the ask's fields (and the
-  // signature at the end of a repeated stop, for a report).
+  // signature at the end of a repeated stop, for a report). The tool's own
+  // message talks to the conductor, so it goes on `detail`, never the question.
   const target = guardRefusalTarget(refusal);
-  const why = refusal.userMessage.trim().length > 0 ? ` ${refusal.userMessage.trim()}` : "";
+  const why = refusal.userMessage.trim();
   const situation =
     `I stopped at ${target}: this step cannot go ahead, and there is ` +
-    `nothing I can safely do about it on my own.${why}`;
+    "nothing I can safely do about it on my own.";
   return {
     kind: "ask",
     ask_type: GUARD_RECOVERY_ASK_TYPE,
@@ -29871,6 +29924,7 @@ export function guardTerminalAskForRefusal(
     reason_codes: streak.codes,
     remedies: [],
     state_signature: streak.signature,
+    detail: `${refusal.code} on ${refusal.blockedAction} (${refusal.state}).${why ? ` ${why}` : ""}`,
   };
 }
 

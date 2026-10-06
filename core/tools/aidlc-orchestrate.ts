@@ -518,7 +518,7 @@ interface PreparedEmission {
     steering_payload?: SteeringTokenPayload;
     steering_payload_receipt?: string;
     ask_type?: string;
-    remedies?: Array<Pick<GuardRemedy, "op" | "action" | "operation" | "interaction">>;
+    remedies?: Array<Pick<GuardRemedy, "op" | "label" | "action" | "operation" | "interaction">>;
   };
 }
 
@@ -1019,10 +1019,12 @@ function prepareEmission(directive: Directive): PreparedEmission {
   // A guard-recovery ask is published as a marker so the human's selection has
   // somewhere to live across turns. Other asks keep their own machinery (the
   // resume choice) or none; publishing every ask would supersede a live
-  // run-stage marker for a question the engine re-derives on every call.
+  // run-stage marker for a question the engine re-derives on every call. The
+  // conductor's own work is no question: it leaves the issued step in place.
   if (
     transported.kind === "ask" &&
     transported.ask_type === GUARD_RECOVERY_ASK_TYPE &&
+    transported.agent_work !== true &&
     askState !== null
   ) {
     marker = {
@@ -1030,8 +1032,9 @@ function prepareEmission(directive: Directive): PreparedEmission {
       stage: transported.stage,
       ask_type: GUARD_RECOVERY_ASK_TYPE,
       ...(typeof transported.unit === "string" ? { unit: transported.unit } : {}),
-      remedies: transported.remedies.map(({ op, action, operation, interaction }) => ({
+      remedies: transported.remedies.map(({ op, label, action, operation, interaction }) => ({
         op,
+        ...(label ? { label } : {}),
         action,
         ...(operation ? { operation } : {}),
         ...(interaction ? { interaction } : {}),
@@ -1280,6 +1283,7 @@ function guardRecoveryAskMarkerIsCurrent(
     current.remedies.length === marker.remedies.length &&
     current.remedies.every((remedy, index) =>
       remedy.op === marker.remedies?.[index]?.op &&
+      remedy.label === marker.remedies[index]?.label &&
       remedy.action === marker.remedies[index]?.action &&
       remedy.interaction === marker.remedies[index]?.interaction &&
       sameGuardOperation(remedy.operation, marker.remedies[index]?.operation)

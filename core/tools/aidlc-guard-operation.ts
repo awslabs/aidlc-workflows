@@ -1,5 +1,10 @@
-import { isSwitchableGuardFence, type SwitchableGuardFence } from "./aidlc-guard-fences.ts";
-import { aidlcInvocation, quoteCommandArgument, runtimeHarnessDir } from "./aidlc-runtime-paths.ts";
+import { guardFenceConfigKey, isSwitchableGuardFence, type SwitchableGuardFence } from "./aidlc-guard-fences.ts";
+import {
+  aidlcInvocation,
+  entrySkillInvocation,
+  quoteCommandArgument,
+  runtimeHarnessDir,
+} from "./aidlc-runtime-paths.ts";
 
 // These are domain operations, not shell programs. Owning commands retain their
 // own checks; rendering an operation does not authenticate human selection.
@@ -319,4 +324,142 @@ export function guardOperationMatchesEngineArgs(
     return expected.length === args.length &&
       expected.every((value, index) => value === args[index]);
   });
+}
+
+export interface GuardRemedyWordingContext {
+  code: string;
+  // The stage's plain name, and with its Unit ("Code Generation for beta").
+  stage: string;
+  target: string;
+  unit?: string;
+  fence?: SwitchableGuardFence;
+  sourceUnbindable: boolean;
+  // A solo unit-major walk: a stage-wide reset reaches every Unit's work.
+  everyUnit: boolean;
+}
+
+// What the person reads for each way on put to them: a name and one line on
+// what happens, never how the workflow keeps track. Only commands the person
+// types are code. `null` is the conductor's own work (`external-work`), which
+// it does without asking. aidlc-lib.ts checks every op has an entry.
+export type GuardRemedyWording =
+  | ((context: GuardRemedyWordingContext) => { label: string; description: string })
+  | null;
+
+export const GUARD_REMEDY_WORDING = {
+  "present-approval-gate": (c) => ({
+    label: "Decide at approval",
+    description:
+      `I'll bring ${c.target} to you for approval with what its review raised, instead of ` +
+      "asking for another review.",
+  }),
+  "request-review": null,
+  "start-recovery-review": null,
+  "apply-repairs-then-request": null,
+  "record-verdict": null,
+  "retry-pending": null,
+  "request-changes": (c) => ({
+    label: "Request Changes",
+    description: `Tell me what should change in ${c.target}, and I'll revise it.${guardResetCost(c, "reject")}`,
+  }),
+  "finish-revision": null,
+  "redo-jump": (c) => ({
+    label: "Start the stage over",
+    description:
+      `I'll redo ${c.stage} from the top. Your answers are kept, but you'll confirm the summary ` +
+      `again and I'll save each of its documents again.${guardResetCost(c, "jump")}`,
+  }),
+  "restore-or-jump": (c) => ({
+    label: "Reopen the approved stage",
+    description: (c.sourceUnbindable
+      ? `${c.stage} is already approved, but I can't check the project's source files. I'll ` +
+        "reopen it and redo it from the top. To keep the approval instead, fix the list of " +
+        "source folders in .aidlc-source-paths.json so the files can be checked."
+      : `${c.stage} is already approved. I'll reopen it and redo it from the top. To keep the ` +
+        "approval instead, put the files back the way they were when it was reviewed.") +
+      guardResetCost(c, "jump"),
+  }),
+  "restart-stage": (c) => ({
+    label: "Restart the stage",
+    description:
+      `I'll restart ${c.stage}. Your answers are kept, and you'll be asked to confirm them ` +
+      `again.${guardResetCost(c, "jump")}`,
+  }),
+  "redo-unit-step": null,
+  "reopen-unit-step": (c) => ({
+    label: "Do this step again for the Unit",
+    description:
+      `I'll start ${c.stage} again for ${c.unit ?? "this Unit"} only. The other Units keep ` +
+      "their finished work and approvals.",
+  }),
+  "review-advisory-gate": (c) => ({
+    label: "Decide now",
+    description:
+      `I'll stop the review rounds for this piece of work and bring ${c.target} to you for ` +
+      "approval with the reviewer's open points.",
+  }),
+  "change-scope": (c) => ({
+    label: "Switch to a scope that includes it",
+    description:
+      `${c.stage} is not part of this workflow's plan. Type ` +
+      `\`${entrySkillInvocation()} --scope <scope>\` with a scope that includes it, and I'll restart it.`,
+  }),
+  "restore-scope": () => ({
+    label: "Switch to a scope with per-Unit stages",
+    description:
+      "The current plan has no Construction stage that runs for each Unit, so nothing can " +
+      `approve this Unit. Type \`${entrySkillInvocation()} --scope <scope>\` with a scope that ` +
+      "has one, and I'll try again.",
+  }),
+  "abort-bolt": (c) => ({
+    label: "Restart this Unit",
+    description:
+      `The automatic run for ${c.unit ?? "this Unit"} is stuck. I'll stop it, set its unfinished ` +
+      "work aside, and start it fresh.",
+  }),
+  "record-unit-completion": (c) =>
+    c.code === "UNIT_COMPLETION_MISSING"
+      ? {
+          label: "Mark this Unit finished",
+          description:
+            `The documents for ${c.unit ?? "this Unit"} are already in place. I'll record that it ` +
+            "is finished and bring it to you for approval.",
+        }
+      : {
+          label: "Finish with the review it has",
+          description:
+            `I'll finish ${c.stage} for ${c.unit ?? "this Unit"} with the review it already has. ` +
+            "What the review raised comes to you when its work is up for approval.",
+        },
+  "repair-source-boundary": null,
+  "reconfirm-summary": (c) => ({
+    label: "Confirm the summary again",
+    description:
+      `I'll show you the current summary of your answers for ${c.target} to confirm, then save ` +
+      "its documents again from it.",
+  }),
+  "unset-unattended": (c) => ({
+    label: "Stop working unattended",
+    description:
+      `I'll stop working on my own and ask you what should change in ${c.target}.` +
+      guardResetCost(c, "reject"),
+  }),
+  "lower-fence": (c) => ({
+    label: "Turn this check off",
+    description: c.fence
+      ? `Type \`${entrySkillInvocation()} config set ${guardFenceConfigKey(c.fence)} off\` yourself ` +
+        `to turn the ${c.fence} check off for this piece of work. It is recorded, and it comes ` +
+        "back on for the next piece of work."
+      : "Turn this check off for this piece of work yourself. It is recorded, and it comes back " +
+        "on for the next piece of work.",
+  }),
+} satisfies Record<string, GuardRemedyWording>;
+
+// What a stage-wide reset in a solo unit-major walk throws away, said in the
+// line the person reads, as unitMajorResetCost says it to the conductor.
+function guardResetCost(context: GuardRemedyWordingContext, reset: "jump" | "reject"): string {
+  if (!context.everyUnit) return "";
+  return reset === "jump"
+    ? " This also throws away the work every Unit has finished, and each needs its reviews and approvals again."
+    : ` This also throws away every Unit's finished ${context.stage} work, and each needs its review and approval again.`;
 }

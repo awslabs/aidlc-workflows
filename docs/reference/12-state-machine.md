@@ -1428,9 +1428,15 @@ remain the outer boundary.
 No in-repo check can provide stronger provenance on today's harnesses.
 
 **Operations and interaction.** Emitted remedies carry `interaction`, an
-`action` for presentation, `requiresHuman`, and `executableNow`. The conductor
-offers only executable remedies, waits for the human's selection, and follows
-the selected interaction:
+`action` that instructs the conductor, `requiresHuman`, and `executableNow`; a
+remedy put to the person also carries a `label` and `description` in their
+words (`GUARD_REMEDY_WORDING` in `aidlc-lib.ts`). The first time a refusal has
+an executable `external-work` remedy, the ask is the conductor's own work
+(`agent_work: true`, only those remedies, never published): it carries out the
+first that applies without asking. When the same refusal comes back, or there
+is none, the person is asked with the other executable remedies only. The
+conductor offers them by label and description, waits for the human's
+selection, and follows the selected interaction:
 
 | `interaction` | Contract after selection |
 |---|---|
@@ -1596,7 +1602,8 @@ lifecycle state, attempt fields, the latest session/workflow/jump/rejection
 boundary, and the resource fingerprints); it carries no authority, and an
 observer reads it without writing. A refusal with no executable remedy is still a
 question: a terminal ask with an empty remedy list that names the situation, and
-past the repetition cap the guard-state signature for escalation. This shared
+past the repetition cap the guard-state signature for escalation. The tool's own
+message is on its `detail` for the conductor, never in the question. This shared
 guard-refusal path emits asks. An ordinary tool failure without that typed ask
 must be surfaced with its actual error; it is not a recovery directive or a
 successful operation. The refusal streak counts these guard states, not every
@@ -1605,8 +1612,8 @@ tool failure.
 **The human's selection survives the re-ask.** An engine-published guard-recovery
 ask is stored as an active-directive marker (`kind: "ask"`,
 `ask_type: "guard-recovery"`); a tool-printed ask alone does not publish one, and neither does the review-freeze hook's ask when `next` asks it, so the person's own words from the request that led to the refusal still carry their Request Changes.
-The marker carries `remedies`, the offered `op`, `action`, `operation` (when present),
-and `interaction` entries in display order. The human-turn hook records that the
+The marker carries `remedies`, the offered `op`, `label` (when shown), `action`,
+`operation` (when present), and `interaction` entries in display order. The human-turn hook records that the
 person replied (`delivery: consumed`, `selection_sha256` over their words,
 `selected_op: null`); the conductor reads the reply and records the remedy they
 picked with `answer --checkpoint guard-recovery --details '<the remedy's op>'`
@@ -1629,7 +1636,7 @@ before the picked remedy runs withdraws the pick so the conductor reads the new
 reply, while an identical re-recorded response is idempotent.
 
 A repeated `next` preserves that response only when the state, gate, and ordered
-remedy `op`, `action`, structured `operation`, and `interaction` still match.
+remedy `op`, `label`, `action`, structured `operation`, and `interaction` still match.
 A changed target or interaction therefore cannot inherit the old selection.
 The Stop hook releases the turn on the ask. `reject` is allowed only
 after `selected_op` records `request-changes` and matching human feedback arrives:

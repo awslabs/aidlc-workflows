@@ -332,6 +332,8 @@ describe("bounded guard-remedy liveness", () => {
       reason_codes: ["TEST"],
       remedies: [{
         op: "restart-stage",
+        label: "Restart the stage",
+        description: "I'll restart Functional Design.",
         action: "Restart the stage.",
         operation: { kind: "restart-stage", stage: "functional-design" },
         interaction: "command",
@@ -2168,7 +2170,11 @@ describe("AttemptView projections and refusal streaks", () => {
     expect(first.ask.question).toContain("nothing I can safely do about it on my own");
     expect(first.ask.question).not.toContain("authority-preserving");
     expect(first.ask.question).not.toMatch(/from the \w+ state/);
-    expect(first.ask.question).toContain("recovery spent");
+    // The refusal message talks to the agent, so the person never reads it:
+    // the agent keeps it, and the code, on `detail`.
+    expect(first.ask.question).not.toContain("recovery spent");
+    expect(first.ask.detail).toContain("recovery spent");
+    expect(first.ask.detail).toContain("REVIEW_RECOVERY_SPENT");
     expect(first.ask.question).not.toContain("state signature");
     expect(validateDirective(first.ask).valid).toBe(true);
 
@@ -2198,6 +2204,158 @@ describe("AttemptView projections and refusal streaks", () => {
         }),
       ).valid,
     ).toBe(true);
+  });
+
+  test("a way on the agent can take itself is its own work; the person is asked only if it comes back", () => {
+    const project = mkdtempSync(join(tmpdir(), "aidlc-guard-agent-work-"));
+    projects.push(project);
+    const attempt = {
+      recovery: "available" as const,
+      pendingReview: { iteration: 1, retryable: true },
+      summaryCoverage: "current" as const,
+      reviewCoverage: "missing" as const,
+      sourceCoverage: "current" as const,
+    };
+    const refusal = evaluateGuardRefusal({
+      code: "REVIEW_VERDICT_PENDING",
+      blockedAction: "review-request",
+      stage: "functional-design",
+      stateContent: state("-"),
+      invariant: "A review request receives its verdict before another request starts.",
+      userMessage: "Record that verdict, or repeat the same iteration with --retry-pending.",
+      attempt,
+      humanAuthority: { freshTurn: false, unattended: false },
+    });
+    expect(refusal.remedies.map((remedy) => remedy.op)).toEqual(["record-verdict", "retry-pending", "request-changes"]);
+
+    // First time: the agent saves the review result or asks the reviewer again
+    // itself. Nothing is put to the person.
+    const first = recordGuardRefusal(project, refusal, attempt);
+    expect(first.ask.agent_work).toBe(true);
+    expect(first.ask.remedies.map((remedy) => remedy.op)).toEqual(["record-verdict", "retry-pending"]);
+    for (const remedy of first.ask.remedies) expect(remedy.interaction).toBe("external-work");
+    expect(validateDirective(first.ask).valid).toBe(true);
+
+    // It came back unchanged: now the person decides, and only between ways on
+    // that need them, each in plain words.
+    const again = recordGuardRefusal(project, refusal, attempt);
+    expect(again.ask.agent_work).toBeUndefined();
+    expect(again.ask.question).toBe("Functional Design still can't go ahead as things stand: which way would you like to go on?");
+    expect(again.ask.remedies.map(({ op, label, description }) => ({ op, label, description }))).toEqual([
+      {
+        op: "request-changes",
+        label: "Request Changes",
+        // One Unit at a time, a rejection reaches every Unit: the person reads that too.
+        description: "Tell me what should change in Functional Design, and I'll revise it. This also throws away " +
+          "every Unit's finished Functional Design work, and each needs its review and approval again.",
+      },
+    ]);
+    expect(again.ask.remedies[0].action).toContain("submit Request Changes with their exact text");
+    expect(validateDirective(again.ask).valid).toBe(true);
+
+    // The contract: the agent's own work carries only its own ways on, and a way
+    // on put to the person carries the words the person reads.
+    expect(validateDirective({ ...first.ask, remedies: [...first.ask.remedies, ...again.ask.remedies] }).valid)
+      .toBe(false);
+    const { label: _label, ...unworded } = again.ask.remedies[0];
+    expect(validateDirective({ ...again.ask, remedies: [unworded] }).valid).toBe(false);
+  });
+
+  test("every way on put to the person reads in plain words; the agent's own carry none", () => {
+    const humanAuthority = { freshTurn: false, unattended: false };
+    const current = {
+      recovery: "available" as const,
+      summaryCoverage: "current" as const,
+      reviewCoverage: "current" as const,
+      sourceCoverage: "current" as const,
+    };
+    const base = {
+      code: "PROBE",
+      blockedAction: "probe",
+      stage: "functional-design",
+      invariant: "probe",
+      userMessage: "probe",
+      humanAuthority,
+    };
+    const skipped = ["# AI-DLC State", "- **Scope**: feature", "- [ ] functional-design \u2014 SKIP (not in scope)", ""]
+      .join("\n");
+    const walk = (unitState?: string) => [
+      "# AI-DLC State",
+      "- **Scope**: feature",
+      "- **Current Stage**: functional-design",
+      "- **Construction Iteration**: unit-major",
+      "- **Active Unit**: beta",
+      "- **Unit Stage**: code-generation",
+      ...(unitState ? [`- **Unit State**: ${unitState}`] : []),
+      "- [-] functional-design \u2014 EXECUTE",
+      "- [ ] nfr-requirements \u2014 EXECUTE",
+      "- [ ] nfr-design \u2014 EXECUTE",
+      "- [ ] infrastructure-design \u2014 EXECUTE",
+      "- [ ] code-generation \u2014 EXECUTE",
+      "",
+    ].join("\n");
+    const spentBudget = { ...current, reviewBudget: { used: 1, limit: 1 } };
+    const inputs: GuardRefusalInput[] = [
+      { ...base, stateContent: state("-"), attempt: { ...current, pendingReview: { iteration: 1, retryable: true } } },
+      { ...base, stateContent: state("-"), attempt: { ...current, repairReview: { iteration: 1 } } },
+      { ...base, stateContent: state("-"), attempt: { ...current, nextReview: { iteration: 2 } } },
+      { ...base, stateContent: state("-"), attempt: { ...current, reviewCoverage: "stale" } },
+      { ...base, stateContent: state("-"), attempt: spentBudget },
+      { ...base, stateContent: state("-"), attempt: { ...current, sourceCoverage: "unbindable" } },
+      {
+        ...base,
+        stateContent: state("-"),
+        attempt: { ...current, summaryCoverage: "stale", reviewCoverage: "stale", recovery: "spent" },
+      },
+      { ...base, stateContent: state("R"), attempt: current },
+      { ...base, stateContent: state("x"), attempt: current },
+      { ...base, stateContent: state("x"), attempt: { ...current, sourceCoverage: "unbindable" } },
+      { ...base, stateContent: state(" "), attempt: current },
+      { ...base, stateContent: skipped, attempt: current },
+      {
+        ...base,
+        stateContent: state("-"),
+        unit: "billing",
+        attempt: current,
+        teamGate: { resolved: false, scope: "unit-end", reason: "no-active-gate-stage" },
+      },
+      { ...base, stateContent: state("-"), attempt: current, humanAuthority: { freshTurn: false, unattended: true } },
+      { ...base, stateContent: state("-"), attempt: current, autonomousBolt: { unit: "billing", slug: "billing-1", batch: null } },
+      { ...base, code: "UNIT_COMPLETION_MISSING", unit: "billing", stateContent: state("-"), attempt: current },
+      { ...base, stateContent: state("-"), attempt: current, fence: "review-freeze" },
+      // A solo unit-major walk with beta on Code Generation.
+      { ...base, stage: "code-generation", unit: "beta", stateContent: walk(), attempt: { ...current, reviewCoverage: "missing" } },
+      { ...base, stage: "code-generation", unit: "beta", stateContent: walk("in-progress"), attempt: spentBudget },
+    ];
+    const seen = new Set<string>();
+    // The stage protocol's reserved words, the bookkeeping the person has no use
+    // for, and the stored stage names: commands the person types are the only
+    // code spans, and only those may hold a stage or config name.
+    const reserved =
+      /\b(?:engine|directive|dispatch|conductor|harness|verb|steering|mint|swarm|authority|receipt|fingerprint|iteration|budget|verdict|gate|guard|remedy|the human|functional-design|code-generation)\b/i;
+    for (const input of inputs) {
+      for (const remedy of evaluateGuardRefusal(input).remedies) {
+        seen.add(remedy.op);
+        if (remedy.interaction === "external-work") {
+          expect(remedy.label, remedy.op).toBeUndefined();
+          expect(remedy.description, remedy.op).toBeUndefined();
+          continue;
+        }
+        for (const text of [remedy.label, remedy.description]) {
+          expect(typeof text, remedy.op).toBe("string");
+          expect(text as string, remedy.op).toMatch(/^[\x20-\x7e]+$/);
+          const spoken = (text as string).replace(/`[^`]*`/g, "");
+          expect(spoken, `${remedy.op}: ${text}`).not.toMatch(reserved);
+          expect(spoken, `${remedy.op}: ${text}`).not.toMatch(/\b[A-Z]{2,}(?:_[A-Z]+)+\b/);
+          for (const span of (text as string).match(/`[^`]*`/g) ?? []) {
+            expect(span.startsWith("`/aidlc "), `${remedy.op}: ${span}`).toBe(true);
+          }
+        }
+        expect((remedy.label as string).split(" ").length, `${remedy.op} label stays short`).toBeLessThanOrEqual(7);
+        expect(remedy.action.length, `${remedy.op} keeps its instruction`).toBeGreaterThan(0);
+      }
+    }
+    expect([...seen].sort()).toEqual([...GUARD_REMEDY_OPS].sort());
   });
 
   test("every remedy carries a closed op and the contract rejects an unknown one", () => {

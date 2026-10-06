@@ -662,6 +662,28 @@ describe("a recovery question: exact picks are recorded, everything else is the 
     },
   );
 
+  // The person is shown each way on by its plain name, so that name typed back
+  // is an exact pick, and the agent may name it when it records their reading.
+  test("a shown name typed back is the person's exact pick, and the agent can record it by name", () => {
+    const named: ActiveDirectiveGuardRemedy[] = [
+      { op: "reconfirm-summary", label: "Confirm the summary again", action: "Present the current summary again" },
+      { op: "request-changes", label: "Request Changes", action: "Ask what should change" },
+    ];
+    writeActiveDirectiveMarker(proj, {
+      kind: "ask", ask_type: GUARD_RECOVERY_ASK_TYPE, stage: "functional-design", state_sha256: stateDigest(content),
+      remedies: named,
+    });
+    expect(consumeSharedDirectiveAsk(proj, "Confirm the summary again")).toBe(true);
+    expect(response()).toMatchObject({ selected_op: "reconfirm-summary", picked_by: "person" });
+
+    writeActiveDirectiveMarker(proj, {
+      kind: "ask", ask_type: GUARD_RECOVERY_ASK_TYPE, stage: "functional-design", state_sha256: stateDigest(content),
+      remedies: named,
+    });
+    consumeSharedDirectiveAsk(proj, "let's go over the summary once more");
+    expect(recordGuardRecoveryChoice(proj, "Confirm the summary again", false)).toMatchObject({ op: "reconfirm-summary" });
+  });
+
   test("several picks in a picker are no one remedy: nothing is taken", () => {
     ask();
     const question = "How should we recover?";
