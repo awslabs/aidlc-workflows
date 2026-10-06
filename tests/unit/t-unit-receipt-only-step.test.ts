@@ -1,4 +1,4 @@
-// covers: function:unitReceiptOnlyStep, function:checkStageCompletionEvidence, subcommand:aidlc-orchestrate:next, subcommand:aidlc-orchestrate:report, subcommand:aidlc-state:unit, audit:UNIT_COMPLETED, audit:REVIEW_COMPLETED
+// covers: function:unitReceiptOnlyStep, function:checkStageCompletionEvidence, subcommand:aidlc-orchestrate:next, subcommand:aidlc-orchestrate:report, subcommand:aidlc-state:unit, audit:UNIT_COMPLETED, audit:REVIEW_COMPLETED, audit:STAGE_AWAITING_APPROVAL
 //
 // A Unit whose stage files are written and freshly reviewed READY, but whose
 // completion was never recorded (receipt mode needs UNIT_COMPLETED), used to
@@ -15,7 +15,7 @@
 import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS, NATIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import {
   AIDLC_SRC,
@@ -130,19 +130,30 @@ function writeUnitArtifacts(proj: string, unit: string, skip: string | null = nu
   }
 }
 
-// A fresh READY review of the Unit's current files, through the same audit
-// rows t341 seeds.
-function reviewReady(proj: string, unit: string): void {
+// A fresh review of the Unit's current files at one iteration, through the
+// same audit rows t341 seeds.
+function reviewVerdict(proj: string, unit: string, verdict: "READY" | "NOT-READY", iteration = 1): void {
   const stage = findStageBySlug(SLUG)!;
   const fields: Record<string, string> = {
     Stage: SLUG,
     Unit: unit,
     Reviewer: stage.reviewer!,
-    Iteration: "1",
+    Iteration: String(iteration),
     "Artifact Fingerprint": reviewArtifactFingerprint(proj, stage, unit)!,
   };
   appendAuditEntry("REVIEW_REQUESTED", fields, proj);
-  appendAuditEntry("REVIEW_COMPLETED", { ...fields, Verdict: "READY" }, proj);
+  appendAuditEntry("REVIEW_COMPLETED", { ...fields, Verdict: verdict }, proj);
+}
+
+function reviewReady(proj: string, unit: string): void {
+  reviewVerdict(proj, unit, "READY");
+}
+
+// The stage's review turns, all spent on NOT-READY: the last one goes to the
+// person as it is.
+function reviewTurnsSpent(proj: string, unit: string): void {
+  const turns = findStageBySlug(SLUG)!.reviewer_max_iterations ?? 2;
+  for (let iteration = 1; iteration <= turns; iteration++) reviewVerdict(proj, unit, "NOT-READY", iteration);
 }
 
 // The same review through the logger, as the reviewer agent records it: the
@@ -229,6 +240,71 @@ describe("t-unit-receipt-only-step: a Unit done but not recorded gets its receip
     expect(readAllAuditShards(proj)).toContain("GATE_APPROVED");
   });
 
+  test("a final NOT-READY review, its turns spent, gets the same receipt step", () => {
+    projectWithFirstUnitDone();
+    writeUnitArtifacts(proj, "unit-b");
+    reviewTurnsSpent(proj, "unit-b");
+
+    const d = next(proj);
+    expect(d.kind, JSON.stringify(d)).toBe("print");
+    expect(String(d.message)).toContain(START_B);
+    expect(String(d.message)).toContain(COMPLETE_B);
+    expect(unitVerb(proj, "start", "unit-b").rc).toBe(0);
+    const completed = unitVerb(proj, "complete", "unit-b");
+    expect(completed.rc, completed.out).toBe(0);
+  });
+
+  // Request Changes leaves the stage revising, and only its revised report
+  // takes it back to the gate, so the step names that report again.
+  test("a revising stage's revised report names the step, then itself again", () => {
+    projectWithFirstUnitDone();
+    writeFileSync(
+      seededStateFile(proj),
+      CONSTRUCTION_STATE.replace("- [-] functional-design", "- [R] functional-design"),
+      "utf-8",
+    );
+    writeUnitArtifacts(proj, "unit-b");
+    reviewReady(proj, "unit-b");
+
+    const r = run(ORCHESTRATE, ["report", "--stage", SLUG, "--result", "revised"], proj);
+    const d = directiveOf(r.out);
+    expect(d.kind, r.out).toBe("print");
+    const message = String(d.message);
+    expect(message).toContain(START_B);
+    expect(message).toContain(COMPLETE_B);
+    expect(message).toContain(`report --stage ${SLUG} --result revised\` again.`);
+    expect(message).not.toContain("next`");
+
+    expect(unitVerb(proj, "start", "unit-b").rc).toBe(0);
+    const completed = unitVerb(proj, "complete", "unit-b");
+    expect(completed.rc, completed.out).toBe(0);
+    const again = run(ORCHESTRATE, ["report", "--stage", SLUG, "--result", "revised"], proj);
+    expect(directiveOf(again.out).kind, again.out).not.toBe("error");
+    expect(readAllAuditShards(proj)).toContain("STAGE_AWAITING_APPROVAL");
+    expect(readFileSync(seededStateFile(proj), "utf-8")).toContain("- [?] functional-design");
+  });
+
+  // `unit start` takes only the Unit the engine routes, so a later Unit's
+  // step waits while an earlier Unit still has work left.
+  test("a later Unit's receipt step waits while an earlier Unit has work left", () => {
+    proj = createOrchestrationTestProject();
+    writeFileSync(seededStateFile(proj), CONSTRUCTION_STATE, "utf-8");
+    seedBoltDag(proj, ["unit-a", "unit-b", "unit-c"]);
+    expect(unitVerb(proj, "start", "unit-a").rc).toBe(0);
+    writeUnitArtifacts(proj, "unit-a");
+    expect(unitVerb(proj, "complete", "unit-a").rc).toBe(0);
+    writeUnitArtifacts(proj, "unit-b", "rules");
+    writeUnitArtifacts(proj, "unit-c");
+    reviewReady(proj, "unit-c");
+
+    const r = run(ORCHESTRATE, ["report", "--stage", SLUG, "--result", "awaiting-approval"], proj);
+    const refusal = directiveOf(r.out);
+    expect(refusal.kind, r.out).toBe("error");
+    expect(String(refusal.message)).toContain("2 of 3 work items are not complete (unit-b, unit-c)");
+    expect(String(refusal.message)).toContain("Run `next`");
+    expect(String(refusal.message)).not.toContain("--unit unit-c");
+  });
+
   test("a Unit already started gets only its complete command", () => {
     projectWithFirstUnitDone();
     expect(unitVerb(proj, "start", "unit-b").rc).toBe(0);
@@ -270,6 +346,10 @@ describe("t-unit-receipt-only-step: work genuinely left keeps Run next", () => {
   for (const [label, shape] of [
     ["a required file is missing", (p: string) => { writeUnitArtifacts(p, "unit-b", "rules"); reviewReady(p, "unit-b"); }],
     ["no fresh review shows the files are this attempt's", (p: string) => writeUnitArtifacts(p, "unit-b")],
+    ["its review asked for changes with a turn left", (p: string) => {
+      writeUnitArtifacts(p, "unit-b");
+      reviewVerdict(p, "unit-b", "NOT-READY");
+    }],
   ] as const) {
     test(`${label}: next hands back the stage and the refusal says Run next`, () => {
       projectWithFirstUnitDone();

@@ -428,11 +428,14 @@ describe("t-checkpoint-wave-edit: an approved Unit's document edited after a wav
   }
 
   // A stage the Unit never completed is still work to do under Guard Policy
-  // off: the walk hands it back and the checkpoint is not ready.
+  // off: its files are written and reviewed, so the walk names the completion
+  // step it still owes, and the checkpoint is not ready.
   test("Guard Policy off: a Unit whose design stage never completed still blocks", () => {
     const p = fixture("off (from scope classic)");
     build(p, "alpha", true, DOCUMENT_STAGE);
-    expect(next(p)).toMatchObject({ kind: "run-stage", stage: DOCUMENT_STAGE, unit: "alpha" });
+    const beat = next(p) as Beat & { message?: string };
+    expect(beat.kind, JSON.stringify(beat)).toBe("print");
+    expect(beat.message).toContain(`unit complete --stage ${DOCUMENT_STAGE} --unit alpha`);
     const status = checkpointStatus(p, "alpha");
     expect(status.approved).toBe(false);
     expect(status.errors).toContain(`${DOCUMENT_STAGE}: current Unit completion evidence is missing or stale.`);
