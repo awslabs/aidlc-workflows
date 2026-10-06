@@ -2026,12 +2026,17 @@ describe("AttemptView projections and refusal streaks", () => {
     const first = recordGuardRefusal(project, refusalA, attempt);
     expect(first.count).toBe(1);
     expect(first.ask.reason_codes).toEqual(["SUMMARY_EVIDENCE_INVALID"]);
-    expect(first.ask.question).toContain("would be refused");
+    expect(first.ask.question).toBe(
+      "Functional Design can't go ahead as things stand: which way would you like to go on?",
+    );
     expect(recordGuardRefusal(project, refusalB, attempt).count).toBe(1);
     expect(recordGuardRefusal(project, refusalA, attempt).count).toBe(2);
     const capped = recordGuardRefusal(project, refusalB, attempt);
     expect(capped.count).toBe(3);
-    expect(capped.ask.question).toContain("has refused artifact-write 3 times");
+    // A repeat says so in the person's words; the codes carry the rest.
+    expect(capped.ask.question).toBe(
+      "Functional Design still can't go ahead as things stand: which way would you like to go on?",
+    );
     expect(capped.ask.reason_codes).toEqual([
       "REVIEW_FREEZE_ACTIVE",
       "SUMMARY_EVIDENCE_INVALID",
@@ -2069,6 +2074,61 @@ describe("AttemptView projections and refusal streaks", () => {
     expect(guardRefusalStreakView(project, refusalA, attempt).count).toBe(2);
   });
 
+  test("the recovery question names the stage and the Unit as the person knows them, in plain words", () => {
+    const attempt = {
+      floor: "floor-1",
+      recovery: "spent" as const,
+      summaryCoverage: "stale" as const,
+      reviewCoverage: "current" as const,
+      sourceCoverage: "current" as const,
+    };
+    const refusal = evaluateGuardRefusal({
+      code: "SUMMARY_EVIDENCE_INVALID",
+      blockedAction: "gate-start",
+      stage: "functional-design",
+      unit: "alpha",
+      stateContent: state("-"),
+      invariant: "Summary authorization is current.",
+      userMessage: "summary blocked",
+      attempt,
+      humanAuthority: { freshTurn: false, unattended: false },
+    });
+    const ask = guardRecoveryAskForRefusal(refusal);
+    expect(ask?.question).toBe(
+      "Functional Design for alpha can't go ahead as things stand: which way would you like to go on?",
+    );
+    expect(ask?.unit).toBe("alpha");
+    const stuck = guardTerminalAskForRefusal(
+      { ...refusal, remedies: [] },
+      { count: 1, codes: [refusal.code], signature: "f".repeat(64), atCap: false },
+    );
+    expect(stuck.question.startsWith("I stopped at Functional Design for alpha: ")).toBe(true);
+    // No engine words reach the person in the line the engine writes.
+    for (const question of [ask?.question ?? "", stuck.question.replace(" summary blocked", "")]) {
+      expect(question).not.toMatch(/guard|authorit|refus|remed|action|functional-design/i);
+    }
+  });
+
+  test("the old recovery wording is gone from every shipped source", () => {
+    const stale = [
+      /authority-preserving recovery action/,
+      /would be refused\. Choose one/,
+      /The same guard state for/,
+    ];
+    const hits: string[] = [];
+    for (const root of ["core", "harness", "docs"]) {
+      for (const entry of readdirSync(join(REPO_ROOT, root), { recursive: true }) as string[]) {
+        if (!/\.(ts|md|json)$/.test(entry)) continue;
+        const path = join(REPO_ROOT, root, entry);
+        const text = readFileSync(path, "utf-8");
+        for (const pattern of stale) {
+          if (pattern.test(text)) hits.push(`${root}/${entry}: ${pattern.source}`);
+        }
+      }
+    }
+    expect(hits).toEqual([]);
+  });
+
   test("a refusal with no executable remedy is a terminal ask, never an error and never a silent count", () => {
     const project = mkdtempSync(join(tmpdir(), "aidlc-guard-liveness-"));
     projects.push(project);
@@ -2104,7 +2164,7 @@ describe("AttemptView projections and refusal streaks", () => {
     const first = recordGuardRefusal(project, zeroExit, attempt);
     expect(first.ask.remedies).toEqual([]);
     expect(first.ask.state_signature).toBe(first.signature);
-    expect(first.ask.question).toContain("I stopped at");
+    expect(first.ask.question).toContain("I stopped at Functional Design: ");
     expect(first.ask.question).toContain("nothing I can safely do about it on my own");
     expect(first.ask.question).not.toContain("authority-preserving");
     expect(first.ask.question).not.toMatch(/from the \w+ state/);
