@@ -359,26 +359,37 @@ describe("t241 OpenCode adapter command boundary and transition filter", () => {
 
   test("a pasted request with an apostrophe and a line break starts in any usual quoting, as one argument", async () => {
     const root = freshProject();
-    const { client } = fakeClient();
-    const adapter = await createAdapter({
-      client,
-      directory: root,
-      aidlcEntrypoints: new Set([...TEST_ENTRYPOINTS, "tools/aidlc.ts"]),
-      aidlcCommand: TEST_AIDLC_COMMAND,
-    });
-    const invoke = (callID: string, command: string) =>
-      adapter["tool.execute.before"]({ tool: "bash", sessionID: "main", callID }, { args: { command } });
     // With no shell set, opencode runs /bin/sh on POSIX and cmd.exe on Windows.
-    const posix = process.platform !== "win32";
-    for (const [i, command] of [
+    // Both are read the same way on every OS, so each is checked everywhere.
+    const adapterOn = async (platform: NodeJS.Platform) => {
+      const { client } = fakeClient();
+      const adapter = await createAdapter({
+        client,
+        directory: root,
+        aidlcEntrypoints: new Set([...TEST_ENTRYPOINTS, "tools/aidlc.ts"]),
+        aidlcCommand: TEST_AIDLC_COMMAND,
+        platform,
+      });
+      return (callID: string, command: string) =>
+        adapter["tool.execute.before"]({ tool: "bash", sessionID: "main", callID }, { args: { command } });
+    };
+    const sh = await adapterOn("linux");
+    const cmd = await adapterOn("win32");
+    const pasted = [
       START_SINGLE,
       START_DOUBLE,
       `bun .aidlc/tools/aidlc.ts engine orchestrate next '${SPEC.replaceAll("'", `'"'"'`)}'`,
-      "aidlc engine orchestrate next today\\'s\\ rooms",
-    ].entries()) {
-      if (posix) await expect(invoke(`ok-${i}`, command)).resolves.toBeUndefined();
-      else await expect(invoke(`ok-${i}`, command)).rejects.toThrow("one direct invocation");
+    ];
+    const escaped = "aidlc engine orchestrate next today\\'s\\ rooms";
+    for (const [i, command] of [...pasted, escaped].entries()) {
+      await expect(sh(`ok-${i}`, command)).resolves.toBeUndefined();
     }
+    // cmd.exe cannot carry the line break, so the request goes through the file
+    // `next` reads; it gives the backslash no meaning, so that one is refused.
+    for (const [i, command] of pasted.entries()) {
+      await expect(cmd(`cmd-ok-${i}`, command)).rejects.toThrow(REQUEST_FILE_STEP);
+    }
+    await expect(cmd("cmd-escaped", escaped)).rejects.toThrow("one direct invocation");
     // Still one command only: chaining, substitution and expansion outside or
     // inside double quotes, and $'...', which /bin/sh may read as more than one
     // word, are refused. cmd.exe gives $ and the backtick no meaning, so there
@@ -389,19 +400,22 @@ describe("t241 OpenCode adapter command boundary and transition filter", () => {
       "bun .aidlc/tools/aidlc.ts engine orchestrate next \"$HOME\"",
     ];
     for (const [i, command] of posixExpansions.entries()) {
-      if (posix) await expect(invoke(`expand-${i}`, command)).rejects.toThrow("one direct invocation");
-      else await expect(invoke(`expand-${i}`, command)).resolves.toBeUndefined();
+      await expect(sh(`expand-${i}`, command)).rejects.toThrow("one direct invocation");
+      await expect(cmd(`cmd-expand-${i}`, command)).resolves.toBeUndefined();
     }
-    for (const [i, command] of [
-      `${START_SINGLE} ; touch /tmp/x`,
-      `${START_SINGLE}\ntouch /tmp/x`,
-      "bun .aidlc/tools/aidlc.ts engine orchestrate next $'today\\'s rooms\\; touch /tmp/x'",
-      "aidlc engine orchestrate next today\\' ; touch /tmp/x",
+    // Chained after a request, or joined by a line continuation: refused by
+    // both, on cmd.exe through the request file wherever a line break is in it.
+    for (const [i, [command, onCmd]] of ([
+      [`${START_SINGLE} ; touch /tmp/x`, REQUEST_FILE_STEP],
+      [`${START_SINGLE}\ntouch /tmp/x`, REQUEST_FILE_STEP],
+      ["bun .aidlc/tools/aidlc.ts engine orchestrate next $'today\\'s rooms\\; touch /tmp/x'", "one direct invocation"],
+      ["aidlc engine orchestrate next today\\' ; touch /tmp/x", "one direct invocation"],
       // A line continuation: the shell joins the lines, the later guards do not.
-      "aidlc engine orchestrate next today\\\naidlc engine state approve",
-      "aidlc engine orchestrate next \"today\\\naidlc engine state approve\"",
-    ].entries()) {
-      await expect(invoke(`no-${i}`, command)).rejects.toThrow("one direct invocation");
+      ["aidlc engine orchestrate next today\\\naidlc engine state approve", REQUEST_FILE_STEP],
+      ["aidlc engine orchestrate next \"today\\\naidlc engine state approve\"", REQUEST_FILE_STEP],
+    ] as const).entries()) {
+      await expect(sh(`no-${i}`, command)).rejects.toThrow("one direct invocation");
+      await expect(cmd(`cmd-no-${i}`, command)).rejects.toThrow(onCmd);
     }
   });
 
