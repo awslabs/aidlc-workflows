@@ -848,6 +848,9 @@ The recordable bypass set includes the documented recovery and ceremony switches
 
 The wizard never offers bypasses. They require an explicit `--bypass <name>`;
 `--show` surfaces every enabled bypass and its guard-weakening consequence.
+Recording or clearing one prints only what changed with its undo command and
+the line for the check it switched (plus any setup step still outstanding);
+`--json` and `--quiet` output are unchanged.
 Every bypass except usage tracking, sensors, and learnings takes a check away
 from the person, so while one is on AI-DLC says so in one line: on the next
 step, at the start of every chat (not on opencode, which shows no session-start

@@ -9949,25 +9949,33 @@ function recordBypassesOnly(
     const switchLines = [...new Set(mutations.flatMap((change) =>
       recordSwitchChange(projectDir, change.target, change.previous, change.next, { otherFiles: false })
     ))];
-    if (options.mode === "human") {
-      writeMenuLines("", context.summaryLines);
-      writeMenuLines("", context.notes.map((note) => `  Note: ${note}`));
-      writeMenuLines("", changes.map((line) => `  ${line}`));
-      writeMenuLines("", notes.map((note) => `  Note: ${note}`));
-      writeMenuLines("", switchLines.map((line) => `  ${line}`));
-    }
     // With several harnesses and none named, no one harness's setup is the
     // person's to finish here.
     const outstandingActions = setupWalkChild || context.anyHarness
       ? []
       : postApplyOutstandingActions(projectDir, context.harnessDir, context.harness);
+    if (options.mode === "human") {
+      // The person sees what changed with its undo, and which check is now
+      // off or on again; anything more only when something still needs them.
+      writeMenuLines("", changes);
+      writeMenuLines("", notes.map((note) => `Note: ${note}`));
+      writeMenuLines("", switchLines);
+      if (changes.length + notes.length + switchLines.length === 0) {
+        writeMenuLines("", [`configured flags settings for ${projectDir}`]);
+      }
+      if (outstandingActions.length > 0) {
+        process.stdout.write(`${menuText(configCompletionMessage("", outstandingActions, "human").trimStart())}\n`);
+      }
+      process.exitCode = EXIT.ok;
+      return;
+    }
     const completion = configCompletionMessage(
       `configured flags settings for ${projectDir}`,
       outstandingActions,
       options.mode,
     );
     emitResult(success(
-      options.mode === "human" ? menuText(completion) : completion,
+      completion,
       {
         projectDir,
         ...(context.anyHarness ? {} : { distribution: context.distribution }),
