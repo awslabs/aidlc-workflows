@@ -10,6 +10,7 @@
 // In both cases the slug is reconciled into the state file via set-status.
 // Receives JSON on stdin from the adapter / Claude Code.
 import { existsSync } from "node:fs";
+import { noopMarkName } from "../tools/aidlc-hook-front-gate.ts";
 import {
   hookStandsOutside,
   enterHookWorkflow,
@@ -85,15 +86,21 @@ if (source === "ide-audit-sync") {
   const audit = readAllAuditShards(projectDir);
   const auditSlug = latestStartedStageSlug(audit);
   hookDebug(projectDir, "sync-workflow-state", "ide-audit-sync", { auditSlug, current, status });
+  // Nothing to do from this record's files: the Kiro IDE front gate skips the
+  // next shell command's call until one of them changes.
+  const noop = (): number => {
+    writeHookStatusFile(hooksHealthDir(projectDir), noopMarkName("sync-workflow-state"), isoTimestamp());
+    return 0;
+  };
 
   // (a) Only sync a live, running workflow. A completed/parked workflow (Status
   //     != Running) or a cleared pointer (Current Stage none/empty) is ahead of
   //     the audit tail by design — never rewind it.
-  if (status !== "Running") return 0;
-  if (current === "" || current === "none") return 0;
+  if (status !== "Running") return noop();
+  if (current === "" || current === "none") return noop();
   // (b) No audit slug, or it already matches state → nothing to do.
-  if (!auditSlug) return 0;
-  if (current === auditSlug) return 0;
+  if (!auditSlug) return noop();
+  if (current === auditSlug) return noop();
   // (c) Never sync BACKWARD: if the audit slug is a stage the workflow has
   //     already completed or skipped, the state is legitimately ahead of it
   //     (the stage finished; a newer STAGE_STARTED just wasn't the last row).
@@ -105,7 +112,7 @@ if (source === "ide-audit-sync") {
       auditSlug,
       auditState: auditCb.state,
     });
-    return 0;
+    return noop();
   }
   slug = auditSlug;
 } else {

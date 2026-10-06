@@ -168,7 +168,7 @@ function currentStage(dir: string): string {
 }
 
 describe("a shell command that changed nothing the hook reads skips the engine", () => {
-  test.each(GATED)("%s: the second call does not load the engine", (hook) => {
+  test.each([...GATED])("%s: the second call does not load the engine", (hook) => {
     const dir = project();
     settled(dir, hook);
     const second = shellHook(dir, hook);
@@ -176,7 +176,7 @@ describe("a shell command that changed nothing the hook reads skips the engine",
     expect(second.engineLoaded).toBe(false);
   });
 
-  test.each(GATED)("%s with no AI-DLC work in the folder does not load the engine", (hook) => {
+  test.each([...GATED])("%s with no AI-DLC work in the folder does not load the engine", (hook) => {
     const dir = project(false);
     const call = shellHook(dir, hook);
     expect(call.code).toBe(0);
@@ -199,7 +199,7 @@ describe("a shell command that changed nothing the hook reads skips the engine",
     expect(Date.parse(readFileSync(heartbeat, "utf-8"))).toBeGreaterThan(Date.now() - 60_000);
   });
 
-  test.each(GATED)("%s: finding nothing to do leaves the mark where the engine keeps hook health", (hook) => {
+  test.each([...GATED])("%s: finding nothing to do leaves the mark where the engine keeps hook health", (hook) => {
     const dir = project();
     settled(dir, hook);
     expect(join(seededRecordDir(dir), ".aidlc-engine", "hooks-health")).toBe(hooksHealthDir(dir));
@@ -231,14 +231,14 @@ describe("anything that might matter runs the full hook", () => {
     expect(existsSync(graph) && statSync(graph).mtimeMs > before).toBe(true);
   });
 
-  test.each(GATED)("%s: another chat writes the audit after the mark", (hook) => {
+  test.each([...GATED])("%s: another chat writes the audit after the mark", (hook) => {
     const dir = project();
     settled(dir, hook);
     appendFileSync(shard(dir), "\n## Decision Recorded\n**Event**: DECISION_RECORDED\n\n---\n");
     expect(shellHook(dir, hook).engineLoaded).toBe(true);
   });
 
-  test.each(GATED)("%s: a write just before the mark, inside the margin (a race or a 2 s clock)", (hook) => {
+  test.each([...GATED])("%s: a write just before the mark, inside the margin (a race or a 2 s clock)", (hook) => {
     const dir = project();
     settled(dir, hook);
     const at = new Date(markTime(dir, hook) - 1_000);
@@ -246,7 +246,7 @@ describe("anything that might matter runs the full hook", () => {
     expect(shellHook(dir, hook).engineLoaded).toBe(true);
   });
 
-  test.each(GATED)("%s: the same timestamp on the mark and a write (a coarse file system)", (hook) => {
+  test.each([...GATED])("%s: the same timestamp on the mark and a write (a coarse file system)", (hook) => {
     const dir = project();
     settled(dir, hook);
     const at = new Date(Math.floor(markTime(dir, hook) / 2_000) * 2_000);
@@ -255,14 +255,14 @@ describe("anything that might matter runs the full hook", () => {
     expect(shellHook(dir, hook).engineLoaded).toBe(true);
   });
 
-  test.each(GATED)("%s: the mark is ahead of the clock (the clock moved back)", (hook) => {
+  test.each([...GATED])("%s: the mark is ahead of the clock (the clock moved back)", (hook) => {
     const dir = project();
     settled(dir, hook);
     setTime(mark(dir, hook), 60_000);
     expect(shellHook(dir, hook).engineLoaded).toBe(true);
   });
 
-  test.each(GATED)("%s: a file the hook reads is ahead of the clock", (hook) => {
+  test.each([...GATED])("%s: a file the hook reads is ahead of the clock", (hook) => {
     const dir = project();
     settled(dir, hook);
     setTime(shard(dir), 60_000);
@@ -283,7 +283,7 @@ describe("anything that might matter runs the full hook", () => {
     expect(shellHook(dir, "rebuild-stage-graph").engineLoaded).toBe(true);
   });
 
-  test.each(GATED)("%s: a second piece of work the hook has not looked at", (hook) => {
+  test.each([...GATED])("%s: a second piece of work the hook has not looked at", (hook) => {
     const dir = project();
     settled(dir, hook);
     const other = join(intentsDirOf(dir, DEFAULT_SPACE), "other-00000002");
@@ -294,20 +294,20 @@ describe("anything that might matter runs the full hook", () => {
     expect(shellHook(dir, hook).engineLoaded).toBe(true);
   });
 
-  test.each(GATED)("%s: the flat layout from before spaces", (hook) => {
+  test.each([...GATED])("%s: the flat layout from before spaces", (hook) => {
     const dir = project();
     settled(dir, hook);
     mkdirSync(join(dir, "aidlc-docs"));
     expect(shellHook(dir, hook).engineLoaded).toBe(true);
   });
 
-  test.each(GATED)("%s: hook debugging is on", (hook) => {
+  test.each([...GATED])("%s: hook debugging is on", (hook) => {
     const dir = project();
     settled(dir, hook);
     expect(shellHook(dir, hook, { AIDLC_HOOK_DEBUG: "1" }).engineLoaded).toBe(true);
   });
 
-  test.skipIf(process.platform === "win32").each(GATED)("%s: a linked audit folder", (hook) => {
+  test.skipIf(process.platform === "win32").each([...GATED])("%s: a linked audit folder", (hook) => {
     const dir = project();
     settled(dir, hook);
     const audit = seededAuditDir(dir);

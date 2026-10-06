@@ -162,6 +162,18 @@ and the command would otherwise still act. A hook with no matcher also sees Kiro
   against resurrecting a finished workflow). Both audit-tail hooks match
   `execute_bash`, Windows `execute_pwsh`, and the `shell` alias — the
   IDE surfaces no task event the sync could parse.
+- **front gate for the two audit-tail hooks**: they run after every shell
+  command, so the dispatcher's `engine adapter kiro-ide` route looks first,
+  without loading the engine (`core/tools/aidlc-hook-front-gate.ts`). When
+  either hook finds nothing to do from a record's files it leaves
+  `<hook>.noop` in that record's `.aidlc-engine/hooks-health/`. The gate skips
+  the hook only when every record in every space carries that mark at least
+  5 s newer than everything the hook reads there (audit shards and the state
+  file, plus `runtime-graph.json` for the rebuild), and a skipped rebuild
+  rewrites its existing `rebuild-stage-graph.last` heartbeat as the full hook
+  would. A link, the flat `aidlc-docs/` layout, hook debugging, a timestamp
+  ahead of the clock, or a change within the margin runs the full hook. The
+  guards, writes, prompts and every other target always run in full.
 - **log-subagent** — payload-dependent. IDE 0.12 sent `invoke_sub_agent`; 1.x
   (1.0.89-1.0.138) sent `subagent_<agent>` instead, each preceded by an empty
   `subagent_response` shell (`"Response recorded."`). The registration matcher

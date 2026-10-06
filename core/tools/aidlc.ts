@@ -2433,6 +2433,16 @@ async function runAdapter(action: Extract<Action, { type: "adapter" }>): Promise
     process.env.AIDLC_COMPILED_EXECUTABLE = process.execPath;
   }
   try {
+    // Kiro IDE runs these two after every shell command. When nothing they read
+    // changed since they last found nothing to do, they are skipped before the
+    // engine loads; whenever the gate cannot tell, they run as before.
+    if (kasAdapter(action) && (action.target === "rebuild-stage-graph" || action.target === "sync-workflow-state")) {
+      const gate = await import("./aidlc-hook-front-gate.ts");
+      if (gate.frontGateSkips(action.target, gate.frontGateProjectDirs(action.path))) {
+        hookTrace("adapter-front-gate-skip", { target: action.target });
+        return 0;
+      }
+    }
     hookTrace("adapter-import-begin");
     const mod = await import(pathToFileURL(action.path).href);
     hookTrace("adapter-import-end");

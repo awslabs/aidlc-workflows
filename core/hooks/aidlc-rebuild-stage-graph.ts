@@ -30,6 +30,7 @@
 // of their own. It needs no workflow state: the engine errors before any
 // intent exists too.
 
+import { noopMarkName } from "../tools/aidlc-hook-front-gate.ts";
 import { LONG_SUBPROCESS_TIMEOUT_MS } from "../tools/aidlc-runtime-budget.ts";
 import { statSync } from "node:fs";
 import { join } from "node:path";
@@ -271,9 +272,15 @@ const last3 = blocks.slice(-3);
 const transitionRegex = /^\*\*Event\*\*:[ \t]*(GATE_APPROVED|STAGE_STARTED|STAGE_AWAITING_APPROVAL|AUDIT_MERGED|UNIT_MERGED|WORKFLOW_COMPLETED)[ \t]*$/m;
 const hasTransition = last3.some((b) => transitionRegex.test(b));
 hookDebug(projectDir, "rebuild-stage-graph", "transition-gate", { hasTransition, last3count: last3.length });
+// Nothing to do from this record's files: the Kiro IDE front gate skips the
+// next shell command's call until one of them changes.
+const noop = (): number => {
+  if (ideAuditMode) writeHookStatusFile(healthDir, noopMarkName("rebuild-stage-graph"), isoTimestamp());
+  return 0;
+};
 if (!hasTransition) {
   hookDebug(projectDir, "rebuild-stage-graph", "exit: no transition in audit tail");
-  return 0;
+  return noop();
 }
 
 // 7b. Idempotency guard (IDE audit-tail mode only). On the CLI the command
@@ -303,7 +310,7 @@ if (ideAuditMode) {
         graphMtime,
         newestShard,
       });
-      return 0;
+      return noop();
     }
   } catch {
     // runtime-graph.json absent (never compiled) → fall through and compile.
