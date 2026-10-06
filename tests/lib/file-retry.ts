@@ -31,14 +31,15 @@ export const ISOLATED_RETRY_MAX_MS = 25 * 60_000;
 export const ORDINARY_RETRY_MAX_MS = 10 * 60_000;
 /**
  * A file whose only failures are case timeouts: a slow Windows runner times
- * out hook-spawning cases in files that run 12 to 15 minutes there.
+ * out cases in files that run 12 to 33 minutes there. It lifts only the
+ * ordinary limit; an isolated live file keeps its own.
  */
-export const CASE_TIMEOUT_RETRY_MAX_MS = 25 * 60_000;
+export const CASE_TIMEOUT_RETRY_MAX_MS = 45 * 60_000;
 /** Never start a second attempt the run deadline would cut short. */
 export const RETRY_DEADLINE_RESERVE_MS = 5 * 60_000;
 
 export function retryEligible(first: RetryEvidence, maxWallMs: number, remainingMs = Number.POSITIVE_INFINITY): boolean {
-  const wallLimit = first.caseTimeoutsOnly === true ? Math.max(maxWallMs, CASE_TIMEOUT_RETRY_MAX_MS) : maxWallMs;
+  const wallLimit = first.caseTimeoutsOnly === true && maxWallMs === ORDINARY_RETRY_MAX_MS ? CASE_TIMEOUT_RETRY_MAX_MS : maxWallMs;
   return first.status === "FAIL" && first.cases.failed > 0 && first.evidenceComplete === true &&
     !first.cleanupError && !first.timedOut && first.wallTimeMs <= wallLimit &&
     remainingMs > RETRY_DEADLINE_RESERVE_MS;

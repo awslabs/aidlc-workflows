@@ -47,15 +47,20 @@ describe("the retry rule", () => {
     expect(retryEligible({ ...failed, wallTimeMs: ORDINARY_RETRY_MAX_MS + 1 }, ISOLATED_RETRY_MAX_MS)).toBe(true);
   });
 
-  // A slow Windows runner times out hook-spawning cases in files that run
-  // longer than ten minutes there; such a file still earns its one retry.
-  test("a file whose only failures are case timeouts earns its retry up to 25 minutes; any other failure keeps the ten", () => {
-    expect(CASE_TIMEOUT_RETRY_MAX_MS).toBe(25 * 60_000);
+  // A slow Windows runner times out cases in files that run longer than ten
+  // minutes there (one t244 ran 33 minutes); such a file still earns its one retry.
+  test("a file whose only failures are case timeouts earns its retry up to 45 minutes; any other failure keeps the ten", () => {
+    expect(CASE_TIMEOUT_RETRY_MAX_MS).toBe(45 * 60_000);
     const slow = { ...failed, wallTimeMs: 15 * 60_000 };
     expect(retryEligible({ ...slow, caseTimeoutsOnly: true }, ORDINARY_RETRY_MAX_MS)).toBe(true);
     expect(retryEligible({ ...slow, caseTimeoutsOnly: false }, ORDINARY_RETRY_MAX_MS)).toBe(false);
     expect(retryEligible(slow, ORDINARY_RETRY_MAX_MS)).toBe(false);
+    expect(retryEligible({ ...failed, caseTimeoutsOnly: true, wallTimeMs: 33 * 60_000 }, ORDINARY_RETRY_MAX_MS)).toBe(true);
     expect(retryEligible({ ...failed, caseTimeoutsOnly: true, wallTimeMs: CASE_TIMEOUT_RETRY_MAX_MS + 1 }, ORDINARY_RETRY_MAX_MS)).toBe(false);
+    // The five minutes left in the run still bound it.
+    expect(retryEligible({ ...failed, caseTimeoutsOnly: true, wallTimeMs: 33 * 60_000 }, ORDINARY_RETRY_MAX_MS, 5 * 60_000)).toBe(false);
+    // An isolated live file keeps its own 25 minutes.
+    expect(retryEligible({ ...failed, caseTimeoutsOnly: true, wallTimeMs: ISOLATED_RETRY_MAX_MS + 1 }, ISOLATED_RETRY_MAX_MS)).toBe(false);
     // A file that ran past its own deadline is still never retried.
     expect(retryEligible({ ...failed, caseTimeoutsOnly: true, timedOut: true }, ORDINARY_RETRY_MAX_MS)).toBe(false);
   });

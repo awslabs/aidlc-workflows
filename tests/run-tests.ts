@@ -174,7 +174,7 @@ OUTPUT MODIFIERS (combinable with any tier/profile):
   --file-retries N  Retry a short assertion-failed file once (0 or 1): in a fresh
                   isolated worker with --isolated-files, otherwise in a fresh
                   process for smoke/unit/integration (the merge queue). A
-                  file whose only failures are case timeouts may run up to 25
+                  file whose only failures are case timeouts may run up to 45
                   minutes and still retry. A file past its deadline, a crash
                   or a cleanup failure is never retried.
                   Known serial driver families may overlap; assertions are unchanged.

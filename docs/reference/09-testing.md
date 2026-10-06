@@ -673,7 +673,7 @@ the tier with `--file-retries 1`: a file whose first attempt failed assertions
 most ten minutes, and at least five minutes left in the run) runs once more in a
 fresh process and temporary directory. A case that ran past its own case timeout
 is a failed case, and a file whose only failures are such case timeouts (a slow
-Windows runner timing out hook-spawning cases) may have run up to 25 minutes and
+Windows runner timing out cases) may have run up to 45 minutes and
 still gets its one retry; `retries.json` marks it `caseTimeoutsOnly`. The rule lives in
 `tests/lib/file-retry.ts`, shared with the isolated live retry. A crash or
 nonzero exit without failed cases, a file that executed no cases, a file that
