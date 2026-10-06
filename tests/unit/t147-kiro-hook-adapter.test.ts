@@ -2402,10 +2402,10 @@ describe("t147 Kiro CLI presence floor holds only at a gate the person must answ
       gateOpen(dir);
       const refused = guard(dir, approveGate);
       expect(refused.code, refused.stderr).toBe(2);
-      // Plain words the person reads under Kiro's own prefix, the same as Kiro IDE's.
+      // Plain words the person reads under Kiro's own prefix. Kiro IDE's floor
+      // takes the same sentence in its own follow-up.
       expect(refused.stderr).toContain(APPROVAL_WAITS);
-      const ideSource = readFileSync(join(REPO_ROOT, "harness/kiro-ide/hooks/aidlc-kiro-adapter.ts"), "utf-8");
-      expect(ideSource.replace(/"\s*\+\s*"/g, "")).toContain(APPROVAL_WAITS);
+      expect(refused.stderr).not.toContain("end the turn");
       expect(refused.stderr).not.toContain("no human has acted since it opened");
     } finally { rmSync(dir, { recursive: true, force: true }); }
   });

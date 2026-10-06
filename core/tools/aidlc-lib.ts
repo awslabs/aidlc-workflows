@@ -11486,14 +11486,33 @@ function literalConstructionPolicySetter(command: string): { field: string; valu
   return field !== undefined && rest.length === 2 ? { field, value: rest[1] } : null;
 }
 
+// The Review brief the protocol prints at the gate, before its question:
+// `bun <harness>/tools/aidlc-review-brief.ts review|summary ...`, or the same
+// through `aidlc engine review-brief` or `bun <harness>/tools/aidlc.ts engine
+// review-brief`, named bare as one command. It only reads.
+function literalReviewBriefRead(command: string): boolean {
+  const literal = parseLiteralShellInvocation(command);
+  if (!literal || literal.directory !== null) return false;
+  const words = literal.argv;
+  const tools = `${harnessDir()}/tools`;
+  let rest: string[];
+  if (words[0] === "aidlc" && words[1] === "engine" && words[2] === "review-brief") rest = words.slice(3);
+  else if (words[0] === "bun" && words[1] === `${tools}/aidlc.ts` && words[2] === "engine" && words[3] === "review-brief") {
+    rest = words.slice(4);
+  } else if (words[0] === "bun" && words[1] === `${tools}/aidlc-review-brief.ts`) rest = words.slice(2);
+  else return false;
+  return rest[0] === "review" || rest[0] === "summary";
+}
+
 // The human-presence floors' one rule (Kiro CLI and Kiro IDE): whether a tool
 // call waits for the person's turn. It holds only while a stage gate the person
 // must answer is open and no turn of theirs is on record since it opened. A
 // gate the engine approves itself (isAutonomousConstructionGate, the rule its
 // approval uses) does not need them, and the one Construction policy setter
 // their recorded choice authorizes (the setter's own check) runs while a gate
-// stays open for its later approval. Neither lets through what the engine
-// would refuse, and either one that cannot be read leaves the floor holding.
+// stays open for its later approval, as does the Review brief, which only
+// reads. None lets through what the engine would refuse, and a setter whose
+// receipt cannot be read leaves the floor holding.
 export function presenceFloorHolds(
   projectDir: string,
   stateContent: string | null,
@@ -11501,6 +11520,7 @@ export function presenceFloorHolds(
 ): boolean {
   if (!stateContent || !hasOpenGate(stateContent)) return false;
   if (humanActedSinceGate(projectDir)) return false;
+  if (literalReviewBriefRead(command)) return false;
   const setter = literalConstructionPolicySetter(command);
   try {
     if (setter !== null && constructionPolicyChangeAllowed(projectDir, setter.field, setter.value)) {

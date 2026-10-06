@@ -725,8 +725,9 @@ if (target === "guard-tool-call") {
     // since it opened (see presenceFloorHolds).
     if (presenceFloorHolds(cwd, content, String(kiro.tool_input?.command ?? ""))) {
       process.stderr.write(
-        // The same words Kiro IDE's approval floor uses: Kiro shows them to the person too.
-        "An approval is waiting for the person's answer, so nothing runs until they give it: end the turn.\n",
+        // Kiro shows this to the person too: one line they can read, and the
+        // SKILL keys the agent's step on the same sentence.
+        "Nothing runs until you answer the approval question.\n",
       );
       return 2; // Kiro reject contract: exit 2 + stderr BLOCKS the tool call.
     }
