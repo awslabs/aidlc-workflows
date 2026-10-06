@@ -93,7 +93,8 @@ describe("t-own-harness-bindings", () => {
     const section = (text: string, own: string) => {
       const from = text.indexOf(`### ${own}\n`);
       const rest = text.slice(from + 1).search(/\n#{2,3} /);
-      return text.slice(from, rest === -1 ? undefined : from + 1 + rest).split("\n");
+      // Trailing blank lines differ only by where the section ends (a heading or the file end).
+      return text.slice(from, rest === -1 ? undefined : from + 1 + rest).trimEnd().split("\n");
     };
     const differ: string[] = [];
     for (const [tree, dir, own] of TREES) {
@@ -140,6 +141,22 @@ describe("t-own-harness-bindings", () => {
     expect(kiro).not.toContain("#### Kiro IDE detail");
     expect(kiro).toContain("### After the run\n\nShared text.\n");
     expect(keepOwnHarnessBindings("# No bindings\n\ntext\n", "codex", "plain.md")).toBe("# No bindings\n\ntext\n");
+  });
+
+  test("a CRLF checkout cuts the same subsections and keeps its line endings", async () => {
+    const { keepOwnHarnessBindings } = await import("../../scripts/harness-bindings.ts");
+    const run = TOOLS.map((tool) => `### ${tool}\n\n${tool} body.\n`).join("\n");
+    const lf = `# Module\n\n\`\`\`bash\n### Cursor\n\`\`\`\n\n## Bindings\n\n${run}\n### After\n\nShared.\n`;
+    const crlf = lf.replaceAll("\n", "\r\n");
+    for (const harness of ["claude", "kiro-ide", "copilot"]) {
+      const cut = keepOwnHarnessBindings(crlf, harness, "crlf.md");
+      expect(cut).toBe(keepOwnHarnessBindings(lf, harness, "lf.md").replaceAll("\n", "\r\n"));
+      expect(cut).not.toMatch(/(^|[^\r])\n/);
+    }
+    // A Windows clone of an authored module cuts exactly as the LF source does.
+    const module = readFileSync(join(REPO_ROOT, "core", "aidlc-common", "protocols", "stage-protocol-swarm.md"), "utf-8");
+    expect(keepOwnHarnessBindings(module.replaceAll("\n", "\r\n"), "codex", "swarm.md"))
+      .toBe(keepOwnHarnessBindings(module, "codex", "swarm.md").replaceAll("\n", "\r\n"));
   });
 
   test("a binding run that is missing a tool fails the build", async () => {

@@ -54,6 +54,9 @@ export function keepOwnHarnessBindings(content: string, harness: string, file: s
     throw new Error(`harness bindings: ${file}: no binding heading is known for harness "${harness}".`);
   }
   const lines = content.split("\n");
+  // A run that reaches the end of the file stops before the empty piece the
+  // final newline leaves, so the module keeps its trailing newline, CRLF or LF.
+  const end = lines.at(-1) === "" ? lines.length - 1 : lines.length;
   const headings = headingsOutsideFences(lines);
   const drop = new Set<number>();
   let i = 0;
@@ -71,7 +74,7 @@ export function keepOwnHarnessBindings(content: string, harness: string, file: s
       if (h.level < start.level || (h.level === start.level && !TOOL_NAMES.has(h.text))) break;
       if (h.level === start.level) {
         if (sections.length > 0) sections[sections.length - 1].to = h.line;
-        sections.push({ text: h.text, from: h.line, to: lines.length });
+        sections.push({ text: h.text, from: h.line, to: end });
       }
       j++;
     }
