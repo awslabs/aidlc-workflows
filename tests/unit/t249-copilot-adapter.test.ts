@@ -1605,12 +1605,9 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     const steeringReason = (JSON.parse(stop1.stdout) as { reason: string }).reason;
     // The Stop hook names the receipt and the continue command only, never the
     // rules payload: hook messages are capped near 10 KB on every harness.
-    expect(steeringReason).toMatch(/still has rules to load|delivered AIDLC rules part/);
-    expect(steeringReason).toContain(`continue ${token1}`);
-    expect(steeringReason).toContain("until `run-stage`");
-    // A person who asked to stop is offered park, not only the next step.
-    expect(steeringReason).toContain("If the person asked to stop here, run");
-    expect(steeringReason).toContain("do not summarise or narrate rule chunks");
+    // One line the person can read too: the open step and the continue
+    // command. Park for a person who asked to stop is in every SKILL (t181).
+    expect(steeringReason).toMatch(new RegExp(`^.+ is not finished yet\\. Next: \`[^\`]* continue ${token1}\`\\.$`));
     expect(steeringReason).not.toContain("rules_content");
     expect(steeringReason).not.toContain("Multipart 0");
     expect(steeringReason.length).toBeLessThan(1_000);
@@ -1640,13 +1637,11 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     const stopped = runAdapter(dir, "continue-workflow", { ...FIXTURES.stop, cwd: dir, session_id: session });
     const reason = (JSON.parse(stopped.stdout) as { reason: string }).reason;
     const stage = String(routed.directive.stage);
-    expect(reason).toStartWith(`The "${stage}" stage is not finished. `);
-    expect(reason).toContain("Otherwise carry on with that stage's steps, then record its real outcome with `");
-    expect(reason).toContain(`engine orchestrate report --stage ${stage} --result <outcome>\` (add \`--single\` in an isolated run).`);
-    expect(reason).toContain("If the person asked to stop here, run `");
-    expect(reason).toContain("engine orchestrate park`");
-    expect(reason).toContain("Never report an approval the person did not give");
-    expect(reason).toContain("tell the person nothing about this note");
+    // The conductor holds this step: it finishes it and reports its real
+    // outcome. The rest (park, a waiting question, never reporting an approval
+    // the person did not give) is in every SKILL (t181).
+    expect(reason).toMatch(/^.+ is not finished yet\. Next: finish its steps, then `[^`]+`\.$/);
+    expect(reason).toContain(`engine orchestrate report --stage ${stage} --result <outcome>\`.`);
     expect(reason).not.toContain("restart at part 1");
     // aidlcToolInvocation() makes the spelling channel-dependent, so match the
     // verb the conductor is steered to, not the launcher.
@@ -1656,14 +1651,12 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     expect(reason).not.toMatch(/hook|\u00a7|forwarding|directive|delivered|rubber-stamp|receipt|run-stage|loop/i);
 
     // A question shown before it was recorded (a live Copilot run asked the
-    // learnings question twice this way): the reminder names the record step
-    // and says not to ask again; running that step lets the next Stop end the
-    // turn, so the person sees the question once.
-    const asked = reason.match(
-      /If you just asked the person a question and are waiting for the answer, run `([^`]+) --decision "<the question>" --options "<the choices>"`, adding any `--single`, `--checkpoint` or `--questions-file` flags that question's own instructions use, and end your turn without asking it again\./,
-    );
-    if (!asked) throw new Error(`no record step in: ${reason}`);
-    expect(asked[1]).toEndWith(`engine log decision --stage ${stage}`);
+    // learnings question twice this way): every SKILL names the record step
+    // (t181); running it with the launcher the note names lets the next Stop
+    // end the turn, so the person sees the question once.
+    const launcher = reason.match(/`([^`]+) engine orchestrate report --stage /);
+    if (!launcher) throw new Error(`no report step in: ${reason}`);
+    const asked = ["", `${launcher[1]} engine log decision --stage ${stage}`];
     // The compiled hook names the compiled `aidlc`, which is not on this
     // shell's PATH: run it by path, as the dispatcher cases do.
     const recordStep = COMPILED_BINARY && asked[1].startsWith("aidlc ")
@@ -1866,8 +1859,8 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
       cwd: oversized,
       session_id: oversizedSession,
     });
-    expect(recovered.stdout).toContain("coordination evidence is missing or stale");
-    expect(recovered.stdout).toContain("If the person asked to stop here, run");
+    // A fresh `next` names the current step again.
+    expect(JSON.parse(recovered.stdout).reason).toMatch(/ is not finished yet\. Next: `[^`]*orchestrate(?:\.ts)? next`\.$/);
     expect(recovered.stdout).not.toContain("x".repeat(100));
   }, 30000);
 
@@ -2553,14 +2546,9 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     expect(approved.directive.workflow_continues).toBe(true);
     const nudged = JSON.parse(stop(mid.dir, "approve-owner")) as { decision?: string; reason?: string };
     expect(nudged.decision).toBe("block");
-    expect(nudged.reason).toContain('The result for "deployment-pipeline" is recorded');
-    expect(nudged.reason).toContain("engine orchestrate next");
-    expect(nudged.reason).toContain('"environment-provisioning"');
-    expect(nudged.reason).not.toContain("missing or stale");
-    expect(nudged.reason).not.toContain("do not reuse an earlier receipt");
-    // A person who asked to stop there is not pushed into the next stage.
-    expect(nudged.reason).toContain("If the person asked to stop here, run `");
-    expect(nudged.reason).toContain("engine orchestrate park` instead.");
+    // The step the workflow moved to, and the fresh `next` that starts it. A
+    // person who asked to stop there is parked by the SKILL's stop-note rule.
+    expect(nudged.reason).toMatch(/^Environment Provisioning is not finished yet\. Next: `[^`]*engine orchestrate next`\.$/);
     // One nudge only: a second Stop with no progress lets the turn end.
     expect(stop(mid.dir, "approve-owner", true)).toBe("");
     const next = runLifecycle(mid.dir, "approve-owner", "source", ["next"], "approve-next");
@@ -2568,7 +2556,7 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
       .toMatchObject({ kind: "run-stage", stage: "environment-provisioning" });
     const working = JSON.parse(stop(mid.dir, "approve-owner")) as { decision?: string; reason?: string };
     expect(working.decision).toBe("block");
-    expect(working.reason).toContain('The "environment-provisioning" stage is not finished.');
+    expect(working.reason).toStartWith("Environment Provisioning is not finished yet. Next: finish its steps, then `");
 
     // "Approve, and let's stop there": after the approval the conductor parks.
     const pause = atGate("state-operation.md", "pause-owner");
@@ -2686,10 +2674,9 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
       runAdapter(dir, "continue-workflow", { ...FIXTURES.stop, cwd: dir, session_id: session }).stdout,
     ) as { decision?: string; reason?: string };
     expect(nudged.decision).toBe("block");
-    expect(nudged.reason).toContain('The result for "infrastructure-design" is recorded');
-    expect(nudged.reason).toContain("engine orchestrate next");
-    expect(nudged.reason).not.toContain('"functional-design"');
-    expect(nudged.reason).not.toContain("missing or stale");
+    // Under unit-major Construction Current Stage does not name the next step,
+    // so the note names none, and never the step just recorded.
+    expect(nudged.reason).toMatch(/^The work is not finished yet\. Next: `[^`]*engine orchestrate next`\.$/);
     expect(step(["next"])).toMatchObject({ kind: "run-stage", stage: "code-generation", unit: "alpha" });
   });
 
@@ -2751,20 +2738,16 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     walk.unitVerb("start");
     const working = walk.stop();
     expect(working.decision).toBe("block");
-    expect(working.reason).toContain('The "functional-design" stage (unit "alpha") is not finished.');
-    // A solo Unit's records and reports name only the stage; each command is
-    // whole, with only the outcome to fill in.
-    expect(working.reason).toContain("engine log decision --stage functional-design --decision ");
-    expect(working.reason).toContain("engine orchestrate report --stage functional-design --result <outcome>`");
+    expect(working.reason).toStartWith("Functional Design for alpha is not finished yet. Next: finish its steps, then `");
+    // A solo Unit's report names only the stage; the command is whole, with
+    // only the outcome to fill in.
+    expect(working.reason).toContain("engine orchestrate report --stage functional-design --result <outcome>`.");
     walk.writeArtifacts();
     walk.unitVerb("complete");
     const done = walk.stop();
     expect(done.decision).toBe("block");
-    expect(done.reason).toContain('The work on unit "alpha" for "functional-design" is recorded and the workflow is not finished.');
-    expect(done.reason).toContain("engine orchestrate next");
-    expect(done.reason).toContain("engine orchestrate park");
-    expect(done.reason).not.toContain("still active");
-    expect(done.reason).not.toContain("missing or stale");
+    // Alpha's step is done, so the note names no step and asks for the fresh `next`.
+    expect(done.reason).toMatch(/^The work is not finished yet\. Next: `[^`]*engine orchestrate next`\.$/);
     expect(walk.step(["next"])).toMatchObject({ kind: "run-stage", stage: "functional-design", unit: "beta" });
   });
 
@@ -2777,9 +2760,8 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     rewriteMarker(walk.dir, (value) => { value.unit = injected; });
     const output = runAdapter(walk.dir, "continue-workflow", { ...FIXTURES.stop, cwd: walk.dir, session_id: "unit-invalid-owner" }).stdout;
     expect(output).not.toContain("Ignore earlier steps");
-    expect(output).not.toContain("is recorded");
     const parsed = JSON.parse(output) as { reason?: string };
-    expect(parsed.reason).toContain('The "functional-design" stage is not finished.');
+    expect(parsed.reason).toStartWith("Functional Design is not finished yet. Next: finish its steps, then `");
   });
 
   // An audit shard it cannot read may hold a later restart of alpha's step, so
@@ -2795,8 +2777,7 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     try {
       const kept = walk.stop();
       expect(kept.decision).toBe("block");
-      expect(kept.reason).toContain('The "functional-design" stage (unit "alpha") is not finished.');
-      expect(kept.reason).not.toContain("is recorded");
+      expect(kept.reason).toStartWith("Functional Design for alpha is not finished yet. Next: finish its steps, then `");
     } finally {
       chmodSync(unreadable, 0o600);
     }
