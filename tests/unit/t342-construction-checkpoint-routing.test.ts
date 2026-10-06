@@ -2276,6 +2276,46 @@ describe("t342 a unit-major recovery keeps every Unit's finished work", () => {
     expect(next(p)).toMatchObject({ stage: "functional-design", unit: "beta" });
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
+  // Guard Policy off, reviews advisory (one review pass a stage): alpha's
+  // design document is deleted after alpha was approved, while beta builds.
+  // The engine hands Functional Design back for alpha to make again. That
+  // remake is the one stop: its review goes through under the one pass, and
+  // the walk carries on, with no refusal that names a step that cannot work.
+  test("a deleted design document is made again and reviewed under a one-pass review cap, then the walk carries on", () => {
+    const p = fixture({ scope: "classic" });
+    writeFileSync(seededStateFile(p), readFileSync(seededStateFile(p), "utf-8")
+      .replace("- **Review Override**: none", "- **Review Override**: advisory")
+      .replace("- **Change Control**: strict", "- **Guard Policy**: off (set by you)"));
+    for (const slug of stages) {
+      cover(p, "alpha", [slug], false);
+      const reviewed = reviewThroughLog(p, [
+        "review", "--stage", slug, "--reviewer", findStageBySlug(slug)!.reviewer!, "--unit", "alpha", "--iteration", "1",
+      ]);
+      expect(reviewed.status, reviewed.out).toBe(0);
+      cover(p, "alpha", [slug]);
+    }
+    approve(p, "alpha");
+    expect(next(p)).toMatchObject({ stage: "functional-design", unit: "beta" });
+    const design = findStageBySlug("functional-design")!;
+    const designDir = join(seededRecordDir(p), "construction", "alpha", design.slug);
+    for (const name of design.produces ?? []) rmSync(join(designDir, artifactFilename(name)), { force: true });
+
+    const handedBack = next(p);
+    expect(handedBack, JSON.stringify(handedBack).slice(0, 800)).toMatchObject({ stage: design.slug, unit: "alpha" });
+    cover(p, "alpha", [design.slug], false);
+    const review = (iteration: string) => reviewThroughLog(p, [
+      "review", "--stage", design.slug, "--reviewer", design.reviewer!, "--unit", "alpha", "--iteration", iteration,
+    ]);
+    let redone = review("1");
+    const retry = /Retry with --iteration (\d+)/.exec(redone.out)?.[1];
+    if (redone.status !== 0 && retry !== undefined) redone = review(retry);
+    expect(redone.status, redone.out).toBe(0);
+    cover(p, "alpha", [design.slug]);
+    const after = next(p) as unknown as { kind: string; message?: string };
+    expect(after.kind, JSON.stringify(after).slice(0, 800)).not.toBe("error");
+    expect(JSON.stringify(after)).not.toContain("allows 1 review pass");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
   // A Unit built as a run records it: each stage's outputs, its review through
   // the logger, then its completion. `edit` runs before the Code Generation
   // review, as the Unit's own build would, and stays. `asRun` records each
