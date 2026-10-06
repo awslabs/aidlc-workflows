@@ -85,14 +85,17 @@ function installed(): { dir: string; machine: string } {
 }
 
 // Every file under the roots, with its bytes and modification time, so a
-// command that writes anything (or touches a file) shows up.
+// command that writes anything (or touches a file) shows up. Bun's own
+// transpile cache under the test HOME is the runtime's, not AI-DLC's.
 function snapshot(...roots: string[]): Map<string, string> {
   const seen = new Map<string, string>();
   const walk = (path: string): void => {
     if (!existsSync(path)) return;
     const stat = lstatSync(path);
     if (stat.isDirectory()) {
-      for (const name of readdirSync(path)) walk(join(path, name));
+      for (const name of readdirSync(path)) {
+        if (name !== ".bun") walk(join(path, name));
+      }
       return;
     }
     const bytes = stat.isFile() ? readFileSync(path) : Buffer.from("");
