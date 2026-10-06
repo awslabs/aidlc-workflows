@@ -239,7 +239,9 @@ approval or readiness stands, and its one line arrives in `change_notices`.
 The same holds with reviews off: under `relaxed` and `off` a later change to an
 approved Unit's work keeps its approval, and its one line arrives in
 `change_notices` from the next checkpoint's `verify` or the Construction stage's
-own check.
+own check. A change made after the approval question was asked and before the
+person answers is accepted the same way: their `approve` records it, and its one
+line arrives in that command's `change_notices`.
 
 Otherwise, if `ready` is false or evidence became stale, explain `errors`.
 Repair the named missing review or receipt through its owning procedure,

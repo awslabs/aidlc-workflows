@@ -383,7 +383,11 @@ review re-checks keeps those values in the checkpoint fingerprint, so the
 approval stands. Its one `CHANGE_ACCEPTED` row (Checkpoint `construction-unit`)
 is written by the next checkpoint's `verify` or the Construction stage's own
 check, and names the changed paths when the kept listing still reproduces the
-approved source fingerprint. Under `strict`, or for an approval recorded before
+approved source fingerprint. The approval question's `DECISION_RECORDED` row
+records the same values as `Asked Evidence`, so a change made after the question
+and before the person answers keeps what they were shown: under `relaxed` and
+`off` their `approve` records it, writes the one `CHANGE_ACCEPTED` row and says
+it in its `change_notices`. Under `strict`, or for an approval recorded before
 `Approved Evidence` existed, the Unit is asked about again.
 
 `WORKFLOW_STARTED`, `STAGE_JUMPED`, and a `workspace_requires`

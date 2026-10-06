@@ -320,8 +320,8 @@ const APPROVED_FILES_CAP = 50;
 // [artifact fingerprint, source fingerprint or null] plus, for a stage with
 // source and at most APPROVED_FILES_CAP claimed paths, an object of those path
 // keys and their listing entries. Null when the row has none or it is unreadable.
-function readApprovedEvidence(block: string): Map<string, ApprovedStageEvidence> | null {
-  const value = auditBlockField(block, "Approved Evidence");
+function readApprovedEvidence(block: string, field = "Approved Evidence"): Map<string, ApprovedStageEvidence> | null {
+  const value = auditBlockField(block, field);
   if (value === null) return null;
   try {
     const parsed = JSON.parse(value) as unknown;
@@ -363,6 +363,7 @@ function approvedWorkChange(
   source: string | null,
   claimed: { model: SourceClaimModel; sha256: string } | null,
   listing: WorkspaceSourceListing | null,
+  asked = false,
 ): AcceptedChange {
   const artifactMoved = recorded.artifact !== artifact;
   const sourceMoved = recorded.source !== source;
@@ -378,9 +379,13 @@ function approvedWorkChange(
     changed: paths.length > 0 ? paths : null,
     recorded: pair(recorded.artifact, recorded.source),
     current: pair(artifact, source),
-    notice: paths.length > 0
-      ? `${renderChangedPaths(paths)} changed after you approved Unit ${unit}; carrying on.`
-      : `Unit ${unit}'s files changed after you approved it; carrying on.`,
+    notice: asked
+      ? paths.length > 0
+        ? `${renderChangedPaths(paths)} changed after you were asked about Unit ${unit}; carrying on.`
+        : `Unit ${unit}'s files changed after you were asked about it; carrying on.`
+      : paths.length > 0
+        ? `${renderChangedPaths(paths)} changed after you approved Unit ${unit}; carrying on.`
+        : `Unit ${unit}'s files changed after you approved it; carrying on.`,
   };
 }
 
@@ -445,9 +450,15 @@ function snapshot(
     return row.event === "GATE_REJECTED" ||
       auditBlockField(row.block, "Checkpoint") === checkpointName(kind);
   }));
-  // What this Unit's latest approval saw, read for a stage no review re-checks.
-  const recordedEvidence = gate?.event === "GATE_APPROVED" && auditBlockField(gate.block, "Unit") === unit
-    ? readApprovedEvidence(gate.block) : null;
+  // What this Unit's latest approval saw, read for a stage no review re-checks;
+  // or, when the person was asked about the Unit since, what they were shown.
+  const asked = onlyLatest(rows.filter((row) =>
+    row.event === "DECISION_RECORDED" && auditBlockField(row.block, "Checkpoint") === "Construction Unit Approval" &&
+    auditBlockField(row.block, "Unit") === unit && auditBlockField(row.block, "Kind") === kind &&
+    (gate === null || attemptEventDefinitelyBefore(gate, row))));
+  const askedEvidence = asked ? readApprovedEvidence(asked.block, "Asked Evidence") : null;
+  const recordedEvidence = askedEvidence ?? (gate?.event === "GATE_APPROVED" && auditBlockField(gate.block, "Unit") === unit
+    ? readApprovedEvidence(gate.block) : null);
   const approvedEvidence: Record<string, [string | null, string | null] | [string | null, string, Record<string, string>]> = {};
 
   for (const slug of stages) {
@@ -625,7 +636,7 @@ function snapshot(
         (recorded.artifact !== artifact || recorded.source !== source) &&
         acceptsChanges()
       ) {
-        accepted.push(approvedWorkChange(slug, unit, recorded, artifact, source, claimed, listing));
+        accepted.push(approvedWorkChange(slug, unit, recorded, artifact, source, claimed, listing, askedEvidence !== null));
         artifact = recorded.artifact;
         source = recorded.source;
         keptFiles = recorded.files;
@@ -1012,6 +1023,9 @@ export function askConstructionCheckpoint(
       Checkpoint: "Construction Unit Approval", Unit: unit, Kind: kind,
       Stage: current.result.stages.at(-1)!, Fingerprint: current.result.fingerprint,
       Session: session, Options: "Approve,Request Changes",
+      // What the person is shown, so a change before their answer is said
+      // once instead of asking again (relaxed and off).
+      "Asked Evidence": current.approvedEvidence, "Run floors": JSON.stringify(current.result.run_floors),
     }, projectDir);
     mintProtectedQuestion(projectDir, {
       kind: "checkpoint-approval", session, target: approvalTarget(current),
@@ -1054,6 +1068,10 @@ export function approveConstructionCheckpoint(
       rechecked.result.human_required !== current.result.human_required) {
       throw new Error("Construction checkpoint evidence changed before approval.");
     }
+    // A change made after the person was asked, which the Guard Policy
+    // accepts, is said once here, with their approval.
+    if (rechecked.accepted.length > 0) governedGuardPolicy(projectDir, rechecked.state);
+    const notices = recordAcceptedChanges(projectDir, rechecked.accepted);
     appendAuditEntryUnlocked("GATE_APPROVED", {
       ...gateFields(projectDir, rechecked.result, rechecked.state),
       "Verification Id": rechecked.result.verification!.id,
@@ -1063,7 +1081,8 @@ export function approveConstructionCheckpoint(
       ...(words ? { "Person Reply": words } : {}),
     }, projectDir);
     if (humanRequired) consumeProtectedQuestion(projectDir, session);
-    return resolveConstructionCheckpoint(projectDir, unit, kind);
+    const result = resolveConstructionCheckpoint(projectDir, unit, kind);
+    return notices.length > 0 ? { ...result, change_notices: notices } : result;
   });
 }
 

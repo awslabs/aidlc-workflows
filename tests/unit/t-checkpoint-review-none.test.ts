@@ -338,4 +338,39 @@ describe("t-checkpoint-review-none: reviews off, an approved Unit changed later"
     expect(approved(p, "alpha")).toBe(false);
     expect(acceptedFor(p, "alpha")).toHaveLength(0);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  // Asked "Approve Unit alpha?", the person fixes a typo in its functional
+  // design and says "approve". Under relaxed and off their approval lands on
+  // the Unit they were shown and the change is said once; under strict they are
+  // asked about it as it is now.
+  for (const policy of ["off (from scope classic)", "relaxed (set by you)", "strict (set by you)"]) {
+    test(`Guard Policy ${policy.split(" ")[0]}: a document edited between the question and the approval`, () => {
+      const p = fixture(policy);
+      build(p, "alpha");
+      verify(p, "alpha");
+      const session = "t-review-none-asked";
+      const asked = tool(p, "bolt", ["checkpoint", "--unit", "alpha", "--kind", "unit", "--action", "ask", "--session", session]);
+      expect(asked.status, asked.out).toBe(0);
+      const doc = join(seededRecordDir(p), "construction", "alpha", "functional-design",
+        artifactFilename(findStageBySlug("functional-design")!.produces![0]));
+      writeFileSync(doc, `${readFileSync(doc, "utf-8")}\nFixed a typo.\n`);
+      human(p, "approve", session);
+      const answered = tool(p, "bolt", ["checkpoint", "--unit", "alpha", "--kind", "unit", "--action", "approve", "--session", session, "--user-input", "Approve"]);
+      if (policy.startsWith("strict")) {
+        expect(answered.status).not.toBe(0);
+        expect(approved(p, "alpha")).toBe(false);
+        return;
+      }
+      expect(answered.status, answered.out).toBe(0);
+      expect(JSON.parse(answered.stdout)).toMatchObject({
+        approved: true, change_notices: ["Unit alpha's files changed after you were asked about it; carrying on."],
+      });
+      expect(next(p)).toMatchObject({ stage: "functional-design", unit: "beta" });
+      expect(approved(p, "alpha")).toBe(true);
+      // Said once: the next Unit's checkpoint does not say it again.
+      build(p, "beta");
+      expect(verify(p, "beta").change_notices ?? []).toEqual([]);
+      expect(acceptedFor(p, "alpha")).toHaveLength(1);
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+  }
 });
