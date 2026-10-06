@@ -20,9 +20,9 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 1290,
+    "total": 1281,
     "enumeratedByClass": {
-      "function": 958,
+      "function": 949,
       "audit": 110,
       "scope": 11,
       "stage": 33,
@@ -31,7 +31,7 @@
       "render-surface": 7
     },
     "coveredByClass": {
-      "function": 586,
+      "function": 583,
       "audit": 70,
       "scope": 11,
       "stage": 11,
@@ -127,10 +127,6 @@
       "unitId": "CEREMONY_SET",
       "minMechanism": "none",
       "coveredBy": [
-        {
-          "file": "tests/unit/t-answer-mode-once.test.ts",
-          "mechanism": "cli"
-        },
         {
           "file": "tests/unit/t338-ceremony-verb.test.ts",
           "mechanism": "cli"
@@ -1586,28 +1582,7 @@
     },
     {
       "unitClass": "function",
-      "unitId": "function:ANSWER_MODE_CHANGE_HINT",
-      "minMechanism": "none",
-      "coveredBy": [],
-      "status": "UNCOVERED"
-    },
-    {
-      "unitClass": "function",
-      "unitId": "function:ANSWER_MODE_ENV",
-      "minMechanism": "none",
-      "coveredBy": [],
-      "status": "UNCOVERED"
-    },
-    {
-      "unitClass": "function",
       "unitId": "function:ANSWER_MODE_FIELD",
-      "minMechanism": "none",
-      "coveredBy": [],
-      "status": "UNCOVERED"
-    },
-    {
-      "unitClass": "function",
-      "unitId": "function:ANSWER_MODE_FLAG",
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
@@ -1628,13 +1603,6 @@
     },
     {
       "unitClass": "function",
-      "unitId": "function:ANSWER_MODE_SETTINGS",
-      "minMechanism": "none",
-      "coveredBy": [],
-      "status": "UNCOVERED"
-    },
-    {
-      "unitClass": "function",
       "unitId": "function:answerModeFromReply",
       "minMechanism": "none",
       "coveredBy": [
@@ -1649,8 +1617,13 @@
       "unitClass": "function",
       "unitId": "function:answerModeStageStartedFields",
       "minMechanism": "none",
-      "coveredBy": [],
-      "status": "UNCOVERED"
+      "coveredBy": [
+        {
+          "file": "tests/unit/t-answer-mode-once.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "function",
@@ -3817,13 +3790,6 @@
     },
     {
       "unitClass": "function",
-      "unitId": "function:formatAnswerMode",
-      "minMechanism": "none",
-      "coveredBy": [],
-      "status": "UNCOVERED"
-    },
-    {
-      "unitClass": "function",
       "unitId": "function:formatCeremony",
       "minMechanism": "none",
       "coveredBy": [
@@ -3900,18 +3866,6 @@
         },
         {
           "file": "tests/unit/t261-audit-authority-floor.test.ts",
-          "mechanism": "cli"
-        }
-      ],
-      "status": "covered"
-    },
-    {
-      "unitClass": "function",
-      "unitId": "function:formatStageAnswerMode",
-      "minMechanism": "none",
-      "coveredBy": [
-        {
-          "file": "tests/unit/t-answer-mode-once.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -6374,30 +6328,6 @@
     },
     {
       "unitClass": "function",
-      "unitId": "function:parseAnswerModeSetting",
-      "minMechanism": "none",
-      "coveredBy": [
-        {
-          "file": "tests/unit/t-answer-mode-once.test.ts",
-          "mechanism": "cli"
-        }
-      ],
-      "status": "covered"
-    },
-    {
-      "unitClass": "function",
-      "unitId": "function:parseAnswerModeStateLine",
-      "minMechanism": "none",
-      "coveredBy": [
-        {
-          "file": "tests/unit/t-answer-mode-once.test.ts",
-          "mechanism": "cli"
-        }
-      ],
-      "status": "covered"
-    },
-    {
-      "unitClass": "function",
       "unitId": "function:parseArgs",
       "minMechanism": "none",
       "coveredBy": [],
@@ -8277,18 +8207,6 @@
         },
         {
           "file": "tests/unit/t229-workspace-parser.test.ts",
-          "mechanism": "cli"
-        }
-      ],
-      "status": "covered"
-    },
-    {
-      "unitClass": "function",
-      "unitId": "function:resolveAnswerModeSetting",
-      "minMechanism": "none",
-      "coveredBy": [
-        {
-          "file": "tests/unit/t-answer-mode-once.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -14881,10 +14799,6 @@
           "mechanism": "cli"
         },
         {
-          "file": "tests/unit/t-answer-mode-once.test.ts",
-          "mechanism": "cli"
-        },
-        {
           "file": "tests/unit/t231-handler-additions.test.ts",
           "mechanism": "cli"
         },
@@ -14912,10 +14826,6 @@
       "unitId": "aidlc-utility config-get",
       "minMechanism": "cli",
       "coveredBy": [
-        {
-          "file": "tests/unit/t-answer-mode-once.test.ts",
-          "mechanism": "cli"
-        },
         {
           "file": "tests/unit/t231-handler-additions.test.ts",
           "mechanism": "cli"

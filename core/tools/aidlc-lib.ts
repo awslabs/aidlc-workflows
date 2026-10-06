@@ -216,8 +216,6 @@ export interface ScopeDefinition {
   guardPolicy?: GuardPolicy;
   /** Scope-owned ceremony defaults; omitted settings stay on. */
   ceremony?: Partial<CeremonyPolicy>;
-  /** The scope's answer-mode default (`answer_mode:` frontmatter); absent means once. */
-  answerMode?: AnswerModeSetting;
 }
 
 export type CheckboxState = "pending" | "in-progress" | "awaiting-approval" | "revising" | "completed" | "skipped";
@@ -951,9 +949,7 @@ export function isRefusedModifierNextArgv(args: readonly string[]): boolean {
       ? ["adversarial", "advisory", "none"]
       : flag === "--depth" || flag === "--test-strategy"
         ? ["minimal", "standard", "comprehensive"]
-        : flag === ANSWER_MODE_FLAG
-          ? [...ANSWER_MODE_SETTINGS]
-          : null;
+        : null;
     if (!words && !ceremony && !guard) return false;
     const value = args[i + 1];
     if (value === undefined || value.startsWith("--")) {
@@ -2207,9 +2203,8 @@ function isTerminalConfigurationDispatch(
     "--guard-policy": "guard-policy",
     "--change-control": "guard-policy",
     ...Object.fromEntries(CEREMONY_KEYS.map((key) => [CEREMONY_FLAGS[key], CEREMONY_FLAGS[key].slice(2)])),
-    [ANSWER_MODE_FLAG]: "answer-mode",
   };
-  const order = ["depth", "test-strategy", "review", "guard-policy", ...CEREMONY_KEYS.map((key) => CEREMONY_FLAGS[key].slice(2)), "answer-mode"];
+  const order = ["depth", "test-strategy", "review", "guard-policy", ...CEREMONY_KEYS.map((key) => CEREMONY_FLAGS[key].slice(2))];
   const values = new Map<string, string>();
   for (let i = 0; i < args.length; i += 2) {
     const name = modifierFlags[args[i]];
@@ -2223,9 +2218,7 @@ function isTerminalConfigurationDispatch(
       ? parseGuardPolicy(raw)
       : CEREMONY_KEYS.some((key) => CEREMONY_FLAGS[key] === args[i])
         ? parseCeremonySetting(raw)
-        : name === "answer-mode"
-          ? parseAnswerModeSetting(raw)
-          : levels.includes(raw.toLowerCase()) ? raw.toLowerCase() : null;
+        : levels.includes(raw.toLowerCase()) ? raw.toLowerCase() : null;
     if (value === null) return false;
     values.set(name, value);
   }
@@ -31348,8 +31341,6 @@ interface ScopeMetadata {
    *  resolveGuardPolicy. */
   guardPolicy?: GuardPolicy;
   ceremony?: Partial<CeremonyPolicy>;
-  /** `answer_mode:` frontmatter; absent = once. Resolution lives in resolveAnswerModeSetting. */
-  answerMode?: AnswerModeSetting;
 }
 
 let _scopeMetadata: Record<string, ScopeMetadata> | null = null;
@@ -31491,16 +31482,6 @@ export function loadScopeMetadataAll(): Record<string, ScopeMetadata> {
       meta.ceremony ??= {};
       meta.ceremony[key] = value;
     }
-    const answerModeRaw = scalarField(fm, "answer_mode");
-    if (answerModeRaw) {
-      const answerMode = parseAnswerModeSetting(answerModeRaw);
-      if (answerMode === null) {
-        throw new Error(
-          `Scope file ${filePath} has invalid answer_mode value "${answerModeRaw}". Expected one of: ${ANSWER_MODE_SETTINGS.join(", ")}.`,
-        );
-      }
-      meta.answerMode = answerMode;
-    }
     out[name] = meta;
   }
   _scopeMetadataAll = out;
@@ -31631,7 +31612,6 @@ export function loadScopeMapping(): Record<string, ScopeDefinition> {
     def.skeleton = meta.skeleton;
     if (meta.guardPolicy !== undefined) def.guardPolicy = meta.guardPolicy;
     if (meta.ceremony !== undefined) def.ceremony = meta.ceremony;
-    if (meta.answerMode !== undefined) def.answerMode = meta.answerMode;
     out[name] = def;
   }
   _scopeMapping = out;
@@ -33508,20 +33488,15 @@ export function ceremonyPolicyValues(
   };
 }
 
-// --- Answer mode (stage-protocol.md §3 Step 2) ---
+// --- Answer mode (stage-protocol.md section 3, Step 2) ---
 //
 // How the person answers a stage's questions: Guide me, I'll edit the file, or
-// Chat. The default asks once per piece of work, at the first stage with
-// questions, and reuses that choice. Precedence mirrors the scope-owned
-// ceremonies: env kill switch, then the intent's saved line, then the scope's
-// `answer_mode:` frontmatter, then `once`.
-export const ANSWER_MODE_SETTINGS = ["once", "ask", "guide", "file", "chat"] as const;
-export type AnswerModeSetting = (typeof ANSWER_MODE_SETTINGS)[number];
+// Chat. The first stage with questions asks; later stages in the same piece of
+// work reuse the person's choice and say so in one line. The person changes it
+// by saying so, and the agent records the new choice the same way.
 export type AnswerModeChoice = "guide" | "file" | "chat";
+/** The STAGE_STARTED field recording the mode a stage starts with. */
 export const ANSWER_MODE_FIELD = "Answer Mode";
-export const ANSWER_MODE_FLAG = "--answer-mode";
-/** Machine kill switch; "1" asks the mode question at every stage again. */
-export const ANSWER_MODE_ENV = "AIDLC_DISABLE_ANSWER_MODE_REUSE";
 /** The recorded Decision text of the mode question starts with this. */
 export const ANSWER_MODE_QUESTION_PREFIX = "How would you like to answer";
 export const ANSWER_MODE_LABELS: Record<AnswerModeChoice, string> = {
@@ -33529,51 +33504,35 @@ export const ANSWER_MODE_LABELS: Record<AnswerModeChoice, string> = {
   file: "I'll edit the file",
   chat: "Chat",
 };
-export const ANSWER_MODE_CHANGE_HINT =
-  "Change it with `/aidlc --answer-mode guide|file|chat`, or `/aidlc --answer-mode ask` to be asked at every stage.";
-
-export function parseAnswerModeSetting(raw: string | null | undefined): AnswerModeSetting | null {
-  if (raw === null || raw === undefined) return null;
-  const word = raw.toLowerCase().replace(/[`*_]/g, "").trim();
-  return (ANSWER_MODE_SETTINGS as readonly string[]).includes(word) ? word as AnswerModeSetting : null;
-}
-
-const ANSWER_MODE_STATE_LINE_RE = /^(once|ask|guide|file|chat)\b(?:\s*\((.*)\))?\s*$/i;
-
-export function parseAnswerModeStateLine(
-  raw: string | null | undefined,
-): { value: AnswerModeSetting; source: string } | null {
-  if (!raw) return null;
-  const match = ANSWER_MODE_STATE_LINE_RE.exec(raw.trim());
-  if (!match) return null;
-  return {
-    value: match[1].toLowerCase() as AnswerModeSetting,
-    source: changeControlSourceFromLabel((match[2] ?? "").trim()),
-  };
-}
-
-export function formatAnswerMode(value: AnswerModeSetting, source: string): string {
-  return `${value} (${changeControlSourceLabel(source)})`;
-}
+const ANSWER_MODE_OTHERS: Record<AnswerModeChoice, string> = {
+  guide: "edit the file or chat",
+  file: "be guided through them here or chat",
+  chat: "be guided through them here or edit the file",
+};
 
 /**
- * The mode a recorded answer to the mode question names, or null when the
- * reply names none (an Other escape, or answers given in place of a mode).
- * Accepts the option label, with or without its numbered-prose prefix, and a
- * bare option number.
+ * The mode a recorded answer to the mode question names: the option label the
+ * agent recorded, or its option number. The agent reads what the person meant
+ * and records the label; this reads only that exact label or number, so it
+ * never judges the person's own words. Anything else names no mode.
  */
 export function answerModeFromReply(details: string | null | undefined): AnswerModeChoice | null {
   if (!details) return null;
-  const text = details.trim().replace(/^["'`]+|["'`]+$/g, "").trim().toLowerCase();
-  const numbered = /^([123])\s*(?:[.):-]\s*(.*))?$/.exec(text);
-  const words = numbered ? (numbered[2] ?? "").trim() : text;
-  if (numbered && words.length === 0) {
-    return (["guide", "file", "chat"] as const)[Number(numbered[1]) - 1];
+  const text = details
+    .trim()
+    .replace(/^["'`]+|["'`]+$/g, "")
+    .replace(/\u2019/g, "'")
+    .trim()
+    .toLowerCase();
+  const numbered = /^([123])(?:\s*[.):]\s*(.*))?$/.exec(text);
+  const label = numbered ? (numbered[2] ?? "").trim() : text;
+  const byLabel = (Object.keys(ANSWER_MODE_LABELS) as AnswerModeChoice[])
+    .find((mode) => ANSWER_MODE_LABELS[mode].toLowerCase() === label);
+  if (numbered) {
+    const byNumber = (["guide", "file", "chat"] as const)[Number(numbered[1]) - 1];
+    return label === "" || byLabel === byNumber ? byNumber : null;
   }
-  if (/^guide\b/.test(words)) return "guide";
-  if (/^(?:i'll|i will|ill)\s+edit\b/.test(words) || /^edit\b/.test(words)) return "file";
-  if (/^chat\b/.test(words)) return "chat";
-  return null;
+  return byLabel ?? null;
 }
 
 export interface RecordedAnswerMode {
@@ -33628,47 +33587,7 @@ export function latestRecordedAnswerMode(
   return latest;
 }
 
-export interface AnswerModeResolution {
-  /** The resolved setting before a recorded choice is applied. */
-  setting: AnswerModeSetting;
-  /** Human-worded: env AIDLC_DISABLE_ANSWER_MODE_REUSE, you, command, scope <name>, or default. */
-  source: string;
-  scopeDefault: AnswerModeSetting;
-  intent: { value: AnswerModeSetting; source: string } | null;
-  rawStateValue: string | null;
-}
-
-/** Pure resolution of the supplied state; no audit, intent-file reads or writes. */
-export function resolveAnswerModeSetting(
-  scope: string | null | undefined,
-  stateContent: string | null | undefined,
-  env: NodeJS.ProcessEnv = process.env,
-): AnswerModeResolution {
-  const scopeName = scope?.trim().toLowerCase();
-  let declared: AnswerModeSetting | undefined;
-  try {
-    declared = scopeName ? loadScopeMapping()[scopeName]?.answerMode : undefined;
-  } catch {
-    // Scope data is unavailable; a saved intent value and the default remain usable.
-  }
-  const scopeDefault = declared ?? "once";
-  const rawStateValue = getField(stateContent ?? "", ANSWER_MODE_FIELD);
-  const intent = parseAnswerModeStateLine(rawStateValue);
-  const disabled = resolveProjectFlag(ANSWER_MODE_ENV, env) === "1";
-  return {
-    setting: disabled ? "ask" : intent?.value ?? scopeDefault,
-    source: disabled
-      ? `env ${ANSWER_MODE_ENV}`
-      : intent?.source ?? (declared === undefined ? "default" : `scope ${scopeName}`),
-    scopeDefault,
-    intent,
-    rawStateValue,
-  };
-}
-
 export interface StageAnswerMode {
-  setting: AnswerModeSetting;
-  source: string;
   /** The mode this stage uses without asking; null when it asks. */
   mode: AnswerModeChoice | null;
   /** True when this stage presents the mode question before its questions. */
@@ -33681,61 +33600,45 @@ export interface StageAnswerMode {
 
 /**
  * The answer mode one stage runs with. `projectDir` null skips the recorded
- * choice (a piece of work being created has none yet).
+ * choice (a piece of work being created, or an isolated run, has none).
  */
 export function resolveStageAnswerMode(
   projectDir: string | null,
-  scope: string | null | undefined,
-  stateContent: string | null | undefined,
-  options: { intent?: string; space?: string; env?: NodeJS.ProcessEnv } = {},
+  options: { intent?: string; space?: string } = {},
 ): StageAnswerMode {
-  const resolution = resolveAnswerModeSetting(scope, stateContent, options.env);
-  const { setting, source } = resolution;
-  if (setting === "guide" || setting === "file" || setting === "chat") {
-    return {
-      setting, source, mode: setting, ask: false, reused_from: null,
-      notice: `Answering in "${ANSWER_MODE_LABELS[setting]}" mode (${changeControlSourceLabel(source)}). ${ANSWER_MODE_CHANGE_HINT}`,
-    };
-  }
-  if (setting === "ask") {
-    return {
-      setting, source, mode: null, ask: true, reused_from: null,
-      notice: `The answer mode is asked at every stage (${changeControlSourceLabel(source)}).`,
-    };
-  }
   const recorded = projectDir === null ? null : latestRecordedAnswerMode(projectDir, options.intent, options.space);
   if (recorded !== null) {
     return {
-      setting, source, mode: recorded.mode, ask: false, reused_from: recorded.stage,
-      notice: `Answering in "${ANSWER_MODE_LABELS[recorded.mode]}" mode, your choice at ${recorded.stage}. ${ANSWER_MODE_CHANGE_HINT}`,
+      mode: recorded.mode,
+      ask: false,
+      reused_from: recorded.stage,
+      notice: `Answering the way you chose earlier: ${ANSWER_MODE_LABELS[recorded.mode]}. ` +
+        `Say if you'd rather ${ANSWER_MODE_OTHERS[recorded.mode]}.`,
     };
   }
   return {
-    setting, source, mode: null, ask: true, reused_from: null,
-    notice: "Your choice is reused for the later stages of this piece of work. " +
-      "Change it any time with `/aidlc --answer-mode guide|file|chat|ask`.",
+    mode: null,
+    ask: true,
+    reused_from: null,
+    notice: "I'll answer the later stages' questions the same way. Say any time if you'd rather switch.",
   };
 }
 
-/** The `Answer Mode` field a STAGE_STARTED row carries: the mode in effect. */
-export function formatStageAnswerMode(mode: StageAnswerMode): string {
-  if (mode.mode !== null && mode.reused_from !== null) {
-    return `${mode.mode} (reused from ${mode.reused_from})`;
-  }
-  if (mode.mode !== null) return `${mode.mode} (${changeControlSourceLabel(mode.source)})`;
-  if (mode.setting === "ask") return `ask (${changeControlSourceLabel(mode.source)})`;
-  return "ask (first stage with questions; the choice is then reused)";
-}
-
-/** STAGE_STARTED fields recording the stage's answer mode; empty on any read error. */
+/**
+ * STAGE_STARTED fields recording a reused answer mode, e.g.
+ * `Answer Mode: guide (reused from requirements-analysis)`, so the audit shows
+ * how a stage that asked no mode question was answered. Empty when the stage
+ * asks (its own question and answer are the record) and on any read error.
+ */
 export function answerModeStageStartedFields(
   projectDir: string | null,
-  scope: string | null | undefined,
-  stateContent: string | null | undefined,
   options: { intent?: string; space?: string } = {},
 ): Record<string, string> {
   try {
-    return { [ANSWER_MODE_FIELD]: formatStageAnswerMode(resolveStageAnswerMode(projectDir, scope, stateContent, options)) };
+    const mode = resolveStageAnswerMode(projectDir, options);
+    return mode.mode !== null && mode.reused_from !== null
+      ? { [ANSWER_MODE_FIELD]: `${mode.mode} (reused from ${mode.reused_from})` }
+      : {};
   } catch {
     return {};
   }

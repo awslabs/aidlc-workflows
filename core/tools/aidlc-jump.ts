@@ -554,7 +554,7 @@ function handleExecute(args: string[]): void {
     emitAudit(pd, "STAGE_STARTED", {
       Stage: targetSlug,
       Agent: targetStage.lead_agent,
-      ...answerModeStageStartedFields(pd, getField(content, "Scope"), content),
+      ...answerModeStageStartedFields(pd),
       ...jumpSourceBaseline,
     });
   } catch (e) {

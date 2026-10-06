@@ -65,8 +65,7 @@ diagnostic and lifecycle routes.
 | `/aidlc --learnings <on\|off>` | Set the learning diary and learning-gate ceremony for this intent |
 | `/aidlc --summary-confirmation <on\|off>` | Set the consolidated-summary confirmation checkpoint for this intent |
 | `/aidlc --plan-approval <on\|off>` | Set whether each code plan is shown for approval before it is built, for this intent (only the person turns it off) |
-| `/aidlc --answer-mode <once\|ask\|guide\|file\|chat>` | Set how stage questions are answered for this intent: ask once and reuse the choice (default), ask at every stage, or always use one mode |
-| `/aidlc config get <key>` | Print active workflow config (`depth`, `test-strategy`, `review`, `guard-policy`, `sensors`, `learnings`, `summary-confirmation`, `plan-approval`, `answer-mode`, `guard.<fence>`) |
+| `/aidlc config get <key>` | Print active workflow config (`depth`, `test-strategy`, `review`, `guard-policy`, `sensors`, `learnings`, `summary-confirmation`, `plan-approval`, `guard.<fence>`) |
 | `/aidlc config set <key> <value> [--key value ...]` | Change intent settings through the shared setter; typed lowering switches apply at prompt time |
 | `/aidlc config set guard.<fence> <on\|off>` | Turn one fence off for this piece of work, or back on above the policy word (review-freeze, state-transition, reviewer-scope; `guard.plan-approval` is another name for `plan-approval`) |
 | `/aidlc config list` | List all twelve active workflow settings (`--json` for structured output) |
@@ -1037,7 +1036,6 @@ through `aidlc config flags`.
 | `learnings` / `--learnings` | `on`, `off` | Learnings |
 | `summary-confirmation` / `--summary-confirmation` | `on`, `off` | Summary Confirmation |
 | `plan-approval` / `--plan-approval` | `on`, `off` | Plan Approval |
-| `answer-mode` / `--answer-mode` | `once`, `ask`, `guide`, `file`, `chat` | Answer Mode |
 | `guard.plan-approval` / `--guard.plan-approval` | `on`, `off` | Plan Approval (another name for `plan-approval`) |
 | `guard.review-freeze` / `--guard.review-freeze` | `on`, `off` | Guards Off / Guards On |
 | `guard.state-transition` / `--guard.state-transition` | `on`, `off` | Guards Off / Guards On |
@@ -1448,10 +1446,6 @@ following sets all three ceremonies and Guard Policy together:
 | `AIDLC_DISABLE_SUMMARY_CONFIRMATION` | Summary Confirmation |
 | `AIDLC_DISABLE_PLAN_APPROVAL_GUARD` | Plan Approval (also over a memory Guard Policy strict lock) |
 
-`AIDLC_DISABLE_ANSWER_MODE_REUSE=1` is the answer-mode counterpart: it asks the
-interaction-mode question at every stage (see
-[`/aidlc --answer-mode`](#aidlc-answer-mode-how-stage-questions-are-answered)).
-
 Any other value does not force the policy off. These switches can also be
 recorded explicitly through the native config bypass interface:
 
@@ -1464,50 +1458,6 @@ aidlc config flags --show
 
 Use `--project` instead of `--local` to share the recorded switch with the
 project. Real environment variables take precedence over recorded config flags.
-
-#### `/aidlc --answer-mode` - How stage questions are answered
-
-A stage with questions offers three ways to answer them: **Guide me**, **I'll
-edit the file**, or **Chat** (see [Interaction Modes](07-interaction-modes.md)).
-By default that choice is asked once per intent, at the first stage with
-questions, and later stages reuse it. Each reusing stage says which mode it uses
-and how to change it in one line, for example:
-
-> Answering in "Guide me" mode, your choice at requirements-analysis. Change it with `/aidlc --answer-mode guide|file|chat`, or `/aidlc --answer-mode ask` to be asked at every stage.
-
-```
-/aidlc --answer-mode chat
-/aidlc config set answer-mode ask
-```
-
-| Value | What each stage with questions does |
-|-------|-------------------------------------|
-| `once` (default) | Asks at the first stage with questions, then reuses the latest answer that names a mode |
-| `ask` | Asks at every stage (the behavior before this setting existed) |
-| `guide`, `file`, `chat` | Uses that mode without asking |
-
-**Defaults and precedence:** `AIDLC_DISABLE_ANSWER_MODE_REUSE=1` asks at every
-stage; otherwise the per-intent setting wins, then the scope's `answer_mode:`
-frontmatter, then `once`. In short: **environment → per-intent → scope →
-once**. No shipped scope declares `answer_mode`. Under `once`, an answer to the
-mode question that names no mode (an **Other** reply, or answers typed in place
-of a choice) is not reused, so the next stage asks again; an isolated `--single`
-run never reuses or sets the main intent's choice.
-
-The setting is saved as `- **Answer Mode**: <value> (set by a command)` (or
-`set by you`), recorded with a `CEREMONY_SET` row whose `Key` is `answer_mode`,
-and shown by `/aidlc --status`, `config get answer-mode`, and `config list`
-(under `once`, with the choice being reused, for example
-`once (from default), reusing guide from requirements-analysis`). An intent
-that never sets it has no `Answer Mode` line. Every `STAGE_STARTED` row records
-the mode in effect in its `Answer Mode` field, such as
-`guide (reused from requirements-analysis)` or
-`ask (first stage with questions; the choice is then reused)`, so the audit
-shows each stage's mode without a question being asked. A reused mode opens no
-pending decision. The setting removes no decision from the person, so a command
-can set it; it is also a creation flag (`intent-create --answer-mode guide`).
-Record the kill switch with
-`aidlc config flags --bypass AIDLC_DISABLE_ANSWER_MODE_REUSE --local --yes`.
 
 #### `/aidlc --plan-approval` - Plan approval
 

@@ -397,29 +397,28 @@ Stage files list **topic areas and example questions** — they are guidance, no
 - **Give each question one line of context** — why it is being asked or what depends on the answer — when the reason is not obvious from the prompt itself. "We found two conflicting retention values in the requirements (30 days vs 90 days); which governs?" beats "What is the retention period?".
 - **Prefer a concrete phrasing over an abstract one.** Ask about the actual decision in the user's domain terms, not the framework's internal vocabulary. If you would need to explain the question when asked to rephrase it, phrase it that clear way the first time.
 
-**Step 2: Use the answer mode the directive names, or ask for it.**
+**Step 2: Use the person's earlier answer mode, or ask for it.**
 
-The run-stage directive's `answer_mode` says how this stage's questions are
-answered. The default asks once per piece of work, at the first stage with
-questions, and later stages reuse that choice.
+The person picks how to answer once per piece of work, at the first stage with
+questions; later stages reuse that choice. The run-stage directive's
+`answer_mode` carries it:
 
-- `answer_mode.ask === false`: do not ask the mode question. Print
-  `answer_mode.notice` verbatim as one line, then go straight to the step for
+- `answer_mode.ask === false`: do not ask the mode question. Say
+  `answer_mode.notice` as one line, then go straight to the step for
   `answer_mode.mode` (`guide` is Step 3a, `file` is Step 3b, `chat` is Step 3c).
   Log nothing for the mode: the stage's `STAGE_STARTED` row already records it.
-  If the person then asks for a different mode, switch for this stage (see
-  "Users can switch modes mid-stage" below), and point them to
-  `/aidlc --answer-mode <guide|file|chat|ask>` to change it for the later stages.
 - `answer_mode.ask === true` (or no `answer_mode` field): offer the choice
-  below. After it is answered, print `answer_mode.notice` when present as one
-  line, so the person knows how the choice carries forward.
+  below. After the person answers, say `answer_mode.notice` as one line.
 
-The setting resolves in this order: `AIDLC_DISABLE_ANSWER_MODE_REUSE=1` (asks
-at every stage), the piece of work's own setting (`/aidlc --answer-mode
-once|ask|guide|file|chat`), the scope's `answer_mode:` frontmatter, then
-`once`. Under `once`, the latest answer to the mode question in this piece of
-work that names a mode is reused; an answer that names none (an Other reply,
-or answers given in place of a mode) is not reused, so the next stage asks again.
+Record the mode the person chose as its option label (`Guide me`, `I'll edit
+the file`, or `Chat`): the one they picked, or the one you understood when they
+answered in their own words. The engine reuses only a recorded label, so the
+person is never asked again because of how they worded it. If their reply
+leaves the mode unclear, ask one short follow-up instead of guessing.
+
+When the person asks for a different way at any stage ("let me just edit the
+file"), switch for this stage (see "Users can switch modes mid-stage" below) and
+record the new choice the same way, so the later stages use it too.
 
 Offer the user a choice of interaction mode:
 ```question

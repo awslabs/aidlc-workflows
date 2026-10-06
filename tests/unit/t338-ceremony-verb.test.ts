@@ -464,7 +464,7 @@ describe("t338 atomic per-intent settings", () => {
       depth: "Minimal", "test-strategy": "Comprehensive", review: "none",
       "guard-policy": "strict (set by you)", sensors: "off (set by a command)",
       learnings: "off (set by a command)", "summary-confirmation": "on (set by a command)",
-      "plan-approval": "on (from scope classic)", "answer-mode": "once (from default)",
+      "plan-approval": "on (from scope classic)",
       // `guard.plan-approval` is the same switch, so it reads the same setting.
       "guard.plan-approval": "on (from scope classic)", "guard.review-freeze": "on (default)",
       "guard.state-transition": "on (default)", "guard.reviewer-scope": "on (default)",

@@ -55,20 +55,15 @@ You can switch between modes at any point during a stage. All three modes conver
 
 You choose the mode once per piece of work: the first stage with questions asks,
 and later stages reuse your choice without asking again. Each of those stages
-still tells you, in one line, which mode it is using and how to change it:
+still tells you, in one line, which mode it is using:
 
 ```
-Answering in "Guide me" mode, your choice at requirements-analysis. Change it with `/aidlc --answer-mode guide|file|chat`, or `/aidlc --answer-mode ask` to be asked at every stage.
+Answering the way you chose earlier: Guide me. Say if you'd rather edit the file or chat.
 ```
 
-- `/aidlc --answer-mode guide` (or `file`, `chat`) uses that mode from now on without asking.
-- `/aidlc --answer-mode ask` asks at every stage, as earlier releases did.
-- `/aidlc --answer-mode once` returns to the default.
-
-A scope can set the default with `answer_mode:` in its frontmatter, and
-`AIDLC_DISABLE_ANSWER_MODE_REUSE=1` asks at every stage on this machine. See
-[`/aidlc --answer-mode`](12-cli-commands.md#aidlc-answer-mode-how-stage-questions-are-answered)
-for precedence and how each stage's mode is recorded.
+To change it, just say so ("let me edit the file this time"). The agent switches
+and later stages use your new choice. However you word your answer, the agent
+records the mode you meant, so you are not asked again because of the wording.
 
 ---
 

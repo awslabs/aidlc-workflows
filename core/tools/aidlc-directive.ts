@@ -18,7 +18,6 @@
 // aidlc-lib.ts.
 
 import {
-  ANSWER_MODE_SETTINGS,
   CEREMONY_KEYS,
   CEREMONY_SETTINGS,
   type CeremonyPolicy,
@@ -313,7 +312,7 @@ export interface RunStageDirective {
   sensors_applicable: string[];
   // Engine-resolved ceremony switches apply equally to inline and dispatched work.
   ceremony: CeremonyPolicy;
-  // How this stage's questions are answered (stage-protocol.md §3 Step 2): ask
+  // How this stage's questions are answered (stage-protocol.md section 3, Step 2): ask
   // the mode question, or use `mode` and show `notice` without asking.
   answer_mode?: StageAnswerMode;
   stage_file: string;
@@ -1935,7 +1934,7 @@ function checkCeremony(
   }
 }
 
-const ANSWER_MODE_KEYS = ["setting", "source", "mode", "ask", "reused_from", "notice"] as const;
+const ANSWER_MODE_KEYS = ["mode", "ask", "reused_from", "notice"] as const;
 
 function checkOptionalAnswerMode(
   o: Record<string, unknown>,
@@ -1953,9 +1952,6 @@ function checkOptionalAnswerMode(
       errors.push(`${kind}: answer_mode unknown key: ${key}`);
     }
   }
-  if (typeof value.setting !== "string" || !(ANSWER_MODE_SETTINGS as readonly string[]).includes(value.setting)) {
-    errors.push(`${kind}: answer_mode.setting must be one of ${ANSWER_MODE_SETTINGS.join(" | ")}, got ${describe(value.setting)}`);
-  }
   if (value.mode !== null && !(["guide", "file", "chat"] as const as readonly unknown[]).includes(value.mode)) {
     errors.push(`${kind}: answer_mode.mode must be guide | file | chat | null, got ${describe(value.mode)}`);
   }
@@ -1964,10 +1960,8 @@ function checkOptionalAnswerMode(
   } else if (value.ask === (value.mode !== null)) {
     errors.push(`${kind}: answer_mode.ask must be true exactly when answer_mode.mode is null`);
   }
-  for (const key of ["source", "notice"] as const) {
-    if (typeof value[key] !== "string" || value[key].length === 0) {
-      errors.push(`${kind}: answer_mode.${key} must be a nonblank string, got ${describe(value[key])}`);
-    }
+  if (typeof value.notice !== "string" || value.notice.length === 0) {
+    errors.push(`${kind}: answer_mode.notice must be a nonblank string, got ${describe(value.notice)}`);
   }
   if (value.reused_from !== null && typeof value.reused_from !== "string") {
     errors.push(`${kind}: answer_mode.reused_from must be string or null, got ${describe(value.reused_from)}`);

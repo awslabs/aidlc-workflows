@@ -1685,7 +1685,7 @@ function handleRefreshUnitProgress(
         emitAudit(pd, "STAGE_STARTED", {
           Stage: started,
           Agent: next?.lead_agent ?? "",
-          ...answerModeStageStartedFields(pd, getField(content, "Scope"), content),
+          ...answerModeStageStartedFields(pd),
         });
       }
       if (workflowCompleted && completedFinalStage) {
@@ -4784,7 +4784,7 @@ function handleAdvance(
     emitAudit(pd, "STAGE_STARTED", {
       Stage: nextSlug,
       Agent: nextStage.lead_agent,
-      ...answerModeStageStartedFields(pd, scope, content),
+      ...answerModeStageStartedFields(pd),
       ...(nextStage.workspace_requires
         ? sourceBaselineAuditFields(pd, nextSlug)
         : {}),
@@ -6771,7 +6771,7 @@ function handleSkip(args: string[]): void {
         emitAudit(pd, "STAGE_STARTED", {
           Stage: nextStage.slug,
           Agent: nextStage.lead_agent,
-          ...answerModeStageStartedFields(pd, scope, content),
+          ...answerModeStageStartedFields(pd),
           ...(nextStage.workspace_requires
             ? sourceBaselineAuditFields(pd, nextStage.slug)
             : {}),
