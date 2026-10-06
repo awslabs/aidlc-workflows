@@ -273,3 +273,20 @@ describe("intent-capture known grounding regressions", () => {
     })).toHaveLength(1);
   });
 });
+
+// A person who just chose or approved the plan was asked right after whether
+// that plan was what they meant ("The workflow was started as a proof of
+// concept ... Does that match what you have in mind?"). The boundary question
+// states the scope as chosen and asks only what this first version leaves out.
+describe("intent-capture boundary question", () => {
+  const stage = readFileSync(join(import.meta.dir, "../../core/aidlc-common/stages/ideation/intent-capture.md"), "utf8");
+
+  test("states the chosen scope and asks only what the first version leaves out", () => {
+    expect(stage).toContain(
+      "- What this first version leaves out. Name the scope in `[scope]` as already chosen\n" +
+        "  (the person picked or approved it) and ask only what this first version should\n" +
+        "  not do; never ask whether the scope is the right one.",
+    );
+    expect(stage).not.toContain("does that scope match");
+  });
+});
