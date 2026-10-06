@@ -308,6 +308,24 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
     expect(missing).toEqual([]);
   });
 
+  // The person sees the stop note (Claude Code shows it as "Stop hook error"),
+  // so it carries only the next step; what the agent does with it lives here.
+  test("every shipped conductor SKILL says what to do when a stop note ends its turn", () => {
+    const clause = "**When your turn is stopped with a note.** A note that reads \"<step> is not finished yet. Next: <command>\" " +
+      "(or \"The last AI-DLC step stopped on a problem: ...\") is for you, and the person can already see it, so say nothing about it.";
+    const waiting = "If you had just asked the person a question in your own words and are waiting for their answer, record it with " +
+      "`{{INVOKE}} engine log decision --stage <stage> --decision \"<the question>\" --options \"<the choices>\"`";
+    const missing = skills.flatMap((rel) => {
+      const body = readFileSync(join(REPO_ROOT, rel), "utf-8");
+      return [
+        ...(body.includes(clause) ? [] : [`${rel}: clause`]),
+        ...(body.includes(waiting) ? [] : [`${rel}: waiting`]),
+        ...(body.includes("Never mark a stage done or approved just to end the turn.") ? [] : [`${rel}: never`]),
+      ];
+    });
+    expect(missing).toEqual([]);
+  });
+
   test("every SKILL and the onboarding switch a check when the person asks, with no typing for them", () => {
     // A live Claude chat followed the onboarding's old "name the exact command
     // for them to type" over the SKILL's rule and refused a plain request.

@@ -821,6 +821,43 @@ describe("t149 Codex hook adapter (live-captured payload fixtures)", () => {
     }
   });
 
+  // Claude Code shows a Stop hook's whole note to the person ("Stop hook
+  // error: ..."), and Codex puts it in the chat: the note is one line they can
+  // read, naming the one step the agent takes next.
+  test("1b: the stop note is one line the person can read, naming the next step", () => {
+    const dir = scratchProject(true);
+    try {
+      const r = runAdapter(dir, "continue-workflow", withCwd(FIXTURES.stop, dir));
+      const out = JSON.parse(r.stdout) as { decision?: string; reason?: string };
+      expect(out.decision).toBe("block");
+      expect(out.reason).toBe("Requirements Analysis is not finished yet. Next: `bun .codex/tools/aidlc-orchestrate.ts next`.");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  // Codex puts the note back into the chat as a message of the person's. The
+  // hook still knows it as its own, so the agent that engaged the work and then
+  // only answered the note is still steered on.
+  test("1c: the stop note put back into the chat is not read as the person talking", () => {
+    const dir = scratchProject(true);
+    try {
+      const note = "Requirements Analysis is not finished yet. Next: `bun .codex/tools/aidlc-orchestrate.ts next`.";
+      const entry = (payload: Record<string, unknown>) => JSON.stringify({ type: "response_item", payload });
+      const transcript = join(dir, "rollout-2026-06-26T00-00-00.jsonl");
+      writeFileSync(transcript, [
+        entry({ type: "message", role: "user", content: [{ type: "input_text", text: "ok, continue the workflow" }] }),
+        entry({ type: "function_call", name: "Bash", arguments: JSON.stringify({ command: "bun .codex/tools/aidlc-orchestrate.ts next" }) }),
+        entry({ type: "message", role: "user", content: [{ type: "input_text", text: note }] }),
+        entry({ type: "message", role: "assistant", content: [{ type: "output_text", text: "Carrying on." }] }),
+      ].join("\n") + "\n", "utf-8");
+      const r = runAdapter(dir, "continue-workflow", withCwd({ ...FIXTURES.stop, transcript_path: transcript }, dir));
+      expect((JSON.parse(r.stdout || "{}") as { decision?: string }).decision).toBe("block");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test("2: stop is silent (no block) when no workflow state exists", () => {
     const dir = scratchProject(false);
     try {
