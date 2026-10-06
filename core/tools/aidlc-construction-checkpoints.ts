@@ -138,7 +138,11 @@ export interface ConstructionCheckpoint {
   rereview: { stage: string; reviewer: string; iteration: number; command: string } | null;
   /** The current review is that re-check, of the Unit's code or documents.
    *  `approved_before` says the person had approved this Unit before then. */
-  rechecked: { verdict: string; approved_before: boolean; changed: "code" | "documents" } | null;
+  rechecked: {
+    verdict: string; approved_before: boolean; changed: "code" | "documents";
+    /** The person chose Redo for this approved Unit's work, so it is asked about as new work. */
+    redone?: true;
+  } | null;
   /** From verify: the one line for each change to this Unit's reviewed work
    *  its Guard Policy accepted, said before the person is asked. */
   change_notices?: string[];
@@ -168,6 +172,16 @@ function proofRelativePath(unit: string, kind: ConstructionCheckpointKind): stri
 function onlyLatest(rows: readonly AuditShardEvent[]): AuditShardEvent | null {
   const frontier = maximalAttemptEvents(rows);
   return frontier.length === 1 ? frontier[0] : null;
+}
+
+// A Redo answer names its Unit, or (recorded by `state reuse-artifact`) lists
+// only that Unit's own documents.
+function reuseIsForUnit(row: AuditShardEvent, unit: string): boolean {
+  const named = auditBlockField(row.block, "Unit");
+  if (named !== null) return named === unit;
+  const artifacts = (auditBlockField(row.block, "Artifacts") ?? "").split(",")
+    .map((path) => path.trim().replaceAll("\\", "/")).filter((path) => path.length > 0);
+  return artifacts.length > 0 && artifacts.every((path) => path.startsWith(`construction/${unit}/`));
 }
 
 function stagesInRow(row: AuditShardEvent): string[] {
@@ -752,10 +766,20 @@ function snapshot(
   }
   const approvedBefore = gate?.event === "GATE_APPROVED" && auditBlockField(gate.block, "Unit") === unit &&
     auditBlockField(gate.block, "Run floor") === floors[stages.at(-1)!];
+  // The person chose Redo for one of this Unit's stages after approving it, and
+  // the work's Guard Policy accepts changes: what comes back is new work, asked
+  // about once as that. Strict keeps the re-check of a change.
+  const redone = approvedBefore && gate !== null && rows.some((row) =>
+    row.event === "ARTIFACT_REUSED" && auditBlockField(row.block, "Decision") === "redo" &&
+    stages.includes(auditBlockField(row.block, "Stage") ?? "") && reuseIsForUnit(row, unit) &&
+    attemptEventDefinitelyBefore(gate, row)) && acceptsChanges();
   // A re-check of documents during the Unit's build is its usual checkpoint.
   const rechecked = recheckVerdict === null || approved || (recheckChanged === "documents" && !approvedBefore)
     ? null
-    : { verdict: recheckVerdict, approved_before: approvedBefore, changed: recheckChanged };
+    : {
+      verdict: recheckVerdict, approved_before: approvedBefore, changed: recheckChanged,
+      ...(redone ? { redone: true as const } : {}),
+    };
   return {
     root, rows, state, verificationCommand: shared.verificationCommand, accepted,
     approvedEvidence: JSON.stringify(approvedEvidence),
