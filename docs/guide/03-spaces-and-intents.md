@@ -211,8 +211,9 @@ Session identity follows one order:
 
 1. The host session id delivered to a hook.
 2. A valid `AIDLC_SESSION_OVERRIDE` inherited from the harness process.
-3. The nearest live PID ancestry entry.
-4. No session identity.
+3. On Codex, the `CODEX_THREAD_ID` Codex gives every command it runs.
+4. The nearest live PID ancestry entry.
+5. No session identity.
 
 Once identity is known, an explicit space or intent selector wins, followed by
 that session's binding, then the shared `active-space` and `active-intent`
@@ -240,7 +241,9 @@ delivery remains future work.
 
 On POSIX, the Codex adapter pins the validated hook payload session into every
 core-hook child and Bash command, so macOS sandbox denial of `ps` does not weaken
-Codex workflow selection. On Windows x64 and arm64, native process handles,
+Codex workflow selection. When Codex already gives the command that session as
+`CODEX_THREAD_ID` (Codex 0.160 and later), the command is left as written and
+the tools read the id from there. On Windows x64 and arm64, native process handles,
 creation times, and parent PIDs identify the owning session within the same
 50 ms / 64-ancestor budget. Reused PID generations and unverified ancestry do not
 select a session; the POSIX command rewrite remains unavailable on Windows.

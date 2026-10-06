@@ -790,8 +790,8 @@ aidlc/                                    # neutral, harness-independent, commit
 ```
 
 **Resolution.** Workflow identity is resolved at one library chokepoint with
-precedence `in-process sessionId > AIDLC_SESSION_OVERRIDE > PID ancestry >
-none`. Hook payload identity uses the in-process option and is authoritative.
+precedence `in-process sessionId > AIDLC_SESSION_OVERRIDE > CODEX_THREAD_ID
+(Codex tools only) > PID ancestry > none`. Hook payload identity uses the in-process option and is authoritative.
 An invalid environment value is ignored. A valid environment override that
 differs from ancestry throws a typed refusal before a binding or workflow record
 path is derived. Explicit selectors and the resulting machine-local session

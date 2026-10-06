@@ -39,7 +39,8 @@
 //     wrapper (verified live, findings E1) — the shim re-wraps.
 //   - bind-bash-session: POSIX Bash input is rewritten through
 //     hookSpecificOutput.updatedInput so every command inherits the validated
-//     payload session without process inspection.
+//     payload session without process inspection, unless Codex already gives
+//     the command that session as CODEX_THREAD_ID.
 //   - continue-workflow: {"decision":"block","reason"} passes through VERBATIM — the
 //     contract is identical on Codex (stop_hook_active included).
 //   - everything else: advisory; stdout ignored, exit 0.
@@ -496,11 +497,14 @@ switch (target) {
       typeof codex.tool_input?.command === "string"
         ? codex.tool_input.command
         : "";
+    // Codex already gives the command this session as CODEX_THREAD_ID (0.160
+    // and later), so the command keeps the words the agent wrote.
     if (
       process.platform === "win32" ||
       codex.tool_name !== "Bash" ||
       !payloadSessionId ||
-      !command
+      !command ||
+      process.env.CODEX_THREAD_ID === payloadSessionId
     ) {
       persistResponse("", 0);
       return 0;

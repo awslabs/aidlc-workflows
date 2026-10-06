@@ -42,7 +42,7 @@ const AUDIT_TRAIL_PATH =
 const HOOK_FILE = /(?:^|[\\/])hooks[\\/]aidlc-[a-z-]+\.ts$|(?:^|[\\/])aidlc-(?:kiro|codex|copilot|cursor)-adapter\.ts$/;
 const HOOK_MODULE = /(?:^|[\\/])(?:hooks[\\/]aidlc-[a-z-]+|aidlc-(?:record-human-turn|guard-switch))(?:\.ts)?$/;
 // The variables that carry AI-DLC's authority or turn a guard off: the session
-// and presence overrides, the direct state and audit authorities, the
+// and presence overrides (Codex's thread id is one), the direct state and audit authorities, the
 // human-turn token, and every recordable bypass. Only the person sets them,
 // outside the agent. A terminal can set one many ways, so each is recognized:
 // POSIX assignments and builtins, PowerShell's env: drive, .NET calls, and
@@ -51,6 +51,8 @@ const HOOK_MODULE = /(?:^|[\\/])(?:hooks[\\/]aidlc-[a-z-]+|aidlc-(?:record-human
 const HARNESS_CONTROL_NAME = `(?:${[
   "AIDLC_SESSION_OVERRIDE",
   "AIDLC_SESSION_OVERRIDE_SOURCE",
+  "CODEX_THREAD_ID",
+  "CODEX_SESSION_ID",
   "AIDLC_UNATTENDED",
   "AIDLC_ALLOW_DIRECT_STATE_TRANSITIONS",
   "AIDLC_STATE_TRANSITION_OWNER",

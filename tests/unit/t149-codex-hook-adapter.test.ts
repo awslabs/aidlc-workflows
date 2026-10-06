@@ -822,13 +822,18 @@ describe("t149 Codex hook adapter (live-captured payload fixtures)", () => {
         tool_name: "Bash",
         tool_input: { command },
       };
-      const kept = runAdapter(dir, "bind-bash-session", payload, { CODEX_THREAD_ID: "codex-command-session" });
+      // Each call is its own tool call: the adapter replays a repeated delivery.
+      const kept = runAdapter(dir, "bind-bash-session", { ...payload, tool_use_id: "call-kept" }, {
+        CODEX_THREAD_ID: "codex-command-session",
+      });
       expect(kept.code, kept.stderr).toBe(0);
       expect(kept.stdout).toBe("");
       if (process.platform !== "win32") {
         // Another thread's id, or none, still gets the prefix.
         for (const thread of ["codex-other-thread", undefined]) {
-          const wrapped = runAdapter(dir, "bind-bash-session", payload, { CODEX_THREAD_ID: thread });
+          const wrapped = runAdapter(dir, "bind-bash-session", { ...payload, tool_use_id: `call-${thread ?? "none"}` }, {
+            CODEX_THREAD_ID: thread,
+          });
           expect(wrapped.code, wrapped.stderr).toBe(0);
           expect(wrapped.stdout).toContain("export AIDLC_SESSION_OVERRIDE='codex-command-session'");
         }
