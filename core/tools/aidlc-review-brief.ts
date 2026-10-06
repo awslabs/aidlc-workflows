@@ -11,9 +11,11 @@ import {
   attemptEventAfterFrontier,
   attemptEventDefinitelyBefore,
   auditBlockField,
+  constructionCheckpointsApply,
   errorMessage,
   extractMarkdownSection,
   findStageBySlug,
+  isTeamUnitOwnership,
   isUnreadableFindingsTableFinding,
   pairedReviewCompletions,
   pairedReviewRecordForCompletion,
@@ -25,6 +27,7 @@ import {
   recordDir,
   reviewRecordDerivedFindings,
   resolveAuditProjectPath,
+  resolveBoltDag,
   resolveProjectDir,
   type ReviewArtifactEntry,
   reviewArtifactEntries,
@@ -39,10 +42,15 @@ import {
   reviewRecordFindings,
   reviewSectionVerdict,
   sortAttemptEvents,
+  stateFilePath,
   maximalAttemptEvents,
   toPosix,
   unreadableFindingsTableFinding,
 } from "./aidlc-lib.js";
+import {
+  constructionCheckpointKind,
+  resolveConstructionCheckpoint,
+} from "./aidlc-construction-checkpoints.js";
 
 export { reviewFindingFingerprint, type ReviewFinding, type ReviewFindingStatus };
 
@@ -1953,6 +1961,24 @@ export function acceptedReviewChanges(
   return accepted;
 }
 
+// Whether the approval a per-Unit stage's brief comes before is the Unit's own:
+// its team gate, or its Construction checkpoint before the person approves it.
+// The stage's one final gate covers every Unit, so a Unit named there is only
+// the execution cursor. Unreadable state is that final gate.
+function unitOwnApproval(projectDir: string, unit: string): boolean {
+  try {
+    const state = readFileSync(stateFilePath(projectDir), "utf-8");
+    if (isTeamUnitOwnership(state)) return true;
+    if (!constructionCheckpointsApply(state)) return false;
+    const dag = resolveBoltDag(projectDir);
+    if (dag.state !== "ok" || !dag.units.includes(unit)) return false;
+    const kind = constructionCheckpointKind(state, unit, dag.units);
+    return !resolveConstructionCheckpoint(projectDir, unit, kind, state).approved;
+  } catch {
+    return false;
+  }
+}
+
 export function renderReviewBrief(
   projectDir: string,
   stage: ReviewFingerprintStage & { name: string },
@@ -1960,9 +1986,11 @@ export function renderReviewBrief(
   unit?: string,
   fallbackFinding?: string,
 ): string {
-  // Per-Unit review dispatches are isolated, but their final human approval is
-  // one stage-level gate. The last Unit is only the execution cursor.
-  const contextUnit = stage.for_each === "unit-of-work" ? undefined : unit;
+  // A Unit's own approval shows only that Unit's review; the stage's final gate
+  // shows every Unit's, the findings its approval accepts.
+  const contextUnit = stage.for_each === "unit-of-work" && !(unit && unitOwnApproval(projectDir, unit))
+    ? undefined
+    : unit;
   let contexts = readReviewArtifactContexts(projectDir, stage, contextUnit);
   if (fallbackFinding) {
     // The incomplete fallback re-checked nothing, so a list carried from
