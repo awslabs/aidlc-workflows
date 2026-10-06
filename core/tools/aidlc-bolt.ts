@@ -52,9 +52,11 @@ import {
   getField,
   holdsAuditLock,
   commandTurnHint,
-  humanRepliedSinceGate,
   humanPresenceGuardDisabled,
+  keepPlanApprovalAskOverStateWrite,
+  personAskedSinceGate,
   readAuditShardEvents,
+  recordHookDrop,
   unattendedHumanPresenceHint,
   auditBlockField,
   isTeamUnitOwnership,
@@ -1229,10 +1231,12 @@ function handleSetAutonomy(args: string[]): void {
     // Human-presence guard on ESCALATION only. Switching to autonomous is the
     // human's ladder-prompt grant and consumes that turn through the emitted
     // AUTONOMY_MODE_SET row. De-escalation restores gates without presence.
+    // The approval given in the same message ("approve the plan, and run on
+    // its own from here") leaves the rest of it standing, as for the switches.
     if (
       flags.mode === "autonomous" &&
       !humanPresenceGuardDisabled() &&
-      !humanRepliedSinceGate(pd)
+      !personAskedSinceGate(pd)
     ) {
       error(
         "Refusing to switch Construction to autonomous: no reply from the person is on record since " +
@@ -1275,6 +1279,13 @@ function handleSetAutonomy(args: string[]): void {
       error(`Audit emission failed: ${errorMessage(e)}`);
     }
     writeStateFile(pd, updated);
+    // Asked for while the code plan's question waits, it stays the open step:
+    // the plan is still the person's to approve, and their reply answers it.
+    try {
+      keepPlanApprovalAskOverStateWrite(pd, content, updated);
+    } catch (e) {
+      recordHookDrop(pd, "active-directive", errorMessage(e));
+    }
   });
 
   console.log(

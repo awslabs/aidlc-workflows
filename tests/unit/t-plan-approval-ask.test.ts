@@ -2790,3 +2790,64 @@ describe("the zero-Unit Code Generation lockout reported in #1172", () => {
     expect(current.stage).toBe("functional-design");
   });
 });
+
+// "Approve the plan, and run Construction on its own from here": one message
+// asks for both, so both are carried out in whichever order the agent runs
+// them, under every Guard Policy, and the plan is never asked again.
+describe("approve the plan and run Construction on its own, in one message", () => {
+  // The person's checks as the shipped run has them: no presence bypass.
+  function attended(proj: string): NodeJS.ProcessEnv {
+    const env: NodeJS.ProcessEnv = { ...process.env, CLAUDE_PROJECT_DIR: proj, AIDLC_PROJECT_DIR: proj, AIDLC_UNATTENDED: "0" };
+    delete env.AIDLC_SKIP_HUMAN_PRESENCE_GUARD;
+    return env;
+  }
+  function run(proj: string, tool: string, args: string[]): { code: number; out: string } {
+    const result = spawnSync(BUN, [join(AIDLC_SRC, "tools", tool), ...args, "--project-dir", proj], {
+      cwd: proj,
+      env: attended(proj),
+      encoding: "utf-8",
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+    });
+    return { code: result.status ?? -1, out: `${result.stdout ?? ""}${result.stderr ?? ""}` };
+  }
+
+  test.each([
+    ["off", "approve first"],
+    ["off", "switch first"],
+    ["relaxed", "approve first"],
+    ["relaxed", "switch first"],
+    ["strict", "approve first"],
+    ["strict", "switch first"],
+    // The approval's own line says "Run next.", so the agent may build first.
+    ["off", "approve, next, then switch"],
+    ["strict", "approve, next, then switch"],
+  ] as const)("Guard Policy %s, %s: both are done and the plan is built as approved", (policy, order) => {
+    const proj = project(policy);
+    askFor(proj);
+    reply(proj, "Approve the plan, and run Construction on its own from here.");
+    const steps = order === "approve first" ? ["approve", "switch"]
+      : order === "switch first" ? ["switch", "approve"] : ["approve", "next", "switch"];
+    for (const step of steps) {
+      if (step === "next") {
+        expect(nextThroughParts(proj).directive.kind).toBe("run-stage");
+      } else if (step === "approve") {
+        const said = run(proj, "aidlc-log.ts", [
+          "answer", "--stage", "code-generation", "--checkpoint", "plan-approval", "--details", "Approve Plan",
+        ]);
+        expect(said.code, said.out).toBe(0);
+        expect(said.out).toContain('"recorded":"approve"');
+      } else {
+        const command = "bun .claude/tools/aidlc.ts engine bolt set-autonomy --mode autonomous";
+        const verdict = guardBash(proj, command);
+        expect(verdict.code, verdict.stderr).toBe(0);
+        const grant = run(proj, "aidlc-bolt.ts", ["set-autonomy", "--mode", "autonomous"]);
+        expect(grant.code, grant.out).toBe(0);
+      }
+    }
+    expect(readFileSync(seededStateFile(proj), "utf-8")).toContain("- **Construction Autonomy Mode**: autonomous");
+    const build = nextThroughParts(proj).directive;
+    expect(build.kind, JSON.stringify(build)).toBe("run-stage");
+    expect(build.stage).toBe("code-generation");
+    expect(auditText(proj).match(/\*\*Event\*\*: PLAN_APPROVAL_RECORDED/g)).toHaveLength(1);
+  });
+});
