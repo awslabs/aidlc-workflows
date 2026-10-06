@@ -11006,7 +11006,9 @@ const DOCUMENT_AUDIT_EVENTS = new Set([
 // Where the latest human turn stands against the gate resolutions that consume
 // it: "acted" when a turn follows every resolution; "answered" when every
 // resolution provably after the latest turn is an answer record and no question
-// was logged since that turn, so answers already used that reply; "consumed" when some other resolution used it or the
+// was logged since that turn, so answers already used that reply (a question
+// box's reply also backs one answer per pick it carried, whenever its questions
+// were logged); "consumed" when some other resolution used it or the
 // order cannot be proven; "none" when no turn is on record or a listed audit
 // shard could not be read. With `replies`, a turn that was only a command to
 // AIDLC or a question about a switch (its HUMAN_TURN row says `Reply: command`
@@ -11140,6 +11142,9 @@ export function humanTurnState(
   // Questions logged since a turn: a later question's reply is not the one the
   // earlier answers used.
   const decisions: { ts: string; shard: number; pos: number }[] = [];
+  // What a question box carried back (the hook's QUESTION_REPLIED rows, one per
+  // question it asked), under the turn the hook wrote them with.
+  const picks: { shard: number; turn: number }[] = [];
   let sawPresenceTrackingEvent = false;
   const texts: Array<AuditShardText & { shardIndex: number }> = [];
   for (let s = 0; s < shards.length; s++) {
@@ -11165,6 +11170,7 @@ export function humanTurnState(
   for (let t = 0; t < texts.length; t++) {
     const s = texts[t].shardIndex;
     const blocks = auditShardBlocks(texts[t].content);
+    let lastTurn = -1;
     for (let i = 0; i < blocks.length; i++) {
       if (copied[t].has(i)) continue;
       const ev = auditBlockField(blocks[i], "Event");
@@ -11173,6 +11179,8 @@ export function humanTurnState(
       if (ev === "DECISION_RECORDED") {
         decisions.push({ ts: auditBlockField(blocks[i], "Timestamp") ?? "", shard: s, pos: i });
       }
+      if (ev === "HUMAN_TURN") lastTurn = i;
+      if (ev === "QUESTION_REPLIED" && lastTurn >= 0) picks.push({ shard: s, turn: lastTurn });
       // QUESTION_UNANSWERED (hook-owned: a question box closed with no answer)
       // spends any earlier turn, so a remark typed before the box never answers
       // the question asked in it. The question itself stays open.
@@ -11214,7 +11222,7 @@ export function humanTurnState(
   );
   if (latestHumanTimestamp > latestResolutionTimestamp) return "acted";
   if (latestHumanTimestamp < latestResolutionTimestamp) {
-    return usedOnlyByAnswers(humans, resolutions, decisions, latestHumanTimestamp) ? "answered" : "consumed";
+    return usedOnlyByAnswers(humans, resolutions, decisions, picks, latestHumanTimestamp) ? "answered" : "consumed";
   }
 
   // At equal second-precision timestamps, one turn must be provably after EVERY
@@ -11234,17 +11242,21 @@ export function humanTurnState(
     )
   )
     ? "acted"
-    : usedOnlyByAnswers(humans, resolutions, decisions, latestHumanTimestamp) ? "answered" : "consumed";
+    : usedOnlyByAnswers(humans, resolutions, decisions, picks, latestHumanTimestamp) ? "answered" : "consumed";
 }
 
 // True when one human turn holds the latest timestamp, every resolution
 // provably after it is a QUESTION_ANSWERED, and every logged question is
-// provably before it. An event at the same second in another shard is
-// unordered, so it proves nothing about what used the turn or what was asked.
+// provably before it, or the turn was a question box's reply with a pick left
+// for this answer. A question box answers the questions it showed, whenever the
+// agent logs them, so each of its picks backs one answer and no more. An event
+// at the same second in another shard is unordered, so it proves nothing about
+// what used the turn or what was asked.
 function usedOnlyByAnswers(
   humans: { ts: string; shard: number; pos: number }[],
   resolutions: { ts: string; shard: number; pos: number; event: string }[],
   decisions: { ts: string; shard: number; pos: number }[],
+  picks: { shard: number; turn: number }[],
   latestHumanTimestamp: string,
 ): boolean {
   const latest = humans.filter((human) => human.ts === latestHumanTimestamp);
@@ -11253,11 +11265,12 @@ function usedOnlyByAnswers(
   if (resolutions.some((r) => r.ts === turn.ts && r.shard !== turn.shard)) return false;
   const provablyBefore = (e: { ts: string; shard: number; pos: number }) =>
     e.ts < turn.ts || (e.ts === turn.ts && e.shard === turn.shard && e.pos < turn.pos);
-  if (!decisions.every(provablyBefore)) return false;
   const after = resolutions.filter(
     (r) => r.ts > turn.ts || (r.ts === turn.ts && r.shard === turn.shard && r.pos > turn.pos),
   );
-  return after.length > 0 && after.every((r) => r.event === "QUESTION_ANSWERED");
+  if (after.length === 0 || !after.every((r) => r.event === "QUESTION_ANSWERED")) return false;
+  if (decisions.every(provablyBefore)) return true;
+  return after.length < picks.filter((pick) => pick.shard === turn.shard && pick.turn === turn.pos).length;
 }
 
 export function humanActedSinceGate(projectDir: string): boolean {

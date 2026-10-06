@@ -1334,6 +1334,45 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
       expect(eventCount(proj, "QUESTION_ANSWERED")).toBe(3);
     });
 
+    // From block-sweep probes: the person answered three questions in one
+    // Claude Code question box, the agent logged the batch's question after
+    // the reply and then one answer per question, and the second and third were
+    // refused, so the person was told their answer never arrived and typed it
+    // again. A question box answers the questions it showed: each pick it
+    // carried backs one answer, however the agent ordered its records.
+    function boxReply(answers: string[]): void {
+      recordHumanTurn(proj);
+      for (const [index, reply] of answers.entries()) {
+        appendAuditEntry("QUESTION_REPLIED", { Question: `Q${index + 1}?`, Reply: reply }, proj);
+      }
+    }
+
+    test("one question box reply backs one answer per pick, though the batch was logged after it; one more waits", () => {
+      const slug = field(proj, "Current Stage");
+      boxReply(["In the API handler", "A toast", "Yes, to Untitled"]);
+      expect(guardedLog(proj, ["decision", "--stage", slug, "--decision", "Q1-Q3", "--options", "A,B"]).rc).toBe(0);
+      for (const reply of ["Q1: In the API handler", "Q2: A toast", "Q3: Yes, to Untitled"]) {
+        const r = guardedLog(proj, ["answer", "--stage", slug, "--details", reply]);
+        expect(r.rc, r.out).toBe(0);
+      }
+      expect(eventCount(proj, "QUESTION_ANSWERED")).toBe(3);
+      // The box carried three picks: a fourth answer has no pick behind it.
+      const fourth = guardedLog(proj, ["answer", "--stage", slug, "--details", "Q4: anything"]);
+      expect(fourth.rc).not.toBe(0);
+      expect(eventCount(proj, "QUESTION_ANSWERED")).toBe(3);
+    });
+
+    test("a question box reply backs its answers when each question is logged after it, one at a time", () => {
+      const slug = field(proj, "Current Stage");
+      boxReply(["In the API handler", "A toast"]);
+      for (const [question, reply] of [["Q1?", "In the API handler"], ["Q2?", "A toast"]]) {
+        expect(guardedLog(proj, ["decision", "--stage", slug, "--decision", question, "--options", "A,B"]).rc).toBe(0);
+        const r = guardedLog(proj, ["answer", "--stage", slug, "--details", reply]);
+        expect(r.rc, r.out).toBe(0);
+      }
+      expect(eventCount(proj, "QUESTION_ANSWERED")).toBe(2);
+    });
+
     test("with no HUMAN_TURN on record, an attended answer still asks for a reply", () => {
       const slug = field(proj, "Current Stage");
       expect(guardedLog(proj, ["decision", "--stage", slug, "--decision", "Choose", "--options", "A,B"]).rc).toBe(0);
