@@ -84,6 +84,10 @@ import {
   isAutonomousSwarmStage,
   loadStageGraphAll,
   isNonAnswer,
+  ANSWER_MODE_LABELS,
+  answerModeFromReply,
+  isAnswerModeDecision,
+  openDecisionBlock,
   isoTimestamp,
   latestPipelineLinkArtifactMtime,
   parseCheckboxes,
@@ -1678,6 +1682,25 @@ function handleAnswer(args: string[]): void {
   if (flags["batch-file"] !== undefined) {
     handlePlanApprovalBatch(resolveActiveProjectDir(projectDir), flags, "answer");
     return;
+  }
+  // The mode question ("How would you like to answer them?"): the agent reads
+  // the way the person chose from their reply and records its option, which
+  // later stages reuse; the person's own words are kept beside it.
+  if (flags.checkpoint === undefined && !isNonAnswer(reply)) {
+    const asked = openDecisionBlock(resolveActiveProjectDir(projectDir), flags.stage);
+    if (asked !== null && isAnswerModeDecision(asked)) {
+      const labels = Object.values(ANSWER_MODE_LABELS);
+      const mode = answerModeFromReply(reply) ??
+        answerModeFromReply(offeredChoiceLabel(reply, labels)?.choice);
+      if (mode === null) {
+        error(
+          `--details ${formatReceivedReply(reply)} does not name a way to answer. Pass the way the person chose, ` +
+            `"${labels[0]}", "${labels[1]}" or "${labels[2]}", as you read it from their reply; their own ` +
+            "words are kept beside it.",
+        );
+      }
+      flags.details = ANSWER_MODE_LABELS[mode];
+    }
   }
   let summaryFeedback: string | null = null;
   if (summaryCheckpoint && !isNonAnswer(reply)) {

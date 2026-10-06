@@ -37170,6 +37170,22 @@ export const ANSWER_MODE_LABELS: Record<AnswerModeChoice, string> = {
   file: "I'll edit the file",
   chat: "Chat",
 };
+
+/**
+ * True when a DECISION_RECORDED block is the mode question: it offers exactly
+ * the three ways to answer (the options the agent copies from the protocol),
+ * or its wording starts the way the protocol logs it. The wording varies with
+ * how the agent showed it ("I've created 3 questions at ... How would you
+ * like to answer them?"), so the options decide.
+ */
+export function isAnswerModeDecision(block: string): boolean {
+  if (auditBlockField(block, "Checkpoint") !== null) return false;
+  if ((auditBlockField(block, "Decision") ?? "").trim().startsWith(ANSWER_MODE_QUESTION_PREFIX)) return true;
+  const plain = (text: string) => text.trim().replace(/\u2019/g, "'").toLowerCase();
+  const offered = (auditBlockField(block, "Options") ?? "").split(",").map(plain).filter((option) => option !== "");
+  const labels = Object.values(ANSWER_MODE_LABELS).map(plain);
+  return offered.length === labels.length && labels.every((label) => offered.includes(label));
+}
 const ANSWER_MODE_OTHERS: Record<AnswerModeChoice, string> = {
   guide: "edit the file or chat",
   file: "be guided through them here or chat",
@@ -37241,9 +37257,7 @@ export function latestRecordedAnswerMode(
     const before = open.get(key) ?? null;
     const after = nextOpenDecision(before, row.event, row.block);
     if (
-      before !== null && after === null && row.event === "QUESTION_ANSWERED" &&
-      auditBlockField(before, "Checkpoint") === null &&
-      (auditBlockField(before, "Decision") ?? "").trim().startsWith(ANSWER_MODE_QUESTION_PREFIX)
+      before !== null && after === null && row.event === "QUESTION_ANSWERED" && isAnswerModeDecision(before)
     ) {
       const mode = answerModeFromReply(auditBlockField(row.block, "Details"));
       if (mode !== null) latest = { mode, stage, timestamp: row.timestamp };

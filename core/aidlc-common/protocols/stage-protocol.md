@@ -499,8 +499,9 @@ questions; later stages reuse that choice. The run-stage directive's
 
 Record the mode the person chose as its option label (`Guide me`, `I'll edit
 the file`, or `Chat`): the one they picked, or the one you understood when they
-answered in their own words. The engine reuses only a recorded label, so the
-person is never asked again because of how they worded it. If their reply
+answered in their own words. The engine reuses only a recorded label and hands
+back an answer that names none, so the person is never asked again because of
+how they worded it. If their reply
 leaves the mode unclear, ask one short follow-up instead of guessing.
 
 When the person asks for a different way at any stage ("let me just edit the

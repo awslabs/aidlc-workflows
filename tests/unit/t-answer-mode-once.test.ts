@@ -210,12 +210,43 @@ describe("answer mode across a piece of work", () => {
     );
   });
 
-  test("an answer that names no mode is not reused; the next stage asks again", () => {
+  // The agent reads what the person meant; the tool takes only the option it
+  // understood, so a reply in the person's own words never leaves the next
+  // stage asking again. The agent records the label in the same turn.
+  test("an answer that names no mode goes back to the agent for the option it understood, and that one is reused", () => {
     const { proj, state } = project();
     const first = currentStage(state);
-    askModeQuestion(proj, first, "Q1: A, Q2: B");
+    const asked = run(LOG, ["decision", "--stage", first, "--decision", MODE_QUESTION, "--options", MODE_OPTIONS], proj);
+    expect(asked.status, asked.stderr).toBe(0);
+    for (const words of ["the first one", "Q1: A, Q2: B"]) {
+      const refused = run(LOG, ["answer", "--stage", first, "--details", words], proj);
+      expect(refused.status, words).not.toBe(0);
+      const line = `${refused.stdout}${refused.stderr}`.split("\n").find((entry) => entry.startsWith("{"));
+      expect((JSON.parse(line ?? "{}") as { error?: string }).error)
+        .toContain('"Guide me", "I\'ll edit the file" or "Chat", as you read it from their reply');
+    }
+    const answered = run(LOG, ["answer", "--stage", first, "--details", "Guide me"], proj);
+    expect(answered.status, answered.stderr).toBe(0);
     advance(proj, state);
-    expect(runStageAnswerMode(proj)).toMatchObject({ ask: true, mode: null });
+    expect(runStageAnswerMode(proj)).toMatchObject({ ask: false, mode: "guide", reused_from: first });
+  });
+
+  test("the mode question is known by its three options, however the agent worded it", () => {
+    const { proj, state } = project();
+    const first = currentStage(state);
+    const shown = "I've created 3 questions at aidlc/questions.md. How would you like to answer them?";
+    for (const decision of [shown, "How do you want to answer the questions?"]) {
+      const asked = run(LOG, ["decision", "--stage", first, "--decision", decision, "--options", MODE_OPTIONS], proj);
+      expect(asked.status, asked.stderr).toBe(0);
+      const answered = run(LOG, ["answer", "--stage", first, "--details", "1"], proj);
+      expect(answered.status, answered.stderr).toBe(0);
+    }
+    advance(proj, state);
+    expect(runStageAnswerMode(proj)).toMatchObject({ ask: false, mode: "guide", reused_from: first });
+    // A content question with other options is never read as the mode question.
+    const second = currentStage(state);
+    expect(run(LOG, ["decision", "--stage", second, "--decision", "How would you like the API to fail?", "--options", "Errors,Codes"], proj).status).toBe(0);
+    expect(run(LOG, ["answer", "--stage", second, "--details", "Codes"], proj).status).toBe(0);
   });
 
   test("an isolated --single answer never sets the main workflow's mode", () => {
