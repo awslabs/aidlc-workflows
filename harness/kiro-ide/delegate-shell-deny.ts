@@ -112,8 +112,13 @@ export function copyChannelDelegateShellDeny(harnessDir: string, agent: string):
   };
 }
 
+// The native conductor allows `aidlc engine *` and the dispatcher's read-only
+// and turn-back-on commands exactly as written, so the persona denies both.
 export function nativeDelegateShellDeny(agent: string): ShellDeny {
-  return { match: [trustedCommand("*")], exclude: engineRouteExclusions(agent, trustedCommand()) };
+  return {
+    match: [trustedCommand("*"), ...copyChannelDispatcherCommands().map((command) => `aidlc ${command}`)],
+    exclude: engineRouteExclusions(agent, trustedCommand()),
+  };
 }
 
 // Shell forms that can run, expand, or redirect more than the one command a

@@ -1339,7 +1339,8 @@ export function copyChannelToolScripts(): string[] {
 // The dispatcher's public commands, outside its engine namespace, that every
 // install pre-approves, each spelled exactly as AI-DLC runs it: the doctor,
 // status and version utilities in both spellings agents use, config's
-// read-only forms, and turning one recorded check back on
+// read-only forms (`--show`, with or without `--json`, and `--help`), and
+// turning one recorded check back on
 // (`config flags --clear-bypass <switch> --yes`, the form the skills name),
 // which only ever raises a check. A host that matches text as written cannot
 // tell a quoted or re-spelled machine-wide config flag from a project one, so
@@ -1357,7 +1358,11 @@ export function copyChannelDispatcherCommands(): string[] {
     "status",
     "--status",
     "config --help",
-    ...CONFIG_SECTIONS.flatMap((section) => [`config ${section} --show --json`, `config ${section} --help`]),
+    ...CONFIG_SECTIONS.flatMap((section) => [
+      `config ${section} --show`,
+      `config ${section} --show --json`,
+      `config ${section} --help`,
+    ]),
     ...RECORDABLE_PROJECT_BYPASSES.map((name) => `config flags --clear-bypass ${name} --yes`),
   ];
 }

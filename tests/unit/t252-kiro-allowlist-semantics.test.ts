@@ -42,10 +42,29 @@ import { readFileSync } from "node:fs";
 import { dirname, join, posix } from "node:path";
 import { fileURLToPath } from "node:url";
 import { RECORDABLE_PROJECT_BYPASSES } from "../../core/tools/aidlc-settings.ts";
+import { CONFIG_SECTIONS } from "../../core/tools/aidlc-command.ts";
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 
 const HARNESSES = ["kiro"] as const;
+
+// Every read form agents were seen running for "show my settings", "what
+// version", "is my setup healthy" and "what is my status", pinned on their own
+// so the list cannot lose one.
+const SEEN_READ_FORMS = [
+  "--status",
+  "--version",
+  "version",
+  "config --help",
+  "doctor",
+  "--doctor",
+  ...CONFIG_SECTIONS.flatMap((section) => [
+    `config ${section} --show`,
+    `config ${section} --show --json`,
+    `config ${section} --help`,
+  ]),
+];
+
 
 const PERSONAS = [
   "aidlc-architect-agent.json",
@@ -573,6 +592,19 @@ describe("t252 Kiro native release allowlist", () => {
   const agents = ["aidlc.json", ...PERSONAS];
   const check = "AIDLC_DISABLE_REVIEW_FREEZE_HOOK";
 
+  test("every read form agents run works unprompted on both channels", () => {
+    for (const agent of agents) {
+      for (const form of SEEN_READ_FORMS) {
+        expect(evaluate(execBash("kiro", agent), `bun .kiro/tools/aidlc.ts ${form}`), `${agent}: ${form}`).toBe("allow");
+        expect(evaluate(nativeBash(agent), `aidlc ${form}`), `${agent}: ${form}`).toBe("allow");
+      }
+      for (const form of ["config", "config --yes", "--config", "config models --show --global"]) {
+        expect(evaluate(execBash("kiro", agent), `bun .kiro/tools/aidlc.ts ${form}`), `${agent}: ${form}`).not.toBe("allow");
+        expect(evaluate(nativeBash(agent), `aidlc ${form}`), `${agent}: ${form}`).not.toBe("allow");
+      }
+    }
+  });
+
   test("reading a setting, doctor, status, version and turning a check back on run unprompted", () => {
     for (const agent of agents) {
       const eb = nativeBash(agent);
@@ -603,6 +635,7 @@ describe("t252 Kiro native release allowlist", () => {
       for (const command of [
         "aidlc config",
         "aidlc config --yes",
+        "aidlc --config",
         "aidlc config --pin 2.10.0",
         "aidlc config --channel preview",
         "aidlc config models --show --json --global",

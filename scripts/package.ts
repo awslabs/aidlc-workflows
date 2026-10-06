@@ -1191,15 +1191,15 @@ function expandKiroToolAllows(treeRoot: string, m: HarnessManifest): void {
 }
 
 // Kiro IDE's authored conductor (agents/aidlc.md) allows AI-DLC's tool
-// scripts and the dispatcher's engine namespace. The copy channel's
-// projection adds, after the engine line, each dispatcher command a copy
-// channel pre-approves exactly as AI-DLC runs it (copyChannelDispatcherCommands),
-// so reading a setting or running doctor shows no card while any config change
-// still does. Every persona's deny lists the same commands
-// (delegate-shell-deny.ts). The native release keeps its one engine entry, as
-// every native harness does.
+// scripts and the dispatcher's engine namespace. Both trees add, after the
+// engine line, each dispatcher command every install pre-approves exactly as
+// AI-DLC runs it (copyChannelDispatcherCommands): through the project's
+// dispatcher on the copy channel, through the installed aidlc command in the
+// native release. Reading a setting or running doctor then shows no card,
+// while any config change still does. Every persona's deny lists the same
+// commands (delegate-shell-deny.ts).
 function expandKiroIdeConductorAllows(treeRoot: string, m: HarnessManifest, invoke: string): void {
-  if (m.name !== "kiro-ide" || invoke === "aidlc") return;
+  if (m.name !== "kiro-ide") return;
   const conductor = join(treeRoot, "agents", "aidlc.md");
   const engine = `        - "${invoke} engine *"\n`;
   const value = readFileSync(conductor, "utf-8");
@@ -1265,7 +1265,7 @@ function rewriteCursorNativePermissions(outRoot: string, m: HarnessManifest): vo
 // engine prefix alone.
 function nativePermissionsLine(exactReads: boolean): string {
   return exactReads
-    ? `- **Permissions**: the \`aidlc\` agent pre-approves only the native \`${TRUSTED_COMMAND_PREFIX}\` command prefix, the read-only \`aidlc doctor\`, \`status\`, \`version\` and \`config <section> --show --json\` and \`--help\` forms, turning a check back on (\`aidlc config flags --clear-bypass <switch> --yes\`), and its listed read-only tools; everything else prompts, including any other \`config\` change.`
+    ? `- **Permissions**: the \`aidlc\` agent pre-approves only the native \`${TRUSTED_COMMAND_PREFIX}\` command prefix, the read-only \`aidlc doctor\`, \`status\`, \`version\` and \`config <section> --show\` (with or without \`--json\`) and \`--help\` forms, turning a check back on (\`aidlc config flags --clear-bypass <switch> --yes\`), and its listed read-only tools; everything else prompts, including any other \`config\` change.`
     : `- **Permissions**: the \`aidlc\` agent pre-approves only the native \`${TRUSTED_COMMAND_PREFIX}\` command prefix and its listed read-only tools; everything else prompts.`;
 }
 
@@ -1447,7 +1447,7 @@ function rewriteNativeInvocations(
       `"${trustedCommand(".*")}"`,
     );
     value = substituteInvocationTokens(value, m.harnessDir, "aidlc");
-    value = rewriteNativeOnboarding(value, m.tierFlavor === "claude" || m.tierFlavor === "cursor" || m.name === "kiro");
+    value = rewriteNativeOnboarding(value, m.tierFlavor === "claude" || m.tierFlavor === "cursor" || m.tierFlavor === "kiro");
     writeFileSync(file, value);
   }
   rewriteKiroNativeAllowlists(outRoot, m);

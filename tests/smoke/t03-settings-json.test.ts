@@ -57,6 +57,23 @@ import { copyChannelDispatcherCommands, copyChannelToolScripts, ROUTES } from ".
 import { RECORDABLE_PROJECT_BYPASSES } from "../../core/tools/aidlc-settings.ts";
 import { AIDLC_SRC, REPO_ROOT } from "../harness/fixtures.ts";
 
+// Every read form agents were seen running for "show my settings", "what
+// version", "is my setup healthy" and "what is my status", pinned on their own
+// so the list cannot lose one.
+const SEEN_READ_FORMS = [
+  "--status",
+  "--version",
+  "version",
+  "config --help",
+  "doctor",
+  "--doctor",
+  ...CONFIG_SECTIONS.flatMap((section) => [
+    `config ${section} --show`,
+    `config ${section} --show --json`,
+    `config ${section} --help`,
+  ]),
+];
+
 const SETTINGS_PATH = join(AIDLC_SRC, "settings.json");
 const RAW = readFileSync(SETTINGS_PATH, "utf-8");
 
@@ -202,6 +219,15 @@ describe("permissions.allow — pre-approved tool list [.sh tests 2-9]", () => {
 
   // Every script behind a route that can change the machine prompts, so a new
   // one cannot slip in.
+  test("every read form agents run works with no prompt on the copy channel", () => {
+    for (const form of SEEN_READ_FORMS) {
+      expect(claudeBashEffect(`bun .claude/tools/aidlc.ts ${form}`), form).toBe("allow");
+    }
+    for (const form of ["config", "config --yes", "--config", "config models --show --global"]) {
+      expect(claudeBashEffect(`bun .claude/tools/aidlc.ts ${form}`), form).toBe("prompt");
+    }
+  });
+
   test("the scripts behind every machine-changing command prompt", () => {
     const machine = new Set(
       ROUTES.filter((route) => route.mutationScope === "machine" || route.mutationScope === "project-and-machine")
@@ -298,6 +324,9 @@ describe("permissions.allow on the native release", () => {
   });
 
   test("reading a setting, doctor, status, version and turning a check back on run with no prompt", () => {
+    for (const form of SEEN_READ_FORMS) {
+      expect(nativeEffect(`aidlc ${form}`), form).toBe("allow");
+    }
     for (const command of [
       "aidlc engine orchestrate next",
       "aidlc doctor",
@@ -321,6 +350,8 @@ describe("permissions.allow on the native release", () => {
     for (const command of [
       "aidlc config",
       "aidlc config --yes",
+      "aidlc --config",
+      "aidlc config models --show --global",
       "aidlc config --pin 2.10.0",
       "aidlc config --unpin",
       "aidlc config --channel preview",

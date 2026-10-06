@@ -73,8 +73,10 @@ For an air-gapped package, use
 `& $installer -From <release-directory> -Offline` on Windows.
 
 `aidlc config` projects the Kiro shell before the project is opened. The native
-`aidlc engine *` trust grant ships inside the permissions of the conductor
-(`.kiro/agents/aidlc.md`) and of every agent it hands work to. Some commands are
+`aidlc engine *` trust grant, and the exact read-only and turn-back-on commands
+listed for a copied project below, ship inside the permissions of the conductor
+(`.kiro/agents/aidlc.md`); every agent it hands work to is denied those
+commands. Some commands are
 held back from it: `aidlc engine config set *` changes a setting of your piece
 of work, `aidlc engine adapter *` is the entry the IDE's own hooks run, and a
 command holding `$`, a backtick, `>`, `<`, `&`, `@(`, `@{`, or a line break can
@@ -141,10 +143,13 @@ of `.kiro/`, so copy it separately (or copy the whole
 "workspace shell ready" check if it is missing.
 
 In a copied project, the `aidlc` agent runs AI-DLC's engine commands
-(`bun .kiro/tools/aidlc.ts engine ...`), its tool scripts, and its read-only
-commands (`doctor`, `version`, `--doctor`, `status`,
-`config <section> --show --json` and `config <section> --help`) with no card. A
-`config` change, the commands that change the machine's AI-DLC install (`use`,
+(`bun .kiro/tools/aidlc.ts engine ...`), its tool scripts, its read-only
+commands (`doctor`, `version`, `--doctor`, `--version`, `status`, `--status`,
+`config --help`, `config <section> --show` with or without `--json`, and
+`config <section> --help`) and turning a check back on
+(`config flags --clear-bypass <switch> --yes`) with no card. A native install
+runs the same commands, as `aidlc ...`, with no card too. Any other
+`config` change (bare `config`, the guided setup, included), the commands that change the machine's AI-DLC install (`use`,
 `update`, `rollback`, `uninstall`, `system`), and a command holding `$`, a
 backtick, `>`, `<`, `&`, `@(`, `@{`, or a line break show Kiro's card first.
 

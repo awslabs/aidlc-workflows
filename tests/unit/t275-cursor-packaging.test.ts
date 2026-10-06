@@ -54,8 +54,27 @@ import { join } from "node:path";
 import { REPO_ROOT } from "../harness/fixtures.ts";
 import { copyChannelDispatcherCommands, copyChannelToolScripts, machineReachingTools, resolveAction } from "../../core/tools/aidlc.ts";
 import { RECORDABLE_PROJECT_BYPASSES } from "../../core/tools/aidlc-settings.ts";
+import { CONFIG_SECTIONS } from "../../core/tools/aidlc-command.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+// Every read form agents were seen running for "show my settings", "what
+// version", "is my setup healthy" and "what is my status", pinned on their own
+// so the list cannot lose one.
+const SEEN_READ_FORMS = [
+  "--status",
+  "--version",
+  "version",
+  "config --help",
+  "doctor",
+  "--doctor",
+  ...CONFIG_SECTIONS.flatMap((section) => [
+    `config ${section} --show`,
+    `config ${section} --show --json`,
+    `config ${section} --help`,
+  ]),
+];
+
 
 const PACKAGE_SCRIPT = join(REPO_ROOT, "scripts", "package.ts");
 const CLAUDE_SRC = join(REPO_ROOT, "dist", "claude", ".claude");
@@ -341,6 +360,15 @@ describe("t275 dist/cursor packaging parity + shell shape", () => {
       ...copyChannelDispatcherCommands().map((command) => `Shell(aidlc:${command})`),
     ]);
     const check = "AIDLC_DISABLE_REVIEW_FREEZE_HOOK";
+    const copy = { allow: SHIPPED_ALLOW, deny: SHIPPED_DENY };
+    for (const form of SEEN_READ_FORMS) {
+      expect(cursorShellEffect(cli, `aidlc ${form}`), form).toBe("allow");
+      expect(cursorShellEffect(copy, `bun .cursor/tools/aidlc.ts ${form}`), form).toBe("allow");
+    }
+    for (const form of ["config", "config --yes", "--config", "config models --show --global"]) {
+      expect(cursorShellEffect(cli, `aidlc ${form}`), form).not.toBe("allow");
+      expect(cursorShellEffect(copy, `bun .cursor/tools/aidlc.ts ${form}`), form).not.toBe("allow");
+    }
     for (const command of [
       "aidlc engine orchestrate next",
       "aidlc doctor",

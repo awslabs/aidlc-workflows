@@ -211,7 +211,8 @@ utility shortcuts are `/aidlc-status`, `/aidlc-jump --stage <slug>` (or
 - **Permissions**: `.cursor/cli.json` pre-approves only AI-DLC's own workflow
   commands: its engine commands, `doctor`, `version`, `status` (and their
   `--doctor`, `--version` and `--status` spellings), `config --help`, the
-  read-only `config <section> --show --json` and `--help` forms, turning a
+  read-only `config <section> --show` (with or without `--json`) and `--help`
+  forms, turning a
   check back on (`config flags --clear-bypass <switch> --yes`), and its
   `aidlc-*.ts` tools (a project-level `cli.json` carries permissions only). A
   native install pre-approves the same commands run as the installed `aidlc`
