@@ -2141,7 +2141,12 @@ describe("t248 reviewer knowledge absorption", () => {
         expect(surface).toContain(
           `Absorbed at build time from knowledge/${reviewer}/reviewing.md`,
         );
-        expect(surface).toContain(source);
+        // The build writes {{INVOKE}} as this harness's own AI-DLC command.
+        const absorbed = source
+          .split("{{INVOKE}}")
+          .map((part) => part.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
+          .join("[^`\\n]+");
+        expect(surface).toMatch(new RegExp(absorbed));
       }
     });
   }
