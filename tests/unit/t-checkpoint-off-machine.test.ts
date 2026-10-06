@@ -14,8 +14,9 @@ import {
   remainingOperationTimeoutMs,
 } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, test, setDefaultTimeout } from "bun:test";
-import { spawnSync } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
+import { type ChildProcess, spawn, spawnSync } from "node:child_process";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import {
   AIDLC_SRC, cleanupTestProject, createTestProject, resetAidlcEnv,
@@ -31,7 +32,14 @@ setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 resetAidlcEnv();
 const projects: string[] = [];
+// Programs holding a project file open with no sharing (the Windows case at the end).
+const holders: ChildProcess[] = [];
+const pause = (ms: number) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 afterEach(() => {
+  if (holders.length) {
+    while (holders.length) holders.pop()!.kill();
+    pause(1500);
+  }
   while (projects.length) cleanupTestProject(projects.pop());
 });
 const stages = ["functional-design", "nfr-requirements", "nfr-design", "infrastructure-design", "code-generation"];
@@ -339,4 +347,39 @@ describe("t-checkpoint-off-machine: a review recorded while the source could not
     expect(status.approved, JSON.stringify(status)).toBe(false);
     expect(status.rereview?.stage, JSON.stringify(status)).toBe("code-generation");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+});
+
+// On Windows another program (an editor, an indexer, a virus scanner) often
+// holds a file open with no sharing. AI-DLC still reads it there, so an
+// approved Unit stays approved under every Guard Policy. If a runtime upgrade
+// stops reading such a file, this fails before a person loses an approval.
+describe("t-checkpoint-off-machine: a file another program holds open on Windows", () => {
+  for (const policy of [STRICT, ...ACCEPTING]) {
+    test.skipIf(process.platform !== "win32")(`Guard Policy ${policy.split(" ")[0]}: alpha stays approved`, () => {
+      const p = fixture(policy);
+      build(p, "alpha");
+      approve(p, "alpha");
+      const target = join(p, "src", "alpha.ts");
+      // The helper's notes go outside the project, so they never join its source.
+      const notes = mkdtempSync(join(tmpdir(), "t-held-"));
+      const marker = join(notes, "taken.txt");
+      const q = (value: string) => `'${value.replaceAll("'", "''")}'`;
+      const script = `try { $f=[System.IO.File]::Open(${q(target)},'Open','Read','None'); ` +
+        `Set-Content -LiteralPath ${q(marker)} -Value 'held'; Start-Sleep -Seconds 300; $f.Close() } ` +
+        `catch { Set-Content -LiteralPath ${q(marker)} -Value ('error: ' + $_.Exception.Message) }`;
+      const out = openSync(join(notes, "out.txt"), "w");
+      holders.push(spawn("powershell", ["-NoProfile", "-NonInteractive", "-Command", script], { stdio: ["ignore", out, out] }));
+      const until = Date.now() + 60_000;
+      while (!existsSync(marker)) {
+        if (Date.now() > until) {
+          throw new Error(`the helper never opened ${target}: ${readFileSync(join(notes, "out.txt"), "utf8").slice(0, 800)}`);
+        }
+        pause(200);
+      }
+      pause(300);
+      expect(readFileSync(marker, "utf8").trim()).toBe("held");
+      const status = checkpointStatus(p, "alpha");
+      expect(status, JSON.stringify(status)).toMatchObject({ approved: true, errors: [] });
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+  }
 });
