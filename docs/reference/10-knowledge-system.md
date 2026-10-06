@@ -159,6 +159,8 @@ sequenceDiagram
 
 On inline stages and for the inline lead of a mob, the directive's `inline_context_paths` lists the team's knowledge (steps 4-5) right after the personas and before the framework methodology (steps 2-3), and the agent reads it in that order. When the list is over its size cap, framework methodology is trimmed before team knowledge. Dispatched agents keep the order above.
 
+The roster leaves out the shared format references (`audit-format.md`, `worktree-info-schema.md`, `state-template.md`, `memory-template.md`, `knowledge-readme-template.md`). They ship in step 2's directory, and the step that needs one names it by path, so the agent reads it there.
+
 ### What Each Layer Contributes
 
 - Rules (step 1) load first and are resolved through the strict-additive five-layer chain (org → team → project → phase → stage) — every applicable rule is present in context; broader layers are never overridden, only added to. See [Rule System](08-rule-system.md).

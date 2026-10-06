@@ -109,13 +109,14 @@ describe("t314 minimal-scope dispatch and handoff budget", () => {
 
   test("Standard context remains full and pipeline dispatch count stays two", () => {
     // Feasibility at Standard depth with collaborators on: the lead and both
-    // supports keep their full knowledge.
+    // supports keep their full knowledge (18 files, about 100 KB, against
+    // Minimal's 50 KB cap above).
     const standard = directive("feature", "feasibility", "state-mid-ideation.md", true);
     const standardPaths = standard.inline_context_paths as string[];
-    expect(standardPaths.length).toBeGreaterThan(20);
+    expect(standardPaths.length).toBeGreaterThan(15);
     expect(
       contextBytes(standard.projectDir as string, standardPaths),
-    ).toBeGreaterThan(100_000);
+    ).toBeGreaterThan(75_000);
 
     const pipeline = directive(
       "bugfix",
