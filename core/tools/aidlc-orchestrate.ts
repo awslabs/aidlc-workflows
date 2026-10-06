@@ -6058,13 +6058,21 @@ function routingEvidenceFor(projectDir: string, stateContent: string | null): Co
   return routingEvidence;
 }
 
+// The `next` being routed, so routing can route it again after it settled a
+// bookkeeping gate itself (settleBookkeepingGate), and how many it settled.
+let routingArgs: string[] | null = null;
+let settledGates = 0;
+
 function handleNext(args: string[], projectDir: string | undefined): void {
   routingPassActive = true;
+  routingArgs = args;
+  settledGates = 0;
   try {
     routeNext(args, projectDir);
   } finally {
     routingEvidence = null;
     routingPassActive = false;
+    routingArgs = null;
   }
 }
 
@@ -8804,6 +8812,65 @@ function activePerUnitWave(
   return { state: "settled" };
 }
 
+// Once every Unit of a solo unit-major walk is approved at its checkpoint, the
+// late stage gates are bookkeeping: the person approved the work Unit by Unit
+// and is not asked again. A bare `next` settles each one itself, with the same
+// two reports the conductor would run (so the same rows), then routes again and
+// hands over the next real step. A report that does not go through is shown as
+// it is. True when this call emitted.
+const MAX_SETTLED_GATES = 12;
+function settleBookkeepingGate(
+  projectDir: string,
+  stateContent: string | null,
+  directive: RunStageDirective,
+): boolean {
+  const policy = directive.construction_policy;
+  const args = routingArgs;
+  if (
+    policy?.completion_only !== true || policy.human_completion_required !== false ||
+    policy.iteration !== "unit-major" || stateContent === null || isTeamUnitOwnership(stateContent) ||
+    directive.single === true || directive.swarm_settled === true || directive.wave !== undefined ||
+    directive.construction_checkpoint !== undefined || directive.swarm_checkpoint !== undefined ||
+    directive.unit_gate !== undefined || isReadOnlyEngineProbe() ||
+    args === null || args.length > 0 || settledGates >= MAX_SETTLED_GATES
+  ) {
+    return false;
+  }
+  for (const result of ["awaiting-approval", "approved"] as const) {
+    const run = Bun.spawnSync({
+      cmd: aidlcEngineCommand(
+        "orchestrate",
+        ["report", "--stage", directive.stage, "--result", result, "--project-dir", projectDir],
+        fileURLToPath(import.meta.url),
+        IS_COMPILED ? process.execPath : null,
+      ),
+      env: engineChildEnv(),
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const lines = new TextDecoder().decode(run.stdout).trim().split("\n");
+    let reported: Directive | null = null;
+    try {
+      reported = JSON.parse(lines[lines.length - 1] ?? "") as Directive;
+    } catch {
+      reported = null;
+    }
+    if (run.exitCode !== 0 || reported?.kind !== (result === "approved" ? "done" : "print")) {
+      emit(reported !== null && reported.kind !== "print" && reported.kind !== "done"
+        ? reported
+        : errorDirective(
+          `${nodeForSlug(directive.stage)?.name ?? directive.stage} could not be recorded as approved: ` +
+            `${new TextDecoder().decode(run.stderr).trim() || "the report gave no result"}.`,
+        ));
+      return true;
+    }
+  }
+  settledGates++;
+  routingEvidence = null;
+  routeNext(args, projectDir);
+  return true;
+}
+
 // Emit ONE iteration of a per-unit Construction stage. The engine owns the
 // for_each loop here: it resolves the next uncovered unit, substitutes the real
 // unit name for {unit-name} in every path, and suppresses the gate for EVERY
@@ -8997,12 +9064,14 @@ function emitPerUnitRunStage(
         return;
       }
     }
-    emit(withChangeNotices(directive, [
+    const notices = [
       ...((directive as Directive).change_notices ?? []),
       ...units
         .filter((u) => ledger.skipped.has(u))
         .map((u) => skippedUnitNotice(node, u, ledger.skipped.get(u) ?? "")),
-    ]));
+    ];
+    if (notices.length === 0 && settleBookkeepingGate(projectDir, stateContent, directive)) return;
+    emit(withChangeNotices(directive, notices));
     return;
   }
   const directive = buildRunStageDirective(

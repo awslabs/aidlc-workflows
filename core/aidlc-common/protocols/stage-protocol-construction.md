@@ -37,7 +37,10 @@ the team `unit_gate` and settled-swarm policies when those fields are present.
    `rereview` re-checks the Unit's changed code or documents first, as
    described there.
 4. **`directive.construction_policy.completion_only === true`** closes the stage
-   after its Units were approved. It must also carry
+   after its Units were approved. In a solo unit-major walk a bare `next`
+   records these gates itself once the last Unit is approved and returns the
+   next real step, so this directive comes only where it cannot (a change
+   notice to say, team-owned Units, a swarm's settle). It must also carry
    `human_completion_required: false`. Skip the body, questions, reviewer, and
    learnings prompt, and say nothing about this step. Report
    `awaiting-approval`, then `approved`, for the emitted `directive.stage`,
@@ -314,7 +317,8 @@ question-and-answer flow.
 After approval or rejection, re-run `next`. Never use a checkpoint approval as
 `report --stage code-generation --result approved` for the whole Unit set.
 Once all Unit approvals are recorded, the engine may emit normal stage gates
-with `completion_only: true`; settle those through the bookkeeping branch above.
+with `completion_only: true`; settle those through the bookkeeping branch above
+(in a solo unit-major walk a bare `next` records them itself).
 Explicit stage-major gated execution retains its ordinary stage reviews;
 autonomous execution skips their routine human completion questions.
 
