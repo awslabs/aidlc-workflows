@@ -558,6 +558,27 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
     expect(missing).toEqual([]);
   });
 
+  // From live runs: at an open plan question, "from here on, build one unit at a
+  // time" was not carried out. The setters lived only in the Construction
+  // module, which an ask does not open: one agent said it already worked that
+  // way, the others went looking for the command.
+  test("every shipped conductor SKILL names the setters for a change to how Construction runs", () => {
+    const missing: string[] = [];
+    for (const rel of skills) {
+      const body = readFileSync(join(REPO_ROOT, rel), "utf-8").replace(/\s+/g, " ");
+      for (const token of [
+        "A change to how Construction runs is its setter:",
+        "`{{INVOKE}} engine state set-construction-iteration <unit-major|stage-major>`",
+        "`{{INVOKE}} engine state set-construction-checkpoints <enabled|disabled>`",
+        "`{{INVOKE}} engine state set-construction-execution <serial|swarm>`",
+        "say the setter's notice line and keep the gate open.",
+      ]) {
+        if (!body.includes(token)) missing.push(`${rel}  missing: ${token}`);
+      }
+    }
+    expect(missing).toEqual([]);
+  });
+
   // From a live Kiro CLI run: "from here on, build one unit at a time; I'll
   // approve the design after" at a gate. The engine takes the agent's Approve
   // whatever the wording, so the guidance is what keeps a request that holds no
