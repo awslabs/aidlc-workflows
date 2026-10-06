@@ -489,6 +489,24 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
     expect(missing).toEqual([]);
   });
 
+  // Kiro CLI shows every word the agent writes between tool calls: a live run
+  // showed "The request carries a change_notices line I must relay to you",
+  // a literal SAY: "..." and "that's the review freeze fence".
+  test("what the person reads carries no marker, field name, or check machinery", () => {
+    const notice = "Say a notice as a plain sentence of your own with nothing in front of it: never name the field, " +
+      "never say you were asked to pass it on, never call a check a fence, and add no reason of your own for carrying on.";
+    const speech = 'So a message never starts with "SAY:", never puts the sentence in quotation marks, and never ' +
+      "names a field, a directive, a protocol, or a fence.";
+    const missing = skills.flatMap((rel) => {
+      const body = readFileSync(join(REPO_ROOT, rel), "utf-8");
+      return [
+        ...(body.includes(notice) ? [] : [`${rel}: change_notices`]),
+        ...(body.includes(speech) ? [] : [`${rel}: speaking`]),
+      ];
+    });
+    expect(missing).toEqual([]);
+  });
+
   test("the narration rule is worded identically across every harness", () => {
     // Byte-alignment, not just presence: the rule is authored once and ported,
     // so a per-harness reword is drift. Extracted by its own anchors rather than
