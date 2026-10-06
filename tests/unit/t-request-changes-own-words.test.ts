@@ -490,6 +490,8 @@ describe("the words are ordered against the gate row, not by time", () => {
     says(proj, "Before you finish: keep it short.");
     presentWithoutClearing();
     expect(gateWordsSincePresentation(proj, SESSION, { stage: slug })).toBeNull();
+    // Their reply to the question is the pick alone; the earlier message is not its words.
+    says(proj, "Request Changes");
     rejectWith(proj, slug, ["--reason", PARAPHRASE]);
     expect(field(proj, "GATE_REJECTED", "Feedback")).toBe(PARAPHRASE);
   });
