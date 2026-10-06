@@ -419,12 +419,26 @@ describe("t38 aidlc-utility status — gate awareness (migrated from t38-utility
     expect(r.out).toContain("Scope:          feature\n");
     expect(r.out).toContain("Project Type:   new project\n");
     expect(r.out).toContain("Depth:          Standard (from scope feature)\n");
+    expect(r.out).toContain("Guard Policy:   strict (from scope feature)\n");
+    expect(r.out).toContain("Sensors: on (from scope feature)\n");
     // Said by the person, and a plan composed for this work, read as such.
     sedState(p, /^- \*\*Project Type\*\*: .*$/m, "- **Project Type**: Brownfield\n- **Project Type Source**: you");
-    sedState(p, /^- \*\*Test Strategy\*\*: .*$/m, "- **Test Strategy**: Minimal\n- **Plan**: custom, based on feature");
+    sedState(p, /^- \*\*Test Strategy\*\*: .*$/m, "- **Test Strategy**: Minimal\n- **Plan**: custom, based on feature\n- **Learnings**: off (from scope feature)");
+    const stored = readFileSync(statePath(p), "utf-8");
     const again = status(p).out;
     expect(again).toContain("Project Type:   existing code (you said so)\n");
-    expect(again).toContain("Depth:          Standard (from scope feature), tests: Minimal\n");
+    // A composed plan runs on a stock scope the person never chose: its
+    // settings read as the plan's, whoever reads them.
+    expect(again).toContain("Depth:          Standard (from the approved plan), tests: Minimal\n");
+    expect(again).toContain("Guard Policy:   strict (from the approved plan)\n");
+    expect(again).toContain("Sensors: on (from the approved plan)\n");
+    expect(again).toContain("Learnings: off (from the approved plan)\n");
+    expect(again).toContain("Plan Approval: on (from the approved plan)\n");
+    expect(again).not.toContain("from scope");
+    // Only the words change: the stored source still names the scope, which
+    // a scope change and plan approval read.
+    expect(readFileSync(statePath(p), "utf-8")).toBe(stored);
+    expect(stored).toContain("- **Learnings**: off (from scope feature)");
     expect(again).toContain("Plan:           custom, based on feature (this piece of work only)\n");
     expect(again).not.toContain("Scope:");
     // Before workspace detection decides, the type is not shown as a guess.

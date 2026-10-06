@@ -1879,6 +1879,13 @@ To get started:
   const agentLine = agentName === null ? "" : `Active Agent:   ${agentName}\n`;
   const lastLine = lastName === null ? "" : `Last Completed: ${lastName}\n`;
   const nextLine = nextName === null ? "" : `Next Stage:     ${nextName}\n`;
+  const plan = getField(content, PLAN_FIELD);
+  // A plan composed for this work runs on a stock scope the person never
+  // chose, so a setting that came from that scope reads as the approved
+  // plan's. Only the words change: the stored source still names the scope,
+  // which a scope change and plan approval read.
+  const shownSource = (source: string): string =>
+    plan && source === `scope ${scope.trim().toLowerCase()}` ? "the approved plan" : source;
   // Resolved, not the raw line: a memory layer holding strict shows as strict
   // from that file even when the intent's own line says relaxed.
   let guardPolicyDisplay: string;
@@ -1890,7 +1897,7 @@ To get started:
     const resolution = resolveGuardPolicy(projectDir, content, {
       selection: { intent: selection.intent ?? undefined, space: selection.space },
     });
-    guardPolicyDisplay = formatGuardPolicy(resolution.value, resolution.source);
+    guardPolicyDisplay = formatGuardPolicy(resolution.value, shownSource(resolution.source));
     const fences = resolveFences(resolution, content);
     // The plan-approval fence now only decides whether an approved plan that is
     // edited asks again; the Plan Approval line below is the plan stop itself.
@@ -1908,10 +1915,11 @@ To get started:
   }
   const ceremonyDisplay = CEREMONY_KEYS.map((key) => {
     if (key === "plan_approval") {
-      return `${CEREMONY_FIELDS[key]}: ${formatPlanApprovalSetting(resolvePlanApprovalSetting(projectDir, content))}`;
+      const setting = resolvePlanApprovalSetting(projectDir, content);
+      return `${CEREMONY_FIELDS[key]}: ${formatPlanApprovalSetting({ ...setting, source: shownSource(setting.source) })}`;
     }
     const resolution = resolveCeremony(key, scope, content);
-    return `${CEREMONY_FIELDS[key]}: ${formatCeremony(resolution.value, resolution.source)}`;
+    return `${CEREMONY_FIELDS[key]}: ${formatCeremony(resolution.value, shownSource(resolution.source))}`;
   }).join("\n");
 
   // Find current stage number
@@ -2056,7 +2064,6 @@ To get started:
     // Unreadable receipts change nothing the person can act on here.
   }
 
-  const plan = getField(content, PLAN_FIELD);
   // Said only once it is known: workspace detection writes a placeholder first.
   const projectType = declaredProjectType(getField(content, "Project Type") ?? "");
   const projectTypeDisplay = projectType === null
@@ -2070,7 +2077,7 @@ To get started:
   // set for this piece of work.
   const scopeDepth = loadScopeMapping()[scope]?.depth;
   const depthSource = scopeDepth !== undefined && scopeDepth.toLowerCase() === (depth ?? "").toLowerCase()
-    ? `from scope ${scope}`
+    ? (plan ? "from the approved plan" : `from scope ${scope}`)
     : "set for this piece of work";
   const depthDisplay = depth === null
     ? ""

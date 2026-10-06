@@ -236,7 +236,7 @@ Precedence is global kill switch (`1`) → valid intent field → scope default 
 `on`. Kill switches can also be recorded with `aidlc config flags --bypass <NAME>`.
 New intents store `Sensors`, `Learnings`, `Summary Confirmation`,
 `Plan Approval`, and `Collaborators` after `Guard Policy` in `aidlc-state.md`, each with a source
-label such as `on (from scope classic)`. The label reads `set by you` only when
+label such as `on (from scope classic)`. For a plan composed for this piece of work, `--status` shows that label as `(from the approved plan)`; the state file keeps the scope. The label reads `set by you` only when
 the human-turn hook applies the message you typed itself: summary confirmation
 or plan approval off typed with no description, plan approval off in your own
 words, or a Guard Policy or fence switch, together with the settings typed
