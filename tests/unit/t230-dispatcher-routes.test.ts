@@ -1100,7 +1100,7 @@ describe("t230 dispatcher route parity", () => {
       tool_name: "bash",
       tool_input: { command: "echo hi" },
     });
-    const why = `AI-DLC does not run in ${home}, which holds AI-DLC's own install (`;
+    const why = `AI-DLC can't run in ${home}`;
 
     // Copilot and Cursor deny a failed hook without its reason, so their tool
     // guards refuse in the host's own deny form. The call is still denied.
@@ -1156,7 +1156,7 @@ describe("t230 dispatcher route parity", () => {
     }).hookSpecificOutput;
     expect(namedDecision.permissionDecision).toBe("deny");
     expect(namedDecision.permissionDecisionReason).toContain(
-      `AI-DLC does not run in ${project}, which is inside AI-DLC's own install (`,
+      `AI-DLC can't run in ${project}. Start the session from your project's folder.`,
     );
   });
 
