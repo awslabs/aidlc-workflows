@@ -19,11 +19,11 @@ import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, unlinkSync
 import { dirname, join } from "node:path";
 import {
   AIDLC_SRC, cleanupTestProject, createTestProject, resetAidlcEnv,
-  seedAidlcMemory, seedBoltDag, seededRecordDir, seededStateFile,
+  runOrchestrateNext, seedAidlcMemory, seedBoltDag, seededRecordDir, seededStateFile,
 } from "../harness/fixtures.ts";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import {
-  artifactFilename, findStageBySlug, latestMainWorkflowStageRunFloorForProject,
+  artifactFilename, auditBlockField, findStageBySlug, latestMainWorkflowStageRunFloorForProject,
   readAuditShardEvents, reviewArtifactFingerprint,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
@@ -205,8 +205,12 @@ const cases: Record<string, { what: string; act: (p: string, reviews: string[]) 
   },
   "review-record-absent": {
     what: "the written reviews not on this machine",
-    act: (_p, reviews) => {
-      for (const file of reviews) unlinkSync(file);
+    act: (p) => {
+      const records = readAuditShardEvents(p)
+        .filter((row) => row.event === "REVIEW_COMPLETED" && auditBlockField(row.block, "Unit") === "alpha")
+        .map((row) => auditBlockField(row.block, "Review Record"));
+      expect(records.length).toBe(stages.length);
+      for (const record of records) unlinkSync(join(seededRecordDir(p), record!));
     },
   },
   "snapshot-absent-then-edit": {
@@ -256,8 +260,10 @@ describe("t-checkpoint-off-machine: an approved Unit whose reviewed evidence can
       approve(p, "alpha");
       act(p, reviews);
       const status = checkpointStatus(p, "alpha");
-      console.log(`t-checkpoint-off-machine strict ${name}: ${JSON.stringify(status)}`);
       expect(status.approved, `${name}: ${JSON.stringify(status)}`).toBe(false);
+      // What the person and the agent are given next.
+      const next = runOrchestrateNext(join(AIDLC_SRC, "tools/aidlc-orchestrate.ts"), p, [], { env: process.env });
+      console.log(`t-checkpoint-off-machine strict ${name}: status ${JSON.stringify({ errors: status.errors, rereview: status.rereview })} next ${JSON.stringify(next.directive ?? next.stderr).slice(0, 1500)}`);
     }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
   }
 });

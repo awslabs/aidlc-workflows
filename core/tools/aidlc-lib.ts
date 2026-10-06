@@ -14351,6 +14351,11 @@ export interface FreshReviewReceipts {
    *  recorded (an edit outside any review), under every Guard Policy and
    *  whether or not a newer claim shields the path, with their next review. */
   unitSourceMoved: Map<string, StaleReviewProgress>;
+  /** Units whose review's source binding relaxed and off keep although it
+   *  cannot be compared path by path here: the reviewed listing is not on this
+   *  machine, the Unit's list of files changed after its review, or the
+   *  project source cannot be read. Each is said once. */
+  unitSourceKept: Set<string>;
   /** Units the person approved at their checkpoint after their latest
    *  re-check: that approval opens a fresh one, so their progress above
    *  reports it unspent. */
@@ -16442,6 +16447,22 @@ function reviewRecordAbsent(projectDir: string, relativePath: string): boolean {
   return false;
 }
 
+/**
+ * Whether a completion that does not carry its verified review is that review
+ * with only its written record missing from this checkout (a fresh clone,
+ * another machine, a clean): it matches its request and names a record that
+ * is simply not here. Relaxed and off keep its recorded verdict.
+ */
+export function reviewRecordNotHere(
+  projectDir: string,
+  request: ReviewRequestBinding,
+  completionBlock: string,
+): boolean {
+  if (!reviewCompletionMatchesRequest(request, completionBlock)) return false;
+  const ref = reviewRecordRefFromBlock(completionBlock);
+  return ref !== null && reviewRecordAbsent(projectDir, ref.path);
+}
+
 export function readReviewRecord(
   projectDir: string,
   ref: { path: string; digest: string },
@@ -18375,6 +18396,7 @@ export function freshReviewReceipts(
     freshUnitClaims: new Map(),
     unitSourceAttributed: new Set(),
     unitSourceMoved: new Map(),
+    unitSourceKept: new Set(),
     unitRecheckReopened: new Set(),
     sourceBaseline: { state: "legacy" },
     currentSourceListing: null,
@@ -19033,6 +19055,7 @@ export function freshReviewReceipts(
   const freshUnitClaims = new Map<string, SourceClaimModel>();
   const unitSourceAttributed = new Set<string>();
   const unitSourceMoved = new Map<string, StaleReviewProgress>();
+  const unitSourceKept = new Set<string>();
   if (sourceFreshnessApplies && currentSourceListing !== null) {
     const newerFreshClaims: SourceClaimModel[] = [];
     // What each newer validated review recorded, newest first: a path it claims
@@ -19098,11 +19121,13 @@ export function freshReviewReceipts(
             // The reviewed listing is not on this machine, or the manifest
             // cannot be read: the verdict stands, said once.
             acceptUncheckedSource(unit, receipt.fingerprint, manifest.ok ? manifest.rawBytesSha256 : null);
+            unitSourceKept.add(unit);
             if (manifest.ok) claimModel = { claims: manifest.claims, prefixes: manifest.prefixes };
           } else {
             // The unit's manifest changed after its review (a path claimed
             // since): the verdict stands, the new claims count, said once.
             claimModel = { claims: manifest.claims, prefixes: manifest.prefixes };
+            unitSourceKept.add(unit);
             acceptedChanges.push({
               checkpoint: "review-receipt",
               stage: stage.slug,
@@ -19201,6 +19226,7 @@ export function freshReviewReceipts(
       // The workspace cannot be read now: relaxed and off keep the verdicts.
       if (isRelaxed()) {
         acceptUncheckedSource(unit, receipt.fingerprint ?? "(not recorded)", null);
+        unitSourceKept.add(unit);
         continue;
       }
       unitVerdicts.delete(unit);
@@ -19331,6 +19357,7 @@ export function freshReviewReceipts(
     freshUnitClaims,
     unitSourceAttributed,
     unitSourceMoved,
+    unitSourceKept,
     unitRecheckReopened,
     sourceBaseline,
     currentSourceListing: sourceFreshnessApplies ? currentSourceListing : null,
