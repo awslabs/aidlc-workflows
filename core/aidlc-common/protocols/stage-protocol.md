@@ -518,7 +518,8 @@ leaves the mode unclear, ask one short follow-up instead of guessing.
 
 When the person asks for a different way at any stage ("let me just edit the
 file"), switch for this stage (see "Users can switch modes mid-stage" below) and
-record the new choice the same way, so the later stages use it too.
+record the new choice as below, with `--on-instruction '<their words>'`, so the
+later stages use it too.
 
 Offer the user a choice of interaction mode:
 ```question
@@ -539,7 +540,7 @@ numbered lines: `1. Guide me`, `2. I'll edit the file`, `3. Chat`, and the final
 `4. Other`. Mentioning Other in a nearby tip or sentence does not satisfy the
 structured-question contract.
 
-Record the mode question and the user's mode choice through the log tool, the same pair every non-gate question uses (section 2 checklist item 2): `{{INVOKE}} engine log decision --stage <slug> --decision "How would you like to answer the questions?" --options "Guide me,I'll edit the file,Chat"` before presenting it, then `{{INVOKE}} engine log answer --stage <slug> --details '<exact choice>'` after the response. When their request already said how they want to answer ("guide me through it"), do not ask it again: log the question as usual, record that choice with `--on-instruction '<their words>'` (in single quotes, as **Their words on a command line** above says), and say **SAY:** "You asked to be guided, so I'll ask the questions here. Say if you'd rather edit the file or chat." The tool stamps the row. Never write the audit shard yourself.
+Record the mode question and the user's mode choice through the log tool, the same pair every non-gate question uses (section 2 checklist item 2): `{{INVOKE}} engine log decision --stage <slug> --decision "How would you like to answer the questions?" --options "Guide me,I'll edit the file,Chat"` before presenting it, then `{{INVOKE}} engine log answer --stage <slug> --details '<the option label>'` after the response. When their request already said how they want to answer ("guide me through it"), do not ask it again: log the question as usual, record that choice with `--on-instruction '<their words>'` (in single quotes, as **Their words on a command line** above says), and say **SAY:** "You asked to be guided, so I'll ask the questions here. Say if you'd rather edit the file or chat." The tool stamps the row. Never write the audit shard yourself.
 
 **Step 3a: If "Guide me" (interactive mode):**
 - Present questions as structured questions in batches (batching limits are harness-specific — see the question-rendering annex)
