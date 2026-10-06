@@ -122,9 +122,15 @@ function cover(p: string, unit: string, selected = stages, receipts = true) {
   }
 }
 
-function next(p: string) {
+// The step `next` routes, seen as a route check: it records nothing, so a
+// bookkeeping stage gate is seen as it is instead of being settled.
+function routed(p: string) {
+  return next(p, { ...process.env, AIDLC_ROUTE_CHECK: "1" });
+}
+
+function next(p: string, env: NodeJS.ProcessEnv = process.env) {
   // The env is passed for the same reason as in approve() below.
-  const result = runOrchestrateNext(join(AIDLC_SRC, "tools/aidlc-orchestrate.ts"), p, [], { env: process.env });
+  const result = runOrchestrateNext(join(AIDLC_SRC, "tools/aidlc-orchestrate.ts"), p, [], { env });
   expect(result.directive, result.stderr).not.toBeNull();
   return result.directive as {
     kind: string; stage: string; unit?: string; gate?: boolean; batch?: number;
@@ -529,7 +535,7 @@ describe("t342 Construction checkpoint routing", () => {
       cover(p, unit);
       approve(p, unit);
     }
-    const gate = next(p);
+    const gate = routed(p);
     expect(gate.construction_policy?.completion_only, JSON.stringify(gate)).toBe(true);
     reportStage(p, "functional-design", "awaiting-approval");
     const approveCommand =
@@ -575,7 +581,7 @@ describe("t342 Construction checkpoint routing", () => {
       cover(p, unit);
       approve(p, unit);
     }
-    const gate = next(p);
+    const gate = routed(p);
     expect(gate.stage, JSON.stringify(gate)).toBe("functional-design");
     expect(gate.construction_policy?.completion_only).toBe(true);
     for (const result of ["awaiting-approval", "approved"]) reportStage(p, "functional-design", result);
@@ -616,12 +622,47 @@ describe("t342 Construction checkpoint routing", () => {
     expect(checkpointStatus(p, "beta").approved).toBe(true);
 
     // The workflow continues at the next stage gate, which is bookkeeping.
-    const resumed = next(p);
+    const resumed = routed(p);
     expect(resumed.stage, JSON.stringify(resumed)).toBe("nfr-requirements");
     expect(resumed.construction_checkpoint).toBeUndefined();
     expect(resumed.construction_policy?.completion_only).toBe(true);
     for (const result of ["awaiting-approval", "approved"]) reportStage(p, "nfr-requirements", result);
     expect(readFileSync(seededStateFile(p), "utf-8")).toContain("- **Current Stage**: nfr-design");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  // Every Unit is approved at its checkpoint, so the stage gates left are
+  // bookkeeping. One `next` records them all, with the rows the conductor's own
+  // reports wrote, and hands over the next real step; the person was asked
+  // nothing more.
+  test("one next after the last Unit approval records the bookkeeping stage gates itself", () => {
+    const rows = (p: string) => readAuditShardEvents(p)
+      .filter((row) => ["STAGE_AWAITING_APPROVAL", "GATE_APPROVED", "STAGE_STARTED", "STAGE_COMPLETED"].includes(row.event))
+      .map((row) => `${row.event} ${auditBlockField(row.block, "Stage")}`);
+    const manual = fixture();
+    const settled = fixture();
+    for (const p of [manual, settled]) {
+      for (const unit of ["alpha", "beta"]) {
+        cover(p, unit);
+        approve(p, unit);
+      }
+    }
+    // The chain the protocol had the conductor run: two reports per stage.
+    const reported: string[] = [];
+    for (let gate = routed(manual); gate.construction_policy?.completion_only === true; gate = routed(manual)) {
+      expect(reported, JSON.stringify(gate).slice(0, 400)).not.toContain(gate.stage);
+      reported.push(gate.stage);
+      for (const result of ["awaiting-approval", "approved"]) reportStage(manual, gate.stage, result);
+    }
+    expect(reported.length).toBeGreaterThan(1);
+    const following = routed(manual);
+
+    const step = next(settled);
+    expect(step.construction_policy?.completion_only, JSON.stringify(step).slice(0, 400)).not.toBe(true);
+    expect(step).toMatchObject({ kind: following.kind, stage: following.stage });
+    expect(rows(settled)).toEqual(rows(manual));
+    for (const slug of reported) {
+      expect(readFileSync(seededStateFile(settled), "utf-8")).toMatch(new RegExp(`^- \\[x\\] ${slug} `, "m"));
+    }
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("a kind-vacuous Unit's approval survives the stage going [S] on another Unit's skip", () => {
@@ -764,7 +805,7 @@ describe("t342 Construction checkpoint routing", () => {
       cover(p, unit);
       approve(p, unit);
     }
-    const directive = next(p);
+    const directive = routed(p);
     expect(directive.construction_policy?.completion_only).toBe(true);
     expect(directive.construction_policy?.human_completion_required).toBe(false);
     const env = { ...process.env };
