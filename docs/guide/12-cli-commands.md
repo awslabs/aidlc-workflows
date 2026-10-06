@@ -1914,7 +1914,9 @@ or opening a checkpoint approval question early. Re-run `next` after verificatio
 one Unit's checkpoint as approval of the whole Code Generation stage.
 The verifier records a tool-owned `CHECKPOINT_VERIFICATION_RECORDED` receipt
 alongside the proof file, and approval requires that receipt; a hand-written
-proof file cannot verify a Unit.
+proof file cannot verify a Unit. On a checkout with no proof file at all (a
+fresh clone, another machine), that receipt stands in for the proof of a Unit
+already approved whose evidence is unchanged, so nothing runs again.
 
 Only one protected question may be open per session. Asking any new question
 (protected or ordinary) or opening a lifecycle gate withdraws it, so ask

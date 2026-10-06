@@ -130,6 +130,8 @@ export interface ConstructionCheckpoint {
   run_floor: string;
   run_floors: Record<string, string>;
   proof_path: string;
+  /** The proof file, or on a checkout with none the committed verification
+   *  row that stands in for it (no output recorded). */
   verification: ConstructionCheckpointProof | null;
   verification_command: string | null;
   command_authorized: boolean;
@@ -305,13 +307,16 @@ function proofFileAbsent(root: string, path: string): boolean {
   }
 }
 
-// What a committed verification row records of its proof, read the way the
-// proof file is: the row is written with the proof, and Verified true means
-// the check passed with the Unit's evidence unchanged.
+// What a committed verification row records of its proof.
+type CommittedCheckpointProof = Pick<ConstructionCheckpointProof, "id" | "kind" | "unit" | "fingerprint" |
+  "command_sha256" | "verified" | "evidence_unchanged" | "exit_code" | "signal" | "error" | "finished_at">;
+
+// That record, read the way the proof file is: the row is written with the
+// proof, and Verified true means the check passed with the Unit's evidence
+// unchanged.
 function proofFromVerificationRow(
   block: string, kind: ConstructionCheckpointKind, unit: string,
-): Pick<ConstructionCheckpointProof, "id" | "kind" | "unit" | "fingerprint" | "command_sha256" |
-  "verified" | "evidence_unchanged" | "exit_code" | "signal" | "error" | "finished_at"> | null {
+): CommittedCheckpointProof | null {
   const id = auditBlockField(block, "Verification Id");
   const fingerprint = auditBlockField(block, "Fingerprint");
   const commandSha256 = auditBlockField(block, "Command SHA-256");
@@ -740,6 +745,7 @@ function snapshot(
   // still to be approved.
   let verified = verifiedNow || (gateApproved && verifiedWith(proof?.command_sha256));
   let approved = verified && gateApproved;
+  let restored: ConstructionCheckpointProof | null = null;
   // A checkout with no proof file at all (a fresh clone, another machine):
   // the committed verification row stands in for it, for a Unit already
   // approved whose evidence is unchanged since. Nothing is run again.
@@ -748,6 +754,15 @@ function snapshot(
     if (committed && gateApprovedWith(committed.command_sha256) && verifiedWith(committed.command_sha256, committed)) {
       verified = true;
       approved = true;
+      // Asked about again, the approval binds to the verification it stands
+      // on. The committed row records no output, so none is shown.
+      restored = {
+        version: 4, ...committed,
+        command_label: shared.verificationCommand?.sha256 === committed.command_sha256
+          ? shared.verificationCommand.label : "",
+        started_at: committed.finished_at ?? "recorded",
+        stdout_bytes: 0, stderr_bytes: 0, stdout_sha256: "", stderr_sha256: "", stdout_tail: "", stderr_tail: "",
+      };
     }
   }
   const approvedBefore = gate?.event === "GATE_APPROVED" && auditBlockField(gate.block, "Unit") === unit &&
@@ -765,7 +780,7 @@ function snapshot(
       verification_command: shared.verificationCommand?.label ?? null,
       command_authorized: shared.verificationCommand !== null,
       run_floor: floors[stages.at(-1)!] ?? "unstarted#0",
-      run_floors: floors, proof_path: `${root}/${proofPath}`, verification: proof,
+      run_floors: floors, proof_path: `${root}/${proofPath}`, verification: proof ?? restored,
       rereview, rechecked,
     },
   };

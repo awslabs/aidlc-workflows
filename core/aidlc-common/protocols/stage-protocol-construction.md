@@ -223,7 +223,9 @@ after the new verification reports `verified: true`. Say each `change_notices`
 line the verification returns, as written, before you ask.
 The verifier records a tool-owned `CHECKPOINT_VERIFICATION_RECORDED` receipt
 alongside the proof file, and approval requires that receipt; a hand-written
-proof file cannot verify a Unit.
+proof file cannot verify a Unit. On a checkout with no proof file at all (a
+fresh clone, another machine), that receipt stands in for the proof of a Unit
+already approved whose evidence is unchanged, so nothing runs again.
 
 When the checkpoint carries `rereview`, the Unit's reviewed code or documents
 changed after their review (the person's edit, a formatter, anything no review

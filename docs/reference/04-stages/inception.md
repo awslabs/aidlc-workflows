@@ -1369,7 +1369,9 @@ later Units start, even with stage-major chosen.
 The legacy first-stage gate is a stage review, not proof of that result.
 The verifier records a tool-owned `CHECKPOINT_VERIFICATION_RECORDED` receipt
 alongside the proof file, and approval requires that receipt; a hand-written
-proof file cannot verify a Unit.
+proof file cannot verify a Unit. On a checkout with no proof file at all (a
+fresh clone, another machine), that receipt stands in for the proof of a Unit
+already approved whose evidence is unchanged, so nothing runs again.
 
 Eligible skeleton-off flows offer **Continue automatically** / **Review each
 checkpoint** at Construction entry; skeleton-on offers after the real skeleton
