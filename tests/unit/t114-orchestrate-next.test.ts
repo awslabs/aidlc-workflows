@@ -587,6 +587,20 @@ describe("t114 help-request routing", () => {
     expect(out).not.toContain("aidlc.ts engine space help");
   });
 
+  // Live (Claude Code, poc and express): the request printed AI-DLC's version
+  // and started nothing, so the person had to say it again.
+  test("a utility flag inside a description stays part of the request", () => {
+    for (const flag of ["--version", "--status", "--help", "--doctor"]) {
+      proj = createOrchestrationTestProject();
+      const said = `add a ${flag} flag that prints the version from package.json`;
+      const out = runNext(proj, said.split(" ")).out;
+      expect(out, flag).toContain('"kind":"ask"');
+      expect(out, flag).not.toContain(" version`, print its output verbatim");
+      cleanupTestProject(proj);
+      proj = "";
+    }
+  });
+
   test("`help` inside a longer description stays freeform intent text", () => {
     // Only the SOLE token is a help request; a description mentioning help
     // still reaches the freeform funnel (Branch 8 ask on a fresh workspace).

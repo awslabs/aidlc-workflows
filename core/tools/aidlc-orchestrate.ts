@@ -250,6 +250,7 @@ import {
   PHASES,
   parseTeamBoardArgs,
   parseWorkspaceCommand,
+  nextArgsCarryRequestWords,
   READ_ONLY_FLAGS,
   readKiroIdeLegacyPlanApprovalHost,
   readAllAuditShards,
@@ -3170,6 +3171,7 @@ function parseNextFlags(argv: string[]): ParsedFlags {
   }
   const flags: ParsedFlags = {};
   const intentWords: string[] = [];
+  const requestWords = nextArgsCarryRequestWords(args);
   let literalIntent = false;
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
@@ -3181,7 +3183,9 @@ function parseNextFlags(argv: string[]): ParsedFlags {
       literalIntent = true;
       continue;
     }
-    if (READ_ONLY_FLAGS.has(a)) {
+    // Among the person's own words a utility flag is part of their request
+    // ("add a --version flag ..."), kept as one of its words below.
+    if (READ_ONLY_FLAGS.has(a) && !requestWords) {
       flags.readOnly = a;
       continue;
     }

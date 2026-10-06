@@ -82,6 +82,11 @@ diagnostic and lifecycle routes.
 | `aidlc engine worktree restore --slug <slug> [--parked <stamp>] [--raw]` | Recover files from a set-aside Bolt attempt in a separate checkout |
 | `aidlc engine worktree purge --slug <slug> [--parked <stamp> \| --older-than <days>]` | Remove selected local recovery refs once their restored checkouts are gone |
 
+`--status`, `--doctor`, `--help` and `--version` run on their own or beside
+other flags. Inside a description they are part of what you asked for:
+`/aidlc add a --version flag that prints the version from package.json` starts
+that work, and prints no AI-DLC version.
+
 ---
 
 ## Terminal Color

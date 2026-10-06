@@ -845,6 +845,20 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
     }
   });
 
+  test("a utility flag among the person's words is forwarded as their request, not run as the utility", () => {
+    const dir = scratchProject(true);
+    try {
+      const r = runAdapter(dir, "verb-intercept", {
+        cwd: dir,
+        prompt: "/aidlc add a --version flag that prints the version from package.json",
+      });
+      expect(r.code).toBe(0);
+      expect(r.stdout).not.toContain("relay that output to the user");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test("the relay fence is longer than any backtick run in the output", () => {
     expect(relayAsTextBlock("Machine  ok\n")).toContain("(```text on its own line before it, ``` after it)");
     // A document's own code fence stays inside the block.

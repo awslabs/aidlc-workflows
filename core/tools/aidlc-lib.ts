@@ -894,9 +894,10 @@ export const DEFAULT_SPACE = "default";
 // (e.g. the Kiro userPromptSubmit hook) can dispatch them deterministically off
 // the SAME classification the engine uses — never a divergent hardcoded list.
 //
-//   - read-only utility flags: matched ANYWHERE in the args (mirrors the engine's
-//     parseNextFlags, which sets `readOnly` on any matching token). Each maps to
-//     its subcommand by stripping the leading `--` (--status→status, …).
+//   - read-only utility flags: matched anywhere among flags, but never among the
+//     person's own words (nextArgsCarryRequestWords; the engine's parseNextFlags
+//     applies the same rule). Each maps to its subcommand by stripping the
+//     leading `--` (--status→status, …).
 //   - workspace commands: parsed ONLY when the LEADING token is a workspace
 //     noun/legacy verb, so freeform prose merely containing "space"/"intent"
 //     stays intent text. A leading workspace noun wins over later read-only
@@ -907,6 +908,22 @@ export const READ_ONLY_FLAGS: ReadonlySet<string> = new Set([
   "--doctor",
   "--version",
 ]);
+// Whether the args carry words of the person's own: a token that is not a flag
+// and does not follow one (a flag's value), or anything after `--`. Among such
+// words a utility flag is part of what they asked for ("add a --version flag
+// that prints the version"), not AI-DLC's own utility; alone, or among other
+// flags, it is the utility. parseNextFlags and the harness seams read the
+// same rule, so they never disagree on one command.
+export function nextArgsCarryRequestWords(args: readonly string[]): boolean {
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    if (arg === "--") return i + 1 < args.length;
+    if (arg.startsWith("-")) continue;
+    if (i > 0 && args[i - 1].startsWith("-")) continue;
+    return true;
+  }
+  return false;
+}
 export const WORKSPACE_VERBS: ReadonlySet<string> = new Set([
   "space",
   "space-create",
@@ -1035,6 +1052,7 @@ export function isReadOnlyNextArgv(argv: readonly string[]): boolean {
   if (parsePluginCommand(args).kind !== "not-plugin" || parseKnowledgeCommand(args).kind !== "not-knowledge") return false;
   const workspace = parseWorkspaceCommand(args);
   if (workspace.kind !== "not-workspace") return workspace.kind !== "create-intent";
+  if (nextArgsCarryRequestWords(args)) return false;
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
     if (arg === "--") break;
@@ -1704,6 +1722,8 @@ export function classifyTerminalCommand(argv: string[]): TerminalCommand | null 
     if (workspaceCommand.kind === "create-intent") return null;
     return terminalCommandFromWorkspaceCommand(workspaceCommand, args);
   }
+  // Among the person's own words a utility flag is part of their request.
+  if (nextArgsCarryRequestWords(args)) return null;
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
     if (READ_ONLY_FLAGS.has(a)) {
