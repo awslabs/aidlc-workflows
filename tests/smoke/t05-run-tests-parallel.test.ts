@@ -77,6 +77,7 @@ import { afterAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
   existsSync,
+  mkdirSync,
   mkdtempSync,
   readFileSync,
   readdirSync,
@@ -88,6 +89,8 @@ import { join } from "node:path";
 import { REPO_ROOT } from "../harness/fixtures.ts";
 import {
   assignWeightedShards,
+  orderLongestFirst,
+  parseOrderWeights,
   parseShardSpec,
   type ShardConfig,
 } from "../lib/test-sharding.ts";
@@ -267,11 +270,11 @@ describe("t05 run-tests.sh --parallel flag (migrated from t05-run-tests-parallel
     expect(r.out).not.toContain("RESULT: PASS");
   }, PER_TEST_TIMEOUT);
 
-  test("eight weighted unit shards cover every file once and preserve binary affinity", () => {
+  test("twelve weighted unit shards cover every file once and preserve binary affinity", () => {
     const files = readdirSync(join(TESTS_ROOT, "unit"))
       .filter((file) => file.endsWith(".test.ts"))
       .sort();
-    const shards = assignWeightedShards(files, 8, UNIT_SHARD_CONFIG);
+    const shards = assignWeightedShards(files, 12, UNIT_SHARD_CONFIG);
     const flattened = shards.flat();
 
     expect(shards.every((shard) => shard.length > 0)).toBe(true);
@@ -368,6 +371,45 @@ describe("t05 run-tests.sh --parallel flag (migrated from t05-run-tests-parallel
     }
   }, PER_TEST_TIMEOUT);
 
+  test("machine settings stay isolated across every settings-hierarchy case", () => {
+    const host = mkdtempSync(join(tmpdir(), "aidlc-t05-host-machine-"));
+    const machine = join(host, "aidlc");
+    mkdirSync(machine);
+    const policy = join(machine, "aidlc.settings.json");
+    const sentinel = "invalid host policy: tests must never read or overwrite this\n";
+    writeFileSync(policy, sentinel);
+    try {
+      const result = run(["--unit", "--no-llm", "--filter", "^t298-settings-hierarchy$"], {
+        AIDLC_TEST_PACKAGE_READY: "1",
+        AIDLC_INSTALL_ROOT: machine,
+        AIDLC_BIN_DIR: join(host, "bin"),
+        XDG_DATA_HOME: host,
+        LOCALAPPDATA: host,
+      });
+      expect(result.status, result.out).toBe(0);
+      expect(result.out).toContain("=== DONE t298-settings-hierarchy.test.ts (PASS) ===");
+      expect(readFileSync(policy, "utf-8")).toBe(sentinel);
+      // Windows keeps its own caches under LOCALAPPDATA (Microsoft\...) for any
+      // process that runs with it; only AI-DLC's entries matter here.
+      expect(readdirSync(host).filter((name) => name !== "Microsoft")).toEqual(["aidlc"]);
+      expect(readdirSync(machine)).toEqual(["aidlc.settings.json"]);
+    } finally {
+      rmSync(host, { recursive: true, force: true });
+    }
+  }, PER_TEST_TIMEOUT);
+
+  test("debug logging keeps the source project separate from machine fixtures", () => {
+    const result = run([
+      "--debug", "-P", "8", "--unit", "--no-llm", "--filter", "^t230-dispatcher-routes$",
+    ], {
+      AIDLC_TEST_PACKAGE_READY: "1",
+      BUN_OPTIONS: "--test-name-pattern=compose.translates.to.orchestrate.next.compose",
+    });
+    expect(result.status, result.out).toBe(0);
+    expect(result.out).toContain("=== DONE t230-dispatcher-routes.test.ts (PASS) ===");
+    expect(result.out).not.toContain("cannot use an AI-DLC machine install");
+  }, PER_TEST_TIMEOUT);
+
   // --- 3. --parallel 1 ≡ serial on the smoke tier --------------------------
   // .sh compared the (Test files / Total assertions) summary lines between
   // `--smoke` and `--smoke --parallel 1`. (The .sh's `^Failed:` alternative
@@ -415,6 +457,23 @@ describe("t05 run-tests.sh --parallel flag (migrated from t05-run-tests-parallel
     const banner =
       r.out.split("\n").find((l) => l.startsWith("## Integration Tests")) ?? "";
     expect(banner).toContain("(parallel=4)");
+  }, PER_TEST_TIMEOUT);
+
+  // --- 5b. Parallel integration admits the longest file first --------------
+  // A long file admitted last sets the tier's wall time, so the runner orders
+  // parallel integration files by tests/integration-weights.json (prior CI
+  // durations); unweighted files and ties keep name order.
+  test("parallel integration starts files longest-first by their recorded weights", () => {
+    const pair = ["t12-state-fixture-validation", "t89"];
+    const order = parseOrderWeights(readFileSync(join(TESTS_ROOT, "integration-weights.json"), "utf-8"));
+    expect(order).toBeDefined();
+    const expected = orderLongestFirst(pair, (name) => name, order!);
+    // The pair proves the ordering only while its weights reverse name order.
+    expect(expected, "pick two integration files whose weights reverse name order").toEqual(["t89", "t12-state-fixture-validation"]);
+    const r = run(["--integration", "--parallel", "2", "--no-llm", "--filter", "^(t12-state-fixture-validation|t89)$"]);
+    expect(r.status, r.out).toBe(0);
+    const starts = [...r.out.matchAll(/^=== START (\S+)\.test\.ts ===$/gm)].map((match) => match[1]);
+    expect(starts).toEqual(expected);
   }, PER_TEST_TIMEOUT);
 
   // --- 6. Interleaving observed under --parallel 4 -------------------------

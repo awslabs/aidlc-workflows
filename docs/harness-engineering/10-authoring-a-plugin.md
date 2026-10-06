@@ -323,9 +323,9 @@ runs only while the plugin is enabled. It receives `AIDLC_PROJECT_DIR`,
 without other stdout:
 
 Doctor discovery derives installed plugin identities from owned stage and scope
-metadata. A plugin must therefore own at least one stage or scope for its doctor
-script to be discoverable; a tools-, sensors-, or knowledge-only plugin is not
-enough on its own.
+metadata and from the composition sidecars under `tools/data/`. A plugin whose
+compose merged contributions (sensors, produces, overlays) is discoverable even
+when it owns no stage or scope.
 
 ```typescript
 import { existsSync } from "node:fs";
@@ -392,8 +392,10 @@ there, writes `plugin-compose-<key>.json` and hash-proven
 `plugin-owned-<key>.json`, then commits the staged diff through the shared
 transaction engine. A fault restores all files, modes, stamps, and ownership
 records. `--prune-missing` is intentionally stricter: it requires a proved full
-host inventory, explicit confirmation (`--yes` in automation), and unchanged
-owned hashes; local or unowned bytes are refused.
+host inventory, `--yes` in automation, and unchanged owned hashes; local or
+unowned bytes are refused. At a terminal it asks nothing: it names the plugins
+it prunes and how to get them back (reinstall in the host, then sync), then
+prunes.
 
 ### Project selection
 

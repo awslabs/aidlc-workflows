@@ -159,7 +159,7 @@ describe("t-acp-kiro compose in-flight recompose journey (live Kiro ACP)", () =>
         });
         // Kiro's adapter pre-dispatches this literal compose request, so the
         // composer path is already selected even without a visible next call.
-        // The named-stage fast path applies only before next compose runs.
+        // Named stages go through next --skip or --add only before next compose runs.
         // Match the captured native crew signature, not other tools mentioning an agent.
         const composerIndex = r1.toolCalls.findIndex((call) => {
           const input = call.rawInput;

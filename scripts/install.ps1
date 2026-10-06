@@ -683,6 +683,9 @@ try {
 
   $binary = Join-Path $temporary 'aidlc-windows-x64.exe'
   $arguments = @('system', 'lifecycle', 'install-apply', '--version', $Version, '--from', $temporary)
+  # -Yes also answers yes to replacing a bin\aidlc that AI-DLC did not write
+  # (the file is kept as a backup); at a terminal the binary asks instead.
+  if ($Yes) { $arguments += '--yes' }
   $applyOutput = (& $binary @arguments --json | Out-String).Trim()
   $applyCode = $LASTEXITCODE
   try {

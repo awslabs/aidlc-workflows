@@ -240,6 +240,12 @@ class SyntheticChild extends EventEmitter {
   }
 }
 
+// Startup budget for a synthetic launch that must fail or time out on its own.
+// The launcher spends this budget copying the seed profile before it spawns, and
+// that copy took up to 18 ms on loaded CI runners (a 10 ms budget ran out before
+// the spawn). 250 ms leaves over 10x that, and a timeout case waits only that long.
+const SYNTHETIC_STARTUP_TIMEOUT_MS = 250;
+
 function fixture() {
   const root = scratch();
   const seed = join(root, "seed");
@@ -747,7 +753,7 @@ describe("Kiro IDE port and profile ownership", () => {
   test.each(["linux", "win32"] as const)("%s startup timeout before discovery terminates only the authoritative child", async (host) => {
     const { root, options, env } = fixture();
     const child = new SyntheticChild();
-    await expect(launchKiroIde({ ...options, startupTimeoutMs: 10 }, {
+    await expect(launchKiroIde({ ...options, startupTimeoutMs: SYNTHETIC_STARTUP_TIMEOUT_MS }, {
       platform: host,
       env: { ...env, AIDLC_TEST_WORKER_PROCESS_GROUP: host === "win32" ? "0" : "1" },
       spawn: () => child.child,
@@ -869,7 +875,7 @@ describe("Kiro IDE port and profile ownership", () => {
       const { root, options, env } = fixture();
       const child = new SyntheticChild();
       let terminations = 0;
-      const launching = launchKiroIde({ ...options, startupTimeoutMs: 10 }, {
+      const launching = launchKiroIde({ ...options, startupTimeoutMs: SYNTHETIC_STARTUP_TIMEOUT_MS }, {
         env,
         spawn: () => {
           if (failure === "spawn-throw") throw new Error("synthetic spawn threw");

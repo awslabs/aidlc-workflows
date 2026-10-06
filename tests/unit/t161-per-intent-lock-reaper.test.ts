@@ -171,7 +171,8 @@ describe("t161 keying invariants", () => {
   test("release stays bound when active-space changes after acquisition", () => {
     const projectDir = mkdtempSync(join(tmpdir(), "aidlc-t161-space-shift-"));
     const intent = "auth-aaaaaaaa";
-    mkdirSync(join(projectDir, "aidlc"), { recursive: true });
+    mkdirSync(join(projectDir, "aidlc", "spaces", "space-one"), { recursive: true });
+    mkdirSync(join(projectDir, "aidlc", "spaces", "space-two"), { recursive: true });
     writeFileSync(join(projectDir, "aidlc", "active-space"), "space-one\n");
     const acquiredLock = auditLockDir(projectDir, intent, "space-one");
     try {
@@ -654,14 +655,16 @@ describe("t161 per-intent lock independence", () => {
     const driver = join(scratch, "owner.ts");
     writeFileSync(driver, [
       `import { existsSync, writeFileSync } from "node:fs";`,
-      `import { acquireAuditLock, auditLockDir, releaseAuditLock } from ${JSON.stringify(join(REPO_ROOT, "core", "tools", "aidlc-lib.ts"))};`,
+      `import { acquireAuditLock, auditLockOwnedByProcess, releaseAuditLock } from ${JSON.stringify(join(REPO_ROOT, "core", "tools", "aidlc-lib.ts"))};`,
       `const projectDir = ${JSON.stringify(projectDir)};`,
       // The acquisition budget is also the release budget: three seconds.
       'if (!acquireAuditLock(projectDir, 300, 10)) { process.stdout.write("LOST"); process.exit(0); }',
       `writeFileSync(${JSON.stringify(held)}, "");`,
       `while (!existsSync(${JSON.stringify(go)})) Bun.sleepSync(5);`,
       "releaseAuditLock(projectDir);",
-      'process.stdout.write(existsSync(auditLockDir(projectDir)) ? "STUCK" : "RELEASED");',
+      // The waiting test process takes the lock as soon as it is free, so a
+      // lock directory alone may be the waiter's: judge only this owner's stamp.
+      'process.stdout.write(auditLockOwnedByProcess(projectDir, process.pid) ? "STUCK" : "RELEASED");',
     ].join("\n"));
     const owner = Bun.spawn([process.execPath, driver], { stdout: "pipe", stderr: "pipe" });
     const ownerOutput = new Response(owner.stdout).text();

@@ -133,6 +133,12 @@ import {
 import * as os from "node:os";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, posix, win32 } from "node:path";
+import {
+  nextPersonTurnCarriesPicks,
+  startPersonTurnSession,
+  submittedToPersonTurnSession,
+  typedIntoPersonTurnSession,
+} from "./person-turns.ts";
 import { stateFilePathFor } from "./sdk-drive.ts";
 import { createBunBackend } from "./tui-bun-backend.ts";
 import { nativeCleanupDeadlineMs } from "./tui-bun-process.ts";
@@ -696,7 +702,30 @@ async function cmdStart(backend: Backend, a: Args): Promise<void> {
     command,
     requestedCommand: command.join("\0") === a.rest.join("\0") ? undefined : a.rest,
   });
+  if (isOwnedTuiFixture(cwd)) startPersonTurnSession(session, realpathSync(cwd));
   await backend.start(session, cwd, width, height, command);
+}
+
+/** Every submit (a prompt, a menu choice) is a turn from the person, with what was typed for it. */
+function recordingPersonTurns(backend: Backend): Backend {
+  const paste = backend.paste;
+  return {
+    ...backend,
+    send(session, keys, literal, noEnter) {
+      if (!noEnter) submittedToPersonTurnSession(session, keys);
+      else if (!literal && keys === "Enter") submittedToPersonTurnSession(session, "");
+      else if (literal) typedIntoPersonTurnSession(session, keys);
+      return backend.send(session, keys, literal, noEnter);
+    },
+    ...(paste
+      ? {
+        paste(session: string, text: string) {
+          typedIntoPersonTurnSession(session, text);
+          return paste.call(backend, session, text);
+        },
+      }
+      : {}),
+  };
 }
 
 async function cmdSend(backend: Backend, a: Args): Promise<void> {
@@ -1549,7 +1578,14 @@ function makeTerminator(projectDir: string, a: Args): Terminator {
 // Anchor it to a numbered option so the ordinary `>` input prompt cannot match.
 const AUQ_CARET_OPTION = /^\s*❯\s+\d+\.\s/m;
 function gridHasCaret(grid: string): boolean {
-  return AUQ_CARET_OPTION.test(grid);
+  return AUQ_CARET_OPTION.test(unglueRules(grid));
+}
+
+// A Windows repaint can leave a rule's `─` cells glued to a row's text, even in
+// the cell a space belongs in (`❯ 1.─Approve───`). The menu readers take such a
+// row as the text it carries; a row that is only a rule stays a rule.
+export function unglueRules(grid: string): string {
+  return grid.split("\n").map((line) => (/[^\s─]/.test(line) ? line.replace(/─+/g, " ") : line)).join("\n");
 }
 
 // Is a waiting AskUserQuestion menu painted on the grid right now? A menu shows
@@ -1564,7 +1600,7 @@ export function gridHasMenu(grid: string): boolean {
 // The rows that keep an answered menu actionable: its caret row through its
 // footer. Other rows can repaint while these still take a key.
 function actionableMenuRange(grid: string): [number, number] | null {
-  const lines = grid.split("\n");
+  const lines = unglueRules(grid).split("\n");
   const caret = lines.findLastIndex((line) => AUQ_CARET_OPTION.test(line));
   if (caret < 0) return null;
   let footer = caret;
@@ -1691,6 +1727,26 @@ function gridIsSubmitScreen(grid: string): boolean {
   return grid.includes("Submit answers");
 }
 
+// The picks a form's review screen lists above Submit, one `→ <choice>` line
+// per answered question, read from the last review on screen up to its own
+// Submit. When the review is out of view, the tab strip's ticked tabs count
+// them instead; the strip's tabs cap what the review can count.
+export function reviewedPicks(grid: string): string[] {
+  const lines = grid.split("\n");
+  const strip = lines.findLast((line) => line.includes("←") && line.includes("Submit")) ?? "";
+  const tabs = (strip.match(/[☒☐]/g) ?? []).length;
+  const ticked = (strip.match(/☒/g) ?? []).length;
+  const review = lines.findLastIndex((line) => line.includes("Review your answers"));
+  if (review >= 0) {
+    const end = lines.findIndex((line, at) => at > review && /Ready to submit|Submit answers/.test(line));
+    const picks = lines.slice(review + 1, end === -1 ? undefined : end)
+      .map((line) => /^\s*│?\s*→\s+(.*\S)\s*$/.exec(line)?.[1])
+      .filter((pick): pick is string => pick !== undefined);
+    if (picks.length > 0) return tabs > 0 ? picks.slice(0, tabs) : picks;
+  }
+  return Array.from({ length: ticked }, () => "");
+}
+
 // Is the painted question a MULTI-SELECT ("select all that apply")? The AUQ key
 // model, confirmed from the claude bundle AND by live single-keystroke probing of
 // the real widget (2026-06-06):
@@ -1708,7 +1764,7 @@ function gridIsSubmitScreen(grid: string): boolean {
 // review screen) nor the tab-strip `☐`/`☒` glyphs (present on EVERY tab,
 // single-select ones included) — both misfire.
 function gridIsMultiSelect(grid: string): boolean {
-  return /\d+\.\s*\[[ ✔]\]/.test(grid); // a numbered option line carrying a checkbox
+  return /\d+\.\s*\[[ ✔]\]/.test(unglueRules(grid)); // a numbered option line carrying a checkbox
 }
 
 // Is this a MULTI-TAB AUQ form (more than one question batched into one gate)? Such
@@ -1731,7 +1787,7 @@ function gridIsMultiTabForm(grid: string): boolean {
 // actually rendered.
 function parseMenuOptions(grid: string): { num: number; label: string }[] {
   const out: { num: number; label: string }[] = [];
-  for (const line of grid.split("\n")) {
+  for (const line of unglueRules(grid).split("\n")) {
     const m = /^\s*❯?\s*(\d+)\.\s+(.*\S)\s*$/.exec(line);
     if (m) out.push({ num: Number(m[1]), label: m[2].trim() });
   }
@@ -2297,6 +2353,9 @@ async function cmdAnswerGate(backend: Backend, a: Args): Promise<void> {
         action: "submit",
         screen: grid,
       });
+      // The Submit carries every pick on the form, one answer each.
+      const picks = reviewedPicks(grid);
+      nextPersonTurnCarriesPicks(session, Math.max(picks.length, 1), picks.filter(Boolean).join("; "));
       await backend.send(session, "Enter", false, true); // commit the whole form
       if (revisionFeedbackPending) {
         revisionFeedbackPending = false;
@@ -2310,13 +2369,14 @@ async function cmdAnswerGate(backend: Backend, a: Args): Promise<void> {
       });
       // A retry after a lost final key finds the box already ticked; another
       // Space would clear it.
-      if (!/^\s*❯\s+\d+\.\s*\[✔\]/m.test(grid)) {
+      if (!/^\s*❯\s+\d+\.\s*\[✔\]/m.test(unglueRules(grid))) {
         await backend.send(session, "Space", false, true); // toggle the Recommended option ON
         await sleep(150);
       }
       if (gridIsMultiTabForm(grid)) {
         await backend.send(session, "Right", false, true); // advance to the next tab / Submit
       } else {
+        nextPersonTurnCarriesPicks(session, 1);
         await backend.send(session, "Enter", false, true); // lone multi-select: commit it
       }
     } else if (rejectFirstGate && gridIsApprovalGate(grid)) {
@@ -2333,6 +2393,7 @@ async function cmdAnswerGate(backend: Backend, a: Args): Promise<void> {
       // Revision Count++). Consume the one-shot so every later gate is approved.
       await backend.send(session, "Down", false, true);
       await sleep(150);
+      nextPersonTurnCarriesPicks(session, requestChangesNeedsSubmit ? 0 : 1);
       await backend.send(session, "Enter", false, true);
       rejectFirstGate = false;
       process.stdout.write("answer-gate: rejected first approval gate (Request changes)\n");
@@ -2358,6 +2419,8 @@ async function cmdAnswerGate(backend: Backend, a: Args): Promise<void> {
         action: "single_select_default",
         screen: grid,
       });
+      // A pick on one tab of a form is counted with the form's Submit.
+      nextPersonTurnCarriesPicks(session, gridIsMultiTabForm(grid) ? 0 : 1);
       await backend.send(session, "Enter", false, true); // select Recommended + advance
     }
     answered++;
@@ -2392,7 +2455,7 @@ async function main(): Promise<void> {
   }
   // Capture and retirement remain available during the reserved cleanup phase.
 
-  const backend = selectBackend();
+  const backend = recordingPersonTurns(selectBackend());
   const withinWorkDeadline = (requestedMs: number, run: () => Promise<void>): Promise<void> => {
     // Zero is an immediate poll. Leave its existing result/error contract intact.
     if (requestedMs === 0) return run();

@@ -1,5 +1,6 @@
 // covers: hook:aidlc-continue-workflow
 // covers: tool:aidlc, function:renderCommandHelp, tool:aidlc-sensor, tool:aidlc-swarm, hook:aidlc-validate-state, hook:aidlc-review-freeze, hook:aidlc-statusline
+// covers: function:kiroLayoutOf, function:kiroTreeLayout, function:installedKiroLayout
 import {
   NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS,
   NATIVE_STARTUP_TIMEOUT_MS,
@@ -51,8 +52,11 @@ import {
   discoverableRuntimeHarnessDir,
   discoverProjectHarnesses,
   isCompiledModuleUrl,
+  kiroLayoutOf,
+  kiroTreeLayout,
   runtimeHarnessDir,
 } from "../../core/tools/aidlc-runtime-paths.ts";
+import { installedKiroLayout } from "../../core/tools/aidlc-lib.ts";
 import { parseSensorManifest } from "../../core/tools/aidlc-sensor-schema.ts";
 import { AIDLC_VERSION } from "../../core/tools/aidlc-version.ts";
 import {
@@ -551,6 +555,13 @@ describe("t230 dispatcher route parity", () => {
       fixture: true,
     },
     {
+      name: "config collaborators maps to config-change",
+      routerArgs: ["engine", "config", "set", "collaborators", "off"],
+      tool: "aidlc-utility.ts",
+      toolArgs: ["config-change", "--collaborators", "off"],
+      fixture: true,
+    },
+    {
       name: "config summary confirmation maps to config-change",
       routerArgs: ["engine", "config", "set", "summary-confirmation", "off"],
       tool: "aidlc-utility.ts",
@@ -647,6 +658,13 @@ describe("t230 dispatcher route parity", () => {
       routerArgs: ["engine", "workspace", "detect"],
       tool: "aidlc-utility.ts",
       toolArgs: ["detect"],
+      fixture: true,
+    },
+    {
+      name: "workspace reclassify maps to utility reclassify",
+      routerArgs: ["engine", "workspace", "reclassify", "--project-type", "brownfield"],
+      tool: "aidlc-utility.ts",
+      toolArgs: ["reclassify", "--project-type", "brownfield"],
       fixture: true,
     },
     {
@@ -1280,11 +1298,13 @@ describe("t230 version-aware startup", () => {
       });
       expect(result.exitCode, result.stderr.toString()).toBe(0);
       expect(readFileSync(marker, "utf-8")).toBe("reserved\n");
-      expect(existsSync(join(machine, "reservations"))).toBe(false);
+      expect(readdirSync(join(machine, "reservations"))).toEqual([]);
     },
   );
 
-  test("Kiro IDE adapter routing never waits for its open stdin pipe", async () => {
+  // `kiro` reaches the same KAS adapter once the rows share that name: the
+  // installed tree's layout, not the adapter name, keeps stdin unread.
+  for (const harness of ["kiro-ide", "kiro"] as const) test(`Kiro IDE adapter routing never waits for its open stdin pipe (engine adapter ${harness})`, async () => {
     const project = makeProject();
     cpSync(
       join(REPO_ROOT, "dist", "kiro-ide", ".kiro"),
@@ -1293,7 +1313,7 @@ describe("t230 version-aware startup", () => {
     );
     const child = spawn(
       BUN,
-      [DISPATCHER, "engine", "adapter", "kiro-ide", "mint", "--project-dir", project],
+      [DISPATCHER, "engine", "adapter", harness, "mint", "--project-dir", project],
       {
         cwd: project,
         env: childEnv(project, {
@@ -1774,6 +1794,61 @@ describe("t230 dispatcher dev and compiled in-process modes", () => {
     expect(labels.some((label) => label.includes(".claude/settings.json"))).toBe(false);
   });
 
+  test("a Kiro tree's layout comes from its declaration, then its row name, then its conductor", () => {
+    // Each shipped row declares its layout in harness.json.
+    expect(kiroTreeLayout(join(REPO_ROOT, "dist", "kiro", ".kiro"))).toBe("agent-v1");
+    expect(kiroTreeLayout(join(REPO_ROOT, "dist", "kiro-ide", ".kiro"))).toBe("kas");
+    // The declaration wins over the row name, so a `kiro` row can be either layout.
+    expect(kiroLayoutOf({ name: "kiro", kiroLayout: "kas" })).toBe("kas");
+    expect(kiroLayoutOf({ name: "kiro-ide", kiroLayout: "agent-v1" })).toBe("agent-v1");
+    // Trees installed before the field existed: the row name was the layout.
+    expect(kiroLayoutOf({ name: "kiro-ide", distribution: "kiro-ide" })).toBe("kas");
+    expect(kiroLayoutOf({ distribution: "kiro" })).toBe("agent-v1");
+    expect(kiroLayoutOf({ name: "claude", kiroLayout: "elsewhere" })).toBeNull();
+    // Without readable metadata the conductor file decides.
+    const projectDir = mkdtempSync(join(tmpdir(), "aidlc-t230-kiro-layout-"));
+    tempProjects.add(projectDir);
+    const tree = join(projectDir, ".kiro");
+    mkdirSync(join(tree, "agents"), { recursive: true });
+    expect(kiroTreeLayout(tree)).toBeNull();
+    writeFileSync(join(tree, "agents", "aidlc.json"), "{}\n");
+    expect(kiroTreeLayout(tree)).toBe("agent-v1");
+    writeFileSync(join(tree, "agents", "aidlc.md"), "---\nname: aidlc\n---\n");
+    expect(kiroTreeLayout(tree)).toBe("kas");
+    mkdirSync(join(tree, "tools", "data"), { recursive: true });
+    writeFileSync(join(tree, "tools", "data", "harness.json"), "{");
+    expect(kiroTreeLayout(tree)).toBe("kas");
+  });
+
+  test("a project's Kiro layout trusts the KAS adapter's own name and reads the tree for `kiro`", () => {
+    const saved = { name: process.env.AIDLC_HARNESS_NAME, dir: process.env.AIDLC_HARNESS_DIR };
+    const restore = (key: "AIDLC_HARNESS_NAME" | "AIDLC_HARNESS_DIR", value: string | undefined) => {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    };
+    try {
+      process.env.AIDLC_HARNESS_DIR = ".kiro";
+      for (const [row, expected] of [
+        ["kiro-ide", { "kiro-ide": "kas", kiro: "kas", unset: "kas", claude: null }],
+        ["kiro", { "kiro-ide": "kas", kiro: "agent-v1", unset: "agent-v1", claude: null }],
+      ] as const) {
+        const projectDir = mkdtempSync(join(tmpdir(), `aidlc-t230-installed-${row}-`));
+        tempProjects.add(projectDir);
+        cpSync(join(REPO_ROOT, "dist", row, ".kiro"), join(projectDir, ".kiro"), { recursive: true });
+        for (const [name, layout] of Object.entries(expected)) {
+          restore("AIDLC_HARNESS_NAME", name === "unset" ? undefined : name);
+          expect(installedKiroLayout(projectDir), `${row} tree, AIDLC_HARNESS_NAME=${name}`).toBe(layout);
+        }
+      }
+      process.env.AIDLC_HARNESS_DIR = ".claude";
+      delete process.env.AIDLC_HARNESS_NAME;
+      expect(installedKiroLayout(mkdtempSync(join(tmpdir(), "aidlc-t230-installed-claude-")))).toBeNull();
+    } finally {
+      restore("AIDLC_HARNESS_NAME", saved.name);
+      restore("AIDLC_HARNESS_DIR", saved.dir);
+    }
+  });
+
   test("project harness discovery accepts a metadata-declared future harness", () => {
     const projectDir = mkdtempSync(join(tmpdir(), "aidlc-t230-future-harness-"));
     tempProjects.add(projectDir);
@@ -2011,8 +2086,11 @@ describe("t230 native review-brief dispatch", () => {
       expect(stopped.status, `${stopped.stdout}\n${stopped.stderr}`).toBe(0);
       const feedback = JSON.parse(stopped.stdout) as { decision: string; reason: string };
       expect(feedback.decision).toBe("block");
-      const recovery = /`([^`]+ next)`/.exec(feedback.reason)?.[1];
-      expect(recovery).toBe("aidlc engine orchestrate next");
+      // A stage whose rules ride inside its run-stage names a fresh `next`; one
+      // whose rules arrive first (most stages on Copilot) names the receipt of
+      // the part in hand.
+      const recovery = /`(aidlc engine orchestrate (?:next|continue \S+))`/.exec(feedback.reason)?.[1];
+      expect(recovery, feedback.reason).toBeDefined();
       let command = recovery!;
       let kind = "";
       for (let part = 0; part < 20; part++) {
@@ -2182,6 +2260,7 @@ describe("t230 dispatcher route completeness", () => {
       [["engine", "scope", "resolve-env"], "scope"],
       [["engine", "orchestrate", "help"], "engine-orchestrate-help"],
       [["engine", "workspace", "detect"], "workspace"],
+      [["engine", "workspace", "reclassify"], "workspace"],
       [["engine", "workspace", "codekb"], "workspace"],
       [["engine", "workspace", "codekb-scope-diff"], "workspace"],
       [["engine", "gen", "stage-table"], "gen"],
@@ -2201,6 +2280,7 @@ describe("t230 dispatcher route completeness", () => {
       [["engine", "config", "set", "depth"], "config"],
       [["engine", "status"], "top-status"],
       [["engine", "recompose"], "top-recompose"],
+      [["engine", "now"], "top-now"],
     ];
     for (const [args, routeId] of semanticRoutes) {
       expect(routePolicyFor(args)?.id, args.join(" ")).toBe(routeId);
@@ -2261,6 +2341,11 @@ describe("t230 dispatcher route completeness", () => {
       type: "delegate",
       tool: TOOLS.utility,
       args: ["status"],
+    });
+    expect(resolveAction(["engine", "now"])).toEqual({
+      type: "delegate",
+      tool: TOOLS.utility,
+      args: ["now"],
     });
     expect(resolveAction(["engine", "recompose", "--skip", "market-research"]))
       .toEqual({
@@ -2815,7 +2900,7 @@ describe("t230 dispatcher help and errors", () => {
     expect(text).toContain(
       "Operations on this user's aidlc installation; never a system-wide or root install:",
     );
-    expect(text).toContain("  rollback: [--version <version>|--list]");
+    expect(text).toContain("  rollback: [<version>|--version <version>|--list]");
     expect(text).toContain("  completions: <bash|zsh|fish|powershell>");
     expect(text).toContain("  lifecycle: install-apply");
     expect(text).toContain("install-profile --profile <path>");
@@ -2896,6 +2981,14 @@ describe("t230 dispatcher help and errors", () => {
     );
   });
 
+  test("a system noun with no verb points to system help, not engine help", () => {
+    const res = viaDispatcher(["system", "versions"], REPO_ROOT);
+    expect(res.exitCode).toBe(2);
+    expect(res.stderr.toString("utf-8")).toBe(
+      "aidlc: missing verb for system noun 'versions'; try 'aidlc system --help'\n",
+    );
+  });
+
   test("plugin help and invalid plugin verbs use the shared noun grammar", () => {
     const help = viaDispatcher(["engine", "plugin", "help"], REPO_ROOT);
     expect(help.exitCode).toBe(0);
@@ -2942,6 +3035,40 @@ describe("t230 dispatcher help and errors", () => {
     expect(graph.exitCode).not.toBe(0);
     expect(graph.stderr.toString("utf-8")).toContain("requires an installed project harness");
     expect(existsSync(join(projectDir, ".claude"))).toBe(false);
+  });
+});
+
+// A copy runs its tools through `bun <harness>/tools/aidlc.ts`, which spawns
+// each tool. Input piped to the command reaches the tool, read to its end even
+// when the writer is slow, as in the compiled binary.
+describe("t230 a tool run through the dispatcher reads piped input", () => {
+  test("validate-grid reads a proposal written slowly to stdin", async () => {
+    const projectDir = mkdtempSync(join(tmpdir(), "aidlc-t230-stdin-"));
+    tempProjects.add(projectDir);
+    cpSync(join(REPO_ROOT, "dist", "claude"), projectDir, { recursive: true });
+    const graph = JSON.parse(
+      readFileSync(join(projectDir, ".claude", "tools", "data", "stage-graph.json"), "utf-8"),
+    ) as Array<{ slug: string }>;
+    const proposal = JSON.stringify({ stages: Object.fromEntries(graph.map(({ slug }) => [slug, "EXECUTE"])) });
+    // A pipe, as a shell or a script's subprocess gives it.
+    const child = Bun.spawn([
+      BUN,
+      join(projectDir, ".claude", "tools", "aidlc.ts"),
+      "engine", "graph", "validate-grid", "--project-type", "greenfield", "--proposal", "/dev/stdin",
+    ], { cwd: projectDir, stdin: "pipe", stdout: "pipe", stderr: "pipe" });
+    const half = Math.floor(proposal.length / 2);
+    child.stdin.write(proposal.slice(0, half));
+    child.stdin.flush();
+    await new Promise((wait) => setTimeout(wait, 400));
+    child.stdin.write(proposal.slice(half));
+    child.stdin.end();
+    const [code, stdout, stderr] = await Promise.all([
+      child.exited,
+      new Response(child.stdout).text(),
+      new Response(child.stderr).text(),
+    ]);
+    expect(code, `${stdout}${stderr}`).toBe(0);
+    expect(JSON.parse(stdout).valid, stdout).toBe(true);
   });
 });
 
@@ -3033,6 +3160,32 @@ describe("t230 dispatcher hook routing", () => {
       existsSync(join(seededRecordDir(projectDir), ".aidlc-engine/hooks-health", heartbeat)) ||
         existsSync(join(dirname(seededRecordDir(projectDir)), ".aidlc-engine/hooks-health", heartbeat)),
     ).toBe(true);
+  });
+
+  // Claude Code shows a blocking hook's stderr behind "[<hook command>]: ";
+  // its deny decision shows only the reason. Exit 2 still blocks on its own.
+  test("a guard refusal on Claude Code also carries Claude's deny, with the same words", () => {
+    const projectDir = makeProject();
+    const input = JSON.stringify({
+      hook_event_name: "PreToolUse",
+      session_id: "t230-guard-deny",
+      cwd: projectDir,
+      tool_name: "Bash",
+      tool_input: { command: "bun .claude/tools/aidlc-state.ts approve intent-capture" },
+    });
+    const claude = viaDispatcher(["engine", "hook", "state-transition-guard"], projectDir, { AIDLC_HARNESS_NAME: "claude" }, input);
+    expect(claude.exitCode, claude.stderr.toString("utf-8")).toBe(2);
+    const reason = claude.stderr.toString("utf-8").trim();
+    expect(reason).toContain("Stage status cannot be changed");
+    expect(JSON.parse(claude.stdout.toString("utf-8"))).toEqual({
+      hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: reason },
+    });
+
+    // Another tool's adapter reads stderr only: nothing changes there.
+    const kiro = viaDispatcher(["engine", "hook", "state-transition-guard"], projectDir, { AIDLC_HARNESS_NAME: "kiro" }, input);
+    expect(kiro.exitCode).toBe(2);
+    expect(kiro.stdout.toString("utf-8")).toBe("");
+    expect(kiro.stderr.toString("utf-8")).toContain("Stage status cannot be changed");
   });
 
   test("statusline dispatches to run(input) and renders a line", () => {

@@ -87,14 +87,15 @@ the framework deliberately removed it. A stage decides what fires on its
 outputs by naming the sensor in its own frontmatter:
 
 ```yaml
-# core/aidlc-common/stages/construction/code-generation.md
+# core/aidlc-common/stages/construction/ci-pipeline.md
 ---
-slug: code-generation
+slug: ci-pipeline
 phase: construction
 sensors:
+  - required-sections
+  - upstream-coverage
   - linter
   - type-check
-  - traceability
 ---
 ```
 

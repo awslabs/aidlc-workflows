@@ -19,7 +19,7 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join, relative, sep } from "node:path";
 import { renderCompletion, type Shell } from "../../core/tools/aidlc-completions.ts";
-import { preservedUninstallPaths, untrustedPathList } from "../../core/tools/aidlc-lifecycle.ts";
+import { preservedUninstallPaths, untrustedPathList, windowsPosixShim } from "../../core/tools/aidlc-lifecycle.ts";
 import { buildUninstallPlan } from "../../core/tools/aidlc-uninstall-plan.ts";
 
 const VERSION = "1.2.3";
@@ -151,8 +151,11 @@ function plan(fixture: Fixture, purge = false): ReturnType<typeof buildUninstall
   const result = readOnly(fixture, () => buildUninstallPlan(purge));
   expect(new Set(result.files.map((file) => file.path)).size).toBe(result.files.length);
   expect(new Set(result.directories).size).toBe(result.directories.length);
+  // The bin directory may sit outside the install root; the command and, on
+  // Windows, the Git Bash launcher beside it are the only files planned there.
+  const besideCommand = [fixture.command, join(fixture.bin, "aidlc")];
   for (const file of result.files) {
-    expect(file.path === fixture.command || file.path.startsWith(`${fixture.root}${sep}`)).toBe(true);
+    expect(besideCommand.includes(file.path) || file.path.startsWith(`${fixture.root}${sep}`), file.path).toBe(true);
     const stat = lstatSync(file.path);
     if (file.path === fixture.command && process.platform !== "win32" && stat.isSymbolicLink()) {
       expect(file.expected).toBe(`symlink:${readlinkSync(file.path)}`);
@@ -386,6 +389,34 @@ describe("uninstall file ownership plans", () => {
       expect(result.preserved).toEqual([]);
     }, { customBin: true });
   });
+
+  test.skipIf(process.platform !== "win32")(
+    "plans an installer-owned Windows Git Bash launcher for removal",
+    () => {
+      withInstall((fixture) => {
+        const posixLauncher = join(fixture.bin, "aidlc");
+        put(posixLauncher, windowsPosixShim());
+        const result = plan(fixture);
+        expect(result.files.some((file) => file.path === posixLauncher)).toBe(true);
+        expect(result.preserved).not.toContain(posixLauncher);
+      });
+    },
+  );
+
+  test.skipIf(process.platform !== "win32")(
+    "preserves a foreign bin/aidlc instead of deleting it",
+    () => {
+      withInstall((fixture) => {
+        const posixLauncher = join(fixture.bin, "aidlc");
+        // A user's own hand-created bin/aidlc (the field workaround) must NOT
+        // be swept away by uninstall — only the installer's own forwarder is.
+        put(posixLauncher, "#!/bin/sh\necho my own launcher\n");
+        const result = plan(fixture);
+        expect(result.files.some((file) => file.path === posixLauncher)).toBe(false);
+        expect(result.preserved).toContain(posixLauncher);
+      });
+    },
+  );
 });
 
 describe("uninstall path output keeps unowned names as data", () => {

@@ -16,7 +16,10 @@
 // this is the regression guard that the codekb-path defer fixed it.
 //
 // HARNESS NOTE: `next` resumes the seeded in-flight Reverse Engineering stage
-// directly. Capture placement at the first post-artifact human boundary: RE
+// directly. A bare `/aidlc` on work in progress may first show the resume menu;
+// the drive answers Resume and goes on, so the boundary below is the first
+// question after that menu, whether or not it appears. Capture placement at
+// the first post-artifact human boundary: RE
 // steps 3-4 write the 9 artifacts before the learnings ritual and approval gate,
 // so the on-disk surface is complete at that moment (before finally-block
 // cleanup wipes the fixture). The driver stops intentionally after that menu's
@@ -54,7 +57,7 @@ import {
   setupIntegrationProject,
 } from "../harness/fixtures.ts";
 import { retainFailedFixture } from "../harness/failed-fixture.ts";
-import { driveAidlc } from "../harness/sdk-drive.ts";
+import { type CapturedAskUserQuestion, driveAidlc } from "../harness/sdk-drive.ts";
 import { compileFixtureRuntimeGraph } from "../harness/tui-fixtures.ts";
 import {
   activeSpace,
@@ -82,6 +85,16 @@ const RE_STEMS = [
   "code-quality-assessment",
   "reverse-engineering-timestamp",
 ];
+
+/** The resume menu a bare `/aidlc` may show on work in progress (Resume, Redo,
+ *  Jump, Start fresh): answered Resume, and never the boundary this test stops
+ *  at. */
+function isResumeMenu(menu: CapturedAskUserQuestion): boolean {
+  return menu.questions.some((question) => {
+    const labels = question.options.map((option) => option.label);
+    return labels.some((label) => /^resume\b/i.test(label)) && labels.some((label) => /\bfresh\b/i.test(label));
+  });
+}
 
 /** Every markdown path under <proj>/aidlc, relative to proj (posix slashes),
  *  excluding the copied .claude/ distributable. Used to scan WHERE the RE
@@ -137,17 +150,20 @@ describe("t183 codekb placement re-verify (sdk) — RE artifacts land at the eng
 
         const r = await driveAidlc("/aidlc", {
           projectDir: proj,
-          // Answer the first post-artifact menu. The 9 artifacts have landed.
+          // Answer a resume menu with Resume, then the first post-artifact
+          // menu. The 9 artifacts have landed by then.
           answerScript: {
             kind: "byHeader",
             map: {},
-            fallback: { optionIndex: 0 },
+            // Resume on the resume menu; any other menu takes its first choice.
+            fallback: { labelContains: "Resume" },
           },
           timeoutMs: remainingOperationTimeoutMs(LIVE_WORK_TIMEOUT_MS, {
             deadlineMs, reserveMs: fileCleanupReserveMs(TEST_TIMEOUT_MS), phase: "integration SDK drive",
           }),
-          stopAfterAskUserQuestionAt: 1,
-          onAskUserQuestion: () => {
+          stopAfterAskUserQuestionWhen: (menu) => !isResumeMenu(menu),
+          onAskUserQuestion: (menu) => {
+            if (isResumeMenu(menu)) return;
             gateCount++;
             if (gateCount >= 1 && capturedMarkdown === null) {
               capturedMarkdown = allAidlcMarkdown(proj);
@@ -198,6 +214,15 @@ describe("t183 codekb placement re-verify (sdk) — RE artifacts land at the eng
           r.stoppedAfterAskUserQuestion || waitingOnLoggedQuestion,
           `RE never reached its post-artifact human wait: ${JSON.stringify(events.slice(-12))}`,
         ).toBe(true);
+        // That wait belongs to RE: nothing was approved and the engine still
+        // holds RE when the drive stops. Under the test profile, a conductor
+        // that reports RE complete without asking gets it approved with nobody
+        // asked, and the next stage's first question would satisfy the check
+        // above.
+        expect(events, `RE was approved with nobody asked: ${JSON.stringify(events.slice(-12))}`)
+          .not.toContain("GATE_APPROVED");
+        expect(r.stateFile ?? "", "the drive left no state file to read")
+          .toContain("- **Current Stage**: reverse-engineering");
 
         // Defensive fallback for a missing callback snapshot. The native
         // question assertions still apply independently of this file scan.

@@ -225,7 +225,7 @@ describe("t47 Construction Bolt vocabulary (migrated from t47-construction-bolts
       ),
     ).toBe(true);
     expect(CODE_GEN).toContain(
-      "Step 3 Plan Approval is a mandatory hard stop in every execution mode",
+      "While plan approval is on, initial Plan Approval is a mandatory stop in every execution mode",
     );
     expect(CODE_GEN).toContain(
       "Only the Step 7 completion approval gate is suppressed",

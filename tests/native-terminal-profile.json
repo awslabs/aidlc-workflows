@@ -341,6 +341,14 @@
             {
               "classname": "native private namespace",
               "name": "unsafe roots and records are rejected, never chmod-repaired"
+            },
+            {
+              "classname": "native private namespace",
+              "name": "the ancestor check relaxes only ownership, and only under the opt-in"
+            },
+            {
+              "classname": "native private namespace",
+              "name": "e2e setup names the ownership opt-in, which then admits a sandbox-owned /"
             }
           ]
         },
@@ -423,15 +431,15 @@
           "cases": [
             {
               "classname": "Darwin native process identity",
+              "name": "an absent PID reads as absence; required identities and other errors fail closed"
+            },
+            {
+              "classname": "Darwin native process identity",
               "name": "incomplete and mismatched native identities fail instead of claiming process absence"
             },
             {
               "classname": "Darwin native process identity",
-              "name": "start-time identities retain both 64-bit fields and distinguish PID reuse"
-            },
-            {
-              "classname": "Darwin native process identity",
-              "name": "system enumeration excludes EPERM while required identities and other errors fail closed"
+              "name": "start-time identities retain both fields and distinguish PID reuse"
             },
             {
               "classname": "Linux native process identity",
@@ -645,6 +653,14 @@
         {
           "path": "tests/unit/t-tui-screen.test.ts",
           "cases": [
+            {
+              "classname": "menus a Windows repaint left rule cells in",
+              "name": "a row that is only a rule is still no menu"
+            },
+            {
+              "classname": "menus a Windows repaint left rule cells in",
+              "name": "read as the menu they show"
+            },
             {
               "classname": "native TUI bounds and lifetime",
               "name": "dispose is idempotent and settles a queued snapshot even during a pending write"
@@ -1246,15 +1262,15 @@
           "cases": [
             {
               "classname": "Darwin native process identity",
+              "name": "an absent PID reads as absence; required identities and other errors fail closed"
+            },
+            {
+              "classname": "Darwin native process identity",
               "name": "incomplete and mismatched native identities fail instead of claiming process absence"
             },
             {
               "classname": "Darwin native process identity",
-              "name": "start-time identities retain both 64-bit fields and distinguish PID reuse"
-            },
-            {
-              "classname": "Darwin native process identity",
-              "name": "system enumeration excludes EPERM while required identities and other errors fail closed"
+              "name": "start-time identities retain both fields and distinguish PID reuse"
             },
             {
               "classname": "Linux native process identity",
@@ -1476,6 +1492,14 @@
         {
           "path": "tests/unit/t-tui-screen.test.ts",
           "cases": [
+            {
+              "classname": "menus a Windows repaint left rule cells in",
+              "name": "a row that is only a rule is still no menu"
+            },
+            {
+              "classname": "menus a Windows repaint left rule cells in",
+              "name": "read as the menu they show"
+            },
             {
               "classname": "native TUI bounds and lifetime",
               "name": "dispose is idempotent and settles a queued snapshot even during a pending write"
@@ -1859,6 +1883,10 @@
             },
             {
               "classname": "Darwin native supervision fixtures",
+              "name": "the process-table identity matches proc_pidinfo for this process and reads any user's process"
+            },
+            {
+              "classname": "Darwin native supervision fixtures",
               "name": "uncertain cleanup retains the same supervisor until a later authenticated retry gets a fresh budget"
             },
             {
@@ -2032,6 +2060,14 @@
             {
               "classname": "native private namespace",
               "name": "unsafe roots and records are rejected, never chmod-repaired"
+            },
+            {
+              "classname": "native private namespace",
+              "name": "the ancestor check relaxes only ownership, and only under the opt-in"
+            },
+            {
+              "classname": "native private namespace",
+              "name": "e2e setup names the ownership opt-in, which then admits a sandbox-owned /"
             }
           ]
         },
@@ -2114,15 +2150,15 @@
           "cases": [
             {
               "classname": "Darwin native process identity",
+              "name": "an absent PID reads as absence; required identities and other errors fail closed"
+            },
+            {
+              "classname": "Darwin native process identity",
               "name": "incomplete and mismatched native identities fail instead of claiming process absence"
             },
             {
               "classname": "Darwin native process identity",
-              "name": "start-time identities retain both 64-bit fields and distinguish PID reuse"
-            },
-            {
-              "classname": "Darwin native process identity",
-              "name": "system enumeration excludes EPERM while required identities and other errors fail closed"
+              "name": "start-time identities retain both fields and distinguish PID reuse"
             },
             {
               "classname": "Linux native process identity",
@@ -2323,6 +2359,14 @@
         {
           "path": "tests/unit/t-tui-screen.test.ts",
           "cases": [
+            {
+              "classname": "menus a Windows repaint left rule cells in",
+              "name": "a row that is only a rule is still no menu"
+            },
+            {
+              "classname": "menus a Windows repaint left rule cells in",
+              "name": "read as the menu they show"
+            },
             {
               "classname": "native TUI bounds and lifetime",
               "name": "dispose is idempotent and settles a queued snapshot even during a pending write"

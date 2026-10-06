@@ -1,0 +1,73 @@
+name: Prepare live dependencies
+on:
+  workflow_call:
+    inputs:
+      ref:
+        required: true
+        type: string
+      runner:
+        required: true
+        type: string
+permissions:
+  contents: read
+defaults:
+  run:
+    shell: bash
+env:
+  BUN_VERSION: 1.4.2
+  NODE_VERSION: 22.23.2
+  CLAUDE_CODE_VERSION: 2.1.278
+  CODEX_VERSION: 0.151.0
+  OPENCODE_VERSION: 1.18.31
+  GIT_CONFIG_COUNT: "1"
+  GIT_CONFIG_KEY_0: core.autocrlf
+  GIT_CONFIG_VALUE_0: "false"
+jobs:
+  prepare:
+    runs-on: ${{ inputs.runner }}
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: "${{ inputs.ref }}"
+          persist-credentials: false
+      - name: Prepare pinned POSIX Node runtime
+        if: "runner.os != 'Windows'"
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: "${{ env.NODE_VERSION }}"
+          package-manager-cache: false
+      - name: Reuse pinned Node headers for native dependencies
+        if: "runner.os != 'Windows'"
+        run: |
+          node_root="$(node -p 'require("node:path").dirname(require("node:path").dirname(process.execPath))')"
+          test -r "$node_root/include/node/node.h"
+          test -r "$node_root/include/node/config.gypi"
+          test -r "$node_root/include/node/common.gypi"
+          printf 'npm_package_config_node_gyp_nodedir=%s\n' "$node_root" >> "$GITHUB_ENV"
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: "${{ env.BUN_VERSION }}"
+      - run: bun install --frozen-lockfile
+      - run: bun scripts/package.ts
+      - name: Install relocatable pinned CLIs
+        if: "runner.os != 'Windows'"
+        run: npm install -g --prefix "$RUNNER_TEMP/aidlc-cli" "@anthropic-ai/claude-code@$CLAUDE_CODE_VERSION" "@openai/codex@$CODEX_VERSION" "opencode-ai@$OPENCODE_VERSION"
+      - name: Pack POSIX live dependencies
+        if: "runner.os != 'Windows'"
+        run: |
+          node_root="$(node -p 'require("node:path").dirname(require("node:path").dirname(process.execPath))')"
+          test "$(node --version)" = "v$NODE_VERSION"
+          python3 scripts/ci-live-deps.py pack "$RUNNER_TEMP/live-deps.tar.gz" \
+            --workspace "$GITHUB_WORKSPACE" --cli "$RUNNER_TEMP/aidlc-cli" --node-runtime "$node_root"
+      - name: Pack Windows live dependencies
+        if: "runner.os == 'Windows'"
+        shell: powershell
+        run: python scripts/ci-live-deps.py pack "$env:RUNNER_TEMP/live-deps.tar.gz" --workspace "$env:GITHUB_WORKSPACE"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: "live-deps-${{ runner.os }}"
+          path: "${{ runner.temp }}/live-deps.tar.gz"
+          compression-level: 0 # The transport archive is already gzip-compressed.
+          retention-days: 1
+          if-no-files-found: error

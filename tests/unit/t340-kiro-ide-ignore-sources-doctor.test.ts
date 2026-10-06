@@ -11,6 +11,8 @@ import { delimiter, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { gitCallFailure, kiroIdeIgnoreSourceChecks } from "../../core/tools/aidlc-utility.ts";
 import { readBoundedRegularFile } from "../../core/tools/aidlc-inline-context.ts";
+import { aidlcInvocation } from "../../core/tools/aidlc-runtime-paths.ts";
+import { doctorCommandLines, vscodeVisibleOutput } from "../harness/vscode-output-trim.ts";
 
 const UTIL = fileURLToPath(new URL("../../core/tools/aidlc-utility.ts", import.meta.url));
 const created: string[] = [];
@@ -111,6 +113,15 @@ function writeData(project: string, name: string, value: unknown): void {
   mkdirSync(join(project, ".kiro", "tools", "data"), { recursive: true });
   writeFileSync(join(project, ".kiro", "tools", "data", name), typeof value === "string" ? value : `${JSON.stringify(value)}\n`);
 }
+// A doctor row as the report prints it must reach the agent whole after VS
+// Code trims the doctor command line it ran (#1411).
+function expectWholeInVsCode(row: { label: string; fix?: string }): void {
+  const text = `  warn  ${row.label}\n        fix: ${row.fix ?? ""}`;
+  // Every spelling, including the invocation these rows render in this process.
+  for (const commandLine of [...doctorCommandLines(".kiro"), `${aidlcInvocation()} doctor`, `${aidlcInvocation()} doctor --verbose`]) {
+    expect(vscodeVisibleOutput(text, commandLine), commandLine).toBe(text);
+  }
+}
 const hides = (at: string, count: string, folder: string): string =>
   `Kiro IDE ignore sources: ${at} hides ${count} framework files (${folder}) - the IDE's fs_read guard denies those framework reads`;
 
@@ -143,6 +154,7 @@ describe("t340 Kiro IDE ignore sources doctor", () => {
     expect(failures[0].fix).toContain("permissions.yaml");
     expect(failures[0].fix).toContain(".git/info/exclude");
     expect(failures.some((row) => row.label.includes(".gitignore:"))).toBe(false);
+    expectWholeInVsCode(failures[0]);
   });
 
   test("a negation inside the same file clears the rule", () => {
@@ -239,6 +251,7 @@ describe("t340 Kiro IDE ignore sources doctor", () => {
     expect(rows[0].label).toContain("~/.kiro/settings/kiroignore not evaluated - git is not available");
     expect(rows[0].label).toContain(`${GLOBAL_ID}`);
     expect(rows[0].fix).toContain("`git` on PATH");
+    expectWholeInVsCode(rows[0]);
   });
 
   test.skipIf(process.platform === "win32")("a per-source git failure warns instead of passing", () => {
@@ -250,6 +263,7 @@ describe("t340 Kiro IDE ignore sources doctor", () => {
     expect(rows[0].severity).toBe("warn");
     expect(rows[0].label).toContain(`${XDG_IGNORE} not evaluated - git check-ignore exit 128`);
     expect(rows[0].fix).toContain("check that file by hand for a rule that hides .kiro/");
+    expectWholeInVsCode(rows[0]);
   });
 
   test("an empty XDG_CONFIG_HOME falls back to ~/.config/git/ignore, as git does", () => {
@@ -337,7 +351,8 @@ describe("t340 Kiro IDE ignore sources doctor", () => {
     expect(rows[0].pass).toBe(false);
     expect(rows[0].severity).toBe("warn");
     expect(rows[0].label).toBe(`Kiro IDE ignore sources: ${GLOBAL_ID} not evaluated - git is not available`);
-    expect(rows[0].fix).toContain("put `git` on PATH and re-run");
+    expect(rows[0].fix).toContain("put `git` on PATH and run doctor again");
+    expectWholeInVsCode(rows[0]);
     // Every scope a normal core.excludesFile lookup reads, named without values.
     for (const surface of [
       ".git/config", ".git/config.worktree",
@@ -397,6 +412,7 @@ describe("t340 Kiro IDE ignore sources doctor", () => {
     expect(rows[0].fix).toContain("run `git config --get core.excludesFile` outside the project");
     expect(rows[0].fix).toContain(`no output means ${XDG_IGNORE}`);
     expect(rows[0].fix).not.toContain("on PATH");
+    expectWholeInVsCode(rows[0]);
   });
 
   test.skipIf(process.platform === "win32")("a symlinked nested workspace git refuses is traced to its real repository", () => {

@@ -72,7 +72,7 @@ function runStage(): Record<string, unknown> {
     produces: ["aidlc-docs/inception/application-design/decisions.md"],
     rules_in_context: ["aidlc-org.md", "aidlc-team.md"],
     sensors_applicable: ["required-sections"],
-    ceremony: { sensors: "on", learnings: "on", summary_confirmation: "on" },
+    ceremony: { sensors: "on", learnings: "on", summary_confirmation: "on", plan_approval: "on", collaborators: "on" },
     stage_file: ".claude/skills/aidlc/stages/inception/application-design.md",
   };
 }
@@ -120,7 +120,7 @@ function dispatchSubagent(): Record<string, unknown> {
     produces: ["aidlc-docs/construction/auth/code-generation/code-manifest.md"],
     rules_in_context: ["aidlc-org.md"],
     sensors_applicable: ["linter"],
-    ceremony: { sensors: "on", learnings: "on", summary_confirmation: "on" },
+    ceremony: { sensors: "on", learnings: "on", summary_confirmation: "on", plan_approval: "on", collaborators: "on" },
     stage_file: ".claude/skills/aidlc/stages/construction/code-generation.md",
     worker: "code-generation",
   };
@@ -162,6 +162,16 @@ function ask(): Record<string, unknown> {
       {
         scope: "feature",
         command: "bun .claude/tools/aidlc-orchestrate.ts next --scope 'feature' --request a1b2c3d4",
+      },
+    ],
+    choices: [
+      {
+        label: "Go ahead with the \"bugfix\" plan",
+        command: "bun .claude/tools/aidlc-orchestrate.ts next --scope bugfix --request a1b2c3d4",
+      },
+      {
+        label: "Tailor a plan to this task",
+        command: "bun .claude/tools/aidlc-orchestrate.ts next compose --request a1b2c3d4",
       },
     ],
   };
@@ -342,11 +352,11 @@ describe("t113 directive-schema — validateDirective (migrated from t113-direct
     for (const create of [runStage, dispatchSubagent]) {
       expect(validateDirective({
         ...create(),
-        ceremony: { sensors: "off", learnings: "off", summary_confirmation: "off" },
+        ceremony: { sensors: "off", learnings: "off", summary_confirmation: "off", plan_approval: "off", collaborators: "off" },
       }).valid).toBe(true);
       expect(validateDirective({
         ...create(),
-        ceremony: { sensors: "off", learnings: "on", summary_confirmation: "off" },
+        ceremony: { sensors: "off", learnings: "on", summary_confirmation: "off", plan_approval: "on", collaborators: "on" },
       }).valid).toBe(true);
     }
   });
@@ -361,7 +371,7 @@ describe("t113 directive-schema — validateDirective (migrated from t113-direct
 
   test("stage directives require every ceremony switch", () => {
     for (const create of [runStage, dispatchSubagent]) {
-      for (const key of ["sensors", "learnings", "summary_confirmation"]) {
+      for (const key of ["sensors", "learnings", "summary_confirmation", "plan_approval", "collaborators"]) {
         const directive = create();
         delete (directive.ceremony as Record<string, unknown>)[key];
         expect(validateDirective(directive).valid).toBe(false);
@@ -379,6 +389,7 @@ describe("t113 directive-schema — validateDirective (migrated from t113-direct
         { ...policy, sensors: true },
         { ...policy, learnings: "enabled" },
         { ...policy, summary_confirmation: "ON" },
+        { ...policy, plan_approval: "skip" },
         { ...policy, reviewer: "off" },
       ]) {
         expect(validateDirective({ ...directive, ceremony }).valid).toBe(false);
@@ -610,7 +621,7 @@ describe("t113 directive-schema — validateDirective (migrated from t113-direct
 
   test("command-bearing asks require their typed payload fields", () => {
     const cases: Array<[Record<string, unknown>, string[]]> = [
-      [ask(), ["proposed_scope", "confirm_command", "compose_command", "scope_commands"]],
+      [ask(), ["proposed_scope", "confirm_command", "compose_command", "scope_commands", "choices"]],
       [composeOfferAsk(), ["compose_command", "scope_commands"]],
       [intentPickAsk(), ["available_intents", "select_commands"]],
       [unitPausedAsk(), ["stage", "unit", "resume_command"]],
@@ -622,6 +633,13 @@ describe("t113 directive-schema — validateDirective (migrated from t113-direct
         expect(validateDirective(missing).valid).toBe(false);
         expect(validateDirective({ ...directive, [field]: 42 }).valid).toBe(false);
       }
+    }
+  });
+
+  test("only scope-confirm carries the offer's choices, each a label and a command", () => {
+    expect(validateDirective({ ...composeOfferAsk(), choices: (ask() as { choices: unknown }).choices }).valid).toBe(false);
+    for (const entry of [{ label: "Go ahead" }, { command: "x" }, { label: 1, command: "x" }, { label: "Go", command: "x", extra: 1 }]) {
+      expect(validateDirective({ ...ask(), choices: [entry] }).valid).toBe(false);
     }
   });
 
@@ -674,6 +692,15 @@ describe("t113 directive-schema — validateDirective (migrated from t113-direct
 
   test("done well-formed -> VALID", () => {
     expect(validateDirective(done()).valid).toBe(true);
+  });
+
+  test("done accepts only literal true for the workflow-continues marker", () => {
+    expect(errs({ ...done(), workflow_continues: true })).toBe("VALID");
+    for (const value of [false, "yes", 1]) {
+      expect(errs({ ...done(), workflow_continues: value })).toContain(
+        "done: workflow_continues must be true when present",
+      );
+    }
   });
 
   test("parked well-formed -> VALID", () => {

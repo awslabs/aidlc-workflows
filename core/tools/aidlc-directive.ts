@@ -117,6 +117,11 @@ export interface LoadSteeringDirective {
   receipt: string;
   /** The exact command that fetches the next part (or the run-stage). */
   next: string;
+  /**
+   * The conductor persona, on part one only, when the workflow's first run-stage
+   * would not fit the host's limit with it (see the run-stage field).
+   */
+  conductor_persona?: string;
   rules_content: Array<{ path: string; text: string }>;
 }
 
@@ -163,6 +168,59 @@ export interface LegacyPlanApprovalChoices {
   request_changes: string;
 }
 
+// Where a Code Generation target stands with Plan Approval, carried on the
+// code-generation run-stage (one target) and invoke-swarm (a group) the engine
+// emits. The engine asks for Plan Approval itself (a `plan-approval` ask), so a
+// run-stage only ever says whether to plan or to build:
+//   plan     write or finish the plan and test instructions, then run next
+//   revise   the person asked for changes: revise, then run next
+//   repair   fix what `note` names (a Testing Contract block an edit broke), then run next
+//   approved the plan is approved (or may keep building): build it
+export type CodeGenerationPlanStatus = "plan" | "revise" | "repair" | "approved";
+export const CODE_GENERATION_PLAN_STATUSES = ["plan", "revise", "repair", "approved"] as const;
+
+export interface CodeGenerationPlanUnitState {
+  unit: string;
+  status: Exclude<CodeGenerationPlanStatus, "approved">;
+  note?: string;
+  feedback?: string;
+}
+
+export interface CodeGenerationPlanApprovalState {
+  status: CodeGenerationPlanStatus;
+  /** One sentence to act on: a defect to fix, or what the person said. */
+  note?: string;
+  /** The person's own words for what should change, verbatim. */
+  feedback?: string;
+  /** invoke-swarm: the Units still being planned, each with its own state. */
+  units?: CodeGenerationPlanUnitState[];
+  /** Plan approval is off: build without asking. `notice` is the one line to show the person first. */
+  skipped?: true;
+  notice?: string;
+}
+
+// The engine's Plan Approval question for one target, or for several Units
+// whose plans are ready together.
+export interface PlanApprovalAskTargetView {
+  /** null for the zero-Unit stage-level plan. */
+  unit: string | null;
+  plan_path: string;
+  instructions_path: string;
+  questions_path: string;
+  /** A few lines the person can decide from: what gets built, which files, the tests. */
+  summary: string[];
+}
+
+export interface PlanApprovalAskContent {
+  targets: PlanApprovalAskTargetView[];
+  /** In order: approve, request changes, edit the files. */
+  choices: string[];
+  /** The person said they will edit the files and has not said done yet. */
+  editing: boolean;
+  /** One sentence to say with the question (a repair made, or why nothing was recorded). */
+  note?: string;
+}
+
 // run-stage — load the resolved rules, load lead + support agents, load
 // `consumes` artifacts, run the stage body, write `produces`, keep memory.md. Routing fields (lead_agent,
 // support_agents, mode, gate, sensors_applicable, rules_in_context, stage_file)
@@ -196,6 +254,12 @@ export interface RunStageDirective {
   // continues with the readable context; rule-delivery failures are blocking
   // error directives instead.
   context_warnings?: string[];
+  // What the person replied to this stage's questions that no answer holds
+  // yet (a chat that ended before the agent wrote or logged it), in order,
+  // the stage's questions and answers already on record before it, and what
+  // the agent does with it. Present only while the stage's questions file
+  // still has a blank answer.
+  kept_replies?: { answered: Array<{ question: string; answer: string }>; replies: string[]; note: string };
   // gate is a boolean for every deterministic case; the string sentinel
   // GATE_UNRESOLVED ("unresolved") appears ONLY for the first Construction Bolt's
   // walking-skeleton gate, which the conductor resolves via report (the
@@ -225,6 +289,12 @@ export interface RunStageDirective {
     proof_path: string;
     verification_command: string | null;
     command_authorized: boolean;
+    // Only the Unit's reviewed code changed since its review: run this review
+    // request now, without asking, then verify again.
+    rereview?: { stage: string; reviewer: string; iteration: number; command: string };
+    // The current review re-checked that changed code or those documents; the
+    // person gets one approval question that says so.
+    rechecked?: { verdict: string; approved_before: boolean; changed: "code" | "documents" };
   };
   swarm_checkpoint?: {
     batch: number;
@@ -234,6 +304,13 @@ export interface RunStageDirective {
     approved: boolean;
     human_required: boolean;
     errors: string[];
+  };
+  // The person's answer to the artifact re-use question for this Unit's step,
+  // recorded by the engine when they asked to redo it on re-entry: the
+  // conductor redoes the step without asking it again (#1411).
+  artifact_reuse?: {
+    decision: "redo";
+    unit: string;
   };
   memory_path: string;
   // consumes carries only the declared inputs that EXIST on disk at emit time;
@@ -258,6 +335,8 @@ export interface RunStageDirective {
   // capability only to the `next`/`continue` caller that owns legacy planning;
   // runtime authority stores hashes, never these plaintext labels.
   legacy_plan_approval_choices?: LegacyPlanApprovalChoices;
+  // Code Generation only: plan or build (see CodeGenerationPlanApprovalState).
+  plan_approval?: CodeGenerationPlanApprovalState;
   // reviewer — the agent to invoke as a separate sub-agent for quality review
   // after the stage body completes. Absent (undefined) when no review step is
   // configured for this stage. See stage-protocol-reviewer.md §12a.
@@ -282,6 +361,10 @@ export interface RunStageDirective {
   // Re-present an open approval gate. Body and review are settled; do not rerun
   // the stage or edit its outputs. Team gates retain their unit_gate routing.
   gate_only?: true;
+  // Every Unit this per-Unit stage covers was built in the current attempt, so
+  // the beat presents the stage gate with nothing left to plan or build. Set by
+  // the engine only; the conductor handles the beat as before.
+  build_settled?: true;
   // Gate-only re-entry after every autonomous swarm Unit and reviewer receipt
   // converged. Present only as literal true; the conductor must not rerun the
   // stage body or reviewer.
@@ -400,6 +483,8 @@ export interface InvokeSwarmDirective {
   // set). When present, the conductor passes it straight through as `prepare --repo`.
   repo?: string;
   legacy_plan_approval_choices?: LegacyPlanApprovalChoices;
+  // Code Generation only: plan the listed Units, or build the batch.
+  plan_approval?: CodeGenerationPlanApprovalState;
 }
 
 // present-gate — run the stage-protocol §13 learnings ritual, then render the
@@ -423,20 +508,29 @@ interface AskDirectiveBase {
   question: string;
 }
 
+/** One plan the person can name instead: its complete command, and its stage count as the person sees it ("17 of 33 stages"). */
+export interface ScopeCommandRow {
+  scope: string;
+  command: string;
+  stages?: string;
+}
+
 export interface ScopeConfirmAskDirective extends AskDirectiveBase {
   ask_type: "scope-confirm";
   response_route: "next";
   proposed_scope: string;
   confirm_command: string;
   compose_command: string;
-  scope_commands: Array<{ scope: string; command: string }>;
+  scope_commands: ScopeCommandRow[];
+  /** The offer's answers as the person sees them, in order: go ahead, then compose. */
+  choices: Array<{ label: string; command: string }>;
 }
 
 export interface ComposeOfferAskDirective extends AskDirectiveBase {
   ask_type: "compose-offer";
   response_route: "next";
   compose_command: string;
-  scope_commands: Array<{ scope: string; command: string }>;
+  scope_commands: ScopeCommandRow[];
 }
 
 export interface IntentPickAskDirective extends AskDirectiveBase {
@@ -452,6 +546,15 @@ export interface UnitPausedAskDirective extends AskDirectiveBase {
   stage: string;
   unit: string;
   resume_command: string;
+}
+
+// A folder set up as a new project now holds code: the person says which it
+// is. Each answer is one complete command; either records the type as theirs.
+export interface ProjectTypeAskDirective extends AskDirectiveBase {
+  ask_type: "project-type";
+  response_route: "command";
+  existing_code_command: string;
+  new_project_command: string;
 }
 
 export interface NewWorkRoutingAskDirective extends AskDirectiveBase {
@@ -470,7 +573,7 @@ export interface NewWorkRoutingAskDirective extends AskDirectiveBase {
   /** Option 2 with the proposed scope. */
   new_intent_command: string;
   /** Option 2 with a human-corrected scope: one complete command per valid scope. */
-  scope_commands: Array<{ scope: string; command: string }>;
+  scope_commands: ScopeCommandRow[];
   /** Option 3, after any required record selection. */
   compose_command: string;
   /** Option 1 for the active workflow the question named; absent when the human selects a record. */
@@ -528,15 +631,39 @@ export interface GuardRecoveryAskDirective extends AskDirectiveBase {
   recovery_choice?: undefined;
 }
 
+// plan-approval: the engine asks the person to approve a Code Generation plan
+// (or several ready Unit plans at once). The human-turn hook keeps the reply in
+// the person's own words and records an exact pick; the conductor shows the
+// question, ends the turn, records the choice the person made with `log answer
+// --checkpoint plan-approval`, and runs `next`.
+export interface PlanApprovalAskDirective extends AskDirectiveBase {
+  ask_type: "plan-approval";
+  response_route: "next";
+  stage: "code-generation";
+  /** Present for a single Unit's plan. */
+  unit?: string;
+  plan_approval: PlanApprovalAskContent;
+  new_work_description?: undefined;
+  proposed_scope?: undefined;
+  available_intents?: undefined;
+  numbered_prose_question?: undefined;
+  claimable_units?: undefined;
+  claimed_units?: undefined;
+  waiting_units?: undefined;
+  recovery_choice?: undefined;
+}
+
 export type AskDirective =
   | ScopeConfirmAskDirective
   | ComposeOfferAskDirective
   | IntentPickAskDirective
   | UnitPausedAskDirective
+  | ProjectTypeAskDirective
   | NewWorkRoutingAskDirective
   | UnitClaimAskDirective
   | LegacyPlanApprovalRecoveryAskDirective
-  | GuardRecoveryAskDirective;
+  | GuardRecoveryAskDirective
+  | PlanApprovalAskDirective;
 
 // print — print verbatim and stop (status / help / doctor / version).
 export interface PrintDirective {
@@ -544,6 +671,11 @@ export interface PrintDirective {
   /** Optional spoken line for the user; presentation only (see NarrationField). */
   narration?: NarrationField;
   message: string;
+  // next_stage: on the reply that opens (or re-opens) a stage's approval gate,
+  // the stage the Approve option continues to, computed when the gate opens so
+  // a plan change made during the stage is in it. null = the final in-scope
+  // stage. Same meaning as run-stage's next_stage.
+  next_stage?: string | null;
 }
 
 // error — stop with an error (unknown scope, mutually-exclusive flags, init
@@ -556,12 +688,15 @@ export interface ErrorDirective {
 }
 
 // done — stop the loop (workflow or single-stage complete). `reason` records
-// why the loop ended.
+// why the loop ended. A `report` that committed a step and left the workflow
+// running sets `workflow_continues`: the conductor runs `next` at once instead
+// of presenting a completion (#1411).
 export interface DoneDirective {
   kind: "done";
   /** Optional spoken line for the user; presentation only (see NarrationField). */
   narration?: NarrationField;
   reason: string;
+  workflow_continues?: true;
 }
 
 // parked - the workflow was intentionally parked mid-flow (a human resumes it
@@ -661,11 +796,13 @@ const RUN_STAGE_FIELDS = [
   "single",
   "inline_context_paths",
   "context_warnings",
+  "kept_replies",
   "gate",
   "unit_gate",
   "construction_policy",
   "construction_checkpoint",
   "swarm_checkpoint",
+  "artifact_reuse",
   "memory_path",
   "consumes",
   "produces",
@@ -681,12 +818,14 @@ const RUN_STAGE_FIELDS = [
   "protocol_modules",
   "swarm_settled",
   "gate_only",
+  "build_settled",
   "conductor_persona",
   "next_stage",
   "unit",
   "wave",
   "consumes_absent",
   "legacy_plan_approval_choices",
+  "plan_approval",
 ] as const;
 
 const LOAD_STEERING_FIELDS = [
@@ -697,6 +836,7 @@ const LOAD_STEERING_FIELDS = [
   "parts",
   "receipt",
   "next",
+  "conductor_persona",
   "rules_content",
 ] as const;
 
@@ -710,7 +850,9 @@ const DISPATCH_SUBAGENT_FIELDS = [
       field !== "protocol_modules" &&
       field !== "swarm_settled" &&
       field !== "gate_only" &&
-      field !== "legacy_plan_approval_choices",
+      field !== "build_settled" &&
+      field !== "legacy_plan_approval_choices" &&
+      field !== "plan_approval",
   ),
   "worker",
 ] as const;
@@ -729,6 +871,7 @@ const INVOKE_SWARM_FIELDS = [
   "protocol_modules",
   "repo",
   "legacy_plan_approval_choices",
+  "plan_approval",
 ] as const;
 const PRESENT_GATE_FIELDS = ["kind", "stage", "phase", "memory_path"] as const;
 const ASK_FIELDS = [
@@ -757,10 +900,14 @@ const ASK_FIELDS = [
   "reason_codes",
   "remedies",
   "state_signature",
+  "plan_approval",
+  "existing_code_command",
+  "new_project_command",
+  "choices",
 ] as const;
-const PRINT_FIELDS = ["kind", "message"] as const;
+const PRINT_FIELDS = ["kind", "message", "next_stage"] as const;
 const ERROR_FIELDS = ["kind", "message"] as const;
-const DONE_FIELDS = ["kind", "reason"] as const;
+const DONE_FIELDS = ["kind", "reason", "workflow_continues"] as const;
 const PARKED_FIELDS = ["kind", "reason", "stage"] as const;
 const NOTICE_FIELDS = ["kind", "message"] as const;
 
@@ -858,6 +1005,7 @@ export function validateDirective(obj: unknown): ValidationResult {
         }
       }
       checkPathTextArray(o, "rules_content", kind, errors);
+      checkOptionalString(o, "conductor_persona", kind, errors);
       if (
         typeof o.part === "number" &&
         typeof o.parts === "number" &&
@@ -872,6 +1020,7 @@ export function validateDirective(obj: unknown): ValidationResult {
       checkRunStageShared(o, kind, errors);
       checkOptionalBoolean(o, "single", kind, errors);
       checkOptionalWave(o, "wave", kind, errors);
+      checkOptionalCodeGenerationPlanState(o, kind, errors);
       break;
     case "dispatch-subagent":
       checkRunStageShared(o, kind, errors);
@@ -907,6 +1056,7 @@ export function validateDirective(obj: unknown): ValidationResult {
       checkOptionalProtocolModules(o, kind, errors);
       checkOptionalString(o, "repo", kind, errors);
       checkOptionalLegacyPlanApprovalChoices(o, kind, errors);
+      checkOptionalCodeGenerationPlanState(o, kind, errors);
       break;
     case "present-gate":
       checkString(o, "stage", kind, errors);
@@ -929,6 +1079,8 @@ export function validateDirective(obj: unknown): ValidationResult {
       checkOptionalStringArray(o, "available_intents", kind, errors);
       checkOptionalString(o, "numbered_prose_question", kind, errors);
       checkOptionalString(o, "recovery_choice", kind, errors);
+      checkOptionalString(o, "existing_code_command", kind, errors);
+      checkOptionalString(o, "new_project_command", kind, errors);
       if (
         typeof o.ask_type === "string" &&
         ![
@@ -940,11 +1092,16 @@ export function validateDirective(obj: unknown): ValidationResult {
           "unit-claim",
           "legacy-plan-approval-recovery",
           "guard-recovery",
+          "plan-approval",
+          "project-type",
         ].includes(o.ask_type)
       ) {
         errors.push(
-          `${kind}: ask_type must be one of scope-confirm | compose-offer | intent-pick | unit-paused | new-work-routing | unit-claim | legacy-plan-approval-recovery | guard-recovery, got ${String(o.ask_type)}`,
+          `${kind}: ask_type must be one of scope-confirm | compose-offer | intent-pick | unit-paused | new-work-routing | unit-claim | legacy-plan-approval-recovery | guard-recovery | plan-approval | project-type, got ${String(o.ask_type)}`,
         );
+      }
+      if ("plan_approval" in o && o.ask_type !== "plan-approval") {
+        errors.push(`${kind}: plan_approval requires ask_type "plan-approval"`);
       }
       const askPayloadFields = [
         "confirm_command",
@@ -968,6 +1125,9 @@ export function validateDirective(obj: unknown): ValidationResult {
         "reason_codes",
         "remedies",
         "state_signature",
+        "existing_code_command",
+        "new_project_command",
+        "choices",
       ] as const;
       const rejectUnexpected = (
         askType: string,
@@ -986,7 +1146,8 @@ export function validateDirective(obj: unknown): ValidationResult {
         checkString(o, "proposed_scope", kind, errors);
         checkString(o, "confirm_command", kind, errors);
         checkString(o, "compose_command", kind, errors);
-        checkCommandRows(o, "scope_commands", "scope", kind, errors);
+        checkCommandRows(o, "scope_commands", "scope", kind, errors, ["stages"]);
+        checkCommandRows(o, "choices", "label", kind, errors);
         rejectUnexpected(
           "scope-confirm",
           {
@@ -994,6 +1155,7 @@ export function validateDirective(obj: unknown): ValidationResult {
             confirm_command: true,
             compose_command: true,
             scope_commands: true,
+            choices: true,
           },
         );
       } else if (o.ask_type === "compose-offer") {
@@ -1001,7 +1163,7 @@ export function validateDirective(obj: unknown): ValidationResult {
           errors.push(`${kind}: compose-offer response_route must be "next"`);
         }
         checkString(o, "compose_command", kind, errors);
-        checkCommandRows(o, "scope_commands", "scope", kind, errors);
+        checkCommandRows(o, "scope_commands", "scope", kind, errors, ["stages"]);
         rejectUnexpected(
           "compose-offer",
           {
@@ -1030,6 +1192,16 @@ export function validateDirective(obj: unknown): ValidationResult {
           "unit-paused",
           { stage: true, unit: true, resume_command: true },
         );
+      } else if (o.ask_type === "project-type") {
+        if (o.response_route !== "command") {
+          errors.push(`${kind}: project-type response_route must be "command"`);
+        }
+        checkString(o, "existing_code_command", kind, errors);
+        checkString(o, "new_project_command", kind, errors);
+        rejectUnexpected(
+          "project-type",
+          { existing_code_command: true, new_project_command: true },
+        );
       } else if (o.ask_type === "new-work-routing") {
         if (o.response_route !== "next") {
           errors.push(`${kind}: new-work-routing response_route must be "next"`);
@@ -1038,7 +1210,7 @@ export function validateDirective(obj: unknown): ValidationResult {
         checkString(o, "proposed_scope", kind, errors);
         checkString(o, "numbered_prose_question", kind, errors);
         checkString(o, "new_intent_command", kind, errors);
-        checkCommandRows(o, "scope_commands", "scope", kind, errors);
+        checkCommandRows(o, "scope_commands", "scope", kind, errors, ["stages"]);
         checkString(o, "compose_command", kind, errors);
         if ("available_intents" in o || "select_commands" in o || "reshape_commands" in o) {
           checkStringArray(o, "available_intents", kind, errors);
@@ -1086,6 +1258,16 @@ export function validateDirective(obj: unknown): ValidationResult {
           "legacy-plan-approval-recovery",
           { recovery_choice: true },
         );
+      } else if (o.ask_type === "plan-approval") {
+        if (o.response_route !== "next") {
+          errors.push(`${kind}: plan-approval response_route must be "next"`);
+        }
+        if (o.stage !== "code-generation") {
+          errors.push(`${kind}: plan-approval stage must be "code-generation"`);
+        }
+        checkOptionalString(o, "unit", kind, errors);
+        checkPlanApprovalAskContent(o, kind, errors);
+        rejectUnexpected("plan-approval", { stage: true, unit: true });
       } else if (o.ask_type === "guard-recovery") {
         if (o.response_route !== "execute-remedy") {
           errors.push(
@@ -1111,12 +1293,14 @@ export function validateDirective(obj: unknown): ValidationResult {
     }
     case "print":
       checkString(o, "message", kind, errors);
+      checkOptionalNullableString(o, "next_stage", kind, errors);
       break;
     case "error":
       checkString(o, "message", kind, errors);
       break;
     case "done":
       checkString(o, "reason", kind, errors);
+      checkOptionalTrue(o, "workflow_continues", kind, errors);
       break;
     case "parked":
       checkString(o, "reason", kind, errors);
@@ -1160,6 +1344,7 @@ function checkRunStageShared(
   checkOptionalPipeline(o, kind, errors);
   checkStringArray(o, "inline_context_paths", kind, errors);
   checkOptionalStringArray(o, "context_warnings", kind, errors);
+  checkOptionalKeptReplies(o, kind, errors);
   checkGate(o, "gate", kind, errors);
   checkString(o, "memory_path", kind, errors);
   checkStringArray(o, "consumes", kind, errors);
@@ -1206,6 +1391,7 @@ function checkRunStageShared(
     checkOptionalProtocolModules(o, kind, errors);
     checkOptionalTrue(o, "swarm_settled", kind, errors);
     checkOptionalTrue(o, "gate_only", kind, errors);
+    checkOptionalTrue(o, "build_settled", kind, errors);
   }
   // unit: optional on a run-stage directive (present only on a per-unit
   // Construction directive resolved to a concrete Unit of Work). A present
@@ -1255,6 +1441,23 @@ function checkRunStageShared(
           errors.push(`${kind}: construction_checkpoint.${field} must be a string array`);
         }
       }
+      const rereview = checkpoint.rereview;
+      if (
+        "rereview" in checkpoint &&
+        (!isObject(rereview) || typeof rereview.command !== "string" || !Number.isSafeInteger(rereview.iteration))
+      ) errors.push(`${kind}: construction_checkpoint.rereview must carry its review request`);
+      const rechecked = checkpoint.rechecked;
+      if (
+        "rechecked" in checkpoint &&
+        (!isObject(rechecked) || typeof rechecked.verdict !== "string" || typeof rechecked.approved_before !== "boolean" ||
+          (rechecked.changed !== "code" && rechecked.changed !== "documents"))
+      ) errors.push(`${kind}: construction_checkpoint.rechecked must carry its verdict`);
+    }
+  }
+  if ("artifact_reuse" in o) {
+    const reuse = o.artifact_reuse;
+    if (!isObject(reuse) || o.phase !== "construction" || reuse.unit !== o.unit || reuse.decision !== "redo") {
+      errors.push(`${kind}: artifact_reuse must be the redo decision for this Construction Unit`);
     }
   }
   if ("swarm_checkpoint" in o) {
@@ -1526,6 +1729,108 @@ function checkOptionalString(
   }
 }
 
+// checkOptionalCodeGenerationPlanState: the plan-or-build state on a
+// code-generation run-stage or invoke-swarm.
+function checkOptionalCodeGenerationPlanState(
+  o: Record<string, unknown>,
+  kind: DirectiveKind,
+  errors: string[],
+): void {
+  if (!("plan_approval" in o)) return;
+  const value = o.plan_approval;
+  if (!isPlainObject(value)) {
+    errors.push(`${kind}: plan_approval must be object, got ${describe(value)}`);
+    return;
+  }
+  for (const key of Object.keys(value)) {
+    if (!["status", "note", "feedback", "units", "skipped", "notice"].includes(key)) {
+      errors.push(`${kind}: plan_approval unknown key: ${key}`);
+    }
+  }
+  if (!(CODE_GENERATION_PLAN_STATUSES as readonly unknown[]).includes(value.status)) {
+    errors.push(
+      `${kind}: plan_approval.status must be one of ${CODE_GENERATION_PLAN_STATUSES.join(" | ")}, got ${describe(value.status)}`,
+    );
+  }
+  for (const field of ["note", "feedback", "notice"] as const) {
+    if (field in value && typeof value[field] !== "string") {
+      errors.push(`${kind}: plan_approval.${field} must be string, got ${describe(value[field])}`);
+    }
+  }
+  if ("skipped" in value && (value.skipped !== true || value.status !== "approved")) {
+    errors.push(`${kind}: plan_approval.skipped must be true and only on an approved status`);
+  }
+  if ("units" in value) {
+    if (!Array.isArray(value.units) || value.units.length === 0) {
+      errors.push(`${kind}: plan_approval.units must be a non-empty array`);
+      return;
+    }
+    for (const entry of value.units) {
+      if (
+        !isPlainObject(entry) ||
+        typeof entry.unit !== "string" ||
+        !["plan", "revise", "repair"].includes(String(entry.status)) ||
+        ("note" in entry && typeof entry.note !== "string") ||
+        ("feedback" in entry && typeof entry.feedback !== "string") ||
+        Object.keys(entry).some((key) => !["unit", "status", "note", "feedback"].includes(key))
+      ) {
+        errors.push(`${kind}: plan_approval.units entries need unit, a plan|revise|repair status, and optional note and feedback strings`);
+        return;
+      }
+    }
+  }
+}
+
+// checkPlanApprovalAskContent: the engine's Plan Approval question.
+function checkPlanApprovalAskContent(
+  o: Record<string, unknown>,
+  kind: DirectiveKind,
+  errors: string[],
+): void {
+  const value = o.plan_approval;
+  if (!isPlainObject(value)) {
+    errors.push(`${kind}: plan-approval requires a plan_approval object, got ${describe(value)}`);
+    return;
+  }
+  for (const key of Object.keys(value)) {
+    if (!["targets", "choices", "editing", "note"].includes(key)) {
+      errors.push(`${kind}: plan_approval unknown key: ${key}`);
+    }
+  }
+  if (!Array.isArray(value.targets) || value.targets.length === 0) {
+    errors.push(`${kind}: plan_approval.targets must be a non-empty array`);
+  } else {
+    for (const target of value.targets) {
+      const valid = isPlainObject(target) &&
+        (target.unit === null || typeof target.unit === "string") &&
+        typeof target.plan_path === "string" &&
+        typeof target.instructions_path === "string" &&
+        typeof target.questions_path === "string" &&
+        Array.isArray(target.summary) &&
+        target.summary.every((line) => typeof line === "string") &&
+        Object.keys(target).every((key) =>
+          ["unit", "plan_path", "instructions_path", "questions_path", "summary"].includes(key));
+      if (!valid) {
+        errors.push(`${kind}: plan_approval.targets entries need unit, plan_path, instructions_path, questions_path, and summary lines`);
+        break;
+      }
+    }
+  }
+  if (
+    !Array.isArray(value.choices) ||
+    value.choices.length !== 3 ||
+    !value.choices.every((choice) => typeof choice === "string" && choice.length > 0)
+  ) {
+    errors.push(`${kind}: plan_approval.choices must be three non-empty strings`);
+  }
+  if (typeof value.editing !== "boolean") {
+    errors.push(`${kind}: plan_approval.editing must be boolean, got ${describe(value.editing)}`);
+  }
+  if ("note" in value && typeof value.note !== "string") {
+    errors.push(`${kind}: plan_approval.note must be string, got ${describe(value.note)}`);
+  }
+}
+
 function checkOptionalLegacyPlanApprovalChoices(
   o: Record<string, unknown>,
   kind: DirectiveKind,
@@ -1602,6 +1907,30 @@ function checkOptionalPipeline(
   }
   checkStringArray(value, "links", kind, errors);
   checkStringArray(value, "completed", kind, errors);
+}
+
+function checkOptionalKeptReplies(
+  o: Record<string, unknown>,
+  kind: DirectiveKind,
+  errors: string[],
+): void {
+  if (!("kept_replies" in o)) return;
+  const value = o.kept_replies;
+  if (!isPlainObject(value)) {
+    errors.push(`${kind}: kept_replies must be object, got ${describe(value)}`);
+    return;
+  }
+  for (const key of Object.keys(value)) {
+    if (key !== "answered" && key !== "replies" && key !== "note") errors.push(`${kind}: kept_replies unknown key: ${key}`);
+  }
+  const answered = value.answered;
+  if (!Array.isArray(answered) || !answered.every((entry) =>
+    isPlainObject(entry) && typeof entry.question === "string" && typeof entry.answer === "string" &&
+    Object.keys(entry).every((key) => key === "question" || key === "answer"))) {
+    errors.push(`${kind}: kept_replies.answered must be an array of { question, answer } strings`);
+  }
+  checkStringArray(value, "replies", kind, errors);
+  checkString(value, "note", kind, errors);
 }
 
 function checkOptionalTrue(
@@ -2041,6 +2370,7 @@ function checkCommandRows(
   key: string,
   kind: DirectiveKind,
   errors: string[],
+  optional: readonly string[] = [],
 ): void {
   if (!(field in o)) {
     errors.push(`${kind}: missing required field: ${field}`);
@@ -2060,8 +2390,10 @@ function checkCommandRows(
       continue;
     }
     for (const rowKey of Object.keys(row)) {
-      if (rowKey !== key && rowKey !== "command") {
+      if (rowKey !== key && rowKey !== "command" && !optional.includes(rowKey)) {
         errors.push(`${kind}: ${field}[${i}] unknown key: ${rowKey}`);
+      } else if (optional.includes(rowKey) && typeof row[rowKey] !== "string") {
+        errors.push(`${kind}: ${field}[${i}].${rowKey} must be string, got ${describe(row[rowKey])}`);
       }
     }
     if (typeof row[key] !== "string") {
@@ -2165,7 +2497,7 @@ if (import.meta.main) {
         "Could not read optional knowledge file example.md; fix its permissions.",
       ],
       sensors_applicable: ["required-sections", "upstream-coverage"],
-      ceremony: { sensors: "on", learnings: "on", summary_confirmation: "on" },
+      ceremony: { sensors: "on", learnings: "on", summary_confirmation: "on", plan_approval: "on", collaborators: "on" },
       stage_file: ".claude/aidlc-common/stages/inception/domain-design.md",
       next_stage: "Units Generation",
     },
@@ -2183,7 +2515,7 @@ if (import.meta.main) {
       produces: ["aidlc-docs/construction/auth/code-generation/code-manifest.md"],
       rules_in_context: ["aidlc-org.md", "aidlc-phase-construction.md"],
       sensors_applicable: ["linter", "type-check"],
-      ceremony: { sensors: "on", learnings: "on", summary_confirmation: "on" },
+      ceremony: { sensors: "on", learnings: "on", summary_confirmation: "on", plan_approval: "on", collaborators: "on" },
       stage_file: ".claude/aidlc-common/stages/construction/code-generation.md",
       worker: "code-generation",
     },
@@ -2219,6 +2551,16 @@ if (import.meta.main) {
           command: "aidlc engine orchestrate next --scope feature --request a1b2c3d4",
         },
       ],
+      choices: [
+        {
+          label: "Go ahead with the \"bugfix\" plan",
+          command: "aidlc engine orchestrate next --scope bugfix --request a1b2c3d4",
+        },
+        {
+          label: "Tailor a plan to this task",
+          command: "aidlc engine orchestrate next compose --request a1b2c3d4",
+        },
+      ],
     },
     { kind: "print", message: "AIDLC framework version 0.0.0" },
     { kind: "error", message: 'Unknown scope: "frobnicate"' },
@@ -2244,7 +2586,7 @@ if (import.meta.main) {
       produces: ["aidlc-docs/construction/{unit-name}/functional-design/functional-spec.md"],
       rules_in_context: ["aidlc-org.md", "aidlc-phase-construction.md"],
       sensors_applicable: ["required-sections"],
-      ceremony: { sensors: "on", learnings: "on", summary_confirmation: "on" },
+      ceremony: { sensors: "on", learnings: "on", summary_confirmation: "on", plan_approval: "on", collaborators: "on" },
       stage_file: ".claude/aidlc-common/stages/construction/functional-design.md",
       conductor_persona: "# The Conductor's Craft …",
     },

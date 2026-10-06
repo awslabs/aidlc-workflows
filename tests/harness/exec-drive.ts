@@ -14,7 +14,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { REPO_ROOT } from "./fixtures.ts";
 import { CI_BEDROCK_MODELS } from "../../scripts/ci-credential-broker.ts";
-import { codexExecTimeout, recordCodexExec } from "./codex-test-lifecycle.ts";
+import { codexExecTimeout, codexPersonTurn, recordCodexExec } from "./codex-test-lifecycle.ts";
 import { LIVE_LONG_OPERATION_TIMEOUT_MS, NATIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "./test-budget.ts";
 
 const CODEX_DIST = join(REPO_ROOT, "dist", "codex");
@@ -27,8 +27,6 @@ const COPILOT_BIN = process.env.AIDLC_COPILOT_BIN ?? "copilot";
 const OPENCODE_BIN = process.env.AIDLC_OPENCODE_BIN ?? "opencode";
 const CURSOR_BIN = process.env.AIDLC_CURSOR_BIN ?? "agent";
 
-const AWS_PROFILE = process.env.AIDLC_CODEX_AWS_PROFILE ?? "codex";
-const AWS_REGION = process.env.AIDLC_CODEX_AWS_REGION ?? "us-east-2";
 const OPENCODE_MODEL =
   process.env.AIDLC_OPENCODE_MODEL ??
   `amazon-bedrock/${CI_BEDROCK_MODELS.opencode}`;
@@ -84,11 +82,23 @@ export function codexBedrockEndpointConfig(env: NodeJS.ProcessEnv = process.env)
   ];
 }
 
+/** Leave credentials to the SDK default chain unless the caller selects a profile. */
+export function codexBedrockConfig(env: NodeJS.ProcessEnv = process.env): string[] {
+  const profile = env.AIDLC_CODEX_AWS_PROFILE;
+  return [
+    ...codexBedrockEndpointConfig(env),
+    "[model_providers.amazon-bedrock.aws]",
+    ...(profile ? [`profile = ${JSON.stringify(profile)}`] : []),
+    `region = ${JSON.stringify(env.AIDLC_CODEX_AWS_REGION ?? "us-east-2")}`,
+  ];
+}
+
 // A scratch install: dist/codex copied verbatim, git-initialized (project
 // hooks.json discovery requires a git repo), a scratch CODEX_HOME with Bedrock
 // provider + project trust + the trust pre-seed from `package.ts codex trust`
-// so hooks fire with zero TUI passes.
-export function setupCodexProject(): CodexProject {
+// so hooks fire with zero TUI passes. A journey that writes workflow records
+// asks for the workspace-write sandbox.
+export function setupCodexProject(opts: { workspaceWrite?: boolean } = {}): CodexProject {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "codex-exec-")));
   const proj = join(root, "proj");
   const home = join(root, "codex-home");
@@ -123,11 +133,10 @@ export function setupCodexProject(): CodexProject {
       `model_provider = "amazon-bedrock"`,
       `model_context_window = 1000000`,
       `model_reasoning_effort = "low"`,
+      // A root setting: after the first table it would belong to that table.
+      ...(opts.workspaceWrite ? [`sandbox_mode = "workspace-write"`] : []),
       ``,
-      ...codexBedrockEndpointConfig(),
-      `[model_providers.amazon-bedrock.aws]`,
-      `profile = ${JSON.stringify(AWS_PROFILE)}`,
-      `region = ${JSON.stringify(AWS_REGION)}`,
+      ...codexBedrockConfig(),
       ``,
       `[shell_environment_policy]`,
       `exclude = ["AWS_*", "AIDLC_BROKER_*", "ANTHROPIC_*", "KIRO_API_KEY", "CURSOR_API_KEY", "GITHUB_TOKEN", "GH_TOKEN", "ACTIONS_*"]`,
@@ -161,6 +170,7 @@ export function execCodex(
   prompt: string,
 ): ExecResult {
   const argv = codexHeadlessArgs("exec", prompt);
+  const turn = codexPersonTurn(proj, prompt);
   const result = spawnSync(CODEX_BIN, argv, {
     cwd: proj,
     encoding: "utf-8",
@@ -174,7 +184,7 @@ export function execCodex(
     signal: result.signal,
     error: result.error?.message,
   };
-  recordCodexExec("status", proj, [CODEX_BIN, ...argv], captured);
+  recordCodexExec("status", proj, [CODEX_BIN, ...argv], captured, turn);
   return captured;
 }
 

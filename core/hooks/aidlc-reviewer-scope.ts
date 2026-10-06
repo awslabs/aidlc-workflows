@@ -43,17 +43,21 @@
 // the run's record shows when the bound bit; audit failures never change the
 // decision.
 
-import { existsSync, mkdirSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, statSync, unlinkSync } from "node:fs";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { appendAuditEntryUnlocked } from "../tools/aidlc-audit.ts";
 import {
+  hookOutsideGate,
+  enterHookWorkflow,
   acquireAuditLock,
   auditFilePath,
   type ClaudeCodeHookInput,
   decideFence,
   errorMessage,
+  guardStandAsideSpeaks,
   guardStoodAsideLine,
   hooksHealthDir,
+  writeHookStatusFile,
   recordGuardStoodAside,
   isClaudeCodeHookInput,
   isTeamUnitOwnership,
@@ -70,6 +74,7 @@ import {
   toPosix,
   writeGuardStoodAside,
 } from "../tools/aidlc-lib.ts";
+import { writeTargets } from "./review-freeze-command.ts";
 
 const HOOK_NAME = "reviewer-scope";
 
@@ -836,7 +841,9 @@ function reviewerScopeStandsAside(
   }
   if (gate.decision !== "stand-aside") return false;
   const detail = `${target} (unit ${unit})`;
-  writeGuardStoodAside(guardStoodAsideLine("reviewer-scope", gate.source, detail));
+  if (guardStandAsideSpeaks(gate)) {
+    writeGuardStoodAside(guardStoodAsideLine("reviewer-scope", gate.source, detail));
+  }
   recordGuardStoodAside(projectDir, {
     fence: "reviewer-scope",
     authority: gate.authority,
@@ -922,13 +929,31 @@ function perUnitReviewOwed(projectDir: string, stateContent: string | null): boo
  *  block; the CLI entry below preserves the direct-run contract unchanged. */
 export async function run(input: string): Promise<number> {
   const projectDir = resolveProjectDirFromHook(import.meta.url);
-
+  let payloadSession: unknown;
   try {
-    const healthDir = hooksHealthDir(projectDir);
-    mkdirSync(healthDir, { recursive: true });
-    writeFileSync(join(healthDir, `${HOOK_NAME}.last`), isoTimestamp(), "utf-8");
+    payloadSession = (JSON.parse(input) as { session_id?: unknown }).session_id;
   } catch {
-    // Heartbeat failure is non-fatal - never let it affect the decision.
+    // Missing/malformed payload: resolve without a payload session.
+  }
+  const workflow = enterHookWorkflow(projectDir, payloadSession);
+  try {
+    return await checkScope(input, projectDir, hookOutsideGate(workflow));
+  } finally {
+    workflow.restore();
+  }
+}
+
+// `outside`: this conversation has not joined the selected workflow. The
+// claimed-checkout write bound still applies; its bookkeeping and the reviewer
+// read scope, which belong to that workflow, do not.
+async function checkScope(input: string, projectDir: string, outside: boolean): Promise<number> {
+  if (!outside) {
+    try {
+      const healthDir = hooksHealthDir(projectDir);
+      writeHookStatusFile(healthDir, `${HOOK_NAME}.last`, isoTimestamp());
+    } catch {
+      // Heartbeat failure is non-fatal - never let it affect the decision.
+    }
   }
 
   let parsed: ClaudeCodeHookInput;
@@ -962,18 +987,19 @@ export async function run(input: string): Promise<number> {
     unitScope &&
     ["Edit", "MultiEdit", "Write", "NotebookEdit", "Bash"].includes(toolName)
   ) {
-    let scopedVerdict: ScopeVerdict;
+    let scopedVerdict: ScopeVerdict = { block: false };
     try {
       const cwdField = (parsed as { cwd?: unknown }).cwd;
-      scopedVerdict = evaluateReviewerScope(
-        toolName,
-        toolInput,
-        { unit: unitScope.unit, exempt: [] },
-        {
-          recordRoot: dirname(dirname(reviewerDispatchPath(projectDir))),
-          cwd: typeof cwdField === "string" && cwdField.length > 0 ? cwdField : projectDir,
-        },
-      );
+      const context = {
+        recordRoot: dirname(dirname(reviewerDispatchPath(projectDir))),
+        cwd: typeof cwdField === "string" && cwdField.length > 0 ? cwdField : projectDir,
+      };
+      // A shell call that writes nothing (a read, a listing, a search) is the
+      // checkout owner's own: only a command that writes is held to this Unit.
+      const writes = toolName !== "Bash" || writeTargets("Bash", toolInput, context.cwd).length > 0;
+      if (writes) {
+        scopedVerdict = evaluateReviewerScope(toolName, toolInput, { unit: unitScope.unit, exempt: [] }, context);
+      }
     } catch (e) {
       recordHookDrop(projectDir, HOOK_NAME, errorMessage(e));
       return 0;
@@ -994,7 +1020,9 @@ export async function run(input: string): Promise<number> {
         ? " (an implicit search root the command falls back to with no path, not a path you typed)"
         : "";
       process.stderr.write(
-        `This checkout is scoped to Unit "${unitScope.unit}"; refusing cross-unit write target "${scopedVerdict.target ?? ""}"${defaultNote}.\n`,
+        `This checkout is scoped to Unit "${unitScope.unit}"; refusing cross-unit write target "${scopedVerdict.target ?? ""}"${defaultNote}. ` +
+          `This checkout changes only Unit "${unitScope.unit}"'s files: make that change from the project's main checkout, ` +
+          "or ask whoever claimed that Unit.\n",
       );
       return 2;
     }
@@ -1002,9 +1030,18 @@ export async function run(input: string): Promise<number> {
 
   // The deterministic off-switch applies only to reviewer read-scope
   // enforcement. Mandatory claimed-checkout ownership was handled above.
-  if (resolveProjectFlag("AIDLC_DISABLE_REVIEWER_SCOPE_HOOK") === "1") return 0;
+  if (outside || resolveProjectFlag("AIDLC_DISABLE_REVIEWER_SCOPE_HOOK") === "1") return 0;
 
-  const recordPath = reviewerDispatchPath(projectDir);
+  // A record that cannot be located (delegated worktree metadata that does not
+  // validate) is unavailable dispatch evidence: the read scope fails open, and
+  // Plan Approval, which resolves the same selection, refuses mutations.
+  let recordPath: string;
+  try {
+    recordPath = reviewerDispatchPath(projectDir);
+  } catch (e) {
+    recordHookDrop(projectDir, HOOK_NAME, errorMessage(e));
+    return 0;
+  }
   if (!existsSync(recordPath)) {
     // No review in flight. One advisory: a review-only agent touching
     // construction/ paths with no dispatch record suggests the conductor
@@ -1021,10 +1058,11 @@ export async function run(input: string): Promise<number> {
           toPosix(c.text).includes("construction/"),
         );
         if (touchesConstruction && perUnitReviewOwed(projectDir, stateContent)) {
-          const marker = join(hooksHealthDir(projectDir), `${HOOK_NAME}.missing-record.last`);
+          const markerName = `${HOOK_NAME}.missing-record.last`;
+          const marker = join(hooksHealthDir(projectDir), markerName);
           const fresh = existsSync(marker) && Date.now() - statSync(marker).mtimeMs < 10 * 60 * 1000;
           if (!fresh) {
-            writeFileSync(marker, isoTimestamp(), "utf-8");
+            writeHookStatusFile(hooksHealthDir(projectDir), markerName, isoTimestamp());
             recordHookDrop(
               projectDir,
               HOOK_NAME,

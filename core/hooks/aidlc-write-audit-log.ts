@@ -6,10 +6,12 @@
 // Receives JSON on stdin from Claude Code. No-op if no audit.md exists (no
 // active workflow in this cwd) to preserve the existing "only log when
 // relevant" behaviour.
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
 import { appendAuditEntryUnlocked } from "../tools/aidlc-audit.ts";
 import {
+  hookStandsOutside,
+  enterHookWorkflow,
   auditFilePath,
   type StageEntry,
   type ClaudeCodeHookInput,
@@ -18,6 +20,7 @@ import {
   errorMessage,
   hookDebug,
   hooksHealthDir,
+  writeHookStatusFile,
   isClaudeCodeHookInput,
   activeSummaryAuthorizationForRecordPath,
   isoTimestamp,
@@ -30,13 +33,29 @@ import {
 } from "../tools/aidlc-lib.ts";
 
 export async function run(input: string): Promise<number> {
-const projectDir = resolveProjectDirFromHook(import.meta.url);
+  const projectDir = resolveProjectDirFromHook(import.meta.url);
+  let payloadSession: unknown;
+  try {
+    payloadSession = (JSON.parse(input) as { session_id?: unknown }).session_id;
+  } catch {
+    // Missing/malformed payload: resolve without a payload session.
+  }
+  // A write in a conversation that has not joined the selected workflow is not that workflow's artifact.
+  const workflow = enterHookWorkflow(projectDir, payloadSession);
+  try {
+    if (hookStandsOutside(workflow)) return 0;
+    return await recordArtifact(input, projectDir);
+  } finally {
+    workflow.restore();
+  }
+}
+
+async function recordArtifact(input: string, projectDir: string): Promise<number> {
 hookDebug(projectDir, "write-audit-log", "invoked", { projectDir, cwd: process.cwd() });
 
 // Write health heartbeat
 const healthDir = hooksHealthDir(projectDir);
-mkdirSync(healthDir, { recursive: true });
-writeFileSync(join(healthDir, "write-audit-log.last"), isoTimestamp(), "utf-8");
+writeHookStatusFile(healthDir, "write-audit-log.last", isoTimestamp());
 
 // Read JSON from stdin. If stdin is a TTY (interactive shell, test harness
 // running under `bash -x`-inheriting pipeline), no JSON is coming — exit

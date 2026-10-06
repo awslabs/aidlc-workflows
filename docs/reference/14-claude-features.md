@@ -184,7 +184,7 @@ The user-facing walk-through (with a worked example) is in [Rules and the Learni
 | Prerequisites | Self-contained `aidlc`; atomic filesystem locking |
 | AI-DLC Structure | Skill, agent, rules, knowledge, and hook locations |
 | Conventions | Artifacts go to the intent's record dir under `aidlc/spaces/<space>/intents/<YYMMDD>-<label>/`; application code goes to workspace root |
-| Session Resumption | Check for `aidlc-state.md` on startup, offer resume options |
+| Session Resumption | Check for `aidlc-state.md` on startup and carry on from the checkpoint |
 | Git Integration | Commit policy (see below) |
 
 ### Git Integration
@@ -213,9 +213,11 @@ The audit trail is committed as **per-clone shards** (`audit/<host>-<clone>.md`)
 {
   "permissions": {
     "allow": [
-      "Read", "Edit", "Write",
-      "Bash(bun .claude/tools/*)", "Bash(date -u *)",
-      "Glob", "Grep", "Task", "WebSearch"
+      "Edit(/**)",
+      "Bash(bun .claude/tools/aidlc.ts engine *)",
+      "Bash(bun .claude/tools/aidlc.ts doctor)", "...",
+      "Bash(bun .claude/tools/aidlc-log.ts)", "Bash(bun .claude/tools/aidlc-log.ts *)", "...",
+      "Task", "WebSearch"
     ]
   }
 }
@@ -338,7 +340,7 @@ The spike also surfaced a separate frontmatter footgun: `allowedTools` is **not*
 
 The two configuration files answer different questions and do not overlap:
 
-- `.claude/settings.json` `permissions.allow` pre-approves *built-in Claude Code tools* (Read, Edit, Write, Bash, Glob, Grep, Task, WebSearch) so the session does not prompt on first use (see [Settings](#settings) above). It says nothing about MCP servers.
+- `.claude/settings.json` `permissions.allow` pre-approves *built-in Claude Code tools* (file edits inside the project, AI-DLC's own commands, Task, WebSearch) so the session does not prompt on first use (see [Settings](#settings) above). It says nothing about MCP servers.
 - `.mcp.json` declares *which MCP servers exist* and how to launch them. Provisioning and inheritance are governed by Claude Code's MCP layer, not by `settings.json`.
 
 An MCP server appearing in the session is a function of `.mcp.json` plus available credentials, not of any `settings.json` allow-list entry. Per-agent narrowing, when it is wired, lives in the agent's `tools:` frontmatter — not in `settings.json` and not in `.mcp.json`.
@@ -380,7 +382,7 @@ When a user runs `/aidlc feature`:
 8.  Stage executes               (stage work)
 9.  Hooks fire as needed         (Claude Code tool calls, compaction, subagent stop)
 10. Conductor reports the outcome (`aidlc-orchestrate report` -- commits state)
-11. Loop back to step 5          (next directive) until the engine emits `done`
+11. Loop back to step 5          (next directive) until the engine emits the final `done`
 ```
 
 Steps 1-2a happen for every conversation, even non-AI-DLC ones — and because every hook is registered project-wide in `settings.json` (not on skill activation), the deterministic spine is in place before `/aidlc` is ever invoked; each hook self-gates to a no-op when no workflow is active. Step 3 loads the rule layers. Steps 4 onward set up and drive the workflow only when the user invokes `/aidlc`; steps 5-11 repeat once per directive — the engine, not SKILL.md, decides what each iteration does.

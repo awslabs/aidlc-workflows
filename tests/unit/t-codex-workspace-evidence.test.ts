@@ -272,6 +272,15 @@ test("the exact parser accepts Codex's own shell wrappers and plain quoting only
   expect(exactCodexUtilityArgv(`${PWSH} "${CREATE.replaceAll('"', '\\"')}"`)).toEqual(argv);
   expect(exactCodexUtilityArgv(`${PWSH_NO_PROFILE} '${CREATE}'`)).toEqual(argv);
   expect(exactCodexUtilityArgv(`/bin/bash -c '${CREATE}'`)).toEqual(argv);
+  // The session prefix the Bash-matched PreToolUse hook adds, as Codex reports it.
+  const bound = "export AIDLC_SESSION_OVERRIDE='01a1079f-990e-7680-822c-66c6a6229df9' AIDLC_SESSION_OVERRIDE_SOURCE='payload'; ";
+  expect(exactCodexUtilityArgv(`/usr/bin/zsh -lc "${bound}${CREATE.replaceAll('"', '\\"')}"`)).toEqual(argv);
+  expect(exactCodexUtilityArgv(`${bound}${CREATE}`)).toEqual(argv);
+  for (const command of [
+    `${bound}${bound}${CREATE}`,
+    `${bound.replace("AIDLC_SESSION_OVERRIDE_SOURCE", "OTHER")}${CREATE}`,
+    `${bound}${CREATE}; true`,
+  ]) expect(exactCodexUtilityArgv(command), command).toBeNull();
   for (const command of [
     `${CREATE}; true`, `${CREATE} &`, `(${CREATE})`, `FOO=1 ${CREATE}`, `${CREATE} 2>&1`,
     "bun .codex/tools/aidlc.ts engine intent create ~", "bun .codex/tools/aidlc.ts engine intent create *",

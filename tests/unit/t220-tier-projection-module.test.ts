@@ -364,15 +364,13 @@ describe("t220 shipped projection bytes (codex TOML, kiro JSON + md)", () => {
     }
   });
 
-  test("Kiro CLI cli.json keeps authored defaults; the Kiro IDE row pins the engine without model defaults", () => {
-    const s = JSON.parse(
-      readFileSync(dist("kiro", ".kiro", "settings", "cli.json"), "utf-8"),
-    ) as Record<string, Record<string, { output_config?: { effort?: string } }>>;
-    const defaults = s["chat.modelDefaults"];
-    expect(defaults?.["claude-opus-4.8"]?.output_config?.effort).toBe("xhigh");
-    expect(Object.keys(defaults ?? {}).sort()).toEqual(["claude-opus-4.8"]);
-    // A project chat.modelDefaults replaces the user's map, so an empty one
-    // would silently reset every model's effort to its default.
+  test("Kiro CLI and Kiro IDE cli.json ship no model defaults", () => {
+    // A project chat.modelDefaults replaces the person's whole personal map,
+    // so any entry (or an empty map) would hide the session effort saved in
+    // their personal Kiro settings and reset every other model's effort.
+    expect(
+      JSON.parse(readFileSync(dist("kiro", ".kiro", "settings", "cli.json"), "utf-8")),
+    ).toEqual({ "chat.defaultAgent": "aidlc" });
     expect(
       JSON.parse(readFileSync(dist("kiro-ide", ".kiro", "settings", "cli.json"), "utf-8")),
     ).toEqual({ "chat.agentEngine": "v3", "chat.defaultAgent": "aidlc" });

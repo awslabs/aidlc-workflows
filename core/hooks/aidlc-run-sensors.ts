@@ -18,16 +18,19 @@
 // semantics defer to the future ralph driver.
 
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
 import { type GraphStage, loadGraph } from "../tools/aidlc-graph.ts";
 import { aidlcEngineCommand } from "../tools/aidlc-runtime-paths.ts";
 import { EXTENDED_SUBPROCESS_TIMEOUT_MS } from "../tools/aidlc-runtime-budget.ts";
 import {
+  hookStandsOutside,
+  enterHookWorkflow,
   auditFilePath,
   type ClaudeCodeHookInput,
   getField,
   hooksHealthDir,
+  writeHookStatusFile,
   isClaudeCodeHookInput,
   isoTimestamp,
   LEGACY_SENSORS_DIR,
@@ -45,9 +48,26 @@ import {
 } from "../tools/aidlc-lib.ts";
 
 export async function run(input: string): Promise<number> {
-// Step 1 — Resolve project dir from import.meta.url. Mirrors
-// aidlc-write-audit-log.ts and aidlc-rebuild-stage-graph.ts precedent.
-const projectDir = resolveProjectDirFromHook(import.meta.url);
+  // Step 1 — Resolve project dir from import.meta.url. Mirrors
+  // aidlc-write-audit-log.ts and aidlc-rebuild-stage-graph.ts precedent.
+  const projectDir = resolveProjectDirFromHook(import.meta.url);
+  let payloadSession: unknown;
+  try {
+    payloadSession = (JSON.parse(input) as { session_id?: unknown }).session_id;
+  } catch {
+    // Missing/malformed payload: resolve without a payload session.
+  }
+  // A write in a conversation that has not joined the selected workflow fires none of its sensors.
+  const workflow = enterHookWorkflow(projectDir, payloadSession);
+  try {
+    if (hookStandsOutside(workflow)) return 0;
+    return await fireSensors(input, projectDir);
+  } finally {
+    workflow.restore();
+  }
+}
+
+async function fireSensors(input: string, projectDir: string): Promise<number> {
 
 // Enclosing dispatcher backstop; explicit project/user limits still win,
 // including the deliberately short timeout-calibration fixtures.
@@ -130,12 +150,7 @@ if (resolveCeremony("sensors", scope, stateContent).value === "off") return 0;
 // with empty sensors_applicable like workspace-scaffold, (b) no
 // matches glob hit since last fire. See plan § Cross-milestone for the
 // canonical heuristic.
-mkdirSync(healthDir, { recursive: true });
-writeFileSync(
-  join(healthDir, "run-sensors.last"),
-  isoTimestamp(),
-  "utf-8"
-);
+writeHookStatusFile(healthDir, "run-sensors.last", isoTimestamp());
 
 // Step 8b — First-fire banner. On the first invocation against a
 // workspace (no .first-fired marker yet), print a one-line stderr
@@ -151,11 +166,8 @@ if (!existsSync(firstFiredMarker)) {
       "See the AI-DLC documentation to learn how rules and " +
       "the learning loop work.\n"
   );
-  try {
-    writeFileSync(firstFiredMarker, isoTimestamp(), "utf-8");
-  } catch {
-    // Marker write failure is non-fatal — banner may repeat next fire.
-  }
+  // Marker write failure is non-fatal: the banner may repeat next fire.
+  writeHookStatusFile(healthDir, ".first-fired", isoTimestamp());
 }
 
 // Step 9 — Active stage lookup (C3). The compile-resolved
@@ -264,20 +276,20 @@ for (const entry of applicableSensors) {
       recordHookDrop(
         projectDir,
         "run-sensors",
-        `${entry.id}: subprocess killed by SIGTERM (timeout)`
+        `sensor ${entry.id} timed out: subprocess killed by SIGTERM`
       );
     } else if (result.error) {
       recordHookDrop(
         projectDir,
         "run-sensors",
-        `${entry.id}: ${result.error.message}`
+        `sensor ${entry.id} could not start: ${result.error.message}`
       );
     } else if (result.status !== 0) {
       const stderr = result.stderr?.toString().trim() ?? "";
       recordHookDrop(
         projectDir,
         "run-sensors",
-        `${entry.id}: dispatcher exit ${result.status}${stderr ? `: ${stderr}` : ""}`
+        `sensor ${entry.id} dispatcher exit ${result.status}${stderr ? `: ${stderr}` : ""}`
       );
     }
   } catch (e: unknown) {
@@ -285,7 +297,7 @@ for (const entry of applicableSensors) {
     recordHookDrop(
       projectDir,
       "run-sensors",
-      `${entry.id}: ${e instanceof Error ? e.message : String(e)}`
+      `sensor ${entry.id} could not run: ${e instanceof Error ? e.message : String(e)}`
     );
   }
 }

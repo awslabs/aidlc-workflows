@@ -67,6 +67,8 @@ import {
   reviewerAgentSet,
 } from "./agent-knowledge.ts";
 import { renderNeutralOnboarding, renderOnboarding } from "./onboarding.ts";
+import { keepOwnHarnessBindings } from "./harness-bindings.ts";
+import { forgetPackagedSources, packageInputsFingerprint, recordPackagedSources } from "./package-sources.ts";
 import {
   buildPluginProjection as emitPluginProjection,
   type PluginTarget,
@@ -88,15 +90,16 @@ import {
   writeMarkdownAgentSurface,
 } from "../core/tools/aidlc-model-policy.ts";
 import {
+  cursorTrustedShell,
   scanNamespaceInvocations,
   TRUSTED_COMMAND_PREFIX,
   TRUSTED_ROUTE_NAMESPACE,
   trustedCommand,
 } from "../core/tools/aidlc-command.ts";
-import { ROUTES, TOOLS } from "../core/tools/aidlc.ts";
+import { copyChannelDispatcherCommands, copyChannelToolScripts, ROUTES, TOOLS } from "../core/tools/aidlc.ts";
 import { AIDLC_VERSION } from "../core/tools/aidlc-version.ts";
 import { BUILD_VERSION_ENV, releaseBuildVersion } from "../core/tools/aidlc-channel.ts";
-import { sha256Bytes } from "../core/tools/aidlc-distribution.ts";
+import { copyStartsWithout, sha256Bytes, writtenRootIntegration } from "../core/tools/aidlc-distribution.ts";
 import { AIDLC_SETTINGS_SCHEMA } from "../core/tools/aidlc-settings.ts";
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -340,9 +343,9 @@ function projectKiroAgentJson(srcPath: string, content: Buffer): Buffer {
 // Merge the tier-derived chat.modelDefaults entries into an authored Kiro
 // settings/cli.json: one entry per distinct pinned Kiro model, carrying the
 // highest sharing tier's effort (the collapse rule - kiroModelDefaults()).
-// Authored entries (the orchestrator's opus-4.8 -> xhigh) are preserved and
-// join the same higher-effort collapse on collision. CLI-only: the Kiro IDE
-// ignores cli.json.
+// Authored entries are preserved and join the same higher-effort collapse on
+// collision; none ship today, because a project map replaces the person's
+// personal one. CLI-only: the Kiro IDE ignores cli.json.
 function projectKiroCliJson(content: Buffer): Buffer {
   return Buffer.from(
     writeKiroCliSurface(content.toString("utf-8"), [], TIER_CAP),
@@ -579,8 +582,12 @@ function writeHarnessData(treeRoot: string, m: HarnessManifest): void {
   // Emitted only when a manifest sets it, so the three-field output stays
   // byte-identical for every harness that does not -- which is all of them today.
   if (m.documentExtractors) data.documentExtractors = m.documentExtractors;
-  // Likewise conditional: only a host that gates hooks on trust declares it.
+  // Likewise conditional: only a host whose hooks wait on the person (trust, engine) declares it.
   if (m.hookActivation) data.hookActivation = m.hookActivation;
+  // Only the Kiro rows declare a layout; the runtime reads it in place of the row name.
+  if (m.kiroLayout) data.kiroLayout = m.kiroLayout;
+  // And only a host that cuts a shell result below the engine's cap.
+  if (m.directiveMaxBytes) data.directiveMaxBytes = m.directiveMaxBytes;
   const dst = join(treeRoot, HARNESS_DATA);
   mkdirSync(dirname(dst), { recursive: true });
   writeFileSync(dst, `${JSON.stringify(data, null, 2)}\n`);
@@ -611,9 +618,23 @@ function writeProjectionData(outRoot: string, treeRoot: string, m: HarnessManife
       throw new Error(`[${m.name}] root integration is not projected: ${integration.path}`);
     }
   }
+  // A directory that holds only root integrations (.vscode/ for settings.json)
+  // is the project's, not a managed engine directory.
+  const onlyRootIntegrations = (entry: string): boolean => {
+    const files: string[] = [];
+    const visit = (dir: string): void => {
+      for (const name of readdirSync(join(outRoot, dir))) {
+        const rel = `${dir}/${name}`;
+        if (statSync(join(outRoot, rel)).isDirectory()) visit(rel);
+        else files.push(rel);
+      }
+    };
+    visit(entry);
+    return files.length > 0 && files.every((file) => rootIntegrationPaths.has(file));
+  };
   const managedDirectories = readdirSync(outRoot)
     .filter((entry) => statSync(join(outRoot, entry)).isDirectory())
-    .filter((entry) => !rootIntegrationPaths.has(entry))
+    .filter((entry) => !rootIntegrationPaths.has(entry) && !onlyRootIntegrations(entry))
     .sort();
   const allowedTopLevel = new Set([
     ...managedDirectories,
@@ -626,19 +647,29 @@ function writeProjectionData(outRoot: string, treeRoot: string, m: HarnessManife
     throw new Error(`[${m.name}] unclassified projection entries: ${unclassified.join(", ")}`);
   }
   const rootIntegrations = m.rootIntegrations.map((integration) => {
+    if (copyStartsWithout(integration) || integration.policy === "json-entries") {
+      // A copy starts without this file (or leaves the team's own in place);
+      // its shipped part rides along so config and the engine can add it
+      // without a download.
+      const dst = join(treeRoot, "tools", "data", "root-blocks", basename(integration.path));
+      mkdirSync(dirname(dst), { recursive: true });
+      writeFileSync(dst, readFileSync(join(outRoot, integration.path)));
+      return integration;
+    }
     if (integration.policy !== "managed-block") return integration;
     const bytes = readFileSync(join(outRoot, integration.path));
-    if (integration.shared === "union") {
-      const dst = join(
-        treeRoot,
-        "tools",
-        "data",
-        "root-blocks",
-        integration.marker || basename(integration.path),
-      );
-      mkdirSync(dirname(dst), { recursive: true });
-      writeFileSync(dst, bytes);
-    }
+    // Every managed block ships a copy inside the harness folder: siblings
+    // read it to combine .gitignore lines, the copy runtime leaves the root
+    // file out, and config and the engine add AI-DLC's part from it.
+    const dst = join(
+      treeRoot,
+      "tools",
+      "data",
+      "root-blocks",
+      integration.marker || basename(integration.path),
+    );
+    mkdirSync(dirname(dst), { recursive: true });
+    writeFileSync(dst, bytes);
     const currentHash = sha256Bytes(bytes);
     return {
       ...integration,
@@ -667,7 +698,7 @@ function writeProjectionData(outRoot: string, treeRoot: string, m: HarnessManife
         ? { onboarding: `${m.harnessDir}/${m.onboarding.dst}` }
         : {}),
     managedDirectories,
-    rootIntegrations,
+    rootIntegrations: rootIntegrations.map(writtenRootIntegration),
   };
   const stamp = {
     schemaVersion: 1,
@@ -813,6 +844,10 @@ function buildTree(
       // Manifest keys are POSIX; normalize the platform separator so the
       // lookup works on Windows too.
       const harnessRel = join(finalDst, rel).split(sep).join("/");
+      // A protocol module's per-tool binding subsections: this tree keeps its own.
+      if (/^aidlc-common\/protocols\/[^/]+\.md$/.test(harnessRel)) {
+        out = Buffer.from(keepOwnHarnessBindings(out.toString("utf-8"), m.name, harnessRel), "utf-8");
+      }
       const fmLines = fmAdditions.get(harnessRel);
       if (fmLines) {
         out = Buffer.from(
@@ -969,6 +1004,10 @@ function buildTree(
       tierCap: TIER_CAP,
     });
   }
+  expandCursorToolAllows(treeRoot, m);
+  expandClaudeToolAllows(treeRoot, m);
+  expandKiroToolAllows(treeRoot, m);
+  expandKiroIdeConductorAllows(treeRoot, m, invoke);
   writeProjectionData(outRoot, treeRoot, m);
 
   // 6. Generated table regions are build products, not authored prose. Refresh
@@ -982,18 +1021,50 @@ function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
+// The dispatcher commands every install pre-approves exactly as written
+// (copyChannelDispatcherCommands), as the native release runs them: through
+// the installed aidlc command, never a project path.
+function nativeDispatcherCommands(): string[] {
+  return copyChannelDispatcherCommands().map((command) => `aidlc ${command}`);
+}
+
+// A manifest's nativeReplacements, applied before the generic rewrite, which
+// would otherwise turn their copy-channel text into retired or unresolvable
+// engine spellings.
+function applyNativeReplacements(outRoot: string, m: HarnessManifest): void {
+  for (const { from, to } of m.nativeReplacements ?? []) {
+    let found = false;
+    for (const file of walk(outRoot)) {
+      if (!/\.(?:md|mdc|json|toml|hook|ts)$/.test(file)) continue;
+      const value = readFileSync(file, "utf-8");
+      if (!value.includes(from)) continue;
+      found = true;
+      writeFileSync(file, value.replaceAll(from, to));
+    }
+    if (!found) {
+      throw new Error(`[${m.name}] nativeReplacements: text not found in the native projection:\n${from}`);
+    }
+  }
+}
+
 function rewriteKiroNativeAllowlists(outRoot: string, m: HarnessManifest): void {
   if (m.tierFlavor !== "kiro") return;
   const agentsDir = join(outRoot, m.harnessDir, "agents");
   for (const file of walk(agentsDir)) {
     if (file.endsWith(".md")) {
       // Kiro IDE persona surfaces carry a YAML shell allowlist; the native
-      // channel replaces the bun tool glob with the aidlc command prefix.
+      // channel replaces the bun tool glob with the aidlc command prefix. The
+      // copy channel's dispatcher line (`{{INVOKE}} engine *` on the conductor,
+      // `bun <dir>/tools/aidlc.ts engine *` on a persona, which the tool
+      // rewrite above turned into `aidlc engine engine *`) is that same
+      // prefix, so the pair collapses to one entry. A persona's ask lines get
+      // the same doubled prefix and lose it the same way.
       const value = readFileSync(file, "utf-8");
-      const rewritten = value.replaceAll(
-        `- "bun ${m.harnessDir}/tools/aidlc-*"`,
-        `- "${trustedCommand("*")}"`,
-      );
+      const trusted = `- "${trustedCommand("*")}"`;
+      const rewritten = value
+        .replaceAll(`- "bun ${m.harnessDir}/tools/aidlc-*"`, trusted)
+        .replaceAll(`- "${trustedCommand("engine ")}`, `- "${trustedCommand("")} `)
+        .replaceAll(`${trusted}\n        ${trusted}`, trusted);
       if (rewritten !== value) writeFileSync(file, rewritten);
       continue;
     }
@@ -1014,7 +1085,12 @@ function rewriteKiroNativeAllowlists(outRoot: string, m: HarnessManifest): void 
         ? trustedCommand(".*")
         : command
     );
-    value.toolsSettings!.execute_bash!.allowedCommands = [...new Set(rewritten)];
+    // An agent the copy channel let run AI-DLC's tool commands also runs the
+    // exact read-only and turn-back-on commands natively, as anchored patterns.
+    const trusted = trustedCommand(".*");
+    value.toolsSettings!.execute_bash!.allowedCommands = [...new Set(rewritten)].flatMap((command) =>
+      command === trusted ? [command, ...nativeDispatcherCommands().map(escapeRegExp)] : [command]
+    );
     writeFileSync(file, `${JSON.stringify(value, null, 2)}\n`);
   }
 }
@@ -1027,32 +1103,179 @@ function rewriteClaudeNativePermissions(outRoot: string, m: HarnessManifest): vo
   };
   const allow = value.permissions?.allow;
   if (!Array.isArray(allow)) throw new Error("[claude] settings.json has no permissions.allow list");
+  // The copy channel's AI-DLC command entries (the tool rewrite above has
+  // already turned their `bun <dir>/tools/aidlc...` into `aidlc engine ...`)
+  // give way to the one trusted prefix and the exact read-only and
+  // turn-back-on commands, run as the installed aidlc command.
   value.permissions!.allow = [
     ...allow.filter((entry) =>
       entry !== "Bash" &&
-      !(typeof entry === "string" && entry.startsWith("Bash(bun "))
+      !(typeof entry === "string" && (entry.startsWith("Bash(bun ") || entry.startsWith("Bash(aidlc ")))
     ),
     `Bash(${trustedCommand("*")})`,
+    ...nativeDispatcherCommands().map((command) => `Bash(${command})`),
   ];
   writeFileSync(settingsPath, `${JSON.stringify(value, null, 2)}\n`);
+}
+
+// Claude's authored settings.json names AI-DLC's tool scripts with one glob.
+// The projection lists, in its place, each dispatcher command a copy channel
+// pre-approves exactly as AI-DLC runs it (copyChannelDispatcherCommands), and
+// each tool script it pre-approves (copyChannelToolScripts), bare or followed
+// by arguments, never a longer file name. A script behind a machine-changing
+// command, and any config command but the read-only forms, then shows Claude
+// Code's own prompt. Both trees get it; the native rewrite then drops every
+// bun entry.
+function expandClaudeToolAllows(treeRoot: string, m: HarnessManifest): void {
+  if (m.tierFlavor !== "claude") return;
+  const settingsPath = join(treeRoot, "settings.json");
+  const value = JSON.parse(readFileSync(settingsPath, "utf-8")) as { permissions?: { allow?: unknown } };
+  const allow = value.permissions?.allow;
+  // The authored entries name the tools folder as written (`.claude`), which
+  // a renamed harness folder keeps, so the expansion uses the same spelling.
+  const glob = Array.isArray(allow)
+    ? allow.find((entry): entry is string =>
+      typeof entry === "string" && /^Bash\(bun \S+\/tools\/aidlc-\*\)$/.test(entry)
+    )
+    : undefined;
+  if (!Array.isArray(allow) || glob === undefined) {
+    throw new Error("[claude] settings.json has no Bash(bun <dir>/tools/aidlc-*) entry to expand");
+  }
+  const toolsDir = glob.slice("Bash(bun ".length, -"/aidlc-*)".length);
+  const tool = (script: string) => `Bash(bun ${toolsDir}/${script}`;
+  value.permissions!.allow = allow.flatMap((entry) =>
+    entry === glob
+      ? [
+        ...copyChannelDispatcherCommands().map((command) => `${tool("aidlc.ts")} ${command})`),
+        ...copyChannelToolScripts().flatMap((script) => [`${tool(script)})`, `${tool(script)} *)`]),
+      ]
+      : [entry]
+  );
+  writeFileSync(settingsPath, `${JSON.stringify(value, null, 2)}\n`);
+}
+
+// Kiro CLI's authored agents name AI-DLC's tool scripts with one pattern
+// (any script, any arguments). The projection lists, in its place, the
+// dispatcher's engine commands, each dispatcher command a copy channel
+// pre-approves exactly as AI-DLC runs it (copyChannelDispatcherCommands), and
+// the tool scripts it pre-approves (copyChannelToolScripts), bare or followed
+// by arguments, never a longer file name. A script behind a machine-changing
+// command, and any config command but the read-only forms, then waits for the
+// person in Kiro CLI. Both trees get it; the native rewrite then turns every
+// bun entry into the one trusted prefix.
+function expandKiroToolAllows(treeRoot: string, m: HarnessManifest): void {
+  if (m.name !== "kiro") return;
+  const agentsDir = join(treeRoot, "agents");
+  const prefix = (dir: string) => `bun (run )?["']?${dir}/`;
+  let expanded = 0;
+  for (const file of walk(agentsDir).filter((path) => path.endsWith(".json"))) {
+    const value = JSON.parse(readFileSync(file, "utf-8")) as {
+      toolsSettings?: { execute_bash?: { allowedCommands?: unknown } };
+    };
+    const allowed = value.toolsSettings?.execute_bash?.allowedCommands;
+    if (!Array.isArray(allowed)) continue;
+    const next = allowed.flatMap((entry) => {
+      const match = typeof entry === "string"
+        ? /^bun \(run \)\?\["']\?(\S+)\/tools\/\[A-Za-z0-9\._-\]\+\\\.ts\["']\?\( \.\*\)\?$/.exec(entry)
+        : null;
+      if (match === null) return [entry];
+      expanded++;
+      const tools = `${match[1]}/tools`;
+      const scripts = copyChannelToolScripts().map((script) => escapeRegExp(script.slice(0, -".ts".length)));
+      return [
+        `${prefix(tools)}aidlc\\.ts["']? engine( .*)?`,
+        ...copyChannelDispatcherCommands().map((command) =>
+          `${prefix(tools)}aidlc\\.ts["']? ${escapeRegExp(command)}`
+        ),
+        `${prefix(tools)}(${scripts.join("|")})\\.ts["']?( .*)?`,
+      ];
+    });
+    value.toolsSettings!.execute_bash!.allowedCommands = next;
+    writeFileSync(file, `${JSON.stringify(value, null, 2)}\n`);
+  }
+  if (expanded === 0) throw new Error("[kiro] no agent names the tools-folder pattern to expand");
+}
+
+// Kiro IDE's authored conductor (agents/aidlc.md) allows AI-DLC's tool
+// scripts and the dispatcher's engine namespace. Both trees add, after the
+// engine line, each dispatcher command every install pre-approves exactly as
+// AI-DLC runs it (copyChannelDispatcherCommands): through the project's
+// dispatcher on the copy channel, through the installed aidlc command in the
+// native release. Reading a setting or running doctor then shows no card,
+// while any config change still does. Every persona's deny lists the same
+// commands (delegate-shell-deny.ts).
+function expandKiroIdeConductorAllows(treeRoot: string, m: HarnessManifest, invoke: string): void {
+  if (m.name !== "kiro-ide") return;
+  const conductor = join(treeRoot, "agents", "aidlc.md");
+  const engine = `        - "${invoke} engine *"\n`;
+  const value = readFileSync(conductor, "utf-8");
+  if (value.split(engine).length !== 2) {
+    throw new Error(`[kiro-ide] agents/aidlc.md must allow ${invoke} engine * exactly once`);
+  }
+  const exact = copyChannelDispatcherCommands().map((command) => `        - "${invoke} ${command}"\n`);
+  writeFileSync(conductor, value.replace(engine, `${engine}${exact.join("")}`));
+}
+
+// Cursor's authored cli.json names AI-DLC's tool scripts with one glob. The
+// projection lists, in its place, each dispatcher command a copy channel
+// pre-approves exactly as AI-DLC runs it (copyChannelDispatcherCommands), and
+// each tool script it pre-approves (copyChannelToolScripts), bare or followed
+// by arguments, never a longer file name. A script behind a machine-changing
+// command, and any config command but the read-only forms, then shows
+// Cursor's own prompt. Both trees get it; the native rewrite then drops every
+// bun entry.
+function expandCursorToolAllows(treeRoot: string, m: HarnessManifest): void {
+  if (m.tierFlavor !== "cursor") return;
+  const cliPath = join(treeRoot, "cli.json");
+  const value = JSON.parse(readFileSync(cliPath, "utf-8")) as { permissions?: { allow?: unknown } };
+  const allow = value.permissions?.allow;
+  const glob = `Shell(bun:${m.harnessDir}/tools/aidlc-*)`;
+  if (!Array.isArray(allow) || !allow.includes(glob)) {
+    throw new Error(`[cursor] cli.json has no ${glob} entry to expand`);
+  }
+  const tool = (script: string) => `Shell(bun:${m.harnessDir}/tools/${script}`;
+  value.permissions!.allow = allow.flatMap((entry) =>
+    entry === glob
+      ? [
+        ...copyChannelDispatcherCommands().map((command) => `${tool("aidlc.ts")} ${command})`),
+        ...copyChannelToolScripts().flatMap((script) => [`${tool(script)})`, `${tool(script)} *)`]),
+      ]
+      : [entry]
+  );
+  writeFileSync(cliPath, `${JSON.stringify(value, null, 2)}\n`);
 }
 
 function rewriteCursorNativePermissions(outRoot: string, m: HarnessManifest): void {
   if (m.tierFlavor !== "cursor") return;
   const cliPath = join(outRoot, m.harnessDir, "cli.json");
   const value = JSON.parse(readFileSync(cliPath, "utf-8")) as {
-    permissions?: { allow?: unknown };
+    permissions?: { allow?: unknown; deny?: unknown };
   };
   const allow = value.permissions?.allow;
   if (!Array.isArray(allow)) throw new Error("[cursor] cli.json has no permissions.allow list");
+  // The copy channel's bun entries name its tool paths; native runs the
+  // aidlc command, so they give way to its one trusted-prefix entry and the
+  // same exact read-only and turn-back-on commands.
   value.permissions!.allow = [
-    ...allow.filter((entry) => entry !== "Shell(bun)"),
-    `Shell(${trustedCommand("*")})`,
+    ...allow.filter((entry) => typeof entry !== "string" || !entry.startsWith("Shell(bun")),
+    cursorTrustedShell(),
+    // Cursor reads the first token as the command and the rest as an
+    // argument glob, so each exact form is `Shell(aidlc:<arguments>)`.
+    ...copyChannelDispatcherCommands().map((command) => `Shell(aidlc:${command})`),
   ];
   writeFileSync(cliPath, `${JSON.stringify(value, null, 2)}\n`);
 }
 
-function rewriteNativeOnboarding(value: string): string {
+// The native Permissions line. A harness whose native allow list carries the
+// exact read-only and turn-back-on commands names them; the others keep the
+// engine prefix alone.
+function nativePermissionsLine(exactReads: boolean): string {
+  return exactReads
+    ? `- **Permissions**: the \`aidlc\` agent pre-approves only the native \`${TRUSTED_COMMAND_PREFIX}\` command prefix, the read-only \`aidlc doctor\`, \`status\`, \`version\` and \`config <section> --show\` (with or without \`--json\`) and \`--help\` forms, turning a check back on (\`aidlc config flags --clear-bypass <switch> --yes\`), and its listed read-only tools; everything else prompts, including any other \`config\` change.`
+    : `- **Permissions**: the \`aidlc\` agent pre-approves only the native \`${TRUSTED_COMMAND_PREFIX}\` command prefix and its listed read-only tools; everything else prompts.`;
+}
+
+function rewriteNativeOnboarding(value: string, exactReads = false): string {
   return value
     .replace(
       /^- \*\*bun\*\*:.*$/gm,
@@ -1062,10 +1285,7 @@ function rewriteNativeOnboarding(value: string): string {
       /^- \*\*Hook permissions\*\*:.*$/gm,
       "- **Hook permissions**: Framework hooks run through the self-contained `aidlc` binary. No separate script runtime or executable bits are required.",
     )
-    .replace(
-      /^- \*\*Permissions\*\*:.*$/gm,
-      `- **Permissions**: the \`aidlc\` agent pre-approves only the native \`${TRUSTED_COMMAND_PREFIX}\` command prefix and its listed read-only tools; everything else prompts.`,
-    )
+    .replace(/^- \*\*Permissions\*\*:.*$/gm, nativePermissionsLine(exactReads))
     .replace(
       /TypeScript, run via bun/g,
       "TypeScript sources invoked through the self-contained `aidlc` runtime",
@@ -1108,7 +1328,7 @@ function projectNativeRootIntegrations(outRoot: string, m: HarnessManifest): voi
       }
       cpSync(source, destination);
     }
-    descriptor.rootIntegrations.push(integration);
+    descriptor.rootIntegrations.push(writtenRootIntegration(integration));
     paths.add(integration.path);
   }
   writeFileSync(descriptorPath, `${JSON.stringify(descriptor, null, 2)}\n`);
@@ -1131,6 +1351,7 @@ function rewriteNativeInvocations(
   copyRoot: string,
 ): void {
   projectNativeRootIntegrations(outRoot, m);
+  applyNativeReplacements(outRoot, m);
   const harnessDir = escapeRegExp(m.harnessDir);
   // The hand-maintained list had drifted to 23 of 33 tools, omitting review-brief.
   // Deriving it from TOOLS keeps new delegates' bare bun aidlc-<name>.ts forms
@@ -1232,7 +1453,7 @@ function rewriteNativeInvocations(
       `"${trustedCommand(".*")}"`,
     );
     value = substituteInvocationTokens(value, m.harnessDir, "aidlc");
-    value = rewriteNativeOnboarding(value);
+    value = rewriteNativeOnboarding(value, m.tierFlavor === "claude" || m.tierFlavor === "cursor" || m.tierFlavor === "kiro");
     writeFileSync(file, value);
   }
   rewriteKiroNativeAllowlists(outRoot, m);
@@ -1295,6 +1516,14 @@ function rewriteNativeInvocations(
   }
   writeFileSync(descriptorPath, `${JSON.stringify(descriptor, null, 2)}\n`);
 
+  // A manifest's nativeReplacements text is generated from the route table
+  // (permission globs, not invocations), so the prose check skips it; its
+  // lines stay as blank lines so reported line numbers still match the file.
+  const withoutNativeReplacements = (value: string): string =>
+    (m.nativeReplacements ?? []).reduce(
+      (text, { to }) => text.replaceAll(to, to.replace(/[^\n]/g, "")),
+      value,
+    );
   const leftovers: string[] = [];
   for (const file of walk(outRoot)) {
     if (!/\.(?:md|mdc|json|toml|hook|ts)$/.test(file)) continue;
@@ -1314,7 +1543,7 @@ function rewriteNativeInvocations(
       leftovers.push(`${relative(outRoot, file)}: retired engine alias survived native projection`);
     }
     leftovers.push(
-      ...projectedNamespaceInvocationViolations(relative(outRoot, file), value),
+      ...projectedNamespaceInvocationViolations(relative(outRoot, file), withoutNativeReplacements(value)),
     );
     if (
       relative(outRoot, file).split(sep).join("/").includes("/agents/") &&
@@ -1528,13 +1757,15 @@ if (argv[0] === "codex" && argv[1] === "trust") {
       trustedNamespace: string,
     ) => string;
   };
+  // The checkout's dist/codex runs its hooks as `bun .codex/tools/aidlc.ts ...`,
+  // so hash those commands: a native `aidlc ...` hash trusts none of them.
   console.log(
     trustEntries(
       resolvedProject,
       hooksJson ?? undefined,
       ".codex",
       "codex",
-      "aidlc",
+      substituteInvocationTokens("{{INVOKE}}", ".codex"),
       TRUSTED_ROUTE_NAMESPACE,
     ),
   );
@@ -1818,6 +2049,8 @@ if (check) {
       `for ${targets.join(", ")}.`,
   );
 } else {
+  const builtFrom = packageInputsFingerprint(REPO_ROOT);
+  forgetPackagedSources(REPO_ROOT, targets);
   cleanWriteOutputs(targets, named === undefined);
   for (const n of targets) {
     writeHarness(n);
@@ -1827,4 +2060,11 @@ if (check) {
   assertIdenticalRootIntegrations(join(REPO_ROOT, "dist-release"), targets);
   // Emit plugin projections (the hybrid: per-harness host plugins from plugins/<name>/)
   emitPlugins(targets);
+  // Last, so only a finished build from unchanged sources is recorded as current.
+  if (!recordPackagedSources(REPO_ROOT, targets, builtFrom)) {
+    console.error(
+      "[sources] a packaging input changed while packaging, so the generated trees may mix old and new files: run `bun scripts/package.ts` again.",
+    );
+    process.exit(1);
+  }
 }

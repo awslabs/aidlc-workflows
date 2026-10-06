@@ -563,6 +563,44 @@ describe("t332 summary authorization id", () => {
     expect(stale.refusal?.code).toBe("SUMMARY_CONTENT_STALE");
   });
 
+  test("decorated assumption and follow-up headings after the summary read as the sections they name (#1385)", () => {
+    const proj = project();
+    const { questions, artifact } = paths(proj);
+    confirm(proj, questions);
+    writeArtifact(proj, artifact);
+    const confirmed = readFileSync(questions, "utf-8");
+    const appended = `${confirmed}\n---\n\n## \u2139\uFE0F Assumption Confirmation\n\nConfirmed.\n`;
+    writeFileSync(questions, appended);
+    expect(evidence(proj).ok).toBe(true);
+
+    writeFileSync(questions, `${appended}\n## \u2753 Q2\n\n[Answer]: Disable TLS.\n`);
+    const stale = evidence(proj);
+    expect(stale.ok).toBe(false);
+    if (stale.ok) throw new Error("expected refusal");
+    expect(stale.refusal?.code).toBe("SUMMARY_CONTENT_STALE");
+  });
+
+  test("a summary re-presented with a decorated follow-up question records and completes (#1385)", () => {
+    const proj = project();
+    const { questions, artifact } = paths(proj);
+    const body = `${questionsBody("")}\n## \u2753 Q2. Which region?\n\n[Answer]: EU\n`;
+    writeFileSync(questions, body);
+    const decision = run(
+      [
+        "decision", "--stage", STAGE, "--checkpoint", "summary-confirmation",
+        "--questions-file", questions, "--decision", "Does this all look correct?",
+      ],
+      proj,
+    );
+    expect(decision.status, decision.stderr).toBe(0);
+    appendAuditEntry("HUMAN_TURN", {}, proj);
+    writeFileSync(questions, body.replace("[Answer]: \n", "[Answer]: Looks correct\n"));
+    const recorded = answer(proj, questions, "Looks correct");
+    expect(recorded.status, recorded.stderr).toBe(0);
+    writeArtifact(proj, artifact);
+    expect(evidence(proj).ok).toBe(true);
+  });
+
   for (const { name, block } of [
     { name: "fenced JSON", block: '```json\n{"tls_required":true}\n```' },
     { name: "indented code", block: '    {"tls_required":true}' },
@@ -667,6 +705,34 @@ describe("t332 stage-level questions for per-unit stages", () => {
     },
   );
 
+  test("a Unit's confirmed summary stays confirmed after the person switches back to stage by stage", () => {
+    const proj = project({ ...target, scope: "infra", unitsGeneration: "EXECUTE" });
+    const file = seededStateFile(proj);
+    writeFileSync(file, readFileSync(file, "utf-8").replace(
+      "## Current Status", "- **Construction Iteration**: unit-major\n\n## Current Status",
+    ));
+    const unitTarget = { ...target, unit: "api" };
+    const perUnit = paths(proj, unitTarget);
+    const unitId = confirm(proj, perUnit.questions, "Looks correct", undefined, unitTarget);
+    writeArtifact(proj, perUnit.artifact, "# Confirmed Unit NFR output\n");
+    expect(auditBlockField(artifactWrites(proj).at(-1)!.block, SUMMARY_AUTHORIZATION_FIELD)).toBe(unitId as string);
+    expect(evidence(proj, unitTarget)).toMatchObject({ ok: true, required: true });
+    // The unit-major walk records the stage's start late, then the person
+    // says "go stage by stage": that start is no new attempt for the Unit.
+    appendAuditEntry("STAGE_STARTED", { Stage: NFR_STAGE }, proj);
+    appendAuditEntry("CONSTRUCTION_POLICY_SET", {
+      Field: "Construction Iteration", Value: "stage-major", "Previous Value": "unit-major",
+      "Construction Iteration": "stage-major", "Construction Checkpoints": "unset",
+    }, proj);
+    writeFileSync(file, readFileSync(file, "utf-8").replace(
+      "- **Construction Iteration**: unit-major", "- **Construction Iteration**: stage-major",
+    ));
+    expect(evidence(proj, unitTarget)).toMatchObject({ ok: true, required: true });
+    // A start after the switch is a real restart: the Unit confirms again.
+    appendAuditEntry("STAGE_STARTED", { Stage: NFR_STAGE }, proj);
+    expect(evidence(proj, unitTarget)).toMatchObject({ ok: false });
+  });
+
   test("infra with an EXECUTE override requires the specified Unit's own questions and confirmation", () => {
     const proj = project({ ...target, scope: "infra", unitsGeneration: "EXECUTE" });
     const stageLevel = paths(proj, target);
@@ -750,6 +816,11 @@ describe("t332 authorization scope resolution", () => {
     expect(reviewDraftRelativePath("functional-design", "Unit.Name_1", "0123456789abcdef", 2)).toBe(
       ".aidlc-engine/reviews/functional-design/units/Unit.Name_1/0123456789abcdef/2.review.md",
     );
+    // A request with an id has a draft slot of its own.
+    expect(reviewDraftRelativePath("functional-design", undefined, "0123456789abcdef", 2, `review:${"a".repeat(32)}`)).toBe(
+      `.aidlc-engine/reviews/functional-design/stage/0123456789abcdef/2.${"a".repeat(32)}.review.md`,
+    );
+    expect(() => reviewDraftRelativePath("functional-design", undefined, "0123456789abcdef", 2, "review:../x")).toThrow();
     for (const path of [
       ".aidlc-engine/reviews/functional-design/stage/0123456789abcdef/1.json",
       ".aidlc-engine/reviews/functional-design/units/stage-level/0123456789abcdef/1.json",

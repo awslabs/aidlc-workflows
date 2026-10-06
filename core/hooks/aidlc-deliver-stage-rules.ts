@@ -17,9 +17,12 @@ import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { isAbsolute, join, resolve } from "node:path";
 import {
+  hookStandsOutside,
+  enterHookWorkflow,
   agentsDir,
   authorityFor,
   getField,
+  isAidlcAgentFile,
   markSubagentInflight,
   resolveWorkflowSelection,
   stateFilePath,
@@ -63,6 +66,7 @@ function isAidlcAgent(value: unknown): value is string {
     typeof value === "string" &&
     /^[a-z0-9][a-z0-9-]*-agent$/.test(value) &&
     existsSync(join(agentsDir(), `${value}.md`)) &&
+    isAidlcAgentFile(join(agentsDir(), `${value}.md`)) &&
     !EXEMPT_AGENTS.has(value)
   );
 }
@@ -347,6 +351,18 @@ export async function run(input: string): Promise<number> {
   const projectDir = isAbsolute(rawProjectDir)
     ? rawProjectDir
     : resolve(process.cwd(), rawProjectDir);
+  // A dispatch in a conversation that has not joined the selected workflow gets
+  // none of that workflow's stage rules and records nothing in its ledger.
+  const workflow = enterHookWorkflow(projectDir, parsed.session_id);
+  try {
+    if (hookStandsOutside(workflow)) return 0;
+    return deliver(parsed, projectDir);
+  } finally {
+    workflow.restore();
+  }
+}
+
+function deliver(parsed: HookInput, projectDir: string): number {
   // The rules were delivered before the dispatch; afterwards the hook only
   // records a background launch its input did not announce.
   if (parsed.hook_event_name === "PostToolUse") {
