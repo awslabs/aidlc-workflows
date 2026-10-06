@@ -171,7 +171,7 @@ and the command would otherwise still act. A hook with no matcher also sees Kiro
   5 s newer than everything the hook reads there (audit shards and the state
   file, plus `runtime-graph.json` for the rebuild), and a skipped rebuild
   rewrites its existing `rebuild-stage-graph.last` heartbeat as the full hook
-  would. A link, the flat `aidlc-docs/` layout, hook debugging, a timestamp
+  would. A link, the flat layout from before spaces, hook debugging, a timestamp
   ahead of the clock, or a change within the margin runs the full hook. The
   guards, writes, prompts and every other target always run in full.
 - **log-subagent** — payload-dependent. IDE 0.12 sent `invoke_sub_agent`; 1.x

@@ -30,7 +30,6 @@
 // of their own. It needs no workflow state: the engine errors before any
 // intent exists too.
 
-import { noopMarkName } from "../tools/aidlc-hook-front-gate.ts";
 import { LONG_SUBPROCESS_TIMEOUT_MS } from "../tools/aidlc-runtime-budget.ts";
 import { statSync } from "node:fs";
 import { join } from "node:path";
@@ -273,9 +272,10 @@ const transitionRegex = /^\*\*Event\*\*:[ \t]*(GATE_APPROVED|STAGE_STARTED|STAGE
 const hasTransition = last3.some((b) => transitionRegex.test(b));
 hookDebug(projectDir, "rebuild-stage-graph", "transition-gate", { hasTransition, last3count: last3.length });
 // Nothing to do from this record's files: the Kiro IDE front gate skips the
-// next shell command's call until one of them changes.
+// next shell command's call until one of them changes (the mark's name is
+// aidlc-hook-front-gate.ts noopMarkName; the hook names it without importing).
 const noop = (): number => {
-  if (ideAuditMode) writeHookStatusFile(healthDir, noopMarkName("rebuild-stage-graph"), isoTimestamp());
+  if (ideAuditMode) writeHookStatusFile(healthDir, "rebuild-stage-graph.noop", isoTimestamp());
   return 0;
 };
 if (!hasTransition) {

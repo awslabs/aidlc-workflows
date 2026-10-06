@@ -10,7 +10,6 @@
 // In both cases the slug is reconciled into the state file via set-status.
 // Receives JSON on stdin from the adapter / Claude Code.
 import { existsSync } from "node:fs";
-import { noopMarkName } from "../tools/aidlc-hook-front-gate.ts";
 import {
   hookStandsOutside,
   enterHookWorkflow,
@@ -87,9 +86,10 @@ if (source === "ide-audit-sync") {
   const auditSlug = latestStartedStageSlug(audit);
   hookDebug(projectDir, "sync-workflow-state", "ide-audit-sync", { auditSlug, current, status });
   // Nothing to do from this record's files: the Kiro IDE front gate skips the
-  // next shell command's call until one of them changes.
+  // next shell command's call until one of them changes (the mark's name is
+  // aidlc-hook-front-gate.ts noopMarkName; the hook names it without importing).
   const noop = (): number => {
-    writeHookStatusFile(hooksHealthDir(projectDir), noopMarkName("sync-workflow-state"), isoTimestamp());
+    writeHookStatusFile(hooksHealthDir(projectDir), "sync-workflow-state.noop", isoTimestamp());
     return 0;
   };
 
