@@ -320,6 +320,7 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
       return [
         ...(body.includes(clause) ? [] : [`${rel}: clause`]),
         ...(body.includes(waiting) ? [] : [`${rel}: waiting`]),
+        ...(body.includes("adding `--unit \"<directive.unit>\"` in team-owned Unit work") ? [] : [`${rel}: unit`]),
         ...(body.includes("Never mark a stage done or approved just to end the turn.") ? [] : [`${rel}: never`]),
       ];
     });

@@ -2420,11 +2420,10 @@ describe("t121 aidlc-continue-workflow hook — forwarding-loop enforcement (mig
     );
     const stop = () => runHook(proj, '{"stop_hook_active":false}', "run-stage", "", "alpha", "code-generation");
     const reminder = (JSON.parse(stop().out) as { reason: string }).reason;
-    // A team Unit's wait matches only a record for that Unit, so the record
-    // step names it.
-    expect(reminder).toContain(
-      "engine log decision --stage code-generation --unit alpha --decision \"<the question>\" --options \"<the choices>\"`, adding any `--single`, `--checkpoint` or `--questions-file` flags that question's own instructions use, and end your turn without asking it again.",
-    );
+    // The note names the Unit. A team Unit's wait matches only a record for
+    // that Unit, so the SKILL's record step adds `--unit` in team-owned Unit
+    // work (t181), and that record then ends the turn.
+    expect(reminder).toMatch(/^Code Generation for alpha is not finished yet\. Next: `[^`]* next`\.$/);
     seedInteractionAudit(proj, [{ event: "DECISION_RECORDED", stage: "code-generation", unit: "alpha" }]);
     expect(stop().out).toBe("");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
