@@ -348,14 +348,34 @@ async function serveReleaseFixtureForChildren(
       stop: () => server.stop(),
     };
   }
+  return serveReleaseFixtureInChild(root, fault);
+}
 
+// A child server that has not said where it listens by then is stopped and
+// started once more: one stalled spawn on a slow runner costs this wait, not
+// the whole case.
+const RELEASE_SERVER_STARTUP_WAIT_MS = 30_000;
+
+/** Test-only: `stallOnce` names a file whose presence makes the next child hang before it listens, once. */
+type ChildServerOptions = { startupWaitMs?: number; stallOnce?: string };
+
+async function serveReleaseFixtureInChild(
+  root: string,
+  fault: ReleaseServerFault = { kind: "none" },
+  options: ChildServerOptions = {},
+): Promise<ReleaseServerHandle> {
   const requestLog = join(temp("aidlc-t244-release-server-"), "requests.ndjson");
   writeFileSync(requestLog, "");
   const helper = [
-    'import { appendFileSync } from "node:fs";',
+    'import { appendFileSync, existsSync, rmSync } from "node:fs";',
     `import { serveReleaseFixture } from ${
       JSON.stringify(join(REPO_ROOT, "tests", "harness", "release-fixture.ts"))
     };`,
+    "const stall = process.env.AIDLC_RELEASE_FIXTURE_STALL_ONCE;",
+    "if (stall && existsSync(stall)) {",
+    "  rmSync(stall);",
+    "  await new Promise(() => {});",
+    "}",
     "const fault = JSON.parse(process.env.AIDLC_RELEASE_FIXTURE_FAULT);",
     "const server = serveReleaseFixture(process.env.AIDLC_RELEASE_FIXTURE_ROOT, fault);",
     "const push = server.requests.push.bind(server.requests);",
@@ -371,34 +391,55 @@ async function serveReleaseFixtureForChildren(
     "process.stdout.write(JSON.stringify({ baseUrl: server.baseUrl }) + \"\\n\");",
     "await new Promise(() => {});",
   ].join("\n");
-  const child = Bun.spawn([process.execPath, "-e", helper], {
+  const spawnServer = () => Bun.spawn([process.execPath, "-e", helper], {
     cwd: REPO_ROOT,
     env: {
       ...process.env,
       AIDLC_RELEASE_FIXTURE_ROOT: root,
       AIDLC_RELEASE_FIXTURE_REQUEST_LOG: requestLog,
       AIDLC_RELEASE_FIXTURE_FAULT: JSON.stringify(fault),
+      AIDLC_RELEASE_FIXTURE_STALL_ONCE: options.stallOnce ?? "",
     },
     stdout: "pipe",
     stderr: "pipe",
   });
-  const stderr = new Response(child.stderr).text();
-  const reader = child.stdout.getReader();
-  const decoder = new TextDecoder();
-  let startup = "";
-  while (!startup.includes("\n")) {
-    const chunk = await reader.read();
-    if (chunk.done) {
-      const exitCode = await child.exited;
-      throw new Error(
-        `release fixture server exited during startup (exit code ${exitCode}): ${await stderr}`,
-      );
+  const readStartup = async (child: ReturnType<typeof spawnServer>, waitMs: number) => {
+    const stderr = new Response(child.stderr).text();
+    const reader = child.stdout.getReader();
+    const decoder = new TextDecoder();
+    const deadline = Date.now() + waitMs;
+    let startup = "";
+    while (!startup.includes("\n")) {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const late = new Promise<null>((resolve) => {
+        timer = setTimeout(() => resolve(null), Math.max(0, deadline - Date.now()));
+      });
+      const chunk = await Promise.race([reader.read(), late]);
+      clearTimeout(timer);
+      if (chunk === null) {
+        child.kill();
+        await Promise.all([child.exited, stderr]);
+        return null;
+      }
+      if (chunk.done) {
+        const exitCode = await child.exited;
+        throw new Error(
+          `release fixture server exited during startup (exit code ${exitCode}): ${await stderr}`,
+        );
+      }
+      startup += decoder.decode(chunk.value, { stream: true });
     }
-    startup += decoder.decode(chunk.value, { stream: true });
-  }
-  const startupEvent = JSON.parse(startup.slice(0, startup.indexOf("\n"))) as {
-    baseUrl: string;
+    const startupEvent = JSON.parse(startup.slice(0, startup.indexOf("\n"))) as {
+      baseUrl: string;
+    };
+    return { child, stderr, reader, startupEvent };
   };
+  const waitMs = options.startupWaitMs ?? RELEASE_SERVER_STARTUP_WAIT_MS;
+  const started = await readStartup(spawnServer(), waitMs) ?? await readStartup(spawnServer(), waitMs);
+  if (started === null) {
+    throw new Error(`release fixture server did not start within ${waitMs / 1000}s, twice`);
+  }
+  const { child, stderr, reader, startupEvent } = started;
   const stdout = (async () => {
     while (!(await reader.read()).done) {
       // Drain the helper channel until the process exits.
@@ -460,6 +501,23 @@ describe("t244 machine configuration and update discovery", () => {
     updateRelease = fixture(NEXT_VERSION, { binary: "bytes" });
     suiteTemporary.add(updateRelease);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  // A slow Windows runner can stall one child server before it listens. The
+  // server has its own startup wait and starts once more, so the stall costs
+  // that wait and not the whole case.
+  test("a release fixture server that stalls before it listens starts once more within its own wait", async () => {
+    const stall = join(temp("aidlc-t244-stall-"), "stall-once");
+    writeFileSync(stall, "");
+    const server = await serveReleaseFixtureInChild(updateRelease, { kind: "none" }, { stallOnce: stall, startupWaitMs: 3_000 });
+    try {
+      expect(existsSync(stall)).toBe(false);
+      const response = await fetch(`${server.baseUrl}/version.json`);
+      await response.arrayBuffer();
+      expect(server.requests).toContain("/version.json");
+    } finally {
+      await server.stop();
+    }
+  }, 30_000);
 
   test("global config works outside projects and precedence is flag, env, config, default", () => {
     const machine = temp("aidlc-t241-config-");
