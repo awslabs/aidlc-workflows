@@ -42,7 +42,7 @@ function parserFlags(): string[] {
 const words = (text: string) => nextArgsAreOnlyWords(splitKiroCommandArgs(text));
 
 describe("words typed after /aidlc are a reply unless the dispatcher reads a command in them", () => {
-  test("every flag the parser knows keeps the message a command, with or without a value", () => {
+  test("every flag the parser knows keeps the message a command, with or without a value, unless a utility flag sits among the person's words", () => {
     const flags = [...parserFlags(), ...READ_ONLY_FLAGS, ...Object.values(CEREMONY_FLAGS)];
     expect(flags.length).toBeGreaterThan(20);
     // `next` reads --doctor's own arguments only after --doctor, and a valued
@@ -53,7 +53,11 @@ describe("words typed after /aidlc are a reply unless the dispatcher reads a com
       const lead = doctorArgs.has(flag) ? ["--doctor"] : [];
       expect(nextArgsAreOnlyWords([...lead, flag, "standard"]), `${flag} standard`).toBe(false);
       if (lead.length === 0) {
-        expect(nextArgsAreOnlyWords(["approve", "it", flag, "off"]), `approve it ${flag} off`).toBe(false);
+        // Among the person's own words a utility flag is one of their words
+        // ("add a --version flag ..."), so the message stays their reply.
+        expect(nextArgsAreOnlyWords(["approve", "it", flag, "off"]), `approve it ${flag} off`).toBe(
+          READ_ONLY_FLAGS.has(flag),
+        );
       }
     }
   });
