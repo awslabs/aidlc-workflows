@@ -81,7 +81,8 @@
 //
 // 14 .sh asserts -> 14 expect()-bearing test() cases here, 1:1.
 
-import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS } from "../harness/test-budget.ts";
+import { setDefaultTimeout, afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
   appendFileSync,
@@ -93,6 +94,8 @@ import {
 } from "node:fs";
 import { dirname, join } from "node:path";
 import { cleanupTestProject, createTestProject } from "../harness/fixtures.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const BUN = process.execPath; // the bun running this test
 const REPO_ROOT = join(import.meta.dir, "..", "..");
@@ -392,7 +395,7 @@ beforeAll(() => {
   // Step 5: advance — approve already auto-advanced, so this replays cleanly.
   advanceAck = run(STATE, ["advance", "requirements-analysis"], proj);
   expect(advanceAck.status).toBe(0);
-}, 30_000);
+}, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 afterAll(() => {
   cleanupTestProject(proj);

@@ -22,9 +22,12 @@
 // tool_result bytes (toolResults), and the on-disk state file the chosen
 // branch wrote (stateFile). Never on assistantText.
 
-import { describe, expect, test } from "bun:test";
+import { beforeEach, describe, expect, test } from "bun:test";
+import { spawnSync } from "node:child_process";
+import { statSync, writeFileSync } from "node:fs";
+import { dirname, join, relative } from "node:path";
+import { parseLiteralShellInvocation } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import {
-  assertAskedQuestion,
   assertToolResultContains,
 } from "./assert.ts";
 import {
@@ -36,20 +39,34 @@ import {
   type DriveResult,
   driveAidlc,
 } from "./sdk-drive.ts";
+import {
+  fileCleanupReserveMs,
+  liveCaseTimeoutMs,
+  LIVE_LONG_OPERATION_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "./test-budget.ts";
 
 // ---------------------------------------------------------------------------
-// Timeout budget. A multi-tool /aidlc turn on Opus/Bedrock can take minutes.
-// Honour the suite's AIDLC_TEST_TIMEOUT convention (seconds; see the t2x
-// integration tests, which set it to 600 for doctor/jump). The bun:test
-// per-test cap is that value; the driver's own abort fires a hair earlier so a
-// stuck canUseTool surfaces as a clear harness failure (no result event) and
-// not as a 0-byte hang.
+// These calibrate live protocol behavior. Use the shared live backstop, while
+// preserving an explicit AIDLC_TEST_TIMEOUT (seconds) as the whole case cap.
+// Fixtures, deterministic probes and both doctor turns spend the same case
+// deadline. Each operation draws from actual remaining time, with one cleanup
+// reservation; the original file work deadline can shorten every allocation.
 // ---------------------------------------------------------------------------
-const TIMEOUT_S = Number.parseInt(process.env.AIDLC_TEST_TIMEOUT ?? "600", 10);
-const TEST_TIMEOUT_MS = (Number.isFinite(TIMEOUT_S) ? TIMEOUT_S : 600) * 1000;
-// Drive aborts ~15s before bun kills the test, so we still capture a partial
-// DriveResult to assert against / diagnose, rather than an opaque test-timeout.
-const DRIVE_TIMEOUT_MS = Math.max(60_000, TEST_TIMEOUT_MS - 15_000);
+const TIMEOUT_S = Number(process.env.AIDLC_TEST_TIMEOUT);
+const TEST_TIMEOUT_MS = Number.isSafeInteger(TIMEOUT_S) && TIMEOUT_S > 0
+  ? TIMEOUT_S * 1000
+  : liveCaseTimeoutMs(LIVE_LONG_OPERATION_TIMEOUT_MS);
+let caseDeadlineMs: number;
+beforeEach(() => { caseDeadlineMs = Date.now() + TEST_TIMEOUT_MS; });
+function remainingWorkMs(requestedMs = LIVE_LONG_OPERATION_TIMEOUT_MS): number {
+  return remainingOperationTimeoutMs(requestedMs, {
+    deadlineMs: caseDeadlineMs,
+    reserveMs: fileCleanupReserveMs(TEST_TIMEOUT_MS),
+    phase: "SDK protocol calibration",
+  })!;
+}
 
 // ---------------------------------------------------------------------------
 // CALIBRATION 2 known-answer strings — read from the SHIPPED doctor handler so
@@ -69,6 +86,97 @@ const DOCTOR_RUNTIME_LABEL = "Runtime hook PATH: bun";
 const DOCTOR_HOOK_LABEL = "aidlc-write-audit-log.ts present";
 const DOCTOR_SETTINGS_LABEL = "settings.json present";
 const DOCTOR_DOCS_LABEL = "workspace shell ready";
+const COMPOSE_TASK = "build a distributed cache layer with consistency guarantees";
+
+function expectedComposeDecision(project: string): Record<string, unknown> {
+  const run = spawnSync(process.execPath, [
+    ".claude/tools/aidlc.ts", "engine", "orchestrate", "next", COMPOSE_TASK,
+  ], {
+    cwd: project, env: { ...process.env, AIDLC_PROJECT_DIR: project },
+    encoding: "utf8", timeout: remainingWorkMs(NATIVE_STARTUP_TIMEOUT_MS),
+  });
+  expect(run.error).toBeUndefined();
+  expect(run.status).toBe(0);
+  const decision = JSON.parse(run.stdout) as Record<string, unknown>;
+  expect(decision.kind).toBe("ask");
+  expect(typeof decision.question).toBe("string");
+  return decision;
+}
+
+function isOrchestrateNext(command: unknown, project: string): command is string {
+  if (typeof command !== "string") return false;
+  const parsed = parseLiteralShellInvocation(command);
+  if (!parsed) return false;
+  if (parsed.directory !== null) {
+    if (relative(project, parsed.directory) !== "") return false;
+    try {
+      const expected = statSync(project, { bigint: true });
+      const actual = statSync(parsed.directory, { bigint: true });
+      if (!actual.isDirectory() || actual.dev !== expected.dev || actual.ino !== expected.ino) return false;
+    } catch {
+      return false;
+    }
+  }
+  const argv = [...parsed.argv];
+  if (/^bun(?:\.exe)?$/.test(argv[0] ?? "")) {
+    const tool = argv[1]?.replaceAll("\\", "/").replace(/^\.\//, "");
+    if (tool === ".claude/tools/aidlc.ts") argv.splice(0, 2, "aidlc");
+    else if (tool === ".claude/tools/aidlc-orchestrate.ts") argv.splice(0, 2, "aidlc", "engine", "orchestrate");
+  }
+  if (argv[0] === "aidlc.exe") argv[0] = "aidlc";
+  return JSON.stringify(argv) === JSON.stringify(["aidlc", "engine", "orchestrate", "next", COMPOSE_TASK]);
+}
+
+function assertComposeOffer(result: DriveResult, expectedDecision: Record<string, unknown>, project = process.cwd()) {
+  // The engine's typed reply identifies Branch 8 independently of how the
+  // model phrases the question sentence. Accept only its real next command
+  // for this task, then require the compose choice in the captured menu.
+  const next = result.toolResults.find((tool) =>
+    tool.toolName === "Bash" && isOrchestrateNext(tool.input.command, project)
+  );
+  expect(next).toBeDefined();
+  expect(next!.isError).toBe(false);
+  expect(JSON.parse(next!.resultText)).toEqual(expectedDecision);
+  expect(result.timedOut).toBe(false);
+  expect(result.stoppedAfterAskUserQuestion).toBe(true);
+  const menu = result.askedQuestions[0];
+  expect(menu).toBeDefined();
+  expect(menu.questions).toHaveLength(1);
+  const question = menu.questions[0];
+  expect(question.options.length).toBeGreaterThan(1);
+  expect(question.options.filter((option) => /^compose\b/i.test(option.label))).toHaveLength(1);
+  expect(question.multiSelect ?? false).toBe(false);
+  expect(typeof menu.answers[question.question]).toBe("string");
+  expect(question.options.map((option) => option.label)).toContain(menu.answers[question.question] as string);
+  return menu;
+}
+
+function expectedDoctorRuntimeLine(project: string): string {
+  // The same machine can legitimately report ok, warn or fail for Bun.
+  // Obtain its exact row independently of the model and SDK transport.
+  const run = spawnSync(process.execPath, [
+    ".claude/tools/aidlc.ts", "doctor", "--verbose",
+  ], {
+    cwd: project, env: { ...process.env, AIDLC_PROJECT_DIR: project },
+    encoding: "utf8", timeout: remainingWorkMs(NATIVE_STARTUP_TIMEOUT_MS),
+  });
+  expect(run.error).toBeUndefined();
+  expect(run.status, run.stdout + run.stderr).toBe(0);
+  const rows = run.stdout.split(/\r?\n/).filter((line) =>
+    /^\s+(?:ok|warn|fail)\s+Runtime hook PATH: bun(?:\s|$)/.test(line)
+  );
+  expect(rows).toHaveLength(1);
+  return rows[0];
+}
+
+function recordCalibration(name: string, result: DriveResult, expectedDecision: Record<string, unknown>): void {
+  const logs = process.env.AIDLC_TEST_LOG_DIR;
+  if (logs) writeFileSync(join(logs, `sdk-calibration-${name}-${process.pid}.json`), JSON.stringify({
+    expectedDecision, askedQuestions: result.askedQuestions,
+    toolResults: result.toolResults, timedOut: result.timedOut,
+    stoppedAfterAskUserQuestion: result.stoppedAfterAskUserQuestion,
+  }, null, 2));
+}
 
 // ---------------------------------------------------------------------------
 
@@ -90,27 +198,28 @@ describe("sdk-drive calibration (known-answer)", () => {
     async () => {
       const proj = setupIntegrationProject();
       try {
+        const expectedDecision = expectedComposeDecision(proj);
         const r = await driveAidlc(
-          '/aidlc "build a distributed cache layer with consistency guarantees"',
+          `/aidlc "${COMPOSE_TASK}"`,
           {
             projectDir: proj,
-            timeoutMs: DRIVE_TIMEOUT_MS,
+            timeoutMs: remainingWorkMs(),
             stopAfterAskUserQuestion: true,
           },
         );
+        recordCalibration("default-answer", r, expectedDecision);
 
         // The compose offer must have been captured. If canUseTool never fired
         // (or the gate was denied), askedQuestions would be empty here.
         expect(r.askedQuestions.length).toBeGreaterThanOrEqual(1);
 
-        // Prove WHICH gate fired without scraping the TUI: Branch 8's
-        // engine-fixed question names "compose".
-        assertAskedQuestion(r, "compose");
+        // Prove WHICH decision and menu fired, without requiring a particular
+        // word in the model's question sentence or accepting an unrelated ask.
+        const composeMenu = assertComposeOffer(r, expectedDecision, proj);
 
         // The driver records the answer it handed back to the SDK. For a
         // captured-and-answered gate this is a real option label, not empty —
         // that is the positive proof the question was ANSWERED, not denied.
-        const composeMenu = r.askedQuestions[0];
         const handedBack = Object.values(composeMenu.answers);
         expect(handedBack.length).toBeGreaterThanOrEqual(1);
         for (const a of handedBack) {
@@ -124,13 +233,16 @@ describe("sdk-drive calibration (known-answer)", () => {
         // This is the headless `-p` auto-deny contrast: an answered gate
         // returns a non-error tool_result from AskUserQuestion.
         expect(askToolResult?.isError).toBe(false);
+        expect(askToolResult!.input.questions).toEqual(composeMenu.questions);
 
         // The default option must be one the menu actually offered
         // (structure-resolved, never invented). Calibration 1 only proves the
-        // canUseTool boundary; it does not depend on model-authored labels.
+        // canUseTool boundary; selection is checked against the labels actually
+        // offered rather than a hard-coded full label.
         const offered = composeMenu.questions[0].options.map((o) => o.label);
         const chosen = Object.values(composeMenu.answers)[0] as string;
         expect(offered).toContain(chosen);
+        expect(askToolResult!.resultText).toContain(chosen);
       } finally {
         cleanupTestProject(proj);
       }
@@ -159,9 +271,10 @@ describe("sdk-drive calibration (known-answer)", () => {
       const projA = setupIntegrationProject();
       const projB = setupIntegrationProject();
       try {
+        const runtimeLine = expectedDoctorRuntimeLine(projA);
         const rA = await driveAidlc("/aidlc --doctor --verbose", {
           projectDir: projA,
-          timeoutMs: DRIVE_TIMEOUT_MS,
+          timeoutMs: remainingWorkMs(),
         });
 
         // The Bash tool must have actually been called AND its result must
@@ -184,7 +297,7 @@ describe("sdk-drive calibration (known-answer)", () => {
         expect(blockA!).toContain("Project");
         expect(blockA!).toContain("Framework integrity");
         expect(blockA!).toMatch(/\d+ problems?, \d+ warnings?\./);
-        expect(blockA!).toContain(`warn  ${DOCTOR_RUNTIME_LABEL}`);
+        expect(blockA!.split(/\r?\n/)).toContain(runtimeLine);
 
         // Stability: a second independent run must yield a byte-identical
         // doctor block (deterministic stdout). We compare from the header to
@@ -202,7 +315,7 @@ describe("sdk-drive calibration (known-answer)", () => {
         // this proves it does so STABLY for the deterministic portion.
         const rB = await driveAidlc("/aidlc --doctor --verbose", {
           projectDir: projB,
-          timeoutMs: DRIVE_TIMEOUT_MS,
+          timeoutMs: remainingWorkMs(),
         });
         const blockB = extractDoctorBlock(rB);
         expect(blockB).not.toBeNull();
@@ -227,19 +340,20 @@ describe("sdk-drive calibration (known-answer)", () => {
   // the calibration continue into a live composer run.
   //
   // The option labels are model-rendered. Index selection deliberately tests
-  // the driver's structural non-default path without assuming either label
-  // contains a particular word.
+  // the driver's structural non-default path without fixing the second label's
+  // wording. The engine decision and compose choice identify the offer separately.
   // -------------------------------------------------------------------------
   test(
     "3. scripted non-default answer reaches the model via AskUserQuestion tool_result bytes",
     async () => {
       const proj = setupIntegrationProject();
       try {
+        const expectedDecision = expectedComposeDecision(proj);
         const r = await driveAidlc(
-          '/aidlc "build a distributed cache layer with consistency guarantees"',
+          `/aidlc "${COMPOSE_TASK}"`,
           {
             projectDir: proj,
-            timeoutMs: DRIVE_TIMEOUT_MS,
+            timeoutMs: remainingWorkMs(),
             stopAfterAskUserQuestion: true,
             answerScript: {
               kind: "sequence",
@@ -247,6 +361,7 @@ describe("sdk-drive calibration (known-answer)", () => {
             },
           },
         );
+        recordCalibration("scripted-answer", r, expectedDecision);
 
         // The compose offer must have fired and been answered (canUseTool path).
         expect(r.askedQuestions.length).toBe(1);
@@ -254,7 +369,7 @@ describe("sdk-drive calibration (known-answer)", () => {
         // The second offered option must be what was handed to the model,
         // proving the scripted answer reached it rather than silently falling
         // back to the default first option.
-        const composeMenu = r.askedQuestions[0];
+        const composeMenu = assertComposeOffer(r, expectedDecision, proj);
         const composeOffered = composeMenu.questions[0].options.map(
           (o) => o.label,
         );
@@ -286,7 +401,7 @@ describe("sdk-drive calibration (known-answer)", () => {
       try {
         const r = await driveAidlc("/aidlc --resume", {
           projectDir: proj,
-          timeoutMs: DRIVE_TIMEOUT_MS,
+          timeoutMs: remainingWorkMs(),
           stopAfterToolResult: {
             toolName: "Bash",
             resultIncludes: '"kind":"load-steering"',
@@ -375,6 +490,56 @@ describe("sdk-drive calibration (known-answer)", () => {
     expect(() =>
       assertToolResultContains(withBash, "Bash", DOCTOR_HEADER),
     ).not.toThrow();
+
+    // The compose calibration must not accept a lookalike JSON reply from an
+    // unrelated command, or a generic question merely mentioning "compose".
+    const question = {
+      question: "How should this work be sized?",
+      options: [{ label: "Compose a plan" }, { label: "Feature" }],
+      multiSelect: false,
+    };
+    const decision = { kind: "ask", question: `Choose a plan for ${COMPOSE_TASK}` };
+    const answeredCompose: DriveResult = {
+      ...empty,
+      stoppedAfterAskUserQuestion: true,
+      askedQuestions: [{
+        questions: [question],
+        answers: { [question.question]: "Compose a plan" },
+      }],
+      toolResults: [{
+        toolName: "Bash",
+        input: { command: `bun .claude/tools/aidlc.ts engine orchestrate next "${COMPOSE_TASK}"` },
+        toolUseId: "next", resultText: JSON.stringify(decision), isError: false,
+      }, {
+        toolName: "AskUserQuestion", input: { questions: [question] },
+        toolUseId: "ask", resultText: "Compose a plan", isError: false,
+      }],
+    };
+    expect(() => assertComposeOffer(answeredCompose, decision)).not.toThrow();
+    const selectedDirectory = structuredClone(answeredCompose);
+    selectedDirectory.toolResults[0].input.command =
+      `cd ${JSON.stringify(process.cwd())} && ${answeredCompose.toolResults[0].input.command}`;
+    expect(() => assertComposeOffer(selectedDirectory, decision)).not.toThrow();
+    const otherDirectory = structuredClone(answeredCompose);
+    otherDirectory.toolResults[0].input.command =
+      `cd ${JSON.stringify(dirname(process.cwd()))} && ${answeredCompose.toolResults[0].input.command}`;
+    expect(() => assertComposeOffer(otherDirectory, decision)).toThrow();
+    const continuedWorkflow = structuredClone(answeredCompose);
+    continuedWorkflow.toolResults[0].input.command += " && aidlc engine state advance";
+    expect(() => assertComposeOffer(continuedWorkflow, decision)).toThrow();
+    const wrongCommand = structuredClone(answeredCompose);
+    wrongCommand.toolResults[0].input.command = "printf supplied-ask-json";
+    expect(() => assertComposeOffer(wrongCommand, decision)).toThrow();
+    const unrelatedQuestion = structuredClone(answeredCompose);
+    unrelatedQuestion.askedQuestions[0].questions[0] = {
+      question: "Does this unrelated question mention compose?",
+      options: [{ label: "Yes" }, { label: "No" }],
+      multiSelect: false,
+    };
+    unrelatedQuestion.askedQuestions[0].answers = {
+      "Does this unrelated question mention compose?": "Yes",
+    };
+    expect(() => assertComposeOffer(unrelatedQuestion, decision)).toThrow();
   });
 });
 

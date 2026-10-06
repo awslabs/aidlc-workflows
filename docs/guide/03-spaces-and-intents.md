@@ -105,10 +105,11 @@ identity; `dirName` records the human-readable record-dir name verbatim.
 
 The row's `status` is the intent's lifecycle: `in-flight` from creation,
 `complete` once the last in-scope gate closes, or `archived` when you retire
-work you will not finish (`/aidlc intent archive <name>`). Archiving never
-deletes anything — the record dir and audit trail stay put, the default listing
-just stops showing the row (`/aidlc intent list --all` still does), and
-`/aidlc intent unarchive <name>` puts it back in flight.
+work you will not finish or hide work you finished (`/aidlc intent archive
+<name>`). Archiving never deletes anything: the record dir, audit trail, and
+any Bolt worktrees stay put, the default listing just stops showing the row
+(`/aidlc intent list --all` still does), and `/aidlc intent unarchive <name>`
+puts it back the way it was, in flight or complete.
 
 You never create an intent with a special command. The first time you describe
 work, the engine **auto-creates** an intent for you:
@@ -131,20 +132,44 @@ you just describe the new work:
 /aidlc Fix the timeout on the export endpoint
 ```
 
-When an intent is already active, AI-DLC recognizes that this is *new, unrelated*
-work rather than a continuation of the current feature, and **offers** to start a
-second intent alongside the first:
+When an intent is already active, AI-DLC recognizes that this may be *new,
+unrelated* work rather than a continuation of the current feature, and **asks**
+before starting a second intent alongside the first:
 
 ```
-▸ This looks like new work, separate from "inventory-api". Start a second intent?
-  (1) Yes — start a second intent (scope: bugfix)
-  (2) No — this continues the inventory-api work
+Work is already in progress on: "inventory-api". You said: "Fix the timeout on
+the export endpoint". What should I do?
+1. Part of the active work: continue the current workflow
+2. Separate new piece of work: set it up alongside the current one as "bugfix" work
+3. Reshape the active work: change how the remaining plan is shaped
 ```
 
-- Choose **Yes** and AI-DLC creates a second intent (here, a `bugfix`), switches to
-  it, and begins its first stage. Your inventory-api intent is untouched — its
-  record dir, state, and progress are all preserved exactly where you left them.
-- Choose **No** and AI-DLC treats your message as part of the active intent.
+- Choose **2** and AI-DLC creates a second intent (here, a `bugfix`). Your
+  inventory-api intent is untouched: its record dir, state, and progress are all
+  preserved exactly where you left them.
+- Choose **1** and AI-DLC treats your message as part of the active intent.
+- Choose **3** and AI-DLC works out how to reshape the active intent's
+  remaining plan with you.
+
+Saying only that the work should go on (`/aidlc carry on`, "continue", "keep
+going", "go on" or "resume", with or without "please") asks nothing: AI-DLC
+carries on with the active work. With work in the project but none selected
+yet, it asks which piece to pick up.
+
+Settings you type with the new work go with the work you choose.
+`/aidlc --depth minimal --learnings off Fix the timeout on the export endpoint`
+asks the same question: choose **2** and the new intent starts with that depth
+and learnings off; choose **1** or **3** and they apply to the active intent
+(for **3**, before its plan is reshaped). A Guard Policy you lower this way,
+and any other setting typed in the same message, applies to the active intent
+as you send the message; the new intent starts at the default Guard Policy, and
+AI-DLC says so when it creates it. Naming the plan first
+(`/aidlc bugfix Fix the timeout`) asks the same question, proposing that plan.
+So does a scope that differs from the active intent's, typed with a
+description (`/aidlc --scope express "add a health endpoint"`), with new work
+first: choose **1** and the description starts new express work, the active
+intent kept as it is, or **2** and the active intent changes to express. A
+scope with no description changes the active intent's scope without asking.
 
 AI-DLC never creates a second intent without asking. If a prompt is genuinely a
 follow-up to the current work — answering a gate, correcting a requirement — it
@@ -177,12 +202,28 @@ Each live session keeps a machine-local binding at
 session's space and intent, so another terminal or IDE window can move the shared
 cursors without silently moving this session's workflow.
 
+A binding also records how its intent was chosen. Finding a record is not the same
+as joining it: in a fresh clone, where a teammate's intent record is committed but
+your `active-intent` cursor is not, the lone record resolves but no session has
+joined it. The first `/aidlc` asks which intent to work on, and AI-DLC's hooks leave
+that record alone until the session runs `/aidlc intent <slug>` (or creates its own
+intent). A session bound by an earlier version keeps working its intent when your
+cursor names the same record; otherwise it is offered a rebind to that intent. A
+session an earlier version stamped but never bound follows its stamp when it
+resumes, so a chat left open across an upgrade continues its own intent.
+A plain `git worktree` created without AI-DLC's worktree command has no local
+evidence either, so it also selects its intent with `/aidlc intent <slug>`. A Unit
+claimed on this machine counts for that Unit's intent; the Unit participant marker
+is checkout-wide and names no intent, so it does not count as joining a
+particular record.
+
 Session identity follows one order:
 
 1. The host session id delivered to a hook.
 2. A valid `AIDLC_SESSION_OVERRIDE` inherited from the harness process.
-3. The nearest live PID ancestry entry.
-4. No session identity.
+3. On Codex, the `CODEX_THREAD_ID` Codex gives every command it runs.
+4. The nearest live PID ancestry entry.
+5. No session identity.
 
 Once identity is known, an explicit space or intent selector wins, followed by
 that session's binding, then the shared `active-space` and `active-intent`
@@ -210,18 +251,27 @@ delivery remains future work.
 
 On POSIX, the Codex adapter pins the validated hook payload session into every
 core-hook child and Bash command, so macOS sandbox denial of `ps` does not weaken
-Codex workflow selection. On Windows, PID ancestry resolution returns no session
-identity and the POSIX command rewrite is unavailable. Shared-process harnesses
-also cannot distinguish chats that use one process, including Kiro IDE
-multi-chat and multi-session opencode. Children of payload-bearing hooks follow
+Codex workflow selection. Codex 0.160 and later also give every command the
+session as `CODEX_THREAD_ID` (but not the hooks), so once an AI-DLC tool has
+seen it there, that session's later commands are left as written and the tools
+read the id from there. On Windows x64 and arm64, native process handles,
+creation times, and parent PIDs identify the owning session within the same
+50 ms / 64-ancestor budget. Reused PID generations and unverified ancestry do not
+select a session; the POSIX command rewrite remains unavailable on Windows.
+Shared-process harnesses still cannot distinguish chats that use one process,
+including Kiro IDE multi-chat and multi-session opencode. Children of payload-bearing hooks follow
 the payload session; tools without that parent still fall back to the shared
 cursors when ancestry is unavailable unless the harness process has a valid
 `AIDLC_SESSION_OVERRIDE`.
 
-Known limitation: hook writes and the intent and space switch verbs on those
-platforms retain the pre-existing v2 shared-cursor and `.current-session`
+Known limitation: hook writes and the intent and space switch verbs in those
+shared-process chats retain the pre-existing v2 shared-cursor and `.current-session`
 behavior. One chat can therefore affect another chat's navigation or hook
-attribution. Per-session isolation for those paths is future work.
+attribution. Per-session isolation for those paths is future work. The exception
+is an intent or space switch typed into a Kiro IDE chat, in either form
+(`/aidlc intent switch <name>` or `/aidlc intent <name>`, and the same for
+`space`): the prompt hook runs it with that chat's session, so it binds only
+that chat.
 
 ---
 

@@ -8,6 +8,11 @@ differs. The source/development tree is **generated** into ignored local
 `dist/opencode/` from `core/` + `harness/opencode/` by
 `bun scripts/package.ts opencode`; never hand-edit it.
 
+Harness-specific onboarding lives in `.aidlc/onboarding.md`, loaded by the
+`instructions` list in `opencode.json`. The root `AGENTS.md` block is
+harness-neutral and shared with other installed harnesses whose engine
+directories differ; opencode and Copilot cannot share one `.aidlc/` install.
+
 ## Layout: two dot-dirs, on purpose
 
 opencode auto-imports every `*.ts` under `.opencode/tools/` and
@@ -33,12 +38,10 @@ script (top-level dispatch, `process.exit`) crashes the session
 - **bun** only when generating or running the source/development `dist/`
   projection. Native installs and versioned release runtimes dispatch through
   the installed `aidlc` executable.
-- **A model provider** — the shipped project `opencode.json` pins no session
-  model; your global opencode config supplies it. Only the shipped reviewer
-  tier pins `amazon-bedrock/global.anthropic.claude-sonnet-4-6` — override per
-  agent in the project `opencode.json` if your provider differs. Deciding and
-  Writing up inherit the session model; selecting an AI-DLC effort preset does
-  not change those model choices.
+- **A model provider** — the shipped project `opencode.json` and agent
+  definitions pin no model. Your global opencode config supplies the provider
+  and session model; balanced reviewers retain only their medium reasoning
+  variant.
 
 ## Install
 
@@ -60,16 +63,19 @@ opencode
 The installer verifies the release metadata, executable, and all-harness runtime archive against the published SHA-256 checksums. The installed runtime does not require Bun, Node.js, or Git. Harness selection happens in `aidlc config`.
 
 On Windows, download `install.ps1` and run
-`& $installer`. An interactive run may omit the flag;
-redirected input, `pwsh -NonInteractive`, `--yes`, `--json`, and `--quiet`
-require it. For an air-gapped package, use
+`& $installer`. See [Windows installation](../18-install-and-lifecycle.md#windows-powershell)
+for account scope, automatic User PATH registration, and `-NoModifyPath`.
+For an air-gapped package, use
 `install.sh --from <release-directory> --offline` on Unix or
 `& $installer -From <release-directory> -Offline` on Windows.
 
 `aidlc config` projects `.aidlc/`, `.opencode/`, the workspace shell,
-`AGENTS.md`, the managed `.gitignore` block, and `opencode.json`. The generated
-config discovers the skill and method files and allows direct `aidlc engine *`
-commands; other shell commands still prompt. Start opencode in the project and
+`AGENTS.md`, the managed `.gitignore` block, and AI-DLC's entries in
+`opencode.json`. Those entries discover the skill and method files and allow
+direct `aidlc engine *` commands; other shell commands still prompt. A
+project that already has an `opencode.json` keeps its model, provider,
+instructions, permission rules, and comments: AI-DLC adds only its own
+entries, and leaves a permission map's `"*"` rule to you when you set one. Start opencode in the project and
 run `/aidlc --doctor`, then `/aidlc` followed by what you want to build.
 
 ### Versioned manual-copy alternative
@@ -84,31 +90,41 @@ then set `RUNTIME_ROOT` to the extracted `runtime/` directory.
    cp -r "$RUNTIME_ROOT/opencode/.aidlc/"    your-project/.aidlc/
    cp -r "$RUNTIME_ROOT/opencode/.opencode/" your-project/.opencode/
    cp -r "$RUNTIME_ROOT/opencode/aidlc/"     your-project/aidlc/      # the workspace shell — a sibling of .aidlc/, not inside it
-   cp "$RUNTIME_ROOT/opencode/opencode.json" your-project/opencode.json  # or merge into yours
-   cp "$RUNTIME_ROOT/opencode/AGENTS.md"     your-project/AGENTS.md      # or merge into yours
    ```
 
-   `opencode.json` carries three load-bearing blocks: `skills.paths` (skill
-   discovery from `.aidlc/skills`), `instructions` (the method-tree include —
-   `/aidlc space <name>` re-points it), and permission rules for AIDLC bash
-   entrypoints plus edits under `.aidlc/tools/` and `.aidlc/hooks/`. If you
-   merge into an existing `opencode.json` or `opencode.jsonc`, keep all three.
+   The copy runtime has no `opencode.json`, so copying never replaces yours.
+   Step 2 adds AI-DLC's three load-bearing parts to it, or writes the file
+   when there is none: `skills.paths` (skill discovery from `.aidlc/skills`),
+   `instructions` (both native onboarding at `.aidlc/onboarding.md` and the
+   method-tree glob, the one entry `/aidlc space <name>` re-points), and
+   permission rules for AIDLC bash entrypoints plus edits under
+   `.aidlc/tools/` and `.aidlc/hooks/`. If you keep an `opencode.jsonc`
+   instead, add those three parts to it by hand.
    The adapter enforces the permission boundary: the target must be an entrypoint
    embedded from the packaged tree, invoked as one direct command with no
    chaining, redirection, expansion, or command substitution. Engine-code edits
    prompt for approval.
 
-2. Apply the `.gitignore` entries from the shipped `AGENTS.md` § "Git
-   Integration" before starting a workflow (per-clone audit shards are
-   committed deliberately; cursors and machine-local runtime stay ignored).
+2. Run the copy's own setup once, from the project:
+
+   ```bash
+   bun .aidlc/tools/aidlc.ts config --from "$RUNTIME_ROOT" --harness opencode
+   ```
+
+   It adds AI-DLC's lines to your `AGENTS.md` and `.gitignore`, after
+   everything already there, and AI-DLC's entries to your `opencode.json`
+   (or creates them), before your first workflow
+   (per-clone audit shards are committed deliberately; cursors and
+   machine-local runtime stay ignored).
 
 3. Start opencode in the project and run `/aidlc --doctor`, then `/aidlc`
    followed by what you want to build.
 
 Because opencode has no channel for the session-start hook's injected context,
 the `/aidlc` skill performs one read-only status probe on a bare invocation. An
-existing workflow gets the standard Resume / Redo / Jump / Start Fresh menu;
-`/aidlc --resume` skips both the probe and menu and continues directly.
+existing workflow carries on where it stopped, as with `/aidlc --resume` (ask
+to redo, jump to a stage, or start fresh to do something else);
+`/aidlc --resume` skips the probe and continues directly.
 
 The versioned runtime uses the native `aidlc` command. Framework developers who
 need the Bun-shaped projection can clone the repository, run
@@ -127,9 +143,11 @@ aidlc config
 ```
 
 Config preserves managed root blocks and user-owned files, and reports local
-framework edits as conflicts. Because `opencode.json` is a whole-file
-integration, a local edit is preserved as a conflict rather than overwritten.
-Config refuses refresh while any workflow is active; complete the workflow first.
+framework edits as conflicts. In `opencode.json`, a refresh updates only the
+entries AI-DLC wrote that nobody changed; your own entries, and any AI-DLC
+entry you edited, stay as they are.
+A refresh while a workflow is open is done, like a settings change (`config
+models`, `flags`, `providers`), and says your open work carries on.
 Upgrade and rollback remain safe during a workflow because they do not touch
 the project.
 
@@ -143,13 +161,20 @@ the project.
   plugin hook moments onto the core hook bodies in `.aidlc/hooks/` (run as bun
   subprocesses): reviewer read-scope and the AIDLC bash boundary before tool
   execution; audit + sensors on write/edit/apply_patch; rebuild-stage-graph on
-  bash; statusline sync on todowrite; subagent logging on task; presence
+  bash, which also shows an engine error's exact message as a TUI toast;
+  statusline sync on todowrite; subagent logging on task; presence
   minting on each human turn; state validation before compaction.
 - **Forwarding-loop enforcement is advisory.** The Stop seam is the
   `session.idle` event — reactive, not blocking. When the core stop hook
   answers `block`, the plugin re-engages the loop by injecting a nudge prompt
-  (marked with a sentinel so it never mints human presence). A chatting or
+  (marked with a sentinel so it never mints human presence). The nudge is a
+  synthetic part: the agent reads it, and your chat does not show it. When you
+  stop a turn with Esc, or reject a command the agent asked to run, no nudge
+  follows until you write again. A chatting or
   pausing human is released by the hook's interactive cap.
+- **`/aidlc` shows what you typed.** opencode would show the command's whole
+  template as your message; the plugin keeps the template for the agent and
+  shows your `/aidlc ...` line instead.
 - **Personas are native subagents** (`mode: subagent`); the conductor adopts
   them inline for most stages and delegates via the `task` tool for the two
   subagent stages (2.1 reverse-engineering, 3.5 code-generation). Their native

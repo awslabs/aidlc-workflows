@@ -39,9 +39,22 @@
 // since the includes are committed, a failed rewrite leaves the prior (valid)
 // pointer in place, recoverable by re-running.
 
-import { existsSync, readdirSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, lstatSync, readdirSync, readFileSync } from "node:fs";
+import { basename, join, relative, sep } from "node:path";
+import {
+  assertProjectionPathHasNoSymlinks,
+  jsonEntriesIsSafe,
+  managedBlockIsSafe,
+  mergeBlock,
+  mergeJsonEntries,
+  type ProjectionDescriptor,
+  readRootIntegrations,
+  type RootIntegration,
+  rootBlockPath,
+  unionBlocks,
+} from "./aidlc-distribution.ts";
 import { activeSpace, harnessDir, writeFileAtomic } from "./aidlc-lib.ts";
+import { discoverProjectHarnesses } from "./aidlc-runtime-paths.ts";
 
 /** Workspace-relative POSIX memory path for a space: `aidlc/spaces/<space>/memory`.
  *  POSIX separators — these strings live in include files read identically on
@@ -133,8 +146,9 @@ function repointOpencodeInstructions(raw: string, space: string): string | null 
 
 /** Rewrite active-space memory paths in an opencode persona body. */
 function repointOpencodeAgentMemory(raw: string, space: string): string | null {
+  // <space>-style documentation placeholders are never space names.
   const next = raw.replace(
-    /aidlc\/spaces\/[^/]+\/memory\//g,
+    /aidlc\/spaces\/(?!<)[^/]+\/memory\//g,
     `${spaceMemoryRel(space)}/`,
   );
   return next === raw ? null : next;
@@ -364,3 +378,148 @@ function readSafe(path: string): string | null {
     return null;
   }
 }
+
+// --- AI-DLC's part of the team's root files ---------------------------------
+//
+// A copy runtime leaves the team's .gitignore and AGENTS.md out (a copy would
+// replace them) and ships AI-DLC's part of each in root-blocks. Where config
+// never ran (no harness in the project has its install record), this adds that
+// part with config's own rule, at the same two moments as the includes: after
+// the team's content, or as the whole file when there is none. A part that is
+// exactly what a release shipped is brought up to date; a part the team
+// changed, and every file config or the Cursor installer manages, is left as
+// it is. Best-effort: a file that cannot be read or merged is skipped, never
+// corrupted, and nothing outside the project is read or written.
+export function addRootBlocks(projectDir: string): string[] {
+  const written: string[] = [];
+  const parts = new Map<string, {
+    integration: RootIntegration;
+    contributors: Array<{ distribution: string; text: string }>;
+    legacy: Set<string>;
+    configured: boolean;
+  }>();
+  // AI-DLC's part of a team's JSON file (opencode.json), from root-blocks.
+  const entryParts = new Map<string, { distribution: string; text: string; configured: boolean }>();
+  let harnesses: ReturnType<typeof discoverProjectHarnesses>;
+  try {
+    harnesses = discoverProjectHarnesses(projectDir);
+  } catch {
+    return written;
+  }
+  for (const harness of harnesses) {
+    const data = join(harness.root, "tools", "data");
+    let descriptor: ProjectionDescriptor;
+    try {
+      descriptor = JSON.parse(readFileSync(join(data, "aidlc-projection.json"), "utf-8")) as ProjectionDescriptor;
+      if (descriptor.harnessDir !== harness.harnessDir || descriptor.distribution !== harness.distribution) continue;
+    } catch {
+      continue;
+    }
+    const configured = existsSync(join(data, "aidlc-manifest.json"));
+    const integrations = readRootIntegrations(descriptor.rootIntegrations);
+    for (const integration of (Array.isArray(integrations) ? integrations : []) as RootIntegration[]) {
+      if (integration?.policy === "json-entries" && jsonEntriesIsSafe(integration)) {
+        const partPath = rootBlockPath(harness.root, integration);
+        try {
+          assertProjectionPathHasNoSymlinks(projectDir, relative(projectDir, partPath).split(sep).join("/"));
+        } catch {
+          continue;
+        }
+        const text = readSafe(partPath);
+        const known = entryParts.get(integration.path);
+        if (text !== null && (!known || harness.distribution.localeCompare(known.distribution) < 0)) {
+          entryParts.set(integration.path, { distribution: harness.distribution, text, configured: configured || Boolean(known?.configured) });
+        } else if (known) {
+          known.configured ||= configured;
+        }
+        continue;
+      }
+      // Config's own check on a managed block: a path inside the project and a
+      // plain marker, and no symlink on the way to the copy in root-blocks.
+      if (integration?.policy !== "managed-block" || !managedBlockIsSafe(integration)) continue;
+      const blockPath = rootBlockPath(harness.root, integration);
+      try {
+        assertProjectionPathHasNoSymlinks(projectDir, relative(projectDir, blockPath).split(sep).join("/"));
+      } catch {
+        continue;
+      }
+      const text = readSafe(blockPath);
+      if (text === null) continue;
+      const part = parts.get(integration.path) ?? {
+        integration,
+        contributors: [],
+        legacy: new Set<string>(),
+        configured: false,
+      };
+      part.contributors.push({ distribution: harness.distribution, text });
+      for (const hash of integration.legacySignatures?.wholeFileHashes ?? []) part.legacy.add(hash);
+      part.configured ||= configured;
+      parts.set(integration.path, part);
+    }
+  }
+  for (const [path, part] of parts) {
+    if (part.configured) continue;
+    const shipped = part.integration.shared === "union"
+      ? unionBlocks(part.contributors)
+      : [...part.contributors].sort((left, right) => left.distribution.localeCompare(right.distribution))[0].text;
+    const target = join(projectDir, path);
+    let current = "";
+    try {
+      assertProjectionPathHasNoSymlinks(projectDir, path);
+      const stat = lstatSync(target, { throwIfNoEntry: false });
+      if (stat && !stat.isFile()) continue;
+      if (stat) {
+        const bytes = readFileSync(target);
+        current = bytes.toString("utf-8");
+        if (!Buffer.from(current, "utf-8").equals(bytes)) continue;
+      }
+    } catch {
+      continue;
+    }
+    // A file the Cursor installer manages already holds AI-DLC's part, under
+    // that installer's own markers; it stays the installer's to update.
+    if (/^(?:# |<!-- )BEGIN AIDLC [A-Z]+/m.test(current)) continue;
+    const merged = mergeBlock(path, current, shipped, part.integration.marker || basename(path), [...part.legacy]);
+    if (merged.error || merged.value === undefined || merged.value === current) continue;
+    if (merged.currentHash && !merged.currentBlockShipped) continue;
+    try {
+      assertProjectionPathHasNoSymlinks(projectDir, path);
+      writeFileAtomic(target, merged.value);
+      written.push(path);
+    } catch {
+      // Leave the file as it was; the next session or config tries again.
+    }
+  }
+  for (const [path, part] of entryParts) {
+    if (part.configured) continue;
+    const target = join(projectDir, path);
+    let current = "";
+    try {
+      assertProjectionPathHasNoSymlinks(projectDir, path);
+      const stat = lstatSync(target, { throwIfNoEntry: false });
+      if (stat && (!stat.isFile() || stat.size > MAX_ENTRY_FILE_BYTES)) continue;
+      if (stat) {
+        const bytes = readFileSync(target);
+        current = bytes.toString("utf-8");
+        if (!Buffer.from(current, "utf-8").equals(bytes)) continue;
+      }
+    } catch {
+      continue;
+    }
+    // With no record, only entries that name AI-DLC's own folders are read
+    // as AI-DLC's; the team's keys and values stay theirs.
+    const merged = mergeJsonEntries(current, part.text, { kind: "none" });
+    if ("conflict" in merged || merged.text === current) continue;
+    try {
+      assertProjectionPathHasNoSymlinks(projectDir, path);
+      writeFileAtomic(target, merged.text);
+      written.push(path);
+    } catch {
+      // Leave the file as it was; the next session or config tries again.
+    }
+  }
+  return written;
+}
+
+// A team settings file this large is not one AI-DLC adds its part to at session start.
+const MAX_ENTRY_FILE_BYTES = 1024 * 1024;

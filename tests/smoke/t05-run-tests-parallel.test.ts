@@ -77,6 +77,7 @@ import { afterAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
   existsSync,
+  mkdirSync,
   mkdtempSync,
   readFileSync,
   readdirSync,
@@ -88,6 +89,8 @@ import { join } from "node:path";
 import { REPO_ROOT } from "../harness/fixtures.ts";
 import {
   assignWeightedShards,
+  orderLongestFirst,
+  parseOrderWeights,
   parseShardSpec,
   type ShardConfig,
 } from "../lib/test-sharding.ts";
@@ -153,6 +156,9 @@ function shellFilesUnder(dir: string): string[] {
   const files: string[] = [];
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
     const full = join(dir, entry.name);
+    // Generated debug evidence can retain whole worker checkouts and fixtures.
+    // It is not part of the authored test-file substrate guarded here.
+    if (full === join(TESTS_ROOT, "logs")) continue;
     if (entry.isDirectory()) {
       files.push(...shellFilesUnder(full));
     } else if (entry.isFile() && entry.name.endsWith(".sh")) {
@@ -199,6 +205,18 @@ describe("t05 run-tests.sh --parallel flag (migrated from t05-run-tests-parallel
     // (run-tests.sh:90 `${PARALLEL:-<missing>}`). STRONGER than the .sh, which
     // only checked rc==2 here.
     expect(r.out).toContain("ERROR: --parallel requires a positive integer");
+  }, PER_TEST_TIMEOUT);
+
+  test("--e2e-plan requires --e2e and implies isolated planning without running tests", () => {
+    const rejected = run(["--e2e-plan"]);
+    expect(rejected.status).toBe(2);
+    expect(rejected.out).toContain("--e2e --isolated-e2e or --e2e --e2e-plan");
+    expect(rejected.out).toContain("--e2e-plan implies --isolated-e2e, not --e2e");
+
+    const planned = run(["--e2e", "--e2e-plan", "--filter", "^t01-helpers$"]);
+    expect(planned.status, planned.out).toBe(0);
+    const plan = JSON.parse(planned.out) as { files: Array<{ file: string }> };
+    expect(plan.files.map(({ file }) => file)).toEqual(["tests/e2e/t01-helpers.test.ts"]);
   }, PER_TEST_TIMEOUT);
 
   test("rejects malformed and out-of-range --shard values", () => {
@@ -252,11 +270,11 @@ describe("t05 run-tests.sh --parallel flag (migrated from t05-run-tests-parallel
     expect(r.out).not.toContain("RESULT: PASS");
   }, PER_TEST_TIMEOUT);
 
-  test("four weighted unit shards cover every file once and preserve binary affinity", () => {
+  test("twelve weighted unit shards cover every file once and preserve binary affinity", () => {
     const files = readdirSync(join(TESTS_ROOT, "unit"))
       .filter((file) => file.endsWith(".test.ts"))
       .sort();
-    const shards = assignWeightedShards(files, 4, UNIT_SHARD_CONFIG);
+    const shards = assignWeightedShards(files, 12, UNIT_SHARD_CONFIG);
     const flattened = shards.flat();
 
     expect(shards.every((shard) => shard.length > 0)).toBe(true);
@@ -279,33 +297,117 @@ describe("t05 run-tests.sh --parallel flag (migrated from t05-run-tests-parallel
     );
   }, PER_TEST_TIMEOUT);
 
-  test("unit shard CLI runs only the selected deterministic shard", () => {
+  test("shared CI flags run only the selected deterministic unit shard", () => {
     const file = "t68-version-changelog-sync.test.ts";
     const files = readdirSync(join(TESTS_ROOT, "unit"))
       .filter((entry) => entry.endsWith(".test.ts"))
       .sort();
-    const shards = assignWeightedShards(files, 4, UNIT_SHARD_CONFIG);
+    const shards = assignWeightedShards(files, 8, UNIT_SHARD_CONFIG);
     const selected = shards.findIndex((shard) => shard.includes(file)) + 1;
     expect(selected).toBeGreaterThan(0);
-    expect(parseShardSpec(`${selected}/4`)).toEqual({
+    expect(parseShardSpec(`${selected}/8`)).toEqual({
       index: selected,
-      total: 4,
+      total: 8,
     });
 
     const r = run([
+      "--debug", "-P", "8", "--no-llm",
       "--unit",
       "--shard",
-      `${selected}/4`,
+      `${selected}/8`,
       "--filter",
       "t68-version-changelog-sync",
     ]);
-    expect(r.status).toBe(0);
+    const stamp = r.out.match(/^Verbose mode: logging to (.+)$/m)?.[1].trim();
+    if (stamp) createdLogDirs.push(stamp);
+    expect(r.status, r.out).toBe(0);
+    expect(stamp).toBeDefined();
+    const execution = JSON.parse(readFileSync(join(stamp!, file.replace(/\.test\.ts$/, ".execution.json")), "utf8"));
+    expect(execution.noLlm).toBe(true);
     expect(r.out).toContain(
-      `## Unit Tests (single-component isolation) (shard=${selected}/4)`,
+      `## Unit Tests (single-component isolation) (shard=${selected}/8)`,
     );
     expect(r.out).toContain(`=== START ${file} ===`);
     expect(r.out).toContain("Test files: 1");
     expect(r.out).toContain("RESULT: PASS");
+  }, PER_TEST_TIMEOUT);
+
+  test("unit shards isolate compiled handoffs and fail when the producer did not run", () => {
+    const root = mkdtempSync(join(tmpdir(), "aidlc-t05-compiled-"));
+    const trace = join(root, "handoff-path.txt");
+    const plant = join(TESTS_ROOT, "unit", "t248-t05-compiled-handoff.test.ts");
+    writeFileSync(plant, [
+      'import { mkdirSync, writeFileSync } from "node:fs";',
+      'import { join } from "node:path";',
+      plantedBunTestSource("records runner compiled handoff", `
+      const dir = process.env.AIDLC_TEST_COMPILED_DIR;
+      expect(dir).toBeDefined();
+      mkdirSync(dir!, { recursive: true });
+      writeFileSync(join(dir!, "handoff-probe"), "current run");
+      writeFileSync(${JSON.stringify(trace)}, dir!);
+      `),
+    ].join("\n"));
+    try {
+      const r = run([
+        "--unit", "--shard", "1/1", "--filter", "t248-t05-compiled-handoff|t249-copilot-adapter",
+      ], {
+        AIDLC_TEST_PACKAGE_READY: "1",
+        AIDLC_TEST_COMPILED_DIR: root,
+        // Even an existing executable cannot replace this shard's producer.
+        AIDLC_TEST_COMPILED_EXECUTABLE: process.execPath,
+        BUN_OPTIONS: "--test-name-pattern=records|0a:",
+      });
+      expect(r.status, r.out).toBe(1);
+      expect(r.out).toContain("=== DONE t248-t05-compiled-handoff.test.ts (PASS) ===");
+      expect(r.out).toContain("=== DONE t249-copilot-adapter.test.ts (FAIL) ===");
+      expect(r.out).toContain("(fail) t249 Copilot hook adapter (live-captured payload fixtures) > 0a:");
+      const compiledDir = readFileSync(trace, "utf8");
+      expect(compiledDir).not.toBe(root);
+      expect(existsSync(compiledDir)).toBe(false);
+      expect(existsSync(root)).toBe(true);
+    } finally {
+      rmSync(plant, { force: true });
+      rmSync(root, { recursive: true, force: true });
+    }
+  }, PER_TEST_TIMEOUT);
+
+  test("machine settings stay isolated across every settings-hierarchy case", () => {
+    const host = mkdtempSync(join(tmpdir(), "aidlc-t05-host-machine-"));
+    const machine = join(host, "aidlc");
+    mkdirSync(machine);
+    const policy = join(machine, "aidlc.settings.json");
+    const sentinel = "invalid host policy: tests must never read or overwrite this\n";
+    writeFileSync(policy, sentinel);
+    try {
+      const result = run(["--unit", "--no-llm", "--filter", "^t298-settings-hierarchy$"], {
+        AIDLC_TEST_PACKAGE_READY: "1",
+        AIDLC_INSTALL_ROOT: machine,
+        AIDLC_BIN_DIR: join(host, "bin"),
+        XDG_DATA_HOME: host,
+        LOCALAPPDATA: host,
+      });
+      expect(result.status, result.out).toBe(0);
+      expect(result.out).toContain("=== DONE t298-settings-hierarchy.test.ts (PASS) ===");
+      expect(readFileSync(policy, "utf-8")).toBe(sentinel);
+      // Windows keeps its own caches under LOCALAPPDATA (Microsoft\...) for any
+      // process that runs with it; only AI-DLC's entries matter here.
+      expect(readdirSync(host).filter((name) => name !== "Microsoft")).toEqual(["aidlc"]);
+      expect(readdirSync(machine)).toEqual(["aidlc.settings.json"]);
+    } finally {
+      rmSync(host, { recursive: true, force: true });
+    }
+  }, PER_TEST_TIMEOUT);
+
+  test("debug logging keeps the source project separate from machine fixtures", () => {
+    const result = run([
+      "--debug", "-P", "8", "--unit", "--no-llm", "--filter", "^t230-dispatcher-routes$",
+    ], {
+      AIDLC_TEST_PACKAGE_READY: "1",
+      BUN_OPTIONS: "--test-name-pattern=compose.translates.to.orchestrate.next.compose",
+    });
+    expect(result.status, result.out).toBe(0);
+    expect(result.out).toContain("=== DONE t230-dispatcher-routes.test.ts (PASS) ===");
+    expect(result.out).not.toContain("cannot use an AI-DLC machine install");
   }, PER_TEST_TIMEOUT);
 
   // --- 3. --parallel 1 ≡ serial on the smoke tier --------------------------
@@ -355,6 +457,23 @@ describe("t05 run-tests.sh --parallel flag (migrated from t05-run-tests-parallel
     const banner =
       r.out.split("\n").find((l) => l.startsWith("## Integration Tests")) ?? "";
     expect(banner).toContain("(parallel=4)");
+  }, PER_TEST_TIMEOUT);
+
+  // --- 5b. Parallel integration admits the longest file first --------------
+  // A long file admitted last sets the tier's wall time, so the runner orders
+  // parallel integration files by tests/integration-weights.json (prior CI
+  // durations); unweighted files and ties keep name order.
+  test("parallel integration starts files longest-first by their recorded weights", () => {
+    const pair = ["t12-state-fixture-validation", "t89"];
+    const order = parseOrderWeights(readFileSync(join(TESTS_ROOT, "integration-weights.json"), "utf-8"));
+    expect(order).toBeDefined();
+    const expected = orderLongestFirst(pair, (name) => name, order!);
+    // The pair proves the ordering only while its weights reverse name order.
+    expect(expected, "pick two integration files whose weights reverse name order").toEqual(["t89", "t12-state-fixture-validation"]);
+    const r = run(["--integration", "--parallel", "2", "--no-llm", "--filter", "^(t12-state-fixture-validation|t89)$"]);
+    expect(r.status, r.out).toBe(0);
+    const starts = [...r.out.matchAll(/^=== START (\S+)\.test\.ts ===$/gm)].map((match) => match[1]);
+    expect(starts).toEqual(expected);
   }, PER_TEST_TIMEOUT);
 
   // --- 6. Interleaving observed under --parallel 4 -------------------------
@@ -564,19 +683,25 @@ describe("t05 run-tests.sh --parallel flag (migrated from t05-run-tests-parallel
       f.endsWith(".meta"),
     );
     expect(leftoverMeta.length).toBe(0);
+    const junit = readFileSync(join(logDir, "t06-claude-md-paths.junit.xml"), "utf8");
+    expect(junit).toContain("<testcase");
+    const execution = JSON.parse(readFileSync(join(logDir, "t06-claude-md-paths.execution.json"), "utf8"));
+    expect(execution.file).toContain("t06-claude-md-paths.test.ts");
+    expect(Object.hasOwn(execution.gates, "AIDLC_TUI_LIVE")).toBe(true);
   }, PER_TEST_TIMEOUT);
 
   test("--all --debug defaults live TUI coverage unless AIDLC_TUI_LIVE is explicit", () => {
+    // Test each input explicitly, even when this meta-test runs under --no-llm.
     const defaulted = run(
       ["--all", "--debug", "--filter", "t01-helpers"],
-      { AIDLC_TUI_LIVE: undefined },
+      { AIDLC_TUI_LIVE: undefined, AIDLC_NO_LLM: undefined },
     );
     expect(defaulted.status).toBe(0);
     expect(defaulted.out).toContain("Live TUI coverage: AIDLC_TUI_LIVE=1 (defaulted");
 
     const explicitOff = run(
       ["--all", "--debug", "--filter", "NO_SUCH_T05_TEST"],
-      { AIDLC_TUI_LIVE: "0" },
+      { AIDLC_TUI_LIVE: "0", AIDLC_NO_LLM: undefined },
     );
     expect(explicitOff.status).toBe(1);
     expect(explicitOff.out).toContain("matched no test files");
@@ -584,7 +709,7 @@ describe("t05 run-tests.sh --parallel flag (migrated from t05-run-tests-parallel
 
     const noLlm = run(
       ["--all", "--debug", "--no-llm", "--filter", "NO_SUCH_T05_TEST"],
-      { AIDLC_TUI_LIVE: undefined },
+      { AIDLC_TUI_LIVE: undefined, AIDLC_NO_LLM: undefined },
     );
     expect(noLlm.status).toBe(1);
     expect(noLlm.out).toContain("matched no test files");

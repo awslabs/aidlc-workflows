@@ -1,7 +1,12 @@
 // covers: function:checkSummaryConfirmationEvidence, function:recoveryGuidance,
 // subcommand:aidlc-log:review, hook:aidlc-review-freeze
 
-import { afterEach, describe, expect, test } from "bun:test";
+import {
+  NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { afterEach, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
@@ -23,10 +28,13 @@ import {
   seedAidlcMemory,
   seedBoltDag,
   recordArtifactWriteViaHook,
+  REPO_ROOT,
   seededRecordDir,
   seededStateFile,
   seedStateFile,
 } from "../harness/fixtures.ts";
+
+setDefaultTimeout(NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
 const BUN = process.execPath;
 const LOG = join(AIDLC_SRC, "tools", "aidlc-log.ts");
@@ -58,6 +66,7 @@ function run(
   const env: NodeJS.ProcessEnv = { ...process.env, ...extraEnv };
   for (const name of clearEnv) delete env[name];
   const result = Bun.spawnSync({
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     cmd: [BUN, tool, ...args, "--project-dir", proj],
     env,
     stdout: "pipe",
@@ -205,6 +214,7 @@ function runHook(
   extraEnv: NodeJS.ProcessEnv = {},
 ) {
   const result = Bun.spawnSync({
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     cmd: [BUN, HOOK],
     env: { ...process.env, CLAUDE_PROJECT_DIR: proj, ...extraEnv },
     stdin: Buffer.from(
@@ -263,7 +273,7 @@ describe("t320 review/summary deadlock prevention", () => {
     const blocked = runHook(proj, artifact);
     expect(blocked.status).toBe(2);
     expect(blocked.stderr).toContain(
-      'Ask "What should change?" for stage "requirements-analysis"',
+      'When the person already said what should change for stage "requirements-analysis"',
     );
     expect(blocked.stderr).toContain("their exact text unchanged");
     expect(
@@ -522,6 +532,19 @@ describe("t320 review/summary deadlock prevention", () => {
 });
 
 describe("t320 recovery guidance", () => {
+  test("names the command the person types on Codex", () => {
+    // The Codex tree's own lib, in its own process: the tree names the harness.
+    const lib = join(REPO_ROOT, "dist", "codex", ".codex", "tools", "aidlc-lib.ts");
+    const state = "- [R] requirements-analysis \u2014 EXECUTE";
+    const script = `const { recoveryGuidance } = await import(${JSON.stringify(lib)});\n` +
+      `console.log(recoveryGuidance("/p", ${JSON.stringify(state)}, "requirements-analysis"));`;
+    const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => key !== "AIDLC_HARNESS_DIR"));
+    const r = Bun.spawnSync({ cmd: [BUN, "-e", script], env, stdout: "pipe", stderr: "pipe" });
+    expect(r.exitCode, r.stderr.toString()).toBe(0);
+    expect(r.stdout.toString()).toContain("$aidlc --stage requirements-analysis");
+    expect(r.stdout.toString()).not.toContain("/aidlc ");
+  });
+
   test("maps every checkbox and absent-stage state to one executable exit", () => {
     expect(
       recoveryGuidance(
@@ -529,7 +552,7 @@ describe("t320 recovery guidance", () => {
         "- [-] requirements-analysis — EXECUTE",
         "requirements-analysis",
       ),
-    ).toContain('Ask "What should change?"');
+    ).toContain('Otherwise ask "What should change?"');
     expect(
       recoveryGuidance(
         "/p",

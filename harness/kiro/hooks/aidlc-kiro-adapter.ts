@@ -42,14 +42,23 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
+import { randomUUID } from "node:crypto";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
+  hookOutsideGate,
+  hookStandsOutside,
+  enterHookWorkflow,
+  activeSpace,
+  agentsDir,
   classifyTerminalCommand,
   decodeHarnessPlainText,
-  hasOpenGate,
-  humanActedSinceGate,
+  fenceCommandOutput,
+  relayAsTextBlock,
+  presenceFloorHolds,
+  hookDebug,
   humanPresenceGuardDisabled,
+  isAidlcAgentFile,
   isAutonomousMode,
   leadingOrchestratorVerb,
   sanitizeHarnessPlainText,
@@ -57,8 +66,14 @@ import {
   stateFilePath,
   stripOrchestratorLauncherOptions,
 } from "../tools/aidlc-lib.ts";
+import { terminalDispatcherArgv } from "../tools/aidlc.ts";
+import { repointHarnessIncludes } from "../tools/aidlc-includes.ts";
+import { aidlcInvocation } from "../tools/aidlc-runtime-paths.ts";
 
 const HOOKS_DIR = dirname(fileURLToPath(import.meta.url));
+// The agent-v1 hook's default max_output_size is 10 KiB, independently of
+// the shell tool's larger response budget. Count the complete UTF-8 packet.
+const PROMPT_HOOK_MAX_BYTES = 10 * 1024;
 
 interface KiroHookInput {
   hook_event_name?: string;
@@ -91,6 +106,11 @@ function inputPaths(input: Record<string, unknown>): string[] {
   };
   add(input.path);
   add(input.file_path);
+  // `delete_file` names its target `targetFile` and carries no other path field
+  // (every captured payload is {explanation, targetFile}). Without it a delete
+  // reached the guards with no target: reviewer-scope and review-freeze had
+  // nothing to judge, and Plan Approval saw an opaque mutation.
+  add(input.targetFile);
   if (Array.isArray(input.paths)) for (const path of input.paths) add(path);
   if (Array.isArray(input.operations)) {
     for (const operation of input.operations) {
@@ -168,6 +188,89 @@ function kiroDispatch(input: KiroHookInput): KiroDispatch | null {
   };
 }
 
+type PreloadFailure = { message: string; repointable: boolean };
+
+function nativePreloadError(projectDir: string, agents: string[]): PreloadFailure | null {
+  // Match the shared delivery hook's installed Markdown roster, including
+  // plugin personas, and its composer exemption. JSON-only helpers are outside
+  // that contract even when their names use the aidlc- prefix.
+  const rosterDir = agentsDir();
+  const workers = agents.filter((agent) =>
+    /^[a-z0-9][a-z0-9-]*-agent$/.test(agent) &&
+    agent !== "aidlc-composer-agent" &&
+    existsSync(join(rosterDir, `${agent}.md`)) &&
+    isAidlcAgentFile(join(rosterDir, `${agent}.md`))
+  );
+  if (workers.length === 0) return null;
+  // Use the same active-space cursor as repointHarnessIncludes. Validate the
+  // persisted result rather than trusting a repoint made here: Kiro may already
+  // have read the config, and a skipped or failed repoint must not silently
+  // admit work.
+  const space = activeSpace(projectDir);
+  const pattern = `aidlc/spaces/${space}/memory/**/*.md`;
+  const expected = `file://${pattern}`;
+  // Each failure names the one step that repairs it. Plugin authoring reserves
+  // aidlc- for core; other roster namespaces have hand-authored native JSON
+  // that no AI-DLC command can repair.
+  const failure = (agent: string, reason: string, step: string, repointable = false): PreloadFailure => ({
+    message:
+      `[aidlc] Worker dispatch blocked: ${join(projectDir, ".kiro", "agents", `${agent}.json`)}: ${reason}. ` +
+      `Expected resources to include ${expected}, resolving to at least one existing Markdown file. ` +
+      `${agent.startsWith("aidlc-") ? step : `Add ${expected} to the resources array in the plugin's agent JSON and repair the active-space memory files before retrying.`}\n`,
+    repointable: repointable && agent.startsWith("aidlc-"),
+  });
+  const reinstall = `Run \`${aidlcInvocation()} config --harness kiro\` in a terminal to put AI-DLC's Kiro files back, ` +
+    `then start the specialist again; /aidlc --doctor names anything still wrong.`;
+  for (const agent of new Set(workers)) {
+    const file = join(projectDir, ".kiro", "agents", `${agent}.json`);
+    try {
+      const config: unknown = JSON.parse(readFileSync(file, "utf-8"));
+      if (
+        config === null || typeof config !== "object" ||
+        !("resources" in config) || !Array.isArray(config.resources)
+      ) {
+        return failure(agent, "the active-space memory preload is absent", reinstall);
+      }
+      if (!config.resources.includes(expected)) {
+        // A glob for another space is what a space switch repoints; any other
+        // shape needs the shipped file back.
+        const otherSpace = config.resources.some((entry: unknown) =>
+          typeof entry === "string" && /^file:\/\/aidlc\/spaces\/[^/]+\/memory\/\*\*\/\*\.md$/.test(entry)
+        );
+        return otherSpace
+          ? failure(
+            agent,
+            "the active-space memory preload is stale",
+            `Run /aidlc space switch ${space} to point it at this space, then start the specialist again.`,
+            true,
+          )
+          : failure(agent, "the active-space memory preload is absent", reinstall);
+      }
+    } catch (error) {
+      return failure(
+        agent,
+        `cannot read or parse the worker config: ${String(error).replace(/[\r\n]+/g, " ")}`,
+        reinstall,
+      );
+    }
+  }
+  // Each missing file is put back on its own: a whole-folder checkout would
+  // throw away the team's edits to the files still there.
+  const restore = `Put this space's method files back under aidlc/spaces/${space}/memory/ ` +
+    `(for example \`git checkout -- aidlc/spaces/${space}/memory/org.md\` for a tracked file that is missing), ` +
+    `then start the specialist again.`;
+  try {
+    for (const _file of new Bun.Glob(pattern).scanSync({
+      cwd: projectDir,
+      onlyFiles: true,
+      followSymlinks: false,
+    })) return null;
+    return failure(workers[0], "the active-space memory glob resolves to no Markdown files", restore);
+  } catch (error) {
+    return failure(workers[0], `cannot resolve the active-space memory glob: ${String(error).replace(/[\r\n]+/g, " ")}`, restore);
+  }
+}
+
 export async function run(
   target: string,
   input: string,
@@ -213,29 +316,88 @@ const childCwd = process.env.AIDLC_PROJECT_DIR ? projectDir : process.cwd();
 // block API, so the conductor relays rather than is bypassed — measured to land
 // the command and leave the active intent untouched).
 //
-// WHY the args support BOTH payload shapes: expanded-body generations substitute
-// $ARGUMENTS into the forwarding-loop anchor
-// `aidlc-orchestrate.ts next <ARGS>`, so that anchor remains the first source.
-// The repo's live kiro-cli 2.6.1 fixture carries plain prompt text, while issue
+// WHY the args support BOTH payload shapes: kiro-cli delivers the expanded
+// skill body, with $ARGUMENTS substituted into the forwarding loop's step-1
+// anchor `... engine orchestrate next <ARGS>` bare (no shell capture, no pipe).
+// The body also holds prose examples of `next` (`next --stage <slug>`,
+// `next compose ...`) ahead of that anchor, so only the span followed by
+// "bare" is the person's dispatch, or the only span when there is one. The
+// repo's live kiro-cli 2.6.1 fixture carries plain prompt text, while issue
 // #776 measured Kiro IDE 1.0.309 and kiro-cli 2.18.1 --v3 delivering the raw
-// typed `/aidlc …` text. The fallback recovers argv directly from that raw shape.
+// typed `/aidlc ...` text. The fallback recovers argv directly from that raw
+// shape.
+// The step-1 line of the expanded body, from its opening words to its closing
+// ones: what lies between its `next` and the closing words is exactly what the
+// person typed, newlines and backticks included.
+const NEXT_ANCHOR_LINE = "printed by running `";
+const NEXT_ANCHOR_CLOSE = "` bare (no shell capture, no pipe)";
+
+function anchoredArgs(prompt: string): string | null {
+  const close = prompt.indexOf(NEXT_ANCHOR_CLOSE);
+  const line = close < 0 ? -1 : prompt.lastIndexOf(NEXT_ANCHOR_LINE, close);
+  if (line < 0) return null;
+  const open = /(?:engine\s+orchestrate|aidlc-orchestrate\.ts)\s+next ?/.exec(prompt.slice(line, close));
+  return open === null ? null : prompt.slice(line + open.index + open[0].length, close);
+}
+
+// The engine call the agent is told to run: plain typed words as they are, or,
+// when they hold anything else a shell reads (a line break, a backtick, `$`,
+// `#`, a glob, an apostrophe), each argument quoted, so the call carries every
+// word and runs none. Single quotes are literal in sh and in PowerShell alike;
+// a word with an apostrophe takes double quotes when nothing in it expands
+// there, and otherwise this host's own shell form.
+function forwardedArgs(raw: string, args: string[]): string {
+  if (/^[A-Za-z0-9_@%+=:,./ \t"-]*$/.test(raw)) return raw;
+  const quote = (arg: string): string => {
+    if (/^[A-Za-z0-9_@%+=:,./-]+$/.test(arg)) return arg;
+    if (!arg.includes("'")) return `'${arg}'`;
+    if (!/["`$\\]/.test(arg)) return `"${arg}"`;
+    return `'${arg.replaceAll("'", process.platform === "win32" ? "''" : "'\\''")}'`;
+  };
+  return args.map(quote).join(" ");
+}
+
 function extractNextInvocation(
-  expandedPrompt: string,
-): { raw: string; args: string[] } {
-  // Match the FIRST `… aidlc-orchestrate.ts next <ARGS>` occurrence (the loop's
-  // step-1 anchor) and take the tokens up to the closing backtick. The anchor is
-  // inside a markdown code span, so the args end at the backtick.
-  // Accept the native dispatcher anchor and the legacy filename shape so the
-  // seam keeps working across both invocation channels.
-  const m = expandedPrompt.match(
-    /(?:engine\s+orchestrate|aidlc-orchestrate\.ts)\s+next ([^`\n]*)`/,
-  );
-  const rawInvocation = m
-    ? m[1]
-    : expandedPrompt.match(/^\s*\/aidlc(?![\w-])([\s\S]*)$/)?.[1];
-  if (rawInvocation === undefined) return { raw: "", args: [] };
-  const raw = rawInvocation.trim();
-  return { raw, args: splitKiroCommandArgs(raw) };
+  prompt: string,
+): { raw: string; args: string[]; typed: string; forwarded: string } {
+  // The step-1 line's own boundary first; then the anchor's closing backtick,
+  // in the native dispatcher or the legacy filename shape. A body with a
+  // single `next` span has no example to mistake for it.
+  const payload = anchoredArgs(prompt);
+  const spans = [...prompt.matchAll(/(?:engine\s+orchestrate|aidlc-orchestrate\.ts)\s+next ?([^`\n]*)`/g)];
+  const anchor = payload !== null ? null : prompt.match(
+    /(?:engine\s+orchestrate|aidlc-orchestrate\.ts)\s+next ?([^`\n]*)` bare\b/,
+  ) ?? (spans.length === 1 ? spans[0] : null);
+  const rawInvocation = payload ?? (anchor
+    ? anchor[1]
+    : prompt.match(/^\s*\/aidlc(?![\w-])([\s\S]*)$/)?.[1]);
+  if (rawInvocation === undefined) return { raw: "", args: [], typed: prompt, forwarded: "" };
+  // An anchor Kiro left unexpanded carries no typed args.
+  const raw = rawInvocation.trim() === "$ARGUMENTS" ? "" : rawInvocation.trim();
+  // What the person typed: the prompt itself, or for an expanded body the
+  // `/aidlc` line the body was expanded from.
+  const typed = payload !== null || anchor ? `/aidlc${raw ? ` ${raw}` : ""}` : prompt;
+  // A line break inside a quoted argument reads as a space, so the call the
+  // agent runs stays on one line and matches what the guard compares.
+  const args = splitKiroCommandArgs(raw).map((arg) => arg.replace(/\s*[\r\n]+\s*/g, " "));
+  return { raw, args, typed, forwarded: forwardedArgs(raw, args) };
+}
+
+/** The text of every context line a core hook printed, as plain stdout for Kiro. */
+function hookContextText(stdout: string): string {
+  const parts: string[] = [];
+  for (const line of stdout.split("\n")) {
+    if (!line.trim()) continue;
+    try {
+      const parsed = JSON.parse(line) as {
+        additionalContext?: unknown;
+        hookSpecificOutput?: { additionalContext?: unknown };
+      };
+      const text = parsed.additionalContext ?? parsed.hookSpecificOutput?.additionalContext;
+      if (typeof text === "string" && text.trim()) parts.push(text.trim());
+    } catch { /* a line that is not hook JSON carries no context */ }
+  }
+  return parts.length > 0 ? `${sanitizeHarnessPlainText(parts.join("\n"))}\n\n` : "";
 }
 
 const PRE_DISPATCH_FLAGS = new Set([
@@ -245,13 +407,15 @@ const PRE_DISPATCH_FLAGS = new Set([
   "--resume",
   "--depth",
   "--test-strategy",
-  "--single",
   "--new-intent",
   "--new-scope",
   "--report",
 ]);
 
 function shouldPreDispatchNext(args: string[], cwd: string): boolean {
+  // A single-stage next owns its issuance/audit boundary. Let the conductor's
+  // exact first tool call issue it once, rather than issuing inside this hook.
+  if (args.includes("--single")) return false;
   if (args[0] === "compose") return true;
   if (args.some((arg) => PRE_DISPATCH_FLAGS.has(arg))) return true;
   // A scope choice is unambiguous only before a workflow exists. Over an
@@ -274,6 +438,7 @@ if (target === "verb-intercept") {
   // fire ONLY when the latch's turn === the current counter (same turn) — truly
   // turn-scoped, no time window, no wedge. Best-effort; failure fails open.
   let turn = 0;
+  let preface = "";
   try {
     const cwd = projectDir;
     mkdirSync(join(cwd, "aidlc"), { recursive: true });
@@ -300,19 +465,24 @@ if (target === "verb-intercept") {
   // only the authority-bearing ledger event while retaining the conversational
   // marker. See the marker family in aidlc-lib.ts.
   try {
-    runCore("aidlc-record-human-turn.ts", {
+    // The person's own words, not the skill body Kiro expanded them into, so a
+    // typed switch (`/aidlc --guard-policy off`) is read as typed. Its lines
+    // (what the switch did) lead whatever this seam writes: plain stdout is
+    // Kiro's only context channel here.
+    const recorded = runCore("aidlc-record-human-turn.ts", {
       hook_event_name: "UserPromptSubmit",
       ...(kiro.session_id ? { session_id: kiro.session_id } : {}),
-      prompt: kiro.prompt ?? "",
+      prompt: invocation.typed,
     });
+    preface = hookContextText(recorded.stdout);
   } catch { /* presence best-effort - record-human-turn never blocks the turn */ }
   if (cmd === null) {
     // Pure, explicit engine reads do not need the model to reconstruct the
     // first tool call. Dispatch them here with the exact recovered argv and
-    // inject the returned directive. This removes the observed fail-then-retry
-    // path where Kiro changed or dropped compose/routing arguments. Ambiguous
-    // active-workflow freeform remains conductor-owned and uses the forwarding
-    // latch below.
+    // inject a small, non-steering directive. Steering must arrive complete
+    // through the real tool channel: the hook can truncate rules and their
+    // trailing continuation token even when the engine's own budget is met.
+    // Ambiguous active-workflow freeform also uses the forwarding latch below.
     const cwd = projectDir;
     if (invocation.raw.length > 0 && shouldPreDispatchNext(args, cwd)) {
       try {
@@ -333,32 +503,43 @@ if (target === "verb-intercept") {
           run.stdout ?? new Uint8Array(),
         ).trim();
         if (run.exitCode === 0 && directive.length > 0) {
-          rmSync(join(cwd, "aidlc", ".aidlc-forwarding-latch"), {
-            force: true,
-          });
-          if (args[0] === "--config") {
-            try {
-              writeFileSync(
-                join(cwd, "aidlc", ".aidlc-readonly-latch"),
-                JSON.stringify({
-                  turn,
-                  flag: args.join(" ").replace(/^--/, ""),
-                  source: "config-alias",
-                  ts: Date.now(),
-                }) + "\n",
-                "utf-8",
-              );
-            } catch { /* config-alias latch is best-effort */ }
-          }
-          process.stdout.write(
+          const parsed: unknown = JSON.parse(directive);
+          const packet =
             "SYSTEM (deterministic engine pre-dispatch): The harness has ALREADY " +
               "run the exact first `aidlc-orchestrate.ts next` invocation with " +
               "every user argument preserved. Treat the JSON below as the " +
               "authoritative directive and act on it now. Do NOT call `next` " +
               "again for this invocation.\n\n" +
-              `--- DIRECTIVE ---\n${directive}\n--- END DIRECTIVE ---\n`,
-          );
-          return 0;
+              `--- DIRECTIVE ---\n${directive}\n--- END DIRECTIVE ---\n`;
+          // Never move the token ahead of rules to make it survive truncation.
+          // Fall through without publishing either when the full packet cannot
+          // be delivered, or when these are steering contents of any size.
+          if (
+            parsed !== null && typeof parsed === "object" &&
+            !Array.isArray(parsed) && "kind" in parsed &&
+            typeof parsed.kind === "string" && parsed.kind !== "load-steering" &&
+            Buffer.byteLength(preface + packet, "utf-8") <= PROMPT_HOOK_MAX_BYTES
+          ) {
+            rmSync(join(cwd, "aidlc", ".aidlc-forwarding-latch"), {
+              force: true,
+            });
+            if (args[0] === "--config") {
+              try {
+                writeFileSync(
+                  join(cwd, "aidlc", ".aidlc-readonly-latch"),
+                  JSON.stringify({
+                    turn,
+                    flag: args.join(" ").replace(/^--/, ""),
+                    source: "config-alias",
+                    ts: Date.now(),
+                  }) + "\n",
+                  "utf-8",
+                );
+              } catch { /* config-alias latch is best-effort */ }
+            }
+            process.stdout.write(preface + packet);
+            return 0;
+          }
         }
       } catch { /* pre-dispatch is advisory; forwarding latch remains the floor */ }
     }
@@ -374,17 +555,20 @@ if (target === "verb-intercept") {
           join(cwd, "aidlc", ".aidlc-forwarding-latch"),
           JSON.stringify({
             turn,
-            raw: invocation.raw,
+            raw: invocation.forwarded,
             args,
           }) + "\n",
           "utf-8",
         );
       } catch { /* forwarding backstop best-effort */ }
       process.stdout.write(
+        preface +
         "SYSTEM (deterministic argument forwarding): Your immediate first tool call " +
           "must be exactly the engine call below. Preserve every argument; do not run a bare `next`.\n\n" +
-          `{{INVOKE}} engine orchestrate next ${invocation.raw}\n`,
+          `{{INVOKE}} engine orchestrate next ${invocation.forwarded}\n`,
       );
+    } else if (preface) {
+      process.stdout.write(preface);
     }
     return 0; // non-terminal command — conductor handles the directive
   }
@@ -396,25 +580,6 @@ if (target === "verb-intercept") {
     out = cmd.error;
   } else {
     const executable = process.env.AIDLC_COMPILED_EXECUTABLE;
-    const compiledArgs = (() => {
-      if (cmd.source === "plugin-verb") {
-        if (cmd.subcommand === "plugin-list") return ["plugin", "list", ...forwarded];
-        if (cmd.subcommand === "plugin-sync") return ["plugin", "sync", ...forwarded];
-        if (cmd.subcommand === "select-plugins") return ["plugin", "select", ...forwarded];
-        if (cmd.subcommand === "plugin-validate") return ["plugin", "validate", ...forwarded];
-        if (cmd.subcommand === "plugin-build") return ["plugin", "build", ...forwarded];
-        if (cmd.subcommand === "help") return ["plugin", "help"];
-      }
-      if (cmd.source === "knowledge-verb") {
-        // The knowledge verb IS the subcommand, so no translation table -- but
-        // the noun must be restored, since the compiled CLI dispatches on it.
-        if (cmd.subcommand === "help") return ["knowledge", "help"];
-        return ["knowledge", cmd.subcommand, ...forwarded];
-      }
-      if (cmd.subcommand === "space-create") return ["space", "create", ...forwarded];
-      if (cmd.subcommand === "intent-create") return ["intent", "create", ...forwarded];
-      return [cmd.subcommand, ...forwarded];
-    })();
     // Which tool owns the subcommand. Every terminal family before DocumentKB
     // lived in aidlc-utility.ts, so this was a constant; `knowledge` verbs live
     // in their own tool, so the non-compiled path must pick one. Getting this
@@ -425,7 +590,7 @@ if (target === "verb-intercept") {
     // PATH containing bun (the hook environment often lacks the bun install dir).
     const run = Bun.spawnSync(
       executable
-        ? [executable, "engine", ...compiledArgs]
+        ? [executable, ...terminalDispatcherArgv(cmd)]
         : [process.execPath, ...utilArgs],
       { cwd, stdout: "pipe", stderr: "pipe", env: projectEnv },
     );
@@ -460,7 +625,9 @@ if (target === "verb-intercept") {
     ? `--${cmd.subcommand}`
     : (cmd.display ?? [cmd.subcommand, ...forwarded].join(" "));
   process.stdout.write(
-    `SYSTEM (deterministic harness dispatch): The command \`/aidlc ${typed}\` has ALREADY been run by the harness — it is a terminal utility that carries NO workflow work. Its verbatim output is below. Your ONLY action this turn: relay that output to the user, then STOP. Do NOT run \`aidlc-orchestrate.ts next\`. Do NOT advance, resume, or run any workflow stage.\n\n--- OUTPUT ---\n${out}\n--- END OUTPUT ---\n`,
+    preface +
+    `SYSTEM (deterministic harness dispatch): The command \`/aidlc ${typed}\` has ALREADY been run by the harness: it is a terminal utility that carries NO workflow work. Its verbatim output is below. Your ONLY action this turn: relay that output to the user ${relayAsTextBlock(out)}, then STOP. Do NOT run \`aidlc-orchestrate.ts next\`. Do NOT advance, resume, or run any workflow stage.\n\n` +
+      fenceCommandOutput(out),
   );
   return 0;
 }
@@ -578,22 +745,30 @@ if (target === "guard-tool-call") {
   // stage. Distinct from the roll-forward latch above. Carve-outs mirror the core
   // gate: autonomous Construction (swarm/Bolt) first, then the deterministic
   // off-switch, then no-open-gate. Fail-open on any read/parse error: advisory,
-  // must never wedge a legitimate turn.
+  // must never wedge a legitimate turn. A conversation that has not joined the
+  // selected workflow is not held at that workflow's gates.
+  const floorWorkflow = enterHookWorkflow(cwd, kiro.session_id);
   try {
+    if (hookOutsideGate(floorWorkflow)) return 0;
     const content = existsSync(stateFilePath(cwd))
       ? readFileSync(stateFilePath(cwd), "utf-8")
       : null;
     if (isAutonomousMode(content)) return 0; // autonomous: never block
     if (humanPresenceGuardDisabled()) return 0; // deterministic off-switch
-    if (!hasOpenGate(content)) return 0; // no gate awaits approval
 
-    if (!humanActedSinceGate(cwd)) {
+    // The shared rule: a gate the person must answer, and no turn of theirs
+    // since it opened (see presenceFloorHolds).
+    if (presenceFloorHolds(cwd, content, String(kiro.tool_input?.command ?? ""))) {
       process.stderr.write(
-        "an approval gate is open and no human has acted since it opened: refusing the tool call. A real human must respond at the gate. End the turn.\n",
+        // Kiro shows this to the person too: one line they can read, and the
+        // SKILL keys the agent's step on the same sentence.
+        "Nothing runs until you answer the approval question.\n",
       );
       return 2; // Kiro reject contract: exit 2 + stderr BLOCKS the tool call.
     }
-  } catch { /* fail open: advisory presence floor */ }
+  } catch { /* fail open: advisory presence floor */ } finally {
+    floorWorkflow.restore();
+  }
 
   return 0;
 }
@@ -614,6 +789,8 @@ if (target === "state-transition-guard") {
       stdin: Buffer.from(
         JSON.stringify({
           hook_event_name: "PreToolUse",
+          // The guards judge the workflow of the session named in their payload.
+          ...(kiro.session_id ? { session_id: kiro.session_id } : {}),
           tool_name: "Bash",
           tool_input: { command },
           ...(registeredAgent ? { agent_type: registeredAgent } : {}),
@@ -671,6 +848,8 @@ if (target === "plan-approval-guard") {
   } else {
     return 0;
   }
+  // The core guard judges the workflow of the session named in its payload.
+  if (kiro.session_id) payload.session_id = kiro.session_id;
   const executable = process.env.AIDLC_COMPILED_EXECUTABLE;
   const command = executable
     ? [executable, "engine", "hook", "plan-approval-guard"]
@@ -740,6 +919,7 @@ if (target === "reviewer-scope") {
     stdin: Buffer.from(
       JSON.stringify({
         hook_event_name: "PreToolUse",
+        ...(kiro.session_id ? { session_id: kiro.session_id } : {}),
         tool_name: coreTool,
         tool_input: coreInput,
         ...(registeredAgent.length > 0
@@ -787,6 +967,7 @@ if (target === "review-freeze") {
     stdin: Buffer.from(
       JSON.stringify({
         hook_event_name: "PreToolUse",
+        ...(kiro.session_id ? { session_id: kiro.session_id } : {}),
         tool_name: shell ? "Bash" : canonical === "Write" ? "Write" : "Edit",
         tool_input: coreInput,
         cwd: projectDir,
@@ -812,17 +993,43 @@ if (target === "review-freeze") {
 // updated tool input, and a block-with-retry contract deadlocks live: the
 // conductor cannot reliably reproduce a multi-KB bundle byte-exactly, so
 // every retry re-blocks (observed on the ACP gate - zero dispatches
-// converged). Kiro is also the ONE harness where the rules invariant already
-// holds without the brief: every delegated agent's config preloads the full
-// active memory tree via its `resources` glob, so the worker holds the rules
-// before it reads the brief. Run the shared augmenter as an OBSERVER: a
-// complete brief passes silently; an incomplete one proceeds WITH a warning
-// (visible in the transcript and traces), never a block. The strict rewrite
-// path stays on the harnesses that support updatedInput (Claude, Codex,
-// opencode).
+// converged). Kiro's delegated agents instead preload the full active memory
+// tree via their `resources` glob. Check selected rule-delivery roster workers'
+// persisted preload before running the shared augmenter as an OBSERVER: complete and
+// preload-served incomplete briefs pass silently; the latter logs only through
+// opt-in hookDebug. Failed preloads and core exit 2 block with repair guidance;
+// exit 3 is advisory only after preload validation succeeds.
 if (target === "deliver-stage-rules") {
   const dispatch = kiroDispatch(kiro);
   if (dispatch === null) return 0;
+  // The shared hook's self-gate, first: a conversation that has not joined the
+  // selected workflow gets none of its rules, so its preload is not held either.
+  const dispatchWorkflow = enterHookWorkflow(projectDir, kiro.session_id);
+  try {
+    if (hookStandsOutside(dispatchWorkflow)) return 0;
+  } finally {
+    dispatchWorkflow.restore();
+  }
+  let preloadError = nativePreloadError(projectDir, dispatch.agents);
+  if (preloadError?.repointable === true) {
+    // A core persona still pointed at another space: repoint it once, as a
+    // space switch would. Kiro may have read the old config for this call, so
+    // the call still stops, and starting the specialist again goes through.
+    try {
+      repointHarnessIncludes(projectDir);
+    } catch { /* the check below names the switch */ }
+    preloadError = nativePreloadError(projectDir, dispatch.agents) ?? {
+      message: "[aidlc] This specialist was set up for another space and is now set up for this one. Start it again.\n",
+      repointable: false,
+    };
+  }
+  if (preloadError !== null) {
+    process.stderr.write(preloadError.message);
+    hookDebug(projectDir, "kiro-adapter", "Native active-space memory preload failed", {
+      target, transport: "native-preload", error: preloadError.message.trim(),
+    });
+    return 2;
+  }
   const executable = process.env.AIDLC_COMPILED_EXECUTABLE;
   const command = executable
     ? [executable, "engine", "hook", "deliver-stage-rules"]
@@ -846,8 +1053,7 @@ if (target === "deliver-stage-rules") {
   });
   if (r.exitCode === 2) {
     // A required rule file could not be loaded at all (missing/unreadable):
-    // that is real missing steering with no preload to fall back on - the
-    // one case that still blocks, with the core hook's repair guidance.
+    // a resolving glob alone cannot supply that missing steering.
     process.stderr.write(r.stderr?.toString() ?? "");
     return 2;
   }
@@ -859,10 +1065,11 @@ if (target === "deliver-stage-rules") {
     return 0;
   }
   if ((r.stdout?.toString().trim() ?? "") !== "") {
-    process.stderr.write(
-      "Advisory: the AIDLC subagent brief did not carry the active-stage rule bundle verbatim. " +
-        "The dispatch proceeded - Kiro agents preload the active memory tree natively - but keep " +
-        "briefs aligned with the delivered load-steering content.\n",
+    hookDebug(
+      projectDir,
+      "kiro-adapter",
+      "Incomplete brief served by native active-space memory preload",
+      { target, transport: "native-preload" },
     );
   }
   return 0;
@@ -1024,15 +1231,28 @@ function runCore(hookFile: string, input: Record<string, unknown>): { stdout: st
   // Reuse the exact bun binary running this adapter; the child must not depend on
   // PATH containing bun (the hook environment often lacks the bun install dir).
   const executable = process.env.AIDLC_COMPILED_EXECUTABLE;
+  const hook = hookFile.replace(/^aidlc-|\.ts$/g, "");
+  const authorityToken = hook === "record-human-turn" ? randomUUID() : "";
   const command = executable
-    ? [executable, "engine", "hook", hookFile.replace(/^aidlc-|\.ts$/g, "")]
-    : [process.execPath, join(HOOKS_DIR, hookFile)];
+    ? authorityToken
+      ? [executable, "--internal-aidlc-record-human-turn", join(HOOKS_DIR, hookFile)]
+      : [executable, "engine", "hook", hook]
+    : authorityToken
+      ? [
+          process.execPath,
+          join(HOOKS_DIR, "..", "tools", "aidlc.ts"),
+          "--internal-aidlc-record-human-turn",
+          join(HOOKS_DIR, hookFile),
+        ]
+      : [process.execPath, join(HOOKS_DIR, hookFile)];
   const r = Bun.spawnSync(command, {
     stdin: Buffer.from(JSON.stringify(input), "utf-8"),
     stdout: "pipe",
     stderr: "ignore",
     cwd: childCwd,
-    env: projectEnv,
+    env: authorityToken
+      ? { ...projectEnv, AIDLC_INTERNAL_HUMAN_TURN_TOKEN: authorityToken }
+      : projectEnv,
   });
   return {
     stdout: new TextDecoder("utf-8").decode(

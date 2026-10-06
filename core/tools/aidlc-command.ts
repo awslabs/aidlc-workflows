@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { readSync } from "node:fs";
 import {
   colorEnabled,
@@ -37,6 +38,42 @@ export function trustedCommand(suffix = ""): string {
   return suffix ? `${TRUSTED_COMMAND_PREFIX} ${suffix}` : TRUSTED_COMMAND_PREFIX;
 }
 
+// The hash Codex records in [hooks.state] when a person trusts one hook. The
+// identity is {event_name: <snake>, matcher: <the group's, when it has one>,
+// hooks: [{async: false, command, timeout: <seconds>, type: "command"}]} as
+// sorted compact JSON, then sha256 (checked against the hashes Codex 0.160.0
+// wrote after "Trust all"). The shipped trust seed and the doctor both hash
+// through here, so they count what Codex trusts.
+export function codexHookTrustHash(
+  eventName: string,
+  command: string,
+  timeout: number,
+  matcher?: string,
+): string {
+  const identity = {
+    event_name: eventName,
+    ...(matcher === undefined ? {} : { matcher }),
+    hooks: [{ async: false, command, timeout, type: "command" }],
+  };
+  const sortKeys = (value: unknown): unknown => {
+    if (Array.isArray(value)) return value.map(sortKeys);
+    if (value !== null && typeof value === "object") {
+      const record = value as Record<string, unknown>;
+      return Object.fromEntries(Object.keys(record).sort().map((key) => [key, sortKeys(record[key])]));
+    }
+    return value;
+  };
+  return `sha256:${createHash("sha256").update(JSON.stringify(sortKeys(identity)), "utf-8").digest("hex")}`;
+}
+
+// The Cursor CLI permission for the trusted prefix. Cursor reads only the
+// first token as a Shell entry's command base, and the rest after a colon as
+// an argument glob, so `Shell(aidlc engine *)` would name no command at all.
+export function cursorTrustedShell(): string {
+  const [command, ...rest] = TRUSTED_COMMAND_TOKENS;
+  return `Shell(${command}:${[...rest, "*"].join(" ")})`;
+}
+
 // Lightweight dispatcher grammar. aidlc-lib.ts retains the same public
 // workspace helpers for methodology callers; keeping this copy in the existing
 // command module avoids loading the full methodology graph at CLI startup.
@@ -57,8 +94,13 @@ export const PINNED_TOP_LEVEL_ROUTES = [
 
 export const PINNED_SYSTEM_GROUPS = ["workspace-sync"] as const;
 
+// The sections `aidlc config <section>` takes (aidlc-init.ts reads them).
+export const CONFIG_SECTIONS = ["models", "runtime", "providers", "trust", "flags", "project"] as const;
+
 const LAUNCHER_FLAG_VALUES = new Set(["--project-dir"]);
-const LAUNCHER_GLOBAL_FLAGS = new Set([
+// The dispatcher's global flags: `aidlc` drops them wherever they appear
+// before `--`, then routes what remains.
+export const LAUNCHER_GLOBAL_FLAGS: ReadonlySet<string> = new Set([
   "--json",
   "--quiet",
   "--no-color",
@@ -409,6 +451,13 @@ export function scanNamespaceInvocations(
   return invocations;
 }
 
+// Every spelling of a human-presence switch gets this refusal: the dispatcher's
+// `config set guard.human-presence` and the utility's `--guard.human-presence`.
+export const HUMAN_PRESENCE_NO_SWITCH =
+  "Human presence cannot be switched off: it is how AIDLC knows an approval or an answer came from a real person, " +
+  "so reply in the chat yourself. For a supervised session where nobody can reply, launch the CLI with " +
+  "AIDLC_SKIP_HUMAN_PRESENCE_GUARD=1 set.";
+
 export const EXIT = {
   ok: 0,
   failure: 1,
@@ -516,9 +565,14 @@ export function success(message: string, data?: unknown): CommandResult {
 // indistinguishable from a cancelled prompt. This reader returns `""` for an
 // empty line and `null` only when the input is closed (EOF), so callers can
 // treat Enter as "accept the default" and EOF as "cancel". It reads one byte at
-// a time so nothing past the newline is consumed from the input.
-export function readTerminalLine(label: string, fd = 0): string | null {
-  process.stdout.write(`${label} `);
+// a time so nothing past the newline is consumed from the input. A command
+// whose stdout carries its JSON result asks on stderr.
+export function readTerminalLine(
+  label: string,
+  fd = 0,
+  out: { write(text: string): unknown } = process.stdout,
+): string | null {
+  out.write(`${label} `);
   const bytes: number[] = [];
   const byte = Buffer.alloc(1);
   let sawNewline = false;

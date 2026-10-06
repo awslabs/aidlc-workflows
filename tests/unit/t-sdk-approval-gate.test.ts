@@ -1,0 +1,535 @@
+// covers: harness-instrument:sdk-approval-gate
+//
+// Deterministic calibration of the real SDK driver and fixture evidence reader.
+// The suite runner starts each file in a separate Bun process; this transport
+// mock belongs only to this file. No Claude process or model request is made.
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+} from "../harness/test-budget.ts";
+import { afterEach, describe, expect, mock, test, setDefaultTimeout } from "bun:test";
+import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import type { SDKMessage, query as sdkQuery } from "@anthropic-ai/claude-agent-sdk";
+import type {
+  CapturedAskUserQuestion,
+  DriveOptions,
+} from "../harness/sdk-drive.ts";
+import {
+  cleanupTestProject,
+  createTestProject,
+  seedStateFile,
+  seededAuditShard,
+  seededRecordDir,
+  seededStateFile,
+  setupIntegrationProject,
+} from "../harness/fixtures.ts";
+import { readAuditShardEvents, runtimeGraphPath } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+type QueryInput = Parameters<typeof sdkQuery>[0];
+let scenario: (input: QueryInput) => AsyncGenerator<SDKMessage> = (): AsyncGenerator<SDKMessage> => {
+  throw new Error("Unexpected SDK query in deterministic calibration");
+};
+mock.module("@anthropic-ai/claude-agent-sdk", () => ({
+  query: (input: QueryInput) => scenario(input),
+}));
+const {
+  driveAidlc,
+  prepareSdkStageFixture,
+  stageApprovalQuestionBoundary,
+} = await import("../harness/sdk-drive.ts");
+const { assertResultOk } = await import("../harness/assert.ts");
+
+const STAGE = "reverse-engineering";
+const TS = "2026-01-01T00:00:00Z";
+const projects: string[] = [];
+const menu = (header: string, labels: string[], question = header): CapturedAskUserQuestion => ({
+  questions: [{ header, question, options: labels.map((label) => ({ label })) }],
+  answers: {},
+});
+const approval = () => menu("Approval", ["Approve", "Request Changes"], "Review the reverse-engineering artifacts.");
+const learnings = () => menu("Learnings", ["Add a note", "Nothing to add"], "Anything to add for next time?");
+const blocked = () => menu("Blocked step", ["Investigate the record", "Skip learnings, hold gate"]);
+
+function event(project: string, name: string, fields: Record<string, string> = {}, otherShard = false) {
+  const path = otherShard
+    ? join(seededRecordDir(project), "audit", "other.md")
+    : seededAuditShard(project);
+  mkdirSync(join(seededRecordDir(project), "audit"), { recursive: true });
+  appendFileSync(path, `\n---\n\n## ${name}\n**Timestamp**: ${TS}\n**Event**: ${name}\n` +
+    Object.entries(fields).map(([key, value]) => `**${key}**: ${value}\n`).join(""));
+}
+
+function positionedProject(): string {
+  const project = createTestProject();
+  projects.push(project);
+  seedStateFile(project, "state-brownfield-init-done.md");
+  event(project, "WORKFLOW_STARTED", { Scope: "bugfix" });
+  event(project, "STAGE_STARTED", { Stage: STAGE });
+  return project;
+}
+
+function holdGate(project: string, fields: Record<string, string> = {}, otherShard = false) {
+  const state = seededStateFile(project);
+  writeFileSync(state, readFileSync(state, "utf8").replace(`- [-] ${STAGE}`, `- [?] ${STAGE}`));
+  event(project, "STAGE_AWAITING_APPROVAL", { Stage: STAGE, ...fields }, otherShard);
+}
+
+const message = (value: Record<string, unknown>) => value as unknown as SDKMessage;
+const use = (id: string, captured: CapturedAskUserQuestion) => message({
+  type: "assistant",
+  message: { content: [{ type: "tool_use", id, name: "AskUserQuestion", input: { questions: captured.questions } }] },
+});
+const result = (id: string, error = false) => message({
+  type: "user",
+  message: { content: [{ type: "tool_result", tool_use_id: id, content: `delivered:${id}`, is_error: error }] },
+});
+const success = () => message({ type: "result", subtype: "success", is_error: false, num_turns: 1 });
+
+async function answer(input: QueryInput, id: string, captured: CapturedAskUserQuestion) {
+  if (!input.options?.canUseTool || !input.options.abortController) {
+    throw new Error("Driver did not provide its permission callback and abort controller");
+  }
+  return input.options.canUseTool("AskUserQuestion", { questions: captured.questions }, {
+    toolUseID: id, signal: input.options.abortController.signal,
+  });
+}
+
+afterEach(() => {
+  scenario = (): AsyncGenerator<SDKMessage> => { throw new Error("Unexpected SDK query"); };
+  for (const project of projects.splice(0)) cleanupTestProject(project);
+});
+
+describe("SDK stage fixture history", () => {
+  test("seeds initialization and current attempt, compiles runtime, and is idempotent", async () => {
+    const project = setupIntegrationProject({
+      withState: "state-brownfield-init-done.md", withAudit: true, withBrownfieldStub: true,
+    });
+    projects.push(project);
+    const stateBefore = readFileSync(seededStateFile(project), "utf8");
+    await prepareSdkStageFixture(project, STAGE);
+    const rows = readAuditShardEvents(project);
+    expect(rows.filter((row) => row.event === "WORKFLOW_STARTED")).toHaveLength(1);
+    expect(rows.filter((row) => row.event === "STAGE_STARTED")).toHaveLength(4);
+    expect(rows.filter((row) => row.event === "STAGE_COMPLETED")).toHaveLength(3);
+    const graph = JSON.parse(readFileSync(runtimeGraphPath(project), "utf8"));
+    expect(graph.scope).toBe("bugfix");
+    expect(graph.workflow_id).not.toBe("");
+    expect(graph.stages.find((row: { stage_slug: string }) => row.stage_slug === STAGE))
+      .toMatchObject({ outcome: "pending", completed_at: null });
+    expect(graph.stages.filter((row: { outcome: string }) => row.outcome === "approved")).toHaveLength(3);
+    expect(readFileSync(seededStateFile(project), "utf8")).toBe(stateBefore);
+    await prepareSdkStageFixture(project, STAGE);
+    expect(readAuditShardEvents(project)).toEqual(rows);
+    expect((await stageApprovalQuestionBoundary(project, STAGE)).identity.stage).toBe(STAGE);
+  });
+
+  test("cannot capture an approval boundary from a missing workflow header", async () => {
+    const project = createTestProject();
+    projects.push(project);
+    seedStateFile(project, "state-brownfield-init-done.md");
+    event(project, "STAGE_STARTED", { Stage: STAGE });
+    await expect(stageApprovalQuestionBoundary(project, STAGE)).rejects.toThrow("coherent workflow/stage attempt");
+  });
+});
+
+describe("stage/attempt-bound approval identity", () => {
+  test("accepts append-ordered approval at the current attempt, not a blocker or learnings menu", async () => {
+    const project = positionedProject();
+    const gate = await stageApprovalQuestionBoundary(project, STAGE);
+    expect(gate.matches(approval())).toBe(false);
+    holdGate(project);
+    expect(gate.matches(blocked())).toBe(false);
+    expect(gate.matches(learnings())).toBe(false);
+    expect(gate.matches(approval())).toBe(true);
+  });
+
+  test.each([
+    { Stage: "requirements-analysis" },
+    { Workflow: `single-stage:${STAGE}` },
+    { Unit: "unrelated-unit" },
+    { Recovered: "true" },
+  ] as Array<Record<string, string>>)("rejects an unrelated or recovered approval row: %j", async (fields) => {
+    const project = positionedProject();
+    const gate = await stageApprovalQuestionBoundary(project, STAGE);
+    holdGate(project, fields);
+    expect(gate.matches(approval())).toBe(false);
+  });
+
+  test("state marker alone and audit row alone cannot establish a held gate", async () => {
+    const project = positionedProject();
+    const gate = await stageApprovalQuestionBoundary(project, STAGE);
+    const path = seededStateFile(project);
+    const running = readFileSync(path, "utf8");
+    writeFileSync(path, running.replace(`- [-] ${STAGE}`, `- [?] ${STAGE}`));
+    expect(gate.matches(approval())).toBe(false);
+    writeFileSync(path, running);
+    event(project, "STAGE_AWAITING_APPROVAL", { Stage: STAGE });
+    expect(gate.matches(approval())).toBe(false);
+  });
+
+  test.each(["STAGE_STARTED", "GATE_REJECTED", "STAGE_JUMPED", "WORKFLOW_STARTED"])(
+    "a later %s invalidates the captured attempt even in the same timestamp second",
+    async (boundary) => {
+      const project = positionedProject();
+      const gate = await stageApprovalQuestionBoundary(project, STAGE);
+      holdGate(project);
+      expect(gate.matches(approval())).toBe(true);
+      event(project, boundary, { Stage: STAGE });
+      expect(gate.matches(approval())).toBe(false);
+    },
+  );
+
+  test("cannot order a same-second approval from another shard after the attempt", async () => {
+    const project = positionedProject();
+    const gate = await stageApprovalQuestionBoundary(project, STAGE);
+    holdGate(project, {}, true);
+    expect(gate.matches(approval())).toBe(false);
+  });
+
+  test("a resolved gate cannot satisfy a later menu while a stale checkbox remains", async () => {
+    const project = positionedProject();
+    const gate = await stageApprovalQuestionBoundary(project, STAGE);
+    holdGate(project);
+    event(project, "GATE_APPROVED", { Stage: STAGE });
+    expect(gate.matches(approval())).toBe(false);
+  });
+});
+
+describe("SDK question transport boundary", () => {
+  test.each(["permission-first", "message-first"] as const)(
+    "%s: answers learnings and waits for the selected question's own result",
+    async (ordering) => {
+      const project = positionedProject();
+      const gate = await stageApprovalQuestionBoundary(project, STAGE);
+      let selectedAnswer: unknown;
+      let learnedAnswer: unknown;
+      let observedAbort = false;
+      scenario = async function* (input) {
+        yield use("learnings", learnings());
+        learnedAnswer = await answer(input, "learnings", learnings());
+        yield result("learnings");
+        expect(input.options!.abortController!.signal.aborted).toBe(false);
+        holdGate(project);
+        if (ordering === "message-first") yield use("approval", approval());
+        selectedAnswer = await answer(input, "approval", approval());
+        expect(input.options!.abortController!.signal.aborted).toBe(false);
+        if (ordering === "permission-first") yield use("approval", approval());
+        // A different menu/result cannot trigger the selected boundary.
+        yield use("other", blocked());
+        await answer(input, "other", blocked());
+        yield result("other");
+        expect(input.options!.abortController!.signal.aborted).toBe(false);
+        yield result("approval");
+        observedAbort = input.options!.abortController!.signal.aborted;
+        throw new Error("SDK abort after answer delivery");
+      };
+      const driven = await driveAidlc("deterministic fixture", {
+        projectDir: project,
+        answerScript: {
+          kind: "byHeader",
+          map: { "Anything to add for next time?": { label: "Nothing to add" }, Approval: { label: "Approve" } },
+        },
+        stopAfterAskUserQuestionWhen: gate.matches,
+      });
+      expect(learnedAnswer).toMatchObject({
+        behavior: "allow", updatedInput: { answers: { "Anything to add for next time?": "Nothing to add" } },
+      });
+      expect(selectedAnswer).toMatchObject({
+        behavior: "allow", updatedInput: { answers: { "Review the reverse-engineering artifacts.": "Approve" } },
+      });
+      expect(observedAbort).toBe(true);
+      expect(driven.timedOut).toBe(false);
+      expect(driven.stoppedAfterAskUserQuestion).toBe(true);
+      expect(driven.toolResults.at(-1)).toMatchObject({
+        toolUseId: "approval", resultText: "delivered:approval", isError: false,
+      });
+    },
+  );
+
+  test("the historical blockage question cannot false-pass the live test's stop check", async () => {
+    const project = positionedProject();
+    const gate = await stageApprovalQuestionBoundary(project, STAGE);
+    scenario = async function* (input) {
+      yield use("blocked", blocked());
+      await answer(input, "blocked", blocked());
+      yield result("blocked");
+      yield success();
+    };
+    const driven = await driveAidlc("fixture", { projectDir: project, stopAfterAskUserQuestionWhen: gate.matches });
+    expect(driven.askedQuestions).toHaveLength(1);
+    expect(driven.stoppedAfterAskUserQuestion).toBe(false);
+  });
+
+  test("a failed selected tool result is not a successful approval boundary", async () => {
+    const project = positionedProject();
+    const gate = await stageApprovalQuestionBoundary(project, STAGE);
+    holdGate(project);
+    scenario = async function* (input) {
+      yield use("approval", approval());
+      await answer(input, "approval", approval());
+      yield result("approval", true);
+      expect(input.options!.abortController!.signal.aborted).toBe(false);
+      yield success();
+    };
+    const driven = await driveAidlc("fixture", { projectDir: project, stopAfterAskUserQuestionWhen: gate.matches });
+    expect(driven.stoppedAfterAskUserQuestion).toBe(false);
+    expect(driven.toolResults[0].isError).toBe(true);
+  });
+
+  test.each([
+    { options: { stopAfterAskUserQuestion: true }, last: "first" },
+    { options: { stopAfterAskUserQuestionAt: 2 }, last: "second" },
+  ])("preserves the existing first/Nth-question boundary: %j", async ({ options, last }) => {
+    const project = positionedProject();
+    scenario = async function* (input) {
+      for (const [id, captured] of [["first", learnings()], ["second", approval()]] as const) {
+        yield use(id, captured);
+        await answer(input, id, captured);
+        expect(input.options!.abortController!.signal.aborted).toBe(false);
+        yield result(id);
+        if (input.options!.abortController!.signal.aborted) {
+          throw new Error("SDK intentional boundary");
+        }
+      }
+      yield success();
+    };
+    const driven = await driveAidlc("fixture", { projectDir: project, ...options });
+    expect(driven.stoppedAfterAskUserQuestion).toBe(true);
+    expect(driven.toolResults.at(-1)?.toolUseId).toBe(last);
+  });
+
+  test.each([
+    { stopAfterAskUserQuestion: true },
+    { stopAfterAskUserQuestionAt: 2 },
+  ] satisfies DriveOptions[])("rejects mixed predicate/ordinal stop configuration: %j", async (legacy) => {
+    await expect(driveAidlc("fixture", {
+      ...legacy, stopAfterAskUserQuestionWhen: () => true,
+    })).rejects.toThrow("either a question predicate");
+  });
+});
+
+// The real SDK's stdin rule (claude-agent-sdk sdk.mjs, Query.readMessages): a
+// string prompt is a single-turn query whose stdin closes at the first result,
+// and a permission request after that fails with "Stream closed". A message
+// stream stays open until the caller's iterable ends.
+function cliStdin(input: QueryInput) {
+  const singleTurn = typeof input.prompt === "string";
+  let closed = false;
+  let ended: Promise<void> = Promise.resolve();
+  if (!singleTurn) {
+    const messages = (input.prompt as AsyncIterable<unknown>)[Symbol.asyncIterator]();
+    ended = (async () => {
+      while (!(await messages.next()).done) { /* the prompt */ }
+      closed = true;
+    })();
+  }
+  return {
+    get closed() { return closed; },
+    /** Call as a result is emitted. */
+    result() { if (singleTurn) closed = true; },
+    /** Resolves once the caller has closed its input. */
+    ended,
+  };
+}
+
+const task = (subtype: string, taskId: string) => message({
+  type: "system", subtype, task_id: taskId, tool_use_id: `agent-${taskId}`,
+  ...(subtype === "task_updated" ? { patch: { status: "completed" } } : { status: "completed" }),
+});
+const bash = (id: string, command: string) => message({
+  type: "assistant", message: { content: [{ type: "tool_use", id, name: "Bash", input: { command } }] },
+});
+const output = (id: string, text: string, error = false) => message({
+  type: "user", message: { content: [{ type: "tool_result", tool_use_id: id, content: text, is_error: error }] },
+});
+const kiosk = () => menu("Kiosk privacy", ["A. Add an inactivity timeout", "B. Defer"],
+  "The designer and quality engineer flagged a privacy risk on shared kiosks. Add an inactivity timeout or defer?");
+const storiesApproval = () => menu("Approval", ["Approve", "Request Changes"], "Approve the user stories?");
+
+describe("the answer stream stays open while subagents still run", () => {
+  test("a turn that ends before the last support reports still gets its questions answered", async () => {
+    // Replays the t238 mob failures (live trace 2026-10-03T13-44-29Z): the last
+    // support is marked completed before the lead's turn ends, its
+    // notification arrives just after the result and resumes the session, and
+    // the lead then asks an extra judgement question before the approval.
+    const project = positionedProject();
+    scenario = async function* (input) {
+      const stdin = cliStdin(input);
+      for (const agent of ["design", "developer", "quality"]) yield task("task_started", agent);
+      yield task("task_notification", "design");
+      yield task("task_notification", "developer");
+      yield task("task_updated", "quality");
+      stdin.result();
+      yield success();
+      yield task("task_notification", "quality");
+      for (const [id, captured] of [["kiosk", kiosk()], ["approval", storiesApproval()]] as const) {
+        yield use(id, captured);
+        if (stdin.closed) {
+          yield output(id, "Tool permission request failed: Error: Stream closed", true);
+          continue;
+        }
+        await answer(input, id, captured);
+        yield result(id);
+      }
+      if (!stdin.closed) {
+        yield bash("report", "bun .claude/tools/aidlc.ts engine orchestrate report --stage user-stories --result approved");
+        yield output("report", "Committed approve for user-stories");
+      }
+      if (input.options!.abortController!.signal.aborted) throw new Error("SDK abort after the boundary");
+      stdin.result();
+      yield success();
+      await stdin.ended;
+    };
+    const driven = await driveAidlc("fixture", {
+      projectDir: project,
+      answerScript: { kind: "byHeader", map: { Approval: { labelContains: "Approve" } }, fallback: { labelContains: "Approve" } },
+      stopAfterToolResult: { toolName: "Bash", resultIncludes: "Committed approve for" },
+    });
+    expect(driven.toolResults.filter((row) => row.resultText.includes("Stream closed"))).toEqual([]);
+    expect(driven.askedQuestions.map((asked) => asked.questions[0].header)).toEqual(["Kiosk privacy", "Approval"]);
+    // The unexpected question takes its first option; the approval is the scripted one.
+    expect(driven.askedQuestions[0].answers).toEqual({ [kiosk().questions[0].question]: "A. Add an inactivity timeout" });
+    expect(driven.askedQuestions[1].answers).toEqual({ "Approve the user stories?": "Approve" });
+    expect(driven.stoppedAfterToolResult).toBe(true);
+  });
+
+  test("a result with no task pending closes the stream, so a finished run ends", async () => {
+    const project = positionedProject();
+    let closedByDriver = false;
+    scenario = async function* (input) {
+      const stdin = cliStdin(input);
+      yield task("task_started", "support");
+      yield task("task_notification", "support");
+      stdin.result();
+      yield success();
+      await stdin.ended;
+      closedByDriver = true;
+    };
+    const driven = await driveAidlc("fixture", { projectDir: project });
+    expect(closedByDriver).toBe(true);
+    expect(driven.resultEvent?.subtype).toBe("success");
+    expect(driven.timedOut).toBe(false);
+  });
+
+  test.each([
+    { case: "work after the last report", lateReport: false },
+    { case: "a report that arrives late", lateReport: true },
+  ])("$case still gets its question answered, however long the quiet", async ({ lateReport }) => {
+    const project = positionedProject();
+    scenario = async function* (input) {
+      const stdin = cliStdin(input);
+      yield task("task_started", "support");
+      stdin.result();
+      yield success();
+      if (lateReport) await Bun.sleep(300);
+      yield task("task_notification", "support");
+      // A long resumed turn (a slow tool, a slow model) sends nothing for a while.
+      if (!lateReport) await Bun.sleep(300);
+      const captured = storiesApproval();
+      yield use("approval", captured);
+      if (stdin.closed) {
+        yield output("approval", "Tool permission request failed: Error: Stream closed", true);
+      } else {
+        await answer(input, "approval", captured);
+        yield result("approval");
+      }
+      stdin.result();
+      yield success();
+      await stdin.ended;
+    };
+    const driven = await driveAidlc("fixture", { projectDir: project });
+    expect(driven.toolResults.filter((row) => row.resultText.includes("Stream closed"))).toEqual([]);
+    expect(driven.askedQuestions.map((asked) => asked.questions[0].header)).toEqual(["Approval"]);
+  });
+
+  test.each([
+    { case: "ends the drive", nextMessage: false },
+    { case: "sends the person's next message", nextMessage: true },
+  ])("a support that finished inside the turn, with no report after it, $case", async ({ nextMessage }) => {
+    // Replays the t238 hang (live trace 2026-10-04T15-09-21Z): the supports
+    // finish while the lead's turn still runs, the CLI hands their reports to
+    // the lead inside that turn, and no task_notification ever follows.
+    const project = positionedProject();
+    const sent: unknown[] = [];
+    let closedByDriver = false;
+    scenario = async function* (input) {
+      // The CLI's stdin: each message the driver sends, until it closes.
+      const prompts = (input.prompt as AsyncIterable<{ message: { content: unknown } }>)[Symbol.asyncIterator]();
+      const signal = input.options!.abortController!.signal;
+      const aborted = new Promise<undefined>((resolve) => signal.addEventListener("abort", () => resolve(undefined)));
+      sent.push((await prompts.next()).value?.message.content);
+      yield task("task_started", "support");
+      yield task("task_updated", "support");
+      yield success();
+      for (;;) {
+        const next = await Promise.race([prompts.next(), aborted]);
+        if (next === undefined) throw new Error("SDK abort at the drive timeout");
+        if (next.done) break;
+        sent.push(next.value.message.content);
+        yield success();
+      }
+      closedByDriver = true;
+    };
+    const driven = await driveAidlc("fixture", {
+      projectDir: project,
+      timeoutMs: 10_000,
+      settledTaskReportWaitMs: 50,
+      ...(nextMessage ? { nextMessage: (turn) => (turn.turn === 1 ? "carry on" : undefined) } : {}),
+    });
+    expect(closedByDriver).toBe(true);
+    expect(driven.timedOut).toBe(false);
+    expect(driven.resultEvent?.subtype).toBe("success");
+    expect(sent).toEqual(nextMessage ? ["fixture", "carry on"] : ["fixture"]);
+  });
+
+  test("a finished support's report that resumes the session keeps the stream open, however long the quiet", async () => {
+    const project = positionedProject();
+    scenario = async function* (input) {
+      const stdin = cliStdin(input);
+      yield task("task_started", "support");
+      yield task("task_updated", "support");
+      yield success();
+      yield task("task_notification", "support");
+      // The resumed turn goes quiet for longer than the wait for a report.
+      await Bun.sleep(300);
+      const captured = storiesApproval();
+      yield use("approval", captured);
+      if (stdin.closed) {
+        yield output("approval", "Tool permission request failed: Error: Stream closed", true);
+      } else {
+        await answer(input, "approval", captured);
+        yield result("approval");
+      }
+      stdin.result();
+      yield success();
+      await stdin.ended;
+    };
+    const driven = await driveAidlc("fixture", { projectDir: project, settledTaskReportWaitMs: 50 });
+    expect(driven.toolResults.filter((row) => row.resultText.includes("Stream closed"))).toEqual([]);
+    expect(driven.askedQuestions.map((asked) => asked.questions[0].header)).toEqual(["Approval"]);
+  });
+
+  test.each([
+    { case: "a task that never reports", update: undefined },
+    { case: "a task moved to the background but still running", update: { is_backgrounded: true } },
+  ])("$case keeps the stream open until the drive's own timeout", async ({ update }) => {
+    const project = positionedProject();
+    scenario = async function* (input) {
+      const stdin = cliStdin(input);
+      const signal = input.options!.abortController!.signal;
+      yield task("task_started", "lost");
+      if (update) yield message({ type: "system", subtype: "task_updated", task_id: "lost", patch: update });
+      stdin.result();
+      yield success();
+      await Promise.race([stdin.ended, new Promise((resolve) => signal.addEventListener("abort", resolve))]);
+      if (signal.aborted) throw new Error("SDK abort at the drive timeout");
+    };
+    const driven = await driveAidlc("fixture", { projectDir: project, timeoutMs: 300, settledTaskReportWaitMs: 50 });
+    expect(driven.timedOut).toBe(true);
+    expect(driven.resultEvent?.subtype).toBe("success");
+    // The earlier success does not make the timed-out run pass.
+    expect(() => assertResultOk(driven)).toThrow("the drive timed out");
+  });
+});

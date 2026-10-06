@@ -1,6 +1,11 @@
 // covers: tool:aidlc-init, function:postApplyOutstandingActions
 
-import { afterAll, describe, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { afterAll, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
   existsSync,
@@ -16,9 +21,12 @@ import { AIDLC_VERSION } from "../../core/tools/aidlc-version.ts";
 import { readConfigDiagnosticRecords } from "../../core/tools/aidlc-config-diagnostics.ts";
 import { REPO_ROOT } from "../harness/fixtures.ts";
 
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
 const BUN = process.execPath;
 const INIT = join(REPO_ROOT, "core", "tools", "aidlc-init.ts");
 const CLAUDE_RELEASE = join(REPO_ROOT, "dist-release", "claude");
+const COPILOT_RELEASE = join(REPO_ROOT, "dist-release", "copilot");
 const temporary: string[] = [];
 
 afterAll(() => {
@@ -44,7 +52,7 @@ function hookPathEnv(
   if (process.platform === "win32") {
     writeFileSync(
       join(bin, "powershell.cmd"),
-      `@echo off\r\necho ${bin}\r\n`,
+      `@echo off\r\necho ${bin}\r\nexit /b 0\r\n`,
       "utf-8",
     );
   } else {
@@ -102,10 +110,16 @@ function run(
 ): { status: number; stdout: string; stderr: string } {
   const result = spawnSync(BUN, [INIT, ...args], {
     cwd,
-    env: { ...process.env, ...env },
-    input,
+    env: {
+      ...process.env,
+      ...env,
+      // Feed the forced-TTY fixture through its scripted-answer seam. Runtime
+      // re-probes on Windows must not share a redirected dialogue pipe.
+      AIDLC_TEST_CONFIG_INPUT: input,
+    },
+    stdio: ["ignore", "pipe", "pipe"],
     encoding: "utf-8",
-    timeout: 60_000,
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
   });
   if (result.error) throw result.error;
   return {
@@ -179,9 +193,9 @@ describe("t296 first-run config setup walk", () => {
     expect(records.runtime).toBeNull();
     expect(records.providers).toBeNull();
     expect(records.trust).toBeNull();
-  }, 60_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-  test("a Bedrock-oriented harness gets the model-preset step's unchanged answer", () => {
+  test("a Bedrock-oriented harness defaults to keeping the current provider", () => {
     const path = project("aidlc-t296-walk-unchanged-");
     const env = hookPathEnv("aidlc", true, {
       AWS_ACCESS_KEY_ID: "test-access",
@@ -191,39 +205,68 @@ describe("t296 first-run config setup walk", () => {
     // model-preset step first, and its output would be scored by the
     // no-vendor-names assertions below that only the provider menu owns.
     expect(run(scaffoldArgs(path), path, env, "n\n").status).toBe(0);
-    // 2 = unchanged, which records nothing and keeps what is in place.
     const result = run(
       ["config", "providers", "--project-dir", path, "--harness", "claude"],
       path,
       env,
-      "2\n",
+      "1\ny\n",
     );
     expect(result.status, result.stdout + result.stderr).toBe(0);
-    // Bedrock names what it writes for THIS harness. There is no `builtin` here:
-    // Claude Code does not serve its own models, and naming a vendor would be a
-    // guess, since it also runs on Vertex.
     expect(result.stdout).toContain(
-      "1. amazon-bedrock   records the AWS region and profile in settings.json",
+      "1. keep current     inherit the provider already configured in the harness (default)",
     );
     expect(result.stdout).toContain(
-      "2. unchanged        records no provider answer and keeps existing settings;",
+      "2. amazon-bedrock   write the AWS region and profile to settings.json",
     );
-    expect(result.stdout).toContain("new projects use the shipped fallback");
     expect(result.stdout).not.toContain("builtin");
-    // `other` is flag-only now: nothing read a recorded `other`, and declining
-    // its acknowledgement did exactly what `unchanged` does. Match the numbered
-    // answer and the old acknowledgement prompt, not any word containing "other".
+    expect(readConfigDiagnosticRecords(join(path, ".claude")).providers)
+      .toEqual(expect.objectContaining({ provider: "current" }));
     expect(result.stdout).not.toMatch(/\d\. other\b/);
     expect(result.stdout).not.toContain("Using other provider setup");
     for (const vendor of ["Anthropic", "OpenAI", "Vertex", "subscription"]) {
       expect(result.stdout).not.toContain(vendor);
     }
     expect(result.stdout).toContain(
-      "Keeping existing settings unchanged; no provider answer recorded.",
+      "Keeping the current harness provider; attributable AI-DLC Bedrock overrides will be removed when present, and other provider settings will be kept.",
     );
     expect(result.stdout).not.toContain("Manual provider setup complete?");
-    expect(readConfigDiagnosticRecords(join(path, ".claude")).providers).toBeNull();
-  }, 90_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("provider re-entry preserves a recorded other answer and its pending action", () => {
+    const path = project("aidlc-t296-walk-other-");
+    const env = hookPathEnv("aidlc", true);
+    expect(run(scaffoldArgs(path), path, env, "n\n").status).toBe(0);
+    const dataPath = join(path, ".claude", "tools", "data", "harness.json");
+    const data = JSON.parse(readFileSync(dataPath, "utf-8"));
+    data.providers = {
+      schemaVersion: 1,
+      provider: "other",
+      acknowledged: true,
+      pendingActions: [{
+        id: "non-bedrock-provider-configuration",
+        status: "pending",
+      }],
+    };
+    writeFileSync(dataPath, `${JSON.stringify(data, null, 2)}\n`);
+
+    const result = run(
+      ["config", "providers", "--project-dir", path, "--harness", "claude"],
+      path,
+      env,
+      "1\n\ny\n",
+    );
+    expect(result.status, result.stdout + result.stderr).toBe(0);
+    expect(result.stdout).toContain("recorded: other; default");
+    expect(readConfigDiagnosticRecords(join(path, ".claude")).providers).toEqual({
+      schemaVersion: 1,
+      provider: "other",
+      acknowledged: true,
+      pendingActions: [{
+        id: "non-bedrock-provider-configuration",
+        status: "pending",
+      }],
+    });
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("Kiro's providers section asks nothing and records nothing", () => {
     const path = project("aidlc-t296-walk-kiro-managed-");
@@ -290,7 +333,7 @@ describe("t296 first-run config setup walk", () => {
     expect(nonTty.status, nonTty.stdout + nonTty.stderr).toBe(0);
     expect(nonTty.stdout).toContain("Nothing to answer");
     expect(nonTty.stdout).not.toContain("non-interactive providers configuration requires");
-  }, 90_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("a subscription harness needs no provider answer and is not chased for one", () => {
     const path = project("aidlc-t296-kiro-managed-");
@@ -357,7 +400,61 @@ describe("t296 first-run config setup walk", () => {
     expect(walk.stdout).not.toContain("Fix the");
     expect(walk.stdout).not.toContain("config providers");
     expect(walk.stdout).not.toContain("Provider [");
-  }, 60_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("Copilot: the Trust row and step name VS Code's switches and leave CLI trust to Copilot's own prompt", () => {
+    const path = project("aidlc-t296-copilot-trust-");
+    const copilotHome = temp("aidlc-t296-copilot-home-");
+    const configPath = join(copilotHome, "config.json");
+    const env = hookPathEnv("aidlc", true, { COPILOT_HOME: copilotHome });
+    const vsCode =
+      "In VS Code, hooks also need a trusted folder and Chat: Use Hooks on (your organization can switch it off); AI-DLC cannot see either.";
+    const remember = 'choose "Yes, and remember this folder for future sessions"';
+    const trustRow = (stdout: string) => setupRows(stdout).find((line) => line.includes("Trust"));
+    const step = () =>
+      run(["config", "trust", "--project-dir", path, "--harness", "copilot"], path, env, "y\n");
+
+    // No CLI config yet: nothing to flag, but the row does not call it ready.
+    const scaffold = run(
+      ["config", "--project-dir", path, "--from", COPILOT_RELEASE, "--harness", "copilot", "--mcp", "none", "--yes"],
+      path,
+      env,
+      "n\n",
+    );
+    expect(scaffold.status, scaffold.stdout + scaffold.stderr).toBe(0);
+    expect(trustRow(scaffold.stdout)).toBe(
+      "    [ok]     Trust       no Copilot CLI config yet (the CLI asks to trust the folder on its first run); in VS Code, check the folder is trusted and Chat: Use Hooks is on",
+    );
+    const absent = step();
+    expect(absent.stdout).toContain(vsCode);
+    expect(absent.stdout).toContain(`headless copilot -p runs included), run copilot in this folder once and ${remember}`);
+    expect(existsSync(configPath)).toBe(false);
+
+    // The CLI has not trusted it: flagged, and the step names the CLI's own
+    // prompt. Trusting a folder lets its code run, so AI-DLC never edits the
+    // CLI's config, whatever it is answered.
+    const original = `{\n  "trustedFolders": [${JSON.stringify(join(copilotHome, "elsewhere"))}]\n}\n`;
+    writeFileSync(configPath, original);
+    const untrusted = run(["config", "--project-dir", path], path, env, "n\n");
+    expect(untrusted.status, untrusted.stdout + untrusted.stderr).toBe(0);
+    expect(trustRow(untrusted.stdout)).toBe("    [needs]  Trust       Copilot CLI has not trusted this folder");
+    expect(untrusted.stdout).toContain("trust        bun .aidlc/tools/aidlc.ts config trust");
+    const named = step();
+    expect(named.status, named.stdout + named.stderr).toBe(0);
+    expect(named.stdout).toContain(vsCode);
+    expect(named.stdout).toContain(`The Copilot CLI has not trusted this folder. To trust it, run copilot in this folder once and ${remember}.`);
+    expect(named.stdout).not.toContain("[y/N]");
+    expect(readFileSync(configPath, "utf-8")).toBe(original);
+
+    // Trusted (a folder above the project counts).
+    writeFileSync(configPath, JSON.stringify({ trustedFolders: [join(path, "..")] }));
+    const after = run(["config", "--project-dir", path], path, env, "n\n");
+    expect(after.status, after.stdout + after.stderr).toBe(0);
+    expect(trustRow(after.stdout)).toBe(
+      "    [ok]     Trust       no Copilot CLI trust issue; in VS Code, check the folder is trusted and Chat: Use Hooks is on",
+    );
+    expect(step().stdout).toContain("The Copilot CLI already trusts this folder");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("an incomplete workspace shell is reported once, never walked, with the command that rebuilds it", () => {
     const path = project("aidlc-t296-shell-missing-");
@@ -392,10 +489,10 @@ describe("t296 first-run config setup walk", () => {
     );
     // The old advice was a bare `aidlc config`, which is this very command. This
     // is a Bun-invoking projection, which has no installed runtime to refresh
-    // from, so the rebuild also names the source bytes: the copy-runtime root or a
-    // checkout's dist tree, never the native bytes that would swap its channel.
+    // from, so the rebuild also fetches the copy runtime for its release, never
+    // the native bytes that would swap its channel.
     expect(rerun.stdout).toMatch(
-      /workspace\s+bun \.claude\/tools\/aidlc\.ts config --harness claude --from <the runtime\/claude\/ root you copied from, or a checkout's dist\/claude\/ tree>/,
+      /workspace\s+bun \.claude\/tools\/aidlc\.ts config --harness claude --download/,
     );
     expect(rerun.stdout).not.toMatch(/^\s+trust\s+/m);
     // The trust issue itself now names the same rebuild, not the bare rerun.
@@ -411,10 +508,10 @@ describe("t296 first-run config setup walk", () => {
     }>;
     expect(issues.map((issue) => issue.id)).toEqual(["workspace-root-missing"]);
     expect(issues[0].remediation).toContain(
-      "bun .claude/tools/aidlc.ts config --harness claude --from <the runtime/claude/ root you copied from, or a checkout's dist/claude/ tree>",
+      "bun .claude/tools/aidlc.ts config --harness claude --download",
     );
     expect(issues[0].remediation).not.toContain("Run aidlc config to restore");
-  }, 90_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("a shell missing only its memory dir keeps the Workspace row through an accepted walk", () => {
     const path = project("aidlc-t296-memory-missing-");
@@ -445,7 +542,7 @@ describe("t296 first-run config setup walk", () => {
       /workspace\s+bun \.claude\/tools\/aidlc\.ts config --harness claude/,
     );
     expect(existsSync(join(path, "aidlc", "spaces", "default", "memory"))).toBe(false);
-  }, 60_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("yes walks models then providers, applies answers without double confirm, and closes clean", () => {
     const path = project("aidlc-t296-walk-provider-");
@@ -460,7 +557,7 @@ describe("t296 first-run config setup walk", () => {
       scaffoldArgs(path),
       path,
       env,
-      "\nproject\n1\nbalanced\n\nus-west-2\ndev\ny\n",
+      "\nproject\n1\nbalanced\n2\nus-west-2\ndev\ny\n",
     );
     expect(result.status, result.stdout + result.stderr).toBe(0);
     expect(result.stdout).toContain("Setup check - 2 of 8 sections need you.");
@@ -476,7 +573,15 @@ describe("t296 first-run config setup walk", () => {
     expect(result.stdout).not.toContain("Runtime configuration for");
     expect(result.stdout).not.toContain("Trust configuration for");
     expect(result.stdout).not.toContain("Outstanding actions:");
-    expect(result.stdout).toContain("Setup complete. 0 actions still need you");
+    const runtimeDiagnostic = result.stdout.includes("Setup complete. 0 actions still need you")
+      ? ""
+      : run(
+          ["config", "runtime", "--show", "--json", "--project-dir", path, "--harness", "claude"],
+          path,
+          env,
+        );
+    expect(result.stdout, runtimeDiagnostic && JSON.stringify(runtimeDiagnostic))
+      .toContain("Setup complete. 0 actions still need you");
     // The recorded preset is what closes the row; a declined walk would leave it
     // open and the ledger would name the command instead.
     expect(readFileSync(join(path, "aidlc.settings.json"), "utf-8"))
@@ -532,7 +637,61 @@ describe("t296 first-run config setup walk", () => {
     expect(runtimeWalk.stdout).toContain(
       "Full diagnostics: bun .claude/tools/aidlc.ts config runtime --show",
     );
-  }, 60_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("re-entering a recorded Bedrock answer preserves its defaults and pending state", () => {
+    const path = project("aidlc-t296-recorded-bedrock-");
+    const env = hookPathEnv("aidlc", true, {
+      AWS_ACCESS_KEY_ID: "test-access",
+      AWS_SECRET_ACCESS_KEY: "test-secret",
+      AWS_REGION: "us-east-2",
+    });
+    expect(run(scaffoldArgs(path), path, env, "n\n").status).toBe(0);
+    expect(run([
+      "config",
+      "models",
+      "--project-dir",
+      path,
+      "--project",
+      "--preset",
+      "balanced",
+      "--yes",
+    ], path, env).status).toBe(0);
+    const configured = run([
+      "config",
+      "providers",
+      "--project-dir",
+      path,
+      "--provider",
+      "amazon-bedrock",
+      "--region",
+      "eu-west-1",
+      "--profile",
+      "team",
+      "--yes",
+    ], path, env);
+    expect(configured.status, configured.stdout + configured.stderr).toBe(0);
+    const beforeRecord = readConfigDiagnosticRecords(join(path, ".claude")).providers;
+    const settingsPath = join(path, ".claude", "settings.json");
+    const beforeSettings = readFileSync(settingsPath);
+
+    const walked = run(
+      ["config", "--project-dir", path],
+      path,
+      env,
+      "\n\n\n\n\n",
+    );
+    expect(walked.status, walked.stdout + walked.stderr).toBe(0);
+    expect(walked.stdout).toContain(
+      "2. amazon-bedrock   write the AWS region and profile to settings.json (recorded: eu-west-1, team; default)",
+    );
+    expect(walked.stdout).toContain("Provider [2]:");
+    expect(walked.stdout).toContain("AWS region [eu-west-1]:");
+    expect(walked.stdout).toContain("AWS profile [team]:");
+    expect(readConfigDiagnosticRecords(join(path, ".claude")).providers)
+      .toEqual(beforeRecord);
+    expect(readFileSync(settingsPath)).toEqual(beforeSettings);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("non-TTY human output is byte-identical to the pre-walk completion", () => {
     const path = project("aidlc-t296-nontty-snapshot-");
@@ -544,9 +703,10 @@ describe("t296 first-run config setup walk", () => {
     expect(result.status, result.stdout + result.stderr).toBe(0);
     expect(result.stdout).toBe(
       `configured ${path} for Claude Code ${AIDLC_VERSION}; ` +
-        "next: open Claude Code in this project and run `/aidlc --doctor`\n",
+        "next: open Claude Code in this project (if it is already open in this folder, exit it and start it " +
+        "again) and run `/aidlc --doctor`\n",
     );
-  }, 60_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("json, quiet, and dry-run never render the setup map", () => {
     const jsonProject = project("aidlc-t296-json-");
@@ -578,7 +738,7 @@ describe("t296 first-run config setup walk", () => {
     expect(dry.status, dry.stdout + dry.stderr).toBe(0);
     expect(dry.stdout).not.toContain("Setup check -");
     expect(existsSync(join(dryProject, ".claude"))).toBe(false);
-  }, 60_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("section --show --quiet emits one line instead of the human report", () => {
     const path = project("aidlc-t296-show-quiet-");
@@ -604,5 +764,104 @@ describe("t296 first-run config setup walk", () => {
       // (heading plus indented detail lines) must not leak under --quiet.
       expect(quiet.stdout.trimEnd().split(/\r?\n/), section).toEqual([line]);
     }
-  }, 120_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("where the session sets every agent's model and effort, the Models row names it and is never walked", () => {
+    // These hosts cannot pin an agent's model or effort, so a recorded policy
+    // changes nothing there. The row says where the lever is, counts as done,
+    // and never sends the person into the models wizard or the closing list.
+    const hosts = [
+      ["copilot", ".aidlc", "GitHub Copilot"],
+      ["cursor", ".cursor", "Cursor"],
+      ["kiro-ide", ".kiro", "Kiro IDE"],
+    ] as const;
+    const env = hookPathEnv("aidlc", true);
+    for (const [harness, dir, product] of hosts) {
+      const path = project(`aidlc-t296-session-models-${harness}-`);
+      const args = [
+        "config", "--project-dir", path, "--from", join(REPO_ROOT, "dist-release", harness),
+        "--harness", harness, "--mcp", "none", "--yes",
+      ];
+      const fresh = run(args, path, env, "n\n");
+      expect(fresh.status, fresh.stdout + fresh.stderr).toBe(0);
+      const models = setupRows(fresh.stdout).find((line) => line.includes("Models"));
+      expect(models, harness).toContain("[ok]");
+      expect(models, harness).toContain(
+        `every agent uses your ${product} session's model and effort`,
+      );
+      expect(models, harness).not.toContain("does not apply");
+      // No provider answer on these hosts is the session's own model access,
+      // so the Providers row reads like the Models row, never "needs".
+      const providers = setupRows(fresh.stdout).find((line) => line.includes("Providers"));
+      expect(providers, harness).toContain("[ok]");
+      expect(providers, harness).not.toContain("provider access unverified");
+      expect(providers, harness).toContain(
+        harness === "kiro-ide"
+          ? "model access comes with Kiro IDE; nothing for AI-DLC to configure"
+          : harness === "cursor"
+          ? "model access comes with your Cursor session; to use your own Amazon Bedrock access in the Cursor IDE instead, run `"
+          : `model access comes with your ${product} session; to use your own Amazon Bedrock access instead, run \``,
+      );
+      // The closing ledger agrees with the row: no provider action is owed.
+      expect(fresh.stdout, harness).not.toContain("Choose and configure a model provider");
+      expect(fresh.stdout, harness).not.toMatch(/^\s*providers\s{2,}\S.*config providers\s*$/m);
+      expect(fresh.stdout, harness).not.toContain("config models");
+      expect(fresh.stdout, harness).not.toContain("Models [Enter keep everything");
+      expect(existsSync(join(path, "aidlc.settings.json")), harness).toBe(false);
+
+      // A team's recorded preset (often for teammates on other harnesses) is
+      // named so nobody reads it as applied here.
+      writeFileSync(join(path, "aidlc.settings.json"), `${JSON.stringify({
+        schemaVersion: 1,
+        models: { schemaVersion: 1, preset: "balanced" },
+      }, null, 2)}\n`);
+      const rerun = run(["config", "--project-dir", path], path, env, "n\n");
+      expect(rerun.status, rerun.stdout + rerun.stderr).toBe(0);
+      expect(setupRows(rerun.stdout).find((line) => line.includes("Models")), harness)
+        .toContain(
+          `[ok]     Models      every agent uses your ${product} session's model and effort; ` +
+            "the recorded balanced preset does not apply here",
+        );
+      expect(rerun.stdout, harness).not.toContain("config models");
+      expect(readFileSync(join(path, dir, "tools", "data", "harness.json"), "utf-8"), harness)
+        .toContain(`"productName": "${product}"`);
+    }
+
+    // The project's harness file cannot change which host the row names, nor
+    // put escape sequences on the terminal.
+    for (const [harness, dir, product, spoof] of [
+      ["copilot", ".aidlc", "GitHub Copilot", "Cursor"],
+      ["cursor", ".cursor", "Cursor", "GitHub Copilot"],
+    ] as const) {
+      const path = project(`aidlc-t296-session-models-name-${harness}-`);
+      const scaffold = run([
+        "config", "--project-dir", path, "--from", join(REPO_ROOT, "dist-release", harness),
+        "--harness", harness, "--mcp", "none", "--yes",
+      ], path, env, "n\n");
+      expect(scaffold.status, scaffold.stdout + scaffold.stderr).toBe(0);
+      const descriptorPath = join(path, dir, "tools", "data", "harness.json");
+      const descriptor = JSON.parse(readFileSync(descriptorPath, "utf-8"));
+      for (const name of ["Copilot\u001b]0;owned\u0007\u001b[2J", spoof]) {
+        descriptor.productName = name;
+        writeFileSync(descriptorPath, `${JSON.stringify(descriptor, null, 2)}\n`);
+        const rerun = run(["config", "--project-dir", path], path, env, "n\n");
+        expect(rerun.status, rerun.stdout + rerun.stderr).toBe(0);
+        expect(rerun.stdout, harness).not.toContain("\u001b");
+        expect(rerun.stdout, harness).not.toContain("\u0007");
+        expect(setupRows(rerun.stdout).find((line) => line.includes("Models")), harness)
+          .toContain(`every agent uses your ${product} session's model and effort`);
+      }
+    }
+
+    // Kiro CLI can carry a per-agent model, so its row still asks.
+    const kiro = project("aidlc-t296-session-models-kiro-");
+    const kiroRun = run([
+      "config", "--project-dir", kiro, "--from", join(REPO_ROOT, "dist-release", "kiro"),
+      "--harness", "kiro", "--mcp", "none", "--yes",
+    ], kiro, env, "n\n");
+    expect(kiroRun.status, kiroRun.stdout + kiroRun.stderr).toBe(0);
+    expect(setupRows(kiroRun.stdout).find((line) => line.includes("Models")))
+      .toContain("[needs]  Models      no recorded policy; agents inherit your session model and effort");
+    expect(kiroRun.stdout).toContain("models       bun .kiro/tools/aidlc.ts config models");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });

@@ -41,6 +41,7 @@ import {
   relativeMemoryPath,
   relativeRecordDir,
   resolveAuditWorktreePath,
+  resolveBoltIdentity,
   requireLiveClaimForTeamUnit,
   resolveProjectDir,
   runtimeGraphPath,
@@ -50,7 +51,6 @@ import {
   validateLiveUnitScope,
   withAuditLock,
   worktreeClaimBoundaryMatches,
-  worktreePath,
   worktreeRuntimeGraphPath,
   writeFileAtomic,
 } from "./aidlc-lib.ts";
@@ -570,9 +570,10 @@ function compile(opts: CompileOptions): { skipped?: string; written?: string } {
   // 8-hex `Fire id` correlator (NOT positional — the PostToolUse hook fans a
   // single Write out to 4 parallel sensor fires whose terminal rows interleave
   // by spawn duration). Orphan FIRED rows (no terminal) become `incomplete`
-  // immediately in a closed stage window, or after a deterministic 60s cutoff
-  // (DEFAULT_TIMEOUT_SECONDS, a non-exported const at aidlc-sensor.ts:44) in an
-  // open window — measured against `baseline_ts` (max audit timestamp), never
+  // immediately in a closed stage window, or after a deterministic 60s
+  // historical orphan cutoff in an open window. This reporting heuristic is
+  // separate from the script execution budget and is measured against
+  // `baseline_ts` (max audit timestamp), never
   // `Date.now()`, so re-compile is byte-equal.
   const firedRows = findAllEvents(audit, "SENSOR_FIRED");
   const passedRows = findAllEvents(audit, "SENSOR_PASSED");
@@ -632,7 +633,7 @@ function compile(opts: CompileOptions): { skipped?: string; written?: string } {
     }
   }
 
-  const ORPHAN_CUTOFF_SECONDS = 60; // = DEFAULT_TIMEOUT_SECONDS (aidlc-sensor.ts:44, not exported)
+  const ORPHAN_CUTOFF_SECONDS = 60;
 
   // Pair the FIRED rows that fall in a [start, end) window and match the
   // stage slug (and, for instances, an output path under the worktree) into
@@ -1168,17 +1169,6 @@ function handleFragmentFork(rest: string[], projectDir: string): void {
     process.stderr.write(`aidlc-runtime fragment-fork: ${slugErr}\n`);
     process.exit(1);
   }
-  const wtPath = worktreePath(projectDir, flags.slug);
-  if (worktreeClaimBoundaryMatches(projectDir, wtPath, flags.slug)) {
-    validateLiveUnitScope(projectDir, flags.slug);
-  } else {
-    requireLiveClaimForTeamUnit(projectDir, flags.slug, {
-      intent: flags.intent,
-      space: flags.space,
-      walkingSkeletonMain,
-    });
-  }
-
   // Pin the worktree runtime-graph mirror AND the main read to ONE intent
   // (vision §5). recordPrefix -> the worktree mirror's relative record dir
   // (null -> flat); wtRecord -> the record-dir NAME the worktree fragment lives
@@ -1199,6 +1189,16 @@ function handleFragmentFork(rest: string[], projectDir: string): void {
   const space = selection.space;
   const recordPrefix = relativeRecordDir(projectDir, intent, space);
   const wtRecord = selection.intent ?? undefined;
+  const wtPath = resolveBoltIdentity(projectDir, flags.slug, selection).dir;
+  if (worktreeClaimBoundaryMatches(projectDir, wtPath, flags.slug)) {
+    validateLiveUnitScope(projectDir, flags.slug);
+  } else {
+    requireLiveClaimForTeamUnit(projectDir, flags.slug, {
+      intent: flags.intent,
+      space: flags.space,
+      walkingSkeletonMain,
+    });
+  }
 
   const wtFragmentPath = worktreeRuntimeGraphPath(wtPath, recordPrefix);
   const mainPath = runtimeGraphPath(projectDir, intent, space);
@@ -1286,7 +1286,11 @@ function handleFragmentMerge(rest: string[], projectDir: string): void {
     process.stderr.write(`aidlc-runtime fragment-merge: ${slugErr}\n`);
     process.exit(1);
   }
-  const wtPath = worktreePath(projectDir, flags.slug);
+  const selection = resolveWorkflowSelection(projectDir, {
+    intent: flags.intent,
+    space: flags.space,
+  });
+  const wtPath = resolveBoltIdentity(projectDir, flags.slug, selection).dir;
   requireLiveClaimForTeamUnit(projectDir, flags.slug, {
     intent: flags.intent,
     space: flags.space,
@@ -1294,7 +1298,7 @@ function handleFragmentMerge(rest: string[], projectDir: string): void {
   });
 
   // Same selector the fork used -> the SAME intent record (vision §5).
-  const recordPrefix = relativeRecordDir(projectDir, flags.intent, flags.space);
+  const recordPrefix = relativeRecordDir(projectDir, selection.intent ?? undefined, selection.space);
 
   const wtFragmentPath = worktreeRuntimeGraphPath(wtPath, recordPrefix);
 

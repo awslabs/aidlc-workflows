@@ -15,7 +15,12 @@
 // WHY SUBPROCESS. Same idiom as kiro's t141: the packager is a CLI; we pin
 // its observable behavior, not its internals.
 
-import { describe, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
   chmodSync,
@@ -33,6 +38,8 @@ import { delimiter, join } from "node:path";
 import { parse } from "smol-toml";
 import { TRUSTED_ROUTE_NAMESPACE } from "../../core/tools/aidlc-command.ts";
 import { REPO_ROOT } from "../harness/fixtures.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const PACKAGE_SCRIPT = join(REPO_ROOT, "scripts", "package.ts");
 const CLAUDE_SRC = join(REPO_ROOT, "dist", "claude", ".claude");
@@ -131,7 +138,35 @@ function runDoctorWithCodexVersion(version: string): {
     const binDir = join(root, "bin");
     mkdirSync(binDir, { recursive: true });
     if (process.platform === "win32") {
-      writeFileSync(join(binDir, "codex.cmd"), `@echo off\r\necho codex-cli ${version}\r\n`);
+      // The doctor executes the resolved path without a shell. Node-compatible
+      // spawnSync rejects .cmd files; use a small native CLI (as in t255).
+      const source = join(binDir, "codex.cs");
+      const executable = join(binDir, "codex.exe");
+      writeFileSync(source, `using System;
+public static class CodexVersionFixture {
+  public static int Main(string[] args) {
+    if (args.Length != 1 || args[0] != "--version") return 2;
+    Console.WriteLine(${JSON.stringify(`codex-cli ${version}`)});
+    return 0;
+  }
+}
+`);
+      const compiler = join(
+        process.env.WINDIR ?? "C:\\Windows",
+        "Microsoft.NET", "Framework64", "v4.0.30319", "csc.exe",
+      );
+      const compiled = spawnSync(
+        compiler,
+        ["/nologo", "/optimize+", "/target:exe", `/out:${executable}`, source],
+        { encoding: "utf-8", timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS) },
+      );
+      if (compiled.error || compiled.status !== 0) {
+        throw new Error(`Codex fixture compile failed: ${compiled.error?.message || compiled.stderr || compiled.stdout}`);
+      }
+      const probe = spawnSync(executable, ["--version"], { encoding: "utf-8", timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS) });
+      expect(probe.error).toBeUndefined();
+      expect(probe.status, probe.stderr).toBe(0);
+      expect(probe.stdout.trim()).toBe(`codex-cli ${version}`);
     } else {
       const fakeCodex = join(binDir, "codex");
       writeFileSync(fakeCodex, `#!/bin/sh\necho "codex-cli ${version}"\n`);
@@ -143,10 +178,13 @@ function runDoctorWithCodexVersion(version: string): {
       process.execPath,
       [tool, "doctor", "--verbose", "--project-dir", project],
       {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
       cwd: project,
       encoding: "utf-8",
       env: {
         ...process.env,
+        // The version-floor fixture exercises copied source, not the host install.
+        AIDLC_INSTALL_ROOT: join(root, "install"),
         PATH: `${binDir}${delimiter}${process.env.PATH ?? ""}`,
       },
       },
@@ -163,6 +201,7 @@ function runDoctorWithCodexVersion(version: string): {
 describe("t150 dist/codex packaging determinism + trust", () => {
   test("1: codex package generation is deterministic", () => {
     const r = spawnSync("bun", [PACKAGE_SCRIPT, "codex", "--check"], {
+      timeout: remainingOperationTimeoutMs(NATIVE_FIXTURE_SETUP_TIMEOUT_MS),
       encoding: "utf-8",
       cwd: REPO_ROOT,
     });
@@ -174,7 +213,7 @@ describe("t150 dist/codex packaging determinism + trust", () => {
     expect(r.stdout).toContain(
       "deterministic across two independent build(s) for codex",
     );
-  }, 60_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("2: packaged .ts files differ only at declared projection tokens", () => {
     // tools/ + hooks/ carry the deterministic core. The codex adapter
@@ -210,10 +249,26 @@ describe("t150 dist/codex packaging determinism + trust", () => {
     const r = spawnSync(
       "grep",
       ["-rn", "bun .claude/tools/", join(REPO_ROOT, "dist", "codex")],
-      { encoding: "utf-8" },
+      { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" },
     );
     // grep exits 1 on no matches — exactly what we want.
     expect(r.status).toBe(1);
+  });
+
+  test("3b: the session skills name the commands a Codex user types, and leave paths alone", () => {
+    const skills = join(REPO_ROOT, "dist", "codex", ".agents", "skills");
+    const read = (skill: string) => readFileSync(join(skills, skill, "SKILL.md"), "utf-8");
+    expect(read("aidlc-session-cost")).toContain("Run $aidlc to\nbegin, then re-run $aidlc-session-cost.");
+    expect(read("aidlc-replay")).toContain("start a workflow with $aidlc before running\n$aidlc-replay.");
+    expect(read("aidlc-replay")).toContain("`$aidlc-outcomes-pack`");
+    expect(read("aidlc-outcomes-pack")).toContain("Run $aidlc to completion first.");
+    for (const skill of ["aidlc-session-cost", "aidlc-replay", "aidlc-outcomes-pack"]) {
+      expect(read(skill), skill).not.toMatch(/(^|[\s(`"])\/aidlc(?![a-z0-9-]*\.[a-z])/m);
+    }
+    // Paths keep their slash, and the Claude tree keeps its slash commands.
+    expect(read("aidlc-replay")).toContain("`<record>/aidlc-state.md`");
+    expect(read("aidlc-replay")).toContain("bun .codex/tools/aidlc.ts engine runtime summary");
+    expect(readFileSync(join(CLAUDE_SRC, "skills", "aidlc-replay", "SKILL.md"), "utf-8")).toContain("/aidlc-replay.");
   });
 
   test("4: method relocated to workspace-root aidlc/spaces/default/memory/; native rules/ is Starlark-only", () => {
@@ -249,9 +304,50 @@ describe("t150 dist/codex packaging determinism + trust", () => {
     expect(graph).not.toContain('".claude/rules/');
   });
 
+  test("Codex config injects the native onboarding in both distribution channels", () => {
+    for (const channel of ["dist", "dist-release"]) {
+      const root = join(REPO_ROOT, channel, "codex", ".codex");
+      const raw = readFileSync(join(root, "config.toml"), "utf-8");
+      // The parser's object return type omits these shipped Codex config fields.
+      const config = Bun.TOML.parse(raw) as {
+        developer_instructions?: string;
+        shell_environment_policy?: { set?: Record<string, string> };
+        suppress_unstable_features_warning?: boolean;
+        features?: { default_mode_request_user_input?: boolean };
+      };
+      // The gate picker is a Codex under-development feature AI-DLC turns on,
+      // so the start-up warning about it is turned off in the same file.
+      expect(config.features?.default_mode_request_user_input).toBe(true);
+      expect(config.suppress_unstable_features_warning).toBe(true);
+      const onboarding = readFileSync(join(root, "onboarding.md"), "utf-8");
+      expect(typeof config.developer_instructions).toBe("string");
+      // Bun 1.3.14 incorrectly preserves the opening newline of a TOML literal string.
+      const instructions = config.developer_instructions as string;
+      expect(instructions.replace(/^\n/, "")).toBe(onboarding);
+      const standardConfig = parse(raw) as typeof config;
+      expect(standardConfig.developer_instructions).toBe(onboarding);
+      expect(config.developer_instructions).toContain("# AI-DLC on Codex CLI");
+      // AI-DLC's questions keep its words; the agent's own words are for the rest.
+      expect(config.developer_instructions).toContain("Show AI-DLC's questions and choices with their meaning unchanged, in the\nperson's language;");
+      expect(config.developer_instructions).toContain("are still named by path.");
+      expect(config.developer_instructions).toContain("When they ask about one, answer them.");
+      expect(config.developer_instructions).toContain("Plan Approval's choice labels stay exactly as AI-DLC gives\nthem.");
+      expect(config.developer_instructions).not.toContain("say it in your own words");
+      expect(config.developer_instructions).toContain(".agents/skills/");
+      expect(config.shell_environment_policy).toMatchObject({
+        set: { AIDLC_RULES_DIR: "aidlc/spaces/default/memory" },
+      });
+      expect(raw).toContain('set = { AIDLC_RULES_DIR = "aidlc/spaces/default/memory" }');
+      if (channel === "dist-release") {
+        expect(config.developer_instructions).toContain("- **Runtime**:");
+        expect(config.developer_instructions).not.toMatch(/\bbun\b/);
+      }
+    }
+  });
+
   test("5: hooks.json wires only Codex-real events through the adapter (no SessionEnd)", () => {
     const wiring = JSON.parse(readFileSync(join(CODEX_DST, "hooks.json"), "utf-8")) as {
-      hooks: Record<string, Array<{ matcher?: string; hooks: Array<{ command: string }> }>>;
+      hooks: Record<string, Array<{ matcher?: string; hooks: Array<{ command: string; timeout: number }> }>>;
     };
     expect(Object.keys(wiring.hooks).sort()).toEqual(
       ["PostToolUse", "PreCompact", "PreToolUse", "SessionStart", "Stop", "SubagentStop", "UserPromptSubmit"].sort(),
@@ -274,6 +370,8 @@ describe("t150 dist/codex packaging determinism + trust", () => {
           expect(h.command).toMatch(
             /^bun \.codex\/tools\/aidlc\.ts engine adapter codex [a-z-]+$/,
           );
+          const compound = /(?:continue-workflow|audit-and-sensors)$/.test(h.command);
+          expect(h.timeout, h.command).toBe(compound ? 3600 : 1800);
         }
       }
     }
@@ -320,7 +418,16 @@ describe("t150 dist/codex packaging determinism + trust", () => {
     // — a concrete anchor so a silent recipe change can't pass by emitting a
     // self-consistent but wrong hash for every entry.
     expect(shippedBody).toContain(
-      'session_start:0:0"]\ntrusted_hash = "sha256:92de9e3a0fc738d1645c02577f54f3c5ce9892ec8389c000bc5f14ba5cb3bee9"',
+      'session_start:0:0"]\ntrusted_hash = "sha256:58956c1f8f0b66e96c0f4d02e26946e79979e0f30599e8dc06a512ebecf03843"',
+    );
+    // Codex hashes a group's matcher too. These two are the hashes Codex 0.160.0
+    // itself wrote for the Bash-matched hooks after "Trust all": a seed without
+    // the matcher left every matched hook untrusted, and they never ran.
+    expect(shippedBody).toContain(
+      'pre_tool_use:0:0"]\ntrusted_hash = "sha256:e7a90e58ec814e697217f2bc230585e508be24e62833294da2e2095dc66ff0d4"',
+    );
+    expect(shippedBody).toContain(
+      'post_tool_use:3:0"]\ntrusted_hash = "sha256:5f9a79604c580af77ffe63c58e0b76871e229f051df824b8add818dfbd44c388"',
     );
   });
 
@@ -358,10 +465,11 @@ describe("t150 dist/codex packaging determinism + trust", () => {
       }
     }
 
-    // The common Unix form remains byte-identical to the historical output.
+    // Pin the installed-command identity separately from the copy-channel
+    // anchor above; its explicit SessionStart timeout is also 1800 seconds.
     expect(emitTrustEntries("/tmp/example-proj")).toStartWith(
       '[hooks.state."/tmp/example-proj/.codex/hooks.json:session_start:0:0"]\n' +
-        'trusted_hash = "sha256:4e23fffc05a5ef77e420b7d09b59be712919558a2a532c689d78f639731788db"\n\n',
+        'trusted_hash = "sha256:0ba8b12bad0f77c2bf9a996ec8e533c53a6e451fe37c31de2626e27514e35e63"\n\n',
     );
   });
 
@@ -369,7 +477,7 @@ describe("t150 dist/codex packaging determinism + trust", () => {
     const project = "/tmp/project path that must not replace the hook path";
     const hooksJson = String.raw`D:\custom hooks\hook "set"\hooks.json`;
     const emitTrustEntries = trustEntries();
-    const expected = emitTrustEntries(project, hooksJson);
+    const expected = emitTrustEntries(project, hooksJson, ".codex", "codex", SOURCE_INVOKE);
     const direct = parseTrustDocument(expected);
     expect(Object.keys(direct.hooks.state)).toEqual(expectedTrustKeys(hooksJson));
 
@@ -377,6 +485,7 @@ describe("t150 dist/codex packaging determinism + trust", () => {
       "bun",
       [PACKAGE_SCRIPT, "codex", "trust", "--project", project, "--hooks-json", hooksJson],
       {
+        timeout: remainingOperationTimeoutMs(NATIVE_FIXTURE_SETUP_TIMEOUT_MS),
         encoding: "utf-8",
         cwd: REPO_ROOT,
       },
@@ -408,6 +517,7 @@ describe("t150 dist/codex packaging determinism + trust", () => {
 
     for (const { project, hooksJson } of cases) {
       const r = spawnSync("bun", [PACKAGE_SCRIPT, "codex", "trust", "--project", project], {
+        timeout: remainingOperationTimeoutMs(NATIVE_FIXTURE_SETUP_TIMEOUT_MS),
         encoding: "utf-8",
         cwd: REPO_ROOT,
       });
@@ -475,6 +585,7 @@ describe("t150 dist/codex packaging determinism + trust", () => {
 
     for (const { args, error } of cases) {
       const r = spawnSync("bun", [PACKAGE_SCRIPT, ...args], {
+        timeout: remainingOperationTimeoutMs(NATIVE_FIXTURE_SETUP_TIMEOUT_MS),
         encoding: "utf-8",
         cwd: REPO_ROOT,
       });
@@ -526,6 +637,7 @@ describe("t150 dist/codex packaging determinism + trust", () => {
 
   test("12: trust subcommand substitutes the project path into every entry", () => {
     const r = spawnSync("bun", [PACKAGE_SCRIPT, "codex", "trust", "--project", "/tmp/example-proj"], {
+      timeout: remainingOperationTimeoutMs(NATIVE_FIXTURE_SETUP_TIMEOUT_MS),
       encoding: "utf-8",
       cwd: REPO_ROOT,
     });
@@ -539,20 +651,48 @@ describe("t150 dist/codex packaging determinism + trust", () => {
     expect(entries.length).toBe(groupCount);
     expect(entries).toEqual(expectedTrustKeys("/tmp/example-proj/.codex/hooks.json"));
     expect(r.stdout).not.toContain("<PROJECT_DIR>");
+    // It trusts the hooks the copied dist/codex runs (`bun .codex/tools/aidlc.ts
+    // ...`): the shipped seed's entries for this project, hash for hash. Native
+    // `aidlc ...` hashes here left every hook in a copied project untrusted.
+    const seed = readFileSync(join(CODEX_DST, "trust-seed.toml"), "utf-8");
+    expect(r.stdout.trimEnd()).toBe(
+      seed.slice(seed.indexOf("[hooks.state")).replaceAll("<PROJECT_DIR>", "/tmp/example-proj").trimEnd(),
+    );
   });
 
-  test("13: doctor enforces Codex 0.145.0 as the compact-session reload floor", () => {
-    const unsupported = runDoctorWithCodexVersion("0.144.9");
-    expect(unsupported.status).toBe(0);
-    expect(unsupported.output).toContain(
-      "Harness CLI: codex codex-cli 0.144.9 is below 0.145.0",
-    );
-    expect(unsupported.output).toContain(
-      "Install or upgrade Codex CLI to 0.145.0 or later",
-    );
+  test.each(["0.144.9", "0.145.0"])("13: doctor enforces the compact-session reload floor for Codex %s", (version) => {
+    const result = runDoctorWithCodexVersion(version);
+    expect(result.status, result.output).toBe(0);
+    if (version === "0.144.9") {
+      expect(result.output).toContain(
+        "Harness CLI: codex codex-cli 0.144.9 is below 0.145.0",
+      );
+      expect(result.output).toContain(
+        "Install or upgrade Codex CLI to 0.145.0 or later",
+      );
+    } else {
+      expect(result.output).toContain("Harness CLI: codex codex-cli 0.145.0");
+    }
+    // Each version owns one native fixture and doctor run, including cleanup.
+    // Compiler/probe backstops use the shared native policy for each version.
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-    const supported = runDoctorWithCodexVersion("0.145.0");
-    expect(supported.status).toBe(0);
-    expect(supported.output).toContain("Harness CLI: codex codex-cli 0.145.0");
+  test("14: both generated Codex configs select workspace-write at the TOML root", () => {
+    for (const output of ["dist", "dist-release"]) {
+      const configPath = join(REPO_ROOT, output, "codex", ".codex", "config.toml");
+      const config = parse(readFileSync(configPath, "utf-8"));
+      // A text match also accepts sandbox_mode inside shell_environment_policy,
+      // where it does not select the sandbox. Check the generated TOML structure.
+      expect(config.sandbox_mode, configPath).toBe("workspace-write");
+      expect(config.shell_environment_policy, configPath).toEqual({
+        set: { AIDLC_RULES_DIR: "aidlc/spaces/default/memory" },
+      });
+      // Keep the existing network policy and absence of extra grants/approval
+      // overrides while correcting only the sandbox setting's table placement.
+      expect(config.sandbox_workspace_write, configPath).toEqual({
+        network_access: true,
+      });
+      expect(config.approval_policy, configPath).toBeUndefined();
+    }
   });
 });

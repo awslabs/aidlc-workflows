@@ -47,7 +47,7 @@ function assertQualityTargetGate(root: string, orgPath: string): void {
 
   const buildAndTest = read(root, FILES.buildAndTest);
   expect(buildAndTest).toContain(
-    "every approved `## Testing Contract` in `code-generation-plan.md`",
+    "every current `## Testing Contract` in `code-generation-plan.md`",
   );
   expect(buildAndTest).toContain(
     "Target ID, Source, Expected, Actual, Evidence, Owning Stage, Verdict",

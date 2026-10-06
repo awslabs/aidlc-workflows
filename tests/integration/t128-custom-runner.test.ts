@@ -70,7 +70,8 @@
 // directive JSON is PARSED (kind/stage assertions on the object, not a
 // substring grep that could match the prose).
 
-import { afterEach, describe, expect, test } from "bun:test";
+import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS } from "../harness/test-budget.ts";
+import { setDefaultTimeout, afterEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -79,6 +80,8 @@ import {
   runOrchestrateNext,
   setupIntegrationProject,
 } from "../harness/fixtures.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const BUN = process.execPath; // the bun running this test
 
@@ -224,7 +227,7 @@ describe("t128 custom stage → drivable runner (migrated from t128-custom-runne
     // STRONGER than the .sh (which set +e then branched on rc): assert exit 0
     // outright. A schema-invalid stage or an unseeded row would exit 1 here.
     expect(r.status).toBe(0);
-  }, 60000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("2: the custom stage is in the compiled graph (topo lists it) [.sh 2]", () => {
     const proj = buildSandbox();
@@ -233,7 +236,7 @@ describe("t128 custom stage → drivable runner (migrated from t128-custom-runne
     const topo = run(graph, ["topo", "--project-dir", proj]);
     expect(topo.status).toBe(0);
     expect(topo.out).toContain(CUSTOM_SLUG);
-  }, 60000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("3: the generator emits a runner SKILL.md for the custom stage [.sh 3]", () => {
     const proj = buildSandbox();
@@ -242,7 +245,7 @@ describe("t128 custom stage → drivable runner (migrated from t128-custom-runne
     const w = run(gen, ["write", "--project-dir", proj]);
     expect(w.status).toBe(0);
     expect(existsSync(runnerPath(proj))).toBe(true);
-  }, 60000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("4: the custom runner's frontmatter name equals its dir [.sh 4]", () => {
     const proj = buildSandbox();
@@ -258,7 +261,7 @@ describe("t128 custom stage → drivable runner (migrated from t128-custom-runne
     expect(nameLine).toBeDefined();
     const name = (nameLine as string).replace(/^name:\s*/, "").trim();
     expect(name).toBe(`aidlc-${CUSTOM_SLUG}`);
-  }, 60000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("5: the custom runner drives next --stage <slug> --single [.sh 5]", () => {
     const proj = buildSandbox();
@@ -269,7 +272,7 @@ describe("t128 custom stage → drivable runner (migrated from t128-custom-runne
     // The .sh asserted the literal `next --stage <slug> --single` appears in
     // the runner body (the --single signature handleWrite/isRunnerSkill keys on).
     expect(body).toContain(`next --stage ${CUSTOM_SLUG} --single`);
-  }, 60000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("6: stage-runner-drift check passes after regenerating (set == compiled list) [.sh 6]", () => {
     const proj = buildSandbox();
@@ -282,7 +285,7 @@ describe("t128 custom stage → drivable runner (migrated from t128-custom-runne
     const c = run(gen, ["check", "--project-dir", proj]);
     expect(c.status).toBe(0);
     expect(c.out).toContain("in sync with the compiled stage graph");
-  }, 60000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("7: next --single drives the custom stage to a run-stage directive [.sh 7]", () => {
     const proj = buildSandbox();
@@ -304,7 +307,7 @@ describe("t128 custom stage → drivable runner (migrated from t128-custom-runne
       stage: string;
     };
     expect(directive.kind).toBe("run-stage");
-  }, 60000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("8: the run-stage directive targets the custom stage [.sh 8]", () => {
     const proj = buildSandbox();
@@ -325,5 +328,5 @@ describe("t128 custom stage → drivable runner (migrated from t128-custom-runne
     // The directive targets the custom slug (the membership check passed only
     // because compile transposed `scopes: [fixture-scope]` into the grid).
     expect(directive.stage).toBe(CUSTOM_SLUG);
-  }, 60000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });

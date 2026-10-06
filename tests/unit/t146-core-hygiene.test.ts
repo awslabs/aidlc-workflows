@@ -17,14 +17,20 @@
 //   - workspace-detection.md enumerates all three harness dirs by name when it
 //     tells the scanner which dirs to exclude — `.claude/`, `.kiro/`, `.codex/`
 //     are the literal directory names, not a tokenizable path.
+//   - reverse-engineering.md enumerates them the same way in the developer's
+//     do-not-scan list: in a project several harnesses share, every
+//     harness's install is skipped, not only the running one's.
 //   - stage-protocol.md's CWD-drift note says "on Claude Code,
 //     $CLAUDE_PROJECT_DIR/.claude/tools/" — a Claude-Code-specific example, true
 //     only for that harness.
 //   - stage-protocol-reviewer.md preserves the original Codex reviewer-binding
 //     clause verbatim, including the literal `.codex/agents/` resolution path.
-// Both are exactly what survives the proven anchored migration by NON-MATCH
-// (the anchors only rewrite `.claude/<subdir>` path forms), so this carve-out
-// list is the same set the packager and the kiro/codex dist trees already prove.
+//   - templates/onboarding.md is the harness-neutral root instruction block
+//     shared byte-identically by the five root-sharing harnesses. Only lines
+//     enumerating at least two distinct harness dirs or a labeled, backticked
+//     harness-onboarding path may carry literals; other prose remains guarded.
+// These exceptions name native harness surfaces rather than paths to projectable
+// core content; they must not weaken the guard for surrounding prose.
 
 import { describe, expect, test } from "bun:test";
 import { readdirSync, readFileSync, statSync } from "node:fs";
@@ -36,10 +42,12 @@ const CORE = join(REPO_ROOT, "core");
 
 // A hit is carved out iff its (relPath, lineText) is a known truthful literal.
 function isCarvedOut(relPath: string, line: string): boolean {
-  // workspace-detection's three-dir enumeration: the line names .kiro/ and
-  // .codex/ alongside .claude/, so it is harness-enumerating, not a path.
+  // workspace-detection's and reverse-engineering's harness-dir enumerations:
+  // the line names .kiro/ and .codex/ alongside .claude/, so it is
+  // harness-enumerating, not a path.
   if (
-    relPath === "aidlc-common/stages/initialization/workspace-detection.md" &&
+    (relPath === "aidlc-common/stages/initialization/workspace-detection.md" ||
+      relPath === "aidlc-common/stages/inception/reverse-engineering.md") &&
     line.includes(".kiro/") &&
     line.includes(".codex/")
   ) {
@@ -60,6 +68,14 @@ function isCarvedOut(relPath: string, line: string): boolean {
     )
   ) {
     return true;
+  }
+  // Neutral onboarding cannot carry tokens. Allow only multi-harness directory
+  // enumerations or labeled onboarding-file entries, not arbitrary prose.
+  if (relPath === "templates/onboarding.md") {
+    return (
+      new Set(line.match(/\.(?:claude|kiro|codex|cursor|aidlc)\//g)).size >= 2 ||
+      /^- \*\*[^*]+\*\*: `\.(?:claude|kiro|codex|cursor|aidlc)\/(?:[^`/]+\/)*(?:CLAUDE\.md|aidlc-onboarding\.md|onboarding\.md|aidlc-onboarding\.mdc|AGENTS\.md)`/.test(line)
+    );
   }
   return false;
 }

@@ -135,13 +135,19 @@ participants, and the Product Leader reviews afterwards (`stage-protocol-reviewe
 - INVEST compliance notes
 
 **Round 1 — dispatch the mob.** Per stage-protocol-ensemble.md §5 `mode: mob`,
-dispatch all three support agents in parallel against the draft (artifacts
-by path: the two draft artifacts, the Q&A file, requirements.md; rules as the
-accumulated steering bundle), mutually blind. Each WRITES its contribution file at
+dispatch exactly the collaborators the directive lists in `support_agents`, in
+parallel against the draft (artifacts by path: the two draft artifacts, the Q&A
+file, requirements.md; rules as the accumulated steering bundle), mutually
+blind. Each WRITES its contribution file at
 `<record>/inception/user-stories/contributions/<agent-slug>.md` (§11 format:
 identity-marker first line, Contribution, Positions): design on UX and
 persona fidelity, developer on implementability and story sizing, quality on
 testability of the acceptance criteria.
+
+**If `directive.support_agents` is empty, skip Round 1 and the triage below** —
+the collaborators switch is off for this scope, so the stage runs lead-only
+(§5): your draft stands as the user stories, with no mob round to dispatch,
+integrate, or triage, and no contribution files.
 
 **Integrate and triage.** As the lead, fold the contributions into the two
 artifacts, then triage unresolved objections per stage-protocol-ensemble.md §5: a judgment call (both
@@ -150,8 +156,9 @@ to the questions file first, blank `[Answer]:` tag); a knowledge dispute
 goes to **round 2** — re-dispatch only the objecting agent(s) with the
 revised draft and the other participants' positions (they update their own
 contribution files). Maintained dissent is quoted verbatim in the Step 10
-completion summary. The three contribution files are this stage's ensemble
-evidence — the engine refuses approval while any is missing.
+completion summary. The dispatched collaborators' contribution files are this
+stage's ensemble evidence — the engine refuses approval while any in the
+directive's effective `support_agents` is missing. A lead-only run has none.
 
 **Write element-level traceability.** Create
 `<record>/inception/user-stories/traceability.json`. Enumerate every `FR` and
@@ -173,7 +180,8 @@ only with a named downstream stage and `N/A` only with a justification:
 
 ### Step 9: Open the Approval Gate
 
-After verifying the three lead artifacts and all three contribution files, run:
+After verifying the three lead artifacts and every dispatched collaborator's
+contribution file (none on a lead-only run), run:
 
 ```bash
 {{INVOKE}} engine orchestrate report \
@@ -188,12 +196,12 @@ evidence before presenting the human gate.
 Use stage-protocol.md completion template with completion emoji: :books:
 - Summary of personas and stories produced
 - Review path: `<record>/inception/user-stories/`
-- Structured approval question with options: Approve / Request Changes. On the Approve option's description write `Continue to <next stage name>`, taking that name from the run-stage directive's `next_stage` field (`Complete workflow` when it is null) - the user sees the real stage name, never a field name.
+- Structured approval question with options: Approve / Request Changes. On the Approve option's description write `Continue to <next stage name>`, taking that name from the `next_stage` field of the reply that opened the gate, else the run-stage directive's (`Complete workflow` when it is null) - the user sees the real stage name, never a field name.
 
-STOP for the human response. Report **Approve** with
-`--result approved --user-input "<exact choice>"`; report
-**Request Changes** with `--result rejected --user-input "Request Changes"
---reason "<feedback>"`, run the
+STOP for the human response, then read it. Report **Approve** with
+`--result approved --user-input "Approve"`; report
+**Request Changes** with `--result rejected --user-input "Request Changes"`
+(their words are kept with the record; add `--reason` only to say more), run the
 revision loop, and report `--result revised` before re-presenting. The engine
 owns every lifecycle transition and advancement.
 

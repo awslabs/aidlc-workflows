@@ -229,12 +229,13 @@ describe("t156 method relocation to aidlc/spaces/default/memory/ + per-harness i
         expect(json.resources, `${harness.name}/${f} resources → relocated memory`).toContain(
           "file://aidlc/spaces/default/memory/**/*.md",
         );
-        // The old steering glob is gone from `resources` (note: `.kiro/steering/**`
-        // may legitimately remain in fs_write.allowedPaths — that is a write
-        // permission, NOT a method-load glob, so we only inspect `resources`).
+        // Only the always-on native onboarding may load from steering; method
+        // globs must use relocated memory. Inspect resources, not write permissions.
         expect(
-          json.resources.some((r) => r.includes(".kiro/steering")),
-          `${harness.name}/${f} resources must not point at the empty steering dir`,
+          json.resources.some((r) =>
+            r.includes(".kiro/steering") && r !== "file://.kiro/steering/aidlc-onboarding.md"
+          ),
+          `${harness.name}/${f} resources may load only native onboarding from steering`,
         ).toBe(false);
       }
       expect(harnessChecked, `${harness.name}: agents with resources`).toBeGreaterThan(0);

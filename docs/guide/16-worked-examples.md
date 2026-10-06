@@ -191,7 +191,7 @@ Application code in workspace root:
 
 ## Feature Walkthrough
 
-This example builds a notification service for a task management application. The **feature** scope runs all 33 stages at Standard depth. This walkthrough highlights key stages across all phases.
+This example builds a notification service for a task management application. The **feature** scope runs all 33 stages at Standard depth. This walkthrough highlights key stages across all phases. It runs with collaborators on (`/aidlc --collaborators on`), so the Inception ensembles below show their full roster; the feature scope ships them off, and then those stages run with the lead agent only.
 
 ### Invocation
 
@@ -355,7 +355,7 @@ Only after `verify` reports `verified: true` and the current checkpoint has
 `ready: true` does the conductor open its session-bound approval question:
 
 ```bash
-aidlc engine bolt checkpoint --action ask --unit "notification-core" --kind skeleton --session "<session ID>"
+aidlc engine bolt checkpoint --action ask --unit "notification-core" --kind skeleton
 ```
 
 It presents "Verified with `bun run verify:notifications` (exit 0). Approve this
@@ -363,11 +363,11 @@ completed notification-core?" with **Approve** / **Request Changes** and waits.
 The code span shows the full recorded command, not a summary. You choose
 **Approve**; only that exact reply in that session, to this checkpoint question,
 authorizes approval. An unrelated reply, another session's reply, or a reply to
-a different question does not. The conductor records your actual choice with the
+a different question does not. The conductor records your actual choice in the
 same session, never passing `--user-input` you did not choose:
 
 ```bash
-aidlc engine bolt checkpoint --action approve --unit "notification-core" --kind skeleton --session "<session ID>" --user-input 'Approve'
+aidlc engine bolt checkpoint --action approve --unit "notification-core" --kind skeleton --user-input 'Approve'
 ```
 
 The earlier Functional Design review by itself would not have established that

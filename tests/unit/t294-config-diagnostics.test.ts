@@ -1,4 +1,9 @@
-import { afterAll, describe, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { afterEach, describe, expect, spyOn, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
   cpSync,
@@ -7,20 +12,33 @@ import {
   mkdtempSync,
   readFileSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { REPO_ROOT } from "../harness/fixtures.ts";
+import { homedir, tmpdir } from "node:os";
+import { delimiter, join, posix, resolve } from "node:path";
+import { parse as parseToml } from "smol-toml";
+import { cleanupTestProject, createOrchestrationTestProject, REPO_ROOT } from "../harness/fixtures.ts";
+import { appendAuditEntry } from "../../core/tools/aidlc-audit.ts";
+import { sha256Bytes } from "../../core/tools/aidlc-distribution.ts";
+import { hooksHealthReadDir } from "../../core/tools/aidlc-lib.ts";
+import { doctorCommandLines, vscodeVisibleOutput } from "../harness/vscode-output-trim.ts";
 import {
   applyConfigDiagnosticRecords,
   codexTrustIssues,
+  copilotCliTrust,
+  copilotConfigPath,
+  copilotFolderTrusted,
+  copilotTrustedFolderKey,
+  copilotTrustIssues,
   deriveNonInteractivePath,
   detectAwsCredentials,
   harnessOwnsModelAccess,
+  insideGitRepository,
   instructionFileDoctorCheck,
   normalizeProvidersRecord,
   postApplyOutstandingActions,
+  shellOnlyRuntimes,
   preserveKiroMcpRegion,
   probeHarnessCli,
   probeRuntime,
@@ -29,15 +47,21 @@ import {
   providerIssues,
   readConfigDiagnosticRecords,
   reconcileProviderActions,
+  resolveExecutableOnPath,
   runtimeDoctorChecks,
   runtimeIssues,
+  vscodeRequestCapDoctorCheck,
+  vscodeWorkspaceRequestCapDoctorCheck,
   trustStatus,
   workspaceSiblingDoctorCheck,
   workspaceSiblingIssues,
   type ConfigDiagnosticRecords,
   type ProvidersRecord,
 } from "../../core/tools/aidlc-config-diagnostics.ts";
-import { collectDoctorReport } from "../../core/tools/aidlc-utility.ts";
+import { collectDoctorReport, firingHooksLastFired } from "../../core/tools/aidlc-utility.ts";
+import * as runtimePaths from "../../core/tools/aidlc-runtime-paths.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const BUN = process.execPath;
 const INIT = join(REPO_ROOT, "core", "tools", "aidlc-init.ts");
@@ -45,14 +69,27 @@ const DIST = join(REPO_ROOT, "dist");
 const DIST_RELEASE = join(REPO_ROOT, "dist-release");
 const temporary: string[] = [];
 
-afterAll(() => {
-  for (const path of temporary) rmSync(path, { recursive: true, force: true });
-});
+// Each case owns its installations. Release them before the next case rather
+// than retaining every copied runtime until the entire file finishes.
+afterEach(() => {
+  for (const path of temporary.splice(0)) rmSync(path, { recursive: true, force: true });
+}, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 function temp(prefix: string): string {
   const path = mkdtempSync(join(tmpdir(), prefix));
   temporary.push(path);
   return path;
+}
+
+function canonical(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`;
+  if (value && typeof value === "object") {
+    const object = value as Record<string, unknown>;
+    return `{${Object.keys(object).sort().map((key) =>
+      `${JSON.stringify(key)}:${canonical(object[key])}`
+    ).join(",")}}`;
+  }
+  return JSON.stringify(value);
 }
 
 function run(
@@ -71,7 +108,7 @@ function run(
       ...env,
     },
     encoding: "utf-8",
-    timeout: 60_000,
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
   });
   if (result.error) throw result.error;
   return {
@@ -109,6 +146,26 @@ function runtimeEnv(extra: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
     AWS_SECRET_ACCESS_KEY: "test-secret",
     ...extra,
   };
+}
+
+// The legacy Bedrock block sat among the shipped config's top-level keys with
+// its aws table last before the first table header. Insert a synthesized block
+// there, after developer_instructions and every other top-level key the current
+// shipped config carries (tool_output_token_limit), so no shipped key lands
+// inside the legacy table in TOML terms and the file models a real upgrade.
+function withLegacyCodexProviderBlock(config: string, block: string): string {
+  const developerInstructions =
+    /^[\t ]*developer_instructions[\t ]*=[\t ]*'''[\s\S]*?'''[\t ]*(?:\r?\n|$)/m
+      .exec(config);
+  // sandbox_mode is a root key, not part of a model_providers table:
+  // https://developers.openai.com/codex/config-reference/#sandbox_mode
+  // Insert after all root assignments, skipping headers inside onboarding text.
+  const afterInstructions = developerInstructions
+    ? developerInstructions.index + developerInstructions[0].length
+    : 0;
+  const table = /^[\t ]*\[/m.exec(config.slice(afterInstructions));
+  const insertion = table ? afterInstructions + table.index : config.length;
+  return config.slice(0, insertion) + block + config.slice(insertion);
 }
 
 // Rewrites both aws-mcp region arguments of a Kiro CLI mcp.json text. Built from
@@ -213,6 +270,10 @@ describe("t294 config section dispatch", () => {
 });
 
 describe("t294 runtime diagnostics", () => {
+  // The injected platform selects Linux configuration sources; the returned
+  // PATH and filesystem resolver still use this process's native path format.
+  const linuxBaseline = ["/bin", "/usr/bin"].join(delimiter);
+
   test("baseline, interactive-only, and absent PATH cases are hermetic", () => {
     const project = temp("aidlc-t294-runtime-probe-");
     const hooks = join(project, ".claude", "hooks");
@@ -268,6 +329,29 @@ describe("t294 runtime diagnostics", () => {
     expect(runtimeIssues(interactiveOnly)[0].message).toContain(
       "resolves only through the interactive PATH",
     );
+    // Setup lists no step for it: started from a terminal, the hooks find it.
+    expect(postApplyOutstandingActions(project, ".claude", "claude", {
+      skipSections: ["trust", "providers"],
+      runtime: {
+        baselinePath: join(project, "empty"),
+        interactivePath: interactiveBin,
+        which(command, pathValue) {
+          const path = join(pathValue, command);
+          return existsSync(path) ? path : null;
+        },
+        run: () => ({ status: 0, stdout: "2.0.0\n" }),
+      },
+    })).toEqual([]);
+    // The setup check names it instead, with where to start the harness.
+    expect(shellOnlyRuntimes(project, ".claude", "claude", {
+      baselinePath: join(project, "empty"),
+      interactivePath: interactiveBin,
+      which(command, pathValue) {
+        const path = join(pathValue, command);
+        return existsSync(path) ? path : null;
+      },
+      run: () => ({ status: 0, stdout: "2.0.0\n" }),
+    })).toContain("bun");
 
     const absent = probeRuntime(project, ".claude", "claude", {
       baselinePath: join(project, "empty"),
@@ -280,6 +364,103 @@ describe("t294 runtime diagnostics", () => {
     );
   });
 
+  // The doctor row reported bun "interactive-only" while the project's hooks
+  // were running through it, and an agent took that as the person's PATH being
+  // broken. Hooks that fire settle it; without them the row says what it saw.
+  function interactiveOnlyProject(): { project: string; runtime: Parameters<typeof probeRuntime>[3] } {
+    const project = temp("aidlc-t294-runtime-row-");
+    // The shipped projection marker makes .claude an installed harness.
+    cpSync(join(DIST, "claude", ".claude", "tools", "data"), join(project, ".claude", "tools", "data"), { recursive: true });
+    writeFileSync(join(project, ".claude", "settings.json"), JSON.stringify({
+      hooks: { Stop: [{ hooks: [{ command: "bun .claude/tools/aidlc.ts engine hook continue-workflow" }] }] },
+    }));
+    const interactiveBin = join(project, "interactive-bin");
+    mkdirSync(interactiveBin);
+    writeExecutable(join(interactiveBin, "bun"));
+    return {
+      project,
+      runtime: {
+        baselinePath: join(project, "empty"),
+        interactivePath: interactiveBin,
+        which(command, pathValue) {
+          const path = join(pathValue, command);
+          return existsSync(path) ? path : null;
+        },
+        run: () => ({ status: 0, stdout: "2.0.0\n" }),
+      },
+    };
+  }
+
+  test("a bun found only on this shell's PATH passes while the project's hooks are firing", () => {
+    const { project, runtime } = interactiveOnlyProject();
+    const row = runtimeDoctorChecks(project, ".claude", { runtime, hooksLastFired: "2026-10-02T01:23:45Z" })
+      .find((check) => check.label.startsWith("Runtime hook PATH: bun "));
+    expect(row).toEqual({
+      pass: true,
+      label: `Runtime hook PATH: bun -> ${join(project, "interactive-bin", "bun")} (this project's hooks found it; last fired 2026-10-02T01:23:45Z)`,
+    });
+  });
+
+  test("without firing hooks it warns with what it saw, and rc file edits are not the fix", () => {
+    const { project, runtime } = interactiveOnlyProject();
+    const row = runtimeDoctorChecks(project, ".claude", { runtime })
+      .find((check) => check.label.startsWith("Runtime hook PATH: bun "));
+    expect(row?.pass).toBe(false);
+    expect(row?.severity).toBe("warn");
+    expect(row?.label).toBe(
+      `Runtime hook PATH: bun is on this shell's PATH (${join(project, "interactive-bin", "bun")}) but not on the system-wide PATH`,
+    );
+    if (process.platform !== "win32") {
+      expect(row?.fix).toContain("Nothing needs changing when you start Claude Code from a terminal: it hands that terminal's PATH to AI-DLC's hooks.");
+      // The person's tool by name, never AI-DLC's own words for how it ships.
+      expect(row?.fix).not.toContain("harness");
+      expect(row?.fix).not.toContain("copy-channel");
+      // The directory named is the one bun was found in, not a default.
+      expect(row?.fix).toContain(`add ${join(project, "interactive-bin")} to `);
+      expect(row?.fix).toContain("Editing .bashrc or .zshrc does not change this check.");
+    }
+    // The old wording asserted a fault it had not observed; it stays gone.
+    for (const check of runtimeDoctorChecks(project, ".claude", { runtime })) {
+      expect(check.label).not.toContain("is interactive-only at");
+    }
+    expect(readFileSync(join(REPO_ROOT, "docs", "guide", "12-cli-commands.md"), "utf-8"))
+      .not.toContain("is interactive-only at");
+  });
+
+  test("the doctor reads firing hooks from fresh heartbeats only", () => {
+    const project = createOrchestrationTestProject();
+    try {
+      const health = hooksHealthReadDir(project);
+      // No heartbeat yet: no evidence.
+      expect(firingHooksLastFired(project)).toBeUndefined();
+      appendAuditEntry("STAGE_STARTED", { Stage: "requirements-analysis" }, project);
+      const fresh = new Date().toISOString();
+      mkdirSync(health, { recursive: true });
+      writeFileSync(join(health, "session-start.last"), `${fresh}\n`);
+      expect(firingHooksLastFired(project)).toBe(fresh);
+      // An older heartbeat names no launch, even with no progress since: a
+      // later launch (a dock-started harness) may not find the runtime.
+      expect(firingHooksLastFired(project, Date.parse(fresh) + 11 * 60 * 1000)).toBeUndefined();
+      // That launch closed, and the one running now (reopened from the dock)
+      // has not started its hooks: its recent heartbeats no longer count.
+      const closed = new Date(Date.parse(fresh) + 1000).toISOString();
+      writeFileSync(join(health, "validate-state.last"), `${fresh}\n`);
+      writeFileSync(join(health, "session-end.last"), `${closed}\n`);
+      expect(firingHooksLastFired(project, Date.parse(closed))).toBeUndefined();
+      // The next launch's session-start fired: its hooks found the runtime.
+      const reopened = new Date(Date.parse(closed) + 1000).toISOString();
+      writeFileSync(join(health, "session-start.last"), `${reopened}\n`);
+      expect(firingHooksLastFired(project, Date.parse(reopened))).toBe(reopened);
+      // The workflow advanced long after the newest heartbeat: hooks stopped.
+      rmSync(join(health, "validate-state.last"));
+      rmSync(join(health, "session-end.last"));
+      writeFileSync(join(health, "session-start.last"), "2026-01-01T00:00:00.000Z\n");
+      expect(firingHooksLastFired(project)).toBeUndefined();
+    } finally {
+      cleanupTestProject(project);
+    }
+  });
+
   // getconf PATH is glibc's compile-time _CS_PATH (/bin:/usr/bin on the Debian
   // family), so a Linux baseline built from it alone can never contain the
   // directories the remediation tells the user to add. The login-independent
@@ -287,9 +468,12 @@ describe("t294 runtime diagnostics", () => {
   // environment.d; the probe reads them under the injected systemRoot.
   test("Linux baseline PATH includes /etc/environment, login.defs, and environment.d entries", () => {
     const root = temp("aidlc-t294-system-root-");
-    const home = temp("aidlc-t294-system-home-");
+    // Linux PATH records cannot contain a Windows drive colon. Keep logical
+    // Linux paths separate from the native directories holding the fixtures.
+    const home = "/home/aidlc-fixture";
+    const configHome = temp("aidlc-t294-system-home-");
     mkdirSync(join(root, "etc", "environment.d"), { recursive: true });
-    mkdirSync(join(home, ".config", "environment.d"), { recursive: true });
+    mkdirSync(join(configHome, "environment.d"), { recursive: true });
     writeFileSync(
       join(root, "etc", "environment"),
       'PATH="/usr/local/bin:/opt/from-environment/bin" # site\nLANG=C.UTF-8\n',
@@ -308,7 +492,7 @@ describe("t294 runtime diagnostics", () => {
       ].join(""),
     );
     writeFileSync(
-      join(home, ".config", "environment.d", "10-user.conf"),
+      join(configHome, "environment.d", "10-user.conf"),
       [
         "PATH=$",
         "{PATH}:/opt/from-user-environment-d/bin\nPATH=$HOME/.local/bin:$PATH\nPATH=$",
@@ -319,10 +503,10 @@ describe("t294 runtime diagnostics", () => {
       platform: "linux",
       systemRoot: root,
       home,
-      env: {},
-      run: () => ({ status: 0, stdout: "/bin:/usr/bin\n" }),
+      env: { XDG_CONFIG_HOME: configHome },
+      run: () => ({ status: 0, stdout: `${linuxBaseline}\n` }),
     });
-    const entries = baseline.split(":");
+    const entries = baseline.split(delimiter);
     expect(entries.slice(0, 2)).toEqual(["/bin", "/usr/bin"]);
     expect(entries).toEqual(expect.arrayContaining([
       "/usr/local/bin",
@@ -333,8 +517,8 @@ describe("t294 runtime diagnostics", () => {
       "/opt/from-user-environment-d/bin",
       "/opt/foo/bin",
       "/opt/lead/bin",
-      join(home, ".local", "bin"),
-      join(home, "bin"),
+      posix.join(home, ".local", "bin"),
+      posix.join(home, "bin"),
     ]));
     // ENV_SUPATH is root's path, not a login-independent user PATH; $PATH
     // references, expression fragments, quotes, and comments never survive as entries.
@@ -352,11 +536,11 @@ describe("t294 runtime diagnostics", () => {
     const bare = deriveNonInteractivePath({
       platform: "linux",
       systemRoot: temp("aidlc-t294-system-root-empty-"),
-      home: temp("aidlc-t294-system-home-empty-"),
-      env: {},
-      run: () => ({ status: 0, stdout: "/bin:/usr/bin\n" }),
+      home: "/home/empty-fixture",
+      env: { XDG_CONFIG_HOME: temp("aidlc-t294-system-home-empty-") },
+      run: () => ({ status: 0, stdout: `${linuxBaseline}\n` }),
     });
-    expect(bare).toBe("/bin:/usr/bin");
+    expect(bare).toBe(linuxBaseline);
   });
 
   test("Linux runtime probe resolves aidlc from /etc/environment and user environment.d", () => {
@@ -378,15 +562,32 @@ describe("t294 runtime diagnostics", () => {
     writeExecutable(join(siteBin, "aidlc"));
     const systemRoot = temp("aidlc-t294-system-root-site-");
     const home = temp("aidlc-t294-system-home-probe-");
+    const linuxHome = "/home/aidlc-fixture";
+    const linuxSite = "/opt/aidlc-site/bin";
+    const linuxInteractive = "/opt/aidlc-interactive/bin";
+    const directories = new Map([
+      [linuxSite, siteBin],
+      [linuxInteractive, interactiveBin],
+      [posix.join(linuxHome, ".local", "bin"), join(home, ".local", "bin")],
+    ]);
     mkdirSync(join(systemRoot, "etc"), { recursive: true });
-    writeFileSync(join(systemRoot, "etc", "environment"), `PATH="${siteBin}" # site\n`);
+    writeFileSync(join(systemRoot, "etc", "environment"), `PATH="${linuxSite}" # site\n`);
     const options = {
       platform: "linux" as const,
       systemRoot,
-      home,
-      env: { PATH: interactiveBin },
+      home: linuxHome,
+      env: { PATH: linuxInteractive, XDG_CONFIG_HOME: join(home, ".config") },
       includeHarnessCli: false,
-      run: () => ({ status: 0, stdout: "/bin:/usr/bin\n" }),
+      which(command: string, pathValue: string): string | null {
+        for (const entry of pathValue.split(delimiter)) {
+          const directory = directories.get(entry);
+          if (!directory) continue;
+          const executable = resolveExecutableOnPath(command, directory);
+          if (executable) return executable;
+        }
+        return null;
+      },
+      run: () => ({ status: 0, stdout: `${linuxBaseline}\n` }),
     };
     const site = probeRuntime(project, ".claude", "claude", options);
 
@@ -425,9 +626,9 @@ describe("t294 runtime diagnostics", () => {
     const bare = probeRuntime(project, ".claude", "claude", {
       ...options,
       systemRoot: emptyRoot,
-      env: { PATH: join(home, ".local", "bin") },
+      env: { ...options.env, PATH: posix.join(linuxHome, ".local", "bin") },
     });
-    expect(bare.baselinePath).toBe("/bin:/usr/bin");
+    expect(bare.baselinePath).toBe(linuxBaseline);
     expect(bare.binaries.find((item) => item.name === "aidlc")?.status).toBe(
       "interactive-only",
     );
@@ -435,22 +636,25 @@ describe("t294 runtime diagnostics", () => {
     // Blanking an unresolved variable must not expose an unrelated executable.
     const unresolvedHome = temp("aidlc-t294-system-home-unresolved-");
     const toolchainRoot = temp("aidlc-t294-toolchain-");
+    const linuxToolchain = "/opt/toolchain";
+    directories.set(posix.join(linuxToolchain, "bin"), join(toolchainRoot, "bin"));
     mkdirSync(join(toolchainRoot, "bin"));
     writeExecutable(join(toolchainRoot, "bin", "aidlc"));
     mkdirSync(join(unresolvedHome, ".config", "environment.d"), { recursive: true });
     writeFileSync(
       join(unresolvedHome, ".config", "environment.d", "10-user.conf"),
-      `TOOLCHAIN=gcc\nPATH=${toolchainRoot}/$TOOLCHAIN/bin:$PATH\n`,
+      `TOOLCHAIN=gcc\nPATH=${linuxToolchain}/$TOOLCHAIN/bin:$PATH\n`,
     );
     const unresolved = probeRuntime(project, ".claude", "claude", {
       ...options,
       systemRoot: temp("aidlc-t294-system-root-unresolved-"),
-      home: unresolvedHome,
+      home: "/home/unresolved-fixture",
+      env: { ...options.env, XDG_CONFIG_HOME: join(unresolvedHome, ".config") },
     });
     expect({
       status: unresolved.binaries.find((item) => item.name === "aidlc")?.status,
-      toolchainEntries: unresolved.baselinePath.split(":").filter((entry) =>
-        entry.startsWith(toolchainRoot)
+      toolchainEntries: unresolved.baselinePath.split(delimiter).filter((entry) =>
+        entry.startsWith(linuxToolchain)
       ),
     }).toEqual({
       status: "interactive-only",
@@ -512,7 +716,7 @@ describe("t294 runtime diagnostics", () => {
       darwin: expect.stringMatching(/^(?!.*\/etc\/environment).*\/etc\/paths\.d/),
       linux: expect.stringMatching(/\/etc\/environment.*\/etc\/login\.defs.*environment\.d/),
       bun: expect.stringMatching(
-        /^This project is a copy-channel projection, so its hooks run through Bun; a native install runs them through the aidlc command instead\. .*\/etc\/environment/,
+        /^Nothing needs changing when you start Claude Code from a terminal: .*\/etc\/environment/,
       ),
     });
   });
@@ -541,9 +745,383 @@ describe("t294 runtime diagnostics", () => {
       status: "missing",
     }));
 
-    expect(probeHarnessCli("kiro-ide")).toEqual(expect.objectContaining({
+    // Kiro CLI is optional for this row, but it is probed: with only kiro-cli on
+    // PATH, first-run setup must see this row too, not just the kiro row.
+    expect(probeHarnessCli("kiro-ide", { which: () => null })).toEqual(expect.objectContaining({
+      command: "kiro-cli",
       required: false,
-      status: "not-applicable",
+      status: "missing",
+    }));
+    expect(probeHarnessCli("kiro-ide", {
+      which: () => "/opt/kiro/bin/kiro-cli",
+      run: () => ({ status: 0, stdout: "kiro-cli 2.24.1\n" }),
+    })).toEqual(expect.objectContaining({
+      command: "kiro-cli",
+      status: "found",
+    }));
+    // 2.24.1 is the oldest Kiro CLI this row has been checked on; an older one
+    // down to 2.6 still serves the kiro row.
+    const oldKiro = {
+      which: () => "/opt/kiro/bin/kiro-cli",
+      run: () => ({ status: 0, stdout: "kiro-cli 2.24.0\n" }),
+    };
+    expect(probeHarnessCli("kiro-ide", oldKiro)).toEqual(expect.objectContaining({
+      command: "kiro-cli",
+      status: "too-old",
+      minimumVersion: "2.24.1",
+    }));
+    expect(probeHarnessCli("kiro", oldKiro)).toEqual(expect.objectContaining({
+      command: "kiro-cli",
+      status: "found",
+    }));
+    // The kiro row's own floor is the 2.6 its guide asks for.
+    expect(probeHarnessCli("kiro", {
+      which: () => "/opt/kiro/bin/kiro-cli",
+      run: () => ({ status: 0, stdout: "kiro-cli 2.5.9\n" }),
+    })).toEqual(expect.objectContaining({
+      command: "kiro-cli",
+      status: "too-old",
+      minimumVersion: "2.6.0",
+    }));
+  });
+
+  // A `copilot` whose --version reply has no version number, like the line
+  // VS Code's stand-in prints when the real CLI is missing (#1411).
+  const NO_VERSION = {
+    interactivePath: "/usr/local/bin",
+    which: () => "/usr/local/bin/copilot",
+    run: () => ({
+      status: 0,
+      stdout: "Cannot find GitHub Copilot CLI (https://docs.github.com/copilot/how-tos/copilot-cli)\n",
+    }),
+  };
+  const printsVersion = (stdout: string) => ({ ...NO_VERSION, run: () => ({ status: 0, stdout }) });
+
+  test("a --version reply with no version number is not an installed CLI", () => {
+    expect(probeHarnessCli("copilot", NO_VERSION)).toEqual(expect.objectContaining({
+      command: "copilot",
+      required: false,
+      status: "missing",
+    }));
+    expect(probeHarnessCli("copilot", NO_VERSION).version).toBeUndefined();
+    expect(probeHarnessCli("copilot", printsVersion("1.0.80\n"))).toEqual(expect.objectContaining({
+      status: "found",
+      version: "1.0.80",
+    }));
+    expect(probeHarnessCli("copilot", printsVersion("GitHub Copilot CLI 1.0.60.\n"))).toEqual(expect.objectContaining({
+      status: "too-old",
+      minimumVersion: "1.0.74",
+    }));
+    // The same reading for a required CLI with a floor.
+    expect(probeHarnessCli("codex", printsVersion("Cannot find Codex\n"))).toEqual(expect.objectContaining({
+      required: true,
+      status: "missing",
+    }));
+  });
+
+  // VS Code's Copilot Chat puts a stand-in `copilot` first on its terminals'
+  // PATH. With no real CLI it asks "Install GitHub Copilot CLI? (y/N)" on the
+  // console, so doctor and setup must never run it, only look past it.
+  test("the CLI probe never runs VS Code's stand-in copilot", () => {
+    const root = temp("aidlc-t294-copilot-stand-in-");
+    const standIn = join(root, "Code", "User", "globalStorage", "github.copilot-chat", "copilotCli");
+    const real = join(root, "npm", "bin");
+    const ran = join(root, "stand-in-ran");
+    mkdirSync(standIn, { recursive: true });
+    mkdirSync(real, { recursive: true });
+    // Scripts this host can run: a .cmd on Windows, a shell script elsewhere.
+    const windows = process.platform === "win32";
+    const command = windows ? "copilot.cmd" : "copilot";
+    const script = (lines: string[]) =>
+      windows ? `@echo off\r\n${lines.join("\r\n")}\r\n` : `#!/bin/sh\n${lines.join("\n")}\n`;
+    writeFileSync(
+      join(standIn, command),
+      windows
+        ? script([`type nul > "${ran}"`, "echo Install GitHub Copilot CLI? (y/N):", "exit /b 0"])
+        : script([`touch '${ran}'`, "printf 'Install GitHub Copilot CLI? (y/N): '", "exit 0"]),
+      { mode: 0o755 },
+    );
+    const host = { platform: process.platform, env: {} };
+    const separator = windows ? ";" : ":";
+    // Only the stand-in: the CLI is not installed, and nothing ran.
+    expect(probeHarnessCli("copilot", { ...host, interactivePath: standIn })).toEqual(
+      expect.objectContaining({ status: "missing", required: false }),
+    );
+    expect(probeHarnessCli("copilot", { ...host, interactivePath: `${standIn}${windows ? "\\" : "/"}` }).status)
+      .toBe("missing");
+    // The real CLI after it on PATH is the one probed. npm on Windows writes
+    // an extensionless shell script beside copilot.cmd; the .cmd is the one run.
+    writeFileSync(join(real, command), script(["echo 1.0.80"]), { mode: 0o755 });
+    if (windows) writeFileSync(join(real, "copilot"), "#!/bin/sh\necho 9.9.9\n");
+    expect(probeHarnessCli("copilot", { ...host, interactivePath: `${standIn}${separator}${real}` })).toEqual(
+      expect.objectContaining({ status: "found", version: "1.0.80", path: join(real, command) }),
+    );
+    expect(existsSync(ran)).toBe(false);
+    if (windows) {
+      // cmd.exe would expand % in the path, so such a .cmd is not run.
+      const expanding = join(root, "npm%PATH%");
+      const expandingRan = join(root, "expanding-ran");
+      mkdirSync(expanding, { recursive: true });
+      writeFileSync(join(expanding, command), script([`type nul > "${expandingRan}"`, "echo 1.0.80"]));
+      expect(probeHarnessCli("copilot", { ...host, interactivePath: expanding }).status).toBe("missing");
+      expect(existsSync(expandingRan)).toBe(false);
+    }
+
+    // npm's Windows layout: the extensionless shell script, copilot.cmd and
+    // copilot.ps1 side by side. The resolver picks what Windows can run.
+    const npmLayout = join(root, "npm-layout");
+    mkdirSync(npmLayout, { recursive: true });
+    for (const name of ["copilot", "copilot.cmd", "copilot.ps1"]) writeFileSync(join(npmLayout, name), "");
+    expect(resolveExecutableOnPath("copilot", npmLayout, "win32")).toBe(resolve(npmLayout, "copilot.cmd"));
+    expect(resolveExecutableOnPath("copilot.cmd", npmLayout, "win32")).toBe(resolve(npmLayout, "copilot.cmd"));
+
+    // Windows spelling: any case, backslashes, a trailing separator. The
+    // search skips the folder, and a resolver that names it anyway is ignored.
+    const appData = "C:\\Users\\dev\\AppData\\Roaming";
+    const windowsStandIn = `${appData}\\Code\\User\\globalStorage\\GitHub.copilot-chat\\copilotCli\\`;
+    const searched: string[] = [];
+    const never = (command: string) => {
+      throw new Error(`ran ${command}`);
+    };
+    expect(probeHarnessCli("copilot", {
+      platform: "win32",
+      env: {},
+      interactivePath: `${windowsStandIn};${appData}\\npm`,
+      which: (_command, pathValue) => {
+        searched.push(pathValue);
+        return null;
+      },
+      run: never,
+    }).status).toBe("missing");
+    expect(searched).toEqual([`${appData}\\npm`]);
+    expect(probeHarnessCli("copilot", {
+      platform: "win32",
+      env: {},
+      interactivePath: windowsStandIn,
+      which: () => `${windowsStandIn}copilot.bat`,
+      run: never,
+    }).status).toBe("missing");
+    // Another CLI's folder is searched as before.
+    expect(probeHarnessCli("codex", {
+      platform: "win32",
+      env: {},
+      interactivePath: windowsStandIn,
+      which: (_command, pathValue) => {
+        searched.push(pathValue);
+        return null;
+      },
+    }).status).toBe("missing");
+    expect(searched.at(-1)).toBe(windowsStandIn);
+  });
+
+  test("doctor's report and fix lines reach the agent whole in VS Code", () => {
+    // VS Code's terminal tool drops output up to the line that repeats the
+    // command it ran. The old footer erased a healthy report this way (#1411).
+    const oldReport = "AI-DLC doctor\n\nMachine\n  ok    4 checks passed\n\n0 problems, 0 warnings.\n" +
+      "Run 'aidlc doctor --verbose' to see every check.";
+    expect(vscodeVisibleOutput(oldReport, "aidlc doctor").trim()).toBe("");
+    expect(vscodeVisibleOutput(oldReport, "aidlc doctor 2>&1")).toBe(oldReport);
+    for (const [tree, invoke] of [[DIST, "bun .aidlc/tools/aidlc.ts"], [DIST_RELEASE, "aidlc"]] as const) {
+      const project = temp("aidlc-t294-vscode-trim-");
+      cpSync(join(tree, "copilot"), project, { recursive: true });
+      // An unreadable harness.json adds the Providers row and its fix.
+      writeFileSync(join(project, ".aidlc", "tools", "data", "harness.json"), "{\n");
+      for (const flags of [[], ["--verbose"]]) {
+        const result = spawnSync(BUN, [join(project, ".aidlc", "tools", "aidlc.ts"), "doctor", ...flags], {
+          cwd: project,
+          encoding: "utf-8",
+          env: { ...process.env, NO_COLOR: "1", AIDLC_PROJECT_DIR: undefined, CLAUDE_PROJECT_DIR: undefined } as NodeJS.ProcessEnv,
+          timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+        });
+        const report = `${result.stdout ?? ""}${result.stderr ?? ""}`;
+        expect(report).toContain("Providers: could not read recorded answers");
+        const commandLine = [invoke, "doctor", ...flags].join(" ");
+        expect(doctorCommandLines()).toContain(commandLine);
+        expect(vscodeVisibleOutput(report, commandLine), commandLine).toBe(report);
+      }
+    }
+  });
+
+  test("doctor warns when VS Code would pause a Copilot stage for its request cap", () => {
+    const copilot = temp("aidlc-t294-request-cap-");
+    cpSync(join(DIST, "copilot"), copilot, { recursive: true });
+    const settings = join(copilot, ".vscode", "settings.json");
+    const check = (text: string | null) => {
+      if (text === null) rmSync(settings, { force: true });
+      else writeFileSync(settings, text);
+      const row = vscodeRequestCapDoctorCheck(copilot, ".aidlc");
+      if (!row) throw new Error("no request cap row for a Copilot project");
+      return row;
+    };
+    expect(check('{\n  "chat.agent.maxRequests": 200\n}\n')).toEqual({
+      pass: true,
+      label: "VS Code agent request cap: chat.agent.maxRequests is 200 in .vscode/settings.json",
+    });
+    expect(check('// ours\n{ "chat.agent.maxRequests": 100, }\n').pass).toBe(true);
+    const low = check('{ "chat.agent.maxRequests": 75 }');
+    expect(low).toEqual(expect.objectContaining({ pass: false, severity: "warn" }));
+    expect(low.label).toBe("VS Code agent request cap: chat.agent.maxRequests is 75 in .vscode/settings.json");
+    expect(low.fix).toContain('raise "chat.agent.maxRequests" in .vscode/settings.json to 100 or more');
+    expect(low.fix).toContain("Continue to iterate?");
+    // The fix is the one edit that works on every channel, including a copied
+    // project, whose runtime ships no .vscode/settings.json.
+    for (const unset of [null, '{\n  "editor.tabSize": 2\n}\n']) {
+      const row = check(unset);
+      expect(row, String(unset)).toEqual(expect.objectContaining({ pass: false, severity: "warn" }));
+      expect(row.label, String(unset)).toContain("your user setting or VS Code's default of 50 applies");
+      expect(row.fix, String(unset)).toContain('add "chat.agent.maxRequests": 200 to .vscode/settings.json');
+    }
+    // A number written as text is named as text, with how to write it.
+    const text = check('{ "chat.agent.maxRequests": "200" }');
+    expect(text).toEqual(expect.objectContaining({ pass: false, severity: "warn" }));
+    expect(text.label).toBe('VS Code agent request cap: chat.agent.maxRequests is "200" in .vscode/settings.json, text rather than a number');
+    expect(text.fix).toContain('write it as a number without quotes: "chat.agent.maxRequests": 200');
+    expect(check('{ "chat.agent.maxRequests": " 50 " }').fix)
+      .toContain('write it as a number of 100 or more without quotes, for example "chat.agent.maxRequests": 200');
+    for (const other of ['{ "chat.agent.maxRequests": true }', '{ "chat.agent.maxRequests": "lots" }', '{ "chat.agent.maxRequests": null }']) {
+      const row = check(other);
+      expect(row, other).toEqual(expect.objectContaining({ pass: false, severity: "warn" }));
+      expect(row.label, other).toBe("VS Code agent request cap: chat.agent.maxRequests in .vscode/settings.json is not a number");
+      expect(row.fix, other).toContain('set it to a number of 100 or more, for example "chat.agent.maxRequests": 200');
+    }
+    const broken = check("{ ,, }");
+    expect(broken).toEqual(expect.objectContaining({ pass: false, severity: "warn" }));
+    expect(broken.label).toContain("could not be read as JSONC");
+    // Only a Copilot project gets the row.
+    const claude = temp("aidlc-t294-request-cap-claude-");
+    cpSync(join(DIST, "claude"), claude, { recursive: true });
+    expect(vscodeRequestCapDoctorCheck(claude, ".claude")).toBeNull();
+
+    // A key AI-DLC added once and the team then removed from the file it kept
+    // is the team's choice, so doctor does not warn about it. A checkout with
+    // no settings file at all is still told how to add it.
+    const baseline = join(copilot, ".aidlc", "tools", "data", "aidlc-manifest.json");
+    writeFileSync(baseline, JSON.stringify({ rootContributions: { ".vscode/settings.json": { policy: "jsonc-settings", entries: {}, added: ["chat.agent.maxRequests"] } } }));
+    expect(check('{\n  "editor.tabSize": 2\n}\n')).toEqual({
+      pass: true,
+      label: "VS Code agent request cap: the team removed chat.agent.maxRequests from .vscode/settings.json, so AI-DLC leaves it out",
+    });
+    expect(check(null)).toEqual(expect.objectContaining({ pass: false, severity: "warn" }));
+    rmSync(baseline, { force: true });
+    expect(check('{\n  "editor.tabSize": 2\n}\n').pass).toBe(false);
+  });
+
+  test("doctor checks the request cap in the multi-root workspace file too", () => {
+    const copilot = temp("aidlc-t294-workspace-request-cap-");
+    cpSync(join(DIST, "copilot"), copilot, { recursive: true });
+    const file = join(copilot, "aidlc.code-workspace");
+    const check = (text: string) => {
+      writeFileSync(file, text);
+      return vscodeWorkspaceRequestCapDoctorCheck(copilot, ".aidlc");
+    };
+    // No workspace file: the person opens the folder, which the other row checks.
+    expect(vscodeWorkspaceRequestCapDoctorCheck(copilot, ".aidlc")).toBeNull();
+    const workspace = (settings?: unknown) => JSON.stringify({ folders: [{ path: "." }], ...(settings === undefined ? {} : { settings }) });
+    expect(check(workspace({ "chat.agent.maxRequests": 200 }))).toEqual({
+      pass: true,
+      label: "VS Code agent request cap (multi-root workspace): chat.agent.maxRequests is 200 in aidlc.code-workspace",
+    });
+    const low = check(workspace({ "chat.agent.maxRequests": 75 }));
+    expect(low).toEqual(expect.objectContaining({ pass: false, severity: "warn" }));
+    expect(low?.fix).toContain('raise "chat.agent.maxRequests" in aidlc.code-workspace to 100 or more');
+    // A file written before this release: workspace-sync adds the key.
+    const older = check(workspace());
+    expect(older).toEqual(expect.objectContaining({ pass: false, severity: "warn" }));
+    expect(older?.fix).toContain("run aidlc system workspace-sync");
+    // A settings object without the key is the team's choice.
+    expect(check(workspace({ "editor.tabSize": 2 }))?.pass).toBe(true);
+    // A settings member that is not an object is broken, never the team's choice.
+    for (const broken of [null, [], "200", true]) {
+      const row = check(JSON.stringify({ folders: [{ path: "." }], settings: broken }));
+      expect(row, JSON.stringify(broken)).toEqual(expect.objectContaining({ pass: false, severity: "warn" }));
+      expect(row?.fix, JSON.stringify(broken)).toContain('make "settings" an object');
+    }
+    expect(check("{ ,, }")?.label).toContain("could not be read as JSONC");
+    // Only a Copilot project gets the row.
+    const claude = temp("aidlc-t294-workspace-request-cap-claude-");
+    cpSync(join(DIST, "claude"), claude, { recursive: true });
+    writeFileSync(join(claude, "aidlc.code-workspace"), workspace());
+    expect(vscodeWorkspaceRequestCapDoctorCheck(claude, ".claude")).toBeNull();
+  });
+
+  test("doctor never fails an optional harness CLI and keeps required CLI warnings", () => {
+    const copilot = temp("aidlc-t294-doctor-copilot-cli-");
+    cpSync(join(DIST, "copilot"), copilot, { recursive: true });
+    const cliRow = (project: string, harnessDir: string, runtime: NonNullable<Parameters<typeof runtimeDoctorChecks>[2]>["runtime"]) => {
+      const row = runtimeDoctorChecks(project, harnessDir, { runtime })
+        .find((check) => check.label.startsWith("Harness CLI:"));
+      if (!row) throw new Error("no Harness CLI row");
+      return row;
+    };
+
+    // VS Code-only install: the stand-in is not the CLI, so it is just absent,
+    // and it is never run.
+    const standInFolder = "/vscode/User/globalStorage/github.copilot-chat/copilotCli";
+    const standIn = cliRow(copilot, ".aidlc", {
+      interactivePath: standInFolder,
+      which: () => `${standInFolder}/copilot`,
+      run: (command) => {
+        if (command.includes("copilot")) throw new Error(`ran ${command}`);
+        return { status: 0, stdout: "/usr/bin:/bin\n" };
+      },
+    });
+    expect(standIn).toEqual(expect.objectContaining({
+      pass: true,
+      label: "Harness CLI: optional copilot is not installed",
+    }));
+    expect(standIn.severity).toBeUndefined();
+    expect(cliRow(copilot, ".aidlc", NO_VERSION)).toEqual(expect.objectContaining({
+      pass: true,
+      label: "Harness CLI: optional copilot is not installed",
+    }));
+    expect(cliRow(copilot, ".aidlc", { which: () => null })).toEqual(expect.objectContaining({
+      pass: true,
+      label: "Harness CLI: optional copilot is not installed",
+    }));
+    // A real but old optional CLI is a warning with a plain fix, never a fail.
+    const old = cliRow(copilot, ".aidlc", printsVersion("1.0.60\n"));
+    expect(old).toEqual(expect.objectContaining({
+      pass: false,
+      severity: "warn",
+      label: "Harness CLI: optional copilot 1.0.60 is below 1.0.74",
+      fix: "Install @github/copilot 1.0.74 or later for CLI use; VS Code-only installs may omit it.",
+    }));
+    expect(cliRow(copilot, ".aidlc", printsVersion("1.0.80\n"))).toEqual(expect.objectContaining({
+      pass: true,
+      label: `Harness CLI: copilot 1.0.80 at ${NO_VERSION.which()}`,
+    }));
+
+    // Kiro CLI is optional on the kiro-ide row too: absent passes, older than
+    // the floor warns.
+    const kiroIde = temp("aidlc-t294-doctor-kiro-ide-cli-");
+    cpSync(join(DIST, "kiro-ide"), kiroIde, { recursive: true });
+    expect(cliRow(kiroIde, ".kiro", { which: () => null })).toEqual(expect.objectContaining({
+      pass: true,
+      label: "Harness CLI: optional kiro-cli is not installed",
+    }));
+    expect(cliRow(kiroIde, ".kiro", {
+      which: () => "/opt/kiro/bin/kiro-cli",
+      run: (command) => command.includes("kiro-cli")
+        ? { status: 0, stdout: "kiro-cli 2.24.0\n" }
+        : { status: 0, stdout: "/usr/bin:/bin\n" },
+    })).toEqual(expect.objectContaining({
+      pass: false,
+      severity: "warn",
+      label: "Harness CLI: optional kiro-cli kiro-cli 2.24.0 is below 2.24.1",
+    }));
+
+    // Required CLIs are unchanged: missing or too old is a warning.
+    const codex = temp("aidlc-t294-doctor-codex-cli-");
+    cpSync(join(DIST, "codex"), codex, { recursive: true });
+    expect(cliRow(codex, ".codex", printsVersion("codex-cli 0.144.0\n"))).toEqual(expect.objectContaining({
+      pass: false,
+      severity: "warn",
+      label: "Harness CLI: codex codex-cli 0.144.0 is below 0.145.0",
+    }));
+    expect(cliRow(codex, ".codex", { which: () => null })).toEqual(expect.objectContaining({
+      pass: false,
+      severity: "warn",
+      label: "Harness CLI: codex is missing",
     }));
   });
 });
@@ -575,8 +1153,8 @@ describe("t294 provider diagnostics", () => {
     expect(result.regions).toEqual(["ap-southeast-2", "eu-west-1", "us-east-1"]);
   });
 
-  test("shared provider writers apply only the selected harness surfaces", () => {
-    const record = reconcileProviderActions({
+  describe("shared provider writers apply only the selected harness surfaces", () => {
+    const record = () => reconcileProviderActions({
       schemaVersion: 1,
       provider: "amazon-bedrock",
       region: "eu-west-1",
@@ -585,84 +1163,89 @@ describe("t294 provider diagnostics", () => {
       pendingActions: [
         { id: "bedrock-model-access", status: "done" },
       ],
-    }, "claude");
+    }, "claude", true);
 
-    const claude = temp("aidlc-t294-provider-claude-");
-    cpSync(join(DIST, "claude"), claude, { recursive: true });
-    applyConfigDiagnosticRecords(
-      claude,
-      ".claude",
-      "claude",
-      emptyRecords(record),
-    );
-    const settings = JSON.parse(
-      readFileSync(join(claude, ".claude", "settings.json"), "utf-8"),
-    ) as { env: Record<string, string> };
-    expect(settings.env.AWS_REGION).toBe("eu-west-1");
-    expect(settings.env.AWS_PROFILE).toBe("dev");
-    const claudeMcp = readFileSync(join(claude, ".mcp.json"), "utf-8");
-    expect(claudeMcp).toContain("https://aws-mcp.eu-west-1.api.aws/mcp");
-    expect(claudeMcp).toContain("AWS_REGION=eu-west-1");
-
-    const codex = temp("aidlc-t294-provider-codex-");
-    cpSync(join(DIST, "codex"), codex, { recursive: true });
-    const codexBefore = readFileSync(join(codex, ".codex", "config.toml"), "utf-8");
-    applyConfigDiagnosticRecords(
-      codex,
-      ".codex",
-      "codex",
-      emptyRecords(record),
-    );
-    const codexAfter = readFileSync(join(codex, ".codex", "config.toml"), "utf-8");
-    expect(codexAfter).toContain('profile = "dev"');
-    expect(codexAfter).toContain('region = "eu-west-1"');
-    expect(codexAfter.match(/^model\s*=.*$/m)?.[0]).toBe(
-      codexBefore.match(/^model\s*=.*$/m)?.[0],
-    );
-    expect(codexAfter.match(/^model_reasoning_effort\s*=.*$/m)?.[0]).toBe(
-      codexBefore.match(/^model_reasoning_effort\s*=.*$/m)?.[0],
-    );
-
-    const opencode = temp("aidlc-t294-provider-opencode-");
-    cpSync(join(DIST, "opencode"), opencode, { recursive: true });
-    applyConfigDiagnosticRecords(
-      opencode,
-      ".aidlc",
-      "opencode",
-      emptyRecords(record),
-    );
-    const opencodeJson = JSON.parse(
-      readFileSync(join(opencode, "opencode.json"), "utf-8"),
-    ) as {
-      provider: {
-        "amazon-bedrock": { options: { region: string; profile: string } };
-      };
-    };
-    expect(opencodeJson.provider["amazon-bedrock"].options).toEqual({
-      region: "eu-west-1",
-      profile: "dev",
+    // Each surface is independent. Keep its real distribution and assertions,
+    // but do not charge eleven tree copies to one default test deadline.
+    test("Claude writes provider settings and MCP region", () => {
+      const claude = temp("aidlc-t294-provider-claude-");
+      cpSync(join(DIST, "claude"), claude, { recursive: true });
+      applyConfigDiagnosticRecords(
+        claude,
+        ".claude",
+        "claude",
+        emptyRecords(record()),
+      );
+      const settings = JSON.parse(
+        readFileSync(join(claude, ".claude", "settings.json"), "utf-8"),
+      ) as { env: Record<string, string> };
+      expect(settings.env.CLAUDE_CODE_USE_BEDROCK).toBe("1");
+      expect(settings.env.AWS_REGION).toBe("eu-west-1");
+      expect(settings.env.AWS_PROFILE).toBe("dev");
+      const claudeMcp = readFileSync(join(claude, ".mcp.json"), "utf-8");
+      expect(claudeMcp).toContain("https://aws-mcp.eu-west-1.api.aws/mcp");
+      expect(claudeMcp).toContain("AWS_REGION=eu-west-1");
     });
 
-    const decline = temp("aidlc-t294-provider-opencode-decline-");
-    cpSync(join(DIST, "opencode"), decline, { recursive: true });
-    const before = readFileSync(join(decline, "opencode.json"), "utf-8");
-    applyConfigDiagnosticRecords(
-      decline,
-      ".aidlc",
-      "opencode",
-      emptyRecords({ ...record, opencodeDefault: false }),
-    );
-    expect(readFileSync(join(decline, "opencode.json"), "utf-8")).toBe(before);
+    test("Codex leaves its project configuration unchanged", () => {
+      const codex = temp("aidlc-t294-provider-codex-");
+      cpSync(join(DIST, "codex"), codex, { recursive: true });
+      const codexBefore = readFileSync(join(codex, ".codex", "config.toml"), "utf-8");
+      applyConfigDiagnosticRecords(
+        codex,
+        ".codex",
+        "codex",
+        emptyRecords(record()),
+      );
+      const codexAfter = readFileSync(join(codex, ".codex", "config.toml"), "utf-8");
+      expect(codexAfter).toBe(codexBefore);
+      expect(codexAfter).not.toContain("[model_providers.amazon-bedrock");
+    });
+
+    test("OpenCode applies an accepted default provider", () => {
+      const opencode = temp("aidlc-t294-provider-opencode-");
+      cpSync(join(DIST, "opencode"), opencode, { recursive: true });
+      applyConfigDiagnosticRecords(
+        opencode,
+        ".aidlc",
+        "opencode",
+        emptyRecords(record()),
+      );
+      const opencodeJson = JSON.parse(
+        readFileSync(join(opencode, "opencode.json"), "utf-8"),
+      ) as {
+        provider: {
+          "amazon-bedrock": { options: { region: string; profile: string } };
+        };
+      };
+      expect(opencodeJson.provider["amazon-bedrock"].options).toEqual({
+        region: "eu-west-1",
+        profile: "dev",
+      });
+    });
+
+    test("OpenCode leaves a declined default provider unchanged", () => {
+      const decline = temp("aidlc-t294-provider-opencode-decline-");
+      cpSync(join(DIST, "opencode"), decline, { recursive: true });
+      const before = readFileSync(join(decline, "opencode.json"), "utf-8");
+      applyConfigDiagnosticRecords(
+        decline,
+        ".aidlc",
+        "opencode",
+        emptyRecords({ ...record(), opencodeDefault: false }),
+      );
+      expect(readFileSync(join(decline, "opencode.json"), "utf-8")).toBe(before);
+    });
 
     // Owned harnesses: no record writes anything, Kiro CLI included. The aws-mcp
     // region there is carried from the project's own file during staging, and a
     // record's region never reaches it, even when the file says something else.
-    for (const [harness, dir, file] of [
+    test.each([
       ["kiro", ".kiro", "settings/mcp.json"],
       ["kiro-ide", ".kiro", "tools/data/harness.json"],
       ["copilot", ".aidlc", "tools/data/harness.json"],
       ["cursor", ".cursor", "cli.json"],
-    ] as const) {
+    ] as const)("%s leaves its owned surface unchanged", (harness, dir, file) => {
       const root = temp(`aidlc-t294-provider-${harness}-`);
       cpSync(join(DIST, harness), root, { recursive: true });
       const path = join(root, dir, file);
@@ -671,34 +1254,233 @@ describe("t294 provider diagnostics", () => {
         root,
         dir,
         harness,
-        emptyRecords(record),
+        emptyRecords(record()),
       );
       expect(readFileSync(path), harness).toEqual(original);
-    }
+    });
 
     // Staging preservation: the project's aws-mcp endpoint and metadata replace
     // the release values in the staged copy, argument by argument, and a project
     // without that entry leaves the staged bytes alone.
-    const kiroProject = temp("aidlc-t294-kiro-mcp-project-");
-    cpSync(join(DIST, "kiro"), kiroProject, { recursive: true });
-    const projectMcpPath = join(kiroProject, ".kiro", "settings", "mcp.json");
-    writeFileSync(projectMcpPath, withMcpRegion(readFileSync(projectMcpPath, "utf-8"), "ap-southeast-2"));
-    const kiroStaged = temp("aidlc-t294-kiro-mcp-staged-");
-    cpSync(join(DIST, "kiro"), kiroStaged, { recursive: true });
-    preserveKiroMcpRegion(kiroProject, kiroStaged, ".kiro");
-    const stagedMcp = readFileSync(join(kiroStaged, ".kiro", "settings", "mcp.json"), "utf-8");
-    expect(stagedMcp).toContain("https://aws-mcp.ap-southeast-2.api.aws/mcp");
-    expect(stagedMcp).toContain("AWS_REGION=ap-southeast-2");
-    expect(stagedMcp).not.toContain("us-east-1");
-    expect(stagedMcp).toBe(readFileSync(projectMcpPath, "utf-8"));
-    const emptyProject = temp("aidlc-t294-kiro-mcp-empty-");
-    mkdirSync(join(emptyProject, ".kiro", "settings"), { recursive: true });
-    writeFileSync(join(emptyProject, ".kiro", "settings", "mcp.json"), "{}\n");
-    const untouched = temp("aidlc-t294-kiro-mcp-untouched-");
-    cpSync(join(DIST, "kiro"), untouched, { recursive: true });
-    const before2 = readFileSync(join(untouched, ".kiro", "settings", "mcp.json"), "utf-8");
-    preserveKiroMcpRegion(emptyProject, untouched, ".kiro");
-    expect(readFileSync(join(untouched, ".kiro", "settings", "mcp.json"), "utf-8")).toBe(before2);
+    test("Kiro staging preserves the project's MCP region and metadata", () => {
+      const kiroProject = temp("aidlc-t294-kiro-mcp-project-");
+      cpSync(join(DIST, "kiro"), kiroProject, { recursive: true });
+      const projectMcpPath = join(kiroProject, ".kiro", "settings", "mcp.json");
+      writeFileSync(projectMcpPath, withMcpRegion(readFileSync(projectMcpPath, "utf-8"), "ap-southeast-2"));
+      const kiroStaged = temp("aidlc-t294-kiro-mcp-staged-");
+      cpSync(join(DIST, "kiro"), kiroStaged, { recursive: true });
+      preserveKiroMcpRegion(kiroProject, kiroStaged, ".kiro");
+      const stagedMcp = readFileSync(join(kiroStaged, ".kiro", "settings", "mcp.json"), "utf-8");
+      expect(stagedMcp).toContain("https://aws-mcp.ap-southeast-2.api.aws/mcp");
+      expect(stagedMcp).toContain("AWS_REGION=ap-southeast-2");
+      expect(stagedMcp).not.toContain("us-east-1");
+      expect(stagedMcp).toBe(readFileSync(projectMcpPath, "utf-8"));
+    });
+    test("Kiro staging leaves an absent project MCP entry alone", () => {
+      const emptyProject = temp("aidlc-t294-kiro-mcp-empty-");
+      mkdirSync(join(emptyProject, ".kiro", "settings"), { recursive: true });
+      writeFileSync(join(emptyProject, ".kiro", "settings", "mcp.json"), "{}\n");
+      const untouched = temp("aidlc-t294-kiro-mcp-untouched-");
+      cpSync(join(DIST, "kiro"), untouched, { recursive: true });
+      const before2 = readFileSync(join(untouched, ".kiro", "settings", "mcp.json"), "utf-8");
+      preserveKiroMcpRegion(emptyProject, untouched, ".kiro");
+      expect(readFileSync(join(untouched, ".kiro", "settings", "mcp.json"), "utf-8")).toBe(before2);
+    });
+  });
+
+  test("current detects and removes stale project Bedrock overrides", () => {
+    const record: ProvidersRecord = {
+      schemaVersion: 1,
+      provider: "current",
+    };
+
+    const claude = temp("aidlc-t294-other-claude-");
+    cpSync(join(DIST, "claude"), claude, { recursive: true });
+    const claudePath = join(claude, ".claude", "settings.json");
+    const claudeSettings = JSON.parse(readFileSync(claudePath, "utf-8"));
+    claudeSettings.env.CLAUDE_CODE_USE_BEDROCK = "1";
+    claudeSettings.env.AWS_REGION = "us-east-1";
+    claudeSettings.env.ANTHROPIC_DEFAULT_FABLE_MODEL =
+      "global.anthropic.claude-fable-5[1m]";
+    claudeSettings.env.ANTHROPIC_DEFAULT_OPUS_MODEL =
+      "global.anthropic.claude-opus-4-8[1m]";
+    claudeSettings.env.ANTHROPIC_DEFAULT_SONNET_MODEL =
+      "global.anthropic.claude-sonnet-4-6[1m]";
+    claudeSettings.env.ANTHROPIC_DEFAULT_HAIKU_MODEL =
+      "global.anthropic.claude-haiku-4-5-20251001-v1:0";
+    writeFileSync(claudePath, `${JSON.stringify(claudeSettings, null, 2)}\n`);
+    expect(providerIssues(claude, ".claude", "claude", record)
+      .map((issue) => issue.id)).toContain("provider-claude-project-override");
+    applyConfigDiagnosticRecords(
+      claude,
+      ".claude",
+      "claude",
+      emptyRecords(record),
+    );
+    expect(providerIssues(claude, ".claude", "claude", record)).toEqual([]);
+
+    const userClaude = temp("aidlc-t294-user-claude-");
+    cpSync(join(DIST, "claude"), userClaude, { recursive: true });
+    const userClaudePath = join(userClaude, ".claude", "settings.json");
+    const userClaudeSettings = JSON.parse(readFileSync(userClaudePath, "utf-8"));
+    userClaudeSettings.env.CLAUDE_CODE_USE_BEDROCK = "1";
+    userClaudeSettings.env.AWS_REGION = "eu-west-1";
+    userClaudeSettings.env.AWS_PROFILE = "team";
+    userClaudeSettings.env.ANTHROPIC_DEFAULT_OPUS_MODEL = "team.opus";
+    writeFileSync(userClaudePath, `${JSON.stringify(userClaudeSettings, null, 2)}\n`);
+    applyConfigDiagnosticRecords(
+      userClaude,
+      ".claude",
+      "claude",
+      emptyRecords(record),
+    );
+    expect(JSON.parse(readFileSync(userClaudePath, "utf-8")).env)
+      .toEqual(expect.objectContaining({
+        CLAUDE_CODE_USE_BEDROCK: "1",
+        AWS_REGION: "eu-west-1",
+        AWS_PROFILE: "team",
+        ANTHROPIC_DEFAULT_OPUS_MODEL: "team.opus",
+      }));
+
+    const codex = temp("aidlc-t294-other-codex-");
+    cpSync(join(DIST, "codex"), codex, { recursive: true });
+    const codexPath = join(codex, ".codex", "config.toml");
+    const legacyFrameworkConfig = readFileSync(codexPath, "utf-8").replace(
+      /^[\t ]*developer_instructions[\t ]*=[\t ]*'''[\s\S]*?'''[\t ]*(?:\r?\n|$)/m,
+      "",
+    );
+    writeFileSync(
+      codexPath,
+      withLegacyCodexProviderBlock(legacyFrameworkConfig, `# D-9: Amazon Bedrock is the shipped default provider (web_search is\n` +
+        `# unavailable there; the market-research stage degrades gracefully). For\n` +
+        `# OpenAI-auth setups, comment out model_provider and the [model_providers]\n` +
+        `# block.\n` +
+        `model = "openai.gpt-5.5"\nmodel_provider = "amazon-bedrock"\n` +
+        `model_context_window = 1000000\nmodel_reasoning_effort = "high"\n\n` +
+        `[model_providers.amazon-bedrock.aws]\nprofile = "default"\nregion = "us-east-1"\n\n`),
+    );
+    expect(providerIssues(codex, ".codex", "codex", record)
+      .map((issue) => issue.id)).toContain("provider-codex-project-override");
+    applyConfigDiagnosticRecords(
+      codex,
+      ".codex",
+      "codex",
+      emptyRecords(record),
+    );
+    expect(providerIssues(codex, ".codex", "codex", record)).toEqual([]);
+    expect(parseToml(readFileSync(codexPath, "utf-8")).sandbox_mode).toBe("workspace-write");
+
+    const customCodex = temp("aidlc-t294-custom-codex-");
+    cpSync(join(DIST, "codex"), customCodex, { recursive: true });
+    const customCodexPath = join(customCodex, ".codex", "config.toml");
+    const customConfig = withLegacyCodexProviderBlock(
+      readFileSync(customCodexPath, "utf-8"),
+      `model = "gpt-5.5"\nmodel_provider = "amazon-bedrock"\n` +
+      `model_context_window = 262144\nmodel_reasoning_effort = "low"\n\n` +
+        `[model_providers.amazon-bedrock.aws]\nprofile = "dev"\nregion = "eu-west-1"\n\n`,
+    );
+    writeFileSync(customCodexPath, customConfig);
+    expect(providerIssues(customCodex, ".codex", "codex", record)).toEqual([
+      expect.objectContaining({
+        id: "provider-codex-project-override",
+        severity: "warn",
+      }),
+    ]);
+    applyConfigDiagnosticRecords(
+      customCodex,
+      ".codex",
+      "codex",
+      emptyRecords(record),
+    );
+    expect(readFileSync(customCodexPath, "utf-8")).toBe(customConfig);
+
+    const opencode = temp("aidlc-t294-other-opencode-");
+    cpSync(join(DIST, "opencode"), opencode, { recursive: true });
+    const opencodePath = join(opencode, "opencode.json");
+    const opencodeSettings = JSON.parse(readFileSync(opencodePath, "utf-8"));
+    opencodeSettings.provider = {
+      "amazon-bedrock": {
+        options: { region: "us-east-1" },
+      },
+    };
+    writeFileSync(
+      opencodePath,
+      `${JSON.stringify(opencodeSettings, null, 2)}\n`,
+    );
+    applyConfigDiagnosticRecords(
+      opencode,
+      ".aidlc",
+      "opencode",
+      emptyRecords(record),
+      {
+        schemaVersion: 1,
+        provider: "amazon-bedrock",
+        region: "us-east-1",
+        opencodeDefault: true,
+      },
+    );
+    expect(providerIssues(opencode, ".aidlc", "opencode", record)).toEqual([]);
+  });
+
+  test("an answer recorded while a workflow runs is done, names its file, and says how to undo it", () => {
+    const project = install("claude");
+    const dirName = "active-answers";
+    const intents = join(project, "aidlc", "spaces", "default", "intents");
+    mkdirSync(join(intents, dirName), { recursive: true });
+    writeFileSync(
+      join(intents, "intents.json"),
+      `${JSON.stringify([{
+        uuid: "deadbeef-0000-4000-8000-000000000294",
+        slug: dirName,
+        dirName,
+        scope: "feature",
+        status: "in-flight",
+      }], null, 2)}\n`,
+    );
+    writeFileSync(
+      join(intents, dirName, "aidlc-state.md"),
+      "# AI-DLC State Tracking\n\n## Current Status\n- **Status**: Running\n",
+    );
+    const answer = (...args: string[]) => {
+      const result = run(["config", ...args, "--project-dir", project, "--yes"], project, runtimeEnv());
+      expect(result.status, result.stdout + result.stderr).toBe(0);
+      expect(result.stdout).not.toContain("refusing to refresh");
+      return result.stdout;
+    };
+    const file = ".claude/tools/data/harness.json";
+    const acknowledged = answer("trust", "--acknowledge");
+    expect(acknowledged).toContain(`Recorded the trust answer in ${file}. To undo: `);
+    expect(acknowledged).toContain("config trust --reset --yes");
+    const reset = answer("trust", "--reset");
+    expect(reset).toContain(`Cleared the trust answer in ${file}. To undo: `);
+    expect(reset).toContain("config trust --acknowledge --yes");
+    // --acknowledge records a review, so a record without one gets no undo.
+    const dataFile = join(project, ".claude", "tools", "data", "harness.json");
+    for (const trust of [{ schemaVersion: 1, reviewed: false }, { schemaVersion: 1 }]) {
+      writeFileSync(dataFile, `${JSON.stringify({ ...JSON.parse(readFileSync(dataFile, "utf-8")), trust }, null, 2)}\n`);
+      const unreviewed = answer("trust", "--reset");
+      expect(unreviewed).toContain(`Cleared the trust answer in ${file}.`);
+      expect(unreviewed).not.toContain("--acknowledge");
+    }
+    const provider = answer("providers", "--provider", "current");
+    expect(provider).toContain(`Recorded the providers answer in ${file}. To undo: `);
+    expect(provider).toContain("config providers --reset --yes");
+    // An answer does not change how the open work runs, so nothing claims it does.
+    expect(acknowledged + reset + provider).not.toContain("picks this up");
+    // The undo brings back the acknowledgement and the actions marked done too.
+    const dataPath = join(project, ".claude", "tools", "data", "harness.json");
+    const data = JSON.parse(readFileSync(dataPath, "utf-8")) as Record<string, unknown>;
+    data.providers = {
+      schemaVersion: 1,
+      provider: "amazon-bedrock",
+      region: "us-east-1",
+      acknowledged: true,
+      pendingActions: [{ id: "bedrock-model-access", status: "done" }],
+    };
+    writeFileSync(dataPath, `${JSON.stringify(data, null, 2)}\n`);
+    const back = answer("providers", "--provider", "current");
+    expect(back).toContain(`Changed the providers answer in ${file}. To undo: `);
+    expect(back).toContain("config providers --provider amazon-bedrock --region us-east-1 --acknowledge --mark-done bedrock-model-access --yes");
   });
 
   test("pending actions drive check and doctor until marked done", () => {
@@ -708,11 +1490,21 @@ describe("t294 provider diagnostics", () => {
       schemaVersion: 1,
       provider: "amazon-bedrock",
       region: "us-east-1",
-    }, "claude");
+    }, "claude", true);
     const dataPath = join(project, ".claude", "tools", "data", "harness.json");
     const data = JSON.parse(readFileSync(dataPath, "utf-8"));
     data.providers = record;
     writeFileSync(dataPath, `${JSON.stringify(data, null, 2)}\n`);
+    applyConfigDiagnosticRecords(
+      project,
+      ".claude",
+      "claude",
+      emptyRecords(record),
+    );
+    const accessKey = process.env.AWS_ACCESS_KEY_ID;
+    const secretKey = process.env.AWS_SECRET_ACCESS_KEY;
+    process.env.AWS_ACCESS_KEY_ID = "test-access";
+    process.env.AWS_SECRET_ACCESS_KEY = "test-secret";
     expect(providerDoctorCheck(project).pass).toBe(false);
     expect(
       providerIssues(
@@ -740,10 +1532,200 @@ describe("t294 provider diagnostics", () => {
     data.providers = record;
     writeFileSync(dataPath, `${JSON.stringify(data, null, 2)}\n`);
     expect(providerDoctorCheck(project).pass).toBe(true);
+    if (accessKey === undefined) delete process.env.AWS_ACCESS_KEY_ID;
+    else process.env.AWS_ACCESS_KEY_ID = accessKey;
+    if (secretKey === undefined) delete process.env.AWS_SECRET_ACCESS_KEY;
+    else process.env.AWS_SECRET_ACCESS_KEY = secretKey;
   });
 });
 
 describe("t294 trust diagnostics", () => {
+  test("Codex doctor hashes configured seconds exactly and retains the omitted-timeout legacy identity", async () => {
+    const project = temp("aidlc-t294-trust-timeouts-");
+    cpSync(join(DIST_RELEASE, "codex"), project, { recursive: true });
+    const harnessRoot = join(project, ".codex");
+    const hooksPath = join(harnessRoot, "hooks.json");
+    const seedPath = join(harnessRoot, "trust-seed.toml");
+    const machine = temp("aidlc-t294-trust-timeouts-machine-");
+    const overrides = {
+      AIDLC_HARNESS_DIR: ".codex",
+      AIDLC_HARNESS_NAME: "codex",
+      AIDLC_RUNTIME_HARNESS_ROOT: harnessRoot,
+      AIDLC_RUNTIME_ROOT: DIST_RELEASE,
+      AIDLC_INSTALL_ROOT: machine,
+      AIDLC_BIN_DIR: join(machine, "bin"),
+      AIDLC_OFFLINE: "1",
+      CODEX_HOME: machine,
+      ...hookPathEnv(),
+    };
+    const previous = new Map(Object.keys(overrides).map((key) => [key, process.env[key]]));
+    // Select the compiled-install doctor row without compiling a fixture
+    // binary. The real doctor still reads the hook file and computes its hash.
+    const compiled = spyOn(runtimePaths, "isCompiledExecutable").mockReturnValue(true);
+    const writeHook = (timeout: unknown): void => {
+      writeFileSync(hooksPath, JSON.stringify({
+        hooks: { SessionStart: [{ hooks: [{
+          type: "command",
+          command: "aidlc engine adapter codex session-start",
+          ...(timeout === undefined ? {} : { timeout }),
+        }] }] },
+      }));
+    };
+    const nativeTrust = async () => {
+      const report = await collectDoctorReport(project);
+      const rows = report.checks.filter((check) => check.label.startsWith("Native command trust"));
+      expect(rows).toHaveLength(1);
+      return rows[0];
+    };
+    // Fixed canonical JSON hashes are independent of the emitter and doctor
+    // implementations. Each differs only at the timeout field in seconds.
+    const identities = [
+      { timeout: undefined, hash: "4e23fffc05a5ef77e420b7d09b59be712919558a2a532c689d78f639731788db" },
+      { timeout: 1800, hash: "0ba8b12bad0f77c2bf9a996ec8e533c53a6e451fe37c31de2626e27514e35e63" },
+      { timeout: 3600, hash: "460202569a039241af1d9ca9fa8f0763ee457222429d505a9c0bfff770245168" },
+      { timeout: 37, hash: "1e1b151916107c841414863a260ca84732b1fbe38828d37644e4d04649be904e" },
+      { timeout: 0, hash: "d4e9789fbe4ab8b2124b1c5d2534a8d551edd9745a1e74c8823f2e2cee17463d" },
+    ];
+    try {
+      Object.assign(process.env, overrides);
+      for (const { timeout, hash } of identities) {
+        writeHook(timeout);
+        const seed = `[hooks.state."fixture:session_start:0:0"]\ntrusted_hash = "sha256:${hash}"\n`;
+        writeFileSync(seedPath, seed);
+        const trusted = await nativeTrust();
+        expect(trusted.pass, `timeout=${timeout}: ${trusted.label}`).toBe(true);
+        // A timeout-only edit invalidates trust. Reusing the legacy default,
+        // silently normalizing a user value, or hashing milliseconds fails here.
+        writeHook((timeout ?? 600) + 1);
+        const changed = await nativeTrust();
+        expect(changed.pass, `timeout=${timeout}: ${changed.label}`).toBe(false);
+        expect(changed.label).toContain("native permission/trust missing");
+        expect(readFileSync(seedPath, "utf-8")).toBe(seed);
+      }
+      // Invalid shapes must not acquire trust by falling back to 600 or by
+      // coercing the supplied value to a number.
+      const seed = identities.map(({ hash }, index) =>
+        `[hooks.state."fixture:${index}"]\ntrusted_hash = "sha256:${hash}"\n`
+      ).join("\n");
+      writeFileSync(seedPath, seed);
+      for (const timeout of [null, "1800", -1, 0.5, Number.MAX_SAFE_INTEGER + 1]) {
+        writeHook(timeout);
+        const invalid = await nativeTrust();
+        expect(invalid.pass, `timeout=${JSON.stringify(timeout)}: ${invalid.label}`).toBe(false);
+        expect(invalid.label).toContain("native permission/trust missing");
+      }
+      expect(readFileSync(seedPath, "utf-8")).toBe(seed);
+    } finally {
+      compiled.mockRestore();
+      for (const [key, value] of previous) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    }
+  });
+
+  test("Codex doctor hashes a hook group's matcher, as Codex does", async () => {
+    const project = temp("aidlc-t294-trust-matcher-");
+    cpSync(join(DIST_RELEASE, "codex"), project, { recursive: true });
+    const harnessRoot = join(project, ".codex");
+    const hooksPath = join(harnessRoot, "hooks.json");
+    const seedPath = join(harnessRoot, "trust-seed.toml");
+    const machine = temp("aidlc-t294-trust-matcher-machine-");
+    const overrides = {
+      AIDLC_HARNESS_DIR: ".codex",
+      AIDLC_HARNESS_NAME: "codex",
+      AIDLC_RUNTIME_HARNESS_ROOT: harnessRoot,
+      AIDLC_RUNTIME_ROOT: DIST_RELEASE,
+      AIDLC_INSTALL_ROOT: machine,
+      AIDLC_BIN_DIR: join(machine, "bin"),
+      AIDLC_OFFLINE: "1",
+      CODEX_HOME: machine,
+      ...hookPathEnv(),
+    };
+    const previous = new Map(Object.keys(overrides).map((key) => [key, process.env[key]]));
+    const compiled = spyOn(runtimePaths, "isCompiledExecutable").mockReturnValue(true);
+    const nativeTrust = async () => {
+      const report = await collectDoctorReport(project);
+      const rows = report.checks.filter((check) => check.label.startsWith("Native command trust"));
+      expect(rows).toHaveLength(1);
+      return rows[0];
+    };
+    try {
+      Object.assign(process.env, overrides);
+      // The shipped seed and hooks agree, matched groups included.
+      const shipped = await nativeTrust();
+      expect(shipped.pass, shipped.label).toBe(true);
+      writeFileSync(hooksPath, JSON.stringify({
+        hooks: { PreToolUse: [{ matcher: "Bash", hooks: [{
+          type: "command",
+          command: "aidlc engine adapter codex bind-bash-session",
+          timeout: 1800,
+        }] }] },
+      }));
+      // Fixed canonical JSON hashes, with and without the "Bash" matcher.
+      const seedFor = (hash: string) =>
+        `[hooks.state."fixture:pre_tool_use:0:0"]\ntrusted_hash = "sha256:${hash}"\n`;
+      writeFileSync(seedPath, seedFor("300611f50500fcc20cc68c0d72dfe8aab2804e596f333f271ea170570a876d1e"));
+      const withMatcher = await nativeTrust();
+      expect(withMatcher.pass, withMatcher.label).toBe(true);
+      writeFileSync(seedPath, seedFor("86e3fee54b13fecc85ee6d26c95d0f7d5cb72166070e2af57f274d2e36c4cdca"));
+      const withoutMatcher = await nativeTrust();
+      expect(withoutMatcher.pass, withoutMatcher.label).toBe(false);
+      expect(withoutMatcher.label).toContain("native permission/trust missing");
+    } finally {
+      compiled.mockRestore();
+      for (const [key, value] of previous) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    }
+  });
+
+  test("Kiro native trust reads the conductor's grant, not a persona's", async () => {
+    const project = temp("aidlc-t294-trust-kiro-conductor-");
+    cpSync(join(DIST_RELEASE, "kiro-ide"), project, { recursive: true });
+    const harnessRoot = join(project, ".kiro");
+    const machine = temp("aidlc-t294-trust-kiro-conductor-machine-");
+    const overrides = {
+      AIDLC_HARNESS_DIR: ".kiro",
+      AIDLC_HARNESS_NAME: "kiro-ide",
+      AIDLC_RUNTIME_HARNESS_ROOT: harnessRoot,
+      AIDLC_RUNTIME_ROOT: DIST_RELEASE,
+      AIDLC_INSTALL_ROOT: machine,
+      AIDLC_BIN_DIR: join(machine, "bin"),
+      AIDLC_OFFLINE: "1",
+      ...hookPathEnv(),
+    };
+    const previous = new Map(Object.keys(overrides).map((key) => [key, process.env[key]]));
+    const compiled = spyOn(runtimePaths, "isCompiledExecutable").mockReturnValue(true);
+    const nativeTrust = async () => {
+      const report = await collectDoctorReport(project);
+      const rows = report.checks.filter((check) => check.label.startsWith("Native command trust"));
+      expect(rows).toHaveLength(1);
+      return rows[0];
+    };
+    try {
+      Object.assign(process.env, overrides);
+      const shipped = await nativeTrust();
+      expect(shipped.pass, shipped.label).toBe(true);
+      const conductor = join(harnessRoot, "agents", "aidlc.md");
+      const grant = `        - "aidlc engine *"\n`;
+      expect(readFileSync(conductor, "utf-8")).toContain(grant);
+      expect(readFileSync(join(harnessRoot, "agents", "aidlc-developer-agent.md"), "utf-8"))
+        .toContain(grant);
+      writeFileSync(conductor, readFileSync(conductor, "utf-8").replace(grant, ""));
+      const missing = await nativeTrust();
+      expect(missing.pass, missing.label).toBe(false);
+      expect(missing.label).toContain("native permission/trust missing");
+    } finally {
+      compiled.mockRestore();
+      for (const [key, value] of previous) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    }
+  });
+
   test("Codex detects complete and missing user trust without changing the seed", () => {
     const project = temp("aidlc-t294-trust-codex-");
     cpSync(join(DIST, "codex"), project, { recursive: true });
@@ -770,20 +1752,160 @@ describe("t294 trust diagnostics", () => {
       .toBe(seed);
   });
 
-  test("Kiro IDE trustedCommands and required sibling directories are verified", () => {
+  test("Codex counts the trust Codex itself writes after Trust all as complete", () => {
+    const project = temp("aidlc-t294-trust-codex-all-");
+    cpSync(join(DIST, "codex"), project, { recursive: true });
+    const home = temp("aidlc-t294-codex-all-home-");
+    // Codex writes one entry per hook in the hooks.json it reads, hashed over
+    // the event, the group's matcher when it has one, and the hook. Counting
+    // against a seed that left the matcher out reported 6 of 15 missing here.
+    const wiring = JSON.parse(readFileSync(join(project, ".codex", "hooks.json"), "utf-8")) as {
+      hooks: Record<string, Array<{ matcher?: string; hooks: Array<{ command: string; timeout: number }> }>>;
+    };
+    const sorted = (value: unknown): unknown =>
+      Array.isArray(value) ? value.map(sorted)
+      : value !== null && typeof value === "object"
+        ? Object.fromEntries(Object.keys(value).sort().map((key) => [key, sorted((value as Record<string, unknown>)[key])]))
+        : value;
+    const hooksPath = `${project.replaceAll("\\", "/")}/.codex/hooks.json`;
+    const tables = Object.entries(wiring.hooks).flatMap(([event, groups]) => {
+      const name = event.replace(/[A-Z]/g, (c, i) => `${i ? "_" : ""}${c.toLowerCase()}`);
+      return groups.map((group, index) => {
+        const identity = {
+          event_name: name,
+          ...(group.matcher === undefined ? {} : { matcher: group.matcher }),
+          hooks: [{ async: false, command: group.hooks[0].command, timeout: group.hooks[0].timeout, type: "command" }],
+        };
+        return `[hooks.state.${JSON.stringify(`${hooksPath}:${name}:${index}:0`)}]\n` +
+          `trusted_hash = "${sha256Bytes(JSON.stringify(sorted(identity)))}"\n`;
+      });
+    });
+    expect(Object.values(wiring.hooks).flat().some((group) => group.matcher !== undefined)).toBe(true);
+    writeFileSync(join(home, "config.toml"), tables.join("\n"));
+    expect(codexTrustIssues(project, ".codex", { HOME: home, CODEX_HOME: home })).toEqual([]);
+  });
+
+  test("Copilot config is found in the home the Copilot CLI uses on each platform", () => {
+    const configIn = (dir: string) => join(dir, ".copilot", "config.json");
+    // A Windows desktop process has no HOME; the CLI reads USERPROFILE. The
+    // old lookup read HOME alone and looked for a relative .copilot instead.
+    expect(copilotConfigPath({ USERPROFILE: "C:\\Users\\dev" }, "win32"))
+      .toBe(configIn("C:\\Users\\dev"));
+    // A HOME that is set on Windows is not where the CLI looks either.
+    expect(copilotConfigPath({ HOME: "H:\\", USERPROFILE: "C:\\Users\\dev" }, "win32"))
+      .toBe(configIn("C:\\Users\\dev"));
+    expect(copilotConfigPath({ HOME: "/home/dev", USERPROFILE: "/elsewhere" }, "linux"))
+      .toBe(configIn("/home/dev"));
+    expect(copilotConfigPath({ COPILOT_HOME: "/copilot", HOME: "/home/dev" }, "linux"))
+      .toBe(join("/copilot", "config.json"));
+    expect(copilotConfigPath({ COPILOT_HOME: "D:\\copilot", USERPROFILE: "C:\\Users\\dev" }, "win32"))
+      .toBe(join("D:\\copilot", "config.json"));
+    // The CLI ignores an empty COPILOT_HOME, and with no home variable at all
+    // the lookup still lands in the account's home, never under the cwd.
+    expect(copilotConfigPath({ COPILOT_HOME: "", HOME: "/home/dev" }, "linux"))
+      .toBe(configIn("/home/dev"));
+    expect(copilotConfigPath({}, "win32")).toBe(configIn(homedir()));
+  });
+
+  test("Copilot folder trust matches entries the way the Copilot CLI does", () => {
+    // Windows: case, drive-letter spelling (VS Code says c:\, a terminal C:\),
+    // separator style, and trailing separators never change the folder, and
+    // a trusted parent covers the project. These paths do not exist, so the
+    // comparison is the string rule alone on every host.
+    const app = "C:\\aidlc-t294-copilot-trust\\Work\\App";
+    for (const entry of [
+      app,
+      "c:\\aidlc-t294-copilot-trust\\Work\\App",
+      "C:/aidlc-t294-copilot-trust/Work/App/",
+      "C:\\AIDLC-T294-COPILOT-TRUST\\WORK\\APP\\",
+      "c:/aidlc-t294-copilot-trust/work",
+    ]) {
+      expect(copilotFolderTrusted(app, [entry], "win32"), entry).toBe(true);
+    }
+    expect(copilotFolderTrusted("c:\\aidlc-t294-copilot-trust\\Work\\App", [app], "win32"))
+      .toBe(true);
+    expect(copilotFolderTrusted(`${app}Other`, [app], "win32")).toBe(false);
+    expect(copilotFolderTrusted("C:\\aidlc-t294-copilot-trust\\Work", [app], "win32"))
+      .toBe(false);
+    expect(copilotFolderTrusted(app, ["", 42, null], "win32")).toBe(false);
+    // Linux and macOS: the CLI keeps case, and a backslash is no separator.
+    const posixApp = "/aidlc-t294-copilot-trust/work/App";
+    expect(copilotFolderTrusted(posixApp, [`${posixApp}/`], "linux")).toBe(true);
+    expect(copilotFolderTrusted(posixApp, ["/aidlc-t294-copilot-trust/work"], "linux"))
+      .toBe(true);
+    expect(copilotFolderTrusted(posixApp, ["/aidlc-t294-copilot-trust/work/app"], "linux"))
+      .toBe(false);
+    expect(copilotFolderTrusted(`${posixApp}Other`, [posixApp], "linux")).toBe(false);
+  });
+
+  test("Copilot folder trust resolves links on either side", () => {
+    const root = temp("aidlc-t294-copilot-trust-links-");
+    const app = join(root, "work", "App");
+    mkdirSync(join(app, "sub"), { recursive: true });
+    const link = join(root, "link");
+    symlinkSync(app, link, process.platform === "win32" ? "junction" : "dir");
+    expect(copilotFolderTrusted(link, [app])).toBe(true);
+    expect(copilotFolderTrusted(app, [link])).toBe(true);
+    expect(copilotFolderTrusted(join(link, "sub"), [join(root, "work")])).toBe(true);
+    expect(copilotFolderTrusted(app, [join(root, "gone")])).toBe(false);
+  });
+
+  test("Copilot CLI trust reads the list the CLI reads, and the setup check warns when it misses the folder", () => {
+    expect(copilotTrustedFolderKey({})).toBe("trustedFolders");
+    expect(copilotTrustedFolderKey({ trusted_folders: [] })).toBe("trusted_folders");
+    // With both keys the CLI takes the later one in the file.
+    expect(copilotTrustedFolderKey({ trustedFolders: [], trusted_folders: [] })).toBe("trusted_folders");
+    expect(copilotTrustedFolderKey({ trusted_folders: [], trustedFolders: [] })).toBe("trustedFolders");
+
+    const project = temp("aidlc-t294-copilot-cli-trust-");
+    const home = temp("aidlc-t294-copilot-cli-home-");
+    const env = { COPILOT_HOME: home };
+    const configPath = join(home, "config.json");
+    expect(copilotCliTrust(project, env).state).toBe("absent");
+    expect(copilotTrustIssues(project, env)).toEqual([]);
+
+    writeFileSync(configPath, `// managed\n{ "trusted_folders": [${JSON.stringify(project)}], }\n`);
+    expect(copilotCliTrust(project, env).state).toBe("trusted");
+    writeFileSync(configPath, JSON.stringify({ trusted_folders: [project], trustedFolders: [] }));
+    expect(copilotCliTrust(project, env).state).toBe("untrusted");
+    const [untrusted] = copilotTrustIssues(project, env);
+    expect(untrusted.id).toBe("copilot-folder-untrusted");
+    expect(untrusted.severity).toBe("warn");
+    expect(untrusted.message).toBe("Copilot CLI has not trusted this folder");
+    expect(untrusted.remediation).toContain(`add ${JSON.stringify(project)} to trustedFolders in ${configPath}`);
+    expect(untrusted.remediation).toContain(`Run copilot in this folder once and choose "Yes, and remember this folder for future sessions"`);
+
+    for (const broken of ["{ \"trustedFolders\": [", "[]", "null", "{ \"trustedFolders\": \"/one/folder\" }"]) {
+      writeFileSync(configPath, broken);
+      expect(copilotCliTrust(project, env).state, broken).toBe("unreadable");
+      const [issue] = copilotTrustIssues(project, env);
+      expect(issue.id, broken).toBe("copilot-cli-config-unreadable");
+      expect(issue.severity, broken).toBeUndefined();
+    }
+  });
+
+  test("Kiro IDE trust needs no .vscode settings and required sibling directories are verified", () => {
+    // Kiro IDE 1.x no longer reads kiroAgent.trustedCommands; the shipped
+    // conductor's permissions carry the grant, so a copy install with no
+    // .vscode directory at all is trusted as shipped.
     const project = temp("aidlc-t294-trust-kiro-ide-");
     cpSync(join(DIST, "kiro-ide"), project, { recursive: true });
-    mkdirSync(join(project, ".vscode"), { recursive: true });
-    writeFileSync(
-      join(project, ".vscode", "settings.json"),
-      `${JSON.stringify({
-        "kiroAgent.trustedCommands": ["aidlc engine *"],
-      }, null, 2)}\n`,
-    );
-    expect(trustStatus(project, ".kiro", "kiro-ide").issues).toEqual([]);
-    writeFileSync(join(project, ".vscode", "settings.json"), "{}\n");
-    expect(trustStatus(project, ".kiro", "kiro-ide").issues.map((item) => item.id))
-      .toContain("kiro-ide-trusted-command-missing");
+    expect(existsSync(join(project, ".vscode"))).toBe(false);
+    const status = trustStatus(project, ".kiro", "kiro-ide");
+    expect(status.issues).toEqual([]);
+    expect(status.files).toContain(join(project, ".kiro", "agents", "aidlc.md"));
+    expect(status.files).toContain(join(project, ".kiro", "settings", "cli.json"));
+    expect(status.files.some((file) => file.includes(".vscode"))).toBe(false);
+    // Under the shared name `kiro` the installed tree, not the name, picks the
+    // files: the KAS tree's Markdown agents and engine pin, the agent-v1 tree's
+    // JSON agents and legacy hooks.
+    expect(trustStatus(project, ".kiro", "kiro").files).toEqual(status.files);
+    const agentV1 = temp("aidlc-t294-trust-kiro-");
+    cpSync(join(DIST, "kiro"), agentV1, { recursive: true });
+    const legacy = trustStatus(agentV1, ".kiro", "kiro").files;
+    expect(legacy).toContain(join(agentV1, ".kiro", "agents", "aidlc.json"));
+    expect(legacy.some((file) => file.endsWith(".kiro.hook"))).toBe(true);
+    expect(legacy).not.toContain(join(agentV1, ".kiro", "settings", "cli.json"));
 
     const codex = temp("aidlc-t294-siblings-codex-");
     cpSync(join(DIST, "codex"), codex, { recursive: true });
@@ -838,6 +1960,275 @@ describe("t294 trust diagnostics", () => {
       check.label.includes("Harness CLI: codex")
     )).toBe(true);
   });
+
+  test("doctor fails changed flow hooks, warns on advisory drift, and ignores project hooks", () => {
+    const env = runtimeEnv();
+    const flowHooks = [
+      "continue-workflow",
+      "deliver-stage-rules",
+      "plan-approval-guard",
+      "review-freeze",
+      "reviewer-scope",
+      "state-transition-guard",
+    ];
+    for (const [source, hook] of [[DIST, "session-end"], [DIST_RELEASE, "session-start"]]) {
+      const project = temp("aidlc-t294-doctor-unwired-");
+      mkdirSync(join(project, ".git"));
+      cpSync(join(source, "claude"), project, { recursive: true });
+      const args = [
+        "config",
+        "--project-dir",
+        project,
+        "--from",
+        join(source, "claude"),
+        "--harness",
+        "claude",
+        "--yes",
+      ];
+      const installed = run(args, project, env);
+      expect(installed.status, installed.stdout + installed.stderr).toBe(0);
+      const settingsPath = join(project, ".claude", "settings.json");
+      const settings = JSON.parse(readFileSync(settingsPath, "utf-8"));
+      const shippedHooks = structuredClone(settings.hooks);
+      const doctor = (): {
+        status: number | null;
+        checks: Array<{ pass: boolean; label: string; fix?: string; severity?: string }>;
+        failed: number;
+      } => {
+        const result = spawnSync(BUN, [
+          join(project, ".claude", "tools", "aidlc.ts"),
+          "--doctor",
+          "--json",
+          "--offline",
+        ], {
+          cwd: project,
+          env: { ...process.env, ...env, AIDLC_HARNESS_DIR: ".claude" },
+          encoding: "utf-8",
+          timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+        });
+        if (result.error) throw result.error;
+        return { ...JSON.parse(result.stdout).data, status: result.status };
+      };
+      const pristine = doctor();
+      expect(pristine.checks.some((check) => check.label.includes("shipped but not wired")))
+        .toBe(false);
+      expect(pristine.checks.some((check) =>
+        check.label.includes("differs from the shipped")
+      )).toBe(false);
+
+      const strayHook = "aidlc-evil-instructions.ts";
+      writeFileSync(join(project, ".claude", "hooks", strayHook), "// project-owned hook\n");
+      settings.hooks.PreToolUse.push({
+        matcher: "Bash",
+        hooks: [{
+          type: "command",
+          command: `bun "$CLAUDE_PROJECT_DIR/.claude/hooks/${strayHook}"`,
+        }],
+      });
+      writeFileSync(settingsPath, `${JSON.stringify(settings, null, 2)}\n`);
+      const withStray = doctor();
+      expect(withStray.checks.some((check) => check.label.includes(strayHook))).toBe(false);
+      expect(withStray.checks.some((check) =>
+        check.label.includes("differs from the shipped")
+      )).toBe(false);
+      expect(withStray.failed).toBe(pristine.failed);
+      expect(withStray.status).toBe(pristine.status);
+
+      const registrationFor = (
+        target: string,
+      ): { event: string; registration: { matcher?: string; hooks: Array<{ command: string }> } } => {
+        for (const [event, registrations] of Object.entries(settings.hooks)) {
+          const registration = (registrations as Array<{
+            matcher?: string;
+            hooks: Array<{ command: string }>;
+          }>).find((candidate) =>
+            candidate.hooks.some((entry) => entry.command.includes(`hook ${target}`))
+          );
+          if (registration) return { event, registration };
+        }
+        throw new Error(`missing test registration for ${target}`);
+      };
+      for (const target of flowHooks) {
+        for (const variant of ["command", "event", "matcher"]) {
+          settings.hooks = structuredClone(shippedHooks);
+          const { event, registration } = registrationFor(target);
+          if (variant === "command") {
+            const item = registration.hooks.find((entry) =>
+              entry.command.includes(`hook ${target}`)
+            );
+            expect(item).toBeDefined();
+            item!.command += " --changed";
+          } else if (variant === "matcher") {
+            registration.matcher = "__changed__";
+          } else {
+            settings.hooks[event] = settings.hooks[event].filter(
+              (candidate: unknown) => candidate !== registration,
+            );
+            const destination = event === "PostToolUse" ? "PreToolUse" : "PostToolUse";
+            settings.hooks[destination] ??= [];
+            settings.hooks[destination].push(registration);
+          }
+          writeFileSync(settingsPath, `${JSON.stringify(settings, null, 2)}\n`);
+          const altered = doctor();
+          expect(altered.checks).toContainEqual(expect.objectContaining({
+            pass: false,
+            label:
+              `Flow-altering AI-DLC hook ${target} differs from the shipped event, matcher, or command`,
+          }));
+          expect(altered.failed).toBeGreaterThan(pristine.failed);
+          expect(altered.status).toBe(1);
+        }
+      }
+
+      settings.hooks = structuredClone(shippedHooks);
+      const sessionStart = registrationFor("session-start").registration;
+      sessionStart.hooks[0].command += " --changed";
+      writeFileSync(settingsPath, `${JSON.stringify(settings, null, 2)}\n`);
+      const advisory = doctor();
+      expect(advisory.checks).toContainEqual(expect.objectContaining({
+        pass: true,
+        severity: "warn",
+        label: expect.stringContaining("session-start"),
+      }));
+      expect(advisory.failed).toBe(pristine.failed);
+      expect(advisory.status).toBe(pristine.status);
+
+      settings.hooks = structuredClone(shippedHooks);
+      if (hook === "session-end") {
+        delete settings.hooks.SessionEnd;
+      } else {
+        delete settings.hooks.SessionStart;
+      }
+      writeFileSync(settingsPath, `${JSON.stringify(settings, null, 2)}\n`);
+      const label = `aidlc-${hook}.ts shipped but not wired in .claude/settings.json - AI-DLC enforcement for it is off`;
+      const unwired = doctor();
+      expect(unwired.checks).toContainEqual(expect.objectContaining({ pass: false, label }));
+      const repair = unwired.checks.find((check) => check.label === label)?.fix;
+      expect(repair).toContain("config --harness claude");
+      expect(repair).not.toContain("--force");
+      if (source === DIST) {
+        expect(repair).toContain("bun .claude/tools/aidlc.ts config --harness claude --from");
+      }
+      expect(unwired.failed).toBeGreaterThan(pristine.failed);
+      expect(unwired.status).toBe(1);
+
+      const refreshed = run(args, project, env);
+      expect(refreshed.status, refreshed.stdout + refreshed.stderr).toBe(0);
+      expect(refreshed.stdout).toContain("Note: restored the AI-DLC hook registrations");
+      expect(JSON.parse(readFileSync(settingsPath, "utf-8")).hooks).toEqual(shippedHooks);
+      const repaired = doctor();
+      expect(repaired.checks.some((check) => check.label.includes("shipped but not wired")))
+        .toBe(false);
+      expect(repaired.checks.some((check) =>
+        check.label.includes("differs from the shipped")
+      )).toBe(false);
+    }
+    if (process.platform !== "win32") {
+      const project = install("claude");
+      writeFileSync(join(project, ".claude", "hooks", "aidlc-x\u001b[31mfake.ts"), "// local hook\n");
+      const human = spawnSync(BUN, [
+        join(project, ".claude", "tools", "aidlc.ts"),
+        "--doctor",
+        "--offline",
+      ], {
+        cwd: project,
+        env: { ...process.env, ...env, AIDLC_HARNESS_DIR: ".claude", NO_COLOR: "1" },
+        encoding: "utf-8",
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+      });
+      if (human.error) throw human.error;
+      expect(human.stdout).not.toContain("\u001b");
+      expect(human.stdout).not.toContain("aidlc-x");
+    }
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  // Cursor may skip project hooks outside a git repository (#976). The check
+  // reads markers in place and never follows a gitdir: pointer anywhere.
+  test("a git repository is recognized by its markers, without following them", () => {
+    const root = temp("aidlc-t294-git-marker-");
+    const at = (name: string): string => {
+      const dir = join(root, name);
+      mkdirSync(dir, { recursive: true });
+      return dir;
+    };
+    const repo = at("repo");
+    expect(spawnSync("git", ["init", "-q", repo]).status).toBe(0);
+    expect(insideGitRepository(repo)).toBe(true);
+    expect(insideGitRepository(at("repo/packages/api"))).toBe(true);
+
+    // A submodule or linked worktree: a gitdir: pointer, counted as written.
+    // Its target is never opened, so a missing one or another machine's share
+    // is never reached.
+    writeFileSync(join(at("relative"), ".git"), "gitdir: ../store/modules/lib\n");
+    writeFileSync(join(at("absolute"), ".git"), `gitdir: ${join(root, "store", "worktrees", "x")}`);
+    writeFileSync(join(at("share"), ".git"), "gitdir: \\\\unreachable.invalid\\share\\repo\n");
+    for (const name of ["relative", "absolute", "share"]) {
+      expect(insideGitRepository(join(root, name)), name).toBe(true);
+    }
+
+    mkdirSync(join(at("empty"), ".git"));
+    writeFileSync(join(at("malformed"), ".git"), "not a pointer\n");
+    writeFileSync(join(at("oversized"), ".git"), `gitdir: ${root}${" ".repeat(70_000)}`);
+    for (const name of ["empty", "malformed", "oversized"]) {
+      expect(insideGitRepository(join(root, name)), name).toBe(false);
+    }
+    // A FIFO named .git is never opened, so the check cannot block on it.
+    if (process.platform !== "win32") {
+      expect(spawnSync("mkfifo", [join(at("fifo"), ".git")]).status).toBe(0);
+      expect(insideGitRepository(join(root, "fifo"))).toBe(false);
+    }
+  });
+
+  test("doctor fails hook drift recorded by a legacy whole-hooks baseline", () => {
+    const project = install("claude");
+    const env = runtimeEnv();
+    const manifestPath = join(
+      project,
+      ".claude",
+      "tools",
+      "data",
+      "aidlc-manifest.json",
+    );
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf-8"));
+    const hookEntries = manifest.entries[".claude/settings.json"];
+    for (const key of Object.keys(hookEntries)) {
+      if (key.startsWith("hooksAidlc")) delete hookEntries[key];
+    }
+    writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+
+    const settingsPath = join(project, ".claude", "settings.json");
+    const settings = JSON.parse(readFileSync(settingsPath, "utf-8"));
+    const guardGroup = settings.hooks.PreToolUse.find(
+      (group: { hooks: Array<{ command: string }> }) =>
+        group.hooks.some((hook) => hook.command.includes("plan-approval-guard")),
+    );
+    settings.hooks.PreToolUse = settings.hooks.PreToolUse.filter(
+      (group: unknown) => group !== guardGroup,
+    );
+    settings.hooks.PostToolUse.push(guardGroup);
+    writeFileSync(settingsPath, `${JSON.stringify(settings, null, 2)}\n`);
+
+    const result = spawnSync(BUN, [
+      join(project, ".claude", "tools", "aidlc.ts"),
+      "--doctor",
+      "--json",
+      "--offline",
+    ], {
+      cwd: project,
+      env: { ...process.env, ...env, AIDLC_HARNESS_DIR: ".claude" },
+      encoding: "utf-8",
+      timeout: 60_000,
+    });
+    if (result.error) throw result.error;
+    expect(result.status).toBe(1);
+    expect(JSON.parse(result.stdout).data.checks).toContainEqual(
+      expect.objectContaining({
+        pass: false,
+        label:
+          "Claude hook wiring differs from its legacy shipped baseline; refresh is required before flow-altering hooks can be verified",
+      }),
+    );
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });
 
 describe("t294 post-apply outstanding actions", () => {
@@ -888,7 +2279,7 @@ describe("t294 post-apply outstanding actions", () => {
       id: "runtime-aidlc-missing",
       command: "bun .claude/tools/aidlc.ts config runtime",
     }));
-  }, 60_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("Codex config names missing user trust without duplicating trust section output", () => {
     const project = temp("aidlc-t294-post-trust-");
@@ -925,7 +2316,7 @@ describe("t294 post-apply outstanding actions", () => {
     ], project, env);
     expect(trustSection.status, trustSection.stdout + trustSection.stderr).toBe(0);
     expect(trustSection.stdout).not.toContain("aidlc config trust");
-  }, 60_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("provider pending actions appear after plain refresh and healthy quiet stays one line", () => {
     const project = temp("aidlc-t294-post-provider-");
@@ -988,10 +2379,120 @@ describe("t294 post-apply outstanding actions", () => {
       },
     );
     expect(actions.map((action) => action.section)).toEqual(["providers"]);
-  }, 60_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });
 
 describe("t294 instruction-file doctor row", () => {
+  test("copied Codex instructions require both root guidance and onboarding without config", () => {
+    const project = temp("aidlc-t294-copy-instructions-");
+    cpSync(join(DIST, "codex", "AGENTS.md"), join(project, "AGENTS.md"));
+    cpSync(join(DIST, "codex", ".codex"), join(project, ".codex"), { recursive: true });
+    cpSync(join(DIST, "codex", "aidlc"), join(project, "aidlc"), { recursive: true });
+    expect(existsSync(join(project, ".codex", "tools", "data", "aidlc-manifest.json")))
+      .toBe(false);
+
+    const intact = instructionFileDoctorCheck(project, ".codex");
+    expect(intact.pass).toBe(true);
+    expect(intact.label).toContain("framework-owned file intact");
+
+    const agentsPath = join(project, "AGENTS.md");
+    rmSync(agentsPath);
+    const missingRoot = instructionFileDoctorCheck(project, ".codex");
+    expect(missingRoot.pass).toBe(false);
+    expect(missingRoot.label).toContain("missing (AGENTS.md)");
+
+    mkdirSync(agentsPath);
+    const directoryRoot = instructionFileDoctorCheck(project, ".codex");
+    expect(directoryRoot.pass).toBe(false);
+    expect(directoryRoot.label).toContain("missing (AGENTS.md)");
+
+    rmSync(agentsPath, { recursive: true });
+    cpSync(join(DIST, "codex", "AGENTS.md"), agentsPath);
+    rmSync(join(project, ".codex", "onboarding.md"));
+    const missingOnboarding = instructionFileDoctorCheck(project, ".codex");
+    expect(missingOnboarding.pass).toBe(false);
+    expect(missingOnboarding.label).toContain("missing (.codex/onboarding.md)");
+  });
+
+  test("in a copy config never ran in, AGENTS.md needs AI-DLC's part where the engine can add it", () => {
+    const project = temp("aidlc-t294-copy-agents-");
+    cpSync(join(DIST, "codex", ".codex"), join(project, ".codex"), { recursive: true });
+    cpSync(join(DIST, "codex", "aidlc"), join(project, "aidlc"), { recursive: true });
+    const agentsPath = join(project, "AGENTS.md");
+    const part = readFileSync(join(project, ".codex", "tools", "data", "root-blocks", "agents"), "utf-8").trim();
+    writeFileSync(agentsPath, `# Shop\n\n<!-- BEGIN AI-DLC:agents -->\n${part}\n<!-- END AI-DLC:agents -->\n`);
+    expect(instructionFileDoctorCheck(project, ".codex").pass).toBe(true);
+    // An earlier release's text the team changed: the session start cannot
+    // add the part, so the doctor says so instead of calling it intact.
+    writeFileSync(agentsPath, `${readFileSync(join(DIST, "codex", "AGENTS.md"), "utf-8")}\nOur own line.\n`);
+    const edited = instructionFileDoctorCheck(project, ".codex");
+    expect(edited.pass).toBe(false);
+    expect(edited.label).toContain("conflict (AGENTS.md)");
+    // The team's own file, before the session start adds the part.
+    writeFileSync(agentsPath, "# Shop\n");
+    const own = instructionFileDoctorCheck(project, ".codex");
+    expect(own.pass).toBe(false);
+    expect(own.label).toContain("missing (AGENTS.md)");
+  });
+
+  test("an unsafe onboarding path is ignored like an absent descriptor field", () => {
+    const project = install("codex");
+    const descriptorPath = join(project, ".codex", "tools", "data", "aidlc-projection.json");
+    const descriptor = JSON.parse(readFileSync(descriptorPath, "utf-8"));
+    delete descriptor.onboarding;
+    writeFileSync(descriptorPath, `${JSON.stringify(descriptor, null, 2)}\n`);
+    const absent = instructionFileDoctorCheck(project, ".codex");
+    expect(absent.pass).toBe(true);
+
+    descriptor.onboarding = "../../x\n";
+    writeFileSync(descriptorPath, `${JSON.stringify(descriptor, null, 2)}\n`);
+    expect(instructionFileDoctorCheck(project, ".codex")).toEqual(absent);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("onboarding behind a symlinked parent is a conflict even when its hash matches", () => {
+    const project = install("codex");
+    const outside = temp("aidlc-t294-onboarding-outside-");
+    cpSync(join(project, ".codex", "onboarding.md"), join(outside, "onboarding.md"));
+    symlinkSync(outside, join(project, ".codex", "etc"), process.platform === "win32" ? "junction" : "dir");
+    const onboarding = ".codex/etc/onboarding.md";
+    const descriptorPath = join(project, ".codex", "tools", "data", "aidlc-projection.json");
+    const descriptor = JSON.parse(readFileSync(descriptorPath, "utf-8"));
+    descriptor.onboarding = onboarding;
+    writeFileSync(descriptorPath, `${JSON.stringify(descriptor, null, 2)}\n`);
+    const baselinePath = join(project, ".codex", "tools", "data", "aidlc-manifest.json");
+    const baseline = JSON.parse(readFileSync(baselinePath, "utf-8"));
+    baseline.files[onboarding] = baseline.files[".codex/onboarding.md"];
+    writeFileSync(baselinePath, `${JSON.stringify(baseline, null, 2)}\n`);
+
+    const conflict = instructionFileDoctorCheck(project, ".codex");
+    expect(conflict.pass).toBe(false);
+    expect(conflict.label).toContain(`conflict (${onboarding})`);
+
+    delete baseline.files[onboarding];
+    writeFileSync(baselinePath, `${JSON.stringify(baseline, null, 2)}\n`);
+    expect(instructionFileDoctorCheck(project, ".codex")).toEqual(conflict);
+    rmSync(baselinePath);
+    expect(instructionFileDoctorCheck(project, ".codex")).toEqual(conflict);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("declared onboarding absent from the baseline remains a missing instruction", () => {
+    const project = install("codex");
+    const baselinePath = join(project, ".codex", "tools", "data", "aidlc-manifest.json");
+    const baseline = JSON.parse(readFileSync(baselinePath, "utf-8"));
+    delete baseline.files[".codex/onboarding.md"];
+    writeFileSync(baselinePath, `${JSON.stringify(baseline, null, 2)}\n`);
+
+    const missingBaseline = instructionFileDoctorCheck(project, ".codex");
+    expect(missingBaseline.pass).toBe(false);
+    expect(missingBaseline.label).toContain("missing (.codex/onboarding.md)");
+
+    rmSync(join(project, "AGENTS.md"));
+    const missingBoth = instructionFileDoctorCheck(project, ".codex");
+    expect(missingBoth.pass).toBe(false);
+    expect(missingBoth.label).toContain("AGENTS.md");
+    expect(missingBoth.label).toContain(".codex/onboarding.md");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
   test("marker-managed instruction block reports intact, missing, and modified", async () => {
     const project = install("kiro");
     const path = join(project, "AGENTS.md");
@@ -1022,38 +2523,60 @@ describe("t294 instruction-file doctor row", () => {
     expect(modified.pass).toBe(false);
     expect(modified.severity).toBe("warn");
     expect(modified.label).toContain("hand-modified - conflict");
-  }, 60_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-  test("whole-file instruction surface reports intact, missing, and modified", () => {
+  test("the team's opencode.json reports intact, missing, and edited by AI-DLC's entries", () => {
     const project = install("opencode");
     const path = join(project, "opencode.json");
     const original = readFileSync(path, "utf-8");
     const intact = instructionFileDoctorCheck(project, ".aidlc");
     expect(intact.pass).toBe(true);
-    expect(intact.label).toContain("framework-owned file intact");
+    expect(intact.label).toContain("block present, user content preserved");
 
     rmSync(path);
     const missing = instructionFileDoctorCheck(project, ".aidlc");
     expect(missing.label).toContain("block or file missing (opencode.json)");
     expect(missing.fix).toContain("bun .aidlc/tools/aidlc.ts config");
 
+    // The team's own setting is theirs, not a conflict.
     writeFileSync(path, original.replace('"permission"', '"localSetting": true,\n  "permission"'));
+    expect(instructionFileDoctorCheck(project, ".aidlc").pass).toBe(true);
+    // Without AI-DLC's onboarding instruction, the file is missing its part.
+    writeFileSync(path, original.replace('".aidlc/onboarding.md", ', ""));
     expect(instructionFileDoctorCheck(project, ".aidlc").label)
-      .toContain("hand-modified - conflict");
-  }, 60_000);
+      .toContain("block or file missing (opencode.json)");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("instruction row selects the invoking harness in a dual-harness project", () => {
     const project = install("claude");
-    const codex = install("codex");
-    cpSync(join(codex, ".codex"), join(project, ".codex"), { recursive: true });
-    cpSync(join(codex, ".agents"), join(project, ".agents"), { recursive: true });
-    cpSync(join(codex, "AGENTS.md"), join(project, "AGENTS.md"));
+    const kiro = install("kiro");
+    cpSync(join(kiro, ".kiro"), join(project, ".kiro"), { recursive: true });
+    cpSync(join(kiro, "AGENTS.md"), join(project, "AGENTS.md"));
+    const onboardingPath = join(project, ".kiro", "steering", "aidlc-onboarding.md");
+    const onboarding = readFileSync(onboardingPath, "utf-8");
+    const claudePath = join(project, ".claude", "CLAUDE.md");
     expect(instructionFileDoctorCheck(project, ".claude").pass).toBe(true);
-    expect(instructionFileDoctorCheck(project, ".codex").pass).toBe(true);
+    const intact = instructionFileDoctorCheck(project, ".kiro");
+    expect(intact.pass).toBe(true);
+    expect(intact.label).toContain("framework-owned file intact");
+
+    writeFileSync(onboardingPath, `${onboarding}\nLocal onboarding change\n`);
+    const modified = instructionFileDoctorCheck(project, ".kiro");
+    expect(modified.pass).toBe(false);
+    expect(modified.label).toContain("hand-modified - conflict (.kiro/steering/aidlc-onboarding.md)");
+    expect(instructionFileDoctorCheck(project, ".claude").pass).toBe(true);
+
+    writeFileSync(onboardingPath, onboarding);
     rmSync(join(project, "AGENTS.md"));
     expect(instructionFileDoctorCheck(project, ".claude").pass).toBe(true);
-    expect(instructionFileDoctorCheck(project, ".codex").pass).toBe(false);
-  }, 60_000);
+    expect(instructionFileDoctorCheck(project, ".kiro").label)
+      .toContain("block or file missing (AGENTS.md)");
+
+    writeFileSync(claudePath, `${readFileSync(claudePath, "utf-8")}\nLocal Claude change\n`);
+    const claudeModified = instructionFileDoctorCheck(project, ".claude");
+    expect(claudeModified.pass).toBe(false);
+    expect(claudeModified.label).toContain("hand-modified - conflict (.claude/CLAUDE.md)");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });
 
 describe("t294 config diagnostics CLI", () => {
@@ -1161,7 +2684,9 @@ describe("t294 config diagnostics CLI", () => {
     ], project, env);
     expect(reset.status, reset.stdout + reset.stderr).toBe(0);
     expect(readFileSync(join(project, ".claude", "settings.json"), "utf-8"))
-      .toContain('"AWS_REGION": "us-east-1"');
+      .not.toContain('"AWS_REGION"');
+    expect(readFileSync(join(project, ".claude", "settings.json"), "utf-8"))
+      .not.toContain('"CLAUDE_CODE_USE_BEDROCK"');
     expect(readConfigDiagnosticRecords(join(project, ".claude")).providers)
       .toBeNull();
 
@@ -1181,7 +2706,2841 @@ describe("t294 config diagnostics CLI", () => {
         provider: "other",
         acknowledged: true,
       }));
+    expect(run([
+      "config",
+      "providers",
+      "--project-dir",
+      project,
+      "--check",
+    ], project, env).status).toBe(0);
+    const switched = run([
+      "config",
+      "providers",
+      "--project-dir",
+      project,
+      "--provider",
+      "amazon-bedrock",
+      "--region",
+      "us-east-1",
+      "--yes",
+    ], project, env);
+    expect(switched.status, switched.stdout + switched.stderr).toBe(0);
+    const switchedRecord = readConfigDiagnosticRecords(
+      join(project, ".claude"),
+    ).providers;
+    expect(switchedRecord?.provider).toBe("amazon-bedrock");
+    expect(switchedRecord?.acknowledged).toBeUndefined();
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("legacy Codex Bedrock records acquire new required actions on load and refresh", () => {
+    const project = install("codex");
+    const dataPath = join(project, ".codex", "tools", "data", "harness.json");
+    const data = JSON.parse(readFileSync(dataPath, "utf-8"));
+    const legacyRecord: ProvidersRecord = {
+      schemaVersion: 1,
+      provider: "amazon-bedrock",
+      region: "us-east-1",
+      acknowledged: true,
+      pendingActions: [
+        { id: "bedrock-model-access", status: "done" },
+      ],
+    };
+    expect(reconcileProviderActions(legacyRecord, "codex", false).pendingActions)
+      .toContainEqual({
+        id: "codex-provider-configuration",
+        status: "pending",
+      });
+    expect(reconcileProviderActions(legacyRecord, "codex", true).pendingActions)
+      .toContainEqual({
+        id: "codex-provider-configuration",
+        status: "done",
+      });
+    data.providers = legacyRecord;
+    writeFileSync(dataPath, `${JSON.stringify(data, null, 2)}\n`);
+
+    expect(
+      readConfigDiagnosticRecords(join(project, ".codex")).providers
+        ?.pendingActions,
+    ).toContainEqual({
+      id: "codex-provider-configuration",
+      status: "pending",
+    });
+    const check = run([
+      "config",
+      "providers",
+      "--project-dir",
+      project,
+      "--check",
+    ], project, runtimeEnv());
+    expect(check.status).toBe(1);
+    expect(check.stdout).toContain("codex-provider-configuration");
+
+    const refreshed = run([
+      "config",
+      "--project-dir",
+      project,
+      "--yes",
+    ], project, runtimeEnv());
+    expect(refreshed.status, refreshed.stdout + refreshed.stderr).toBe(0);
+    const persisted = JSON.parse(readFileSync(dataPath, "utf-8"));
+    expect(persisted.providers.pendingActions).toContainEqual({
+      id: "codex-provider-configuration",
+      status: "pending",
+    });
+    const refreshedCheck = run([
+      "config",
+      "providers",
+      "--project-dir",
+      project,
+      "--check",
+    ], project, runtimeEnv());
+    expect(refreshedCheck.status).toBe(1);
+    expect(refreshedCheck.stdout).toContain("codex-provider-configuration");
+
+    const reapplied = run([
+      "config",
+      "providers",
+      "--project-dir",
+      project,
+      "--provider",
+      "amazon-bedrock",
+      "--yes",
+    ], project, runtimeEnv());
+    expect(reapplied.status, reapplied.stdout + reapplied.stderr).toBe(0);
+    expect(JSON.parse(readFileSync(dataPath, "utf-8")).providers.pendingActions)
+      .toContainEqual({
+        id: "codex-provider-configuration",
+        status: "pending",
+      });
+    const reappliedCheck = run([
+      "config",
+      "providers",
+      "--project-dir",
+      project,
+      "--check",
+    ], project, runtimeEnv());
+    expect(reappliedCheck.status).toBe(1);
+    expect(reappliedCheck.stdout).toContain("codex-provider-configuration");
+
+    const acknowledged = run([
+      "config",
+      "providers",
+      "--project-dir",
+      project,
+      "--acknowledge",
+      "--yes",
+    ], project, runtimeEnv());
+    expect(acknowledged.status, acknowledged.stdout + acknowledged.stderr).toBe(0);
+    const acknowledgedCheck = run([
+      "config",
+      "providers",
+      "--project-dir",
+      project,
+      "--check",
+    ], project, runtimeEnv());
+    expect(acknowledgedCheck.status, acknowledgedCheck.stdout + acknowledgedCheck.stderr)
+      .toBe(0);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("completed Codex Bedrock setup stays visibly self-attested", () => {
+    const project = install("codex");
+    const dataPath = join(project, ".codex", "tools", "data", "harness.json");
+    const data = JSON.parse(readFileSync(dataPath, "utf-8"));
+    data.providers = {
+      schemaVersion: 1,
+      provider: "amazon-bedrock",
+      region: "us-east-1",
+      pendingActions: [
+        { id: "bedrock-model-access", status: "done" },
+        { id: "codex-provider-configuration", status: "done" },
+      ],
+    };
+    writeFileSync(dataPath, `${JSON.stringify(data, null, 2)}\n`);
+
+    const issues = providerIssues(
+      project,
+      ".codex",
+      "codex",
+      readConfigDiagnosticRecords(join(project, ".codex")).providers,
+      {
+        hasCredentials: true,
+        sources: [],
+        profiles: [],
+        regions: [],
+        files: [],
+      },
+    );
+    expect(issues).toContainEqual(expect.objectContaining({
+      id: "provider-codex-self-attested",
+      severity: "warn",
+    }));
+    const check = run([
+      "config",
+      "providers",
+      "--project-dir",
+      project,
+      "--check",
+      "--json",
+    ], project, runtimeEnv());
+    expect(check.status, check.stdout + check.stderr).toBe(0);
+    expect(check.stdout).toContain("provider-codex-self-attested");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("Claude local provider overrides are reported as warnings", () => {
+    const project = temp("aidlc-t294-claude-local-provider-");
+    cpSync(join(DIST, "claude"), project, { recursive: true });
+    writeFileSync(
+      join(project, ".claude", "settings.local.json"),
+      `${JSON.stringify({
+        env: {
+          CLAUDE_CODE_USE_BEDROCK: "1",
+          AWS_REGION: "eu-west-1",
+        },
+      }, null, 2)}\n`,
+    );
+    const issues = providerIssues(project, ".claude", "claude", {
+      schemaVersion: 1,
+      provider: "current",
+    });
+    expect(issues).toContainEqual(expect.objectContaining({
+      id: "provider-claude-local-override",
+      severity: "warn",
+    }));
+  });
+
+  test("Claude local overrides that contradict Bedrock block check and doctor", () => {
+    const project = install("claude");
+    const env = runtimeEnv({
+      AWS_ACCESS_KEY_ID: "test-access",
+      AWS_SECRET_ACCESS_KEY: "test-secret",
+    });
+    const configured = run([
+      "config",
+      "providers",
+      "--project-dir",
+      project,
+      "--provider",
+      "amazon-bedrock",
+      "--region",
+      "us-east-1",
+      "--mark-done",
+      "bedrock-model-access",
+      "--yes",
+    ], project, env);
+    expect(configured.status, configured.stdout + configured.stderr).toBe(0);
+    writeFileSync(
+      join(project, ".claude", "settings.local.json"),
+      `${JSON.stringify({
+        env: {
+          CLAUDE_CODE_USE_BEDROCK: "0",
+          AWS_REGION: "eu-west-1",
+        },
+      }, null, 2)}\n`,
+    );
+    const check = run([
+      "config",
+      "providers",
+      "--project-dir",
+      project,
+      "--check",
+    ], project, env);
+    expect(check.status).toBe(1);
+    expect(check.stdout).toContain("provider-claude-local-override");
+    const previousAccess = process.env.AWS_ACCESS_KEY_ID;
+    const previousSecret = process.env.AWS_SECRET_ACCESS_KEY;
+    process.env.AWS_ACCESS_KEY_ID = "test-access";
+    process.env.AWS_SECRET_ACCESS_KEY = "test-secret";
+    expect(providerDoctorCheck(project)).toEqual(expect.objectContaining({
+      pass: false,
+      label: "Providers: 1 unmet item(s)",
+    }));
+    if (previousAccess === undefined) delete process.env.AWS_ACCESS_KEY_ID;
+    else process.env.AWS_ACCESS_KEY_ID = previousAccess;
+    if (previousSecret === undefined) delete process.env.AWS_SECRET_ACCESS_KEY;
+    else process.env.AWS_SECRET_ACCESS_KEY = previousSecret;
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("ordinary refresh preserves user-owned Codex provider fields", () => {
+    const project = install("codex");
+    const env = runtimeEnv();
+    const recorded = run([
+      "config",
+      "providers",
+      "--project-dir",
+      project,
+      "--provider",
+      "current",
+      "--yes",
+    ], project, env);
+    expect(recorded.status, recorded.stdout + recorded.stderr).toBe(0);
+    const configPath = join(project, ".codex", "config.toml");
+    const current = readFileSync(configPath, "utf-8");
+    writeFileSync(
+      configPath,
+      withLegacyCodexProviderBlock(current,
+        `model = "team-model"\n` +
+          `model_provider = "team-provider"\n` +
+          `model_context_window = 262144\n` +
+          `model_reasoning_effort = "low"\n\n` +
+          `[model_providers.team-provider]\n` +
+          `name = "Team Provider"\n\n`),
+    );
+    const refreshed = run([
+      "config",
+      "--project-dir",
+      project,
+      "--yes",
+    ], project, env);
+    expect(refreshed.status, refreshed.stdout + refreshed.stderr).toBe(0);
+    const after = readFileSync(configPath, "utf-8");
+    expect(after).toContain('model = "team-model"');
+    expect(after).toContain('model_provider = "team-provider"');
+    expect(after).toContain('model_reasoning_effort = "low"');
+    expect(after).toContain("[model_providers.team-provider]");
+    expect(() => parseToml(after)).not.toThrow();
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("pristine Codex refresh remains valid and byte-idempotent", () => {
+    const project = install("codex");
+    const env = runtimeEnv();
+    const configPath = join(project, ".codex", "config.toml");
+    const refresh = () => run([
+      "config",
+      "--project-dir",
+      project,
+      "--yes",
+    ], project, env);
+    const first = refresh();
+    expect(first.status, first.stdout + first.stderr).toBe(0);
+    const firstText = readFileSync(configPath, "utf-8");
+    expect(() => parseToml(firstText)).not.toThrow();
+    const second = refresh();
+    expect(second.status, second.stdout + second.stderr).toBe(0);
+    const secondText = readFileSync(configPath, "utf-8");
+    expect(() => parseToml(secondText)).not.toThrow();
+    expect(secondText).toBe(firstText);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("provider mutation preserves project fields but rejects Codex framework drift", () => {
+    const env = runtimeEnv();
+    const claude = install("claude");
+    const claudePath = join(claude, ".claude", "settings.json");
+    const claudeSettings = JSON.parse(readFileSync(claudePath, "utf-8"));
+    claudeSettings.model = "team-claude-model";
+    claudeSettings.env.MY_TEAM_SETTING = "preserved";
+    writeFileSync(claudePath, `${JSON.stringify(claudeSettings, null, 2)}\n`);
+    const claudeRecorded = run([
+      "config",
+      "providers",
+      "--project-dir",
+      claude,
+      "--provider",
+      "current",
+      "--yes",
+    ], claude, env);
+    expect(
+      claudeRecorded.status,
+      claudeRecorded.stdout + claudeRecorded.stderr,
+    ).toBe(0);
+    expect(JSON.parse(readFileSync(claudePath, "utf-8")))
+      .toEqual(expect.objectContaining({
+        model: "team-claude-model",
+        env: expect.objectContaining({ MY_TEAM_SETTING: "preserved" }),
+      }));
+    const claudeRefreshed = run([
+      "config",
+      "--project-dir",
+      claude,
+      "--yes",
+    ], claude, env);
+    expect(
+      claudeRefreshed.status,
+      claudeRefreshed.stdout + claudeRefreshed.stderr,
+    ).toBe(0);
+    expect(JSON.parse(readFileSync(claudePath, "utf-8")))
+      .toEqual(expect.objectContaining({
+        model: "team-claude-model",
+        env: expect.objectContaining({ MY_TEAM_SETTING: "preserved" }),
+      }));
+
+    const codex = install("codex");
+    const codexPath = join(codex, ".codex", "config.toml");
+    writeFileSync(
+      codexPath,
+      withLegacyCodexProviderBlock(
+        readFileSync(codexPath, "utf-8"),
+        `model = "team-model"\nmodel_provider = "team-provider"\n\n` +
+          `[model_providers.team-provider]\nname = "Team Provider"\n\n`,
+      )
+        .replace("# AI-DLC on Codex CLI", "# Team-owned Codex instructions")
+        .replace(
+          'set = { AIDLC_RULES_DIR = "aidlc/spaces/default/memory" }',
+          'set = { AIDLC_RULES_DIR = "team/rules" }',
+        )
+        .replace(
+          'sandbox_mode = "workspace-write"',
+          'sandbox_mode = "read-only"',
+        ),
+    );
+    const codexRecorded = run([
+      "config",
+      "providers",
+      "--project-dir",
+      codex,
+      "--provider",
+      "current",
+      "--yes",
+    ], codex, env);
+    expect(
+      codexRecorded.status,
+      codexRecorded.stdout + codexRecorded.stderr,
+    ).toBe(0);
+    expect(parseToml(readFileSync(codexPath, "utf-8")).sandbox_mode).toBe("read-only");
+    expect(readFileSync(codexPath, "utf-8"))
+      .toContain("# Team-owned Codex instructions");
+    expect(readFileSync(codexPath, "utf-8"))
+      .toContain('AIDLC_RULES_DIR = "team/rules"');
+    const codexRefreshed = run([
+      "config",
+      "--project-dir",
+      codex,
+      "--yes",
+    ], codex, env);
+    expect(
+      codexRefreshed.status,
+      codexRefreshed.stdout + codexRefreshed.stderr,
+    ).toBe(4);
+    expect(parseToml(readFileSync(codexPath, "utf-8")).sandbox_mode).toBe("read-only");
+    const codexRepaired = run([
+      "config",
+      "--project-dir",
+      codex,
+      "--force",
+      "--yes",
+    ], codex, env);
+    expect(codexRepaired.status, codexRepaired.stdout + codexRepaired.stderr)
+      .toBe(0);
+    expect(parseToml(readFileSync(codexPath, "utf-8")).sandbox_mode).toBe("workspace-write");
+    expect(readFileSync(codexPath, "utf-8"))
+      .toContain("# AI-DLC on Codex CLI");
+    expect(readFileSync(codexPath, "utf-8"))
+      .not.toContain("# Team-owned Codex instructions");
+    expect(readFileSync(codexPath, "utf-8"))
+      .toContain('AIDLC_RULES_DIR = "aidlc/spaces/default/memory"');
+    expect(readFileSync(codexPath, "utf-8"))
+      .toContain('model = "team-model"');
+    expect(readFileSync(codexPath, "utf-8"))
+      .toContain("[model_providers.team-provider]");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("Codex refresh repairs only the owned root sandbox mode, not prose or custom-table keys", () => {
+    const project = install("codex");
+    const env = runtimeEnv();
+    const configPath = join(project, ".codex", "config.toml");
+    const shipped = readFileSync(configPath, "utf-8");
+    const prose = 'sandbox_mode = "danger-full-access"';
+    const custom = '\n[model_providers.team-provider]\nname = "Team Provider"\nsandbox_mode = "team-value"\n';
+    const edited = shipped
+      .replace('sandbox_mode = "workspace-write"', '"sandbox_mode" = \'read-only\'')
+      .replace("# AI-DLC on Codex CLI", `# AI-DLC on Codex CLI\n${prose}`) + custom;
+    writeFileSync(configPath, edited);
+    const args = ["config", "--project-dir", project, "--yes"];
+    const refused = run(args, project, env);
+    expect(refused.status, refused.stdout + refused.stderr).toBe(4);
+    expect(readFileSync(configPath, "utf-8")).toBe(edited);
+    const forced = run([...args, "--force"], project, env);
+    expect(forced.status, forced.stdout + forced.stderr).toBe(0);
+    const repaired = parseToml(readFileSync(configPath, "utf-8"));
+    expect(repaired.sandbox_mode).toBe("workspace-write");
+    expect(repaired.model_providers).toEqual({
+      "team-provider": { name: "Team Provider", sandbox_mode: "team-value" },
+    });
+    expect(repaired.developer_instructions).not.toContain(prose);
+
+    // Removing the owned root key must not promote a same-named custom-table key.
+    const missing = (shipped + custom).replace(/^sandbox_mode = "workspace-write"\n/m, "");
+    writeFileSync(configPath, missing);
+    const missingRefused = run(args, project, env);
+    expect(missingRefused.status, missingRefused.stdout + missingRefused.stderr).toBe(4);
+    expect(readFileSync(configPath, "utf-8")).toBe(missing);
+    const restored = run([...args, "--force"], project, env);
+    expect(restored.status, restored.stdout + restored.stderr).toBe(0);
+    const restoredConfig = parseToml(readFileSync(configPath, "utf-8"));
+    expect(restoredConfig.sandbox_mode).toBe("workspace-write");
+    expect(restoredConfig.model_providers).toEqual(repaired.model_providers);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("release refresh adds framework developer instructions to a legacy Codex config", () => {
+    const project = install("codex");
+    const env = runtimeEnv();
+    const configPath = join(project, ".codex", "config.toml");
+    const legacyFrameworkConfig = readFileSync(configPath, "utf-8").replace(
+      /^[\t ]*developer_instructions[\t ]*=[\t ]*'''[\s\S]*?'''[\t ]*(?:\r?\n|$)/m,
+      "",
+    );
+    const manifestPath = join(
+      project,
+      ".codex",
+      "tools",
+      "data",
+      "aidlc-manifest.json",
+    );
+    const legacyManifest = JSON.parse(readFileSync(manifestPath, "utf-8"));
+    delete legacyManifest.entries[".codex/config.toml"].developer_instructions;
+    writeFileSync(manifestPath, `${JSON.stringify(legacyManifest, null, 2)}\n`);
+    const legacyProviderBlock =
+      `# D-9: Amazon Bedrock is the shipped default provider (web_search is\n` +
+      `# unavailable there; the market-research stage degrades gracefully). For\n` +
+      `# OpenAI-auth setups, comment out model_provider and the [model_providers]\n` +
+      `# block.\n` +
+      `model = "openai.gpt-5.5"\nmodel_provider = "amazon-bedrock"\n` +
+      `model_context_window = 1000000\nmodel_reasoning_effort = "high"\n\n` +
+      `[model_providers.amazon-bedrock.aws]\n` +
+      `# Set to your AWS profile/region with Bedrock model access.\n` +
+      `profile = "default"\nregion = "us-east-1"\n\n`;
+    writeFileSync(configPath, withLegacyCodexProviderBlock(legacyFrameworkConfig, legacyProviderBlock));
+
+    const cleaned = run([
+      "config",
+      "providers",
+      "--project-dir",
+      project,
+      "--provider",
+      "current",
+      "--yes",
+    ], project, env);
+    expect(cleaned.status, cleaned.stdout + cleaned.stderr).toBe(0);
+    const refreshed = run([
+      "config",
+      "--project-dir",
+      project,
+      "--from",
+      join(DIST_RELEASE, "codex"),
+      "--harness",
+      "codex",
+      "--yes",
+    ], project, env);
+    expect(refreshed.status, refreshed.stdout + refreshed.stderr).toBe(0);
+    const after = readFileSync(configPath, "utf-8");
+    expect(() => parseToml(after)).not.toThrow();
+    expect(after).toContain("developer_instructions = '''");
+    expect(after).toContain("# AI-DLC on Codex CLI");
+    expect(after).not.toContain("[model_providers.amazon-bedrock.aws]");
+    expect(after).not.toContain('model_provider = "amazon-bedrock"');
+    expect(typeof parseToml(after).developer_instructions).toBe("string");
+    expect(parseToml(after).sandbox_mode).toBe("workspace-write");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("release refresh adds the start-up warning switch to a Codex config installed before it", () => {
+    const project = install("codex");
+    const env = runtimeEnv();
+    const configPath = join(project, ".codex", "config.toml");
+    const before = readFileSync(configPath, "utf-8")
+      .replace(/^[\t ]*suppress_unstable_features_warning[\t ]*=[^\r\n]*\r?\n/m, "");
+    expect(parseToml(before).suppress_unstable_features_warning).toBeUndefined();
+    writeFileSync(configPath, before);
+    const manifestPath = join(project, ".codex", "tools", "data", "aidlc-manifest.json");
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf-8"));
+    delete manifest.entries[".codex/config.toml"].suppress_unstable_features_warning;
+    // An install from before the switch: its baseline recorded this exact file.
+    manifest.files[".codex/config.toml"] = sha256Bytes(before);
+    writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+
+    const refreshed = run([
+      "config",
+      "--project-dir",
+      project,
+      "--from",
+      join(DIST_RELEASE, "codex"),
+      "--harness",
+      "codex",
+      "--yes",
+    ], project, env);
+    expect(refreshed.status, refreshed.stdout + refreshed.stderr).toBe(0);
+    const after = parseToml(readFileSync(configPath, "utf-8"));
+    expect(after.suppress_unstable_features_warning).toBe(true);
+    expect((after.features as Record<string, unknown>).default_mode_request_user_input).toBe(true);
+    expect(after.sandbox_mode).toBe("workspace-write");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("refresh treats deleted Codex developer instructions as framework drift", () => {
+    const project = install("codex");
+    const env = runtimeEnv();
+    const configPath = join(project, ".codex", "config.toml");
+    const withoutInstructions = readFileSync(configPath, "utf-8").replace(
+      /^[\t ]*developer_instructions[\t ]*=[\t ]*'''[\s\S]*?'''[\t ]*(?:\r?\n|$)/m,
+      "",
+    );
+    writeFileSync(configPath, withoutInstructions);
+
+    const refreshed = run([
+      "config",
+      "--project-dir",
+      project,
+      "--yes",
+    ], project, env);
+    expect(refreshed.status, refreshed.stdout + refreshed.stderr).toBe(4);
+    expect(readFileSync(configPath, "utf-8")).toBe(withoutInstructions);
+
+    const forced = run([
+      "config",
+      "--project-dir",
+      project,
+      "--force",
+      "--yes",
+    ], project, env);
+    expect(forced.status, forced.stdout + forced.stderr).toBe(0);
+    expect(readFileSync(configPath, "utf-8"))
+      .toContain("developer_instructions = '''");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("ordinary and forced Claude refreshes preserve user permissions and environment", () => {
+    const project = install("claude");
+    const env = runtimeEnv();
+    expect(run([
+      "config",
+      "providers",
+      "--project-dir",
+      project,
+      "--provider",
+      "current",
+      "--yes",
+    ], project, env).status).toBe(0);
+    const settingsPath = join(project, ".claude", "settings.json");
+    const settings = JSON.parse(readFileSync(settingsPath, "utf-8"));
+    settings.env.MY_TEAM_SETTING = "preserved";
+    settings.permissions = {
+      ...(settings.permissions ?? {}),
+      deny: ["Bash(rm -rf:*)"],
+      ask: ["Bash(deploy:*)"],
+      additionalDirectories: ["../shared"],
+    };
+    const edited = `${JSON.stringify(settings, null, 2)}\n`;
+    writeFileSync(settingsPath, edited);
+    const refreshed = run([
+      "config",
+      "--project-dir",
+      project,
+      "--from",
+      join(DIST_RELEASE, "claude"),
+      "--harness",
+      "claude",
+      "--yes",
+    ], project, env);
+    expect(refreshed.status, refreshed.stdout + refreshed.stderr).toBe(0);
+    expect(JSON.parse(readFileSync(settingsPath, "utf-8"))).toEqual(settings);
+    expect(refreshed.stdout).not.toContain("Note:");
+    const forced = run([
+      "config",
+      "--project-dir",
+      project,
+      "--from",
+      join(DIST_RELEASE, "claude"),
+      "--harness",
+      "claude",
+      "--force",
+      "--yes",
+    ], project, env);
+    expect(forced.status, forced.stdout + forced.stderr).toBe(0);
+    const after = JSON.parse(readFileSync(settingsPath, "utf-8"));
+    expect(after.permissions).toEqual(settings.permissions);
+    expect(forced.stdout).not.toContain("Note:");
+    expect(after.env.MY_TEAM_SETTING).toBe("preserved");
+    expect(after.hooks).toEqual(settings.hooks);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("Bedrock refresh and opt-out preserve Claude project fields and deny rules", () => {
+    const env = runtimeEnv();
+    for (const change of ["permissions", "env", "pristine"]) {
+      const project = install("claude");
+      const configured = run([
+        "config",
+        "providers",
+        "--project-dir",
+        project,
+        "--provider",
+        "amazon-bedrock",
+        "--region",
+        "us-east-1",
+        "--yes",
+      ], project, env);
+      expect(configured.status, configured.stdout + configured.stderr).toBe(0);
+      const settingsPath = join(project, ".claude", "settings.json");
+      const settings = JSON.parse(readFileSync(settingsPath, "utf-8"));
+      if (change !== "pristine") settings.env.MY_TEAM_SETTING = "preserved";
+      if (change === "permissions") {
+        settings.permissions = {
+          ...(settings.permissions ?? {}),
+          deny: ["Bash(team-command:*)"],
+        };
+      }
+      const edited = `${JSON.stringify(settings, null, 2)}\n`;
+      if (change !== "pristine") writeFileSync(settingsPath, edited);
+      const refreshed = run([
+        "config",
+        "--project-dir",
+        project,
+        "--from",
+        join(DIST_RELEASE, "claude"),
+        "--harness",
+        "claude",
+        "--yes",
+      ], project, env);
+      expect(refreshed.status, refreshed.stdout + refreshed.stderr).toBe(0);
+      expect(refreshed.stdout).not.toContain("Note:");
+      const after = JSON.parse(readFileSync(settingsPath, "utf-8"));
+      expect(after.permissions).toEqual(settings.permissions);
+      expect(after.hooks).toEqual(settings.hooks);
+      expect(after.env).toEqual(expect.objectContaining({
+        CLAUDE_CODE_USE_BEDROCK: "1",
+        AWS_REGION: "us-east-1",
+      }));
+      if (change !== "pristine") expect(after.env.MY_TEAM_SETTING).toBe("preserved");
+      if (change === "permissions") {
+        const current = run([
+          "config",
+          "providers",
+          "--project-dir",
+          project,
+          "--provider",
+          "current",
+          "--yes",
+        ], project, env);
+        expect(current.status, current.stdout + current.stderr).toBe(0);
+        const optedOut = JSON.parse(readFileSync(settingsPath, "utf-8"));
+        expect(optedOut.permissions).toEqual(settings.permissions);
+        expect(optedOut.env.MY_TEAM_SETTING).toBe("preserved");
+        expect(optedOut.env.CLAUDE_CODE_USE_BEDROCK).toBeUndefined();
+        expect(optedOut.hooks).toEqual(settings.hooks);
+      }
+    }
+
+    for (const provider of ["current", "amazon-bedrock"]) {
+      const project = install("claude");
+      const configured = run([
+        "config",
+        "providers",
+        "--project-dir",
+        project,
+        "--provider",
+        provider,
+        ...(provider === "amazon-bedrock" ? ["--region", "us-east-1"] : []),
+        "--yes",
+      ], project, env);
+      expect(configured.status, configured.stdout + configured.stderr).toBe(0);
+      const settingsPath = join(project, ".claude", "settings.json");
+      const settings = JSON.parse(readFileSync(settingsPath, "utf-8"));
+      settings.disableAllHooks = true;
+      const edited = `${JSON.stringify(settings, null, 2)}\n`;
+      writeFileSync(settingsPath, edited);
+      const refreshed = run([
+        "config",
+        "--project-dir",
+        project,
+        "--from",
+        join(DIST_RELEASE, "claude"),
+        "--harness",
+        "claude",
+        "--yes",
+      ], project, env);
+      expect(refreshed.status, refreshed.stdout + refreshed.stderr).toBe(0);
+      const after = JSON.parse(readFileSync(settingsPath, "utf-8"));
+      expect(after.disableAllHooks).toBe(true);
+      expect(after.hooks).toEqual(settings.hooks);
+      expect(after.env).toEqual(settings.env);
+      expect(refreshed.stdout).not.toContain("Note: kept your");
+    }
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("Claude refresh restores moved registrations while preserving user hook groups and deny rules", () => {
+    const project = install("claude");
+    const env = runtimeEnv();
+    const settingsPath = join(project, ".claude", "settings.json");
+    const settings = JSON.parse(readFileSync(settingsPath, "utf-8"));
+    const shippedHooks = structuredClone(settings.hooks);
+    const guardGroup = settings.hooks.PreToolUse.find(
+      (group: { hooks: Array<{ command: string }> }) =>
+        group.hooks.some((hook) => hook.command.includes("plan-approval-guard")),
+    );
+    const guardIndex = guardGroup.hooks.findIndex(
+      (hook: { command: string }) => hook.command.includes("plan-approval-guard"),
+    );
+    const [guard] = guardGroup.hooks.splice(guardIndex, 1);
+    const ownPreToolUse = {
+      matcher: "Bash",
+      hooks: [{ type: "command", command: "echo mine" }],
+    };
+    const ownPostToolUse = {
+      matcher: "Write",
+      hooks: [{ type: "command", command: "echo after", timeout: 10 }],
+    };
+    const ownNotification = {
+      matcher: "permission_prompt",
+      hooks: [{ type: "command", command: "echo notify" }],
+    };
+    settings.hooks.PreToolUse.push(ownPreToolUse);
+    settings.hooks.PostToolUse.push({
+      ...ownPostToolUse,
+      hooks: [guard, ...ownPostToolUse.hooks],
+    });
+    settings.hooks.Notification = [ownNotification];
+    settings.permissions.deny = ["Bash(rm -rf:*)"];
+    writeFileSync(settingsPath, `${JSON.stringify(settings, null, 2)}\n`);
+
+    const args = [
+      "config", "--project-dir", project,
+      "--from", join(DIST_RELEASE, "claude"), "--harness", "claude", "--yes",
+    ];
+    const refreshed = run(args, project, env);
+    expect(refreshed.status, refreshed.stdout + refreshed.stderr).toBe(0);
+    expect(refreshed.stdout).toContain("Note: restored the AI-DLC hook registrations");
+    const after = JSON.parse(readFileSync(settingsPath, "utf-8"));
+    expect(after.hooks.PreToolUse).toEqual([...shippedHooks.PreToolUse, ownPreToolUse]);
+    expect(after.hooks.PostToolUse).toEqual([...shippedHooks.PostToolUse, ownPostToolUse]);
+    expect(after.hooks.PostToolUse.flatMap(
+      (group: { hooks: Array<{ command: string }> }) => group.hooks,
+    ).some((hook: { command: string }) => hook.command.includes("plan-approval-guard"))).toBe(false);
+    expect(after.hooks.Notification).toEqual([ownNotification]);
+    expect(after.permissions.deny).toEqual(["Bash(rm -rf:*)"]);
+
+    const doctor = spawnSync(BUN, [
+      join(project, ".claude", "tools", "aidlc.ts"), "--doctor", "--json", "--offline",
+    ], {
+      cwd: project,
+      env: { ...process.env, ...env, AIDLC_HARNESS_DIR: ".claude" },
+      encoding: "utf-8",
+      timeout: 60_000,
+    });
+    if (doctor.error) throw doctor.error;
+    const checks = JSON.parse(doctor.stdout).data.checks as Array<{ label: string }>;
+    expect(checks.some((check) => check.label.includes("shipped but not wired"))).toBe(false);
+    expect(checks.some((check) => check.label.includes("differ from the shipped wiring"))).toBe(false);
+
+    const firstText = readFileSync(settingsPath, "utf-8");
+    const second = run(args, project, env);
+    expect(second.status, second.stdout + second.stderr).toBe(0);
+    expect(second.stdout).not.toContain("Note:");
+    expect(readFileSync(settingsPath, "utf-8")).toBe(firstText);
+  }, 90_000);
+
+  test("Claude refresh migrates exact legacy hooks without claiming project commands", () => {
+    const project = install("claude");
+    const env = runtimeEnv();
+    const settingsPath = join(project, ".claude", "settings.json");
+    const settings = JSON.parse(readFileSync(settingsPath, "utf-8"));
+    const guardGroup = settings.hooks.PreToolUse.find(
+      (group: { hooks: Array<{ command: string }> }) =>
+        group.hooks.some((hook) => hook.command === "aidlc engine hook plan-approval-guard"),
+    );
+    const guard = guardGroup.hooks.find(
+      (hook: { command: string }) =>
+        hook.command === "aidlc engine hook plan-approval-guard",
+    );
+    guard.command =
+      'bun "$CLAUDE_PROJECT_DIR/.claude/hooks/aidlc-plan-approval-guard.ts"';
+    const projectCommands = [
+      "team-aidlc engine hook plan-approval-guard",
+      "aidlc engine hook plan-approval-guard && team-audit",
+      'bun "$CLAUDE_PROJECT_DIR/team/hooks/aidlc-plan-approval-guard.ts"',
+      'bun "$CLAUDE_PROJECT_DIR/team/aidlc.ts" engine hook plan-approval-guard',
+    ];
+    settings.hooks.PreToolUse.push({
+      matcher: "Bash",
+      hooks: projectCommands.map((command) => ({ type: "command", command })),
+    });
+    settings.statusLine.command =
+      'bun "$CLAUDE_PROJECT_DIR/.claude/hooks/aidlc-statusline.ts"';
+    writeFileSync(settingsPath, `${JSON.stringify(settings, null, 2)}\n`);
+
+    const refreshed = run([
+      "config", "--project-dir", project,
+      "--from", join(DIST_RELEASE, "claude"), "--harness", "claude", "--yes",
+    ], project, env);
+    expect(refreshed.status, refreshed.stdout + refreshed.stderr).toBe(0);
+    const after = JSON.parse(readFileSync(settingsPath, "utf-8"));
+    const commands = Object.values(after.hooks).flatMap(
+      (groups) => (groups as Array<{ hooks: Array<{ command: string }> }>)
+        .flatMap((group) => group.hooks.map((hook) => hook.command)),
+    );
+    expect(commands.filter(
+      (command) => command === "aidlc engine hook plan-approval-guard",
+    )).toHaveLength(1);
+    expect(commands).toEqual(expect.arrayContaining(projectCommands));
+    expect(commands).not.toContain(
+      'bun "$CLAUDE_PROJECT_DIR/.claude/hooks/aidlc-plan-approval-guard.ts"',
+    );
+    expect(after.statusLine.command).toBe("aidlc engine statusline");
   }, 60_000);
+
+  test("Claude refresh recognizes the installed dispatcher by absolute path", () => {
+    const project = install("claude");
+    const env = runtimeEnv();
+    const settingsPath = join(project, ".claude", "settings.json");
+    const settings = JSON.parse(readFileSync(settingsPath, "utf-8"));
+    const absoluteDispatcher = join(
+      project,
+      ".claude",
+      "tools",
+      "aidlc.ts",
+    ).replaceAll("\\", "/");
+    const absoluteGuard =
+      `bun "${absoluteDispatcher}" engine hook plan-approval-guard`;
+    const guardGroup = settings.hooks.PreToolUse.find(
+      (group: { hooks: Array<{ command: string }> }) =>
+        group.hooks.some((hook) =>
+          hook.command === "aidlc engine hook plan-approval-guard"
+        ),
+    );
+    guardGroup.hooks.find(
+      (hook: { command: string }) =>
+        hook.command === "aidlc engine hook plan-approval-guard",
+    ).command = absoluteGuard;
+    settings.statusLine.command =
+      `bun "${absoluteDispatcher}" engine statusline`;
+    writeFileSync(settingsPath, `${JSON.stringify(settings, null, 2)}\n`);
+
+    const refreshed = run([
+      "config", "--project-dir", project,
+      "--from", join(DIST_RELEASE, "claude"), "--harness", "claude", "--yes",
+    ], project, env);
+    expect(refreshed.status, refreshed.stdout + refreshed.stderr).toBe(0);
+    const after = JSON.parse(readFileSync(settingsPath, "utf-8"));
+    const commands = Object.values(after.hooks).flatMap(
+      (groups) => (groups as Array<{ hooks: Array<{ command: string }> }>)
+        .flatMap((group) => group.hooks.map((hook) => hook.command)),
+    );
+    expect(commands.filter((command) =>
+      command === "aidlc engine hook plan-approval-guard"
+    )).toHaveLength(1);
+    expect(commands).not.toContain(absoluteGuard);
+    expect(after.statusLine.command).toBe("aidlc engine statusline");
+  }, 60_000);
+
+  test("Claude refresh treats an unchanged legacy hook installation as a clean migration", () => {
+    const project = install("claude");
+    const env = runtimeEnv();
+    const settingsPath = join(project, ".claude", "settings.json");
+    const settings = JSON.parse(readFileSync(settingsPath, "utf-8"));
+    for (const groups of Object.values(settings.hooks)) {
+      for (const group of groups as Array<{ hooks: Array<{ command: string }> }>) {
+        for (const hook of group.hooks) {
+          const target = /^aidlc engine hook ([A-Za-z0-9_-]+)$/.exec(hook.command)?.[1];
+          if (target) {
+            hook.command =
+              `bun "$CLAUDE_PROJECT_DIR/.claude/hooks/aidlc-${target}.ts"`;
+          }
+        }
+      }
+    }
+    const retiredTargets = ["audit-logger", "sensor-fire", "stop"];
+    settings.hooks.Stop.push(...retiredTargets.map((target) => ({
+      matcher: "",
+      hooks: [{
+        type: "command",
+        command: `bun "$CLAUDE_PROJECT_DIR/.claude/hooks/aidlc-${target}.ts"`,
+      }],
+    })));
+    settings.statusLine.command =
+      'bun "$CLAUDE_PROJECT_DIR/.claude/hooks/aidlc-statusline.ts"';
+
+    const manifestPath = join(
+      project,
+      ".claude",
+      "tools",
+      "data",
+      "aidlc-manifest.json",
+    );
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf-8"));
+    const entries = manifest.entries[".claude/settings.json"];
+    for (const key of Object.keys(entries)) {
+      if (key === "hooksAidlc" || key.startsWith("hooksAidlc:")) delete entries[key];
+    }
+    entries.hooks = sha256Bytes(canonical(settings.hooks));
+    for (const target of retiredTargets) {
+      const relative = `.claude/hooks/aidlc-${target}.ts`;
+      const content = `// retired legacy ${target}\n`;
+      writeFileSync(join(project, relative), content);
+      manifest.files[relative] = sha256Bytes(content);
+    }
+    const projectCommand =
+      'bun "$CLAUDE_PROJECT_DIR/team/aidlc.ts" engine hook plan-approval-guard';
+    const projectLegacyTarget = "dispatch-rules";
+    const projectLegacyCommand =
+      `bun "$CLAUDE_PROJECT_DIR/.claude/hooks/aidlc-${projectLegacyTarget}.ts"`;
+    const projectLegacyPath = join(
+      project,
+      `.claude/hooks/aidlc-${projectLegacyTarget}.ts`,
+    );
+    writeFileSync(projectLegacyPath, "console.log('project hook');\n");
+    settings.hooks.PreToolUse.push({
+      matcher: "Bash",
+      hooks: [
+        { type: "command", command: projectCommand },
+        { type: "command", command: projectLegacyCommand },
+      ],
+    });
+    writeFileSync(settingsPath, `${JSON.stringify(settings, null, 2)}\n`);
+    writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+
+    const refreshed = run([
+      "config", "--project-dir", project,
+      "--from", join(DIST_RELEASE, "claude"), "--harness", "claude", "--yes",
+    ], project, env);
+    expect(refreshed.status, refreshed.stdout + refreshed.stderr).toBe(0);
+    expect(refreshed.stdout).not.toContain(
+      "restored the AI-DLC hook registrations in .claude/settings.json",
+    );
+    const after = JSON.parse(readFileSync(settingsPath, "utf-8"));
+    const commands = Object.values(after.hooks).flatMap(
+      (groups) => (groups as Array<{ hooks: Array<{ command: string }> }>)
+        .flatMap((group) => group.hooks.map((hook) => hook.command)),
+    );
+    expect(after.statusLine.command).toBe("aidlc engine statusline");
+    expect(commands).toContain(projectCommand);
+    expect(commands).toContain(projectLegacyCommand);
+    expect(readFileSync(projectLegacyPath, "utf-8")).toBe(
+      "console.log('project hook');\n",
+    );
+    for (const target of retiredTargets) {
+      expect(existsSync(join(project, `.claude/hooks/aidlc-${target}.ts`))).toBe(false);
+    }
+  }, 60_000);
+
+  test("Claude refresh reports actual drift in a legacy whole-hooks baseline", () => {
+    const project = install("claude");
+    const env = runtimeEnv();
+    const settingsPath = join(project, ".claude", "settings.json");
+    const settings = JSON.parse(readFileSync(settingsPath, "utf-8"));
+    for (const groups of Object.values(settings.hooks)) {
+      for (const group of groups as Array<{ hooks: Array<{ command: string }> }>) {
+        for (const hook of group.hooks) {
+          const target = /^aidlc engine hook ([A-Za-z0-9_-]+)$/.exec(hook.command)?.[1];
+          if (target) {
+            hook.command =
+              `bun "$CLAUDE_PROJECT_DIR/.claude/hooks/aidlc-${target}.ts"`;
+          }
+        }
+      }
+    }
+    const manifestPath = join(
+      project,
+      ".claude",
+      "tools",
+      "data",
+      "aidlc-manifest.json",
+    );
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf-8"));
+    const entries = manifest.entries[".claude/settings.json"];
+    for (const key of Object.keys(entries)) {
+      if (key === "hooksAidlc" || key.startsWith("hooksAidlc:")) delete entries[key];
+    }
+    entries.hooks = sha256Bytes(canonical(settings.hooks));
+    settings.hooks.PreToolUse[0].matcher = "TeamPolicy";
+    writeFileSync(settingsPath, `${JSON.stringify(settings, null, 2)}\n`);
+    writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+
+    const refreshed = run([
+      "config", "--project-dir", project,
+      "--from", join(DIST_RELEASE, "claude"), "--harness", "claude", "--yes",
+    ], project, env);
+    expect(refreshed.status, refreshed.stdout + refreshed.stderr).toBe(0);
+    expect(refreshed.stdout).toContain(
+      "restored the AI-DLC hook registrations in .claude/settings.json",
+    );
+  }, 60_000);
+
+  test("Claude refresh retires attributable manifestless hooks and preserves project hooks", () => {
+    const project = install("claude");
+    const env = runtimeEnv();
+    const settingsPath = join(project, ".claude", "settings.json");
+    const settings = JSON.parse(readFileSync(settingsPath, "utf-8"));
+    const retiredTarget = "mint-presence";
+    const retiredCommand =
+      `bun "$CLAUDE_PROJECT_DIR/.claude/hooks/aidlc-${retiredTarget}.ts"`;
+    const retiredPath = join(project, `.claude/hooks/aidlc-${retiredTarget}.ts`);
+    const releasedHook = `// UserPromptSubmit hook: record a HUMAN_TURN event (human-presence gate).
+//
+// On every real human prompt, append a HUMAN_TURN event to the active intent's
+// audit shard (the state machine's own append-only ledger). The approval /
+// interview gate (handleApprove / handleAnswer) refuses unless a HUMAN_TURN was
+// recorded since the last gate resolution, so a model under autopilot cannot
+// fabricate an approval with no human having acted this turn.
+//
+// Presence-only: the prompt text is irrelevant, so stdin is not read.
+// appendAuditEntry resolves the active intent from the on-disk cursor using only
+// the project dir (no payload needed). No workflow state on disk means nothing
+// to gate, so the hook exits without writing (same self-gate as
+// aidlc-session-start.ts) - otherwise every prompt in a project that carries the
+// harness shell but never ran the framework would scaffold and grow audit
+// shards. The gate fails open on an empty ledger, so skipping the mint there is
+// safe. The mint is fail-open (try/catch, exit 0): a mint failure must never
+// block the human's turn.
+import { existsSync } from "node:fs";
+import { resolveProjectDirFromHook, stateFilePath } from "../tools/aidlc-lib.ts";
+import { appendAuditEntry } from "../tools/aidlc-audit.ts";
+
+try {
+  const projectDir = resolveProjectDirFromHook(import.meta.url);
+  if (existsSync(stateFilePath(projectDir))) {
+    appendAuditEntry("HUMAN_TURN", {}, projectDir);
+  }
+} catch {
+  // Non-fatal — a mint failure must never block the human's turn.
+}
+
+process.exit(0);
+`;
+    expect(sha256Bytes(releasedHook)).toBe(
+      "sha256:ff7556c56f6bebe0bc447be6632ccc34d14bb68b11220ad8e36bfd0bc37d2b90",
+    );
+    writeFileSync(retiredPath, releasedHook);
+    const projectTarget = "dispatch-rules";
+    const projectCommand =
+      `bun "$CLAUDE_PROJECT_DIR/.claude/hooks/aidlc-${projectTarget}.ts"`;
+    const projectPath = join(project, `.claude/hooks/aidlc-${projectTarget}.ts`);
+    const projectHook =
+      `import { resolveProjectDirFromHook } from "../tools/aidlc-lib.ts";\n` +
+      `console.log(resolveProjectDirFromHook(import.meta.url));\n`;
+    writeFileSync(projectPath, projectHook);
+    settings.hooks.Stop.push({
+      matcher: "",
+      hooks: [
+        { type: "command", command: retiredCommand },
+        { type: "command", command: projectCommand },
+      ],
+    });
+    writeFileSync(settingsPath, `${JSON.stringify(settings, null, 2)}\n`);
+    rmSync(
+      join(project, ".claude", "tools", "data", "aidlc-manifest.json"),
+    );
+
+    const refreshed = run([
+      "config", "--project-dir", project,
+      "--from", join(DIST_RELEASE, "claude"), "--harness", "claude", "--yes",
+    ], project, env);
+    expect(refreshed.status, refreshed.stdout + refreshed.stderr).toBe(0);
+    const after = JSON.parse(readFileSync(settingsPath, "utf-8"));
+    const commands = Object.values(after.hooks).flatMap(
+      (groups) => (groups as Array<{ hooks: Array<{ command: string }> }>)
+        .flatMap((group) => group.hooks.map((hook) => hook.command)),
+    );
+    expect(commands).not.toContain(retiredCommand);
+    expect(existsSync(retiredPath)).toBe(false);
+    expect(commands).toContain(projectCommand);
+    expect(readFileSync(projectPath, "utf-8")).toBe(projectHook);
+  }, 60_000);
+
+  test("Claude refresh re-adds shipped allow entries before user entries and retains retired entries", () => {
+    const project = install("claude");
+    const env = runtimeEnv();
+    const settingsPath = join(project, ".claude", "settings.json");
+    const settings = JSON.parse(readFileSync(settingsPath, "utf-8"));
+    const shippedAllow = [...settings.permissions.allow];
+    settings.permissions.allow = [
+      ...shippedAllow.filter((entry) => entry !== "Task"),
+      "Bash(team-tool:*)",
+    ];
+    writeFileSync(settingsPath, `${JSON.stringify(settings, null, 2)}\n`);
+    const refreshed = run([
+      "config", "--project-dir", project,
+      "--from", join(DIST_RELEASE, "claude"), "--harness", "claude", "--yes",
+    ], project, env);
+    expect(refreshed.status, refreshed.stdout + refreshed.stderr).toBe(0);
+    expect(refreshed.stdout).toContain("Note: added the AI-DLC command allow entries that were missing");
+    expect(JSON.parse(readFileSync(settingsPath, "utf-8")).permissions.allow)
+      .toEqual([...shippedAllow, "Bash(team-tool:*)"]);
+
+    const source = temp("aidlc-t294-retired-allow-source-");
+    cpSync(join(DIST_RELEASE, "claude"), source, { recursive: true });
+    const sourceSettingsPath = join(source, ".claude", "settings.json");
+    const release = JSON.parse(readFileSync(sourceSettingsPath, "utf-8"));
+    release.permissions.allow = shippedAllow.filter((entry) => entry !== "Task");
+    writeFileSync(sourceSettingsPath, `${JSON.stringify(release, null, 2)}\n`);
+    const retired = run([
+      "config", "--project-dir", project,
+      "--from", source, "--harness", "claude", "--yes",
+    ], project, env);
+    expect(retired.status, retired.stdout + retired.stderr).toBe(0);
+    expect(JSON.parse(readFileSync(settingsPath, "utf-8")).permissions.allow)
+      .toEqual([...release.permissions.allow, "Task", "Bash(team-tool:*)"]);
+    expect(retired.stdout).not.toContain("Note: re-added");
+  }, 90_000);
+
+  test("Claude refresh keeps a personal statusLine and restores the shipped one when absent", () => {
+    const project = install("claude");
+    const env = runtimeEnv();
+    const settingsPath = join(project, ".claude", "settings.json");
+    const settings = JSON.parse(readFileSync(settingsPath, "utf-8"));
+    const shippedStatusLine = structuredClone(settings.statusLine);
+    settings.statusLine = { type: "command", command: "my-status", padding: 2 };
+    writeFileSync(settingsPath, `${JSON.stringify(settings, null, 2)}\n`);
+    const args = [
+      "config", "--project-dir", project,
+      "--from", join(DIST_RELEASE, "claude"), "--harness", "claude", "--yes",
+    ];
+    const refreshed = run(args, project, env);
+    expect(refreshed.status, refreshed.stdout + refreshed.stderr).toBe(0);
+    expect(JSON.parse(readFileSync(settingsPath, "utf-8")).statusLine).toEqual(settings.statusLine);
+    // Same release: the personal choice stands without a note.
+    expect(refreshed.stdout).not.toContain("Note:");
+    const doctor = spawnSync(BUN, [
+      join(project, ".claude", "tools", "aidlc.ts"),
+      "--doctor",
+      "--json",
+      "--offline",
+    ], {
+      cwd: project,
+      env: { ...process.env, ...env, AIDLC_HARNESS_DIR: ".claude" },
+      encoding: "utf-8",
+      timeout: 60_000,
+    });
+    if (doctor.error) throw doctor.error;
+    expect(doctor.status, doctor.stdout + doctor.stderr).toBe(0);
+    expect(JSON.parse(doctor.stdout).data.checks.some(
+      (check: { label: string }) =>
+        check.label.includes("aidlc-statusline.ts shipped but not wired"),
+    )).toBe(false);
+
+    // A release that ships a different statusLine says so, but still keeps yours.
+    const source = temp("aidlc-t294-statusline-source-");
+    cpSync(join(DIST_RELEASE, "claude"), source, { recursive: true });
+    const sourceSettingsPath = join(source, ".claude", "settings.json");
+    const release = JSON.parse(readFileSync(sourceSettingsPath, "utf-8"));
+    release.statusLine = { ...release.statusLine, padding: 1 };
+    writeFileSync(sourceSettingsPath, `${JSON.stringify(release, null, 2)}\n`);
+    const changedRelease = run([
+      "config", "--project-dir", project, "--from", source, "--harness", "claude", "--yes",
+    ], project, env);
+    expect(changedRelease.status, changedRelease.stdout + changedRelease.stderr).toBe(0);
+    expect(JSON.parse(readFileSync(settingsPath, "utf-8")).statusLine).toEqual(settings.statusLine);
+    expect(changedRelease.stdout).toContain("Note: kept your statusLine");
+
+    const withoutStatusLine = JSON.parse(readFileSync(settingsPath, "utf-8"));
+    delete withoutStatusLine.statusLine;
+    writeFileSync(settingsPath, `${JSON.stringify(withoutStatusLine, null, 2)}\n`);
+    const restored = run(args, project, env);
+    expect(restored.status, restored.stdout + restored.stderr).toBe(0);
+    expect(JSON.parse(readFileSync(settingsPath, "utf-8")).statusLine).toEqual(shippedStatusLine);
+    expect(restored.stdout).not.toContain("Note:");
+  }, 60_000);
+
+  test("Claude refresh replaces malformed statusLine values and repairs doctor", () => {
+    const env = runtimeEnv();
+    for (const malformed of [null, {}, { type: "command" }]) {
+      const project = install("claude");
+      const settingsPath = join(project, ".claude", "settings.json");
+      const settings = JSON.parse(readFileSync(settingsPath, "utf-8"));
+      const shippedStatusLine = structuredClone(settings.statusLine);
+      settings.statusLine = malformed;
+      writeFileSync(settingsPath, `${JSON.stringify(settings, null, 2)}\n`);
+
+      const refreshed = run([
+        "config", "--project-dir", project,
+        "--from", join(DIST_RELEASE, "claude"), "--harness", "claude", "--yes",
+      ], project, env);
+      expect(refreshed.status, refreshed.stdout + refreshed.stderr).toBe(0);
+      expect(JSON.parse(readFileSync(settingsPath, "utf-8")).statusLine)
+        .toEqual(shippedStatusLine);
+
+      const doctor = spawnSync(BUN, [
+        join(project, ".claude", "tools", "aidlc.ts"),
+        "--doctor",
+        "--json",
+        "--offline",
+      ], {
+        cwd: project,
+        env: { ...process.env, ...env, AIDLC_HARNESS_DIR: ".claude" },
+        encoding: "utf-8",
+        timeout: 60_000,
+      });
+      if (doctor.error) throw doctor.error;
+      expect(doctor.status, doctor.stdout + doctor.stderr).toBe(0);
+    }
+  }, 90_000);
+
+  test("Claude refresh updates shipped announcements and preserves personal announcements", () => {
+    const env = runtimeEnv();
+    const source = temp("aidlc-t294-announcements-source-");
+    cpSync(join(DIST_RELEASE, "claude"), source, { recursive: true });
+    const sourceSettingsPath = join(source, ".claude", "settings.json");
+    const release = JSON.parse(readFileSync(sourceSettingsPath, "utf-8"));
+    release.companyAnnouncements = ["New shipped announcement"];
+    writeFileSync(sourceSettingsPath, `${JSON.stringify(release, null, 2)}\n`);
+    for (const variant of ["shipped", "personal", "absent"]) {
+      const project = install("claude");
+      const settingsPath = join(project, ".claude", "settings.json");
+      const settings = JSON.parse(readFileSync(settingsPath, "utf-8"));
+      settings.env.MY_TEAM_SETTING = "preserved";
+      if (variant === "personal") settings.companyAnnouncements = ["Team reminder"];
+      if (variant === "absent") delete settings.companyAnnouncements;
+      writeFileSync(settingsPath, `${JSON.stringify(settings, null, 2)}\n`);
+      const args = [
+        "config", "--project-dir", project,
+        "--from", source, "--harness", "claude", "--yes",
+      ];
+      const refreshed = run(args, project, env);
+      expect(refreshed.status, refreshed.stdout + refreshed.stderr).toBe(0);
+      const after = JSON.parse(readFileSync(settingsPath, "utf-8"));
+      expect(after.companyAnnouncements).toEqual(
+        variant === "personal" ? ["Team reminder"] : release.companyAnnouncements,
+      );
+      expect(after.env.MY_TEAM_SETTING).toBe("preserved");
+      if (variant === "personal") {
+        expect(refreshed.stdout).toContain("Note: kept your companyAnnouncements");
+      } else {
+        expect(refreshed.stdout).not.toContain("Note:");
+      }
+      const second = run(args, project, env);
+      expect(second.status, second.stdout + second.stderr).toBe(0);
+      expect(JSON.parse(readFileSync(settingsPath, "utf-8")).companyAnnouncements)
+        .toEqual(variant === "personal" ? ["Team reminder"] : release.companyAnnouncements);
+    }
+  }, 120_000);
+
+  test("a project's own settings.json is kept on first install, with AI-DLC's entries added", () => {
+    const project = temp("aidlc-t294-claude-own-settings-");
+    mkdirSync(join(project, ".git"));
+    mkdirSync(join(project, ".claude"));
+    const settingsPath = join(project, ".claude", "settings.json");
+    writeFileSync(settingsPath, `${JSON.stringify({ userOwned: true, permissions: { deny: ["Bash(rm -rf:*)"] } }, null, 2)}\n`);
+    const installed = run([
+      "config", "--project-dir", project,
+      "--from", join(DIST_RELEASE, "claude"), "--harness", "claude", "--mcp", "defaults", "--yes",
+    ], project);
+    expect(installed.status, installed.stdout + installed.stderr).toBe(0);
+    expect(installed.stdout).toContain("Note: added the AI-DLC hook registrations to .claude/settings.json; your own settings were kept.");
+    expect(installed.stdout).not.toContain("they had been changed");
+    const after = JSON.parse(readFileSync(settingsPath, "utf-8"));
+    expect(after.userOwned).toBe(true);
+    expect(after.permissions.deny).toEqual(["Bash(rm -rf:*)"]);
+    const release = JSON.parse(readFileSync(join(DIST_RELEASE, "claude", ".claude", "settings.json"), "utf-8"));
+    expect(after.hooks).toEqual(release.hooks);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("a release change to AI-DLC's hook entries is not reported as a local edit", () => {
+    const env = runtimeEnv();
+    const claude = install("claude");
+    const claudeSource = temp("aidlc-t294-claude-release-change-");
+    cpSync(join(DIST_RELEASE, "claude"), claudeSource, { recursive: true });
+    const claudeSourcePath = join(claudeSource, ".claude", "settings.json");
+    const release = JSON.parse(readFileSync(claudeSourcePath, "utf-8"));
+    release.hooks.PreToolUse[0].matcher = "Bash";
+    writeFileSync(claudeSourcePath, `${JSON.stringify(release, null, 2)}\n`);
+    const claudeRefresh = run([
+      "config", "--project-dir", claude,
+      "--from", claudeSource, "--harness", "claude", "--yes",
+    ], claude, env);
+    expect(claudeRefresh.status, claudeRefresh.stdout + claudeRefresh.stderr).toBe(0);
+    expect(claudeRefresh.stdout).not.toContain(
+      "restored the AI-DLC hook registrations in .claude/settings.json (they had been changed)",
+    );
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("pristine Claude refresh remains byte-idempotent without notes", () => {
+    const project = install("claude");
+    const env = runtimeEnv();
+    const settingsPath = join(project, ".claude", "settings.json");
+    const installed = readFileSync(settingsPath, "utf-8");
+    for (let refresh = 0; refresh < 2; refresh++) {
+      const result = run([
+        "config", "--project-dir", project,
+        "--from", join(DIST_RELEASE, "claude"), "--harness", "claude", "--yes",
+      ], project, env);
+      expect(result.status, result.stdout + result.stderr).toBe(0);
+      expect(result.stdout).not.toContain("Note:");
+      expect(readFileSync(settingsPath, "utf-8")).toBe(installed);
+    }
+  }, 60_000);
+
+  // Windows PowerShell 5.1's `Set-Content -Encoding utf8`, and some editors,
+  // start a file with a UTF-8 byte order mark.
+  test("a settings file saved with a byte order mark is read, and kept as the person saved it", () => {
+    const project = install("claude");
+    const env = runtimeEnv();
+    const settingsPath = join(project, ".claude", "settings.json");
+    const mcpPath = join(project, ".mcp.json");
+    const args = ["config", "--project-dir", project, "--from", join(DIST_RELEASE, "claude"), "--harness", "claude", "--yes"];
+    for (const path of [settingsPath, mcpPath]) writeFileSync(path, `\uFEFF${readFileSync(path, "utf-8")}`);
+    const saved = [readFileSync(settingsPath, "utf-8"), readFileSync(mcpPath, "utf-8")];
+    for (let refresh = 0; refresh < 2; refresh++) {
+      const result = run(args, project, env);
+      expect(result.status, result.stdout + result.stderr).toBe(0);
+      expect(result.stdout).not.toContain("Note:");
+      expect([readFileSync(settingsPath, "utf-8"), readFileSync(mcpPath, "utf-8")]).toEqual(saved);
+    }
+
+    const doctorLabels = (): string[] => {
+      const doctor = spawnSync(BUN, [
+        join(project, ".claude", "tools", "aidlc.ts"), "--doctor", "--json", "--offline",
+      ], {
+        cwd: project,
+        env: { ...process.env, ...env, AIDLC_HARNESS_DIR: ".claude" },
+        encoding: "utf-8",
+        timeout: 60_000,
+      });
+      if (doctor.error) throw doctor.error;
+      return (JSON.parse(doctor.stdout).data.checks as Array<{ label: string }>).map((check) => check.label);
+    };
+    expect(doctorLabels().some((label) => label.includes("settings.json unreadable"))).toBe(false);
+    // A marked layer that switches hooks off is read as switching them off.
+    const localPath = join(project, ".claude", "settings.local.json");
+    writeFileSync(localPath, `\uFEFF${JSON.stringify({ disableAllHooks: true }, null, 2)}\n`);
+    expect(doctorLabels().some((label) =>
+      label.includes('Hooks DISABLED via "disableAllHooks": true in .claude/settings.local.json'))).toBe(true);
+    rmSync(localPath);
+
+    // A setting changed without --from reads the person's own copy too.
+    const providers = run(["config", "providers", "--provider", "current", "--project-dir", project, "--yes"], project, env);
+    expect(providers.status, providers.stdout + providers.stderr).toBe(0);
+    expect(readFileSync(settingsPath, "utf-8").startsWith("\uFEFF")).toBe(true);
+
+    // A refresh that adds AI-DLC's entries back keeps the person's own, and the mark.
+    const settings = JSON.parse(saved[0].slice(1));
+    settings.permissions = { deny: ["Bash(rm -rf:*)"] };
+    writeFileSync(settingsPath, `\uFEFF${JSON.stringify(settings, null, 2)}\n`);
+    const restored = run(args, project, env);
+    expect(restored.status, restored.stdout + restored.stderr).toBe(0);
+    expect(restored.stdout).toContain("added the AI-DLC command allow entries that were missing from .claude/settings.json");
+    const after = readFileSync(settingsPath, "utf-8");
+    expect(after.startsWith("\uFEFF")).toBe(true);
+    expect(JSON.parse(after.slice(1)).permissions.deny).toEqual(["Bash(rm -rf:*)"]);
+    expect(JSON.parse(after.slice(1)).permissions.allow).toEqual(JSON.parse(saved[0].slice(1)).permissions.allow);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("an opencode.json saved with a byte order mark refreshes as the person saved it", () => {
+    const project = install("opencode");
+    const path = join(project, "opencode.json");
+    writeFileSync(path, `\uFEFF${readFileSync(path, "utf-8")}`);
+    const saved = readFileSync(path, "utf-8");
+    const result = run([
+      "config", "--project-dir", project, "--from", join(DIST_RELEASE, "opencode"), "--harness", "opencode", "--yes",
+    ], project, runtimeEnv());
+    expect(result.status, result.stdout + result.stderr).toBe(0);
+    expect(readFileSync(path, "utf-8")).toBe(saved);
+
+    // Straight after the mark, a release that ships a different opencode.json
+    // takes the mark along.
+    const fresh = install("opencode");
+    const freshPath = join(fresh, "opencode.json");
+    writeFileSync(freshPath, `\uFEFF${readFileSync(freshPath, "utf-8")}`);
+    const source = temp("aidlc-t294-opencode-bom-source-");
+    cpSync(join(DIST_RELEASE, "opencode"), source, { recursive: true });
+    const shipped = JSON.parse(readFileSync(join(source, "opencode.json"), "utf-8"));
+    writeFileSync(join(source, "opencode.json"), `${JSON.stringify({ ...shipped, share: "disabled" }, null, 2)}\n`);
+    const upgraded = run([
+      "config", "--project-dir", fresh, "--from", source, "--harness", "opencode", "--yes",
+    ], fresh, runtimeEnv());
+    expect(upgraded.status, upgraded.stdout + upgraded.stderr).toBe(0);
+    expect(readFileSync(freshPath, "utf-8")).toBe(`\uFEFF${readFileSync(join(source, "opencode.json"), "utf-8")}`);
+    // Their own edit, mark or not, is still theirs: kept, with the mark.
+    writeFileSync(freshPath, `\uFEFF${JSON.stringify({ ...shipped, theme: "mine" }, null, 2)}\n`);
+    const edited = run([
+      "config", "--project-dir", fresh, "--from", join(DIST_RELEASE, "opencode"), "--harness", "opencode", "--yes",
+    ], fresh, runtimeEnv());
+    expect(edited.status, edited.stdout + edited.stderr).toBe(0);
+    const kept = readFileSync(freshPath, "utf-8");
+    expect(kept.startsWith("\uFEFF")).toBe(true);
+    expect(JSON.parse(kept.slice(1)).theme).toBe("mine");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("Claude refresh preserves a wired project hook whose filename starts with aidlc-", () => {
+    const project = install("claude");
+    const env = runtimeEnv();
+    const settingsPath = join(project, ".claude", "settings.json");
+    const settings = JSON.parse(readFileSync(settingsPath, "utf-8"));
+    const projectHook = {
+      matcher: "Bash",
+      hooks: [{
+        type: "command",
+        command: 'bun "$CLAUDE_PROJECT_DIR/.claude/hooks/aidlc-custom-policy.ts"',
+      }],
+    };
+    const projectStatusLine = {
+      type: "command",
+      command: 'bun "$CLAUDE_PROJECT_DIR/.claude/hooks/aidlc-custom-status.ts"',
+    };
+    settings.hooks.PreToolUse.push(projectHook);
+    settings.statusLine = projectStatusLine;
+    writeFileSync(settingsPath, `${JSON.stringify(settings, null, 2)}\n`);
+    writeFileSync(
+      join(project, ".claude", "hooks", "aidlc-custom-policy.ts"),
+      "// project-owned policy hook\n",
+    );
+
+    const refreshed = run([
+      "config", "--project-dir", project,
+      "--from", join(DIST_RELEASE, "claude"), "--harness", "claude", "--yes",
+    ], project, env);
+    expect(refreshed.status, refreshed.stdout + refreshed.stderr).toBe(0);
+    expect(refreshed.stdout).not.toContain("restored the AI-DLC hook registrations");
+    const after = JSON.parse(readFileSync(settingsPath, "utf-8"));
+    expect(after.hooks.PreToolUse).toContainEqual(projectHook);
+    expect(after.statusLine).toEqual(projectStatusLine);
+  }, 60_000);
+
+  test("refresh merges changed shipped Claude entries while preserving user settings", () => {
+    const env = runtimeEnv();
+    const source = temp("aidlc-t294-claude-entries-source-");
+    cpSync(join(DIST_RELEASE, "claude"), source, { recursive: true });
+    const sourceSettingsPath = join(source, ".claude", "settings.json");
+    const release = JSON.parse(readFileSync(sourceSettingsPath, "utf-8"));
+    release.permissions.allow.push("Bash(team-tool:*)");
+    const extraStopHook = {
+      matcher: "",
+      hooks: [{ type: "command", command: "aidlc engine hook validate-state" }],
+    };
+    release.hooks.Stop.push(extraStopHook);
+    writeFileSync(sourceSettingsPath, `${JSON.stringify(release, null, 2)}\n`);
+
+    const pristine = install("claude");
+    const pristineRefresh = run([
+      "config",
+      "--project-dir",
+      pristine,
+      "--from",
+      source,
+      "--harness",
+      "claude",
+      "--yes",
+    ], pristine, env);
+    expect(pristineRefresh.status, pristineRefresh.stdout + pristineRefresh.stderr).toBe(0);
+    const pristineSettings = JSON.parse(
+      readFileSync(join(pristine, ".claude", "settings.json"), "utf-8"),
+    );
+    expect(pristineSettings.permissions).toEqual(release.permissions);
+    expect(pristineSettings.hooks).toEqual(release.hooks);
+
+    const project = install("claude");
+    const settingsPath = join(project, ".claude", "settings.json");
+    const settings = JSON.parse(readFileSync(settingsPath, "utf-8"));
+    settings.permissions.deny = ["Bash(team-command:*)"];
+    writeFileSync(settingsPath, `${JSON.stringify(settings, null, 2)}\n`);
+    const args = [
+      "config",
+      "--project-dir",
+      project,
+      "--from",
+      source,
+      "--harness",
+      "claude",
+      "--yes",
+    ];
+    const dryRun = run([...args, "--dry-run"], project, env);
+    expect(dryRun.status, dryRun.stdout + dryRun.stderr).toBe(0);
+    expect(dryRun.stdout).not.toContain("Note: restored the AI-DLC hook registrations");
+    expect(dryRun.stdout).toContain("Note: added the AI-DLC command allow entries that were missing");
+    expect(JSON.parse(readFileSync(settingsPath, "utf-8"))).toEqual(settings);
+    const dryJson = run([...args, "--dry-run", "--json"], project, env);
+    expect(dryJson.status, dryJson.stdout + dryJson.stderr).toBe(0);
+    expect(JSON.parse(dryJson.stdout).data.notes).toEqual(expect.arrayContaining([
+      "added the AI-DLC command allow entries that were missing from .claude/settings.json; your other permissions were kept.",
+    ]));
+    expect(JSON.parse(dryJson.stdout).data.notes).not.toContain(
+      "restored the AI-DLC hook registrations in .claude/settings.json (they had been changed); your own hook entries were kept.",
+    );
+    expect(JSON.parse(readFileSync(settingsPath, "utf-8"))).toEqual(settings);
+
+    const refreshed = run(args, project, env);
+    expect(refreshed.status, refreshed.stdout + refreshed.stderr).toBe(0);
+    expect(refreshed.stdout).not.toContain("Note: restored the AI-DLC hook registrations");
+    expect(refreshed.stdout).toContain("Note: added the AI-DLC command allow entries that were missing");
+    const after = JSON.parse(readFileSync(settingsPath, "utf-8"));
+    expect(after.permissions.allow).toEqual(release.permissions.allow);
+    expect(after.permissions.deny).toEqual(settings.permissions.deny);
+    expect(after.hooks).toEqual(release.hooks);
+    const baseline = JSON.parse(readFileSync(
+      join(project, ".claude", "tools", "data", "aidlc-manifest.json"),
+      "utf-8",
+    ));
+    expect(baseline.entries[".claude/settings.json"]).toEqual(expect.objectContaining({
+      companyAnnouncements: expect.stringMatching(/^sha256:[0-9a-f]{64}$/),
+      permissions: expect.stringMatching(/^sha256:[0-9a-f]{64}$/),
+      statusLine: expect.stringMatching(/^sha256:[0-9a-f]{64}$/),
+      hooks: expect.stringMatching(/^sha256:[0-9a-f]{64}$/),
+      hooksAidlc: expect.stringMatching(/^sha256:[0-9a-f]{64}$/),
+    }));
+    for (const target of [
+      "continue-workflow",
+      "deliver-stage-rules",
+      "plan-approval-guard",
+      "review-freeze",
+      "reviewer-scope",
+      "state-transition-guard",
+    ]) {
+      expect(baseline.entries[".claude/settings.json"][
+        `hooksAidlc:${target}`
+      ]).toMatch(/^sha256:[0-9a-f]{64}$/);
+    }
+  }, 120_000);
+
+  test("refresh rejects a user-edited Codex framework table and force restores it", () => {
+    const env = runtimeEnv();
+    const project = install("codex");
+    const configPath = join(project, ".codex", "config.toml");
+    const userStatus = ["git-branch", "context-used"];
+    const edited = readFileSync(configPath, "utf-8").replace(
+      /^status_line\s*=.*$/m,
+      `status_line = ${JSON.stringify(userStatus)}`,
+    );
+    writeFileSync(configPath, edited);
+    const ordinary = run([
+      "config",
+      "--project-dir",
+      project,
+      "--yes",
+    ], project, env);
+    expect(ordinary.status, ordinary.stdout + ordinary.stderr).toBe(4);
+    expect(parseToml(readFileSync(configPath, "utf-8")).tui)
+      .toEqual({ status_line: userStatus });
+
+    const source = temp("aidlc-t294-codex-entries-source-");
+    cpSync(join(DIST_RELEASE, "codex"), source, { recursive: true });
+    const sourceConfigPath = join(source, ".codex", "config.toml");
+    const releaseStatus = ["model-with-reasoning", "context-used"];
+    writeFileSync(sourceConfigPath, readFileSync(sourceConfigPath, "utf-8").replace(
+      /^status_line\s*=.*$/m,
+      `status_line = ${JSON.stringify(releaseStatus)}`,
+    ));
+    const refreshed = run([
+      "config",
+      "--project-dir",
+      project,
+      "--from",
+      source,
+      "--harness",
+      "codex",
+      "--yes",
+    ], project, env);
+    expect(refreshed.status, refreshed.stdout + refreshed.stderr).toBe(4);
+    expect(parseToml(readFileSync(configPath, "utf-8")).tui)
+      .toEqual({ status_line: userStatus });
+    const forced = run([
+      "config",
+      "--project-dir",
+      project,
+      "--from",
+      source,
+      "--harness",
+      "codex",
+      "--force",
+      "--yes",
+    ], project, env);
+    expect(forced.status, forced.stdout + forced.stderr).toBe(0);
+    expect(parseToml(readFileSync(configPath, "utf-8")).tui)
+      .toEqual({ status_line: releaseStatus });
+
+    const pristine = install("codex");
+    const pristineRefresh = run([
+      "config",
+      "--project-dir",
+      pristine,
+      "--from",
+      source,
+      "--harness",
+      "codex",
+      "--yes",
+    ], pristine, env);
+    expect(pristineRefresh.status, pristineRefresh.stdout + pristineRefresh.stderr).toBe(0);
+    expect(parseToml(readFileSync(join(pristine, ".codex", "config.toml"), "utf-8")).tui)
+      .toEqual({ status_line: releaseStatus });
+    const baseline = JSON.parse(readFileSync(
+      join(project, ".codex", "tools", "data", "aidlc-manifest.json"),
+      "utf-8",
+    ));
+    expect(baseline.entries[".codex/config.toml"]).toEqual({
+      agents: expect.stringMatching(/^sha256:[0-9a-f]{64}$/),
+      developer_instructions: expect.stringMatching(/^sha256:[0-9a-f]{64}$/),
+      features: expect.stringMatching(/^sha256:[0-9a-f]{64}$/),
+      sandbox_mode: expect.stringMatching(/^sha256:[0-9a-f]{64}$/),
+      sandbox_workspace_write: expect.stringMatching(/^sha256:[0-9a-f]{64}$/),
+      shell_environment_policy: expect.stringMatching(/^sha256:[0-9a-f]{64}$/),
+      suppress_unstable_features_warning: expect.stringMatching(/^sha256:[0-9a-f]{64}$/),
+      tools: expect.stringMatching(/^sha256:[0-9a-f]{64}$/),
+      tui: expect.stringMatching(/^sha256:[0-9a-f]{64}$/),
+    });
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("record-only answers never adopt local drift into the ownership baseline", () => {
+    const env = runtimeEnv();
+    for (const [harness, harnessDir] of [["claude", ".claude"], ["opencode", ".aidlc"]]) {
+      for (const modified of [true, false]) {
+        const project = install(harness);
+        const manifestPath = join(project, harnessDir, "tools", "data", "aidlc-manifest.json");
+        const before = JSON.parse(readFileSync(manifestPath, "utf-8"));
+        const rel = harness === "claude" ? ".claude/hooks/aidlc-session-end.ts" : "opencode.json";
+        const path = join(project, rel);
+        const userHook = ".claude/hooks/aidlc-team.ts";
+        if (modified) {
+          if (harness === "claude") {
+            writeFileSync(path, `${readFileSync(path, "utf-8")}\n// local hook edit\n`);
+            writeFileSync(join(project, userHook), "// user-owned hook\n");
+          } else {
+            const settings = JSON.parse(readFileSync(path, "utf-8"));
+            settings.mcp = {
+              ...settings.mcp,
+              "team-service": { type: "local", command: ["team-tool"] },
+            };
+            writeFileSync(path, `${JSON.stringify(settings, null, 2)}\n`);
+          }
+        }
+        const current = readFileSync(path, "utf-8");
+        const answer = run([
+          "config",
+          "providers",
+          "--provider",
+          harness === "claude" ? "current" : "amazon-bedrock",
+          ...(harness === "opencode" ? ["--region", "eu-west-1", "--opencode-default", "yes"] : []),
+          "--yes",
+        ], project, env);
+        expect(answer.status, answer.stdout + answer.stderr).toBe(0);
+        const after = JSON.parse(readFileSync(manifestPath, "utf-8"));
+        expect(after.entries).toEqual(before.entries);
+        if (harness === "claude") {
+          expect(readFileSync(path, "utf-8")).toBe(current);
+          expect(after.files[rel]).toBe(before.files[rel]);
+          expect(after.files[userHook]).toBeUndefined();
+          expect(after.rootContributions).toEqual(before.rootContributions);
+        } else {
+          const settings = JSON.parse(readFileSync(path, "utf-8"));
+          expect(settings.mcp).toEqual(JSON.parse(current).mcp);
+          expect(settings.provider["amazon-bedrock"].options.region).toBe("eu-west-1");
+          // The team's own MCP server is never recorded as AI-DLC's; the
+          // provider region AI-DLC wrote is.
+          const entries = after.rootContributions[rel].entries as Record<string, string>;
+          expect(Object.keys(entries).some((id) => id.includes('"mcp"'))).toBe(false);
+          expect(entries).toMatchObject(before.rootContributions[rel].entries);
+          expect(entries[JSON.stringify({ path: ["provider", "amazon-bedrock", "options", "region"] })]).toBeDefined();
+        }
+        const refresh = run([
+          "config",
+          "--from",
+          join(DIST_RELEASE, harness),
+          "--harness",
+          harness,
+          "--yes",
+        ], project, env);
+        // A Claude hook edit is a conflict; the team's opencode.json entries are theirs to keep.
+        expect(refresh.status, refresh.stdout + refresh.stderr).toBe(modified && harness === "claude" ? 4 : 0);
+        if (modified && harness === "claude") {
+          expect(refresh.stdout).toContain(rel);
+          expect(refresh.stdout).toContain("locally modified or unowned");
+        } else if (modified) {
+          expect(JSON.parse(readFileSync(path, "utf-8")).mcp["team-service"]).toEqual({ type: "local", command: ["team-tool"] });
+        }
+      }
+    }
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("record-only answers establish ownership for manifest-less copy-channel projections", () => {
+    for (const [harness, harnessDir] of [["claude", ".claude"], ["opencode", ".aidlc"]]) {
+      for (const env of [runtimeEnv(), runtimeEnv({ AIDLC_RUNTIME_ROOT: "" })]) {
+        const project = temp(`aidlc-t294-copy-baseline-${harness}-`);
+        mkdirSync(join(project, ".git"), { recursive: true });
+        cpSync(join(DIST, harness), project, { recursive: true });
+        const manifestPath = join(project, harnessDir, "tools", "data", "aidlc-manifest.json");
+        expect(existsSync(manifestPath)).toBe(false);
+
+        const recorded = run([
+          "config",
+          "providers",
+          "--project-dir",
+          project,
+          "--provider",
+          "current",
+          "--yes",
+        ], project, env);
+        expect(recorded.status, recorded.stdout + recorded.stderr).toBe(0);
+
+        const manifest = JSON.parse(readFileSync(manifestPath, "utf-8"));
+        expect(Object.keys(manifest.files).length).toBeGreaterThan(0);
+        if (harness === "opencode") {
+          expect(manifest.rootContributions["opencode.json"]).toBeDefined();
+        }
+
+        const refreshed = run([
+          "config",
+          "--project-dir",
+          project,
+          "--from",
+          join(DIST_RELEASE, harness),
+          "--harness",
+          harness,
+          "--yes",
+        ], project, env);
+        expect(refreshed.status, refreshed.stdout + refreshed.stderr).toBe(0);
+        expect(refreshed.stdout).not.toContain("locally modified or unowned");
+        expect(refreshed.stdout).not.toContain("unowned whole file");
+        rmSync(project, { recursive: true, force: true });
+      }
+    }
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("provider answers preserve project fields and reject framework drift", () => {
+    const env = runtimeEnv();
+    const opencode = install("opencode");
+    const opencodePath = join(opencode, "opencode.json");
+    const opencodeSettings = JSON.parse(readFileSync(opencodePath, "utf-8"));
+    opencodeSettings.mcp = {
+      ...opencodeSettings.mcp,
+      "team-service": { type: "local", command: ["team-tool"] },
+    };
+    writeFileSync(opencodePath, `${JSON.stringify(opencodeSettings, null, 2)}\n`);
+    const opencodeAnswer = run([
+      "config",
+      "providers",
+      "--project-dir",
+      opencode,
+      "--provider",
+      "amazon-bedrock",
+      "--region",
+      "eu-west-1",
+      "--opencode-default",
+      "yes",
+      "--yes",
+    ], opencode, env);
+    expect(opencodeAnswer.status, opencodeAnswer.stdout + opencodeAnswer.stderr).toBe(0);
+    const opencodeAfter = JSON.parse(readFileSync(opencodePath, "utf-8"));
+    expect(opencodeAfter.mcp).toEqual(opencodeSettings.mcp);
+    expect(opencodeAfter.provider["amazon-bedrock"].options.region).toBe("eu-west-1");
+
+    const codex = install("codex");
+    const codexPath = join(codex, ".codex", "config.toml");
+    const userStatus = ["git-branch"];
+    const edited = readFileSync(codexPath, "utf-8").replace(
+      /^status_line\s*=.*$/m,
+      `status_line = ${JSON.stringify(userStatus)}`,
+    );
+    const legacyBlock =
+      `# D-9: Amazon Bedrock is the shipped default provider (web_search is\n` +
+      `# unavailable there; the market-research stage degrades gracefully). For\n` +
+      `# OpenAI-auth setups, comment out model_provider and the [model_providers]\n` +
+      `# block.\n` +
+      `model = "openai.gpt-5.5"\nmodel_provider = "amazon-bedrock"\n` +
+      `model_context_window = 1000000\nmodel_reasoning_effort = "high"\n\n` +
+      `[model_providers.amazon-bedrock.aws]\n` +
+      `# Set to your AWS profile/region with Bedrock model access.\n` +
+      `profile = "default"\nregion = "us-east-1"\n\n`;
+    const legacyEdited = withLegacyCodexProviderBlock(edited, legacyBlock);
+    writeFileSync(codexPath, legacyEdited);
+    const codexAnswer = run([
+      "config",
+      "providers",
+      "--project-dir",
+      codex,
+      "--provider",
+      "current",
+      "--yes",
+    ], codex, env);
+    expect(codexAnswer.status, codexAnswer.stdout + codexAnswer.stderr).toBe(4);
+    const codexAfter = readFileSync(codexPath, "utf-8");
+    expect(codexAfter).toBe(legacyEdited);
+    expect(parseToml(codexAfter).tui).toEqual({ status_line: userStatus });
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("opting out of a recorded Bedrock answer removes shipped Claude aliases and keeps customized ones", () => {
+    const env = runtimeEnv();
+    for (const opusModel of [
+      "my-custom-opus",
+      "global.anthropic.claude-opus-4-8[1m]",
+    ]) {
+      const project = install("claude");
+      const configured = run([
+        "config",
+        "providers",
+        "--project-dir",
+        project,
+        "--provider",
+        "amazon-bedrock",
+        "--region",
+        "us-east-1",
+        "--yes",
+      ], project, env);
+      expect(configured.status, configured.stdout + configured.stderr).toBe(0);
+      const settingsPath = join(project, ".claude", "settings.json");
+      const settings = JSON.parse(readFileSync(settingsPath, "utf-8"));
+      const scope = settings.env.AWS_AIDLC_DEFAULT_SCOPE;
+      Object.assign(settings.env, {
+        ANTHROPIC_DEFAULT_FABLE_MODEL:
+          "global.anthropic.claude-fable-5[1m]",
+        ANTHROPIC_DEFAULT_OPUS_MODEL: opusModel,
+        ANTHROPIC_DEFAULT_SONNET_MODEL:
+          "global.anthropic.claude-sonnet-4-6[1m]",
+        ANTHROPIC_DEFAULT_HAIKU_MODEL:
+          "global.anthropic.claude-haiku-4-5-20251001-v1:0",
+      });
+      writeFileSync(settingsPath, `${JSON.stringify(settings, null, 2)}\n`);
+      const changed = run([
+        "config",
+        "providers",
+        "--project-dir",
+        project,
+        "--provider",
+        "current",
+        "--yes",
+      ], project, env);
+      expect(changed.status, changed.stdout + changed.stderr).toBe(0);
+      const after = JSON.parse(readFileSync(settingsPath, "utf-8")).env;
+      for (const key of [
+        "CLAUDE_CODE_USE_BEDROCK",
+        "AWS_REGION",
+        "ANTHROPIC_DEFAULT_FABLE_MODEL",
+        "ANTHROPIC_DEFAULT_SONNET_MODEL",
+        "ANTHROPIC_DEFAULT_HAIKU_MODEL",
+      ]) {
+        expect(after[key], key).toBeUndefined();
+      }
+      expect(after.ANTHROPIC_DEFAULT_OPUS_MODEL).toBe(
+        opusModel === "my-custom-opus" ? opusModel : undefined,
+      );
+      expect(after.AWS_AIDLC_DEFAULT_SCOPE).toBe(scope);
+      const check = run([
+        "config",
+        "providers",
+        "--project-dir",
+        project,
+        "--check",
+      ], project, env);
+      expect(check.status, check.stdout + check.stderr).toBe(0);
+      expect(check.stdout).toContain("clean for claude");
+    }
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("provider changes and ordinary refresh preserve a directly customized Claude default scope", () => {
+    const project = install("claude");
+    const env = runtimeEnv();
+    const settingsPath = join(project, ".claude", "settings.json");
+    const settings = JSON.parse(readFileSync(settingsPath, "utf-8"));
+    settings.env.AWS_AIDLC_DEFAULT_SCOPE = "feature";
+    writeFileSync(settingsPath, `${JSON.stringify(settings, null, 2)}\n`);
+
+    const provider = run([
+      "config",
+      "providers",
+      "--project-dir",
+      project,
+      "--provider",
+      "current",
+      "--yes",
+    ], project, env);
+    expect(provider.status, provider.stdout + provider.stderr).toBe(0);
+    expect(JSON.parse(readFileSync(settingsPath, "utf-8")).env.AWS_AIDLC_DEFAULT_SCOPE)
+      .toBe("feature");
+
+    const refreshed = run([
+      "config",
+      "--project-dir",
+      project,
+      "--from",
+      join(DIST_RELEASE, "claude"),
+      "--harness",
+      "claude",
+      "--yes",
+    ], project, env);
+    expect(refreshed.status, refreshed.stdout + refreshed.stderr).toBe(0);
+    expect(JSON.parse(readFileSync(settingsPath, "utf-8")).env.AWS_AIDLC_DEFAULT_SCOPE)
+      .toBe("feature");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("reset removes the OpenCode provider block AI-DLC wrote and keeps a user-authored one", () => {
+    const env = runtimeEnv();
+    for (const customized of [false, true]) {
+      const project = install("opencode");
+      const configured = run([
+        "config",
+        "providers",
+        "--project-dir",
+        project,
+        "--provider",
+        "amazon-bedrock",
+        "--region",
+        "us-east-1",
+        "--opencode-default",
+        "yes",
+        "--yes",
+      ], project, env);
+      expect(configured.status, configured.stdout + configured.stderr).toBe(0);
+      const path = join(project, "opencode.json");
+      const config = JSON.parse(readFileSync(path, "utf-8"));
+      expect(config.provider["amazon-bedrock"].options.region).toBe("us-east-1");
+      if (customized) {
+        config.provider["amazon-bedrock"].options.region = "eu-west-1";
+        writeFileSync(path, `${JSON.stringify(config, null, 2)}\n`);
+      }
+      const reset = run([
+        "config",
+        "providers",
+        "--project-dir",
+        project,
+        "--reset",
+        "--yes",
+      ], project, env);
+      expect(reset.status, reset.stdout + reset.stderr).toBe(0);
+      const after = JSON.parse(readFileSync(path, "utf-8"));
+      if (customized) {
+        expect(after.provider).toEqual(config.provider);
+      } else {
+        expect(after.provider).toBeUndefined();
+      }
+    }
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("reset and keep-current remove only the OpenCode provider options AI-DLC wrote", () => {
+    const env = runtimeEnv();
+    const models = { "anthropic.claude-sonnet-4-6": { name: "Sonnet" } };
+    for (const flags of [["--reset"], ["--provider", "current"]]) {
+      const project = install("opencode");
+      const configured = run([
+        "config",
+        "providers",
+        "--project-dir",
+        project,
+        "--provider",
+        "amazon-bedrock",
+        "--region",
+        "us-east-1",
+        "--opencode-default",
+        "yes",
+        "--yes",
+      ], project, env);
+      expect(configured.status, configured.stdout + configured.stderr).toBe(0);
+      const path = join(project, "opencode.json");
+      const config = JSON.parse(readFileSync(path, "utf-8"));
+      config.provider["amazon-bedrock"].options.maxRetries = 3;
+      config.provider["amazon-bedrock"].models = models;
+      writeFileSync(path, `${JSON.stringify(config, null, 2)}\n`);
+
+      const refreshed = run([
+        "config",
+        "--project-dir",
+        project,
+        "--yes",
+      ], project, env);
+      expect(refreshed.status, refreshed.stdout + refreshed.stderr).toBe(0);
+      expect(JSON.parse(readFileSync(path, "utf-8")).provider["amazon-bedrock"])
+        .toEqual({ models, options: { region: "us-east-1", maxRetries: 3 } });
+
+      const cleared = run([
+        "config",
+        "providers",
+        "--project-dir",
+        project,
+        ...flags,
+        "--yes",
+      ], project, env);
+      expect(cleared.status, cleared.stdout + cleared.stderr).toBe(0);
+      expect(JSON.parse(readFileSync(path, "utf-8")).provider["amazon-bedrock"])
+        .toEqual({ models, options: { maxRetries: 3 } });
+    }
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("OpenCode other treats retained user Bedrock providers as intentional warnings", () => {
+    const env = runtimeEnv();
+
+    const userProject = install("opencode");
+    const userPath = join(userProject, "opencode.json");
+    const userConfig = JSON.parse(readFileSync(userPath, "utf-8"));
+    userConfig.provider = {
+      "team-provider": { npm: "@example/provider" },
+      "amazon-bedrock": {
+        models: { "team-model": { name: "Team model" } },
+        options: { region: "eu-west-1", maxRetries: 3 },
+      },
+    };
+    writeFileSync(userPath, `${JSON.stringify(userConfig, null, 2)}\n`);
+    const recordedOther = run([
+      "config",
+      "providers",
+      "--project-dir",
+      userProject,
+      "--provider",
+      "other",
+      "--acknowledge",
+      "--yes",
+    ], userProject, env);
+    expect(recordedOther.status, recordedOther.stdout + recordedOther.stderr).toBe(0);
+    const userCheck = run([
+      "config",
+      "providers",
+      "--project-dir",
+      userProject,
+      "--check",
+    ], userProject, env);
+    expect(userCheck.status, userCheck.stdout + userCheck.stderr).toBe(0);
+    expect(userCheck.stdout).toContain("provider-opencode-project-override");
+    expect(userCheck.stdout).toContain("warning(s)");
+
+    const transitioned = install("opencode");
+    const configured = run([
+      "config",
+      "providers",
+      "--project-dir",
+      transitioned,
+      "--provider",
+      "amazon-bedrock",
+      "--region",
+      "us-east-1",
+      "--opencode-default",
+      "yes",
+      "--yes",
+    ], transitioned, env);
+    expect(configured.status, configured.stdout + configured.stderr).toBe(0);
+    const transitionedPath = join(transitioned, "opencode.json");
+    const transitionedConfig = JSON.parse(readFileSync(transitionedPath, "utf-8"));
+    transitionedConfig.provider["amazon-bedrock"].models = {
+      "team-model": { name: "Team model" },
+    };
+    transitionedConfig.provider["amazon-bedrock"].options.maxRetries = 3;
+    writeFileSync(
+      transitionedPath,
+      `${JSON.stringify(transitionedConfig, null, 2)}\n`,
+    );
+    const changed = run([
+      "config",
+      "providers",
+      "--project-dir",
+      transitioned,
+      "--provider",
+      "other",
+      "--acknowledge",
+      "--yes",
+    ], transitioned, env);
+    expect(changed.status, changed.stdout + changed.stderr).toBe(0);
+    const transitionedCheck = run([
+      "config",
+      "providers",
+      "--project-dir",
+      transitioned,
+      "--check",
+    ], transitioned, env);
+    expect(transitionedCheck.status, transitionedCheck.stdout + transitionedCheck.stderr)
+      .toBe(0);
+    expect(transitionedCheck.stdout).toContain("provider-opencode-project-override");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("keep-current preserves a customized legacy Codex Bedrock table and removes a record-written one", () => {
+    const legacyBlock =
+      `# D-9: Amazon Bedrock is the shipped default provider (web_search is\n` +
+      `# unavailable there; the market-research stage degrades gracefully). For\n` +
+      `# OpenAI-auth setups, comment out model_provider and the [model_providers]\n` +
+      `# block.\n` +
+      `model = "openai.gpt-5.5"\nmodel_provider = "amazon-bedrock"\n` +
+      `model_context_window = 1000000\nmodel_reasoning_effort = "high"\n\n` +
+      `[model_providers.amazon-bedrock.aws]\n` +
+      `# Set to your AWS profile/region with Bedrock model access.\n` +
+      `profile = "team"\nregion = "eu-west-1"\n\n`;
+    for (const env of [runtimeEnv(), runtimeEnv({ AIDLC_RUNTIME_ROOT: "" })]) {
+      const project = install("codex");
+      const configPath = join(project, ".codex", "config.toml");
+      const customized = withLegacyCodexProviderBlock(
+        readFileSync(configPath, "utf-8"),
+        legacyBlock,
+      );
+      writeFileSync(configPath, customized);
+      const changed = run([
+        "config",
+        "providers",
+        "--project-dir",
+        project,
+        "--provider",
+        "current",
+        "--yes",
+      ], project, env);
+      expect(changed.status, changed.stdout + changed.stderr).toBe(0);
+      expect(changed.stdout).not.toContain("project overrides removed");
+      expect(readFileSync(configPath, "utf-8")).toBe(customized);
+      const check = run([
+        "config",
+        "providers",
+        "--project-dir",
+        project,
+        "--check",
+      ], project, env);
+      expect(check.status, check.stdout + check.stderr).toBe(0);
+      expect(check.stdout).toContain("1 warning(s)");
+      expect(check.stdout).toContain("provider-codex-project-override");
+    }
+
+    const project = install("codex");
+    const env = runtimeEnv();
+    const configPath = join(project, ".codex", "config.toml");
+    const shipped = readFileSync(configPath, "utf-8");
+    writeFileSync(
+      configPath,
+      withLegacyCodexProviderBlock(shipped, legacyBlock),
+    );
+    const configured = run([
+      "config",
+      "providers",
+      "--project-dir",
+      project,
+      "--provider",
+      "amazon-bedrock",
+      "--region",
+      "eu-west-1",
+      "--profile",
+      "team",
+      "--yes",
+    ], project, env);
+    expect(configured.status, configured.stdout + configured.stderr).toBe(0);
+    const changed = run([
+      "config",
+      "providers",
+      "--project-dir",
+      project,
+      "--provider",
+      "current",
+      "--yes",
+    ], project, env);
+    expect(changed.status, changed.stdout + changed.stderr).toBe(0);
+    expect(readFileSync(configPath, "utf-8")).toBe(shipped);
+    const check = run([
+      "config",
+      "providers",
+      "--project-dir",
+      project,
+      "--check",
+    ], project, env);
+    expect(check.status, check.stdout + check.stderr).toBe(0);
+    expect(check.stdout).toContain("clean for codex");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("keep-current removes the documented commented-out legacy Codex block", () => {
+    const env = runtimeEnv();
+    for (const effort of ["high", "medium"]) {
+      const project = install("codex");
+      const configPath = join(project, ".codex", "config.toml");
+      const shipped = readFileSync(configPath, "utf-8");
+      const legacyBlock =
+        `# Model: these session defaults are what judgment-tier agent roles inherit\n` +
+        `# (their TOMLs omit model/model_reasoning_effort by design - see the tier\n` +
+        `# projection); balanced roles pin gpt-5.6-terra/medium, while templated roles inherit.\n` +
+        `# D-9: Amazon Bedrock is the shipped default provider (web_search is\n` +
+        `# unavailable there; the market-research stage degrades gracefully). For\n` +
+        `# OpenAI-auth setups, comment out model_provider and the [model_providers]\n` +
+        `# block.\n` +
+        `model = "openai.gpt-5.5"\n# model_provider = "amazon-bedrock"\n` +
+        `model_context_window = 1000000\nmodel_reasoning_effort = "${effort}"\n\n` +
+        `# [model_providers.amazon-bedrock.aws]\n` +
+        `# # Set to your AWS profile/region with Bedrock model access.\n` +
+        `# profile = "default"\n# region = "us-east-1"\n\n`;
+      const legacy = withLegacyCodexProviderBlock(shipped, legacyBlock);
+      writeFileSync(configPath, legacy);
+      const changed = run([
+        "config",
+        "providers",
+        "--project-dir",
+        project,
+        "--provider",
+        "current",
+        "--yes",
+      ], project, env);
+      expect(changed.status, changed.stdout + changed.stderr).toBe(0);
+      expect(readFileSync(configPath, "utf-8")).toBe(effort === "high" ? shipped : legacy);
+      const check = run([
+        "config",
+        "providers",
+        "--project-dir",
+        project,
+        "--check",
+      ], project, env);
+      expect(check.status, check.stdout + check.stderr).toBe(0);
+      if (effort === "high") {
+        expect(check.stdout).toContain("clean for codex");
+        expect(check.stdout).not.toContain("provider-codex-project-override");
+      } else {
+        expect(check.stdout).toContain("warning");
+        expect(check.stdout).toContain("provider-codex-project-override");
+      }
+    }
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("keep-current preserves a legacy Codex table that carries a user key after a blank line", () => {
+    const legacyBlock =
+      `# D-9: Amazon Bedrock is the shipped default provider (web_search is\n` +
+      `# unavailable there; the market-research stage degrades gracefully). For\n` +
+      `# OpenAI-auth setups, comment out model_provider and the [model_providers]\n` +
+      `# block.\n` +
+      `model = "openai.gpt-5.5"\nmodel_provider = "amazon-bedrock"\n` +
+      `model_context_window = 1000000\nmodel_reasoning_effort = "high"\n\n` +
+      `[model_providers.amazon-bedrock.aws]\n` +
+      `profile = "default"\nregion = "us-east-1"\n\ncustom = "keep"\n\n`;
+    for (const env of [runtimeEnv(), runtimeEnv({ AIDLC_RUNTIME_ROOT: "" })]) {
+      const project = install("codex");
+      const configPath = join(project, ".codex", "config.toml");
+      const customized = withLegacyCodexProviderBlock(
+        readFileSync(configPath, "utf-8"),
+        legacyBlock,
+      );
+      writeFileSync(configPath, customized);
+      const changed = run([
+        "config",
+        "providers",
+        "--project-dir",
+        project,
+        "--provider",
+        "current",
+        "--yes",
+      ], project, env);
+      expect(changed.status, changed.stdout + changed.stderr).toBe(0);
+      const after = readFileSync(configPath, "utf-8");
+      expect(after).toContain('custom = "keep"');
+      expect(after).toContain("[model_providers.amazon-bedrock.aws]");
+      expect(after).toContain('model_provider = "amazon-bedrock"');
+      expect(after).toBe(customized);
+      const check = run([
+        "config",
+        "providers",
+        "--project-dir",
+        project,
+        "--check",
+      ], project, env);
+      expect(check.status, check.stdout + check.stderr).toBe(0);
+      expect(check.stdout).toContain("provider-codex-project-override");
+    }
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("reset removes the exact legacy Codex Bedrock block", () => {
+    const project = install("codex");
+    const env = runtimeEnv();
+    const configPath = join(project, ".codex", "config.toml");
+    const shipped = readFileSync(configPath, "utf-8");
+    const legacyBlock =
+      `# Model: these session defaults are what judgment-tier agent roles inherit\n` +
+        `# (their TOMLs omit model/model_reasoning_effort by design - see the tier\n` +
+        `# projection); balanced roles pin gpt-5.6-terra/medium, while templated roles inherit.\n` +
+      `# D-9: Amazon Bedrock is the shipped default provider (web_search is\n` +
+        `# unavailable there; the market-research stage degrades gracefully). For\n` +
+        `# OpenAI-auth setups, comment out model_provider and the [model_providers]\n` +
+        `# block.\n` +
+        `model = "openai.gpt-5.5"\nmodel_provider = "amazon-bedrock"\n` +
+        `model_context_window = 1000000\nmodel_reasoning_effort = "high"\n\n` +
+        `[model_providers.amazon-bedrock.aws]\nprofile = "default"\nregion = "us-east-1"\n\n`;
+    writeFileSync(
+      configPath,
+      withLegacyCodexProviderBlock(shipped, legacyBlock),
+    );
+    const configured = run([
+      "config",
+      "providers",
+      "--project-dir",
+      project,
+      "--provider",
+      "amazon-bedrock",
+      "--region",
+      "us-east-1",
+      "--yes",
+    ], project, env);
+    expect(configured.status, configured.stdout + configured.stderr).toBe(0);
+    const reset = run([
+      "config",
+      "providers",
+      "--project-dir",
+      project,
+      "--reset",
+      "--yes",
+    ], project, env);
+    expect(reset.status, reset.stdout + reset.stderr).toBe(0);
+    const after = readFileSync(configPath, "utf-8");
+    expect(after).not.toContain('model_provider = "amazon-bedrock"');
+    expect(after).not.toContain('model = "openai.gpt-5.5"');
+    expect(after).not.toContain("[model_providers.amazon-bedrock.aws]");
+    expect(after).toBe(shipped);
+    const check = run([
+      "config",
+      "providers",
+      "--project-dir",
+      project,
+      "--check",
+    ], project, env);
+    expect(check.status, check.stdout + check.stderr).toBe(0);
+    expect(check.stdout).toContain("no recorded answer");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("check warns and show stops calling a partially edited legacy Codex block provider-neutral", () => {
+    const project = install("codex");
+    const env = runtimeEnv();
+    const path = join(project, ".codex", "config.toml");
+    const legacyBlock =
+      `# D-9: Amazon Bedrock is the shipped default provider (web_search is\n` +
+        `# unavailable there; the market-research stage degrades gracefully). For\n` +
+        `# OpenAI-auth setups, comment out model_provider and the [model_providers]\n` +
+        `# block.\n` +
+        `model = "openai.gpt-5.5"\nmodel_provider = "amazon-bedrock"\n` +
+        `model_context_window = 1000000\nmodel_reasoning_effort = "medium"\n\n` +
+        `[model_providers.amazon-bedrock.aws]\nprofile = "default"\nregion = "us-east-1"\n\n`;
+    writeFileSync(
+      path,
+      withLegacyCodexProviderBlock(readFileSync(path, "utf-8"), legacyBlock),
+    );
+    const configured = run([
+      "config",
+      "providers",
+      "--project-dir",
+      project,
+      "--provider",
+      "amazon-bedrock",
+      "--region",
+      "us-east-1",
+      "--yes",
+    ], project, env);
+    expect(configured.status, configured.stdout + configured.stderr).toBe(0);
+    const changed = run([
+      "config",
+      "providers",
+      "--project-dir",
+      project,
+      "--provider",
+      "current",
+      "--yes",
+    ], project, env);
+    expect(changed.status, changed.stdout + changed.stderr).toBe(0);
+    expect(readFileSync(path, "utf-8")).toContain('model_provider = "amazon-bedrock"');
+    expect(readFileSync(path, "utf-8")).toContain('model_reasoning_effort = "medium"');
+    const check = run([
+      "config",
+      "providers",
+      "--project-dir",
+      project,
+      "--check",
+    ], project, env);
+    expect(check.status, check.stdout + check.stderr).toBe(0);
+    expect(check.stdout).toContain("1 warning(s)");
+    expect(check.stdout).toContain("provider-codex-project-override");
+    const show = run([
+      "config",
+      "providers",
+      "--project-dir",
+      project,
+      "--show",
+    ], project, env);
+    expect(show.status, show.stdout + show.stderr).toBe(0);
+    expect(show.stdout).toContain("Codex project configuration");
+    expect(show.stdout).not.toContain("provider-neutral");
+    const record = normalizeProvidersRecord({
+      schemaVersion: 1,
+      provider: "current",
+    });
+    expect(providerIssues(project, ".codex", "codex", record)
+      .map(({ id, severity }) => ({ id, severity }))).toEqual([
+      { id: "provider-codex-project-override", severity: "warn" },
+    ]);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("copy-channel provider transitions remove the recorded Claude Bedrock values", () => {
+    for (const transition of [
+      ["--provider", "current"],
+      ["--provider", "other", "--acknowledge"],
+      ["--reset"],
+    ]) {
+      const project = install("claude");
+      const configured = run([
+        "config",
+        "providers",
+        "--project-dir",
+        project,
+        "--provider",
+        "amazon-bedrock",
+        "--region",
+        "eu-west-1",
+        "--profile",
+        "team",
+        "--yes",
+      ], project, runtimeEnv());
+      expect(configured.status, configured.stdout + configured.stderr).toBe(0);
+      const copyEnv = {
+        AIDLC_RUNTIME_ROOT: "",
+        AWS_ACCESS_KEY_ID: "test-access",
+        AWS_SECRET_ACCESS_KEY: "test-secret",
+      };
+      const changed = run([
+        "config",
+        "providers",
+        "--project-dir",
+        project,
+        ...transition,
+        "--yes",
+      ], project, copyEnv);
+      expect(changed.status, changed.stdout + changed.stderr).toBe(0);
+      const settings = JSON.parse(readFileSync(
+        join(project, ".claude", "settings.json"),
+        "utf-8",
+      ));
+      expect(settings.env.CLAUDE_CODE_USE_BEDROCK).toBeUndefined();
+      expect(settings.env.AWS_REGION).toBeUndefined();
+      expect(settings.env.AWS_PROFILE).toBeUndefined();
+      const check = run([
+        "config",
+        "providers",
+        "--project-dir",
+        project,
+        "--check",
+      ], project, copyEnv);
+      expect(check.status, check.stdout + check.stderr).toBe(0);
+      expect(check.stdout).not.toContain("provider-claude-project-override");
+    }
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("refresh reports removal of unrecorded legacy Bedrock defaults", () => {
+    const env = runtimeEnv();
+    for (const [harness, harnessDir, configName] of [
+      ["claude", ".claude", "settings.json"],
+      ["codex", ".codex", "config.toml"],
+    ]) {
+      const project = install(harness);
+      const dataPath = join(project, harnessDir, "tools", "data", "harness.json");
+      const data = JSON.parse(readFileSync(dataPath, "utf-8"));
+      delete data.providers;
+      writeFileSync(dataPath, `${JSON.stringify(data, null, 2)}\n`);
+      const configPath = join(project, harnessDir, configName);
+      if (harness === "claude") {
+        const settings = JSON.parse(readFileSync(configPath, "utf-8"));
+        Object.assign(settings.env, {
+          CLAUDE_CODE_USE_BEDROCK: "1",
+          AWS_REGION: "us-east-1",
+          ANTHROPIC_DEFAULT_FABLE_MODEL:
+            "global.anthropic.claude-fable-5[1m]",
+          ANTHROPIC_DEFAULT_OPUS_MODEL:
+            "global.anthropic.claude-opus-4-8[1m]",
+          ANTHROPIC_DEFAULT_SONNET_MODEL:
+            "global.anthropic.claude-sonnet-4-6[1m]",
+          ANTHROPIC_DEFAULT_HAIKU_MODEL:
+            "global.anthropic.claude-haiku-4-5-20251001-v1:0",
+        });
+        writeFileSync(configPath, `${JSON.stringify(settings, null, 2)}\n`);
+      } else {
+        const legacyBlock =
+          `# Model: these session defaults are what judgment-tier agent roles inherit\n` +
+          `# (their TOMLs omit model/model_reasoning_effort by design - see the tier\n` +
+          `# projection); balanced roles pin gpt-5.6-terra/medium, while templated roles inherit.\n` +
+          `# D-9: Amazon Bedrock is the shipped default provider (web_search is\n` +
+          `# unavailable there; the market-research stage degrades gracefully). For\n` +
+          `# OpenAI-auth setups, comment out model_provider and the [model_providers]\n` +
+          `# block.\n` +
+          `model = "openai.gpt-5.5"\nmodel_provider = "amazon-bedrock"\n` +
+          `model_context_window = 1000000\nmodel_reasoning_effort = "high"\n\n` +
+          `[model_providers.amazon-bedrock.aws]\n` +
+          `profile = "default"\nregion = "us-east-1"\n\n`;
+        writeFileSync(
+          configPath,
+          withLegacyCodexProviderBlock(
+            readFileSync(configPath, "utf-8"),
+            legacyBlock,
+          ),
+        );
+      }
+
+      const args = [
+        "config",
+        "--project-dir",
+        project,
+        "--from",
+        join(DIST_RELEASE, harness),
+        "--harness",
+        harness,
+        "--yes",
+      ];
+      const preview = run([...args, "--dry-run", "--json"], project, env);
+      expect(preview.status, preview.stdout + preview.stderr).toBe(0);
+      const note = JSON.parse(preview.stdout).data.notes.join("\n");
+      expect(note).toContain(`${harnessDir}/${configName}`);
+      expect(note).toContain(
+        "config providers --provider amazon-bedrock --region us-east-1 --yes",
+      );
+
+      const refreshed = run(args, project, env);
+      expect(refreshed.status, refreshed.stdout + refreshed.stderr).toBe(0);
+      expect(refreshed.stdout).toContain(`Note: Removed legacy AI-DLC Bedrock defaults from ${harnessDir}/${configName}`);
+      expect(refreshed.stdout).toContain(
+        "config providers --provider amazon-bedrock --region us-east-1 --yes",
+      );
+    }
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("legacy Claude cleanup preserves a user-authored AWS profile", () => {
+    const project = install("claude");
+    const env = runtimeEnv();
+    const settingsPath = join(project, ".claude", "settings.json");
+    const settings = JSON.parse(readFileSync(settingsPath, "utf-8"));
+    Object.assign(settings.env, {
+      CLAUDE_CODE_USE_BEDROCK: "1",
+      AWS_REGION: "us-east-1",
+      AWS_PROFILE: "team-profile",
+      ANTHROPIC_DEFAULT_FABLE_MODEL:
+        "global.anthropic.claude-fable-5[1m]",
+      ANTHROPIC_DEFAULT_OPUS_MODEL:
+        "global.anthropic.claude-opus-4-8[1m]",
+      ANTHROPIC_DEFAULT_SONNET_MODEL:
+        "global.anthropic.claude-sonnet-4-6[1m]",
+      ANTHROPIC_DEFAULT_HAIKU_MODEL:
+        "global.anthropic.claude-haiku-4-5-20251001-v1:0",
+    });
+    writeFileSync(settingsPath, `${JSON.stringify(settings, null, 2)}\n`);
+    const result = run([
+      "config",
+      "providers",
+      "--project-dir",
+      project,
+      "--provider",
+      "current",
+      "--yes",
+    ], project, env);
+    expect(result.status, result.stdout + result.stderr).toBe(0);
+    const after = JSON.parse(readFileSync(settingsPath, "utf-8")).env;
+    expect(after.AWS_PROFILE).toBe("team-profile");
+    expect(after.CLAUDE_CODE_USE_BEDROCK).toBeUndefined();
+    expect(after.ANTHROPIC_DEFAULT_OPUS_MODEL).toBeUndefined();
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("current preserves a manually configured OpenCode Bedrock provider", () => {
+    const project = install("opencode");
+    const env = runtimeEnv();
+    const path = join(project, "opencode.json");
+    const config = JSON.parse(readFileSync(path, "utf-8"));
+    config.provider = {
+      "amazon-bedrock": {
+        options: {
+          region: "eu-west-1",
+          profile: "team-profile",
+        },
+      },
+    };
+    writeFileSync(path, `${JSON.stringify(config, null, 2)}\n`);
+    const result = run([
+      "config",
+      "providers",
+      "--project-dir",
+      project,
+      "--provider",
+      "current",
+      "--yes",
+    ], project, env);
+    expect(result.status, result.stdout + result.stderr).toBe(0);
+    expect(JSON.parse(readFileSync(path, "utf-8")).provider)
+      .toEqual(config.provider);
+    expect(run([
+      "config",
+      "providers",
+      "--project-dir",
+      project,
+      "--check",
+    ], project, env).status).toBe(0);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("changing a Bedrock region or profile resets provider attestations", () => {
+    const project = install("codex");
+    const env = runtimeEnv();
+    const configure = (...args: string[]) => run([
+      "config",
+      "providers",
+      "--project-dir",
+      project,
+      ...args,
+      "--yes",
+    ], project, env);
+    const complete = configure(
+      "--provider",
+      "amazon-bedrock",
+      "--region",
+      "us-east-1",
+      "--profile",
+      "dev",
+      "--acknowledge",
+      "--mark-done",
+      "bedrock-model-access",
+    );
+    expect(complete.status, complete.stdout + complete.stderr).toBe(0);
+    expect(readConfigDiagnosticRecords(join(project, ".codex")).providers)
+      .toEqual(expect.objectContaining({
+        acknowledged: true,
+        pendingActions: [
+          { id: "bedrock-model-access", status: "done" },
+          { id: "codex-provider-configuration", status: "done" },
+        ],
+      }));
+
+    const changedRegion = configure("--region", "eu-west-1");
+    expect(
+      changedRegion.status,
+      changedRegion.stdout + changedRegion.stderr,
+    ).toBe(0);
+    expect(readConfigDiagnosticRecords(join(project, ".codex")).providers)
+      .toEqual(expect.objectContaining({
+        region: "eu-west-1",
+        pendingActions: [
+          { id: "bedrock-model-access", status: "pending" },
+          { id: "codex-provider-configuration", status: "pending" },
+        ],
+      }));
+    expect(readConfigDiagnosticRecords(join(project, ".codex")).providers
+      ?.acknowledged).toBeUndefined();
+
+    expect(configure(
+      "--acknowledge",
+      "--mark-done",
+      "bedrock-model-access",
+    ).status).toBe(0);
+    const changedProfile = configure("--profile", "team-profile");
+    expect(
+      changedProfile.status,
+      changedProfile.stdout + changedProfile.stderr,
+    ).toBe(0);
+    expect(readConfigDiagnosticRecords(join(project, ".codex")).providers)
+      .toEqual(expect.objectContaining({
+        profile: "team-profile",
+        pendingActions: [
+          { id: "bedrock-model-access", status: "pending" },
+          { id: "codex-provider-configuration", status: "pending" },
+        ],
+      }));
+    expect(readConfigDiagnosticRecords(join(project, ".codex")).providers
+      ?.acknowledged).toBeUndefined();
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("reapplying an unchanged provider answer repairs stale project overrides", () => {
+    const project = install("claude");
+    const env = runtimeEnv();
+    const recorded = run([
+      "config",
+      "providers",
+      "--project-dir",
+      project,
+      "--provider",
+      "current",
+      "--yes",
+    ], project, env);
+    expect(recorded.status, recorded.stdout + recorded.stderr).toBe(0);
+
+    const settingsPath = join(project, ".claude", "settings.json");
+    const settings = JSON.parse(readFileSync(settingsPath, "utf-8"));
+    settings.env.CLAUDE_CODE_USE_BEDROCK = "1";
+    settings.env.AWS_REGION = "us-east-1";
+    settings.env.ANTHROPIC_DEFAULT_FABLE_MODEL =
+      "global.anthropic.claude-fable-5[1m]";
+    settings.env.ANTHROPIC_DEFAULT_OPUS_MODEL =
+      "global.anthropic.claude-opus-4-8[1m]";
+    settings.env.ANTHROPIC_DEFAULT_SONNET_MODEL =
+      "global.anthropic.claude-sonnet-4-6[1m]";
+    settings.env.ANTHROPIC_DEFAULT_HAIKU_MODEL =
+      "global.anthropic.claude-haiku-4-5-20251001-v1:0";
+    settings.env.MY_TEAM_SETTING = "preserved";
+    writeFileSync(settingsPath, `${JSON.stringify(settings, null, 2)}\n`);
+    expect(run([
+      "config",
+      "providers",
+      "--project-dir",
+      project,
+      "--check",
+    ], project, env).status).toBe(1);
+
+    const repaired = run([
+      "config",
+      "providers",
+      "--project-dir",
+      project,
+      "--provider",
+      "current",
+      "--yes",
+    ], project, env);
+    expect(repaired.status, repaired.stdout + repaired.stderr).toBe(0);
+    expect(repaired.stdout).not.toContain("configuration unchanged");
+    const repairedSettings = readFileSync(settingsPath, "utf-8");
+    expect(repairedSettings).not.toContain("CLAUDE_CODE_USE_BEDROCK");
+    expect(repairedSettings).not.toContain("ANTHROPIC_DEFAULT_OPUS_MODEL");
+    expect(repairedSettings).toContain('"MY_TEAM_SETTING": "preserved"');
+    expect(run([
+      "config",
+      "--project-dir",
+      project,
+      "--yes",
+    ], project, env).status).toBe(0);
+    expect(readFileSync(settingsPath, "utf-8"))
+      .toContain('"MY_TEAM_SETTING": "preserved"');
+    expect(run([
+      "config",
+      "providers",
+      "--project-dir",
+      project,
+      "--check",
+    ], project, env).status).toBe(0);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("check warns when a non-Bedrock record has a project Bedrock flag", () => {
+    const project = install("claude");
+    const env = runtimeEnv();
+    const recorded = run([
+      "config",
+      "providers",
+      "--project-dir",
+      project,
+      "--provider",
+      "other",
+      "--acknowledge",
+      "--yes",
+    ], project, env);
+    expect(recorded.status, recorded.stdout + recorded.stderr).toBe(0);
+    const settingsPath = join(project, ".claude", "settings.json");
+    const settings = JSON.parse(readFileSync(settingsPath, "utf-8"));
+    Object.assign(settings.env, {
+      CLAUDE_CODE_USE_BEDROCK: "1",
+      AWS_REGION: "eu-west-1",
+    });
+    writeFileSync(settingsPath, `${JSON.stringify(settings, null, 2)}\n`);
+    const check = run([
+      "config",
+      "providers",
+      "--project-dir",
+      project,
+      "--check",
+    ], project, env);
+    expect(check.status, check.stdout + check.stderr).toBe(0);
+    expect(check.stdout).toContain("provider-claude-project-override");
+    expect(check.stdout).toContain("warning");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("providers show renders blocking issues and their remediation", () => {
+    const project = install("claude");
+    const env = runtimeEnv();
+    const recorded = run([
+      "config",
+      "providers",
+      "--project-dir",
+      project,
+      "--provider",
+      "current",
+      "--yes",
+    ], project, env);
+    expect(recorded.status, recorded.stdout + recorded.stderr).toBe(0);
+    const settingsPath = join(project, ".claude", "settings.json");
+    const settings = JSON.parse(readFileSync(settingsPath, "utf-8"));
+    Object.assign(settings.env, {
+      CLAUDE_CODE_USE_BEDROCK: "1",
+      AWS_REGION: "us-east-1",
+      ANTHROPIC_DEFAULT_FABLE_MODEL: "global.anthropic.claude-fable-5[1m]",
+      ANTHROPIC_DEFAULT_OPUS_MODEL: "global.anthropic.claude-opus-4-8[1m]",
+      ANTHROPIC_DEFAULT_SONNET_MODEL: "global.anthropic.claude-sonnet-4-6[1m]",
+      ANTHROPIC_DEFAULT_HAIKU_MODEL:
+        "global.anthropic.claude-haiku-4-5-20251001-v1:0",
+    });
+    writeFileSync(settingsPath, `${JSON.stringify(settings, null, 2)}\n`);
+    const show = run([
+      "config",
+      "providers",
+      "--project-dir",
+      project,
+      "--show",
+    ], project, env);
+    expect(show.status, show.stdout + show.stderr).toBe(0);
+    expect(show.stdout).toContain(
+      "Unmet: provider-claude-project-override - Claude settings still carry the legacy AI-DLC Bedrock defaults",
+    );
+    expect(show.stdout).toContain(
+      "fix: Run aidlc config providers again to reapply the recorded answer",
+    );
+    expect(show.stdout).toContain("Region: not managed by AI-DLC");
+    expect(show.stdout).toContain("Profile: not managed by AI-DLC");
+    expect(show.stdout).not.toContain("shipped fallback");
+    expect(show.stdout).not.toContain("default credential chain");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("provider flags refuse builtin and harness-owned access without writing", () => {
     const env = runtimeEnv();
@@ -1189,7 +5548,7 @@ describe("t294 config diagnostics CLI", () => {
       [
         "claude",
         ["--provider", "builtin"],
-        "--provider builtin is no longer recorded; a harness that provides its own model access needs no answer",
+        "--provider builtin is legacy-only; choose current, amazon-bedrock, or other",
       ],
       [
         "kiro",
@@ -1210,7 +5569,7 @@ describe("t294 config diagnostics CLI", () => {
       expect(result.stdout + result.stderr).toContain(message);
       expect(snapshot()).toEqual(before);
     }
-  }, 90_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("a legacy Kiro record with pending actions reads as harness-managed everywhere", () => {
     const project = install("kiro-ide");
@@ -1243,15 +5602,20 @@ describe("t294 config diagnostics CLI", () => {
 
     const json = run([...args, "--show", "--json"], project, env);
     expect(json.status, json.stdout + json.stderr).toBe(0);
-    expect(JSON.parse(json.stdout).data).toEqual(expect.objectContaining({
+    const jsonData = JSON.parse(json.stdout).data;
+    expect(jsonData).toEqual(expect.objectContaining({
       harnessManaged: true,
       pendingActions: [],
       issues: [],
-      files: [{
-        setting: "provider answers and pending actions",
-        file: join(".kiro", "tools", "data", "harness.json"),
-      }],
     }));
+    expect(jsonData.files).toEqual([
+      expect.objectContaining({
+        setting: "provider answers and pending actions",
+      }),
+    ]);
+    expect(jsonData.files[0].file.endsWith(
+      join(".kiro", "tools", "data", "harness.json"),
+    )).toBe(true);
     const check = run([...args, "--check"], project, env);
     expect(check.status, check.stdout + check.stderr).toBe(0);
     expect(check.stdout).toContain(
@@ -1371,7 +5735,7 @@ describe("t294 config diagnostics CLI", () => {
     ], claude, env);
     expect(claudeCheck.status).toBe(1);
     expect(claudeCheck.stdout + claudeCheck.stderr).toContain("bedrock-model-access");
-  }, 90_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("check names an unrecorded providers section instead of calling it clean", () => {
     const env = runtimeEnv();
@@ -1409,7 +5773,45 @@ describe("t294 config diagnostics CLI", () => {
       pass: true,
       label: "Providers: using shipped fallback; no recorded answers",
     }));
-  }, 90_000);
+
+    // Where the session sets every agent's model, no answer means the
+    // session's own model access: `--check` and doctor say what setup says.
+    for (const [harness, harnessDir, product, where] of [
+      ["copilot", ".aidlc", "GitHub Copilot", ""],
+      ["cursor", ".cursor", "Cursor", " in the Cursor IDE"],
+    ] as const) {
+      const project = install(harness);
+      const check = run([
+        "config",
+        "providers",
+        "--project-dir",
+        project,
+        "--check",
+      ], project, env);
+      expect(check.status, check.stdout + check.stderr).toBe(0);
+      expect(check.stdout).toContain(
+        `providers needs no answer for ${harness}; model access comes with your ${product} session; ` +
+          `to use your own Amazon Bedrock access${where} instead, run '`,
+      );
+      expect(check.stdout).toContain(` config providers --harness ${harness}'`);
+      expect(check.stdout).not.toContain("shipped fallback");
+      // Run from elsewhere, the command still names the project.
+      const elsewhere = temp(`aidlc-t294-elsewhere-${harness}-`);
+      const away = run([
+        "config",
+        "providers",
+        "--project-dir",
+        project,
+        "--check",
+      ], elsewhere, env);
+      expect(away.status, away.stdout + away.stderr).toBe(0);
+      expect(away.stdout).toContain(`config providers --harness ${harness} --project-dir `);
+      expect(providerDoctorCheck(project, harnessDir)).toEqual(expect.objectContaining({
+        pass: true,
+        label: `Providers: model access comes with your ${product} session; no answer needed`,
+      }));
+    }
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("only Kiro owns its own model access; every other harness is Bedrock-oriented", () => {
     for (const harness of ["kiro", "kiro-ide"] as const) {
@@ -1422,7 +5824,7 @@ describe("t294 config diagnostics CLI", () => {
     }
   });
 
-  test("a bun-requiring projection names the copy channel in its runtime remediation", () => {
+  test("a bun-requiring copy says why Bun is needed, in the person's words", () => {
     const project = temp("aidlc-t294-copy-runtime-");
     mkdirSync(join(project, ".git"));
     cpSync(join(DIST, "claude"), project, { recursive: true });
@@ -1442,9 +5844,10 @@ describe("t294 config diagnostics CLI", () => {
     }));
     const bunIssue = issues.find((issue) => issue.id.includes("bun"));
     expect(bunIssue, issues.map((issue) => issue.id).join(",")).toBeDefined();
-    expect(bunIssue?.remediation).toContain("copy-channel projection");
-    expect(bunIssue?.remediation).toContain("native install runs them through the aidlc command");
-  }, 60_000);
+    expect(bunIssue?.remediation).toContain("AI-DLC in this project runs on Bun (the installed aidlc command does not need it).");
+    expect(bunIssue?.remediation).not.toContain("copy-channel");
+    expect(bunIssue?.remediation).not.toContain("harness");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("OpenCode offer decline and acceptance are recorded and applied", () => {
     const project = install("opencode");
@@ -1463,9 +5866,8 @@ describe("t294 config diagnostics CLI", () => {
       "--yes",
     ], project, env);
     expect(declined.status, declined.stdout + declined.stderr).toBe(0);
-    expect(readFileSync(join(project, "opencode.json"), "utf-8")).not.toContain(
-      '"provider"',
-    );
+    expect(JSON.parse(readFileSync(join(project, "opencode.json"), "utf-8")).provider)
+      .toBeUndefined();
     expect(readConfigDiagnosticRecords(join(project, ".aidlc")).providers)
       .toEqual(expect.objectContaining({ opencodeDefault: false }));
 
@@ -1489,7 +5891,108 @@ describe("t294 config diagnostics CLI", () => {
       region: "us-west-2",
       profile: "dev",
     });
-  }, 60_000);
+
+    const revoked = run([
+      "config",
+      "providers",
+      "--project-dir",
+      project,
+      "--provider",
+      "amazon-bedrock",
+      "--region",
+      "us-west-2",
+      "--profile",
+      "dev",
+      "--opencode-default",
+      "no",
+      "--yes",
+    ], project, env);
+    expect(revoked.status, revoked.stdout + revoked.stderr).toBe(0);
+    expect(JSON.parse(readFileSync(join(project, "opencode.json"), "utf-8")).provider)
+      .toBeUndefined();
+    expect(readConfigDiagnosticRecords(join(project, ".aidlc")).providers)
+      .toEqual(expect.objectContaining({ opencodeDefault: false }));
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("OpenCode yes-to-no removes recorded options but preserves user-authored provider fields", () => {
+    const env = runtimeEnv();
+    const models = { "anthropic.claude-sonnet-4-6": { name: "Sonnet" } };
+    for (const customRegion of [false, true]) {
+      const project = install("opencode");
+      const args = [
+        "config",
+        "providers",
+        "--project-dir",
+        project,
+        "--provider",
+        "amazon-bedrock",
+        "--region",
+        "us-east-1",
+      ];
+      const configured = run([...args, "--opencode-default", "yes", "--yes"], project, env);
+      expect(configured.status, configured.stdout + configured.stderr).toBe(0);
+      const path = join(project, "opencode.json");
+      const config = JSON.parse(readFileSync(path, "utf-8"));
+      config.provider["amazon-bedrock"].models = models;
+      config.provider["amazon-bedrock"].options.maxRetries = 3;
+      if (customRegion) config.provider["amazon-bedrock"].options.region = "eu-west-1";
+      writeFileSync(path, `${JSON.stringify(config, null, 2)}\n`);
+
+      const declined = run([...args, "--opencode-default", "no", "--yes"], project, env);
+      expect(declined.status, declined.stdout + declined.stderr).toBe(0);
+      expect(JSON.parse(readFileSync(path, "utf-8")).provider["amazon-bedrock"]).toEqual(
+        customRegion ? config.provider["amazon-bedrock"] : { models, options: { maxRetries: 3 } },
+      );
+    }
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("Bedrock-only provider flags are rejected for current and other", () => {
+    const project = install("claude");
+    const env = runtimeEnv();
+    const current = run([
+      "config",
+      "providers",
+      "--project-dir",
+      project,
+      "--provider",
+      "current",
+      "--region",
+      "us-east-1",
+      "--yes",
+    ], project, env);
+    expect(current.status, current.stdout + current.stderr).toBe(2);
+    expect(current.stdout).toContain("require --provider amazon-bedrock");
+    expect(readConfigDiagnosticRecords(join(project, ".claude")).providers).toBeNull();
+    const other = run([
+      "config",
+      "providers",
+      "--project-dir",
+      project,
+      "--provider",
+      "other",
+      "--profile",
+      "team",
+      "--acknowledge",
+      "--yes",
+    ], project, env);
+    expect(other.status, other.stdout + other.stderr).toBe(2);
+    expect(other.stdout).toContain("require --provider amazon-bedrock");
+    expect(readConfigDiagnosticRecords(join(project, ".claude")).providers).toBeNull();
+    const configured = run([
+      "config",
+      "providers",
+      "--project-dir",
+      project,
+      "--provider",
+      "amazon-bedrock",
+      "--region",
+      "us-east-1",
+      "--profile",
+      "team",
+      "--yes",
+    ], project, env);
+    expect(configured.status, configured.stdout + configured.stderr).toBe(0);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("OpenCode-only provider flags are rejected for other harnesses", () => {
     const project = install("claude");
@@ -1511,7 +6014,7 @@ describe("t294 config diagnostics CLI", () => {
       "--opencode-default is only valid for the opencode harness",
     );
     expect(readConfigDiagnosticRecords(join(project, ".claude")).providers).toBeNull();
-  }, 60_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("runtime and trust enforce non-TTY judgment, --yes semantics, show, and reset", () => {
     const project = install("claude");
@@ -1648,7 +6151,7 @@ describe("t294 config diagnostics CLI", () => {
     ], project, env).status).toBe(0);
     expect(readConfigDiagnosticRecords(join(project, ".claude")).trust)
       .toBeNull();
-  }, 60_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("trust human show compacts its unbounded file list while JSON stays complete", () => {
     const project = install("kiro");
@@ -1679,7 +6182,7 @@ describe("t294 config diagnostics CLI", () => {
       `... and ${files.length - 5} more ` +
         "(aidlc config trust --show --json lists all)",
     );
-  }, 60_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("instruct-only harnesses record acknowledgements and named pending actions", () => {
     const pendingCopilot = install("copilot");
@@ -1778,7 +6281,7 @@ describe("t294 config diagnostics CLI", () => {
     });
 
     const cursor = install("cursor");
-    const missingOtherAck = run([
+    const pendingOther = run([
       "config",
       "providers",
       "--project-dir",
@@ -1787,8 +6290,17 @@ describe("t294 config diagnostics CLI", () => {
       "other",
       "--yes",
     ], cursor, env);
-    expect(missingOtherAck.status).toBe(2);
-    expect(missingOtherAck.stdout).toContain("pass --acknowledge");
+    expect(pendingOther.status, pendingOther.stdout + pendingOther.stderr).toBe(0);
+    expect(readConfigDiagnosticRecords(join(cursor, ".cursor")).providers)
+      .toEqual(expect.objectContaining({
+        provider: "other",
+        pendingActions: expect.arrayContaining([
+          {
+            id: "non-bedrock-provider-configuration",
+            status: "pending",
+          },
+        ]),
+      }));
     const cursorApplied = run([
       "config",
       "providers",
@@ -1805,7 +6317,7 @@ describe("t294 config diagnostics CLI", () => {
         provider: "other",
         acknowledged: true,
       }));
-  }, 60_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });
 
 describe("t294 invariants", () => {

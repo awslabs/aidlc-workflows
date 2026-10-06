@@ -4,7 +4,7 @@
 
 The aidlc-architect-agent is your solutions architect. It translates requirements into robust system architectures, produces Architecture Decision Records (ADRs), designs domain models, and decomposes projects into implementable units of work. It thinks in patterns and trade-offs, producing designs that developers can implement directly.
 
-The aidlc-architect-agent leads the most stages of any single agent in the lifecycle — seven in total — spanning Ideation, Inception, and Construction. It is the primary design authority and carries the `judgment` tier along with the seven other high-judgment agents, so it inherits your session's own model and effort rather than pinning one. Only delivery, pipeline-deploy, and operations carry the `templated` tier (a mid-size model at reduced effort on Claude Code, Codex, and opencode; on Kiro, Cursor, and Copilot all tiers inherit the session model and effort) because their output is dominantly templated.
+The aidlc-architect-agent leads the most stages of any single agent in the lifecycle — seven in total — spanning Ideation, Inception, and Construction. It is the primary design authority and carries the `judgment` tier along with the seven other high-judgment agents, so it inherits your session's own model and effort rather than pinning one. Only delivery, pipeline-deploy, and operations carry the `templated` tier; their shipped baseline also inherits the session model and effort because their output is dominantly templated.
 
 ## Stages Led
 
@@ -18,7 +18,7 @@ The aidlc-architect-agent leads the most stages of any single agent in the lifec
 | 3.2 NFR Requirements | Construction | Non-functional requirements with measurable targets (per unit) |
 | 3.3 NFR Design | Construction | Technical approaches for caching, resilience, security, observability (per unit) |
 
-It also leads the synthesis step of stage 2.1 (Reverse Engineering), where it receives code scan results from the aidlc-developer-agent and produces the 9 architectural artifacts.
+It also leads the synthesis step of stage 2.1 (Reverse Engineering), where it receives code scan results from the aidlc-developer-agent and produces the 9 architectural artifacts. With collaborators off, the developer writes them and the architect is not dispatched.
 
 ## Stages Supported
 

@@ -134,10 +134,12 @@ afterEach(() => {
 // =========================================================================
 
 describe("t89 sensors_applicable resolution (in-process compileStageGraph)", () => {
-  // Case 1 (.sh:64-66): basic-import - code-generation resolves 4 sensors.
-  test("basic-import: code-generation has 4 resolved sensors", () => {
+  // Case 1 (.sh:64-66): basic-import - code-generation resolves 2 sensors.
+  // (linter/type-check were dropped from code-generation per RFC #1911; the
+  // stage now imports required-sections + traceability only.)
+  test("basic-import: code-generation has 2 resolved sensors", () => {
     const { stages } = compileWithSensors(join(FIXTURES, "basic-import"));
-    expect(stageBySlug(stages, "code-generation").sensors_applicable).toHaveLength(4);
+    expect(stageBySlug(stages, "code-generation").sensors_applicable).toHaveLength(2);
   });
 
   // Case 2 (.sh:68-70): resolved entries carry id and .claude/... path.
@@ -153,9 +155,11 @@ describe("t89 sensors_applicable resolution (in-process compileStageGraph)", () 
   });
 
   // Case 3 (.sh:72-75): matches glob copied verbatim from the manifest.
+  // (Keyed on functional-design, which still imports linter; code-generation
+  // no longer does — RFC #1911.)
   test("matches-passthrough: matches copied verbatim", () => {
     const { stages } = compileWithSensors(join(FIXTURES, "matches-passthrough"));
-    const linter = stageBySlug(stages, "code-generation").sensors_applicable.find(
+    const linter = stageBySlug(stages, "functional-design").sensors_applicable.find(
       (s) => s.id === "linter",
     );
     expect(linter?.matches).toBe("**/distinctive-glob/**/*.ts");
@@ -164,7 +168,7 @@ describe("t89 sensors_applicable resolution (in-process compileStageGraph)", () 
   // Case 4 (.sh:77-80): manifests with no matches field omit it (not "").
   test("no-matches: matches field omitted (not empty string)", () => {
     const { stages } = compileWithSensors(join(FIXTURES, "no-matches"));
-    const linter = stageBySlug(stages, "code-generation").sensors_applicable.find(
+    const linter = stageBySlug(stages, "functional-design").sensors_applicable.find(
       (s) => s.id === "linter",
     );
     expect(linter).toBeDefined();
@@ -304,7 +308,7 @@ describe("t89 sensors_applicable resolution (in-process compileStageGraph)", () 
 
     const linterPath = join(dir, "aidlc-linter.md");
     const before = compileWithSensors(dir);
-    const beforeGlob = stageBySlug(before.stages, "code-generation").sensors_applicable.find(
+    const beforeGlob = stageBySlug(before.stages, "functional-design").sensors_applicable.find(
       (s) => s.id === "linter",
     )?.matches;
     expect(beforeGlob).toBe("**/*.{ts,js}");
@@ -321,7 +325,7 @@ describe("t89 sensors_applicable resolution (in-process compileStageGraph)", () 
     // A fresh compile reflects the edit — proving the snapshot is frozen only
     // until the next compile, never re-read retroactively.
     const after = compileWithSensors(dir);
-    const afterGlob = stageBySlug(after.stages, "code-generation").sensors_applicable.find(
+    const afterGlob = stageBySlug(after.stages, "functional-design").sensors_applicable.find(
       (s) => s.id === "linter",
     )?.matches;
     expect(afterGlob).toBe("**/post-edit/*.ts");
@@ -337,11 +341,12 @@ describe("t89 sensors_applicable resolution (in-process compileStageGraph)", () 
     expect(keys[idx + 1]).toBe("sensors_applicable");
   });
 
-  // Case 19 (.sh:230-241): per-stage matrix - code-generation=4, build-and-test=3,
-  // workspace-scaffold=0, functional-design=5.
-  test("per-stage matrix: CG=4, BT=3, WS=0, FD=5", () => {
+  // Case 19 (.sh:230-241): per-stage matrix - code-generation=2, build-and-test=3,
+  // workspace-scaffold=0, functional-design=5. (code-generation dropped
+  // linter/type-check per RFC #1911.)
+  test("per-stage matrix: CG=2, BT=3, WS=0, FD=5", () => {
     const { stages } = compileWithSensors(join(FIXTURES, "basic-import"));
-    expect(stageBySlug(stages, "code-generation").sensors_applicable.length).toBe(4);
+    expect(stageBySlug(stages, "code-generation").sensors_applicable.length).toBe(2);
     expect(stageBySlug(stages, "build-and-test").sensors_applicable.length).toBe(3);
     expect(stageBySlug(stages, "workspace-scaffold").sensors_applicable.length).toBe(0);
     expect(stageBySlug(stages, "functional-design").sensors_applicable.length).toBe(5);

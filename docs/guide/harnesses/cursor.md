@@ -9,13 +9,18 @@ distribution - only the shell differs. The source/development tree is
 **generated** into ignored local `dist/cursor/` from `core/` +
 `harness/cursor/` by `bun scripts/package.ts cursor`; never hand-edit it.
 
+Harness-specific onboarding lives in `.cursor/rules/aidlc-onboarding.mdc`,
+loaded automatically through `alwaysApply: true`. The root `AGENTS.md` block
+is harness-neutral and shared with other installed harnesses whose engine
+directories differ.
+
 ## Layout
 
 Cursor is the most "native" port so far - it consumes the standard core
 projection directly (no `emit.ts`, no split dot-dir). The distribution is:
 
 - **`.cursor/`** - the framework tree. Cursor reads only a few subdirs as
-  native meaning: `rules/` (one standing and four phase method pointers),
+  native meaning: `rules/` (always-applied onboarding, one standing and four phase method pointers),
   `agents/` (the 14 personas as native subagents), `skills/` (the orchestrator,
   utility shortcuts, and generated stage runners), `hooks.json` + `hooks/`
   (the hook wiring and adapter), `cli.json` (permissions), and `mcp.json` (MCP
@@ -58,6 +63,13 @@ aidlc config --harness cursor
 aidlc doctor
 ```
 
+Cursor may skip project hooks in a folder that is not in a git repository, and
+without them your approvals are never recorded. If the project is not a git
+repository yet, run `git init` in it before opening it in Cursor (fully
+restart Cursor if it is already open).
+`aidlc config`, the copy installer, and `/aidlc --doctor` all say so when it is
+missing.
+
 ### Versioned manual-copy alternative
 
 Download and extract a specific release's `aidlc-copy-runtime-X.Y.Z.tar.gz` as described in
@@ -67,6 +79,12 @@ then install that versioned projection:
 ```bash
 bun "$RUNTIME_ROOT/cursor/install.ts" your-project
 ```
+
+The copy installer is single-harness: its root sections use private
+`AIDLC CURSOR` markers and it does not write an `aidlc config` ownership
+baseline. Multi-harness projects must add Cursor with
+`aidlc config --harness cursor` instead; the copy installer refuses root
+blocks already managed by `aidlc config`.
 
 The installer preflights the full copy, refuses project-owned collisions,
 preserves `.cursor/.gitignore` and existing method memory, structurally
@@ -118,6 +136,23 @@ utility shortcuts are `/aidlc-status`, `/aidlc-jump --stage <slug>` (or
   `loop_limit` is 10 rather than Cursor's default 5, which covers the core's
   autonomous no-progress cap of 8. The forwarding loop in the conductor skill
   is the real discipline.
+- **Background agents are side workers.** A Cursor background agent you start
+  while a workflow runs in the foreground chat (a review, a test run, a code
+  change) is left out of that workflow. At session start it gets a short note,
+  instead of the workflow context, saying the workflow belongs to the
+  foreground chat: don't run `/aidlc` or AIDLC workflow commands, or edit
+  `aidlc/` or AIDLC's own files under `.cursor/` (its hooks, tools, skills,
+  agents, and `aidlc` rules); your own Cursor configuration, such as
+  `.cursor/mcp.json`, is fine, and so are reads and
+  `bun .cursor/tools/aidlc.ts status`. Its stops get no forwarding nudge, its prompts never count as a
+  human turn, and its session end is not recorded. Nothing is blocked: the
+  note is the only guard, so an agent that ignores it could still move the
+  workflow, as a second session could on any harness. Cursor flags a
+  background agent only on `sessionStart`, `beforeSubmitPrompt`, and
+  `sessionEnd`, so the adapter records the flag in
+  `aidlc/.aidlc-cursor-subagents/` for the conversation's later stops and
+  removes it at `sessionEnd`; if the record cannot be written, the agent runs
+  normally and its stops get the foreground nudge.
 - **A real session-end moment exists** (unlike Codex): `sessionEnd` fires, so
   `SESSION_ENDED` audit events are emitted. Pre-compaction validation also fires
   (`preCompact`).
@@ -144,7 +179,11 @@ utility shortcuts are `/aidlc-status`, `/aidlc-jump --stage <slug>` (or
   fail closed rather than losing delegated-agent attribution. Delegates may use
   ordinary Shell commands, but general-purpose interpreters and dynamic command
   evaluation are denied; use Cursor's native read/search tools and let the parent
-  conversation run executable probes.
+  conversation run executable probes. These delegate limits apply only while the
+  reviewer read-scope or state-transition check holds for the piece of work:
+  when both stand aside (Guard Policy off does that), delegates run builds,
+  tests and searches like the main conversation, a Task starts even when its
+  record cannot be written, and Cursor's own approval applies.
 - **Generated stage and scope runners are explicit-only.** Cursor receives
   `disable-model-invocation: true` on generated runner skills, including plugin
   runners, so ordinary coding prompts cannot auto-activate state-mutating
@@ -169,9 +208,20 @@ utility shortcuts are `/aidlc-status`, `/aidlc-jump --stage <slug>` (or
   `/aidlc --status`) and the progress lines at gates.
 - **Tab autocomplete is untouched** by this install - it rides Cursor's own
   models regardless of configuration.
-- **Permissions**: `.cursor/cli.json` pre-approves `Shell(bun)` only (a
-  project-level `cli.json` carries permissions only); every other shell command
-  follows your Cursor approval settings.
+- **Permissions**: `.cursor/cli.json` pre-approves only AI-DLC's own workflow
+  commands: its engine commands, `doctor`, `version`, `status` (and their
+  `--doctor`, `--version` and `--status` spellings, and doctor with
+  `--verbose`), `config --help`, `config --show` and the read-only
+  `config <section> --show` (with or without `--json`) and `--help`
+  forms, turning a
+  check back on (`config flags --clear-bypass <switch> --yes`), and its
+  `aidlc-*.ts` tools (a project-level `cli.json` carries permissions only). A
+  native install pre-approves the same commands run as the installed `aidlc`
+  command, and `aidlc engine ...`. Every other
+  shell command follows your Cursor approval settings, including any other
+  `config` change (turning a check off too), the commands that change the machine's AI-DLC install (`use`,
+  `update`, `rollback`, `uninstall`, `system`), and the tool scripts behind
+  them.
 - **MCP servers**: none ship; configure your own under `.cursor/mcp.json` if
   needed.
 - **Headless `agent -p` runs cannot pass approval gates.** The human-presence
@@ -191,13 +241,14 @@ utility shortcuts are `/aidlc-status`, `/aidlc-jump --stage <slug>` (or
 ## Verifying an install
 
 ```bash
-bun .cursor/tools/aidlc-utility.ts doctor        # all checks pass on a fresh copy
+bun .cursor/tools/aidlc-utility.ts doctor        # all checks pass on a fresh copy in a git repository
 agent -p "/aidlc --status" --output-format text --trust   # /aidlc --status through the CLI
 ```
 
 The doctor's Cursor-specific checks: the hook wiring at `.cursor/hooks.json`,
-the `Shell(bun)` permission pre-approval at `.cursor/cli.json`, the standing
-rule at `.cursor/rules/aidlc.mdc`, and all four phase-rule pointers.
+the permission pre-approval for AI-DLC's commands at `.cursor/cli.json`, the standing
+rule at `.cursor/rules/aidlc.mdc`, all four phase-rule pointers, and whether
+the project is in a git repository.
 
 > **Scripting trap: Cursor CLI always exits 0.** Headless `agent -p "<prompt>"
 > --output-format text --trust` returns exit code 0 even when the run errors, so

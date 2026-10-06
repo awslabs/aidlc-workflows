@@ -66,6 +66,12 @@ import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { assertResultOk, assertToolResultContains } from "../harness/assert.ts";
 import {
+  LIVE_COMMAND_TIMEOUT_MS,
+  LIVE_LONG_OPERATION_TIMEOUT_MS,
+  fileCleanupReserveMs,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import {
   cleanupWorkspaceJourney,
   setupWorkspaceJourney,
 } from "../harness/fixtures.ts";
@@ -84,15 +90,12 @@ import {
 // This is the suite's heaviest live test: seven SDK turns across one journey, one
 // of which (the per-repo reverse-engineering codekb beat) writes many artifacts
 // over two repos. Budget it like the other multi-stage live journeys (2400s
-// default), and split the budget so the cheap deterministic-verb beats get a
-// modest cap while the heavy codekb beat gets the lion's share.
+// default). Individual ceilings are backstops; the shared parent deadline bounds
+// actual elapsed work without pre-reserving every other operation's worst case.
 const TIMEOUT_S = Number.parseInt(process.env.AIDLC_TEST_TIMEOUT ?? "2400", 10);
 const TEST_TIMEOUT_MS = (Number.isFinite(TIMEOUT_S) ? TIMEOUT_S : 2400) * 1000;
-// Per-beat caps (a fresh SDK session each): the verb beats finish in one or two
-// tool round-trips; the reverse-engineering codekb beat fans 9 artifacts × 2
-// repos and needs far longer.
-const VERB_DRIVE_MS = 300_000;
-const CODEKB_DRIVE_MS = Math.max(600_000, TEST_TIMEOUT_MS - 6 * VERB_DRIVE_MS);
+const VERB_DRIVE_MS = LIVE_COMMAND_TIMEOUT_MS;
+const CODEKB_DRIVE_MS = LIVE_LONG_OPERATION_TIMEOUT_MS;
 
 const INIT_STATE_SUMMARY = "State initialized:";
 const STOP_AFTER_CREATION = { toolName: "Bash", resultIncludes: INIT_STATE_SUMMARY } as const;
@@ -250,6 +253,10 @@ describe("t-journey-workspace (live SDK multi-repo·intent·space journey)", () 
   test(
     "one feature spanning two repos, a second intent alongside, a non-default space — composed live, no collision",
     async () => {
+      const deadlineMs = Date.now() + TEST_TIMEOUT_MS;
+      const operationBudget = (requestedMs: number) => remainingOperationTimeoutMs(requestedMs, {
+        deadlineMs, reserveMs: fileCleanupReserveMs(TEST_TIMEOUT_MS), phase: "workspace SDK journey",
+      });
       const journey = setupWorkspaceJourney("claude");
       const root = journey.root;
       try {
@@ -265,7 +272,7 @@ describe("t-journey-workspace (live SDK multi-repo·intent·space journey)", () 
           {
             projectDir: root,
             answerScript: "default",
-            timeoutMs: VERB_DRIVE_MS,
+            timeoutMs: operationBudget(VERB_DRIVE_MS),
             stopAfterToolResult: STOP_AFTER_CREATION,
           },
         );
@@ -296,7 +303,7 @@ describe("t-journey-workspace (live SDK multi-repo·intent·space journey)", () 
           {
             projectDir: root,
             answerScript: "default",
-            timeoutMs: CODEKB_DRIVE_MS,
+            timeoutMs: operationBudget(CODEKB_DRIVE_MS),
             stopAfterToolResult: {
               toolName: "Bash",
               resultIncludes: SINGLE_RE_DONE,
@@ -387,7 +394,7 @@ describe("t-journey-workspace (live SDK multi-repo·intent·space journey)", () 
           {
             projectDir: root,
             answerScript: "default",
-            timeoutMs: VERB_DRIVE_MS,
+            timeoutMs: operationBudget(VERB_DRIVE_MS),
             stopAfterToolResult: STOP_AFTER_CREATION,
           },
         );
@@ -423,7 +430,7 @@ describe("t-journey-workspace (live SDK multi-repo·intent·space journey)", () 
         const createSpace = await driveAidlc(`/aidlc space-create teamB`, {
           projectDir: root,
           answerScript: "default",
-          timeoutMs: VERB_DRIVE_MS,
+          timeoutMs: operationBudget(VERB_DRIVE_MS),
           // Exercise the real Stop hook with a readable transcript and wait
           // for its natural terminal result, not just the utility tool result.
           persistSession: true,
@@ -460,7 +467,7 @@ describe("t-journey-workspace (live SDK multi-repo·intent·space journey)", () 
         const switchTeam = await driveAidlc(`/aidlc space teamB`, {
           projectDir: root,
           answerScript: "default",
-          timeoutMs: VERB_DRIVE_MS,
+          timeoutMs: operationBudget(VERB_DRIVE_MS),
           persistSession: true,
         });
         assertTerminalWorkspaceTurn(switchTeam, `Active space -> ${TEAM_B_SLUG}`);
@@ -473,7 +480,7 @@ describe("t-journey-workspace (live SDK multi-repo·intent·space journey)", () 
           {
             projectDir: root,
             answerScript: "default",
-            timeoutMs: VERB_DRIVE_MS,
+            timeoutMs: operationBudget(VERB_DRIVE_MS),
             stopAfterToolResult: STOP_AFTER_CREATION,
           },
         );
@@ -495,7 +502,7 @@ describe("t-journey-workspace (live SDK multi-repo·intent·space journey)", () 
         const switchDefault = await driveAidlc(`/aidlc space default`, {
           projectDir: root,
           answerScript: "default",
-          timeoutMs: VERB_DRIVE_MS,
+          timeoutMs: operationBudget(VERB_DRIVE_MS),
           persistSession: true,
         });
         assertTerminalWorkspaceTurn(switchDefault, "Active space -> default");

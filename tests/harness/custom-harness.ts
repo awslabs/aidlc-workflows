@@ -86,6 +86,7 @@
 // aidlc-project.md in rules_in_context.
 
 import { spawnSync } from "node:child_process";
+import { NATIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "./test-budget.ts";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
@@ -570,7 +571,7 @@ output_schema:
   h2_count: integer
   headings: string[]
   findings_count: integer
-timeout_seconds: 5
+timeout_seconds: ${Math.ceil(NATIVE_STARTUP_TIMEOUT_MS / 1000)}
 ---
 
 # ${CUSTOM_SENSOR_ID} sensor (custom)
@@ -612,6 +613,7 @@ function compileGraph(proj: string, claude: string): void {
     cwd: proj,
     encoding: "utf8",
     env: { ...process.env, CLAUDE_PROJECT_DIR: proj },
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS, { phase: "custom fixture compile" }),
   });
   if (res.status !== 0) {
     throw new Error(

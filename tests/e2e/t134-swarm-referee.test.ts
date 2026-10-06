@@ -50,7 +50,7 @@
 // `git worktree add` does not byte-copy audit.md / runtime-graph.json into the
 // child, then `commit --amend` so the worktree fork carries the gitignore at
 // HEAD. The per-unit worktree path is the tool's deterministic
-// worktreePath(proj, slug) = <proj>/.aidlc/worktrees/bolt-<slug>. Nothing is
+// worktreePath(proj, intentId8, slug). Nothing is
 // written under tests/fixtures/**; cleanupWorktreeFixture prunes children then
 // rm -rf's each parent in afterAll.
 //
@@ -77,7 +77,8 @@
 // === "error" on the parsed envelope row), and audit-event presence is an exact
 // `**Event**: <type>` row count rather than a `grep -q`.
 
-import { afterAll, describe, expect, test } from "bun:test";
+import { NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS, NATIVE_FIXTURE_SETUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "../harness/test-budget.ts";
+import { afterAll, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -86,6 +87,7 @@ import {
   DEFAULT_RECORD_DIR,
   FIXTURES_DIR,
   cleanupWorktreeFixture,
+  fixtureIntentId8,
   seedBoltDag,
   seededAuditDir,
   seededAuditShard,
@@ -93,21 +95,27 @@ import {
   seededStateFile,
   setupWorktreeFixture,
 } from "../harness/fixtures.ts";
+import { approveSuppliedCheckCommand, approveVerificationCommand } from "../harness/verification-command.ts";
 import {
   artifactFilename,
   boltSlugForUnit,
+  worktreePath,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+
+setDefaultTimeout(NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
 const BUN = process.execPath;
 const SWARM_TOOL = join(AIDLC_SRC, "tools", "aidlc-swarm.ts");
 const LOG_TOOL = join(AIDLC_SRC, "tools", "aidlc-log.ts");
 
 const fixtures: string[] = [];
+const WORKFLOW_STARTED_AT = "2026-08-04T00:00:00Z";
+const RUN_FLOOR = `WORKFLOW_STARTED:${WORKFLOW_STARTED_AT}#1`;
 // Serial Git worktree removal across this file's fixtures can exceed Bun's
 // default 5s hook budget; bound cleanup separately from the product test cases.
 afterAll(() => {
   for (const f of fixtures) cleanupWorktreeFixture(f);
-}, 30_000);
+}, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
 /**
  * make_swarm_fixture (t134.sh:80-95): a real git repo on `main` in Construction
@@ -128,6 +136,22 @@ function makeSwarmFixture(units: string[] = []): string {
   );
   mkdirSync(seededAuditDir(proj), { recursive: true });
   writeFileSync(join(seededAuditDir(proj), "fixture.md"), "# AI-DLC Audit Log\n");
+  // The workflow started before the dated rows the cases append, so a later
+  // Stage Start opens a new attempt of this run.
+  writeFileSync(
+    seededAuditShard(proj),
+    [
+      "# AI-DLC Audit Log",
+      "",
+      "## Workflow Started",
+      `**Timestamp**: ${WORKFLOW_STARTED_AT}`,
+      "**Event**: WORKFLOW_STARTED",
+      "**Scope**: feature",
+      "",
+      "---",
+      "",
+    ].join("\n"),
+  );
   writeFileSync(
     join(proj, ".gitignore"),
     [
@@ -141,10 +165,13 @@ function makeSwarmFixture(units: string[] = []): string {
     ].join("\n"),
   );
   if (units.length > 0) seedBoltDag(proj, units);
+  // The person approved the check command before the swarm forks, so the
+  // workflow start the approval rests on is part of every prepared attempt.
+  approveVerificationCommand(proj, "test -f impl.txt");
   // Stage everything and amend the seed commit so HEAD carries the gitignore +
   // state, mirroring the .sh's `git add -A && commit --amend --no-edit`.
   const git = (args: string[]): void => {
-    spawnSync("git", args, { cwd: proj, encoding: "utf-8" });
+    spawnSync("git", args, { timeout: remainingOperationTimeoutMs(NATIVE_FIXTURE_SETUP_TIMEOUT_MS), cwd: proj, encoding: "utf-8" });
   };
   git(["add", "-A"]);
   git([
@@ -162,7 +189,7 @@ function makeSwarmFixture(units: string[] = []): string {
 
 /** The per-unit worktree path the swarm derives from its internal Bolt slug. */
 function wtPath(proj: string, unit: string): string {
-  return join(proj, ".aidlc", "worktrees", `bolt-${boltSlugForUnit(unit)}`);
+  return worktreePath(proj, fixtureIntentId8(proj), boltSlugForUnit(unit));
 }
 
 interface RefResult {
@@ -181,7 +208,8 @@ function runRef(
   args: string[],
   env: Record<string, string> = {},
 ): RefResult {
-  const res = spawnSync(BUN, [SWARM_TOOL, "--project-dir", proj, ...args], {
+  approveSuppliedCheckCommand(proj, args);
+  const res = spawnSync(BUN, [SWARM_TOOL, "--project-dir", proj, ...args], { timeout: remainingOperationTimeoutMs(NATIVE_FIXTURE_SETUP_TIMEOUT_MS),
     cwd: proj,
     encoding: "utf-8",
     env: { ...process.env, ...env },
@@ -223,7 +251,7 @@ function logWorktreeReview(proj: string, unit: string): void {
     "--project-dir",
     worktree,
   ];
-  const requested = spawnSync(BUN, args, {
+  const requested = spawnSync(BUN, args, { timeout: remainingOperationTimeoutMs(NATIVE_FIXTURE_SETUP_TIMEOUT_MS),
     cwd: worktree,
     encoding: "utf-8",
   });
@@ -245,7 +273,7 @@ function logWorktreeReview(proj: string, unit: string): void {
       "",
     ].join("\n"),
   );
-  const completed = spawnSync(BUN, [...args, "--verdict", "READY"], {
+  const completed = spawnSync(BUN, [...args, "--verdict", "READY"], { timeout: remainingOperationTimeoutMs(NATIVE_FIXTURE_SETUP_TIMEOUT_MS),
     cwd: worktree,
     encoding: "utf-8",
   });
@@ -279,10 +307,11 @@ function eventCount(p: string, event: string): number {
 function prepareAsLegacy(proj: string, unit: string): void {
   const shard = seededAuditShard(proj);
   mkdirSync(seededAuditDir(proj), { recursive: true });
+  // Appended after the person's command approval already in this shard.
   writeFileSync(
     shard,
     [
-      "# AI-DLC Audit Log",
+      existsSync(shard) ? "" : "# AI-DLC Audit Log",
       "",
       "## Swarm Started",
       "**Timestamp**: 2026-08-05T00:00:00Z",
@@ -294,7 +323,7 @@ function prepareAsLegacy(proj: string, unit: string): void {
       "---",
       "",
     ].join("\n"),
-    "utf-8",
+    { encoding: "utf-8", flag: "a" },
   );
   expect(
     runRef(proj, [
@@ -345,7 +374,7 @@ describe("t134 swarm referee — prepare/check/finalize (migrated from t134-swar
       .split("\n---\n")
       .find((b) => b.includes("**Event**: SWARM_STARTED"));
     expect(startedBlock).toContain("**Stage**: functional-design");
-    expect(startedBlock).toContain("**Run floor**: unstarted#0");
+    expect(startedBlock).toContain(`**Run floor**: ${RUN_FLOOR}`);
     // The worktree directory landed on disk via the real `git worktree add`.
     expect(existsSync(wtPath(proj, "alpha"))).toBe(true);
 
@@ -393,7 +422,7 @@ describe("t134 swarm referee — prepare/check/finalize (migrated from t134-swar
       .split("\n---\n")
       .find((b) => b.includes("**Event**: SWARM_UNIT_CONVERGED"));
     expect(convergedBlock).toContain("**Stage**: functional-design");
-    expect(convergedBlock).toContain("**Run floor**: unstarted#0");
+    expect(convergedBlock).toContain(`**Run floor**: ${RUN_FLOOR}`);
     expect(
       readFileSync(
         join(
@@ -406,7 +435,7 @@ describe("t134 swarm referee — prepare/check/finalize (migrated from t134-swar
         "utf-8",
       ),
     ).toBe("# entities\n");
-  }, 120000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("1b legacy-safe Unit names complete the autonomous swarm lifecycle", () => {
     const proj = makeSwarmFixture();
@@ -501,7 +530,7 @@ describe("t134 swarm referee — prepare/check/finalize (migrated from t134-swar
           block.includes(`**Failed Bolt**: ${failedUnit}`),
       );
     expect(failedBlock).toContain(`**Bolt slug**: ${boltSlugForUnit(failedUnit)}`);
-  }, 120000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("1c malformed authoritative DAG refuses before worktree creation", () => {
     const proj = makeSwarmFixture();
@@ -528,7 +557,7 @@ describe("t134 swarm referee — prepare/check/finalize (migrated from t134-swar
     ]);
     expect(prepared.rc).not.toBe(0);
     expect(existsSync(wtPath(proj, "alpha"))).toBe(false);
-  }, 120000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("14a stale finalize is refused before merge after the stage attempt changes", () => {
     const proj = makeSwarmFixture(["stale"]);
@@ -590,7 +619,7 @@ describe("t134 swarm referee — prepare/check/finalize (migrated from t134-swar
       "does not match the current attempt",
     );
     expect(eventCount(proj, "SWARM_UNIT_CONVERGED")).toBe(0);
-  }, 120000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("14b a fully proven pre-upgrade swarm can finalize without re-prepare", () => {
     const proj = makeSwarmFixture(["legacy"]);
@@ -615,8 +644,8 @@ describe("t134 swarm referee — prepare/check/finalize (migrated from t134-swar
       .split("\n---\n")
       .find((block) => block.includes("**Event**: SWARM_UNIT_CONVERGED"));
     expect(convergedBlock).toContain("**Stage**: functional-design");
-    expect(convergedBlock).toContain("**Run floor**: unstarted#0");
-  }, 120000);
+    expect(convergedBlock).toContain(`**Run floor**: ${RUN_FLOOR}`);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("14c a pre-upgrade swarm from a prior attempt remains refused", () => {
     const proj = makeSwarmFixture(["legacy-stale"]);
@@ -653,7 +682,7 @@ describe("t134 swarm referee — prepare/check/finalize (migrated from t134-swar
       "does not match the current attempt",
     );
     expect(eventCount(proj, "SWARM_UNIT_CONVERGED")).toBe(0);
-  }, 120000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("14d record-artifact merge failure is retryable before convergence authority", () => {
     const proj = makeSwarmFixture();
@@ -724,7 +753,7 @@ describe("t134 swarm referee — prepare/check/finalize (migrated from t134-swar
     expect(JSON.parse(retried.out).merge_failures).toEqual([]);
     expect(eventCount(proj, "SWARM_UNIT_CONVERGED")).toBe(1);
     expect(readFileSync(existingTarget, "utf-8")).toBe("# entities\n");
-  }, 120000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test.skipIf(process.platform === "win32")(
     "14e reviewed artifact symlinks are refused before record merge",
@@ -773,7 +802,7 @@ describe("t134 swarm referee — prepare/check/finalize (migrated from t134-swar
       expect(refused.out).toContain("current artifact fingerprint");
       expect(eventCount(proj, "SWARM_UNIT_CONVERGED")).toBe(0);
     },
-    120000,
+    NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS,
   );
 
   test.skipIf(process.platform === "win32")(
@@ -840,7 +869,7 @@ describe("t134 swarm referee — prepare/check/finalize (migrated from t134-swar
       expect(danglingParent.out).toContain("current artifact fingerprint");
       expect(eventCount(proj, "SWARM_UNIT_CONVERGED")).toBe(0);
     },
-    120000,
+    NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS,
   );
 
   test("14h apply-time verification failure rolls back the complete record set", () => {
@@ -905,7 +934,7 @@ describe("t134 swarm referee — prepare/check/finalize (migrated from t134-swar
     expect(readFileSync(rules, "utf-8")).toBe("old rules\n");
     expect(existsSync(functionalSpec)).toBe(false);
     expect(eventCount(proj, "SWARM_UNIT_CONVERGED")).toBe(0);
-  }, 120000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test.skipIf(process.platform === "win32")(
     "14f symlinked main-record destinations are refused before writes",
@@ -956,7 +985,7 @@ describe("t134 swarm referee — prepare/check/finalize (migrated from t134-swar
       expect(readdirSync(outside)).toEqual([]);
       expect(eventCount(proj, "SWARM_UNIT_CONVERGED")).toBe(0);
     },
-    120000,
+    NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS,
   );
 
   // Cases 2, 3, 4, 6 are asserted inside test 1's shared-fixture flow above
@@ -971,7 +1000,7 @@ describe("t134 swarm referee — prepare/check/finalize (migrated from t134-swar
     const c = runRef(proj, ["check", "g2", "--check-cmd", "test -f impl.txt"]);
     expect(c.rc).toBe(0);
     expect(JSON.parse(c.out).converged).toBe(true);
-  }, 120000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("3 check is stateless: repeat call same verdict (no counter)", () => {
     const proj = makeSwarmFixture(["g3"]);
@@ -984,7 +1013,7 @@ describe("t134 swarm referee — prepare/check/finalize (migrated from t134-swar
     expect(second.rc).toBe(0);
     expect(JSON.parse(second.out)).toEqual(JSON.parse(first.out));
     expect(JSON.parse(second.out).converged).toBe(true);
-  }, 120000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("4 check: not-yet-converged unit -> exit non-zero, converged:false", () => {
     const proj = makeSwarmFixture(["g4"]);
@@ -993,7 +1022,7 @@ describe("t134 swarm referee — prepare/check/finalize (migrated from t134-swar
     const c = runRef(proj, ["check", "g4", "--check-cmd", "test -f impl.txt"]);
     expect(c.rc).not.toBe(0);
     expect(JSON.parse(c.out).converged).toBe(false);
-  }, 120000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   // ===========================================================================
   // Case 5: anti-tamper on check — editing the protected --test-file is refused,
@@ -1004,11 +1033,11 @@ describe("t134 swarm referee — prepare/check/finalize (migrated from t134-swar
     // Seed a TRACKED protected file so the worktree fork carries it at HEAD.
     mkdirSync(join(proj, "spec"), { recursive: true });
     writeFileSync(join(proj, "spec", "unit.test"), "EXPECTED\n");
-    spawnSync("git", ["add", "-A"], { cwd: proj, encoding: "utf-8" });
+    spawnSync("git", ["add", "-A"], { timeout: remainingOperationTimeoutMs(NATIVE_FIXTURE_SETUP_TIMEOUT_MS), cwd: proj, encoding: "utf-8" });
     spawnSync(
       "git",
       ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "-m", "seed test"],
-      { cwd: proj, encoding: "utf-8" },
+      { timeout: remainingOperationTimeoutMs(NATIVE_FIXTURE_SETUP_TIMEOUT_MS), cwd: proj, encoding: "utf-8" },
     );
     runRef(proj, ["prepare", "--batch", "1", "--units", "gamma", "--base", "main"]);
     // The "worker" cheats: it makes the check pass by editing the protected file.
@@ -1025,7 +1054,7 @@ describe("t134 swarm referee — prepare/check/finalize (migrated from t134-swar
     // true, convergence refused (exit non-zero).
     expect(c.rc).not.toBe(0);
     expect(JSON.parse(c.out).tampered).toBe(true);
-  }, 120000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   // ===========================================================================
   // Cases 7 + 9: the LYING-CONDUCTOR GUARD + mixed batch. The conductor claims
@@ -1065,7 +1094,7 @@ describe("t134 swarm referee — prepare/check/finalize (migrated from t134-swar
     expect(env.failed).toBe(1);
     expect(eventCount(proj, "SWARM_COMPLETED")).toBe(1);
     expect(f.rc).toBe(2);
-  }, 120000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("9 finalize mixed batch: 1 converged + 1 failed; SWARM_COMPLETED; exit 2", () => {
     // The .sh asserted cases 7 + 9 on a single finalize run; re-prove case 9
@@ -1091,7 +1120,7 @@ describe("t134 swarm referee — prepare/check/finalize (migrated from t134-swar
     expect(env.failed).toBe(1);
     expect(eventCount(proj, "SWARM_COMPLETED")).toBe(1);
     expect(f.rc).toBe(2);
-  }, 120000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   // ===========================================================================
   // Case 8: finalize anti-tamper — a claimed unit whose protected file was
@@ -1101,11 +1130,11 @@ describe("t134 swarm referee — prepare/check/finalize (migrated from t134-swar
     const proj = makeSwarmFixture(["delta"]);
     mkdirSync(join(proj, "spec"), { recursive: true });
     writeFileSync(join(proj, "spec", "unit.test"), "EXPECTED\n");
-    spawnSync("git", ["add", "-A"], { cwd: proj, encoding: "utf-8" });
+    spawnSync("git", ["add", "-A"], { timeout: remainingOperationTimeoutMs(NATIVE_FIXTURE_SETUP_TIMEOUT_MS), cwd: proj, encoding: "utf-8" });
     spawnSync(
       "git",
       ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "-m", "seed test"],
-      { cwd: proj, encoding: "utf-8" },
+      { timeout: remainingOperationTimeoutMs(NATIVE_FIXTURE_SETUP_TIMEOUT_MS), cwd: proj, encoding: "utf-8" },
     );
     runRef(proj, ["prepare", "--batch", "1", "--units", "delta", "--base", "main"]);
     writeFileSync(join(wtPath(proj, "delta"), "spec", "unit.test"), "TAMPERED\n");
@@ -1131,7 +1160,7 @@ describe("t134 swarm referee — prepare/check/finalize (migrated from t134-swar
     expect(delta).toBeDefined();
     expect(delta.tampered).toBe(true);
     expect(delta.status).toBe("failed");
-  }, 120000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   // ===========================================================================
   // Case 10: loud-degrade — prepare --degraded-from ultracode emits SWARM_DEGRADED.
@@ -1152,7 +1181,7 @@ describe("t134 swarm referee — prepare/check/finalize (migrated from t134-swar
     // SWARM_DEGRADED fired, and it records the requested driver (ultracode).
     expect(eventCount(proj, "SWARM_DEGRADED")).toBe(1);
     expect(auditBody(proj)).toContain("**Requested driver**: ultracode");
-  }, 120000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   // ===========================================================================
   // Case 11: path-confinement — a --test-file escaping the worktree (../) is a
@@ -1176,7 +1205,7 @@ describe("t134 swarm referee — prepare/check/finalize (migrated from t134-swar
     const out = JSON.parse(c.out);
     expect(out.reason).toBe("error");
     expect(out.detail).toContain("resolves outside the unit worktree");
-  }, 120000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   // ===========================================================================
   // Case 12: conductor attribution — a DECLINED (unclaimed) unit for which the
@@ -1210,7 +1239,7 @@ describe("t134 swarm referee — prepare/check/finalize (migrated from t134-swar
     expect(stuck.reason).toBe("unsatisfiable");
     // ...and in the SWARM_UNIT_FAILED audit row's Reason field.
     expect(auditBody(proj)).toContain("**Reason**: unsatisfiable");
-  }, 120000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   // ===========================================================================
   // Case 13: --reasons cannot override the lying-conductor guard. A unit CLAIMED
@@ -1246,7 +1275,7 @@ describe("t134 swarm referee — prepare/check/finalize (migrated from t134-swar
     // "error", never the laundered "unsatisfiable".
     expect(sneaky.reason).toBe("error");
     expect(sneaky.reason).not.toBe("unsatisfiable");
-  }, 120000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   // ===========================================================================
   // Case 14: a converged unit whose MERGE-BACK failed gets NO SWARM_UNIT_CONVERGED
@@ -1300,5 +1329,5 @@ describe("t134 swarm referee — prepare/check/finalize (migrated from t134-swar
     // The load-bearing advance signal did NOT fire — and no false FAILED row either.
     expect(eventCount(proj, "SWARM_UNIT_CONVERGED")).toBe(0);
     expect(eventCount(proj, "SWARM_UNIT_FAILED")).toBe(0);
-  }, 120000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 });

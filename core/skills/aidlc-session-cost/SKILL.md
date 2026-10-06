@@ -4,8 +4,8 @@ description: >
   Read-only session cost view. Prints deterministic aggregates for the
   current workflow — duration, stage outcomes, memory entries, sensor
   firings, learnings captured — sourced entirely from
-  `aidlc-runtime.ts summary`. Never mutates workflow state, never emits
-  audit events, never writes files.
+  `{{INVOKE}} engine runtime summary`. Never mutates workflow state,
+  never emits audit events, never writes files.
 argument-hint: ""
 user-invocable: true
 classification: read-only

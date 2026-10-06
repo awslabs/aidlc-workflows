@@ -4,7 +4,7 @@ description: >
   Generate a comprehensive handover document at workflow close so the
   team can own, operate, and continue the system without re-running the
   workflow. Stage/phase/learning counts come from
-  `aidlc-runtime.ts summary`; prose comes from the artefacts. Writes
+  `{{INVOKE}} engine runtime summary`; prose comes from the artefacts. Writes
   OUTCOMES.md but never mutates workflow state or emits audit events.
 argument-hint: ""
 user-invocable: true

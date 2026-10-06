@@ -6,13 +6,14 @@
 // whose output cascades downstream (architect, developer, product, ...): it
 // inherits the session's own model and effort so the user's ceiling is never
 // silently capped. `balanced` marks reviewer-shaped work (novel input judged
-// against explicit criteria): the measured reviewer baseline pins a mid-size
-// model at medium effort. `templated` marks dominantly pattern-following output
-// whose methodology already lives in knowledge (delivery plans, CI/CD config,
-// runbooks). It remains a distinct models-dial group, but its shipped baseline
-// now inherits the session model and effort. The names describe the WORK, not
-// the dial, so a reader can classify a new agent without knowing today's model
-// lineup.
+// against explicit criteria): the measured reviewer baseline uses Sonnet at
+// medium effort on Claude Code, while Codex and opencode inherit the session
+// model with a medium reasoning setting. `templated` marks dominantly
+// pattern-following output whose methodology already lives in knowledge
+// (delivery plans, CI/CD config, runbooks). It remains a distinct models-dial
+// group, but its shipped baseline now inherits the session model and effort.
+// The names describe the WORK, not the dial, so a reader can classify a new
+// agent without knowing today's model lineup.
 //
 // Projection targets (see TIER_PROJECTIONS):
 //   - Claude Code   agent .md frontmatter: `model:` and optional `effort:`.
@@ -22,11 +23,9 @@
 //                   `model: inherit` and NO effort line; `balanced` writes
 //                   `model: sonnet` with `effort: medium`.
 //   - Codex CLI     agent role .toml: `model` and `model_reasoning_effort`.
-//                   Omitted keys fall back to the shipped .codex/config.toml
-//                   session defaults (live-verified on codex-cli 0.139.0 and
-//                   0.142.5: a role TOML without `model` spawns on the
-//                   config.toml model + effort). `judgment`
-//                   omits both keys.
+//                   Every tier omits `model`, so roles inherit the user's
+//                   selected session/provider model. `judgment` also omits
+//                   effort; `balanced` pins medium effort.
 //   - Kiro CLI/IDE  every tier omits `"model"` — Kiro agents INHERIT the
 //                   session model (a shipped model ID resolves only when that
 //                   model is enabled on the user's install; a session on
@@ -39,15 +38,18 @@
 //                   also fail-closes on any effort-like key in agent JSON,
 //                   so no Kiro agent surface may EVER carry one; a per-model
 //                   effort default can only ride on cli.json
-//                   chat.modelDefaults (see kiroModelDefaults below).
+//                   chat.modelDefaults (see kiroModelDefaults below). The
+//                   session's own model and effort live in the person's
+//                   PERSONAL Kiro settings (aidlc-kiro-session.ts): a project
+//                   chat.modelDefaults replaces that whole map, so none ships.
 //
 // Kiro collapse rule (dormant while no tier pins a Kiro model): two tiers
 // whose Kiro model IDs are equal are the same tier on Kiro (there is no
 // per-agent effort surface to tell them apart). When tiers share a model,
 // the cli.json chat.modelDefaults entry for that model takes the HIGHER
 // tier's effort - kiroModelDefaults() computes this. Today no tier pins a
-// Kiro model, so kiroModelDefaults() contributes no entries and only the
-// authored cli.json entries ship.
+// Kiro model, so kiroModelDefaults() contributes no entries and the shipped
+// cli.json carries no chat.modelDefaults.
 //
 // Tier-ceiling override, resolved at PACK time (runtime composition is out of
 // scope): the space-memory `tier_cap:` frontmatter key on the layered method
@@ -133,10 +135,10 @@ export const TIER_PROJECTIONS: Record<Tier, TierProjection> = {
     // of an xhigh-inheriting one with no verdict/finding quality loss. A
     // session pinned to xhigh was silently doubling every review's cost.
     claude: { model: "sonnet", effort: "medium" },
-    codex: { model: "openai.gpt-5.6-terra", effort: "medium" },
+    codex: { model: null, effort: "medium" },
     cursor: { model: null },
     kiro: { model: null },
-    opencode: { model: "amazon-bedrock/global.anthropic.claude-sonnet-4-6", variant: "medium" },
+    opencode: { model: null, variant: "medium" },
     copilot: { model: null },
   },
   templated: {
@@ -258,9 +260,8 @@ export function projectTier<H extends Harness>(
  *  tier's effort (the Kiro collapse rule - when tiers share a model there is
  *  no per-agent surface to tell them apart, so the more demanding tier's
  *  effort wins). Tiers with no pinned Kiro model (judgment) contribute no
- *  entry. NOTE: the orchestrator's own model entry (claude-opus-4.8 ->
- *  xhigh) is authored in the per-harness kiro settings cli.json, outside
- *  this table - the orchestrator agent is not a tier-carrying persona. */
+ *  entry. The session model's effort is not here: it lives in the person's
+ *  personal Kiro settings (aidlc-kiro-session.ts). */
 export function kiroModelDefaults(
   cap: Tier | null = null,
   additions: readonly { model: string; effort: KiroEffort }[] = [],

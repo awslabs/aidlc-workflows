@@ -17,7 +17,12 @@
 // recovery, shielding, baselines, aggregate swarm authority, and multi-repo
 // attribution are kept here so upstream-owned t304 remains conflict-minimal.
 
-import { afterEach, describe, expect, test } from "bun:test";
+import {
+  NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { afterEach, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawn, spawnSync } from "node:child_process";
 import { appendFileSync, chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { mkdtempSync } from "node:fs";
@@ -25,6 +30,9 @@ import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import {
+  boltName,
+  reviewedSourceRefPrefix,
+  worktreePath,
   auditBlockField,
   currentStageSourceBaseline,
   currentSwarmAttemptObligations,
@@ -37,6 +45,7 @@ import {
   readUnitSourceManifest,
   readUnitSourceSnapshot,
   recordDir,
+  recordedSourceListingUnderCurrentBoundary,
   reviewRecordDigest,
   type ReviewRecord,
   sourceClaimCovers,
@@ -51,6 +60,7 @@ import {
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
 import {
+  fixtureIntentId8,
   AIDLC_SRC,
   cleanupWorktreeFixture,
   createTestProject,
@@ -63,6 +73,9 @@ import {
   seedStateFile,
   setupWorktreeFixture,
 } from "../harness/fixtures.ts";
+import { approveSuppliedCheckCommand } from "../harness/verification-command.ts";
+
+setDefaultTimeout(NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
 const ROOT = join(import.meta.dir, "..", "..");
 const PROTOCOL = join(ROOT, "core", "aidlc-common", "protocols");
@@ -83,7 +96,7 @@ afterEach(() => {
 });
 
 function git(dir: string, args: string[]): void {
-  const result = spawnSync("git", ["-C", dir, ...args], { encoding: "utf-8" });
+  const result = spawnSync("git", ["-C", dir, ...args], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" });
   if (result.status !== 0) throw new Error(result.stderr || result.stdout);
 }
 
@@ -671,7 +684,7 @@ describe("t305 strict source-manifest validation", () => {
         'directory claims must end with "/"',
       );
     }
-  }, 30000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 });
 
 describe("t305 content-addressed source review evidence", () => {
@@ -743,6 +756,7 @@ describe("t305 content-addressed source review evidence", () => {
         project,
       ],
       {
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
         encoding: "utf-8",
         env: {
           ...process.env,
@@ -813,6 +827,7 @@ describe("t305 content-addressed source review evidence", () => {
         jumped,
       ],
       {
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
         encoding: "utf-8",
         env: {
           ...process.env,
@@ -860,7 +875,7 @@ describe("t305 content-addressed source review evidence", () => {
     );
     expect(opening.state).toBe("ready");
     expect(recordDir(jumped)).not.toBeNull();
-  }, 30000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("current swarm source chain binds its opening baseline and latest per-unit convergence", () => {
     const { project } = runtimeFixture();
@@ -880,7 +895,7 @@ describe("t305 content-addressed source review evidence", () => {
     const commit = spawnSync(
       "git",
       ["-C", project, "rev-parse", "HEAD"],
-      { encoding: "utf-8" },
+      { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" },
     ).stdout.trim();
     expect(commit).toMatch(/^[0-9a-f]{40,64}$/);
 
@@ -926,7 +941,7 @@ describe("t305 content-addressed source review evidence", () => {
         ),
       ),
     );
-  }, 30000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 });
 
 
@@ -1002,7 +1017,7 @@ function writeManifest(record: string, unit: string, writes: Array<{ path: strin
 
 function cli(tool: string, args: string[], project: string, env: Record<string, string> = {}): { rc: number; out: string } {
   const merged = { ...process.env, AIDLC_SKIP_ARTIFACT_GUARD: "1", AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "1", AIDLC_ALLOW_DIRECT_STATE_TRANSITIONS: "1", AIDLC_SKIP_REVISION_BACKSTOP: "1", ...env };
-  const r = spawnSync(process.execPath, [tool, ...args, "--project-dir", project], { encoding: "utf-8", env: merged });
+  const r = spawnSync(process.execPath, [tool, ...args, "--project-dir", project], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8", env: merged });
   return { rc: r.status ?? -1, out: `${r.stdout ?? ""}${r.stderr ?? ""}` };
 }
 
@@ -1106,6 +1121,9 @@ function swarmFixture(
 ): string {
   const project = setupWorktreeFixture();
   worktreeDirs.push(project);
+  // This is a new repository; it does not inherit the execution checkout's
+  // local long-path setting. Nested Unit review records can exceed MAX_PATH.
+  if (process.platform === "win32") git(project, ["config", "core.longpaths", "true"]);
   git(project, ["config", "user.email", "t@test"]);
   git(project, ["config", "user.name", "t"]);
   const state = readFileSync(
@@ -1185,10 +1203,11 @@ function runSwarm(
   project: string,
   args: string[],
 ): { rc: number; out: string } {
+  approveSuppliedCheckCommand(project, args);
   const result = spawnSync(
     process.execPath,
     [SWARM, "--project-dir", project, ...args],
-    { cwd: project, encoding: "utf-8" },
+    { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), cwd: project, encoding: "utf-8" },
   );
   return {
     rc: result.status ?? -1,
@@ -1214,7 +1233,7 @@ function mergeSwarmUnit(
       "--project-dir",
       project,
     ],
-    { cwd: project, encoding: "utf-8" },
+    { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), cwd: project, encoding: "utf-8" },
   );
   return {
     rc: result.status ?? -1,
@@ -1232,7 +1251,7 @@ function auditLockWatcher(
     const shard = process.env.AIDLC_TEST_AUDIT_SHARD;
     const marker = process.env.AIDLC_TEST_AUDIT_MARKER;
     const slug = process.env.AIDLC_TEST_BOLT_SLUG;
-    const deadline = Date.now() + 15000;
+    const deadline = Date.now() + ${remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS)};
     const poll = () => {
       let body = "";
       try { body = fs.readFileSync(shard, "utf8"); } catch {}
@@ -1273,7 +1292,7 @@ describe("t305 real receipt and guard flows", () => {
     expect(bypass.rc).toBe(1);
     expect(bypass.out).toContain("has no valid source manifest");
     expect(readAllAuditShards(project)).not.toContain("**Event**: REVIEW_REQUESTED");
-  }, 30000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("REVIEW_COMPLETED and retry-pending refuse source edited after dispatch", () => {
     const { project, record } = runtimeFixture();
@@ -1298,7 +1317,7 @@ describe("t305 real receipt and guard flows", () => {
     writeFileSync(join(project, "app.ts"), "export const app = 1;\n");
     expect(cli(LOG, [...args, "--retry-pending"], project).rc).toBe(0);
     expect(cli(LOG, [...args, "--verdict", "READY"], project).rc).toBe(0);
-  }, 30000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("REVIEW_COMPLETED refuses source-manifest bytes edited after dispatch", () => {
     const { project, record } = runtimeFixture();
@@ -1320,7 +1339,7 @@ describe("t305 real receipt and guard flows", () => {
     expect(refused.out).toContain(
       "unit source or source-manifest.json changed after REVIEW_REQUESTED",
     );
-  }, 30000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("review request refuses an explicitly claimed ignored path without minting a receipt", () => {
     const { project, record } = runtimeFixture();
@@ -1344,7 +1363,7 @@ describe("t305 real receipt and guard flows", () => {
     expect(readAllAuditShards(project)).not.toMatch(
       /\*\*Event\*\*: REVIEW_REQUESTED[\s\S]*?\*\*Unit\*\*: alpha/,
     );
-  }, 30000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("3 disjoint unit invalidation names only beta and bounded recovery clears", () => {
     const { project, record } = runtimeFixture();
@@ -1355,22 +1374,24 @@ describe("t305 real receipt and guard flows", () => {
     review(project, record, "alpha", [{ path: "alpha.ts" }]);
     const refused = approve(project); expect(refused.rc).toBe(1); expect(refused.out).toContain("Changed after review: beta"); expect(refused.out).not.toContain("Changed after review: alpha");
     const recovered = review(project, record, "beta", [{ path: "beta.ts" }]); expect(recovered.verdict.rc).toBe(0); expect(approve(project).rc).toBe(0);
-  }, 30000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
-  test("executable-bit changes invalidate the owning unit after another review refreshes the global binding", () => {
+  test.skipIf(process.platform === "win32")("POSIX executable-bit changes invalidate the owning unit after another review refreshes the global binding", () => {
     const { project, record } = runtimeFixture();
     const script = join(project, "script.sh");
     writeFileSync(script, "#!/bin/sh\nexit 0\n");
     chmodSync(script, 0o644);
+    expect(statSync(script).mode & 0o111).toBe(0);
     review(project, record, "alpha", [{ path: "script.sh" }]);
     review(project, record, "beta", []);
 
     chmodSync(script, 0o755);
+    expect(statSync(script).mode & 0o111).not.toBe(0);
     review(project, record, "beta", []);
     const refused = approve(project);
     expect(refused.rc).toBe(1);
     expect(refused.out).toContain("Changed after review: alpha");
-  }, 30000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("retargeting a reviewed in-repo symlink invalidates its owning receipt", () => {
     const { project, record } = runtimeFixture();
@@ -1398,7 +1419,7 @@ describe("t305 real receipt and guard flows", () => {
     const refused = approve(project);
     expect(refused.rc).toBe(1);
     expect(refused.out).toContain("Changed after review: alpha");
-  }, 30000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("4 newest claimant shields overlap, but a stale newer claimant invalidates both", () => {
     const pass = runtimeFixture(); writeFileSync(join(pass.project, "shared.ts"), "export const s=1\n");
@@ -1407,7 +1428,25 @@ describe("t305 real receipt and guard flows", () => {
     review(fail.project, fail.record, "alpha", [{ path: "shared.ts" }]); writeFileSync(join(fail.project, "shared.ts"), "export const s=2\n"); review(fail.project, fail.record, "beta", [{ path: "shared.ts" }]); writeFileSync(join(fail.project, "shared.ts"), "export const s=3\n");
     const r=approve(fail.project); expect(r.rc).toBe(1); expect(r.out).toContain("project source changed after aidlc-architecture-reviewer-agent reviewed it");
     const state=readFileSync(join(fail.record,"aidlc-state.md"),"utf-8"); const receipts=freshReviewReceipts(fail.project,state,{slug:"code-generation",phase:"construction",for_each:"unit-of-work",reviewer:REVIEWER,review_artifact:"code-generation-plan",reviewer_max_iterations:2,workspace_requires:true,produces:["code-generation-plan","unit-test-instructions","code-summary","traceability"]}); expect([...receipts.unitStale].sort()).toEqual(["alpha","beta"]);
-  }, 30000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
+
+  test("4b a shared path holding exactly a newer review's bytes is that Unit's own reviewed build", () => {
+    const stage = {slug:"code-generation",phase:"construction",for_each:"unit-of-work",reviewer:REVIEWER,review_artifact:"code-generation-plan",reviewer_max_iterations:2,workspace_requires:true,produces:["code-generation-plan","unit-test-instructions","code-summary","traceability"]};
+    const { project, record } = runtimeFixture(); writeFileSync(join(project, "shared.ts"), "export const s=1\n");
+    review(project, record, "alpha", [{ path: "shared.ts" }]); writeFileSync(join(project, "shared.ts"), "export const s=2\n"); review(project, record, "beta", [{ path: "shared.ts" }]);
+    const state = readFileSync(join(record, "aidlc-state.md"), "utf-8");
+    // alpha's shared path moved only to what beta's review recorded; beta's own bytes never moved.
+    const built = freshReviewReceipts(project, state, stage);
+    expect([...built.unitSourceAttributed]).toEqual(["alpha"]);
+    expect([...built.unitSourceMoved.keys()]).toEqual([]);
+    // An edit after beta's review matches no review, so nothing is attributed:
+    // both Units' reviewed code moved, and each owes its next review pass.
+    writeFileSync(join(project, "shared.ts"), "export const s=3\n");
+    const edited = freshReviewReceipts(project, state, stage);
+    expect([...edited.unitSourceAttributed]).toEqual([]);
+    expect([...edited.unitSourceMoved.keys()].sort()).toEqual(["alpha", "beta"]);
+    expect(edited.unitSourceMoved.get("alpha")).toEqual({ nextIteration: 2, recoverySpent: false });
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("5 unclaimed add refuses; claim+recovery and revert both clear", () => {
     const claimed = runtimeFixture(); review(claimed.project, claimed.record, "alpha", [{ path: "app.ts" }]); review(claimed.project, claimed.record, "beta", []);
@@ -1416,7 +1455,35 @@ describe("t305 real receipt and guard flows", () => {
     review(claimed.project, claimed.record, "alpha", [{ path: "app.ts" }, { path: "extra.ts" }]); expect(approve(claimed.project).rc).toBe(0);
     const reverted = runtimeFixture(); review(reverted.project, reverted.record, "alpha", [{ path: "app.ts" }]); review(reverted.project, reverted.record, "beta", []);
     writeFileSync(join(reverted.project, "extra.ts"), "export const x=1\n"); review(reverted.project, reverted.record, "beta", []); expect(approve(reverted.project).rc).toBe(1); rmSync(join(reverted.project, "extra.ts")); expect(approve(reverted.project).rc).toBe(0);
-  }, 30000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
+
+  test("a setting recorded during the stage is not unclaimed source", () => {
+    const { project, record } = runtimeFixture();
+    review(project, record, "alpha", [{ path: "app.ts" }]); review(project, record, "beta", []);
+    const before = workspaceSourceState(project)?.fingerprint;
+    // A person records a kill switch mid-stage, locally and for the team: AI-DLC's
+    // own settings at the workspace root, like the aidlc/ shell beside them.
+    writeFileSync(join(project, "aidlc.settings.local.json"), `${JSON.stringify({ schemaVersion: 1, flags: { schemaVersion: 1, bypasses: ["AIDLC_DISABLE_SENSORS"] } })}\n`);
+    writeFileSync(join(project, "aidlc.settings.json"), `${JSON.stringify({ schemaVersion: 1, flags: { schemaVersion: 1, swarm: true } })}\n`);
+    expect(workspaceSourceState(project)?.fingerprint).toBe(before);
+    const current = workspaceSourceListing(project);
+    expect(current?.has("\0aidlc.settings.json")).toBe(false);
+    // Evidence recorded before they left the boundary still compares.
+    const appEntry = current?.get("\0app.ts");
+    expect(appEntry).toBeDefined();
+    const recorded = new Map(current ?? []);
+    recorded.set("\0aidlc.settings.json", appEntry as string);
+    recorded.set("\0aidlc.settings.local.json", appEntry as string);
+    expect([...recordedSourceListingUnderCurrentBoundary(recorded, current ?? new Map()).keys()].sort())
+      .toEqual([...(current?.keys() ?? [])].sort());
+    expect(approve(project).rc).toBe(0);
+    // The same name anywhere else is the team's file.
+    const nested = runtimeFixture();
+    const nestedBefore = workspaceSourceState(nested.project)?.fingerprint;
+    mkdirSync(join(nested.project, "pkg"), { recursive: true });
+    writeFileSync(join(nested.project, "pkg", "aidlc.settings.json"), "{}\n");
+    expect(workspaceSourceState(nested.project)?.fingerprint).not.toBe(nestedBefore);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("rejection never launders an unclaimed path into the next attempt baseline", () => {
     const { project, record } = runtimeFixture();
@@ -1438,7 +1505,7 @@ describe("t305 real receipt and guard flows", () => {
     expect(refused.rc).toBe(1);
     expect(refused.out).toContain("evil.ts");
     expect(refused.out).toContain("Unclaimed source changes fail closed");
-  }, 30000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("6 unit-major ignores late STAGE_STARTED and destroyed baseline fails closed", () => {
     const late = runtimeFixture(); const state=join(late.record,"aidlc-state.md"); writeFileSync(state,readFileSync(state,"utf-8").replace("stage-major","unit-major"));
@@ -1447,20 +1514,20 @@ describe("t305 real receipt and guard flows", () => {
     const syntheticSecond=Math.floor(Date.now()/1000); while(Math.floor(Date.now()/1000)===syntheticSecond){}
     review(late.project,late.record,"alpha",[{path:"app.ts"}]); review(late.project,late.record,"beta",[]); const lateState=readFileSync(state,"utf-8"); const lateReceipts=freshReviewReceipts(late.project,lateState,{slug:"code-generation",phase:"construction",for_each:"unit-of-work",reviewer:REVIEWER,review_artifact:"code-generation-plan",reviewer_max_iterations:2,workspace_requires:true,produces:["code-generation-plan","unit-test-instructions","code-summary","traceability"]}); expect(lateReceipts.sourceBaseline.state).toBe("ready"); if (lateReceipts.sourceBaseline.state === "ready") expect(lateReceipts.sourceBaseline.listing.has("\0late.ts")).toBe(false); expect(approve(late.project).out).toContain("late.ts");
     const destroyed=runtimeFixture(); review(destroyed.project,destroyed.record,"alpha",[{path:"app.ts"}]); review(destroyed.project,destroyed.record,"beta",[]);
-    const audit=readAllAuditShards(destroyed.project); const hash=/\*\*Source Baseline\*\*: sha256:([0-9a-f]{64})/.exec(audit)![1]; rmSync(join(destroyed.record,".aidlc-engine/source-review","code-generation",`baseline-${hash.slice(0,12)}.tsv`)); expect(approve(destroyed.project).out).toContain("baseline snapshot is missing");
-  }, 30000);
+    const audit=readAllAuditShards(destroyed.project); const hash=/\*\*Source Baseline\*\*: sha256:([0-9a-f]{64})/.exec(audit)![1]; rmSync(join(destroyed.record,".aidlc-engine/source-review","code-generation",`baseline-${hash.slice(0,12)}.tsv`)); expect(approve(destroyed.project).out).toContain("the record of what this stage started from is missing");
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("7 manifest tamper and 8 claimed deletion make only the owning unit stale", () => {
     const tamper=runtimeFixture(); review(tamper.project,tamper.record,"alpha",[{path:"app.ts"}]); review(tamper.project,tamper.record,"beta",[]); writeManifest(tamper.record,"alpha",[]); expect(approve(tamper.project).out).toContain("Changed after review: alpha");
     const deleted=runtimeFixture(); writeFileSync(join(deleted.project,"alpha.ts"),"a\n"); review(deleted.project,deleted.record,"alpha",[{path:"alpha.ts"}]); review(deleted.project,deleted.record,"beta",[]); rmSync(join(deleted.project,"alpha.ts")); review(deleted.project,deleted.record,"beta",[]); expect(approve(deleted.project).out).toContain("Changed after review: alpha");
-  }, 30000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("9 fieldless per-unit bindings preserve legacy global policy and 11 zero-unit stays manifest-free", () => {
     const legacy=runtimeFixture(); review(legacy.project,legacy.record,"alpha",[{path:"app.ts"}]); review(legacy.project,legacy.record,"beta",[]); stripUnitBindings(legacy.project); expect(approve(legacy.project).rc).toBe(0);
     const zero=runtimeFixture(); rmSync(join(zero.record,"inception"),{recursive:true,force:true});
     const zeroArtifact=reviewArtifact(zero.record); mkdirSync(join(zeroArtifact,".."),{recursive:true}); writeFileSync(zeroArtifact,"# code-generation-plan.md\n");
     const args=["review","--stage","code-generation","--reviewer",REVIEWER,"--iteration","1"]; expect(cli(LOG,args,zero.project).rc).toBe(0); appendReviewAppendix(zeroArtifact,"1"); expect(cli(LOG,[...args,"--verdict","READY"],zero.project).rc).toBe(0); expect(approve(zero.project).rc).toBe(0);
-  }, 30000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("missing baseline fields fail closed after modern evidence but pure legacy stays open", () => {
     const modern = runtimeFixture();
@@ -1499,7 +1566,7 @@ describe("t305 real receipt and guard flows", () => {
     const refused = approve(modern.project);
     expect(refused.rc).toBe(1);
     expect(refused.out).toContain(
-      "inconsistent with other modern source-binding evidence",
+      "the record of what this stage started from is missing or does not match",
     );
 
     const legacy = runtimeFixture();
@@ -1546,7 +1613,7 @@ describe("t305 real receipt and guard flows", () => {
       }).sourceBaseline.state,
     ).toBe("legacy");
     expect(approve(legacy.project).rc).toBe(0);
-  }, 30000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("durable source artifacts preserve modernity after whole audit-row deletion and stay intent-scoped", () => {
     const modern = runtimeFixture();
@@ -1603,10 +1670,7 @@ describe("t305 real receipt and guard flows", () => {
       "{}\n",
     );
     const otherWorktree = join(
-      isolated.project,
-      ".aidlc",
-      "worktrees",
-      "bolt-other",
+      worktreePath(isolated.project, fixtureIntentId8(isolated.project), "other"),
       ".aidlc",
     );
     mkdirSync(otherWorktree, { recursive: true });
@@ -1645,7 +1709,7 @@ describe("t305 real receipt and guard flows", () => {
         "fixture-intent",
       ).state,
     ).toBe("invalid");
-  }, 30000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("cross-shard baseline ties accept identical values and refuse differing values", () => {
     const stage = {
@@ -1921,7 +1985,7 @@ describe("t305 real receipt and guard flows", () => {
         false,
       ).state,
     ).toBe("unbindable");
-  }, 30000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("shrinking the live DAG cannot erase current-attempt swarm obligations", () => {
     const project = swarmFixture();
@@ -1949,7 +2013,7 @@ describe("t305 real receipt and guard flows", () => {
     expect(readAllAuditShards(project)).toContain(
       "**Unit obligations**: alpha,beta",
     );
-    const wt = join(project, ".aidlc", "worktrees", "bolt-alpha");
+    const wt = worktreePath(project, fixtureIntentId8(project), "alpha");
     writeFileSync(join(wt, "alpha.ts"), "export const alpha = true;\n");
     const reviewed = review(
       wt,
@@ -1984,7 +2048,7 @@ describe("t305 real receipt and guard flows", () => {
         "--project-dir",
         project,
       ],
-      { cwd: project, encoding: "utf-8" },
+      { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), cwd: project, encoding: "utf-8" },
     );
     expect(merged.status, `${merged.stdout ?? ""}${merged.stderr ?? ""}`)
       .toBe(0);
@@ -2009,7 +2073,7 @@ describe("t305 real receipt and guard flows", () => {
     expect(readAllAuditShards(project)).not.toContain(
       "**Event**: STAGE_COMPLETED",
     );
-  }, 120000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("uniformly fieldless swarm starts migrate open while mixed starts refuse", () => {
     const legacy = swarmFixture();
@@ -2181,16 +2245,16 @@ describe("t305 real receipt and guard flows", () => {
     expect(readFileSync(mixedStatePath, "utf-8")).toContain(
       "- [-] code-generation",
     );
-  }, 120000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("12 two recorded repos invalidate only the owning repo and unit", () => {
     const base=runtimeFixture(); const project=base.project; const record=base.record; rmSync(join(project,".git"),{recursive:true,force:true}); for (const repo of ["repo-a","repo-b"]) { const path=join(project,repo); mkdirSync(path,{recursive:true}); git(path,["init","-q"]); git(path,["config","user.email","t@test"]); git(path,["config","user.name","t"]); writeFileSync(join(path,`${repo}.ts`),`export const ${repo.replace(/-/g,"_")}=1\n`); git(path,["add","-A"]); git(path,["commit","-qm","seed"]); } const registry=join(project,"aidlc","spaces","default","intents","intents.json"); const rows=JSON.parse(readFileSync(registry,"utf-8")); rows[0].repos=["repo-a","repo-b"]; writeFileSync(registry,`${JSON.stringify(rows)}\n`); const initial=workspaceSourceListing(project)!; appendAuditEntry("STAGE_JUMPED",{Target:"code-generation","Source Baseline":writeBaselineSourceSnapshot(project,"code-generation",initial)},project); const multiBoundary=Math.floor(Date.now()/1000); while(Math.floor(Date.now()/1000)===multiBoundary){}
     review(project,record,"alpha",[{repo:"repo-a",path:"repo-a.ts"}]); review(project,record,"beta",[{repo:"repo-b",path:"repo-b.ts"}]); writeFileSync(join(project,"repo-b","repo-b.ts"),"export const repo_b=2\n"); review(project,record,"alpha",[{repo:"repo-a",path:"repo-a.ts"}]); const r=approve(project); expect(r.out).toContain("Changed after review: beta"); expect(r.out).not.toContain("Changed after review: alpha");
-  }, 30000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("absent exact claim becomes stale when the path appears before an unrelated review", () => {
     const {project,record}=runtimeFixture(); review(project,record,"alpha",[{path:"future.ts"}]); writeFileSync(join(project,"future.ts"),"future\n"); review(project,record,"beta",[{path:"app.ts"}]); expect(approve(project).out).toContain("Changed after review: alpha");
-  }, 30000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("ghost/non-applicable units cannot mint review authority or cover unclaimed source", () => {
     const {project,record}=runtimeFixture();
@@ -2202,7 +2266,7 @@ describe("t305 real receipt and guard flows", () => {
     const forgedState=readFileSync(join(record,"aidlc-state.md"),"utf-8");
     const receipts=freshReviewReceipts(project,forgedState,{slug:"code-generation",phase:"construction",for_each:"unit-of-work",reviewer:REVIEWER,review_artifact:"code-generation-plan",reviewer_max_iterations:2,workspace_requires:true,produces:["code-generation-plan","unit-test-instructions","code-summary","traceability"]});
     expect(receipts.freshUnitClaims.has("ghost")).toBe(false);
-  }, 30000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("stage-major selects the tighter STAGE_STARTED baseline", () => {
     const {project,record}=runtimeFixture();
@@ -2217,7 +2281,7 @@ describe("t305 real receipt and guard flows", () => {
     const second=Math.floor(Date.now()/1000); while(Math.floor(Date.now()/1000)===second){}
     writeFileSync(join(project,"later.ts"),"later\n"); review(project,record,"alpha",[{path:"app.ts"}]); review(project,record,"beta",[]);
     const out=approve(project).out; expect(out).toContain("later.ts"); expect(out).not.toContain("prestage.ts");
-  }, 30000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("an empty modern baseline still exposes source created after Git initialization", () => {
     const { project, record } = runtimeFixture();
@@ -2250,11 +2314,11 @@ describe("t305 real receipt and guard flows", () => {
     const refused = approve(project);
     expect(refused.rc).toBe(1);
     expect(refused.out).toContain("unclaimed.ts");
-  }, 30000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("calls freshReviewReceipts directly for a modern unit chain", () => {
     const {project,record}=runtimeFixture(); review(project,record,"alpha",[{path:"app.ts"}]); review(project,record,"beta",[]); const state=readFileSync(join(record,"aidlc-state.md"),"utf-8"); const receipts=freshReviewReceipts(project,state,{slug:"code-generation",phase:"construction",for_each:"unit-of-work",reviewer:REVIEWER,review_artifact:"code-generation-plan",reviewer_max_iterations:2,workspace_requires:true,produces:["code-generation-plan","unit-test-instructions","code-summary","traceability"]}); expect(receipts.unitVerdicts.size).toBe(2);
-  }, 30000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 });
 
 describe("t305 healthy settled-swarm source completion", () => {
@@ -2273,7 +2337,7 @@ describe("t305 healthy settled-swarm source completion", () => {
     ]);
     expect(prepared.rc, prepared.out).toBe(0);
 
-    const wt = join(project, ".aidlc", "worktrees", `bolt-${unit}`);
+    const wt = worktreePath(project, fixtureIntentId8(project), unit);
     const source = `${unit}.ts`;
     writeFileSync(join(wt, source), "export const healthy = true;\n");
     const reviewed = review(
@@ -2332,7 +2396,7 @@ describe("t305 healthy settled-swarm source completion", () => {
     expect(readAllAuditShards(project)).toContain(
       "**Event**: STAGE_COMPLETED",
     );
-  }, 120000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   for (const mergeMode of ["default", "union"] as const) {
     test(`two reviewed Units can merge non-overlapping shared-file edits with the ${mergeMode} text driver and approve`, () => {
@@ -2367,12 +2431,7 @@ describe("t305 healthy settled-swarm source completion", () => {
       ["alpha", 0, "export const alphaOwned = true;"],
       ["beta", 39, "export const betaOwned = true;"],
     ] as Array<[string, number, string]>) {
-      const wt = join(
-        project,
-        ".aidlc",
-        "worktrees",
-        `bolt-${unit}`,
-      );
+      const wt = worktreePath(project, fixtureIntentId8(project), unit);
       const lines = [...baseLines];
       lines[index] = value;
       writeFileSync(join(wt, "shared.ts"), `${lines.join("\n")}\n`);
@@ -2447,7 +2506,7 @@ describe("t305 healthy settled-swarm source completion", () => {
     expect(readAllAuditShards(project)).toContain(
       "**Event**: STAGE_COMPLETED",
     );
-    }, 120000);
+    }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
   }
 
   for (const driverCase of [
@@ -2499,7 +2558,7 @@ describe("t305 healthy settled-swarm source completion", () => {
       "main",
     ]);
     expect(prepared.rc, prepared.out).toBe(0);
-    const wt = join(project, ".aidlc", "worktrees", `bolt-${unit}`);
+    const wt = worktreePath(project, fixtureIntentId8(project), unit);
     writeFileSync(
       join(wt, "driver-target.ts"),
       "export const reviewed = true;\n",
@@ -2526,7 +2585,7 @@ describe("t305 healthy settled-swarm source completion", () => {
     const before = spawnSync(
       "git",
       ["-C", project, "rev-parse", "HEAD"],
-      { encoding: "utf-8" },
+      { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" },
     ).stdout.trim();
     const merged = mergeSwarmUnit(project, unit);
     expect(merged.rc).toBe(1);
@@ -2539,11 +2598,12 @@ describe("t305 healthy settled-swarm source completion", () => {
     expect(existsSync(marker)).toBe(false);
     expect(
       spawnSync("git", ["-C", project, "rev-parse", "HEAD"], {
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
         encoding: "utf-8",
       }).stdout.trim(),
     ).toBe(before);
     expect(existsSync(wt)).toBe(true);
-    }, 120000);
+    }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
   }
 });
 
@@ -2565,7 +2625,7 @@ describe("t305 post-merge source authority failure", () => {
         "main",
       ]);
       expect(prepared.rc, prepared.out).toBe(0);
-      const wt = join(project, ".aidlc", "worktrees", `bolt-${unit}`);
+      const wt = worktreePath(project, fixtureIntentId8(project), unit);
       writeFileSync(join(wt, source), `export const value = ${JSON.stringify(value)};\n`);
       const reviewed = review(
         wt,
@@ -2603,7 +2663,7 @@ describe("t305 post-merge source authority failure", () => {
           "--project-dir",
           project,
         ],
-        { cwd: project, encoding: "utf-8" },
+        { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), cwd: project, encoding: "utf-8" },
       );
       expect(merged.status, `${merged.stdout}${merged.stderr}`).toBe(0);
     };
@@ -2624,7 +2684,7 @@ describe("t305 post-merge source authority failure", () => {
     );
     runCycle("2", "second");
     expect(readFileSync(join(project, source), "utf-8")).toContain("second");
-  }, 120000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("a post-authority branch cleanup failure is idempotently reconcilable", () => {
     const project = swarmFixture();
@@ -2640,7 +2700,7 @@ describe("t305 post-merge source authority failure", () => {
       "main",
     ]);
     expect(prepared.rc, prepared.out).toBe(0);
-    const wt = join(project, ".aidlc", "worktrees", `bolt-${unit}`);
+    const wt = worktreePath(project, fixtureIntentId8(project), unit);
     const source = `${unit}.ts`;
     writeFileSync(join(wt, source), "export const cleanupRetry = true;\n");
     const reviewed = review(
@@ -2672,7 +2732,7 @@ describe("t305 post-merge source authority failure", () => {
         "#!/bin/sh",
         '[ "$1" = "prepared" ] || exit 0',
         "while read old new ref; do",
-        `  if [ "$ref" = "refs/heads/bolt-${unit}" ]; then`,
+        `  if [ "$ref" = "refs/heads/${boltName(fixtureIntentId8(project), unit)}" ]; then`,
         '    case "$new" in',
         "      000000*)",
         `        if [ ! -e "${marker}" ]; then`,
@@ -2703,62 +2763,18 @@ describe("t305 post-merge source authority failure", () => {
         "--project-dir",
         project,
       ],
-      { cwd: project, encoding: "utf-8" },
+      { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), cwd: project, encoding: "utf-8" },
     );
     const firstOutput = `${first.stdout ?? ""}${first.stderr ?? ""}`;
     expect(first.status).not.toBe(0);
     expect(firstOutput).toContain("[merge-succeeded:");
-    expect(firstOutput).toContain(`branch -D bolt-${unit} failed`);
+    expect(firstOutput).toContain(`branch -D ${boltName(fixtureIntentId8(project), unit)} failed`);
     expect(existsSync(join(project, source))).toBe(true);
     expect(existsSync(wt)).toBe(false);
     expect(readAllAuditShards(project).match(/\*\*Event\*\*: SWARM_SOURCE_MERGED/g))
       .toHaveLength(1);
 
-    const authorityBlocks = readAllAuditShards(project)
-      .split(/\n---\n/)
-      .filter(
-        (block) =>
-          block.includes(`**Unit name**: ${unit}`) &&
-          (
-            block.includes("**Event**: SWARM_UNIT_CONVERGED") ||
-            block.includes("**Event**: SWARM_SOURCE_MERGED")
-          ),
-      );
-    const decoyAudit = join(
-      project,
-      "aidlc",
-      "spaces",
-      "default",
-      "intents",
-      "cleanup-decoy",
-      "audit",
-    );
-    mkdirSync(decoyAudit, { recursive: true });
-    writeFileSync(
-      join(decoyAudit, "decoy.md"),
-      `# AI-DLC Audit Log\n${authorityBlocks.join("\n---\n")}\n---\n`,
-    );
-    const ambiguous = spawnSync(
-      process.execPath,
-      [
-        WORKTREE,
-        "merge",
-        "--slug",
-        unit,
-        "--target",
-        "main",
-        "--strategy",
-        "squash",
-        "--project-dir",
-        project,
-      ],
-      { cwd: project, encoding: "utf-8" },
-    );
-    expect(ambiguous.status).not.toBe(0);
-    expect(`${ambiguous.stdout}${ambiguous.stderr}`).toContain(
-      "multiple durable SWARM_SOURCE_MERGED authorities",
-    );
-
+    // R4(b): the advanced-stage retry must reconcile the retained branch and source, not a prior no-op.
     appendAuditEntry(
       "STAGE_STARTED",
       { Stage: "code-generation", Agent: "aidlc-developer-agent" },
@@ -2768,8 +2784,23 @@ describe("t305 post-merge source authority failure", () => {
     const headAfterLanding = spawnSync(
       "git",
       ["-C", project, "rev-parse", "HEAD"],
-      { encoding: "utf-8" },
+      { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" },
     ).stdout.trim();
+    expect(
+      spawnSync("git", ["-C", project, "show-ref", "--verify", "--quiet", `refs/heads/${boltName(fixtureIntentId8(project), unit)}`], {
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+        encoding: "utf-8",
+      }).status,
+    ).toBe(0);
+    const retainedPrefix = reviewedSourceRefPrefix(fixtureIntentId8(project), unit);
+    const sourceCommit = readAllAuditShards(project).split(/\n---\n/)
+      .filter((block) => block.includes("**Event**: SWARM_SOURCE_MERGED"))
+      .at(-1)?.match(/^\*\*Source Commit\*\*: (.+)$/m)?.[1];
+    expect(sourceCommit).toMatch(/^[0-9a-f]{40,64}$/);
+    expect(spawnSync("git", ["-C", project, "rev-parse", "--verify", `${retainedPrefix}${sourceCommit}`], {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+      encoding: "utf-8",
+    }).stdout.trim()).toBe(sourceCommit!);
     const retried = spawnSync(
       process.execPath,
       [
@@ -2788,25 +2819,91 @@ describe("t305 post-merge source authority failure", () => {
         "--project-dir",
         project,
       ],
-      { cwd: project, encoding: "utf-8" },
+      { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), cwd: project, encoding: "utf-8" },
     );
     expect(retried.status, `${retried.stdout ?? ""}${retried.stderr ?? ""}`).toBe(0);
     expect(retried.stdout).toContain('"cleanup_reconciled":true');
     expect(
       spawnSync("git", ["-C", project, "rev-parse", "HEAD"], {
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
         encoding: "utf-8",
       }).stdout.trim(),
     ).toBe(headAfterLanding);
     expect(
       spawnSync(
         "git",
-        ["-C", project, "show-ref", "--verify", "--quiet", `refs/heads/bolt-${unit}`],
-        { encoding: "utf-8" },
+        ["-C", project, "show-ref", "--verify", "--quiet", `refs/heads/${boltName(fixtureIntentId8(project), unit)}`],
+        { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" },
       ).status,
     ).toBe(1);
     expect(readAllAuditShards(project).match(/\*\*Event\*\*: SWARM_SOURCE_MERGED/g))
       .toHaveLength(1);
-  }, 120000);
+    expect(existsSync(wt)).toBe(false);
+    expect(spawnSync("git", ["-C", project, "for-each-ref", "--format=%(refname)", retainedPrefix], {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+      encoding: "utf-8",
+    }).stdout).toBe("");
+
+    const authorityBlocks = readAllAuditShards(project)
+      .split(/\n---\n/)
+      .filter(
+        (block) =>
+          block.includes(`**Unit name**: ${unit}`) &&
+          (
+            block.includes("**Event**: SWARM_UNIT_CONVERGED") ||
+            block.includes("**Event**: SWARM_SOURCE_MERGED")
+          ),
+      );
+    // R4(b): only after stage-advance cleanup, plant another intent's decoy rows.
+    // They neither block nor authorize the original intent's idempotent retry.
+    const decoyAudit = join(
+      project,
+      "aidlc",
+      "spaces",
+      "default",
+      "intents",
+      "cleanup-decoy",
+      "audit",
+    );
+    mkdirSync(decoyAudit, { recursive: true });
+    writeFileSync(
+      join(decoyAudit, "decoy.md"),
+      `# AI-DLC Audit Log\n${authorityBlocks.join("\n---\n")}\n---\n`,
+    );
+    const withDecoy = spawnSync(
+      process.execPath,
+      [
+        WORKTREE,
+        "merge",
+        "--slug",
+        unit,
+        "--target",
+        "main",
+        "--strategy",
+        "squash",
+        "--project-dir",
+        project,
+      ],
+      { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), cwd: project, encoding: "utf-8" },
+    );
+    expect(withDecoy.status, `${withDecoy.stdout ?? ""}${withDecoy.stderr ?? ""}`).toBe(0);
+    expect(withDecoy.stdout).toContain('"cleanup_reconciled":true');
+    expect(spawnSync("git", ["-C", project, "rev-parse", "HEAD"], {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+      encoding: "utf-8",
+    }).stdout.trim()).toBe(headAfterLanding);
+    expect(existsSync(wt)).toBe(false);
+    expect(spawnSync("git", ["-C", project, "show-ref", "--verify", "--quiet", `refs/heads/${boltName(fixtureIntentId8(project), unit)}`], {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+      encoding: "utf-8",
+    }).status).toBe(1);
+    expect(spawnSync("git", ["-C", project, "for-each-ref", "--format=%(refname)", retainedPrefix], {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+      encoding: "utf-8",
+    }).stdout).toBe("");
+    expect(readAllAuditShards(project).match(/\*\*Event\*\*: SWARM_SOURCE_MERGED/g))
+      .toHaveLength(1);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("durable modern worktree evidence prevents field-deletion branch fallback", () => {
     const project = swarmFixture();
@@ -2822,7 +2919,7 @@ describe("t305 post-merge source authority failure", () => {
       "main",
     ]);
     expect(prepared.rc, prepared.out).toBe(0);
-    const wt = join(project, ".aidlc", "worktrees", `bolt-${unit}`);
+    const wt = worktreePath(project, fixtureIntentId8(project), unit);
     const source = `${unit}.ts`;
     writeFileSync(join(wt, source), "export const reviewed = true;\n");
     const reviewed = review(
@@ -2855,6 +2952,7 @@ describe("t305 post-merge source authority failure", () => {
     ]);
     stripAuditFields(project, "SWARM_STARTED", ["Stage", "Run floor"]);
     const before = spawnSync("git", ["-C", project, "rev-parse", "HEAD"], {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
       encoding: "utf-8",
     }).stdout.trim();
     const merged = spawnSync(
@@ -2871,7 +2969,7 @@ describe("t305 post-merge source authority failure", () => {
         "--project-dir",
         project,
       ],
-      { cwd: project, encoding: "utf-8" },
+      { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), cwd: project, encoding: "utf-8" },
     );
     const output = `${merged.stdout ?? ""}${merged.stderr ?? ""}`;
     expect(merged.status).not.toBe(0);
@@ -2879,12 +2977,13 @@ describe("t305 post-merge source authority failure", () => {
     expect(output).not.toContain("[merge-succeeded:");
     expect(
       spawnSync("git", ["-C", project, "rev-parse", "HEAD"], {
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
         encoding: "utf-8",
       }).stdout.trim(),
     ).toBe(before);
     expect(existsSync(join(project, source))).toBe(false);
     expect(existsSync(join(project, "unreviewed.ts"))).toBe(false);
-  }, 120000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("a post-merge hook cannot stage unrelated source into aggregate authority", () => {
     const project = swarmFixture();
@@ -2901,7 +3000,7 @@ describe("t305 post-merge source authority failure", () => {
     ]);
     expect(prepared.rc, prepared.out).toBe(0);
 
-    const wt = join(project, ".aidlc", "worktrees", `bolt-${unit}`);
+    const wt = worktreePath(project, fixtureIntentId8(project), unit);
     const source = `${unit}.ts`;
     writeFileSync(join(wt, source), "export const reviewed = true;\n");
     const reviewed = review(
@@ -2950,7 +3049,7 @@ describe("t305 post-merge source authority failure", () => {
         "--project-dir",
         project,
       ],
-      { cwd: project, encoding: "utf-8" },
+      { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), cwd: project, encoding: "utf-8" },
     );
     const output = `${merged.stdout ?? ""}${merged.stderr ?? ""}`;
     expect(merged.status, output).toBe(0);
@@ -2961,7 +3060,7 @@ describe("t305 post-merge source authority failure", () => {
     expect(readAllAuditShards(project)).toContain(
       "**Event**: SWARM_SOURCE_MERGED",
     );
-  }, 120000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("a post-merge hook cannot replace the reviewed source path", () => {
     const project = swarmFixture();
@@ -2978,7 +3077,7 @@ describe("t305 post-merge source authority failure", () => {
     ]);
     expect(prepared.rc, prepared.out).toBe(0);
 
-    const wt = join(project, ".aidlc", "worktrees", `bolt-${unit}`);
+    const wt = worktreePath(project, fixtureIntentId8(project), unit);
     const source = `${unit}.ts`;
     writeFileSync(join(wt, source), "export const reviewed = true;\n");
     const reviewed = review(
@@ -3027,7 +3126,7 @@ describe("t305 post-merge source authority failure", () => {
         "--project-dir",
         project,
       ],
-      { cwd: project, encoding: "utf-8" },
+      { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), cwd: project, encoding: "utf-8" },
     );
     const output = `${merged.stdout ?? ""}${merged.stderr ?? ""}`;
     expect(merged.status, output).toBe(0);
@@ -3039,7 +3138,7 @@ describe("t305 post-merge source authority failure", () => {
     expect(readAllAuditShards(project)).toContain(
       "**Event**: SWARM_SOURCE_MERGED",
     );
-  }, 120000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("a post-commit hook cannot create a second source commit", () => {
     const project = swarmFixture();
@@ -3056,7 +3155,7 @@ describe("t305 post-merge source authority failure", () => {
     ]);
     expect(prepared.rc, prepared.out).toBe(0);
 
-    const wt = join(project, ".aidlc", "worktrees", `bolt-${unit}`);
+    const wt = worktreePath(project, fixtureIntentId8(project), unit);
     const source = `${unit}.ts`;
     writeFileSync(join(wt, source), "export const reviewed = true;\n");
     const reviewed = review(
@@ -3108,7 +3207,7 @@ describe("t305 post-merge source authority failure", () => {
         "--project-dir",
         project,
       ],
-      { cwd: project, encoding: "utf-8" },
+      { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), cwd: project, encoding: "utf-8" },
     );
     const output = `${merged.stdout ?? ""}${merged.stderr ?? ""}`;
     expect(merged.status, output).toBe(0);
@@ -3118,7 +3217,7 @@ describe("t305 post-merge source authority failure", () => {
     expect(readAllAuditShards(project)).toContain(
       "**Event**: SWARM_SOURCE_MERGED",
     );
-  }, 120000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("an audit append failure after source merge is tagged, non-retryable, and preserves recovery state", () => {
     expect(typeof process.getuid === "function" ? process.getuid() : -1)
@@ -3137,7 +3236,7 @@ describe("t305 post-merge source authority failure", () => {
     ]);
     expect(prepared.rc, prepared.out).toBe(0);
 
-    const wt = join(project, ".aidlc", "worktrees", `bolt-${unit}`);
+    const wt = worktreePath(project, fixtureIntentId8(project), unit);
     const source = `${unit}.ts`;
     writeFileSync(
       join(wt, source),
@@ -3185,7 +3284,7 @@ describe("t305 post-merge source authority failure", () => {
           "--project-dir",
           project,
         ],
-        { cwd: project, encoding: "utf-8" },
+        { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), cwd: project, encoding: "utf-8" },
       );
       locked = existsSync(marker);
     } finally {
@@ -3204,15 +3303,40 @@ describe("t305 post-merge source authority failure", () => {
     expect(readAllAuditShards(project)).not.toContain(
       "**Event**: SWARM_SOURCE_MERGED",
     );
-  }, 120000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 });
 
 describe("t305 stage and protocol source-attribution requirements", () => {
   test("pins schema, Bolt-relative paths, review freeze, and workspace_requires semantics", () => {
     const stage=readFileSync(STAGE,"utf-8"); const reviewer=readFileSync(join(PROTOCOL,"stage-protocol-reviewer.md"),"utf-8"); const construction=readFileSync(join(PROTOCOL,"stage-protocol-construction.md"),"utf-8"); const definition=readFileSync(join(PROTOCOL,"stage-definition.md"),"utf-8"); const swarm=readFileSync(join(PROTOCOL,"stage-protocol-swarm.md"),"utf-8");
-    expect(stage).toContain('"version": 1'); expect(stage).toContain("created, modified, or deleted"); expect(stage).toContain("trailing `/` directory claim"); expect(stage).toContain("MUST omit `repo`"); expect(stage).toContain("unclaimed changed paths\nblock stage completion"); expect(stage).toContain("engine-validated against its strict schema");
+    expect(stage).toContain('"version": 1'); expect(stage).toContain("created, modified, or deleted"); expect(stage).toContain("trailing `/` directory claim"); expect(stage).toContain("MUST omit `repo`"); expect(stage).toContain("unclaimed changed paths block stage completion; under relaxed or off they are\nkept"); expect(stage).toContain("engine-validated against its strict schema");
     expect(reviewer).toContain("differentially at those paths"); expect(reviewer).toContain("source-manifest.json"); expect(reviewer).toContain("claimed source paths");
     expect(construction).toContain("before the in-Bolt review"); expect(construction).toContain("worktree-relative and omit `repo`"); expect(definition).toContain("source-manifest.json"); expect(definition).toContain("stage-entry source baseline");
     expect(swarm).toContain("Post-finalize source landing"); expect(swarm).toContain("cleanup-only reconciliation"); expect(swarm).toContain("SWARM_SOURCE_MERGED");
+  });
+
+  // The review request needs every Step 5 file (aidlc-log.ts review), so the
+  // stage must place the review after Step 3 (approval, or its notice when
+  // plan approval is off) and Step 5, in one place.
+  test("Code Generation names one order (Step 3, generation, Step 5 files, review) and a Unit-only source manifest", () => {
+    const stage=readFileSync(STAGE,"utf-8");
+    expect(stage).not.toContain("- Before review, write `source-manifest.json`");
+    expect(stage).toContain("Step 3 (the person's Plan Approval; with plan approval off, only its one-line notice), generation (Step 4)");
+    expect(stage).toContain("never dispatch the reviewer before the Step 5 files exist");
+    // The manifest is a Unit-only Step 5 file (readUnitSourceManifest needs a
+    // Unit); zero-Unit Step 5 files are the stage-level summary and traceability.
+    expect(stage).not.toContain("Create `<record>/construction/{unit-name}/code-generation/source-manifest.json`");
+    expect(stage).toContain("For a Unit (`directive.unit` present), write `source-manifest.json` in Step 5, before the review");
+    expect(stage).toContain("For a Unit (`directive.unit` present), create\n`<record>/construction/<directive.unit>/code-generation/source-manifest.json`");
+    expect(stage).toContain("Zero-Unit work writes no `source-manifest.json`");
+    expect(stage).toContain("A zero-Unit directive (`directive.unit` absent) writes no\n`source-manifest.json`");
+    expect(stage).toContain("Its Step 5 files are\n`<record>/construction/code-generation/code-summary.md` and\n`<record>/construction/code-generation/traceability.json`.");
+    const step3=stage.indexOf("### Step 3: Plan Approval"); const step5=stage.indexOf("### Step 5:"); const step6=stage.indexOf("### Step 6:"); const step7=stage.indexOf("### Step 7:");
+    const review=stage.indexOf("When `directive.protocol_modules` lists `reviewer`, run the review now");
+    expect(step3).toBeGreaterThan(0); expect(step5).toBeGreaterThan(step3); expect(step6).toBeGreaterThan(step5);
+    expect(review).toBeGreaterThan(step6); expect(review).toBeLessThan(stage.indexOf("engine orchestrate report --stage code-generation")); expect(review).toBeLessThan(step7);
+    expect(stage.indexOf("section 12a of `stage-protocol-reviewer.md`")).toBeGreaterThan(step6);
+    const zeroUnit=stage.indexOf("A zero-Unit directive (`directive.unit` absent) writes no");
+    expect(zeroUnit).toBeGreaterThan(step5); expect(zeroUnit).toBeLessThan(step6);
   });
 });
