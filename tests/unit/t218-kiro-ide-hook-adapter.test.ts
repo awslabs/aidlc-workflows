@@ -5584,23 +5584,33 @@ describe("t218 enforce-approval-gate refusal names doctor's trust step", () => {
     expect(activation.recovery.split(" In Kiro CLI,").length).toBe(2);
   });
 
-  // The state tool's refusal for a reply that was not recorded (missedReply)
-  // says what happened, not to ask again, and the step for each tool this tree
-  // runs in (Kiro IDE, Kiro CLI, an ACP client), the one doctor names, word for
-  // word. The state tool cannot tell which tool runs it, so the agent relays
-  // only its own tool's line; nothing says how AI-DLC works.
-  test("the missed-reply line gives each tool's step, not how AI-DLC works", () => {
+  // The state tool's refusal for a reply that was not recorded says what
+  // happened, not to ask again, and the step doctor names for the tool the
+  // person is in, word for word, with nothing about how AI-DLC works. Inside
+  // Kiro IDE (VSCODE_IPC_HOOK or VSCODE_PID, the adapter's signal) that is its
+  // step alone; Kiro CLI and an ACP client, which nothing tells apart, get
+  // their own two lines and never Kiro IDE's.
+  test("the missed-reply line gives the person's own tool's step, not how AI-DLC works", () => {
     const activation = (JSON.parse(readFileSync(join(KIRO_IDE_TREE, "tools", "data", "harness.json"), "utf-8")) as {
-      hookActivation: { recovery: string; missedReply: string };
+      hookActivation: { recovery: string; missedReply: string; missedReplyInHost: { env: string[]; text: string } };
     }).hookActivation;
+    const split = activation.recovery.indexOf(" In Kiro CLI,");
+    const ideStep = activation.recovery.slice(0, split);
+    const otherTools = activation.recovery.slice(split + 1);
+    const said = "Your answer was not recorded, so you don't need to answer again.";
+    const lead = "If the person already replied, that reply was not recorded. Do not ask them to answer again. ";
+    expect(activation.missedReplyInHost).toEqual({
+      env: ["VSCODE_IPC_HOOK", "VSCODE_PID"],
+      text: `${lead}Tell them exactly this, with nothing about why: "${said} ${ideStep}"`,
+    });
     expect(activation.missedReply).toBe(
-      "If the person already replied, that reply was not recorded. Do not ask them to answer again. " +
-        "Tell them exactly this, with nothing about why, then only the line below for the tool they are in: " +
-        `"Your answer was not recorded, so you don't need to answer again." ${activation.recovery}`,
+      `${lead}Tell them exactly this, with nothing about why, then only the line below for the tool they are in: "${said}" ${otherTools}`,
     );
-    for (const tool of ["In Kiro IDE,", "In Kiro CLI,", "ACP client"]) expect(activation.missedReply).toContain(tool);
-    for (const machinery of ["hook", "human turn"]) {
-      expect(activation.missedReply).not.toContain(machinery);
+    expect(activation.missedReply).not.toContain("Reload Window");
+    expect(activation.missedReplyInHost.text).not.toContain("Kiro CLI");
+    expect(activation.missedReplyInHost.text).not.toContain("ACP");
+    for (const text of [activation.missedReply, activation.missedReplyInHost.text]) {
+      for (const machinery of ["hook", "human turn"]) expect(text).not.toContain(machinery);
     }
   });
 

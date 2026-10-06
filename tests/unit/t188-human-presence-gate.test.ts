@@ -90,8 +90,13 @@ function guarded(
   args: string[],
   unattended = false,
   state = STATE,
+  host: NodeJS.ProcessEnv = {},
 ): { rc: number; out: string } {
   const env = { ...process.env };
+  // The host the agent's shell is in is the case's own, never the runner's.
+  delete env.VSCODE_IPC_HOOK;
+  delete env.VSCODE_PID;
+  Object.assign(env, host);
   env.AIDLC_SKIP_ARTIFACT_GUARD = "1";
   env.AIDLC_ALLOW_DIRECT_STATE_TRANSITIONS = "1";
   delete env.AIDLC_SKIP_HUMAN_PRESENCE_GUARD;
@@ -275,10 +280,11 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
 
   // A refusal for a reply that was not recorded never asks the person to answer
   // again. Claude's tools (its shipped hookActivation) give the agent's own
-  // step and the one line to show; Kiro IDE's give the words to relay with the
-  // step for each tool its tree runs in, the one doctor names, and nothing
+  // step and the one line to show; the Kiro IDE tree's give the words to relay
+  // with the step doctor names for the person's own tool: Kiro IDE's alone
+  // inside Kiro IDE, Kiro CLI's and an ACP client's elsewhere, and nothing
   // about how AI-DLC works.
-  test("A2: Claude's refusal gives its own step, Kiro IDE's gives each tool's step, and neither asks again", () => {
+  test("A2: Claude's refusal gives its own step, the Kiro IDE tree's gives the person's own tool's step, and neither asks again", () => {
     const slug = field(proj, "Current Stage"); // feasibility
     guarded(proj, ["checkbox", `${slug}=in-progress`]);
     guarded(proj, ["gate-start", slug]);
@@ -290,18 +296,32 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
     );
     expect(claude.out).not.toContain("reply again");
     expect(claude.out).not.toContain("Reload Window");
-    const r = guarded(proj, ["approve", slug, "--user-input", "Approve"], false, KIRO_IDE_STATE);
-    expect(r.rc).not.toBe(0);
-    const refusal = JSON.parse(r.out).error as string;
-    expect(refusal).toContain(
-      "If the person already replied, that reply was not recorded. Do not ask them to answer again.",
+    const refusalIn = (host: NodeJS.ProcessEnv): string => {
+      const r = guarded(proj, ["approve", slug, "--user-input", "Approve"], false, KIRO_IDE_STATE, host);
+      expect(r.rc).not.toBe(0);
+      const refusal = JSON.parse(r.out).error as string;
+      expect(refusal).toContain(
+        "If the person already replied, that reply was not recorded. Do not ask them to answer again.",
+      );
+      expect(refusal).not.toContain("hooks");
+      expect(refusal).not.toContain("agent picker");
+      expect(refusal).not.toContain("clientCapabilities");
+      return refusal;
+    };
+    const ideStep =
+      'Tell them exactly this, with nothing about why: "Your answer was not recorded, so you don\'t need to answer again. In Kiro IDE, trust this folder: choose Trust Folder & Continue when Kiro asks whether you trust it, or select Manage on the Restricted Mode banner, then Trust. Then run Developer: Reload Window from the Command Palette (Ctrl+Shift+P, or Cmd+Shift+P on macOS), and say carry on."';
+    for (const host of [{ VSCODE_IPC_HOOK: "/tmp/vscode-ipc.sock" }, { VSCODE_PID: "4242" }]) {
+      const inIde = refusalIn(host);
+      expect(inIde).toContain(ideStep);
+      expect(inIde).not.toContain("Kiro CLI");
+      expect(inIde).not.toContain("ACP");
+    }
+    // Kiro CLI v3 and an ACP client on this tree set neither.
+    const elsewhere = refusalIn({});
+    expect(elsewhere).toContain(
+      'Tell them exactly this, with nothing about why, then only the line below for the tool they are in: "Your answer was not recorded, so you don\'t need to answer again." In Kiro CLI, quit Kiro and start `kiro-cli` again in this folder. If you drive Kiro from an ACP client, the Kiro IDE guide names what that client must send.',
     );
-    expect(refusal).toContain(
-      'Tell them exactly this, with nothing about why, then only the line below for the tool they are in: "Your answer was not recorded, so you don\'t need to answer again." In Kiro IDE, trust this folder: choose Trust Folder & Continue when Kiro asks whether you trust it, or select Manage on the Restricted Mode banner, then Trust. Then run Developer: Reload Window from the Command Palette (Ctrl+Shift+P, or Cmd+Shift+P on macOS), and say carry on. In Kiro CLI, quit Kiro and start `kiro-cli` again in this folder.',
-    );
-    expect(refusal).not.toContain("hooks");
-    expect(refusal).not.toContain("agent picker");
-    expect(refusal).not.toContain("clientCapabilities");
+    expect(elsewhere).not.toContain("Reload Window");
     expect(eventCount(proj, "GATE_APPROVED")).toBe(0);
     expect(field(proj, "Current Stage")).toBe(slug);
   });
