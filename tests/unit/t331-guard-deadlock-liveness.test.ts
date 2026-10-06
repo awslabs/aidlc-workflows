@@ -1723,7 +1723,7 @@ describe("AttemptView projections and refusal streaks", () => {
       Stage: "functional-design", Reviewer: "reviewer", Unit: "alpha", Iteration: iteration,
       "Artifact Fingerprint": `sha256:${"a".repeat(64)}`,
     }, "main.md", 0, pos);
-    for (const finished of [{}, { Mode: "wave" }]) {
+    for (const finished of [{}, { Mode: "wave" }] as Record<string, string>[]) {
       const rows = [
         event("WORKFLOW_STARTED", "2026-08-28T00:00:00Z", {}, "main.md", 0, 0),
         request("2026-08-28T00:00:01Z", "1", 1),
