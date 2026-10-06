@@ -3545,12 +3545,40 @@ describe("t294 config diagnostics CLI", () => {
     expect(parsed.model).toBe("team-model");
     expect(parsed.developer_instructions).toBe(shipped.developer_instructions);
     expect(parsed.sandbox_mode).toBe(shipped.sandbox_mode);
+    // Without the raised output budget, Codex cuts a long workflow instruction
+    // short for a model outside its catalog (custom providers, --oss).
+    expect(parsed.tool_output_token_limit).toBe(shipped.tool_output_token_limit);
     expect(parsed.features).toEqual({
       ...(shipped.features as Record<string, unknown>),
       web_search_request: true,
     });
     expect(parsed.tui).toEqual(shipped.tui);
     expect(parsed.mcp_servers).toEqual({ team: { command: "team-mcp" } });
+
+    const again = run(["config", "--project-dir", project, "--yes"], project, runtimeEnv());
+    expect(again.status, again.stdout + again.stderr).toBe(0);
+    expect(again.stdout).not.toContain("Note:");
+    expect(readFileSync(configPath, "utf-8")).toBe(after);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("first Codex install keeps a project's own output budget and says so once", () => {
+    const project = temp("aidlc-t294-codex-own-budget-");
+    mkdirSync(join(project, ".git"));
+    mkdirSync(join(project, ".codex"));
+    const own = "model = \"team-model\"\ntool_output_token_limit = 40000\n";
+    const configPath = join(project, ".codex", "config.toml");
+    writeFileSync(configPath, own);
+    const installed = run([
+      "config", "--project-dir", project, "--from", join(DIST_RELEASE, "codex"),
+      "--harness", "codex", "--mcp", "defaults", "--yes",
+    ], project);
+    expect(installed.status, installed.stdout + installed.stderr).toBe(0);
+    expect(installed.stdout).toContain(
+      "Note: kept your tool_output_token_limit in .codex/config.toml; this release ships a different value.",
+    );
+    const after = readFileSync(configPath, "utf-8");
+    expect(after).toContain("model = \"team-model\"\ntool_output_token_limit = 40000\n");
+    expect((parseToml(after) as Record<string, unknown>).tool_output_token_limit).toBe(40000);
 
     const again = run(["config", "--project-dir", project, "--yes"], project, runtimeEnv());
     expect(again.status, again.stdout + again.stderr).toBe(0);
@@ -4769,11 +4797,13 @@ process.exit(0);
       sandbox_workspace_write: hash,
       shell_environment_policy: hash,
       suppress_unstable_features_warning: hash,
+      tool_output_token_limit: hash,
       tools: hash,
       tui: hash,
       'value:["developer_instructions"]': hash,
       'value:["sandbox_mode"]': hash,
       'value:["suppress_unstable_features_warning"]': hash,
+      'value:["tool_output_token_limit"]': hash,
       'value:["shell_environment_policy","set","AIDLC_RULES_DIR"]': hash,
       'value:["sandbox_workspace_write","network_access"]': hash,
       'value:["agents","max_depth"]': hash,

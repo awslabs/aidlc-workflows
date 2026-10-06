@@ -4844,6 +4844,13 @@ const CODEX_FRAMEWORK_ASSIGNMENTS = [
     pattern:
       /[\t ]*(?:suppress_unstable_features_warning|"suppress_unstable_features_warning"|'suppress_unstable_features_warning')[\t ]*=[^\r\n]*(?:\r?\n|$)/y,
   },
+  // The raised output budget: without it Codex cuts a long workflow instruction
+  // short for a model outside its catalog.
+  {
+    name: "tool_output_token_limit",
+    pattern:
+      /[\t ]*(?:tool_output_token_limit|"tool_output_token_limit"|'tool_output_token_limit')[\t ]*=[^\r\n]*(?:\r?\n|$)/y,
+  },
 ] as const;
 
 // Match only real root assignments, not lookalikes in onboarding prose, arrays,

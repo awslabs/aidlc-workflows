@@ -1040,8 +1040,8 @@ answers.
 
 `.codex/config.toml` belongs to the project as well; AI-DLC contributes its
 settings key by key: `developer_instructions`, `sandbox_mode`,
-`suppress_unstable_features_warning`, and the keys it ships in the
-`[shell_environment_policy]`, `[sandbox_workspace_write]`, `[agents]`,
+`suppress_unstable_features_warning`, `tool_output_token_limit`, and the keys
+it ships in the `[shell_environment_policy]`, `[sandbox_workspace_write]`, `[agents]`,
 `[features]`, `[tools]`, and `[tui]` tables. A refresh, including those
 accompanying provider, scope, or model answers, changes only those keys and
 keeps every other byte: your own keys (also inside AI-DLC's tables), your own
