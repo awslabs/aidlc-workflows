@@ -275,9 +275,10 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
 
   // A refusal for a reply that was not recorded never asks the person to answer
   // again. Claude's tools (its shipped hookActivation) give the agent's own
-  // step and the one line to show; Kiro IDE's give the words to relay with its
-  // trust step, the one doctor names, and nothing about how AI-DLC works.
-  test("A2: Claude's refusal gives its own step, Kiro IDE's gives its trust step, and neither asks again", () => {
+  // step and the one line to show; Kiro IDE's give the words to relay with the
+  // step for each tool its tree runs in, the one doctor names, and nothing
+  // about how AI-DLC works.
+  test("A2: Claude's refusal gives its own step, Kiro IDE's gives each tool's step, and neither asks again", () => {
     const slug = field(proj, "Current Stage"); // feasibility
     guarded(proj, ["checkbox", `${slug}=in-progress`]);
     guarded(proj, ["gate-start", slug]);
@@ -296,10 +297,9 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
       "If the person already replied, that reply was not recorded. Do not ask them to answer again.",
     );
     expect(refusal).toContain(
-      'Tell them exactly this, with nothing about why: "Your answer was not recorded, so you don\'t need to answer again. In Kiro IDE, trust this folder: choose Trust Folder & Continue when Kiro asks whether you trust it, or select Manage on the Restricted Mode banner, then Trust. Then run Developer: Reload Window from the Command Palette (Ctrl+Shift+P, or Cmd+Shift+P on macOS), and say carry on."',
+      'Tell them exactly this, with nothing about why, then only the line below for the tool they are in: "Your answer was not recorded, so you don\'t need to answer again." In Kiro IDE, trust this folder: choose Trust Folder & Continue when Kiro asks whether you trust it, or select Manage on the Restricted Mode banner, then Trust. Then run Developer: Reload Window from the Command Palette (Ctrl+Shift+P, or Cmd+Shift+P on macOS), and say carry on. In Kiro CLI, quit Kiro and start `kiro-cli` again in this folder.',
     );
     expect(refusal).not.toContain("hooks");
-    expect(refusal).not.toContain("Kiro CLI");
     expect(refusal).not.toContain("agent picker");
     expect(refusal).not.toContain("clientCapabilities");
     expect(eventCount(proj, "GATE_APPROVED")).toBe(0);

@@ -5585,18 +5585,21 @@ describe("t218 enforce-approval-gate refusal names doctor's trust step", () => {
   });
 
   // The state tool's refusal for a reply that was not recorded (missedReply)
-  // says what happened, not to ask again, and the same Kiro IDE step, word for
-  // word, with nothing about how AI-DLC works.
-  test("the missed-reply line gives the Kiro IDE trust step, not how AI-DLC works", () => {
+  // says what happened, not to ask again, and the step for each tool this tree
+  // runs in (Kiro IDE, Kiro CLI, an ACP client), the one doctor names, word for
+  // word. The state tool cannot tell which tool runs it, so the agent relays
+  // only its own tool's line; nothing says how AI-DLC works.
+  test("the missed-reply line gives each tool's step, not how AI-DLC works", () => {
     const activation = (JSON.parse(readFileSync(join(KIRO_IDE_TREE, "tools", "data", "harness.json"), "utf-8")) as {
       hookActivation: { recovery: string; missedReply: string };
     }).hookActivation;
-    const ideStep = activation.recovery.slice(0, activation.recovery.indexOf(" In Kiro CLI,"));
     expect(activation.missedReply).toBe(
       "If the person already replied, that reply was not recorded. Do not ask them to answer again. " +
-        `Tell them exactly this, with nothing about why: "Your answer was not recorded, so you don't need to answer again. ${ideStep}"`,
+        "Tell them exactly this, with nothing about why, then only the line below for the tool they are in: " +
+        `"Your answer was not recorded, so you don't need to answer again." ${activation.recovery}`,
     );
-    for (const machinery of ["hook", "Kiro CLI", "ACP", "human turn"]) {
+    for (const tool of ["In Kiro IDE,", "In Kiro CLI,", "ACP client"]) expect(activation.missedReply).toContain(tool);
+    for (const machinery of ["hook", "human turn"]) {
       expect(activation.missedReply).not.toContain(machinery);
     }
   });
