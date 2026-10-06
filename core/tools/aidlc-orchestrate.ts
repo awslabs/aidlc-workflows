@@ -2098,6 +2098,28 @@ const NEW_WORK_ROUTING_OPTIONS: readonly RoutingOption[] = [
   },
   { route: "reshape", label: "Reshape the active work", detail: (_scope: string) => "Change how the remaining plan is shaped" },
 ];
+// The same ask when the person typed a scope that differs from the active
+// work's. Words typed with a scope most often mean new work, so that answer
+// comes first; the active-work answer changes its scope to the one they typed.
+const SCOPE_CHANGE_ROUTING_OPTIONS: readonly RoutingOption[] = [
+  {
+    route: "separate",
+    label: "Separate new piece of work",
+    detail: (scope: string) => `Start new "${scope}" work for it; the current work stays as it is`,
+  },
+  {
+    route: "continue",
+    label: "Part of the active work",
+    detail: (scope: string) => `Change the current workflow to "${scope}" and continue it`,
+  },
+  NEW_WORK_ROUTING_OPTIONS[2],
+];
+
+// A routing question asked about a typed scope that differs from the active
+// work's: its active-work answer carries that scope (no other one does).
+function routingAskedAboutScope(question: StoredQuestion): boolean {
+  return question.settings?.existingWork.includes("--scope") === true;
+}
 // The same ask's options while no work is selected: continue and reshape act
 // on a record the person picks from the ones it lists.
 const EXISTING_WORK_ROUTING_OPTIONS: readonly RoutingOption[] = [
@@ -2171,7 +2193,7 @@ function routingQuestionAnswer(
     const option = routingOptionReply(
       text,
       question.proposedScope,
-      pick ? EXISTING_WORK_ROUTING_OPTIONS : NEW_WORK_ROUTING_OPTIONS,
+      pick ? EXISTING_WORK_ROUTING_OPTIONS : routingAskedAboutScope(question) ? SCOPE_CHANGE_ROUTING_OPTIONS : NEW_WORK_ROUTING_OPTIONS,
     );
     if (!option) return null;
     // Once the request it stopped has started work, the question is spent:
@@ -6633,11 +6655,15 @@ function routeNext(args: string[], projectDir: string | undefined): void {
       uuid: intentUuidForSelection(pd, selection),
     });
     if (named && flags.continue) {
-      // Part of that work: continue it exactly as a bare `next` does.
+      // Part of that work: continue it exactly as a bare `next` does, after
+      // changing its scope when the person typed a different one.
+      const typedScope = flags.scope && stateContent && flags.scope !== (getField(stateContent, "Scope") ?? "")
+        ? flags.scope
+        : undefined;
       flags.continue = false;
       flags.intent = undefined;
       flags.request = undefined;
-      flags.scope = undefined;
+      flags.scope = typedScope;
       question = undefined;
     } else if (!named) {
       // Never act on the answer: ask again about the work that exists now.
@@ -7121,10 +7147,14 @@ function routeNext(args: string[], projectDir: string | undefined): void {
     // settings still take the config-only path below.
     const currentStateScope = getField(stateContent, "Scope") ?? "";
     const plan = { scope: currentStateScope, stateContent };
+    // Words typed with a differing scope may be new work or the reason for
+    // the change: Branch 9c asks which, so they are never dropped.
+    const scopeWithWords = Boolean(flags.intent) && !planChanges && !flags.resume;
     if (
       flags.scope &&
       validScopes().has(flags.scope) &&
-      flags.scope !== currentStateScope
+      flags.scope !== currentStateScope &&
+      !scopeWithWords
     ) {
       const parts = [`--scope ${scopeArg(flags.scope)}`];
       for (const modifier of modifiers) parts.push(`--${modifier}`);
@@ -7420,10 +7450,14 @@ function routeNext(args: string[], projectDir: string | undefined): void {
   // is the scope that new work would get, asked about the same way.
   if (
     flags.intent &&
-    (!flags.scope || flags.scope === (getField(stateContent, "Scope") ?? "")) &&
+    (!flags.scope || flags.scope === (getField(stateContent, "Scope") ?? "") || validScopes().has(flags.scope)) &&
     !flags.resume
   ) {
     const activeLabel = activeWorkLabel(stateContent);
+    // A typed scope that differs from the active work's (Branch 5 left it
+    // here): the active-work answer changes the work to it.
+    const scopeChange = flags.scope !== undefined && flags.scope !== (getField(stateContent, "Scope") ?? "");
+    const options = scopeChange ? SCOPE_CHANGE_ROUTING_OPTIONS : NEW_WORK_ROUTING_OPTIONS;
     // Name the scope a confirmed new intent would get (the same pure
     // inference Branch 8 uses) so the single ask carries everything the offer
     // needs: active work, the new text, the proposed scope, and a "Yes"-led
@@ -7435,15 +7469,19 @@ function routeNext(args: string[], projectDir: string | undefined): void {
       scope: routingScopeProposal ?? flags.scope ?? flags.positionalScope ??
         inferScopeFromText(authoritativeRequest(flags.intent)).scope,
     };
+    const carried = askedAgain?.carried ?? carriedRoutingFlags(flags);
     emit(newWorkRoutingAskDirective(
       `Work is already in progress on: "${activeLabel}". You said: "${requestPreview(flags.intent)}".${documentSplitSentence(flags.intent)} ` +
-        `Is this (1) part of that work - continue it; (2) a separate new piece of work - ` +
-        `Yes, set it up alongside the current one as "${inferred.scope}" work without changing it; ` +
+        (scopeChange
+          ? `Is this (1) a separate new piece of work - start new "${inferred.scope}" work for it, the current work stays as it is; ` +
+            `(2) part of that work - change it to "${inferred.scope}" and continue it; `
+          : "Is this (1) part of that work - continue it; (2) a separate new piece of work - " +
+            `Yes, set it up alongside the current one as "${inferred.scope}" work without changing it; `) +
         "or (3) a change to how the remaining plan is shaped?",
       `**New work routing** — Work is already in progress on: "${activeLabel}". You said: "${requestPreview(flags.intent)}".${documentSplitSentence(flags.intent)} What should I do?\n\n` +
-        `${newWorkRoutingOptionLine(0, inferred.scope)}\n` +
-        `${newWorkRoutingOptionLine(1, inferred.scope)}\n` +
-        `${newWorkRoutingOptionLine(2, inferred.scope)}\n` +
+        `${newWorkRoutingOptionLine(0, inferred.scope, options)}\n` +
+        `${newWorkRoutingOptionLine(1, inferred.scope, options)}\n` +
+        `${newWorkRoutingOptionLine(2, inferred.scope, options)}\n` +
         "4. **Other** — describe what you want instead\n\n" +
         "Reply with a number (or just tell me).",
       flags.intent,
@@ -7452,7 +7490,7 @@ function routeNext(args: string[], projectDir: string | undefined): void {
       { space: selection.space, targets: routingTargets() },
       undefined,
       stateDigest(stateContent),
-      askedAgain?.carried ?? carriedRoutingFlags(flags),
+      scopeChange ? { ...carried, existingWork: `${carried.existingWork} --scope ${scopeArg(inferred.scope)}` } : carried,
       askedAgain?.question.approvedRequest,
     ));
     return;

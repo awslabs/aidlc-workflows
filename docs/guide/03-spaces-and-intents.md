@@ -160,6 +160,11 @@ and any other setting typed in the same message, applies to the active intent
 as you send the message; the new intent starts at the default Guard Policy, and
 AI-DLC says so when it creates it. Naming the plan first
 (`/aidlc bugfix Fix the timeout`) asks the same question, proposing that plan.
+So does a scope that differs from the active intent's, typed with a
+description (`/aidlc --scope express "add a health endpoint"`), with new work
+first: choose **1** and the description starts new express work, the active
+intent kept as it is, or **2** and the active intent changes to express. A
+scope with no description changes the active intent's scope without asking.
 
 AI-DLC never creates a second intent without asking. If a prompt is genuinely a
 follow-up to the current work — answering a gate, correcting a requirement — it

@@ -1013,10 +1013,57 @@ describe("t114 mid-flow freeform prose -> routing ask (Branch 9c)", () => {
     expect(out).not.toContain('"kind":"ask"');
   });
 
-  test("prose WITH an explicit --scope stays a scope-change, never the ask", () => {
+  // Arden decision 6: words typed with a differing --scope over open work are
+  // never dropped. One question, new work first (what the words most often
+  // mean): new work with that scope, or a scope change for the open work.
+  test("prose WITH a differing --scope asks once: new work with it first, or change the open work's scope", () => {
     proj = createOrchestrationTestProject();
-    seedStateFile(proj, MID_IDEATION); // state scope differs from bugfix
+    seedStateFile(proj, MID_IDEATION); // scope: feature
     const out = runNext(proj, ["--scope", "bugfix", "fix the login flow"]).out;
+    const directive = JSON.parse(out) as {
+      kind?: string; ask_type?: string; proposed_scope?: string; question?: string; numbered_prose_question?: string;
+      new_intent_command?: string; continue_command?: string; new_work_description?: string;
+    };
+    expect(directive.kind).toBe("ask");
+    expect(directive.ask_type).toBe("new-work-routing");
+    expect(directive.new_work_description).toBe("fix the login flow");
+    expect(directive.proposed_scope).toBe("bugfix");
+    expect(directive.new_intent_command).toContain("--new-intent --scope bugfix");
+    expect(directive.continue_command).toContain("--continue --request ");
+    expect(directive.continue_command).toContain("--scope bugfix");
+    expect(directive.question).toContain('(1) a separate new piece of work - start new "bugfix" work for it');
+    expect(directive.question).toContain('(2) part of that work - change it to "bugfix"');
+    expect(directive.numbered_prose_question).toContain(
+      '1. **Separate new piece of work** — Start new "bugfix" work for it; the current work stays as it is',
+    );
+    expect(directive.numbered_prose_question).toContain(
+      '2. **Part of the active work** — Change the current workflow to "bugfix" and continue it',
+    );
+  });
+
+  test("a bare 1 to that question starts the new work with the typed scope", () => {
+    proj = createOrchestrationTestProject();
+    seedStateFile(proj, MID_IDEATION);
+    runNext(proj, ["--scope", "bugfix", "fix the login flow"]);
+    const out = runNext(proj, ["1"]).out;
+    expect(out).toContain("intent create --scope bugfix --request ");
+    expect(out).not.toContain("scope change");
+  });
+
+  test("the open-work answer to that question changes its scope", () => {
+    proj = createOrchestrationTestProject();
+    seedStateFile(proj, MID_IDEATION);
+    const asked = JSON.parse(runNext(proj, ["--scope", "bugfix", "fix the login flow"]).out) as { continue_command?: string };
+    const args = (asked.continue_command ?? "").split(" ");
+    const out = runNext(proj, args.slice(args.indexOf("next") + 1)).out;
+    expect(out).toContain('"kind":"print"');
+    expect(out).toContain("scope change --scope bugfix");
+  });
+
+  test("a differing --scope with no words still changes scope", () => {
+    proj = createOrchestrationTestProject();
+    seedStateFile(proj, MID_IDEATION);
+    const out = runNext(proj, ["--scope", "bugfix"]).out;
     expect(out).toContain('"kind":"print"');
     expect(out).toContain("scope change --scope bugfix");
   });
