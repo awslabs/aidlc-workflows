@@ -584,6 +584,34 @@ function artifactBasisChanges(
   return changes;
 }
 
+// The input and output changes that are only an edit to a document that is
+// still there: same producer, same instances, same presence, other content. A
+// change named by both such an edit and another kind of change stays out.
+function contentOnlyChanges(before: StageValidationBasis, after: StageValidationBasis): Set<string> {
+  const only = new Set<string>();
+  const other = new Set<string>();
+  for (const [label, left, right] of [
+    ["input", before.inputs, after.inputs],
+    ["output", before.outputs, after.outputs],
+  ] as const) {
+    const previous = new Map(left.map((item) => [artifactBasisKey(item), item]));
+    const current = new Map(right.map((item) => [artifactBasisKey(item), item]));
+    for (const key of new Set([...previous.keys(), ...current.keys()])) {
+      const was = previous.get(key);
+      const now = current.get(key);
+      if (canonicalJson(was) === canonicalJson(now)) continue;
+      const change = `${label}:${(now ?? was)!.artifact}`;
+      if (was && now && canonicalJson({ ...was, contentHash: "" }) === canonicalJson({ ...now, contentHash: "" })) {
+        only.add(change);
+      } else {
+        other.add(change);
+      }
+    }
+  }
+  for (const change of other) only.delete(change);
+  return only;
+}
+
 export function diffStageValidationBasis(
   before: StageValidationBasis,
   after: StageValidationBasis,
@@ -753,6 +781,8 @@ export function inspectStageValidity(
       stage: StageValidityNode,
       stages: readonly StageValidityNode[],
     ) => StageValidationBasis;
+    /** A change to a document's content alone is not raised (Guard Policy relaxed or off). */
+    acceptContentChanges?: boolean;
   } = {},
 ): StageValidityInspection {
   const stages = options.stages ?? loadGraph();
@@ -784,8 +814,10 @@ export function inspectStageValidity(
       );
       continue;
     }
+    const contentOnly = options.acceptContentChanges === true
+      ? contentOnlyChanges(previous, current) : new Set<string>();
     const changes = diffStageValidationBasis(previous, current).filter(
-      (change) => change !== "project-type" || workDependsOnProjectType(stage),
+      (change) => (change !== "project-type" || workDependsOnProjectType(stage)) && !contentOnly.has(change),
     );
     if (changes.length > 0) directReasons.set(slug, changes);
   }

@@ -19,6 +19,7 @@ import { spawnSync } from "node:child_process";
 import { createHash, createHmac } from "node:crypto";
 import {
   appendFileSync,
+  unlinkSync,
   cpSync,
   existsSync,
   mkdirSync,
@@ -507,6 +508,9 @@ describe("t248 deterministic steering delivery", () => {
 
   test("a retired policy notice tips a near-limit inline bundle into bounded steering parts", () => {
     const proj = statefulProjectWithDrift();
+    // Under relaxed an edit to the finished document is accepted and not
+    // raised; a document that is gone still is, so the advisory stays.
+    unlinkSync(join(seededRecordDir(proj), "inception", "requirements-analysis", "requirements.md"));
     const statePath = seededStateFile(proj);
     const state = readFileSync(statePath, "utf-8").replace(
       /^- \*\*Change Control\*\*:.*$/m,

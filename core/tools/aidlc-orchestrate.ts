@@ -529,7 +529,11 @@ function projectStageValidityAdvisory(
   stateContent: string,
 ): StageValidityAdvisory | undefined {
   try {
-    const validity = inspectStageValidity(projectDir, stateContent);
+    // Under Guard Policy relaxed and off the guard accepts an edit to a
+    // finished stage's document and says it once, so this line never raises it.
+    const validity = inspectStageValidity(projectDir, stateContent, {
+      acceptContentChanges: guardPolicyAcceptsChanges(projectDir, stateContent),
+    });
     if (validity.issues.length === 0 && validity.warnings.length === 0) {
       return undefined;
     }

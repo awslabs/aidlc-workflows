@@ -1151,6 +1151,10 @@ engine keeps the normal directive kind and attaches a machine-readable
 (which finished stage is behind and what to say to redo it, or that a check
 could not run); the conductor says it the first time it appears in a
 conversation and not again for the same warning, then continues routing.
+Under Guard Policy `relaxed` or `off` an edit to a document that is still there
+is not raised on `next`: the guard accepts it and says it once. A document that
+is gone, a project-type change and a stage-graph change still are, and
+`/aidlc --status` still lists every stage behind.
 Inspection-unavailable stages remain a per-turn advisory because they need
 attention. Receipt-less histories are reported as untracked by
 `/aidlc --status` only, so migration does not add a warning to every `next`.
