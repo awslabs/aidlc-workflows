@@ -4252,7 +4252,8 @@ describe("t243 project initialization", () => {
       ], project);
       expect(refused.status, `${harness}: ${refused.stdout}${refused.stderr}`).toBe(4);
       const out = refused.stdout.replace(/\s+/g, " ");
-      expect(out).toContain(`${agent} (locally modified or unowned)`);
+      // The conflict line names the path with forward slashes on every OS.
+      expect(out).toContain(`${agent.replaceAll("\\", "/")} (locally modified or unowned)`);
       const dir = harness === "codex" ? ".codex" : ".claude";
       expect(out, harness).toContain(`\`bun ${dir}/tools/aidlc.ts config --dry-run --verbose\` lists every change first`);
       if (harness === "codex") expect(out).not.toContain(".claude/tools/aidlc.ts");
