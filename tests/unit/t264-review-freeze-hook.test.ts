@@ -1321,3 +1321,147 @@ describe("t264 (d) Kiro IDE adapter route", () => {
     }).code).toBe(0);
   });
 });
+
+// ---------------------------------------------------------------------------
+// (d) The refusal names `next`, and the next `next` asks the recovery question
+// ---------------------------------------------------------------------------
+//
+// The refusal used to end with the recovery question as a JSON line, which
+// the person read under the tool's hook error. The hook now says what was
+// refused and names `next`; the question waits in the refusal record and the
+// next `next` asks it once, unless it no longer stands (the stage was approved
+// or sent back, the check was lowered) or another question is already open.
+
+const ORCH_TOOL = join(DIST_CLAUDE, "tools", "aidlc-orchestrate.ts");
+
+function nextDirective(p: string, env: Record<string, string> = {}): Record<string, unknown> {
+  const r = spawnSync(BUN, [ORCH_TOOL, "next", "--project-dir", p], {
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+    encoding: "utf-8",
+    env: { ...process.env, ...env },
+  });
+  const line = (r.stdout ?? "").trim().split("\n").at(-1) ?? "";
+  try {
+    return JSON.parse(line) as Record<string, unknown>;
+  } catch {
+    throw new Error(`next printed no directive: ${r.status}\n${r.stdout}\n${r.stderr}`);
+  }
+}
+
+function approveStage(p: string): void {
+  const r = spawnSync(
+    BUN,
+    [STATE_TOOL, "approve", "requirements-analysis", "--project-dir", p],
+    {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+      encoding: "utf-8",
+      env: {
+        ...process.env,
+        AIDLC_ALLOW_DIRECT_STATE_TRANSITIONS: "1",
+        AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "1",
+        AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD: "1",
+      },
+    },
+  );
+  if ((r.status ?? -1) !== 0) throw new Error(`approve failed: ${r.stdout}${r.stderr}`);
+}
+
+function refusalRecords(p: string): string[] {
+  const dir = join(seededRecordDir(p), ".aidlc-engine", "guard-refusals");
+  if (!existsSync(dir)) return [];
+  return readdirSync(dir).sort().map((name) => readFileSync(join(dir, name), "utf-8"));
+}
+
+function refusedWrite(p: string): string {
+  const refused = runHook(p, writePayload(raArtifact(p)));
+  expect(refused.code).toBe(2);
+  return refused.stderr;
+}
+
+describe("t264 (d) the refusal names next; next asks the recovery question", () => {
+  test("the refusal says what was refused and the step to take, with no JSON line", () => {
+    const p = projBeforeGate();
+    recordReview(p, "READY");
+    const stderr = refusedWrite(p);
+    expect(stderr).toContain("its latest review is final");
+    expect(stderr.split("\n").filter((line) => line.trim().startsWith("{"))).toEqual([]);
+    expect(stderr).not.toContain('"ask_type"');
+    expect(stderr.trim()).toMatch(/ Next: `[^`\n]*orchestrate[^`\n]* next`\.$/);
+  });
+
+  test("the next `next` asks the recovery question, once", () => {
+    const p = projBeforeGate();
+    recordReview(p, "READY");
+    refusedWrite(p);
+    const asked = nextDirective(p);
+    expect(asked).toMatchObject({
+      kind: "ask",
+      ask_type: "guard-recovery",
+      stage: "requirements-analysis",
+      reason_codes: ["REVIEW_FREEZE_ACTIVE"],
+    });
+    expect((asked.remedies as { op: string }[]).map((remedy) => remedy.op)).toEqual([
+      "request-changes",
+      "lower-fence",
+    ]);
+    expect(nextDirective(p)).toMatchObject({ kind: "run-stage", stage: "requirements-analysis" });
+  });
+
+  test("a Stop-hook probe reads the question without taking it", () => {
+    const p = projBeforeGate();
+    recordReview(p, "READY");
+    refusedWrite(p);
+    const before = refusalRecords(p);
+    expect(nextDirective(p, { AIDLC_STOP_HOOK_PROBE: "1" })).toMatchObject({
+      kind: "ask",
+      ask_type: "guard-recovery",
+    });
+    expect(refusalRecords(p)).toEqual(before);
+    expect(nextDirective(p)).toMatchObject({ kind: "ask", ask_type: "guard-recovery" });
+  });
+
+  test("an open gate's question comes first, and approving the stage retires the recovery question", () => {
+    const p = projBeforeGate();
+    recordReview(p, "READY");
+    refusedWrite(p);
+    openGate(p);
+    expect(nextDirective(p).ask_type).not.toBe("guard-recovery");
+    approveStage(p);
+    const after = nextDirective(p);
+    expect(after.ask_type).not.toBe("guard-recovery");
+    expect(after.stage).not.toBe("requirements-analysis");
+  });
+
+  test("sending the stage back retires the recovery question", () => {
+    const p = projBeforeGate();
+    recordReview(p, "READY");
+    openGate(p);
+    refusedWrite(p);
+    reject(p);
+    expect(nextDirective(p).ask_type).not.toBe("guard-recovery");
+  });
+
+  test("a lowered review-freeze check retires the recovery question", () => {
+    const p = projBeforeGate();
+    recordReview(p, "READY");
+    refusedWrite(p);
+    expect(
+      nextDirective(p, { AIDLC_DISABLE_REVIEW_FREEZE_HOOK: "1" }).ask_type,
+    ).not.toBe("guard-recovery");
+  });
+
+  test("every conductor runs the step a hook refusal names", () => {
+    const missing: string[] = [];
+    for (const harness of ["claude", "kiro", "kiro-ide", "codex", "cursor", "opencode", "copilot"]) {
+      const rel = join("harness", harness, "skills", "aidlc", "SKILL.md");
+      const body = readFileSync(join(REPO_ROOT, rel), "utf-8");
+      if (!body.includes(HOOK_REFUSAL_NEXT_RULE)) missing.push(rel);
+    }
+    expect(missing).toEqual([]);
+  });
+});
+
+const HOOK_REFUSAL_NEXT_RULE =
+  "A hook refusal that ends with `Next:` and a command names your next step: run that command and act on " +
+  "the directive it returns (after a refused write, the recovery question to put to the person); never retry " +
+  "the refused call.";
