@@ -48,6 +48,18 @@ const DISPATCHER = join(REPO_ROOT, "core", "tools", "aidlc.ts");
 const DIST = join(REPO_ROOT, "dist");
 const DIST_RELEASE = join(REPO_ROOT, "dist-release");
 const temporary: string[] = [];
+// The one line a tool that picks its own models shows for a model or effort it
+// cannot apply. The setting is still kept, for teammates on other tools.
+const OWN_PICKER_LINES = {
+  copilot:
+    "GitHub Copilot runs every agent on the model you choose in its model picker (/model in the Copilot CLI), so a model or effort set here is kept for other tools and changes nothing in GitHub Copilot.",
+  cursor:
+    "Cursor runs every agent on the model you choose in its model picker, so a model or effort set here is kept for other tools and changes nothing in Cursor.",
+  "kiro-ide":
+    "Kiro IDE runs every agent on the model you choose in its model picker, so a model or effort set here is kept for other tools and changes nothing in Kiro IDE.",
+  kiro:
+    "Kiro CLI runs every agent on your session's model and effort, so an effort set here without a model is kept for other tools and changes nothing in Kiro CLI; a preset (minimal, balanced or thorough) sets the session's effort.",
+} as const;
 
 afterAll(() => {
   for (const path of temporary) rmSync(path, { recursive: true, force: true });
@@ -110,6 +122,20 @@ function runtimeEnv(): NodeJS.ProcessEnv {
     // Host active-version runtimes must not join this fixture's source discovery.
     AIDLC_INSTALL_ROOT: temp("aidlc-t293-runtime-machine-"),
   };
+}
+
+// A hook PATH holding only the named commands, as `getconf PATH` (or
+// PowerShell on Windows) reports it to the runtime check.
+function hookPath(commands: readonly string[]): NodeJS.ProcessEnv {
+  const bin = temp("aidlc-t293-hook-path-");
+  if (process.platform === "win32") {
+    writeFileSync(join(bin, "powershell.cmd"), `@echo off\r\necho ${bin}\r\n`, "utf-8");
+    for (const name of commands) writeFileSync(join(bin, `${name}.cmd`), "@exit /b 0\r\n", "utf-8");
+    return { PATH: bin };
+  }
+  writeFileSync(join(bin, "getconf"), `#!/bin/sh\nprintf '%s\\n' ${JSON.stringify(bin)}\n`, { mode: 0o755 });
+  for (const name of commands) writeFileSync(join(bin, name), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+  return { PATH: bin, SystemRoot: "" };
 }
 
 function harnessData(project: string, harnessDir: string): Record<string, unknown> {
@@ -811,6 +837,37 @@ describe("t293 config models CLI", () => {
     expect(raised.stdout).toContain("config models --reviewing-effort xhigh --project --yes");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
+  test("a model change ends with what changed and its undo, and names a setup step only when one is left", () => {
+    const project = install("claude");
+    const change = (effort: string, env: NodeJS.ProcessEnv, mode: string[] = []) => {
+      const result = run([
+        "config", "models", "--project-dir", project, "--project", "--reviewing-effort", effort, "--yes", ...mode,
+      ], project, { ...runtimeEnv(), ...env });
+      expect(result.status, result.stdout + result.stderr).toBe(0);
+      return result.stdout;
+    };
+    // Hooks find aidlc and bun, so nothing is left for the person to do.
+    const ready = change("xhigh", hookPath(["aidlc", "bun"]));
+    expect(ready.trimEnd().split("\n").at(-1)).toBe(
+      "  Recorded Reviewing effort xhigh in aidlc.settings.json. To undo: bun .claude/tools/aidlc.ts config models --reset --project --yes",
+    );
+    expect(ready).not.toContain("configured model policy");
+    expect(ready).not.toContain("Outstanding actions:");
+    // Hooks cannot find aidlc: that step still follows the change.
+    const missing = change("max", hookPath(["bun"]));
+    expect(missing).not.toContain("configured model policy");
+    expect(missing).toContain("Reviewing effort: xhigh -> max in aidlc.settings.json. To undo: ");
+    expect(missing).toContain(
+      "Outstanding actions:\n  runtime/runtime-aidlc-missing: aidlc is absent from the non-interactive hook PATH - run `bun .claude/tools/aidlc.ts config runtime`",
+    );
+    // JSON and --quiet keep their one message.
+    const json = JSON.parse(change("high", hookPath(["aidlc", "bun"]), ["--json"])) as { message: string };
+    expect(json.message).toStartWith("configured model policy for ");
+    const quiet = change("medium", hookPath(["aidlc", "bun"]), ["--quiet"]);
+    expect(quiet).toStartWith("configured model policy for ");
+    expect(quiet.trimEnd().split("\n")).toHaveLength(1);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
   test("an undo never runs a recorded value as shell syntax, and --reset is never offered over saved profiles", () => {
     const project = install("claude");
     writeFileSync(projectSettingsPath(project), `${JSON.stringify({
@@ -941,10 +998,111 @@ describe("t293 config models CLI", () => {
       "config", "models", "--project-dir", project, "--project", "--agent", "developer", "--effort", "high", "--yes",
     ], project, runtimeEnv());
     expect(result.status, result.stdout + result.stderr).toBe(0);
-    expect(result.stdout).toContain("agents inherit the session");
+    expect(result.stdout).toContain(`  Note: ${OWN_PICKER_LINES.copilot}\n`);
+    expect(result.stdout).not.toContain("inherit the session");
     expect(result.stdout).toContain("Recorded developer effort high in aidlc.settings.json. To undo: ");
     expect(result.stdout).not.toContain("picks this up");
+    // Kept for teammates whose tools can apply it.
+    expect((projectSettings(project).models as { agents?: Record<string, { effort?: string }> }).agents?.developer?.effort)
+      .toBe("high");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("on opencode a model change while two workflows run says both pick it up", () => {
+    const project = install("opencode");
+    const intents = join(project, "aidlc", "spaces", "default", "intents");
+    const open = ["opencode-policy-one", "opencode-policy-two"];
+    mkdirSync(intents, { recursive: true });
+    writeFileSync(
+      join(intents, "intents.json"),
+      `${JSON.stringify(open.map((dirName, index) => ({
+        uuid: `deadbeef-0000-4000-8000-00000000029${5 + index}`,
+        slug: dirName,
+        dirName,
+        scope: "feature",
+        status: "in-flight",
+      })), null, 2)}\n`,
+    );
+    for (const dirName of open) {
+      mkdirSync(join(intents, dirName), { recursive: true });
+      writeFileSync(
+        join(intents, dirName, "aidlc-state.md"),
+        "# AI-DLC State Tracking\n\n## Current Status\n- **Status**: Running\n",
+      );
+    }
+    const result = run([
+      "config", "models", "--project-dir", project, "--project", "--agent", "developer", "--effort", "high", "--yes",
+    ], project, runtimeEnv());
+    expect(result.status, result.stdout + result.stderr).toBe(0);
+    expect(result.stdout).toContain("Recorded developer effort high in aidlc.settings.json. To undo: ");
+    // opencode reads its agents from .opencode/agents/, and the change lands there.
+    expect(readFileSync(join(project, ".opencode", "agents", "aidlc-developer-agent.md"), "utf-8"))
+      .toMatch(/^variant: high$/m);
+    expect(result.stdout).toContain(
+      "2 open workflows (default/opencode-policy-one, default/opencode-policy-two) pick this up from the next step; a step already running keeps what it started with.",
+    );
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("on Kiro CLI a model or effort change while two workflows run applies from the next Kiro CLI session", () => {
+    const project = install("kiro");
+    const intents = join(project, "aidlc", "spaces", "default", "intents");
+    const open = ["kiro-policy-one", "kiro-policy-two"];
+    mkdirSync(intents, { recursive: true });
+    writeFileSync(
+      join(intents, "intents.json"),
+      `${JSON.stringify(open.map((dirName, index) => ({
+        uuid: `deadbeef-0000-4000-8000-00000000039${5 + index}`,
+        slug: dirName,
+        dirName,
+        scope: "feature",
+        status: "in-flight",
+      })), null, 2)}\n`,
+    );
+    for (const dirName of open) {
+      mkdirSync(join(intents, dirName), { recursive: true });
+      writeFileSync(
+        join(intents, dirName, "aidlc-state.md"),
+        "# AI-DLC State Tracking\n\n## Current Status\n- **Status**: Running\n",
+      );
+    }
+    // A running Kiro CLI session keeps the agents and effort it started with.
+    const nextSession =
+      "2 open workflows (default/kiro-policy-one, default/kiro-policy-two) pick this up from your next Kiro CLI session; the Kiro CLI session already running keeps what it started with.";
+    const model = run([
+      "config", "models", "--project-dir", project, "--project",
+      "--agent", "architect", "--model", "vendor/kiro-model", "--effort", "low", "--yes",
+    ], project, runtimeEnv());
+    expect(model.status, model.stdout + model.stderr).toBe(0);
+    expect(JSON.parse(readFileSync(join(project, ".kiro", "agents", "aidlc-architect-agent.json"), "utf-8")).model)
+      .toBe("vendor/kiro-model");
+    expect(model.stdout).toContain(nextSession);
+    expect(model.stdout).not.toContain("from the next step");
+    // An effort change on that agent lands in cli.json alone, and reads the same.
+    const effort = run([
+      "config", "models", "--project-dir", project, "--project",
+      "--agent", "architect", "--model", "vendor/kiro-model", "--effort", "high", "--yes",
+    ], project, runtimeEnv());
+    expect(effort.status, effort.stdout + effort.stderr).toBe(0);
+    expect(readFileSync(join(project, ".kiro", "settings", "cli.json"), "utf-8")).toContain('"effort": "high"');
+    expect(effort.stdout).toContain(nextSession);
+    expect(effort.stdout).not.toContain("from the next step");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("on Cursor, Kiro IDE and Kiro CLI a model request they cannot apply is kept and names their own picker", () => {
+    for (const harness of ["cursor", "kiro-ide", "kiro"] as const) {
+      const project = install(harness);
+      const result = run([
+        "config", "models", "--project-dir", project, "--project", "--agent", "developer", "--effort", "high", "--yes",
+      ], project, runtimeEnv());
+      expect(result.status, `${harness}: ${result.stdout}${result.stderr}`).toBe(0);
+      expect(result.stdout, harness).toContain(`  Note: ${OWN_PICKER_LINES[harness]}\n`);
+      expect(result.stdout, harness).toContain("Recorded developer effort high in aidlc.settings.json. To undo: ");
+      for (const machinery of ["inherit the session", "surface", "cannot express", "portably", "chat.modelDefaults"]) {
+        expect(result.stdout, `${harness}: ${machinery}`).not.toContain(machinery);
+      }
+      expect((projectSettings(project).models as { agents?: Record<string, { effort?: string }> }).agents?.developer?.effort, harness)
+        .toBe("high");
+    }
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS * 3);
 
   test("Kiro reports unsupported group effort and applies model-bound exceptions", () => {
     const project = install("kiro");
@@ -959,9 +1117,7 @@ describe("t293 config models CLI", () => {
       "--yes",
     ], project, runtimeEnv());
     expect(unsupported.status, unsupported.stdout + unsupported.stderr).toBe(0);
-    expect(unsupported.stdout).toContain(
-      "group effort dials have no Kiro surface",
-    );
+    expect(unsupported.stdout).toContain(OWN_PICKER_LINES.kiro);
     expect(unsupported.stdout).not.toContain("reviews run slower and cost more");
     const unsupportedPolicy = resolvedPolicy(project, "kiro");
     expect(

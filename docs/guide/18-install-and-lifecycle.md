@@ -467,6 +467,9 @@ aidlc config models --reset --project --yes
 aidlc config models --session-model claude-opus-4.8   # Kiro CLI: your personal session model
 ```
 
+A change ends with what changed, its undo command and who picks it up (plus
+any setup step still outstanding); `--json` and `--quiet` output are unchanged.
+
 `--show --json` prints every agent's effective model, effort, and provenance.
 `--check` is the CI inverse and exits non-zero when the recorded policy is not
 fully reflected in the harness surfaces.
@@ -541,10 +544,13 @@ Kiro settings
 ([Session model and effort](harnesses/kiro-cli.md#session-model-and-effort));
 explicit group dials have no Kiro surface, and a per-agent model exception
 carries its effort through the project's `chat.modelDefaults`, which then
-replaces your personal effort map in that project. Kiro IDE, Cursor, and GitHub Copilot cannot portably pin
-agent models or effort, so setup records no preset there; a policy you record
-anyway is kept, and the command reports the unsupported fields instead of
-writing inert keys. On those three, every agent uses the session's model and
+replaces your personal effort map in that project. An effort set on Kiro CLI
+without a model is kept for other tools, and the command says so in one line.
+Kiro IDE, Cursor, and GitHub Copilot cannot portably pin
+agent models or effort, so setup records no preset there. A model or effort you
+set anyway is kept for teammates on tools that apply it, writes no inert keys,
+and the command says in one line that this tool uses the model you choose in its
+own model picker. On those three, every agent uses the session's model and
 effort: the setup check and `aidlc doctor` say so instead of asking for a
 policy, and doctor warns only about an agent model recorded for that harness
 by name.
@@ -960,7 +966,9 @@ release. Each prints what changed and, where one command
 puts the earlier value back, that command. A model or flag change also names
 the open workflows that pick it up: a bypass, hook debug, the sensor timeout,
 and question retention apply right away, with no restart; models and swarm
-apply from the next step (a step already running keeps what it started with);
+apply from the next step (a step already running keeps what it started with),
+except that on Kiro CLI a model or effort change applies from your next Kiro CLI
+session, since a running one keeps what it started with;
 a default scope applies to new work only, and a saved model profile changes
 nothing until `--from` loads it. The runtime, providers, and trust answers
 print no workflow line.

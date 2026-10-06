@@ -178,12 +178,14 @@ import {
   activeModelGroups,
   applyModelPolicyToProjection,
   HARNESS_HONESTY,
+  HARNESS_PRODUCT_NAMES,
   harnessHonestyNotes,
   isModelEffort,
   isModelPreset,
   MODEL_EFFORTS,
   MODEL_GROUPS,
   MODEL_PRESETS,
+  modelPolicyAgentsDir,
   modelPolicyIsEmpty,
   modelPolicySurfaceDrift,
   normalizeModelPolicy,
@@ -9587,7 +9589,12 @@ const RIGHT_AWAY_FLAGS = new Map([
   ["flags.questionRetentionDays", "question retention"],
 ]);
 
-function openWorkflowLine(projectDir: string, mutations: readonly SettingsMutation[]): string | null {
+// `nextSession` names a tool that reads the change only when a session starts.
+function openWorkflowLine(
+  projectDir: string,
+  mutations: readonly SettingsMutation[],
+  nextSession?: string,
+): string | null {
   const open = activeWorkflowDescriptions(projectDir);
   const [first, ...rest] = mutations;
   if (open.length === 0 || !first) return null;
@@ -9617,16 +9624,19 @@ function openWorkflowLine(projectDir: string, mutations: readonly SettingsMutati
     ...changed.flatMap((id) => RIGHT_AWAY_FLAGS.get(id) ?? []),
   ];
   const nextStep = changed.some((id) => id !== "flags.defaultScope" && !RIGHT_AWAY_FLAGS.has(id));
-  const later = "a step already running keeps what it started with";
+  const from = nextSession ? `from your next ${nextSession} session` : "from the next step";
+  const later = nextSession
+    ? `the ${nextSession} session already running keeps what it started with`
+    : "a step already running keeps what it started with";
   const scopeNote = changed.includes("flags.defaultScope") ? "; the default scope applies to new work only" : "";
   if (rightAway.length > 0 && nextStep) {
     const named = rightAway.length === 1
       ? rightAway[0]
       : `${rightAway.slice(0, -1).join(", ")} and ${rightAway[rightAway.length - 1]}`;
-    return `${who} ${verb("pick")} up ${named} right away, with no restart, and the other settings from the next step; ${later}${scopeNote}.`;
+    return `${who} ${verb("pick")} up ${named} right away, with no restart, and the other settings ${from}; ${later}${scopeNote}.`;
   }
   if (rightAway.length > 0) return `${who} ${verb("pick")} this up right away, with no restart${scopeNote}.`;
-  if (nextStep) return `${who} ${verb("pick")} this up from the next step; ${later}${scopeNote}.`;
+  if (nextStep) return `${who} ${verb("pick")} this up ${from}; ${later}${scopeNote}.`;
   if (scopeNote) return `The default scope applies to new work; ${who} ${verb("keep")} the scope it started with.`;
   // The file changed, but what open work reads did not: another file sets the
   // same thing, or outranks it. A saved profile reaches nothing either.
@@ -11306,13 +11316,25 @@ export async function main(
     ];
     // A model policy reaches running work only through the agent files it
     // rewrites; a harness whose agents inherit the session says so in a note.
+    // Kiro CLI reads its agent files and its cli.json effort only when a
+    // session starts, so there the change reaches open work from the next one.
+    const policyHarness = modelHarness(descriptor.distribution);
+    const agentsDir = modelPolicyAgentsDir(policyHarness, descriptor.harnessDir);
+    const kiroCliSettings = policyHarness === "kiro" ? `${descriptor.harnessDir}/settings/cli.json` : null;
     const reachesWork = Boolean(settingsMutation) && (
       !modelsContext ||
-      actions.some((item) => item.path.startsWith(`${descriptor.harnessDir}/agents/`) && item.action !== "preserve")
+      (agentsDir !== null &&
+        actions.some((item) =>
+          item.action !== "preserve" && (item.path.startsWith(`${agentsDir}/`) || item.path === kiroCliSettings)
+        ))
     );
     if (choicesContext?.section === "project") changes.push(...projectChangeLines(projectDir, choicesContext));
     const openLine = recordOnly && reachesWork && settingsMutation
-      ? openWorkflowLine(projectDir, [settingsMutation])
+      ? openWorkflowLine(
+        projectDir,
+        [settingsMutation],
+        modelsContext && policyHarness === "kiro" ? HARNESS_PRODUCT_NAMES.kiro : undefined,
+      )
       : null;
     if (openLine) changes.push(openLine);
     if (!recordOnly) {
@@ -11400,6 +11422,15 @@ export async function main(
     // asked for until the printed command runs again.
     const kiroUnsaved = kiroSession !== null && !kiroSession.ok;
     const completed = kiroUnsaved ? `${completion}; your Kiro session was not saved` : completion;
+    // A model change the person sees ends with what changed and its undo;
+    // anything more only when something still needs them.
+    if (modelsContext && options.mode === "human" && changes.length > 0 && !kiroUnsaved) {
+      if (outstandingActions.length > 0) {
+        process.stdout.write(`${menuText(configCompletionMessage("", outstandingActions, "human").trimStart())}\n`);
+      }
+      process.exitCode = EXIT.ok;
+      return;
+    }
     const configured = success(
       // Only the human line is laid out for the terminal; JSON and --quiet
       // output keep the message exactly.
