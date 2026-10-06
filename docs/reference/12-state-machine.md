@@ -1568,7 +1568,7 @@ tool failure.
 
 **The human's selection survives the re-ask.** An engine-published guard-recovery
 ask is stored as an active-directive marker (`kind: "ask"`,
-`ask_type: "guard-recovery"`); a tool-printed ask alone does not publish one, and the review-freeze hook's ask is published when `next` asks it.
+`ask_type: "guard-recovery"`); a tool-printed ask alone does not publish one, and neither does the review-freeze hook's ask when `next` asks it, so the person's own words from the request that led to the refusal still carry their Request Changes.
 The marker carries `remedies`, the offered `op`, `action`, `operation` (when present),
 and `interaction` entries in display order. The human-turn hook records that the
 person replied (`delivery: consumed`, `selection_sha256` over their words,

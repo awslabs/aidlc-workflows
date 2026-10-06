@@ -1407,6 +1407,25 @@ describe("t264 (d) the refusal names next; next asks the recovery question", () 
     expect(nextDirective(p)).toMatchObject({ kind: "run-stage", stage: "requirements-analysis" });
   });
 
+  // A live run picked Request Changes on this question after saying what should
+  // change, and was asked "What should change?" again: a published question binds
+  // only words given after it. Asked as the hook used to print it, the pick is
+  // carried out with the person's own words.
+  test("the question is not published, so the person's own words carry their Request Changes", () => {
+    const p = projBeforeGate();
+    recordReview(p, "READY");
+    refusedWrite(p);
+    expect(nextDirective(p)).toMatchObject({ kind: "ask", ask_type: "guard-recovery" });
+    const answered = spawnSync(
+      BUN,
+      [LOG_TOOL, "answer", "--stage", "requirements-analysis", "--checkpoint", "guard-recovery",
+        "--details", "request-changes", "--project-dir", p],
+      { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8", env: process.env },
+    );
+    expect(answered.status, `${answered.stdout}${answered.stderr}`).toBe(0);
+    expect(JSON.parse(answered.stdout.trim().split("\n").at(-1) ?? "{}")).toMatchObject({ recorded: null });
+  });
+
   test("a Stop-hook probe reads the question without taking it", () => {
     const p = projBeforeGate();
     recordReview(p, "READY");
