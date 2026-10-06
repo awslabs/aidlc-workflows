@@ -115,6 +115,9 @@ jobs:
       # Only the merge queue reruns an assertion-failed file once (flagged as
       # flaky); a PR push stays strict, so a flake still shows red there.
       retry-once: ${{ github.event_name == 'merge_group' }}
+      # The merge queue's macOS unit shards run only the unit files that name
+      # macOS and the ones the change touches; every other leg runs in full.
+      macos-merge-selection: ${{ github.event_name == 'merge_group' && matrix.runner == 'macos-15' && matrix.suite.tier == 'unit' }}
 
   test_native_terminal:
     name: Native terminal units (${{ matrix.runner }})

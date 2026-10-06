@@ -635,7 +635,7 @@ so a broken enumerator reds the gate.
 |---------|-------|---------|-------|
 | `git commit` | L1 | `bun tests/run-tests.ts` | Local (pre-commit hook) |
 | Pull request push | Fast deterministic gate | `ci.yml`: contract checks + Linux smoke, twelve unit shards and deterministic integration (the scope runs in a job of their own), using `deterministic-tests.yml`, plus production-guard checks; the cross-OS native-terminal and live OS-isolation jobs are skipped | GitHub Actions |
-| Merge queue (`merge_group`) | Full deterministic gate | `ci.yml` reruns the pull-request gate on the queued merge commit on Linux, macOS and Windows (the scope runs on Linux only), adding isolated E2E on each, retrying an assertion-failed smoke, unit or integration file once with a `Flaky test` warning, and adds the native-terminal units (Linux arm64, macOS, Windows) and live OS-isolation checks (Linux, macOS, Windows), plus three advisory Windows lanes: the documented `install.ps1` one-liner under Windows PowerShell 5.1 against a release candidate staged from the same commit, the hook contracts with Git Bash removed from `PATH`, and the smoke tier plus a compiled binary installed with the documented `install.sh` inside WSL 1 | GitHub Actions |
+| Merge queue (`merge_group`) | Full deterministic gate | `ci.yml` reruns the pull-request gate on the queued merge commit on Linux, macOS and Windows (the scope runs on Linux only; macOS unit shards run only the unit files that name macOS and the ones the change touches), adding isolated E2E on each, retrying an assertion-failed smoke, unit or integration file once with a `Flaky test` warning, and adds the native-terminal units (Linux arm64, macOS, Windows) and live OS-isolation checks (Linux, macOS, Windows), plus three advisory Windows lanes: the documented `install.ps1` one-liner under Windows PowerShell 5.1 against a release candidate staged from the same commit, the hook contracts with Git Bash removed from `PATH`, and the smoke tier plus a compiled binary installed with the documented `install.sh` inside WSL 1 | GitHub Actions |
 | Manual deterministic workflow dispatch | Targeted deterministic reproduction | `deterministic-tests.yml` accepts an immutable source SHA, runner, tier, required N/M shard for unit and optional manual-only `diagnostic_filter`; non-unit tiers omit the shard; one runner executes with model gates closed | GitHub Actions |
 | Manual CI dispatch with `platform_regressions=true` | Expanded deterministic matrix | `ci.yml` selects Linux/macOS/Windows smoke, twelve unit shards, integration and isolated E2E as separate jobs in the shared workflow, with the scope runs on Linux | GitHub Actions |
 | Nightly preview / manual preview dispatch | Declared nightly matrix | `preview-release.yml` calls `full-suite.yml` even for an unchanged source, running native obligations, release contracts and bounded hosted live shards | GitHub Actions |
@@ -687,6 +687,19 @@ directory records every retry for flake triage. The first attempt's log and
 JUnit stay beside the second as `<file>.attempt-1.*`. Isolated e2e and Full
 Suite never take the flag. `t-runner-production-guards` and
 `t-ci-retry-report` cover the rule, the runner and the report.
+
+macOS runners are the slowest and fewest hosted runners, so they set the merge
+queue's pace: a full macOS unit set costs about 245 job-minutes per merge group.
+In the queue only, `ci.yml` passes `macos-merge-selection` to the macOS unit
+shards, and `scripts/ci-macos-unit-selection.ts` picks the unit files whose
+source names macOS or darwin (computed on each run, never a kept list) plus the
+unit files the change touches against its first parent (the queue entry ahead),
+spread over the twelve shards by weight, about 60 job-minutes in all. Each shard
+leaves the other files out with `--exclude`, so a file that skips on macOS stays
+`SKIP` as in a full shard; a shard with no selected file stops before installing.
+When the change cannot be diffed or the selection fails, the shard runs in full.
+macOS smoke, integration, isolated E2E and the native-terminal units, Linux and
+Windows, PR CI and the nightly Full Suite run every file. `t345` pins this.
 
 `main` is not production: PR CI and the merge queue remain the fast gates listed
 above, while required hosted live tiers run in

@@ -38,6 +38,10 @@ on:
         description: Merge queue only. Rerun a smoke, unit or integration file once when its assertions failed
         default: false
         type: boolean
+      macos-merge-selection:
+        description: Merge queue macOS unit shards only. Run the unit files that name macOS and the ones the change touches
+        default: false
+        type: boolean
   # Manual reproductions emit diagnostics only, never full-suite or release qualification.
   workflow_dispatch:
     inputs:
@@ -140,6 +144,8 @@ jobs:
         with:
           ref: ${{ inputs.ref }}
           persist-credentials: false
+          # The macOS merge-queue selection diffs against the first parent.
+          fetch-depth: ${{ inputs.macos-merge-selection == true && 2 || 1 }}
       - name: Bind checkout to requested commit
         env:
           TEST_REF: ${{ inputs.ref }}
@@ -147,12 +153,33 @@ jobs:
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version: '1.4.2'
+      # macOS runners set the merge queue's pace, so a queued merge commit runs
+      # on macOS only the unit files that name macOS and the ones the change
+      # touches (its diff against the first parent, the queue entry ahead).
+      # Linux and Windows, PR CI and the nightly Full Suite run every file. If
+      # the selection cannot be made, the shard runs in full.
+      - name: Select macOS unit files for the merge queue
+        id: select
+        if: inputs.macos-merge-selection == true && inputs.tier == 'unit' && runner.os == 'macOS'
+        env:
+          UNIT_SHARD: ${{ inputs.unit-shard }}
+        run: |
+          if ! selection="$(bun scripts/ci-macos-unit-selection.ts --base HEAD^1 --shard "$UNIT_SHARD")"; then
+            echo "::warning::The macOS unit selection failed, so this shard runs every file"
+            selection="mode=full"
+          fi
+          printf '%s\n' "$selection" | tee -a "$GITHUB_OUTPUT"
+          if [ "$selection" = mode=none ]; then
+            echo "::notice::No selected macOS unit file falls in shard $UNIT_SHARD"
+          fi
       - name: Install dependencies
+        if: steps.select.outputs.mode != 'none'
         run: bun install --frozen-lockfile
       - name: Build the harness projections
+        if: steps.select.outputs.mode != 'none'
         run: bun scripts/package.ts
       - name: Prepare unit test substrates
-        if: inputs.tier == 'unit' && runner.os != 'Windows'
+        if: inputs.tier == 'unit' && runner.os != 'Windows' && steps.select.outputs.mode != 'none'
         run: |
           set -euo pipefail
           if [ "$RUNNER_OS" = Linux ]; then
@@ -195,6 +222,7 @@ jobs:
           Add-Content -LiteralPath $env:GITHUB_ENV -Value "AIDLC_CODEX_RUNNER_PROBE=$runner"
           Add-Content -LiteralPath $env:GITHUB_ENV -Value 'AIDLC_CODEX_RUNNER_PROBE_ONLY=0'
       - name: Run deterministic tier
+        if: steps.select.outputs.mode != 'none'
         # Leave time to sanitize and upload partial evidence after a timeout.
         timeout-minutes: 270
         env:
@@ -203,6 +231,8 @@ jobs:
           TEST_FILTER: ${{ inputs.filter || inputs.diagnostic_filter || '' }}
           TEST_EXCLUDE: ${{ inputs.exclude || '' }}
           RETRY_ONCE: ${{ inputs.retry-once == true }}
+          SELECTION_MODE: ${{ steps.select.outputs.mode || '' }}
+          SELECTION_EXCLUDE: ${{ steps.select.outputs.exclude || '' }}
         run: |
           set -euo pipefail
           case "$TEST_TIER" in
@@ -212,6 +242,12 @@ jobs:
             e2e) args=(--e2e --isolated-e2e --e2e-file-timeout 7200) ;;
             *) exit 2 ;;
           esac
+          # The macOS merge-queue selection already holds this shard's share,
+          # so the tier runs unsharded and leaves every other file out.
+          if [ "$TEST_TIER" = unit ] && [ "${SELECTION_MODE:-}" = selected ] && [ -n "${SELECTION_EXCLUDE:-}" ]; then
+            args=(--unit)
+            TEST_EXCLUDE="${TEST_EXCLUDE:+(?:$TEST_EXCLUDE)|}$SELECTION_EXCLUDE"
+          fi
           # The merge queue reruns an assertion-failed file once, in a fresh
           # process; a pass is reported as flaky, a second failure stays red.
           if [ "$RETRY_ONCE" = true ] && [ "$TEST_TIER" != e2e ]; then
@@ -262,18 +298,18 @@ jobs:
       - name: Report outdated test weights
         # Advisory only. A stale weight makes CI slower, never wrong, so this
         # step cannot fail the job: it warns and names the refresh command.
-        if: ${{ always() && (inputs.tier == 'unit' || inputs.tier == 'integration') }}
+        if: ${{ always() && steps.select.outputs.mode != 'none' && (inputs.tier == 'unit' || inputs.tier == 'integration') }}
         env:
           TEST_TIER: ${{ inputs.tier }}
         run: bun scripts/ci-test-weights.ts report "$TEST_TIER" tmp/ci-deterministic/stamp.txt || true
       - name: Report tests that passed on retry
         # A pass on the second attempt is a flaky test to fix, so it is never
         # silent. Like the weight report, this step cannot fail the job.
-        if: ${{ always() && inputs.retry-once == true && inputs.tier != 'e2e' }}
+        if: ${{ always() && steps.select.outputs.mode != 'none' && inputs.retry-once == true && inputs.tier != 'e2e' }}
         run: bun scripts/ci-retry-report.ts tmp/ci-deterministic/stamp.txt || true
       - name: Sanitize deterministic evidence
         id: sanitize
-        if: ${{ always() }}
+        if: ${{ always() && steps.select.outputs.mode != 'none' }}
         env:
           AIDLC_NIGHTLY_UPLOAD_TRACES: ${{ vars.AIDLC_NIGHTLY_UPLOAD_TRACES || '1' }}
         run: |
