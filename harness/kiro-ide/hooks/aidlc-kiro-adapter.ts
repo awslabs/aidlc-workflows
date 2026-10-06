@@ -1824,8 +1824,8 @@ function unrecordedAnswerRelay(projectDir: string): string {
 if (target === "enforce-approval-gate") {
   if (approvalGateAwaitsHuman()) {
     process.stderr.write(
-      "An approval is waiting for the person's answer, so nothing runs until they give it: " +
-        `end the turn. If they already answered, that answer was not recorded. ${unrecordedAnswerRelay(process.cwd())} ` +
+      "An approval is waiting for the person's answer, so nothing runs until they give it: end the turn. " +
+        `If they already answered, that answer was not recorded. ${unrecordedAnswerRelay(process.cwd())} ` +
         "If that does not fix it, `/aidlc --doctor` shows what else to fix.\n",
     );
     return 2; // Kiro reject contract: exit 2 + stderr BLOCKS the tool call.
