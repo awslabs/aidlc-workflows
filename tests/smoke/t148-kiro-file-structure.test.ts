@@ -812,6 +812,10 @@ describe("t148 dist/kiro file structure", () => {
         "config --help",
         "doctor",
         "--doctor",
+        "doctor --verbose",
+        "--doctor --verbose",
+        "config --show",
+        "config --show --json",
         ...CONFIG_SECTIONS.flatMap((section) => [
           `config ${section} --show`,
           `config ${section} --show --json`,
