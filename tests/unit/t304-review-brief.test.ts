@@ -1030,6 +1030,39 @@ describe("t304 executable review brief scenarios", () => {
     );
   });
 
+  // A Unit's own approval, its Construction checkpoint, covers only that Unit,
+  // so its brief shows only that Unit's review: a live run showed Unit 1's
+  // review table at Unit 2's approval. The stage's own brief shows every Unit.
+  test("a Unit's own approval brief shows only that Unit's review", () => {
+    const units = ["u1-note-store", "u2-note-tags"];
+    const { proj, artifacts } = perUnitReviewProject("code-generation", units);
+    const statePath = seededStateFile(proj);
+    writeFileSync(
+      statePath,
+      readFileSync(statePath, "utf-8").replace(
+        /^(- \*\*Scope\*\*:.*)$/m,
+        "$1\n- **Construction Iteration**: unit-major\n- **Construction Checkpoints**: enabled",
+      ),
+      "utf-8",
+    );
+    const brief = (extra: string[]): string => {
+      const rendered = run(
+        REVIEW_BRIEF,
+        ["review", "--stage", "code-generation", "--why", "first", ...extra],
+        proj,
+      );
+      expect(rendered.status, rendered.out).toBe(0);
+      return rendered.stdout;
+    };
+    const own = brief(["--unit", "u2-note-tags"]);
+    expect(own).toContain(`**Review artifact:** \`${artifacts.get("u2-note-tags")}\``);
+    expect(own).not.toContain("u1-note-store");
+    const stage = brief([]);
+    for (const unit of units) {
+      expect(stage).toContain(`**Review artifact:** \`${artifacts.get(unit)}\``);
+    }
+  });
+
   test("Unit-end disposition readback follows Gate Stages and Unit scope", () => {
     const { proj, artifacts } = perUnitReviewProject(
       "functional-design",
