@@ -555,6 +555,13 @@ describe("t230 dispatcher route parity", () => {
       fixture: true,
     },
     {
+      name: "config collaborators maps to config-change",
+      routerArgs: ["engine", "config", "set", "collaborators", "off"],
+      tool: "aidlc-utility.ts",
+      toolArgs: ["config-change", "--collaborators", "off"],
+      fixture: true,
+    },
+    {
       name: "config summary confirmation maps to config-change",
       routerArgs: ["engine", "config", "set", "summary-confirmation", "off"],
       tool: "aidlc-utility.ts",
