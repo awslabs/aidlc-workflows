@@ -670,11 +670,20 @@ function snapshot(
         // the one recovery review re-checks them. So does readable code the
         // review no longer binds (its list of files changed, or the listing it
         // saw is not on this machine).
+        // Under strict, a written review not on this machine (a teammate's
+        // clone) cannot be checked here: the one re-check is a fresh review,
+        // never a refusal that nothing clears.
+        const recordNotHere = review !== null && review !== undefined && binding !== null && !acceptsChanges() &&
+          !completionCarriesVerifiedReview(projectDir, binding, review.block) &&
+          reviewRecordNotHere(projectDir, binding, review.block);
         const moved = receipts.unitSourceMoved.get(unit) ??
           (review && (
             auditBlockField(review.block, "Artifact Fingerprint") !== artifact ||
             (receipts.unitStale.has(unit) && listing !== null)
-          ) ? receipts.unitStaleProgress.get(unit) : undefined);
+          ) ? receipts.unitStaleProgress.get(unit) : undefined) ??
+          (recordNotHere
+            ? { nextIteration: (receipts.unitIterations.get(unit) ?? 0) + 1, recoverySpent: false }
+            : undefined);
         if (review && moved && !moved.recoverySpent && !receipts.unitPending.has(unit)) {
           const reviewer = stage.reviewer!;
           const iteration = moved.nextIteration;
