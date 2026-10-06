@@ -382,6 +382,37 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
     expect(field(proj, "Current Stage")).toBe(slug);
   });
 
+  // A live Kiro CLI run turned "doctor shows whether AI-DLC's hooks run here"
+  // into talk of hooks, then offered to switch human presence off machine-wide.
+  // The refusal gives the person's step in fixed words, and the agent never
+  // offers to turn a check off for them.
+  test("A5: a reply that was not recorded gets only the person's step, never hooks or a check to turn off", () => {
+    const first = field(proj, "Current Stage"); // feasibility
+    guarded(proj, ["checkbox", `${first}=in-progress`]);
+    recordHumanTurn(proj);
+    guarded(proj, ["gate-start", first]);
+    expect(guarded(proj, ["approve", first, "--user-input", "Approve"]).rc).toBe(0);
+    const slug = field(proj, "Current Stage");
+    guarded(proj, ["checkbox", `${slug}=in-progress`]);
+    guarded(proj, ["gate-start", slug]);
+    stampPrompt(proj, Date.now());
+    writeHeartbeat(proj, Date.now());
+    for (const [state, line] of [
+      [STATE, `"Your answer didn't reach AI-DLC. Please give it once more. If it happens again, type /aidlc --doctor."`],
+      [KIRO_CLI_STATE, `"Your answer didn't reach AI-DLC. Please give it once more. If it happens again, type /aidlc --doctor."`],
+      [KIRO_IDE_STATE, `"Your answer was not recorded, so you don't need to answer again.`],
+    ] as const) {
+      const r = guarded(proj, ["approve", slug, "--user-input", "Approve"], false, state);
+      expect(r.rc).not.toBe(0);
+      const refusal = JSON.parse(r.out).error as string;
+      expect(refusal).toContain(line);
+      expect(refusal).toContain("Never offer to turn a check off for them.");
+      expect(refusal).not.toMatch(/hook/i);
+      expect(refusal).not.toContain("AIDLC_SKIP");
+    }
+    expect(eventCount(proj, "GATE_APPROVED")).toBe(1);
+  });
+
   // --- Scenario B: LEGIT (human turn after gate-open) ------------------------
   //
   // The realistic flow: the human types (HUMAN_TURN), then the agent opens the

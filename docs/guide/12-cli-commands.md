@@ -1414,9 +1414,10 @@ receive the driver guidance. This command controls the three switchable fences,
 including any the policy word leaves up. A switchable fence's main-session
 refusal names the command; a human-presence refusal names no switch and says
 what happened to a reply the person already sent: on a harness that runs hooks
-only after the person acts, the steps that turn them on; elsewhere, that
-`/aidlc --doctor` shows whether AI-DLC's hooks run here. It never asks the
-person to reply again.
+only after the person acts, the steps that turn them on; elsewhere, one line
+for the person: "Your answer didn't reach AI-DLC. Please give it once more. If
+it happens again, type /aidlc --doctor." The agent is told never to offer to
+turn a check off for them.
 
 Only `AIDLC_SKIP_HUMAN_PRESENCE_GUARD=1` lowers human presence, set machine-wide
 or recorded with `aidlc config flags --bypass` (AI-DLC then says it is off).

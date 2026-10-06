@@ -28197,6 +28197,9 @@ function hooksNeverRanHere(projectDir?: string): boolean {
   }
 }
 
+// Said to the agent after every missed-reply step: the person turns a check off, never the agent's offer.
+const NO_CHECK_OFF_OFFER = "Never offer to turn a check off for them.";
+
 export function unattendedHumanPresenceHint(projectDir?: string): string {
   // Explain unattended submissions when relevant.
   if (!humanTurnMintAllowed()) {
@@ -28207,24 +28210,27 @@ export function unattendedHumanPresenceHint(projectDir?: string): string {
   if (personAtOwnTerminal(projectDir)) return ` ${OWN_TERMINAL_PRESENCE_STEP}`;
   // Nothing on record tells a reply not sent yet from one the prompt hook
   // failed to record, so every such refusal also says what happened to a reply
-  // the person did send, and never asks them to send it again. A host that runs
-  // no hooks until the person acts names its own steps; the others name doctor.
+  // the person did send. A host that runs no hooks until the person acts names
+  // its own steps; the others ask once more and name doctor for a repeat.
   // A harness that declares the agent's own step for hooks that are not
   // running gives it here too, so the reply is never asked for again, but
   // only when the record shows the hooks never ran: with a heartbeat there
   // they run, and the step would send the person after a setting already on.
+  // A live run turned an explanation of hooks into an offer to switch human
+  // presence off, so the agent is told plainly never to offer that.
   const agentStep = hooksNeverRanHere(projectDir) ? hooksOffAgentStep(projectDir) : null;
   if (agentStep !== null) {
     return " If the person already replied, that reply was not recorded because AI-DLC's hooks are not " +
-      `running here, so do not ask them to answer again; do this instead: ${agentStep}`;
+      `running here, so do not ask them to answer again; do this instead: ${agentStep} ${NO_CHECK_OFF_OFFER}`;
   }
   const activation = hookActivation();
   const host = activation?.missedReplyInHost;
   const inHost = host?.env.some((name) => Boolean(process.env[name]?.trim())) === true;
   const missedReply = (inHost ? host?.text : activation?.missedReply) ??
-    "If the person already replied, that reply was not recorded for this question. Tell them " +
-      `that, and that ${entrySkillInvocation()} --doctor shows whether AI-DLC's hooks run here.`;
-  return ` ${missedReply}`;
+    "If the person already replied, that reply was not recorded for this question. Tell them exactly this, " +
+      "with nothing about why: \"Your answer didn't reach AI-DLC. Please give it once more. If it happens again, " +
+      `type ${entrySkillInvocation()} --doctor."`;
+  return ` ${missedReply} ${NO_CHECK_OFF_OFFER}`;
 }
 
 export function setField(content: string, field: string, value: string): string {
