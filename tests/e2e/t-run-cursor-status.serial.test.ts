@@ -25,7 +25,7 @@
 //   - the /aidlc skill entry (.cursor/skills/aidlc/SKILL.md) resolves in a
 //     print-mode run and forwards the flag text;
 //   - the engine's print-directive terminal arm (status names no workflow);
-//   - the shipped cli.json Shell(bun) allowlist admits the engine call
+//   - the shipped cli.json allowlist admits the engine call
 //     without -f/--force;
 //   - nothing is scaffolded by a read-only utility.
 //

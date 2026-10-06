@@ -701,6 +701,15 @@ describe("bounded guard-remedy liveness", () => {
       );
       expect(repair?.action).toContain("review iteration 2");
       expect(repair?.executableNow).toBe(fixture.executable);
+      // The person may want the gate now: reviews go advisory for this piece of
+      // work and the open findings go to the gate, once they say so.
+      const gate = refusal.remedies.find((remedy) => remedy.op === "review-advisory-gate");
+      expect(gate).toMatchObject({
+        requiresHuman: true, interaction: "command", operation: { kind: "review-advisory" },
+        executableNow: fixture.executable,
+      });
+      expect(gate?.command).toContain("config-change --review advisory");
+      expect(gate?.action).toContain("present the reviewer's open findings at the approval gate");
       expect(
         refusal.remedies.some((remedy) =>
           remedy.action.includes("Record the verdict for pending review") ||
@@ -1704,6 +1713,52 @@ describe("AttemptView projections and refusal streaks", () => {
     expect(accounting.requestCount).toBe(0);
   });
 
+  // A solo unit-major walk hands a Unit's finished step back when its work is
+  // gone, and the Unit starts the step again: that run gets the stage's review
+  // passes and its one stale-review recovery again, whether the step was
+  // finished one Unit at a time or in a wave. The passes keep their numbers and
+  // the attempt stays the same.
+  test("a Unit that starts a finished step again has the stage's review passes again", () => {
+    const fd = { Stage: "functional-design", Unit: "alpha" };
+    const request = (timestamp: string, iteration: string, pos: number, recovery = false) => event("REVIEW_REQUESTED", timestamp, {
+      Stage: "functional-design", Reviewer: "reviewer", Unit: "alpha", Iteration: iteration,
+      "Artifact Fingerprint": `sha256:${"a".repeat(64)}`,
+      ...(recovery ? { Recovery: "stale-receipt" } : {}),
+    }, "main.md", 0, pos);
+    for (const finished of [{}, { Mode: "wave" }] as Record<string, string>[]) {
+      const rows = [
+        event("WORKFLOW_STARTED", "2026-08-28T00:00:00Z", {}, "main.md", 0, 0),
+        request("2026-08-28T00:00:01Z", "1", 1, true),
+        event("UNIT_COMPLETED", "2026-08-28T00:00:02Z", { ...fd, ...finished }, "main.md", 0, 2),
+        event("UNIT_STARTED", "2026-08-28T00:00:03Z", { ...fd, Unit: "beta" }, "main.md", 0, 3),
+        event("UNIT_STARTED", "2026-08-28T00:00:04Z", fd, "main.md", 0, 4),
+      ];
+      const accounting = (count: number, unit = "alpha", stateContent = state("-")) => {
+        const view: AttemptView = {
+          allEvents: rows.slice(0, count),
+          events: rows.slice(0, count),
+          floorIdx: 0,
+          mergedBoltUnits: new Set(),
+          openBoltUnits: new Set(),
+        };
+        return reviewAttemptAccounting(
+          "", view, stateContent, { slug: "functional-design", for_each: "unit-of-work" }, "reviewer", unit, undefined,
+        );
+      };
+      const label = JSON.stringify(finished);
+      // Another Unit's start is not this Unit's.
+      expect(accounting(4), label).toMatchObject({ requestCount: 1, budgetCount: 1, recoverySpent: true });
+      // The first run's stale-review recovery is the first run's.
+      const again = accounting(5);
+      expect(again, label).toMatchObject({ requestCount: 1, budgetCount: 0, recoverySpent: false, recoveryIteration: null });
+      expect(again.floor, label).toBe(accounting(4).floor);
+      // Team-owned Units keep their Bolt floors.
+      expect(accounting(5, "alpha", `${state("-")}- **Unit Ownership**: team\n`).budgetCount, label).toBe(1);
+      rows.push(request("2026-08-28T00:00:05Z", "2", 5));
+      expect(accounting(6), label).toMatchObject({ requestCount: 2, budgetCount: 1 });
+    }
+  });
+
   test("worktree review projection owns the Bolt boundary event set", () => {
     const projection = worktreeReviewAttemptProjection(
       "",
@@ -1971,12 +2026,17 @@ describe("AttemptView projections and refusal streaks", () => {
     const first = recordGuardRefusal(project, refusalA, attempt);
     expect(first.count).toBe(1);
     expect(first.ask.reason_codes).toEqual(["SUMMARY_EVIDENCE_INVALID"]);
-    expect(first.ask.question).toContain("would be refused");
+    expect(first.ask.question).toBe(
+      "Functional Design can't go ahead as things stand: which way would you like to go on?",
+    );
     expect(recordGuardRefusal(project, refusalB, attempt).count).toBe(1);
     expect(recordGuardRefusal(project, refusalA, attempt).count).toBe(2);
     const capped = recordGuardRefusal(project, refusalB, attempt);
     expect(capped.count).toBe(3);
-    expect(capped.ask.question).toContain("has refused artifact-write 3 times");
+    // A repeat says so in the person's words; the codes carry the rest.
+    expect(capped.ask.question).toBe(
+      "Functional Design still can't go ahead as things stand: which way would you like to go on?",
+    );
     expect(capped.ask.reason_codes).toEqual([
       "REVIEW_FREEZE_ACTIVE",
       "SUMMARY_EVIDENCE_INVALID",
@@ -2014,6 +2074,61 @@ describe("AttemptView projections and refusal streaks", () => {
     expect(guardRefusalStreakView(project, refusalA, attempt).count).toBe(2);
   });
 
+  test("the recovery question names the stage and the Unit as the person knows them, in plain words", () => {
+    const attempt = {
+      floor: "floor-1",
+      recovery: "spent" as const,
+      summaryCoverage: "stale" as const,
+      reviewCoverage: "current" as const,
+      sourceCoverage: "current" as const,
+    };
+    const refusal = evaluateGuardRefusal({
+      code: "SUMMARY_EVIDENCE_INVALID",
+      blockedAction: "gate-start",
+      stage: "functional-design",
+      unit: "alpha",
+      stateContent: state("-"),
+      invariant: "Summary authorization is current.",
+      userMessage: "summary blocked",
+      attempt,
+      humanAuthority: { freshTurn: false, unattended: false },
+    });
+    const ask = guardRecoveryAskForRefusal(refusal);
+    expect(ask?.question).toBe(
+      "Functional Design for alpha can't go ahead as things stand: which way would you like to go on?",
+    );
+    expect(ask?.unit).toBe("alpha");
+    const stuck = guardTerminalAskForRefusal(
+      { ...refusal, remedies: [] },
+      { count: 1, codes: [refusal.code], signature: "f".repeat(64), atCap: false },
+    );
+    expect(stuck.question.startsWith("I stopped at Functional Design for alpha: ")).toBe(true);
+    // No engine words reach the person in the line the engine writes.
+    for (const question of [ask?.question ?? "", stuck.question.replace(" summary blocked", "")]) {
+      expect(question).not.toMatch(/guard|authorit|refus|remed|action|functional-design/i);
+    }
+  });
+
+  test("the old recovery wording is gone from every shipped source", () => {
+    const stale = [
+      /authority-preserving recovery action/,
+      /would be refused\. Choose one/,
+      /The same guard state for/,
+    ];
+    const hits: string[] = [];
+    for (const root of ["core", "harness", "docs"]) {
+      for (const entry of readdirSync(join(REPO_ROOT, root), { recursive: true }) as string[]) {
+        if (!/\.(ts|md|json)$/.test(entry)) continue;
+        const path = join(REPO_ROOT, root, entry);
+        const text = readFileSync(path, "utf-8");
+        for (const pattern of stale) {
+          if (pattern.test(text)) hits.push(`${root}/${entry}: ${pattern.source}`);
+        }
+      }
+    }
+    expect(hits).toEqual([]);
+  });
+
   test("a refusal with no executable remedy is a terminal ask, never an error and never a silent count", () => {
     const project = mkdtempSync(join(tmpdir(), "aidlc-guard-liveness-"));
     projects.push(project);
@@ -2049,7 +2164,7 @@ describe("AttemptView projections and refusal streaks", () => {
     const first = recordGuardRefusal(project, zeroExit, attempt);
     expect(first.ask.remedies).toEqual([]);
     expect(first.ask.state_signature).toBe(first.signature);
-    expect(first.ask.question).toContain("I stopped at");
+    expect(first.ask.question).toContain("I stopped at Functional Design: ");
     expect(first.ask.question).toContain("nothing I can safely do about it on my own");
     expect(first.ask.question).not.toContain("authority-preserving");
     expect(first.ask.question).not.toMatch(/from the \w+ state/);
@@ -2524,7 +2639,7 @@ describe("unit-major resets name what they throw away", () => {
     }
   });
 
-  test("a refusal redoing the step cannot clear ends in the terminal ask, not a redo loop", () => {
+  test("a refusal redoing the step cannot clear starts that Unit's step again, never a redo loop", () => {
     const stuck: Array<[string, GuardRefusalInput["attempt"], string?]> = [
       ["review freeze", { ...clearable, reviewCoverage: "current" }, "REVIEW_FREEZE_ACTIVE"],
       ["review budget spent", { ...clearable, reviewCoverage: "current", reviewBudget: { used: 3, limit: 3 } }],
@@ -2536,22 +2651,43 @@ describe("unit-major resets name what they throw away", () => {
     ];
     for (const [label, attempt, code] of stuck) {
       const refusal = walkRefusal({ attempt, ...(code ? { code } : {}) });
-      expect(ops(refusal), label).not.toContain("redo-unit-step");
-      expect(ops(refusal), label).not.toContain("restart-stage");
-      expect(guardRecoveryAskForRefusal(refusal), label).toBeNull();
-      const project = mkdtempSync(join(tmpdir(), "t331-unit-major-stuck-"));
-      try {
-        let ask: ReturnType<typeof recordGuardRefusal>["ask"] | undefined;
-        for (let repeat = 0; repeat < 5; repeat++) ask = recordGuardRefusal(project, refusal, attempt).ask;
-        expect(ask?.remedies, label).toEqual([]);
-        expect(ask?.question, label).toMatch(/tell me how you want to proceed/i);
-      } finally {
-        rmSync(project, { recursive: true, force: true });
-      }
+      expect(ops(refusal), label).toEqual(["reopen-unit-step"]);
+      const reopen = refusal.remedies[0];
+      expect(reopen, label).toMatchObject({
+        executableNow: true, requiresHuman: true, interaction: "command",
+        operation: { kind: "reopen-unit", stage: "code-generation", unit: "beta" },
+      });
+      expect(reopen.command, label).toContain("reopen --target code-generation --units beta");
+      expect(reopen.action, label).toContain('Start "code-generation" again for unit "beta" only');
+      expect(reopen.action, label).toContain("the other units keep their finished work");
+      const ask = guardRecoveryAskForRefusal(refusal);
+      expect(ask, label).not.toBeNull();
+      expect(validateDirective(ask).valid, label).toBe(true);
+    }
+    // A new attempt has no review either when this work allows none, so nothing
+    // is offered and a repeated refusal reaches the terminal ask, where the
+    // person decides.
+    const none = { ...clearable, reviewCoverage: "current" as const, reviewBudget: { used: 0, limit: 0 } };
+    const refusal = walkRefusal({ attempt: none, code: "REVIEW_BUDGET_EXHAUSTED" });
+    expect(ops(refusal)).toEqual([]);
+    const project = mkdtempSync(join(tmpdir(), "t331-unit-major-stuck-"));
+    try {
+      let ask: ReturnType<typeof recordGuardRefusal>["ask"] | undefined;
+      for (let repeat = 0; repeat < 5; repeat++) ask = recordGuardRefusal(project, refusal, none).ask;
+      expect(ask?.remedies).toEqual([]);
+      expect(ask?.question).toMatch(/tell me how you want to proceed/i);
+    } finally {
+      rmSync(project, { recursive: true, force: true });
     }
     const guidance = recoveryGuidance("/nonexistent-project", betaBuilding, "code-generation", { unit: "beta" });
     expect(guidance).not.toContain("--stage code-generation");
-    expect(guidance).toContain('ask the person how to go on with unit "beta"\'s "code-generation"');
+    expect(guidance).toContain('Start "code-generation" again for unit "beta" only');
+    expect(guidance).toContain("reopen --target code-generation --units beta`");
+    // With no Unit on record the person names the one that does it again.
+    expect(recoveryGuidance("/nonexistent-project", walkState(), "code-generation")).toContain(
+      'Ask the person which unit should do "code-generation" again, then run ' +
+        "/aidlc --stage code-generation --unit <name>.",
+    );
     // Restarting the first block stage is no forward jump, so it stays, with its cost.
     const first = unitRefusal(" ").remedies.find((remedy) => remedy.op === "restart-stage");
     expect(first?.action).toContain(RESTART);
@@ -2567,6 +2703,7 @@ describe("unit-major resets name what they throw away", () => {
       walkRefusal({ stateContent: walkState({ activeUnit: "beta", unitStage: "nfr-design" }) }),
     ]) {
       expect(ops(refusal)).not.toContain("redo-unit-step");
+      expect(ops(refusal)).not.toContain("reopen-unit-step");
       expect(ops(refusal)).not.toContain("restart-stage");
     }
     // With no Active Unit on record and no Unit named, no restart is offered at a
@@ -2642,5 +2779,91 @@ describe("unit-major resets name what they throw away", () => {
 
     const stageLevel = unitRefusal(" ", { unit: undefined, stateContent: stageMajor(" ") });
     expect(stageLevel.remedies.find((remedy) => remedy.op === "restart-stage")?.action).toBe(RESTART);
+  });
+});
+
+describe("the gate a spent review budget offers is a step the walk accepts", () => {
+  // A solo unit-major walk with Construction checkpoints: unit "extra" is on
+  // Code Generation and its checkpoint is the open gate. The stage cannot be
+  // reported for approval until every Unit's checkpoint is approved, so the
+  // way to the gate is `next`, which shows the checkpoint again.
+  function checkpointWalk(checkpoints: boolean): string {
+    return [
+      "# AI-DLC State",
+      "- **Scope**: feature",
+      "- **Current Stage**: code-generation",
+      "- **Construction Iteration**: unit-major",
+      ...(checkpoints ? ["- **Construction Checkpoints**: enabled"] : []),
+      "- **Active Unit**: extra",
+      "- **Unit Stage**: code-generation",
+      "- [S] functional-design \u2014 SKIP",
+      "- [S] nfr-requirements \u2014 SKIP",
+      "- [S] nfr-design \u2014 SKIP",
+      "- [S] infrastructure-design \u2014 SKIP",
+      "- [-] code-generation \u2014 EXECUTE",
+      "",
+    ].join("\n");
+  }
+  function budgetRefusal(stateContent: string, unit: string | undefined = "extra") {
+    return evaluateGuardRefusal({
+      code: "REVIEW_BUDGET_EXHAUSTED",
+      blockedAction: "request-review",
+      stage: "code-generation",
+      ...(unit ? { unit } : {}),
+      projectDir: "/tmp/t331-checkpoint-walk",
+      stateContent,
+      invariant: "probe",
+      userMessage: "probe",
+      attempt: {
+        recovery: "available",
+        summaryCoverage: "current",
+        reviewCoverage: "current",
+        sourceCoverage: "current",
+        reviewBudget: { used: 1, limit: 1 },
+      },
+      humanAuthority: { freshTurn: false, unattended: false },
+    });
+  }
+  const gate = (refusal: ReturnType<typeof evaluateGuardRefusal>) =>
+    refusal.remedies.find((remedy) => remedy.op === "present-approval-gate");
+
+  test("at a Unit's checkpoint it names `next` for that checkpoint, never a stage report", () => {
+    for (const unit of ["extra", undefined]) {
+      const remedy = gate(budgetRefusal(checkpointWalk(true), unit));
+      expect(remedy?.executableNow, String(unit)).toBe(true);
+      expect(remedy?.action, String(unit)).toContain('at unit "extra"\'s checkpoint');
+      expect(remedy?.action, String(unit)).toMatch(
+        /`bun [^`]*orchestrate(?:\.ts)? next --project-dir \/tmp\/t331-checkpoint-walk`/,
+      );
+      expect(remedy?.action, String(unit)).not.toContain("report");
+    }
+  });
+
+  test("without checkpoints the stage's own approval gate is still the way", () => {
+    expect(gate(budgetRefusal(checkpointWalk(false)))?.action).toBe(
+      "Present the unresolved review findings at the approval gate for the " +
+        "human instead of starting another review pass.",
+    );
+  });
+
+  // Part way through the Unit's step (`unit start` recorded it), no gate opens
+  // yet, and an approved stage (design stage by stage, then one Unit at a time)
+  // offers only a stage-wide reset. The ways on are that Unit's own.
+  test("part way through a Unit's step it offers finishing or redoing that step for the Unit", () => {
+    const midStep = checkpointWalk(true)
+      .replace("- **Unit Stage**: code-generation", "- **Unit Stage**: code-generation\n- **Unit State**: in-progress");
+    const approved = midStep.replace("- [-] code-generation \u2014 EXECUTE", "- [x] code-generation \u2014 EXECUTE");
+    for (const [stateContent, lifecycle] of [[midStep, "in-progress"], [approved, "completed"]] as const) {
+      const refusal = budgetRefusal(stateContent);
+      expect(refusal.state).toBe(lifecycle);
+      expect(refusal.remedies.slice(0, 2).map((remedy) => remedy.op), lifecycle)
+        .toEqual(["record-unit-completion", "reopen-unit-step"]);
+      expect(gate(refusal), lifecycle).toBeUndefined();
+      const [finish, redo] = refusal.remedies;
+      expect(finish.executableNow, lifecycle).toBe(true);
+      expect(finish.interaction, lifecycle).toBe("command");
+      expect(finish.command, lifecycle).toMatch(/aidlc-state(?:\.ts)? unit complete --stage code-generation --unit extra$/);
+      expect(redo.command, lifecycle).toMatch(/aidlc-jump(?:\.ts)? reopen --target code-generation --units extra$/);
+    }
   });
 });

@@ -138,8 +138,10 @@ reviewer, learnings, or approval steps.
 ## Harness-specific behaviors
 
 - **Approval gate `[next stage]`**: on an approval question, render the
-  `Continue to [next stage]` placeholder from the run-stage directive's
-  `next_stage` field verbatim (e.g. `Continue to NFR Requirements`); render
+  `Continue to [next stage]` placeholder from the `next_stage` field verbatim
+  (e.g. `Continue to NFR Requirements`): the one on the reply that opened the
+  gate (`report --result awaiting-approval` or `revised`), which includes any
+  plan change made during the stage, else the run-stage directive's. Render
   `Complete workflow` when `next_stage` is null. Never guess the next stage.
 - **Batching limits**: max 4 questions per `AskUserQuestion` call, max 4
   options per question, and **at least 2 options per question**. For 5+
@@ -148,7 +150,9 @@ reviewer, learnings, or approval steps.
   one-option call: the tool rejects it before the user can answer.
 - **"Other" escape**: `AskUserQuestion` has a built-in "Other" option, always
   available — do NOT add an explicit Other option to the spec's options list
-  for interactive batches. (Questions *files* still end every question with
+  for interactive batches. Claude Code labels that row "Type something", so
+  that is its name whenever you mention it to the person: "Pick "Type
+  something" on any question to answer in your own words or talk it through." (Questions *files* still end every question with
   `X. Other (please specify)` per protocol §3 — the file format is
   harness-neutral.)
 - **Answer capture**: the user's selection returns as the exact option label;

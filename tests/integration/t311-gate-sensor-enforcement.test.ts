@@ -523,6 +523,21 @@ describe("t311 gate-bound sensor enforcement", () => {
     expect(readFileSync(seededStateFile(autonomous.project), "utf-8")).toContain(
       "- [-] probe",
     );
+    // The refusal names the step that lets the person's override through:
+    // Construction stops for approval at each Bolt again, and the same
+    // override is then accepted.
+    expect(refused.out).toContain("set-autonomy --mode gated");
+    const statePath = seededStateFile(autonomous.project);
+    writeFileSync(
+      statePath,
+      readFileSync(statePath, "utf-8").replace(
+        "- **Construction Autonomy Mode**: autonomous",
+        "- **Construction Autonomy Mode**: gated",
+      ),
+    );
+    const accepted = gate(autonomous, overrideArgs());
+    expect(accepted.out).not.toContain("Autonomy Mode is autonomous");
+    expect(accepted.status, accepted.out).toBe(0);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("blocking dispatch exits, malformed verdicts, and dispatcher timeouts fail closed", () => {

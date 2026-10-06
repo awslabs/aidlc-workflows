@@ -159,18 +159,35 @@ are not asked about again. The flag rides along on rule-delivery `continue` call
 A covered grid without those receipts (a Build-and-Test loop-back over artifacts
 alone) is not marked, because that beat can still apply a fix.
 
+Under unit-major with Unit checkpoints off (the field disabled or absent), the
+per-Unit stage approvals still due once the whole grid is covered are one
+question. The first covered gate carries `approve_together`: the pending block
+stages from `directive.stage` on, in graph order, the Units, and the engine's
+question naming both. It is set only for solo work at the first pending block
+stage with at least two stages left; checkpoint-enabled, stage-major, team-owned
+and autonomous gates keep their own flow. Opening that gate records the list on
+`STAGE_AWAITING_APPROVAL` as `Approves Together`, and the reply's `next_stage` is
+the stage after the last listed one. `report --result approved` then approves
+each listed stage in order: the first `GATE_APPROVED` carries `Approves
+Together`, each later one `Approved Together With: <first stage>` plus the same
+`User Input` and person's words. Every stage still passes its own artifact,
+summary, reviewer and sensor checks; the first stage that refuses stops the run
+there, with the stages before it approved. That stage's later approval needs no
+new person turn while no reply, rejection or answer has been recorded since the
+approval that listed it. A rejection approves nothing.
+
 | Transition | Trigger | Emitter |
 |---|---|---|
 | `Pending → Active` | Engine routes after the previous reported outcome | `tools/aidlc-state.ts` (internal emitter) |
 | `Active → AwaitingApproval` | `aidlc-orchestrate.ts report --stage <slug> --result awaiting-approval`; reviewer-bearing stages require a fresh terminal receipt before gate opening | `tools/aidlc-state.ts` (internal emitter) |
-| `AwaitingApproval → Completed` | `aidlc-orchestrate.ts report --stage <slug> --result approved --user-input '<their reply>'` | `tools/aidlc-state.ts` (internal emitter) |
+| `AwaitingApproval → Completed` | `aidlc-orchestrate.ts report --stage <slug> --result approved --user-input "Approve"` | `tools/aidlc-state.ts` (internal emitter) |
 | `AwaitingApproval → Revising` | `aidlc-orchestrate.ts report --stage <slug> --result rejected --user-input <text>` | `tools/aidlc-state.ts` (internal emitter) |
 | `Active → Revising` | The same rejected report when gate-open recovery is needed | `tools/aidlc-state.ts` (internal emitter) |
 | `Revising → AwaitingApproval` | `aidlc-orchestrate.ts report --stage <slug> --result revised`; reviewer-bearing stages require a fresh post-rejection terminal receipt before gate re-entry | `tools/aidlc-state.ts` (internal emitter) |
 | `{Active,Revising} → Skipped` | `aidlc-orchestrate.ts report --stage <slug> --result skipped --reason <text>` | `tools/aidlc-state.ts` (internal routed-skip emitter) |
 | `AwaitingApproval -> Skipped` (plan row SKIP) | The same skipped report, only when the stage's plan row now says SKIP (the person said the work is a new project while Reverse Engineering waited at its gate); the gate closes as skipped, never as approved | `tools/aidlc-state.ts` (internal routed-skip emitter) |
 | `Pending → Skipped` | Scope composition or `aidlc-jump execute` | `tools/aidlc-utility.ts`, `tools/aidlc-jump.ts` |
-| `{Pending,Active,Revising} -> Skipped` (unit-major walk) | `aidlc-orchestrate.ts report --stage <directive.stage> --unit <directive.unit> --result skipped --reason <text>` once no unit owes the stage (each unit skipped or kind-vacuous) | `tools/aidlc-state.ts` (internal `skip --unit` emitter; one `UNIT_SKIPPED` per unit) |
+| `{Pending,Active,Revising} -> Skipped` (unit-major walk) | `aidlc-orchestrate.ts report --stage <directive.stage> --unit <directive.unit> --result skipped --reason <text>`, or a forward jump that moves the unit in flight on (`aidlc-jump.ts execute --units <unit> --stages <steps>`), once no unit owes the stage (each unit skipped or kind-vacuous) | `tools/aidlc-state.ts` (internal `skip --unit` emitter; one `UNIT_SKIPPED` per unit) |
 
 The `approved` report owns the full post-gate transition: it emits
 `GATE_APPROVED + STAGE_COMPLETED`, then routes to the next in-scope stage,
@@ -202,8 +219,8 @@ covers that unit only. The internal `skip --unit` transition emits one
 `UNIT_SKIPPED` receipt at the unit's `Run floor`, so the unit owes the stage
 nothing in this attempt (outputs, review, summary, and its Construction
 checkpoint alike, as for a kind-vacuous unit), the walk moves on, and every
-other unit still gets the stage. A forward jump inside the per-unit steps
-moves only the unit in flight on the same way: `aidlc-jump.ts execute --units`
+other unit still gets the stage. Once a unit has finished work, a forward jump
+inside the per-unit steps moves only the unit in flight on the same way: `aidlc-jump.ts execute --units`
 runs this transition for each step the walk would stop that unit at before the
 target, also for a step reopened behind its stage approval, whose checkbox and
 Current Stage stay as they are. When some units did the stage and others
@@ -260,7 +277,15 @@ fingerprinting, while the union drives receipt filtering.
 **Reviewer gate guard (issue #551).** A reviewer-bearing stage cannot enter
 `AwaitingApproval` through `gate-start` or `revise` until its configured
 reviewer has a fresh terminal `REVIEW_COMPLETED` receipt. The same receipt
-remains mandatory on all four completion paths. Re-reporting an already-open
+remains mandatory on all four completion paths, with one exception: the
+person's own approval (reported with their reply since the question) goes over
+a review that was requested in the current attempt and has no verdict yet, and
+`GATE_APPROVED` then carries `Review: not finished`. The gate a report backfills
+for that approval (`gate-start --recovered --person-approves`) opens the same
+way, only after such a reply. A review never requested, a recovery review in
+flight, a result that could not be verified, a review whose content changed
+after its verdict, and a project whose memory locks Guard Policy strict keep
+the review required. Re-reporting an already-open
 gate re-runs these guards without writing a duplicate transition. A rejection
 reported directly from `Active` moves to `Revising` without fabricating a
 `STAGE_AWAITING_APPROVAL` row. Synthetic transition tests that deliberately
@@ -358,13 +383,45 @@ checkpoint reads the same receipts: when every claimed path that moved since a
 Unit's review now holds exactly the bytes a newer review in the attempt recorded
 for a path it claims (`unitSourceAttributed`), the checkpoint binds that Unit's
 reviewed source, so another Unit's own reviewed build keeps an approved
-checkpoint approved, and any other change asks again.
+checkpoint approved, and any other change asks again. Such a change, one no
+review recorded, puts the Unit in `unitSourceMoved` under every Guard Policy.
+With checkpoints on, the logger grants that Unit its one `stale-receipt`
+recovery for it, and under `strict` the checkpoint carries the request as
+`rereview`, so the code is re-checked before the person is asked once (a
+document edited after its review is re-checked the same way). Under
+`relaxed` and `off`, which the checkpoint reads through
+`guardPolicyAcceptsChanges` as the receipt scan does, a moved path or an edited
+reviewed document is an accepted change: the checkpoint binds the Unit's
+reviewed source and documents, keeps its approval or readiness, and one
+`CHANGE_ACCEPTED` row names what changed. The first later step that records
+changes writes it: a review request or completion of that stage, or that Unit's
+checkpoint `verify`, which returns the line as `change_notices`. For a
+Unit-bound receipt the scan names only the Unit's own paths and leaves out the
+workspace-wide `Reviewed source` line, since the whole workspace also moves
+with another Unit's own build. A person's checkpoint approval after a re-check
+opens a fresh one (`unitRecheckReopened`; the Unit's progress reports the
+recovery unspent again), so every later edit is re-checked and asked about once.
+The same holds with reviews off: the Unit's `GATE_APPROVED` row records
+`Approved Evidence` (each stage's artifact and source fingerprints, and up to
+50 claimed paths with their entries), and under `relaxed` and `off` a stage no
+review re-checks keeps those values in the checkpoint fingerprint, so the
+approval stands. Its one `CHANGE_ACCEPTED` row (Checkpoint `construction-unit`)
+is written by the next checkpoint's `verify` or the Construction stage's own
+check, and names the changed paths when the kept listing still reproduces the
+approved source fingerprint. The approval question's `DECISION_RECORDED` row
+records the same values as `Asked Evidence`, so a change made after the question
+and before the person answers keeps what they were shown: under `relaxed` and
+`off` their `approve` records it, writes the one `CHANGE_ACCEPTED` row and says
+it in its `change_notices`. Under `strict`, or for an approval recorded before
+`Approved Evidence` existed, the Unit is asked about again.
 
 `WORKFLOW_STARTED`, `STAGE_JUMPED`, and a `workspace_requires`
 `STAGE_STARTED` record content-addressed source-listing baselines. After every
 applicable unit has fresh modern evidence, completion compares baseline to the
-current listing and refuses any changed application-source path outside the
-fresh claims union. Unit-major Construction always uses the workflow/jump
+current listing. Under Guard Policy strict it refuses any changed
+application-source path outside the fresh claims union; under relaxed or off it
+records those paths once as `CHANGE_ACCEPTED` (checkpoint `review-receipt`) and
+names them to the person in one line. Unit-major Construction always uses the workflow/jump
 boundary because source work can precede its late `STAGE_STARTED`. Equal-second
 cross-shard rows that would decide a boundary or newest claimant fail closed
 instead of trusting shard filename order.
@@ -411,17 +468,29 @@ Registered paths are content-bound regardless of encoding and are included in
 the canonical listing and autonomous swarm Source Commit. Absolute, traversing,
 framework, sensor-cache, and dependency/cache paths are rejected. Missing
 registered repositories contribute an explicit marker; unreadable, unstable,
-over-budget, or malformed boundaries remain `unbindable` and fail closed.
+over-budget, or malformed boundaries remain `unbindable` and fail closed under
+Guard Policy strict. Under relaxed or off, source that cannot be bound or read
+now, a Unit's reviewed-source snapshot or written review missing on this
+machine, and a Unit manifest that claims a path after its review keep the
+recorded verdict: the review counts, the person hears one line, and the change
+is recorded once as `CHANGE_ACCEPTED`.
 
 Migration is deliberate: a pre-upgrade workflow with no baseline skips the
 unclaimed check, and a fieldless per-unit receipt retains the #629 global
 policy. A present but `unbindable`, missing, or corrupt modern baseline/unit
-snapshot fails closed. `AIDLC_SKIP_SOURCE_FRESHNESS=1` bypasses both global and
+snapshot fails closed under strict; under relaxed or off a missing or corrupt
+stage-entry baseline skips the unclaimed check with one line, and a missing unit
+snapshot keeps the unit's verdict. `AIDLC_SKIP_SOURCE_FRESHNESS=1` bypasses both global and
 per-unit checks; missing/invalid-manifest receipts explicitly record
 `Unit Source Binding Bypass: true`, so the switch must be present again at
 completion. In a modern Bolt, finalize also verifies the attested base-to-
 worktree footprint is a subset of the reviewed manifest claims before the
-settled-swarm stage-level exemption applies.
+settled-swarm stage-level exemption applies. Under a relaxed or off Guard
+Policy a Unit's manifest that changed after its review, and files the Unit
+changed outside its manifest, keep the review: finalize records each once as
+`CHANGE_ACCEPTED` and returns its line in the Unit's `change_notices`. Swarm
+prepare likewise keeps parent source that moved after Plan Approval (generation
+start records it and says it), as the single-agent build does.
 
 Swarm footprint verification and immutable Source Commit creation apply the
 same boundary. Clean-filter raw-byte replacement is restricted to exact
@@ -449,7 +518,9 @@ the gate can reopen. Bypass with `AIDLC_SKIP_REVISION_BACKSTOP=1`.
 
 **Archive (issue #980).** `aidlc-utility intent archive <name> [--reason <text>]` retires an in-flight intent the team will not finish, or hides a completed one from the default listing. Under the workspace lock it emits `WORKFLOW_ARCHIVED` into that intent's own audit shard first, then flips the state file's `Status` to `Archived` (keeping the Status it replaced in `Archived From`) and the `intents.json` row to `archived`; the record dir, its artifacts, its audit shards, and any Bolt worktrees are never moved or deleted. A subsequent `next` on that record (a stale per-user cursor or session binding) emits a terminal `done` naming `intent unarchive`, so retired stages never resume by accident; `park` refuses an archived workflow the same way it refuses a completed one. Archiving is refused only for a team-owned intent with claimed Units. An intent with Bolt worktrees archives and the output names them; their `Bolt Refs` stay in the state file, Bolt start, complete, and merge refuse until unarchive, and doctor still counts them as active forks. `intent unarchive <name>` reverses the field writes, restoring `Completed` / `complete` when `Archived From` says `Completed` and `Running` / `in-flight` otherwise, and emits `WORKFLOW_UNARCHIVED`; a `--reason` given to it is not recorded, and the output says so. The default `intent` listing hides archived rows (`--all` shows them; `--json` always carries every row), the creation gate ignores them, and the lone-record fallback never resolves one implicitly.
 
-**Park (issue #365/#367).** `aidlc-orchestrate park` writes a `Parked` / `Parked At Stage` runtime marker (via `aidlc-state.ts park`, which emits `WORKFLOW_PARKED`) without advancing any stage; a subsequent plain `next` re-emits a terminal `parked` directive and the Stop hook lets the turn end, so a long workflow can pause across sessions instead of rubber-stamping the remaining stages to reach `done`. `/aidlc --resume` clears the marker (`unpark` emits `WORKFLOW_UNPARKED`) before continuing. An unattended autonomous Construction run (`Construction Autonomy Mode: autonomous`) refuses to park: both the tool and the Stop hook's `parked` allow decline under autonomous mode, so the loop keeps moving with no human to resume it. The one exception is a stop the person asks for in a reply AIDLC reads: an approval at Plan Approval, or at a gate a person answered, that also says to stop for today. The human-turn hook or `report` parks in-process as attended (`parkWorkflow` in `aidlc-state.ts`; the CLI never passes it) and records `Parked By: person`, which the Stop hook honors under autonomy too; `unpark` clears it.
+**Park (issue #365/#367).** `aidlc-orchestrate park` writes a `Parked` / `Parked At Stage` runtime marker (via `aidlc-state.ts park`, which emits `WORKFLOW_PARKED`) without advancing any stage; a subsequent plain `next` re-emits a terminal `parked` directive and the Stop hook lets the turn end, so a long workflow can pause across sessions instead of rubber-stamping the remaining stages to reach `done`. `/aidlc --resume` clears the marker (`unpark` emits `WORKFLOW_UNPARKED`) before continuing. An unattended autonomous Construction run (`Construction Autonomy Mode: autonomous`) refuses to park: both the tool and the Stop hook's `parked` allow decline under autonomous mode, so the loop keeps moving with no human to resume it. The one exception is a stop the person asks for. With a reply from them on record since the last decision, `park` (and an approval reported with `--park`) parks as attended (`parkWorkflow` in `aidlc-state.ts`) and records `Parked By: person`, which the Stop hook honors under autonomy too; `unpark` clears it. The run's own approvals after their message do not use it up; any other decision does. On a host whose hooks can miss a reply (its `hookActivation` names one), an attended session's park is recorded as the person's even with no reply on record, and its result carries a note saying so. `AIDLC_UNATTENDED=1` always refuses.
+
+A park the person comes back to carries on. Once they have spoken after it (a `HUMAN_TURN` after the latest `WORKFLOW_PARKED`), a bare `next`, such as a bare `/aidlc` in the same chat, names the unpark and carries on instead of re-emitting `parked`, and words passed to `next` are read as on active work; the agent's own loop, whose stop came from the reply before the park, and the Stop hook's probe still get `parked`.
 
 ### Revision loop
 
@@ -553,8 +624,8 @@ legacy Unit-less rows retain stage-global behavior.
 | `QUESTION_UNANSWERED` | `hooks/aidlc-record-human-turn.ts` (Codex adapter) | A harness question box came back with no answer (Codex's box runs out after about two minutes). Records no human turn and spends any earlier one, so no answer or approval is recorded until the person replies again; the agent asks the question again. Only this hook writes it: the public `append` CLI refuses it, and a worktree's audit merge never copies it |
 | `SUMMARY_CONFIRMATION_RECORDED` | `tools/aidlc-log.ts` | Human-backed consolidated-summary receipt; new rows carry `Hash Scope: confirmed-content-v2` (scope and legacy migration below). A `Looks correct` receipt also carries `Summary Authorization Id`, the authorization the confirmation minted (a digest of the attempt, stage, Unit, workflow, questions path, confirmed content, and choice); the same id becomes the scope's active authorization under `<record>/.aidlc-engine/summary-authorization/`, and a `Request changes` reply withdraws it. A `Request changes` receipt whose reply said what to change also carries `Feedback`, the person's words. Reserved from public audit append. |
 | `VERIFICATION_COMMAND_RECORDED` | `tools/aidlc-log.ts` | Human-approved project check command for the current intent workflow. Binds `Checkpoint: Construction Verification Command`, the canonical single-line command's `Command SHA-256`, the full canonical `Command Label` (at most 1024 control-free characters), and exact `User Input: Approve` to the matching pending decision's one-shot challenge and offered choice from the invoking `Session`. Unrelated human turns and cross-session responses cannot authorize it. The typed state setter and Unit verification require the latest receipt; changing the command requires a new receipt and re-verification. Reserved from public audit append and worktree audit merge. |
-| `CONSTRUCTION_POLICY_RECORDED` | `tools/aidlc-log.ts` | Human-approved Construction policy change bound to the invoking `Session`, `Field` (Construction Checkpoints, Execution, or Iteration), `Value`, and exact `User Input: Approve`. The pending decision's one-shot challenge binds field and value; the hook records the offered choice. During Construction, the typed setter requires the latest unambiguous current-workflow receipt for that field, matching the new value; applying it spends the receipt. A later proposal supersedes it. Other gate answers and unrelated human turns are not consent. Outside Construction the setters retain their existing behavior. Reserved from public audit append and worktree audit merge. |
-| `CHECKPOINT_VERIFICATION_RECORDED` | `tools/aidlc-construction-checkpoints.ts` | Emitted by `verifyConstructionCheckpoint` under the audit lock after the command's final proof is written. Carries `Unit`, `Kind`, last `Stage`, `Stages`, `Verification Id`, `Fingerprint`, `Command SHA-256`, `Exit Code`, `Verified`, `Run floor`, and claim-attempt fields. Verification requires the latest current-attempt receipt to match the proof id, evidence fingerprint, authorized command digest, and current run floor with `Verified: true`; hand-written proof JSON cannot authorize approval. Reserved from public audit append and worktree audit merge. |
+| `CONSTRUCTION_POLICY_RECORDED` | `tools/aidlc-log.ts` | The person's choice at a Construction policy question, from workflows that asked one: bound to the invoking `Session`, `Field` (Construction Checkpoints, Execution, or Iteration), `Value`, and exact `User Input: Approve`. The conductor no longer asks this question (the typed setter acts when the person asks, see `CONSTRUCTION_POLICY_SET`); a current receipt still authorizes its one value, and applying it spends the receipt. Reserved from public audit append and worktree audit merge. |
+| `CHECKPOINT_VERIFICATION_RECORDED` | `tools/aidlc-construction-checkpoints.ts` | Emitted by `verifyConstructionCheckpoint` under the audit lock after the command's final proof is written. Carries `Unit`, `Kind`, last `Stage`, `Stages`, `Verification Id`, `Fingerprint`, `Command SHA-256`, `Exit Code`, `Verified`, `Run floor`, and claim-attempt fields. Verification requires the latest current-attempt receipt to match the proof id, evidence fingerprint, authorized command digest, and current run floor with `Verified: true`; hand-written proof JSON cannot authorize approval. On a checkout with no proof file at all, the receipt stands in for the proof of a Unit already approved whose evidence is unchanged. Reserved from public audit append and worktree audit merge. |
 | `PLAN_APPROVAL_RECORDED` | `tools/aidlc-log.ts` | Human-backed Code Generation plan receipt. The authority it records binds to intent, stage or Unit target, stage attempt (run floor), content fingerprint (the projected plan and instructions plus the Testing Contract hash), prompt (the questions file with answers blanked), and session response, never to the identity of the directive that presented the question nor to row order. The row also carries the directive epoch and the raw questions-file digest (`Questions SHA-256`) as provenance; both are recorded and never compared, so a note appended to the questions file after approval leaves the decision standing while a change to the prompt the human saw retires it. Protected runtime state is the authority; this row is provenance only. |
 | `PLAN_APPROVAL_SKIPPED` | `tools/aidlc-plan-approval-ask.ts` | Written by the engine when plan approval is off for this piece of work and it hands over the build of a ready plan without asking: by `next` when the build fits one message, or by the `continue` that delivers the build's last rules part. A rules part alone writes nothing. If that write failed, the next handover of the same build writes it: a fresh `next` gives the build again, after its rules again from part one when they came in parts. Carries the same target, attempt, and fingerprint fields as `PLAN_APPROVAL_RECORDED` plus `Source` (where the off setting came from); the questions file reads `[Answer]: Plan approval off` and the protected receipt is marked skipped, so no reader mistakes it for a person's approval. Team merge accepts it as the Unit's plan record |
 | `PLAN_APPROVAL_OVERRIDDEN` | `tools/aidlc-log.ts` | The human-only break-glass exit for Plan Approval. Fires only when the human typed `Override Plan Approval: <reason>` as a prompt (the human-turn hook records that typed text under the session; a picked option never does), the conductor ran `answer --checkpoint plan-approval --override-file <file>` with the same reason written to that file (the older `--override "<reason>"` spelling is still read), and the normal receipt path refused. Carries `Reason`, `Failed Checks` (what the normal path refused), `Session`, `Unit` or `stage-level`, and `Fingerprint`; the paired `PLAN_APPROVAL_RECORDED` row carries `Override: yes`. The receipt it accompanies binds to plan content and stage attempt only, so no later check compares its source. The break-glass response is single-use and the conductor never proposes or initiates it |
@@ -599,7 +670,7 @@ resolve v1 through the v2 hash function; no stored receipt is rewritten.
 | `UNIT_STARTED` | `tools/aidlc-state.ts` | `unit start` — requires the exact stage/Unit pair currently routed by the engine, a safe Unit identifier from the authoritative DAG (including safe legacy spellings), and no other open Unit, except one set aside for this Unit |
 | `UNIT_PAUSED` | `tools/aidlc-state.ts` | `unit pause` — requires `--reason` and `--next-action`; the engine routes the paused unit first and hard-stops until an explicit resume. `--set-aside-for <unit>` records `Set Aside For`: the person asked for that Unit's work meanwhile (a unit-major reopen), so the walk takes that Unit first and then asks to resume this one. With `--set-aside-for`, a unit already paused keeps its own reason and next action when they are not given |
 | `UNIT_RESUMED` | `tools/aidlc-state.ts` | `unit resume` — only a paused unit can resume, and only while no other unit of the stage is in progress |
-| `UNIT_COMPLETED` | `tools/aidlc-state.ts` | Serial `unit complete` verifies the active unit's required artifacts. Wave `unit complete --wave` instead verifies the engine still exposes that entry as build-complete/review-settled, copies any new Unit diary entries into the parent diary with deterministic markers (leaving an absent parent diary absent when there are no new entries), binds the receipt to the final artifact fingerprint, then commits without opening a single-active checkpoint. All lifecycle rows carry an exact boundary-event/timestamp/ordinal `Run floor` (or a fail-closed cross-shard ambiguity token); receipt mode stays enabled across attempts, so stale, changed, ambiguous, reopened, or not-yet-fanned-in Units block the gate until they complete again. |
+| `UNIT_COMPLETED` | `tools/aidlc-state.ts` | Serial `unit complete` verifies the active unit's required artifacts. Wave `unit complete --wave` instead verifies the engine still exposes that entry as build-complete/review-settled, copies any new Unit diary entries into the parent diary with deterministic markers (leaving an absent parent diary absent when there are no new entries), binds the receipt to the final artifact fingerprint, then commits without opening a single-active checkpoint. All lifecycle rows carry an exact boundary-event/timestamp/ordinal `Run floor` (or a fail-closed cross-shard ambiguity token); receipt mode stays enabled across attempts, so stale, changed, ambiguous, reopened, or not-yet-fanned-in Units block the gate until they complete again. With Construction Checkpoints on, a wave receipt whose outputs changed after it stays a receipt while every output is there: the Unit's checkpoint re-checks the change (`strict`) or accepts it with one line (`relaxed`, `off`). Under Guard Policy `relaxed` or `off` it stays a receipt without checkpoints too, and the stage's gate says the change once. |
 | `UNIT_SKIPPED` | `tools/aidlc-state.ts` | `skip --unit`, reached only through `aidlc-orchestrate.ts report --result skipped --unit` for the unit-major walk's live (stage, unit) beat, or through `aidlc-jump.ts execute --units <unit> --stages <steps>` when a forward jump moves that unit on (the jump tool runs the state tool with a token bound to its own PID; every other direct `skip` is refused). The unit owes that stage nothing in its current attempt (same `Run floor` as `UNIT_COMPLETED`), so the walk moves on while other units still owe the stage; the stage itself becomes `[S]` only once no unit owes it. A unit's step reopened behind its stage approval (a `[x]` stage before Current Stage) is skipped for that unit only, with its checkbox and Current Stage left as they are. |
 | `UNIT_MERGED` | `tools/aidlc-state.ts` | Main landed the pinned candidate content, received the team's audit shard, and folded this Unit's derived row. Fields bind the row to Unit, owner, pinned candidate OID, merge commit OID, and attempt generation. |
 
@@ -622,24 +693,24 @@ column.
 | `TEST_STRATEGY_CHANGED` | `tools/aidlc-guard-switch.ts` | `config set test-strategy <value>` / `config-change --test-strategy` |
 | `UNIT_OWNERSHIP_SET` | `tools/aidlc-state.ts` | `set-unit-ownership team|solo`; team requires unit-major |
 | `UNIT_GATE_RHYTHM_SET` | `tools/aidlc-state.ts` | `set-unit-gate-rhythm per-stage|unit-end`; team mode only |
-| `CONSTRUCTION_POLICY_SET` | `tools/aidlc-state.ts` | `set-construction-iteration`, `set-construction-checkpoints`, or `set-construction-execution` applied a changed value; fields `Field`, `Value`, `Previous Value`, and the `Construction Iteration` / `Construction Checkpoints` left in force. Unit receipt floors read it, so a stage start recorded under stage-major flooring stays a boundary after a switch to unit-major iteration or checkpoints, and one recorded under unit-major flooring stays out of a Unit receipt's floor after a switch back to stage-major with checkpoints off; each Unit's receipt floor keeps that Unit's own reopen (a Unit-tagged `GATE_REJECTED`) in every mode, and a stage's first start recorded after its Units finished in a unit-major walk (the late gate cascade) is not a restart |
+| `CONSTRUCTION_POLICY_SET` | `tools/aidlc-state.ts` | `set-construction-iteration`, `set-construction-checkpoints`, or `set-construction-execution` applied a changed value; fields `Field`, `Value`, `Previous Value`, and the `Construction Iteration` / `Construction Checkpoints` left in force, plus `Person Reply` (the words of the person's turn that asked for it) when the change was theirs during Construction. During Construction the setter applies a change only when a person turn since the last decision is on record (or a current `CONSTRUCTION_POLICY_RECORDED` receipt), never on an unattended run. Unit receipt floors read it, so a stage start recorded under stage-major flooring stays a boundary after a switch to unit-major iteration or checkpoints, and one recorded under unit-major flooring stays out of a Unit receipt's floor after a switch back to stage-major with checkpoints off; each Unit's receipt floor keeps that Unit's own reopen (a Unit-tagged `GATE_REJECTED`) in every mode, and a stage's first start recorded after its Units finished in a unit-major walk (the late gate cascade) is not a restart |
 | `REVIEW_CLASS_CHANGED` | `tools/aidlc-guard-switch.ts`, `tools/aidlc-utility.ts` | `config set review <value>` / `config-change --review` / a combined `scope-change --review` set or cleared the per-run review override |
 | `RECOMPOSED` | `tools/aidlc-utility.ts` | `recompose` subcommand - the adaptive composer's in-flight plan re-shape (pending-stage suffix flips under the audit lock) |
 | `SCOPE_SAVED` | `tools/aidlc-utility.ts` | `scope-save` subcommand - the person kept a piece of work's current plan as a reusable scope |
 | `GUARD_POLICY_SET` | `tools/aidlc-guard-switch.ts`, `tools/aidlc-lib.ts` | The utility applier builds a row for `config-change --guard-policy <strict\|relaxed\|off>` or a changed scope-owned default in `scope-change`; lib's `appendGuardPolicySetRow` (through `governedGuardPolicy`) records an effective memory-layer change observed at a governed checkpoint. Fields: `Old Value`, `New Value`, `Source` (`you`, `scope <name>`, `<layer>.md`). Utility rows use the previously persisted intent value for `Old Value` (raw text if invalid; `strict` if absent), not the memory-effective value; checkpoint rows retain effective old/new values. |
 | `CHANGE_CONTROL_SET` | `Reserved (retired name)` | The name `GUARD_POLICY_SET` replaced. Written by releases before the rename and still read as the same setting history; no shipped emitter writes it. Same fields: `Old Value`, `New Value`, `Source` |
-| `CHANGE_ACCEPTED` | `tools/aidlc-lib.ts` | A governed checkpoint (plan-approval source drift, review-receipt content change, summary-confirmation authorization) accepted an input change under `relaxed` or `off` (for workspace source that moved after a plan was approved, under every policy) and continued. Fields: `Stage`, optional `Unit`, `Checkpoint`, `Changed`, `Recorded`, `Current`, `Details` (the one line the human hears). One row per distinct change; the same values never produce a second row |
+| `CHANGE_ACCEPTED` | `tools/aidlc-lib.ts` | A governed checkpoint (plan-approval source drift, review-receipt content change, summary-confirmation authorization, construction-unit change to an approved Unit's work with reviews off) accepted an input change under `relaxed` or `off` (for workspace source that moved after a plan was approved, under every policy) and continued. Fields: `Stage`, optional `Unit`, `Checkpoint`, `Changed`, `Recorded`, `Current`, `Details` (the one line the human hears). One row per distinct change; the same values never produce a second row |
 | `GUARD_RESTORED` | `tools/aidlc-guard-switch.ts` | `config-change --guard.<fence> on` switched a fence back on for this piece of work after a per-work `off` or forced it on above a policy word that lowers it. Fields: `Guard` (the switchable fence), `Scope`, `Source` (`you`). The matching `off` writes `GUARD_DISABLED` |
-| `CEREMONY_SET` | `tools/aidlc-guard-switch.ts` | The shared `config-change` / `scope-change` applier builds changed-setting rows, appended in the same audit batch as the other settings and any scope event. Fields: `Key` (`sensors`, `learnings`, `summary_confirmation`, `plan_approval`), `Old`, `New`, `Source` (`you` for an explicit set, `scope <name>` for an inherited default); `Old` is the previously saved value (raw text if invalid; scope default if absent), not the environment-effective value. `--intent` / `--space` pin the state and audit shard together. Public `append` / `append-batch` cannot forge the setting row. |
+| `CEREMONY_SET` | `tools/aidlc-guard-switch.ts` | The shared `config-change` / `scope-change` applier builds changed-setting rows, appended in the same audit batch as the other settings and any scope event. Fields: `Key` (`sensors`, `learnings`, `summary_confirmation`, `plan_approval`, `collaborators`), `Old`, `New`, `Source` (`you` for an explicit set, `scope <name>` for an inherited default); `Old` is the previously saved value (raw text if invalid; scope default if absent), not the environment-effective value. `--intent` / `--space` pin the state and audit shard together. Public `append` / `append-batch` cannot forge the setting row. |
 
-All eight intent settings share `config-change`: `depth`, `test-strategy`,
+All nine intent settings share `config-change`: `depth`, `test-strategy`,
 `review`, `guard-policy`, `sensors`, `learnings`, `summary-confirmation`,
-`plan-approval`, in that order. Three per-fence keys, `guard.review-freeze`,
+`plan-approval`, `collaborators`, in that order. Three per-fence keys, `guard.review-freeze`,
 `guard.state-transition`, and `guard.reviewer-scope`, use the same setter and
 take `on` or `off`; `guard.plan-approval` is an alias of `plan-approval` (one
 switch, no `Guards Off` entry). The matching slash flags and every
 `config set <key> <value>` route can combine settings in one transaction.
-`config get` and `config list` expose all twelve keys; Guard Policy, fence, and
+`config get` and `config list` expose all thirteen keys; Guard Policy, fence, and
 ceremony values include effective sources, and the retired key `change-control`
 resolves to `guard-policy`. `config-change` accepts only those setting flags plus
 `--intent`, `--space`, and `--project-dir`, requires at least one setting, and
@@ -682,8 +753,9 @@ remain allowed. Memory-held strict also forces any previously lowered fence
 back on while that line stands, unless a machine-wide kill switch takes
 precedence. The persisted `Guards Off` entry remains and takes effect again
 only after the memory line no longer holds strict. Scope-owned Guard Policy
-follows a stricter new scope default, while a lower default preserves the
-stored value until the person types the lowering switch. Ceremony values still
+follows a stricter new scope default. A lower default follows when the person
+asked for the scope change; otherwise the stored value stays and the output
+says so in one line. Ceremony values still
 follow the new scope under memory policy, which controls the effective Guard
 Policy. Changed stored values or sources are audited with scope provenance;
 explicit overrides and absent legacy rows are preserved. Explicit Guard
@@ -701,33 +773,42 @@ Codex uses `$aidlc` instead of `/aidlc`, including in refusals.
 Both config and flags-first forms accept companion intent settings plus
 `--intent <name>` and `--space <name>`; omitted selectors use the hook payload
 session's workflow selection. Each selector is permitted at most once.
-A nonexistent named intent is refused; without a state file, create the piece
-of work and type the switch again.
+A nonexistent named intent is refused. Without a state file, two switches are
+kept for the piece of work this chat starts next: Guard Policy `relaxed` or
+`off` (alone, or as a flag of the new work's description), which a later
+`strict` withdraws, and plan approval `off` (`guard.plan-approval off` too),
+which a later `plan-approval on` withdraws. Any other fence switch says to
+create the piece of work and type it again.
 The hook checks memory-held strict, then uses the shared settings transaction
 with `typedByPerson: true` to append audit rows and write state under the audit
 lock, returning the result as `AIDLC Guard Policy: ...` hook context on harnesses
 that inject it.
-No switch is saved for later, and the CLI performs no switch-authority session
-lookup; hooks run on Windows too, so every harness that forwards the prompt
+Apart from those two grants for the next piece of work, no switch is saved for
+later, and the CLI performs no switch-authority session lookup; hooks run on Windows too, so every harness that forwards the prompt
 supports this path.
 
-After the memory-strict check, `config-change` and `scope-change` refuse any
-explicit lowering from `you` unless it is a no-op or `fenceKeyBypassed` allows
-the fixture or harness-launch presence bypass.
+After the memory-strict check, `config-change` and `scope-change` carry out an
+explicit lowering when a person's turn is on record since the last gate
+resolution (`personSpokeSinceGate`): the conductor runs them when the person
+asks in their own words or picks a `lower-fence` remedy. Without that turn they
+refuse, unless the change is a no-op or `fenceKeyBypassed` allows the fixture or
+harness-launch presence bypass.
 A fence already off for this work and a policy word already equal to the
 current line with source `you` need no key.
 Direct `intent create --guard-policy relaxed|off` from chat is refused when the
 value is below the scope default: create
-the piece of work, then have the person type the switch; scope defaults apply
-without asking.
+the piece of work, and the agent runs the setter when the person asks for the
+lower value; a scope's own default applies at creation without asking, and on a
+scope change a lower default applies when the person asked for that change. Typed by the person before the work exists, or in the same message as new work, Guard Policy `relaxed` or `off` is kept for the piece of work this chat starts next and answers that request: `intent create --request <id>` for it records `Guard Policy: <value> (set by you)`, with or without the flag, and any open work keeps its own policy.
 `AIDLC_UNATTENDED=1` suppresses prompt-time application and refuses CLI lowering
 before the presence bypass can apply.
 The session-start hook keeps its `presence-bypass-<session>` stamp in the Plan
 Approval runtime directory for an attended harness launched with
 `AIDLC_SKIP_HUMAN_PRESENCE_GUARD=1`; an inline environment assignment does not
 establish the bypass.
-A `lower-fence` remedy is `human-input`, with no `operation` or `command`:
-selecting it only tells the person the exact command to type and executes nothing.
+A `lower-fence` remedy is a `command` remedy whose `command` is the setter:
+when the person picks it, the conductor runs it and says in one line what
+changed.
 Model tools cannot invoke hooks or write `aidlc/.aidlc-sessions/` or any
 `.aidlc-plan-approval/` or `<record>/.aidlc-engine/gate-words/` directory, as enforced by the
 [state-transition guard](06-hooks-and-tools.md#pretooluse-aidlc-state-transition-guardts).
@@ -760,7 +841,7 @@ Typing `guard policy relaxed|off` applies the choice through the human-turn
 hook immediately; `guard policy strict` runs the strict setter through the
 conductor, and either policy write removes the retired line and stops the notice.
 
-Ceremony settings control sensors, learnings, and consolidated-summary confirmation independently. Every shipped scope declares all three explicitly: `classic` sets sensors and learnings to `on` and summary confirmation to `off`, `bugfix` sets sensors to `on` and learnings and summary confirmation to `off`, `express` sets all three to `off`, and the other eight set all three to `on`. A scope file that omits a key still falls back to `on`. An explicit setting writes `<value> (set by you)` to the selected intent when the person typed it and `<value> (set by a command)` when the agent or a script ran it. Turning summary confirmation off on a running piece of work needs the person's typed switch, like a fence. `summary_confirmation: off` skips only the consolidated-summary "Looks correct" checkpoint declared by stage frontmatter; intent-capture's separate Assumption Confirmation decision remains. Turning a ceremony off does not remove lifecycle hooks or the autonomous single pre-merge reviewer.
+Ceremony settings control sensors, learnings, and consolidated-summary confirmation independently. Every shipped scope declares all three explicitly: `classic` sets sensors and learnings to `on` and summary confirmation to `off`, `bugfix` sets sensors to `on` and learnings and summary confirmation to `off`, `express` sets all three to `off`, and the other eight set all three to `on`. A scope file that omits a key still falls back to `on`. An explicit setting writes `<value> (set by you)` to the selected intent when the person typed it and `<value> (set by a command)` when the agent or a script ran it. Turning summary confirmation off on a running piece of work is the person's call, like a fence: their typed switch, or the setter the agent runs when they asked in their own words. `summary_confirmation: off` skips only the consolidated-summary "Looks correct" checkpoint declared by stage frontmatter; intent-capture's separate Assumption Confirmation decision remains. Turning a ceremony off does not remove lifecycle hooks or the autonomous single pre-merge reviewer.
 
 Ceremony precedence is environment kill switch (`1`) → valid per-intent field
 → scope default → `on`. A kill switch never rewrites the saved override. An
@@ -776,7 +857,7 @@ and do not enforce that scope comparison.
 |---|---|---|
 | `ARTIFACT_CREATED` | `hooks/aidlc-write-audit-log.ts` | Write to net-new path, distinguished from UPDATED via `mtimeMs == birthtimeMs` stat check. Carries `Summary Authorization Id` when the written stage and Unit have an active summary confirmation, so completion can ask whether the output descends from the current confirmation |
 | `ARTIFACT_UPDATED` | `hooks/aidlc-write-audit-log.ts` | Edit tool or Write overwriting existing file. Same `Summary Authorization Id` stamp as `ARTIFACT_CREATED` |
-| `ARTIFACT_REUSED` | `tools/aidlc-state.ts`, `tools/aidlc-jump.ts` | `reuse-artifact` subcommand records keep/modify/redo decisions; `jump reopen --via redo` records the person's resume-menu Redo as the redo decision for that Unit's step (Unit, Source), so the next run-stage for that Unit and step carries `artifact_reuse` and the conductor does not ask again; the Unit's `unit start` for that step, or a later reopen or jump, spends it. Keep and modify retain the stage scope's engine-owned findings and human decisions. Redo starts a fresh list at `R-01` with no inherited decisions. Optional `Repo` scopes evidence to one registered repo, optional `--single` binds it to the open synthetic attempt, but only `keep` with a complete authoritative artifact set and still-`CURRENT` isolated Reverse Engineering store grants that pipeline exemption. |
+| `ARTIFACT_REUSED` | `tools/aidlc-state.ts`, `tools/aidlc-jump.ts` | `reuse-artifact` subcommand records keep/modify/redo decisions; `jump reopen --via redo` records the person's Redo on re-entry as the redo decision for that Unit's step (Unit, Source), so the next run-stage for that Unit and step carries `artifact_reuse` and the conductor does not ask again; the Unit's `unit start` for that step, or a later reopen or jump, spends it. Keep and modify retain the stage scope's engine-owned findings and human decisions. Redo starts a fresh list at `R-01` with no inherited decisions. Optional `Repo` scopes evidence to one registered repo, optional `--single` binds it to the open synthetic attempt, but only `keep` with a complete authoritative artifact set and still-`CURRENT` isolated Reverse Engineering store grants that pipeline exemption. |
 
 ### Construction Bolts
 
@@ -795,7 +876,7 @@ and do not enforce that scope comparison.
 | `SESSION_RESUMED` | `hooks/aidlc-session-start.ts` | `source=resume` |
 | `SESSION_COMPACTED` | `hooks/aidlc-validate-state.ts` | Emitted at PreCompact (not at next SessionStart) to avoid duplication |
 | `SESSION_ENDED` | `hooks/aidlc-session-end.ts` | Includes `Reason` field from Claude Code |
-| `HUMAN_TURN` | `hooks/aidlc-record-human-turn.ts` (+ per-harness prompt-submit adapters) | One per observed prompt-submit or answered-widget seam unless the driver declares `AIDLC_UNATTENDED=1`; the approval/interview gate requires one since the last gate resolution. This is presence/freshness evidence, not an authenticated transcript or proof that later caller-supplied decision text was authored by the human. |
+| `HUMAN_TURN` | `hooks/aidlc-record-human-turn.ts` (+ per-harness prompt-submit adapters) | One per observed prompt-submit or answered-widget seam unless the driver declares `AIDLC_UNATTENDED=1`; the approval/interview gate requires one since the last gate resolution. A turn that was only a command to AIDLC (an AIDLC command (`/aidlc ...`, `/aidlc-<runner> ...`, `$aidlc ...` with a flag, scope, verb or noun that `next` reads; words alone after `/aidlc` or `$aidlc`, such as `/aidlc approve the code plan`, are a reply kept without the entry, and so is other text that starts with a slash), a typed switch, or the break-glass phrase) carries `Reply: command`, and a question about a switch ("skip plan approval?") carries `Reply: question`, which also lowers no check: it is presence for what the command asks for, but a decision on an open question (a stage gate, an answer, a Plan Approval correction, a recovery ask) does not count it as a reply, and the refusal tells the conductor to carry out the command and leave the question open. This is presence/freshness evidence, not an authenticated transcript or proof that later caller-supplied decision text was authored by the human. |
 | `SUBAGENT_COMPLETED` | `hooks/aidlc-log-subagent.ts` | Records subagent completion via SubagentStop hook |
 | `SUBAGENT_PROMPT_UNMATCHED` | `tools/aidlc-audit.ts` | Advisory, never a human turn: the Copilot adapter's `record-human-turn` saw a prompt within seconds of a subagent start in the same chat that matched no recorded subagent brief. The prompt is not counted as the person's turn (`Counted: no`); the Reason says whether no brief matched or the brief record could not be read |
 | `REVIEWER_SCOPE_BLOCKED` | `hooks/aidlc-reviewer-scope.ts` | A per-unit reviewer's tool call refused for reaching into sibling units' `construction/` paths (the reviewer-module read-scope bound); one row per refusal |
@@ -1227,8 +1308,9 @@ receipts, and the active-directive marker.
 **A query never writes, and a guard never deletes evidence.** `next`, the Stop
 hook's `next` probe, the `unit start` route check, `/aidlc --status`, `--doctor`
 and `team-board` are queries. `next` publishes the directive it returns, and for
-Plan Approval the question the person is asked, but never an answer: only the
-human-turn hook records the person's answer. The one receipt the engine writes
+Plan Approval the question the person is asked, but never an answer: an answer
+is recorded only from the person's reply, by the human-turn hook for an exact
+pick or by the conductor's `log answer` for the choice it read. The one receipt the engine writes
 is the skipped record when plan approval is off for the piece of work: a receipt
 marked skipped, `[Answer]: Plan approval off`, and a `PLAN_APPROVAL_SKIPPED`
 row, written when the build is handed over (by `next`, or by the `continue`
@@ -1279,16 +1361,15 @@ state (`in-progress`, `awaiting-approval`, `revising`, `completed`, `pending`,
 closed `op` from `GUARD_REMEDY_OPS` in `aidlc-lib.ts` (`present-approval-gate`,
 `request-review`, `start-recovery-review`, `apply-repairs-then-request`,
 `record-verdict`, `retry-pending`, `request-changes`, `finish-revision`, `redo-jump`,
-`restore-or-jump`, `restart-stage`, `redo-unit-step`, `change-scope`, `restore-scope`,
-`abort-bolt`, `record-unit-completion`, `repair-source-boundary`, `reconfirm-summary`,
+`restore-or-jump`, `restart-stage`, `redo-unit-step`, `reopen-unit-step`,
+`review-advisory-gate`, `change-scope`, `restore-scope`, `abort-bolt`, `record-unit-completion`, `repair-source-boundary`, `reconfirm-summary`,
 `unset-unattended`, `lower-fence`). Routing decisions compare `op` and never the
 remedy sentence; the directive contract refuses an unknown `op`. `lower-fence`
 is the one remedy a refusal adds LAST, and only when the refusal is a fence
-holding. It is a `human-input` choice carrying no `operation` or `command`.
-Selecting it executes nothing and only tells the person to type
-`/aidlc config set guard.<fence> off` (`$aidlc config set guard.<fence> off` on
-Codex), so the way past a fence is printed beside the thing that stopped the
-human instead of living on a reference page.
+holding. It is a `command` choice: its `operation` is
+`{kind: "lower-fence", fence}` and its `command` is the setter, so the way past
+a fence is offered beside the thing that stopped the person, and picking it is
+enough for the conductor to carry it out.
 
 **One Unit's step in a unit-major walk.** Solo unit-major Construction (the
 default for new source-producing work) takes one Unit through every per-unit
@@ -1305,12 +1386,19 @@ approvals, but only when two things hold. The step must be the one the walk is
 on: the recorded `Active Unit` and `Unit Stage`, when present, must name it. And
 redoing it must be able to clear the refusal: no review in flight, review budget
 left, and the one stale-review recovery not used once a review exists. It resets
-no attempt (a Unit-scoped attempt boundary does not exist yet), so a refusal
-about the review attempt itself gets no redo. A later block stage then offers
-nothing executable, because its restart either lands back on the same step or
-jumps and starts every Unit's finished work over, and a repeated refusal
-reaches the terminal ask, where the person decides; prose recovery guidance
-says the same.
+no attempt, so a refusal about the review attempt itself gets no redo. A later
+block stage then offers `reopen-unit-step` for that same Unit instead: a
+`command` remedy whose operation `{kind: "reopen-unit", stage, unit}` renders
+`aidlc engine jump reopen --target <stage> --units <unit>`. Once the person
+picks it, it writes the Unit-scoped `GATE_REJECTED` a Unit checkpoint's Request
+Changes writes, a new attempt for that Unit and stage only, and every other Unit
+keeps its finished work. A stage restart is never offered there, because it
+either lands back on the same step or jumps and starts every Unit's finished
+work over. When this work allows no review at all (a review budget of 0), a new
+attempt clears nothing, so nothing is offered and a repeated refusal reaches the
+terminal ask, where the person decides. Prose recovery guidance names the same
+reopen, or, with no Unit on record, asks the person which Unit does the step
+again with `/aidlc --stage <stage> --unit <name>`.
 The first block stage still offers `restart-stage`, which is no forward jump,
 with its cost. The stage-wide resets offered in other states (`request-changes`,
 `unset-unattended`, `redo-jump`, `restore-or-jump`) say in their action that
@@ -1320,11 +1408,13 @@ stage-major, and team walks keep their remedies.
 
 The human-turn hook applies the person's typed switch at prompt time to the
 piece of work selected by the message or the hook payload session.
-A picked `lower-fence` choice does not lower a fence or the policy word.
-Memory-held strict refuses first, and unattended runs cannot lower through this
-path.
-CLI setters refuse lowering except for an already-set no-op or the
-fixture/harness-launch presence bypass; no saved switch is consumed by a setter.
+A picked `lower-fence` choice is carried out by the conductor running the
+setter, which the person's reply on record authorizes.
+Memory-held strict refuses first (and withholds the remedy), and unattended
+runs cannot lower through this path.
+Without a person's turn on record, CLI setters refuse lowering except for an
+already-set no-op or the fixture/harness-launch presence bypass; no saved switch
+is consumed by a setter.
 
 The runtime-integrity check refuses recognized direct and indirect tool-call
 routes to hooks and their records, including paths, environment assignments,
@@ -1343,23 +1433,37 @@ the selected interaction:
 
 | `interaction` | Contract after selection |
 |---|---|
-| `command` | Execute the exact returned `command`, rendered from its structured `operation`. These reset operations require human selection; selection is sufficient to attempt the command. |
-| `human-input` | Present the action's follow-up and end the turn. Request Changes needs a separate answer to "What should change?"; when it is the only remedy, a reply that does not pick it (and is not a dismissed question) is taken as that answer, so the person is not asked twice, and a later reply replaces it until the reject is submitted. A Scope remedy needs the human's concrete Scope. `lower-fence` only tells the person to type the exact setter command; selection authorizes and executes nothing. |
+| `command` | Execute the exact returned `command`, rendered from its structured `operation`. Every operation (the resets, `lower-fence`'s setter, `reopen-unit`, `review-advisory` and `record-unit-completion`) requires human selection, so its `requiresHuman` is true; selection is sufficient to attempt the command. |
+| `human-input` | Present the action's follow-up and end the turn. Request Changes needs a separate answer to "What should change?"; when it is the only remedy, a reply that does not pick it (and is not a dismissed question) is taken as that answer, so the person is not asked twice, and a later reply replaces it until the reject is submitted. A Scope remedy needs the human's concrete Scope. |
 | `external-work` | Perform the described work through its existing protocol and tools. Selection needs no additional feedback turn, but it does not prove that the work succeeded or supply missing arguments. |
 
-`aidlc-guard-operation.ts` defines four operations:
+`aidlc-guard-operation.ts` defines six operations:
 `{kind: "restart-stage", stage}`, `{kind: "abort-bolt", unit, slug}`,
-`{kind: "lower-fence", fence}`, and
-`{kind: "record-unit-completion", stage, unit}`. The last renders
+`{kind: "lower-fence", fence}`, `{kind: "reopen-unit", stage, unit}` (one Unit's
+step of a unit-major walk starts again, above), `{kind: "review-advisory"}`, and
+`{kind: "record-unit-completion", stage, unit}`. `review-advisory` renders
+`aidlc engine config set review advisory` and is offered beside
+`apply-repairs-then-request` as `review-advisory-gate`: when the person wants to
+decide now instead of another review pass, this work's reviews go advisory, so
+the reviewer's NOT-READY is final and its open findings go to the approval gate.
+`record-unit-completion` renders
 `aidlc engine state unit complete --stage <stage> --unit <unit>` and is offered,
 first, when a team Unit's gate is refused `UNIT_COMPLETION_MISSING` while its
 work is open: the Unit's artifacts are on disk and only the receipt is missing.
 `unit complete` then records the receipt without an earlier `unit start`, but
 only once the person picked that remedy on the active ask for the same stage and
 Unit, and it still refuses when a required artifact is missing.
-The `lower-fence` operation remains for `PreToolUse` admission of the setter's
-command shape; admission does not permit the CLI to lower a fence on its own,
-and the `lower-fence` remedy carries neither that operation nor a command.
+In a solo unit-major walk, a refusal with no review pass left about a Unit part
+way through its step (the recorded `Active Unit`, `Unit Stage` that stage, and
+`Unit State` in-progress) offers that Unit's own ways on first, in every state:
+`record-unit-completion`, which finishes the step with the review it has (its
+open findings go to the person when that Unit's work comes up for approval), and
+`reopen-unit-step`. No gate can open before that step is done, so
+present-approval-gate is not offered there, and on an approved stage
+`restore-or-jump` follows them.
+The `lower-fence` operation renders the setter, the command its remedy
+carries; `PreToolUse` admits the same exact shape, and the setter still requires
+a person's turn on record.
 
 A stage restart first resolves its destination and returns the exact
 `jump execute` continuation. During unapproved Code Generation, that
@@ -1396,7 +1500,12 @@ follow-up: `orchestrate report --result rejected` with their words for Request
 Changes, and `log answer --checkpoint summary-confirmation` for their
 confirmation. A Scope remedy opens no route: the person types `/aidlc --scope
 <scope>`, which runs through `next`. Neither does `redo-unit-step`: `next`
-routes the Unit's step again.
+routes the Unit's step again. With Construction checkpoints on, a Unit's
+checkpoint is its gate and the stage cannot be reported for approval until
+every checkpoint is approved, so present-approval-gate names `next` there,
+which shows that Unit's checkpoint again with the findings. `reopen-unit-step`
+and `review-advisory-gate` are `command` remedies: once picked, their exact
+command is admitted.
 Before the person picks, the offer alone admits nothing. When the picked remedy's
 work happens while the question is open (`apply-repairs-then-request` and
 `finish-revision` on the pick, `reconfirm-summary` once the person confirmed),
@@ -1409,8 +1518,8 @@ For `PreToolUse` admission, the `lower-fence` operation models the fence setter
 as `aidlc engine config set guard.<fence> off` in a native install and
 `bun <harness-dir>/tools/aidlc-utility.ts config-change --guard.<fence> off` in a
 source install, because the native `config` route is a dispatcher translation
-onto `aidlc-utility.ts`. These are setter shapes, not commands emitted by the
-`lower-fence` remedy.
+onto `aidlc-utility.ts`. The `lower-fence` remedy carries the same shape as
+its `command`.
 
 The conductor must obtain human consent before aborting a Bolt. This
 conductor-prose-obtained consent remains the abort trust boundary. The Plan
@@ -1468,10 +1577,19 @@ valid re-confirmation can finish an unchanged pending review without another
 rejection or a new stage attempt.
 
 **One rule for first occurrence, at both sites.** A refusal renders as a
-guard-recovery `ask` the first time it happens. The router emits it as the
+guard-recovery `ask` the first time it happens. Its question is one line in the
+person's words, naming the stage (and the Unit) as they know it: "Functional
+Design for alpha can't go ahead as things stand: which way would you like to go
+on?", with "still" when the same state repeats; the options carry the detail
+and the reason codes stay in the ask's fields. The router emits it as the
 directive; an enforcing tool prints the human sentence and then the same ask as
 the last line of its refusal, which the router parses back into the directive it
-would have emitted itself. The `.aidlc-engine/guard-refusals/` record beside the other
+would have emitted itself. The review-freeze hook, whose output the tool shows
+the person, prints the human sentence and `Next:` with the `next` command
+instead, and leaves the ask in its refusal record: the next `next` asks it once,
+after any open gate or engine question, while the step is still open and
+unapproved, the same reset boundary holds, and the check would still refuse; a
+read-only probe reads it without taking it. The `.aidlc-engine/guard-refusals/` record beside the other
 gitignored runtime files counts repetitions of one guard state (stage, Unit,
 lifecycle state, attempt fields, the latest session/workflow/jump/rejection
 boundary, and the resource fingerprints); it carries no authority, and an
@@ -1485,23 +1603,29 @@ tool failure.
 
 **The human's selection survives the re-ask.** An engine-published guard-recovery
 ask is stored as an active-directive marker (`kind: "ask"`,
-`ask_type: "guard-recovery"`); a hook/tool-printed ask alone does not publish one.
+`ask_type: "guard-recovery"`); a tool-printed ask alone does not publish one, and neither does the review-freeze hook's ask when `next` asks it, so the person's own words from the request that led to the refusal still carry their Request Changes.
 The marker carries `remedies`, the offered `op`, `action`, `operation` (when present),
-and `interaction` entries in display order. The human-turn hook records the
-selection with `delivery: consumed`, `selection_sha256`, and `selected_op`;
-`selected_op` is null when the selection is unmatched or ambiguous. Command and
-external-work selections become `guard_recovery_response.status: ready`
-immediately, without a feedback hash. Human-input selections remain
-`awaiting-feedback` until a separate human answer supplies `feedback_sha256`
-and changes the status to `ready`. An unmatched selection authorizes no remedy.
-For `lower-fence`, neither the selection nor later recorded feedback lowers
-anything; the human-turn hook applies only the person's exact typed command,
-including any validated companion intent settings.
-A recorded command or external-work selection authorizes only until the next
-human response; a later prompt before the returned command runs replaces it,
-while an identical re-recorded response is idempotent. An unmatched answer
-records no feedback and leaves no admissible restart; the next response is
-resolved as a fresh selection.
+and `interaction` entries in display order. The human-turn hook records that the
+person replied (`delivery: consumed`, `selection_sha256` over their words,
+`selected_op: null`); the conductor reads the reply and records the remedy they
+picked with `answer --checkpoint guard-recovery --details '<the remedy's op>'`
+(`recordGuardRecoveryChoice`), which sets `selected_op`. It passes the stable
+`op`, never the action text, which can hold backtick-wrapped commands a shell
+would run. Command and
+external-work picks become `guard_recovery_response.status: ready` immediately,
+without a feedback hash. A Request Changes pick whose reply already said what to
+change (`--details 'request-changes: <what>'`) is ready with that reply as the
+feedback; other human-input picks remain `awaiting-feedback` until the person's
+next reply supplies `feedback_sha256` and changes the status to `ready`. A next
+reply that is exactly a different remedy is a new pick instead: it replaces the
+selection and is not taken as feedback; the same remedy again changes nothing. A
+reply with no recorded pick authorizes no remedy.
+For `lower-fence`, the selection is ready at once (a `command` interaction):
+the conductor runs the setter. The human-turn hook still applies the person's
+exact typed command itself, including any validated companion intent settings.
+A recorded pick authorizes only until the next human response; a later prompt
+before the picked remedy runs withdraws the pick so the conductor reads the new
+reply, while an identical re-recorded response is idempotent.
 
 A repeated `next` preserves that response only when the state, gate, and ordered
 remedy `op`, `action`, structured `operation`, and `interaction` still match.
@@ -1528,11 +1652,11 @@ quotes, and trailing punctuation, and one `(Recommended)` label decorator is
 accepted inside or outside those quotes and punctuation. The Approve, Request
 Changes, and Accept as-is labels each accept one trailing `(Recommended)`
 decorator, case-insensitively; Approve and Accept as-is are otherwise matched
-exactly apart from surrounding whitespace. The engine's Plan Approval question
-reads the human's reply in their own words instead (see the Plan Approval
-guard in `06-hooks-and-tools.md`): a named option or a change request always
-counts, and a plain yes counts when it is the first reply after the question is
-shown or is picked in the picker asking that question. The legacy Kiro IDE
+exactly apart from surrounding whitespace. For the engine's Plan Approval
+question the conductor reads the person's reply and records their choice with
+`answer --checkpoint plan-approval --details "Approve Plan"` (or `Request
+Changes`, `I'll edit the files`, `Review the plan`), which needs a reply kept on
+the open question since it was shown. The legacy Kiro IDE
 path's `answer --checkpoint plan-approval --details` still requires
 `Approve Plan` or `Request Changes`.
 
@@ -1617,8 +1741,8 @@ would be required before it can safely participate in validity propagation.
 
 The projection remains read-only and advisory. `next` keeps its normal
 directive kind and adds a machine-readable `stage_validity` field for stale,
-revalidation, or unavailable results. Untracked-only histories appear in
-`/aidlc --status` rather than every `next`.
+revalidation, or unavailable results. `/aidlc --status` says the same
+out-of-date line as `next`; untracked-only histories are not shown.
 The warning names the earliest affected stage and the words to redo it (the
 same move as `/aidlc --stage <earliest-affected-stage>`), but this release does
 not enforce it. Schema-1, receipt-less, and capture-failed

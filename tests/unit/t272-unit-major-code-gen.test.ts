@@ -12,15 +12,17 @@
 // working code lands after ONE unit's design documents, not after every
 // unit's. The autonomous swarm never fires under unit-major (the walk owns
 // the build; its coverage signal is DISK, the swarm's is SWARM_UNIT_CONVERGED
-// audit rows - two owners would re-fan already-built units). Gate machinery
-// is unchanged: the per-stage gates cascade at the end of the walk once the
-// whole (stage x unit) grid, code-generation included, is covered.
+// audit rows - two owners would re-fan already-built units). The per-stage
+// approvals come due at the end of the walk once the whole (stage x unit)
+// grid, code-generation included, is covered; with Unit checkpoints off they
+// are one question (t-late-design-gates-one-approval pins that question).
 //
 // t209 pins the walk ordering + knob write path; t210 pins knob-off
 // byte-equivalence and the swarm suppression + its negative control. THIS
 // file pins the seams the widened block newly touches:
-//   1. the full five-gate cascade order across report approvals,
-//   2. code-generation's own gate presenting LAST, on the last unit,
+//   1. one late approval covering all five stages, in order, through to
+//      Build and Test,
+//   2. a lone Code Generation gate presenting on the last unit,
 //   3. a degenerate scope whose per-unit block is code-generation ONLY
 //      (poc-like: every design stage skipped) still walks correctly,
 //   4. the early-approve guard extends to code-generation coverage,
@@ -384,12 +386,10 @@ describe("t272 code-generation joins the unit-major walk", () => {
     expect(gate.gate).toBe(true);
   });
 
-  // 1: the full gate cascade is FIVE stages long and ends on code-generation.
-  // From a fully-covered grid (code-gen included), approving each stage in
-  // order walks Current Stage down the block; each intermediate `next`
-  // presents the NEXT stage's real gate, and code-generation's gate is the
-  // last of the cascade, presented on the last unit.
-  test("1: five-gate cascade ends with code-generation's gate on the last unit", () => {
+  // 1: the late approvals are ONE question for all five stages. From a
+  // fully-covered grid (code-gen included) the first gate lists them, on the
+  // last unit, and one approval approves them in order.
+  test("1: one late approval covers the five stages and the work moves on to Build and Test", () => {
     const proj = seedProject();
     seedBoltDag(proj, ["alpha", "beta"]);
     coverFullGrid(proj, ["alpha", "beta"]);
@@ -397,55 +397,26 @@ describe("t272 code-generation joins the unit-major walk", () => {
       for (const stage of BLOCK) logReviewReady(proj, stage, unit);
     }
 
-    // The first fully-covered next presents functional-design's gate (t209
-    // case 4 shape); approve the four design stages in cascade order.
-    for (const stage of BLOCK.slice(0, 4)) {
-      const gate = runNext(proj);
-      expect(gate.kind).toBe("run-stage");
-      expect(gate.stage).toBe(stage);
-      expect(gate.gate).toBe(true);
-      expect(gate.unit).toBe("beta");
-      const after = runReport(proj, ["--stage", stage, "--result", "approved"]);
-      expect(after.kind).not.toBe("error");
-    }
+    const gate = runNext(proj);
+    expect(gate).toMatchObject({ kind: "run-stage", stage: "functional-design", gate: true, unit: "beta" });
+    expect((gate.approve_together as { stages: { slug: string }[] }).stages.map((s) => s.slug)).toEqual(BLOCK);
+    const done = runReport(proj, ["--stage", "functional-design", "--result", "approved"]);
+    expect(done.kind).toBe("done");
 
-    // The cascade's fifth and final gate: code-generation, real gate, last unit.
-    const last = runNext(proj);
-    expect(last.kind).toBe("run-stage");
-    expect(last.stage).toBe("code-generation");
-    expect(last.gate).toBe(true);
-    expect(last.unit).toBe("beta");
-    // Covered by artifacts alone, with no Unit built in this attempt: the beat
-    // may still apply a fix, so it is not marked as having nothing to build.
-    expect(last.build_settled).toBeUndefined();
-    const floor = latestMainWorkflowStageRunFloorForProject(
-      proj,
-      "code-generation",
-    );
-    for (const unit of ["alpha", "beta"]) {
-      appendAuditEntry(
-        "SWARM_UNIT_CONVERGED",
-        {
-          "Batch number": "1",
-          "Unit name": unit,
-          Stage: "code-generation",
-          "Run floor": floor,
-        },
-        proj,
-      );
-    }
-    const settled = runReport(proj, [
-      "--stage", "code-generation", "--result", "approved",
-    ]);
-    expect(settled.kind).not.toBe("error");
-
-    // Post-cascade the workflow has left the per-unit block entirely.
+    // The workflow has left the per-unit block entirely.
     const next = runNext(proj);
     expect(next.stage).toBe("build-and-test");
   });
 
   test("5: once every Unit is built, the last Code Generation gate never asks about a plan again", () => {
-    const proj = seedProject();
+    const sep = "\u2014";
+    const proj = seedProject({
+      current: "code-generation",
+      checkboxes: [
+        "- [x] functional-design", "- [x] nfr-requirements", "- [x] nfr-design",
+        "- [x] infrastructure-design", "- [-] code-generation", "- [ ] build-and-test",
+      ].map((row) => `${row} ${sep} EXECUTE`).join("\n"),
+    });
     seedBoltDag(proj, ["alpha", "beta"]);
     coverFullGrid(proj, ["alpha", "beta"]);
     for (const unit of ["alpha", "beta"]) {
@@ -453,13 +424,6 @@ describe("t272 code-generation joins the unit-major walk", () => {
       buildUnit(proj, unit);
     }
     expect([...unitCompletedReceipts(proj, "code-generation")].sort()).toEqual(["alpha", "beta"]);
-    // Approving each design stage moves the state, so the directive the engine
-    // last published is out of date when the Code Generation gate comes round.
-    for (const stage of BLOCK.slice(0, 4)) {
-      const gate = runNext(proj);
-      expect(gate.stage).toBe(stage);
-      expect(runReport(proj, ["--stage", stage, "--result", "approved"]).kind).not.toBe("error");
-    }
     const last = runNext(proj);
     expect(last).toMatchObject({
       kind: "run-stage", stage: "code-generation", gate: true, unit: "beta", build_settled: true,

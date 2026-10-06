@@ -267,10 +267,11 @@ function writePlanArtifacts(project: string): string {
 function assertFence(project: string, policy: "strict" | "relaxed" | "off") {
   const status = run(project, ["--status"]);
   expect(status.code, status.stderr).toBe(0);
-  // Status names the checks that are off, grouped by why.
+  // The policy that lowers the check is on its own line; status names only
+  // checks someone switched off, so plan re-approval is never listed here.
+  expect(status.stdout).toMatch(new RegExp(`^Guard Policy:\\s+${policy} \\(from scope poc\\)$`, "m"));
   const checksOff = /^Checks off:\s+(.*)$/m.exec(status.stdout)?.[1] ?? "";
-  if (policy === "strict") expect(checksOff).not.toContain("plan re-approval");
-  else expect(checksOff).toMatch(new RegExp(`plan re-approval[^;]*\\(guard policy ${policy} \\(from scope poc\\)\\)`));
+  expect(checksOff).not.toContain("plan re-approval");
 }
 
 describe("native Kiro IDE recovery from a stale upstream directive", () => {
@@ -282,7 +283,7 @@ describe("native Kiro IDE recovery from a stale upstream directive", () => {
       assertFence(project, policy);
       const blocked = sourceWriteOf(project);
       expect(blocked.code, blocked.stderr).toBe(2);
-      expect(JSON.parse(blocked.stderr).code).toBe("CODE_GENERATION_EXECUTION_INELIGIBLE");
+      expect(blocked.stderr).toContain(" The plan-approval setting is unchanged.");
       expect(blocked.stderr).toContain(reason);
       expect(blocked.stdout).toBe("");
       assertFence(project, policy);
@@ -360,7 +361,7 @@ describe("native Kiro IDE recovery from a stale upstream directive", () => {
       // below shows the lowered fence still refuses), so it is not offered.
       expect(beforeApproval.stderr).not.toContain(LOWER_FENCE_SWITCH);
     } else {
-      expect(JSON.parse(beforeApproval.stderr).code).toBe("CODE_GENERATION_EXECUTION_INELIGIBLE");
+      expect(beforeApproval.stderr).toContain(" The plan-approval setting is unchanged.");
     }
     assertFence(project, policy);
     expect(stoodAsideRows(project)).toBe(0);
@@ -389,10 +390,12 @@ describe("native Kiro IDE recovery from a stale upstream directive", () => {
       "\nAlso handle repeated punctuation.\n");
     const continuation = sourceWrite();
     expect(continuation.code, continuation.stderr).toBe(policy === "strict" ? 2 : 0);
-    if (policy !== "strict") {
+    if (policy === "relaxed") {
       expect(continuation.stdout).toContain(
-        `Continuing past the plan-approval check because it is off for this piece of work (guard policy ${policy} (from scope poc))`,
+        "Continuing past the plan-approval check because it is off for this piece of work (guard policy relaxed (from scope poc))",
       );
+    } else if (policy === "off") {
+      expect(continuation.stdout).not.toContain("Continuing past");
     }
     expect(stoodAsideRows(project)).toBe(policy === "strict" ? 0 : 1);
     expect(readFileSync(questions, "utf-8")).toBe(approvedQuestions);

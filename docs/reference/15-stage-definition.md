@@ -223,7 +223,8 @@ baseline, and refuses changed paths outside the fresh claims union. Directory
 claims cover later additions; in a main multi-repo workspace every entry names
 its recorded repo, while a Bolt's manifest is relative to its one selected repo.
 Missing pre-upgrade fields fail open only as documented migration evidence;
-present-but-unbindable or destroyed modern evidence fails closed. A team that
+present-but-unbindable or destroyed modern evidence fails closed under Guard
+Policy strict; under relaxed or off it is recorded once and the work continues. A team that
 adds its own code- or config-emitting stage (a contract generator, an IaC
 executor) should set `workspace_requires: true` so the workspace guard applies.
 Bypass it for CI with `AIDLC_SKIP_ARTIFACT_GUARD=1`; that switch also bypasses
@@ -478,7 +479,7 @@ loop above — the default when a `reviewer` is declared without a class) or
 `advisory` (one normal-flow pass whose findings the human approval gate shows
 from the engine-owned findings list, no repair loop; the effective iteration budget is 1). A later
 write that invalidates its terminal receipt permits one bounded recovery request
-at the next ordinal. The shipped split:
+at the next ordinal, and a review the person asks for is never refused. The shipped split:
 the 7 human-gated ideation/inception prose stages declare `advisory`; the 5
 Construction design/build stages default `adversarial`. `none` is deliberately
 not a stage value — a stage that wants no review deletes its `reviewer:` line;
@@ -495,9 +496,10 @@ inside a Bolt the reviewer is the only pre-merge verification, so the declared
 class always applies there. Like the cap, `review_class` requires a `reviewer`
 (schema error `review_class requires a reviewer`).
 
-Scope frontmatter also accepts four ceremony switches, each `on` | `off`
-(absent means on): `sensors`, `learnings`, `summary_confirmation`, and
-`plan_approval`.
+Scope frontmatter also accepts five ceremony switches, each `on` | `off`
+(absent means on, except `collaborators`, which ships on only on `enterprise`):
+`sensors`, `learnings`, `summary_confirmation`, `plan_approval`, and
+`collaborators` (off runs every stage lead-only; the reviewer is unaffected).
 The last is distinct from a stage's `summary_confirmation: required | if-present`:
 the scope/intent policy decides whether that checkpoint applies at all.
 `/aidlc --sensors on|off`, `/aidlc --learnings on|off`,

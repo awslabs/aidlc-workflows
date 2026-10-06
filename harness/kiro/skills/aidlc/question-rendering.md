@@ -169,8 +169,8 @@ directive it returns; when the reply says neither, ask again. `claim` follows th
 claim contract and
 `execute-remedy` follows only the human-selected executable guard remedy's
 command or action; empty remedies remain terminal. These routes do not fall
-back to reporting an ask answer. The prompt-rendered resume menu alone uses
-non-stage `report --result resumed --user-input "<answer>"`; explicit
+back to reporting an ask answer. A redo, jump, or start-fresh request on re-entry alone
+uses non-stage `report --result resumed --choice <redo|jump|fresh>`; explicit
 guard-remedy stage reports retain their existing contract.
 
 ## Mandatory consolidated-summary checkpoint
@@ -219,8 +219,10 @@ checkpoint with the later reviewer, learnings, or approval steps.
 Rules:
 
 - **Approval gate `[next stage]`**: on an approval question, render the
-  `Continue to [next stage]` placeholder from the run-stage directive's
-  `next_stage` field verbatim (e.g. `Continue to NFR Requirements`); render
+  `Continue to [next stage]` placeholder from the `next_stage` field verbatim
+  (e.g. `Continue to NFR Requirements`): the one on the reply that opened the
+  gate (`report --result awaiting-approval` or `revised`), which includes any
+  plan change made during the stage, else the run-stage directive's. Render
   `Complete workflow` when `next_stage` is null. Never guess the next stage.
 - **Bold the header**, then the prompt, then the numbered options in spec
   order. When a question has a recommended option, list it FIRST and append

@@ -118,7 +118,7 @@ describe("t317 doctor gate-pending advisory", () => {
     const staleRun = runDoctor(stale);
 
     expect(staleRun.out).toMatch(
-      /ok\s+Approval gate pending: Feasibility & Constraints \(~\d+h\); waiting for a human, not stuck\./,
+      /ok\s+Approval gate pending: Feasibility & Constraints \(~\d+ hours?\); waiting for a human, not stuck\./,
     );
     expect(staleRun.out).toContain("/aidlc --status");
     expect(staleRun.status).toBe(baselineRun.status);

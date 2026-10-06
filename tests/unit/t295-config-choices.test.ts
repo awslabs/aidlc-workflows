@@ -1247,7 +1247,7 @@ describe("t295 project section", () => {
     expect(codexShow.data.mcpNote).toContain("no shipped MCP surface");
   });
 
-  test("plugin changes inherit the active workflow refresh refusal", () => {
+  test("a plugin change while a workflow runs is done, with its undo", () => {
     const project = install();
     const dirName = "active-plugin-selection";
     const intents = join(project, "aidlc", "spaces", "default", "intents");
@@ -1275,10 +1275,13 @@ describe("t295 project section", () => {
       "aidlc",
       "--yes",
     ], project, runtimeEnv());
-    expect(result.status).toBe(4);
+    expect(result.status, result.stdout + result.stderr).toBe(0);
     expect(result.stdout).toContain(
-      "refusing to refresh while 1 workflow(s) are active",
+      "Changed the project choices in .claude/tools/data/harness.json. To undo: ",
     );
+    // Nothing was recorded before, so --reset puts it back exactly.
+    expect(result.stdout).toContain("config project --reset --yes");
+    expect(result.stdout).toContain(`Updated. Your open work (default/${dirName}) carries on.`);
   });
 });
 

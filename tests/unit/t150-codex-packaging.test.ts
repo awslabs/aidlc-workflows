@@ -255,6 +255,22 @@ describe("t150 dist/codex packaging determinism + trust", () => {
     expect(r.status).toBe(1);
   });
 
+  test("3b: the session skills name the commands a Codex user types, and leave paths alone", () => {
+    const skills = join(REPO_ROOT, "dist", "codex", ".agents", "skills");
+    const read = (skill: string) => readFileSync(join(skills, skill, "SKILL.md"), "utf-8");
+    expect(read("aidlc-session-cost")).toContain("Run $aidlc to\nbegin, then re-run $aidlc-session-cost.");
+    expect(read("aidlc-replay")).toContain("start a workflow with $aidlc before running\n$aidlc-replay.");
+    expect(read("aidlc-replay")).toContain("`$aidlc-outcomes-pack`");
+    expect(read("aidlc-outcomes-pack")).toContain("Run $aidlc to completion first.");
+    for (const skill of ["aidlc-session-cost", "aidlc-replay", "aidlc-outcomes-pack"]) {
+      expect(read(skill), skill).not.toMatch(/(^|[\s(`"])\/aidlc(?![a-z0-9-]*\.[a-z])/m);
+    }
+    // Paths keep their slash, and the Claude tree keeps its slash commands.
+    expect(read("aidlc-replay")).toContain("`<record>/aidlc-state.md`");
+    expect(read("aidlc-replay")).toContain("bun .codex/tools/aidlc.ts engine runtime summary");
+    expect(readFileSync(join(CLAUDE_SRC, "skills", "aidlc-replay", "SKILL.md"), "utf-8")).toContain("/aidlc-replay.");
+  });
+
   test("4: method relocated to workspace-root aidlc/spaces/default/memory/; native rules/ is Starlark-only", () => {
     // The AIDLC method ("memory") no longer ships under .codex/aidlc-rules/ (the
     // old D-10 rename target). It relocated OUT of the harness dir to the
@@ -311,6 +327,12 @@ describe("t150 dist/codex packaging determinism + trust", () => {
       const standardConfig = parse(raw) as typeof config;
       expect(standardConfig.developer_instructions).toBe(onboarding);
       expect(config.developer_instructions).toContain("# AI-DLC on Codex CLI");
+      // AI-DLC's questions keep its words; the agent's own words are for the rest.
+      expect(config.developer_instructions).toContain("Show AI-DLC's questions and choices with their meaning unchanged, in the\nperson's language;");
+      expect(config.developer_instructions).toContain("are still named by path.");
+      expect(config.developer_instructions).toContain("When they ask about one, answer them.");
+      expect(config.developer_instructions).toContain("Plan Approval's choice labels stay exactly as AI-DLC gives\nthem.");
+      expect(config.developer_instructions).not.toContain("say it in your own words");
       expect(config.developer_instructions).toContain(".agents/skills/");
       expect(config.shell_environment_policy).toMatchObject({
         set: { AIDLC_RULES_DIR: "aidlc/spaces/default/memory" },

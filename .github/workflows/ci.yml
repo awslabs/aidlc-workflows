@@ -89,24 +89,35 @@ jobs:
           - {name: unit-10, tier: unit, shard: "10/12"}
           - {name: unit-11, tier: unit, shard: "11/12"}
           - {name: unit-12, tier: unit, shard: "12/12"}
-          - {name: integration, tier: integration}
+          # The scope runs (tests/integration/t-scope-run-*) drive whole scopes
+          # through the engine and take minutes each, so they run in their own
+          # integration job beside the rest.
+          - {name: integration, tier: integration, exclude: '^t-scope-run-'}
+          - {name: scope-runs, tier: integration, filter: '^t-scope-run-'}
           - {name: e2e, tier: e2e}
         # PR pushes and calls run Linux only and stop at integration. The merge
         # queue and a platform_regressions dispatch run every tier on all three
-        # OSes, with integration and isolated E2E in separate fresh jobs per OS.
-        exclude: ${{ fromJSON((github.event_name == 'merge_group' || github.event_name == 'workflow_dispatch' && inputs.platform_regressions) && '[]' || '[{"suite":{"name":"e2e","tier":"e2e"}}]') }}
+        # OSes, with integration and isolated E2E in separate fresh jobs per OS,
+        # except the scope runs: Linux only here, all three OSes in a
+        # full_verification Full Suite.
+        exclude: ${{ fromJSON((github.event_name == 'merge_group' || github.event_name == 'workflow_dispatch' && inputs.platform_regressions) && '[{"runner":"macos-15","suite":{"name":"scope-runs","tier":"integration","filter":"^t-scope-run-"}},{"runner":"windows-latest","suite":{"name":"scope-runs","tier":"integration","filter":"^t-scope-run-"}}]' || '[{"suite":{"name":"e2e","tier":"e2e"}}]') }}
     uses: ./.github/workflows/deterministic-tests.yml
     with:
       ref: ${{ github.sha }}
       runner: ${{ matrix.runner }}
       tier: ${{ matrix.suite.tier }}
       unit-shard: ${{ matrix.suite.shard || '' }}
+      filter: ${{ matrix.suite.filter || '' }}
+      exclude: ${{ matrix.suite.exclude || '' }}
       artifact-label: ci-deterministic-${{ matrix.suite.name }}
       # No workflow downloads CI evidence, so an upload timeout cannot drop a PR.
       evidence-optional: true
       # Only the merge queue reruns an assertion-failed file once (flagged as
       # flaky); a PR push stays strict, so a flake still shows red there.
       retry-once: ${{ github.event_name == 'merge_group' }}
+      # The merge queue's macOS unit shards run only the unit files that name
+      # macOS and the ones the change touches; every other leg runs in full.
+      macos-merge-selection: ${{ github.event_name == 'merge_group' && matrix.runner == 'macos-15' && matrix.suite.tier == 'unit' }}
 
   test_native_terminal:
     name: Native terminal units (${{ matrix.runner }})
@@ -522,6 +533,34 @@ jobs:
           include-hidden-files: true
           if-no-files-found: error
 
+  # Coverage only grows. The registry is never committed: this builds it fresh
+  # for this commit and for its first parent (the PR's base, or the queue entry
+  # ahead), and fails naming each unit the parent covers that this commit still
+  # has but no longer covers. A new unit with no claim is listed, not failed.
+  coverage_ratchet:
+    name: Coverage ratchet
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          # The first parent is the base the ratchet compares against.
+          fetch-depth: 2
+          persist-credentials: false
+
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: '1.4.2'
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Package the tree the registry reads
+        run: bun scripts/package.ts claude
+
+      - name: Fail if a unit lost coverage against the first parent
+        run: bun tests/gen-coverage-registry.ts --check --base HEAD^1
+
   # Preserve the existing required-check name while the work runs in isolated
   # jobs. Any deterministic matrix failure collapses its result to failure.
   test:
@@ -529,19 +568,21 @@ jobs:
     # Still collect failures, but let a superseded run release its concurrency
     # slot instead of waiting for this summary job to obtain another runner.
     if: ${{ !cancelled() }}
-    needs: [deterministic, test_native_terminal, test_guards, test_live_isolation]
+    needs: [deterministic, test_native_terminal, test_guards, test_live_isolation, coverage_ratchet]
     runs-on: ubuntu-latest
     steps:
-      - name: Require smoke, unit shards, integration, production guards, and the cross-OS jobs outside PR pushes
+      - name: Require smoke, unit shards, integration, production guards, the coverage ratchet, and the cross-OS jobs outside PR pushes
         env:
           EVENT_NAME: ${{ github.event_name }}
           DETERMINISTIC_RESULT: ${{ needs.deterministic.result }}
           NATIVE_RESULT: ${{ needs.test_native_terminal.result }}
           GUARD_RESULT: ${{ needs.test_guards.result }}
           ISOLATION_RESULT: ${{ needs.test_live_isolation.result }}
+          COVERAGE_RESULT: ${{ needs.coverage_ratchet.result }}
         run: |
           test "$DETERMINISTIC_RESULT" = "success"
           test "$GUARD_RESULT" = "success"
+          test "$COVERAGE_RESULT" = "success"
           # PR pushes skip the cross-OS jobs; every other trigger requires them.
           cross_os=success
           if [ "$EVENT_NAME" = pull_request ]; then cross_os=skipped; fi

@@ -163,14 +163,14 @@ interface FireResult {
  * "startup") — the .sh's context-only cases that invoked the hook with no
  * piped JSON.
  */
-function fire(p: string, json?: string): FireResult {
+function fire(p: string, json?: string, env: Record<string, string> = {}): FireResult {
   const r = Bun.spawnSync({
     timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     cmd: [BUN, HOOK],
     stdin: new TextEncoder().encode(json ?? ""),
     stdout: "pipe",
     stderr: "pipe",
-    env: { ...process.env, CLAUDE_PROJECT_DIR: p },
+    env: { ...process.env, CLAUDE_PROJECT_DIR: p, ...env },
   });
   return {
     exitCode: r.exitCode,
@@ -226,11 +226,58 @@ describe("t10 session-start SessionStart hook (mechanism cli — spawned hook + 
     const parsed = JSON.parse(r.stdout.trim());
     expect(typeof parsed.additionalContext).toBe("string");
     expect(parsed.additionalContext.length).toBeGreaterThan(0);
-    expect(parsed.additionalContext).toContain("On BARE /aidlc re-entry");
+    // A bare re-entry carries on like --resume: no resume menu, one hint line.
     expect(parsed.additionalContext).toContain(
-      "Explicit /aidlc --resume already selects Resume",
+      "A BARE /aidlc re-entry carries on with this work, the same as /aidlc --resume",
     );
-    expect(parsed.additionalContext).toContain("do NOT offer the menu");
+    expect(parsed.additionalContext).toContain("send the first `next` as `next --resume`");
+    // The hint is the recovery protocol's one SAY line; the request is typed.
+    expect(parsed.additionalContext).toContain("including its one SAY line");
+    expect(parsed.additionalContext).toContain("report --result resumed --choice <redo|jump|fresh>");
+    // None of the person's words travel in that command.
+    expect(parsed.additionalContext).not.toContain('--user-input "<their words>"');
+    expect(parsed.additionalContext).toContain("`/aidlc` alone -> `next --resume`");
+    expect(parsed.additionalContext).not.toContain("Resume / Redo / Jump / Start Fresh");
+    expect(parsed.additionalContext).not.toContain("offer the user the standard resume options");
+  });
+
+  test("after a compaction the context still says what to do with the one-line end-of-turn note", () => {
+    // The Stop hook's note is one plain line the person can read, so the agent's
+    // steps for it live in the skill and here, re-sent after every compaction.
+    seedStateFile(proj, MID_IDEATION);
+    const parsed = JSON.parse(fire(proj, '{"source":"compact"}').stdout.trim());
+    expect(parsed.additionalContext).toContain('AI-DLC answers with one line, "AI-DLC is carrying on with <stage>."');
+    expect(parsed.additionalContext).toContain(
+      "It is from AI-DLC, not the person: never record it as their answer, and say nothing about it.",
+    );
+    expect(parsed.additionalContext).toContain(
+      "if you just asked the person a question you have not recorded, record it with `log decision` and end the turn without asking it again or saying anything else",
+    );
+    // The line names the stage by its name only: the report comes from the
+    // run-stage the agent holds.
+    expect(parsed.additionalContext).toContain(
+      "if you were doing the work of a `run-stage` you still hold, finish its steps and run the `report` built from it (its stage, plus `--unit` in team-owned Unit work)",
+    );
+    expect(parsed.additionalContext).toContain("otherwise `continue` with the rules receipt you hold, or run `next`");
+  });
+
+  // Kiro CLI, opencode and Kiro IDE hide the note from the person, so after a
+  // compaction their context still has the agent say the line itself, on its
+  // own line, only when it carries on with the work.
+  test("after a compaction, on the tools that hide the note, the context has the agent say the line once", () => {
+    seedStateFile(proj, MID_IDEATION);
+    for (const tool of ["kiro", "kiro-ide", "opencode"]) {
+      const parsed = JSON.parse(fire(proj, '{"source":"compact"}', { AIDLC_HARNESS_NAME: tool }).stdout.trim());
+      expect(parsed.additionalContext, tool).toContain(
+        "This tool does not show that line to the person, so if you carry on with the work, first say it to them once, on its own line, and nothing else about it.",
+      );
+      expect(parsed.additionalContext, tool).not.toContain("and say nothing about it.");
+    }
+    for (const tool of ["claude", "codex", "copilot", "cursor"]) {
+      const parsed = JSON.parse(fire(proj, '{"source":"compact"}', { AIDLC_HARNESS_NAME: tool }).stdout.trim());
+      expect(parsed.additionalContext, tool).toContain("and say nothing about it.");
+      expect(parsed.additionalContext, tool).not.toContain("This tool does not show that line to the person");
+    }
   });
 
   test("Claude Code reads the context: each line also carries it under hookSpecificOutput", () => {
@@ -243,7 +290,7 @@ describe("t10 session-start SessionStart hook (mechanism cli — spawned hook + 
     };
     // A workflow in progress: the whole context.
     seedStateFile(proj, MID_IDEATION);
-    expect(context(fire(proj).stdout)).toContain("On BARE /aidlc re-entry");
+    expect(context(fire(proj).stdout)).toContain("A BARE /aidlc re-entry carries on");
     // No workflow yet: the chat's own Runtime Session id.
     const bare = createTestProject();
     try {
@@ -253,6 +300,29 @@ describe("t10 session-start SessionStart hook (mechanism cli — spawned hook + 
     } finally {
       cleanupTestProject(bare);
     }
+  });
+
+  test("work created but not started gets the same carry-on rule, with no menu", () => {
+    // Intent Capture is current and nothing has run: the first call starts it.
+    seedStateFile(proj, join(FIXTURES_DIR, "state-initialization-done.md"));
+    const ctx = JSON.parse(fire(proj).stdout.trim()).additionalContext as string;
+    expect(ctx).toContain("send the first `next` as `next --resume`");
+    expect(ctx).not.toContain("Resume / Redo / Jump / Start Fresh");
+  });
+
+  test("a parked workflow gets the same carry-on rule on a bare re-entry", () => {
+    // A new session on a parked workflow: the first call is `next --resume`,
+    // which clears the park, so the person never has to retype `/aidlc --resume`.
+    seedStateFile(proj, MID_IDEATION);
+    const state = statePath(proj);
+    writeFileSync(state, readFileSync(state, "utf-8").replace(
+      "## Runtime State\n",
+      "## Runtime State\n- **Parked**: 2026-10-03T23:18:27Z\n- **Parked At Stage**: feasibility\n",
+    ));
+    expect(readFileSync(state, "utf-8")).toContain("- **Parked At Stage**: feasibility");
+    const ctx = JSON.parse(fire(proj).stdout.trim()).additionalContext as string;
+    expect(ctx).toContain("send the first `next` as `next --resume`");
+    expect(ctx).toContain("`/aidlc` alone -> `next --resume`");
   });
 
   test("injects the Lifecycle Phase (IDEATION) [.sh test 4]", () => {

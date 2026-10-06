@@ -211,7 +211,7 @@ the turn and wait for the user's response. After they respond, fill the
 confirmation `[Answer]:` with their exact choice, then record the receipt:
 
 ```bash
-{{INVOKE}} engine log answer --stage requirements-analysis --checkpoint summary-confirmation --questions-file "<this questions-file path>" --details "<Looks correct or Request changes>"
+{{INVOKE}} engine log answer --stage requirements-analysis --checkpoint summary-confirmation --questions-file "<this questions-file path>" --details '<Looks correct or Request changes>'
 ```
 
 If the user requests changes and their reply already says what should
@@ -266,9 +266,10 @@ options:
   - label: Add User Stories
     description: Include User Stories stage (currently skipped)
 ```
-Render `[next stage]` verbatim from the run-stage directive's `next_stage`
-field (per the stage-protocol.md approval-gate binding), or `Complete workflow`
-when it is null. Never guess the next stage name.
+Render `[next stage]` verbatim from the `next_stage` field of the reply that
+opened the gate, else the run-stage directive's (per the stage-protocol.md
+approval-gate binding), or `Complete workflow` when it is null. Never guess the
+next stage name.
 If "Add User Stories" is selected, run
 `{{INVOKE}} engine recompose --add user-stories`
 before re-entering the approval flow.

@@ -1,4 +1,4 @@
-// covers: subcommand:aidlc-utility:intent-create, subcommand:aidlc-utility:intent, subcommand:aidlc-utility:space, subcommand:aidlc-utility:space-create, function:createIntent, function:listSpaces, function:listIntents, function:slugify, function:updateIntentStatus, function:migrateFlatLayout, function:leaveCreationReceipt, function:resolveIntentRepoSet, function:discoverSiblingRepos, function:handleIntentLifecycle, function:resolveIntentByName, function:refuseUnlessArchivable, function:auditReason, function:clearActiveIntentCursor, function:isArchivedIntent, function:ARCHIVED_INTENT_STATUS, audit:WORKFLOW_ARCHIVED, audit:WORKFLOW_UNARCHIVED
+// covers: subcommand:aidlc-utility:intent-create, subcommand:aidlc-utility:intent, subcommand:aidlc-utility:space, subcommand:aidlc-utility:space-create, function:createIntent, function:listSpaces, function:listIntents, function:slugify, function:updateIntentStatus, function:migrateFlatLayout, function:leaveCreationReceipt, function:resolveIntentRepoSet, function:discoverSiblingRepos, function:handleIntentLifecycle, function:resolveIntentByName, function:refuseUnlessArchivable, function:auditReason, function:clearActiveIntentCursor, function:isArchivedIntent, function:ARCHIVED_INTENT_STATUS, function:runningWorkflows, audit:WORKFLOW_ARCHIVED, audit:WORKFLOW_UNARCHIVED
 //
 // Mechanism: cli (spawned dist tools) + in-process pure-function asserts.
 // P4 - retire the user-facing --init; the engine auto-creates the first intent
@@ -22,6 +22,7 @@ import {
   mkdtempSync,
   readdirSync,
   readFileSync,
+  renameSync,
   rmSync,
   symlinkSync,
   writeFileSync,
@@ -651,14 +652,13 @@ describe("t164 done-on-completed carries the new-work hint", () => {
 });
 
 // ============================================================
-// The creation directive has TWO tails: a fresh-start creation re-enters the loop in
-// the same session ("re-run `next` to continue"), while a --new-intent creation (a
-// 2nd, unrelated intent alongside an active/completed one) tells the conductor
-// to STOP and hand off to a fresh session so the new intent doesn't inherit the
-// prior intent's context.
+// New work started beside other work carries on in the same chat, like the
+// first piece of work: the creation directive re-enters the loop ("re-run
+// `next` to continue"), and its narration offers a clean chat once, in the
+// host's words, never as a stop.
 // ============================================================
-describe("t164 --new-intent creation directive hands off to a fresh session", () => {
-  test("next --new-intent emits a command-neutral creation print that STOPs for a fresh session", () => {
+describe("t164 --new-intent creation carries on in the same chat", () => {
+  test("next --new-intent emits a creation print that continues, and offers a clean chat once", () => {
     // Seed an active intent so this mirrors the real 'second intent while one is
     // live' path; Branch 4a fires before any continuation branch regardless.
     seedStateFile(proj, join(FIXTURES_DIR, "state-mid-ideation.md"));
@@ -667,18 +667,15 @@ describe("t164 --new-intent creation directive hands off to a fresh session", ()
     expect(d.kind).toBe("print");
     // Names the creation move for the CONFIRMED scope (not the active intent's scope).
     expect(d.message).toContain("intent create --scope bugfix");
-    // The shared engine names the handoff but leaves concrete entry/reset
-    // commands to each harness SKILL.
-    expect(d.message).toContain("STOP");
-    expect(d.message).toContain("fresh session");
-    expect(d.message).toContain("AI-DLC entry skill");
-    expect(d.message).not.toContain("/clear");
-    expect(d.message).not.toContain("run `/aidlc`");
-    expect(d.message).not.toContain("invoke `/aidlc`");
-    expect(d.message).not.toContain("$aidlc");
-    // It must NOT carry the fresh-start continuation tail (that would keep the
-    // new intent in the polluted session).
-    expect(d.message).not.toContain("re-run `next` to continue");
+    expect(d.message).toContain("then re-run `next` to continue");
+    // Never a stop, a restart, or a fresh-session hand-off.
+    for (const stale of ["STOP", "fresh session", "restart", "clean slate", "do NOT re-run"]) {
+      expect(d.message).not.toContain(stale);
+    }
+    // The clean chat is an option, said once, in the host's words.
+    expect(d.narration).toContain("To start this in a clean chat instead, ");
+    expect(d.narration.split("clean chat").length - 1).toBe(1);
+    expect(d.narration).not.toContain("restart");
     // next is read-only: naming the creation move mutates nothing.
     expect(readIntentRegistry(proj).length).toBe(0);
   });
@@ -1066,6 +1063,33 @@ describe("t165 intent archive / unarchive (issue #980)", () => {
     return { a, b };
   }
 
+  test("status names other open work and how to switch to it", () => {
+    const { a, b } = createTwo();
+    const status = util(["status"]).stdout;
+    expect(status).toContain(`Also open:      ${a} (type \`/aidlc intent ${a}\` to switch)\n`);
+    expect(status).not.toContain(`Also open:      ${b}`);
+    // Archived work is not open.
+    expect(util(["intent", "archive", a]).status).toBe(0);
+    expect(util(["status"]).stdout).not.toContain("Also open:");
+  });
+
+  test("status leaves out work its state file says is finished, and a record named outside the record-name shape", () => {
+    const { a } = createTwo();
+    const stateA = join(recordPath(a), "aidlc-state.md");
+    const running = readFileSync(stateA, "utf-8");
+    writeFileSync(stateA, running.replace(/^- \*\*Status\*\*: .*$/m, "- **Status**: Completed"));
+    expect(registryStatus(a)).toBe("in-flight");
+    expect(util(["status"]).stdout).not.toContain("Also open:");
+    writeFileSync(stateA, running);
+    const odd = "odd`name";
+    renameSync(recordPath(a), recordPath(odd));
+    const rows = readIntentRegistry(proj).map((row) => (row.dirName === a ? { ...row, dirName: odd } : row));
+    writeFileSync(join(intentsDir(proj), "intents.json"), `${JSON.stringify(rows, null, 2)}\n`);
+    const shown = util(["status"]).stdout;
+    expect(shown).not.toContain("Also open:");
+    expect(shown).not.toContain(odd);
+  });
+
   test("archiving the active intent flips registry + state, audits into its own shard, and clears the cursor", () => {
     const { a, b } = createTwo();
     const r = util(["intent", "archive", b, "--reason", "superseded by a broader design"]);
@@ -1270,6 +1294,46 @@ describe("t165 intent archive / unarchive (issue #980)", () => {
       content.split("\n").filter((line) => line !== "" && !line.startsWith("- **Last Updated**")).join("\n");
     expect(routed(readFileSync(statePath, "utf-8"))).toBe(routed(before));
     expect(util(["intent"]).stdout).toContain(`${a}  [complete]`);
+  });
+
+  test("archive and unarchive name the command the person types on this harness", () => {
+    const { a, b } = createTwo();
+    // Codex's entry is $aidlc; the tree a tool runs from names it.
+    const codexUtil = join(REPO_ROOT, "dist", "codex", ".codex", "tools", "aidlc-utility.ts");
+    const codex = (args: string[]): Run => {
+      const env = { ...process.env };
+      delete env.AWS_AIDLC_DEFAULT_SCOPE;
+      delete env.AIDLC_HARNESS_DIR;
+      const r = Bun.spawnSync({ cmd: [BUN, codexUtil, ...args, "--project-dir", proj], stdout: "pipe", stderr: "pipe", env });
+      const stdout = r.stdout.toString();
+      return { status: r.exitCode, stdout, out: `${stdout}${r.stderr.toString()}` };
+    };
+    const archived = codex(["intent", "archive", a]);
+    expect(archived.status, archived.out).toBe(0);
+    expect(archived.stdout).toContain(`$aidlc intent list --all shows it and $aidlc intent unarchive ${a} brings it back.`);
+    // Refusals while it is archived name it too.
+    const codexWorktree = join(REPO_ROOT, "dist", "codex", ".codex", "tools", "aidlc-worktree.ts");
+    const merge = Bun.spawnSync({
+      cmd: [BUN, codexWorktree, "merge", "--slug", "auth-service", "--target", "main", "--strategy", "squash", "--intent", a, "--project-dir", proj],
+      stdout: "pipe",
+      stderr: "pipe",
+      env: Object.fromEntries(Object.entries(process.env).filter(([key]) => key !== "AIDLC_HARNESS_DIR")),
+    });
+    expect(merge.exitCode).not.toBe(0);
+    expect(`${merge.stdout}${merge.stderr}`).toContain(`Bring it back first with \`$aidlc intent unarchive ${a}\`.`);
+    expect(codex(["intent"]).stdout).toContain("archived intent hidden - $aidlc intent list --all shows them");
+    const back = codex(["intent", "unarchive", a]);
+    expect(back.status, back.out).toBe(0);
+    expect(back.stdout).toContain(`Switch to it with $aidlc intent ${a}.`);
+    expect(codex(["intent", "nope"]).out).toContain("run $aidlc intent list --all to see them");
+    for (const r of [archived, back]) expect(r.out).not.toContain("/aidlc ");
+    // Help and the space replies name it too.
+    const help = codex(["help"]).stdout;
+    expect(help).toContain("Usage: $aidlc [command]");
+    expect(help).not.toMatch(/^\s*\/aidlc /m);
+    expect(codex(["space-create", "help"]).out).toContain("Did you mean $aidlc --help?");
+    // The Claude tree still names /aidlc.
+    expect(util(["intent", "archive", b]).stdout).toContain(`/aidlc intent unarchive ${b} brings it back.`);
   });
 
   test("archiving an intent with Bolt worktrees keeps them on disk, names them, and unarchive brings them back", () => {

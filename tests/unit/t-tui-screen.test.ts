@@ -9,7 +9,7 @@ import {
   type TuiScreen,
   type TuiSnapshot,
 } from "../harness/tui-screen.ts";
-import { gridHasMenu, matchTuiPattern } from "../harness/tui-drive.ts";
+import { gridHasMenu, gridIsApprovalGate, matchTuiPattern } from "../harness/tui-drive.ts";
 import { completedClaudeTurnPattern } from "../harness/tui-fixtures.ts";
 
 const screens: TuiScreen[] = [];
@@ -60,6 +60,36 @@ function expectPreflightFrame(snapshot: TuiSnapshot, partition: string): void {
 
 afterEach(() => {
   for (const target of screens.splice(0)) target.dispose();
+});
+
+describe("menus a Windows repaint left rule cells in", () => {
+  // From a live Windows run: the approval gate's rows carried a rule's cells,
+  // even where the space after "1." belongs, and the driver saw no menu.
+  const garbled = [
+    "─".repeat(120),
+    " ☐ Approval",
+    "",
+    `Schema Snapshot complete. How would you like to proceed?${"─".repeat(64)}`,
+    "",
+    `❯ 1.─Approve${"─".repeat(108)}`,
+    "     Continue to Migration Plan",
+    "  2. Request Changes",
+    "     Provide revision feedback",
+    "  3. Type something.",
+    "─".repeat(120),
+    "  4. Chat about this",
+    "",
+    "Enter to select · ↑/↓ to navigate · Esc to cancel",
+  ].join("\n");
+
+  test("read as the menu they show", () => {
+    expect(gridHasMenu(garbled)).toBe(true);
+    expect(gridIsApprovalGate(garbled)).toBe(true);
+  });
+
+  test("a row that is only a rule is still no menu", () => {
+    expect(gridHasMenu(["─".repeat(120), "Enter to select · ↑/↓ to navigate · Esc to cancel"].join("\n"))).toBe(false);
+  });
 });
 
 describe("native TUI screen transcripts", () => {

@@ -12,12 +12,19 @@ export type GuardRecoveryOperation =
   | { kind: "lower-fence"; fence: SwitchableGuardFence }
   // Records the Unit's missing UNIT_COMPLETED receipt from artifacts already on
   // disk; the state tool checks them and the open ask before it writes.
-  | { kind: "record-unit-completion"; stage: string; unit: string };
+  | { kind: "record-unit-completion"; stage: string; unit: string }
+  // Starts one Unit's step of a solo unit-major walk again: a new attempt for
+  // that Unit and stage only, the record a Unit checkpoint's Request Changes
+  // writes. Every other Unit keeps its finished work.
+  | { kind: "reopen-unit"; stage: string; unit: string }
+  // Sets this work's reviews to advisory, so the reviewer's open findings go to
+  // the approval gate for the person instead of another review pass.
+  | { kind: "review-advisory" };
 
 export type GuardRecoveryInteraction = "command" | "human-input" | "external-work";
 
 export interface GuardOperationInvocation extends EngineInvocation {
-  route: "orchestrate" | "bolt" | "config" | "state";
+  route: "orchestrate" | "bolt" | "config" | "state" | "jump";
   args: string[];
   // Source installs run bun <harness>/tools/aidlc-<route>.ts <args>, so route is
   // also the tool stem. The fence switch breaks that: its native route is config
@@ -63,7 +70,8 @@ export function isGuardRecoveryOperation(value: unknown): value is GuardRecovery
   if (operation.kind === "lower-fence") {
     return Object.keys(operation).length === 2 && isSwitchableGuardFence(operation.fence);
   }
-  if (operation.kind === "record-unit-completion") {
+  if (operation.kind === "review-advisory") return Object.keys(operation).length === 1;
+  if (operation.kind === "record-unit-completion" || operation.kind === "reopen-unit") {
     return Object.keys(operation).length === 3 &&
       identifier(operation.stage) && identifier(operation.unit);
   }
@@ -97,6 +105,17 @@ export function guardOperationInvocation(operation: GuardRecoveryOperation): Gua
       return {
         route: "state",
         args: ["unit", "complete", "--stage", operation.stage, "--unit", operation.unit],
+      };
+    case "reopen-unit":
+      return {
+        route: "jump",
+        args: ["reopen", "--target", operation.stage, "--units", operation.unit],
+      };
+    case "review-advisory":
+      return {
+        route: "config",
+        args: ["set", "review", "advisory"],
+        source: { route: "utility", args: ["config-change", "--review", "advisory"] },
       };
   }
 }
@@ -171,6 +190,11 @@ export function guardOperationMatchesRemedy(
     case "record-unit-completion":
       return remedy === "record-unit-completion" && operation.stage === stage &&
         operation.unit === unit;
+    case "reopen-unit":
+      return remedy === "reopen-unit-step" && operation.stage === stage &&
+        operation.unit === unit;
+    case "review-advisory":
+      return remedy === "review-advisory-gate";
   }
 }
 
@@ -187,8 +211,11 @@ export function sameGuardOperation(left: unknown, right: unknown): boolean {
     case "lower-fence":
       return left.fence === (right as typeof left).fence;
     case "record-unit-completion":
+    case "reopen-unit":
       return left.stage === (right as typeof left).stage &&
         left.unit === (right as typeof left).unit;
+    case "review-advisory":
+      return true;
   }
 }
 

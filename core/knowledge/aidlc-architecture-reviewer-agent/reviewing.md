@@ -67,7 +67,9 @@ applies`. Never write or repeat
 `Accepted risk`, `Rejected`, or any other person's decision. New findings have
 no ID or status. `Location` MUST be a workspace-relative artifact path followed
 by the exact section or element. `Required action` MUST state concrete work in
-plain language. Keep both table headers and separator rows even when they have
+plain language. Write `Finding` and `Required action` in the project's terms,
+as the person reads them at the gate: what is wrong in the artifact and what to
+change, never which stage rule, contract, or protocol step it breaks. Keep both table headers and separator rows even when they have
 no rows. A placeholder row is refused, and a NOT-READY review needs at least
 one reported row.
 
@@ -85,7 +87,7 @@ Use this exact format:
 
 **Verdict:** READY | NOT-READY
 **Reviewer:** aidlc-architecture-reviewer-agent
-**Date:** [ISO timestamp from Bash]
+**Date:** [the UTC time `{{INVOKE}} engine now` prints]
 **Iteration:** [1, 2, etc.]
 
 ### Findings
@@ -115,7 +117,7 @@ Use this exact format:
 [1-2 sentences: what's the main architectural concern, or why it's ready.]
 ```
 
-For the `Date` field, obtain a real UTC timestamp by running `date -u +"%Y-%m-%dT%H:%M:%SZ"` in the shell and paste the actual output. Never guess or infer the date.
+For the `Date` field, run `{{INVOKE}} engine now` and paste the time it prints. Never guess or infer the date.
 
 ### Severity Levels
 

@@ -183,6 +183,35 @@ describe("t330 release version-id grammar", () => {
     expect(utcBuildDate(new Date("2026-09-03T23:59:59-05:00"))).toBe("20260904");
   });
 
+  test("version identifiers reject oversized and unsafe numeric components", () => {
+    const maximum = String(Number.MAX_SAFE_INTEGER);
+    const largest = `${maximum}.${maximum}.${maximum}-preview.20260903.${maximum}`;
+    expect(requireVersion(largest)).toBe(largest);
+    expect(parseVersion(largest)).toMatchObject({
+      major: Number.MAX_SAFE_INTEGER,
+      minor: Number.MAX_SAFE_INTEGER,
+      patch: Number.MAX_SAFE_INTEGER,
+      build: Number.MAX_SAFE_INTEGER,
+    });
+    for (const value of [
+      `${"9".repeat(512 * 1024)}.0.0`,
+      "9007199254740992.0.0",
+      "0.9007199254740992.0",
+      "0.0.9007199254740992",
+      "0.0.0-preview.20260903.9007199254740992",
+    ]) {
+      let error: unknown;
+      try {
+        requireVersion(value);
+      } catch (caught) {
+        error = caught;
+      }
+      expect(error instanceof Error).toBe(true);
+      expect(String(error).length).toBeLessThan(200);
+      expect(() => parseVersion(value)).toThrow("invalid version");
+    }
+  });
+
   test("ordering is numeric on the base, then stable above its previews, then build date and counter", () => {
     const ordered = [
       "2.7.1",

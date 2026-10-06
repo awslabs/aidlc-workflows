@@ -73,12 +73,14 @@ import {
   type ClaudeCodeHookInput,
   composerProposalPath,
   docsRoot,
+  ANSWER_TEXT_DIR,
   errorMessage,
   getField,
   GUARD_RECOVERY_ASK_TYPE,
   guardRecoveryAnswerAdmits,
   guardRecoveryRecordWorkOpen,
   PLAN_APPROVAL_ASK_TYPE,
+  guardStandAsideSpeaks,
   guardStoodAsideLine,
   harnessDir,
   normalizeDriveLetter,
@@ -91,8 +93,14 @@ import {
   loadStageGraph,
   parseCheckboxes,
   parseStateStageSuffixes,
+  personAskedSinceGate,
+  personCheckSwitchAllowed,
   personSpokeSinceGate,
   readActiveDirectiveMarker,
+  readAuditShardEvents,
+  REVIEW_RECORDS_DIR,
+  reviewerDispatchPath,
+  spacesRoot,
   activeDirectiveOutOfDateReason,
   recordHookDrop,
   releaseAuditLock,
@@ -525,16 +533,17 @@ export function receiptDetail(
   return null;
 }
 
+// The refused path or command can come from the workspace, so it stays out of
+// the refusal: the agent knows what it tried, and the way on is the same.
 export function mutationBlockReason(
-  target: string,
   unit: string | null,
   opaqueShell = false,
   detail: string | null = null,
 ): string {
   const scope = unit === null ? "the zero-Unit stage-level implementation" : `unit ${unit}`;
   const action = opaqueShell
-    ? `run mutation-capable ${target}`
-    : `modify workspace path "${target}"`;
+    ? "run mutation-capable shell commands"
+    : "modify workspace paths";
   return (
     `Code generation cannot ${action} for ${scope} because ` +
     `the plan, unit-test instructions, and current Testing Contract do not have a current ` +
@@ -592,11 +601,9 @@ function authorityRemedy(
       return "The person is editing the plan files themselves: leave those files to them. When they say " +
         `they are done, run ${nextOnItsOwn()}, and follow the step it prints.`;
     }
-    return (
-      "The plan is waiting for the person to approve it. Show them the question from the last `next`, end " +
-      `the turn, and after they answer, run ${nextOnItsOwn()}. Nothing is built or changed until then, and ` +
-      "the plan files stay as the person sees them."
-    );
+    // Some hosts show this refusal to the person as written, so it is only their
+    // sentence; the agent's steps for it are in the skill's refusal clause.
+    return "Nothing is built or changed while the plan waits for your approval.";
   }
   const stands = standing === null
     ? ""
@@ -791,11 +798,118 @@ function isTrustedRecordTarget(
   }
 }
 
+// The asked plans' own plan files the person's reply opened, loaded only while
+// the engine's Plan Approval question is open. Nothing is open when that module
+// cannot be read, so the write is refused as before.
+function planApprovalReplyEditableFiles(projectDir: string): string[] {
+  try {
+    return (require("../tools/aidlc-plan-approval-ask.ts") as typeof import("../tools/aidlc-plan-approval-ask.ts"))
+      .planApprovalReplyEditableFiles(projectDir);
+  } catch {
+    return [];
+  }
+}
+
+// While the engine's Plan Approval question is open and the person has replied,
+// a file-tool write of exactly one of the asked plans' own plan or test
+// instructions (planApprovalReplyEditableFiles), reached through no symlink and
+// not hard-linked to another file, carries out what they asked with their
+// answer. The approval they give then covers the plan as it stands.
+function isRepliedPlanFileTarget(projectDir: string, target: string, editable: string[]): boolean {
+  try {
+    const projectLexical = resolve(projectDir);
+    const targetAbs = resolve(target);
+    if (!editable.some((file) => normalizeDriveLetter(resolve(file)) === normalizeDriveLetter(targetAbs))) return false;
+    assertNoSymlinkInChainOrThrow(realpathSync(projectLexical), relative(projectLexical, targetAbs));
+    const existing = lstatSync(targetAbs, { throwIfNoEntry: false });
+    return existing === undefined || (existing.isFile() && existing.nlink === 1);
+  } catch {
+    return false;
+  }
+}
+
+// A review the person asked for while the plan waits writes only its open
+// request's own review file (the Review File of a REVIEW_REQUESTED with no
+// REVIEW_COMPLETED for its request id yet) and, while one is open, the reviewer
+// dispatch record beside it. Nothing is open when the trail cannot be read.
+function openReviewRequestFiles(projectDir: string): string[] {
+  try {
+    const record = docsRoot(projectDir);
+    const open = new Map<string, string>();
+    for (const row of readAuditShardEvents(projectDir)) {
+      const id = auditBlockField(row.block, "Request Id");
+      if (id === null) continue;
+      if (row.event === "REVIEW_COMPLETED") open.delete(id);
+      if (row.event !== "REVIEW_REQUESTED") continue;
+      // Audit rows are project text: only a slot inside the record's reviews
+      // folder, as `log review` writes it, counts.
+      const file = auditBlockField(row.block, "Review File");
+      const slot = file === null ? null : resolve(record, file);
+      const reviews = resolve(record, REVIEW_RECORDS_DIR);
+      if (slot !== null && !isAbsolute(file as string) && slot.startsWith(`${reviews}${sep}`)) open.set(id, slot);
+    }
+    return open.size === 0 ? [] : [...open.values(), resolve(reviewerDispatchPath(projectDir))];
+  } catch {
+    return [];
+  }
+}
+
+// One of those files exactly, reached through no symlink and not hard-linked
+// to another file.
+function isOpenReviewTarget(projectDir: string, target: string, files: string[]): boolean {
+  try {
+    const projectLexical = resolve(projectDir);
+    const targetAbs = resolve(target);
+    if (!files.some((file) => normalizeDriveLetter(file) === normalizeDriveLetter(targetAbs))) return false;
+    assertNoSymlinkInChainOrThrow(realpathSync(projectLexical), relative(projectLexical, targetAbs));
+    const existing = lstatSync(targetAbs, { throwIfNoEntry: false });
+    return existing === undefined || (existing.isFile() && existing.nlink === 1);
+  } catch {
+    return false;
+  }
+}
+
 // The composer's grid proposal (composerProposalPath) is engine scratch that
 // only validate-grid reads: not source, not a plan file, and nothing reads an
 // approval from it. A composition requested while Code Generation is current
 // writes it before its own approval gate. Exactly that file, reached through no
 // symlink and not hard-linked to another file, is exempt.
+// A stage's own record output inside AI-DLC's records (`aidlc/spaces`): reached
+// through no symlink, not hard-linked to another file, and not the work's state,
+// audit trail or engine control files, which only the engine writes.
+function isStageRecordOutput(projectDir: string, target: string): boolean {
+  try {
+    const projectLexical = resolve(projectDir);
+    const targetAbs = resolve(target);
+    const inside = relative(resolve(spacesRoot(projectDir)), targetAbs);
+    if (inside === "" || inside.startsWith("..") || isAbsolute(inside)) return false;
+    const segments = inside.split(/[\\/]/);
+    if (
+      basename(targetAbs) === "aidlc-state.md" || basename(targetAbs) === "intents.json" ||
+      segments.includes(".aidlc-engine") || segments.includes("audit")
+    ) return false;
+    assertNoSymlinkInChainOrThrow(realpathSync(projectLexical), relative(projectLexical, targetAbs));
+    const existing = lstatSync(targetAbs, { throwIfNoEntry: false });
+    return existing === undefined || (existing.isFile() && existing.nlink === 1);
+  } catch {
+    return false;
+  }
+}
+
+// The record folder where the agent writes a person's answer text for
+// `log answer --details-file`: a plain file inside the work's own record,
+// reached through no link. Writing it changes nothing and builds nothing.
+function isAnswerTextTarget(projectDir: string, target: string): boolean {
+  try {
+    const record = docsRoot(projectDir);
+    if (!record || !isTrustedRecordTarget(projectDir, target, join(record, ANSWER_TEXT_DIR))) return false;
+    const existing = lstatSync(resolve(target), { throwIfNoEntry: false });
+    return existing === undefined || (existing.isFile() && existing.nlink === 1);
+  } catch {
+    return false;
+  }
+}
+
 function isComposerProposalTarget(projectDir: string, target: string): boolean {
   try {
     const projectLexical = resolve(projectDir);
@@ -840,6 +954,8 @@ function lastFlagValue(args: string[], flag: string): string | null {
 function isReadOnlyDiagnostic(args: readonly string[]): boolean {
   const [head = "", ...rest] = args;
   if (["status", "--status", "version", "--version", "help", "--help"].includes(head)) return true;
+  // The engine's clock, for a time a document asks for.
+  if (head === "engine" && rest.length === 1 && rest[0] === "now") return true;
   if (head !== "doctor" && head !== "--doctor") return false;
   return !rest.some((arg) =>
     arg === "--export" || arg === "--output" ||
@@ -879,7 +995,19 @@ function recordedSwitchChangeAdmitted(projectDir: string, args: readonly string[
       return false;
     }
   }
-  return changes && (!lowers || (process.env.AIDLC_UNATTENDED !== "1" && personSpokeSinceGate(projectDir)));
+  return changes && (!lowers || personAskedSinceGate(projectDir));
+}
+
+// A check for this piece of work turned off or back on with `engine config set`,
+// and nothing else. Turning one on, or raising Guard Policy, only adds a stop,
+// so it never waits. Turning one off is the person's call, so while a plan
+// waits it passes once they have asked in the chat since the last decision:
+// the setter then records it with their words and says how to undo it. Plan
+// approval itself is admitted beside the other plan-wait prerequisites.
+function chatSwitchChangeAdmitted(projectDir: string, args: readonly string[]): boolean {
+  if (args.length !== 5 || args[0] !== "engine" || args[1] !== "config" || args[2] !== "set") return false;
+  if (args[3] === "plan-approval" || args[3] === "guard.plan-approval") return false;
+  return personCheckSwitchAllowed(projectDir, args[3], args[4]);
 }
 
 // How a shell command line is read. Every harness keeps the POSIX reading
@@ -911,6 +1039,9 @@ const POWERSHELL_NULL_REDIRECT = /^(?:[1-6*]?>>?[ ]*\$null|[2-6*]>&1)(?=[ ;|]|$)
 // hands a native program differently than written: it splits a bare -x.y at
 // the dot, drops empty arguments, and does not escape embedded quotes or a
 // trailing backslash. The rendering is the same commands as POSIX words.
+// It is not the write-target reader: readPowerShell in
+// review-freeze-command.ts reads every line for what it may write, while
+// this reading admits only lines it can render exactly.
 function plainPowerShell(
   command: string,
 ): { commands: string[][]; rendering: string } | null {
@@ -1082,7 +1213,8 @@ function isNativePlanApprovalPrerequisite(
 // aidlc-utility.ts), which the unified entry point dispatches to.
 function isReadOnlyToolDiagnostic(stem: string, args: readonly string[]): boolean {
   if (stem === "doctor") return args[0] === "doctor" && isReadOnlyDiagnostic(args);
-  return stem === "utility" && (args[0] === "status" || args[0] === "version");
+  return stem === "utility" &&
+    (args[0] === "status" || args[0] === "version" || (args[0] === "now" && args.length === 1));
 }
 
 // Construction entry choices the person makes before the first Unit's plan
@@ -1104,7 +1236,118 @@ function codeGenerationGateHeld(state: string): boolean {
     );
 }
 
-function isPlanApprovalPrerequisite(args: string[], gateHeld = false): boolean {
+// What the engine names while a plan waits, other than building it: steps that
+// change nothing a plan governs, admitted at any time, and moves a person asks
+// for (`asked`), admitted once a person has spoken since the last decision.
+// Each is matched on `engine <noun> <verb>`; `admits` checks what follows the
+// noun. Code stays held for the approved plan either way.
+interface EngineDirectedRoute {
+  noun: string;
+  verbs?: readonly string[];
+  asked?: true;
+  admits?: (afterNoun: readonly string[]) => boolean;
+}
+
+// Only these flags, each with its value.
+function onlyFlags(args: readonly string[], allowed: readonly string[]): boolean {
+  for (let i = 0; i < args.length; i++) {
+    const [flag, inline] = args[i].split("=", 2);
+    if (!allowed.includes(flag)) return false;
+    if (inline === undefined) i++;
+  }
+  return true;
+}
+
+// The settings a scope or setting change the person asked for may carry. Guard
+// Policy, plan approval and the person's checks keep their own switch rules.
+const PLAN_WAIT_SETTINGS = ["depth", "test-strategy", "review", "sensors", "learnings", "collaborators"] as const;
+const PLAN_WAIT_SETTING_FLAGS = PLAN_WAIT_SETTINGS.map((setting) => `--${setting}`);
+
+const ENGINE_DIRECTED_WHILE_PLAN_WAITS: readonly EngineDirectedRoute[] = [
+  // The review brief and the stage's own question rows (a checkpoint row keeps
+  // its own rule).
+  { noun: "review-brief", verbs: ["review", "context", "summary"] },
+  {
+    noun: "log", verbs: ["decision", "answer"],
+    admits: (afterNoun) =>
+      lastFlagValue(afterNoun.slice(1), "--stage") === GUARDED_STAGE &&
+      !afterNoun.some((arg) => arg === "--checkpoint" || arg.startsWith("--checkpoint=")),
+  },
+  // Status and help as the engine prints them.
+  { noun: "status" },
+  { noun: "orchestrate", verbs: ["help"] },
+  // The resume menu's choice: it only names the move, which is judged itself.
+  {
+    noun: "orchestrate", verbs: ["report"],
+    admits: (afterNoun) =>
+      lastFlagValue(afterNoun.slice(1), "--result") === "resumed" && !afterNoun.includes("--stage"),
+  },
+  // Moves the person asked for: a jump, a skip or add, new work, what the
+  // folder is, and the scan that follows it.
+  { noun: "jump", verbs: ["execute", "reopen"], asked: true },
+  { noun: "recompose", asked: true, admits: (afterNoun) => onlyFlags(afterNoun, ["--skip", "--add", "--reason"]) },
+  // A scope or setting change, which keeps the plan's question open.
+  {
+    noun: "scope", verbs: ["change"], asked: true,
+    admits: (afterNoun) => onlyFlags(afterNoun.slice(1), ["--scope", ...PLAN_WAIT_SETTING_FLAGS]),
+  },
+  {
+    noun: "config", verbs: ["set"], asked: true,
+    admits: (afterNoun) =>
+      (PLAN_WAIT_SETTINGS as readonly string[]).includes(afterNoun[1] ?? "") && afterNoun[2] !== undefined &&
+      onlyFlags(afterNoun.slice(3), PLAN_WAIT_SETTING_FLAGS),
+  },
+  { noun: "intent", verbs: ["create"], asked: true },
+  { noun: "workspace", verbs: ["reclassify", "codekb-scope-diff"], asked: true },
+  // A review the person asks for: its request and its verdict.
+  { noun: "log", verbs: ["review"], asked: true },
+];
+
+function engineDirectedWhilePlanWaits(args: readonly string[], personAsked: () => boolean): boolean {
+  if (args[0] !== "engine") return false;
+  const [noun, verb] = [args[1], args[2]];
+  return ENGINE_DIRECTED_WHILE_PLAN_WAITS.some((route) =>
+    route.noun === noun &&
+    (route.verbs === undefined || route.verbs.includes(verb ?? "")) &&
+    (route.admits === undefined || route.admits(args.slice(2))) &&
+    (route.asked !== true || personAsked()));
+}
+
+// The engine's last step is current and was delivered as issued, and it is not
+// its recovery question, whose own picked remedy is the one move it carries out
+// (guardRecoveryAnswerAdmits). A step gone stale or superseded since names
+// nothing the person's earlier words still ask for: `next` names the step now.
+function lastStepAdmitsPersonsMoves(projectDir: string): boolean {
+  try {
+    const marker = readActiveDirectiveMarker(projectDir, readFileSync(stateFilePath(projectDir), "utf-8"));
+    return marker !== null && marker.delivery !== "superseded" &&
+      !(marker.kind === "ask" && marker.ask_type === GUARD_RECOVERY_ASK_TYPE);
+  } catch {
+    return false;
+  }
+}
+
+// Everything admitted while a plan waits, in one place: the prerequisites
+// below, the open question's own answers, read-only diagnostics, a recorded
+// switch, and what the engine names.
+function planWaitAdmits(
+  projectDir: string,
+  engineArgs: string[],
+  gateHeld: boolean,
+  askAdmits: (engineArgs: readonly string[]) => boolean,
+): boolean {
+  const personSpoke = () => personSpokeSinceGate(projectDir, { requests: true });
+  return isPlanApprovalPrerequisite(engineArgs, gateHeld, personSpoke) ||
+    askAdmits(engineArgs) || isReadOnlyDiagnostic(engineArgs) || recordedSwitchChangeAdmitted(projectDir, engineArgs) ||
+    chatSwitchChangeAdmitted(projectDir, engineArgs) ||
+    engineDirectedWhilePlanWaits(engineArgs, () => personSpoke() && lastStepAdmitsPersonsMoves(projectDir));
+}
+
+function isPlanApprovalPrerequisite(
+  args: string[],
+  gateHeld = false,
+  personSpoke: () => boolean = () => false,
+): boolean {
   if (args[0] !== "engine") return false;
   // Direct refusals can offer the abort or the fence switch without publishing
   // a selection marker. The strict drift ask in this hook prints
@@ -1182,12 +1425,19 @@ function isPlanApprovalPrerequisite(args: string[], gateHeld = false): boolean {
   }
   if (noun === "state" && CONSTRUCTION_ENTRY_SETTERS.has(verb)) return true;
   if (noun === "bolt" && verb === "set-autonomy") return true;
-  // Turning plan approval on only adds the stop, so the person can ask for it
-  // while a plan waits. Turning it off stays the person's own typed turn.
+  // Plan approval on or off for this piece of work is the person's call, said
+  // in their own words. On only adds the stop; off is carried out when a person
+  // has spoken since the last decision, so the conductor runs what they asked.
   if (
     noun === "config" && verb === "set" && args.length === 5 &&
-    ["plan-approval", "guard.plan-approval"].includes(args[3] ?? "") && args[4] === "on"
+    ["plan-approval", "guard.plan-approval"].includes(args[3] ?? "") &&
+    (args[4] === "on" || (args[4] === "off" && personSpoke()))
   ) {
+    return true;
+  }
+  // Recording the remedy the person picked on the engine's recovery question
+  // writes nothing in the workspace; the picked remedy is admitted after it.
+  if (noun === "log" && verb === "answer" && lastFlagValue(args.slice(3), "--checkpoint") === "guard-recovery") {
     return true;
   }
   // The walking-skeleton stance is the same kind of entry choice, recorded
@@ -1301,9 +1551,7 @@ function isFrameworkToolInvocation(
   enginePaths = false,
   askAdmits: (engineArgs: readonly string[]) => boolean = () => false,
 ): boolean {
-  const admitted = (engineArgs: string[]): boolean =>
-    isPlanApprovalPrerequisite(engineArgs, gateHeld) || askAdmits(engineArgs) ||
-    isReadOnlyDiagnostic(engineArgs) || recordedSwitchChangeAdmitted(projectDir, engineArgs);
+  const admitted = (engineArgs: string[]): boolean => planWaitAdmits(projectDir, engineArgs, gateHeld, askAdmits);
   if (isNativePlanApprovalPrerequisite(name, args, admitted, enginePaths)) {
     // A wrapper (env -C, sudo -D, xargs) can run it against another directory
     // than the one these admissions were judged for.
@@ -1445,9 +1693,7 @@ function shellInvocationNeedsApproval(
   const executable = invocation.executable ?? invocation.name;
   const unwrapped = (invocation.launchers?.length ?? 0) === 0 &&
     !invocation.dataDriven && !invocation.executableResolutionChanged;
-  const admitted = (engineArgs: string[]): boolean =>
-    isPlanApprovalPrerequisite(engineArgs, gateHeld) || askAdmits(engineArgs) ||
-    isReadOnlyDiagnostic(engineArgs) || recordedSwitchChangeAdmitted(projectDir, engineArgs);
+  const admitted = (engineArgs: string[]): boolean => planWaitAdmits(projectDir, engineArgs, gateHeld, askAdmits);
   if (
     dialect.pathsAsWritten && /[\\/]/.test(executable) &&
     !isNativePlanApprovalPrerequisite(executable, invocation.args, admitted, true)
@@ -1833,6 +2079,17 @@ async function evaluate(
     return 2;
   }
 
+  const projectDir = resolveProjectDirFromHook(import.meta.url);
+
+  // The heartbeat says the host ran this hook, so it comes before the off
+  // switch: a fence switched off never looks like a host running no hooks.
+  try {
+    const healthDir = hooksHealthDir(projectDir);
+    writeHookStatusFile(healthDir, `${HOOK_NAME}.last`, isoTimestamp());
+  } catch {
+    // Heartbeat failure is non-fatal - never let it affect the decision.
+  }
+
   // Deterministic off-switch: the Plan Approval fence is disabled, recorded once.
   if (resolveProjectFlag("AIDLC_DISABLE_PLAN_APPROVAL_GUARD") === "1") {
     try {
@@ -1841,15 +2098,6 @@ async function evaluate(
       // Fail-open: disabled fence bookkeeping does not refuse the call.
     }
     return 0;
-  }
-
-  const projectDir = resolveProjectDirFromHook(import.meta.url);
-
-  try {
-    const healthDir = hooksHealthDir(projectDir);
-    writeHookStatusFile(healthDir, `${HOOK_NAME}.last`, isoTimestamp());
-  } catch {
-    // Heartbeat failure is non-fatal - never let it affect the decision.
   }
 
   // A TTY means no harness JSON is coming (test / debug contexts) - allow.
@@ -1885,20 +2133,25 @@ async function evaluate(
   // hands over may be built: before that, the `brief` it would name refuses too.
   let handoffDefect: HandoffDefect | null = null;
   let rulesArriving: string | null = null;
+  // Plain sentences: some hosts (Codex) show a hook's refusal to the person as
+  // it is written. A path or command the reason quotes stays on the one line.
+  // biome-ignore lint/suspicious/noControlCharactersInRegex: replacing them is the point
+  const oneLine = (text: string): string => text.replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]+/g, " ");
   const refuseProvenanceFailure = (reason: string): number => {
     recordHookDrop(projectDir, HOOK_NAME, reason);
-    process.stderr.write(`${JSON.stringify({
-      error: `Code Generation source provenance could not be committed. ${reason} Repair the source or runtime/audit write problem and retry; the plan-approval setting is unchanged.`,
-      code: "CODE_GENERATION_PROVENANCE_UNAVAILABLE",
-    })}\n`);
+    process.stderr.write(
+      `Code Generation source provenance could not be committed. ${oneLine(reason)} Repair the source or runtime/audit write problem and retry; the plan-approval setting is unchanged.\n`,
+    );
     return 2;
   };
   // `lead` false: the reason is already a whole refusal that says what cannot happen.
-  const refuseExecutionIneligible = (reason: string, lead = true): number => {
-    process.stderr.write(`${JSON.stringify({
-      error: `${lead ? "Code Generation cannot start: " : ""}${reason.trim().replace(/\.*$/, ".")} The plan-approval setting is unchanged.`,
-      code: "CODE_GENERATION_EXECUTION_INELIGIBLE",
-    })}\n`);
+  // `settingNote` false: a question waiting on the person, where the setting is not in play.
+  const refuseExecutionIneligible = (reason: string, lead = true, settingNote = true): number => {
+    process.stderr.write(
+      `${lead ? "Code Generation cannot start: " : ""}${oneLine(reason).trim().replace(/\.*$/, ".")}${
+        settingNote ? " The plan-approval setting is unchanged." : ""
+      }\n`,
+    );
     return 2;
   };
   let blockedMutation: {
@@ -1926,6 +2179,13 @@ async function evaluate(
       promptUnitMarkers(dispatchPrompt).length > 0 ||
       promptStageMarkers(dispatchPrompt).length > 0 ||
       promptTestingContractMarkers(dispatchPrompt).length > 0;
+    // A run of another stage on its own while Code Generation is current (the
+    // Reverse Engineering a person asked for once the folder turned out to hold
+    // existing code): its steps and its writes inside AI-DLC's own folder are
+    // that stage's work; a write to the workspace source still waits for the
+    // approved plan.
+    const otherStageRunning = activeDirective?.version === 2 && activeDirective.kind === "run-stage" &&
+      directiveStage !== "" && directiveStage !== GUARDED_STAGE;
     const codeGenerationRelevant =
       directiveStage === GUARDED_STAGE ||
       durableStage === GUARDED_STAGE ||
@@ -1949,6 +2209,12 @@ async function evaluate(
     if (!guardedDispatch && mutation.targets.length === 0 && !mutation.opaqueShell) {
       return 0;
     }
+    if (
+      otherStageRunning && directiveStage !== GUARDED_STAGE && !guardedDispatch && knownMutationTool &&
+      mutation.targets.every((candidate) => isStageRecordOutput(projectDir, candidate))
+    ) {
+      return 0;
+    }
     // A file-tool write of the composer's proposal alone passes in every Plan
     // Approval state, before the directive checks, and never starts
     // generation. A shell write, or one that also names another file, is
@@ -1958,6 +2224,16 @@ async function evaluate(
       !mutation.opaqueShell &&
       mutation.targets.length > 0 &&
       mutation.targets.every((candidate) => isComposerProposalTarget(projectDir, candidate))
+    ) {
+      return 0;
+    }
+    // A file-tool write of a person's answer text, for the log to read with no
+    // shell on the way, passes in every Plan Approval state too.
+    if (
+      WRITE_TOOLS.has(toolName) &&
+      !mutation.opaqueShell &&
+      mutation.targets.length > 0 &&
+      mutation.targets.every((candidate) => isAnswerTextTarget(projectDir, candidate))
     ) {
       return 0;
     }
@@ -2037,8 +2313,22 @@ async function evaluate(
         activeDirective.ask_type === PLAN_APPROVAL_ASK_TYPE
       ) {
         // The engine is asking the person to approve the plan. Nothing is
-        // built or changed until they answer, including the plan files, so an
-        // answer the agent wrote can never stand in for theirs.
+        // built or changed until they reply, so an answer the agent wrote can
+        // never stand in for theirs. After their reply, the asked plan's own
+        // plan and test instructions can change for what they asked; the
+        // questions file, other plans, and code still wait.
+        const editable = planApprovalReplyEditableFiles(projectDir);
+        if (
+          WRITE_TOOLS.has(toolName) && !mutation.opaqueShell && mutation.targets.length > 0 &&
+          mutation.targets.every((candidate) => isRepliedPlanFileTarget(projectDir, candidate, editable))
+        ) return 0;
+        // A review the person asked for runs while the plan waits: its own
+        // review file and dispatch record, and nothing else.
+        const reviewing = openReviewRequestFiles(projectDir);
+        if (
+          reviewing.length > 0 && !mutation.opaqueShell && mutation.targets.length > 0 &&
+          mutation.targets.every((candidate) => isOpenReviewTarget(projectDir, candidate, reviewing))
+        ) return 0;
         authorityFailure = PLAN_APPROVAL_ASK_OPEN;
         standing = planStanding(projectDir, activeDirective);
         // Loaded only here: the question's own record, read the way its owner
@@ -2094,9 +2384,7 @@ async function evaluate(
         };
         if (verdict.block) {
           blockedMutation = {
-            target:
-              outsideRecord ??
-              `shell command: ${(mutation.shellCommand ?? "").trim().slice(0, 160)}`,
+            target: outsideRecord ?? (mutation.shellCommand ?? "").trim().slice(0, 160),
             unit,
             opaqueShell: outsideRecord === undefined,
             detail: receiptDetail([evidence], verdict.mentioned),
@@ -2120,7 +2408,6 @@ async function evaluate(
       ? authorityBlockReason(authorityFailure, standing, asked)
       : blockedMutation
       ? mutationBlockReason(
-          blockedMutation.target,
           blockedMutation.unit,
           blockedMutation.opaqueShell,
           detail ?? blockedMutation.detail,
@@ -2190,7 +2477,9 @@ async function evaluate(
       // supplies a missing directive, target, or approval. Those refusals say
       // what they say with the fence on, so each names the step that ends it.
       if (authorityFailure) {
-        return refuseExecutionIneligible(authorityRemedy(authorityFailure, standing, asked));
+        // The plan question is open: the same words as with the fence on.
+        const waiting = authorityFailure === PLAN_APPROVAL_ASK_OPEN;
+        return refuseExecutionIneligible(authorityRemedy(authorityFailure, standing, asked), !waiting, !waiting);
       }
       if (verdict.mentioned.length === 0) {
         return refuseExecutionIneligible(refusalProse(null), false);
@@ -2246,7 +2535,9 @@ async function evaluate(
       if (!recorded) {
         recordHookDrop(projectDir, HOOK_NAME, `GUARD_STOOD_ASIDE row not recorded (audit ledger busy or not writable): ${detail}`);
       }
-      writeGuardStoodAside(guardStoodAsideLine("plan-approval", gate.source, detail, recorded));
+      if (guardStandAsideSpeaks(gate)) {
+        writeGuardStoodAside(guardStoodAsideLine("plan-approval", gate.source, detail, recorded));
+      }
       return 0;
     }
   }

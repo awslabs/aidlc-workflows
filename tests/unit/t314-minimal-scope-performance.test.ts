@@ -12,13 +12,14 @@ import {
   NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
 } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, test, setDefaultTimeout } from "bun:test";
-import { readFileSync, statSync } from "node:fs";
+import { readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   AIDLC_SRC,
   cleanupTestProject,
   REPO_ROOT,
   runOrchestrateNext,
+  seededStateFile,
   setupIntegrationProject,
 } from "../harness/fixtures.ts";
 
@@ -38,11 +39,18 @@ function directive(
   scope: string,
   stage: string,
   withState?: string,
+  pinCollaborators?: boolean,
 ): Record<string, unknown> {
   const proj = setupIntegrationProject(
     withState ? { withState } : {},
   );
   projects.push(proj);
+  // The seeded fixtures ship collaborators off; a pipeline link-count check
+  // needs the full chain, so pin the switch on for those cases.
+  if (pinCollaborators && withState) {
+    const sp = seededStateFile(proj);
+    writeFileSync(sp, `${readFileSync(sp, "utf-8")}- **Collaborators**: on (set by you)\n`);
+  }
   const result = runOrchestrateNext(
     ORCH,
     proj,
@@ -67,17 +75,17 @@ function contextBytes(
 
 describe("t314 minimal-scope dispatch and handoff budget", () => {
   test("Minimal context rosters are exact and byte-bounded", () => {
+    // poc ships collaborators off, so intent capture carries only its lead's
+    // context: the architect who supports it is not brought in.
     const intent = directive("poc", "intent-capture");
     const intentPaths = intent.inline_context_paths as string[];
     expect(intentPaths).toEqual([
       ".claude/agents/aidlc-product-agent.md",
-      ".claude/agents/aidlc-architect-agent.md",
       ".claude/knowledge/aidlc-shared/ai-dlc-principles.md",
       ".claude/knowledge/aidlc-shared/rules-reading.md",
       ".claude/knowledge/aidlc-shared/verification.md",
       ".claude/knowledge/aidlc-product-agent/requirements-elicitation.md",
       ".claude/knowledge/aidlc-product-agent/requirements-guide.md",
-      ".claude/knowledge/aidlc-architect-agent/architecture-guide.md",
     ]);
     expect(
       contextBytes(intent.projectDir as string, intentPaths),
@@ -100,17 +108,21 @@ describe("t314 minimal-scope dispatch and handoff budget", () => {
   });
 
   test("Standard context remains full and pipeline dispatch count stays two", () => {
-    const standard = directive("mvp", "intent-capture");
+    // Feasibility at Standard depth with collaborators on: the lead and both
+    // supports keep their full knowledge (18 files, about 100 KB, against
+    // Minimal's 50 KB cap above).
+    const standard = directive("feature", "feasibility", "state-mid-ideation.md", true);
     const standardPaths = standard.inline_context_paths as string[];
-    expect(standardPaths.length).toBeGreaterThan(20);
+    expect(standardPaths.length).toBeGreaterThan(15);
     expect(
       contextBytes(standard.projectDir as string, standardPaths),
-    ).toBeGreaterThan(100_000);
+    ).toBeGreaterThan(75_000);
 
     const pipeline = directive(
       "bugfix",
       "reverse-engineering",
       "state-brownfield-init-done.md",
+      true,
     );
     expect(pipeline.mode).toBe("pipeline");
     expect(pipeline.pipeline).toEqual({

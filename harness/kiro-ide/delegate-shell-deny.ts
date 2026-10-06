@@ -4,8 +4,9 @@
 // A delegate's own calls carry no agent identity, so that branch never fires
 // on Kiro, and on a delegated call Kiro enforces the persona's deny but not its
 // allow: the delegate runs whatever the conductor's allow covers (measured on
-// Kiro CLI 2.27.1 and IDE 1.2.4). The conductor allows `bun .kiro/tools/aidlc-*`
-// in the copy channel and `aidlc engine *` in the native one.
+// Kiro CLI 2.27.1 and IDE 1.2.4). The conductor allows `bun .kiro/tools/aidlc-*`,
+// the dispatcher's engine namespace and its read-only commands in the copy
+// channel, and `aidlc engine *` in the native one.
 //
 // Kiro matches the command text as written, so a deny that lists forbidden
 // spellings misses a quoted or re-spaced one. The persona therefore denies the
@@ -24,7 +25,7 @@ import {
   delegateAdmittedVerbs,
   delegatedLifecycleCommand,
 } from "../../core/hooks/aidlc-state-transition-guard.ts";
-import { resolveAction, ROUTES } from "../../core/tools/aidlc.ts";
+import { copyChannelDispatcherCommands, resolveAction, ROUTES } from "../../core/tools/aidlc.ts";
 import { LAUNCHER_GLOBAL_FLAGS, trustedCommand, TRUSTED_ROUTE_NAMESPACE } from "../../core/tools/aidlc-command.ts";
 import { isWorkspaceNoun, parseWorkspaceCommand, WORKSPACE_NOUNS } from "../../core/tools/aidlc-lib.ts";
 
@@ -65,44 +66,118 @@ const workspaceExclusions = (prefix: string, noun: string): string[] => [
   ...workspaceReads(noun).flatMap((read) => exclusionsFor(`${prefix} ${read}`)),
 ];
 
-export function copyChannelDelegateShellDeny(harnessDir: string, agent: string): ShellDeny {
-  const tool = (file: string) => `bun ${harnessDir}/tools/${file}`;
-  const admitted = delegateAdmittedVerbs(agent);
-  return {
-    match: [tool("aidlc-*")],
-    exclude: [
-      ...Object.keys(admitted).sort().flatMap((file) =>
-        admitted[file].flatMap((verb) => exclusionsFor(`${tool(file)} ${verb}`))
-      ),
-      ...WORKSPACE_NOUNS.flatMap((noun) => workspaceExclusions(tool("aidlc-utility.ts"), noun)),
-    ],
-  };
-}
-
-export function nativeDelegateShellDeny(agent: string): ShellDeny {
+// The engine routes the guard admits the persona, spelled after `engine`
+// (`aidlc engine` on the native channel, the copy channel's dispatcher path
+// before it there).
+function engineRouteExclusions(agent: string, engine: string): string[] {
   const admitted = delegateAdmittedVerbs(agent);
   const routes = ROUTES.filter(
     (route) => route.namespace === TRUSTED_ROUTE_NAMESPACE && route.classification !== "routing-only",
   );
   const exclude: string[] = [];
   for (const noun of WORKSPACE_NOUNS.filter((noun) => routes.some((route) => route.group === noun))) {
-    exclude.push(...workspaceExclusions(trustedCommand(), noun));
+    exclude.push(...workspaceExclusions(engine, noun));
   }
   for (const route of routes.filter((route) => !isWorkspaceNoun(route.group))) {
     const prefix = route.group === "top" ? "" : `${route.group} `;
     for (const verb of route.verbs.filter((verb) => !verb.startsWith("<"))) {
       const words = [...(route.group === "top" ? [] : [route.group]), ...verb.split(" ")];
-      if (admittedRoute(admitted, words)) exclude.push(...exclusionsFor(trustedCommand(`${prefix}${verb}`)));
+      if (admittedRoute(admitted, words)) exclude.push(...exclusionsFor(`${engine} ${prefix}${verb}`));
     }
   }
-  return { match: [trustedCommand("*")], exclude };
+  return exclude;
 }
 
-export const shellDenyLines = ({ match, exclude }: ShellDeny): string[] => [
+// The copy channel's conductor allows the tool scripts, the dispatcher's
+// engine namespace, and the dispatcher's read-only commands exactly as written
+// (reading a setting, doctor, version, status), so the persona denies all
+// three. delegateAdmittedVerbs admits no persona any of those commands.
+export function copyChannelDelegateShellDeny(harnessDir: string, agent: string): ShellDeny {
+  const tool = (file: string) => `bun ${harnessDir}/tools/${file}`;
+  const engine = `${tool("aidlc.ts")} ${TRUSTED_ROUTE_NAMESPACE}`;
+  const admitted = delegateAdmittedVerbs(agent);
+  return {
+    match: [
+      tool("aidlc-*"),
+      `${engine} *`,
+      ...copyChannelDispatcherCommands().map((command) => `${tool("aidlc.ts")} ${command}`),
+    ],
+    exclude: [
+      ...Object.keys(admitted).sort().flatMap((file) =>
+        admitted[file].flatMap((verb) => exclusionsFor(`${tool(file)} ${verb}`))
+      ),
+      ...WORKSPACE_NOUNS.flatMap((noun) => workspaceExclusions(tool("aidlc-utility.ts"), noun)),
+      ...engineRouteExclusions(agent, engine),
+    ],
+  };
+}
+
+// The native conductor allows `aidlc engine *` and the dispatcher's read-only
+// and turn-back-on commands exactly as written, so the persona denies both.
+export function nativeDelegateShellDeny(agent: string): ShellDeny {
+  return {
+    match: [trustedCommand("*"), ...copyChannelDispatcherCommands().map((command) => `aidlc ${command}`)],
+    exclude: engineRouteExclusions(agent, trustedCommand()),
+  };
+}
+
+// Shell forms that can run, expand, or redirect more than the one command a
+// rule names, as Kiro rule text: "\\n" is the YAML escape for a line break.
+// The conductor asks before a command holding one; a delegate is refused one
+// on an AI-DLC command, so the deny holds whichever ask Kiro applies to a
+// delegated call. A carriage return is not listed: Kiro compiles every rule
+// into one Cedar policy set, Cedar rejects a carriage return in a pattern, and
+// a rejected set leaves Kiro asking about every command. The Kiro IDE
+// adapter's terminal-command-guard refuses a lone carriage return on every
+// agent instead (a carriage return before a line feed is the line break).
+export const RISKY_SHELL_FORMS = ["$", "`", ">", "<", "&", "@(", "@{", "\\n"] as const;
+
+// The deny for those forms after each command prefix a delegate inherits from
+// the conductor's allow.
+export const riskyFormDenyLines = (prefixes: readonly string[]): string[] => [
   "    - capability: shell",
   "      effect: deny",
   "      match:",
-  ...match.map((pattern) => `        - "${pattern}"`),
-  "      exclude:",
-  ...exclude.map((pattern) => `        - "${pattern}"`),
+  ...prefixes.flatMap((prefix) => RISKY_SHELL_FORMS.map((form) => `        - "${prefix}*${form}*"`)),
 ];
+
+// Kiro compiles each match pattern into one Cedar policy that holds every
+// exclude of its rule, and its bundled cedar-wasm traps evaluating a long one
+// (t148 pins the limit), which leaves the chat asking before every command. So
+// the deny is written as one rule per command an exclude names (a tool file, or
+// an engine route group: the word after a match prefix) holding only that
+// command's excludes, plus one rule that denies the rest of the allow and
+// lifts those commands whole. Kiro matches a command from its start, so a
+// command falls under at most one of the per-command rules, and the rules deny
+// exactly what the single rule would.
+export function splitShellDeny({ match, exclude }: ShellDeny): ShellDeny[] {
+  const prefixes = match.filter((pattern) => pattern.endsWith("*"))
+    .map((pattern) => pattern.slice(0, -1))
+    .sort((a, b) => b.length - a.length);
+  const commands = new Map<string, string[]>();
+  const unsplit: string[] = [];
+  for (const pattern of exclude) {
+    const prefix = prefixes.find((candidate) => pattern.startsWith(candidate));
+    const word = prefix === undefined ? "" : pattern.slice(prefix.length).split(" ")[0];
+    if (word === "" || /[*?]/.test(word)) {
+      unsplit.push(pattern);
+      continue;
+    }
+    const command = `${prefix}${word}`;
+    commands.set(command, [...commands.get(command) ?? [], pattern]);
+  }
+  return [
+    { match, exclude: [...unsplit, ...[...commands.keys()].flatMap(both)] },
+    ...[...commands].map(([command, excludes]) => ({ match: [`${command} *`], exclude: excludes })),
+  ];
+}
+
+export const shellDenyLines = (deny: ShellDeny): string[] =>
+  splitShellDeny(deny).flatMap(({ match, exclude }) => [
+    "    - capability: shell",
+    "      effect: deny",
+    "      match:",
+    ...match.map((pattern) => `        - "${pattern}"`),
+    "      exclude:",
+    ...exclude.map((pattern) => `        - "${pattern}"`),
+  ]);

@@ -495,7 +495,7 @@ describe("t351 fresh clone with a teammate's lone intent record", () => {
     }).stdout.toString();
     expect(next).toContain('"kind":"ask"');
     expect(next).toContain(record);
-    expect(next).toContain("/aidlc intent <record>");
+    expect(next).toContain(", or not now?");
     expect(next).not.toContain("SYSTEM: run");
     expect(next).not.toContain("re-run `next`");
   });

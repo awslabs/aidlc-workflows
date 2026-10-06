@@ -58,7 +58,9 @@
 //     & | < > ^ outside cmd.exe's quotes on the way through aidlc.cmd, that
 //     holds a %NAME% pair cmd.exe would expand, that passes a value through a
 //     PowerShell variable or expression, or that it cannot read far enough to
-//     check.
+//     check. Then it refuses an AI-DLC command, on either channel, with an
+//     argument PowerShell builds by running code (a grouping, $(...), @(...),
+//     @{...} or {...}).
 //   - guard-switch capability: an empty-prompt turn notes the limitation once
 //     per session and refuses lowering (summary confirmation off included)
 //     before a shell command runs. Non-empty
@@ -70,6 +72,9 @@
 //     fingerprint/decision/answer ownership after canonical record writes,
 //     and bind approval to the planned workspace source the questions file
 //     records.
+//   - review-freeze, state-transition-guard: forward a write or shell call in
+//     the shared guards' shape; refuse a call they cannot read (malformed, no
+//     tool name, a write naming no file, a shell call with no command).
 //   - session-start: retain the modern session_id or derive a legacy identity
 //     from the measured IDE host-instance environment.
 //   - record-human-turn: Kiro IDE 1.1.14 runs no SessionStart hook when a chat
@@ -90,7 +95,8 @@
 // where <target> ∈ record-human-turn | enforce-approval-gate | session-start |
 //                  audit-and-sensors | rebuild-stage-graph |
 //                  sync-workflow-state | log-subagent | continue-workflow |
-//                  session-end | verb-intercept | terminal-command-guard
+//                  session-end | verb-intercept | terminal-command-guard |
+//                  plan-approval-guard | review-freeze | state-transition-guard
 
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { createHash, randomUUID } from "node:crypto";
@@ -101,13 +107,14 @@ import {
   classifyTerminalCommand,
   decodeHarnessPlainText,
   fenceCommandOutput,
-  hasOpenGate,
+  relayAsTextBlock,
+  presenceFloorHolds,
   clearKiroIdeLegacyPlanApprovalHost,
   clearPlanApprovalViolation,
   getField,
   hookChildEnv,
   hookDebug,
-  humanActedSinceGate,
+  hookExecutionRecoveryText,
   humanPresenceGuardDisabled,
   isAutonomousMode,
   isSwitchableGuardFence,
@@ -116,6 +123,7 @@ import {
   clearPlanApprovalLegacyWindow,
   recordHookDrop,
   recordPreWorkflowHeartbeat,
+  resolveProjectFlag,
   readPlanApprovalViolation,
   readPlanApprovalLegacyWindow,
   readPlanApprovalLegacyWindows,
@@ -136,6 +144,9 @@ import {
 import {
   approvalFingerprint,
   beginCodeGeneration,
+  codeGenerationExecutionAllowed,
+  codeGenerationPlanApprovalFence,
+  evaluateCodeGenerationApproval,
   legacyPlanApprovalGuardState,
   parseTestingContract,
   renderTestingContract,
@@ -146,6 +157,19 @@ import { normalizeRetiredGuardPolicyField } from "../tools/aidlc-guard-switch.ts
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { aidlcEngineCommand, aidlcInvocation } from "../tools/aidlc-runtime-paths.ts";
 import { terminalDispatcherArgv } from "../tools/aidlc.ts";
+import {
+  canonicalWriteTool,
+  isKiroAppendTool,
+  isKiroDelegationTool,
+  isKiroGenericDelegationTool,
+  isKiroPipelineDelegationTool,
+  isKiroPowerShellTool,
+  isKiroShellTool,
+  isLegacyPlanningWriteTool,
+  isPlanApprovalSafeReadTool,
+  kiroNamedDelegate,
+  mutationCapableTool,
+} from "./aidlc-kiro-tool-names.ts";
 
 const HOOKS_DIR = dirname(fileURLToPath(import.meta.url));
 // The NORMALIZED hook context, whichever channel delivered it: 1.x snake_case
@@ -180,6 +204,8 @@ const PAYLOAD_TARGETS = new Set([
   "log-subagent",
   "plan-approval-guard",
   "rebuild-stage-graph",
+  "review-freeze",
+  "state-transition-guard",
   "terminal-command-guard",
 ]);
 const SESSION_ID_TARGETS = new Set([
@@ -194,63 +220,6 @@ const INPUT_TARGETS = new Set([
 ]);
 const LEGACY_SESSION_ID = "kiro-ide-legacy-current";
 const KIRO_IDE_SESSION_FILE = ".kiro-ide-current-session";
-const LEGACY_PLANNING_WRITE_TOOLS = new Set([
-  "fs_write",
-  "str_replace",
-]);
-const PLAN_APPROVAL_SAFE_READ_TOOLS = new Set([
-  "read",
-  "fs_read",
-  "read_file",
-  "read_files",
-  "read_code",
-  "list_directory",
-  "file_search",
-  "glob",
-  "grep_search",
-  "grep",
-  "web_fetch",
-  "web_search",
-  // `disclose_context` activates skills or steering files into context. Kiro
-  // documents it under Context tools beside `introspect` and `knowledge` and
-  // gives it no write surface; anything an activated skill then asks for is
-  // still gated by its own PreToolUse call, and approval authority comes from
-  // the active directive and disk receipts, never from activated context. So it
-  // cannot mutate the workspace during a Plan Approval window, while denying it
-  // stopped a Windows customer mid-workflow (#1039).
-  "disclose_context",
-  "thinking",
-  "todo_list",
-]);
-
-// Kiro IDE names its shell tool `execute_bash` on POSIX hosts, `execute_pwsh`
-// on Windows, and `shell` in some IDE generations. Every shell decision in this
-// adapter (terminal guard, Plan Approval recovery routing, the forward to the
-// core guard as `Bash`) goes through this one predicate so the three names
-// cannot drift apart again.
-function isKiroShellTool(toolName: string): boolean {
-  return toolName === "execute_bash" || toolName === "execute_pwsh" || toolName === "shell";
-}
-
-// Kiro's delegation surface has three dispatch tools. `subagent_<agent>` is the
-// named dispatch an agent gets from the `subagent` tool category; the conductor's
-// tools list selects the other two instead, `invoke_sub_agent` on Kiro IDE and
-// `orchestrate_subagent` (a pipeline of stages) on Kiro CLI, because only those
-// two run a delegate under its own permissions. `subagent_response` is excluded
-// because it is the completion shell, not a dispatch — the same exclusion the
-// SUBAGENT_COMPLETED matcher makes, for the same reason.
-//
-// A delegation call carries an agent + prompt and no file path, so the opaque-mutation
-// test below reads it as unattributable and refuses it. It is not: the target agent IS
-// the attribution, and the forward further down translates the call into a synthetic
-// `Task` payload for the core guard, which consults approval state properly. Naming the
-// shape here is what lets control reach that forward (#1175).
-function isKiroDelegationTool(toolName: string): boolean {
-  return toolName === "invoke_sub_agent" ||
-    toolName === "orchestrate_subagent" ||
-    (toolName.startsWith("subagent_") && toolName !== "subagent_response");
-}
-
 function firstNonBlank(values: unknown[]): string {
   return values.find((value): value is string =>
     typeof value === "string" && value.trim().length > 0
@@ -269,6 +238,24 @@ interface KiroDelegationTarget {
 // `tool_input.stages[].role`; an `orchestrate_subagent` stage's own
 // `prompt_template` is what that delegate receives. `agent` is "" when the
 // payload names no delegate.
+// A call with no arguments may build any Unit of a group, so continuing past a
+// changed approved plan needs every Unit the active directive builds to be
+// approved or to continue from its own approval: a Unit the person never
+// approved is never built. A single-target directive has only its own target.
+function everyUnitContinuesFromApproval(projectDir: string): boolean {
+  try {
+    const state = readFileSync(stateFilePath(projectDir), "utf-8");
+    const marker = readActiveDirectiveMarker(projectDir, state);
+    if (marker?.kind !== "invoke-swarm") return true;
+    return (marker.units ?? []).every((unit) =>
+      evaluateCodeGenerationApproval(projectDir, { unit }).ok ||
+      codeGenerationExecutionAllowed(projectDir, { unit })
+    );
+  } catch {
+    return false;
+  }
+}
+
 // Whether the workflow is at Code Generation: the state's Current Stage or the
 // active directive names it. Unreadable state is not Code Generation, matching
 // the core guard's fail-open outside that stage.
@@ -292,7 +279,7 @@ function kiroDelegationTargets(
   toolName: string,
   toolArgs: Record<string, unknown>,
 ): KiroDelegationTarget[] {
-  if (toolName === "orchestrate_subagent") {
+  if (isKiroPipelineDelegationTool(toolName)) {
     const stages = Array.isArray(toolArgs.stages) ? toolArgs.stages : [];
     return stages.filter(isRecord).map((stage) => ({
       agent: firstNonBlank([stage.role, stage.name]),
@@ -300,10 +287,7 @@ function kiroDelegationTargets(
       stage: firstNonBlank([stage.name]),
     }));
   }
-  const suffix =
-    toolName.startsWith("subagent_") && toolName !== "subagent_response"
-      ? toolName.slice("subagent_".length).trim()
-      : "";
+  const suffix = kiroNamedDelegate(toolName);
   return [{
     agent: suffix ||
       firstNonBlank([
@@ -563,7 +547,12 @@ function processLegacyPlanApprovalWrite(
     }
     return null;
   }
-  if (state.approved) return null;
+  // An approved plan, or one that changed since under a lowered check, is not
+  // a planning window: its writes are the build's.
+  if (
+    state.approved ||
+    (codeGenerationExecutionAllowed(projectDir, state.target) && everyUnitContinuesFromApproval(projectDir))
+  ) return null;
   const authority = resolveCodeGenerationAuthority(projectDir, state.target);
   const planPath = join(authority.stageDir, "code-generation-plan.md");
   const instructionsPath = join(authority.stageDir, "unit-test-instructions.md");
@@ -725,7 +714,8 @@ function processLegacyPlanApprovalWrite(
 // before it runs. It also refuses an aidlc argument PowerShell resolves first
 // (a variable or expression, whose result it cannot see) and an aidlc command
 // it cannot read far enough to check. `bun .kiro/tools/...` invocations never
-// pass through cmd.exe and are not checked.
+// pass through cmd.exe and are not checked for it (aidlcCodeArgumentHazard
+// below checks both channels for PowerShell code).
 
 // What cmd.exe does with each character it acts on outside its quotes.
 const CMD_OPERATOR_EFFECTS: Record<string, string> = {
@@ -740,6 +730,7 @@ interface PowerShellWord {
   source: string; // the word as written in the command
   value: string; // the argument PowerShell passes, when `opaque` is false
   opaque: boolean; // PowerShell would expand or evaluate part of it
+  code: boolean; // PowerShell runs code to build it: a grouping, $(...), @(...), @{...} or {...}
   redirect: boolean; // a PowerShell redirection, not an argument
 }
 
@@ -875,12 +866,13 @@ function powerShellStatements(command: string): PowerShellReading {
           while (i < command.length && !/[ \t;|\n\r]/.test(command[i])) i++;
         }
       }
-      words.push({ source: redirect[0], value: "", opaque: false, redirect: true });
+      words.push({ source: redirect[0], value: "", opaque: false, code: false, redirect: true });
       continue;
     }
     const start = i;
     let value = "";
     let opaque = false;
+    let code = false;
     while (i < command.length && !/[ \t;|\n\r>]/.test(command[i])) {
       const c = command[i];
       if (c === "'") {
@@ -909,6 +901,8 @@ function powerShellStatements(command: string): PowerShellReading {
             continue;
           }
           if (d === "$") opaque = true;
+          // A $(...) inside double quotes runs too.
+          if (d === "$" && command[j + 1] === "(") code = true;
           if (d === '"') {
             if (command[j + 1] === '"') {
               value += '"';
@@ -941,6 +935,7 @@ function powerShellStatements(command: string): PowerShellReading {
         statements.push(...inner.statements);
         unreadable.push(...inner.unreadable);
         opaque = true;
+        code = true;
         i = close + 1;
       } else {
         // A backtick before a line break ends the word and continues the
@@ -963,7 +958,7 @@ function powerShellStatements(command: string): PowerShellReading {
       skipNextWord = false;
       continue;
     }
-    words.push({ source, value, opaque, redirect: false });
+    words.push({ source, value, opaque, code, redirect: false });
   }
   endStatement();
   return { statements, unreadable };
@@ -1125,6 +1120,74 @@ function cmdMetacharacterRefusal(hazard: CmdHazard): string {
     `${CMD_OPERATOR_EFFECTS[hazard.char]} instead of passing it as text. Write that value's inner double ` +
     "quotes as single quotes (for example --details 'Use ''R & D'' team'), or leave the character out of " +
     "a label you wrote, then run the command again.\n"
+  );
+}
+
+// --- PowerShell code in an AI-DLC command's arguments ---
+//
+// Every Kiro IDE agent's permissions run AI-DLC's own commands without a card
+// (the engine namespace and AI-DLC's tool scripts, on both channels). Their
+// ask rules catch `$`,
+// a backtick, `@(`, `@{`, redirects, `&` and line breaks, but a glob cannot
+// tell a bare grouping such as `--decision (Get-Content x)` from a quoted label
+// such as 'Approve (Recommended)'. PowerShell runs the grouping before the
+// command starts, so this adapter refuses an argument PowerShell builds by
+// running code (a grouping, $(...), @(...), @{...} or {...}, bare or inside
+// double quotes) on either channel's AI-DLC command. A quoted value passes.
+
+// The arguments of a statement in which bun runs one of the copy channel's
+// AI-DLC scripts, the dispatcher `aidlc.ts` or a tool `aidlc-<tool>.ts` in
+// the harness tools folder (also through `run`, and after a leading `$x =`).
+// Null for any other program.
+function copyChannelCommandArgs(words: PowerShellWord[]): PowerShellWord[] | null {
+  const start = words.length > 2 && words[0].source.startsWith("$") && words[1].source === "=" ? 2 : 0;
+  const program = words[start];
+  if (program === undefined || program.opaque || !/(?:^|[\\/])bun(?:\.exe)?$/i.test(program.value)) return null;
+  let at = start + 1;
+  if (words[at] !== undefined && !words[at].opaque && words[at].value === "run") at++;
+  const script = words[at];
+  if (
+    script === undefined || script.opaque ||
+    !/^(?:\.[\\/])?\.kiro[\\/]tools[\\/]aidlc(?:-[a-z0-9-]+)?\.ts$/i.test(script.value)
+  ) {
+    return null;
+  }
+  return words.slice(at + 1);
+}
+
+interface CodeArgumentHazard {
+  flag: string | null;
+  request: boolean;
+}
+
+// The first argument of an AI-DLC command (either channel), in any statement,
+// that PowerShell builds by running code. Null when there is none.
+function aidlcCodeArgumentHazard(command: string): CodeArgumentHazard | null {
+  for (const words of powerShellStatements(command).statements) {
+    const found = aidlcCommandArgs(words) ?? copyChannelCommandArgs(words);
+    if (found === null) continue;
+    const args = found.filter((word) => !word.redirect);
+    const index = args.findIndex((word) => word.code);
+    if (index < 0) continue;
+    const flag = valueFlag(args, index);
+    const next = args.findIndex(
+      (word, at) => at > 0 && !word.opaque && word.value === "next" && args[at - 1].value === "orchestrate",
+    );
+    return { flag, request: flag === null && next >= 0 && index > next };
+  }
+  return null;
+}
+
+// A fixed template: only a plain flag name is filled in, never the value.
+function aidlcCodeArgumentRefusal(hazard: CodeArgumentHazard): string {
+  const subject = hazard.request
+    ? "The request after next"
+    : hazard.flag === null
+    ? "A value"
+    : `The ${hazard.flag} value`;
+  return (
+    `AIDLC stopped this command before it ran. ${subject} is PowerShell code, which PowerShell would run ` +
+    "before the command starts. Write the value itself in single quotes, then run the command again.\n"
   );
 }
 
@@ -1495,9 +1558,10 @@ function summaryConfirmationWayOut(): string {
 }
 
 // Plan approval off is read from what the person types or says, so this build
-// cannot carry the typed switch; the recorded one works now, as above.
+// cannot carry the typed switch, and it keeps its plan picker either way. The
+// recorded switch still turns the Plan Approval check's refusals off now.
 function planApprovalWayOut(): string {
-  return `To build code plans without being asked now, run \`${aidlcInvocation()} config flags --bypass AIDLC_DISABLE_PLAN_APPROVAL_GUARD --local --yes\` in a terminal: it turns plan approval off for all work in this project, including the work running now (run it again with \`--clear-bypass\` in place of \`--bypass\` to turn it back on). After you update Kiro IDE, you can instead type \`/aidlc config set plan-approval off\` yourself.`;
+  return `This Kiro IDE build still shows each plan here for you to approve; after you update Kiro IDE, you can type \`/aidlc config set plan-approval off\` to build plans without being asked. If the plan approval check refuses work wrongly meanwhile, run \`${aidlcInvocation()} config flags --bypass AIDLC_DISABLE_PLAN_APPROVAL_GUARD --local --yes\` in a terminal to turn that check off for all work in this project, including the work running now (run it again with \`--clear-bypass\` in place of \`--bypass\` to turn it back on).`;
 }
 
 // "summary" when the only lowering is summary confirmation off, which skips
@@ -1623,7 +1687,7 @@ function terminalContext(result: TerminalResult): string {
   return (
     "SYSTEM (deterministic harness dispatch): The command " +
     `\`/aidlc ${result.typed}\` has ALREADY been run by the harness. ` +
-    "It carries no workflow work. Relay the output below verbatim, then STOP. " +
+    `It carries no workflow work. Relay the output below ${relayAsTextBlock(result.output)}, then STOP. ` +
     "Do not call any AIDLC tool this turn.\n\n" +
     fenceCommandOutput(result.output, result.exitCode)
   );
@@ -1635,7 +1699,7 @@ function terminalRefusal(result: TerminalResult): string {
     "already run inside the hook, and this shell call is intentionally refused " +
     "to keep Kiro's Windows shell transport from changing its UTF-8 output. " +
     "Do not retry or run another AIDLC command this turn. Relay the output below " +
-    "verbatim to the user, then stop.\n\n" +
+    `to the user ${relayAsTextBlock(result.output)}, then stop.\n\n` +
     fenceCommandOutput(result.output, result.exitCode)
   );
 }
@@ -1666,11 +1730,27 @@ if (target === "terminal-command-guard") {
   const rawCommand = typeof ide.toolArgs?.command === "string"
     ? ide.toolArgs.command
     : "";
+  // A lone carriage return, on any shell and any agent (a delegated call
+  // carries no agent identity, and this reads none). The agents' rules cannot
+  // name one (delegate-shell-deny.ts RISKY_SHELL_FORMS); a carriage return
+  // before a line feed is a line break, which they ask about.
+  if (/\r(?!\n)/.test(rawCommand)) {
+    process.stderr.write(
+      "AIDLC stopped this command before it ran. It holds a carriage return: " +
+        "put the whole command on one line and run it again.\n",
+    );
+    return 2;
+  }
   // Before anything below runs a command: this call would not reach the
   // engine as written (see cmdMetacharacterHazard).
-  const cmdHazard = tool === "execute_pwsh" ? cmdMetacharacterHazard(rawCommand) : null;
+  const cmdHazard = isKiroPowerShellTool(tool) ? cmdMetacharacterHazard(rawCommand) : null;
   if (cmdHazard !== null) {
     process.stderr.write(cmdMetacharacterRefusal(cmdHazard));
+    return 2;
+  }
+  const codeHazard = isKiroPowerShellTool(tool) ? aidlcCodeArgumentHazard(rawCommand) : null;
+  if (codeHazard !== null) {
+    process.stderr.write(aidlcCodeArgumentRefusal(codeHazard));
     return 2;
   }
   const invocation = toolTerminalInvocation(rawCommand);
@@ -1743,8 +1823,9 @@ function approvalGateAwaitsHuman(): boolean {
     // and no-open-gate (nothing awaits approval, so nothing to floor).
     if (isAutonomousMode(content)) return false;
     if (humanPresenceGuardDisabled()) return false;
-    if (!hasOpenGate(content)) return false;
-    return !humanActedSinceGate(pd); // a human acted at this gate
+    // The shared rule: a gate the person must answer, and no turn of theirs
+    // since it opened (see presenceFloorHolds).
+    return presenceFloorHolds(pd, content, String(ide.toolArgs?.command ?? ""));
   } catch {
     return false; // advisory - any read/parse failure fails open
   } finally {
@@ -1752,19 +1833,31 @@ function approvalGateAwaitsHuman(): boolean {
   }
 }
 
+// The words the agent relays when the person's answer was not recorded: what
+// happened and the step for the tool they are in, never why. The step is the
+// one doctor names (the harness's hook-activation recovery), so the two never
+// differ. A Kiro IDE hook process carries VSCODE_IPC_HOOK or VSCODE_PID and a
+// Kiro CLI one carries neither (docs/reference/kiro-ide-hook-payload.md), so
+// inside Kiro IDE the person gets its step alone: everything before the
+// recovery's Kiro CLI sentence.
+function unrecordedAnswerRelay(projectDir: string): string {
+  const said = "Your answer was not recorded, so you don't need to answer again.";
+  const recovery = hookExecutionRecoveryText(projectDir);
+  const otherTools = recovery.indexOf(" In Kiro CLI,");
+  const inKiroIde = Boolean(process.env.VSCODE_IPC_HOOK?.trim() || process.env.VSCODE_PID?.trim());
+  if (inKiroIde && otherTools > 0) {
+    return `Tell them exactly this, with nothing about why: "${said} ${recovery.slice(0, otherTools)}"`;
+  }
+  const lines = otherTools > 0 ? recovery.slice(otherTools + 1) : recovery;
+  return `Tell them exactly this, with nothing about why, then only the line below for the tool they are in: "${said}" ${lines}`;
+}
+
 if (target === "enforce-approval-gate") {
   if (approvalGateAwaitsHuman()) {
-    const palette = process.platform === "darwin" ? "Cmd+Shift+P" : "Ctrl+Shift+P";
     process.stderr.write(
-      "An approval gate is open and no reply from the person is on record since it " +
-        "opened, so no tool call runs until they answer it. If they already replied, " +
-        "that reply was not recorded: Kiro may not have passed it to AI-DLC's hooks in " +
-        "this window. Tell them that, and that trusting the folder if the Restricted Mode " +
-        "banner shows at the top of the window (select Manage, then Trust), running " +
-        `"Developer: Reload Window" from the Command Palette (${palette}), and choosing ` +
-        "the aidlc agent in the chat panel's agent picker should let their next message be " +
-        "recorded; if it still is not, `/aidlc --doctor` shows why. In Kiro CLI, starting " +
-        "`kiro-cli` again in this folder does the same.\n",
+      "An approval is waiting for the person's answer, so nothing runs until they give it: end the turn. " +
+        `If they already answered, that answer was not recorded. ${unrecordedAnswerRelay(process.cwd())} ` +
+        "If that does not fix it, `/aidlc --doctor` shows what else to fix.\n",
     );
     return 2; // Kiro reject contract: exit 2 + stderr BLOCKS the tool call.
   }
@@ -1831,23 +1924,75 @@ function isFailedWriteResult(toolResult: string): boolean {
   );
 }
 
-// Map the IDE tool name to the canonical name the core hooks match on. Write
-// creates a (possibly new) file; str_replace/fs_append always target an
-// existing file → Edit (forces ARTIFACT_UPDATED in the core write-audit-log).
-function canonicalWriteTool(name: string): "Write" | "Edit" | "" {
-  if (name === "fs_write" || name === "create_file") return "Write";
-  if (
-    name === "str_replace" ||
-    name === "fs_append" ||
-    name === "delete_file" ||
-    name === "apply_patch" ||
-    name === "edit_file"
-  ) return "Edit";
-  return "";
+// The shared guards' Write/Edit/Bash shape for a Kiro write or shell call, or
+// null for any other tool. Kiro names the written text `text` (fs_write,
+// fs_append; `content` under the 2.6.1 `write`) and a replacement
+// `oldStr`/`newStr` (str_replace); the core reads `content` and
+// `old_string`/`new_string`.
+function guardToolCall(
+  toolName: string,
+  toolArgs: Record<string, unknown>,
+): { tool_name: string; tool_input: Record<string, unknown> } | null {
+  const writeTool = canonicalWriteTool(toolName);
+  if (writeTool) {
+    const paths = inputPaths(toolArgs);
+    const text = typeof toolArgs.text === "string"
+      ? toolArgs.text
+      : typeof toolArgs.content === "string" ? toolArgs.content : undefined;
+    return {
+      tool_name: writeTool,
+      tool_input: {
+        file_path: paths[0] ?? "",
+        paths,
+        ...(writeTool === "Write" && text !== undefined ? { content: text } : {}),
+        ...(toolName === "fs_append" && text !== undefined ? { new_string: text } : {}),
+        ...(typeof toolArgs.oldStr === "string" ? { old_string: toolArgs.oldStr } : {}),
+        ...(typeof toolArgs.newStr === "string" ? { new_string: toolArgs.newStr } : {}),
+        ...(toolArgs.replace_all === true ? { replace_all: true } : {}),
+      },
+    };
+  }
+  if (isKiroShellTool(toolName)) {
+    return {
+      tool_name: "Bash",
+      tool_input: { command: typeof toolArgs.command === "string" ? toolArgs.command : "" },
+    };
+  }
+  return null;
 }
 
-function mutationCapableTool(name: string): boolean {
-  return name.length > 0 && !PLAN_APPROVAL_SAFE_READ_TOOLS.has(name);
+// The directory a Kiro shell call runs in: its own `cwd`, which every captured
+// Kiro shell payload carries, else the project. Its relative paths resolve from
+// there; the core finds the project from AIDLC_PROJECT_DIR, not from this.
+function shellToolCwd(toolName: string, toolArgs: Record<string, unknown>): string {
+  return isKiroShellTool(toolName) && typeof toolArgs.cwd === "string" && toolArgs.cwd !== ""
+    ? resolve(projectDir, toolArgs.cwd)
+    : projectDir;
+}
+
+// What review-freeze and state-transition-guard cannot read in this call, or
+// null when they can. Every PreToolUse payload of the supported builds (Kiro
+// IDE 1.1.70, Kiro CLI 2.24.1 and later) names the tool and fills its input,
+// so a call they cannot read is refused rather than judged as one with no
+// target. A readable command that writes nothing still goes to the guards.
+function unreadableGuardCall(): string | null {
+  if (Object.keys(ide).length === 0) return "no hook payload arrived";
+  if ((ide.malformedFields?.length ?? 0) > 0) {
+    return `its hook payload is malformed (${ide.malformedFields?.join(", ")})`;
+  }
+  const toolName = ide.toolName ?? "";
+  if (toolName === "") return "its hook payload names no tool";
+  const toolArgs = ide.toolArgs ?? {};
+  if (canonicalWriteTool(toolName) !== "" && inputPaths(toolArgs).length === 0) {
+    return `${toolName} names no file`;
+  }
+  if (
+    isKiroShellTool(toolName) &&
+    (typeof toolArgs.command !== "string" || toolArgs.command.trim() === "")
+  ) {
+    return `${toolName} carries no command`;
+  }
+  return null;
 }
 
 function inputPaths(input: Record<string, unknown>): string[] {
@@ -1896,18 +2041,59 @@ function extractAgentIdentity(toolResult: string, structured = ""): string {
 
 type Forward = { hook: string; input: Record<string, unknown> } | null;
 
+// A lowered Plan Approval check (Guard Policy relaxed or off, or the person's
+// own switch) lets changed content through once the plan is approved, as the
+// core guard does; it never supplies the first approval. These refusals are the
+// adapter's own, for payloads that hide their target, so they follow the same
+// rule: an approved plan that changed since is still approved here, through the
+// core's own continuation. An unreadable state keeps the check up.
+function loweredPlanCheckAdmitsApprovedWork(): boolean {
+  try {
+    const state = legacyPlanApprovalGuardState(projectDir);
+    if (!state.active || state.target === null) return false;
+    if (
+      !state.approved &&
+      (!codeGenerationExecutionAllowed(projectDir, state.target) || !everyUnitContinuesFromApproval(projectDir))
+    ) return false;
+    return codeGenerationPlanApprovalFence(projectDir, state.target, {
+      sessionId: resolvedPlanApprovalSessionId(ide),
+    }).decision === "stand-aside";
+  } catch {
+    return false;
+  }
+}
+
 // The chat session a prompt starts, when the prompt names a session other than
 // the one this adapter last saw. Set by the record-human-turn route.
 let promptSessionStart = "";
 
 function buildForward(): Forward {
+  // Ahead of the malformed-payload drop below: for these two guards an
+  // unreadable call is refused, whatever the workflow, fence or off-switch.
+  if (target === "review-freeze" || target === "state-transition-guard") {
+    const unreadable = unreadableGuardCall();
+    if (unreadable !== null) {
+      return {
+        hook: "__unreadable_guard_call__",
+        input: {
+          reason:
+            `AI-DLC cannot check this Kiro tool call: ${unreadable}. ` +
+            "AI-DLC supports Kiro IDE 1.1.70 or later and Kiro CLI 2.24.1 or later. If Kiro is older, update it; then try again.",
+        },
+      };
+    }
+  }
   if (PAYLOAD_TARGETS.has(target) && (ide.malformedFields?.length ?? 0) > 0) {
     recordHookDrop(
       projectDir,
       "kiro-adapter",
       `${target}: malformed hook context fields (${ide.malformedFields?.join(", ")}) — event not forwarded`,
     );
-    if (target === "plan-approval-guard" && !ideStandsOutside(projectDir, resolvedPlanApprovalSessionId(ide))) {
+    if (
+      target === "plan-approval-guard" &&
+      !ideStandsOutside(projectDir, resolvedPlanApprovalSessionId(ide)) &&
+      !loweredPlanCheckAdmitsApprovedWork()
+    ) {
       const malformedToolName = ide.toolName ?? "";
       if (
         readPlanApprovalLegacyWindows(projectDir).length > 0 &&
@@ -2194,11 +2380,42 @@ function buildForward(): Forward {
             },
           };
         }
+        // An approved plan that changed since, under a lowered check, builds on.
+        if (state.active && !state.approved && state.target !== null && loweredPlanCheckAdmitsApprovedWork()) {
+          try {
+            beginCodeGeneration(projectDir, state.target);
+          } catch (error) {
+            return {
+              hook: "__legacy_plan_approval_block__",
+              input: {
+                reason:
+                  `Legacy Code Generation could not start its protected authority: ${
+                    error instanceof Error ? error.message : String(error)
+                  }`,
+              },
+            };
+          }
+          return null;
+        }
+        // Under a lowered check the person's answer accepts source drift, so
+        // the plan is not shown again: the checks below wait while the question
+        // is open, and name the answer's own write once the person has replied.
+        let lowered = false;
+        if (state.active && !state.approved && !state.sourceFloorValid && state.target !== null) {
+          try {
+            lowered = codeGenerationPlanApprovalFence(projectDir, state.target, {
+              sessionId: resolvedPlanApprovalSessionId(ide),
+            }).decision === "stand-aside";
+          } catch {
+            lowered = false;
+          }
+        }
         if (
           state.active &&
           !state.approved &&
           !state.sourceFloorValid &&
-          !LEGACY_PLANNING_WRITE_TOOLS.has(toolName)
+          !lowered &&
+          !isLegacyPlanningWriteTool(toolName)
         ) {
           // The canonical planning writes stay open: re-presenting the plan is
           // the remedy, and it is a questions-file write. Blocking it here made
@@ -2244,6 +2461,7 @@ function buildForward(): Forward {
               },
             };
           }
+          if (loweredPlanCheckAdmitsApprovedWork()) return null;
         }
         if (
           state.active &&
@@ -2251,7 +2469,7 @@ function buildForward(): Forward {
           (
             toolName === "" ||
             isKiroShellTool(toolName) ||
-            toolName === "fs_append"
+            isKiroAppendTool(toolName)
           )
         ) {
           return {
@@ -2269,7 +2487,7 @@ function buildForward(): Forward {
           if (
             state.active &&
             !state.approved &&
-            !LEGACY_PLANNING_WRITE_TOOLS.has(toolName)
+            !isLegacyPlanningWriteTool(toolName)
           ) {
             return {
               hook: "__legacy_plan_approval_block__",
@@ -2280,7 +2498,7 @@ function buildForward(): Forward {
             };
           }
           if (
-            LEGACY_PLANNING_WRITE_TOOLS.has(toolName) &&
+            isLegacyPlanningWriteTool(toolName) &&
             state.target !== null
           ) {
             try {
@@ -2313,11 +2531,26 @@ function buildForward(): Forward {
           // denying here is what kept a Windows shell (`execute_pwsh`) from ever
           // running `aidlc-orchestrate.ts next` to start one.
           if (state.active && Object.keys(toolArgs).length > 0 && !isKiroShellTool(toolName)) {
+            // A populated payload with no path the adapter can read goes to the
+            // core guard under its own name, which decides an unlisted tool as
+            // it does on every harness: held before approval, run after it.
+            // A payload with no tool name gives the guard nothing to decide.
+            if (toolName === "") {
+              return {
+                hook: "__legacy_plan_approval_block__",
+                input: {
+                  reason:
+                    "Plan Approval blocked a mutation-capable payload whose target path is missing or unsupported.",
+                },
+              };
+            }
             return {
-              hook: "__legacy_plan_approval_block__",
+              hook: "aidlc-plan-approval-guard.ts",
               input: {
-                reason:
-                  "Plan Approval blocked a mutation-capable payload whose target path is missing or unsupported.",
+                hook_event_name: "PreToolUse",
+                tool_name: toolName,
+                tool_input: toolArgs,
+                cwd: projectDir,
               },
             };
           }
@@ -2329,7 +2562,7 @@ function buildForward(): Forward {
         }
       }
       if (toolName === "") return null;
-      if (PLAN_APPROVAL_SAFE_READ_TOOLS.has(toolName)) return null;
+      if (isPlanApprovalSafeReadTool(toolName)) return null;
       if (writeTool) {
         return {
           hook: "aidlc-plan-approval-guard.ts",
@@ -2354,15 +2587,14 @@ function buildForward(): Forward {
               command:
                 typeof toolArgs.command === "string" ? toolArgs.command : "",
             },
-            cwd: projectDir,
+            cwd: shellToolCwd(toolName, toolArgs),
             // The guard reads a PowerShell command the way PowerShell runs it.
-            ...(toolName === "execute_pwsh" ? { aidlc_shell: "powershell" } : {}),
+            ...(isKiroPowerShellTool(toolName) ? { aidlc_shell: "powershell" } : {}),
           },
         };
       }
       if (isKiroDelegationTool(toolName)) {
-        const generic =
-          toolName === "invoke_sub_agent" || toolName === "orchestrate_subagent";
+        const generic = isKiroGenericDelegationTool(toolName);
         const named = kiroDelegationTargets(toolName, toolArgs);
         // A generic dispatch that names no delegate (or a pipeline with no
         // stage) is treated as guarded generation rather than letting an
@@ -2417,6 +2649,27 @@ function buildForward(): Forward {
       };
     }
 
+    // Kiro runs a project PreToolUse hook on a delegated agent's own calls too,
+    // under the conductor's session and with no agent identity (measured on
+    // IDE 1.2.4), so both guards judge a delegate's call as the conductor's.
+    case "review-freeze":
+    case "state-transition-guard": {
+      const toolArgs = ide.toolArgs ?? {};
+      const call = guardToolCall(ide.toolName ?? "", toolArgs);
+      if (call === null) return null;
+      return {
+        hook: target === "review-freeze"
+          ? "aidlc-review-freeze.ts"
+          : "aidlc-state-transition-guard.ts",
+        input: {
+          hook_event_name: "PreToolUse",
+          ...call,
+          cwd: shellToolCwd(ide.toolName ?? "", toolArgs),
+          // Both guards read a PowerShell command the way PowerShell runs it.
+          ...(isKiroPowerShellTool(ide.toolName ?? "") ? { aidlc_shell: "powershell" } : {}),
+        },
+      };
+    }
     case "audit-and-sensors": {
       // postToolUse(write) → write-audit-log THEN run-sensors (both ship core).
       // Captured PostToolUse write inputs are empty, so the file path comes
@@ -2624,7 +2877,7 @@ function buildForward(): Forward {
       }
       const sessionId = ide.sessionId?.trim() || rememberedKiroIdeSessionId();
       const completion = (t: KiroDelegationTarget | undefined) => {
-        const output = toolName === "orchestrate_subagent"
+        const output = isKiroPipelineDelegationTool(toolName)
           ? orchestrateStageOutput(result, t?.stage ?? "")
           : result;
         return {
@@ -2774,7 +3027,14 @@ if (fwd === null) {
   return 0;
 }
 if (fwd.hook === "__legacy_plan_approval_block__") {
+  // The switch that turns the Plan Approval check off turns the adapter's own
+  // refusals off too, as it turns off the core guard before it reads anything.
+  if (resolveProjectFlag("AIDLC_DISABLE_PLAN_APPROVAL_GUARD", process.env, projectDir) === "1") return 0;
   process.stderr.write(`${String(fwd.input.reason ?? "Plan Approval blocked this tool.")}\n`);
+  return 2;
+}
+if (fwd.hook === "__unreadable_guard_call__") {
+  process.stderr.write(`${String(fwd.input.reason)}\n`);
   return 2;
 }
 hookDebug(projectDir, "kiro-adapter", "forward", {
@@ -2834,10 +3094,14 @@ if (fwd.hook === "__audit_and_sensors__") {
   return 0;
 }
 
-// The core guard judges the workflow of the session named in its payload; the
-// routes above build its input from the tool call alone. Legacy events carry no
+// The core guards judge the workflow of the session named in their payload; the
+// routes above build their input from the tool call alone. Legacy events carry no
 // session id, so send the host-derived identity SessionStart bound instead.
-if (fwd.hook === "aidlc-plan-approval-guard.ts") {
+if (
+  fwd.hook === "aidlc-plan-approval-guard.ts" ||
+  fwd.hook === "aidlc-review-freeze.ts" ||
+  fwd.hook === "aidlc-state-transition-guard.ts"
+) {
   fwd.input.session_id = resolvedPlanApprovalSessionId(ide);
 }
 // A prompt that starts its chat's session runs session-start first, as

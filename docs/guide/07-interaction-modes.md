@@ -73,28 +73,37 @@ The default approval gate presents two options:
   `aidlc-state.md`, shows a progress line, and advances to the next stage
 - **Request Changes** lets you provide specific feedback; the agent revises its work and re-presents the approval gate
 
-Answer in your own words. The engine reads your reply the same way at every
-question it asks (this gate, the summary confirmation, a construction policy or
-verification command, a Construction checkpoint, Plan Approval, and a recovery
-question), so you never have to retype an exact option label:
+Answer in your own words, the way you would answer a colleague. You drive: the
+agent reads your reply and does what you said, at every question (this gate, the
+summary confirmation, a verification command, a Construction checkpoint, Plan
+Approval, and a recovery question). You never retype an option label or say the
+same thing twice:
 
-- A number, letter, or ordinal picks that option: `1`, `b`, `the second one`.
-- An option label counts with a typo or in any case: `aprove`, `request chnages`.
-- Plain approval counts: `approved`, `looks good`, `lgtm`, `yes`. A bare `yes`
-  counts only when no other question is waiting for the same reply; otherwise
-  you are asked once to confirm.
+- `1`, `a` (where the options are lettered), `approved`, `looks good`, or
+  `aprove` all approve.
 - A change request is Request Changes, and your words are the feedback:
-  `rename the handler`, `looks good but split the tests`. Only a bare `no` or
-  `2` is followed by "What should change?".
-- An approval that also asks to stop the workflow for now approves, and the
-  workflow parks with nothing else asked: `Approve, but let's stop there for
-  today`, `Approved. Stop here for today.`, `lgtm, done for today`. This works
-  at a stage gate and at Plan Approval; `/aidlc --resume` picks it up later.
-- Naming the approval and asking for a change in the same reply (`approve, but
-  rename the handler`) gets one question: approve it as it is, or make the
-  change first.
-- A question is answered and the gate asked again; nothing is recorded.
-- A reply that is genuinely unclear (`maybe`, `hmm`) gets one short follow-up.
+  `rename the handler`, `no, split the tests`.
+- An approval with an instruction is both: `looks fine but rename the handler`
+  approves, the agent renames it and says so in one line ("Renamed
+  processOrder to handleOrder in 3 files"), and the work carries on.
+- An approval that also asks to stop for now approves and parks the workflow:
+  `Approve, but let's stop there for today`. `/aidlc --resume` picks it up later.
+- A question gets an answer, and your next reply decides.
+- Only a reply that is genuinely unclear (`hmm`, `not sure`) gets one short
+  question back.
+
+AI-DLC records gate, Plan Approval, checkpoint, verification-command, and
+Construction setting changes with your words beside them (`Person Reply` in
+the audit trail), as your harness passed them and trimmed. At a stage gate that
+is every message since the gate was shown, up to 8: if a ninth arrives, or one
+message is over 8000 characters, none of them is attached, and a change request
+records the agent's `--reason` instead; at Plan Approval, your latest 8
+replies, each cut to 8000 characters; at a checkpoint or verification-command
+question, your replies joined in order, keeping the last 8000 characters; for a
+Construction setting you asked to change, the message that asked. The summary confirmation records the
+choice the agent read and, for a change request, what you asked to change. A
+decision needs a reply from you after the question was shown: the agent cannot
+answer for you.
 
 When you ask for changes at a stage gate, the audit trail records, as the
 revision feedback, the words your harness passed to the human-turn hook for
@@ -259,7 +268,7 @@ When you are told a file changed and the run is continuing, that is the whole re
 
 An edit to a finished stage's files is not reviewed or approved again unless you ask for it:
 
-- **What warns you.** When you edit one of the stage documents AIDLC tracks for a finished stage, the next step says once which finished stage is now behind and what to say to redo it; `/aidlc --status` lists the stages affected downstream. Moving, renaming or copying the project folder changes none of those documents, so it brings no warning (see the [Artifacts Reference](14-artifacts-reference.md) for when it still can). The warning is advice, not a stop. A stage finished without a validation record (for example, by an older AIDLC release) gets no warning and shows only as untracked in `/aidlc --status`.
+- **What warns you.** When you edit one of the stage documents AIDLC tracks for a finished stage, the next step says once which finished stage is now behind and what to say to redo it; `/aidlc --status` lists the stages affected downstream. Moving, renaming or copying the project folder changes none of those documents, so it brings no warning (see the [Artifacts Reference](14-artifacts-reference.md) for when it still can). The warning is advice, not a stop. A stage finished without a validation record (for example, by an older AIDLC release) gets no warning, and `/aidlc --status` does not list it.
 - **What does not.** Your application code is not tracked this way, so changing it after Code Generation raises no warning.
 - **Getting it checked again.** Jump back with `/aidlc --stage <name>` to the earliest affected stage (Code Generation for application code). That reopens it and every later stage in your plan. The files stay, so each reopened stage that finds its earlier files asks you to **Keep** them, **Modify** them, or **Redo from scratch**. Keep skips regenerating the files, not the checks: any review or approval the stage needs still happens. Choose Modify or Redo where your change should be carried through. Code Generation's review covers only the application files listed in a Unit's source manifest, so a file you added or moved by hand is not reviewed until it is listed there. When you choose Modify, name the files you added or moved and the Unit they belong to. Work without Units (for example a bugfix or refactor scope) has no source manifest, so check hand edits to application code yourself before you approve. Construction checkpoints you set to run automatically stay automatic.
 

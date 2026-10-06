@@ -164,7 +164,7 @@ Twenty-nine stages use inline execution, including all three Initialization stag
 
 **Subagent stages** -- The conductor prepares context (prior artifacts, project description, workspace findings) and delegates to a Claude Code Task tool subagent. The subagent executes autonomously and returns a structured summary. This is used for stages that benefit from focused, independent work without user interaction during execution. If a subagent call fails, the conductor retries once with a reduced-context prompt, then offers the user inline execution or skip-and-revisit as fallback options.
 
-Four stages use dispatched execution: Reverse Engineering (2.1, `mode: pipeline` — developer scan then architect synthesis-and-write), Practices Discovery (2.2, `mode: subagent` — pipeline-deploy lead draft, mutually blind quality/developer/devsecops spokes, human interview, lead integration), User Stories (2.4, `mode: mob` — product lead draft plus design/developer/quality contribution rounds), and Code Generation (3.5, focused developer subagent). The complete topology is 29 inline / 2 subagent / 1 pipeline / 1 mob. Workspace Detection (0.2) runs deterministically inside `aidlc-utility intent-create`, not as a subagent.
+Four stages use dispatched execution: Reverse Engineering (2.1, `mode: pipeline` — developer scan then architect synthesis-and-write), Practices Discovery (2.2, `mode: subagent` — pipeline-deploy lead draft, mutually blind quality/developer/devsecops spokes, human interview, lead integration), User Stories (2.4, `mode: mob` — product lead draft plus design/developer/quality contribution rounds), and Code Generation (3.5, focused developer subagent). With collaborators off (every shipped scope except `enterprise`), the first three run their lead agent alone. The complete topology is 29 inline / 2 subagent / 1 pipeline / 1 mob. Workspace Detection (0.2) runs deterministically inside `aidlc-utility intent-create`, not as a subagent.
 
 ```mermaid
 flowchart LR
@@ -366,12 +366,16 @@ under `tools/data/`:
 - `aidlc-projection.json` is the exhaustive install descriptor. It classifies
   every top-level output as a framework-managed directory or a root integration
   with one typed merge policy (`managed-block`, `json-map`, `json-array`,
-  `whole-file`, or `jsonc-settings`, which edits an editor's JSONC settings
+  `whole-file`, `jsonc-settings`, which edits an editor's JSONC settings
   file key by key: it adds a shipped key only when absent, keeps every other
-  key and comment, and is left out of the copy runtime). A 2.10.0 install
+  key and comment, and is left out of the copy runtime, or `json-entries`,
+  which does the same at any depth for a team's JSON file such as
+  `opencode.json`: AI-DLC's values and array strings are added when absent and
+  followed or removed only while unchanged, its part ships in root-blocks, and
+  the copy runtime leaves the file out). A 2.10.0 install
   refuses a release whose descriptor names a policy it does not know, so a
-  policy added since (`jsonc-settings`) is written as `whole-file` with the real
-  one in `extendedPolicy`, and every reader puts it back
+  policy added since (`jsonc-settings`, `json-entries`) is written as
+  `whole-file` with the real one in `extendedPolicy`, and every reader puts it back
   (`writtenRootIntegration` and `readRootIntegrations` in
   `core/tools/aidlc-distribution.ts`;
   `tests/unit/t-previous-release-validates-runtime.test.ts` runs 2.10.0's own
@@ -529,8 +533,9 @@ otherwise higher precedence than the record.
 `aidlc config project` stores MCP and completion answers in a schema-versioned
 `project` record while continuing to store plugin selection in the established
 top-level `plugins` array. Installed plugins are discovered from graph, scope,
-and plugin sidecar data. The normal refresh guard protects all project choice
-mutations from changing a live workflow plan.
+and plugin sidecar data. A project choice changed while a workflow is open is
+done like any refresh, and its output names the open work and the command that
+puts the earlier choice back.
 
 Recorded MCP consent feeds the existing root-integration merge mode during the
 same transaction and on later plain refreshes for Claude's consent-managed
@@ -790,8 +795,8 @@ aidlc/                                    # neutral, harness-independent, commit
 ```
 
 **Resolution.** Workflow identity is resolved at one library chokepoint with
-precedence `in-process sessionId > AIDLC_SESSION_OVERRIDE > PID ancestry >
-none`. Hook payload identity uses the in-process option and is authoritative.
+precedence `in-process sessionId > AIDLC_SESSION_OVERRIDE > CODEX_THREAD_ID
+(Codex tools only) > PID ancestry > none`. Hook payload identity uses the in-process option and is authoritative.
 An invalid environment value is ignored. A valid environment override that
 differs from ancestry throws a typed refusal before a binding or workflow record
 path is derived. Explicit selectors and the resulting machine-local session
@@ -930,7 +935,7 @@ readers read the rows they share once (`copiedAuditBlocks` in
 
 13. **No nested delegation** -- The conductor (SKILL.md) performs every agent Task call. Agents never invoke each other or spawn subagents. This keeps the delegation graph flat and debuggable.
 
-14. **Four-option session resume** -- Resume from checkpoint, redo current stage, jump to a specific stage, or start fresh (with archive confirmation). Gives users fine-grained control over workflow navigation without manual state file editing.
+14. **Session resume** -- Bare `/aidlc` in a new session carries on from the checkpoint; the person can ask to redo the current stage, jump to a specific stage, or start fresh (a new intent alongside). Gives users fine-grained control over workflow navigation without manual state file editing.
 
 15. **Stage/Phase jump commands** -- `--stage <slug|#>` and `--phase <name|#>` jump directly to a specific stage or phase. `--scope <scope>` sets or overrides the workflow scope. Forward jumps mark intermediate stages as `[S]` (skipped); under solo unit-major Construction a jump to the step the walk is on just continues it, once a Unit has finished work a jump to a later per-unit step moves only the Unit in flight on, and any other forward jump names what it skips or starts over; backward jumps reset downstream stages to `[ ]` and replay forward from the target. Composable with each other.
 
@@ -940,8 +945,8 @@ readers read the rows they share once (`copiedAuditBlocks` in
 tests/
 +-- run-tests.ts              # Native Bun test runner (all levels, flag-selectable)
 +-- run-tests.sh              # POSIX compatibility wrapper for run-tests.ts
-+-- gen-coverage-registry.ts  # Generates .coverage-registry.json from covers: headers
-+-- .coverage-registry.json   # Machine-checked coverage index (units x test files); also the ratchet baseline
++-- gen-coverage-registry.ts  # Builds the coverage registry fresh from covers: headers; --check --base is CI's ratchet
++-- .coverage-registry.json   # Local only (gitignored): the registry a plain generator run writes
 +-- README.md                 # Discoverable suite index + quick reference
 +-- lib/
 |   +-- bun-junit-to-meta.ts  # Bun JUnit -> runner metadata glue

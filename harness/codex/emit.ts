@@ -497,12 +497,23 @@ export default function emit(ctx: EmitContext): void {
   // Codex alone does NOT enumerate core/skills/, so this list is the only thing
   // that ships them here: a skill missing from it silently reaches every OTHER
   // harness and not this one.
+  // A Codex user invokes a skill with `$`, so the slash commands these skills
+  // name (`/aidlc`, `/aidlc-replay`) are written the Codex way; a path such as
+  // `<record>/aidlc-state.md` or `.codex/tools/aidlc.ts` is left as it is.
+  const codexInvocations = (s: string): string =>
+    s.replace(/(^|[\s(`"])\/(aidlc(?:-[a-z][a-z0-9-]*)?)(?![a-z0-9-]*\.[a-z])/gm, "$1$$$2");
   for (const skill of ["aidlc-session-cost", "aidlc-replay", "aidlc-outcomes-pack", "aidlc-knowledge"]) {
     const srcDir = join(coreRoot, "skills", skill);
     if (!existsSync(srcDir)) continue;
     for (const file of walk(srcDir)) {
       const rel = relative(srcDir, file);
-      emissions.push({ path: join(SKILLS_DST, skill, rel), content: () => rewriteProse(readFileSync(file, "utf-8")) });
+      emissions.push({
+        path: join(SKILLS_DST, skill, rel),
+        content: () => {
+          const prose = rewriteProse(readFileSync(file, "utf-8"));
+          return rel.endsWith(".md") ? codexInvocations(prose) : prose;
+        },
+      });
     }
     emissions.push({ path: join(SKILLS_DST, skill, "agents", "openai.yaml"), content: () => IMPLICIT_GUARD });
   }

@@ -257,6 +257,11 @@ class Fixture {
     ));
     mkdirSync(seededAuditDir(this.project), { recursive: true });
     writeFileSync(seededAuditShard(this.project), "# AI-DLC Audit Log\n");
+    // The session this fixture stands for runs AI-DLC's hooks: they have
+    // left a heartbeat in the record, so `next` does its work.
+    const health = join(seededRecordDir(this.project), ".aidlc-engine", "hooks-health");
+    mkdirSync(health, { recursive: true });
+    writeFileSync(join(health, "write-audit-log.last"), new Date().toISOString());
     mkdirSync(join(this.project, "src"));
     writeFileSync(join(this.project, "src", "base.ts"), "export const base = 1;\n");
     // The native commands are unchanged strings. Project context comes from

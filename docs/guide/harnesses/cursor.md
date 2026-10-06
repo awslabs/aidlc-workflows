@@ -179,7 +179,11 @@ utility shortcuts are `/aidlc-status`, `/aidlc-jump --stage <slug>` (or
   fail closed rather than losing delegated-agent attribution. Delegates may use
   ordinary Shell commands, but general-purpose interpreters and dynamic command
   evaluation are denied; use Cursor's native read/search tools and let the parent
-  conversation run executable probes.
+  conversation run executable probes. These delegate limits apply only while the
+  reviewer read-scope or state-transition check holds for the piece of work:
+  when both stand aside (Guard Policy off does that), delegates run builds,
+  tests and searches like the main conversation, a Task starts even when its
+  record cannot be written, and Cursor's own approval applies.
 - **Generated stage and scope runners are explicit-only.** Cursor receives
   `disable-model-invocation: true` on generated runner skills, including plugin
   runners, so ordinary coding prompts cannot auto-activate state-mutating
@@ -204,9 +208,20 @@ utility shortcuts are `/aidlc-status`, `/aidlc-jump --stage <slug>` (or
   `/aidlc --status`) and the progress lines at gates.
 - **Tab autocomplete is untouched** by this install - it rides Cursor's own
   models regardless of configuration.
-- **Permissions**: `.cursor/cli.json` pre-approves `Shell(bun)` only (a
-  project-level `cli.json` carries permissions only); every other shell command
-  follows your Cursor approval settings.
+- **Permissions**: `.cursor/cli.json` pre-approves only AI-DLC's own workflow
+  commands: its engine commands, `doctor`, `version`, `status` (and their
+  `--doctor`, `--version` and `--status` spellings, and doctor with
+  `--verbose`), `config --help`, `config --show` and the read-only
+  `config <section> --show` (with or without `--json`) and `--help`
+  forms, turning a
+  check back on (`config flags --clear-bypass <switch> --yes`), and its
+  `aidlc-*.ts` tools (a project-level `cli.json` carries permissions only). A
+  native install pre-approves the same commands run as the installed `aidlc`
+  command, and `aidlc engine ...`. Every other
+  shell command follows your Cursor approval settings, including any other
+  `config` change (turning a check off too), the commands that change the machine's AI-DLC install (`use`,
+  `update`, `rollback`, `uninstall`, `system`), and the tool scripts behind
+  them.
 - **MCP servers**: none ship; configure your own under `.cursor/mcp.json` if
   needed.
 - **Headless `agent -p` runs cannot pass approval gates.** The human-presence
@@ -231,7 +246,7 @@ agent -p "/aidlc --status" --output-format text --trust   # /aidlc --status thro
 ```
 
 The doctor's Cursor-specific checks: the hook wiring at `.cursor/hooks.json`,
-the `Shell(bun)` permission pre-approval at `.cursor/cli.json`, the standing
+the permission pre-approval for AI-DLC's commands at `.cursor/cli.json`, the standing
 rule at `.cursor/rules/aidlc.mdc`, all four phase-rule pointers, and whether
 the project is in a git repository.
 

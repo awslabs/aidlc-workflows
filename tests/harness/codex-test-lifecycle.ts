@@ -3,6 +3,7 @@ import { lstatSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { CODEX_FILE, coordinatorReportPath } from "../lib/e2e-deferred-cleanup.ts";
 import { FILE_CLEANUP_RESERVE_MS, remainingOperationTimeoutMs } from "./test-budget.ts";
+import { PersonTurnLedger, unbackedFailure } from "./person-turns.ts";
 
 export interface CodexExecution {
   rc: number;
@@ -52,8 +53,27 @@ export function codexExecDiagnostic(result: CodexExecution): string {
     limit(result.out ?? `STDOUT:\n${result.stdout ?? ""}\nSTDERR:\n${result.stderr ?? ""}`);
 }
 
-export function recordCodexExec(label: string, cwd: string, argv: string[], result: CodexExecution): void {
-  const header = `Command: ${JSON.stringify(argv)}\nCwd: ${cwd}\n`;
+/** Begin a codex turn just before its exec: the prompt is the person's turn. */
+export function codexPersonTurn(proj: string, prompt: string): PersonTurnLedger {
+  const turn = new PersonTurnLedger(proj);
+  turn.sent(prompt);
+  return turn;
+}
+
+// Every live exec passes its turn (codexPersonTurn, before the spawn), so no
+// journey can record a decision the check never sees.
+export function recordCodexExec(
+  label: string,
+  cwd: string,
+  argv: string[],
+  result: CodexExecution,
+  turn: PersonTurnLedger,
+): void {
+  const unbacked = turn.unbacked();
+  const decisions = unbacked.length > 0
+    ? `Unbacked decisions (no turn from the person after the gate or question opened):\n${unbacked.map((line) => `  ${line}`).join("\n")}\n`
+    : "";
+  const header = `Command: ${JSON.stringify(argv)}\nCwd: ${cwd}\n${decisions}`;
   const summary = header + codexExecDiagnostic(result);
   const context = diagnostics.getStore();
   if (context) context.last = limit(summary);
@@ -63,6 +83,7 @@ export function recordCodexExec(label: string, cwd: string, argv: string[], resu
       `${header}Exit code: ${result.rc}\nSignal: ${result.signal ?? "none"}\nSpawn error: ${result.error ?? "none"}\n\n` +
       (result.out ?? `STDOUT:\n${result.stdout ?? ""}\nSTDERR:\n${result.stderr ?? ""}`));
   }
+  if (unbacked.length > 0) throw unbackedFailure(`The codex exec "${label}"`, unbacked);
 }
 
 const samePath = (a: string, b: string): boolean => {

@@ -1,5 +1,6 @@
 // covers: hook:aidlc-continue-workflow, hook:aidlc-rebuild-stage-graph
 // covers: function:parseLiteralShellInvocation, function:isRetiredOnlyNextArgv
+// covers: function:isShellToolName, function:shellCommandText
 //
 // Pins the both-shape detector contract for the stop hook and runtime-compile
 // hook. The legacy tool-file shape is a permanent input: plugin manifests and
@@ -18,7 +19,9 @@ import {
   classifyRuntimeCompileCommand,
   isEngineEngagementSegment,
   isEngineToolCall,
+  isShellToolName,
   parseLiteralShellInvocation,
+  shellCommandText,
 } from "../../core/tools/aidlc-lib.ts";
 
 type RuntimeCompileDecision = "reject" | "fire" | "pass";
@@ -868,6 +871,25 @@ describe("detector corpus", () => {
         "aidlc engine state approve application-design --user-input 'notes && aidlc engine runtime compile'",
       ),
     ).toBe("fire");
+  });
+
+  test("a shell call reads the same under every shell tool name and command field", () => {
+    // Codex 0.160 records its shell call as exec_command with the command
+    // under `cmd`; other Codex models use shell_command, older Codex shell or
+    // local_shell_call, Kiro execute_bash, Claude Code Bash.
+    const next = "bun .codex/tools/aidlc.ts engine orchestrate next";
+    for (const name of ["Bash", "bash", "shell", "execute_bash", "local_shell_call", "shell_command", "exec_command"]) {
+      expect(isShellToolName(name), name).toBe(true);
+      expect(isEngineToolCall(name, { command: next }), `${name} command`).toBe(true);
+      expect(isEngineToolCall(name, { cmd: next, max_output_tokens: 12000 }), `${name} cmd`).toBe(true);
+      expect(isEngineToolCall(name, { cmd: `${next} --status` }), `${name} read-only`).toBe(false);
+    }
+    expect(shellCommandText({ command: "ls", cmd: next })).toBe("ls");
+    expect(shellCommandText({ cmd: next })).toBe(next);
+    expect(shellCommandText({ command: ["bash", "-lc", next] })).toBeNull();
+    // A tool that is not a shell is judged by its name, never by a command field.
+    expect(isShellToolName("apply_patch")).toBe(false);
+    expect(isEngineToolCall("apply_patch", { cmd: next })).toBe(false);
   });
 
   test("new top-level park is intentional engagement", () => {

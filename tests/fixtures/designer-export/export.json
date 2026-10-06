@@ -2371,8 +2371,6 @@
       ],
       "sensors": [
         "required-sections",
-        "linter",
-        "type-check",
         "traceability"
       ],
       "scopes": [
@@ -2419,22 +2417,6 @@
           "default_severity": "advisory",
           "category": "document-shape",
           "matches": "**/{aidlc-docs,intents,codekb}/**"
-        },
-        {
-          "id": "linter",
-          "path": ".claude/sensors/aidlc-linter.md",
-          "fire_on": "write",
-          "default_severity": "advisory",
-          "category": "code-quality",
-          "matches": "**/*.{ts,js}"
-        },
-        {
-          "id": "type-check",
-          "path": ".claude/sensors/aidlc-type-check.md",
-          "fire_on": "write",
-          "default_severity": "advisory",
-          "category": "code-quality",
-          "matches": "**/*.{ts,tsx}"
         },
         {
           "id": "traceability",
@@ -3350,7 +3332,8 @@
         "sensors": "on",
         "learnings": "off",
         "summary_confirmation": "off",
-        "plan_approval": "on"
+        "plan_approval": "on",
+        "collaborators": "off"
       }
     },
     "classic": {
@@ -3398,7 +3381,8 @@
         "sensors": "on",
         "learnings": "on",
         "summary_confirmation": "off",
-        "plan_approval": "on"
+        "plan_approval": "on",
+        "collaborators": "off"
       }
     },
     "enterprise": {
@@ -3446,7 +3430,8 @@
         "sensors": "on",
         "learnings": "on",
         "summary_confirmation": "on",
-        "plan_approval": "on"
+        "plan_approval": "on",
+        "collaborators": "on"
       }
     },
     "express": {
@@ -3498,7 +3483,8 @@
         "sensors": "off",
         "learnings": "off",
         "summary_confirmation": "off",
-        "plan_approval": "off"
+        "plan_approval": "off",
+        "collaborators": "off"
       }
     },
     "feature": {
@@ -3547,7 +3533,8 @@
         "sensors": "on",
         "learnings": "on",
         "summary_confirmation": "on",
-        "plan_approval": "on"
+        "plan_approval": "on",
+        "collaborators": "off"
       }
     },
     "infra": {
@@ -3599,7 +3586,8 @@
         "sensors": "on",
         "learnings": "on",
         "summary_confirmation": "on",
-        "plan_approval": "on"
+        "plan_approval": "on",
+        "collaborators": "off"
       }
     },
     "mvp": {
@@ -3651,7 +3639,8 @@
         "sensors": "on",
         "learnings": "on",
         "summary_confirmation": "on",
-        "plan_approval": "on"
+        "plan_approval": "on",
+        "collaborators": "off"
       }
     },
     "poc": {
@@ -3704,7 +3693,8 @@
         "sensors": "on",
         "learnings": "on",
         "summary_confirmation": "on",
-        "plan_approval": "off"
+        "plan_approval": "off",
+        "collaborators": "off"
       }
     },
     "refactor": {
@@ -3757,7 +3747,8 @@
         "sensors": "on",
         "learnings": "on",
         "summary_confirmation": "on",
-        "plan_approval": "on"
+        "plan_approval": "on",
+        "collaborators": "off"
       }
     },
     "security-patch": {
@@ -3812,7 +3803,8 @@
         "sensors": "on",
         "learnings": "on",
         "summary_confirmation": "on",
-        "plan_approval": "on"
+        "plan_approval": "on",
+        "collaborators": "off"
       }
     },
     "workshop": {
@@ -3865,7 +3857,8 @@
         "sensors": "on",
         "learnings": "on",
         "summary_confirmation": "on",
-        "plan_approval": "on"
+        "plan_approval": "on",
+        "collaborators": "off"
       }
     }
   },

@@ -288,8 +288,15 @@ export function latestQuestion(projectDir: string): StoredQuestion | null {
  * The first new-work question asked at or after `since` and within `withinMs`
  * of it: the request described right after words said before any was open. A
  * `compose` entry counts, so words said just before a composition answer it.
+ * With `routing`, a routing question counts too: words typed with a description
+ * beside open work answer the routing question that description becomes.
  */
-export function firstFrontQuestionSince(projectDir: string, since: string, withinMs: number): string | null {
+export function firstFrontQuestionSince(
+  projectDir: string,
+  since: string,
+  withinMs: number,
+  options: { routing?: boolean } = {},
+): string | null {
   const from = Date.parse(since);
   if (Number.isNaN(from)) return null;
   let names: string[];
@@ -304,7 +311,8 @@ export function firstFrontQuestionSince(projectDir: string, since: string, withi
     if (!QUESTION_ID.test(id)) continue;
     const question = readStoredQuestion(projectDir, id);
     const at = Date.parse(question?.createdAt ?? "");
-    if (question === null || question.origin === "routing" || Number.isNaN(at) || at < from || at - from > withinMs) continue;
+    if (question === null || (question.origin === "routing" && !options.routing) || Number.isNaN(at) ||
+      at < from || at - from > withinMs) continue;
     if (first === null || at < first.at) first = { id, at };
   }
   return first?.id ?? null;

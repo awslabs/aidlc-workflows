@@ -17,18 +17,19 @@
 
 import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS } from "../harness/test-budget.ts";
 import { afterEach, beforeEach, describe, expect, setDefaultTimeout, test } from "bun:test";
-import { cpSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import {
   cleanupTestProject,
   createTestProject,
   removeWorkspaceRecord,
+  seedAidlcMemory,
 } from "../harness/fixtures.ts";
 import {
   HARNESS_MATRIX,
   harnessByName,
 } from "../harness/harness-matrix.ts";
-import { loadScopeMapping, readIntentRegistry, toPosix } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import { intentDisplayLabel, loadScopeMapping, readIntentRegistry, toPosix } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { mintQuestionId, saveQuestion } from "../../dist/claude/.claude/tools/aidlc-question-store.ts";
 
 const BUN = process.execPath;
@@ -116,6 +117,17 @@ function questionFile(id: string): string {
   return join(proj, "aidlc", ".aidlc-sessions", "questions", `${id}.json`);
 }
 
+// Words alone over active work first get the re-entry readings (a redo,
+// jump, or fresh start, or else this); their `next --request` asks the
+// routing question with the words kept.
+function asWork(words: string) {
+  const read = JSON.parse(next([words]).stdout.trim()) as { kind: string; message: string };
+  expect(read.kind, JSON.stringify(read).slice(0, 300)).toBe("print");
+  const request = /`([^`]* next --request [0-9a-f]{8})`/.exec(read.message)?.[1];
+  expect(request, read.message).toBeDefined();
+  return JSON.parse(runEmittedCommand(request!).stdout.trim());
+}
+
 function printedCommand(message: string): string {
   const command = message.match(/Run `([^`]+)`/)?.[1];
   expect(command, message).toBeDefined();
@@ -156,6 +168,56 @@ describe("t171 creation gate consults the intent registry (Blocker B1)", () => {
       return records;
     };
 
+    // A teammate's clone: committed work in progress, no per-user cursor. A bare
+    // /aidlc (or --resume) names each piece and where it stands, never "no work".
+    test("work whose record cannot be selected here is counted, never named", () => {
+      const [kept, odd] = seedTwoIntentsNoCursor();
+      const unbindable = `${odd} `;
+      renameSync(join(intentsDir(proj), odd), join(intentsDir(proj), unbindable));
+      const rows = readIntentRegistry(proj).map((row) => (row.dirName === odd ? { ...row, dirName: unbindable } : row));
+      writeFileSync(join(intentsDir(proj), "intents.json"), `${JSON.stringify(rows, null, 2)}\n`);
+      const d = JSON.parse(next([]).stdout.trim());
+      expect(d.ask_type, JSON.stringify(d).slice(0, 300)).toBe("intent-pick");
+      expect(d.available_intents).toEqual([kept]);
+      expect(d.question).toContain("This project has 2 pieces of work in progress");
+      expect(d.question).toContain("(1 more has a record name that cannot be selected here)");
+      expect(d.question).not.toContain(unbindable);
+    });
+
+    for (const args of [[], ["--resume"]]) {
+      test(`a clone with work in progress and no cursor: \`next${args.length ? ` ${args.join(" ")}` : ""}\` names each piece and where it stands`, () => {
+        const records = seedTwoIntentsNoCursor();
+        const d = JSON.parse(next(args).stdout.trim());
+        expect(d.kind, JSON.stringify(d).slice(0, 300)).toBe("ask");
+        expect(d.ask_type).toBe("intent-pick");
+        // The picker's order is the registry's; the directory listing's varies by filesystem.
+        expect([...d.available_intents].sort()).toEqual([...records].sort());
+        expect(d.question).toContain("This project has 2 pieces of work in progress, and none is selected here:");
+        expect(d.question.match(/\(at [A-Z][^)]*\)/g) ?? []).toHaveLength(2);
+        expect(d.question).toContain("Pick one to carry on.");
+        expect(JSON.stringify(d)).not.toContain("No workflow state found");
+        // Read-only: nothing created, nothing selected.
+        expect(recordDirs(proj)).toEqual(records);
+        expect(existsSync(cursorPath(proj))).toBe(false);
+      });
+
+      test(`a clone with one piece of work and no cursor: \`next${args.length ? ` ${args.join(" ")}` : ""}\` offers it in one line`, () => {
+        const [first, second] = seedTwoIntentsNoCursor();
+        rmSync(join(intentsDir(proj), second), { recursive: true, force: true });
+        const rows = readIntentRegistry(proj).filter((row) => row.dirName !== second);
+        writeFileSync(join(intentsDir(proj), "intents.json"), `${JSON.stringify(rows, null, 2)}\n`);
+        const d = JSON.parse(next(args).stdout.trim());
+        expect(d.ask_type, JSON.stringify(d).slice(0, 300)).toBe("intent-pick");
+        expect(d.available_intents).toEqual([first]);
+        expect(d.question).toMatch(/^This project has one piece of work in progress: [^.]*\(at [A-Z][^)]*\)\. /);
+        // A question to the person, naming the work: an agent that reads it never
+        // takes it as its own instruction to pick, and "not now" stays an answer.
+        expect(String(d.question)).toEndWith(` Carry on with \`${intentDisplayLabel(rows[0])}\`, or not now?`);
+        expect(d.question).not.toContain("Pick it up");
+        expect(existsSync(cursorPath(proj))).toBe(false);
+      });
+    }
+
     test("Branch 9a (explicit --scope flag) emits an `ask` listing the existing intents, not a creation print", () => {
       seedTwoIntentsNoCursor();
       const r = next(["--scope", "poc"]);
@@ -166,7 +228,7 @@ describe("t171 creation gate consults the intent registry (Blocker B1)", () => {
       expect(d.message ?? "").not.toContain("intent create");
       // The engine exposes exact record names accepted by the switch command,
       // with the slug retained only as the human label.
-      expect(d.question).toContain("/aidlc intent <record>");
+      expect(d.question).toContain("Pick one to carry on.");
       const records = readIntentRegistry(proj)
         .map((entry) => entry.dirName)
         .filter((name): name is string => typeof name === "string");
@@ -186,7 +248,7 @@ describe("t171 creation gate consults the intent registry (Blocker B1)", () => {
       const d = JSON.parse(r.stdout.trim());
       expect(d.kind).toBe("ask");
       expect(d.message ?? "").not.toContain("intent create");
-      expect(d.question).toContain("/aidlc intent <record>");
+      expect(d.question).toContain("Pick one to carry on.");
       expect(d.available_intents).toHaveLength(2);
       expect(recordDirs(proj).length).toBe(2); // no duplicate created
     });
@@ -225,7 +287,7 @@ describe("t171 creation gate consults the intent registry (Blocker B1)", () => {
         }
         const pick = JSON.parse(next(["--scope", "poc"]).stdout.trim());
         expect(pick.ask_type).toBe("intent-pick");
-        expect(pick.question).toContain("1 piece of work in progress");
+        expect(pick.question).toContain("one piece of work in progress");
         expect(pick.question).toContain(live);
         expect(pick.question).not.toContain(finished);
         expect(pick.available_intents).toEqual([live]);
@@ -237,6 +299,60 @@ describe("t171 creation gate consults the intent registry (Blocker B1)", () => {
         expect(recordDirs(proj).length).toBe(2); // read-only
       });
     }
+
+    test("new work beside another clone's registry row counts only the work whose folder is here", () => {
+      const [here, elsewhere] = seedTwoIntentsNoCursor();
+      // Another clone's work: its registry row came with the pull, its record folder did not.
+      rmSync(join(intentsDir(proj), elsewhere), { recursive: true, force: true });
+      const routing = JSON.parse(next(["--scope", "poc", "a brand new standalone thing"]).stdout.trim());
+      expect(routing.ask_type, JSON.stringify(routing).slice(0, 300)).toBe("new-work-routing");
+      for (const text of [routing.question, routing.numbered_prose_question]) {
+        expect(text).toContain("This project already has 1 piece of work in progress, and none is currently selected:");
+        expect(text).toContain(here);
+        expect(text).not.toContain(elsewhere);
+      }
+      expect(routing.available_intents).toEqual([here]);
+      expect(recordDirs(proj)).toEqual([here]); // read-only
+    });
+
+    test("new work beside a record that cannot be selected here counts it without naming it", () => {
+      const [kept, odd] = seedTwoIntentsNoCursor();
+      const unbindable = `${odd} `;
+      renameSync(join(intentsDir(proj), odd), join(intentsDir(proj), unbindable));
+      const rows = readIntentRegistry(proj).map((row) => (row.dirName === odd ? { ...row, dirName: unbindable } : row));
+      writeFileSync(join(intentsDir(proj), "intents.json"), `${JSON.stringify(rows, null, 2)}\n`);
+      const routing = JSON.parse(next(["--scope", "poc", "a brand new standalone thing"]).stdout.trim());
+      expect(routing.ask_type, JSON.stringify(routing).slice(0, 300)).toBe("new-work-routing");
+      for (const text of [routing.question, routing.numbered_prose_question]) {
+        expect(text).toContain("This project already has 2 pieces of work in progress");
+        expect(text).toContain("(1 more has a record name that cannot be selected here)");
+        expect(text).not.toContain(unbindable);
+      }
+      expect(routing.available_intents).toEqual([kept]);
+    });
+
+    test("one piece of work in a fresh clone: picking it up lands on its next step, with nothing more to type", () => {
+      const [first, second] = seedTwoIntentsNoCursor();
+      // The rules a stage loads, so the carried-on step can be handed out.
+      seedAidlcMemory(proj);
+      rmSync(join(intentsDir(proj), second), { recursive: true, force: true });
+      const rows = readIntentRegistry(proj).filter((row) => row.dirName !== second);
+      writeFileSync(join(intentsDir(proj), "intents.json"), `${JSON.stringify(rows, null, 2)}\n`);
+      const pick = JSON.parse(next([]).stdout.trim());
+      expect(pick.ask_type, JSON.stringify(pick).slice(0, 300)).toBe("intent-pick");
+      const picked = runEmittedCommand(pick.select_commands[0].command);
+      expect(picked.status, picked.out).toBe(0);
+      const message = String(JSON.parse(picked.stdout.trim()).message);
+      const switched = runEmittedCommand(printedCommand(message));
+      expect(switched.status, switched.out).toBe(0);
+      expect(readFileSync(cursorPath(proj), "utf-8").trim()).toBe(first);
+      // The same print then names `next`, which carries the picked work on.
+      const carry = message.match(/then run `([^`]+)` and follow what it returns/)?.[1];
+      expect(carry, message).toBeDefined();
+      const step = JSON.parse(runEmittedCommand(carry!).stdout.trim());
+      expect(step.ask_type, JSON.stringify(step).slice(0, 300)).not.toBe("intent-pick");
+      expect(step.kind, JSON.stringify(step).slice(0, 300)).not.toBe("error");
+    });
 
     for (const selector of ["customer work", "x; touch pwned"]) {
       test(`intent picker executes literal selector ${selector}`, () => {
@@ -281,13 +397,23 @@ describe("t171 creation gate consults the intent registry (Blocker B1)", () => {
         expect(d.proposed_scope).toBe("poc");
       });
 
-      test(`${harness.name}: the intent picker names the harness's own entry`, () => {
+      test(`${harness.name}: picking work up selects it and carries on in one answer`, () => {
         seedTwoIntentsNoCursor();
         const orchestrator = join(harness.engineRoot, "tools", "aidlc-orchestrate.ts");
         const d = JSON.parse(next(["--scope", "poc"], proj, orchestrator).stdout.trim());
         expect(d.ask_type).toBe("intent-pick");
-        // A Codex user invokes the skill, not a slash command.
-        expect(d.question).toContain(`${harness.name === "codex" ? "$aidlc" : "/aidlc"} intent <record>`);
+        // The person is not told to type the entry again: their pick carries on.
+        expect(d.question).not.toContain("carries on where it left off");
+        const [entry] = d.select_commands;
+        expect(entry.command).toContain(" next --pick ");
+        // This fixture holds only the Claude tree, so the harness's own engine runs the pick.
+        const picked = next(["--pick", entry.selector], proj, orchestrator);
+        expect(picked.status, picked.out).toBe(0);
+        const message = String(JSON.parse(picked.stdout.trim()).message);
+        expect(message).toContain("intent switch");
+        expect(message).toContain(entry.selector);
+        expect(message).toMatch(/then run `[^`]* next` and follow what it returns\.$/);
+        expect(message).not.toContain("Do not call `next`");
       });
     }
 
@@ -332,13 +458,14 @@ describe("t171 creation gate consults the intent registry (Blocker B1)", () => {
     // A plan composed and approved in a fresh clone is asked about first; started
     // as new work, it is created exactly as approved, never as the stock scope.
     const PLAN = [
-      "--add", "functional-design", "--skip", "deployment-pipeline,deployment-execution",
+      "--add", "functional-design", "--skip", "deployment-pipeline,deployment-execution", "--plan-name", "price-check",
       "--depth", "comprehensive", "--sensors", "off", "--learnings", "off", "--review", "none", "--guard-policy", "strict",
     ];
     const expectApprovedPlan = (request: string): void => {
       const active = readFileSync(cursorPath(proj), "utf-8").trim();
       const state = readFileSync(join(intentsDir(proj), active, "aidlc-state.md"), "utf-8");
-      expect(state).toContain("- **Plan**: custom, based on bugfix");
+      // Named as the gate showed it, never after the scope it runs on.
+      expect(state).toContain("- **Plan**: price-check\n");
       expect(state).toMatch(/^- \[.\] functional-design \u2014 EXECUTE/m);
       expect(state).toMatch(/^- \[.\] deployment-pipeline \u2014 SKIP/m);
       expect(state).toMatch(/^- \[.\] deployment-execution \u2014 SKIP/m);
@@ -378,7 +505,7 @@ describe("t171 creation gate consults the intent registry (Blocker B1)", () => {
         expect(routed.status, routed.out).toBe(0);
         const creation = JSON.parse(routed.stdout.trim());
         expect(creation.message).toContain("--skip deployment-pipeline,deployment-execution --add functional-design");
-        expect(creation.message).toContain("no reviewers, sensors, learnings ritual, or summary confirmation");
+        expect(creation.message).toContain("no reviewers, sensors, learnings ritual, or summary confirmation; lead agent only");
         const created = runEmittedCommand(printedCommand(creation.message));
         expect(created.status, created.out).toBe(0);
         expect(recordDirs(proj)).toHaveLength(3);
@@ -553,7 +680,7 @@ describe("t171 creation gate consults the intent registry (Blocker B1)", () => {
       expect(util(["intent-create", "--scope", "feature", "--arguments", "second", "--label", "second"]).status).toBe(0);
       const asked = readFileSync(cursorPath(proj), "utf-8").trim();
       const other = recordDirs(proj).find((record) => record !== asked)!;
-      const ask = JSON.parse(next(["rename the settings page"]).stdout.trim());
+      const ask = asWork("rename the settings page");
       expect(ask.ask_type).toBe("new-work-routing");
       // While the workflow it asked about is selected, its reshape proceeds.
       expect(JSON.parse(runEmittedCommand(ask.compose_command).stdout.trim()).kind).toBe("print");
@@ -587,7 +714,7 @@ describe("t171 creation gate consults the intent registry (Blocker B1)", () => {
       expect(util(["intent-create", "--scope", "feature", "--arguments", "second", "--label", "second"]).status).toBe(0);
       const asked = readFileSync(cursorPath(proj), "utf-8").trim();
       const other = recordDirs(proj).find((record) => record !== asked)!;
-      const ask = JSON.parse(next(["rename the settings page"]).stdout.trim());
+      const ask = asWork("rename the settings page");
       expect(ask.ask_type).toBe("new-work-routing");
       expect(emittedArgv(ask.continue_command)).toEqual(["next", "--continue", "--request", expect.stringMatching(/^[0-9a-f]{8}$/)]);
       // While the workflow it asked about is selected, "part of it" is exactly a bare next.
@@ -604,7 +731,7 @@ describe("t171 creation gate consults the intent registry (Blocker B1)", () => {
       expect(util(["intent-create", "--scope", "feature", "--arguments", "second", "--label", "second"]).status).toBe(0);
       const asked = readFileSync(cursorPath(proj), "utf-8").trim();
       const other = recordDirs(proj).find((record) => record !== asked)!;
-      const ask = JSON.parse(next(["rename the settings page"]).stdout.trim());
+      const ask = asWork("rename the settings page");
       expect(ask.ask_type).toBe("new-work-routing");
       expect(runEmittedCommand(`bun .claude/tools/aidlc.ts engine intent switch ${other}`).status).toBe(0);
       const stateBefore = readFileSync(join(intentsDir(proj), other, "aidlc-state.md"), "utf-8");
@@ -619,7 +746,7 @@ describe("t171 creation gate consults the intent registry (Blocker B1)", () => {
       expect(util(["intent-create", "--scope", "feature", "--arguments", "second", "--label", "second"]).status).toBe(0);
       const asked = readFileSync(cursorPath(proj), "utf-8").trim();
       const other = recordDirs(proj).find((record) => record !== asked)!;
-      const ask = JSON.parse(next(["rename the settings page"]).stdout.trim());
+      const ask = asWork("rename the settings page");
       expect(ask.ask_type).toBe("new-work-routing");
       expect(runEmittedCommand(`bun .claude/tools/aidlc.ts engine intent switch ${other}`).status).toBe(0);
       for (const reply of ["2", "Separate new piece of work"]) {
@@ -634,7 +761,7 @@ describe("t171 creation gate consults the intent registry (Blocker B1)", () => {
       expect(util(["intent-create", "--scope", "feature", "--arguments", "second", "--label", "second"]).status).toBe(0);
       const asked = readFileSync(cursorPath(proj), "utf-8").trim();
       const other = recordDirs(proj).find((record) => record !== asked)!;
-      const ask = JSON.parse(next(["rename the settings page"]).stdout.trim());
+      const ask = asWork("rename the settings page");
       expect(ask.ask_type).toBe("new-work-routing");
       expect(runEmittedCommand(`bun .claude/tools/aidlc.ts engine intent switch ${other}`).status).toBe(0);
       const stateBefore = readFileSync(join(intentsDir(proj), other, "aidlc-state.md"), "utf-8");
@@ -648,7 +775,7 @@ describe("t171 creation gate consults the intent registry (Blocker B1)", () => {
       test(`a routing option said in prose (${reply}) asks again, never creates, when the workflow it named is gone`, () => {
         expect(util(["intent-create", "--scope", "poc", "--arguments", "first", "--label", "first"]).status).toBe(0);
         const [asked] = recordDirs(proj);
-        const ask = JSON.parse(next(["rename the settings page"]).stdout.trim());
+        const ask = asWork("rename the settings page");
         expect(ask.ask_type).toBe("new-work-routing");
         expect(runEmittedCommand(`bun .claude/tools/aidlc.ts engine intent archive ${asked}`).status).toBe(0);
         const again = JSON.parse(next([reply]).stdout.trim());
@@ -662,7 +789,7 @@ describe("t171 creation gate consults the intent registry (Blocker B1)", () => {
       expect(util(["intent-create", "--scope", "feature", "--arguments", "second", "--label", "second"]).status).toBe(0);
       const asked = readFileSync(cursorPath(proj), "utf-8").trim();
       const other = recordDirs(proj).find((record) => record !== asked)!;
-      const ask = JSON.parse(next(["rename the settings page"]).stdout.trim());
+      const ask = asWork("rename the settings page");
       expect(ask.ask_type).toBe("new-work-routing");
       expect(runEmittedCommand(`bun .claude/tools/aidlc.ts engine intent switch ${other}`).status).toBe(0);
       // The selected workflow's current stage is [-] with a logged, unanswered
@@ -699,7 +826,7 @@ describe("t171 creation gate consults the intent registry (Blocker B1)", () => {
       test(`a routing ${route} answer asks again, never creates, when the workflow it named is gone`, () => {
         expect(util(["intent-create", "--scope", "poc", "--arguments", "first", "--label", "first"]).status).toBe(0);
         const [asked] = recordDirs(proj);
-        const ask = JSON.parse(next(["rename the settings page"]).stdout.trim());
+        const ask = asWork("rename the settings page");
         expect(ask.ask_type).toBe("new-work-routing");
         expect(runEmittedCommand(`bun .claude/tools/aidlc.ts engine intent archive ${asked}`).status).toBe(0);
         const again = JSON.parse(runEmittedCommand(ask[route]).stdout.trim());
@@ -824,6 +951,71 @@ describe("t171 creation gate consults the intent registry (Blocker B1)", () => {
         for (const text of ["1", "Part of existing work"]) {
           expect(directive(text)).toEqual(emitted(ask.select_commands[0].command));
         }
+      });
+
+      test("a setting typed with the request reaches the record the continue option picks", () => {
+        const record = seedOneIntentNoCursor();
+        const first = JSON.parse(next(["--depth", "comprehensive", DESCRIPTION]).stdout.trim());
+        const ask = JSON.parse(runEmittedCommand(first.confirm_command).stdout.trim());
+        expect(ask.ask_type, JSON.stringify(ask).slice(0, 300)).toBe("new-work-routing");
+        // Its select command carries the setting, and a reply naming the option runs the same.
+        expect(ask.select_commands[0].command).toContain("--depth comprehensive");
+        for (const text of ["1", "Part of existing work"]) expect(directive(text)).toEqual(emitted(ask.select_commands[0].command));
+        // It selects the record, then continues it with the setting.
+        const step = emitted(ask.select_commands[0].command);
+        expect(step.kind, JSON.stringify(step).slice(0, 300)).toBe("print");
+        const commands = [...String(step.message).matchAll(/`([^`]+)`/g)].map((m) => m[1]);
+        expect(commands).toHaveLength(2);
+        expect(runEmittedCommand(commands[0]).status).toBe(0);
+        expect(readFileSync(cursorPath(proj), "utf-8").trim()).toBe(record);
+        const applied = emitted(commands[1]);
+        expect(applied.kind, JSON.stringify(applied).slice(0, 300)).toBe("print");
+        expect(applied.message).toContain("config set depth comprehensive");
+        expect(runEmittedCommand(printedCommand(applied.message)).status).toBe(0);
+        expect(readFileSync(join(intentsDir(proj), record, "aidlc-state.md"), "utf-8")).toContain("- **Depth**: Comprehensive");
+      });
+
+      test("a continue answer given from another space goes back to the question's space first", () => {
+        const record = seedOneIntentNoCursor();
+        const first = JSON.parse(next(["--depth", "comprehensive", DESCRIPTION]).stdout.trim());
+        const ask = JSON.parse(runEmittedCommand(first.confirm_command).stdout.trim());
+        // Another chat moves the shared space cursor before the answer runs.
+        mkdirSync(join(proj, "aidlc", "spaces", "other", "intents"), { recursive: true });
+        writeFileSync(join(proj, "aidlc", "active-space"), "other\n");
+        const step = emitted(ask.select_commands[0].command);
+        expect(step.kind, JSON.stringify(step).slice(0, 300)).toBe("print");
+        const commands = [...String(step.message).matchAll(/`([^`]+)`/g)].map((m) => m[1]);
+        expect(commands[0]).toMatch(/space switch default$/);
+        expect(commands[1]).toMatch(new RegExp(`intent switch ${record}$`));
+      });
+
+      test("a record named outside the record-name shape is never written into a command", () => {
+        const [kept, other] = seedTwoIntentsNoCursor();
+        const odd = "odd`name";
+        renameSync(join(intentsDir(proj), kept), join(intentsDir(proj), odd));
+        const rows = readIntentRegistry(proj).map((row) => (row.dirName === kept ? { ...row, dirName: odd } : row));
+        writeFileSync(join(intentsDir(proj), "intents.json"), `${JSON.stringify(rows, null, 2)}\n`);
+        const first = JSON.parse(next(["--depth", "comprehensive", DESCRIPTION]).stdout.trim());
+        const ask = JSON.parse(runEmittedCommand(first.confirm_command).stdout.trim());
+        const entry = ask.select_commands.find((row: { selector: string }) => row.selector === odd);
+        expect(entry, JSON.stringify(ask).slice(0, 400)).toBeDefined();
+        // Other work is selected by the time the answer runs.
+        writeFileSync(cursorPath(proj), `${other}\n`);
+        const refused = emitted(entry.command);
+        expect(refused.kind).toBe("error");
+        expect(refused.message).toContain(JSON.stringify(odd));
+        expect(refused.message).toContain("Rename the record directory");
+        expect(refused.message).not.toContain("intent switch");
+      });
+
+      test("with two records, the setting rides the continue command of whichever one is picked", () => {
+        seedTwoIntentsNoCursor();
+        const first = JSON.parse(next(["--depth", "comprehensive", DESCRIPTION]).stdout.trim());
+        const ask = JSON.parse(runEmittedCommand(first.confirm_command).stdout.trim());
+        for (const row of ask.select_commands) expect(row.command).toContain(`--record ${row.selector} --depth comprehensive`);
+        const which = directive("1");
+        expect(which.ask_type).toBe("intent-pick");
+        expect(which.select_commands).toEqual(ask.select_commands);
       });
 
       test("with one record listed, the reshape option reshapes it, exactly as its reshape command does", () => {
@@ -1368,7 +1560,7 @@ describe("t171 creation gate consults the intent registry (Blocker B1)", () => {
       expect(readFileSync(join(intentsDir(proj), other, "aidlc-state.md"), "utf-8"), "the other workflow is untouched").toBe(stateBefore);
     });
 
-    test("hostile scope names stay one argv value in scope commands and the migration remedy", () => {
+    test("a name that is not a scope name is never offered as a scope, and nothing in it runs", () => {
       const hostile = "evil scope; touch pwned";
       const mapping = { ...loadScopeMapping(), [hostile]: loadScopeMapping().poc };
       const mappingPath = join(proj, "..", `${basename(proj)}-scope-mapping.json`);
@@ -1378,17 +1570,16 @@ describe("t171 creation gate consults the intent registry (Blocker B1)", () => {
         const ask = JSON.parse(runEmittedCommand(`${ORCH_SH} next 'fix the login bug'`, proj, env).stdout.trim());
         expect(ask.ask_type).toBe("scope-confirm");
         const id: string = ask.confirm_command.match(/--request ([0-9a-f]{8})/)?.[1] ?? "";
-        const row = ask.scope_commands.find((entry: { scope: string }) => entry.scope === hostile);
-        expect(row, "every valid scope has a command").toBeDefined();
-        expect(emittedArgv(row.command)).toEqual(["next", "--scope", hostile, "--request", id]);
+        const rows = ask.scope_commands as Array<{ scope: string; command: string }>;
+        expect(rows.map((row) => row.scope)).toContain("poc");
+        expect(rows.map((row) => row.scope)).not.toContain(hostile);
+        for (const row of rows) expect(emittedArgv(row.command)).toEqual(["next", "--scope", row.scope, "--request", id]);
         const flat = join(proj, "aidlc-docs");
         mkdirSync(flat, { recursive: true });
         writeFileSync(join(flat, "aidlc-state.md"), "# AI-DLC State Tracking\n## Project Information\n- **Scope**: feature\n", "utf-8");
         const refused = runEmittedCommand(`${UTIL_SH} intent-create --scope '${hostile}' --request ${id}`, proj, env);
-        expect(refused.status).toBe(1);
-        const remedy = refused.out.match(/Run `([^`]+)` once to move it/)?.[1];
-        expect(remedy, refused.out).toBeDefined();
-        expect(emittedArgv(remedy!).slice(-2)).toEqual(["--scope", hostile]);
+        expect(refused.status, refused.out).toBe(1);
+        expect(refused.out).not.toContain("once to move it");
         expect(existsSync(join(proj, "pwned"))).toBe(false);
       } finally {
         rmSync(mappingPath, { force: true });

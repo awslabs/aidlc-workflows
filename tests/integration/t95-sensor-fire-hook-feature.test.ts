@@ -209,11 +209,24 @@ interface SynthSensor {
   default_severity?: "advisory" | "blocking";
 }
 
-/** synth_graph (t95:132-159): a one-stage graph carrying sensors_applicable[]. */
-function synthGraph(proj: string, slug: string, applicable: SynthSensor[]): string {
-  const node = {
+/** synth_graph (t95:132-159): a graph carrying sensors_applicable[], one stage
+ * unless `extra` adds more. */
+function synthGraph(
+  proj: string,
+  slug: string,
+  applicable: SynthSensor[],
+  extra: { slug: string; applicable: SynthSensor[] }[] = [],
+): string {
+  const nodes = [{ slug, applicable }, ...extra].map((stage, i) => stageNode(stage.slug, stage.applicable, i));
+  const out = join(proj, "synth-graph.json");
+  writeFileSync(out, JSON.stringify(nodes), "utf-8");
+  return out;
+}
+
+function stageNode(slug: string, applicable: SynthSensor[], index: number) {
+  return {
     slug,
-    number: "1.0",
+    number: `1.${index}`,
     name: "Synthetic Stage",
     phase: "construction",
     execution: "ALWAYS",
@@ -228,9 +241,6 @@ function synthGraph(proj: string, slug: string, applicable: SynthSensor[]): stri
     rules_in_context: [],
     sensors_applicable: applicable,
   };
-  const out = join(proj, "synth-graph.json");
-  writeFileSync(out, JSON.stringify([node]), "utf-8");
-  return out;
 }
 
 function singleWriteGraph(proj: string, slug: string): string {
@@ -473,7 +483,12 @@ describe("t95 sensor-fire hook — multi-glob filtering at the stage level (mech
   test("C3b-active-directive: unit-major TS writes use code-generation rather than stale Current Stage", () => {
     const proj = makeProjectActive("functional-design");
     seedActiveDirective(proj, "code-generation", "alpha");
-    runHook(proj, join(proj, "src", "foo.ts"));
+    // Both stages carry the TS sensors, so a write routed to the stale Current
+    // Stage would spawn with --stage functional-design and fail the check below.
+    const graph = synthGraph(proj, "code-generation", CODE_STAGE, [
+      { slug: "functional-design", applicable: CODE_STAGE },
+    ]);
+    runHook(proj, join(proj, "src", "foo.ts"), { graph });
     const argvs = spawnArgvs(proj);
     expect(argvs.length).toBe(2);
     for (const argv of argvs) {

@@ -102,7 +102,7 @@ export type Mode = "strict" | "relaxed" | "off";
 
 /** The one line the human hears when a relaxed or off policy carries source drift through. */
 export function driftNotice(count: string, paths: string): string {
-  return `${count} changed since this plan was approved: ${paths}. Continuing (Guard Policy: relaxed or off). Say 'review the plan again' to reopen approval.`;
+  return `${count} changed since this plan was approved: ${paths}. Carrying on. Say 'review the plan again' to reopen approval.`;
 }
 
 /** The one line the human hears when other code moved after they approved, on any policy. */

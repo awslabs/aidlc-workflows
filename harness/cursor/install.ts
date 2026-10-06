@@ -62,7 +62,9 @@ function assertNoSymlinks(
   }
   const label = relative(root, candidate).replaceAll("\\", "/") || ".";
   if (stat.isSymbolicLink()) {
-    throw new Error(`${label}: symlinked installer targets are not allowed`);
+    throw new Error(
+      `${label}: symlinked installer targets are not allowed. Replace that link with a regular file or folder, then run the installer again.`,
+    );
   }
   if (!recursive || !stat.isDirectory()) return;
   for (const name of readdirSync(candidate)) {
@@ -951,6 +953,8 @@ function mergeHooks(sourcePath: string, targetPath: string): string {
   return `${JSON.stringify(merged, null, 2)}\n`;
 }
 
+const RETIRED_SHIPPED_ALLOW = new Set(["Shell(bun)"]);
+
 function mergeCli(sourcePath: string, targetPath: string): string {
   const source = parseObject(sourcePath);
   const existing = existsSync(targetPath) ? parseObject(targetPath) : {};
@@ -963,7 +967,10 @@ function mergeCli(sourcePath: string, targetPath: string): string {
 
   const shippedAllow = stringArray(sourcePermissions.allow, `${sourcePath}: permissions.allow`);
   const shippedDeny = stringArray(sourcePermissions.deny, `${sourcePath}: permissions.deny`);
-  const projectAllow = stringArray(existingPermissions?.allow, `${targetPath}: permissions.allow`);
+  // The allow entry earlier releases shipped, which covered every bun command;
+  // the narrower shipped entries replace it on refresh.
+  const projectAllow = stringArray(existingPermissions?.allow, `${targetPath}: permissions.allow`)
+    .filter((entry) => !RETIRED_SHIPPED_ALLOW.has(entry));
   const projectDeny = stringArray(existingPermissions?.deny, `${targetPath}: permissions.deny`);
   const conflicts = [
     ...shippedAllow.filter((entry) => projectDeny.includes(entry)),
@@ -1208,7 +1215,8 @@ export async function install(targetDir: string): Promise<void> {
 
   if (collisions.length > 0) {
     throw new Error(
-      `refusing to overwrite existing files that differ:\n${collisions.map((path) => `  ${path}`).join("\n")}`,
+      `refusing to overwrite existing files that differ:\n${collisions.map((path) => `  ${path}`).join("\n")}\n` +
+        "To keep your changes, move these files somewhere else, then run the installer again.",
     );
   }
 

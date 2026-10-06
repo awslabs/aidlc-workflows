@@ -51,6 +51,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { basename, dirname, join, relative, sep, win32 } from "node:path";
+import { resolveAction } from "../../dist/cursor/.cursor/tools/aidlc.ts";
 import {
   auditBlockField,
   createIntent,
@@ -1158,8 +1159,11 @@ describe("t276 cursor adapter payload conversion", () => {
         const denied = JSON.parse(r.stdout) as { permission?: string; agent_message?: string };
         expect(denied.permission).toBe("deny");
         // The refusal names the way out for the person, not only the failure.
-        // This tree runs from source, so the command is the install's own spelling.
-        expect(denied.agent_message ?? "").toContain("tell the person to run `bun .cursor/tools/aidlc.ts doctor` in a terminal");
+        // Cursor sends this input itself and doctor cannot see it, so the step
+        // is a retry, then a full restart of Cursor.
+        expect(denied.agent_message ?? "").toContain("Retry it once");
+        expect(denied.agent_message ?? "").toContain("quit Cursor fully and open this folder again");
+        expect(denied.agent_message ?? "").not.toContain("doctor");
       } else {
         expect(r.stdout.trim(), `${target}: advisory malformed input`).toBe("");
       }
@@ -1561,6 +1565,11 @@ describe("t276 cursor adapter payload conversion", () => {
     const out = JSON.parse(r.stdout) as { permission?: string; agent_message?: string };
     expect(out.permission).toBe("deny");
     expect(out.agent_message ?? "").toContain("aidlc-reviewer-scope.ts failed");
+    // It names the step that puts the files back, and that command is a real route.
+    expect(out.agent_message ?? "").toContain("config --harness cursor");
+    expect(out.agent_message ?? "").not.toContain("doctor");
+    const action = resolveAction(["config", "--harness", "cursor"]);
+    expect(action.type).not.toBe("error");
   });
 
   test("22b: an unavailable shared freeze parser denies before the guard chain", () => {
@@ -4468,5 +4477,74 @@ if (import.meta.main) {
     expect(nestedOut.agent_message ?? "").toContain(
       "nested delegation is not allowed",
     );
+  });
+
+  test("38: with Guard Policy off a delegate runs its builds and tests, and its Task starts", () => {
+    // Under Guard Policy off the reviewer read scope and the state-transition
+    // check stand aside, and the delegate identity checks serve only those two.
+    // A developer delegate's `npm test` or `bun test` was refused all the same.
+    const proj = installedProject();
+    seedStateFile(proj, "state-construction.md");
+    const statePath = join(seededRecordDir(proj), "aidlc-state.md");
+    const withPolicy = (line: string) => writeFileSync(
+      statePath,
+      readFileSync(statePath, "utf-8")
+        .replace(/^- \*\*(?:Guard Policy|Change Control)\*\*:.*\n/gm, "")
+        .replace(/^(- \*\*Scope\*\*:.*)$/m, `$1\n- **Guard Policy**: ${line}`),
+    );
+    withPolicy("off (from scope classic)");
+    // A design stage: no code plan is waiting, so the plan check has nothing to hold.
+    setCurrentStage(proj, "functional-design");
+    clearLedger(proj);
+    registerTaskParent(proj);
+    const spawn = runAdapter(
+      proj,
+      "guards",
+      payload("preToolUseTask", proj, {
+        tool_input: {
+          description: "Developer probe",
+          prompt: "Implement the unit.",
+          subagent_type: "aidlc-developer-agent",
+        },
+      }),
+    );
+    expectAllowJson(spawn);
+    const delegateShell = (command: string) => JSON.parse(runAdapter(
+      proj,
+      "guards",
+      payload("preToolUseShell", proj, {
+        conversation_id: "developer-under-guard-policy-off",
+        session_id: "developer-under-guard-policy-off",
+        tool_input: { command },
+      }),
+    ).stdout) as { permission?: string; agent_message?: string };
+    for (const command of ["bun test", "node --test", "npm test", "grep -rn formatPrice ."]) {
+      const out = delegateShell(command);
+      expect(out.permission, `${command}: ${out.agent_message ?? ""}`).toBe("allow");
+    }
+    // A Task whose record cannot be written still starts: nothing reads the record.
+    const unrecordedTask = () => JSON.parse(runAdapter(
+      proj,
+      "guards",
+      payload("preToolUseTask", proj, {
+        tool_use_id: "",
+        generation_id: "",
+        tool_input: { description: "Developer probe", prompt: "Implement the unit.", subagent_type: "aidlc-developer-agent" },
+      }),
+    ).stdout) as { permission?: string; agent_message?: string };
+    expect(unrecordedTask().permission).toBe("allow");
+    // Under strict the identity checks hold, and each refusal names the step that works.
+    withPolicy("strict (set by you)");
+    const held = delegateShell("bun test");
+    expect(held.permission).toBe("deny");
+    expect(held.agent_message ?? "").toContain("have the parent conversation run executable probes");
+    const heldTask = unrecordedTask();
+    expect(heldTask.permission).toBe("deny");
+    expect(heldTask.agent_message ?? "").toContain("Start it again");
+    expect(heldTask.agent_message ?? "").toContain("doctor");
+    // The named step: the same Task with its ids starts.
+    expect(JSON.parse(runAdapter(proj, "guards", payload("preToolUseTask", proj, {
+      tool_input: { description: "Developer probe", prompt: "Implement the unit.", subagent_type: "aidlc-developer-agent" },
+    })).stdout).permission).toBe("allow");
   });
 });

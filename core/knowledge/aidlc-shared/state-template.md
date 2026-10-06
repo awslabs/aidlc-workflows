@@ -17,7 +17,7 @@ Authoritative generated views:
 - **Project Type**: [Greenfield/Brownfield; the bare word, which every reader compares]
 - **Project Type Source**: [`workspace scan` or `you`: who decided the type. Written at intent creation (`you` when the request carried `--project-type`), rewritten to `you` by `workspace reclassify` (the person's `/aidlc --project-type` or plain words). A routing field: while it reads `workspace scan` on Greenfield work that has not started Construction, `next` asks once when the folder gains code; `you` is never second-guessed by a scan. A state file without the line reads as `workspace scan`]
 - **Scope**: [scope slug from compiled scope grid]
-- **Plan**: [present only for a plan composed for this piece of work: `custom, based on <scope>`; its stage changes are the Stage Progress suffixes, and a scope change removes the line]
+- **Plan**: [present only for a plan composed for this piece of work: its name as the gate showed it (`--plan-name`), or `tailored plan`; its stage changes are the Stage Progress suffixes, and a scope change removes the line]
 - **Start Date**: [ISO 8601 timestamp]
 - **State Version**: 8
 - **Active Agent**: [current lead agent slug]

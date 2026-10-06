@@ -19,6 +19,7 @@ import { spawnSync } from "node:child_process";
 import { createHash, createHmac } from "node:crypto";
 import {
   appendFileSync,
+  unlinkSync,
   cpSync,
   existsSync,
   mkdirSync,
@@ -507,6 +508,9 @@ describe("t248 deterministic steering delivery", () => {
 
   test("a retired policy notice tips a near-limit inline bundle into bounded steering parts", () => {
     const proj = statefulProjectWithDrift();
+    // Under relaxed an edit to the finished document is accepted and not
+    // raised; a document that is gone still is, so the advisory stays.
+    unlinkSync(join(seededRecordDir(proj), "inception", "requirements-analysis", "requirements.md"));
     const statePath = seededStateFile(proj);
     const state = readFileSync(statePath, "utf-8").replace(
       /^- \*\*Change Control\*\*:.*$/m,
@@ -1490,17 +1494,36 @@ describe("t248 deterministic steering delivery", () => {
 
   test("missing required rules block before stage work with repair guidance", () => {
     const proj = project();
-    rmSync(join(proj, "aidlc", "spaces", "default", "memory", "org.md"));
-    const result = invoke(proj, "next", [
-      "--scope",
-      "mvp",
-      "--stage",
-      "intent-capture",
-    ]).directive;
+    const orgPath = join(proj, "aidlc", "spaces", "default", "memory", "org.md");
+    const org = readFileSync(orgPath);
+    rmSync(orgPath);
+    const args = ["--scope", "mvp", "--stage", "intent-capture"];
+    const result = invoke(proj, "next", args).directive;
     expect(result.kind).toBe("error");
     expect(result.message).toContain("Cannot load required stage rule");
     expect(result.message).toContain("The stage has not started");
     expect(result.message).toContain("run `next` again");
+    // It names how to put the file back, and the doctor.
+    expect(result.message).toContain("git checkout -- aidlc/spaces/default/memory/org.md");
+    expect(result.message).toContain("--doctor");
+    // The named step works: with the file back, the same request starts the stage.
+    writeFileSync(orgPath, org);
+    expect(invoke(proj, "next", args).directive.kind).not.toBe("error");
+  });
+
+  test("a rule file that is there but not UTF-8 is repaired in place, never checked out over the team's edits", () => {
+    const proj = project();
+    const orgPath = join(proj, "aidlc", "spaces", "default", "memory", "org.md");
+    const org = readFileSync(orgPath);
+    writeFileSync(orgPath, Buffer.concat([org, Buffer.from([0xff, 0xfe, 0x00])]));
+    const args = ["--scope", "mvp", "--stage", "intent-capture"];
+    const result = invoke(proj, "next", args).directive;
+    expect(result.kind).toBe("error");
+    expect(result.message).toContain("Keep a copy of the file, then fix its permissions or save it as UTF-8");
+    expect(result.message).not.toContain("git checkout");
+    // The named step works: saved as UTF-8, the same request starts the stage.
+    writeFileSync(orgPath, org);
+    expect(invoke(proj, "next", args).directive.kind).not.toBe("error");
   });
 
   test("rejected background dispatch leaves no in-flight ledger", () => {
@@ -1599,15 +1622,14 @@ describe("t248 deterministic steering delivery", () => {
     ]);
     const paths = result.final.inline_context_paths ?? [];
 
+    // poc ships collaborators off, so only the lead's context is loaded.
     for (const path of [
       ".claude/agents/aidlc-product-agent.md",
-      ".claude/agents/aidlc-architect-agent.md",
       ".claude/knowledge/aidlc-shared/ai-dlc-principles.md",
       ".claude/knowledge/aidlc-shared/rules-reading.md",
       ".claude/knowledge/aidlc-shared/verification.md",
       ".claude/knowledge/aidlc-product-agent/requirements-elicitation.md",
       ".claude/knowledge/aidlc-product-agent/requirements-guide.md",
-      ".claude/knowledge/aidlc-architect-agent/architecture-guide.md",
     ]) {
       expect(paths).toContain(path);
     }
@@ -1749,7 +1771,7 @@ describe("t248 deterministic steering delivery", () => {
     }
   });
 
-  test("Standard depth keeps the complete shipped knowledge roster", () => {
+  test("Standard depth keeps the complete shipped methodology roster", () => {
     const proj = project();
     const result = drive(proj, [
       "--scope",
@@ -1759,14 +1781,18 @@ describe("t248 deterministic steering delivery", () => {
     ]);
     const paths = result.final.inline_context_paths ?? [];
 
+    // The shared methodology stays; the format references never join a roster.
     expect(paths).toContain(
+      ".claude/knowledge/aidlc-shared/ai-dlc-principles.md",
+    );
+    expect(paths).not.toContain(
       ".claude/knowledge/aidlc-shared/audit-format.md",
     );
     expect(paths).toContain(
       ".claude/knowledge/aidlc-product-agent/market-research-methods.md",
     );
     expect(paths).toContain(
-      ".claude/knowledge/aidlc-architect-agent/architecture-patterns.md",
+      ".claude/knowledge/aidlc-product-agent/prioritization-frameworks.md",
     );
     expect(paths).toContain(
       ".claude/knowledge/aidlc-product-agent/corner-checklist.md",
@@ -2125,7 +2151,12 @@ describe("t248 reviewer knowledge absorption", () => {
         expect(surface).toContain(
           `Absorbed at build time from knowledge/${reviewer}/reviewing.md`,
         );
-        expect(surface).toContain(source);
+        // The build writes {{INVOKE}} as this harness's own AI-DLC command.
+        const absorbed = source
+          .split("{{INVOKE}}")
+          .map((part) => part.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
+          .join("[^`\\n]+");
+        expect(surface).toMatch(new RegExp(absorbed));
       }
     });
   }
@@ -2174,4 +2205,33 @@ describe("t248 reviewer knowledge absorption", () => {
       rmSync(root, { recursive: true, force: true });
     }
   });
+});
+
+// What each tool's agent is told to do with the one-line Stop note, as the
+// shipped skill delivers it: the person on every tool gets the line once.
+// Tools that show the note have the agent say nothing about it; opencode,
+// Kiro IDE and Kiro CLI hide it, so the agent says the line itself when it
+// carries on, and a question it just asked ends the turn in silence.
+describe("t248 the shipped skill delivers the Stop-note step for its tool", () => {
+  const SAYS_THE_LINE: Record<string, string> = { opencode: "opencode", "kiro-ide": "Kiro IDE", kiro: "Kiro CLI" };
+  for (const harness of HARNESS_MATRIX) {
+    test(`${harness.name} ships one carrying-on paragraph with its own say-or-not step`, () => {
+      const skill = readFileSync(join(harness.skillsRoot, "aidlc", "SKILL.md"), "utf-8");
+      const paragraphs = skill.split("\n").filter((line) => line.startsWith("**When AI-DLC carries on by itself.**"));
+      expect(paragraphs.length).toBe(1);
+      const paragraph = paragraphs[0] as string;
+      expect(paragraph).not.toContain("{{INVOKE}}");
+      expect(paragraph).toContain("and end your turn without asking it again or saying anything else.");
+      const tool = SAYS_THE_LINE[harness.name];
+      if (tool === undefined) {
+        expect(paragraph).toContain("so say nothing about it.");
+        expect(paragraph).not.toContain("first say the carrying-on line to them once");
+      } else {
+        expect(paragraph).toContain(
+          `${tool} does not show the note to the person, so if you carry on with the work (the rules parts, the stage, or a fresh \`next\`), first say the carrying-on line to them once`,
+        );
+        expect(paragraph).not.toContain("so say nothing about it.");
+      }
+    });
+  }
 });

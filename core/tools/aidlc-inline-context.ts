@@ -103,7 +103,7 @@ type PluginKnowledgeOwners = ReadonlyMap<string, ReadonlySet<string>>;
 // Minimal scopes still load every active-space rule, persona, stage file,
 // consume, and user/team knowledge file. The only pruning here is shipped
 // framework knowledge whose subject belongs to another stage. Standard and
-// Comprehensive depth keep the full historical roster.
+// Comprehensive depth keep the full methodology roster.
 const MINIMAL_INLINE_KNOWLEDGE: Readonly<
   Record<string, Readonly<Record<string, ReadonlySet<string>>>>
 > = {
@@ -138,14 +138,9 @@ const SHIPPED_INLINE_KNOWLEDGE: Readonly<
 > = {
   "aidlc-shared": new Set([
     "ai-dlc-principles.md",
-    "audit-format.md",
     "brownfield.md",
-    "knowledge-readme-template.md",
-    "memory-template.md",
     "rules-reading.md",
-    "state-template.md",
     "verification.md",
-    "worktree-info-schema.md",
   ]),
   "aidlc-product-agent": new Set([
     "corner-checklist.md",
@@ -166,6 +161,19 @@ const SHIPPED_INLINE_KNOWLEDGE: Readonly<
     "nfr-design-patterns.md",
   ]),
 };
+
+// The shipped reference docs for formats the engine itself writes: the audit
+// taxonomy, the worktree info schema, and the state, memory and knowledge
+// README templates. They ship beside the methodology but never join a roster,
+// at any depth: each place that needs one names it by path and the agent reads
+// it there.
+const SHIPPED_FORMAT_DOCS: ReadonlySet<string> = new Set([
+  "audit-format.md",
+  "knowledge-readme-template.md",
+  "memory-template.md",
+  "state-template.md",
+  "worktree-info-schema.md",
+]);
 
 // Roster metadata read from a checkout (compiled graph, selection, ownership
 // records): only a regular file that is not a symlink and fits the cap. A FIFO,
@@ -309,7 +317,8 @@ function selectShippedInlineKnowledge(
 // under an explicit harness root: `harnessRoot` is where the files live and
 // `harnessPrefix` the display prefix a directive names them by. Depth "minimal"
 // prunes shipped knowledge that belongs to another stage; any other depth keeps
-// the full roster. The orchestrator adds user/team knowledge on top.
+// the full methodology roster. No depth carries the format docs. The
+// orchestrator adds user/team knowledge on top.
 export function shippedInlineContextEntries(
   node: GraphStage,
   harnessRoot: string,
@@ -351,14 +360,15 @@ export function shippedInlineContextEntries(
       agent,
     });
   }
+  const sharedRoot = join(harnessRoot, "knowledge", "aidlc-shared");
   entries.push(
     ...selectShippedInlineKnowledge(
       markdownFilesUnder(
-        join(harnessRoot, "knowledge", "aidlc-shared"),
+        sharedRoot,
         join(harnessPrefix, "knowledge", "aidlc-shared"),
         warnings,
         preflight,
-      ),
+      ).filter((file) => !SHIPPED_FORMAT_DOCS.has(toPosix(relative(sharedRoot, file.abs)))),
       node.slug,
       "aidlc-shared",
       depth,

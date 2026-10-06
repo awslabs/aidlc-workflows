@@ -52,6 +52,7 @@ import {
 } from "../../core/tools/aidlc-machine-config.ts";
 import {
   cachedUpdateNotice,
+  cachedUpdateState,
   readUpdateCache,
   refreshUpdateState,
 } from "../../core/tools/aidlc-update.ts";
@@ -347,14 +348,34 @@ async function serveReleaseFixtureForChildren(
       stop: () => server.stop(),
     };
   }
+  return serveReleaseFixtureInChild(root, fault);
+}
 
+// A child server that has not said where it listens by then is stopped and
+// started once more: one stalled spawn on a slow runner costs this wait, not
+// the whole case.
+const RELEASE_SERVER_STARTUP_WAIT_MS = 30_000;
+
+/** Test-only: `stallOnce` names a file whose presence makes the next child hang before it listens, once. */
+type ChildServerOptions = { startupWaitMs?: number; stallOnce?: string };
+
+async function serveReleaseFixtureInChild(
+  root: string,
+  fault: ReleaseServerFault = { kind: "none" },
+  options: ChildServerOptions = {},
+): Promise<ReleaseServerHandle> {
   const requestLog = join(temp("aidlc-t244-release-server-"), "requests.ndjson");
   writeFileSync(requestLog, "");
   const helper = [
-    'import { appendFileSync } from "node:fs";',
+    'import { appendFileSync, existsSync, rmSync } from "node:fs";',
     `import { serveReleaseFixture } from ${
       JSON.stringify(join(REPO_ROOT, "tests", "harness", "release-fixture.ts"))
     };`,
+    "const stall = process.env.AIDLC_RELEASE_FIXTURE_STALL_ONCE;",
+    "if (stall && existsSync(stall)) {",
+    "  rmSync(stall);",
+    "  await new Promise(() => {});",
+    "}",
     "const fault = JSON.parse(process.env.AIDLC_RELEASE_FIXTURE_FAULT);",
     "const server = serveReleaseFixture(process.env.AIDLC_RELEASE_FIXTURE_ROOT, fault);",
     "const push = server.requests.push.bind(server.requests);",
@@ -370,34 +391,55 @@ async function serveReleaseFixtureForChildren(
     "process.stdout.write(JSON.stringify({ baseUrl: server.baseUrl }) + \"\\n\");",
     "await new Promise(() => {});",
   ].join("\n");
-  const child = Bun.spawn([process.execPath, "-e", helper], {
+  const spawnServer = () => Bun.spawn([process.execPath, "-e", helper], {
     cwd: REPO_ROOT,
     env: {
       ...process.env,
       AIDLC_RELEASE_FIXTURE_ROOT: root,
       AIDLC_RELEASE_FIXTURE_REQUEST_LOG: requestLog,
       AIDLC_RELEASE_FIXTURE_FAULT: JSON.stringify(fault),
+      AIDLC_RELEASE_FIXTURE_STALL_ONCE: options.stallOnce ?? "",
     },
     stdout: "pipe",
     stderr: "pipe",
   });
-  const stderr = new Response(child.stderr).text();
-  const reader = child.stdout.getReader();
-  const decoder = new TextDecoder();
-  let startup = "";
-  while (!startup.includes("\n")) {
-    const chunk = await reader.read();
-    if (chunk.done) {
-      const exitCode = await child.exited;
-      throw new Error(
-        `release fixture server exited during startup (exit code ${exitCode}): ${await stderr}`,
-      );
+  const readStartup = async (child: ReturnType<typeof spawnServer>, waitMs: number) => {
+    const stderr = new Response(child.stderr).text();
+    const reader = child.stdout.getReader();
+    const decoder = new TextDecoder();
+    const deadline = Date.now() + waitMs;
+    let startup = "";
+    while (!startup.includes("\n")) {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const late = new Promise<null>((resolve) => {
+        timer = setTimeout(() => resolve(null), Math.max(0, deadline - Date.now()));
+      });
+      const chunk = await Promise.race([reader.read(), late]);
+      clearTimeout(timer);
+      if (chunk === null) {
+        child.kill();
+        await Promise.all([child.exited, stderr]);
+        return null;
+      }
+      if (chunk.done) {
+        const exitCode = await child.exited;
+        throw new Error(
+          `release fixture server exited during startup (exit code ${exitCode}): ${await stderr}`,
+        );
+      }
+      startup += decoder.decode(chunk.value, { stream: true });
     }
-    startup += decoder.decode(chunk.value, { stream: true });
-  }
-  const startupEvent = JSON.parse(startup.slice(0, startup.indexOf("\n"))) as {
-    baseUrl: string;
+    const startupEvent = JSON.parse(startup.slice(0, startup.indexOf("\n"))) as {
+      baseUrl: string;
+    };
+    return { child, stderr, reader, startupEvent };
   };
+  const waitMs = options.startupWaitMs ?? RELEASE_SERVER_STARTUP_WAIT_MS;
+  const started = await readStartup(spawnServer(), waitMs) ?? await readStartup(spawnServer(), waitMs);
+  if (started === null) {
+    throw new Error(`release fixture server did not start within ${waitMs / 1000}s, twice`);
+  }
+  const { child, stderr, reader, startupEvent } = started;
   const stdout = (async () => {
     while (!(await reader.read()).done) {
       // Drain the helper channel until the process exits.
@@ -459,6 +501,23 @@ describe("t244 machine configuration and update discovery", () => {
     updateRelease = fixture(NEXT_VERSION, { binary: "bytes" });
     suiteTemporary.add(updateRelease);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  // A slow Windows runner can stall one child server before it listens. The
+  // server has its own startup wait and starts once more, so the stall costs
+  // that wait and not the whole case.
+  test("a release fixture server that stalls before it listens starts once more within its own wait", async () => {
+    const stall = join(temp("aidlc-t244-stall-"), "stall-once");
+    writeFileSync(stall, "");
+    const server = await serveReleaseFixtureInChild(updateRelease, { kind: "none" }, { stallOnce: stall, startupWaitMs: 3_000 });
+    try {
+      expect(existsSync(stall)).toBe(false);
+      const response = await fetch(`${server.baseUrl}/version.json`);
+      await response.arrayBuffer();
+      expect(server.requests).toContain("/version.json");
+    } finally {
+      await server.stop();
+    }
+  }, 30_000);
 
   test("global config works outside projects and precedence is flag, env, config, default", () => {
     const machine = temp("aidlc-t241-config-");
@@ -566,6 +625,8 @@ describe("t244 machine configuration and update discovery", () => {
         .toHaveLength(1);
       expect(server.requests.filter((path) => path.endsWith("/checksums.txt")))
         .toHaveLength(1);
+      expect(server.requests.filter((path) => path.endsWith("/aidlc-release.intoto.jsonl")))
+        .toHaveLength(0);
 
       server.clearRequests();
       const routed = await runAsync(DISPATCHER, [
@@ -591,6 +652,8 @@ describe("t244 machine configuration and update discovery", () => {
         .toHaveLength(1);
       expect(server.requests.filter((path) => path.endsWith("/checksums.txt")))
         .toHaveLength(1);
+      expect(server.requests.filter((path) => path.endsWith("/aidlc-release.intoto.jsonl")))
+        .toHaveLength(0);
 
       rmSync(join(machine, "update-check.json"), { force: true });
       server.clearRequests();
@@ -668,7 +731,7 @@ describe("t244 machine configuration and update discovery", () => {
     }
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-  test("authenticated refresh replaces the cache and every failed refresh preserves it", async () => {
+  test("checksum-verified refresh replaces the cache and every failed refresh preserves it", async () => {
     const release = updateRelease;
     const server = await serveReleaseFixtureForChildren(release);
     const machine = temp("aidlc-t241-update-");
@@ -714,7 +777,225 @@ describe("t244 machine configuration and update discovery", () => {
     }
   });
 
-  test("older authenticated metadata cannot replace a newer valid update cache", async () => {
+  test("update check reports behind without downloading or verifying provenance", async () => {
+    const release = fixture(NEXT_VERSION, { binary: "bytes" });
+    writeFileSync(join(release, "aidlc-release.intoto.jsonl"), "tampered\n");
+    const server = await serveReleaseFixtureForChildren(release);
+    const machine = temp("aidlc-t244-check-no-provenance-");
+    const keys = [
+      "AIDLC_INSTALL_ROOT",
+      "AIDLC_BIN_DIR",
+      "AIDLC_RELEASE_BASE_URL",
+      "AIDLC_OFFLINE",
+      "NO_PROXY",
+    ] as const;
+    const saved = Object.fromEntries(keys.map((key) => [key, process.env[key]]));
+    Object.assign(process.env, {
+      ...envFor(machine),
+      AIDLC_RELEASE_BASE_URL: server.baseUrl,
+      AIDLC_OFFLINE: "0",
+      NO_PROXY: "127.0.0.1",
+    });
+    try {
+      const state = await refreshUpdateState(15_000);
+      expect(state.state).toBe("behind");
+      expect(state.latestVersion).toBe(NEXT_VERSION);
+      expect(readUpdateCache()?.latestVersion).toBe(NEXT_VERSION);
+      expect(server.requests.filter((path) => path.endsWith("/aidlc-release.intoto.jsonl")))
+        .toHaveLength(0);
+      const check = await runAsync(DISPATCHER, [
+        "update",
+        "--check",
+        "--release-base-url",
+        server.baseUrl,
+        "--json",
+      ], REPO_ROOT, {
+        ...envFor(machine),
+        AIDLC_OFFLINE: "0",
+        NO_PROXY: "127.0.0.1",
+      });
+      expect(check.status, check.stdout + check.stderr).toBe(5);
+      expect(JSON.parse(check.stdout).data.latestVersion).toBe(NEXT_VERSION);
+    } finally {
+      await server.stop();
+      for (const key of keys) {
+        const value = saved[key];
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    }
+  }, process.platform === "win32" ? 120_000 : 45_000);
+
+  test.each(["checksum row", "manifest field", "malformed JSON"])(
+    "update diagnostics never repeat remote text from a %s",
+    async (fault) => {
+      const release = fixture(NEXT_VERSION, { binary: "bytes" });
+      const marker = "REMOTE_DIAGNOSTIC_INSTRUCTION";
+      if (fault === "checksum row") {
+        writeFileSync(join(release, "checksums.txt"), `${marker}\n`);
+      } else {
+        const manifestPath = join(release, "version.json");
+        const manifest = JSON.parse(readFileSync(manifestPath, "utf-8"));
+        writeFileSync(manifestPath, fault === "manifest field"
+          ? JSON.stringify({ ...manifest, version: marker })
+          : `{"${marker}":`);
+      }
+      const server = await serveReleaseFixtureForChildren(release);
+      const machine = temp("aidlc-t244-update-diagnostic-");
+      try {
+        for (const command of ["update", "doctor"]) {
+          for (const json of [false, true]) {
+            const result = await runAsync(DISPATCHER, [
+              command,
+              command === "update" ? "--check" : "--check-updates",
+              "--release-base-url", server.baseUrl,
+              ...(json ? ["--json"] : []),
+              "--project-dir", REPO_ROOT,
+            ], REPO_ROOT, {
+              ...envFor(machine),
+              AIDLC_OFFLINE: "0",
+              NO_PROXY: "127.0.0.1",
+            });
+            expect(command === "update" ? [3] : [0, 1]).toContain(result.status);
+            const output = result.stdout + result.stderr;
+            expect(output).toContain("update refresh unavailable");
+            expect(output).not.toContain(marker);
+            if (json) expect(() => JSON.parse(result.stdout)).not.toThrow();
+            expect(existsSync(join(machine, "update-check.json"))).toBe(false);
+          }
+        }
+      } finally {
+        await server.stop();
+      }
+    },
+  );
+
+  test("update checks reject checksum-inconsistent metadata without caching it", async () => {
+    const release = fixture(NEXT_VERSION, { binary: "bytes" });
+    const manifestPath = join(release, "version.json");
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf-8"));
+    writeFileSync(manifestPath, JSON.stringify({ ...manifest, date: "2026-01-01" }));
+    const server = await serveReleaseFixtureForChildren(release);
+    const machine = temp("aidlc-t244-update-checksum-");
+    try {
+      const result = await runAsync(DISPATCHER, [
+        "update", "--check", "--release-base-url", server.baseUrl, "--json",
+      ], REPO_ROOT, {
+        ...envFor(machine),
+        AIDLC_OFFLINE: "0",
+        NO_PROXY: "127.0.0.1",
+      });
+      expect(result.status, result.stdout + result.stderr).toBe(3);
+      expect(existsSync(join(machine, "update-check.json"))).toBe(false);
+      expect(server.requests.filter((path) => path.endsWith("/checksums.txt"))).toHaveLength(1);
+      expect(server.requests.filter((path) => path.endsWith("/aidlc-release.intoto.jsonl"))).toHaveLength(0);
+    } finally {
+      await server.stop();
+    }
+  });
+
+  test.each([
+    ["oversized", `${"9".repeat(512 * 1024)}.0.0`],
+    ["unsafe major", "9007199254740992.0.0"],
+    ["unsafe minor", "999999.9007199254740992.0"],
+    ["unsafe patch", "999999.0.9007199254740992"],
+  ])("update checks and cached notices reject an %s version", async (_label, version) => {
+    const release = fixture(NEXT_VERSION, { binary: "bytes" });
+    const manifestPath = join(release, "version.json");
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf-8"));
+    writeFileSync(manifestPath, JSON.stringify({
+      ...manifest, version, sourceRef: undefined, sourceDigest: undefined,
+    }));
+    const checksumPath = join(release, "checksums.txt");
+    writeFileSync(checksumPath, readFileSync(checksumPath, "utf-8").replace(
+      /^[0-9a-f]{64} {2}version\.json$/m,
+      `${createHash("sha256").update(readFileSync(manifestPath)).digest("hex")}  version.json`,
+    ));
+    const server = await serveReleaseFixtureForChildren(release);
+    const machine = temp("aidlc-t244-update-version-bound-");
+    const env = { ...envFor(machine), AIDLC_OFFLINE: "0", NO_PROXY: "127.0.0.1" };
+    const saved = Object.fromEntries(Object.keys(env).map((key) => [key, process.env[key]]));
+    Object.assign(process.env, env);
+    try {
+      const result = await runAsync(DISPATCHER, [
+        "update", "--check", "--release-base-url", server.baseUrl, "--json",
+      ], REPO_ROOT, env);
+      expect(result.status).toBe(3);
+      expect(Buffer.byteLength(result.stdout + result.stderr)).toBeLessThan(4096);
+      expect(JSON.parse(result.stdout).message).toContain("update refresh unavailable");
+      expect(existsSync(join(machine, "update-check.json"))).toBe(false);
+
+      // A cache written by an older version must not keep flooding later
+      // cache-only commands after the parser is fixed.
+      mkdirSync(machine, { recursive: true });
+      writeFileSync(join(machine, "update-check.json"), JSON.stringify({
+        schemaVersion: 1,
+        checkedAt: new Date().toISOString(),
+        latestVersion: version,
+        releaseDate: "2026-09-01",
+      }));
+      expect(() => { readUpdateCache(); }).toThrow("invalid version");
+      expect(cachedUpdateNotice()).toBeNull();
+      expect(cachedUpdateState()).toMatchObject({
+        state: "unavailable",
+        message: "update cache is invalid",
+      });
+      for (const command of ["doctor", "help", "config"]) {
+        const shown = await runAsync(DISPATCHER, [
+          command, ...(command === "doctor" ? ["--json"] : command === "config" ? ["--help"] : []),
+          "--project-dir", REPO_ROOT,
+        ], REPO_ROOT, env);
+        expect(shown.stdout + shown.stderr).not.toContain(version.slice(0, 100));
+        expect(Buffer.byteLength(shown.stdout + shown.stderr)).toBeLessThan(32 * 1024);
+      }
+    } finally {
+      for (const [key, value] of Object.entries(saved)) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+      await server.stop();
+    }
+  });
+
+  test("a future advisory version cannot prevent recovery to the real latest release", async () => {
+    const forgedVersion = "999999.0.0";
+    const forgedRelease = fixture(forgedVersion, { binary: "bytes" });
+    const forgedServer = await serveReleaseFixtureForChildren(forgedRelease);
+    const realServer = await serveReleaseFixtureForChildren(updateRelease);
+    const machine = temp("aidlc-t244-update-recovery-");
+    const saved = Object.fromEntries(
+      ["AIDLC_INSTALL_ROOT", "AIDLC_BIN_DIR", "AIDLC_RELEASE_BASE_URL", "AIDLC_OFFLINE", "NO_PROXY"]
+        .map((key) => [key, process.env[key]]),
+    );
+    Object.assign(process.env, {
+      ...envFor(machine),
+      AIDLC_RELEASE_BASE_URL: forgedServer.baseUrl,
+      AIDLC_OFFLINE: "0",
+      NO_PROXY: "127.0.0.1",
+    });
+    try {
+      expect((await refreshUpdateState(remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS)!)).state).toBe("behind");
+      expect(readUpdateCache()?.latestVersion).toBe(forgedVersion);
+      expect(cachedUpdateNotice()).toContain(forgedVersion);
+      process.env.AIDLC_RELEASE_BASE_URL = realServer.baseUrl;
+
+      const recovered = await refreshUpdateState(remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS)!);
+      expect(recovered.state).toBe("behind");
+      expect(recovered.latestVersion).toBe(NEXT_VERSION);
+      expect(readUpdateCache()?.latestVersion).toBe(NEXT_VERSION);
+      expect(cachedUpdateNotice()).toContain(`aidlc ${NEXT_VERSION}`);
+      expect(cachedUpdateNotice()).not.toContain(forgedVersion);
+    } finally {
+      for (const [key, value] of Object.entries(saved)) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+      await forgedServer.stop();
+      await realServer.stop();
+    }
+  });
+
+  test("metadata older than the installed binary cannot replace a valid update cache", async () => {
     const newerRelease = updateRelease;
     const olderRelease = fixture("0.0.1", { binary: "bytes" });
     const newerServer = await serveReleaseFixtureForChildren(newerRelease);
@@ -2417,6 +2698,13 @@ describe("t244 Windows and completion release surfaces", () => {
   );
 
   test("malformed Windows uninstall journals are reported", () => {
+    const machine = temp("aidlc-t244-uninstall-malformed-");
+    const saved = {
+      root: process.env.AIDLC_INSTALL_ROOT,
+      bin: process.env.AIDLC_BIN_DIR,
+    };
+    process.env.AIDLC_INSTALL_ROOT = machine;
+    process.env.AIDLC_BIN_DIR = join(machine, "bin");
     const malformed = join(tmpdir(), `aidlc-uninstall-${randomUUID()}.json`);
     const missingRoot = join(tmpdir(), `aidlc-uninstall-${randomUUID()}.json`);
     try {
@@ -2429,6 +2717,10 @@ describe("t244 Windows and completion release surfaces", () => {
       expect(scan.invalid).toContain(malformed);
       expect(scan.invalid).toContain(missingRoot);
     } finally {
+      if (saved.root === undefined) delete process.env.AIDLC_INSTALL_ROOT;
+      else process.env.AIDLC_INSTALL_ROOT = saved.root;
+      if (saved.bin === undefined) delete process.env.AIDLC_BIN_DIR;
+      else process.env.AIDLC_BIN_DIR = saved.bin;
       rmSync(malformed, { force: true });
       rmSync(missingRoot, { force: true });
     }

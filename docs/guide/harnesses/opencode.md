@@ -70,9 +70,12 @@ For an air-gapped package, use
 `& $installer -From <release-directory> -Offline` on Windows.
 
 `aidlc config` projects `.aidlc/`, `.opencode/`, the workspace shell,
-`AGENTS.md`, the managed `.gitignore` block, and `opencode.json`. The generated
-config discovers the skill and method files and allows direct `aidlc engine *`
-commands; other shell commands still prompt. Start opencode in the project and
+`AGENTS.md`, the managed `.gitignore` block, and AI-DLC's entries in
+`opencode.json`. Those entries discover the skill and method files and allow
+direct `aidlc engine *` commands; other shell commands still prompt. A
+project that already has an `opencode.json` keeps its model, provider,
+instructions, permission rules, and comments: AI-DLC adds only its own
+entries, and leaves a permission map's `"*"` rule to you when you set one. Start opencode in the project and
 run `/aidlc --doctor`, then `/aidlc` followed by what you want to build.
 
 ### Versioned manual-copy alternative
@@ -87,16 +90,16 @@ then set `RUNTIME_ROOT` to the extracted `runtime/` directory.
    cp -r "$RUNTIME_ROOT/opencode/.aidlc/"    your-project/.aidlc/
    cp -r "$RUNTIME_ROOT/opencode/.opencode/" your-project/.opencode/
    cp -r "$RUNTIME_ROOT/opencode/aidlc/"     your-project/aidlc/      # the workspace shell — a sibling of .aidlc/, not inside it
-   cp "$RUNTIME_ROOT/opencode/opencode.json" your-project/opencode.json  # or merge into yours
    ```
 
-   `opencode.json` carries three load-bearing blocks: `skills.paths` (skill
-   discovery from `.aidlc/skills`), `instructions` (both native onboarding at
-   `.aidlc/onboarding.md` and the method-tree glob — `/aidlc space <name>`
-   re-points only the glob), and permission rules for AIDLC bash entrypoints
-   plus edits under `.aidlc/tools/` and `.aidlc/hooks/`. If you merge into an
-   existing `opencode.json` or `opencode.jsonc`, preserve all three blocks,
-   including both `instructions` entries.
+   The copy runtime has no `opencode.json`, so copying never replaces yours.
+   Step 2 adds AI-DLC's three load-bearing parts to it, or writes the file
+   when there is none: `skills.paths` (skill discovery from `.aidlc/skills`),
+   `instructions` (both native onboarding at `.aidlc/onboarding.md` and the
+   method-tree glob, the one entry `/aidlc space <name>` re-points), and
+   permission rules for AIDLC bash entrypoints plus edits under
+   `.aidlc/tools/` and `.aidlc/hooks/`. If you keep an `opencode.jsonc`
+   instead, add those three parts to it by hand.
    The adapter enforces the permission boundary: the target must be an entrypoint
    embedded from the packaged tree, invoked as one direct command with no
    chaining, redirection, expansion, or command substitution. Engine-code edits
@@ -109,7 +112,8 @@ then set `RUNTIME_ROOT` to the extracted `runtime/` directory.
    ```
 
    It adds AI-DLC's lines to your `AGENTS.md` and `.gitignore`, after
-   everything already there (or creates them), before your first workflow
+   everything already there, and AI-DLC's entries to your `opencode.json`
+   (or creates them), before your first workflow
    (per-clone audit shards are committed deliberately; cursors and
    machine-local runtime stay ignored).
 
@@ -118,8 +122,9 @@ then set `RUNTIME_ROOT` to the extracted `runtime/` directory.
 
 Because opencode has no channel for the session-start hook's injected context,
 the `/aidlc` skill performs one read-only status probe on a bare invocation. An
-existing workflow gets the standard Resume / Redo / Jump / Start Fresh menu;
-`/aidlc --resume` skips both the probe and menu and continues directly.
+existing workflow carries on where it stopped, as with `/aidlc --resume` (ask
+to redo, jump to a stage, or start fresh to do something else);
+`/aidlc --resume` skips the probe and continues directly.
 
 The versioned runtime uses the native `aidlc` command. Framework developers who
 need the Bun-shaped projection can clone the repository, run
@@ -138,11 +143,11 @@ aidlc config
 ```
 
 Config preserves managed root blocks and user-owned files, and reports local
-framework edits as conflicts. Because `opencode.json` is a whole-file
-integration, a local edit is preserved as a conflict rather than overwritten.
-A refresh from release files waits while any workflow is active; complete the
-workflow first. Settings changes (`config models`, `flags`, `providers`) do not
-wait.
+framework edits as conflicts. In `opencode.json`, a refresh updates only the
+entries AI-DLC wrote that nobody changed; your own entries, and any AI-DLC
+entry you edited, stay as they are.
+A refresh while a workflow is open is done, like a settings change (`config
+models`, `flags`, `providers`), and says your open work carries on.
 Upgrade and rollback remain safe during a workflow because they do not touch
 the project.
 

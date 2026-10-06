@@ -37,6 +37,7 @@ import {
   workspaceSourceFingerprint,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import {
+  approvalFingerprint,
   codeGenerationRecordDir,
   evaluateCodeGenerationApproval,
   parseTestingContract,
@@ -405,7 +406,7 @@ describe("t334 (5) changed content or prompt before the answer cannot be recorde
       );
       const refused = answer(project, questions, session);
       expect(refused.code).not.toBe(0);
-      expect(refused.stderr).toContain("actual offered choice from this prompt and session");
+      expect(refused.stderr).toContain("requires the person's reply to this prompt, in this session");
       expect(refused.stderr).toContain("The pending question was presented for a different plan or attempt");
       expect(approvalRows(project)).toHaveLength(0);
       expect(receiptFiles(project)).toEqual({});
@@ -427,6 +428,9 @@ describe("t334 (6) F16: lowered fences allow post-approval content edits without
   for (const { mode, fence, lowered } of settings) {
     for (const member of ["plan", "test instructions", "Testing Contract"] as const) {
       const setting = `${mode}${fence ? ` with guard.plan-approval ${fence}` : ""}`;
+      // Guard Policy off records each pass and says nothing; relaxed and a
+      // person's own switch say it in one line.
+      const speaks = lowered && mode !== "off";
       test(`${setting} ${lowered ? "permits" : "blocks"} ${member} edits after a real approval`, () => {
         const project = createProject(mode, fence);
         const questions = presentPlan(project);
@@ -504,19 +508,23 @@ describe("t334 (6) F16: lowered fences allow post-approval content edits without
           expect(currentInstructions).toBe(instructionsBefore);
         }
 
+        // The edited content the build starts on, which generation start keeps
+        // beside the approval so an interrupted build of it picks up.
+        const startedFingerprint = approvalFingerprint(currentPlan, currentInstructions, contractHash, authority);
+        expect(startedFingerprint).not.toBe(receipt.fingerprint);
         const assertApprovalUnchanged = () => {
           // Continuing by policy is not a new Approve Plan answer. Only the
-          // original receipt's execution status may advance to generation;
-          // every approval field and its audit row remain unchanged.
+          // original receipt's execution status may advance to generation,
+          // keeping the content the build started on; every approval field
+          // and its audit row remain unchanged.
           expect(readFileSync(questions, "utf-8")).toBe(questionsBefore);
           expect(Object.keys(receiptFiles(project))).toEqual(Object.keys(receiptsBefore));
           const currentReceipt = readPlanApprovalReceipt(project, receiptKey);
           if (!currentReceipt) throw new Error("Continuation removed the original Plan Approval receipt");
           expect(currentReceipt?.status).toMatch(/^(approved|generation)$/);
-          expect(currentReceipt).toEqual({
-            ...receipt,
-            status: lowered ? currentReceipt.status : "approved",
-          });
+          expect(currentReceipt).toEqual(lowered && currentReceipt.status === "generation"
+            ? { ...receipt, startedFingerprint, status: "generation" }
+            : { ...receipt, status: "approved" });
           expect(approvalRows(project)).toEqual(approvalsBefore);
           const current = evaluateCodeGenerationApproval(project, { unit: null });
           expect(current.ok, current.reason).toBe(false);
@@ -564,7 +572,8 @@ describe("t334 (6) F16: lowered fences allow post-approval content edits without
             `${guarded.stderr}\n${guarded.stdout}\n${hookDrops(project)}`,
           ).toBe(lowered ? 0 : 2);
           if (lowered) {
-            expect(guarded.stdout).toContain("Continuing past the plan-approval check");
+            if (speaks) expect(guarded.stdout).toContain("Continuing past the plan-approval check");
+            else expect(guarded.stdout).not.toContain("Continuing past");
             expect(guarded.stderr).not.toContain('"ask_type":"guard-recovery"');
             const rows = stoodAsideRows();
             expect(rows).toHaveLength(rowsBefore + 1);
@@ -603,7 +612,8 @@ describe("t334 (6) F16: lowered fences allow post-approval content edits without
           expect(handoff.stdout).toContain("## Current unit-test instructions");
           expect(handoff.stdout).not.toContain("## Approved plan");
           expect(handoff.stdout).not.toContain("## Approved unit-test instructions");
-          expect(handoff.stderr).toContain("Continuing past the plan-approval check");
+          if (speaks) expect(handoff.stderr).toContain("Continuing past the plan-approval check");
+          else expect(handoff.stderr).not.toContain("Continuing past");
           expect(stoodAsideRows()).toHaveLength(beforeBrief + 1);
           const row = stoodAsideRows()[beforeBrief];
           expect(auditBlockField(row.block, "Tool")).toBe("testing-posture brief");
@@ -627,8 +637,8 @@ describe("t334 (6) F16: lowered fences allow post-approval content edits without
           expect(started.code, started.stderr).toBe(0);
           expect(JSON.parse(started.stdout.trim().split("\n").pop() ?? "{}").status).toBe("generation");
           const notices = changeNotices(started.stdout);
-          expect(notices).toHaveLength(1);
-          expect(notices[0]).toContain("Continuing past the plan-approval check");
+          expect(notices).toHaveLength(speaks ? 1 : 0);
+          if (speaks) expect(notices[0]).toContain("Continuing past the plan-approval check");
           expect(stoodAsideRows()).toHaveLength(beforeBegin + 1);
           const row = stoodAsideRows()[beforeBegin];
           expect(auditBlockField(row.block, "Tool")).toBe("testing-posture begin");
@@ -757,8 +767,16 @@ describe("t334 F20 combined content and source changes", () => {
         expect(rows).toHaveLength(1);
         expect(auditBlockField(rows[0].block, "Changed")).toBe("src/changed.ts");
         expect(auditBlockField(rows[0].block, "Current")).toBe(source);
+        // The build started on the edited content, which the receipt keeps
+        // beside the approval so an interrupted build of it picks up.
+        const startedPlan = readFileSync(planPath, "utf-8");
+        const startedFingerprint = approvalFingerprint(
+          startedPlan, readFileSync(join(dir, "unit-test-instructions.md"), "utf-8"),
+          parseTestingContract(startedPlan)!.contract_sha256, authority,
+        );
+        expect(startedFingerprint).not.toBe(original.fingerprint);
         expect(readPlanApprovalReceipt(project, key)).toEqual({
-          ...original, certifiedSourceSha256: source, status: "generation",
+          ...original, certifiedSourceSha256: source, startedFingerprint, status: "generation",
         });
         expect(approvalRows(project)).toEqual(approvals);
         expect(readFileSync(questions, "utf-8")).toBe(originalQuestions);
@@ -773,11 +791,15 @@ describe("t334 F20 combined content and source changes", () => {
   }
 });
 
-describe("t334 F20 provenance failures do not reopen or bypass the lowered approval fence", () => {
+describe("t334 F20 an unreadable source never reopens the approval, and with the check lowered the build goes ahead", () => {
   const unbindable = { AIDLC_TEST_SOURCE_MAX_ENTRIES: "1" };
+  // Guard Policy relaxed or off, or strict with the plan-approval check turned
+  // off for this work: the project's files cannot all be read (a very large
+  // repository, a link that loops), so the build starts from them as they
+  // are, says so in one line, and keeps the person's approval and answers.
   for (const mode of ["relaxed", "off", "strict"] as const) {
     for (const edited of [false, true]) {
-      test(`${mode}, content ${edited ? "edited" : "unchanged"}: unbindable source blocks execution until repaired`, () => {
+      test(`${mode}, content ${edited ? "edited" : "unchanged"}: an unbindable source builds with one line`, () => {
         const project = createProject(mode, mode === "strict" ? "off" : undefined);
         const questions = presentPlan(project);
         const session = `unbound-${mode}-${edited}`;
@@ -787,52 +809,33 @@ describe("t334 F20 provenance failures do not reopen or bypass the lowered appro
         expect(answer(project, questions, session).code).toBe(0);
         const originalQuestions = readFileSync(questions, "utf-8");
         const approvals = approvalRows(project);
-        const receipts = receiptFiles(project);
         const statePath = join(seededRecordDir(project), "aidlc-state.md");
         const state = readFileSync(statePath, "utf-8");
         const plan = join(codeGenerationRecordDir(project, null), "code-generation-plan.md");
         if (edited) writeFileSync(plan, `${readFileSync(plan, "utf-8")}\n- [ ] Revised work.\n`);
-        const handoff = brief(project);
-        expect(handoff.code, handoff.stderr).toBe(0);
 
         const verified = runChangeControlTool([BUN, POSTURE, "verify", "--stage-level", "--project-dir", project], project, undefined, unbindable);
-        expect(verified.code, verified.stderr).toBe(2);
-        expect(JSON.parse(verified.stdout)).toMatchObject({ ok: false, execution_allowed: false });
-        expect(JSON.parse(verified.stdout).reason).toContain("workspace source cannot be bound");
+        expect(verified.code, verified.stderr).toBe(0);
+        expect(JSON.parse(verified.stdout)).toMatchObject({ execution_allowed: true });
         expect(JSON.parse(verified.stdout).reason).not.toContain("approve the plan again");
-        for (const command of ["begin", "brief"]) {
-          const result = runChangeControlTool([BUN, POSTURE, command, "--stage-level", "--project-dir", project], project, undefined, unbindable);
-          expect(result.code).not.toBe(0);
-          expect(result.stderr).toContain("workspace source cannot be bound");
-          expect(result.stdout).toBe("");
-        }
-        for (const [tool, input] of [
-          ["Write", { file_path: join(project, "src/base.ts"), content: "export const base = 2;\n" }],
-          ["Task", { subagent_type: "aidlc-developer-agent", prompt: handoff.stdout }],
-        ] as const) {
-          const guarded = runChangeControlTool([BUN, GUARD], project, JSON.stringify({
-            hook_event_name: "PreToolUse", session_id: session, cwd: project,
-            tool_name: tool, tool_input: input,
-          }), unbindable);
-          expect(guarded.code, `${guarded.stdout}\n${guarded.stderr}`).toBe(2);
-          expect(guarded.stderr).toContain("CODE_GENERATION_PROVENANCE_UNAVAILABLE");
-          expect(guarded.stderr).toContain("workspace source cannot be bound");
-          expect(guarded.stdout).not.toContain("Continuing past");
-          expect(guarded.stderr).not.toContain('"ask_type":"guard-recovery"');
-        }
-        expect(receiptFiles(project)).toEqual(receipts);
+        const handoff = runChangeControlTool([BUN, POSTURE, "brief", "--stage-level", "--project-dir", project], project, undefined, unbindable);
+        expect(handoff.code, handoff.stderr).toBe(0);
+        const begun = runChangeControlTool([BUN, POSTURE, "begin", "--stage-level", "--project-dir", project], project, undefined, unbindable);
+        expect(begun.code, begun.stderr).toBe(0);
+        expect(begun.stdout).toContain("Building without a check of the project's files");
+        const guarded = runChangeControlTool([BUN, GUARD], project, JSON.stringify({
+          hook_event_name: "PreToolUse", session_id: session, cwd: project,
+          tool_name: "Write", tool_input: { file_path: join(project, "src/base.ts"), content: "export const base = 2;\n" },
+        }), unbindable);
+        expect(guarded.code, `${guarded.stdout}\n${guarded.stderr}`).toBe(0);
+        // The approval and the person's answers are untouched; no new question.
         expect(approvalRows(project)).toEqual(approvals);
-        expect(acceptedRows(project)).toHaveLength(0);
         expect(readFileSync(questions, "utf-8")).toBe(originalQuestions);
         expect(readFileSync(statePath, "utf-8")).toBe(state);
-        // Repairing the source walk (removing the test-only budget fault) lets
-        // the same approval continue; no new human turn or answer is issued.
+        // Once the files can be read again the same build carries on.
         const resumed = begin(project);
         expect(resumed.code, resumed.stderr).toBe(0);
-        expect(readFileSync(statePath, "utf-8")).toBe(state);
-        expect(readFileSync(questions, "utf-8")).toBe(originalQuestions);
         expect(approvalRows(project)).toEqual(approvals);
-        expect(evaluateCodeGenerationApproval(project, { unit: null }).ok).toBe(!edited);
       }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
     }
   }
@@ -866,13 +869,14 @@ describe("t334 F20 provenance failures do not reopen or bypass the lowered appro
           expect(blockedBegin.code, `${blockedBegin.stdout}\n${blockedBegin.stderr}`).not.toBe(0);
           if (fault === "audit" && edited) {
             // The brief's stand-aside row is the lowered fence's own account,
-            // not approval evidence: the brief still hands over the edited plan
-            // and says the row was not recorded. The start above still refuses,
-            // because the source change it carries must be recorded.
+            // not approval evidence: the brief still hands over the edited plan.
+            // Under Guard Policy off it says nothing about the row; the doctor
+            // lists the miss. The start above still refuses, because the source
+            // change it carries must be recorded.
             const unrecordedBrief = brief(project);
             expect(unrecordedBrief.code, unrecordedBrief.stderr).toBe(0);
             expect(unrecordedBrief.stdout.split("\n")[0]).toBe("AIDLC-STAGE: code-generation");
-            expect(unrecordedBrief.stderr).toContain("Not recorded in the audit trail, which was busy or could not be written");
+            expect(unrecordedBrief.stderr).not.toContain("Continuing past");
           }
           for (const [tool, input] of [
             ["Write", { file_path: join(project, "src/base.ts"), content: "export const base = 2;\n" }],
@@ -883,7 +887,7 @@ describe("t334 F20 provenance failures do not reopen or bypass the lowered appro
               tool_name: tool, tool_input: input,
             }));
             expect(guarded.code, `${guarded.stdout}\n${guarded.stderr}`).toBe(2);
-            expect(guarded.stderr).toContain("CODE_GENERATION_PROVENANCE_UNAVAILABLE");
+            expect(guarded.stderr).toContain("Code Generation source provenance could not be committed.");
             expect(guarded.stderr).not.toContain('"ask_type":"guard-recovery"');
             expect(guarded.stdout).not.toContain("Continuing past");
           }

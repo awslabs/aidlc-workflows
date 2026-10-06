@@ -3,6 +3,7 @@ import { existsSync, readFileSync, writeSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import {
+  CONFIG_SECTIONS,
   dispatcherWorkspaceUtilityArgv,
   HUMAN_PRESENCE_NO_SWITCH,
   LAUNCHER_GLOBAL_FLAGS,
@@ -312,6 +313,19 @@ export const ROUTES: readonly Route[] = [
     all: ["recompose [args]"],
   },
   {
+    id: "top-now",
+    group: "top",
+    kind: "top-passthrough",
+    classification: "passthrough",
+    verbs: ["now"],
+    tool: TOOLS.utility,
+    ...PUBLIC_ENGINE,
+    namespace: "engine",
+    mutationScope: "none",
+    human: [{ command: "now", summary: "print the current UTC time for a document" }],
+    all: ["now"],
+  },
+  {
     id: "top-doctor",
     namespace: "public",
     group: "top",
@@ -382,7 +396,7 @@ export const ROUTES: readonly Route[] = [
     all: [
       "config [--harness <name>] [--from <path>|--download [--release-base-url <url>] [--ca-bundle <path>]] [--mcp <defaults|none>] [--pin <version>|--unpin] [--dry-run] [--yes] [--json] [--quiet] [--force] [--plan-token <token>] [--project-dir <path>]",
       "config models [--show [--json]|--check|--reset|--preset <name>|--from <preset|profile> --save-as <name>] [--local|--project|--global]",
-      "config models [--deciding-effort <e>] [--reviewing-effort <e>] [--writing-up-effort <e>] [--agent <name> [--effort <e>] [--model <raw-id>]] [--local|--project|--global] [--dry-run] [--yes] [--download [--release-base-url <url>] [--ca-bundle <path>]]",
+      "config models [--deciding-effort <e>] [--reviewing-effort <e>] [--writing-up-effort <e>] [--agent <name> [--effort <e>] [--model <raw-id>]] [--session-model <id>] [--local|--project|--global] [--dry-run] [--yes] [--download [--release-base-url <url>] [--ca-bundle <path>]]",
       "config runtime [--show [--json]|--check|--record-paths|--reset] [--dry-run] [--yes] [--download [--release-base-url <url>] [--ca-bundle <path>]]",
       "config providers [--show [--json]|--check|--reset|--provider <current|amazon-bedrock|other>] [--region <region>] [--profile <profile>] [--opencode-default <yes|no>] [--acknowledge] [--mark-done <id>] [--dry-run] [--yes] [--download [--release-base-url <url>] [--ca-bundle <path>]]",
       "config trust [--show [--json]|--check|--acknowledge|--reset] [--dry-run] [--yes] [--download [--release-base-url <url>] [--ca-bundle <path>]]",
@@ -882,7 +896,9 @@ export const ROUTES: readonly Route[] = [
       "set change-control",
       "set sensors",
       "set learnings",
+      "set collaborators",
       "set summary-confirmation",
+      "set plan-approval",
       "set guard.plan-approval",
       "set guard.review-freeze",
       "set guard.state-transition",
@@ -902,7 +918,9 @@ export const ROUTES: readonly Route[] = [
       "set change-control": "config-change",
       "set sensors": "config-change",
       "set learnings": "config-change",
+      "set collaborators": "config-change",
       "set summary-confirmation": "config-change",
+      "set plan-approval": "config-change",
       "set guard.plan-approval": "config-change",
       "set guard.review-freeze": "config-change",
       "set guard.state-transition": "config-change",
@@ -1315,6 +1333,62 @@ export function listRoutes(): readonly Route[] {
   return ROUTES;
 }
 
+// The tool scripts behind a route that can change the machine (a release,
+// machine-wide settings, the installation). Copy channels pre-approve
+// AI-DLC's other tool scripts, never these, so running one directly shows the
+// host's own prompt.
+export function machineReachingTools(): string[] {
+  return [...new Set(
+    ROUTES.filter((route) => route.mutationScope === "machine" || route.mutationScope === "project-and-machine")
+      .map((route) => route.tool)
+      .filter((tool): tool is string => tool !== undefined),
+  )].sort();
+}
+
+// AI-DLC's tool scripts a copy channel pre-approves: every one but those.
+export function copyChannelToolScripts(): string[] {
+  const machine = new Set(machineReachingTools());
+  return [...new Set(Object.values(TOOLS))].filter((tool) => !machine.has(tool)).sort();
+}
+
+// The dispatcher's public commands, outside its engine namespace, that every
+// install pre-approves, each spelled exactly as AI-DLC runs it: the doctor,
+// status and version utilities in both spellings agents use (doctor with or
+// without `--verbose`), config's read-only forms (`--show`, with or without
+// `--json`, top level or per section, and `--help`), and
+// turning one recorded check back on
+// (`config flags --clear-bypass <switch> --yes`, the form the skills name),
+// which only ever raises a check. A host that matches text as written cannot
+// tell a quoted or re-spelled machine-wide config flag from a project one, so
+// every other config command, bare `config` (the guided setup) and turning a
+// check off included, is left to the host's prompt.
+export function copyChannelDispatcherCommands(): string[] {
+  // Only the packager and the tests ask for this list, so the settings reader
+  // loads here and the dispatcher's own start stays as light as before.
+  const { RECORDABLE_PROJECT_BYPASSES } = require("./aidlc-settings.ts") as typeof import("./aidlc-settings.ts");
+  return [
+    "doctor",
+    "doctor --verbose",
+    "version",
+    "--doctor",
+    "--doctor --verbose",
+    "--version",
+    "status",
+    "--status",
+    "config --help",
+    // An unknown option there, answered with the config usage line and no
+    // change; agents run it first for "show my settings".
+    "config --show",
+    "config --show --json",
+    ...CONFIG_SECTIONS.flatMap((section) => [
+      `config ${section} --show`,
+      `config ${section} --show --json`,
+      `config ${section} --help`,
+    ]),
+    ...RECORDABLE_PROJECT_BYPASSES.map((name) => `config flags --clear-bypass ${name} --yes`),
+  ];
+}
+
 export function renderHumanHelp(): string {
   const invoke = aidlcInvocation();
   const out = process.stdout;
@@ -1399,7 +1473,7 @@ export function renderCommandHelp(command: PublicCommand): string {
       `  ${cmd(`${invoke} config <section> [flags]`, out)}`,
       "",
       heading("SECTIONS", out),
-      sectionRow("models", "Which model and effort each agent uses (presets: thorough, balanced, minimal)"),
+      sectionRow("models", "Which model and effort each agent uses, or the Kiro CLI session model (presets: thorough, balanced, minimal)"),
       sectionRow("runtime", "Whether hooks can find bun, aidlc, and the selected harness"),
       sectionRow("providers", "Provider, AWS region/profile, and manual provider actions"),
       sectionRow("trust", "Host trust and command allowlist acknowledgement"),
@@ -1410,12 +1484,13 @@ export function renderCommandHelp(command: PublicCommand): string {
       "  --pin <version>   Pin this project to an installed release",
       "  --download        Fetch and verify the release this project needs, if it is missing",
       "  --channel [name]  Show or set the machine release channel (stable, preview)",
-      "  --show            Show the selected section without changing it",
+      "  --show            Show one section, or every section with no section named, without changing it",
       "  --dry-run         Print the transaction plan without writing",
       "  --yes             Confirm explicit choices; it never chooses values",
       "",
       heading("EXAMPLES", out),
       `  ${cmd(`${invoke} config`, out)}`,
+      `  ${cmd(`${invoke} config --show`, out)}`,
       `  ${cmd(`${invoke} config models --show`, out)}`,
       `  ${cmd(`${invoke} config models --preset thorough --project --yes`, out)}`,
       "",
@@ -2106,6 +2181,9 @@ function runDelegateDev(tool: string, args: string[]): number {
   try {
     const child = Bun.spawnSync([bunExecutable(), toolPath(tool), ...args], { /* dev-mode bun spawn */
       cwd: process.cwd(),
+      // The tool reads the same stdin it would read in the compiled binary,
+      // so input piped to the command (`--proposal /dev/stdin`) arrives.
+      stdin: "inherit",
       stdout: "inherit",
       stderr: "inherit",
       env: {
@@ -2298,8 +2376,66 @@ async function runHook(action: Extract<Action, { type: "hook" }>): Promise<numbe
     text(2, `aidlc engine hook ${action.name}: hook does not export run(input)\n`);
     return 1;
   }
-  const code = await mod.run(await readStdin());
+  const code = await runHookModule(mod.run, await readStdin());
   hookTrace("hook-run-end", { code });
+  return code;
+}
+
+// Claude Code shows a blocking hook's stderr behind the hook's own command
+// ("[aidlc engine hook plan-approval-guard]: ..."), and a deny decision on
+// stdout with only its reason. So on Claude a PreToolUse refusal also prints
+// that decision, with the words it wrote to stderr. Exit 2 blocks on its own,
+// so the call stays refused if the JSON is ever not read. Adapters pin their
+// own harness name and read stderr, so nothing changes for them.
+async function runHookModule(
+  run: (input: string) => number | Promise<number>,
+  input: string,
+): Promise<number> {
+  let event: unknown;
+  try {
+    event = (JSON.parse(input) as { hook_event_name?: unknown }).hook_event_name;
+  } catch {
+    event = undefined;
+  }
+  let claude = false;
+  try {
+    claude = event === "PreToolUse" && runtimeHarnessName() === "claude";
+  } catch {
+    // No harness to name: the plain refusal stands.
+  }
+  if (!claude) return await run(input);
+  const written: string[] = [];
+  let wroteStdout = false;
+  const stderrWrite = process.stderr.write;
+  const stdoutWrite = process.stdout.write;
+  const text = (chunk: unknown): string =>
+    typeof chunk === "string" ? chunk : Buffer.from(chunk as Uint8Array).toString("utf-8");
+  process.stderr.write = ((chunk: unknown, ...rest: unknown[]) => {
+    written.push(text(chunk));
+    return (stderrWrite as (...args: unknown[]) => boolean).call(process.stderr, chunk, ...rest);
+  }) as typeof process.stderr.write;
+  process.stdout.write = ((chunk: unknown, ...rest: unknown[]) => {
+    wroteStdout = true;
+    return (stdoutWrite as (...args: unknown[]) => boolean).call(process.stdout, chunk, ...rest);
+  }) as typeof process.stdout.write;
+  let code: number;
+  try {
+    code = await run(input);
+  } finally {
+    process.stderr.write = stderrWrite;
+    process.stdout.write = stdoutWrite;
+  }
+  const reason = written.join("").trim();
+  // A hook that already answered on stdout keeps its own answer.
+  if (code === 2 && reason && !wroteStdout) {
+    process.stdout.write(`${JSON.stringify({
+      hookSpecificOutput: {
+        hookEventName: "PreToolUse",
+        permissionDecision: "deny",
+        permissionDecisionReason: reason,
+      },
+    })}\n`);
+  }
   return code;
 }
 
@@ -2336,6 +2472,16 @@ async function runAdapter(action: Extract<Action, { type: "adapter" }>): Promise
     process.env.AIDLC_COMPILED_EXECUTABLE = process.execPath;
   }
   try {
+    // Kiro IDE runs these two after every shell command. When nothing they read
+    // changed since they last found nothing to do, they are skipped before the
+    // engine loads; whenever the gate cannot tell, they run as before.
+    if (kasAdapter(action) && (action.target === "rebuild-stage-graph" || action.target === "sync-workflow-state")) {
+      const gate = await import("./aidlc-hook-front-gate.ts");
+      if (gate.frontGateSkips(action.target, gate.frontGateProjectDirs(action.path))) {
+        hookTrace("adapter-front-gate-skip", { target: action.target });
+        return 0;
+      }
+    }
     hookTrace("adapter-import-begin");
     const mod = await import(pathToFileURL(action.path).href);
     hookTrace("adapter-import-end");
@@ -2353,6 +2499,8 @@ async function runAdapter(action: Extract<Action, { type: "adapter" }>): Promise
       action.target === "plan-approval-guard" ||
       action.target === "record-human-turn" ||
       action.target === "rebuild-stage-graph" ||
+      action.target === "review-freeze" ||
+      action.target === "state-transition-guard" ||
       action.target === "session-start" ||
       action.target === "continue-workflow" ||
       action.target === "verb-intercept" ||

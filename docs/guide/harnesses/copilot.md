@@ -58,11 +58,13 @@ that ship the neutral-only block. Keep those imports when merging project instru
   - VS Code agent mode never reads that list. Its hooks run only in a
     trusted workspace (VS Code Workspace Trust) with the **Chat: Use Hooks**
     setting (`chat.useHooks`) on. That setting is a preview feature your
-    organization can switch off. A skipped hook leaves no message in the
-    chat; the Agent Debug Logs panel shows it.
+    organization can switch off. `aidlc config` turns it on in the folder's
+    `.vscode/settings.json` when the project does not set it, and the
+    folder's value beats a user setting that is off. A skipped hook leaves
+    no message in the chat; the Agent Debug Logs panel shows it.
   - `/aidlc --doctor` warns when the CLI list does not cover the folder. It
-    cannot see the VS Code switches, but once a stage has started with no
-    hook run, AI-DLC says so in the chat (see "AI-DLC says when its hooks
+    cannot see the VS Code switches, but when no hook has run for your
+    message, AI-DLC says so in the chat (see "AI-DLC says when its hooks
     have not run" below).
 - **A model provider** — nothing in this install pins a model. Signed-in
   Copilot works as-is; BYOK works with no GitHub auth at all (e.g. Amazon
@@ -106,10 +108,13 @@ then set `RUNTIME_ROOT` to the extracted `runtime/` directory.
    cp -R "$RUNTIME_ROOT/copilot/.github/." your-project/.github/  # MERGE — everything is aidlc-prefixed, nothing of yours is overwritten
    ```
 
-2. AI-DLC adds its lines to your `AGENTS.md` (including the method include)
-   and `.gitignore` when the first chat starts, after everything already there,
-   or creates them when the project has none (per-clone audit shards are
-   committed deliberately; cursors and machine-local runtime stay ignored).
+2. Run the copy's own setup once:
+   `cd your-project && bun .aidlc/tools/aidlc.ts config --from "$RUNTIME_ROOT" --harness copilot`.
+   It adds AI-DLC's lines to your `AGENTS.md` (including the method include)
+   and `.gitignore`, after everything already there, or creates them when the
+   project has none (per-clone audit shards are committed deliberately;
+   cursors and machine-local runtime stay ignored). Without it, AI-DLC adds
+   them when the first chat starts.
    For VS Code, also add `"chat.agent.maxRequests": 200` to your
    `.vscode/settings.json` if it does not set that key (see
    [VS Code request cap](#vs-code-request-cap)). The copy runtime does not
@@ -166,11 +171,17 @@ then use the ignored local `dist/copilot/` output.
   plan first" refusal on both surfaces.
 - **AI-DLC says when its hooks have not run.** Both surfaces skip repo hooks
   without a word in the chat (see Folder trust above), so AI-DLC watches for
-  it. Once a stage has started in a workflow where no hook has ever run, each
-  step the agent receives carries one sentence saying so and naming the
-  switches to check, and the agent tells you once. Before your first Copilot
-  chat in the folder, `/aidlc --doctor` warns "AIDLC hooks have not run in this
-  project yet"; after a stage it fails with the same steps. A hook that runs
+  it. When no hook has run for your first message, or once a stage has
+  started in a workflow where no hook has ever run, the next step does no
+  work: in VS Code the agent turns Chat: Use Hooks on in
+  the folder's `.vscode/settings.json` itself (VS Code asks you to allow the
+  edit) and says "Fixed. Send your next message here to carry on."; your next
+  message in the same chat runs with the hooks. If the setting was already
+  on, it says your organization has switched it off. If you switched the
+  human-presence check off, the work carries on and the agent tells you once
+  instead. Before your first Copilot chat in the folder, `/aidlc --doctor`
+  warns "AIDLC hooks have not run in this project yet"; after a stage it fails
+  with the same steps. A hook that runs
   but crashes still lets your action through, and leaves its error line in
   `.aidlc-engine/hooks-health/<hook>.drops`, which doctor reads.
 - **Hooks enforce natively.** The adapter
@@ -189,26 +200,35 @@ then use the ignored local `dist/copilot/` output.
   Code agent mode normally asks "Run command? Allow / Skip" before every
   terminal command, so each workflow step would wait for a click. The adapter
   answers `allow` for the routine commands AI-DLC runs during a stage: `next`,
-  `continue`, `report`, and `park`, the read-only `next` forms, `doctor` with
-  the flags the engine names, and the project commands in AI-DLC's own command
-  table (`engine log`, `engine state`, `engine runtime`, `engine learnings`,
-  `engine testing-posture`, `engine intent list`, and the rest), in the
-  direct, source-dispatcher, compiled, or tool-script spelling. It answers only
-  when all of these hold:
+  `continue`, `report`, and `park`, the read-only `next` forms, `doctor` (or
+  `--doctor`) with the flags the engine names, `--version`, `--status`, and
+  `--help`, AI-DLC's own checks (`engine sensor-traceability`,
+  `sensor-required-sections`, `sensor-upstream-coverage`, and
+  `sensor-claim-sources`, which only read files), and the project commands in
+  AI-DLC's own command table (`engine log`, `engine state`, `engine runtime`,
+  `engine learnings`, `engine testing-posture`, `engine intent list`, and the
+  rest), in the direct, source-dispatcher, compiled, or tool-script spelling.
+  The copy channel's `aidlc-utility.ts <verb>` gets the same answer as its
+  `engine workspace <verb>` spelling. It answers only when all of these hold:
   - the call carries VS Code's chat session, every AI-DLC guard has passed,
     and a workflow command is matched to this session's workflow;
   - it is one plain command that PowerShell, cmd, and a POSIX shell all read
     the same way: no chaining, pipe, redirect other than one trailing `2>&1`,
     environment assignment in front, or shell expansion, and no character any
     of those shells treats specially (such as `$`, a backtick, `%`, `^`, `!`,
-    `&`, `|`, `<`, `>`, `;`, `#`, parentheses, braces, `@`, `\`, or a
-    typographic quote), even inside quotes. A quoted word may hold spaces and
-    `?`, and an apostrophe inside double quotes. Text outside plain ASCII
-    (accented letters, for example) also keeps the prompt. On Windows, where
-    VS Code's terminal is PowerShell or cmd, a backslash is a plain path
-    separator, so a path such as `C:\work\app` or `.aidlc\tools\...` runs
-    without a click; only a backslash right before a double quote keeps the
-    prompt. In a Git Bash or WSL terminal a backslash still keeps it. In a
+    `#`, braces, `@`, `\`, or a typographic quote), even inside quotes. A
+    quoted word may hold spaces, `?`, parentheses, and `;`, and an apostrophe
+    inside double quotes. Double-quoted text may also hold `|`, `&`, `<`, or
+    `>` when it has a space, as in
+    `--details "Q1: A - both ends included (closed range)"` or
+    `--options "Keep the note|Skip it"`; outside quotes, in single quotes, or
+    in double quotes with no space, those keep the prompt. Text outside plain
+    ASCII (accented letters, for example) also keeps the prompt. On Windows,
+    where VS Code's terminal is PowerShell or cmd, a backslash is a plain path
+    separator, so a path such as `C:\work\app`, `.aidlc\tools\...`, or
+    `--project-dir 'C:\work\app'` (as the engine prints a project folder)
+    runs without a click; only a backslash right before a closing quote keeps
+    the prompt. In a Git Bash or WSL terminal a backslash still keeps it. In a
     PowerShell terminal one `cd` or `Set-Location` to the project folder
     itself, by its full path, may come first:
     `cd C:\work\app; aidlc engine orchestrate next` runs like
@@ -242,18 +262,21 @@ then use the ignored local `dist/copilot/` output.
     and `next config set`,
     `engine bolt set-autonomy`, the `engine state` status changes, and the
     gate setters (`set-unit-gate-rhythm`, `set-construction-checkpoints`,
-    `set-skeleton-stance`, `set-status`). `set-construction-checkpoints` runs
-    without a click when it applies the checkpoints choice you just recorded
-    (its policy receipt for exactly that value);
+    `set-skeleton-stance`, `set-status`). `set-construction-checkpoints`, and
+    `engine config set` for one of your checks (plan approval, summary
+    confirmation, a fence, or Guard Policy), run without a click when you
+    asked for that change in the chat since the last decision, and turning a
+    check back on always does;
   - commands that switch the work in progress: `engine intent switch` (or
     `engine intent <name>`) and `engine space switch` (or `engine space <name>`);
   - the team `unit` commands, which share claims and approvals through your
     remote (all but `unit merge-status`);
   - commands that run code AI-DLC does not ship or rewrite its installed
-    skills: `engine sensor fire` and the `engine sensor-*` checks (they run
-    your project's linter and type checker), `engine knowledge onboard`,
-    `sync`, and `engine workspace document-input --onboard` (they run the
-    document extractor your harness names),
+    skills: `engine sensor fire` (it runs whatever a check names) and
+    `engine sensor-linter` and `sensor-type-check` (they run your project's
+    linter and type checker), `engine knowledge onboard`, `sync`, and
+    `engine workspace document-input --onboard` (they run the document
+    extractor your harness names),
     `engine plugin sync`, `select`, and `build`, `plugin build`, and
     `engine gen runners` and `runner-scopes`.
 
@@ -329,10 +352,8 @@ then use the ignored local `dist/copilot/` output.
   happens for each stage of each Unit. On a native install this reaches a
   workflow already in progress as soon as you run `aidlc update`; no
   `aidlc config` refresh is needed. A project pinned to an earlier release in
-  `.aidlc-version` keeps running that release, and AI-DLC does not move a pin
-  while a workflow is in progress, so a pinned project gets this once its
-  workflow completes and you run `aidlc config --pin` with this release or
-  later.
+  `.aidlc-version` keeps running that release, so a pinned project gets this
+  once you run `aidlc config --pin` with this release or later.
 - **Let the extra steps run without a click.** If VS Code asks you to allow
   each terminal command, choose **Configure Auto Approve...** from its Allow
   options and add `"aidlc engine orchestrate": true` to the

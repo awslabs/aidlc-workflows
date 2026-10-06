@@ -1,7 +1,7 @@
 // t147-kiro-hook-adapter: the Kiro stdin shim normalizes live-captured
 // payloads into the core hooks' contract.
 //
-// covers: file:hooks/aidlc-continue-workflow.ts, file:hooks/aidlc-session-start.ts, file:hooks/aidlc-sync-workflow-state.ts, file:hooks/aidlc-log-subagent.ts, hook:aidlc-plan-approval-guard, function:splitKiroCommandArgs, function:sanitizeHarnessPlainText, function:decodeHarnessPlainText, function:terminalDispatcherArgv
+// covers: file:hooks/aidlc-continue-workflow.ts, file:hooks/aidlc-session-start.ts, file:hooks/aidlc-sync-workflow-state.ts, file:hooks/aidlc-log-subagent.ts, hook:aidlc-plan-approval-guard, function:splitKiroCommandArgs, function:sanitizeHarnessPlainText, function:decodeHarnessPlainText, function:terminalDispatcherArgv, function:relayAsTextBlock
 //
 // WHAT. Each case pipes a fixture from tests/fixtures/kiro-hook-payloads/
 // (field-verbatim captures off kiro-cli 2.6.1 — findings.md §0.2) into
@@ -35,6 +35,7 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   rmSync,
   writeFileSync,
@@ -50,10 +51,12 @@ import {
   readAuditShardEvents,
   readIntentRegistry,
   readSessionBinding,
+  relayAsTextBlock,
   sanitizeHarnessPlainText,
   splitKiroCommandArgs,
   subagentInflightMarkerPath,
   writeActiveDirectiveMarker,
+  readSessionIntentHandoff,
   writeSessionIntentHandoff,
   writeSessionIntentUuid,
   stateDigest,
@@ -382,12 +385,52 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
     }
   });
 
-  test("1a: stop forwards session identity and allows an exact post-create handoff", () => {
+  // Kiro CLI shows the person nothing of a Stop block (live, 2.23.1), so the
+  // reason carries the agent's step after the line: the agent says the line
+  // itself, on its own line, even when the aidlc skill is not in its context.
+  const KIRO_LINE = "AI-DLC is carrying on with Requirements Analysis.";
+  const KIRO_AGENT_STEP =
+    "If you carry on with the work, first say that line to the person once, on its own line; " +
+    "if you had just asked them a question, record it with `log decision` and end your turn saying nothing. " +
+    "Say nothing else about this note.";
+  test("1b: on Kiro CLI the reason is the line, then the agent's step to say it", () => {
+    const dir = scratchProject(true);
+    try {
+      const r = runAdapter(dir, "continue-workflow", FIXTURES.stop, [], { AIDLC_HARNESS_NAME: undefined });
+      const out = JSON.parse(r.stdout) as { decision?: string; reason?: string };
+      expect(out.decision).toBe("block");
+      expect(out.reason).toBe(`${KIRO_LINE}\n${KIRO_AGENT_STEP}`);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("1a: stop forwards session identity and allows an exact switch handoff", () => {
     const dir = scratchProject(true);
     try {
       const original = readIntentRegistry(dir)[0];
       const created = createIntent(dir, "new-work", "default", "bugfix");
       const sessionId = "kiro-handoff-session";
+      writeSessionIntentUuid(dir, sessionId, created.uuid);
+      writeSessionIntentHandoff(dir, sessionId, original.uuid, created.uuid, "switch");
+
+      const r = runAdapter(dir, "continue-workflow", {
+        ...FIXTURES.stop as Record<string, unknown>,
+        session_id: sessionId,
+      });
+      expect(r.code).toBe(0);
+      expect(r.stdout.trim()).toBe("");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("1a1: new work created beside other work carries on: the stop right after creation is pushed on", () => {
+    const dir = scratchProject(true);
+    try {
+      const original = readIntentRegistry(dir)[0];
+      const created = createIntent(dir, "new-work", "default", "bugfix");
+      const sessionId = "kiro-create-session";
       writeSessionIntentUuid(dir, sessionId, created.uuid);
       writeSessionIntentHandoff(dir, sessionId, original.uuid, created.uuid);
 
@@ -396,7 +439,9 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
         session_id: sessionId,
       });
       expect(r.code).toBe(0);
-      expect(r.stdout.trim()).toBe("");
+      expect((JSON.parse(r.stdout) as { decision?: string }).decision).toBe("block");
+      // The receipt is spent either way.
+      expect(readSessionIntentHandoff(dir, sessionId)).toBeNull();
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -812,9 +857,35 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
       expect(r.stdout).not.toContain("\u001b");
       expect(r.stdout).not.toContain("\u0008");
       expect(r.stdout).not.toContain("Cwd=C:\\shell\\noise");
+      // Kiro renders the reply as Markdown, which joins single line breaks; a
+      // fenced text block keeps doctor and help on their own lines.
+      expect(r.stdout).toContain(`relay that output to the user ${relayAsTextBlock("")}, then STOP.`);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+
+  test("a utility flag among the person's words is forwarded as their request, not run as the utility", () => {
+    const dir = scratchProject(true);
+    try {
+      const r = runAdapter(dir, "verb-intercept", {
+        cwd: dir,
+        prompt: "/aidlc add a --version flag that prints the version from package.json",
+      });
+      expect(r.code).toBe(0);
+      expect(r.stdout).not.toContain("relay that output to the user");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("the relay fence is longer than any backtick run in the output", () => {
+    expect(relayAsTextBlock("Machine  ok\n")).toContain("(```text on its own line before it, ``` after it)");
+    // A document's own code fence stays inside the block.
+    expect(relayAsTextBlock("# Notes\n```ts\nconst a = 1;\n```\n")).toContain("(````text on its own line before it, ```` after it)");
+    expect(relayAsTextBlock("````md\n````\n")).toContain("(`````text on its own line before it, ````` after it)");
+    // A long record with many short runs is read in one pass.
+    expect(relayAsTextBlock("`a".repeat(200_000))).toContain("(```text on its own line before it, ``` after it)");
   });
 
   test("3b: plain-text sanitizer drops unterminated 7-bit and 8-bit controls", () => {
@@ -1006,7 +1077,7 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
         });
         writeFileSync(join(dir, "next-response.txt"), response);
         const hook = runAdapter(dir, "verb-intercept", {
-          cwd: dir, prompt: `Step 1: run \`aidlc engine orchestrate next ${raw}\``,
+          cwd: dir, prompt: `1. directive = the JSON printed by running \`aidlc engine orchestrate next ${raw}\` bare (no shell capture, no pipe).`,
         });
         expect(hook.code).toBe(0);
         expect(hook.stdout).toContain(`engine orchestrate next ${raw}`);
@@ -1449,7 +1520,6 @@ if (args[0] === "engine" && args[1] === "orchestrate") {
   test.each([
     ["empty resources", JSON.stringify({ resources: [] })],
     ["absent resources", "{}"],
-    ["stale-space glob", JSON.stringify({ resources: ["file://aidlc/spaces/old-space/memory/**/*.md"] })],
     ["malformed JSON", "{not json"],
     ["missing worker file", null],
     ["partial memory glob", JSON.stringify({ resources: ["file://aidlc/spaces/default/memory/org*.md"] })],
@@ -1474,8 +1544,70 @@ if (args[0] === "engine" && args[1] === "orchestrate") {
       expect(result.stdout).toBe("");
       expect(result.stderr).toContain(workerFile);
       expect(result.stderr).toContain("file://aidlc/spaces/default/memory/**/*.md");
-      expect(result.stderr).toContain("/aidlc space switch default");
+      // A space switch only repoints a glob that is there, so the step named
+      // is the one that puts the shipped file back, and that route is real.
+      expect(result.stderr).toContain("config --harness kiro` in a terminal to put AI-DLC's Kiro files back");
+      expect(result.stderr).not.toContain("/aidlc space switch");
       expect(result.stderr).toContain("/aidlc --doctor");
+      expect(resolveAction(["config", "--harness", "kiro"]).type).not.toBe("error");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("native preload repoints a core worker left on another space, and starting it again goes through", () => {
+    const dir = scratchProject(false);
+    try {
+      const workerFile = join(dir, ".kiro", "agents", "aidlc-product-agent.json");
+      writeFileSync(join(dir, "aidlc", "spaces", "default", "memory", "org.md"), "# Organization\n");
+      const oldMemory = join(dir, "aidlc", "spaces", "old-space", "memory");
+      mkdirSync(oldMemory, { recursive: true });
+      writeFileSync(join(oldMemory, "org.md"), "# Previous organization\n");
+      const shipped = JSON.parse(readFileSync(workerFile, "utf-8")) as { resources: string[] };
+      writeFileSync(workerFile, JSON.stringify({
+        ...shipped,
+        resources: shipped.resources.map((entry) =>
+          entry.replace("aidlc/spaces/default/memory/", "aidlc/spaces/old-space/memory/")
+        ),
+      }));
+      const payload = {
+        cwd: dir,
+        tool_name: "invoke_sub_agent",
+        tool_input: { name: "aidlc-product-agent", prompt: "Inspect the project." },
+      };
+      const stopped = runAdapter(dir, "deliver-stage-rules", payload);
+      expect(stopped.code, stopped.stderr).toBe(2);
+      expect(stopped.stderr).toBe(
+        "[aidlc] This specialist was set up for another space and is now set up for this one. Start it again.\n",
+      );
+      expect(readFileSync(workerFile, "utf-8")).toContain("file://aidlc/spaces/default/memory/**/*.md");
+      const again = runAdapter(dir, "deliver-stage-rules", payload);
+      expect(again.code, again.stderr).toBe(0);
+      expect(again.stderr).toBe("");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("native preload holds no worker for a conversation outside the workflow", () => {
+    const dir = scratchProject(true);
+    try {
+      const workerFile = join(dir, ".kiro", "agents", "aidlc-product-agent.json");
+      writeFileSync(workerFile, JSON.stringify({ resources: [] }));
+      const payload = {
+        cwd: dir,
+        session_id: "11111111-2222-4333-8444-555555555555",
+        tool_name: "invoke_sub_agent",
+        tool_input: { name: "aidlc-product-agent", prompt: "Inspect the project." },
+      };
+      expect(runAdapter(dir, "deliver-stage-rules", payload).code).toBe(2);
+      // No cursor names the record, so this chat stands outside it.
+      const cursor = join(dirname(dirname(seededStateFile(dir))), "active-intent");
+      expect(existsSync(cursor)).toBe(true);
+      writeFileSync(cursor, "");
+      const outside = runAdapter(dir, "deliver-stage-rules", payload);
+      expect(outside.code, outside.stderr).toBe(0);
+      expect(outside.stderr).toBe("");
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -1532,6 +1664,20 @@ if (args[0] === "engine" && args[1] === "orchestrate") {
       expect(result.stdout).toBe("");
       expect(result.stderr).toContain(workerFile);
       expect(result.stderr).toContain("file://aidlc/spaces/default/memory/**/*.md");
+      expect(result.stderr).toContain("Put this space's method files back under aidlc/spaces/default/memory/");
+      // One missing file at a time, never a checkout over the whole folder.
+      expect(result.stderr).toContain("git checkout -- aidlc/spaces/default/memory/org.md` for a tracked file that is missing");
+      expect(result.stderr).not.toContain("git checkout -- aidlc/spaces/default/memory`");
+      // The step it names: with a method file back, the dispatch goes through.
+      writeFileSync(join(memory, "org.md"), "# Organization\n");
+      const restored = runAdapter(dir, "deliver-stage-rules", {
+        cwd: dir,
+        tool_name: "subagent",
+        tool_input: {
+          stages: [{ role: "aidlc-product-agent", prompt_template: "Inspect the project." }],
+        },
+      });
+      expect(restored.code, restored.stderr).toBe(0);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -2241,5 +2387,280 @@ if (args[0] === "engine" && args[1] === "orchestrate") {
       // The respawn seam names process.execPath.
       expect(src).toContain("process.execPath");
     }
+  });
+});
+
+describe("t147 Kiro CLI presence floor holds only at a gate the person must answer", () => {
+  const presence = { AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "0" };
+  let clock = Date.parse("2026-02-01T00:00:00Z");
+  const row = (event: string, fields: string) => {
+    clock += 1000;
+    return `\n## ${event}\n**Timestamp**: ${new Date(clock).toISOString().replace(/\.\d{3}Z$/, "Z")}\n**Event**: ${event}\n${fields}\n---\n`;
+  };
+  // requirements-analysis waits at its gate, opened after the workflow began.
+  function gateOpen(dir: string, extra = ""): void {
+    const sp = seededStateFile(dir);
+    writeFileSync(sp, readFileSync(sp, "utf-8").replace("- [-] requirements-analysis", "- [?] requirements-analysis"));
+    appendFileSync(
+      join(seededAuditDir(dir), pinnedShardName()),
+      row("WORKFLOW_STARTED", "**Scope**: feature\n") + extra +
+        row("STAGE_AWAITING_APPROVAL", "**Stage**: requirements-analysis\n"),
+      "utf-8",
+    );
+  }
+  const guard = (dir: string, command: string) =>
+    runAdapter(dir, "guard-tool-call", { cwd: dir, tool_name: "execute_bash", tool_input: { command } }, [], presence);
+  const approveGate = "bun .kiro/tools/aidlc.ts engine orchestrate report --stage requirements-analysis --result approved";
+  // One line the person can read wherever Kiro shows it; the agent's step is
+  // keyed on the same sentence in the SKILL.
+  const APPROVAL_WAITS = "Nothing runs until you answer the approval question.";
+  const toUnitMajor = "bun .kiro/tools/aidlc.ts engine state set-construction-iteration unit-major";
+
+  test("a gate the person must answer, with no turn of theirs since it opened, refuses the call", () => {
+    const dir = scratchProject(true);
+    try {
+      gateOpen(dir);
+      const refused = guard(dir, approveGate);
+      expect(refused.code, refused.stderr).toBe(2);
+      // Plain words the person reads under Kiro's own prefix. Kiro IDE's floor
+      // takes the same sentence in its own follow-up.
+      expect(refused.stderr).toContain(APPROVAL_WAITS);
+      expect(refused.stderr).not.toContain("end the turn");
+      expect(refused.stderr).not.toContain("no human has acted since it opened");
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+
+  // The protocol prints the Review brief at the gate, before the question: it
+  // only reads, so the floor lets that call through and the person never sees
+  // the floor's line in the normal flow. Anything around it still waits.
+  test("the Review brief prints while the gate waits for the person", () => {
+    const dir = scratchProject(true);
+    try {
+      gateOpen(dir);
+      for (const brief of [
+        "bun .kiro/tools/aidlc-review-brief.ts review --stage requirements-analysis --why first",
+        'bun .kiro/tools/aidlc-review-brief.ts review --stage "requirements-analysis" --why first',
+        "aidlc engine review-brief review --stage requirements-analysis --why first",
+        "bun .kiro/tools/aidlc.ts engine review-brief summary --stage requirements-analysis --questions-file q.md",
+      ]) {
+        const printed = guard(dir, brief);
+        expect(printed.code, `${brief}\n${printed.stderr}`).toBe(0);
+      }
+      for (const command of [
+        `bun .kiro/tools/aidlc-review-brief.ts review --stage requirements-analysis --why first && ${approveGate}`,
+        "bun .kiro/tools/aidlc-review-brief.ts context --stage requirements-analysis",
+        "bun .kiro/tools/aidlc-review-brief.ts review --stage requirements-analysis --why first > out.md",
+        approveGate,
+      ]) {
+        expect(guard(dir, command).code, command).toBe(2);
+      }
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+
+  test("the Construction setting the person just chose runs while the gate stays open", () => {
+    const dir = scratchProject(true);
+    try {
+      // The person's turn went to recording their choice, which used it up.
+      gateOpen(dir, row("HUMAN_TURN", "**Session**: kiro-person\n") + row(
+        "CONSTRUCTION_POLICY_RECORDED",
+        "**Stage**: requirements-analysis\n**Checkpoint**: Construction Policy\n**Field**: Construction Iteration\n" +
+          "**Value**: unit-major\n**Session**: kiro-person\n**User Input**: Approve\n",
+      ));
+      const applied = guard(dir, toUnitMajor);
+      expect(applied.code, applied.stderr).toBe(0);
+      // Each form the engine issues for it runs; any other spelling waits, so
+      // nothing but the state tool itself can run on that choice.
+      for (const issued of [
+        "aidlc engine state set-construction-iteration unit-major",
+        "bun .kiro/tools/aidlc-state.ts set-construction-iteration unit-major",
+      ]) {
+        expect(guard(dir, issued).code, issued).toBe(0);
+      }
+      for (const altered of [
+        `PATH=./bin ${toUnitMajor}`,
+        `env FOO=1 ${toUnitMajor}`,
+        `command ${toUnitMajor}`,
+        `exec ${toUnitMajor}`,
+        `cd ${dir} && ${toUnitMajor}`,
+        "./bin/bun .kiro/tools/aidlc.ts engine state set-construction-iteration unit-major",
+        "bun --preload ./x.ts .kiro/tools/aidlc.ts engine state set-construction-iteration unit-major",
+        "bun ./other/tools/aidlc.ts engine state set-construction-iteration unit-major",
+        "/tmp/aidlc engine state set-construction-iteration unit-major",
+        `${toUnitMajor} --project-dir /tmp`,
+        "bun .kiro/tools/aidlc.ts engine state set-construction-iteration 'unit-major'",
+      ]) {
+        expect(guard(dir, altered).code, altered).toBe(2);
+      }
+      // Nothing else rides on that choice: another value, a command chained to
+      // the setter, and the gate's own approval still wait for the person.
+      for (const command of [
+        "bun .kiro/tools/aidlc.ts engine state set-construction-iteration stage-major",
+        `${toUnitMajor} && ${approveGate}`,
+        approveGate,
+      ]) {
+        const refused = guard(dir, command);
+        expect(refused.code, command).toBe(2);
+      }
+      // Once the setting holds that value, the spent choice opens nothing.
+      const sp = seededStateFile(dir);
+      writeFileSync(sp, readFileSync(sp, "utf-8").replace(
+        "- **Current Stage**:",
+        "- **Construction Iteration**: unit-major\n- **Current Stage**:",
+      ));
+      expect(getField(readFileSync(sp, "utf-8"), "Construction Iteration")).toBe("unit-major");
+      expect(guard(dir, toUnitMajor).code).toBe(2);
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+});
+
+describe("t147 Kiro CLI reads what the person typed from the expanded skill body", () => {
+  // kiro-cli delivers `/aidlc <args>` as the skill body with $ARGUMENTS
+  // substituted, so the typed words exist only in the forwarding loop's step-1
+  // anchor. The body holds `next` examples ahead of it.
+  const SKILL = readFileSync(join(KIRO_TREE, "skills", "aidlc", "SKILL.md"), "utf-8");
+  const expanded = (args: string) => SKILL.replaceAll("$ARGUMENTS", args);
+  const session = "t147-typed-session";
+  const env = { AIDLC_SESSION_OVERRIDE: session, AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "0", AIDLC_UNATTENDED: "0" };
+
+  test("the body this models: a prose `next` example comes before the step-1 anchor", () => {
+    const anchor = SKILL.indexOf("next $ARGUMENTS` bare");
+    expect(anchor).toBeGreaterThan(0);
+    expect(SKILL.indexOf("next $ARGUMENTS` bare", anchor + 1)).toBe(-1);
+    expect(SKILL.indexOf("next --stage <slug>`")).toBeGreaterThan(-1);
+    expect(SKILL.indexOf("next --stage <slug>`")).toBeLessThan(anchor);
+  });
+
+  test("`/aidlc --guard-policy off` sets Guard Policy off and the line reaches the conversation", () => {
+    const dir = scratchProject(false);
+    try {
+      const created = spawnSync("bun", [
+        join(dir, ".kiro", "tools", "aidlc-utility.ts"), "intent-create", "--scope", "enterprise",
+        "--arguments", "typed switch fixture", "--label", "typed-switch", "--project-dir", dir,
+      ], { cwd: dir, encoding: "utf-8", env: { ...process.env, ...env }, timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS) });
+      expect(created.status, created.stderr).toBe(0);
+      const intents = join(dir, "aidlc", "spaces", "default", "intents");
+      const state = join(intents, readFileSync(join(intents, "active-intent"), "utf-8").trim(), "aidlc-state.md");
+      expect(getField(readFileSync(state, "utf-8"), "Guard Policy")).toStartWith("strict");
+      const r = runAdapter(dir, "verb-intercept", { cwd: dir, session_id: session, prompt: expanded("--guard-policy off") }, [], env);
+      expect(r.code, r.stderr).toBe(0);
+      expect(getField(readFileSync(state, "utf-8"), "Guard Policy")).toBe("off (set by you)");
+      const shards = join(dirname(state), "audit");
+      expect(readdirSync(shards).map((name) => readFileSync(join(shards, name), "utf-8")).join("\n")).toContain("GUARD_POLICY_SET");
+      expect(r.stdout).toContain("AIDLC Guard Policy:");
+      // The person's own dispatch, never a prose example.
+      expect(r.stdout).toContain("engine orchestrate next --guard-policy off");
+      expect(r.stdout).not.toContain("<slug>");
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+
+  // A pasted request can hold a line break or a backtick: every word after it
+  // still reaches the engine, and the call the agent is told to run quotes it.
+  const pasted = "fix the `parse` step\nso the totals add up";
+  const words = ["fix", "the", "`parse`", "step", "so", "the", "totals", "add", "up"];
+
+  test("a request with a backtick and a line break reaches the engine whole", () => {
+    const dir = scratchProject(false);
+    try {
+      const calls = stubNext(dir, JSON.stringify({ kind: "print", message: "" }));
+      const r = runAdapter(dir, "verb-intercept", { cwd: dir, session_id: session, prompt: expanded(`--scope classic ${pasted}`) }, [], env);
+      expect(r.code, r.stderr).toBe(0);
+      expect(r.stdout).toContain("ALREADY");
+      expect(readFileSync(calls, "utf8").trim().split("\n").map((line) => JSON.parse(line)))
+        .toEqual([["next", "--scope", "classic", ...words]]);
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+
+  test("forwarded, it is quoted so the call carries the words and runs none of them", () => {
+    const dir = scratchProject(true);
+    try {
+      const r = runAdapter(dir, "verb-intercept", { cwd: dir, session_id: session, prompt: expanded(pasted) }, [], env);
+      expect(r.code, r.stderr).toBe(0);
+      const call = "engine orchestrate next fix the '`parse`' step so the totals add up";
+      expect(r.stdout).toContain(`${call}\n`);
+      const latch = join(dir, "aidlc", ".aidlc-forwarding-latch");
+      expect(JSON.parse(readFileSync(latch, "utf8")).args).toEqual(words);
+      const guard = (command: string) => runAdapter(dir, "guard-tool-call", {
+        cwd: dir, tool_name: "execute_bash", tool_input: { command },
+      });
+      const cut = guard("bun .kiro/tools/aidlc.ts engine orchestrate next fix the");
+      expect(cut.code).toBe(2);
+      expect(cut.stderr).toContain(call);
+      expect(guard(`bun .kiro/tools/aidlc.ts ${call}`).code).toBe(0);
+      // A word with an apostrophe takes double quotes, literal in sh and PowerShell alike.
+      const apostrophe = runAdapter(dir, "verb-intercept", { cwd: dir, session_id: session, prompt: expanded(`say "it's done" now; really`) }, [], env);
+      const quoted = `engine orchestrate next say "it's done" 'now;' really`;
+      expect(apostrophe.stdout).toContain(`${quoted}\n`);
+      expect(guard(`bun .kiro/tools/aidlc.ts ${quoted}`).code).toBe(0);
+      // A word a shell would read as a comment or a glob is quoted too.
+      const hashed = runAdapter(dir, "verb-intercept", { cwd: dir, session_id: session, prompt: expanded("fix bug #123 in *.ts") }, [], env);
+      const literal = "engine orchestrate next fix bug '#123' in '*.ts'";
+      expect(hashed.stdout).toContain(`${literal}\n`);
+      expect(guard(`bun .kiro/tools/aidlc.ts ${literal}`).code).toBe(0);
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+
+  // A contraction or a possessive is a word, not a quote: "it's", "don't" and
+  // "users' files" keep their apostrophes, and real quoting keeps working.
+  test("an apostrophe inside or at the end of a word is a letter; one that opens a word still quotes", () => {
+    expect(splitKiroCommandArgs("fix it, it's broken")).toEqual(["fix", "it,", "it's", "broken"]);
+    expect(splitKiroCommandArgs("don't ask me again")).toEqual(["don't", "ask", "me", "again"]);
+    expect(splitKiroCommandArgs("keep the users' files and it's done")).toEqual(["keep", "the", "users'", "files", "and", "it's", "done"]);
+    expect(splitKiroCommandArgs("rock'n'roll")).toEqual(["rock'n'roll"]);
+    expect(splitKiroCommandArgs("fix the 'login' page")).toEqual(["fix", "the", "login", "page"]);
+    expect(splitKiroCommandArgs("--label='my label' now")).toEqual(["--label=my label", "now"]);
+    expect(splitKiroCommandArgs(`"it's quoted" and 'so is this'`)).toEqual(["it's quoted", "and", "so is this"]);
+  });
+
+  test("a request with contractions reaches the engine with them, and the call the agent is told to run does too", () => {
+    const dir = scratchProject(true);
+    try {
+      const said = "fix it, it's broken and don't touch the users' files";
+      const r = runAdapter(dir, "verb-intercept", { cwd: dir, session_id: session, prompt: expanded(said) }, [], env);
+      expect(r.code, r.stderr).toBe(0);
+      const words = ["fix", "it,", "it's", "broken", "and", "don't", "touch", "the", "users'", "files"];
+      const latch = join(dir, "aidlc", ".aidlc-forwarding-latch");
+      expect(JSON.parse(readFileSync(latch, "utf8")).args).toEqual(words);
+      const quoted = `fix it, "it's" broken and "don't" touch the "users'" files`;
+      expect(r.stdout).toContain(`engine orchestrate next ${quoted}\n`);
+      // A shell reads that call as the same words, so running it as told works.
+      // Windows runs the call in PowerShell (the case below); its hook job also
+      // has no sh on PATH on purpose.
+      if (process.platform !== "win32") {
+        const shell = spawnSync("sh", ["-c", `printf '%s\\n' ${quoted}`], { encoding: "utf-8" });
+        expect(shell.stdout.trimEnd().split("\n")).toEqual(words);
+      }
+      const guard = (command: string) => runAdapter(dir, "guard-tool-call", {
+        cwd: dir, tool_name: "execute_bash", tool_input: { command },
+      });
+      expect(guard(`bun .kiro/tools/aidlc.ts engine orchestrate next ${quoted}`).code).toBe(0);
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+
+  // On Windows the call runs in PowerShell. Only a word with no `$`, backtick,
+  // double quote or backslash is double-quoted, so PowerShell expands nothing
+  // in it; "$5" is single-quoted, and PowerShell reads every word back as typed.
+  test.skipIf(process.platform !== "win32")("PowerShell reads the quoted call as the same words, a dollar word included", () => {
+    const dir = scratchProject(true);
+    try {
+      const said = "don't touch the users' files it's $5 off";
+      const r = runAdapter(dir, "verb-intercept", { cwd: dir, session_id: session, prompt: expanded(said) }, [], env);
+      expect(r.code, r.stderr).toBe(0);
+      const quoted = `"don't" touch the "users'" files "it's" '$5' off`;
+      expect(r.stdout).toContain(`engine orchestrate next ${quoted}\n`);
+      const pwsh = spawnSync("powershell", ["-NoProfile", "-NonInteractive", "-Command", `& { foreach ($a in $args) { $a } } ${quoted}`], { encoding: "utf-8" });
+      expect(pwsh.stdout.trimEnd().split(/\r?\n/)).toEqual(["don't", "touch", "the", "users'", "files", "it's", "$5", "off"]);
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+
+  test("a bare `/aidlc` dispatches nothing, and no `--stage <slug>`", () => {
+    const dir = scratchProject(true);
+    try {
+      const calls = stubNext(dir, JSON.stringify({ kind: "print", message: "" }));
+      const r = runAdapter(dir, "verb-intercept", { cwd: dir, session_id: session, prompt: expanded("") }, [], env);
+      expect(r.code, r.stderr).toBe(0);
+      expect(existsSync(calls)).toBe(false);
+      expect(r.stdout).not.toContain("<slug>");
+      expect(readAudit(dir)).not.toContain("Unknown stage");
+    } finally { rmSync(dir, { recursive: true, force: true }); }
   });
 });

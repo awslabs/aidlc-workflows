@@ -157,6 +157,12 @@ function approvedBuild(proj: string, session: string): string {
     hook_event_name: "UserPromptSubmit", session_id: session, prompt: "approve", timestamp: new Date().toISOString(),
   });
   expect(approved.code, approved.stderr).toBe(0);
+  // The agent reads the reply and records the choice the person made.
+  const recorded = tool(proj, "aidlc-log.ts", [
+    "answer", "--stage", "code-generation", "--checkpoint", "plan-approval", "--details", "Approve Plan",
+    "--project-dir", proj,
+  ]);
+  expect(recorded.code, `${recorded.stdout}${recorded.stderr}`).toBe(0);
   expect(nextToBuild(proj, session, `${session}-build`)).toMatchObject({
     kind: "run-stage", stage: "code-generation", plan_approval: { status: "approved" },
   });

@@ -105,6 +105,16 @@ import {
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const COPILOT_TREE = join(REPO_ROOT, "dist", "copilot", ".aidlc");
+// The one line the Stop hook shows the person when it sends the agent on: the
+// stage by its compiled name, the Unit when one is named, or no stage at all.
+function carryingOn(stage?: string, unit?: string): string {
+  if (!stage) return "AI-DLC is carrying on.";
+  const graph = JSON.parse(
+    readFileSync(join(COPILOT_TREE, "tools", "data", "stage-graph.json"), "utf-8"),
+  ) as Array<{ slug: string; name: string }>;
+  const name = graph.find((s) => s.slug === stage)?.name ?? stage;
+  return `AI-DLC is carrying on with ${name}${unit ? ` for ${unit}` : ""}.`;
+}
 const FIXTURES = JSON.parse(
   readFileSync(
     join(REPO_ROOT, "tests", "fixtures", "copilot-hook-payloads", "payloads.json"),
@@ -1603,14 +1613,11 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     const stop1 = runAdapter(dir, "continue-workflow", { ...FIXTURES.stop, cwd: dir, session_id: session });
     expect((JSON.parse(stop1.stdout) as { decision?: string }).decision).toBe("block");
     const steeringReason = (JSON.parse(stop1.stdout) as { reason: string }).reason;
-    // The Stop hook names the receipt and the continue command only, never the
-    // rules payload: hook messages are capped near 10 KB on every harness.
-    expect(steeringReason).toMatch(/still has rules to load|delivered AIDLC rules part/);
-    expect(steeringReason).toContain(`continue ${token1}`);
-    expect(steeringReason).toContain("until `run-stage`");
-    // A person who asked to stop is offered park, not only the next step.
-    expect(steeringReason).toContain("If the person asked to stop here, run");
-    expect(steeringReason).toContain("do not summarise or narrate rule chunks");
+    // The Stop line names the stage only, never the receipt or the rules
+    // payload: the person reads it, and hook messages are capped near 10 KB on
+    // every harness. The agent continues with the receipt it holds (token1).
+    expect(steeringReason).toBe(carryingOn(String(routed.directive.stage)));
+    expect(steeringReason).not.toContain(token1);
     expect(steeringReason).not.toContain("rules_content");
     expect(steeringReason).not.toContain("Multipart 0");
     expect(steeringReason.length).toBeLessThan(1_000);
@@ -1640,35 +1647,42 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     const stopped = runAdapter(dir, "continue-workflow", { ...FIXTURES.stop, cwd: dir, session_id: session });
     const reason = (JSON.parse(stopped.stdout) as { reason: string }).reason;
     const stage = String(routed.directive.stage);
-    expect(reason).toStartWith(`The "${stage}" stage is not finished. `);
-    expect(reason).toContain("Otherwise carry on with that stage's steps, then record its real outcome with `");
-    expect(reason).toContain(`engine orchestrate report --stage ${stage} --result <outcome>\` (add \`--single\` in an isolated run).`);
-    expect(reason).toContain("If the person asked to stop here, run `");
-    expect(reason).toContain("engine orchestrate park`");
-    expect(reason).toContain("Never report an approval the person did not give");
-    expect(reason).toContain("tell the person nothing about this note");
+    // The retained run-stage is named by its stage, in one plain line: the
+    // host shows it to the person, and the skill holds the agent's steps
+    // (carry on with the stage, report its real outcome, or park).
+    expect(reason).toBe(carryingOn(stage));
     expect(reason).not.toContain("restart at part 1");
-    // aidlcToolInvocation() makes the spelling channel-dependent, so match the
-    // verb the conductor is steered to, not the launcher.
     expect(reason).not.toMatch(/orchestrate(?:\.ts)? next/);
     // Plain words: the agent repeats what it is told, so the reminder names no
     // hook, protocol section, or engine term.
     expect(reason).not.toMatch(/hook|\u00a7|forwarding|directive|delivered|rubber-stamp|receipt|run-stage|loop/i);
 
-    // A question shown before it was recorded (a live Copilot run asked the
-    // learnings question twice this way): the reminder names the record step
-    // and says not to ask again; running that step lets the next Stop end the
-    // turn, so the person sees the question once.
-    const asked = reason.match(
-      /If you just asked the person a question and are waiting for the answer, run `([^`]+) --decision "<the question>" --options "<the choices>"`, adding any `--single`, `--checkpoint` or `--questions-file` flags that question's own instructions use, and end your turn without asking it again\./,
+    // The line names the stage by its name only, so the shipped Copilot skill
+    // gives the step for the run-stage the agent holds: finish it, then the
+    // report built from that directive, whole but for the outcome.
+    const skill = readFileSync(join(REPO_ROOT, "dist", "copilot", ".github", "skills", "aidlc", "SKILL.md"), "utf-8");
+    const reportStep = skill.match(
+      /If you were doing the work of a `run-stage` you still hold, finish its steps, then record its real outcome with the report built from that directive: `([^`]+)`/,
     );
-    if (!asked) throw new Error(`no record step in: ${reason}`);
-    expect(asked[1]).toEndWith(`engine log decision --stage ${stage}`);
-    // The compiled hook names the compiled `aidlc`, which is not on this
+    if (!reportStep) throw new Error("the Copilot skill names no report step for the run-stage the agent holds");
+    expect(reportStep[1].replace("<directive.stage>", stage)).toMatch(
+      new RegExp(`^.+ engine orchestrate report --stage ${stage} --result <outcome>$`),
+    );
+
+    // A question shown before it was recorded (a live Copilot run asked the
+    // learnings question twice this way): the shipped Copilot skill names the
+    // record step for that line and says not to ask again; running that step
+    // lets the next Stop end the turn, so the person sees the question once.
+    const asked = skill.match(
+      /If you had just asked the person a question in your own words and are waiting for their answer, record it with `([^`]+) --stage <stage> --decision "<the question>" --options "<the choices>"`, adding [^\n]*? and end your turn without asking it again or saying anything else\./,
+    );
+    if (!asked) throw new Error("the Copilot skill names no record step for the one-line Stop note");
+    expect(asked[1]).toEndWith("engine log decision");
+    // The compiled skill names the compiled `aidlc`, which is not on this
     // shell's PATH: run it by path, as the dispatcher cases do.
-    const recordStep = COMPILED_BINARY && asked[1].startsWith("aidlc ")
+    const recordStep = `${COMPILED_BINARY && asked[1].startsWith("aidlc ")
       ? `${JSON.stringify(COMPILED_BINARY)}${asked[1].slice("aidlc".length)}`
-      : asked[1];
+      : asked[1]} --stage ${stage}`;
     const recorded = runShell(dir, `${recordStep} --decision "Anything to add for next time?" --options "Nothing to add,Add a note"`);
     expect(recorded.status, recorded.stderr).toBe(0);
     expect(recorded.stdout).toContain("DECISION_RECORDED");
@@ -1866,8 +1880,9 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
       cwd: oversized,
       session_id: oversizedSession,
     });
-    expect(recovered.stdout).toContain("coordination evidence is missing or stale");
-    expect(recovered.stdout).toContain("If the person asked to stop here, run");
+    // Stale evidence: the line names no stage (a fresh `next` decides where
+    // the work goes), and the oversized message never rides along.
+    expect((JSON.parse(recovered.stdout) as { reason: string }).reason).toBe(carryingOn());
     expect(recovered.stdout).not.toContain("x".repeat(100));
   }, 30000);
 
@@ -1903,7 +1918,9 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     const stopped = runAdapter(dir, "continue-workflow", { ...FIXTURES.stop, cwd: dir, session_id: session });
     const copilotReason = JSON.parse(stopped.stdout).reason;
     expect(copilotReason, `${label} Copilot diagnostic must equal the direct hook's UTF-8-bounded diagnostic`).toBe(directReason);
-    const diagnostic = copilotReason.split("--- begin engine diagnostic ---\n")[1].split("\n--- end engine diagnostic ---")[0];
+    const lead = "The last AI-DLC step stopped on a problem: ";
+    expect(String(copilotReason).startsWith(lead)).toBe(true);
+    const diagnostic = String(copilotReason).slice(lead.length);
     expect(diagnostic).toBe(expected);
     expect(runAdapter(dir, "continue-workflow", { ...FIXTURES.stop, cwd: dir, session_id: session }).stdout).toBe("");
   }, 30000);
@@ -2251,6 +2268,23 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     }
   });
 
+  test("21f2: a duplicate continue names a fresh next, and that next is accepted", () => {
+    const dir = orchestrationProject();
+    inflateRules(dir);
+    const session = "host-duplicate-fresh-next";
+    const seeded = runLifecycle(dir, session, "direct", ["next"], "fresh-next-seed");
+    const token = String(seeded.directive.receipt);
+    runAdapter(dir, "guard-tool-call", commandPayload(dir, session, commandSpec(dir, "direct", ["continue", token]).text, "fresh-first"));
+    const duplicate = runAdapter(
+      dir, "guard-tool-call", commandPayload(dir, session, commandSpec(dir, "source", ["continue", token]).text, "fresh-second"),
+    );
+    expect(duplicate.stdout).toContain('"permissionDecision":"deny"');
+    expect(duplicate.stdout).toContain("or run a fresh `next` in this session");
+    const fresh = runAdapter(dir, "guard-tool-call", commandPayload(dir, session, commandSpec(dir, "direct", ["next"]).text, "fresh-next"));
+    expect(fresh.code).toBe(0);
+    expect(fresh.stdout).not.toContain('"permissionDecision":"deny"');
+  });
+
   test("21g: reusable duplicate continue has one engine winner and one deliverable result in both operation orders", () => {
     const scenarios = [
       { pre: ["direct", "source"] as const, engine: "first", post: "winner-first" },
@@ -2402,8 +2436,12 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
       continue_token_sha256: createHash("sha256").update(token1).digest("hex"),
       active_attempt: { id: "mistyped-continue", command_kind: "continue", status: "settled" },
     });
+    // The Stop line names no receipt (the person reads it); the agent continues
+    // with the receipt it holds from the last answer, which is token1 again.
     const stop = runAdapter(dir, "continue-workflow", { ...FIXTURES.stop, cwd: dir, session_id: session });
-    expect((JSON.parse(stop.stdout) as { reason: string }).reason).toContain(`continue ${token1}`);
+    const stopLine = (JSON.parse(stop.stdout) as { reason: string }).reason;
+    expect(stopLine).toBe(carryingOn(String(first.directive.stage)));
+    expect(stopLine).not.toContain(token1);
     const second = runLifecycle(dir, session, "source", ["continue", token1], "mistyped-recovered");
     expect(second.directive).toMatchObject({ kind: "load-steering", part: 2 });
     expect(String(second.directive.receipt)).not.toBe(token1);
@@ -2536,14 +2574,10 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     expect(approved.directive.workflow_continues).toBe(true);
     const nudged = JSON.parse(stop(mid.dir, "approve-owner")) as { decision?: string; reason?: string };
     expect(nudged.decision).toBe("block");
-    expect(nudged.reason).toContain('The result for "deployment-pipeline" is recorded');
-    expect(nudged.reason).toContain("engine orchestrate next");
-    expect(nudged.reason).toContain('"environment-provisioning"');
-    expect(nudged.reason).not.toContain("missing or stale");
-    expect(nudged.reason).not.toContain("do not reuse an earlier receipt");
-    // A person who asked to stop there is not pushed into the next stage.
-    expect(nudged.reason).toContain("If the person asked to stop here, run `");
-    expect(nudged.reason).toContain("engine orchestrate park` instead.");
+    // The recorded result moved the work on: the line names the stage it moved
+    // to, never the stage just approved. Running `next`, or `park` for a
+    // person who asked to stop there, is the skill's step.
+    expect(nudged.reason).toBe(carryingOn("environment-provisioning"));
     // One nudge only: a second Stop with no progress lets the turn end.
     expect(stop(mid.dir, "approve-owner", true)).toBe("");
     const next = runLifecycle(mid.dir, "approve-owner", "source", ["next"], "approve-next");
@@ -2551,7 +2585,7 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
       .toMatchObject({ kind: "run-stage", stage: "environment-provisioning" });
     const working = JSON.parse(stop(mid.dir, "approve-owner")) as { decision?: string; reason?: string };
     expect(working.decision).toBe("block");
-    expect(working.reason).toContain('The "environment-provisioning" stage is not finished.');
+    expect(working.reason).toBe(carryingOn("environment-provisioning"));
 
     // "Approve, and let's stop there": after the approval the conductor parks.
     const pause = atGate("state-operation.md", "pause-owner");
@@ -2565,13 +2599,13 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     expect(parked.directive).toMatchObject({ kind: "parked", stage: "environment-provisioning" });
     expect(stop(pause.dir, "pause-owner")).toBe("");
 
-    // Said in one reply, the engine approves and parks: no extra question.
+    // Said in one reply, the conductor reports the approval with --park: no extra question.
     const both = atGate("state-operation.md", "both-owner");
     const words = "Approve, but let's stop there for today";
     reply(both.dir, "both-owner", words);
     const parkedAtOnce = runLifecycle(
       both.dir, "both-owner", "source",
-      ["report", "--stage", both.stage, "--result", "approved", "--user-input", words], "both-result",
+      ["report", "--stage", both.stage, "--result", "approved", "--user-input", "Approve", "--park"], "both-result",
     );
     expect(parkedAtOnce.directive, JSON.stringify(parkedAtOnce.directive))
       .toMatchObject({ kind: "parked", stage: "environment-provisioning" });
@@ -2669,10 +2703,9 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
       runAdapter(dir, "continue-workflow", { ...FIXTURES.stop, cwd: dir, session_id: session }).stdout,
     ) as { decision?: string; reason?: string };
     expect(nudged.decision).toBe("block");
-    expect(nudged.reason).toContain('The result for "infrastructure-design" is recorded');
-    expect(nudged.reason).toContain("engine orchestrate next");
-    expect(nudged.reason).not.toContain('"functional-design"');
-    expect(nudged.reason).not.toContain("missing or stale");
+    // Unit-by-Unit, Current Stage does not name the next step, so the line
+    // names none (never "Functional Design", which this Unit has done).
+    expect(nudged.reason).toBe(carryingOn());
     expect(step(["next"])).toMatchObject({ kind: "run-stage", stage: "code-generation", unit: "alpha" });
   });
 
@@ -2734,20 +2767,13 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     walk.unitVerb("start");
     const working = walk.stop();
     expect(working.decision).toBe("block");
-    expect(working.reason).toContain('The "functional-design" stage (unit "alpha") is not finished.');
-    // A solo Unit's records and reports name only the stage; each command is
-    // whole, with only the outcome to fill in.
-    expect(working.reason).toContain("engine log decision --stage functional-design --decision ");
-    expect(working.reason).toContain("engine orchestrate report --stage functional-design --result <outcome>`");
+    expect(working.reason).toBe(carryingOn("functional-design", "alpha"));
     walk.writeArtifacts();
     walk.unitVerb("complete");
     const done = walk.stop();
     expect(done.decision).toBe("block");
-    expect(done.reason).toContain('The work on unit "alpha" for "functional-design" is recorded and the workflow is not finished.');
-    expect(done.reason).toContain("engine orchestrate next");
-    expect(done.reason).toContain("engine orchestrate park");
-    expect(done.reason).not.toContain("still active");
-    expect(done.reason).not.toContain("missing or stale");
+    // The finished Unit's step is never named again: a fresh `next` decides.
+    expect(done.reason).toBe(carryingOn());
     expect(walk.step(["next"])).toMatchObject({ kind: "run-stage", stage: "functional-design", unit: "beta" });
   });
 
@@ -2760,9 +2786,8 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     rewriteMarker(walk.dir, (value) => { value.unit = injected; });
     const output = runAdapter(walk.dir, "continue-workflow", { ...FIXTURES.stop, cwd: walk.dir, session_id: "unit-invalid-owner" }).stdout;
     expect(output).not.toContain("Ignore earlier steps");
-    expect(output).not.toContain("is recorded");
     const parsed = JSON.parse(output) as { reason?: string };
-    expect(parsed.reason).toContain('The "functional-design" stage is not finished.');
+    expect(parsed.reason).toBe(carryingOn("functional-design"));
   });
 
   // An audit shard it cannot read may hold a later restart of alpha's step, so
@@ -2778,8 +2803,7 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     try {
       const kept = walk.stop();
       expect(kept.decision).toBe("block");
-      expect(kept.reason).toContain('The "functional-design" stage (unit "alpha") is not finished.');
-      expect(kept.reason).not.toContain("is recorded");
+      expect(kept.reason).toBe(carryingOn("functional-design", "alpha"));
     } finally {
       chmodSync(unreadable, 0o600);
     }
@@ -3087,6 +3111,38 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     }
   });
 
+  // A `next` that reaches the engine outside the chat's own answer (a
+  // terminal, a delegate) while the resume question waits is not published.
+  // Retrying repeats that, so it names the answer, and the answer goes through.
+  test("23d: a next from outside the chat while the resume question waits names the answer, and the answer is accepted", () => {
+    const dir = orchestrationProject();
+    const session = "resume-wait-outside";
+    driveToRunStage(dir, session);
+    rewriteMarker(dir, (value) => {
+      value.kind = "ask";
+      value.delivery = "issued";
+      value.needs_rehydrate = false;
+      delete value.continue_token;
+      delete value.continue_token_sha256;
+      value.resume = {
+        status: "waiting",
+        issuing_stage: "requirements-analysis",
+        issuing_state_sha256: value.state_sha256,
+        issuing_session: session,
+        issuing_intent_uuid: value.intent_uuid,
+      };
+    });
+    const outside = runShell(dir, commandSpec(dir, "direct", ["next"]).text);
+    expect(outside.status, outside.stderr).toBe(0);
+    const refused = JSON.parse(outside.stdout.trim()) as { kind?: string; message?: string };
+    expect(refused.kind).toBe("error");
+    expect(refused.message).toContain("waiting for an answer to its resume question in the Copilot chat");
+    expect(refused.message).toContain("--resume` in that chat");
+    expect(refused.message).not.toContain("--doctor");
+    const resumed = runLifecycle(dir, session, "direct", ["next", "--resume"], "resume-wait-answer");
+    expect(resumed.directive).toMatchObject({ kind: "load-steering", stage: "requirements-analysis" });
+  });
+
   test("24: Copilot conversational ordering, concurrent Stop count, unit fingerprint, and marker recovery are bounded", async () => {
     const dir = orchestrationProject();
     const session = "bounded-stop-owner";
@@ -3131,8 +3187,9 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
       }
       const stopped = runAdapter(recovery, "continue-workflow", { ...FIXTURES.stop, cwd: recovery, session_id: `recovery-${shape}` });
       const reason = (JSON.parse(stopped.stdout) as { reason: string }).reason;
-      expect(reason.match(/orchestrate(?:\.ts)? next/g)).toHaveLength(1);
-      expect(reason).not.toMatch(/orchestrate(?:\.ts)? continue/);
+      // Missing, corrupt or legacy evidence: the line names no stage and no
+      // receipt; the skill's step is one fresh next.
+      expect(reason).toBe(carryingOn());
       expect(runAdapter(recovery, "continue-workflow", { ...FIXTURES.stop, cwd: recovery, session_id: `recovery-${shape}` }).stdout).toBe("");
       expect(marker(recovery)).toMatchObject({ owner_session: `recovery-${shape}`, stop_count: 2 });
       expect(existsSync(join(seededRecordDir(recovery), ".aidlc-engine/stop-hook", "block-count.json"))).toBe(false);
@@ -3491,8 +3548,9 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
   function approvePlan(dir: string, session: string, recorded: () => unknown[]): void {
     const ask = runLifecycle(dir, session, "direct", ["next"], `${session}-ask`);
     expect(ask.directive).toMatchObject({ kind: "ask", ask_type: "plan-approval" });
+    // An exact pick: the hook records it, with no step for the conductor.
     const approved = runAdapter(dir, "record-human-turn", {
-      ...FIXTURES.userPromptSubmit, cwd: dir, session_id: session, prompt: "approve",
+      ...FIXTURES.userPromptSubmit, cwd: dir, session_id: session, prompt: "1",
     });
     expect(approved.code, approved.stderr).toBe(0);
     expect(recorded()).toHaveLength(1);
@@ -3609,6 +3667,18 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
       ...FIXTURES.userPromptSubmit, cwd: dir, session_id: session, prompt: "review the plan first",
     });
     expect(review.code, review.stderr).toBe(0);
+    // The agent reads it and records the request.
+    const asked = spawnSync(process.execPath, [
+      join(dir, ".aidlc", "tools", "aidlc-log.ts"), "answer", "--stage", "code-generation", "--checkpoint", "plan-approval",
+      "--details", "Review the plan", "--project-dir", dir,
+    ], {
+      cwd: dir,
+      encoding: "utf-8",
+      env: { ...process.env, AIDLC_PROJECT_DIR: undefined, CLAUDE_PROJECT_DIR: undefined } as NodeJS.ProcessEnv,
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+    });
+    expect(asked.status, `${asked.stdout}${asked.stderr}`).toBe(0);
+    expect(asked.stdout).toContain("wants to review the plan");
     const unparked = spawnSync(process.execPath, [join(dir, ".aidlc", "tools", "aidlc-state.ts"), "unpark", "--project-dir", dir], {
       cwd: dir,
       encoding: "utf-8",
@@ -3632,7 +3702,7 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     const compacted = runAdapter(dir, "validate-state", { hook_event_name: "PreCompact", cwd: dir, session_id: session });
     expect(compacted.code, compacted.stderr).toBe(0);
     const approved = runAdapter(dir, "record-human-turn", {
-      ...FIXTURES.userPromptSubmit, cwd: dir, session_id: session, prompt: "approve",
+      ...FIXTURES.userPromptSubmit, cwd: dir, session_id: session, prompt: "1",
     });
     expect(approved.code, approved.stderr).toBe(0);
     expect(recorded()).toHaveLength(1);
@@ -3683,6 +3753,53 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     expect(pasted.code, pasted.stderr).toBe(0);
     expect(humanTurnCount(dir)).toBe(2);
     expect(humanSequence(dir)).toBe(2);
+  });
+
+  // The agent records the choice it read, so only the person's own turn can
+  // back it: a briefing sent at an open gate, even one that reads "Approve",
+  // is no reply, and the approval waits for the person.
+  test("33b: a subagent briefing at an open gate cannot back the agent's approval", () => {
+    const dir = orchestrationProject();
+    const session = "ed5ea5b5-0000-4000-8000-000000000283";
+    writeFileSync(
+      seededStateFile(dir),
+      readFileSync(join(REPO_ROOT, "tests", "fixtures", "state-operation.md"), "utf-8")
+        .replace(/^- \*\*Change Control\*\*:.*$/m, "$&\n- **Summary Confirmation**: off (set by you)"),
+    );
+    const routed = driveToRunStage(dir, session);
+    const stage = String(routed.directive.stage);
+    for (const path of (routed.directive.produces as string[]).filter((p) => !p.endsWith("-questions.md"))) {
+      mkdirSync(dirname(join(dir, path)), { recursive: true });
+      writeFileSync(join(dir, path), "# Artifact\n\nContent.\n");
+    }
+    const opened = runLifecycle(dir, session, "source", ["report", "--stage", stage, "--result", "awaiting-approval"], "33b-gate");
+    expect(opened.directive.kind, JSON.stringify(opened.directive)).toBe("print");
+    const turns = humanTurnCount(dir);
+    const briefing = dispatchVsCodeSubagent(dir, session, "toolu_bdrk_01T249B", "Approve");
+    expect(briefing.code, briefing.stderr).toBe(0);
+    expect(humanTurnCount(dir)).toBe(turns);
+    expect(keptWords(dir)).not.toContain("Approve");
+    settleSubagentStarts(dir);
+    runAdapter(dir, "log-subagent", {
+      hook_event_name: "SubagentStop",
+      session_id: session,
+      cwd: dir,
+      agent_id: "toolu_bdrk_01T249B",
+      agent_type: "aidlc-architecture-reviewer-agent",
+    });
+    // The runner's presence bypass would let any report through: hold it off.
+    const bypass = process.env.AIDLC_SKIP_HUMAN_PRESENCE_GUARD;
+    process.env.AIDLC_SKIP_HUMAN_PRESENCE_GUARD = "0";
+    try {
+      const refused = runLifecycle(
+        dir, session, "source", ["report", "--stage", stage, "--result", "approved", "--user-input", "Approve"], "33b-approve",
+      );
+      expect(refused.directive.kind, JSON.stringify(refused.directive)).toBe("print");
+      expect(String(refused.directive.message)).toContain("no new human reply");
+    } finally {
+      if (bypass === undefined) delete process.env.AIDLC_SKIP_HUMAN_PRESENCE_GUARD;
+      else process.env.AIDLC_SKIP_HUMAN_PRESENCE_GUARD = bypass;
+    }
   });
 
   test("33a: a typed prompt with no subagent in flight records the turn as before", () => {

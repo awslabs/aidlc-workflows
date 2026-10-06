@@ -120,8 +120,16 @@ describe("Claude hook project-root anchoring", () => {
       expect(blocked.error).toBeUndefined();
       expect(blocked.status, blocked.stderr).toBe(2);
       expect(blocked.stderr).toContain("the engine asks the person to approve it");
-      expect(blocked.stderr).toContain(join(cwd, "source.ts"));
-      expect(blocked.stdout.trim()).toBe(cwd);
+      expect(blocked.stderr).toContain("Code generation cannot modify workspace paths");
+      // Claude Code's own deny comes first, with the same reason: the person
+      // reads only the reason, never the hook command in front of it.
+      const [decision, ...afterHook] = blocked.stdout.trim().split("\n");
+      expect(JSON.parse(decision).hookSpecificOutput).toEqual({
+        hookEventName: "PreToolUse",
+        permissionDecision: "deny",
+        permissionDecisionReason: blocked.stderr.trim(),
+      });
+      expect(afterHook.join("\n").trim()).toBe(cwd);
       expect(readFileSync(join(cwd, "source.ts"), "utf-8")).toBe("export const value = 1;\n");
       // The hook also loads for a cd-to-root recovery attempt. Preserve the
       // guard's existing refusal of this mutation-capable compound command.
@@ -130,7 +138,7 @@ describe("Claude hook project-root anchoring", () => {
       expect(recover.status, recover.stderr).toBe(2);
       expect(recover.stderr).toContain("Code generation cannot run mutation-capable shell command");
       expect(recover.stderr).not.toContain("Module not found");
-      expect(recover.stdout.trim()).toBe(cwd);
+      expect(recover.stdout.trim().split("\n").at(-1)).toBe(cwd);
     } finally {
       rmSync(project, { recursive: true, force: true });
     }

@@ -15,7 +15,7 @@
 //   - no scope file is written: the scope library keeps its stock files and
 //     grid keys (a composed plan belongs to this piece of work),
 //   - the created aidlc-state.md runs a stock scope with a
-//     `Plan: custom, based on <scope>` line.
+//     `Plan: <name>` line (the name the gate showed).
 //
 // SPENDS Claude credits - gated behind AIDLC_TUI_LIVE=1 with skip-reasons;
 // The selected native TUI backend supplies the terminal on each supported OS.
@@ -159,7 +159,8 @@ describe("t-tui compose front journey (live claude TUI)", () => {
         const stateMd = readFileSync(stateFilePathFor(sandbox), "utf8");
         const scope = /^- \*\*Scope\*\*: (\S+)$/m.exec(stateMd)?.[1] ?? "";
         expect(STOCK_SCOPES.has(scope)).toBe(true);
-        expect(stateMd).toContain(`- **Plan**: custom, based on ${scope}`);
+        // The plan is named as the gate showed it, never after the scope it runs on.
+        expect(stateMd).toMatch(/^- \*\*Plan\*\*: (?:[a-z0-9][a-z0-9-]*|tailored plan)$/m);
       } finally {
         cleanupTuiProjectAfterKill(
           sandbox,
