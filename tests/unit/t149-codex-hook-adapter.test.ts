@@ -1372,7 +1372,8 @@ describe("t149 Codex hook adapter (live-captured payload fixtures)", () => {
     humanPrompt: string,
     assistant:
       | { kind: "message"; text: string }
-      | { kind: "call"; name: string; command: string },
+      | { kind: "call"; name: string; command: string }
+      | { kind: "rows"; payloads: Array<Record<string, unknown>> },
   ): string {
     const lines: string[] = [
       JSON.stringify({
@@ -1391,6 +1392,10 @@ describe("t149 Codex hook adapter (live-captured payload fixtures)", () => {
           },
         }),
       );
+    } else if (assistant.kind === "rows") {
+      for (const payload of assistant.payloads) {
+        lines.push(JSON.stringify({ type: "response_item", payload }));
+      }
     } else {
       lines.push(
         JSON.stringify({
@@ -1466,6 +1471,95 @@ describe("t149 Codex hook adapter (live-captured payload fixtures)", () => {
       expect(r.stdout.trim()).toBe("");
     } finally {
       rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  // Codex 0.160 records a shell call as function_call "exec_command" with the
+  // command under `cmd` (copied from a live rollout). Older Codex recorded
+  // local_shell_call with the command as an argv list, and "shell" with a
+  // `command` list; both must still read as engine calls.
+  const execCommand = (callId: string, cmd: string): Record<string, unknown> => ({
+    type: "function_call",
+    id: `fc_${callId}`,
+    name: "exec_command",
+    arguments: JSON.stringify({ cmd, max_output_tokens: 12000 }),
+    call_id: callId,
+    internal_chat_message_metadata_passthrough: { turn_id: "01a11036-03b0-7ba2-876b-d1999e5c1f53" },
+  });
+  const execOutput = (callId: string, output: string): Record<string, unknown> => ({
+    type: "function_call_output",
+    id: `fco_${callId}`,
+    call_id: callId,
+    output: `Chunk ID: 8964f2\nWall time: 1.1062 seconds\nProcess exited with code 0\nOriginal token count: 40\nOutput:\n${output}`,
+  });
+
+  test("15b: ENGAGED BLOCK - a Codex 0.160 exec_command call to the engine after the human prompt blocks the stop", () => {
+    const dir = scratchProject(true);
+    try {
+      const transcript = writeCodexTranscript(dir, "Run AI-DLC's next step and tell me in one line what it asks for.", {
+        kind: "rows",
+        payloads: [
+          { type: "message", role: "assistant", content: [{ type: "output_text", text: "I will check AI-DLC's next step.\n" }] },
+          execCommand("call_262608d5c75b5a868164fa3422add761", "bun .codex/tools/aidlc.ts engine orchestrate next"),
+          execOutput("call_262608d5c75b5a868164fa3422add761", '{"kind":"run-stage","stage":"requirements-analysis"}'),
+          { type: "message", role: "assistant", content: [{ type: "output_text", text: "AI-DLC asks to analyse the requirements." }] },
+        ],
+      });
+      const r = runAdapter(dir, "continue-workflow", codexStopWithTranscript(dir, transcript));
+      expect(r.code).toBe(0);
+      const out = JSON.parse(r.stdout || "{}") as { decision?: string; reason?: string };
+      expect(out.decision).toBe("block");
+      expect(out.reason ?? "").not.toBe("");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("15c: READ-ONLY ALLOW - a Codex 0.160 exec_command status query is still not engagement", () => {
+    const dir = scratchProject(true);
+    try {
+      const transcript = writeCodexTranscript(dir, "Quick check: ask AI-DLC where this run is and tell me in one line.", {
+        kind: "rows",
+        payloads: [
+          execCommand("call_6adb0608467758fa994697f8a3d4778b", "bun .codex/tools/aidlc.ts engine orchestrate next --status"),
+          execOutput("call_6adb0608467758fa994697f8a3d4778b", '{"kind":"print","message":"Run status"}'),
+          { type: "message", role: "assistant", content: [{ type: "output_text", text: "You are on requirements-analysis." }] },
+        ],
+      });
+      const r = runAdapter(dir, "continue-workflow", codexStopWithTranscript(dir, transcript));
+      expect(r.code).toBe(0);
+      expect(r.stdout.trim()).toBe("");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("15d: ENGAGED BLOCK - older Codex local_shell_call and shell calls to the engine still block the stop", () => {
+    const shapes: Array<Record<string, unknown>> = [
+      {
+        type: "local_shell_call",
+        call_id: "call_local_1",
+        status: "completed",
+        action: { type: "exec", command: ["bash", "-lc", "bun .codex/tools/aidlc-orchestrate.ts next"] },
+      },
+      {
+        type: "function_call",
+        name: "shell",
+        call_id: "call_shell_1",
+        arguments: JSON.stringify({ command: ["bash", "-lc", "bun .codex/tools/aidlc-orchestrate.ts next"] }),
+      },
+    ];
+    for (const shape of shapes) {
+      const dir = scratchProject(true);
+      try {
+        const transcript = writeCodexTranscript(dir, "ok, continue the workflow", { kind: "rows", payloads: [shape] });
+        const r = runAdapter(dir, "continue-workflow", codexStopWithTranscript(dir, transcript));
+        expect(r.code, String(shape.type)).toBe(0);
+        const out = JSON.parse(r.stdout || "{}") as { decision?: string };
+        expect(out.decision, String(shape.type)).toBe("block");
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
     }
   });
 

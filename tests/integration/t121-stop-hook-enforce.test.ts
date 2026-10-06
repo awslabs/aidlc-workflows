@@ -709,6 +709,8 @@ type TranscriptEntry =
   | { kind: "human"; text: string }
   | { kind: "text" }
   | { kind: "bash"; command: string; id?: string }
+  | { kind: "exec"; cmd: string; id?: string }
+  | { kind: "localShell"; argv: string[]; id?: string }
   | { kind: "bashBatch"; calls: Array<{ command: string; id: string }> }
   | { kind: "result"; id: string; output: unknown; failed?: boolean }
   | { kind: "meta"; text: string }
@@ -767,6 +769,18 @@ function seedTranscriptEntries(
             }),
           );
           break;
+        case "exec":
+        case "localShell": {
+          const command = e.kind === "exec" ? e.cmd : e.argv.join(" ");
+          lines.push(JSON.stringify({
+            type: "assistant",
+            message: {
+              role: "assistant",
+              content: [{ type: "tool_use", ...(e.id ? { id: e.id } : {}), name: "Bash", input: { command } }],
+            },
+          }));
+          break;
+        }
         case "bashBatch":
           lines.push(JSON.stringify({
             type: "assistant",
@@ -842,6 +856,30 @@ function seedTranscriptEntries(
               },
             }),
           );
+          break;
+        case "exec":
+          // Codex 0.160's shell call, as a live rollout records it.
+          lines.push(JSON.stringify({
+            type: "response_item",
+            payload: {
+              type: "function_call",
+              name: "exec_command",
+              arguments: JSON.stringify({ cmd: e.cmd, max_output_tokens: 12000 }),
+              ...(e.id ? { call_id: e.id } : {}),
+            },
+          }));
+          break;
+        case "localShell":
+          // The shell call older Codex recorded: the command as an argv list.
+          lines.push(JSON.stringify({
+            type: "response_item",
+            payload: {
+              type: "local_shell_call",
+              ...(e.id ? { call_id: e.id } : {}),
+              status: "completed",
+              action: { type: "exec", command: e.argv },
+            },
+          }));
           break;
         case "bashBatch":
           for (const call of e.calls) {
@@ -3935,6 +3973,65 @@ describe("t121 aidlc-continue-workflow hook — forwarding-loop enforcement (mig
     );
     expect(r.rc).toBe(0);
     expect((JSON.parse(r.out) as { decision?: string }).decision).toBe("block");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  // Codex 0.160 names its shell call exec_command and carries the command
+  // under `cmd`; the Stop hook must read it as the shell call it is.
+  const codexStop = (proj: string, entries: TranscriptEntry[]) => runHook(
+    proj,
+    JSON.stringify({ stop_hook_active: false, transcript_path: seedTranscriptEntries(proj, "codex", entries) }),
+    "run-stage",
+  );
+
+  test("(h) Codex 0.160: an exec_command `next` after the prompt BLOCKS", () => {
+    const proj = makeProject();
+    seedActive(proj, "requirements-analysis");
+    const r = codexStop(proj, [
+      { kind: "human", text: "Run AI-DLC's next step and tell me in one line what it asks for." },
+      { kind: "exec", id: "call_next", cmd: "bun .codex/tools/aidlc.ts engine orchestrate next" },
+      {
+        kind: "result",
+        id: "call_next",
+        output: "Chunk ID: 8964f2\nWall time: 1.1062 seconds\nProcess exited with code 0\nOutput:\n{\"kind\":\"run-stage\"}",
+      },
+      { kind: "text" },
+    ]);
+    expect(r.rc).toBe(0);
+    expect((JSON.parse(r.out || "{}") as { decision?: string }).decision).toBe("block");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("(h) Codex 0.160: an exec_command `aidlc-state approve` BLOCKS", () => {
+    const proj = makeProject();
+    seedActive(proj, "requirements-analysis");
+    const r = codexStop(proj, [
+      { kind: "human", text: "approve" },
+      { kind: "exec", cmd: "bun .codex/tools/aidlc-state.ts approve requirements-analysis" },
+    ]);
+    expect(r.rc).toBe(0);
+    expect((JSON.parse(r.out || "{}") as { decision?: string }).decision).toBe("block");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("(h) Codex 0.160: an exec_command read-only `next --status` allows the stop", () => {
+    const proj = makeProject();
+    seedActive(proj, "requirements-analysis");
+    const r = codexStop(proj, [
+      { kind: "human", text: "where is this run?" },
+      { kind: "exec", cmd: "bun .codex/tools/aidlc.ts engine orchestrate next --status" },
+      { kind: "text" },
+    ]);
+    expect(r.rc).toBe(0);
+    expect(r.out).toBe("");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("(h) Codex: an older local_shell_call `next` still BLOCKS", () => {
+    const proj = makeProject();
+    seedActive(proj, "requirements-analysis");
+    const r = codexStop(proj, [
+      { kind: "human", text: "continue" },
+      { kind: "localShell", argv: ["bash", "-lc", "bun .codex/tools/aidlc-orchestrate.ts next"] },
+    ]);
+    expect(r.rc).toBe(0);
+    expect((JSON.parse(r.out || "{}") as { decision?: string }).decision).toBe("block");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   // =========================================================================
