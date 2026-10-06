@@ -1864,6 +1864,11 @@ interface RoutingCarried {
    * plan they were approved on, so they ride only that plan's new-work answers.
    */
   planChanges: string;
+  /**
+   * A typed scope that differs from the active work's: only the continue
+   * answer carries it, as the scope change the person picks there.
+   */
+  continueScope?: string;
 }
 
 function guardPolicyLowered(flags: ParsedFlags): boolean {
@@ -1899,7 +1904,7 @@ function routingSettings(carried: RoutingCarried): QuestionSettings {
   const tokens = (carriedFlags: string): string[] => carriedFlags.split(" ").filter((token) => token.length > 0);
   return {
     newWork: tokens(`${carried.newWork}${carried.planChanges}`),
-    existingWork: tokens(carried.existingWork),
+    existingWork: tokens(`${carried.existingWork}${carried.continueScope ? ` --scope ${carried.continueScope}` : ""}`),
   };
 }
 
@@ -1917,6 +1922,10 @@ function fillStoredSettings(flags: ParsedFlags, question: StoredQuestion): boole
   flags.projectType ??= kept.projectType;
   flags.review ??= kept.review;
   flags.changeControl ??= kept.changeControl;
+  // The scope change a continue answer carries (the person typed a scope
+  // that differs from the active work's), whether they ran its command or
+  // replied with its number or label.
+  if (flags.continue === true && kept.scope) flags.scope ??= kept.scope;
   if (kept.ceremony) flags.ceremony = { ...kept.ceremony, ...flags.ceremony };
   if (!existing && !flags.planChanges && kept.planChanges) flags.planChanges = kept.planChanges;
   return true;
@@ -2415,7 +2424,10 @@ function newWorkRoutingAskDirective(
           command: routingReshapeCommand(stored.id, selector, carried.existingWork),
         })),
       }
-      : { continue_command: `${tool} next --continue --request ${stored.id}${carried.existingWork}` }),
+      : {
+        continue_command: `${tool} next --continue --request ${stored.id}${carried.existingWork}` +
+          (carried.continueScope ? ` --scope ${scopeArg(carried.continueScope)}` : ""),
+      }),
   };
 }
 
@@ -7490,7 +7502,7 @@ function routeNext(args: string[], projectDir: string | undefined): void {
       { space: selection.space, targets: routingTargets() },
       undefined,
       stateDigest(stateContent),
-      scopeChange ? { ...carried, existingWork: `${carried.existingWork} --scope ${scopeArg(inferred.scope)}` } : carried,
+      scopeChange ? { ...carried, continueScope: inferred.scope } : carried,
       askedAgain?.question.approvedRequest,
     ));
     return;

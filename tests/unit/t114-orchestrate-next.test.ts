@@ -1050,6 +1050,25 @@ describe("t114 mid-flow freeform prose -> routing ask (Branch 9c)", () => {
     expect(out).not.toContain("scope change");
   });
 
+  // A prose harness hands the reply to `next` as the person typed it.
+  for (const reply of ["2", "Part of the active work"]) {
+    test(`a reply of "${reply}" to that question changes the open work's scope`, () => {
+      proj = createOrchestrationTestProject();
+      seedStateFile(proj, MID_IDEATION);
+      runNext(proj, ["--scope", "bugfix", "fix the login flow"]);
+      const out = runNext(proj, [reply]).out;
+      expect(out).toContain('"kind":"print"');
+      expect(out).toContain("scope change --scope bugfix");
+    });
+  }
+
+  test("only the open-work answer carries the scope change", () => {
+    proj = createOrchestrationTestProject();
+    seedStateFile(proj, MID_IDEATION);
+    const asked = JSON.parse(runNext(proj, ["--scope", "bugfix", "fix the login flow"]).out) as { compose_command?: string };
+    expect(asked.compose_command).not.toContain("--scope");
+  });
+
   test("the open-work answer to that question changes its scope", () => {
     proj = createOrchestrationTestProject();
     seedStateFile(proj, MID_IDEATION);
