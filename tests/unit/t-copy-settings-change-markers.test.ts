@@ -1,7 +1,7 @@
 // covers: tool:aidlc-init, file:core/tools/aidlc-includes.ts
 //
-// A copied install whose first session added AI-DLC's part to AGENTS.md,
-// CLAUDE.md or .gitignore keeps one AI-DLC part in each after a settings
+// A copied install whose first session added AI-DLC's part to AGENTS.md or
+// .gitignore keeps one AI-DLC part in each after a settings
 // change made with the copy's own command, and the next refresh from a
 // release goes through. Before, the settings change took the project's own
 // file, markers and all, as the shipped part and wrapped it in a second pair

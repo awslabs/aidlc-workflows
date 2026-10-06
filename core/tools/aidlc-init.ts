@@ -5133,6 +5133,15 @@ function prepareRefreshSource(
   try {
   const root = join(cleanup, "projection");
   cpSync(sourceRoot, root, { recursive: true, preserveTimestamps: true });
+  // A project's own tree holds the team's AGENTS.md or .gitignore
+  // with AI-DLC's part merged in, markers and all; the staged release takes
+  // AI-DLC's part alone from root-blocks, so a refresh never wraps that part
+  // in a second pair of markers.
+  for (const integration of descriptor.rootIntegrations) {
+    if (integration.policy !== "managed-block") continue;
+    const part = rootBlockPath(join(root, descriptor.harnessDir), integration);
+    if (regularFile(part)) cpSync(part, join(root, integration.path), { preserveTimestamps: true });
+  }
   const regenerated = new Set<string>();
   const stagedHarness = join(root, descriptor.harnessDir);
   const beforeGeneratedWrites = new Map<string, string>();
