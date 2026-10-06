@@ -52,6 +52,12 @@ const manifest: HarnessManifest = {
         wholeFileHashes: [
           // Keep pre-engine-directory unmarked root files recognizable.
           "sha256:b4bf7694361e76aae9feabc5d985d09afb7863cf8458b0c9aaa73f20a589582f",
+          // The variant shipped before the block listed aidlc.settings.local.json.
+          "sha256:a87496436cb23f303dee533322bd0896e981e14be1a7abd18e76aa5e113be02c",
+          // The variant shipped with a generic template above the AI-DLC lines.
+          "sha256:f9fbe33a3e622010a8a45ef199e104077db6ee7ee27137c08c34e81c1a0c24a4",
+          // The variant shipped with notes above each group of lines.
+          "sha256:8c5a09fbee163fa2a02fbccb1695c2f66a79507a180456240dd380b681b97506",
         ],
       },
     },
@@ -69,6 +75,8 @@ const manifest: HarnessManifest = {
           "sha256:2ef8a8cd1b72e59d017013b8d261721b1c5dedb82499b44dc9a97be01b6a73cb",
           // The pre-neutral shipped variant (#1268 made the root block harness-neutral).
           "sha256:eeabf9f9555124da3f5ad34eb3a26b9fcbf3e2ccd65610cb9f0182701cf3ef48",
+          // The variant shipped before the onboarding waited for the person to invoke AI-DLC.
+          "sha256:6de1298dfa4c2b6916f66d372b844faf23481c8f258eedd595c1423dab8e106d",
         ],
       },
     },
@@ -121,8 +129,9 @@ const manifest: HarnessManifest = {
     // beside it are packaged byte-identical to the Claude harness).
     { src: "hooks/aidlc-cursor-adapter.ts", dst: "hooks/aidlc-cursor-adapter.ts" },
     { src: "hooks.json", dst: "hooks.json" },
-    // Project-level permissions: pre-approve bun (the engine/tool runner) so
-    // the forwarding loop is not interrupted by a prompt per engine call.
+    // Project-level permissions: pre-approve AI-DLC's own workflow commands
+    // (the dispatcher's engine commands and the aidlc-*.ts tools) so the
+    // forwarding loop is not interrupted by a prompt per engine call.
     // .cursor/cli.json is the ONLY project-level CLI config Cursor reads
     // (permissions only, documented contract).
     { src: "cli.json", dst: "cli.json" },
@@ -146,6 +155,13 @@ const manifest: HarnessManifest = {
   runnerFrontmatterAdditions: ["disable-model-invocation: true"],
 
   emit: null,
+
+  // The standing rule names the doctor the way each install runs it: a copied
+  // install through its own Bun dispatcher, the native release as `aidlc`.
+  nativeReplacements: [{
+    from: "run `bun .cursor/tools/aidlc.ts doctor` (after installing Bun from https://bun.sh/install if `bun` is not found),",
+    to: "run `aidlc doctor`,",
+  }],
 
   plugin: { manifestDir: ".cursor-plugin", kind: "cursor" },
 };

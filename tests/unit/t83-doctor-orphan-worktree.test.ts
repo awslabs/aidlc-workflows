@@ -77,7 +77,12 @@
 //   .sh test 15 preserved-by-abort sub-class (MAJOR)    -> test 15
 //   .sh test 16 unknown Reason tracked (MINOR)          -> test 16
 
-import { afterEach, describe, expect, test } from "bun:test";
+import {
+  NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { afterEach, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { hostname } from "node:os";
 import { appendFileSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
@@ -101,6 +106,8 @@ import {
   sedReplaceInFile,
   setupIntegrationProject,
 } from "../harness/fixtures.ts";
+
+setDefaultTimeout(NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
 const BUN = process.execPath; // the bun running this test
 const UTIL = join(AIDLC_SRC, "tools", "aidlc-utility.ts");
@@ -190,6 +197,7 @@ function runDoctor(
   env: NodeJS.ProcessEnv = {},
 ): DoctorResult {
   const res = spawnSync(BUN, [UTIL, "doctor", ...args, "--project-dir", proj], {
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     encoding: "utf-8",
     env: { ...process.env, ...env },
   });
@@ -200,7 +208,7 @@ function runDoctor(
 }
 
 function git(proj: string, ...args: string[]): string {
-  const result = spawnSync("git", args, { cwd: proj, encoding: "utf-8" });
+  const result = spawnSync("git", args, { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), cwd: proj, encoding: "utf-8" });
   if (result.status !== 0) throw new Error(`git ${args.join(" ")}: ${result.stderr}`);
   return result.stdout.trim();
 }
@@ -243,6 +251,7 @@ function runRecoveryOperation(
   env: NodeJS.ProcessEnv = {},
 ): void {
   const result = spawnSync(BUN, [join(AIDLC_SRC, "tools", "aidlc.ts"), "engine", operation.route, ...operation.args], {
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     cwd: proj,
     encoding: "utf-8",
     env: { ...process.env, AIDLC_PROJECT_DIR: proj, CLAUDE_PROJECT_DIR: proj, ...env },
@@ -258,7 +267,7 @@ describe("t83 aidlc-utility doctor — orphan-reconciliation family (migrated fr
     expect(out).toContain("Orphan state files: 0 observed");
     expect(out).toContain("Orphan audit: 0 observed");
     expect(out).not.toContain("Parked attempts");
-  }, 30000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("2: active fork (slug in Bolt Refs) does not flag as orphan", () => {
     const proj = freshProject();
@@ -272,7 +281,7 @@ describe("t83 aidlc-utility doctor — orphan-reconciliation family (migrated fr
     // .sh grepped two ERE lines; assert the same two literals render.
     expect(out).toContain(`Orphan worktrees: 0 (1 active fork: ${boltName(fixtureIntentId8(proj), "activeslug")})`);
     expect(out).toContain(`Orphan state files: 0 (1 active: ${boltName(fixtureIntentId8(proj), "activeslug")})`);
-  }, 30000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("3: cleanup-orphan classification (WORKTREE_MERGED + dir persists)", () => {
     const proj = freshProject();
@@ -295,7 +304,7 @@ describe("t83 aidlc-utility doctor — orphan-reconciliation family (migrated fr
     const line = out.split("\n").find((l) => l.includes("cleanup-orphan")) ?? "";
     expect(line).toContain("cleanup-orphan");
     expect(line).toContain("cleanuptest");
-  }, 30000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("4: unmatched orphan (no Bolt Refs, no audit row)", () => {
     const proj = freshProject();
@@ -305,7 +314,7 @@ describe("t83 aidlc-utility doctor — orphan-reconciliation family (migrated fr
     const line = out.split("\n").find((l) => l.includes("unmatched")) ?? "";
     expect(line).toContain("unmatched");
     expect(line).toContain("orphanunmatched");
-  }, 30000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("5: orphan state file flagged when slug not in Bolt Refs and no DISCARDED row", () => {
     const proj = freshProject();
@@ -320,7 +329,7 @@ describe("t83 aidlc-utility doctor — orphan-reconciliation family (migrated fr
     // The slug is named in the fix string for this drift row.
     expect(out).toContain("orphanstate");
     expect(line).toContain("Orphan state files: 1 drift");
-  }, 30000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("6: orphan state paired with WORKTREE_DISCARDED is not flagged (legit pre-discard)", () => {
     const proj = freshProject();
@@ -344,7 +353,7 @@ describe("t83 aidlc-utility doctor — orphan-reconciliation family (migrated fr
     // Observed but reconciled → "0 (1 active)", NOT a drift row.
     expect(out).toContain(`Orphan state files: 0 (1 active: ${boltName(fixtureIntentId8(proj), "discardedstate")})`);
     expect(out).not.toContain("Orphan state files: 1 drift");
-  }, 30000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("7: AUDIT_FORKED-without-disk-state flagged (sub-case a)", () => {
     const proj = freshProject();
@@ -364,7 +373,7 @@ describe("t83 aidlc-utility doctor — orphan-reconciliation family (migrated fr
     const line = out.split("\n").find((l) => l.includes("AUDIT_FORKED-without-disk")) ?? "";
     expect(line).toContain("AUDIT_FORKED-without-disk");
     expect(line).toContain("noaudit");
-  }, 30000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("8: orphan-delta drift flagged (sub-case b: no AUDIT_MERGED, no active, no discard)", () => {
     const proj = freshProject();
@@ -390,7 +399,7 @@ describe("t83 aidlc-utility doctor — orphan-reconciliation family (migrated fr
     const line = out.split("\n").find((l) => l.includes("orphan-delta")) ?? "";
     expect(line).toContain("orphan-delta");
     expect(line).toContain("deltatest");
-  }, 30000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("9: PRACTICES_OVERRIDE write-failure-* without follow-up AFFIRMED is flagged", () => {
     const proj = freshProject();
@@ -408,7 +417,7 @@ describe("t83 aidlc-utility doctor — orphan-reconciliation family (migrated fr
     // Both phrases the .sh grepped land on the Check-4 fix string.
     expect(out).toContain("PRACTICES_OVERRIDE write-failure");
     expect(out).toContain("without follow-up PRACTICES_AFFIRMED");
-  }, 30000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("10: PRACTICES_OVERRIDE bolt-plan-marker-conflict is expected (not flagged)", () => {
     const proj = freshProject();
@@ -432,7 +441,7 @@ describe("t83 aidlc-utility doctor — orphan-reconciliation family (migrated fr
     const line = out.split("\n").find((l) => l.includes("Orphan audit:")) ?? "";
     expect(line).toMatch(/Orphan audit: 0(\s|$)/);
     expect(out).not.toContain("Orphan audit: 1 drift");
-  }, 30000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("11: MERGE_DISPATCH_INVOKED orphan is advisory (pass=true with advisory label)", () => {
     const proj = freshProject();
@@ -451,7 +460,7 @@ describe("t83 aidlc-utility doctor — orphan-reconciliation family (migrated fr
     const line = out.split("\n").find((l) => l.includes("MERGE_DISPATCH:")) ?? "";
     expect(line).toContain("MERGE_DISPATCH: 1 orphan INVOKED");
     expect(line).toContain("advisory");
-  }, 30000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("12: merged-and-cleaned Bolt does not flag as orphan (BLOCKER regression)", () => {
     const proj = freshProject();
@@ -484,7 +493,7 @@ describe("t83 aidlc-utility doctor — orphan-reconciliation family (migrated fr
     const { out } = runDoctor(proj);
     expect(out).toContain("Orphan audit: 0 (1 reconciled)");
     expect(out).not.toContain("AUDIT_FORKED-without-disk");
-  }, 30000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("13: multi-INVOKED pair-matching — 2 INVOKED + 1 RETURNED reports 1 orphan", () => {
     const proj = freshProject();
@@ -524,7 +533,7 @@ describe("t83 aidlc-utility doctor — orphan-reconciliation family (migrated fr
     const { out } = runDoctor(proj);
     // Each terminal consumes one preceding INVOKED → exactly 1 orphan, not 0.
     expect(out).toContain("MERGE_DISPATCH: 1 orphan INVOKED");
-  }, 30000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("14: ms-precision PRACTICES_AFFIRMED reconciles seconds-precision OVERRIDE", () => {
     const proj = freshProject();
@@ -554,7 +563,7 @@ describe("t83 aidlc-utility doctor — orphan-reconciliation family (migrated fr
     const { out } = runDoctor(proj);
     expect(out).toContain("Orphan audit: 0 (1 reconciled)");
     expect(out).not.toContain("without follow-up");
-  }, 30000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("15: preserved-by-abort sub-classification distinguishes from active forks", () => {
     const proj = freshProject();
@@ -579,7 +588,7 @@ describe("t83 aidlc-utility doctor — orphan-reconciliation family (migrated fr
     const line = out.split("\n").find((l) => l.includes("preserved-by-abort")) ?? "";
     expect(line).toContain("preserved-by-abort");
     expect(line).toContain("active fork");
-  }, 30000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("16: unknown PRACTICES_OVERRIDE Reason value surfaces as advisory", () => {
     const proj = freshProject();
@@ -597,7 +606,7 @@ describe("t83 aidlc-utility doctor — orphan-reconciliation family (migrated fr
     // Both phrases the .sh grepped land on the Check-4 advisory label.
     expect(out).toContain("unknown Reason");
     expect(out).toContain("track for follow-up");
-  }, 30000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
   test("mixed current and legacy directories retain distinct orphan classifications", () => {
     const proj = freshProject();
     const slug = "api";
@@ -610,7 +619,7 @@ describe("t83 aidlc-utility doctor — orphan-reconciliation family (migrated fr
     expect(result.out).toContain("bolt-abcdef01-api (legacy");
     expect(result.out).not.toContain(`${boltName(fixtureIntentId8(proj), slug)} (unknown intent)`);
     expect(result.out).toContain("Orphan worktrees: 1 drift");
-  }, 30000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 });
 
 describe("t83 doctor parked attempts", () => {
@@ -619,7 +628,7 @@ describe("t83 doctor parked attempts", () => {
     initRepo(proj);
     expect(runDoctor(proj, []).out).not.toContain("Parked attempts");
     expect(JSON.parse(runDoctor(proj, ["--json"]).out).data.parked_attempts).toEqual([]);
-  }, 30000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("unrecorded parks require the exact ref in their owning intent's discard rows", () => {
     const proj = freshProject();
@@ -656,7 +665,7 @@ describe("t83 doctor parked attempts", () => {
     expect(recorded.restore_operation.args).toEqual([
       "restore", "--slug", "saved", "--parked", stamp, "--repo", ".", "--intent", DEFAULT_RECORD_DIR, "--space", DEFAULT_SPACE,
     ]);
-  }, 30000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("unknown and ambiguous owners leave parked namespaces visible without recovery operations", () => {
     const proj = freshProject();
@@ -682,7 +691,7 @@ describe("t83 doctor parked attempts", () => {
       expect(attempt).not.toHaveProperty("restore_command");
       expect(attempt).not.toHaveProperty("purge_command");
     }
-  }, 30000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("a legacy park's sole recording owner cannot offer recovery when its id8 collides across spaces", () => {
     const proj = freshProject();
@@ -720,7 +729,7 @@ describe("t83 doctor parked attempts", () => {
     expect(ambiguous).not.toHaveProperty("purge_operation");
     expect(ambiguous).not.toHaveProperty("restore_command");
     expect(ambiguous).not.toHaveProperty("purge_command");
-  }, 30000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("a parked snapshot lists recovery actions without changing health severity", () => {
     const proj = freshProject();
@@ -764,7 +773,7 @@ describe("t83 doctor parked attempts", () => {
     expect(out).toContain("restored checkout: absent");
     expect(out).toContain(attempt.restore_command);
     expect(out).toContain(attempt.purge_command);
-  }, 30000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("a metacharacter harness omits unsafe display commands but preserves executable recovery operations", () => {
     const proj = freshProject();
@@ -807,7 +816,7 @@ describe("t83 doctor parked attempts", () => {
     runRecoveryOperation(proj, attempt.purge_operation, env);
     expect(git(proj, "for-each-ref", "--format=%(refname)", prefix)).toBe("");
     expect(JSON.parse(runDoctor(proj, ["--json"], env).out).data.parked_attempts).toEqual([]);
-  }, 30000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("February 31 parked stamps have null age_days and an unknown human age", () => {
     const proj = freshProject();
@@ -822,7 +831,7 @@ describe("t83 doctor parked attempts", () => {
     ]);
     const { out } = runDoctor(proj, []);
     expect(out).toContain(`impossible-date / ${stamp} (repo ., age unknown days, mode snapshot)`);
-  }, 30000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("legacy same-slug same-stamp attempts report only the owning repository as restored", () => {
     const proj = setupIntegrationProject({ withState: STATE_FIXTURE, withAudit: true });
@@ -870,7 +879,7 @@ describe("t83 doctor parked attempts", () => {
       expect.objectContaining({ repo: null, restored_exists: false }),
       expect.objectContaining({ repo: "api", restored_exists: false }),
     ]);
-  }, 30000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("audit-only historical records discover excluded and linked repos without treating ordinary children as repositories", () => {
     const proj = setupIntegrationProject({ withState: STATE_FIXTURE, withAudit: true });
@@ -942,7 +951,7 @@ describe("t83 doctor parked attempts", () => {
       `${parkedRefPrefix(historicalId8, "unrecorded-slug")}${stamp}/head`,
       `${parkedRefPrefix(historicalId8, "unrecorded-slug")}${stamp}/snapshot`,
     ].join("\n"));
-  }, 30000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("unrecorded external Git repositories linked as immediate children stay out of inventory", () => {
     const proj = freshProject();
@@ -958,7 +967,7 @@ describe("t83 doctor parked attempts", () => {
     expect(JSON.parse(runDoctor(proj, ["--json"]).out).data.parked_attempts).toEqual([]);
     expect(runDoctor(proj, []).out).not.toContain("Parked attempts");
     expect(git(external, "for-each-ref", "--format=%(refname)", "refs/aidlc/parked/")).toContain(`external/${stamp}/head`);
-  }, 30000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("evidence-only namespaces expose a purge action without offering a restore", () => {
     const proj = setupIntegrationProject({ withState: STATE_FIXTURE, withAudit: true });
@@ -1002,7 +1011,7 @@ describe("t83 doctor parked attempts", () => {
       }
     }
     expect(JSON.parse(runDoctor(proj, ["--json"]).out).data.parked_attempts).toEqual([]);
-  }, 30000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test.each([".", "api"])("recovery operations keep targeting repo %s when an identical attempt appears elsewhere", (repo) => {
     const proj = setupIntegrationProject({ withState: STATE_FIXTURE, withAudit: true });
@@ -1057,5 +1066,5 @@ describe("t83 doctor parked attempts", () => {
     expect(git(selected, "for-each-ref", "--format=%(refname)", prefix)).toBe("");
     expect(git(competing, "for-each-ref", "--format=%(refname)", prefix)).toBe(competingRefs);
     expect(git(selected, "for-each-ref", "--format=%(refname)", newerPrefix)).toBe(newerRefs);
-  }, 30000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 });

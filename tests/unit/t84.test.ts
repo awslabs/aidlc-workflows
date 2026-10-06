@@ -54,7 +54,12 @@
 // init a real git repo on `main` with one commit (init_git_repo). All temp
 // dirs are cleaned in afterAll. NOTHING is written under tests/fixtures/**.
 
-import { afterAll, describe, expect, test } from "bun:test";
+import {
+  NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { afterAll, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -68,6 +73,8 @@ import {
   seedAuditFile,
   seedStateFile,
 } from "../harness/fixtures.ts";
+
+setDefaultTimeout(NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
 const BUN = process.execPath; // the bun running this test
 const REPO_ROOT = HARNESS_REPO_ROOT;
@@ -101,6 +108,7 @@ interface DoctorResult {
 /** Spawn `bun aidlc-utility.ts doctor --project-dir <p>`. Mirrors `bun "$UTIL" doctor --project-dir "$PROJ" 2>&1`. */
 function doctor(p: string): DoctorResult {
   const res = spawnSync(BUN, [UTIL, "doctor", "--verbose", "--project-dir", p], {
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     encoding: "utf-8",
   });
   return {
@@ -111,7 +119,7 @@ function doctor(p: string): DoctorResult {
 
 /** git -C <p> <args...>; throws on non-zero so fixture setup never silently fails. */
 function git(p: string, ...args: string[]): void {
-  const res = spawnSync("git", ["-C", p, ...args], { encoding: "utf-8" });
+  const res = spawnSync("git", ["-C", p, ...args], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" });
   if ((res.status ?? -1) !== 0) {
     throw new Error(
       `git ${args.join(" ")} failed (status ${res.status}): ${res.stderr ?? ""}`,
@@ -139,6 +147,7 @@ function proj(): string {
 function initGitRepo(p: string): void {
   // git init -b main; fall back to plain init on older git.
   const initB = spawnSync("git", ["-C", p, "init", "-b", "main"], {
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     encoding: "utf-8",
   });
   if ((initB.status ?? -1) !== 0) {
@@ -152,10 +161,11 @@ function initGitRepo(p: string): void {
   git(p, "commit", "-m", "init");
   // Some git versions land on `master`; rename if so (best-effort, as the .sh).
   const head = spawnSync("git", ["-C", p, "symbolic-ref", "--short", "HEAD"], {
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     encoding: "utf-8",
   });
   if ((head.stdout ?? "").trim() !== "main") {
-    spawnSync("git", ["-C", p, "branch", "-m", "main"], { encoding: "utf-8" });
+    spawnSync("git", ["-C", p, "branch", "-m", "main"], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" });
   }
 }
 

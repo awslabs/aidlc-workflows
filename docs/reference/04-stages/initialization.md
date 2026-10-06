@@ -84,7 +84,7 @@ All three stages run inside a single deterministic `bun .claude/tools/aidlc-util
 
 ### Steps
 1. Walk the project directory one level deep, plus known source directories (`src/`, `app/`, `lib/`, `pages/`, `components/`, `tests/`) if present. When no top-level signal fires, fall back to scanning one level into each arbitrarily-named subdirectory with the same signal set, so a project nested in a container folder (e.g. `wordbook/`) is detected instead of misclassified greenfield
-2. Count files by extension to determine primary/secondary languages
+2. Count files by extension to determine primary/secondary languages, never counting a file AI-DLC wrote whole into the project (such as Cursor's root `install.ts`): each installed harness lists those in `<harness directory>/tools/data/aidlc-projection.json`
 3. Detect frameworks via known config filenames (Next.js, Vite, Angular, Nuxt, Remix, Gatsby, Astro, Svelte, NestJS) and React via `package.json` dependencies
 4. Detect build system via manifest + lockfile (npm/yarn/pnpm/bun/poetry/uv/hatch/pip/cargo/go/maven/gradle/composer/bundler)
 5. Read `.gitmodules` (if present) for declared submodule paths, probing each for initialization
@@ -105,6 +105,7 @@ All three stages run inside a single deterministic `bun .claude/tools/aidlc-util
 - Excludes `.claude/`, `<record>/`, `node_modules/`, `.git/`, `dist/`, `build/`, `.next/`, `target/`, `vendor/`
 - `package.json` with only `devDependencies` is treated as tooling/scaffolding and does not alone cause brownfield classification
 - A parseable `.gitmodules` with at least one submodule path entry is a brownfield signal (repo metadata declares code even when the submodule dirs are uninitialized). When submodule paths are uninitialized, the scan warns and names `git submodule update --init --recursive` - surfaced in the `WORKSPACE_SCANNED` event (`Submodules` field + `Details` remedy) and on creation stdout so the conductor can relay it; languages stay as scanned
+- The person's word wins over the scan: `intent-create --project-type <greenfield|brownfield>` sets `Project Type` and writes `Project Type Source: you` (otherwise `workspace scan`). Later, `workspace reclassify --project-type <t>` rescans and records the type as theirs, and `next` asks once when work the scan set up as greenfield gains code before Construction (see `/aidlc --project-type` in the [CLI guide](../../guide/12-cli-commands.md))
 
 ---
 
@@ -141,7 +142,7 @@ All three stages run inside a single deterministic `bun .claude/tools/aidlc-util
 ### Notes
 - Brownfield projects route to reverse-engineering (Stage 2.1)
 - Greenfield projects route to the first non-initialization stage (intent-capture for feature/poc; requirements-analysis for bugfix/refactor/express; practices-discovery for classic/workshop, since both skip all of Ideation and reverse-engineering is downgraded to SKIP on greenfield)
-- When invoked from `/aidlc-init` (the explicit creation packaging), the orchestrator stops after this stage
+- When invoked from `/aidlc-init --scope <name>` (the explicit creation packaging), the orchestrator stops after this stage; `/aidlc-init` with only a description shows the plan offer first and then continues as `/aidlc` does
 - When invoked from workflow start (`/aidlc <scope>` or describing what to build), the orchestrator continues into the first post-init stage
 
 ---

@@ -1,4 +1,9 @@
 // covers: file:tests/harness/tui-record-file.ts
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_PROCESS_CLEANUP_TIMEOUT_MS,
+  remainingCleanupTimeoutMs,
+} from "../harness/test-budget.ts";
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import fs from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
@@ -43,8 +48,9 @@ beforeEach(() => {
 
 afterEach(async () => {
   for (const restore of restorers.splice(0).reverse()) restore();
-  fs.rmSync(directory, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
-}, 10_000);
+  // Node linear retry delays sum to at most the shared cleanup backstop.
+  fs.rmSync(directory, { recursive: true, force: true, maxRetries: Math.floor((Math.sqrt(1 + 8 * remainingCleanupTimeoutMs(NATIVE_PROCESS_CLEANUP_TIMEOUT_MS) / 100) - 1) / 2), retryDelay: 100 });
+}, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 function failureOf(action: () => void): unknown {
   try { action(); } catch (error) { return error; }

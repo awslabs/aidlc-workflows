@@ -71,14 +71,16 @@ example assumes intent identity `7c31e9a0`.
 ```bash
 # From unscoped main:
 # Optional local-only mode: git remote remove origin
-aidlc worktree create --slug payments --base main
+aidlc engine worktree create --slug payments --base main
 cd .aidlc/worktrees/bolt-7c31e9a0_payments
 aidlc unit claim payments --team "Payments team"
 ```
 
 Run the same scoped build and `publish` commands below from that worktree. After
 main lands and pushes the candidate, return to main and discard the completed
-local worktree with `aidlc worktree discard --slug payments`.
+local worktree with `aidlc engine worktree discard --slug payments`. On a Bun-based
+copy install, run `bun .claude/tools/aidlc-worktree.ts create` and `discard` with
+the same flags instead, substituting your harness directory for `.claude`.
 Discard sets aside tracked files, non-ignored untracked files, and reviewed
 source refs before removing the checkout and branch. To inspect that work later,
 run `aidlc engine worktree restore --slug payments`; it creates an isolated
@@ -348,8 +350,11 @@ Construction walk.
 
 When a fresh clone has several intents and no active-intent cursor, the picker
 annotates a mixed team workspace with statuses such as `team construction, 2
-units claimable`, `parked at code-generation`, and `complete`. Single-intent and
-non-team picker text is unchanged.
+units claimable` and `parked at code-generation`. Finished intents are left out
+of the picker in every workspace, because they have nothing left to carry on;
+`/aidlc intent list` still shows them. Every other piece of work is listed with
+where it stands (`at Requirements Analysis`). A bare `/aidlc` or `/aidlc --resume` there always asks; it
+never answers that there is no work.
 
 `/aidlc --doctor` adds local-only claim reconciliation:
 
@@ -435,6 +440,7 @@ claim-bound CAS publication; main serializes the reviewed pinned OIDs.
 
 ## Related reading
 
+- [Facilitator Guide](facilitator-guide.md) - readiness check, scopes for side tasks, recovery playbook, and how strongly each harness enforces the workflow
 - [CLI Commands](12-cli-commands.md) - claim, publish, pin, gate, and land
 - [State and Audit](10-state-and-audit.md) - per-clone shards and merged receipt floors
 - [Construction](../reference/04-stages/construction.md) - Unit-major routing and gate rhythm

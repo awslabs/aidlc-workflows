@@ -23,7 +23,12 @@
 // marked in-flight; contribution files seeded per case. Temp dirs cleaned in
 // afterEach.
 
-import { afterEach, describe, expect, test } from "bun:test";
+import {
+  NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { afterEach, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
   existsSync,
@@ -50,6 +55,8 @@ import {
   seededRecordDir,
   seededStateFile,
 } from "../harness/fixtures.ts";
+
+setDefaultTimeout(NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
 resetAidlcEnv();
 
@@ -87,7 +94,7 @@ function inceptionState(checkbox = "[?]"): string {
 ## Project Information
 - **Project**: ensemble evidence test
 - **Project Type**: Greenfield
-- **Scope**: feature
+- **Scope**: enterprise
 - **State Version**: 8
 
 ## Scope Configuration
@@ -119,7 +126,7 @@ function practicesState(
 ## Project Information
 - **Project**: practices ensemble evidence test
 - **Project Type**: Greenfield
-- **Scope**: feature
+- **Scope**: enterprise
 - **State Version**: 8
 - **Practices Affirmed Timestamp**: ${affirmedTimestamp}
 
@@ -202,6 +209,7 @@ function runReport(
       proj,
     ],
     {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
       encoding: "utf-8",
       cwd: proj,
       env: { ...process.env, ...env },
@@ -245,10 +253,13 @@ function startSingle(
   env: Record<string, string | undefined> = {},
 ): void {
   seedAidlcMemory(proj);
+  // enterprise is the scope that ships collaborators on, so an isolated run
+  // (which resolves the switch from its recorded attempt scope, never the main
+  // state's intent line) still owes ensemble evidence.
   const result = runOrchestrateNext(
     ORCH,
     proj,
-    ["--scope", "feature", "--stage", "user-stories", "--single"],
+    ["--scope", "enterprise", "--stage", "user-stories", "--single"],
     { cwd: proj, env: { ...process.env, ...env } },
   );
   expect(result.status, result.stderr).toBe(0);
@@ -793,6 +804,47 @@ describe("t236 ensemble evidence gate — mob approval requires contribution fil
     expect(eventCount(auditText(completeProj), "STAGE_AWAITING_APPROVAL")).toBe(
       eventCount(completeBefore.audit, "STAGE_AWAITING_APPROVAL") + 1,
     );
+  });
+
+  // A real run (s20d) approved a Testing Posture whose Methodology gave its
+  // reasons; promotion then wrote it to team.md and Code Generation refused it.
+  test("Practices Discovery opens its gate only on a Testing Posture team.md can carry", () => {
+    const withDraft = (methodology: string): string => {
+      const proj = seedPracticesProject("[-]");
+      for (const agent of PRACTICES_SUPPORTS) {
+        writeContribution(proj, agent, undefined, "inception", "practices-discovery");
+      }
+      const draftDir = join(seededRecordDir(proj), "inception", "practices-discovery");
+      mkdirSync(draftDir, { recursive: true });
+      writeFileSync(
+        join(draftDir, "team-practices.md"),
+        `# Team Practices\n\n## Testing Posture\n\n- **Methodology**: ${methodology}\n- **Ordering**: one sentence.\n`,
+        "utf-8",
+      );
+      return proj;
+    };
+    const unreadable = withDraft("whatever the team prefers");
+    const before = mutationSnapshot(unreadable);
+    const refused = runReport(unreadable, ["--stage", "practices-discovery", "--result", "awaiting-approval"]);
+    expect(refused.kind).toBe("error");
+    expect(refused.message).toContain("In team-practices.md");
+    expect(refused.message).toContain('"Methodology evidence" line');
+    expect(refused.message).not.toContain("report");
+    expect(readFileSync(seededStateFile(unreadable), "utf-8")).toBe(before.state);
+
+    // A mix of two is custom, so the gate never splits it to the first one.
+    const mixed = withDraft("tdd for the domain, test-after for adapters");
+    const mixedRefused = runReport(mixed, ["--stage", "practices-discovery", "--result", "awaiting-approval"]);
+    expect(mixedRefused.kind).toBe("error");
+    expect(mixedRefused.message).toContain("custom for a mix");
+
+    // The s20d line: the value leads, so promotion splits off the reasons.
+    const reasons = withDraft(
+      "test-after (evidence and org default agree - `filter.ts`\n  ships with a colocated happy-path `filter.test.ts`).",
+    );
+    const opened = runReport(reasons, ["--stage", "practices-discovery", "--result", "awaiting-approval"]);
+    expect(opened.kind, opened.message).toBe("print");
+    expect(readFileSync(seededStateFile(reasons), "utf-8")).toMatch(/- \[\?\] practices-discovery /);
   });
 
   test("Practices Discovery approval requires a fresh promotion receipt after all spoke evidence exists", () => {

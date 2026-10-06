@@ -31,19 +31,28 @@
 // the bare "[AIDLC] ready" — proving the prefix never leaks onto the no-workflow
 // line and the pre-auto-create workspace renders cleanly, not an error.
 
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { afterEach, beforeEach, describe, expect, test, setDefaultTimeout } from "bun:test";
+import { mkdirSync, readFileSync, renameSync, utimesSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import {
   createIntent,
+  setActiveIntentCursor,
   setActiveSpaceCursor,
   stateFilePath,
+  writeSessionBinding,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import {
   AIDLC_SRC,
   cleanupTestProject,
   createTestProject,
 } from "../harness/fixtures.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const BUN = process.execPath; // the bun running this test
 const HOOK = join(AIDLC_SRC, "hooks", "aidlc-statusline.ts");
@@ -58,10 +67,14 @@ afterEach(() => {
 });
 
 /** Spawn the per-shipped statusline hook with the workspace JSON on stdin. */
-function runStatusline(p: string): string {
+function runStatusline(p: string, sessionId?: string): string {
   const r = Bun.spawnSync({
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     cmd: [BUN, HOOK],
-    stdin: new TextEncoder().encode(JSON.stringify({ workspace: { project_dir: p } })),
+    stdin: new TextEncoder().encode(JSON.stringify({
+      workspace: { project_dir: p },
+      ...(sessionId ? { session_id: sessionId } : {}),
+    })),
     stdout: "pipe",
     stderr: "pipe",
   });
@@ -107,11 +120,11 @@ describe("t168 statusline orientation prefix (mechanism cli — spawned hook + p
     // active intent and point both cursors at it. Now listSpaces().length === 2,
     // so the space token appears.
     seedIntent(proj, "checkout-flow", "default");
-    seedIntent(proj, "export-bug", "teamB");
-    setActiveSpaceCursor(proj, "teamB"); // active space → teamB
+    seedIntent(proj, "export-bug", "team-b");
+    setActiveSpaceCursor(proj, "team-b"); // active space → team-b
     const out = runStatusline(proj);
-    // teamB's active intent is export-bug → "teamB · export-bug · CONSTRUCTION".
-    expect(out).toContain("teamB · export-bug · CONSTRUCTION");
+    // team-b's active intent is export-bug → "team-b · export-bug · CONSTRUCTION".
+    expect(out).toContain("team-b · export-bug · CONSTRUCTION");
   });
 
   test("empty state (no record) paints the bare `[AIDLC] ready` — no prefix leak", () => {
@@ -144,5 +157,117 @@ describe("t168 statusline orientation prefix (mechanism cli — spawned hook + p
     expect(out).toContain("[AIDLC] ready");
     expect(out).not.toContain("retired-work");
     expect(out).not.toContain("CONSTRUCTION");
+  });
+
+  test("an archived binding paints `[AIDLC] ready` beside a space-root workflow", () => {
+    const created = createIntent(proj, "retired-work", "default", "feature");
+    writeFileSync(
+      stateFilePath(proj, created.dirName, "default"),
+      "# AI-DLC State Tracking\n## Current Status\n- **Lifecycle Phase**: CONSTRUCTION\n- **Status**: Archived\n",
+      "utf-8",
+    );
+    // A workflow at the space root, the selection a binding to no record also names.
+    writeFileSync(
+      join(proj, "aidlc", "spaces", "default", "intents", "aidlc-state.md"),
+      "# AI-DLC State Tracking\n## Current Status\n- **Lifecycle Phase**: INCEPTION\n- **Current Stage**: requirements-analysis\n- **Status**: Running\n",
+      "utf-8",
+    );
+    const session = "01995100-0000-7000-8000-000000000168";
+    writeSessionBinding(proj, session, "default", created.dirName, "switch");
+    expect(runStatusline(proj, session)).toContain("[AIDLC] ready");
+    expect(runStatusline(proj, session)).not.toContain("INCEPTION");
+    writeSessionBinding(proj, session, "default", null, "archive");
+    expect(runStatusline(proj, session)).toContain("[AIDLC] ready");
+    expect(runStatusline(proj, session)).not.toContain("INCEPTION");
+    // A session that has chosen no record still sees the space-root workflow.
+    writeSessionBinding(proj, session, "default", null, "none");
+    expect(runStatusline(proj, session)).toContain("INCEPTION");
+  });
+
+  test("a binding naming a record with a DEL or C1 control character is not displayed", () => {
+    const intents = join(proj, "aidlc", "spaces", "default", "intents");
+    const sessions = join(proj, "aidlc", ".aidlc-sessions");
+    mkdirSync(sessions, { recursive: true });
+    const plain = createIntent(proj, "plain-work", "default", "feature");
+    writeFileSync(
+      stateFilePath(proj, plain.dirName, "default"),
+      "# AI-DLC State Tracking\n## Current Status\n- **Lifecycle Phase**: INCEPTION\n- **Current Stage**: requirements-analysis\n- **Status**: Running\n",
+      "utf-8",
+    );
+    for (const [i, named] of ["del\u007fname", "nel\u0085name", "csi\u009bname"].entries()) {
+      const created = createIntent(proj, `control-${i}`, "default", "feature");
+      renameSync(join(intents, created.dirName), join(intents, named));
+      writeFileSync(
+        join(intents, named, "aidlc-state.md"),
+        "# AI-DLC State Tracking\n## Current Status\n- **Lifecycle Phase**: CONSTRUCTION\n- **Current Stage**: ci-pipeline\n- **Status**: Running\n",
+        "utf-8",
+      );
+      // Written by hand: the engine refuses to bind such a name.
+      const session = `01995100-0000-7000-8000-00000000016${i}`;
+      writeFileSync(
+        join(sessions, `${session}.binding.json`),
+        JSON.stringify({ space: "default", intent: named, boundAt: new Date().toISOString(), source: "switch" }),
+      );
+      // The binding does not count, so the cursor's record shows instead.
+      setActiveIntentCursor(proj, plain.dirName, "default");
+      const out = runStatusline(proj, session);
+      expect(out).toContain("INCEPTION");
+      expect(out).not.toContain("CONSTRUCTION");
+      expect(out).not.toContain(named);
+    }
+  });
+});
+
+// Working one Unit at a time, Current Stage stays on the block's first stage
+// while the person is on a later step of a Unit: a live run read
+// "0/5 > Functional Design -- Architect Agent" at Unit 2's checkpoint.
+describe("t168 statusline names the step the person is on", () => {
+  function seedUnitWalk(p: string): string {
+    const created = createIntent(p, "notes-cli", "default", "feature");
+    const state = stateFilePath(p, created.dirName, "default");
+    writeFileSync(
+      state,
+      "# AI-DLC State Tracking\n## Current Status\n- **Lifecycle Phase**: CONSTRUCTION\n" +
+        "- **Current Stage**: functional-design\n- **Active Agent**: aidlc-architect-agent\n" +
+        "- **Construction Iteration**: unit-major\n- **Status**: Running\n",
+      "utf-8",
+    );
+    return state;
+  }
+
+  function writeMarker(state: string, marker: Record<string, unknown>): string {
+    const dir = join(dirname(state), ".aidlc-engine");
+    mkdirSync(dir, { recursive: true });
+    const path = join(dir, "active-directive.json");
+    writeFileSync(path, JSON.stringify({ version: 2, state_sha256: "0".repeat(64), ...marker }), "utf-8");
+    return path;
+  }
+
+  test("the Unit's step the engine last put to the person is the step shown", () => {
+    const state = seedUnitWalk(proj);
+    writeMarker(state, { kind: "run-stage", stage: "code-generation", unit: "u2-note-tags" });
+    const out = runStatusline(proj);
+    expect(out).toContain("> Code Generation for u2-note-tags");
+    expect(out).not.toContain("Functional Design");
+    // The Active Agent field follows Current Stage, so it is not shown beside another step.
+    expect(out).not.toContain("Architect");
+  });
+
+  test("a marker from before the state's last change names nothing; Current Stage shows", () => {
+    const state = seedUnitWalk(proj);
+    const marker = writeMarker(state, { kind: "run-stage", stage: "code-generation", unit: "u2-note-tags" });
+    const past = new Date(Date.now() - 60_000);
+    utimesSync(marker, past, past);
+    const out = runStatusline(proj);
+    expect(out).toContain("> Functional Design");
+    expect(out).not.toContain("Code Generation");
+  });
+
+  test("a marker Unit that is not a Unit name never reaches the line", () => {
+    const state = seedUnitWalk(proj);
+    writeMarker(state, { kind: "run-stage", stage: "code-generation", unit: "u2\u001b[31mred" });
+    const out = runStatusline(proj);
+    expect(out).toContain("> Code Generation");
+    expect(out).not.toContain("u2");
   });
 });

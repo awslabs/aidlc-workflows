@@ -240,12 +240,14 @@ digests, and persists text YOU produce after reading `show <id>`.
 Read the document first, write a short summary (a few paragraphs,
 not a copy of the extracted text — it is capped at 4,000 characters,
 and text past that is truncated and **reported**: the JSON carries
-`"truncated": true` and the human output says so), save it to a file,
-then persist it with the digest `show` just reported:
+`"truncated": true` and the human output says so), save it to
+`aidlc/spaces/<space>/intents/.aidlc-knowledge-summary.md` (inside the
+project, ignored by git), then persist it with the digest `show` just
+reported:
 
 ```bash
 bun {{HARNESS_DIR}}/tools/aidlc-knowledge.ts summarize <id> \
-  --text-file /tmp/summary.md \
+  --text-file aidlc/spaces/<space>/intents/.aidlc-knowledge-summary.md \
   --source-revision <the sha256 `show <id>` reported> \
   --tags policy,security
 ```

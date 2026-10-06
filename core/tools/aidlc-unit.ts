@@ -84,6 +84,7 @@ import {
   recordedApprovalFingerprint,
   resolveTestingPosture,
 } from "./aidlc-testing-posture.ts";
+import { aidlcEngineCommand, isCompiledExecutable } from "./aidlc-runtime-paths.ts";
 
 const CLAIM_FILE = ".aidlc-unit-claim.json";
 const ZERO_OID = "0000000000000000000000000000000000000000";
@@ -573,9 +574,9 @@ function skeletonCompletedAtOid(projectDir: string, oid: string): boolean {
     const shown = git(projectDir, ["show", `${oid}:${path}`, "--"]);
     if (!shown.ok) continue;
     for (const block of shown.stdout.split(/\n---\n/)) {
-      const event = /^\*\*Event\*\*:\s*(.+)$/m.exec(block)?.[1]?.trim();
+      const event = /^\*\*Event\*\*:[ \t]*(.+)$/m.exec(block)?.[1]?.trim();
       const names =
-        /^\*\*Bolt names\*\*:\s*(.+)$/m.exec(block)?.[1]?.trim() ?? "";
+        /^\*\*Bolt names\*\*:[ \t]*(.+)$/m.exec(block)?.[1]?.trim() ?? "";
       if (!event) continue;
       events.push({
         event,
@@ -1176,6 +1177,7 @@ const TRANSPORTED_ATTEMPT_EVENTS = new Set([
   "GATE_APPROVED",
   "GATE_REJECTED",
   "PLAN_APPROVAL_RECORDED",
+  "PLAN_APPROVAL_SKIPPED",
   "REVIEW_REQUESTED",
   "REVIEW_COMPLETED",
 ]);
@@ -1576,8 +1578,10 @@ function candidateEvidence(
     const fingerprint = recordedApprovalFingerprint(questions);
     const embedded = parseTestingContract(plan);
     const currentContract = resolveTestingPosture(projectDir);
+    // A plan built with plan approval off carries the engine's own record of
+    // that instead of the person's approval; both bind the same content.
     const approvalEvent = events.findLast((event) =>
-      event.event === "PLAN_APPROVAL_RECORDED" &&
+      (event.event === "PLAN_APPROVAL_RECORDED" || event.event === "PLAN_APPROVAL_SKIPPED") &&
       attemptEventMatches(
         event,
         claim.unit,
@@ -1601,7 +1605,8 @@ function candidateEvidence(
       instructions.trim().length > 0 &&
       embedded?.contract_sha256 === currentContract.contract_sha256 &&
       approvalEvent &&
-      auditBlockField(approvalEvent.block, "Details") === "Approve Plan" &&
+      auditBlockField(approvalEvent.block, "Details") ===
+        (approvalEvent.event === "PLAN_APPROVAL_SKIPPED" ? "Plan approval off" : "Approve Plan") &&
       auditBlockField(approvalEvent.block, "Checkpoint") ===
         PLAN_APPROVAL_CHECKPOINT &&
       auditBlockField(approvalEvent.block, "Plan Target") ===
@@ -1619,8 +1624,11 @@ function candidateEvidence(
       (auditBlockField(approvalEvent.block, "Directive Epoch") ?? "").length >
         0 &&
       (auditBlockField(approvalEvent.block, "Run floor") ?? "").length > 0 &&
-      (auditBlockField(approvalEvent.block, "Session") ?? "").length > 0 &&
-      /^\[Answer\]:\s*A\.\s*Approve Plan\s*$/m.test(questions)
+      (approvalEvent.event === "PLAN_APPROVAL_SKIPPED"
+        ? (auditBlockField(approvalEvent.block, "Source") ?? "").length > 0 &&
+          /^\[Answer\]:\s*Plan approval off\s*$/m.test(questions)
+        : (auditBlockField(approvalEvent.block, "Session") ?? "").length > 0 &&
+          /^\[Answer\]:\s*A\.\s*Approve Plan\s*$/m.test(questions))
     ) {
       planFingerprint = fingerprint;
     }
@@ -2082,6 +2090,7 @@ function gateUnitMerge(args: string[], projectDir?: string): void {
       "Usage: aidlc-unit gate <unit> --decision <approve|reject> --user-input <text>",
     );
   }
+  const pd = resolveProjectDir(projectDir);
   if (
     !humanPresenceGuardDisabled() &&
     isNonAnswer(userInput)
@@ -2099,7 +2108,6 @@ function gateUnitMerge(args: string[], projectDir?: string): void {
         `(${approvalAuthorship.category}) in --user-input: "${approvalAuthorship.phrase}".`,
     );
   }
-  const pd = resolveProjectDir(projectDir);
   const transaction = readUnitMergeTransaction(pd, unit);
   if (!transaction || !["pinned", "approved", "rejected"].includes(transaction.status)) {
     fail(`Unit "${unit}" has no pinned merge transaction.`);
@@ -2806,11 +2814,15 @@ function runStateFold(
   projectDir: string,
   transaction: UnitMergeTransaction,
 ): void {
-  const tool = join(dirname(fileURLToPath(import.meta.url)), "aidlc-state.ts");
-  const result = spawnSync(
-    process.execPath,
+  // A compiled install has no aidlc-state.ts beside this module: its URL is
+  // inside the bundle, and process.execPath is the aidlc binary, which reads a
+  // script path as an unknown command. Route the fold through `engine state`
+  // there, as the orchestrator's spawnState does, and like it use only this
+  // process's own identity, never an executable supplied through the
+  // environment, since the child inherits the unit-merge owner token (#1286).
+  const [command, ...args] = aidlcEngineCommand(
+    "state",
     [
-      tool,
       "fold-unit-merge",
       "--unit",
       transaction.unit,
@@ -2821,6 +2833,12 @@ function runStateFold(
       "--project-dir",
       projectDir,
     ],
+    join(dirname(fileURLToPath(import.meta.url)), "aidlc-state.ts"),
+    isCompiledExecutable() ? process.execPath : null,
+  );
+  const result = spawnSync(
+    command,
+    args,
     {
       cwd: projectDir,
       encoding: "utf-8",

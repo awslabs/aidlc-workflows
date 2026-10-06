@@ -4,7 +4,12 @@
 // engine must require it for per-unit coverage under every test strategy, and
 // build-and-test must consume the artifact from a real producer.
 
-import { afterEach, describe, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { afterEach, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -26,6 +31,8 @@ import {
   seededRecordDir,
   seededStateFile,
 } from "../harness/fixtures.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 resetAidlcEnv();
 
@@ -178,7 +185,7 @@ describe("t290 code-generation coverage requires per-unit test instructions", ()
       expect(directive.produces).toContain(
         `${RP}/construction/alpha/code-generation/unit-test-instructions.md`,
       );
-    }, 30000);
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
     test(`${strategy}: all four outputs advance to the next unit`, () => {
       const proj = seedProject(strategy);
@@ -189,7 +196,7 @@ describe("t290 code-generation coverage requires per-unit test instructions", ()
       expect(directive.kind).toBe("run-stage");
       expect(directive.stage).toBe("code-generation");
       expect(directive.unit).toBe("beta");
-    }, 30000);
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
   }
 
   test("build-and-test requires the artifact and code-generation produces it", () => {
@@ -305,6 +312,7 @@ ${quotedExecutable} -e 'await Bun.write("${marker}", "passed")'
       .trim();
     expect(command).toBeTruthy();
     const executed = spawnSync("bash", ["-lc", command!], {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
       cwd: proj,
       encoding: "utf-8",
     });

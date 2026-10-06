@@ -6,7 +6,7 @@ default_severity: advisory
 fire_on: gate
 description: Checks at the gate that stage output contains the required H2 headings
 category: document-shape
-matches: "**/{aidlc-docs,intents}/**"
+matches: "**/{aidlc-docs,intents,codekb}/**"
 input_schema:
   output_path: string
   stage_slug: string
@@ -20,13 +20,18 @@ output_schema:
   template_expected: string[]
   template_missing: string[]
   config_warning: string
-timeout_seconds: 5
+timeout_seconds: 300
 ---
 
 # required-sections sensor
 
 Default mode: checks the output contains at least 2 H2 headings (generic
 content-shape sanity check).
+
+A timestamp marker (`<artifact>-timestamp.md`, such as
+`practices-discovery-timestamp.md`) is a run record rather than a document,
+so it always passes; its headings are still reported. Questions markers keep
+the floor.
 
 For `unit-of-work-dependency.md` (units-generation 2.7), additionally
 requires the fenced `yaml` `units:` edge block to be present, well-formed,
@@ -51,7 +56,8 @@ The default heading set can be overridden two ways. **Precedence: a resolving
    shape and the checked shape cannot drift. A template applies only to a
    template-eligible artifact (the stage's prose `produces` entries, threaded by
    the dispatcher); a template resolving for a questions/timestamp marker is
-   ignored with a config warning, and the marker keeps the generic floor.
+   ignored with a config warning. A questions marker keeps the generic floor,
+   and a timestamp marker still passes.
 
 2. **`## Sensors`-prose override (in-stage, legacy anticipation).** A stage's
    `## Sensors` body may document a heading-set override (post-milestone-12
@@ -60,7 +66,8 @@ The default heading set can be overridden two ways. **Precedence: a resolving
 The framework ships no per-stage `## Sensors` overrides by default — teams
 introduce specific heading shapes either by authoring a template (path 1) or via
 the §13 learning loop when there's a real reason. When neither override is
-present, the output keeps the generic ≥2-H2 floor.
+present, the output keeps the generic ≥2-H2 floor (a timestamp marker still
+passes).
 
 ## Failure mode
 

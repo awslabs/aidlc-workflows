@@ -1,11 +1,18 @@
 // Token-free ACP protocol fixtures. The injected AcpSession adapter uses the
 // real dispatch/request/diagnostic methods without constructing a CLI process.
-import { afterAll, afterEach, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { afterAll, afterEach, expect, test, setDefaultTimeout } from "bun:test";
 import { mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import type { AcpSession as Session, AcpToolCall } from "../harness/kiro-acp-drive.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const savedDiagnostic = process.env.AIDLC_ACP_DIAGNOSTIC_TRACE;
 process.env.AIDLC_ACP_DIAGNOSTIC_TRACE = "1";
@@ -278,7 +285,7 @@ test("raw vendor chunks and input updates remain visible without changing aggreg
   expect(rows.find(row => row.event === "aggregate_at_return")?.calls?.[0]?.input.commandPresent).toBe(false);
 });
 
-test("a failed orphan remains an issue even when a preceding chunk contains input", async () => {
+test("a failed orphan is reported as a rejected call even when a preceding chunk contains input", async () => {
   const project = directory(), trace = join(project, "trace.ndjson");
   const diagnostic = "The tool input does not match the tool schema: missing field `command`";
   const { session } = adapter(trace, (_request, emit, current) => {
@@ -291,7 +298,10 @@ test("a failed orphan remains an issue even when a preceding chunk contains inpu
   });
   const result = await driveKiroAcp({ projectDir: project, session, prompt: "fixture-only", keepAlive: true });
   expect(result.toolCalls).toEqual([]);
-  expect(result.toolCallIssues).toEqual([{ toolCallId: "bad", status: "failed", output: [diagnostic], orphan: true }]);
+  // The host never announced a start for this call, so it is the agent reaching
+  // for something that is not there: reported separately, not a watched failure.
+  expect(result.toolCallIssues).toEqual([]);
+  expect(result.rejectedToolCalls).toEqual([{ toolCallId: "bad", status: "failed", output: [diagnostic], orphan: true }]);
   const wireFailure = records(trace).find(row => row.update?.status === "failed");
   expect(wireFailure?.update?.content).toEqual([{ content: { type: "text", text: diagnostic } }]);
   expect(wireFailure?.update?.rawOutput).toEqual({ code: "fixture-validation-error" });
@@ -336,7 +346,7 @@ test("metadata allowlist excludes prose/auth bodies and preserves protocol/versi
     protocolVersion: 1, agentInfo: { name: "fixture", title: "Fixture CLI", version: "0.test", secret: "agent-secret-canary" },
     authMethods: [{ token: "auth-secret-canary" }],
   }));
-  await fixture.session.request("initialize", { private: "request-secret-canary" }, 1000);
+  await fixture.session.request("initialize", { private: "request-secret-canary" }, remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS)!);
   fixture.emit(update({ sessionUpdate: "agent_message_chunk", content: { text: "prose-canary" } }, fixture.session.sessionId));
   fixture.emit(update({ sessionUpdate: "agent_thought_chunk", content: { text: "thought-canary" } }, fixture.session.sessionId));
   fixture.emit({ method: "_kiro.dev/auth", params: { token: "auth-notification-canary" } });
@@ -399,6 +409,7 @@ test("diagnostics disabled creates no protocol sidecar", () => {
     process.exit(existsSync(${JSON.stringify(`${trace}.protocol.ndjson`)}) ? 1 : 0);
   `;
   const child = Bun.spawnSync([process.execPath, "-e", script], {
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     env: { ...process.env, AIDLC_ACP_DIAGNOSTIC_TRACE: "0" }, stdout: "pipe", stderr: "pipe",
   });
   expect(child.exitCode, new TextDecoder().decode(child.stderr)).toBe(0);

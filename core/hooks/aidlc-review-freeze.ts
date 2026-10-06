@@ -50,27 +50,34 @@
 // redirections and operands of common mutation commands; read-only shell calls
 // do not produce targets and remain untouched.
 
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync } from "node:fs";
 import { appendAuditEntryUnlocked } from "../tools/aidlc-audit.ts";
 import {
+  hookOutsideGate,
+  enterHookWorkflow,
   acquireAuditLock,
   auditFilePath,
   type ClaudeCodeHookInput,
   type FreshReviewReceipts,
   checkSummaryConfirmationEvidence,
+  decideFence,
   errorMessage,
   evaluateGuardRefusal,
+  guardStandAsideSpeaks,
+  guardStoodAsideLine,
+  recordGuardStoodAside,
   freshReviewReceipts,
   getField,
   guardAttemptState,
   guardRefusalOutput,
   humanAuthorityState,
   hooksHealthDir,
+  writeHookStatusFile,
   intentRepos,
   isClaudeCodeHookInput,
   isoTimestamp,
   loadStageGraph,
+  memoryStrictHoldsGuardPolicy,
   parseCheckboxes,
   reviewedArtifactUnit,
   readAllAuditShards,
@@ -83,6 +90,7 @@ import {
   resolveProjectDirFromHook,
   teamUnitGateStatus,
   type StageEntry,
+  writeGuardStoodAside,
 } from "../tools/aidlc-lib.ts";
 import { writeTargets } from "./review-freeze-command.ts";
 export {
@@ -170,9 +178,9 @@ export function judgeFreeze(
 // the quote-at-gate route for suggestions, and names the state-correct route
 // that legitimately reopens a real defect.
 export const REVIEW_FREEZE_FALLBACK_GUIDANCE =
-  "Ask the human what should change, then record their Request Changes " +
-  "decision before editing the document; that unlocks it for revision and a " +
-  "fresh review.";
+  "Record the person's Request Changes decision, with what they said should " +
+  "change (ask only if they have not said), before editing the document; that " +
+  "unlocks it for revision and a fresh review.";
 
 export function reviewFreezeRecoveryGuidance(
   projectDir: string,
@@ -203,19 +211,33 @@ export function blockReason(
 // --- Main ---------------------------------------------------------------------
 
 export async function run(input: string): Promise<number> {
-  // Deterministic off-switch: enforcement disabled entirely.
-  if (resolveProjectFlag("AIDLC_DISABLE_REVIEW_FREEZE_HOOK") === "1") return 0;
-
   const projectDir = resolveProjectDirFromHook(import.meta.url);
-
+  let payloadSession: unknown;
   try {
-    const healthDir = hooksHealthDir(projectDir);
-    mkdirSync(healthDir, { recursive: true });
-    writeFileSync(join(healthDir, `${HOOK_NAME}.last`), isoTimestamp(), "utf-8");
+    payloadSession = (JSON.parse(input) as { session_id?: unknown }).session_id;
   } catch {
-    // Heartbeat failure is non-fatal - never let it affect the decision.
+    // Missing/malformed payload: resolve without a payload session.
   }
+  // A conversation that has not joined the selected workflow is not held to its review freeze.
+  const workflow = enterHookWorkflow(projectDir, payloadSession);
+  try {
+    if (hookOutsideGate(workflow)) return 0;
+    // The heartbeat says the host ran this hook, so it comes before the off
+    // switch: the freeze switched off never looks like a host running no hooks.
+    try {
+      writeHookStatusFile(hooksHealthDir(projectDir), `${HOOK_NAME}.last`, isoTimestamp());
+    } catch {
+      // Heartbeat failure is non-fatal - never let it affect the decision.
+    }
+    // Deterministic off-switch: enforcement disabled entirely.
+    if (resolveProjectFlag("AIDLC_DISABLE_REVIEW_FREEZE_HOOK") === "1") return 0;
+    return await checkFreeze(input, projectDir);
+  } finally {
+    workflow.restore();
+  }
+}
 
+async function checkFreeze(input: string, projectDir: string): Promise<number> {
   let parsed: ClaudeCodeHookInput;
   try {
     const raw: unknown = JSON.parse(input);
@@ -227,7 +249,8 @@ export async function run(input: string): Promise<number> {
 
   const toolName = parsed.tool_name ?? "";
   const cwd = typeof parsed.cwd === "string" ? parsed.cwd : projectDir;
-  const targets = writeTargets(toolName, parsed.tool_input, cwd);
+  // Set by the adapter that ran the tool, outside the agent's input.
+  const targets = writeTargets(toolName, parsed.tool_input, cwd, parsed.aidlc_shell === "powershell" ? "powershell" : "posix");
   if (targets.length === 0) return 0;
 
   // No audit ledger means no receipts to protect - the common non-AIDLC case,
@@ -288,9 +311,41 @@ export async function run(input: string): Promise<number> {
   }
   if (!verdict.block) return 0;
 
+  // The fence stands aside when it is LOWERED for this piece of work, by the
+  // guard policy word (relaxed and off both lower this one) or by the human's
+  // own `guard.review-freeze off` switch. A human message, however recent, does
+  // not lower it: see decideGuard in aidlc-lib.ts for why. The review receipt
+  // and its verdict are untouched either way; what changes is that the human is
+  // told in one line and the ledger keeps the row.
+  {
+    let gate: ReturnType<typeof decideFence> | null = null;
+    try {
+      gate = decideFence(projectDir, "review-freeze", {
+        hookInput: parsed,
+        stateContent,
+      });
+    } catch (e) {
+      recordHookDrop(projectDir, HOOK_NAME, errorMessage(e));
+    }
+    if (gate?.decision === "stand-aside") {
+      const detail = verdict.target ?? "";
+      if (guardStandAsideSpeaks(gate)) {
+        writeGuardStoodAside(guardStoodAsideLine("review-freeze", gate.source, detail));
+      }
+      recordGuardStoodAside(projectDir, {
+        fence: "review-freeze",
+        authority: gate.authority,
+        ...(blockedStage ? { stage: blockedStage.slug } : {}),
+        tool: toolName,
+        details: detail,
+      });
+      return 0;
+    }
+  }
+
   // Audit the refusal so the run's record shows when the freeze bit.
   // Best-effort: an audit failure never changes the block decision. The lock
-  // acquisition is TIME-BOUNDED well below the standard 5s budget (5 x 50ms):
+  // acquisition deliberately keeps a short reporting budget (5 x 50ms):
   // the block decision is already made, and a lock-starved fan-out must not
   // stretch a fast refuse into a laggy one - a dropped advisory row is
   // preferable to a slow block.
@@ -359,6 +414,12 @@ export async function run(input: string): Promise<number> {
     attempt: snapshot.attempt,
     humanAuthority: humanAuthorityState(projectDir),
     ...(teamGate ? { teamGate } : {}),
+    // This refusal IS the fence holding, so the ask carries the switch that
+    // lowers it for this piece of work beside the workflow's own remedies.
+    fence: "review-freeze",
+    fenceSwitch: (parsed.agent_type?.trim() ?? "").length > 0 ||
+      (typeof parsed.tool_input?.subagent_type === "string" && parsed.tool_input.subagent_type.trim().length > 0) ||
+      memoryStrictHoldsGuardPolicy(projectDir, stateContent) ? "withhold" : "offer",
   });
   const guidance =
     evaluated.remedies.find((remedy) => remedy.executableNow)?.action ??

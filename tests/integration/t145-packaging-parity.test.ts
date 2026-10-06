@@ -17,6 +17,11 @@
 // mirrors how a developer or CI invokes it, and isolates its temp-dir builds
 // from the suite's process.
 
+import {
+  NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS,
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
 import { describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
@@ -36,7 +41,7 @@ import { fileURLToPath } from "node:url";
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const PACKAGE_TS = join(REPO_ROOT, "scripts", "package.ts");
-const CHECK_TIMEOUT_MS = 180_000;
+const CHECK_TIMEOUT_MS = NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS;
 
 type Run = ReturnType<typeof spawnSync>;
 
@@ -101,7 +106,7 @@ function runPackage(root: string, ...args: string[]): Run {
   return spawnSync("bun", [join(root, "scripts", "package.ts"), ...args], {
     cwd: root,
     encoding: "utf-8",
-    timeout: CHECK_TIMEOUT_MS - 5_000,
+    timeout: remainingOperationTimeoutMs(NATIVE_FIXTURE_SETUP_TIMEOUT_MS),
   });
 }
 
@@ -124,7 +129,7 @@ describe("t145 package determinism — two source-only builds match", () => {
     const res = spawnSync("bun", [PACKAGE_TS, "--check"], {
       cwd: REPO_ROOT,
       encoding: "utf-8",
-      timeout: CHECK_TIMEOUT_MS - 5_000,
+      timeout: remainingOperationTimeoutMs(NATIVE_FIXTURE_SETUP_TIMEOUT_MS),
     });
     if (res.status !== 0) {
       console.error(`package --check output:\n${res.stdout ?? ""}${res.stderr ?? ""}`);
@@ -136,7 +141,7 @@ describe("t145 package determinism — two source-only builds match", () => {
     const res = spawnSync("bun", [PACKAGE_TS, "claude", "--check"], {
       cwd: REPO_ROOT,
       encoding: "utf-8",
-      timeout: CHECK_TIMEOUT_MS - 5_000,
+      timeout: remainingOperationTimeoutMs(NATIVE_FIXTURE_SETUP_TIMEOUT_MS),
     });
     if (res.status !== 0) {
       console.error(`package claude --check output:\n${res.stdout ?? ""}${res.stderr ?? ""}`);

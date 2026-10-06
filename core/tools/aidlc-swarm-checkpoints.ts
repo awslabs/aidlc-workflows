@@ -14,9 +14,13 @@ import {
   eventMatchesClaimAttempt,
   findStageBySlug,
   getField,
+  guardPolicyAcceptsChanges,
   hasUnsafeSingleLineCharacter,
   consumeProtectedQuestion,
+  unitPlainName,
   withdrawProtectedQuestions,
+  changeRequestWords,
+  readProtectedResponse,
   requireProtectedResponse,
   protectedTargetDigest,
   mintProtectedQuestion,
@@ -29,18 +33,23 @@ import {
   readCommittedUnitSourceManifest,
   readRegularFileNoFollowOrThrow,
   readStateFile,
+  recordAcceptedChanges,
   recordDir,
   recordFileTargetOrThrow,
   repoDir,
   resolveBoltDag,
   resolveWorkflowSelection,
+  renderChangedPaths,
   reviewArtifactFingerprint,
   selfAttributedDecisionMarker,
   sortAttemptEvents,
+  sourceClaimCovers,
+  sourceListingChangedPaths,
   unitSourceFingerprint,
   validateUnitName,
   withAuditLock,
   workspaceSourceListing,
+  type AcceptedChange,
   type AuditShardEvent,
 } from "./aidlc-lib.ts";
 
@@ -52,6 +61,11 @@ export interface SwarmCheckpoint {
   approved: boolean;
   human_required: boolean;
   errors: string[];
+  /** Under strict, the batch's files or outputs changed after it was checked:
+   *  `ask` then offers Request Changes, so the person always has a way on. */
+  changed_after_check: boolean;
+  /** Lines for changes kept under a relaxed or off Guard Policy. */
+  notices?: string[];
 }
 
 const STAGE = "code-generation";
@@ -101,6 +115,19 @@ function snapshot(pd: string, batch: number, requested: string[], stateContent?:
   const intent = activeIntentUuid(pd);
   if (!root || !intent) throw new Error("Swarm checkpoint requires an active intent record.");
   const errors: string[] = [];
+  // Changes found after the batch was checked: kept under relaxed or off, an
+  // error under strict (where they are the only errors, `ask` still asks).
+  const acceptsChanges = guardPolicyAcceptsChanges(pd, state);
+  const accepted: AcceptedChange[] = [];
+  const driftErrors = new Set<string>();
+  const changedAfterCheck = (unit: string, error: string, change: Omit<AcceptedChange, "checkpoint" | "stage" | "unit">) => {
+    if (acceptsChanges) {
+      accepted.push({ checkpoint: "swarm-batch", stage: STAGE, unit, ...change });
+      return;
+    }
+    driftErrors.add(error);
+    errors.push(error);
+  };
   const enabled = getField(state, "Construction Checkpoints") === "enabled" &&
     getField(state, "Construction Iteration") === "stage-major" &&
     getField(state, "Construction Execution") === "swarm";
@@ -129,6 +156,9 @@ function snapshot(pd: string, batch: number, requested: string[], stateContent?:
   const repos = intentRepos(pd);
   const floors: Record<string, string> = {};
   const commandSha256s: Record<string, string> = {};
+  // Units checked with an earlier approved command: an already approved batch
+  // keeps its approval; any other batch needs the current command.
+  const olderCommand = new Set<string>();
   const evidence = units.map((unit) => {
     const unitFloor = latestMainWorkflowStageRunFloorForProject(pd, STAGE, false, unit, rows);
     floors[unit] = unitFloor;
@@ -157,9 +187,10 @@ function snapshot(pd: string, batch: number, requested: string[], stateContent?:
       (rejection !== null && !attemptEventDefinitelyBefore(rejection, native))) {
       errors.push(`${unit}: current native convergence and its source merge are required.`);
     }
-    if (!verificationCommand || !native ||
-      auditBlockField(native.block, "Command SHA-256") !== verificationCommand.sha256) {
+    if (!verificationCommand || !native || !/^[a-f0-9]{64}$/.test(commandSha256s[unit])) {
       errors.push(`${unit}: batch was not checked with the authorized Construction Verification Command.`);
+    } else if (commandSha256s[unit] !== verificationCommand.sha256) {
+      olderCommand.add(unit);
     }
     const artifact = reviewArtifactFingerprint(pd, definition, unit, {
       boltDag: dag, stateContent: state, requireRequiredArtifacts: true,
@@ -169,14 +200,35 @@ function snapshot(pd: string, batch: number, requested: string[], stateContent?:
     // do not run another checker or manufacture another review receipt.
     const review = latest(rows.filter((row) => row.event === "REVIEW_COMPLETED" &&
       auditBlockField(row.block, "Stage") === STAGE && auditBlockField(row.block, "Unit") === unit));
+    // What finalize kept after this review under relaxed or off: the review
+    // stands for the kept content, and finalize already said so once. The
+    // review row reaches this audit at merge, after finalize's row, so the
+    // two are ordered by time (to the second, so the same second counts), not
+    // by position.
+    const keptRows = review ? rows.filter((row) => row.event === "CHANGE_ACCEPTED" &&
+      auditBlockField(row.block, "Checkpoint") === "review-receipt" &&
+      auditBlockField(row.block, "Stage") === STAGE && auditBlockField(row.block, "Unit") === unit &&
+      review.timestamp <= row.timestamp) : [];
+    const reviewedOrKept = (field: string): string | null => {
+      const recorded = review ? auditBlockField(review.block, field) : null;
+      const kept = latest(keptRows.filter((row) => auditBlockField(row.block, "Recorded") === recorded));
+      return kept ? auditBlockField(kept.block, "Current") : recorded;
+    };
+    const reviewedArtifact = reviewedOrKept("Artifact Fingerprint");
+    let boundArtifact = artifact;
     if (!review || !native || !attemptEventDefinitelyBefore(review, native) ||
       (rejection !== null && !attemptEventDefinitelyBefore(rejection, review)) ||
       !eventMatchesClaimAttempt(pd, review.block, unit) ||
-      auditBlockField(review.block, "Artifact Fingerprint") !== artifact ||
-      auditBlockField(review.block, "Source Fingerprint") !== nativeSource ||
+      reviewedOrKept("Source Fingerprint") !== nativeSource ||
       auditBlockField(review.block, "Source Freshness Bypass") !== null ||
       auditBlockField(review.block, "Unit Source Binding Bypass") !== null) {
       errors.push(`${unit}: required outputs no longer match the review verified by native convergence.`);
+    } else if (artifact !== null && reviewedArtifact !== artifact) {
+      changedAfterCheck(unit, `${unit}: required outputs no longer match the review verified by native convergence.`, {
+        changed: null, recorded: reviewedArtifact ?? "", current: artifact,
+        notice: `The ${unitPlainName(unit)} Unit's Code Generation documents changed after its batch was checked. Kept them.`,
+      });
+      if (acceptsChanges) boundArtifact = reviewedArtifact;
     }
     let source: string | null = null;
     try {
@@ -193,9 +245,18 @@ function snapshot(pd: string, batch: number, requested: string[], stateContent?:
       );
       if (!manifest.ok) throw new Error(manifest.reason);
       const committed = manifest.listing;
-      if (!review || unitSourceFingerprint(committed, manifest, manifest.rawBytesSha256) !==
-        auditBlockField(review.block, "Unit Source Fingerprint")) {
-        throw new Error("source manifest or claimed source does not match the native reviewed binding");
+      if (!review) throw new Error("source manifest or claimed source does not match the native reviewed binding");
+      // A Unit finalize kept a change for lands as it was kept, not as reviewed.
+      // A list of files changed after that is kept under relaxed or off.
+      const bound = unitSourceFingerprint(committed, manifest, manifest.rawBytesSha256);
+      const reviewedBinding = auditBlockField(review.block, "Unit Source Fingerprint");
+      if (keptRows.length === 0 && bound !== reviewedBinding) {
+        const error = "source manifest or claimed source does not match the native reviewed binding";
+        if (!acceptsChanges) throw new Error(error);
+        changedAfterCheck(unit, `${unit}: ${error}`, {
+          changed: null, recorded: reviewedBinding ?? "", current: bound,
+          notice: `The ${unitPlainName(unit)} Unit's list of files changed after its batch was checked. Kept them.`,
+        });
       }
       const parentClaims = {
         claims: new Set([...manifest.claims].map((key) => repos.length ? `${repo}${key}` : key)),
@@ -206,15 +267,24 @@ function snapshot(pd: string, batch: number, requested: string[], stateContent?:
         : committed;
       if (!listing) throw new Error("claimed source cannot be fingerprinted");
       source = unitSourceFingerprint(listing, parentClaims, manifest.rawBytesSha256);
-      if (source !== unitSourceFingerprint(projected, parentClaims, manifest.rawBytesSha256)) {
-        throw new Error("claimed source differs from the verified native Source Commit");
+      const checked = unitSourceFingerprint(projected, parentClaims, manifest.rawBytesSha256);
+      if (source !== checked) {
+        const claimed = (from: ReadonlyMap<string, string>) =>
+          new Map([...from].filter(([key]) => sourceClaimCovers(key, parentClaims)));
+        const paths = sourceListingChangedPaths(claimed(projected), claimed(listing));
+        changedAfterCheck(unit, `${unit}: claimed source differs from the verified native Source Commit`, {
+          changed: paths, recorded: checked, current: source,
+          notice: `Files from the ${unitPlainName(unit)} Unit changed after its batch was checked: ${renderChangedPaths(paths)}. Kept them.`,
+        });
+        // Kept: the batch stays bound to the source it was checked with.
+        if (acceptsChanges) source = checked;
       }
     } catch (error) {
       errors.push(`${unit}: ${error instanceof Error ? error.message : String(error)}`);
     }
     return {
       unit, kind: dag.unitKinds?.get(unit) ?? null, floor: unitFloor,
-      claim: claimAttemptFields(pd, unit), artifact, source,
+      claim: claimAttemptFields(pd, unit), artifact: boundArtifact, source,
       // Native receipt/merge provenance establishes readiness above; the
       // approval binds the reviewed content rather than receipt timestamps.
       reviewer: review ? auditBlockField(review.block, "Reviewer") : null,
@@ -230,18 +300,31 @@ function snapshot(pd: string, batch: number, requested: string[], stateContent?:
     auditBlockField(row.block, "Checkpoint") === CHECKPOINT &&
     auditBlockField(row.block, "Batch number") === String(batch),
   ));
-  const ready = errors.length === 0;
-  const approved = ready && gate?.event === "GATE_APPROVED" &&
+  const gateApproved = (commandSha256: string | undefined) => gate?.event === "GATE_APPROVED" &&
+    commandSha256 !== undefined &&
     auditBlockField(gate.block, "Stage") === STAGE &&
     auditBlockField(gate.block, "Intent") === intent &&
     auditBlockField(gate.block, "Units") === units.join(", ") &&
     auditBlockField(gate.block, "Fingerprint") === fingerprint &&
     auditBlockField(gate.block, "Run floor") === floor &&
-    auditBlockField(gate.block, "Command SHA-256") === verificationCommand?.sha256 &&
+    auditBlockField(gate.block, "Command SHA-256") === commandSha256 &&
     (auditBlockField(gate.block, "User Input") === "Approve" ||
       auditBlockField(gate.block, "Autonomous") === "true");
-  const result: SwarmCheckpoint = { batch, units, fingerprint, ready, approved, human_required: humanRequired, errors };
-  return { result, root, intent, rows, floor, floors, enabled, verificationCommand, commandSha256s };
+  const earlierCommands = new Set(units.filter((unit) => olderCommand.has(unit)).map((unit) => commandSha256s[unit]));
+  const keptUnderEarlierCommand = olderCommand.size === units.length && earlierCommands.size === 1 &&
+    gateApproved([...earlierCommands][0]);
+  if (olderCommand.size > 0 && !keptUnderEarlierCommand) {
+    for (const unit of units) {
+      if (olderCommand.has(unit)) errors.push(`${unit}: batch was not checked with the authorized Construction Verification Command.`);
+    }
+  }
+  const ready = errors.length === 0;
+  const changedOnly = !ready && errors.every((error) => driftErrors.has(error));
+  const approved = ready && (keptUnderEarlierCommand || gateApproved(verificationCommand?.sha256));
+  const result: SwarmCheckpoint = {
+    batch, units, fingerprint, ready, approved, human_required: humanRequired, errors, changed_after_check: changedOnly,
+  };
+  return { result, root, intent, rows, floor, floors, enabled, verificationCommand, commandSha256s, accepted };
 }
 
 export function resolveSwarmCheckpoint(
@@ -262,17 +345,22 @@ export function askSwarmCheckpoint(pd: string, batch: number, units: string[], s
   return locked(pd, (selection) => {
     const current = snapshot(pd, batch, units);
     if (!current.enabled) throw new Error("Swarm checkpoints are not enabled for this execution policy.");
-    if (!current.result.ready) throw new Error(`Swarm checkpoint is not ready: ${current.result.errors.join(" ")}`);
+    // A batch whose files changed after it was checked cannot be approved
+    // under strict, but the person can still send it back for changes.
+    if (!current.result.ready && !current.result.changed_after_check) {
+      throw new Error(`Swarm checkpoint is not ready: ${current.result.errors.join(" ")}`);
+    }
+    const notices = recordAcceptedChanges(pd, current.accepted);
     withdrawProtectedQuestions(pd, session);
     appendAuditEntryUnlocked("DECISION_RECORDED", {
       Checkpoint: "Swarm Batch Approval", Stage: STAGE, "Batch number": String(batch),
       Units: current.result.units.join(", "), Fingerprint: current.result.fingerprint,
-      Session: session, Options: "Approve,Request Changes",
+      Session: session, Options: current.result.ready ? "Approve,Request Changes" : "Request Changes",
     }, pd, selection.intent, selection.space);
     mintProtectedQuestion(pd, {
       kind: "checkpoint-approval", session, target: approvalTarget(current.result, current.commandSha256s),
     });
-    return current.result;
+    return notices.length > 0 ? { ...current.result, notices } : current.result;
   });
 }
 
@@ -301,45 +389,55 @@ function recheck(
 }
 
 export function approveSwarmCheckpoint(
-  pd: string, batch: number, units: string[], userInput?: string, session = "",
+  pd: string, batch: number, units: string[], reply?: string, session = "",
 ): SwarmCheckpoint {
+  // The conductor read the person's reply and reports their approval; the
+  // receipt records it beside the person's own words from the human-turn hook.
   return locked(pd, (selection) => {
     const current = snapshot(pd, batch, units);
     if (!current.result.ready) throw new Error(`Swarm checkpoint is not ready: ${current.result.errors.join(" ")}`);
-    const humanRequired = current.result.human_required || userInput !== undefined;
+    const humanRequired = current.result.human_required || reply !== undefined;
+    let words: string | undefined;
     if (humanRequired) {
-      if (userInput !== "Approve") throw new Error('Swarm checkpoint requires the exact "Approve" choice.');
       requireProtectedResponse(pd, session, {
-        kind: "checkpoint-approval", targetDigest: protectedTargetDigest(approvalTarget(current.result, current.commandSha256s)), choice: userInput,
+        kind: "checkpoint-approval", targetDigest: protectedTargetDigest(approvalTarget(current.result, current.commandSha256s)), choice: "Approve",
       });
+      words = readProtectedResponse(pd, session)?.words;
     } else if (current.result.approved) {
       return current.result;
     }
     const after = recheck(pd, batch, units, current, selection.root);
+    const notices = recordAcceptedChanges(pd, after.accepted);
     appendAuditEntryUnlocked("GATE_APPROVED", {
       ...fields(after),
       ...(humanRequired ? { Session: session } : {}),
-      ...(userInput === "Approve" ? { "User Input": userInput } : { Autonomous: "true" }),
+      ...(humanRequired ? { "User Input": "Approve" } : { Autonomous: "true" }),
+      ...(words ? { "Person Reply": words } : {}),
     }, pd, selection.intent, selection.space);
     if (humanRequired) consumeProtectedQuestion(pd, session);
-    return snapshot(pd, batch, units).result;
+    const result = snapshot(pd, batch, units).result;
+    return notices.length > 0 ? { ...result, notices } : result;
   });
 }
 
 export function rejectSwarmCheckpoint(
-  pd: string, batch: number, units: string[], userInput: string, reason: string, session = "",
+  pd: string, batch: number, units: string[], _reply: string, givenReason: string, session = "",
 ): SwarmCheckpoint {
-  if (userInput !== "Request Changes") throw new Error('Swarm checkpoint requires the exact "Request Changes" choice.');
-  if (isNonAnswer(reason) || reason.length > 8192 || hasUnsafeSingleLineCharacter(reason) ||
-    selfAttributedDecisionMarker(reason, "rejection")) {
-    throw new Error("Swarm rejection requires a nonblank human reason on one line.");
-  }
+  // The conductor read the person's reply as a change request. The reason is
+  // the conductor's --reason when given, otherwise the person's own words.
   return locked(pd, (selection) => {
     const current = snapshot(pd, batch, units);
     if (!current.enabled) throw new Error("Swarm checkpoints are not enabled for this execution policy.");
     requireProtectedResponse(pd, session, {
-      kind: "checkpoint-approval", targetDigest: protectedTargetDigest(approvalTarget(current.result, current.commandSha256s)), choice: userInput,
+      kind: "checkpoint-approval", targetDigest: protectedTargetDigest(approvalTarget(current.result, current.commandSha256s)), choice: "Request Changes",
     });
+    const words = readProtectedResponse(pd, session)?.words;
+    const reason = givenReason.trim() || changeRequestWords(words);
+    const userInput = "Request Changes";
+    if (isNonAnswer(reason) || reason.length > 8192 || hasUnsafeSingleLineCharacter(reason) ||
+      selfAttributedDecisionMarker(reason, "rejection")) {
+      throw new Error("Swarm Request Changes needs what the person asked to change, on one line, in --reason.");
+    }
     const after = recheck(pd, batch, units, current, selection.root, false);
     appendAuditEntries(after.result.units.map((unit) => ({
       eventType: "GATE_REJECTED",
@@ -347,6 +445,7 @@ export function rejectSwarmCheckpoint(
         ...fields(after), Unit: unit, ...claimAttemptFields(pd, unit),
         Session: session,
         "User Input": userInput, Reason: reason, Feedback: reason,
+        ...(words ? { "Person Reply": words } : {}),
       },
     })), pd, selection.intent, selection.space);
     consumeProtectedQuestion(pd, session);

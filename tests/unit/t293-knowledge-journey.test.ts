@@ -39,7 +39,12 @@
 // test agree with a fiction). Generous timeouts: this spawns dozens of
 // processes, and the oversized-file phase alone writes >32 MiB.
 
-import { afterEach, describe, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { afterEach, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { type SpawnSyncReturns, spawnSync } from "node:child_process";
 import {
   existsSync,
@@ -51,6 +56,8 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const REPO_ROOT = join(import.meta.dir, "..", "..");
 const CLAUDE_TOOLS = join(REPO_ROOT, "dist", "claude", ".claude", "tools");
@@ -89,7 +96,7 @@ function knowledge(p: string, args: string[]): SpawnSyncReturns<string> {
   return spawnSync(
     "bun",
     [AIDLC, "engine", "knowledge", ...args, "--project-dir", p, "--json"],
-    { encoding: "utf-8", env: CHILD_ENV },
+    { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8", env: CHILD_ENV },
   );
 }
 
@@ -109,7 +116,7 @@ function intentCreate(p: string, label: string): string {
   const r = spawnSync(
     "bun",
     [UTILITY, "intent-create", "--scope", "feature", "--arguments", label, "--project-dir", p],
-    { encoding: "utf-8", env: CHILD_ENV },
+    { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8", env: CHILD_ENV },
   );
   expect(r.status, `intent-create ${label} failed: ${r.stderr}`).toBe(0);
   const registry = JSON.parse(
@@ -260,7 +267,7 @@ describe("t293 the documented workflow, end to end, through the public dispatche
         expect(other.status, `deleting c.md must not disturb row ${id}`).not.toBe("tombstoned");
       }
     },
-    30_000,
+    NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
   );
 
   test(
@@ -304,7 +311,7 @@ describe("t293 the documented workflow, end to end, through the public dispatche
       const shown = run(p, "show rebound row content", ["show", id]);
       expect(shown.content).toBe("policy v2 moved and edited\n");
     },
-    30_000,
+    NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
   );
 
   test(
@@ -353,7 +360,7 @@ describe("t293 the documented workflow, end to end, through the public dispatche
       rows = checkInvariants(p, "after sync (oversized file genuinely deleted)");
       expect(rows.find((r) => r.id === id)?.status).toBe("tombstoned");
     },
-    60_000,
+    NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
   );
 
   test(
@@ -378,7 +385,7 @@ describe("t293 the documented workflow, end to end, through the public dispatche
       rows = checkInvariants(p, "after sync over a 21-document tree");
       expect(rows.length).toBe(total);
     },
-    60_000,
+    NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
   );
 
   test("a present non-regular source is refused, not tombstoned", () => {
@@ -400,5 +407,5 @@ describe("t293 the documented workflow, end to end, through the public dispatche
     const removed = run(p, "sync after actual removal", ["sync"]);
     expect((removed.changes as { id: string; change: string }[]).find((c) => c.id === id)?.change)
       .toBe("removed");
-  }, 30_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });

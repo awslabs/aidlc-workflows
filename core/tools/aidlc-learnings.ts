@@ -125,15 +125,17 @@ import {
   relativeMemoryPath,
   relativeRecordDir,
   resolveProjectDir,
+  resolveBoltDag,
   resolveWorkflowSelection,
   runtimeGraphPath,
+  constructionCheckpointsApply,
   spacesRoot,
   validSpaceFlag,
   withAuditLock,
   writeFileAtomic,
   harnessDir,
 } from "./aidlc-lib.ts";
-import { aidlcToolInvocation } from "./aidlc-runtime-paths.ts";
+import { constructionCheckpointKind, resolveConstructionCheckpoint } from "./aidlc-construction-checkpoints.ts";
 
 // --- Exit-code convention (plan §2) ---
 //   0 success
@@ -304,10 +306,12 @@ function readRuntimeStageRow(
 // Recomputing is exact, not a guess: compile derives the row's memory_path
 // itself, as relativeMemoryPath(<the stage's phase>, <slug>, <record prefix>)
 // (aidlc-runtime.ts). A recorded row still wins so a graph that knows better
-// keeps winning (the legacy flat layout), and the fallback says so on stderr —
-// the same recompute-and-warn posture aidlc-orchestrate.ts takes for a missing
-// or stale bolt_dag. The record prefix is resolved against the space + intent
-// PINNED at surface time, not the live cursor compile happens to read.
+// keeps winning (the legacy flat layout). The fallback is silent: the path is
+// exact and the graph compiles at the next transition, so there is nothing for
+// the person to do, and a harness that shows tool stderr (Codex) would repeat a
+// warning once per stage surfaced. The record prefix is resolved against the
+// space + intent PINNED at surface time, not the live cursor compile happens to
+// read.
 // A row that exists without a memory_path is corruption and still fails.
 function resolveMemoryPath(
   projectDir: string,
@@ -329,29 +333,48 @@ function resolveMemoryPath(
       1
     );
   }
-  const derived = relativeMemoryPath(
+  return relativeMemoryPath(
     stage.phase,
     slug,
     relativeRecordDir(projectDir, intent, space)
   );
-  process.stderr.write(
-    `aidlc-learnings: no compiled memory_path for "${slug}"; derived ${derived} from the ` +
-      `stage graph. runtime-graph.json is machine-local and is compiled at the next ` +
-      `transition — \`${aidlcToolInvocation("runtime")} compile\` rebuilds it now.\n`
-  );
-  return derived;
+}
+
+// A Construction checkpoint the person approves covers every stage its Unit
+// walked, while Current Stage waits on the first one until every Unit is past
+// it. A stage of the checkpoint now at its approval (ready, not yet approved)
+// is the one that just ran.
+function checkpointStage(projectDir: string, stateContent: string, slug: string): boolean {
+  if (!constructionCheckpointsApply(stateContent)) return false;
+  try {
+    const dag = resolveBoltDag(projectDir);
+    if (dag.state !== "ok") return false;
+    const units = dag.batches.flat();
+    return units.some((unit) => {
+      const kind = constructionCheckpointKind(stateContent, unit, units);
+      const checkpoint = resolveConstructionCheckpoint(projectDir, unit, kind, stateContent);
+      return checkpoint.ready && !checkpoint.approved && checkpoint.stages.includes(slug);
+    });
+  } catch {
+    return false;
+  }
 }
 
 // The §13 ritual runs while the just-completed stage is still the Active
 // (Current Stage) row at the approval gate. Reject a slug that isn't the
 // active one — the orchestrator must surface the stage it just ran.
-function assertActiveStage(stateContent: string, slug: string): void {
+function assertActiveStage(projectDir: string, stateContent: string, slug: string): void {
   const current = getField(stateContent, "Current Stage");
   if (current === null) {
     fail("state file has no Current Stage field", 1);
   }
-  if (current !== slug) {
-    fail(`slug mismatch: requested "${slug}" but Current Stage is "${current}"`, 1);
+  if (current !== slug && !checkpointStage(projectDir, stateContent, slug)) {
+    // --slug takes a stage's slug. When the value is no stage at all (an
+    // intent's record name is the usual one), name the active stage to pass.
+    const retry = !findStageBySlug(slug) && findStageBySlug(current)
+      ? `. Run it again with --slug ${current}.`
+      : "";
+    fail(`slug mismatch: requested "${slug}" but Current Stage is "${current}"${retry}`, 1);
   }
 }
 
@@ -382,7 +405,7 @@ function handleSurface(args: string[], projectDir: string): void {
     fail(`could not read state: ${errorMessage(e)}`, 1);
   }
 
-  assertActiveStage(stateContent, slug);
+  assertActiveStage(projectDir, stateContent, slug);
 
   const memRel = resolveMemoryPath(projectDir, slug, pinnedIntent, space);
   const memAbs = join(projectDir, memRel);
@@ -482,9 +505,17 @@ function narrowSelection(raw: unknown): Selection {
   if (!isRecord(raw)) {
     fail("selections-json malformed: each selection must be an object", 1);
   }
-  const candidateId = str(raw.candidate_id);
+  const namedCandidateId = str(raw.candidate_id);
+  const aliasId = str(raw.id);
+  if (namedCandidateId !== undefined && aliasId !== undefined && namedCandidateId !== aliasId) {
+    fail(
+      `selections-json malformed: selection has candidate_id ${JSON.stringify(namedCandidateId)} and id ${JSON.stringify(aliasId)}; id is an alias for candidate_id, so give one key or the same value`,
+      1,
+    );
+  }
+  const candidateId = namedCandidateId ?? aliasId;
   if (candidateId === undefined) {
-    fail("selections-json malformed: selection missing candidate_id", 1);
+    fail("selections-json malformed: selection missing candidate_id (surface emits it as `id`)", 1);
   }
   const source = raw.source === "user_addition" ? "user_addition" : raw.source === "orchestrator" ? "orchestrator" : undefined;
 

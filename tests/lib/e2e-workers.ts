@@ -8,7 +8,13 @@ import { tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep, win32 } from "node:path";
 import { resolveTuiRuntime, selectedTuiBackend } from "../harness/tui-runtime.ts";
 import { ensurePrivateRoot } from "../harness/tui-record-file.ts";
-import { LIVE_CLEANUP_TIMEOUT_MS } from "../harness/test-budget.ts";
+import {
+  FILE_DEADLINE_ENV,
+  remainingCleanupTimeoutMs,
+  NATIVE_TERMINAL_CLEANUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  NATIVE_PROCESS_CLEANUP_TIMEOUT_MS,
+} from "../harness/test-budget.ts";
 import type { IsolatedProcessRetirement } from "./e2e-process.ts";
 import { retainDeferredCodexFixtures } from "./e2e-deferred-cleanup.ts";
 
@@ -24,14 +30,28 @@ export interface E2eWorkerPool {
   workers: E2eWorker[];
   sourceRevision: string;
   sourceDirty: boolean;
+  reset(worker: E2eWorker): Promise<void>;
   dispose(preserve: boolean): Promise<void>;
 }
 
 // Enclose the terminal client's cleanup deadline plus startup/confirmation I/O.
-const NATIVE_CLEANUP_MS = LIVE_CLEANUP_TIMEOUT_MS;
+const NATIVE_CLEANUP_MS = NATIVE_STARTUP_TIMEOUT_MS + NATIVE_TERMINAL_CLEANUP_TIMEOUT_MS;
 const transportReceipts = new WeakMap<NodeJS.ProcessEnv, string>();
 const nativeRoots = new Map<string, string>();
 const pause = (ms: number) => new Promise<void>((done) => setTimeout(done, ms));
+
+async function removeWorkerTree(path: string, env = process.env): Promise<void> {
+  const deadline = Date.now() + remainingCleanupTimeoutMs(NATIVE_PROCESS_CLEANUP_TIMEOUT_MS, { env });
+  for (;;) {
+    try { await rm(path, { recursive: true, force: true }); return; }
+    catch (error) {
+      const remaining = deadline - Date.now();
+      if (remaining <= 0 || !["EBUSY", "ENOTEMPTY", "EPERM", "EACCES", "EMFILE", "ENFILE"].includes(
+        (error as NodeJS.ErrnoException).code ?? "")) throw error;
+      await pause(Math.min(100, remaining));
+    }
+  }
+}
 
 /** Keep headroom for results and runtime fixtures before admitting more work. */
 export function assertE2eDiskSpace(path: string, additionalBytes = 0): void {
@@ -85,7 +105,7 @@ export async function createE2eTemporaryRoot(candidates = [
 
 function command(
   bin: string, args: string[], cwd: string, env = process.env,
-  timeout = 60_000,
+  timeout = NATIVE_STARTUP_TIMEOUT_MS,
 ): Promise<{ code: number; stdout: string; stderr: string }> {
   return new Promise((accept, reject) => {
     const child = spawn(bin, args, {
@@ -251,8 +271,7 @@ export async function prepareE2eWorkers(
     const namespace = `aidlc-e2e-${process.pid}-${randomUUID().slice(0, 8)}`;
     // Copying sequentially bounds disk pressure; execution begins once the
     // snapshot is complete, never while another worker is regenerating it.
-    for (let id = 1; id <= count; id++) {
-      const workerRoot = join(root, `worker-${id}`);
+    const populate = async (workerRoot: string): Promise<void> => {
       await git(["clone", "--quiet", "--no-checkout", snapshot, workerRoot], source);
       await git(["read-tree", "HEAD"], workerRoot);
       for (const entry of readdirSync(snapshot)) {
@@ -260,6 +279,10 @@ export async function prepareE2eWorkers(
         await copySnapshotEntry(join(snapshot, entry), join(workerRoot, entry), snapshot);
       }
       await linkDependencies(dependencies, workerRoot);
+    };
+    for (let id = 1; id <= count; id++) {
+      const workerRoot = join(root, `worker-${id}`);
+      await populate(workerRoot);
       workers.push({ id, root: workerRoot, socket: `${namespace}-${id}`, sourceRoot: resolve(source) });
     }
     return {
@@ -267,15 +290,22 @@ export async function prepareE2eWorkers(
       workers,
       sourceRevision,
       sourceDirty,
+      async reset(worker) {
+        if (!workers.includes(worker)) throw new Error("Cannot reset a worker outside this pool");
+        // The caller confirms process/transport retirement before reusing a slot.
+        // Restore the whole checkout, including ignored generated files and .git.
+        await removeWorkerTree(worker.root);
+        await populate(worker.root);
+      },
       async dispose(preserve) {
-        if (!preserve) await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+        if (!preserve) await removeWorkerTree(root);
         writeFileSync(join(runDir, "e2e-worker-storage.json"), `${JSON.stringify({
           root, workers: count, snapshotBytes: copyBytes, retained: preserve,
         }, null, 2)}\n`);
       },
     };
   } catch (error) {
-    await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    await removeWorkerTree(root);
     throw error;
   }
 }
@@ -306,15 +336,18 @@ export function createE2eNativeRoot(artifactDir: string): string {
       failures.push(error);
     }
   }
-  throw new AggregateError(failures, "e2e needs an OS temporary directory with trusted native root ancestors");
+  // The runner prints only the aggregate's message, so carry each base's reason.
+  const reasons = failures.map((error) => `- ${error instanceof Error ? error.message : String(error)}`);
+  throw new AggregateError(failures, `e2e needs an OS temporary directory with trusted native root ancestors:\n${reasons.join("\n")}`);
 }
 
 export async function e2eWorkerEnvironment(
   worker: E2eWorker, file: string, artifactDir: string, inherited: NodeJS.ProcessEnv,
+  freshHome = false,
 ): Promise<NodeJS.ProcessEnv> {
   // Never inherit the operator's native namespace or trust artifact ancestors.
   // Keep launch records outside TEMP until authenticated cleanup has completed.
-  const nativeEnv = {
+  const nativeEnv: NodeJS.ProcessEnv = {
     ...normalizeE2eExternalPaths(inherited, worker.sourceRoot ?? process.cwd()),
     AIDLC_TEST_WORKER_ROOT: artifactDir,
     AIDLC_TUI_BUN_ROOT: createE2eNativeRoot(artifactDir),
@@ -326,8 +359,9 @@ export async function e2eWorkerEnvironment(
   // repository or parent application instructions. Logs can live in the
   // checkout; temporary projects must live outside it.
   const temp = await createE2eTemporaryRoot();
-  const profile = join(artifactDir, "claude-config");
-  await Promise.all([mkdir(temp, { recursive: true }), mkdir(profile, { recursive: true })]);
+  const home = join(temp, "home");
+  const profile = freshHome ? join(home, ".claude") : join(artifactDir, "claude-config");
+  await Promise.all([mkdir(temp, { recursive: true }), mkdir(profile, { recursive: true }), mkdir(artifactDir, { recursive: true })]);
   const env: NodeJS.ProcessEnv = {
     ...nativeEnv,
     AIDLC_TEST_PACKAGE_READY: "1",
@@ -344,8 +378,29 @@ export async function e2eWorkerEnvironment(
     AIDLC_KIRO_IDE_DIAGNOSTICS: join(artifactDir, "kiro-ide.ndjson"),
     AIDLC_KIRO_IDE_SCREENSHOT: join(artifactDir, "kiro-ide.png"),
   };
+  if (freshHome) {
+    const directories = {
+      HOME: home, USERPROFILE: home,
+      APPDATA: join(home, "AppData", "Roaming"), LOCALAPPDATA: join(home, "AppData", "Local"),
+      XDG_CONFIG_HOME: join(home, ".config"), XDG_CACHE_HOME: join(home, ".cache"),
+      XDG_DATA_HOME: join(home, ".local", "share"), XDG_STATE_HOME: join(home, ".local", "state"),
+      CODEX_HOME: join(home, ".codex"), OPENCODE_CONFIG_DIR: join(home, ".config", "opencode"),
+    };
+    await Promise.all(Object.values(directories).map(path => mkdir(path, { recursive: true })));
+    Object.assign(env, directories);
+    // Preserve broker routing without sharing a mutable configuration file.
+    if (nativeEnv.AWS_CONFIG_FILE) {
+      const aws = join(home, ".aws");
+      await mkdir(aws, { recursive: true });
+      env.AWS_CONFIG_FILE = join(aws, "config");
+      await cp(nativeEnv.AWS_CONFIG_FILE, env.AWS_CONFIG_FILE);
+    }
+  }
   // An inherited explicit trace path would make unrelated workers overwrite it.
   delete env.AIDLC_SDK_TRACE_FILE;
+  // The Windows live legs switch on the hook phase trace (scripts/ci-live-sandbox.ts);
+  // each file's hooks write into its own artifacts, so a stall names its test.
+  if (env.AIDLC_TEST_HOOK_TRACE === "1") env.AIDLC_HOOK_TRACE_DIR = join(artifactDir, "hook-trace");
   return env;
 }
 
@@ -368,7 +423,7 @@ export async function finishE2eTemporaryFiles(
     // Archives are diagnostics, never a live namespace: copied inode identities
     // cannot authorize commands. Copy before deleting either root or fixtures.
     await cp(root, join(artifactDir, "tui-bun"), { recursive: true });
-    await rm(dirname(root), { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    await removeWorkerTree(dirname(root), env);
     nativeRoots.delete(resolve(artifactDir));
     transportReceipts.delete(env);
   } else {
@@ -377,7 +432,7 @@ export async function finishE2eTemporaryFiles(
   if (deferred) return deferred;
   const source = env.TEMP!;
   if (!preserve) {
-    await rm(source, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    await removeWorkerTree(source, env);
     return;
   }
   const destination = join(artifactDir, "retained-fixtures");
@@ -386,7 +441,7 @@ export async function finishE2eTemporaryFiles(
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "EXDEV") throw error;
     await cp(source, destination, { recursive: true });
-    await rm(source, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    await removeWorkerTree(source, env);
   }
   return destination;
 }
@@ -452,14 +507,16 @@ async function cleanupNativeTransports(worker: E2eWorker, env: NodeJS.ProcessEnv
   if (!root) return undefined;
   const ids = nativeSessionIds(root);
   if (!ids.length) return nativeInventorySignature(root);
-  const [{ bunSessionPaths }, { acquireNativeLock }] = await Promise.all([
+  const [{ bunSessionPaths, requestBunSessionStop }, { acquireNativeLock }, { nativeCleanupDeadlineMs }] = await Promise.all([
     import("../harness/tui-bun-backend.ts"), import("../harness/tui-process-identity.ts"),
+    import("../harness/tui-bun-process.ts"),
   ]);
-  const nativeEnv = { ...env, AIDLC_TUI_BACKEND: "bun", AIDLC_KEEP_TEMP: "1" };
+  const nativeEnv: NodeJS.ProcessEnv = { ...env, AIDLC_TUI_BACKEND: "bun", AIDLC_KEEP_TEMP: "1" };
   const runtime = resolveTuiRuntime(join(worker.root, "tests", "harness", "tui-drive.ts"), { env: nativeEnv });
   const confirmed = new Map<string, string | null>();
   const results = await Promise.allSettled(ids.map(async (id) => {
-    const deadline = Date.now() + NATIVE_CLEANUP_MS;
+    const deadline = nativeCleanupDeadlineMs(NATIVE_CLEANUP_MS, undefined, env);
+    const cleanupEnv = { ...nativeEnv, [FILE_DEADLINE_ENV]: String(deadline) };
     let unlock: (() => void) | undefined;
     // start publishes its record before spawning the detached daemon. Its lock
     // closes on client death, so cleanup can distinguish an interrupted launch
@@ -468,7 +525,7 @@ async function cleanupNativeTransports(worker: E2eWorker, env: NodeJS.ProcessEnv
       try { unlock = await acquireNativeLock(join(root, `${id}.lock`)); }
       catch (error) {
         if (!String(error).includes("native lock already in progress") || Date.now() >= deadline) throw error;
-        await pause(100);
+        await pause(Math.max(0, Math.min(100, deadline - Date.now())));
       }
     }
     try {
@@ -494,31 +551,41 @@ async function cleanupNativeTransports(worker: E2eWorker, env: NodeJS.ProcessEnv
         return { record, text };
       };
       let lastFailure = "native daemon did not become ready";
-      while (Date.now() < deadline) {
+      do {
         const { record } = readRecord();
+        // The direct publication keeps the client's exact directory/token
+        // checks and never needs a new subprocess allowance just to signal.
+        if (requestBunSessionStop(record.session!, cleanupEnv, deadline) !== record.token) {
+          throw new Error(`e2e native session ownership changed before stop: ${join(root, id)}`);
+        }
+        readRecord();
+        if (Date.now() >= deadline) break;
         const killed = await command(runtime.bin, [
           ...runtime.prefix, "kill", "--session", record.session!,
-        ], worker.root, nativeEnv, Math.max(1, deadline - Date.now()));
+        ], worker.root, cleanupEnv, Math.max(1, deadline - Date.now()));
         readRecord(); // A missing/replaced record must never become a no-op success.
-        if (killed.code === 0 && Date.now() < deadline) {
+        const killedAt = Date.now();
+        if (killed.code === 0 && killedAt < deadline) {
           const remaining = Math.max(1, deadline - Date.now());
           const dead = await command(runtime.bin, [
             ...runtime.prefix, "wait-dead", "--session", record.session!,
-            "--timeout-ms", String(Math.min(15_000, remaining)),
-          ], worker.root, nativeEnv, remaining);
+            "--timeout-ms", String(remaining),
+          ], worker.root, cleanupEnv, remaining);
           const final = readRecord();
           if (dead.code === 0 && final.record.cleanupComplete === true) {
             confirmed.set(id, final.text);
             return;
           }
           lastFailure = dead.stderr.trim() || "native cleanupComplete was not confirmed";
+        } else if (killed.code === 0) {
+          lastFailure = "the cleanup deadline passed before retirement could be confirmed";
         } else {
           lastFailure = killed.stderr.trim() || `native kill exited ${killed.code}`;
         }
         // kill writes the native stop marker if IPC is not ready. Retry through
         // the driver; never infer retirement from a missing endpoint or PID.
-        await pause(100);
-      }
+        await pause(Math.max(0, Math.min(100, deadline - Date.now())));
+      } while (Date.now() < deadline);
       throw new Error(`e2e native cleanup unconfirmed: ${join(root, id)}: ${lastFailure}`);
     } finally { unlock(); }
   }));
@@ -538,7 +605,7 @@ export async function cleanupE2eTransports(worker: E2eWorker, env: NodeJS.Proces
   const backend = selectedTuiBackend(env);
   if (backend === "tmux") {
     try {
-      const result = await command("tmux", ["-L", worker.socket, "kill-server"], worker.root, env);
+      const result = await command("tmux", ["-L", worker.socket, "kill-server"], worker.root, env, remainingCleanupTimeoutMs(NATIVE_CLEANUP_MS, { env }));
       if (result.code !== 0 && !/no server running|no such file|error connecting/i.test(result.stderr)) {
         throw new Error(`e2e tmux cleanup failed: ${result.stderr}`);
       }
@@ -547,27 +614,6 @@ export async function cleanupE2eTransports(worker: E2eWorker, env: NodeJS.Proces
     }
     if (receipt !== undefined) transportReceipts.set(env, receipt);
     return;
-  }
-  // A Windows test can explicitly select node-pty while the runner defaults
-  // to Bun. Inspect only its private legacy metadata, and resolve Node only
-  // when there is actually legacy work to reap.
-  const sessionRoot = join(env.TEMP!, "tui-drive");
-  const legacyRecords = process.platform === "win32" && existsSync(sessionRoot)
-    ? readdirSync(sessionRoot).map((entry) => join(sessionRoot, entry, "meta.json")).filter(existsSync)
-    : [];
-  const legacyEnv = { ...env, AIDLC_TUI_BACKEND: "node-pty", AIDLC_KEEP_TEMP: "0" };
-  const runtime = legacyRecords.length
-    ? resolveTuiRuntime(join(worker.root, "tests", "harness", "tui-drive.ts"), { env: legacyEnv })
-    : undefined;
-  for (const path of legacyRecords) {
-    const meta = JSON.parse(readFileSync(path, "utf8")) as { session?: string };
-    if (!meta.session) throw new Error(`e2e session metadata has no session: ${path}`);
-    const result = await command(
-      runtime!.bin,
-      [...runtime!.prefix, "kill", "--session", meta.session],
-      worker.root, legacyEnv, 60_000,
-    );
-    if (result.code !== 0) throw new Error(`e2e terminal cleanup failed: ${result.stderr}`);
   }
   if (receipt !== undefined) transportReceipts.set(env, receipt);
 }

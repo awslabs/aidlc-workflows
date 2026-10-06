@@ -46,7 +46,11 @@
 //   hooks/aidlc-write-audit-log.ts (emits ARTIFACT_UPDATED with the production File shape);
 //   tools/aidlc-audit.ts append (records the HUMAN_TURN event).
 
-import { deterministicCaseTimeoutMs } from "../harness/test-budget.ts";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
 import {
   afterEach,
   beforeEach,
@@ -84,7 +88,7 @@ import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts
 
 const BUN = process.execPath;
 
-setDefaultTimeout(Math.max(30_000, deterministicCaseTimeoutMs()));
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 const STATE = join(AIDLC_SRC, "tools", "aidlc-state.ts");
 const ORCHESTRATE = join(AIDLC_SRC, "tools", "aidlc-orchestrate.ts");
 const AUDIT = join(AIDLC_SRC, "tools", "aidlc-audit.ts");
@@ -106,6 +110,7 @@ function guarded(proj: string, args: string[]): { rc: number; out: string } {
   delete env.AIDLC_SKIP_REVISION_BACKSTOP;
   delete env.AIDLC_DISABLE_ENSEMBLE_EVIDENCE;
   const r = spawnSync(BUN, [STATE, ...args, "--project-dir", proj], {
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     encoding: "utf-8",
     env,
   });
@@ -121,6 +126,7 @@ function guardedReport(proj: string, args: string[]): { rc: number; out: string 
   delete env.AIDLC_SKIP_REVISION_BACKSTOP;
   delete env.AIDLC_DISABLE_ENSEMBLE_EVIDENCE;
   const r = spawnSync(BUN, [ORCHESTRATE, "report", ...args, "--project-dir", proj], {
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     encoding: "utf-8",
     env,
   });
@@ -135,6 +141,7 @@ function guardedNoBackstop(proj: string, args: string[]): { rc: number; out: str
   env.AIDLC_SKIP_REVISION_BACKSTOP = "1";
   env.AIDLC_ALLOW_DIRECT_STATE_TRANSITIONS = "1";
   const r = spawnSync(BUN, [STATE, ...args, "--project-dir", proj], {
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     encoding: "utf-8",
     env,
   });
@@ -153,7 +160,7 @@ function recordStageStarted(proj: string, slug: string): void {
   const r = spawnSync(
     BUN,
     [AUDIT, "append", "STAGE_STARTED", "--field", `Stage=${slug}`, "--project-dir", proj],
-    { encoding: "utf-8", env: process.env },
+    { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8", env: process.env },
   );
   if ((r.status ?? -1) !== 0) {
     throw new Error(`recordStageStarted failed: ${r.stdout ?? ""}${r.stderr ?? ""}`);
@@ -189,7 +196,7 @@ function recordReview(proj: string, slug: string, iteration: number): void {
     "--project-dir",
     proj,
   ];
-  const request = spawnSync(BUN, args, { encoding: "utf-8", env: process.env });
+  const request = spawnSync(BUN, args, { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8", env: process.env });
   if ((request.status ?? -1) !== 0) {
     throw new Error(`recordReview request failed: ${request.stdout ?? ""}${request.stderr ?? ""}`);
   }
@@ -210,6 +217,7 @@ function recordReview(proj: string, slug: string, iteration: number): void {
     "utf-8",
   );
   const verdict = spawnSync(BUN, [...args, "--verdict", "READY"], {
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     encoding: "utf-8",
     env: process.env,
   });
@@ -268,6 +276,7 @@ function recordPipelineLinks(proj: string, repos: string[] = []): void {
         );
       }
       const result = spawnSync(BUN, args, {
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
         encoding: "utf-8",
         env: process.env,
       });
@@ -288,7 +297,7 @@ function recordPipelineLinks(proj: string, repos: string[] = []): void {
 function fireArtifact(proj: string, absFile: string): void {
   const env = { ...process.env, CLAUDE_PROJECT_DIR: proj };
   const json = JSON.stringify({ tool_name: "Edit", tool_input: { file_path: absFile } });
-  spawnSync(BUN, [HOOK], { input: json, encoding: "utf-8", env });
+  spawnSync(BUN, [HOOK], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), input: json, encoding: "utf-8", env });
 }
 
 // Absolute path of a stage artifact under the seeded record:
@@ -574,6 +583,28 @@ describe("t205: approve-time gate-revision backstop", () => {
     expect(eventCount(proj, "GATE_APPROVED")).toBe(1);
   });
 
+  // --- Scenario 7b: Guard Policy off (or relaxed): an edit at the open gate is
+  // a change the person's Approve accepts, never a Request Changes they did not
+  // give. No backfill; the approval commits as given.
+  test("7b: under Guard Policy off the person's Approve stands with no backfilled rejection", () => {
+    const statePath = seededStateFile(proj);
+    writeFileSync(statePath, readFileSync(statePath, "utf-8").replace(
+      "- **Change Control**: strict (from scope feature)",
+      "- **Guard Policy**: off (from scope feature)",
+    ));
+    const slug = field(proj, "Current Stage");
+    guarded(proj, ["checkbox", `${slug}=in-progress`]);
+    guarded(proj, ["gate-start", slug]);
+    recordHumanTurn(proj);
+    fireArtifact(proj, feasibilityArtifact(proj, PRIMARY_ARTIFACT));
+    recordHumanTurn(proj);
+    const r = guarded(proj, ["approve", slug, "--user-input", "change the title and approve"]);
+    expect(r.rc, r.out).toBe(0);
+    expect(field(proj, "Revision Count")).toBe("0");
+    expect(eventCount(proj, "GATE_REJECTED")).toBe(0);
+    expect(eventCount(proj, "GATE_APPROVED")).toBe(1);
+  });
+
   // --- Scenario 8: NO anchor at all (the gate was opened via a bare checkbox
   // flip, and the fixture never emitted STAGE_STARTED either) -> the predicate
   // has no anchor -> false. Documents the accepted false negative: the backstop
@@ -712,6 +743,8 @@ describe("t205: approve-time gate-revision backstop", () => {
     cleanupTestProject(proj);
     proj = createTestProject();
     seedStateFile(proj, "state-brownfield-init-done.md");
+    // Pin collaborators on (fixture scope ships them off) so reverse-engineering keeps its architect pipeline link.
+    writeFileSync(seededStateFile(proj), readFileSync(seededStateFile(proj), "utf-8").replace(/^- \*\*Scope\*\*: .*/m, "- **Scope**: enterprise"));
     rewriteIntentRepos(proj, ["repo-a", "repo-b"]);
     const slug = field(proj, "Current Stage");
     expect(slug).toBe("reverse-engineering");
@@ -772,6 +805,8 @@ describe("t205: approve-time gate-revision backstop", () => {
     cleanupTestProject(proj);
     proj = createTestProject();
     seedStateFile(proj, "state-brownfield-init-done.md");
+    // Pin collaborators on (fixture scope ships them off) so reverse-engineering keeps its architect pipeline link.
+    writeFileSync(seededStateFile(proj), readFileSync(seededStateFile(proj), "utf-8").replace(/^- \*\*Scope\*\*: .*/m, "- **Scope**: enterprise"));
     rewriteIntentRepos(proj, ["repo-a"]);
     const slug = field(proj, "Current Stage");
     expect(slug).toBe("reverse-engineering");

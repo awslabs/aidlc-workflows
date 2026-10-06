@@ -11,10 +11,10 @@
 //   drive:     `/aidlc can we skip market research? we already know this
 //              market` - no compose verb, no flag, pure conversation.
 //   conductor: classifies the input as a plan-reshape (not a continuation -
-//              a verbatim forward would silently run the current stage),
-//              routes via `next compose "<their words>"` or the sanctioned
-//              fast path, presents the approve gate, and on approve lands
-//              the flip through the recompose verb.
+//              a verbatim forward would silently run the current stage)
+//              that names its stage, so it runs `next --skip`, which lands
+//              the flip through the recompose verb at once: the person
+//              named the change, so nothing asks them first.
 //   disk:      market-research's suffix is SKIP (a suffix edit - the marker
 //              stays pending); derived fields rebuilt; RECOMPOSED audited;
 //              the cursor never moved and no stage advanced.
@@ -22,7 +22,12 @@
 // It SPENDS TOKENS - driveAidlc drives the real /aidlc on Opus/Bedrock. Gated
 // on claude-CLI presence.
 
-import { liveCaseTimeoutMs } from "../harness/test-budget.ts";
+import {
+  liveCaseTimeoutMs,
+  LIVE_LONG_OPERATION_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+  fileCleanupReserveMs,
+} from "../harness/test-budget.ts";
 import { describe, expect, test } from "bun:test";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -32,11 +37,11 @@ import {
 } from "../harness/fixtures.ts";
 import { driveAidlc, readStateFile } from "../harness/sdk-drive.ts";
 
-const TIMEOUT_S = Number.parseInt(process.env.AIDLC_TEST_TIMEOUT ?? "900", 10);
-const LIVE_WORK_TIMEOUT_MS = (Number.isFinite(TIMEOUT_S) ? TIMEOUT_S : 900) * 1000;
-const DRIVE_TIMEOUT_MS = Math.max(180_000, LIVE_WORK_TIMEOUT_MS - 15_000);
-// Preserve the existing work allowance and reserve fixture/startup/cleanup separately.
-const TEST_TIMEOUT_MS = liveCaseTimeoutMs(Math.max(LIVE_WORK_TIMEOUT_MS, DRIVE_TIMEOUT_MS));
+const TIMEOUT_S = Number.parseInt(process.env.AIDLC_TEST_TIMEOUT ?? String(LIVE_LONG_OPERATION_TIMEOUT_MS / 1000), 10);
+const LIVE_WORK_TIMEOUT_MS = Number.isFinite(TIMEOUT_S) && TIMEOUT_S > 0
+  ? TIMEOUT_S * 1000 : LIVE_LONG_OPERATION_TIMEOUT_MS;
+// Setup and cleanup allowances belong to the case; calls share its remaining work.
+const TEST_TIMEOUT_MS = liveCaseTimeoutMs(LIVE_WORK_TIMEOUT_MS);
 
 const APPROVE_ALL = {
   kind: "byHeader" as const,
@@ -58,6 +63,7 @@ describe("t197 chat-first in-flight reshape (plain chat, no compose verb, sdk li
   test(
     "a conversational skip request reaches the gate and lands via the recompose verb; no stage advances",
     async () => {
+      const deadlineMs = Date.now() + TEST_TIMEOUT_MS;
       // A real created workflow (not a fixture): create a feature-scope intent, so
       // market-research is a pending grid-EXECUTE stage ahead of the
       // cursor (intent-capture).
@@ -88,7 +94,9 @@ describe("t197 chat-first in-flight reshape (plain chat, no compose verb, sdk li
           {
             projectDir: proj,
             answerScript: APPROVE_ALL,
-            timeoutMs: DRIVE_TIMEOUT_MS,
+            timeoutMs: remainingOperationTimeoutMs(LIVE_WORK_TIMEOUT_MS, {
+              deadlineMs, reserveMs: fileCleanupReserveMs(TEST_TIMEOUT_MS), phase: "integration SDK drive",
+            }),
             stopAfterToolResult: {
               toolName: "Bash",
               resultIncludes: "Recomposed:",
@@ -97,9 +105,9 @@ describe("t197 chat-first in-flight reshape (plain chat, no compose verb, sdk li
           },
         );
 
-        // The gate fired; the flip landed through the deterministic verb
+        // No question first; the flip landed through the deterministic verb
         // (its verbatim summary in a tool result), not a prose state edit.
-        expect(r.askedQuestions.length).toBeGreaterThanOrEqual(1);
+        expect(r.askedQuestions).toHaveLength(0);
         const recomposeCalls = r.toolResults.filter(
           (t) => t.toolName === "Bash" && t.resultText.includes("Recomposed:"),
         );

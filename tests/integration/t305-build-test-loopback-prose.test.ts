@@ -236,21 +236,18 @@ describe("t305 construction protocol module — Build-and-Test failure loop-back
     expect(CONSTRUCTION_PROTOCOL).toContain(
       "The jump opens a new stage attempt",
     );
+    // The engine asks again: nothing for the conductor to blank or re-mint.
     expect(CONSTRUCTION_PROTOCOL).toContain(
-      "blank `[Answer]:`, regenerate the target-bound fingerprint",
+      "after the repaired plan is written, `next` asks the\nperson for Plan Approval again before generation",
     );
-    expect(CONSTRUCTION_PROTOCOL).toContain(
-      "Plan Approval decision/human-turn/answer receipt\nsequence again before generation",
-    );
+    expect(CONSTRUCTION_PROTOCOL).not.toContain("regenerate the target-bound fingerprint");
     expect(CODE_GENERATION).toContain(
       "**Build-and-Test loop-back:** The construction protocol module",
     );
     expect(CODE_GENERATION).toContain(
-      "reset the Plan\n> Approval `[Answer]:`",
+      "`next` asks for Plan Approval again under\n> the replayed directive",
     );
-    expect(CODE_GENERATION).toContain(
-      "run the full decision/human-turn/answer receipt",
-    );
+    expect(CODE_GENERATION).not.toContain("decision/human-turn/answer receipt");
   });
 
   test("cross-file references point to the conditional Construction module", () => {

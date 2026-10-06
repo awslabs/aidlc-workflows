@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { existsSync, lstatSync, readFileSync, readdirSync } from "node:fs";
-import { join, relative } from "node:path";
+import { basename, join, relative } from "node:path";
 import { VERSION_ID } from "./aidlc-channel.ts";
 
 export type ProjectionStamp = {
@@ -12,7 +12,8 @@ export type ProjectionStamp = {
 
 export type RootIntegration = {
   path: string;
-  policy: "managed-block" | "json-map" | "json-array" | "whole-file";
+  /** jsonc-settings adds each shipped top-level key that is absent and never changes a key someone else set. */
+  policy: "managed-block" | "json-map" | "json-array" | "whole-file" | "jsonc-settings";
   marker?: string;
   /** union combines shipped line sets (.gitignore); identical lets any declaring harness own byte-identical content; absent is exclusive. */
   shared?: "union" | "identical";
@@ -24,11 +25,39 @@ export type RootIntegration = {
   };
 };
 
+// A 2.10.0 install checks every release it installs against its own policy
+// list and refuses a policy it does not know, so `aidlc update` from 2.10.0
+// would fail. A release writes a policy added since then in `extendedPolicy`,
+// with "whole-file", which 2.10.0 accepts, in `policy`; reading a projection
+// puts the real policy back when this release knows it, and otherwise keeps
+// "whole-file", so this release can install a later one in turn.
+const EXTENDED_POLICIES: readonly string[] = ["jsonc-settings"];
+
+export function writtenRootIntegration<T extends { policy: string }>(
+  integration: T,
+): T | (Omit<T, "policy"> & { policy: "whole-file"; extendedPolicy: string }) {
+  return EXTENDED_POLICIES.includes(integration.policy)
+    ? { ...integration, policy: "whole-file", extendedPolicy: integration.policy }
+    : integration;
+}
+
+export function readRootIntegrations(value: unknown): unknown {
+  if (!Array.isArray(value)) return value;
+  return value.map((item: unknown) => {
+    if (!item || typeof item !== "object" || !("extendedPolicy" in item)) return item;
+    const { extendedPolicy, ...integration } = item as Record<string, unknown>;
+    if (typeof extendedPolicy !== "string" || !EXTENDED_POLICIES.includes(extendedPolicy)) return integration;
+    return { ...integration, policy: extendedPolicy };
+  });
+}
+
 export type ProjectionDescriptor = {
   schemaVersion: 1;
   distribution: string;
   productName: string;
   configNextStep: string;
+  firstRunSteps?: string[];
+  editorTerminalApp?: string;
   harnessDir: string;
   onboarding?: string;
   managedDirectories: string[];
@@ -36,9 +65,205 @@ export type ProjectionDescriptor = {
   rootIntegrations: RootIntegration[];
 };
 
+const QUOTED_OR_BARE_PATH = String.raw`(?:"[^"\r\n]+"|'[^'\r\n]+'|[^\s"';&|]+)`;
+const CLAUDE_AIDLC_TS_PATH =
+  String.raw`(?:\$CLAUDE_PROJECT_DIR[\\/])?\.claude[\\/]tools[\\/]aidlc\.ts`;
+const AIDLC_TS_PATH =
+  `(?:"${CLAUDE_AIDLC_TS_PATH}"|'${CLAUDE_AIDLC_TS_PATH}'|${CLAUDE_AIDLC_TS_PATH})`;
+const AIDLC_DISPATCHER = String.raw`(?:aidlc(?:\.exe|\.cmd)?|bun\s+${AIDLC_TS_PATH})`;
+const AIDLC_HOOK_COMMAND = new RegExp(
+  String.raw`^\s*${AIDLC_DISPATCHER}\s+engine\s+(?:hook\s+([A-Za-z0-9_-]+)|(statusline))\s*$`,
+);
+const AIDLC_HOOK_COMMAND_PREFIX = new RegExp(
+  String.raw`^\s*${AIDLC_DISPATCHER}\s+engine\s+(?:hook\s+([A-Za-z0-9_-]+)|(statusline))(?=\s|$)`,
+);
+const LEGACY_AIDLC_HOOK_COMMAND = new RegExp(
+  String.raw`^\s*bun\s+(${QUOTED_OR_BARE_PATH})\s*$`,
+);
+export const LEGACY_AIDLC_HOOK_TARGETS: ReadonlySet<string> = new Set([
+  "audit-logger",
+  "continue-workflow",
+  "deliver-stage-rules",
+  "dispatch-rules",
+  "fold-usage",
+  "log-subagent",
+  "mint-presence",
+  "plan-approval-guard",
+  "rebuild-stage-graph",
+  "record-human-turn",
+  "review-freeze",
+  "reviewer-scope",
+  "run-sensors",
+  "runtime-compile",
+  "sensor-fire",
+  "session-end",
+  "session-start",
+  "state-transition-guard",
+  "statusline",
+  "stop",
+  "sync-statusline",
+  "sync-workflow-state",
+  "validate-state",
+  "write-audit-log",
+]);
+export const AIDLC_HOOK_ENTRY_PREFIX = "hooksAidlc:";
+
+export function aidlcDispatcherTarget(
+  command: string,
+  allowTrailingContent = false,
+  projectDir?: string,
+): string | null {
+  const match = (allowTrailingContent ? AIDLC_HOOK_COMMAND_PREFIX : AIDLC_HOOK_COMMAND)
+    .exec(command);
+  const target = match?.[1] ?? match?.[2];
+  if (target !== undefined) return target;
+  if (projectDir === undefined) return null;
+  const normalized = command.trim().replaceAll("\\", "/");
+  const dispatcherPath = join(projectDir, ".claude", "tools", "aidlc.ts")
+    .replaceAll("\\", "/");
+  const prefixes = [
+    `bun ${dispatcherPath}`,
+    `bun "${dispatcherPath}"`,
+    `bun '${dispatcherPath}'`,
+  ];
+  const prefix = prefixes.find((candidate) =>
+    normalized.startsWith(`${candidate} `)
+  );
+  if (prefix === undefined) return null;
+  const suffix = normalized.slice(prefix.length).trimStart();
+  const suffixMatch = new RegExp(
+    allowTrailingContent
+      ? String.raw`^engine\s+(?:hook\s+([A-Za-z0-9_-]+)|(statusline))(?=\s|$)`
+      : String.raw`^engine\s+(?:hook\s+([A-Za-z0-9_-]+)|(statusline))\s*$`,
+  ).exec(suffix);
+  return suffixMatch?.[1] ?? suffixMatch?.[2] ?? null;
+}
+
+export function aidlcHookTarget(command: string, projectDir?: string): string | null {
+  const dispatcher = aidlcDispatcherTarget(command, false, projectDir);
+  if (dispatcher !== null) return dispatcher;
+  return legacyAidlcHookTarget(command);
+}
+
+export function legacyAidlcHookTarget(command: string): string | null {
+  const legacy = LEGACY_AIDLC_HOOK_COMMAND.exec(command);
+  if (!legacy) return null;
+  const path = legacy[1].replace(/^(['"])([\s\S]*)\1$/, "$2").replaceAll("\\", "/");
+  const hook =
+    /^\$CLAUDE_PROJECT_DIR\/\.claude\/hooks\/aidlc-([A-Za-z0-9_-]+)\.ts$/.exec(path);
+  const target = hook?.[1];
+  return target !== undefined && LEGACY_AIDLC_HOOK_TARGETS.has(target) ? target : null;
+}
+
+export function isCustomClaudeStatusLine(
+  value: unknown,
+  projectDir?: string,
+): boolean {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const statusLine = value as Record<string, unknown>;
+  return statusLine.type === "command" &&
+    typeof statusLine.command === "string" &&
+    statusLine.command.trim() !== "" &&
+    aidlcHookTarget(statusLine.command, projectDir) !== "statusline";
+}
+
+/** Keep event, matcher, and item metadata while excluding project hook entries. */
+export function aidlcHookRegistrations(
+  hooks: unknown,
+  ownedTargets?: ReadonlySet<string>,
+  projectDir?: string,
+): Record<string, unknown[]> {
+  const registrations: Record<string, unknown[]> = {};
+  if (!hooks || typeof hooks !== "object" || Array.isArray(hooks)) return registrations;
+  for (const [event, groups] of Object.entries(hooks)) {
+    if (!Array.isArray(groups)) continue;
+    const owned = groups.flatMap((group: unknown) => {
+      if (!group || typeof group !== "object" || Array.isArray(group)) return [];
+      const entry = group as Record<string, unknown>;
+      if (!Array.isArray(entry.hooks)) return [];
+      const items = entry.hooks.filter((item: unknown) =>
+        item !== null && typeof item === "object" && "command" in item &&
+        typeof item.command === "string" &&
+        (() => {
+          const target = aidlcHookTarget(item.command, projectDir);
+          return target !== null && (!ownedTargets || ownedTargets.has(target));
+        })()
+      );
+      return items.length > 0 ? [{ ...entry, hooks: items }] : [];
+    });
+    if (owned.length > 0) registrations[event] = owned;
+  }
+  return registrations;
+}
+
+function canonical(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`;
+  if (value && typeof value === "object") {
+    const object = value as Record<string, unknown>;
+    return `{${Object.keys(object).sort().map((key) =>
+      `${JSON.stringify(key)}:${canonical(object[key])}`
+    ).join(",")}}`;
+  }
+  return JSON.stringify(value);
+}
+
+/** Hash each shipped hook target with its exact events, matchers, commands, and metadata. */
+export function aidlcHookRegistrationHashes(
+  hooks: unknown,
+  ownedTargets?: ReadonlySet<string>,
+  projectDir?: string,
+): Record<string, string> {
+  const registrations = new Map<string, unknown[]>();
+  if (!hooks || typeof hooks !== "object" || Array.isArray(hooks)) return {};
+  for (const [event, groups] of Object.entries(hooks)) {
+    if (!Array.isArray(groups)) continue;
+    for (const group of groups) {
+      if (!group || typeof group !== "object" || Array.isArray(group)) continue;
+      const entry = group as Record<string, unknown>;
+      if (!Array.isArray(entry.hooks)) continue;
+      const groupMetadata = Object.fromEntries(
+        Object.entries(entry).filter(([key]) => key !== "hooks"),
+      );
+      for (const hook of entry.hooks) {
+        if (!hook || typeof hook !== "object" || Array.isArray(hook)) continue;
+        const command = (hook as Record<string, unknown>).command;
+        if (typeof command !== "string") continue;
+        const target = aidlcHookTarget(command, projectDir);
+        if (target === null || (ownedTargets && !ownedTargets.has(target))) continue;
+        const rows = registrations.get(target) ?? [];
+        rows.push({ event, ...groupMetadata, hook });
+        registrations.set(target, rows);
+      }
+    }
+  }
+  return Object.fromEntries(
+    [...registrations.entries()].sort(([left], [right]) => left.localeCompare(right))
+      .map(([target, rows]) => [target, sha256Bytes(canonical(rows))]),
+  );
+}
+
+// A JSON file saved from Windows PowerShell 5.1 or some editors starts with a
+// UTF-8 byte order mark, which JSON.parse refuses. It is read past, and a file
+// AI-DLC writes back keeps it.
+const BOM = "\uFEFF";
+
+export function withoutBom(text: string): string {
+  return text.startsWith(BOM) ? text.slice(1) : text;
+}
+
+export function readJsonFile(path: string): unknown {
+  return JSON.parse(withoutBom(readFileSync(path, "utf-8")));
+}
+
+// The JSON text AI-DLC writes for a file, with the byte order mark the file
+// had (`like` is its text before the write).
+export function jsonFileText(value: unknown, like = ""): string {
+  return `${like.startsWith(BOM) ? BOM : ""}${JSON.stringify(value, null, 2)}\n`;
+}
+
 function parseJson<T>(path: string): T {
   try {
-    return JSON.parse(readFileSync(path, "utf-8")) as T;
+    return readJsonFile(path) as T;
   } catch (error) {
     throw new Error(`${path}: invalid JSON (${error instanceof Error ? error.message : String(error)})`);
   }
@@ -102,6 +327,20 @@ export function isSafeOnboardingPath(value: unknown, harnessDir: string): value 
     value.startsWith(`${harnessDir}/`);
 }
 
+// A managed block names a file inside the project and a marker that is a
+// plain word, so nothing read or written through it (the team's file, its copy
+// in root-blocks) leaves the project. Config's projection check and the
+// engine's root-file fallback both hold a managed block to this.
+export function managedBlockIsSafe(integration: Pick<RootIntegration, "path" | "marker" | "policy">): boolean {
+  try {
+    safeRelativePath(integration.path, "root integration path");
+  } catch {
+    return false;
+  }
+  return integration.policy === "managed-block" && typeof integration.marker === "string" &&
+    /^[a-z0-9-]+$/.test(integration.marker);
+}
+
 export function validateProjectionDescriptor(
   root: string,
   stamp: ProjectionStamp,
@@ -119,6 +358,17 @@ export function validateProjectionDescriptor(
     descriptor.configNextStep.trim().length === 0
   ) {
     throw new Error(`${root}: projection identity is invalid`);
+  }
+  if (
+    (descriptor.firstRunSteps !== undefined &&
+      (!Array.isArray(descriptor.firstRunSteps) ||
+        descriptor.firstRunSteps.length === 0 ||
+        descriptor.firstRunSteps.some((line) => typeof line !== "string"))) ||
+    (descriptor.editorTerminalApp !== undefined &&
+      (typeof descriptor.editorTerminalApp !== "string" ||
+        !/^[a-z0-9][a-z0-9 .-]*$/.test(descriptor.editorTerminalApp)))
+  ) {
+    throw new Error(`${root}: projection first-run guidance is invalid`);
   }
   safeRelativePath(stamp.harnessDir, "harnessDir", true);
   if (descriptor.onboarding !== undefined) {
@@ -199,7 +449,11 @@ export function validateProjectionDescriptor(
     }
     declare(safe);
     assertProjectionPathHasNoSymlinks(root, safe);
-    const path = join(root, safe);
+    // Checked even when the file and its copy are absent: the marker names the copy.
+    if (integration.policy !== "managed-block" && integration.marker !== undefined) {
+      throw new Error(`${root}: ${safe} has a marker, which only a managed block takes`);
+    }
+    const path = shippedRootIntegrationPath(root, descriptor.harnessDir, integration);
     if (
       !existsSync(path) &&
       (integration.optional || options.allowMissingRootIntegrations)
@@ -209,13 +463,13 @@ export function validateProjectionDescriptor(
     if (!existsSync(path) || !lstatSync(path).isFile()) {
       throw new Error(`${root}: root integration is missing or invalid: ${safe}`);
     }
-    if (!["managed-block", "json-map", "json-array", "whole-file"].includes(integration.policy)) {
+    if (!["managed-block", "json-map", "json-array", "whole-file", "jsonc-settings"].includes(integration.policy)) {
       throw new Error(`${root}: ${safe} has an invalid integration policy`);
     }
-    if (
-      integration.policy === "managed-block" &&
-      (typeof integration.marker !== "string" || !/^[a-z0-9-]+$/.test(integration.marker))
-    ) {
+    if (integration.policy === "jsonc-settings" && !jsoncRootMembers(readFileSync(path, "utf-8"))?.members.length) {
+      throw new Error(`${root}: ${safe} must ship a JSON object with at least one setting`);
+    }
+    if (integration.policy === "managed-block" && !managedBlockIsSafe(integration)) {
       throw new Error(`${root}: ${safe} has an invalid managed-block marker`);
     }
     if (
@@ -263,6 +517,198 @@ export function validateProjectionDescriptor(
   }
 }
 
+// The default space's memory files the team writes: Practices Discovery
+// affirms practices into team.md, and practices and learnings land in
+// project.md. The engine creates them from its bundled memory seed when they
+// are missing (ensureWorkspaceDirs), so a copy runtime need not ship them.
+export const TEAM_MEMORY_FILES = ["team.md", "project.md"] as const;
+
+// The copy channel copies runtime/<harness>/ over the project, with no config
+// step to merge anything, so its archive leaves out each file a copy would
+// replace with the shipped one: a file a team's editor owns (a jsonc-settings
+// integration such as .vscode/settings.json), a team file AI-DLC adds its own
+// part to (a managed-block integration such as .gitignore or AGENTS.md; its
+// part ships in root-blocks and is added by config or the engine), the team's
+// memory files, and the person's chosen space (aidlc/active-space; a missing
+// one reads as "default").
+export function copyChannelOmits(
+  descriptor: Pick<ProjectionDescriptor, "rootIntegrations">,
+): Set<string> {
+  return new Set([
+    ...descriptor.rootIntegrations
+      .filter((integration) =>
+        integration.policy === "jsonc-settings" || integration.policy === "managed-block" ||
+        copyStartsWithout(integration))
+      .map((integration) => integration.path),
+    ...TEAM_MEMORY_FILES.map((name) => `aidlc/spaces/default/memory/${name}`),
+    "aidlc/active-space",
+  ]);
+}
+
+// An optional settings file a copy starts without, as `config` does by
+// default: Claude Code's .mcp.json, whose servers would otherwise all be
+// offered at first start. Its shipped list still travels in root-blocks.
+export function copyStartsWithout(integration: Pick<RootIntegration, "policy" | "optional">): boolean {
+  return integration.policy === "json-map" && integration.optional === true;
+}
+
+// Every managed-block root file a release ships, and every file a copy starts
+// without, is also copied, byte for byte, to
+// <harnessDir>/tools/data/root-blocks/<marker or file name>, inside the
+// harness folder a copy brings along. Only a managed block has a marker.
+export function rootBlockPath(
+  harnessRoot: string,
+  integration: Pick<RootIntegration, "path" | "marker" | "policy">,
+): string {
+  const name = integration.policy === "managed-block" && integration.marker
+    ? integration.marker
+    : basename(integration.path);
+  return join(harnessRoot, "tools", "data", "root-blocks", name);
+}
+
+// Where a projection holds the bytes it ships for a root integration: the root
+// file, or for one the copy runtime leaves out, its root-blocks copy.
+export function shippedRootIntegrationPath(
+  root: string,
+  harnessDir: string,
+  integration: Pick<RootIntegration, "path" | "marker" | "policy" | "optional">,
+): string {
+  const path = join(root, integration.path);
+  if ((integration.policy !== "managed-block" && !copyStartsWithout(integration)) || existsSync(path)) return path;
+  const block = rootBlockPath(join(root, harnessDir), integration);
+  return existsSync(block) ? block : path;
+}
+
+export function managedBlockMarkers(
+  path: string,
+  identity: string,
+): { begin: string; end: string } {
+  return path.endsWith(".md")
+    ? {
+        begin: `<!-- BEGIN AI-DLC:${identity} -->`,
+        end: `<!-- END AI-DLC:${identity} -->`,
+      }
+    : {
+        begin: `# BEGIN AI-DLC:${identity}`,
+        end: `# END AI-DLC:${identity}`,
+      };
+}
+
+// One harness's shipped .gitignore lines combined with each sibling's: the
+// first (by name) is the base, and each other adds only the entries not seen,
+// so the part keeps its one comment line.
+export function unionBlocks(contributors: Array<{ distribution: string; text: string }>): string {
+  contributors.sort((left, right) => left.distribution.localeCompare(right.distribution));
+  let base = contributors[0].text.trim();
+  const seen = new Set<string>();
+  for (const line of base.split(/\r?\n/)) {
+    const entry = line.trim();
+    if (entry && !entry.startsWith("#")) seen.add(entry);
+  }
+  for (let index = 1; index < contributors.length; index++) {
+    const contributor = contributors[index];
+    const extras: string[] = [];
+    for (const line of contributor.text.split(/\r?\n/)) {
+      const entry = line.trim();
+      if (!entry || entry.startsWith("#") || seen.has(entry)) continue;
+      extras.push(entry);
+      seen.add(entry);
+    }
+    if (extras.length > 0) base += `\n${extras.join("\n")}`;
+  }
+  return base;
+}
+
+// The ignore entries of a .gitignore part, without its comments and blank lines.
+function ignoreEntries(text: string): string {
+  return text.split(/\r?\n/).map((line) => line.trim()).filter((line) => line && !line.startsWith("#")).sort().join("\n");
+}
+
+// Earlier releases shipped a generic template above their own "# AI-DLC"
+// section of .gitignore. When that text is replaced, the template lines stay
+// in the file as the project's own, so nothing they ignored is un-ignored.
+function linesAboveOwnSection(text: string, nextBody: string, newline: string): string {
+  const lines = text.split(/\r?\n/);
+  const own = lines.findIndex((line) => line.startsWith("# AI-DLC"));
+  if (own <= 0) return "";
+  const above = lines.slice(0, own).join(newline).trim();
+  return above && !nextBody.includes(above) ? above : "";
+}
+
+// The one rule for AI-DLC's part of a team file: replace the text between its
+// markers, adopt an unmarked file that is exactly a release's, refuse unmarked
+// AI-DLC text it cannot tell from the team's (except in .gitignore), and
+// otherwise add the marked part after the team's content (a missing file gets
+// only that part). Used by config and by the engine for a copy that was never
+// configured.
+export function mergeBlock(
+  path: string,
+  current: string,
+  shipped: string,
+  identity: string,
+  legacyWholeFileHashes: readonly string[] = [],
+): {
+  value?: string;
+  currentHash?: string;
+  nextHash?: string;
+  adoptedLegacy?: boolean;
+  /** The present part holds exactly what a release shipped. */
+  currentBlockShipped?: boolean;
+  /** An earlier release's template lines were kept above AI-DLC's part. */
+  keptOwnLines?: boolean;
+  error?: string;
+} {
+  const { begin, end } = managedBlockMarkers(path, identity);
+  const begins = current.split(begin).length - 1;
+  const ends = current.split(end).length - 1;
+  if (begins > 1 || ends > 1 || (begins === 1) !== (ends === 1)) {
+    return { error: "managed markers are missing, duplicated, or malformed" };
+  }
+  const beginAt = current.indexOf(begin);
+  const endAt = current.indexOf(end);
+  const newline = current.includes("\r\n") ? "\r\n" : "\n";
+  const body = shipped.trim().replace(/\r?\n/g, newline);
+  const block = `${begin}${newline}${body}${newline}${end}`;
+  if (beginAt >= 0) {
+    if (endAt < beginAt) return { error: "managed end marker precedes its begin marker" };
+    const currentBlock = current.slice(beginAt, endAt + end.length);
+    const currentBody = current.slice(beginAt + begin.length, endAt).trim();
+    const kept = path === ".gitignore" ? linesAboveOwnSection(currentBody, body, newline) : "";
+    return {
+      value: `${current.slice(0, beginAt)}${kept ? `${kept}${newline}${newline}` : ""}${block}${
+        current.slice(endAt + end.length)
+      }`,
+      currentHash: sha256Bytes(currentBlock),
+      nextHash: sha256Bytes(block),
+      // A .gitignore part with exactly the shipped entries is a release's own,
+      // whatever notes an earlier release put between them.
+      currentBlockShipped: currentBody === body ||
+        legacyWholeFileHashes.includes(sha256Bytes(`${currentBody.replace(/\r\n/g, "\n")}\n`)) ||
+        (path === ".gitignore" && ignoreEntries(currentBody) === ignoreEntries(body)),
+      ...(kept ? { keptOwnLines: true } : {}),
+    };
+  }
+  if (current.length > 0 && legacyWholeFileHashes.includes(sha256Bytes(current))) {
+    const kept = path === ".gitignore" ? linesAboveOwnSection(current.trim(), body, newline) : "";
+    return {
+      value: `${kept ? `${kept}${newline}${newline}` : ""}${block}${newline}`,
+      nextHash: sha256Bytes(block),
+      adoptedLegacy: true,
+      ...(kept ? { keptOwnLines: true } : {}),
+    };
+  }
+  // Ignore rules can remain user-owned even when they mention AI-DLC. Append
+  // our marked block without claiming or rewriting that existing prefix.
+  if (path !== ".gitignore" && /\baidlc\b|AI-DLC/i.test(current)) {
+    return { error: "legacy root integration ambiguous; move or delete the unmarked AI-DLC content" };
+  }
+  const prefix = current.length === 0 || current.endsWith(newline) ? current : `${current}${newline}`;
+  return {
+    value: `${prefix}${prefix ? newline : ""}${block}${newline}`,
+    nextHash: sha256Bytes(block),
+  };
+}
+
 export function projectionFiles(root: string): {
   stamp: ProjectionStamp;
   descriptor: ProjectionDescriptor;
@@ -279,6 +725,7 @@ export function projectionFiles(root: string): {
   const data = join(root, harnessDir, "tools", "data");
   const stamp = parseJson<ProjectionStamp>(join(data, "aidlc-stamp.json"));
   const descriptor = parseJson<ProjectionDescriptor>(join(data, "aidlc-projection.json"));
+  descriptor.rootIntegrations = readRootIntegrations(descriptor.rootIntegrations) as RootIntegration[];
   if (
     stamp.schemaVersion !== 1 ||
     descriptor.schemaVersion !== 1 ||
@@ -308,6 +755,28 @@ export function sha256File(path: string): string {
   return sha256Bytes(readFileSync(path));
 }
 
+// What a host tool installs for itself inside a directory AI-DLC manages:
+// a package manager's dependencies and their records (opencode, for one,
+// installs its plugin dependencies under .opencode/ at first start), and a
+// nested .gitignore it writes for them. No release ships any of these, so
+// config never copies them as release files, never owns them, and never
+// removes them.
+const HOST_TOOL_NAMES = new Set([
+  "node_modules",
+  "package.json",
+  "package-lock.json",
+  "bun.lock",
+  "bun.lockb",
+  "yarn.lock",
+  "pnpm-lock.yaml",
+]);
+
+export function hostToolPath(rel: string): boolean {
+  return rel.split(/[\\/]/).some((segment, index) =>
+    HOST_TOOL_NAMES.has(segment) || (segment === ".gitignore" && index > 0)
+  );
+}
+
 export function walkFiles(root: string): string[] {
   const files: string[] = [];
   const visit = (dir: string): void => {
@@ -321,4 +790,186 @@ export function walkFiles(root: string): string[] {
   };
   visit(root);
   return files;
+}
+
+// --- JSONC settings files ----------------------------------------------------
+// A settings file such as .vscode/settings.json is JSONC and belongs to the
+// team: comments, trailing commas, and layout stay as they are. Edits are made
+// in place on the text, one top-level member at a time, never by rewriting it.
+
+type JsoncMember = {
+  key: string;
+  start: number;
+  valueStart: number;
+  valueEnd: number;
+  /** After the member's trailing comma when it has one, else valueEnd. */
+  end: number;
+};
+
+function skipJsoncTrivia(text: string, at: number): number {
+  let index = at;
+  while (index < text.length) {
+    const char = text[index];
+    if (char === " " || char === "\t" || char === "\n" || char === "\r" || char === "\uFEFF") {
+      index++;
+    } else if (char === "/" && text[index + 1] === "/") {
+      while (index < text.length && text[index] !== "\n") index++;
+    } else if (char === "/" && text[index + 1] === "*") {
+      const end = text.indexOf("*/", index + 2);
+      if (end < 0) return -1;
+      index = end + 2;
+    } else {
+      break;
+    }
+  }
+  return index;
+}
+
+function skipJsoncString(text: string, at: number): number {
+  for (let index = at + 1; index < text.length; index++) {
+    if (text[index] === "\\") index++;
+    else if (text[index] === '"') return index + 1;
+    else if (text[index] === "\n") return -1;
+  }
+  return -1;
+}
+
+function skipJsoncValue(text: string, at: number): number {
+  if (text[at] === '"') return skipJsoncString(text, at);
+  if (text[at] === "{" || text[at] === "[") {
+    let depth = 0;
+    let index = at;
+    while (index < text.length) {
+      const char = text[index];
+      if (char === '"') {
+        index = skipJsoncString(text, index);
+        if (index < 0) return -1;
+        continue;
+      }
+      if (char === "/" && (text[index + 1] === "/" || text[index + 1] === "*")) {
+        index = skipJsoncTrivia(text, index);
+        if (index < 0) return -1;
+        continue;
+      }
+      if (char === "{" || char === "[") depth++;
+      else if (char === "}" || char === "]") {
+        depth--;
+        if (depth === 0) return index + 1;
+      }
+      index++;
+    }
+    return -1;
+  }
+  let index = at;
+  while (index < text.length && !/[\s,}\]/]/.test(text[index])) index++;
+  return index > at ? index : -1;
+}
+
+/** The root object's top-level members, or null when the text is not one JSONC object. */
+export function jsoncRootMembers(text: string): { open: number; close: number; members: JsoncMember[] } | null {
+  let index = skipJsoncTrivia(text, 0);
+  if (index < 0 || text[index] !== "{") return null;
+  const open = index;
+  index = skipJsoncTrivia(text, index + 1);
+  const members: JsoncMember[] = [];
+  while (index >= 0 && index < text.length && text[index] !== "}") {
+    if (text[index] !== '"') return null;
+    const start = index;
+    const keyEnd = skipJsoncString(text, index);
+    if (keyEnd < 0) return null;
+    let key: unknown;
+    try {
+      key = JSON.parse(text.slice(start, keyEnd));
+    } catch {
+      return null;
+    }
+    index = skipJsoncTrivia(text, keyEnd);
+    if (index < 0 || text[index] !== ":") return null;
+    const valueStart = skipJsoncTrivia(text, index + 1);
+    if (valueStart < 0 || valueStart >= text.length) return null;
+    const valueEnd = skipJsoncValue(text, valueStart);
+    if (valueEnd < 0) return null;
+    index = skipJsoncTrivia(text, valueEnd);
+    if (index < 0) return null;
+    let end = valueEnd;
+    if (text[index] === ",") {
+      end = index + 1;
+      index = skipJsoncTrivia(text, index + 1);
+      if (index < 0) return null;
+    } else if (text[index] !== "}") {
+      return null;
+    }
+    members.push({ key: String(key), start, valueStart, valueEnd, end });
+  }
+  if (index < 0 || text[index] !== "}") return null;
+  if (skipJsoncTrivia(text, index + 1) !== text.length) return null;
+  return { open, close: index, members };
+}
+
+/** The parsed value of one top-level member, or undefined when it is absent. */
+export function jsoncSettingValue(text: string, key: string): unknown {
+  const root = jsoncRootMembers(text);
+  const member = root?.members.findLast((candidate) => candidate.key === key);
+  if (!member) return undefined;
+  try {
+    return Bun.JSONC.parse(text.slice(member.valueStart, member.valueEnd));
+  } catch {
+    return undefined;
+  }
+}
+
+/** Add `key` as the root object's last member, keeping every other byte. */
+export function insertJsoncSetting(text: string, key: string, valueJson: string): string | null {
+  const source = text.trim() ? text : "{}\n";
+  const root = jsoncRootMembers(source);
+  if (!root) return null;
+  const eol = source.includes("\r\n") ? "\r\n" : "\n";
+  const lineStartOf = (position: number): number => source.lastIndexOf("\n", position - 1) + 1;
+  const first = root.members[0];
+  const firstPrefix = first ? source.slice(lineStartOf(first.start), first.start) : "";
+  const indent = first && firstPrefix.trim() === "" && firstPrefix.length > 0 ? firstPrefix : "  ";
+  const member = `${JSON.stringify(key)}: ${valueJson}`;
+  const closeLine = lineStartOf(root.close);
+  const closeOnOwnLine = closeLine > root.open && source.slice(closeLine, root.close).trim() === "";
+  let next = closeOnOwnLine
+    ? `${source.slice(0, closeLine)}${indent}${member}${eol}${source.slice(closeLine)}`
+    : `${source.slice(0, root.close).trimEnd()}${eol}${indent}${member}${eol}${source.slice(root.close)}`;
+  const last = root.members.at(-1);
+  if (last && last.end === last.valueEnd) {
+    next = `${next.slice(0, last.valueEnd)},${next.slice(last.valueEnd)}`;
+  }
+  return next;
+}
+
+/** Replace one top-level member's value in place. */
+export function replaceJsoncSetting(text: string, key: string, valueJson: string): string | null {
+  const member = jsoncRootMembers(text)?.members.findLast((candidate) => candidate.key === key);
+  if (!member) return null;
+  return `${text.slice(0, member.valueStart)}${valueJson}${text.slice(member.valueEnd)}`;
+}
+
+/** Remove one top-level member (and its line when it stood alone), keeping every other byte. */
+export function removeJsoncSetting(text: string, key: string): string | null {
+  const root = jsoncRootMembers(text);
+  if (!root) return null;
+  const at = root.members.findIndex((candidate) => candidate.key === key);
+  if (at < 0) return text;
+  const member = root.members[at];
+  let start = member.start;
+  let end = member.end;
+  const lineStart = text.lastIndexOf("\n", start - 1) + 1;
+  if (text.slice(lineStart, start).trim() === "") {
+    start = lineStart;
+    let after = end;
+    while (text[after] === " " || text[after] === "\t") after++;
+    if (text[after] === "\r" && text[after + 1] === "\n") end = after + 2;
+    else if (text[after] === "\n") end = after + 1;
+  }
+  let next = `${text.slice(0, start)}${text.slice(end)}`;
+  // The last member had no comma of its own: drop the one before it instead.
+  const previous = root.members[at - 1];
+  if (member.end === member.valueEnd && previous && previous.end !== previous.valueEnd) {
+    next = `${next.slice(0, previous.end - 1)}${next.slice(previous.end)}`;
+  }
+  return next;
 }

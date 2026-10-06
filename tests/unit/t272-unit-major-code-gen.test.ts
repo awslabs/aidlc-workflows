@@ -62,8 +62,17 @@ import {
   artifactFilename,
   latestMainWorkflowStageRunFloorForProject,
   stateDigest,
+  unitCompletedReceipts,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
-import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS } from "../harness/test-budget.ts";
+import {
+  renderTestingContract,
+  resolveTestingPosture,
+} from "../../dist/claude/.claude/tools/aidlc-testing-posture.ts";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 resetAidlcEnv();
@@ -240,6 +249,7 @@ function activeDirectiveMarker(proj: string): Record<string, unknown> {
 
 function runReport(proj: string, args: string[]): Directive {
   const r = spawnSync(BUN, [ORCH, "report", ...args, "--project-dir", proj], {
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     encoding: "utf-8",
     env: (() => {
       const e: NodeJS.ProcessEnv = {
@@ -267,6 +277,7 @@ function runStatusSync(proj: string, stage: string): void {
     BUN,
     [UTILITY, "set-status", "--stage", stage, "--project-dir", proj],
     {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
       encoding: "utf-8",
       env: {
         ...process.env,
@@ -276,6 +287,23 @@ function runStatusSync(proj: string, stage: string): void {
   );
   if ((r.status ?? -1) !== 0) {
     throw new Error(`status sync failed: ${r.stdout ?? ""}${r.stderr ?? ""}`);
+  }
+}
+
+// A Unit's built Code Generation step: a ready plan beside its instructions,
+// and the start and completion receipts the build records in this attempt
+// (seeded at the stage's run floor, as case 1 seeds swarm convergence).
+function buildUnit(proj: string, unit: string): void {
+  const dir = join(seededRecordDir(proj), "construction", unit, "code-generation");
+  writeFileSync(
+    join(dir, "code-generation-plan.md"),
+    "# Code Generation Plan\n\n## Steps\n\n- [x] Step 1: build `src/" + unit + ".ts`\n\n" +
+      renderTestingContract(resolveTestingPosture(proj)),
+  );
+  writeFileSync(join(dir, "unit-test-instructions.md"), "# Unit Test Instructions\n\nRun the tests.\n");
+  const floor = latestMainWorkflowStageRunFloorForProject(proj, "code-generation", true, unit);
+  for (const event of ["UNIT_STARTED", "UNIT_COMPLETED"]) {
+    appendAuditEntry(event, { Stage: "code-generation", Unit: unit, "Run floor": floor }, proj);
   }
 }
 
@@ -311,7 +339,7 @@ function logReviewReady(proj: string, stage: string, unit: string): void {
     ...process.env,
     AIDLC_DISABLE_PLAN_APPROVAL_GUARD: "1",
   };
-  const request = spawnSync(BUN, args, { encoding: "utf-8", env });
+  const request = spawnSync(BUN, args, { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8", env });
   if ((request.status ?? -1) !== 0) {
     throw new Error(`review request failed: ${request.stdout ?? ""}${request.stderr ?? ""}`);
   }
@@ -325,6 +353,7 @@ function logReviewReady(proj: string, stage: string, unit: string): void {
     "utf-8",
   );
   const verdict = spawnSync(BUN, [...args, "--verdict", "READY"], {
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     encoding: "utf-8",
     env,
   });
@@ -386,6 +415,9 @@ describe("t272 code-generation joins the unit-major walk", () => {
     expect(last.stage).toBe("code-generation");
     expect(last.gate).toBe(true);
     expect(last.unit).toBe("beta");
+    // Covered by artifacts alone, with no Unit built in this attempt: the beat
+    // may still apply a fix, so it is not marked as having nothing to build.
+    expect(last.build_settled).toBeUndefined();
     const floor = latestMainWorkflowStageRunFloorForProject(
       proj,
       "code-generation",
@@ -410,6 +442,30 @@ describe("t272 code-generation joins the unit-major walk", () => {
     // Post-cascade the workflow has left the per-unit block entirely.
     const next = runNext(proj);
     expect(next.stage).toBe("build-and-test");
+  });
+
+  test("5: once every Unit is built, the last Code Generation gate never asks about a plan again", () => {
+    const proj = seedProject();
+    seedBoltDag(proj, ["alpha", "beta"]);
+    coverFullGrid(proj, ["alpha", "beta"]);
+    for (const unit of ["alpha", "beta"]) {
+      for (const stage of BLOCK) logReviewReady(proj, stage, unit);
+      buildUnit(proj, unit);
+    }
+    expect([...unitCompletedReceipts(proj, "code-generation")].sort()).toEqual(["alpha", "beta"]);
+    // Approving each design stage moves the state, so the directive the engine
+    // last published is out of date when the Code Generation gate comes round.
+    for (const stage of BLOCK.slice(0, 4)) {
+      const gate = runNext(proj);
+      expect(gate.stage).toBe(stage);
+      expect(runReport(proj, ["--stage", stage, "--result", "approved"]).kind).not.toBe("error");
+    }
+    const last = runNext(proj);
+    expect(last).toMatchObject({
+      kind: "run-stage", stage: "code-generation", gate: true, unit: "beta", build_settled: true,
+    });
+    expect(last.plan_approval).toBeUndefined();
+    expect(last.ask_type).toBeUndefined();
   });
 
   // 2: a degenerate block - every design stage completed ([x]) leaves

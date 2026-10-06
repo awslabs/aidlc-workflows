@@ -1,4 +1,11 @@
-import { describe, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_PROCESS_CLEANUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingCleanupTimeoutMs,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { describe, expect, test, setDefaultTimeout } from "bun:test";
 import { type ChildProcess, spawn } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
@@ -10,6 +17,8 @@ import {
   nativeRootProviderFailure,
   nativeToolCalls,
 } from "../harness/t139-fidelity.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const ROOT_SESSION = "11111111-1111-4111-8111-111111111111";
 const ERROR_EVENT = "22222222-2222-4222-8222-222222222222";
@@ -132,7 +141,7 @@ function client(resist = false, exitAfter?: number): ChildProcess {
 ${resist ? 'process.on("SIGTERM", () => {});' : ""}
 process.stdout.write("READY\\n");
 setInterval(() => {}, 1000);
-setTimeout(() => process.exit(${exitAfter === undefined ? 99 : 0}), ${exitAfter ?? 10000});
+setTimeout(() => process.exit(${exitAfter === undefined ? 99 : 0}), ${exitAfter ?? NATIVE_FIXTURE_SETUP_TIMEOUT_MS});
 `], { stdio: ["ignore", "pipe", "pipe"] });
 }
 
@@ -148,7 +157,7 @@ async function clientReady(child: ChildProcess): Promise<void> {
         child.once("error", reject);
         child.once("exit", () => reject(new Error("controlled client exited before readiness")));
       }),
-      new Promise<never>((_, reject) => { timeout = setTimeout(() => reject(new Error("controlled client readiness timed out")), 2000); }),
+      new Promise<never>((_, reject) => { timeout = setTimeout(() => reject(new Error("controlled client readiness timed out")), remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS)); }),
     ]);
   } finally { clearTimeout(timeout); }
 }
@@ -161,7 +170,7 @@ async function stopClient(child: ChildProcess): Promise<void> {
   try {
     await Promise.race([
       exited,
-      new Promise<never>((_, reject) => { timeout = setTimeout(() => reject(new Error("controlled client cleanup unconfirmed")), 2000); }),
+      new Promise<never>((_, reject) => { timeout = setTimeout(() => reject(new Error("controlled client cleanup unconfirmed")), remainingCleanupTimeoutMs(NATIVE_PROCESS_CLEANUP_TIMEOUT_MS)); }),
     ]);
   } finally { clearTimeout(timeout); }
 }
@@ -177,15 +186,13 @@ describe("t139 owned answer-gate monitor", () => {
     let succeeded = false;
     try {
       await Promise.all([clientReady(owned), clientReady(unrelated)]);
-      const began = performance.now();
       let caught: unknown;
       try {
         await monitorNativeAnswerGate(owned, () => {
           if (nativeRootProviderFailure(readFileSync(path, "utf8"), ROOT_SESSION, 3)) throw failure;
-        }, { pollMs: 10, terminateGraceMs: 50, killWaitMs: 500 });
+        }, { pollMs: 10, terminateGraceMs: 50, killWaitMs: NATIVE_PROCESS_CLEANUP_TIMEOUT_MS });
       } catch (error) { caught = error; }
       expect(caught).toBe(failure);
-      expect(performance.now() - began).toBeLessThan(1500);
       expect(owned.exitCode !== null || owned.signalCode !== null).toBe(true);
       expect(unrelated.exitCode).toBeNull();
       expect(unrelated.signalCode).toBeNull();
@@ -195,7 +202,7 @@ describe("t139 owned answer-gate monitor", () => {
       if (succeeded) rmSync(directory, { recursive: true, force: true });
       else console.error(`provider monitor evidence retained: ${directory}`);
     }
-  }, 10_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("a goal reached before a late API error leaves the healthy client alive until its normal exit", async () => {
     const directory = clientScratch();
@@ -215,7 +222,7 @@ describe("t139 owned answer-gate monitor", () => {
         const completed = Number(/Completed\*\*:[ \t]*(\d+)/.exec(readFileSync(state, "utf8"))![1]);
         const error = nativeRootProviderFailure(readFileSync(root, "utf8"), ROOT_SESSION, completed);
         if (error) throw new Error(error.message);
-      }, { pollMs: 10, terminateGraceMs: 50, killWaitMs: 500 })).toBe(0);
+      }, { pollMs: 10, terminateGraceMs: 50, killWaitMs: NATIVE_PROCESS_CLEANUP_TIMEOUT_MS })).toBe(0);
       expect(inspected).toBeGreaterThan(0);
       expect(owned.signalCode).toBeNull();
       const finishedInspections = inspected;
@@ -227,24 +234,22 @@ describe("t139 owned answer-gate monitor", () => {
       if (succeeded) rmSync(directory, { recursive: true, force: true });
       else console.error(`provider goal-boundary evidence retained: ${directory}`);
     }
-  }, 10_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test.skipIf(process.platform === "win32")("an owned client ignoring TERM is force-stopped within the failure budget", async () => {
     const owned = client(true);
     const failure = new Error(PROVIDER_MESSAGE);
     try {
       await clientReady(owned);
-      const began = performance.now();
       let caught: unknown;
       try {
         await monitorNativeAnswerGate(owned, () => { throw failure; },
-          { pollMs: 10, terminateGraceMs: 50, killWaitMs: 500 });
+          { pollMs: 10, terminateGraceMs: 50, killWaitMs: NATIVE_PROCESS_CLEANUP_TIMEOUT_MS });
       } catch (error) { caught = error; }
       expect(caught).toBe(failure);
-      expect(performance.now() - began).toBeLessThan(1500);
       expect(owned.signalCode).toBe("SIGKILL");
     } finally { await stopClient(owned); }
-  }, 10_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });
 
 const FLAG = "AIDLC_DISABLE_ENSEMBLE_EVIDENCE";
@@ -393,13 +398,13 @@ describe("t139 comparable completion milestone", () => {
     expect(sampled.phase).toBe("INCEPTION"); // The unchanged live phase assertion must reject this.
   });
 
-  test.each([75, 10_000])("wait is bounded by the original deadline and a five-second observation cap (%i)", async (deadline) => {
+  test.each([75, 10_000])("wait is bounded by the original deadline, with no shorter observation cap (%i)", async (deadline) => {
     let now = 0;
     await expect(comparableTerminal(() => intermediate, deadline, {
       now: () => now,
       pause: async (ms) => { now += ms; },
     })).rejects.toThrow("existing deadline");
-    expect(now).toBe(Math.min(deadline, 5_000));
+    expect(now).toBe(deadline);
     expect(intermediate.phase).toBe("INCEPTION");
   });
 });

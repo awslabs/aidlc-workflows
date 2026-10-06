@@ -13,7 +13,12 @@
 // predicates (normalizeManifestSourcePath, sourcePathIsExcluded) hold the
 // contracts aidlc-attest.ts resolve/anchor depend on.
 
-import { afterEach, describe, expect, test } from "bun:test";
+import {
+  NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { afterEach, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -32,6 +37,8 @@ import {
   writeUnitSourceSnapshot,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
+setDefaultTimeout(NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
+
 const dirs: string[] = [];
 
 afterEach(() => {
@@ -39,7 +46,7 @@ afterEach(() => {
 });
 
 function git(dir: string, args: string[]): void {
-  const result = spawnSync("git", ["-C", dir, ...args], { encoding: "utf-8" });
+  const result = spawnSync("git", ["-C", dir, ...args], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" });
   if (result.status !== 0) throw new Error(result.stderr || result.stdout);
 }
 

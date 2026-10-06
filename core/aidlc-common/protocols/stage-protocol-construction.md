@@ -22,18 +22,29 @@ prose. Follow the metadata on the current directive.
 Before ordinary body, questions, reviewer, learnings, or `gate: true` handling,
 load this module and apply these branches in order:
 
+An open stage gate with `gate_only: true` follows the Stage Protocol's
+open-gate re-entry before completion-only bookkeeping below. Its body and
+review are settled, not permission to approve the gate automatically. Preserve
+the team `unit_gate` and settled-swarm policies when those fields are present.
+
 1. **`directive.unit_gate`** uses the existing team-owned gate procedure below.
 2. **`directive.swarm_checkpoint`** uses the swarm module's **Batch checkpoint**
    procedure before ordinary body or settled-swarm handling. Approve or reject
    the completed batch, then `next`; never approve the whole stage for a batch.
 3. **`directive.construction_checkpoint`** uses **Unit and skeleton checkpoints**
    below. The Unit body has already run; do not regenerate it or report the
-   whole Code Generation stage complete for this Unit.
-4. **`directive.construction_policy.completion_only === true`** is bookkeeping
-   after recorded Unit approvals. It must also carry
+   whole Code Generation stage complete for this Unit. A checkpoint carrying
+   `rereview` re-checks the Unit's changed code or documents first, as
+   described there.
+4. **`directive.construction_policy.completion_only === true`** closes the stage
+   after its Units were approved. In a solo unit-major walk a bare `next`
+   records these gates itself once the last Unit is approved and returns the
+   next real step, so this directive comes only where it cannot (a change
+   notice to say, team-owned Units, a swarm's settle). It must also carry
    `human_completion_required: false`. Skip the body, questions, reviewer, and
-   learnings prompt. Report `awaiting-approval`, then `approved`, for the emitted
-   `directive.stage`, both without `--user-input`, and re-run `next`. If the
+   learnings prompt, and say nothing about this step. Report
+   `awaiting-approval`, then `approved`, for the emitted `directive.stage`,
+   both without `--user-input`, and re-run `next`. If the
    metadata contradicts itself or a report refuses, explain the error and stop;
    do not manufacture approval or retry generation.
 5. **`directive.construction_policy.offer_autonomy === true`** uses **Autonomy
@@ -48,8 +59,8 @@ load this module and apply these branches in order:
    `human_completion_required` selects whether the routine completion gate
    needs a human. When false, skip the learnings question and routine approval
    question, report `awaiting-approval` and `approved` without `--user-input`,
-   then `next`. This never waives an enabled summary stop, Plan Approval, or
-   verification command selection.
+   then `next`. This never waives an enabled summary stop, an enabled Plan
+   Approval, or verification command selection.
    An unfinished per-Unit iteration still completes its Unit receipt and calls
    `next`, without reporting the whole stage. When the policy is absent, use
    the legacy gate rules. All verification and tool failures stop the flow.
@@ -63,10 +74,9 @@ human decisions. Preserve the existing isolated-run branch for `single: true`.
 ### Execution is separate from approval
 
 New workflows default to `Construction Execution: serial`. Setting autonomy
-never changes execution or iteration order. To select swarm explicitly, the
-human chooses stage-major first, then the execution setting. Obtain a separate
-field/value consent using **Changing Construction policy** below before each
-setter during Construction:
+never changes execution or iteration order. Swarm needs stage-major first,
+then the execution setting; when the person asks for parallel Units, run both
+setters as **Changing Construction policy** below describes:
 
 ```bash
 {{INVOKE}} engine state set-construction-iteration stage-major
@@ -87,32 +97,28 @@ Only one protected question may be open per session. Asking any new question
 protected questions one at a time and wait for the answer before anything else.
 A withdrawn question must be asked again.
 
-During Construction, changing `Construction Checkpoints`, `Construction
-Execution`, or `Construction Iteration` requires the human's exact choice for
-that field and value. A recent unrelated human turn, another gate's approval,
-or autonomy never authorizes a policy change. Do not disable checkpoints to
-clear an execution refusal. For example, if the human wants checkpoints disabled:
+When the person asks in their own words to change `Construction Checkpoints`,
+`Construction Execution`, or `Construction Iteration` ("turn checkpoints off",
+"from here on, build one unit at a time", "run the Units in parallel"), do it
+in that turn: run the typed setter, then say its `notice` line to them word for
+word. Do not ask them to confirm it. For example:
 
 ```bash
-{{INVOKE}} engine log decision --stage "<directive.stage>" --checkpoint construction-policy --field "Construction Checkpoints" --value "disabled" --session "<session ID>" --decision "Change Construction Checkpoints to disabled?" --options "Approve,Request Changes"
-```
-
-Present **Approve** and **Request Changes** and wait for the human's offered
-choice in the invoking SessionStart session. After **Approve**, record and apply it:
-
-```bash
-{{INVOKE}} engine log answer --stage "<directive.stage>" --checkpoint construction-policy --field "Construction Checkpoints" --value "disabled" --session "<session ID>" --details "Approve"
 {{INVOKE}} engine state set-construction-checkpoints disabled
+{{INVOKE}} engine state set-construction-iteration unit-major
+{{INVOKE}} engine state set-construction-execution swarm
 ```
 
-After **Request Changes**, record the same answer with `--details "Request Changes"`
-and keep the existing policy. Substitute the exact field and value for execution
-or iteration changes, then use its typed setter. Each change needs its own
-current-workflow `CONSTRUCTION_POLICY_RECORDED` receipt. The setter spends the
-receipt by applying its value; another value, another session's response, a
-superseding proposal, or a consumed answer is refused. An audit append failure
-leaves the response retryable: fix the failure and retry the same answer.
-During Inception, the typed setters retain their receipt-free planning behavior.
+During Construction the setter makes the change only when a message from the
+person since the last decision is on record, and it keeps their words with the
+change. It is never yours to make on your own: not to clear a refusal, not
+because autonomy is on, not from another gate's answer. When a setter names a
+setting that has to change first (parallel needs stage-major and checkpoints
+on; one Unit at a time needs serial), run that setter first and say both lines.
+When one message asks for Construction changes and automatic approval
+together, run the Construction setters before `set-autonomy`. Several changes
+in one message each get their own setter and their own line. A request at an
+open gate with no approval in it leaves the gate open for their answer.
 
 ### Unit and skeleton checkpoints
 
@@ -153,11 +159,12 @@ Before presenting the command, write it as UTF-8 text to
 `<record>/verification-command.txt` using the harness's file-write tool
 (Write/edit), never a shell `echo` or heredoc. Repo-derived command text must
 never be interpolated into a shell line: shell substitutions could execute
-before the human approves. Pass only the record-relative file path below and
-use the invoking SessionStart session ID:
+before the human approves. Pass only the record-relative file path below; the
+command finds the session it runs in by itself, so pass no session and never
+look one up:
 
 ```bash
-{{INVOKE}} engine log decision --stage "<directive.stage>" --checkpoint verification-command --command-file verification-command.txt --session "<session ID>" --decision "Use this command to verify each completed Unit?" --options "Approve,Request Changes"
+{{INVOKE}} engine log decision --stage "<directive.stage>" --checkpoint verification-command --command-file verification-command.txt --decision "Use this command to verify each completed Unit?" --options "Approve,Request Changes"
 ```
 
 Render this structured question through the harness's question binding. Copy the
@@ -178,14 +185,13 @@ options:
     description: Propose a different project check before running verification.
 ```
 
-The human-turn hook binds the exact **Approve** / **Request Changes** reply in
-that session to the pending command. Only **Approve** authorizes the receipt;
-an unrelated reply, **Request Changes**, or a reply from another session does not.
-Never write `--details "Approve"` unless the human chose it. Only then record
-their answer using the same session ID, and set the command:
+Read the person's reply in that session and record the choice they made. The
+human-turn hook keeps that they replied to this question and their exact words;
+a reply from another session, or to another question, does not count. When they
+approve, record their answer, and set the command:
 
 ```bash
-{{INVOKE}} engine log answer --stage "<directive.stage>" --checkpoint verification-command --command-file verification-command.txt --session "<session ID>" --details "Approve"
+{{INVOKE}} engine log answer --stage "<directive.stage>" --checkpoint verification-command --command-file verification-command.txt --details "Approve"
 {{INVOKE}} engine state set-construction-verification-command --command-file verification-command.txt
 ```
 
@@ -194,7 +200,9 @@ For **Request Changes**, record the same `log answer` with
 command. Never invent or auto-approve a command. The tool-owned approval receipt,
 not the state field, is the authority: never write the field without that receipt
 or use generic `state set`. Changing the command later requires this same fresh
-decision/answer/setter flow. Re-run `next` after recording it, then follow the
+decision/answer/setter flow; Units and batches already approved keep their
+approval, the new command checks the ones still to be approved, and the setter's
+`notice` is the one line to tell the person. Re-run `next` after recording it, then follow the
 new directive before verification. If no runnable project check exists yet,
 resolve that gap with the human; do not substitute a placeholder or claim a pass.
 
@@ -208,20 +216,44 @@ recorded command:
 The verifier stores proof bound to the current artifacts, source, attempt, and
 authorized command's SHA-256 plus the complete canonical command as its display
 label. File presence, a claimed demonstration, a placeholder command, or a previous
-pass is not verification. A failed check halts. Re-run `next` after verification;
+pass is not verification. A failed check halts. A check that changes the Unit's
+files while it runs (a formatter, a generator) runs once more against the files as
+they are then; if it changes them again, its proof's `error` says to use a check
+that leaves the files as they are. Long output never fails a passing check. Re-run `next` after verification;
 the resulting directive is the next source of truth about readiness and
 verification. Re-running `verify` withdraws every open checkpoint question and
 captured checkpoint response for this intent, in any session. Ask again only
-after the new verification reports `verified: true`.
+after the new verification reports `verified: true`. Say each `change_notices`
+line the verification returns, as written, before you ask.
 The verifier records a tool-owned `CHECKPOINT_VERIFICATION_RECORDED` receipt
 alongside the proof file, and approval requires that receipt; a hand-written
-proof file cannot verify a Unit.
+proof file cannot verify a Unit. On a checkout with no proof file at all (a
+fresh clone, another machine), that receipt stands in for the proof of a Unit
+already approved whose evidence is unchanged, so nothing runs again.
 
-If `ready` is false or evidence became stale, explain `errors`. Repair the named
-missing review or receipt through its owning procedure, consulting the human
-about the repair as needed; do not replay the whole body just because the
-checkpoint uses `gate: true`. Do not open a checkpoint approval question or claim
-verification succeeded while it is unverified. After any repair, obtain a new
+When the checkpoint carries `rereview`, the Unit's reviewed code or documents
+changed after their review (the person's edit, a formatter, anything no review
+saw) and nothing else is missing. Do not ask the person anything first: run
+`rereview.command` now (it opens the Unit's re-check, which the pass cap never
+refuses; each approval of the Unit by the person opens a fresh one), dispatch
+`rereview.reviewer` for that request through the reviewer module, record its verdict with the
+`recordVerdict` command the request returned, re-run `next`, and verify. Either
+verdict is final for this re-check. The re-check runs under Guard Policy
+`strict` only. Under `relaxed` and `off` a change to a Unit's code or documents
+after their review is accepted: no checkpoint carries `rereview`, the Unit's
+approval or readiness stands, and its one line arrives in `change_notices`.
+The same holds with reviews off: under `relaxed` and `off` a later change to an
+approved Unit's work keeps its approval, and its one line arrives in
+`change_notices` from the next checkpoint's `verify` or the Construction stage's
+own check. A change made after the approval question was asked and before the
+person answers is accepted the same way: their `approve` records it, and its one
+line arrives in that command's `change_notices`.
+
+Otherwise, if `ready` is false or evidence became stale, explain `errors`.
+Repair the named missing review or receipt through its owning procedure,
+consulting the human about the repair as needed; do not replay the whole body
+just because the checkpoint uses `gate: true`. Do not open a checkpoint
+approval question or claim verification succeeded while it is unverified. After any repair, obtain a new
 directive and verify the current result. If no real project check exists,
 resolve that gap with the human before claiming a pass.
 
@@ -231,7 +263,8 @@ human approval. An ordinary Unit needs one when `human_required` is true
 the verified ordinary Unit automatically. At a human checkpoint, run the §13
 learnings ritual for the represented stages only when
 `directive.protocol_modules` lists `learnings`. With the module listed,
-consolidate relevant candidates into one Unit learning question and persist only
+consolidate relevant candidates into one Unit learning question (log it and its
+answer with `--stage "<directive.stage>"`) and persist only
 the human's explicit selections through each owning stage's learning tools, then
 open the checkpoint approval with `ask` below as a separate question and turn. During automatic
 execution, retain candidates in the diaries for the next human checkpoint or
@@ -242,20 +275,38 @@ to the checkpoint approval procedure when a human is required. Only after `verif
 reports `verified: true` and the current directive has `ready: true`, run `ask`.
 It refuses an unready or unverified checkpoint. Before presenting **Approve** /
 **Request Changes**, bind the question to the current checkpoint proof and
-authorized command digest in the invoking SessionStart session:
+authorized command digest. The command finds the session it runs in by itself,
+so pass no session and never look one up:
 
 ```bash
-{{INVOKE}} engine bolt checkpoint --action ask --unit "<unit>" --kind <unit|skeleton> --session "<session ID>"
+{{INVOKE}} engine bolt checkpoint --action ask --unit "<unit>" --kind <unit|skeleton>
 ```
 
 Then present the choices and wait for the human. Show the complete recorded
 command, never abbreviated, in the approval question: "Verified with
 `<full command>` (exit 0). Approve this completed <unit>?" Use the full
 `verification_command` from the current tool output, with a code-span delimiter
-that preserves any backticks. The human's exact **Approve** / **Request Changes**
-reply in that session, to this checkpoint question, authorizes the matching action;
-an unrelated reply, another session's reply, or a reply to a different question
-does not. Never pass `--user-input` the human did not choose. The response is
+that preserves any backticks. When the checkpoint carries `rechecked`, this is
+the one question about the re-check: no learnings question comes before it, and
+its line takes the place of "Approve this completed <unit>?" after
+"Verified with `<full command>` (exit 0).", so the person is asked once:
+"<unit>'s <changed> changed since you approved it, so it was re-checked:
+<verdict>. Approve it?" when
+`rechecked.approved_before` is true, otherwise "<unit>'s <changed> changed after
+its review, so it was re-checked: <verdict>. Approve it?", with `<changed>` as
+`rechecked.changed` (code, or documents) and the verdict in plain words (ready,
+or not ready). When `rechecked.redone` is true, the person asked for that work
+to be redone, so the line is instead "<unit>'s design was redone and its review
+says <verdict>. Approve it?" ("code" in place of "design" when
+`rechecked.changed` is code). On a `NOT-READY` verdict, print the Review brief
+first, as the reviewer module asks after a recovery verdict:
+`bun {{HARNESS_DIR}}/tools/aidlc-review-brief.ts review --stage "<directive.stage>" --unit "<unit>" --why stale`.
+The human's reply in this session, to this checkpoint question, authorizes the
+action you read from it: approve, or reject with what they asked to change
+(their words are kept with the record; add `--reason` when you want to say
+more). A reply from another session, or to a
+different question, does not count. When they approved and asked for a change,
+approve, then make the change and say in one line what you changed. The response is
 one-shot and bound to this Unit, kind, current fingerprint, verification proof ID,
 and authorized command digest. If the checkpoint changes, obtain a new directive,
 re-verify, and ask again; a reply captured before re-verification cannot approve
@@ -265,17 +316,18 @@ question-and-answer flow.
 
 ```bash
 # Only after the human chose Approve:
-{{INVOKE}} engine bolt checkpoint --action approve --unit "<unit>" --kind <unit|skeleton> --session "<session ID>" --user-input 'Approve'
+{{INVOKE}} engine bolt checkpoint --action approve --unit "<unit>" --kind <unit|skeleton> --user-input 'Approve'
 # Automatic approval: verified ordinary Unit and human_required: false only.
 {{INVOKE}} engine bolt checkpoint --action approve --unit "<unit>" --kind unit
 # Only after the human chose Request Changes and supplied feedback:
-{{INVOKE}} engine bolt checkpoint --action reject --unit "<unit>" --kind <unit|skeleton> --session "<session ID>" --user-input 'Request Changes' --reason '<human feedback>'
+{{INVOKE}} engine bolt checkpoint --action reject --unit "<unit>" --kind <unit|skeleton> --user-input 'Request Changes' --reason '<human feedback>'
 ```
 
 After approval or rejection, re-run `next`. Never use a checkpoint approval as
 `report --stage code-generation --result approved` for the whole Unit set.
 Once all Unit approvals are recorded, the engine may emit normal stage gates
-with `completion_only: true`; settle those through the bookkeeping branch above.
+with `completion_only: true`; settle those through the bookkeeping branch above
+(in a solo unit-major walk a bare `next` records them itself).
 Explicit stage-major gated execution retains its ordinary stage reviews;
 autonomous execution skips their routine human completion questions.
 
@@ -298,10 +350,9 @@ options:
 ```
 
 Map **Continue automatically** to `autonomous` and **Review each checkpoint** to
-`gated`. Record the explicit answer with
-`{{INVOKE}} engine bolt set-autonomy --mode <autonomous|gated>`, then re-run
-`next`. Do not log this choice with `log decision`/`log answer`: `set-autonomy`
-owns its receipt, and logging an interview answer first consumes the human turn.
+`gated`. Record the explicit answer only with
+`{{INVOKE}} engine bolt set-autonomy --mode <autonomous|gated>`, never with
+`log decision` or `log answer` first, then re-run `next`.
 Escalation requires a fresh human turn; revocation to `gated` does not.
 
 Explicit on-demand requests remain valid at any point during Construction.
@@ -410,13 +461,11 @@ backward jump does not count against the bound — only entries this protocol
 writes do.
 
 **Plan approval on replay.** The jump opens a new stage attempt, so the prior
-Plan Approval receipt (bound to the previous attempt) cannot authorize the
-replay. Preserve the
-Loop-Back Log, but blank `[Answer]:`, regenerate the target-bound fingerprint,
-and run Code Generation's Plan Approval decision/human-turn/answer receipt
-sequence again before generation. The human's "Retry with fix" choice authorizes
-the loop-back jump; it is not approval of plan content the human has not
-reviewed under the new attempt.
+Plan Approval (bound to the previous attempt) cannot authorize the replay.
+Preserve the Loop-Back Log; after the repaired plan is written, `next` asks the
+person for Plan Approval again before generation (Code Generation Step 3). The
+human's "Retry with fix" choice authorizes the loop-back jump; it is not approval
+of plan content the human has not reviewed under the new attempt.
 
 **Autonomous loop-back procedure** (mode `autonomous`, bound not exhausted,
 impact-estimated fix identified):
@@ -433,8 +482,8 @@ impact-estimated fix identified):
    loop. Never compose the `execute` call by hand — the engine's print is the
    validated form.
 3. On the code-generation re-entry, follow "Re-entry settlement and review"
-   below. Before any fix generation, run the fresh target-bound Plan Approval
-   sequence required above; this is a human hard stop even though Construction
+   below. Before any fix generation, the engine asks for Plan Approval of the
+   repaired plan as required above; this is a human stop even though Construction
    autonomy remains granted. Then apply the planned fix ONLY to the unit(s) the diagnosis names and
    apply the deterministic Artifact Re-use decisions (see "Autonomous failure
    loop-back" under Artifact Re-use in stage-protocol.md). The standing
@@ -585,13 +634,13 @@ impact-unestimated give-up option is a protocol violation.
 
 **Engine-driven per-unit iteration.** The orchestration engine now drives the per-Unit loop for the inline per-Unit design stages (functional-design, nfr-requirements, nfr-design, infrastructure-design) the same way it always has for code-generation: on a `next` that lands on an in-flight per-Unit stage (off the swarm path), the engine emits ONE `run-stage` directive per Unit, in Bolt build order, carrying the resolved Unit name in `directive.unit` and its artifact paths. The engine substitutes the next unsettled Unit on each `next`. For a stage-major or legacy stage gate, the stage's per-Unit gate is **suppressed** (`gate: false`) on every not-yet-settled Unit, and the stage's real gate is presented exactly once, on the re-entry after the LAST Unit settles, so a single stage-level approval covers all Units and cannot be reached until every Unit is built (the same "per-Unit gate suppressed, single gate replaces it" rule, now applied across all five per-Unit stages, and enforced deterministically: `report --result approved` on a not-yet-completed per-Unit stage is refused while any Unit is unsettled). A workflow with no units-generation dependency artifact on disk degrades to one single-iteration directive (unchanged behaviour). When the artifact exists, the engine validates the compiled `bolt_dag` against it and recomputes the unit batches on the spot if the cache is missing or stale, so the per-unit loop never silently shrinks to an outdated unit set; an artifact whose units block does not parse is surfaced as an error instead.
 
-**Unit lifecycle receipts.** On a per-Unit body directive without `directive.wave`, `construction_checkpoint`, or `construction_policy.completion_only`, bracket the Unit's work with the receipt verbs: `{{INVOKE}} engine state unit start --stage <slug> --unit <name>` before the body, and `... unit complete --stage <slug> --unit <name>` after the Unit's artifacts are written (complete verifies that every required artifact is a regular file on disk and refuses directories or missing paths — the receipt is the completion signal, artifacts are the evidence it checks). Pass the exact `directive.stage` + `directive.unit` pair emitted by the engine: `unit start` re-runs the route as a read-only engine observation (it publishes no directive and writes no state, receipt, or approval evidence, and a durable write from that path fails loudly rather than silently) and refuses a DAG member whose dependencies or earlier same-batch Units are not settled. New Unit names use lowercase kebab-case; safe legacy single-segment names (including digit-leading names, uppercase letters, underscores, and dots) remain accepted by existing DAGs and autonomous swarms, which use a deterministic internal Bolt slug without changing the Unit identity. An autonomy grant does not disable these receipts when a backward jump routes an inline per-Unit stage; only a stage currently owned by the autonomous swarm refuses them. If the Unit must stop before completion (blocking question, failed dependency, session ending mid-Unit), record the checkpoint with single-line text: `... unit pause --stage <slug> --unit <name> --reason "<why>" --next-action "<the exact next step>"`. Every lifecycle row carries an exact stage-attempt `Run floor` (`<boundary-event>:<timestamp>#<ordinal>`); when equal second-precision boundaries in different audit shards are causally unordered, the engine uses a deterministic `AMBIGUOUS:<timestamp>#<digest>` floor that invalidates older receipts instead of trusting shard filename order. Receipt validity is decided by the attempt floor and the content bindings on the row, never by the order in which shards or rows were written. Once any receipt exists for a stage, every later attempt stays in receipt mode and requires a current-attempt `UNIT_COMPLETED` receipt per Unit. Artifact files alone no longer settle a Unit, so a stale, paused, reopened, or partially-written Unit can never be mistaken for done. A paused Unit routes FIRST and hard-stops the loop: the engine emits an `ask` naming the Unit, its recorded reason, and next action (`unit_state: paused`), and no other work may start until an explicit `... unit resume --stage <slug> --unit <name>`. `unit start` refuses while another Unit of the stage is open (one active Unit at a time; resume or complete it first), and workflows that never call the verbs keep today's artifact-driven coverage unchanged.
+**Unit lifecycle receipts.** On a per-Unit body directive without `directive.wave`, `construction_checkpoint`, or `construction_policy.completion_only`, bracket the Unit's work with the receipt verbs: `{{INVOKE}} engine state unit start --stage <slug> --unit <name>` before the body, and `... unit complete --stage <slug> --unit <name>` after the Unit's artifacts are written (complete verifies that every required artifact is a regular file on disk and refuses directories or missing paths — the receipt is the completion signal, artifacts are the evidence it checks). Pass the exact `directive.stage` + `directive.unit` pair emitted by the engine: `unit start` re-runs the route as a read-only engine observation (it publishes no directive and writes no state, receipt, or approval evidence, and a durable write from that path fails loudly rather than silently) and refuses a DAG member whose dependencies or earlier same-batch Units are not settled. New Unit names use lowercase kebab-case; safe legacy single-segment names (including digit-leading names, uppercase letters, underscores, and dots) remain accepted by existing DAGs and autonomous swarms, which use a deterministic internal Bolt slug without changing the Unit identity. An autonomy grant does not disable these receipts when a backward jump routes an inline per-Unit stage; only a stage currently owned by the autonomous swarm refuses them. If the Unit must stop before completion (blocking question, failed dependency, session ending mid-Unit), record the checkpoint with single-line text: `... unit pause --stage <slug> --unit <name> --reason "<why>" --next-action "<the exact next step>"`. Every lifecycle row carries an exact stage-attempt `Run floor` (`<boundary-event>:<timestamp>#<ordinal>`); when equal second-precision boundaries in different audit shards are causally unordered, the engine uses a deterministic `AMBIGUOUS:<timestamp>#<digest>` floor that invalidates older receipts instead of trusting shard filename order. Receipt validity is decided by the attempt floor and the content bindings on the row, never by the order in which shards or rows were written. Once any receipt exists for a stage, every later attempt stays in receipt mode and requires a current-attempt `UNIT_COMPLETED` receipt per Unit. Artifact files alone no longer settle a Unit, so a stale, paused, reopened, or partially-written Unit can never be mistaken for done. A paused Unit routes FIRST and hard-stops the loop: the engine emits an `ask` naming the Unit, its recorded reason, and next action (`unit_state: paused`), and no other work may start until an explicit `... unit resume --stage <slug> --unit <name>`. `unit start` refuses while another Unit of the stage is open (one active Unit at a time; resume or complete it first), and workflows that never call the verbs keep today's artifact-driven coverage unchanged. The one exception is a Unit the person set aside for another (a pause with `--set-aside-for <unit>`, which a unit-major reopen or pick-up names): follow the engine's route, which takes the Unit it was set aside for first, lets that Unit start even on the paused Unit's stage, and then asks to resume the set-aside Unit.
 
 **Per-unit batch waves (optional, stage-major only).** For functional-design, nfr-requirements, nfr-design, and infrastructure-design on an explicitly selected stage-major walk, the engine may emit `directive.wave` from one healed Bolt-DAG snapshot. Code Generation remains wave-ineligible because it writes the shared workspace and hard-stops for Plan Approval. Each entry carries resolved Unit-local inputs/outputs, `required_produces`, `unit_memory_path`, `build_required`, `completion_required`, and receipt-backed `review_state` / `review_iteration`; kind-vacuous and fully settled Units are omitted, and large batches arrive as deterministic same-batch prefixes. The parent retains `stage_file`, the complete `inline_context_paths`, `context_warnings`, the accumulated steering bundle, effective `review_class`, reviewer settings, sensors, and the stage-level `memory_path`. Never reconstruct siblings from `runtime-graph.json`.
 
 When `directive.wave` is present, branch on it before the ordinary per-Unit or gate path; the parent Unit fields are compatibility projections of the first entry and are not separate work. Show parent warnings once, then give every builder the parent `ceremony` and `protocol_modules`, stage file, all inline context, plus only its entry's paths. Deliver the `load-steering` rule bundle per `stage-protocol.md` § "For subagent stages" step 2 — through the harness's declared native preload where one exists, verbatim paste otherwise. Dispatch entries concurrently where the harness supports independent workers; serial entry processing is the universal fallback. A builder with `build_required: true` runs the Unit-scoped question flow, applies the summary checkpoint only when `directive.ceremony.summary_confirmation === "on"`, and writes its Unit artifacts; it keeps a diary only when `directive.protocol_modules` lists `learnings`. The serial `unit start/pause/resume` verbs refuse while the engine routes this stage as a wave, including before the first completion receipt, without changing state or audit. The wave directive is the batch checkpoint, and a blocking question keeps the entry open by withholding a path from `entry.required_produces`, returning the question to the conductor, and stopping for the human.
 
-After builds, `review_state: "outstanding"` runs the named iteration; `"retry-required"` repeats the unmatched request with `aidlc-log.ts review --retry-pending`; `"repair-required"` runs the lead-only repair and then the next reviewer iteration; and `"recovery-required"` runs the one stale-receipt recovery at the emitted `review_iteration`. `"escalation-required"` means that recovery was already spent: do not request another review or complete the Unit; halt and present the situation to the human, and only a human Request Changes decision may reset the stage attempt. `READY`, terminal `NOT-READY`, and `not-required` need no review work. Under Change Control `relaxed` a post-review change to a Unit's reviewed artifacts or claimed source does not produce `"recovery-required"`: the receipt stays valid, the engine records the change once (`CHANGE_ACCEPTED`) when the gate opens or the Unit completes, and the human hears one `change_notices` line. Reviewer dispatches remain serialized where the single reviewer-scope record is enforced; only an enforcement-free harness may run them as parallel foreground work. Once an entry is build-complete and review-settled, run `{{INVOKE}} engine state unit complete --wave --stage <slug> --unit <name>`. That command re-verifies the live wave entry, copies new Unit diary entries verbatim into the parent diary with deterministic deduplication, binds the receipt to the final artifact fingerprint, and only then emits `UNIT_COMPLETED`. Therefore a crash before diary fan-in or a later artifact change leaves `completion_required: true` and re-hands the entry; neither a dependent batch nor the stage gate can overtake build, review, memory, or completion evidence. Re-run `next` without report-approve after processing the emitted prefix. Unit-major iteration stays serial and never carries `directive.wave`.
+After builds, `review_state: "outstanding"` runs the named iteration; `"retry-required"` repeats the unmatched request with `aidlc-log.ts review --retry-pending`; `"repair-required"` runs the lead-only repair and then the next reviewer iteration; and `"recovery-required"` runs the one stale-receipt recovery at the emitted `review_iteration`. `"escalation-required"` means that recovery was already spent: do not request another review or complete the Unit; halt and present the situation to the human, and only a human Request Changes decision may reset the stage attempt. `READY`, terminal `NOT-READY`, and `not-required` need no review work. Under Guard Policy `relaxed` or `off` a post-review change to a Unit's reviewed artifacts or claimed source does not produce `"recovery-required"`: the receipt stays valid, the engine records the change once (`CHANGE_ACCEPTED`) when the gate opens or the Unit completes, and the human hears one `change_notices` line. Reviewer dispatches remain serialized where the single reviewer-scope record is enforced; only an enforcement-free harness may run them as parallel foreground work. Once an entry is build-complete and review-settled, run `{{INVOKE}} engine state unit complete --wave --stage <slug> --unit <name>`. That command re-verifies the live wave entry, copies new Unit diary entries verbatim into the parent diary with deterministic deduplication, binds the receipt to the final artifact fingerprint, and only then emits `UNIT_COMPLETED`. Therefore a crash before diary fan-in or a later artifact change leaves `completion_required: true` and re-hands the entry. With Construction Checkpoints on, a later change to a completed entry's outputs is the Unit checkpoint's instead: Guard Policy `strict` re-checks it once, `relaxed` and `off` say it once, and the entry is not handed back (an output that is gone still is). Under `relaxed` and `off` the same holds without checkpoints: the entry stays settled and the stage's gate says the change once. Neither a dependent batch nor the stage gate can overtake build, review, memory, or completion evidence. Re-run `next` without report-approve after processing the emitted prefix. Unit-major iteration stays serial and never carries `directive.wave`.
 
 When the learnings ritual is off, the engine creates neither the parent diary nor the Unit diaries. `unit complete --wave` leaves an absent parent diary absent when the Unit has no entries to copy.
 
@@ -604,7 +653,10 @@ verifies and approves the Unit through `construction_checkpoint`; the late stage
 gates carrying `completion_only: true` are bookkeeping. Legacy workflows without
 the checkpoint field retain their late human per-stage cascade. A directive may
 name a later stage than `Current Stage`; always use `directive.stage` and
-`directive.unit`. Lifecycle and review evidence remain keyed to the current
+`directive.unit`, including in a conditional skip report
+(`--stage "<directive.stage>" --unit "<directive.unit>"`), which covers that
+Unit only; the other Units still get the stage. Lifecycle and review evidence
+remain keyed to the current
 workflow/jump/rejection attempt so later stage starts do not repeat approved work.
 
 **Team-owned Unit Progress and gates (opt-in).** `Unit Ownership: team` is valid
@@ -627,8 +679,8 @@ settled; do not regenerate or re-review them. Run the learnings presentation onl
 `--unit "<directive.unit>"` so pending human decisions remain attempt- and
 Unit-scoped. Every report call for this gate adds
 `--unit "<directive.unit>"`: first `awaiting-approval`, then `approved
---user-input "<exact choice>"`, or `rejected --user-input "<feedback>"` and
-later `revised`. Rejection floors only that Unit's lifecycle/review receipts;
+--user-input "Approve"` (with `--park` when they also asked to stop), or
+`rejected --user-input "Request Changes"` and later `revised`. Rejection floors only that Unit's lifecycle/review receipts;
 for `unit-end` it floors all stages in that Unit's chain. Re-run `next` after
 each accepted report. When Unit Ownership is absent or `solo`, follow the checkpoint or legacy
 policy above. The team-owned `unit_gate` path keeps its own approval rhythm and
@@ -658,13 +710,13 @@ bracket the existing pipeline-deploy strategy lookup with
 `MERGE_DISPATCH_INVOKED` / `MERGE_DISPATCH_RETURNED` (or `_FALLBACK`), then
 present the returned pinned OID + evidence summary as one merge gate. Record the
 exact human answer with `aidlc unit gate <unit> --decision <approve|reject>
---user-input "<text>"`. On approval, `aidlc unit land <unit> --target <branch>`
+--user-input '<text>'`. On approval, `aidlc unit land <unit> --target <branch>`
 owns the transaction: pinned git content first with main-owned metadata retained,
 then one Unit-row fold under the intent lock, then audit/finalization. A moved
 claim ref requires re-pin, and an unavailable registry makes gate/land fail
 closed. If the exact attempt is released only after the git step landed, inspect
 the merge and continue explicitly with `aidlc unit land <unit>
---accept-released-attempt --user-input "<human acknowledgment>"`; a successor
+--accept-released-attempt --user-input '<human acknowledgment>'`; a successor
 claim is never accepted. Source conflicts abort before state folding. For
 crash recovery the same command accepts `--step git|state|audit`; each step is
 idempotent and `aidlc unit merge-status <unit>` reports the local journal.
@@ -701,59 +753,71 @@ swarm module's **Continuing a partially completed batch** rule. Valid remaining
 workers keep their original plans and approvals and proceed to the protected
 brief in step 4; do not reset their questions or run initial preparation again.
 
-1. For every Unit in `directive.units`, prepare Code Generation Part 1 in the
-   main workspace: the plan, embedded `## Testing Contract`, test instructions,
-   questions file, `[Approval Fingerprint]`, and `[Planned Source]`. Leave each
-   `[Answer]:` blank until the human answers. A revision resets it before
-   re-fingerprinting. Every Unit remains individually bound and approved.
-2. Present Plan Approval individually, or group the exact live `invoke-swarm`
-   Unit set through **Grouped Plan Approval** below. A real `Approve Plans`
-   answer maps to `[Answer]: Approve Plan` for each named Unit and produces
-   per-Unit receipts. Individual approval uses `Approve Plan` as before. Stop
-   for the answer; do not fork worktrees or dispatch implementation workers
-   during planning. Re-run `next` after recording approval and use the current
-   emitted Unit set.
-3. Call `prepare` only after every unit in the emitted batch has current
-   approval evidence. Before initial protected prepare, the approved parent
-   application source must be committed and reproducible, including an inline
+After initial approval, plan, test instruction, and Testing Contract edits for
+the same intent, Unit, and attempt follow Code Generation Step 3's after-approval
+rules: under a lowered `plan-approval` fence the build continues with the edited
+files; with the fence on, `next` asks the person again. Other code moving never
+asks again. This also applies to approved members of a group; it does not change
+initial approval, source reproducibility, new-attempt approval, or completion
+gates. Missing artifacts or malformed contract JSON must be repaired before
+execution; `next` names the repair.
+
+1. While `directive.plan_approval.status` is `plan`, write Code Generation Part 1
+   in the main workspace for each Unit it lists: the plan (with its `## Summary`),
+   the embedded `## Testing Contract`, and the test instructions, acting on each
+   entry's `status`, `note`, and `feedback` as Code Generation Step 3 describes.
+   Then run `next`. Do not write questions files or fingerprints: the engine asks.
+2. When every listed plan is ready, `next` returns ONE `plan-approval` ask for all
+   the Units still waiting (see **Grouped Plan Approval** below). Show it, end the
+   turn, and run `next` after the person answers. Units the person approved are
+   done; Units they sent back return in `plan_approval.units` with their words.
+   Do not fork worktrees or dispatch implementation workers during planning.
+3. Call `prepare` only when `next` returns this `invoke-swarm` with
+   `plan_approval.status: "approved"`. Before
+   initial protected prepare, the approved parent application source must be
+   committed and reproducible, including an inline
    skeleton's source before a later parallel batch. The swarm module's
    **Before initial protected prepare** rule applies to legacy autonomy and new
    checkpoints alike: preflight the whole batch before creating any child, and
    never commit automatically. On swarm Code Generation, `prepare` verifies the
    plan, test instructions, embedded contract, answer, target-bound fingerprint,
    current stage attempt, planned source, and human-owned receipt before
-   creating any worktree. A stale memory/scope/test-strategy/project-type input
-   therefore reopens approval instead of silently changing execution; re-running
-   `next` for the same units and attempt does not.
+   creating any worktree. If memory Testing Posture, scope, test strategy, or
+   project type inputs changed, refresh the current contract and instructions
+   as needed and apply the same after-approval rules: a lowered fence permits
+   continuation without reapproval. Re-running `next` for the same intent,
+   units, and attempt does not reopen approval.
 4. Every worker brief starts with the output of
    `bun {{HARNESS_DIR}}/tools/aidlc-testing-posture.ts brief --unit <unit>`,
    verbatim and unedited. That output begins with exactly:
 
    ```text
    AIDLC-UNIT: <unit>
-   AIDLC-TESTING-CONTRACT: <contract_sha256 from that unit's approved plan>
+   AIDLC-TESTING-CONTRACT: <contract_sha256 from that unit's current plan>
    ```
 
-   and carries the approved plan exactly as the approval fingerprint bound it
+   and carries the current plan using the approval-content projection
    (every line before a terminal `## Review` appendix and none of that appendix,
    task markers reset to `[ ]`, spacing normalized; a replayed plan may still
    carry an appendix from a review recorded under the earlier protocol) and the
-   approved `unit-test-instructions.md` byte for byte. Do not write either
+   current `unit-test-instructions.md` byte for byte. Do not write either
    marker line yourself and never read the plan file into a brief: the
-   fingerprint excludes the appendix, so its bytes were never approved as work,
-   and the plan-approval guard refuses a handoff that quotes them. The command
-   refuses until the unit's approval is current. Any further context for the
-   worker follows the command's output; the worker reads and ticks its own
+   fingerprint excludes the appendix, so its bytes are not work to execute.
+   With its fence on, the plan-approval guard refuses a handoff that quotes them.
+   Use the tool-produced brief for current approval or permitted postapproval
+   continuation; do not substitute a fabricated approval. Any further context
+   for the worker follows the command's output; the worker reads and ticks its own
    progress in the plan file inside its worktree. The worker must produce the unit's
    `construction/<unit>/code-generation/source-manifest.json` in the worktree,
    listing every application-source path it creates, modifies, or deletes,
    before the in-Bolt review. Because a Bolt is the single selected repository,
    these paths are worktree-relative and omit `repo` even when the parent intent
-   records multiple repositories. The approved Testing Contract is authoritative:
-   workers do not re-resolve memory, and retries reuse the same approved bytes.
-   The plan-approval guard rejects a delegated worker whose marker is missing,
-   stale, or different from the approved plan. Headless worker harnesses that
-   cannot run the hook still remain protected by `prepare` and this mandatory
+   records multiple repositories. The Testing Contract in the current brief is
+   authoritative: workers do not re-resolve memory, and retries use the current
+   tool-produced brief. With its fence on, the plan-approval guard rejects a
+   delegated worker whose marker is missing, stale, or different from the plan.
+   Headless worker harnesses that cannot run the hook still remain protected
+   by `prepare` and this mandatory
    brief contract.
 
 Only after all four obligations are satisfied does the ordinary swarm
@@ -765,15 +829,15 @@ prepare/fan-out/check/review/finalize loop run.
 
 ### Claude Code
 
-- **`gate: "unresolved"`** — the initial Construction route depends on the **walking-skeleton stance**, which no parser can derive from a team's free-form `## Walking Skeleton` practices prose. This is your knowledge-work, handed back to the engine. Do NOT run the stage body yet. Instead: read the `## Walking Skeleton` section (resolution order `aidlc/spaces/<space>/memory/org.md` → `team.md` → `project.md`; most-specific non-empty statement wins) and classify the stance — **"always"/"every greenfield feature"** → `on`; **"never"** → `off`; **"scope-dependent"/unspecified/empty** → `scope-dependent` (the engine then uses the active scope file's `skeleton:` field). Honour the `PRACTICES_OVERRIDE` judgement (a bolt-plan marker contradicting practices loses; practices wins — emit the override row first). Then `report --skeleton-stance <on|off|scope-dependent>`; the next `next` emits the resolved Construction directive; apply metadata routing before any body or gate. See the conductor persona for the full classification rules.
+- **`gate: "unresolved"`** — the initial Construction route depends on the **walking-skeleton stance**, which no parser can derive from a team's free-form `## Walking Skeleton` practices prose. This is your knowledge-work, handed back to the engine. Do NOT run the stage body yet. Instead: read the `## Walking Skeleton` section (resolution order `aidlc/spaces/<space>/memory/org.md` → `team.md` → `project.md`; most-specific non-empty statement wins) and classify the stance — **"always"/"every greenfield feature"** → `on`; **"never"** → `off`; **"scope-dependent"/unspecified/empty** → `scope-dependent` (the engine then uses the active scope file's `skeleton:` field). Honour the `PRACTICES_OVERRIDE` judgement (a bolt-plan marker contradicting practices loses; practices wins: emit the override row first). Then `report --skeleton-stance <on|off|scope-dependent>`; the next `next` emits the resolved Construction directive; apply metadata routing before any body or gate. Follow its stage and Unit, including a skeleton-first Unit route, rather than assuming the previous stage is re-emitted. See the conductor persona for the full classification rules.
 
-**Per-unit iteration (`directive.unit`).** After Construction metadata routing has excluded checkpoint and completion-only directives, when `directive.unit` is present, this `run-stage` is ONE iteration of a per-unit Construction stage (`for_each: unit-of-work`, covering the 3.1-3.4 design stages and code-generation). Run the question flow for THIS unit; only when `directive.ceremony.summary_confirmation === "on"`, apply the PRE-GENERATION SUMMARY STOP, passing `--unit "<directive.unit>"` to both checkpoint log commands. When summary confirmation is off, generate directly with no checkpoint or receipt. Then run the body and write its artifacts under `construction/<directive.unit>/<directive.stage>/`; only when `directive.reviewer` is present, follow stage-protocol-reviewer.md §12a for this unit only. The engine drives the loop: if `directive.gate` is **false** on a per-unit directive, re-run `next` after the receipt-backed artifact work (do NOT report-approve); the engine hands you the next uncovered unit, and once every unit is built it re-emits this stage with `gate: true`. For a remaining per-unit stage gate, use `construction_policy.human_completion_required` to choose routine human completion or automatic reporting; only the legacy path without policy retains the single human stage gate, running the §13 ritual only when `directive.protocol_modules` lists `learnings`. Checkpoint and completion-only directives must already have branched before this body procedure. When present, review accounting and normal budgets are per Unit; an invalidated terminal receipt gets the same single bounded stale-receipt recovery for that Unit. If `directive.unit` is absent because there is no compiled Unit DAG, run one ordinary stage iteration with no Bolt or per-Unit ceremony. When unit-major construction iteration is recorded (`Construction Iteration: unit-major`), the engine may emit a `directive.stage` that names a LATER Construction stage (including code-generation, which the unit-major walk covers) than the state's Current Stage; always act on the directive's own `directive.stage` + `directive.unit`, never on Current Stage.
+**Per-unit iteration (`directive.unit`).** After Construction metadata routing has excluded checkpoint and completion-only directives, when `directive.unit` is present, this `run-stage` is ONE iteration of a per-unit Construction stage (`for_each: unit-of-work`, covering the 3.1-3.4 design stages and code-generation). Run the question flow for THIS unit; only when `directive.ceremony.summary_confirmation === "on"`, apply the PRE-GENERATION SUMMARY STOP, passing `--unit "<directive.unit>"` to both checkpoint log commands. When summary confirmation is off, generate directly with no checkpoint or receipt. Then run the body and write its artifacts under `construction/<directive.unit>/<directive.stage>/`; only when `directive.reviewer` is present, follow stage-protocol-reviewer.md §12a for this unit only. The engine drives the loop: if `directive.gate` is **false** on a per-unit directive, re-run `next` after the receipt-backed artifact work (do NOT report-approve, do NOT present a gate); the engine hands you the next uncovered unit, and once every unit is built it re-emits this stage with `gate: true`. For a remaining per-unit stage gate, use `construction_policy.human_completion_required` to choose routine human completion or automatic reporting; only the legacy path without policy retains the single human stage gate, running the §13 ritual only when `directive.protocol_modules` lists `learnings`. Checkpoint and completion-only directives must already have branched before this body procedure. When present, review accounting and normal budgets are per Unit; an invalidated terminal receipt gets the same single bounded stale-receipt recovery for that Unit. If `directive.unit` is absent because there is no compiled Unit DAG, run one ordinary stage iteration with no Bolt or per-Unit ceremony. When unit-major construction iteration is recorded (`Construction Iteration: unit-major`), the engine may emit a `directive.stage` that names a LATER Construction stage (including code-generation, which the unit-major walk covers) than the state's Current Stage; always act on the directive's own `directive.stage` + `directive.unit`, never on Current Stage.
 
 ---
 
 ### Kiro CLI
 
-- **`gate: "unresolved"`** — the initial Construction route depends on the **walking-skeleton stance**. Do NOT run the stage body yet. Read the `## Walking Skeleton` section (resolution order `aidlc/spaces/<space>/memory/org.md` → `team.md` → `project.md`; most-specific non-empty statement wins) and classify the stance — **"always"/"every greenfield feature"** → `on`; **"never"** → `off`; **"scope-dependent"/unspecified/empty** → `scope-dependent` (the engine then uses the active scope file's `skeleton:` field). Honour the `PRACTICES_OVERRIDE` judgement. Then `report --skeleton-stance <on|off|scope-dependent>`; the next `next` emits the resolved Construction directive; apply metadata routing before any body or gate. Follow its stage and Unit, including a skeleton-first Unit route, rather than assuming the previous stage is re-emitted.
+- **`gate: "unresolved"`** — the initial Construction route depends on the **walking-skeleton stance**, which no parser can derive from a team's free-form `## Walking Skeleton` practices prose. This is your knowledge-work, handed back to the engine. Do NOT run the stage body yet. Instead: read the `## Walking Skeleton` section (resolution order `aidlc/spaces/<space>/memory/org.md` → `team.md` → `project.md`; most-specific non-empty statement wins) and classify the stance — **"always"/"every greenfield feature"** → `on`; **"never"** → `off`; **"scope-dependent"/unspecified/empty** → `scope-dependent` (the engine then uses the active scope file's `skeleton:` field). Honour the `PRACTICES_OVERRIDE` judgement (a bolt-plan marker contradicting practices loses; practices wins: emit the override row first). Then `report --skeleton-stance <on|off|scope-dependent>`; the next `next` emits the resolved Construction directive; apply metadata routing before any body or gate. Follow its stage and Unit, including a skeleton-first Unit route, rather than assuming the previous stage is re-emitted. See the conductor persona for the full classification rules.
 
 **Per-unit iteration (`directive.unit`).** After Construction metadata routing has excluded checkpoint and completion-only directives, when `directive.unit` is present, this `run-stage` is ONE iteration of a per-unit Construction stage (`for_each: unit-of-work`, covering the 3.1-3.4 design stages and code-generation). Run the question flow for THIS unit; only when `directive.ceremony.summary_confirmation === "on"`, apply the PRE-GENERATION SUMMARY STOP, passing `--unit "<directive.unit>"` to both checkpoint log commands. When summary confirmation is off, generate directly with no checkpoint or receipt. Then run the body and write its artifacts under `construction/<directive.unit>/<directive.stage>/`; only when `directive.reviewer` is present, follow stage-protocol-reviewer.md §12a for this unit only. The engine drives the loop: if `directive.gate` is **false** on a per-unit directive, re-run `next` after the receipt-backed artifact work (do NOT report-approve, do NOT present a gate); the engine hands you the next uncovered unit, and once every unit is built it re-emits this stage with `gate: true`. For a remaining per-unit stage gate, use `construction_policy.human_completion_required` to choose routine human completion or automatic reporting; only the legacy path without policy retains the single human stage gate, running the §13 ritual only when `directive.protocol_modules` lists `learnings`. Checkpoint and completion-only directives must already have branched before this body procedure. When present, review accounting and normal budgets are per Unit; an invalidated terminal receipt gets the same single bounded stale-receipt recovery for that Unit. If `directive.unit` is absent because there is no compiled Unit DAG, run one ordinary stage iteration with no Bolt or per-Unit ceremony. When unit-major construction iteration is recorded (`Construction Iteration: unit-major`), the engine may emit a `directive.stage` that names a LATER Construction stage (including code-generation, which the unit-major walk covers) than the state's Current Stage; always act on the directive's own `directive.stage` + `directive.unit`, never on Current Stage.
 
@@ -781,7 +845,7 @@ prepare/fan-out/check/review/finalize loop run.
 
 ### Kiro IDE
 
-- **`gate: "unresolved"`** — the initial Construction route depends on the **walking-skeleton stance**. Do NOT run the stage body yet. Read the `## Walking Skeleton` section (resolution order `aidlc/spaces/<space>/memory/org.md` → `team.md` → `project.md`; most-specific non-empty statement wins) and classify the stance — **"always"/"every greenfield feature"** → `on`; **"never"** → `off`; **"scope-dependent"/unspecified/empty** → `scope-dependent` (the engine then uses the active scope file's `skeleton:` field). Honour the `PRACTICES_OVERRIDE` judgement. Then `report --skeleton-stance <on|off|scope-dependent>`; the next `next` emits the resolved Construction directive; apply metadata routing before any body or gate. Follow its stage and Unit, including a skeleton-first Unit route, rather than assuming the previous stage is re-emitted.
+- **`gate: "unresolved"`** — the initial Construction route depends on the **walking-skeleton stance**, which no parser can derive from a team's free-form `## Walking Skeleton` practices prose. This is your knowledge-work, handed back to the engine. Do NOT run the stage body yet. Instead: read the `## Walking Skeleton` section (resolution order `aidlc/spaces/<space>/memory/org.md` → `team.md` → `project.md`; most-specific non-empty statement wins) and classify the stance — **"always"/"every greenfield feature"** → `on`; **"never"** → `off`; **"scope-dependent"/unspecified/empty** → `scope-dependent` (the engine then uses the active scope file's `skeleton:` field). Honour the `PRACTICES_OVERRIDE` judgement (a bolt-plan marker contradicting practices loses; practices wins: emit the override row first). Then `report --skeleton-stance <on|off|scope-dependent>`; the next `next` emits the resolved Construction directive; apply metadata routing before any body or gate. Follow its stage and Unit, including a skeleton-first Unit route, rather than assuming the previous stage is re-emitted. See the conductor persona for the full classification rules.
 
 **Per-unit iteration (`directive.unit`).** After Construction metadata routing has excluded checkpoint and completion-only directives, when `directive.unit` is present, this `run-stage` is ONE iteration of a per-unit Construction stage (`for_each: unit-of-work`, covering the 3.1-3.4 design stages and code-generation). Run the question flow for THIS unit; only when `directive.ceremony.summary_confirmation === "on"`, apply the PRE-GENERATION SUMMARY STOP, passing `--unit "<directive.unit>"` to both checkpoint log commands. When summary confirmation is off, generate directly with no checkpoint or receipt. Then run the body and write its artifacts under `construction/<directive.unit>/<directive.stage>/`; only when `directive.reviewer` is present, follow stage-protocol-reviewer.md §12a for this unit only. The engine drives the loop: if `directive.gate` is **false** on a per-unit directive, re-run `next` after the receipt-backed artifact work (do NOT report-approve, do NOT present a gate); the engine hands you the next uncovered unit, and once every unit is built it re-emits this stage with `gate: true`. For a remaining per-unit stage gate, use `construction_policy.human_completion_required` to choose routine human completion or automatic reporting; only the legacy path without policy retains the single human stage gate, running the §13 ritual only when `directive.protocol_modules` lists `learnings`. Checkpoint and completion-only directives must already have branched before this body procedure. When present, review accounting and normal budgets are per Unit; an invalidated terminal receipt gets the same single bounded stale-receipt recovery for that Unit. If `directive.unit` is absent because there is no compiled Unit DAG, run one ordinary stage iteration with no Bolt or per-Unit ceremony. When unit-major construction iteration is recorded (`Construction Iteration: unit-major`), the engine may emit a `directive.stage` that names a LATER Construction stage (including code-generation, which the unit-major walk covers) than the state's Current Stage; always act on the directive's own `directive.stage` + `directive.unit`, never on Current Stage.
 
@@ -789,15 +853,15 @@ prepare/fan-out/check/review/finalize loop run.
 
 ### Codex CLI
 
-- **`gate: "unresolved"`** — the initial Construction route depends on the **walking-skeleton stance**, which no parser can derive from a team's free-form `## Walking Skeleton` practices prose. This is your knowledge-work, handed back to the engine. Do NOT run the stage body yet. Instead: read the `## Walking Skeleton` section (resolution order `aidlc/spaces/<space>/memory/org.md` → `team.md` → `project.md`; most-specific non-empty statement wins) and classify the stance — **"always"/"every greenfield feature"** → `on`; **"never"** → `off`; **"scope-dependent"/unspecified/empty** → `scope-dependent` (the engine then uses the active scope file's `skeleton:` field). Honour the `PRACTICES_OVERRIDE` judgement (a bolt-plan marker contradicting practices loses; practices wins — emit the override row first). Then `report --skeleton-stance <on|off|scope-dependent>`; the next `next` emits the resolved Construction directive; apply metadata routing before any body or gate. See the conductor persona for the full classification rules.
+- **`gate: "unresolved"`** — the initial Construction route depends on the **walking-skeleton stance**, which no parser can derive from a team's free-form `## Walking Skeleton` practices prose. This is your knowledge-work, handed back to the engine. Do NOT run the stage body yet. Instead: read the `## Walking Skeleton` section (resolution order `aidlc/spaces/<space>/memory/org.md` → `team.md` → `project.md`; most-specific non-empty statement wins) and classify the stance — **"always"/"every greenfield feature"** → `on`; **"never"** → `off`; **"scope-dependent"/unspecified/empty** → `scope-dependent` (the engine then uses the active scope file's `skeleton:` field). Honour the `PRACTICES_OVERRIDE` judgement (a bolt-plan marker contradicting practices loses; practices wins: emit the override row first). Then `report --skeleton-stance <on|off|scope-dependent>`; the next `next` emits the resolved Construction directive; apply metadata routing before any body or gate. Follow its stage and Unit, including a skeleton-first Unit route, rather than assuming the previous stage is re-emitted. See the conductor persona for the full classification rules.
 
-**Per-unit iteration (`directive.unit`).** After Construction metadata routing has excluded checkpoint and completion-only directives, when `directive.unit` is present, this `run-stage` is ONE iteration of a per-unit Construction stage (`for_each: unit-of-work`, covering the 3.1-3.4 design stages and code-generation). Run the question flow for THIS unit; only when `directive.ceremony.summary_confirmation === "on"`, apply the PRE-GENERATION SUMMARY STOP, passing `--unit "<directive.unit>"` to both checkpoint log commands. When summary confirmation is off, generate directly with no checkpoint or receipt. Then run the body and write its artifacts under `construction/<directive.unit>/<directive.stage>/`; only when `directive.reviewer` is present, follow stage-protocol-reviewer.md §12a for this unit only. The engine drives the loop: if `directive.gate` is **false** on a per-unit directive, re-run `next` after the receipt-backed artifact work (do NOT report-approve); the engine hands you the next uncovered unit, and once every unit is built it re-emits this stage with `gate: true`. For a remaining per-unit stage gate, use `construction_policy.human_completion_required` to choose routine human completion or automatic reporting; only the legacy path without policy retains the single human stage gate, running the §13 ritual only when `directive.protocol_modules` lists `learnings`. Checkpoint and completion-only directives must already have branched before this body procedure. When present, review accounting and normal budgets are per Unit; an invalidated terminal receipt gets the same single bounded stale-receipt recovery for that Unit. If `directive.unit` is absent because there is no compiled Unit DAG, run one ordinary stage iteration with no Bolt or per-Unit ceremony. When unit-major construction iteration is recorded (`Construction Iteration: unit-major`), the engine may emit a `directive.stage` that names a LATER Construction stage (including code-generation, which the unit-major walk covers) than the state's Current Stage; always act on the directive's own `directive.stage` + `directive.unit`, never on Current Stage.
+**Per-unit iteration (`directive.unit`).** After Construction metadata routing has excluded checkpoint and completion-only directives, when `directive.unit` is present, this `run-stage` is ONE iteration of a per-unit Construction stage (`for_each: unit-of-work`, covering the 3.1-3.4 design stages and code-generation). Run the question flow for THIS unit; only when `directive.ceremony.summary_confirmation === "on"`, apply the PRE-GENERATION SUMMARY STOP, passing `--unit "<directive.unit>"` to both checkpoint log commands. When summary confirmation is off, generate directly with no checkpoint or receipt. Then run the body and write its artifacts under `construction/<directive.unit>/<directive.stage>/`; only when `directive.reviewer` is present, follow stage-protocol-reviewer.md §12a for this unit only. The engine drives the loop: if `directive.gate` is **false** on a per-unit directive, re-run `next` after the receipt-backed artifact work (do NOT report-approve, do NOT present a gate); the engine hands you the next uncovered unit, and once every unit is built it re-emits this stage with `gate: true`. For a remaining per-unit stage gate, use `construction_policy.human_completion_required` to choose routine human completion or automatic reporting; only the legacy path without policy retains the single human stage gate, running the §13 ritual only when `directive.protocol_modules` lists `learnings`. Checkpoint and completion-only directives must already have branched before this body procedure. When present, review accounting and normal budgets are per Unit; an invalidated terminal receipt gets the same single bounded stale-receipt recovery for that Unit. If `directive.unit` is absent because there is no compiled Unit DAG, run one ordinary stage iteration with no Bolt or per-Unit ceremony. When unit-major construction iteration is recorded (`Construction Iteration: unit-major`), the engine may emit a `directive.stage` that names a LATER Construction stage (including code-generation, which the unit-major walk covers) than the state's Current Stage; always act on the directive's own `directive.stage` + `directive.unit`, never on Current Stage.
 
 ---
 
 ### Cursor
 
-- **`gate: "unresolved"`** — the initial Construction route depends on the **walking-skeleton stance**. Do NOT run the stage body yet. Read the `## Walking Skeleton` section (resolution order `aidlc/spaces/<space>/memory/org.md` → `team.md` → `project.md`; most-specific non-empty statement wins) and classify the stance — **"always"/"every greenfield feature"** → `on`; **"never"** → `off`; **"scope-dependent"/unspecified/empty** → `scope-dependent`. Honour the `PRACTICES_OVERRIDE` judgement. Then `report --skeleton-stance <on|off|scope-dependent>`; the next `next` emits the resolved Construction directive; apply metadata routing before any body or gate. Follow its stage and Unit, including a skeleton-first Unit route, rather than assuming the previous stage is re-emitted.
+- **`gate: "unresolved"`** — the initial Construction route depends on the **walking-skeleton stance**, which no parser can derive from a team's free-form `## Walking Skeleton` practices prose. This is your knowledge-work, handed back to the engine. Do NOT run the stage body yet. Instead: read the `## Walking Skeleton` section (resolution order `aidlc/spaces/<space>/memory/org.md` → `team.md` → `project.md`; most-specific non-empty statement wins) and classify the stance — **"always"/"every greenfield feature"** → `on`; **"never"** → `off`; **"scope-dependent"/unspecified/empty** → `scope-dependent` (the engine then uses the active scope file's `skeleton:` field). Honour the `PRACTICES_OVERRIDE` judgement (a bolt-plan marker contradicting practices loses; practices wins: emit the override row first). Then `report --skeleton-stance <on|off|scope-dependent>`; the next `next` emits the resolved Construction directive; apply metadata routing before any body or gate. Follow its stage and Unit, including a skeleton-first Unit route, rather than assuming the previous stage is re-emitted. See the conductor persona for the full classification rules.
 
 **Per-unit iteration (`directive.unit`).** After Construction metadata routing has excluded checkpoint and completion-only directives, when `directive.unit` is present, this `run-stage` is ONE iteration of a per-unit Construction stage (`for_each: unit-of-work`, covering the 3.1-3.4 design stages and code-generation). Run the question flow for THIS unit; only when `directive.ceremony.summary_confirmation === "on"`, apply the PRE-GENERATION SUMMARY STOP, passing `--unit "<directive.unit>"` to both checkpoint log commands. When summary confirmation is off, generate directly with no checkpoint or receipt. Then run the body and write its artifacts under `construction/<directive.unit>/<directive.stage>/`; only when `directive.reviewer` is present, follow stage-protocol-reviewer.md §12a for this unit only. The engine drives the loop: if `directive.gate` is **false** on a per-unit directive, re-run `next` after the receipt-backed artifact work (do NOT report-approve, do NOT present a gate); the engine hands you the next uncovered unit, and once every unit is built it re-emits this stage with `gate: true`. For a remaining per-unit stage gate, use `construction_policy.human_completion_required` to choose routine human completion or automatic reporting; only the legacy path without policy retains the single human stage gate, running the §13 ritual only when `directive.protocol_modules` lists `learnings`. Checkpoint and completion-only directives must already have branched before this body procedure. When present, review accounting and normal budgets are per Unit; an invalidated terminal receipt gets the same single bounded stale-receipt recovery for that Unit. If `directive.unit` is absent because there is no compiled Unit DAG, run one ordinary stage iteration with no Bolt or per-Unit ceremony. When unit-major construction iteration is recorded (`Construction Iteration: unit-major`), the engine may emit a `directive.stage` that names a LATER Construction stage (including code-generation, which the unit-major walk covers) than the state's Current Stage; always act on the directive's own `directive.stage` + `directive.unit`, never on Current Stage.
 
@@ -805,7 +869,7 @@ prepare/fan-out/check/review/finalize loop run.
 
 ### opencode
 
-- **`gate: "unresolved"`** — the initial Construction route depends on the **walking-skeleton stance**. Do NOT run the stage body yet. Read the `## Walking Skeleton` section (resolution order `aidlc/spaces/<space>/memory/org.md` → `team.md` → `project.md`; most-specific non-empty statement wins) and classify the stance — **"always"/"every greenfield feature"** → `on`; **"never"** → `off`; **"scope-dependent"/unspecified/empty** → `scope-dependent`. Honour the `PRACTICES_OVERRIDE` judgement. Then `report --skeleton-stance <on|off|scope-dependent>`; the next `next` emits the resolved Construction directive; apply metadata routing before any body or gate. Follow its stage and Unit, including a skeleton-first Unit route, rather than assuming the previous stage is re-emitted.
+- **`gate: "unresolved"`** — the initial Construction route depends on the **walking-skeleton stance**, which no parser can derive from a team's free-form `## Walking Skeleton` practices prose. This is your knowledge-work, handed back to the engine. Do NOT run the stage body yet. Instead: read the `## Walking Skeleton` section (resolution order `aidlc/spaces/<space>/memory/org.md` → `team.md` → `project.md`; most-specific non-empty statement wins) and classify the stance — **"always"/"every greenfield feature"** → `on`; **"never"** → `off`; **"scope-dependent"/unspecified/empty** → `scope-dependent` (the engine then uses the active scope file's `skeleton:` field). Honour the `PRACTICES_OVERRIDE` judgement (a bolt-plan marker contradicting practices loses; practices wins: emit the override row first). Then `report --skeleton-stance <on|off|scope-dependent>`; the next `next` emits the resolved Construction directive; apply metadata routing before any body or gate. Follow its stage and Unit, including a skeleton-first Unit route, rather than assuming the previous stage is re-emitted. See the conductor persona for the full classification rules.
 
 **Per-unit iteration (`directive.unit`).** After Construction metadata routing has excluded checkpoint and completion-only directives, when `directive.unit` is present, this `run-stage` is ONE iteration of a per-unit Construction stage (`for_each: unit-of-work`, covering the 3.1-3.4 design stages and code-generation). Run the question flow for THIS unit; only when `directive.ceremony.summary_confirmation === "on"`, apply the PRE-GENERATION SUMMARY STOP, passing `--unit "<directive.unit>"` to both checkpoint log commands. When summary confirmation is off, generate directly with no checkpoint or receipt. Then run the body and write its artifacts under `construction/<directive.unit>/<directive.stage>/`; only when `directive.reviewer` is present, follow stage-protocol-reviewer.md §12a for this unit only. The engine drives the loop: if `directive.gate` is **false** on a per-unit directive, re-run `next` after the receipt-backed artifact work (do NOT report-approve, do NOT present a gate); the engine hands you the next uncovered unit, and once every unit is built it re-emits this stage with `gate: true`. For a remaining per-unit stage gate, use `construction_policy.human_completion_required` to choose routine human completion or automatic reporting; only the legacy path without policy retains the single human stage gate, running the §13 ritual only when `directive.protocol_modules` lists `learnings`. Checkpoint and completion-only directives must already have branched before this body procedure. When present, review accounting and normal budgets are per Unit; an invalidated terminal receipt gets the same single bounded stale-receipt recovery for that Unit. If `directive.unit` is absent because there is no compiled Unit DAG, run one ordinary stage iteration with no Bolt or per-Unit ceremony. When unit-major construction iteration is recorded (`Construction Iteration: unit-major`), the engine may emit a `directive.stage` that names a LATER Construction stage (including code-generation, which the unit-major walk covers) than the state's Current Stage; always act on the directive's own `directive.stage` + `directive.unit`, never on Current Stage.
 
@@ -813,49 +877,24 @@ prepare/fan-out/check/review/finalize loop run.
 
 ### GitHub Copilot
 
-- **`gate: "unresolved"`** — the initial Construction route depends on the **walking-skeleton stance**. Do NOT run the stage body yet. Read the `## Walking Skeleton` section (resolution order `aidlc/spaces/<space>/memory/org.md` → `team.md` → `project.md`; most-specific non-empty statement wins) and classify the stance — **"always"/"every greenfield feature"** → `on`; **"never"** → `off`; **"scope-dependent"/unspecified/empty** → `scope-dependent`. Honour the `PRACTICES_OVERRIDE` judgement. Then `report --skeleton-stance <on|off|scope-dependent>`; the next `next` emits the resolved Construction directive; apply metadata routing before any body or gate. Follow its stage and Unit, including a skeleton-first Unit route, rather than assuming the previous stage is re-emitted.
+- **`gate: "unresolved"`** — the initial Construction route depends on the **walking-skeleton stance**, which no parser can derive from a team's free-form `## Walking Skeleton` practices prose. This is your knowledge-work, handed back to the engine. Do NOT run the stage body yet. Instead: read the `## Walking Skeleton` section (resolution order `aidlc/spaces/<space>/memory/org.md` → `team.md` → `project.md`; most-specific non-empty statement wins) and classify the stance — **"always"/"every greenfield feature"** → `on`; **"never"** → `off`; **"scope-dependent"/unspecified/empty** → `scope-dependent` (the engine then uses the active scope file's `skeleton:` field). Honour the `PRACTICES_OVERRIDE` judgement (a bolt-plan marker contradicting practices loses; practices wins: emit the override row first). Then `report --skeleton-stance <on|off|scope-dependent>`; the next `next` emits the resolved Construction directive; apply metadata routing before any body or gate. Follow its stage and Unit, including a skeleton-first Unit route, rather than assuming the previous stage is re-emitted. See the conductor persona for the full classification rules.
 
-**Per-unit iteration (`directive.unit`).** After Construction metadata routing has excluded checkpoint and completion-only directives, when `directive.unit` is present, this `run-stage` is ONE iteration of a per-unit Construction stage (`for_each: unit-of-work`, covering the 3.1-3.4 design stages and non-autonomous code-generation). Run the question flow for THIS unit; only when `directive.ceremony.summary_confirmation === "on"`, apply the PRE-GENERATION SUMMARY STOP, passing `--unit "<directive.unit>"` to both checkpoint log commands. When summary confirmation is off, generate directly with no checkpoint or receipt. Then run the body and write its artifacts under `construction/<directive.unit>/<directive.stage>/`; only when `directive.reviewer` is present, follow stage-protocol-reviewer.md §12a for this unit only. The engine drives the loop: if `directive.gate` is **false** on a per-unit directive, re-run `next` after the receipt-backed artifact work (do NOT report-approve, do NOT present a gate); the engine hands you the next uncovered unit, and once every unit is built it re-emits this stage with `gate: true`. For a remaining per-unit stage gate, use `construction_policy.human_completion_required` to choose routine human completion or automatic reporting; only the legacy path without policy retains the single human stage gate, running the §13 ritual only when `directive.protocol_modules` lists `learnings`. Checkpoint and completion-only directives must already have branched before this body procedure. When present, review accounting and normal budgets are per Unit; an invalidated terminal receipt gets the same single bounded stale-receipt recovery for that Unit. If `directive.unit` is absent because there is no compiled Unit DAG, run one ordinary stage iteration with no Bolt or per-Unit ceremony. When unit-major construction iteration is recorded (`Construction Iteration: unit-major`), the engine may emit a `directive.stage` that names a LATER design stage than the state's Current Stage; always act on the directive's own `directive.stage` + `directive.unit`, never on Current Stage.
+**Per-unit iteration (`directive.unit`).** After Construction metadata routing has excluded checkpoint and completion-only directives, when `directive.unit` is present, this `run-stage` is ONE iteration of a per-unit Construction stage (`for_each: unit-of-work`, covering the 3.1-3.4 design stages and code-generation). Run the question flow for THIS unit; only when `directive.ceremony.summary_confirmation === "on"`, apply the PRE-GENERATION SUMMARY STOP, passing `--unit "<directive.unit>"` to both checkpoint log commands. When summary confirmation is off, generate directly with no checkpoint or receipt. Then run the body and write its artifacts under `construction/<directive.unit>/<directive.stage>/`; only when `directive.reviewer` is present, follow stage-protocol-reviewer.md §12a for this unit only. The engine drives the loop: if `directive.gate` is **false** on a per-unit directive, re-run `next` after the receipt-backed artifact work (do NOT report-approve, do NOT present a gate); the engine hands you the next uncovered unit, and once every unit is built it re-emits this stage with `gate: true`. For a remaining per-unit stage gate, use `construction_policy.human_completion_required` to choose routine human completion or automatic reporting; only the legacy path without policy retains the single human stage gate, running the §13 ritual only when `directive.protocol_modules` lists `learnings`. Checkpoint and completion-only directives must already have branched before this body procedure. When present, review accounting and normal budgets are per Unit; an invalidated terminal receipt gets the same single bounded stale-receipt recovery for that Unit. If `directive.unit` is absent because there is no compiled Unit DAG, run one ordinary stage iteration with no Bolt or per-Unit ceremony. When unit-major construction iteration is recorded (`Construction Iteration: unit-major`), the engine may emit a `directive.stage` that names a LATER Construction stage (including code-generation, which the unit-major walk covers) than the state's Current Stage; always act on the directive's own `directive.stage` + `directive.unit`, never on Current Stage.
 
 ### Grouped Plan Approval
 
-Use grouping only for the exact named Units of the live Code Generation
-`invoke-swarm` directive, with all plans ready and unchanged planned source.
-Create a JSON manifest of at most 64 KiB in the active record. Pass its
-record-relative path to `--batch-file`, without absolute paths, `..` components,
-or symlinked components. Use the actual project-relative questions paths inside
-the manifest; never reconstruct the Unit set from the DAG:
-
-```json
-{"batch":"<review name>","units":[{"unit":"<emitted Unit>","questionsFile":"<project-relative questions path>"}]}
-```
-
-Before showing the plans, use the invoking SessionStart session ID:
-
-```bash
-{{INVOKE}} engine log decision --stage code-generation --checkpoint plan-approval --batch-file "<manifest.json>" --session "<session ID>" --decision "Approve these named plans?" --options "Approve Plans,Request Changes"
-```
-
-Show every named Unit and its plan, then present **Approve Plans** / **Request
-Changes** and stop for the actual human response. On **Approve Plans**, write
-`[Answer]: Approve Plan` into each named questions file, preserving its bound
-fingerprint and planned-source tags, then record:
-
-```bash
-{{INVOKE}} engine log answer --stage code-generation --checkpoint plan-approval --batch-file "<manifest.json>" --session "<session ID>" --details "Approve Plans"
-```
-
-On **Request Changes**, write that exact choice into each named questions file
-and call the same answer command with `--details "Request Changes"`; gather the
-human's feedback, revise the affected plans, and re-present current evidence.
-Never write either choice before the human answers. Grouped approval binds the
-manifest's exact live Unit set and each plan/questions fingerprint, produces
-individual approval receipts, and refuses source drift even under relaxed Change
-Control. It does not approve future batches or remove any Unit's Plan Approval.
-
-Do not combine `--batch-file` with `--unit`, `--stage-level`, `--questions-file`,
-`--single`, or `--override`. Legacy protected-choice mediation and harnesses
-without grouped support use the existing single-Unit approval flow. If grouping
-refuses because the live set, plans, questions, or source changed, explain the
-error and obtain fresh individual or grouped approval; never invent receipts,
-relax verification, or turn the refusal into an automatic grant.
+When several Units' plans are ready at once, the engine asks about them in one
+question: `plan_approval.targets` carries each Unit's summary and plan path, and
+the choices are **Approve all**, **Request Changes**, and **I'll edit the files**.
+Show every Unit's summary lines under the question and end the turn. Read the
+person's reply and record the choice they made, as for one plan:
+`{{INVOKE}} engine log answer --stage code-generation --checkpoint plan-approval
+--details "Approve Plan"` (or `"Request Changes"`, or `"I'll edit the files"`),
+with `--units "<unit>,<unit>"` to record a choice for some Units, then the rest;
+then run `next`. "Approve all" approves every Unit. For a change that names a
+Unit ("change billing: use Stripe"), record Request Changes for that Unit and
+Approve Plan for the rest; for a change that names no Unit, ask once which plan
+should change. An exact "Approve all" or "I'll edit the files" is recorded for
+you; a bare Request Changes still needs to know which plan. Every Unit still
+gets its own approval record, bound to its own plan; grouping only changes how
+the question is shown, and never approves a later batch.

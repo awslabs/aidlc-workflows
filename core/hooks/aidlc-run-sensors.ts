@@ -18,18 +18,23 @@
 // semantics defer to the future ralph driver.
 
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
 import { type GraphStage, loadGraph } from "../tools/aidlc-graph.ts";
 import { aidlcEngineCommand } from "../tools/aidlc-runtime-paths.ts";
+import { EXTENDED_SUBPROCESS_TIMEOUT_MS } from "../tools/aidlc-runtime-budget.ts";
 import {
+  hookStandsOutside,
+  enterHookWorkflow,
   auditFilePath,
   type ClaudeCodeHookInput,
   getField,
   hooksHealthDir,
+  writeHookStatusFile,
   isClaudeCodeHookInput,
   isoTimestamp,
   LEGACY_SENSORS_DIR,
+  normalizeDriveLetter,
   readActiveDirectiveMarker,
   readStateFile,
   recordHookDrop,
@@ -43,16 +48,31 @@ import {
 } from "../tools/aidlc-lib.ts";
 
 export async function run(input: string): Promise<number> {
-// Step 1 — Resolve project dir from import.meta.url. Mirrors
-// aidlc-write-audit-log.ts and aidlc-rebuild-stage-graph.ts precedent.
-const projectDir = resolveProjectDirFromHook(import.meta.url);
+  // Step 1 — Resolve project dir from import.meta.url. Mirrors
+  // aidlc-write-audit-log.ts and aidlc-rebuild-stage-graph.ts precedent.
+  const projectDir = resolveProjectDirFromHook(import.meta.url);
+  let payloadSession: unknown;
+  try {
+    payloadSession = (JSON.parse(input) as { session_id?: unknown }).session_id;
+  } catch {
+    // Missing/malformed payload: resolve without a payload session.
+  }
+  // A write in a conversation that has not joined the selected workflow fires none of its sensors.
+  const workflow = enterHookWorkflow(projectDir, payloadSession);
+  try {
+    if (hookStandsOutside(workflow)) return 0;
+    return await fireSensors(input, projectDir);
+  } finally {
+    workflow.restore();
+  }
+}
 
-// Subprocess timeout. Defaults to 90s (covers tsc's 60s manifest cap +
-// dispatcher overhead). t95's timeout case overrides via env var to
-// avoid patching the production source tree. `Number(undefined) || N`
-// pattern handles unset / empty / unparseable equally.
+async function fireSensors(input: string, projectDir: string): Promise<number> {
+
+// Enclosing dispatcher backstop; explicit project/user limits still win,
+// including the deliberately short timeout-calibration fixtures.
 const SUBPROCESS_TIMEOUT_MS =
-  Number(resolveProjectFlag("AIDLC_SENSOR_TIMEOUT_MS")) || 90_000;
+  Number(resolveProjectFlag("AIDLC_SENSOR_TIMEOUT_MS")) || EXTENDED_SUBPROCESS_TIMEOUT_MS;
 
 // Health-dir for the heartbeat (run-sensors.last). Read by the future
 // hook-health doctor.
@@ -87,9 +107,10 @@ const filePath = isAbsolute(rawFilePath)
 // Step 5 - Recursion guard. Cover new output and the readable legacy findings
 // directory, including the older flat aidlc-docs location. Writers always use
 // sensorsDir; resolving a legacy read never creates or moves either directory.
+// Drive letters are normalized on both sides (see normalizeDriveLetter).
 const sensorsLeaves = [sensorsDir(projectDir), sensorsReadDir(projectDir)]
-  .map((path) => path.replace(/\\/g, "/").replace(/\/$/, ""));
-const filePathNorm = filePath.replace(/\\/g, "/");
+  .map((path) => normalizeDriveLetter(path.replace(/\\/g, "/").replace(/\/$/, "")));
+const filePathNorm = normalizeDriveLetter(filePath.replace(/\\/g, "/"));
 if (
   sensorsLeaves.some((leaf) => filePathNorm === leaf || filePathNorm.startsWith(`${leaf}/`)) ||
   filePathNorm.includes(`aidlc-docs/${LEGACY_SENSORS_DIR}/`)
@@ -129,12 +150,7 @@ if (resolveCeremony("sensors", scope, stateContent).value === "off") return 0;
 // with empty sensors_applicable like workspace-scaffold, (b) no
 // matches glob hit since last fire. See plan § Cross-milestone for the
 // canonical heuristic.
-mkdirSync(healthDir, { recursive: true });
-writeFileSync(
-  join(healthDir, "run-sensors.last"),
-  isoTimestamp(),
-  "utf-8"
-);
+writeHookStatusFile(healthDir, "run-sensors.last", isoTimestamp());
 
 // Step 8b — First-fire banner. On the first invocation against a
 // workspace (no .first-fired marker yet), print a one-line stderr
@@ -150,11 +166,8 @@ if (!existsSync(firstFiredMarker)) {
       "See the AI-DLC documentation to learn how rules and " +
       "the learning loop work.\n"
   );
-  try {
-    writeFileSync(firstFiredMarker, isoTimestamp(), "utf-8");
-  } catch {
-    // Marker write failure is non-fatal — banner may repeat next fire.
-  }
+  // Marker write failure is non-fatal: the banner may repeat next fire.
+  writeHookStatusFile(healthDir, ".first-fired", isoTimestamp());
 }
 
 // Step 9 — Active stage lookup (C3). The compile-resolved
@@ -200,8 +213,10 @@ if (applicableSensors.length === 0) return 0;
 // do not fire. The framework artifact glob is `**/{aidlc-docs,intents}/**`
 // (P9 — the per-intent record tree carries an `/intents/` segment; the legacy
 // `aidlc-docs/` arm stays so a pre-migration artifact still matches). The
-// relaxed `**/<seg>/**` form (vs `**/<seg>/**/*.md`) is load-bearing: the
-// upstream dispatcher's bespoke globToRegex rejects the *.md form even though
+// gate-fired document-shape manifests add a `codekb` arm for the space-level
+// CodeKB that reverse-engineering writes (#771). The relaxed `**/<seg>/**`
+// form (vs `**/<seg>/**/*.md`) is load-bearing: the upstream dispatcher's
+// bespoke globToRegex rejects the *.md form even though
 // Bun.Glob accepts both — both engines agree on the relaxed form.
 const sensorTs = join(projectDir, harnessDir(), "tools", "aidlc-sensor.ts");
 for (const entry of applicableSensors) {
@@ -261,20 +276,20 @@ for (const entry of applicableSensors) {
       recordHookDrop(
         projectDir,
         "run-sensors",
-        `${entry.id}: subprocess killed by SIGTERM (timeout)`
+        `sensor ${entry.id} timed out: subprocess killed by SIGTERM`
       );
     } else if (result.error) {
       recordHookDrop(
         projectDir,
         "run-sensors",
-        `${entry.id}: ${result.error.message}`
+        `sensor ${entry.id} could not start: ${result.error.message}`
       );
     } else if (result.status !== 0) {
       const stderr = result.stderr?.toString().trim() ?? "";
       recordHookDrop(
         projectDir,
         "run-sensors",
-        `${entry.id}: dispatcher exit ${result.status}${stderr ? `: ${stderr}` : ""}`
+        `sensor ${entry.id} dispatcher exit ${result.status}${stderr ? `: ${stderr}` : ""}`
       );
     }
   } catch (e: unknown) {
@@ -282,7 +297,7 @@ for (const entry of applicableSensors) {
     recordHookDrop(
       projectDir,
       "run-sensors",
-      `${entry.id}: ${e instanceof Error ? e.message : String(e)}`
+      `sensor ${entry.id} could not run: ${e instanceof Error ? e.message : String(e)}`
     );
   }
 }

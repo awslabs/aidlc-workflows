@@ -1,4 +1,9 @@
-import { describe, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { describe, expect, test, setDefaultTimeout } from "bun:test";
 import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -44,6 +49,8 @@ import {
   validateStructuredReview,
 } from "../../.github/scripts/ai-pr-review.ts";
 import { REPO_ROOT } from "../harness/fixtures.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const BASE = "b".repeat(40);
 const HEAD = "a".repeat(40);
@@ -1036,7 +1043,7 @@ describe("t345 AIDA findings ledger", () => {
       const ledgerModule = pathToFileURL(join(REPO_ROOT, ".github", "scripts", "ai-pr-ledger.ts")).href;
       writeFileSync(driver, `import { main } from ${JSON.stringify(ledgerModule)};\nmain(process.argv.slice(2), ${JSON.stringify(gh.path)});\n`);
       const output = join(root, "ledger.json");
-      const run = (args: string[]) => execFileSync(process.execPath, [driver, ...args], { cwd: REPO_ROOT, encoding: "utf8", env });
+      const run = (args: string[]) => execFileSync(process.execPath, [driver, ...args], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), cwd: REPO_ROOT, encoding: "utf8", env });
       expect(run(["fetch", "--repo", "acme/repo", "--pr", "42", "--output", output]).trim()).toBe("new migrated=false");
       expect(JSON.parse(readFileSync(output, "utf8"))).toMatchObject({ version: LEDGER_VERSION, pullRequest: 42, nextId: 1, findings: [], migrated: false, expectedDigest: null });
 
@@ -1183,7 +1190,7 @@ if (endpoint === "repos/acme/repo/pulls/42" && !args.includes("--method")) {
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
-  }, 15_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("the command workflow is isolated and refreshes the verdict; the review workflow merges before publishing", () => {
     expect(LEDGER_WORKFLOW).toContain("  issue_comment:");
