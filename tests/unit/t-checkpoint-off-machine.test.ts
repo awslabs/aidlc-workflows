@@ -141,7 +141,11 @@ function approve(p: string, unit: string): void {
   expect(checkpoint(["--action", "approve", "--session", session, "--user-input", "Approve"]).approved).toBe(true);
 }
 
-type Status = { approved: boolean; errors: string[]; rereview?: { stage: string; command: string } | null };
+type Status = {
+  approved: boolean;
+  errors: string[];
+  rereview?: { stage: string; reviewer: string; iteration: number; command: string } | null;
+};
 
 function checkpointStatus(p: string, unit: string): Status {
   const status = tool(p, "bolt", ["checkpoint", "--unit", unit, "--kind", "unit", "--action", "status"]);
@@ -266,6 +270,33 @@ describe("t-checkpoint-off-machine: an approved Unit whose reviewed evidence can
       console.log(`t-checkpoint-off-machine strict ${name}: status ${JSON.stringify({ errors: status.errors, rereview: status.rereview })} next ${JSON.stringify(next.directive ?? next.stderr).slice(0, 1500)}`);
     }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
   }
+
+  // Strict with the written reviews not on this machine (a teammate's clone):
+  // nothing here can check them, so each stage gets the one re-check, a fresh
+  // review, and then the person approves the Unit once. Never a refusal that
+  // nothing the person or the agent can do clears.
+  test("Guard Policy strict, the written reviews not on this machine: a fresh review of each stage, then alpha is approved again", () => {
+    const p = fixture(STRICT);
+    const reviews = build(p, "alpha");
+    approve(p, "alpha");
+    cases["review-record-absent"].act(p, reviews);
+    const rechecked: string[] = [];
+    for (let round = 0; round <= stages.length; round++) {
+      const status = checkpointStatus(p, "alpha");
+      if (!status.rereview) break;
+      rechecked.push(status.rereview.stage);
+      reviewThroughLog(p, [
+        "review", "--stage", status.rereview.stage, "--reviewer", status.rereview.reviewer,
+        "--unit", "alpha", "--iteration", String(status.rereview.iteration),
+      ]);
+    }
+    expect(rechecked.length, "no re-check was offered").toBeGreaterThan(0);
+    const status = checkpointStatus(p, "alpha");
+    expect(status, JSON.stringify(status)).toMatchObject({ errors: [] });
+    approve(p, "alpha");
+    expect(checkpointStatus(p, "alpha").approved).toBe(true);
+    expect(readAuditShardEvents(p).filter((row) => row.event === "GATE_REJECTED")).toEqual([]);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   // Strict holds a Unit whose code no longer matches what its review saw: the
   // code is re-checked once, then the person approves the Unit once, never
