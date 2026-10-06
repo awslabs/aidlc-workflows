@@ -184,7 +184,7 @@ fires for the in-flight workflow (BGP-stability property — see
 | `build-and-test` | `[required-sections, upstream-coverage, type-check]` (linter intentionally omitted — build runs canonical lint) |
 | `ci-pipeline` | `[required-sections, upstream-coverage, linter, type-check]` |
 | 4 per-Unit construction-design stages (`functional-design`, `infrastructure-design`, `nfr-design`, `nfr-requirements`) | `[required-sections, upstream-coverage, linter, type-check, traceability]` |
-| `code-generation` | `[linter, type-check, traceability]` |
+| `code-generation` | `[required-sections, traceability]` (linter/type-check omitted — advisory per-write cost; type-check runs at `build-and-test`, lint in the build pipeline — RFC #1911) |
 
 Forks customise stages by editing the stage's `sensors:` list directly
 — the binding lives next to the thing being customised. A manifest is a

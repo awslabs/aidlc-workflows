@@ -43,8 +43,6 @@ requires_stage:
   - infrastructure-design
 sensors:
   - required-sections
-  - linter
-  - type-check
   - traceability
 scopes:
   - enterprise
@@ -516,11 +514,19 @@ the record dir); the planning, plan-approval, and summary artefacts
 `unit-test-instructions.md`, `code-summary.md`) live under
 `<code-generation-record>/`.
 
-Imports: `required-sections`, `linter`, `type-check`, `traceability`.
+Imports: `required-sections`, `traceability`.
 
 `required-sections` checks each planning and summary artefact for at least two
-H2 headings. `linter` and `type-check` run against matching generated code,
-and `traceability` verifies the per-Unit coverage table and every `OK` target.
+H2 headings, and `traceability` verifies the per-Unit coverage table and every
+`OK` target.
+
+`linter` and `type-check` are intentionally NOT imported here. As advisory
+`fire_on: write` sensors they fired a full-project `tsc` and `eslint` run on
+every generated file — the dominant per-write cost during this stage — for
+feedback that is not enforced. Type coverage still runs at `build-and-test`
+(which imports `type-check`), and the canonical lint runs in the build pipeline
+that stage drives, so dropping the per-file runs here speeds generation without
+losing the checks (RFC #1911 quick win).
 
 `upstream-coverage` is intentionally NOT imported because the stage consumes a
 broad, scope-dependent design set. `source-manifest.json` is
