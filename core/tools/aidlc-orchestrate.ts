@@ -3770,9 +3770,14 @@ function parseNextFlags(argv: string[]): ParsedFlags {
   // explicitly, the positional text is pure description — peeling there
   // truncates an intent that happens to OPEN with a scope word
   // (`--new-intent --scope feature "feature flags for billing"`).
+  // A scope name followed by a colon (`/aidlc classic: Build a notes app`)
+  // names the plan the same way, also when the agent quotes the whole request
+  // as one argument, as Kiro IDE's PowerShell does. Without the colon, one
+  // quoted argument that only opens with a scope word stays the request
+  // ("classic car rental website"): splitting a plan name off it is the
+  // agent's reading of the person's words.
   if (
     intentWords.length > 0 &&
-    validScopes().has(intentWords[0]) &&
     !flags.scope &&
     !flags.newIntent &&
     !flags.compose &&
@@ -3781,7 +3786,15 @@ function parseNextFlags(argv: string[]): ParsedFlags {
     !flags.stage &&
     !flags.phase
   ) {
-    flags.positionalScope = intentWords.shift();
+    const colonNamed = intentWords[0].replace(ENTRY_WORD_PREFIX, "").match(/^([A-Za-z][\w-]*):(?:\s+([\s\S]*))?$/);
+    if (validScopes().has(intentWords[0])) {
+      flags.positionalScope = intentWords.shift();
+    } else if (colonNamed && validScopes().has(colonNamed[1].toLowerCase())) {
+      flags.positionalScope = colonNamed[1].toLowerCase();
+      const rest = (colonNamed[2] ?? "").trim();
+      if (rest) intentWords[0] = rest;
+      else intentWords.shift();
+    }
   }
   if (intentWords.length > 0) flags.intent = intentWords.join(" ").replace(ENTRY_WORD_PREFIX, "");
   if (!flags.claim && (flags.claimTeam || flags.claimRhythm)) {
