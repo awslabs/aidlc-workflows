@@ -520,13 +520,9 @@ Imports: `required-sections`, `traceability`.
 H2 headings, and `traceability` verifies the per-Unit coverage table and every
 `OK` target.
 
-`linter` and `type-check` are intentionally NOT imported here. As advisory
-`fire_on: write` sensors they fired a full-project `tsc` and `eslint` run on
-every generated file — the dominant per-write cost during this stage — for
-feedback that is not enforced. Type coverage still runs at `build-and-test`
-(which imports `type-check`), and the canonical lint runs in the build pipeline
-that stage drives, so dropping the per-file runs here speeds generation without
-losing the checks (RFC #1911 quick win).
+`linter` and `type-check` are not imported here: they ran on every file write
+and nothing read their results; Build and Test runs the project's build and
+tests.
 
 `upstream-coverage` is intentionally NOT imported because the stage consumes a
 broad, scope-dependent design set. `source-manifest.json` is

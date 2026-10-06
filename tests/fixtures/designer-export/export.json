@@ -2371,8 +2371,6 @@
       ],
       "sensors": [
         "required-sections",
-        "linter",
-        "type-check",
         "traceability"
       ],
       "scopes": [
@@ -2419,22 +2417,6 @@
           "default_severity": "advisory",
           "category": "document-shape",
           "matches": "**/{aidlc-docs,intents,codekb}/**"
-        },
-        {
-          "id": "linter",
-          "path": ".claude/sensors/aidlc-linter.md",
-          "fire_on": "write",
-          "default_severity": "advisory",
-          "category": "code-quality",
-          "matches": "**/*.{ts,js}"
-        },
-        {
-          "id": "type-check",
-          "path": ".claude/sensors/aidlc-type-check.md",
-          "fire_on": "write",
-          "default_severity": "advisory",
-          "category": "code-quality",
-          "matches": "**/*.{ts,tsx}"
         },
         {
           "id": "traceability",
