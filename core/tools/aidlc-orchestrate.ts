@@ -8443,8 +8443,9 @@ function nextUncoveredUnit(
 }
 
 // The step a Unit still owes when its work for this stage is done: every
-// required file is on disk and a fresh READY review of them is recorded in this
-// attempt, but its completion receipt was never written (receipt mode settles a
+// required file is on disk and a fresh final review of them is recorded in this
+// attempt (READY, or NOT-READY once its review turns are spent, which goes to
+// the person as it is), but its completion receipt was never written (receipt mode settles a
 // Unit only on UNIT_COMPLETED). Handing back the stage body, or "run next",
 // only loops, so the step names the receipt's exact commands. The fresh review
 // is the evidence the files are this attempt's: a reopened or redone Unit's
@@ -8474,7 +8475,8 @@ function unitReceiptOnlyStep(
   const reviewClass = resolveReviewClass(node.review_class ?? "adversarial", scope, stateContent);
   if (reviewClass === "none") return null;
   const review = freshReviewReceipts(projectDir, stateContent, node, { reviewClass });
-  if (review.unitVerdicts.get(unit) !== "READY") return null;
+  // Only final verdicts are kept, the same evidence `unit complete` accepts.
+  if (!review.unitVerdicts.has(unit)) return null;
   const command = (action: string): string =>
     `\`${renderEngineInvocation({ route: "state", args: ["unit", action, "--stage", node.slug, "--unit", unit] })}\``;
   const steps = own ? command("complete") : `${command("start")}, then ${command("complete")}`;
@@ -11950,6 +11952,9 @@ function checkStageCompletionEvidence(
   scope: string,
   stateContent: string,
   pd: string,
+  // The command to run again once the receipt step is done, when `next` would
+  // not get back to it (a revising stage re-enters its gate only by its report).
+  retry?: string,
 ): EnsembleEvidenceResult {
   const stageLevelPerUnit =
     isPerUnit(node) &&
@@ -12024,24 +12029,29 @@ function checkStageCompletionEvidence(
       if (pick !== null) {
         // A Unit whose work is done owes only its completion receipt: name
         // that step for the agent rather than a "run next" that hands the
-        // same Unit's stage back.
-        const owed = pick.uncovered.map((unit) => ({
-          unit,
-          step: unitReceiptOnlyStep(
+        // same Unit's stage back. Units are named in route order up to the
+        // first with work left, since `unit start` takes only the routed Unit.
+        const order = [pick.unit, ...pick.uncovered.filter((unit) => unit !== pick.unit)];
+        const steps: string[] = [];
+        for (const unit of order) {
+          const step = unitReceiptOnlyStep(
             pd, node, unit, recordPrefix, codekbCtxFor(pd), unitKinds?.get(unit) ?? null,
             ledger, stateContent, scope,
-          ),
-        }));
-        const steps = owed.flatMap((entry) => entry.step === null ? [] : [entry.step]);
+          );
+          if (step === null) break;
+          steps.push(step);
+        }
         if (steps.length > 0) {
-          const left = owed.filter((entry) => entry.step === null).map((entry) => entry.unit);
+          const left = order.slice(steps.length);
           const nextCommand = `\`${aidlcToolInvocation("orchestrate")} next\``;
           return {
             ok: false,
             step: true,
             message:
-              `${steps.join(" ")} Then run ${nextCommand}` +
-              (left.length > 0 ? ` to finish the other work items (${left.join(", ")}).` : "."),
+              `${steps.join(" ")} Then run ` +
+              (left.length > 0
+                ? `${nextCommand} to finish the other work items (${left.join(", ")}).`
+                : `${retry ?? nextCommand}.`),
           };
         }
         return {
@@ -13207,6 +13217,9 @@ function handleReport(args: string[], projectDir: string | undefined): void {
         scope,
         stateContent,
         pd,
+        flags.result === "revised"
+          ? `\`${aidlcToolInvocation("orchestrate")} report --stage ${shellArg(slug)} --result revised\` again`
+          : undefined,
       );
       if (!evidence.ok) {
         emit(evidence.step ? printDirective(evidence.message) : errorDirective(evidence.message));
