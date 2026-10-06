@@ -286,3 +286,57 @@ describe("t-checkpoint-off-machine: an approved Unit whose reviewed evidence can
     }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
   }
 });
+
+// A review recorded while the project source could not be read (its binding is
+// "unbindable"), with the source readable again when the checkpoint is looked
+// at. Relaxed and off keep the review's verdict, so the Unit is approved, or
+// stays approved; strict holds it and re-checks the code once.
+describe("t-checkpoint-off-machine: a review recorded while the source could not be read", () => {
+  const sourcePaths = (p: string) => join(p, ".aidlc-source-paths.json");
+  const unreadable = (p: string) =>
+    writeFileSync(sourcePaths(p), `${JSON.stringify({ version: 1, paths: ["../outside"] })}\n`);
+  const readable = (p: string) => unlinkSync(sourcePaths(p));
+  const reviewedUnbindable = (p: string) => {
+    const units = readAuditShardEvents(p)
+      .filter((row) => row.event === "REVIEW_COMPLETED" && auditBlockField(row.block, "Stage") === "code-generation")
+      .map((row) => auditBlockField(row.block, "Unit Source Fingerprint"));
+    expect(units).toEqual(["unbindable"]);
+  };
+
+  for (const policy of ACCEPTING) {
+    test(`Guard Policy ${policy.split(" ")[0]}, source readable again before the first approval: alpha is approved`, () => {
+      const p = fixture(policy);
+      unreadable(p);
+      build(p, "alpha");
+      reviewedUnbindable(p);
+      readable(p);
+      approve(p, "alpha");
+      const status = checkpointStatus(p, "alpha");
+      expect(status, JSON.stringify(status)).toMatchObject({ approved: true, errors: [] });
+      expect(readAuditShardEvents(p).filter((row) => row.event === "GATE_REJECTED")).toEqual([]);
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+    test(`Guard Policy ${policy.split(" ")[0]}, source readable again after the approval: alpha stays approved`, () => {
+      const p = fixture(policy);
+      unreadable(p);
+      build(p, "alpha");
+      reviewedUnbindable(p);
+      approve(p, "alpha");
+      readable(p);
+      const status = checkpointStatus(p, "alpha");
+      expect(status, JSON.stringify(status)).toMatchObject({ approved: true, errors: [] });
+      expect(readAuditShardEvents(p).filter((row) => row.event === "GATE_REJECTED")).toEqual([]);
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+  }
+
+  test("Guard Policy strict, source readable again: alpha is not approved and its code is re-checked once", () => {
+    const p = fixture(STRICT);
+    unreadable(p);
+    build(p, "alpha");
+    reviewedUnbindable(p);
+    readable(p);
+    const status = checkpointStatus(p, "alpha");
+    expect(status.approved, JSON.stringify(status)).toBe(false);
+    expect(status.rereview?.stage, JSON.stringify(status)).toBe("code-generation");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+});
