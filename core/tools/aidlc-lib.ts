@@ -28468,7 +28468,8 @@ function finishUnitStepRemedy(stage: string, unit: string): GuardRemedy {
       `Finish "${stage}" for unit "${unit}" with the review it has: run \`${operation.command}\`, ` +
       `then re-run next. The open findings go to the person when unit "${unit}"'s work comes up for approval.`,
     ...operation,
-    requiresHuman: false,
+    // A command runs on the person's pick, like every remedy that carries one.
+    requiresHuman: true,
     executableNow: true,
   };
 }
@@ -28708,7 +28709,8 @@ export function evaluateGuardRefusal(
           `Record Unit "${input.unit}"'s completion for "${input.stage}" from the artifacts ` +
           `already on disk by running \`${operation.command}\`, then present its gate again.`,
         ...operation,
-        requiresHuman: false,
+        // `unit complete` records it only once the person picked it.
+        requiresHuman: true,
         executableNow: true,
       });
     }

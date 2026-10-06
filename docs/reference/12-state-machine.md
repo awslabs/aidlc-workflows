@@ -1402,7 +1402,7 @@ the selected interaction:
 
 | `interaction` | Contract after selection |
 |---|---|
-| `command` | Execute the exact returned `command`, rendered from its structured `operation`. These operations (the resets, and `lower-fence`'s setter) require human selection; selection is sufficient to attempt the command. |
+| `command` | Execute the exact returned `command`, rendered from its structured `operation`. Every operation (the resets, `lower-fence`'s setter, `reopen-unit`, `review-advisory` and `record-unit-completion`) requires human selection, so its `requiresHuman` is true; selection is sufficient to attempt the command. |
 | `human-input` | Present the action's follow-up and end the turn. Request Changes needs a separate answer to "What should change?"; when it is the only remedy, a reply that does not pick it (and is not a dismissed question) is taken as that answer, so the person is not asked twice, and a later reply replaces it until the reject is submitted. A Scope remedy needs the human's concrete Scope. |
 | `external-work` | Perform the described work through its existing protocol and tools. Selection needs no additional feedback turn, but it does not prove that the work succeeded or supply missing arguments. |
 

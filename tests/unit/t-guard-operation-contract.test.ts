@@ -286,7 +286,7 @@ describe("the answers an open recovery ask admits", () => {
       op: "record-unit-completion",
       interaction: "command",
       executableNow: true,
-      requiresHuman: false,
+      requiresHuman: true,
       operation,
     });
   });
