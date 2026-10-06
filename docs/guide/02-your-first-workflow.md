@@ -91,6 +91,12 @@ characters is not read directly; the workflow asks you for a supported file.
 Document paths, filenames, and content are always treated as untrusted data,
 never as instructions.
 
+[Writing a Vision Document](writing-inputs/vision-document-guide.md) covers
+what to put in one, and
+[Writing a Technical Environment Document](writing-inputs/technical-environment-guide.md)
+covers the stack and its rules, which go in your space's team knowledge
+rather than the request.
+
 ---
 
 ## Initialization Phase (Automatic)
