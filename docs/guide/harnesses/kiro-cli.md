@@ -190,7 +190,8 @@ read-only and turn-back-on commands listed next, run as `aidlc ...`.
 Source/development copies pre-approve only
 AI-DLC's own workflow commands, run project-relative: the engine commands
 (`bun .kiro/tools/aidlc.ts engine ...`), the read-only `doctor`, `version`,
-`--version`, `--doctor`, `status`, `--status`, `config --help`,
+`--version`, `--doctor` (doctor with or without `--verbose`), `status`,
+`--status`, `config --help`, `config --show` and
 `config <section> --show` with or without `--json`, and
 `config <section> --help`, turning a check back on with
 `config flags --clear-bypass <switch> --yes`, and the AI-DLC tool scripts

@@ -144,8 +144,9 @@ of `.kiro/`, so copy it separately (or copy the whole
 
 In a copied project, the `aidlc` agent runs AI-DLC's engine commands
 (`bun .kiro/tools/aidlc.ts engine ...`), its tool scripts, its read-only
-commands (`doctor`, `version`, `--doctor`, `--version`, `status`, `--status`,
-`config --help`, `config <section> --show` with or without `--json`, and
+commands (`doctor` and `--doctor`, with or without `--verbose`, `version`,
+`--version`, `status`, `--status`, `config --help`, `config --show` and
+`config <section> --show` with or without `--json`, and
 `config <section> --help`) and turning a check back on
 (`config flags --clear-bypass <switch> --yes`) with no card. A native install
 runs the same commands, as `aidlc ...`, with no card too. Any other
