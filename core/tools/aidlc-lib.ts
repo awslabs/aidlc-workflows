@@ -37195,7 +37195,7 @@ export function resolveStageAnswerMode(
     mode: null,
     ask: true,
     reused_from: null,
-    notice: "I'll answer the later stages' questions the same way. Say any time if you'd rather switch.",
+    notice: "Later stages will use this way too. Say any time if you'd rather switch.",
   };
 }
 
