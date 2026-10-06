@@ -1422,6 +1422,14 @@ work is open: the Unit's artifacts are on disk and only the receipt is missing.
 `unit complete` then records the receipt without an earlier `unit start`, but
 only once the person picked that remedy on the active ask for the same stage and
 Unit, and it still refuses when a required artifact is missing.
+In a solo unit-major walk, a refusal with no review pass left about a Unit part
+way through its step (the recorded `Active Unit`, `Unit Stage` that stage, and
+`Unit State` in-progress) offers that Unit's own ways on first, in every state:
+`record-unit-completion`, which finishes the step with the review it has (its
+open findings go to the person when that Unit's work comes up for approval), and
+`reopen-unit-step`. No gate can open before that step is done, so
+present-approval-gate is not offered there, and on an approved stage
+`restore-or-jump` follows them.
 The `lower-fence` operation renders the setter, the command its remedy
 carries; `PreToolUse` admits the same exact shape, and the setter still requires
 a person's turn on record.

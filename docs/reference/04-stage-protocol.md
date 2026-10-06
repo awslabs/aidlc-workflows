@@ -1224,6 +1224,12 @@ the person asked for (they spoke since the last decision and since that review
 was last requested) is never refused, under every Guard Policy: the conductor
 records it the first time they ask, and the budget and the recovery bound only
 the passes the conductor starts on its own.
+When Construction runs one Unit at a time and a Unit's finished step loses its
+work, the walk hands the step back and the Unit starts it again (`unit start`
+after its `UNIT_COMPLETED`, a wave completion included). That run of the step
+gets the stage's budget again, so a redo the engine asked for finishes under
+any review setting. Its passes keep their numbers (the redo's first request is
+the next ordinal), and team-owned Units keep their Bolt floors.
 Autonomous Units halt before `finalize` and
 restart their Bolt attempt only after a human decision. The reviewer
 never blocks — the human always has final say at the gate — and does not fire
