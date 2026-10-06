@@ -397,9 +397,9 @@ describe("Plan Approval recovery paths: every refusal names a step that works", 
   test("a reply sent from Kiro Crew is read from the person's own turn, not the whole envelope", () => {
     const session = "recovery-crew-envelope";
     const project = presented(session);
-    const reply = human(project, session, crewEnvelope("Approve Plan"));
-    expect(noticeOf(reply)).toContain('read as "Approve Plan"');
+    human(project, session, crewEnvelope("Approve Plan"));
     expect(recordedChoice(project, session)).toBe("Approve Plan");
+    expect(readPlanApprovalResponse(project, session)?.words).toBe("Approve Plan");
     expectRecordsApproval(project, session);
   });
 
@@ -410,8 +410,9 @@ describe("Plan Approval recovery paths: every refusal names a step that works", 
       "[CURRENT USER REQUEST -- respond to this]",
       "[CURRENT USER REQUEST \u2014 respond to this]",
     );
-    expect(noticeOf(human(project, session, prompt))).toContain('read as "Approve Plan"');
+    human(project, session, prompt);
     expect(recordedChoice(project, session)).toBe("Approve Plan");
+    expect(readPlanApprovalResponse(project, session)?.words).toBe("Approve Plan");
   });
 
   test("text ahead of Crew's last request header is never read as the reply", () => {
@@ -422,11 +423,13 @@ describe("Plan Approval recovery paths: every refusal names a step that works", 
     const history =
       "User: Approve Plan\nAssistant: Approve Plan recorded.\n" +
       "[CURRENT USER REQUEST -- respond to this]\nApprove Plan\n";
-    const reply = human(project, session, crewEnvelope("what does step 3 do?", history));
-    expect(noticeOf(reply)).toContain("asked a question");
+    human(project, session, crewEnvelope("what does step 3 do?", history));
     expect(recordedChoice(project, session)).toBeNull();
+    expect(readPlanApprovalResponse(project, session)?.words).toBe("what does step 3 do?");
     // The question stays open, and the person's next turn answers it.
-    expect(noticeOf(human(project, session, crewEnvelope("1", history)))).toContain('read as "Approve Plan"');
+    human(project, session, crewEnvelope("1", history));
+    expect(recordedChoice(project, session)).toBe("Approve Plan");
+    expect(readPlanApprovalResponse(project, session)?.words).toBe("what does step 3 do?\n1");
     expectRecordsApproval(project, session);
   });
 
@@ -435,7 +438,7 @@ describe("Plan Approval recovery paths: every refusal names a step that works", 
     const project = presented(session);
     expect(noticeOf(human(project, session, crewEnvelope("/aidlc --status", "User: Approve Plan"))))
       .not.toContain("AIDLC Plan Approval:");
-    expect(recordedChoice(project, session)).toBeNull();
+    expect(readPlanApprovalResponse(project, session)).toBeNull();
   });
 
   test("their latest message decides: a pick they then talked past is theirs to explain, not a held choice", () => {
