@@ -10,6 +10,7 @@ import {
   enterHookWorkflow,
   type ClaudeCodeHookInput,
   decideFence,
+  guardStandAsideSpeaks,
   guardStoodAsideLine,
   isClaudeCodeHookInput,
   fenceSwitchSentence,
@@ -1213,7 +1214,9 @@ export async function run(input: string): Promise<number> {
         return false;
       }
       if (gate.decision !== "stand-aside") return false;
-      writeGuardStoodAside(guardStoodAsideLine("state-transition", gate.source, detail));
+      if (guardStandAsideSpeaks(gate)) {
+        writeGuardStoodAside(guardStoodAsideLine("state-transition", gate.source, detail));
+      }
       recordGuardStoodAside(projectDir, {
         fence: "state-transition",
         authority: gate.authority,

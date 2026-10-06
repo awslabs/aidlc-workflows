@@ -54,6 +54,7 @@ import {
   type ClaudeCodeHookInput,
   decideFence,
   errorMessage,
+  guardStandAsideSpeaks,
   guardStoodAsideLine,
   hooksHealthDir,
   writeHookStatusFile,
@@ -840,7 +841,9 @@ function reviewerScopeStandsAside(
   }
   if (gate.decision !== "stand-aside") return false;
   const detail = `${target} (unit ${unit})`;
-  writeGuardStoodAside(guardStoodAsideLine("reviewer-scope", gate.source, detail));
+  if (guardStandAsideSpeaks(gate)) {
+    writeGuardStoodAside(guardStoodAsideLine("reviewer-scope", gate.source, detail));
+  }
   recordGuardStoodAside(projectDir, {
     fence: "reviewer-scope",
     authority: gate.authority,

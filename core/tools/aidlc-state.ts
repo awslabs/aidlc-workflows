@@ -109,6 +109,7 @@ import {
   personSpokeSinceGate,
   fenceSwitchSentence,
   decideFence,
+  guardStandAsideSpeaks,
   guardStoodAsideLine,
   recordGuardStoodAside,
   unattendedHumanPresenceHint,
@@ -832,9 +833,11 @@ export function main(argv: string[]): void {
       // Unreadable state or policy cannot lower the ownership fence.
     }
     if (gate?.decision === "stand-aside") {
-      process.stderr.write(
-        guardStoodAsideLine("state-transition", gate.source, `aidlc-state.ts ${subcommand}`) + "\n",
-      );
+      if (guardStandAsideSpeaks(gate)) {
+        process.stderr.write(
+          guardStoodAsideLine("state-transition", gate.source, `aidlc-state.ts ${subcommand}`) + "\n",
+        );
+      }
       recordGuardStoodAside(pd, {
         fence: "state-transition",
         authority: gate.authority,

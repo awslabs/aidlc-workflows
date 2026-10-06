@@ -31,6 +31,7 @@ import {
   errorMessage,
   getField,
   guardPolicyAcceptsChanges,
+  guardStandAsideSpeaks,
   guardStoodAsideLine,
   gitCommitSourceListing,
   isoTimestamp,
@@ -1531,7 +1532,7 @@ export function workerBrief(
     brief,
     appendixStripped: planReviewAppendix(plan.replace(/^\uFEFF/, "")).length > 0,
     ...(continuation ? {
-      changeNotices: [recordCodeGenerationContinuation(projectDir, continuation, "brief")],
+      changeNotices: recordCodeGenerationContinuation(projectDir, continuation, "brief"),
     } : {}),
   };
 }
@@ -2483,7 +2484,7 @@ function recordCodeGenerationContinuation(
   projectDir: string,
   continuation: CodeGenerationContinuation,
   operation: string,
-): string {
+): string[] {
   const detail = `${operation} for ${continuation.authority.targetId} using current content; the earlier approval is unchanged`;
   const recorded = recordGuardStoodAside(projectDir, {
     fence: "plan-approval",
@@ -2498,7 +2499,10 @@ function recordCodeGenerationContinuation(
   if (!recorded) {
     recordHookDrop(projectDir, "testing-posture", `GUARD_STOOD_ASIDE row not recorded (audit ledger busy or not writable): ${detail}`);
   }
-  return guardStoodAsideLine("plan-approval", continuation.fence.source, detail, recorded);
+  // Under Guard Policy off the row is the whole account; nothing is said.
+  return guardStandAsideSpeaks(continuation.fence)
+    ? [guardStoodAsideLine("plan-approval", continuation.fence.source, detail, recorded)]
+    : [];
 }
 
 export interface LegacyPlanApprovalGuardState {
@@ -4483,7 +4487,7 @@ function publishCodeGenerationStart(
 ): string[] {
   const { authority, receipt, continuation } = prepared;
   const changeNotices: string[] = continuation && options.recordContinuation !== false
-    ? [recordCodeGenerationContinuation(projectDir, continuation, "begin")] : [];
+    ? recordCodeGenerationContinuation(projectDir, continuation, "begin") : [];
   if (receipt.status === "generation") return changeNotices;
   originals.push(receipt);
   if (receipt.override !== undefined) {

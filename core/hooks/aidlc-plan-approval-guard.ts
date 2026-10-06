@@ -80,6 +80,7 @@ import {
   guardRecoveryAnswerAdmits,
   guardRecoveryRecordWorkOpen,
   PLAN_APPROVAL_ASK_TYPE,
+  guardStandAsideSpeaks,
   guardStoodAsideLine,
   harnessDir,
   normalizeDriveLetter,
@@ -2460,7 +2461,9 @@ async function evaluate(
       if (!recorded) {
         recordHookDrop(projectDir, HOOK_NAME, `GUARD_STOOD_ASIDE row not recorded (audit ledger busy or not writable): ${detail}`);
       }
-      writeGuardStoodAside(guardStoodAsideLine("plan-approval", gate.source, detail, recorded));
+      if (guardStandAsideSpeaks(gate)) {
+        writeGuardStoodAside(guardStoodAsideLine("plan-approval", gate.source, detail, recorded));
+      }
       return 0;
     }
   }
