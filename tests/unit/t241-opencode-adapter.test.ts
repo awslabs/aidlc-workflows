@@ -658,6 +658,7 @@ describe("t241 OpenCode adapter command boundary and transition filter", () => {
   test("an OpenCode state transition passes the real runtime hook command gate", async () => {
     const root = freshProject();
     copyCore(root, "hooks/aidlc-rebuild-stage-graph.ts");
+    copyCore(root, "tools/aidlc-hook-front-gate.ts");
     copyCore(root, "tools/aidlc-lib.ts");
     copyCore(root, "tools/aidlc-runtime.ts");
     copyCore(root, "tools/aidlc-artifact-vocabulary.ts");
