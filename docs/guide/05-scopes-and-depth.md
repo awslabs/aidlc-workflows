@@ -237,10 +237,10 @@ The engine analyzes your intent against keyword patterns:
 
 The exemption checks every keyword, so "security vulnerability CVE-2026-12345" can identify `security-patch` even when `security` matches first. Nearby negation before a keyword, such as "do not refactor" or "not a proof of concept", does not activate the exemption; a later affirmative mention can still match. This is a lexical heuristic, so confirm that the proposed plan fits your intent. Among eligible scopes, the first alphabetical scope wins. Inputs of five words or fewer retain the existing alphabetical keyword matching. Plugin-specific keywords retain the length heuristic until plugins can declare their own keyword specificity.
 
-After a clear keyword match, you get a one-line confirmation naming the MATCHED scope and the ceremony it carries, straight from the compiled grid. On a new project it reads like this; on an existing codebase bugfix also runs Reverse Engineering, so the line says 9 of 33 stages and 6 approval gates:
+After a clear keyword match, you get a one-line confirmation naming the MATCHED scope and the ceremony it carries, straight from the compiled grid. On a new project it reads like this; on an existing codebase bugfix also runs Reverse Engineering, so the line says 6 stages and 6 approval gates:
 
 ```
-This looks like "bugfix" work, so I'd run the "bugfix" plan for: "fix login bug" - 8 of 33 stages, 5 approval gates; no learnings ritual or summary confirmation; lead agent only.
+This looks like "bugfix" work, so I'd run the "bugfix" plan for: "fix login bug" - 5 stages, 5 approval gates; no learnings ritual or summary confirmation; lead agent only.
 Say go ahead, name a different plan, or say "compose" and I'll tailor one to this task.
 ```
 

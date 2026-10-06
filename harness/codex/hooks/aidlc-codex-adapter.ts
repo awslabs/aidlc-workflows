@@ -876,7 +876,8 @@ switch (target) {
     // A structured request_user_input selection is forwarded as the tool
     // response it is, never as typed prompt text: the core hook records the
     // Plan Approval choice from either channel, but the break-glass override
-    // phrase counts only when the human typed it as a prompt.
+    // phrase counts only when the human typed it as a prompt. The box's reply
+    // goes along as it came, so each question's reply is kept word for word.
     const selectionText = explicitHumanSelectionText(codex.tool_response);
     const forwarded =
       codex.tool_name === "request_user_input"
@@ -886,6 +887,7 @@ switch (target) {
             tool_name: "request_user_input",
             tool_input: codex.tool_input,
             tool_response: { answer: selectionText },
+            picker_reply: codex.tool_response,
           }
         : {
             hook_event_name: "UserPromptSubmit",

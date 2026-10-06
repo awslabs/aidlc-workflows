@@ -83,15 +83,15 @@ not repeat completed spokes.
 Code Generation resumes from the plan's ticks. The developer agent ticks each
 step in `code-generation-plan.md` as it finishes it. If the build stops part
 way (a model or provider error, the editor closed), the next run of the same
-approved plan picks up at the first unticked step, and you see one line such as
+plan picks up at the first unticked step, and you see one line such as
 "Picking up unit-2's code at step 5 of 9 (1-4 done)." When nothing is ticked but
 the files the first steps name were written, it picks up after them instead
 ("(1-4 wrote their files)"). The developer checks the files each done step
 names and redoes a step only when a file it should have made is not there.
 Redo, Request Changes, and approving the plan again start its steps fresh: the
 plan's ticks are cleared when the new build starts, and only the ticks it makes
-count if it is cut off in turn. Editing the plan after approval also starts
-fresh.
+count if it is cut off in turn. Editing the plan after its build started also
+starts fresh; a plan you edited before the build picks up like any other.
 
 ---
 

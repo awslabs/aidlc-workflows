@@ -2301,10 +2301,61 @@ describe("t294 post-apply outstanding actions", () => {
       "--yes",
     ], project, env);
     expect(applied.status, applied.stdout + applied.stderr).toBe(0);
-    expect(applied.stdout).toContain("codex-hook-trust-missing");
+    // Codex's hook trust is given inside Codex. The line names that step, the
+    // same one the hooks-off stop and doctor name, never AI-DLC's own review.
+    const recovery = (JSON.parse(readFileSync(
+      join(DIST_RELEASE, "codex", ".codex", "tools", "data", "harness.json"),
+      "utf-8",
+    )) as { hookActivation: { recovery: string } }).hookActivation.recovery;
+    const step = "in Codex, type /hooks, press t to trust all, then press Esc";
+    expect(recovery.startsWith(`I${step.slice(1)}.`), recovery).toBe(true);
     expect(applied.stdout).toContain(
-      "bun .codex/tools/aidlc.ts config trust",
+      `trust/codex-hook-trust-missing: Codex has not trusted this project's hooks yet - ${step}`,
     );
+    expect(applied.stdout).not.toContain("config trust");
+
+    const quiet = run([
+      "config",
+      "--project-dir",
+      project,
+      "--from",
+      join(DIST_RELEASE, "codex"),
+      "--quiet",
+      "--yes",
+    ], project, env);
+    expect(quiet.status, quiet.stdout + quiet.stderr).toBe(0);
+    expect(quiet.stdout).toContain(`Outstanding actions: ${step}`);
+    expect(quiet.stdout).not.toContain("config trust");
+
+    const json = run([
+      "config",
+      "--project-dir",
+      project,
+      "--from",
+      join(DIST_RELEASE, "codex"),
+      "--json",
+      "--yes",
+    ], project, env);
+    expect(json.status, json.stdout + json.stderr).toBe(0);
+    expect((JSON.parse(json.stdout) as {
+      data: { outstandingActions: Array<{ section: string; id: string; message: string; command: string; step?: string }> };
+    }).data.outstandingActions).toContainEqual({
+      section: "trust",
+      id: "codex-hook-trust-missing",
+      message: "Codex has not trusted this project's hooks yet",
+      command: "bun .codex/tools/aidlc.ts config trust --check",
+      step,
+    });
+
+    const check = run([
+      "config",
+      "trust",
+      "--project-dir",
+      project,
+      "--check",
+    ], project, env);
+    expect(check.status).not.toBe(0);
+    expect(check.stdout + check.stderr).toContain(`fix: ${step}`);
 
     const trustSection = run([
       "config",
@@ -2525,22 +2576,26 @@ describe("t294 instruction-file doctor row", () => {
     expect(modified.label).toContain("hand-modified - conflict");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-  test("whole-file instruction surface reports intact, missing, and modified", () => {
+  test("the team's opencode.json reports intact, missing, and edited by AI-DLC's entries", () => {
     const project = install("opencode");
     const path = join(project, "opencode.json");
     const original = readFileSync(path, "utf-8");
     const intact = instructionFileDoctorCheck(project, ".aidlc");
     expect(intact.pass).toBe(true);
-    expect(intact.label).toContain("framework-owned file intact");
+    expect(intact.label).toContain("block present, user content preserved");
 
     rmSync(path);
     const missing = instructionFileDoctorCheck(project, ".aidlc");
     expect(missing.label).toContain("block or file missing (opencode.json)");
     expect(missing.fix).toContain("bun .aidlc/tools/aidlc.ts config");
 
+    // The team's own setting is theirs, not a conflict.
     writeFileSync(path, original.replace('"permission"', '"localSetting": true,\n  "permission"'));
+    expect(instructionFileDoctorCheck(project, ".aidlc").pass).toBe(true);
+    // Without AI-DLC's onboarding instruction, the file is missing its part.
+    writeFileSync(path, original.replace('".aidlc/onboarding.md", ', ""));
     expect(instructionFileDoctorCheck(project, ".aidlc").label)
-      .toContain("hand-modified - conflict");
+      .toContain("block or file missing (opencode.json)");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("instruction row selects the invoking harness in a dual-harness project", () => {
@@ -3017,7 +3072,7 @@ describe("t294 config diagnostics CLI", () => {
     expect(secondText).toBe(firstText);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-  test("provider mutation preserves project fields but rejects Codex framework drift", () => {
+  test("provider mutation and refresh keep the project's Codex fields and values", () => {
     const env = runtimeEnv();
     const claude = install("claude");
     const claudePath = join(claude, ".claude", "settings.json");
@@ -3096,73 +3151,77 @@ describe("t294 config diagnostics CLI", () => {
       .toContain("# Team-owned Codex instructions");
     expect(readFileSync(codexPath, "utf-8"))
       .toContain('AIDLC_RULES_DIR = "team/rules"');
-    const codexRefreshed = run([
-      "config",
-      "--project-dir",
-      codex,
-      "--yes",
-    ], codex, env);
-    expect(
-      codexRefreshed.status,
-      codexRefreshed.stdout + codexRefreshed.stderr,
-    ).toBe(4);
+    // The project's own values for AI-DLC's keys stay theirs on a refresh,
+    // with or without --force; the release here ships the same values.
+    const codexEdited = readFileSync(codexPath, "utf-8");
+    for (const extra of [[], ["--force"]]) {
+      const codexRefreshed = run([
+        "config",
+        "--project-dir",
+        codex,
+        ...extra,
+        "--yes",
+      ], codex, env);
+      expect(
+        codexRefreshed.status,
+        codexRefreshed.stdout + codexRefreshed.stderr,
+      ).toBe(0);
+      expect(codexRefreshed.stdout).not.toContain("Note:");
+      expect(readFileSync(codexPath, "utf-8")).toBe(codexEdited);
+    }
     expect(parseToml(readFileSync(codexPath, "utf-8")).sandbox_mode).toBe("read-only");
-    const codexRepaired = run([
-      "config",
-      "--project-dir",
-      codex,
-      "--force",
-      "--yes",
-    ], codex, env);
-    expect(codexRepaired.status, codexRepaired.stdout + codexRepaired.stderr)
-      .toBe(0);
-    expect(parseToml(readFileSync(codexPath, "utf-8")).sandbox_mode).toBe("workspace-write");
     expect(readFileSync(codexPath, "utf-8"))
-      .toContain("# AI-DLC on Codex CLI");
+      .toContain("# Team-owned Codex instructions");
     expect(readFileSync(codexPath, "utf-8"))
-      .not.toContain("# Team-owned Codex instructions");
-    expect(readFileSync(codexPath, "utf-8"))
-      .toContain('AIDLC_RULES_DIR = "aidlc/spaces/default/memory"');
+      .toContain('AIDLC_RULES_DIR = "team/rules"');
     expect(readFileSync(codexPath, "utf-8"))
       .toContain('model = "team-model"');
     expect(readFileSync(codexPath, "utf-8"))
       .toContain("[model_providers.team-provider]");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-  test("Codex refresh repairs only the owned root sandbox mode, not prose or custom-table keys", () => {
+  test("Codex refresh moves only the owned root sandbox mode, not prose or custom-table keys", () => {
     const project = install("codex");
     const env = runtimeEnv();
     const configPath = join(project, ".codex", "config.toml");
     const shipped = readFileSync(configPath, "utf-8");
     const prose = 'sandbox_mode = "danger-full-access"';
     const custom = '\n[model_providers.team-provider]\nname = "Team Provider"\nsandbox_mode = "team-value"\n';
+    // The same value under another spelling of the key is still AI-DLC's.
     const edited = shipped
-      .replace('sandbox_mode = "workspace-write"', '"sandbox_mode" = \'read-only\'')
-      .replace("# AI-DLC on Codex CLI", `# AI-DLC on Codex CLI\n${prose}`) + custom;
+      .replace('sandbox_mode = "workspace-write"', '"sandbox_mode" = \'workspace-write\'') + custom;
     writeFileSync(configPath, edited);
-    const args = ["config", "--project-dir", project, "--yes"];
-    const refused = run(args, project, env);
-    expect(refused.status, refused.stdout + refused.stderr).toBe(4);
-    expect(readFileSync(configPath, "utf-8")).toBe(edited);
-    const forced = run([...args, "--force"], project, env);
-    expect(forced.status, forced.stdout + forced.stderr).toBe(0);
-    const repaired = parseToml(readFileSync(configPath, "utf-8"));
-    expect(repaired.sandbox_mode).toBe("workspace-write");
+    const source = temp("aidlc-t294-codex-sandbox-source-");
+    cpSync(join(DIST_RELEASE, "codex"), source, { recursive: true });
+    const sourcePath = join(source, ".codex", "config.toml");
+    writeFileSync(sourcePath, readFileSync(sourcePath, "utf-8")
+      .replace('sandbox_mode = "workspace-write"', 'sandbox_mode = "read-only"')
+      .replace("# AI-DLC on Codex CLI", `# AI-DLC on Codex CLI\n${prose}`));
+    const args = ["config", "--project-dir", project, "--from", source, "--harness", "codex", "--yes"];
+    const moved = run(args, project, env);
+    expect(moved.status, moved.stdout + moved.stderr).toBe(0);
+    const after = readFileSync(configPath, "utf-8");
+    const repaired = parseToml(after);
+    expect(repaired.sandbox_mode).toBe("read-only");
+    expect(after).toContain('"sandbox_mode" = "read-only"');
     expect(repaired.model_providers).toEqual({
       "team-provider": { name: "Team Provider", sandbox_mode: "team-value" },
     });
-    expect(repaired.developer_instructions).not.toContain(prose);
+    // The onboarding text took the release's words, lookalike line included,
+    // and nothing else in it was read as a key.
+    expect(repaired.developer_instructions).toContain(prose);
+    expect(moved.stdout).not.toContain("Note:");
 
-    // Removing the owned root key must not promote a same-named custom-table key.
-    const missing = (shipped + custom).replace(/^sandbox_mode = "workspace-write"\n/m, "");
+    // A deleted owned root key comes back at the root, never by promoting a
+    // same-named custom-table key.
+    const missing = after.replace(/^"sandbox_mode" = "read-only"\n/m, "");
+    expect(parseToml(missing).sandbox_mode).toBeUndefined();
     writeFileSync(configPath, missing);
-    const missingRefused = run(args, project, env);
-    expect(missingRefused.status, missingRefused.stdout + missingRefused.stderr).toBe(4);
-    expect(readFileSync(configPath, "utf-8")).toBe(missing);
-    const restored = run([...args, "--force"], project, env);
+    const restored = run(args, project, env);
     expect(restored.status, restored.stdout + restored.stderr).toBe(0);
+    expect(restored.stdout).toContain("Note: put back AI-DLC's sandbox_mode in .codex/config.toml.");
     const restoredConfig = parseToml(readFileSync(configPath, "utf-8"));
-    expect(restoredConfig.sandbox_mode).toBe("workspace-write");
+    expect(restoredConfig.sandbox_mode).toBe("read-only");
     expect(restoredConfig.model_providers).toEqual(repaired.model_providers);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
@@ -3259,10 +3318,11 @@ describe("t294 config diagnostics CLI", () => {
     expect(after.sandbox_mode).toBe("workspace-write");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-  test("refresh treats deleted Codex developer instructions as framework drift", () => {
+  test("refresh puts back deleted Codex developer instructions and says so", () => {
     const project = install("codex");
     const env = runtimeEnv();
     const configPath = join(project, ".codex", "config.toml");
+    const shipped = parseToml(readFileSync(configPath, "utf-8")).developer_instructions;
     const withoutInstructions = readFileSync(configPath, "utf-8").replace(
       /^[\t ]*developer_instructions[\t ]*=[\t ]*'''[\s\S]*?'''[\t ]*(?:\r?\n|$)/m,
       "",
@@ -3275,19 +3335,461 @@ describe("t294 config diagnostics CLI", () => {
       project,
       "--yes",
     ], project, env);
-    expect(refreshed.status, refreshed.stdout + refreshed.stderr).toBe(4);
-    expect(readFileSync(configPath, "utf-8")).toBe(withoutInstructions);
+    expect(refreshed.status, refreshed.stdout + refreshed.stderr).toBe(0);
+    expect(refreshed.stdout).toContain(
+      "Note: put back AI-DLC's developer_instructions in .codex/config.toml.",
+    );
+    const after = readFileSync(configPath, "utf-8");
+    expect(parseToml(after).developer_instructions).toBe(shipped);
+    expect(after.endsWith(withoutInstructions)).toBe(true);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-    const forced = run([
-      "config",
-      "--project-dir",
-      project,
-      "--force",
-      "--yes",
+  // A release source whose only change is the shipped tui.status_line value.
+  function codexStatusRelease(status: string[], edit: (text: string) => string = (text) => text): string {
+    const source = temp("aidlc-t294-codex-status-source-");
+    cpSync(join(DIST_RELEASE, "codex"), source, { recursive: true });
+    const path = join(source, ".codex", "config.toml");
+    writeFileSync(path, edit(readFileSync(path, "utf-8").replace(
+      /^status_line\s*=.*$/m,
+      `status_line = ${JSON.stringify(status)}`,
+    )));
+    return source;
+  }
+
+  // A release source with one edit to its shipped config.toml.
+  function codexRelease(edit: (text: string) => string): string {
+    const source = temp("aidlc-t294-codex-release-");
+    cpSync(join(DIST_RELEASE, "codex"), source, { recursive: true });
+    const path = join(source, ".codex", "config.toml");
+    writeFileSync(path, edit(readFileSync(path, "utf-8")));
+    return source;
+  }
+
+  const SHIPPED_SET_LINE = 'set = { AIDLC_RULES_DIR = "aidlc/spaces/default/memory" }';
+
+  const SHIPPED_STATUS_LINE =
+    'status_line = ["model-with-reasoning", "git-branch", "task-progress", "context-used"]';
+  const SHIPPED_STATUS_VALUE = SHIPPED_STATUS_LINE.slice("status_line = ".length);
+  const RELEASE_STATUS = ["model-with-reasoning", "context-used"];
+
+  test("Codex refresh keeps the project's own keys, tables and comments byte for byte", () => {
+    const project = install("codex");
+    const env = runtimeEnv();
+    const configPath = join(project, ".codex", "config.toml");
+    const shipped = readFileSync(configPath, "utf-8");
+    expect(shipped).toContain(SHIPPED_STATUS_LINE);
+    const edited = shipped
+      .replace(
+        "default_mode_request_user_input = true",
+        "default_mode_request_user_input = true\n# team: research needs web search\nweb_search_request = true",
+      )
+      .replace(
+        '# writable_roots = ["/absolute/path/to/main-repo/.git"]',
+        'writable_roots = ["/work/main/.git"] # headless runs',
+      )
+      .replace(
+        "[tools]",
+        '[agents.reviewer]\ndescription = "Team reviewer"\nconfig_file = "agents/reviewer.toml"\n\n[tools]',
+      ) +
+      "\n# Team MCP configuration must stay below\n[mcp_servers.team]\ncommand = \"team-mcp\"\n" +
+      "\n[[tui.project_items]]\nvalue = \"keep-array\"\n" +
+      "\n[project_meta]\ncreated = 1979-05-27\nat = 07:32:00\nstamp = 1979-05-27T07:32:00Z\n" +
+      "\n# Keep this team note at EOF\n";
+    expect(() => parseToml(edited)).not.toThrow();
+    writeFileSync(configPath, edited);
+
+    const same = run(["config", "--project-dir", project, "--yes"], project, env);
+    expect(same.status, same.stdout + same.stderr).toBe(0);
+    expect(same.stdout).not.toContain("Note:");
+    expect(readFileSync(configPath, "utf-8")).toBe(edited);
+
+    const source = codexStatusRelease(RELEASE_STATUS);
+    const moved = run([
+      "config", "--project-dir", project, "--from", source, "--harness", "codex", "--yes",
     ], project, env);
-    expect(forced.status, forced.stdout + forced.stderr).toBe(0);
+    expect(moved.status, moved.stdout + moved.stderr).toBe(0);
+    expect(moved.stdout).not.toContain("Note:");
+    // Only AI-DLC's own value moved; every byte of the project's stayed.
+    expect(readFileSync(configPath, "utf-8")).toBe(edited.replace(
+      SHIPPED_STATUS_VALUE,
+      JSON.stringify(RELEASE_STATUS),
+    ));
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("Codex refresh reads root dotted and inline spellings of AI-DLC's tables", () => {
+    const env = runtimeEnv();
+    const source = codexStatusRelease(RELEASE_STATUS);
+    const spellings = [
+      `tui.status_line = ${SHIPPED_STATUS_VALUE}\ntui.project_note = "keep-me"\n\n`,
+      `tui = { status_line = ${SHIPPED_STATUS_VALUE}, project_note = "keep-me" }\n\n`,
+    ];
+    for (const spelling of spellings) {
+      const project = install("codex");
+      const configPath = join(project, ".codex", "config.toml");
+      const shipped = readFileSync(configPath, "utf-8");
+      const withoutTui = shipped.replace(/\[tui\][\s\S]*$/, "");
+      const firstTable = withoutTui.indexOf("[shell_environment_policy]");
+      const edited = withoutTui.slice(0, firstTable) + spelling + withoutTui.slice(firstTable);
+      expect(() => parseToml(edited)).not.toThrow();
+      writeFileSync(configPath, edited);
+
+      const refreshed = run([
+        "config", "--project-dir", project, "--from", source, "--harness", "codex", "--yes",
+      ], project, env);
+      expect(refreshed.status, refreshed.stdout + refreshed.stderr).toBe(0);
+      const after = readFileSync(configPath, "utf-8");
+      // The person's spelling stays; only the value moved, and no second [tui].
+      expect(after).toBe(edited.replace(SHIPPED_STATUS_VALUE, JSON.stringify(RELEASE_STATUS)));
+      expect(parseToml(after).tui).toEqual({
+        status_line: RELEASE_STATUS,
+        project_note: "keep-me",
+      });
+    }
+
+    // A release that retires [tui] removes the unchanged dotted key and keeps
+    // the person's own key beside it.
+    const retired = temp("aidlc-t294-codex-retired-tui-");
+    cpSync(join(DIST_RELEASE, "codex"), retired, { recursive: true });
+    const retiredPath = join(retired, ".codex", "config.toml");
+    writeFileSync(retiredPath, readFileSync(retiredPath, "utf-8").replace(/\[tui\][\s\S]*$/, ""));
+    const project = install("codex");
+    const configPath = join(project, ".codex", "config.toml");
+    const withoutTui = readFileSync(configPath, "utf-8").replace(/\[tui\][\s\S]*$/, "");
+    const firstTable = withoutTui.indexOf("[shell_environment_policy]");
+    writeFileSync(
+      configPath,
+      withoutTui.slice(0, firstTable) + spellings[0] + withoutTui.slice(firstTable),
+    );
+    const refreshed = run([
+      "config", "--project-dir", project, "--from", retired, "--harness", "codex", "--yes",
+    ], project, env);
+    expect(refreshed.status, refreshed.stdout + refreshed.stderr).toBe(0);
+    const after = readFileSync(configPath, "utf-8");
+    expect(after).not.toContain("tui.status_line");
+    expect(parseToml(after).tui).toEqual({ project_note: "keep-me" });
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("Codex refresh adds a release's new inline member beside the project's own", () => {
+    const env = runtimeEnv();
+    const release = codexRelease((text) => text.replace(
+      SHIPPED_SET_LINE,
+      'set = { AIDLC_RULES_DIR = "aidlc/spaces/default/memory", RELEASE_VAR = "new" }',
+    ));
+    const project = install("codex");
+    const configPath = join(project, ".codex", "config.toml");
+    const edited = readFileSync(configPath, "utf-8").replace(
+      SHIPPED_SET_LINE,
+      'set = { AIDLC_RULES_DIR = "aidlc/spaces/default/memory", PROJECT_VAR = "must-stay" }',
+    );
+    writeFileSync(configPath, edited);
+    const args = (dir: string) => [
+      "config", "--project-dir", dir, "--from", release, "--harness", "codex", "--yes",
+    ];
+    const refreshed = run(args(project), project, env);
+    expect(refreshed.status, refreshed.stdout + refreshed.stderr).toBe(0);
+    expect(readFileSync(configPath, "utf-8")).toBe(edited.replace(
+      'PROJECT_VAR = "must-stay" }',
+      'PROJECT_VAR = "must-stay", RELEASE_VAR = "new" }',
+    ));
+
+    // Where the new key has no safe place beside the project's own dotted keys,
+    // the refresh stops as before, also right after a refresh wrote the file.
+    const dotted = install("codex");
+    const dottedPath = join(dotted, ".codex", "config.toml");
+    const dottedEdited = readFileSync(dottedPath, "utf-8").replace(
+      SHIPPED_SET_LINE,
+      'set.AIDLC_RULES_DIR = "aidlc/spaces/default/memory"\nset.PROJECT_VAR = "must-stay"',
+    );
+    writeFileSync(dottedPath, dottedEdited);
+    const written = run(["config", "--project-dir", dotted, "--yes"], dotted, env);
+    expect(written.status, written.stdout + written.stderr).toBe(0);
+    const stopped = run(args(dotted), dotted, env);
+    expect(stopped.status, stopped.stdout + stopped.stderr).toBe(4);
+    expect(stopped.stdout + stopped.stderr).toContain(".codex/config.toml (locally modified or unowned)");
+    expect(readFileSync(dottedPath, "utf-8")).toBe(dottedEdited);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("a Codex key the project set first stays theirs once a release ships it", () => {
+    const env = runtimeEnv();
+    const project = install("codex");
+    const configPath = join(project, ".codex", "config.toml");
+    const own = "default_mode_request_user_input = true\nweb_search_request = true";
+    const edited = readFileSync(configPath, "utf-8").replace("default_mode_request_user_input = true", own);
+    writeFileSync(configPath, edited);
+    const written = run(["config", "--project-dir", project, "--yes"], project, env);
+    expect(written.status, written.stdout + written.stderr).toBe(0);
+    const release = codexRelease((text) => text.replace(
+      "default_mode_request_user_input = true",
+      "default_mode_request_user_input = true\nweb_search_request = false",
+    ));
+    const refreshed = run([
+      "config", "--project-dir", project, "--from", release, "--harness", "codex", "--yes",
+    ], project, env);
+    expect(refreshed.status, refreshed.stdout + refreshed.stderr).toBe(0);
+    expect(refreshed.stdout).toContain(
+      "Note: kept your features.web_search_request in .codex/config.toml; this release ships a different value.",
+    );
+    expect(readFileSync(configPath, "utf-8")).toBe(edited);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("a comment inside a reformatted AI-DLC value stops the refresh instead of going", () => {
+    const env = runtimeEnv();
+    const project = install("codex");
+    const configPath = join(project, ".codex", "config.toml");
+    const edited = readFileSync(configPath, "utf-8").replace(
+      SHIPPED_STATUS_LINE,
+      'status_line = [\n  # team: keep the model first\n  "model-with-reasoning", "git-branch", "task-progress", "context-used",\n]',
+    );
+    writeFileSync(configPath, edited);
+    const same = run(["config", "--project-dir", project, "--yes"], project, env);
+    expect(same.status, same.stdout + same.stderr).toBe(0);
+    expect(readFileSync(configPath, "utf-8")).toBe(edited);
+    const moved = run([
+      "config", "--project-dir", project, "--from", codexStatusRelease(RELEASE_STATUS),
+      "--harness", "codex", "--yes",
+    ], project, env);
+    expect(moved.status, moved.stdout + moved.stderr).toBe(4);
+    expect(readFileSync(configPath, "utf-8")).toBe(edited);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("Codex refresh keeps the team's active space and needs no --force", () => {
+    const project = install("codex");
+    const env = runtimeEnv();
+    const configPath = join(project, ".codex", "config.toml");
+    // What /aidlc space teamb writes at the next session start.
+    const onSpace = readFileSync(configPath, "utf-8").replace(
+      'AIDLC_RULES_DIR = "aidlc/spaces/default/memory"',
+      'AIDLC_RULES_DIR = "aidlc/spaces/teamb/memory"',
+    );
+    writeFileSync(configPath, onSpace);
+    const refreshed = run([
+      "config", "--project-dir", project, "--from", codexStatusRelease(RELEASE_STATUS),
+      "--harness", "codex", "--yes",
+    ], project, env);
+    expect(refreshed.status, refreshed.stdout + refreshed.stderr).toBe(0);
+    expect(refreshed.stdout).not.toContain("Note:");
     expect(readFileSync(configPath, "utf-8"))
-      .toContain("developer_instructions = '''");
+      .toBe(onSpace.replace(SHIPPED_STATUS_VALUE, JSON.stringify(RELEASE_STATUS)));
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("first Codex install keeps a project's own config.toml and adds AI-DLC's settings", () => {
+    const project = temp("aidlc-t294-codex-own-config-");
+    mkdirSync(join(project, ".git"));
+    mkdirSync(join(project, ".codex"));
+    const own = "# team codex settings\nmodel = \"team-model\"\n\n" +
+      "[features]\nweb_search_request = true\n\n[mcp_servers.team]\ncommand = \"team-mcp\"\n";
+    const configPath = join(project, ".codex", "config.toml");
+    writeFileSync(configPath, own);
+    const installed = run([
+      "config", "--project-dir", project, "--from", join(DIST_RELEASE, "codex"),
+      "--harness", "codex", "--mcp", "defaults", "--yes",
+    ], project);
+    expect(installed.status, installed.stdout + installed.stderr).toBe(0);
+    expect(installed.stdout).toContain(
+      "Note: added AI-DLC's settings to .codex/config.toml; your own settings were kept.",
+    );
+    const after = readFileSync(configPath, "utf-8");
+    expect(after).toContain("# team codex settings\nmodel = \"team-model\"\n");
+    expect(after).toContain("[mcp_servers.team]\ncommand = \"team-mcp\"\n");
+    const shipped = parseToml(readFileSync(join(DIST_RELEASE, "codex", ".codex", "config.toml"), "utf-8"));
+    const parsed = parseToml(after) as Record<string, unknown>;
+    expect(parsed.model).toBe("team-model");
+    expect(parsed.developer_instructions).toBe(shipped.developer_instructions);
+    expect(parsed.sandbox_mode).toBe(shipped.sandbox_mode);
+    // Without the raised output budget, Codex cuts a long workflow instruction
+    // short for a model outside its catalog (custom providers, --oss).
+    expect(parsed.tool_output_token_limit).toBe(shipped.tool_output_token_limit);
+    expect(parsed.features).toEqual({
+      ...(shipped.features as Record<string, unknown>),
+      web_search_request: true,
+    });
+    expect(parsed.tui).toEqual(shipped.tui);
+    expect(parsed.mcp_servers).toEqual({ team: { command: "team-mcp" } });
+
+    const again = run(["config", "--project-dir", project, "--yes"], project, runtimeEnv());
+    expect(again.status, again.stdout + again.stderr).toBe(0);
+    expect(again.stdout).not.toContain("Note:");
+    expect(readFileSync(configPath, "utf-8")).toBe(after);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("first Codex install keeps a project's own output budget and says so once", () => {
+    const project = temp("aidlc-t294-codex-own-budget-");
+    mkdirSync(join(project, ".git"));
+    mkdirSync(join(project, ".codex"));
+    const own = "model = \"team-model\"\ntool_output_token_limit = 40000\n";
+    const configPath = join(project, ".codex", "config.toml");
+    writeFileSync(configPath, own);
+    const installed = run([
+      "config", "--project-dir", project, "--from", join(DIST_RELEASE, "codex"),
+      "--harness", "codex", "--mcp", "defaults", "--yes",
+    ], project);
+    expect(installed.status, installed.stdout + installed.stderr).toBe(0);
+    expect(installed.stdout).toContain(
+      "Note: kept your tool_output_token_limit in .codex/config.toml; this release ships a different value.",
+    );
+    const after = readFileSync(configPath, "utf-8");
+    expect(after).toContain("model = \"team-model\"\ntool_output_token_limit = 40000\n");
+    expect((parseToml(after) as Record<string, unknown>).tool_output_token_limit).toBe(40000);
+
+    const again = run(["config", "--project-dir", project, "--yes"], project, runtimeEnv());
+    expect(again.status, again.stdout + again.stderr).toBe(0);
+    expect(again.stdout).not.toContain("Note:");
+    expect(readFileSync(configPath, "utf-8")).toBe(after);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("Codex refresh keeps CRLF line ends and a byte order mark", () => {
+    const project = install("codex");
+    const env = runtimeEnv();
+    const configPath = join(project, ".codex", "config.toml");
+    const edited = `\uFEFF${readFileSync(configPath, "utf-8")
+      .replace("default_mode_request_user_input = true", "default_mode_request_user_input = true\nweb_search_request = true")
+      .replace(/^status_line\s*=.*\n/m, "")
+      .replaceAll("\n", "\r\n")}`;
+    writeFileSync(configPath, edited);
+    const refreshed = run([
+      "config", "--project-dir", project, "--from", codexStatusRelease(RELEASE_STATUS),
+      "--harness", "codex", "--yes",
+    ], project, env);
+    expect(refreshed.status, refreshed.stdout + refreshed.stderr).toBe(0);
+    const after = readFileSync(configPath, "utf-8");
+    expect(after).toBe(edited.replace(
+      "[tui]\r\n",
+      `[tui]\r\nstatus_line = ${JSON.stringify(RELEASE_STATUS)}\r\n`,
+    ));
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("a Codex file the refresh cannot merge still stops and stays unchanged", () => {
+    const project = install("codex");
+    const env = runtimeEnv();
+    const configPath = join(project, ".codex", "config.toml");
+    // AI-DLC's [tui] written as an array of tables: nothing to merge safely.
+    const edited = readFileSync(configPath, "utf-8").replace(/^\[tui\]$/m, "[[tui]]");
+    expect(() => parseToml(edited)).not.toThrow();
+    writeFileSync(configPath, edited);
+    const refreshed = run(["config", "--project-dir", project, "--yes"], project, env);
+    expect(refreshed.status, refreshed.stdout + refreshed.stderr).toBe(4);
+    expect(refreshed.stdout + refreshed.stderr).toContain(".codex/config.toml (locally modified or unowned)");
+    expect(readFileSync(configPath, "utf-8")).toBe(edited);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  // Turn an install's baseline into one written before per-value records.
+  function withoutValueRecords(project: string): void {
+    const manifestPath = join(project, ".codex", "tools", "data", "aidlc-manifest.json");
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf-8"));
+    const entries = manifest.entries[".codex/config.toml"] as Record<string, string>;
+    for (const key of Object.keys(entries)) if (key.startsWith("value:")) delete entries[key];
+    writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+  }
+
+  test("a baseline written before per-key records still takes release values for untouched tables", () => {
+    const project = install("codex");
+    const env = runtimeEnv();
+    const configPath = join(project, ".codex", "config.toml");
+    withoutValueRecords(project);
+    const edited = readFileSync(configPath, "utf-8").replace(
+      "default_mode_request_user_input = true",
+      "default_mode_request_user_input = true\nweb_search_request = true",
+    );
+    writeFileSync(configPath, edited);
+    const refreshed = run([
+      "config", "--project-dir", project, "--from", codexStatusRelease(RELEASE_STATUS),
+      "--harness", "codex", "--yes",
+    ], project, env);
+    expect(refreshed.status, refreshed.stdout + refreshed.stderr).toBe(0);
+    expect(refreshed.stdout).not.toContain("Note:");
+    expect(readFileSync(configPath, "utf-8"))
+      .toBe(edited.replace(SHIPPED_STATUS_VALUE, JSON.stringify(RELEASE_STATUS)));
+
+    // The same older baseline: an edited table is read from its real header,
+    // not a lookalike inside a string, and an untouched retired table goes.
+    const legacy = install("codex");
+    const legacyPath = join(legacy, ".codex", "config.toml");
+    withoutValueRecords(legacy);
+    const legacyEdited = readFileSync(legacyPath, "utf-8").replace("max_depth = 1", "max_depth = 3") +
+      "\n[mcp_servers.notes]\ncommand = \"notes\"\ndescription = '''\n[agents]\nmax_depth = 1\n'''\n";
+    writeFileSync(legacyPath, legacyEdited);
+    const retiring = codexRelease((text) => text
+      .replace("max_depth = 1", "max_depth = 2")
+      .replace(/\[tui\][\s\S]*$/, ""));
+    const retired = run([
+      "config", "--project-dir", legacy, "--from", retiring, "--harness", "codex", "--yes",
+    ], legacy, env);
+    expect(retired.status, retired.stdout + retired.stderr).toBe(0);
+    expect(retired.stdout).toContain("Note: kept your agents.max_depth in .codex/config.toml");
+    const after = readFileSync(legacyPath, "utf-8");
+    expect(after).toBe(legacyEdited.replace(`[tui]\n${SHIPPED_STATUS_LINE}\n`, ""));
+    expect(parseToml(after).tui).toBeUndefined();
+
+    // A root key is read from its real statement, not a lookalike line inside
+    // a string that an odd closing quote run hides.
+    const roots = install("codex");
+    const rootsPath = join(roots, ".codex", "config.toml");
+    withoutValueRecords(roots);
+    const rootsEdited = readFileSync(rootsPath, "utf-8").replace(
+      'sandbox_mode = "workspace-write"',
+      'description = \'\'\'x\'\'\'\'\nsandbox_mode = "read-only"\nnotes = """example\'s:\nsandbox_mode = "workspace-write"\n"""',
+    );
+    expect(parseToml(rootsEdited).sandbox_mode).toBe("read-only");
+    writeFileSync(rootsPath, rootsEdited);
+    const rootsRefreshed = run(["config", "--project-dir", roots, "--yes"], roots, env);
+    expect(rootsRefreshed.status, rootsRefreshed.stdout + rootsRefreshed.stderr).toBe(0);
+    expect(readFileSync(rootsPath, "utf-8")).toBe(rootsEdited);
+
+    // A key an older release wrote into a table that stays goes when this
+    // release no longer ships it.
+    const older = temp("aidlc-t294-codex-older-");
+    mkdirSync(join(older, ".git"));
+    const olderRelease = codexRelease((text) => text.replace(
+      "default_mode_request_user_input = true",
+      "default_mode_request_user_input = true\nold_flag = true",
+    ));
+    const olderInstall = run([
+      "config", "--project-dir", older, "--from", olderRelease, "--harness", "codex", "--mcp", "defaults", "--yes",
+    ], older);
+    expect(olderInstall.status, olderInstall.stdout + olderInstall.stderr).toBe(0);
+    withoutValueRecords(older);
+    const upgraded = run([
+      "config", "--project-dir", older, "--from", join(DIST_RELEASE, "codex"), "--harness", "codex", "--yes",
+    ], older, env);
+    expect(upgraded.status, upgraded.stdout + upgraded.stderr).toBe(0);
+    expect(readFileSync(join(older, ".codex", "config.toml"), "utf-8"))
+      .toBe(readFileSync(join(DIST_RELEASE, "codex", ".codex", "config.toml"), "utf-8"));
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("an escaped line break in the project's onboarding text is their own value", () => {
+    const env = runtimeEnv();
+    const project = install("codex");
+    const configPath = join(project, ".codex", "config.toml");
+    const edited = readFileSync(configPath, "utf-8").replace(
+      /^developer_instructions = '''[\s\S]*?'''\n/m,
+      'developer_instructions = "team line one\\r\\nteam line two"\n',
+    );
+    expect(parseToml(edited).developer_instructions).toBe("team line one\r\nteam line two");
+    writeFileSync(configPath, edited);
+    const release = codexRelease((text) => text.replace(
+      "# AI-DLC on Codex CLI",
+      "# AI-DLC on Codex CLI\nNew line from the release.",
+    ));
+    const refreshed = run([
+      "config", "--project-dir", project, "--from", release, "--harness", "codex", "--yes",
+    ], project, env);
+    expect(refreshed.status, refreshed.stdout + refreshed.stderr).toBe(0);
+    expect(refreshed.stdout).toContain("Note: kept your developer_instructions in .codex/config.toml");
+    expect(readFileSync(configPath, "utf-8")).toBe(edited);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("a deeply nested project value never crashes a Codex refresh", () => {
+    const env = runtimeEnv();
+    const project = install("codex");
+    const configPath = join(project, ".codex", "config.toml");
+    const deep = `deep = ${"[".repeat(20000)}1${"]".repeat(20000)}\n`;
+    writeFileSync(configPath, deep + readFileSync(configPath, "utf-8"));
+    const refreshed = run([
+      "config", "--project-dir", project, "--from", codexStatusRelease(RELEASE_STATUS),
+      "--harness", "codex", "--yes",
+    ], project, env);
+    expect([0, 4], refreshed.stdout + refreshed.stderr).toContain(refreshed.status);
+    expect(readFileSync(configPath, "utf-8").startsWith(deep)).toBe(true);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("ordinary and forced Claude refreshes preserve user permissions and environment", () => {
@@ -4128,12 +4630,15 @@ process.exit(0);
     ], fresh, runtimeEnv());
     expect(upgraded.status, upgraded.stdout + upgraded.stderr).toBe(0);
     expect(readFileSync(freshPath, "utf-8")).toBe(`\uFEFF${readFileSync(join(source, "opencode.json"), "utf-8")}`);
-    // Their own edit, mark or not, is still theirs.
+    // Their own edit, mark or not, is still theirs: kept, with the mark.
     writeFileSync(freshPath, `\uFEFF${JSON.stringify({ ...shipped, theme: "mine" }, null, 2)}\n`);
     const edited = run([
       "config", "--project-dir", fresh, "--from", join(DIST_RELEASE, "opencode"), "--harness", "opencode", "--yes",
     ], fresh, runtimeEnv());
-    expect(edited.stdout + edited.stderr).toContain("opencode.json (unowned whole file)");
+    expect(edited.status, edited.stdout + edited.stderr).toBe(0);
+    const kept = readFileSync(freshPath, "utf-8");
+    expect(kept.startsWith("\uFEFF")).toBe(true);
+    expect(JSON.parse(kept.slice(1)).theme).toBe("mine");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("Claude refresh preserves a wired project hook whose filename starts with aidlc-", () => {
@@ -4266,7 +4771,7 @@ process.exit(0);
     }
   }, 120_000);
 
-  test("refresh rejects a user-edited Codex framework table and force restores it", () => {
+  test("refresh keeps a person's Codex value and says so once the release ships another", () => {
     const env = runtimeEnv();
     const project = install("codex");
     const configPath = join(project, ".codex", "config.toml");
@@ -4282,9 +4787,9 @@ process.exit(0);
       project,
       "--yes",
     ], project, env);
-    expect(ordinary.status, ordinary.stdout + ordinary.stderr).toBe(4);
-    expect(parseToml(readFileSync(configPath, "utf-8")).tui)
-      .toEqual({ status_line: userStatus });
+    expect(ordinary.status, ordinary.stdout + ordinary.stderr).toBe(0);
+    expect(ordinary.stdout).not.toContain("Note:");
+    expect(readFileSync(configPath, "utf-8")).toBe(edited);
 
     const source = temp("aidlc-t294-codex-entries-source-");
     cpSync(join(DIST_RELEASE, "codex"), source, { recursive: true });
@@ -4294,62 +4799,68 @@ process.exit(0);
       /^status_line\s*=.*$/m,
       `status_line = ${JSON.stringify(releaseStatus)}`,
     ));
-    const refreshed = run([
+    const fromSource = (dir: string, extra: string[] = []) => run([
       "config",
       "--project-dir",
-      project,
+      dir,
       "--from",
       source,
       "--harness",
       "codex",
+      ...extra,
       "--yes",
-    ], project, env);
-    expect(refreshed.status, refreshed.stdout + refreshed.stderr).toBe(4);
-    expect(parseToml(readFileSync(configPath, "utf-8")).tui)
-      .toEqual({ status_line: userStatus });
-    const forced = run([
-      "config",
-      "--project-dir",
-      project,
-      "--from",
-      source,
-      "--harness",
-      "codex",
-      "--force",
-      "--yes",
-    ], project, env);
-    expect(forced.status, forced.stdout + forced.stderr).toBe(0);
+    ], dir, env);
+    const kept = "Note: kept your tui.status_line in .codex/config.toml; this release ships a different value. Delete the key and refresh to take it.";
+    const refreshed = fromSource(project);
+    expect(refreshed.status, refreshed.stdout + refreshed.stderr).toBe(0);
+    expect(refreshed.stdout).toContain(kept);
+    expect(readFileSync(configPath, "utf-8")).toBe(edited);
+    // Once said, the same release keeps the choice silently; --force keeps it too.
+    for (const extra of [[], ["--force"]]) {
+      const again = fromSource(project, extra);
+      expect(again.status, again.stdout + again.stderr).toBe(0);
+      expect(again.stdout).not.toContain("Note:");
+      expect(readFileSync(configPath, "utf-8")).toBe(edited);
+    }
+    // Deleting the key takes the shipped value.
+    writeFileSync(configPath, edited.replace(/^status_line\s*=.*\n/m, ""));
+    const taken = fromSource(project);
+    expect(taken.status, taken.stdout + taken.stderr).toBe(0);
     expect(parseToml(readFileSync(configPath, "utf-8")).tui)
       .toEqual({ status_line: releaseStatus });
 
     const pristine = install("codex");
-    const pristineRefresh = run([
-      "config",
-      "--project-dir",
-      pristine,
-      "--from",
-      source,
-      "--harness",
-      "codex",
-      "--yes",
-    ], pristine, env);
+    const pristineRefresh = fromSource(pristine);
     expect(pristineRefresh.status, pristineRefresh.stdout + pristineRefresh.stderr).toBe(0);
+    expect(pristineRefresh.stdout).not.toContain("Note:");
     expect(parseToml(readFileSync(join(pristine, ".codex", "config.toml"), "utf-8")).tui)
       .toEqual({ status_line: releaseStatus });
     const baseline = JSON.parse(readFileSync(
       join(project, ".codex", "tools", "data", "aidlc-manifest.json"),
       "utf-8",
     ));
+    const hash = expect.stringMatching(/^sha256:[0-9a-f]{64}$/);
     expect(baseline.entries[".codex/config.toml"]).toEqual({
-      agents: expect.stringMatching(/^sha256:[0-9a-f]{64}$/),
-      developer_instructions: expect.stringMatching(/^sha256:[0-9a-f]{64}$/),
-      features: expect.stringMatching(/^sha256:[0-9a-f]{64}$/),
-      sandbox_mode: expect.stringMatching(/^sha256:[0-9a-f]{64}$/),
-      sandbox_workspace_write: expect.stringMatching(/^sha256:[0-9a-f]{64}$/),
-      shell_environment_policy: expect.stringMatching(/^sha256:[0-9a-f]{64}$/),
-      suppress_unstable_features_warning: expect.stringMatching(/^sha256:[0-9a-f]{64}$/),
-      tools: expect.stringMatching(/^sha256:[0-9a-f]{64}$/),
-      tui: expect.stringMatching(/^sha256:[0-9a-f]{64}$/),
+      agents: hash,
+      developer_instructions: hash,
+      features: hash,
+      sandbox_mode: hash,
+      sandbox_workspace_write: hash,
+      shell_environment_policy: hash,
+      suppress_unstable_features_warning: hash,
+      tool_output_token_limit: hash,
+      tools: hash,
+      tui: hash,
+      'value:["developer_instructions"]': hash,
+      'value:["sandbox_mode"]': hash,
+      'value:["suppress_unstable_features_warning"]': hash,
+      'value:["tool_output_token_limit"]': hash,
+      'value:["shell_environment_policy","set","AIDLC_RULES_DIR"]': hash,
+      'value:["sandbox_workspace_write","network_access"]': hash,
+      'value:["agents","max_depth"]': hash,
+      'value:["tools","experimental_request_user_input","enabled"]': hash,
+      'value:["features","default_mode_request_user_input"]': hash,
+      'value:["tui","status_line"]': hash,
     });
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
@@ -4397,11 +4908,12 @@ process.exit(0);
           const settings = JSON.parse(readFileSync(path, "utf-8"));
           expect(settings.mcp).toEqual(JSON.parse(current).mcp);
           expect(settings.provider["amazon-bedrock"].options.region).toBe("eu-west-1");
-          if (modified) {
-            expect(after.rootContributions[rel]).toEqual(before.rootContributions[rel]);
-          } else {
-            expect(after.rootContributions[rel]).not.toEqual(before.rootContributions[rel]);
-          }
+          // The team's own MCP server is never recorded as AI-DLC's; the
+          // provider region AI-DLC wrote is.
+          const entries = after.rootContributions[rel].entries as Record<string, string>;
+          expect(Object.keys(entries).some((id) => id.includes('"mcp"'))).toBe(false);
+          expect(entries).toMatchObject(before.rootContributions[rel].entries);
+          expect(entries[JSON.stringify({ path: ["provider", "amazon-bedrock", "options", "region"] })]).toBeDefined();
         }
         const refresh = run([
           "config",
@@ -4411,12 +4923,13 @@ process.exit(0);
           harness,
           "--yes",
         ], project, env);
-        expect(refresh.status, refresh.stdout + refresh.stderr).toBe(modified ? 4 : 0);
-        if (modified) {
+        // A Claude hook edit is a conflict; the team's opencode.json entries are theirs to keep.
+        expect(refresh.status, refresh.stdout + refresh.stderr).toBe(modified && harness === "claude" ? 4 : 0);
+        if (modified && harness === "claude") {
           expect(refresh.stdout).toContain(rel);
-          expect(refresh.stdout).toContain(
-            harness === "claude" ? "locally modified or unowned" : "unowned whole file",
-          );
+          expect(refresh.stdout).toContain("locally modified or unowned");
+        } else if (modified) {
+          expect(JSON.parse(readFileSync(path, "utf-8")).mcp["team-service"]).toEqual({ type: "local", command: ["team-tool"] });
         }
       }
     }
@@ -4466,7 +4979,7 @@ process.exit(0);
     }
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-  test("provider answers preserve project fields and reject framework drift", () => {
+  test("provider answers preserve project fields and the project's Codex values", () => {
     const env = runtimeEnv();
     const opencode = install("opencode");
     const opencodePath = join(opencode, "opencode.json");
@@ -4522,9 +5035,11 @@ process.exit(0);
       "current",
       "--yes",
     ], codex, env);
-    expect(codexAnswer.status, codexAnswer.stdout + codexAnswer.stderr).toBe(4);
+    expect(codexAnswer.status, codexAnswer.stdout + codexAnswer.stderr).toBe(0);
     const codexAfter = readFileSync(codexPath, "utf-8");
-    expect(codexAfter).toBe(legacyEdited);
+    // The answer removes only the attributable legacy block.
+    expect(codexAfter).not.toContain("[model_providers.amazon-bedrock.aws]");
+    expect(codexAfter.replace(/\n{2,}/g, "\n")).toBe(edited.replace(/\n{2,}/g, "\n"));
     expect(parseToml(codexAfter).tui).toEqual({ status_line: userStatus });
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 

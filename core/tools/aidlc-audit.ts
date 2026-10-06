@@ -96,6 +96,8 @@ const VALID_EVENT_TYPES = new Set([
   "QUESTION_ANSWERED",
   // Hook-owned: a question box closed with no answer (Codex's runs out).
   "QUESTION_UNANSWERED",
+  // Hook-owned: what a question box carried back, question by question.
+  "QUESTION_REPLIED",
   "SUMMARY_CONFIRMATION_RECORDED",
   "VERIFICATION_COMMAND_RECORDED",
   "CONSTRUCTION_POLICY_RECORDED",
@@ -301,6 +303,7 @@ const EVENT_HEADINGS: Record<string, string> = {
   GATE_REJECTED: "Gate Rejected",
   QUESTION_ANSWERED: "Question Answered",
   QUESTION_UNANSWERED: "Question Unanswered",
+  QUESTION_REPLIED: "Question Replied",
   SUMMARY_CONFIRMATION_RECORDED: "Summary Confirmation Recorded",
   VERIFICATION_COMMAND_RECORDED: "Verification Command Recorded",
   CONSTRUCTION_POLICY_RECORDED: "Construction Policy Recorded",
@@ -403,6 +406,9 @@ const CLI_RESERVED_EVENT_TYPES = new Set([
   // Hook-owned like HUMAN_TURN: it spends a person's turn, so only the hook
   // that saw the empty question box may write it.
   "QUESTION_UNANSWERED",
+  // Hook-owned too: it is the person's own reply, so only the hook that saw
+  // the question box may write it.
+  "QUESTION_REPLIED",
   "SUMMARY_CONFIRMATION_RECORDED",
   "VERIFICATION_COMMAND_RECORDED",
   "CONSTRUCTION_POLICY_RECORDED",
@@ -468,6 +474,7 @@ export const CLI_PROTECTED_EVENT_TYPES = new Set([
   "STAGE_COMPLETED",
   "HUMAN_TURN",
   "QUESTION_UNANSWERED",
+  "QUESTION_REPLIED",
   "GATE_APPROVED",
   "GATE_REJECTED",
   "QUESTION_ANSWERED",
@@ -563,6 +570,7 @@ const MERGE_PROTECTED_EVENT_TYPES = new Set([
   // Human authority (GATE_RESOLUTION_EVENTS + presence + autonomy).
   "HUMAN_TURN",
   "QUESTION_UNANSWERED",
+  "QUESTION_REPLIED",
   "GATE_APPROVED",
   "GATE_REJECTED",
   "QUESTION_ANSWERED",

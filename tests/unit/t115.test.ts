@@ -96,6 +96,7 @@ import {
   reviewArtifactFingerprint,
   renderReviewVerdictCommand,
   resolveStage,
+  scopeCostSummary,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import {
@@ -1490,6 +1491,41 @@ describe("t115 reviewer precondition (report refuses approve without a recorded 
     expect(r.out).toContain('"kind":"done"');
     expect(countEvent(p, "GATE_APPROVED")).toBe(1);
   }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
+
+  // A live poc run read "Progress: 1/8 in-scope stages complete (4/33 overall) | 1/7 IDEATION" after the first of
+  // the five stages it showed the person: the agent counted Initialization in one number and not the other, and
+  // the whole phase in the third. The engine now counts the line and the approval's reply carries it.
+  test("R2p: the approval's reply carries the progress line, counted over the stages the plan runs", () => {
+    const p = projWithState("state-mid-inception.md");
+    completeReview(
+      ["review", "--stage", "requirements-analysis", "--reviewer", "aidlc-product-lead-agent", "--iteration", "1", "--verdict", "READY"],
+      p,
+    );
+    expect(state(["gate-start", "requirements-analysis"], p).status).toBe(0);
+    const r = orchestrate(
+      ["report", "--stage", "requirements-analysis", "--result", "approved", "--user-input", "Approve"],
+      p,
+    );
+    const done = JSON.parse(r.stdout.trim().split("\n").at(-1) ?? "{}") as Record<string, unknown>;
+    expect(done.kind, r.out).toBe("done");
+    // bugfix past Initialization: reverse-engineering and requirements-analysis (done), then code-generation,
+    // build-and-test, deployment-pipeline and deployment-execution; 3 Initialization stages count overall.
+    expect(done.narration).toBe(
+      "Progress: 2/6 in-scope stages complete (5/33 overall) | 2/2 INCEPTION. Next: Code Generation",
+    );
+    // The same count the work started with: "6 stages, 6 approval gates".
+    expect(scopeCostSummary("bugfix")?.shown).toBe(6);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
+
+  test("R2q: the stage protocol has the agent say the engine's progress line, never count it", () => {
+    const protocol = readFileSync(
+      join(import.meta.dir, "../../core/aidlc-common/protocols/stage-protocol.md"),
+      "utf-8",
+    );
+    expect(protocol).toContain(
+      "say the progress line the approval's reply carries as its `narration`, word for word; never count stages yourself",
+    );
+  });
 
   test("R3: a NOT-READY verdict still satisfies the precondition (soft on verdict)", () => {
     const p = projWithState("state-mid-inception.md");

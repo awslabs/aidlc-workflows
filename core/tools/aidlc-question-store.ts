@@ -82,9 +82,10 @@ export interface QuestionSettings {
   existingWork: string[];
 }
 
-// Flag names and their one-word values (a stage list joins slugs with commas)
-// only: `next`'s own parser reads them back and checks each value.
-const SETTING_TOKEN = /^(?:--)?[a-z0-9][a-z0-9,-]*$/;
+// Flag names and their one-word values (a stage list joins slugs with commas,
+// a check's flag names it after a dot) only: `next`'s own parser reads them
+// back and checks each value.
+const SETTING_TOKEN = /^(?:--)?[a-z0-9][a-z0-9.,-]*$/;
 
 function isSettingTokens(value: unknown): value is string[] {
   return Array.isArray(value) && value.every((token) => typeof token === "string" && SETTING_TOKEN.test(token));

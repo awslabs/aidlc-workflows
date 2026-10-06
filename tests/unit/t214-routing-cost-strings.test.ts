@@ -7,8 +7,8 @@
 // so the assertions track the grid.
 //
 // Surfaces:
-//   - the keyword-hit confirm (Branch 8) carries "N of T stages, G approval
-//     gates" for the MATCHED scope,
+//   - the keyword-hit confirm (Branch 8) carries "N stages, G approval gates"
+//     for the MATCHED scope (N: the stages after Initialization),
 //   - the compose offer carries the express/classic/feature example trio,
 //     computed from the grid, and still avoids the t198 `"feature" workflow` trap,
 //   - the explicit-scope creation print carries the cost parenthetical, and
@@ -64,7 +64,7 @@ const PER_UNIT = new Set(
 function counts(
   stages: Record<string, "EXECUTE" | "SKIP">,
   greenfieldAdjust = false,
-): { execute: number; total: number; gates: number; perUnitStages: number } {
+): { execute: number; total: number; gates: number; shown: number; perUnitStages: number } {
   const st = { ...stages };
   if (greenfieldAdjust && st["reverse-engineering"] === "EXECUTE") {
     st["reverse-engineering"] = "SKIP";
@@ -73,21 +73,26 @@ function counts(
   const hasUnitDag = st["units-generation"] === "EXECUTE";
   let execute = 0;
   let gates = 0;
+  let shown = 0;
   let perUnitStages = 0;
   for (const [slug, action] of Object.entries(st)) {
     if (action !== "EXECUTE") continue;
     execute++;
-    if (PHASE.get(slug) !== "initialization") gates++;
+    if (PHASE.get(slug) !== "initialization") {
+      gates++;
+      shown++;
+    }
     if (hasUnitDag && PER_UNIT.has(slug)) perUnitStages++;
   }
-  return { execute, total, gates, perUnitStages };
+  return { execute, total, gates, shown, perUnitStages };
 }
 
 function costClause(cost: ReturnType<typeof counts>): string {
   const perUnit = cost.perUnitStages > 0
     ? `, ${cost.perUnitStages} ${cost.perUnitStages === 1 ? "stage repeats" : "stages repeat"} per unit of work in Construction`
     : "";
-  return `${cost.execute} of ${cost.total} stages, ${cost.gates} approval gates${perUnit}`;
+  // The stages after Initialization: the count the progress line uses too.
+  return `${cost.shown} stages, ${cost.gates} approval gates${perUnit}`;
 }
 
 interface RunResult {
@@ -175,10 +180,11 @@ describe("t214 compose offer carries the example counts (no feature-workflow tra
     const feature = counts(GRID.feature.stages, true);
     // bugfix leads, so a bug the description gave no word for is still offered.
     expect(q).toContain(
-      `e.g. bugfix = ${bugfix.execute} of ${bugfix.total} stages, express = ${express.execute}`,
+      `e.g. bugfix = ${bugfix.shown} stages, express = ${express.shown}`,
     );
-    expect(q).toContain(`classic = ${classic.execute}`);
-    expect(q).toContain(`feature = all ${feature.execute}`);
+    expect(q).toContain(`classic = ${classic.shown}`);
+    expect(q).toContain(`feature = ${feature.shown}`);
+    expect(q).not.toContain("of 33");
     // t198:200 pins this substring's absence on the compose-offer arm.
     expect(q).not.toContain('"feature" workflow');
   });
@@ -192,7 +198,7 @@ describe("t214 every plan the offer lists carries the engine's own count", () =>
     const rows = d.scope_commands as Array<{ scope: string; stages?: string }>;
     for (const [scope, entry] of Object.entries(GRID)) {
       const c = counts(entry.stages, greenfield);
-      expect(rows.find((row) => row.scope === scope)?.stages, scope).toBe(`${c.execute} of ${c.total} stages`);
+      expect(rows.find((row) => row.scope === scope)?.stages, scope).toBe(`${c.shown} ${c.shown === 1 ? "stage" : "stages"}`);
     }
   }
 
@@ -201,14 +207,14 @@ describe("t214 every plan the offer lists carries the engine's own count", () =>
     const d = directiveOf(runNext(proj, ["build a distributed cache layer with consistency guarantees"]).out);
     expect(d.ask_type).toBe("compose-offer");
     rowsAgree(d, true);
-    expect(String(d.question)).toContain(`classic = ${counts(GRID.classic.stages, true).execute}`);
+    expect(String(d.question)).toContain(`classic = ${counts(GRID.classic.stages, true).shown}`);
     // Every count the question names is its plan's row count, so a choice that
     // shows a row's number can only differ from the question in wording.
     const rows = d.scope_commands as Array<{ scope: string; stages?: string }>;
-    const named = [...String(d.question).matchAll(/\b([a-z][a-z-]*) = (?:all )?(\d+)\b/g)];
+    const named = [...String(d.question).matchAll(/\b([a-z][a-z-]*) = (\d+)\b/g)];
     expect(named.map(([, scope]) => scope)).toEqual(["bugfix", "express", "classic", "feature"]);
     for (const [, scope, n] of named) {
-      expect(rows.find((row) => row.scope === scope)?.stages, scope).toStartWith(`${n} of `);
+      expect(rows.find((row) => row.scope === scope)?.stages, scope).toBe(`${n} stages`);
     }
   });
 
@@ -293,7 +299,7 @@ describe("t214 scope-change stdout carries the stage and gate counts", () => {
     expect(r.rc).toBe(0);
     // The fixture is Greenfield, so reverse-engineering EXECUTE -> SKIP.
     const mvp = counts(GRID.mvp.stages, true);
-    expect(r.out).toContain(`Switched to mvp: ${mvp.execute} stages (`);
+    expect(r.out).toContain(`Switched to mvp: ${mvp.shown} stages (`);
     expect(r.out).toContain(`, ${mvp.gates} approval gates`);
   });
 });

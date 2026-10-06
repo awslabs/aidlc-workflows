@@ -151,6 +151,11 @@ the export endpoint". What should I do?
 - Choose **3** and AI-DLC works out how to reshape the active intent's
   remaining plan with you.
 
+Saying only that the work should go on (`/aidlc carry on`, "continue", "keep
+going", "go on" or "resume", with or without "please") asks nothing: AI-DLC
+carries on with the active work. With work in the project but none selected
+yet, it asks which piece to pick up.
+
 Settings you type with the new work go with the work you choose.
 `/aidlc --depth minimal --learnings off Fix the timeout on the export endpoint`
 asks the same question: choose **2** and the new intent starts with that depth

@@ -103,8 +103,9 @@ To choose swarm execution, explicitly select stage-major and then
 `Construction Execution: swarm`. Guided (`gated`) and automatic (`autonomous`)
 batch completion are both supported; granting autonomy does not change order or
 execution. Unit-major remains serial and refuses a contradictory swarm setting.
-Legacy workflows without the new fields retain their existing first-stage/late
-cascade and autonomy-based swarm routing. Team-owned work keeps `unit_gate` and
+Legacy workflows without the new fields retain their existing first-stage review
+and autonomy-based swarm routing; under unit-major their late stage approvals are
+one question. Team-owned work keeps `unit_gate` and
 its own per-stage or unit-end approval rhythm.
 
 You shape the recommendation through the rule layers from
@@ -236,8 +237,8 @@ declaring `for_each: unit-of-work` in its frontmatter:
 For human team ownership, delivery planning can combine
 `Construction Iteration: unit-major` with `Unit Ownership: team`. The engine
 then derives `## Unit Progress` from the same DAG/artifact/receipt evidence and
-uses either per-stage or unit-end Unit gates instead of the legacy late
-unit-major cascade. This team-owned path retains its own policy; solo ownership
+uses either per-stage or unit-end Unit gates instead of the solo path's one late
+approval. This team-owned path retains its own policy; solo ownership
 uses the checkpoint-enabled or legacy path selected by its recorded state.
 
 | Stage | Runs |

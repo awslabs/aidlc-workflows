@@ -602,18 +602,14 @@ describe("t209 opt-in unit-major construction design iteration", () => {
       "--result",
       "approved",
     ]);
-    expect(functional.kind).toBe("done");
 
+    // With Unit checkpoints off one approval covers the late stage approvals.
     // Advancing functional-design emitted nfr-requirements's STAGE_STARTED
     // after both nfr reviews. Unit-major freshness deliberately ignores that
-    // late row, while still honoring workflow/jump/rejection boundaries.
-    const nfr = runReport(proj, [
-      "--stage",
-      "nfr-requirements",
-      "--result",
-      "approved",
-    ]);
-    expect(nfr.kind).toBe("done");
+    // late row, while still honoring workflow/jump/rejection boundaries, so
+    // nfr-requirements is approved too; nfr-design, never reviewed, stops it.
+    expect(functional.change_notices).toContain("Approved Functional Design and NFR Requirements.");
+    expect(String(functional.message)).toContain('"nfr-design"');
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("10: lifecycle receipts for a later unit-major stage survive its STAGE_STARTED", () => {
@@ -635,13 +631,13 @@ describe("t209 opt-in unit-major construction design iteration", () => {
       "--result",
       "approved",
     ]);
-    expect(functional.kind).toBe("done");
 
-    const nfr = runNext(proj);
-    expect(nfr.kind).toBe("run-stage");
-    expect(nfr.stage).toBe("nfr-requirements");
-    expect(nfr.unit).toBe("alpha");
-    expect(nfr.gate).toBe(true);
+    // One approval covers the late stage approvals (checkpoints off): alpha's
+    // nfr-requirements receipts survived its STAGE_STARTED, so the stage is
+    // approved without handing alpha out again; nfr-design, never reviewed,
+    // stops the approval there.
+    expect(functional.change_notices).toContain("Approved Functional Design and NFR Requirements.");
+    expect(readFileSync(seededStateFile(proj), "utf-8")).toMatch(/^- \[x\] nfr-requirements /m);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   // 11-17: a conditional skip under unit-major. Current Stage stays on the
@@ -845,7 +841,9 @@ describe("t209 opt-in unit-major construction design iteration", () => {
       "--result",
       "approved",
     ]);
-    expect(approved.kind).toBe("done");
+    // The same approval goes on to code-generation, the one stage left, which
+    // has no review yet, so it stops there.
+    expect(String(approved.message)).toContain('"code-generation"');
     state = readFileSync(seededStateFile(proj), "utf-8");
     expect(state).toMatch(/^- \[x\] infrastructure-design /m);
     expect(countEvents(proj, "STAGE_SKIPPED")).toBe(0);

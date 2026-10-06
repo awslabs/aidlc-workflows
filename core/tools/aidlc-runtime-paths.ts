@@ -308,9 +308,17 @@ export function kiroTreeLayout(harnessRoot: string): KiroLayout | null {
  * Null means "not discoverable here", never a default harness: a command that
  * needs one still resolves it later and reports the error then. Other
  * discovery errors are rethrown.
+ *
+ * Codex sets CODEX_SESSION_ID in every shell command its model runs, so in a
+ * project that also holds another tool's install, a command Codex runs reads
+ * the Codex install instead of the first one found.
  */
 export function discoverableRuntimeHarnessDir(projectDir = runtimeProjectDir()): string | null {
   try {
+    if (!process.env.AIDLC_HARNESS_DIR?.trim() && process.env.CODEX_SESSION_ID?.trim()) {
+      const codex = discoverProjectHarnesses(projectDir).find((item) => item.distribution === "codex");
+      if (codex) return codex.harnessDir;
+    }
     return runtimeHarnessDir(projectDir);
   } catch (error) {
     if (["EACCES", "EPERM"].includes((error as NodeJS.ErrnoException).code ?? "")) return null;
@@ -342,6 +350,14 @@ export function runtimeHarnessName(
   if (harnessDir === ".kiro") return "kiro";
   if (harnessDir === ".cursor") return "cursor";
   return "claude";
+}
+
+// The tools that hide a Stop-hook block's reason from the person: Kiro CLI
+// shows none of it, opencode hands it to the agent as a hidden synthetic part,
+// and Kiro IDE (whose tree Kiro CLI v3 also runs) drops Stop output. There the
+// agent says the carrying-on line itself.
+export function hidesStopNote(harnessName: string): boolean {
+  return harnessName === "kiro" || harnessName === "kiro-ide" || harnessName === "opencode";
 }
 
 function distributionFor(harnessDir: string, projectDir = runtimeProjectDir()): string {

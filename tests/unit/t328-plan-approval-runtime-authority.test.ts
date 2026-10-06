@@ -1504,7 +1504,17 @@ describe("t328 human-only break-glass override", () => {
       }, UNBINDABLE_ENV);
       expect(guarded.exitCode, guarded.stderr).toBe(0);
     }
-    expect(JSON.parse(readFileSync(receiptPath, "utf-8"))).toEqual({ ...receipt, status: "generation" });
+    // The build started on the edited plan, which the receipt keeps beside the
+    // approval so an interrupted build of it picks up.
+    const started = readFileSync(planPath, "utf-8");
+    const startedFingerprint = approvalFingerprint(
+      started,
+      readFileSync(join(codeGenerationRecordDir(project, null), "unit-test-instructions.md"), "utf-8"),
+      resolveTestingPosture(project).contract_sha256,
+      resolveCodeGenerationAuthority(project, { unit: null }),
+    );
+    expect(startedFingerprint).not.toBe(receipt.fingerprint);
+    expect(JSON.parse(readFileSync(receiptPath, "utf-8"))).toEqual({ ...receipt, startedFingerprint, status: "generation" });
     expect(readAuditShardEvents(project).filter((entry) => entry.event === "PLAN_APPROVAL_RECORDED")).toEqual(approvalRows);
     expect(readFileSync(questions, "utf-8")).toBe(originalQuestions);
     expect(readFileSync(statePath, "utf-8")).toBe(state);

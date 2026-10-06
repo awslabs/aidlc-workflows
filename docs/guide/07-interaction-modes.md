@@ -279,13 +279,21 @@ An edit to a finished stage's files is not reviewed or approved again unless you
 After every approval, a progress line appears:
 
 ```
-Progress: 13/33 overall | 3/7 IDEATION stages complete. Next: Approval & Handoff
+Progress: 6/30 in-scope stages complete (9/33 overall) | 6/7 IDEATION. Next: Approval & Handoff
 ```
 
 This shows:
-- Total progress across all stages
+- Progress across the stages your plan runs after Initialization (the count you
+  were shown when the work started), with every stage finished so far in
+  parentheses
 - Progress within the current phase
 - The name of the next stage
+
+On a shorter plan the numbers are smaller, for example:
+
+```
+Progress: 2/6 in-scope stages complete (5/33 overall) | 2/2 INCEPTION. Next: Code Generation
+```
 
 ---
 

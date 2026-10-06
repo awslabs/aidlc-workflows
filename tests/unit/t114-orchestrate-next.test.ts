@@ -292,6 +292,56 @@ describe("t114 scope precedence + validation", () => {
     expect(running.message).toContain('Unknown scope "retired-lane"');
   });
 
+  // New work started beside open work on a scope this install no longer
+  // defines never routes through that scope, so it starts as it would beside
+  // any open work, and the open work stays exactly as it was.
+  test("new work beside open work on a retired scope starts, and the open work is untouched", () => {
+    proj = createOrchestrationTestProject();
+    seedStateFile(proj, "state-completed.md");
+    const statePath = seededStateFile(proj);
+    writeFileSync(
+      statePath,
+      readFileSync(statePath, "utf-8")
+        .replace(/^- \*\*Scope\*\*: .*$/m, "- **Scope**: retired-lane")
+        .replace("- **Status**: Completed", "- **Status**: Running"),
+      "utf-8",
+    );
+    const registry = join(proj, "aidlc", "spaces", "default", "intents", "intents.json");
+    const openState = readFileSync(statePath, "utf-8");
+    const openEntries = readFileSync(registry, "utf-8");
+    const directive = (args: string[]) => JSON.parse(runNext(proj, args).out.trim().split("\n").at(-1) ?? "{}") as {
+      kind: string;
+      ask_type?: string;
+      message?: string;
+    };
+
+    const scoped = directive(["--new-intent", "--scope", "bugfix", "fix the login redirect"]);
+    expect(scoped.kind, JSON.stringify(scoped)).toBe("print");
+    expect(scoped.message).toContain("intent create --scope bugfix");
+    // With no scope typed, the person gets the same plan offer as beside known work.
+    const unscoped = directive(["--new-intent", "fix the login redirect"]);
+    expect(unscoped.kind, JSON.stringify(unscoped)).toBe("ask");
+    expect(unscoped.ask_type).toBe("scope-confirm");
+    // A move on the open work itself still needs its scope.
+    expect(directive([]).message).toContain('Unknown scope "retired-lane"');
+    expect(readFileSync(statePath, "utf-8")).toBe(openState);
+    expect(readFileSync(registry, "utf-8")).toBe(openEntries);
+
+    // Running the named creation adds the new work and leaves the open one as it was.
+    const created = spawnSync(BUN, [
+      join(AIDLC_SRC, "tools", "aidlc-utility.ts"),
+      "intent-create", "--scope", "bugfix", "--label", "fix the login redirect", "--project-dir", proj,
+    ], { cwd: proj, encoding: "utf-8", timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS) });
+    expect(created.status, `${created.stdout}${created.stderr}`).toBe(0);
+    type Entry = { scope?: string; status?: string };
+    const entries = JSON.parse(readFileSync(registry, "utf-8")) as Entry[];
+    const before = JSON.parse(openEntries) as Entry[];
+    expect(entries).toHaveLength(before.length + 1);
+    expect(entries.slice(0, before.length)).toEqual(before);
+    expect(entries.at(-1)?.scope).toBe("bugfix");
+    expect(readFileSync(statePath, "utf-8")).toBe(openState);
+  });
+
   // New work never routes through the finished intent's scope, so a retired
   // one changes nothing for it: `/aidlc-init "<description>"` (next
   // --new-intent "<description>"), free text, and a typed scope with a

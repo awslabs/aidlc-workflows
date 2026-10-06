@@ -331,10 +331,12 @@ jobs:
           - {name: unit-10, tier: unit, shard: "10/12"}
           - {name: unit-11, tier: unit, shard: "11/12"}
           - {name: unit-12, tier: unit, shard: "12/12"}
-          # The scope runs (tests/integration/t-scope-run-*) run in their own
-          # integration job, here on every OS.
-          - {name: integration, tier: integration, exclude: '^t-scope-run-'}
+          # The scope runs (tests/integration/t-scope-run-*) and the guard
+          # matrix (t-guard-matrix-*) run in their own integration jobs, here on
+          # every OS.
+          - {name: integration, tier: integration, exclude: '^t-(scope-run|guard-matrix)-'}
           - {name: scope-runs, tier: integration, filter: '^t-scope-run-'}
+          - {name: guard-matrix, tier: integration, filter: '^t-guard-matrix-'}
           - {name: e2e, tier: e2e}
         # Adds the OS label for the job name to each runner's legs.
         include:
@@ -350,6 +352,31 @@ jobs:
       filter: ${{ matrix.suite.filter || '' }}
       exclude: ${{ matrix.suite.exclude || '' }}
       artifact-label: full-suite-deterministic-${{ matrix.suite.name }}
+  # The nightly (release purpose) runs no deterministic tier, so the scope runs
+  # and the guard matrix get this job of their own there, on every OS. A
+  # full_verification run has them in its deterministic job instead.
+  scope_runs:
+    name: "${{ matrix.os }} / ${{ matrix.suite.name }}"
+    needs: plan
+    if: needs.plan.outputs.purpose == 'release'
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-latest, macos-15, windows-latest]
+        suite:
+          - {name: scope-runs, filter: '^t-scope-run-'}
+          - {name: guard-matrix, filter: '^t-guard-matrix-'}
+        include:
+          - {runner: ubuntu-latest, os: Linux}
+          - {runner: macos-15, os: macOS}
+          - {runner: windows-latest, os: Windows}
+    uses: ./.github/workflows/deterministic-tests.yml
+    with:
+      ref: ${{ needs.plan.outputs.sha }}
+      runner: ${{ matrix.runner }}
+      tier: integration
+      filter: ${{ matrix.suite.filter }}
+      artifact-label: full-suite-${{ matrix.suite.name }}
   production_guards:
     name: "Linux / production-guards"
     needs: plan
@@ -886,7 +913,7 @@ jobs:
   result:
     name: "Linux / result"
     if: "${{ always() }}"
-    needs: [plan, native_terminal, native_reconcile, deterministic, production_guards, live_prepare_linux, live_prepare_macos, live_prepare_windows, live_linux, live_macos, live_windows, release_contract_windows]
+    needs: [plan, native_terminal, native_reconcile, deterministic, scope_runs, production_guards, live_prepare_linux, live_prepare_macos, live_prepare_windows, live_linux, live_macos, live_windows, release_contract_windows]
     runs-on: ubuntu-latest
     steps:
       - name: "Reject unauthorized source without executing repository code"

@@ -159,6 +159,23 @@ are not asked about again. The flag rides along on rule-delivery `continue` call
 A covered grid without those receipts (a Build-and-Test loop-back over artifacts
 alone) is not marked, because that beat can still apply a fix.
 
+Under unit-major with Unit checkpoints off (the field disabled or absent), the
+per-Unit stage approvals still due once the whole grid is covered are one
+question. The first covered gate carries `approve_together`: the pending block
+stages from `directive.stage` on, in graph order, the Units, and the engine's
+question naming both. It is set only for solo work at the first pending block
+stage with at least two stages left; checkpoint-enabled, stage-major, team-owned
+and autonomous gates keep their own flow. Opening that gate records the list on
+`STAGE_AWAITING_APPROVAL` as `Approves Together`, and the reply's `next_stage` is
+the stage after the last listed one. `report --result approved` then approves
+each listed stage in order: the first `GATE_APPROVED` carries `Approves
+Together`, each later one `Approved Together With: <first stage>` plus the same
+`User Input` and person's words. Every stage still passes its own artifact,
+summary, reviewer and sensor checks; the first stage that refuses stops the run
+there, with the stages before it approved. That stage's later approval needs no
+new person turn while no reply, rejection or answer has been recorded since the
+approval that listed it. A rejection approves nothing.
+
 | Transition | Trigger | Emitter |
 |---|---|---|
 | `Pending → Active` | Engine routes after the previous reported outcome | `tools/aidlc-state.ts` (internal emitter) |
@@ -552,7 +569,7 @@ Session hooks check for the active intent's `aidlc-state.md` (under `aidlc/space
 
 ## Audit event taxonomy
 
-**113 events**, grouped below into 20 categories (the canonical `audit-format.md` registry splits the same 113 into 25 - the grouping is presentational, the event set is the invariant). Each event's permitted tool or hook emitters are listed below. `GUARD_POLICY_SET` has distinct mutation and effective-memory-observation paths; neither duplicates the other's emission. Events pre-registered for an upcoming release have an Emitter cell reading `Reserved (v0.4.0 PR N)`, `Reserved (v0.5.0 PR N)`, or `Reserved (v0.6.0 PR N)`, and a retired event name that is still read but never written reads `Reserved (retired name)`; both are skipped by the drift test's forward check. The drift test `tests/integration/t48-audit-event-emitters.test.ts` enforces forward/reverse/tertiary/pairing/MD-MD consistency between this chapter's tables and the code.
+**114 events**, grouped below into 20 categories (the canonical `audit-format.md` registry splits the same 114 into 25 - the grouping is presentational, the event set is the invariant). Each event's permitted tool or hook emitters are listed below. `GUARD_POLICY_SET` has distinct mutation and effective-memory-observation paths; neither duplicates the other's emission. Events pre-registered for an upcoming release have an Emitter cell reading `Reserved (v0.4.0 PR N)`, `Reserved (v0.5.0 PR N)`, or `Reserved (v0.6.0 PR N)`, and a retired event name that is still read but never written reads `Reserved (retired name)`; both are skipped by the drift test's forward check. The drift test `tests/integration/t48-audit-event-emitters.test.ts` enforces forward/reverse/tertiary/pairing/MD-MD consistency between this chapter's tables and the code.
 
 ### Workflow lifecycle
 
@@ -604,6 +621,7 @@ legacy Unit-less rows retain stage-global behavior.
 |---|---|---|
 | `DECISION_RECORDED` | `tools/aidlc-log.ts` | Fires before a non-gate `AskUserQuestion` so options are captured |
 | `QUESTION_ANSWERED` | `tools/aidlc-log.ts` | Fires after a non-gate question response; approval choices are lifecycle events owned by `report` |
+| `QUESTION_REPLIED` | `hooks/aidlc-record-human-turn.ts` | A harness question box (Claude Code's `AskUserQuestion`, Codex's `request_user_input`) came back with the person's answer: one row per question, with the question as shown and the reply as given. It decides nothing and spends no turn, so the answer is on record even when no `QUESTION_ANSWERED` is logged for it. Only this hook writes it: the public `append` CLI refuses it, and a worktree's audit merge never copies it |
 | `QUESTION_UNANSWERED` | `hooks/aidlc-record-human-turn.ts` (Codex adapter) | A harness question box came back with no answer (Codex's box runs out after about two minutes). Records no human turn and spends any earlier one, so no answer or approval is recorded until the person replies again; the agent asks the question again. Only this hook writes it: the public `append` CLI refuses it, and a worktree's audit merge never copies it |
 | `SUMMARY_CONFIRMATION_RECORDED` | `tools/aidlc-log.ts` | Human-backed consolidated-summary receipt; new rows carry `Hash Scope: confirmed-content-v2` (scope and legacy migration below). A `Looks correct` receipt also carries `Summary Authorization Id`, the authorization the confirmation minted (a digest of the attempt, stage, Unit, workflow, questions path, confirmed content, and choice); the same id becomes the scope's active authorization under `<record>/.aidlc-engine/summary-authorization/`, and a `Request changes` reply withdraws it. A `Request changes` receipt whose reply said what to change also carries `Feedback`, the person's words. Reserved from public audit append. |
 | `VERIFICATION_COMMAND_RECORDED` | `tools/aidlc-log.ts` | Human-approved project check command for the current intent workflow. Binds `Checkpoint: Construction Verification Command`, the canonical single-line command's `Command SHA-256`, the full canonical `Command Label` (at most 1024 control-free characters), and exact `User Input: Approve` to the matching pending decision's one-shot challenge and offered choice from the invoking `Session`. Unrelated human turns and cross-session responses cannot authorize it. The typed state setter and Unit verification require the latest receipt; changing the command requires a new receipt and re-verification. Reserved from public audit append and worktree audit merge. |

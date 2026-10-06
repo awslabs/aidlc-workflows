@@ -365,6 +365,14 @@ export interface RunStageDirective {
   // the beat presents the stage gate with nothing left to plan or build. Set by
   // the engine only; the conductor handles the beat as before.
   build_settled?: true;
+  // The per-Unit stages one late approval covers (unit-major, Unit checkpoints
+  // off), in order with display names, the Units, and the engine's question.
+  // Set by the engine only; the first stage is `stage`.
+  approve_together?: {
+    stages: { slug: string; name: string }[];
+    units: string[];
+    prompt: string;
+  };
   // Gate-only re-entry after every autonomous swarm Unit and reviewer receipt
   // converged. Present only as literal true; the conductor must not rerun the
   // stage body or reviewer.
@@ -508,7 +516,7 @@ interface AskDirectiveBase {
   question: string;
 }
 
-/** One plan the person can name instead: its complete command, and its stage count as the person sees it ("17 of 33 stages"). */
+/** One plan the person can name instead: its complete command, and its stage count as the person sees it ("15 stages", the stages after Initialization). */
 export interface ScopeCommandRow {
   scope: string;
   command: string;
@@ -819,6 +827,7 @@ const RUN_STAGE_FIELDS = [
   "swarm_settled",
   "gate_only",
   "build_settled",
+  "approve_together",
   "conductor_persona",
   "next_stage",
   "unit",
@@ -851,6 +860,7 @@ const DISPATCH_SUBAGENT_FIELDS = [
       field !== "swarm_settled" &&
       field !== "gate_only" &&
       field !== "build_settled" &&
+      field !== "approve_together" &&
       field !== "legacy_plan_approval_choices" &&
       field !== "plan_approval",
   ),
@@ -1392,6 +1402,7 @@ function checkRunStageShared(
     checkOptionalTrue(o, "swarm_settled", kind, errors);
     checkOptionalTrue(o, "gate_only", kind, errors);
     checkOptionalTrue(o, "build_settled", kind, errors);
+    checkOptionalApproveTogether(o, kind, errors);
   }
   // unit: optional on a run-stage directive (present only on a per-unit
   // Construction directive resolved to a concrete Unit of Work). A present
@@ -1931,6 +1942,29 @@ function checkOptionalKeptReplies(
   }
   checkStringArray(value, "replies", kind, errors);
   checkString(value, "note", kind, errors);
+}
+
+function checkOptionalApproveTogether(
+  o: Record<string, unknown>,
+  kind: DirectiveKind,
+  errors: string[],
+): void {
+  if (!("approve_together" in o)) return;
+  const v = o.approve_together;
+  const stages = typeof v === "object" && v !== null ? (v as Record<string, unknown>).stages : undefined;
+  const units = typeof v === "object" && v !== null ? (v as Record<string, unknown>).units : undefined;
+  const prompt = typeof v === "object" && v !== null ? (v as Record<string, unknown>).prompt : undefined;
+  if (
+    !Array.isArray(stages) || stages.length < 2 ||
+    !stages.every((s) =>
+      typeof s === "object" && s !== null &&
+      typeof (s as Record<string, unknown>).slug === "string" &&
+      typeof (s as Record<string, unknown>).name === "string") ||
+    !Array.isArray(units) || units.length === 0 || !units.every((u) => typeof u === "string") ||
+    typeof prompt !== "string" || prompt.length === 0
+  ) {
+    errors.push(`${kind}: approve_together must carry two or more stages, the Units and a prompt`);
+  }
 }
 
 function checkOptionalTrue(

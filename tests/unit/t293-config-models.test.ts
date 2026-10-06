@@ -742,7 +742,11 @@ describe("t293 config models CLI", () => {
         "--yes",
       ], project);
       expect(result.status).toBe(2);
-      expect(result.stdout).toContain("config option");
+      // --show reads every section and takes no setup flag, so it names the flag
+      // it cannot be combined with rather than calling --show an unknown option.
+      expect(result.stdout).toContain(
+        extra.includes("--show") ? "--from cannot be combined with config --show" : "config option",
+      );
       expect(existsSync(join(project, ".claude"))).toBe(false);
     }
   });

@@ -22,6 +22,7 @@ import {
   managedBlockIsSafe,
   managedBlockMarkers,
   mergeBlock,
+  missingJsonEntries,
   readJsonFile,
   type RootIntegration,
   rootBlockPath,
@@ -32,6 +33,9 @@ import {
   discoverProjectHarnesses,
   kiroTreeLayout,
 } from "./aidlc-runtime-paths.ts";
+import { AIDLC_VERSION } from "./aidlc-version.ts";
+import { compareVersions, VERSION_ID } from "./aidlc-channel.ts";
+import { installedExecutablePath } from "./aidlc-install-paths.ts";
 import { readBoundedRegularFile } from "./aidlc-inline-context.ts";
 import {
   HARNESS_PRODUCT_NAMES,
@@ -1496,13 +1500,26 @@ export function preserveKiroMcpRegion(
 }
 
 
+// A staged opencode.json as plain JSON, or null when it is the team's own file
+// with comments (a copy's own tree), which holds no provider block AI-DLC
+// writes or clears here.
+function openCodeJsonOrNull(path: string): Record<string, unknown> | null {
+  try {
+    const value = readJsonFile(path);
+    return isRecord(value) ? value : null;
+  } catch {
+    return null;
+  }
+}
+
 function writeOpenCodeProvider(
   projectionRoot: string,
   record: ProvidersRecord,
 ): void {
   if (!record.opencodeDefault) return;
   const path = join(projectionRoot, "opencode.json");
-  const value = readJsonFile(path) as Record<string, unknown>;
+  const value = openCodeJsonOrNull(path);
+  if (value === null) return;
   const providers = isRecord(value.provider) ? { ...value.provider } : {};
   const existing = isRecord(providers["amazon-bedrock"])
     ? providers["amazon-bedrock"]
@@ -1547,8 +1564,8 @@ function clearOpenCodeProvider(
 ): void {
   const path = join(projectionRoot, "opencode.json");
   if (!existsSync(path)) return;
-  const value = readJsonFile(path) as Record<string, unknown>;
-  if (!isRecord(value.provider)) return;
+  const value = openCodeJsonOrNull(path);
+  if (value === null || !isRecord(value.provider)) return;
   const providers = { ...value.provider };
   if (!openCodeProviderMatchesRecord(
     providers["amazon-bedrock"],
@@ -2176,7 +2193,7 @@ export function providerSurfaceIssues(
         }
       } else if (harness === "opencode" && record.provider === "other") {
         const path = join(projectDir, "opencode.json");
-        const value = readJsonFile(path) as Record<string, unknown>;
+        const value = readTeamJsonFile(path) as Record<string, unknown>;
         const providers = isRecord(value.provider) ? value.provider : {};
         if (Object.hasOwn(providers, "amazon-bedrock")) {
           warning(
@@ -2245,7 +2262,7 @@ export function providerSurfaceIssues(
       }
     } else if (harness === "opencode" && record.opencodeDefault) {
       const path = join(projectDir, "opencode.json");
-      const value = readJsonFile(path) as Record<string, unknown>;
+      const value = readTeamJsonFile(path) as Record<string, unknown>;
       const providers = isRecord(value.provider) ? value.provider : {};
       const bedrock = isRecord(providers["amazon-bedrock"]) ? providers["amazon-bedrock"] : {};
       const options = isRecord(bedrock.options) ? bedrock.options : {};
@@ -2635,7 +2652,22 @@ export type ConfigOutstandingAction = {
   id: string;
   message: string;
   command: string;
+  // What the person does in their own tool when no AI-DLC command does it.
+  // Shown in place of the command; `command` then only checks the result.
+  step?: string;
 };
+
+// Codex runs a project's hooks only once the person trusts them inside Codex,
+// the same step the hooks-off stop and doctor name. AI-DLC's own trust review
+// is a different thing, so this step never points at it.
+export const CODEX_HOOK_TRUST_UNMET = "Codex has not trusted this project's hooks yet";
+export const CODEX_HOOK_TRUST_STEP = "in Codex, type /hooks, press t to trust all, then press Esc";
+const CODEX_HOOK_TRUST_IDS = new Set(["codex-hook-trust-missing", "codex-hook-trust-incomplete"]);
+
+/** Codex's own hook-trust step for an issue it alone can fix, else null. */
+export function codexHookTrustStep(issueId: string): string | null {
+  return CODEX_HOOK_TRUST_IDS.has(issueId) ? CODEX_HOOK_TRUST_STEP : null;
+}
 
 // The runtimes this shell finds that the system-wide PATH does not. A harness
 // started from this terminal hands them to its hooks, so setup lists no step
@@ -2688,12 +2720,23 @@ export function postApplyOutstandingActions(
       harnessDir,
       harness,
       options.env,
-    ).issues.map((issue) => ({
-      section: "trust" as const,
-      id: issue.id,
-      message: issue.message,
-      command: `${invoke} config trust`,
-    })));
+    ).issues.map((issue) => {
+      const step = codexHookTrustStep(issue.id);
+      return step
+        ? {
+            section: "trust" as const,
+            id: issue.id,
+            message: CODEX_HOOK_TRUST_UNMET,
+            command: `${invoke} config trust --check`,
+            step,
+          }
+        : {
+            section: "trust" as const,
+            id: issue.id,
+            message: issue.message,
+            command: `${invoke} config trust`,
+          };
+    }));
   }
   if (!skipped.has("providers")) {
     try {
@@ -2720,9 +2763,16 @@ export function postApplyOutstandingActions(
 
 export { managedBlockMarkers };
 
+// The team's own opencode.json may hold comments and trailing commas, as
+// opencode allows.
+function readTeamJsonFile(path: string): unknown {
+  return Bun.JSONC.parse(readFileSync(path, "utf-8").replace(/^\uFEFF/, ""));
+}
+
 type RecordedInstructionContribution =
   | { policy: "managed-block"; hash: string; marker?: string }
-  | { policy: "whole-file"; hash: string };
+  | { policy: "whole-file"; hash: string }
+  | { policy: "json-entries"; entries: Record<string, string> };
 
 type RecordedInstructionBaseline = {
   files?: Record<string, string>;
@@ -2731,7 +2781,7 @@ type RecordedInstructionBaseline = {
 
 type InstructionState = {
   path: string;
-  kind: "managed-block" | "whole-file";
+  kind: "managed-block" | "whole-file" | "json-entries";
   state: "intact" | "missing" | "conflict";
 };
 
@@ -2842,7 +2892,7 @@ function instructionStates(
   )) {
     if (
       path === "AGENTS.md" ||
-      (path === "opencode.json" && contribution.policy === "whole-file")
+      (path === "opencode.json" && (contribution.policy === "whole-file" || contribution.policy === "json-entries"))
     ) {
       tracked.push({ path, contribution });
     }
@@ -2879,6 +2929,23 @@ function instructionStates(
         path,
         kind: contribution.policy,
         state: sha256Bytes(content) === contribution.hash ? "intact" : "conflict",
+      };
+    }
+    if (contribution.policy === "json-entries") {
+      // The team's own file: AI-DLC's instructions and skills entries must be
+      // there; everything else in it is theirs.
+      let shipped: string;
+      try {
+        assertProjectionPathHasNoSymlinks(projectDir, `${harnessDir}/tools/data/root-blocks/${path}`);
+        shipped = readFileSync(join(projectDir, harnessDir, "tools", "data", "root-blocks", path), "utf-8");
+      } catch {
+        return { path, kind: contribution.policy, state: "intact" };
+      }
+      const missing = missingJsonEntries(content.toString("utf-8"), shipped, ["instructions", "skills"]);
+      return {
+        path,
+        kind: contribution.policy,
+        state: missing === null ? "conflict" : missing.length > 0 ? "missing" : "intact",
       };
     }
     const text = content.toString("utf-8");
@@ -2960,7 +3027,7 @@ export function instructionFileDoctorCheck(
       fix: `run \`${invoke} config\``,
     };
   }
-  const managed = states.some((item) => item.kind === "managed-block");
+  const managed = states.some((item) => item.kind === "managed-block" || item.kind === "json-entries");
   const whole = states.some((item) => item.kind === "whole-file");
   return {
     pass: true,
@@ -2979,6 +3046,7 @@ function selectedHarness(
   root: string;
   harnessDir: string;
   harness: ModelHarness;
+  frameworkVersion?: string;
 } | null {
   const harnesses = discoverProjectHarnesses(projectDir);
   const selected = harnessDirHint
@@ -2990,6 +3058,7 @@ function selectedHarness(
     root: selected.root,
     harnessDir: selected.harnessDir,
     harness: selected.distribution as ModelHarness,
+    ...(selected.frameworkVersion ? { frameworkVersion: selected.frameworkVersion } : {}),
   };
 }
 
@@ -3261,6 +3330,28 @@ export function providerDoctorCheck(
         };
   } catch (error) {
     const path = join(selected.root, "tools", "data", "harness.json");
+    const detail = error instanceof Error ? error.message : String(error);
+    // A newer release may record answers this one does not know (a pinned
+    // project is configured by its pin, while doctor runs on the machine-active
+    // release). That is not a damaged file, and restoring it would discard
+    // valid answers: send the user to the release that wrote it.
+    const writer = selected.frameworkVersion;
+    if (
+      writer && VERSION_ID.test(writer) && VERSION_ID.test(AIDLC_VERSION) &&
+      compareVersions(writer, AIDLC_VERSION) > 0
+    ) {
+      const executable = installedExecutablePath(writer);
+      return {
+        pass: false,
+        severity: "warn",
+        label: `Providers: recorded answers are from aidlc ${writer}, newer than this aidlc ${AIDLC_VERSION}`,
+        // Not the doctor command line itself: VS Code drops output up to a line that repeats it (#1411).
+        fix: (existsSync(executable)
+          ? `run doctor with aidlc ${writer} to check them; it is at \`${executable}\``
+          : `install aidlc ${writer} with \`${aidlcInvocation()} update --version ${writer}\`, then rerun doctor`) +
+          ` (${detail})`,
+      };
+    }
     return {
       pass: false,
       label: "Providers: could not read recorded answers",
@@ -3268,7 +3359,7 @@ export function providerDoctorCheck(
         `restore ${path} from git or re-copy dist/${selected.harness}/${selected.harnessDir}/tools/data/harness.json ` +
         // Not the doctor command itself: VS Code drops output up to a line that repeats it (#1411).
         "from the aidlc-workflows checkout, then run doctor again " +
-        `(${error instanceof Error ? error.message : String(error)})`,
+        `(${detail})`,
     };
   }
 }

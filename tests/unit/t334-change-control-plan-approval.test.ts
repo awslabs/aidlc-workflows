@@ -37,6 +37,7 @@ import {
   workspaceSourceFingerprint,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import {
+  approvalFingerprint,
   codeGenerationRecordDir,
   evaluateCodeGenerationApproval,
   parseTestingContract,
@@ -507,19 +508,23 @@ describe("t334 (6) F16: lowered fences allow post-approval content edits without
           expect(currentInstructions).toBe(instructionsBefore);
         }
 
+        // The edited content the build starts on, which generation start keeps
+        // beside the approval so an interrupted build of it picks up.
+        const startedFingerprint = approvalFingerprint(currentPlan, currentInstructions, contractHash, authority);
+        expect(startedFingerprint).not.toBe(receipt.fingerprint);
         const assertApprovalUnchanged = () => {
           // Continuing by policy is not a new Approve Plan answer. Only the
-          // original receipt's execution status may advance to generation;
-          // every approval field and its audit row remain unchanged.
+          // original receipt's execution status may advance to generation,
+          // keeping the content the build started on; every approval field
+          // and its audit row remain unchanged.
           expect(readFileSync(questions, "utf-8")).toBe(questionsBefore);
           expect(Object.keys(receiptFiles(project))).toEqual(Object.keys(receiptsBefore));
           const currentReceipt = readPlanApprovalReceipt(project, receiptKey);
           if (!currentReceipt) throw new Error("Continuation removed the original Plan Approval receipt");
           expect(currentReceipt?.status).toMatch(/^(approved|generation)$/);
-          expect(currentReceipt).toEqual({
-            ...receipt,
-            status: lowered ? currentReceipt.status : "approved",
-          });
+          expect(currentReceipt).toEqual(lowered && currentReceipt.status === "generation"
+            ? { ...receipt, startedFingerprint, status: "generation" }
+            : { ...receipt, status: "approved" });
           expect(approvalRows(project)).toEqual(approvalsBefore);
           const current = evaluateCodeGenerationApproval(project, { unit: null });
           expect(current.ok, current.reason).toBe(false);
@@ -762,8 +767,16 @@ describe("t334 F20 combined content and source changes", () => {
         expect(rows).toHaveLength(1);
         expect(auditBlockField(rows[0].block, "Changed")).toBe("src/changed.ts");
         expect(auditBlockField(rows[0].block, "Current")).toBe(source);
+        // The build started on the edited content, which the receipt keeps
+        // beside the approval so an interrupted build of it picks up.
+        const startedPlan = readFileSync(planPath, "utf-8");
+        const startedFingerprint = approvalFingerprint(
+          startedPlan, readFileSync(join(dir, "unit-test-instructions.md"), "utf-8"),
+          parseTestingContract(startedPlan)!.contract_sha256, authority,
+        );
+        expect(startedFingerprint).not.toBe(original.fingerprint);
         expect(readPlanApprovalReceipt(project, key)).toEqual({
-          ...original, certifiedSourceSha256: source, status: "generation",
+          ...original, certifiedSourceSha256: source, startedFingerprint, status: "generation",
         });
         expect(approvalRows(project)).toEqual(approvals);
         expect(readFileSync(questions, "utf-8")).toBe(originalQuestions);

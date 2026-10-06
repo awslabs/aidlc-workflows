@@ -397,7 +397,7 @@ modes mid-stage.
   holds yet, in order, after the stage's answers already on record. Record
   those answers first; never ask them again
 - Log each batch with fresh ISO timestamp
-- Only when `directive.ceremony.summary_confirmation === "on"`, present a consolidated answer summary, then print
+- Only when `directive.ceremony.summary_confirmation === "on"`, present a consolidated answer summary where the person reads it (in the confirmation question itself, or right above it in the same message), then print
   `aidlc-review-brief.ts summary --stage <slug> --questions-file <path>` before
   the structured **Looks correct** / **Request changes** confirmation. The
   deterministic brief names the stage, questions file, generated artifacts,

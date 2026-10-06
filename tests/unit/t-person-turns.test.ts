@@ -271,6 +271,39 @@ describe("person-turn check", () => {
     expect(problems[0]).toContain("SUMMARY_CONFIRMATION_RECORDED build-and-test");
   });
 
+  test("a menu answer backs the question the agent logs after it, until the next decision", () => {
+    const dir = project();
+    const drive = new PersonTurnLedger(dir);
+    drive.sent("start");
+    row(dir, "DECISION_RECORDED", { Stage: "nfr-requirements", Decision: "How would you like to answer the questions?" });
+    drive.sent('{"How would you like to answer them?":"Guide me"}', 1);
+    row(dir, "QUESTION_ANSWERED", { Stage: "nfr-requirements", Details: "Guide me" });
+    // The person answers the batch in the menu; the agent logs the batch's question after.
+    drive.sent('{"Source language?":"TypeScript","File layout?":"Two files"}', 2);
+    row(dir, "DECISION_RECORDED", { Stage: "nfr-requirements", Decision: "Q1-Q2: source language, file layout" });
+    row(dir, "QUESTION_ANSWERED", { Stage: "nfr-requirements", Details: "Q1=A; Q2=A" });
+    expect(drive.unbacked()).toEqual([]);
+    // A question logged after that answer needs a newer turn, menu or not.
+    row(dir, "DECISION_RECORDED", { Stage: "nfr-requirements", Decision: "Q3: deploy target" });
+    row(dir, "QUESTION_ANSWERED", { Stage: "nfr-requirements", Details: "Q3=A" });
+    const problems = drive.unbacked();
+    expect(problems).toHaveLength(1);
+    expect(problems[0]).toContain('recorded words "Q3=A"');
+  });
+
+  test("a menu answer backs a late-logged question only as many times as it carried picks", () => {
+    const dir = project();
+    const drive = new PersonTurnLedger(dir);
+    drive.sent("start");
+    drive.sent('{"What problem are we solving?":"Personal tasks"}', 1);
+    row(dir, "DECISION_RECORDED", { Stage: "intent-capture", Decision: "Q1: problem" });
+    row(dir, "QUESTION_ANSWERED", { Stage: "intent-capture", Details: "Q1: A" });
+    row(dir, "QUESTION_ANSWERED", { Stage: "intent-capture", Details: "Q2: A" });
+    const problems = drive.unbacked();
+    expect(problems).toHaveLength(1);
+    expect(problems[0]).toContain('recorded words "Q2: A"');
+  });
+
   test("a Unit checkpoint's gate row answers its own question, and needs a reply after it", () => {
     const dir = project();
     const drive = new PersonTurnLedger(dir);
@@ -383,7 +416,7 @@ describe("person-turn check", () => {
     expect(drive.unbacked()[1]).toContain("GATE_APPROVED functional-design");
   });
 
-  test("with two Units the engine settles a stage only after both checkpoints are approved; a rejection and a reopening count", () => {
+  test("with two Units the engine settles a stage only after both checkpoints are approved; a rejection, a reopen and a jump count", () => {
     const dir = project();
     seedBoltDag(dir, ["core", { name: "extra", depends_on: ["core"] }]);
     const drive = new PersonTurnLedger(dir);
@@ -411,6 +444,18 @@ describe("person-turn check", () => {
     checkpoint("extra", "GATE_APPROVED", "Approve");
     stageGate();
     expect(drive.unbacked()).toHaveLength(2);
+    // A reopen names the Unit with no Checkpoint, and a jump moves the work: each takes the approvals back.
+    drive.sent("reopen core, the totals are wrong");
+    row(dir, "GATE_REJECTED", { Stage: "code-generation", Unit: "core", "Gate Stages": "code-generation", Feedback: "the totals are wrong" });
+    stageGate();
+    expect(drive.unbacked()).toHaveLength(3);
+    checkpoint("core", "GATE_APPROVED", "Approve");
+    stageGate();
+    expect(drive.unbacked()).toHaveLength(3);
+    drive.sent("go back to requirements");
+    row(dir, "STAGE_JUMPED", { From: "code-generation", To: "requirements-analysis" });
+    stageGate();
+    expect(drive.unbacked()).toHaveLength(4);
   });
 
   test("a gate in a single-stage run is not opened by the main workflow's gate", () => {

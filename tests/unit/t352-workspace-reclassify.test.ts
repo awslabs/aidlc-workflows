@@ -277,7 +277,8 @@ describe("t352 next: the flag rides to creation and the preview is honest", () =
     const declared = next(proj, ["--project-type", "brownfield", "--scope", "classic", "add the tooltip"]);
     expect(declared.kind).toBe("print");
     expect(String(declared.message)).toContain("--project-type brownfield");
-    const stages = (d: Record<string, unknown>) => Number(/\((\d+) of \d+ stages/.exec(String(d.message))?.[1]);
+    const stages = (d: Record<string, unknown>) => Number(/\((\d+) stages?, /.exec(String(d.message))?.[1]);
+    expect(stages(plain)).toBeGreaterThan(0);
     expect(stages(declared)).toBe(stages(plain) + 1);
     // An empty folder starts as a new project, said while it can be corrected.
     expect(String(plain.narration)).toContain("starting this as a new project without Reverse Engineering");
@@ -1111,6 +1112,18 @@ describe("t352 the lines the person must hear ride the next step the agent speak
     );
     expect(reverseEngineering.stage_validity).toBeUndefined();
     expect(String(nextIn(proj).narration ?? "")).not.toContain("Project type is now");
+  });
+
+  // Live runs on Claude Code and Kiro left the protocol's pick-up line unsaid:
+  // the engine says where the work picks up, with the first step, once.
+  test("picking the work back up says where it picks up, once in this chat", () => {
+    const proj = project();
+    expect(run(UTIL, proj, ["intent-create", "--scope", "classic", "--arguments", "show the asset description on hover"], chat).status).toBe(0);
+    const first = nextIn(proj, ["--resume"]);
+    expect(String(first.narration)).toMatch(
+      /^Picking up where we left off, at [A-Z][^.]*\. If you'd rather redo it, go back to another stage, or start fresh, just say so\./,
+    );
+    expect(String(nextIn(proj, ["--resume"]).narration ?? "")).not.toContain("Picking up where we left off");
   });
 
   test("a newer prompt from the person drops a line still waiting", () => {

@@ -35,7 +35,7 @@ another commit or run never qualify. When none qualifies, the release calls
 falls back to running the suite. `Require a passing Full Suite` then downloads
 the result and runs `scripts/ci-full-suite-evidence.ts check`, which requires the
 tagged `sha`, the producing `runId`, `purpose: "release"`,
-`verificationFamily: "all"`, `coveragePolicy: "required-hosted-live-shards-v2"`,
+`verificationFamily: "all"`, `coveragePolicy: "required-hosted-live-shards-v3"`,
 `passed: true`, no disabled legs, and exactly `deterministic` and
 `production_guards` omitted and skipped. All other declared jobs must succeed.
 A suite this run called must also have succeeded. `publish` and `release` need

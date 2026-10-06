@@ -1641,8 +1641,9 @@ export function validateScope(
  *  stage name must never pass as an implicit SKIP.
  *
  *  opts.projectType filters conditional_on consumes exactly as
- *  validateScope does. opts.label names the grid in messages (defaults to
- *  "proposed grid"). */
+ *  validateScope does; greenfield also leaves reverse-engineering out of the
+ *  summary counts, as creation does. opts.label names the grid in messages
+ *  (defaults to "proposed grid"). */
 export function validateGrid(
   grid: Record<string, string>,
   opts?: {
@@ -1731,9 +1732,13 @@ export function validateGrid(
   // The ceremony count travels with the validation so the composer relays the
   // validator's numbers, not a hand recount. Computed over the raw proposal
   // entries; unknown slugs already produced errors above and contribute only to
-  // total/execute per gridCostSummary's graph-lookup guard.
+  // total/execute per gridCostSummary's graph-lookup guard. Creation skips
+  // reverse-engineering on a greenfield project, so a greenfield count leaves
+  // it out too and the offer's numbers are the ones creation prints.
   const summary = gridCostSummary(
-    grid as Record<string, "EXECUTE" | "SKIP">,
+    (opts?.projectType === "greenfield" && grid["reverse-engineering"] === "EXECUTE"
+      ? { ...grid, "reverse-engineering": "SKIP" }
+      : grid) as Record<string, "EXECUTE" | "SKIP">,
   );
   // Distance to each stock scope travels with the validation for the same
   // reason as summary: the match decision must ride the validator's numbers.

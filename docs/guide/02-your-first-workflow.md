@@ -190,9 +190,13 @@ After the agent completes its work, you see a completion summary and an approval
 **Review outcome:** One concern remains for your decision.
 **Why now:** First review completed.
 
-| ID | Severity | Location | Finding | Required action | Status |
-|---|---|---|---|---|---|
-| R-01 | Minor | aidlc/spaces/default/intents/260820-checkout/ideation/intent-capture/intent-statement.md > Success Criteria | The adoption target has no deadline | Add the date by which the adoption target should be reached | New |
+| ID | Severity | Where | Status |
+|---|---|---|---|
+| R-01 | Minor | intent-statement.md > Success Criteria | New |
+
+> R-01 Finding: The adoption target has no deadline
+
+> R-01 Required action: Add the date by which the adoption target should be reached
 
 **Decision options:**
 - **Approve** - continue with the open findings accepted.
@@ -220,7 +224,7 @@ on the revision process.
 After approval, a progress line appears:
 
 ```
-Progress: 4/33 overall | 1/7 IDEATION stages complete. Next: Market Research
+Progress: 1/30 in-scope stages complete (4/33 overall) | 1/7 IDEATION. Next: Market Research
 ```
 
 ### Remaining Ideation Stages

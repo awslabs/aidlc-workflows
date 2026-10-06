@@ -467,9 +467,13 @@ describe("t351 (4) next carries the plan's typed changes and checks every echoed
     const d = nextDirective(proj, ["--scope", "bugfix", "--add", ADD, "--skip", SKIP, "--", "fix the parser"]);
     expect(d.kind).toBe("print");
     expect(d.message).toContain(`--skip ${SKIP} --add ${ADD}`);
-    const previewed = /\((\d+) of \d+ stages/.exec(d.message)?.[1];
+    // The preview counts the stages after Initialization (phase 0), which every plan runs.
+    const previewed = Number(/\((\d+) stages?, /.exec(d.message)?.[1]);
     expect(createComposed(proj).status).toBe(0);
-    expect(previewed).toBe(/^- \*\*Total Stages\*\*: (\d+)$/m.exec(stateOf(proj))?.[1]);
+    const executed = (/^- \*\*Stages to Execute\*\*: (.+)$/m.exec(stateOf(proj))?.[1] ?? "")
+      .split(",").map((n) => n.trim()).filter(Boolean);
+    expect(previewed).toBeGreaterThan(0);
+    expect(previewed).toBe(executed.filter((n) => !n.startsWith("0.")).length);
   });
 
   test("hostile depth, test-strategy, and stage values never reach a command", () => {

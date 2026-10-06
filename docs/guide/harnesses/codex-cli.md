@@ -87,12 +87,12 @@ AI-DLC onboarding. Keep provider and model settings in your user config. Then
 run `$aidlc --doctor` in Codex.
 
 The generated `sandbox_mode = "workspace-write"` is a top-level TOML setting,
-not a member of `[shell_environment_policy]`. AI-DLC tracks it as a framework-owned
-entry alongside `developer_instructions`: provider answers leave it unchanged,
-and an ordinary refresh reports a conflict if it was edited or removed. An explicit
-`aidlc config --force` restores the shipped value while preserving user-owned
-provider tables. Selecting the current provider removes only attributable legacy
-Bedrock defaults; it does not change the sandbox policy.
+not a member of `[shell_environment_policy]`. AI-DLC tracks it as one of its own
+entries alongside `developer_instructions`: provider answers leave it unchanged,
+and a refresh keeps a value you set (with a note when a release ships a
+different one) and puts the shipped value back when the key was removed; the
+rest of the file stays yours. Selecting the current provider removes only
+attributable legacy Bedrock defaults; it does not change the sandbox policy.
 
 ### Versioned manual-copy alternative
 

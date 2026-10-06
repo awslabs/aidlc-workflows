@@ -366,12 +366,16 @@ under `tools/data/`:
 - `aidlc-projection.json` is the exhaustive install descriptor. It classifies
   every top-level output as a framework-managed directory or a root integration
   with one typed merge policy (`managed-block`, `json-map`, `json-array`,
-  `whole-file`, or `jsonc-settings`, which edits an editor's JSONC settings
+  `whole-file`, `jsonc-settings`, which edits an editor's JSONC settings
   file key by key: it adds a shipped key only when absent, keeps every other
-  key and comment, and is left out of the copy runtime). A 2.10.0 install
+  key and comment, and is left out of the copy runtime, or `json-entries`,
+  which does the same at any depth for a team's JSON file such as
+  `opencode.json`: AI-DLC's values and array strings are added when absent and
+  followed or removed only while unchanged, its part ships in root-blocks, and
+  the copy runtime leaves the file out). A 2.10.0 install
   refuses a release whose descriptor names a policy it does not know, so a
-  policy added since (`jsonc-settings`) is written as `whole-file` with the real
-  one in `extendedPolicy`, and every reader puts it back
+  policy added since (`jsonc-settings`, `json-entries`) is written as
+  `whole-file` with the real one in `extendedPolicy`, and every reader puts it back
   (`writtenRootIntegration` and `readRootIntegrations` in
   `core/tools/aidlc-distribution.ts`;
   `tests/unit/t-previous-release-validates-runtime.test.ts` runs 2.10.0's own
@@ -927,7 +931,7 @@ readers read the rows they share once (`copiedAuditBlocks` in
 
 11. **Phase boundary verification** -- Traceability checks run automatically at phase transitions (Initialization->Ideation auto-proceed, Ideation->Inception, Inception->Construction, Construction->Operation). This catches missing requirements-to-design links, orphaned artifacts, and inconsistencies before downstream stages build on incomplete foundations.
 
-12. **Hook-based audit logging** -- A PostToolUse hook on Write/Edit operations automatically logs artifact creation and modification to the intent's `audit/` shards. A PreCompact hook validates state file structure before context compaction. A SubagentStop hook logs subagent completions. The 113-event taxonomy (defined in `knowledge/aidlc-shared/audit-format.md`; see [State Machine](12-state-machine.md) for the emitter registry) enables post-hoc analysis -- key events include `STAGE_STARTED`, `STAGE_COMPLETED`, `DECISION_RECORDED`, `SCOPE_CHANGED`, and `RULE_LEARNED`.
+12. **Hook-based audit logging** -- A PostToolUse hook on Write/Edit operations automatically logs artifact creation and modification to the intent's `audit/` shards. A PreCompact hook validates state file structure before context compaction. A SubagentStop hook logs subagent completions. The 114-event taxonomy (defined in `knowledge/aidlc-shared/audit-format.md`; see [State Machine](12-state-machine.md) for the emitter registry) enables post-hoc analysis -- key events include `STAGE_STARTED`, `STAGE_COMPLETED`, `DECISION_RECORDED`, `SCOPE_CHANGED`, and `RULE_LEARNED`.
 
 13. **No nested delegation** -- The conductor (SKILL.md) performs every agent Task call. Agents never invoke each other or spawn subagents. This keeps the delegation graph flat and debuggable.
 

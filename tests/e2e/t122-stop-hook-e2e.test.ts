@@ -48,11 +48,11 @@
 //       -> seed state-final-stage (final stage [-], engine emits a real
 //          run-stage for feedback-optimization), pipe {"stop_hook_active":false}
 //          into the real hook: stdout is a parseable {"decision":"block"} whose
-//          reason names the pending stage + re-feeds the loop
-//          (continuationReason, aidlc-continue-workflow.ts:298-307) and carries no
-//          override-shaped verbs. Deterministic — verified by direct invocation
-//          on this exact fixture (block reason names "feedback-optimization" +
-//          "aidlc-orchestrate"). Exit 0 (a block rides stdout, never the code).
+//          reason is the one plain line naming the pending stage
+//          (continuationReason in aidlc-continue-workflow.ts) and carries no
+//          override-shaped verbs. Deterministic, by direct invocation on this
+//          exact fixture ("AI-DLC is carrying on with Feedback & Optimization.").
+//          Exit 0 (a block rides stdout, never the code).
 //   5 done directive -> the REAL hook ALLOWS, against the REAL engine
 //       -> seed state-completed, same payload: empty stdout, exit 0
 //          (deterministically confirmed on this fixture).
@@ -434,9 +434,10 @@ describe("t122 Stop hook end-to-end — real hook, real engine (sdk+cli)", () =>
         // the exact decision shape + the reason's contract in one pass.
         const parsed = JSON.parse(r.out) as { decision: string; reason: string };
         expect(parsed.decision).toBe("block");
-        // The reason names the pending stage and re-feeds the loop...
-        expect(parsed.reason).toContain(PENDING_STAGE);
-        expect(parsed.reason).toContain("aidlc-orchestrate");
+        // The reason is one plain line naming the pending stage by its name
+        // (the host shows it to the person; the skill holds the agent's steps)...
+        expect(parsed.reason).toBe("AI-DLC is carrying on with Feedback & Optimization.");
+        expect(parsed.reason).not.toContain(PENDING_STAGE);
         // ...and the hook's OWN framing uses no override-shaped verbs (the
         // security property SPIKE 1 pinned: the hook phrases continuation,
         // never override). A load-steering reason EMBEDS rule-file text

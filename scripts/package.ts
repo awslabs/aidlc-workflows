@@ -647,9 +647,10 @@ function writeProjectionData(outRoot: string, treeRoot: string, m: HarnessManife
     throw new Error(`[${m.name}] unclassified projection entries: ${unclassified.join(", ")}`);
   }
   const rootIntegrations = m.rootIntegrations.map((integration) => {
-    if (copyStartsWithout(integration)) {
-      // A copy starts without this file; its shipped list rides along so
-      // config can turn it on without a download.
+    if (copyStartsWithout(integration) || integration.policy === "json-entries") {
+      // A copy starts without this file (or leaves the team's own in place);
+      // its shipped part rides along so config and the engine can add it
+      // without a download.
       const dst = join(treeRoot, "tools", "data", "root-blocks", basename(integration.path));
       mkdirSync(dirname(dst), { recursive: true });
       writeFileSync(dst, readFileSync(join(outRoot, integration.path)));

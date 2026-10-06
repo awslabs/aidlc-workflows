@@ -121,11 +121,15 @@ separate confirmation before any stage artifact is generated. Append or update
 the prompt, both options without A/B file-letter prefixes, and a blank
 `[Answer]:` tag.
 
-Render the protocol's **Confirm** question through the active track. With
-`request_user_input`, map the prompt and the two semantic options directly; the
-tool supplies its own escape. On the numbered-prose floor, render:
+Render the protocol's **Confirm** question through the active track, with the
+summary bullets where the person reads them. With `request_user_input`, the
+question's text is the summary bullets, a blank line, then the prompt, and the
+two semantic options map directly; the tool supplies its own escape. On the
+numbered-prose floor, render the bullets right above it in the same message:
 
 ```
+- <each answer, as a summary bullet>
+
 **Confirm** — Does this all look correct before I generate the artifact?
 
 1. **Looks correct** — Generate the artifact from these answers

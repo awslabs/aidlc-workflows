@@ -708,6 +708,78 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
     expect(eventCount(proj, "GATE_APPROVED")).toBe(2);
   });
 
+  // --- Scenario C3: one question for several late stage approvals -----------
+  //
+  // Unit-major with Unit checkpoints off: the gate's question named several
+  // stages, so the person's one reply approves each of them. A stage the
+  // question did not name still needs its own reply: Scenario C holds for it.
+  test("C3: one HUMAN_TURN approves the stages its gate listed, and only those", () => {
+    const sep = "\u2014"; // the state file's checkbox separator
+    writeFileSync(seededStateFile(proj), `# AI-DLC State Tracking
+
+## Project Information
+- **Project**: combined late approval
+- **Project Type**: Greenfield
+- **Scope**: feature
+- **State Version**: 8
+
+## Runtime State
+- **Revision Count**: 0
+- **Construction Iteration**: unit-major
+- **Construction Checkpoints**: disabled
+- **Review Override**: none
+
+## Stage Progress
+
+### CONSTRUCTION PHASE
+- [-] functional-design ${sep} EXECUTE
+- [ ] nfr-requirements ${sep} EXECUTE
+- [ ] nfr-design ${sep} EXECUTE
+- [S] infrastructure-design ${sep} EXECUTE
+- [S] code-generation ${sep} EXECUTE
+- [ ] build-and-test ${sep} EXECUTE
+
+## Current Status
+- **Lifecycle Phase**: CONSTRUCTION
+- **Current Stage**: functional-design
+- **Status**: Running
+`);
+    // Reviews are off for this work (Review Override: none): the case is about
+    // the person's turn only.
+    const run = (args: string[]) => {
+      const env: NodeJS.ProcessEnv = { ...process.env, AIDLC_SKIP_ARTIFACT_GUARD: "1" };
+      env.AIDLC_ALLOW_DIRECT_STATE_TRANSITIONS = "1";
+      delete env.AIDLC_SKIP_HUMAN_PRESENCE_GUARD;
+      delete env.AIDLC_UNATTENDED;
+      const r = spawnSync(BUN, [STATE, ...args, "--project-dir", proj], {
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+        encoding: "utf-8",
+        env,
+      });
+      return { rc: r.status ?? -1, out: `${r.stdout ?? ""}${r.stderr ?? ""}` };
+    };
+    const listed = ["functional-design", "nfr-requirements", "nfr-design"];
+    expect(run(["gate-start", "functional-design", "--approves-together", listed.join(",")]).rc).toBe(0);
+    recordHumanTurn(proj);
+    expect(run(["approve", "functional-design", "--user-input", "Approve"]).rc).toBe(0);
+    for (const slug of listed.slice(1)) {
+      expect(field(proj, "Current Stage")).toBe(slug);
+      expect(run(["gate-start", slug]).rc).toBe(0);
+      const r = run(["approve", slug, "--user-input", "Approve"]);
+      expect(r.rc, r.out).toBe(0);
+    }
+    expect(eventCount(proj, "GATE_APPROVED")).toBe(3);
+
+    // build-and-test was not in the question: the same turn cannot approve it.
+    expect(field(proj, "Current Stage")).toBe("build-and-test");
+    run(["checkbox", "build-and-test=in-progress"]);
+    run(["gate-start", "build-and-test"]);
+    const unlisted = run(["approve", "build-and-test", "--user-input", "Approve"]);
+    expect(unlisted.rc).not.toBe(0);
+    expect(unlisted.out).toContain("no new human reply");
+    expect(eventCount(proj, "GATE_APPROVED")).toBe(3);
+  });
+
   // --- Scenario D: AUTONOMY carve-out is Construction-only -------------------
   test("D: a Construction autonomy field does NOT waive an Ideation gate", () => {
     const slug = field(proj, "Current Stage");

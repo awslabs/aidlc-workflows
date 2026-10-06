@@ -805,7 +805,7 @@ export const ROUTES: readonly Route[] = [
     group: "testing-posture",
     kind: "noun-passthrough",
     classification: "passthrough",
-    verbs: ["resolve", "render", "fingerprint", "verify", "begin", "brief", "reply"],
+    verbs: ["resolve", "render", "fingerprint", "verify", "begin", "brief", "reply", "restore"],
     tool: TOOLS.testingPosture,
     ...HIDDEN_ENGINE,
   },
@@ -1484,12 +1484,13 @@ export function renderCommandHelp(command: PublicCommand): string {
       "  --pin <version>   Pin this project to an installed release",
       "  --download        Fetch and verify the release this project needs, if it is missing",
       "  --channel [name]  Show or set the machine release channel (stable, preview)",
-      "  --show            Show the selected section without changing it",
+      "  --show            Show one section, or every section with no section named, without changing it",
       "  --dry-run         Print the transaction plan without writing",
       "  --yes             Confirm explicit choices; it never chooses values",
       "",
       heading("EXAMPLES", out),
       `  ${cmd(`${invoke} config`, out)}`,
+      `  ${cmd(`${invoke} config --show`, out)}`,
       `  ${cmd(`${invoke} config models --show`, out)}`,
       `  ${cmd(`${invoke} config models --preset thorough --project --yes`, out)}`,
       "",
@@ -3185,6 +3186,40 @@ async function projectMachineOverlapError(
     : null;
 }
 
+// A host runs hooks, adapters, and the statusline on its own, so this refusal
+// reaches the person only through the host. Copilot's and Cursor's tool guards
+// answer on stdout and deny a failed hook without saying why, so they get their
+// own deny form; every other host route keeps its exit code and names the step
+// on the first stderr line, the line hosts show. It stays a refusal: a guard
+// that cannot run never lets the call through. The line names only the step;
+// the troubleshooting guide says why the folder is refused.
+async function refuseHostRouteInMachineRoot(argv: readonly string[]): Promise<number> {
+  const projectDir = dispatcherProjectDirFrom(argv);
+  const why = `AI-DLC can't run in ${projectDir}`;
+  let action: Action | null = null;
+  try {
+    action = resolveAction([...argv]);
+  } catch {
+    action = null;
+  }
+  if (
+    action?.type === "adapter" &&
+    ((action.harness === "copilot" && action.target === "guard-tool-call") ||
+      (action.harness === "cursor" && action.target === "guards"))
+  ) {
+    // Take the payload the host is still writing, so the answer does not meet
+    // a closed pipe.
+    await readStdin();
+    const reason = `${why}. Start the session from your project's folder.`;
+    const decision = action.harness === "copilot"
+      ? { hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: reason } }
+      : { permission: "deny", agent_message: reason };
+    text(1, `${JSON.stringify(decision)}\n`);
+    return 0;
+  }
+  return renderDispatcherFailure(argv, 1, `${why}: start the session from your project's folder`);
+}
+
 function effectiveMutationScope(
   route: Route,
   argv: readonly string[],
@@ -3278,7 +3313,10 @@ export async function main(rawArgv: string[]): Promise<void> {
   if (route) {
     const overlapError = await projectMachineOverlapError(route, argv);
     if (overlapError) {
-      process.exitCode = renderDispatcherFailure(argv, 1, overlapError);
+      process.exitCode =
+        route.routeOnly === "hook" || route.routeOnly === "statusline" || route.routeOnly === "adapter"
+          ? await refuseHostRouteInMachineRoot(argv)
+          : renderDispatcherFailure(argv, 1, overlapError);
       return;
     }
   }

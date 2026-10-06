@@ -474,6 +474,45 @@ function shownStep(stateFile: string, state: string, stage: string): { stage: st
   }
 }
 
+// Working one Unit at a time, the stage checkboxes tick only once every Unit
+// has finished a stage, so the stage count reads 0 until the last Unit. While
+// a Unit is still open the line counts Units instead: the one the person is
+// on, of the Units planned. The Units are the names in the Unit DAG's edge
+// block; a Unit counts as done from its approval (GATE_APPROVED at the
+// construction-unit checkpoint) until a later rejection of it.
+function unitProgress(stateFile: string, state: string): { current: number; total: number } | null {
+  if (extractField(state, "Construction Iteration") !== "unit-major") return null;
+  const record = dirname(stateFile);
+  try {
+    const dag = readFileSync(join(record, "inception", "units-generation", "unit-of-work-dependency.md"), "utf-8");
+    const block = /## Machine-Readable Edge Block[\s\S]*?```ya?ml\r?\n([\s\S]*?)```/.exec(dag)?.[1] ?? "";
+    const units = [...block.matchAll(/^\s*-\s+name:\s*([A-Za-z0-9][A-Za-z0-9._-]{0,63})\s*$/gm)].map((m) => m[1]);
+    if (units.length === 0) return null;
+    const rows: Array<{ at: string; approved: boolean; unit: string }> = [];
+    const auditDir = join(record, "audit");
+    for (const name of readdirSync(auditDir).filter((file) => file.endsWith(".md"))) {
+      for (const entry of readFileSync(join(auditDir, name), "utf-8").split(/\n## /)) {
+        if (!/^\*\*Checkpoint\*\*: construction-unit$/m.test(entry)) continue;
+        const event = /^\*\*Event\*\*:\s*(\S+)/m.exec(entry)?.[1] ?? "";
+        if (event !== "GATE_APPROVED" && event !== "GATE_REJECTED") continue;
+        const unit = /^\*\*Unit\*\*:\s*(.+)$/m.exec(entry)?.[1]?.trim() ?? "";
+        const at = /^\*\*Timestamp\*\*:\s*(.+)$/m.exec(entry)?.[1]?.trim() ?? "";
+        rows.push({ at, approved: event === "GATE_APPROVED", unit });
+      }
+    }
+    const done = new Set<string>();
+    for (const row of rows.sort((a, b) => a.at.localeCompare(b.at))) {
+      if (!units.includes(row.unit)) continue;
+      if (row.approved) done.add(row.unit);
+      else done.delete(row.unit);
+    }
+    if (done.size >= units.length) return null;
+    return { current: done.size + 1, total: units.length };
+  } catch {
+    return null;
+  }
+}
+
 function extractField(text: string, label: string): string {
   // Match the Markdown list field pattern used throughout aidlc-state.md:
   //   - **Lifecycle Phase**: IDEATION
@@ -720,8 +759,13 @@ async function main(stdinText: string): Promise<void> {
   }
 
   let output = `[AIDLC] ${prefix}${phase}`;
-  if (bar) output += ` ${bar}`;
-  if (phaseProg) output += ` ${phaseProg}`;
+  const units = phase === "CONSTRUCTION" ? unitProgress(stateFile, state) : null;
+  if (units) {
+    output += ` Unit ${units.current} of ${units.total}`;
+  } else {
+    if (bar) output += ` ${bar}`;
+    if (phaseProg) output += ` ${phaseProg}`;
+  }
   if (stageDisplay) output += ` > ${stageDisplay}`;
   if (agentDisplay) output += ` -- ${agentDisplay}`;
 

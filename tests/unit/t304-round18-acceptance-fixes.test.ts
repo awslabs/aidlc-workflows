@@ -31,8 +31,10 @@ import { acquireRelease, digest } from "../../core/tools/aidlc-release.ts";
 import { quoteCommandArgument as quoteForShell } from "../../core/tools/aidlc-runtime-paths.ts";
 import { serveReleaseFixture, writeReleaseFixture } from "../harness/release-fixture.ts";
 import { AIDLC_VERSION } from "../../core/tools/aidlc-version.ts";
+import { doctorCommandLines, vscodeVisibleOutput } from "../harness/vscode-output-trim.ts";
 import {
   canonicalPolicyPath,
+  installedExecutablePath,
   machineTransactionRoot,
 } from "../../core/tools/aidlc-install-paths.ts";
 import {
@@ -1616,6 +1618,89 @@ describe("t304 diagnostics and release truthfulness", () => {
     expect(check.severity).toBeUndefined();
     expect(check.fix).toContain("restore");
   });
+
+  test("answers recorded by a newer release are a warning naming that release, not a restore", () => {
+    const project = readmeCopyProject();
+    const data = join(project, ".claude", "tools", "data");
+    const stampPath = join(data, "aidlc-stamp.json");
+    const stamp = JSON.parse(readFileSync(stampPath, "utf-8"));
+    writeFileSync(stampPath, `${JSON.stringify({ ...stamp, frameworkVersion: OTHER_VERSION }, null, 2)}\n`);
+    const harnessPath = join(data, "harness.json");
+    const harness = JSON.parse(readFileSync(harnessPath, "utf-8"));
+    writeFileSync(harnessPath, `${JSON.stringify({
+      ...harness,
+      providers: { schemaVersion: 1, provider: "introduced-later" },
+    }, null, 2)}\n`);
+    const check = providerDoctorCheck(project);
+    expect(check).toEqual(expect.objectContaining({
+      pass: false,
+      severity: "warn",
+      label: `Providers: recorded answers are from aidlc ${OTHER_VERSION}, newer than this aidlc ${AIDLC_VERSION}`,
+    }));
+    expect(check.fix).not.toContain("restore");
+    expect(check.fix).toContain(OTHER_VERSION);
+    // With that release installed, the fix names where it is. Neither fix
+    // repeats the doctor command line, which VS Code would cut the report at (#1411).
+    const prior = process.env.AIDLC_INSTALL_ROOT;
+    process.env.AIDLC_INSTALL_ROOT = join(temp("aidlc-t304-newer-answers-"), "share", "aidlc");
+    let installed: ReturnType<typeof providerDoctorCheck>;
+    try {
+      const executable = installedExecutablePath(OTHER_VERSION);
+      mkdirSync(join(executable, ".."), { recursive: true });
+      writeFileSync(executable, "");
+      installed = providerDoctorCheck(project);
+      expect(installed.fix).toContain(`run doctor with aidlc ${OTHER_VERSION} to check them; it is at \`${executable}\``);
+    } finally {
+      if (prior === undefined) delete process.env.AIDLC_INSTALL_ROOT;
+      else process.env.AIDLC_INSTALL_ROOT = prior;
+    }
+    for (const row of [check, installed]) {
+      const printed = `${row.label}\n  fix: ${row.fix}\n`;
+      for (const commandLine of doctorCommandLines(".claude")) {
+        expect(vscodeVisibleOutput(printed, commandLine), commandLine).toBe(printed);
+      }
+    }
+  });
+
+  test("doctor judges the project stamp against the pinned engine", () => {
+    const stampRow = (pin: string, stampVersion: string) => {
+      const project = readmeCopyProject();
+      const stampPath = join(project, ".claude", "tools", "data", "aidlc-stamp.json");
+      const stamp = JSON.parse(readFileSync(stampPath, "utf-8"));
+      writeFileSync(stampPath, `${JSON.stringify({ ...stamp, frameworkVersion: stampVersion }, null, 2)}\n`);
+      writeFileSync(join(project, ".aidlc-version"), `${pin}\n`);
+      const doctor = spawnSync(
+        process.execPath,
+        [join(project, ".claude", "tools", "aidlc.ts"), "doctor", "--json", "--project-dir", project],
+        {
+          cwd: project,
+          env: cleanEnv(),
+          encoding: "utf-8",
+          timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+        },
+      );
+      const checks = (JSON.parse(doctor.stdout) as {
+        data: { checks: Array<{ pass: boolean; severity?: string; label: string; fix?: string }> };
+      }).data.checks;
+      return checks.find((check) => check.label.startsWith("Project runtime stamp"));
+    };
+    // The pin matches the project files: the engine that serves the project
+    // is the pinned one, so this is not skew even though doctor runs elsewhere.
+    const aligned = stampRow(OTHER_VERSION, OTHER_VERSION);
+    expect(aligned).toEqual(expect.objectContaining({
+      pass: true,
+      label: `Project runtime stamp: ${OTHER_VERSION} (claude); pinned engine: ${OTHER_VERSION} (machine active: ${AIDLC_VERSION})`,
+    }));
+    expect(aligned?.severity).toBeUndefined();
+    // Files from the running release under a pin to another one are skew.
+    const skewed = stampRow(OTHER_VERSION, AIDLC_VERSION);
+    expect(skewed).toEqual(expect.objectContaining({
+      pass: false,
+      label: `Project runtime stamp: ${AIDLC_VERSION}; pinned engine: ${OTHER_VERSION} (machine active: ${AIDLC_VERSION})`,
+    }));
+    expect(skewed?.fix).toContain("config --harness claude");
+    expect(skewed?.fix).toContain(`config --pin ${AIDLC_VERSION}`);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("HTTP 404 explains that no native release is published yet", async () => {
     const server = Bun.serve({

@@ -16,6 +16,9 @@ import { FILE_TOOLS_RULE } from "../../core/tools/aidlc-testing-posture.ts";
 import { REPO_ROOT } from "../harness/fixtures.ts";
 
 const PROSE = [
+  "agents/aidlc-architecture-reviewer-agent.md",
+  "agents/aidlc-composer-agent.md",
+  "agents/aidlc-product-lead-agent.md",
   "aidlc-common/conductor.md",
   "aidlc-common/protocols/stage-protocol-ensemble.md",
   "aidlc-common/protocols/stage-protocol-reviewer.md",

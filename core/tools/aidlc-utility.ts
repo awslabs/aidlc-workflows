@@ -47,8 +47,10 @@ import {
   type ConfigKey,
   ceremoniesCreationGranted,
   consumeCeremoniesCreationGrant,
+  consumeFencesOffCreationGrant,
   consumeGuardPolicyCreationGrant,
   consumePlanApprovalCreationGrant,
+  fencesOffCreationGranted,
   guardPolicyCreationGranted,
   formatPlanApprovalSetting,
   type IntentSettingsRequest,
@@ -3933,6 +3935,19 @@ export async function collectDoctorReport(
   });
 
   const projectStamp = join(projectDir, harnessDir(), "tools", "data", "aidlc-stamp.json");
+  const pinPath = join(projectDir, ".aidlc-version");
+  // doctor runs on the machine-active release, but a well-formed pin routes
+  // every engine command (hooks, sensors, orchestration) to the pinned one, so
+  // the project stamp is judged against that engine. A malformed pin is
+  // reported below and leaves this check on the running release.
+  const pinnedEngine = (() => {
+    try {
+      const value = readFileSync(pinPath, "utf-8").trim();
+      return VERSION_ID.test(value) ? value : null;
+    } catch {
+      return null;
+    }
+  })();
   if (existsSync(projectStamp)) {
     try {
       const stamp = JSON.parse(readFileSync(projectStamp, "utf-8")) as {
@@ -3940,15 +3955,28 @@ export async function collectDoctorReport(
         distribution?: string;
       };
       const stampVersion = stamp.frameworkVersion ?? "unknown";
-      const currentMajor = AIDLC_VERSION.split(".")[0];
+      const engineVersion = pinnedEngine ?? AIDLC_VERSION;
+      const engineMajor = engineVersion.split(".")[0];
       const stampMajor = stampVersion.split(".")[0];
+      const engine = pinnedEngine
+        ? `pinned engine: ${pinnedEngine}${
+            pinnedEngine === AIDLC_VERSION ? "" : ` (machine active: ${AIDLC_VERSION})`
+          }`
+        : `selected engine: ${AIDLC_VERSION}`;
+      const distribution = stamp.distribution ?? "unknown";
       results.push({
-        pass: stampVersion === AIDLC_VERSION || stampMajor === currentMajor,
-        severity: stampVersion !== AIDLC_VERSION && stampMajor === currentMajor ? "warn" : undefined,
-        label: stampVersion === AIDLC_VERSION
-          ? `Project runtime stamp: ${stampVersion} (${stamp.distribution ?? "unknown"})`
-          : `Project runtime stamp: ${stampVersion}; selected engine: ${AIDLC_VERSION}`,
-        fix: `run \`${aidlcInvocation()} config\` or select the machine release with \`${aidlcInvocation()} use ${stampVersion}\``,
+        pass: stampVersion === engineVersion || stampMajor === engineMajor,
+        severity: stampVersion !== engineVersion && stampMajor === engineMajor ? "warn" : undefined,
+        label: stampVersion !== engineVersion
+          ? `Project runtime stamp: ${stampVersion}; ${engine}`
+          : pinnedEngine && pinnedEngine !== AIDLC_VERSION
+          ? `Project runtime stamp: ${stampVersion} (${distribution}); ${engine}`
+          : `Project runtime stamp: ${stampVersion} (${distribution})`,
+        fix: pinnedEngine
+          ? `refresh the project to the pinned release with \`${aidlcInvocation()} config${
+              stamp.distribution ? ` --harness ${stamp.distribution}` : ""
+            }\` or pin the project's release with \`${aidlcInvocation()} config --pin ${stampVersion}\``
+          : `run \`${aidlcInvocation()} config\` or select the machine release with \`${aidlcInvocation()} use ${stampVersion}\``,
       });
     } catch {
       results.push({
@@ -3959,7 +3987,6 @@ export async function collectDoctorReport(
     }
   }
 
-  const pinPath = join(projectDir, ".aidlc-version");
   if (existsSync(pinPath)) {
     const pinned = readFileSync(pinPath, "utf-8").trim();
     if (!VERSION_ID.test(pinned)) {
@@ -7674,6 +7701,10 @@ function handleIntentCreate(projectDir: string, flags: Record<string, string>): 
   const guardPolicyAsked = preflightMemoryStrict === null
     ? guardPolicyCreationGranted(projectDir, initialSelection.sessionId, questionId ?? null) : null;
   consumeGuardPolicyCreationGrant(projectDir, initialSelection.sessionId);
+  // So are the checks they turned off with it, or before it.
+  const fencesAsked = preflightMemoryStrict === null
+    ? fencesOffCreationGranted(projectDir, initialSelection.sessionId, questionId ?? null) : [];
+  consumeFencesOffCreationGrant(projectDir, initialSelection.sessionId);
   const wantedChangeControl = flaggedChangeControl ?? guardPolicyAsked;
   const guardPolicySetByPerson = guardPolicyAsked !== null && wantedChangeControl === guardPolicyAsked;
   const requestedChangeControl =
@@ -8025,6 +8056,17 @@ function handleIntentCreate(projectDir: string, flags: Record<string, string>): 
       ceremonySetByPerson,
       composedPlan ? plannedStages.stages : null,
     );
+    // The checks the person turned off for this work start off, set by them.
+    if (fencesAsked.length > 0 && lockedMemoryStrict === null) {
+      const content = readStateFile(projectDir, created.dirName, created.space);
+      const requested: IntentSettingsRequest = {};
+      for (const fence of fencesAsked) requested[`guard.${fence}`] = { value: "off", source: "you" };
+      const update = applyIntentSettings(projectDir, content, requested, {
+        intent: created.dirName, space: created.space, sessionId: initialSelection.sessionId, typedByPerson: true,
+      });
+      if (update.audit.length > 0) appendAuditEntries(update.audit, projectDir, created.dirName, created.space);
+      if (update.content !== content) writeStateFile(projectDir, update.content, created.dirName, created.space);
+    }
     // The commit point: list the finished record with the question it answered,
     // then select it. The question's copy is no longer needed once listed.
     registerIntentRecord(
@@ -10948,8 +10990,14 @@ function handleScopeChange(projectDir: string, flags: Record<string, string>): v
       );
       // What happened and how to go back, then each stage it skipped and each
       // setting whose value changed. Nothing runs until the person asks.
+      // The stages after Initialization, the count the person reads everywhere
+      // during a run (the creation line, the progress line).
+      const shownDone = updatedCheckboxes.filter(
+        (c) => c.state === "completed" && executeSlugs.has(c.slug) &&
+          graph.find((s) => s.slug === c.slug)?.phase !== "initialization",
+      ).length;
       outputLines = [
-        `Switched to ${newScope}: ${executeStages.length} stages (${completedCount} done), ` +
+        `Switched to ${newScope}: ${summary.shown} stages (${shownDone} done), ` +
           `${gates} approval gates${ceremonyOffClause(summary)}.` +
           (isScopeName(oldScope) ? ` To go back, type \`${entrySkillInvocation()} --scope ${scopeArg(oldScope)}\`.` : ""),
         ...skippedNow.map(({ slug, was }) =>

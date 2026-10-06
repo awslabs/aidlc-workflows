@@ -128,7 +128,11 @@ const gateItem = (row: AuditShardEvent) =>
  * drive) and before the row. A menu submission backs as many answers as it
  * carried picks; a typed reply backs one answer for each question open when it
  * arrived (at least one), so a second answer to one question needs a newer
- * turn, and so does a question asked after the reply. Approvals and
+ * turn, and so does a question asked after the reply. A menu submission is the
+ * one exception: it answers the question the menu showed, so when the agent
+ * logs that question only after the submission, the submission still backs
+ * its answer if nothing was decided between them (the engine's own rule, a
+ * reply since the last decision). Approvals and
  * answers need a reply: a turn that was only a command (as the human-turn hook
  * reads it) does not count. A command still backs what it
  * can ask for: a stage reopened by a jump, a changed project type.
@@ -166,6 +170,8 @@ export function unbackedDecisions(projectDir: string, start: AuditCursor, turns:
     let workspace = -1;
     let autonomous = false;
     let resolved = -1;
+    // The last row that decided anything, as the engine counts resolutions.
+    let settled = -1;
     // The engine settles a Construction stage gate once every Unit of the
     // work's compiled DAG has its checkpoint approved and one of them covers the
     // stage (isAutonomousConstructionGate): per Unit, the stages its standing
@@ -195,10 +201,13 @@ export function unbackedDecisions(projectDir: string, start: AuditCursor, turns:
       let reply = true;
       let answer = false;
       let instruction: string | undefined;
+      // Where a menu submission sent before a late-logged question may start.
+      let menuSince: number | undefined;
       if (closes) {
         since = pending?.index ?? answered.get(stage) ?? -1;
         answered.set(stage, since);
         answer = true;
+        if (pending) menuSince = settled;
         // A choice the person left to the agent, which they can say before the
         // question comes: any turn of the drive that holds the words the row
         // quotes backs it, a command included, and backs every answer it covers.
@@ -207,6 +216,7 @@ export function unbackedDecisions(projectDir: string, start: AuditCursor, turns:
           since = -1;
           reply = false;
           answer = false;
+          menuSince = undefined;
         }
       } else if (gate && !engineApproved) {
         reply = row.event === "GATE_APPROVED";
@@ -232,12 +242,15 @@ export function unbackedDecisions(projectDir: string, start: AuditCursor, turns:
         const after = Math.max(since + 1, first);
         const needsReply = reply;
         const quoted = instruction;
-        const backing = quoted === "" ? -1 : turns.findIndex((turn, which) => {
+        const backs = (from: number, menuOnly: boolean) => turns.findIndex((turn, which) => {
           const at = turn.cursor.get(key) ?? 0;
-          return at >= after && at <= index && !(needsReply && isCommand(turn.words)) &&
+          return at >= from && at <= index && !(needsReply && isCommand(turn.words)) &&
+            (!menuOnly || turn.selections !== undefined) &&
             (!answer || used[which] < (turn.selections ?? openQuestions(events, at))) &&
             (quoted === undefined || plainWords(turn.words).includes(quoted));
         });
+        let backing = quoted === "" ? -1 : backs(after, false);
+        if (backing === -1 && menuSince !== undefined) backing = backs(Math.max(menuSince + 1, first), true);
         if (backing === -1) problems.push(describe(row, key, turns));
         else if (answer) used[backing]++;
       }
@@ -252,16 +265,19 @@ export function unbackedDecisions(projectDir: string, start: AuditCursor, turns:
         autonomous = false;
         approvedUnits.clear();
       }
+      // A Unit's approval stands until a rejection names the Unit (a reopen
+      // carries no Checkpoint) or a jump moves the work.
       const unit = auditBlockField(row.block, "Unit");
-      if (gate && checkpoint !== null && unit !== null) {
-        if (row.event === "GATE_REJECTED") approvedUnits.delete(unit);
-        else {
-          const stages = (auditBlockField(row.block, "Gate Stages") ?? "").split(",").map((part) => part.trim());
-          approvedUnits.set(unit, new Set(stages.filter((name) => name.length > 0)));
-        }
+      if (row.event === "GATE_REJECTED" && unit !== null) approvedUnits.delete(unit);
+      else if (gate && checkpoint !== null && unit !== null) {
+        const stages = (auditBlockField(row.block, "Gate Stages") ?? "").split(",").map((part) => part.trim());
+        approvedUnits.set(unit, new Set(stages.filter((name) => name.length > 0)));
       }
+      if (row.event === "STAGE_JUMPED") approvedUnits.clear();
       if (row.event === "AUTONOMY_MODE_SET") autonomous = auditBlockField(row.block, "Mode") === "autonomous";
       if (gate) resolved = index;
+      if (closes || gate || row.event === "QUESTION_UNANSWERED" ||
+        (row.event === "AUTONOMY_MODE_SET" && auditBlockField(row.block, "Mode") === "autonomous")) settled = index;
     }
   }
   return problems;

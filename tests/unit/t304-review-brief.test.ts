@@ -720,6 +720,50 @@ describe("t304 executable review brief scenarios", () => {
     ).toHaveLength(0);
   });
 
+  // A first review has no prior findings to report, so a report that leaves
+  // out the empty Prior findings table is read as it stands: the reviewer is
+  // not sent back to write the same review again. A later review must still
+  // say what became of the open findings, so there the table stays required.
+  const withoutPriorTable = (body: string): string =>
+    body.replace("**Prior findings**\n\n| ID | Now | Severity | Note |\n|---|---|---|---|\n\n", "");
+
+  test("a first review's report may leave out the empty Prior findings table", () => {
+    const { proj, artifact, relativeArtifact } = requirementProject([]);
+    writeFileSync(artifact, "# Requirements\n\nFR-1: ship it.\n", "utf-8");
+    const body = withoutPriorTable(reviewReportMarkdown("NOT-READY", [], [
+      `| Minor | ${relativeArtifact} > FR-1 | Deadline is missing | Add the deadline |`,
+    ]));
+    expect(body).not.toContain("**Prior findings**");
+    recordReviewViaRecord(proj, body, { verdict: "NOT-READY" });
+    expect(
+      readAuditShardEvents(proj).filter((entry) => entry.event === "REVIEW_COMPLETED"),
+    ).toHaveLength(1);
+    const stage = findStageBySlug("requirements-analysis")!;
+    expect(readReviewArtifactContexts(proj, stage)[0].findings.map((finding) => finding.id)).toEqual(["R-01"]);
+  });
+
+  test("a later review's report without the Prior findings table is refused", () => {
+    const project = engineOwnedFindingProject();
+    expect(requestChanges(project).status).toBe(0);
+    const base = [
+      "review",
+      "--stage",
+      "requirements-analysis",
+      "--reviewer",
+      "aidlc-product-lead-agent",
+      "--iteration",
+      "1",
+    ];
+    const requested = run(LOG, base, project.proj);
+    expect(requested.status, requested.out).toBe(0);
+    const draft = join(project.proj, JSON.parse(requested.stdout).reviewFile);
+    mkdirSync(dirname(draft), { recursive: true });
+    writeFileSync(draft, withoutPriorTable(reviewReportMarkdown("READY", [], [])), "utf-8");
+    const completed = run(LOG, [...base, "--verdict", "READY"], project.proj);
+    expect(completed.status).not.toBe(0);
+    expect(JSON.parse(completed.stderr).error).toContain("the findings report could not be read");
+  });
+
   test("a findings header the record schema cannot read is refused, not read as no findings", () => {
     // A reviewer that documents its rows under its own column names still
     // names every finding, so dropping the two columns the record addresses
@@ -975,6 +1019,25 @@ describe("t304 executable review brief scenarios", () => {
       "**Review outcome:** 1 finding marked fixed by the reviewer.",
     );
     expect(rendered).not.toContain("**The reviewer's findings, as written:**");
+  });
+
+  // The person reads the brief in a terminal, where a table as wide as the
+  // review file's is redrawn as one record block per finding. The brief's
+  // table keeps four short columns; the full text goes on lines of its own.
+  test("the brief's findings table stays narrow, with the full text below it", () => {
+    const project = engineOwnedFindingProject();
+    const brief = renderReviewBrief(project.proj, findStageBySlug("requirements-analysis")!, "first");
+    const table = brief.split("\n").filter((line) => line.startsWith("|"));
+    expect(table[0]).toBe("| ID | Severity | Where | Status |");
+    for (const line of table) {
+      const cells = line.slice(1, -1).split("|").map((cell) => cell.trim());
+      expect(cells, line).toHaveLength(4);
+      for (const cell of cells) expect(cell.length, line).toBeLessThanOrEqual(48);
+    }
+    const file = project.relativeArtifact.split("/").at(-1);
+    expect(brief).toContain(`| R-01 | Minor | ${file} > FR-1 | New |`);
+    expect(brief).toContain("> R-01 Finding: Concern 1");
+    expect(brief).toContain("> R-01 Required action: Fix concern 1");
   });
 
   test("the single per-Unit stage gate displays exactly the open findings approval dispositions cover", () => {
@@ -1614,9 +1677,11 @@ describe("t304 executable review brief scenarios", () => {
       expect(rendered).toContain(
         "**Looks correct** - record this confirmation and generate",
       );
+      // What happens and what the person does next, in plain words.
       expect(rendered).toContain(
-        "**Request changes** - leave the artifacts ungenerated",
+        "- **Request changes** - nothing is generated yet; say what to change in your answers, and they are updated first.",
       );
+      expect(rendered).not.toContain("ungenerated");
     }
   });
 
@@ -1660,6 +1725,30 @@ describe("t304 engine-owned findings experience", () => {
     );
     expect(brief).toContain("**Review outcome:** No open findings remain.");
     expect(brief).not.toContain("Not re-checked this round");
+  });
+
+  // The narrow table cuts a long cell; the person's own reason for a decision,
+  // or a long place, is still written out in full below it.
+  test("A decision reason too long for its cell is shown in full below the narrow table", () => {
+    const project = engineOwnedFindingProject();
+    const reason = "Internal milestones never carry a public date, the launch plan owns that";
+    expect(requestChanges(project, [`${project.relativeArtifact}#R-01=${reason}`]).status).toBe(0);
+    recordReviewViaRecord(
+      project.proj,
+      reviewReportMarkdown(
+        "READY",
+        [],
+        [`| Minor | ${project.relativeArtifact} > Success Criteria and the adoption targets for the first release | Concern 2 | Fix concern 2 |`],
+      ),
+      { gate: "revise" },
+    );
+    const brief = renderReviewBrief(project.proj, findStageBySlug("requirements-analysis")!, "revision");
+    for (const line of brief.split("\n").filter((row) => row.startsWith("|"))) {
+      for (const cell of line.slice(1, -1).split("|")) expect(cell.trim().length, line).toBeLessThanOrEqual(48);
+    }
+    expect(brief).toContain(`> R-01 Status: Rejected: ${reason}`);
+    const file = project.relativeArtifact.split("/").at(-1);
+    expect(brief).toContain(`> R-02 Where: ${file} > Success Criteria and the adoption targets for the first release`);
   });
 
   test("The reviewer comments on a decided finding at the same or lower severity: it becomes a note, not a question", () => {
@@ -2668,7 +2757,8 @@ describe("t304 engine-owned report replay and compatibility", () => {
       fallback,
     );
     expect(brief).toContain("Rejected: Known gap");
-    expect(brief).toContain(`| R-02 | Major | ${project.relativeArtifact} > review completion | ${fallback} |`);
+    expect(brief).toContain(`| R-02 | Major | ${project.relativeArtifact.split("/").at(-1)} > review completion | Unresolved |`);
+    expect(brief).toContain(`> R-02 Finding: ${fallback}`);
     expect(brief).toContain("**Review outcome:** Concerns remain for your decision.");
   });
 
@@ -3523,7 +3613,7 @@ describe("t304 protocol and harness projections use the deterministic renderer",
     expect(context.stdout).toContain("No open findings require re-checking");
     // The gate still shows people the explicit "no findings" row.
     const brief = run(REVIEW_BRIEF, ["review", "--stage", "requirements-analysis", "--why", "first"], proj);
-    expect(brief.stdout).toContain("| - | - | - | No findings | No action required | Resolved |");
+    expect(brief.stdout).toContain("| - | - | - | No findings |");
   });
 
   test("a review recorded as a record renders at the gate and in redispatch context, and its findings take dispositions", () => {
@@ -3667,9 +3757,7 @@ describe("t304 protocol and harness projections use the deterministic renderer",
     );
     expect(brief.status, brief.out).toBe(0);
     expect(brief.stdout).toContain(fallbackFinding);
-    expect(brief.stdout).not.toContain(
-      "| - | - | - | No findings | No action required | Resolved |",
-    );
+    expect(brief.stdout).not.toContain("| - | - | - | No findings |");
   });
 
   test("a record replaces a legacy embedded review for the same scope at the gate", () => {

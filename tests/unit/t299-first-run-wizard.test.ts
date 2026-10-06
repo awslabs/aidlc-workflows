@@ -9,6 +9,7 @@ import { afterAll, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { createHash } from "node:crypto";
 import {
   closeSync,
+  cpSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -581,6 +582,30 @@ function expectInstalledWorkflowWrites(context: CliContext, trace: string): void
   expect(events.some((event) =>
     event.event === "open" && event.path && dirname(event.path) === auditDir
   )).toBe(true);
+}
+
+// A machine whose active release is older than the one this project is pinned
+// to: the active runtime is the shipped claude tree restamped as `active`, and
+// the pinned release is the shipped tree itself. No explicit runtime root, so
+// the wizard sees only what the version store holds, as a native install does.
+function pinnedMachineEnv(active: string, pinned?: string): NodeJS.ProcessEnv {
+  const share = join(temp("aidlc-t299-pinned-machine-"), "share", "aidlc");
+  const restamped = join(share, "versions", active, "runtime", "claude");
+  cpSync(join(RUNTIME, "claude"), restamped, { recursive: true });
+  const stampPath = join(restamped, ".claude", "tools", "data", "aidlc-stamp.json");
+  const stamp = JSON.parse(readFileSync(stampPath, "utf-8"));
+  writeFileSync(stampPath, `${JSON.stringify({ ...stamp, frameworkVersion: active }, null, 2)}\n`);
+  if (pinned) {
+    cpSync(join(RUNTIME, "claude"), join(share, "versions", pinned, "runtime", "claude"), {
+      recursive: true,
+    });
+  }
+  writeFileSync(join(share, "active-version"), `${active}\n`);
+  return {
+    AIDLC_INSTALL_ROOT: share,
+    AIDLC_BIN_DIR: join(share, "bin"),
+    AIDLC_RUNTIME_ROOT: "",
+  };
 }
 
 function wizardStderrMessage(stderr: string): string {
@@ -1594,6 +1619,29 @@ describe("t299 first-run setup wizard", () => {
     expect(harness.providers).toEqual(expect.objectContaining({
       provider: "current",
     }));
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("a pinned project is set up from its pinned release, not the machine-active one", () => {
+    const result = runWizard("\n", {
+      env: pinnedMachineEnv("1.0.0", AIDLC_VERSION),
+      prepare: (project) => writeFileSync(join(project, ".aidlc-version"), `${AIDLC_VERSION}\n`),
+    });
+    expect(result.status, result.stdout + result.stderr).toBe(0);
+    expect(result.stdout).not.toContain("Setup stopped");
+    expect(JSON.parse(
+      readFileSync(join(result.project, ".claude", "tools", "data", "aidlc-stamp.json"), "utf-8"),
+    ).frameworkVersion).toBe(AIDLC_VERSION);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("a pin to a release this machine lacks is reported before any question", () => {
+    const result = runWizard("\n", {
+      env: pinnedMachineEnv("1.0.0"),
+      prepare: (project) => writeFileSync(join(project, ".aidlc-version"), "9.9.9\n"),
+    });
+    expect(result.status).not.toBe(0);
+    expect(result.stdout).not.toContain("AI-DLC setup - first run in this project.");
+    expect(result.stdout + result.stderr).toContain("project requires 9.9.9, which is not installed");
+    expect(existsSync(join(result.project, ".claude"))).toBe(false);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("a preexisting AI-DLC file conflict renders the child's message and fix without its JSON plan", () => {

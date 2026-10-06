@@ -129,6 +129,7 @@ import {
   resolveWorkflowSelection,
   runtimeGraphPath,
   constructionCheckpointsApply,
+  approvesTogetherStages,
   spacesRoot,
   validSpaceFlag,
   withAuditLock,
@@ -360,6 +361,13 @@ function checkpointStage(projectDir: string, stateContent: string, slug: string)
   }
 }
 
+// One question covers the late stage approvals when Units are built one at a
+// time with Unit checkpoints off, while Current Stage waits on the first of
+// them: the ritual before that question surfaces each stage it names.
+function approvedTogetherStage(stateContent: string, current: string, slug: string): boolean {
+  return approvesTogetherStages(stateContent, current)?.includes(slug) === true;
+}
+
 // The §13 ritual runs while the just-completed stage is still the Active
 // (Current Stage) row at the approval gate. Reject a slug that isn't the
 // active one — the orchestrator must surface the stage it just ran.
@@ -368,7 +376,11 @@ function assertActiveStage(projectDir: string, stateContent: string, slug: strin
   if (current === null) {
     fail("state file has no Current Stage field", 1);
   }
-  if (current !== slug && !checkpointStage(projectDir, stateContent, slug)) {
+  if (
+    current !== slug &&
+    !checkpointStage(projectDir, stateContent, slug) &&
+    !approvedTogetherStage(stateContent, current, slug)
+  ) {
     // --slug takes a stage's slug. When the value is no stage at all (an
     // intent's record name is the usual one), name the active stage to pass.
     const retry = !findStageBySlug(slug) && findStageBySlug(current)

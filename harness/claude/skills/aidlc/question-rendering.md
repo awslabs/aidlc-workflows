@@ -96,12 +96,14 @@ separate confirmation before any stage artifact is generated. Append or update
 `## Consolidated Summary Confirmation` in the questions file with the summary,
 the prompt, both options without A/B file-letter prefixes, and a blank
 `[Answer]:` tag, then render the two semantic options through
-`AskUserQuestion`:
+`AskUserQuestion`. The question's own text starts with the summary bullets, so
+the person reads what they confirm in the picker itself; the recorded decision
+stays the last line alone:
 
 ```
 AskUserQuestion({
   questions: [{
-    question: "Does this all look correct before I generate the artifact?",
+    question: "- <each answer, as a summary bullet>\n\nDoes this all look correct before I generate the artifact?",
     header: "Confirm",
     multiSelect: false,
     options: [

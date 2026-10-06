@@ -18,7 +18,8 @@
 // an engine misread shows up as a difference.
 
 import { spawnSync } from "node:child_process";
-import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import type { AuditShardEvent } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { afterAll, describe, expect, test } from "bun:test";
@@ -79,9 +80,9 @@ export interface DeclaredScope {
 }
 
 /** What the scope file declares. Absent switches take the documented defaults. */
-export function declaredScope(scope: string): DeclaredScope {
+export function declaredScope(scope: string, file = join(SCOPES_DIR, `aidlc-${scope}.md`)): DeclaredScope {
   const values = new Map<string, string>();
-  for (const line of frontmatter(join(SCOPES_DIR, `aidlc-${scope}.md`))) {
+  for (const line of frontmatter(file)) {
     const m = /^([A-Za-z_]+):\s*(.*)$/.exec(line);
     if (m) values.set(m[1], m[2].replace(/^"|"$/g, "").trim());
   }
@@ -241,6 +242,13 @@ export class ScopeHost {
 
   /** Refusals by the one PreToolUse guard the host fires (see preTool). */
   readonly refusals: string[] = [];
+  /**
+   * Fire the guard before every Bash and Write, and let its refusal block the
+   * call, as Claude Code does. Off for the scope runs, which fire it only where
+   * a refusal would stop the person; on where a case is about what the guard
+   * holds while a plan waits.
+   */
+  fullHost = false;
 
   /**
    * The PreToolUse guard the host fires before Bash, Write and Task calls. Of
@@ -251,7 +259,9 @@ export class ScopeHost {
    */
   private preTool(tool: string, input: Record<string, unknown>): void {
     const res = this.hook("plan-approval-guard", { hook_event_name: "PreToolUse", tool_name: tool, tool_input: input });
-    if (res.status === 2) this.refusals.push(`${tool} ${clip(JSON.stringify(input), 200)}: ${clip(res.stderr, 600)}`);
+    if (res.status !== 2) return;
+    this.refusals.push(`${tool} ${clip(JSON.stringify(input), 200)}: ${clip(res.stderr, 600)}`);
+    if (this.fullHost) throw new ScopeRunRefused(`the guard refused ${tool} ${clip(JSON.stringify(input), 200)}`, res.stderr);
   }
 
   /** Run a command line as the agent's Bash tool would, with the host's Bash hooks. */
@@ -260,7 +270,7 @@ export class ScopeHost {
     if (words[0] !== "bun") throw new Error(`the stand-in runs only bun commands, got: ${line}`);
     // The guard is fired on the engine's loop commands, where a refusal would
     // stop the person's run; logging and read-only helpers skip it.
-    if (/\borchestrate(?:\.ts)? (?:next|continue|report)\b|\borchestrate-?\.?ts continue\b|aidlc-orchestrate\.ts /.test(line)) {
+    if (this.fullHost || /\borchestrate(?:\.ts)? (?:next|continue|report)\b|\borchestrate-?\.?ts continue\b|aidlc-orchestrate\.ts /.test(line)) {
       this.preTool("Bash", { command: line });
     }
     const res = this.spawn(line, [process.execPath, ...words.slice(1)]);
@@ -278,6 +288,13 @@ export class ScopeHost {
     return res;
   }
 
+  /** Delete a file as the agent's Bash `rm` would, with the guard before it. */
+  remove(rel: string): void {
+    const abs = join(this.proj, rel);
+    if (this.fullHost) this.preTool("Bash", { command: `rm ${shellQuote(abs)}` });
+    rmSync(abs, { force: true });
+  }
+
   /** `bun .claude/tools/aidlc.ts engine <args>`, the skill's dispatcher form. */
   engine(...args: string[]): RunResult {
     return this.bash(["bun", ".claude/tools/aidlc.ts", "engine", ...args].map(shellQuote).join(" "));
@@ -287,7 +304,7 @@ export class ScopeHost {
   write(rel: string, content: string): void {
     const abs = join(this.proj, rel);
     // Record files are the agent's own stage output; the guard watches code.
-    if (!RECORD_PREFIX.test(rel)) this.preTool("Write", { file_path: abs, content });
+    if (this.fullHost || !RECORD_PREFIX.test(rel)) this.preTool("Write", { file_path: abs, content });
     mkdirSync(dirname(abs), { recursive: true });
     const existed = existsSync(abs);
     writeFileSync(abs, content);
@@ -339,8 +356,15 @@ export class ScopeHost {
 
   /** The agent dispatches a subagent with the Task tool: the host's Task hooks. */
   task(agent: string, prompt: string, work: () => void): void {
-    const input = { subagent_type: agent, description: "stage work", prompt };
-    this.hook("deliver-stage-rules", { hook_event_name: "PreToolUse", tool_name: "Task", tool_input: input });
+    const asked = { subagent_type: agent, description: "stage work", prompt };
+    // As Claude Code does: exit 2 keeps the Task from starting, and an
+    // updatedInput is what the subagent gets.
+    const delivered = this.hook("deliver-stage-rules", { hook_event_name: "PreToolUse", tool_name: "Task", tool_input: asked });
+    if (delivered.status === 2) {
+      throw new ScopeRunStuck(`the Task hook kept ${agent} from starting: ${clip(delivered.stderr || delivered.stdout, 800)}`);
+    }
+    const updated = (parseJson(delivered.stdout)?.hookSpecificOutput as { updatedInput?: unknown } | undefined)?.updatedInput;
+    const input = updated && typeof updated === "object" ? { ...asked, ...(updated as Record<string, unknown>) } : asked;
     this.preTool("Task", input);
     work();
     this.hook("log-subagent", { hook_event_name: "SubagentStop", agent_type: agent, stop_hook_active: false });
@@ -428,7 +452,53 @@ export class PersonScript {
 // ---------------------------------------------------------------------------
 
 /** A step the run could not take: the message names it, the trace shows how it got there. */
-export class ScopeRunStuck extends Error {}
+export class ScopeRunStuck extends Error {
+  /** The run up to where it stuck, for a caller that reads what happened. */
+  run?: ScopeRun;
+}
+
+/** The engine or a guard refused a step; `refusal` is what it said. */
+export class ScopeRunRefused extends ScopeRunStuck {
+  constructor(message: string, readonly refusal: string) {
+    super(message);
+  }
+}
+
+/** A refusal came back after the stand-in took the step it named, or named none. */
+export class ScopeRunDeadlock extends ScopeRunStuck {
+  constructor(message: string, readonly refusal: string) {
+    super(message);
+  }
+}
+
+/** A refusal's identity across retries: its words without ids, digests, paths' hex or counts. */
+export function refusalSignature(said: string): string {
+  return said.split("\n")[0]
+    .replace(/[0-9a-f]{8,}/gi, "#")
+    .replace(/\d+/g, "#")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 300);
+}
+
+/** The guard-recovery ask a refusal carries on its last JSON line, when it has one. */
+export function recoveryAsk(said: string): Directive | null {
+  // The ask is a line of its own, the whole output, or a line inside an `error` string.
+  const whole = parseJson(said) as Directive | null;
+  const inner = typeof whole?.error === "string" ? whole.error : "";
+  for (const line of [...said.trim().split("\n"), ...inner.split("\n")].reverse()) {
+    const d = parseJson(line) as Directive | null;
+    if (d?.kind === "ask" && d.ask_type === "guard-recovery") return d;
+  }
+  return whole?.kind === "ask" && whole.ask_type === "guard-recovery" ? whole : null;
+}
+
+/**
+ * Remedies the stand-in can carry out, in the order its person prefers them.
+ * Any other remedy (request-changes needs feedback the scope run never gives)
+ * stops the run as the stand-in's limit, never as the engine's deadlock.
+ */
+const REMEDY_PREFERENCE = ["present-approval-gate", "start-recovery-review", "request-review"];
 
 /** Where the agent handed the turn to the person, and whether the Stop hook let it. */
 export interface Handoff {
@@ -482,6 +552,16 @@ export interface StandInOptions {
    * Return the directive the agent then acts on, or nothing to carry on.
    */
   afterApproval?: (stage: string, agent: AgentStandIn) => Directive | undefined;
+  /** Extra writes during a Unit's code generation; returns the paths to claim in its manifest. */
+  onCode?: (unit: string, agent: AgentStandIn) => string[];
+  /** After the person approves a Unit's checkpoint. */
+  afterCheckpoint?: (unit: string, kind: string, agent: AgentStandIn) => void;
+  /** After a stage's review verdict is recorded, before its completion. */
+  afterReview?: (stage: string, unit: string | null, agent: AgentStandIn) => void;
+  /** While a code plan's approval waits, before the person answers. */
+  beforePlanAnswer?: (unit: string | null, agent: AgentStandIn) => void;
+  /** Follow each refusal's named step instead of stopping (the guard matrix). */
+  followRefusals?: boolean;
 }
 
 /**
@@ -501,11 +581,27 @@ export class AgentStandIn {
   readonly directives: Directive[] = [];
   /** The run-stage directives whose stage body the stand-in ran. */
   readonly worked: Directive[] = [];
+  /** Follow a refusal's named step instead of stopping at it (the guard matrix). */
+  followRefusals = false;
+  /** Every refusal the run met, and the step taken after it. */
+  readonly refusalsMet: { said: string; signature: string; took: string }[] = [];
+  /** The last review pass recorded, per stage and Unit. */
+  private readonly reviews = new Map<string, { reviewer: string; iteration: number }>();
+  /** Checkpoint repairs already taken, by Unit and what was missing. */
+  readonly repaired = new Set<string>();
+  /** Steps an engine refusal sent the agent round by, outside the guards. */
+  readonly detours: string[] = [];
+  /** Every question put to the person, with the Unit in hand when it was asked. */
+  readonly asked: { what: string; stage: string; unit: string | null }[] = [];
+  private unitInHand: string | null = null;
+  /** Each Unit's code plan, as written. */
+  readonly plans = new Map<string, string>();
   readonly handoffs: Handoff[] = [];
   readonly started: string[] = [];
   readonly units: string[];
   answers: PersonAnswers;
   readonly afterApproval?: StandInOptions["afterApproval"];
+  readonly hooks: Pick<StandInOptions, "onCode" | "afterCheckpoint" | "afterReview" | "beforePlanAnswer">;
   private steps = 0;
   /** A directive a person move produced, acted on before the next `next`. */
   private pending: Directive | undefined;
@@ -521,6 +617,11 @@ export class AgentStandIn {
     this.answers = { ...PLAIN_ANSWERS, ...options.answers };
     this.units = options.units ?? ["core"];
     this.afterApproval = options.afterApproval;
+    this.hooks = {
+      onCode: options.onCode, afterCheckpoint: options.afterCheckpoint,
+      afterReview: options.afterReview, beforePlanAnswer: options.beforePlanAnswer,
+    };
+    this.followRefusals = options.followRefusals ?? false;
   }
 
   /**
@@ -553,6 +654,12 @@ export class AgentStandIn {
     throw new ScopeRunStuck(`${message}${shown}\n--- last host calls ---\n${tail}`);
   }
 
+  /** A refusal of a step the stand-in took: stop, carrying the engine's words. */
+  refused(step: string, said: string): never {
+    const tail = this.host.trace.slice(-25).join("\n");
+    throw new ScopeRunRefused(`${step} was refused: ${clip(said, 1500)}\n--- last host calls ---\n${tail}`, said);
+  }
+
   /** Kinds of hand-off whose turn-ending Stop check already ran, per phase. */
   private stopChecked = new Set<string>();
   /** Check every hand-off's Stop, not one per kind and phase. */
@@ -569,6 +676,7 @@ export class AgentStandIn {
    * tests/integration/t121-stop-hook-enforce.test.ts; here it is the wiring.
    */
   askPerson(what: string, stage: string, question: string, options: string[], words: string): string {
+    this.asked.push({ what, stage, unit: this.unitInHand });
     const phase = sourceStage(stage)?.phase ?? "";
     const key = `${what} ${phase}`;
     if (this.checkEveryStop || !this.stopChecked.has(key)) {
@@ -584,10 +692,18 @@ export class AgentStandIn {
   must(...args: string[]): Record<string, unknown> {
     const res = this.host.engine(...args);
     const out = parseJson(res.stdout);
-    if (res.status !== 0 || out?.kind === "error") {
-      this.fail(`engine ${args.slice(0, 3).join(" ")} was refused (${res.status}): ${clip(res.stdout + res.stderr, 1200)}`);
+    if (res.status !== 0 || out?.kind === "error" || out?.kind === "ask") {
+      this.refused(`engine ${args.slice(0, 3).join(" ")}`, `${res.stdout}${res.stderr}`);
     }
+    this.heard(out);
     return out ?? {};
+  }
+
+  /** Lines the engine hands the agent to tell the person about a change. */
+  readonly notices: string[] = [];
+  heard(out: Record<string, unknown> | null | undefined): void {
+    const lines = out?.change_notices;
+    if (Array.isArray(lines)) this.notices.push(...lines.map(String));
   }
 
   /**
@@ -599,8 +715,9 @@ export class AgentStandIn {
     const res = this.host.engine("orchestrate", "report", "--stage", stage, ...args);
     const out = parseJson(res.stdout);
     if (res.status !== 0 || !out || (out.kind !== "print" && out.kind !== "done")) {
-      this.fail(`report ${stage} ${args.join(" ")} was refused (${res.status}): ${clip(res.stdout + res.stderr, 1500)}`);
+      this.refused(`report ${stage} ${args.join(" ")}`, `${res.stdout}${res.stderr}`);
     }
+    this.heard(out);
     return out;
   }
 
@@ -612,6 +729,7 @@ export class AgentStandIn {
       if (!d) this.fail(`next printed no directive (${res.status}): ${clip(res.stdout + res.stderr, 1200)}`);
       if (d.kind !== "load-steering") {
         this.directives.push(d);
+        this.heard(d);
         return d;
       }
       const cont = typeof d.next === "string" ? d.next : null;
@@ -636,7 +754,21 @@ export class AgentStandIn {
       const create = /`(bun \.claude\/tools\/aidlc\.ts engine intent create [^`]+)`/.exec(message);
       if (!create) break;
       const line = create[1].replace(/--label "[^"]*"/, '--label "scope run"');
-      const res = this.host.bash(line);
+      let res = this.host.bash(line);
+      const said = res.stdout + res.stderr;
+      // Plan approval off is the person's own call: create refuses the flag and
+      // names the setting command, which takes a reply from the person after
+      // the work exists. So they say it again, and the agent runs it.
+      const setting = /`(bun \.claude\/tools\/aidlc-utility\.ts config-change --guard\.plan-approval off)`/.exec(said)?.[1];
+      if (res.status !== 0 && setting && /\s--plan-approval off\b/.test(line)) {
+        this.detours.push("plan approval off typed with the request: the person had to say it again");
+        res = this.host.bash(line.replace(/\s--plan-approval off\b/, ""));
+        if (res.status === 0) {
+          this.person.say("turn plan approval off for this");
+          const set = this.host.bash(setting);
+          if (set.status !== 0) this.fail(`${setting} failed: ${clip(set.stdout + set.stderr, 1200)}`, d);
+        }
+      }
       if (res.status !== 0) this.fail(`intent create failed: ${clip(res.stdout + res.stderr, 1200)}`, d);
       d = this.next();
     }
@@ -652,7 +784,95 @@ export class AgentStandIn {
       const key = `${String(d.kind)} ${String(d.stage ?? d.ask_type ?? "")} ${String(d.unit ?? "")} ${JSON.stringify(d.construction_checkpoint ?? d.plan_approval ?? d.gate ?? "")}`;
       const times = (seen.get(key) ?? 0) + 1;
       seen.set(key, times);
-      if (times > 3) this.fail(`the same step came back ${times} times without progress`, d);
+      if (times > 3) {
+        const why = `the same step came back ${times} times without progress`;
+        if (this.followRefusals && this.refusalsMet.length > 0) throw new ScopeRunDeadlock(why, this.refusalsMet.at(-1)!.said);
+        this.fail(why, d);
+      }
+      try {
+        this.step(d);
+      } catch (error) {
+        if (!(error instanceof ScopeRunRefused) || error instanceof ScopeRunDeadlock || !this.followRefusals) throw error;
+        this.followRefusal(error.refusal);
+      }
+      if (d.kind === "done" && d.workflow_continues !== true && !this.pending) return d;
+      d = this.pending ?? this.next();
+      this.pending = undefined;
+    }
+  }
+
+  /**
+   * Take the step a refusal names, as an agent and the person would: the
+   * person picks a remedy the engine offers now, or the agent runs the one
+   * command it names; then `next` again. A refusal that names no step, or comes
+   * back after its step was taken, is a dead end for the person.
+   */
+  followRefusal(said: string): void {
+    const signature = refusalSignature(said);
+    if (this.refusalsMet.some((r) => r.signature === signature)) {
+      this.refusalsMet.push({ said, signature, took: "none: it came back" });
+      throw new ScopeRunDeadlock(`a refusal came back after its step was taken: ${clip(said, 800)}`, said);
+    }
+    const ask = recoveryAsk(said);
+    if (ask) {
+      const remedies = ((ask.remedies as { op: string; executableNow?: boolean; interaction?: string; command?: string }[] | undefined) ?? [])
+        .filter((r) => r.executableNow === true);
+      if (remedies.length === 0) {
+        this.refusalsMet.push({ said, signature, took: "none: no remedy can be taken now" });
+        throw new ScopeRunDeadlock(`a refusal offered no remedy that can be taken now: ${clip(said, 800)}`, said);
+      }
+      const remedy = remedies.filter((r) => REMEDY_PREFERENCE.includes(r.op))
+        .sort((a, b) => REMEDY_PREFERENCE.indexOf(a.op) - REMEDY_PREFERENCE.indexOf(b.op))[0];
+      if (!remedy) {
+        this.refusalsMet.push({ said, signature, took: "none: no remedy the stand-in can carry out" });
+        this.fail(`a refusal offered only remedies the stand-in cannot carry out (${remedies.map((r) => r.op).join(", ")}): ${clip(said, 800)}`);
+      }
+      const stage = String(ask.stage ?? "");
+      const unit = typeof ask.unit === "string" ? ask.unit : null;
+      this.askPerson("guard recovery", stage, String(ask.question ?? ""), remedies.map((r) => r.op), remedy.op);
+      this.must("log", "answer", "--stage", stage, "--checkpoint", "guard-recovery", "--details", remedy.op,
+        ...(unit ? ["--unit", unit] : []));
+      this.refusalsMet.push({ said, signature, took: `remedy ${remedy.op}` });
+      // The remedy's interaction, as the skill's guard-recovery execution says.
+      // A step the remedy takes that is refused in turn is followed the same way.
+      try {
+        if (remedy.interaction === "command") {
+          if (!remedy.command) this.fail(`remedy ${remedy.op} is a command with no command`);
+          const ran = this.host.bash(remedy.command);
+          if (ran.status !== 0) this.refused(`remedy ${remedy.op}`, `${ran.stdout}${ran.stderr}`);
+          const out = parseJson(ran.stdout) as Directive | null;
+          if (out && typeof out.kind === "string" && out.kind !== "print" && out.kind !== "done") this.pending = out;
+        } else if (remedy.op === "start-recovery-review" || remedy.op === "request-review") {
+          this.reviewAgain(stage, unit);
+        } else if (remedy.op === "present-approval-gate") {
+          // Its route after the pick: the stage's gate opens for the person.
+          this.report(stage, "--result", "awaiting-approval");
+        }
+      } catch (error) {
+        if (!(error instanceof ScopeRunRefused) || error instanceof ScopeRunDeadlock) throw error;
+        this.followRefusal(error.refusal);
+      }
+      return;
+    }
+    const named = /`(bun \.claude\/tools\/[^`<>]+)`/.exec(said)?.[1];
+    if (named && !/\borchestrate(?:\.ts)? next\b/.test(named)) {
+      const ran = this.host.bash(named);
+      this.refusalsMet.push({ said, signature, took: named });
+      if (ran.status !== 0) this.refused(named, `${ran.stdout}${ran.stderr}`);
+      return;
+    }
+    if (named) {
+      this.refusalsMet.push({ said, signature, took: "next" });
+      return;
+    }
+    this.refusalsMet.push({ said, signature, took: "none: it named no step" });
+    throw new ScopeRunDeadlock(`a refusal named no step to take: ${clip(said, 800)}`, said);
+  }
+
+  /** One directive's work. */
+  private step(d: Directive): void {
+      const cp = d.construction_checkpoint as { unit?: unknown } | undefined;
+      this.unitInHand = typeof d.unit === "string" ? d.unit : typeof cp?.unit === "string" ? cp.unit : null;
       switch (d.kind) {
         case "run-stage":
           this.runStage(d);
@@ -661,7 +881,7 @@ export class AgentStandIn {
           this.ask(d);
           break;
         case "done":
-          if (d.workflow_continues !== true) return d;
+          // The end of the run, or a recorded step the next `next` follows.
           break;
         case "print": {
           // A print mid-run names one command to run exactly as given, then
@@ -679,9 +899,6 @@ export class AgentStandIn {
         default:
           this.fail(`no stand-in step for directive kind ${String(d.kind)}`, d);
       }
-      d = this.pending ?? this.next();
-      this.pending = undefined;
-    }
   }
 
   // --- stages -------------------------------------------------------------
@@ -788,11 +1005,22 @@ export class AgentStandIn {
       this.must("state", "set-construction-verification-command", "--command-file", "verification-command.txt");
       return;
     }
+    if (cp.ready !== true) {
+      // The protocol's repair for stale review evidence is one recovery review
+      // at the next pass; anything else, or a second time, is the engine's.
+      const errors = (cp.errors as string[] | undefined) ?? [];
+      const said = JSON.stringify({ error: `Construction checkpoint is not ready: ${errors.join(" ")}` });
+      const stale = errors.filter((e) => /review evidence/.test(e)).map((e) => e.split(":")[0]);
+      const repair = `${unit} ${errors.join(" ")}`;
+      if (stale.length === 0 || this.repaired.has(repair)) this.refused(`the ${unit} checkpoint`, said);
+      this.repaired.add(repair);
+      for (const reviewed of stale) this.reviewAgain(reviewed, unit);
+      return;
+    }
     if (cp.verified !== true) {
       this.must("bolt", "checkpoint", "--action", "verify", "--unit", unit, "--kind", kind);
       return;
     }
-    if (cp.ready !== true) this.fail(`checkpoint for ${unit} is not ready: ${clip(JSON.stringify(cp.errors ?? []))}`, d);
     if (cp.human_required === false) {
       this.must("bolt", "checkpoint", "--action", "approve", "--unit", unit, "--kind", kind);
       return;
@@ -802,8 +1030,14 @@ export class AgentStandIn {
     const words = this.answers.checkpoint(unit, kind);
     this.askPerson(`${kind} checkpoint`, stage, `Verified with \`bun test test/\` (exit 0). Approve this completed ${unit}?`,
       ["Approve", "Request Changes"], words);
+    if (/\breview/i.test(words) && !/^approve\b/i.test(words)) {
+      // The person asks for another review before they decide.
+      for (const reviewed of (cp.stages as string[] | undefined) ?? [stage]) this.reviewAgain(reviewed, unit);
+      return;
+    }
     this.must("bolt", "checkpoint", "--action", "approve", "--unit", unit, "--kind", kind,
       "--session", session, "--user-input", "Approve");
+    this.hooks.afterCheckpoint?.(unit, kind, this);
   }
 
   /**
@@ -906,13 +1140,35 @@ export class AgentStandIn {
 
   review(d: Directive): void {
     const stage = String(d.stage);
-    const reviewer = String(d.reviewer);
-    const unit = typeof d.unit === "string" ? ["--unit", d.unit] : [];
-    const request = this.must("log", "review", "--stage", stage, "--reviewer", reviewer, "--iteration", "1", ...unit);
+    const unit = typeof d.unit === "string" ? d.unit : null;
+    this.reviewPass(stage, unit, String(d.reviewer), 1);
+    this.hooks.afterReview?.(stage, unit, this);
+  }
+
+  /**
+   * Another review pass after the last one: the repair a stale receipt asks
+   * for, or a second look the person asked for.
+   */
+  reviewAgain(stage: string, unit: string | null): void {
+    const last = this.reviews.get(`${stage} ${unit ?? ""}`);
+    if (!last) this.fail(`${stage} needs a fresh review, but it was never reviewed`);
+    this.reviewPass(stage, unit, last.reviewer, last.iteration + 1);
+  }
+
+  private reviewPass(stage: string, unit: string | null, reviewer: string, iteration: number): void {
+    const forUnit = unit === null ? [] : ["--unit", unit];
+    const pass = String(iteration);
+    const request = this.must("log", "review", "--stage", stage, "--reviewer", reviewer, "--iteration", pass, ...forUnit);
     const file = typeof request.reviewFile === "string" ? request.reviewFile : null;
-    if (!file) this.fail("review request named no review file", d);
-    this.host.task(reviewer, `Review ${stage}`, () => this.host.write(file, reviewText(reviewer)));
-    this.must("log", "review", "--stage", stage, "--reviewer", reviewer, "--iteration", "1", "--verdict", "READY", ...unit);
+    if (!file) this.fail("review request named no review file");
+    // A per-Unit review on a host with reviewer-scope enforcement writes its
+    // dispatch record before the reviewer starts and deletes it after.
+    const dispatch = this.host.fullHost && unit !== null ? `${activeRecord(this.host.proj).dir.slice(this.host.proj.length + 1)}/.aidlc-engine/reviewer-dispatch.json` : null;
+    if (dispatch) this.host.write(dispatch, `${JSON.stringify({ reviewer, stage, unit, exempt: [] })}\n`);
+    this.host.task(reviewer, `Review ${stage}`, () => this.host.write(file, reviewText(reviewer, iteration)));
+    if (dispatch) this.host.remove(dispatch);
+    this.must("log", "review", "--stage", stage, "--reviewer", reviewer, "--iteration", pass, "--verdict", "READY", ...forUnit);
+    this.reviews.set(`${stage} ${unit ?? ""}`, { reviewer, iteration });
   }
 
   learnings(d: Directive): void {
@@ -935,11 +1191,7 @@ export class AgentStandIn {
     if (d.gate_only !== true) this.report(stage, "--result", "awaiting-approval");
     if (this.answers.stopAt?.(stage) && !this.stopped.has(stage)) {
       this.stopped.add(stage);
-      this.person.say("let's stop here for today");
-      const parked = this.must("orchestrate", "park");
-      this.parks.push(parked as Directive);
-      this.host.newSession();
-      this.pending = this.personTypes("/aidlc --resume");
+      this.stopForTheDay();
       return;
     }
     const words = this.answers.approve(stage, typeof d.unit === "string" ? d.unit : null);
@@ -949,6 +1201,19 @@ export class AgentStandIn {
     if (stage === "practices-discovery") this.promotePractices(d);
     this.report(stage, "--result", "approved", "--user-input", choice);
     this.pending = this.afterApproval?.(stage, this);
+  }
+
+  /**
+   * The person stops for the day: the agent parks, `meanwhile` runs while no
+   * one is in the work, and a new chat picks it up with `/aidlc --resume`.
+   */
+  stopForTheDay(meanwhile?: () => void): void {
+    this.person.say("let's stop here for today");
+    const parked = this.must("orchestrate", "park");
+    this.parks.push(parked as Directive);
+    meanwhile?.();
+    this.host.newSession();
+    this.pending = this.personTypes("/aidlc --resume");
   }
 
   // --- code generation ----------------------------------------------------
@@ -962,6 +1227,7 @@ export class AgentStandIn {
     if (contract.status !== 0) this.fail(`testing posture render failed: ${clip(contract.stderr)}`, d);
     this.host.write(planPath, codePlanText(contract.stdout));
     const name = typeof d.unit === "string" ? d.unit : "scope-run";
+    this.plans.set(name, planPath);
     this.host.write(tests, `# Unit Test Instructions\n\n- Run: \`bun test test/${name}.test.ts\`\n`);
   }
 
@@ -998,10 +1264,12 @@ export class AgentStandIn {
       }, null, 2)}\n`);
     }
     if (unit) {
+      const extra = this.hooks.onCode?.(unit, this) ?? [];
       const { intent, space } = activeRecord(this.host.proj);
+      const writes = [source, test, ...extra].map((path) => ({ path }));
       this.host.write(
         `aidlc/spaces/${space}/intents/${intent}/construction/${unit}/code-generation/source-manifest.json`,
-        `${JSON.stringify({ stage: "code-generation", unit, version: 1, writes: [{ path: source }, { path: test }] }, null, 2)}\n`,
+        `${JSON.stringify({ stage: "code-generation", unit, version: 1, writes }, null, 2)}\n`,
       );
     }
   }
@@ -1014,6 +1282,7 @@ export class AgentStandIn {
       const unit = typeof d.unit === "string" ? d.unit : null;
       const question = String(d.question ?? d.prompt ?? "Approve the code plan?");
       const offered = ((d.options as { label?: string }[] | undefined) ?? []).map((o) => String(o.label ?? o));
+      this.hooks.beforePlanAnswer?.(unit, this);
       this.askPerson("plan approval", "code-generation", question,
         offered.length ? offered : ["Approve Plan", "Request Changes"], this.answers.plan(unit));
       return;
@@ -1150,8 +1419,8 @@ function codekbText(name: string, intent: string, fingerprint: string): string {
   return text;
 }
 
-function reviewText(reviewer: string): string {
-  return `## Review\n\n**Verdict:** READY\n**Reviewer:** ${reviewer}\n**Date:** 2026-01-01T00:00:00Z\n**Iteration:** 1\n\n### Findings\n\n**Prior findings**\n\n| ID | Now | Severity | Note |\n|---|---|---|---|\n\n**New findings**\n\n| Severity | Location | Finding | Required action |\n|---|---|---|---|\n\n### Summary\n\nReady.\n`;
+function reviewText(reviewer: string, iteration = 1): string {
+  return `## Review\n\n**Verdict:** READY\n**Reviewer:** ${reviewer}\n**Date:** 2026-01-01T00:00:00Z\n**Iteration:** ${iteration}\n\n### Findings\n\n**Prior findings**\n\n| ID | Now | Severity | Note |\n|---|---|---|---|\n\n**New findings**\n\n| Severity | Location | Finding | Required action |\n|---|---|---|---|\n\n### Summary\n\nReady.\n`;
 }
 
 function codePlanText(contract: string): string {
@@ -1185,6 +1454,11 @@ export interface ScopeRunOptions extends StandInOptions {
   /** Flags typed with the request, after `--scope <scope>`. */
   flags?: string[];
   request?: string;
+  /** A scope that does not ship (composed, or from a plugin): its file, and how it gets into the project. */
+  scopeFile?: string;
+  /** Run the host as Claude Code does in full (see ScopeHost.fullHost). */
+  fullHost?: boolean;
+  prepare?: (proj: string) => void;
 }
 
 export interface ScopeRun {
@@ -1201,15 +1475,24 @@ export interface ScopeRun {
 
 /** Drive one shipped scope from the person's first request to done. */
 export function runScope(scope: string, options: ScopeRunOptions = {}): ScopeRun {
-  const declared = declaredScope(scope);
+  const declared = declaredScope(scope, options.scopeFile);
   const shape = options.shape ?? (declared.existingCode ? "code" : "empty");
   const { proj, host } = createScopeProject(shape);
+  host.fullHost = options.fullHost ?? false;
+  options.prepare?.(proj);
   const person = new PersonScript(host);
   const agent = new AgentStandIn(host, person, options);
   const started = Date.now();
-  const first = agent.begin(options.request ?? `build the ${scope} work`, ["--scope", scope, ...(options.flags ?? [])]);
-  const final = agent.drive(first);
-  return { scope, declared, shape, proj, host, person, agent, final, ms: Date.now() - started };
+  try {
+    const first = agent.begin(options.request ?? `build the ${scope} work`, ["--scope", scope, ...(options.flags ?? [])]);
+    const final = agent.drive(first);
+    return { scope, declared, shape, proj, host, person, agent, final, ms: Date.now() - started };
+  } catch (error) {
+    if (error instanceof ScopeRunStuck) {
+      error.run = { scope, declared, shape, proj, host, person, agent, final: agent.directives.at(-1) ?? {}, ms: Date.now() - started };
+    }
+    throw error;
+  }
 }
 
 /**
@@ -1306,12 +1589,22 @@ export function scopeRunProblems(run: ScopeRun, options: ProblemOptions = {}): s
 /** A whole scope run takes minutes, and several times longer on Windows. */
 export const SCOPE_RUN_TIMEOUT_MS = 60 * 60_000;
 
+/** A scratch directory the file's cleanup removes with its projects. */
+export function scopeScratchDir(prefix: string): string {
+  const dir = mkdtempSync(join(tmpdir(), prefix));
+  projects.push(dir);
+  return dir;
+}
+
+/** Remove every project this file's runs made. */
+export function cleanupScopeProjects(): void {
+  while (projects.length > 0) cleanupTestProject(projects.pop());
+}
+
 /** The test a scope-run file declares: one run, every check. */
 export function scopeRunSuite(scope: string, options: ScopeRunOptions = {}): void {
   describe(`the ${scope} scope, from the person's first request to done`, () => {
-    afterAll(() => {
-      while (projects.length > 0) cleanupTestProject(projects.pop());
-    });
+    afterAll(cleanupScopeProjects);
     test("runs its stages, asks the person at every gate, keeps its switches, and ends done", () => {
       const run = runScope(scope, options);
       const problems = scopeRunProblems(run);

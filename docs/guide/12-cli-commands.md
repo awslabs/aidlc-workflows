@@ -193,11 +193,11 @@ Describe what you want to build and the engine auto-detects the appropriate scop
 
 **Behavior:** The engine analyzes keywords in your description (e.g., "fix" suggests bugfix). A clear match asks a one-line confirm naming the MATCHED scope and its effective ceremony (stage count, approval-gate count, and any per-unit fan-out, all from the compiled grid). Greenfield work excludes reverse engineering, and a per-unit clause appears only when `units-generation` runs and creates a Unit DAG. Rich or unmatched prose gets the compose offer (see `/aidlc compose` below) instead of a silent default. You confirm or override before the workflow begins.
 
-**Example** (a new project; on an existing codebase bugfix also runs Reverse Engineering, so the line says 9 of 33 stages and 6 approval gates):
+**Example** (a new project; on an existing codebase bugfix also runs Reverse Engineering, so the line says 6 stages and 6 approval gates):
 
 ```
 /aidlc Fix the ProfileSerializer null pointer
-> This looks like "bugfix" work, so I'd run the "bugfix" plan for: "Fix the ProfileSerializer null pointer" - 8 of 33 stages, 5 approval gates; no learnings ritual or summary confirmation; lead agent only. Say go ahead, name a different plan, or say "compose" and I'll tailor one to this task.
+> This looks like "bugfix" work, so I'd run the "bugfix" plan for: "Fix the ProfileSerializer null pointer" - 5 stages, 5 approval gates; no learnings ritual or summary confirmation; lead agent only. Say go ahead, name a different plan, or say "compose" and I'll tailor one to this task.
 ```
 
 **A request no shell can carry.** On Windows, cmd.exe ends a command at a line
@@ -671,7 +671,8 @@ asks what you want to change there, offering that section's choices and leaving
 it unchanged, even when the section is already clean.
 
 The conductor reads current state with
-`aidlc config <section> --show --json`, asks for changes conversationally, and
+`aidlc config <section> --show --json` (`aidlc config --show --json` reads every
+section at once), asks for changes conversationally, and
 uses the native question picker for enumerable choices. Saying "leave it"
 skips that section. Every accepted change lands through one exact
 `aidlc config <section> <explicit value flags> --yes` command; the command and
@@ -708,7 +709,7 @@ When a workflow has issues, `--doctor` also prints a **Workflow diagnosis** sect
 |-------|-------------------|
 | Prerequisites | Self-contained binary, or `bun` on PATH for a copy install |
 | Installed runtime | Active machine version and installed harness distributions, when using the binary channel |
-| Project stamp | Project distribution/version compared with the selected engine |
+| Project stamp | Project distribution/version compared with the engine that serves the project: the release `.aidlc-version` pins, or else the running release |
 | Hook presence | Every framework hook wired by `settings.json` exists in `.claude/hooks/`; a wired-but-missing hook fails loudly. A valid custom non-AI-DLC `statusLine` intentionally leaves `aidlc-statusline.ts` unwired and is exempt. Sourcing the expected roster from `settings.json` means adding a hook there auto-checks it |
 | Hooks enabled (Claude Code) | `disableAllHooks: true` is not the resolved value across Claude Code's settings layers (enterprise managed file plus alphabetical `managed-settings.d/` fragments → `.claude/settings.local.json` → `.claude/settings.json` → `~/.claude/settings.json`, highest-precedence definition wins). A resolved `true` silently skips every present hook, so it fails loudly and names the layer |
 | Project structure | `.claude/settings.json` exists (file presence only, no content validation) |
@@ -1222,9 +1223,16 @@ starts next: `Guard Policy relaxed for the piece of work you start now (set by y
 Typed with a request, it goes with that request
 (`Guard Policy relaxed for the work you are asking for (set by you).`): new work
 takes it at creation, and continuing open work applies it there; the message
-alone never changes open work. A fence switch with no state file receives:
-`Guard Policy relaxed and fence switches apply to a piece of work: create it, then type this again.`
-The `off` form names `off` instead of `relaxed`.
+alone never changes open work. The `off` form names `off` instead of `relaxed`.
+A fence switch (`guard.<fence> off`) works the same way:
+`The review freeze check is off for the piece of work you start now (set by you).`
+before the work exists, and
+`The review freeze check is off for the work you are asking for (set by you).`
+typed with a request. The one exception is while the code plan question
+is open and the person is not editing the plan files: then a setting typed with
+words is for this work, and the words are the reply to that question
+(`/aidlc --guard-policy off approve the plan`). Words after an unquoted `--`
+still describe new work.
 Hooks run on Windows too, so the typed switch works on every harness that
 forwards the prompt without a setter-side session lookup.
 An unrelated reply opens nothing, and `AIDLC_UNATTENDED=1` suppresses prompt-time
@@ -1383,8 +1391,10 @@ Asking in your own words, or picking a guard's `lower-fence` choice, works too:
 the agent runs the setter for that fence and says in one line what changed.
 Both forms accept `--intent <name>` and `--space <name>`; omitted selectors use
 the hook payload session's workflow selection.
-A nonexistent named intent is refused, and a selection without a state file
-must be created before the person types the switch again.
+A nonexistent named intent is refused. With no state file yet, the switch is
+kept for the piece of work this chat starts next; typed with a request
+(`/aidlc --guard.<fence> off <description>`), it goes with that request and
+never changes the open work.
 The CLI setters lower a fence when a person's turn is on record since the last
 decision (an empty ledger does not count); an already-off fence is a no-op and
 needs no key.
@@ -1464,7 +1474,8 @@ and do not enforce this scope comparison.
 
 An explicit ceremony setting writes `<value> (set by a command)` to the
 corresponding state line, or `<value> (set by you)` when the human-turn hook
-applies the person's typed switch, and adds a `CEREMONY_SET` row to the shared
+applies the person's typed switch or the setter turns off a check the person
+asked in the chat to turn off, and adds a `CEREMONY_SET` row to the shared
 audit batch with `Key`, `Old`, `New`, and `Source`.
 `Old` is the previously saved value (raw text if invalid; the scope default
 when no line existed), not a value forced off by an environment kill switch.
@@ -1561,8 +1572,8 @@ that turns it back on, for example:
 
 > The review freeze check is off for this project since 10:42, because you said: "turn the review freeze check off for this project". Say "turn it back on" to restore it (aidlc config flags --clear-bypass AIDLC_DISABLE_REVIEW_FREEZE_HOOK --yes).
 
-When no message of yours in the chat stood behind it, the line says `set from a
-terminal or a file, not from your chat` instead. Every new chat opens with the
+When the engine cannot tie it to a message of yours in the chat, the line says
+only that the check is off and since when. Every new chat opens with the
 same line while the check stays off (except on opencode, which shows no
 session-start context), and `config flags --show` and the doctor Flags row (a
 warning, which does not change doctor's exit code) list it. Say "turn it back
@@ -2568,6 +2579,8 @@ bun .claude/tools/aidlc-graph.ts ars --iae 0.30 --csu 0.80 --ve 0.40 --r 0.20 --
 ### `aidlc-graph validate-grid` - arbitrary-grid dependency check
 
 `bun .claude/tools/aidlc-graph.ts validate-grid [--proposal <path>] [--strict] [--project-type <t>] [--keywords <csv>] [--guard-policy <strict|relaxed|off>] [--matched <stock-scope> | --custom]` validates an arbitrary `{"<stage>": "EXECUTE"|"SKIP"}` JSON grid. Without `--proposal` it reads the composer's proposal file, the `proposalPath` that `detect --json` prints. The proposal must name every compiled stage exactly once; missing stages, unknown stages, and invalid actions are errors. Lenient mode mirrors `validate-scope` (an off-path required producer is advisory); `--strict` hard-rejects it (the recompose posture). `--keywords` checks each granted keyword against the keywords existing scopes already claim: a collision is a hard error naming the incumbent scope (the composer runs this before the gate when keywords are granted, and `scope save --keywords` runs the same check). `--guard-policy` (or a `guardPolicy` member beside `stages`; the retired `--change-control` flag and `changeControl` member still resolve) checks the composer's proposed Guard Policy value: anything but `strict`, `relaxed`, or `off` is an error, a `relaxed` or `off` proposal under a memory layer's `Mode: strict` is refused naming that file, and the accepted value is echoed as both `guard_policy` and `change_control`. A `scopeSettings` member beside `stages` checks the composer's six scope settings: it must name exactly `sensors`, `learnings`, `summary_confirmation`, `plan_approval`, and `collaborators` (each `on` or `off`) and `review_cap` (`adversarial`, `advisory`, or `none`); an unknown key, a missing key, or any other word is an error. The accepted values are echoed as `scope_settings`, and `summary.off` lists what they switch off. `--matched <stock-scope>` or `--custom` names the composer's route for a front/report proposal: either one requires `scopeSettings` and a Guard Policy. Neither route writes a scope file. `--matched` rejects a grid that differs from that stock scope and a Guard Policy below its default (a stricter value is one creation applies); any setting may differ, and a passing run echoes `routing`, `matched_scope`, and `creation_settings`, the typed changes applied to this piece of work at creation (for example `{"learnings": "off", "review": "adversarial"}`). `--custom` picks the stock scope the plan runs on, the nearest one whose Guard Policy default is the proposal's or lower (any one for `strict`) and that adds nothing the gate does not show (no walking skeleton, and no test strategy other than the plan's depth); with `--project-type greenfield` it prefers one meant for new work over a scope marked `existing_code: true` (`bugfix`, `refactor`, and `security-patch` ship marked) whenever one qualifies, and a passing run echoes `routing`, `base_scope`, `plan_changes` (the `skip` and `add` stage lists that turn that scope's grid into the plan), `creation_settings` against that scope, and `creation_depth` when the proposal's `depth` member differs from that scope's; it requires that `depth` member (`minimal`, `standard`, or `comprehensive`) and rejects a Guard Policy that no stock scope defaults to or below, and a plan that skips an initialization stage. Every run without `--matched` also echoes `custom_start`, the `guard_policy` and `scope_settings` a custom plan starts from: the `classic` scope's, whichever stock scope the plan runs on (omitted when `classic` is not an enabled scope). Any `on` ceremony that a kill switch (`AIDLC_DISABLE_*`, set or recorded) forces off on this machine gets an advisory too, since the scope stores `on` but the ceremony will not run. The result also carries `nearest_stock`: every graph/plugin-authored stock scope ranked by grid distance from the proposal (`{scope, diff, differs}` ascending, composer-authored scopes excluded), so the composer's matched-vs-custom verdict is the validator's number rather than an LLM recount.
+
+The `summary` counts the stages and approval gates the plan runs; its `shown` count, the stages after Initialization, is the number every line the person reads uses. With `--project-type greenfield` it leaves out Reverse Engineering, which creation skips on a new project, so the counts the plan offer shows are the ones creation prints.
 
 ### `aidlc-sensor` — inspect and fire Sensors
 

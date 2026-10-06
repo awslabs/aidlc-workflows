@@ -451,7 +451,7 @@ function applyReviewBody(
   artifact: string,
   unit: string | undefined,
   body: string,
-): { findings: ReviewFinding[]; malformed: boolean } {
+): { findings: ReviewFinding[]; malformed: boolean; priorMissing: boolean } {
   const report = parseReviewerFindingsReport(body);
   if (report !== null) {
     const duplicatePrior = new Set<string>();
@@ -475,7 +475,7 @@ function applyReviewBody(
       if (row.suppliedId && seenPrior.has(row.suppliedId)) malformed = true;
       next.push(reportNewFinding(next, artifact, unit, row));
     }
-    return { findings: next, malformed };
+    return { findings: next, malformed, priorMissing: report.priorMissing === true };
   }
 
   // Transition read of the six-column table: a row with a known ID is an
@@ -568,7 +568,7 @@ function applyReviewBody(
       ),
     );
   }
-  return { findings: next, malformed: malformed || prior.malformed };
+  return { findings: next, malformed: malformed || prior.malformed, priorMissing: false };
 }
 
 function parsedDispositions(block: string): ReviewFindingDisposition[] {
@@ -1003,6 +1003,11 @@ export function deriveReviewFindingsList(
       }
     } else {
       try {
+        // A first review (no review record and no findings yet in this list)
+        // has no prior findings to report, so a report that leaves out the
+        // empty Prior findings table reads the same. A later one must say
+        // what became of the open findings.
+        const firstReview = latestRef === undefined && findings.length === 0;
         const applied = applyReviewBody(
           findings,
           pending.artifact,
@@ -1010,7 +1015,7 @@ export function deriveReviewFindingsList(
           pending.body,
         );
         findings = applied.findings;
-        if (applied.malformed && !pending.allowMalformed) {
+        if ((applied.malformed || (applied.priorMissing && !firstReview)) && !pending.allowMalformed) {
           malformedReport = REVIEW_FINDINGS_REPORT_RETRY_MESSAGE;
         }
       } catch {
@@ -1457,9 +1462,27 @@ const PRIOR_FINDINGS_AS_DATA =
  * Render the complete engine list for a gate, or only open and settled
  * decision context for the next reviewer.
  */
+// Where a finding is, short enough for a table cell: the file name and the
+// section, not the whole path.
+const SHORT_CELL_MAX = 48;
+function shortCell(text: string): string {
+  return text.length > SHORT_CELL_MAX ? `${text.slice(0, SHORT_CELL_MAX - 3).trimEnd()}...` : text;
+}
+function whereText(location: string): string {
+  const [path, ...rest] = location.split(" > ");
+  const file = path.split("/").filter((part) => part.length > 0).at(-1) ?? path;
+  return [file, ...rest].join(" > ");
+}
+function shortWhere(location: string): string {
+  return shortCell(whereText(location));
+}
+
+// `gate` is what the person reads before they decide: a narrow table that stays
+// a table in a terminal, with each finding's full text on lines of its own.
+// `copy` is the readable review copy beside the record, with every column.
 export function renderFindingsContext(
   contexts: ReviewArtifactContext[],
-  audience: "gate" | "reviewer" = "gate",
+  audience: "gate" | "copy" | "reviewer" = "gate",
 ): string {
   if (contexts.length === 0) return "_No review findings were recorded._";
   const reviewer = audience === "reviewer";
@@ -1525,25 +1548,52 @@ export function renderFindingsContext(
       lines.push("");
       continue;
     }
-    lines.push(
-      "| ID | Severity | Location | Finding | Required action | Status |",
-      "|---|---|---|---|---|---|",
-    );
-    for (const finding of context.findings) {
-      const displayFinding = finding.relatedFindingId
+    const displayFinding = (finding: ReviewFinding): string =>
+      finding.relatedFindingId
         ? `${finding.finding} (worse than ${finding.relatedFindingId})`
         : finding.finding;
-      const displayStatus = finding.resolvedByReviewer
-        ? "Resolved (reviewer)"
-        : finding.status;
+    const displayStatus = (finding: ReviewFinding): string =>
+      finding.resolvedByReviewer ? "Resolved (reviewer)" : finding.status;
+    if (audience === "copy") {
       lines.push(
-        `| ${markdownCell(finding.id)} | ${markdownCell(finding.severity)} | ` +
-          `${markdownCell(finding.location)} | ${markdownCell(displayFinding)} | ` +
-          `${markdownCell(finding.requiredAction)} | ${markdownCell(displayStatus)} |`,
+        "| ID | Severity | Location | Finding | Required action | Status |",
+        "|---|---|---|---|---|---|",
       );
-    }
-    if (context.findings.length === 0) {
-      lines.push("| - | - | - | No findings | No action required | Resolved |");
+      for (const finding of context.findings) {
+        lines.push(
+          `| ${markdownCell(finding.id)} | ${markdownCell(finding.severity)} | ` +
+            `${markdownCell(finding.location)} | ${markdownCell(displayFinding(finding))} | ` +
+            `${markdownCell(finding.requiredAction)} | ${markdownCell(displayStatus(finding))} |`,
+        );
+      }
+      if (context.findings.length === 0) {
+        lines.push("| - | - | - | No findings | No action required | Resolved |");
+      }
+    } else {
+      lines.push("| ID | Severity | Where | Status |", "|---|---|---|---|");
+      for (const finding of context.findings) {
+        lines.push(
+          `| ${markdownCell(shortCell(finding.id))} | ${markdownCell(shortCell(finding.severity))} | ` +
+            `${markdownCell(shortWhere(finding.location))} | ${markdownCell(shortCell(displayStatus(finding)))} |`,
+        );
+      }
+      if (context.findings.length === 0) {
+        lines.push("| - | - | - | No findings |");
+      }
+      // A place or status too long for its cell (the person's own reason for
+      // a decision, say) is written out in full here, so nothing is cut.
+      for (const finding of context.findings) {
+        const where = whereText(finding.location);
+        const status = displayStatus(finding);
+        lines.push(
+          "",
+          `> ${finding.id} Finding: ${markdownCell(displayFinding(finding))}`,
+          ...(where.length > SHORT_CELL_MAX ? ["", `> ${finding.id} Where: ${markdownCell(where)}`] : []),
+          "",
+          `> ${finding.id} Required action: ${markdownCell(finding.requiredAction)}`,
+          ...(status.length > SHORT_CELL_MAX ? ["", `> ${finding.id} Status: ${markdownCell(status)}`] : []),
+        );
+      }
     }
     for (const finding of context.findings) {
       if (finding.reviewerNote) {
@@ -1599,7 +1649,7 @@ export function renderReadableReviewCopy(
     );
     if (nextHeading !== -1) after = bodyLines.slice(nextHeading);
   }
-  const rendered = renderFindingsContext([context]).split("\n");
+  const rendered = renderFindingsContext([context], "copy").split("\n");
   const artifactHeading = rendered.findIndex((line) =>
     line.startsWith("**Review artifact:**")
   );
@@ -2162,7 +2212,7 @@ export function renderSummaryConfirmationBrief(
     "**Why now:** All stage questions are answered; artifact generation will use this confirmed summary.",
     "**Decision options:**",
     "- **Looks correct** - record this confirmation and generate the named artifacts.",
-    `- **Request changes** - leave the artifacts ungenerated and return to \`${questions}\`.`,
+    "- **Request changes** - nothing is generated yet; say what to change in your answers, and they are updated first.",
   ].join("\n");
 }
 

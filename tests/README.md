@@ -118,7 +118,10 @@ bash tests/run-tests.sh --e2e
 bash tests/run-tests.sh --integration --filter "t25|t26"
 
 # Leave files out by pattern; the rest run as an ordinary tier
-bash tests/run-tests.sh --integration --exclude "^t-scope-run-"
+bash tests/run-tests.sh --integration --exclude "^t-tui-"
+
+# The scope runs and the guard matrix (minutes per file) run only when selected
+bash tests/run-tests.sh --integration -P 8 --filter "^t-(scope-run|guard-matrix)-"
 
 # Run tests concurrently within a level (larger levels benefit most; smoke/unit stay serial)
 bash tests/run-tests.sh --all --parallel 4
@@ -210,15 +213,17 @@ and optional `diagnostic_filter` filename regex. The unit tier requires
 integration or e2e, omit `unit-shard`; its default is empty. That
 `diagnostic_filter` exists only for manual dispatch. Reusable callers pass
 `filter` and `exclude` instead, both empty by default: `ci.yml` and
-`full-suite.yml` run the scope runs (`t-scope-run-*`) as an integration job of
-their own (`filter`) and leave them out of the other one (`exclude`).
+`full-suite.yml` run the scope runs (`t-scope-run-*`) and the guard matrix
+(`t-guard-matrix-*`) as integration jobs of their own (`filter`) and leave them
+out of the other one (`exclude`).
 One fresh runner produces `ci-deterministic-probe-<OS>` diagnostics with all
 model gates closed; it cannot qualify full-suite or release coverage.
 
 Nightly and manual `preview-release.yml` runs call the reusable `full-suite.yml`
 even when the source already has a published preview: source-bound native
 Bun/compatibility receipts,
-and required hosted Claude/Codex/opencode/release-contract suites. Cursor is excluded
+required hosted Claude/Codex/opencode/release-contract suites, and the scope
+runs and the guard matrix on Linux, macOS and Windows (the `scope_runs` job). Cursor is excluded
 because its CLI exposes vendor API keys to agent environments; Copilot is
 excluded by account policy. Ordinary Full Suite dispatches accept any requested
 branch or commit, including unmerged PRs, with both verification flags false.
@@ -303,7 +308,7 @@ requires no excluded families and remains false with the documented exclusions.
 Missing, failed, cancelled or skipped required jobs fail readiness.
 `full-suite-result` retains the exact SHA and run/leg outcomes for 90 days.
 Preview readiness and the stable gate require `purpose: "release"`, `verificationFamily: "all"`,
-`coveragePolicy: "required-hosted-live-shards-v2"`, `passed: true`,
+`coveragePolicy: "required-hosted-live-shards-v3"`, `passed: true`,
 `disabledLegs: []`, and exactly `deterministic` and `production_guards` in
 `omittedLegs`. Those two jobs must be skipped; every other declared job must succeed.
 A preview that is not ready still builds and publishes. Its notes end with a

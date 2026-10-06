@@ -670,18 +670,32 @@ function snapshot(
         // the one recovery review re-checks them. So does readable code the
         // review no longer binds (its list of files changed, or the listing it
         // saw is not on this machine).
-        const moved = receipts.unitSourceMoved.get(unit) ??
+        // Under strict, a written review not on this machine (a teammate's
+        // clone) cannot be checked here: the one re-check is a fresh review,
+        // never a refusal that nothing clears.
+        const recordNotHere = review !== null && review !== undefined && binding !== null && !acceptsChanges() &&
+          !completionCarriesVerifiedReview(projectDir, binding, review.block) &&
+          reviewRecordNotHere(projectDir, binding, review.block);
+        const changed = receipts.unitSourceMoved.get(unit) ??
           (review && (
             auditBlockField(review.block, "Artifact Fingerprint") !== artifact ||
             (receipts.unitStale.has(unit) && listing !== null)
           ) ? receipts.unitStaleProgress.get(unit) : undefined);
-        if (review && moved && !moved.recoverySpent && !receipts.unitPending.has(unit)) {
+        // That review still counts as waiting for its verdict, so the re-check
+        // repeats the same iteration and records it again here.
+        const retryPending = changed === undefined && recordNotHere;
+        const moved = changed ?? (retryPending
+          ? { nextIteration: receipts.unitIterations.get(unit) ?? 1, recoverySpent: false }
+          : undefined);
+        if (review && moved && !moved.recoverySpent && (!receipts.unitPending.has(unit) || retryPending)) {
           const reviewer = stage.reviewer!;
           const iteration = moved.nextIteration;
           recheckable++;
           rereview ??= {
             stage: slug, reviewer, iteration,
-            command: renderReviewRequestCommand({ projectDir, stage: slug, reviewer, unit, iteration }),
+            command: renderReviewRequestCommand({
+              projectDir, stage: slug, reviewer, unit, iteration, ...(retryPending ? { retryPending: true } : {}),
+            }),
           };
         }
       } else if (request && auditBlockField(request.block, "Recovery") === "stale-receipt") {

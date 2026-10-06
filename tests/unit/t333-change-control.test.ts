@@ -2492,10 +2492,10 @@ describe("t333 (9) fences: the policy lowers a fixed set; per-run switches can l
     },
     {
       prompt: "/aidlc config set guard.state-transition off",
-      setting: "guard.state-transition off",
-      said: "apply to a piece of work: create it, then type this again.",
+      setting: "state transition check",
+      said: "The state transition check is off for the piece of work you start now (set by you).",
     },
-  ])("a typed $setting switch with no state creates nothing; Guard Policy is kept for the next piece of work", ({ prompt, setting, said }) => {
+  ])("a typed $setting switch with no state creates nothing and is kept for the next piece of work", ({ prompt, setting, said }) => {
     const proj = createTestProject();
     tempDirs.push(proj);
     seedAidlcMemory(proj);

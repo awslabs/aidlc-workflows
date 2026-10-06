@@ -120,7 +120,13 @@ Create `harness/<name>/manifest.ts` exporting a `HarnessManifest`
   assistant".
 - `rootIntegrations` — every project-root file emitted by the normal projection,
   each with an explicit init merge policy (`managed-block`, `json-map`,
-  `json-array`, `whole-file`, or `jsonc-settings`). `jsonc-settings` is for an
+  `json-array`, `whole-file`, `jsonc-settings`, or `json-entries`).
+  `json-entries` is for a team's own JSON config file (opencode's
+  `opencode.json`): config adds AI-DLC's values and array strings at any depth
+  only where absent, adds a map's `"*"` rule only when the map has none, keeps
+  everything else, and follows or retires only entries still holding the value
+  it wrote; its part ships in root-blocks and the copy runtime leaves the file
+  out. `jsonc-settings` is for an
   editor's own JSONC settings file (Copilot's `.vscode/settings.json`): config
   adds each shipped top-level key only when the project does not set it, never
   changes a value someone else set, keeps every other key, comment, and line,

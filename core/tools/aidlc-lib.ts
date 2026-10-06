@@ -1045,6 +1045,20 @@ export function withoutEntryWord(args: readonly string[]): string[] {
   return args.length > 0 && ENTRY_WORD_ARG.test(args[0]) ? args.slice(1) : [...args];
 }
 
+// The words that, said on their own, only ask for the work in progress to go
+// on. The one list the engine reads, so every tool agrees on it.
+export const CONTINUATION_PHRASES = ["carry on", "continue", "keep going", "go on", "resume"] as const;
+
+// True only when the text is one of those phrases and nothing more, with or
+// without "please" before or after it. Case, spacing, a comma beside "please"
+// and a closing "." or "!" do not matter; any other word makes it a request
+// of its own.
+export function isBareContinuationPhrase(text: string): boolean {
+  const words = text.toLowerCase().replace(/\s+/g, " ").trim().replace(/[.!]+$/, "").trim();
+  const phrase = words.replace(/^please,? /, "").replace(/,? please$/, "");
+  return (CONTINUATION_PHRASES as readonly string[]).includes(phrase);
+}
+
 // One rule for the Copilot adapter claim gate and isTerminalUtilityNext, mirroring
 // parseNextFlags/routeNext's terminal early returns and engine-marker exclusion.
 export function isReadOnlyNextArgv(argv: readonly string[]): boolean {
@@ -1095,7 +1109,7 @@ export const WORKSPACE_NOUNS = ["intent", "space"] as const;
 export type WorkspaceNoun = (typeof WORKSPACE_NOUNS)[number];
 
 // aidlc-testing-posture.ts runs the first of these it finds anywhere in argv.
-export const TESTING_POSTURE_SUBCOMMANDS = ["resolve", "render", "fingerprint", "verify", "begin", "brief", "reply"] as const;
+export const TESTING_POSTURE_SUBCOMMANDS = ["resolve", "render", "fingerprint", "verify", "begin", "brief", "reply", "restore"] as const;
 
 // The commands aidlc-utility.ts dispatches, as its unknown-command error lists them.
 export const UTILITY_COMMANDS = [
@@ -1767,6 +1781,34 @@ export function classifyTerminalCommand(argv: string[]): TerminalCommand | null 
     }
   }
   return null;
+}
+
+// A host that drives the CLI for the person may deliver each turn as ONE prompt
+// string: its own context blocks first, then a request header, then what the
+// person sent. Kiro Crew does this over ACP, and the whole string is what the
+// UserPromptSubmit hook receives as `prompt`. Measured 2026-10-04 (Crew
+// dashboard driving kiro-cli 2.27): a 34 KB prompt (agent prompt, memory,
+// lessons, a replay of earlier turns, reply rules) ending in
+// "[CURRENT USER REQUEST -- respond to this]\nApprove Plan". Read whole, that
+// reply never matched an offered option, so Plan Approval, typed switches and
+// /aidlc commands sent from Crew were never seen.
+//
+// The person's turn is the text after the LAST header. Crew emits the header
+// with an em dash and folds it to "--" before sending, so both spellings are
+// read. Crew scrubs the header out of everything it splices in, the turn
+// included, and taking the last one means nothing ahead of it (memory, a
+// replayed assistant reply that says "Approve Plan") can be read as the reply
+// even if a forgery slipped through. Only ever a suffix of the prompt is
+// returned, so this never adds text the person did not submit. A prompt
+// without the header is returned unchanged.
+const HOST_TURN_HEADER_RE = /\[CURRENT USER REQUEST (?:--|\u2014) respond to this\]\r?\n/g;
+
+export function hostEnvelopeTurnText(prompt: string): string {
+  let end = -1;
+  for (const match of prompt.matchAll(HOST_TURN_HEADER_RE)) {
+    end = match.index + match[0].length;
+  }
+  return end < 0 ? prompt : prompt.slice(end);
 }
 
 // Kiro's plain-text hook channel must carry UTF-8 without terminal protocol
@@ -4310,6 +4352,12 @@ export interface PlanApprovalRuntimeReceipt
   override?: PlanApprovalReceiptOverride;
   /** Plan approval was off, so the engine built this plan without asking; `source` says what turned it off. */
   skipped?: { source: string };
+  /**
+   * The fingerprint of the plan and instructions the build started on, kept
+   * only when that is not the approved content: a lowered fence built a plan
+   * edited after its approval. An interrupted build picks up only on it.
+   */
+  startedFingerprint?: string;
 }
 
 export interface PlanApprovalWorktreeDelegation {
@@ -4782,6 +4830,44 @@ export function readPlanApprovalReceipt(
     "Plan Approval receipt",
   );
   return value?.version === 1 ? value : null;
+}
+
+/**
+ * The files a person approved for one Code Generation target and attempt: the
+ * plan, its test instructions, and the questions file that records the answer.
+ * Kept beside the receipt so a later change can be named in one line and undone
+ * by writing these bytes back. Each approval in the attempt replaces it.
+ */
+export interface ApprovedPlanCopy {
+  version: 1;
+  fingerprint: string;
+  plan: string;
+  instructions: string;
+  questions: string;
+}
+
+function approvedPlanCopyPath(projectDir: string, target: { targetId: string; runFloor: string }): string {
+  const key = createHash("sha256").update(`${target.targetId}\n${target.runFloor}`, "utf-8").digest("hex");
+  return join(planApprovalRuntimeDir(projectDir), `approved-${key}.json`);
+}
+
+export function writeApprovedPlanCopy(
+  projectDir: string,
+  target: { targetId: string; runFloor: string },
+  copy: ApprovedPlanCopy,
+): void {
+  ensurePlanApprovalRuntimeDir(projectDir);
+  writeFileAtomic(approvedPlanCopyPath(projectDir, target), `${JSON.stringify(copy)}\n`);
+}
+
+export function readApprovedPlanCopy(
+  projectDir: string,
+  target: { targetId: string; runFloor: string },
+): ApprovedPlanCopy | null {
+  const value = readPlanApprovalRuntimeJson<ApprovedPlanCopy>(approvedPlanCopyPath(projectDir, target), "approved plan copy");
+  return value?.version === 1 && typeof value.fingerprint === "string" && typeof value.plan === "string" &&
+      typeof value.instructions === "string" && typeof value.questions === "string"
+    ? value : null;
 }
 
 export function clearPlanApprovalReceipt(
@@ -16076,6 +16162,9 @@ export interface ReviewerNewFindingReport {
 export interface ReviewerFindingsReport {
   prior: ReviewerPriorFindingReport[];
   newFindings: ReviewerNewFindingReport[];
+  /** The report left out its Prior findings table. A first review has no
+   *  prior findings, so there it reads as empty; a later review is refused. */
+  priorMissing?: true;
 }
 
 export const REVIEW_FINDINGS_REPORT_RETRY_MESSAGE =
@@ -16152,14 +16241,16 @@ export function parseReviewerFindingsReport(
     line.trim().toLowerCase() === "**new findings**"
   );
   if (!hasPrior && !hasNew) return null;
-  if (!hasPrior || !hasNew) {
+  if (!hasNew) {
     throw new Error(REVIEW_FINDINGS_REPORT_RETRY_MESSAGE);
   }
-  const priorTable = reportTable(
-    visible,
-    "Prior findings",
-    ["ID", "Now", "Severity", "Note"],
-  );
+  const priorTable = hasPrior
+    ? reportTable(
+      visible,
+      "Prior findings",
+      ["ID", "Now", "Severity", "Note"],
+    )
+    : { headers: ["ID", "Now", "Severity", "Note"], rows: [] };
   const newTable = reportTable(
     visible,
     "New findings",
@@ -16223,7 +16314,7 @@ export function parseReviewerFindingsReport(
       };
     },
   );
-  return { prior, newFindings };
+  return { prior, newFindings, ...(hasPrior ? {} : { priorMissing: true as const }) };
 }
 
 /**
@@ -19649,12 +19740,13 @@ export function freshReviewReceipts(
       ...[...acceptedArtifactChanges.values()].map((change) => ({
         ...change,
         changed: change.changed !== null && change.changed.length > 0 ? change.changed : null,
-        notice: relaxedReviewNotice(
-          change.changed !== null && change.changed.length > 0
-            ? renderChangedPaths(change.changed)
-            : stage.review_artifact ?? "Its documents",
-          change.unit ?? null,
-        ),
+        // An edit with no write record (one made in an editor) names no file:
+        // the line names the stage's documents, not one that may not have changed.
+        notice: change.changed !== null && change.changed.length > 0
+          ? relaxedReviewNotice(renderChangedPaths(change.changed), change.unit ?? null)
+          : `${change.unit ? `The ${unitPlainName(change.unit)} Unit's` : "The"} ${reviewedStageName} ` +
+            `${(stage.produces ?? []).length === 1 ? "document changed after it was" : "documents changed after they were"}` +
+            " reviewed; carrying on.",
       })),
       ...acceptedChanges,
     ],
@@ -28647,6 +28739,8 @@ interface ReviewCommandInput {
   unit?: string;
   single?: boolean;
   iteration: number;
+  /** Repeat the same iteration's request (a review whose record is not here). */
+  retryPending?: boolean;
 }
 
 // The review request and its verdict, rendered once: the same scope selectors
@@ -28664,6 +28758,7 @@ function renderReviewCommand(input: ReviewCommandInput, verdict: boolean): strin
       ...(input.single ? ["--single"] : []),
       "--iteration",
       String(input.iteration),
+      ...(input.retryPending && !verdict ? ["--retry-pending"] : []),
       ...(verdict ? ["--verdict", "<READY|NOT-READY>"] : []),
       "--project-dir",
       input.projectDir,
@@ -35983,6 +36078,118 @@ export function unitMajorConstructionStageSlugs(
     .map((stage) => stage.slug);
 }
 
+// The per-Unit stages one late approval covers: solo unit-major work with Unit
+// checkpoints off (disabled or absent), not autonomous, at the first pending
+// block stage, when two or more remain. Null keeps the ordinary one-stage gate.
+// Both the gate's question and its STAGE_AWAITING_APPROVAL row come from this
+// list, so the person approves exactly the stages they were shown.
+export function approvesTogetherStages(stateContent: string, slug: string): string[] | null {
+  if (
+    getField(stateContent, "Construction Iteration")?.trim() !== "unit-major" ||
+    isTeamUnitOwnership(stateContent) ||
+    constructionCheckpointsApply(stateContent) ||
+    getField(stateContent, AUTONOMY_MODE_FIELD)?.trim() === "autonomous" ||
+    getField(stateContent, "Current Stage")?.trim() !== slug
+  ) return null;
+  const scope = getField(stateContent, "Scope")?.trim() ?? "";
+  if (usesStageLevelPerUnitArtifacts(scope, stateContent)) return null;
+  const block = unitMajorConstructionStageSlugs(scope, stateContent);
+  return block[0] === slug && block.length >= 2 ? block : null;
+}
+
+const APPROVES_TOGETHER_FIELD = "Approves Together";
+const APPROVED_TOGETHER_WITH_FIELD = "Approved Together With";
+
+export function approvesTogetherField(block: string): string[] {
+  return (auditBlockField(block, APPROVES_TOGETHER_FIELD) ?? "")
+    .split(",").map((s) => s.trim()).filter((s) => s.length > 0);
+}
+
+// Since this approval, anything that asks the person something new, takes a
+// decision, or moves the work elsewhere ends what it covers.
+const APPROVED_TOGETHER_ENDS = new Set([
+  "GATE_REJECTED",
+  "QUESTION_ANSWERED",
+  "QUESTION_UNANSWERED",
+  "DECISION_RECORDED",
+  "AUTONOMY_MODE_SET",
+  "WORKFLOW_STARTED",
+  "STAGE_JUMPED",
+]);
+
+// A later listed stage's approval stands on the person's one reply while the
+// approval that listed it still covers it: no question, rejection or decision
+// since, and no gate for a stage outside the list. Ledger order only.
+export function approvedTogetherCover(
+  projectDir: string,
+  slug: string,
+): { first: string } | null {
+  let rows: AuditShardEvent[];
+  try {
+    rows = sortAttemptEvents(readAuditShardEvents(projectDir));
+  } catch {
+    return null;
+  }
+  for (let i = rows.length - 1; i >= 0; i--) {
+    const row = rows[i];
+    if (row.event !== "GATE_APPROVED") continue;
+    const listed = approvesTogetherField(row.block);
+    const first = auditBlockField(row.block, "Stage");
+    if (!first || first === slug || !listed.includes(slug)) continue;
+    for (const later of rows.slice(i + 1)) {
+      if (APPROVED_TOGETHER_ENDS.has(later.event)) return null;
+      if (later.event !== "GATE_APPROVED" && later.event !== "STAGE_AWAITING_APPROVAL") continue;
+      const stage = auditBlockField(later.block, "Stage") ?? "";
+      if (!listed.includes(stage)) return null;
+      if (later.event === "GATE_APPROVED" && stage === slug) return null;
+    }
+    return { first };
+  }
+  return null;
+}
+
+// The list the stage's open gate was shown with (its latest STAGE_AWAITING_APPROVAL).
+export function openGateApprovesTogether(projectDir: string, slug: string): string[] {
+  try {
+    const rows = sortAttemptEvents(readAuditShardEvents(projectDir));
+    for (let i = rows.length - 1; i >= 0; i--) {
+      const row = rows[i];
+      if (row.event === "STAGE_AWAITING_APPROVAL" && auditBlockField(row.block, "Stage") === slug) {
+        return approvesTogetherField(row.block);
+      }
+    }
+  } catch {
+    // An unreadable ledger approves the one stage only.
+  }
+  return [];
+}
+
+// The listed stages still to approve after the stage approval just recorded:
+// from its own list, or from the approval that covered it.
+export function approvedTogetherFollowers(projectDir: string, slug: string): string[] {
+  try {
+    const rows = sortAttemptEvents(readAuditShardEvents(projectDir));
+    const latest = (stage: string) =>
+      [...rows].reverse().find((row) => row.event === "GATE_APPROVED" && auditBlockField(row.block, "Stage") === stage);
+    const own = latest(slug);
+    if (!own) return [];
+    const first = auditBlockField(own.block, APPROVED_TOGETHER_WITH_FIELD);
+    const list = approvesTogetherField((first ? latest(first) : own)?.block ?? "");
+    const at = list.indexOf(slug);
+    return at === -1 ? [] : list.slice(at + 1);
+  } catch {
+    return [];
+  }
+}
+
+export function approvedTogetherWithField(first: string): Record<string, string> {
+  return { [APPROVED_TOGETHER_WITH_FIELD]: first };
+}
+
+export function approvesTogetherFields(stages: readonly string[]): Record<string, string> {
+  return stages.length >= 2 ? { [APPROVES_TOGETHER_FIELD]: stages.join(", ") } : {};
+}
+
 export function firstInScopeStageOfPhase(
   phase: string,
   scope: string
@@ -36062,6 +36269,8 @@ export interface ScopeCostSummary {
   skip: number;          // total - execute
   gates: number;         // EXECUTE stages outside initialization; mirrors
                          // computeGate() in aidlc-orchestrate.ts - change together
+  shown: number;         // EXECUTE stages outside initialization: the stages a
+                         // run shows the person, the count every line they read uses
   perUnitStages: number; // EXECUTE stages that repeat per Unit of Work when
                          // units-generation EXECUTEs; otherwise they run once
   off: string[];        // scope defaults omitted from the gated-flow ceremony
@@ -36083,18 +36292,22 @@ export function gridCostSummary(
   const hasUnitDag = stages["units-generation"] === "EXECUTE";
   let execute = 0;
   let gates = 0;
+  let shown = 0;
   let perUnitStages = 0;
   for (const [slug, action] of Object.entries(stages)) {
     if (action !== "EXECUTE") continue;
     execute++;
     const node = byslug.get(slug);
     if (!node) continue;
-    if (node.phase !== "initialization") gates++;
+    if (node.phase !== "initialization") {
+      gates++;
+      shown++;
+    }
     // Without units-generation there is no Unit DAG, so per-unit stages
     // degrade to one stage-level pass (aidlc-orchestrate.ts).
     if (hasUnitDag && isPerUnitStage(node)) perUnitStages++;
   }
-  return { total, execute, skip: total - execute, gates, perUnitStages, off: [] };
+  return { total, execute, skip: total - execute, gates, shown, perUnitStages, off: [] };
 }
 
 /** Labels of ceremonies the effective policy turns off, plus reviewers when
@@ -36777,8 +36990,9 @@ function changeControlSourceFromLabel(label: string): string {
 
 /**
  * The label rendered after the value: `from scope classic`, `from project.md`,
- * `set by you` (the person's typed switch), `set by a command` (an explicit
- * setter with no typed turn behind it), `not set`.
+ * `set by you` (the person's typed switch, or a check they asked to turn off),
+ * `set by a command` (an explicit setter with no word of theirs behind it),
+ * `not set`.
  */
 export function changeControlSourceLabel(source: string): string {
   if (source === "not set") return source;
@@ -37256,6 +37470,8 @@ export function parseTypedGuardSwitchRequest(prompt: string, options: { wordsAns
   newWorkGuardPolicy?: "relaxed" | "off";
   /** Sensors, learnings or summary confirmation typed as flags of the new work the message describes. */
   newWorkCeremonies?: Record<string, "on" | "off">;
+  /** `--guard.<fence> off` typed as flags of the new work the message describes. */
+  newWorkFencesOff?: SwitchableGuardFence[];
   /** The plain-words switch asked as a question ("skip plan approval?"). */
   asked?: true;
   /** The words typed after the flags, when there are any. */
@@ -37399,7 +37615,12 @@ export function parseTypedGuardSwitchRequest(prompt: string, options: { wordsAns
     } else {
       if (!currentKey.startsWith("guard.")) continue;
       const fence = currentKey.slice("guard.".length);
-      if (!isSwitchableGuardFence(fence) || normalizedValue !== "off") continue;
+      if (!isSwitchableGuardFence(fence)) continue;
+      // The last value wins here too, so a later on drops an earlier off.
+      if (normalizedValue !== "off") {
+        switches.delete(`guard.${fence}`);
+        continue;
+      }
       key = `guard.${fence}`;
     }
     if (normalizedValue === "relaxed" || normalizedValue === "off") {
@@ -37433,6 +37654,14 @@ export function parseTypedGuardSwitchRequest(prompt: string, options: { wordsAns
     switches.delete("guard-policy");
     settings.delete("guard-policy");
   }
+  // So is a check turned off with it, when off is the last word typed for it.
+  const newWorkFencesOff: SwitchableGuardFence[] = [];
+  for (const fence of SWITCHABLE_GUARD_FENCES) {
+    if (!forNewWork || fence === "plan-approval" || settings.get(`guard.${fence}`) !== "off") continue;
+    newWorkFencesOff.push(fence);
+    switches.delete(`guard.${fence}`);
+    settings.delete(`guard.${fence}`);
+  }
   return {
     switches: [...switches.values()],
     settings: [...settings].map(([key, value]) => ({ key, value })),
@@ -37443,6 +37672,7 @@ export function parseTypedGuardSwitchRequest(prompt: string, options: { wordsAns
     ...(newWorkPlanApprovalOff ? { newWorkPlanApprovalOff: true as const } : {}),
     ...(newWorkGuardPolicy ? { newWorkGuardPolicy } : {}),
     ...(Object.keys(newWorkCeremonies).length > 0 ? { newWorkCeremonies } : {}),
+    ...(newWorkFencesOff.length > 0 ? { newWorkFencesOff } : {}),
     ...(words.length > 0 ? { words: words.join(" ") } : {}),
   };
 }

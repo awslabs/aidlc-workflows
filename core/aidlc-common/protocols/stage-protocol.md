@@ -249,6 +249,20 @@ that reply carries no `next_stage`, use the run-stage directive's. When
 the next stage name from the phase, the plan, or your own expectations - only
 the engine's value is correct.
 
+**One question for several stage approvals.** When the gate's run-stage
+directive carries `approve_together`, the stages it lists (`approve_together.stages`,
+in order, the first being `directive.stage`) are all waiting for the person, and
+they answer them with ONE question. Show one completion message covering every
+listed stage, then the question above with `approve_together.prompt` as its
+`prompt`, and the same two options. Open and report the gate for
+`directive.stage` only, exactly once: an approval there approves every listed
+stage, and the engine says which. A change request is Request Changes for
+`directive.stage`; make the change in the listed stage it belongs to, through
+that stage's own revision steps, say in one line what changed, then show the
+same one question again. If the approval stops at a listed stage that is not
+ready yet, do what its reply names, then report that stage approved with the
+same choice: do not ask the person again.
+
 ### For stages with conditional options:
 IDEATION and INCEPTION stages may include a 3rd option to add a previously skipped stage:
 
@@ -405,28 +419,15 @@ question.
 Then present the structured approval question as defined above.
 
 ### Part 4: Progress update (mandatory — after user approves)
-After the user selects "Approve", display a progress line before proceeding.
+After the user selects "Approve", say the progress line the approval's reply carries as its `narration`, word for word; never count stages yourself. When the reply carries none, say no progress line.
 
-**When every compiled stage is in scope**:
-```
-Progress: [N]/33 overall | [phase-N]/[phase-total] [Phase] stages complete. Next: [Next Stage Name]
-```
-
-**When the active scope executes fewer stages than the compiled total**, show
-in-scope progress with overall shown parenthetically:
+The engine counts the stages the plan runs after Initialization, the same count the person was shown when the work started, and puts the overall count of every compiled stage finished so far in parentheses:
 ```
 Progress: [X]/[S] in-scope stages complete ([N]/33 overall) | [phase-N]/[phase-total] [Phase]. Next: [Next Stage Name]
 ```
-Keep this format exactly as shown. `S` = the number of stages this workflow
-actually runs, read from the current scope's compiled totals. Use
-`{{INVOKE}} engine gen scope-table` when you need those
-totals; never carry a hand-maintained per-scope count table in this protocol,
-and never narrate where the number came from.
+The phase part counts the approved stage's phase within the plan.
 
-Example (full-scope): "Progress: 13/33 overall | 3/7 IDEATION stages complete. Next: Approval & Handoff"
-Example (reduced-scope): "Progress: 5/8 in-scope stages complete (7/33 overall) | 2/3 CONSTRUCTION. Next: Build & Test"
-
-Count only stages in the current phase (INITIALIZATION, IDEATION, INCEPTION, CONSTRUCTION, or OPERATION). Include both completed and skipped stages in the numerator.
+Example (reduced-scope): "Progress: 2/6 in-scope stages complete (5/33 overall) | 2/2 INCEPTION. Next: Code Generation"
 
 ---
 
@@ -513,7 +514,7 @@ Record the mode question and the user's mode choice through the log tool, the sa
 - Continue until all questions are answered
 - When the `run-stage` directive carries `kept_replies`, the person already replied to these questions in a chat that ended before their answers were written down: do what its `note` says, recording each answer they gave before asking anything, and never ask them again what they already answered
 - **Consolidated summary before generation**: The checkpoint below applies only when `directive.ceremony.summary_confirmation === "on"`. When it is `"off"`, generate directly from the answers with no confirmation prompt, confirmation entry, or receipt. With it on, after all questions have been
-  answered, present a consolidated summary of all answers as unordered bullets (never a numbered list). Then run
+  answered, present a consolidated summary of all answers as unordered bullets (never a numbered list). The person confirms what they can read: the bullets sit in the question itself, or right above it in the same message, as the question-rendering annex shows; never only in a tool's output or a file. Then run
   `bun {{HARNESS_DIR}}/tools/aidlc-review-brief.ts summary --stage "<directive.stage>" --questions-file "<questions-path>"`;
   add `--unit "<directive.unit>"` on a per-unit stage. Print its compact
   decision brief verbatim before presenting this structured question. The brief

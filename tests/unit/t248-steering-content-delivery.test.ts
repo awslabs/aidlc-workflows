@@ -2200,3 +2200,32 @@ describe("t248 reviewer knowledge absorption", () => {
     }
   });
 });
+
+// What each tool's agent is told to do with the one-line Stop note, as the
+// shipped skill delivers it: the person on every tool gets the line once.
+// Tools that show the note have the agent say nothing about it; opencode,
+// Kiro IDE and Kiro CLI hide it, so the agent says the line itself when it
+// carries on, and a question it just asked ends the turn in silence.
+describe("t248 the shipped skill delivers the Stop-note step for its tool", () => {
+  const SAYS_THE_LINE: Record<string, string> = { opencode: "opencode", "kiro-ide": "Kiro IDE", kiro: "Kiro CLI" };
+  for (const harness of HARNESS_MATRIX) {
+    test(`${harness.name} ships one carrying-on paragraph with its own say-or-not step`, () => {
+      const skill = readFileSync(join(harness.skillsRoot, "aidlc", "SKILL.md"), "utf-8");
+      const paragraphs = skill.split("\n").filter((line) => line.startsWith("**When AI-DLC carries on by itself.**"));
+      expect(paragraphs.length).toBe(1);
+      const paragraph = paragraphs[0] as string;
+      expect(paragraph).not.toContain("{{INVOKE}}");
+      expect(paragraph).toContain("and end your turn without asking it again or saying anything else.");
+      const tool = SAYS_THE_LINE[harness.name];
+      if (tool === undefined) {
+        expect(paragraph).toContain("so say nothing about it.");
+        expect(paragraph).not.toContain("first say the carrying-on line to them once");
+      } else {
+        expect(paragraph).toContain(
+          `${tool} does not show the note to the person, so if you carry on with the work (the rules parts, the stage, or a fresh \`next\`), first say the carrying-on line to them once`,
+        );
+        expect(paragraph).not.toContain("so say nothing about it.");
+      }
+    });
+  }
+});

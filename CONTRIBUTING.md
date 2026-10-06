@@ -63,9 +63,11 @@ Before submitting a PR, verify:
 `main` is not production: each PR push runs contract checks, Linux smoke, unit
 shards, integration tests, and production-guard checks; the merge queue reruns
 them on the merge commit and adds the focused macOS/Windows/arm64 platform checks.
-`deterministic-tests.yml` supplies the shared test definition; nightly
-`full-suite.yml` runs it across Linux, macOS and Windows alongside required live
-coverage. Preview runs contract checks and Full Suite without repeating the PR
+`deterministic-tests.yml` supplies the shared test definition. The nightly
+`full-suite.yml` runs the scope runs and the guard matrix through it on Linux,
+macOS and Windows, alongside required live coverage; a manual
+`full_verification` Full Suite runs every deterministic tier through it on all
+three. Preview runs contract checks and Full Suite without repeating the PR
 test matrix. Stable publication through `release.yml` requires a passing Full
 Suite for the tagged commit, reusing a preview's result or running the suite,
 and validates the tag source and its newly built artifacts.

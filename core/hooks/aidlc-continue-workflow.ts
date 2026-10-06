@@ -19,9 +19,12 @@
 // via `reason`. The conductor cannot quit until the engine answers `done`.
 // Enforced by the harness, not by the LLM remembering.
 //
-// The reason is an ON-TASK CONTINUATION — it names the work the conductor
-// still owes (run the loop, act on the directive, report), never an
-// override-shaped instruction. That phrasing is the security property:
+// The reason is ONE PLAIN LINE naming where the work carries on ("AI-DLC is
+// carrying on with Requirements Analysis."). Hosts show it to the person
+// (Claude Code prints it under its own hook label), so it carries no command,
+// slug or receipt; the conductor's steps for it live in the orchestrator skill
+// and in the session-start context, which is sent again after a compaction.
+// It is never an override-shaped instruction. That is the security property:
 // override-shaped directives are refused by the conductor's own safety
 // training, so a buggy or compromised engine can only ever CONTINUE sanctioned
 // work, never hijack the session.
@@ -158,6 +161,7 @@ import {
   findIntentByUuid,
   findStageBySlug,
   listIntents,
+  loadStageGraph,
   parseRecordIntentKey,
   effectiveUnitGateRhythm,
   getField,
@@ -200,7 +204,7 @@ import {
   withAuditLock,
   writeFileAtomic,
 } from "../tools/aidlc-lib.ts";
-import { aidlcDispatcherInvocation, aidlcEngineCommand, aidlcToolInvocation } from "../tools/aidlc-runtime-paths.ts";
+import { aidlcEngineCommand, hidesStopNote, runtimeHarnessName } from "../tools/aidlc-runtime-paths.ts";
 import {
   foldTranscriptIntoLedger,
   writeCurrentTranscriptPath,
@@ -947,17 +951,61 @@ function isPendingSubagentStop(
 //      loop must keep running unattended; there is no human chatting to release.
 // Fail-closed throughout: any error returns false and the cap-bounded block stands.
 
-// Earlier reminders' opening and closing words, still found in older transcripts.
+// The line continuationReason() writes ("AI-DLC is carrying on with <stage>."
+// or "AI-DLC is carrying on."), and earlier notes' words, still found in older
+// transcripts.
+const CARRYING_ON = "AI-DLC is carrying on";
+const CARRYING_ON_LINE = /^AI-DLC is carrying on(?: with ([^\n]{1,200}))?\.$/;
+const STAGE_SLUG = /^[a-z0-9][a-z0-9-]*$/;
 const CONTINUATION_OPENING = "The AI-DLC workflow is not finished";
 const SAY_NOTHING = "tell the person nothing about this note";
-// The one-line note continuationReason() writes: "<step> is not finished yet. Next: <step>."
-const STOP_NOTE = /^[^\n]{1,300} is not finished yet\. Next: [^\n]+\.$/;
+// What follows the line, on its own line, where the tool hides the note from
+// the person. It reaches the agent even when the aidlc skill is not in its
+// context (a plain prompt, no /aidlc), and the line stays first so logs and the
+// matcher read it the same way on every tool.
+const SAY_THE_LINE =
+  "If you carry on with the work, first say that line to the person once, on its own line; " +
+  "if you had just asked them a question, record it with `log decision` and end your turn saying nothing. " +
+  "Say nothing else about this note.";
+// The one-line note the hook wrote before: "<step> is not finished yet. Next:
+// `<command>`." (or "Next: finish its steps, then `<command>`."). The command
+// in backticks is part of the shape, so a person's own sentence that happens
+// to start the same way is still read as the person.
+const STOP_NOTE = /^[^\n`]{1,300} is not finished yet\. Next: (?:finish its steps, then )?`[^`\n]+`\.$/;
+
+// True when the WHOLE message is a line carryingOnLine() writes: no stage, or
+// a stage named as stageName() names one, with a valid Unit after " for ". A
+// person's own sentence that starts the same way names no stage that way, so
+// it is still read as the person.
+function isCarryingOnLine(text: string): boolean {
+  const line = CARRYING_ON_LINE.exec(text);
+  if (line === null) return false;
+  const named = line[1];
+  if (named === undefined) return true;
+  let names: string[];
+  try {
+    names = loadStageGraph().map((s) => stageName(s.slug) ?? "");
+  } catch {
+    // An unreadable stage graph names every stage by its slug.
+    names = [named.split(" for ")[0]].filter((slug) => STAGE_SLUG.test(slug));
+  }
+  return names.some((name) =>
+    name.length > 0 && (named === name ||
+      (named.startsWith(`${name} for `) && validateUnitName(named.slice(name.length + 5)) === null)),
+  );
+}
+
+// The line alone, when the text is exactly the line and the agent's step after it.
+function withoutAgentStep(text: string): string {
+  return text.endsWith(`\n${SAY_THE_LINE}`) ? text.slice(0, -(SAY_THE_LINE.length + 1)) : text;
+}
 
 // True when a user-role transcript entry's text is actually the hook's OWN
 // injected continuation (a re-prompt after a block), not the human talking.
 // Two shapes: Claude Code wraps the block reason as "Stop hook feedback: ..."
 // (isMeta:true), but other harnesses (Codex) may re-inject the RAW reason text
-// with no wrapper. continuationReason() writes one STOP_NOTE line;
+// with no wrapper, or (Codex 0.160) in its own <hook_prompt> tag, which is
+// unwrapped first. continuationReason() writes one carrying-on line, and
 // errorDirectiveReason() opens with STOPPED_ON_A_PROBLEM. Excluding these is
 // what keeps an engine-engaged turn whose last user entry is the hook's nudge
 // from being misread as a fresh human prompt. These shapes MUST stay in step
@@ -965,12 +1013,28 @@ const STOP_NOTE = /^[^\n]{1,300} is not finished yet\. Next: [^\n]+\.$/;
 // changing too, an injected reason reads as a fresh human prompt and the
 // conversational carve-out silently mis-allows the stop.
 function isInjectedHookFeedback(text: string): boolean {
+  const wrapped = CODEX_HOOK_PROMPT.exec(text.trim());
+  return isHookNote(wrapped ? unescapeHookPrompt(wrapped[1] as string) : text);
+}
+
+// Codex 0.160 stores a Stop reason as a user message of its own,
+// <hook_prompt hook_run_id="stop:...">REASON</hook_prompt>, with < > and &
+// escaped. Only exactly that wrapper, around the whole message, is unwrapped,
+// and the text inside must still be one of the hook's own lines, so a
+// person's message with the tag and words of their own stays theirs.
+const CODEX_HOOK_PROMPT = /^<hook_prompt hook_run_id="stop:[^"\n]*">((?:(?!<\/?hook_prompt\b)[\s\S])*)<\/hook_prompt>$/;
+function unescapeHookPrompt(text: string): string {
+  return text.replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&");
+}
+
+function isHookNote(text: string): boolean {
   const t = text.trimStart();
   return (
     t.startsWith("Stop hook feedback:") ||
-    STOP_NOTE.test(t.trimEnd()) ||
+    isCarryingOnLine(withoutAgentStep(t.trimEnd())) ||
     t.startsWith(STOPPED_ON_A_PROBLEM) ||
     // The earlier wordings, still found in older transcripts.
+    STOP_NOTE.test(t.trimEnd()) ||
     (t.startsWith(CONTINUATION_OPENING) && t.includes(SAY_NOTHING)) ||
     (t.startsWith("The AIDLC workflow has a pending step") &&
       /workflow loop/.test(t)) ||
@@ -1475,72 +1539,63 @@ function retainedUnitWorkRecorded(
   }
 }
 
-// Build the on-task continuation injected when blocking. Claude Code shows it
-// to the person ("Stop hook error: ...") and Codex puts it in the chat, so it
-// is one line they can read: which step is open and the one command the agent
-// runs next. What the agent does when a question of its own is waiting, or the
-// person asked to stop, is in every conductor SKILL ("When your turn is stopped
-// with a note"). Deliberately phrased as continuation of sanctioned work, never
-// as an instruction to do something new or out-of-band (the security property).
-function continuationReason(
-  kind: string,
-  stage: string,
-  continueToken?: string,
-  retained = false,
-  committedTo?: string,
-  unit?: string,
-  finishedUnit?: string,
-  teamUnits = false,
-): string {
-  // A team-owned Unit's records and reports carry its Unit; solo ones do not.
-  const scopedUnit = teamUnits && unit && validateUnitName(unit) === null ? unit : undefined;
-  const next = (command: string): string => `Next: \`${command}\`.`;
-  if (kind === "rehydrate" && (committedTo !== undefined || finishedUnit !== undefined)) {
-    // The report's `done` was loop bookkeeping, not the end of the workflow
-    // (#1411): a fresh `next` starts the step it moved to, named when known
-    // (under unit-major Construction it is not, nor after a Unit's step).
-    return `${openStep(committedTo ?? "")} is not finished yet. ${next(aidlcDispatcherInvocation("orchestrate next"))}`;
-  }
-  if (kind === "rehydrate") {
-    return `${openStep(stage)} is not finished yet. ${next(`${aidlcToolInvocation("orchestrate")} next`)}`;
-  }
-  // The marker is a writable file: only a valid Unit name reaches the person.
-  const forUnit = unit && validateUnitName(unit) === null ? unit : undefined;
-  if (kind === "load-steering" && continueToken) {
-    // The receipt names the part the conductor already holds, never the
-    // payload: hook messages are capped near 10 KB on every harness. If it no
-    // longer matches, the engine answers with the current step.
-    return `${openStep(stage, forUnit)} is not finished yet. ${next(`${aidlcToolInvocation("orchestrate")} continue ${continueToken}`)}`;
-  }
-  if (retained && kind === "run-stage") {
-    // The conductor holds this step already: it finishes it and records the
-    // real outcome, never a fresh `next`.
-    return (
-      `${openStep(stage, forUnit)} is not finished yet. Next: finish its steps, then ` +
-      `\`${aidlcDispatcherInvocation("orchestrate report")} ${scopeFlags(stage, scopedUnit)} --result <outcome>\`.`
-    );
-  }
-  return `${openStep(stage, forUnit)} is not finished yet. ${next(`${aidlcToolInvocation("orchestrate")} next`)}`;
+// Build the line injected when blocking: where the work carries on, in one
+// plain line. Claude Code shows it to the person ("Stop hook error: ..."), so
+// it names the stage the way status does and carries no command, slug,
+// receipt or note to the agent. The agent's steps for it live in every
+// conductor SKILL ("When AI-DLC carries on by itself") and the session-start
+// context: record a question it just asked, park for a person who asked to
+// stop, continue with the rules receipt it holds, finish a stage it holds and
+// run the `report` built from that run-stage (its stage, and its Unit in
+// team-owned Unit work), or run one fresh `next`. A plain `next` from part two
+// restarts the rules at part one, which is always complete, so the line needs
+// no receipt. Deliberately a continuation of sanctioned work, never an
+// instruction to do something new or out-of-band (the security property).
+function continuationReason(kind: string, stage: string, committedTo?: string, unit?: string): string {
+  // A recorded result that moved the work on names the step it moved to
+  // (none under unit-major Construction, where Current Stage does not name it).
+  if (kind === "rehydrate" && committedTo !== undefined) return carryingOnLine(committedTo);
+  // A finished Unit's step, or evidence that is missing or stale: a fresh
+  // `next` decides where the work goes, so the line names no stage.
+  if (kind === "rehydrate") return carryingOnLine("");
+  return carryingOnLine(stage, unit);
 }
 
-// The open step as the person knows it: a shipped stage by its name, a
-// plugin's by the slug they type (the rule stageLabel in aidlc-validity.ts
-// follows), with its Unit; "The work" when no stage can be named.
-function openStep(stage: string, unit?: string): string {
-  if (!/^[a-z0-9][a-z0-9-]*$/.test(stage)) return "The work";
-  let name = stage;
+// "AI-DLC is carrying on with Code Generation for alpha." The marker is a
+// writable file: only a valid Unit name reaches the line.
+function carryingOnLine(stage: string, unit?: string): string {
+  const name = stageName(stage);
+  if (name === null) return `${CARRYING_ON}.`;
+  const forUnit = unit && validateUnitName(unit) === null ? ` for ${unit}` : "";
+  return `${CARRYING_ON} with ${name}${forUnit}.`;
+}
+
+// A stage as the person knows it: a shipped stage by its name, a plugin's by
+// the slug they type (the rule stageLabel in aidlc-validity.ts follows). A
+// slug of any other shape is not named, and a name is one short line or the
+// slug.
+function stageName(slug: string): string | null {
+  if (!STAGE_SLUG.test(slug)) return null;
   try {
-    const node = findStageBySlug(stage);
-    if (node && node.plugin === undefined) name = node.name;
+    const node = findStageBySlug(slug);
+    if (node !== undefined && node.plugin === undefined && /^[^\r\n]{1,80}$/.test(node.name)) return node.name;
   } catch {
-    // An unreadable stage graph still names the step by its slug.
+    // An unreadable stage graph still names the stage by its slug.
   }
-  return unit ? `${name} for ${unit}` : name;
+  return slug;
 }
 
-function scopeFlags(stage: string, unit?: string): string {
-  const slug = /^[a-z0-9][a-z0-9-]*$/.test(stage) ? stage : "<stage>";
-  return unit ? `--stage ${slug} --unit ${unit}` : `--stage ${slug}`;
+// The reason for this tool: the plain line where the tool shows it to the
+// person (Claude Code, Codex, Copilot, Cursor); the line and then the agent's
+// step where the tool hides it, read from the installed tool name.
+function reasonForTheTool(line: string, projectDir: string): string {
+  let hides = false;
+  try {
+    hides = hidesStopNote(runtimeHarnessName(projectDir));
+  } catch {
+    // An unreadable install keeps the plain line.
+  }
+  return hides ? `${line}\n${SAY_THE_LINE}` : line;
 }
 
 // --- Main ---------------------------------------------------------------------
@@ -2093,12 +2148,10 @@ if (!shouldBlock) {
 }
 
 // Within budget — block the stop and re-feed the pending work.
-return blockStop(
+return blockStop(reasonForTheTool(
   continuationReason(
     kind,
     activeStage ?? currentStageSlug(stateContent),
-    directive.continueToken,
-    directive.retained,
     // Under unit-major Construction, Current Stage stays on the block's first
     // stage while the walk moves through (stage, Unit) beats, so it does not
     // name the next step there: leave the stage out.
@@ -2109,10 +2162,9 @@ return blockStop(
         : currentStageSlug(stateContent)
       : undefined,
     activeUnit,
-    directive.finishedUnit,
-    isTeamUnitOwnership(stateContent),
   ),
-);
+  projectDir,
+));
 }
 
 if (import.meta.main) {

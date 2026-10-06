@@ -100,6 +100,7 @@ import {
   guardPolicyAcceptsChanges,
   readAuditShardEvents,
   isRequestTurn,
+  latestPersonTurn,
   personSpokeSinceGate,
   ANSWER_SOURCE_ON_INSTRUCTION,
   unitSkippedUnits,
@@ -2173,6 +2174,12 @@ function handleAnswer(args: string[]): void {
       return;
     }
 
+    // The person's own words go on the record beside the choice the agent read
+    // in them, as they do at a gate and for the engine's own questions.
+    if (instruction === undefined && !autonomousDecision) {
+      const words = latestPersonTurn(pd)?.words;
+      if (words && !isNonAnswer(words)) fields["Person Reply"] = words;
+    }
     if (instruction !== undefined) {
       if (!personSpokeInThisWork(pd)) {
         error("Nothing the person said in this piece of work is on record, so no choice was left to you. Ask them." +

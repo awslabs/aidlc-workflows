@@ -81,9 +81,13 @@ it explicitly, such as Requirements Analysis), the stage protocol requires a
 separate confirmation before any stage artifact is generated. Append or update
 `## Consolidated Summary Confirmation` in the questions file with the summary,
 the prompt, both options without A/B file-letter prefixes, and a blank
-`[Answer]:` tag, then render this numbered question in chat:
+`[Answer]:` tag, then render this numbered question in chat, with the summary
+bullets right above it in the same message, so the person reads what they
+confirm:
 
 ```
+- <each answer, as a summary bullet>
+
 **Confirm** — Does this all look correct before I generate the artifact?
 
 1. **Looks correct** — Generate the artifact from these answers

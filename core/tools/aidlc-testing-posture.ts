@@ -54,6 +54,7 @@ import {
   readPlanApprovalLegacyWindow,
   readPlanApprovalLegacyRecoveryChallenge,
   readPlanApprovalOverrideRequest,
+  readApprovedPlanCopy,
   readPlanApprovalReceipt,
   readPlanApprovalResponse,
   readPlanApprovalViolation,
@@ -105,6 +106,7 @@ import {
   writePlanApprovalChallenge,
   writePlanApprovalLegacyRecoveryResponse,
   writePlanApprovalOverrideRequest,
+  writeApprovedPlanCopy,
   writePlanApprovalReceipt,
   runtimeSessionHint,
   writePlanApprovalResponse,
@@ -124,6 +126,7 @@ import {
   type PlanApprovalRuntimeResponse,
   type PlanApprovalRuntimeIdentity,
   type PlanApprovalRuntimeProvenance,
+  type ApprovedPlanCopy,
   type PlanApprovalRuntimeReceipt,
   type WorkspaceSourceState,
   type WorkspaceSourceListing,
@@ -1517,7 +1520,7 @@ export function workerBrief(
   const marker = target.unit
     ? `AIDLC-UNIT: ${target.unit}`
     : "AIDLC-STAGE: code-generation";
-  const resume = continuation ? null : codeGenerationResume(projectDir, target, { plan, approval });
+  const resume = codeGenerationResume(projectDir, target, { plan, content: snapshotFingerprint });
   const brief =
     `${marker}\n` +
     `AIDLC-TESTING-CONTRACT: ${contractHash}\n` +
@@ -1538,14 +1541,143 @@ export function workerBrief(
   };
 }
 
+// --- An approved plan that changed before the build ---------------------------------
+//
+// The files the person approved are kept beside the approval (writeApprovedPlanCopy).
+// When the plan or its test instructions on disk no longer match them and the
+// build has not started, the person hears one line naming what changed and how
+// to go back; `restore` writes the approved files back, so the approval matches
+// again. Ticks are not a change: the comparison is over the approval content.
+
+/** Keep the approved files for this target and attempt; only bytes that hash to the approval are kept. */
+export function keepApprovedPlanCopy(
+  projectDir: string,
+  authority: CodeGenerationAuthority,
+  fingerprint: string,
+  questions: string,
+): void {
+  // The copy only serves the change line and the way back: a copy that cannot
+  // be kept never stands between the person and their approval.
+  try {
+    const plan = readFileSync(join(authority.stageDir, "code-generation-plan.md"), "utf-8");
+    const instructions = readFileSync(join(authority.stageDir, "unit-test-instructions.md"), "utf-8");
+    const read = readTestingContract(plan);
+    if (!("contract" in read)) return;
+    if (approvalFingerprint(plan, instructions, read.contract.contract_sha256, authority) !== fingerprint) return;
+    writeApprovedPlanCopy(projectDir, authority, { version: 1, fingerprint, plan, instructions, questions });
+  } catch {
+    // Nothing to name later; the approval stands.
+  }
+}
+
+const APPROVED_PLAN_UNDO = 'Say "go back to the approved plan" to undo.';
+
+function quotedStep(text: string): string {
+  return `"${text.length > 80 ? `${text.slice(0, 77).trimEnd()}...` : text}"`;
+}
+
+/** What changed between the approved plan's steps and the plan's steps now, in the person's words. */
+function changedSteps(before: string[], after: string[]): string {
+  const at = Array.from({ length: Math.max(before.length, after.length) }, (_, index) => index)
+    .find((index) => before[index] !== after[index]);
+  if (at === undefined) return "the plan's text changed";
+  const same = (a: string[], b: string[]) => a.length === b.length && a.every((text, index) => text === b[index]);
+  if (after.length === before.length + 1 && same(after.slice(at + 1), before.slice(at))) {
+    return `step ${at + 1} ${quotedStep(after[at])} was added`;
+  }
+  if (before.length === after.length + 1 && same(before.slice(at + 1), after.slice(at))) {
+    return `step ${at + 1} ${quotedStep(before[at])} was removed`;
+  }
+  const what = at < after.length && at < before.length
+    ? `step ${at + 1} now says ${quotedStep(after[at])} instead of ${quotedStep(before[at])}`
+    : at < after.length
+      ? `step ${at + 1} ${quotedStep(after[at])} was added`
+      : `step ${at + 1} ${quotedStep(before[at])} was removed`;
+  const others = Array.from({ length: Math.max(before.length, after.length) }, (_, index) => index)
+    .filter((index) => index > at && before[index] !== after[index]).length;
+  return others > 0 ? `${what}, and ${others} more ${others === 1 ? "step" : "steps"} changed` : what;
+}
+
+export function approvedPlanChangeText(copy: ApprovedPlanCopy, plan: string, instructions: string): string | null {
+  const planChanged = projectPlanApprovalContent(plan) !== projectPlanApprovalContent(copy.plan);
+  const lf = (text: string) => text.replace(/\r\n/g, "\n");
+  const instructionsChanged = lf(instructions) !== lf(copy.instructions);
+  if (!planChanged && !instructionsChanged) return null;
+  if (!planChanged) return `Your approved test instructions changed before the build. ${APPROVED_PLAN_UNDO}`;
+  const what = changedSteps(planSteps(copy.plan).map((step) => step.text), planSteps(plan).map((step) => step.text));
+  return `Your approved plan changed before the build: ${what}${instructionsChanged ? ", and the test instructions changed too" : ""}. ` +
+    APPROVED_PLAN_UNDO;
+}
+
+/** The approved files for this target and attempt, when the person approved them and the build has not started. */
+function unbuiltApprovedCopy(
+  projectDir: string,
+  authority: CodeGenerationAuthority,
+): ApprovedPlanCopy | null {
+  const copy = readApprovedPlanCopy(projectDir, authority);
+  if (copy === null) return null;
+  const receipt = readPlanApprovalReceipt(projectDir, {
+    targetId: authority.targetId, runFloor: authority.runFloor, fingerprint: copy.fingerprint,
+  });
+  return receipt?.choice === "Approve Plan" && receipt.status === "approved" ? copy : null;
+}
+
+/**
+ * The one line the person hears when the plan they approved changed before the
+ * build, or null when it did not (or nothing was approved in this attempt).
+ */
+export function approvedPlanChangeLine(
+  projectDir: string,
+  target: CodeGenerationTarget,
+  issued?: CodeGenerationIssuance,
+): string | null {
+  try {
+    const authority = resolveCodeGenerationAuthority(projectDir, target, issued);
+    const copy = unbuiltApprovedCopy(projectDir, authority);
+    if (copy === null) return null;
+    return approvedPlanChangeText(
+      copy,
+      readFileSync(join(authority.stageDir, "code-generation-plan.md"), "utf-8"),
+      readFileSync(join(authority.stageDir, "unit-test-instructions.md"), "utf-8"),
+    );
+  } catch {
+    return null;
+  }
+}
+
+/** Write the approved plan, test instructions and answer back: the person said to go back to the plan they approved. */
+export function restoreApprovedPlan(projectDir: string, target: CodeGenerationTarget): string {
+  const authority = resolveCodeGenerationAuthority(projectDir, target);
+  const copy = readApprovedPlanCopy(projectDir, authority);
+  const receipt = copy === null ? null : readPlanApprovalReceipt(projectDir, {
+    targetId: authority.targetId, runFloor: authority.runFloor, fingerprint: copy.fingerprint,
+  });
+  if (copy === null || receipt?.choice !== "Approve Plan") {
+    throw new Error(
+      `There is no approved plan to go back to for ${authority.unit === null ? "this code" : authority.unit}. ` +
+        "Show the person the plan as it is now.",
+    );
+  }
+  withActiveDirectiveLock(projectDir, () => {
+    for (const [name, content] of [
+      ["code-generation-plan.md", copy.plan],
+      ["unit-test-instructions.md", copy.instructions],
+      ["code-generation-questions.md", copy.questions],
+    ] as const) {
+      writeRecordFileNoFollow(projectDir, relative(projectDir, join(authority.stageDir, name)), content);
+    }
+  });
+  return "Back to the plan you approved.";
+}
+
 // --- Picking up an interrupted build ----------------------------------------------
 //
 // The worker ticks the plan file as it finishes each step, but the brief hands
 // it the approved plan, where every step reads unticked. So a build cut off part
 // way (a provider error, the editor closed, a crash before the report) was run
 // again from step 1 by the next worker. When the brief is for a build that
-// already started under the approval that is current now, the plan file's ticks
-// are that build's progress, and the brief says so: which steps are ticked,
+// already started on the plan as it is now, the plan file's ticks are that
+// build's progress, and the brief says so: which steps are ticked,
 // which files they name are not in the project, and the step to continue at.
 // Whether a named file that is not there means the step must be redone is the
 // worker's call: a step can name a file it says not to add. The person hears
@@ -1555,13 +1687,17 @@ export function workerBrief(
 // files the steps name are the record: the furthest step whose named files all
 // changed since the build started is where the build got to.
 //
-// "Started under the approval that is current now" is the receipt the approval
-// check validates, at status `generation`. Its key binds the target, the stage
-// attempt (the run floor, which a Redo or a rejected gate moves) and the
-// fingerprint of the approved content (which an edit changes), and every new
-// approval writes a fresh receipt at status `approved`. So a new attempt, a
-// re-approval, and an edited plan (a lowered-fence continuation is not a current
-// approval) all start the steps fresh. And when a build starts fresh (generation
+// "Started on the plan as it is now" is the receipt the questions file names,
+// at status `generation`, when the plan and instructions on disk are the
+// content the build started on. Its key binds the target, the stage attempt
+// (the run floor, which a Redo or a rejected gate moves) and the fingerprint of
+// the approved content, and every new approval writes a fresh receipt at status
+// `approved`. The content a build starts on is the approved content, or, when a
+// lowered fence builds a plan edited after its approval, the edited content,
+// which generation start keeps on the receipt (`startedFingerprint`). So a new
+// attempt, a re-approval, and a plan edited after the build started all start
+// the steps fresh, and a build started on an edited plan picks up like any
+// other. And when a build starts fresh (generation
 // start moves a receipt from `approved` to `generation`), the engine clears the
 // plan file's ticks, so ticks left from before a Redo, a rejected gate, or a
 // re-approval never count as this build's progress. A resume finds the receipt
@@ -1673,13 +1809,14 @@ function stepHeadings(steps: PlanStep[]): string[] | null {
 
 /**
  * Where an interrupted build of this target stands, or null when there is
- * nothing to pick up: the build has not started under the current approval, the
- * active directive is a swarm batch, or nothing is ticked.
+ * nothing to pick up: the build has not started on the plan and instructions as
+ * they are now, the active directive is a swarm batch, or nothing is ticked.
+ * `content` is their fingerprint when the caller has already taken it.
  */
 export function codeGenerationResume(
   projectDir: string,
   target: CodeGenerationTarget,
-  known: { plan?: string; approval?: CodeGenerationApproval; issued?: CodeGenerationIssuance } = {},
+  known: { plan?: string; content?: string; issued?: CodeGenerationIssuance } = {},
 ): CodeGenerationResume | null {
   try {
     const state = readFileSync(stateFilePath(projectDir), "utf-8");
@@ -1695,9 +1832,12 @@ export function codeGenerationResume(
       ? readPlanApprovalReceipt(projectDir, { targetId: authority.targetId, runFloor: authority.runFloor, fingerprint })
       : null;
     if (receipt?.status !== "generation" || receipt.delegation !== undefined) return null;
-    const approval = known.approval ?? evaluateCodeGenerationApproval(projectDir, target, known.issued);
-    if (!approval.ok || approval.approvalFingerprint !== fingerprint) return null;
-    const steps = planSteps(known.plan ?? readFileSync(join(authority.stageDir, "code-generation-plan.md"), "utf-8"));
+    const plan = known.plan ?? readFileSync(join(authority.stageDir, "code-generation-plan.md"), "utf-8");
+    const content = known.content ?? buildContentFingerprint(
+      plan, readFileSync(join(authority.stageDir, "unit-test-instructions.md"), "utf-8"), authority,
+    );
+    if (content !== (receipt.startedFingerprint ?? fingerprint)) return null;
+    const steps = planSteps(plan);
     let ticked = steps.flatMap((step, index) => step.ticked ? [index + 1] : []);
     let next: number | null = steps.findIndex((step) => !step.ticked) + 1 || null;
     let from: CodeGenerationResume["from"] = "ticks";
@@ -1727,6 +1867,16 @@ export function codeGenerationResume(
   } catch {
     return null;
   }
+}
+
+/**
+ * The fingerprint of a plan and its test instructions over the testing contract
+ * the plan embeds: the content a build is on, approved or not. Null when either
+ * is empty or the plan embeds no contract.
+ */
+function buildContentFingerprint(plan: string, instructions: string, authority: CodeGenerationAuthority): string | null {
+  const contract = plan.trim().length > 0 ? parseTestingContract(plan)?.contract_sha256 : undefined;
+  return contract && instructions.trim().length > 0 ? approvalFingerprint(plan, instructions, contract, authority) : null;
 }
 
 /**
@@ -2606,6 +2756,8 @@ function recordCodeGenerationContinuation(
   operation: string,
 ): string[] {
   const detail = `${operation} for ${continuation.authority.targetId} using current content; the earlier approval is unchanged`;
+  // An approved plan that changed before the build is named for the person.
+  const changed = approvedPlanChangeLine(projectDir, { unit: continuation.authority.unit });
   const recorded = recordGuardStoodAside(projectDir, {
     fence: "plan-approval",
     authority: continuation.fence.authority,
@@ -2619,10 +2771,15 @@ function recordCodeGenerationContinuation(
   if (!recorded) {
     recordHookDrop(projectDir, "testing-posture", `GUARD_STOOD_ASIDE row not recorded (audit ledger busy or not writable): ${detail}`);
   }
-  // Under Guard Policy off the row is the whole account; nothing is said.
-  return guardStandAsideSpeaks(continuation.fence)
-    ? [guardStoodAsideLine("plan-approval", continuation.fence.source, detail, recorded)]
-    : [];
+  const line = guardStoodAsideLine("plan-approval", continuation.fence.source, detail, recorded);
+  // Under Guard Policy off the row is the whole account: the stand-aside line
+  // is not said.
+  const speaks = guardStandAsideSpeaks(continuation.fence);
+  if (changed === null) return speaks ? [line] : [];
+  // An approved plan that changed is named in place of the stand-aside line.
+  // A row the ledger could not take is still said beside it, so the doctor's
+  // list matches.
+  return recorded || !speaks ? [changed] : [changed, line];
 }
 
 export interface LegacyPlanApprovalGuardState {
@@ -3566,6 +3723,7 @@ function certifyPlanApprovalReceipt(
     status: "approved",
   };
   writePlanApprovalReceipt(projectDir, receipt);
+  keepApprovedPlanCopy(projectDir, evidence.authority, evidence.fingerprint, readFileSync(evidence.questionsPath, "utf-8"));
   keepWorkspaceSourceSnapshot(projectDir, stateBefore);
   clearPlanApprovalChallenge(projectDir, session);
   // A normal receipt spends any typed break-glass request too: the phrase
@@ -4604,19 +4762,27 @@ function publishCodeGenerationStart(
   prepared: ReturnType<typeof prepareCodeGenerationStart>,
   options: { recordContinuation?: boolean },
   originals: PlanApprovalRuntimeReceipt[],
+  pickUp: boolean,
 ): string[] {
   const { authority, receipt, continuation } = prepared;
   const changeNotices: string[] = continuation && options.recordContinuation !== false
     ? recordCodeGenerationContinuation(projectDir, continuation, "begin") : [];
   if (receipt.status === "generation") return changeNotices;
   originals.push(receipt);
+  // A lowered fence building a plan edited after its approval: the receipt
+  // keeps the content the build started on, so an interrupted build of it picks
+  // up (see "Picking up an interrupted build"). A swarm, a worktree delegation
+  // and a batch keep their own continuation rule.
+  const started = pickUp && continuation && !receipt.batch
+    ? buildContentFingerprint(continuation.artifacts.plan, continuation.artifacts.instructions, authority) : null;
+  const startedOn = started !== null && started !== receipt.fingerprint ? { startedFingerprint: started } : {};
   if (receipt.override !== undefined) {
     // A break-glass receipt is bound to content and attempt only. There is
     // no certified source to compare or re-certify, and no race window to
     // close, so the generation boundary is published as the receipt stands.
     // This is the one place an override could have been downgraded to
     // "approve again": it is not.
-    writePlanApprovalReceipt(projectDir, { ...receipt, status: "generation" });
+    writePlanApprovalReceipt(projectDir, { ...receipt, ...startedOn, status: "generation" });
     return changeNotices;
   }
   const stateBefore = workspaceSourceState(projectDir);
@@ -4629,6 +4795,7 @@ function publishCodeGenerationStart(
     // files as they are, said in one line.
     writePlanApprovalReceipt(projectDir, {
       ...receipt,
+      ...startedOn,
       certifiedSourceSha256: UNBINDABLE_FINGERPRINT,
       status: "generation",
     });
@@ -4663,6 +4830,7 @@ function publishCodeGenerationStart(
   // guard nor directive publication can retire this receipt mid-start.
   writePlanApprovalReceipt(projectDir, {
     ...receipt,
+    ...startedOn,
     certifiedSourceSha256: sourceBefore,
     status: "generation",
   });
@@ -4728,10 +4896,11 @@ export function beginCodeGenerationBatch(
           // own (see "Picking up an interrupted build"). They are cleared before
           // the start is published. A swarm batch and a worktree delegation keep
           // their own continuation rule.
-          if (started.receipt.status !== "generation" && started.receipt.delegation === undefined && !swarm) {
+          const pickUp = started.receipt.delegation === undefined && !swarm;
+          if (started.receipt.status !== "generation" && pickUp) {
             clearPlanFileTicks(projectDir, started.authority.stageDir);
           }
-          notices.push(...publishCodeGenerationStart(projectDir, started, options, originals));
+          notices.push(...publishCodeGenerationStart(projectDir, started, options, originals, pickUp));
         }
         if (needsSource && workspaceSourceFingerprint(projectDir) !== sourceBefore) {
           throw new Error("Source files changed while code generation was starting. Retry the step.");
@@ -4773,7 +4942,7 @@ function flagValue(args: string[], name: string): string | undefined {
 
 function targetFromArgs(
   args: string[],
-  subcommand: "fingerprint" | "verify" | "begin" | "brief",
+  subcommand: "fingerprint" | "verify" | "begin" | "brief" | "restore",
 ): CodeGenerationTarget {
   const unitIndex = args.indexOf("--unit");
   const stageLevel = args.includes("--stage-level");
@@ -4967,9 +5136,12 @@ export function main(argv: string[]): void {
       case "reply":
         console.log(recordedPlanApprovalReply(projectDir, replySession(projectDir, argv)));
         return;
+      case "restore":
+        console.log(restoreApprovedPlan(projectDir, targetFromArgs(argv, "restore")));
+        return;
       default:
         throw new Error(
-          `Unknown subcommand: ${subcommand ?? "(none)"}. Valid: resolve, render, fingerprint, verify, begin, brief, reply`,
+          `Unknown subcommand: ${subcommand ?? "(none)"}. Valid: resolve, render, fingerprint, verify, begin, brief, reply, restore`,
         );
     }
   } catch (error) {

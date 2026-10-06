@@ -63,6 +63,7 @@ import {
   emptyPickerResult,
   enterHookWorkflow,
   hookStandsOutside,
+  hostEnvelopeTurnText,
   clearPlanApprovalChallenge,
   planApprovalChallengeRelativePath,
   protectedQuestionRelativePath,
@@ -120,15 +121,18 @@ async function aidlcEntryReply(prompt: string): Promise<string | null> {
   }
 }
 
-// Switch flags, then exactly one choice of the open code plan question
-// ("/aidlc --guard-policy off Approve Plan"): the switch is for the work open
-// now and the words answer the question. Null for anything else.
+// Setting flags, then the person's reply to the open code plan question
+// ("/aidlc --guard-policy off approve the plan"): the setting is for the work
+// open now and the words are their reply, one of its choices or their own
+// words. Words after an explicit `--` describe new work. Null for anything else.
 function planAnswerAfterSwitch(projectDir: string, prompt: string): string | null {
   try {
+    const entry = /^(?:\/aidlc|\$aidlc|aidlc)(?:\s+|$)/i.exec(prompt.trim());
+    if (entry !== null && splitKiroCommandArgs(prompt.trim().slice(entry[0].length)).includes("--")) return null;
     const parsed = parseTypedGuardSwitchRequest(prompt, { wordsAnswer: true });
-    if (parsed.words === undefined || parsed.error !== null || parsed.switches.length === 0) return null;
+    if (parsed.words === undefined || parsed.error !== null || parsed.settings.length === 0) return null;
     const question = openPlanApprovalQuestion(projectDir, parsed.words);
-    return question !== null && !question.answered && !question.editing && question.isChoice ? parsed.words : null;
+    return question !== null && !question.answered && !question.editing ? parsed.words : null;
   } catch {
     return null;
   }
@@ -268,6 +272,48 @@ function pickedGateLabel(text: string, picker: PlanApprovalPickerQuestion | unde
   return GATE_PICK_LABELS.includes(label.toLowerCase()) ? label : "";
 }
 
+// What a question box carried back, one entry per question it asked: the
+// question as shown and the reply as given, verbatim. Claude Code keys each
+// reply by its question; Codex keys it by the question's id, with a list of
+// picks (its adapter passes the box's reply as picker_reply). Nothing here
+// reads meaning into the reply.
+function pickerReplies(input: string): Array<{ question: string; reply: string }> {
+  try {
+    const payload = JSON.parse(input) as {
+      tool_input?: unknown; toolInput?: unknown; tool_response?: unknown; toolResponse?: unknown; picker_reply?: unknown;
+    };
+    let response = payload.picker_reply ?? payload.tool_response ?? payload.toolResponse;
+    if (typeof response === "string") response = JSON.parse(response);
+    const answers = response !== null && typeof response === "object" ? (response as Record<string, unknown>).answers : null;
+    if (answers === null || typeof answers !== "object" || Array.isArray(answers)) return [];
+    const toolInput = payload.tool_input ?? payload.toolInput;
+    const asked = toolInput !== null && typeof toolInput === "object" &&
+        Array.isArray((toolInput as Record<string, unknown>).questions)
+      ? (toolInput as { questions: unknown[] }).questions
+      : [];
+    const shown = (key: string): string => {
+      for (const entry of asked) {
+        const question = entry !== null && typeof entry === "object" ? entry as Record<string, unknown> : {};
+        if (question.id === key && typeof question.question === "string") return question.question;
+      }
+      return key;
+    };
+    const replies: Array<{ question: string; reply: string }> = [];
+    for (const [key, value] of Object.entries(answers)) {
+      const picks = value !== null && typeof value === "object" && !Array.isArray(value)
+        ? (value as Record<string, unknown>).answers
+        : value;
+      const reply = (Array.isArray(picks) ? picks : [picks])
+        .filter((pick): pick is string => typeof pick === "string" && pick.trim() !== "")
+        .join(", ");
+      if (reply !== "") replies.push({ question: shown(key), reply });
+    }
+    return replies;
+  } catch {
+    return [];
+  }
+}
+
 // Deliberately not exported. This hook mints human authority, so importing the
 // module from project code must not expose a callable function that accepts a
 // fabricated UserPromptSubmit payload. Harnesses and the dispatcher execute it
@@ -315,10 +361,18 @@ try {
     };
     if (typeof parsed.session_id === "string") sessionId = validSessionId(parsed.session_id.trim()) ?? "";
     questionText = extractQuestionText(parsed.tool_input ?? parsed.toolInput);
+    // A host that wraps the person's turn in its own context (Kiro Crew) hands
+    // over the whole envelope as the prompt; only the person's turn is read.
+    // tool_response is a picker payload, never an envelope, and stays as is.
+    const ownTurn = (value: unknown): unknown =>
+      typeof value === "string" ? hostEnvelopeTurnText(value) : value;
+    const prompt = ownTurn(parsed.prompt);
+    const userPrompt = ownTurn(parsed.user_prompt);
+    const message = ownTurn(parsed.message);
     for (const candidate of [
-      parsed.prompt,
-      parsed.user_prompt,
-      parsed.message,
+      prompt,
+      userPrompt,
+      message,
       parsed.tool_response,
       parsed.toolResponse,
     ]) {
@@ -334,7 +388,7 @@ try {
     ) {
       promptSubmitted = true;
       typedPrompt =
-        [parsed.prompt, parsed.user_prompt, parsed.message].find(
+        [prompt, userPrompt, message].find(
           (value): value is string =>
             typeof value === "string" && value.trim().length > 0,
         ) ?? "";
@@ -505,6 +559,20 @@ try {
           }
           if (sessionId && typedPrompt) {
             recordPlanApprovalOverrideRequest(projectDir, sessionId, typedPrompt);
+          }
+          // What the question box carried back goes on the record, question
+          // by question, so the person's reply stands even when no answer is
+          // logged for it. It decides nothing and spends no turn. Written
+          // after the turn's words, which are kept at the shard's size just
+          // after its row.
+          if (pickerQuestion !== undefined && !notAReply) {
+            for (const { question, reply } of pickerReplies(input)) {
+              appendAuditEntryUnlocked("QUESTION_REPLIED", {
+                ...(sessionId ? { Session: sessionId } : {}),
+                Question: question,
+                Reply: reply,
+              }, projectDir);
+            }
           }
         });
       } catch {

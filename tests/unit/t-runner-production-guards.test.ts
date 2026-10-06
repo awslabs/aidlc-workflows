@@ -433,6 +433,30 @@ describe("explicit runner coverage uses real JUnit execution evidence", () => {
     expect(run.summary).toContain("Test files: 1");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
+  test("a run with no --filter leaves the scope runs and the guard matrix out; a filter or --all selects them", () => {
+    const fixture = runnerFixture({
+      "integration/t-scope-run-fixture.test.ts": PASSING_CASE,
+      "integration/t-guard-matrix-fixture.test.ts": PASSING_CASE,
+      "integration/t-plain.test.ts": PASSING_CASE,
+    });
+    const plain = fixture.run(["--integration", "--no-llm"]);
+    expect(plain.status).toBe(0);
+    expect(plain.out).toContain("=== DONE t-plain.test.ts (PASS) ===");
+    expect(plain.out).not.toContain("t-scope-run-fixture.test.ts");
+    expect(plain.out).not.toContain("t-guard-matrix-fixture.test.ts");
+    expect(plain.out).toContain("select them with --filter '^t-(scope-run|guard-matrix)-'");
+    const selected = fixture.run(["--integration", "--no-llm", "--filter", "^t-(scope-run|guard-matrix)-"]);
+    expect(selected.status).toBe(0);
+    expect(selected.out).toContain("=== DONE t-scope-run-fixture.test.ts (PASS) ===");
+    expect(selected.out).toContain("=== DONE t-guard-matrix-fixture.test.ts (PASS) ===");
+    expect(selected.out).not.toContain("t-plain.test.ts");
+    // The full acceptance profile keeps them.
+    const full = fixture.run(["--all", "--no-llm"]);
+    expect(full.status, full.out).toBe(0);
+    expect(full.out).toContain("=== DONE t-scope-run-fixture.test.ts (PASS) ===");
+    expect(full.out).toContain("=== DONE t-plain.test.ts (PASS) ===");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
   test("partially skipped files pass when a case really executes, without requiring expect calls", () => {
     const fixture = runnerFixture({
       "unit/t-mixed.test.ts": `${PASSING_CASE}test.skip("optional", () => {});\n`,

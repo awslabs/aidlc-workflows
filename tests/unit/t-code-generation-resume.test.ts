@@ -19,10 +19,13 @@
 //     the ticks;
 //   - nothing ticked: the brief is byte-identical to the first run's and no
 //     pick-up line;
-//   - Redo, Request Changes at a gate, a re-approval, and an edited plan all
-//     start the steps fresh, even with ticks left on disk: starting the fresh
-//     build clears them (task markers only, fingerprint unchanged), so a resume
-//     of that build counts only its own ticks; a resume never clears ticks;
+//   - Redo, Request Changes at a gate, a re-approval, and a plan edited after
+//     the build started all start the steps fresh, even with ticks left on
+//     disk: starting the fresh build clears them (task markers only,
+//     fingerprint unchanged), so a resume of that build counts only its own
+//     ticks; a resume never clears ticks;
+//   - an approved plan edited before the build (the fence lowered): the build
+//     that started on the edited plan picks up where it got to;
 //   - a swarm batch keeps its own continuation rule: no progress section.
 import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS, NATIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
@@ -844,5 +847,52 @@ describe("the start line and the pick-up line count the plan the same way", () =
       "Generating code for 9 plan steps. This may take several minutes depending on project complexity. " +
         "I'll show a summary when complete.",
     );
+  });
+});
+
+describe("the pick-up is keyed on the plan the build started on", () => {
+  // The fence is lowered, so an approved plan edited before the build is built
+  // as edited: this is that build's first run.
+  function startedOnEditedPlan(proj: string): void {
+    writePlan(proj);
+    expect(next(proj).ask_type).toBe("plan-approval");
+    approve(proj);
+    writeFileSync(planPath(proj), readFileSync(planPath(proj), "utf-8")
+      .replace("- [ ] Step 9:", "- [ ] Step 10: add a fast path\n- [ ] Step 9:"), "utf-8");
+    const build = next(proj);
+    expect(build.kind).toBe("run-stage");
+    expect(build.plan_approval?.status).toBe("approved");
+    expect(build.narration ?? "").not.toContain(PICK_UP);
+    const first = brief(proj);
+    expect(first).toContain("## Current plan (plan-approval fence off)");
+    expect(first).not.toContain("## Progress");
+    dispatch(proj, first);
+  }
+
+  test("an approved plan edited before the build, then cut off: the next session picks up", () => {
+    const proj = project("relaxed");
+    startedOnEditedPlan(proj);
+    tick(proj, UNIT, 1, 2, 3, 4);
+    const again = next(proj);
+    expect(again.kind).toBe("run-stage");
+    expect(again.plan_approval?.status).toBe("approved");
+    expect(again.narration).toBe(`Picking up ${UNIT}'s code at step 5 of 10 (1-4 done).`);
+    const resumed = brief(proj);
+    expect(resumed).toContain("## Progress before the interruption");
+    expect(resumed).toContain(`\nContinue at step 5 of 10: "${STEPS[4]}".`);
+    expect(resumed).toContain("## Current plan (plan-approval fence off)");
+  });
+
+  test("that plan edited again after the build started: the steps start fresh", () => {
+    const proj = project("relaxed");
+    startedOnEditedPlan(proj);
+    tick(proj, UNIT, 1, 2, 3, 4);
+    writeFileSync(planPath(proj), readFileSync(planPath(proj), "utf-8")
+      .replace("Step 10: add a fast path", "Step 10: add a faster path"), "utf-8");
+    const build = next(proj);
+    expect(build.kind).toBe("run-stage");
+    expect(build.plan_approval?.status).toBe("approved");
+    expect(build.narration ?? "").not.toContain(PICK_UP);
+    expect(brief(proj)).not.toContain("## Progress");
   });
 });

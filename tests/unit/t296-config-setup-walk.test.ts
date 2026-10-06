@@ -27,6 +27,7 @@ const BUN = process.execPath;
 const INIT = join(REPO_ROOT, "core", "tools", "aidlc-init.ts");
 const CLAUDE_RELEASE = join(REPO_ROOT, "dist-release", "claude");
 const COPILOT_RELEASE = join(REPO_ROOT, "dist-release", "copilot");
+const CODEX_RELEASE = join(REPO_ROOT, "dist-release", "codex");
 const temporary: string[] = [];
 
 afterAll(() => {
@@ -454,6 +455,36 @@ describe("t296 first-run config setup walk", () => {
       "    [ok]     Trust       no Copilot CLI trust issue; in VS Code, check the folder is trusted and Chat: Use Hooks is on",
     );
     expect(step().stdout).toContain("The Copilot CLI already trusts this folder");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("Codex: the Trust row and step name Codex's own hook trust, apart from AI-DLC's review", () => {
+    const path = project("aidlc-t296-codex-trust-");
+    const home = temp("aidlc-t296-codex-home-");
+    const env = hookPathEnv("aidlc", true, { HOME: home, CODEX_HOME: home });
+    const unmet = "Codex has not trusted this project's hooks yet";
+    const step = "in Codex, type /hooks, press t to trust all, then press Esc";
+
+    const scaffold = run(
+      ["config", "--project-dir", path, "--from", CODEX_RELEASE, "--harness", "codex", "--yes"],
+      path,
+      env,
+      "n\n",
+    );
+    expect(scaffold.status, scaffold.stdout + scaffold.stderr).toBe(0);
+    expect(setupRows(scaffold.stdout).find((line) => line.includes("Trust"))).toBe(
+      `    [needs]  Trust       ${unmet}`,
+    );
+    expect(scaffold.stdout).toContain(`trust        ${step}`);
+    expect(scaffold.stdout).not.toContain("config trust");
+
+    // The trust section says Codex's step first, so its own review question
+    // never reads as that step.
+    const section = run(["config", "trust", "--project-dir", path, "--harness", "codex"], path, env, "n\n");
+    expect(section.status, section.stdout + section.stderr).toBe(0);
+    const said = section.stdout.indexOf(`${unmet}: ${step}.`);
+    const asked = section.stdout.indexOf("Separately, record that you reviewed");
+    expect(said, section.stdout).toBeGreaterThanOrEqual(0);
+    expect(asked, section.stdout).toBeGreaterThan(said);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("an incomplete workspace shell is reported once, never walked, with the command that rebuilds it", () => {

@@ -1085,6 +1085,81 @@ describe("t230 dispatcher route parity", () => {
     );
   });
 
+  test("host hooks in a folder that holds the machine roots refuse and say why", () => {
+    const home = mkdtempSync(join(tmpdir(), "aidlc-t230-home-hooks-"));
+    tempProjects.add(home);
+    const bin = join(home, ".local", "bin");
+    const env = {
+      HOME: home,
+      AIDLC_INSTALL_ROOT: join(home, ".local", "share", "aidlc"),
+      AIDLC_BIN_DIR: bin,
+    };
+    const payload = JSON.stringify({
+      session_id: "t230-home-hooks",
+      cwd: home,
+      tool_name: "bash",
+      tool_input: { command: "echo hi" },
+    });
+    const why = `AI-DLC can't run in ${home}`;
+
+    // Copilot and Cursor deny a failed hook without its reason, so their tool
+    // guards refuse in the host's own deny form. The call is still denied.
+    for (const args of [
+      ["engine", "adapter", "copilot", "guard-tool-call"],
+      ["engine", "hook", "copilot-adapter", "guard-tool-call"],
+    ]) {
+      const result = viaDispatcher(args, home, env, payload);
+      expect(result.exitCode, args.join(" ")).toBe(0);
+      const decision = (JSON.parse(result.stdout.toString()) as {
+        hookSpecificOutput: Record<string, string>;
+      }).hookSpecificOutput;
+      expect(decision.hookEventName).toBe("PreToolUse");
+      expect(decision.permissionDecision).toBe("deny");
+      expect(decision.permissionDecisionReason).toContain(why);
+      expect(decision.permissionDecisionReason).toContain(
+        "Start the session from your project's folder.",
+      );
+    }
+    const cursor = viaDispatcher(["engine", "adapter", "cursor", "guards"], home, env, payload);
+    expect(cursor.exitCode).toBe(0);
+    const cursorDecision = JSON.parse(cursor.stdout.toString()) as Record<string, string>;
+    expect(cursorDecision.permission).toBe("deny");
+    expect(cursorDecision.agent_message).toContain(why);
+
+    // Every other host route keeps its exit code, and its first stderr line,
+    // the line hosts show, names the folder and what to do.
+    for (const args of [
+      ["engine", "hook", "plan-approval-guard"],
+      ["engine", "adapter", "copilot", "session-start"],
+      ["engine", "statusline"],
+    ]) {
+      const result = viaDispatcher(args, home, env, payload);
+      expect(result.exitCode, args.join(" ")).toBe(1);
+      expect(result.stdout.toString(), args.join(" ")).toBe("");
+      const firstLine = result.stderr.toString().split("\n")[0];
+      expect(firstLine, args.join(" ")).toContain(why);
+      expect(firstLine, args.join(" ")).toContain("start the session from your project's folder");
+    }
+    expect(existsSync(join(home, "aidlc"))).toBe(false);
+
+    // However a project comes to overlap the install, its tool guard denies.
+    const project = makeProject();
+    const named = viaDispatcher(
+      ["engine", "adapter", "copilot", "guard-tool-call"],
+      project,
+      { AIDLC_INSTALL_ROOT: project, AIDLC_BIN_DIR: bin },
+      payload,
+    );
+    expect(named.exitCode).toBe(0);
+    const namedDecision = (JSON.parse(named.stdout.toString()) as {
+      hookSpecificOutput: Record<string, string>;
+    }).hookSpecificOutput;
+    expect(namedDecision.permissionDecision).toBe("deny");
+    expect(namedDecision.permissionDecisionReason).toContain(
+      `AI-DLC can't run in ${project}. Start the session from your project's folder.`,
+    );
+  });
+
   test("--project-dir is global and may be interleaved with workspace tokens", () => {
     const projectDir = makeProject();
     const routed = viaDispatcher(
@@ -1794,6 +1869,80 @@ describe("t230 dispatcher dev and compiled in-process modes", () => {
     expect(labels.some((label) => label.includes(".claude/settings.json"))).toBe(false);
   });
 
+  test("compiled main run by Codex in a project that also holds Claude Code reads the Codex install", () => {
+    const projectDir = mkdtempSync(join(tmpdir(), "aidlc-t230-codex-beside-claude-"));
+    const machine = mkdtempSync(join(tmpdir(), "aidlc-t230-codex-beside-claude-machine-"));
+    tempProjects.add(projectDir);
+    tempProjects.add(machine);
+    cpSync(join(REPO_ROOT, "dist", "claude"), projectDir, { recursive: true });
+    cpSync(join(REPO_ROOT, "dist", "codex"), projectDir, { recursive: true });
+    const doctorLabels = (env: NodeJS.ProcessEnv): string[] => {
+      const result = viaImportedCompiledMain(
+        ["doctor", "--project-dir", projectDir, "--json"],
+        projectDir,
+        {
+          AIDLC_BIN_DIR: join(machine, "bin"),
+          AIDLC_DISPATCH_TOOLS_DIR: CORE_TOOLS_DIR,
+          AIDLC_HARNESS_DIR: "",
+          AIDLC_HARNESS_NAME: "",
+          AIDLC_INSTALL_ROOT: machine,
+          CODEX_SESSION_ID: "",
+          ...env,
+        },
+      );
+      const report = JSON.parse(result.stdout.toString()) as {
+        data: { checks: Array<{ label: string }> };
+      };
+      return report.data.checks.map((check) => check.label);
+    };
+    // Codex sets CODEX_SESSION_ID in every shell command its model runs.
+    const codex = doctorLabels({ CODEX_SESSION_ID: "019a0000-0000-7000-8000-000000000230" });
+    expect(codex.some((label) => label.startsWith("config.toml present"))).toBe(true);
+    expect(codex).not.toContain("settings.json present");
+    // Any other caller keeps the first install, as before.
+    const other = doctorLabels({});
+    expect(other).toContain("settings.json present");
+    expect(other.some((label) => label.startsWith("config.toml present"))).toBe(false);
+  });
+
+  test("a Codex session picks the project's Codex install only when there is one and no harness is named", () => {
+    const saved = { dir: process.env.AIDLC_HARNESS_DIR, session: process.env.CODEX_SESSION_ID };
+    const restore = (key: "AIDLC_HARNESS_DIR" | "CODEX_SESSION_ID", value: string | undefined) => {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    };
+    const writeHarness = (projectDir: string, distribution: string): void => {
+      const dataDir = join(projectDir, `.${distribution}`, "tools", "data");
+      mkdirSync(dataDir, { recursive: true });
+      writeFileSync(
+        join(dataDir, "harness.json"),
+        `${JSON.stringify({ schemaVersion: 1, distribution, harnessDir: `.${distribution}` })}\n`,
+      );
+    };
+    try {
+      delete process.env.AIDLC_HARNESS_DIR;
+      const both = mkdtempSync(join(tmpdir(), "aidlc-t230-codex-session-both-"));
+      const claudeOnly = mkdtempSync(join(tmpdir(), "aidlc-t230-codex-session-claude-"));
+      tempProjects.add(both);
+      tempProjects.add(claudeOnly);
+      writeHarness(both, "claude");
+      writeHarness(both, "codex");
+      writeHarness(claudeOnly, "claude");
+      delete process.env.CODEX_SESSION_ID;
+      expect(discoverableRuntimeHarnessDir(both)).toBe(".claude");
+      process.env.CODEX_SESSION_ID = "  ";
+      expect(discoverableRuntimeHarnessDir(both)).toBe(".claude");
+      process.env.CODEX_SESSION_ID = "019a0000-0000-7000-8000-000000000231";
+      expect(discoverableRuntimeHarnessDir(both)).toBe(".codex");
+      expect(discoverableRuntimeHarnessDir(claudeOnly)).toBe(".claude");
+      process.env.AIDLC_HARNESS_DIR = ".claude";
+      expect(discoverableRuntimeHarnessDir(both)).toBe(".claude");
+    } finally {
+      restore("AIDLC_HARNESS_DIR", saved.dir);
+      restore("CODEX_SESSION_ID", saved.session);
+    }
+  });
+
   test("a Kiro tree's layout comes from its declaration, then its row name, then its conductor", () => {
     // Each shipped row declares its layout in harness.json.
     expect(kiroTreeLayout(join(REPO_ROOT, "dist", "kiro", ".kiro"))).toBe("agent-v1");
@@ -2086,11 +2235,16 @@ describe("t230 native review-brief dispatch", () => {
       expect(stopped.status, `${stopped.stdout}\n${stopped.stderr}`).toBe(0);
       const feedback = JSON.parse(stopped.stdout) as { decision: string; reason: string };
       expect(feedback.decision).toBe("block");
-      // A stage whose rules ride inside its run-stage names a fresh `next`; one
-      // whose rules arrive first (most stages on Copilot) names the receipt of
-      // the part in hand.
-      const recovery = /`(aidlc engine orchestrate (?:next|continue \S+))`/.exec(feedback.reason)?.[1];
-      expect(recovery, feedback.reason).toBeDefined();
+      // The Stop note is one plain line the person reads; the shipped skill
+      // names the agent's step for it, here one fresh `next`, and each rules
+      // part then names its own `continue`.
+      expect(feedback.reason).toStartWith("AI-DLC is carrying on");
+      const skillPath = [join(harnessDir, "skills", "aidlc", "SKILL.md"), join(".agents", "skills", "aidlc", "SKILL.md"), join(".github", "skills", "aidlc", "SKILL.md")]
+        .map((rel) => join(project, rel))
+        .find((path) => existsSync(path));
+      expect(skillPath, harness.name).toBeDefined();
+      const recovery = /run one fresh `(aidlc engine orchestrate next)`/.exec(readFileSync(skillPath!, "utf-8"))?.[1];
+      expect(recovery, harness.name).toBeDefined();
       let command = recovery!;
       let kind = "";
       for (let part = 0; part < 20; part++) {
@@ -2139,7 +2293,10 @@ describe("t230 native review-brief dispatch", () => {
             `| R-01 | Minor | ${artifact} > FR-1 | Deadline is missing | Add a delivery date |  |`,
           );
         } else {
-          expect(output).toContain(finding);
+          // The person's brief: a narrow row, and the full text on its own line.
+          expect(output).toContain(`| R-01 | Minor | ${artifact.split("/").at(-1)} > FR-1 | New |`);
+          expect(output).toContain("> R-01 Finding: Deadline is missing");
+          expect(output).toContain("> R-01 Required action: Add a delivery date");
         }
         if (command === "review") {
           expect(output).toContain("**Stage:** Requirements Analysis");

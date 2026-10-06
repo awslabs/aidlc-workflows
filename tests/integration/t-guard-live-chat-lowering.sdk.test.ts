@@ -108,11 +108,13 @@ describe.skipIf(
       expect(guardEvents("GUARD_POLICY_SET")).toHaveLength(0);
       expect(guardEvents("GUARD_DISABLED")).toHaveLength(0);
 
-      // A flags-only invocation resumes the workflow after applying the switch.
-      // Stop at its deterministic acknowledgement, before unrelated stage work.
+      // The hook applies a typed switch when the prompt arrives, so `next` only
+      // ends the turn for the agent to say the hook's line. Stop at that
+      // deterministic step, before any stage work.
+      const APPLIED = "The setting the person typed is already applied";
       const relaxed = await drive("/aidlc --guard-policy relaxed", 240_000, {
         toolName: "Bash",
-        resultIncludes: "Guard Policy",
+        resultIncludes: APPLIED,
       });
       expect(stateLines()).toContain(RELAXED_LINE);
       expect(guardEvents("GUARD_POLICY_SET")).toHaveLength(1);
@@ -121,7 +123,7 @@ describe.skipIf(
       );
       expect(policyRows).toHaveLength(1);
       expect(auditBlockField(policyRows[0].block, "Source")).toBe("you");
-      assertToolResultContains(relaxed, "Bash", "Guard Policy");
+      assertToolResultContains(relaxed, "Bash", APPLIED);
 
       const disabled = await drive("/aidlc config set guard.state-transition off", 90_000, {
         toolName: "Bash",

@@ -47,17 +47,21 @@ import {
   aidlcHookTarget,
   assertProjectionPathHasNoSymlinks,
   hostToolPath,
+  emptyJsonObject,
   insertJsoncSetting,
+  type JsonEntriesOwnership,
   jsonFileText,
   isCustomClaudeStatusLine,
   jsoncRootMembers,
   jsoncSettingValue,
   legacyAidlcHookTarget,
   mergeBlock,
+  mergeJsonEntries,
   type ProjectionDescriptor,
   projectionFiles,
   readJsonFile,
   readRootIntegrations,
+  removeJsonEntries,
   removeJsoncSetting,
   replaceJsoncSetting,
   copyStartsWithout,
@@ -203,6 +207,8 @@ import {
   providerAnswerIsTheSession,
   sessionModelAccessFact,
   availableScopeNames,
+  CODEX_HOOK_TRUST_UNMET,
+  codexHookTrustStep,
   completionInstruction,
   copilotCliTrust,
   detectAwsCredentials,
@@ -276,7 +282,10 @@ type RootContribution =
   | { policy: "whole-file"; hash: string }
   // Only the settings AI-DLC itself added, with the value it wrote; created
   // records that the file did not exist before.
-  | { policy: "jsonc-settings"; entries: Record<string, string>; added?: string[]; created?: boolean };
+  | { policy: "jsonc-settings"; entries: Record<string, string>; added?: string[]; created?: boolean }
+  // Each entry AI-DLC owns in a team's JSON file (opencode.json), with the
+  // value hash it wrote; created records that AI-DLC created the file.
+  | { policy: "json-entries"; entries: Record<string, string>; created?: boolean };
 
 type Baseline = {
   schemaVersion: 1;
@@ -298,6 +307,8 @@ type PreparedRefreshSource = {
   regenerated: Set<string>;
   retiredManagedFiles: Set<string>;
   projectOverlays?: ReadonlySet<string>;
+  // Files whose merge could not be proven: a refresh replaces them only with --force.
+  unproven?: ReadonlySet<string>;
   entries?: Baseline["entries"];
   notes: string[];
 };
@@ -845,7 +856,24 @@ function validateChannelConfigArgs(argv: readonly string[]): string | null {
   return validateConfigOutputMode(argv);
 }
 
+// `config --show [--json]` reads every section and changes nothing, so it takes
+// only the flags that shape its output and --project-dir.
+const ROOT_SHOW_BARE_FLAGS = new Set(["--show", "--json", "--no-color", "--help"]);
+
+function validateRootShowArgs(argv: readonly string[]): string | null {
+  for (let i = 0; i < argv.length; i++) {
+    const token = argv[i];
+    if (token === "--project-dir") {
+      i++;
+      continue;
+    }
+    if (!ROOT_SHOW_BARE_FLAGS.has(token)) return `${token} cannot be combined with config --show`;
+  }
+  return argv.filter((token) => token === "--show").length > 1 ? "--show may be specified only once" : null;
+}
+
 function validateRootConfigArgs(argv: readonly string[]): string | null {
+  if (argv.includes("--show")) return validateRootShowArgs(argv);
   const hasPin = argv.includes("--pin");
   const hasUnpin = argv.includes("--unpin");
   if (hasPin && hasUnpin) return "--pin and --unpin are mutually exclusive";
@@ -1778,6 +1806,9 @@ function checkDiagnosticSection(
   }
   const blockers = issues.filter((issue) => issue.severity !== "warn");
   const warnings = issues.filter((issue) => issue.severity === "warn");
+  // Only the person can give Codex its hook trust, inside Codex.
+  const hostSteps = [...new Set(blockers.map((issue) => codexHookTrustStep(issue.id)))];
+  const hostStep = hostSteps.length === 1 ? hostSteps[0] : null;
   const providersUnrecorded = section === "providers" && records.providers === null;
   const cleanMessage = section === "providers" && harnessOwnsModelAccess(selected.harness)
     ? `providers needs no answer for ${selected.harness}; its model access is harness-managed`
@@ -1807,7 +1838,7 @@ function checkDiagnosticSection(
             blockers.map((issue) => `${issue.id} (${issue.message})`).join("; ")
           }`,
           EXIT.failure,
-          configCommand(`${section} --show`),
+          hostStep ?? configCommand(`${section} --show`),
         ),
     options,
   );
@@ -2111,8 +2142,17 @@ function diagnosticWizard(
     }
     return next;
   }
+  // Codex's own hook trust comes first, so the review question below never
+  // reads as that step.
+  const codexStep = selected.harness === "codex"
+    ? trustStatus(projectDir, selected.harnessDir, selected.harness).issues
+      .map((issue) => codexHookTrustStep(issue.id)).find((step) => step !== null)
+    : undefined;
+  if (codexStep) writeMenuRow("  ", `${CODEX_HOOK_TRUST_UNMET}: ${codexStep}.`);
   const answer = promptYesDefault(
-    "  Record that you reviewed the trust and allowlist files?",
+    codexStep
+      ? "  Separately, record that you reviewed AI-DLC's trust and allowlist files?"
+      : "  Record that you reviewed the trust and allowlist files?",
     false,
   );
   process.stdout.write(
@@ -2204,14 +2244,14 @@ function configCompletionMessage(
 ): string {
   if (actions.length === 0 || mode === "json") return base;
   if (mode === "quiet") {
-    const commands = [...new Set(actions.map((action) => action.command))];
+    const commands = [...new Set(actions.map((action) => action.step ?? action.command))];
     return `${base}\nOutstanding actions: ${commands.join("; ")}`;
   }
   return [
     base,
     "Outstanding actions:",
     ...actions.map((action) =>
-      `  ${action.section}/${action.id}: ${action.message} - run \`${action.command}\``
+      `  ${action.section}/${action.id}: ${action.message} - ${action.step ?? `run \`${action.command}\``}`
     ),
   ].join("\n");
 }
@@ -2407,7 +2447,7 @@ function setupMapRows(
   // Copilot in VS Code gates hooks on switches AI-DLC cannot read, so the row
   // names them as the person's to check instead of reporting all trust as met.
   const copilot = modelHarness(distribution) === "copilot";
-  const trustDetail = trust.length === 1 && trust[0].id === "copilot-folder-untrusted"
+  const trustDetail = trust.length === 1 && (trust[0].id === "copilot-folder-untrusted" || trust[0].step)
     ? trust[0].message
     : trust.length > 0
     ? `${trust.length} host trust issue${trust.length === 1 ? "" : "s"}`
@@ -2519,7 +2559,8 @@ function renderSetupLedger(
     } still need${actions.length === 1 ? "s" : ""} you\n`,
   );
   for (const action of actions) {
-    writeCommandRow(`    ${action.section.padEnd(12)} `, action.command);
+    if (action.step) writeMenuRow(`    ${action.section.padEnd(12)} `, action.step);
+    else writeCommandRow(`    ${action.section.padEnd(12)} `, action.command);
   }
 }
 
@@ -3943,6 +3984,8 @@ function contributionValid(entry: unknown): boolean {
       return isStringMap(entry.entries) &&
         (entry.added === undefined || (Array.isArray(entry.added) && entry.added.every((key) => typeof key === "string"))) &&
         (entry.created === undefined || typeof entry.created === "boolean");
+    case "json-entries":
+      return isStringMap(entry.entries) && (entry.created === undefined || typeof entry.created === "boolean");
     default:
       return false;
   }
@@ -4816,6 +4859,13 @@ const CODEX_FRAMEWORK_ASSIGNMENTS = [
     pattern:
       /[\t ]*(?:suppress_unstable_features_warning|"suppress_unstable_features_warning"|'suppress_unstable_features_warning')[\t ]*=[^\r\n]*(?:\r?\n|$)/y,
   },
+  // The raised output budget: without it Codex cuts a long workflow instruction
+  // short for a model outside its catalog.
+  {
+    name: "tool_output_token_limit",
+    pattern:
+      /[\t ]*(?:tool_output_token_limit|"tool_output_token_limit"|'tool_output_token_limit')[\t ]*=[^\r\n]*(?:\r?\n|$)/y,
+  },
 ] as const;
 
 // Match only real root assignments, not lookalikes in onboarding prose, arrays,
@@ -4894,13 +4944,657 @@ function codexSections(
   return sections;
 }
 
+// A TOML table header or assignment with its exact source range and full key
+// path. Comments and blank lines belong to no statement, so an edit never moves
+// them. `table` is the header an assignment sits under ([] at the root);
+// `comment` says the statement's own lines carry a comment, `innerComment` that
+// one sits inside its value (a multi-line array).
+type TomlStatement = {
+  kind: "header" | "assignment";
+  path: string[];
+  table: string[];
+  // A header or assignment inside an array of tables: never AI-DLC's.
+  arrayTable: boolean;
+  start: number;
+  end: number;
+  valueStart: number;
+  valueEnd: number;
+  comment: boolean;
+  innerComment: boolean;
+};
+
+// The key path a TOML key or header spells (quoted, escaped and dotted forms
+// alike), read by parsing it.
+function tomlParsedPath(text: string): string[] | null {
+  try {
+    let value: unknown = Bun.TOML.parse(text);
+    const path: string[] = [];
+    while (isRecord(value) && Object.keys(value).length === 1) {
+      const key = Object.keys(value)[0];
+      path.push(key);
+      value = value[key];
+    }
+    return path.length > 0 ? path : null;
+  } catch {
+    return null;
+  }
+}
+
+// The index of a key's `=` from `from`, outside quotes and before `limit` or the
+// line end; -1 when there is none.
+function tomlKeyEquals(content: string, from: number, limit = content.length): number {
+  for (let index = from; index < limit; index++) {
+    const char = content[index];
+    if (char === "\n") return -1;
+    if (char === "=") return index;
+    if (char === '"' || char === "'") {
+      index++;
+      while (index < limit && content[index] !== char && content[index] !== "\n") {
+        if (char === '"' && content[index] === "\\") index++;
+        index++;
+      }
+    }
+  }
+  return -1;
+}
+
+// The span of one TOML value starting after `=` at `from`. A statement value
+// ends at the line end outside strings and brackets; a member of an inline table
+// ends before its `,` or `}`. `end` is past the statement's line end.
+function tomlValueSpan(
+  content: string,
+  from: number,
+  member: boolean,
+  limit = content.length,
+): { valueStart: number; valueEnd: number; end: number; comment: boolean; inner: boolean } | null {
+  let index = from;
+  while (index < limit && (content[index] === " " || content[index] === "\t")) index++;
+  const valueStart = index;
+  let valueEnd = index;
+  let depth = 0;
+  let comment = false;
+  let inner = false;
+  while (index < limit) {
+    const char = content[index];
+    if (depth === 0 && member && (char === "," || char === "}")) {
+      return { valueStart, valueEnd, end: index, comment, inner };
+    }
+    if (char === "\n") {
+      if (depth === 0 && !member) return { valueStart, valueEnd, end: index + 1, comment, inner };
+      index++;
+      continue;
+    }
+    if (char === " " || char === "\t" || char === "\r") {
+      index++;
+      continue;
+    }
+    if (char === "#") {
+      comment = true;
+      if (depth > 0) inner = true;
+      while (index < limit && content[index] !== "\n") index++;
+      continue;
+    }
+    if (char === '"' || char === "'") {
+      const delimiter = content.startsWith(char.repeat(3), index) ? char.repeat(3) : char;
+      index += delimiter.length;
+      for (;;) {
+        if (index >= limit) return null;
+        if (char === '"' && content[index] === "\\") {
+          index += 2;
+          continue;
+        }
+        if (content.startsWith(delimiter, index)) {
+          // Up to two quotes may close the content right before the delimiter.
+          for (let extra = 0; extra < 2 && delimiter.length === 3 && content[index + 3] === char; extra++) {
+            index++;
+          }
+          break;
+        }
+        if (delimiter.length === 1 && content[index] === "\n") return null;
+        index++;
+      }
+      index += delimiter.length;
+      valueEnd = index;
+      continue;
+    }
+    if (char === "[" || char === "{") depth++;
+    else if (char === "]" || char === "}") depth--;
+    if (depth < 0) return null;
+    index++;
+    valueEnd = index;
+  }
+  return depth === 0 && !member ? { valueStart, valueEnd, end: limit, comment, inner } : null;
+}
+
+// Every table header and assignment of a TOML file, in order; null when a line
+// cannot be read, so the caller never edits what it did not understand.
+function tomlStatements(content: string): TomlStatement[] | null {
+  const statements: TomlStatement[] = [];
+  let table: string[] = [];
+  let arrayTable = false;
+  let index = 0;
+  while (index < content.length) {
+    const lineStart = index;
+    while (index < content.length && (content[index] === " " || content[index] === "\t")) index++;
+    const char = content[index];
+    if (index >= content.length) break;
+    if (char === "\n" || char === "\r" || char === "#") {
+      const newline = content.indexOf("\n", index);
+      index = newline < 0 ? content.length : newline + 1;
+      continue;
+    }
+    if (char === "[") {
+      const newline = content.indexOf("\n", index);
+      const end = newline < 0 ? content.length : newline + 1;
+      const line = content.slice(lineStart, end);
+      const path = tomlParsedPath(`${line.trimEnd()}\n`);
+      if (path === null) return null;
+      table = path;
+      arrayTable = content.startsWith("[[", index);
+      statements.push({
+        kind: "header", path, table: [], arrayTable,
+        start: lineStart, end, valueStart: end, valueEnd: end,
+        // A header name holds no `#` outside quotes, so one here opens a comment.
+        comment: /#/.test(line.replace(/"(?:[^"\\\n]|\\.)*"|'[^'\n]*'/g, "")),
+        innerComment: false,
+      });
+      index = end;
+      continue;
+    }
+    const equals = tomlKeyEquals(content, index);
+    if (equals < 0) return null;
+    const key = tomlParsedPath(`${content.slice(index, equals)}= 0\n`);
+    const value = tomlValueSpan(content, equals + 1, false);
+    if (key === null || value === null) return null;
+    statements.push({
+      kind: "assignment", path: [...table, ...key], table, arrayTable,
+      start: lineStart, end: value.end, valueStart: value.valueStart, valueEnd: value.valueEnd,
+      comment: value.comment,
+      innerComment: value.inner,
+    });
+    index = value.end;
+  }
+  return statements;
+}
+
+// The value span of `path` inside the inline table spanning valueStart..valueEnd.
+function tomlInlineMemberSpan(
+  content: string,
+  valueStart: number,
+  valueEnd: number,
+  path: readonly string[],
+): { start: number; end: number; innerComment: boolean } | null {
+  if (content[valueStart] !== "{" || content[valueEnd - 1] !== "}") return null;
+  const close = valueEnd - 1;
+  let index = valueStart + 1;
+  while (index < close) {
+    while (index < close && /[\s,]/.test(content[index])) index++;
+    if (index >= close) break;
+    const equals = tomlKeyEquals(content, index, close);
+    if (equals < 0) return null;
+    const key = tomlParsedPath(`${content.slice(index, equals)}= 0\n`);
+    const value = tomlValueSpan(content, equals + 1, true, close + 1);
+    if (key === null || value === null) return null;
+    if (pathStartsWith(path, key)) {
+      return key.length === path.length
+        ? { start: value.valueStart, end: value.valueEnd, innerComment: value.inner }
+        : tomlInlineMemberSpan(content, value.valueStart, value.valueEnd, path.slice(key.length));
+    }
+    index = value.end;
+  }
+  return null;
+}
+
+// The span of the value that defines `path`: its own assignment, wherever the
+// file puts it, or its member inside an enclosing inline table.
+function tomlValueSpanOf(
+  content: string,
+  statements: readonly TomlStatement[],
+  path: readonly string[],
+): { start: number; end: number; innerComment: boolean; statement: TomlStatement } | null {
+  for (const statement of statements) {
+    if (statement.kind !== "assignment" || statement.arrayTable) continue;
+    if (!pathStartsWith(path, statement.path)) continue;
+    if (statement.path.length === path.length) {
+      return {
+        start: statement.valueStart,
+        end: statement.valueEnd,
+        innerComment: statement.innerComment,
+        statement,
+      };
+    }
+    const member = tomlInlineMemberSpan(
+      content,
+      statement.valueStart,
+      statement.valueEnd,
+      path.slice(statement.path.length),
+    );
+    return member ? { ...member, statement } : null;
+  }
+  return null;
+}
+
+function pathStartsWith(path: readonly string[], prefix: readonly string[]): boolean {
+  return prefix.length <= path.length && prefix.every((part, at) => part === path[at]);
+}
+
+// A key path as TOML spells it: bare parts where allowed, quoted otherwise.
+function tomlKey(path: readonly string[]): string {
+  return path.map((part) => /^[A-Za-z0-9_-]+$/.test(part) ? part : JSON.stringify(part)).join(".");
+}
+
+function tomlPathValue(
+  root: unknown,
+  path: readonly string[],
+): { found: boolean; value: unknown; clash: boolean } {
+  let value: unknown = root;
+  for (const part of path) {
+    if (value === undefined) return { found: false, value: undefined, clash: false };
+    if (!isTomlTable(value)) return { found: false, value: undefined, clash: true };
+    value = Object.hasOwn(value, part) ? value[part] : undefined;
+  }
+  return { found: value !== undefined, value, clash: false };
+}
+
+// A TOML table as parsed: a plain object. Dates and times parse to other objects.
+function isTomlTable(value: unknown): value is Record<string, unknown> {
+  if (!isRecord(value)) return false;
+  const prototype = Object.getPrototypeOf(value);
+  return prototype === Object.prototype || prototype === null;
+}
+
+// Values compare as TOML values (the parser already reads a CRLF line end inside
+// a multi-line string as one line end). Paths in `skip` are left out, and tables
+// they leave empty with them.
+function codexValueText(value: unknown, skip: ReadonlySet<string> = new Set(), path: string[] = []): string {
+  if (typeof value === "string") return JSON.stringify(value);
+  if (Array.isArray(value)) return `[${value.map((item) => codexValueText(item)).join(",")}]`;
+  if (isTomlTable(value)) {
+    const members = Object.keys(value).sort().flatMap((key) => {
+      const child = [...path, key];
+      if (skip.has(JSON.stringify(child))) return [];
+      const text = codexValueText(value[key], skip, child);
+      return skip.size > 0 && text === "{}" && isTomlTable(value[key]) ? [] : [`${JSON.stringify(key)}:${text}`];
+    });
+    return `{${members.join(",")}}`;
+  }
+  if (value !== null && typeof value === "object") return JSON.stringify(`${value.constructor?.name}:${String(value)}`);
+  return JSON.stringify(value);
+}
+
+const CODEX_VALUE_ENTRY_PREFIX = "value:";
+const CODEX_SPACE_POINTER = JSON.stringify(["shell_environment_policy", "set", "AIDLC_RULES_DIR"]);
+const CODEX_SPACE_MEMORY = /^aidlc\/spaces\/[^/"\\]+\/memory$/;
+
+function codexValueEntry(path: readonly string[]): string {
+  return `${CODEX_VALUE_ENTRY_PREFIX}${JSON.stringify(path)}`;
+}
+
+// AI-DLC's own settings in config.toml: each leaf key under the shipped root
+// assignments and framework tables, by full path. A project table under one of
+// those roots (an [agents.<name>] role) is never one of them.
+function codexFrameworkLeaves(shipped: Record<string, unknown>): string[][] {
+  const leaves: string[][] = [];
+  const walk = (value: unknown, path: string[]): void => {
+    if (isTomlTable(value) && Object.keys(value).length > 0) {
+      for (const [key, child] of Object.entries(value)) walk(child, [...path, key]);
+    } else {
+      leaves.push(path);
+    }
+  };
+  for (const { name } of CODEX_FRAMEWORK_ASSIGNMENTS) {
+    if (Object.hasOwn(shipped, name)) leaves.push([name]);
+  }
+  for (const name of CODEX_FRAMEWORK_TABLES) {
+    if (isTomlTable(shipped[name])) walk(shipped[name], [name]);
+  }
+  return leaves;
+}
+
+function codexFrameworkValueEntries(config: string): Array<[string, string]> {
+  const shipped = Bun.TOML.parse(config) as Record<string, unknown>;
+  return codexFrameworkLeaves(shipped).map((path) => [
+    codexValueEntry(path),
+    sha256Bytes(codexValueText(tomlPathValue(shipped, path).value)),
+  ]);
+}
+
+// The hashes a baseline from before per-value records holds, read from real
+// statements: per root assignment, and per top-level table section from its
+// header to the next real header (a table a later release retires included).
+function legacyCodexEntryHashes(
+  content: string,
+  statements: readonly TomlStatement[],
+): Record<string, string> {
+  const hashes: Record<string, string> = {};
+  for (const statement of statements) {
+    if (statement.kind !== "assignment" || statement.table.length !== 0 || statement.path.length !== 1) continue;
+    if (Object.hasOwn(hashes, statement.path[0])) continue;
+    const key = statement.start + (/^[\t ]*/.exec(content.slice(statement.start, statement.end))?.[0].length ?? 0);
+    hashes[statement.path[0]] = sha256Bytes(content.slice(key, statement.end).replaceAll("\r\n", "\n").trimEnd());
+  }
+  const headers = statements.filter((statement) => statement.kind === "header");
+  for (const [at, header] of headers.entries()) {
+    const name = header.path.length === 1 && !header.arrayTable ? header.path[0] : null;
+    if (name === null || Object.hasOwn(hashes, name)) continue;
+    const text = content.slice(header.start, headers[at + 1]?.start ?? content.length)
+      .replaceAll("\r\n", "\n")
+      .trimEnd();
+    hashes[name] = sha256Bytes(text);
+  }
+  return hashes;
+}
+
+function plainList(items: readonly string[]): string {
+  return items.length <= 1
+    ? items.join("")
+    : `${items.slice(0, -1).join(", ")} and ${items[items.length - 1]}`;
+}
+
+// Refresh AI-DLC's own settings in the project's config.toml and keep every byte
+// of the project's: its keys (also inside AI-DLC's tables), its tables, comments,
+// blank lines, order and spelling. A value of AI-DLC's nobody changed takes the
+// release's; a value the project changed stays theirs; a deleted one comes back;
+// a retired one goes while it still holds what AI-DLC wrote. Returns null when
+// the file cannot be merged and proven, so the caller falls back.
+function mergeCodexEntries(
+  staged: string,
+  currentFile: string,
+  priorEntries: Record<string, string> | undefined,
+  pristine: boolean,
+  label: string,
+): { content: string; notes: string[] } | null {
+  // Anything the merge fails to read or prove (a crafted file included) leaves
+  // the file to the whole-table fallback.
+  try {
+    return planCodexEntries(staged, currentFile, priorEntries, pristine, label);
+  } catch {
+    return null;
+  }
+}
+
+function planCodexEntries(
+  staged: string,
+  currentFile: string,
+  priorEntries: Record<string, string> | undefined,
+  pristine: boolean,
+  label: string,
+): { content: string; notes: string[] } | null {
+  const bom = currentFile.startsWith("\uFEFF") ? "\uFEFF" : "";
+  const current = currentFile.slice(bom.length);
+  const newline = current.includes("\r\n") ? "\r\n" : "\n";
+  const lines = (text: string): string => text.replaceAll("\r\n", "\n").replaceAll("\n", newline);
+  const stagedObject = Bun.TOML.parse(staged) as Record<string, unknown>;
+  const currentObject = Bun.TOML.parse(current) as Record<string, unknown>;
+  const stagedStatements = tomlStatements(staged);
+  const currentStatements = tomlStatements(current);
+  if (stagedStatements === null || currentStatements === null) return null;
+
+  const recorded = priorEntries ?? {};
+  // No record at all: a baseline from before entries, where an untouched file is
+  // all AI-DLC's, or a file AI-DLC never wrote.
+  const unrecorded = Object.keys(recorded).length === 0;
+  const perValue = Object.keys(recorded).some((key) => key.startsWith(CODEX_VALUE_ENTRY_PREFIX));
+  const legacyCurrent = perValue ? {} : legacyCodexEntryHashes(current, currentStatements);
+  const legacyStaged = perValue ? {} : legacyCodexEntryHashes(staged, stagedStatements);
+  const leaves = codexFrameworkLeaves(stagedObject);
+  const expected = new Map<string, unknown>();
+  const sets: string[][] = [];
+  const putBack: string[] = [];
+  const kept: string[] = [];
+  for (const leaf of leaves) {
+    const target = tomlPathValue(stagedObject, leaf).value;
+    const now = tomlPathValue(currentObject, leaf);
+    if (now.clash || (now.found && isTomlTable(now.value) !== isTomlTable(target))) return null;
+    const key = JSON.stringify(leaf);
+    const legacyKey = leaf[0];
+    const record = perValue ? recorded[codexValueEntry(leaf)] : recorded[legacyKey];
+    const same = now.found && codexValueText(now.value) === codexValueText(target);
+    const spacePointer = now.found && key === CODEX_SPACE_POINTER &&
+      typeof now.value === "string" && CODEX_SPACE_MEMORY.test(now.value) &&
+      typeof target === "string" && CODEX_SPACE_MEMORY.test(target);
+    if (same || spacePointer) {
+      expected.set(key, now.value);
+      continue;
+    }
+    if (!now.found) {
+      if (!pristine && record !== undefined && (perValue || legacyCurrent[legacyKey] === undefined)) {
+        putBack.push(tomlKey(leaf));
+      }
+      sets.push(leaf);
+      expected.set(key, target);
+      continue;
+    }
+    // The record says what AI-DLC last wrote. A key it never recorded is the
+    // project's, unless no record exists at all and the file is untouched.
+    const unedited = unrecorded
+      ? pristine
+      : record !== undefined &&
+        (perValue ? record === sha256Bytes(codexValueText(now.value)) : legacyCurrent[legacyKey] === record);
+    if (unedited) {
+      sets.push(leaf);
+      expected.set(key, target);
+      continue;
+    }
+    // The project's own value stays; say so only when this release ships another.
+    const shippedChanged = record === undefined ||
+      (perValue ? record !== sha256Bytes(codexValueText(target)) : legacyStaged[legacyKey] !== record);
+    if (shippedChanged) kept.push(tomlKey(leaf));
+    expected.set(key, now.value);
+  }
+
+  // Retired: recorded, no longer shipped, and still holding what AI-DLC wrote.
+  const shippedLeaves = new Set(leaves.map((leaf) => JSON.stringify(leaf)));
+  const retired: string[][] = [];
+  if (perValue) {
+    for (const [entry, hash] of Object.entries(recorded)) {
+      if (!entry.startsWith(CODEX_VALUE_ENTRY_PREFIX)) continue;
+      const path = JSON.parse(entry.slice(CODEX_VALUE_ENTRY_PREFIX.length)) as string[];
+      if (shippedLeaves.has(JSON.stringify(path))) continue;
+      const now = tomlPathValue(currentObject, path);
+      if (now.found && sha256Bytes(codexValueText(now.value)) === hash) retired.push(path);
+    }
+  } else {
+    // An older baseline: a section exactly as recorded (or, with no record at
+    // all, an untouched file) is AI-DLC's, so what this release no longer ships
+    // in it goes.
+    const ownedSection = (name: string): boolean => unrecorded
+      ? pristine && (CODEX_FRAMEWORK_TABLES.has(name) ||
+        CODEX_FRAMEWORK_ASSIGNMENTS.some((assignment) => assignment.name === name))
+      : recorded[name] !== undefined && legacyCurrent[name] === recorded[name];
+    for (const statement of currentStatements) {
+      if (statement.kind !== "assignment" || statement.arrayTable) continue;
+      const inSection = statement.table.length === 0 ? statement.path.length === 1 : statement.table.length === 1;
+      if (!inSection || !ownedSection(statement.path[0])) continue;
+      if (tomlPathValue(stagedObject, statement.path).found) continue;
+      if (leaves.some((leaf) => pathStartsWith(leaf, statement.path))) continue;
+      retired.push(statement.path);
+    }
+  }
+
+  const edits: Array<{ start: number; end: number; text: string; order: number }> = [];
+  const insertedStatements = new Set<number>();
+  const appendedTables = new Set<string>();
+  const appended: string[] = [];
+  for (const leaf of sets) {
+    const value = tomlValueSpanOf(staged, stagedStatements, leaf);
+    if (value === null) return null;
+    const valueText = lines(staged.slice(value.start, value.end));
+    const existing = tomlValueSpanOf(current, currentStatements, leaf);
+    if (existing !== null) {
+      // A comment of the project's inside the old value would go with it.
+      if (existing.innerComment) return null;
+      edits.push({ start: existing.start, end: existing.end, text: valueText, order: edits.length });
+      continue;
+    }
+    // Missing inside an inline table of the project's: add it as one more member.
+    const inline = currentStatements.find((statement) =>
+      statement.kind === "assignment" && !statement.arrayTable &&
+      statement.path.length < leaf.length && pathStartsWith(leaf, statement.path)
+    );
+    if (inline) {
+      if (inline.path.length !== leaf.length - 1 || current[inline.valueStart] !== "{") return null;
+      const inner = current.slice(inline.valueStart + 1, inline.valueEnd - 1);
+      const at = inline.valueStart + 1 + inner.trimEnd().length;
+      const member = `${tomlKey(leaf.slice(inline.path.length))} = ${valueText}`;
+      const lead = inner.trim() === "" || inner.trimEnd().endsWith(",") ? " " : ", ";
+      edits.push({ start: at, end: at, text: `${lead}${member}`, order: edits.length });
+      continue;
+    }
+    // Missing: add the shipped statement that defines it, once.
+    const shippedStatement = value.statement;
+    if (insertedStatements.has(shippedStatement.start)) continue;
+    insertedStatements.add(shippedStatement.start);
+    const statementPath = shippedStatement.path;
+    if (currentStatements.some((statement) => pathStartsWith(statement.path, statementPath))) return null;
+    const statementValue = lines(staged.slice(shippedStatement.valueStart, shippedStatement.valueEnd));
+    if (statementPath.length === 1) {
+      const text = lines(staged.slice(shippedStatement.start, shippedStatement.end).trimEnd());
+      edits.push({ start: 0, end: 0, text: `${text}${newline}${newline}`, order: edits.length });
+      continue;
+    }
+    const tableName = statementPath[0];
+    const header = currentStatements.find((statement) =>
+      statement.kind === "header" && !statement.arrayTable &&
+      statement.path.length === 1 && statement.path[0] === tableName
+    );
+    if (header) {
+      const section = currentStatements.slice(currentStatements.indexOf(header) + 1);
+      const next = section.findIndex((statement) => statement.kind === "header");
+      const body = next < 0 ? section : section.slice(0, next);
+      const at = body.length > 0 ? body[body.length - 1].end : header.end;
+      const lead = at === current.length && !current.endsWith("\n") ? newline : "";
+      edits.push({
+        start: at,
+        end: at,
+        text: `${lead}${tomlKey(statementPath.slice(1))} = ${statementValue}${newline}`,
+        order: edits.length,
+      });
+      continue;
+    }
+    const rootDefined = currentStatements.filter((statement) =>
+      statement.kind === "assignment" && statement.table.length === 0 &&
+      statement.path[0] === tableName
+    );
+    if (rootDefined.length > 0) {
+      const at = rootDefined[rootDefined.length - 1].end;
+      edits.push({
+        start: at,
+        end: at,
+        text: `${tomlKey(statementPath)} = ${statementValue}${newline}`,
+        order: edits.length,
+      });
+      continue;
+    }
+    if (appendedTables.has(tableName)) continue;
+    appendedTables.add(tableName);
+    // Append the shipped table, with the comment lines right above its header.
+    const shippedHeader = stagedStatements.find((statement) =>
+      statement.kind === "header" && statement.path.length === 1 && statement.path[0] === tableName
+    );
+    if (!shippedHeader) return null;
+    const shippedSection = stagedStatements.slice(stagedStatements.indexOf(shippedHeader) + 1);
+    const shippedNext = shippedSection.findIndex((statement) => statement.kind === "header");
+    const shippedBody = shippedNext < 0 ? shippedSection : shippedSection.slice(0, shippedNext);
+    let from = shippedHeader.start;
+    while (from > 0) {
+      const previousStart = staged.lastIndexOf("\n", from - 2) + 1;
+      if (!staged.slice(previousStart, from).trimStart().startsWith("#")) break;
+      from = previousStart;
+    }
+    const to = shippedBody.length > 0 ? shippedBody[shippedBody.length - 1].end : shippedHeader.end;
+    // One blank line before each appended table.
+    const separator = appendedTables.size > 1
+      ? newline
+      : current.length === 0 || current.endsWith(`${newline}${newline}`)
+      ? ""
+      : current.endsWith("\n")
+      ? newline
+      : `${newline}${newline}`;
+    appended.push(`${separator}${lines(staged.slice(from, to).trimEnd())}${newline}`);
+  }
+  // Appended tables come after anything added to the file's own last table.
+  for (const text of appended) {
+    edits.push({ start: current.length, end: current.length, text, order: edits.length });
+  }
+  // A retired setting goes with its line; a comment of the project's on that
+  // line, or a setting inside an inline table, is not AI-DLC's to remove.
+  const removed = new Set<TomlStatement>();
+  for (const path of retired) {
+    const existing = tomlValueSpanOf(current, currentStatements, path);
+    if (existing === null) continue;
+    if (existing.statement.path.length !== path.length || existing.statement.comment) return null;
+    removed.add(existing.statement);
+    edits.push({ start: existing.statement.start, end: existing.statement.end, text: "", order: edits.length });
+  }
+  // A retired table's header goes with its last setting.
+  for (const [at, header] of currentStatements.entries()) {
+    if (header.kind !== "header" || header.arrayTable || header.path.length !== 1) continue;
+    if (isTomlTable(stagedObject[header.path[0]])) continue;
+    const section = currentStatements.slice(at + 1);
+    const next = section.findIndex((statement) => statement.kind === "header");
+    const body = next < 0 ? section : section.slice(0, next);
+    if (body.length === 0 || !body.every((statement) => removed.has(statement))) continue;
+    if (header.comment) return null;
+    edits.push({ start: header.start, end: header.end, text: "", order: edits.length });
+  }
+
+  // Apply from the end; edits at one offset keep the shipped order.
+  edits.sort((left, right) => right.start - left.start || right.order - left.order);
+  let merged = current;
+  let limit = current.length;
+  for (const edit of edits) {
+    if (edit.end > limit) return null;
+    merged = merged.slice(0, edit.start) + edit.text + merged.slice(edit.end);
+    limit = edit.start;
+  }
+
+  // Prove the result before it is used: it parses, AI-DLC's settings hold what
+  // was planned, and everything else equals the project's file.
+  const mergedObject = Bun.TOML.parse(merged) as Record<string, unknown>;
+  for (const leaf of leaves) {
+    const got = tomlPathValue(mergedObject, leaf);
+    if (!got.found || codexValueText(got.value) !== codexValueText(expected.get(JSON.stringify(leaf)))) {
+      return null;
+    }
+  }
+  for (const path of retired) if (tomlPathValue(mergedObject, path).found) return null;
+  const owned = new Set([...leaves, ...retired].map((path) => JSON.stringify(path)));
+  if (codexValueText(mergedObject, owned) !== codexValueText(currentObject, owned)) return null;
+
+  const notes: string[] = [];
+  if (unrecorded && !pristine && sets.length > 0 && current.trim() !== "") {
+    notes.push(`added AI-DLC's settings to ${label}; your own settings were kept.`);
+  } else if (putBack.length > 0) {
+    notes.push(`put back AI-DLC's ${plainList(putBack)} in ${label}.`);
+  }
+  if (kept.length === 1) {
+    notes.push(
+      `kept your ${kept[0]} in ${label}; this release ships a different value. Delete the key and refresh to take it.`,
+    );
+  } else if (kept.length > 1) {
+    notes.push(
+      `kept your ${plainList(kept)} in ${label}; this release ships different values. Delete a key and refresh to take its shipped value.`,
+    );
+  }
+  return { content: `${bom}${merged}`, notes };
+}
+
 function mergeCodexUserConfiguration(
   staged: string,
   current: string,
   priorEntries: Record<string, string> | undefined,
   pristine: boolean,
-): { content: string; frameworkOwnedClean: boolean } {
-  // Keep project model/provider assignments and custom tables, but always
+  notes: string[],
+  label: string,
+): { content: string; frameworkOwnedClean: boolean; proven: boolean } {
+  const entries = mergeCodexEntries(staged, current, priorEntries, pristine, label);
+  if (entries !== null) {
+    notes.push(...entries.notes);
+    return { content: entries.content, frameworkOwnedClean: true, proven: true };
+  }
+  // A file the per-entry merge cannot prove keeps the whole-table behaviour:
+  // keep project model/provider assignments and custom tables, but always
   // stage framework tables from the release. Local drift in those tables
   // remains visible to the ownership planner.
   let merged = current;
@@ -4956,6 +5650,7 @@ function mergeCodexUserConfiguration(
   return {
     content: merged.endsWith("\n") ? merged : `${merged}\n`,
     frameworkOwnedClean,
+    proven: false,
   };
 }
 
@@ -4964,6 +5659,8 @@ function preserveCodexProviderFields(
   stagedRoot: string,
   harnessDir: string,
   prior: Baseline | null,
+  notes: string[],
+  unproven: Set<string>,
 ): boolean {
   const relative = `${harnessDir}/config.toml`;
   const currentPath = join(projectDir, relative);
@@ -4975,9 +5672,31 @@ function preserveCodexProviderFields(
     current,
     prior?.entries?.[relative],
     sha256Bytes(current) === prior?.files[relative],
+    notes,
+    relative,
   );
   writeFileSync(stagedPath, merged.content);
-  return merged.frameworkOwnedClean;
+  // A file this refresh wrote can hold the project's own keys inside AI-DLC's
+  // tables, which the whole-table merge would drop: only --force replaces it.
+  if (!merged.proven && merged.content !== current) unproven.add(relative);
+  return merged.proven;
+}
+
+// True when the staged release merges opencode.json per entry: the team's
+// provider block is then never copied into AI-DLC's part, so it is never read
+// as AI-DLC's.
+function stagedOpenCodeJsonEntries(stagedRoot: string): boolean {
+  try {
+    const descriptor = readJsonFile(join(stagedRoot, ".aidlc", "tools", "data", "aidlc-projection.json")) as {
+      rootIntegrations?: unknown;
+    };
+    const integrations = readRootIntegrations(descriptor.rootIntegrations);
+    return Array.isArray(integrations) && integrations.some((integration) =>
+      isRecord(integration) && integration.path === "opencode.json" && integration.policy === "json-entries"
+    );
+  } catch {
+    return false;
+  }
 }
 
 function preserveOpenCodeProviderFields(
@@ -4986,7 +5705,7 @@ function preserveOpenCodeProviderFields(
 ): void {
   const currentPath = join(projectDir, "opencode.json");
   const stagedPath = join(stagedRoot, "opencode.json");
-  if (!regularFile(currentPath) || !regularFile(stagedPath)) return;
+  if (!regularFile(currentPath) || !regularFile(stagedPath) || stagedOpenCodeJsonEntries(stagedRoot)) return;
   const currentText = readFileSync(currentPath, "utf-8");
   const current = JSON.parse(withoutBom(currentText)) as Record<string, unknown>;
   if (!current.provider || typeof current.provider !== "object" ||
@@ -5022,6 +5741,7 @@ function preserveUserProviderFields(
   prior: Baseline | null,
   notes: string[],
   retiredManagedFiles: Set<string>,
+  unproven: Set<string>,
 ): boolean {
   if (harness === "claude") {
     // Claude settings merge per entry, so the refreshed file always applies.
@@ -5037,7 +5757,7 @@ function preserveUserProviderFields(
     )) retiredManagedFiles.add(rel);
     return true;
   } else if (harness === "codex") {
-    return preserveCodexProviderFields(projectDir, stagedRoot, harnessDir, prior);
+    return preserveCodexProviderFields(projectDir, stagedRoot, harnessDir, prior, notes, unproven);
   } else if (harness === "opencode") {
     preserveOpenCodeProviderFields(projectDir, stagedRoot);
   }
@@ -5104,13 +5824,15 @@ function prepareRefreshSource(
   } else if (!projectProjection && entries && descriptor.distribution === "codex") {
     const rel = `${descriptor.harnessDir}/config.toml`;
     const config = readFileSync(join(sourceRoot, rel), "utf-8");
-    entries[rel] = Object.fromEntries([
-      ...codexFrameworkAssignments(config)
-        .map((assignment) => [assignment.name, sha256Bytes(assignment.text)]),
-      ...codexSections(config)
-        .filter((section) => CODEX_FRAMEWORK_TABLES.has(section.name))
-        .map((section) => [section.name, sha256Bytes(section.text)]),
-    ]);
+    // Per-value records drive the refresh; the table and assignment records stay
+    // beside them for the whole-table fallback and for older releases.
+    const legacy = legacyCodexEntryHashes(config, tomlStatements(config) ?? []);
+    entries[rel] = {
+      ...Object.fromEntries(Object.entries(legacy).filter(([name]) =>
+        CODEX_FRAMEWORK_TABLES.has(name) || CODEX_FRAMEWORK_ASSIGNMENTS.some((assignment) => assignment.name === name)
+      )),
+      ...Object.fromEntries(codexFrameworkValueEntries(config)),
+    };
   }
   const currentHarness = join(projectDir, descriptor.harnessDir);
   const currentHarnessData = join(currentHarness, "tools", "data", "harness.json");
@@ -5133,6 +5855,13 @@ function prepareRefreshSource(
   try {
   const root = join(cleanup, "projection");
   cpSync(sourceRoot, root, { recursive: true, preserveTimestamps: true });
+  // A copy runtime leaves the team's json-entries file out; AI-DLC's part
+  // (root-blocks) stands in for it, so a provider answer lands in that part.
+  for (const integration of descriptor.rootIntegrations) {
+    if (integration.policy !== "json-entries" || pathPresent(join(root, integration.path))) continue;
+    const part = rootBlockPath(join(root, descriptor.harnessDir), integration);
+    if (regularFile(part)) cpSync(part, join(root, integration.path), { preserveTimestamps: true });
+  }
   // A project's own tree holds the team's AGENTS.md or .gitignore
   // with AI-DLC's part merged in, markers and all; the staged release takes
   // AI-DLC's part alone from root-blocks, so a refresh never wraps that part
@@ -5273,9 +6002,9 @@ function prepareRefreshSource(
     }
   }
   // Preserve project-owned provider/model fields and unrelated additions.
-  // Claude's AI-DLC entries are refreshed in place; Codex's framework-owned
-  // entries remain tied to the baseline.
+  // Claude's and Codex's AI-DLC entries are refreshed in place, per entry.
   const retiredManagedFiles = new Set<string>();
+  const unproven = new Set<string>();
   const configurationOwnershipClean = preserveUserProviderFields(
     projectDir,
     root,
@@ -5287,6 +6016,7 @@ function prepareRefreshSource(
     prior,
     notes,
     retiredManagedFiles,
+    unproven,
   );
   // A recorded flag overrides a directly customized settings value.
   applyProjectFlagsToProjection(
@@ -5545,7 +6275,7 @@ function prepareRefreshSource(
       }
     }
   }
-  return { root, cleanup, regenerated, retiredManagedFiles, projectOverlays, entries, notes };
+  return { root, cleanup, regenerated, retiredManagedFiles, projectOverlays, unproven, entries, notes };
   } catch (error) {
     rmSync(cleanup, { recursive: true, force: true });
     throw error;
@@ -6920,7 +7650,8 @@ function renderFirstRunEnding(
         continue;
       }
       writeMenuRow("    ", action.message);
-      writeCommandRow("    fix: ", action.command);
+      if (action.step) writeMenuRow("    fix: ", action.step);
+      else writeCommandRow("    fix: ", action.command);
       process.stdout.write("\n");
     }
   }
@@ -7396,7 +8127,15 @@ function customizeFirstRun(
 
 async function runFirstRunWizard(projectDir: string): Promise<boolean> {
   try {
-  const candidates = installedSourceCandidates();
+  // A pinned project is set up from its pinned release, as `config --harness`
+  // is: the children below pass the chosen root as --from, and a source other
+  // than the pin would be refused only after every question was answered. A
+  // malformed pin, or a pinned release this machine lacks, leaves the wizard
+  // to the regular path, which reports it before asking anything.
+  const pinPath = join(projectDir, ".aidlc-version");
+  const pinned = regularFile(pinPath) ? readFileSync(pinPath, "utf-8").trim() : undefined;
+  if (pathPresent(pinPath) && (pinned === undefined || !VERSION_ID.test(pinned))) return false;
+  const candidates = installedSourceCandidates(pinned);
   if (candidates.length === 0) return false;
   // Storage that cannot hold the transaction lock would fail at apply, after
   // every question; find out before asking any. Whatever the check hits (a
@@ -7654,6 +8393,7 @@ function planManagedFiles(
   regenerated: ReadonlySet<string>,
   retainBaseline: boolean,
   projectOverlays: ReadonlySet<string> = new Set(),
+  unproven: ReadonlySet<string> = new Set(),
 ): void {
   const shipped = new Set<string>();
   for (const directory of descriptor.managedDirectories) {
@@ -7744,6 +8484,7 @@ function planManagedFiles(
         targetExists &&
         (
           !targetRegular ||
+          unproven.has(rel) ||
           (!adoptedManagedFile && (!priorHash || currentHash !== priorHash))
         ) &&
         !force
@@ -7888,6 +8629,15 @@ function holdsShippedServers(projectDir: string, descriptor: Pick<ProjectionDesc
   return false;
 }
 
+// Two JSON texts with the same value, byte order mark and layout aside.
+function sameJsonText(left: string, right: string): boolean {
+  try {
+    return canonical(JSON.parse(withoutBom(left))) === canonical(JSON.parse(withoutBom(right)));
+  } catch {
+    return false;
+  }
+}
+
 function planRootIntegrations(
   projectDir: string,
   sourceRoot: string,
@@ -7907,6 +8657,9 @@ function planRootIntegrations(
   // MCP is on because the project already has the shipped servers: keep and
   // update those, and add none it does not have.
   keepPresent = false,
+  // The source is the project's own copied tree, whose json-entries file is
+  // the team's own with AI-DLC's part merged in.
+  ownJsonEntries = ownBytes,
 ): void {
   let siblings: ProjectHarness[] | undefined;
   let siblingProjections: Array<{
@@ -8269,6 +9022,56 @@ function planRootIntegrations(
       }
       continue;
     }
+    if (integration.policy === "json-entries") {
+      // A team's own JSON file (opencode.json): AI-DLC adds its entries that
+      // are absent, follows the ones it wrote while nobody changed them, and
+      // removes only those it no longer ships. The team's keys, values,
+      // comments, and layout stay as they are.
+      const shippedText = readFileSync(sourcePath, "utf-8");
+      const legacy = integration.legacySignatures?.wholeFileHashes ?? [];
+      const currentHash = sha256Bytes(current);
+      const bareHash = sha256Bytes(withoutBom(current));
+      const legacyMatch = legacy.includes(currentHash) || legacy.includes(bareHash);
+      let ownership: JsonEntriesOwnership;
+      if (priorContribution?.policy === "json-entries") {
+        ownership = { kind: "recorded", entries: priorContribution.entries };
+      } else if (priorContribution?.policy === "whole-file") {
+        // A file AI-DLC wrote whole: still as written, or edited since.
+        ownership = priorContribution.hash === currentHash || priorContribution.hash === bareHash || legacyMatch
+          ? { kind: "whole" }
+          : { kind: "matching" };
+      } else {
+        // From the project's own files the "shipped" file is the team's file
+        // itself, so matching it proves nothing: only entries naming AI-DLC's
+        // own folders are read as AI-DLC's, as at the first session.
+        ownership = legacyMatch || (!ownJsonEntries && sameJsonText(current, shippedText))
+          ? { kind: "whole" }
+          : { kind: "none" };
+      }
+      const merged = mergeJsonEntries(current, shippedText, ownership, force);
+      if ("conflict" in merged) {
+        actions.push({ path: integration.path, action: "conflict", detail: merged.conflict });
+        continue;
+      }
+      const created = !targetExists || priorContribution?.policy === "whole-file" ||
+        (priorContribution?.policy === "json-entries" && priorContribution.created === true);
+      contributions[integration.path] = {
+        policy: "json-entries",
+        entries: merged.entries,
+        ...(created ? { created: true } : {}),
+      };
+      if (merged.text === current) {
+        actions.push({ path: integration.path, action: "preserve" });
+      } else {
+        operations.push(writeOperation(integration.path, merged.text, expected(targetPath)));
+        actions.push({
+          path: integration.path,
+          action: !targetExists ? "create" : merged.whole ? "update" : "merge",
+          detail: legacyMatch && priorContribution?.policy !== "json-entries" ? "adopted exact legacy signature" : undefined,
+        });
+      }
+      continue;
+    }
     if (integration.policy === "json-array") {
       let targetValue: unknown;
       let sourceValue: unknown;
@@ -8466,6 +9269,22 @@ function planRemovedRootIntegrations(
       } else {
         operations.push(writeOperation(path, value, expected(targetPath)));
         actions.push({ path, action: "merge", detail: "removed retired settings" });
+      }
+      continue;
+    }
+    if (contribution.policy === "json-entries") {
+      // Remove only the entries AI-DLC wrote and nobody has changed since.
+      const value = removeJsonEntries(text, contribution.entries, force);
+      if (value === null) {
+        actions.push({ path, action: "conflict", detail: "retired JSON integration is malformed" });
+      } else if (value === text) {
+        actions.push({ path, action: "preserve", detail: "retired entries were changed or already removed" });
+      } else if (contribution.created && emptyJsonObject(value)) {
+        operations.push({ kind: "remove", path, expected: expected(targetPath) });
+        actions.push({ path, action: "remove", detail: NO_LONGER_SHIPPED });
+      } else {
+        operations.push(writeOperation(path, value, expected(targetPath)));
+        actions.push({ path, action: "merge", detail: "removed retired JSON entries" });
       }
       continue;
     }
@@ -9860,6 +10679,83 @@ function recordBypassesOnly(
   }
 }
 
+// `config --show [--json]`: each section's own `--show`, in CONFIG_SECTIONS
+// order, run in this process with its output gathered, so every block is
+// exactly what that section prints. A section that cannot answer here (no
+// installed harness yet) answers with its own message, and the read still
+// succeeds: agents run this first for "show my settings".
+async function showEverySection(
+  argv: readonly string[],
+  options: ReturnType<typeof globalOptions>,
+  internal: ConfigMainInternal,
+): Promise<void> {
+  const projectDir = valueAfter(argv, "--project-dir");
+  const shared = [
+    ...(projectDir === undefined ? [] : ["--project-dir", projectDir]),
+    ...(argv.includes("--no-color") ? ["--no-color"] : []),
+    ...(options.mode === "json" ? ["--json"] : []),
+  ];
+  const answers: Array<{ section: string; stdout: string; output: string; code: number }> = [];
+  for (const section of CONFIG_SECTIONS) {
+    answers.push({ section, ...(await gatherConfigOutput([section, "--show", ...shared], internal)) });
+  }
+  if (options.mode === "json") {
+    const sections = Object.fromEntries(answers.map(({ section, stdout, code }) => {
+      try {
+        return [section, JSON.parse(stdout) as unknown];
+      } catch {
+        return [section, { ok: false, code, status: "failed", message: stdout.trim() }];
+      }
+    }));
+    emitResult(success("settings for every config section", { sections }), options);
+    return;
+  }
+  process.stdout.write(
+    answers.map(({ section, output }) => `${heading(section, process.stdout)}\n${output.replace(/\n*$/, "\n")}`)
+      .join("\n"),
+  );
+  process.exitCode = EXIT.ok;
+}
+
+// Runs one config command in this process and hands back what it printed
+// (stdout alone, and both streams in order) and its exit code, leaving the
+// caller's exit code as it was.
+async function gatherConfigOutput(
+  args: string[],
+  internal: ConfigMainInternal,
+): Promise<{ stdout: string; output: string; code: number }> {
+  const stdout: string[] = [];
+  const output: string[] = [];
+  const text = (chunk: unknown): string =>
+    typeof chunk === "string" ? chunk : Buffer.from(chunk as Uint8Array).toString("utf-8");
+  const gather = (toStdout: boolean) =>
+    ((chunk: unknown, ...rest: unknown[]) => {
+      if (toStdout) stdout.push(text(chunk));
+      output.push(text(chunk));
+      const done = rest.find((item) => typeof item === "function") as (() => void) | undefined;
+      done?.();
+      return true;
+    }) as typeof process.stdout.write;
+  const stdoutWrite = process.stdout.write;
+  const stderrWrite = process.stderr.write;
+  const exitCode = process.exitCode;
+  process.exitCode = undefined;
+  process.stdout.write = gather(true);
+  process.stderr.write = gather(false);
+  try {
+    await main(args, internal);
+  } catch (error) {
+    output.push(`error: ${error instanceof Error ? error.message : String(error)}\n`);
+    process.exitCode = EXIT.failure;
+  } finally {
+    process.stdout.write = stdoutWrite;
+    process.stderr.write = stderrWrite;
+  }
+  const code = typeof process.exitCode === "number" ? process.exitCode : EXIT.ok;
+  process.exitCode = exitCode;
+  return { stdout: stdout.join(""), output: output.join(""), code };
+}
+
 export async function main(
   input: string[],
   internal: ConfigMainInternal = {},
@@ -9926,6 +10822,10 @@ export async function main(
     const validation = validateRootConfigArgs(argv);
     if (validation) {
       emitResult(usage(validation, configCommand("--help")), options);
+      return;
+    }
+    if (argv.includes("--show") && !argv.includes("--help")) {
+      await showEverySection(argv, options, internal);
       return;
     }
   }
@@ -10613,6 +11513,7 @@ export async function main(
       prepared.regenerated,
       retainBaseline,
       prepared.projectOverlays,
+      prepared.unproven,
     );
     for (const rel of prepared.retiredManagedFiles) {
       const target = join(projectDir, rel);
@@ -10675,6 +11576,7 @@ export async function main(
           rootContributions,
           ownFilesProject,
           keepPresentServers,
+          true,
         );
       }
     }

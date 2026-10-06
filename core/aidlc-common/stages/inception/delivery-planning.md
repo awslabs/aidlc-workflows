@@ -187,7 +187,8 @@ Preserve an existing explicit choice. When the person asks to change the order
 `{{INVOKE}} engine state set-construction-iteration <unit-major|stage-major>` in
 that turn and say its `notice` line word for word; do not ask them to confirm it.
 Do not silently migrate a legacy workflow: without the checkpoint field it keeps
-its prior first-stage review and late stage-gate cascade. Team-owned work keeps
+its prior first-stage review, and its late stage approvals come as one question.
+Team-owned work keeps
 its own per-stage or unit-end `unit_gate` policy. Plan Approval, summary
 confirmation, and verification command selection remain human decisions under
 either order and autonomy choice.

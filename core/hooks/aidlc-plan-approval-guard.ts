@@ -1388,10 +1388,11 @@ function isPlanApprovalPrerequisite(
     );
   }
   // reply only reads what the human-turn hook recorded; the conductor needs it
-  // before approval on harnesses that never show the hook's notice.
+  // before approval on harnesses that never show the hook's notice. restore
+  // writes back only the files the person approved, so their approval holds.
   if (
     noun === "testing-posture" &&
-    ["resolve", "render", "fingerprint", "verify", "reply"].includes(verb)
+    ["resolve", "render", "fingerprint", "verify", "reply", "restore"].includes(verb)
   ) {
     return true;
   }

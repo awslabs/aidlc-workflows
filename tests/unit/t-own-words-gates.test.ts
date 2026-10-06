@@ -4,6 +4,7 @@
 // covers: function:recordProtectedHumanResponse, function:requireProtectedResponse
 // covers: function:consumeSharedDirectiveAsk, function:recordGuardRecoveryChoice
 // covers: function:openDecisionBlock, function:PROTECTED_RESPONSE_WORDS_MAX_CHARS
+// covers: audit:QUESTION_REPLIED, file:hooks/aidlc-record-human-turn.ts
 //
 // The person drives (tools for determinism, the model for knowledge, the human
 // for judgement). The agent reads the person's reply and records the choice
@@ -757,5 +758,79 @@ describe("a recovery question: exact picks are recorded, everything else is the 
     ask();
     expect(() => recordGuardRecoveryChoice(proj, "Present the current summary again", false))
       .toThrow(/has not replied/);
+  });
+});
+
+// From a live run: the person typed their own words into the picker at a
+// Requirements question, the agent logged no answer, and the words were
+// nowhere on record. What the box carried back is now on record question by
+// question, and an answer the agent logs keeps the person's words.
+describe("an ordinary question keeps the person's own words", () => {
+  let proj: string;
+  let slug: string;
+  beforeEach(() => {
+    resetAidlcEnv();
+    proj = createTestProject();
+    seedStateFile(proj, "state-mid-ideation.md");
+    slug = state(proj, ["get", "Current Stage"]).out.trim();
+    state(proj, ["checkbox", `${slug}=in-progress`]);
+  });
+  afterEach(() => cleanupTestProject(proj));
+
+  const asks = (question: string, options: string) =>
+    expect(log(proj, ["decision", "--stage", slug, "--decision", question, "--options", options]).rc).toBe(0);
+  const field = (row: { block: string }, name: string) => auditBlockField(row.block, name);
+
+  test("a typed reply rides on the answer the agent records", () => {
+    asks("Which database?", "Postgres,SQLite");
+    says(proj, "Postgres, because the team already runs it");
+    const answered = log(proj, ["answer", "--stage", slug, "--details", "Postgres"]);
+    expect(answered.rc, answered.out).toBe(0);
+    const row = events(proj, "QUESTION_ANSWERED").at(-1)!;
+    expect(field(row, "Details")).toBe("Postgres");
+    expect(field(row, "Person Reply")).toBe("Postgres, because the team already runs it");
+  });
+
+  test("words typed into the picker are on record before any answer is logged, and the answer still records", () => {
+    const question = "What should a zero price show as?";
+    asks(question, "A. $0.00,B. Free");
+    const words = "Keep the fix small: zero shows as $0.00 like any other price, and nothing else changes";
+    picks(proj, words, ["A. $0.00", "B. Free"], question);
+    const replied = events(proj, "QUESTION_REPLIED");
+    expect(replied).toHaveLength(1);
+    expect(field(replied[0], "Question")).toBe(question);
+    expect(field(replied[0], "Reply")).toBe(words);
+    expect(field(replied[0], "Session")).toBe(SESSION);
+    // It spends no turn: the agent's answer still records, with the words.
+    const answered = log(proj, ["answer", "--stage", slug, "--details", "A"]);
+    expect(answered.rc, answered.out).toBe(0);
+    expect(field(events(proj, "QUESTION_ANSWERED").at(-1)!, "Person Reply")).toBe(words);
+  });
+
+  test("a picked option is on record as picked, and Codex's box is read the same way", () => {
+    asks("Which database?", "Postgres,SQLite");
+    picks(proj, "SQLite", ["Postgres", "SQLite"], "Which database?");
+    expect(events(proj, "QUESTION_REPLIED").map((row) => [field(row, "Question"), field(row, "Reply")]))
+      .toEqual([["Which database?", "SQLite"]]);
+    const env: Record<string, string | undefined> = {
+      ...process.env, CLAUDE_PROJECT_DIR: proj, AIDLC_PROJECT_DIR: proj, AIDLC_UNATTENDED: "0", AIDLC_SESSION_OVERRIDE: SESSION,
+    };
+    delete env.AIDLC_SESSION_OVERRIDE_SOURCE;
+    const codex = (response: string) => spawnSync(BUN, [DISPATCHER, "engine", "hook", "record-human-turn"], {
+      cwd: proj,
+      input: JSON.stringify({
+        hook_event_name: "PostToolUse", tool_name: "request_user_input", session_id: SESSION,
+        tool_input: { questions: [{ id: "db", question: "Which database, really?", options: ["Postgres", "SQLite"] }] },
+        tool_response: response,
+      }),
+      env, encoding: "utf-8", timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+    });
+    expect(codex(JSON.stringify({ answers: { db: { answers: ["Postgres"] } } })).status).toBe(0);
+    expect(events(proj, "QUESTION_REPLIED").map((row) => [field(row, "Question"), field(row, "Reply")]))
+      .toEqual([["Which database?", "SQLite"], ["Which database, really?", "Postgres"]]);
+    // A box that came back empty answered nothing, and records no reply.
+    expect(codex(JSON.stringify({ answers: {} })).status).toBe(0);
+    expect(events(proj, "QUESTION_REPLIED")).toHaveLength(2);
+    expect(events(proj, "QUESTION_UNANSWERED")).toHaveLength(1);
   });
 });

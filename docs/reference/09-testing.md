@@ -222,8 +222,9 @@ Verifies the orchestrator's structural correctness without invoking the LLM. If 
 - Scope-stage mapping, graph consistency, stage I/O contract chains, protocol compliance (integration)
 - Stage output-to-step validation: all declared outputs referenced in instruction steps (integration, deterministic via the `aidlc-validate.ts` CLI tool)
 - Scope runs: every shipped scope driven from the person's first request to done (integration, `tests/integration/t-scope-run-*`; see below)
+- Guard matrix: what the person meets when files change under approved work, per Guard Policy, review cap and plan approval (integration, `tests/integration/t-guard-matrix-*`; see below)
 
-**Run:** `bun tests/run-tests.ts` (default, no flags needed). `bash tests/run-tests.sh` is a compatibility wrapper for existing POSIX commands.
+**Run:** `bun tests/run-tests.ts` (default, no flags needed). `bash tests/run-tests.sh` is a compatibility wrapper for existing POSIX commands. The scope runs and the guard matrix run only when a `--filter` selects them, or with `--release`/`--all` (see the CLI reference).
 
 ### Scope runs
 
@@ -251,8 +252,33 @@ for the day then a resume. A stage with a new kind of step fails its run until
 the stand-in learns that step. A known engine block the runs exempt is listed in
 `KNOWN_STOP_BLOCKS` with a `test.todo` named after it. CI runs the scope runs as
 their own integration job: Linux on pull requests and in the merge queue, and
-Linux, macOS and Windows in a `full_verification` Full Suite (the scheduled
-nightly runs no deterministic tier).
+Linux, macOS and Windows in the nightly Full Suite (its `scope_runs` job) and in
+a `full_verification` Full Suite.
+
+### Guard matrix
+
+`tests/harness/guard-matrix.ts` uses the same stand-in to drive classic with two
+Units (Requirements, Units Generation, Code Generation, Build and Test) under
+each Guard Policy (`off`, `relaxed`, `strict`), review cap and plan approval
+setting. Each `t-guard-matrix-<change>.test.ts` file makes one change at the
+point a person makes it: a later Unit edits an approved Unit's file, a hand
+edit, a plan edit while its approval waits, a pull mid-stage, a revert, a second
+review the person asks for, an engine update between Units, the person's own
+switch to off, a composed scope and classic as it ships. Every refusal the run
+meets is followed: the person picks a remedy the engine offers, or the agent
+runs the command it names. Each case checks:
+
+- under Guard Policy off, nothing refuses the person or asks them again;
+- with the policy on, the person is asked at most once about the change;
+- no refusal comes back after its step was taken (a deadlock);
+- every decision recorded as the person's is backed by a turn they sent, and
+  the run ends done;
+- the record keeps at most one CHANGE_ACCEPTED row and one line for the person
+  per changed Unit, naming what changed, and none when nothing changed.
+
+A case the engine blocks today is a `test.todo` named after the block, with the
+real check as its body, so the fix turns it on. CI runs the guard matrix where
+it runs the scope runs, as a job of its own.
 
 ## Layer 2: Stage (CI push, LLM, minutes)
 
@@ -637,11 +663,11 @@ so a broken enumerator reds the gate.
 | Trigger | Layer | Command | Where |
 |---------|-------|---------|-------|
 | `git commit` | L1 | `bun tests/run-tests.ts` | Local (pre-commit hook) |
-| Pull request push | Fast deterministic gate | `ci.yml`: contract checks + Linux smoke, twelve unit shards and deterministic integration (the scope runs in a job of their own), using `deterministic-tests.yml`, plus production-guard checks; the cross-OS native-terminal and live OS-isolation jobs are skipped | GitHub Actions |
-| Merge queue (`merge_group`) | Full deterministic gate | `ci.yml` reruns the pull-request gate on the queued merge commit on Linux, macOS and Windows (the scope runs on Linux only; macOS unit shards run only the unit files that name macOS and the ones the change touches), adding isolated E2E on each, retrying an assertion-failed smoke, unit or integration file once with a `Flaky test` warning, and adds the native-terminal units (Linux arm64, macOS, Windows) and live OS-isolation checks (Linux, macOS, Windows), plus three advisory Windows lanes: the documented `install.ps1` one-liner under Windows PowerShell 5.1 against a release candidate staged from the same commit, the hook contracts with Git Bash removed from `PATH`, and the smoke tier plus a compiled binary installed with the documented `install.sh` inside WSL 1 | GitHub Actions |
+| Pull request push | Fast deterministic gate | `ci.yml`: contract checks + Linux smoke, twelve unit shards and deterministic integration (the scope runs and the guard matrix in jobs of their own), using `deterministic-tests.yml`, plus production-guard checks; the cross-OS native-terminal and live OS-isolation jobs are skipped | GitHub Actions |
+| Merge queue (`merge_group`) | Full deterministic gate | `ci.yml` reruns the pull-request gate on the queued merge commit on Linux, macOS and Windows (the scope runs and the guard matrix on Linux only; on macOS the unit tier runs only the unit files that name macOS and the ones the change touches, in two jobs instead of twelve shards), adding isolated E2E on each, retrying an assertion-failed smoke, unit or integration file once with a `Flaky test` warning, and adds the native-terminal units (Linux arm64, macOS, Windows) and live OS-isolation checks (Linux, macOS, Windows), plus three advisory Windows lanes: the documented `install.ps1` one-liner under Windows PowerShell 5.1 against a release candidate staged from the same commit, the hook contracts with Git Bash removed from `PATH`, and the smoke tier plus a compiled binary installed with the documented `install.sh` inside WSL 1 | GitHub Actions |
 | Manual deterministic workflow dispatch | Targeted deterministic reproduction | `deterministic-tests.yml` accepts an immutable source SHA, runner, tier, required N/M shard for unit and optional manual-only `diagnostic_filter`; non-unit tiers omit the shard; one runner executes with model gates closed | GitHub Actions |
-| Manual CI dispatch with `platform_regressions=true` | Expanded deterministic matrix | `ci.yml` selects Linux/macOS/Windows smoke, twelve unit shards, integration and isolated E2E as separate jobs in the shared workflow, with the scope runs on Linux | GitHub Actions |
-| Nightly preview / manual preview dispatch | Declared nightly matrix | `preview-release.yml` calls `full-suite.yml` even for an unchanged source, running native obligations, release contracts and bounded hosted live shards | GitHub Actions |
+| Manual CI dispatch with `platform_regressions=true` | Expanded deterministic matrix | `ci.yml` selects Linux/macOS/Windows smoke, twelve unit shards, integration and isolated E2E as separate jobs in the shared workflow, with the scope runs and the guard matrix on Linux | GitHub Actions |
+| Nightly preview / manual preview dispatch | Declared nightly matrix | `preview-release.yml` calls `full-suite.yml` even for an unchanged source, running native obligations, release contracts, bounded hosted live shards, and the scope runs and the guard matrix on Linux, macOS and Windows | GitHub Actions |
 | Explicit manual Full Suite with `full_verification=true` | Credential-free candidate verification | Runs every job that receives no OIDC or AWS credentials for the selected workflow head, including an unmerged PR; live lanes need `live_verification`; separate evidence is not consumed by stable publication | GitHub Actions |
 | Explicit manual Full Suite with `live_verification=true` | Candidate live verification | Runs live preparation and hosted live/release-contract jobs for the selected workflow head only; separate evidence is not consumed by stable publication | GitHub Actions |
 | Stable tag | Exact-source release validation | `release.yml` validates the tag and source, reuses a passing release-purpose `full-suite-result` for the exact tagged commit or calls `full-suite.yml` for it, and runs contract checks, builds, and native/installer/lifecycle validation alongside; `publish` and `release` require the passing Full Suite | GitHub Actions |
@@ -741,11 +767,13 @@ called by the preview are never cancelled this way.
 `.github/workflows/deterministic-tests.yml`. Callers select the immutable `ref`,
 runner, tier, unit shard, an optional file `filter` and `exclude` (both empty
 by default, so the whole tier runs) and artifact label. Both split integration
-in two jobs: the scope runs (`filter`, `t-scope-run-*`) and everything else
-(`exclude` of the same names). PR CI selects Linux smoke,
-twelve weighted unit shards, and both integration jobs; Full Suite selects
-smoke, the same twelve shards, both integration jobs, and isolated E2E on
-Linux/macOS/Windows. Integration and
+in three jobs: the scope runs (`filter`, `t-scope-run-*`), the guard matrix
+(`filter`, `t-guard-matrix-*`) and everything else (`exclude` of both). PR CI
+selects Linux smoke, twelve weighted unit shards, and the three integration
+jobs; a `full_verification` Full Suite selects smoke, the same twelve shards,
+the three integration jobs, and isolated E2E on Linux/macOS/Windows. The
+nightly Full Suite runs no deterministic tier; its `scope_runs` job calls the
+shared workflow for the scope runs and the guard matrix on all three. Integration and
 E2E run as independent jobs per OS, each with a fresh Bun runner process.
 Every call owns a fresh checkout, installs frozen dependencies under Bun 1.4.2,
 regenerates projections, and invokes the Bash wrapper with `--debug -P 8
@@ -994,7 +1022,13 @@ explicitly to keep those files on their in-test SKIP path.
 `--exclude` matches the same names but selects nothing: the files it matches
 are left out of the tier, and the rest keep their ordinary, unfiltered rules
 below. With `--shard`, the shard is chosen first and then the files it matches
-are left out of it. CI uses it to run the scope runs as a job of their own.
+are left out of it.
+
+The scope runs and the guard matrix (`t-scope-run-*`, `t-guard-matrix-*`) take
+minutes per file, so a run with no `--filter` leaves them out and says so; the
+full `--release` and `--all` acceptance keeps them. Run them alone with
+`--integration -P 8 --filter '^t-(scope-run|guard-matrix)-'`, as their CI jobs
+do.
 
 An explicit **`--filter` requires execution in each selected file**. A file
 whose cases are all skipped (or which declares no cases) fails the run even
@@ -1683,15 +1717,17 @@ Artifacts are `full-suite-native-plan`, `full-suite-native-<job>` (complete log
 stamp directories and JUnit), `full-suite-native-result`,
 `full-suite-production-guards`,
 `full-suite-deterministic-<suite>-<OS>` (suite is `smoke`, `unit-1` through
-`unit-12`, `integration`, or `e2e`), `full-suite-live-<family>-<slice-number>-<OS>`,
+`unit-12`, `integration`, `scope-runs`, `guard-matrix`, or `e2e`),
+`full-suite-scope-runs-<OS>` and `full-suite-guard-matrix-<OS>` (the release
+`scope_runs` job), `full-suite-live-<family>-<slice-number>-<OS>`,
 `full-suite-live-release-contract-Windows`, and the purpose-specific result
 (90-day retention): `full-suite-result` for `purpose: "release"`,
 `full-suite-live-verification-result` for `"live-verification"`, and
 `full-suite-verification-result` for `"full-verification"`. The final JSON records `sha`, `runId`,
 `runAttempt`, `purpose`, `verificationFamily`, `coveragePolicy`, `passed`, `complete`, every job's result in `legs`,
 `disabledLegs: []`, `omittedLegs`, and live families declared with `hosting: "excluded"` in the
-sorted `excluded` list. For `purpose: "release"` under `required-hosted-live-shards-v2`, `passed` requires a 40-hex commit ID, exactly `deterministic` and
-`production_guards` omitted and skipped, and every other declared job successful.
+sorted `excluded` list. For `purpose: "release"` under `required-hosted-live-shards-v3`, `passed` requires a 40-hex commit ID, exactly `deterministic` and
+`production_guards` omitted and skipped, and every other declared job, `scope_runs` included, successful.
 Missing, failed, cancelled or unexpectedly skipped required jobs fail. `disabledLegs` is retained so the Full Suite result policy can reject
 historical disabled-live reports. `complete` additionally requires
 no excluded families; it remains false with the documented Kiro/Cursor/Copilot
@@ -1700,7 +1736,7 @@ without failing the suite; disabled required jobs fail it.
 The stable gate, `scripts/ci-full-suite-evidence.ts check`, accepts a result only
 when `sha` is the tagged commit, `runId` is the run it came from, `purpose` is
 `"release"`, `verificationFamily` is `"all"`, `coveragePolicy` is
-`required-hosted-live-shards-v2`, `passed` is true, `disabledLegs` is empty, and
+`required-hosted-live-shards-v3`, `passed` is true, `disabledLegs` is empty, and
 `omittedLegs` is exactly the two deterministic/production-guard job IDs. Those jobs
 must be skipped; all other declared jobs and extra legs must have succeeded.
 It does not require `complete`, so the documented exclusions only warn.

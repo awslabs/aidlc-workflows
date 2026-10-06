@@ -201,12 +201,14 @@ export function clearSwitchCommand(
 export function switchOffLine(off: SwitchOff, now: Date = new Date()): string {
   const label = PERSON_CHECK_SWITCH_LABELS[off.name] ?? off.name;
   const since = clock(off.entry?.since ?? fileTime(off.settingsPath), now);
+  // Where it came from is said only when the person's words are on record:
+  // a switch nothing ties to their chat may still be theirs.
   const how = off.entry?.how !== "chat"
-    ? "set from a terminal or a file, not from your chat"
+    ? ""
     : off.entry.words
-    ? `because you said: "${quoted(off.entry.words)}"`
-    : "set after your last message in the chat";
-  return `The ${label} is off ${where(off.target)} since ${since}, ${how}. ` +
+    ? `, because you said: "${quoted(off.entry.words)}"`
+    : ", set after your last message in the chat";
+  return `The ${label} is off ${where(off.target)} since ${since}${how}. ` +
     `Say "turn it back on" to restore it (${clearSwitchCommand(off.name, off.projectDir)}).`;
 }
 

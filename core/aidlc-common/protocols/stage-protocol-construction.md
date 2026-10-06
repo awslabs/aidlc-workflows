@@ -13,7 +13,8 @@ record `Construction Checkpoints: enabled`, `Construction Iteration: unit-major`
 apply to solo work with a real, non-empty Unit DAG. Team-owned `unit_gate`
 directives keep their own approval policy; zero-Unit and isolated runs do not
 acquire a Unit, skeleton, or swarm ceremony. Existing workflows without the
-checkpoint field retain their first-stage approval and late per-stage cascade.
+checkpoint field retain their first-stage approval; under unit-major their late
+stage approvals come as one question (`directive.approve_together`).
 Preserve an explicit iteration choice; never migrate state by editing it in
 prose. Follow the metadata on the current directive.
 
@@ -364,7 +365,8 @@ still require the human. Grouped Plan Approval below changes the presentation
 only; every Unit still needs its own valid receipt.
 
 For a legacy workflow without the checkpoint field, retain the first
-Construction-stage review and the late human per-stage cascade under unit-major.
+Construction-stage review; under unit-major its late stage approvals are one
+human question (`directive.approve_together`).
 Skeleton-on may offer the legacy ladder after that first-stage review if no
 choice exists; skeleton-off keeps its on-demand path. Describe that older review
 as a first-stage approval, never as proof of a working integrated skeleton.
@@ -650,8 +652,10 @@ workflows. The engine walks every applicable per-unit stage for one Unit before
 the next, including Code Generation. Each Unit's Plan Approval remains a human
 stop, and unit-major never invokes swarm. Checkpoint-enabled solo work then
 verifies and approves the Unit through `construction_checkpoint`; the late stage
-gates carrying `completion_only: true` are bookkeeping. Legacy workflows without
-the checkpoint field retain their late human per-stage cascade. A directive may
+gates carrying `completion_only: true` are bookkeeping. With checkpoints off, or
+in a legacy workflow without the field, the stage approvals still due after the
+last Unit are one human question (`directive.approve_together`, as the Stage
+Protocol's approval gate describes). A directive may
 name a later stage than `Current Stage`; always use `directive.stage` and
 `directive.unit`, including in a conditional skip report
 (`--stage "<directive.stage>" --unit "<directive.unit>"`), which covers that

@@ -44,7 +44,8 @@ They complete one Unit's applicable design and source-producing stages before
 the next. Preserve an explicit stage-major choice. Design-only and no-Unit
 workflows retain their existing stage flow; team-owned work uses `unit_gate`.
 Existing workflows without the checkpoint setting keep the legacy first-stage
-review and late per-stage gate cascade.
+review; their late stage approvals, like those of work with checkpoints off, come
+as one question.
 
 For eligible checkpoint work with skeleton-on, the first DAG Unit is the
 smallest working integrated slice. It completes its applicable stages, including
@@ -1032,17 +1033,20 @@ This stage has a **two-part structure**: planning followed by generation.
      excludes the appendix, so it is not work to execute; with its fence on,
      the dispatch guard refuses a handoff that quotes it. After permitted
      postapproval edits, use the current brief without calling the edits approved
-   - When a build of the same approved plan was interrupted, that output also
+   - When a build of the same plan was interrupted, that output also
      carries a `## Progress before the interruption` section after its marker
      lines: the steps the plan file ticks (or, with none ticked, the steps
      whose named files changed since the build started), each file a done step
      names in a code span that is not in the project (a bare file name counts
      when a file of that name is anywhere in it), stated as a fact for the
      worker to judge, and the step to continue at. It appears only when the
-     build already started under the approval that is current now (the
-     receipt for this target, stage attempt,
-     and approved content is at `generation`); a Redo, a rejected gate, a new
-     approval, or an edited plan starts the steps fresh. When a build starts
+     build already started on the plan and instructions as they are now (the
+     receipt for this target, stage attempt, and approved content is at
+     `generation`, and the content on disk is the approved content or, when
+     the fence was lowered for a plan edited after its approval, the edited
+     content generation start kept on that receipt); a Redo, a rejected gate,
+     a new approval, or a plan edited after the build started starts the steps
+     fresh. When a build starts
      under a new approval, the engine sets the plan file's task markers back to
      `[ ]` (nothing else in the file changes, and the fingerprint is the same),
      so ticks from before never count. A swarm batch keeps its own

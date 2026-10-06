@@ -31,6 +31,11 @@ import {
   activeIntent,
   activeIntentUuid,
   activeSpace,
+  approvedTogetherCover,
+  approvedTogetherWithField,
+  approvesTogetherFields,
+  approvesTogetherStages,
+  openGateApprovesTogether,
   unitOpenCheckpoints,
   auditBlockField,
   clearGateWords,
@@ -5821,7 +5826,8 @@ function handleGateStart(args: string[]): void {
   if (args.length < 1) {
     error(
       "Usage: aidlc-state.ts gate-start <slug> [--artifacts <csv>] " +
-        "[--recovered [--person-approves]] [--override-blocking-sensors] [--user-input <choice>]",
+        "[--recovered [--person-approves]] [--override-blocking-sensors] [--user-input <choice>] " +
+        "[--approves-together <csv>]",
     );
   }
   const slug = args[0];
@@ -5979,12 +5985,13 @@ function handleGateStart(args: string[]): void {
     return;
   }
 
+  const together = approvesTogetherFlag(args.slice(1), content, slug);
   content = setCheckbox(content, slug, "awaiting-approval");
   const timestamp = isoTimestamp();
   content = setField(content, "Last Updated", timestamp);
 
   try {
-    const fields: Record<string, string> = { Stage: slug };
+    const fields: Record<string, string> = { Stage: slug, ...approvesTogetherFields(together) };
     if (artifacts) fields.Artifacts = artifacts;
     if (recovered) fields.Recovered = "true";
     addBlockingSensorOverrideFields(
@@ -5998,8 +6005,29 @@ function handleGateStart(args: string[]): void {
   }
 
   writeStateFile(pd, content);
-  console.log(JSON.stringify({ slug, new_state: "awaiting-approval", timestamp }));
+  console.log(JSON.stringify({
+    slug,
+    new_state: "awaiting-approval",
+    timestamp,
+    ...(together.length > 0 ? { approves_together: together } : {}),
+  }));
   });
+}
+
+// The stages one late approval covers, as the engine named them in this gate's
+// question. Only that exact list is recorded on the gate.
+function approvesTogetherFlag(args: string[], content: string, slug: string): string[] {
+  const raw = getFlagValue(args, "--approves-together");
+  if (raw === undefined) return [];
+  const listed = raw.split(",").map((s) => s.trim()).filter((s) => s.length > 0);
+  const expected = approvesTogetherStages(content, slug);
+  if (expected === null || listed.join(",") !== expected.join(",")) {
+    error(
+      `--approves-together for "${slug}" must name exactly the stages its gate covers ` +
+        `(${expected?.join(", ") ?? "none"}).`,
+    );
+  }
+  return listed;
 }
 
 // approve <slug> [--user-input <exact-choice>]
@@ -6017,10 +6045,14 @@ function verifyApprovalDecision(
   userInput?: string,
   forceHuman = false,
   unit?: string,
-): { approvalInput: string | undefined; autonomousDecision: boolean } {
+): { approvalInput: string | undefined; autonomousDecision: boolean; together: { first: string } | null } {
   const autonomousDecision =
     !forceHuman && isAutonomousConstructionGate(content, stage, pd);
   let approvalInput = userInput?.trim();
+  // A later stage the person's one approval listed stands on that reply.
+  const together = autonomousDecision || forceHuman || humanPresenceGuardDisabled()
+    ? null
+    : approvedTogetherCover(pd, stage.slug);
   const approvalAuthorship =
     autonomousDecision || humanPresenceGuardDisabled()
       ? null
@@ -6068,6 +6100,7 @@ function verifyApprovalDecision(
   if (
     !autonomousDecision &&
     !humanPresenceGuardDisabled() &&
+    together === null &&
     !humanRepliedSinceGate(pd)
   ) {
     refuseForAgent(
@@ -6087,7 +6120,7 @@ function verifyApprovalDecision(
       { personDecided: true },
     );
   }
-  return { approvalInput, autonomousDecision };
+  return { approvalInput, autonomousDecision, together };
 }
 
 function handleApprove(args: string[]): void {
@@ -6165,7 +6198,7 @@ function handleApprove(args: string[]): void {
   if (!teamGate) {
     validateSlugInState(content, slug, "awaiting-approval");
   }
-  const { approvalInput, autonomousDecision } = verifyApprovalDecision(
+  const { approvalInput, autonomousDecision, together } = verifyApprovalDecision(
     pd,
     content,
     stage,
@@ -6250,6 +6283,15 @@ function handleApprove(args: string[]): void {
   // construction/<unit>/<slug>/) and code-producing stages (workspace_requires).
   verifyStageArtifacts(pd, stage);
   verifySummaryConfirmationPrecondition(pd, content, stage);
+
+  // The stages the open gate's one question named and that still wait: this
+  // approval records them all, and report approves the rest in order.
+  const listedTogether = ((): string[] => {
+    if (together !== null || autonomousDecision) return [];
+    const waiting = approvesTogetherStages(content, slug);
+    const shown = openGateApprovesTogether(pd, slug);
+    return waiting && shown[0] === slug ? shown.filter((s) => waiting.includes(s)) : [];
+  })();
 
   // Gate-revision backstop: reconcile a revision the conductor performed at an
   // open gate but never recorded (it skipped the `reject` verb). When the ledger
@@ -6378,7 +6420,12 @@ function handleApprove(args: string[]): void {
   try {
     const gateFields: Record<string, string> = { Stage: slug };
     if (approvalInput) gateFields["User Input"] = approvalInput;
-    if (!autonomousDecision) Object.assign(gateFields, personsWordsFields(pd, slug));
+    if (together) {
+      // The person's one reply at the first listed stage approves this one too.
+      Object.assign(gateFields, approvedTogetherWithField(together.first), personsWordsFields(pd, together.first));
+    } else if (!autonomousDecision) {
+      Object.assign(gateFields, personsWordsFields(pd, slug), approvesTogetherFields(listedTogether));
+    }
     if (reviewFindingDispositions) {
       gateFields[REVIEW_FINDING_DISPOSITIONS_FIELD] =
         reviewFindingDispositions;
@@ -6787,7 +6834,7 @@ function handleRevise(args: string[]): void {
   if (args.length < 1) {
     error(
       "Usage: aidlc-state.ts revise <slug> [--override-blocking-sensors] " +
-        "[--user-input <choice>]",
+        "[--user-input <choice>] [--approves-together <csv>]",
     );
   }
   const slug = args[0];
@@ -6884,6 +6931,7 @@ function handleRevise(args: string[]): void {
   admitStageAction(pd, content, stage, { action: "revise" });
   verifyGateSensorArtifactsUnchanged(slug, gateSensorEvaluation);
 
+  const together = approvesTogetherFlag(args.slice(1), content, slug);
   content = setCheckbox(content, slug, "awaiting-approval");
   const timestamp = isoTimestamp();
   content = setField(content, "Last Updated", timestamp);
@@ -6892,6 +6940,7 @@ function handleRevise(args: string[]): void {
     const fields: Record<string, string> = {
       Stage: slug,
       Details: "Re-entering gate after revision",
+      ...approvesTogetherFields(together),
     };
     addBlockingSensorOverrideFields(
       fields,
@@ -6904,7 +6953,12 @@ function handleRevise(args: string[]): void {
   }
 
   writeStateFile(pd, content);
-  console.log(JSON.stringify({ slug, new_state: "awaiting-approval", timestamp }));
+  console.log(JSON.stringify({
+    slug,
+    new_state: "awaiting-approval",
+    timestamp,
+    ...(together.length > 0 ? { approves_together: together } : {}),
+  }));
   });
 }
 

@@ -384,6 +384,23 @@ describe("t149 Codex structured request_user_input presence", () => {
     }
   });
 
+  test("what the person put in the box is on record word for word, question by question", () => {
+    const dir = scratchProject(true);
+    try {
+      const words = "Reject: keep the old login page until the new one is tested";
+      const payload = structuredSelectionPayload(dir, JSON.stringify({
+        answers: { decision: { answers: [words] } },
+      }));
+      expect(runAdapter(dir, "record-human-turn", payload).code).toBe(0);
+      const replied = readAudit(dir).split("\n## ").filter((block) => block.includes("**Event**: QUESTION_REPLIED"));
+      expect(replied).toHaveLength(1);
+      expect(replied[0]).toContain("**Question**: Approve?");
+      expect(replied[0]).toContain(`**Reply**: ${words}`);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test("substantive Codex answer arrays mint, including opaque question IDs and cancellation words in prose", () => {
     for (const [index, answer] of ["Approve", "cancel the standing order via cron"].entries()) {
       const dir = scratchProject(true);
@@ -911,47 +928,157 @@ describe("t149 Codex hook adapter (live-captured payload fixtures)", () => {
       const out = JSON.parse(r.stdout) as { decision?: string; reason?: string };
       expect(out.decision).toBe("block");
       expect(out.reason ?? "").not.toBe("");
-      // Copy-channel continuation guidance uses the harness-local Bun tool.
-      expect(out.reason).toContain("bun .codex/tools/aidlc-orchestrate.ts next");
+      // The reason passes through verbatim: one plain line the person can
+      // read, with no command (the Codex skill names the harness-local step).
+      expect(out.reason ?? "").toStartWith("AI-DLC is carrying on");
+      expect(out.reason).not.toContain("aidlc-orchestrate");
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
   });
 
   // Claude Code shows a Stop hook's whole note to the person ("Stop hook
-  // error: ..."), and Codex puts it in the chat: the note is one line they can
-  // read, naming the one step the agent takes next.
-  test("1b: the stop note is one line the person can read, naming the next step", () => {
+  // error: ..."): the note is one line they can read, naming where the work
+  // carries on, with no command (the agent's steps are in the Codex skill).
+  test("1b: the stop note is one line the person can read, naming where the work carries on", () => {
     const dir = scratchProject(true);
     try {
       const r = runAdapter(dir, "continue-workflow", withCwd(FIXTURES.stop, dir));
       const out = JSON.parse(r.stdout) as { decision?: string; reason?: string };
       expect(out.decision).toBe("block");
-      expect(out.reason).toBe("Requirements Analysis is not finished yet. Next: `bun .codex/tools/aidlc-orchestrate.ts next`.");
+      expect(out.reason).toBe("AI-DLC is carrying on with Requirements Analysis.");
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
   });
 
+  // The step a tool that hides the note gets after the line (Kiro CLI,
+  // opencode, Kiro IDE); the matcher knows that form too.
+  const AGENT_STEP =
+    "If you carry on with the work, first say that line to the person once, on its own line; " +
+    "if you had just asked them a question, record it with `log decision` and end your turn saying nothing. " +
+    "Say nothing else about this note.";
+
+  // A turn whose person engaged the work, then a user-role message, then an
+  // answer with no engine call: blocks when that message is the hook's own
+  // note, and ends the turn when it is the person's.
+  function stopAfterMessage(dir: string, message: string): string {
+    const entry = (payload: Record<string, unknown>) => JSON.stringify({ type: "response_item", payload });
+    const transcript = join(dir, "rollout-2026-06-26T00-00-00.jsonl");
+    writeFileSync(transcript, [
+      entry({ type: "message", role: "user", content: [{ type: "input_text", text: "ok, continue the workflow" }] }),
+      entry({ type: "function_call", name: "Bash", arguments: JSON.stringify({ command: "bun .codex/tools/aidlc-orchestrate.ts next" }) }),
+      entry({ type: "message", role: "user", content: [{ type: "input_text", text: message }] }),
+      entry({ type: "message", role: "assistant", content: [{ type: "output_text", text: "Two questions are still open." }] }),
+    ].join("\n") + "\n", "utf-8");
+    return runAdapter(dir, "continue-workflow", withCwd({ ...FIXTURES.stop, transcript_path: transcript }, dir)).stdout.trim();
+  }
+
   // Codex puts the note back into the chat as a message of the person's. The
   // hook still knows it as its own, so the agent that engaged the work and then
-  // only answered the note is still steered on.
+  // only answered the note is still steered on. Each line the hook writes, and
+  // the earlier one-line note still found in older transcripts, counts.
   test("1c: the stop note put back into the chat is not read as the person talking", () => {
-    const dir = scratchProject(true);
-    try {
-      const note = "Requirements Analysis is not finished yet. Next: `bun .codex/tools/aidlc-orchestrate.ts next`.";
-      const entry = (payload: Record<string, unknown>) => JSON.stringify({ type: "response_item", payload });
-      const transcript = join(dir, "rollout-2026-06-26T00-00-00.jsonl");
-      writeFileSync(transcript, [
-        entry({ type: "message", role: "user", content: [{ type: "input_text", text: "ok, continue the workflow" }] }),
-        entry({ type: "function_call", name: "Bash", arguments: JSON.stringify({ command: "bun .codex/tools/aidlc-orchestrate.ts next" }) }),
-        entry({ type: "message", role: "user", content: [{ type: "input_text", text: note }] }),
-        entry({ type: "message", role: "assistant", content: [{ type: "output_text", text: "Carrying on." }] }),
-      ].join("\n") + "\n", "utf-8");
-      const r = runAdapter(dir, "continue-workflow", withCwd({ ...FIXTURES.stop, transcript_path: transcript }, dir));
-      expect((JSON.parse(r.stdout || "{}") as { decision?: string }).decision).toBe("block");
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
+    for (const note of [
+      "AI-DLC is carrying on with Requirements Analysis.",
+      "AI-DLC is carrying on with Code Generation for alpha.",
+      "AI-DLC is carrying on.",
+      `AI-DLC is carrying on with Code Generation for alpha.\n${AGENT_STEP}`,
+      "Requirements Analysis is not finished yet. Next: `bun .codex/tools/aidlc-orchestrate.ts next`.",
+      "Code Generation for alpha is not finished yet. Next: finish its steps, then `aidlc engine orchestrate report --stage code-generation --result <outcome>`.",
+    ]) {
+      const dir = scratchProject(true);
+      try {
+        expect((JSON.parse(stopAfterMessage(dir, note) || "{}") as { decision?: string }).decision, note).toBe("block");
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    }
+  });
+
+  // A person's own message that starts like a note but is not one of the
+  // hook's own lines (no command in the older form, no stage the hook names
+  // in the new one) is the person talking: an answer to it with no engine call
+  // ends the turn.
+  test("1d: a person's message shaped like the note is still the person", () => {
+    for (const said of [
+      "Requirements Analysis is not finished yet. Next: explain what is missing.",
+      "AI-DLC is carrying on with the old plan.",
+      "AI-DLC is carrying on with Requirements Analysis for the whole team.",
+      `AI-DLC is carrying on with Requirements Analysis.\n${AGENT_STEP} Why does it keep saying that?`,
+      `Why? AI-DLC is carrying on with Requirements Analysis.\n${AGENT_STEP}`,
+      `AI-DLC is carrying on with the old plan.\n${AGENT_STEP}`,
+    ]) {
+      const dir = scratchProject(true);
+      try {
+        expect(stopAfterMessage(dir, said), said).toBe("");
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    }
+  });
+
+  // Codex 0.160 stores the Stop reason as a user message wrapped in its own
+  // <hook_prompt hook_run_id="stop:..."> tag, with < > & escaped (live run:
+  // engine call, a reply, the blocked stop, the wrapped note, then a reply
+  // with no engine call). The wrapped note is still the hook's, so that reply
+  // does not make the turn chat: the stop blocks again.
+  function stopAfterHookPrompt(dir: string, wrapped: string): string {
+    const entry = (payload: Record<string, unknown>) => JSON.stringify({ type: "response_item", payload });
+    const transcript = join(dir, "rollout-2026-10-06T09-26-38.jsonl");
+    writeFileSync(transcript, [
+      entry({ type: "message", role: "user", content: [{ type: "input_text", text: "Run AI-DLC's next step and tell me in one line what it asks for." }] }),
+      entry({ type: "function_call", name: "Bash", arguments: JSON.stringify({ command: "bun .codex/tools/aidlc.ts engine orchestrate next" }) }),
+      entry({ type: "message", role: "assistant", content: [{ type: "output_text", text: "AI-DLC asks the developer to analyze the existing code before Requirements Analysis." }] }),
+      entry({ type: "message", role: "user", content: [{ type: "input_text", text: wrapped }] }),
+      entry({ type: "message", role: "assistant", content: [{ type: "output_text", text: "Still waiting on the developer." }] }),
+    ].join("\n") + "\n", "utf-8");
+    return runAdapter(dir, "continue-workflow", withCwd({ ...FIXTURES.stop, transcript_path: transcript }, dir)).stdout.trim();
+  }
+  const hookPrompt = (dir: string, inner: string) =>
+    `<hook_prompt hook_run_id="stop:14:${dir}/.codex/hooks.json">${inner}</hook_prompt>`;
+  // The live note, word for word as the rollout stored it.
+  const LIVE_WRAPPED_NOTE =
+    'The AI-DLC workflow is not finished (current stage "reverse-engineering"). If you just asked the person a question and are waiting for the answer, run `bun .codex/tools/aidlc.ts engine log decision --stage reverse-engineering --decision "&lt;the question&gt;" --options "&lt;the choices&gt;"`, adding any `--single`, `--checkpoint` or `--questions-file` flags that question\'s own instructions use, and end your turn without asking it again. Otherwise run `bun .codex/tools/aidlc-orchestrate.ts next`, do what the step it prints asks, then run `bun .codex/tools/aidlc-orchestrate.ts report --stage &lt;stage&gt; --result &lt;outcome&gt;`; repeat until it answers `done`. If the person asked to stop here, run `bun .codex/tools/aidlc-orchestrate.ts park`. Never mark a stage done or approved just to end the turn, and tell the person nothing about this note.';
+
+  test("1e: Codex's wrapped stop note is the hook's, so a reply with no engine call is still sent on", () => {
+    for (const inner of [
+      LIVE_WRAPPED_NOTE,
+      "AI-DLC is carrying on with Requirements Analysis.",
+      "AI-DLC is carrying on with Feedback &amp; Optimization.",
+      "AI-DLC is carrying on.",
+      `AI-DLC is carrying on with Requirements Analysis.\n${AGENT_STEP}`,
+      "Requirements Analysis is not finished yet. Next: `bun .codex/tools/aidlc-orchestrate.ts next`.",
+    ]) {
+      const dir = scratchProject(true);
+      try {
+        const out = stopAfterHookPrompt(dir, hookPrompt(dir, inner));
+        expect((JSON.parse(out || "{}") as { decision?: string }).decision, inner).toBe("block");
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    }
+  });
+
+  // Only that exact wrapper around one of the hook's own lines is unwrapped.
+  // A person's message with the tag and words of their own, a wrapped text
+  // that is not a hook line, or another wrapper stays the person's: the
+  // answer to it with no engine call ends the turn.
+  test("1f: a person's message that only looks like Codex's wrapper is still the person", () => {
+    for (const said of [
+      (dir: string) => `${hookPrompt(dir, "AI-DLC is carrying on with Requirements Analysis.")} why does this keep showing up?`,
+      (dir: string) => `what is this? ${hookPrompt(dir, "AI-DLC is carrying on with Requirements Analysis.")}`,
+      (dir: string) => hookPrompt(dir, "please explain the plan"),
+      () => '<hook_prompt hook_run_id="session:1">AI-DLC is carrying on with Requirements Analysis.</hook_prompt>',
+      () => "<hook_prompt>AI-DLC is carrying on with Requirements Analysis.</hook_prompt>",
+    ]) {
+      const dir = scratchProject(true);
+      try {
+        const message = said(dir);
+        expect(stopAfterMessage(dir, message), message).toBe("");
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
     }
   });
 

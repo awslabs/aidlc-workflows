@@ -234,7 +234,8 @@ The installer:
 1. Downloads or reads `version.json`, `checksums.txt`, and
    `aidlc-release.intoto.jsonl`.
 2. When a compatible GitHub CLI is available, verifies the `checksums.txt`
-   attestation against the repository and signer workflow.
+   attestation against the repository and signer workflow on `github.com`,
+   even when the GitHub CLI's default host is a GitHub Enterprise host.
 3. Verifies the `version.json` SHA-256, reads its version id and source
    identity, and rejects an explicit version mismatch before downloading or
    executing a release binary.
@@ -247,17 +248,20 @@ The installer:
 6. Lets the verified binary validate and transactionally install the release.
 
 To authenticate the bootstrap script itself before execution, use a current
-GitHub CLI:
+GitHub CLI. The `github.com/` repository prefix and `--hostname github.com`
+keep these commands on github.com when your `gh` defaults to a GitHub
+Enterprise host:
 
 ```bash
 tmp="$(mktemp -d)"
-tag="$(gh release view --repo awslabs/aidlc-workflows --json tagName --jq .tagName)"
-gh release download "$tag" --repo awslabs/aidlc-workflows --dir "$tmp" \
+tag="$(gh release view --repo github.com/awslabs/aidlc-workflows --json tagName --jq .tagName)"
+gh release download "$tag" --repo github.com/awslabs/aidlc-workflows --dir "$tmp" \
   --pattern install.sh --pattern aidlc-release.intoto.jsonl
 gh attestation verify "$tmp/install.sh" \
   --bundle "$tmp/aidlc-release.intoto.jsonl" \
   --repo awslabs/aidlc-workflows \
   --signer-workflow awslabs/aidlc-workflows/.github/workflows/release.yml \
+  --hostname github.com \
   --source-ref "refs/tags/$tag"
 sh "$tmp/install.sh" --version "${tag#v}"
 rm -rf "$tmp"
@@ -330,8 +334,10 @@ sweep. It checks only the non-interactive hook PATH, host trust files, and
 recorded provider actions; it does not spawn the harness CLI or contact a
 provider. The transaction still exits 0. Non-TTY human output names every
 outstanding item and the exact `aidlc config runtime`, `aidlc config trust`, or
-`aidlc config providers --check` follow-up. JSON includes
-`data.outstandingActions`. Quiet output stays one line when clean and appends
+`aidlc config providers --check` follow-up. Codex's own hook trust is the one
+item no AI-DLC command gives: its line names the step in Codex instead (type
+`/hooks`, press `t` to trust all, then press Esc). JSON includes
+`data.outstandingActions`, where such an item also carries that `step`. Quiet output stays one line when clean and appends
 one outstanding-actions line when follow-up is required, plus one `Warning:`
 line for each ignore rule that hides committed records.
 
@@ -420,6 +426,7 @@ interactive wizard.
 | `--mcp defaults\|none` | Add or omit Claude's optional shipped MCP entries |
 | `--dry-run` | Calculate the complete plan without creating the target directory or changing bytes |
 | `--plan-token <token>` | Apply only the exact plan approved from a JSON dry run |
+| `--show` | Show settings without changing anything: with no section, every section in turn (`aidlc config --show`; `--json` prints one object keyed by section, each value what that section's `--show --json` prints); with a section, that section alone |
 | `--force` | Replace locally modified framework-owned files and managed blocks where that policy permits |
 | `--yes` | Confirm an otherwise unrecognized target directory or a section mutation; it does not imply MCP consent or choose a section answer |
 | `--json` | Emit one result object with counts, actions, `data.notes`, and `data.planToken` |
@@ -1037,23 +1044,37 @@ one. Environment and other top-level settings (including `disableAllHooks`)
 stay yours, except for values attributed to recorded provider or project
 answers.
 
-Provider, scope, and model answers preserve project-owned fields in
-`.codex/config.toml`. The Codex `[shell_environment_policy]`,
-`[sandbox_workspace_write]`, `[agents]`, `[features]`, `[tools]`, and `[tui]`
-tables remain framework-owned. Local edits to those entries conflict
-against the baseline, and `--force` restores the shipped entries while
+`.codex/config.toml` belongs to the project as well; AI-DLC contributes its
+settings key by key: `developer_instructions`, `sandbox_mode`,
+`suppress_unstable_features_warning`, `tool_output_token_limit`, and the keys
+it ships in the `[shell_environment_policy]`, `[sandbox_workspace_write]`, `[agents]`,
+`[features]`, `[tools]`, and `[tui]` tables. A refresh, including those
+accompanying provider, scope, or model answers, changes only those keys and
+keeps every other byte: your own keys (also inside AI-DLC's tables), your own
+tables (such as `[agents.<role>]` or `[mcp_servers.<name>]`), comments, order,
+and spelling. An AI-DLC value nobody changed takes the release's value; a value
+you changed stays yours, with a note when a release ships a different one
+(delete the key and refresh to take it); a deleted AI-DLC key comes back, with
+a note. The active space's `AIDLC_RULES_DIR` stays as it is. A project that
+already has its own `.codex/config.toml` keeps it on first install, and AI-DLC
+adds its settings. A file the refresh cannot merge safely (it does not parse,
+or uses one of AI-DLC's table names for something else, such as an array of
+tables) still reports a conflict; `--force` then restores AI-DLC's tables while
 retaining unrelated project-owned fields. An explicit `--from` selects that
 source instead of the project's copy.
 
-Human output prints `Note:` when AI-DLC entries in `.claude/settings.json`
-were restored, and when a custom Claude statusline or announcement was kept
+Human output prints `Note:` when AI-DLC entries in `.claude/settings.json` or
+`.codex/config.toml` were restored or added, and when your own value for one of
+them (a custom Claude statusline or announcement, or a Codex key) was kept
 while this release ships a different one; JSON output exposes the same
-messages in `data.notes`. To restore them, use `aidlc config --harness claude`,
-not the bare interactive setup walk. Copy-channel projects also pass
-`--from <the runtime/claude root you copied from>`.
+messages in `data.notes`. To restore them, use `aidlc config --harness claude`
+or `aidlc config --harness codex`, not the bare interactive setup walk.
+Copy-channel projects also pass `--from <the runtime/<harness> root you copied
+from>`.
 
-`opencode.json` provider answers edit their attributed keys in place. An
-ordinary release refresh still applies the whole-file ownership policy.
+`opencode.json` belongs to the team: config adds AI-DLC's entries to it and
+keeps every other key, value, comment, and line. Provider answers edit only
+the entries AI-DLC wrote.
 
 ### Root Integrations and Ownership
 
@@ -1062,7 +1083,7 @@ ordinary release refresh still applies the whole-file ownership policy.
 | `.gitignore` | All | Own one marked AI-DLC block containing the union of installed harnesses' shipped entries; preserve every byte outside it |
 | `.mcp.json` / `mcpServers` | Claude | Add or remove only consented, baseline-owned entries; preserve user keys and overrides |
 | `AGENTS.md` | Kiro CLI, Kiro IDE, Codex, Cursor, OpenCode, Copilot | One marked block; harness-neutral and shared (`shared: "identical"`) except Copilot, whose block carries its `@`-imports; preserve project instructions |
-| `opencode.json` | OpenCode | Record-only answers edit the current file in place; ordinary release refresh still requires an unchanged file baseline or exact shipped signature |
+| `opencode.json` | OpenCode | `json-entries`: add AI-DLC's entries (`$schema`, its `skills.paths` and `instructions` strings, its `permission` rules) only where absent, and a permission map's `"*"` rule only when the map has none, first, so the team's rules after it still decide; keep the team's model, provider, own instructions and rules, comments, and layout; record what AI-DLC wrote, follow or retire only entries still holding that value. A file AI-DLC wrote whole in an earlier release is adopted. The copy runtime leaves this file out; its setup (or the first session where setup never ran) adds AI-DLC's part |
 | `.vscode/settings.json` | Copilot | `jsonc-settings`: add `chat.agent.maxRequests` (200) only when the project does not set it; never change a value someone else set, other keys, or comments; record only what AI-DLC added, and on retirement remove it only while it holds the value AI-DLC wrote; once added, a key the team takes out of a file it keeps is not added back. The copy runtime leaves this file out |
 
 **More than one harness in a project.** Harnesses may coexist when their engine
@@ -1148,7 +1169,8 @@ of the file, above AI-DLC's, and says so once, so nothing they ignored becomes
 visible to git. A copy that config never ran in gets the same AI-DLC block, and
 an `AGENTS.md` block, from the copy's own `tools/data/root-blocks/` when its
 first chat starts or work is first created; config later treats a block that
-is exactly what a release shipped as its own.
+is exactly what a release shipped as its own. opencode's entries in
+`opencode.json` arrive from the same folder at the same moment.
 
 Known unmarked files and JSON entries from historical shipped projections are
 adopted only when their exact recorded SHA-256 signature matches. Unknown or
@@ -1177,9 +1199,8 @@ change doctor's exit code and is absent when no records are hidden or Git
 cannot check the project.
 
 `--force` can replace a modified, baseline-owned managed block or managed
-harness file. It cannot adopt ambiguous unmarked content, overwrite a
-user-owned JSON value, or replace an unowned or locally modified `opencode.json`
-during an ordinary release refresh. Malformed JSON, malformed or duplicate
+harness file. It cannot adopt ambiguous unmarked content or overwrite a
+user-owned JSON value, including the team's own entries in `opencode.json`. Malformed JSON, malformed or duplicate
 markers, non-regular-file targets, and retired owned content whose integrity
 cannot be proved are hard conflicts.
 
@@ -1366,12 +1387,13 @@ A fresh clone or CI runner installs the committed version before config:
 version=$(cat .aidlc-version)
 tag="v$version"
 tmp="$(mktemp -d)"
-gh release download "$tag" --repo awslabs/aidlc-workflows --dir "$tmp" \
+gh release download "$tag" --repo github.com/awslabs/aidlc-workflows --dir "$tmp" \
   --pattern install.sh --pattern aidlc-release.intoto.jsonl
 gh attestation verify "$tmp/install.sh" \
   --bundle "$tmp/aidlc-release.intoto.jsonl" \
   --repo awslabs/aidlc-workflows \
   --signer-workflow awslabs/aidlc-workflows/.github/workflows/release.yml \
+  --hostname github.com \
   --source-ref "refs/tags/$tag"
 sh "$tmp/install.sh" --version "$version" --quiet --yes
 rm -rf "$tmp"
@@ -1395,7 +1417,7 @@ fails closed if the bundle is missing or does not authenticate
 `checksums.txt`:
 
 ```bash
-gh release download v2.5.45 --repo awslabs/aidlc-workflows --dir ./aidlc-offline
+gh release download v2.5.45 --repo github.com/awslabs/aidlc-workflows --dir ./aidlc-offline
 ```
 
 Install on the disconnected machine:
@@ -1617,7 +1639,9 @@ out files a team's editor owns, such as Copilot's `.vscode/settings.json`, so
 copying never replaces them; the [Copilot guide](harnesses/copilot.md#vs-code-request-cap)
 names the one setting to add yourself. It leaves out your `.gitignore` and
 `AGENTS.md` too: AI-DLC adds its own lines to them, after everything already
-there, or creates them when the project has none. Claude Code's `.mcp.json` is
+there, or creates them when the project has none. opencode's `opencode.json`
+is left out the same way: the copy's setup adds AI-DLC's entries to your file
+and keeps everything else in it, or writes the file when there is none. Claude Code's `.mcp.json` is
 left out as well, so a copy starts with no MCP servers, as `aidlc config` does
 by default; to turn the shipped servers on, run
 `bun .claude/tools/aidlc.ts config project --harness claude --mcp defaults --yes`. It also leaves out the team's memory
@@ -1639,7 +1663,7 @@ runtime_asset="aidlc-copy-runtime-${tag#v}.tar.gz"
 runtime_checksum="${runtime_asset}.sha256"
 source_repo="${AIDLC_RELEASE_REPOSITORY:-awslabs/aidlc-workflows}"
 release_workflow="${AIDLC_RELEASE_WORKFLOW:-$source_repo/.github/workflows/release.yml}"
-gh release download "$tag" --repo "$source_repo" --dir "$tmp" \
+gh release download "$tag" --repo "github.com/$source_repo" --dir "$tmp" \
   --pattern "$runtime_asset" \
   --pattern "$runtime_checksum" \
   --pattern aidlc-release.intoto.jsonl
@@ -1647,6 +1671,7 @@ gh attestation verify "$tmp/$runtime_asset" \
   --bundle "$tmp/aidlc-release.intoto.jsonl" \
   --repo "$source_repo" \
   --signer-workflow "$release_workflow" \
+  --hostname github.com \
   --source-ref "refs/tags/$tag"
 (cd "$tmp" && sha256sum -c "$runtime_checksum")
 tar -xzf "$tmp/$runtime_asset" -C "$tmp"

@@ -45,9 +45,12 @@ import { existsSync, lstatSync, readdirSync, readFileSync } from "node:fs";
 import { basename, join, relative, sep } from "node:path";
 import {
   assertProjectionPathHasNoSymlinks,
+  jsonEntriesIsSafe,
   managedBlockIsSafe,
   mergeBlock,
+  mergeJsonEntries,
   type ProjectionDescriptor,
+  readRootIntegrations,
   type RootIntegration,
   rootBlockPath,
   unionBlocks,
@@ -398,6 +401,8 @@ export function addRootBlocks(projectDir: string): string[] {
     legacy: Set<string>;
     configured: boolean;
   }>();
+  // AI-DLC's part of a team's JSON file (opencode.json), from root-blocks.
+  const entryParts = new Map<string, { distribution: string; text: string; configured: boolean }>();
   let harnesses: ReturnType<typeof discoverProjectHarnesses>;
   try {
     harnesses = discoverProjectHarnesses(projectDir);
@@ -414,7 +419,24 @@ export function addRootBlocks(projectDir: string): string[] {
       continue;
     }
     const configured = existsSync(join(data, "aidlc-manifest.json"));
-    for (const integration of Array.isArray(descriptor.rootIntegrations) ? descriptor.rootIntegrations : []) {
+    const integrations = readRootIntegrations(descriptor.rootIntegrations);
+    for (const integration of (Array.isArray(integrations) ? integrations : []) as RootIntegration[]) {
+      if (integration?.policy === "json-entries" && jsonEntriesIsSafe(integration)) {
+        const partPath = rootBlockPath(harness.root, integration);
+        try {
+          assertProjectionPathHasNoSymlinks(projectDir, relative(projectDir, partPath).split(sep).join("/"));
+        } catch {
+          continue;
+        }
+        const text = readSafe(partPath);
+        const known = entryParts.get(integration.path);
+        if (text !== null && (!known || harness.distribution.localeCompare(known.distribution) < 0)) {
+          entryParts.set(integration.path, { distribution: harness.distribution, text, configured: configured || Boolean(known?.configured) });
+        } else if (known) {
+          known.configured ||= configured;
+        }
+        continue;
+      }
       // Config's own check on a managed block: a path inside the project and a
       // plain marker, and no symlink on the way to the copy in root-blocks.
       if (integration?.policy !== "managed-block" || !managedBlockIsSafe(integration)) continue;
@@ -471,5 +493,36 @@ export function addRootBlocks(projectDir: string): string[] {
       // Leave the file as it was; the next session or config tries again.
     }
   }
+  for (const [path, part] of entryParts) {
+    if (part.configured) continue;
+    const target = join(projectDir, path);
+    let current = "";
+    try {
+      assertProjectionPathHasNoSymlinks(projectDir, path);
+      const stat = lstatSync(target, { throwIfNoEntry: false });
+      if (stat && (!stat.isFile() || stat.size > MAX_ENTRY_FILE_BYTES)) continue;
+      if (stat) {
+        const bytes = readFileSync(target);
+        current = bytes.toString("utf-8");
+        if (!Buffer.from(current, "utf-8").equals(bytes)) continue;
+      }
+    } catch {
+      continue;
+    }
+    // With no record, only entries that name AI-DLC's own folders are read
+    // as AI-DLC's; the team's keys and values stay theirs.
+    const merged = mergeJsonEntries(current, part.text, { kind: "none" });
+    if ("conflict" in merged || merged.text === current) continue;
+    try {
+      assertProjectionPathHasNoSymlinks(projectDir, path);
+      writeFileAtomic(target, merged.text);
+      written.push(path);
+    } catch {
+      // Leave the file as it was; the next session or config tries again.
+    }
+  }
   return written;
 }
+
+// A team settings file this large is not one AI-DLC adds its part to at session start.
+const MAX_ENTRY_FILE_BYTES = 1024 * 1024;

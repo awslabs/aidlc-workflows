@@ -3007,6 +3007,27 @@ describe("t243 project initialization", () => {
   test("--force cannot overwrite an unowned whole-file root integration", () => {
     const project = temp("aidlc-t240-whole-file-");
     mkdirSync(join(project, ".git"));
+    const config = join(project, "install.ts");
+    writeFileSync(config, "// the project's own install script\n");
+    const initialized = run(INIT, [
+      "config",
+      "--project-dir",
+      project,
+      "--from",
+      CURSOR_RELEASE,
+      "--harness",
+      "cursor",
+      "--force",
+    ], project);
+    expect(initialized.status).toBe(4);
+    expect(initialized.stdout).toContain("unowned whole file");
+    expect(readFileSync(config, "utf-8")).toBe("// the project's own install script\n");
+    expect(existsSync(join(project, ".cursor"))).toBe(false);
+  });
+
+  test("--force keeps the team's own entries in opencode.json", () => {
+    const project = temp("aidlc-t240-json-entries-");
+    mkdirSync(join(project, ".git"));
     const config = join(project, "opencode.json");
     writeFileSync(config, '{"userOwned":true}\n');
     const initialized = run(INIT, [
@@ -3019,10 +3040,10 @@ describe("t243 project initialization", () => {
       "opencode",
       "--force",
     ], project);
-    expect(initialized.status).toBe(4);
-    expect(initialized.stdout).toContain("unowned whole file");
-    expect(readFileSync(config, "utf-8")).toBe('{"userOwned":true}\n');
-    expect(existsSync(join(project, ".aidlc"))).toBe(false);
+    expect(initialized.status, initialized.stdout + initialized.stderr).toBe(0);
+    const value = JSON.parse(readFileSync(config, "utf-8"));
+    expect(value.userOwned).toBe(true);
+    expect(value.skills).toEqual({ paths: [".aidlc/skills"] });
   });
 
   test("dry-run against a missing explicit target creates no directory", () => {
@@ -5536,8 +5557,11 @@ describe("t243 release lifecycle", () => {
       // the manifest's source ref and digest.
       const calls = readFileSync(ghCalls, "utf-8").trim().split("\n");
       expect(calls[0]).toBe("attestation verify --help");
-      expect(calls.filter((call) => call.startsWith("attestation verify ") && !call.includes("--help")))
-        .toHaveLength(2);
+      const verifications = calls.filter((call) => call.startsWith("attestation verify ") && !call.includes("--help"));
+      expect(verifications).toHaveLength(2);
+      // Both passes pin github.com, so a GitHub Enterprise default host in the
+      // user's gh config cannot redirect verification.
+      for (const call of verifications) expect(call).toContain("--hostname github.com");
       expect(calls.at(-1)).toContain("--source-ref refs/heads/main --source-digest ");
     } finally {
       server.stop();
@@ -5711,6 +5735,8 @@ describe("t243 release lifecycle", () => {
       workflow,
       "--signer-workflow",
       repository,
+      "--hostname",
+      "github.com",
       "--source-ref",
       `refs/tags/v${AIDLC_VERSION}`,
     ], {
@@ -7953,6 +7979,8 @@ describe("t243 projection channel", () => {
         "opencode.json": [
           "sha256:3be60b2be72b7a423fdaa90fd7d0d9d19613875c05ad5f1a2b6e20fcb54cd1e5",
           "sha256:bc216975f2d614214fc6b6cc612c78f7da3f2b3f56492f0c252297fdc51fb928",
+          "sha256:d8118ed1ea8d76b2b89c55fdf87bc0405325c03c2f72fee5dd689c59fc745a78",
+          "sha256:34904172eae6868a8bcf99cddab1b17639d98d022cb32339a5a05c5b2d096ba1",
         ],
       },
       copilot: {

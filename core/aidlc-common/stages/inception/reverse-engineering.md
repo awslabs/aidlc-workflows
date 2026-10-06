@@ -250,14 +250,14 @@ not to scan or document it:
   `.agents/` (Codex): the `aidlc`-named ones, and every skill whose `SKILL.md`
   frontmatter says `generated-by: aidlc-runner-gen` (stage runners, plugin
   stages included);
-- the root files AI-DLC writes whole: Cursor's `install.ts` beside `.cursor/`
-  and opencode's `opencode.json` beside `.opencode/`;
+- the root file AI-DLC writes whole: Cursor's `install.ts` beside `.cursor/`;
 - AI-DLC's marked sections of shared root files such as `AGENTS.md` and
-  `.gitignore`, and the MCP servers it adds to `.mcp.json` (named under
-  `rootContributions` in `<harness directory>/tools/data/aidlc-manifest.json`).
+  `.gitignore`, the MCP servers it adds to `.mcp.json`, and its entries in
+  opencode's `opencode.json` (named under `rootContributions` in
+  `<harness directory>/tools/data/aidlc-manifest.json`).
 
-The rest of `.github/`, `.agents/`, `AGENTS.md`, and `.gitignore` is the
-project's own and is scanned as usual.
+The rest of `.github/`, `.agents/`, `AGENTS.md`, `.gitignore`, and
+`opencode.json` is the project's own and is scanned as usual.
 
 Tell the developer to scan only what people wrote: follow the repo's
 `.gitignore` files, and skip build outputs, dependency folders, and IDE and

@@ -61,7 +61,8 @@ const NAME = "AIDLC_DISABLE_REVIEW_FREEZE_HOOK";
 const ASKED = "turn the review freeze check off for this project";
 const OFF = "The review freeze check is off for this project since ";
 const FROM_CHAT = `because you said: "${ASKED}"`;
-const NOT_FROM_CHAT = "set from a terminal or a file, not from your chat";
+// A line the engine cannot source never claims where the switch came from.
+const NOT_FROM_CHAT = "your chat";
 const UNDO = `Say "turn it back on" to restore it (`;
 
 // Nothing in the environment decides these switches here: the settings files
@@ -242,15 +243,15 @@ describe("a check switched off for the project is always said, never refused", (
     expect(entry.words.length).toBe(201);
   });
 
-  test("set with nobody in the chat: off at once, and said as not from the chat", () => {
+  test("set with nobody in the chat: off at once, and said without claiming where it came from", () => {
     const proj = installedProject();
     const recorded = flags(proj, "--bypass", NAME, "--local", "--yes");
     expect(recorded.status, recorded.stdout + recorded.stderr).toBe(0);
-    expect(recorded.stdout).toContain(NOT_FROM_CHAT);
+    expect(recorded.stdout).not.toContain(NOT_FROM_CHAT);
     expect(resolveProjectFlag(NAME, NONE, proj)).toBe("1");
     const said = notices(proj);
     expect(said).toHaveLength(1);
-    expect(said[0]).toContain(NOT_FROM_CHAT);
+    expect(said[0]).not.toContain(NOT_FROM_CHAT);
   });
 
   test("an unattended run does not turn a check off for the project, and still turns one back on", () => {
@@ -284,10 +285,10 @@ describe("a check switched off for the project is always said, never refused", (
 
     const said = notices(proj);
     expect(said).toEqual([
-      `${OFF}09:05, ${NOT_FROM_CHAT}. ${UNDO}${clearSwitchCommand(NAME)}).`,
+      `${OFF}09:05. ${UNDO}${clearSwitchCommand(NAME)}).`,
     ]);
     expect(notices(proj)).toEqual([]);
-    expect(sessionStart(proj)).toContain(`${OFF}09:05, ${NOT_FROM_CHAT}.`);
+    expect(sessionStart(proj)).toContain(`${OFF}09:05.`);
   });
 
   test("turned back on while something else still keeps it off, the command says what does", () => {
@@ -389,7 +390,7 @@ describe("a check switched off for the project is always said, never refused", (
     mkdirSync(join(proj, "aidlc", ".aidlc-sessions"), { recursive: true });
     writeFileSync(recordFile(proj), "{ not json");
     expect(resolveProjectFlag(NAME, NONE, proj)).toBe("1");
-    expect(switchesOffLines(proj, NONE)[0]).toContain(NOT_FROM_CHAT);
+    expect(switchesOffLines(proj, NONE)[0]).not.toContain(NOT_FROM_CHAT);
     expect(switchOffNotices(proj, NONE)).toHaveLength(1);
     markSwitchOffNoticesSaid(proj, NONE);
     expect(JSON.parse(readFileSync(recordFile(proj), "utf-8")).switches).toHaveLength(1);
@@ -411,7 +412,7 @@ describe("a check switched off for the project is always said, never refused", (
     );
     expect(switchOffLine(off({}), now)).toContain("since 10:07, set after your last message in the chat.");
     expect(switchOffLine(off({ how: "other", since: at(8, 1) }, "global"), now)).toBe(
-      `The plan approval check is off on this machine since 2026-10-01 08:07, ${NOT_FROM_CHAT}. ` +
+      `The plan approval check is off on this machine since 2026-10-01 08:07. ` +
         `${UNDO}${clearSwitchCommand("AIDLC_DISABLE_PLAN_APPROVAL_GUARD")}).`,
     );
     const long = switchOffLine(off({ words: `${"word ".repeat(80)}\nend` }), now);
@@ -453,7 +454,7 @@ describe("the line reaches the person on every harness", () => {
       const next = runOrchestrateNext(engine, proj, [], { cwd: proj, env: quietEnv() });
       expect(next.status, next.out).toBe(0);
       const carried = (next.directive as { change_notices?: string[] } | null)?.change_notices ?? [];
-      expect(carried.some((line) => line.startsWith(OFF) && line.includes(NOT_FROM_CHAT)), next.out).toBe(true);
+      expect(carried.some((line) => line.startsWith(OFF) && !line.includes(NOT_FROM_CHAT)), next.out).toBe(true);
 
       const payload = JSON.stringify({
         hook_event_name: "SessionStart",
@@ -474,7 +475,7 @@ describe("the line reaches the person on every harness", () => {
       });
       expect(started.status, started.stderr).toBe(0);
       expect(started.stdout, started.stderr).toContain(OFF);
-      expect(started.stdout).toContain(NOT_FROM_CHAT);
+      expect(started.stdout).not.toContain(NOT_FROM_CHAT);
     });
   }
 });

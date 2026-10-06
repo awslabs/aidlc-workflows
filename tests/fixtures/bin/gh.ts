@@ -26,6 +26,7 @@ const sourceRef = valueAfter("--source-ref");
 const sourceDigest = valueAfter("--source-digest");
 const repository = valueAfter("--repo");
 const signerWorkflow = valueAfter("--signer-workflow");
+const hostname = valueAfter("--hostname");
 const expectedRepository =
   process.env.AIDLC_RELEASE_REPOSITORY?.trim() || "awslabs/aidlc-workflows";
 const manifestPath = join(dirname(args[2]), "version.json");
@@ -45,6 +46,7 @@ if (
   readFileSync(bundle, "utf-8").trim() !== "aidlc-test-release-provenance" ||
   repository !== expectedRepository ||
   signerWorkflow !== expectedWorkflow ||
+  hostname !== "github.com" ||
   (
     sourceRef !== undefined &&
     sourceRef !== "refs/heads/main" &&

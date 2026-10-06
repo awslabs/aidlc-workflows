@@ -1,22 +1,23 @@
 import { FAMILIES, LIVE_MATRICES, liveMatrix, VERIFICATION_FAMILIES, type LiveMatrixKind, type VerificationFamily } from "./ci-live-filter.ts";
 
 export const FULL_SUITE_JOBS = [
-  "plan", "native_terminal", "native_reconcile", "deterministic", "production_guards",
+  "plan", "native_terminal", "native_reconcile", "deterministic", "scope_runs", "production_guards",
   "live_prepare_linux", "live_prepare_macos", "live_prepare_windows", "live_linux",
   "live_macos", "live_windows", "release_contract_windows",
 ] as const;
 
 // Stable promotion requires the current bounded-shard job and omission contract.
-export const FULL_SUITE_COVERAGE_POLICY = "required-hosted-live-shards-v2";
+export const FULL_SUITE_COVERAGE_POLICY = "required-hosted-live-shards-v3";
 export const RELEASE_OMITTED_JOBS = ["deterministic", "production_guards"] as const;
 export const LIVE_VERIFICATION_OMITTED_JOBS = [
-  "native_terminal", "native_reconcile", "deterministic", "production_guards",
+  "native_terminal", "native_reconcile", "deterministic", "scope_runs", "production_guards",
 ] as const;
 // Full verification may select an unmerged head, so it never reaches a job that
 // receives OIDC or AWS credentials; live coverage of a candidate uses
-// live-verification's separately authorized boundary.
+// live-verification's separately authorized boundary. Its deterministic job
+// already runs the scope runs and the guard matrix, so it omits scope_runs.
 export const FULL_VERIFICATION_OMITTED_JOBS = [
-  "live_prepare_linux", "live_prepare_macos", "live_prepare_windows", "live_linux", "live_macos", "live_windows",
+  "scope_runs", "live_prepare_linux", "live_prepare_macos", "live_prepare_windows", "live_linux", "live_macos", "live_windows",
 ] as const;
 export type SuitePurpose = "release" | "live-verification" | "full-verification";
 

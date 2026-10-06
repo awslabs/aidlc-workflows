@@ -64,11 +64,13 @@ import {
 } from "./aidlc-lib.ts";
 import {
   approvalFingerprint,
+  approvedPlanChangeLine,
   codeGenerationBuildsWithoutSource,
   codeGenerationExecutionAllowed,
   codeGenerationRecordDir,
   codeGenerationTargetId,
   evaluateCodeGenerationApproval,
+  keepApprovedPlanCopy,
   PlanApprovalUnbindableError,
   readTestingContract,
   resolveCodeGenerationAuthority,
@@ -666,7 +668,12 @@ export function routeCodeGenerationPlanApproval(projectDir: string, directive: D
   // must re-read).
   const states = units.map((unit) => targetState(projectDir, unit, intentId, record, directive, planApprovalOff));
   if (states.every((state) => state.kind === "approved")) {
-    return withPlanState(directive, { status: "approved" });
+    // Under a lowered Guard Policy an approved plan that changed before the
+    // build still builds; the person hears what changed and how to go back.
+    const approved = withPlanState(directive, { status: "approved" });
+    const changed = units.flatMap((unit) => approvedPlanChangeLine(projectDir, { unit }, directive) ?? []);
+    if (changed.length > 0) approved.change_notices = [...(approved.change_notices ?? []), ...changed];
+    return approved;
   }
   const working = states.filter((state): state is Extract<TargetState, { kind: "plan" | "revise" | "repair" }> =>
     state.kind === "plan" || state.kind === "revise" || state.kind === "repair");
@@ -713,10 +720,15 @@ export function routeCodeGenerationPlanApproval(projectDir: string, directive: D
   const question = planQuestion(askUnits, repaired);
   const reShown = record !== null && record.results === undefined && record.question === question &&
     record.targets.length === askUnits.length && record.targets.every((target) => askUnits.includes(target.unit));
+  // Under strict a changed approved plan is asked about again; the question
+  // says first what changed since the person approved it.
+  const changed = askUnits.flatMap((unit) => approvedPlanChangeLine(projectDir, { unit }, directive) ?? []);
   return planApprovalAskDirective(projectDir, askUnits, {
     question,
     editing: false,
-    ...(reShown && record?.lastNotice ? { note: record.lastNotice } : {}),
+    ...(changed.length > 0
+      ? { note: changed.join(" ") }
+      : reShown && record?.lastNotice ? { note: record.lastNotice } : {}),
   });
 }
 
@@ -1094,6 +1106,7 @@ function approveTarget(
   withActiveDirectiveLock(projectDir, () => {
     writeFileAtomic(questionsPath, questions);
     writePlanApprovalReceipt(projectDir, receipt);
+    keepApprovedPlanCopy(projectDir, authority, fingerprint, questions);
     if (source !== null) writeWorkspaceSourceSnapshot(projectDir, STAGE, source);
   });
   appendAuditEntryUnlocked("PLAN_APPROVAL_RECORDED", {

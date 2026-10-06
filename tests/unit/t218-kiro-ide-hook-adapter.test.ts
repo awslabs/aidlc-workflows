@@ -2136,8 +2136,18 @@ describe("t218 Kiro IDE hook adapter (USER_PROMPT env context)", () => {
     try {
       const r = runIde(dir, "continue-workflow", null);
       expect(r.code).toBe(0);
-      const out = JSON.parse(r.stdout) as { decision?: string };
+      const out = JSON.parse(r.stdout) as { decision?: string; reason?: string };
       expect(out.decision).toBe("block");
+      // Kiro IDE drops Stop output and Kiro CLI v3 (same tree) hides it, so
+      // after the line comes the agent's step to say it, on its own line.
+      const [line, step, ...rest] = (out.reason ?? "").split("\n");
+      expect(line).toMatch(/^AI-DLC is carrying on(?: with [^\n]+)?\.$/);
+      expect(step).toBe(
+        "If you carry on with the work, first say that line to the person once, on its own line; " +
+          "if you had just asked them a question, record it with `log decision` and end your turn saying nothing. " +
+          "Say nothing else about this note.",
+      );
+      expect(rest).toEqual([]);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
