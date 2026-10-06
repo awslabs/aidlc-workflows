@@ -1896,7 +1896,9 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     const stopped = runAdapter(dir, "continue-workflow", { ...FIXTURES.stop, cwd: dir, session_id: session });
     const copilotReason = JSON.parse(stopped.stdout).reason;
     expect(copilotReason, `${label} Copilot diagnostic must equal the direct hook's UTF-8-bounded diagnostic`).toBe(directReason);
-    const diagnostic = copilotReason.split("--- begin engine diagnostic ---\n")[1].split("\n--- end engine diagnostic ---")[0];
+    const lead = "The last AI-DLC step stopped on a problem: ";
+    expect(String(copilotReason).startsWith(lead)).toBe(true);
+    const diagnostic = String(copilotReason).slice(lead.length);
     expect(diagnostic).toBe(expected);
     expect(runAdapter(dir, "continue-workflow", { ...FIXTURES.stop, cwd: dir, session_id: session }).stdout).toBe("");
   }, 30000);
