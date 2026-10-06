@@ -85,6 +85,7 @@ import {
   existsSync,
   mkdirSync,
   openSync,
+  readdirSync,
   readFileSync,
   realpathSync,
   rmSync,
@@ -129,8 +130,11 @@ import {
   validateDirective,
 } from "./aidlc-directive.ts";
 import {
+  docsRoot,
   intentDisplayLabel,
   isBindableIntentRecordName,
+  keptRepliesSinceStageStart,
+  stageDir,
   isSafeIntentRecordName,
   SPACE_NAME_REGEX,
   workflowParticipation,
@@ -896,6 +900,9 @@ function prepareEmission(directive: Directive): PreparedEmission {
       : activeKeptRequestLine;
     activeKeptRequestLine = null;
   }
+  // Before transport, so a run-stage delivered in parts (rebuilt by
+  // `continue`) carries the person's kept replies too.
+  directive = withKeptReplies(directive);
   // A route check asks one question: which Unit would the engine route now? It
   // never loads rules, so it skips transport entirely - which also keeps it from
   // minting the machine-local steering key on a checkout that has none.
@@ -1432,6 +1439,42 @@ function withBuiltPlanReviewRoute(directive: Directive): Directive {
     recordHookDrop(projectDir, "plan-approval-ask", errorMessage(e));
     return directive;
   }
+}
+
+// A stage whose questions file still has a blank answer gets back what the
+// person already replied that no answer holds yet, so the agent records it
+// instead of asking them again (a chat can end between their reply and the
+// agent writing it down).
+const KEPT_REPLIES_NOTE =
+  "The person already replied to this stage's questions in an earlier chat, and no answer records these replies " +
+  "yet. `answered` lists what is already on record for this stage, in order (the way they chose to answer comes " +
+  "first), and `replies` came after it, in the order they typed them. Read them against the questions file: write " +
+  "each answer they gave on its [Answer]: line and record it with `log answer`, then ask only what is still open. " +
+  "Never ask them again what they already answered.";
+
+function withKeptReplies(directive: Directive): Directive {
+  if (isRouteCheckProbe() || directive.kind !== "run-stage" || directive.gate_only || directive.build_settled) {
+    return directive;
+  }
+  const projectDir = emissionProjectDir(directive);
+  if (!projectDir) return directive;
+  try {
+    const dir = directive.phase === "construction" && directive.unit
+      ? join(docsRoot(projectDir), "construction", directive.unit, directive.stage)
+      : stageDir(projectDir, directive.phase, directive.stage);
+    const blank = existsSync(dir) && readdirSync(dir).some((name) =>
+      name.endsWith("-questions.md") && /\[Answer\]:[ \t]*_*[ \t]*$/m.test(readFileSync(join(dir, name), "utf-8")));
+    if (!blank) return directive;
+    const kept = keptRepliesSinceStageStart(projectDir, {
+      stage: directive.stage,
+      ...(directive.phase === "construction" && directive.unit ? { unit: directive.unit } : {}),
+    });
+    if (kept === null) return directive;
+    directive.kept_replies = { answered: kept.answered, replies: kept.replies, note: KEPT_REPLIES_NOTE };
+  } catch (e) {
+    recordHookDrop(projectDir, "kept-replies", errorMessage(e));
+  }
+  return directive;
 }
 
 function emit(requested: Directive): void {

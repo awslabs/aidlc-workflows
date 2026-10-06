@@ -392,6 +392,10 @@ modes mid-stage.
   "Other"): "Pick "[that row]" on any question to answer in your own words or
   talk it through."
 - After each batch, IMMEDIATELY write answers to the questions file
+- A resumed stage whose questions file still has a blank answer carries
+  `kept_replies` on its `run-stage`: what the person replied that no answer
+  holds yet, in order, after the stage's answers already on record. Record
+  those answers first; never ask them again
 - Log each batch with fresh ISO timestamp
 - Only when `directive.ceremony.summary_confirmation === "on"`, present a consolidated answer summary, then print
   `aidlc-review-brief.ts summary --stage <slug> --questions-file <path>` before

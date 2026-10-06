@@ -25681,6 +25681,80 @@ export function personRepliedSincePresentation(
     .some((block) => isReplyTurn({ event: auditBlockField(block, "Event") ?? "", block }));
 }
 
+// What the person typed in any chat since the stage started, after the latest
+// answer the engine recorded, in the order they typed it, or null. These are
+// replies no answer holds yet: a chat that ended before the agent wrote or
+// logged them leaves them here for the stage's next run. `answered` is the
+// stage's questions and answers already on record, so a later chat knows what
+// the replies came after. Nothing here reads meaning into them. A stage
+// already at its gate, or a chat whose kept words miss one of these replies,
+// gives none.
+export function keptRepliesSinceStageStart(
+  projectDir: string,
+  stage: { stage: string; unit?: string },
+): { replies: string[]; answered: Array<{ question: string; answer: string }> } | null {
+  const shardPath = auditFilePath(projectDir);
+  const shard = projectRelativePath(projectDir, shardPath);
+  let records: GateWordsRecord[];
+  let content: string;
+  try {
+    const dir = gateWordsDir(projectDir);
+    if (!existsSync(dir)) return null;
+    // Every chat's file: the stage may have been asked in an earlier one.
+    records = readdirSync(dir).flatMap((name) => {
+      if (!name.endsWith(".json")) return [];
+      let session: unknown;
+      try {
+        session = (JSON.parse(readRegularFileNoFollowOrThrow(join(dir, name), "gate words", GATE_WORDS_MAX_FILE_BYTES)
+          .toString("utf-8")) as { session?: unknown } | null)?.session;
+      } catch {
+        return [];
+      }
+      const record = typeof session === "string" ? readGateWords(projectDir, session) : null;
+      return record !== null && record.shard === shard && record.messages.length > 0 ? [record] : [];
+    });
+    if (records.length === 0) return null;
+    content = readAppendOnlyFileNoFollowOrThrow(shardPath, "audit shard").toString("utf-8");
+  } catch {
+    return null;
+  }
+  const separator = /\r?\n---\r?\n/g;
+  let start = 0;
+  let from = 0;
+  let answered: Array<{ question: string; answer: string }> = [];
+  let asked: string | null = null;
+  for (;;) {
+    const match = separator.exec(content);
+    const block = content.slice(start, match ? match.index : content.length).replace(/\r\n/g, "\n");
+    const event = auditBlockField(block, "Event");
+    const ours = auditBlockField(block, "Stage") === stage.stage &&
+      (stage.unit === undefined || auditBlockField(block, "Unit") === stage.unit);
+    if (event !== null && GATE_WORDS_LIFECYCLE_EVENTS.has(event) && ours) {
+      if (event !== "STAGE_STARTED") return null;
+      from = start;
+      answered = [];
+      asked = null;
+    } else if (event !== null && GATE_WORDS_ANSWERED_BY.has(event)) {
+      from = start;
+      if (event === "QUESTION_ANSWERED" && ours) {
+        answered.push({ question: asked ?? "", answer: auditBlockField(block, "Details") ?? "" });
+        asked = null;
+      }
+    } else if (event === "DECISION_RECORDED" && ours) {
+      asked = auditBlockField(block, "Decision");
+    }
+    if (match === null) break;
+    start = match.index + match[0].length;
+  }
+  const floor = Buffer.byteLength(content.slice(0, from), "utf-8");
+  if (records.some((record) => record.dropped > floor)) return null;
+  const replies = records
+    .flatMap((record) => record.messages.filter((message) => message.offset > floor))
+    .sort((a, b) => a.offset - b.offset)
+    .map((message) => message.text);
+  return replies.length > 0 ? { replies, answered } : null;
+}
+
 // The person's latest chat turn in this clone's ledger for the selected work:
 // when it was, and the words its chat kept right after it (null when the hook
 // kept none: a slash command, a picked option, an over-long message). Null when
