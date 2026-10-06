@@ -15888,6 +15888,9 @@ function reportTable(
   for (let i = tableStart + 2; i < lines.length; i++) {
     if (!lines[i].trim().startsWith("|")) break;
     const cells = splitMarkdownRow(lines[i]);
+    // A row with nothing in any cell says nothing: the table reads as if the
+    // row were not there.
+    if (cells.every((cell) => cell.trim() === "")) continue;
     if (cells.length > headers.length) {
       throw new Error(REVIEW_FINDINGS_REPORT_RETRY_MESSAGE);
     }
