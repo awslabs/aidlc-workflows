@@ -7074,7 +7074,8 @@ function routeNext(args: string[], projectDir: string | undefined): void {
       // or their own words): the work carries on, as `--resume` does, and
       // their words are read below. The Stop hook's probe still sees the park.
       const back = !isReadOnlyEngineProbe() && personSpokeSincePark(pd);
-      if (back && args.length === 0) {
+      // "carry on", "resume" and the like, said on their own, are no words.
+      if (back && (args.length === 0 || bareContinuation)) {
         emit(printDirective(
           `This workflow is parked. Run \`${aidlcToolInvocation("state")} unpark\` ` +
             "to clear the park marker, then re-run `next` to continue.",
@@ -7717,8 +7718,9 @@ function routeNext(args: string[], projectDir: string | undefined): void {
     }
     // Words alone (nothing `next` reads as a flag, scope, verb or noun) may
     // ask to redo, jump to a stage, or start fresh, read the same way; words
-    // with a setting typed beside them are asked about with it, as below.
-    if (nextArgsAreOnlyWords(args)) {
+    // with a setting typed beside them are asked about with it, as below. A
+    // continuation phrase on its own asks none of these: it carries on below.
+    if (nextArgsAreOnlyWords(args) && !bareContinuation) {
       const words = saveQuestion(
         pd, flags.intent, "", "routing", { space: selection.space, targets: routingTargets() }, false, undefined,
         undefined, routingSettings(carriedRoutingFlags(flags)),

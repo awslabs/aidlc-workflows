@@ -145,11 +145,14 @@ describe("t-carry-on-continues-the-work: work in progress carries on", () => {
       }
     });
 
-    test(`${harness}: words that name something after the phrase are still asked about`, () => {
+    test(`${harness}: words that name something after the phrase are still read, never carried on`, () => {
       proj = activeProject();
       const d = next(tools, proj, ["carry on with a login page"]);
-      expect(d.ask_type, JSON.stringify(d).slice(0, 300)).toBe("new-work-routing");
-      expect(d.question).toContain('You said: "carry on with a login page"');
+      // Read as a possible redo, jump or fresh start, with the words kept for
+      // the routing question.
+      expect(d.kind, JSON.stringify(d).slice(0, 300)).toBe("print");
+      expect(String(d.message)).toContain("report --result resumed --choice <redo|jump|fresh>");
+      expect(String(d.message)).toMatch(/next --request [0-9a-f]{8}/);
     });
   }
 });
