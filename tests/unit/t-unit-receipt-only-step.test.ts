@@ -307,6 +307,55 @@ describe("t-unit-receipt-only-step: a Unit done but not recorded gets its receip
     expect(String(refusal.message)).not.toContain("--unit unit-c");
   });
 
+  // The person already said Approve: the step ends with that same report, so
+  // the approval is applied without asking them again.
+  test("an approval refused for the receipt step goes through when the same report runs again", () => {
+    projectWithFirstUnitDone();
+    reviewThroughLog(proj, "unit-a");
+    writeUnitArtifacts(proj, "unit-b");
+    reviewThroughLog(proj, "unit-b");
+
+    const report = ["report", "--stage", SLUG, "--result", "approved", "--user-input", "Approve"];
+    const first = directiveOf(run(ORCHESTRATE, report, proj).out);
+    expect(first.kind, JSON.stringify(first)).toBe("print");
+    const message = String(first.message);
+    expect(message).toContain(START_B);
+    expect(message).toContain(`report --stage ${SLUG} --result approved --user-input`);
+    expect(message).toContain("Approve");
+    expect(message).toMatch(/` again\.$/);
+    expect(message).not.toContain("next`");
+    expect(readAllAuditShards(proj)).not.toContain("GATE_APPROVED");
+
+    expect(unitVerb(proj, "start", "unit-b").rc).toBe(0);
+    expect(unitVerb(proj, "complete", "unit-b").rc).toBe(0);
+    const again = run(ORCHESTRATE, report, proj);
+    expect(directiveOf(again.out).kind, again.out).toBe("done");
+    expect(readAllAuditShards(proj)).toContain("GATE_APPROVED");
+  });
+
+  // `unit start` takes only the Unit the engine routes, so with two Units
+  // owing their receipt the step names the first and `next` the other.
+  test("with two Units owing their receipt, the step names the routed one and next the other", () => {
+    proj = createOrchestrationTestProject();
+    writeFileSync(seededStateFile(proj), CONSTRUCTION_STATE, "utf-8");
+    seedBoltDag(proj, ["unit-a", "unit-b", "unit-c"]);
+    expect(unitVerb(proj, "start", "unit-a").rc).toBe(0);
+    writeUnitArtifacts(proj, "unit-a");
+    expect(unitVerb(proj, "complete", "unit-a").rc).toBe(0);
+    for (const unit of ["unit-b", "unit-c"]) {
+      writeUnitArtifacts(proj, unit);
+      reviewReady(proj, unit);
+    }
+
+    const r = run(ORCHESTRATE, ["report", "--stage", SLUG, "--result", "awaiting-approval"], proj);
+    const d = directiveOf(r.out);
+    expect(d.kind, r.out).toBe("print");
+    const message = String(d.message);
+    expect(message).toContain(START_B);
+    expect(message).not.toContain("--unit unit-c");
+    expect(message).toContain("next` to finish the other work items (unit-c).");
+  });
+
   test("a Unit already started gets only its complete command", () => {
     projectWithFirstUnitDone();
     expect(unitVerb(proj, "start", "unit-b").rc).toBe(0);
