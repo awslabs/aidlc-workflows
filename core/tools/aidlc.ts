@@ -3186,16 +3186,20 @@ async function projectMachineOverlapError(
     : null;
 }
 
-// A host runs hooks, adapters, and the statusline on its own, so this refusal
-// reaches the person only through the host. Copilot's and Cursor's tool guards
-// answer on stdout and deny a failed hook without saying why, so they get their
-// own deny form; every other host route keeps its exit code and names the step
-// on the first stderr line, the line hosts show. It stays a refusal: a guard
-// that cannot run never lets the call through. The line names only the step;
-// the troubleshooting guide says why the folder is refused.
-async function refuseHostRouteInMachineRoot(argv: readonly string[]): Promise<number> {
-  const projectDir = dispatcherProjectDirFrom(argv);
-  const why = `AI-DLC can't run in ${projectDir}`;
+// The one line a person sees when they ask for AI-DLC in a folder that holds
+// AI-DLC's own install (most often the home folder) or sits inside it. It
+// names only the step; the troubleshooting guide says why.
+function machineRootStep(argv: readonly string[]): string {
+  return `AI-DLC can't run in ${dispatcherProjectDirFrom(argv)}. Start the session from your project's folder.`;
+}
+
+// AI-DLC never runs in such a folder, so a host's hooks, adapters and
+// statusline stand aside there: every tool call goes on as it would with no
+// AI-DLC, and the person's other work in that folder is never stopped. The
+// step line is said when the person asks for AI-DLC itself (the engine
+// routes). Copilot's tool guard gives no decision, so its own permission
+// rules apply; Cursor's failClosed guard needs an explicit allow.
+async function standAsideInMachineRoot(argv: readonly string[]): Promise<number> {
   let action: Action | null = null;
   try {
     action = resolveAction([...argv]);
@@ -3210,14 +3214,9 @@ async function refuseHostRouteInMachineRoot(argv: readonly string[]): Promise<nu
     // Take the payload the host is still writing, so the answer does not meet
     // a closed pipe.
     await readStdin();
-    const reason = `${why}. Start the session from your project's folder.`;
-    const decision = action.harness === "copilot"
-      ? { hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: reason } }
-      : { permission: "deny", agent_message: reason };
-    text(1, `${JSON.stringify(decision)}\n`);
-    return 0;
+    if (action.harness === "cursor") text(1, `${JSON.stringify({ permission: "allow" })}\n`);
   }
-  return renderDispatcherFailure(argv, 1, `${why}: start the session from your project's folder`);
+  return 0;
 }
 
 function effectiveMutationScope(
@@ -3315,8 +3314,8 @@ export async function main(rawArgv: string[]): Promise<void> {
     if (overlapError) {
       process.exitCode =
         route.routeOnly === "hook" || route.routeOnly === "statusline" || route.routeOnly === "adapter"
-          ? await refuseHostRouteInMachineRoot(argv)
-          : renderDispatcherFailure(argv, 1, overlapError);
+          ? await standAsideInMachineRoot(argv)
+          : renderDispatcherFailure(argv, 1, route.namespace === "engine" ? machineRootStep(argv) : overlapError);
       return;
     }
   }
