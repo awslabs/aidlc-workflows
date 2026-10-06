@@ -240,9 +240,11 @@ label such as `on (from scope classic)`. The label reads `set by you` only when
 the human-turn hook applies the message you typed itself: summary confirmation
 or plan approval off typed with no description, plan approval off in your own
 words, or a Guard Policy or fence switch, together with the settings typed
-beside it. Any other change, including a flag on the command
-that starts new work, is made by a command the agent or a script runs and reads
-`set by a command`. A change to work already under way records `CEREMONY_SET`
+beside it. Sensors, learnings or summary confirmation you type with a request
+(`/aidlc --learnings on build the export`), or before any work exists, also
+read `set by you` on the work that request creates. Any other change, including
+a flag the agent adds to the command that starts new work, is made by a command
+the agent or a script runs and reads `set by a command`. A change to work already under way records `CEREMONY_SET`
 either way; a flag on the command that starts new work is stored in the new
 state file without one. Turning summary
 confirmation or plan approval off for work already under way needs your own

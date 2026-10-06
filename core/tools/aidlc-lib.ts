@@ -36736,6 +36736,8 @@ export function parseTypedGuardSwitchRequest(prompt: string, options: { wordsAns
   newWorkPlanApprovalOff?: true;
   /** `--guard-policy relaxed|off` typed as a flag of the new work the message describes. */
   newWorkGuardPolicy?: "relaxed" | "off";
+  /** Sensors, learnings or summary confirmation typed as flags of the new work the message describes. */
+  newWorkCeremonies?: Record<string, "on" | "off">;
   /** The plain-words switch asked as a question ("skip plan approval?"). */
   asked?: true;
   /** The words typed after the flags, when there are any. */
@@ -36892,6 +36894,12 @@ export function parseTypedGuardSwitchRequest(prompt: string, options: { wordsAns
   // honors it for the piece of work this chat creates next.
   const forNewWork = described && options.wordsAnswer !== true;
   const newWorkPlanApprovalOff = forNewWork && settings.get("plan-approval") === "off";
+  // The ceremonies typed for the new work are the person's, for its labels.
+  const newWorkCeremonies: Record<string, "on" | "off"> = {};
+  for (const key of ["sensors", "learnings", "summary-confirmation"]) {
+    const value = settings.get(key);
+    if (forNewWork && (value === "on" || value === "off")) newWorkCeremonies[key] = value;
+  }
   for (const ceremony of ["summary-confirmation", "plan-approval"] as const) {
     if (forNewWork && settings.get(ceremony) === "off") {
       switches.delete(ceremony);
@@ -36915,6 +36923,7 @@ export function parseTypedGuardSwitchRequest(prompt: string, options: { wordsAns
     error,
     ...(newWorkPlanApprovalOff ? { newWorkPlanApprovalOff: true as const } : {}),
     ...(newWorkGuardPolicy ? { newWorkGuardPolicy } : {}),
+    ...(Object.keys(newWorkCeremonies).length > 0 ? { newWorkCeremonies } : {}),
     ...(words.length > 0 ? { words: words.join(" ") } : {}),
   };
 }

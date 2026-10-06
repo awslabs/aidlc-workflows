@@ -45,6 +45,8 @@ import {
   applyReviewOverride,
   CONFIG_KEYS,
   type ConfigKey,
+  ceremoniesCreationGranted,
+  consumeCeremoniesCreationGrant,
   consumeGuardPolicyCreationGrant,
   consumePlanApprovalCreationGrant,
   guardPolicyCreationGranted,
@@ -7675,6 +7677,15 @@ function handleIntentCreate(projectDir: string, flags: Record<string, string>): 
   }
   const ceremonySetByPerson: Partial<Record<CeremonyKey, true>> =
     planApprovalAsked && requestedCeremony.plan_approval === "off" ? { plan_approval: true } : {};
+  // A ceremony the person typed with this request, or before it, at the value
+  // the creation sets: their words, so the work says they set it.
+  const ceremoniesAsked = ceremoniesCreationGranted(projectDir, initialSelection.sessionId, questionId ?? null);
+  consumeCeremoniesCreationGrant(projectDir, initialSelection.sessionId);
+  for (const key of CEREMONY_KEYS) {
+    if (key !== "plan_approval" && requestedCeremony[key] !== undefined && requestedCeremony[key] === ceremoniesAsked[key]) {
+      ceremonySetByPerson[key] = true;
+    }
+  }
   if (requestedCeremony.plan_approval === "off") {
     if (preflightMemoryStrict !== null) die(planApprovalMemoryLockRefusal(preflightMemoryStrict.path));
     if (scopeCeremonyDefault("plan_approval", scope) !== "off" && ceremonySetByPerson.plan_approval !== true) {

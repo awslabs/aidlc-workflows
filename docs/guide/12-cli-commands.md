@@ -1457,7 +1457,9 @@ The audit keys are `sensors`, `learnings`, and `summary_confirmation`; a command
 records `Source: command` and the person's typed switch records `Source: you`.
 A command that repeats the person's own choice is a no-op and keeps `set by
 you`. A creation flag such as `intent-create --learnings off` also records
-`set by a command`. The saved override is committed with the intent
+`set by a command`, unless the person typed that setting with the request in
+their chat (`/aidlc --learnings off <request>`, or before any work exists),
+which records `set by you`. The saved override is committed with the intent
 and survives sessions. An environment kill switch takes precedence without
 overwriting that saved choice. Turning a ceremony off does not uninstall or
 remove hooks, remove required stage gates, or disable the single pre-merge
