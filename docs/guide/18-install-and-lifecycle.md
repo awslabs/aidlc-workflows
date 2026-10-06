@@ -420,6 +420,7 @@ interactive wizard.
 | `--mcp defaults\|none` | Add or omit Claude's optional shipped MCP entries |
 | `--dry-run` | Calculate the complete plan without creating the target directory or changing bytes |
 | `--plan-token <token>` | Apply only the exact plan approved from a JSON dry run |
+| `--show` | Show settings without changing anything: with no section, every section in turn (`aidlc config --show`; `--json` prints one object keyed by section, each value what that section's `--show --json` prints); with a section, that section alone |
 | `--force` | Replace locally modified framework-owned files and managed blocks where that policy permits |
 | `--yes` | Confirm an otherwise unrecognized target directory or a section mutation; it does not imply MCP consent or choose a section answer |
 | `--json` | Emit one result object with counts, actions, `data.notes`, and `data.planToken` |

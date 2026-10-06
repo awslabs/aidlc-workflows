@@ -845,7 +845,24 @@ function validateChannelConfigArgs(argv: readonly string[]): string | null {
   return validateConfigOutputMode(argv);
 }
 
+// `config --show [--json]` reads every section and changes nothing, so it takes
+// only the flags that shape its output and --project-dir.
+const ROOT_SHOW_BARE_FLAGS = new Set(["--show", "--json", "--no-color", "--help"]);
+
+function validateRootShowArgs(argv: readonly string[]): string | null {
+  for (let i = 0; i < argv.length; i++) {
+    const token = argv[i];
+    if (token === "--project-dir") {
+      i++;
+      continue;
+    }
+    if (!ROOT_SHOW_BARE_FLAGS.has(token)) return `${token} cannot be combined with config --show`;
+  }
+  return argv.filter((token) => token === "--show").length > 1 ? "--show may be specified only once" : null;
+}
+
 function validateRootConfigArgs(argv: readonly string[]): string | null {
+  if (argv.includes("--show")) return validateRootShowArgs(argv);
   const hasPin = argv.includes("--pin");
   const hasUnpin = argv.includes("--unpin");
   if (hasPin && hasUnpin) return "--pin and --unpin are mutually exclusive";
@@ -9860,6 +9877,83 @@ function recordBypassesOnly(
   }
 }
 
+// `config --show [--json]`: each section's own `--show`, in CONFIG_SECTIONS
+// order, run in this process with its output gathered, so every block is
+// exactly what that section prints. A section that cannot answer here (no
+// installed harness yet) answers with its own message, and the read still
+// succeeds: agents run this first for "show my settings".
+async function showEverySection(
+  argv: readonly string[],
+  options: ReturnType<typeof globalOptions>,
+  internal: ConfigMainInternal,
+): Promise<void> {
+  const projectDir = valueAfter(argv, "--project-dir");
+  const shared = [
+    ...(projectDir === undefined ? [] : ["--project-dir", projectDir]),
+    ...(argv.includes("--no-color") ? ["--no-color"] : []),
+    ...(options.mode === "json" ? ["--json"] : []),
+  ];
+  const answers: Array<{ section: string; stdout: string; output: string; code: number }> = [];
+  for (const section of CONFIG_SECTIONS) {
+    answers.push({ section, ...(await gatherConfigOutput([section, "--show", ...shared], internal)) });
+  }
+  if (options.mode === "json") {
+    const sections = Object.fromEntries(answers.map(({ section, stdout, code }) => {
+      try {
+        return [section, JSON.parse(stdout) as unknown];
+      } catch {
+        return [section, { ok: false, code, status: "failed", message: stdout.trim() }];
+      }
+    }));
+    emitResult(success("settings for every config section", { sections }), options);
+    return;
+  }
+  process.stdout.write(
+    answers.map(({ section, output }) => `${heading(section, process.stdout)}\n${output.replace(/\n*$/, "\n")}`)
+      .join("\n"),
+  );
+  process.exitCode = EXIT.ok;
+}
+
+// Runs one config command in this process and hands back what it printed
+// (stdout alone, and both streams in order) and its exit code, leaving the
+// caller's exit code as it was.
+async function gatherConfigOutput(
+  args: string[],
+  internal: ConfigMainInternal,
+): Promise<{ stdout: string; output: string; code: number }> {
+  const stdout: string[] = [];
+  const output: string[] = [];
+  const text = (chunk: unknown): string =>
+    typeof chunk === "string" ? chunk : Buffer.from(chunk as Uint8Array).toString("utf-8");
+  const gather = (toStdout: boolean) =>
+    ((chunk: unknown, ...rest: unknown[]) => {
+      if (toStdout) stdout.push(text(chunk));
+      output.push(text(chunk));
+      const done = rest.find((item) => typeof item === "function") as (() => void) | undefined;
+      done?.();
+      return true;
+    }) as typeof process.stdout.write;
+  const stdoutWrite = process.stdout.write;
+  const stderrWrite = process.stderr.write;
+  const exitCode = process.exitCode;
+  process.exitCode = undefined;
+  process.stdout.write = gather(true);
+  process.stderr.write = gather(false);
+  try {
+    await main(args, internal);
+  } catch (error) {
+    output.push(`error: ${error instanceof Error ? error.message : String(error)}\n`);
+    process.exitCode = EXIT.failure;
+  } finally {
+    process.stdout.write = stdoutWrite;
+    process.stderr.write = stderrWrite;
+  }
+  const code = typeof process.exitCode === "number" ? process.exitCode : EXIT.ok;
+  process.exitCode = exitCode;
+  return { stdout: stdout.join(""), output: output.join(""), code };
+}
+
 export async function main(
   input: string[],
   internal: ConfigMainInternal = {},
@@ -9926,6 +10020,10 @@ export async function main(
     const validation = validateRootConfigArgs(argv);
     if (validation) {
       emitResult(usage(validation, configCommand("--help")), options);
+      return;
+    }
+    if (argv.includes("--show") && !argv.includes("--help")) {
+      await showEverySection(argv, options, internal);
       return;
     }
   }

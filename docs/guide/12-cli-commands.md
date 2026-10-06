@@ -661,7 +661,8 @@ asks what you want to change there, offering that section's choices and leaving
 it unchanged, even when the section is already clean.
 
 The conductor reads current state with
-`aidlc config <section> --show --json`, asks for changes conversationally, and
+`aidlc config <section> --show --json` (`aidlc config --show --json` reads every
+section at once), asks for changes conversationally, and
 uses the native question picker for enumerable choices. Saying "leave it"
 skips that section. Every accepted change lands through one exact
 `aidlc config <section> <explicit value flags> --yes` command; the command and
