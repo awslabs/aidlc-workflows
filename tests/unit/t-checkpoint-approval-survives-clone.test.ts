@@ -22,7 +22,7 @@ import {
 } from "../harness/fixtures.ts";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import {
-  artifactFilename, findStageBySlug, latestMainWorkflowStageRunFloorForProject,
+  artifactFilename, auditBlockField, findStageBySlug, latestMainWorkflowStageRunFloorForProject,
   readAuditShardEvents, reviewArtifactFingerprint,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
@@ -240,6 +240,42 @@ describe("t-checkpoint-approval-survives-clone: no checkpoint proof file on this
       writeFileSync(proof, "{}\n");
       const status = checkpointStatus(p, "alpha");
       expect(status.approved, JSON.stringify(status)).toBe(false);
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+  }
+});
+
+// A Unit restored as approved on a checkout with no proof file, then asked
+// about again: the person's Approve is recorded against the committed
+// verification it stands on, and nothing throws.
+describe("t-checkpoint-approval-survives-clone: asking again for a restored Unit", () => {
+  for (const policy of POLICIES) {
+    test(`Guard Policy ${policy.split(" ")[0]}: ask, then approve, records the approval with its verification`, () => {
+      const p = fixture(policy);
+      build(p, "alpha");
+      approve(p, "alpha");
+      const verification = readAuditShardEvents(p)
+        .filter((row) => row.event === "CHECKPOINT_VERIFICATION_RECORDED" && auditBlockField(row.block, "Unit") === "alpha")
+        .at(-1)!;
+      rmSync(proofDir(p), { recursive: true, force: true });
+      const runs = verificationRuns(p);
+      // No verify: the restored approval is asked about as it stands.
+      const checkpoint = (args: string[]) => {
+        const result = tool(p, "bolt", ["checkpoint", "--unit", "alpha", "--kind", "unit", ...args]);
+        expect(result.status, result.out).toBe(0);
+        return JSON.parse(result.stdout);
+      };
+      const session = "t-clone-alpha-again";
+      checkpoint(["--action", "ask", "--session", session]);
+      human(p, "Approve", session);
+      expect(checkpoint(["--action", "approve", "--session", session, "--user-input", "Approve"]).approved).toBe(true);
+      expect(verificationRuns(p)).toBe(runs);
+      const gate = readAuditShardEvents(p)
+        .filter((row) => row.event === "GATE_APPROVED" && auditBlockField(row.block, "Unit") === "alpha")
+        .at(-1)!;
+      expect(auditBlockField(gate.block, "Verification Id")).toBe(auditBlockField(verification.block, "Verification Id"));
+      expect(auditBlockField(gate.block, "Verification Command SHA-256"))
+        .toBe(auditBlockField(verification.block, "Command SHA-256"));
+      expect(checkpointStatus(p, "alpha")).toMatchObject({ approved: true, errors: [] });
     }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
   }
 });
