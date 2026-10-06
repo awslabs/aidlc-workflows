@@ -354,8 +354,9 @@ describe("t335 (1) review receipt: relaxed keeps the verdict and carries the cha
     expect(blocked.stderr).toContain("review-freeze");
     expect(stoodAside(strictProject)).toHaveLength(0);
 
-    // relaxed and off lower this fence: the write goes through with one line
-    // and one GUARD_STOOD_ASIDE row; the receipt and its verdict are untouched.
+    // relaxed and off lower this fence: the write goes through with one
+    // GUARD_STOOD_ASIDE row; the receipt and its verdict are untouched. Relaxed
+    // says so in one line; off says nothing, because off means off.
     for (const mode of ["relaxed", "off"] as const) {
       const proj = project(mode);
       recordReadyReview(proj);
@@ -366,9 +367,13 @@ describe("t335 (1) review receipt: relaxed keeps the verdict and carries the cha
         tool_input: { file_path: artifact(proj) },
       });
       expect(passed.code, mode).toBe(0);
-      expect(passed.stdout, mode).toContain(
-        `Continuing past the review-freeze check because it is off for this piece of work (guard policy ${mode} (set by you)). Recorded in the audit trail`,
-      );
+      if (mode === "relaxed") {
+        expect(passed.stdout, mode).toContain(
+          "Continuing past the review-freeze check because it is off for this piece of work (guard policy relaxed (set by you)). Recorded in the audit trail",
+        );
+      } else {
+        expect(passed.stdout, mode).toBe("");
+      }
       const rows = stoodAside(proj);
       expect(rows, mode).toHaveLength(1);
       expect(auditBlockField(rows[0].block, "Guard")).toBe("review-freeze");
@@ -376,6 +381,32 @@ describe("t335 (1) review receipt: relaxed keeps the verdict and carries the cha
       expect(auditBlockField(rows[0].block, "Stage")).toBe(STAGE);
       expect(reviewCompletedRows(proj)).toHaveLength(1);
       expect(auditBlockField(reviewCompletedRows(proj)[0].block, "Verdict")).toBe("READY");
+    }
+  });
+
+  test("under Guard Policy off, every write the freeze stands aside for says nothing, whatever set the policy", () => {
+    const writes = 3;
+    for (const policy of ["off (set by you)", "off (from scope classic)", "off (from team.md)"]) {
+      const proj = project("off");
+      const statePath = seededStateFile(proj);
+      writeFileSync(statePath, setGuardPolicyLine(readFileSync(statePath, "utf-8"), policy));
+      recordReadyReview(proj);
+      expect(run(STATE_TOOL, ["gate-start", STAGE], proj).status).toBe(0);
+      for (let i = 0; i < writes; i++) {
+        for (const harness of ["claude", "codex"]) {
+          const passed = runHook(FREEZE_HOOK, proj, {
+            hook_event_name: "PreToolUse",
+            tool_name: "Write",
+            tool_input: { file_path: artifact(proj) },
+          }, { AIDLC_HARNESS_NAME: harness });
+          expect(passed.code, `${policy} ${harness}`).toBe(0);
+          expect(passed.stdout, `${policy} ${harness}`).toBe("");
+          expect(passed.stderr, `${policy} ${harness}`).not.toContain("Continuing past");
+        }
+      }
+      // The audit trail still has every write it let through.
+      const rows = readAuditShardEvents(proj).filter((entry) => entry.event === "GUARD_STOOD_ASIDE");
+      expect(rows, policy).toHaveLength(writes * 2);
     }
   });
 
