@@ -185,12 +185,13 @@ export function frontGateSkips(target: string, projectDirs: readonly string[], n
   return true;
 }
 
-// Rewrite a heartbeat that is already there; never create one or follow a link.
+// Rewrite a heartbeat that is already there, never following a link, with
+// the open flags the engine's own heartbeat writer uses.
 function refreshHeartbeat(path: string, stamp: string): void {
   try {
     if (entry(path)?.kind !== "file") return;
     const noFollow = typeof fsConstants.O_NOFOLLOW === "number" ? fsConstants.O_NOFOLLOW : 0;
-    const fd = openSync(path, fsConstants.O_WRONLY | fsConstants.O_TRUNC | noFollow);
+    const fd = openSync(path, fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_TRUNC | noFollow, 0o644);
     try {
       writeSync(fd, stamp);
     } finally {
