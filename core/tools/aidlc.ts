@@ -1336,14 +1336,15 @@ export function copyChannelToolScripts(): string[] {
   return [...new Set(Object.values(TOOLS))].filter((tool) => !machine.has(tool)).sort();
 }
 
-// The dispatcher's public commands, outside its engine namespace, that a copy
-// channel pre-approves, each spelled exactly as AI-DLC runs it: the doctor and
-// version utilities, config's read-only forms, and turning one recorded check
-// back on (`config flags --clear-bypass <switch> --yes`, the form the skills
-// name), which only ever raises a check. A host that matches text as written
-// cannot tell a quoted or re-spelled machine-wide config flag from a project
-// one, so every other config command, turning a check off included, is left to
-// the host's prompt.
+// The dispatcher's public commands, outside its engine namespace, that every
+// install pre-approves, each spelled exactly as AI-DLC runs it: the doctor,
+// status and version utilities in both spellings agents use, config's
+// read-only forms, and turning one recorded check back on
+// (`config flags --clear-bypass <switch> --yes`, the form the skills name),
+// which only ever raises a check. A host that matches text as written cannot
+// tell a quoted or re-spelled machine-wide config flag from a project one, so
+// every other config command, bare `config` (the guided setup) and turning a
+// check off included, is left to the host's prompt.
 export function copyChannelDispatcherCommands(): string[] {
   // Only the packager and the tests ask for this list, so the settings reader
   // loads here and the dispatcher's own start stays as light as before.
@@ -1352,7 +1353,10 @@ export function copyChannelDispatcherCommands(): string[] {
     "doctor",
     "version",
     "--doctor",
+    "--version",
     "status",
+    "--status",
+    "config --help",
     ...CONFIG_SECTIONS.flatMap((section) => [`config ${section} --show --json`, `config ${section} --help`]),
     ...RECORDABLE_PROJECT_BYPASSES.map((name) => `config flags --clear-bypass ${name} --yes`),
   ];
