@@ -379,8 +379,8 @@ async function runWorkflowStep(
 describe("t332 preview publication pipeline", () => {
   for (const [name, event, flag, sha, head, ancestor, purpose, selectedFamily = "all", selectedTest = ""] of [
     ["release call can test an older main commit", "workflow_call", "false", SOURCE_A, TARGET, true, "release"],
-    ["release schedule stays main-bound", "schedule", "false", SOURCE_A, SOURCE_A, true, "release"],
-    ["normal dispatch rejects branch source", "workflow_dispatch", "false", SOURCE_A, SOURCE_A, false, null],
+    ["release schedule resolves the selected source", "schedule", "false", SOURCE_A, SOURCE_A, true, "release"],
+    ["normal dispatch accepts branch source", "workflow_dispatch", "false", SOURCE_A, SOURCE_A, false, "release"],
     ["manual candidate live verification", "workflow_dispatch", "true", SOURCE_A, SOURCE_A, false, "live-verification"],
     ["manual main live verification remains ineligible", "workflow_dispatch", "true", SOURCE_A, SOURCE_A, true, "live-verification"],
     ["live verification rejects a different workflow head", "workflow_dispatch", "true", SOURCE_A, TARGET, true, null],
@@ -445,16 +445,12 @@ describe("t332 preview publication pipeline", () => {
       expect(result.status, result.stdout + result.stderr).toBe(purpose === null ? 1 : 0);
       expect(readFileSync(output, "utf8")).toBe(purpose === null ? "" : `sha=${sha}\npurpose=${purpose}\nverification_family=${selectedFamily}\nverification_test=${selectedTest}\n`);
       const commands = readFileSync(calls, "utf8");
-      if (flag === "false" && selectedFamily === "all" && selectedTest === "") {
-        expect(commands).toContain("fetch --no-tags origin main");
-        expect(commands).toContain(`merge-base --is-ancestor ${sha} origin/main`);
-      } else {
-        expect(commands).not.toContain("fetch");
-      }
+      expect(commands).not.toContain("fetch");
+      expect(commands).not.toContain("merge-base");
     }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
   }
 
-  test("a failing Full Suite still builds the preview but keeps the run red", async () => {
+  test("a failing Full Suite does not fail the preview and its notes retain the failure report", async () => {
     const workflow = Bun.YAML.parse(readFileSync(PREVIEW_RELEASE_WORKFLOW, "utf8")) as {
       jobs: Record<string, { if?: string; needs: string | string[]; steps?: Array<{ name?: string; run?: string }> }>;
     };
@@ -471,7 +467,7 @@ describe("t332 preview publication pipeline", () => {
     const step = (job: string, name: string): string => jobs[job].steps!.find((entry) => entry.name === name)!.run!;
     const testScript = step("test", "Require a finished Full Suite");
     const publicationScript = step("release-result", "Require publication or an intentional preview skip");
-    const suiteScript = step("release-result", "Require a passing Full Suite");
+    expect(jobs["release-result"].steps?.some(entry => entry.name === "Require a passing Full Suite")).toBe(false);
     for (const fullSuite of ["success", "failure", "cancelled", "skipped"]) {
       // Only a suite that never finished blocks the build and its report.
       const tests = await runWorkflowStep(testScript, REPO_ROOT, { FULL_SUITE_RESULT: fullSuite });
@@ -482,14 +478,6 @@ describe("t332 preview publication pipeline", () => {
           RELEASE_SKIP: skip, RELEASE_RESULT: release,
         });
         expect(publication.status, publication.stdout + publication.stderr).toBe(tests.status);
-      }
-      // The error names the report only when Release tests actually produced it.
-      for (const testResult of ["success", "failure"]) {
-        const suite = await runWorkflowStep(suiteScript, REPO_ROOT, { FULL_SUITE_RESULT: fullSuite, TEST_RESULT: testResult });
-        expect(suite.status, suite.stdout + suite.stderr).toBe(fullSuite === "success" ? 0 : 1);
-        expect(suite.stdout).toBe(fullSuite === "success" ? "" : testResult === "success"
-          ? "::error::Full Suite failed; the Release tests job summary has the failure report\n"
-          : "::error::Full Suite failed and Release tests produced no failure report; see that job's log\n");
       }
     }
     for (const release of ["success", "skipped", "failure"]) {
@@ -504,7 +492,7 @@ describe("t332 preview publication pipeline", () => {
     mkdirSync(join(temp, "preview-test-report"));
     const reportPath = join(temp, "preview-test-report", "preview-test-report.md");
     const warning = "> **Warning:** Full Suite failed for this source. A Full Suite failure report ends these notes.\n\n";
-    const stageNotes = async (fullSuite: string, body: string, report: string): Promise<string> => {
+    const stageNotes = async (fullSuite: string, body: string, report: string, update = "success"): Promise<string> => {
       writeFileSync(reportPath, report);
       const plan = {
         schemaVersion: 1, version: PREVIEW_ID, tag: `v${PREVIEW_ID}`, sourceRepository: "owner/repo",
@@ -512,7 +500,8 @@ describe("t332 preview publication pipeline", () => {
         notes: { name: previewReleaseName(PREVIEW_ID), body },
       };
       const staged = await runWorkflowStep(step("release", "Stage preview notes"), REPO_ROOT, {
-        RUNNER_TEMP: temp, FULL_SUITE_RESULT: fullSuite, PREVIEW_PLAN: JSON.stringify(plan),
+        RUNNER_TEMP: temp, FULL_SUITE_RESULT: fullSuite, PREVIEW_PLAN: JSON.stringify(plan), UPDATE_RESULT: update,
+        GITHUB_SERVER_URL: "https://github.com", GITHUB_REPOSITORY: "owner/repo", GITHUB_RUN_ID: "77",
       });
       expect(staged.status, staged.stdout + staged.stderr).toBe(0);
       const notes = readPreviewPlan(join(temp, "aidlc-preview-plan.json")).notes;
@@ -525,6 +514,57 @@ describe("t332 preview publication pipeline", () => {
     // t-ci-preview-test-report covers the near-limit budget; a plan that size
     // cannot pass through one Windows environment variable.
     expect(await stageNotes("failure", body, small)).toBe(`${warning}${body}\n${small}`);
+    // A failed update from the last release warns and reports, but publishes.
+    const updateWarning = "> **Warning:** Updating from the last release to this preview failed in its checks. " +
+      "Stay on your release or wait for the next preview.\n\n";
+    const updateLine = "## Update from the last release\n\n`aidlc update` from the last release to this preview " +
+      "**failed** in [the preview run](https://github.com/owner/repo/actions/runs/77).\n";
+    expect(await stageNotes("success", body, small, "failure")).toBe(`${updateWarning}${body}\n${updateLine}`);
+    expect(await stageNotes("failure", body, small, "failure"))
+      .toBe(`${warning}${updateWarning}${body}\n${updateLine}\n${small}`);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("preview tracks the exact dispatched run and tolerates its failure without changing Full Suite", async () => {
+    const workflow = Bun.YAML.parse(readFileSync(PREVIEW_RELEASE_WORKFLOW, "utf8")) as {
+      jobs: Record<string, { "continue-on-error"?: boolean; steps: Array<{ run?: string }> }>;
+    };
+    expect(workflow.jobs.full_suite["continue-on-error"]).toBe(true);
+    const script = workflow.jobs.full_suite.steps[0].run!;
+    const root = mkdtempSync(join(tmpdir(), "aidlc-preview-dispatch-"));
+    roots.push(root);
+    const bin = join(root, "bin");
+    mkdirSync(bin);
+    const shim = join(bin, "gh");
+    writeFileSync(shim, [
+      "#!/usr/bin/env bash", 'printf "%s\\n" "$*" >>"$GH_CALLS"',
+      'case "$1 $2" in',
+      '  "api --method") if [ "$SUITE_CONCLUSION" = dispatch-error ]; then exit 1; fi; echo 12345 ;;',
+      '  "run watch") test "$SUITE_CONCLUSION" = success ;;',
+      '  "run view") echo "$SUITE_CONCLUSION" ;;',
+      '  *) exit 2 ;;', "esac",
+    ].join("\n"));
+    chmodSync(shim, 0o755);
+    for (const conclusion of ["success", "failure", "cancelled", "dispatch-error"]) {
+      const output = join(root, `output-${conclusion}`);
+      const calls = join(root, `calls-${conclusion}`);
+      const result = await runWorkflowStep(script, root, {
+        PATH: `${bin}${delimiter}${dirname(process.execPath)}${delimiter}${process.env.PATH ?? ""}`,
+        GITHUB_REPOSITORY: "owner/repo", SOURCE_SHA: SOURCE_A, GITHUB_OUTPUT: output,
+        GH_CALLS: calls, SUITE_CONCLUSION: conclusion,
+      });
+      expect(result.status, result.stdout + result.stderr).toBe(conclusion === "dispatch-error" ? 1 : 0);
+      const outputs = readFileSync(output, "utf8");
+      expect(outputs).toStartWith("result=failure\n");
+      expect(outputs.includes("result=success")).toBe(conclusion === "success");
+      const commands = readFileSync(calls, "utf8");
+      expect(commands).toContain(`-f ref=main -f inputs[ref]=${SOURCE_A}`);
+      expect(commands).not.toContain("run list");
+      if (conclusion !== "dispatch-error") {
+        expect(outputs).toContain("run_id=12345");
+        expect(commands).toContain("run watch 12345");
+        expect(commands).toContain("run view 12345");
+      }
+    }
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("the tag message binds a preview to its source commit and parses back", () => {
@@ -1093,7 +1133,32 @@ describe("t332 preview publication pipeline", () => {
     },
   );
 
-  test("a queued older checkout can skip its already-published source but cannot become a new publication candidate", async () => {
+  test("the planner skips a source that a newer published preview has overtaken", async () => {
+    // A retried older run must not publish older code under a newer preview id.
+    const history = sourceHistory();
+    const newest = `v${NEXT_STABLE}-${PREVIEW_CHANNEL}.20260903.1`;
+    const client = githubApiClient(servePlanMock({
+      releases: [{ tag_name: newest, prerelease: true, draft: false }],
+      tags: [newest],
+      annotated: { [newest]: { source: history.second } },
+    }), undefined);
+    const plan = (sourceDigest: string) => planPreviewRelease({
+      client, repository: "owner/repo", sourceRepository: "owner/source",
+      sourceDigest, cwd: history.cwd, date: "20260903",
+    });
+    expect(await plan(history.first)).toEqual({
+      skip: true, reason: "superseded-source", version: null,
+      previousSourceDigest: history.second, plan: null,
+    });
+    // A newer commit still publishes, even though main may be past it.
+    expect(await plan(history.third)).toMatchObject({
+      skip: false, previousSourceDigest: history.second, plan: { sourceDigest: history.third },
+    });
+  });
+
+  test("a checkout main has moved past skips an already-published or overtaken source and otherwise plans the commit it started on", async () => {
+    // Preview Release 36485041152 waited 22 minutes for a runner, main moved,
+    // and the run refused to test anything. It now plans its own commit.
     const workflow = Bun.YAML.parse(readFileSync(PREVIEW_RELEASE_WORKFLOW, "utf-8")) as {
       jobs: { validate: { steps: Array<{ id?: string; run?: string }> } };
     };
@@ -1141,18 +1206,19 @@ describe("t332 preview publication pipeline", () => {
     expect(git(history.cwd, ["rev-parse", "HEAD"])).toBe(history.first);
     expect(git(history.cwd, ["rev-parse", "origin/main"])).toBe(history.third);
 
-    for (const alreadyPublished of [true, false]) {
+    // Its own source, a descendant (a retried older run), or nothing newer.
+    for (const published of [history.first, history.second, null] as const) {
       const date = new Date().toISOString().slice(0, 10).replaceAll("-", "");
-      mock.releases = alreadyPublished
+      mock.releases = published
         ? [{ tag_name: `v${NEXT_STABLE}-${PREVIEW_CHANNEL}.${date}.1`, prerelease: true, draft: false }]
         : [];
-      mock.tags = alreadyPublished
+      mock.tags = published
         ? [`v${NEXT_STABLE}-${PREVIEW_CHANNEL}.${date}.1`]
         : [];
-      mock.annotated = alreadyPublished
+      mock.annotated = published
         ? {
           [`v${NEXT_STABLE}-${PREVIEW_CHANNEL}.${date}.1`]: {
-            source: history.first,
+            source: published,
             repository: "owner/repo",
           },
         }
@@ -1170,14 +1236,15 @@ describe("t332 preview publication pipeline", () => {
       const planningRows = process.platform === "win32"
         ? rawPlanningRows.replaceAll("\r\n", "\n")
         : rawPlanningRows;
-      if (alreadyPublished) {
+      if (published) {
         expect(planned.status, planned.stdout + planned.stderr).toBe(0);
         expect(planningRows).toBe("skip=true\npreview_version=\ntag=\npreview_plan=null\n");
         expect(JSON.parse(readFileSync(planPath, "utf-8"))).toBeNull();
+        expect(planned.stdout).toContain(published === history.first ? "already the source" : "older than the newest");
       } else {
-        expect(planned.status, planned.stdout + planned.stderr).toBe(1);
+        expect(planned.status, planned.stdout + planned.stderr).toBe(0);
         expect(planningRows).toContain("skip=false\n");
-        expect(planningRows).not.toContain("preview_plan=");
+        expect(planningRows).toContain("preview_plan=");
         expect(readPreviewPlan(planPath)).toMatchObject({
           sourceRepository: "owner/repo",
           sourceDigest: history.first,
@@ -1187,12 +1254,54 @@ describe("t332 preview publication pipeline", () => {
     }
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
+  test("a preview tests and publishes the commit it started on while main advances", async () => {
+    // Preview Release 36351055682 passed every test, then refused to publish
+    // because a merge moved main during the run; 36485041152 refused to start.
+    const workflow = Bun.YAML.parse(readFileSync(PREVIEW_RELEASE_WORKFLOW, "utf-8")) as {
+      jobs: Record<string, { steps: Array<{ id?: string; name?: string; uses?: string; with?: Record<string, unknown>; run?: string }> }>;
+    };
+    const planStep = workflow.jobs.validate.steps.find((step) => step.id === "plan")?.run ?? "";
+    expect(planStep).not.toContain("origin/main^{commit}");
+    const validateStep = workflow.jobs.validate.steps.find((step) => step.id === "validate")?.run ?? "";
+    expect(validateStep).toContain('git merge-base --is-ancestor "$source_sha" origin/main');
+    expect(validateStep).not.toContain("origin/main^{commit}");
+    for (const job of ["publish", "release"]) {
+      const steps = workflow.jobs[job].steps;
+      const recheck = steps.find((step) => step.name === "Recheck preview source")?.run ?? "";
+      expect(recheck).toContain('git merge-base --is-ancestor "$AUTHORIZED_SHA" origin/main');
+      expect(recheck).toContain('test "$(git rev-parse HEAD)" = "$AUTHORIZED_SHA"');
+      expect(recheck).not.toContain("origin/main^{commit}");
+      // Ancestry needs history, not a depth-1 checkout.
+      expect(steps.find((step) => step.uses?.startsWith("actions/checkout@"))?.with?.["fetch-depth"]).toBe(0);
+    }
+    const recheck = workflow.jobs.publish.steps.find((step) => step.name === "Recheck preview source")?.run;
+    if (!recheck) throw new Error("the publish job must recheck its source");
+
+    const history = sourceHistory();
+    const origin = join(history.cwd, "origin.git");
+    git(history.cwd, ["clone", "--bare", "--no-hardlinks", history.cwd, origin]);
+    git(history.cwd, ["remote", "add", "origin", origin]);
+    git(history.cwd, ["checkout", "-q", "--detach", history.first]);
+    git(history.cwd, ["commit", "-q", "--allow-empty", "-m", "chore: never merged"]);
+    const offMain = git(history.cwd, ["rev-parse", "HEAD"]);
+    const run = async (head: string, authorized: string) => {
+      git(history.cwd, ["checkout", "-q", "--detach", head]);
+      return runWorkflowStep(recheck, history.cwd, { AUTHORIZED_SHA: authorized });
+    };
+    // main is at history.third; the run tested history.first.
+    const published = await run(history.first, history.first);
+    expect(published.status, published.stdout + published.stderr).toBe(0);
+    expect((await run(offMain, offMain)).status).not.toBe(0);
+    expect((await run(offMain, history.first)).status).not.toBe(0);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
   test("stable and preview releases use isolated, fully gated DAGs", () => {
     type WorkflowJob = {
       needs?: string | string[];
       if?: string;
       environment?: string;
       permissions?: Record<string, string>;
+      "continue-on-error"?: boolean;
       uses?: string;
       with?: Record<string, string>;
       secrets?: string;
@@ -1285,13 +1394,16 @@ describe("t332 preview publication pipeline", () => {
       "stable release does not consume full suite evidence",
       "the stable workflow does not query preview runs",
       "neither is a stable-publication prerequisite",
+      // A preview publishes the commit it tested while main advances (#1460).
+      "is still the tip of `main`",
+      "start a new preview from the new tip",
     ];
     for (const path of releaseRunbooks) {
       const runbook = readFileSync(join(REPO_ROOT, path), "utf8").toLowerCase().replace(/\s+/g, " ");
       for (const obsoleteClaim of obsoleteStableGateClaims) {
         expect(
           runbook,
-          `${path} contains obsolete stable-release guidance`,
+          `${path} contains obsolete release guidance`,
         ).not.toContain(obsoleteClaim);
       }
     }
@@ -1355,22 +1467,29 @@ describe("t332 preview publication pipeline", () => {
     expect(preview.jobs["native-smoke"].if).toBe(`\${{ !cancelled() && needs.validate.result == 'success' && needs.gate.result == 'success' && needs.test.result == 'success' && needs.validate.outputs.skip != 'true' }}`);
     expect(preview.jobs.full_suite).toMatchObject({
       needs: ["validate", "gate"],
-      uses: "./.github/workflows/full-suite.yml",
-      with: { ref: `\${{ needs.validate.outputs.sha }}` },
+      "runs-on": "ubuntu-latest",
+      "continue-on-error": true,
+      permissions: { contents: "read", actions: "write" },
     });
-    expect(preview.jobs.full_suite.secrets).toBe("inherit");
+    expect(preview.jobs.full_suite.uses).toBeUndefined();
+    expect(preview.jobs.full_suite.steps?.[0].env?.SOURCE_SHA).toBe(`\${{ needs.validate.outputs.sha }}`);
     expect(preview.jobs.full_suite.if).toBeUndefined();
     expect(preview.jobs.test.needs).toEqual(["validate", "full_suite"]);
-    expect(preview.jobs.test.steps?.[0].env?.FULL_SUITE_RESULT).toBe(`\${{ needs.full_suite.result }}`);
+    expect(preview.jobs.test.steps?.[0].env?.FULL_SUITE_RESULT).toBe(`\${{ needs.full_suite.outputs.result || 'failure' }}`);
     expect(preview.jobs.test.if).not.toContain("needs.validate.outputs.skip");
     // The report lists this run's jobs, so only the report job reads Actions.
     expect(preview.jobs.test.permissions).toEqual({ actions: "read", contents: "read" });
     const testStep = (name: string) => preview.jobs.test.steps?.find((step) => step.name === name);
     expect(testStep("Download Full Suite evidence")?.with?.pattern).toBe("full-suite-*");
+    expect(testStep("Download Full Suite evidence")?.with?.["run-id"]).toBe(`\${{ needs.full_suite.outputs.run_id }}`);
+    expect(testStep("List Full Suite jobs")?.env?.FULL_SUITE_RUN_ID).toBe(`\${{ needs.full_suite.outputs.run_id }}`);
+    expect(testStep("Report Full Suite results")?.env?.FULL_SUITE_RUN_ID).toBe(`\${{ needs.full_suite.outputs.run_id }}`);
+    expect(preview.jobs.release.steps?.find(step => step.name === "Stage preview notes")?.env?.FULL_SUITE_RESULT)
+      .toBe(`\${{ needs.full_suite.outputs.result || 'failure' }}`);
     expect(testStep("Report Full Suite results")?.run).toContain("bun scripts/ci-preview-test-report.ts");
     expect(testStep("Report Full Suite results")?.run).toContain(`>>"$GITHUB_STEP_SUMMARY"`);
     expect(preview.jobs.test.steps?.some((step) => step.with?.name === "preview-test-report")).toBe(true);
-    expect(preview.jobs.release.needs).toEqual(["validate", "full_suite", "publish"]);
+    expect(preview.jobs.release.needs).toEqual(["validate", "full_suite", "publish", "update-from-previous"]);
     expect(preview.jobs.release.steps?.some((step) => step.with?.name === "preview-test-report")).toBe(true);
     expect(preview.jobs.release.environment).toBe("preview");
     expect(preview.jobs.release.permissions).toEqual({ contents: "write" });
@@ -1401,6 +1520,7 @@ describe("t332 preview publication pipeline", () => {
       "stage-release",
       "windows-lifecycle",
       "unix-lifecycle",
+      "update-from-previous",
       "publish",
       "release",
     ]) {
@@ -1408,15 +1528,17 @@ describe("t332 preview publication pipeline", () => {
     }
     // Implicit success() also covers ancestors, so a failed Full Suite would skip
     // any job below Release tests that lacks an explicit check of its direct needs.
+    // The Full Suite and the update from the last release only report.
+    const reportOnly = ["full_suite", "update-from-previous"];
     for (const [name, job] of Object.entries(preview.jobs)) {
       if (name === "release-result" || !ancestors(name).has("test")) continue;
       expect(job.if, `${name} must not inherit the Full Suite result`).toStartWith("${{ !cancelled() && ");
-      for (const dependency of dependencies(job).filter((entry) => entry !== "full_suite")) {
+      for (const dependency of dependencies(job).filter((entry) => !reportOnly.includes(entry))) {
         expect(job.if, `${name} must require ${dependency}`).toContain(`needs.${dependency}.result == 'success'`);
       }
-      expect(job.if).not.toContain("needs.full_suite");
+      for (const dependency of reportOnly) expect(job.if).not.toContain(`needs.${dependency}.result`);
     }
-    for (const name of ["build", "musl-smoke", "stage-release", "windows-lifecycle", "unix-lifecycle", "publish", "release"]) {
+    for (const name of ["build", "musl-smoke", "stage-release", "windows-lifecycle", "unix-lifecycle", "update-from-previous", "publish", "release"]) {
       const required = ancestors(name, stable.jobs);
       for (const dependency of ["validate", "verify", "native-smoke"]) {
         expect(required.has(dependency), `stable ${name} must descend from ${dependency}`).toBe(true);
@@ -1424,7 +1546,12 @@ describe("t332 preview publication pipeline", () => {
       // Builds run alongside the Full Suite; only publication waits for its gate.
       expect(required.has("full_suite_gate"), `stable ${name} and the Full Suite gate`).toBe(name === "publish" || name === "release");
     }
-    expect(stable.jobs.publish.needs).toEqual(["validate", "musl-smoke", "windows-lifecycle", "unix-lifecycle", "full_suite_gate"]);
+    // By maintainer decision on 2026-10-04, a stable release people on the last
+    // release cannot update to does not publish; a preview reports it.
+    expect(stable.jobs.publish.needs)
+      .toEqual(["validate", "musl-smoke", "windows-lifecycle", "unix-lifecycle", "update-from-previous", "full_suite_gate"]);
+    expect(stable.jobs.publish.if).toContain("needs.update-from-previous.result == 'success'");
+    expect(preview.jobs.publish.needs).not.toContain("update-from-previous");
     expect(stable.jobs.release.needs).toEqual(["validate", "publish", "full_suite_gate"]);
 
     for (const key of ["tag", "sha", "skip", "preview_version", "preview_plan"]) {
@@ -1467,9 +1594,6 @@ describe("t332 preview publication pipeline", () => {
     expect(result?.env?.TEST_RESULT).toBe(`\${{ needs.test.result }}`);
     expect(result?.run?.indexOf('test "$TEST_RESULT" = success')).toBeLessThan(result!.run!.indexOf('[ "$RELEASE_SKIP" = true ]'));
     expect(result?.run).toContain("test \"$RELEASE_RESULT\" = success");
-    const suite = preview.jobs["release-result"].steps?.find((step) => step.name === "Require a passing Full Suite");
-    expect(suite?.if).toBe(`\${{ !cancelled() }}`);
-    expect(suite?.env?.FULL_SUITE_RESULT).toBe(`\${{ needs.full_suite.result }}`);
-    expect(suite?.env?.TEST_RESULT).toBe(`\${{ needs.test.result }}`);
+    expect(preview.jobs["release-result"].steps?.some(step => step.name === "Require a passing Full Suite")).toBe(false);
   });
 });

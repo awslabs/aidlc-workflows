@@ -73,7 +73,9 @@ and `AGENTS.md`, and writes `.codex/config.toml`, hooks, permission rules, and
 the matching `.codex/trust-seed.toml`. Codex requires one project-specific hook
 trust action before those hooks run:
 
-- Start `codex` and choose **Trust all and continue** at the hooks dialog; or
+- Start `codex` and choose **Trust all and continue** at the hooks dialog (if
+  you passed it, type `/hooks` in Codex, press `t` to trust all, then press
+  Esc; it counts for your next message in the same chat); or
 - Replace `<PROJECT_DIR>` in `.codex/trust-seed.toml` with the absolute project
   path and merge its complete `[hooks.state]` set into
   `$CODEX_HOME/config.toml`. Replace an existing set for that hooks path rather
@@ -106,7 +108,6 @@ then set `RUNTIME_ROOT` to the extracted `runtime/` directory.
    cp -r "$RUNTIME_ROOT/codex/.codex/"  your-project/.codex/
    cp -r "$RUNTIME_ROOT/codex/.agents/" your-project/.agents/
    cp -r "$RUNTIME_ROOT/codex/aidlc/"   your-project/aidlc/      # the workspace shell (spaces/default/memory) — a sibling of .codex/, not inside it
-   cp "$RUNTIME_ROOT/codex/AGENTS.md"   your-project/AGENTS.md   # or merge into yours
    ```
 
    The `aidlc/` directory is the workspace shell — it ships the pre-built
@@ -115,11 +116,18 @@ then set `RUNTIME_ROOT` to the extracted `runtime/` directory.
    `$RUNTIME_ROOT/codex/` tree at once). `$aidlc --doctor` fails its "workspace shell
    ready" check if it is missing.
 
-2. Apply the `.gitignore` entries from the shipped `AGENTS.md` § "Git
-   Integration" **before** starting a workflow — the per-clone audit shards
-   under each intent's `audit/` are committed deliberately (each clone writes
-   its own `<host>-<clone>.md`, so concurrent appends never git-conflict), while
-   per-user cursors and machine-local runtime state stay ignored.
+2. Run the copy's own setup once, from the project:
+
+   ```bash
+   bun .codex/tools/aidlc.ts config --from "$RUNTIME_ROOT" --harness codex
+   ```
+
+   It adds AI-DLC's lines to your `AGENTS.md` and `.gitignore`, after
+   everything already there (or creates them), before your first workflow:
+   the per-clone audit shards under each intent's `audit/` are committed
+   deliberately (each clone writes its own `<host>-<clone>.md`, so concurrent
+   appends never git-conflict), while per-user cursors and machine-local
+   runtime state stay ignored.
 
 3. Trust the project and pre-seed hook trust. Codex never runs untrusted
    hooks (the `--dangerously-bypass-hook-trust` flag does not run them
@@ -135,8 +143,9 @@ then set `RUNTIME_ROOT` to the extracted `runtime/` directory.
 
    The command prints ready-to-paste `[hooks.state]` entries for
    `$CODEX_HOME/config.toml`
-   (the hash covers the hook identity, not the path — the printed entries are
-   exact for the shipped `hooks.json`). The command serializes the complete
+   (each hash covers the hook's event, its matcher, its command, and its
+   timeout, as Codex hashes them, not the path: the printed entries are exact
+   for the copied `hooks.json`). The command serializes the complete
    output as TOML, so quoted paths, spaces, and Windows backslashes are
    preserved. If the hook manifest is not at `<project>/.codex/hooks.json`,
    pass its exact path explicitly:
@@ -156,7 +165,8 @@ then set `RUNTIME_ROOT` to the extracted `runtime/` directory.
 
    Re-run this trust command whenever an AI-DLC upgrade changes `.codex/hooks.json`,
    including upgrades that add a new matcher. Replace the old tables before
-   opening a fresh Codex session; otherwise Codex silently skips the new hook.
+   opening a fresh Codex session; otherwise Codex asks again about the changed
+   hooks when it starts (seen on Codex 0.160.0).
 
 4. Back in `your-project/` (step 3 ran from the AI-DLC source checkout), keep
    the shipped config at `.codex/config.toml` in the trusted project. Do not
@@ -187,9 +197,9 @@ aidlc config
 ```
 
 Config preserves user-owned content and reports local framework edits as
-conflicts. It refuses refresh while any workflow is active; complete the
-workflow first. Upgrade and rollback remain safe during a workflow because
-they do not touch project files. A refresh can change Codex hook identities, so
+conflicts. A refresh while a workflow is open is done and says your open work
+carries on. Upgrade and rollback remain safe during a workflow because they do
+not touch project files. A refresh can change Codex hook identities, so
 approve the new trust dialog or replace the matching trust-seed entries after
 config when Codex requests it.
 
@@ -205,9 +215,18 @@ implicit skill matching so 37 runner descriptions don't pollute the index).
 
 - **Gates** render via the `request_user_input` tool when the shipped config
   flags enable it, with a numbered-prose fallback otherwise (answer with a
-  number or free text). Gate semantics live in the engine either way.
+  number or free text). Gate semantics live in the engine either way. Codex
+  still marks that picker as under development, so the shipped
+  `.codex/config.toml` turns it on and turns off Codex's start-up warning
+  about it; while you work in this project, that also hides the warning for
+  any other under-development feature. For numbered prose gates in one
+  session, start Codex with
+  `codex -c features.default_mode_request_user_input=false`.
 - **No custom statusline** — workflow position rides the `update_plan` tool
   (the `task-progress` statusline item) and `$aidlc --status`.
+- **A question box that runs out**: Codex closes its question box after
+  about two minutes with no answer. Nothing is answered for you: when you
+  come back, the same question is waiting in the chat.
 - **Git under the sandbox**: `workspace-write` keeps `.git` read-only
   in-sandbox by design. Interactive sessions auto-escalate, and the shipped
   `.codex/rules/default.rules` pre-allows `git worktree`/`commit`/`add`.
@@ -220,6 +239,15 @@ implicit skill matching so 37 runner descriptions don't pollute the index).
   (always `< /dev/null`), with the
   same deterministic referee. `AIDLC_USE_SWARM=1` has no Workflow tool here
   and loud-degrades (`SWARM_DEGRADED` is audited).
+- **Only what you type in the main chat counts as your reply.** Codex sends a
+  subagent's brief, and every follow-up the agent sends it, through the same
+  prompt hook as your messages, and does the same for its own reviewers
+  (`/review`, auto-review), marked with the subagent's id or its own thread's
+  transcript. AI-DLC never
+  counts those as your turn: they do not satisfy an approval and are not read
+  as your answer or your requested changes. If you switch to a subagent's own
+  thread (`/subagents`) and type there, that message is for the worker, so it
+  does not answer the main chat's question either.
 - **Session lifecycle**: Codex has no SessionEnd event; an unclosed session
   is reconciled as an inferred `SESSION_ENDED` audit row at the next session
   start. After compaction, Codex emits SessionStart with `source=compact`;

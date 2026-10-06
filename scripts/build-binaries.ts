@@ -30,6 +30,7 @@ import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { releaseBuildVersion, VERSION_ID_PATTERN } from "../core/tools/aidlc-channel.ts";
 import { targetTriple } from "../core/tools/aidlc-install-paths.ts";
+import { hooksHealthDir } from "../core/tools/aidlc-lib.ts";
 import { DEFAULT_SUBPROCESS_TIMEOUT_MS, LONG_SUBPROCESS_TIMEOUT_MS } from "../core/tools/aidlc-runtime-budget.ts";
 
 // The version every built artifact must report: the source version, or the
@@ -312,6 +313,15 @@ function pathlessEnv(projectDir?: string): NodeJS.ProcessEnv {
   return env;
 }
 
+// A person's first chat message reaches the human-turn hook, which leaves a
+// heartbeat before any workflow exists; with none, `next` stops with the
+// hooks-off step. A gate that drives `next` the way a chat does starts with it.
+function chatStarted(project: string): void {
+  const dir = hooksHealthDir(project);
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, "record-human-turn.last"), new Date().toISOString());
+}
+
 function installedProject(prefix: string): string {
   const project = mkdtempSync(join(tmpdir(), prefix));
   cpSync(join(REPO_ROOT, "dist-release", "claude"), project, { recursive: true });
@@ -547,6 +557,7 @@ function compiledKiroNewWorkRoutingGate(artifact: string): GateResult {
   const project = mkdtempSync(join(tmpdir(), "aidlc-binary-kiro-routing-"));
   try {
     cpSync(join(REPO_ROOT, "dist", "kiro"), project, { recursive: true });
+    chatStarted(project);
     const env: NodeJS.ProcessEnv = { ...process.env, PATH: "" };
     delete env.AIDLC_HARNESS_DIR;
     delete env.AIDLC_HARNESS_NAME;
@@ -679,6 +690,7 @@ function conductorPersonaGate(artifact: string): GateResult {
     "default",
     "memory",
   );
+  chatStarted(standaloneGateCwd());
   const options = {
     cwd: standaloneGateCwd(),
     env: { ...pathlessEnv(), AIDLC_RULES_DIR: rulesDir },
@@ -1100,6 +1112,7 @@ function pathlessOrchestrateGate(
   const project = mkdtempSync(join(tmpdir(), `aidlc-binary-${name}-`));
   try {
     mkdirSync(join(project, ".git"));
+    chatStarted(project);
     const result = run(artifact, [...args, "--project-dir", project], {
       cwd: project,
       env: {
@@ -1172,6 +1185,7 @@ function pathlessSingleAuditGate(artifact: string): GateResult {
       memoryTarget,
       { recursive: true },
     );
+    chatStarted(project);
     const result = run(
       artifact,
       [
@@ -1429,10 +1443,13 @@ function nativeStatuslineCustomizationGate(artifact: string): GateResult {
 }
 
 function seedUnapprovedPlanProject(project: string): void {
-  const recordDir = join(project, "aidlc", "spaces", "default", "intents");
+  const intentsRoot = join(project, "aidlc", "spaces", "default", "intents");
+  const recordDir = join(intentsRoot, "binary-plan-fixture");
   mkdirSync(join(recordDir, "construction", "todo-core", "code-generation"), {
     recursive: true,
   });
+  // The local cursor names the record, as it does after `/aidlc intent`.
+  writeFileSync(join(intentsRoot, "active-intent"), "binary-plan-fixture\n", "utf-8");
   writeFileSync(
     join(recordDir, "aidlc-state.md"),
     [

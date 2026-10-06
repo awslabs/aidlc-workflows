@@ -36,6 +36,7 @@ import {
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
+  copyFileSync,
   appendFileSync,
   chmodSync,
   cpSync,
@@ -50,9 +51,14 @@ import {
   writeFileSync,
 } from "node:fs";
 import { basename, dirname, join, relative, sep, win32 } from "node:path";
+import { resolveAction } from "../../dist/cursor/.cursor/tools/aidlc.ts";
 import {
+  auditBlockField,
   createIntent,
+  getField,
+  hooksHealthDir,
   readAllAuditShards,
+  readAuditShardEvents,
   setActiveIntentCursor,
   writeActiveDirectiveMarker,
   writeSessionPidEntry,
@@ -255,6 +261,30 @@ function registerTaskParent(projectDir: string): void {
   );
 }
 
+/** A chat stamped by an earlier version: its stamp stays, its binding goes. */
+function unbind(projectDir: string): void {
+  const sessions = join(projectDir, "aidlc", ".aidlc-sessions");
+  for (const name of readdirSync(sessions)) {
+    if (name.endsWith(".binding.json")) rmSync(join(sessions, name));
+  }
+}
+
+function turns(projectDir: string, intent: string): number {
+  return readAllAuditShards(projectDir, intent, "default").split("**Event**: HUMAN_TURN").length - 1;
+}
+
+/** The rebind lines the fixture chat's next `next` carries. */
+function rebindLines(projectDir: string): string[] {
+  const session = (JSON.parse(payload("beforeSubmitPrompt", projectDir)) as { conversation_id: string }).conversation_id;
+  const r = spawnSync("bun", [join(projectDir, ".cursor", "tools", "aidlc-orchestrate.ts"), "next", "--project-dir", projectDir], {
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+    encoding: "utf-8",
+    env: { ...process.env, AIDLC_PROJECT_DIR: projectDir, AIDLC_HARNESS_DIR: ".cursor", AIDLC_SESSION_OVERRIDE: session },
+  });
+  return ((JSON.parse(r.stdout) as { change_notices?: string[] }).change_notices ?? [])
+    .filter((line) => line.startsWith("Another chat selected"));
+}
+
 /** Replace the core stop hook with a probe that always asks to continue. */
 function installStopProbe(projectDir: string): string {
   const marker = join(projectDir, "stop-hook-ran");
@@ -451,6 +481,37 @@ describe("t276 cursor adapter payload conversion", () => {
     expectAllowJson(r);
   });
 
+  // A sibling-only swarm worktree whose delegated metadata does not validate
+  // names no workflow. Reads stay open so the checkout can be inspected, a
+  // mutation is refused by Plan Approval's fail-closed authority check rather
+  // than by a guard that failed, and the engine says which file to repair.
+  test.each([
+    ["malformed", { version: 2, repoSelector: "repo", swarmUnit: "widget", intentRecord: "aidlc/spaces/default/intents/x" }],
+    ["stale", {
+      version: 1, repoSelector: "repo", swarmUnit: "widget", boltSlug: "widget",
+      intentRecord: "aidlc/spaces/default/intents/2026-01-01-gone",
+    }],
+  ] as const)("4c: %s delegated worktree metadata allows a read, refuses a write, and names the repair", (_kind, meta) => {
+    const proj = installedProject();
+    mkdirSync(join(proj, ".aidlc"), { recursive: true });
+    writeFileSync(join(proj, ".aidlc", "worktree-meta.json"), JSON.stringify(meta));
+    expectAllowJson(runAdapter(proj, "guards", payload("preToolUseWrite", proj, {
+      tool_name: "Read", tool_input: { file_path: join(proj, "AGENTS.md") },
+    })), "read");
+    const write = runAdapter(proj, "guards", payload("preToolUseWrite", proj));
+    expect(write.code).toBe(0);
+    const denied = JSON.parse(write.stdout) as { permission?: string; agent_message?: string };
+    expect(denied.permission).toBe("deny");
+    expect(denied.agent_message ?? "").toContain("Plan Approval authority evaluation failed closed");
+    const next = spawnSync("bun", [join(proj, ".cursor", "tools", "aidlc-orchestrate.ts"), "next", "--project-dir", proj], {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+      encoding: "utf-8",
+      env: { ...process.env, AIDLC_PROJECT_DIR: proj, AIDLC_HARNESS_DIR: ".cursor" },
+    });
+    expect(next.status).toBe(1);
+    expect(`${next.stdout}${next.stderr}`).toContain("Repair this checkout's .aidlc/worktree-meta.json");
+  });
+
   test("4b: dispatcher adapter and legacy hook routes both emit failClosed allow JSON", () => {
     const proj = installedProject();
     seedStateFile(proj, "state-construction.md");
@@ -481,6 +542,39 @@ describe("t276 cursor adapter payload conversion", () => {
       expect(r.stderr, route.join(" ")).toBe("");
       expect(r.stdout, route.join(" ")).toBe('{"permission":"allow"}\n');
     }
+  });
+
+  test("5b: an active-space pointer naming no space reads as the default space, as in the engine", () => {
+    const proj = installedProject();
+    seedStateFile(proj, "state-construction.md");
+    const record = seededRecordDir(proj);
+    clearLedger(proj);
+    writeFileSync(join(proj, "aidlc", "active-space"), "ghost\n");
+    mkdirSync(join(record, "construction", "unit-b"), { recursive: true });
+    mkdirSync(dirname(join(record, ".aidlc-engine/reviewer-dispatch.json")), { recursive: true });
+    writeFileSync(
+      join(record, ".aidlc-engine/reviewer-dispatch.json"),
+      JSON.stringify({
+        reviewer: "aidlc-architecture-reviewer-agent",
+        stage: "functional-design",
+        unit: "unit-a",
+        exempt: [],
+      }),
+    );
+    registerTaskParent(proj);
+    expectAllowJson(runAdapter(proj, "guards", payload("preToolUseTask", proj)));
+    expect(runAdapter(proj, "audit-and-sensors", payload("postToolUseTask", proj)).code).toBe(0);
+    expect(ledgerFilesFor(proj)).toHaveLength(0);
+    // With the ledger cleared, the dispatch record in the default space still
+    // scopes an unknown conversation's reads.
+    const sibling = runAdapter(
+      proj,
+      "guards",
+      payload("preToolUseSubagentRead", proj, {
+        tool_input: { file_path: join(record, "construction", "unit-b", "design.md") },
+      }),
+    );
+    expect(JSON.parse(sibling.stdout).permission).toBe("deny");
   });
 
   test("5: Task attribution binds unknown conversations only; registered mains are never conflated", () => {
@@ -630,7 +724,7 @@ describe("t276 cursor adapter payload conversion", () => {
     expect(readFileSync(ledger, "utf-8")).toBe(before);
   });
 
-  test("8: beforeSubmitPrompt rebind falls back from session_id to conversation_id", () => {
+  test("8: beforeSubmitPrompt never blocks the prompt; the next step says once where this chat's work is", () => {
     const proj = installedProject();
     const a = createIntent(proj, "intent-a", "default", "feature");
     const b = createIntent(proj, "intent-b", "default", "feature");
@@ -644,31 +738,151 @@ describe("t276 cursor adapter payload conversion", () => {
     expect(started.code).toBe(0);
     setActiveIntentCursor(proj, b.dirName, "default");
 
-    const warned = runAdapter(
+    // Another chat moved the selection. The person's prompt still goes
+    // through (no block, nothing to retype), and it is their turn.
+    const sent = runAdapter(
       proj,
       "mint",
       payload("beforeSubmitPrompt", proj, { session_id: undefined }),
     );
-    expect(warned.code).toBe(0);
-    const out = JSON.parse(warned.stdout) as { continue?: boolean; user_message?: string };
-    expect(out.continue).toBe(false);
-    expect(out.user_message ?? "").toContain("INTENT REBIND OFFER");
-    expect(out.user_message ?? "").toContain("intent-a");
-    expect(out.user_message ?? "").toContain("intent-b");
-    expect(out.user_message ?? "").toContain("/aidlc intent intent-a");
-
-    // The blocked warning is consumed: resubmitting continues on the bound
-    // intent A instead of deadlocking on the same beforeSubmitPrompt response.
-    const next = runAdapter(
-      proj,
-      "mint",
-      payload("beforeSubmitPrompt", proj, { session_id: undefined }),
-    );
-    expect(next.code).toBe(0);
-    expect(next.stdout.trim()).toBe("");
+    expect(sent.code).toBe(0);
+    expect(sent.stdout.trim()).toBe("");
     const shard = readAllAuditShards(proj, a.dirName, "default");
     expect(shard).toContain("HUMAN_TURN");
     expect(shard).not.toContain("SESSION_RESUMED");
+
+    // The chat's next step carries one plain line naming both pieces of work
+    // and the switch command (falls back from session_id to conversation_id).
+    const session = (JSON.parse(payload("beforeSubmitPrompt", proj)) as { conversation_id: string }).conversation_id;
+    const next = () => {
+      const r = spawnSync("bun", [join(proj, ".cursor", "tools", "aidlc-orchestrate.ts"), "next", "--project-dir", proj], {
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+        encoding: "utf-8",
+        env: { ...process.env, AIDLC_PROJECT_DIR: proj, AIDLC_HARNESS_DIR: ".cursor", AIDLC_SESSION_OVERRIDE: session },
+      });
+      return ((JSON.parse(r.stdout) as { change_notices?: string[] }).change_notices ?? [])
+        .filter((line) => line.startsWith("Another chat selected"));
+    };
+    const first = next();
+    expect(first).toHaveLength(1);
+    expect(first[0]).toContain("intent-a");
+    expect(first[0]).toContain("intent-b");
+    expect(first[0]).toContain(`/aidlc intent ${a.dirName}`);
+    expect(first[0]).toContain("this chat stays on");
+    expect(first[0]).not.toContain("INTENT REBIND OFFER");
+    // Said once: the following step and a further prompt for the same move
+    // carry no second copy.
+    expect(next()).toHaveLength(0);
+    const again = runAdapter(
+      proj,
+      "mint",
+      payload("beforeSubmitPrompt", proj, { session_id: undefined }),
+    );
+    expect(again.stdout.trim()).toBe("");
+    expect(next()).toHaveLength(0);
+  });
+
+  // A chat an earlier version stamped but never bound keeps its own work, so
+  // the person's turn is recorded there, and the line says so.
+  test("8b: a stamped, unbound chat keeps its own work and its turn after another chat moved the selection", () => {
+    const proj = installedProject();
+    const a = createIntent(proj, "intent-a", "default", "feature");
+    const b = createIntent(proj, "intent-b", "default", "feature");
+    setActiveIntentCursor(proj, a.dirName, "default");
+    expect(runAdapter(proj, "session-start", payload("sessionStart", proj, { session_id: undefined })).code).toBe(0);
+    const sessions = join(proj, "aidlc", ".aidlc-sessions");
+    for (const name of readdirSync(sessions)) {
+      if (name.endsWith(".binding.json")) rmSync(join(sessions, name));
+    }
+    setActiveIntentCursor(proj, b.dirName, "default");
+    const turns = (dir: string) =>
+      readAllAuditShards(proj, dir, "default").split("**Event**: HUMAN_TURN").length - 1;
+    const [onA, onB] = [turns(a.dirName), turns(b.dirName)];
+    const sent = runAdapter(proj, "mint", payload("beforeSubmitPrompt", proj, { session_id: undefined }));
+    expect(sent.stdout.trim()).toBe("");
+    expect(turns(a.dirName)).toBe(onA + 1);
+    expect(turns(b.dirName)).toBe(onB);
+    const session = (JSON.parse(payload("beforeSubmitPrompt", proj)) as { conversation_id: string }).conversation_id;
+    const r = spawnSync("bun", [join(proj, ".cursor", "tools", "aidlc-orchestrate.ts"), "next", "--project-dir", proj], {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+      encoding: "utf-8",
+      env: { ...process.env, AIDLC_PROJECT_DIR: proj, AIDLC_HARNESS_DIR: ".cursor", AIDLC_SESSION_OVERRIDE: session },
+    });
+    const lines = ((JSON.parse(r.stdout) as { change_notices?: string[] }).change_notices ?? [])
+      .filter((line) => line.startsWith("Another chat selected"));
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toContain("this chat stays on");
+    expect(lines[0]).toContain("intent-a");
+  });
+
+  // The person typed the switch themselves: no line about the old selection,
+  // and the turn lands on this chat's own work, never on the other chat's.
+  test("8c: a typed switch from a stamped, unbound chat carries no rebind line and gives the other work no turn", () => {
+    const proj = installedProject();
+    const a = createIntent(proj, "intent-a", "default", "feature");
+    const b = createIntent(proj, "intent-b", "default", "feature");
+    setActiveIntentCursor(proj, a.dirName, "default");
+    expect(runAdapter(proj, "session-start", payload("sessionStart", proj, { session_id: undefined })).code).toBe(0);
+    unbind(proj);
+    setActiveIntentCursor(proj, b.dirName, "default");
+    const [onA, onB] = [turns(proj, a.dirName), turns(proj, b.dirName)];
+    const sent = runAdapter(
+      proj,
+      "mint",
+      payload("beforeSubmitPrompt", proj, { session_id: undefined, prompt: `/aidlc intent ${b.dirName}` }),
+    );
+    expect(sent.stdout.trim()).toBe("");
+    expect(turns(proj, a.dirName)).toBe(onA + 1);
+    expect(turns(proj, b.dirName)).toBe(onB);
+    expect(rebindLines(proj)).toHaveLength(0);
+  });
+
+  // A line an earlier prompt left, before the agent ran anything, is dropped
+  // when the person then types a switch.
+  test("8d: a typed switch drops a rebind line an earlier prompt left", () => {
+    const proj = installedProject();
+    const a = createIntent(proj, "intent-a", "default", "feature");
+    const b = createIntent(proj, "intent-b", "default", "feature");
+    setActiveIntentCursor(proj, a.dirName, "default");
+    expect(runAdapter(proj, "session-start", payload("sessionStart", proj, { session_id: undefined })).code).toBe(0);
+    setActiveIntentCursor(proj, b.dirName, "default");
+    expect(runAdapter(proj, "mint", payload("beforeSubmitPrompt", proj, { session_id: undefined })).stdout.trim()).toBe("");
+    const sent = runAdapter(
+      proj,
+      "mint",
+      payload("beforeSubmitPrompt", proj, { session_id: undefined, prompt: `/aidlc intent ${b.dirName}` }),
+    );
+    expect(sent.stdout.trim()).toBe("");
+    expect(rebindLines(proj)).toHaveLength(0);
+  });
+
+  // Asked in plain words, the agent runs the switch: the line about the old
+  // selection is no longer true, so the next step does not say it.
+  test("8e: a switch the agent runs after the person's prompt drops the rebind line", () => {
+    const proj = installedProject();
+    const a = createIntent(proj, "intent-a", "default", "feature");
+    const b = createIntent(proj, "intent-b", "default", "feature");
+    setActiveIntentCursor(proj, a.dirName, "default");
+    expect(runAdapter(proj, "session-start", payload("sessionStart", proj, { session_id: undefined })).code).toBe(0);
+    setActiveIntentCursor(proj, b.dirName, "default");
+    const sent = runAdapter(
+      proj,
+      "mint",
+      payload("beforeSubmitPrompt", proj, { session_id: undefined, prompt: "switch this chat to the other work too" }),
+    );
+    expect(sent.stdout.trim()).toBe("");
+    const session = (JSON.parse(payload("beforeSubmitPrompt", proj)) as { conversation_id: string }).conversation_id;
+    const switched = spawnSync(
+      "bun",
+      [join(proj, ".cursor", "tools", "aidlc-utility.ts"), "intent", b.dirName, "--project-dir", proj],
+      {
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+        encoding: "utf-8",
+        env: { ...process.env, AIDLC_PROJECT_DIR: proj, AIDLC_HARNESS_DIR: ".cursor", AIDLC_SESSION_OVERRIDE: session },
+      },
+    );
+    expect(switched.status, switched.stderr).toBe(0);
+    expect(rebindLines(proj)).toHaveLength(0);
   });
 
   test("9: beforeSubmitPrompt is silent when the session's intent is unchanged", () => {
@@ -852,6 +1066,63 @@ describe("t276 cursor adapter payload conversion", () => {
     expect(shard.indexOf("SUBAGENT_COMPLETED")).toBeLessThan(shard.indexOf("SESSION_ENDED"));
   });
 
+  test("13b: inferred and posted Task completions land in the parent session's intent, not the cursor's", () => {
+    const conversation = (JSON.parse(payload("sessionEnd", installedProject())) as { conversation_id: string })
+      .conversation_id;
+    const same = { conversation_id: conversation, session_id: conversation };
+    const drive = (finish: (proj: string) => void) => {
+      const proj = installedProject();
+      clearLedger(proj);
+      const a = createIntent(proj, "task-owner", "default", "feature");
+      const b = createIntent(proj, "other-work", "default", "feature");
+      // Both workflows are mid-Construction, so either could record a completion.
+      for (const intent of [a, b]) {
+        copyFileSync(
+          join(FIXTURES_DIR, "state-construction.md"),
+          join(proj, "aidlc", "spaces", "default", "intents", intent.dirName, "aidlc-state.md"),
+        );
+      }
+      setActiveIntentCursor(proj, a.dirName, "default");
+      expect(runAdapter(proj, "session-start", payload("sessionStart", proj, same)).code).toBe(0);
+      // A second conversation in the same host starts later on B. It moves the
+      // shared cursor and becomes the session the host's process ancestry names.
+      setActiveIntentCursor(proj, b.dirName, "default");
+      const other = { conversation_id: "cursor-other-conversation", session_id: "cursor-other-conversation" };
+      expect(runAdapter(proj, "session-start", payload("sessionStart", proj, other)).code).toBe(0);
+      expect(runAdapter(proj, "guards", payload("preToolUseTask", proj, same)).code).toBe(0);
+      finish(proj);
+      const completed = (intent: string) =>
+        (readAllAuditShards(proj, intent, "default").match(/\*\*Event\*\*: SUBAGENT_COMPLETED/g) ?? []).length;
+      const drops = (intent: string) => existsSync(join(hooksHealthDir(proj, intent, "default"), "log-subagent.drops"));
+      return {
+        owner: completed(a.dirName),
+        other: completed(b.dirName),
+        ...(drops(a.dirName) || drops(b.dirName) ? { ownerDrop: drops(a.dirName), otherDrop: drops(b.dirName) } : {}),
+      };
+    };
+
+    // sessionEnd retires the live Task record.
+    expect(drive((proj) => runAdapter(proj, "session-end", payload("sessionEnd", proj, same))))
+      .toEqual({ owner: 1, other: 0 });
+    // Task postToolUse completes it.
+    expect(drive((proj) => runAdapter(proj, "audit-and-sensors", payload("postToolUseTask", proj, same))))
+      .toEqual({ owner: 1, other: 0 });
+    // A second Task retires the first before it opens.
+    expect(drive((proj) => runAdapter(proj, "guards", payload("preToolUseTask", proj, same))))
+      .toEqual({ owner: 1, other: 0 });
+    // A drop is recorded beside the completion, not under the cursor's intent.
+    expect(drive((proj) => {
+      writeFileSync(join(proj, "aidlc", ".aidlc-subagent-inflight"), "{malformed");
+      runAdapter(proj, "session-end", payload("sessionEnd", proj, same));
+    })).toEqual({ owner: 1, other: 0, ownerDrop: true, otherDrop: false });
+    // sessionEnd retires the delegation witness when the Task ledger is gone.
+    expect(drive((proj) => {
+      clearLedger(proj);
+      expect(witnessFilesFor(proj).length).toBeGreaterThan(0);
+      runAdapter(proj, "session-end", payload("sessionEnd", proj, same));
+    })).toEqual({ owner: 1, other: 0 });
+  });
+
   test("14: stop converts a core block into an advisory followup_message", () => {
     const proj = installedProject();
     seedStateFile(proj, "state-construction.md");
@@ -885,7 +1156,14 @@ describe("t276 cursor adapter payload conversion", () => {
       const r = runAdapter(proj, target, "{not json");
       expect(r.code).toBe(0);
       if (target === "guards") {
-        expect(JSON.parse(r.stdout).permission).toBe("deny");
+        const denied = JSON.parse(r.stdout) as { permission?: string; agent_message?: string };
+        expect(denied.permission).toBe("deny");
+        // The refusal names the way out for the person, not only the failure.
+        // Cursor sends this input itself and doctor cannot see it, so the step
+        // is a retry, then a full restart of Cursor.
+        expect(denied.agent_message ?? "").toContain("Retry it once");
+        expect(denied.agent_message ?? "").toContain("quit Cursor fully and open this folder again");
+        expect(denied.agent_message ?? "").not.toContain("doctor");
       } else {
         expect(r.stdout.trim(), `${target}: advisory malformed input`).toBe("");
       }
@@ -1138,6 +1416,63 @@ describe("t276 cursor adapter payload conversion", () => {
     rmSync(ledgerDirFor(proj));
   });
 
+  test("19g: a person's typed summary-confirmation off in a foreground chat applies as theirs", () => {
+    const proj = installedProject();
+    seedAidlcMemory(proj);
+    const env = {
+      AIDLC_UNATTENDED: undefined,
+      AIDLC_DISABLE_SUMMARY_CONFIRMATION: "0",
+      AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "0",
+      AIDLC_SESSION_OVERRIDE: undefined,
+      AIDLC_SESSION_OVERRIDE_SOURCE: undefined,
+    };
+    const toolEnv = { ...process.env, ...env, AIDLC_PROJECT_DIR: proj, AIDLC_HARNESS_DIR: ".cursor" };
+    for (const [key, value] of Object.entries(toolEnv)) {
+      if (value === undefined) delete toolEnv[key as keyof typeof toolEnv];
+    }
+    const runTool = (tool: string, args: string[]) =>
+      spawnSync("bun", [join(proj, ".cursor", "tools", tool), ...args, "--project-dir", proj], {
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+        cwd: proj,
+        encoding: "utf-8",
+        env: toolEnv as NodeJS.ProcessEnv,
+      });
+    const created = runTool("aidlc-utility.ts", [
+      "intent-create", "--scope", "feature", "--arguments", "summary fixture", "--label", "summary",
+    ]);
+    expect(created.status, created.stderr).toBe(0);
+    const intents = join(proj, "aidlc", "spaces", "default", "intents");
+    const active = readFileSync(join(intents, "active-intent"), "utf-8").trim();
+    const state = join(intents, active, "aidlc-state.md");
+    expect(getField(readFileSync(state, "utf-8"), "Summary Confirmation")).toBe("on (from scope feature)");
+    runAdapter(proj, "session-start", payload("sessionStart", proj), { env });
+
+    // Cursor carries the submitted chat text in beforeSubmitPrompt's `prompt`.
+    const typed = runAdapter(
+      proj,
+      "mint",
+      payload("beforeSubmitPrompt", proj, { prompt: "/aidlc config set summary-confirmation off" }),
+      { env },
+    );
+    expect(typed.code, typed.stderr).toBe(0);
+    expect(typed.stdout.trim()).toBe("");
+    const content = readFileSync(state, "utf-8");
+    expect(getField(content, "Summary Confirmation")).toBe("off (set by you)");
+    const ceremonyRows = () =>
+      readAuditShardEvents(proj).filter((entry) => entry.event === "CEREMONY_SET");
+    const audit = ceremonyRows();
+    expect(audit).toHaveLength(1);
+    expect(auditBlockField(audit[0].block, "New")).toBe("off");
+    expect(auditBlockField(audit[0].block, "Source")).toBe("you");
+
+    // The agent's later shell setter finds it already off and relabels nothing.
+    const repeated = runTool("aidlc.ts", ["engine", "config", "set", "summary-confirmation", "off"]);
+    expect(repeated.status, repeated.stderr).toBe(0);
+    expect(repeated.stdout).toContain("Summary Confirmation is already off (set by you)");
+    expect(readFileSync(state, "utf-8")).toBe(content);
+    expect(ceremonyRows()).toEqual(audit);
+  });
+
   test("20: an attributed call refreshes the spawn record so a long review outlives the TTL", () => {
     const proj = installedProject();
     seedStateFile(proj, "state-construction.md");
@@ -1230,6 +1565,11 @@ describe("t276 cursor adapter payload conversion", () => {
     const out = JSON.parse(r.stdout) as { permission?: string; agent_message?: string };
     expect(out.permission).toBe("deny");
     expect(out.agent_message ?? "").toContain("aidlc-reviewer-scope.ts failed");
+    // It names the step that puts the files back, and that command is a real route.
+    expect(out.agent_message ?? "").toContain("config --harness cursor");
+    expect(out.agent_message ?? "").not.toContain("doctor");
+    const action = resolveAction(["config", "--harness", "cursor"]);
+    expect(action.type).not.toBe("error");
   });
 
   test("22b: an unavailable shared freeze parser denies before the guard chain", () => {
@@ -4137,5 +4477,74 @@ if (import.meta.main) {
     expect(nestedOut.agent_message ?? "").toContain(
       "nested delegation is not allowed",
     );
+  });
+
+  test("38: with Guard Policy off a delegate runs its builds and tests, and its Task starts", () => {
+    // Under Guard Policy off the reviewer read scope and the state-transition
+    // check stand aside, and the delegate identity checks serve only those two.
+    // A developer delegate's `npm test` or `bun test` was refused all the same.
+    const proj = installedProject();
+    seedStateFile(proj, "state-construction.md");
+    const statePath = join(seededRecordDir(proj), "aidlc-state.md");
+    const withPolicy = (line: string) => writeFileSync(
+      statePath,
+      readFileSync(statePath, "utf-8")
+        .replace(/^- \*\*(?:Guard Policy|Change Control)\*\*:.*\n/gm, "")
+        .replace(/^(- \*\*Scope\*\*:.*)$/m, `$1\n- **Guard Policy**: ${line}`),
+    );
+    withPolicy("off (from scope classic)");
+    // A design stage: no code plan is waiting, so the plan check has nothing to hold.
+    setCurrentStage(proj, "functional-design");
+    clearLedger(proj);
+    registerTaskParent(proj);
+    const spawn = runAdapter(
+      proj,
+      "guards",
+      payload("preToolUseTask", proj, {
+        tool_input: {
+          description: "Developer probe",
+          prompt: "Implement the unit.",
+          subagent_type: "aidlc-developer-agent",
+        },
+      }),
+    );
+    expectAllowJson(spawn);
+    const delegateShell = (command: string) => JSON.parse(runAdapter(
+      proj,
+      "guards",
+      payload("preToolUseShell", proj, {
+        conversation_id: "developer-under-guard-policy-off",
+        session_id: "developer-under-guard-policy-off",
+        tool_input: { command },
+      }),
+    ).stdout) as { permission?: string; agent_message?: string };
+    for (const command of ["bun test", "node --test", "npm test", "grep -rn formatPrice ."]) {
+      const out = delegateShell(command);
+      expect(out.permission, `${command}: ${out.agent_message ?? ""}`).toBe("allow");
+    }
+    // A Task whose record cannot be written still starts: nothing reads the record.
+    const unrecordedTask = () => JSON.parse(runAdapter(
+      proj,
+      "guards",
+      payload("preToolUseTask", proj, {
+        tool_use_id: "",
+        generation_id: "",
+        tool_input: { description: "Developer probe", prompt: "Implement the unit.", subagent_type: "aidlc-developer-agent" },
+      }),
+    ).stdout) as { permission?: string; agent_message?: string };
+    expect(unrecordedTask().permission).toBe("allow");
+    // Under strict the identity checks hold, and each refusal names the step that works.
+    withPolicy("strict (set by you)");
+    const held = delegateShell("bun test");
+    expect(held.permission).toBe("deny");
+    expect(held.agent_message ?? "").toContain("have the parent conversation run executable probes");
+    const heldTask = unrecordedTask();
+    expect(heldTask.permission).toBe("deny");
+    expect(heldTask.agent_message ?? "").toContain("Start it again");
+    expect(heldTask.agent_message ?? "").toContain("doctor");
+    // The named step: the same Task with its ids starts.
+    expect(JSON.parse(runAdapter(proj, "guards", payload("preToolUseTask", proj, {
+      tool_input: { description: "Developer probe", prompt: "Implement the unit.", subagent_type: "aidlc-developer-agent" },
+    })).stdout).permission).toBe("allow");
   });
 });

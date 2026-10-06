@@ -43,7 +43,7 @@ jobs:
           test "$GITHUB_SHA" = "$tag_sha"
           test "$(git rev-parse HEAD^{commit})" = "$tag_sha"
           if ! git merge-base --is-ancestor "$tag_sha" "$main_sha"; then
-            echo "::error::$RELEASE_TAG points at $tag_sha, which is not on main. Stable publication requires a passing release-purpose Full Suite, which only tests commits already on main; tag a commit on main."
+            echo "::error::$RELEASE_TAG points at $tag_sha, which is not on main. Stable publication requires a tagged commit on main and a passing Full Suite for that exact commit."
             exit 1
           fi
           version="$(awk -F'"' '/^export const AIDLC_VERSION = "/ { print $2 }' core/tools/aidlc-version.ts)"
@@ -457,6 +457,11 @@ jobs:
             }
             & $command config --project-dir $project --harness $harness --mcp none --quiet
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            # Setup tells a Cursor project outside git to run `git init`; doctor fails it until then.
+            if ($harness -eq 'cursor') {
+              git init --quiet $project
+              if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            }
             & $command doctor --project-dir $project --quiet
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           }
@@ -591,15 +596,67 @@ jobs:
             fi
             env PATH="/usr/bin:/bin" "$command" config \
               --project-dir "$project" --harness "$harness" --mcp none --quiet
+            # Setup tells a Cursor project outside git to run `git init`; doctor fails it until then.
+            if [ "$harness" = cursor ]; then
+              git init --quiet "$project"
+            fi
             env PATH="/usr/bin:/bin" "$command" doctor \
               --project-dir "$project" --quiet
           done
 
+  # A person on the last stable release types `aidlc update`, gets this
+  # release, and their hooks, project refresh and doctor still work. A failure
+  # holds publication back, like the lifecycle checks (preview-release.yml
+  # reports it and still publishes).
+  update-from-previous:
+    needs: [validate, stage-release]
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-latest, macos-15, windows-latest]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ needs.validate.outputs.sha }}
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: 1.4.2
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: release-candidate
+          path: build/release
+      # The token stays in this step: the releases under test never see it.
+      - name: Find the last stable release
+        id: previous
+        shell: bash
+        env:
+          CANDIDATE_TAG: ${{ needs.validate.outputs.tag }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          previous="$(gh release list --repo "$GITHUB_REPOSITORY" --exclude-drafts --exclude-pre-releases \
+            --limit 20 --json tagName --jq '[.[].tagName | select(. != env.CANDIDATE_TAG)] | .[0] // empty')"
+          test -n "$previous"
+          echo "tag=$previous" >>"$GITHUB_OUTPUT"
+      - name: Update from the last release
+        shell: bash
+        env:
+          PREVIOUS_TAG: ${{ steps.previous.outputs.tag }}
+        run: |
+          set -euo pipefail
+          printf 'aidlc-lifecycle-provenance-fixture\n' >build/release/aidlc-release.intoto.jsonl
+          bun scripts/ci-update-from-previous.ts --previous "$PREVIOUS_TAG" --candidate build/release
+
   publish:
-    needs: [validate, musl-smoke, windows-lifecycle, unix-lifecycle, full_suite_gate]
+    needs: [validate, musl-smoke, windows-lifecycle, unix-lifecycle, update-from-previous, full_suite_gate]
     # Implicit success() also covers ancestors, and full_suite is skipped when
     # evidence is reused, so require each direct need explicitly.
-    if: ${{ !cancelled() && needs.validate.result == 'success' && needs.musl-smoke.result == 'success' && needs.windows-lifecycle.result == 'success' && needs.unix-lifecycle.result == 'success' && needs.full_suite_gate.result == 'success' }}
+    if: ${{ !cancelled() && needs.validate.result == 'success' && needs.musl-smoke.result == 'success' && needs.windows-lifecycle.result == 'success' && needs.unix-lifecycle.result == 'success' && needs.update-from-previous.result == 'success' && needs.full_suite_gate.result == 'success' }}
     runs-on: ubuntu-latest
     permissions:
       contents: read

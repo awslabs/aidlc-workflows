@@ -15,9 +15,12 @@ import { join } from "node:path";
 import {
   auditBlockField,
   getField,
+  type GuardSwitch,
+  parseTypedGuardSwitchRequest,
   readAuditShardEvents,
   setField,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import { HUMAN_PRESENCE_NO_SWITCH } from "../../dist/claude/.claude/tools/aidlc-command.ts";
 import {
   AIDLC_SRC,
   cleanupTestProject,
@@ -49,7 +52,7 @@ afterEach(() => {
   while (tempDirs.length > 0) cleanupTestProject(tempDirs.pop()!);
 });
 
-function run(tool: string, args: string[], proj: string, env: Record<string, string> = {}) {
+function run(tool: string, args: string[], proj: string, env: NodeJS.ProcessEnv = {}) {
   const result = Bun.spawnSync({
     timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     cmd: [process.execPath, tool, ...args, "--project-dir", proj],
@@ -97,11 +100,11 @@ function directive(stdout: string): { kind: string; message: string } {
   return JSON.parse(stdout.trim().split("\n").pop() ?? "{}");
 }
 
-function recordHumanPrompt(proj: string, prompt: string): void {
+function recordHumanPrompt(proj: string, prompt: string, env: Record<string, string> = {}): string {
   const result = Bun.spawnSync({
     cmd: [process.execPath, RECORD_HUMAN_TURN, "engine", "hook", "record-human-turn"],
     cwd: proj,
-    env: { ...process.env, ...FENCE_ENV_CLEAR, CLAUDE_PROJECT_DIR: proj },
+    env: { ...process.env, ...FENCE_ENV_CLEAR, CLAUDE_PROJECT_DIR: proj, ...env },
     stdin: Buffer.from(JSON.stringify({
       hook_event_name: "UserPromptSubmit",
       cwd: proj,
@@ -112,12 +115,13 @@ function recordHumanPrompt(proj: string, prompt: string): void {
     stderr: "pipe",
   });
   expect(result.exitCode, result.stderr.toString()).toBe(0);
+  return result.stdout.toString();
 }
 
 describe("t338 atomic per-intent settings", () => {
   test.each([
     { extra: [], learnings: "on (from scope classic)" },
-    { extra: ["--learnings", "off"], learnings: "off (set by you)" },
+    { extra: ["--learnings", "off"], learnings: "off (set by a command)" },
   ])("creation records scope defaults and explicit intent choices with visible sources: $learnings", ({ extra, learnings }) => {
     const { proj, state } = project("classic", [...extra]);
     const content = readFileSync(state, "utf-8");
@@ -135,14 +139,15 @@ describe("t338 atomic per-intent settings", () => {
     const { proj, state } = project();
     const changed = run(UTILITY, ["config-change", "--sensors", "off"], proj);
     expect(changed.status, changed.stderr).toBe(0);
-    expect(getField(readFileSync(state, "utf-8"), "Sensors")).toBe("off (set by you)");
+    // No typed turn is behind a shell command, so it is not credited to the person.
+    expect(getField(readFileSync(state, "utf-8"), "Sensors")).toBe("off (set by a command)");
     const audit = rows(proj);
     expect(audit).toHaveLength(1);
     expect(auditBlockField(audit[0].block, "Key")).toBe("sensors");
     expect(auditBlockField(audit[0].block, "Old")).toBe("on");
     expect(auditBlockField(audit[0].block, "New")).toBe("off");
-    expect(auditBlockField(audit[0].block, "Source")).toBe("you");
-    expect(run(UTILITY, ["status"], proj).stdout).toContain("Sensors: off (set by you)\n");
+    expect(auditBlockField(audit[0].block, "Source")).toBe("command");
+    expect(run(UTILITY, ["status"], proj).stdout).toContain("Sensors: off (set by a command)\n");
     const before = readFileSync(state, "utf-8");
     const repeated = run(UTILITY, ["config-change", "--sensors", "off"], proj);
     expect(repeated.status, repeated.stderr).toBe(0);
@@ -159,17 +164,24 @@ describe("t338 atomic per-intent settings", () => {
     ]) {
       const enabled = run(UTILITY, ["config-change", flag, "on"], proj);
       expect(enabled.status, enabled.stderr).toBe(0);
-      expect(getField(readFileSync(state, "utf-8"), field)).toBe("on (set by you)");
+      expect(getField(readFileSync(state, "utf-8"), field)).toBe("on (set by a command)");
       const before = rows(proj);
-      const disabled = run(UTILITY, ["config-change", flag, "off"], proj, { [env]: "1" });
-      expect(disabled.status, disabled.stderr).toBe(0);
+      // Summary confirmation off is the person's own switch, so they type it.
+      if (key === "summary_confirmation") {
+        recordHumanPrompt(proj, "/aidlc config set summary-confirmation off", { [env]: "1" });
+      } else {
+        const disabled = run(UTILITY, ["config-change", flag, "off"], proj, { [env]: "1" });
+        expect(disabled.status, disabled.stderr).toBe(0);
+      }
+      const source = key === "summary_confirmation" ? "you" : "command";
       const audit = rows(proj).slice(before.length);
       expect(audit).toHaveLength(1);
       expect(auditBlockField(audit[0].block, "Key")).toBe(key);
       expect(auditBlockField(audit[0].block, "Old")).toBe("on");
       expect(auditBlockField(audit[0].block, "New")).toBe("off");
-      expect(auditBlockField(audit[0].block, "Source")).toBe("you");
-      expect(getField(readFileSync(state, "utf-8"), field)).toBe("off (set by you)");
+      expect(auditBlockField(audit[0].block, "Source")).toBe(source);
+      expect(getField(readFileSync(state, "utf-8"), field))
+        .toBe(source === "you" ? "off (set by you)" : "off (set by a command)");
     }
   });
 
@@ -191,9 +203,9 @@ describe("t338 atomic per-intent settings", () => {
       // none, not classic's own advisory level, which would clear the override.
       "Review Override": "none",
       "Guard Policy": "strict (set by you)",
-      Sensors: "off (set by you)",
-      Learnings: "off (set by you)",
-      "Summary Confirmation": "on (set by you)",
+      Sensors: "off (set by a command)",
+      Learnings: "off (set by a command)",
+      "Summary Confirmation": "on (set by a command)",
     })) expect(getField(content, field)).toBe(value);
     expect(getField(content, "Last Updated")).not.toBe(timestamp);
 
@@ -206,10 +218,10 @@ describe("t338 atomic per-intent settings", () => {
       { "Old Depth": "Standard", "New Depth": "Minimal" },
       { "Old Strategy": "Standard", "New Strategy": "Comprehensive" },
       { "Old Override": "none set", "New Override": "none" },
-      { "Old Value": "relaxed", "New Value": "strict", Source: "you" },
-      { Key: "sensors", Old: "on", New: "off", Source: "you" },
-      { Key: "learnings", Old: "on", New: "off", Source: "you" },
-      { Key: "summary_confirmation", Old: "off", New: "on", Source: "you" },
+      { "Old Value": "off", "New Value": "strict", Source: "you" },
+      { Key: "sensors", Old: "on", New: "off", Source: "command" },
+      { Key: "learnings", Old: "on", New: "off", Source: "command" },
+      { Key: "summary_confirmation", Old: "off", New: "on", Source: "command" },
     ];
     for (const [index, expected] of fields.entries()) {
       for (const [field, value] of Object.entries(expected)) {
@@ -265,11 +277,11 @@ describe("t338 atomic per-intent settings", () => {
     const content = readFileSync(state, "utf-8");
     expect(getField(content, "Scope")).toBe("classic");
     expect(getField(content, "Guard Policy")).toBe("strict (set by you)");
-    expect(getField(content, "Sensors")).toBe("off (set by you)");
+    expect(getField(content, "Sensors")).toBe("off (set by a command)");
     const audit = settingRows(proj);
     expect(audit.map((row) => row.event)).toEqual(["GUARD_POLICY_SET", "CEREMONY_SET"]);
     expect(auditBlockField(audit[0].block, "Source")).toBe("you");
-    expect(auditBlockField(audit[1].block, "Source")).toBe("you");
+    expect(auditBlockField(audit[1].block, "Source")).toBe("command");
     expect(readAuditShardEvents(proj).filter((row) => row.event === "SCOPE_CHANGED")).toHaveLength(0);
     const repeated = run(UTILITY, args, proj);
     expect(repeated.status, repeated.stderr).toBe(0);
@@ -314,8 +326,8 @@ describe("t338 atomic per-intent settings", () => {
     }));
     for (const result of results) expect(result.status, result.stderr).toBe(0);
     const content = readFileSync(state, "utf-8");
-    expect(getField(content, "Sensors")).toBe("off (set by you)");
-    expect(getField(content, "Learnings")).toBe("off (set by you)");
+    expect(getField(content, "Sensors")).toBe("off (set by a command)");
+    expect(getField(content, "Learnings")).toBe("off (set by a command)");
     const audit = rows(proj);
     expect(audit).toHaveLength(2);
     expect(audit.map((row) => auditBlockField(row.block, "Key")).sort()).toEqual(["learnings", "sensors"]);
@@ -358,26 +370,28 @@ describe("t338 atomic per-intent settings", () => {
     expect(readFileSync(state, "utf-8")).toBe(legacy);
     const changed = run(UTILITY, ["config-change", "--summary-confirmation", "on"], proj);
     expect(changed.status, changed.stderr).toBe(0);
-    expect(getField(readFileSync(state, "utf-8"), "Summary Confirmation")).toBe("on (set by you)");
+    expect(getField(readFileSync(state, "utf-8"), "Summary Confirmation")).toBe("on (set by a command)");
     expect(getField(readFileSync(state, "utf-8"), "Sensors")).toBeNull();
   });
 
-  test("scope change follows scope-owned rows while retaining human overrides and absent legacy rows", () => {
+  test("scope change follows scope-owned rows while retaining explicit overrides and absent legacy rows", () => {
     const { proj, state } = project();
     expect(run(UTILITY, ["config-change", "--sensors", "off"], proj).status).toBe(0);
     writeFileSync(state, readFileSync(state, "utf-8").replace(/^- \*\*Summary Confirmation\*\*:.*\n/gm, ""));
     const changed = run(UTILITY, ["scope-change", "--scope", "feature"], proj);
     expect(changed.status, changed.stderr).toBe(0);
     const content = readFileSync(state, "utf-8");
-    expect(getField(content, "Sensors")).toBe("off (set by you)");
+    expect(getField(content, "Sensors")).toBe("off (set by a command)");
     expect(getField(content, "Learnings")).toBe("on (from scope feature)");
     expect(getField(content, "Summary Confirmation")).toBeNull();
     const scopeRows = rows(proj).filter((row) => auditBlockField(row.block, "Source") === "scope feature");
-    expect(scopeRows).toHaveLength(1);
-    expect(auditBlockField(scopeRows[0].block, "Key")).toBe("learnings");
+    // Both scope-owned rows now name feature as their source. Their values did
+    // not change, so the audit holds no setting row for them.
+    expect(scopeRows).toEqual([]);
+    expect(getField(content, "Plan Approval")).toBe("on (from scope feature)");
     const explicit = run(UTILITY, ["scope-change", "--scope", "classic", "--summary-confirmation", "on"], proj);
     expect(explicit.status, explicit.stderr).toBe(0);
-    expect(getField(readFileSync(state, "utf-8"), "Summary Confirmation")).toBe("on (set by you)");
+    expect(getField(readFileSync(state, "utf-8"), "Summary Confirmation")).toBe("on (set by a command)");
   });
 
   test("scope-change summary reflects retained overrides and environment-disabled ceremonies", () => {
@@ -388,18 +402,22 @@ describe("t338 atomic per-intent settings", () => {
     expect(express.status, express.stderr).toBe(0);
     // express declares every ceremony off; the human's learnings choice is
     // retained, so the clause names reviewers, the env-disabled sensors, and
-    // the scope-owned summary confirmation.
-    const expressSummary = express.stdout.split("\n").find((line) => line.startsWith("Approval gates:"));
-    expect(expressSummary?.split("; no ")[1]).toBe("reviewers, sensors, or summary confirmation");
-    expect(getField(readFileSync(state, "utf-8"), "Learnings")).toBe("on (set by you)");
+    // the scope-owned summary confirmation and plan approval.
+    // The clause rides the reply's first line, after the approval gate count.
+    const offClause = (stdout: string): string | undefined =>
+      stdout.split("\n").find((line) => line.startsWith("Switched to "))?.split("; no ")[1]?.split(". To go back")[0];
+    expect(offClause(express.stdout)).toBe("reviewers, sensors, summary confirmation, or plan approval; lead agent only");
+    // Plan approval follows the scope the person switched to.
+    expect(getField(readFileSync(state, "utf-8"), "Plan Approval")).toBe("off (from scope express)");
+    expect(getField(readFileSync(state, "utf-8"), "Learnings")).toBe("on (set by a command)");
     expect(getField(readFileSync(state, "utf-8"), "Summary Confirmation")).toBe("off (from scope express)");
 
-    // Returning to classic must retain the human provenance even when the value matches its default.
+    // Returning to classic must retain the explicit provenance even when the value matches its default.
     const classic = run(UTILITY, ["scope-change", "--scope", "classic"], proj);
     expect(classic.status, classic.stderr).toBe(0);
-    expect(getField(readFileSync(state, "utf-8"), "Learnings")).toBe("on (set by you)");
-    const classicSummary = classic.stdout.split("\n").find((line) => line.startsWith("Approval gates:"));
-    expect(classicSummary?.split("; no ")[1]).toBe("summary confirmation");
+    expect(getField(readFileSync(state, "utf-8"), "Learnings")).toBe("on (set by a command)");
+    expect(offClause(classic.stdout)).toBe("summary confirmation; lead agent only");
+    expect(getField(readFileSync(state, "utf-8"), "Plan Approval")).toBe("on (from scope classic)");
   });
 
   test("environment disable wins in status and config reads without replacing the saved choice", () => {
@@ -446,9 +464,12 @@ describe("t338 atomic per-intent settings", () => {
     expect(listed.status, listed.stderr).toBe(0);
     expect(JSON.parse(listed.stdout)).toEqual({
       depth: "Minimal", "test-strategy": "Comprehensive", review: "none",
-      "guard-policy": "strict (set by you)", sensors: "off (set by you)",
-      learnings: "off (set by you)", "summary-confirmation": "on (set by you)",
-      "guard.plan-approval": "on (default)", "guard.review-freeze": "on (default)",
+      "guard-policy": "strict (set by you)", sensors: "off (set by a command)",
+      learnings: "off (set by a command)", "summary-confirmation": "on (set by a command)",
+      "plan-approval": "on (from scope classic)",
+      collaborators: "off (from scope classic)",
+      // `guard.plan-approval` is the same switch, so it reads the same setting.
+      "guard.plan-approval": "on (from scope classic)", "guard.review-freeze": "on (default)",
       "guard.state-transition": "on (default)", "guard.reviewer-scope": "on (default)",
     });
     expect(settingRows(proj)).toHaveLength(7);
@@ -503,11 +524,192 @@ describe("t338 atomic per-intent settings", () => {
     const { proj, state } = project();
     const changed = run(DISPATCHER, ["engine", "config", "set", "summary-confirmation", "on"], proj);
     expect(changed.status, changed.stderr).toBe(0);
-    expect(getField(readFileSync(state, "utf-8"), CEREMONY_FIELDS[2])).toBe("on (set by you)");
-    expect(run(DISPATCHER, ["engine", "config", "get", "summary-confirmation"], proj).stdout).toBe("on (set by you)\n");
+    expect(getField(readFileSync(state, "utf-8"), CEREMONY_FIELDS[2])).toBe("on (set by a command)");
+    expect(run(DISPATCHER, ["engine", "config", "get", "summary-confirmation"], proj).stdout).toBe("on (set by a command)\n");
     const listed = run(DISPATCHER, ["engine", "config", "list", "--json"], proj);
     expect(listed.status, listed.stderr).toBe(0);
-    expect(JSON.parse(listed.stdout)["summary-confirmation"]).toBe("on (set by you)");
+    expect(JSON.parse(listed.stdout)["summary-confirmation"]).toBe("on (set by a command)");
     expect(rows(proj)).toHaveLength(1);
+  });
+});
+
+describe("t338 summary confirmation off is the person's switch", () => {
+  const summaryRefusal = "Turning summary confirmation off skips the person's `Looks correct` check before a stage writes its output, so it is their call. No reply from the person has arrived since the last decision: run it when they ask for it. They can also type `/aidlc config set summary-confirmation off`.";
+  /** No resolved session and no presence bypass, so only a typed turn can lower. */
+  const SESSIONLESS = { ...FENCE_ENV_CLEAR, AIDLC_SESSION_OVERRIDE: undefined, AIDLC_SESSION_OVERRIDE_SOURCE: undefined };
+
+  test.each<{ via: string; scope: string; tool: string; args: string[] }>([
+    { via: "the setter", scope: "feature", tool: UTILITY, args: ["config-change", "--summary-confirmation", "off"] },
+    {
+      via: "engine config set", scope: "feature", tool: DISPATCHER,
+      args: ["engine", "config", "set", "summary-confirmation", "off"],
+    },
+    {
+      via: "scope-change", scope: "feature", tool: UTILITY,
+      args: ["scope-change", "--scope", "feature", "--summary-confirmation", "off"],
+    },
+    // A scope-owned off is not the person's choice; saving it as explicit
+    // would outlive a later scope change.
+    { via: "a scope-owned off", scope: "classic", tool: UTILITY, args: ["config-change", "--summary-confirmation", "off"] },
+    // The setter owns the refusal, so another spelling of the same command
+    // reaches it too.
+    { via: "the setter's --key=value form", scope: "feature", tool: UTILITY, args: ["config-change", "--summary-confirmation=off"] },
+    {
+      via: "a pair after another setting", scope: "feature", tool: DISPATCHER,
+      args: ["engine", "config", "set", "sensors", "on", "--summary-confirmation", "off"],
+    },
+  ])("an off nobody asked for, through $via, changes nothing", ({ scope, tool, args }) => {
+    const { proj, state } = project(scope);
+    const before = readFileSync(state, "utf-8");
+    const refused = run(tool, args, proj, SESSIONLESS);
+    expect(refused.status).toBe(1);
+    expect(JSON.parse(refused.stderr)).toEqual({ error: summaryRefusal });
+    expect(readFileSync(state, "utf-8")).toBe(before);
+    expect(settingRows(proj)).toHaveLength(0);
+  });
+
+  test("asked for in the chat, the agent's off says it in one line with their words and the way back", () => {
+    const { proj, state } = project("feature");
+    recordHumanPrompt(proj, "skip the looks correct check from now on");
+    const changed = run(DISPATCHER, ["engine", "config", "set", "summary-confirmation", "off"], proj, SESSIONLESS);
+    expect(changed.status, changed.stderr).toBe(0);
+    expect(getField(readFileSync(state, "utf-8"), "Summary Confirmation")).toStartWith("off (");
+    const audit = rows(proj);
+    expect(auditBlockField(audit.at(-1)!.block, "Person Reply")).toBe("skip the looks correct check from now on");
+    // One line: the setter's own "changed" line is not said beside it.
+    expect(changed.stdout).not.toContain("Summary Confirmation changed:");
+    expect(changed.stdout).toContain(
+      'The summary confirmation is off for this piece of work, because you said: "skip the looks correct check from now on". ' +
+        'Say "turn it back on" to restore it (/aidlc config set summary-confirmation on).',
+    );
+    const unattended = project("feature");
+    recordHumanPrompt(unattended.proj, "skip the looks correct check from now on");
+    expect(run(UTILITY, ["config-change", "--summary-confirmation", "off"], unattended.proj, {
+      ...SESSIONLESS, AIDLC_UNATTENDED: "1",
+    }).status).toBe(1);
+  });
+
+  test("turning it on stays free for a command", () => {
+    const { proj, state } = project("classic");
+    const changed = run(UTILITY, ["config-change", "--summary-confirmation", "on"], proj, SESSIONLESS);
+    expect(changed.status, changed.stderr).toBe(0);
+    expect(getField(readFileSync(state, "utf-8"), "Summary Confirmation")).toBe("on (set by a command)");
+  });
+
+  test("the person's typed off applies as theirs and a command repeat neither writes nor relabels it", () => {
+    const { proj, state } = project("feature");
+    const output = recordHumanPrompt(proj, "/aidlc config set summary-confirmation off");
+    expect(output).toContain("Summary Confirmation changed:");
+    const content = readFileSync(state, "utf-8");
+    expect(getField(content, "Summary Confirmation")).toBe("off (set by you)");
+    const audit = rows(proj);
+    expect(audit).toHaveLength(1);
+    expect(auditBlockField(audit[0].block, "New")).toBe("off");
+    expect(auditBlockField(audit[0].block, "Source")).toBe("you");
+    const repeated = run(DISPATCHER, ["engine", "config", "set", "summary-confirmation", "off"], proj, SESSIONLESS);
+    expect(repeated.status, repeated.stderr).toBe(0);
+    expect(repeated.stdout).toContain("Summary Confirmation is already off (set by you)");
+    expect(readFileSync(state, "utf-8")).toBe(content);
+    expect(rows(proj)).toEqual(audit);
+  });
+
+  test("the presence bypass applies an untyped off without crediting the person", () => {
+    const { proj, state } = project("feature");
+    const changed = run(UTILITY, ["config-change", "--summary-confirmation", "off"], proj, {
+      ...SESSIONLESS, AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "1",
+    });
+    expect(changed.status, changed.stderr).toBe(0);
+    expect(getField(readFileSync(state, "utf-8"), "Summary Confirmation")).toBe("off (set by a command)");
+    const audit = rows(proj);
+    expect(audit).toHaveLength(1);
+    expect(auditBlockField(audit[0].block, "Source")).toBe("command");
+  });
+
+  test("an unattended driver cannot turn it off, even with the presence bypass", () => {
+    const { proj, state } = project("feature");
+    const before = readFileSync(state, "utf-8");
+    const refused = run(UTILITY, ["config-change", "--summary-confirmation", "off"], proj, {
+      ...SESSIONLESS, AIDLC_UNATTENDED: "1", AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "1",
+    });
+    expect(refused.status).toBe(1);
+    expect(JSON.parse(refused.stderr).error).toStartWith(summaryRefusal);
+    expect(readFileSync(state, "utf-8")).toBe(before);
+    expect(settingRows(proj)).toHaveLength(0);
+  });
+
+  test("a creation flag records that a command chose it", () => {
+    const { state } = project("feature", ["--summary-confirmation", "off"]);
+    expect(getField(readFileSync(state, "utf-8"), "Summary Confirmation")).toBe("off (set by a command)");
+  });
+
+  test.each<{ prompt: string; switches: GuardSwitch[] }>([
+    { prompt: "/aidlc config set summary-confirmation off", switches: [{ key: "summary-confirmation", value: "off" }] },
+    { prompt: "/aidlc --summary-confirmation off", switches: [{ key: "summary-confirmation", value: "off" }] },
+    { prompt: "/aidlc --intent a --summary-confirmation off", switches: [{ key: "summary-confirmation", value: "off" }] },
+    { prompt: "/aidlc config set summary-confirmation on", switches: [] },
+    { prompt: "/aidlc --sensors off", switches: [] },
+    // Only a message that carries settings alone switches it: a description
+    // may be new work or a question about the flag.
+    { prompt: "/aidlc --summary-confirmation off build unrelated B", switches: [] },
+    { prompt: "/aidlc build B --summary-confirmation off", switches: [] },
+    { prompt: "/aidlc --summary-confirmation off -- build B", switches: [] },
+    { prompt: "/aidlc should I use --summary-confirmation off?", switches: [] },
+    { prompt: "/aidlc don't set --summary-confirmation off", switches: [] },
+    { prompt: "/aidlc config set summary-confirmation off please", switches: [] },
+    // The last value wins, so a later on drops an earlier off.
+    { prompt: "/aidlc --summary-confirmation off --summary-confirmation on build B", switches: [] },
+    { prompt: "/aidlc --summary-confirmation off --summary-confirmation on", switches: [] },
+  ])("the typed prompt $prompt switches $switches", ({ prompt, switches }) => {
+    expect(parseTypedGuardSwitchRequest(prompt).switches).toEqual(switches);
+  });
+
+  test("a description beside other switches still drops summary confirmation off", () => {
+    const parsed = parseTypedGuardSwitchRequest("/aidlc build B --guard-policy relaxed --summary-confirmation off");
+    expect(parsed.switches.map((wanted) => wanted.key)).not.toContain("summary-confirmation");
+    expect(parsed.settings.map((setting) => setting.key)).not.toContain("summary-confirmation");
+  });
+
+  test("the request's own flags carry no switch, and an unknown flag still drops every switch", () => {
+    const beside = parseTypedGuardSwitchRequest("/aidlc --skip user-stories --project-type brownfield --plan-approval off build B");
+    expect(beside.newWorkPlanApprovalOff).toBe(true);
+    expect(beside.switches).toEqual([]);
+    const unknown = parseTypedGuardSwitchRequest("/aidlc --bogus x --plan-approval off build B");
+    expect(unknown.newWorkPlanApprovalOff).toBeUndefined();
+  });
+
+  test.each([
+    "/aidlc --summary-confirmation off build unrelated B",
+    "/aidlc should I use --summary-confirmation off?",
+    "/aidlc build B --guard-policy relaxed --summary-confirmation off",
+    "/aidlc --summary-confirmation off --summary-confirmation on --sensors off build B",
+  ])("typing %s leaves the active piece of work's summary confirmation alone", (prompt) => {
+    const { proj, state } = project("feature");
+    const before = getField(readFileSync(state, "utf-8"), "Summary Confirmation");
+    recordHumanPrompt(proj, prompt);
+    expect(getField(readFileSync(state, "utf-8"), "Summary Confirmation")).toBe(before);
+    expect(rows(proj)).toHaveLength(0);
+  });
+});
+
+describe("t338 config help and the human presence refusal", () => {
+  test.each(["--help", "-h", "help"])("engine config %s prints the config usage", (flag) => {
+    const proj = emptyProject();
+    const help = run(DISPATCHER, ["engine", "config", flag], proj);
+    expect(help.status, help.stderr).toBe(0);
+    expect(help.stdout).toContain("Settings for the selected piece of work:\n");
+    expect(help.stdout).toContain("  set summary-confirmation <on|off>\n");
+  });
+
+  test.each<{ via: string; tool: string; args: string[] }>([
+    { via: "engine config set", tool: DISPATCHER, args: ["engine", "config", "set", "guard.human-presence", "off"] },
+    { via: "the setter", tool: UTILITY, args: ["config-change", "--guard.human-presence", "off"] },
+  ])("$via names why human presence stays on and what to do instead", ({ tool, args }) => {
+    const { proj, state } = project("feature");
+    const before = readFileSync(state, "utf-8");
+    const refused = run(tool, args, proj);
+    expect(refused.status).not.toBe(0);
+    expect(refused.stderr).toContain(HUMAN_PRESENCE_NO_SWITCH);
+    expect(refused.stderr).not.toContain("unknown verb");
+    expect(readFileSync(state, "utf-8")).toBe(before);
   });
 });

@@ -1,4 +1,4 @@
-// covers: subcommand:aidlc-log:link, audit:PIPELINE_LINK_COMPLETED, function:codekbStoreIsCurrent, function:latestPipelineLinkArtifactMtime, function:pipelineLinkEvidence, function:currentPipelineLinkReceipts, function:pipelineLinks, function:singleStageAttemptIsOpen, function:checkPipelineLinkEvidence
+// covers: subcommand:aidlc-log:link, audit:PIPELINE_LINK_COMPLETED, function:codekbStoreIsCurrent, function:codekbSourceRoot, function:latestPipelineLinkArtifactMtime, function:pipelineLinkEvidence, function:currentPipelineLinkReceipts, function:pipelineLinks, function:singleStageAttemptIsOpen, function:checkPipelineLinkEvidence
 //
 // Pipeline links are durable, ordered completion evidence. The log tool owns
 // each receipt; the engine and direct state transitions require the complete
@@ -37,6 +37,7 @@ import {
 } from "../harness/fixtures.ts";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import {
+  codekbRepoName,
   codekbStoreIsCurrent,
   codekbScopeFingerprint,
   currentPipelineLinkReceipts,
@@ -52,6 +53,7 @@ const BUN = process.execPath;
 const LOG = join(AIDLC_SRC, "tools", "aidlc-log.ts");
 const STATE = join(AIDLC_SRC, "tools", "aidlc-state.ts");
 const ORCH = join(AIDLC_SRC, "tools", "aidlc-orchestrate.ts");
+const UTILITY = join(AIDLC_SRC, "tools", "aidlc-utility.ts");
 const NATIVE_ORCH = join(
   import.meta.dir,
   "../../dist-release/claude/.claude/tools/aidlc-orchestrate.ts",
@@ -81,6 +83,13 @@ function pipelineProject(): string {
   projects.push(proj);
   seedAidlcMemory(proj);
   seedStateFile(proj, "state-brownfield-init-done.md");
+  // The fixture scope ships collaborators off, which would collapse the
+  // reverse-engineering pipeline to the developer lead alone and drop the
+  // architect link this suite verifies — including isolated single runs, which
+  // inherit this main-workflow scope. Pin the scope to enterprise (the one
+  // collaborators-on scope) so both links exist on every path.
+  const statePath = seededStateFile(proj);
+  writeFileSync(statePath, readFileSync(statePath, "utf-8").replace(/^- \*\*Scope\*\*: .*/m, "- **Scope**: enterprise"));
   return proj;
 }
 
@@ -725,6 +734,41 @@ describe("t315 pipeline link receipts", () => {
     }).completed).toEqual([LEAD, FINAL]);
   });
 
+  // Under Guard Policy relaxed or off, a targeted fix after Request Changes, or
+  // a handoff edited, copied or cloned, keeps the scan the agents already did.
+  function offPipelineProject(): string {
+    const proj = pipelineProject();
+    const statePath = seededStateFile(proj);
+    const content = readFileSync(statePath, "utf-8");
+    const line = "- **Guard Policy**: off (from scope enterprise)";
+    writeFileSync(
+      statePath,
+      /^- \*\*(Change Control|Guard Policy)\*\*: .*/m.test(content)
+        ? content.replace(/^- \*\*(Change Control|Guard Policy)\*\*: .*/m, line)
+        : content.replace(/^(- \*\*Scope\*\*: .*)$/m, `$1\n${line}`),
+    );
+    return proj;
+  }
+  const RE_NODE = { slug: RE_STAGE, lead_agent: LEAD, support_agents: [FINAL] };
+
+  test("under Guard Policy off, Request Changes keeps the earlier scan's handoffs", () => {
+    const proj = offPipelineProject();
+    appendAuditEntry("STAGE_STARTED", { Stage: RE_STAGE, Agent: LEAD }, proj);
+    expect(runLog(proj, LEAD).rc).toBe(0);
+    expect(runLog(proj, FINAL).rc).toBe(0);
+    appendAuditEntry("GATE_REJECTED", { Stage: RE_STAGE, Feedback: "rename module X in the architecture doc" }, proj);
+    expect(pipelineLinkEvidence(proj, RE_NODE).completed).toEqual([LEAD, FINAL]);
+  });
+
+  test("under Guard Policy off, an edited handoff keeps its link", () => {
+    const proj = offPipelineProject();
+    appendAuditEntry("STAGE_STARTED", { Stage: RE_STAGE, Agent: LEAD }, proj);
+    expect(runLog(proj, LEAD).rc).toBe(0);
+    expect(runLog(proj, FINAL).rc).toBe(0);
+    appendFileSync(developerHandoffPath(proj), "\nThe person's own note.\n");
+    expect(pipelineLinkEvidence(proj, RE_NODE).completed).toEqual([LEAD, FINAL]);
+  });
+
   test("gate-start and approve refuse conductor-written artifacts without the final receipt", () => {
     const proj = pipelineProject();
     writeAllCodekbArtifacts(proj);
@@ -761,6 +805,98 @@ describe("t315 pipeline link receipts", () => {
       links: [LEAD, FINAL],
       completed: [LEAD],
     });
+  });
+
+  // A live run on a one-folder project passed the folder's own name as --repo
+  // to every Reverse Engineering command, the name codekb-path gives its store.
+  // The codekb commands took it, the receipt refused it, and the agent renamed
+  // the developer's handoff to recover. The root's name now means the root.
+  test("the project root's own name works as --repo, and its handoff may carry that name", () => {
+    const proj = pipelineProject();
+    const root = codekbRepoName(proj);
+    appendAuditEntry("STAGE_STARTED", { Stage: RE_STAGE, Agent: LEAD }, proj);
+    for (const args of [
+      ["codekb-scope-diff", "--repo", root],
+      ["codekb-snapshot", "--repo", root, "--paths", "./", "--json"],
+    ]) {
+      const run = spawnSync(BUN, [UTILITY, ...args, "--project-dir", proj], {
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+        encoding: "utf-8",
+        env: childEnv(),
+      });
+      expect(run.status, `${args[0]}: ${run.stdout}${run.stderr}`).toBe(0);
+    }
+    const lead = runLog(proj, LEAD, root);
+    expect(lead.rc, lead.out).toBe(0);
+    expect(lead.out).not.toContain('"repo"');
+    const final = runLog(proj, FINAL, root);
+    expect(final.rc, final.out).toBe(0);
+    const audit = readAllAuditShards(proj);
+    expect(audit).toContain(`developer-scan-${root}.md`);
+    expect(audit).not.toContain("**Repo**:");
+    expect(pipelineLinkEvidence(proj, {
+      slug: RE_STAGE,
+      lead_agent: LEAD,
+      support_agents: [FINAL],
+    }).completed).toEqual([LEAD, FINAL]);
+
+    // The same handoff name with --repo left off, as the agent tried next.
+    const other = pipelineProject();
+    const otherRoot = codekbRepoName(other);
+    appendAuditEntry("STAGE_STARTED", { Stage: RE_STAGE, Agent: LEAD }, other);
+    writeDeveloperHandoff(other, otherRoot);
+    const bare = spawnSync(BUN, [
+      LOG, "link", "--stage", RE_STAGE, "--link", LEAD,
+      "--artifact", relative(other, developerHandoffPath(other, otherRoot)),
+      "--project-dir", other,
+    ], {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+      encoding: "utf-8",
+      env: childEnv(),
+    });
+    expect(bare.status, `${bare.stdout}${bare.stderr}`).toBe(0);
+
+    // Any other name is still not this project's repo.
+    const third = pipelineProject();
+    appendAuditEntry("STAGE_STARTED", { Stage: RE_STAGE, Agent: LEAD }, third);
+    const wrong = runLog(third, LEAD, "another-repo");
+    expect(wrong.rc).not.toBe(0);
+    expect(wrong.out).toContain("omit --repo");
+  });
+
+  // A project folder that holds a folder of its own name (a Python package
+  // named after its project) is still one repo: its knowledge base describes
+  // the whole project root, so a change outside that folder makes it stale.
+  test("with no registered repo, the store describes the project root even beside a same-named folder", () => {
+    const proj = pipelineProject();
+    const current = writeCurrentCodekbStore(proj);
+    const child = join(proj, current.repo, "src");
+    mkdirSync(child, { recursive: true });
+    writeFileSync(join(child, "app.ts"), "export const current = true;\n", "utf-8");
+    expect(codekbStoreIsCurrent(proj, current.repo)).toBe(true);
+    writeFileSync(current.source, "export const current = false;\n", "utf-8");
+    expect(codekbStoreIsCurrent(proj, current.repo)).toBe(false);
+    expect(codekbStoreIsCurrent(proj)).toBe(false);
+
+    expect(runOrchestrateNext(
+      ORCH,
+      proj,
+      ["--scope", "bugfix", "--stage", RE_STAGE, "--single"],
+      { env: childEnv() },
+    ).directive?.kind).toBe("run-stage");
+    const reused = state(proj, [
+      "reuse-artifact",
+      RE_STAGE,
+      "--decision",
+      "keep",
+      "--artifacts",
+      current.store,
+      "--repo",
+      current.repo,
+      "--single",
+    ]);
+    expect(reused.rc).not.toBe(0);
+    expect(reused.out).toContain("not CURRENT");
   });
 
   test("multi-repo intents enforce one ordered chain per repo", () => {
@@ -874,7 +1010,7 @@ describe("t315 pipeline link receipts", () => {
     const first = runOrchestrateNext(
       ORCH,
       proj,
-      ["--scope", "bugfix", "--stage", RE_STAGE, "--single"],
+      ["--scope", "enterprise", "--stage", RE_STAGE, "--single"],
       { env: childEnv() },
     );
     expect(first.status).toBe(0);
@@ -890,7 +1026,7 @@ describe("t315 pipeline link receipts", () => {
     const resumed = runOrchestrateNext(
       ORCH,
       proj,
-      ["--scope", "bugfix", "--stage", RE_STAGE, "--single"],
+      ["--scope", "enterprise", "--stage", RE_STAGE, "--single"],
       { env: childEnv() },
     );
     expect(
@@ -901,7 +1037,9 @@ describe("t315 pipeline link receipts", () => {
       links: [LEAD, FINAL],
       completed: [LEAD, FINAL],
     });
-    writeAllCodekbArtifacts(proj);
+    // The close names the code knowledge base in one plain line, and only
+    // when every store the run covers matches the code.
+    writeCurrentCodekbStore(proj);
     const completed = report(proj, [
       "--single",
       "--stage",
@@ -910,6 +1048,7 @@ describe("t315 pipeline link receipts", () => {
       "completed",
     ]);
     expect(completed.directive?.kind).toBe("done");
+    expect(completed.directive?.narration).toBe("The code knowledge base now matches the code.");
 
     const mainBefore = pipelineLinkEvidence(proj, {
       slug: RE_STAGE,
@@ -951,7 +1090,7 @@ describe("t315 pipeline link receipts", () => {
     const first = runOrchestrateNext(
       ORCH,
       proj,
-      ["--scope", "bugfix", "--stage", RE_STAGE, "--single"],
+      ["--scope", "enterprise", "--stage", RE_STAGE, "--single"],
       { env: childEnv() },
     );
     expect(first.directive?.pipeline).toEqual({
@@ -975,7 +1114,7 @@ describe("t315 pipeline link receipts", () => {
     const resumed = runOrchestrateNext(
       ORCH,
       proj,
-      ["--scope", "bugfix", "--stage", RE_STAGE, "--single"],
+      ["--scope", "enterprise", "--stage", RE_STAGE, "--single"],
       { env: childEnv() },
     );
     expect(
@@ -1014,7 +1153,7 @@ describe("t315 pipeline link receipts", () => {
     expect(runOrchestrateNext(
       ORCH,
       proj,
-      ["--scope", "bugfix", "--stage", RE_STAGE, "--single"],
+      ["--scope", "enterprise", "--stage", RE_STAGE, "--single"],
       { env: childEnv() },
     ).directive?.kind).toBe("run-stage");
 
@@ -1059,7 +1198,7 @@ describe("t315 pipeline link receipts", () => {
     expect(runOrchestrateNext(
       ORCH,
       proj,
-      ["--scope", "bugfix", "--stage", RE_STAGE, "--single"],
+      ["--scope", "enterprise", "--stage", RE_STAGE, "--single"],
       { env: childEnv() },
     ).directive?.kind).toBe("run-stage");
     expect(singleStageAttemptIsOpen(proj, RE_STAGE)).toBe(true);
@@ -1086,7 +1225,7 @@ describe("t315 pipeline link receipts", () => {
     expect(runOrchestrateNext(
       ORCH,
       proj,
-      ["--scope", "bugfix", "--stage", RE_STAGE, "--single"],
+      ["--scope", "enterprise", "--stage", RE_STAGE, "--single"],
       { env: childEnv() },
     ).directive?.kind).toBe("run-stage");
 
@@ -1164,7 +1303,7 @@ describe("t315 pipeline link receipts", () => {
       expect(runOrchestrateNext(
         ORCH,
         proj,
-        ["--scope", "bugfix", "--stage", RE_STAGE, "--single"],
+        ["--scope", "enterprise", "--stage", RE_STAGE, "--single"],
         { env: childEnv() },
       ).directive?.kind).toBe("run-stage");
       const stateBefore = readFileSync(seededStateFile(proj), "utf-8");
@@ -1214,7 +1353,7 @@ describe("t315 pipeline link receipts", () => {
     expect(runOrchestrateNext(
       ORCH,
       proj,
-      ["--scope", "bugfix", "--stage", RE_STAGE, "--single"],
+      ["--scope", "enterprise", "--stage", RE_STAGE, "--single"],
       { env: childEnv() },
     ).directive?.kind).toBe("run-stage");
     const stateBefore = readFileSync(seededStateFile(proj), "utf-8");

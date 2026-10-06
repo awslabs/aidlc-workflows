@@ -14,8 +14,10 @@ Authoritative generated views:
 ## Project Information
 - **Project**: [single-line project description preview]
 - **Project Description Source**: project-description.json
-- **Project Type**: [Greenfield/Brownfield]
+- **Project Type**: [Greenfield/Brownfield; the bare word, which every reader compares]
+- **Project Type Source**: [`workspace scan` or `you`: who decided the type. Written at intent creation (`you` when the request carried `--project-type`), rewritten to `you` by `workspace reclassify` (the person's `/aidlc --project-type` or plain words). A routing field: while it reads `workspace scan` on Greenfield work that has not started Construction, `next` asks once when the folder gains code; `you` is never second-guessed by a scan. A state file without the line reads as `workspace scan`]
 - **Scope**: [scope slug from compiled scope grid]
+- **Plan**: [present only for a plan composed for this piece of work: its name as the gate showed it (`--plan-name`), or `tailored plan`; its stage changes are the Stage Progress suffixes, and a scope change removes the line]
 - **Start Date**: [ISO 8601 timestamp]
 - **State Version**: 8
 - **Active Agent**: [current lead agent slug]
@@ -31,9 +33,9 @@ Authoritative generated views:
 - **Guard Policy**: [strict/relaxed/off, then its source in parentheses: `(from scope <name>)`, `(from <layer>.md)`, or `(set by you)`; written at intent creation with the resolved value, rewritten by `/aidlc --guard-policy` or the plain-chat request, read by value only. When a record carries only the retired `**Change Control**` line, every `/aidlc` run announces that a carried-over relaxed or off value now also lowers fences for work nobody directed and every pass is recorded in the audit trail, and asks the person to keep it or raise the fences again; the notice repeats until the person chooses a Guard Policy setting; a retired strict line alone gets no notice. If both lines carry different policy words, strict applies with source `conflicting state lines` unless memory holds strict, and `next` repeats a notice containing both raw values until the person chooses; if both agree, `Guard Policy` is used. Any policy write removes the retired line and retains only `Guard Policy`; `next` writes nothing]
 - **Guards Off**: [only present once a fence was switched off for this piece of work: a comma list of `plan-approval`, `review-freeze`, `state-transition`, `reviewer-scope` followed by `(set by you)`, or `none`; written by `/aidlc config set guard.<fence> off|on`; a persisted human-presence entry is ignored because human presence has no per-work switch]
 - **Guards On**: [only present once a fence was forced on above the policy word for this piece of work: a comma list of `plan-approval`, `review-freeze`, `state-transition`, `reviewer-scope` followed by `(set by you)`, or `none`; written by `/aidlc config set guard.<fence> on|off`; a persisted human-presence entry is ignored; precedence is environment kill switch, Guards Off, Guards On, Guard Policy, then on by default]
-- **Sensors**: [on/off, then its source in parentheses: `(from scope <name>)` or `(set by you)`; written at intent creation with the scope default, rewritten by `/aidlc --sensors`, read by value only]
-- **Learnings**: [on/off, then its source in parentheses: `(from scope <name>)` or `(set by you)`; written at intent creation with the scope default, rewritten by `/aidlc --learnings`, read by value only]
-- **Summary Confirmation**: [on/off, then its source in parentheses: `(from scope <name>)` or `(set by you)`; written at intent creation with the scope default, rewritten by `/aidlc --summary-confirmation`, read by value only]
+- **Sensors**: [on/off, then its source in parentheses: `(from scope <name>)`, `(set by you)`, or `(set by a command)`; written at intent creation with the scope default, rewritten by `/aidlc --sensors`, read by value only]
+- **Learnings**: [on/off, then its source in parentheses: `(from scope <name>)`, `(set by you)`, or `(set by a command)`; written at intent creation with the scope default, rewritten by `/aidlc --learnings`, read by value only]
+- **Summary Confirmation**: [on/off, then its source in parentheses: `(from scope <name>)`, `(set by you)`, or `(set by a command)`; written at intent creation with the scope default, rewritten by `/aidlc --summary-confirmation`, read by value only]
 
 ## Workspace State
 - **Project Root**: [project-relative path, normally `.`; re-derived at runtime, never trusted as an absolute path]
@@ -99,6 +101,7 @@ Progress column and required team gates are complete.
 - **Status**: [Running/Completed/Archived]
 - **Construction Autonomy Mode**: [unset/autonomous/gated]
 - **Last Updated**: [ISO 8601 timestamp]
+- **Archived From**: [only while Archived: the Status it replaced, Running or Completed]
 
 ## Session Resume Point
 - **Last Completed Stage**: [stage slug]

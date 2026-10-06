@@ -31,6 +31,7 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { keepOwnHarnessBindings } from "../../scripts/harness-bindings.ts";
 import { AIDLC_SRC, REPO_ROOT } from "../harness/fixtures.ts";
 import { HARNESS_MATRIX } from "../harness/harness-matrix.ts";
 
@@ -145,14 +146,15 @@ describe("t305 construction protocol module — Build-and-Test failure loop-back
   test("authored Construction module is byte-aligned across every dist", () => {
     // The copy channel expands the authored `{{INVOKE}}` seam to
     // `bun <harnessDir>/tools/aidlc.ts`; fold both projections back before the
-    // byte comparison so real prose drift still fails.
+    // byte comparison so real prose drift still fails. Each tree ships only its
+    // own tool's binding subsection, so it is compared with that cut.
     const normalize = (body: string, harnessDir: string) =>
       body
         .replaceAll(harnessDir, "{{HARNESS_DIR}}")
         .replaceAll("bun {{HARNESS_DIR}}/tools/aidlc.ts", "{{INVOKE}}");
-    expect(normalize(CONSTRUCTION_PROTOCOL, ".claude")).toBe(
-      AUTHORED_CONSTRUCTION_PROTOCOL,
-    );
+    const authoredFor = (harness: string) =>
+      keepOwnHarnessBindings(AUTHORED_CONSTRUCTION_PROTOCOL, harness, "stage-protocol-construction.md");
+    expect(normalize(CONSTRUCTION_PROTOCOL, ".claude")).toBe(authoredFor("claude"));
     const mismatched = HARNESS_MATRIX.flatMap((harness) => {
       const path = join(
         harness.engineRoot,
@@ -163,7 +165,7 @@ describe("t305 construction protocol module — Build-and-Test failure loop-back
       return normalize(
         readFileSync(path, "utf-8"),
         harness.capabilities.harnessDir,
-      ) === AUTHORED_CONSTRUCTION_PROTOCOL
+      ) === authoredFor(harness.name)
         ? []
         : [harness.name];
     });
@@ -236,21 +238,18 @@ describe("t305 construction protocol module — Build-and-Test failure loop-back
     expect(CONSTRUCTION_PROTOCOL).toContain(
       "The jump opens a new stage attempt",
     );
+    // The engine asks again: nothing for the conductor to blank or re-mint.
     expect(CONSTRUCTION_PROTOCOL).toContain(
-      "blank `[Answer]:`, regenerate the target-bound fingerprint",
+      "after the repaired plan is written, `next` asks the\nperson for Plan Approval again before generation",
     );
-    expect(CONSTRUCTION_PROTOCOL).toContain(
-      "Plan Approval decision/human-turn/answer receipt\nsequence again before generation",
-    );
+    expect(CONSTRUCTION_PROTOCOL).not.toContain("regenerate the target-bound fingerprint");
     expect(CODE_GENERATION).toContain(
       "**Build-and-Test loop-back:** The construction protocol module",
     );
     expect(CODE_GENERATION).toContain(
-      "reset the Plan\n> Approval `[Answer]:`",
+      "`next` asks for Plan Approval again under\n> the replayed directive",
     );
-    expect(CODE_GENERATION).toContain(
-      "run the full decision/human-turn/answer receipt",
-    );
+    expect(CODE_GENERATION).not.toContain("decision/human-turn/answer receipt");
   });
 
   test("cross-file references point to the conditional Construction module", () => {

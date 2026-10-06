@@ -65,6 +65,28 @@ const HARNESS_NAME = (() => {
   }
   return HARNESS_LEAF.replace(/^\./, "");
 })();
+// Whether the .kiro tree is the KAS layout (Markdown agents, standalone hook
+// JSON) rather than the agent-v1 JSON layout. Same reading as the runtime's
+// kiroTreeLayout (core/tools/aidlc-runtime-paths.ts), which this template ships
+// without: harness.json's kiroLayout, else the row name trees carried before it,
+// else the conductor file. `kiro-ide` names only the KAS adapter.
+const KIRO_KAS_LAYOUT = (() => {
+  if (HARNESS_LEAF !== ".kiro") return false;
+  if (process.env.AIDLC_HARNESS_NAME?.trim() === "kiro-ide") return true;
+  try {
+    const parsed = JSON.parse(
+      readFileSync(join(HARNESS_DIR, "tools", "data", "harness.json"), "utf-8"),
+    ) as { kiroLayout?: unknown; name?: unknown; distribution?: unknown };
+    if (parsed.kiroLayout === "kas" || parsed.kiroLayout === "agent-v1") {
+      return parsed.kiroLayout === "kas";
+    }
+    const row = typeof parsed.name === "string" ? parsed.name : parsed.distribution;
+    if (row === "kiro-ide" || row === "kiro") return row === "kiro-ide";
+  } catch {
+    // A tree without readable metadata still has its conductor file.
+  }
+  return existsSync(join(HARNESS_DIR, "agents", "aidlc.md"));
+})();
 const IS_COPILOT = HARNESS_NAME === "copilot";
 const IS_OPENCODE = HARNESS_NAME === "opencode";
 const STAGES_DIR = join(HARNESS_DIR, "aidlc-common", "stages");
@@ -78,6 +100,8 @@ const STAGE_TABLE_END = "<!-- END: compiled stage graph -->";
 type ParseStageFrontmatter = (raw: string) => Record<string, unknown>;
 interface InstalledAidlcLib {
   hooksHealthDir?: (projectDir: string) => string;
+  writeHookStatusFile?: (healthDir: string, fileName: string, data: string) => boolean;
+  removeHookStatusFile?: (healthDir: string, fileName: string) => boolean;
   parseStageFrontmatter?: ParseStageFrontmatter;
   acquireAuditLock?: (
     projectDir: string,
@@ -252,15 +276,37 @@ function recordInstalledToolPayloadDrop(reason: string): void {
 // — a clean plugin's compose (or an early-exit guard) deleted another plugin's
 // live degraded drop, so doctor went green (round-6). Per-plugin files isolate
 // each plugin's signal; doctor globs `*.drops` and aggregates them all.
+// The file goes through the installed engine's hook status writer and
+// remover, which go through no link inside the record; an engine from before
+// them keeps the plain write and removal until it is upgraded.
+async function writeDropFile(healthDir: string, fileName: string, data: string): Promise<void> {
+  const lib = await installedAidlcLib();
+  if (typeof lib?.writeHookStatusFile === "function") {
+    lib.writeHookStatusFile(healthDir, fileName, data);
+    return;
+  }
+  mkdirSync(healthDir, { recursive: true });
+  writeFileSync(join(healthDir, fileName), data, { flag: "w" });
+}
+
+async function removeDropFile(healthDir: string, fileName: string): Promise<void> {
+  const lib = await installedAidlcLib();
+  if (typeof lib?.removeHookStatusFile === "function") {
+    lib.removeHookStatusFile(healthDir, fileName);
+    return;
+  }
+  const dropFile = join(healthDir, fileName);
+  if (existsSync(dropFile)) rmSync(dropFile, { force: true });
+}
+
 async function flushDrops(): Promise<void> {
   try {
     const healthDir = await resolveHealthDir();
-    const dropFile = join(healthDir, `plugin-compose-${PLUGIN_KEY}.drops`);
+    const dropName = `plugin-compose-${PLUGIN_KEY}.drops`;
     if (_drops.length === 0) {
-      if (existsSync(dropFile)) rmSync(dropFile, { force: true });
+      await removeDropFile(healthDir, dropName);
     } else {
-      mkdirSync(healthDir, { recursive: true });
-      writeFileSync(dropFile, _drops.map((l) => l + "\n").join(""), { flag: "w" });
+      await writeDropFile(healthDir, dropName, _drops.map((l) => l + "\n").join(""));
     }
   } catch { /* truly non-fatal */ }
   _drops.length = 0;
@@ -280,19 +326,11 @@ async function flushInstalledToolPayloadDrops(): Promise<void> {
   if (!installedToolPayloadAuditRan) return;
   try {
     const healthDir = await resolveHealthDir();
-    const dropFile = join(
-      healthDir,
-      `plugin-compose-installed-tool-payloads-${HARNESS_KEY}.drops`,
-    );
+    const dropName = `plugin-compose-installed-tool-payloads-${HARNESS_KEY}.drops`;
     if (_installedToolPayloadDrops.length === 0) {
-      if (existsSync(dropFile)) rmSync(dropFile, { force: true });
+      await removeDropFile(healthDir, dropName);
     } else {
-      mkdirSync(healthDir, { recursive: true });
-      writeFileSync(
-        dropFile,
-        _installedToolPayloadDrops.map((line) => line + "\n").join(""),
-        { flag: "w" },
-      );
+      await writeDropFile(healthDir, dropName, _installedToolPayloadDrops.map((line) => line + "\n").join(""));
     }
   } catch { /* truly non-fatal */ }
   _installedToolPayloadDrops.length = 0;
@@ -1265,7 +1303,7 @@ async function kiroPluginAgentPrechecks(): Promise<KiroPluginAgentPrechecks | nu
   ) {
     return null;
   }
-  const isKiroIde = HARNESS_NAME === "kiro-ide";
+  const isKiroIde = KIRO_KAS_LAYOUT;
   const isKiroCli = HARNESS_LEAF === ".kiro" && !isKiroIde;
   const surfaceExt = isKiroIde
     ? ".md"

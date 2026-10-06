@@ -96,10 +96,10 @@ with a fresh timestamp.
 |---|-------|
 | 1 | At the approval gate, call `aidlc engine orchestrate report --stage <slug> --result awaiting-approval`. When `ceremony.sensors` is `on`, gate-bound sensors run once per existing deliverable before the transaction. A blocking binding requires a verified pass. To override, log and present the separate `Fix findings` / `Override blocking sensors` decision, wait for the exact human-backed answer, then retry with `--override-blocking-sensors --user-input "Override blocking sensors"`; a bare flag and autonomous mode are refused. The engine then flips state from `[-]` to `[?]` AwaitingApproval and emits `STAGE_AWAITING_APPROVAL` atomically, so status shows the held gate while the prompt is open. (`STAGE_STARTED` / the `[-]` transition was emitted when the stage became active.) |
 | 2 | For non-gate questions, log options BEFORE calling `AskUserQuestion` via `aidlc engine log decision` (not by hand-writing to the `audit/` shards), then log the exact response via `aidlc engine log answer`. |
-| 3 | After an approval-gate response, call `aidlc engine orchestrate report --stage <slug> --result approved --user-input "<exact choice>"` for approval or `aidlc engine orchestrate report --stage <slug> --result rejected --user-input "Request Changes" --reason "<feedback>"` for request-changes. Never call the log tool's `decision` or `answer` verb for the gate. After revision work, report `--result revised` before re-presenting it. |
-| 4 | Never summarize user input -- pass exact option labels to the owning log or report tool; for automated stages use `N/A -- [reason]` |
+| 3 | After an approval-gate response, call `aidlc engine orchestrate report --stage <slug> --result approved --user-input "Approve"` for approval or `aidlc engine orchestrate report --stage <slug> --result rejected --user-input "Request Changes"` for request-changes, passing the choice they made by its label (the engine keeps their own words as the feedback; add `--reason '<what they asked to change>'` only to say more). Never call the log tool's `decision` or `answer` verb for the gate. After revision work, report `--result revised` before re-presenting it. |
+| 4 | Record the choice the person made, read from their reply; the human-turn hook keeps their exact words with it. Never choose for them or paraphrase their words in an answer or note; for automated stages use `N/A -- [reason]` |
 | 5 | One audit entry per interaction -- the log/state tools enforce single-event emission; never merge multiple events into one call |
-| 6 | At stage end, call `aidlc-orchestrate.ts report --stage <slug> --result approved --user-input "<exact choice>"` (gated stages) or `report --stage <slug> --result completed` (Initialization). The engine flips `[?]`/`[-]` to `[x]`, emits `GATE_APPROVED` when gated, and emits `STAGE_COMPLETED` atomically through the state tool |
+| 6 | At stage end, call `aidlc-orchestrate.ts report --stage <slug> --result approved --user-input "Approve"` (gated stages) or `report --stage <slug> --result completed` (Initialization). The engine flips `[?]`/`[-]` to `[x]`, emits `GATE_APPROVED` when gated, and emits `STAGE_COMPLETED` atomically through the state tool |
 | 7 | Mark previous stage task `completed` and current stage task `in_progress` with `activeForm` BEFORE work begins (the `sync-workflow-state` hook handles state syncing) |
 | 8 | Use ONLY event types from `knowledge/aidlc-shared/audit-format.md` -- the state and log tools enforce this; never write directly to the `audit/` shards |
 | 9 | Do NOT hand-write lifecycle events or invoke lifecycle verbs on `aidlc-state.ts`. Report outcomes through `aidlc-orchestrate.ts`; the engine's internal state call emits the atomic audit rows |
@@ -135,21 +135,29 @@ AskUserQuestion({
 })
 ```
 
-`[next stage]` is rendered verbatim from the run-stage directive's `next_stage`
-field (the display name of the next in-scope stage, computed by the engine at
-emit time), or `Complete workflow` when `next_stage` is null. The conductor
-never guesses the next stage.
+`[next stage]` is rendered verbatim from the `next_stage` field (the display
+name of the next in-scope stage) on the reply that opened the gate (`report
+--result awaiting-approval` or `revised`, computed when the gate opens, so a
+plan change made during the stage is in it), else the run-stage directive's
+(computed at emit time), or `Complete workflow` when `next_stage` is null. The
+conductor never guesses the next stage.
 
-Pass the selected label unchanged in `--user-input`, including any trailing
-`(Recommended)` added by the harness's question renderer. The engine removes
-one such suffix (case-insensitive) before matching **Approve**, **Request Changes**,
-or **Accept as-is** when that choice is available. Approval audit records and
-refusal messages retain the received label.
+The conductor reads the person's reply and records the choice they made by its
+label: `--user-input "Approve"`, `"Request Changes"`, or `"Accept as-is"` when that
+choice is available. The engine never reads meaning into the reply
+(`core/tools/aidlc-reply-reader.ts` keeps only the exact parts: host cancellation
+text, the `(Recommended)` decoration, and the offered labels). It requires a
+human turn since the gate was shown and records the person's exact words, kept by
+the human-turn hook for that chat, on `GATE_APPROVED` as `Person Reply` and on
+`GATE_REJECTED` as the feedback. An approval with an instruction ("looks fine but
+rename the handler") is recorded as **Approve**, and the conductor then does what
+they asked. An approval that also asks to stop for now is reported with `--park`,
+and the engine parks the workflow, so `report` answers `parked`.
 
-If a reply matches none of the choices currently shown, the conductor quotes
-the received reply briefly, says that it did not match an offered choice, and
-re-presents every valid choice in the same turn. It does not report a lifecycle
-transition, record a decision, or consume the gate turn for that reply.
+When a report names no choice, the refusal says what to do: with the person's
+reply on record, report the choice they made from it, without asking again; with
+none, show the gate and wait for one. It does not report a lifecycle transition,
+record a decision, or consume the gate turn for that reply.
 
 **No Emergent Behavior Rule:** Construction and Operation stages (phases 3-4)
 must always use this 2-option format. They must never introduce additional
@@ -170,9 +178,9 @@ Modify/Keep decisions before the gate and MUST produce a fresh
 all earlier reviews and the completion precondition refuses stale coverage.
 Under unit-major the replay stays on this serial walk and never swarms.
 
-The jump opens a new stage attempt, so Plan Approval IS re-run for the repaired
-plan: blank `[Answer]:`, regenerate the fingerprint, and record a fresh
-decision/human-turn/answer receipt before any fix generation. The Loop-Back Log
+The jump opens a new stage attempt, so Plan Approval IS asked again for the
+repaired plan: once it is written, `next` asks the person before any fix
+generation. The Loop-Back Log
 records the plan delta. The gated "Retry with fix" answer authorizes the jump, not
 the plan content.
 
@@ -202,7 +210,7 @@ The question text changes to include the cycle count:
 
 **When "Accept as-is" is selected:** report it as the gate's approval
 (`report --stage <slug> --result approved --user-input "Accept as-is"`); the
-engine records the exact choice and completes the stage. This overrides the
+engine records the choice and completes the stage. This overrides the
 No Emergent Behavior Rule for Construction stages only when the threshold is
 reached.
 
@@ -275,7 +283,7 @@ Every stage ends with this 5-part structure, in order. All parts mandatory.
 
 The gate's audit trail is report-owned:
 1. Before presenting the gate, `report --result awaiting-approval` records the held gate (`STAGE_AWAITING_APPROVAL`)
-2. After the response, `report --result approved|rejected --user-input "<exact choice>"` records the user's choice (`GATE_APPROVED`/`GATE_REJECTED`); no separate log entry is added for the gate prompt or choice
+2. After the response, `report --result approved|rejected --user-input '<the choice they made>'` (`"Approve"` or `"Request Changes"`) records that choice (`GATE_APPROVED`/`GATE_REJECTED`); no separate log entry is added for the gate prompt or choice
 
 ### Part 1: Announcement
 
@@ -377,9 +385,17 @@ modes mid-stage.
   options per question)
 - Questions with 5+ options: split across multiple calls (4 options each).
   User must see every option. File retains full option set.
-- Built-in "Other" triggers discussion. Tell user before first batch:
-  "Select 'Other' on any question to discuss it before answering."
+- Built-in "Other" takes an answer in the user's own words as their answer,
+  or opens a discussion when they ask about the question. Tell user before
+  first batch, naming that row as their tool labels it (Claude Code: "Type
+  something"; Codex's question tool: "None of the above"; a numbered row:
+  "Other"): "Pick "[that row]" on any question to answer in your own words or
+  talk it through."
 - After each batch, IMMEDIATELY write answers to the questions file
+- A resumed stage whose questions file still has a blank answer carries
+  `kept_replies` on its `run-stage`: what the person replied that no answer
+  holds yet, in order, after the stage's answers already on record. Record
+  those answers first; never ask them again
 - Log each batch with fresh ISO timestamp
 - Only when `directive.ceremony.summary_confirmation === "on"`, present a consolidated answer summary, then print
   `aidlc-review-brief.ts summary --stage <slug> --questions-file <path>` before
@@ -390,13 +406,14 @@ modes mid-stage.
   **Consolidated Summary Confirmation** entry in the stage questions file with
   both options and a blank `[Answer]:`. Record the prompt with
   `aidlc-log.ts decision --checkpoint summary-confirmation --questions-file
-  <path>`, stop for the human, write the exact choice, then record it with the
-  matching `aidlc-log.ts answer` command. The receipt binds the human turn to
-  the exact questions-file digest. On **Request changes**, ask **"What should
-  change?"** and stop again before editing any answer; after feedback and
-  revision, reset the confirmation to blank before re-prompting. Any other
-  reply is acknowledged as not matching an offered choice, both valid choices
-  are re-presented in the same turn, and neither the tag nor receipt is written.
+  <path>`, stop for the human, read their reply, write the choice they made, then
+  record it with the matching `aidlc-log.ts answer` command (`--details "Looks
+  correct"`, or `--details 'Request changes: <what they asked to change>'`). The
+  receipt binds the human turn to the exact questions-file digest. On **Request
+  changes**, ask **"What should change?"** only when they did not say, and stop
+  again before editing any answer. After feedback and revision, reset the confirmation to
+  blank before re-prompting. A reply that picks neither choice gets the one
+  follow-up the refusal names, and neither the tag nor receipt is written.
 
 #### Edit File (Self-Guided Mode)
 
@@ -463,11 +480,20 @@ ask targeted follow-up. Do NOT proceed until resolved.
 **Overconfidence prevention:**
 - Default to asking, not assuming. Never proceed with ambiguity.
 - Red flags requiring follow-up: single-word answers to open-ended questions;
-  "whatever you think" / "up to you"; contradictory signals; question-dodging;
-  relaxing, lowering, or disabling a previously defined quality target (for
-  example, a test coverage threshold) instead of meeting it
-- When user defers to AI: "I want to make sure the design reflects YOUR
-  priorities. Could you tell me [specific aspect]?"
+  contradictory signals; question-dodging; relaxing, lowering, or disabling a
+  previously defined quality target (for example, a test coverage threshold)
+  instead of meeting it
+- When the user leaves a choice to the agent ("up to you", "whatever you think
+  is best", or "choose the recommended answers" for this stage), the agent
+  decides: it picks the option that best fits what they have said and records
+  it with `log answer --on-instruction '<their words>'` (single-quoted, like
+  every piece of the person's text on a command line), so the record shows
+  the agent chose it as they asked. It then says one line: "You left <the
+  question> to me, so I chose <the choice>. Say if you want something else."
+  (for several questions, "You left <Stage>'s <N> questions to me, so I chose
+  the recommended answers: ... Say if you want any of them changed."), and
+  once per piece of work: "Approvals are still yours: I'll stop at each stage
+  for you to approve." A checkpoint or an approval is never left to the agent.
 
 ### Plan and Question File Location
 
@@ -499,7 +525,7 @@ task status in the sidebar, and the tool-stamped audit trail.
 not. Report gate and terminal outcomes through `aidlc-orchestrate.ts`.
 
 **`[S]` behavior:**
-- Set by `report --stage <current> --result skipped --reason "<reason>"`, scope composition, or Stage/Phase Jump
+- Set by `report --stage <current> --result skipped --reason "<reason>"`, scope composition, or Stage/Phase Jump; under unit-major iteration a skip names the walk's `directive.stage` and `--unit <directive.unit>`, covers that unit only, and `[S]` follows once no unit owes the stage
 - Excluded from statusline progress counts (not counted in total or done)
 - Preserved while the engine routes onward; never paired with `STAGE_COMPLETED`
 - On resume, treated as completed for task tracking (task created and immediately marked completed)
@@ -512,7 +538,10 @@ Before beginning any stage, transition sidebar tasks:
 1. Previous stage task `in_progress` -> mark `completed`
 2. Current stage task -> mark `in_progress` with `activeForm: "Running [Stage Name]"`
 
-Rules: task must be `in_progress` for spinner to display. Update BEFORE
+Only when `TaskCreate`/`TaskUpdate`, or the plan or todo tool the harness's
+skill maps them to, is in the agent's tool list; otherwise the agent skips
+task transitions silently. Rules: task must be `in_progress`
+for spinner to display. Update BEFORE
 reading stage file. Applies to all 33 stages. If task IDs lost (compaction),
 use `TaskList` to find by subject. For skipped stages:
 `TaskUpdate({ taskId: [ID], status: "completed", description: "[original] -- Skipped: [reason]" })`
@@ -528,10 +557,11 @@ Update immediately after completing each step.
 
 ### Timestamps
 
-The audit trail is stamped by the tools and hooks that append to it; no
-`date -u` call is involved. When an artifact template asks for a UTC
-timestamp (a review file's `Date` field), generate it via
-`date -u +"%Y-%m-%dT%H:%M:%SZ"`. Never date-only.
+The audit trail is stamped by the tools and hooks that append to it. When an
+artifact template asks for a UTC timestamp (a review file's `Date` field, a
+diary entry's prefix), the agent pastes what `aidlc engine now` prints, for
+example `2026-05-20T10:14:32Z`: the engine's own clock, in UTC on every shell,
+and pre-approved wherever engine commands are. Never date-only.
 
 ### Audit Trail Rules
 
@@ -554,7 +584,7 @@ boundary, and reads stay open by any means.
   `Change Request: <brief>` and the details as `**Field**: value` lines in the
   body. The tool stamps the timestamp and refuses a body naming a taxonomy
   event.
-- `ERROR_LOGGED` and `RECOVERY_COMPLETED` are declared in the taxonomy but reserved for the recovery workflow (not yet implemented). Do not hand-write them via `aidlc-audit.ts append`; the recovery flow will ship its own emitter. Canonical state transitions go through the state/log/bolt tools (see "Silent bookkeeping writes" in section 4).
+- `ERROR_LOGGED` is owned by `aidlc-lib.ts emitError` for non-zero tool exits and by `aidlc-continue-workflow.ts` for the first delivery of a distinct engine error directive. `RECOVERY_COMPLETED` is owned by `aidlc-state.ts acknowledge-compaction`. Do not hand-write either event via `aidlc-audit.ts append`; use the owning tool or hook. Canonical state transitions go through the state/log/bolt tools (see "Silent bookkeeping writes" in section 4).
 - The user's words passed through `--user-input`, `--details`, or a note body
   must be COMPLETE and UNMODIFIED.
 - Earlier questions: `aidlc engine log answers --stage <slug>` (add
@@ -608,9 +638,10 @@ dynamic per workflow position.
 1. Apply the ordered `load-steering` sequence before `run-stage`. It delivers
    every substantive active-space rule as content and re-runs on every stage.
 2. Read every `inline_context_paths` entry: lead + supports for `inline`, and
-   the lead only for `mob` because mob supports are dispatched. Persona and
-   knowledge remain path-loaded. Show any `context_warnings` verbatim and
-   continue with the readable roster. Agent names alone are not loaded context.
+   the lead's persona and knowledge for `mob` because mob supports are
+   dispatched. Persona and knowledge remain path-loaded. Show any
+   `context_warnings` verbatim and continue with the readable roster. Agent
+   names alone are not loaded context.
 3. Apply every loaded perspective during execution. Do not omit support-agent
    perspectives on `inline` or the lead's on `mob`.
 
@@ -659,7 +690,9 @@ mutually blind quality, developer, and devsecops contributions, human interview,
 then lead integration. Its gate offers **Approve** / **Request Changes**; after
 Approve, `practices-promote` must commit both the affirmed timestamp and a
 `PRACTICES_AFFIRMED` audit receipt from the current stage attempt before the
-conductor reports the stage approved.
+conductor reports the stage approved. With collaborators off (the scope setting,
+shipped on only for `enterprise`), the directive lists no support agents and each
+of these stages runs its lead alone (`stage-protocol-ensemble.md`, section 5).
 
 ### The 11 Domain Agents
 
@@ -694,7 +727,7 @@ and reconcile the other sources against the event timeline on disagreement.
 
 When `aidlc-state.md` exists at session start, the conductor reads it to
 determine completed stages (`[x]`), current/next stage, and artifact
-existence, then offers to resume from the last incomplete stage.
+existence, then carries on from the last incomplete stage with no resume menu.
 
 ### Resume Context Loading by Phase
 
@@ -1098,7 +1131,8 @@ change. See
    `## Turn Budget` section plans for the worst-case cutoff on every harness).
 3. **Verdict and decision brief.** The conductor records the verdict with the
    same `aidlc-log.ts review` command plus `--verdict`. The logger reads the
-   review from the request's `reviewFile` (or `--review-file <path>`),
+   review from the request's `reviewFile` (a `--review-file <path>` must
+   name that same file),
    validates it, rechecks current summary confirmation and output admission,
    proves the review manifest and request-time source identity are unchanged,
    and writes the review record
@@ -1187,7 +1221,22 @@ exception is a terminal receipt invalidated by a later reviewed-output write: th
 first request after stale evidence is exactly one marked recovery request at
 the next ordinal, even when normal adversarial budget remained. Either
 recovery verdict is terminal; a second invalidation requires human reset
-instead of another request. Autonomous Units halt before `finalize` and
+instead of another request. With Construction checkpoints on, a Unit whose
+code or documents changed after their review gets that recovery again each
+time the person approves the Unit, and under `relaxed` and `off`, where such a
+change is accepted, a review of that Unit is the same one recovery. A review
+the person asked for (they spoke since the last decision and since that review
+was last requested) is never refused, under every Guard Policy: the conductor
+records it the first time they ask, and the budget and the recovery bound only
+the passes the conductor starts on its own.
+When Construction runs one Unit at a time and a Unit's finished step loses its
+work, the walk hands the step back and the Unit starts it again (`unit start`
+after its `UNIT_COMPLETED`, a wave completion included). That run of the step
+gets the stage's budget and its one stale-review recovery again, so a redo the
+engine asked for finishes under any review setting. Its passes keep their
+numbers (the redo's first request is the next ordinal), and team-owned Units
+keep their Bolt floors.
+Autonomous Units halt before `finalize` and
 restart their Bolt attempt only after a human decision. The reviewer
 never blocks — the human always has final say at the gate — and does not fire
 for stages without a `reviewer` field. See the `reviewer` /

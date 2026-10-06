@@ -92,7 +92,7 @@ function statePath(intent: string): string {
 
 describe("t312 orchestrate session binding", () => {
   test("PID ancestry selects its binding before the shared cursor", () => {
-    writeSessionBinding(proj, "session-a", "default", firstDir);
+    writeSessionBinding(proj, "session-a", "default", firstDir, "switch");
     writeSessionPidEntry(proj, process.pid, "session-a");
 
     const result = next();
@@ -114,7 +114,7 @@ describe("t312 orchestrate session binding", () => {
   });
 
   test("headless environment pin reaches the state child end to end", () => {
-    writeSessionBinding(proj, "session-b", "default", secondDir);
+    writeSessionBinding(proj, "session-b", "default", secondDir, "switch");
     rmSync(sessionPidMapDir(proj), { recursive: true, force: true });
     const firstBefore = readFileSync(statePath(firstDir), "utf-8");
 
@@ -136,7 +136,7 @@ describe("t312 orchestrate session binding", () => {
   });
 
   test("absent payload keeps an inherited override for the spawned engine", () => {
-    writeSessionBinding(proj, "session-a", "default", firstDir);
+    writeSessionBinding(proj, "session-a", "default", firstDir, "switch");
     rmSync(sessionPidMapDir(proj), { recursive: true, force: true });
 
     const result = next(
@@ -160,8 +160,8 @@ describe("t312 orchestrate session binding", () => {
       "feature",
     );
     setActiveIntentCursor(proj, secondDir, "default");
-    writeSessionBinding(proj, "session-a", "default", firstDir);
-    writeSessionBinding(proj, "session-b", "default", ancestry.dirName);
+    writeSessionBinding(proj, "session-a", "default", firstDir, "switch");
+    writeSessionBinding(proj, "session-b", "default", ancestry.dirName, "switch");
     writeSessionPidEntry(proj, process.pid, "session-b");
     writeSessionPidEntry(proj, process.ppid, "session-b");
 
@@ -175,8 +175,8 @@ describe("t312 orchestrate session binding", () => {
   });
 
   test("divergent environment and ancestry refuse before any workflow write", () => {
-    writeSessionBinding(proj, "session-a", "default", firstDir);
-    writeSessionBinding(proj, "session-b", "default", secondDir);
+    writeSessionBinding(proj, "session-a", "default", firstDir, "switch");
+    writeSessionBinding(proj, "session-b", "default", secondDir, "switch");
     writeSessionPidEntry(proj, process.pid, "session-a");
     const firstBefore = readFileSync(statePath(firstDir), "utf-8");
     const secondBefore = readFileSync(statePath(secondDir), "utf-8");
@@ -210,7 +210,7 @@ describe("t312 orchestrate session binding", () => {
 
   for (const invalid of [" session-a", "session-a ", "session/a"]) {
     test(`invalid environment value ${JSON.stringify(invalid)} is ignored`, () => {
-      writeSessionBinding(proj, "session-a", "default", firstDir);
+      writeSessionBinding(proj, "session-a", "default", firstDir, "switch");
       rmSync(sessionPidMapDir(proj), { recursive: true, force: true });
 
       const result = next({

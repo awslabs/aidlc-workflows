@@ -1,7 +1,8 @@
 // Shared fixture for the t326 pinned team Unit merge suites
-// (tests/integration/t326-team-unit-merge*.test.ts). The cases live in two
-// files so the integration tier can run them in parallel; one file ran for
-// about 20 minutes on a Windows runner.
+// (tests/integration/t326-team-unit-merge*.test.ts). The cases live in four
+// files so the integration tier can run them in parallel: one file ran for
+// about 20 minutes on a Windows runner, and with two the longer one still set
+// the Windows integration leg's length.
 
 import { expect } from "bun:test";
 import { spawnSync } from "node:child_process";
@@ -34,6 +35,31 @@ import {
   seededRecordDir,
   seededStateFile,
 } from "./fixtures.ts";
+
+// Git 2.47 and later start `git maintenance run --auto` in the background
+// after a command writes objects, and from 2.54 that run repacks, deleting
+// packed loose objects and the objects/xx directories they leave empty. These
+// suites run git back to back in small repositories, so the next command's
+// object write could lose its fresh objects/xx directory and fail with "unable
+// to create temporary file: No such file or directory". Every git process the
+// suites start, the shipped tools' included, inherits this switch-off.
+export const AUTOMATIC_GIT_MAINTENANCE_OFF: Readonly<Record<string, string>> = {
+  "maintenance.auto": "false",
+  "gc.auto": "0",
+  "receive.autogc": "false",
+};
+
+export function withoutAutomaticGitMaintenance(env: NodeJS.ProcessEnv): void {
+  let count = Number.parseInt(env.GIT_CONFIG_COUNT ?? "0", 10);
+  if (!Number.isInteger(count) || count < 0) count = 0;
+  for (const [key, value] of Object.entries(AUTOMATIC_GIT_MAINTENANCE_OFF)) {
+    env[`GIT_CONFIG_KEY_${count}`] = key;
+    env[`GIT_CONFIG_VALUE_${count}`] = value;
+    count++;
+  }
+  env.GIT_CONFIG_COUNT = String(count);
+}
+withoutAutomaticGitMaintenance(process.env);
 
 export const UNIT = join(AIDLC_SRC, "tools", "aidlc-unit.ts");
 export const ORCH = join(AIDLC_SRC, "tools", "aidlc-orchestrate.ts");
@@ -229,6 +255,9 @@ export function makeSeed(
   const remote = mkdtempSync(join(tmpdir(), "aidlc-inc3-remote-"));
   tempDirs.push(remote);
   git(remote, ["init", "--bare"]);
+  // A push runs receive-pack in the remote without the environment's config,
+  // so the remote carries the same switch-off in its own config.
+  for (const [key, value] of Object.entries(AUTOMATIC_GIT_MAINTENANCE_OFF)) git(remote, ["config", key, value]);
   git(seed, ["remote", "add", "origin", remote]);
   git(seed, ["push", "-u", "origin", "main"]);
   git(remote, ["symbolic-ref", "HEAD", "refs/heads/main"]);

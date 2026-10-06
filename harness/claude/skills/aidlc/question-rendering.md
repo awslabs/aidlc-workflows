@@ -1,7 +1,7 @@
 # Question Rendering — Claude Code harness annex
 
 This file defines how THIS harness renders the structured questions that
-`aidlc-common/protocols/stage-protocol.md` § "Structured questions" requires.
+`{{HARNESS_DIR}}/aidlc-common/protocols/stage-protocol.md` section "Structured questions" requires.
 The protocol and stage files are harness-neutral: they say *present a
 structured question* and carry a fenced ` ```question ` spec block. This annex
 is the one place that binds that contract to a concrete mechanism.
@@ -126,9 +126,10 @@ Then persist `[Answer]: Looks correct` or `[Answer]: Request changes` exactly
 and run the matching checkpoint-specific `aidlc-log.ts answer` command. Strip
 any source letter, punctuation, and option description before writing:
 `[Answer]: A. Looks correct`, `[Answer]: 1. Looks correct`, `[Answer]: A`, and
-a self-selected answer are invalid. On Request changes, ask **"What should change?"**
-and END THE TURN again; do not update any answer until that feedback
-arrives. Then record the feedback, update the affected answers, reset this tag
+a self-selected answer are invalid. On Request changes, when their reply
+already says what should change, those words are the feedback; otherwise ask
+**"What should change?"** and END THE TURN again, and do not update any answer
+until that feedback arrives. Then record the feedback, update the affected answers, reset this tag
 to blank, and present the consolidated summary again. Do not generate the
 artifact until the file contains the human's explicit `[Answer]: Looks correct`
 and the receipt command succeeds. Never merge this checkpoint with the later
@@ -137,8 +138,10 @@ reviewer, learnings, or approval steps.
 ## Harness-specific behaviors
 
 - **Approval gate `[next stage]`**: on an approval question, render the
-  `Continue to [next stage]` placeholder from the run-stage directive's
-  `next_stage` field verbatim (e.g. `Continue to NFR Requirements`); render
+  `Continue to [next stage]` placeholder from the `next_stage` field verbatim
+  (e.g. `Continue to NFR Requirements`): the one on the reply that opened the
+  gate (`report --result awaiting-approval` or `revised`), which includes any
+  plan change made during the stage, else the run-stage directive's. Render
   `Complete workflow` when `next_stage` is null. Never guess the next stage.
 - **Batching limits**: max 4 questions per `AskUserQuestion` call, max 4
   options per question, and **at least 2 options per question**. For 5+
@@ -147,11 +150,13 @@ reviewer, learnings, or approval steps.
   one-option call: the tool rejects it before the user can answer.
 - **"Other" escape**: `AskUserQuestion` has a built-in "Other" option, always
   available — do NOT add an explicit Other option to the spec's options list
-  for interactive batches. (Questions *files* still end every question with
+  for interactive batches. Claude Code labels that row "Type something", so
+  that is its name whenever you mention it to the person: "Pick "Type
+  something" on any question to answer in your own words or talk it through." (Questions *files* still end every question with
   `X. Other (please specify)` per protocol §3 — the file format is
   harness-neutral.)
 - **Answer capture**: the user's selection returns as the exact option label;
   record it verbatim (protocol: never summarize User Input).
 - **Long prompts**: the question body renders at full terminal width and wraps
   gracefully (multi-line wrap verified on macOS before each release) — see
-  `knowledge/aidlc-shared/worktree-info-schema.md` for the long-path fallback.
+  `{{HARNESS_DIR}}/knowledge/aidlc-shared/worktree-info-schema.md` for the long-path fallback.

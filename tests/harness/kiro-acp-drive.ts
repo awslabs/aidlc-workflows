@@ -43,6 +43,7 @@ import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync } from
 import { dirname, join } from "node:path";
 import { createHash } from "node:crypto";
 import { parseLiteralShellInvocation } from "../../core/tools/aidlc-lib.ts";
+import { PersonTurnLedger, unbackedFailure } from "./person-turns.ts";
 import { LIVE_LONG_OPERATION_TIMEOUT_MS, LIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "./test-budget.ts";
 
 // --- Debug trace (parity with sdk-drive.ts) ---------------------------------
@@ -552,6 +553,8 @@ export async function driveKiroAcp(opts: AcpDriveOptions): Promise<AcpDriveResul
 
   session.beginDiagnosticTurn();
   const trace = session.tracePath;
+  // This turn's prompt is the person's only turn in it.
+  const personTurns = new PersonTurnLedger(opts.projectDir);
   writeAcpTrace(trace, "start", {
     prompt: opts.prompt,
     projectDir: opts.projectDir,
@@ -659,6 +662,7 @@ export async function driveKiroAcp(opts: AcpDriveOptions): Promise<AcpDriveResul
     }
 
     let reply: { result?: unknown; error?: unknown };
+    personTurns.sent(opts.prompt);
     try {
       reply = await session.request(
         "session/prompt",
@@ -703,6 +707,11 @@ export async function driveKiroAcp(opts: AcpDriveOptions): Promise<AcpDriveResul
       })),
     });
     const statePath = stateFilePathOf(opts.projectDir);
+    const unbacked = personTurns.unbacked();
+    if (unbacked.length > 0) {
+      writeAcpTrace(trace, "unbacked_decision", { decisions: unbacked });
+      throw unbackedFailure("The Kiro ACP turn", unbacked);
+    }
     return {
       sessionId: session.sessionId,
       stopReason,

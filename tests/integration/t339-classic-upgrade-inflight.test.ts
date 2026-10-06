@@ -258,7 +258,7 @@ describe("t339 upgrading an in-flight classic intent", () => {
     expect(run(STATE, project, ["lookup", "next-stage", "build-and-test", "classic"]).trim()).toBe("deployment-pipeline");
     const status = run(UTILITY, project, ["status"]);
     expect(status).toMatch(/^\s*OPERATION\s+\S+\s+0\/7$/m);
-    expect(status).toContain("Next Stage:     deployment-pipeline\n");
+    expect(status).toContain("Next Stage:     Deployment Pipeline\n");
     expect(readFileSync(path, "utf-8")).toBe(content);
   });
 
@@ -270,17 +270,17 @@ describe("t339 upgrading an in-flight classic intent", () => {
       expect(getField(readFileSync(path, "utf-8"), field)).toBeNull();
     }
     const defaults = next(project);
-    expect(defaults.ceremony).toEqual({ sensors: "on", learnings: "on", summary_confirmation: "off" });
+    expect(defaults.ceremony).toEqual({ sensors: "on", learnings: "on", summary_confirmation: "off", plan_approval: "on", collaborators: "off" });
     expect(defaults.sensors_applicable).toEqual(["required-sections", "upstream-coverage"]);
     expect(defaults.protocol_modules).toContain("learnings");
 
     run(UTILITY, project, ["config-change", "--sensors", "on", "--learnings", "on", "--summary-confirmation", "on"]);
     for (const field of ["Sensors", "Learnings", "Summary Confirmation"]) {
-      expect(getField(readFileSync(path, "utf-8"), field)).toBe("on (set by you)");
+      expect(getField(readFileSync(path, "utf-8"), field)).toBe("on (set by a command)");
     }
     const restored = next(project);
     expect(restored.stage).toBe("deployment-pipeline");
-    expect(restored.ceremony).toEqual({ sensors: "on", learnings: "on", summary_confirmation: "on" });
+    expect(restored.ceremony).toEqual({ sensors: "on", learnings: "on", summary_confirmation: "on", plan_approval: "on", collaborators: "off" });
     expect(restored.sensors_applicable).toEqual(["required-sections", "upstream-coverage"]);
     expect(restored.protocol_modules).toContain("learnings");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);

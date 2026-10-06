@@ -3,7 +3,8 @@ import { cp, mkdir, rename, writeFile } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import type { IsolatedProcessRetirement } from "./e2e-process.ts";
 
-const CODEX_FILE = /^t-exec-codex-(?:status|memory-include|compose-front|compose-inflight|journey-workspace)\.serial\.test\.ts$/;
+/** The live Codex files whose Windows fixtures may be handed to the runner for cleanup. */
+export const CODEX_FILE = /^t-exec-codex-(?:status|memory-include|compose-front|compose-inflight|journey-workspace|journey-code-arrives)\.serial\.test\.ts$/;
 const samePath = (a: string, b: string): boolean => resolve(a).toLowerCase() === resolve(b).toLowerCase();
 
 function plainDirectory(path: string): (atPath?: string) => void {
@@ -16,6 +17,15 @@ function plainDirectory(path: string): (atPath?: string) => void {
     if (!now.isDirectory() || now.isSymbolicLink() || now.dev !== stat.dev || now.ino !== stat.ino ||
       !samePath(realpathSync(atPath), atPath)) throw new Error("Deferred Codex cleanup directory identity changed");
   };
+}
+
+/** Where the coordinator's live report sits for a file's artifact directory:
+ *  `<logDir>/e2e-results.json` for `<logDir>/e2e-artifacts/<file>`, and for
+ *  `<logDir>/e2e-artifacts/<file>/attempt-<n>` when isolated files may retry.
+ *  The worker and the coordinator both locate it here, so they agree. */
+export function coordinatorReportPath(artifactDir: string): string {
+  const fileDir = /^attempt-[1-9]\d*$/.test(basename(artifactDir)) ? dirname(artifactDir) : artifactDir;
+  return join(dirname(dirname(fileDir)), "e2e-results.json");
 }
 
 function readPlain(path: string): string {
@@ -64,7 +74,7 @@ export async function retainDeferredCodexFixtures(
   const status = JSON.parse(readPlain(config.status));
   if (status.token !== config.token || !["running", "exited", "error"].includes(status.phase)) throw invalid();
 
-  const reportPath = join(dirname(dirname(artifactDir)), "e2e-results.json");
+  const reportPath = coordinatorReportPath(artifactDir);
   const report = JSON.parse(readPlain(reportPath));
   const rows = Array.isArray(report.files) ? report.files.filter((row: Record<string, unknown>) =>
     row.worker === Number(env.AIDLC_TEST_WORKER_ID) &&

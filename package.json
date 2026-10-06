@@ -23,5 +23,8 @@
     "eslint": "10.11.0",
     "smol-toml": "1.7.0",
     "typescript": "^6.0.3"
+  },
+  "overrides": {
+    "proxy-addr": "2.0.8"
   }
 }

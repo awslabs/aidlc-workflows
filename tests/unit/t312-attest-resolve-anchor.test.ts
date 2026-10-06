@@ -112,7 +112,7 @@ function fixture(): { project: string; record: string } {
   mkdirSync(record, { recursive: true });
   writeFileSync(join(record, "aidlc-state.md"), "# State\n- **Scope**: feature\n", "utf-8");
   writeFileSync(join(project, "aidlc", "spaces", "default", "intents", "intents.json"), `${JSON.stringify([{ uuid: "80000000-0000-4000-8000-000000000001", slug: "fixture", dirName: "fixture-intent", status: "active", repos: [] }])}\n`);
-  writeFileSync(join(project, "aidlc", "spaces", "default", "intents", ".active-intent"), "fixture-intent\n");
+  writeFileSync(join(project, "aidlc", "spaces", "default", "intents", "active-intent"), "fixture-intent\n");
   git(project, ["init", "-q"]); git(project, ["config", "user.email", "t@test"]); git(project, ["config", "user.name", "t"]);
   writeFileSync(join(project, "app.ts"), "export const app = 1;\n");
   commitAll(project, "seed");
@@ -760,6 +760,47 @@ describe("t312 aidlc-attest resolve/anchor", () => {
     writeManifest(record, "alpha", [{ path: "app.ts" }]);
     const auditDir = join(record, "audit");
     mkdirSync(auditDir, { recursive: true });
+    // Each clone's shard opens with its own first row, as real shards do;
+    // files that start alike are copies of one file and read once.
+    const receipt = (session: string) => [
+      "# AI-DLC Audit Log",
+      "## Session Start",
+      "**Timestamp**: 2026-09-07T09:00:00Z",
+      "**Event**: SESSION_STARTED",
+      `**Session**: ${session}`,
+      "",
+      "---",
+      "",
+      "## Review Completed",
+      "**Timestamp**: 2026-09-07T10:00:00Z",
+      "**Event**: REVIEW_COMPLETED",
+      "**Stage**: code-generation",
+      "**Unit**: alpha",
+      `**Reviewer**: ${REVIEWER}`,
+      "**Verdict**: READY",
+      `**Unit Source Fingerprint**: sha256:${"a".repeat(64)}`,
+      "",
+      "---",
+      "",
+    ].join("\n");
+    writeFileSync(join(auditDir, "clone-a.md"), receipt("session-a"));
+    writeFileSync(join(auditDir, "clone-b.md"), receipt("session-b"));
+
+    writeFileSync(join(project, "app.ts"), "export const app = 2;\n");
+    const c1 = commitAll(project, "two clones' shards land the same receipt second");
+    const failing = attest(["resolve", c1, "--fail-on", "indeterminate"], project);
+    expect(failing.rc).toBe(3);
+    const report = JSON.parse(failing.stdout);
+    expect(pathStatus(report, "app.ts")?.status).toBe("indeterminate");
+    expect(pathStatus(report, "app.ts")?.reason).toContain("same timestamp in different audit shards");
+    expect(report.units[0].fullyLanded).toBeNull();
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("resolve reads a committed conflict copy of one shard once", () => {
+    const { project, record } = fixture();
+    writeManifest(record, "alpha", [{ path: "app.ts" }]);
+    const auditDir = join(record, "audit");
+    mkdirSync(auditDir, { recursive: true });
     const receipt = [
       "# AI-DLC Audit Log",
       "## Review Completed",
@@ -774,17 +815,15 @@ describe("t312 aidlc-attest resolve/anchor", () => {
       "---",
       "",
     ].join("\n");
+    // A sync tool's copy of the same file, committed by accident.
     writeFileSync(join(auditDir, "clone-a.md"), receipt);
-    writeFileSync(join(auditDir, "clone-b.md"), receipt);
+    writeFileSync(join(auditDir, "clone-a 2.md"), receipt);
 
     writeFileSync(join(project, "app.ts"), "export const app = 2;\n");
-    const c1 = commitAll(project, "two clones' shards land the same receipt second");
-    const failing = attest(["resolve", c1, "--fail-on", "indeterminate"], project);
-    expect(failing.rc).toBe(3);
-    const report = JSON.parse(failing.stdout);
-    expect(pathStatus(report, "app.ts")?.status).toBe("indeterminate");
-    expect(pathStatus(report, "app.ts")?.reason).toContain("same timestamp in different audit shards");
-    expect(report.units[0].fullyLanded).toBeNull();
+    const c1 = commitAll(project, "a conflict copy of one shard");
+    const report = JSON.parse(attest(["resolve", c1], project).stdout);
+    expect(pathStatus(report, "app.ts")?.status).not.toBe("indeterminate");
+    expect(pathStatus(report, "app.ts")?.reason ?? "").not.toContain("same timestamp in different audit shards");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("resolve fails closed when two records claim a path with the same-timestamp receipt", () => {

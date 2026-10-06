@@ -22,31 +22,31 @@
 //            in the same session and expects the gate on the next turn.
 //            Either way: gate before write, nothing on disk.
 //   beat 2:  codex exec resume --last "Approve" - same session (asserted via
-//            the JSON thread id), the conductor completes the write +
-//            creation arc: the intent record, aidlc-state.md, WORKFLOW_STARTED
-//            audited, and the created intent's scope resolving through the on-disk
-//            registry (`.codex/scopes/aidlc-<name>.md` + scope-grid entry) -
-//            for a CUSTOM grid that file is authored fresh on the sanctioned
-//            path this session.
+//            the JSON thread id), the conductor completes the creation arc:
+//            the intent record, aidlc-state.md, WORKFLOW_STARTED audited, and
+//            the created intent's scope resolving through the on-disk
+//            registry. A composed plan writes no scope file: a CUSTOM plan runs
+//            a stock scope with a `Plan: <name>` line (the name the gate showed), and
+//            `.codex/scopes/` keeps its stock files.
 //
-// The composed scope's NAME is the model's choice, so beat 2 pins the SHAPE of
-// the sanctioned write (a composed `.codex/scopes/aidlc-*.md` exists and the
-// state's Scope field names it) rather than a literal name. The sanctioned
-// write needs a sandbox grant: under workspace-write codex carves the project-
-// root `.codex/` out of the writable root (same read-only-by-design treatment
-// as `.git/`), so the composer's `.codex/scopes/` + scope-grid write is
-// EPERM-denied and a headless exec run cannot escalate it to an approval. The
-// config.toml below grants `<proj>/.codex` up front (see setupCodexProject),
-// which is what lets this test prove the REAL product arc instead of the
-// model's env-seam improvisation. Denied-path + mechanism pinned by
-// tmp/adaptive-workflows/spike-codex-resume/FINDINGS.md §5.
+// The task is the one the sibling compose-front journeys use (t192, t-tui,
+// t-acp-kiro): no stock grid fits it and it asks for a custom plan, so a stock
+// match is a live failure signal. A task a stock scope fits lets the composer
+// match it, which is correct and leaves no Plan line to assert.
+//
+// Under workspace-write codex carves the project-root `.codex/` out of the
+// writable root (same read-only-by-design treatment as `.git/`), which is why
+// the old composed-scope write needed a grant. Approve no longer writes there;
+// the grant below stays so a stray write would land and be caught by the
+// stock-only assertion instead of failing as EPERM. Denied-path + mechanism
+// pinned by tmp/adaptive-workflows/spike-codex-resume/FINDINGS.md §5.
 //
 // `--last` filters recorded sessions by cwd, so beat 2 MUST run with the same
 // cwd as beat 1 (both use the project dir).
 //
 // LIVE GATE: requires AIDLC_CODEX_EXEC_LIVE=1 + a codex >= 0.145.0 binary
-// (AIDLC_CODEX_BIN or PATH) + AWS creds for the Bedrock profile in
-// AIDLC_CODEX_AWS_PROFILE (default "codex"). Skips cleanly otherwise.
+// (AIDLC_CODEX_BIN or PATH). Bedrock uses the AWS default credential chain;
+// AIDLC_CODEX_AWS_PROFILE selects a named profile when needed.
 
 import { liveCaseTimeoutMs, LIVE_LONG_OPERATION_TIMEOUT_MS, NATIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs, NATIVE_FIXTURE_SETUP_TIMEOUT_MS } from "../harness/test-budget.ts";
 import { describe, expect, test } from "bun:test";
@@ -65,9 +65,9 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { getField } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
-import { codexBedrockEndpointConfig, codexHeadlessArgs, codexWindowsSandboxConfig } from "../harness/exec-drive.ts";
+import { codexBedrockConfig, codexHeadlessArgs, codexWindowsSandboxConfig } from "../harness/exec-drive.ts";
 import { REPO_ROOT } from "../harness/fixtures.ts";
-import { codexExecDiagnostic, codexExecTimeout, recordCodexExec, withCodexFixture } from "../harness/codex-test-lifecycle.ts";
+import { codexExecDiagnostic, codexExecTimeout, codexPersonTurn, recordCodexExec, withCodexFixture } from "../harness/codex-test-lifecycle.ts";
 import { gateText, turnEvidence, type CodexTurn } from "../harness/codex-turn-evidence.ts";
 
 function completedStartupProbe<T extends { error?: Error }>(result: T): T {
@@ -75,10 +75,8 @@ function completedStartupProbe<T extends { error?: Error }>(result: T): T {
   return result;
 }
 
-// The ten shipped stock scopes. A composed scope whose name is NOT one of
-// these is a CUSTOM grid: the composer authors it fresh on the sanctioned path,
-// which is exactly the write the sandbox grant enables (a stock name reuses a
-// file that already ships).
+// The shipped stock scopes. A composed plan runs on one of these, so after
+// Approve the registry must hold nothing else.
 const STOCK_SCOPES = new Set([
   "bugfix",
   "enterprise",
@@ -93,10 +91,11 @@ const STOCK_SCOPES = new Set([
   "express",
 ]);
 
+const TASK =
+  "harden the deployment pipeline and add observability for our existing service - no new features, compose a custom plan for exactly this";
+
 const CODEX_DIST = join(REPO_ROOT, "dist", "codex");
 const CODEX_BIN = process.env.AIDLC_CODEX_BIN ?? "codex";
-const AWS_PROFILE = process.env.AIDLC_CODEX_AWS_PROFILE ?? "codex";
-const AWS_REGION = process.env.AIDLC_CODEX_AWS_REGION ?? "us-east-2";
 
 const TIMEOUT_S = Number(process.env.AIDLC_TEST_TIMEOUT);
 // Up to three live turns back to back (the approve beat alone ran ~9 min in
@@ -158,10 +157,7 @@ function setupCodexProject(): { proj: string; home: string; root: string } {
       // makes it a shell-policy key instead of selecting the sandbox mode.
       `sandbox_mode = "workspace-write"`,
       ``,
-      ...codexBedrockEndpointConfig(),
-      `[model_providers.amazon-bedrock.aws]`,
-      `profile = ${JSON.stringify(AWS_PROFILE)}`,
-      `region = ${JSON.stringify(AWS_REGION)}`,
+      ...codexBedrockConfig(),
       ``,
       `[shell_environment_policy]`,
       `exclude = ["AWS_*", "AIDLC_BROKER_*", "ANTHROPIC_*", "KIRO_API_KEY", "CURSOR_API_KEY", "GITHUB_TOKEN", "GH_TOKEN", "ACTIONS_*"]`,
@@ -169,14 +165,13 @@ function setupCodexProject(): { proj: string; home: string; root: string } {
       ``,
       // Under workspace-write, codex carves the project-root `.codex/` out of
       // the writable workspace root (the same read-only-by-design treatment it
-      // gives `.git/`), so the composer's sanctioned scope-file write
-      // (`.codex/scopes/aidlc-<name>.md` + the scope-grid entry) is EPERM-denied.
+      // gives `.git/`), so a scope write there (`scope save`) is EPERM-denied.
       // An interactive session would escalate that denial to an approval; a
       // headless `codex exec` run cannot, so it must grant the path up front.
       // This is the codex-exec twin of the `.git` grant the shipped
-      // dist/codex/.codex/config.toml documents for headless runs. Granting it
-      // lets beat 2 prove the REAL product arc (scope persisted on the
-      // sanctioned path) rather than the model's env-seam improvisation.
+      // dist/codex/.codex/config.toml documents for headless runs. Approve
+      // writes nothing there, so with the grant a stray write would land and
+      // fail the stock-only assertion rather than hide behind EPERM.
       // Path pinned by tmp/adaptive-workflows/spike-codex-resume/FINDINGS.md §5.
       `[sandbox_workspace_write]`,
       `writable_roots = ${JSON.stringify([join(proj, ".codex")])}`,
@@ -204,6 +199,7 @@ function codexTurn(
 ): CodexTurn {
   const argv = opts.resume ? ["exec", "resume", "--last", "--json", prompt] : ["exec", "--json", prompt];
   const commandArgs = codexHeadlessArgs(...argv);
+  const turn = codexPersonTurn(proj, prompt);
   const r = spawnSync(CODEX_BIN, commandArgs, {
     cwd: proj,
     encoding: "utf-8",
@@ -212,7 +208,7 @@ function codexTurn(
     timeout: codexExecTimeout(TEST_TIMEOUT_MS),
   });
   const result = { rc: r.status ?? -1, stdout: r.stdout ?? "", stderr: r.stderr ?? "", signal: r.signal, error: r.error?.message };
-  recordCodexExec("compose-front", proj, [CODEX_BIN, ...commandArgs], result);
+  recordCodexExec("compose-front", proj, [CODEX_BIN, ...commandArgs], result, turn);
   return { ...result, ...(result.rc === 0 ? turnEvidence(result.stdout) : { agentMessages: [] }) };
 }
 
@@ -250,7 +246,7 @@ describe("t-exec-codex-compose-front - interactive compose over exec + exec resu
         const b1 = codexTurn(
           proj,
           home,
-          'Use the $aidlc skill to run: /aidlc compose "add a rate limiter middleware to an existing Express API"',
+          `Use the $aidlc skill to run: /aidlc compose "${TASK}"`,
         );
         expect(b1.rc, codexExecDiagnostic(b1)).toBe(0);
         const b1Session = b1.sessionId;
@@ -303,30 +299,19 @@ describe("t-exec-codex-compose-front - interactive compose over exec + exec resu
           .join("\n");
         expect(audit).toContain("**Event**: WORKFLOW_STARTED");
 
-        // The composed scope persisted on its SANCTIONED path, not only in the
-        // env-seam mapping. The state's Scope field names the scope the creation
-        // resolved against; that name must resolve through the on-disk registry
-        // - BOTH halves the composer writes: `.codex/scopes/aidlc-<name>.md`
-        // and the `scope-grid.json` entry (a `.md` without a grid entry resolves
-        // all-SKIP). For a CUSTOM grid (a name outside the stock set) those
-        // files exist only because the composer authored them this session on
-        // the granted `.codex/` path - the direct proof the sandbox grant made
-        // the sanctioned write succeed; had `.codex/` stayed EPERM-denied, creation
-        // could only have limped along on the env-seam mapping and left no
-        // sanctioned file for its name.
+        // The state's Scope field names the stock scope the creation resolved
+        // against, through the on-disk registry, and a CUSTOM plan carries its
+        // Plan line. No scope file was written: the registry holds stock only.
         const scope = getField(state, "Scope") ?? "";
-        expect(scope.length).toBeGreaterThan(0);
+        expect(STOCK_SCOPES.has(scope)).toBe(true);
         expect(scopeFiles(proj)).toContain(scope);
         const grid = JSON.parse(
           readFileSync(join(proj, ".codex", "tools", "data", "scope-grid.json"), "utf-8"),
         );
         expect(Object.keys(grid)).toContain(scope);
-        // A composed name outside the ten shipped scopes confirms the CUSTOM
-        // arc actually ran (not a stock match), so the two assertions above
-        // exercised the composer's fresh sanctioned write, not a shipped file.
-        if (!STOCK_SCOPES.has(scope)) {
-          expect(scopeFiles(proj).filter((s) => !STOCK_SCOPES.has(s))).toContain(scope);
-        }
+        expect(scopeFiles(proj).filter((s) => !STOCK_SCOPES.has(s))).toEqual([]);
+        // The plan is named as the gate showed it, never after the scope it runs on.
+        expect(state).toMatch(/^- \*\*Plan\*\*: (?:[a-z0-9][a-z0-9-]*|tailored plan)$/m);
       }, deadlineMs);
     },
     TEST_TIMEOUT_MS,

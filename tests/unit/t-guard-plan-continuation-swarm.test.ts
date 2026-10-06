@@ -244,9 +244,13 @@ function completeAndReject(pd: string): void {
 }
 
 function approveReopenedAttempt(pd: string): void {
-  const printed = tool(pd, "aidlc-testing-posture.ts", ["fingerprint", "--unit", UNIT, "--reapprove"]);
-  succeeded(printed);
   const questions = join(codeGenerationRecordDir(pd, UNIT), "code-generation-questions.md");
+  // The earlier attempt's approval stands in the file; blank it before the new fingerprint.
+  if (existsSync(questions)) {
+    writeFileSync(questions, readFileSync(questions, "utf-8").replace(/^\[Answer\]:.*$/gm, "[Answer]:"));
+  }
+  const printed = tool(pd, "aidlc-testing-posture.ts", ["fingerprint", "--unit", UNIT]);
+  succeeded(printed);
   writeFileSync(questions, [
     "## Plan Approval", ...printed.out.trim().split("\n"),
     "A. Approve Plan", "B. Request Changes", "[Answer]:", "",
@@ -329,7 +333,7 @@ function checkWorkerCommands(worker: string, unit: string, allowed: boolean): vo
   }
 }
 
-function checkWorkerWriteHook(worker: string, unit: string, allowed: boolean): void {
+function checkWorkerWriteHook(worker: string, unit: string, allowed: boolean, speaks = true): void {
   const source = join(worker, "src", `${unit}.ts`);
   const sourceBefore = readFileSync(source, "utf-8");
   const notices = () => readAuditShardEvents(worker).filter((row) => row.event === "GUARD_STOOD_ASIDE" &&
@@ -358,7 +362,9 @@ function checkWorkerWriteHook(worker: string, unit: string, allowed: boolean): v
   expect(notices()).toHaveLength(noticesBefore + (allowed ? 1 : 0));
   expect(blocks()).toHaveLength(blocksBefore + (allowed ? 0 : 1));
   if (allowed) {
-    expect(out).toContain("Continuing past the plan-approval check");
+    // Relaxed says it carried on in one line; off records the row and says nothing.
+    if (speaks) expect(out).toContain("Continuing past the plan-approval check");
+    else expect(out).not.toContain("Continuing past");
     expect(err).not.toContain('"ask_type":"guard-recovery"');
     const notice = notices().at(-1)!;
     expect(auditBlockField(notice.block, "Stage")).toBe(STAGE);
@@ -374,7 +380,10 @@ function checkWorkerWriteHook(worker: string, unit: string, allowed: boolean): v
 
 describe("swarm consumes lowered plan-approval allowance", () => {
   for (const fault of ["later-target", "source-during-publication"] as const) {
-    test.each(["relaxed", "off"] as const)(`a %s dispatch rolls back all new starts after ${fault} and revalidates its retry`, async (mode) => {
+    const outcome = fault === "later-target"
+      ? "rolls back all new starts after later-target and revalidates its retry"
+      : "goes ahead when a file is written while its starts are published";
+    test.each(["relaxed", "off"] as const)(`a %s dispatch ${outcome}`, async (mode) => {
       const pd = fixture(true);
       const originals = GROUP_UNITS.map((unit) => approvalSnapshot(pd, unit));
       const approvals = readAuditShardEvents(pd).filter((row) => row.event === "PLAN_APPROVAL_RECORDED");
@@ -434,6 +443,17 @@ describe("swarm consumes lowered plan-approval allowance", () => {
         } finally {
           clearTimeout(cleanupTimer);
         }
+      }
+      if (fault === "source-during-publication") {
+        // With the check lowered, a file written during the start is the same
+        // accepted change as one written before it.
+        expect(processUnderTest.exitCode, await stderr).toBe(0);
+        for (const original of originals) {
+          expect(readPlanApprovalReceipt(pd, original.key)?.status).toBe("generation");
+        }
+        expect(readAuditShardEvents(pd).filter((row) => row.event === "PLAN_APPROVAL_RECORDED")).toEqual(approvals);
+        expect(readFileSync(statePath, "utf-8")).toBe(state);
+        return;
       }
       expect(processUnderTest.exitCode, await stderr).toBe(2);
       expect(await stdout).not.toContain("Continuing past");
@@ -498,7 +518,7 @@ describe("swarm consumes lowered plan-approval allowance", () => {
       stdout: "pipe", stderr: "pipe",
     });
     expect(guarded.exitCode, guarded.stderr.toString()).toBe(2);
-    expect(guarded.stderr.toString()).toContain("CODE_GENERATION_EXECUTION_INELIGIBLE");
+    expect(guarded.stderr.toString()).toContain(" The plan-approval setting is unchanged.");
     for (const original of originals) {
       expect(readPlanApprovalReceipt(pd, original.key)).toEqual(original.receipt);
     }
@@ -722,7 +742,7 @@ describe("delegated continuation follows the parent approval and live fence", ()
     writeFileSync(parentState, setGuardPolicyLine(readFileSync(parentState, "utf-8"), `${mode} (set by you)`));
     publish(pd);
     revise(worker, true);
-    checkWorkerWriteHook(worker, UNIT, true);
+    checkWorkerWriteHook(worker, UNIT, true, mode !== "off");
     checkWorkerCommands(worker, UNIT, true);
     // The parent choice is effective without re-forking or rewriting child state.
     expect(readFileSync(workerState, "utf-8")).toBe(strictWorkerState);

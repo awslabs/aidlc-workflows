@@ -1,449 +1,59 @@
 // covers: subcommand:aidlc-swarm:prepare, subcommand:aidlc-swarm:check, subcommand:aidlc-swarm:finalize,
 // subcommand:aidlc-bolt:start, subcommand:aidlc-worktree:merge,
-// subcommand:aidlc-bolt:abort, subcommand:aidlc-worktree:discard, audit:WORKTREE_DISCARDED,
+// subcommand:aidlc-worktree:discard, audit:WORKTREE_DISCARDED,
 // subcommand:aidlc-bolt:swarm-checkpoint, function:validateCodeGenerationForkApproval,
 // function:captureCodeGenerationDiscardApproval, function:codeGenerationDiscardedBase,
 // audit:SWARM_STARTED, audit:BOLT_STARTED
 
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
-import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdtempSync, readFileSync, readdirSync, realpathSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import {
-  boltName, legacyBoltName, legacyWorktreePath, worktreePath,
-  activeIntentUuid, artifactFilename, auditBlockField, boltSlugForUnit, createIntent,
-  findStageBySlug, latestMainWorkflowStageRunFloorForProject, readAuditShardEvents,
+  worktreePath, auditBlockField, boltSlugForUnit, createIntent, readAuditShardEvents,
   readPlanApprovalReceipt, recordDir, resolveWorkflowSelection, setActiveIntentCursor,
-  setField, stateDigest, workspaceSourceFingerprint, workspaceSourceListing,
-  writeActiveDirectiveMarker, writeBaselineSourceSnapshot,
+  setField, workspaceSourceListing, writeBaselineSourceSnapshot,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import {
-  bindCodeGenerationWorktreeApproval,
-  approvalFingerprint, beginCodeGeneration, codeGenerationRecordDir,
-  evaluateCodeGenerationApproval, renderTestingContract, resolveCodeGenerationAuthority,
-  resolveTestingPosture, readCodeGenerationWorktreeSourceBaseline,
+  beginCodeGeneration, codeGenerationRecordDir, evaluateCodeGenerationApproval,
+  resolveCodeGenerationAuthority, readCodeGenerationWorktreeSourceBaseline,
 } from "../../dist/claude/.claude/tools/aidlc-testing-posture.ts";
 import {
-  fixtureIntentId8,
-  AIDLC_SRC, cleanupWorktreeFixture, resetAidlcEnv, seedAidlcMemory,
-  runOrchestrateNext, seedBoltDagBatches, seededAuditDir, seededStateFile, setupWorktreeFixture,
+  fixtureIntentId8, AIDLC_SRC, runOrchestrateNext, seededStateFile,
 } from "../harness/fixtures.ts";
 import {
   NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS,
-  NATIVE_STARTUP_TIMEOUT_MS,
-  remainingOperationTimeoutMs,
 } from "../harness/test-budget.ts";
+import {
+  approveGroupedPlans,
+  approvePlan,
+  CHECK,
+  checkpointChoice,
+  checkReviewFinalizeAndLand,
+  cleanupCheckpointFixtures,
+  completeOld,
+  fixture,
+  git,
+  interruptAfterBoltStart,
+  nextDirective,
+  plan,
+  prepare,
+  publish,
+  reject,
+  reviewRevisedSource,
+  runCheckpointTool,
+  STAGE,
+  starts,
+  SUBMODULE_SOURCE,
+  submoduleRepos,
+  swarm,
+  writeUnitSource,
+  wt,
+} from "../harness/swarm-checkpoint.ts";
 
 setDefaultTimeout(NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
-resetAidlcEnv();
-const projects: string[] = [];
-afterEach(() => {
-  while (projects.length) cleanupWorktreeFixture(projects.pop()!);
-}, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
-const STAGE = "code-generation";
-const CHECK = "git diff --check";
-const ISOLATED_GIT_ENV: NodeJS.ProcessEnv = {
-  ...process.env,
-  GIT_CONFIG_GLOBAL: process.platform === "win32" ? "NUL" : "/dev/null",
-  GIT_CONFIG_NOSYSTEM: "1",
-  // Replacing the runner's global config must keep its Windows long-path
-  // support, or deep fixture worktrees cannot be removed.
-  ...(process.platform === "win32"
-    ? { GIT_CONFIG_COUNT: "1", GIT_CONFIG_KEY_0: "core.longpaths", GIT_CONFIG_VALUE_0: "true" }
-    : {}),
-};
-
-function tool(pd: string, file: string, args: string[], input?: unknown) {
-  const r = Bun.spawnSync([process.execPath, join(AIDLC_SRC, file), ...args], {
-    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
-    cwd: pd, env: { ...ISOLATED_GIT_ENV, AIDLC_PROJECT_DIR: pd, CLAUDE_PROJECT_DIR: pd },
-    stdout: "pipe", stderr: "pipe",
-    ...(input === undefined ? {} : { stdin: Buffer.from(JSON.stringify(input)) }),
-  });
-  return { code: r.exitCode, out: r.stdout.toString(), err: r.stderr.toString() };
-}
-
-function recordCommand(pd: string, command: string): void {
-  const identity = ["--stage", STAGE, "--checkpoint", "verification-command", "--command", command, "--session", "t344-command"];
-  const decision = tool(pd, "tools/aidlc-log.ts", ["decision", ...identity, "--decision", "Use this command?", "--options", "Approve,Request Changes"]);
-  expect(decision.code, `${decision.out}\n${decision.err}`).toBe(0);
-  humanChoice(pd, "Approve", "t344-command");
-  const answer = tool(pd, "tools/aidlc-log.ts", ["answer", ...identity, "--details", "Approve"]);
-  expect(answer.code, `${answer.out}\n${answer.err}`).toBe(0);
-  const applied = tool(pd, "tools/aidlc-state.ts", ["set-construction-verification-command", command]);
-  expect(applied.code, `${applied.out}\n${applied.err}`).toBe(0);
-}
-
-function swarm(pd: string, args: string[]) {
-  return tool(pd, "tools/aidlc-swarm.ts", [...args, "--project-dir", pd]);
-}
-
-function git(pd: string, args: string[]): string {
-  const r = Bun.spawnSync(["git", ...args], {
-    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
-    cwd: pd, env: ISOLATED_GIT_ENV, stdout: "pipe", stderr: "pipe",
-  });
-  expect(r.exitCode, r.stderr.toString()).toBe(0);
-  return r.stdout.toString().trim();
-}
-
-function wt(pd: string, unit = "alpha"): string {
-  return worktreePath(pd, fixtureIntentId8(pd), boltSlugForUnit(unit));
-}
-
-function publish(pd: string, units: string[]): void {
-  writeActiveDirectiveMarker(pd, {
-    kind: "invoke-swarm", stage: STAGE, units,
-    state_sha256: stateDigest(readFileSync(seededStateFile(pd), "utf-8")),
-  });
-}
-
-function plan(pd: string, unit: string, revision = "initial"): string {
-  const contract = resolveTestingPosture(pd);
-  const authority = resolveCodeGenerationAuthority(pd, { unit });
-  const dir = codeGenerationRecordDir(pd, unit);
-  mkdirSync(dir, { recursive: true });
-  for (const name of findStageBySlug(STAGE)!.produces ?? []) {
-    const path = join(dir, artifactFilename(name));
-    if (!existsSync(path)) writeFileSync(path, `# ${unit} ${name}\n`);
-  }
-  const body = `# ${revision} plan for ${unit}\n\n${renderTestingContract(contract)}\n## Steps\n- [ ] Implement ${revision}\n`;
-  const instructions = `# Tests for ${unit}\n\nValidate the ${revision} behavior.\n`;
-  writeFileSync(join(dir, "code-generation-plan.md"), body);
-  writeFileSync(join(dir, "unit-test-instructions.md"), instructions);
-  const questions = join(dir, "code-generation-questions.md");
-  writeFileSync(questions, [
-    "## Plan Approval",
-    `[Approval Fingerprint]: ${approvalFingerprint(body, instructions, contract.contract_sha256, authority)}`,
-    `[Planned Source]: ${workspaceSourceFingerprint(pd)}`,
-    "A. Approve Plan", "B. Request Changes", "[Answer]:", "",
-  ].join("\n"));
-  return questions;
-}
-
-function approvePlan(pd: string, unit: string, revision = "initial"): void {
-  const questions = plan(pd, unit, revision);
-  const session = `${unit}-${revision}`;
-  appendAuditEntry("SESSION_STARTED", { Session: session, Source: "t344 fixture" }, pd);
-  const identity = [
-    "--project-dir", pd, "--stage", STAGE, "--checkpoint", "plan-approval",
-    "--unit", unit, "--questions-file", questions, "--session", session,
-  ];
-  const decision = tool(pd, "tools/aidlc-log.ts", [
-    "decision", ...identity, "--decision", `Approve ${revision}?`, "--options", "Approve Plan,Request Changes",
-  ]);
-  expect(decision.code, decision.err).toBe(0);
-  const human = tool(pd, "tools/aidlc.ts", ["engine", "hook", "record-human-turn"], {
-    hook_event_name: "UserPromptSubmit", session_id: session, prompt: "Approve Plan",
-  });
-  expect(human.code, human.err).toBe(0);
-  writeFileSync(questions, readFileSync(questions, "utf-8").replace(/^\[Answer\]:.*$/m, "[Answer]: Approve Plan"));
-  const answer = tool(pd, "tools/aidlc-log.ts", ["answer", ...identity, "--details", "Approve Plan"]);
-  expect(answer.code, answer.err).toBe(0);
-}
-
-function approveGroupedPlans(pd: string, units: string[], revision: string): void {
-  const members = units.map((unit) => ({ unit, questionsFile: plan(pd, unit, revision) }));
-  const file = join(recordDir(pd)!, "group-plan.json");
-  writeFileSync(file, JSON.stringify({ batch: revision, units: members }));
-  const identity = ["--project-dir", pd, "--stage", STAGE, "--checkpoint", "plan-approval",
-    "--batch-file", "group-plan.json", "--session", revision];
-  const decision = tool(pd, "tools/aidlc-log.ts", [
-    "decision", ...identity, "--decision", "Approve these plans?", "--options", "Approve Plans,Request Changes",
-  ]);
-  expect(decision.code, decision.err).toBe(0);
-  const human = tool(pd, "tools/aidlc.ts", ["engine", "hook", "record-human-turn"], {
-    hook_event_name: "UserPromptSubmit", session_id: revision, prompt: "Approve Plans",
-  });
-  expect(human.code, human.err).toBe(0);
-  for (const member of members) {
-    writeFileSync(member.questionsFile, readFileSync(member.questionsFile, "utf-8")
-      .replace(/^\[Answer\]:.*$/m, "[Answer]: Approve Plan"));
-  }
-  const answer = tool(pd, "tools/aidlc-log.ts", ["answer", ...identity, "--details", "Approve Plans"]);
-  expect(answer.code, answer.err).toBe(0);
-}
-
-function fixture(units = ["alpha"], command = CHECK): string {
-  const pd = setupWorktreeFixture();
-  projects.push(pd);
-  // ISOLATED_GIT_ENV drops the global config, so this new repository gets no
-  // long-path support from the runner. Nested Bolt worktrees exceed MAX_PATH.
-  if (process.platform === "win32") git(pd, ["config", "core.longpaths", "true"]);
-  seedAidlcMemory(pd);
-  writeFileSync(seededStateFile(pd), `# State
-## Project Information
-- **Project**: Swarm resume
-- **Scope**: feature
-- **Project Type**: Greenfield
-- **State Version**: 8
-## Runtime State
-- **Construction Checkpoints**: enabled
-- **Construction Iteration**: stage-major
-- **Construction Execution**: swarm
-- **Construction Autonomy Mode**: gated
-- **Skeleton Stance**: off
-- **Unit Ownership**: solo
-- **Review Override**: adversarial
-- **Change Control**: strict
-- **Bolt Refs**: [empty list]
-- **Worktree Path**: -
-## Scope Configuration
-- **Stages to Execute**: all
-- **Stages to Skip**: none
-- **Test Strategy**: Standard
-## Stage Progress
-### CONSTRUCTION PHASE
-- [x] functional-design — EXECUTE
-- [x] nfr-requirements — EXECUTE
-- [x] nfr-design — EXECUTE
-- [x] infrastructure-design — EXECUTE
-- [-] code-generation — EXECUTE
-- [ ] build-and-test — EXECUTE
-## Current Status
-- **Current Stage**: code-generation
-- **Lifecycle Phase**: CONSTRUCTION
-- **Status**: Running
-`);
-  writeFileSync(join(pd, ".gitignore"), [
-    ".aidlc/", "aidlc/.aidlc-*", "aidlc/active-space",
-    "aidlc/spaces/*/intents/active-intent", "aidlc/spaces/*/intents/*/audit/",
-    "aidlc/spaces/*/intents/*/runtime-graph.json", "aidlc/spaces/*/intents/*/.aidlc-*", "",
-  ].join("\n"));
-  seedBoltDagBatches(pd, [units, ["later"]]);
-  mkdirSync(join(pd, "src"), { recursive: true });
-  for (const unit of units) writeFileSync(join(pd, "src", `${unit}.ts`), `export const ${unit} = 1;\n`);
-  const baseline = writeBaselineSourceSnapshot(pd, STAGE, workspaceSourceListing(pd)!);
-  appendAuditEntry("WORKFLOW_STARTED", { Scope: "feature", "Source Baseline": baseline }, pd);
-  appendAuditEntry("STAGE_STARTED", { Stage: STAGE, "Source Baseline": baseline }, pd);
-  recordCommand(pd, command);
-  publish(pd, units);
-  for (const unit of units) plan(pd, unit);
-  git(pd, ["add", "-A"]);
-  git(pd, ["-c", "user.name=AI-DLC Tests", "-c", "user.email=tests@example.com", "commit", "-qm", "swarm fixture"]);
-  for (const unit of units) approvePlan(pd, unit);
-  return pd;
-}
-
-function prepare(pd: string, units = ["alpha"], resume = false) {
-  return swarm(pd, ["prepare", "--batch", "1", "--units", units.join(","), "--base", "main", ...(resume ? ["--resume-existing"] : [])]);
-}
-
-function nextDirective(pd: string) {
-  const result = runOrchestrateNext(join(AIDLC_SRC, "tools", "aidlc-orchestrate.ts"), pd, [], {
-    cwd: pd, env: { ...process.env, AIDLC_PROJECT_DIR: pd, CLAUDE_PROJECT_DIR: pd },
-  });
-  expect(result.status, result.out).toBe(0);
-  return result.directive!;
-}
-
-function interruptAfterBoltStart(pd: string, resume: boolean) {
-  mkdirSync(join(pd, ".aidlc"), { recursive: true });
-  const driver = join(pd, ".aidlc", "interrupt-prepare.ts");
-  // Isolated subprocess fault: real create/state/audit/runtime forks finish,
-  // then their caller sees an interrupted start before bind or SWARM_STARTED.
-  // No production failpoint, global module mock, or modified installation.
-  writeFileSync(driver, `
-import { mock } from "bun:test";
-const childProcess = await import("node:child_process");
-const realSpawn = childProcess.spawnSync;
-mock.module("node:child_process", () => ({
-  ...childProcess,
-  spawnSync(command, args, options) {
-    const result = realSpawn(command, args, options);
-    if (result.status === 0 && args.some(arg => arg.endsWith("aidlc-bolt.ts")) &&
-        args.includes("start")) {
-      return { ...result, status: 1, stderr: "test interruption after real Bolt start" };
-    }
-    return result;
-  },
-}));
-const { main } = await import(${JSON.stringify(join(AIDLC_SRC, "tools", "aidlc-swarm.ts"))});
-main(process.argv.slice(2));
-`);
-  const result = Bun.spawnSync([process.execPath, driver, "prepare", "--project-dir", pd,
-    "--batch", "1", "--units", "alpha", "--base", "main", ...(resume ? ["--resume-existing"] : [])], {
-    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
-    cwd: pd, env: { ...process.env, AIDLC_PROJECT_DIR: pd, CLAUDE_PROJECT_DIR: pd },
-    stdout: "pipe", stderr: "pipe",
-  });
-  return { code: result.exitCode, out: result.stdout.toString(), err: result.stderr.toString() };
-}
-
-function completeOld(pd: string, units = ["alpha"]): void {
-  const prepared = prepare(pd, units);
-  expect(prepared.code, `${prepared.out}\n${prepared.err}`).toBe(0);
-  for (const unit of units) {
-    const completed = tool(pd, "tools/aidlc-bolt.ts", [
-      "complete", "--merge", "--slug", boltSlugForUnit(unit), "--batch", "1", "--name", unit, "--project-dir", pd,
-    ]);
-    expect(completed.code, completed.err).toBe(0);
-    // Fixture authority from the owning native emitter; actual resume uses
-    // the real fork, state/audit merge, worktree metadata, and Plan Approval.
-    appendAuditEntry("SWARM_UNIT_CONVERGED", {
-      "Batch number": "1", "Unit name": unit, Stage: STAGE,
-      "Run floor": latestMainWorkflowStageRunFloorForProject(pd, STAGE),
-      "Source Fingerprint": workspaceSourceFingerprint(pd)!,
-      "Source Commit": git(pd, ["rev-parse", "HEAD"]),
-    }, pd);
-  }
-}
-
-function reject(pd: string, unit = "alpha"): void {
-  appendAuditEntry("HUMAN_TURN", { Source: "t344 checkpoint choice" }, pd);
-  appendAuditEntry("GATE_REJECTED", {
-    Stage: STAGE, "Gate Stages": STAGE, Checkpoint: "swarm-batch",
-    "Batch number": "1", Unit: unit, Units: unit,
-    Intent: activeIntentUuid(pd)!, "Run floor": latestMainWorkflowStageRunFloorForProject(pd, STAGE),
-    "User Input": "Request Changes", Reason: "Please revise this unit", Feedback: "Please revise this unit",
-  }, pd);
-  publish(pd, [unit]);
-}
-
-function starts(pd: string, unit = "alpha") {
-  return readAuditShardEvents(pd).filter((row) => row.event === "BOLT_STARTED" &&
-    auditBlockField(row.block, "Bolt slug") === boltSlugForUnit(unit));
-}
-
-function reviewRevisedSource(pd: string, unit = "alpha"): void {
-  const child = wt(pd, unit);
-  const dir = codeGenerationRecordDir(child, unit);
-  writeFileSync(join(dir, "source-manifest.json"), JSON.stringify({
-    stage: STAGE, unit, version: 1, writes: [{ path: `src/${unit}.ts` }],
-  }));
-  const planPath = join(dir, "code-generation-plan.md");
-  writeFileSync(planPath, readFileSync(planPath, "utf-8").replace("- [ ] Implement", "- [x] Implement"));
-  const args = [
-    "review", "--stage", STAGE, "--unit", unit, "--reviewer", "aidlc-architecture-reviewer-agent",
-    "--iteration", "1", "--project-dir", child,
-  ];
-  const request = tool(child, "tools/aidlc-log.ts", args);
-  expect(request.code, `${request.out}\n${request.err}`).toBe(0);
-  // Deterministic review fixture through the existing protected receipt path.
-  appendFileSync(join(dir, "code-generation-plan.md"),
-    "\n## Review\n\n**Verdict:** READY\n**Reviewer:** aidlc-architecture-reviewer-agent\n**Iteration:** 1\n\n### Findings\n\nNo blocking findings.\n");
-  const receipt = tool(child, "tools/aidlc-log.ts", [...args, "--verdict", "READY"]);
-  expect(receipt.code, `${receipt.out}\n${receipt.err}`).toBe(0);
-}
-
-function humanChoice(pd: string, choice: string, session: string): void {
-  const human = tool(pd, "tools/aidlc.ts", ["engine", "hook", "record-human-turn"], {
-    hook_event_name: "UserPromptSubmit", session_id: session, prompt: choice,
-  });
-  expect(human.code, `${human.out}\n${human.err}`).toBe(0);
-}
-
-function checkpointChoice(pd: string, units: string[], choice: string): void {
-  const asked = tool(pd, "tools/aidlc-bolt.ts", [
-    "swarm-checkpoint", "--action", "ask", "--batch", "1", "--units", units.join(","),
-    "--session", "t344-checkpoint", "--project-dir", pd,
-  ]);
-  expect(asked.code, `${asked.out}\n${asked.err}`).toBe(0);
-  humanChoice(pd, choice, "t344-checkpoint");
-}
-
-function writeUnitSource(pd: string, unit: string, value: number): void {
-  writeFileSync(join(wt(pd, unit), "src", `${unit}.ts`), `export const ${unit} = ${value};\n`);
-}
-
-function checkReviewFinalizeAndLand(pd: string, values: Record<string, number>): void {
-  const units = Object.keys(values);
-  for (const unit of units) {
-    const checked = swarm(pd, ["check", unit]);
-    expect(checked.code, `${checked.out}\n${checked.err}`).toBe(0);
-    reviewRevisedSource(pd, unit);
-  }
-  const finalized = swarm(pd, ["finalize", "--batch", "1", "--units", units.join(","),
-    "--claimed", units.join(",")]);
-  expect(finalized.code, `${finalized.out}\n${finalized.err}`).toBe(0);
-  for (const unit of units) {
-    const merged = tool(pd, "tools/aidlc-worktree.ts", [
-      "merge", "--slug", boltSlugForUnit(unit), "--target", "main", "--strategy", "squash", "--project-dir", pd,
-    ]);
-    expect(merged.code, `${merged.out}\n${merged.err}`).toBe(0);
-    expect(existsSync(wt(pd, unit))).toBe(false);
-    expect(readFileSync(join(pd, "src", `${unit}.ts`), "utf-8")).toContain(`${unit} = ${values[unit]};`);
-  }
-}
-
-function nativeCheckpointRevision(units: string[], grouped: boolean): string {
-  const pd = fixture(units);
-  if (grouped) approveGroupedPlans(pd, units, "initial-discard-group");
-  const initial = prepare(pd, units);
-  expect(initial.code, `${initial.out}\n${initial.err}`).toBe(0);
-  for (const unit of units) writeUnitSource(pd, unit, 2);
-  checkReviewFinalizeAndLand(pd, Object.fromEntries(units.map((unit) => [unit, 2])));
-  expect(nextDirective(pd)).toMatchObject({
-    kind: "run-stage", swarm_checkpoint: { batch: 1, units, ready: true, approved: false },
-  });
-  checkpointChoice(pd, units, "Request Changes");
-  const rejected = tool(pd, "tools/aidlc-bolt.ts", [
-    "swarm-checkpoint", "--action", "reject", "--batch", "1", "--units", units.join(","),
-    "--session", "t344-checkpoint",
-    "--user-input", "Request Changes", "--reason", "Please revise the batch", "--project-dir", pd,
-  ]);
-  expect(rejected.code, `${rejected.out}\n${rejected.err}`).toBe(0);
-  expect(nextDirective(pd)).toMatchObject({ kind: "invoke-swarm", units, resume_existing: true });
-  if (grouped) approveGroupedPlans(pd, units, "native-discard-group");
-  else for (const unit of units) approvePlan(pd, unit, "native-discard-revision");
-  const revision = prepare(pd, units, true);
-  expect(revision.code, `${revision.out}\n${revision.err}`).toBe(0);
-  for (const unit of units) expect(existsSync(wt(pd, unit))).toBe(true);
-  return pd;
-}
-
-function approvalSnapshot(pd: string, unit: string) {
-  const child = wt(pd, unit);
-  const authority = resolveCodeGenerationAuthority(child, { unit });
-  const approval = evaluateCodeGenerationApproval(child, { unit });
-  expect(approval.ok, approval.reason).toBe(true);
-  if (!approval.approvalFingerprint) throw new Error("Prepared Unit lacks an approval fingerprint");
-  const key = { targetId: authority.targetId, runFloor: authority.runFloor, fingerprint: approval.approvalFingerprint };
-  const parentReceipt = readPlanApprovalReceipt(pd, key);
-  const childReceipt = readPlanApprovalReceipt(child, key);
-  if (!parentReceipt || !childReceipt?.delegation) throw new Error("Prepared Unit lacks native approval delegation");
-  expect(childReceipt.delegation.baselineCommit, JSON.stringify(childReceipt.delegation))
-    .toBe(git(child, ["rev-parse", "HEAD"]));
-  return { key, parentReceipt, childReceipt };
-}
-
-function discarded(pd: string, unit: string) {
-  return readAuditShardEvents(pd).filter((row) => row.event === "WORKTREE_DISCARDED" &&
-    auditBlockField(row.block, "Bolt slug") === boltSlugForUnit(unit));
-}
-
-function retryAndDiscard(pd: string, unit: string, cycle = 1): void {
-  const before = discarded(pd, unit).length;
-  humanChoice(pd, "Retry", `${unit}-native-retry-${cycle}`);
-  const aborted = tool(pd, "tools/aidlc-bolt.ts", [
-    "abort", "--name", unit, "--slug", boltSlugForUnit(unit),
-    "--reason", "Human Retry: restart this Unit's reviewer attempt", "--discard", "--project-dir", pd,
-  ]);
-  expect(aborted.code, `${aborted.out}\n${aborted.err}`).toBe(0);
-  expect(existsSync(wt(pd, unit))).toBe(false);
-  const rows = discarded(pd, unit);
-  expect(rows).toHaveLength(before + 1);
-  const row = rows.at(-1)!;
-  for (const field of [
-    "Approval Source Commit", "Approval Source Listing", "Approval Parent Receipt", "Approval Creation",
-  ]) {
-    expect(auditBlockField(row.block, field), row.block).not.toBeNull();
-  }
-}
-
-function approveNativeCheckpoint(pd: string, units: string[]): void {
-  expect(nextDirective(pd)).toMatchObject({
-    kind: "run-stage", swarm_checkpoint: { batch: 1, units, ready: true, approved: false },
-  });
-  checkpointChoice(pd, units, "Approve");
-  const approved = tool(pd, "tools/aidlc-bolt.ts", [
-    "swarm-checkpoint", "--action", "approve", "--batch", "1", "--units", units.join(","),
-    "--session", "t344-checkpoint",
-    "--user-input", "Approve", "--project-dir", pd,
-  ]);
-  expect(approved.code, `${approved.out}\n${approved.err}`).toBe(0);
-  expect(JSON.parse(approved.out).approved).toBe(true);
-}
+afterEach(cleanupCheckpointFixtures, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
 describe("t344 explicit swarm checkpoint re-entry", () => {
   test.each([
@@ -527,93 +137,11 @@ describe("t344 explicit swarm checkpoint re-entry", () => {
     expect(starts(pd)).toHaveLength(startedCount);
   });
 
-  test("native discard after a peer landing recreates a provenance-bound legacy Bolt's approved baseline in the intent namespace", () => {
-    const pd = fixture(["alpha", "beta"]);
-    const interrupted = interruptAfterBoltStart(pd, false);
-    expect(interrupted.code, `${interrupted.out}\n${interrupted.err}`).toBe(2);
-    const id8 = fixtureIntentId8(pd);
-    const currentName = boltName(id8, "alpha");
-    // Convert the real unbound fork to a pre-upgrade fixture BEFORE delegation,
-    // whose provenance digest binds the exact WORKTREE_CREATED block.
-    const oldName = legacyBoltName("alpha");
-    const legacy = legacyWorktreePath(pd, "alpha");
-    git(wt(pd), ["branch", "-m", oldName]);
-    git(pd, ["worktree", "move", wt(pd), legacy]);
-    const metadataPath = join(legacy, ".aidlc", "worktree-meta.json");
-    const metadata = JSON.parse(readFileSync(metadataPath, "utf-8"));
-    delete metadata.intentId8;
-    delete metadata.branch;
-    writeFileSync(metadataPath, JSON.stringify(metadata));
-    for (const project of [pd, legacy]) {
-      const auditDir = seededAuditDir(project);
-      for (const shard of readdirSync(auditDir)) {
-        if (!shard.endsWith(".md")) continue;
-        const path = join(auditDir, shard);
-        writeFileSync(path, readFileSync(path, "utf-8").replaceAll(currentName, oldName));
-      }
-    }
-    writeFileSync(seededStateFile(legacy), readFileSync(seededStateFile(legacy), "utf-8").replaceAll(currentName, oldName));
-    bindCodeGenerationWorktreeApproval(pd, legacy, "alpha");
-    const approved = evaluateCodeGenerationApproval(legacy, { unit: "alpha" });
-    expect(approved.ok, approved.reason).toBe(true);
-    const baseline = git(legacy, ["rev-parse", "HEAD"]);
-    const peer = prepare(pd, ["beta"]);
-    expect(peer.code, `${peer.out}\n${peer.err}`).toBe(0);
-    writeUnitSource(pd, "beta", 2);
-    checkReviewFinalizeAndLand(pd, { beta: 2 });
-    const landedHead = git(pd, ["rev-parse", "HEAD"]);
-    expect(landedHead).not.toBe(baseline);
-    writeFileSync(join(legacy, "src", "alpha.ts"), "export const alpha = 99;\n");
-    const removed = tool(pd, "tools/aidlc-worktree.ts", ["discard", "--slug", "alpha", "--project-dir", pd]);
-    expect(removed.code, `${removed.out}\n${removed.err}`).toBe(0);
-    expect(existsSync(legacy)).toBe(false);
-    const approvedBase = auditBlockField(discarded(pd, "alpha").at(-1)!.block, "Approval Source Commit");
-    expect(approvedBase).toBe(baseline);
-    const recreated = prepare(pd);
-    expect(recreated.code, `${recreated.out}\n${recreated.err}`).toBe(0);
-    expect(git(wt(pd), ["symbolic-ref", "--short", "HEAD"])).toBe(currentName);
-    expect(git(wt(pd), ["rev-parse", "HEAD"])).toBe(baseline);
-    expect(JSON.parse(readFileSync(join(wt(pd), ".aidlc", "worktree-meta.json"), "utf-8")).baseCommit).toBe(baseline);
-    expect(readFileSync(join(wt(pd), "src", "alpha.ts"), "utf-8")).toBe("export const alpha = 1;\n");
-    expect(readFileSync(join(wt(pd), "src", "beta.ts"), "utf-8")).toBe("export const beta = 1;\n");
-    expect(git(pd, ["rev-parse", "HEAD"])).toBe(landedHead);
-    expect(readFileSync(join(pd, "src", "beta.ts"), "utf-8")).toBe("export const beta = 2;\n");
-    expect(evaluateCodeGenerationApproval(wt(pd), { unit: "alpha" })).toMatchObject({
-      ok: true, approvalFingerprint: approved.approvalFingerprint,
-    });
-  });
-
-  test("failed initial fork preserves source and releases registration so discard then retry works", () => {
-    const executable = process.platform === "win32"
-      ? `"${process.execPath.replaceAll('"', '""')}"`
-      : `'${process.execPath.replaceAll("'", "'\\''")}'`;
-    const check = `${executable} -e "require('fs').writeFileSync('.aidlc/unbound-check-ran','executed')"`;
-    const pd = fixture(["alpha"], check);
-    const failed = interruptAfterBoltStart(pd, false);
-    expect(failed.code, `${failed.out}\n${failed.err}`).toBe(2);
-    expect(failed.out).toContain("aidlc-worktree discard");
-    expect(readFileSync(join(wt(pd), "src", "alpha.ts"), "utf-8")).toContain("alpha = 1");
-    expect(readFileSync(seededStateFile(pd), "utf-8")).toContain("**Bolt Refs**: [empty list]");
-    const marker = join(wt(pd), ".aidlc", "unbound-check-ran");
-    expect(existsSync(marker)).toBe(false);
-    const refused = swarm(pd, ["check", "alpha", "--check-cmd", check]);
-    expect(refused.code, `${refused.out}\n${refused.err}`).not.toBe(0);
-    expect(`${refused.out}\n${refused.err}`).toMatch(/approval|delegat/i);
-    expect(existsSync(marker)).toBe(false);
-    const discarded = tool(pd, "tools/aidlc-worktree.ts", ["discard", "--slug", "alpha", "--project-dir", pd]);
-    expect(discarded.code, discarded.err).toBe(0);
-    const retried = prepare(pd);
-    expect(retried.code, `${retried.out}\n${retried.err}`).toBe(0);
-    const allowed = swarm(pd, ["check", "alpha", "--check-cmd", check]);
-    expect(allowed.code, `${allowed.out}\n${allowed.err}`).toBe(0);
-    expect(readFileSync(marker, "utf-8")).toBe("executed");
-  });
-
   test("an earlier stage's checkpoint rejection does not block fresh prepare or finalize", () => {
     const pd = fixture();
     completeOld(pd);
     reject(pd);
-    const discarded = tool(pd, "tools/aidlc-worktree.ts", ["discard", "--slug", "alpha", "--project-dir", pd]);
+    const discarded = runCheckpointTool(pd, "tools/aidlc-worktree.ts", ["discard", "--slug", "alpha", "--project-dir", pd]);
     expect(discarded.code, discarded.err).toBe(0);
     const baseline = writeBaselineSourceSnapshot(pd, STAGE, workspaceSourceListing(pd)!);
     appendAuditEntry("STAGE_STARTED", { Stage: STAGE, "Source Baseline": baseline }, pd);
@@ -643,7 +171,7 @@ describe("t344 explicit swarm checkpoint re-entry", () => {
         "--claimed", units.join(","), "--check-cmd", "git diff --check"]);
       expect(finalized.code, `${finalized.out}\n${finalized.err}`).toBe(0);
       for (const unit of units) {
-      const merged = tool(pd, "tools/aidlc-worktree.ts", [
+      const merged = runCheckpointTool(pd, "tools/aidlc-worktree.ts", [
         "merge", "--slug", boltSlugForUnit(unit), "--target", "main", "--strategy", "squash", "--project-dir", pd,
       ]);
       expect(merged.code, `${merged.out}\n${merged.err}`).toBe(0);
@@ -668,7 +196,7 @@ describe("t344 explicit swarm checkpoint re-entry", () => {
       }
     }
     checkpointChoice(pd, units, "Request Changes");
-    const rejected = tool(pd, "tools/aidlc-bolt.ts", [
+    const rejected = runCheckpointTool(pd, "tools/aidlc-bolt.ts", [
       "swarm-checkpoint", "--action", "reject", "--batch", "1", "--units", units.join(","),
       "--session", "t344-checkpoint",
       "--user-input", "Request Changes", "--reason", "Please revise alpha", "--project-dir", pd,
@@ -676,7 +204,15 @@ describe("t344 explicit swarm checkpoint re-entry", () => {
     expect(rejected.code, `${rejected.out}\n${rejected.err}`).toBe(0);
     const revision = next();
     expect(revision.code, revision.err).toBe(0);
-    expect(JSON.parse(revision.out)).toMatchObject({ kind: "invoke-swarm", units, resume_existing: true });
+    // The plans are still the ones approved before the checkpoint, so the
+    // engine sends them back with the person's words before asking again.
+    expect(JSON.parse(revision.out)).toMatchObject({
+      kind: "invoke-swarm", units, resume_existing: true,
+      plan_approval: {
+        status: "plan",
+        units: units.map((unit) => ({ unit, status: "revise", feedback: "Please revise alpha" })),
+      },
+    });
     if (approvalMode === "grouped") approveGroupedPlans(pd, units, "landed-revision");
     else approvePlan(pd, "alpha", "landed-revision");
     const prepared = prepare(pd, units, true);
@@ -688,7 +224,7 @@ describe("t344 explicit swarm checkpoint re-entry", () => {
     expect(afterRevision.code, afterRevision.err).toBe(0);
     expect(JSON.parse(afterRevision.out).swarm_checkpoint, afterRevision.out).toBeTruthy();
     checkpointChoice(pd, units, "Approve");
-    const approved = tool(pd, "tools/aidlc-bolt.ts", [
+    const approved = runCheckpointTool(pd, "tools/aidlc-bolt.ts", [
       "swarm-checkpoint", "--action", "approve", "--batch", "1", "--units", units.join(","),
       "--session", "t344-checkpoint",
       "--user-input", "Approve", "--project-dir", pd,
@@ -704,7 +240,7 @@ describe("t344 explicit swarm checkpoint re-entry", () => {
     approveGroupedPlans(pd, units, "partial-native-group");
     const prepared = prepare(pd, units);
     expect(prepared.code, `${prepared.out}\n${prepared.err}`).toBe(0);
-    const land = (unit: string) => tool(pd, "tools/aidlc-worktree.ts", [
+    const land = (unit: string) => runCheckpointTool(pd, "tools/aidlc-worktree.ts", [
       "merge", "--slug", boltSlugForUnit(unit), "--target", "main", "--strategy", "squash", "--project-dir", pd,
     ]);
     const next = () => nextDirective(pd);
@@ -726,7 +262,7 @@ describe("t344 explicit swarm checkpoint re-entry", () => {
         kind: "run-stage", swarm_checkpoint: { batch: 1, units, ready: true, approved: false },
       });
       checkpointChoice(pd, units, "Request Changes");
-      const rejected = tool(pd, "tools/aidlc-bolt.ts", [
+      const rejected = runCheckpointTool(pd, "tools/aidlc-bolt.ts", [
         "swarm-checkpoint", "--action", "reject", "--batch", "1", "--units", units.join(","),
         "--session", "t344-checkpoint",
         "--user-input", "Request Changes", "--reason", "Please revise both units", "--project-dir", pd,
@@ -795,7 +331,7 @@ describe("t344 explicit swarm checkpoint re-entry", () => {
     const approval = evaluateCodeGenerationApproval(beta, { unit: "beta" });
     expect(approval.ok, approval.reason).toBe(true);
     expect(readCodeGenerationWorktreeSourceBaseline(beta, "beta")).not.toBeNull();
-    const began = tool(beta, "tools/aidlc-testing-posture.ts", ["begin", "--unit", "beta"]);
+    const began = runCheckpointTool(beta, "tools/aidlc-testing-posture.ts", ["begin", "--unit", "beta"]);
     expect(began.code, `${began.out}\n${began.err}`).toBe(0);
     unchangedAuthority();
     expect(readFileSync(join(beta, "src", "beta.ts"), "utf-8")).toContain("beta = 3");
@@ -820,7 +356,7 @@ describe("t344 explicit swarm checkpoint re-entry", () => {
       expect(current.ok, current.reason).toBe(true);
     }
     checkpointChoice(pd, units, "Approve");
-    const approved = tool(pd, "tools/aidlc-bolt.ts", [
+    const approved = runCheckpointTool(pd, "tools/aidlc-bolt.ts", [
       "swarm-checkpoint", "--action", "approve", "--batch", "1", "--units", units.join(","),
       "--session", "t344-checkpoint",
       "--user-input", "Approve", "--project-dir", pd,
@@ -828,157 +364,6 @@ describe("t344 explicit swarm checkpoint re-entry", () => {
     expect(approved.code, `${approved.out}\n${approved.err}`).toBe(0);
     expect(JSON.parse(approved.out).approved).toBe(true);
   });
-
-  test.each(["individual", "grouped"])("native Retry can discard and reprepare a landed checkpoint revision with the same %s approval", (mode) => {
-    const units = mode === "grouped" ? ["alpha", "beta"] : ["alpha"];
-    const pd = nativeCheckpointRevision(units, mode === "grouped");
-    const approvals = new Map(units.map((unit) => [unit, approvalSnapshot(pd, unit)]));
-    const approvedHead = git(wt(pd), ["rev-parse", "HEAD"]);
-    const parentHead = git(pd, ["rev-parse", "HEAD"]);
-    const peerStarts = starts(pd, "beta").length;
-    for (let cycle = 1; cycle <= 2; cycle++) {
-      writeUnitSource(pd, "alpha", 90 + cycle);
-      if (cycle === 2) {
-        git(wt(pd), ["add", "src/alpha.ts"]);
-        git(wt(pd), ["commit", "-qm", "abandoned Unit implementation"]);
-        expect(git(wt(pd), ["rev-parse", "HEAD"])).not.toBe(approvedHead);
-      }
-      const beforeStarts = starts(pd).length;
-      retryAndDiscard(pd, "alpha", cycle);
-      const next = nextDirective(pd);
-      expect(next).toMatchObject({ kind: "invoke-swarm", units, resume_existing: true });
-      const retried = prepare(pd, units, true);
-      expect(retried.code, `${retried.out}\n${retried.err}`).toBe(0);
-      expect(starts(pd)).toHaveLength(beforeStarts + 1);
-      expect(git(wt(pd), ["rev-parse", "HEAD"])).toBe(approvedHead);
-      expect(readFileSync(join(wt(pd), "src/alpha.ts"), "utf-8")).toBe("export const alpha = 2;\n");
-      expect(git(pd, ["rev-parse", "HEAD"])).toBe(parentHead);
-      for (const unit of units) {
-        const saved = approvals.get(unit)!;
-        expect(readPlanApprovalReceipt(pd, saved.key)).toEqual(saved.parentReceipt);
-        const receipt = readPlanApprovalReceipt(wt(pd, unit), saved.key);
-        expect(receipt?.delegation?.parentReceiptSha256).toBe(saved.childReceipt.delegation!.parentReceiptSha256);
-        expect(evaluateCodeGenerationApproval(wt(pd, unit), { unit }).ok).toBe(true);
-        if (unit !== "alpha") expect(receipt).toEqual(saved.childReceipt);
-      }
-      expect(starts(pd, "beta")).toHaveLength(peerStarts);
-      expect(nextDirective(pd)).not.toHaveProperty("resume_existing");
-    }
-    for (const unit of units) writeUnitSource(pd, unit, 3);
-    checkReviewFinalizeAndLand(pd, Object.fromEntries(units.map((unit) => [unit, 3])));
-    approveNativeCheckpoint(pd, units);
-  });
-
-  test.each(["initial preparation", "checkpoint revision"])("native discard after a grouped peer lands preserves beta's approved commit and running gamma during %s", (phase) => {
-    const units = ["alpha", "beta", "gamma"];
-    const isRevision = phase === "checkpoint revision";
-    const pd = isRevision ? nativeCheckpointRevision(units, true) : fixture(units);
-    if (!isRevision) {
-      approveGroupedPlans(pd, units, "initial-discard-partial");
-      const prepared = prepare(pd, units);
-      expect(prepared.code, `${prepared.out}\n${prepared.err}`).toBe(0);
-    }
-    const approvals = new Map(units.map((unit) => [unit, approvalSnapshot(pd, unit)]));
-    const betaBase = git(wt(pd, "beta"), ["rev-parse", "HEAD"]);
-    const betaBaseSources = new Map(units.map((unit) =>
-      [unit, git(pd, ["show", `${betaBase}:src/${unit}.ts`])]));
-    const betaBaseline = readCodeGenerationWorktreeSourceBaseline(wt(pd, "beta"), "beta");
-    expect(betaBaseline).not.toBeNull();
-    const gamma = wt(pd, "gamma");
-    const gammaStarts = starts(pd, "gamma").length;
-    const gammaHead = git(gamma, ["rev-parse", "HEAD"]);
-    writeUnitSource(pd, "gamma", 5);
-    writeFileSync(join(gamma, ".aidlc", "pending-note.txt"), "Keep gamma's pending work\n");
-    const gammaSource = readFileSync(join(gamma, "src/gamma.ts"));
-    const gammaState = readFileSync(seededStateFile(gamma));
-    writeUnitSource(pd, "alpha", 3);
-    checkReviewFinalizeAndLand(pd, { alpha: 3 });
-    const landedHead = git(pd, ["rev-parse", "HEAD"]);
-    expect(landedHead).not.toBe(betaBase);
-    const unchangedPeers = () => {
-      expect(git(pd, ["rev-parse", "HEAD"])).toBe(landedHead);
-      expect(readFileSync(join(pd, "src/alpha.ts"), "utf-8")).toBe("export const alpha = 3;\n");
-      expect(existsSync(wt(pd, "alpha"))).toBe(false);
-      expect(git(gamma, ["rev-parse", "HEAD"])).toBe(gammaHead);
-      expect(readFileSync(join(gamma, "src/gamma.ts"))).toEqual(gammaSource);
-      expect(readFileSync(seededStateFile(gamma))).toEqual(gammaState);
-      expect(readFileSync(join(gamma, ".aidlc", "pending-note.txt"), "utf-8")).toBe("Keep gamma's pending work\n");
-      expect(starts(pd, "gamma")).toHaveLength(gammaStarts);
-      for (const unit of units) {
-        const saved = approvals.get(unit)!;
-        expect(readPlanApprovalReceipt(pd, saved.key)).toEqual(saved.parentReceipt);
-      }
-      const savedGamma = approvals.get("gamma")!;
-      expect(readPlanApprovalReceipt(gamma, savedGamma.key)).toEqual(savedGamma.childReceipt);
-      expect(evaluateCodeGenerationApproval(gamma, { unit: "gamma" }).ok).toBe(true);
-    };
-    unchangedPeers();
-    for (let cycle = 1; cycle <= 2; cycle++) {
-      const betaStarts = starts(pd, "beta").length;
-      writeUnitSource(pd, "beta", 90 + cycle);
-      retryAndDiscard(pd, "beta", cycle);
-      unchangedPeers();
-      const next = nextDirective(pd);
-      expect(next).toMatchObject({ kind: "invoke-swarm", units: ["beta", "gamma"] });
-      if (isRevision) expect(next.resume_existing).toBe(true);
-      else expect(next).not.toHaveProperty("resume_existing");
-      const retried = prepare(pd, isRevision ? ["beta", "gamma"] : ["beta"], isRevision);
-      expect(retried.code, `${retried.out}\n${retried.err}`).toBe(0);
-      expect(starts(pd, "beta")).toHaveLength(betaStarts + 1);
-      const beta = wt(pd, "beta");
-      expect(git(beta, ["rev-parse", "HEAD"])).toBe(betaBase);
-      expect(readCodeGenerationWorktreeSourceBaseline(beta, "beta")).toEqual(betaBaseline);
-      for (const unit of units) {
-        expect(readFileSync(join(beta, "src", `${unit}.ts`), "utf-8").trim()).toBe(betaBaseSources.get(unit)!);
-      }
-      const savedBeta = approvals.get("beta")!;
-      const receipt = readPlanApprovalReceipt(beta, savedBeta.key);
-      expect(receipt?.batch).toEqual(savedBeta.childReceipt.batch);
-      expect(receipt?.delegation?.parentReceiptSha256).toBe(savedBeta.childReceipt.delegation!.parentReceiptSha256);
-      expect(evaluateCodeGenerationApproval(beta, { unit: "beta" }).ok).toBe(true);
-      unchangedPeers();
-      expect(nextDirective(pd)).not.toHaveProperty("resume_existing");
-    }
-    writeUnitSource(pd, "beta", 4);
-    checkReviewFinalizeAndLand(pd, { beta: 4, gamma: 5 });
-    expect(readFileSync(join(pd, "src/alpha.ts"), "utf-8")).toBe("export const alpha = 3;\n");
-    for (const unit of units) {
-      const saved = approvals.get(unit)!;
-      expect(readPlanApprovalReceipt(pd, saved.key)).toEqual(saved.parentReceipt);
-    }
-    approveNativeCheckpoint(pd, units);
-  });
-
-  test.each(["no discard", "older creation discard", "other Unit discard"])(
-    "raw Git removal is not authorized recovery with %s evidence",
-    (evidence) => {
-      const units = evidence === "other Unit discard" ? ["alpha", "beta"] : ["alpha"];
-      const pd = nativeCheckpointRevision(units, units.length > 1);
-      if (evidence === "older creation discard") {
-        retryAndDiscard(pd, "alpha");
-        expect(nextDirective(pd)).toMatchObject({ kind: "invoke-swarm", resume_existing: true });
-        const recreated = prepare(pd, units, true);
-        expect(recreated.code, `${recreated.out}\n${recreated.err}`).toBe(0);
-      } else if (evidence === "other Unit discard") {
-        retryAndDiscard(pd, "beta");
-      }
-      const beforeDiscards = discarded(pd, "alpha");
-      const beforeStarts = starts(pd).length;
-      const parentHead = git(pd, ["rev-parse", "HEAD"]);
-      const approval = approvalSnapshot(pd, "alpha");
-      git(pd, ["worktree", "remove", "--force", wt(pd)]);
-      git(pd, ["branch", "-D", boltName(fixtureIntentId8(pd), boltSlugForUnit("alpha"))]);
-      nextDirective(pd);
-      const refused = prepare(pd, ["alpha"], true);
-      expect(refused.code, `${refused.out}\n${refused.err}`).not.toBe(0);
-      expect(`${refused.out}\n${refused.err}`).toMatch(/discard|creation|landing|missing worktree/i);
-      expect(existsSync(wt(pd))).toBe(false);
-      expect(starts(pd)).toHaveLength(beforeStarts);
-      expect(discarded(pd, "alpha")).toEqual(beforeDiscards);
-      expect(git(pd, ["rev-parse", "HEAD"])).toBe(parentHead);
-      expect(readPlanApprovalReceipt(pd, approval.key)).toEqual(approval.parentReceipt);
-    },
-  );
 
   test("resumes the current rejected Unit with fresh authority and preserves source, history, and peers", () => {
     const pd = fixture(["alpha", "beta"]);
@@ -1105,18 +490,18 @@ describe("t344 explicit swarm checkpoint re-entry", () => {
     const file = join(recordDir(pd)!, "group-plan.json");
     writeFileSync(file, JSON.stringify({ batch: "group", units }));
     const identity = ["--project-dir", pd, "--stage", STAGE, "--checkpoint", "plan-approval", "--batch-file", "group-plan.json", "--session", "group"];
-    const decision = tool(pd, "tools/aidlc-log.ts", [
+    const decision = runCheckpointTool(pd, "tools/aidlc-log.ts", [
       "decision", ...identity, "--decision", "Approve both plans?", "--options", "Approve Plans,Request Changes",
     ]);
     expect(decision.code, decision.err).toBe(0);
-    const human = tool(pd, "tools/aidlc.ts", ["engine", "hook", "record-human-turn"], {
+    const human = runCheckpointTool(pd, "tools/aidlc.ts", ["engine", "hook", "record-human-turn"], {
       hook_event_name: "UserPromptSubmit", session_id: "group", prompt: "Approve Plans",
     });
     expect(human.code).toBe(0);
     for (const entry of units) {
       writeFileSync(entry.questionsFile, readFileSync(entry.questionsFile, "utf-8").replace(/^\[Answer\]:.*$/m, "[Answer]: Approve Plan"));
     }
-    const answer = tool(pd, "tools/aidlc-log.ts", ["answer", ...identity, "--details", "Approve Plans"]);
+    const answer = runCheckpointTool(pd, "tools/aidlc-log.ts", ["answer", ...identity, "--details", "Approve Plans"]);
     expect(answer.code, answer.err).toBe(0);
     const result = prepare(pd, ["alpha", "beta"]);
     expect(result.code, `${result.out}\n${result.err}`).toBe(0);
@@ -1193,5 +578,107 @@ describe("t344 explicit swarm checkpoint re-entry", () => {
     const start = readAuditShardEvents(pd).filter((row) => row.event === "SWARM_STARTED").at(-1)!;
     expect(auditBlockField(start.block, "Resumed")).toBe("true");
     expect(JSON.parse(auditBlockField(start.block, "Resume revisions")!).alpha).toBeTruthy();
+  });
+});
+
+describe("t344 Bolt worktrees carry the main checkout's submodules (#1352)", () => {
+  test("prepare sets the submodule up in the worktree, and landing leaves the main checkout's submodule as it was", () => {
+    const pd = fixture(["alpha"], CHECK, true);
+    const registered = git(pd, ["config", "--get", "submodule.vendor/sub.url"]);
+    const prepared = prepare(pd);
+    expect(prepared.code, `${prepared.out}\n${prepared.err}`).toBe(0);
+    expect(readFileSync(join(wt(pd), "vendor", "sub", "lib.ts"), "utf-8")).toBe(SUBMODULE_SOURCE);
+    writeUnitSource(pd, "alpha", 2);
+    checkReviewFinalizeAndLand(pd, { alpha: 2 });
+    expect(readFileSync(join(pd, "vendor", "sub", "lib.ts"), "utf-8")).toBe(SUBMODULE_SOURCE);
+    expect(git(pd, ["config", "--get", "submodule.vendor/sub.url"])).toBe(registered);
+    expect(git(pd, ["submodule", "status"])).toMatch(/^[0-9a-f]{40,64} vendor\/sub/);
+  });
+
+  test("a change left inside the worktree's submodule is refused, not lost", () => {
+    const pd = fixture(["alpha"], CHECK, true);
+    const prepared = prepare(pd);
+    expect(prepared.code, `${prepared.out}\n${prepared.err}`).toBe(0);
+    const edited = join(wt(pd), "vendor", "sub", "lib.ts");
+    writeFileSync(edited, "export const lib = 2;\n");
+    writeUnitSource(pd, "alpha", 2);
+    const checked = swarm(pd, ["check", "alpha"]);
+    expect(checked.code, `${checked.out}\n${checked.err}`).toBe(0);
+    reviewRevisedSource(pd, "alpha");
+    const finalized = swarm(pd, ["finalize", "--batch", "1", "--units", "alpha", "--claimed", "alpha"]);
+    expect(finalized.code).not.toBe(0);
+    expect(finalized.out).toContain("source manifest (vendor/sub/lib.ts)");
+    const merged = runCheckpointTool(pd, "tools/aidlc-worktree.ts", [
+      "merge", "--slug", boltSlugForUnit("alpha"), "--target", "main", "--strategy", "squash", "--project-dir", pd,
+    ]);
+    expect(merged.code).not.toBe(0);
+    expect(existsSync(wt(pd))).toBe(true);
+    expect(readFileSync(edited, "utf-8")).toBe("export const lib = 2;\n");
+    expect(readFileSync(join(pd, "vendor", "sub", "lib.ts"), "utf-8")).toBe(SUBMODULE_SOURCE);
+  });
+
+  test("an ordinary Bolt worktree with a submodule lands through the plain worktree removal", () => {
+    const pd = fixture(["alpha"], CHECK, true);
+    const registered = git(pd, ["config", "--get", "submodule.vendor/sub.url"]);
+    const created = runCheckpointTool(pd, "tools/aidlc-worktree.ts", ["create", "--slug", "plain", "--base", "main", "--project-dir", pd]);
+    expect(created.code, `${created.out}\n${created.err}`).toBe(0);
+    const path = JSON.parse(created.out).worktree_path as string;
+    expect(readFileSync(join(path, "vendor", "sub", "lib.ts"), "utf-8")).toBe(SUBMODULE_SOURCE);
+    writeFileSync(join(path, "src", "plain.ts"), "export const plain = 1;\n");
+    git(path, ["add", "src/plain.ts"]);
+    git(path, ["-c", "user.name=AI-DLC Tests", "-c", "user.email=tests@example.com", "commit", "-qm", "plain"]);
+    const merged = runCheckpointTool(pd, "tools/aidlc-worktree.ts", [
+      "merge", "--slug", "plain", "--target", "main", "--strategy", "squash", "--project-dir", pd,
+    ]);
+    expect(merged.code, `${merged.out}\n${merged.err}`).toBe(0);
+    expect(existsSync(path)).toBe(false);
+    expect(readFileSync(join(pd, "src", "plain.ts"), "utf-8")).toBe("export const plain = 1;\n");
+    expect(readFileSync(join(pd, "vendor", "sub", "lib.ts"), "utf-8")).toBe(SUBMODULE_SOURCE);
+    expect(git(pd, ["config", "--get", "submodule.vendor/sub.url"])).toBe(registered);
+  });
+
+  test("a submodule whose name holds '=' is set up from the main checkout's copy, never its configured URL", () => {
+    const pd = fixture(["alpha"], CHECK, true);
+    const sub = mkdtempSync(join(tmpdir(), "t344-submodule-eq-"));
+    submoduleRepos.push(sub);
+    git(sub, ["init", "-q"]);
+    writeFileSync(join(sub, "eq.ts"), "export const eq = 1;\n");
+    git(sub, ["add", "-A"]);
+    git(sub, ["-c", "user.name=AI-DLC Tests", "-c", "user.email=tests@example.com", "commit", "-qm", "eq"]);
+    git(pd, ["-c", "protocol.file.allow=always", "submodule", "add", "-q", "--name", "x=y", sub, "vendor/eq"]);
+    git(pd, ["-c", "user.name=AI-DLC Tests", "-c", "user.email=tests@example.com", "commit", "-qm", "equals-named submodule"]);
+    git(pd, ["config", "submodule.x=y.url", join(sub, "does-not-exist")]);
+    const created = runCheckpointTool(pd, "tools/aidlc-worktree.ts", ["create", "--slug", "eq", "--base", "main", "--project-dir", pd]);
+    expect(created.code, `${created.out}\n${created.err}`).toBe(0);
+    const path = JSON.parse(created.out).worktree_path as string;
+    expect(readFileSync(join(path, "vendor", "eq", "eq.ts"), "utf-8")).toBe("export const eq = 1;\n");
+    expect(realpathSync(git(join(path, "vendor", "eq"), ["remote", "get-url", "origin"])))
+      .toBe(realpathSync(join(pd, "vendor", "eq")));
+  });
+
+  test("a branch left in the worktree's submodule copy keeps the worktree and lands nothing", () => {
+    const pd = fixture(["alpha"], CHECK, true);
+    const created = runCheckpointTool(pd, "tools/aidlc-worktree.ts", ["create", "--slug", "plain", "--base", "main", "--project-dir", pd]);
+    expect(created.code, `${created.out}\n${created.err}`).toBe(0);
+    const path = JSON.parse(created.out).worktree_path as string;
+    const copy = join(path, "vendor", "sub");
+    const recorded = git(copy, ["rev-parse", "HEAD"]);
+    git(copy, ["checkout", "-q", "-b", "scratch"]);
+    writeFileSync(join(copy, "lib.ts"), "export const lib = 9;\n");
+    git(copy, ["-c", "user.name=AI-DLC Tests", "-c", "user.email=tests@example.com", "commit", "-qam", "private work"]);
+    git(copy, ["tag", "keep"]);
+    git(copy, ["checkout", "-q", "--detach", recorded]);
+    writeFileSync(join(path, "src", "plain.ts"), "export const plain = 1;\n");
+    git(path, ["add", "src/plain.ts"]);
+    git(path, ["-c", "user.name=AI-DLC Tests", "-c", "user.email=tests@example.com", "commit", "-qm", "plain"]);
+    const before = git(pd, ["rev-parse", "HEAD"]);
+    const merged = runCheckpointTool(pd, "tools/aidlc-worktree.ts", [
+      "merge", "--slug", "plain", "--target", "main", "--strategy", "squash", "--project-dir", pd,
+    ]);
+    expect(merged.code).not.toBe(0);
+    expect(`${merged.out}${merged.err}`).toContain("has work the main checkout's copy does not have (scratch, keep)");
+    expect(git(pd, ["rev-parse", "HEAD"])).toBe(before);
+    expect(existsSync(path)).toBe(true);
+    expect(git(copy, ["rev-parse", "--verify", "scratch"])).toMatch(/^[0-9a-f]{40,64}$/);
   });
 });

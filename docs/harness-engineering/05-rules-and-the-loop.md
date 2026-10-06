@@ -61,16 +61,17 @@ and [§ Layout](../reference/08-rule-system.md#layout).
 One heading in these files is read as a structured setting rather than prose:
 `## Guard Policy`. It decides how far the guards stand aside for work in this
 space, in two respects. What happens when an input changes after a human approved
-or confirmed something (a plan whose source moved, a reviewed document edited
+or confirmed something (a plan edited after approval, a reviewed document edited
 after its review, an output saved without the current summary confirmation):
 `strict` reopens that approval, while `relaxed` and `off` record the change once,
-tell the human in one line, and continue. And which authority fences hold:
+tell the human in one line, and continue. Workspace source that moved after a
+plan was approved is recorded and continued under every value. And which authority fences hold:
 `strict` lowers none, `relaxed` lowers `plan-approval` and `review-freeze`, and
 `off` lowers those two plus `state-transition` and `reviewer-scope`.
 `human-presence` is never lowered by the word. By default each intent takes its
-scope's value. To lower it from chat, a person must type the exact policy switch,
-such as `/aidlc --guard-policy relaxed` or `guard policy off`; an unrelated
-message is not a switch. To hold `strict` for everyone, put one line under the
+scope's value. To lower it from chat, a person asks in their own words and the
+conductor runs the setter, or types the switch (`/aidlc --guard-policy relaxed`
+or `guard policy off`) for the hook to apply. To hold `strict` for everyone, put one line under the
 heading in `team.md` (or `org.md`, or `project.md` for one project):
 
 ```markdown

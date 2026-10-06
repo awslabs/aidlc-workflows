@@ -2371,8 +2371,6 @@
       ],
       "sensors": [
         "required-sections",
-        "linter",
-        "type-check",
         "traceability"
       ],
       "scopes": [
@@ -2392,7 +2390,7 @@
       "reviewer_max_iterations": 2,
       "review_class": "adversarial",
       "inputs": "ALL prior design artifacts for this unit",
-      "outputs": "application code + code-generation-plan.md, code-generation-questions.md, unit-test-instructions.md, code-summary.md, traceability.json (under this stage's per-unit record dir, engine-resolved)",
+      "outputs": "application code + code-generation-plan.md, code-generation-questions.md, unit-test-instructions.md, code-summary.md, traceability.json (under this stage's per-unit record dir, engine-resolved; the engine writes code-generation-questions.md)",
       "rules_in_context": [
         {
           "path": "aidlc/spaces/default/memory/org.md",
@@ -2419,22 +2417,6 @@
           "default_severity": "advisory",
           "category": "document-shape",
           "matches": "**/{aidlc-docs,intents,codekb}/**"
-        },
-        {
-          "id": "linter",
-          "path": ".claude/sensors/aidlc-linter.md",
-          "fire_on": "write",
-          "default_severity": "advisory",
-          "category": "code-quality",
-          "matches": "**/*.{ts,js}"
-        },
-        {
-          "id": "type-check",
-          "path": ".claude/sensors/aidlc-type-check.md",
-          "fire_on": "write",
-          "default_severity": "advisory",
-          "category": "code-quality",
-          "matches": "**/*.{ts,tsx}"
         },
         {
           "id": "traceability",
@@ -3338,16 +3320,20 @@
       "keywords": [
         "fix",
         "bug",
-        "broken"
+        "broken",
+        "bugfix"
       ],
       "description": "Fix a specific bug",
       "runner": true,
       "skeleton": false,
-      "guardPolicy": "relaxed",
+      "existingCode": true,
+      "guardPolicy": "off",
       "ceremony": {
         "sensors": "on",
-        "learnings": "on",
-        "summary_confirmation": "on"
+        "learnings": "off",
+        "summary_confirmation": "off",
+        "plan_approval": "on",
+        "collaborators": "off"
       }
     },
     "classic": {
@@ -3390,11 +3376,13 @@
       "keywords": [],
       "description": "V1-style ceremony through Inception and Construction - the implicit default",
       "skeleton": false,
-      "guardPolicy": "relaxed",
+      "guardPolicy": "off",
       "ceremony": {
         "sensors": "on",
         "learnings": "on",
-        "summary_confirmation": "off"
+        "summary_confirmation": "off",
+        "plan_approval": "on",
+        "collaborators": "off"
       }
     },
     "enterprise": {
@@ -3441,7 +3429,9 @@
       "ceremony": {
         "sensors": "on",
         "learnings": "on",
-        "summary_confirmation": "on"
+        "summary_confirmation": "on",
+        "plan_approval": "on",
+        "collaborators": "on"
       }
     },
     "express": {
@@ -3492,7 +3482,9 @@
       "ceremony": {
         "sensors": "off",
         "learnings": "off",
-        "summary_confirmation": "off"
+        "summary_confirmation": "off",
+        "plan_approval": "off",
+        "collaborators": "off"
       }
     },
     "feature": {
@@ -3536,11 +3528,13 @@
       "description": "Full lifecycle for new features, practical depth",
       "runner": true,
       "skeleton": true,
-      "guardPolicy": "relaxed",
+      "guardPolicy": "off",
       "ceremony": {
         "sensors": "on",
         "learnings": "on",
-        "summary_confirmation": "on"
+        "summary_confirmation": "on",
+        "plan_approval": "on",
+        "collaborators": "off"
       }
     },
     "infra": {
@@ -3587,11 +3581,13 @@
       ],
       "description": "Infrastructure changes",
       "skeleton": true,
-      "guardPolicy": "strict",
+      "guardPolicy": "off",
       "ceremony": {
         "sensors": "on",
         "learnings": "on",
-        "summary_confirmation": "on"
+        "summary_confirmation": "on",
+        "plan_approval": "on",
+        "collaborators": "off"
       }
     },
     "mvp": {
@@ -3638,11 +3634,13 @@
       "description": "Skip operations, ship the core",
       "runner": true,
       "skeleton": true,
-      "guardPolicy": "relaxed",
+      "guardPolicy": "off",
       "ceremony": {
         "sensors": "on",
         "learnings": "on",
-        "summary_confirmation": "on"
+        "summary_confirmation": "on",
+        "plan_approval": "on",
+        "collaborators": "off"
       }
     },
     "poc": {
@@ -3690,11 +3688,13 @@
       ],
       "description": "Prove feasibility fast",
       "skeleton": true,
-      "guardPolicy": "relaxed",
+      "guardPolicy": "off",
       "ceremony": {
         "sensors": "on",
         "learnings": "on",
-        "summary_confirmation": "on"
+        "summary_confirmation": "on",
+        "plan_approval": "off",
+        "collaborators": "off"
       }
     },
     "refactor": {
@@ -3741,11 +3741,14 @@
       ],
       "description": "Clean up existing code",
       "skeleton": false,
-      "guardPolicy": "relaxed",
+      "existingCode": true,
+      "guardPolicy": "off",
       "ceremony": {
         "sensors": "on",
         "learnings": "on",
-        "summary_confirmation": "on"
+        "summary_confirmation": "on",
+        "plan_approval": "on",
+        "collaborators": "off"
       }
     },
     "security-patch": {
@@ -3794,11 +3797,14 @@
       "description": "CVE response",
       "runner": true,
       "skeleton": false,
-      "guardPolicy": "strict",
+      "existingCode": true,
+      "guardPolicy": "off",
       "ceremony": {
         "sensors": "on",
         "learnings": "on",
-        "summary_confirmation": "on"
+        "summary_confirmation": "on",
+        "plan_approval": "on",
+        "collaborators": "off"
       }
     },
     "workshop": {
@@ -3846,11 +3852,13 @@
       "description": "Facilitated group session with mandatory gates",
       "testStrategy": "Minimal",
       "skeleton": true,
-      "guardPolicy": "relaxed",
+      "guardPolicy": "off",
       "ceremony": {
         "sensors": "on",
         "learnings": "on",
-        "summary_confirmation": "on"
+        "summary_confirmation": "on",
+        "plan_approval": "on",
+        "collaborators": "off"
       }
     }
   },

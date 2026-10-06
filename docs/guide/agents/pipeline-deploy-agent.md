@@ -21,7 +21,7 @@ The aidlc-pipeline-deploy-agent does not support any stages in an advisory capac
 
 ## What to Expect
 
-In Practices Discovery, the aidlc-pipeline-deploy-agent drafts first, then integrates mutually blind quality, developer, and devsecops contributions after the human interview. In its delivery stages, it asks about CI/CD infrastructure, deployment targets, branching strategy, and rollback requirements; produces pipeline configurations, deployment strategies, and rollback runbooks; and monitors Deployment Execution.
+In Practices Discovery, the aidlc-pipeline-deploy-agent drafts first, then integrates mutually blind quality, developer, and devsecops contributions after the human interview (with collaborators off, its draft goes straight to the interview). In its delivery stages, it asks about CI/CD infrastructure, deployment targets, branching strategy, and rollback requirements; produces pipeline configurations, deployment strategies, and rollback runbooks; and monitors Deployment Execution.
 
 ## How It Collaborates
 

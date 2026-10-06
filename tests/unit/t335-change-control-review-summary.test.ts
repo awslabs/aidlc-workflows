@@ -2,7 +2,7 @@
 // function:recordAcceptedChanges, function:acceptedReviewChanges, function:renderReviewBrief,
 // subcommand:aidlc-state:approve, subcommand:aidlc-state:gate-start,
 // subcommand:aidlc-log:review, subcommand:aidlc-orchestrate:report,
-// hook:aidlc-review-freeze, hook:aidlc-plan-approval-guard, audit:CHANGE_ACCEPTED
+// hook:aidlc-review-freeze, hook:aidlc-plan-approval-guard, audit:CHANGE_ACCEPTED, function:unitPlainName
 //
 // t335 - Guard Policy at the review-receipt and summary-confirmation
 // checkpoints, and the checkpoints it never bypasses. Under `relaxed` (and
@@ -47,6 +47,7 @@ import {
   sessionsDir,
   setGuardsOffLine,
   stateDigest,
+  unitPlainName,
   writeActiveDirectiveMarker,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import {
@@ -141,7 +142,6 @@ function project(mode: Mode): string {
 }
 
 /** The one line the human hears when a relaxed or off policy carries a change through. */
-const CONTINUING = "(Guard Policy: relaxed or off).";
 
 function stageDir(proj: string): string {
   const dir = join(seededRecordDir(proj), "inception", STAGE);
@@ -253,7 +253,7 @@ describe("t335 (1) review receipt: relaxed keeps the verdict and carries the cha
     expect(receipts.acceptedChanges[0].checkpoint).toBe("review-receipt");
     expect(receipts.acceptedChanges[0].changed).toEqual([artifactRelative(proj)]);
     expect(receipts.acceptedChanges[0].notice).toBe(
-      `${artifactRelative(proj)} changed after it was reviewed. Continuing to the gate with the diff ${CONTINUING}`,
+      `${artifactRelative(proj)} changed after the Requirements Analysis review; carrying on.`,
     );
     // Reading is not recording: nothing is written until a transition runs.
     expect(acceptedRows(proj)).toHaveLength(0);
@@ -264,7 +264,7 @@ describe("t335 (1) review receipt: relaxed keeps the verdict and carries the cha
     expect(revalidated.status, revalidated.stderr).toBe(0);
     const notices = printedNotices(revalidated.stdout);
     expect(notices).toEqual([
-      `${artifactRelative(proj)} changed after it was reviewed. Continuing to the gate with the diff ${CONTINUING}`,
+      `${artifactRelative(proj)} changed after the Requirements Analysis review; carrying on.`,
     ]);
     let rows = acceptedRows(proj);
     expect(rows).toHaveLength(1);
@@ -298,10 +298,25 @@ describe("t335 (1) review receipt: relaxed keeps the verdict and carries the cha
     const brief = run(BRIEF_TOOL, ["review", "--stage", STAGE, "--why", "first"], proj);
     expect(brief.status, brief.stderr).toBe(0);
     expect(brief.stdout).toContain(
-      `**Reviewed content differs:** ${artifactRelative(proj)} changed after it was reviewed. Continuing to the gate with the diff ${CONTINUING}`,
+      `**Reviewed content differs:** ${artifactRelative(proj)} changed after the Requirements Analysis review; carrying on.`,
     );
     expect(brief.stdout).toContain(`**Changed after review:** \`${artifactRelative(proj)}\``);
     expect(brief.stdout).toContain("**Decision options:**");
+  });
+
+  // An edit made in an editor leaves no write record, so no file can be named:
+  // the line names the stage's documents, never one of them that may not have
+  // changed.
+  test("a hand edit is said as the stage's documents, not one document's name", () => {
+    const proj = project("relaxed");
+    recordReadyReview(proj);
+    appendFileSync(artifact(proj), "\nA requirement added by hand.\n", "utf-8");
+    const receipts = freshReviewReceipts(proj, readFileSync(seededStateFile(proj), "utf-8"), stage());
+    expect(receipts.acceptedChanges).toHaveLength(1);
+    expect(receipts.acceptedChanges[0].changed).toBeNull();
+    expect(receipts.acceptedChanges[0].notice).toBe(
+      "The Requirements Analysis documents changed after they were reviewed; carrying on.",
+    );
   });
 
   test("the engine's report carries the change line onto its directive", () => {
@@ -318,7 +333,7 @@ describe("t335 (1) review receipt: relaxed keeps the verdict and carries the cha
     expect(directive).toMatchObject({
       kind: "print",
       change_notices: [
-        `${artifactRelative(proj)} changed after it was reviewed. Continuing to the gate with the diff ${CONTINUING}`,
+        `${artifactRelative(proj)} changed after the Requirements Analysis review; carrying on.`,
       ],
     });
     expect(acceptedRows(proj)).toHaveLength(1);
@@ -355,8 +370,9 @@ describe("t335 (1) review receipt: relaxed keeps the verdict and carries the cha
     expect(blocked.stderr).toContain("review-freeze");
     expect(stoodAside(strictProject)).toHaveLength(0);
 
-    // relaxed and off lower this fence: the write goes through with one line
-    // and one GUARD_STOOD_ASIDE row; the receipt and its verdict are untouched.
+    // relaxed and off lower this fence: the write goes through with one
+    // GUARD_STOOD_ASIDE row; the receipt and its verdict are untouched. Relaxed
+    // says so in one line; off says nothing, because off means off.
     for (const mode of ["relaxed", "off"] as const) {
       const proj = project(mode);
       recordReadyReview(proj);
@@ -367,9 +383,13 @@ describe("t335 (1) review receipt: relaxed keeps the verdict and carries the cha
         tool_input: { file_path: artifact(proj) },
       });
       expect(passed.code, mode).toBe(0);
-      expect(passed.stdout, mode).toContain(
-        `Continuing past the review-freeze check because it is off for this piece of work (guard policy ${mode} (set by you)). Recorded in the audit trail`,
-      );
+      if (mode === "relaxed") {
+        expect(passed.stdout, mode).toContain(
+          "Continuing past the review-freeze check because it is off for this piece of work (guard policy relaxed (set by you)). Recorded in the audit trail",
+        );
+      } else {
+        expect(passed.stdout, mode).toBe("");
+      }
       const rows = stoodAside(proj);
       expect(rows, mode).toHaveLength(1);
       expect(auditBlockField(rows[0].block, "Guard")).toBe("review-freeze");
@@ -377,6 +397,32 @@ describe("t335 (1) review receipt: relaxed keeps the verdict and carries the cha
       expect(auditBlockField(rows[0].block, "Stage")).toBe(STAGE);
       expect(reviewCompletedRows(proj)).toHaveLength(1);
       expect(auditBlockField(reviewCompletedRows(proj)[0].block, "Verdict")).toBe("READY");
+    }
+  });
+
+  test("under Guard Policy off, every write the freeze stands aside for says nothing, whatever set the policy", () => {
+    const writes = 3;
+    for (const policy of ["off (set by you)", "off (from scope classic)", "off (from team.md)"]) {
+      const proj = project("off");
+      const statePath = seededStateFile(proj);
+      writeFileSync(statePath, setGuardPolicyLine(readFileSync(statePath, "utf-8"), policy));
+      recordReadyReview(proj);
+      expect(run(STATE_TOOL, ["gate-start", STAGE], proj).status).toBe(0);
+      for (let i = 0; i < writes; i++) {
+        for (const harness of ["claude", "codex"]) {
+          const passed = runHook(FREEZE_HOOK, proj, {
+            hook_event_name: "PreToolUse",
+            tool_name: "Write",
+            tool_input: { file_path: artifact(proj) },
+          }, { AIDLC_HARNESS_NAME: harness });
+          expect(passed.code, `${policy} ${harness}`).toBe(0);
+          expect(passed.stdout, `${policy} ${harness}`).toBe("");
+          expect(passed.stderr, `${policy} ${harness}`).not.toContain("Continuing past");
+        }
+      }
+      // The audit trail still has every write it let through.
+      const rows = readAuditShardEvents(proj).filter((entry) => entry.event === "GUARD_STOOD_ASIDE");
+      expect(rows, policy).toHaveLength(writes * 2);
     }
   });
 
@@ -527,7 +573,7 @@ describe("t335 (1) review receipt: relaxed keeps the verdict and carries the cha
     });
     expect(refused.status).not.toBe(0);
     expect(refused.stderr).toContain(
-      `Cannot continue under a relaxed or off Guard Policy: the accepted change for \\"${STAGE}\\" could not be recorded in the audit ledger (injected ledger fault: t335). Repair the ledger, or approve again.`,
+      `Cannot continue under a relaxed or off Guard Policy: the accepted change for \\"${STAGE}\\" could not be recorded in the audit ledger (injected ledger fault: t335). Repair the ledger, then run the same command again.`,
     );
     expect(printedNotices(refused.stdout)).toEqual([]);
     expect(acceptedRows(proj)).toHaveLength(0);
@@ -558,13 +604,13 @@ describe("t335 (1) review receipt: relaxed keeps the verdict and carries the cha
     expect(receipts.stageStale).toBe(false);
     expect(receipts.acceptedChanges).toHaveLength(1);
     expect(receipts.acceptedChanges[0].notice).toBe(
-      `${artifactRelative(proj)} changed after it was reviewed. Continuing to the gate with the diff ${CONTINUING}`,
+      `${artifactRelative(proj)} changed after the Requirements Analysis review; carrying on.`,
     );
     expect(acceptedRows(proj)).toHaveLength(0);
     const revalidated = run(STATE_TOOL, ["gate-start", STAGE], proj);
     expect(revalidated.status, revalidated.stderr).toBe(0);
     expect(printedNotices(revalidated.stdout)).toEqual([
-      `${artifactRelative(proj)} changed after it was reviewed. Continuing to the gate with the diff ${CONTINUING}`,
+      `${artifactRelative(proj)} changed after the Requirements Analysis review; carrying on.`,
     ]);
     expect(acceptedRows(proj)).toHaveLength(1);
     expect(auditBlockField(acceptedRows(proj)[0].block, "Checkpoint")).toBe("review-receipt");
@@ -671,14 +717,14 @@ describe("t335 (2) summary confirmation: relaxed continues with a row", () => {
       stage: STAGE,
       unit: null,
       changed: [artifactRelative(proj)],
-      notice: `${artifactRelative(proj)} was saved without the current summary confirmation. Continuing ${CONTINUING}`,
+      notice: `${artifactRelative(proj)} was saved before you confirmed the current summary; carrying on.`,
     });
     expect(acceptedRows(proj)).toHaveLength(0);
 
     const gate = run(STATE_TOOL, ["gate-start", STAGE], proj, SUMMARY_ENV);
     expect(gate.status, gate.stderr).toBe(0);
     expect(printedNotices(gate.stdout)).toEqual([
-      `${artifactRelative(proj)} was saved without the current summary confirmation. Continuing ${CONTINUING}`,
+      `${artifactRelative(proj)} was saved before you confirmed the current summary; carrying on.`,
     ]);
     const rows = acceptedRows(proj);
     expect(rows).toHaveLength(1);
@@ -739,7 +785,7 @@ describe("t335 (2) summary confirmation: relaxed continues with a row", () => {
     expect(checked.acceptedChanges).toHaveLength(1);
     expect(checked.acceptedChanges?.[0]).toMatchObject({
       checkpoint: "summary-confirmation",
-      notice: `${artifactRelative(proj)} was saved without the current summary confirmation. Continuing ${CONTINUING}`,
+      notice: `${artifactRelative(proj)} was saved before you confirmed the current summary; carrying on.`,
     });
     const gate = run(STATE_TOOL, ["gate-start", STAGE], proj, SUMMARY_ENV);
     expect(gate.status, gate.stderr).toBe(0);
@@ -952,11 +998,14 @@ describe("t335 (5) a team-owned Unit gate runs the same checkpoint", () => {
     expect(gate.status, gate.stderr).toBe(0);
     const relativeArtifact = relative(proj, reviewedUnitArtifact(proj)).replaceAll("\\", "/");
     expect(printedNotices(gate.stdout)).toEqual([
-      `${relativeArtifact} changed after it was reviewed. Continuing to the gate with the diff ${CONTINUING}`,
+      `${relativeArtifact} changed after the alpha Unit was reviewed; carrying on.`,
     ]);
     const rows = acceptedRows(proj);
     expect(rows).toHaveLength(1);
     expect(auditBlockField(rows[0].block, "Unit")).toBe(UNIT);
+    // The line names the Unit in plain words, never its numbered id.
+    expect(unitPlainName("u1-note-store")).toBe("note store");
+    expect(unitPlainName("payments_api")).toBe("payments api");
     expect(auditBlockField(rows[0].block, "Checkpoint")).toBe("review-receipt");
     // The verdict stands as recorded; the gate presented again writes nothing more.
     expect(reviewCompletedRows(proj)).toHaveLength(1);
@@ -964,6 +1013,35 @@ describe("t335 (5) a team-owned Unit gate runs the same checkpoint", () => {
     expect(again.status, again.stderr).toBe(0);
     expect(printedNotices(again.stdout)).toEqual([]);
     expect(acceptedRows(proj)).toHaveLength(1);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("a Unit's own brief says only that Unit's accepted change; the final gate's brief says every Unit's", () => {
+    const proj = teamProject("relaxed");
+    settleUnit(proj);
+    editReviewedUnitArtifact(proj);
+    const gate = run(STATE_TOOL, ["gate-start", UNIT_STAGE, "--unit", UNIT], proj, UNIT_ENV);
+    expect(gate.status, gate.stderr).toBe(0);
+    const relativeArtifact = relative(proj, reviewedUnitArtifact(proj)).replaceAll("\\", "/");
+    // Another Unit's change, already said once when it was kept.
+    appendAuditEntry(
+      "CHANGE_ACCEPTED",
+      {
+        Stage: UNIT_STAGE,
+        Unit: "beta",
+        Checkpoint: "review-receipt",
+        Changed: "src/beta.js",
+        Details: "src/beta.js changed after Unit beta's review; carrying on.",
+      },
+      proj,
+    );
+    const own = run(BRIEF_TOOL, ["review", "--stage", UNIT_STAGE, "--unit", UNIT, "--why", "first"], proj, UNIT_ENV);
+    expect(own.status, own.stderr).toBe(0);
+    expect(own.stdout).toContain(`**Changed after review:** \`${relativeArtifact}\``);
+    expect(own.stdout).not.toContain("src/beta.js");
+    const final = run(BRIEF_TOOL, ["review", "--stage", UNIT_STAGE, "--why", "first"], proj, UNIT_ENV);
+    expect(final.status, final.stderr).toBe(0);
+    expect(final.stdout).toContain(`**Changed after review:** \`${relativeArtifact}\``);
+    expect(final.stdout).toContain("**Changed after review:** `src/beta.js`");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("strict is today's refusal for the Unit", () => {
@@ -975,6 +1053,18 @@ describe("t335 (5) a team-owned Unit gate runs the same checkpoint", () => {
     expect(refused.stderr).toContain(`Refusing gate for unit \\"${UNIT}\\"`);
     expect(acceptedRows(proj)).toHaveLength(0);
   });
+
+  test("a hand edit of the Unit's document is said as its stage's documents", () => {
+    const proj = teamProject("relaxed");
+    settleUnit(proj);
+    appendFileSync(reviewedUnitArtifact(proj), "\nA rule added by hand.\n", "utf-8");
+    const gate = run(STATE_TOOL, ["gate-start", UNIT_STAGE, "--unit", UNIT], proj, UNIT_ENV);
+    expect(gate.status, gate.stderr).toBe(0);
+    expect(printedNotices(gate.stdout)).toEqual([
+      "The alpha Unit's Functional Design documents changed after they were reviewed; carrying on.",
+    ]);
+    expect(acceptedRows(proj)).toHaveLength(1);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("an invalid memory Mode is the validation error at the Unit gate", () => {
     const proj = teamProject("relaxed");
@@ -1064,7 +1154,7 @@ describe("t335 (3) never relaxed: the human gate, the plan stop, and an in-progr
       expect(blocked.code, blocked.stderr).toBe(2);
       expect(blocked.stderr).toContain(reason);
       if (mode !== "strict") {
-        expect(JSON.parse(blocked.stderr).code).toBe("CODE_GENERATION_EXECUTION_INELIGIBLE");
+        expect(blocked.stderr).toContain(" The plan-approval setting is unchanged.");
       }
       expect(blocked.stdout).toBe("");
       expect(approvalRows()).toHaveLength(0);
@@ -1085,7 +1175,7 @@ describe("t335 (3) never relaxed: the human gate, the plan stop, and an in-progr
     expect(fingerprint.status, fingerprint.stderr).toBe(0);
     writeFileSync(questions,
       `## Plan Approval\n${fingerprint.stdout.trim()}\nA. Approve Plan\nB. Request Changes\n[Answer]:\n`);
-    assertBlocked("Plan Approval");
+    assertBlocked("the plan is not approved yet");
 
     const session = `t335-plan-${mode}`;
     appendAuditEntry("SESSION_STARTED", { Source: "startup", Session: session }, proj);
@@ -1097,7 +1187,7 @@ describe("t335 (3) never relaxed: the human gate, the plan stop, and an in-progr
     writeFileSync(questions, readFileSync(questions, "utf-8").replace("[Answer]:", "[Answer]: Approve Plan"));
     const selfAnswered = run(LOG_TOOL, ["answer", ...identity, "--details", "Approve Plan"], proj, env);
     expect(selfAnswered.status, selfAnswered.stdout).not.toBe(0);
-    expect(selfAnswered.stderr).toContain("actual offered choice from this prompt and session");
+    expect(selfAnswered.stderr).toContain("requires the person's reply to this prompt, in this session");
     assertBlocked("Plan Approval");
     const human = runHook(join(TOOLS, "aidlc.ts"), proj, {
       hook_event_name: "UserPromptSubmit", session_id: session, cwd: proj, prompt: "Approve Plan",
@@ -1127,10 +1217,13 @@ describe("t335 (3) never relaxed: the human gate, the plan stop, and an in-progr
     appendFileSync(plan, "\nAlso cover the adjacent edge case.\n");
     const continuation = dispatch();
     expect(continuation.code, continuation.stderr).toBe(mode === "strict" ? 2 : 0);
-    if (mode !== "strict") {
+    if (mode === "relaxed") {
       expect(continuation.stdout).toContain(
-        `Continuing past the plan-approval check because it is off for this piece of work (guard policy ${mode} (set by you)). Recorded in the audit trail: dispatch of aidlc-developer-agent`,
+        "Continuing past the plan-approval check because it is off for this piece of work (guard policy relaxed (set by you)). Recorded in the audit trail: dispatch of aidlc-developer-agent",
       );
+    } else if (mode === "off") {
+      // Off means off: the row records the pass and nothing is said.
+      expect(continuation.stdout).not.toContain("Continuing past");
     }
     expect(stoodAside()).toHaveLength(mode === "strict" ? 0 : 1);
     expect(approvalRows()).toEqual(approvals);

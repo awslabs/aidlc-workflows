@@ -9,6 +9,7 @@
 import { type spawn, spawnSync } from "node:child_process";
 import {
   appendFileSync,
+  copyFileSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -30,6 +31,7 @@ import {
   runnerFailureExitCode,
   testGuardEnvironment,
   type ParsedArgs,
+  type GuardProfile,
 } from "./harness/runner-profile.ts";
 import {
   deterministicCaseTimeoutMs,
@@ -43,7 +45,11 @@ import {
   TestBudgetExhaustedError,
 } from "./harness/test-budget.ts";
 import { buildMeta, renderMeta } from "./lib/bun-junit-to-meta.ts";
+import { CASE_TIMEOUT_RETRY_MAX_MS, ISOLATED_RETRY_MAX_MS, onlyCaseTimeouts, ORDINARY_RETRY_MAX_MS, preserveFirstAttempt, retryEligible, retryPassed } from "./lib/file-retry.ts";
 import {
+  type OrderWeights,
+  orderLongestFirst,
+  parseOrderWeights,
   selectShard,
   type ShardConfig,
 } from "./lib/test-sharding.ts";
@@ -60,6 +66,7 @@ const DEFAULT_CASE_TIMEOUT_MS = deterministicCaseTimeoutMs();
 const PACKAGE_READY_ENV = "AIDLC_TEST_PACKAGE_READY";
 const PACKAGE_LOCK = join(REPO_ROOT, ".aidlc", "test-package.lock");
 const UNIT_SHARD_CONFIG = join(SCRIPT_DIR, "unit-shard-weights.json");
+const INTEGRATION_ORDER_WEIGHTS = join(SCRIPT_DIR, "integration-weights.json");
 const REQUIRE_COMPILED_COVERAGE_ENV = "AIDLC_REQUIRE_COMPILED_COVERAGE";
 
 // Platform null device, used for the system config after the protected
@@ -98,6 +105,7 @@ interface IsolatedFileContext {
   force?: boolean;
   budget?: FileBudget;
   retirement?: IsolatedProcessRetirement;
+  guardProfile?: GuardProfile;
 }
 
 interface FileBudget {
@@ -115,6 +123,8 @@ interface FileExecution {
   evidenceComplete?: boolean;
   evidenceError?: string;
   junitPath?: string;
+  /** Every failed case failed by running past its case timeout. */
+  caseTimeoutsOnly?: boolean;
 }
 
 function usage(): string {
@@ -148,6 +158,8 @@ OUTPUT MODIFIERS (combinable with any tier/profile):
                   driver traces to tests/logs/
   --filter PAT    Only run tests whose filename matches extended regex PAT
                   Fails if a selected file executes no cases or no files match.
+  --exclude PAT   Leave out tests whose filename matches PAT (the same names
+                  --filter matches); the rest run as an ordinary tier.
   --parallel N    Run up to N test files concurrently within a tier (alias: -P N).
                   Default: 1 (serial). Smoke and unit tiers always run serially.
                   Recommended range: 1-8. See docs/reference/09-testing.md.
@@ -158,9 +170,16 @@ OUTPUT MODIFIERS (combinable with any tier/profile):
   --run-timeout N   Shared work ceiling in seconds, including setup and all files.
                   Remaining work is bounded before each dispatch; cleanup is reserved.
   --isolated-e2e  Dispatch e2e files across -P isolated checkout workers.
+  --isolated-files  Dispatch integration/e2e files with fresh checkouts and homes.
+  --file-retries N  Retry a short assertion-failed file once (0 or 1): in a fresh
+                  isolated worker with --isolated-files, otherwise in a fresh
+                  process for smoke/unit/integration (the merge queue). A
+                  file whose only failures are case timeouts may run up to 45
+                  minutes and still retry. A file past its deadline, a crash
+                  or a cleanup failure is never retried.
                   Known serial driver families may overlap; assertions are unchanged.
-  --e2e-plan      Print the isolated e2e inventory/resource plan; run no tests or builds.
-                  Requires --e2e; implies --isolated-e2e, not --e2e.
+  --e2e-plan      Print the isolated file inventory/resource plan; run no tests or builds.
+                  Requires --e2e or --isolated-files; implies --isolated-e2e.
   --bedrock-parallel N  Maximum simultaneous Bedrock test files (default: 2).
   --kiro-parallel N     Maximum simultaneous Kiro test files (default: 2).
   --ide-parallel N      Maximum simultaneous Kiro IDE files (default: 1).
@@ -203,6 +222,18 @@ function parseArgs(argv: string[]): ParsedArgs {
 }
 
 const args = parseArgs(process.argv.slice(2));
+// --exclude drops the files it matches from every tier, as if they were not
+// there: the rest run as an ordinary tier, so their optional skips stay SKIP
+// (unlike --filter, which makes each matched file an explicit selection).
+const excludeRegex: RegExp | null = (() => {
+  if (!args.exclude) return null;
+  try {
+    return new RegExp(args.exclude);
+  } catch (err) {
+    process.stderr.write(`ERROR: --exclude must be a valid JavaScript regex: ${err}\n`);
+    process.exit(2);
+  }
+})();
 const RUN_DEADLINE_MS = args.runTimeout === null
   ? undefined
   : Date.now() + args.runTimeout * 1000;
@@ -288,7 +319,8 @@ if (args.e2ePlan) {
     const { planE2eFile, readE2eTimings } = await import("./lib/e2e-plan.ts");
     const filter = args.filter ? new RegExp(args.filter) : null;
     const weights = args.e2eTimings ? e2eTimingAliases(readE2eTimings(readFileSync(args.e2eTimings, "utf8"))) : {};
-    const files = levelFiles("e2e").filter((file) => matchesE2eFilter(file, filter));
+    const files = args.isolatedFiles ? requestedTestFiles()
+      : levelFiles("e2e").filter((file) => matchesE2eFilter(file, filter));
     if (files.length === 0) throw new Error("e2e selection contains no test files");
     const tasks = files.map((file) => planE2eFile(file, weights));
     const limits = e2eLimits(tasks);
@@ -833,6 +865,15 @@ async function runSpawnCapture(
         };
         transport = { worker: { id: 0, root: cwd, socket }, env };
       }
+      // Keep each file's machine install beside its temporary project fixtures.
+      // Debug logs live inside the source checkout; putting the machine root
+      // there makes project-required routes correctly reject that checkout as
+      // overlapping an installation. The existing fixture cleanup owns this
+      // directory in both ordinary and isolated E2E runs.
+      const machineRoot = join(env.TMPDIR!, "machine");
+      mkdirSync(machineRoot, { recursive: true });
+      env.AIDLC_INSTALL_ROOT = machineRoot;
+      env.AIDLC_BIN_DIR = join(machineRoot, "bin");
       const supervisorPath = join(cwd, "tests", "lib", "e2e-process.ts");
       // Both the coordinator-side helper and its child entry point must use
       // the snapshot, even if authored source changes while a file is queued.
@@ -1029,11 +1070,11 @@ async function runBunTestFile(
   // host cannot change unrelated test results. Focused managed-policy tests
   // override the path with their own fixture.
   const env: NodeJS.ProcessEnv = {
-    ...testGuardEnvironment({ ...process.env, ...context?.env }, args.guardProfile),
+    ...testGuardEnvironment({ ...process.env, ...context?.env }, context?.guardProfile ?? args.guardProfile),
     AIDLC_TEST_NAME: base,
     // Survives each file's private TMPDIR, but never crosses runner invocations.
     AIDLC_TEST_COMPILED_DIR: join(logDir, "compiled"),
-    AIDLC_MANAGED_SETTINGS_PATH: join(logDir, ".aidlc-managed-settings-absent.json"),
+    AIDLC_MANAGED_SETTINGS_PATH: join(args.isolatedFiles && context ? context.artifacts : logDir, ".aidlc-managed-settings-absent.json"),
   };
   // Command-scope config outranks the isolated global file. Preserve its safety
   // entries above, then remove all command-scope injection before spawning tests.
@@ -1048,7 +1089,10 @@ async function runBunTestFile(
       delete env[key];
     }
   }
-  env.GIT_CONFIG_GLOBAL = isolatedGitConfig;
+  if (args.isolatedFiles && context) {
+    env.GIT_CONFIG_GLOBAL = join(context.artifacts, "gitconfig");
+    copyFileSync(isolatedGitConfig, env.GIT_CONFIG_GLOBAL);
+  } else env.GIT_CONFIG_GLOBAL = isolatedGitConfig;
   env.GIT_CONFIG_SYSTEM = NULL_DEVICE;
   process.stdout.write(`\n=== START ${base} ===\n`);
 
@@ -1156,6 +1200,7 @@ async function runBunTestFile(
     evidenceComplete: evidence.complete,
     evidenceError: evidence.complete ? undefined : evidence.error,
     junitPath: junitXml,
+    ...(status === "FAIL" && onlyCaseTimeouts(xml) ? { caseTimeoutsOnly: true } : {}),
     // Diagnostic evidence, never grounds for changing an assertion or retrying.
     throttlingSignals: (run.output.match(
       /ThrottlingException|TooManyRequestsException|(?:HTTP|status(?:Code)?)\s*[:=]?\s*429\b|rate[_ ]limit[_ ]exceeded/gi,
@@ -1188,6 +1233,9 @@ function pluginTestFiles(): string[] {
 function levelFiles(level: Level, excludes: string[] = []): string[] {
   const dir = join(SCRIPT_DIR, level);
   const excludeSet = new Set(excludes);
+  // --exclude applies after shard selection, so a shard is the same set of
+  // files with or without it.
+  const kept = (f: string) => excludeRegex === null || !matchesE2eFilter(f, excludeRegex);
   const files = existsSync(dir)
     ? readdirSync(dir)
         .filter((f) => f.endsWith(".test.ts"))
@@ -1211,7 +1259,7 @@ function levelFiles(level: Level, excludes: string[] = []): string[] {
     const names = files.map((file) => basename(file));
     try {
       const selected = new Set(selectShard(names, args.shard, config));
-      return files.filter((file) => selected.has(basename(file)));
+      return files.filter((file) => selected.has(basename(file)) && kept(file));
     } catch (error) {
       process.stderr.write(
         `ERROR: ${error instanceof Error ? error.message : String(error)}\n`,
@@ -1219,7 +1267,83 @@ function levelFiles(level: Level, excludes: string[] = []): string[] {
       process.exit(2);
     }
   }
-  return files;
+  return files.filter(kept);
+}
+
+function remainingRunMs(): number {
+  return RUN_WORK_DEADLINE_MS ? RUN_WORK_DEADLINE_MS - Date.now() : Number.POSITIVE_INFINITY;
+}
+
+interface OrdinaryRetry {
+  file: string;
+  name: string;
+  passedOnRetry: boolean;
+  firstAttempt: { failedCases: number; wallTimeMs: number; log: string | null };
+  secondAttempt: { status: Status; failedCases: number; wallTimeMs: number };
+}
+const ordinaryRetries: OrdinaryRetry[] = [];
+
+/**
+ * Ordinary smoke/unit/integration files get one fresh second run (the merge
+ * queue passes --file-retries 1) when the first attempt failed assertions
+ * under the shared retry rule. A second failure stays a failure; a pass is
+ * recorded as passed on retry, never as a plain pass.
+ */
+async function runFileWithRetry(file: string, parallelMode: boolean): Promise<FileExecution | undefined> {
+  const first = await runBunTestFile(file, parallelMode);
+  if (!first || !args.fileRetries || !retryEligible(first, ORDINARY_RETRY_MAX_MS, remainingRunMs())) return first;
+  const name = resultName(file);
+  const say = async (line: string): Promise<void> => {
+    if (parallelMode) await withStdoutLock(() => process.stdout.write(line));
+    else process.stdout.write(line);
+  };
+  // Without verbose logs there is no evidence to keep; with them, a retry that
+  // would overwrite the first attempt's evidence never starts.
+  const kept = args.verbose ? preserveFirstAttempt(logDir, name) : { ok: true, log: null };
+  if (!kept.ok) {
+    await say(`=== NO RETRY ${basename(file)} (its first attempt's evidence could not be kept aside) ===\n`);
+    return first;
+  }
+  const log = kept.log;
+  const timedOutCases = first.caseTimeoutsOnly ? ", each by its case timeout" : "";
+  await say(`=== RETRY ${basename(file)} (first attempt failed ${first.cases.failed} case(s)${timedOutCases}${log ? `; its log is ${log}` : ""}) ===\n`);
+  let second = await runBunTestFile(file, parallelMode);
+  if (!second) return first;
+  const passedOnRetry = retryPassed(first, second);
+  const secondAttempt = { status: second.status, failedCases: second.cases.failed, wallTimeMs: second.wallTimeMs };
+  const metaPath = join(resultsDir, `${name}.meta`);
+  if (!passedOnRetry && second.status !== "FAIL") {
+    // Only a pass of every case the first attempt ran replaces its failure: a
+    // retry that skipped one of them, or executed none, leaves the file failed.
+    const meta: ResultRow = existsSync(metaPath)
+      ? parseMeta(metaPath)
+      : { name, status: "FAIL", tests: 0, skipped: 0, failed: 0, duration: "0" };
+    writeMeta(name, {
+      ...meta, status: "FAIL", failed: Math.max(1, meta.failed, first.cases.failed),
+      reason: `failed on its first attempt (${first.cases.failed} case(s)); its retry did not pass every case the first attempt ran`,
+    });
+    second = { ...second, status: "FAIL" };
+    fileExecutions.set(name, second);
+  }
+  ordinaryRetries.push({
+    file: relative(REPO_ROOT, file).replaceAll("\\", "/"),
+    name,
+    passedOnRetry,
+    firstAttempt: {
+      failedCases: first.cases.failed, wallTimeMs: first.wallTimeMs, log,
+      ...(first.caseTimeoutsOnly ? { caseTimeoutsOnly: true } : {}),
+    },
+    secondAttempt,
+  });
+  if (passedOnRetry) {
+    if (existsSync(metaPath)) {
+      writeMeta(name, {
+        ...parseMeta(metaPath),
+        reason: `passed on retry: the first attempt failed ${first.cases.failed} case(s)${log ? `; its log is ${log}` : ""}`,
+      });
+    }
+  }
+  return second;
 }
 
 async function runFileBand(
@@ -1227,16 +1351,16 @@ async function runFileBand(
   serialFiles: string[],
   parallelFiles: string[],
 ): Promise<void> {
-  for (const file of serialFiles) await runBunTestFile(file, false);
+  for (const file of serialFiles) await runFileWithRetry(file, false);
   if (effectiveParallel <= 1) {
-    for (const file of parallelFiles) await runBunTestFile(file, false);
+    for (const file of parallelFiles) await runFileWithRetry(file, false);
     return;
   }
 
   const executing = new Set<Promise<FileExecution | undefined>>();
   try {
     for (const file of parallelFiles) {
-      const p = runBunTestFile(file, true).finally(() => {
+      const p = runFileWithRetry(file, true).finally(() => {
         executing.delete(p);
       });
       executing.add(p);
@@ -1276,8 +1400,25 @@ async function runFilesPartitioned(
     }
   }
 
-  await runFileBand(effectiveParallel, serialFiles, parallelFiles);
-  await runFileBand(effectiveParallel, liveSerialFiles, liveParallelFiles);
+  const order = level === "integration" && effectiveParallel > 1 ? integrationOrderWeights() : undefined;
+  const admit = (files: string[]): string[] => order ? orderLongestFirst(files, legacyResultName, order) : files;
+  await runFileBand(effectiveParallel, serialFiles, admit(parallelFiles));
+  await runFileBand(effectiveParallel, liveSerialFiles, admit(liveParallelFiles));
+}
+
+/** Prior CI durations; without a readable file, files start in name order. */
+function integrationOrderWeights(): OrderWeights | undefined {
+  if (!existsSync(INTEGRATION_ORDER_WEIGHTS)) return undefined;
+  let weights: OrderWeights | undefined;
+  try {
+    weights = parseOrderWeights(readFileSync(INTEGRATION_ORDER_WEIGHTS, "utf8"));
+  } catch {
+    // An unreadable hint (a directory, a permission error) only costs the order.
+  }
+  if (!weights) {
+    process.stdout.write(`NOTE: ${relative(REPO_ROOT, INTEGRATION_ORDER_WEIGHTS)} is unreadable; integration files start in name order\n`);
+  }
+  return weights;
 }
 
 async function runTier(level: Level, label: string): Promise<void> {
@@ -1304,7 +1445,8 @@ async function runIsolatedE2e(): Promise<void> {
     prepareE2eWorkers, e2eWorkerEnvironment, cleanupE2eTransports, finishE2eTemporaryFiles,
     assertE2eDiskSpace,
   } = await import("./lib/e2e-workers.ts");
-  const selected = levelFiles("e2e").filter((file) => matchesE2eFilter(file, filterRegex));
+  const selected = args.isolatedFiles ? requestedTestFiles()
+    : levelFiles("e2e").filter((file) => matchesE2eFilter(file, filterRegex));
   if (selected.length === 0) throw new Error("isolated e2e selection contains no test files");
   const weights = args.e2eTimings ? e2eTimingAliases(readE2eTimings(readFileSync(args.e2eTimings, "utf8"))) : {};
   const tasks = selected.map((file) => planE2eFile(file, weights));
@@ -1385,7 +1527,8 @@ async function runIsolatedE2e(): Promise<void> {
     `E2E plan: ${join(logDir, "e2e-plan.json")}\nE2E results: ${reportPath}\n` +
     `Driver traces: ${join(logDir, "e2e-artifacts", "*", "*.ndjson")}\n`,
   );
-  const execute = async (file: string, workerId: number): Promise<FileExecution> => {
+  const usedWorkers = new Set<number>();
+  const execute = async (file: string, workerId: number, attempt = 1): Promise<FileExecution> => {
     if (isolatedInterrupted) throw new Error("isolated e2e interrupted");
     const worker = pool.workers[workerId - 1];
     let budget: FileBudget;
@@ -1408,21 +1551,26 @@ async function runIsolatedE2e(): Promise<void> {
       report();
       return outcome;
     }
+    if (args.isolatedFiles && usedWorkers.has(workerId)) await pool.reset(worker);
+    usedWorkers.add(workerId);
     assertE2eDiskSpace(worker.root);
     assertE2eDiskSpace(logDir);
-    const artifacts = join(logDir, "e2e-artifacts", resultName(file));
+    const artifacts = join(logDir, "e2e-artifacts", resultName(file), ...(args.isolatedFiles ? [`attempt-${attempt}`] : []));
     const env = await e2eWorkerEnvironment(worker, file, artifacts, {
       ...process.env,
       [FILE_DEADLINE_ENV]: String(budget.deadlineMs),
       [FILE_CLEANUP_ENV]: String(budget.cleanupMs),
-    });
+    }, args.isolatedFiles);
     const record = records.get(file)!;
     Object.assign(record, {
       state: "RUNNING", worker: workerId, checkout: worker.root, socket: worker.socket,
       artifacts, temporaryDirectory: env.TEMP,
     });
     let outcome: FileExecution | undefined;
-    const context: IsolatedFileContext = { worker, env, artifacts, force: true, budget };
+    const context: IsolatedFileContext = {
+      worker, env, artifacts, force: true, budget,
+      guardProfile: args.isolatedFiles && planE2eFile(file).productionGuards ? "production" : args.guardProfile,
+    };
     let cleanupFailure: Error | undefined;
     const checkWorkerSource = async (checkpoint: "before" | "after"): Promise<void> => {
       if (!matrixContext) return;
@@ -1491,6 +1639,16 @@ async function runIsolatedE2e(): Promise<void> {
       ...outcome,
       cleanupError: cleanupFailure?.message ?? outcome.cleanupError,
     });
+    if (args.isolatedFiles) {
+      for (const suffix of [".log", ".execution.json"]) {
+        const path = join(logDir, `${resultName(file)}${suffix}`);
+        if (existsSync(path)) copyFileSync(path, join(artifacts, `runner${suffix}`));
+      }
+      record.attempts ??= [];
+      const attempts = record.attempts as Array<Record<string, unknown>>;
+      attempts.push({ attempt, artifacts, status: outcome.status, seconds: outcome.wallTimeMs / 1000,
+        timedOut: outcome.timedOut, cleanupError: cleanupFailure?.message ?? outcome.cleanupError });
+    }
     report();
     if (cleanupFailure) throw cleanupFailure;
     if (isolatedInterrupted) throw new Error("isolated e2e interrupted");
@@ -1526,7 +1684,16 @@ async function runIsolatedE2e(): Promise<void> {
     });
     await runE2eQueue(runnable, limits, async (task, worker) => {
       try {
-        await execute(task.file, worker);
+        const first = await execute(task.file, worker);
+        // Retry only a short assertion failure after confirmed retirement. A
+        // timeout, missing evidence or cleanup failure never earns another run.
+        if (args.fileRetries && retryEligible(first, ISOLATED_RETRY_MAX_MS, remainingRunMs())) {
+          const second = await execute(task.file, worker, 2);
+          if (second.status === "PASS") {
+            records.get(task.file)!.passedOnRetry = true;
+            process.stdout.write(`::warning title=Flaky live test::${basename(task.file)} passed on its second attempt; both attempts are retained.\n`);
+          }
+        }
       } catch (error) {
         isolatedAbort.abort();
         throw error;
@@ -1597,6 +1764,8 @@ function printSummary(): void {
   process.stdout.write(`Executed test cases: ${resultRows.reduce((n, row) => n + row.tests - row.skipped, 0)}\n`);
   process.stdout.write(`Skipped test cases: ${resultRows.reduce((n, row) => n + row.skipped, 0)}\n`);
   process.stdout.write(`Skipped files: ${resultRows.filter((row) => row.status === "SKIP").length}\n`);
+  const flaky = ordinaryRetries.filter((retry) => retry.passedOnRetry).map((retry) => retry.name);
+  if (flaky.length > 0) process.stdout.write(`Passed on retry (flaky): ${flaky.join(", ")}\n`);
   for (const error of selectionErrors) process.stdout.write(`error: ${error}\n`);
   if (args.verbose && logDir) {
     process.stdout.write(`Log directory: ${displayLogDirPath(logDir)}\n`);
@@ -1635,6 +1804,16 @@ function writeVerboseSummary(): void {
     );
     if (row.reason) lines.push(`    ${row.reason}`);
   }
+  // Rows keep the PASS/FAIL column the timing and report parsers read; a retry
+  // is named here and in retries.json instead.
+  for (const [heading, passed] of [["Passed on retry (flaky: fix these)", true], ["Still failed after a retry", false]] as const) {
+    const retries = ordinaryRetries.filter((retry) => retry.passedOnRetry === passed);
+    if (retries.length === 0) continue;
+    lines.push("", `${heading}:`);
+    for (const retry of retries) {
+      lines.push(`  ${retry.name}: first attempt failed ${retry.firstAttempt.failedCases} case(s)${retry.firstAttempt.log ? `, log ${retry.firstAttempt.log}` : ""}`);
+    }
+  }
   lines.push(
     "",
     "Totals:",
@@ -1650,6 +1829,16 @@ function writeVerboseSummary(): void {
     `  Result: ${runFailed() ? "FAIL" : "PASS"}`,
   );
   writeFileSync(join(logDir, "summary.txt"), `${lines.join("\n")}\n`, "utf8");
+  if (args.fileRetries && !args.isolatedFiles) {
+    // Machine-readable for flake triage; present (possibly empty) whenever the
+    // run allowed retries, so "no retries" is distinguishable from "not enabled".
+    writeFileSync(join(logDir, "retries.json"), `${JSON.stringify({
+      maxFirstAttemptSeconds: ORDINARY_RETRY_MAX_MS / 1000,
+      maxCaseTimeoutFirstAttemptSeconds: CASE_TIMEOUT_RETRY_MAX_MS / 1000,
+      platform: process.platform,
+      retries: ordinaryRetries,
+    }, null, 2)}\n`);
+  }
 
   const failures: string[] = selectionErrors.map((error) => `error: ${error}`);
   if (args.requireCoverage && !coverage.complete) {
@@ -1806,7 +1995,7 @@ async function main(): Promise<number> {
     }
   }
 
-  if (args.runIntegration) {
+  if (args.runIntegration && !args.isolatedFiles) {
     process.stdout.write("\n");
     process.stdout.write(
       args.parallel > 1
@@ -1822,7 +2011,7 @@ async function main(): Promise<number> {
     aggregateTierResults();
   }
 
-  if (args.runE2e && args.isolatedE2e) {
+  if (args.isolatedFiles || args.runE2e && args.isolatedE2e) {
     try {
       await runIsolatedE2e();
     } catch (error) {

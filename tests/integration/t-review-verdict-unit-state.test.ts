@@ -399,7 +399,7 @@ describe("OMP F1: terminal review refusal respects the team Unit gate", () => {
         const rejectedAgain = p.reject();
         expect(rejectedAgain.kind).toBe("error");
         expect(String(rejectedAgain.message)).toContain(
-          `Transition rejected by aidlc-state.ts reject for unit "${UNIT}" of "${STAGE}"`,
+          `Could not update the approval status for unit "${UNIT}" of "${STAGE}"`,
         );
         expect(String(rejectedAgain.message)).toContain(
           "is revising; only a pending or awaiting gate can be rejected.",

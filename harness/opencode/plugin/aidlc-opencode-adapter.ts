@@ -27,7 +27,16 @@
 // session prompt via the SDK client. The injected prompt carries the NUDGE
 // sentinel so the chat.message arm never mints HUMAN presence for it (a
 // synthetic nudge is not a human turn), and loop-guarding stays with the core
-// hook's run-mode-aware no-progress ceiling — this shim never counts.
+// hook's run-mode-aware no-progress ceiling; this shim never counts. The
+// prompt's part is synthetic, so the agent reads it and the person's chat does
+// not show it. After the person stops a turn (Esc, a session.error
+// MessageAbortedError) or rejects a command (permission.replied "reject"), no
+// nudge is sent until they write again.
+//
+// /aidlc: opencode's command.execute.before names the command and its
+// arguments. This plugin shows the person what they typed instead of the
+// command's template, and the chat.message that follows records it as their
+// turn.
 //
 // Known degradations vs Claude Code (documented in AGENTS.md):
 //   - session-start's additionalContext has no injection channel; the hook
@@ -102,14 +111,34 @@ export type EngineErrorToast = {
   duration?: number;
 };
 
+type ChatPart = { id?: string; type?: string; text?: string; synthetic?: boolean; ignored?: boolean };
+
+// opencode shows a command's whole template as the person's message. When the
+// person runs /aidlc, keep the template for the agent (synthetic: sent to the
+// model, not shown) and show what they typed (ignored: shown, not sent, so the
+// agent reads the request once). Returns what they typed, which is also their
+// turn as the human-turn hook reads it (a switch such as `/aidlc --guard-policy
+// off` starts with `/aidlc`).
+function showTypedCommand(parts: ChatPart[], args: string): string {
+  const words = args.trim();
+  const typed = words === "" ? "/aidlc" : `/aidlc ${words}`;
+  for (const part of parts) if (part.type === "text") part.synthetic = true;
+  parts.push({ type: "text", text: typed, ignored: true });
+  return typed;
+}
+
 export type PluginInput = {
   client: {
     session: {
       get: (opts: { path: { id: string } }) => Promise<{ data?: { parentID?: string } }>;
       prompt: (opts: {
         path: { id: string };
-        body: { parts: Array<{ type: "text"; text: string }> };
+        body: { parts: Array<{ type: "text"; text: string; synthetic?: boolean }> };
       }) => Promise<unknown>;
+    };
+    // opencode's merged settings; `shell` names the shell bash-tool commands run in.
+    config?: {
+      get: () => Promise<{ data?: { shell?: unknown } | undefined }>;
     };
     // opencode's SDK client exposes the TUI toast (`POST /tui/show-toast`);
     // optional because a headless `opencode run` has no TUI to show it on.
@@ -122,6 +151,8 @@ export type PluginInput = {
   aidlcEntrypoints?: ReadonlySet<string>;
   /** Unit-test seam. Production uses the projected framework dispatcher. */
   aidlcCommand?: readonly string[];
+  /** Unit-test seam. Production uses the running platform. */
+  platform?: NodeJS.Platform;
 };
 
 const AIDLC_BUN_PREFIX = /^bun[ \t]+\.aidlc\/(?:tools|hooks)\//;
@@ -138,42 +169,145 @@ const PROJECTED_BUN_TOOLS = DEFAULT_AIDLC_COMMAND[0] === "bun"
   ? (DEFAULT_AIDLC_COMMAND[1] ?? "").replace(/aidlc\.ts$/, "")
   : null;
 
-/** Parse one expansion-free shell command into argv, or reject shell syntax. */
-function directShellWords(command: string): string[] | null {
+// opencode runs bash-tool commands with its `shell` setting, else /bin/sh on
+// POSIX and COMSPEC (cmd.exe) on Windows. The boundary reads a command the way
+// that shell would: "posix" for sh, bash, dash, zsh and ksh, "powershell" for
+// pwsh and powershell on Linux and macOS, "windows-powershell" for Windows
+// PowerShell 5.1 (which hands a program one command line), "windows-pwsh" for
+// PowerShell 7 on Windows (which hands a program its arguments as written, and
+// a .cmd file one command line), and "cmd" for cmd.exe. Any other shell, or
+// one it cannot learn, is "strict": no AIDLC command passes there.
+export type ShellDialect = "posix" | "powershell" | "windows-powershell" | "windows-pwsh" | "cmd" | "strict";
+
+const POSIX_SHELLS = new Set(["sh", "bash", "dash", "zsh", "ksh"]);
+const POWERSHELLS = new Set(["pwsh", "powershell"]);
+
+/** `configured` is the `shell` setting, null when unset, false when unreadable. */
+function shellDialect(configured: string | null | false, platform: NodeJS.Platform = process.platform): ShellDialect {
+  if (configured === false) return "strict";
+  let shell = configured?.trim() ?? "";
+  if (shell === "") {
+    if (platform !== "win32") return "posix";
+    shell = process.env.COMSPEC?.trim() || "cmd.exe";
+  }
+  const name = shell.replaceAll("\\", "/").split("/").pop()?.toLowerCase().replace(/\.exe$/, "") ?? "";
+  if (POSIX_SHELLS.has(name)) return "posix";
+  if (POWERSHELLS.has(name)) {
+    if (platform !== "win32") return "powershell";
+    return name === "pwsh" ? "windows-pwsh" : "windows-powershell";
+  }
+  return name === "cmd" ? "cmd" : "strict";
+}
+
+/**
+ * Parse one expansion-free shell command into argv, or reject shell syntax.
+ * Under a POSIX shell an argument may carry apostrophes and line breaks in the
+ * usual forms: single quotes (with '\'' or '"'"' for an apostrophe), double
+ * quotes, and backslash escapes. Each stays one word handed to the tool.
+ * Chaining, redirection, expansion, command substitution, line continuations
+ * and $'...' (which /bin/sh may not read as one word) are refused. Under
+ * PowerShell a word may be double- or single-quoted (with '' for an
+ * apostrophe), line breaks included; under cmd.exe, which reads a single quote
+ * as a plain character and ends the command at a line break, only plain words
+ * and double-quoted text on one line are read, and $ and the backtick, which
+ * cmd.exe never expands, are plain characters.
+ */
+function directShellWords(command: string, dialect: ShellDialect = "posix"): string[] | null {
+  if (dialect === "strict") return null;
+  const posix = dialect === "posix";
+  const powerShell = dialect === "powershell" || dialect === "windows-powershell" || dialect === "windows-pwsh";
+  // Windows PowerShell builds one command line for the program to split again.
+  const windowsPs = dialect === "windows-powershell";
+  // biome-ignore lint/suspicious/noControlCharactersInRegex: control characters are what this refuses.
+  if (dialect === "cmd" && /[\x00-\x08\x0a-\x1f\x7f-\x9f]/.test(command)) return null;
+  // PowerShell reads the typographic quotes as quotes.
+  // biome-ignore lint/suspicious/noControlCharactersInRegex: control characters are what this refuses.
+  if (powerShell && /[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f\u2018-\u201f]/u.test(command)) return null;
+  // A PowerShell quote opens and closes a whole word: "a""b" and 'a'b join
+  // beyond this reading.
+  const wordEnds = (at: number): boolean => at >= command.length || command[at] === " " || command[at] === "\t";
+  // cmd.exe replaces a %NAME% pair even inside quotes, and a !NAME! pair when
+  // delayed expansion is on; a lone % or ! stays.
+  const percentPair = command.indexOf("%") !== command.lastIndexOf("%");
+  const bangPair = command.indexOf("!") !== command.lastIndexOf("!");
   const words: string[] = [];
+  // A trailing backslash escapes the quote the program reads around a word,
+  // and Windows PowerShell drops an empty argument and splits a bare -x.y.
+  const keep = (done: string): boolean => {
+    if ((dialect === "cmd" || windowsPs) && done.endsWith("\\")) return false;
+    if (windowsPs && (done === "" || /^-[^-].*\./.test(done))) return false;
+    words.push(done);
+    return true;
+  };
   let word = "";
   let wordStarted = false;
   let quote: "'" | '"' | null = null;
   for (let i = 0; i < command.length; i++) {
     const ch = command[i];
     if (quote === "'") {
-      if (ch === "'") quote = null;
-      else word += ch;
+      if (ch === "'") {
+        if (powerShell && command[i + 1] === "'") {
+          word += "'";
+          i++;
+          continue;
+        }
+        quote = null;
+        if (powerShell && !wordEnds(i + 1)) return null;
+      } else if (windowsPs && ch === '"') {
+        // Windows PowerShell hands it on unescaped.
+        return null;
+      } else {
+        word += ch;
+      }
       continue;
     }
     if (quote === '"') {
       if (ch === '"') {
         quote = null;
+        if (powerShell && !wordEnds(i + 1)) return null;
         continue;
       }
-      if (ch === "\\" && i + 1 < command.length) {
-        const next = command[++i];
+      // cmd.exe expands neither: they are text there.
+      if ((ch === "`" || ch === "$") && dialect !== "cmd") return null;
+      if (posix && ch === "\\" && i + 1 < command.length) {
+        const next = command[i + 1];
         if (next === "\n" || next === "\r") return null;
-        word += next;
-        continue;
+        if (next === "$" || next === "`" || next === '"' || next === "\\") {
+          word += next;
+          i++;
+          continue;
+        }
       }
-      if (ch === "`" || ch === "$" || ch === "\n" || ch === "\r") return null;
+      if (dialect === "cmd" && ((ch === "%" && percentPair) || (ch === "!" && bangPair))) return null;
+      // The program's own argument reader takes \" as a quote inside the word.
+      if ((dialect === "cmd" || windowsPs) && ch === "\\" && command[i + 1] === '"') return null;
       word += ch;
       continue;
     }
-    if (ch === "'" || ch === '"') {
+    if (ch === '"' || (ch === "'" && (posix || powerShell))) {
+      if (powerShell && wordStarted) return null;
       quote = ch;
+      wordStarted = true;
+      continue;
+    }
+    if (ch === "'") return null;
+    if (ch === "\\") {
+      if (!posix || i + 1 >= command.length) return null;
+      const next = command[++i];
+      if (next === "\n" || next === "\r") return null;
+      word += next;
+      wordStarted = true;
+      continue;
+    }
+    // cmd.exe expands neither $ nor the backtick: they are plain text there.
+    if (dialect === "cmd" && (ch === "$" || ch === "`")) {
+      word += ch;
       wordStarted = true;
       continue;
     }
     if (ch === " " || ch === "\t") {
       if (wordStarted) {
-        words.push(word);
+        if (!keep(word)) return null;
         word = "";
         wordStarted = false;
       }
@@ -182,7 +316,6 @@ function directShellWords(command: string): string[] | null {
     if (
       ch === "\n" ||
       ch === "\r" ||
-      ch === "\\" ||
       ch === "`" ||
       ch === "$" ||
       ch === "#" ||
@@ -192,7 +325,11 @@ function directShellWords(command: string): string[] | null {
       ch === "(" ||
       ch === ")" ||
       ch === "<" ||
-      ch === ">"
+      ch === ">" ||
+      (!posix && (ch === "%" || ch === "!" || ch === "^" || ch === "{" || ch === "}" || ch === "@")) ||
+      // PowerShell splits a word at other whitespace, reads a list or a
+      // wildcard, and globs on Linux and macOS.
+      (powerShell && (/\s/.test(ch) || ch === "," || ch === "[" || ch === "]" || ch === "*" || ch === "?"))
     ) {
       return null;
     }
@@ -200,18 +337,83 @@ function directShellWords(command: string): string[] | null {
     wordStarted = true;
   }
   if (quote !== null) return null;
-  if (wordStarted) words.push(word);
+  if (wordStarted && !keep(word)) return null;
   return words;
+}
+
+const UNKNOWN_SHELL =
+  "AI-DLC runs its commands when opencode's shell is sh, bash, dash, zsh, ksh, PowerShell or cmd.exe, " +
+  "and could not confirm that here. Run the command again; if it is refused again, set \"shell\" in " +
+  "opencode's settings to one of these, or remove that setting.";
+
+// A request `next` takes from a file instead of the command line, so no shell
+// reads the person's words on the way.
+const REQUEST_FILE = "aidlc/.aidlc-request-text/request.txt";
+const REQUEST_FILE_STEP =
+  "Write the person's request, exactly as they typed it, with your file tool to " +
+  `${REQUEST_FILE} in this project, and run the same command with --request-file ${REQUEST_FILE} ` +
+  "in place of the request's words. AI-DLC reads the file and removes it.";
+const NEXT_COMMAND = new RegExp(
+  `^(?:aidlc|bun[ \\t]+\\.aidlc/tools/aidlc\\.ts)[ \\t]+${PROJECTED_TRUSTED_NAMESPACE}[ \\t]+orchestrate[ \\t]+next(?:[ \\t]|$)`,
+);
+const CMD_REQUEST_REFUSAL =
+  `A line break or a %NAME% or !NAME! pair cannot reach AI-DLC through cmd.exe. ${REQUEST_FILE_STEP}`;
+
+// cmd.exe ends a command at a line break and replaces a %NAME% pair, and a
+// !NAME! pair with delayed expansion on, even inside quotes.
+function cmdCannotCarry(command: string): boolean {
+  const pair = (ch: string) => command.indexOf(ch) !== command.lastIndexOf(ch);
+  return /[\r\n]/.test(command) || pair("%") || pair("!");
+}
+
+// On Windows `aidlc` is the aidlc.cmd launcher. PowerShell hands it one command
+// line with a word that has no space unquoted (PowerShell 7 too, for a .cmd
+// file), and cmd.exe reads & | < > ^, a line break, a %NAME% pair and, with
+// delayed expansion on, a !NAME! pair in what it is handed. cmd.exe itself
+// keeps & | < > ^ inside double quotes; nothing on Windows keeps the rest, or
+// a " inside a word or a trailing backslash, through that command line, so a
+// request goes through a file.
+function launcherRefusal(args: string[], dialect: ShellDialect, next: boolean): string | null {
+  const line = args.join(" ");
+  const kept = next
+    ? REQUEST_FILE_STEP
+    : "Ask the person how to write the text, since the launcher cannot carry it as written on Windows, " +
+      "and run the command again with their words.";
+  if (args.some((arg) => /[\r\n]/.test(arg)) || /%[^%]*%/.test(line) || /![^!]*!/.test(line)) {
+    return `A line break or a %NAME% or !NAME! pair cannot reach AI-DLC through the aidlc launcher. ${kept}`;
+  }
+  if (dialect === "windows-pwsh" && args.some((arg) => arg.includes('"') || arg.endsWith("\\"))) {
+    return `A " inside a word or a trailing backslash cannot reach AI-DLC through the aidlc launcher. ${kept}`;
+  }
+  if (dialect === "windows-pwsh" && args.includes("")) {
+    return "PowerShell drops an empty argument on its way to the aidlc launcher. Leave it out and run the command again.";
+  }
+  if (args.some((arg) => /[&|<>^]/.test(arg))) {
+    return (
+      "When PowerShell runs the aidlc launcher, cmd.exe reads &, |, <, > and ^ in its arguments again. " +
+      "Set \"shell\" in opencode's settings to cmd.exe, or remove that setting, and run the command again " +
+      "with the text in double quotes."
+    );
+  }
+  return null;
 }
 
 /** Return a denial reason only when the static AIDLC allow-prefix would match. */
 function aidlcBashBoundaryViolation(
   command: string,
   allowedEntrypoints: ReadonlySet<string> = shippedAidlcEntrypoints,
+  dialect: ShellDialect = "posix",
 ): string | null {
   if (/^aidlc(?:[ \t]|$)/.test(command)) {
-    const words = directShellWords(command);
-    if (words?.[0] === "aidlc") return null;
+    if (dialect === "strict") return UNKNOWN_SHELL;
+    const words = directShellWords(command, dialect);
+    if (words?.[0] === "aidlc") {
+      if (dialect !== "windows-powershell" && dialect !== "windows-pwsh") return null;
+      return launcherRefusal(words.slice(1), dialect, NEXT_COMMAND.test(command));
+    }
+    if (dialect === "cmd" && NEXT_COMMAND.test(command) && cmdCannotCarry(command)) {
+      return CMD_REQUEST_REFUSAL;
+    }
     return (
       "AIDLC bash permission allows one direct invocation of a framework tool only. " +
       "Do not use chaining, redirection, expansion, or command substitution."
@@ -221,7 +423,8 @@ function aidlcBashBoundaryViolation(
     return null;
   }
   if (!AIDLC_BUN_PREFIX.test(command)) return null;
-  const words = directShellWords(command);
+  if (dialect === "strict") return UNKNOWN_SHELL;
+  const words = directShellWords(command, dialect);
   const target = words?.[1]?.match(AIDLC_ENTRYPOINT);
   if (
     words?.[0] === "bun" &&
@@ -229,6 +432,9 @@ function aidlcBashBoundaryViolation(
     allowedEntrypoints.has(`${target[1]}/${target[2]}`)
   ) {
     return null;
+  }
+  if (words === null && dialect === "cmd" && NEXT_COMMAND.test(command) && cmdCannotCarry(command)) {
+    return CMD_REQUEST_REFUSAL;
   }
   return (
     "AIDLC bash permission allows one direct invocation of a shipped tool or hook only. " +
@@ -328,6 +534,7 @@ export default async ({
   directory,
   aidlcEntrypoints = shippedAidlcEntrypoints,
   aidlcCommand = DEFAULT_AIDLC_COMMAND,
+  platform = process.platform,
 }: PluginInput) => {
   const runCore = (
     hookFile: string,
@@ -371,11 +578,37 @@ export default async ({
   const mainSession = new Map<string, boolean>();
   const sessionAgent = new Map<string, string>();
   const idleInFlight = new Set<string>();
+  // Main sessions whose turn the person stopped (Esc) or in which they rejected
+  // a command. The person stopped on purpose, so the idle that follows sends no
+  // nudge until they write again.
+  const interrupted = new Set<string>();
+  // A Reject whose conversation could not be confirmed: every main session
+  // waits for the person until they write again.
+  let rejectedUnowned = false;
+  // What the person typed through /aidlc, by session, set by opencode's own
+  // command hook. Only the message carrying the part it added reads it.
+  const typedCommands = new Map<string, string>();
+  // The shell opencode runs bash-tool commands in, read once from its settings.
+  // An unreadable setting reads every command strictly and is asked again.
+  let dialect: ShellDialect | null = null;
+  async function currentShellDialect(): Promise<ShellDialect> {
+    if (dialect !== null) return dialect;
+    if (!client.config) return shellDialect(null, platform);
+    try {
+      const settings = (await client.config.get()).data;
+      if (!settings) return shellDialect(false, platform);
+      dialect = shellDialect(typeof settings.shell === "string" ? settings.shell : null, platform);
+      return dialect;
+    } catch {
+      return shellDialect(false, platform);
+    }
+  }
 
-  // The Plan Approval guard judges the workflow of a bound session. A child
-  // (task-tool) session skips SessionStart and has no binding, so send the main
-  // session that owns it. A failed lookup keeps the child id, which the guard
-  // then resolves as it would without one.
+  // The guards judge the workflow of a bound session. A child (task-tool)
+  // session skips SessionStart and has no binding, so send the main session
+  // that owns it. An owner that cannot be looked up is not guessed: an unbound
+  // child id would be judged under whatever workflow the shared cursor names,
+  // so the call is refused and the next one looks again.
   const ownerSession = new Map<string, string>();
   async function owningSession(sessionID: string): Promise<string> {
     const cached = ownerSession.get(sessionID);
@@ -384,12 +617,14 @@ export default async ({
     try {
       for (let depth = 0; depth < 8; depth++) {
         const s = await client.session.get({ path: { id: current } });
-        const parent = s.data?.parentID;
+        // An answer without the session record confirms nothing.
+        if (!s.data) throw new Error("no session record");
+        const parent = s.data.parentID;
         if (!parent) break;
         current = parent;
       }
     } catch {
-      return sessionID;
+      throw new Error("AI-DLC could not confirm which conversation owns this tool call; retry it.");
     }
     ownerSession.set(sessionID, current);
     return current;
@@ -413,14 +648,23 @@ export default async ({
   return {
     "chat.message": async (
       input: { sessionID: string; agent?: string },
-      output: { parts: Array<{ type?: string; text?: string }> },
+      output: { parts: ChatPart[] },
     ) => {
       if (input.agent) sessionAgent.set(input.sessionID, input.agent);
+      const command = typedCommands.get(input.sessionID);
+      const typed = command !== undefined &&
+          output.parts.some((p) => p.type === "text" && p.ignored === true && p.text === command)
+        ? command
+        : null;
+      // Another message (a nudge sent at the same moment) leaves it for the command's own.
+      if (typed !== null) typedCommands.delete(input.sessionID);
       // Never treat this plugin's own continue-workflow-nudge injection as a human turn.
       const first = output.parts.find((p) => p.type === "text");
       if (first?.text?.startsWith(NUDGE_SENTINEL)) return;
       if (!(await isMainSession(input.sessionID))) return;
       sawHumanTurn.add(input.sessionID);
+      interrupted.delete(input.sessionID);
+      rejectedUnowned = false;
       if (!started.has(input.sessionID)) {
         const result = await runCore(
           "aidlc-session-start.ts",
@@ -440,10 +684,18 @@ export default async ({
         {
           hook_event_name: "UserPromptSubmit",
           session_id: input.sessionID,
-          prompt: first?.text ?? "",
+          prompt: typed ?? first?.text ?? "",
         },
         directory,
       );
+    },
+
+    "command.execute.before": async (
+      input: { command: string; sessionID: string; arguments: string },
+      output: { parts: ChatPart[] },
+    ) => {
+      if (input.command !== "aidlc") return;
+      typedCommands.set(input.sessionID, showTypedCommand(output.parts, input.arguments));
     },
 
     "tool.execute.before": async (
@@ -493,7 +745,7 @@ export default async ({
           : null;
       if (input.tool === "bash") {
         const command = (args.command as string) ?? "";
-        const violation = aidlcBashBoundaryViolation(command, aidlcEntrypoints);
+        const violation = aidlcBashBoundaryViolation(command, aidlcEntrypoints, await currentShellDialect());
         if (violation) throw new Error(violation);
         // State-transition guard, parallel to the Claude/Kiro/Codex PreToolUse
         // wiring. The state CLI's ownership check remains the hard floor; this
@@ -503,6 +755,8 @@ export default async ({
           "aidlc-state-transition-guard.ts",
           {
             hook_event_name: "PreToolUse",
+            // The guards judge the workflow of the session that owns this call.
+            session_id: await owningSession(input.sessionID),
             tool_name: "Bash",
             tool_input: { command },
             cwd: directory,
@@ -544,6 +798,7 @@ export default async ({
             "aidlc-review-freeze.ts",
             {
               hook_event_name: "PreToolUse",
+              session_id: await owningSession(input.sessionID),
               tool_name: call.toolName,
               tool_input: call.toolInput,
               cwd: directory,
@@ -646,6 +901,7 @@ export default async ({
           "aidlc-reviewer-scope.ts",
           {
             hook_event_name: "PreToolUse",
+            session_id: await owningSession(input.sessionID),
             tool_name: call.toolName,
             tool_input: call.toolInput,
             cwd: directory,
@@ -732,13 +988,38 @@ export default async ({
       }
     },
 
-    "experimental.session.compacting": async (_input: { sessionID: string }) => {
-      await runCore("aidlc-validate-state.ts", { hook_event_name: "PreCompact" }, directory);
+    "experimental.session.compacting": async (input: { sessionID: string }) => {
+      // The compacting session's own id: a child's compaction concerns the child.
+      await runCore(
+        "aidlc-validate-state.ts",
+        { hook_event_name: "PreCompact", session_id: input.sessionID },
+        directory,
+      );
     },
 
     event: async ({ event }: { event: { type: string; properties?: Record<string, unknown> } }) => {
+      if (event.type === "session.error") {
+        const sessionID = (event.properties?.sessionID as string) ?? "";
+        const error = event.properties?.error as { name?: unknown } | undefined;
+        if (sessionID && error?.name === "MessageAbortedError") interrupted.add(sessionID);
+        return;
+      }
+      if (event.type === "permission.replied") {
+        const sessionID = (event.properties?.sessionID as string) ?? "";
+        // opencode 1.18 names the answer `reply`; earlier releases `response`.
+        const answer = event.properties?.reply ?? event.properties?.response;
+        if (!sessionID || answer !== "reject") return;
+        // A Reject in a helper's session stops the person's turn too.
+        try {
+          interrupted.add(await owningSession(sessionID));
+        } catch {
+          rejectedUnowned = true;
+        }
+        return;
+      }
       if (event.type !== "session.idle") return;
       const sessionID = (event.properties?.sessionID as string) ?? "";
+      if (interrupted.has(sessionID) || rejectedUnowned) return;
       // A workflow can be created during the first turn, after session-start saw
       // no state. Let the core Stop hook's own state-file guard decide.
       if (!sessionID || !sawHumanTurn.has(sessionID)) return;
@@ -776,9 +1057,10 @@ export default async ({
       // Release serialization before the prompt: OpenCode may synchronously
       // deliver the continuation's next idle while this promise is pending.
       if (nudgeReason) {
+        // Synthetic: the agent reads it, the person's chat does not show it.
         await client.session.prompt({
           path: { id: sessionID },
-          body: { parts: [{ type: "text", text: `${NUDGE_SENTINEL} ${nudgeReason}` }] },
+          body: { parts: [{ type: "text", text: `${NUDGE_SENTINEL} ${nudgeReason}`, synthetic: true }] },
         });
       }
     },

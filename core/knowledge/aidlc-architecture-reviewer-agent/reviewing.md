@@ -67,7 +67,9 @@ applies`. Never write or repeat
 `Accepted risk`, `Rejected`, or any other person's decision. New findings have
 no ID or status. `Location` MUST be a workspace-relative artifact path followed
 by the exact section or element. `Required action` MUST state concrete work in
-plain language. Keep both table headers and separator rows even when they have
+plain language. Write `Finding` and `Required action` in the project's terms,
+as the person reads them at the gate: what is wrong in the artifact and what to
+change, never which stage rule, contract, or protocol step it breaks. Keep both table headers and separator rows even when they have
 no rows. A placeholder row is refused, and a NOT-READY review needs at least
 one reported row.
 
@@ -75,7 +77,7 @@ The engine reads your review as one self-contained section, so the template's
 opening `## Review` is the only top-level heading it may carry and everything
 below it is `###` or deeper. A later `#` or `##` — including a setext underline
 or a raw `<h1>`/`<h2>` — reads as the start of content the review does not own,
-and the verdict is refused until the file is rewritten. Where you would reach
+and the verdict is refused until the file is rewritten (a plain `#` or `##` line is recorded as `###` instead). Where you would reach
 for another top-level heading, use a bold lead-in instead.
 
 Use this exact format:
@@ -85,7 +87,7 @@ Use this exact format:
 
 **Verdict:** READY | NOT-READY
 **Reviewer:** aidlc-architecture-reviewer-agent
-**Date:** [ISO timestamp from Bash]
+**Date:** [the UTC time `{{INVOKE}} engine now` prints]
 **Iteration:** [1, 2, etc.]
 
 ### Findings
@@ -115,7 +117,7 @@ Use this exact format:
 [1-2 sentences: what's the main architectural concern, or why it's ready.]
 ```
 
-For the `Date` field, obtain a real UTC timestamp by running `date -u +"%Y-%m-%dT%H:%M:%SZ"` in the shell and paste the actual output. Never guess or infer the date.
+For the `Date` field, run `{{INVOKE}} engine now` and paste the time it prints. Never guess or infer the date.
 
 ### Severity Levels
 

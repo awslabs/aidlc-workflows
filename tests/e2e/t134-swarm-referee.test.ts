@@ -95,6 +95,7 @@ import {
   seededStateFile,
   setupWorktreeFixture,
 } from "../harness/fixtures.ts";
+import { approveSuppliedCheckCommand, approveVerificationCommand } from "../harness/verification-command.ts";
 import {
   artifactFilename,
   boltSlugForUnit,
@@ -108,6 +109,8 @@ const SWARM_TOOL = join(AIDLC_SRC, "tools", "aidlc-swarm.ts");
 const LOG_TOOL = join(AIDLC_SRC, "tools", "aidlc-log.ts");
 
 const fixtures: string[] = [];
+const WORKFLOW_STARTED_AT = "2026-08-04T00:00:00Z";
+const RUN_FLOOR = `WORKFLOW_STARTED:${WORKFLOW_STARTED_AT}#1`;
 // Serial Git worktree removal across this file's fixtures can exceed Bun's
 // default 5s hook budget; bound cleanup separately from the product test cases.
 afterAll(() => {
@@ -133,6 +136,22 @@ function makeSwarmFixture(units: string[] = []): string {
   );
   mkdirSync(seededAuditDir(proj), { recursive: true });
   writeFileSync(join(seededAuditDir(proj), "fixture.md"), "# AI-DLC Audit Log\n");
+  // The workflow started before the dated rows the cases append, so a later
+  // Stage Start opens a new attempt of this run.
+  writeFileSync(
+    seededAuditShard(proj),
+    [
+      "# AI-DLC Audit Log",
+      "",
+      "## Workflow Started",
+      `**Timestamp**: ${WORKFLOW_STARTED_AT}`,
+      "**Event**: WORKFLOW_STARTED",
+      "**Scope**: feature",
+      "",
+      "---",
+      "",
+    ].join("\n"),
+  );
   writeFileSync(
     join(proj, ".gitignore"),
     [
@@ -146,6 +165,9 @@ function makeSwarmFixture(units: string[] = []): string {
     ].join("\n"),
   );
   if (units.length > 0) seedBoltDag(proj, units);
+  // The person approved the check command before the swarm forks, so the
+  // workflow start the approval rests on is part of every prepared attempt.
+  approveVerificationCommand(proj, "test -f impl.txt");
   // Stage everything and amend the seed commit so HEAD carries the gitignore +
   // state, mirroring the .sh's `git add -A && commit --amend --no-edit`.
   const git = (args: string[]): void => {
@@ -186,6 +208,7 @@ function runRef(
   args: string[],
   env: Record<string, string> = {},
 ): RefResult {
+  approveSuppliedCheckCommand(proj, args);
   const res = spawnSync(BUN, [SWARM_TOOL, "--project-dir", proj, ...args], { timeout: remainingOperationTimeoutMs(NATIVE_FIXTURE_SETUP_TIMEOUT_MS),
     cwd: proj,
     encoding: "utf-8",
@@ -284,10 +307,11 @@ function eventCount(p: string, event: string): number {
 function prepareAsLegacy(proj: string, unit: string): void {
   const shard = seededAuditShard(proj);
   mkdirSync(seededAuditDir(proj), { recursive: true });
+  // Appended after the person's command approval already in this shard.
   writeFileSync(
     shard,
     [
-      "# AI-DLC Audit Log",
+      existsSync(shard) ? "" : "# AI-DLC Audit Log",
       "",
       "## Swarm Started",
       "**Timestamp**: 2026-08-05T00:00:00Z",
@@ -299,7 +323,7 @@ function prepareAsLegacy(proj: string, unit: string): void {
       "---",
       "",
     ].join("\n"),
-    "utf-8",
+    { encoding: "utf-8", flag: "a" },
   );
   expect(
     runRef(proj, [
@@ -350,7 +374,7 @@ describe("t134 swarm referee — prepare/check/finalize (migrated from t134-swar
       .split("\n---\n")
       .find((b) => b.includes("**Event**: SWARM_STARTED"));
     expect(startedBlock).toContain("**Stage**: functional-design");
-    expect(startedBlock).toContain("**Run floor**: unstarted#0");
+    expect(startedBlock).toContain(`**Run floor**: ${RUN_FLOOR}`);
     // The worktree directory landed on disk via the real `git worktree add`.
     expect(existsSync(wtPath(proj, "alpha"))).toBe(true);
 
@@ -398,7 +422,7 @@ describe("t134 swarm referee — prepare/check/finalize (migrated from t134-swar
       .split("\n---\n")
       .find((b) => b.includes("**Event**: SWARM_UNIT_CONVERGED"));
     expect(convergedBlock).toContain("**Stage**: functional-design");
-    expect(convergedBlock).toContain("**Run floor**: unstarted#0");
+    expect(convergedBlock).toContain(`**Run floor**: ${RUN_FLOOR}`);
     expect(
       readFileSync(
         join(
@@ -620,7 +644,7 @@ describe("t134 swarm referee — prepare/check/finalize (migrated from t134-swar
       .split("\n---\n")
       .find((block) => block.includes("**Event**: SWARM_UNIT_CONVERGED"));
     expect(convergedBlock).toContain("**Stage**: functional-design");
-    expect(convergedBlock).toContain("**Run floor**: unstarted#0");
+    expect(convergedBlock).toContain(`**Run floor**: ${RUN_FLOOR}`);
   }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("14c a pre-upgrade swarm from a prior attempt remains refused", () => {

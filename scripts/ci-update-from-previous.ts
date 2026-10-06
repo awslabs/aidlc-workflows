@@ -1,0 +1,316 @@
+#!/usr/bin/env bun
+// A person on the last published release types `aidlc update`, gets this
+// release, and their next commands and hooks work.
+//
+// Installs the previous release with its own installer into throwaway
+// folders, sets up a project for every harness with it, and runs `aidlc
+// update` with that release's own binary to the candidate in <release-dir>.
+// Then it does what the person does next: each project's existing hooks run,
+// `aidlc config --yes` refreshes the project, the hooks run again, and doctor
+// passes. Hooks run through the shell Claude Code uses (Git Bash on Windows,
+// sh elsewhere); each must exit 0 and show in the hook phase trace that the
+// installed engine ran it. On Windows the Git Bash launcher must exist once the
+// first command after the update has run.
+//
+// Usage: bun scripts/ci-update-from-previous.ts --previous <version> --candidate <release-dir>
+import { spawnSync } from "node:child_process";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
+import { pathToFileURL } from "node:url";
+
+export const HARNESSES = ["claude", "codex", "copilot", "cursor", "kiro", "kiro-ide", "opencode"] as const;
+const HARNESS_DIRS: Record<(typeof HARNESSES)[number], string> = {
+  claude: ".claude",
+  codex: ".codex",
+  copilot: ".github",
+  cursor: ".cursor",
+  kiro: ".kiro",
+  "kiro-ide": ".kiro",
+  opencode: ".opencode",
+};
+const HOOK_COMMAND = /^aidlc engine (?:hook|adapter) [a-z0-9-]+(?: [a-z0-9-]+)*$/;
+const WINDOWS = process.platform === "win32";
+const REPOSITORY = process.env.GITHUB_REPOSITORY || "awslabs/aidlc-workflows";
+const STEP_TIMEOUT_MS = 10 * 60_000;
+const HOOK_TIMEOUT_MS = 2 * 60_000;
+// The whole check ends before the release job's 30-minute limit, so its own
+// report, not a cancelled job, says what went wrong.
+const CHECK_BUDGET_MS = 25 * 60_000;
+
+/** The harnesses a release's version.json ships that this check does not set up. */
+export function uncheckedHarnesses(versionJson: unknown): string[] {
+  const listed = (versionJson as { distributions?: Array<{ name?: unknown }> } | null)?.distributions ?? [];
+  return listed.map((entry) => String(entry?.name ?? "")).filter((name) => !(HARNESSES as readonly string[]).includes(name));
+}
+
+/** Every hook command a harness tree's JSON config files name. */
+export function hookCommands(treeDir: string): string[] {
+  const found = new Set<string>();
+  const visit = (value: unknown) => {
+    if (typeof value === "string") {
+      if (HOOK_COMMAND.test(value.trim())) found.add(value.trim());
+    } else if (Array.isArray(value)) {
+      for (const item of value) visit(item);
+    } else if (value && typeof value === "object") {
+      for (const item of Object.values(value)) visit(item);
+    }
+  };
+  const walk = (dir: string) => {
+    if (!existsSync(dir)) return;
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const path = join(dir, entry.name);
+      if (entry.isDirectory()) walk(path);
+      else if (/\.(?:json|hook)$/.test(entry.name)) {
+        try { visit(JSON.parse(readFileSync(path, "utf-8"))); } catch { /* not a JSON config */ }
+      }
+    }
+  };
+  walk(treeDir);
+  return [...found].sort();
+}
+
+// Credentials for GitHub, the Actions runtime and cloud or model providers. The
+// installers, binaries and hooks under test never need them.
+const CREDENTIAL = /^(?:GH_|GITHUB_TOKEN$|ACTIONS_|AWS_|AZURE_|GOOGLE_|ANTHROPIC_|OPENAI_)|TOKEN|SECRET|PASSWORD|CREDENTIAL|API_KEY|PRIVATE_KEY/i;
+
+/** The environment every process the check starts gets: this one without credentials. */
+export function childEnvironment(inherited: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  return Object.fromEntries(Object.entries(inherited).filter(([name]) => !CREDENTIAL.test(name)));
+}
+
+/**
+ * The engine hook commands opencode's plugin starts, as the plugin file names
+ * them: opencode runs its hooks from a TypeScript plugin, not a JSON config.
+ */
+export function opencodeHookCommands(pluginFile: string): string[] {
+  if (!existsSync(pluginFile)) return [];
+  const text = readFileSync(pluginFile, "utf-8");
+  const constant = (name: string, fallback: string) => {
+    const value = new RegExp(`const ${name} = "([^"]*)";`).exec(text)?.[1];
+    return value === undefined || value.startsWith("{{") ? fallback : value;
+  };
+  const invoke = constant("PROJECTED_INVOKE", "bun .aidlc/tools/aidlc.ts");
+  const namespace = constant("TRUSTED_NAMESPACE", "engine");
+  const hooks = new Set([...text.matchAll(/(?:runCore\(\s*|^\s*)"aidlc-([a-z0-9-]+)\.ts",/gm)].map((match) => match[1]));
+  return [...hooks].sort().map((hook) => `${invoke} ${namespace} hook ${hook}`);
+}
+
+/** The hooks the hook phase trace in `directory` shows the engine ran and ended with code 0. */
+export function hooksTracedToCompletion(directory: string): Set<string> {
+  const done = new Set<string>();
+  if (!existsSync(directory)) return done;
+  for (const file of readdirSync(directory)) {
+    const phases = readFileSync(join(directory, file), "utf-8").split("\n").filter(Boolean)
+      .map((line) => { try { return JSON.parse(line) as { phase?: string; code?: unknown; hook?: unknown; adapter?: unknown }; } catch { return {}; } });
+    const start = phases.find((p) => p.phase === "dispatcher-start");
+    // A hook loads its code in this process, or (the human-turn hook) in a child.
+    const loaded = phases.some((p) =>
+      p.phase === "hook-import-end" || p.phase === "adapter-import-end" || p.phase === "hook-child-started");
+    const ended = phases.filter((p) => p.phase === "hook-run-end" || p.phase === "adapter-run-end" || p.phase === "exit");
+    if (start && loaded && ended.length > 0 && ended.every((p) => p.code === 0)) {
+      done.add(String(start.hook ?? start.adapter ?? ""));
+    }
+  }
+  return done;
+}
+
+/** Whether the hook phase trace in `directory` shows the engine ran a hook and it ended with code 0. */
+export function tracedToCompletion(directory: string): boolean {
+  return hooksTracedToCompletion(directory).size > 0;
+}
+
+// opencode's events as its plugin receives them: a message from the person, a
+// bash call, and the end of the turn. Each must reach the engine hooks it maps to.
+const OPENCODE_EVENT_HOOKS = ["session-start", "record-human-turn", "rebuild-stage-graph", "continue-workflow"];
+const OPENCODE_EVENTS = `
+const plugin = (await import(process.env.AIDLC_CHECK_PLUGIN)).default;
+const client = {
+  session: { get: async () => ({ data: {} }), prompt: async () => ({}) },
+  tui: { showToast: async () => ({}) },
+};
+const hooks = await plugin({ client, directory: process.env.AIDLC_CHECK_PROJECT });
+const sessionID = "update-check";
+await hooks["chat.message"]({ sessionID }, { parts: [{ type: "text", text: "hello" }] });
+await hooks["tool.execute.after"]({ tool: "bash", sessionID, callID: "1", args: { command: "ls" } }, { title: "", output: "", metadata: {} });
+await hooks.event({ event: { type: "session.idle", properties: { sessionID } } });
+`;
+
+function gitBash(): string {
+  for (const root of [process.env.ProgramW6432, process.env.ProgramFiles, "C:\\Program Files"]) {
+    const bash = root ? join(root, "Git", "bin", "bash.exe") : "";
+    if (bash && existsSync(bash)) return bash;
+  }
+  throw new Error("Git for Windows is not installed: Claude Code runs hooks through its Git Bash");
+}
+
+function main(argv: string[]): number {
+  const option = (flag: string) => { const at = argv.indexOf(flag); return at >= 0 ? argv[at + 1] : undefined; };
+  const previous = option("--previous")?.replace(/^v/, "");
+  const given = option("--candidate");
+  // The update runs from a scratch folder, so a relative path must not reach it.
+  const candidate = given ? resolve(given) : undefined;
+  if (!previous || !candidate || !existsSync(join(candidate, "version.json"))) {
+    console.error("Usage: bun scripts/ci-update-from-previous.ts --previous <version> --candidate <release-dir>");
+    return 2;
+  }
+  const target = (JSON.parse(readFileSync(join(candidate, "version.json"), "utf-8")) as { version?: string }).version ?? "";
+  const root = mkdtempSync(join(process.env.RUNNER_TEMP || tmpdir(), "aidlc-update-from-previous-"));
+  try {
+    return check(previous, candidate, target, root);
+  } finally {
+    if (process.env.AIDLC_KEEP_TEMP !== "1") rmSync(root, { recursive: true, force: true, maxRetries: 3 });
+  }
+}
+
+function check(previous: string, candidate: string, target: string, root: string): number {
+  const deadline = Date.now() + CHECK_BUDGET_MS;
+  const within = (ms: number) => Math.max(1_000, Math.min(ms, deadline - Date.now()));
+  const unchecked = uncheckedHarnesses(JSON.parse(readFileSync(join(candidate, "version.json"), "utf-8")));
+  const machine = join(root, "machine");
+  const bin = join(machine, "bin");
+  const pathKey = Object.keys(process.env).find((key) => key.toUpperCase() === "PATH") ?? "PATH";
+  const env: NodeJS.ProcessEnv = {
+    ...childEnvironment(process.env),
+    AIDLC_INSTALL_ROOT: machine,
+    AIDLC_BIN_DIR: bin,
+    // No gh: both releases take the installer's checksum-only path.
+    AIDLC_GH_BIN: join(root, "no-gh", WINDOWS ? "gh.exe" : "gh"),
+    COPILOT_HOME: join(root, "copilot-home"),
+    NO_COLOR: "1",
+    // CI runners are elevated; the Windows installer refuses that unless told.
+    ...(WINDOWS ? { AIDLC_ALLOW_ADMIN_INSTALL: "1" } : {}),
+    [pathKey]: [bin, process.env[pathKey] ?? ""].join(WINDOWS ? ";" : ":"),
+  };
+  for (const key of ["AIDLC_PROJECT_DIR", "CLAUDE_PROJECT_DIR"]) delete env[key];
+  mkdirSync(env.COPILOT_HOME!, { recursive: true });
+  const shell = WINDOWS ? gitBash() : "/bin/sh";
+  const failures: string[] = [];
+  // Each failure is printed as it happens, so a run that stops early still shows it.
+  const fail = (line: string) => {
+    failures.push(line);
+    console.error(`FAIL ${line}`);
+  };
+  for (const name of unchecked) fail(`the candidate ships the ${name} harness, which this check does not set up yet: add it to HARNESSES`);
+  const run = (what: string, command: string, args: string[], extra: NodeJS.ProcessEnv = {}, cwd = root, input = "") => {
+    const r = spawnSync(command, args, { cwd, env: { ...env, ...extra }, encoding: "utf-8", input, timeout: within(STEP_TIMEOUT_MS) });
+    const output = `${r.stdout ?? ""}${r.stderr ?? ""}${r.error ? `\n${r.error.message}` : ""}`.trim();
+    if (r.status !== 0) fail(`${what}: exited ${r.status}: ${output.split("\n").slice(-3).join(" | ")}`);
+    return { ok: r.status === 0, output };
+  };
+  // A person on Windows types aidlc in PowerShell, which runs aidlc.cmd; -File
+  // binds each argument literally.
+  const wrapper = join(root, "aidlc.ps1");
+  if (WINDOWS) writeFileSync(wrapper, "& (Join-Path $env:AIDLC_BIN_DIR 'aidlc.cmd') @args\r\nexit $LASTEXITCODE\r\n");
+  const aidlc = (what: string, args: string[], cwd = root) => WINDOWS
+    ? run(what, "powershell.exe", ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", wrapper, ...args], {}, cwd)
+    : run(what, join(bin, "aidlc"), args, {}, cwd);
+
+  // 1. The previous release, installed the way its README says.
+  const installer = join(root, WINDOWS ? "install.ps1" : "install.sh");
+  const fetched = spawnSync("curl", ["-fsSL", "-o", installer,
+    `https://github.com/${REPOSITORY}/releases/download/v${previous}/${WINDOWS ? "install.ps1" : "install.sh"}`],
+  { encoding: "utf-8", timeout: STEP_TIMEOUT_MS });
+  if (fetched.status !== 0) {
+    console.error(`Could not download the ${previous} installer: ${fetched.stderr}`);
+    return 1;
+  }
+  const installed = WINDOWS
+    ? run(`install ${previous}`, "powershell.exe", ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", installer, "-Version", previous])
+    : run(`install ${previous}`, "sh", [installer, "--version", previous]);
+  if (!installed.ok) return report(failures);
+  const before = aidlc("version before the update", ["version"]);
+  if (!before.output.includes(previous)) fail(`the installed release reports "${before.output}", not ${previous}`);
+
+  // 2. A project for every harness, set up by the previous release.
+  const projects = HARNESSES.map((harness) => {
+    const project = join(root, `project-${harness}`);
+    mkdirSync(project, { recursive: true });
+    spawnSync("git", ["init", "--quiet", project], { encoding: "utf-8", timeout: STEP_TIMEOUT_MS });
+    if (harness === "copilot") writeFileSync(join(env.COPILOT_HOME!, "config.json"), `${JSON.stringify({ trustedFolders: [project] })}\n`);
+    aidlc(`aidlc config --harness ${harness} on ${previous}`, ["config", "--project-dir", project, "--harness", harness, "--mcp", "none", "--quiet"]);
+    return { harness, project };
+  });
+  if (failures.length > 0) return report(failures);
+
+  // 3. The person's update, run by the previous release's own binary.
+  const updated = aidlc(`aidlc update from ${previous}`, ["update", "--from", candidate, "--offline"]);
+  if (!updated.ok) return report(failures);
+  const after = aidlc("version after the update", ["version"]);
+  if (!after.output.includes(target)) fail(`after the update aidlc reports "${after.output}", not ${target}`);
+  if (WINDOWS && !existsSync(join(bin, "aidlc"))) {
+    fail(`${join(bin, "aidlc")} is missing after the update and its first command, so Git Bash cannot run a bare aidlc and Claude Code's hooks fail`);
+  }
+
+  // 4. What the person does next, per project.
+  let traces = 0;
+  const timedOut = new Set<string>();
+  const hooks = (harness: string, project: string, when: string) => {
+    const plugin = join(project, ".opencode", "plugin", "aidlc-opencode-adapter.ts");
+    const commands = harness === "opencode"
+      // The plugin passes the project folder itself; the shell reads it from the environment.
+      ? opencodeHookCommands(plugin).map((command) => `${command} --project-dir "$CLAUDE_PROJECT_DIR"`)
+      : hookCommands(join(project, HARNESS_DIRS[harness as (typeof HARNESSES)[number]]));
+    if (commands.length === 0) fail(`${harness} ${when}: the project has no hook commands to run`);
+    if (harness === "opencode") {
+      // The plugin itself, driven the way opencode calls it.
+      const trace = join(root, "trace", String(++traces));
+      const driven = run(`opencode plugin ${when}`, process.execPath, ["-e", OPENCODE_EVENTS], {
+        AIDLC_CHECK_PLUGIN: pathToFileURL(plugin).href,
+        AIDLC_CHECK_PROJECT: project,
+        AIDLC_HOOK_TRACE_DIR: trace,
+      }, project);
+      const ran = hooksTracedToCompletion(trace);
+      const missing = OPENCODE_EVENT_HOOKS.filter((hook) => !ran.has(hook));
+      if (driven.ok && missing.length > 0) {
+        fail(`opencode plugin ${when}: its events did not run ${missing.join(", ")} to the end`);
+      }
+    }
+    for (const command of commands) {
+      if (Date.now() >= deadline) {
+        fail(`${harness} hook ${when}: the check ran out of its ${CHECK_BUDGET_MS / 60_000}-minute budget before \`${command}\``);
+        break;
+      }
+      // A hook that hung once is not run again; its first failure says so.
+      if (timedOut.has(command)) continue;
+      const trace = join(root, "trace", String(++traces));
+      const r = spawnSync(shell, ["-c", command], {
+        cwd: project,
+        env: { ...env, CLAUDE_PROJECT_DIR: project, AIDLC_HOOK_TRACE_DIR: trace },
+        encoding: "utf-8",
+        input: "{}",
+        timeout: within(HOOK_TIMEOUT_MS),
+      });
+      if (r.error && (r.error as NodeJS.ErrnoException).code === "ETIMEDOUT") {
+        timedOut.add(command);
+        fail(`${harness} hook ${when}: \`${command}\` did not finish within ${HOOK_TIMEOUT_MS / 60_000} minutes; it is not run again`);
+        continue;
+      }
+      if (r.status !== 0 || !tracedToCompletion(trace)) {
+        fail(`${harness} hook ${when}: \`${command}\` exited ${r.status}: ${`${r.stderr ?? ""}`.trim().split("\n").at(-1) ?? ""}`);
+      }
+    }
+    return commands.length;
+  };
+  for (const { harness, project } of projects) {
+    const known = failures.length;
+    const count = hooks(harness, project, `before the refresh`);
+    aidlc(`aidlc config --yes for ${harness}`, ["config", "--project-dir", project, "--harness", harness, "--mcp", "none", "--yes", "--quiet"]);
+    hooks(harness, project, "after the refresh");
+    aidlc(`aidlc doctor for ${harness}`, ["doctor", "--project-dir", project, "--quiet"]);
+    const result = failures.length === known ? "all passed" : `${failures.length - known} failed`;
+    console.log(`${harness}: ${count} hook command(s) before and after the refresh, the refresh, and doctor: ${result}`);
+  }
+  return report(failures, `Updated from ${previous} to ${target}; every harness's hooks, refresh and doctor work.`);
+}
+
+function report(failures: string[], success = ""): number {
+  if (failures.length === 0) {
+    console.log(success);
+    return 0;
+  }
+  console.error(`${failures.length} failure(s), each printed above as it happened.`);
+  return 1;
+}
+
+if (import.meta.main) process.exit(main(process.argv.slice(2)));

@@ -583,6 +583,28 @@ describe("t205: approve-time gate-revision backstop", () => {
     expect(eventCount(proj, "GATE_APPROVED")).toBe(1);
   });
 
+  // --- Scenario 7b: Guard Policy off (or relaxed): an edit at the open gate is
+  // a change the person's Approve accepts, never a Request Changes they did not
+  // give. No backfill; the approval commits as given.
+  test("7b: under Guard Policy off the person's Approve stands with no backfilled rejection", () => {
+    const statePath = seededStateFile(proj);
+    writeFileSync(statePath, readFileSync(statePath, "utf-8").replace(
+      "- **Change Control**: strict (from scope feature)",
+      "- **Guard Policy**: off (from scope feature)",
+    ));
+    const slug = field(proj, "Current Stage");
+    guarded(proj, ["checkbox", `${slug}=in-progress`]);
+    guarded(proj, ["gate-start", slug]);
+    recordHumanTurn(proj);
+    fireArtifact(proj, feasibilityArtifact(proj, PRIMARY_ARTIFACT));
+    recordHumanTurn(proj);
+    const r = guarded(proj, ["approve", slug, "--user-input", "change the title and approve"]);
+    expect(r.rc, r.out).toBe(0);
+    expect(field(proj, "Revision Count")).toBe("0");
+    expect(eventCount(proj, "GATE_REJECTED")).toBe(0);
+    expect(eventCount(proj, "GATE_APPROVED")).toBe(1);
+  });
+
   // --- Scenario 8: NO anchor at all (the gate was opened via a bare checkbox
   // flip, and the fixture never emitted STAGE_STARTED either) -> the predicate
   // has no anchor -> false. Documents the accepted false negative: the backstop
@@ -721,6 +743,8 @@ describe("t205: approve-time gate-revision backstop", () => {
     cleanupTestProject(proj);
     proj = createTestProject();
     seedStateFile(proj, "state-brownfield-init-done.md");
+    // Pin collaborators on (fixture scope ships them off) so reverse-engineering keeps its architect pipeline link.
+    writeFileSync(seededStateFile(proj), readFileSync(seededStateFile(proj), "utf-8").replace(/^- \*\*Scope\*\*: .*/m, "- **Scope**: enterprise"));
     rewriteIntentRepos(proj, ["repo-a", "repo-b"]);
     const slug = field(proj, "Current Stage");
     expect(slug).toBe("reverse-engineering");
@@ -781,6 +805,8 @@ describe("t205: approve-time gate-revision backstop", () => {
     cleanupTestProject(proj);
     proj = createTestProject();
     seedStateFile(proj, "state-brownfield-init-done.md");
+    // Pin collaborators on (fixture scope ships them off) so reverse-engineering keeps its architect pipeline link.
+    writeFileSync(seededStateFile(proj), readFileSync(seededStateFile(proj), "utf-8").replace(/^- \*\*Scope\*\*: .*/m, "- **Scope**: enterprise"));
     rewriteIntentRepos(proj, ["repo-a"]);
     const slug = field(proj, "Current Stage");
     expect(slug).toBe("reverse-engineering");

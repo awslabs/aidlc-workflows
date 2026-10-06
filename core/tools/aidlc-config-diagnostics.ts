@@ -7,24 +7,41 @@ import {
   lstatSync,
   readFileSync,
   readdirSync,
+  realpathSync,
   statSync,
   writeFileSync,
 } from "node:fs";
 import { homedir, platform as hostPlatform } from "node:os";
-import { delimiter, extname, join, relative, resolve } from "node:path";
+import { delimiter, dirname, extname, join, relative, resolve } from "node:path";
 import {
   assertProjectionPathHasNoSymlinks,
   isSafeOnboardingPath,
+  jsonFileText,
+  jsoncRootMembers,
+  jsoncSettingValue,
+  managedBlockIsSafe,
+  managedBlockMarkers,
+  mergeBlock,
+  missingJsonEntries,
+  readJsonFile,
+  type RootIntegration,
+  rootBlockPath,
   sha256Bytes,
 } from "./aidlc-distribution.ts";
 import {
   aidlcInvocation,
   discoverProjectHarnesses,
+  kiroTreeLayout,
 } from "./aidlc-runtime-paths.ts";
 import { AIDLC_VERSION } from "./aidlc-version.ts";
 import { compareVersions, VERSION_ID } from "./aidlc-channel.ts";
 import { installedExecutablePath } from "./aidlc-install-paths.ts";
-import type { ModelHarness } from "./aidlc-model-policy.ts";
+import { readBoundedRegularFile } from "./aidlc-inline-context.ts";
+import {
+  HARNESS_PRODUCT_NAMES,
+  sessionSetsAgentModels,
+  type ModelHarness,
+} from "./aidlc-model-policy.ts";
 import {
   LOCAL_SETTINGS_FILE,
   localSettingsPath,
@@ -62,6 +79,17 @@ export function harnessOwnsModelAccess(
   harness: ModelHarness,
 ): harness is Exclude<ModelHarness, BedrockOrientedHarness> {
   return HARNESS_OWNED_MODEL_ACCESS.has(harness);
+}
+
+// On hosts where the session sets every agent's model (Copilot, Cursor), no
+// provider answer means the session's own model access, as the Models row
+// says: not a gap for setup, doctor or `--check`. Bedrock stays a choice there.
+export function providerAnswerIsTheSession(harness: ModelHarness): boolean {
+  return !harnessOwnsModelAccess(harness) && sessionSetsAgentModels(harness);
+}
+
+export function sessionModelAccessFact(harness: ModelHarness): string {
+  return `model access comes with your ${HARNESS_PRODUCT_NAMES[harness]} session`;
 }
 
 export function ownedModelAccessFact(product: string): string {
@@ -465,7 +493,7 @@ export function normalizeProjectChoicesRecord(
 
 export function readConfigDiagnosticRecords(harnessRoot: string): ConfigDiagnosticRecords {
   const path = join(harnessRoot, "tools", "data", "harness.json");
-  const value = JSON.parse(readFileSync(path, "utf-8")) as Record<string, unknown>;
+  const value = readJsonFile(path) as Record<string, unknown>;
   const policyKeys = ["models", "flags"].filter((key) => Object.hasOwn(value, key));
   if (policyKeys.length > 0) {
     throw new Error(
@@ -503,6 +531,20 @@ function defaultRun(
   command: string,
   args: readonly string[],
 ): { status: number; stdout: string } {
+  // Windows runs a .cmd or .bat (what npm installs, for example copilot.cmd)
+  // only through cmd.exe. The path is quoted whole; one that cmd.exe would
+  // expand (% or !) or cannot quote (") is not run.
+  if (process.platform === "win32" && /\.(?:cmd|bat)$/i.test(command)) {
+    if (/[%!"]/.test(command) || args.some((arg) => !/^[A-Za-z0-9_./:=-]*$/.test(arg))) {
+      return { status: -1, stdout: "" };
+    }
+    const result = spawnSync(
+      process.env.ComSpec ?? "cmd.exe",
+      ["/d", "/s", "/c", `""${command}" ${args.join(" ")}"`],
+      { encoding: "utf-8", timeout: DEFAULT_SUBPROCESS_TIMEOUT_MS, windowsVerbatimArguments: true },
+    );
+    return { status: result.status ?? -1, stdout: result.stdout ?? "" };
+  }
   const result = spawnSync(command, [...args], {
     encoding: "utf-8",
     timeout: DEFAULT_SUBPROCESS_TIMEOUT_MS,
@@ -519,7 +561,9 @@ function pathEntries(value: string, platform: NodeJS.Platform): string[] {
 
 function executableCandidates(command: string, platform: NodeJS.Platform): string[] {
   if (platform !== "win32" || extname(command)) return [command];
-  return [command, `${command}.exe`, `${command}.cmd`, `${command}.bat`];
+  // Windows runs only a file with an executable extension; npm puts an
+  // extensionless shell script beside its copilot.cmd, so it comes last.
+  return [`${command}.exe`, `${command}.cmd`, `${command}.bat`, command];
 }
 
 export function resolveExecutableOnPath(
@@ -733,25 +777,37 @@ function runtimePathSurfaces(platform: NodeJS.Platform): string {
 function runtimeRemediation(
   name: "bun" | "aidlc",
   platform: NodeJS.Platform,
+  harness: ModelHarness,
+  status: "interactive-only" | "missing" = "missing",
+  foundAt?: string,
 ): string {
+  const tool = HARNESS_PRODUCT_NAMES[harness];
+  if (status === "interactive-only" && platform !== "win32") {
+    // Found on this shell's PATH: a tool started from a terminal hands that
+    // PATH to its hooks, so only a desktop or service launch can miss it. The
+    // baseline reads no shell rc file, so editing one never clears this row.
+    const dir = foundAt ? dirname(foundAt) : name === "bun" ? "~/.bun/bin" : "~/.local/bin";
+    return `Nothing needs changing when you start ${tool} from a terminal: it hands that terminal's PATH to AI-DLC's hooks. ` +
+      `If you start it from a desktop icon, the dock, or a service and AI-DLC's hooks do not run, add ${dir} to ${runtimePathSurfaces(platform)}, then restart ${tool}. ` +
+      "Editing .bashrc or .zshrc does not change this check.";
+  }
   if (name === "bun") {
-    // Only a copy-channel projection runs its hooks through bun; a native
-    // install routes them through `aidlc`. Say so, because a user who never
-    // chose the copy channel cannot otherwise tell why Bun is being asked for.
-    const channel =
-      "This project is a copy-channel projection, so its hooks run through Bun; " +
-      "a native install runs them through the aidlc command instead. ";
+    // Only a copied AI-DLC runs its hooks through bun; an installed one routes
+    // them through `aidlc`. Say so, because a user who never chose to copy it
+    // cannot otherwise tell why Bun is being asked for.
+    const why = "AI-DLC in this project runs on Bun (the installed aidlc command does not need it). ";
     return platform === "win32"
-      ? `${channel}Install Bun, then add its install directory to the Windows User or Machine PATH, not only a shell profile.`
-      : `${channel}Install Bun, then add ~/.bun/bin to the login-independent PATH the harness inherits (${runtimePathSurfaces(platform)}), not only .zshrc or .bash_profile.`;
+      ? `${why}Install Bun, then add its install directory to the Windows User or Machine PATH, not only a shell profile.`
+      : `${why}Install Bun, then add ~/.bun/bin to the PATH ${tool} starts with (${runtimePathSurfaces(platform)}), not only .zshrc or .bash_profile.`;
   }
   return platform === "win32"
     ? "Add the aidlc command directory to the Windows User or Machine PATH."
-    : `Add ~/.local/bin to the login-independent PATH the harness inherits (${runtimePathSurfaces(platform)}), not only an interactive shell rc file.`;
+    : `Add ~/.local/bin to the PATH ${tool} starts with (${runtimePathSurfaces(platform)}), not only an interactive shell rc file.`;
 }
 
 function binaryProbe(
   name: "bun" | "aidlc",
+  harness: ModelHarness,
   required: boolean,
   baselinePath: string,
   interactivePath: string,
@@ -778,14 +834,14 @@ function binaryProbe(
       required,
       status: "interactive-only",
       interactivePath: interactive,
-      remediation: runtimeRemediation(name, platform),
+      remediation: runtimeRemediation(name, platform, harness, "interactive-only", interactive),
     };
   }
   return {
     name,
     required,
     status: "missing",
-    remediation: runtimeRemediation(name, platform),
+    remediation: runtimeRemediation(name, platform, harness),
   };
 }
 
@@ -796,6 +852,8 @@ const HARNESS_CLI: Record<
     required: boolean;
     minimumVersion?: string;
     install: string;
+    // A PATH folder whose `command` is a stand-in that must never be run.
+    standIn?: (directory: string) => boolean;
   }
 > = {
   claude: {
@@ -814,23 +872,31 @@ const HARNESS_CLI: Record<
     required: false,
     minimumVersion: "1.0.74",
     install: "Install @github/copilot 1.0.74 or later for CLI use; VS Code-only installs may omit it.",
+    standIn: isVsCodeCopilotStandInFolder,
   },
   cursor: {
     command: "cursor",
     required: false,
     install: "Install the Cursor CLI and ensure `cursor --version` works; IDE-only installs may omit it.",
   },
+  // The 2.x line is where the hooks, skills and workspace default agent this
+  // distribution relies on shipped; the guide asks for 2.6 or later.
   kiro: {
     command: "kiro-cli",
     required: true,
-    install: "Install Kiro CLI and ensure `kiro-cli --version` works.",
+    minimumVersion: "2.6.0",
+    install: "Install or upgrade Kiro CLI to 2.6.0 or later.",
   },
-  // Probed so a machine with only Kiro CLI detects this row next to the kiro
-  // row: first-run setup then asks instead of silently choosing the legacy one.
+  // Probed so a machine with only a supported Kiro CLI detects this row next to
+  // the kiro row: first-run setup then asks instead of silently choosing the
+  // legacy one. 2.24.1 is the oldest Kiro CLI this row has been checked on (its
+  // v3 engine runs the hooks, and `/aidlc --doctor` reports no problem); an
+  // older one counts only for the kiro row, and doctor warns about it here.
   "kiro-ide": {
     command: "kiro-cli",
     required: false,
-    install: "Kiro CLI is optional here: install it only to run AI-DLC from a terminal, and ensure `kiro-cli --version` works.",
+    minimumVersion: "2.24.1",
+    install: "Kiro CLI is optional here: to run AI-DLC from a terminal, install or upgrade Kiro CLI to 2.24.1 or later; Kiro IDE-only installs may omit it.",
   },
   opencode: {
     command: "opencode",
@@ -838,6 +904,18 @@ const HARNESS_CLI: Record<
     install: "Install opencode and ensure `opencode --version` works.",
   },
 };
+
+// VS Code's Copilot Chat writes a stand-in `copilot` to
+// <user data>/User/globalStorage/github.copilot-chat/copilotCli and puts that
+// folder on its terminals' PATH. With no real CLI the stand-in asks "Install
+// GitHub Copilot CLI? (y/N)" on the console, past any pipe, and with an old
+// one it offers an update. So the probe never runs it: like the stand-in
+// itself, it looks past that folder for the real CLI.
+function isVsCodeCopilotStandInFolder(directory: string): boolean {
+  const parts = directory.split(/[\\/]+/).filter(Boolean);
+  return parts.at(-1)?.toLowerCase() === "copilotcli" &&
+    parts.at(-2)?.toLowerCase() === "github.copilot-chat";
+}
 
 function versionTuple(value: string): [number, number, number] | null {
   const match = value.match(/(\d+)\.(\d+)\.(\d+)/);
@@ -875,7 +953,16 @@ export function probeHarnessCli(
   const interactivePath = options.interactivePath ?? env.PATH ?? "";
   const which = options.which ?? ((command: string, pathValue: string) =>
     resolveExecutableOnPath(command, pathValue, platform));
-  const path = which(spec.command, interactivePath);
+  const standIn = spec.standIn;
+  const searchPath = standIn
+    ? pathEntries(interactivePath, platform)
+      .filter((directory) => !standIn(directory))
+      .join(platform === "win32" ? ";" : delimiter)
+    : interactivePath;
+  const resolved = which(spec.command, searchPath);
+  const path = resolved && standIn?.(resolved.replace(/[\\/][^\\/]*$/, ""))
+    ? null
+    : resolved;
   if (!path) {
     return {
       harness,
@@ -889,7 +976,9 @@ export function probeHarnessCli(
   const run = options.run ?? defaultRun;
   const result = run(path, ["--version"]);
   const version = result.stdout.trim();
-  if (result.status !== 0) {
+  // A floor needs a version: a reply with none is a stand-in, not the CLI.
+  // VS Code's `copilot` prints "Cannot find GitHub Copilot CLI" and exits 0 (#1411).
+  if (result.status !== 0 || (spec.minimumVersion && !versionTuple(version))) {
     return {
       harness,
       command: spec.command,
@@ -942,8 +1031,8 @@ export function probeRuntime(
     baselinePath,
     commandFiles,
     binaries: [
-      binaryProbe("bun", requirements.bun, baselinePath, interactivePath, options),
-      binaryProbe("aidlc", requirements.aidlc, baselinePath, interactivePath, options),
+      binaryProbe("bun", harness, requirements.bun, baselinePath, interactivePath, options),
+      binaryProbe("aidlc", harness, requirements.aidlc, baselinePath, interactivePath, options),
     ],
     cli: options.includeHarnessCli === false
       ? {
@@ -1145,8 +1234,9 @@ export function pendingProviderIssues(
     });
 }
 
+// The file keeps the byte order mark it had.
 function writeJson(path: string, value: unknown): void {
-  writeFileSync(path, `${JSON.stringify(value, null, 2)}\n`);
+  writeFileSync(path, jsonFileText(value, existsSync(path) ? readFileSync(path, "utf-8") : ""));
 }
 
 function writeClaudeProvider(
@@ -1155,7 +1245,7 @@ function writeClaudeProvider(
   record: ProvidersRecord,
 ): void {
   const settingsPath = join(projectionRoot, harnessDir, "settings.json");
-  const settings = JSON.parse(readFileSync(settingsPath, "utf-8")) as Record<string, unknown>;
+  const settings = readJsonFile(settingsPath) as Record<string, unknown>;
   const env = isRecord(settings.env) ? { ...settings.env } : {};
   stripLegacyClaudeModelAliases(env);
   env.CLAUDE_CODE_USE_BEDROCK = "1";
@@ -1167,19 +1257,32 @@ function writeClaudeProvider(
 
   const mcpPath = join(projectionRoot, ".mcp.json");
   if (!existsSync(mcpPath)) return;
-  const mcp = JSON.parse(readFileSync(mcpPath, "utf-8")) as Record<string, unknown>;
+  const mcp = readJsonFile(mcpPath) as Record<string, unknown>;
+  if (applyMcpRegion(mcp, record.region as string)) writeJson(mcpPath, mcp);
+}
+
+// The shipped aws-mcp server's region arguments, set to `region`. False when
+// the list has no such server.
+function applyMcpRegion(mcp: Record<string, unknown>, region: string): boolean {
   const servers = isRecord(mcp.mcpServers) ? mcp.mcpServers : {};
   const aws = isRecord(servers["aws-mcp"]) ? servers["aws-mcp"] : null;
-  if (!aws || !Array.isArray(aws.args)) return;
+  if (!aws || !Array.isArray(aws.args)) return false;
   aws.args = aws.args.map((arg) => {
     if (typeof arg !== "string") return arg;
     if (/^https:\/\/aws-mcp\.[^.]+\.api\.aws\/mcp$/.test(arg)) {
-      return `https://aws-mcp.${record.region}.api.aws/mcp`;
+      return `https://aws-mcp.${region}.api.aws/mcp`;
     }
-    if (/^AWS_REGION=/.test(arg)) return `AWS_REGION=${record.region}`;
+    if (/^AWS_REGION=/.test(arg)) return `AWS_REGION=${region}`;
     return arg;
   });
-  writeJson(mcpPath, mcp);
+  return true;
+}
+
+// The shipped server list a copy keeps in its harness folder carries no
+// provider choice; the one recorded now is applied when its servers are added.
+export function withRecordedMcpRegion(mcp: Record<string, unknown>, record: ProvidersRecord | null): void {
+  if (!record?.region || record.provider === "current" || record.provider === "other") return;
+  applyMcpRegion(mcp, record.region);
 }
 
 const CLAUDE_BEDROCK_MODEL_KEYS = [
@@ -1224,7 +1327,7 @@ function clearClaudeProvider(
   harnessDir: string,
 ): void {
   const settingsPath = join(projectionRoot, harnessDir, "settings.json");
-  const settings = JSON.parse(readFileSync(settingsPath, "utf-8")) as Record<string, unknown>;
+  const settings = readJsonFile(settingsPath) as Record<string, unknown>;
   const env = isRecord(settings.env) ? { ...settings.env } : {};
   const legacy = hasLegacyClaudeProviderConfig(env);
   let changed = false;
@@ -1358,7 +1461,7 @@ export function preserveKiroMcpRegion(
   const awsArgs = (path: string): { value: Record<string, unknown>; args: unknown[] } | null => {
     let value: Record<string, unknown>;
     try {
-      value = JSON.parse(readFileSync(path, "utf-8")) as Record<string, unknown>;
+      value = readJsonFile(path) as Record<string, unknown>;
     } catch {
       return null;
     }
@@ -1403,7 +1506,7 @@ function writeOpenCodeProvider(
 ): void {
   if (!record.opencodeDefault) return;
   const path = join(projectionRoot, "opencode.json");
-  const value = JSON.parse(readFileSync(path, "utf-8")) as Record<string, unknown>;
+  const value = readJsonFile(path) as Record<string, unknown>;
   const providers = isRecord(value.provider) ? { ...value.provider } : {};
   const existing = isRecord(providers["amazon-bedrock"])
     ? providers["amazon-bedrock"]
@@ -1448,7 +1551,7 @@ function clearOpenCodeProvider(
 ): void {
   const path = join(projectionRoot, "opencode.json");
   if (!existsSync(path)) return;
-  const value = JSON.parse(readFileSync(path, "utf-8")) as Record<string, unknown>;
+  const value = readJsonFile(path) as Record<string, unknown>;
   if (!isRecord(value.provider)) return;
   const providers = { ...value.provider };
   if (!openCodeProviderMatchesRecord(
@@ -1476,7 +1579,7 @@ function writeClaudeFlags(
 ): void {
   if (!record.defaultScope) return;
   const path = join(projectionRoot, harnessDir, "settings.json");
-  const value = JSON.parse(readFileSync(path, "utf-8")) as Record<string, unknown>;
+  const value = readJsonFile(path) as Record<string, unknown>;
   const env = isRecord(value.env) ? { ...value.env } : {};
   env.AWS_AIDLC_DEFAULT_SCOPE = record.defaultScope;
   value.env = env;
@@ -1625,6 +1728,7 @@ const FLAG_ENV_FIELDS: Array<{
   { env: "AIDLC_USE_SWARM", field: "swarm" },
   { env: "AIDLC_HOOK_DEBUG", field: "hookDebug" },
   { env: "AIDLC_SENSOR_TIMEOUT_MS", field: "sensorTimeoutMs" },
+  { env: "AIDLC_QUESTION_RETENTION_DAYS", field: "questionRetentionDays" },
 ];
 
 export function recordedFlagValue(
@@ -1734,7 +1838,7 @@ export function flagIssues(
   if (record.defaultScope && harness === "claude") {
     const path = join(projectDir, harnessDir, "settings.json");
     try {
-      const value = JSON.parse(readFileSync(path, "utf-8")) as Record<string, unknown>;
+      const value = readJsonFile(path) as Record<string, unknown>;
       const settingsEnv = isRecord(value.env) ? value.env : {};
       if (settingsEnv.AWS_AIDLC_DEFAULT_SCOPE !== record.defaultScope) {
         issues.push({
@@ -1766,22 +1870,29 @@ function collectPluginNames(value: unknown, names: Set<string>): void {
   for (const child of Object.values(value)) collectPluginNames(child, names);
 }
 
+export function composedPluginNames(dataDir: string): string[] {
+  if (!existsSync(dataDir)) return [];
+  const names: string[] = [];
+  for (const file of readdirSync(dataDir).sort()) {
+    const match = /^(?:plugin-contrib|plugin-owned|plugin-compose)-([a-z][a-z0-9-]*)\.json$/
+      .exec(file);
+    if (match) names.push(match[1]);
+  }
+  return names;
+}
+
 export function discoverInstalledPluginNames(
   projectDir: string,
   harnessDir: string,
 ): string[] {
   const names = new Set<string>(["aidlc"]);
   const dataDir = join(projectDir, harnessDir, "tools", "data");
+  for (const name of composedPluginNames(dataDir)) names.add(name);
   if (existsSync(dataDir)) {
-    for (const file of readdirSync(dataDir).sort()) {
-      const match = /^(?:plugin-contrib|plugin-owned|plugin-compose)-([a-z][a-z0-9-]*)\.json$/
-        .exec(file);
-      if (match) names.add(match[1]);
-    }
     const graphPath = join(dataDir, "stage-graph.json");
     if (existsSync(graphPath)) {
       try {
-        collectPluginNames(JSON.parse(readFileSync(graphPath, "utf-8")), names);
+        collectPluginNames(readJsonFile(graphPath), names);
       } catch {
         // Sidecars and scope files remain available when the graph is stale.
       }
@@ -1801,7 +1912,7 @@ export function discoverInstalledPluginNames(
 
 export function readPluginSelection(harnessRoot: string): string[] | null {
   const path = join(harnessRoot, "tools", "data", "harness.json");
-  const value = JSON.parse(readFileSync(path, "utf-8")) as Record<string, unknown>;
+  const value = readJsonFile(path) as Record<string, unknown>;
   if (!Object.hasOwn(value, "plugins")) return null;
   if (
     !Array.isArray(value.plugins) ||
@@ -1933,7 +2044,7 @@ export function projectChoiceIssues(
   let servers = new Set<string>();
   if (existsSync(path)) {
     try {
-      const value = JSON.parse(readFileSync(path, "utf-8")) as Record<string, unknown>;
+      const value = readJsonFile(path) as Record<string, unknown>;
       servers = new Set(
         isRecord(value.mcpServers) ? Object.keys(value.mcpServers) : [],
       );
@@ -1991,7 +2102,7 @@ export function providerSurfaceIssues(
     if (record.provider === "current" || record.provider === "other") {
       if (harness === "claude") {
         const path = join(projectDir, harnessDir, "settings.json");
-        const value = JSON.parse(readFileSync(path, "utf-8")) as Record<string, unknown>;
+        const value = readJsonFile(path) as Record<string, unknown>;
         const env = isRecord(value.env) ? value.env : {};
         if (hasLegacyClaudeProviderConfig(env)) {
           mismatch(
@@ -2012,9 +2123,7 @@ export function providerSurfaceIssues(
         }
         const localPath = join(projectDir, harnessDir, "settings.local.json");
         if (existsSync(localPath)) {
-          const local = JSON.parse(
-            readFileSync(localPath, "utf-8"),
-          ) as Record<string, unknown>;
+          const local = readJsonFile(localPath) as Record<string, unknown>;
           const localEnv = isRecord(local.env) ? local.env : {};
           const localOverrides: string[] = CLAUDE_BEDROCK_MODEL_KEYS.filter(
             (key) => Object.hasOwn(localEnv, key),
@@ -2071,7 +2180,7 @@ export function providerSurfaceIssues(
         }
       } else if (harness === "opencode" && record.provider === "other") {
         const path = join(projectDir, "opencode.json");
-        const value = JSON.parse(readFileSync(path, "utf-8")) as Record<string, unknown>;
+        const value = readTeamJsonFile(path) as Record<string, unknown>;
         const providers = isRecord(value.provider) ? value.provider : {};
         if (Object.hasOwn(providers, "amazon-bedrock")) {
           warning(
@@ -2092,7 +2201,7 @@ export function providerSurfaceIssues(
       );
     } else if (harness === "claude") {
       const settingsPath = join(projectDir, harnessDir, "settings.json");
-      const settings = JSON.parse(readFileSync(settingsPath, "utf-8")) as Record<string, unknown>;
+      const settings = readJsonFile(settingsPath) as Record<string, unknown>;
       const env = isRecord(settings.env) ? settings.env : {};
       if (
         env.CLAUDE_CODE_USE_BEDROCK !== "1" ||
@@ -2103,7 +2212,7 @@ export function providerSurfaceIssues(
       }
       const localPath = join(projectDir, harnessDir, "settings.local.json");
       if (existsSync(localPath)) {
-        const local = JSON.parse(readFileSync(localPath, "utf-8")) as Record<string, unknown>;
+        const local = readJsonFile(localPath) as Record<string, unknown>;
         const localEnv = isRecord(local.env) ? local.env : {};
         const conflicts = [
           ...(Object.hasOwn(localEnv, "CLAUDE_CODE_USE_BEDROCK") &&
@@ -2140,7 +2249,7 @@ export function providerSurfaceIssues(
       }
     } else if (harness === "opencode" && record.opencodeDefault) {
       const path = join(projectDir, "opencode.json");
-      const value = JSON.parse(readFileSync(path, "utf-8")) as Record<string, unknown>;
+      const value = readTeamJsonFile(path) as Record<string, unknown>;
       const providers = isRecord(value.provider) ? value.provider : {};
       const bedrock = isRecord(providers["amazon-bedrock"]) ? providers["amazon-bedrock"] : {};
       const options = isRecord(bedrock.options) ? bedrock.options : {};
@@ -2179,6 +2288,127 @@ export function providerIssues(
     });
   }
   return issues;
+}
+
+// The Copilot CLI keeps folder trust in config.json under COPILOT_HOME, else
+// <home>/.copilot, and finds home the way Node does: USERPROFILE on Windows,
+// HOME elsewhere. A Windows desktop process usually has no HOME at all, and a
+// HOME that is set (a network drive, say) is not where the CLI looks.
+export function copilotConfigPath(
+  env: NodeJS.ProcessEnv = process.env,
+  platform: NodeJS.Platform = hostPlatform(),
+): string {
+  const home = (platform === "win32" ? env.USERPROFILE : env.HOME) || homedir();
+  return join(env.COPILOT_HOME || join(home, ".copilot"), "config.json");
+}
+
+// True when a trustedFolders entry covers the project the way the CLI judges
+// it: the folder itself or any folder above it, after resolving links and
+// dropping trailing separators. On Windows the CLI also ignores case and
+// separator style, so `c:/work` covers `C:\work\app` there.
+export function copilotFolderTrusted(
+  projectDir: string,
+  trustedFolders: readonly unknown[],
+  platform: NodeJS.Platform = hostPlatform(),
+): boolean {
+  const windows = platform === "win32";
+  const separator = windows ? "\\" : "/";
+  const norm = (path: string): string => {
+    let out = path;
+    try {
+      out = realpathSync(path);
+    } catch {
+      // keep the recorded form; a recorded-but-deleted path never matches
+    }
+    if (windows) out = out.replaceAll("/", "\\").toLowerCase();
+    return out.replace(/[/\\]+$/, "");
+  };
+  const project = norm(projectDir);
+  return trustedFolders.some((entry) => {
+    if (typeof entry !== "string" || entry === "") return false;
+    const folder = norm(entry);
+    return project === folder || project.startsWith(`${folder}${separator}`);
+  });
+}
+
+// The list the CLI reads: trustedFolders, or the older trusted_folders it
+// still honours. With both present the later one in the file wins.
+export function copilotTrustedFolderKey(
+  config: Record<string, unknown>,
+): "trustedFolders" | "trusted_folders" {
+  const last = Object.keys(config).findLast((key) =>
+    key === "trustedFolders" || key === "trusted_folders"
+  );
+  return last === "trusted_folders" ? "trusted_folders" : "trustedFolders";
+}
+
+export type CopilotCliTrust =
+  | { state: "absent" | "unreadable"; configPath: string }
+  | {
+      state: "trusted" | "untrusted";
+      configPath: string;
+      raw: string;
+      config: Record<string, unknown>;
+    };
+
+// What the Copilot CLI's config says about this folder. Absent means no CLI
+// config at all (a VS Code-only install; the CLI asks on its first run).
+// Unreadable covers bad JSON and a trusted-folders value that is not a list,
+// which the CLI ignores.
+export function copilotCliTrust(
+  projectDir: string,
+  env: NodeJS.ProcessEnv = process.env,
+  platform: NodeJS.Platform = hostPlatform(),
+): CopilotCliTrust {
+  const configPath = copilotConfigPath(env, platform);
+  if (!existsSync(configPath)) return { state: "absent", configPath };
+  let raw: string;
+  let config: unknown;
+  try {
+    raw = readFileSync(configPath, "utf-8");
+    config = Bun.JSONC.parse(raw);
+  } catch {
+    return { state: "unreadable", configPath };
+  }
+  if (!config || typeof config !== "object" || Array.isArray(config)) {
+    return { state: "unreadable", configPath };
+  }
+  const record = config as Record<string, unknown>;
+  const list = record[copilotTrustedFolderKey(record)];
+  if (list !== undefined && !Array.isArray(list)) return { state: "unreadable", configPath };
+  return {
+    state: copilotFolderTrusted(projectDir, Array.isArray(list) ? list : [], platform)
+      ? "trusted"
+      : "untrusted",
+    configPath,
+    raw,
+    config: record,
+  };
+}
+
+// The setup check's view of Copilot CLI folder trust. Untrusted is a warning
+// for the same reason as in doctor: VS Code never reads this list and the
+// interactive CLI asks first; only headless `copilot -p` runs skip silently.
+export function copilotTrustIssues(
+  projectDir: string,
+  env: NodeJS.ProcessEnv = process.env,
+): DiagnosticIssue[] {
+  const trust = copilotCliTrust(projectDir, env);
+  if (trust.state === "unreadable") {
+    return [{
+      id: "copilot-cli-config-unreadable",
+      message: `${trust.configPath} is not a Copilot CLI config AI-DLC can read, so the CLI's folder trust is unknown`,
+      remediation: `Repair ${trust.configPath}: valid JSON (comments are allowed) with trustedFolders as a list, then rerun the setup check.`,
+    }];
+  }
+  if (trust.state !== "untrusted") return [];
+  return [{
+    id: "copilot-folder-untrusted",
+    message: "Copilot CLI has not trusted this folder",
+    remediation:
+      `Run copilot in this folder once and choose "Yes, and remember this folder for future sessions", or add ${JSON.stringify(resolve(projectDir))} to trustedFolders in ${trust.configPath} yourself.`,
+    severity: "warn",
+  }];
 }
 
 function codexTrustEntries(seedText: string, projectDir: string): Array<{
@@ -2298,12 +2528,18 @@ export function trustFilesForHarness(
       join(process.env.CODEX_HOME || join(process.env.HOME || homedir(), ".codex"), "config.toml"),
     );
   }
-  if (harness === "kiro" || harness === "kiro-ide") {
-    // The kiro row grants trust in agent-v1 JSON and registers legacy hooks;
-    // the kiro-ide row grants it in the Markdown agents' permissions and
-    // registers v1 hook JSON, and pins the Kiro CLI engine in settings/cli.json.
-    const agentSuffix = harness === "kiro" ? ".json" : ".md";
-    const hookSuffix = harness === "kiro" ? ".kiro.hook" : ".json";
+  const kiroLayout = harness === "kiro-ide"
+    ? "kas"
+    : harness === "kiro"
+      ? kiroTreeLayout(join(projectDir, harnessDir)) ?? "agent-v1"
+      : null;
+  if (kiroLayout) {
+    // The agent-v1 layout grants trust in JSON agents and registers legacy hooks;
+    // the KAS layout grants it in the Markdown agents' permissions and registers
+    // v1 hook JSON, and pins the Kiro CLI engine in settings/cli.json. A `kiro`
+    // project can carry either, so its installed tree decides.
+    const agentSuffix = kiroLayout === "agent-v1" ? ".json" : ".md";
+    const hookSuffix = kiroLayout === "agent-v1" ? ".kiro.hook" : ".json";
     const agentsDir = join(projectDir, harnessDir, "agents");
     if (existsSync(agentsDir)) {
       files.push(
@@ -2323,7 +2559,7 @@ export function trustFilesForHarness(
       );
     }
   }
-  if (harness === "kiro-ide") {
+  if (kiroLayout === "kas") {
     files.push(join(projectDir, harnessDir, "settings", "cli.json"));
   }
   if (harness === "cursor") {
@@ -2332,9 +2568,49 @@ export function trustFilesForHarness(
       join(projectDir, harnessDir, "cli.json"),
     );
   }
-  if (harness === "copilot") files.push(join(projectDir, ".github", "hooks", "aidlc.json"));
+  if (harness === "copilot") {
+    files.push(join(projectDir, ".github", "hooks", "aidlc.json"), copilotConfigPath());
+  }
   if (harness === "opencode") files.push(join(projectDir, "opencode.json"));
   return [...new Set(files)];
+}
+
+// A real `.git` pointer file is one short line.
+const GIT_POINTER_MAX_BYTES = 64 * 1024;
+
+// True iff `dir` or one of its ancestors holds a git checkout marker: a `.git`
+// directory with a HEAD entry, or (a submodule or linked worktree) a small
+// regular `.git` file reading `gitdir: <path>`. Only entries of these folders
+// are examined, links are not followed, and a pointer's target is never opened,
+// so a crafted project cannot send the check to another machine. An empty
+// `.git` left behind is not a repository. Searched from the real path so a
+// symlinked project reaches its real parents. Cursor may skip project hooks in
+// a folder outside any git repository (#976).
+export function insideGitRepository(dir: string): boolean {
+  const checkout = (candidate: string): boolean => {
+    const dotGit = join(candidate, ".git");
+    try {
+      if (lstatSync(dotGit).isDirectory()) {
+        lstatSync(join(dotGit, "HEAD"));
+        return true;
+      }
+    } catch {
+      return false;
+    }
+    return /^gitdir: \S/.test(readBoundedRegularFile(dotGit, GIT_POINTER_MAX_BYTES) ?? "");
+  };
+  let current: string;
+  try {
+    current = realpathSync(dir);
+  } catch {
+    current = resolve(dir);
+  }
+  for (;;) {
+    if (checkout(current)) return true;
+    const parent = dirname(current);
+    if (parent === current) return false;
+    current = parent;
+  }
 }
 
 export function trustStatus(
@@ -2346,6 +2622,9 @@ export function trustStatus(
   const issues = workspaceSiblingIssues(projectDir, harness, harnessDir);
   if (harness === "codex") {
     issues.push(...codexTrustIssues(projectDir, harnessDir, env));
+  }
+  if (harness === "copilot") {
+    issues.push(...copilotTrustIssues(projectDir, env));
   }
   return {
     files: trustFilesForHarness(projectDir, harnessDir, harness),
@@ -2361,6 +2640,20 @@ export type ConfigOutstandingAction = {
   message: string;
   command: string;
 };
+
+// The runtimes this shell finds that the system-wide PATH does not. A harness
+// started from this terminal hands them to its hooks, so setup lists no step
+// for them and says where to start the harness instead.
+export function shellOnlyRuntimes(
+  projectDir: string,
+  harnessDir: string,
+  harness: ModelHarness,
+  options: RuntimeProbeOptions = {},
+): string[] {
+  return probeRuntime(projectDir, harnessDir, harness, { ...options, includeHarnessCli: false }).binaries
+    .filter((binary) => binary.status === "interactive-only")
+    .map((binary) => binary.name);
+}
 
 export function postApplyOutstandingActions(
   projectDir: string,
@@ -2380,7 +2673,13 @@ export function postApplyOutstandingActions(
       ...options.runtime,
       includeHarnessCli: false,
     });
-    actions.push(...runtimeIssues(diagnostics).map((issue) => ({
+    // A runtime found on this shell's PATH needs nothing from a harness started
+    // from a terminal; the doctor says what to do if its hooks never run.
+    const needed = {
+      ...diagnostics,
+      binaries: diagnostics.binaries.filter((binary) => binary.status !== "interactive-only"),
+    };
+    actions.push(...runtimeIssues(needed).map((issue) => ({
       section: "runtime" as const,
       id: issue.id,
       message: issue.message,
@@ -2423,24 +2722,18 @@ export function postApplyOutstandingActions(
   return actions;
 }
 
-export function managedBlockMarkers(
-  path: string,
-  identity: string,
-): { begin: string; end: string } {
-  return path.endsWith(".md")
-    ? {
-        begin: `<!-- BEGIN AI-DLC:${identity} -->`,
-        end: `<!-- END AI-DLC:${identity} -->`,
-      }
-    : {
-        begin: `# BEGIN AI-DLC:${identity}`,
-        end: `# END AI-DLC:${identity}`,
-      };
+export { managedBlockMarkers };
+
+// The team's own opencode.json may hold comments and trailing commas, as
+// opencode allows.
+function readTeamJsonFile(path: string): unknown {
+  return Bun.JSONC.parse(readFileSync(path, "utf-8").replace(/^\uFEFF/, ""));
 }
 
 type RecordedInstructionContribution =
   | { policy: "managed-block"; hash: string; marker?: string }
-  | { policy: "whole-file"; hash: string };
+  | { policy: "whole-file"; hash: string }
+  | { policy: "json-entries"; entries: Record<string, string> };
 
 type RecordedInstructionBaseline = {
   files?: Record<string, string>;
@@ -2449,9 +2742,45 @@ type RecordedInstructionBaseline = {
 
 type InstructionState = {
   path: string;
-  kind: "managed-block" | "whole-file";
+  kind: "managed-block" | "whole-file" | "json-entries";
   state: "intact" | "missing" | "conflict";
 };
+
+// AGENTS.md in a copy config never ran in: AI-DLC's part is the marked block
+// the engine adds at session start, by the same rule config uses. A file that
+// rule cannot take (unmarked AI-DLC text the team changed, broken markers) is
+// a conflict, so the person hears what to fix instead of nothing.
+function copiedAgentsState(
+  projectDir: string,
+  harnessDir: string,
+  integration: RootIntegration,
+): InstructionState {
+  const path = "AGENTS.md";
+  let shipped: string;
+  let current: string;
+  try {
+    assertProjectionPathHasNoSymlinks(projectDir, `${harnessDir}/tools/data/root-blocks/${integration.marker}`);
+    shipped = readFileSync(rootBlockPath(join(projectDir, harnessDir), integration), "utf-8");
+    current = readFileSync(join(projectDir, path), "utf-8");
+  } catch {
+    return { path, kind: "whole-file", state: "intact" };
+  }
+  // The Cursor installer keeps AI-DLC's part under its own markers.
+  if (/^<!-- BEGIN AIDLC [A-Z]+ -->/m.test(current)) return { path, kind: "managed-block", state: "intact" };
+  const merged = mergeBlock(
+    path,
+    current,
+    shipped,
+    integration.marker ?? "agents",
+    integration.legacySignatures?.wholeFileHashes ?? [],
+  );
+  if (merged.error) return { path, kind: "managed-block", state: "conflict" };
+  return {
+    path,
+    kind: "managed-block",
+    state: merged.currentHash !== undefined || merged.adoptedLegacy ? "intact" : "missing",
+  };
+}
 
 function instructionStates(
   projectDir: string,
@@ -2459,6 +2788,7 @@ function instructionStates(
   harness: ModelHarness,
 ): InstructionState[] {
   let onboardingPath = harness === "claude" ? `${harnessDir}/CLAUDE.md` : undefined;
+  let agentsBlock: RootIntegration | undefined;
   try {
     const descriptor: unknown = JSON.parse(readFileSync(
       join(projectDir, harnessDir, "tools", "data", "aidlc-projection.json"),
@@ -2469,6 +2799,11 @@ function instructionStates(
       isSafeOnboardingPath(descriptor.onboarding, harnessDir)
     ) {
       onboardingPath = descriptor.onboarding;
+    }
+    if (isRecord(descriptor) && Array.isArray(descriptor.rootIntegrations)) {
+      agentsBlock = (descriptor.rootIntegrations as RootIntegration[]).find((integration) =>
+        isRecord(integration) && integration.path === "AGENTS.md" && managedBlockIsSafe(integration)
+      );
     }
   } catch {
     // Legacy installations may not have a readable onboarding descriptor.
@@ -2498,13 +2833,12 @@ function instructionStates(
         return { path, kind: "whole-file", state: "conflict" };
       }
       const target = join(projectDir, path);
-      return {
-        path,
-        kind: "whole-file",
-        state: existsSync(target) && lstatSync(target).isFile()
-          ? "intact"
-          : "missing",
-      };
+      if (!existsSync(target) || !lstatSync(target).isFile()) {
+        return { path, kind: "whole-file", state: "missing" };
+      }
+      return path === "AGENTS.md" && agentsBlock
+        ? copiedAgentsState(projectDir, harnessDir, agentsBlock)
+        : { path, kind: "whole-file", state: "intact" };
     });
   }
   const baseline = JSON.parse(
@@ -2519,7 +2853,7 @@ function instructionStates(
   )) {
     if (
       path === "AGENTS.md" ||
-      (path === "opencode.json" && contribution.policy === "whole-file")
+      (path === "opencode.json" && (contribution.policy === "whole-file" || contribution.policy === "json-entries"))
     ) {
       tracked.push({ path, contribution });
     }
@@ -2556,6 +2890,23 @@ function instructionStates(
         path,
         kind: contribution.policy,
         state: sha256Bytes(content) === contribution.hash ? "intact" : "conflict",
+      };
+    }
+    if (contribution.policy === "json-entries") {
+      // The team's own file: AI-DLC's instructions and skills entries must be
+      // there; everything else in it is theirs.
+      let shipped: string;
+      try {
+        assertProjectionPathHasNoSymlinks(projectDir, `${harnessDir}/tools/data/root-blocks/${path}`);
+        shipped = readFileSync(join(projectDir, harnessDir, "tools", "data", "root-blocks", path), "utf-8");
+      } catch {
+        return { path, kind: contribution.policy, state: "intact" };
+      }
+      const missing = missingJsonEntries(content.toString("utf-8"), shipped, ["instructions", "skills"]);
+      return {
+        path,
+        kind: contribution.policy,
+        state: missing === null ? "conflict" : missing.length > 0 ? "missing" : "intact",
       };
     }
     const text = content.toString("utf-8");
@@ -2637,7 +2988,7 @@ export function instructionFileDoctorCheck(
       fix: `run \`${invoke} config\``,
     };
   }
-  const managed = states.some((item) => item.kind === "managed-block");
+  const managed = states.some((item) => item.kind === "managed-block" || item.kind === "json-entries");
   const whole = states.some((item) => item.kind === "whole-file");
   return {
     pass: true,
@@ -2675,6 +3026,11 @@ function selectedHarness(
 export function runtimeDoctorChecks(
   projectDir: string,
   harnessDirHint?: string,
+  evidence: {
+    /** The newest heartbeat of this project's hooks, when they are firing (not stale). */
+    hooksLastFired?: string;
+    runtime?: RuntimeProbeOptions;
+  } = {},
 ): DiagnosticDoctorCheck[] {
   const selected = selectedHarness(projectDir, harnessDirHint);
   if (!selected) {
@@ -2687,26 +3043,40 @@ export function runtimeDoctorChecks(
     projectDir,
     selected.harnessDir,
     selected.harness,
+    evidence.runtime,
   );
-  const checks: DiagnosticDoctorCheck[] = diagnostics.binaries.map((binary) => ({
-    pass: binary.status === "found" || binary.status === "not-required",
-    ...(binary.status === "found" || binary.status === "not-required"
-      ? {}
-      : { severity: "warn" as const }),
-    label: binary.status === "found"
-      ? `Runtime hook PATH: ${binary.name} -> ${binary.baselinePath} (non-interactive baseline)`
-      : binary.status === "not-required"
-      ? `Runtime hook PATH: ${binary.name} is not required by the selected projection`
-      : binary.status === "interactive-only"
-      ? `Runtime hook PATH: ${binary.name} is interactive-only at ${binary.interactivePath}`
-      : `Runtime hook PATH: ${binary.name} is missing`,
-    fix: binary.remediation,
-  }));
+  const checks: DiagnosticDoctorCheck[] = diagnostics.binaries.map((binary) => {
+    // A projection's hooks run through one runtime, so hooks that are firing
+    // found it on the PATH the harness really gives them: that settles what the
+    // system-wide PATH can only predict.
+    if (binary.status === "interactive-only" && evidence.hooksLastFired) {
+      return {
+        pass: true,
+        label: `Runtime hook PATH: ${binary.name} -> ${binary.interactivePath} (this project's hooks found it; last fired ${evidence.hooksLastFired})`,
+      };
+    }
+    return {
+      pass: binary.status === "found" || binary.status === "not-required",
+      ...(binary.status === "found" || binary.status === "not-required"
+        ? {}
+        : { severity: "warn" as const }),
+      label: binary.status === "found"
+        ? `Runtime hook PATH: ${binary.name} -> ${binary.baselinePath} (non-interactive baseline)`
+        : binary.status === "not-required"
+        ? `Runtime hook PATH: ${binary.name} is not required by the selected projection`
+        : binary.status === "interactive-only"
+        ? `Runtime hook PATH: ${binary.name} is on this shell's PATH (${binary.interactivePath}) but not on the system-wide PATH`
+        : `Runtime hook PATH: ${binary.name} is missing`,
+      fix: binary.remediation,
+    };
+  });
   const cli = diagnostics.cli;
+  // Never a fail: a missing or old required CLI warns, and an optional one
+  // passes when absent and warns only when present but too old.
   checks.push({
     pass: cli.status === "found" || cli.status === "not-applicable" ||
       (!cli.required && cli.status === "missing"),
-    ...(cli.required && (cli.status === "missing" || cli.status === "too-old")
+    ...(cli.status === "too-old" || (cli.required && cli.status === "missing")
       ? { severity: "warn" as const }
       : {}),
     label: cli.status === "found"
@@ -2714,13 +3084,160 @@ export function runtimeDoctorChecks(
       : cli.status === "not-applicable"
       ? `Harness CLI: none required for ${cli.harness}`
       : cli.status === "too-old"
-      ? `Harness CLI: ${cli.command} ${cli.version || "unknown"} is below ${cli.minimumVersion}`
+      ? `Harness CLI: ${cli.required ? "" : "optional "}${cli.command} ${cli.version || "unknown"} is below ${cli.minimumVersion}`
       : cli.required
       ? `Harness CLI: ${cli.command} is missing`
       : `Harness CLI: optional ${cli.command} is not installed`,
     fix: cli.remediation,
   });
   return checks;
+}
+
+// VS Code pauses agent mode after `chat.agent.maxRequests` requests in one
+// turn to ask "Continue to iterate?", and the chat waits silently until
+// someone answers. Its default (50) stops a Construction stage part way, so a
+// Copilot project should allow 100 or more; config adds 200 when unset (#1411).
+const VSCODE_REQUEST_CAP_KEY = "chat.agent.maxRequests";
+const VSCODE_REQUEST_CAP_FLOOR = 100;
+
+export function vscodeRequestCapDoctorCheck(
+  projectDir: string,
+  harnessDirHint?: string,
+): DiagnosticDoctorCheck | null {
+  const selected = selectedHarness(projectDir, harnessDirHint);
+  if (selected?.harness !== "copilot") return null;
+  const label = "VS Code agent request cap:";
+  const where = ".vscode/settings.json";
+  let text: string | null = null;
+  try {
+    text = readFileSync(join(projectDir, ".vscode", "settings.json"), "utf-8");
+  } catch {
+    // Absent: VS Code's default applies.
+  }
+  if (text?.trim() && !jsoncRootMembers(text)) {
+    return {
+      pass: false,
+      severity: "warn",
+      label: `${label} ${where} could not be read as JSONC`,
+      fix: `correct ${where}, then set "${VSCODE_REQUEST_CAP_KEY}" to 100 or more (AI-DLC suggests 200); ${REQUEST_CAP_PAUSES}`,
+    };
+  }
+  const value = text?.trim() ? jsoncSettingValue(text, VSCODE_REQUEST_CAP_KEY) : undefined;
+  // A key AI-DLC added once and the team then took out of a file it kept is
+  // the team's choice: config does not add it back, and doctor does not ask.
+  if (value === undefined && text !== null && requestCapAddedBefore(selected.root)) {
+    return { pass: true, label: `${label} the team removed ${VSCODE_REQUEST_CAP_KEY} from ${where}, so AI-DLC leaves it out` };
+  }
+  return requestCapRow(label, where, value);
+}
+
+// A multi-root window reads window-scoped settings from its .code-workspace
+// file instead of a folder's .vscode/settings.json, so when the project has
+// the multi-root file workspace-sync generates, doctor checks it as well: it
+// is the file in charge whenever the person opens that workspace.
+export function vscodeWorkspaceRequestCapDoctorCheck(
+  projectDir: string,
+  harnessDirHint?: string,
+): DiagnosticDoctorCheck | null {
+  const selected = selectedHarness(projectDir, harnessDirHint);
+  if (selected?.harness !== "copilot") return null;
+  const label = "VS Code agent request cap (multi-root workspace):";
+  const where = "aidlc.code-workspace";
+  let text: string;
+  try {
+    text = readFileSync(join(projectDir, where), "utf-8");
+  } catch {
+    return null;
+  }
+  if (!jsoncRootMembers(text)) {
+    return {
+      pass: false,
+      severity: "warn",
+      label: `${label} ${where} could not be read as JSONC`,
+      fix: `correct ${where}, then set "${VSCODE_REQUEST_CAP_KEY}" to 100 or more in its "settings" (AI-DLC suggests 200); ${REQUEST_CAP_PAUSES}`,
+    };
+  }
+  const settings = jsoncSettingValue(text, "settings");
+  if (settings === undefined) {
+    return {
+      pass: false,
+      severity: "warn",
+      label: `${label} ${where} has no settings, so a window opened from it uses your user setting or VS Code's default of 50`,
+      fix: `run aidlc system workspace-sync, which adds "settings": { "${VSCODE_REQUEST_CAP_KEY}": 200 } to ${where}, or add it yourself; ${REQUEST_CAP_PAUSES}`,
+    };
+  }
+  if (settings === null || typeof settings !== "object" || Array.isArray(settings)) {
+    return {
+      pass: false,
+      severity: "warn",
+      label: `${label} "settings" in ${where} is not an object, so VS Code reads no settings from it`,
+      fix: `make "settings" an object, for example "settings": { "${VSCODE_REQUEST_CAP_KEY}": 200 }; ${REQUEST_CAP_PAUSES}`,
+    };
+  }
+  const value = (settings as Record<string, unknown>)[VSCODE_REQUEST_CAP_KEY];
+  // workspace-sync adds the key only to a file with no settings yet, so a
+  // settings object without it is the team's choice.
+  if (value === undefined) {
+    return { pass: true, label: `${label} the team's settings in ${where} leave out ${VSCODE_REQUEST_CAP_KEY}, so AI-DLC leaves it out` };
+  }
+  return requestCapRow(label, where, value);
+}
+
+const REQUEST_CAP_PAUSES = 'below 100, VS Code stops a long stage to ask "Continue to iterate?" and the chat waits until someone answers';
+
+// The install's added-once record for .vscode/settings.json.
+function requestCapAddedBefore(harnessRoot: string): boolean {
+  try {
+    const baseline = readJsonFile(join(harnessRoot, "tools", "data", "aidlc-manifest.json")) as {
+      rootContributions?: Record<string, { policy?: string; entries?: Record<string, string>; added?: string[] }>;
+    };
+    const record = baseline.rootContributions?.[".vscode/settings.json"];
+    return record?.policy === "jsonc-settings" &&
+      (record.added?.includes(VSCODE_REQUEST_CAP_KEY) === true || Object.hasOwn(record.entries ?? {}, VSCODE_REQUEST_CAP_KEY));
+  } catch {
+    return false;
+  }
+}
+
+function requestCapRow(label: string, where: string, value: unknown): DiagnosticDoctorCheck {
+  const pauses = REQUEST_CAP_PAUSES;
+  const suggested = `"${VSCODE_REQUEST_CAP_KEY}": 200`;
+  const warn = (detail: string, fix: string): DiagnosticDoctorCheck => ({
+    pass: false,
+    severity: "warn",
+    label: `${label} ${detail}`,
+    fix,
+  });
+  if (typeof value === "number" && value >= VSCODE_REQUEST_CAP_FLOOR) {
+    return { pass: true, label: `${label} ${VSCODE_REQUEST_CAP_KEY} is ${value} in ${where}` };
+  }
+  // Every fix is an edit to the file itself, which works on every channel: a
+  // copied project's runtime ships no settings file for config to merge.
+  if (value === undefined) {
+    return warn(
+      `${where} does not set ${VSCODE_REQUEST_CAP_KEY}, so your user setting or VS Code's default of 50 applies`,
+      `add ${suggested} to ${where} (any number of 100 or more works); ${pauses}`,
+    );
+  }
+  if (typeof value === "number") {
+    return warn(
+      `${VSCODE_REQUEST_CAP_KEY} is ${value} in ${where}`,
+      `raise "${VSCODE_REQUEST_CAP_KEY}" in ${where} to 100 or more (AI-DLC suggests 200); ${pauses}`,
+    );
+  }
+  if (typeof value === "string" && /^\s*\d+(?:\.\d+)?\s*$/.test(value)) {
+    const number = Number(value.trim());
+    return warn(
+      `${VSCODE_REQUEST_CAP_KEY} is ${JSON.stringify(value)} in ${where}, text rather than a number`,
+      number >= VSCODE_REQUEST_CAP_FLOOR
+        ? `write it as a number without quotes: "${VSCODE_REQUEST_CAP_KEY}": ${number}, because VS Code reads this setting as a number`
+        : `write it as a number of 100 or more without quotes, for example ${suggested}; ${pauses}`,
+    );
+  }
+  return warn(
+    `${VSCODE_REQUEST_CAP_KEY} in ${where} is not a number`,
+    `set it to a number of 100 or more, for example ${suggested}; ${pauses}`,
+  );
 }
 
 export function providerDoctorCheck(
@@ -2755,6 +3272,8 @@ export function providerDoctorCheck(
         // gap only where AI-DLC configures the provider.
         label: record
           ? "Providers: recorded answers have no unmet actions"
+          : providerAnswerIsTheSession(selected.harness)
+          ? `Providers: ${sessionModelAccessFact(selected.harness)}; no answer needed`
           : "Providers: using shipped fallback; no recorded answers",
       };
     }
@@ -2798,7 +3317,8 @@ export function providerDoctorCheck(
       label: "Providers: could not read recorded answers",
       fix:
         `restore ${path} from git or re-copy dist/${selected.harness}/${selected.harnessDir}/tools/data/harness.json ` +
-        `from the aidlc-workflows checkout, then run \`${invocationForHarness(selected.harnessDir)} doctor\` ` +
+        // Not the doctor command itself: VS Code drops output up to a line that repeats it (#1411).
+        "from the aidlc-workflows checkout, then run doctor again " +
         `(${detail})`,
     };
   }
@@ -2807,6 +3327,9 @@ export function providerDoctorCheck(
 export function flagsDoctorCheck(
   projectDir: string,
   harnessDirHint?: string,
+  // The lines naming each check a recorded switch has turned off (doctor
+  // builds them; this module stays free of the engine library).
+  switchesOff: readonly string[] = [],
 ): DiagnosticDoctorCheck {
   const selected = selectedHarness(projectDir, harnessDirHint);
   if (!selected) {
@@ -2820,6 +3343,16 @@ export function flagsDoctorCheck(
       selected.harness,
       record,
     );
+    // A check switched off stays visible: a warning, never a failure.
+    const off = switchesOff;
+    if (off.length > 0) {
+      return {
+        pass: false,
+        severity: "warn",
+        label: `Flags: ${off.length} check${off.length === 1 ? "" : "s"} switched off`,
+        fix: [...off, ...issues.map((issue) => issue.message)].join(" "),
+      };
+    }
     return issues.length === 0
       ? {
           pass: true,

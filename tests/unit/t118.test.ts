@@ -15,11 +15,10 @@
 // (`next --stage <slug>`), which DELEGATES the in-scope SKIP check + target
 // resolution to `aidlc-jump.ts resolve` by shelling out (aidlc-orchestrate.ts
 // emitJumpDirective -> runTool("aidlc-jump.ts", ["resolve", ...])). The
-// observable under test — the verbatim `Stage "..." is skipped for scope
-// "<scope>".` error in diff B, and the run-stage emitted for the tool's
-// resolved target_slug in diff A — is OWNED by aidlc-jump.ts resolve
-// (aidlc-jump.ts:116-119, :168-180). The engine relays it unchanged; resolve
-// is the unit credited.
+// observable under test (the skipped-target mark behind diff B, and the
+// run-stage emitted for the tool's resolved target_slug in diff A) is OWNED
+// by aidlc-jump.ts resolve (handleResolve in aidlc-jump.ts). resolve is the
+// unit credited.
 //
 // MECHANISM: SPAWN the real engine binary via node:child_process spawnSync
 // (BUN + aidlc-orchestrate.ts), mirroring the .sh's `bun "$TOOL" next ...`.
@@ -40,17 +39,14 @@
 //     in any single field reds with a field-named message, and gate is checked
 //     as the real JSON boolean `true` (not the string "true").
 //
-//   Diff B — per-scope SKIP (14 .sh asserts = 7 scopes x 2 -> 7 test() cases,
-//     2 expect() each):
-//     The .sh fired TWO assert lines per skipping scope: assert_eq KIND "error"
-//     AND assert_contains MSG `is skipped for scope "<scope>"`. Each test() here
-//     reproduces BOTH observables — kind === "error" and the verbatim resolve
-//     wording — keeping the .sh's 2-ok-per-scope shape inside one case.
-//     STRONGER: we additionally assert the message names the SKIPPED STAGE
-//     (`Stage "<skip>"`), pinning that resolve rejected the RIGHT stage, not
-//     merely some stage. enterprise + feature SKIP nothing (golden "-"), so
-//     they carry no diff-B case — their negative coverage is the gate-axis
-//     anchor below, exactly as the .sh notes.
+//   Diff B: per-scope SKIP (14 .sh asserts = 7 scopes x 2 -> 7 test() cases):
+//     The .sh asserted an error naming the scope for a jump to a SKIP stage.
+//     A jump to a stage the plan skips now does what was asked, so each case
+//     asserts the directive kind for the target's position (print for a stage
+//     ahead of the cursor, error naming --single for the current stage) and a
+//     message naming the SKIPPED stage and its scope. enterprise + feature
+//     SKIP nothing (golden "-"), so they carry no diff-B case; their negative
+//     coverage is the gate-axis anchor below, exactly as the .sh notes.
 //
 //   Gate-axis anchor (1 .sh assert -> 1 test() case):
 //     The .sh diffed "$GATE|$STG" against "false|workspace-detection" for the
@@ -208,6 +204,7 @@ interface EmitResult {
   status: number;
   directive: Directive;
   raw: string;
+  proj?: string;
 }
 
 // emit_scope_stage (t118:79-90): fresh project seeded from
@@ -340,7 +337,17 @@ function emitNextNoState(...args: string[]): EmitResult {
     env: cleanEnv(),
   });
   const raw = `${res.stdout ?? ""}${res.stderr ?? ""}`;
-  return { status: res.status ?? -1, directive: parseDirective(res.stdout ?? ""), raw };
+  return { status: res.status ?? -1, directive: parseDirective(res.stdout ?? ""), raw, proj };
+}
+
+// The creation print names the request by question id; the exact text lives in
+// the private question copy.
+function questionText(r: EmitResult): string {
+  const id = (r.directive.message ?? "").match(/--request ([0-9a-f]{8})/)?.[1] ?? "";
+  expect(id).toMatch(/^[0-9a-f]{8}$/);
+  return JSON.parse(
+    readFileSync(join(r.proj ?? "", "aidlc", ".aidlc-sessions", "questions", `${id}.json`), "utf-8"),
+  ).text;
 }
 
 // The engine emits exactly one directive as JSON to stdout. Parse it; an
@@ -416,28 +423,34 @@ describe("t118 engine differential corpus — aidlc-orchestrate next (migrated f
     }
   });
 
-  // --- Diff B: a SKIP-for-scope stage -> verbatim resolve skip error (7 cases,
-  // each bundling the .sh's 2 ok lines: kind=error + verbatim wording) ---
-  // The negative half of the fingerprint. 7 scopes SKIP at least one stage;
-  // jumping to a SKIP stage must emit an error carrying the verbatim
-  // `Stage "..." is skipped for scope "<scope>".` wording relayed from
-  // aidlc-jump.ts resolve (aidlc-jump.ts:116-119). enterprise + feature SKIP
-  // nothing (golden skip=null) — their negative coverage is the gate-axis
-  // anchor below.
-  describe("diff B — per-scope SKIP stage -> verbatim resolve skip error", () => {
+  // --- Diff B: a SKIP-for-scope stage -> the jump does what was asked (7 cases) ---
+  // The negative half of the fingerprint. 7 scopes SKIP at least one stage.
+  // resolve marks the skipped target (the engine asks with --allow-skipped) and
+  // the engine names the move: a stage AHEAD of the cursor goes back on the plan
+  // (recompose --add, with the jump as its reason) and the jump follows; the
+  // fixture's own cursor stage (intent-capture) is the current stage, which the
+  // plan moves past, so the engine names the isolated run instead. enterprise +
+  // feature SKIP nothing (golden skip=null); their negative coverage is the
+  // gate-axis anchor below.
+  describe("diff B: per-scope SKIP stage -> back on the plan, or the isolated run", () => {
     for (const row of GOLDEN) {
       if (row.skip === null) continue;
       const skip = row.skip;
-      test(`scope '${row.scope}' SKIP stage '${skip}' -> error directive + verbatim resolve wording`, () => {
+      test(`scope '${row.scope}' SKIP stage '${skip}' -> named move for a stage the plan skips`, () => {
         const r = emitScopeStage(row.scope, skip);
-        // .sh ok #1: assert_eq KIND "error"
-        expect(r.directive.kind).toBe("error");
         const msg = r.directive.message ?? "";
-        // .sh ok #2: assert_contains MSG `is skipped for scope "<scope>"`
-        expect(msg).toContain(`is skipped for scope "${row.scope}"`);
-        // STRONGER: the message names the SKIPPED stage, proving resolve
-        // rejected the RIGHT stage (aidlc-jump.ts:118 emits Stage "<slug>" ...).
-        expect(msg).toContain(`Stage "${skip}"`);
+        // The message names the SKIPPED stage and the scope that skips it.
+        expect(msg).toContain(`Stage "${skip}" is not on this workflow's plan (the ${row.scope} scope skips it)`);
+        if (skip === "intent-capture") {
+          expect(r.directive.kind).toBe("error");
+          expect(msg).toContain("it is the current stage");
+          expect(msg).toContain(`--stage ${skip} --single`);
+        } else {
+          expect(r.directive.kind).toBe("print");
+          expect(msg).toContain(`engine recompose --add ${skip} --reason 'jump to ${skip}'`);
+          expect(msg).toContain(`execute --target ${skip} --direction forward --scope ${row.scope}`);
+        }
+        expect(msg).not.toContain("change scope");
       });
     }
   });
@@ -517,7 +530,7 @@ describe("t118 engine differential corpus — aidlc-orchestrate next (migrated f
       expect(r.directive.kind).not.toBe("ask");
     });
 
-    test("no-state positional scope plus description -> direct creation with preserved arguments, never ask", () => {
+    test("no-state positional scope plus description -> direct creation with the preserved request, never ask", () => {
       const r = emitNextNoState(
         "bugfix",
         "Fix",
@@ -529,9 +542,7 @@ describe("t118 engine differential corpus — aidlc-orchestrate next (migrated f
       expect(r.directive.message ?? "").toContain(
         "intent create --scope bugfix",
       );
-      expect(r.directive.message ?? "").toContain(
-        "--arguments='Fix duplicate todo persistence'",
-      );
+      expect(questionText(r)).toBe("Fix duplicate todo persistence");
       expect(r.directive.kind).not.toBe("ask");
     });
 
@@ -588,13 +599,11 @@ describe("t118 engine differential corpus — aidlc-orchestrate next (migrated f
       expect(r.directive.kind).toBe("print");
       expect(r.directive.message ?? "").toContain("intent create --scope mvp");
       expect(r.directive.message ?? "").not.toContain("intent create --scope bugfix");
-      expect(r.directive.message ?? "").toContain(
-        "--arguments='bugfix Fix duplicate todo'",
-      );
+      expect(questionText(r)).toBe("bugfix Fix duplicate todo");
     });
 
     // (4b) The description keeps its leading scope word under explicit routing:
-    // `--scope feature "feature flags for billing"` describes feature flags —
+    // `--scope feature "feature flags for billing"` describes feature flags:
     // "feature" is prose, not positional-scope syntax, because --scope already
     // named the route (the pre-fix peel truncated this to "flags for billing").
     test("no-state --scope + description opening with a scope word -> description intact", () => {
@@ -608,9 +617,7 @@ describe("t118 engine differential corpus — aidlc-orchestrate next (migrated f
       );
       expect(r.directive.kind).toBe("print");
       expect(r.directive.message ?? "").toContain("intent create --scope feature");
-      expect(r.directive.message ?? "").toContain(
-        "--arguments='feature flags for billing'",
-      );
+      expect(questionText(r)).toBe("feature flags for billing");
     });
 
     // (5) --resume never creates: resuming is a claim that a workflow already

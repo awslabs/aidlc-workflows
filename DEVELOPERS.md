@@ -61,6 +61,11 @@ workflow triggers, but no push-to-`main` trigger. CI does not run again on
   documentation or its build inputs change on `main`.
 - Preview Release runs contract checks and Full Suite for its selected source
   commit, without repeating the PR CI test matrix.
+- [Merge queue runner notice](.github/workflows/merge-queue-notice.yml) runs
+  after each merge-queue CI run. When the queue dropped a PR only because a
+  GitHub-hosted runner failed, it comments on the PR so the author knows it
+  was not their change and a maintainer can add it back; it never changes the
+  queue.
 
 For explicitly approved full-suite testing before merge, a maintainer can run:
 
@@ -108,8 +113,18 @@ Inspect `full-suite-live-verification-result/full-suite-result.json` for
 `purpose: "live-verification"`, `verificationFamily`, and the live job results.
 A successful run still has `complete: false` and is not consumed by stable
 publication, even when run on `main`.
-Normal Full Suite runs keep both verification flags false, the main-source gate,
-all required jobs, and the ordinary `full-suite-result` artifact.
+Normal Full Suite runs keep both verification flags false and accept the
+requested ref, including an unmerged branch. They run all required jobs and
+produce the ordinary `full-suite-result` artifact. For example:
+
+```bash
+gh workflow run full-suite.yml --ref '<candidate-branch>' \
+  -f 'ref=<candidate-branch-or-sha>'
+```
+
+Every job uses the resolved commit SHA. Stable publication separately requires
+a tagged commit on `main` and evidence from a trusted workflow on `main`;
+a candidate-branch run does not qualify for publication.
 
 To reproduce a deterministic failure on one fresh runner, dispatch the shared
 deterministic workflow directly:
@@ -121,7 +136,7 @@ gh workflow run deterministic-tests.yml --ref '<candidate-branch>' \
 ```
 
 The manual-only `diagnostic_filter` is a filename regex. The unit tier requires
-`unit-shard=N/M`; use `1/1` to select all unit files before filtering, or `7/8`
+`unit-shard=N/M`; use `1/1` to select all unit files before filtering, or `7/12`
 without a filter to repeat a whole unit shard. For smoke, integration or e2e,
 omit `unit-shard`; its default is empty. Each dispatch uses one runner, closes
 model gates, checks out the immutable source and retains sanitized logs under
@@ -141,26 +156,44 @@ gh workflow run preview-release.yml --ref main
 The workflow:
 
 1. Selects a commit from `main` and runs packaging, type, lint and shell checks.
-2. Calls [Full Suite](.github/workflows/full-suite.yml) for smoke tests, eight
-   independent unit shards per OS,
-   deterministic integration and E2E tests on Linux, macOS, and Windows,
-   native-terminal validation, production guards and required live test families.
+2. Dispatches [Full Suite](.github/workflows/full-suite.yml) as a separate run for native-terminal
+   validation, required live harness shards and release-contract tests.
+   Deterministic tiers and production guards run in PR/merge CI and remain
+   available through manual `full_verification`.
 3. Builds the release assets, checks native binaries and installer lifecycles,
-   verifies checksums, and generates build provenance.
+   checks that an install of the last stable release updates to the new build
+   with every harness project's hooks, refresh and doctor still working
+   (`update-from-previous`), verifies checksums, and generates build provenance.
 4. Publishes a GitHub **prerelease** for preview users after the gates pass.
    Preview publication leaves stable release discovery unchanged.
 
 A failing Full Suite does not stop steps 3 and 4. The **Release tests** job
 summary and the `preview-test-report` artifact list the failed legs, failed
 jobs, and failing test cases. The published preview's notes open with a warning
-and end with the same report. **Release result** still fails the run.
+and end with the same report. Full Suite retains its failed status in its own
+run. **Release result** requires successful preview publication (or an
+intentional skip), without requiring Full Suite to pass.
 
-PR CI and Full Suite share
+A failing `update-from-previous` job does not stop the preview either: the run
+turns red, and the notes open with a warning and gain a line in the report. In
+a stable release it holds publication back, like the lifecycle checks. Its log
+names the harness and step that failed. Rerun the job only for a passing
+problem such as a download that failed. A stable release runs on its tagged
+commit, so a fault in the build needs the fix on `main` and a new
+release-preparation PR, version and tag; the next nightly preview runs the
+check again on its own.
+
+PR/merge CI and manual Full Suite `full_verification` share
 [one deterministic test definition](.github/workflows/deterministic-tests.yml).
-Each call owns its checkout. Deterministic integration and isolated E2E run
-as separate jobs per OS, each with eight workers and a fresh Bun runner process;
-unit files stay serial within each independent shard. Default PR CI includes
-Linux integration; E2E runs in Full Suite and expanded manual CI.
+Each call owns its checkout. Default PR CI includes Linux integration; the merge
+queue and expanded manual CI also run deterministic E2E. Ordinary nightly and
+release Full Suite runs do not repeat those tiers or production-guard jobs.
+
+Hosted live coverage uses 21 jobs: on each existing OS, two Claude SDK shards,
+three Claude TUI shards, one Codex shard and one opencode shard. Each shard runs
+at most two files concurrently, restoring the checkout and application home
+between files and retrying only a failed file after confirmed cleanup. Platform
+preparation is independent, so Linux and Windows do not wait for macOS.
 
 Live model tests are required Full Suite jobs and use the existing
 `ai-pr-review` environment's `AWS_AI_PR_REVIEW_ROLE_ARN`. The `full-suite-result` artifact records the tested
@@ -171,14 +204,19 @@ jobs fail it.
 Documented provider exclusions remain explicit, so a successful job matrix is
 not a claim that every possible test ran.
 
-When the latest published preview already uses the same source commit, the
-workflow still runs its checks and tests, then skips the publication build chain.
+When the latest published preview already uses the same source commit, or was
+built from a newer commit that contains it (an older run, retried or queued), the
+workflow still runs its checks and tests, then skips the publication build chain
+and publishes nothing.
 For changed source the [planner](scripts/plan-preview-release.ts) allocates
 `vX.Y.Z-preview.YYYYMMDD.N`, where `X.Y.Z` is
 the next patch after the source version, the date is UTC, and `N` is a build
 counter. This stamps the artifacts without editing source release metadata.
-Publication rechecks that the selected commit is still the tip of `main`;
-if `main` advances during the run, start a new preview from the new tip.
+A run tests and publishes the commit it was started on. `main` receives merges
+constantly, so planning and publication require only that the commit is still
+on `main`, not that it is the tip, even if `main` moves before a runner picks
+the run up. A revert does not stop it: to withdraw a commit a preview is
+testing, cancel that run.
 
 To try a published preview, follow the
 [preview-channel instructions](docs/guide/18-install-and-lifecycle.md#release-channels).

@@ -891,6 +891,37 @@ describe("t278 engine-emitted wave contract", () => {
     expect(next(proj).directive.gate).toBe(true);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
+  // Under Guard Policy relaxed and off the same change is accepted: the review
+  // stands, so the completion does too, and the stage's gate opens instead of
+  // the entry being handed back.
+  for (const policy of ["relaxed (set by you)", "off (set by you)"]) {
+    test(`Guard Policy ${policy.split(" ")[0]}: a post-review artifact change keeps the wave settled`, () => {
+      const proj = project();
+      writeFileSync(seededStateFile(proj), readFileSync(seededStateFile(proj), "utf-8")
+        .replace("- **Change Control**: strict (from scope feature)", `- **Guard Policy**: ${policy}`));
+      seedBoltDag(proj, ["alpha", "beta"], [["alpha"], ["beta"]]);
+      cover(proj, "alpha", "functional-design", REQUIRED_FD);
+      cover(proj, "beta", "functional-design", REQUIRED_FD);
+      review(proj, "alpha");
+      review(proj, "beta");
+      completeWave(proj, "alpha");
+      completeWave(proj, "beta");
+      expect(next(proj).directive.gate).toBe(true);
+      writeFileSync(join(seededRecordDir(proj), "construction", "alpha", "functional-design", "functional-spec.md"),
+        "# changed after review\n");
+      const after = next(proj).directive;
+      expect(after.wave, JSON.stringify(after)).toBeUndefined();
+      expect(after.gate).toBe(true);
+      // The gate opens and says the change once.
+      const opened = spawnSync(BUN, [ORCH, "report", "--stage", "functional-design", "--result", "awaiting-approval", "--project-dir", proj], {
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8",
+        env: { ...process.env, AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD: "1" },
+      });
+      expect(opened.status, `${opened.stdout}${opened.stderr}`).toBe(0);
+      expect(`${opened.stdout}`).toContain("The alpha Unit's Functional Design documents changed after they were reviewed; carrying on.");
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+  }
+
   test("a second stale wave receipt escalates instead of re-emitting recovery", () => {
     const proj = project();
     seedBoltDag(proj, ["alpha"]);
@@ -989,9 +1020,14 @@ describe("t278 engine-emitted wave contract", () => {
     expect(frozen.status, frozen.out).toBe(2);
     expect(frozen.out).toContain("Finish the current revision");
     expect(frozen.out).toContain("--result revised");
-    expect(frozen.out).toContain("/aidlc --stage functional-design");
     expect(frozen.out).not.toContain("Request Changes");
     expect(frozen.out).not.toContain("--result rejected");
+    // The recovery question the refusal left is what the next `next` asks.
+    const asked = JSON.stringify(next(proj).directive);
+    expect(asked).toContain('"ask_type":"guard-recovery"');
+    expect(asked).toContain("/aidlc --stage functional-design");
+    expect(asked).not.toContain("Request Changes");
+    expect(asked).not.toContain("--result rejected");
 
     writeFileSync(artifact, "# changed before recovery\n");
     review(proj, "alpha", "READY", 2);
@@ -1200,7 +1236,7 @@ describe("t278 engine-emitted wave contract", () => {
       "Request Changes: restart review after the invalidating write",
     );
     expect(rejected.status).toBe(0);
-    expect(rejected.out).toContain('"kind":"error"');
+    expect(rejected.out).toContain('"kind":"print"');
     expect(rejected.out).toContain("Cannot request changes");
     expect(rejected.out).toContain(
       "recovery review has already been used",

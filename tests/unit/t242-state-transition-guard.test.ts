@@ -1,4 +1,4 @@
-// covers: hook:aidlc-state-transition-guard, subcommand:aidlc-state(lifecycle-owner-guard)
+// covers: hook:aidlc-state-transition-guard, subcommand:aidlc-state(lifecycle-owner-guard), file:hooks/aidlc-kiro-adapter.ts
 //
 // The hook provides immediate PreToolUse feedback and the state CLI repeats the
 // same ownership boundary as the harness-independent hard floor.
@@ -10,17 +10,22 @@ import {
 } from "../harness/test-budget.ts";
 import { afterAll, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, readdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
-import { basename, join, relative } from "node:path";
+import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
+import { basename, dirname, join, relative } from "node:path";
 import * as ts from "typescript";
 import {
   BLOCKED_STATE_TRANSITIONS,
+  DELEGATE_ADMITTED_VERBS,
+  DELEGATE_ROLE_ADMITTED_VERBS,
   DELEGATED_STATE_MUTATIONS,
   delegatedLifecycleCommand,
   directStateTransition,
   isLifecycleBoundaryCommand,
 } from "../../dist/claude/.claude/hooks/aidlc-state-transition-guard.ts";
 import { violatesRuntimeIntegrity } from "../../dist/claude/.claude/hooks/runtime-integrity.ts";
+import { resolveAction, ROUTES } from "../../dist/claude/.claude/tools/aidlc.ts";
+import { UTILITY_COMMANDS } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import { RECORDABLE_PROJECT_BYPASSES } from "../../dist/claude/.claude/tools/aidlc-settings.ts";
 import {
   cleanupTestProject,
   createTestProject,
@@ -183,6 +188,8 @@ describe("t242 state-transition ownership guard", () => {
       "aidlc engine orchestrate report --stage feasibility --result completed",
       "aidlc engine state approve feasibility",
       "aidlc engine jump execute --target application-design",
+      "aidlc engine jump reopen --target nfr-design --units beta",
+      "bun .claude/tools/aidlc-jump.ts reopen --target nfr-design --units beta",
       "/opt/aidlc/bin/aidlc engine orchestrate park",
     ]) {
       expect(isLifecycleBoundaryCommand(command), command).toBe(true);
@@ -204,8 +211,20 @@ describe("t242 state-transition ownership guard", () => {
       ],
       ["bun .claude/tools/aidlc-state.ts unpark", "aidlc-state.ts unpark"],
       [
+        "bun .claude/tools/aidlc-state.ts set-construction-execution swarm",
+        "aidlc-state.ts set-construction-execution",
+      ],
+      [
+        "bun .claude/tools/aidlc-state.ts unit complete --stage code-generation --unit u1",
+        "aidlc-state.ts unit",
+      ],
+      [
         "bun .claude/tools/aidlc-jump.ts execute --target requirements-analysis",
         "aidlc-jump.ts execute",
+      ],
+      [
+        "bun .claude/tools/aidlc-jump.ts reopen --target nfr-design --units beta",
+        "aidlc-jump.ts reopen",
       ],
       [
         "bun .claude/tools/aidlc-utility.ts recompose --add user-stories",
@@ -324,6 +343,56 @@ describe("t242 state-transition ownership guard", () => {
       ["aidlc continue steering-token", "aidlc continue"],
       ["aidlc report --result resumed --user-input 1", "aidlc report"],
       ["aidlc state unpark", "aidlc state unpark"],
+      ["aidlc engine state set-construction-checkpoints disabled", "aidlc engine state set-construction-checkpoints"],
+      ["aidlc engine state sync-unit-scope-stage --stage code-generation", "aidlc engine state sync-unit-scope-stage"],
+      ["aidlc engine state init --scope feature", "aidlc engine state init"],
+      ["bun .claude/tools/aidlc-utility.ts reclassify --type existing", "aidlc-utility.ts reclassify"],
+      ["aidlc engine workspace reclassify --type existing", "aidlc engine workspace reclassify"],
+      ["bun .claude/tools/aidlc-utility.ts select-plugins test-pro", "aidlc-utility.ts select-plugins"],
+      ["bun .claude/tools/aidlc-unit.ts gate u1 --decision approve", "aidlc-unit.ts gate"],
+      ["bun .claude/tools/aidlc-unit.ts land u1", "aidlc-unit.ts land"],
+      ["aidlc unit pin u1", "aidlc unit pin"],
+      ["bun .claude/tools/aidlc-utility.ts claim u1", "aidlc-utility.ts claim"],
+      ["bun .claude/tools/aidlc-bolt.ts set-autonomy --mode gated", "aidlc-bolt.ts set-autonomy"],
+      ["bun .claude/tools/aidlc-swarm.ts finalize", "aidlc-swarm.ts finalize"],
+      ["bun .claude/tools/aidlc-log.ts link --stage x", "aidlc-log.ts link"],
+      ["bun .claude/tools/aidlc-learnings.ts persist", "aidlc-learnings.ts persist"],
+      ["bun .claude/tools/aidlc-runtime.ts fragment-merge", "aidlc-runtime.ts fragment-merge"],
+      ["bun .claude/tools/aidlc-testing-posture.ts fingerprint --unit u1", "aidlc-testing-posture.ts fingerprint"],
+      ["bun .claude/tools/aidlc-plugin.ts sync", "aidlc-plugin.ts sync"],
+      ["bun .claude/tools/aidlc-utility.ts set-status x", "aidlc-utility.ts set-status"],
+      ["aidlc engine state set-status x", "aidlc engine state set-status"],
+      ["aidlc engine bolt hold-merge u1", "aidlc engine bolt hold-merge"],
+      ["bun .claude/tools/aidlc-utility.ts upgrade", "aidlc-utility.ts upgrade"],
+      ["aidlc engine plugin sync", "aidlc engine plugin sync"],
+      // A flag before the verb, read the way each script reads it.
+      ["bun .claude/tools/aidlc-swarm.ts --batch 1 finalize", "aidlc-swarm.ts finalize"],
+      ["bun .claude/tools/aidlc-testing-posture.ts --json begin", "aidlc-testing-posture.ts begin"],
+      ["bun .claude/tools/aidlc-testing-posture.ts --project-dir begin brief", "aidlc-testing-posture.ts begin"],
+      ["bun .claude/tools/aidlc-plugin.ts --json x sync", "aidlc-plugin.ts sync"],
+      ["bun .claude/tools/aidlc-state.ts --json x unpark", "aidlc-state.ts unpark"],
+      // The dispatcher drops its global flags before routing.
+      ["aidlc engine intent --json other-intent", "aidlc engine intent other-intent"],
+      ["aidlc --quiet space --json create other-space", "aidlc space create"],
+      ["aidlc engine plugin select --json test-pro", "aidlc engine plugin select"],
+      // The dispatcher's claim and release aliases run the utility's claim and release.
+      ["aidlc --claim u1", "aidlc --claim"],
+      ["aidlc engine --release u1", "aidlc engine --release"],
+      ["bun .claude/tools/aidlc.ts --claim u1", "aidlc.ts --claim"],
+      // Purging parked Bolt work.
+      ["bun .claude/tools/aidlc-worktree.ts purge --slug u1 --older-than 0", "aidlc-worktree.ts purge"],
+      ["bun .claude/tools/aidlc-worktree.ts --project-dir . purge --slug u1", "aidlc-worktree.ts purge"],
+      ["aidlc engine worktree --json purge --slug u1", "aidlc engine worktree purge"],
+      // The audit fork and merge-back primitives.
+      ["bun .claude/tools/aidlc-audit.ts audit-merge --slug u1", "aidlc-audit.ts audit-merge"],
+      ["bun .claude/tools/aidlc-audit.ts --project-dir . audit-fork --slug u1", "aidlc-audit.ts audit-fork"],
+      ["aidlc engine audit merge --slug u1", "aidlc engine audit merge"],
+      // Machine-wide settings: no delegate runs machine-config at all.
+      ["bun .claude/tools/aidlc-machine-config.ts global get offline", "aidlc-machine-config.ts"],
+      ["bun .claude/tools/aidlc-machine-config.ts global set offline on", "aidlc-machine-config.ts"],
+      ["bun .claude/tools/aidlc-machine-config.ts global clear offline", "aidlc-machine-config.ts"],
+      ["aidlc system config global set offline on", "aidlc system config global"],
+      ["bun .claude/tools/aidlc.ts engine audit fork --slug u1", "aidlc.ts engine audit fork"],
       ["aidlc scope change --scope mvp", "aidlc scope change"],
       ["aidlc config-change --depth comprehensive", "aidlc config-change"],
       ["aidlc intent other-intent", "aidlc intent other-intent"],
@@ -332,6 +401,10 @@ describe("t242 state-transition ownership guard", () => {
       [
         "cd project && aidlc jump execute --target requirements-analysis",
         "aidlc jump execute",
+      ],
+      [
+        "cd project && aidlc jump reopen --target nfr-design --units beta",
+        "aidlc jump reopen",
       ],
       ["env AIDLC_TEST=1 aidlc config set --depth comprehensive", "aidlc config set"],
       [
@@ -357,6 +430,67 @@ describe("t242 state-transition ownership guard", () => {
     for (let i = 0; i < 9; i++) nested = `bash -c ${JSON.stringify(nested)}`;
     expect(delegatedLifecycleCommand(nested)).not.toBeNull();
     expect(DELEGATED_STATE_MUTATIONS.has("unpark")).toBe(true);
+    // What the kiro-ide personas are admitted, all or one role, is a real verb of its script and
+    // never one this guard refuses with arguments (select-plugins is admitted
+    // as its bare query only). A script the dispatcher routes is checked
+    // against the verbs it hands that script; the utility against its command
+    // list; the rest against a case or command-table entry in their source.
+    const routed = new Map<string, Set<string>>();
+    for (const route of ROUTES) {
+      for (const verb of route.verbs) {
+        const action = resolveAction([
+          ...(route.namespace === "engine" || route.namespace === "system" ? [route.namespace] : []),
+          ...(route.group === "top" ? [] : [route.group]),
+          ...verb.split(" "),
+        ]);
+        if (action.type !== "delegate") continue;
+        if (!routed.has(action.tool)) routed.set(action.tool, new Set());
+        routed.get(action.tool)?.add(action.args[0] ?? "");
+      }
+    }
+    for (const agent of Object.keys(DELEGATE_ROLE_ADMITTED_VERBS)) {
+      expect(existsSync(join(REPO_ROOT, "core", "agents", `${agent}.md`)), agent).toBe(true);
+    }
+    for (const [file, verbs] of [
+      ...Object.entries(DELEGATE_ADMITTED_VERBS),
+      ...Object.values(DELEGATE_ROLE_ADMITTED_VERBS).flatMap((own) => Object.entries(own)),
+    ]) {
+      const source = readFileSync(join(REPO_ROOT, "core", "tools", file), "utf-8");
+      for (const verb of verbs) {
+        if (file === "aidlc-utility.ts") expect([...UTILITY_COMMANDS] as string[], verb).toContain(verb);
+        else if (routed.has(file)) expect([...(routed.get(file) ?? [])], `${file} ${verb}`).toContain(verb);
+        else expect(source, `${file} ${verb}`).toMatch(new RegExp(`case "${verb}"|^\\s+"?${verb}"?: `, "m"));
+        if (verb === "select-plugins") continue;
+        expect(delegatedLifecycleCommand(`bun .claude/tools/${file} ${verb} x`), `${file} ${verb}`).toBeNull();
+      }
+    }
+    // Reads stay open to a delegate.
+    for (const read of ["get", "count", "lookup", "resume"]) {
+      expect(delegatedLifecycleCommand(`bun .claude/tools/aidlc-state.ts ${read} x`), read).toBeNull();
+    }
+    for (const read of [
+      "bun .claude/tools/aidlc-unit.ts merge-status u1",
+      "bun .claude/tools/aidlc-unit.ts status",
+      "bun .claude/tools/aidlc-utility.ts select-plugins",
+      "aidlc engine plugin select",
+      "aidlc engine plugin select --json",
+      "aidlc engine intent --json",
+      "aidlc engine intent --all other-intent",
+      "bun .claude/tools/aidlc-log.ts answers",
+      "bun .claude/tools/aidlc-learnings.ts surface",
+      "bun .claude/tools/aidlc-runtime.ts read",
+      "bun .claude/tools/aidlc-testing-posture.ts brief --unit u1",
+      "bun .claude/tools/aidlc-worktree.ts merge u1",
+      "bun .claude/tools/aidlc-worktree.ts create --slug u1 --base main",
+      "bun .claude/tools/aidlc-worktree.ts discard --slug u1",
+      "aidlc engine worktree restore --slug u1",
+      "aidlc engine worktree info --slug u1",
+      "bun .claude/tools/aidlc-audit.ts history",
+      "aidlc engine audit append PRACTICES_SECTION_EMPTY --field Details=x",
+      "aidlc engine plugin select --no-color",
+    ]) {
+      expect(delegatedLifecycleCommand(read), read).toBeNull();
+    }
     expect(
       delegatedLifecycleCommand("bun .claude/tools/aidlc-state.ts get 'Current Stage'"),
     ).toBeNull();
@@ -617,6 +751,20 @@ describe("t242 state-transition ownership guard", () => {
       "bun .claude/tools/aidlc.ts engine hook record-human-turn",
       'bun ".claude/tools/aidlc.ts" engine hook record-human-turn',
       "aidlc engine hook record-human-turn",
+      "aidlc --quiet engine hook record-human-turn",
+      "bun .kiro/tools/aidlc.ts engine adapter kiro-ide record-human-turn",
+      "aidlc engine adapter kiro-ide record-human-turn",
+      'aidlc "engine" adapter codex record-human-turn',
+      "aidlc --project-dir . engine adapter cursor record-human-turn",
+      // A computed route word could expand to hook or adapter, so it fails closed.
+      "A=adapter; aidlc engine $A kiro-ide record-human-turn",
+      `aidlc engine \${A} kiro-ide record-human-turn`,
+      'aidlc engine "$A" kiro-ide record-human-turn',
+      "aidlc engine $(printf adapter) kiro-ide record-human-turn",
+      "aidlc engine `printf hook` record-human-turn",
+      "aidlc engine $'adapter' kiro-ide record-human-turn",
+      "aidlc --quiet $E adapter kiro-ide record-human-turn",
+      "bun .kiro/tools/aidlc.ts engine $A kiro-ide record-human-turn",
       "AIDLC_INTERNAL_HUMAN_TURN_TOKEN=forged bun .claude/tools/aidlc.ts --internal-aidlc-record-human-turn .claude/hooks/aidlc-record-human-turn.ts",
       "bun .kiro/hooks/aidlc-kiro-adapter.ts record-human-turn",
       "bun .codex/hooks/aidlc-codex-adapter.ts record-human-turn",
@@ -641,6 +789,90 @@ describe("t242 state-transition ownership guard", () => {
       expect(r.status, command).toBe(2);
       expect(r.stdout, command).toBe("");
       expect(r.stderr, command).toContain("AIDLC runtime records and hooks belong to the harness");
+    }
+  });
+
+  test("runtime integrity refuses every terminal form that sets an AI-DLC control variable", () => {
+    const project = createTestProject();
+    projects.push(project);
+    const refused = (command: string) => violatesRuntimeIntegrity({ cwd: project, tool_name: "Bash", tool_input: { command } });
+    // The session and presence overrides, the direct state and audit
+    // authorities, the human-turn token, and every recordable bypass.
+    const names = [
+      "AIDLC_SESSION_OVERRIDE",
+      "AIDLC_SESSION_OVERRIDE_SOURCE",
+      "AIDLC_UNATTENDED",
+      "AIDLC_ALLOW_DIRECT_STATE_TRANSITIONS",
+      "AIDLC_STATE_TRANSITION_OWNER",
+      "AIDLC_ALLOW_DIRECT_AUDIT_EVENTS",
+      "AIDLC_INTERNAL_HUMAN_TURN_TOKEN",
+      "AIDLC_SKIP_REVIEWER_GATE_GUARD",
+      ...RECORDABLE_PROJECT_BYPASSES,
+    ];
+    for (const name of names) {
+      for (const command of [
+        // POSIX shells
+        `${name}=1 aidlc engine log answers`,
+        `export ${name}=1`,
+        `env ${name}=1 aidlc engine log answers`,
+        `read ${name} <<< 1`,
+        `\\read ${name} <<< 1`,
+        `true && export ${name}`,
+        `printf -v ${name} 1`,
+        `declare -x ${name}`,
+        `: \${${name}:=1}`,
+        // PowerShell, in any letter case
+        `$env:${name}=1; aidlc engine log answers`,
+        `$env:${name} = "1"`,
+        `$Env:${name.toLowerCase()} = '1'`,
+        `\${env:${name}} = 1`,
+        `$env:${name} += "1"`,
+        `Set-Item env:${name} 1`,
+        `Set-Item -Path "Env:\\${name}" -Value 1`,
+        `si env:/${name} 1`,
+        `New-Item -Path env: -Name ${name} -Value 1`,
+        `Rename-Item env:OTHER -NewName ${name}`,
+        `[Environment]::SetEnvironmentVariable("${name}", "1")`,
+        `[System.Environment]::SetEnvironmentVariable('${name}', '1', 'User')`,
+        `Start-Process aidlc -Environment @{ "${name}" = "1" }`,
+        // cmd
+        `set ${name}=1`,
+        `set "${name}=1" && aidlc engine log answers`,
+        `set /a ${name}=1`,
+        `cmd /c "set ${name}=1&& aidlc engine log answers"`,
+        `setx ${name} 1`,
+        // Windows reads variable names in any case, so a lower-case name is the same variable
+        `${name.toLowerCase()}=abc git status`,
+      ]) {
+        expect(refused(command), command).toBe(true);
+      }
+    }
+    // The hook itself refuses with the runtime-integrity reason.
+    const env = unownedEnv();
+    delete env.AIDLC_SKIP_HUMAN_PRESENCE_GUARD;
+    for (const command of ['$env:AIDLC_ALLOW_DIRECT_AUDIT_EVENTS = "1"', "setx AIDLC_UNATTENDED 1", "set AIDLC_DISABLE_PLAN_APPROVAL_GUARD=1"]) {
+      const r = spawnSync(process.execPath, [HOOK], {
+        input: JSON.stringify({ hook_event_name: "PreToolUse", tool_name: "Bash", tool_input: { command } }),
+        encoding: "utf-8",
+        env,
+      });
+      expect(r.status, command).toBe(2);
+      expect(r.stderr, command).toContain("AIDLC runtime records and hooks belong to the harness");
+    }
+    // Reading a variable, or naming one in a search, is not setting it.
+    for (const command of [
+      "echo $AIDLC_UNATTENDED",
+      "echo $env:AIDLC_UNATTENDED",
+      "grep -rn AIDLC_DISABLE_SENSORS src",
+      "Get-ChildItem env:",
+      "printenv AIDLC_UNATTENDED",
+      "MY_AIDLC_UNATTENDED=1 echo ok",
+      // A flag or a path segment that spells a builtin is not the builtin.
+      "aidlc config flags --local --clear-bypass AIDLC_DISABLE_PLAN_APPROVAL_GUARD --yes",
+      "aidlc config flags --local --bypass AIDLC_DISABLE_REVIEW_FREEZE_HOOK --yes",
+      "& 'C:\\Users\\me\\AppData\\Local\\aidlc\\versions\\1.0.0\\aidlc.exe' config flags --clear-bypass AIDLC_DISABLE_PLAN_APPROVAL_GUARD --yes",
+    ]) {
+      expect(refused(command), command).toBe(false);
     }
   });
 
@@ -799,6 +1031,315 @@ describe("t242 state-transition ownership guard", () => {
     });
     expect(relativeWrite.status).toBe(2);
     expect(relativeWrite.stderr).toContain("AIDLC runtime records and hooks belong to the harness");
+  });
+
+  // A shell can run in a project subdirectory (Kiro and Cursor pass the call's
+  // own cwd). Relative targets resolve from there, but the installed tree, its
+  // entrypoints and the authored source are found at the hook's project too.
+  // HOOK runs from dist/, outside the project, so its own path cannot supply it.
+  test("runtime integrity finds the project from AIDLC_PROJECT_DIR when the call runs in a subdirectory", () => {
+    const project = createTestProject();
+    projects.push(project);
+    const shellCwd = join(project, "src");
+    const hookImport = 'import "./aidlc-guard-switch.ts";\n';
+    for (const dir of ["src", "scripts", ".kiro/tools"]) mkdirSync(join(project, dir), { recursive: true });
+    writeFileSync(join(project, "scripts", "package.ts"), "export {};\n");
+    writeFileSync(join(project, ".kiro", "tools", "aidlc-lib.ts"), hookImport);
+    writeFileSync(join(project, ".kiro", "tools", "helper.ts"), hookImport);
+    const env: NodeJS.ProcessEnv = { ...unownedEnv(), AIDLC_PROJECT_DIR: project, CLAUDE_PROJECT_DIR: project };
+    delete env.AIDLC_RUNTIME_PROJECT_DIR;
+    delete env.AIDLC_HARNESS_DIR;
+    for (const [tool_name, tool_input, status] of [
+      ["Bash", { command: "echo x > ../.kiro/hooks/y.json" }, 2],
+      ["Bash", { command: "echo x > ../.github/hooks/aidlc.json" }, 2],
+      ["Bash", { command: "echo x > ../.opencode/plugin/aidlc-opencode-adapter.ts" }, 2],
+      ["Bash", { command: "bun ../.kiro/tools/helper.ts" }, 2],
+      ["Bash", { command: "echo x > local.txt" }, 0],
+      ["Bash", { command: "bun ../.kiro/tools/aidlc-lib.ts" }, 0],
+      ["Write", { file_path: "../core/hooks/example.ts", content: hookImport }, 0],
+      ["Write", { file_path: "../scripts/helper.ts", content: hookImport }, 2],
+    ] as const) {
+      const r = spawnSync(process.execPath, [HOOK], {
+        cwd: project,
+        input: JSON.stringify({ hook_event_name: "PreToolUse", cwd: shellCwd, tool_name, tool_input }),
+        encoding: "utf-8",
+        env,
+      });
+      expect(r.status, JSON.stringify(tool_input)).toBe(status);
+    }
+  });
+
+  // The shared target reader resolves a relative write from every directory a
+  // literal cd or pushd in the command names, and from $HOME for a bare cd or a
+  // leading ~, not only from the call's cwd.
+  test("runtime integrity follows a literal cd or pushd to the write it guards", () => {
+    const project = createTestProject();
+    projects.push(project);
+    for (const dir of [".kiro/hooks", "src", "docs"]) mkdirSync(join(project, dir), { recursive: true });
+    const home = dirname(project);
+    const name = basename(project);
+    const env: NodeJS.ProcessEnv = { ...unownedEnv(), AIDLC_PROJECT_DIR: project, CLAUDE_PROJECT_DIR: project, HOME: home };
+    delete env.AIDLC_RUNTIME_PROJECT_DIR;
+    delete env.AIDLC_HARNESS_DIR;
+    for (const [command, status] of [
+      ["cd .kiro && echo x > hooks/y.json", 2],
+      [`cd; echo x > '${name}/.kiro/hooks/y.json'`, 2],
+      [`cd --; echo x > '${name}/.kiro/hooks/y.json'`, 2],
+      [`cd -P; echo x > '${name}/.kiro/hooks/y.json'`, 2],
+      [`cd 2>/dev/null; echo x > '${name}/.kiro/hooks/y.json'`, 2],
+      [`cd 2>"/dev/null"''; echo x > '${name}/.kiro/hooks/y.json'`, 2],
+      [`cd "$HOME/${name}/.kiro" && echo x > hooks/y.json`, 2],
+      ["cd $" + `{HOME}/${name}/.kiro && echo x > hooks/y.json`, 2],
+      [`echo x > $HOME/${name}/.kiro/hooks/y.json`, 2],
+      // A > inside a quoted operand is not a redirection. (The directory need
+      // not exist, and Windows cannot create it.)
+      [`cd "x >y/../.kiro"; echo x > hooks/y.json`, 2],
+      // $HOME from a bare cd never pushes out a directory collected earlier.
+      // (.kiro and five doublings collect 63; one absolute cd makes the cap's 64.)
+      [`cd .kiro; echo x > hooks/y.json; cd a; cd b; cd c; cd d; cd e; cd '${project}/z'; cd`, 2],
+      [`cd ~ && echo x > '${name}/.kiro/hooks/y.json'`, 2],
+      // $HOME from `cd ~` stays when six doublings pass the cap.
+      [`cd ~; echo x > '${name}/.kiro/hooks/y.json'; cd a; cd b; cd c; cd d; cd e; cd f`, 2],
+      // bash 5.3 runs `${ cmd; }` and `${| cmd; }` as commands.
+      ["echo $" + "{ rm -rf .kiro/hooks; }", 2],
+      ["echo $" + "{| rm -rf .kiro/hooks; }", 2],
+      [`echo x > ~/'${name}/.kiro/hooks/y.json'`, 2],
+      ["pushd .kiro && echo x > hooks/y.json", 2],
+      ["cd .kiro && cd hooks && rm y.json", 2],
+      ["(cd .kiro && tee hooks/y.json < /dev/null)", 2],
+      ["cd src; echo x > ../.kiro/hooks/y.json", 2],
+      // Six relative cds fill the collected directories; a later absolute one still counts.
+      [`cd a; cd b; cd c; cd d; cd e; cd f; cd '${project}/.kiro'; echo x > hooks/y.json`, 2],
+      ["cd -- .kiro && echo x > hooks/y.json", 2],
+      // Redirection forms the separators must not split, and writes that run
+      // again after a later cd (a loop, a function).
+      ["printf x >|.kiro/hooks/y.json", 2],
+      ["printf x >&.kiro/hooks/y.json", 2],
+      ["for i in 1 2; do rm -f hooks/y.json; cd .kiro; done", 2],
+      ["f(){ printf x > hooks/y.json; }; cd .kiro; f", 2],
+      // Order is not modelled: a cd after a write also counts for it, which
+      // only refuses more, and only for a protected path.
+      ["echo x > hooks/y.json; cd .kiro", 2],
+      // `pushd -n` adds to the stack and stays in the directory, for the
+      // audit-trail reading too.
+      ["pushd -n .kiro; echo x > hooks/y.json", 0],
+      ["pushd -n aidlc/spaces/s/intents/i/audit; echo x > notes.md", 0],
+      ["cd docs && echo x > README.md", 0],
+      ["cd src && echo x > hooks/y.json", 0],
+    ] as Array<[string, number]>) {
+      const r = spawnSync(process.execPath, [HOOK], {
+        cwd: project,
+        input: JSON.stringify({ hook_event_name: "PreToolUse", cwd: project, tool_name: "Bash", tool_input: { command } }),
+        encoding: "utf-8",
+        env,
+      });
+      expect(r.status, command).toBe(status);
+    }
+    // A quoted ~ is a file named ~ in the call's cwd, here the hooks directory.
+    const quoted = spawnSync(process.execPath, [HOOK], {
+      cwd: project,
+      input: JSON.stringify({
+        hook_event_name: "PreToolUse",
+        cwd: join(project, ".kiro", "hooks"),
+        tool_name: "Bash",
+        tool_input: { command: "printf x > '~'" },
+      }),
+      encoding: "utf-8",
+      env,
+    });
+    expect(quoted.status).toBe(2);
+  });
+
+  // bash's cd takes +1 as a directory name (only pushd reads it as a stack
+  // entry), here a link to .kiro. Skipped on Windows, where creating the link
+  // can need privileges.
+  test.skipIf(process.platform === "win32")("runtime integrity reads `cd +1` as the directory +1", () => {
+    const project = createTestProject();
+    projects.push(project);
+    mkdirSync(join(project, ".kiro", "hooks"), { recursive: true });
+    symlinkSync(".kiro", join(project, "+1"));
+    // After `--` a word is the directory, for the audit-trail pass too: here
+    // `+1` and `-n` link to an audit directory and the write names it through
+    // a variable.
+    const audit = join(project, "aidlc", "spaces", "s", "intents", "i", "audit");
+    mkdirSync(audit, { recursive: true });
+    mkdirSync(join(project, "a"));
+    symlinkSync(audit, join(project, "a", "+1"));
+    symlinkSync(audit, join(project, "a", "-n"));
+    symlinkSync(audit, join(project, "x"));
+    const env: NodeJS.ProcessEnv = { ...unownedEnv(), AIDLC_PROJECT_DIR: project, CLAUDE_PROJECT_DIR: project };
+    delete env.AIDLC_RUNTIME_PROJECT_DIR;
+    delete env.AIDLC_HARNESS_DIR;
+    for (const [command, status] of [
+      ["cd +1 && echo x > hooks/y.json", 2],
+      ["pushd +1 && echo x > hooks/y.json", 0],
+      ['cd a; pushd -- +1; f=shard.md; echo x >> "$f"', 2],
+      ['cd a; pushd -- -n; f=shard.md; echo x >> "$f"', 2],
+      ['cd a; f=shard.md; echo x >> "$f"', 0],
+      // A redirection on the cd is not its operand, and `cd -- -` is $OLDPWD.
+      ['cd 2>/dev/null x; f=shard.md; echo x >> "$f"', 2],
+      ['cd >/dev/null x; f=shard.md; echo x >> "$f"', 2],
+      ['cd -- -; f=audit/shard.md; echo x >> "$f"', 2],
+    ] as Array<[string, number]>) {
+      const r = spawnSync(process.execPath, [HOOK], {
+        cwd: project,
+        input: JSON.stringify({ hook_event_name: "PreToolUse", cwd: project, tool_name: "Bash", tool_input: { command } }),
+        encoding: "utf-8",
+        env,
+      });
+      expect(r.status, command).toBe(status);
+    }
+  });
+
+  // Kiro IDE names its write tools fs_write/fs_append/str_replace/delete_file and
+  // its shell execute_bash; the adapter hands each to the guard in the shared
+  // Write/Edit/Bash shape, so the same refusals come back as Kiro's exit 2.
+  test("the Kiro IDE adapter route refuses runtime writes and lifecycle verbs", () => {
+    const project = createTestProject();
+    projects.push(project);
+    cpSync(join(REPO_ROOT, "dist", "kiro-ide", ".kiro"), join(project, ".kiro"), { recursive: true });
+    seedAuditFile(project);
+    const runIde = (tool_name: string, tool_input: Record<string, unknown>) => {
+      const env: NodeJS.ProcessEnv = {
+        ...unownedEnv(),
+        CLAUDE_PROJECT_DIR: project,
+        AIDLC_COMPILED_EXECUTABLE: "",
+        HOME: dirname(project),
+        // PowerShell's ~ and $HOME on Windows.
+        USERPROFILE: dirname(project),
+      };
+      delete env.USER_PROMPT;
+      return spawnSync(process.execPath, [join(project, ".kiro", "hooks", "aidlc-kiro-adapter.ts"), "state-transition-guard"], {
+        input: JSON.stringify({ hook_event_name: "PreToolUse", cwd: project, session_id: "sess_t242-ide", tool_name, tool_input }),
+        encoding: "utf-8",
+        env,
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+      });
+    };
+    const runtime = "AIDLC runtime records and hooks belong to the harness";
+    for (const [tool_name, tool_input, refusal] of [
+      ["fs_write", { path: join(project, "aidlc", ".aidlc-sessions", "foo.json"), text: "{}" }, runtime],
+      ["str_replace", { path: join(project, ".kiro", "hooks", "aidlc-kiro-adapter.ts"), oldStr: "a", newStr: "b" }, runtime],
+      ["fs_append", { path: join(project, ".kiro", "hooks", "aidlc-review-freeze.json"), text: "{}" }, runtime],
+      ["delete_file", { explanation: "remove it", targetFile: seededAuditShard(project) }, "The audit trail under aidlc/spaces/"],
+      ["execute_bash", { command: "bun .kiro/tools/aidlc-state.ts approve requirements-analysis" }, "Stage status cannot be changed with aidlc-state.ts approve"],
+      // A bare cd goes to $HOME, here the project's parent.
+      ["execute_bash", { command: `cd; echo x > '${basename(project)}/.kiro/hooks/y.json'` }, runtime],
+      // execute_pwsh reaches the guard marked as PowerShell: backslash paths
+      // and Set-Location read the way PowerShell runs them.
+      ["execute_pwsh", { command: "Set-Content .kiro\\hooks\\y.json x" }, runtime],
+      ["execute_pwsh", { command: "'x' | Tee-Object .kiro\\hooks\\y.json" }, runtime],
+      ["execute_pwsh", { command: "Set-Location .kiro\\hooks; Set-Content y.json x" }, runtime],
+      // $HOME, ${HOME} and ~ with backslashes and in any case (HOME and USERPROFILE are the project's parent).
+      ["execute_pwsh", { command: `Set-Content $HOME\\${basename(project)}\\.kiro\\hooks\\y.json x` }, runtime],
+      ["execute_pwsh", { command: "Set-Content $" + `{home}\\${basename(project)}\\.kiro\\hooks\\y.json x` }, runtime],
+      ["execute_pwsh", { command: `Set-Content ~\\${basename(project)}\\.kiro\\hooks\\y.json x` }, runtime],
+    ] as const) {
+      const r = runIde(tool_name, tool_input);
+      expect(r.status, tool_name).toBe(2);
+      expect(r.stderr, tool_name).toContain(refusal);
+    }
+    for (const [tool_name, tool_input] of [
+      ["fs_write", { path: join(project, "notes.md"), text: "x" }],
+      ["read_file", { path: seededAuditShard(project) }],
+      ["execute_bash", { command: 'bun .kiro/tools/aidlc-state.ts get "Current Stage"' }],
+      ["execute_pwsh", { command: "Set-Location docs; Set-Content notes.md x" }],
+    ] as const) {
+      expect(runIde(tool_name, tool_input).status, tool_name).toBe(0);
+    }
+  });
+
+  // The words the human-turn hook keeps for a stage gate become the Feedback a
+  // Request Changes records as the person's own, so a tool call may not write
+  // or remove them; the rest of the engine directory stays writable.
+  const GATE_WORDS = "aidlc/spaces/default/intents/todo-app/.aidlc-engine/gate-words/01995000-7a11-7000-8000-00000000c0de.json";
+  const GATE_WORDS_MIXED_CASE = GATE_WORDS.replace(".aidlc-engine/gate-words", ".AIDLC-Engine/Gate-Words");
+
+  test("runtime integrity refuses tool-call writes of the kept gate words", () => {
+    const guard = (tool_name: string, tool_input: Record<string, unknown>, cwd?: string) =>
+      spawnSync(process.execPath, [HOOK], {
+        input: JSON.stringify({ hook_event_name: "PreToolUse", ...(cwd ? { cwd } : {}), tool_name, tool_input }),
+        encoding: "utf-8",
+        env: unownedEnv(),
+      });
+    const words = JSON.stringify({ version: 1, messages: [{ offset: 1, text: "rename it" }] });
+    for (const [tool_name, tool_input] of [
+      ["Write", { file_path: GATE_WORDS, content: words }],
+      ["Edit", { file_path: GATE_WORDS, old_string: "a", new_string: "b" }],
+      ["MultiEdit", { edits: [{ file_path: "notes.md" }, { file_path: GATE_WORDS }] }],
+      ["Write", { file_path: GATE_WORDS.replaceAll("/", "\\"), content: words }],
+      ["Write", { file_path: `C:\\project\\${GATE_WORDS.replaceAll("/", "\\")}`, content: words }],
+      // Windows resolves any casing to the same record.
+      ["Write", { file_path: `C:\\project\\${GATE_WORDS_MIXED_CASE.replaceAll("/", "\\")}`, content: words }],
+    ] as const) {
+      const r = guard(tool_name, tool_input);
+      expect(r.status, `${tool_name} ${JSON.stringify(tool_input)}`).toBe(2);
+      expect(r.stderr, tool_name).toContain("AIDLC runtime records and hooks belong to the harness");
+    }
+    const relativeWrite = guard("Write", { file_path: "s.json", content: words }, "/tmp/p/aidlc/spaces/default/intents/r/.aidlc-engine/gate-words");
+    expect(relativeWrite.status).toBe(2);
+    expect(relativeWrite.stderr).toContain("AIDLC runtime records and hooks belong to the harness");
+    for (const command of [
+      `echo '${words}' > ${GATE_WORDS}`,
+      `printf x | tee ${GATE_WORDS}`,
+      `Set-Content -Path ${GATE_WORDS} -Value 'rename it'`,
+      `Set-Content -Path "${GATE_WORDS.replaceAll("/", "\\")}" -Value 'rename it'`,
+      `Remove-Item ${GATE_WORDS}`,
+      `rm -rf aidlc/spaces/default/intents/todo-app/.aidlc-engine/gate-words`,
+      `mkdir -p aidlc/spaces/default/intents/todo-app/.aidlc-engine/gate-words`,
+      `cp words.json ${GATE_WORDS}`,
+      `node -e "require('node:fs').writeFileSync('${GATE_WORDS}', 'x')"`,
+      `echo x > ${GATE_WORDS_MIXED_CASE}`,
+      `Set-Content -Path "${GATE_WORDS_MIXED_CASE.replaceAll("/", "\\")}" -Value 'rename it'`,
+      `node -e "require('node:fs').writeFileSync('${GATE_WORDS_MIXED_CASE}', 'x')"`,
+    ]) {
+      const r = guard("Bash", { command });
+      expect(r.status, command).toBe(2);
+      expect(r.stderr, command).toContain("AIDLC runtime records and hooks belong to the harness");
+    }
+    // Only the gate words: the conductor's own engine-directory record, and
+    // reading the words, stay allowed.
+    for (const [tool_name, tool_input] of [
+      ["Write", { file_path: "aidlc/spaces/default/intents/todo-app/.aidlc-engine/reviewer-dispatch.json", content: "{}" }],
+      ["Bash", { command: `cat ${GATE_WORDS}` }],
+      ["Bash", { command: "echo x > aidlc/spaces/default/intents/todo-app/.aidlc-engine/gate-wordsmith.json" }],
+    ] as const) {
+      const r = guard(tool_name, tool_input);
+      expect(r.status, `${tool_name} ${JSON.stringify(tool_input)}`).toBe(0);
+    }
+  });
+
+  test("the human-turn hook's own save and the engine's clear still write the gate words", () => {
+    const project = createTestProject();
+    projects.push(project);
+    seedStateFile(project, "state-mid-ideation.md");
+    const session = "01995000-7a11-7000-8000-00000000c0de";
+    const record = dirname(seededStateFile(project));
+    const words = join(record, ".aidlc-engine", "gate-words", `${session}.json`);
+    const env: NodeJS.ProcessEnv = { ...unownedEnv(), AIDLC_UNATTENDED: "0", CLAUDE_PROJECT_DIR: project, AIDLC_PROJECT_DIR: project };
+    delete env.AIDLC_SESSION_OVERRIDE;
+    delete env.AIDLC_SESSION_OVERRIDE_SOURCE;
+    const saved = spawnSync(process.execPath, [join(REPO_ROOT, "dist", "claude", ".claude", "tools", "aidlc.ts"), "engine", "hook", "record-human-turn"], {
+      cwd: project,
+      input: JSON.stringify({ hook_event_name: "UserPromptSubmit", session_id: session, prompt: "Rename the list command." }),
+      encoding: "utf-8",
+      env,
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+    });
+    expect(saved.status, saved.stderr).toBe(0);
+    expect(existsSync(words)).toBe(true);
+    expect(readFileSync(words, "utf-8")).toContain("Rename the list command.");
+    // Presenting a gate spends them, through the engine's own transition.
+    const state = (args: string[]) => spawnSync(process.execPath, [STATE, ...args, "--project-dir", project], {
+      encoding: "utf-8",
+      env: { ...unownedEnv(), AIDLC_ALLOW_DIRECT_STATE_TRANSITIONS: "1", AIDLC_SKIP_ARTIFACT_GUARD: "1" },
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+    });
+    const slug = (state(["get", "Current Stage"]).stdout ?? "").trim();
+    expect(state(["checkbox", `${slug}=in-progress`]).status).toBe(0);
+    const opened = state(["gate-start", slug]);
+    expect(opened.status, `${opened.stdout}${opened.stderr}`).toBe(0);
+    expect(existsSync(words)).toBe(false);
   });
 
   test("runtime integrity refuses written hook imports and dispatcher argv outside the runtime and authored repository", () => {
@@ -1158,6 +1699,9 @@ describe("t242 state-transition ownership guard", () => {
     for (const [language, content] of [
       ["js", `Bun.spawnSync([process.execPath, ".claude/tools/aidlc.ts", ${route}]);`],
       ["js", `Bun.spawn({ cmd: ["aidlc", ${route}], stdout: "pipe" });`],
+      // A spawn element that is not a string literal is a computed route word.
+      ["js", 'Bun.spawnSync(["aidlc", process.argv[1], "adapter", "kiro-ide", "record-human-turn"]);'],
+      ["js", 'Bun.spawnSync(["aidlc", "engine", process.argv[1], "kiro-ide", "record-human-turn"]);'],
       ["js", `Bun.spawnSync(["bun", "--silent", "run", ".claude/tools/aidlc.ts", ${route}]);`],
       ["js", `import { spawnSync } from "node:child_process"; spawnSync("aidlc", [${route}]);`],
       ["js", `import * as child_process from "node:child_process"; child_process.spawn("/opt/bin/aidlc", [${route}]);`],
@@ -1357,6 +1901,8 @@ describe("t242 state-transition ownership guard", () => {
       ".claude/settings.json",
       ".codex/hooks.json",
       ".kiro/agents/aidlc.json",
+      ".kiro/agents/aidlc.md",
+      ".kiro/agents/aidlc-developer-agent.md",
       ".github/hooks/aidlc.json",
     ]) {
       for (const [tool_name, tool_input] of [
@@ -1431,6 +1977,32 @@ describe("t242 state-transition ownership guard", () => {
     const project = createTestProject();
     projects.push(project);
     const dispatcher = join(REPO_ROOT, "dist", "claude", ".claude", "tools", "aidlc.ts");
+    for (const command of [
+      "aidlc engine next",
+      "aidlc --quiet engine status",
+      "aidlc engine config set summary-confirmation on",
+      "bun .kiro/tools/aidlc.ts engine orchestrate next",
+      "aidlc engine orchestrate next --intent $I",
+      "aidlc engine config set depth $D",
+      "aidlc --project-dir $P engine orchestrate next",
+      'aidlc --project-dir "$(pwd)" engine status',
+    ]) {
+      expect(violatesRuntimeIntegrity({
+        cwd: project, tool_name: "Bash", tool_input: { command },
+      }), command).toBe(false);
+    }
+    // A route slot the spawn leaves out is not a computed one, and computed
+    // values after the route or after --project-dir stay data.
+    for (const content of [
+      'Bun.spawnSync(["aidlc", "engine", "next"]);',
+      'Bun.spawnSync(["aidlc", "engine"]);',
+      'Bun.spawnSync(["aidlc", "engine", "orchestrate", "next", "--intent", process.argv[1]]);',
+      'Bun.spawnSync(["aidlc", "--project-dir", process.argv[1], "engine", "status"]);',
+    ]) {
+      expect(violatesRuntimeIntegrity({
+        cwd: project, tool_name: "Write", tool_input: { file_path: "example.ts", content },
+      }), content).toBe(false);
+    }
     for (const args of [["engine", "status"], ["config", "--help"], ["update", "--help"]]) {
       const command = `bun "${dispatcher}" ${args.join(" ")}`;
       expect(violatesRuntimeIntegrity({
@@ -1456,7 +2028,7 @@ describe("t242 state-transition ownership guard", () => {
       ["Bash", { command: "cat aidlc/.aidlc-sessions/foo.json" }],
       ["Bash", { command: "cp aidlc/.aidlc-sessions/foo.json /tmp/copy.json" }],
       ["Bash", { command: "echo x > aidlc/.aidlc-sessions-backup/foo.json" }],
-      ["Bash", { command: "aidlc_session_override=abc git status" }],
+      ["Bash", { command: "MY_AIDLC_SESSION_OVERRIDE=abc git status" }],
       ["Write", { file_path: "aidlc/spaces/default/intents/x/.aidlc-engine/reviewer-dispatch.json" }],
       ["Edit", { file_path: "aidlc/spaces/default/intents/x/inception/requirements.md" }],
       ["MultiEdit", { edits: [{ file_path: "aidlc/spaces/default/intents/x/inception/requirements.md" }] }],
@@ -1551,7 +2123,10 @@ describe("t242 state-transition ownership guard", () => {
     });
     expect(main.status).toBe(2);
     expect(main.stderr).toContain("aidlc-orchestrate.ts report");
-    expect(main.stderr).toContain("config set guard.state-transition off");
+    // The agent offers the switch and, when the person says so, runs the setter itself.
+    expect(main.stderr).toContain("offer to turn the state-transition check off for this piece of work");
+    expect(main.stderr).toContain("config-change --guard.state-transition off` yourself");
+    expect(main.stderr).not.toContain("/aidlc config set");
     const delegated = spawnSync(process.execPath, [HOOK], {
       input: JSON.stringify({ ...payload, agent_type: "aidlc-developer-agent" }),
       encoding: "utf-8",
@@ -1559,7 +2134,7 @@ describe("t242 state-transition ownership guard", () => {
     });
     expect(delegated.status).toBe(2);
     expect(delegated.stderr).toContain("aidlc-orchestrate.ts report");
-    expect(delegated.stderr).not.toContain("config set guard.state-transition off");
+    expect(delegated.stderr).not.toContain("guard.state-transition off");
     expect(delegated.stderr).not.toContain("cannot be turned off from chat");
   });
 
@@ -1618,6 +2193,98 @@ describe("t242 state-transition ownership guard", () => {
     expect(rows[0]).toContain("**Guard**: state-transition");
     expect(rows[0]).toContain("**Tool**: aidlc-state.ts");
     expect(rows[0]).toContain("**Details**: aidlc-state.ts checkbox");
+  });
+
+  test("under Guard Policy off the state CLI carries a direct transition through without a line", () => {
+    const project = createTestProject();
+    projects.push(project);
+    seedStateFile(project, join(FIXTURES_DIR, "state-mid-ideation.md"));
+    seedAuditFile(project);
+    const statePath = seededStateFile(project);
+    writeFileSync(
+      statePath,
+      readFileSync(statePath, "utf-8").replace(/^- \*\*Change Control\*\*:.*$/m, "- **Guard Policy**: off (set by you)"),
+    );
+    const r = spawnSync(
+      process.execPath,
+      [STATE, "checkbox", "scope-definition=in-progress", "--project-dir", project],
+      {
+        encoding: "utf-8",
+        env: { ...unownedEnv(), AIDLC_ALLOW_DIRECT_STATE_TRANSITIONS: "0" },
+      },
+    );
+    expect(r.status, `${r.stdout}${r.stderr}`).toBe(0);
+    expect(JSON.parse(r.stdout).updated).toBe(true);
+    // Off means off: the row records the pass and nothing is said.
+    expect(r.stderr).not.toContain("Continuing past");
+    const rows = readFileSync(seededAuditShard(project), "utf-8")
+      .split("\n## ")
+      .filter((row) => row.includes("**Event**: GUARD_STOOD_ASIDE"));
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toContain("**Guard**: state-transition");
+  });
+
+  test("a conversation that has not joined the workflow is not stopped by the hook with an offer to turn off a check that is off", () => {
+    // The hook kept the check up for a chat outside the workflow and offered to
+    // turn it off, though Guard Policy off already had. The state tool's own
+    // check reads the same policy, so it decides.
+    const project = createTestProject();
+    projects.push(project);
+    seedStateFile(project, join(FIXTURES_DIR, "state-mid-ideation.md"));
+    seedAuditFile(project);
+    const statePath = seededStateFile(project);
+    writeFileSync(
+      statePath,
+      readFileSync(statePath, "utf-8").replace(/^- \*\*Change Control\*\*:.*$/m, "- **Guard Policy**: off (set by you)"),
+    );
+    // No cursor names the record, so this chat stands outside it.
+    const cursor = join(dirname(dirname(statePath)), "active-intent");
+    if (existsSync(cursor)) writeFileSync(cursor, "");
+    const r = spawnSync(process.execPath, [HOOK], {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+      input: JSON.stringify({
+        hook_event_name: "PreToolUse",
+        tool_name: "Bash",
+        session_id: "11111111-2222-4333-8444-555555555555",
+        tool_input: { command: "bun .claude/tools/aidlc-state.ts approve feasibility" },
+      }),
+      encoding: "utf-8",
+      env: { ...unownedEnv(), CLAUDE_PROJECT_DIR: project, AIDLC_PROJECT_DIR: project },
+    });
+    expect(r.status, r.stderr).toBe(0);
+    expect(r.stderr).not.toContain("offer to turn the state-transition check off");
+  });
+
+  test("under Guard Policy off the hook lets a direct state command through without a line", () => {
+    const project = createTestProject();
+    projects.push(project);
+    seedStateFile(project, join(FIXTURES_DIR, "state-mid-ideation.md"));
+    seedAuditFile(project);
+    const statePath = seededStateFile(project);
+    writeFileSync(
+      statePath,
+      readFileSync(statePath, "utf-8").replace(/^- \*\*Change Control\*\*:.*$/m, "- **Guard Policy**: off (set by you)"),
+    );
+    const r = spawnSync(process.execPath, [HOOK], {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+      input: JSON.stringify({
+        hook_event_name: "PreToolUse",
+        tool_name: "Bash",
+        session_id: "11111111-2222-4333-8444-555555555555",
+        tool_input: { command: "bun .claude/tools/aidlc-state.ts approve feasibility" },
+      }),
+      encoding: "utf-8",
+      env: { ...unownedEnv(), CLAUDE_PROJECT_DIR: project, AIDLC_PROJECT_DIR: project },
+    });
+    expect(r.status, r.stderr).toBe(0);
+    // Off means off: the row records the pass and nothing is said.
+    expect(`${r.stdout}${r.stderr}`).not.toContain("Continuing past");
+    const rows = readFileSync(seededAuditShard(project), "utf-8")
+      .split("\n## ")
+      .filter((row) => row.includes("**Event**: GUARD_STOOD_ASIDE"));
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toContain("**Guard**: state-transition");
+    expect(rows[0]).toContain("**Tool**: Bash");
   });
 
   test("the state CLI refuses direct transitions when the state-transition fence is not lowered", () => {
@@ -1688,7 +2355,7 @@ describe("t242 state-transition ownership guard", () => {
     );
   });
 
-  test("production reports require approval input and rejection feedback", () => {
+  test("production reports require a reply from the person, and rejection feedback", () => {
     for (const result of ["approved", "rejected"] as const) {
       const project = createTestProject();
       projects.push(project);
@@ -1711,9 +2378,11 @@ describe("t242 state-transition ownership guard", () => {
         { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8", env },
       );
       expect(r.status, `${result}: ${r.stdout}${r.stderr}`).toBe(0);
-      expect(r.stdout, result).toContain('"kind":"error"');
-      expect(r.stdout, result).toContain("did not match an offered choice");
-      expect(r.stdout, result).toContain("original held gate with every offered choice");
+      // Either way it goes back to the agent as its next step.
+      expect(r.stdout, result).toContain('"kind":"print"');
+      expect(r.stdout, result).toContain(
+        result === "approved" ? "names no choice" : "Request Changes requires nonblank revision feedback",
+      );
       expect(readFileSync(seededStateFile(project), "utf-8"), result).toContain(
         "- [-] feasibility",
       );
