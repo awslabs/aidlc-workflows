@@ -141,6 +141,7 @@ const manifest: HarnessManifest = {
   harnessFiles: [
     { src: "skills/aidlc/SKILL.md", dst: "skills/aidlc/SKILL.md" },
     { src: "skills/aidlc/question-rendering.md", dst: "skills/aidlc/question-rendering.md" },
+    { src: "skills/aidlc/composer.md", dst: "skills/aidlc/composer.md" },
     // The AIDLC method @-import stub: .claude/rules/aidlc.md pulls the relocated
     // method (aidlc/spaces/default/memory/*) into Claude's ambient context by
     // reference (explicit @-imports, no copy). The rules/ dir is no longer a

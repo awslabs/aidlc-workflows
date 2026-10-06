@@ -30,7 +30,7 @@ import { HARNESS_MATRIX } from "../harness/harness-matrix.ts";
 // One phrase from each composer-only paragraph.
 const COMPOSER_ONLY = [
   "COMPOSER DISPATCH",
-  "Render that proposal to the human as THREE blocks",
+  "Render that proposal to the human as a SHORT offer",
   "**Composition-moment authority.**",
   "**On approve (front/report), the write and the creation run in the SAME turn",
   "**In-flight recompose (a workflow is RUNNING):**",

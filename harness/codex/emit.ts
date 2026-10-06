@@ -467,7 +467,7 @@ export default function emit(ctx: EmitContext): void {
   }
 
   // (a) authored orchestrator shell with the standard token projection.
-  for (const f of ["SKILL.md", "question-rendering.md"]) {
+  for (const f of ["SKILL.md", "question-rendering.md", "composer.md"]) {
     emissions.push({
       path: join(SKILLS_DST, "aidlc", f),
       content: () =>

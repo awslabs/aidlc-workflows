@@ -218,7 +218,8 @@ describe("t-collaborators-cli the agent is told how to switch collaborators", ()
       expect(rule, harness).toBeDefined();
       expect(rule).toContain("engine config set collaborators on");
       expect(rule).toContain("never hand them a command to type");
-      expect(skill).toContain("plan approval on, collaborators off, reviews advisory");
+      const composer = readFileSync(join(import.meta.dir, "..", "..", "harness", harness, "skills", "aidlc", "composer.md"), "utf-8");
+      expect(composer).toContain("plan approval on, collaborators off, reviews advisory");
     },
   );
 });

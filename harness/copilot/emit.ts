@@ -185,7 +185,7 @@ export default function emit(ctx: EmitContext): void {
   }
 
   // (a) authored orchestrator shell — token-substituted from harness/copilot/.
-  for (const f of ["SKILL.md", "question-rendering.md"]) {
+  for (const f of ["SKILL.md", "question-rendering.md", "composer.md"]) {
     emissions.push({
       path: join(SKILLS_DST, "aidlc", f),
       content: () => substituteToken(readFileSync(join(harnessRoot, "skills", "aidlc", f), "utf-8")),

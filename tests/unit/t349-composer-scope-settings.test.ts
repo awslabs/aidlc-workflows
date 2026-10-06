@@ -492,9 +492,14 @@ describe("t349 (8) every composer surface names the settings contract", () => {
     "core/tools/aidlc-orchestrate.ts",
     ...skills,
   ];
-  const read = (surface: string) => readFileSync(join(REPO_ROOT, surface), "utf-8");
+  // A conductor reads the composer.md beside its SKILL.md when a plan is composed.
+  const read = (surface: string) => {
+    const text = readFileSync(join(REPO_ROOT, surface), "utf-8");
+    if (!surface.endsWith("/skills/aidlc/SKILL.md")) return text;
+    return `${text}\n${readFileSync(join(REPO_ROOT, surface.replace(/SKILL\.md$/, "composer.md")), "utf-8")}`;
+  };
 
-  test("the agent, its knowledge, the dispatch, and each SKILL.md name every key", () => {
+  test("the agent, its knowledge, the dispatch, and each SKILL.md with its composer.md name every key", () => {
     for (const surface of surfaces) {
       const text = read(surface);
       expect(text, surface).toContain("scopeSettings");

@@ -707,9 +707,14 @@ describe("t351 (6) approved stage changes and settings land in one recompose wri
 
 describe("t351 (7) every conductor surface offers the save and never writes scope files itself", () => {
   const harnesses = ["claude", "codex", "copilot", "cursor", "kiro", "kiro-ide", "opencode"];
-  const read = (surface: string) => readFileSync(join(REPO_ROOT, surface), "utf-8");
+  // A conductor reads the composer.md beside its SKILL.md when a plan is composed.
+  const read = (surface: string) => {
+    const text = readFileSync(join(REPO_ROOT, surface), "utf-8");
+    if (!surface.endsWith("/skills/aidlc/SKILL.md")) return text;
+    return `${text}\n${readFileSync(join(REPO_ROOT, surface.replace(/SKILL\.md$/, "composer.md")), "utf-8")}`;
+  };
 
-  test("each SKILL.md offers Approve and save as scope and saves on request", () => {
+  test("each SKILL.md with its composer.md offers Approve and save as scope and saves on request", () => {
     for (const harness of harnesses) {
       const surface = `harness/${harness}/skills/aidlc/SKILL.md`;
       const text = read(surface);
@@ -761,7 +766,14 @@ describe("t351 (8) a custom plan starts from classic's ceremony, whatever stock 
     guard_policy: "off",
     scope_settings: { sensors: "on", learnings: "on", summary_confirmation: "off", plan_approval: "on", collaborators: "off", review_cap: "advisory" },
   } as const;
-  const read = (surface: string) => readFileSync(join(REPO_ROOT, surface), "utf-8").replace(/\s+/g, " ");
+  // A conductor reads the composer.md beside its SKILL.md when a plan is composed.
+  const read = (surface: string) => {
+    const text = readFileSync(join(REPO_ROOT, surface), "utf-8");
+    const composer = surface.endsWith("/skills/aidlc/SKILL.md")
+      ? `\n${readFileSync(join(REPO_ROOT, surface.replace(/SKILL\.md$/, "composer.md")), "utf-8")}`
+      : "";
+    return `${text}${composer}`.replace(/\s+/g, " ");
+  };
 
   function validate(proj: string, proposal: unknown, route: string[]) {
     const path = join(proj, "proposal.json");
