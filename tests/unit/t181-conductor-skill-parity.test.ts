@@ -880,6 +880,22 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
   });
 
 
+  // A Unit approval after a re-check or a redo the person asked for asks once:
+  // its line takes the place of the usual question, never follows it.
+  test("a re-checked or redone Unit's approval is one question", () => {
+    const construction = readFileSync(join(REPO_ROOT, "core/aidlc-common/protocols/stage-protocol-construction.md"), "utf-8")
+      .replace(/\s+/g, " ");
+    expect(construction).toContain(
+      'its line takes the place of "Approve this completed <unit>?" after "Verified with `<full command>` (exit 0).", ' +
+        "so the person is asked once:",
+    );
+    expect(construction).toContain(
+      "When `rechecked.redone` is true, the person asked for that work to be redone, so the line is instead " +
+        "\"<unit>'s design was redone and its review says <verdict>. Approve it?\"",
+    );
+    expect(construction).not.toContain("its line after the verified sentence is");
+  });
+
   test("every conductor stops for summary confirmation before artifact work", () => {
     const missing: string[] = [];
     for (const rel of skills) {
