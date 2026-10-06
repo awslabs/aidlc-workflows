@@ -1,10 +1,11 @@
 // covers: function:handleReject, cli:aidlc-orchestrate(report), cli:aidlc-state(reject)
 //
-// A gate rejection is the person's: only a reply they sent after the stage's
-// approval question was put to them can record one. A turn they sent before
-// the question (an answer to an earlier question, a remark while the stage
-// ran) does not, and neither does the agent's own reading of the reviewer's
-// findings: the agent records nothing and asks.
+// A gate rejection is the person's: once the stage's approval question is put
+// to them, only their reply to it can record one. A turn they sent before the
+// question (an answer to an earlier question, an Approve) does not, and
+// neither does the agent's own reading of the reviewer's findings: the agent
+// records nothing and asks. A stage still running keeps what the person says
+// mid-stage.
 import {
   NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS,
   NATIVE_STARTUP_TIMEOUT_MS,
@@ -109,11 +110,16 @@ describe("t-reject-needs-person-reply: only the person's reply to the approval q
     expectAsked(report(proj, ["--stage", slug, "--result", "rejected", "--user-input", "Request Changes", "--reason", REVIEWER_WORDS]).out);
   });
 
-  test("a stage never put to the person cannot be rejected on a turn from before", () => {
+  // A stage still running has no question yet: what the person says
+  // mid-stage ("that's wrong, redo it") is theirs to ask, and it still rejects.
+  test("the person's own words while the stage runs still reject it", () => {
     const slug = slugOf(proj);
     state(proj, ["checkbox", `${slug}=in-progress`]);
-    person(proj, "yes, keep both groups");
-    expectAsked(report(proj, ["--stage", slug, "--result", "rejected", "--user-input", "Request Changes", "--reason", REVIEWER_WORDS]).out);
+    person(proj, "that's wrong, redo it with two export stories");
+    const rejected = report(proj, ["--stage", slug, "--result", "rejected", "--user-input", "Request Changes", "--reason", "that's wrong, redo it with two export stories"]);
+    const rows = rejections(proj);
+    expect(rows.length, rejected.out).toBe(1);
+    expect(rows[0].block).toContain("redo it with two export stories");
   });
 
   test("the person's own change request at the question is recorded in their words", () => {
