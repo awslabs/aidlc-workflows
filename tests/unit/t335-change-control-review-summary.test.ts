@@ -2,7 +2,7 @@
 // function:recordAcceptedChanges, function:acceptedReviewChanges, function:renderReviewBrief,
 // subcommand:aidlc-state:approve, subcommand:aidlc-state:gate-start,
 // subcommand:aidlc-log:review, subcommand:aidlc-orchestrate:report,
-// hook:aidlc-review-freeze, hook:aidlc-plan-approval-guard, audit:CHANGE_ACCEPTED
+// hook:aidlc-review-freeze, hook:aidlc-plan-approval-guard, audit:CHANGE_ACCEPTED, function:unitPlainName
 //
 // t335 - Guard Policy at the review-receipt and summary-confirmation
 // checkpoints, and the checkpoints it never bypasses. Under `relaxed` (and
