@@ -4738,9 +4738,12 @@ function preserveClaudeProviderFields(
     }
     staged.statusLine = current.statusLine;
   }
+  // A value equal to this release's own is AI-DLC's, not the person's: a
+  // copied runtime brings it in before the first setup records anything.
   if (
     Object.hasOwn(current, "companyAnnouncements") &&
-    sha256Bytes(canonical(current.companyAnnouncements)) !== priorEntries?.companyAnnouncements
+    sha256Bytes(canonical(current.companyAnnouncements)) !== priorEntries?.companyAnnouncements &&
+    canonical(current.companyAnnouncements) !== canonical(staged.companyAnnouncements)
   ) {
     if (shippedChanged("companyAnnouncements")) {
       notes.push(
