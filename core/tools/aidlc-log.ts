@@ -14,6 +14,7 @@ import {
   humanRepliedSinceGate,
   NoGuardRecoveryAskError,
   recordGuardRecoveryChoice,
+  requestChangesReportCommand,
   releaseTakenGuardRecoveryReply,
   assertNoSymlinkInChainOrThrow,
   codekbRepoName,
@@ -1588,7 +1589,7 @@ function handleAnswer(args: string[]): void {
   // same reply also said what should change.
   if (flags.checkpoint === "guard-recovery") {
     const pd = resolveActiveProjectDir(projectDir);
-    let picked: { op: string; action: string; awaitingWords: boolean };
+    let picked: { op: string; action: string; awaitingWords: boolean; stage: string; unit?: string };
     try {
       picked = recordGuardRecoveryChoice(pd, flags.details, /:\s*\S/.test(flags.details));
     } catch (e) {
@@ -1605,10 +1606,18 @@ function handleAnswer(args: string[]): void {
       }
       error(errorMessage(e));
     }
-    const message = picked.awaitingWords && picked.op === "request-changes"
-      ? 'Recorded that the person chose Request Changes. Ask "What should change?" and end the turn; their ' +
-        "next reply is what should change."
-      : `Recorded that the person chose "${picked.action}". Carry it out now.`;
+    // Request Changes names the exact report, so the agent never guesses its
+    // flags: a solo walk reports the stage, a team-owned Unit gate its Unit.
+    const report = picked.op === "request-changes"
+      ? `run \`${requestChangesReportCommand(pd, picked.stage, picked.unit)}\` with their exact words added ` +
+        "as a single-quoted --reason."
+      : "";
+    const message = picked.op !== "request-changes"
+      ? `Recorded that the person chose "${picked.action}". Carry it out now.`
+      : picked.awaitingWords
+        ? 'Recorded that the person chose Request Changes. Ask "What should change?" and end the turn; their ' +
+          `next reply is what should change. Then ${report}`
+        : `Recorded that the person chose Request Changes. Now ${report}`;
     console.log(JSON.stringify({ recorded: picked.op, message }));
     return;
   }

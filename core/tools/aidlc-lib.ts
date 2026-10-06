@@ -9275,7 +9275,7 @@ export function recordGuardRecoveryChoice(
   projectDir: string,
   details: string,
   withWords: boolean,
-): { op: GuardRemedyOp; action: string; awaitingWords: boolean } {
+): { op: GuardRemedyOp; action: string; awaitingWords: boolean; stage: string; unit?: string } {
   return transactActiveDirective(projectDir, (marker, target) => {
     let stateContent: string;
     try {
@@ -9316,7 +9316,10 @@ export function recordGuardRecoveryChoice(
       return {
         marker,
         preserve: true,
-        result: { op: remedy.op, action: remedy.action, awaitingWords: response.status === "awaiting-feedback" },
+        result: {
+          op: remedy.op, action: remedy.action, awaitingWords: response.status === "awaiting-feedback",
+          stage: marker.stage, ...(marker.unit ? { unit: marker.unit } : {}),
+        },
       };
     }
     // The latest reply: a later one may already have been taken as feedback.
@@ -9336,7 +9339,10 @@ export function recordGuardRecoveryChoice(
           picked_by: "conductor",
         },
       },
-      result: { op: remedy.op, action: remedy.action, awaitingWords },
+      result: {
+        op: remedy.op, action: remedy.action, awaitingWords,
+        stage: marker.stage, ...(marker.unit ? { unit: marker.unit } : {}),
+      },
     };
   });
 }
@@ -28498,6 +28504,36 @@ function unitMajorResetCost(reset: "jump" | "reject", stage: string): string {
         "review and checkpoint approval again.";
 }
 
+// The exact Request Changes report for a refused stage. A team-owned Unit gate
+// reports that Unit at its gate stage; anything else, a solo walk one Unit at a
+// time included, reports the stage, because the engine refuses --unit there.
+// The person's words go on as a single-quoted --reason.
+export function requestChangesReportArgs(
+  stage: string,
+  unit: string | undefined,
+  teamGate: GuardRefusalInput["teamGate"],
+): string[] {
+  const team = teamGate?.resolved === true && unit ? { stage: teamGate.gateStage, unit } : null;
+  return [
+    "report", "--stage", team?.stage ?? stage, ...(team ? ["--unit", team.unit] : []),
+    "--result", "rejected", "--user-input", "Request Changes",
+  ];
+}
+
+// The same report, rendered for this checkout, from the record's own state.
+export function requestChangesReportCommand(projectDir: string, stage: string, unit: string | undefined): string {
+  let teamGate: GuardRefusalInput["teamGate"];
+  try {
+    teamGate = unit ? teamUnitGateStatus(projectDir, readStateFile(projectDir), stage, unit) : undefined;
+  } catch {
+    teamGate = undefined;
+  }
+  return renderEngineInvocation(
+    { route: "orchestrate", args: requestChangesReportArgs(stage, unit, teamGate) },
+    { harnessDir: harnessDir() },
+  );
+}
+
 function unresolvedTeamGateRemedy(
   resolution: Extract<TeamUnitGateResolution, { resolved: false }>,
 ): GuardRemedy {
@@ -28603,7 +28639,8 @@ function lifecycleResetRemedies(
         "report",
         "--stage",
         reportStage,
-        ...(input.unit ? ["--unit", input.unit] : []),
+        // Only a team-owned Unit gate reports its Unit; a solo walk reports the stage.
+        ...(input.teamGate?.resolved === true && input.unit ? ["--unit", input.unit] : []),
         "--result",
         "revised",
         ...(input.projectDir ? ["--project-dir", input.projectDir] : []),

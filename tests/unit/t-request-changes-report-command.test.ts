@@ -89,7 +89,7 @@ describe("Request Changes from a recovery question names the report to run", () 
   });
 
   const expectStageReport = (message: string) => {
-    expect(message).toMatch(/orchestrate(\.ts)? report --stage "?functional-design"? --result rejected --user-input "Request Changes"/);
+    expect(message).toMatch(/orchestrate(\.ts)? report --stage "?functional-design"? --result rejected --user-input ['"]Request Changes['"]/);
     expect(message).not.toContain("--unit");
     expect(message).toContain("--reason");
   };
