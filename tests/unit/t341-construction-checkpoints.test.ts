@@ -984,9 +984,12 @@ describe("t341 verification command consent", () => {
       `[REPLY FORMAT RULES]\n(rules)[CURRENT USER REQUEST -- respond to this]\n${turn}`;
     expect(cli(dir, "log", ["decision", ...identity, "--decision", "Use this command?", "--options", "Approve,Request Changes"], env).code).toBe(0);
     submitCommandChoice(dir, "t341-command", crew("What does this command do?"), env);
+    // Only their own turn is kept: no replayed "Approve" is read into it.
+    expect(readProtectedResponse(dir, "t341-command")?.words).toBe("What does this command do?");
+    expect(readProtectedResponse(dir, "t341-command")?.choice).toBeUndefined();
     const answer = ["answer", ...identity, "--details", "Approve"];
-    expect(cli(dir, "log", answer, env).code).not.toBe(0);
     submitCommandChoice(dir, "t341-command", crew("Approve"), env);
+    expect(readProtectedResponse(dir, "t341-command")?.choice).toBe("Approve");
     const approved = cli(dir, "log", answer, env);
     expect(approved.code, approved.out).toBe(0);
     expect(readAuditShardEvents(dir).filter((row) => row.event === "VERIFICATION_COMMAND_RECORDED")).toHaveLength(1);
