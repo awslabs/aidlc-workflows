@@ -16,7 +16,7 @@ import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS, NATIVE_STARTUP_TIMEOUT_MS, remainingOp
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { mkdirSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import {
   AIDLC_SRC,
   cleanupTestProject,
@@ -40,6 +40,7 @@ setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 const BUN = process.execPath;
 const STATE = join(AIDLC_SRC, "tools", "aidlc-state.ts");
 const ORCHESTRATE = join(AIDLC_SRC, "tools", "aidlc-orchestrate.ts");
+const LOG = join(AIDLC_SRC, "tools", "aidlc-log.ts");
 const SLUG = "functional-design";
 const PRODUCES = ["entities", "rules", "functional-spec", "traceability"];
 const START_B = `unit start --stage ${SLUG} --unit unit-b`;
@@ -144,6 +145,20 @@ function reviewReady(proj: string, unit: string): void {
   appendAuditEntry("REVIEW_COMPLETED", { ...fields, Verdict: "READY" }, proj);
 }
 
+// The same review through the logger, as the reviewer agent records it: the
+// request, the review file, then the verdict.
+function reviewThroughLog(proj: string, unit: string): void {
+  const args = ["review", "--stage", SLUG, "--reviewer", findStageBySlug(SLUG)!.reviewer!, "--unit", unit, "--iteration", "1"];
+  const requested = run(LOG, args, proj);
+  expect(requested.rc, requested.out).toBe(0);
+  const { reviewFile } = directiveOf(requested.out) as { reviewFile: string };
+  mkdirSync(dirname(join(proj, reviewFile)), { recursive: true });
+  writeFileSync(join(proj, reviewFile), "**Verdict:** READY\n**Reviewer:** " +
+    `${findStageBySlug(SLUG)!.reviewer}\n**Iteration:** 1\n\n### Findings\n\nNo blocking findings.\n`);
+  const recorded = run(LOG, [...args, "--verdict", "READY"], proj);
+  expect(recorded.rc, recorded.out).toBe(0);
+}
+
 let proj = "";
 afterEach(() => {
   if (proj) cleanupTestProject(proj);
@@ -191,6 +206,27 @@ describe("t-unit-receipt-only-step: a Unit done but not recorded gets its receip
     expect(JSON.stringify(after)).not.toContain(START_B);
     expect(after.kind, JSON.stringify(after)).toBe("run-stage");
     expect(after.gate).toBe(true);
+  });
+
+  // The handed step must leave the Unit's review standing: a review recorded
+  // through the logger before the step still carries the stage's approval.
+  test("after a logged review, the handed step and then approval go through", () => {
+    projectWithFirstUnitDone();
+    reviewThroughLog(proj, "unit-a");
+    writeUnitArtifacts(proj, "unit-b");
+    reviewThroughLog(proj, "unit-b");
+
+    const d = next(proj);
+    expect(d.kind, JSON.stringify(d)).toBe("print");
+    expect(String(d.message)).toContain(START_B);
+    expect(unitVerb(proj, "start", "unit-b").rc).toBe(0);
+    const completed = unitVerb(proj, "complete", "unit-b");
+    expect(completed.rc, completed.out).toBe(0);
+
+    const approved = run(ORCHESTRATE, ["report", "--stage", SLUG, "--result", "approved", "--user-input", "Approve"], proj);
+    expect(approved.out).not.toContain("REVIEW_EVIDENCE_MISSING");
+    expect(directiveOf(approved.out).kind, approved.out).toBe("done");
+    expect(readAllAuditShards(proj)).toContain("GATE_APPROVED");
   });
 
   test("a Unit already started gets only its complete command", () => {
