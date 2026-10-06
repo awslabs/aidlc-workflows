@@ -70,11 +70,11 @@ const CONSTRUCTION_STATE = `# AI-DLC State Tracking
 ## Stage Progress
 
 ### CONSTRUCTION PHASE
-- [-] functional-design — EXECUTE
-- [S] nfr-requirements — EXECUTE
-- [S] nfr-design — EXECUTE
-- [S] infrastructure-design — EXECUTE
-- [S] code-generation — EXECUTE
+- [-] functional-design \u2014 EXECUTE
+- [S] nfr-requirements \u2014 EXECUTE
+- [S] nfr-design \u2014 EXECUTE
+- [S] infrastructure-design \u2014 EXECUTE
+- [S] code-generation \u2014 EXECUTE
 
 ## Current Status
 - **Lifecycle Phase**: CONSTRUCTION
