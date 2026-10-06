@@ -242,10 +242,11 @@ jobs:
             e2e) args=(--e2e --isolated-e2e --e2e-file-timeout 7200) ;;
             *) exit 2 ;;
           esac
-          # The macOS merge-queue selection already holds this shard's share,
-          # so the tier runs unsharded and leaves every other file out.
+          # The macOS merge-queue selection already holds this shard's share:
+          # it runs as one whole shard (keeping the shard rules, such as
+          # required compiled coverage) with every other file left out.
           if [ "$TEST_TIER" = unit ] && [ "${SELECTION_MODE:-}" = selected ] && [ -n "${SELECTION_EXCLUDE:-}" ]; then
-            args=(--unit)
+            args=(--unit --shard 1/1)
             TEST_EXCLUDE="${TEST_EXCLUDE:+(?:$TEST_EXCLUDE)|}$SELECTION_EXCLUDE"
           fi
           # The merge queue reruns an assertion-failed file once, in a fresh

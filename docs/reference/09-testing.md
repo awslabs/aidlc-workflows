@@ -694,10 +694,14 @@ In the queue only, `ci.yml` passes `macos-merge-selection` to the macOS unit
 shards, and `scripts/ci-macos-unit-selection.ts` picks the unit files whose
 source names macOS or darwin (computed on each run, never a kept list) plus the
 unit files the change touches against its first parent (the queue entry ahead),
-spread over the twelve shards by weight, about 60 job-minutes in all. Each shard
-leaves the other files out with `--exclude`, so a file that skips on macOS stays
-`SKIP` as in a full shard; a shard with no selected file stops before installing.
-When the change cannot be diffed or the selection fails, the shard runs in full.
+spread over the twelve shards by weight, about 60 job-minutes in all. A selected
+file brings the rest of its affinity group (t249 reads the binary t238 builds).
+Each shard runs its share as one whole shard (`--shard 1/1`, so the shard rules
+such as required compiled coverage hold) and leaves the other files out with
+`--exclude`, so a file that skips on macOS stays `SKIP` as in a full shard; a
+shard with no selected file stops before installing. When the change cannot be
+diffed, a selected name falls outside the test-file grammar, or the selection
+fails, the shard runs in full.
 macOS smoke, integration, isolated E2E and the native-terminal units, Linux and
 Windows, PR CI and the nightly Full Suite run every file. `t345` pins this.
 

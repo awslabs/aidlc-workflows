@@ -558,7 +558,10 @@ describe("t345 complete nightly coverage", () => {
         expect([file, kept]).toEqual([file, selection.files.includes(file)]);
       }
     }
-    expect(seen.sort()).toEqual(named);
+    // Plus the rest of any affinity group a named file is in.
+    const config = JSON.parse(readFileSync(join(REPO_ROOT, "tests", "unit-shard-weights.json"), "utf8")) as ShardConfig;
+    const grouped = config.affinityGroups.filter((group) => group.some((file) => named.includes(file))).flat();
+    expect(seen.sort()).toEqual([...new Set([...named, ...grouped])].sort());
   });
 
   // This file runs inside the shared step on CI, so a selected macOS shard's
@@ -597,7 +600,34 @@ describe("t345 complete nightly coverage", () => {
     }
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-  test("a selected macOS shard runs its share unsharded, and an empty selection keeps the shard", () => {
+  test("the macOS selection keeps affinity groups whole and runs everything for a name it cannot pass on", () => {
+    const root = mkdtempSync(join(tmpdir(), "t345-macos-groups-"));
+    try {
+      mkdirSync(join(root, "tests", "unit"), { recursive: true });
+      for (const name of ["builder.test.ts", "reader.test.ts", "other.test.ts", "mac.test.ts"]) {
+        writeFileSync(join(root, "tests", "unit", name), name === "mac.test.ts" ? "// macOS only\n" : "// portable\n");
+      }
+      writeFileSync(join(root, "tests", "unit-shard-weights.json"), JSON.stringify({
+        defaultSeconds: 10, weights: {}, affinityGroups: [["builder.test.ts", "reader.test.ts"]],
+      }));
+      // A change to the file that reads what the other builds brings its builder, in the same shard.
+      const shards = ["1/2", "2/2"].map((shard) => macosUnitSelection(root, ["reader.test.ts"], shard));
+      const together = shards.find((selection) => selection.mode === "selected" && selection.files.includes("reader.test.ts"));
+      expect(together).toEqual({ mode: "selected", files: ["builder.test.ts", "reader.test.ts"] });
+      expect(shards.flatMap((selection) => selection.mode === "selected" ? selection.files : []).sort())
+        .toEqual(["builder.test.ts", "mac.test.ts", "reader.test.ts"]);
+      // A selected name outside the test-file grammar could break the step's
+      // output lines, so the shard runs every file instead.
+      expect(macosUnitSelection(root, ["odd name.test.ts"], "1/2")).toEqual({ mode: "full" });
+      const unsafe = process.platform === "win32" ? "mac os.test.ts" : "mac\nmode=none\n.test.ts";
+      writeFileSync(join(root, "tests", "unit", unsafe), "// macOS only\n");
+      expect(macosUnitSelection(root, [], "1/2")).toEqual({ mode: "full" });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("a selected macOS shard runs its share as one whole shard, and an empty selection keeps the shard", () => {
     const step = steps(deterministic.jobs.test).find((step) => step.name === "Run deterministic tier")!;
     expect(step.env).toMatchObject({
       SELECTION_MODE: `\${{ steps.select.outputs.mode || '' }}`,
@@ -617,8 +647,9 @@ describe("t345 complete nightly coverage", () => {
       const exclude = "^(?!(?:unit-)?(?:t1|t2)(?:\\.test\\.ts)?$)";
       const sharded = ["--unit", "--shard", "3/12", "--file-retries", "1"];
       for (const [mode, selected, matrixExclude, expected] of [
-        ["selected", exclude, "", ["--unit", "--file-retries", "1", "--exclude", exclude]],
-        ["selected", exclude, "^t-slow$", ["--unit", "--file-retries", "1", "--exclude", `(?:^t-slow$)|${exclude}`]],
+        // One whole shard keeps the shard rules, such as required compiled coverage.
+        ["selected", exclude, "", ["--unit", "--shard", "1/1", "--file-retries", "1", "--exclude", exclude]],
+        ["selected", exclude, "^t-slow$", ["--unit", "--shard", "1/1", "--file-retries", "1", "--exclude", `(?:^t-slow$)|${exclude}`]],
         ["selected", "", "", sharded],
         ["full", "", "", sharded],
         ["", "", "", sharded],

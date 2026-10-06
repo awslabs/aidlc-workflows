@@ -10,7 +10,7 @@
 // prints GitHub step outputs: `mode=full` (run the shard as usual), `mode=none`
 // (this shard has no selected file), or `mode=selected` with `exclude=<regex>`
 // (leave out every file but this shard's share of the selected files). An
-// exclude, unlike a filter, keeps the rest an ordinary tier, so a file whose
+// exclude, unlike a filter, keeps the rest an ordinary shard, so a file whose
 // cases all skip on macOS stays SKIP as it does in the full shard.
 
 import { spawnSync } from "node:child_process";
@@ -20,6 +20,8 @@ import { assignWeightedShards, parseShardSpec, type ShardConfig } from "../tests
 
 const REPO_ROOT = join(import.meta.dir, "..");
 const MACOS_NAMED = /darwin|macos/i;
+// The test-file names the selection passes on; any other name runs the full shard.
+const SAFE_NAME = /^[A-Za-z0-9._-]+\.test\.ts$/;
 
 export type MacosUnitSelection = { mode: "full" } | { mode: "none" } | { mode: "selected"; files: string[] };
 
@@ -33,11 +35,11 @@ export function macosNamedUnitFiles(unitDir: string): string[] {
 
 /** The unit test files the change touches, or null when git cannot compare it with its base. */
 export function changedUnitFiles(repoRoot: string, base: string): string[] | null {
-  const diff = spawnSync("git", ["-C", repoRoot, "diff", "--name-only", base, "HEAD", "--", "tests/unit"], {
+  const diff = spawnSync("git", ["-C", repoRoot, "diff", "-z", "--name-only", base, "HEAD", "--", "tests/unit"], {
     encoding: "utf8",
   });
   if (diff.status !== 0) return null;
-  return diff.stdout.split("\n").map((line) => line.trim())
+  return diff.stdout.split("\0")
     .filter((path) => /^tests\/unit\/[^/]+\.test\.ts$/.test(path) && existsSync(join(repoRoot, path)))
     .map((path) => basename(path));
 }
@@ -46,12 +48,18 @@ export function changedUnitFiles(repoRoot: string, base: string): string[] | nul
 export function macosUnitSelection(repoRoot: string, changed: string[] | null, shard: string): MacosUnitSelection {
   const spec = parseShardSpec(shard);
   if (changed === null) return { mode: "full" };
-  const selected = [...new Set([...macosNamedUnitFiles(join(repoRoot, "tests", "unit")), ...changed])].sort();
+  const full = JSON.parse(readFileSync(join(repoRoot, "tests", "unit-shard-weights.json"), "utf8")) as ShardConfig;
+  const keep = new Set([...macosNamedUnitFiles(join(repoRoot, "tests", "unit")), ...changed]);
+  if ([...keep].some((file) => !SAFE_NAME.test(file))) return { mode: "full" };
+  // An affinity group runs whole, as in a full shard: a test that reads what
+  // another builds keeps its builder.
+  for (const group of full.affinityGroups) {
+    if (group.some((file) => keep.has(file))) for (const file of group) keep.add(file);
+  }
+  const selected = [...keep].sort();
   if (selected.length === 0) return { mode: "none" };
   // Spread the selected files over the same shards by their weights, so no
   // macOS job carries most of them.
-  const full = JSON.parse(readFileSync(join(repoRoot, "tests", "unit-shard-weights.json"), "utf8")) as ShardConfig;
-  const keep = new Set(selected);
   const config: ShardConfig = {
     defaultSeconds: full.defaultSeconds,
     weights: Object.fromEntries(Object.entries(full.weights).filter(([file]) => keep.has(file))),
