@@ -278,6 +278,12 @@ tool/hook. No blind `sed`. Truthful harness-specific literals in `core/` (the
 workspace-detection) carry no token and pass through unchanged; the core-hygiene
 and native-projection tests guard the boundary.
 
+One more projection keeps each tree to its own tool. The construction, topology,
+reviewer and swarm protocol modules each end with one `### <tool>` binding
+subsection per harness, and `scripts/harness-bindings.ts` ships a tree only its
+own. To port: add your tool's subsection to each of those runs and its heading
+to `BINDING_HEADINGS`. Until you do, your tree ships every tool's subsection.
+
 ## Step 5 — tests + the gate
 
 - A package-determinism test (`t145`) runs `package.ts --check`; it covers both

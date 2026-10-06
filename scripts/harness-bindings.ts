@@ -46,13 +46,13 @@ function headingsOutsideFences(lines: string[]): Heading[] {
 
 /**
  * The module as `harness` ships it: every binding run cut to that tool's own
- * subsection. A module with no tool headings is returned unchanged.
+ * subsection. A module with no tool headings is returned unchanged, and so is
+ * every module for a harness with no heading here yet (a new port keeps all
+ * seven subsections until it adds its own).
  */
 export function keepOwnHarnessBindings(content: string, harness: string, file: string): string {
   const own = BINDING_HEADINGS[harness];
-  if (own === undefined) {
-    throw new Error(`harness bindings: ${file}: no binding heading is known for harness "${harness}".`);
-  }
+  if (own === undefined) return content;
   const lines = content.split("\n");
   // A run that reaches the end of the file stops before the empty piece the
   // final newline leaves, so the module keeps its trailing newline, CRLF or LF.

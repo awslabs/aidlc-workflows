@@ -166,6 +166,8 @@ describe("t-own-harness-bindings", () => {
       .toThrow("missing GitHub Copilot");
     expect(() => keepOwnHarnessBindings("### Cursor\n\nalone\n\n### Next\n", "cursor", "lone.md"))
       .toThrow("a binding run must name each tool once");
-    expect(() => keepOwnHarnessBindings("text\n", "vim", "x.md")).toThrow('harness "vim"');
+    // A harness being ported, with no heading registered yet, keeps every subsection.
+    const full = `## Bindings\n\n${TOOLS.map((tool) => `### ${tool}\n\n${tool} body.\n`).join("\n")}`;
+    expect(keepOwnHarnessBindings(full, "foo", "port.md")).toBe(full);
   });
 });
