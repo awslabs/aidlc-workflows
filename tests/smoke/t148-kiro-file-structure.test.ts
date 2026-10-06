@@ -834,6 +834,38 @@ describe("t148 dist/kiro file structure", () => {
     }
   });
 
+  type KiroRule = { capability: string; effect: string; match?: string[]; exclude?: string[] };
+  // Every built Kiro agent that carries permissions.rules, plugins included.
+  function builtKiroAgentRules(): { path: string; rules: KiroRule[] }[] {
+    const agentDirs: string[] = [];
+    for (const tree of ["dist", "dist-release"]) {
+      const root = join(REPO_ROOT, tree);
+      for (const entry of readdirSync(root)) {
+        if (entry === "plugins") {
+          for (const plugin of readdirSync(join(root, entry))) {
+            for (const harness of readdirSync(join(root, entry, plugin))) agentDirs.push(join(root, entry, plugin, harness, ".kiro", "agents"));
+          }
+        } else {
+          agentDirs.push(join(root, entry, ".kiro", "agents"));
+        }
+      }
+    }
+    const agents: { path: string; rules: KiroRule[] }[] = [];
+    for (const dir of agentDirs.filter((candidate) => existsSync(candidate))) {
+      for (const name of readdirSync(dir)) {
+        const path = join(dir, name);
+        const definition = name.endsWith(".md")
+          ? Bun.YAML.parse(frontmatter(path)) as { permissions?: { rules?: unknown } } | null
+          : name.endsWith(".json")
+          ? JSON.parse(readFileSync(path, "utf-8")) as { permissions?: { rules?: unknown } }
+          : null;
+        const rules = definition?.permissions?.rules;
+        if (Array.isArray(rules)) agents.push({ path, rules: rules as KiroRule[] });
+      }
+    }
+    return agents;
+  }
+
   // Kiro (IDE 1.1 and 1.2, and the v3 engine Kiro CLI shares with it) compiles
   // an agent's permissions.rules into ONE Cedar policy set: each pattern becomes
   // `resource.path like "<pattern>"`, with `**` folded to `*`, every `\` doubled
@@ -860,46 +892,23 @@ describe("t148 dist/kiro file structure", () => {
       }
       return null;
     };
-    const agentDirs: string[] = [];
-    for (const tree of ["dist", "dist-release"]) {
-      const root = join(REPO_ROOT, tree);
-      for (const entry of readdirSync(root)) {
-        if (entry === "plugins") {
-          for (const plugin of readdirSync(join(root, entry))) {
-            for (const harness of readdirSync(join(root, entry, plugin))) agentDirs.push(join(root, entry, plugin, harness, ".kiro", "agents"));
-          }
-        } else {
-          agentDirs.push(join(root, entry, ".kiro", "agents"));
-        }
-      }
-    }
     let checked = 0;
-    for (const dir of agentDirs.filter((candidate) => existsSync(candidate))) {
-      for (const name of readdirSync(dir)) {
-        const path = join(dir, name);
-        const definition = name.endsWith(".md")
-          ? Bun.YAML.parse(frontmatter(path)) as { permissions?: { rules?: unknown } } | null
-          : name.endsWith(".json")
-          ? JSON.parse(readFileSync(path, "utf-8")) as { permissions?: { rules?: unknown } }
-          : null;
-        const rules = definition?.permissions?.rules;
-        if (!Array.isArray(rules)) continue;
-        checked++;
-        for (const rule of rules as { capability: string; effect: string; match?: string[]; exclude?: string[] }[]) {
-          for (const pattern of [...rule.match ?? [], ...rule.exclude ?? []]) {
-            const literals = [cedarLiteral(pattern)];
-            if (pattern.endsWith(" *") && !/[*?]/.test(pattern.slice(0, -2))) {
-              literals.push(pattern.slice(0, -2).replace(/\\/g, "\\\\").replace(/"/g, '\\"'));
-            }
-            for (const literal of literals) {
-              expect(cedarRejects(literal), `${path}: ${rule.effect} ${JSON.stringify(pattern)}`).toBeNull();
-            }
+    for (const { path, rules } of builtKiroAgentRules()) {
+      checked++;
+      for (const rule of rules) {
+        for (const pattern of [...rule.match ?? [], ...rule.exclude ?? []]) {
+          const literals = [cedarLiteral(pattern)];
+          if (pattern.endsWith(" *") && !/[*?]/.test(pattern.slice(0, -2))) {
+            literals.push(pattern.slice(0, -2).replace(/\\/g, "\\\\").replace(/"/g, '\\"'));
           }
-          // Never a shell allow for every command.
-          if (rule.capability === "shell" && rule.effect === "allow") {
-            expect(rule.match?.length ?? 0, `${path}: shell allow with no match`).toBeGreaterThan(0);
-            expect(rule.match, `${path}: shell allow`).not.toContain("*");
+          for (const literal of literals) {
+            expect(cedarRejects(literal), `${path}: ${rule.effect} ${JSON.stringify(pattern)}`).toBeNull();
           }
+        }
+        // Never a shell allow for every command.
+        if (rule.capability === "shell" && rule.effect === "allow") {
+          expect(rule.match?.length ?? 0, `${path}: shell allow with no match`).toBeGreaterThan(0);
+          expect(rule.match, `${path}: shell allow`).not.toContain("*");
         }
       }
     }
@@ -918,6 +927,34 @@ describe("t148 dist/kiro file structure", () => {
         expect(kiroShellEffect(fm, command), `${tree} conductor: ${JSON.stringify(command)}`).not.toBe("allow");
       }
     }
+  });
+
+  // Kiro compiles each match pattern of a rule into its own policy whose
+  // conditions are the match, one per exclude, and one more on an ask, all
+  // joined by &&. Kiro's bundled cedar-wasm runs out of memory evaluating a
+  // long chain: on Kiro IDE 1.2.4 a policy of 306 conditions traps ("memory
+  // access out of bounds") on a command it matches, while 305 evaluate. Kiro
+  // then treats that agent's shell policy as deny-all, and a trap can leave the
+  // chat's whole policy broken: every later shell command, the conductor's
+  // plain engine commands included, asks with "Kiro could not parse this
+  // command" until a new chat. A persona deny that held all 305 of its excludes
+  // on one rule did that on every Practices Discovery dispatch (2026-10-06), so
+  // each compiled policy stays at half the measured limit.
+  test("no compiled Kiro policy holds more conditions than Kiro's Cedar evaluator survives", () => {
+    const MAX_CONDITIONS = 152;
+    const conditionsOf = (rule: KiroRule): number => {
+      const matchless = !rule.match || rule.match.length === 0 || (rule.match.length === 1 && rule.match[0] === "*");
+      return (matchless ? 0 : 1) + (rule.exclude?.length ?? 0) + (rule.effect === "ask" ? 1 : 0);
+    };
+    let checked = 0;
+    for (const { path, rules } of builtKiroAgentRules()) {
+      checked++;
+      for (const rule of rules) {
+        expect(conditionsOf(rule), `${path}: ${rule.capability} ${rule.effect} ${JSON.stringify(rule.match ?? [])}`)
+          .toBeLessThanOrEqual(MAX_CONDITIONS);
+      }
+    }
+    expect(checked).toBeGreaterThanOrEqual(30);
   });
 
   test("Kiro IDE first-run guidance sends the user to the aidlc agent in the agent picker", () => {
