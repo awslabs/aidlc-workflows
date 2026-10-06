@@ -5505,28 +5505,83 @@ describe("t218 enforce-approval-gate refusal names doctor's trust step", () => {
       });
       expect(r.code, r.stderr).toBe(2);
       expect(r.stderr).toContain("An approval is waiting for the person's answer, so nothing runs until they give it: end the turn.");
-      expect(r.stderr).toContain(
-        "If they already answered, that answer was not recorded, so do not ask them to answer again: tell them that, and this: ",
-      );
-      // The same step doctor names, from the same shipped text, so the two
-      // never send the person different ways.
+      expect(r.stderr).toContain("If they already answered, that answer was not recorded.");
+      // The same Kiro IDE step doctor names, from the same shipped text, so the
+      // two never send the person different ways; inside Kiro IDE (its hook
+      // processes carry VSCODE_IPC_HOOK/VSCODE_PID) the person gets that step
+      // alone, in fixed words the agent relays without explaining why.
       const recovery = (JSON.parse(readFileSync(join(KIRO_IDE_TREE, "tools", "data", "harness.json"), "utf-8")) as {
         hookActivation: { recovery: string };
       }).hookActivation.recovery;
       expect(recovery).toContain("choose Trust Folder & Continue when Kiro asks whether you trust it");
-      expect(r.stderr).toContain(`${recovery} \`/aidlc --doctor\` shows anything else to fix.`);
+      const ideStep = recovery.slice(0, recovery.indexOf(" In Kiro CLI,"));
+      expect(ideStep.startsWith("In Kiro IDE, trust this folder:")).toBe(true);
+      expect(r.stderr).toContain(
+        `Tell them exactly this, with nothing about why: "Your answer was not recorded, so you don't need to answer again. ${ideStep}"`,
+      );
       // Trust takes effect after a window reload (measured), so the step names
       // it; another agent in the picker does not stop the hooks, so it names no
       // picker.
       expect(r.stderr).toContain("Then run Developer: Reload Window from the Command Palette");
       expect(r.stderr).not.toContain("agent picker");
-      // Its own words say what to do, never how the hooks work, and never ask
-      // for the answer again.
-      expect(r.stderr.replace(recovery, "")).not.toContain("hooks");
+      // Only the Kiro IDE step reaches a Kiro IDE person: no other tool's
+      // line, and nothing about how AI-DLC works.
+      const words = r.stderr.slice(r.stderr.indexOf('"Your answer'), r.stderr.lastIndexOf('"') + 1);
+      for (const machinery of ["Kiro CLI", "kiro-cli", "ACP", "hook", "human turn", "recorded turn"]) {
+        expect(words).not.toContain(machinery);
+      }
+      expect(r.stderr).not.toContain("Kiro CLI");
+      expect(r.stderr).not.toContain("ACP");
+      expect(r.stderr).not.toContain("hooks");
       expect(r.stderr).not.toContain("reply again");
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+
+  // The same refusal outside Kiro IDE (Kiro CLI on this tree, or an ACP
+  // client: no VSCODE_IPC_HOOK/VSCODE_PID) names the other tools' lines, and
+  // leaves the Kiro IDE step out.
+  test("outside Kiro IDE the refusal gives the Kiro CLI and ACP lines, never the Kiro IDE step", () => {
+    const dir = scratchProject(true);
+    try {
+      const statePath = seededStateFile(dir);
+      writeFileSync(
+        statePath,
+        readFileSync(statePath, "utf-8").replace("- [-] requirements-analysis", "- [?] requirements-analysis"),
+      );
+      appendStageStarted(dir, "requirements-analysis", "2026-01-01T00:00:00Z");
+      const r = runIde(dir, "enforce-approval-gate", null, {
+        AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "0",
+        VSCODE_IPC_HOOK: undefined,
+        VSCODE_PID: undefined,
+      });
+      expect(r.code, r.stderr).toBe(2);
+      expect(r.stderr).toContain(
+          'Tell them exactly this, with nothing about why, then only the line below for the tool they are in: "Your answer was not recorded, so you don\'t need to answer again."',
+      );
+      expect(r.stderr).toContain("In Kiro CLI, quit Kiro and start `kiro-cli` again in this folder.");
+      expect(r.stderr).toContain(
+        "If you drive Kiro from an ACP client, the Kiro IDE guide names what that client must send.",
+      );
+      expect(r.stderr).not.toContain("In Kiro IDE, trust this folder");
+      expect(r.stderr).not.toContain("hooks");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  // The ACP sentence in the shared step names what to do, not AI-DLC's hooks.
+  test("the shared Kiro IDE step's ACP sentence says what to do, not how AI-DLC works", () => {
+    const activation = (JSON.parse(readFileSync(join(KIRO_IDE_TREE, "tools", "data", "harness.json"), "utf-8")) as {
+      hookActivation: { recovery: string };
+    }).hookActivation;
+    expect(activation.recovery).toContain(
+      "If you drive Kiro from an ACP client, the Kiro IDE guide names what that client must send.",
+    );
+    expect(activation.recovery).not.toContain("hooks");
+    // The adapter takes the Kiro IDE step as everything before this marker.
+    expect(activation.recovery.split(" In Kiro CLI,").length).toBe(2);
   });
 
   // Measured on Kiro IDE: trusting the folder from the Restricted Mode banner
@@ -5540,6 +5595,8 @@ describe("t218 enforce-approval-gate refusal names doctor's trust step", () => {
       "do not suggest reloading",
       "on the Restricted Mode banner), then say carry on",
       "then **Trust**. 2. Say carry on",
+      "says what it must send for AI-DLC's hooks to run",
+      "tell them that, and this: ",
     ];
     const roots = [
       KIRO_IDE_TREE,

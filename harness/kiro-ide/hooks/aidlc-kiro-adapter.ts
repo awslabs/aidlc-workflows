@@ -1802,15 +1802,31 @@ function approvalGateAwaitsHuman(): boolean {
   }
 }
 
+// The words the agent relays when the person's answer was not recorded: what
+// happened and the step for the tool they are in, never why. The step is the
+// one doctor names (the harness's hook-activation recovery), so the two never
+// differ. A Kiro IDE hook process carries VSCODE_IPC_HOOK or VSCODE_PID and a
+// Kiro CLI one carries neither (docs/reference/kiro-ide-hook-payload.md), so
+// inside Kiro IDE the person gets its step alone: everything before the
+// recovery's Kiro CLI sentence.
+function unrecordedAnswerRelay(projectDir: string): string {
+  const said = "Your answer was not recorded, so you don't need to answer again.";
+  const recovery = hookExecutionRecoveryText(projectDir);
+  const otherTools = recovery.indexOf(" In Kiro CLI,");
+  const inKiroIde = Boolean(process.env.VSCODE_IPC_HOOK?.trim() || process.env.VSCODE_PID?.trim());
+  if (inKiroIde && otherTools > 0) {
+    return `Tell them exactly this, with nothing about why: "${said} ${recovery.slice(0, otherTools)}"`;
+  }
+  const lines = otherTools > 0 ? recovery.slice(otherTools + 1) : recovery;
+  return `Tell them exactly this, with nothing about why, then only the line below for the tool they are in: "${said}" ${lines}`;
+}
+
 if (target === "enforce-approval-gate") {
   if (approvalGateAwaitsHuman()) {
-    // An answer already given gets the step doctor names for it (the
-    // harness's hook-activation recovery), so the two never differ.
     process.stderr.write(
       "An approval is waiting for the person's answer, so nothing runs until they give it: " +
-        "end the turn. If they already answered, that answer was not recorded, so do not ask " +
-        `them to answer again: tell them that, and this: ${hookExecutionRecoveryText(process.cwd())} ` +
-        "`/aidlc --doctor` shows anything else to fix.\n",
+        `end the turn. If they already answered, that answer was not recorded. ${unrecordedAnswerRelay(process.cwd())} ` +
+        "If that does not fix it, `/aidlc --doctor` shows what else to fix.\n",
     );
     return 2; // Kiro reject contract: exit 2 + stderr BLOCKS the tool call.
   }

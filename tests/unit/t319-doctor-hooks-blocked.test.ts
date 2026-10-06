@@ -228,8 +228,12 @@ describe("t319 doctor detects hooks blocked before their first heartbeat", () =>
     // Trust takes effect after the reload; the agent picker does not stop the hooks.
     expect(output(run)).not.toContain("agent picker");
     expect(output(run)).toContain("In Kiro CLI, quit Kiro and start `kiro-cli` again in this folder.");
-    // What an ACP client must send is in the Kiro IDE guide, not in this line.
-    expect(output(run)).toContain("If you use an ACP client, the Kiro IDE guide says what it must send");
+    // What an ACP client must send is in the Kiro IDE guide, not in this line,
+    // and the line says what to do, not how AI-DLC works.
+    expect(output(run)).toContain(
+      "If you drive Kiro from an ACP client, the Kiro IDE guide names what that client must send.",
+    );
+    expect(output(run)).not.toContain("for AI-DLC's hooks to run");
     expect(output(run)).not.toContain("clientCapabilities");
     expect(output(run)).not.toContain("AIDLC hooks have not run in this project yet");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);

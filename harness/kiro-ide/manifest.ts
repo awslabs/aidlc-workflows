@@ -160,14 +160,16 @@ const manifest: HarnessManifest = {
   // 1.1.14 from the Restricted Mode banner, and on 1.2.4 from both the banner
   // and Trust Folder & Continue), so every copy of the step names both.
   // Another agent in the picker did not stop the hooks. What an ACP client
-  // must send to run hooks is in the Kiro IDE guide.
+  // must send to run hooks is in the Kiro IDE guide. The approval refusal
+  // (hooks/aidlc-kiro-adapter.ts) gives a Kiro IDE person the text before
+  // " In Kiro CLI," alone, so that sentence keeps its place and spelling.
   hookActivation: {
     recovery:
       "In Kiro IDE, trust this folder: choose Trust Folder & Continue when Kiro asks whether you " +
       "trust it, or select Manage on the Restricted Mode banner, then Trust. Then run Developer: " +
       "Reload Window from the Command Palette (Ctrl+Shift+P, or Cmd+Shift+P on macOS), and say " +
-      "carry on. In Kiro CLI, quit Kiro and start `kiro-cli` again in this folder. If you use an " +
-      "ACP client, the Kiro IDE guide says what it must send for AI-DLC's hooks to run.",
+      "carry on. In Kiro CLI, quit Kiro and start `kiro-cli` again in this folder. If you drive " +
+      "Kiro from an ACP client, the Kiro IDE guide names what that client must send.",
     // Says what happened and asks for nothing again; it adds no step to the
     // refusal it joins.
     missedReply:
