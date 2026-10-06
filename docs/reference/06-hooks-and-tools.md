@@ -1819,10 +1819,11 @@ The `permissions.allow` array in `.claude/settings.json` pre-approves Claude Cod
 | Allow entry | AI-DLC Usage |
 |-------------|-------------|
 | `Edit(/**)` | Creating and changing artifacts and project files anywhere in the project, through `Edit` and `Write` (never the `audit/` shards, which the guards refuse) |
-| `Bash(bun .claude/tools/aidlc.ts engine *)`, one exact entry per read-only dispatcher command (`doctor`, `version`, `--doctor`, `status`, `config <section> --show --json`, `config <section> --help`) and per recordable switch for turning a check back on (`config flags --clear-bypass <switch> --yes`), and `Bash(bun .claude/tools/aidlc-<tool>.ts)` plus `Bash(bun .claude/tools/aidlc-<tool>.ts *)` per AI-DLC tool script | AI-DLC's own workflow commands (`Bash(aidlc engine *)` in the native release) |
+| `Bash(bun .claude/tools/aidlc.ts engine *)`, one exact entry per read-only dispatcher command (`doctor`, `version`, `--doctor`, `status`, `config <section> --show --json`, `config <section> --help`), and `Bash(bun .claude/tools/aidlc-<tool>.ts)` plus `Bash(bun .claude/tools/aidlc-<tool>.ts *)` per AI-DLC tool script | AI-DLC's own workflow commands (`Bash(aidlc engine *)` in the native release) |
 | `Bash(date -u *)` | Timestamps |
 | `Task` | Delegating to subagents for Reverse Engineering and Code Generation |
 | `WebSearch` | Market research, design reference lookups, compliance framework research |
+| `Bash(bun .claude/tools/aidlc.ts config flags --clear-bypass <switch> --yes)`, one exact entry per recordable switch | Turning a check back on, which only ever raises a check; turning one off still asks |
 
 Reading and searching inside the project (`Read`, `Glob`, `Grep`) needs no entry. Writes outside the project, and the project's own build and test commands, ask as Claude Code normally does. So do a `config` change and the commands that change the machine's AI-DLC install (`use`, `update`, `rollback`, `uninstall`, `system`), with the tool scripts behind them (`aidlc-doctor.ts`, `aidlc-init.ts`, `aidlc-lifecycle.ts`, `aidlc-machine-config.ts`): the packager lists the copy channel's entries from the same command and script lists the Cursor copy channel uses, and those are not on them.
 
