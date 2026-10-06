@@ -1783,7 +1783,9 @@ function narrateStageEntry(
 ): string {
   const stageName = node.name;
   if (isFirst) {
-    const plan = stateContent && getField(stateContent, PLAN_FIELD) ? "the plan you approved" : `the ${scope} plan`;
+    // Said again wherever the work is picked up, by someone who may not have
+    // approved it, so it names the plan, not who approved it.
+    const plan = stateContent && getField(stateContent, PLAN_FIELD) ? "the approved plan" : `the ${scope} plan`;
     return (
       `Starting ${plan} for this project. First step is ${stageName}, ` +
       `and I will stop for your review before anything is final.`

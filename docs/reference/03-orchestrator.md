@@ -423,8 +423,9 @@ typed with its scope never passed an ask, so its creation line also says how a
 pasted document was split (the `document_split` line); one typed straight to
 compose hears it with the composer's start line, before the plan is offered.
 The stages that read the document do not say it again. A plan composed
-for the piece of work is named "the plan you approved" in these lines, never by
-the scope it was built on. The engine
+for the piece of work is named "the plan you approved" in the creation line and
+"the approved plan" in the first stage's line, which a teammate picking the work
+up also hears, never by the scope it was built on. The engine
 keeps such lines for the chat (`aidlc/.aidlc-sessions/<session>.person-lines`)
 and puts them, in order and once, in front of the `narration` of the next
 directive the agent speaks from: an `ask`, `present-gate`, `parked`, `error`

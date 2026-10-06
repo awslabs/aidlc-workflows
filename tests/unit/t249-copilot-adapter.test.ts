@@ -4408,8 +4408,8 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     const third = { uuid: "00000000-0000-7000-8000-000000000003", slug: "third", status: "in-flight" };
     const recordOf = (entry: typeof other) => `${entry.slug}-${entry.uuid.replace(/-/g, "").slice(-16)}`;
     for (const [verb, target, printed, destination] of [
-      ["intent", "other", `Active intent -> ${recordOf(other)} (space: ${DEFAULT_SPACE})`, [DEFAULT_SPACE, other]],
-      ["space", "other-space", "Active space -> other-space", ["other-space", third]],
+      ["intent", "other", "Now working on `other`.", [DEFAULT_SPACE, other]],
+      ["space", "other-space", "Now working in space `other-space`.", ["other-space", third]],
     ] as const) {
       const dir = orchestrationProject();
       const session = `select-${verb}`;
@@ -4466,10 +4466,10 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
   test("40: selecting a record that has no registry row ends the turn at Stop, also when the row is added first", () => {
     const state = readFileSync(join(REPO_ROOT, "tests", "fixtures", "state-brownfield-feature.md"), "utf-8");
     for (const [verb, target, printed, space, record, repaired] of [
-      ["intent", "hand-made-work", `Active intent -> hand-made-work (space: ${DEFAULT_SPACE})`, DEFAULT_SPACE, "hand-made-work", false],
-      ["space", "other-space", "Active space -> other-space", "other-space", "migrated-work", false],
-      ["intent", "hand-made-work", `Active intent -> hand-made-work (space: ${DEFAULT_SPACE})`, DEFAULT_SPACE, "hand-made-work", true],
-      ["space", "other-space", "Active space -> other-space", "other-space", "migrated-work", true],
+      ["intent", "hand-made-work", "Now working on `hand-made-work`.", DEFAULT_SPACE, "hand-made-work", false],
+      ["space", "other-space", "Now working in space `other-space`.", "other-space", "migrated-work", false],
+      ["intent", "hand-made-work", "Now working on `hand-made-work`.", DEFAULT_SPACE, "hand-made-work", true],
+      ["space", "other-space", "Now working in space `other-space`.", "other-space", "migrated-work", true],
     ] as const) {
       const dir = orchestrationProject();
       const session = `select-unregistered-${verb}${repaired ? "-repaired" : ""}`;

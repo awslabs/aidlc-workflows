@@ -470,7 +470,7 @@ describe("t-journey-workspace (live SDK multi-repo·intent·space journey)", () 
           timeoutMs: operationBudget(VERB_DRIVE_MS),
           persistSession: true,
         });
-        assertTerminalWorkspaceTurn(switchTeam, `Active space -> ${TEAM_B_SLUG}`);
+        assertTerminalWorkspaceTurn(switchTeam, `Now working in space \`${TEAM_B_SLUG}\`.`);
         expect(activeSpace(root)).toBe(TEAM_B_SLUG); // the active-space cursor moved
         expect(workflowMarkdownSnapshot(recordADir)).toEqual(stateAndArtifactsA);
         expect(workflowMarkdownSnapshot(recordBDir)).toEqual(stateAndArtifactsB);
@@ -505,7 +505,7 @@ describe("t-journey-workspace (live SDK multi-repo·intent·space journey)", () 
           timeoutMs: operationBudget(VERB_DRIVE_MS),
           persistSession: true,
         });
-        assertTerminalWorkspaceTurn(switchDefault, "Active space -> default");
+        assertTerminalWorkspaceTurn(switchDefault, "Now working in space `default`.");
         expect(activeSpace(root)).toBe("default");
         expect(workflowMarkdownSnapshot(recordADir)).toEqual(stateAndArtifactsA);
         expect(workflowMarkdownSnapshot(recordBDir)).toEqual(stateAndArtifactsB);

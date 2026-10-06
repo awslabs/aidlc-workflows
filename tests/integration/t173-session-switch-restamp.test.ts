@@ -142,7 +142,7 @@ describe("t173 session switch re-stamp (mechanism cli — spawned hook + real in
     //    handleIntent reads marker (S1) and re-stamps S1 → export-bug.
     const sw = util(proj, b.slug);
     expect(sw.exitCode).toBe(0);
-    expect(sw.stdout).toContain(`Active intent -> ${b.dirName}`);
+    expect(sw.stdout).toContain(`Now working on \`${b.slug}\`.`);
 
     // 3) RESUME S1: stamp S1 (export-bug) == live cursor (export-bug) → NO offer.
     //    Without the fix the stamp would still read auth-service → false nag.
@@ -170,7 +170,7 @@ describe("t173 session switch re-stamp (mechanism cli — spawned hook + real in
     //    on S2's record (S2 → export-bug) and moves the cursor — NOT on S1's.
     const sw = util(proj, b.slug);
     expect(sw.exitCode).toBe(0);
-    expect(sw.stdout).toContain(`Active intent -> ${b.dirName}`);
+    expect(sw.stdout).toContain(`Now working on \`${b.slug}\`.`);
 
     // 4) RESUME S1: its stamp is still auth-service; live cursor is export-bug →
     //    a GENUINE drift S1 never caused → OFFER fires, naming the way back to A.
@@ -192,13 +192,13 @@ describe("t173 session switch re-stamp (mechanism cli — spawned hook + real in
     // Selecting the intent S1 already works crosses no boundary.
     const self = util(proj, a.slug);
     expect(self.exitCode).toBe(0);
-    expect(self.stdout).toContain(`Active intent -> ${a.dirName}`);
+    expect(self.stdout).toContain(`Now working on \`${a.slug}\`.`);
     expect(readSessionIntentHandoff(proj, "S1")).toBeNull();
 
     // Another intent: the receipt runs from the prior stamp to the destination.
     const sw = util(proj, b.slug);
     expect(sw.exitCode).toBe(0);
-    expect(sw.stdout).toContain(`Active intent -> ${b.dirName}`);
+    expect(sw.stdout).toContain(`Now working on \`${b.slug}\`.`);
     expect(readSessionIntentHandoff(proj, "S1")).toMatchObject({
       fromIntentUuid: a.uuid,
       toIntentUuid: b.uuid,
@@ -208,7 +208,7 @@ describe("t173 session switch re-stamp (mechanism cli — spawned hook + real in
     // selects, and still runs from where this turn started.
     const space = util(proj, "payments", "space");
     expect(space.exitCode).toBe(0);
-    expect(space.stdout).toContain("Active space -> payments");
+    expect(space.stdout).toContain("Now working in space `payments`.");
     expect(readSessionIntentHandoff(proj, "S1")).toMatchObject({
       fromIntentUuid: a.uuid,
       toIntentUuid: c.uuid,
