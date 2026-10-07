@@ -33,6 +33,7 @@ import {
   readFileSync,
   readdirSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { hostname, tmpdir } from "node:os";
@@ -6724,13 +6725,13 @@ describe("t218 a bare next on a turn whose terminal command already ran is refus
     expect(r.code, r.stderr).toBe(0);
   }
 
-  function shell(dir: string, command: string, sessionId?: string, tool = "execute_bash") {
+  function shell(dir: string, command: string, sessionId?: string, tool = "execute_bash", toolCwd?: string) {
     return runIdeStdin(dir, "terminal-command-guard", JSON.stringify({
       ...(sessionId === undefined ? {} : { session_id: sessionId }),
       hook_event_name: "PreToolUse",
       cwd: dir,
       tool_name: tool,
-      tool_input: { command },
+      tool_input: { command, ...(toolCwd === undefined ? {} : { cwd: toolCwd }) },
     }));
   }
 
@@ -6751,6 +6752,12 @@ describe("t218 a bare next on a turn whose terminal command already ran is refus
     ["execute_pwsh", "bun.exe .kiro\\tools\\aidlc.ts engine orchestrate next"],
     ["execute_pwsh", "& \"C:\\Users\\dev\\AppData\\Local\\aidlc\\bin\\aidlc.exe\" engine orchestrate next"],
     ["execute_pwsh", "&\"C:\\Users\\dev\\AppData\\Local\\aidlc\\bin\\aidlc.exe\" engine orchestrate next 2>&1"],
+    // A command before or after it does not hide it.
+    ["execute_bash", "aidlc engine orchestrate next; echo done"],
+    ["execute_bash", "echo start && aidlc next"],
+    ["execute_bash", "aidlc next | cat"],
+    ["execute_bash", "aidlc next || true"],
+    ["execute_pwsh", "aidlc.cmd engine orchestrate next; Write-Output done"],
   ];
 
   test("the literal dispatcher spellings of a bare next are refused, in one line", () => {
@@ -6759,9 +6766,15 @@ describe("t218 a bare next on a turn whose terminal command already ran is refus
       submit(dir, "sess_bare_a", "/aidlc --help");
       // The prelude and the stream merge the conductor's own commands carry,
       // and this project named; quoted, so a Windows path reads as one word.
+      // A link to this project (a junction on Windows) is this project.
+      const link = `${dir}-link`;
+      symlinkSync(dir, link, process.platform === "win32" ? "junction" : "dir");
       const own: Array<[string, string]> = [
         ["execute_bash", `cd '${dir}' && aidlc engine orchestrate next 2>&1`],
         ["execute_bash", `aidlc --project-dir '${dir}' engine orchestrate next`],
+        ["execute_bash", `cd '${link}' && aidlc next`],
+        ["execute_bash", `aidlc --project-dir '${link}' next`],
+        ["execute_bash", `cd /elsewhere/project; cd '${dir}' && aidlc next`],
       ];
       for (const [tool, command] of [...BARE_SPELLINGS, ...own]) {
         // Twice: a refusal does not start a turn of its own.
@@ -6772,7 +6785,13 @@ describe("t218 a bare next on a turn whose terminal command already ran is refus
           expect(r.stderr, command).toBe(`AIDLC already ran \`/aidlc --help\` ${SAME_TURN}\n`);
         }
       }
+      // The commands run from the call's own cwd: from a subdirectory, `cd ..`
+      // is this project.
+      mkdirSync(join(dir, "packages"), { recursive: true });
+      const fromSub = shell(dir, "cd .. && aidlc next", "sess_bare_a", "execute_bash", join(dir, "packages"));
+      expect(fromSub.code, fromSub.stderr).toBe(2);
     } finally {
+      rmSync(`${dir}-link`, { force: true });
       rmSync(dir, { recursive: true, force: true });
     }
   });
@@ -6788,7 +6807,17 @@ describe("t218 a bare next on a turn whose terminal command already ran is refus
         "aidlc engine orchestrate next fix the login bug",
         "bun .kiro/tools/aidlc.ts engine orchestrate next compose 'drop market research'",
         "echo bun .kiro/tools/aidlc.ts engine orchestrate next",
-        "aidlc engine orchestrate next; echo done",
+        "echo 'aidlc next; echo done'",
+        "aidlc engine orchestrate next --stage requirements-analysis; echo done",
+        "cd \"$WORK\" && aidlc next",
+        // A cd that may fail, or runs in a pipeline, leaves the directory unknown.
+        `cd '${dir}' || aidlc next`,
+        "cd /elsewhere/project; aidlc next",
+        // Another project named by a variable an earlier command sets.
+        "export AIDLC_PROJECT_DIR=/elsewhere/project; aidlc next",
+        // Lines that are not all commands, and a conditional directory change.
+        "cat > notes.md <<'EOF'\nRun:\naidlc next\nEOF",
+        "if cd /elsewhere/project; then\naidlc next\nfi",
         "aidlc engine orchestrate report",
         "aidlc --project-dir /elsewhere/project engine orchestrate next",
         "cd /elsewhere/project && aidlc engine orchestrate next",
@@ -6832,6 +6861,31 @@ describe("t218 a bare next on a turn whose terminal command already ran is refus
       }
       const legacy = shell(dir, "bun .kiro/tools/aidlc-orchestrate.ts next", "sess_bare_a");
       expect(legacy.code, legacy.stderr).toBe(0);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  // The person's next message after the count was lost, or left unreadable, is
+  // a new turn: its own `next` runs, whatever latch the earlier turn left.
+  test("a count lost or unreadable before the next message does not hold that message's next", () => {
+    const dir = scratchProject(true);
+    try {
+      const sessionDir = join(
+        dir, "aidlc", ".aidlc-sessions", "kiro-terminal",
+        createHash("sha256").update("sess_bare_a").digest("hex"),
+      );
+      for (const leftover of [null, "x\n", "0x\n"]) {
+        rmSync(sessionDir, { recursive: true, force: true });
+        submit(dir, "sess_bare_a", "/aidlc --help");
+        expect(readFileSync(join(sessionDir, "turn"), "utf-8").trim()).toBe("1");
+        if (leftover === null) rmSync(join(sessionDir, "turn"), { force: true });
+        else writeFileSync(join(sessionDir, "turn"), leftover, "utf-8");
+        submit(dir, "sess_bare_a", "carry on with the work");
+        const r = shell(dir, "aidlc next", "sess_bare_a");
+        expect(r.code, `${JSON.stringify(leftover)}\n${r.stderr}`).toBe(0);
+        expect(r.stderr).toBe("");
+      }
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

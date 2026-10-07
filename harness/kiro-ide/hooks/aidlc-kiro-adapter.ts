@@ -120,6 +120,8 @@ import {
   isSwitchableGuardFence,
   kiroIdeLegacyPlanApprovalSessionId,
   parseLiteralShellInvocation,
+  sameDirectory,
+  shellCommandSegments,
   markKiroIdeLegacyPlanApprovalHost,
   clearPlanApprovalLegacyWindow,
   recordHookDrop,
@@ -1395,38 +1397,86 @@ function toolTerminalInvocation(command: string): TerminalInvocation | null {
   return { raw, args: splitKiroCommandArgs(raw) };
 }
 
-// Whether one shell call is a bare engine `next` for this project through the
-// dispatcher: the Bun `.kiro/tools/aidlc.ts` (through `bun`, `bun run` or
-// `bun.exe`) or the native `aidlc`, `aidlc.cmd` or `aidlc.exe`, by name or
-// path, whose route the dispatcher itself resolves (`resolveAction`) to
-// orchestrate `next` with no argument but `--aidlc-attempt-id`, an output flag
-// (`--json`, `--quiet`, ...), or a `--project-dir` naming this project. A POSIX
-// shell call is read by the literal shell reader, which also takes a leading
-// `cd <dir> &&` and a trailing `2>&1`; a PowerShell call may start with `&`,
-// end with `2>&1`, and use `\`. Any other chain, an `echo`, another command,
-// or a call aimed at another project (by `--project-dir`, a `cd` prelude, or
-// an assignment such as `AIDLC_PROJECT_DIR=`) is not one. The direct
-// `aidlc-orchestrate.ts` spelling is the earlier refusal's.
-function isBareDispatcherNext(command: string, powershell: boolean): boolean {
-  let words: string[];
-  // The directory the dispatcher would take the project from, when nothing
-  // names one: a `cd` prelude, else this project.
-  let base = projectDir;
-  if (powershell) {
-    const text = command.trim().replace(/^&\s*/, "").replace(/\s+2>&1$/, "");
-    if (/[;&|<>`\r\n]|\$\(/.test(text)) return false;
-    words = splitKiroCommandArgs(text);
-  } else {
-    const literal = parseLiteralShellInvocation(command);
-    if (literal === null) return false;
-    words = literal.argv;
-    if (literal.directory !== null) base = resolve(projectDir, literal.directory);
+// Whether one shell call runs a bare engine `next` for this project through
+// the dispatcher in any of its commands. The call is split at its unquoted
+// `;`, `|`, `&&`, `||` and line breaks (`shellCommandSegments`), so a suffix such
+// as `; echo done` does not hide the `next`, and a separator inside quotes is
+// text. The commands run from the call's own `cwd`. A literal `cd`, `chdir`,
+// `pushd` (or PowerShell's `Set-Location`, `sl`, `Push-Location`) followed by
+// `&&` moves that directory for the later commands; one that cannot be read,
+// or that another separator follows (it may fail, or run in a pipeline), leaves
+// it unknown, and nothing after it is judged. So does a command that sets a
+// project variable (`AIDLC_PROJECT_DIR`, `CLAUDE_PROJECT_DIR`,
+// `KIRO_PROJECT_DIR`). A call with a heredoc or a shell keyword (`if`, `for`,
+// `while`, `case`, a function) is not judged at all: its lines are not all
+// commands, and its directory changes are conditional.
+function runsBareDispatcherNext(command: string, powershell: boolean, cwd: string): boolean {
+  if (/<<|<<<|@['"]/.test(command)) return false;
+  let base: string | null = cwd;
+  let offset = 0;
+  for (const segment of shellCommandSegments(command)) {
+    const at = command.indexOf(segment, offset);
+    offset = (at < 0 ? offset : at) + segment.length;
+    const followedByAnd = command.slice(offset).trimStart().startsWith("&&");
+    if (/^\s*(?:if|then|else|elif|fi|for|while|until|do|done|case|esac|function|select|\{|\})(?:\s|$)/i.test(segment)) {
+      return false;
+    }
+    if (/(?:^|[\s;$:])(?:AIDLC|CLAUDE|KIRO)_PROJECT_DIR\s*=/i.test(segment)) {
+      base = null;
+      continue;
+    }
+    const words = segmentWords(segment, powershell);
+    const first = (words?.[0] ?? "").toLowerCase();
+    const changesDirectory = /^(?:cd|chdir|pushd|popd|set-location|sl|push-location|pop-location)$/.test(first) ||
+      (words === null && /(?:^|[\s(])(?:cd|chdir|pushd|popd|set-location|sl|push-location|pop-location)\b/i.test(segment));
+    if (changesDirectory) {
+      // The directory named, past `--` and PowerShell's -Path/-LiteralPath.
+      const operands = (words ?? []).slice(1).filter((word) =>
+        word !== "--" && !/^-(?:path|literalpath)$/i.test(word)
+      );
+      const target = words !== null && followedByAnd && first !== "popd" && first !== "pop-location" &&
+          operands.length === 1 && !/^[-~+]/.test(operands[0]) && !operands[0].includes("$")
+        ? operands[0]
+        : null;
+      // An absolute directory is known even after an unknown one.
+      base = target !== null && (base !== null || isAbsolute(target)) ? resolve(base ?? target, target) : null;
+      continue;
+    }
+    if (base === null || words === null) continue;
+    if (isBareDispatcherNext(words, base)) return true;
   }
+  return false;
+}
+
+// One command's words: the literal shell reader for a POSIX shell, which
+// refuses expansions and redirections other than a trailing `2>&1`; for
+// PowerShell a leading `&` and a trailing `2>&1` are taken off and `\` paths
+// kept. Null when the command cannot be read as literal words.
+function segmentWords(segment: string, powershell: boolean): string[] | null {
+  if (segment.trim() === "") return null;
+  if (powershell) {
+    const text = segment.trim().replace(/^&\s*/, "").replace(/\s+2>&1$/, "");
+    if (/[;&|<>`\r\n()]|\$\(/.test(text)) return null;
+    return splitKiroCommandArgs(text);
+  }
+  return parseLiteralShellInvocation(segment)?.argv ?? null;
+}
+
+// Whether one command is the dispatcher's bare orchestrate `next` for this
+// project: the Bun `.kiro/tools/aidlc.ts` (through `bun`, `bun run` or
+// `bun.exe`) or the native `aidlc`, `aidlc.cmd` or `aidlc.exe`, by name or path,
+// also after `command` or `exec`, whose route the dispatcher itself resolves
+// (`resolveAction`) to `next` with no argument but `--aidlc-attempt-id` or an
+// output flag (`--json`, `--quiet`, ...). The project is the one `base` (where
+// the command runs) or a `--project-dir` names, compared with sameDirectory, so
+// a symlink or a Windows case spelling of this project is this project. A
+// leading assignment (`AIDLC_PROJECT_DIR=...`) can name another project, so a
+// command that sets one is not judged. The direct `aidlc-orchestrate.ts`
+// spelling is the earlier refusal's.
+function isBareDispatcherNext(words: string[], base: string): boolean {
   let i = 0;
   if (words[i] === "command" || words[i] === "exec") i++;
   if (words[i] === "env") i++;
-  // An assignment can name another project (AIDLC_PROJECT_DIR=...); a call
-  // that sets one is not judged here.
   if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(words[i] ?? "")) return false;
   const name = (word: string | undefined) =>
     (word ?? "").replaceAll("\\", "/").split("/").pop()?.toLowerCase() ?? "";
@@ -1439,25 +1489,23 @@ function isBareDispatcherNext(command: string, powershell: boolean): boolean {
     : /^aidlc(?:\.cmd|\.exe)?$/.test(name(program));
   if (!dispatcher) return false;
   const routeWords = words.slice(i + 1);
-  // The dispatcher resolves a relative --project-dir from where it runs, which
-  // is the `cd` prelude's directory when there is one.
+  // The dispatcher resolves a relative --project-dir from where it runs.
+  let project = base;
   const named = routeWords.indexOf("--project-dir");
-  if (named >= 0) base = resolve(base, routeWords[named + 1] ?? "");
+  if (named >= 0) project = resolve(base, routeWords[named + 1] ?? "");
   const action = resolveAction(routeWords, true);
   if (action.type !== "delegate" || action.tool !== "aidlc-orchestrate.ts") return false;
   const args: string[] = [];
   for (let j = 0; j < action.args.length; j++) {
     const word = action.args[j];
-    if (word === "--project-dir") {
-      j++;
-    } else if (word === "--aidlc-attempt-id") {
+    if (word === "--project-dir" || word === "--aidlc-attempt-id") {
       j++;
     } else if (!LAUNCHER_GLOBAL_FLAGS.has(word)) {
       args.push(word);
     }
   }
   // Another project's next is not this latch's to judge.
-  return args.length === 1 && args[0] === "next" && resolve(base) === resolve(projectDir);
+  return args.length === 1 && args[0] === "next" && sameDirectory(project, projectDir);
 }
 
 function terminalTyped(
@@ -1566,20 +1614,28 @@ function markSessionStarted(sessionId: string): void {
   }
 }
 
+// The chat's recorded turn, or 0 when the count is missing or is not a whole
+// number (a count with anything after its digits is not one).
 function readTurn(sessionId: string): number {
   try {
-    const value = Number.parseInt(
-      readFileSync(turnCounterPath(sessionId), "utf-8").trim(),
-      10,
-    );
-    return Number.isFinite(value) && value >= 0 ? value : 0;
+    const text = readFileSync(turnCounterPath(sessionId), "utf-8").trim();
+    return /^\d+$/.test(text) ? Number.parseInt(text, 10) : 0;
   } catch {
     return 0;
   }
 }
 
+// The one place a turn count starts or moves on. Starting it again (the count
+// was missing or unreadable) also drops the latch left beside it: a latch from
+// before the count was lost cannot be shown to be this turn's.
 function bumpTurn(sessionId: string): number {
-  const turn = readTurn(sessionId) + 1;
+  const recorded = readTurn(sessionId);
+  if (recorded === 0) {
+    try {
+      rmSync(terminalLatchPath(sessionId), { force: true });
+    } catch { /* best-effort; a latch with no count beside it is not read as fresh */ }
+  }
+  const turn = recorded + 1;
   try {
     mkdirSync(terminalSessionDir(sessionId), { recursive: true });
     writeFileSync(turnCounterPath(sessionId), `${turn}\n`, "utf-8");
@@ -1832,14 +1888,9 @@ if (target === "terminal-command-guard") {
   const invocation = toolTerminalInvocation(rawCommand);
   const lowering = loweringGuardInvocation(rawCommand);
   const sessionId = terminalSessionId();
-  // Only a recorded turn can say a latch is this turn's. With the count gone, a
-  // latch left beside it is dropped, so the count started below cannot match it.
+  // Only a recorded turn can say a latch is this turn's (bumpTurn drops the
+  // latch when it has to start the count again).
   const recordedTurn = readTurn(sessionId);
-  if (!existsSync(turnCounterPath(sessionId))) {
-    try {
-      rmSync(terminalLatchPath(sessionId), { force: true });
-    } catch { /* best-effort; the latch is then not this turn's */ }
-  }
   const turn = recordedTurn || bumpTurn(sessionId);
   const refused = invocation !== null ? loweringGuardFlags(invocation.args, false) : lowering;
   if (promptWasEmpty(sessionId, turn) && refused !== null) {
@@ -1872,7 +1923,7 @@ if (target === "terminal-command-guard") {
   if (
     existing !== null && recordedTurn > 0 && existing.turn === recordedTurn &&
     (ide.sessionId?.trim() ?? "") !== "" &&
-    isBareDispatcherNext(rawCommand, isKiroPowerShellTool(tool))
+    runsBareDispatcherNext(rawCommand, isKiroPowerShellTool(tool), shellToolCwd(tool, ide.toolArgs ?? {}))
   ) {
     process.stderr.write(sameTurnNextRefusal(existing));
     return 2;
