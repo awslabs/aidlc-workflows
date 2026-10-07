@@ -11276,7 +11276,7 @@ function unitMajorReopen(
     ? `\`${aidlcToolInvocation("state")} unpark\`, then `
     : "";
   const backTo = (unit: string, stage: string): string =>
-    ` If they say 'back to ${unit}', run \`next --stage ${stage} --unit ${unit}\`.`;
+    ` If they ask to pick ${unit} up again, run \`next --stage ${stage} --unit ${unit}\`.`;
   // A Unit has reached the target when it finished it, skipped it in this
   // attempt (a jump ahead moved it past), or when the walk has it on a later
   // step of the block (or at its checkpoint, after every step).
@@ -11306,7 +11306,7 @@ function unitMajorReopen(
       const resume = `${aidlcToolInvocation("state")} unit resume --stage ${targetSlug} --unit ${named}`;
       const line = aside && inFlight !== null
         ? `Paused unit ${inFlight} at ${nameOf(aside.stage)} and picked unit ${named} up at ${stageName}. ` +
-          `Say 'back to ${inFlight}' to pick ${inFlight} up again.`
+          `You can pick ${inFlight} up again any time.`
         : `Picked unit ${named} up at ${stageName}.`;
       return {
         kind: "print",
@@ -11355,9 +11355,9 @@ function unitMajorReopen(
   const first = asides[0];
   const line = first
     ? `Paused ${list(asides.map((entry) => `unit ${entry.unit} at ${nameOf(entry.aside.stage)}`))} and reopened ` +
-      `${reopenedText}. Say 'back to ${first.unit}' to pick ${first.unit} up again.${keptLine}`
+      `${reopenedText}. You can pick ${first.unit} up again any time.${keptLine}`
     : `Reopened ${reopenedText}.` +
-      (kept.length > 0 ? `${keptLine} Say 'for every unit' to redo it for ${kept.length === 1 ? kept[0] : "them"} too.` : "");
+      (kept.length > 0 ? `${keptLine} You can redo it for ${kept.length === 1 ? kept[0] : "them"} too.` : "");
   const reopen =
     `${aidlcToolInvocation("jump")} reopen --target ${targetSlug} --stages ${stages.join(",")} --units ${reopened.join(",")} --scope ${scopeArg(scope)}` +
     (flags.change ? " --via change" : "");

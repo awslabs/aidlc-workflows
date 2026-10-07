@@ -1657,7 +1657,7 @@ describe("t342 a unit-major recovery keeps every Unit's finished work", () => {
       "reopen --target nfr-design --stages nfr-design,infrastructure-design,code-generation --units beta ",
     );
     expect(said).toContain(
-      "\"Reopened NFR Design for unit beta. alpha keeps its finished work. Say 'for every unit' to redo it for alpha too.\"",
+      "\"Reopened NFR Design for unit beta. alpha keeps its finished work. You can redo it for alpha too.\"",
     );
     expect(said).not.toContain("jump.ts execute");
     expect(jumped(p)).toBe(0);
@@ -1951,7 +1951,7 @@ describe("t342 a unit-major recovery keeps every Unit's finished work", () => {
   test("reopening alpha while beta builds pauses beta; alpha redoes its steps, then beta picks up where it stopped", () => {
     const { p, said } = alphaReopenedWhileBetaBuilds();
     expect(said).toContain(
-      "\"Paused unit beta at Code Generation and reopened NFR Design for unit alpha. Say 'back to beta' to pick beta up again.\"",
+      "\"Paused unit beta at Code Generation and reopened NFR Design for unit alpha. You can pick beta up again any time.\"",
     );
     expect(lastPause(p)).toEqual({ unit: "beta", stage: "code-generation", reason: "the person reopened alpha" });
     for (const slug of stages.slice(2)) {
@@ -2023,13 +2023,13 @@ describe("t342 a unit-major recovery keeps every Unit's finished work", () => {
     expect(next(p)).toMatchObject({ stage: "nfr-design", unit: "alpha" });
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-  test("'back to beta' in the middle of alpha's redo picks beta up, and 'back to alpha' returns", () => {
+  test("going back to beta in the middle of alpha's redo picks beta up, and going back to alpha returns", () => {
     const { p, said } = alphaReopenedWhileBetaBuilds();
-    expect(said).toContain("If they say 'back to beta', run `next --stage code-generation --unit beta`");
+    expect(said).toContain("If they ask to pick beta up again, run `next --stage code-generation --unit beta`");
     expect(tool(p, "state", ["unit", "start", "--stage", "nfr-design", "--unit", "alpha"]).status).toBe(0);
     const back = runPrinted(p, ["--stage", "code-generation", "--unit", "beta"]);
     expect(back).toContain(
-      "\"Paused unit alpha at NFR Design and picked unit beta up at Code Generation. Say 'back to alpha' to pick alpha up again.\"",
+      "\"Paused unit alpha at NFR Design and picked unit beta up at Code Generation. You can pick alpha up again any time.\"",
     );
     expect(back).not.toContain("jump.ts");
     expect(lastPause(p)).toEqual({ unit: "alpha", stage: "nfr-design", reason: "the person went back to beta" });
