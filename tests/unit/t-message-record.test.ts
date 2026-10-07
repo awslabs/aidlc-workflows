@@ -183,7 +183,7 @@ describe("the human-turn hook keeps one record of each message", () => {
       else expect(record.session).not.toBeNull();
       const turns = humanTurns(proj);
       expect(turns).toHaveLength(1);
-      expect(auditBlockField(turns[0].block, "Message")).toBe(record.id);
+      expect(auditBlockField(turns[0].block, "Message Id")).toBe(record.id);
     });
 
     test(`${harness}: flags are the engine's own parse, and a flag-shaped word stays a word`, () => {
@@ -206,7 +206,7 @@ describe("the human-turn hook keeps one record of each message", () => {
       expect(record.text).toBe("/aidlc --status");
       expect(record.settings).toEqual([]);
       const [turn] = humanTurns(proj);
-      expect(auditBlockField(turn.block, "Message")).toBe(record.id);
+      expect(auditBlockField(turn.block, "Message Id")).toBe(record.id);
       expect(auditBlockField(turn.block, "Reply")).toBe("command");
     });
 
@@ -232,7 +232,7 @@ describe("the human-turn hook keeps one record of each message", () => {
       expect(record.words).toBe("In the API handler");
       expect(record.settings).toEqual([]);
       const [turn] = humanTurns(proj);
-      expect(auditBlockField(turn.block, "Message")).toBe(record.id);
+      expect(auditBlockField(turn.block, "Message Id")).toBe(record.id);
       // Claude Code hands the box's answers over whole, so the row keeps the
       // picks; the Codex adapter hands the pick over as answer text and the
       // box's own reply rides the QUESTION_REPLIED rows instead (as today).
@@ -299,7 +299,7 @@ describe("the human-turn hook keeps one record of each message", () => {
     expect(readdirSync(outside)).toEqual([]);
     const turns = humanTurns(proj);
     expect(turns).toHaveLength(1);
-    expect(auditBlockField(turns[0].block, "Message")).toBeNull();
+    expect(auditBlockField(turns[0].block, "Message Id")).toBeNull();
   });
 
   test("a long prompt is kept to 8000 characters and says it was cut; the words are not shortened", () => {

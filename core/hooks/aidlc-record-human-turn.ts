@@ -718,7 +718,7 @@ try {
               ? { Reply: QUESTION_TURN_REPLY }
               : notAReply || answersEngineQuestion ? { Reply: COMMAND_TURN_REPLY } : {}),
             ...(picked.length > 0 ? { Picked: JSON.stringify(picked) } : {}),
-            ...(messageId ? { Message: messageId } : {}),
+            ...(messageId ? { "Message Id": messageId } : {}),
           }, projectDir);
           // Keep what the person typed in this chat, so a decision at a stage
           // gate records their own words beside the conductor's reading

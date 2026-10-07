@@ -23,7 +23,7 @@ import {
 // written once and never rewritten, through no symlink, and read back only
 // through the same no-follow path. The store keeps a day's worth and at most
 // MESSAGE_MAX_RECORDS; older records go on the next write. The HUMAN_TURN row
-// the hook mints names the record in its `Message` field; nothing names a
+// the hook mints names the record in its `Message Id` field; nothing names a
 // record to the person.
 
 export interface MessageRoute {
