@@ -676,6 +676,9 @@ export function mergeBlock(
   shipped: string,
   identity: string,
   legacyWholeFileHashes: readonly string[] = [],
+  // Hashes recorded for this part: a copy that differs from one only in its
+  // line endings reports that hash as its own.
+  recorded: readonly (string | undefined)[] = [],
 ): {
   value?: string;
   currentHash?: string;
@@ -707,7 +710,7 @@ export function mergeBlock(
       value: `${current.slice(0, beginAt)}${kept ? `${kept}${newline}${newline}` : ""}${block}${
         current.slice(endAt + end.length)
       }`,
-      currentHash: sha256Bytes(currentBlock),
+      currentHash: sha256Matching(currentBlock, [sha256Bytes(block), ...recorded]),
       nextHash: sha256Bytes(block),
       // A .gitignore part with exactly the shipped entries is a release's own,
       // whatever notes an earlier release put between them.
@@ -717,7 +720,7 @@ export function mergeBlock(
       ...(kept ? { keptOwnLines: true } : {}),
     };
   }
-  if (current.length > 0 && legacyWholeFileHashes.includes(sha256Bytes(current))) {
+  if (current.length > 0 && legacyWholeFileHashes.includes(sha256Matching(current, legacyWholeFileHashes))) {
     const kept = path === ".gitignore" ? linesAboveOwnSection(current.trim(), body, newline) : "";
     return {
       value: `${kept ? `${kept}${newline}${newline}` : ""}${block}${newline}`,
@@ -782,6 +785,26 @@ export function sha256Bytes(value: string | Buffer): string {
 
 export function sha256File(path: string): string {
   return sha256Bytes(readFileSync(path));
+}
+
+// Git rewrites line endings on checkout (Git for Windows' default
+// core.autocrlf=true writes LF files back with CRLF), so a file whose only
+// difference from a known one is its line endings is that file, not the
+// person's change (#2057). Returns the value's own hash, or the known hash it
+// equals in its LF form or that form with CRLF.
+export function sha256Matching(value: string | Buffer, known: readonly (string | undefined)[]): string {
+  const own = sha256Bytes(value);
+  if (known.length === 0 || known.includes(own)) return own;
+  const lf = Buffer.from(value).toString("latin1").replaceAll("\r\n", "\n");
+  for (const form of [lf, lf.replaceAll("\n", "\r\n")]) {
+    const hash = sha256Bytes(Buffer.from(form, "latin1"));
+    if (known.includes(hash)) return hash;
+  }
+  return own;
+}
+
+export function sha256FileMatching(path: string, known: readonly (string | undefined)[]): string {
+  return sha256Matching(readFileSync(path), known);
 }
 
 // What a host tool installs for itself inside a directory AI-DLC manages:

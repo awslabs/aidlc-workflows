@@ -68,6 +68,8 @@ import {
   rootBlockPath,
   sha256Bytes,
   sha256File,
+  sha256FileMatching,
+  sha256Matching,
   shippedRootIntegrationPath,
   unionBlocks,
   validateProjectionDescriptor,
@@ -4692,9 +4694,8 @@ function preserveClaudeProviderFields(
     if (prior !== null) return false;
     const hookPath = join(projectDir, hookRelative);
     if (!regularFile(hookPath)) return false;
-    return RELEASED_LEGACY_CLAUDE_HOOK_HASHES[target]?.has(
-      sha256File(hookPath),
-    ) ?? false;
+    const released = RELEASED_LEGACY_CLAUDE_HOOK_HASHES[target];
+    return released?.has(sha256FileMatching(hookPath, [...(released ?? [])])) ?? false;
   });
   const ownedHookTargets = new Set([
     ...Object.keys(incomingHookHashes),
@@ -5695,7 +5696,7 @@ function preserveCodexProviderFields(
     readFileSync(stagedPath, "utf-8"),
     current,
     prior?.entries?.[relative],
-    sha256Bytes(current) === prior?.files[relative],
+    sha256Matching(current, [prior?.files[relative]]) === prior?.files[relative],
     notes,
     relative,
   );
@@ -6165,7 +6166,8 @@ function prepareRefreshSource(
         const currentPath = join(projectDir, rel);
         const stagedPath = join(root, rel);
         if (!regularFile(currentPath) || !existsSync(stagedPath)) continue;
-        const current = readFileSync(currentPath, "utf-8");
+        // Read as AI-DLC wrote it: a CRLF checkout is the same file.
+        const current = readFileSync(currentPath, "utf-8").replaceAll("\r\n", "\n");
         const record = records.get(file.slice(0, -3)) ?? {};
         const fragments = pluginFragments(current);
         const hasRecordedContribution = Object.entries(record).some(([key, value]) =>
@@ -8437,8 +8439,11 @@ function planManagedFiles(
       const targetExists = pathPresent(target);
       const targetRegular = targetExists && lstatSync(target).isFile();
       const hash = sha256File(source);
-      const currentHash = targetRegular ? sha256File(target) : undefined;
       const priorHash = prior?.files[rel];
+      // A copy Git checked out with other line endings is the file it was.
+      const currentHash = targetRegular
+        ? sha256FileMatching(target, [hash, priorHash, ...(descriptor.legacyManagedFileHashes?.[rel] ?? [])])
+        : undefined;
       const adoptedManagedFile = prior === null &&
         currentHash !== undefined &&
         (
@@ -8540,7 +8545,7 @@ function planManagedFiles(
     ) continue;
     const target = join(projectDir, rel);
     if (!pathPresent(target)) continue;
-    if ((!regularFile(target) || sha256File(target) !== priorHash) && !force) {
+    if ((!regularFile(target) || sha256FileMatching(target, [priorHash]) !== priorHash) && !force) {
       actions.push({ path: rel, action: "conflict", detail: "removed upstream but locally modified" });
       continue;
     }
@@ -8765,12 +8770,15 @@ function planRootIntegrations(
         shipped = unionBlocks(contributors);
         legacyWholeFileHashes = [...legacyHashes];
       }
+      siblings ??= discoverProjectHarnesses(projectDir);
       const merged = mergeBlock(
         integration.path,
         current,
         shipped,
         marker,
         legacyWholeFileHashes,
+        [priorContribution, ...siblings.map((sibling) => siblingBaseline(sibling)?.rootContributions?.[integration.path])]
+          .map((contribution) => contribution?.policy === "managed-block" ? contribution.hash : undefined),
       );
       if (merged.error) {
         actions.push({ path: integration.path, action: "conflict", detail: merged.error });
@@ -9051,8 +9059,9 @@ function planRootIntegrations(
       // comments, and layout stay as they are.
       const shippedText = readFileSync(sourcePath, "utf-8");
       const legacy = integration.legacySignatures?.wholeFileHashes ?? [];
-      const currentHash = sha256Bytes(current);
-      const bareHash = sha256Bytes(withoutBom(current));
+      const recordedHashes = [...legacy, priorContribution?.policy === "whole-file" ? priorContribution.hash : undefined];
+      const currentHash = sha256Matching(current, recordedHashes);
+      const bareHash = sha256Matching(withoutBom(current), recordedHashes);
       const legacyMatch = legacy.includes(currentHash) || legacy.includes(bareHash);
       let ownership: JsonEntriesOwnership;
       if (priorContribution?.policy === "json-entries") {
@@ -9163,9 +9172,10 @@ function planRootIntegrations(
     const priorHash = priorContribution?.policy === "whole-file"
       ? priorContribution.hash
       : undefined;
-    const currentHash = sha256Bytes(current);
-    // A byte order mark the person's editor added is not their change.
-    const owned = currentHash === priorHash || (withoutBom(current) !== current && sha256Bytes(withoutBom(current)) === priorHash);
+    // Nor are a byte order mark the person's editor added, or line endings Git rewrote.
+    const currentHash = sha256Matching(current, [shippedHash, priorHash, ...(integration.legacySignatures?.wholeFileHashes ?? [])]);
+    const owned = currentHash === priorHash ||
+      (withoutBom(current) !== current && sha256Matching(withoutBom(current), [priorHash]) === priorHash);
     const adoptedLegacy = integration.legacySignatures?.wholeFileHashes?.includes(currentHash) ?? false;
     if (!retainBaseline || owned) {
       contributions[integration.path] = { policy: "whole-file", hash: shippedHash };
@@ -9229,7 +9239,7 @@ function planRemovedRootIntegrations(
         continue;
       }
       const blockEnd = endAt + end.length;
-      if (sha256Bytes(text.slice(beginAt, blockEnd)) !== contribution.hash && !force) {
+      if (sha256Matching(text.slice(beginAt, blockEnd), [contribution.hash]) !== contribution.hash && !force) {
         actions.push({ path, action: "conflict", detail: "retired managed block was locally modified" });
         continue;
       }
@@ -9333,7 +9343,7 @@ function planRemovedRootIntegrations(
       actions.push({ path, action: "merge", detail: "removed retired JSON array entries" });
       continue;
     }
-    if (sha256File(targetPath) !== contribution.hash && !force) {
+    if (sha256FileMatching(targetPath, [contribution.hash]) !== contribution.hash && !force) {
       actions.push({ path, action: "conflict", detail: "retired whole-file integration was locally modified" });
       continue;
     }

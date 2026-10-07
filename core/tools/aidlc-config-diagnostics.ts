@@ -26,7 +26,7 @@ import {
   readJsonFile,
   type RootIntegration,
   rootBlockPath,
-  sha256Bytes,
+  sha256Matching,
 } from "./aidlc-distribution.ts";
 import {
   aidlcInvocation,
@@ -2928,7 +2928,7 @@ function instructionStates(
       return {
         path,
         kind: contribution.policy,
-        state: sha256Bytes(content) === contribution.hash ? "intact" : "conflict",
+        state: sha256Matching(content, [contribution.hash]) === contribution.hash ? "intact" : "conflict",
       };
     }
     if (contribution.policy === "json-entries") {
@@ -2967,7 +2967,7 @@ function instructionStates(
     return {
       path,
       kind: contribution.policy,
-      state: sha256Bytes(block) === contribution.hash ? "intact" : "conflict",
+      state: sha256Matching(block, [contribution.hash]) === contribution.hash ? "intact" : "conflict",
     };
   });
   if (onboardingPath && !onboardingHash) {
@@ -3014,7 +3014,7 @@ export function instructionFileDoctorCheck(
       severity: "warn",
       label:
         `Instruction file: hand-modified - conflict (${conflicts.map((item) => item.path).join(", ")})`,
-      fix: `review the local changes, then run \`${invoke} config\``,
+      fix: keepOrTakeShipped(conflicts.map((item) => item.path), invoke),
     };
   }
   const missing = states.filter((item) => item.state === "missing");
@@ -3482,4 +3482,103 @@ export function workspaceSiblingDoctorCheck(
         label: `Workspace siblings: ${issues.length} required path(s) missing`,
         fix: issues.map((issue) => issue.message).join("; "),
       };
+}
+
+// The AI-DLC files a refresh refuses to replace: each one config recorded that
+// now differs from what it wrote (line endings aside, #2057). The onboarding
+// file is the instruction row's; files config merges or writes again itself
+// are never refused, so they are not named.
+function changedFrameworkFiles(
+  projectDir: string,
+  harnessDir: string,
+  harness: ModelHarness,
+  baseline: { files?: Record<string, string>; entries?: Record<string, unknown> },
+): string[] {
+  const data = join(projectDir, harnessDir, "tools", "data");
+  let onboarding = harness === "claude" ? `${harnessDir}/CLAUDE.md` : undefined;
+  try {
+    const descriptor: unknown = JSON.parse(readFileSync(join(data, "aidlc-projection.json"), "utf-8"));
+    if (isRecord(descriptor) && isSafeOnboardingPath(descriptor.onboarding, harnessDir)) {
+      onboarding = descriptor.onboarding;
+    }
+  } catch {
+    // The instruction row reports an unreadable descriptor.
+  }
+  const generated = [
+    ...["harness.json", "stage-graph.json", "scope-grid.json"].map((name) => `${harnessDir}/tools/data/${name}`),
+    // The engine writes Kiro IDE's steering copy of the project's memory itself.
+    `${harnessDir}/steering/aidlc-active-memory.md`,
+  ];
+  // Config takes a plugin's additions to stage files out before it compares.
+  const pluginStages = existsSync(data) &&
+    readdirSync(data).some((name) => /^plugin-contrib-.+\.json$/.test(name));
+  const changed: string[] = [];
+  for (const [rel, hash] of Object.entries(baseline.files ?? {})) {
+    if (
+      typeof hash !== "string" ||
+      rel === onboarding ||
+      baseline.entries?.[rel] !== undefined ||
+      generated.includes(rel) ||
+      (pluginStages && rel.startsWith(`${harnessDir}/aidlc-common/stages/`)) ||
+      rel.startsWith("/") ||
+      rel.split("/").includes("..")
+    ) continue;
+    const path = join(projectDir, rel);
+    let regular: boolean;
+    try {
+      regular = lstatSync(path).isFile();
+    } catch {
+      continue;
+    }
+    if (regular) {
+      const content = readFileSync(path);
+      if (sha256Matching(content, [hash]) === hash || content.includes("generated-by: aidlc-runner-gen")) continue;
+    }
+    changed.push(rel);
+  }
+  return changed.sort();
+}
+
+export function frameworkFilesDoctorCheck(
+  projectDir: string,
+  harnessDirHint?: string,
+): DiagnosticDoctorCheck {
+  const selected = selectedHarness(projectDir, harnessDirHint);
+  if (!selected) return { pass: true, label: "AI-DLC files: no installed project harness" };
+  let baseline: { files?: Record<string, string>; entries?: Record<string, unknown> };
+  try {
+    baseline = JSON.parse(readFileSync(
+      join(projectDir, selected.harnessDir, "tools", "data", "aidlc-manifest.json"),
+      "utf-8",
+    ));
+  } catch {
+    // The instruction row reports a missing or unreadable record.
+    return { pass: true, label: "AI-DLC files: not checked, no record of what AI-DLC wrote" };
+  }
+  const changed = changedFrameworkFiles(projectDir, selected.harnessDir, selected.harness, baseline);
+  if (changed.length === 0) return { pass: true, label: "AI-DLC files: unchanged since AI-DLC wrote them" };
+  const invoke = invocationForHarness(selected.harnessDir);
+  const one = changed.length === 1;
+  const shown = changed.slice(0, 10).join(", ");
+  const more = changed.length > 10
+    ? `, and ${changed.length - 10} more; \`${invoke} config --dry-run\` names them all`
+    : "";
+  return {
+    pass: false,
+    severity: "warn",
+    label: `AI-DLC files: ${changed.length} changed in this project, so \`${invoke} config\` keeps ${
+      one ? "it" : "them"
+    } and stops (${shown}${more})`,
+    fix: keepOrTakeShipped(changed, invoke),
+  };
+}
+
+// The two ways forward config itself offers for a file it will not replace,
+// shared by the instruction and AI-DLC files rows.
+function keepOrTakeShipped(paths: readonly string[], invoke: string): string {
+  return paths.length === 1
+    ? `to keep your version, move ${paths[0]} somewhere else, then run \`${invoke} config\`; ` +
+      `to take the shipped version over it, run \`${invoke} config --force\``
+    : `to keep your versions, move those files somewhere else, then run \`${invoke} config\`; ` +
+      `to take the shipped versions over them, run \`${invoke} config --force\``;
 }
