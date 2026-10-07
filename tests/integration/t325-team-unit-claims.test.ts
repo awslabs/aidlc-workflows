@@ -1507,6 +1507,58 @@ describe("t325 atomic team Unit claims", () => {
     expect(merge.status, merge.out).toBe(0);
     expect(readAllAuditShards(checkout)).toContain("direct audit delta");
   });
+
+  // #2116: the integration branch the team wrote down under Way of Working is
+  // the one claims use, whatever it is called; a name that cannot be used is
+  // named with its file instead of being silently replaced by org.md's `main`.
+  test("team mode uses the integration branch named under Way of Working and names the file when the name cannot be used", () => {
+    const { seed, remote } = makeSeed();
+    // Gitflow shape: `dev` holds the intent; `main` carries only releases.
+    git(seed, ["push", "origin", "main:dev"]);
+    git(seed, ["checkout", "-q", "--orphan", "releases"]);
+    git(seed, ["rm", "-r", "-q", "--cached", "."]);
+    writeFileSync(join(seed, "README.md"), "# releases only\n");
+    git(seed, ["add", "README.md"]);
+    git(seed, ["commit", "-q", "-m", "release only"]);
+    git(seed, ["push", "-q", "--force", "origin", "releases:main"]);
+    const gitflow = clone(remote, "gitflow");
+    git(gitflow, ["switch", "-q", "dev"]);
+    const teamMd = join(gitflow, "aidlc", "spaces", "default", "memory", "team.md");
+    const wayOfWorking = (branch: string) =>
+      writeFileSync(
+        teamMd,
+        readFileSync(teamMd, "utf-8").replace(
+          "## Way of Working\n",
+          "## Way of Working\n\nWe use gitflow. Integration tests live in `tests/integration`.\n" +
+            "Integration branch: `" + branch + "`.\n",
+        ),
+      );
+    wayOfWorking("dev");
+    git(gitflow, ["commit", "-q", "-am", "team: integration branch dev"]);
+    git(gitflow, ["push", "-q", "origin", "dev"]);
+
+    const status = run(UNIT, ["status"], gitflow);
+    expect(status.status, status.out).toBe(0);
+    expect([...JSON.parse(status.stdout).claimable].sort()).toEqual(["alpha", "gamma"]);
+    const claimed = run(UNIT, ["claim", "alpha", "--team", "gitflow"], gitflow);
+    expect(claimed.status, claimed.out).toBe(0);
+    expect(JSON.parse(claimed.stdout).integration_ref).toBe("refs/remotes/origin/dev");
+
+    const original = readFileSync(teamMd, "utf-8");
+    writeFileSync(teamMd, original.replace("`dev`", "`bad..name`"));
+    const invalid = run(UNIT, ["status"], gitflow);
+    expect(invalid.status).not.toBe(0);
+    expect(invalid.out).toContain("bad..name");
+    expect(invalid.out).toContain("memory/team.md");
+    expect(invalid.out).toContain("not a valid git branch name");
+
+    writeFileSync(teamMd, original.replace("`dev`", "`integration`"));
+    const absent = run(UNIT, ["status"], gitflow);
+    expect(absent.status).not.toBe(0);
+    expect(absent.out).toContain('branch \\"integration\\"');
+    expect(absent.out).toContain("memory/team.md");
+    expect(absent.out).toContain("could not be fetched from origin");
+  });
 });
 
 function exists(path: string): boolean {

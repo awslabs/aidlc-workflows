@@ -181,37 +181,54 @@ function currentBranch(projectDir: string): string {
   return result.ok && result.stdout.trim() ? result.stdout.trim() : "main";
 }
 
-function affirmedIntegrationBranch(projectDir: string): string | null {
-  const memoryRoot = join(
-    projectDir,
-    "aidlc",
-    "spaces",
-    activeSpace(projectDir),
-    "memory",
-  );
+// A Way of Working line names the team's branch only when it says so: "the
+// integration branch", "the base branch", "the merge-target branch" or "the
+// merge target", with the name in backticks in the same sentence. A line such
+// as "Integration tests live in `tests/integration`" names no branch.
+const INTEGRATION_BRANCH_WORDS =
+  "(?:(?:base|integration|merge[ -]target) branch|merge target)";
+const INTEGRATION_BRANCH_AFTER_WORDS = new RegExp(
+  `\\b${INTEGRATION_BRANCH_WORDS}\\b[^\`\\n.;]*\`([^\`]+)\``,
+  "i",
+);
+const INTEGRATION_BRANCH_BEFORE_WORDS = new RegExp(
+  `\`([^\`]+)\`[^.;\\n]*\\b${INTEGRATION_BRANCH_WORDS}\\b`,
+  "i",
+);
+
+// The branch the team wrote down under "## Way of Working", narrowest layer
+// first. Whatever it is called, that branch is used; a name git cannot use as a
+// branch is refused with its file, never skipped for a broader layer's choice.
+function affirmedIntegrationBranch(
+  projectDir: string,
+): { branch: string; source: string } | null {
+  const space = activeSpace(projectDir);
   for (const name of ["project.md", "team.md", "org.md"]) {
+    const source = `aidlc/spaces/${space}/memory/${name}`;
+    let body: string;
     try {
-      const body = readFileSync(join(memoryRoot, name), "utf-8");
-      const section = extractMarkdownSection(body, "## Way of Working");
-      const explicit =
-        /\b(?:base|integration|merge target)(?: branch)?\b[^`\n]*`([^`]+)`/i.exec(section) ??
-        /`([^`]+)`[^.\n]*\b(?:base|integration|merge target)(?: branch)?\b/i.exec(section);
-      if (
-        explicit &&
-        /^(?:main|master|develop|release\/[A-Za-z0-9._/-]+)$/.test(explicit[1])
-      ) {
-        return explicit[1];
-      }
+      body = readFileSync(join(projectDir, ...source.split("/")), "utf-8");
     } catch {
-      // Try the next narrower/broader method layer.
+      continue;
     }
+    const section = extractMarkdownSection(body, "## Way of Working");
+    const explicit =
+      INTEGRATION_BRANCH_AFTER_WORDS.exec(section) ??
+      INTEGRATION_BRANCH_BEFORE_WORDS.exec(section);
+    if (!explicit) continue;
+    const branch = explicit[1].trim();
+    if (!git(projectDir, ["check-ref-format", "--branch", branch]).ok) {
+      fail(
+        `The integration branch "${branch}", named in ${source} under "Way of Working", ` +
+          "is not a valid git branch name. Correct it there and run the command again.",
+      );
+    }
+    return { branch, source };
   }
   return null;
 }
 
 function integrationBranch(projectDir: string, remote: string | null): string {
-  const affirmed = affirmedIntegrationBranch(projectDir);
-  if (affirmed) return affirmed;
   if (remote) {
     const cached = git(projectDir, ["symbolic-ref", "--short", `refs/remotes/${remote}/HEAD`]);
     if (cached.ok && cached.stdout.trim().startsWith(`${remote}/`)) {
@@ -244,14 +261,26 @@ function fetchIntegration(projectDir: string): {
   oid: string;
 } {
   const remote = repositoryRemote(projectDir);
-  const branch = integrationBranch(projectDir, remote);
+  const affirmed = affirmedIntegrationBranch(projectDir);
+  const branch = affirmed?.branch ?? integrationBranch(projectDir, remote);
+  const named = affirmed
+    ? `The integration branch "${affirmed.branch}", named in ${affirmed.source} under "Way of Working",`
+    : null;
   if (remote) {
     const fetched = git(projectDir, ["fetch", remote, branch]);
-    if (!fetched.ok) fail(`git fetch ${remote} ${branch} failed: ${fetched.stderr.trim()}`);
+    if (!fetched.ok) {
+      fail(
+        named
+          ? `${named} could not be fetched from ${remote}: ${fetched.stderr.trim().replace(/^fatal:\s*/i, "")}`
+          : `git fetch ${remote} ${branch} failed: ${fetched.stderr.trim()}`,
+      );
+    }
   }
   const ref = remote ? `refs/remotes/${remote}/${branch}` : `refs/heads/${branch}`;
   const oid = git(projectDir, ["rev-parse", "--verify", ref]);
-  if (!oid.ok) fail(`Integration ref ${ref} does not exist.`);
+  if (!oid.ok) {
+    fail(named ? `${named} does not exist in this repository.` : `Integration ref ${ref} does not exist.`);
+  }
   return { remote, branch, ref, oid: oid.stdout.trim() };
 }
 

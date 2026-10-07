@@ -656,6 +656,13 @@ Read the current integration state and claim registry, then print the claimable,
 claimed, and waiting Unit sets as JSON. This is a claim-time/status surface and
 may contact the configured git remote.
 
+Team mode reads the integration branch from the `## Way of Working` section of
+`project.md`, then `team.md`, then `org.md`: the first line that names the
+integration, base or merge-target branch in backticks wins, whatever the branch
+is called. When no layer names one, the remote's default branch is used. A named
+branch that git cannot use, or that is not on the remote, is reported with the
+file it came from instead of being replaced by another layer's choice.
+
 ```
 /aidlc unit status
 ```
