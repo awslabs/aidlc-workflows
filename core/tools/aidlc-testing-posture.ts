@@ -1767,8 +1767,9 @@ export function restoreApprovedPlan(projectDir: string, target: CodeGenerationTa
 // one line saying only what is certain: what is done and where it picks up.
 //
 // A worker that built steps without ticking them leaves no ticks. Then the
-// files the steps name are the record: the furthest step whose named files all
-// changed since the build started is where the build got to.
+// files the steps name are the record: the unbroken run of steps from step 1
+// whose named files all changed since the build started is where the build got
+// to, and it picks up at the first step that breaks that run.
 //
 // "Started on the plan as it is now" is the receipt the questions file names,
 // at status `generation`, when the plan and instructions on disk are the
@@ -1963,10 +1964,13 @@ function buildContentFingerprint(plan: string, instructions: string, authority: 
 }
 
 /**
- * With no step ticked: the furthest step whose named files all changed since
- * the build started (the source its receipt certified at generation start), or
- * 0 when none did or the start's file listing was not kept. A bare file name
- * matches a changed file of that name in any folder.
+ * With no step ticked: the unbroken run of steps from step 1 whose named files
+ * all changed since the build started (the source its receipt certified at
+ * generation start), or 0 when none did or the start's file listing was not
+ * kept. The run stops at the first step that names no file or whose files did
+ * not all change: a later step naming a file an earlier one touched
+ * (package.json, a README) says nothing about the steps between. A bare file
+ * name matches a changed file of that name in any folder.
  */
 function stepsWithWrittenFiles(projectDir: string, startedSource: string, steps: PlanStep[]): number {
   const current = workspaceSourceState(projectDir);
@@ -1978,11 +1982,9 @@ function stepsWithWrittenFiles(projectDir: string, startedSource: string, steps:
     : path.includes("/")
       ? changed.some((file) => file === path || file.endsWith(`/${path}`))
       : names.has(path);
-  let furthest = 0;
-  steps.forEach((step, index) => {
-    if (step.paths.length > 0 && step.paths.every(wrote)) furthest = index + 1;
-  });
-  return furthest;
+  let written = 0;
+  while (written < steps.length && steps[written].paths.length > 0 && steps[written].paths.every(wrote)) written++;
+  return written;
 }
 
 /**

@@ -777,6 +777,24 @@ describe("the pick-up says only what is certain", () => {
     expect(next(proj).narration).toBe(`Picking up ${UNIT}'s code at step 3 of 9 (1-2 done).`);
   });
 
+  // A late step can name a file an early step touched (package.json, a README):
+  // that file changing says nothing about the steps between. Only the unbroken
+  // run of steps from step 1 whose files all changed is known to be done, and
+  // the build picks up at the first step that breaks it.
+  test("nothing ticked, a late step's files changed too: the pick-up stops at the first step whose files did not", () => {
+    const proj = project();
+    interrupted(proj);
+    for (const number of [1, 2, 8]) {
+      writeFileSync(join(proj, "src", `part${number}.ts`), `export const part${number} = ${number};\n`, "utf-8");
+    }
+    const resumed = brief(proj);
+    expect(resumed).toContain(
+      "The plan file ticks none of its 9 steps, but the files steps 1-2 name changed since the build started:",
+    );
+    expect(resumed).toContain(`\nContinue at step 3 of 9: "${STEPS[2]}".`);
+    expect(next(proj).narration).toBe(`Picking up ${UNIT}'s code at step 3 of 9 (1-2 wrote their files).`);
+  });
+
   test("the line is about the build being issued, whatever directive is on disk", () => {
     // A copied or moved project, or a step put out of date, leaves a directive
     // on disk that names another stage; the pick-up line must not depend on it,
