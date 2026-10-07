@@ -379,6 +379,33 @@ describe("approving a Unit as it is over a review that did not finish", () => {
     }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
   }
 
+  // A jump back or a reopen starts the Unit's work again. Rebuilt with no
+  // review asked for in this run, its review from before is not this run's:
+  // the step is this run's first request, which the review log accepts.
+  for (const policy of ["off", "strict"] as const) {
+    test(`Guard Policy ${policy}: after a reopen, a Unit rebuilt with no review is named its first request, and following it verifies the Unit`, () => {
+      const p = fixture(policy);
+      build(p, "alpha");
+      review(p, "alpha", 1, "READY");
+      expect(checkpoint(p, "alpha", "verify").json?.verified).toBe(true);
+      const reopened = tool(p, "jump", ["reopen", "--target", CG, "--units", "alpha"]);
+      expect(reopened.status, reopened.out).toBe(0);
+      build(p, "alpha");
+      const first = reviewArgs("alpha", 1).join(" ");
+      const step = routed(p);
+      expect(step.construction_checkpoint, JSON.stringify(step).slice(0, 800)).toMatchObject({ unit: "alpha", ready: false });
+      expect(step.construction_checkpoint?.rereview?.command).toContain(first);
+      expect(step.construction_checkpoint?.rereview?.command).not.toContain("--retry-pending");
+      expect(step.reviewer).toBe(REVIEWER);
+      const refused = checkpoint(p, "alpha", "verify");
+      expect(refused.status).not.toBe(0);
+      expect(refused.out).toContain(first);
+      review(p, "alpha", 1, "READY");
+      const ready = checkpoint(p, "alpha", "verify");
+      expect(ready.json?.verified, ready.out).toBe(true);
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+  }
+
   // The person asked for alpha's review again after its code changed, and that
   // review was interrupted: "approve it as it is" goes over it the same way, as
   // a stage gate's approval goes over a recovery review that never finished.
