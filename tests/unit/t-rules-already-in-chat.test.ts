@@ -9,8 +9,12 @@
 //   - Kiro CLI and opencode put the memory files in context on every request
 //     (live: an edit is seen at once and survives a compaction), so the pointer
 //     needs only the host's own include to cover the stage's files.
-//   - On every tool, a step whose bundle differs from the one this chat's last
-//     step named gets the text once, so a changed rule is in front of the agent.
+//   - On every tool, a chat's first step, and a step whose bundle differs from
+//     the one this chat's last step named, gets the text once, so the rules are
+//     in front of the agent (live on Kiro IDE, an agent in a new chat that held
+//     the rules in its steering once ignored a team rule on a pointer step).
+//   - A pointer step says in one sentence where its rules are, so it works with
+//     no skill loaded.
 //   - Claude Code loads them at startup, resume, clear, compact and fork, but
 //     not after a mid-chat edit, so the pointer needs the hashes the session
 //     start recorded for this chat to match the files now. A resume or fork
@@ -58,6 +62,7 @@ type Printed = {
   receipt?: string;
   rules_content?: Array<{ path: string; text: string }>;
   rules_held?: string;
+  rules_held_note?: string;
   rules_in_context?: string[];
   bundle?: string;
 };
@@ -249,11 +254,15 @@ function sentInFull(delivery: { results: Printed[]; final: Printed }): boolean {
     (delivery.results.length > 1 || (delivery.final.rules_content?.length ?? 0) > 0);
 }
 
+const POINTER_NOTE =
+  "This step's rules are the AI-DLC memory text already in your context; apply them to every file you write in this step.";
+
 function pointerOnly(delivery: { results: Printed[]; final: Printed }): boolean {
   return delivery.results.length === 1 &&
     delivery.final.kind === "run-stage" &&
     typeof delivery.final.rules_held === "string" &&
     /^sha256:[0-9a-f]{64}$/.test(delivery.final.rules_held) &&
+    delivery.final.rules_held_note === POINTER_NOTE &&
     delivery.final.rules_content === undefined;
 }
 
@@ -263,6 +272,8 @@ describe("Claude Code: the memory the host loaded at the chat's last load", () =
     const sid = randomUUID();
     const env = { AIDLC_SESSION_OVERRIDE: sid, CLAUDE_CODE_SESSION_ID: sid, CLAUDECODE: "1" };
     await sessionStart(proj, "claude", sid, "startup");
+    // The chat's first step hands it the text once.
+    expect(sentInFull(await next(proj, "claude", env))).toBe(true);
     const first = await next(proj, "claude", env);
     expect(pointerOnly(first), JSON.stringify(first.final).slice(0, 400)).toBe(true);
     expect(first.final.rules_in_context?.length).toBeGreaterThan(0);
@@ -278,12 +289,12 @@ describe("Claude Code: the memory the host loaded at the chat's last load", () =
     // A compaction reloads the files from disk: the pointer again.
     await sessionStart(proj, "claude", sid, "compact");
     expect(pointerOnly(await next(proj, "claude", env))).toBe(true);
-    // So does /clear, under its new chat id.
+    // So does /clear, under its new chat id, after that chat's first step.
     const cleared = randomUUID();
+    const clearedEnv = { AIDLC_SESSION_OVERRIDE: cleared, CLAUDE_CODE_SESSION_ID: cleared, CLAUDECODE: "1" };
     await sessionStart(proj, "claude", cleared, "clear");
-    expect(pointerOnly(await next(proj, "claude", {
-      AIDLC_SESSION_OVERRIDE: cleared, CLAUDE_CODE_SESSION_ID: cleared, CLAUDECODE: "1",
-    }))).toBe(true);
+    expect(sentInFull(await next(proj, "claude", clearedEnv))).toBe(true);
+    expect(pointerOnly(await next(proj, "claude", clearedEnv))).toBe(true);
   });
 
   test("a resume or a fork after an edit, a different chat, or no session start: the text", async () => {
@@ -291,6 +302,7 @@ describe("Claude Code: the memory the host loaded at the chat's last load", () =
     const sid = randomUUID();
     const env = { AIDLC_SESSION_OVERRIDE: sid, CLAUDE_CODE_SESSION_ID: sid, CLAUDECODE: "1" };
     await sessionStart(proj, "claude", sid, "startup");
+    expect(sentInFull(await next(proj, "claude", env))).toBe(true);
     expect(pointerOnly(await next(proj, "claude", env))).toBe(true);
     // A resume with the files unchanged keeps the pointer.
     await sessionStart(proj, "claude", sid, "resume");
@@ -339,6 +351,7 @@ describe("Kiro CLI and opencode: the host sends the memory files with every requ
     const sid = randomUUID();
     const env = { AIDLC_SESSION_OVERRIDE: sid, KIRO_SESSION_ID: sid };
     await sessionStart(proj, "kiro", sid, "startup");
+    expect(sentInFull(await next(proj, "kiro", env))).toBe(true);
     expect(pointerOnly(await next(proj, "kiro", env))).toBe(true);
     // Kiro holds the edited file at once, but the step after a change hands the
     // text once, so the change is in front of the agent; then the pointer again.
@@ -368,6 +381,7 @@ describe("Kiro CLI and opencode: the host sends the memory files with every requ
     const proj = await projectFor("opencode");
     const sid = randomUUID();
     await sessionStart(proj, "opencode", sid, "startup");
+    expect(sentInFull(await next(proj, "opencode", { AIDLC_SESSION_OVERRIDE: sid, OPENCODE: "1" }))).toBe(true);
     expect(pointerOnly(await next(proj, "opencode", { AIDLC_SESSION_OVERRIDE: sid, OPENCODE: "1" }))).toBe(true);
     editTeam(proj, "Every endpoint has an owner.");
     expect(sentInFull(await next(proj, "opencode", { AIDLC_SESSION_OVERRIDE: sid, OPENCODE: "1" }))).toBe(true);
@@ -489,6 +503,9 @@ describe("Kiro IDE: the chat holds the steering file it captured when it started
 
     const sid = kiroChat();
     await kiroIdePrompt(proj, sid);
+    // The chat's first step hands it the text once (live, an agent in a new
+    // chat once ignored a team rule its steering held on a pointer step).
+    expect(sentInFull(await next(proj, "kiro-ide", inKiroIde(sid)))).toBe(true);
     const held = await next(proj, "kiro-ide", inKiroIde(sid));
     expect(pointerOnly(held), JSON.stringify(held.final).slice(0, 400)).toBe(true);
     expect(held.bytes).toBeLessThan(8_000);
@@ -506,6 +523,7 @@ describe("Kiro IDE: the chat holds the steering file it captured when it started
     expect(readFileSync(join(proj, ...STEERING), "utf-8")).toContain("Every queue has a dead-letter alarm.");
     const later = kiroChat();
     await kiroIdePrompt(proj, later);
+    expect(sentInFull(await next(proj, "kiro-ide", inKiroIde(later)))).toBe(true);
     expect(pointerOnly(await next(proj, "kiro-ide", inKiroIde(later)))).toBe(true);
     await kiroIdeStop(proj, later);
 
@@ -518,10 +536,12 @@ describe("Kiro IDE: the chat holds the steering file it captured when it started
     const proj = await kiroIdeProject();
     const a = kiroChat();
     await kiroIdePrompt(proj, a);
+    expect(sentInFull(await next(proj, "kiro-ide", inKiroIde(a)))).toBe(true);
     expect(pointerOnly(await next(proj, "kiro-ide", inKiroIde(a)))).toBe(true);
     // B starts while A's turn runs: both hold the same file, so either is fine.
     const b = kiroChat();
     await kiroIdePrompt(proj, b);
+    expect(sentInFull(await next(proj, "kiro-ide", inKiroIde(b)))).toBe(true);
     expect(pointerOnly(await next(proj, "kiro-ide", inKiroIde(b)))).toBe(true);
 
     // The memory changes and C starts with the new text while A, holding the
@@ -531,6 +551,7 @@ describe("Kiro IDE: the chat holds the steering file it captured when it started
     await kiroIdeStop(proj, b);
     const c = kiroChat();
     await kiroIdePrompt(proj, c);
+    expect(sentInFull(await next(proj, "kiro-ide", inKiroIde(c)))).toBe(true);
     expect(sentInFull(await next(proj, "kiro-ide", inKiroIde(c)))).toBe(true);
     // A's turn ends: C alone runs, and C holds the file.
     await kiroIdeStop(proj, a);
@@ -544,6 +565,7 @@ describe("Kiro IDE: the chat holds the steering file it captured when it started
     const proj = await kiroIdeProject();
     const sid = kiroChat();
     await kiroIdePrompt(proj, sid);
+    expect(sentInFull(await next(proj, "kiro-ide", { ...inKiroIde(sid), KIRO_SESSION_ID: sid }))).toBe(true);
     expect(pointerOnly(await next(proj, "kiro-ide", { ...inKiroIde(sid), KIRO_SESSION_ID: sid }))).toBe(true);
     expect(sentInFull(await next(proj, "kiro-ide", { ...inKiroIde(sid), KIRO_SESSION_ID: kiroChat() }))).toBe(true);
   });
@@ -559,6 +581,7 @@ describe("Kiro IDE: the chat holds the steering file it captured when it started
     await kiroIdeStop(proj, clone);
     const second = kiroChat();
     await kiroIdePrompt(proj, second);
+    expect(sentInFull(await next(proj, "kiro-ide", inKiroIde(second)))).toBe(true);
     expect(pointerOnly(await next(proj, "kiro-ide", inKiroIde(second)))).toBe(true);
     await kiroIdeStop(proj, second);
 
