@@ -214,6 +214,11 @@ How "source work" is detected depends on the workspace:
 - **Non-git workspace** (or any git error) - the guard falls back to a shell-free
   filesystem-existence check: at least one file must exist outside the `aidlc/`
   workspace tree and the harness dirs.
+- **Multi-repo workspace** - the code may live in one of the intent's recorded
+  repos (the `repos` of its registry row) rather than the workspace repo, for
+  example a gitignored child repo with or without AI-DLC in it. The guard asks
+  each recorded repo the same question it asks the workspace, so a brownfield
+  child repo with no new code does not pass either.
 
 Today only `code-generation` declares it. Its per-unit reviews additionally
 require `<record>/construction/<unit>/code-generation/source-manifest.json`:

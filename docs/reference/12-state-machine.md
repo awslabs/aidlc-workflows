@@ -257,7 +257,8 @@ intent's record dir or its per-unit Construction directories. A codekb stage
 is stricter: every registered repository directory must contain the full
 declared `produces[]` set; single/unrecorded intents use the one resolved
 codekb directory. `workspace_requires: true` also requires source-work evidence
-outside `aidlc/` and the harness dir. A failure writes nothing. Optional outputs
+outside `aidlc/` and the harness dir, in the workspace or in one of the
+intent's recorded repos. A failure writes nothing. Optional outputs
 do not participate. For `produces_kinds`, units whose kind prunes the required
 set to zero owe no artifact; any applicable unit remains strict. Bypass with
 `AIDLC_SKIP_ARTIFACT_GUARD=1`. The same switch also bypasses the review logger's

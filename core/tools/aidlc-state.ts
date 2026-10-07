@@ -121,6 +121,7 @@ import {
   recordGuardStoodAside,
   unattendedHumanPresenceHint,
   intentRepos,
+  repoDir,
   isAutonomousConstructionGate,
   approvedConstructionUnits,
   constructionCheckpointGaps,
@@ -3938,16 +3939,28 @@ function gitHasSourceWork(pd: string): boolean | null {
   return null;
 }
 
-// The workspace_requires signal: git-aware when the workspace is a git repo
+// The source-work signal for one directory: git-aware when it is a git repo
 // (precise - tells session-produced code from a brownfield baseline), else the
 // filesystem-existence fallback (shell-free, reliable in non-git workspaces and
 // the test fixtures). Fail-open: a git error falls back to the FS check.
-function workspaceHasWork(pd: string): boolean {
-  if (isGitRepo(pd)) {
-    const gitVerdict = gitHasSourceWork(pd);
+function dirHasSourceWork(dir: string): boolean {
+  if (isGitRepo(dir)) {
+    const gitVerdict = gitHasSourceWork(dir);
     if (gitVerdict !== null) return gitVerdict;
   }
-  return workspaceHasSourceFile(pd);
+  return workspaceHasSourceFile(dir);
+}
+
+// The workspace_requires signal. The code may live in a child repo rather than
+// the workspace repo (the records in the workspace, the code in a gitignored
+// sibling, with or without AI-DLC in it): the workspace's git never lists that
+// repo's files, so each of the intent's recorded repos - the same set the review
+// source binding and the unit manifest follow - is asked the same question. A
+// recorded repo missing on this clone fails safe (git spawn error -> null,
+// unreadable dir -> false).
+function workspaceHasWork(pd: string): boolean {
+  if (dirHasSourceWork(pd)) return true;
+  return intentRepos(pd).some((repo) => dirHasSourceWork(repoDir(pd, repo)));
 }
 
 // The guard itself. Called from approve/advance/finalize/complete-workflow
