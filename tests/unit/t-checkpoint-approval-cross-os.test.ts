@@ -10,16 +10,13 @@
 // Windows recorded before still counts: the Windows form is accepted too.
 import { describe, expect, test } from "bun:test";
 import { checkpointRecordForms } from "../../dist/claude/.claude/tools/aidlc-construction-checkpoints.ts";
-import { recordDir } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
-import { cleanupTestProject, createTestProject, DEFAULT_RECORD_DIR } from "../harness/fixtures.ts";
+import { cleanupTestProject, createTestProject, DEFAULT_RECORD_DIR, seededRecordDir } from "../harness/fixtures.ts";
 
 describe("t-checkpoint-approval-cross-os: the record folder in a checkpoint fingerprint", () => {
   test("is written with forward slashes on every OS, and the Windows form still counts", () => {
     const project = createTestProject();
     try {
-      const root = recordDir(project);
-      expect(root).not.toBeNull();
-      expect(checkpointRecordForms(project, root!)).toEqual([
+      expect(checkpointRecordForms(project, seededRecordDir(project))).toEqual([
         `aidlc/spaces/default/intents/${DEFAULT_RECORD_DIR}`,
         `aidlc\\spaces\\default\\intents\\${DEFAULT_RECORD_DIR}`,
       ]);
