@@ -289,8 +289,9 @@ fingerprinting, while the union drives receipt filtering.
 reviewer has a fresh terminal `REVIEW_COMPLETED` receipt. The same receipt
 remains mandatory on all four completion paths, with one exception: the
 person's own approval (reported with their reply since the question) goes over
-a review that was requested in the current attempt and has no verdict yet, and
-`GATE_APPROVED` then carries `Review: not finished`. So does the person's
+a review that was requested in the current attempt and has no verdict yet
+(at Code Generation too, when that review is the recovery pass of changed
+source), and `GATE_APPROVED` then carries `Review: not finished`. So does the person's
 approval over a verdict that is the reviewer module's NOT-READY fallback (no
 reviewer gave it); that fallback satisfies the receipt as before, under every
 Guard Policy. The gate a report backfills

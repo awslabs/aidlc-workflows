@@ -4442,7 +4442,14 @@ function verifyReviewerPrecondition(
     !settledSwarm &&
     receipts.sourceStale &&
     !baselineReversionReconciled;
-  if (staleSource) {
+  // The person's own approval goes over the recovery review of that changed
+  // source when it never finished, as at a stage with no source to review.
+  const staleUnit = receipts.newestSourceUnit ?? undefined;
+  const staleRecovery = staleUnit === undefined ? receipts.stagePending : receipts.unitPending.get(staleUnit);
+  if (
+    staleSource &&
+    !(staleRecovery?.recovery === true && approvableUnfinishedReview(pd, content, receipts, personCall, staleUnit))
+  ) {
     staleSourcePreconditionError(
       pd,
       content,
