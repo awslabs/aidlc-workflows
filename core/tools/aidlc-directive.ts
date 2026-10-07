@@ -266,6 +266,9 @@ export interface RunStageDirective {
   // walking-skeleton gate, which the conductor resolves via report (the
   // classify round-trip — see GATE_UNRESOLVED above).
   gate: GateValue;
+  // Beside the unresolved gate, or a Unit's step with no gate of its own: the
+  // agent's next move in one sentence, so the step is taken with no skill loaded.
+  gate_note?: string;
   // Present only for team-owned unit-major approval beats. The stage body is
   // already settled; the conductor opens/reports this unit gate with --unit.
   unit_gate?: "per-stage" | "unit-end";
@@ -541,6 +544,8 @@ interface AskDirectiveBase {
   /** Optional spoken line for the user; presentation only (see NarrationField). */
   narration?: NarrationField;
   question: string;
+  /** QUESTION_NOTE, on every ask that waits for the person. */
+  question_note?: string;
 }
 
 /** One plan the person can name instead: its complete command, and its stage count as the person sees it ("15 stages", the stages after Initialization). */
@@ -792,6 +797,10 @@ type DirectivePayload =
 export type Directive = DirectivePayload & {
   stage_validity?: StageValidityAdvisory;
   change_notices?: string[];
+  /** STAGE_VALIDITY_NOTE, beside stage_validity on every kind but a rules part. */
+  stage_validity_note?: string;
+  /** CHANGE_NOTICES_NOTE, beside change_notices on every kind but a rules part. */
+  change_notices_note?: string;
 };
 
 export type ValidationResult =
@@ -839,6 +848,7 @@ const RUN_STAGE_FIELDS = [
   "context_warnings",
   "kept_replies",
   "gate",
+  "gate_note",
   "unit_gate",
   "construction_policy",
   "construction_checkpoint",
@@ -924,6 +934,7 @@ const PRESENT_GATE_FIELDS = ["kind", "stage", "phase", "memory_path"] as const;
 const ASK_FIELDS = [
   "kind",
   "question",
+  "question_note",
   "ask_type",
   "response_route",
   "confirm_command",
@@ -968,11 +979,16 @@ const NOTICE_FIELDS = ["kind", "message"] as const;
 const NARRATION_FIELD = "narration" as const;
 const STAGE_VALIDITY_FIELD = "stage_validity" as const;
 const CHANGE_NOTICES_FIELD = "change_notices" as const;
+const STAGE_VALIDITY_NOTE_FIELD = "stage_validity_note" as const;
+const CHANGE_NOTICES_NOTE_FIELD = "change_notices_note" as const;
 
 // Every kind's set gains `narration`, so the per-kind literals above stay the
 // record of what is kind-SPECIFIC and this one helper adds what is universal.
 function withNarration(fields: readonly string[]): readonly string[] {
-  return [...fields, NARRATION_FIELD, STAGE_VALIDITY_FIELD, CHANGE_NOTICES_FIELD];
+  return [
+    ...fields, NARRATION_FIELD, STAGE_VALIDITY_FIELD, CHANGE_NOTICES_FIELD,
+    STAGE_VALIDITY_NOTE_FIELD, CHANGE_NOTICES_NOTE_FIELD,
+  ];
 }
 
 const KNOWN_FIELDS_BY_KIND: Readonly<Record<DirectiveKind, readonly string[]>> = {
@@ -988,6 +1004,65 @@ const KNOWN_FIELDS_BY_KIND: Readonly<Record<DirectiveKind, readonly string[]>> =
   parked: withNarration(PARKED_FIELDS),
   notice: withNarration(NOTICE_FIELDS),
 };
+
+// --- Agent notes ---
+//
+// A host can run the agent with no AI-DLC skill or protocol loaded (seen live on
+// Kiro IDE for a whole journey), so a rule that lives only there is missed: the
+// person's own edit was called stray and their redo question answered for them.
+// A rule that rides inside the step is followed. So a field the agent must pass
+// on to the person, and a step the agent got stuck on, carry one sentence for
+// the agent beside it. Errors carry none: many are the agent's to repair, and
+// said word for word they would put the engine's words in front of the person.
+
+export const STAGE_VALIDITY_NOTE =
+  "Say stage_validity.warning to the person word for word if you have not said it in this chat yet, then carry " +
+  "on with this step; it is about their own change, so never say who made it or call it stray or a mistake, and " +
+  "a yes in their next reply redoes that stage.";
+export const CHANGE_NOTICES_NOTE =
+  "Say each change_notices line to the person once, word for word, and add nothing about why.";
+export const QUESTION_NOTE =
+  "This question is for the person, not for you: show it to them with its choices as given, end your turn, and " +
+  "act only on their reply.";
+
+export function unresolvedGateNote(invocation: string): string {
+  return 'Do no work on this stage yet: read the "## Walking Skeleton" section of the memory text (project.md over ' +
+    `team.md over org.md), run \`${invocation} report --skeleton-stance <on|off|scope-dependent>\` ("always" is ` +
+    `on, "never" is off, anything else is scope-dependent), then run \`${invocation} next\` and follow the step it ` +
+    "returns.";
+}
+
+export function unitStepNote(invocation: string): string {
+  return "This Unit's step has no gate of its own: do not report it or ask the person to approve it; when its " +
+    `work for this stage is done, run \`${invocation} next\` and follow the step it returns.`;
+}
+
+// The notes for one emitted directive. `invocation` is how this install runs
+// the orchestrate tool. A rules part carries none: its run-stage repeats the
+// advisory and the notices, and they are said from there, once.
+export function withAgentNotes<T extends Record<string, unknown>>(directive: T, invocation: string): T {
+  if (directive.kind === "load-steering") return directive;
+  const notes: Record<string, string> = {};
+  if (directive.stage_validity !== undefined) notes.stage_validity_note = STAGE_VALIDITY_NOTE;
+  if (Array.isArray(directive.change_notices) && directive.change_notices.length > 0) {
+    notes.change_notices_note = CHANGE_NOTICES_NOTE;
+  }
+  if (directive.kind === "ask" && directive.agent_work !== true) notes.question_note = QUESTION_NOTE;
+  if (directive.kind === "run-stage") {
+    if (directive.gate === GATE_UNRESOLVED) {
+      notes.gate_note = unresolvedGateNote(invocation);
+    } else if (
+      directive.gate === false && typeof directive.unit === "string" &&
+      ![
+        "construction_checkpoint", "swarm_checkpoint", "unit_gate", "wave", "swarm_settled", "single",
+      ].some((field) => field in directive) &&
+      (directive.construction_policy as { completion_only?: boolean } | undefined)?.completion_only !== true
+    ) {
+      notes.gate_note = unitStepNote(invocation);
+    }
+  }
+  return Object.keys(notes).length > 0 ? { ...directive, ...notes } : directive;
+}
 
 // --- Validator ---
 
@@ -1037,6 +1112,13 @@ export function validateDirective(obj: unknown): ValidationResult {
   checkOptionalString(o, NARRATION_FIELD, kind, errors);
   checkOptionalStageValidity(o, kind, errors);
   checkOptionalStringArray(o, CHANGE_NOTICES_FIELD, kind, errors);
+  checkAgentNote(o, STAGE_VALIDITY_NOTE_FIELD, STAGE_VALIDITY_FIELD in o, kind, errors);
+  checkAgentNote(
+    o, CHANGE_NOTICES_NOTE_FIELD,
+    Array.isArray(o[CHANGE_NOTICES_FIELD]) && o[CHANGE_NOTICES_FIELD].length > 0, kind, errors,
+  );
+  checkAgentNote(o, "question_note", true, kind, errors);
+  checkAgentNote(o, "gate_note", true, kind, errors);
 
   // Rule 4-6: per-kind required-field presence + type checks, with specific,
   // kind-aware messages.
@@ -1829,6 +1911,22 @@ function checkGate(
 
 // checkOptionalString — a field that may be absent, but if present must be a
 // string (e.g. conductor_persona, delivered only on the first run-stage).
+// An agent note is one non-empty sentence, and only beside the field it is about.
+function checkAgentNote(
+  o: Record<string, unknown>,
+  field: string,
+  besideItsField: boolean,
+  kind: DirectiveKind,
+  errors: string[],
+): void {
+  if (!(field in o)) return;
+  if (typeof o[field] !== "string" || o[field] === "") {
+    errors.push(`${kind}: ${field} must be a non-empty string`);
+  } else if (!besideItsField) {
+    errors.push(`${kind}: ${field} goes only beside the field it is about`);
+  }
+}
+
 function checkOptionalString(
   o: Record<string, unknown>,
   field: string,

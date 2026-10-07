@@ -91,7 +91,8 @@ function next(proj: string, args: string[] = []): Json {
   return result.directive as Json;
 }
 
-// A solo feature walk at Construction's first stage, Units alpha and beta.
+// A solo feature walk at Construction's first stage, Units alpha and beta,
+// built one Unit at a time with checkpoints (the live journey's settings).
 function constructionProject(skeletonStance?: string): string {
   const proj = createTestProject();
   projects.push(proj);
@@ -109,6 +110,11 @@ ${skeletonStance ? `- **Skeleton Stance**: ${skeletonStance}\n` : ""}
 - **Stages to Skip**: none
 - **Depth**: Standard
 - **Test Strategy**: Standard
+
+## Runtime State
+- **Construction Checkpoints**: enabled
+- **Construction Iteration**: unit-major
+- **Construction Execution**: serial
 
 ## Stage Progress
 

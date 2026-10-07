@@ -129,6 +129,7 @@ import {
   type ScopeCommandRow,
   type StageValidityAdvisory,
   validateDirective,
+  withAgentNotes,
 } from "./aidlc-directive.ts";
 import {
   docsRoot,
@@ -1034,6 +1035,7 @@ function prepareEmission(directive: Directive): PreparedEmission {
     }
   }
   transported = withPickUpLine(transported);
+  transported = withAgentNotes(transported, aidlcToolInvocation("orchestrate"));
   const personLinesSaid = sayPendingPersonLines(requested, transported);
   const result = validateDirective(transported);
   if (!result.valid) {
@@ -14426,9 +14428,13 @@ function handleReport(args: string[], projectDir: string | undefined): void {
     // A solo Unit cannot be reported on its own; when its work is done and
     // only its completion receipt is missing, that receipt is the step.
     const owed = soloUnitReceiptStep(pd, node, flags.unit, scope, stateContent);
-    emit(owed !== null
-      ? printDirective(`${owed} Then run \`${aidlcToolInvocation("orchestrate")} next\`.`)
-      : errorDirective("--unit gate reporting requires Unit Ownership: team."));
+    // Otherwise the agent reported a Unit the walk reports for it: the step is
+    // to carry on, never an error the person would be shown.
+    emit(printDirective(owed !== null
+      ? `${owed} Then run \`${aidlcToolInvocation("orchestrate")} next\`.`
+      : `A Unit is not reported on its own in this work: when this Unit's work for "${slug}" is done, run ` +
+        `\`${aidlcToolInvocation("orchestrate")} next\` and follow the step it returns; it asks the person ` +
+        "whatever needs their approval."));
     return;
   }
 
