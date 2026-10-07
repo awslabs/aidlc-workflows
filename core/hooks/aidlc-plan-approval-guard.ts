@@ -1375,9 +1375,39 @@ function lastStepAdmitsPersonsMoves(projectDir: string): boolean {
   }
 }
 
+// What every helper may run, whoever runs it: the verbs the state-transition
+// guard admits every delegated agent (DELEGATE_ADMITTED_VERBS, from which the
+// Kiro IDE helpers' shell deny is built), in a spelling that guard does not
+// refuse a helper. They read, scan, validate, or do a helper's own work (the
+// composer's workspace scan and grid check, a sensor rerun, the developer's
+// brief). None changes stage status or routing or records a receipt or a
+// person's choice, so none builds a waiting plan or stands in for the
+// person's answer: new work the person asks for is planned while another plan
+// waits. A route is judged by the script and verb the dispatcher runs for it,
+// a tool script (`engine <stem> ...`, see isFrameworkToolInvocation) by its
+// own name. Both modules load only when a command gets this far.
+function everyHelperMayRun(engineArgs: readonly string[]): boolean {
+  if (engineArgs[0] !== "engine") return false;
+  try {
+    const { resolveAction } = require("../tools/aidlc.ts") as typeof import("../tools/aidlc.ts");
+    const { DELEGATE_ADMITTED_VERBS, delegatedLifecycleCommand } =
+      require("./aidlc-state-transition-guard.ts") as typeof import("./aidlc-state-transition-guard.ts");
+    const action = resolveAction([...engineArgs]);
+    const [tool, args] = action.type === "delegate"
+      ? [action.tool, action.args]
+      : [`aidlc-${engineArgs[1]}.ts`, engineArgs.slice(2)];
+    const verb = args.find((arg, i) => arg !== "--project-dir" && args[i - 1] !== "--project-dir");
+    const command = [`bun ${harnessDir()}/tools/${tool}`, ...args.map((arg) => quoteCommandArgument(arg, "posix"))];
+    return Object.hasOwn(DELEGATE_ADMITTED_VERBS, tool) && DELEGATE_ADMITTED_VERBS[tool].includes(verb ?? "") &&
+      delegatedLifecycleCommand(command.join(" ")) === null;
+  } catch {
+    return false;
+  }
+}
+
 // Everything admitted while a plan waits, in one place: the prerequisites
 // below, the open question's own answers, read-only diagnostics, a recorded
-// switch, and what the engine names.
+// switch, what every helper may run, and what the engine names.
 function planWaitAdmits(
   projectDir: string,
   engineArgs: string[],
@@ -1387,7 +1417,7 @@ function planWaitAdmits(
   const personSpoke = () => personSpokeSinceGate(projectDir, { requests: true });
   return isPlanApprovalPrerequisite(engineArgs, gateHeld, personSpoke) ||
     askAdmits(engineArgs) || isReadOnlyDiagnostic(engineArgs) || recordedSwitchChangeAdmitted(projectDir, engineArgs) ||
-    chatSwitchChangeAdmitted(projectDir, engineArgs) ||
+    chatSwitchChangeAdmitted(projectDir, engineArgs) || everyHelperMayRun(engineArgs) ||
     engineDirectedWhilePlanWaits(engineArgs, () => personSpoke() && lastStepAdmitsPersonsMoves(projectDir));
 }
 

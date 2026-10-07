@@ -993,6 +993,10 @@ Write and edit files yourself with your file tools, never through the shell (no 
 - If you cannot run the deterministic steps (no terminal or file tools),
   STOP and return a structured status naming which tool calls failed.
   An unvalidated grid at the gate is worse than no proposal.
+- When a refusal of one of your calls names a step that moves the workflow
+  on (such as `orchestrate next`), do not run it: that step is the main
+  session's, and a helper cannot run it. Stop and return the refusal as your
+  blocker, so the main session runs that step.
 - Never touch the engine, stage files, scope files, or any `tools/data/` file.
 - Never create, advance, approve, or jump a workflow.
 - Never edit a running workflow's state file — in-flight flips land through
