@@ -23687,7 +23687,12 @@ export function normalizeManifestSourcePath(path: string): { path: string; prefi
   if (path.startsWith("/") || /^[A-Za-z]:\//.test(path)) {
     return { reason: "writes[].path must be relative, not absolute" };
   }
-  if (/[*?[\]{}]/.test(path)) return { reason: "writes[].path cannot contain glob syntax" };
+  // A claim is a literal path: brackets and braces are plain characters in a
+  // file name (a Next.js `[id]` route folder, for one). Only `*` and `?`, which
+  // no Windows file name can carry and which read as a pattern, are refused.
+  if (/[*?]/.test(path)) {
+    return { reason: "writes[].path names one file or folder literally (a trailing / claims a folder); * and ? are not accepted" };
+  }
   const inputSegments = path.split("/");
   if (inputSegments.includes("..")) return { reason: "writes[].path cannot contain '..' segments" };
   const prefix = path.endsWith("/");
@@ -23998,10 +24003,11 @@ function currentGitPathMode(
   // The cache accumulates prior single-path additions, but each probe stages
   // and reads only its exact literal path. An earlier path cannot create or
   // change that exact index entry; ordinary directories still have no exact
-  // entry, while embedded repositories remain mode 160000.
+  // entry, while embedded repositories remain mode 160000. Both pathspecs are
+  // literal: git would otherwise read a route folder's `[id]` as a character class.
   const added = spawnSync(
     "git",
-    ["-C", sourceRepoDir, "add", "--", `./${literalPath}`],
+    ["-C", sourceRepoDir, "--literal-pathspecs", "add", "--", `./${literalPath}`],
     {
       env: index.env,
       encoding: "utf-8",
@@ -24011,7 +24017,7 @@ function currentGitPathMode(
   if (added.status !== 0) return { ok: false, mode: null };
   const listed = spawnSync(
     "git",
-    ["-C", sourceRepoDir, "ls-files", "-s", "-z", "--", `./${literalPath}`],
+    ["-C", sourceRepoDir, "--literal-pathspecs", "ls-files", "-s", "-z", "--", `./${literalPath}`],
     {
       env: index.env,
       encoding: "utf-8",
