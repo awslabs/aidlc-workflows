@@ -1246,7 +1246,9 @@ current open finding. A Request Changes report records `Rejected: <reason>`
 only for explicit
 `--reject-finding <review-artifact>#R-NN=<exact human reason>` values. It uses
 `--reopen-finding <review-artifact>#R-NN=<exact human reason>` when the person
-disagrees that a `Resolved (reviewer)` finding is fixed. The same ID cannot
+disagrees that a `Resolved (reviewer)` finding is fixed. The artifact may be
+given as its file name, or left out when one current finding carries the id;
+two findings sharing the id are named back. The same ID cannot
 appear in both flags. Generic revision feedback changes no finding decision.
 
 The iteration budget is engine-enforced: `aidlc-log.ts review` refuses a

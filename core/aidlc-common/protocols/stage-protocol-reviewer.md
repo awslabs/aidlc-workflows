@@ -335,7 +335,10 @@ through normal recovery; do not rewrite receipts or assume a new receipt format.
      ordinary rejected report command for each rejected finding. When the human
      disagrees that a reviewer-fixed finding is fixed (for example
      `R-03 isn't fixed: <why>`), append
-     `--reopen-finding "<review-artifact>#R-03=<why>"`. Never
+     `--reopen-finding "<review-artifact>#R-03=<why>"`. The review artifact
+     may be its file name (`components#R-01`), or left out when one current
+     finding carries the id; when two findings share it, the refusal names
+     both. Never
      infer either decision from generic revision feedback. The same ID cannot
      appear in both flags. The state tool validates the artifact, ID, current
      status, and nonblank reason before recording the decision on
