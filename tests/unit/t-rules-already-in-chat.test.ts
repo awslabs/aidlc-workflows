@@ -188,10 +188,36 @@ async function preCompact(proj: string, harness: string, sessionId: string): Pro
 
 // One `next` as the agent runs it, then `continue <receipt>` for every part.
 // Returns every printed directive and the bytes the chat received.
+// Codex records each command's output in the thread's rollout, as it showed
+// it to the model: `cut` keeps the head and tail of every rule text and drops
+// the middle, as Codex does when the model asks for a small output budget.
+type Rollout = { path: string; cut?: boolean };
+
+function recordOutput(rollout: Rollout, stdout: string): void {
+  let shown = stdout;
+  if (rollout.cut) {
+    const directive = JSON.parse(stdout) as Printed;
+    for (const rule of directive.rules_content ?? []) {
+      rule.text = `${rule.text.slice(0, 40)}\n...3071 tokens truncated...\n${rule.text.slice(-40)}`;
+    }
+    shown = `Warning: truncated output (original token count: 5071)\n${JSON.stringify(directive)}`;
+  }
+  appendFileSync(rollout.path, `${JSON.stringify({
+    timestamp: new Date().toISOString(),
+    type: "response_item",
+    payload: { type: "function_call_output", output: `Process exited with code 0\nOutput:\n${shown}` },
+  })}\n`);
+}
+
+function recordCompaction(rollout: Rollout, at: Date): void {
+  appendFileSync(rollout.path, `${JSON.stringify({ timestamp: at.toISOString(), type: "compacted", payload: { message: "" } })}\n`);
+}
+
 async function next(
   proj: string,
   harness: string,
   env: Record<string, string>,
+  rollout?: Rollout,
 ): Promise<{ results: Printed[]; bytes: number; final: Printed }> {
   const engine = join(proj, HARNESS_DIR[harness], "tools", "aidlc-orchestrate.ts");
   const results: Printed[] = [];
@@ -199,6 +225,7 @@ async function next(
   let args = ["next"];
   for (let hop = 0; hop < 10; hop++) {
     const stdout = await run(proj, [process.execPath, engine, ...args], env);
+    if (rollout) recordOutput(rollout, stdout);
     bytes += Buffer.byteLength(stdout, "utf-8");
     const directive = JSON.parse(stdout) as Printed;
     results.push(directive);
@@ -352,13 +379,13 @@ describe("Codex: this thread was given the bundle and nothing since could have d
   test("the text once, then the pointer; a compaction, a resume or a compacted rollout sends it again", async () => {
     const proj = await projectFor("codex");
     const sid = randomUUID();
-    const rollout = join(proj, "rollout.jsonl");
-    writeFileSync(rollout, `${JSON.stringify({ timestamp: new Date(Date.now() - 60_000).toISOString(), type: "session_meta", payload: { id: sid } })}\n`);
+    const rollout = { path: join(proj, "rollout.jsonl") };
+    writeFileSync(rollout.path, `${JSON.stringify({ timestamp: new Date(Date.now() - 60_000).toISOString(), type: "session_meta", payload: { id: sid } })}\n`);
     const env = { AIDLC_SESSION_OVERRIDE: sid, CODEX_THREAD_ID: sid, CODEX_SESSION_ID: sid };
-    await sessionStart(proj, "codex", sid, "startup", { TRANSCRIPT: rollout });
-    const first = await next(proj, "codex", env);
+    await sessionStart(proj, "codex", sid, "startup", { TRANSCRIPT: rollout.path });
+    const first = await next(proj, "codex", env, rollout);
     expect(sentInFull(first)).toBe(true);
-    const second = await next(proj, "codex", env);
+    const second = await next(proj, "codex", env, rollout);
     expect(pointerOnly(second)).toBe(true);
     expect(second.bytes).toBeLessThan(first.bytes);
 
@@ -368,31 +395,41 @@ describe("Codex: this thread was given the bundle and nothing since could have d
     expect(pointerOnly(await next(proj, "codex", probe))).toBe(true);
 
     await preCompact(proj, "codex", sid);
+    recordCompaction(rollout, new Date());
     // A consultation never counts as handing the text over.
     expect(sentInFull(await next(proj, "codex", probe))).toBe(true);
-    expect(sentInFull(await next(proj, "codex", env))).toBe(true);
-    expect(pointerOnly(await next(proj, "codex", env))).toBe(true);
-
-    // A step Codex cut short (the model asked for fewer output tokens than the
-    // step had): the thread may hold part of the text, so it gets all of it
-    // again, every step until a compaction.
-    const cutStep = `{"kind":"load-steering","stage":"${STAGE}","bundle":"sha256:${"0".repeat(64)}","rules_content":[{"path":"org.md","text":"# Org`;
-    appendFileSync(rollout, `${JSON.stringify({
-      timestamp: new Date().toISOString(),
-      type: "response_item",
-      payload: { type: "function_call_output", output: `Output:\nWarning: truncated output\n${cutStep}` },
-    })}\n`);
-    expect(sentInFull(await next(proj, "codex", env))).toBe(true);
-    expect(sentInFull(await next(proj, "codex", env))).toBe(true);
-
+    expect(sentInFull(await next(proj, "codex", env, rollout))).toBe(true);
+    expect(pointerOnly(await next(proj, "codex", env, rollout))).toBe(true);
     // A compaction no hook reported, seen in the thread's own rollout.
-    appendFileSync(rollout, `${JSON.stringify({ timestamp: new Date(Date.now() + 1_000).toISOString(), type: "compacted", payload: { message: "" } })}\n`);
-    expect(sentInFull(await next(proj, "codex", env))).toBe(true);
+    recordCompaction(rollout, new Date(Date.now() + 1_000));
+    expect(sentInFull(await next(proj, "codex", env, rollout))).toBe(true);
 
-    await sessionStart(proj, "codex", sid, "resume", { TRANSCRIPT: rollout });
-    expect(sentInFull(await next(proj, "codex", env))).toBe(true);
+    await sessionStart(proj, "codex", sid, "resume", { TRANSCRIPT: rollout.path });
+    expect(sentInFull(await next(proj, "codex", env, rollout))).toBe(true);
     // Another thread's command never uses this thread's record.
     expect(sentInFull(await next(proj, "codex", { AIDLC_SESSION_OVERRIDE: sid, CODEX_THREAD_ID: randomUUID() }))).toBe(true);
+  });
+
+  test("rules Codex cut short (inline or in parts) are sent again until a whole copy is in the rollout", async () => {
+    for (const grown of [false, true]) {
+      const proj = await projectFor("codex");
+      // A grown team.md sends the rules in parts before the run-stage.
+      if (grown) editTeam(proj, Array.from({ length: 40 }, (_, index) => `Team practice ${index}: ${"x".repeat(900)}`).join("\n- "));
+      const sid = randomUUID();
+      const rollout: Rollout = { path: join(proj, "rollout.jsonl") };
+      writeFileSync(rollout.path, "");
+      const env = { AIDLC_SESSION_OVERRIDE: sid, CODEX_THREAD_ID: sid, CODEX_SESSION_ID: sid };
+      await sessionStart(proj, "codex", sid, "startup", { TRANSCRIPT: rollout.path });
+      // The model asked for a small output budget: Codex kept each rule's ends.
+      const cut = await next(proj, "codex", env, { ...rollout, cut: true });
+      expect(sentInFull(cut)).toBe(true);
+      expect(cut.results.length > 1, `parts when grown=${grown}`).toBe(grown);
+      // The thread holds only part of the text: all of it again, and again.
+      expect(sentInFull(await next(proj, "codex", env, { ...rollout, cut: true }))).toBe(true);
+      expect(sentInFull(await next(proj, "codex", env, rollout))).toBe(true);
+      // A whole copy is in the rollout now.
+      expect(pointerOnly(await next(proj, "codex", env, rollout))).toBe(true);
+    }
   });
 });
 

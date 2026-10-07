@@ -266,16 +266,42 @@ export function noteRulesDelivered(
   writeDelivery(projectDir, sid, { v: 2, last: bundle, ...(full ? { full } : {}) });
 }
 
-// What the thread's rollout says since its last compaction: when that was (null
-// for none), and whether an AI-DLC step it was handed since then was cut short
-// (Codex trims a command's output to the token budget the model asked for, live:
-// a 20 KB rules part kept 8 KB). A cut step is a directive that no longer parses.
-// Undefined when the rollout cannot be read.
-function rolloutSinceCompaction(transcript: string): { compacted: number | null; cut: boolean } | undefined {
+type RuleEntry = { path: string; text: string };
+
+function isRuleEntries(value: unknown): value is RuleEntry[] {
+  return Array.isArray(value) && value.every((entry) =>
+    entry !== null && typeof entry === "object" &&
+    typeof (entry as RuleEntry).path === "string" && typeof (entry as RuleEntry).text === "string"
+  );
+}
+
+// The digest the engine gives a bundle: rule pieces of one file, in order, are
+// joined back into that file's text (the parts cut it at section and size
+// boundaries without losing a character).
+function bundleDigest(entries: RuleEntry[]): string {
+  const files: RuleEntry[] = [];
+  for (const entry of entries) {
+    const last = files[files.length - 1];
+    if (last !== undefined && last.path === entry.path) last.text += entry.text;
+    else files.push({ path: entry.path, text: entry.text });
+  }
+  return `sha256:${createHash("sha256").update(JSON.stringify(files), "utf-8").digest("hex")}`;
+}
+
+// Whether the thread's rollout shows it holding `bundle` whole: since the last
+// compaction, rule text it was handed (an inline run-stage, or load-steering
+// parts and their run-stage) rebuilds exactly to `bundle`. Codex trims a
+// command's output to the token budget the model asked for by cutting out the
+// middle (live: a 20 KB rules part kept 8 KB and still parsed), so the text
+// itself is checked; a step cut short rebuilds to another digest and proves
+// nothing. Also returns the last compaction's time (null for none). Undefined
+// when the rollout cannot be read.
+function rolloutHolds(transcript: string, bundle: string): { holds: boolean; compacted: number | null } | undefined {
   try {
     if (statSync(transcript).size > ROLLOUT_MAX_BYTES) return undefined;
     let compacted: number | null = null;
-    let cut = false;
+    let holds = false;
+    let parts: { bundle: string; next: number; of: number; entries: RuleEntry[] } | null = null;
     for (const line of readFileSync(transcript, "utf-8").split("\n")) {
       const compaction = line.includes('"compacted"');
       const output = line.includes('"function_call_output"') && line.includes('{\\"kind\\":\\"');
@@ -292,19 +318,43 @@ function rolloutSinceCompaction(transcript: string): { compacted: number | null;
         // A compaction with no readable time could be after anything.
         if (!Number.isFinite(at)) return undefined;
         compacted = compacted === null ? at : Math.max(compacted, at);
-        cut = false;
-      } else if (entry.type === "response_item" && entry.payload?.type === "function_call_output") {
-        const text = typeof entry.payload.output === "string" ? entry.payload.output : "";
-        const at = text.search(/\{"kind":"(run-stage|load-steering)"/);
-        if (at < 0) continue;
-        try {
-          JSON.parse(text.slice(at).trim());
-        } catch {
-          cut = true;
-        }
+        holds = false;
+        parts = null;
+        continue;
       }
+      if (entry.type !== "response_item" || entry.payload?.type !== "function_call_output") continue;
+      const text = typeof entry.payload.output === "string" ? entry.payload.output : "";
+      const at = text.search(/\{"kind":"(run-stage|load-steering)"/);
+      if (at < 0) continue;
+      let step: { kind?: unknown; bundle?: unknown; part?: unknown; parts?: unknown; rules_content?: unknown };
+      try {
+        step = JSON.parse(text.slice(at).trim());
+      } catch {
+        // Cut short at an end: it proves nothing.
+        continue;
+      }
+      const rules = step.rules_content;
+      if (rules !== undefined && !isRuleEntries(rules)) continue;
+      if (step.kind === "load-steering") {
+        if (step.part === 1 && typeof step.bundle === "string" && typeof step.parts === "number") {
+          parts = { bundle: step.bundle, next: 2, of: step.parts, entries: [...(rules ?? [])] };
+        } else if (parts !== null && step.bundle === parts.bundle && step.part === parts.next) {
+          parts.entries.push(...(rules ?? []));
+          parts.next += 1;
+        } else {
+          parts = null;
+        }
+        continue;
+      }
+      // A run-stage: the text it carries, or the parts that came before it.
+      if (rules !== undefined && rules.length > 0) {
+        if (bundleDigest(rules) === bundle) holds = true;
+      } else if (parts !== null && parts.next === parts.of + 1 && bundleDigest(parts.entries) === bundle) {
+        holds = true;
+      }
+      parts = null;
     }
-    return { compacted, cut };
+    return { holds, compacted };
   } catch {
     return undefined;
   }
@@ -344,9 +394,9 @@ export function chatHoldsRules(
       const full = delivered?.full;
       if (full === undefined || full.bundle !== bundle || !record.transcript) return false;
       if (!existsSync(record.transcript)) return false;
-      const since = rolloutSinceCompaction(record.transcript);
+      const since = rolloutHolds(record.transcript, bundle);
       const deliveredAt = Date.parse(full.at);
-      return since !== undefined && !since.cut && Number.isFinite(deliveredAt) &&
+      return since !== undefined && since.holds && Number.isFinite(deliveredAt) &&
         (since.compacted === null || since.compacted < deliveredAt);
     }
     return false;
