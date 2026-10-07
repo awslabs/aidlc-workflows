@@ -75,6 +75,7 @@ import {
   keepApprovedPlanCopy,
   PlanApprovalUnbindableError,
   readTestingContract,
+  replaceTestingContractSection,
   resolveCodeGenerationAuthority,
   resolveTestingPosture,
   testingContractDefectMessage,
@@ -1056,7 +1057,7 @@ export function openPlanApprovalQuestion(
 }
 
 type TargetApproval =
-  | { ok: true; result: PlanApprovalAskResult; changed: boolean }
+  | { ok: true; result: PlanApprovalAskResult; changed: boolean; notice?: string }
   | { ok: false; result?: PlanApprovalAskResult; notice: string };
 
 // Approve one target with its files exactly as they are now. Caller holds the
@@ -1071,7 +1072,8 @@ function approveTarget(
 ): TargetApproval {
   const dir = codeGenerationRecordDir(projectDir, unit);
   const planPath = join(dir, PLAN_FILE);
-  const plan = readText(planPath);
+  const planAsFound = readText(planPath);
+  let plan = planAsFound;
   const instructions = readText(join(dir, INSTRUCTIONS_FILE));
   const view = targetView(projectDir, unit);
   const repair = (note: string): TargetApproval => ({
@@ -1086,10 +1088,25 @@ function approveTarget(
   if (!("contract" in read)) {
     return repair(`the edit broke the Testing Contract block in ${view.plan_path} (${read.defect}).`);
   }
-  if (read.contract.contract_sha256 !== resolveTestingPosture(projectDir).contract_sha256) {
-    return repair(`the Testing Contract in ${view.plan_path} is out of date and needs to be rendered again.`);
+  // The block the engine rendered is out of date because a scope or setting the
+  // person changed moved the posture under it (a block they edited themselves
+  // fails its own hash and took the branch above). It is engine output, so the
+  // engine renders it again and their approval counts for the plan with the
+  // fresh block: nothing is put back to them for a staleness they did not cause.
+  const posture = resolveTestingPosture(projectDir);
+  let contractHash = read.contract.contract_sha256;
+  let rendered: string | null = null;
+  if (contractHash !== posture.contract_sha256) {
+    const refreshed = usableTestingContract(posture) ? replaceTestingContractSection(plan, posture) : null;
+    if (refreshed === null) {
+      return repair(`the Testing Contract in ${view.plan_path} is out of date and needs to be rendered again.`);
+    }
+    plan = refreshed;
+    contractHash = posture.contract_sha256;
+    rendered = `AIDLC Plan Approval: the plan's Testing Contract was rendered again because the scope or settings ` +
+      `changed; the plan's steps are unchanged. Tell them in one line.`;
   }
-  if (!usableTestingContract(read.contract)) {
+  if (!usableTestingContract(rendered === null ? read.contract : posture)) {
     return repair(`the Testing Contract in ${view.plan_path} has missing or inconsistent executable fields.`);
   }
   const source = workspaceSourceState(projectDir);
@@ -1102,7 +1119,13 @@ function approveTarget(
   }
   const sourceFingerprint = source?.fingerprint ?? UNBINDABLE_FINGERPRINT;
   const authority = resolveCodeGenerationAuthority(projectDir, { unit });
-  const fingerprint = approvalFingerprint(plan, instructions, read.contract.contract_sha256, authority);
+  const fingerprint = approvalFingerprint(plan, instructions, contractHash, authority);
+  // What the person's own content came to when the question was answered: a
+  // re-rendered contract block moves the fingerprint on its own, and that is
+  // not the plan changing since they read it.
+  const theirContent = rendered === null
+    ? fingerprint
+    : approvalFingerprint(planAsFound, instructions, read.contract.contract_sha256, authority);
   const asked = record.targets.find((target) => target.unit === unit)?.fingerprint;
   const questionsPath = join(dir, QUESTIONS_FILE);
   const questions = questionsFileContent(
@@ -1129,6 +1152,9 @@ function approveTarget(
     status: "approved",
   };
   withActiveDirectiveLock(projectDir, () => {
+    // The re-rendered plan is written first: the receipt, the copy kept for the
+    // way back, and the fingerprint all describe the plan as it now stands.
+    if (rendered !== null) writeFileAtomic(planPath, plan);
     writeFileAtomic(questionsPath, questions);
     writePlanApprovalReceipt(projectDir, receipt);
     keepApprovedPlanCopy(projectDir, authority, fingerprint, questions);
@@ -1156,7 +1182,8 @@ function approveTarget(
   return {
     ok: true,
     result: { unit, choice: "approve", fingerprint },
-    changed: asked !== undefined && asked !== fingerprint,
+    changed: asked !== undefined && asked !== theirContent,
+    ...(rendered !== null ? { notice: rendered } : {}),
   };
 }
 
@@ -1703,6 +1730,7 @@ export function recordPlanApprovalAnswer(
         results.push(outcome.result);
         approved.push(unit);
         if (outcome.changed) edited.push(unit);
+        if (outcome.notice) repairs.push(outcome.notice);
       } else if (outcome.result) {
         results.push(outcome.result);
         repairs.push(outcome.notice);

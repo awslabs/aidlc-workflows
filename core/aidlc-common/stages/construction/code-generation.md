@@ -254,7 +254,10 @@ When both files from Step 2 are written, run `next`:
     its own step, then run `next`.
   - `repair`: fix exactly what `plan_approval.note` names (for example re-render
     a Testing Contract block an edit broke), then run `next`; the engine asks the
-    person once to build the edited plan.
+    person once to build the edited plan. A Testing Contract left out of date by
+    a scope or setting change the person asked for is not a repair: the engine
+    renders that block again when they approve, their approval stands, and it
+    says so in one line for you to pass on.
   - `plan`: write or finish the Step 2 files, fixing what `plan_approval.note`
     names when present, then run `next`.
 

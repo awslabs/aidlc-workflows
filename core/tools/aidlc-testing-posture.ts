@@ -1209,6 +1209,50 @@ export function renderTestingContract(contract: TestingPostureContract): string 
   return `${CONTRACT_HEADING}\n\n\`\`\`json\n${JSON.stringify(contract, null, 2)}\n\`\`\`\n`;
 }
 
+/**
+ * The plan with its `## Testing Contract` section replaced by this contract's
+ * rendering, or null when the plan has no such section to replace.
+ *
+ * The block is engine output, so a posture change (memory, scope, test
+ * strategy, project type, or a new AIDLC version) leaves a correct block that
+ * is simply out of date, and rendering it again restores exactly what the
+ * engine would have written. The section is found the way `rawMarkdownSection`
+ * finds it, tracking fences, so a `## Testing Contract` line quoted inside a
+ * fenced block in the plan body is never mistaken for the real heading.
+ */
+export function replaceTestingContractSection(
+  plan: string,
+  contract: TestingPostureContract,
+): string | null {
+  const crlf = plan.includes("\r\n");
+  const lines = plan.replace(/\r\n/g, "\n").split("\n");
+  let start = -1;
+  let end = lines.length;
+  let inFence = false;
+  for (let index = 0; index < lines.length; index++) {
+    const line = lines[index];
+    if (/^```/.test(line)) {
+      inFence = !inFence;
+      continue;
+    }
+    if (inFence) continue;
+    if (start < 0 && line.trimEnd() === CONTRACT_HEADING) {
+      start = index;
+      continue;
+    }
+    if (start >= 0 && /^## [^\n]*$/.test(line)) {
+      end = index;
+      break;
+    }
+  }
+  if (start < 0) return null;
+  const before = lines.slice(0, start).join("\n").replace(/\n+$/, "");
+  const after = lines.slice(end).join("\n").replace(/^\n+/, "").replace(/\n+$/, "");
+  const rendered = renderTestingContract(contract).replace(/\n+$/, "");
+  const text = `${before}${before ? "\n\n" : ""}${rendered}\n${after ? `\n${after}\n` : ""}`;
+  return crlf ? text.replace(/\n/g, "\r\n") : text;
+}
+
 function rawMarkdownSection(content: string, heading: string): string {
   const lines = content.replace(/\r\n/g, "\n").split("\n");
   const body: string[] = [];
