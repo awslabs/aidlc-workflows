@@ -2493,9 +2493,20 @@ function handleUnit(args: string[]): void {
       // artifacts, which are still checked below (#1289).
     } else if (action === "pause" || action === "complete") {
       if (!checkpoint || checkpoint.unit !== unit) {
+        // The refusal names the step that is true for this unit. A unit whose
+        // completion receipt stands has nothing left to do, and "start it
+        // first" would send the agent round the start/complete loop again.
+        if (unitCompletedReceipts(pd, slug).has(unit)) {
+          error(
+            `Refusing to ${action} unit "${unit}" for "${slug}": it is already completed. ` +
+              `Nothing more to do for it; run \`${aidlcToolInvocation("orchestrate")} next\` for the next step.`,
+          );
+        }
         error(
           `Refusing to ${action} unit "${unit}" for "${slug}": it is not the active unit` +
-            `${checkpoint ? ` (active: "${checkpoint.unit}", ${checkpoint.state})` : " (no unit is active — start it first)"}.`,
+            `${checkpoint
+              ? ` (active: "${checkpoint.unit}", ${checkpoint.state})`
+              : ` (no unit is active; start it first with \`${aidlcToolInvocation("state")} unit start --stage ${slug} --unit ${unit}\`)`}.`,
         );
       }
       if (action === "pause" && setAsideFor !== undefined && (!reason || !nextAction)) {

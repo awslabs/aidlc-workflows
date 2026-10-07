@@ -499,6 +499,37 @@ describe("t260 single active unit", () => {
     expect(unitVerb(proj, "resume", "unit-a").rc).not.toBe(0);
   });
 
+  // A refusal names the step that is true for the unit: a unit that is
+  // already completed has nothing left to do, so the line must not send the
+  // agent back to "start it first"; a unit never started names the start step.
+  test("completing or pausing a finished unit says it is already completed, never start it first", () => {
+    constructionProject();
+    expect(unitVerb(proj, "start", "unit-a").rc).toBe(0);
+    writeUnitArtifacts(proj, "unit-a");
+    expect(unitVerb(proj, "complete", "unit-a").rc).toBe(0);
+
+    const again = unitVerb(proj, "complete", "unit-a");
+    expect(again.rc).not.toBe(0);
+    const againLine = JSON.parse(again.out).error as string;
+    expect(againLine).toContain('Refusing to complete unit "unit-a" for "functional-design": it is already completed');
+    expect(againLine).toContain("orchestrate");
+    expect(againLine).not.toContain("start it first");
+
+    const pause = unitVerb(proj, "pause", "unit-a", ["--reason", "r", "--next-action", "n"]);
+    expect(pause.rc).not.toBe(0);
+    const pauseLine = JSON.parse(pause.out).error as string;
+    expect(pauseLine).toContain('Refusing to pause unit "unit-a" for "functional-design": it is already completed');
+    expect(pauseLine).not.toContain("start it first");
+
+    // Never started: the start step, in full, and no claim that it is done.
+    const fresh = unitVerb(proj, "complete", "unit-b");
+    expect(fresh.rc).not.toBe(0);
+    const freshLine = JSON.parse(fresh.out).error as string;
+    expect(freshLine).toContain("no unit is active");
+    expect(freshLine).toContain("unit start --stage functional-design --unit unit-b");
+    expect(freshLine).not.toContain("already completed");
+  });
+
   test("a completed unit reopens only when the engine routes it again", () => {
     constructionProject();
     expect(unitVerb(proj, "start", "unit-a").rc).toBe(0);
