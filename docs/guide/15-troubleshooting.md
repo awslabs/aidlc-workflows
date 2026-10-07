@@ -601,10 +601,11 @@ the question open, so your answer still counts.
 
 If AI-DLC says the workspace source cannot be read, the plan cannot be approved
 yet, because nothing could say what the build starts from. Repair the source
-boundary the message names (shrink or exclude the offending path, declare real
-source under an excluded directory in `.aidlc-source-paths.json`, or remove a
-broken symlink), then run `/aidlc` (`$aidlc` on Codex). `/aidlc --doctor` has a
-"Workspace source boundary binds" check that names the failing path.
+boundary the message names (add the offending path to the exclude list in
+`.aidlc-source-paths.json`, declare real source under an excluded directory in
+its paths list, or remove a broken symlink), then run `/aidlc` (`$aidlc` on
+Codex). `/aidlc --doctor` has a "Workspace source boundary binds" check that
+names the failing path.
 
 If the plan's Testing Contract is refused, the message names one of three
 causes: the block is missing, it is not valid JSON, or it changed after it was

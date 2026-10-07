@@ -302,9 +302,9 @@ export interface PlanApprovalRemedy {
 }
 
 export const PLAN_APPROVAL_REPAIR_SOURCE_BOUNDARY_REMEDY =
-  "Repair the source boundary: shrink or exclude the offending path, declare real " +
-  "source under an excluded directory in .aidlc-source-paths.json, or remove the " +
-  "broken symlink; then run next.";
+  "Repair the source boundary: add the offending path to the exclude list in " +
+  ".aidlc-source-paths.json, declare real source under an excluded directory in its " +
+  "paths list, or remove the broken symlink; then run next.";
 
 export function planApprovalUnbindableRemedies(): PlanApprovalRemedy[] {
   return [

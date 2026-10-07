@@ -5191,8 +5191,9 @@ export async function collectDoctorReport(
         label: `Workspace source boundary binds: no (${where})`,
         fix:
           "Plan Approval decisions are refused while the source cannot be bound. " +
-          "Shrink or exclude the offending path, declare the real source under excluded " +
-          "directories in .aidlc-source-paths.json, or remove the broken symlink; then run " +
+          "Add the offending path to the exclude list in .aidlc-source-paths.json " +
+          "({\"version\":1,\"exclude\":[\"<path>\"]}), declare the real source under an excluded " +
+          "directory in its paths list, or remove the broken symlink; then run " +
           "next. Last resort, human only: type " +
           "`Override Plan Approval: <reason>` in chat; the conductor records it with the " +
           "break-glass steps in code-generation.md.",

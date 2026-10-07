@@ -494,12 +494,17 @@ stays bound. Evidence recorded before .NET outputs left the boundary still
 matches until the source or those outputs change.
 
 Real source beneath a conditional generated-output directory, including binary
-or extensionless source, can be declared in root `.aidlc-source-paths.json`:
+or extensionless source, can be declared in root `.aidlc-source-paths.json`,
+and a machine-local tree or file no shipped name covers (a local indexer's
+cache, an in-tree build output) can be excluded there:
 
 ```json
-{"version":1,"paths":["dist/worker.js","build/source"]}
+{"version":1,"paths":["dist/worker.js","build/source"],"exclude":["tools/.indexer"]}
 ```
 
+Both lists are optional. An excluded path and everything under it leave the
+boundary, the swarm Source Commit keeps HEAD's copy of it, and a registered
+path beneath it still wins (it is bound, its excluded siblings are not).
 Registered paths are content-bound regardless of encoding and are included in
 the canonical listing and autonomous swarm Source Commit. Absolute, traversing,
 framework, sensor-cache, and dependency/cache paths are rejected. Missing

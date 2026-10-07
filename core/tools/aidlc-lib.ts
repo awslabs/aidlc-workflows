@@ -21469,11 +21469,33 @@ function sourceHarnessShellDirs(root: string): Set<string> | null {
   }
 }
 
+interface SourceFingerprintRegistry {
+  /** Paths bound whatever their name or encoding. */
+  paths: Set<string>;
+  /** Paths outside the boundary with everything under them, unless a registered path names or lies under them. */
+  excludes: Set<string>;
+}
+
 function sourceFingerprintRegistryPaths(
   root: string,
   carriesWorkspaceShell: boolean,
   suppliedHarnessShellDirs?: ReadonlySet<string>,
 ): Set<string> | null {
+  return sourceFingerprintRegistry(root, carriesWorkspaceShell, suppliedHarnessShellDirs)?.paths ?? null;
+}
+
+// The team's own say over the boundary, in a file it commits and reviews:
+// `paths` names real source the walk would otherwise leave out (binary or
+// extensionless files, source under a generated-output directory); `exclude`
+// names a tree or file nobody authors (a local indexer's cache, an in-tree
+// build output) that no shipped name covers, so a project is never left with
+// "delete it or override" when such a tree makes the boundary unbindable. Both
+// lists are optional.
+function sourceFingerprintRegistry(
+  root: string,
+  carriesWorkspaceShell: boolean,
+  suppliedHarnessShellDirs?: ReadonlySet<string>,
+): SourceFingerprintRegistry | null {
   const harnessShellDirs = suppliedHarnessShellDirs ??
     (
       carriesWorkspaceShell
@@ -21491,7 +21513,7 @@ function sourceFingerprintRegistryPaths(
   try {
     registryLinkStat = lstatSync(registryPath);
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return new Set();
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return { paths: new Set(), excludes: new Set() };
     return noteSourceFailure(
       null,
       "unreadable",
@@ -21515,27 +21537,28 @@ function sourceFingerprintRegistryPaths(
     const parsed = JSON.parse(readFileSync(registryPath, "utf-8")) as {
       version?: unknown;
       paths?: unknown;
+      exclude?: unknown;
     };
+    const lists = { paths: parsed.paths ?? [], exclude: parsed.exclude ?? [] };
     if (
       parsed.version !== 1 ||
-      !Array.isArray(parsed.paths) ||
-      parsed.paths.length > 10_000 ||
-      parsed.paths.some((path) => typeof path !== "string")
+      Object.values(lists).some((list) =>
+        !Array.isArray(list) || list.length > 10_000 || list.some((entry) => typeof entry !== "string"))
     ) {
       return noteSourceFailure(
         null,
         "registered-sources-invalid",
-        `${SOURCE_FINGERPRINT_REGISTRY} must be {"version":1,"paths":[<at most 10000 strings>]}`,
+        `${SOURCE_FINGERPRINT_REGISTRY} must be {"version":1,"paths":[...],"exclude":[...]}, each list optional and at most 10000 strings`,
         SOURCE_FINGERPRINT_REGISTRY,
       );
     }
-    const paths = new Set<string>();
-    for (const raw of parsed.paths) {
+    // A relative path inside the project, or null for anything else.
+    const normalizedPath = (raw: unknown): string | null => {
       const path = String(raw)
         .replace(/\\/g, "/")
         .replace(/^\.\/+/, "")
         .replace(/\/+$/, "");
-      if (
+      return (
         path.length === 0 ||
         path.length > 4096 ||
         path === "." ||
@@ -21546,7 +21569,25 @@ function sourceFingerprintRegistryPaths(
         path
           .split("/")
           .some((part) => part.length === 0 || part === "." || part === "..")
-      ) {
+      ) ? null : path;
+    };
+    const excludes = new Set<string>();
+    for (const raw of lists.exclude as unknown[]) {
+      const path = normalizedPath(raw);
+      if (path === null) {
+        return noteSourceFailure(
+          null,
+          "registered-sources-invalid",
+          `excluded path ${JSON.stringify(String(raw))} must be a relative path inside the project without "." or ".." segments`,
+          SOURCE_FINGERPRINT_REGISTRY,
+        );
+      }
+      excludes.add(path);
+    }
+    const paths = new Set<string>();
+    for (const raw of lists.paths as unknown[]) {
+      const path = normalizedPath(raw);
+      if (path === null) {
         return noteSourceFailure(
           null,
           "registered-sources-invalid",
@@ -21577,7 +21618,7 @@ function sourceFingerprintRegistryPaths(
       }
       paths.add(path);
     }
-    return paths;
+    return { paths, excludes };
   } catch (error) {
     return noteSourceFailure(
       null,
@@ -22619,12 +22660,13 @@ function filesystemSourceIdentity(
         );
     });
   };
-  const registeredSources = sourceFingerprintRegistryPaths(
+  const registry = sourceFingerprintRegistry(
     rootReal,
     carriesWorkspaceShell,
     harnessShellDirs,
   );
-  if (registeredSources === null) return null;
+  if (registry === null) return null;
+  const registeredSources = registry.paths;
   const effectiveRegisteredSources = new Set(registeredSources);
   for (const logicalPath of registeredSources) {
     if (exactPathExcluded(logicalPath)) {
@@ -22717,6 +22759,16 @@ function filesystemSourceIdentity(
   };
   const registeredPathRelevant = (rel: string): boolean =>
     registeredPathIncludes(rel) || registeredDescendantExists(rel);
+  // The registry's exclude list: a path and everything under it leave the
+  // boundary, unless a registered path names it or lies under it (a registered
+  // path always wins). The snapshot keeps HEAD's copy of each excluded path, as
+  // it does for a .NET output beside a project file.
+  const registryExcludes = [...registry.excludes];
+  const registryExcludedPath = (rel: string): boolean =>
+    registryExcludes.some((excluded) => rel === excluded || rel.startsWith(`${excluded}/`));
+  for (const excluded of registryExcludes) {
+    if (!registeredPathIncludes(excluded)) excludedOutputPathspecs.add(`:(top,literal)${excluded}`);
+  }
   const textLike = (path: string, size: number): boolean => {
     if (size === 0) return true;
     let fd: number | undefined;
@@ -22954,6 +23006,16 @@ function filesystemSourceIdentity(
           continue;
         }
         if (exactPathExcluded(childRel)) continue;
+        // Excluded by the registry: skipped, or walked only for the registered
+        // path beneath it, like a conditional directory.
+        const registryExcluded =
+          registryExcludedPath(childRegistryRel) && !registeredPathIncludes(childRegistryRel);
+        if (registryExcluded && !registeredDescendantExists(childRegistryRel)) {
+          if (entry.isSymbolicLink()) {
+            excludedSymlinkPathspecs.add(`:(top,literal)${childSnapshotRel}`);
+          }
+          continue;
+        }
         if (
           rel === "" &&
           excludedTopLevel.has(entry.name) &&
@@ -23031,7 +23093,7 @@ function filesystemSourceIdentity(
           continue;
         }
         const childRegisteredOnly =
-          registeredOnly || conditionalBoundary;
+          registeredOnly || conditionalBoundary || registryExcluded;
         const child = join(dir, entry.name);
         let stat: ReturnType<typeof lstatSync>;
         try {
@@ -23181,7 +23243,7 @@ function filesystemSourceIdentity(
           continue;
         }
         if (stat.isDirectory()) {
-          if (conditionalBoundary) {
+          if (conditionalBoundary || registryExcluded) {
             if (
               !walk(
                 child,
