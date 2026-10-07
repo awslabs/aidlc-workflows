@@ -176,7 +176,9 @@ describe("a Testing Contract left stale by a setting the person changed", () => 
       const recorded = answer(proj, "Approve Plan");
       expect(recorded.code, recorded.message).toBe(0);
       expect(recorded.message).toContain('Recorded "Approve Plan"');
-      expect(recorded.message).toContain("Testing Contract was rendered again");
+      expect(recorded.message).toContain("was rendered again");
+      // The line says what that block is for, so they need no vocabulary to judge it.
+      expect(recorded.message).toContain("the test rules your build follows");
       expect(recorded.message).toContain("the plan's steps are unchanged");
       // Nothing about an edit they never made.
       expect(recorded.message).not.toContain("edited plan");

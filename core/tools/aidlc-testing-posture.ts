@@ -2700,9 +2700,12 @@ interface CodeGenerationContinuation {
  * approval carries to it; strict still asks, because its whole point is to ask.
  *
  * A reopen or a Redo is not that: it is a fresh attempt, whose plan comes back
- * for approval. Its `GATE_REJECTED` row carries `Reopen` (`jump` or `redo`,
- * written by `aidlc-jump.ts reopen`), and nothing carries across it. The two are
- * told apart by that field alone, never by reading the row's feedback text.
+ * for approval. Its `GATE_REJECTED` row carries `Reopen: jump` or `Reopen: redo`
+ * (written by `aidlc-jump.ts reopen`), and nothing carries across those. A change
+ * they ask for at a late question carries `Reopen: change` and is their change
+ * request, whatever stage its row names, so the carry holds for it: that row
+ * reaches this plan's attempt through its `Gate Stages`. The cases are told apart
+ * by that field's value alone, never by reading the row's feedback text.
  *
  * Only the person's own approval of this question, for this target and piece of
  * work, counts: the receipt must match the questions file's fingerprint and
@@ -2725,7 +2728,9 @@ function approvalFromTheirChangeRequest(
   const rejection = readAuditShardEvents(projectDir).find((row) =>
     row.event === "GATE_REJECTED" && row.timestamp === floor[1] &&
     [null, authority.unit].includes(auditBlockField(row.block, "Unit")));
-  if (rejection === undefined || auditBlockField(rejection.block, "Reopen") !== null) return null;
+  if (rejection === undefined) return null;
+  const reopen = auditBlockField(rejection.block, "Reopen");
+  if (reopen !== null && reopen !== "change") return null;
   const plan = readFileSync(join(authority.stageDir, "code-generation-plan.md"), "utf-8");
   const instructions = readFileSync(join(authority.stageDir, "unit-test-instructions.md"), "utf-8");
   const contract = parseTestingContract(plan);

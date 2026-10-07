@@ -1103,8 +1103,8 @@ function approveTarget(
     }
     plan = refreshed;
     contractHash = posture.contract_sha256;
-    rendered = `AIDLC Plan Approval: the plan's Testing Contract was rendered again because the scope or settings ` +
-      `changed; the plan's steps are unchanged. Tell them in one line.`;
+    rendered = "AIDLC Plan Approval: the plan's Testing Contract (the test rules your build follows) was rendered " +
+      "again because the scope or settings changed; the plan's steps are unchanged. Tell them in one line.";
   }
   if (!usableTestingContract(rendered === null ? read.contract : posture)) {
     return repair(`the Testing Contract in ${view.plan_path} has missing or inconsistent executable fields.`);

@@ -630,7 +630,10 @@ try {
         // an exact choice they wrote there is recorded the way an exact pick
         // typed in chat is, and anything else they wrote is named for the
         // agent to read. Never blocks the turn.
-        if (!notAReply && replyText) {
+        // Another engine question on screen owns the reply, and the plan
+        // question's own record is bound to its own marker, so this reads the
+        // file only while the plan question is the open step.
+        if (!notAReply && !answersEngineQuestion && replyText) {
           const fileAnswer = notePlanApprovalFileAnswer(projectDir, sessionId, replyText);
           if (fileAnswer !== null) notes.push(fileAnswer);
         }

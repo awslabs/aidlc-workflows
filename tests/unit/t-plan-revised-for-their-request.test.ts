@@ -186,6 +186,24 @@ function reopened(proj: string, unit: string, how: "jump" | "redo"): void {
 }
 
 /**
+ * A change the person asks for at a late question, for one Unit's earlier stage:
+ * `aidlc-jump.ts reopen` writes one Unit-tagged row per Unit, marked
+ * `Reopen: change`, whose Gate Stages reach this Unit's Code Generation. It is
+ * their change request, not a fresh attempt.
+ */
+function changedAtLateQuestion(proj: string, unit: string, feedback: string): void {
+  appendAuditEntry("GATE_REJECTED", {
+    Stage: "nfr-design",
+    "Gate Stages": "nfr-design,nfr-requirements,infrastructure-design,code-generation",
+    "Gate Scope": "unit-end",
+    Unit: unit,
+    Reopen: "change",
+    "User Input": "Request Changes",
+    Feedback: feedback,
+  }, proj);
+}
+
+/**
  * The developer handoff as the conductor makes it: the brief the engine writes,
  * handed to the guard. Returns the guard's exit code and what it said.
  */
@@ -354,6 +372,30 @@ describe("one Unit's own change request and its reopen", () => {
       const asked = next(proj);
       expect(asked.kind, JSON.stringify(asked)).toBe("ask");
       expect(asked.ask_type).toBe("plan-approval");
+    });
+  }
+  // A change asked for at a late question reopens this Unit's earlier stages for
+  // exactly that change. Their approval of the plan still stands under a lowered
+  // fence; strict asks once, as it does for any other change request.
+  for (const [policy, expected] of [["off", "built"], ["strict", "asked"]] as const) {
+    test(`${policy}: a late-question change for one Unit is ${expected}`, () => {
+      const proj = unitProject(policy, UNIT);
+      approved(proj, UNIT);
+      reply(proj, "use a lookup table in that unit please");
+      changedAtLateQuestion(proj, UNIT, "use a lookup table in that unit please");
+      const revise = next(proj);
+      expect(revise.kind, JSON.stringify(revise)).toBe("run-stage");
+      expect(revise.plan_approval?.status, JSON.stringify(revise)).toBe("revise");
+      expect(revise.plan_approval?.feedback).toBe("use a lookup table in that unit please");
+      writePlan(proj, "- [ ] Step 2: use a lookup table\n", UNIT);
+      const after = next(proj);
+      if (expected === "built") {
+        expect(after.kind, JSON.stringify(after)).toBe("run-stage");
+        expect(after.plan_approval?.status, JSON.stringify(after)).toBe("approved");
+      } else {
+        expect(after.kind, JSON.stringify(after)).toBe("ask");
+        expect(after.ask_type).toBe("plan-approval");
+      }
     });
   }
 });
