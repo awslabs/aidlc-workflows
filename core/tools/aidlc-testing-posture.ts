@@ -1581,7 +1581,19 @@ export function keepApprovedPlanCopy(
   }
 }
 
-const APPROVED_PLAN_UNDO = 'Say "go back to the approved plan" to undo.';
+const APPROVED_PLAN_UNDO_WORDS = "go back to the approved plan";
+const APPROVED_PLAN_UNDO = `Say "${APPROVED_PLAN_UNDO_WORDS}" to undo.`;
+
+/**
+ * True when the text is the words the change line gives the person, and
+ * nothing more: case, spacing, quotes around them, "please" before or after,
+ * and a closing "." or "!" do not matter.
+ */
+export function isApprovedPlanUndoRequest(text: string): boolean {
+  const words = text.toLowerCase().replace(/\s+/g, " ").trim().replace(/^["']|["']$/g, "").replace(/[.!]+$/, "")
+    .replace(/^["']|["']$/g, "").trim();
+  return words.replace(/^please,? /, "").replace(/,? please$/, "") === APPROVED_PLAN_UNDO_WORDS;
+}
 
 function quotedStep(text: string): string {
   return `"${text.length > 80 ? `${text.slice(0, 77).trimEnd()}...` : text}"`;

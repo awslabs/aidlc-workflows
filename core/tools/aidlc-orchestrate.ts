@@ -449,7 +449,14 @@ import {
   settleBuiltPlanReviews,
   withBuiltPlanReviews,
 } from "./aidlc-plan-approval-ask.ts";
-import { codeGenerationResumeNarration, codeGenerationStartNarration, promotableTestingPosture } from "./aidlc-testing-posture.ts";
+import {
+  approvedPlanChangeLine,
+  codeGenerationIssuance,
+  codeGenerationResumeNarration,
+  codeGenerationStartNarration,
+  isApprovedPlanUndoRequest,
+  promotableTestingPosture,
+} from "./aidlc-testing-posture.ts";
 import {
   checksAre,
   checksNamed,
@@ -2721,6 +2728,26 @@ function planQuestionAnsweredByWordsDirective(): PrintDirective {
       ' (a change they ask for is "Request Changes": the engine keeps their words as what to change), then run bare ' +
       `\`${orchestrate} next\`. If you cannot tell which choice it is, run bare \`${orchestrate} next\`, show the person ` +
       "the question it returns, and end the turn.",
+  );
+}
+
+// The words the change line gives the person ("go back to the approved
+// plan"), said in any chat while a plan they approved has changed and is not
+// built yet: the restore of that plan, as the stage rules name it, then next.
+function approvedPlanUndoDirective(projectDir: string, stateContent: string): PrintDirective | null {
+  const marker = readActiveDirectiveMarker(projectDir, stateContent);
+  if (marker?.version !== 2 || marker.stage !== "code-generation") return null;
+  const issued = codeGenerationIssuance(marker, true);
+  if (issued === null) return null;
+  const units = issued.kind === "run-stage" ? [issued.unit ?? null] : issued.units;
+  const changed = units.filter((unit) => approvedPlanChangeLine(projectDir, { unit }, issued) !== null);
+  if (changed.length === 0) return null;
+  const posture = aidlcToolInvocation("testing-posture");
+  const restores = changed.map((unit) =>
+    `\`${posture} restore ${unit === null ? "--stage-level" : `--unit ${shellArg(unit)}`}\``);
+  return printDirective(
+    `The person asked to go back to the plan they approved. Run ${restores.join(", then ")}, say the line it ` +
+      `prints, then run bare \`${aidlcToolInvocation("orchestrate")} next\`.`,
   );
 }
 
@@ -8041,6 +8068,13 @@ function routeNext(args: string[], projectDir: string | undefined): void {
     flags.intent && !flags.scope && !flags.positionalScope && !flags.resume && question === undefined &&
     !isTeamUnitOwnership(stateContent)
   ) {
+    // The words the change line told the person to say undo the change, in
+    // any chat: never a question about where they belong.
+    const undo = isApprovedPlanUndoRequest(flags.intent) ? approvedPlanUndoDirective(pd, stateContent) : null;
+    if (undo !== null) {
+      emit(undo);
+      return;
+    }
     // The engine's own code plan question takes the reply from any chat, so
     // words beside it ("approve the code plan", typed in a new chat) are read
     // as its answer first, never asked about as new work.

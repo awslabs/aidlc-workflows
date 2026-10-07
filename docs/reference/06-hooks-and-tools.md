@@ -2095,7 +2095,9 @@ reply and record their choice or to wait.
 instructions and questions file the person approved in this stage attempt (the
 engine keeps a copy beside the approval receipt) and prints "Back to the plan you
 approved."; the conductor runs it when the person asks to go back to the approved
-plan, and the plan-approval guard lets it through before approval and while a
+plan, and the change line's own words ("go back to the approved plan"), typed in
+any chat or after the entry command, make `next` name this restore for each plan
+that changed. The plan-approval guard lets it through before approval and while a
 plan waits, since it writes back only what the person approved. Until the build starts, an approved plan or test instructions that changed
 on disk are named in one line ("Your approved plan changed before the build: step
 4 now says ... instead of ..."): in `next`'s `change_notices` under a lowered Guard
