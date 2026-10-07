@@ -187,6 +187,14 @@ describe("t-rules-travel-with-steps: a person-facing field says what to do with 
     const note = String(directive.gate_note);
     expect(note).toContain("do not report it or ask the person to approve it");
     expect(note).toMatch(/run `[^`]*aidlc-orchestrate\.ts next`/);
+    // Live: with no skill the step looped on the Unit's review and the autonomy
+    // question; the step names the protocol files it runs by.
+    const protocols = String(directive.protocol_note);
+    const dir = String(directive.stage_file).split("/aidlc-common/")[0] + "/aidlc-common/protocols";
+    expect(protocols.startsWith(`Unless this chat already holds them, read ${dir}/stage-protocol.md, `)).toBe(true);
+    for (const module of directive.protocol_modules as string[]) {
+      expect(protocols).toContain(`${dir}/stage-protocol-${module}.md`);
+    }
   });
 
   test("a Unit reported on its own in a solo walk gets its next step, not an error to show", () => {

@@ -269,6 +269,8 @@ export interface RunStageDirective {
   // Beside the unresolved gate, or a Unit's step with no gate of its own: the
   // agent's next move in one sentence, so the step is taken with no skill loaded.
   gate_note?: string;
+  // protocolNote(): the protocol files this step runs by, for a chat with no skill.
+  protocol_note?: string;
   // Present only for team-owned unit-major approval beats. The stage body is
   // already settled; the conductor opens/reports this unit gate with --unit.
   unit_gate?: "per-stage" | "unit-end";
@@ -849,6 +851,7 @@ const RUN_STAGE_FIELDS = [
   "kept_replies",
   "gate",
   "gate_note",
+  "protocol_note",
   "unit_gate",
   "construction_policy",
   "construction_checkpoint",
@@ -1037,6 +1040,17 @@ export function unresolvedGateNote(invocation: string): string {
     "returns.";
 }
 
+// The protocol files a step runs by, named from its own stage file, so a chat
+// with no skill loaded reads them (seen live: a Unit's step looped on a review
+// and an autonomy question the agent never knew about).
+export function protocolNote(stageFile: string, modules: readonly string[]): string | null {
+  const at = stageFile.indexOf("/aidlc-common/");
+  if (at < 0) return null;
+  const dir = `${stageFile.slice(0, at)}/aidlc-common/protocols`;
+  const files = [`${dir}/stage-protocol.md`, ...modules.map((module) => `${dir}/stage-protocol-${module}.md`)];
+  return `Unless this chat already holds them, read ${files.join(", ")} before this step's work: they say how it runs.`;
+}
+
 export function unitStepNote(invocation: string): string {
   return "This Unit's step has no gate of its own: do not report it or ask the person to approve it; when its " +
     `work for this stage is done, run \`${invocation} next\` and follow the step it returns.`;
@@ -1057,6 +1071,13 @@ export function withAgentNotes<T extends object>(directive: T, invocation: strin
     notes.change_notices_note = CHANGE_NOTICES_NOTE;
   }
   if (d.kind === "ask" && d.agent_work !== true) notes.question_note = QUESTION_NOTE;
+  if (d.kind === "run-stage" && typeof d.stage_file === "string") {
+    const modules = Array.isArray(d.protocol_modules)
+      ? d.protocol_modules.filter((module): module is string => typeof module === "string" && /^[a-z]+$/.test(module))
+      : [];
+    const note = protocolNote(d.stage_file, modules);
+    if (note !== null) notes.protocol_note = note;
+  }
   if (d.kind === "run-stage") {
     if (d.gate === GATE_UNRESOLVED) {
       notes.gate_note = unresolvedGateNote(invocation);
@@ -1128,6 +1149,7 @@ export function validateDirective(obj: unknown): ValidationResult {
   );
   checkAgentNote(o, "question_note", true, kind, errors);
   checkAgentNote(o, "gate_note", true, kind, errors);
+  checkAgentNote(o, "protocol_note", true, kind, errors);
 
   // Rule 4-6: per-kind required-field presence + type checks, with specific,
   // kind-aware messages.
