@@ -345,6 +345,30 @@ describe("approving a Unit as it is over a review that did not finish", () => {
     expect(unitApprovals(p, "alpha")).toHaveLength(0);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
+  // The review stays required, and the step that asks for it is named, so the
+  // agent is never left with a refusal that names nothing.
+  for (const policy of ["off", "strict"] as const) {
+    test(`Guard Policy ${policy}: a review never asked for is named as its first request, and following it verifies the Unit`, () => {
+      const p = fixture(policy);
+      build(p, "alpha");
+      const first = reviewArgs("alpha", 1).join(" ");
+      const step = routed(p);
+      expect(step.construction_checkpoint, JSON.stringify(step).slice(0, 800)).toMatchObject({ unit: "alpha", ready: false });
+      expect(step.construction_checkpoint?.rereview?.command).toContain(first);
+      expect(step.construction_checkpoint?.rereview?.command).not.toContain("--retry-pending");
+      expect(step.reviewer).toBe(REVIEWER);
+      says(p, AS_IT_IS);
+      const refused = checkpoint(p, "alpha", "verify", ["--over-unfinished-review"]);
+      expect(refused.status).not.toBe(0);
+      expect(refused.out).toContain(first);
+      expect(refused.out).not.toContain("verify with --over-unfinished-review");
+      expect(unitApprovals(p, "alpha")).toHaveLength(0);
+      review(p, "alpha", 1, "READY");
+      const ready = checkpoint(p, "alpha", "verify");
+      expect(ready.json?.verified, ready.out).toBe(true);
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+  }
+
   test("the agent cannot let a Unit go on without its review on its own", () => {
     const p = fixture("off");
     build(p, "alpha");
