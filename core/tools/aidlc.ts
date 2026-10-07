@@ -2578,7 +2578,12 @@ async function runHookGroup(
   action: Extract<Action, { type: "hook-group" }>,
 ): Promise<number> {
   const input = await readStdin();
-  return await runHookModule(() => runGroupMembers(action, input), input);
+  const code = await runHookModule(() => runGroupMembers(action, input), input);
+  // The group's own run ended, with the code the host reads. A reader of the
+  // phase trace (the release check's hooksTracedToCompletion among them) sees
+  // the same begin/load/end shape here as for a hook that runs on its own.
+  hookTrace("hook-run-end", { code });
+  return code;
 }
 
 async function runGroupMembers(
@@ -2639,7 +2644,11 @@ async function runGroupMember(
   }) as typeof process.stderr.write;
   let code: number;
   try {
+    // Named phases, because this process loads the hook's code where a hook of
+    // its own would: the trace shows which hook was loaded and that it was.
+    hookTrace("hook-import-begin", { hook: member.hook });
     const mod = await import(pathToFileURL(member.path).href);
+    hookTrace("hook-import-end", { hook: member.hook });
     if (typeof mod.run !== "function") {
       collected.push(
         `aidlc engine hook ${member.hook}: hook does not export run(input)\n`,

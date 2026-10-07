@@ -25,6 +25,7 @@ import { spawnSync } from "node:child_process";
 import { cpSync, existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { hookGroupMembers, PRE_TOOL_USE_GROUP_TARGET } from "../../core/tools/aidlc-command.ts";
+import { hooksTracedToCompletion } from "../../scripts/ci-update-from-previous.ts";
 import { stateDigest, writeActiveDirectiveMarker } from "../../core/tools/aidlc-lib.ts";
 import { AIDLC_SRC, createTestProject, REPO_ROOT, seedAidlcMemory, seededStateFile } from "../harness/fixtures.ts";
 
@@ -71,8 +72,10 @@ function scratchProject(): string {
 function runGroup(
   project: string,
   payload: Record<string, unknown>,
+  traceDir?: string,
 ): { stdout: string; stderr: string; code: number; pid: number } {
   const env: NodeJS.ProcessEnv = { ...process.env, CLAUDE_PROJECT_DIR: project };
+  if (traceDir) env.AIDLC_HOOK_TRACE_DIR = traceDir;
   delete env.AIDLC_PROJECT_DIR;
   delete env.AIDLC_DISABLE_PLAN_APPROVAL_GUARD;
   delete env.AIDLC_UNATTENDED;
@@ -299,6 +302,51 @@ describe("t-claude-guard-group the real checks still refuse", () => {
       });
       expect(r.code, r.stderr).toBe(0);
       expect(r.stdout).toBe("");
+    } finally {
+      rmSync(project, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("t-claude-guard-group the release check reads the group as a hook that ran", () => {
+  // The Preview and stable Release workflows run scripts/ci-update-from-previous.ts,
+  // which runs every hook command the refreshed project wires and requires its
+  // phase trace to show the hook loaded and ended with code 0
+  // (hooksTracedToCompletion). A registration that runs its members in this
+  // process has to leave that same shape, or a release would fail its update
+  // check on every OS while the person sees nothing wrong. The check's own
+  // predicate is imported here so it cannot drift from what the group traces.
+  test("the check's own predicate sees the group load and finish, as it does a single hook", () => {
+    const project = scratchProject();
+    try {
+      const trace = join(project, "trace-allow");
+      // The check pipes `{}`: no tool name, so every member runs and judges it.
+      const r = runGroup(project, {}, trace);
+      expect(r.code, r.stderr).toBe(0);
+      expect([...hooksTracedToCompletion(trace)]).toEqual([PRE_TOOL_USE_GROUP_TARGET]);
+    } finally {
+      rmSync(project, { recursive: true, force: true });
+    }
+  });
+
+  test("a refused call does not read as a clean run, as a single hook's refusal does not", () => {
+    const project = scratchProject();
+    try {
+      const capture = join(project, "members.ndjson");
+      for (const member of MEMBERS) {
+        standIn(
+          project,
+          member.hook,
+          capture,
+          member.hook === "review-freeze"
+            ? { code: 2, stderr: "STANDIN-FREEZE: that file is frozen.\n" }
+            : { code: 0 },
+        );
+      }
+      const trace = join(project, "trace-refuse");
+      const r = runGroup(project, { hook_event_name: "PreToolUse", tool_name: "Bash", tool_input: { command: "ls" } }, trace);
+      expect(r.code).toBe(2);
+      expect([...hooksTracedToCompletion(trace)]).toEqual([]);
     } finally {
       rmSync(project, { recursive: true, force: true });
     }
