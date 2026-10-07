@@ -3644,6 +3644,27 @@ type ConfigSection = (typeof CONFIG_SECTIONS)[number];
 // the front of the description; either way the work is never named after it.
 const ENTRY_WORD_PREFIX = /^[/$]aidlc\s+/i;
 
+/**
+ * Whether what is left of the command line describes work. A line made only of
+ * flag-shaped tokens this engine does not know, and the values that follow them,
+ * describes nothing: the person typed a setting whose name could not be read
+ * (the human-turn hook has already told them so), and starting a piece of work
+ * called "--nonsense 1" would spend what they set on work they never asked for.
+ * One flag-shaped word among real words is still their sentence, as the typed
+ * switch parser reads it the same way, and so are words the person marked as
+ * theirs (after `--`, or beside a plan they named), which this is not asked about.
+ */
+function describesWork(words: readonly string[]): boolean {
+  // One quoted argument can hold the whole request, as Kiro IDE's PowerShell hands it over.
+  const tokens = words.flatMap((word) => word.split(/\s+/)).filter((token) => token.length > 0);
+  for (let index = 0; index < tokens.length; index++) {
+    if (!tokens[index].startsWith("--")) return true;
+    const next = tokens[index + 1];
+    if (next !== undefined && !next.startsWith("-")) index++;
+  }
+  return false;
+}
+
 function parseNextFlags(argv: string[]): ParsedFlags {
   const args = withoutEntryWord(argv);
   // A SOLE bare `help` / `-h` token is a help REQUEST, not intent text. Without
@@ -4024,7 +4045,14 @@ function parseNextFlags(argv: string[]): ParsedFlags {
       else intentWords.shift();
     }
   }
-  if (intentWords.length > 0) flags.intent = intentWords.join(" ").replace(ENTRY_WORD_PREFIX, "");
+  // Words the person marked as theirs stand as they are: after the literal
+  // delimiter, or beside a plan they named, flag-shaped tokens are kept at
+  // creation (`t198-compose-surfaces`). Only an unmarked line the engine cannot
+  // read as a description is not one.
+  const planNamed = Boolean(flags.scope || flags.positionalScope || flags.newScope);
+  if (intentWords.length > 0 && (literalIntent || planNamed || describesWork(intentWords))) {
+    flags.intent = intentWords.join(" ").replace(ENTRY_WORD_PREFIX, "");
+  }
   if (!flags.claim && (flags.claimTeam || flags.claimRhythm)) {
     flags.parseError = "--team and --rhythm require --claim <unit>.";
   }

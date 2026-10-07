@@ -557,6 +557,34 @@ describe("a switch typed while the engine's question is open, before any work ex
   });
 });
 
+// Live on Claude Code: the agent passed a token the engine had just said it could
+// not read to `next` as the work description, the engine offered a plan for
+// "--nonsense 1", and when the person abandoned that offer and described real
+// work, their switch had been spent on the question they walked away from.
+describe("a request made only of a flag-shaped token the engine could not read", () => {
+  test.each(["poc", "enterprise"])("starts no work, and the switch waits for the work they describe (%s)", (scope) => {
+    const proj = emptyProject();
+    expect(reply(proj, "/aidlc --guard.review-freeze off --nonsense 1")).toContain(FOR_WORK_STARTING_NOW);
+    // The agent passes on the words it has left, as it does for any request.
+    const step = next(proj, ["--nonsense", "1"]);
+    expect(step.directive?.kind, step.out).not.toBe("ask");
+    expect(String(step.directive?.narration ?? ""), step.out).toContain("Tell me what to build");
+    // So their switch is still waiting for the work they describe next.
+    const printed = next(proj, ["--scope", scope, "--", "build the export"]);
+    const made = createFromPrint(proj, printed);
+    expect(made.status, made.stderr).toBe(0);
+    expect(guardsOff(activeState(proj))).toContain("review-freeze");
+  });
+
+  test("a flag-shaped word among real words is still their description", () => {
+    const proj = emptyProject();
+    // One quoted argument, as Kiro IDE's PowerShell hands it over.
+    const step = next(proj, ["--help flag for the reverser"]);
+    expect(step.directive?.kind, step.out).toBe("ask");
+    expect(String(step.directive?.question ?? "")).toContain("--help flag for the reverser");
+  });
+});
+
 // A ceremony the person typed before any work existed was kept, promised to them
 // in the engine's step, and then spent at creation without being applied: the
 // stage ran with sensors or learnings on, and nothing said so.
