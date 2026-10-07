@@ -2711,6 +2711,14 @@ interface CodeGenerationContinuation {
  * work, counts: the receipt must match the questions file's fingerprint and
  * prompt hash exactly, so the only field it may differ in is the attempt floor.
  *
+ * And it must be an approval they actually gave. With plan approval off the
+ * engine writes its own receipt for a plan it built without asking, carrying
+ * `choice: "Approve Plan"`, `session: "engine"` and a `skipped` field, and the
+ * questions file records "Plan approval off", which reads as approved. Carrying
+ * that would build a revision on an approval nobody gave: with plan approval
+ * still off the revised plan builds through the off path anyway, and once the
+ * person turns it on they get the question they asked for.
+ *
  * And only once the plan has actually been revised. While it still reads as the
  * plan they approved, their change request has not been carried out yet, and
  * `next` owes them the `revise` step that hands the agent their words; carrying
@@ -2739,6 +2747,7 @@ function approvalFromTheirChangeRequest(
     projectDir, identity.intentId, identity.targetId, authority.runFloor,
   ).find((receipt) =>
     receipt.choice === "Approve Plan" &&
+    receipt.skipped === undefined && receipt.session !== "engine" &&
     runtimeIdentityMatches(receipt, { ...identity, runFloor: receipt.runFloor, promptSha256: receipt.promptSha256 }) &&
     // Judged against that approval's own attempt, the way the revision route
     // judges it: equal means the plan is still the one they approved.

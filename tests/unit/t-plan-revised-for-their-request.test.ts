@@ -57,14 +57,14 @@ afterEach(() => {
 });
 
 /** A poc workflow at Code Generation with plan approval on, as a scope default. */
-function project(policy: "strict" | "relaxed" | "off", guardsOn = false): string {
+function project(policy: "strict" | "relaxed" | "off", guardsOn = false, planApproval: "on" | "off" = "on"): string {
   const proj = createOrchestrationTestProject();
   created.push(proj);
   const state = readFileSync(join(FIXTURES_DIR, "state-brownfield-feature.md"), "utf-8")
     .replace("- **Scope**: feature", "- **Scope**: poc")
     .replace(
       "- **Change Control**: strict (from scope feature)",
-      `- **Guard Policy**: ${policy} (from scope poc)\n- **Plan Approval**: on (from scope poc)` +
+      `- **Guard Policy**: ${policy} (from scope poc)\n- **Plan Approval**: ${planApproval} (from scope poc)` +
         (guardsOn ? "\n- **Guards On**: plan-approval (set by you)" : ""),
     )
     .replace(/^- \*\*Current Stage\*\*:.*$/m, "- **Current Stage**: code-generation");
@@ -313,6 +313,40 @@ describe("a plan revised only for the person's own change request", () => {
     expect(next(proj).plan_approval?.status).toBe("revise");
     writePlan(proj, "- [ ] Step 2: rename the test file\n");
     expect(next(proj).ask_type).toBe("plan-approval");
+  });
+
+  // The engine's own record of a plan it built without asking (plan approval off
+  // for the piece of work) is not an approval of theirs, so it can carry nothing.
+  // Turning plan approval on and asking for a change at the gate must bring the
+  // plan question, not build a revision nobody was shown.
+  test("a plan built with plan approval off carries no approval: turning it on asks", () => {
+    const proj = project("off", false, "off");
+    writePlan(proj);
+    const built = next(proj);
+    expect(built.plan_approval, JSON.stringify(built)).toMatchObject({ status: "approved", skipped: true });
+    expect(readFileSync(join(stageDir(proj), "code-generation-questions.md"), "utf-8"))
+      .toMatch(/^\[Answer\]: Plan approval off$/m);
+    expect(auditText(proj)).not.toContain("**Event**: PLAN_APPROVAL_RECORDED");
+    // They turn plan approval on, as a scope whose default has it on would.
+    const statePath = seededStateFile(proj);
+    writeFileSync(
+      statePath,
+      readFileSync(statePath, "utf-8").replace(
+        "- **Plan Approval**: off (from scope poc)",
+        "- **Plan Approval**: on (from scope feature)",
+      ),
+      "utf-8",
+    );
+    // At the gate they ask for a change.
+    reply(proj, "rename the test file please");
+    rejectedAtGate(proj, "rename the test file please");
+    expect(next(proj).plan_approval?.status).toBe("revise");
+    writePlan(proj, "- [ ] Step 2: rename the test file\n");
+    const asked = next(proj);
+    expect(asked.kind, JSON.stringify(asked)).toBe("ask");
+    expect(asked.ask_type).toBe("plan-approval");
+    // Nobody ever approved a plan here, and nothing says they did.
+    expect(auditText(proj)).not.toContain("**Event**: PLAN_APPROVAL_RECORDED");
   });
 
   test("a Redo is a fresh attempt: the plan comes back under off", () => {
