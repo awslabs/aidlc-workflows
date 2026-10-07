@@ -1,4 +1,4 @@
-import { guardFenceConfigKey, isSwitchableGuardFence, type SwitchableGuardFence } from "./aidlc-guard-fences.ts";
+import { isSwitchableGuardFence, type SwitchableGuardFence } from "./aidlc-guard-fences.ts";
 import {
   aidlcInvocation,
   entrySkillInvocation,
@@ -444,16 +444,21 @@ export const GUARD_REMEDY_WORDING = {
       `I'll stop working on my own and ask you what should change in ${c.target}.` +
       guardResetCost(c, "reject"),
   }),
+  // The person decides; the agent runs the setter (the remedy's command), which
+  // records it as set by them. So the option says what will happen.
   "lower-fence": (c) => ({
     label: "Turn this check off",
-    description: c.fence
-      ? `Type \`${entrySkillInvocation()} config set ${guardFenceConfigKey(c.fence)} off\` yourself ` +
-        `to turn the ${c.fence} check off for this piece of work. It is recorded, and it comes ` +
-        "back on for the next piece of work."
-      : "Turn this check off for this piece of work yourself. It is recorded, and it comes back " +
-        "on for the next piece of work.",
+    description:
+      `I'll turn ${c.fence ? `the ${checkWords(c.fence)}` : "this"} check off for this piece of work. ` +
+      "It is recorded, and it comes back on for the next piece of work.",
   }),
 } satisfies Record<string, GuardRemedyWording>;
+
+// A check as the person knows it ("review freeze", "reviewer read scope"), as
+// the check setter names it.
+function checkWords(fence: SwitchableGuardFence): string {
+  return fence.replace("reviewer-scope", "reviewer read scope").replaceAll("-", " ");
+}
 
 // What a stage-wide reset in a solo unit-major walk throws away, said in the
 // line the person reads, as unitMajorResetCost says it to the conductor.

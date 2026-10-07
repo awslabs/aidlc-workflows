@@ -1,4 +1,4 @@
-// covers: function:lowerFenceRemedy, function:lowerFenceSentence, function:personSpokeSinceGate
+// covers: function:lowerFenceRemedy, function:lowerFenceSentence, function:personSpokeSinceGate, function:evaluateGuardRefusal
 //
 // The person drives. When a guard offers turning a check off and the person
 // picks it, or asks for it in their own words, the agent runs the existing
@@ -21,6 +21,7 @@ import {
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { guardOperationMatchesCommand } from "../../dist/claude/.claude/tools/aidlc-guard-operation.ts";
 import { validateDirective } from "../../dist/claude/.claude/tools/aidlc-directive.ts";
+import { SWITCHABLE_GUARD_FENCES } from "../../dist/claude/.claude/tools/aidlc-guard-fences.ts";
 import { AIDLC_SRC, cleanupTestProject, createTestProject, seedAidlcMemory } from "../harness/fixtures.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
@@ -112,6 +113,51 @@ describe("a guard's turn-it-off choice is a command the agent runs", () => {
     expect(remedy.action).toStartWith("Turn the review-freeze check off for this piece of work.");
     expect(remedy.action).toContain("tell the person in one line");
     expect(remedy.action).not.toMatch(/\/aidlc|\$aidlc|typ(e|ing)|yourself/);
+  });
+
+  // The option is the person's decision; carrying it out is the agent's. So
+  // what they read names what will happen, as every other way on does, and no
+  // command for them to type.
+  test("the option the person reads says the agent turns the check off, with no command to type", () => {
+    for (const fence of SWITCHABLE_GUARD_FENCES) {
+      const remedy = evaluateGuardRefusal({
+        code: "REVIEW_FREEZE_ACTIVE",
+        blockedAction: "artifact-write:requirements.md",
+        stage: "requirements-analysis",
+        stateContent: "# State\n",
+        invariant: "A terminal review continues to cover the bytes it certified.",
+        userMessage: "The reviewed artifact is frozen.",
+        attempt: { recovery: "spent", summaryCoverage: "current", reviewCoverage: "current", sourceCoverage: "current" },
+        humanAuthority: { freshTurn: true, unattended: false },
+        fence,
+        fenceSwitch: "offer",
+      }).remedies.at(-1)!;
+      const words = fence.replace("reviewer-scope", "reviewer read scope").replaceAll("-", " ");
+      expect(remedy.label, fence).toBe("Turn this check off");
+      expect(remedy.description, fence).toBe(
+        `I'll turn the ${words} check off for this piece of work. It is recorded, and it comes back on for ` +
+          "the next piece of work.",
+      );
+      expect(remedy.description, fence).not.toMatch(/`|\/aidlc|\$aidlc|config set|--guard|typ(e|ing)|yourself/);
+    }
+  });
+
+  // A team's memory-held strict Guard Policy keeps the check on for everyone:
+  // the option is not offered, and the setter names the file (below).
+  test("with the check held on by the team's memory, the option is not offered", () => {
+    const withheld = evaluateGuardRefusal({
+      code: "REVIEW_FREEZE_ACTIVE",
+      blockedAction: "artifact-write:requirements.md",
+      stage: "requirements-analysis",
+      stateContent: "# State\n",
+      invariant: "A terminal review continues to cover the bytes it certified.",
+      userMessage: "The reviewed artifact is frozen.",
+      attempt: { recovery: "spent", summaryCoverage: "current", reviewCoverage: "current", sourceCoverage: "current" },
+      humanAuthority: { freshTurn: true, unattended: false },
+      fence: "review-freeze",
+      fenceSwitch: "withhold",
+    });
+    expect(withheld.remedies.some((remedy) => remedy.op === "lower-fence")).toBe(false);
   });
 
   test("the recovery question that offers it is a valid directive", () => {
