@@ -8517,7 +8517,8 @@ function planManagedFiles(
       // their line from AI-DLC's text the same way.
       if (rel === descriptor.onboarding && targetRegular && !unproven.has(rel) && currentHash !== priorHash) {
         const text = readFileSync(target, "utf-8");
-        const owned = [priorHash, ...(prior === null ? descriptor.legacyManagedFileHashes?.[rel] ?? [] : [])]
+        // A copied tree config never ran in has no record: the file the release ships counts.
+        const owned = [priorHash, hash, ...(prior === null ? descriptor.legacyManagedFileHashes?.[rel] ?? [] : [])]
           .filter((known): known is string => known !== undefined);
         const own = ownTitleLine(text, (restored) => owned.includes(sha256Matching(restored, owned)));
         const kept = own === null ? null : withOwnTitleLine(readFileSync(source, "utf-8"), own);
@@ -8825,11 +8826,18 @@ function planRootIntegrations(
       // A line the person wrote in place of the title in AI-DLC's part stays
       // theirs, and the rest of the part refreshes around it (#2058).
       let keptTitle = false;
-      if (priorHash && merged.currentHash && merged.currentHash !== merged.nextHash && merged.currentHash !== priorHash) {
+      if (merged.currentHash && merged.currentHash !== merged.nextHash && merged.currentHash !== priorHash) {
         const { begin, end } = managedBlockMarkers(integration.path, marker);
+        // With no record (a copied tree config never ran in), the part with the
+        // title put back must be one a release shipped, as mergeBlock reads it.
+        const shippedBody = shipped.trim().replace(/\r\n/g, "\n");
+        const shippedPart = (restored: string): boolean => {
+          const body = restored.slice(begin.length, restored.length - end.length).trim().replace(/\r\n/g, "\n");
+          return body === shippedBody || (legacyWholeFileHashes ?? []).includes(sha256Bytes(`${body}\n`));
+        };
         const own = ownTitleLine(
           current.slice(current.indexOf(begin), current.indexOf(end) + end.length),
-          (restored) => sha256Matching(restored, [priorHash]) === priorHash,
+          (restored) => priorHash ? sha256Matching(restored, [priorHash]) === priorHash : shippedPart(restored),
         );
         const beginAt = value.indexOf(begin);
         const endAt = value.indexOf(end) + end.length;

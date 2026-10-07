@@ -17,10 +17,11 @@ import { afterEach, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { cpSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { REPO_ROOT } from "../harness/fixtures.ts";
 import { HARNESS_MATRIX } from "../harness/harness-matrix.ts";
 import { instructionFileDoctorCheck } from "../../core/tools/aidlc-config-diagnostics.ts";
+import { copyChannelOmits, projectionFiles, walkFiles } from "../../core/tools/aidlc-distribution.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
@@ -114,6 +115,35 @@ function aidlcText(tool: Tool, text: string): string {
   return text.slice(text.indexOf("<!-- BEGIN AI-DLC:agents -->"), text.indexOf("<!-- END AI-DLC:agents -->"));
 }
 
+// A copied project config never ran in (no ownership record), as the copy
+// channel leaves it: the runtime folder, and Copilot's AGENTS.md part as the
+// engine adds it at the first chat. `earlier` copies an earlier release's.
+function copiedProject(tool: Tool, earlier: boolean): { project: string; runtime: string } {
+  const runtime = join(temp(`aidlc-t-title-${tool.harness}-copy-runtime-`), "runtime");
+  const root = join(REPO_ROOT, "dist", tool.harness);
+  const omitted = copyChannelOmits(projectionFiles(root).descriptor);
+  for (const rel of walkFiles(root)) {
+    if (omitted.has(rel.replaceAll("\\", "/"))) continue;
+    const target = join(runtime, tool.harness, rel);
+    mkdirSync(dirname(target), { recursive: true });
+    cpSync(join(root, rel), target);
+  }
+  if (earlier) {
+    for (const rel of tool.onboarding.slice(-1)) {
+      const path = join(runtime, tool.harness, rel);
+      writeFileSync(path, readFileSync(path, "utf-8").replace(`${TITLE}\n\n${NOTES_LINE}\n\n`, `${PLACEHOLDER}\n\n`));
+    }
+  }
+  const project = temp(`aidlc-t-title-${tool.harness}-copy-`);
+  mkdirSync(join(project, ".git"));
+  cpSync(join(runtime, tool.harness), project, { recursive: true });
+  if (tool.harness === "copilot") {
+    const part = readFileSync(join(project, tool.shipped), "utf-8");
+    writeFileSync(join(project, "AGENTS.md"), `<!-- BEGIN AI-DLC:agents -->\n${part.trim()}\n<!-- END AI-DLC:agents -->\n`);
+  }
+  return { project, runtime };
+}
+
 function shippedText(tool: Tool): string {
   const text = readFileSync(join(release(tool), tool.shipped), "utf-8");
   return tool.harness === "claude" ? text : `<!-- BEGIN AI-DLC:agents -->\n${text.trim()}\n<!-- END AI-DLC:agents -->`;
@@ -197,6 +227,23 @@ describe("the onboarding's title line", () => {
         aidlcText(tool, swapLine(shippedText(tool), TITLE, "# Demo Project")),
       );
     });
+
+    for (const earlier of [false, true]) {
+      test(`${tool.product}: a copied project config never ran in keeps a replaced ${earlier ? "earlier " : ""}title`, () => {
+        const { project, runtime } = copiedProject(tool, earlier);
+        const file = join(project, tool.onboarding[0]);
+        const original = readFileSync(file, "utf-8");
+        writeFileSync(file, swapLine(original, earlier ? PLACEHOLDER : TITLE, "# Demo Project"));
+        const edited = readFileSync(file, "utf-8");
+        expect(edited).not.toBe(original);
+        // The step the engine names for a copied tree: record it at its own release.
+        const recorded = config(project, runtime, tool.harness, "--yes");
+        expect(recorded.status, recorded.out).toBe(0);
+        expect(recorded.out).not.toContain("conflict(s)");
+        expect(aidlcText(tool, readFileSync(file, "utf-8")).split("\n")).toContain("# Demo Project");
+        expect(instructionFileDoctorCheck(project, tool.harnessDir).pass).toBe(true);
+      });
+    }
 
     test(`${tool.product}: any other change is still the person's to resolve`, () => {
       const project = install(tool, earlierRelease(tool));
