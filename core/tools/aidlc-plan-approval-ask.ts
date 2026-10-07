@@ -64,6 +64,7 @@ import {
   type ActiveDirectiveMarker,
   type PlanApprovalRuntimeReceipt,
 } from "./aidlc-lib.ts";
+import { CHECK_GLOSS } from "./aidlc-guard-fences.ts";
 import {
   approvalFingerprint,
   approvedPlanChangeLine,
@@ -459,7 +460,7 @@ const ANSWER_HERE_INTRO = [
 const BUILT_WITHOUT_ASKING_INTRO = [
   "AI-DLC built this plan without asking because plan approval is off for this",
   "piece of work. This file is the record and asks nothing; to look at a plan",
-  "before it is built, say \"review the plan first\" in chat.",
+  "before it is built, ask in chat.",
 ];
 
 function questionsFileContent(
@@ -872,8 +873,9 @@ export function legacyPlanApprovalOffNotice(
 function planApprovalOffNotice(projectDir: string, units: Array<string | null>, setting: PlanApprovalSetting): string {
   const paths = units.map((unit) => targetView(projectDir, unit).plan_path);
   const written = paths.length === 1 ? `Plan written: ${paths[0]}.` : `Plans written: ${paths.join(", ")}.`;
-  return `${written} Plan approval is off for this piece of work (${changeControlSourceLabel(setting.source)}). ` +
-    "Starting code generation now. Say 'review the plan first' to stop and approve it.";
+  return `${written} Plan approval (${CHECK_GLOSS["plan-approval"]}) is off for this piece of work ` +
+    `(${changeControlSourceLabel(setting.source)}). Starting code generation now. ` +
+    "Do you want to look at the plan and approve it first?";
 }
 
 /**

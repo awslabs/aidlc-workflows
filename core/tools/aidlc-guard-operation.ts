@@ -401,15 +401,14 @@ export const GUARD_REMEDY_WORDING = {
   "change-scope": (c) => ({
     label: "Switch to a scope that includes it",
     description:
-      `${c.stage} is not part of this workflow's plan. Type ` +
-      `\`${entrySkillInvocation()} --scope <scope>\` with a scope that includes it, and I'll restart it.`,
+      `${c.stage} is not part of this work's scope (the set of stages it runs). I'll switch to a scope ` +
+      "that includes it and restart it.",
   }),
   "restore-scope": () => ({
     label: "Switch to a scope with per-Unit stages",
     description:
-      "The current plan has no Construction stage that runs for each Unit, so nothing can " +
-      `approve this Unit. Type \`${entrySkillInvocation()} --scope <scope>\` with a scope that ` +
-      "has one, and I'll try again.",
+      "This work's scope (the set of stages it runs) has no Construction stage that runs for each Unit, " +
+      "so nothing can approve this Unit. I'll switch to a scope that has one and try again.",
   }),
   "abort-bolt": (c) => ({
     label: "Restart this Unit",

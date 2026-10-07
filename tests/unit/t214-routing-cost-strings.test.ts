@@ -299,7 +299,7 @@ describe("t214 scope-change stdout carries the stage and gate counts", () => {
     expect(r.rc).toBe(0);
     // The fixture is Greenfield, so reverse-engineering EXECUTE -> SKIP.
     const mvp = counts(GRID.mvp.stages, true);
-    expect(r.out).toContain(`Switched to mvp: ${mvp.shown} stages (`);
+    expect(r.out).toContain(`Switched to mvp (the set of stages this work runs): ${mvp.shown} stages (`);
     expect(r.out).toContain(`, ${mvp.gates} approval gates`);
   });
 });

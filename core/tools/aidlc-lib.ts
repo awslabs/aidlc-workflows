@@ -55,6 +55,9 @@ export {
   GUARD_FENCE_CONFIG_PREFIX,
   guardFenceConfigKey,
   guardFenceFromConfigKey,
+  CHECK_GLOSS,
+  GUARD_POLICY_GLOSS,
+  SCOPE_GLOSS,
 } from "./aidlc-guard-fences.ts";
 import {
   artifactFilename,
@@ -5978,9 +5981,10 @@ export function personLineHeard(projectDir: string, sessionId: string, line: str
 }
 
 // What the person hears about a finished stage that is behind something it
-// used, with the words that redo it.
+// used: the work carries on, and the redo is offered as a plain question.
 export function staleStageLine(name: string): string {
-  return `${name} finished before something it used changed; say "redo ${name.toLowerCase()}" to bring it up to date.`;
+  return `Something ${name} used changed after it finished. I'm carrying on with it as it is. ` +
+    `Do you want me to redo ${name} with the change?`;
 }
 
 interface SessionPidEntry {
@@ -9682,8 +9686,8 @@ const GUARD_REMEDY_ANSWER_ROUTES: Record<GuardRemedyOp, GuardRemedyAnswerPhases 
   "redo-unit-step": null,
   "reopen-unit-step": null,
   "review-advisory-gate": null,
-  // The person types `/aidlc --scope <scope>`, which runs through `next`: the
-  // Scope is theirs, never a value the conductor fills in.
+  // The agent switches scope through `next --scope <scope>` once the person
+  // picks it, asking which scope only when more than one fits.
   "change-scope": null,
   "restore-scope": null,
   "abort-bolt": null,
@@ -28832,10 +28836,11 @@ export function fenceSwitchSentence(
       // A memory layer's Mode line is the one that cannot be read.
     }
     return (
-      `Guard Policy could not be read, so the ${fence} check cannot be turned off from chat; ` +
+      "Guard Policy (how closely AI-DLC checks changes to what you approved) could not be read, so the " +
+      `${fence} check cannot be turned off from chat. ` +
       (stateLineOnly
-        ? `type \`${entrySkillInvocation()} --guard-policy off\` (or strict, or relaxed) to repair it, then try again.`
-        : "a Guard Policy line in this space's org.md, team.md or project.md cannot be read: correct it there " +
+        ? "Do you want me to set it again, to strict, relaxed or off, and then try again?"
+        : "A Guard Policy line in this space's org.md, team.md or project.md cannot be read: correct it there " +
           "(Mode: strict, relaxed or off), then try again.")
     );
   }
@@ -29036,6 +29041,40 @@ export function requestChangesReportCommand(projectDir: string, stage: string, u
   );
 }
 
+// The scopes whose plan runs this stage, for a remedy that switches to one.
+function scopesRunningStage(slug: string): string[] {
+  try {
+    return Object.entries(loadScopeMapping())
+      .filter(([, definition]) => definition.stages[slug] === "EXECUTE")
+      .map(([name]) => name)
+      .sort();
+  } catch {
+    return [];
+  }
+}
+
+// The scopes whose plan runs at least one per-Unit Construction stage.
+function scopesRunningAnyPerUnitStage(): string[] {
+  try {
+    const perUnit = new Set(loadStageGraphAll().filter((stage) => stage.for_each === "unit-of-work").map((stage) => stage.slug));
+    return Object.entries(loadScopeMapping())
+      .filter(([, definition]) =>
+        Object.entries(definition.stages).some(([slug, run]) => run === "EXECUTE" && perUnit.has(slug)))
+      .map(([name]) => name)
+      .sort();
+  } catch {
+    return [];
+  }
+}
+
+// Which scope the agent switches to: the one that fits, or the person's pick
+// when several do.
+function scopeChoice(scopes: readonly string[]): string {
+  if (scopes.length === 1) return `\`${scopes[0]}\`, the one scope that fits`;
+  if (scopes.length === 0) return "a scope that fits, asking the person which in plain words";
+  return `the one the person picks from ${scopes.join(", ")} (ask them which, in plain words)`;
+}
+
 function unresolvedTeamGateRemedy(
   resolution: Extract<TeamUnitGateResolution, { resolved: false }>,
 ): GuardRemedy {
@@ -29043,9 +29082,9 @@ function unresolvedTeamGateRemedy(
     op: "restore-scope",
     action:
       "This Unit's gate cannot be resolved: no active per-Unit Construction " +
-      `gate stage exists in the current plan (${resolution.reason}). Restore a ` +
-      "valid Scope that includes at least one active per-Unit Construction " +
-      "stage, then retry.",
+      `gate stage exists in the current plan (${resolution.reason}). Switch to a scope ` +
+      `with one: run \`${aidlcToolInvocation("orchestrate")} next --scope <scope>\` with ` +
+      scopeChoice(scopesRunningAnyPerUnitStage()) + ", then retry.",
     requiresHuman: true,
     executableNow: true,
   };
@@ -29062,8 +29101,9 @@ function lifecycleResetRemedies(
     const scopeRemedy: GuardRemedy = {
       op: "change-scope",
       action:
-        "This stage is excluded from the current plan; change to a scope that " +
-        `includes it with ${entrySkillInvocation()} --scope <scope>, then restart ${input.stage}.`,
+        `This stage is excluded from the current plan. Switch to a scope that includes it: run ` +
+        `\`${aidlcToolInvocation("orchestrate")} next --scope <scope>\` with ` +
+        `${scopeChoice(scopesRunningStage(input.stage))}, then restart ${input.stage}.`,
       requiresHuman: true,
       executableNow: true,
     };
@@ -38049,7 +38089,6 @@ export function guardSwitchRefusal(
   // works there is named in place of the chat's.
   const ownTerminal = humanTurnMintAllowed() && personAtOwnTerminal(projectDir);
   const hint = humanTurnMintAllowed() && !ownTerminal ? "" : unattendedHumanPresenceHint(projectDir);
-  const entry = entrySkillInvocation();
   // Before the work exists, the person's own words at the compose gate or
   // scope confirmation are what turn a check off for it. Otherwise the agent
   // creates the work and then runs the setter itself for what they asked.
@@ -38069,25 +38108,25 @@ export function guardSwitchRefusal(
   // Lowering a check is the person's call: the setter carries it out when a
   // person has spoken since the last decision, so this refusal means no reply
   // from them has arrived (or an unattended driver is running).
-  const wait = (typed: string): string => ownTerminal
+  const wait = ownTerminal
     ? ""
-    : ` No reply from the person has arrived since the last decision: run it when they ask for it. They can also type \`${typed}\`.`;
+    : " No reply from the person has arrived since the last decision: run it when they ask for it.";
   if (asked) {
     return "The person asked a question about this check, which turns nothing off. Answer it in one line, offer to " +
       "turn it off for this piece of work, and show the question you asked them again. When they say yes or ask " +
       `for it, run the setter.${hint}`;
   }
   if (wanted.key === "plan-approval") {
-    return `Turning plan approval off lets code generation start without the person approving the plan, so it is their call.${wait(`${entry} config set plan-approval off`)}${hint}`;
+    return `Turning plan approval off lets code generation start without the person approving the plan, so it is their call.${wait}${hint}`;
   }
   if (wanted.key === "summary-confirmation") {
-    return `Turning summary confirmation off skips the person's \`Looks correct\` check before a stage writes its output, so it is their call.${wait(`${entry} config set summary-confirmation off`)}${hint}`;
+    return `Turning summary confirmation off skips the person's \`Looks correct\` check before a stage writes its output, so it is their call.${wait}${hint}`;
   }
   if (wanted.key !== "guard-policy") {
     const fence = wanted.key.slice("guard.".length);
-    return `Turning the ${fence} check off is the person's call.${wait(`${entry} config set guard.${fence} off`)}${hint}`;
+    return `Turning the ${fence} check off is the person's call.${wait}${hint}`;
   }
-  return `Setting Guard Policy ${wanted.value} lowers fences, which is the person's call.${wait(`${entry} --guard-policy ${wanted.value}`)}${hint}`;
+  return `Setting Guard Policy ${wanted.value} lowers fences, which is the person's call.${wait}${hint}`;
 }
 
 export function parseGuardFence(raw: string | null | undefined): GuardFence | null {

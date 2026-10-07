@@ -692,7 +692,7 @@ describe("t333 (3) resolution precedence", () => {
     writeFileSync(state, setField(readFileSync(state, "utf-8"), GUARD_POLICY_FIELD, "stricct (set by you)"));
     const sentence = fenceSwitchSentence(proj, "state-transition", readFileSync(state, "utf-8"));
     expect(sentence).toContain("cannot be turned off from chat");
-    expect(sentence).toContain("--guard-policy off` (or strict, or relaxed) to repair it");
+    expect(sentence).toContain("Do you want me to set it again, to strict, relaxed or off, and then try again?");
     recordHumanPrompt(proj, "/aidlc --guard-policy off");
     expect(resolveGuardPolicy(proj).value).toBe("off");
   });
@@ -1092,7 +1092,7 @@ describe("t333 (4) config-change, the slash flag, and the status line", () => {
     const kept = run(UTILITY, ["scope-change", "--scope", "classic"], unasked.proj, FENCE_ENV_CLEAR);
     expect(kept.status, kept.stderr).toBe(0);
     expect(getField(readFileSync(unasked.state, "utf-8"), GUARD_POLICY_FIELD)).toBe("strict (from scope enterprise)");
-    expect(kept.stdout).toContain('Guard Policy stays strict (from scope enterprise). Say "guard policy off" to match classic.');
+    expect(kept.stdout).toContain("Guard Policy stays strict (AI-DLC asks you again when something you approved changes; from scope enterprise). classic would use off; you can switch to it any time.");
   });
 
   test("the person's request on one piece of work does not lower another's Guard Policy", () => {
@@ -1112,9 +1112,7 @@ describe("t333 (4) config-change, the slash flag, and the status line", () => {
     const other = run(UTILITY, ["scope-change", "--scope", "classic", "--intent", first], proj, FENCE_ENV_CLEAR);
     expect(other.status, other.stderr).toBe(0);
     expect(getField(readFileSync(firstState, "utf-8"), GUARD_POLICY_FIELD)).toBe("strict (from scope enterprise)");
-    expect(other.stdout).toContain(
-      `Guard Policy stays strict (from scope enterprise). Say "/aidlc config set guard-policy off --intent ${first}" to match classic.`,
-    );
+    expect(other.stdout).toContain("Guard Policy stays strict (AI-DLC asks you again when something you approved changes; from scope enterprise). classic would use off; you can switch to it any time.");
     // Named in the same message, the step it gives applies to that work.
     recordHumanPrompt(proj, `/aidlc config set guard-policy off --intent ${first}`);
     expect(getField(readFileSync(firstState, "utf-8"), GUARD_POLICY_FIELD)).toBe("off (set by you)");
@@ -2018,7 +2016,8 @@ describe("t333 (9) fences: the policy lowers a fixed set; per-run switches can l
     // With no word of the person's since the last decision, the agent cannot.
     const refused = run(UTILITY, ["config-change", "--guard-policy", "off"], proj, FENCE_ENV_CLEAR);
     expect(refused.status).not.toBe(0);
-    expect(refused.stderr).toContain("They can also type `/aidlc config set guard.review-freeze off`.");
+    // The agent runs it when they ask: no command is handed to them to type.
+    expect(refused.stderr).not.toContain("They can also type");
     expect(getField(readFileSync(state, "utf-8"), GUARDS_ON_FIELD)).toBe("review-freeze (set by you)");
     // Typed by the person, it is done, and the check is named in words.
     const said = recordHumanPrompt(proj, "/aidlc --guard-policy off");
@@ -2068,8 +2067,8 @@ describe("t333 (9) fences: the policy lowers a fixed set; per-run switches can l
     expect(rowsOf(proj, "GUARD_RESTORED")).toHaveLength(0);
   });
 
-  const fenceRefusal = "Turning the state-transition check off is the person's call. No reply from the person has arrived since the last decision: run it when they ask for it. They can also type `/aidlc config set guard.state-transition off`.";
-  const policyRefusal = "Setting Guard Policy relaxed lowers fences, which is the person's call. No reply from the person has arrived since the last decision: run it when they ask for it. They can also type `/aidlc --guard-policy relaxed`.";
+  const fenceRefusal = "Turning the state-transition check off is the person's call. No reply from the person has arrived since the last decision: run it when they ask for it.";
+  const policyRefusal = "Setting Guard Policy relaxed lowers fences, which is the person's call. No reply from the person has arrived since the last decision: run it when they ask for it.";
   // The agent creates the work, then runs the setter itself for what the person asked.
   const createRefusal = "Creating this intent with Guard Policy relaxed would lower fences, which is the person's call. Create it, then, when they ask for it in their own words, run `bun .claude/tools/aidlc-utility.ts config-change --guard-policy relaxed` yourself and say in one line what changed. A scope default applies without asking.";
 
@@ -2804,9 +2803,10 @@ describe("t333 (9) fences: the policy lowers a fixed set; per-run switches can l
 });
 
 describe("t333 (10) retired policy confirmation", () => {
-  const relaxedNotice = "Guard Policy: relaxed was carried over from this piece of work's retired Change Control line. Under Guard Policy, relaxed now also lowers the plan-approval and review-freeze fences for work nobody directed, and every pass is recorded in the audit trail. Say 'guard policy relaxed' to keep it, or 'guard policy strict' to raise them again; this notice repeats until you choose.";
-  const offNotice = "Guard Policy: off was carried over from this piece of work's retired Change Control line. Under Guard Policy, off now also lowers the plan-approval, review-freeze, state-transition and reviewer-scope fences for work nobody directed, and every pass is recorded in the audit trail. Say 'guard policy off' to keep it, or 'guard policy strict' to raise them again; this notice repeats until you choose.";
-  const conflictNotice = "Guard Policy: this piece of work carries both `Guard Policy: off (set by you)` and the retired `Change Control: strict (from scope classic)`, so strict applies until you choose. Say 'guard policy strict', 'guard policy relaxed', or 'guard policy off' to keep one line; this notice repeats until you do.";
+  // The old setting, said in plain words: what it does, and the choice.
+  const relaxedNotice = "This work still has an old setting that lets AI-DLC skip some of its checks (it asks you to confirm less often). Do you want to keep that, or have AI-DLC check everything again? I'll ask again until you choose.";
+  const offNotice = relaxedNotice;
+  const conflictNotice = "This work has two settings for how closely AI-DLC checks changes, and they disagree, so AI-DLC checks everything for now. Do you want it to keep checking everything, carry on with a note when something you approved changes, or also skip some of its own checks? I'll ask again until you choose.";
 
   test("conflicting policy lines enforce strict and repeat the notice until a typed choice leaves one line", () => {
     const { proj, state } = project("classic");

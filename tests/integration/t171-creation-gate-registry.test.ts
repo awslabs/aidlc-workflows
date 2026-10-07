@@ -1434,7 +1434,7 @@ describe("t171 creation gate consults the intent registry (Blocker B1)", () => {
       const refused = runEmittedCommand(command);
       const decide = refused.out.match(/Run `([^`]+)` to decide whether to start it again/)?.[1] ?? "";
       const again = JSON.parse(runEmittedCommand(decide).stdout.trim());
-      expect(again.question).toContain('Say go ahead to set it up again as "feature" work');
+      expect(again.question).toContain('Do you want to start it again as new "feature" work');
       expect(again.proposed_scope).toBe("feature");
     });
 

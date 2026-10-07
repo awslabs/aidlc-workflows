@@ -726,8 +726,8 @@ describe("t27 aidlc-utility scope-change", () => {
   test("16: scope-change poc->mvp updates Scope field to mvp", () => {
     const p = pocStateAuditProj();
     const result = util(["scope-change", "--scope", "mvp"], p);
-    expect(result.stdout).toContain("Switched to mvp: ");
-    expect(result.stdout).toContain("To go back, type `/aidlc --scope poc`.");
+    expect(result.stdout).toContain("Switched to mvp (the set of stages this work runs): ");
+    expect(result.stdout).toContain("You can switch back to poc any time.");
     expect(stateField(p, "Scope")).toBe("mvp");
     // STRONGER: the SCOPE_CHANGED audit row records New Scope = mvp.
     expect(auditField(auditPath(p), "SCOPE_CHANGED", "New Scope")).toBe("mvp");
@@ -892,10 +892,10 @@ describe("t27 aidlc-utility scope-change", () => {
     expect(stateField(waiting, "Guard Policy")).toBe("off (from scope mvp)");
     expect(stateField(waiting, "Plan Approval")).toBe("on (from scope mvp)");
     expect(lines).toHaveLength(2);
-    expect(lines[0]).toMatch(/^Switched to mvp: \d+ stages \(\d+ done\), \d+ approval gates.*\. To go back, type `\/aidlc --scope feature`\.$/);
+    expect(lines[0]).toMatch(/^Switched to mvp \(the set of stages this work runs\): \d+ stages \(\d+ done\), \d+ approval gates.*\. You can switch back to feature any time\.$/);
     expect(lines[1]).toBe(
       "Skipped Market Research (it was waiting for your approval): mvp does not run it. " +
-        "To run it on its own, type `/aidlc --stage market-research --single`.",
+        "You can still run it on its own any time.",
     );
     // A value that really changes is said.
     const toPoc = util(["scope-change", "--scope", "poc"], stateAuditProj()).stdout;

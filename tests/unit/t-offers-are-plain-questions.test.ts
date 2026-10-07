@@ -24,17 +24,21 @@ import { planSourceDriftRelaxedNotice } from "../../dist/claude/.claude/tools/ai
 const OWNED_FILES = new Set(["aidlc-guard-switch.ts", "aidlc-recorded-switches.ts"]);
 const OWNED = [
   "Say 'for every unit'",
+  "say 'for every unit'",
   "Say 'back to ",
+  "say 'back to ",
   "Say \"go back to the approved plan\" to undo",
   "Type \\`${entrySkillInvocation()} config set ${guardFenceConfigKey",
 ];
+// A break-glass override the person must type in their own words on purpose.
+const KEPT = ["Last resort, human only: type "];
 
 // What a person-facing template must never carry, as it reads in the source.
 const FORBIDDEN: Array<[string, RegExp]> = [
-  ["Say '<words>' to ...", /\b[Ss]ay \\?['"`][^\n'"`]{1,80}\\?['"`] to\b/],
+  ["say '<words>'", /\b[Ss]ay \\?['"][^'"\n]{2,60}\\?['"]/],
   ["Say go ahead", /\bSay go ahead\b/],
-  ["say \"redo <stage>\"", /\bsay \\?"redo/],
   ["type `/aidlc ...`", /\b[Tt]ype \\`\$\{entrySkillInvocation\(\)\}/],
+  ["type ` + (split across lines)", /\b[Tt]ype [`"]\s*\+\s*$/],
   ["they can also type", /\bcan also type\b/],
 ];
 
@@ -52,7 +56,7 @@ describe("t-offers-are-plain-questions: no line tells the person to type exact w
       for (const { file, text } of files) {
         text.split("\n").forEach((line, index) => {
           if (/^\s*(\/\/|\*)/.test(line)) return;
-          if (OWNED.some((phrase) => line.includes(phrase))) return;
+          if ([...OWNED, ...KEPT].some((phrase) => line.includes(phrase))) return;
           if (pattern.test(line)) hits.push(`${file}:${index + 1}: ${line.trim()}`);
         });
       }

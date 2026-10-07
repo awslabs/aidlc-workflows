@@ -473,8 +473,8 @@ describe("t194 recompose - the jump readers honour the recomposed plan", () => {
     expect(jr.status).toBe(0);
     const body = JSON.parse(jr.out) as { notice?: string; stages_skipped: string[] };
     expect(body.stages_skipped).toContain("user-stories");
-    expect(body.notice).toMatch(/^Moved to Code Generation; skipped .*User Stories.*\. To go back, type `[^`]* --stage /);
-    expect(body.notice).toContain(`--stage ${before}\``);
+    expect(body.notice).toMatch(/^Moved to Code Generation; skipped .*User Stories.*\. You can go back to [A-Z][^.]* any time\.$/);
+    expect(body.notice).not.toContain("--stage");
     // One plain line: no stage slugs, no internals.
     expect(body.notice).not.toContain("[S]");
     const back = run(proj, "aidlc-jump.ts", [
@@ -559,10 +559,8 @@ describe("t194 recompose - the jump readers honour the recomposed plan", () => {
       {}) as { kind?: string; narration?: string };
     const said = nextIn();
     expect(said.kind).toBe("run-stage");
-    expect(String(said.narration)).toContain(
-      "To return to Code Generation, type `/aidlc --stage code-generation`.",
-    );
-    expect(String(said.narration)).toMatch(/^Moved back to [A-Z][^.;`]*\. To return to Code Generation/);
+    expect(String(said.narration)).toContain("You can return to Code Generation any time.");
+    expect(String(said.narration)).toMatch(/^Moved back to [A-Z][^.;`]*\. You can return to Code Generation/);
     // Said once.
     expect(String(nextIn().narration ?? "")).not.toContain("To return to Code Generation");
     // And the way back works: the jump it names goes through.
@@ -579,7 +577,7 @@ describe("t194 recompose - the jump readers honour the recomposed plan", () => {
     const back = run(proj, "aidlc-jump.ts", ["execute", "--target", String(before), "--direction", "backward"]);
     expect(back.status, back.out).toBe(0);
     expect((JSON.parse(back.out) as { notice?: string }).notice).toMatch(
-      /^Moved back to [A-Z][^.;`]*\. To return to Code Generation, type `\/aidlc --stage code-generation`\.$/,
+      /^Moved back to [A-Z][^.;`]*\. You can return to Code Generation any time\.$/,
     );
     expect(readState(proj)).toContain(`- **Current Stage**: ${before}`);
   });
@@ -608,7 +606,7 @@ describe("t194 recompose - the jump readers honour the recomposed plan", () => {
     delete nextEnv.AIDLC_SCOPE_MAPPING;
     const said = (runOrchestrateNext(toolIn(proj, "aidlc-orchestrate.ts"), proj, [], { env: nextEnv }).directive ??
       {}) as { narration?: string };
-    expect(String(said.narration)).toContain("To return to Code Generation, type `/aidlc --stage code-generation`.");
+    expect(String(said.narration)).toContain("You can return to Code Generation any time.");
   });
 
   test("backward jump resets a promoted stage's [S/x] like any on-plan stage", () => {
@@ -640,7 +638,8 @@ describe("t194 recompose - the jump readers honour the recomposed plan", () => {
     const jump = message.indexOf("execute --target user-stories --direction forward --scope bugfix");
     expect(add, message).toBeGreaterThan(-1);
     expect(jump).toBeGreaterThan(add);
-    expect(message).toContain("To go back, type `/aidlc --stage requirements-analysis`.");
+    expect(message).toContain("You can go back to Requirements Analysis any time.");
+    expect(message).toContain("next --stage requirements-analysis`.");
     expect(message).not.toContain("change scope");
 
     // The commands it names, in order, land the workflow on the stage.

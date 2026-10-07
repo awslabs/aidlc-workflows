@@ -192,6 +192,13 @@ function directive(r: CliResult): any {
  * Count audit blocks with `**Event**: <ev>` on a line by itself — mirrors the
  * .sh count_event helper `grep -c "\*\*Event\*\*: $2$"` (end-anchored).
  */
+// The one line a print step tells the agent to say to the person.
+function personLine(message: string): string {
+  const said = /Tell the person in one line: "([\s\S]*?)"(?: |$)/.exec(message);
+  if (!said) throw new Error(`no line for the person in: ${message}`);
+  return said[1];
+}
+
 function eventCount(p: string, ev: string): number {
   return readAudit(p)
     .split("\n")
@@ -459,9 +466,12 @@ describe("t118 differential corpus — engine vs aidlc-jump resolve (migrated fr
     expect(unnamed.kind).toBe("print");
     expect(unnamed.message).toContain("Ask the person which stage");
 
+    // A stage that does not exist is a plain question for the person; the agent
+    // reports their answer as the jump.
     const unknown = report("--choice", "jump", "--target", "no-such-stage", ...words("go to the moon"));
-    expect(unknown.kind).toBe("error");
-    expect(unknown.message).toBe('No stage is named "no-such-stage". Say the stage again by its name.');
+    expect(unknown.kind).toBe("print");
+    expect(personLine(unknown.message)).toBe("No stage is named no-such-stage. Which stage did you mean?");
+    expect(unknown.message).toContain("--choice jump --target <stage>");
 
     // A fresh start carries none of the person's words: the new work starts the
     // way new work always does, with their description quoted shell-safe.
@@ -492,6 +502,8 @@ describe("t118 differential corpus — engine vs aidlc-jump resolve (migrated fr
     expect(redoThere.message).toContain("Run `next --stage market-research`");
     // The error is shown to the person as written: it says what happened and
     // what they can say, never an agent's instruction or a flag.
+    // The line the person hears names no machinery; the agent's part around it
+    // carries the commands for their answer.
     const forThePerson = (message: string) => {
       for (const internal of ["Tell the person", "--target", "--choice", "Report again"]) {
         expect(message).not.toContain(internal);
@@ -499,27 +511,28 @@ describe("t118 differential corpus — engine vs aidlc-jump resolve (migrated fr
     };
     for (const [notRun, name] of [["requirements-analysis", "Requirements Analysis"], ["build-and-test", "Build and Test"]]) {
       const r = report("--choice", "redo", "--target", notRun);
-      expect(r.kind).toBe("error");
-      expect(r.message).toBe(
-        `${name} has not run yet, so there is nothing to redo. ` +
-          `Say "jump to ${name}" to go there now, or "redo" to redo the step you are on.`,
+      expect(r.kind).toBe("print");
+      expect(personLine(r.message)).toBe(
+        `${name} has not run yet, so there is nothing to redo. Do you want to go there now, or redo the step you are on?`,
       );
-      forThePerson(r.message);
+      expect(r.message).toContain(`--choice jump --target ${notRun}`);
+      expect(r.message).toContain("--choice redo`");
+      forThePerson(personLine(r.message));
       // Asked for named Units or every Unit, a stage that is not a per-unit
       // step and has not run is still not run: never a jump ahead to it.
       for (const units of [["--every-unit"], ["--unit", "beta"]]) {
         const forUnits = report("--choice", "redo", "--target", notRun, ...units);
-        expect(forUnits.kind, units.join(" ")).toBe("error");
+        expect(forUnits.kind, units.join(" ")).toBe("print");
         expect(forUnits.message).toBe(r.message);
       }
     }
     const unknownRedo = report("--choice", "redo", "--target", "no-such-stage");
-    expect(unknownRedo.kind).toBe("error");
-    expect(unknownRedo.message).toBe(
-      'No stage is named "no-such-stage". Say the stage again by its name, or "redo" to redo the step you are on.',
+    expect(unknownRedo.kind).toBe("print");
+    expect(personLine(unknownRedo.message)).toBe(
+      "No stage is named no-such-stage. Which stage did you mean, or do you want me to redo the step you are on?",
     );
-    forThePerson(unknownRedo.message);
-    forThePerson(unknown.message);
+    forThePerson(personLine(unknownRedo.message));
+    forThePerson(personLine(unknown.message));
     // Stage by stage, a per-unit step after the current one has run for no
     // Unit: a redo of it for every Unit is not run either.
     writeFileSync(

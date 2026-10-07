@@ -84,7 +84,7 @@ A PDF or Word file works the same way: name it, for example
 its document id (at the latest when it asks you to approve the stage), and
 reads its text. You never run a command or type the id, and it never replaces a
 file already in that folder. When the file is git-ignored (or git cannot
-say), it asks first, because the copy would be committed: say "use it anyway" to copy it. When no
+say), it asks first whether you want it copied anyway, because the copy would be committed. When no
 text can be read (no extractor for that kind of file, or a scanned document),
 it says why and asks you for a text or Markdown version. Text over 200,000
 characters is not read directly; the workflow asks you for a supported file.

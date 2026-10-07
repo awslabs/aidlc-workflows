@@ -405,7 +405,7 @@ describe("t338 atomic per-intent settings", () => {
     // the scope-owned summary confirmation and plan approval.
     // The clause rides the reply's first line, after the approval gate count.
     const offClause = (stdout: string): string | undefined =>
-      stdout.split("\n").find((line) => line.startsWith("Switched to "))?.split("; no ")[1]?.split(". To go back")[0];
+      stdout.split("\n").find((line) => line.startsWith("Switched to "))?.split("; no ")[1]?.split(". You can switch back")[0];
     expect(offClause(express.stdout)).toBe("reviewers, sensors, summary confirmation, or plan approval; lead agent only");
     // Plan approval follows the scope the person switched to.
     expect(getField(readFileSync(state, "utf-8"), "Plan Approval")).toBe("off (from scope express)");
@@ -534,7 +534,7 @@ describe("t338 atomic per-intent settings", () => {
 });
 
 describe("t338 summary confirmation off is the person's switch", () => {
-  const summaryRefusal = "Turning summary confirmation off skips the person's `Looks correct` check before a stage writes its output, so it is their call. No reply from the person has arrived since the last decision: run it when they ask for it. They can also type `/aidlc config set summary-confirmation off`.";
+  const summaryRefusal = "Turning summary confirmation off skips the person's `Looks correct` check before a stage writes its output, so it is their call. No reply from the person has arrived since the last decision: run it when they ask for it.";
   /** No resolved session and no presence bypass, so only a typed turn can lower. */
   const SESSIONLESS = { ...FENCE_ENV_CLEAR, AIDLC_SESSION_OVERRIDE: undefined, AIDLC_SESSION_OVERRIDE_SOURCE: undefined };
 

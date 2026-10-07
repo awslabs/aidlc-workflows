@@ -389,6 +389,7 @@ import {
   toPosix,
   UTILITY_COMMANDS,
 } from "./aidlc-lib.ts";
+import { GUARD_POLICY_GLOSS, SCOPE_GLOSS } from "./aidlc-guard-fences.ts";
 import { validateStageFrontmatter } from "./aidlc-stage-schema.ts";
 import { isRuleStale } from "./aidlc-rule-schema.ts";
 import {
@@ -2124,7 +2125,7 @@ To get started:
   }
   const alsoOpen = others.length === 0
     ? ""
-    : `Also open:      ${others.join(", ")} (type \`${entrySkillInvocation()} intent ${others.length === 1 ? others[0] : "<name>"}\` to switch)\n`;
+    : `Also open:      ${others.join(", ")} (ask to switch to ${others.length === 1 ? "it" : "one"})\n`;
   const output = `AI-DLC Workflow Status
 ==============================
 Project:        ${project}
@@ -7610,8 +7611,7 @@ function handleIntentCreate(projectDir: string, flags: Record<string, string>): 
       "intent-create refused: no --scope, --arguments, or --label given. Creation " +
         "is a mutation and a bare invocation mints a garbage default-scope " +
         `intent. Start work via \`${entrySkillInvocation()} "<what to build>"\` (the engine names ` +
-        "the create move for you; the person can also type " +
-        `\`${entrySkillInvocation()}-init [--scope <name>] <description>\`); ` +
+        "the create move for you); " +
         "to invoke this tool directly, pass at least `--scope <name>` (and " +
         "ideally `--arguments \"<description>\" --label \"<2-3 word essence>\"`).",
     );
@@ -9426,9 +9426,9 @@ function onboardDocumentInput(
         path: portablePath,
         ask: ignored === "yes"
           ? `${quoted} is git-ignored, so I haven't copied it into the shared knowledge folder ` +
-            "(it would be committed). Say 'use it anyway' to copy it."
+            "(it would be committed). Do you want me to copy it anyway?"
           : `I couldn't check whether git ignores ${quoted}, so I haven't copied it into the shared ` +
-            "knowledge folder (it might be committed). Say 'use it anyway' to copy it.",
+            "knowledge folder (it might be committed). Do you want me to copy it anyway?",
         next:
           "Tell the person the ask line and wait for their reply. Only after they say to use " +
           "it anyway, run document-input --onboard --include-ignored.",
@@ -10030,7 +10030,7 @@ function handleCodekbPublish(
     );
   }
   const changeNotice = movedDuringScan
-    ? "The code changed while it was being scanned; saved the scan as it was. Say \"redo reverse engineering\" to scan it again."
+    ? "The code changed while it was being scanned, so I saved the scan as it was. Do you want me to scan it again?"
     : null;
   process.stdout.write(
     flags.json === "true"
@@ -10616,7 +10616,8 @@ function handleReclassify(projectDir: string, flags: Record<string, string>, raw
           lines.push(codeArrivedStageLine(stageNames(doneWithoutCode)));
         } else if (doneWithoutCode.length > 1) {
           lines.push(
-            `${stageNames(doneWithoutCode)} ran before the code was here; say "redo" and a stage's name to include it there.`,
+            `${stageNames(doneWithoutCode)} ran before the code was here. I'm carrying on with them as they are. ` +
+              "Do you want me to redo any of them with the code?",
           );
         }
       } else if (planChange === "reopened") {
@@ -10867,15 +10868,12 @@ function handleScopeChange(projectDir: string, flags: Record<string, string>): v
         ) {
           requested["guard-policy"] ??= { value: nextPolicy, source };
         } else {
-          // Work picked by name is switched by name: the plain words reach
-          // the work this chat is on.
-          const switchWords = flags.intent
-            ? `${entrySkillInvocation()} config set guard-policy ${nextPolicy} --intent ${intent}` +
-              (flags.space ? ` --space ${space}` : "")
-            : `guard policy ${nextPolicy}`;
+          // The person asked for the switch: the setting it kept is said as a
+          // fact, with the way to match the new scope.
           keptPolicyLine =
-            `Guard Policy stays ${previousCC.value} (from ${previousCC.source}). ` +
-            `Say "${switchWords}" to match ${newScope}.`;
+            `Guard Policy stays ${previousCC.value} (${GUARD_POLICY_GLOSS[previousCC.value as "strict" | "relaxed" | "off"] ?? previousCC.value}; ` +
+            `from ${previousCC.source}). ` +
+            `${newScope} would use ${nextPolicy}; you can switch to it any time.`;
         }
       }
       for (const key of CEREMONY_KEYS) {
@@ -11056,12 +11054,12 @@ function handleScopeChange(projectDir: string, flags: Record<string, string>): v
       // work it dropped, and each setting whose value changed. Nothing runs
       // until the person asks.
       outputLines = [
-        `Switched to ${newScope}: ${summary.shown} stages (${shownDone} done), ` +
+        `Switched to ${newScope} (${SCOPE_GLOSS}): ${summary.shown} stages (${shownDone} done), ` +
           `${gates} approval gates${ceremonyOffClause(summary)}.` +
-          (isScopeName(oldScope) ? ` To go back, type \`${entrySkillInvocation()} --scope ${scopeArg(oldScope)}\`.` : ""),
+          (isScopeName(oldScope) ? ` You can switch back to ${oldScope} any time.` : ""),
         ...skippedNow.map(({ slug, was }) =>
           `Skipped ${findStageBySlug(slug)?.name ?? slug} (${was}): ${newScope} does not run it. ` +
-            `To run it on its own, type \`${entrySkillInvocation()} --stage ${slug} --single\`.`),
+            "You can still run it on its own any time."),
         ...(droppedUnitWork === null ? [] : [droppedUnitWork]),
         ...update.lines,
         ...(keptPolicyLine === null ? [] : [keptPolicyLine]),

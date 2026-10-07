@@ -429,11 +429,13 @@ describe("t117 flag-validation, env-scope, scope/config change, phase jump, free
 
 describe("t117 init-stage jump guard", () => {
   // --- Test 15: init-stage jump guard — --stage <init>, state present ---
-  test("15: jump to init stage (state present) → error, not run-stage", () => {
+  // With work under way the refusal is a plain question the agent acts on.
+  test("15: jump to init stage (state present) → refused with the rescan offered, not run-stage", () => {
     const p = proj("state-jumped.md");
     const r = next(["--stage", "state-init"], p);
     expect(r.out).toContain("Cannot jump to initialization stages");
-    expect(directive(r.stdout).kind).toBe("error");
+    expect(r.out).toContain("Do you want me to scan the code again for this work?");
+    expect(directive(r.stdout).kind).toBe("print");
   });
 
   // --- Test 16: init-stage jump guard — --phase initialization ---
@@ -441,7 +443,7 @@ describe("t117 init-stage jump guard", () => {
     const p = proj("state-jumped.md");
     const r = next(["--phase", "initialization"], p);
     expect(r.out).toContain("Cannot jump to initialization stages");
-    expect(directive(r.stdout).kind).toBe("error");
+    expect(directive(r.stdout).kind).toBe("print");
   });
 
   // --- Test 16b: with work under way, the refusal names the rescan, and it runs ---
@@ -449,7 +451,7 @@ describe("t117 init-stage jump guard", () => {
     const p = proj("state-jumped.md");
     for (const args of [["--stage", "workspace-detection"], ["--phase", "initialization"], ["--stage", "workspace-detection", "--single"]]) {
       const r = next(args, p);
-      expect(directive(r.stdout).kind, args.join(" ")).toBe("error");
+      expect(directive(r.stdout).kind, args.join(" ")).toBe("print");
       expect(r.out, args.join(" ")).toContain("--project-type brownfield");
     }
     // The named step is accepted: it routes to the rescan, not an error.

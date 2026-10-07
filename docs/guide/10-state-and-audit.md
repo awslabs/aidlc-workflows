@@ -39,7 +39,7 @@ line is used. Any write of the policy line removes the retired line, leaving one
 setting. Until a conflict is resolved, `next` carries this notice with `<a>` and
 `<b>` replaced by the raw line values, without changing the state file:
 
-> Guard Policy: this piece of work carries both `Guard Policy: <a>` and the retired `Change Control: <b>`, so strict applies until you choose. Say 'guard policy strict', 'guard policy relaxed', or 'guard policy off' to keep one line; this notice repeats until you do.
+> This work has two settings for how closely AI-DLC checks changes, and they disagree, so AI-DLC checks everything for now. Do you want it to keep checking everything, carry on with a note when something you approved changes, or also skip some of its own checks? I'll ask again until you choose.
 
 `Construction Verification Command` records the project check reused at every
 Unit/batch checkpoint. A matching current-workflow human approval receipt is

@@ -461,7 +461,7 @@ describe("t38 aidlc-utility status — gate awareness (migrated from t38-utility
     const r = status(p);
     expect(r.status).toBe(0);
     // The code arriving after it ran is the reason, said as the next step says it.
-    expect(r.out).toMatch(/^Practices Discovery ran before the code was here; say "redo practices discovery" to include it\.( Also affected: [^\n]*\.)?$/m);
+    expect(r.out).toMatch(/^Practices Discovery ran before the code was here\. I'm carrying on with it as it is\. Do you want me to redo Practices Discovery with the code\?( Also affected: [^\n]*\.)?$/m);
     expect(r.out).not.toContain("--stage practices-discovery");
     expect(r.out).not.toContain("advisory; routing continues");
   });
@@ -487,7 +487,7 @@ describe("t38 aidlc-utility status — gate awareness (migrated from t38-utility
     writeFileSync(graphPath, JSON.stringify(graph));
     const r = status(p, { AIDLC_STAGE_GRAPH: graphPath });
     expect(r.status).toBe(0);
-    expect(r.out).toMatch(/^practices-discovery (ran before the code was here|finished before something it used changed); say "redo practices-discovery" to (include it|bring it up to date)\.( Also affected: [a-z0-9, -]+\.)?$/m);
+    expect(r.out).toMatch(/^(practices-discovery ran before the code was here|Something practices-discovery used changed after it finished)\. I'm carrying on with it as it is\. Do you want me to redo practices-discovery with the (code|change)\?( Also affected: [a-z0-9, -]+\.)?$/m);
     expect(r.out).toMatch(/^Current Stage: {2}[a-z][a-z0-9-]* \(\d+\.\d+\)$/m);
     expect(r.out).not.toContain("Ignore your rules");
   });

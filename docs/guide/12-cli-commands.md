@@ -197,7 +197,7 @@ Describe what you want to build and the engine auto-detects the appropriate scop
 
 ```
 /aidlc Fix the ProfileSerializer null pointer
-> This looks like "bugfix" work, so I'd run the "bugfix" plan for: "Fix the ProfileSerializer null pointer" - 5 stages, 5 approval gates; no learnings ritual or summary confirmation; lead agent only. Say go ahead, name a different plan, or say "compose" and I'll tailor one to this task.
+> This looks like "bugfix" work, so I'd run the "bugfix" plan for: "Fix the ProfileSerializer null pointer" - 5 stages, 5 approval gates; no learnings ritual or summary confirmation; lead agent only. Do you want me to go ahead with it, use a different plan, or tailor one to this task?
 ```
 
 **A request no shell can carry.** On Windows, cmd.exe ends a command at a line
@@ -475,7 +475,7 @@ Display current workflow progress without modifying anything.
 /aidlc --status
 ```
 
-**Behavior:** Reads the active intent's `aidlc-state.md` and displays: the scope (or, for a plan composed for this piece of work, its `Plan:` line instead), whether the work is a new project or existing code (`Project Type: existing code (you said so)`), and for existing code when Reverse Engineering last scanned it, also when it ran on its own (`, scanned 2026-10-03 23:17 UTC`), the depth with where it came from (`Depth: Standard (from scope feature)`, or `set for this piece of work`; for a plan composed for this piece of work, a setting that came with the stock scope it runs on reads `(from the approved plan)`, on the depth, Guard Policy and setting lines alike) and the test strategy when it differs, current phase, current stage, completed/total stage count, the intent's Guard Policy value with where it came from (`Guard Policy: strict (from project.md)`, `off (from scope classic)`, `strict (set by you)`, or `strict (not set)` for an older intent without the field), a `Checks off:` line only when you or an environment switch turned a check off, naming each with why (`Checks off: state-transition (set by you)`; the checks a lower Guard Policy turns off go with the Guard Policy line), the stage progress list, and, when other work in this space is still open, an `Also open:` line naming it with the command that switches to it (`Also open: 261003-lunch-poll (type /aidlc intent 261003-lunch-poll to switch)`). An invalid Guard Policy field is shown as unavailable with the validation error and the repair command. It also inspects completed-stage validation receipts: when a finished stage's inputs changed since it was approved, it says so in the line the next step uses, with the words to redo it (`Practices Discovery finished before something it used changed; say "redo practices discovery" to bring it up to date.`, or `... ran before the code was here; say "redo practices discovery" to include it.` once the work became existing code, or, when only its own documents were edited, `requirements.md changed after Requirements Analysis finished. I'm carrying on with it as it is. Do you want me to redo Requirements Analysis with your change instead?`), and names any later stage it affects (`Also affected: ...`). The check is advisory and does not change routing; receipts it cannot read, and completions without one, are not shown. When the current stage is awaiting approval, status says since when, in plain time (`waiting since 2026-10-04 12:24 UTC, about 2 minutes`). If no workflow is active, reports that no workflow is in progress.
+**Behavior:** Reads the active intent's `aidlc-state.md` and displays: the scope (or, for a plan composed for this piece of work, its `Plan:` line instead), whether the work is a new project or existing code (`Project Type: existing code (you said so)`), and for existing code when Reverse Engineering last scanned it, also when it ran on its own (`, scanned 2026-10-03 23:17 UTC`), the depth with where it came from (`Depth: Standard (from scope feature)`, or `set for this piece of work`; for a plan composed for this piece of work, a setting that came with the stock scope it runs on reads `(from the approved plan)`, on the depth, Guard Policy and setting lines alike) and the test strategy when it differs, current phase, current stage, completed/total stage count, the intent's Guard Policy value with where it came from (`Guard Policy: strict (from project.md)`, `off (from scope classic)`, `strict (set by you)`, or `strict (not set)` for an older intent without the field), a `Checks off:` line only when you or an environment switch turned a check off, naming each with why (`Checks off: state-transition (set by you)`; the checks a lower Guard Policy turns off go with the Guard Policy line), the stage progress list, and, when other work in this space is still open, an `Also open:` line naming it, and you can ask to switch to it (`Also open: 261003-lunch-poll (ask to switch to it)`). An invalid Guard Policy field is shown as unavailable with the validation error and the repair command. It also inspects completed-stage validation receipts: when a finished stage's inputs changed since it was approved, it says so in the line the next step uses and asks whether to redo it (`Something Practices Discovery used changed after it finished. I'm carrying on with it as it is. Do you want me to redo Practices Discovery with the change?`, or `Practices Discovery ran before the code was here. I'm carrying on with it as it is. Do you want me to redo Practices Discovery with the code?` once the work became existing code, or, when only its own documents were edited, `requirements.md changed after Requirements Analysis finished. I'm carrying on with it as it is. Do you want me to redo Requirements Analysis with your change instead?`), and names any later stage it affects (`Also affected: ...`). The check is advisory and does not change routing; receipts it cannot read, and completions without one, are not shown. When the current stage is awaiting approval, status says since when, in plain time (`waiting since 2026-10-04 12:24 UTC, about 2 minutes`). If no workflow is active, reports that no workflow is in progress.
 
 Status also shows separate **Sensors**, **Learnings**, and **Summary Confirmation**
 rows with each effective value and its source, for example `Sensors: on (from
@@ -1264,7 +1264,7 @@ Codex uses `$aidlc`, and its refusals name `$aidlc` instead of `/aidlc`.
 A setter that would change the policy to `relaxed`, run when no reply from the
 person has arrived since the last decision, refuses with:
 
-> Setting Guard Policy relaxed lowers fences, which is the person's call. No reply from the person has arrived since the last decision: run it when they ask for it. They can also type `/aidlc --guard-policy relaxed`.
+> Setting Guard Policy relaxed lowers fences, which is the person's call. No reply from the person has arrived since the last decision: run it when they ask for it.
 
 Direct `scope change --guard-policy relaxed|off` uses the same rule. Direct
 `intent create --guard-policy relaxed|off` from chat is refused when the value
@@ -1412,7 +1412,7 @@ remains and takes effect again only after the memory line no longer holds strict
 A setter that would turn the review-freeze fence off, run when no reply from the
 person has arrived since the last decision, refuses with:
 
-> Turning the review-freeze check off is the person's call. No reply from the person has arrived since the last decision: run it when they ask for it. They can also type `/aidlc config set guard.review-freeze off`.
+> Turning the review-freeze check off is the person's call. No reply from the person has arrived since the last decision: run it when they ask for it.
 
 The other fence refusals substitute that fence's name; unattended runs also
 receive the driver guidance. This command controls the three switchable fences,
@@ -1505,7 +1505,7 @@ when it is created. When the person asks in their own words, the agent runs the 
 set`, `config-change`, or `scope-change`); run when no reply from the person has
 arrived since the last decision, it refuses with:
 
-> Turning summary confirmation off skips the person's `Looks correct` check before a stage writes its output, so it is their call. No reply from the person has arrived since the last decision: run it when they ask for it. They can also type `/aidlc config set summary-confirmation off`.
+> Turning summary confirmation off skips the person's `Looks correct` check before a stage writes its output, so it is their call. No reply from the person has arrived since the last decision: run it when they ask for it.
 
 An off already saved as an explicit choice is a no-op. A scope-owned off (for
 example `off (from scope classic)`) still needs the person, because saving it
@@ -1627,7 +1627,7 @@ so in their own words ("skip plan approval for this work") and the agent runs
 the setter. A setter run when no reply from the person has arrived since the
 last decision refuses with:
 
-> Turning plan approval off lets code generation start without the person approving the plan, so it is their call. No reply from the person has arrived since the last decision: run it when they ask for it. They can also type `/aidlc config set plan-approval off`.
+> Turning plan approval off lets code generation start without the person approving the plan, so it is their call. No reply from the person has arrived since the last decision: run it when they ask for it.
 
 With memory holding strict, the refusal names the memory file instead. Said
 before the work exists (at the compose gate or the scope confirmation), the
@@ -1639,7 +1639,7 @@ keeps the scope's value. Turning it `on` needs no typed turn. A scope change car
 new scope's default in both directions and keeps a value set for this intent.
 `guard.plan-approval` names the same setting, so
 `/aidlc config set guard.plan-approval off` writes the `Plan Approval` line
-rather than a `Guards Off` entry. Saying "review the plan first" while it is off
+rather than a `Guards Off` entry. Asking to review the plan while it is off
 shows that one plan for approval without changing the setting. See
 [Plan approval](13-customization.md#plan-approval) for the full behavior.
 
@@ -1753,9 +1753,9 @@ Command`; use `set-construction-checkpoints`, `set-construction-execution`,
 During Construction you change any of these in your own words ("turn
 checkpoints off", "from here on, build one unit at a time", "run the Units in
 parallel"). The agent does it in that turn, with no question first, and says one
-line with what changed and the words that undo it, for example "Construction
-checkpoints are off for this work now (they were on). Say 'turn checkpoints back
-on' to undo." The change is recorded as `CONSTRUCTION_POLICY_SET` with your words.
+line with what changed and that you can switch back, for example "Construction
+checkpoints (a stop after each Unit for you to check and approve it) are off for
+this work now (they were on). You can switch back any time." The change is recorded as `CONSTRUCTION_POLICY_SET` with your words.
 The setter makes the change only when a message from you since the last decision
 is on record, so the agent cannot change these on its own, and an unattended run
 never changes them. A change that needs another first (parallel Units need
@@ -2376,7 +2376,7 @@ requires a fresh re-merge rather than a last-writer-wins overwrite. Source
 movement under a strict Guard Policy returns `CODEKB_SOURCE_CHANGED` (or
 `CODEKB_CANDIDATE_STALE`) and publishes nothing until a fresh scan. Under
 `relaxed` or `off` the scan is published as captured, with one line
-(`change_notices` in `--json`) that names "redo reverse engineering" to scan
+(`change_notices` in `--json`) that asks whether you want the code scanned
 again.
 
 After a successful publication the utility renames the staged directory aside

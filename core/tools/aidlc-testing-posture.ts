@@ -141,6 +141,7 @@ import {
   planApprovalAskIsOpen,
   TESTING_POSTURE_SUBCOMMANDS,
 } from "./aidlc-lib.ts";
+import { CHECK_GLOSS } from "./aidlc-guard-fences.ts";
 import { aidlcToolInvocation, entrySkillInvocation } from "./aidlc-runtime-paths.ts";
 import { APPROVAL_GATE_CHOICES, exactOptionPick, isNonAnswer, isOneOfChoices, pickerOffersChoices } from "./aidlc-reply-reader.ts";
 
@@ -362,7 +363,7 @@ export function planSourceDriftStrictMessage(paths: string[] | null, unbound = f
 export function planSourceDriftRelaxedNotice(paths: string[] | null, unbound = false): string {
   return (
     `${describeSourceDrift(paths, unbound)} Carrying on. ` +
-    "Say 'review the plan again' to reopen approval."
+    "Do you want to look at the plan again and approve it first?"
   );
 }
 
@@ -422,7 +423,8 @@ function judgePlanSourceDrift(
       notice: moved
         ? planSourceMovedNotice(paths, unit)
         : loweredFence && resolution.value === "strict"
-          ? `${describeSourceDrift(paths, unbound)} Continuing (plan-approval check is off). Say 'review the plan again' to reopen approval.`
+          ? `${describeSourceDrift(paths, unbound)} Carrying on, since the plan approval check (${CHECK_GLOSS["plan-approval"]}) ` +
+            "is off for this work. Do you want to look at the plan again and approve it first?"
           : planSourceDriftRelaxedNotice(paths, unbound),
     },
   };

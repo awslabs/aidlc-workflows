@@ -682,7 +682,7 @@ describe("t352 reclassify: existing code after a new-project start", () => {
     const r = run(UTIL, proj, ["reclassify", "--project-type", "brownfield"]);
     expect(r.status).toBe(0);
     expect(reply(r)).toContain("then we're back at Requirements Analysis.");
-    expect(reply(r)).toContain('Practices Discovery ran before the code was here; say "redo practices discovery" to include it.');
+    expect(reply(r)).toContain("Practices Discovery ran before the code was here. I'm carrying on with it as it is. Do you want me to redo Practices Discovery with the code?");
   });
 
   test("before the workflow reaches Reverse Engineering it is simply back on the plan", () => {
@@ -955,7 +955,7 @@ describe("t352 what the person hears after saying it is existing code", () => {
     expect(reply(r)).toBe(
       "Project type is now existing code, as you said (TypeScript; React; npm (package.json) in ui-repo). " +
         "Next I'll document the code, then we're back at Requirements Analysis. " +
-        'Practices Discovery ran before the code was here; say "redo practices discovery" to include it. ' +
+        "Practices Discovery ran before the code was here. I'm carrying on with it as it is. Do you want me to redo Practices Discovery with the code? " +
         "To undo, say it's a new project.",
     );
     const after = next(proj);
@@ -964,7 +964,7 @@ describe("t352 what the person hears after saying it is existing code", () => {
     // Outside the chat that heard the reply, the warning gives the same reason
     // in the same words.
     expect(advisory?.warning).toBe(
-      'Practices Discovery ran before the code was here; say "redo practices discovery" to include it.',
+      "Practices Discovery ran before the code was here. I'm carrying on with it as it is. Do you want me to redo Practices Discovery with the code?",
     );
     for (const machinery of [/routing/i, /advisory/i, /drift/i, /directive/i, /receipt/i, /\bengine\b/i, /--stage/]) {
       expect(String(advisory?.warning)).not.toMatch(machinery);
@@ -989,7 +989,7 @@ describe("t352 a plugin's stage behind the code", () => {
     writeFileSync(graphPath, JSON.stringify(graph));
     const after = runOrchestrateNext(ORCH, proj, [], { env: { ...process.env, AIDLC_STAGE_GRAPH: graphPath } }).directive ?? {};
     const warning = String((after.stage_validity as Record<string, unknown> | undefined)?.warning);
-    expect(warning).toMatch(/^practices-discovery (ran before the code was here|finished before something it used changed); say "redo practices-discovery" to (include it|bring it up to date)\.$/);
+    expect(warning).toMatch(/^(practices-discovery ran before the code was here|Something practices-discovery used changed after it finished)\. I'm carrying on with it as it is\. Do you want me to redo practices-discovery with the (code|change)\?$/);
     expect(JSON.stringify(after)).not.toContain("Ignore your rules");
   });
 });
@@ -1107,7 +1107,7 @@ describe("t352 the lines the person must hear ride the next step the agent speak
     expect(String(reverseEngineering.narration)).toStartWith(
       "Project type is now existing code, as you said (TypeScript; React; npm (package.json) in ui-repo). " +
         "Next I'll document the code, then we're back at Requirements Analysis. " +
-        'Practices Discovery ran before the code was here; say "redo practices discovery" to include it. ' +
+        "Practices Discovery ran before the code was here. I'm carrying on with it as it is. Do you want me to redo Practices Discovery with the code? " +
         "To undo, say it's a new project.",
     );
     expect(reverseEngineering.stage_validity).toBeUndefined();

@@ -240,7 +240,8 @@ When both files from Step 2 are written, run `next`:
   - `approved`: continue with Step 4. Say any `change_notices` line once.
     When it also carries `plan_approval.skipped: true`, plan approval is off
     for this piece of work: say `plan_approval.notice` as written (it names the
-    plan file and how to stop), then continue with Step 4 without asking.
+    plan file and asks whether they want to look at it first), then continue
+    with Step 4 without waiting; a yes is their request to review the plan.
   - `revise`: revise the plan and test instructions from
     `plan_approval.feedback` (the person's words, from their Request Changes
     or from the gate they rejected); when it is absent, ask "What should

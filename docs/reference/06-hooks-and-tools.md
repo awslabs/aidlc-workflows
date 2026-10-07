@@ -622,11 +622,11 @@ before consulting that bypass.
 
 A setter or creation that lowers a check is carried out when a person has spoken since the last gate resolution (`humanActedSinceGate`): the conductor runs what they asked for in their own words, and the typed switch remains a shortcut. For the setters, `park` and the grant of autonomous Construction (`bolt set-autonomy --mode autonomous`), an approval the person gave in that same message, or the run's own approval (no `User Input`, or `Autonomous: true`), does not use the message up; any other resolution after it does (`personSpokeSinceGate` with `outlivesApproval`). So "approve, and turn plan approval off" approves, then turns it off, and "approve the plan, and run Construction on its own from here" approves the plan and grants autonomy, in either order; the grant keeps the step already issued (the plan question, or the build of the approved plan) the open step. An approval or an answer itself still needs its own reply. Run with no such reply, it refuses:
 
-> Turning the review-freeze check off is the person's call. No reply from the person has arrived since the last decision: run it when they ask for it. They can also type `/aidlc config set guard.review-freeze off`.
+> Turning the review-freeze check off is the person's call. No reply from the person has arrived since the last decision: run it when they ask for it.
 
-> Turning plan approval off lets code generation start without the person approving the plan, so it is their call. No reply from the person has arrived since the last decision: run it when they ask for it. They can also type `/aidlc config set plan-approval off`.
+> Turning plan approval off lets code generation start without the person approving the plan, so it is their call. No reply from the person has arrived since the last decision: run it when they ask for it.
 
-> Setting Guard Policy relaxed lowers fences, which is the person's call. No reply from the person has arrived since the last decision: run it when they ask for it. They can also type `/aidlc --guard-policy relaxed`.
+> Setting Guard Policy relaxed lowers fences, which is the person's call. No reply from the person has arrived since the last decision: run it when they ask for it.
 
 > Creating this intent with Guard Policy relaxed would lower fences, which is the person's call. Create it, then, when they ask for it in their own words, run `aidlc engine config set guard-policy relaxed` yourself and say in one line what changed. A scope default applies without asking.
 

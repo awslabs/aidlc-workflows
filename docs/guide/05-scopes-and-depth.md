@@ -43,7 +43,7 @@ Core ships 11 named scopes. Each scope defines a stage set, a default depth leve
 - **Stages:** 8 of 33
 - **Default depth:** Minimal
 - **Skips:** Market Research, Feasibility, Team Formation, Mockups, User Stories, most Operation stages
-- **Plan approval:** Off. Once a code plan is written you see one line naming it and code generation starts; say "review the plan first" to look at one before it is built, or type `/aidlc --plan-approval on` to be asked about every plan
+- **Plan approval:** Off. Once a code plan is written you see one line naming it, code generation starts, and the line asks whether you want to look at the plan first; you can also ask to see a plan before it is built, or to be asked about every plan
 
 ### bugfix
 
@@ -135,7 +135,7 @@ full Inception-through-Operation lifecycle and a lighter teaching test floor.
 - **Review cap:** None
 - **Includes:** Initialization, conditional Reverse Engineering, Requirements Analysis, Code Generation, Build and Test, and the conditional Deployment Pipeline, Deployment Execution, and Observability Setup stages
 - **Skips:** Ideation, design, Units Generation, Delivery Planning, CI Pipeline, environment provisioning, and the late operations stages
-- **Plan approval:** Off, like poc: each code plan is built as written after one line naming it; say "review the plan first" to look at one first
+- **Plan approval:** Off, like poc: each code plan is built as written after one line naming it, which asks whether you want to look at it first
 
 ---
 
@@ -241,7 +241,7 @@ After a clear keyword match, you get a one-line confirmation naming the MATCHED 
 
 ```
 This looks like "bugfix" work, so I'd run the "bugfix" plan for: "fix login bug" - 5 stages, 5 approval gates; no learnings ritual or summary confirmation; lead agent only.
-Say go ahead, name a different plan, or say "compose" and I'll tailor one to this task.
+Do you want me to go ahead with it, use a different plan, or tailor one to this task?
 ```
 
 Confirm to proceed, or reply with a different scope (or `compose`) to course-correct before the workflow starts.

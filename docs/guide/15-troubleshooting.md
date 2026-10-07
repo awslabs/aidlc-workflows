@@ -553,9 +553,9 @@ record stays intact; it does not claim you approved the edits. The
 
 If code generation starts without asking you about the plan at all, plan
 approval is off for this piece of work: status shows where that came from, for
-example `Plan Approval: off (from scope poc)`. Say "review the plan first" to
-see one plan before it is built, or type `/aidlc --plan-approval on` to be asked
-about every plan. See [Plan approval](13-customization.md#plan-approval).
+example `Plan Approval: off (from scope poc)`. The line that names each plan
+asks whether you want to look at it first; you can also ask to be asked about
+every plan. See [Plan approval](13-customization.md#plan-approval).
 
 Testing Posture, scope, test strategy, or project type changes follow the same
 rule within the same intent, target, and attempt. Refresh the current contract

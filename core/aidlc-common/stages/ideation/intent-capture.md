@@ -86,7 +86,7 @@ outputs: intent-statement.md, stakeholder-map.md, intent-capture-questions.md (u
   the user for a text or Markdown version.
 - When it returns an `ask` instead, the file is git-ignored (or git could not
   say) and nothing was copied: tell the user that line and wait for their reply. Only after they say
-  to use it anyway, run
+  they want it copied anyway, run
   `bun {{HARNESS_DIR}}/tools/aidlc-utility.ts document-input --onboard --include-ignored`.
 - On a missing, inaccessible, symlinked, out-of-project, non-regular,
   oversized, or other non-text input, do not guess or read it through another

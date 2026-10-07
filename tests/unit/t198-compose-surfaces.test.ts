@@ -359,7 +359,7 @@ describe("t198 Branch 8: inference confirm + compose offer", () => {
     );
     expect(d.kind).toBe("ask");
     expect(String(d.question)).toContain('This looks like "refactor" work');
-    expect(String(d.question)).toContain("Say go ahead");
+    expect(String(d.question)).toContain("Do you want me to go ahead with it");
   });
 
   test("long bug description -> confirm the bugfix plan", () => {
@@ -371,7 +371,7 @@ describe("t198 Branch 8: inference confirm + compose offer", () => {
     expect(d.ask_type).toBe("scope-confirm");
     expect(d.proposed_scope).toBe("bugfix");
     expect(String(d.question)).toContain('This looks like "bugfix" work');
-    expect(String(d.question)).toContain("Say go ahead");
+    expect(String(d.question)).toContain("Do you want me to go ahead with it");
     // The answers a host shows as options, worded for the person.
     expect(d.choices).toEqual([
       { label: 'Go ahead with the "bugfix" plan', command: d.confirm_command },
@@ -757,17 +757,17 @@ describe("t198 Branch 8: inference confirm + compose offer", () => {
     expect(runUtility(proj, ["intent-create", "--scope", "poc", "--label", "spike"]).rc).toBe(0);
     const created = runEmitted(String(ask.new_intent_command));
     expect(String(created.narration)).toContain(
-      "Guard Policy relaxed is on for \"Test widget feature for e-commerce platform\" (you typed it with the request)",
+      "Guard Policy relaxed (AI-DLC carries on with a note when something you approved changes) is on for \"Test widget feature for e-commerce platform\", as you typed it with the request",
     );
   });
 
   test.each([
     ["is on for the active work", "- **Guard Policy**: relaxed (set by you)",
-      "Guard Policy relaxed is on for \"Test widget feature for e-commerce platform\" (you typed it with the request); " +
-        "the new work starts at the default. Say 'relax the guard policy here too' to change it."],
+      "Guard Policy relaxed (AI-DLC carries on with a note when something you approved changes) is on for \"Test widget feature for e-commerce platform\", as you typed it with the " +
+        "request; the new work starts at the default. Do you want relaxed for the new work too?"],
     ["did not land", "- **Change Control**: strict (from scope feature)",
-      "The new work starts at the default Guard Policy, not the relaxed you typed with the request. " +
-        "Say 'relax the guard policy' to change it."],
+      "The new work starts at the default Guard Policy, not relaxed (AI-DLC carries on with a note when something you approved changes) as you typed with the request. " +
+        "Do you want relaxed for it?"],
   ])("a lowered Guard Policy typed with new work is never tried on it: the person hears where it %s", (_label, line, note) => {
     proj = createTestProject();
     seedAidlcMemory(proj);
