@@ -15379,17 +15379,22 @@ function readStableReviewArtifacts(
 
 // A committed text file's bytes as its identity: CRLF and a lone CR read as
 // LF, so a checkout that turns line endings (Git for Windows' default) is no
-// change to the work. Bytes that are not UTF-8 text are taken as they are, and
+// change to the work. A file with a NUL byte is binary and taken as it is, and
 // a file with LF line endings is the same either way.
 export function committedTextBytes(bytes: Buffer): Buffer {
   if (!bytes.includes(13) || bytes.includes(0) || process.env.AIDLC_TEST_RAW_LINE_ENDINGS === "1") return bytes;
-  let text: string;
-  try {
-    text = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes);
-  } catch {
-    return bytes;
+  const out = Buffer.allocUnsafe(bytes.length);
+  let length = 0;
+  for (let at = 0; at < bytes.length; at++) {
+    const byte = bytes[at];
+    if (byte === 13) {
+      out[length++] = 10;
+      if (bytes[at + 1] === 10) at++;
+    } else {
+      out[length++] = byte;
+    }
   }
-  return Buffer.from(text.replace(/\r\n?/g, "\n"), "utf-8");
+  return out.subarray(0, length);
 }
 
 // The sha256 hex of a committed file's text, as committedTextBytes reads it.
@@ -20372,6 +20377,7 @@ export function sameWorkspaceSource(
   if (recorded === current) return true;
   if (recorded == null || current == null) return false;
   return legacyWorkspaceSourceAliases.get(current) === recorded ||
+    currentFingerprintForm(recorded) === current ||
     earlierBoundaryWorkspaceSources(current).includes(recorded);
 }
 
@@ -21134,6 +21140,8 @@ export function sourceListingEntriesEqual(
 ): boolean {
   if (left === right) return true;
   if (left === undefined || right === undefined) return false;
+  // An entry recorded over raw line endings of a file read here is that file.
+  if (currentFingerprintForm(left) === currentFingerprintForm(right)) return true;
   const leftModern =
     /^\d{6} ((?:[0-9a-f]{40}|[0-9a-f]{64}))$/.exec(left);
   const rightModern =
@@ -21779,7 +21787,10 @@ function isAidlcSensorCachePath(path: string): boolean {
   return false;
 }
 
-function stableFileSha256(path: string): string | null {
+// A source file's sha256 with its line endings read as LF (committedTextBytes),
+// so a checkout that turns them is no change, and the raw bytes' digest when
+// that differs.
+function stableFileShas(path: string): { sha: string; raw?: string } | null {
   let fd: number | undefined;
   try {
     fd = openSync(path, "r");
@@ -21787,11 +21798,13 @@ function stableFileSha256(path: string): string | null {
     if (!before.isFile()) return null;
     const hash = createHash("sha256");
     const buffer = Buffer.allocUnsafe(64 * 1024);
+    const chunks: Buffer[] = [];
     let position = 0;
     while (true) {
       const count = readSync(fd, buffer, 0, buffer.length, position);
       if (count === 0) break;
       hash.update(buffer.subarray(0, count));
+      chunks.push(Buffer.from(buffer.subarray(0, count)));
       position += count;
     }
     const after = fstatSync(fd);
@@ -21803,7 +21816,10 @@ function stableFileSha256(path: string): string | null {
     ) {
       return null;
     }
-    return hash.digest("hex");
+    const raw = hash.digest("hex");
+    const bytes = Buffer.concat(chunks);
+    const text = committedTextBytes(bytes);
+    return text === bytes ? { sha: raw } : { sha: createHash("sha256").update(text).digest("hex"), raw };
   } catch {
     return null;
   } finally {
@@ -21815,6 +21831,10 @@ function stableFileSha256(path: string): string | null {
       }
     }
   }
+}
+
+function stableFileSha256(path: string): string | null {
+  return stableFileShas(path)?.sha ?? null;
 }
 
 interface FilesystemSourceIdentity {
@@ -22519,6 +22539,8 @@ function filesystemSourceIdentity(
   const sourceBasename =
     /^(?:BUILD|CMakeLists\.txt|Dockerfile(?:\..+)?|Gemfile|Justfile|Makefile|Procfile|Tiltfile|WORKSPACE)$/i;
   const lines: string[] = [];
+  // The raw form of a file line, by its index in `lines`, where line endings made it differ.
+  const rawLines = new Map<number, string>();
   // Lines only the earlier walk recorded (files now excluded by name), each
   // kept at the index it held there, so evidence recorded before the exclusion
   // still compares equal when nothing actually changed.
@@ -22839,14 +22861,20 @@ function filesystemSourceIdentity(
         );
       }
     }
-    const sha = stableFileSha256(path);
-    if (sha === null) {
+    const shas = stableFileShas(path);
+    if (shas === null) {
       return noteSourceFailure(false, "unreadable", "the file could not be hashed", rel);
     }
+    const { sha, raw } = shas;
     lines.push(`file:${rel}:${executable ? "x" : "-"}=${sha}`);
     const entry = sourceListingEntry(executable ? "100755" : "100644", sha);
     if (entry === null) {
       return noteSourceFailure(false, "walk-failed", "the file produced no listing entry", rel);
+    }
+    if (raw !== undefined) {
+      // As recorded before line endings were read as LF.
+      rawLines.set(lines.length - 1, `file:${rel}:${executable ? "x" : "-"}=${raw}`);
+      rememberRawFingerprint(`${executable ? "100755" : "100644"} ${raw}`, entry);
     }
     listing.set(listingPath, entry);
     return true;
@@ -23347,15 +23375,24 @@ function filesystemSourceIdentity(
     }
     return null;
   }
+  const filesystemFingerprint = createHash("sha256")
+    .update(["aidlc-filesystem-source-v2", ...lines].join("\n"))
+    .digest("hex");
+  if (rawLines.size > 0) {
+    rememberRawFingerprint(
+      createHash("sha256")
+        .update(["aidlc-filesystem-source-v2", ...lines.map((line, at) => rawLines.get(at) ?? line)].join("\n"))
+        .digest("hex"),
+      filesystemFingerprint,
+    );
+  }
   return {
     dotnetOutputSeen,
     embeddedGitPaths: [...embeddedGitPaths].sort(),
     excludedOutputPathspecs: [...excludedOutputPathspecs].sort(),
     excludedSymlinkPathspecs: [...excludedSymlinkPathspecs].sort(),
     externalSymlinkPaths: [...externalSymlinkPaths].sort(),
-    fingerprint: createHash("sha256")
-      .update(["aidlc-filesystem-source-v2", ...lines].join("\n"))
-      .digest("hex"),
+    fingerprint: filesystemFingerprint,
     ...(legacyInserts.length > 0 && !legacyUnavailable
       ? { legacyFingerprint: legacyFilesystemFingerprint(lines, legacyInserts) }
       : {}),
@@ -23578,6 +23615,8 @@ function walkWorkspaceSource(
       createHash("sha256")
         .update(["aidlc-workspace-source-v2", `filesystem=${filesystem}`].join("\n"))
         .digest("hex");
+    const rawSource = rawFingerprintForm(source.fingerprint);
+    if (rawSource !== null) rememberRawFingerprint(workspaceDigest(rawSource), workspaceDigest(source.fingerprint));
     return {
       state: {
         fingerprint: workspaceDigest(source.fingerprint),
@@ -23627,6 +23666,12 @@ function walkWorkspaceSource(
   }
   const digest = (parts: readonly string[]): string =>
     createHash("sha256").update(["aidlc-workspace-source-v2", ...parts].join("\n")).digest("hex");
+  // As recorded before line endings were read as LF.
+  const rawParts = lines.map((line) => line.replace(/=filesystem:([0-9a-f]{64})$/, (whole, hex: string) => {
+    const raw = rawFingerprintForm(hex);
+    return raw === null ? whole : `=filesystem:${raw}`;
+  }));
+  if (rawParts.some((line, at) => line !== lines[at])) rememberRawFingerprint(digest(rawParts), digest(lines));
   return {
     state: { fingerprint: digest(lines), listing },
     legacy: legacyDiffers ? digest(legacyLines) : null,
