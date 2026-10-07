@@ -296,9 +296,8 @@ function snapshot(pd: string, batch: number, requested: string[], stateContent?:
     workflow: workflow ? hash(workflow.block) : null, evidence,
   });
   const fingerprint = fingerprintFor(record);
-  let olderFingerprint: string | undefined;
-  const isFingerprint = (value: string | null): boolean => value === fingerprint ||
-    (value !== null && value === (olderFingerprint ??= fingerprintFor(olderRecord)));
+  const olderFingerprint = fingerprintFor(olderRecord);
+  const isFingerprint = (value: string | null): boolean => value === fingerprint || value === olderFingerprint;
   const gate = latest(rows.filter((row) =>
     (row.event === "GATE_APPROVED" || row.event === "GATE_REJECTED") &&
     auditBlockField(row.block, "Checkpoint") === CHECKPOINT &&
