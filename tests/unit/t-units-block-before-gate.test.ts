@@ -142,8 +142,11 @@ function directiveOf(out: string): Record<string, unknown> {
   return line ? JSON.parse(line) as Record<string, unknown> : {};
 }
 
+// The request's output, with a refusal's words read out of its {"error": ...} line.
 function reviewRequest(proj: string): { rc: number; out: string } {
-  return run(LOG, ["review", "--stage", STAGE, "--reviewer", findStageBySlug(STAGE)!.reviewer!, "--iteration", "1"], proj);
+  const r = run(LOG, ["review", "--stage", STAGE, "--reviewer", findStageBySlug(STAGE)!.reviewer!, "--iteration", "1"], proj);
+  const refusal = directiveOf(r.out).error;
+  return typeof refusal === "string" ? { rc: r.rc, out: refusal } : r;
 }
 
 // The step names the file, the exact defect and the block's shape, and never
