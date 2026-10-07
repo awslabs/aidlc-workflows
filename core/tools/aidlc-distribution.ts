@@ -710,7 +710,11 @@ export function mergeBlock(
       value: `${current.slice(0, beginAt)}${kept ? `${kept}${newline}${newline}` : ""}${block}${
         current.slice(endAt + end.length)
       }`,
-      currentHash: sha256Matching(currentBlock, [sha256Bytes(block), ...recorded]),
+      // A part a space switch pointed at another space is still the one written.
+      currentHash: [currentBlock, withSpace(currentBlock, "default")]
+        .map((text) => sha256Matching(text, [sha256Bytes(block), ...recorded]))
+        .find((hash) => hash === sha256Bytes(block) || recorded.includes(hash)) ??
+        sha256Matching(currentBlock, [sha256Bytes(block), ...recorded]),
       nextHash: sha256Bytes(block),
       // A .gitignore part with exactly the shipped entries is a release's own,
       // whatever notes an earlier release put between them.
@@ -835,6 +839,14 @@ export function sha256Matching(value: string | Buffer, known: readonly (string |
 
 export function sha256FileMatching(path: string, known: readonly (string | undefined)[]): string {
   return sha256Matching(readFileSync(path), known);
+}
+
+// A space switch points the tool's include files at that space's memory
+// (aidlc-includes.ts repointHarnessIncludes); every release ships them at the
+// default space. The text with each active-space memory path set to `space`,
+// never a `<space>` or `${...}` placeholder.
+export function withSpace(text: string, space: string): string {
+  return text.replace(/aidlc\/spaces\/(?![<$])[^/"\s]+\/memory(?=[/"])/g, `aidlc/spaces/${space}/memory`);
 }
 
 // What a host tool installs for itself inside a directory AI-DLC manages:

@@ -352,6 +352,30 @@ function repointFile(
   }
 }
 
+/** An include file's text as repointHarnessIncludes writes it for `space`, by
+ *  its workspace-relative path, or null when the path is not an include it
+ *  rewrites or nothing changes. A config refresh writes AI-DLC's updated
+ *  files this way, so a space switch survives it. */
+export function repointedIncludeText(rel: string, text: string, space: string): string | null {
+  const path = rel.replaceAll("\\", "/");
+  const rewrite = path === ".claude/rules/aidlc.md" || path === "AGENTS.md"
+    ? repointClaudeStub
+    : /^\.kiro\/agents\/[^/]+\.json$/.test(path)
+    ? repointKiroAgentResources
+    : /^\.cursor\/(?:rules\/[^/]+\.mdc|agents\/[^/]+\.md)$/.test(path) ||
+        /^(?:\.aidlc|\.opencode|\.github)\/agents\/[^/]+\.md$/.test(path)
+    ? repointOpencodeAgentMemory
+    : path === "opencode.json" || path === "opencode.jsonc"
+    ? repointOpencodeInstructions
+    : null;
+  if (!rewrite) return null;
+  try {
+    return rewrite(text, space);
+  } catch {
+    return null;
+  }
+}
+
 /** Surgically repoint the active harness's native rule include(s) at the given
  *  space's method tree (`aidlc/spaces/<space>/memory/`). Idempotent — a no-op
  *  when the surfaces already point at `space` (so a `default`-cursor single-team

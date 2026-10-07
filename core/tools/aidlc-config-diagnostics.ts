@@ -32,6 +32,7 @@ import {
   type RootIntegration,
   rootBlockPath,
   sha256Matching,
+  withSpace,
 } from "./aidlc-distribution.ts";
 import {
   aidlcInvocation,
@@ -3045,7 +3046,10 @@ function instructionStates(
     return {
       path,
       kind: contribution.policy,
-      state: sha256Matching(block, [contribution.hash]) === contribution.hash || ownTitleOnly(block, contribution.hash)
+      state: sha256Matching(block, [contribution.hash]) === contribution.hash ||
+          // A space switch pointed its include lines at another space.
+          sha256Matching(withSpace(block, "default"), [contribution.hash]) === contribution.hash ||
+          ownTitleOnly(block, contribution.hash)
         ? "intact"
         : "conflict",
     };
@@ -3612,7 +3616,12 @@ function changedFrameworkFiles(
     }
     if (regular) {
       const content = readFileSync(path);
-      if (sha256Matching(content, [hash]) === hash || content.includes("generated-by: aidlc-runner-gen")) continue;
+      if (
+        sha256Matching(content, [hash]) === hash ||
+        // A space switch pointed its include lines at another space.
+        sha256Matching(withSpace(content.toString("utf-8"), "default"), [hash]) === hash ||
+        content.includes("generated-by: aidlc-runner-gen")
+      ) continue;
     }
     changed.push(rel);
   }
