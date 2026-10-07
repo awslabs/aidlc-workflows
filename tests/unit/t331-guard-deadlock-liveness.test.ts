@@ -945,7 +945,7 @@ describe("bounded guard-remedy liveness", () => {
       .map((remedy) => remedy.action)
       .join(" ") ?? "";
     expect(unresolvedText).toContain("no-active-gate-stage");
-    expect(unresolvedText).toContain("valid Scope");
+    expect(unresolvedText).toContain("Switch to a scope with one");
     expect(unresolvedText).not.toContain("Restart this stage");
     const guidance = recoveryGuidance(
       project,
@@ -954,7 +954,7 @@ describe("bounded guard-remedy liveness", () => {
       { unit: "alpha", teamGate: unresolved },
     );
     expect(guidance).toContain("no-active-gate-stage");
-    expect(guidance).toContain("valid Scope");
+    expect(guidance).toContain("Switch to a scope with one");
     expect(guidance).not.toContain("Restart this stage");
 
     const invalidScopeState = unitEndState.replace(
@@ -989,7 +989,7 @@ describe("bounded guard-remedy liveness", () => {
       .map((remedy) => remedy.action)
       .join(" ") ?? "";
     expect(invalidText).toContain("no-active-gate-stage");
-    expect(invalidText).toContain("valid Scope");
+    expect(invalidText).toContain("Switch to a scope with one");
     expect(
       invalidAsk?.remedies.some((remedy) =>
         remedy.command?.includes("--result rejected") ||

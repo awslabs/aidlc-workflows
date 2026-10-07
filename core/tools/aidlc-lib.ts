@@ -29068,11 +29068,13 @@ function scopesRunningAnyPerUnitStage(): string[] {
 }
 
 // Which scope the agent switches to: the one that fits, or the person's pick
-// when several do.
+// when several do (named when they are few).
 function scopeChoice(scopes: readonly string[]): string {
   if (scopes.length === 1) return `\`${scopes[0]}\`, the one scope that fits`;
-  if (scopes.length === 0) return "a scope that fits, asking the person which in plain words";
-  return `the one the person picks from ${scopes.join(", ")} (ask them which, in plain words)`;
+  if (scopes.length >= 2 && scopes.length <= 4) {
+    return `the one the person picks from ${scopes.join(", ")} (ask them which, in plain words)`;
+  }
+  return "the scope the person picks (ask them which, in plain words)";
 }
 
 function unresolvedTeamGateRemedy(

@@ -1009,7 +1009,9 @@ describe("t342 Construction checkpoint routing", () => {
     expect(same.status).toBe(0);
     expect(JSON.parse(same.stdout).notice).toBe("Construction already goes stage by stage.");
     const off = policyCli(p, "state", ["set-construction-checkpoints", "disabled"]);
-    expect(JSON.parse(off.stdout).notice).toBe("Construction checkpoints are already off for this work.");
+    expect(JSON.parse(off.stdout).notice).toBe(
+      "Construction checkpoints (a stop after each Unit for you to check and approve it) are already off for this work.",
+    );
     expect(readAuditShardEvents(p)).toHaveLength(rows);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
