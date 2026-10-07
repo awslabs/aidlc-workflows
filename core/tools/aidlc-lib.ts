@@ -38048,14 +38048,13 @@ export function parseTypedGuardSwitchRequest(prompt: string, options: { wordsAns
     error: string | null;
   } => ({ switches: [], settings: [], space: null, intent: null, scope: null, error: null });
   // A switch of theirs never does nothing in silence. Where the message holds a
-  // contradiction, or a setting with no value, nothing is changed and they are
-  // told which part, with their own switch echoed back as the way to type it
-  // again. A switch they typed readably is never thrown away for the sake of
-  // another token: that case skips the token and says so afterwards (`unread`).
-  const lost = (reason: (typed: string) => string) => {
+  // contradiction, or a setting with no value, nothing is changed and they hear
+  // which part could not be read, as a question they answer in their own words.
+  // A switch they typed readably is never thrown away for the sake of another
+  // token: that case skips the token and says so afterwards (`unread`).
+  const lost = (reason: () => string) => {
     if (switches.size === 0 && settings.size === 0) return empty();
-    const typed = [...settings].map(([key, value]) => `--${key} ${value}`).join(" ");
-    return { ...empty(), error: reason(typed) };
+    return { ...empty(), error: reason() };
   };
   // A flag-shaped token before they described anything that this parser cannot
   // read: the first one is named back to them once the rest has been carried out.
@@ -38109,9 +38108,7 @@ export function parseTypedGuardSwitchRequest(prompt: string, options: { wordsAns
       // A setting of theirs with nothing after it: there is no value to apply, so
       // nothing changes and they are told which flag is missing one.
       return TYPED_INTENT_SETTING_KEYS.has(settingName(configKey))
-        ? lost((typed) =>
-          `Nothing changed: "--${configKey}" came with no value. Type it again with the value you want, ` +
-          `or type the switch on its own: ${entrySkillInvocation()} ${typed}`)
+        ? lost(() => `Nothing changed: "--${configKey}" came with no value. Which value did you mean for it?`)
         : empty();
     }
     if (configKey === "space" || configKey === "intent") {

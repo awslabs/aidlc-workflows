@@ -52,7 +52,7 @@ const SWITCH = "AIDLC_DISABLE_REVIEW_FREEZE_HOOK";
 const TURN_OFF = "turn the review freeze check off for this project";
 const TURN_ON = "turn the review freeze check back on for this project";
 // The engine's own lines (aidlc-recorded-switches.ts).
-const OFF_LINE = "The review freeze check is off for this project since";
+const OFF_LINE = "The review freeze check (it stops edits to work you already approved) is off for this project since";
 const ON_LINE = "The review freeze check is on again for this project.";
 
 function reviewFreeze(proj: string): string {

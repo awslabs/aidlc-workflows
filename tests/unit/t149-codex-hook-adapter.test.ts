@@ -609,7 +609,7 @@ describe("t149 Codex typed guard switch", () => {
       };
       expect(context.hookSpecificOutput?.hookEventName).toBe("UserPromptSubmit");
       const note = context.hookSpecificOutput?.additionalContext ?? "";
-      expect(note).toContain("The review freeze check is off for the work you are asking for (set by you).");
+      expect(note).toContain("The review freeze check (it stops edits to work you already approved) is off for the work you are asking for (set by you).");
       expect(note).toContain("never run a setter for it");
     } finally {
       rmSync(dir, { recursive: true, force: true });

@@ -50,9 +50,9 @@ const CLEAR = {
   AIDLC_UNATTENDED: "0",
 };
 const TYPED = "/aidlc --guard.review-freeze off fix the parser";
-const FOR_THE_REQUEST = "The review freeze check is off for the work you are asking for (set by you).";
-const FOR_NEW_WORK = "The review freeze check is off for the new work (set by you).";
-const FOR_WORK_STARTING_NOW = "The review freeze check is off for the piece of work you start now (set by you).";
+const FOR_THE_REQUEST = "The review freeze check (it stops edits to work you already approved) is off for the work you are asking for (set by you).";
+const FOR_NEW_WORK = "The review freeze check (it stops edits to work you already approved) is off for the new work (set by you).";
+const FOR_WORK_STARTING_NOW = "The review freeze check (it stops edits to work you already approved) is off for the piece of work you start now (set by you).";
 const STARTS_ON = "not off as you typed with the request";
 
 const created: string[] = [];
@@ -357,7 +357,7 @@ describe("a setter the person runs in their own terminal", () => {
     expect(off.status, off.out).toBe(0);
     expect(off.out).not.toContain(ASKED);
     expect(off.out).not.toContain("as you asked in the chat");
-    expect(off.out).toContain("The state transition check is off for this piece of work, set by you.");
+    expect(off.out).toContain("The state transition check (it keeps the engine, not an agent, moving the work along) is off for this piece of work, set by you.");
     expect(guardsOff(readFileSync(seededStateFile(proj), "utf-8"))).toContain("state-transition");
     const disabled = readAuditShardEvents(proj).filter((row) => row.event === "GUARD_DISABLED");
     expect(disabled).toHaveLength(1);
@@ -441,7 +441,7 @@ describe("a command the person typed, with no turn of theirs on record", () => {
     // Nobody has typed in the chat at all: no turn, no words, no bypass.
     const off = atATerminal(proj, ["guard.state-transition", "off"]);
     expect(off.status, off.out).toBe(0);
-    expect(off.out).toContain("The state transition check is off for this piece of work, set by you.");
+    expect(off.out).toContain("The state transition check (it keeps the engine, not an agent, moving the work along) is off for this piece of work, set by you.");
     expect(off.out).not.toContain("No reply from the person has arrived");
     expect(guardsOff(readFileSync(seededStateFile(proj), "utf-8"))).toContain("state-transition");
     const disabled = readAuditShardEvents(proj).filter((row) => row.event === "GUARD_DISABLED");
@@ -489,7 +489,7 @@ describe("a flag-shaped word inside the request", () => {
     const proj = emptyProject();
     const note = reply(proj, "/aidlc --guard.review-freeze off --nonsense 1");
     expect(note).toContain(FOR_WORK_STARTING_NOW);
-    expect(note).toContain('I could not read "--nonsense"; if that was a setting, type it again on its own.');
+    expect(note).toContain('I could not read "--nonsense". Was that a setting you wanted?');
     expect(note).not.toContain("Nothing changed");
     // And it really did apply: the work they start next has the check off.
     const printed = next(proj, ["--scope", "poc", "--", "build the export"]);
@@ -505,17 +505,17 @@ describe("a flag-shaped word inside the request", () => {
     expect(note).toContain("Which did you mean?");
   });
 
-  test("a setting with no value after it says which flag is missing one", () => {
+  test("a setting with no value after it asks which value they meant", () => {
     const proj = emptyProject();
     const note = reply(proj, "/aidlc --guard.review-freeze off --depth");
-    expect(note).toContain('Nothing changed: "--depth" came with no value.');
-    // The way out echoes the switch they typed readably.
-    expect(note).toContain("--guard.review-freeze off");
+    expect(note).toContain('Nothing changed: "--depth" came with no value. Which value did you mean for it?');
+    // AI-DLC could not read it, so it asks: it never tells them what to type.
+    expect(note).not.toContain("Type it again");
   });
 });
 
 describe("a project switch with no words of theirs on record", () => {
-  test("says only that the check is off, since when, and how to turn it back on", () => {
+  test("says what the check is for, that it is off, since when, and offers it back", () => {
     const line = switchOffLine({
       name: "AIDLC_DISABLE_REVIEW_FREEZE_HOOK",
       target: "local",
@@ -527,7 +527,10 @@ describe("a project switch with no words of theirs on record", () => {
         how: "chat",
       },
     }, new Date(2026, 9, 7, 12, 0, 0));
-    expect(line).toContain("The review freeze check is off for this project since 10:07.");
+    expect(line).toBe(
+      "The review freeze check (it stops edits to work you already approved) is off for this project " +
+        "since 10:07. Do you want it back on?",
+    );
     expect(line).not.toContain("your last message");
   });
 });

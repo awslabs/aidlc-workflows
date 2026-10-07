@@ -468,6 +468,7 @@ import {
   checksNamed,
   fencesOffCreationGranted,
   guardPolicyCreationGranted,
+  guardPolicyNamed,
   planApprovalOffAtCreation,
   planApprovalEnv,
   planApprovalOffForOpenRequest,
@@ -4285,7 +4286,8 @@ function routedGuardPolicyNote(flags: ParsedFlags, projectDir: string, question:
     session = null;
   }
   if (guardPolicyCreationGranted(projectDir, session, question.id) === value) {
-    return `Guard Policy ${value} for the new work (set by you).`;
+    // What the setting does comes with its name, as it does on the check line beside it.
+    return `${guardPolicyNamed()} is ${value} for the new work (set by you).`;
   }
   const words = value === "off" ? "turn the guard policy off" : "relax the guard policy";
   const target = question.askedAbout?.targets.length === 1 ? question.askedAbout.targets[0] : undefined;

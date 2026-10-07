@@ -1011,7 +1011,8 @@ function isReadOnlyDiagnostic(args: readonly string[]): boolean {
 // Turning a check back on never waits for anything. Turning one off is the
 // person's call, so while a plan waits it passes once a person has spoken since
 // the last decision: the agent is running what they asked for, and the engine
-// then tells them which check is off and how to turn it back on. An unattended
+// then tells them which check is off, what it is for, and that the way back is
+// there. An unattended
 // driver has no person behind it, so it never turns one off here.
 // Options that only choose a layer, confirm, or shape the output.
 const RECORDED_SWITCH_OPTIONS = new Set([

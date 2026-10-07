@@ -2186,8 +2186,9 @@ describe("t333 (9) fences: the policy lowers a fixed set; per-run switches can l
       field: GUARDS_OFF_FIELD,
       lowered: "state-transition (set by you)",
       event: "GUARD_DISABLED",
-      line: 'The state transition check is off for this piece of work, because you said: "please relax the \'state\' checks for this piece of work". ' +
-        'Say "turn it back on" to restore it (/aidlc config set guard.state-transition on).',
+      line: "The state transition check (it keeps the engine, not an agent, moving the work along) is off for " +
+        'this piece of work, because you said: "please relax the \'state\' checks for this piece of work". ' +
+        "You can turn it back on any time.",
     },
     {
       operation: "policy setter",
@@ -2196,8 +2197,8 @@ describe("t333 (9) fences: the policy lowers a fixed set; per-run switches can l
       field: GUARD_POLICY_FIELD,
       lowered: "relaxed (set by you)",
       event: "GUARD_POLICY_SET",
-      line: 'Guard Policy is relaxed for this piece of work, because you said: "please relax the \'state\' checks for this piece of work". ' +
-        'Say "put Guard Policy back to strict" to restore it (/aidlc --guard-policy strict).',
+      line: "Guard Policy (it sets how many checks run) is relaxed for this piece of work, because you said: " +
+        '"please relax the \'state\' checks for this piece of work". You can put it back to strict any time.',
     },
   ])("the CLI $operation the agent runs lowers fences after the person asked, and not before", ({ args, refusal, field, lowered, event, line }) => {
     const { proj, state } = project("enterprise");
@@ -2349,7 +2350,7 @@ describe("t333 (9) fences: the policy lowers a fixed set; per-run switches can l
       // A flag-shaped token among their words is one of their words, so the
       // switch they typed is kept for the work they are describing.
       prompt: "/aidlc --guard-policy relaxed build auth --unknown value",
-      says: "Guard Policy relaxed for the work you are asking for (set by you).",
+      says: "Guard Policy (it sets how many checks run) is relaxed for the work you are asking for (set by you).",
     },
     {
       prompt: "/aidlc config set guard-policy relaxed --depth",
@@ -2487,13 +2488,13 @@ describe("t333 (9) fences: the policy lowers a fixed set; per-run switches can l
   test.each([
     {
       prompt: "/aidlc --guard-policy relaxed",
-      setting: "Guard Policy relaxed",
-      said: "Guard Policy relaxed for the piece of work you start now (set by you).",
+      setting: "Guard Policy",
+      said: "Guard Policy (it sets how many checks run) is relaxed for the piece of work you start now (set by you).",
     },
     {
       prompt: "/aidlc config set guard.state-transition off",
       setting: "state transition check",
-      said: "The state transition check is off for the piece of work you start now (set by you).",
+      said: "The state transition check (it keeps the engine, not an agent, moving the work along) is off for the piece of work you start now (set by you).",
     },
   ])("a typed $setting switch with no state creates nothing and is kept for the next piece of work", ({ prompt, setting, said }) => {
     const proj = createTestProject();

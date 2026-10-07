@@ -3254,7 +3254,7 @@ function showChoiceSection(
         resolved.flags,
         resolved,
       ),
-      switches: switchesOffLines(projectDir),
+      switches: switchesOffLines(projectDir, process.env, "command"),
     };
   } else {
     const completion = records.project?.completions;
@@ -9877,7 +9877,7 @@ function handleSettingsOnlySection(
             record: resolved.flags,
             effective: effectiveProjectFlagValues(resolved.flags),
             sources: resolved.sources,
-            switches: switchesOffLines(projectDir),
+            switches: switchesOffLines(projectDir, process.env, "command"),
           },
     ), options);
     return true;

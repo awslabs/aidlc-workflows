@@ -229,7 +229,7 @@ describe("t-plan-switch-with-words: a switch typed with the person's reply to th
     const proj = project("strict");
     askFor(proj);
     expect(reply(proj, "/aidlc --guard-policy off -- add a CSV export")).toContain(
-      "Guard Policy off for the work you are asking for (set by you).",
+      "Guard Policy (it sets how many checks run) is off for the work you are asking for (set by you).",
     );
     expect(policy(proj)).toBe("strict (from scope poc)");
   });

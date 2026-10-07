@@ -579,8 +579,8 @@ describe("t338 summary confirmation off is the person's switch", () => {
     // One line: the setter's own "changed" line is not said beside it.
     expect(changed.stdout).not.toContain("Summary Confirmation changed:");
     expect(changed.stdout).toContain(
-      'The summary confirmation is off for this piece of work, because you said: "skip the looks correct check from now on". ' +
-        'Say "turn it back on" to restore it (/aidlc config set summary-confirmation on).',
+      "The summary confirmation (it reads your words back to you before the work goes on) is off for this piece " +
+        'of work, because you said: "skip the looks correct check from now on". You can turn it back on any time.',
     );
     const unattended = project("feature");
     recordHumanPrompt(unattended.proj, "skip the looks correct check from now on");

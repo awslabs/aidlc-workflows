@@ -68,7 +68,7 @@ import {
   commandAtPersonsTerminal,
 } from "./aidlc-lib.ts";
 import { quoted } from "./aidlc-recorded-switches.ts";
-import { entrySkillInvocation } from "./aidlc-runtime-paths.ts";
+import { settingPurpose } from "./aidlc-settings.ts";
 
 function throwSettingsError(message: string): never {
   throw new Error(message);
@@ -443,8 +443,11 @@ export function applyIntentSettings(
   // A command the person ran at their own terminal carries itself: this rule
   // protects them from a worker lowering a check on their behalf, and it has no
   // business standing in front of what they typed. An agent's tool call arrives
-  // with pipes and no chat identity on it, and is refused exactly as before.
-  const atTheirTerminal = lowering.length > 0 && !typedByPerson && runFromPersonsTerminal();
+  // with pipes and no chat identity on it, and is refused exactly as before, and
+  // so is one run in a terminal a host opened for its agent (Copilot in VS Code,
+  // Kiro IDE, Cursor), where the line says which chat to ask in.
+  // `commandAtPersonsTerminal` owns that test for the refusal and the record alike.
+  const atTheirTerminal = lowering.length > 0 && !typedByPerson && commandAtPersonsTerminal();
   if (
     lowering.length > 0 && !typedByPerson && !atTheirTerminal && !fenceKeyBypassed(projectDir, sessionId) &&
     !personSpokeSinceGate(projectDir, { requests: true, outlivesApproval: true })
@@ -456,14 +459,10 @@ export function applyIntentSettings(
   // A command they ran themselves, at their own terminal, is their own act and
   // belongs to no chat, so no message of theirs is quoted for it. Everything else
   // is the agent carrying out what they asked in the chat, and their words stand
-  // behind it. `commandAtPersonsTerminal` owns that test, including the hosts that
-  // run their agent's commands in a terminal of their own (Copilot in VS Code,
-  // Kiro IDE, Cursor), where a terminal says nothing about who typed it. Which
-  // session is RUNNING the command decides nothing: a chat records its whole
-  // ancestor chain, so a terminal beside it resolves the same session anyway, and
-  // the walk that resolves it fails closed under load, which would drop the
-  // person's own words from their record for no reason they could see.
-  const atTheirTerminal = lowering.length > 0 && !typedByPerson && commandAtPersonsTerminal();
+  // behind it. Which session is RUNNING the command decides nothing: a chat records
+  // its whole ancestor chain, so a terminal beside it resolves the same session
+  // anyway, and the walk that resolves it fails closed under load, which would
+  // drop the person's own words from their record for no reason they could see.
   const turn = lowering.length > 0 && !typedByPerson && !atTheirTerminal
     ? latestPersonTurn(projectDir)
     : null;
@@ -690,7 +689,7 @@ export function applyIntentSettings(
     if (!saidAsAsked(flag)) lines.push(`${field} changed: ${oldDisplay} to ${line}`);
     if (key === "plan_approval") {
       lines.push(value === "off"
-        ? "Each code plan is now built without asking. Say 'review the plan first' to look at one before it is built."
+        ? "Each code plan is now built without asking you first. You can ask to see one before it is built any time."
         : "Each code plan is now shown for approval before it is built.");
     }
   }
@@ -700,30 +699,41 @@ export function applyIntentSettings(
   return { content, audit, lines };
 }
 
+/**
+ * Guard Policy as the person reads it, with what it does for them. One owner, so
+ * the setting reads the same wherever it is said (here and the routed note in
+ * `aidlc-orchestrate.ts`).
+ */
+export function guardPolicyNamed(): string {
+  return `Guard Policy${settingPurpose("Guard Policy")}`;
+}
+
 // A check as the person knows it: "review freeze check", "reviewer read scope check".
 function checkLabel(fence: string): string {
   return `${fence.replace("reviewer-scope", "reviewer read scope").replaceAll("-", " ")} check`;
 }
 
-// What the person hears when one of their checks went off: what is off, for
-// this piece of work, and the way back. Why it went off is said as far as it is
-// known: their own words, the chat they asked in, or, for a command they ran
-// themselves, that they set it.
+// What the person hears when one of their checks went off: what it is for, what
+// is off, for this piece of work, and that the way back is there. Why it went
+// off is said as far as it is known: their own words, the chat they asked in,
+// or, for a command they ran themselves, that they set it.
+// This line follows something they just did, so it tells them where they are and
+// nothing more: no question putting their own decision back to them, and no
+// command to type, because they say what they want next in their own words.
 function askedSwitchLine(
   item: GuardSwitch,
   words: string | null,
   previousPolicy: string,
   inThisChat: boolean,
 ): string {
-  const entry = entrySkillInvocation();
   const why = words ? `because you said: "${quoted(words)}"` : inThisChat ? "as you asked in the chat" : "set by you";
   if (item.key === "guard-policy") {
-    return `Guard Policy is ${item.value} for this piece of work, ${why}. ` +
-      `Say "put Guard Policy back to ${previousPolicy}" to restore it (${entry} --guard-policy ${previousPolicy}).`;
+    return `${guardPolicyNamed()} is ${item.value} for this piece of work, ${why}. ` +
+      `You can put it back to ${previousPolicy} any time.`;
   }
   const label = item.key === "summary-confirmation" ? "summary confirmation" : checkLabel(item.key.slice("guard.".length));
-  return `The ${label} is off for this piece of work, ${why}. ` +
-    `Say "turn it back on" to restore it (${entry} config set ${item.key} on).`;
+  return `The ${label}${settingPurpose(label)} is off for this piece of work, ${why}. ` +
+    "You can turn it back on any time.";
 }
 
 export interface TypedGuardSwitchOutcome {
@@ -748,14 +758,15 @@ export function applyTypedGuardSwitchPrompt(
   const outcome = applyReadTypedGuardSwitches(projectDir, sessionId, prompt, options);
   // A flag-shaped token this parser could not read never costs them the switches
   // it could: those are carried out and said as usual, and the part that was not
-  // read is named after, once, so they know what to type again.
+  // read is named after, once. AI-DLC is the one that could not read it, so that
+  // part is a question of its own rather than an instruction to type anything.
   const unread = parseTypedGuardSwitchRequest(prompt, options).unread;
   if (outcome === null || unread === undefined) return outcome;
   return {
     ...outcome,
     lines: [
       ...outcome.lines,
-      `I could not read "${unread}"; if that was a setting, type it again on its own.`,
+      `I could not read "${unread}". Was that a setting you wanted?`,
     ],
   };
 }
@@ -1036,8 +1047,8 @@ function grantPlanApprovalOffAtCreation(
   return {
     applied: true,
     lines: [
-      "Plan approval will be off for the piece of work you start now (set by you). " +
-        "Say 'review the plan first' to look at a plan before it is built.",
+      `Plan approval${settingPurpose("plan approval")} will be off for the piece of work you start now ` +
+        "(set by you). You can ask to see a plan before it is built any time.",
     ],
   };
 }
@@ -1141,9 +1152,11 @@ function grantGuardPolicyAtCreation(
   }
   return {
     applied: true,
+    // What the setting is for comes with its name: the person reading this may
+    // never have met it, and the fence lines beside it say the same.
     lines: [withDescription
-      ? `Guard Policy ${value} for the work you are asking for (set by you).`
-      : `Guard Policy ${value} for the piece of work you start now (set by you).`],
+      ? `${guardPolicyNamed()} is ${value} for the work you are asking for (set by you).`
+      : `${guardPolicyNamed()} is ${value} for the piece of work you start now (set by you).`],
   };
 }
 
@@ -1300,7 +1313,10 @@ export function checksNamed(fences: readonly SwitchableGuardFence[]): string {
 
 // "The review freeze check is", "The review freeze and state transition checks are".
 export function checksAre(fences: readonly SwitchableGuardFence[]): string {
-  return `The ${checksNamed(fences)} ${fences.length === 1 ? "is" : "are"}`;
+  // One check named says what it does for them; several would bury the sentence.
+  const named = checksNamed(fences);
+  const purpose = fences.length === 1 ? settingPurpose(named) : "";
+  return `The ${named}${purpose} ${fences.length === 1 ? "is" : "are"}`;
 }
 
 function grantFencesOffAtCreation(

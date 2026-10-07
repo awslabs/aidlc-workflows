@@ -62,6 +62,34 @@ export const PERSON_CHECK_SWITCHES = RECORDABLE_PROJECT_BYPASSES.filter(
   (name) => PERSON_CHECK_SWITCH_LABELS[name] !== undefined,
 );
 
+// What each setting does for the person, in a few plain words. A line that names
+// one says what it is for, because the name alone tells someone who has not met
+// it nothing. Keyed by the words the person reads (the labels above, the check
+// names `checkLabel` builds, and Guard Policy), so one map words every line.
+const PERSON_SETTING_PURPOSES: Readonly<Record<string, string>> = {
+  "plan approval check": "it shows you the plan before any code is written",
+  "plan approval": "it shows you the plan before any code is written",
+  "review freeze check": "it stops edits to work you already approved",
+  "state transition check": "it keeps the engine, not an agent, moving the work along",
+  "reviewer read scope check": "it keeps a reviewer reading only the part it was asked about",
+  "human presence check": "it needs a real reply from you behind every approval",
+  "summary confirmation": "it reads your words back to you before the work goes on",
+  "summary confirmation check": "it reads your words back to you before the work goes on",
+  "stage output check": "a stage must have written its files before it finishes",
+  "revision backstop": "it records a change you made at a gate that nobody wrote down",
+  "pipeline handoff check": "each agent's handoff is recorded before a pipeline stage finishes",
+  "Guard Policy": "it sets how many checks run",
+};
+
+/**
+ * ` (what it does)` to follow a setting's name in a line the person reads, or
+ * "" when the name is not one this map words, so the line simply names it.
+ */
+export function settingPurpose(label: string): string {
+  const purpose = PERSON_SETTING_PURPOSES[label];
+  return purpose === undefined ? "" : ` (${purpose})`;
+}
+
 export type ProjectFlagsRecord = {
   schemaVersion: 1;
   defaultScope?: string;

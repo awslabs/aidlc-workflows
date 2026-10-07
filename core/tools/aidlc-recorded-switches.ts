@@ -32,12 +32,13 @@ import {
   sessionsDir,
   writeFileAtomic,
 } from "./aidlc-lib.ts";
-import { aidlcInvocation, entrySkillInvocation, quoteCommandArgument } from "./aidlc-runtime-paths.ts";
+import { aidlcInvocation, quoteCommandArgument } from "./aidlc-runtime-paths.ts";
 import {
   type AidlcSettingsFile,
   bypassRecordedIn,
   PERSON_CHECK_SWITCH_LABELS,
   PERSON_CHECK_SWITCHES,
+  settingPurpose,
   type RecordableProjectBypass,
   resolveAidlcSettings,
   settingsPathForTarget,
@@ -198,8 +199,23 @@ export function clearSwitchCommand(
     : `${command} --project-dir ${quoteCommandArgument(projectDir, "powershell")}`;
 }
 
-/** The one line the person hears while a switch is off. */
-export function switchOffLine(off: SwitchOff, now: Date = new Date()): string {
+/**
+ * How the one line ends, which is what the person can do about it:
+ * - `offer`: a plain question they answer in their own words, for a chat (session
+ *   start, the engine's next step). The agent runs the command if they want it.
+ * - `statement`: they just turned it off themselves, so the line states that the
+ *   way back is there. Putting their own decision back to them as a question
+ *   asks them to think again about what they decided a moment ago.
+ * - `command`: nobody is listening (`config flags --show`, a doctor fix line), so
+ *   the one command that turns it back on is named instead of an offer.
+ */
+export type SwitchWayBack = "offer" | "statement" | "command";
+
+/**
+ * The one line the person hears while a switch is off: what the check is for,
+ * what is off, where, since when, how it was set, and the way back.
+ */
+export function switchOffLine(off: SwitchOff, now: Date = new Date(), wayBack: SwitchWayBack = "offer"): string {
   const label = PERSON_CHECK_SWITCH_LABELS[off.name] ?? off.name;
   const since = clock(off.entry?.since ?? fileTime(off.settingsPath), now);
   // Where it came from is said only when the person's own words are on record:
@@ -208,13 +224,25 @@ export function switchOffLine(off: SwitchOff, now: Date = new Date()): string {
   const how = off.entry?.how === "chat" && off.entry.words
     ? `, because you said: "${quoted(off.entry.words)}"`
     : "";
-  return `The ${label} is off ${where(off.target)} since ${since}${how}. ` +
-    `Say "turn it back on" to restore it (${clearSwitchCommand(off.name, off.projectDir)}).`;
+  const back = wayBack === "statement"
+    ? "You can turn it back on any time."
+    : wayBack === "command"
+    ? `To turn it back on: ${clearSwitchCommand(off.name, off.projectDir)}`
+    : "Do you want it back on?";
+  return `The ${label}${settingPurpose(label)} is off ${where(off.target)} since ${since}${how}. ${back}`;
 }
 
-/** Every switch still off, worded: for session start, --show, and doctor. */
-export function switchesOffLines(projectDir: string, env: NodeJS.ProcessEnv = process.env): string[] {
-  return switchesOff(projectDir, env).map((off) => switchOffLine(off));
+/**
+ * Every switch still off, worded: for session start (an offer the person answers
+ * in the chat) and for `--show` and doctor, where nobody is listening, so the
+ * line names the command instead.
+ */
+export function switchesOffLines(
+  projectDir: string,
+  env: NodeJS.ProcessEnv = process.env,
+  wayBack: SwitchWayBack = "offer",
+): string[] {
+  return switchesOff(projectDir, env).map((off) => switchOffLine(off, new Date(), wayBack));
 }
 
 /**
@@ -294,29 +322,32 @@ export function recordSwitchChange(
   }
   writeRecord(projectDir, switches);
   const off = switchesOff(projectDir, env);
-  const lines = off.filter((item) => added.includes(item.name)).map((item) => switchOffLine(item));
+  // They ran the command that turned these off a moment ago, so each line states
+  // where that leaves them and that the way back is there, and asks nothing.
+  const lines = off.filter((item) => added.includes(item.name))
+    .map((item) => switchOffLine(item, new Date(), "statement"));
   // "On again" only when nothing else still keeps the check off.
   for (const name of removed) {
     const label = PERSON_CHECK_SWITCH_LABELS[name] ?? name;
     const still = off.find((item) => item.name === name);
     if (env[name] === "1") {
       lines.push(
-        `The ${label} is still off: ${name}=1 is set in the environment this command ran in. ` +
+        `The ${label}${settingPurpose(label)} is still off: ${name}=1 is set in the environment this command ran in. ` +
           "Start the editor or CLI without it to turn the check back on.",
       );
     } else if (still) {
       if (!otherFiles) continue;
       const file = still.target === "global" ? still.settingsPath : basename(still.settingsPath);
       lines.push(
-        `The ${label} is still off: ${file} also records it. ` +
-          `Say "turn it back on" to restore it (${clearSwitchCommand(name, projectDir)}).`,
+        `The ${label}${settingPurpose(label)} is still off: ${file} also records it. ` +
+          "Do you want it cleared there too?",
       );
     } else {
       const held = heldOffByWork(projectDir, name);
       lines.push(held === null
         ? `The ${label} is on again ${where(target)}.`
-        : `The ${label} switch is cleared ${where(target)}, but it stays off for this piece of work: ${held.source}. ` +
-          `Say "turn it on for this work" to restore it there (${entrySkillInvocation()} config set ${held.key} on).`);
+        : `The ${label}${settingPurpose(label)} switch is cleared ${where(target)}, but it stays off for this ` +
+          `piece of work: ${held.source}. Do you want it on for this piece of work too?`);
     }
   }
   return lines;

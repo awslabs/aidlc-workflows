@@ -1913,7 +1913,7 @@ describe("t188: what the person's message asks for outlives the approval given i
     expect(approved.rc, approved.out).toBe(0);
     const off = setter(["config-change", "--plan-approval", "off"]);
     expect(off.rc, off.out).toBe(0);
-    expect(off.out).toContain("Each code plan is now built without asking.");
+    expect(off.out).toContain("Each code plan is now built without asking you first.");
     expect(planApproval()).toBe("off");
   });
 

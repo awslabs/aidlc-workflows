@@ -49,6 +49,7 @@ import {
   PERSON_CHECK_SWITCH_LABELS,
   PERSON_CHECK_SWITCHES,
   RECORDABLE_PROJECT_BYPASSES,
+  settingPurpose,
 } from "../../dist/claude/.claude/tools/aidlc-settings.ts";
 
 setDefaultTimeout(120_000);
@@ -59,11 +60,17 @@ const ORCHESTRATE = join(AIDLC_SRC, "tools", "aidlc-orchestrate.ts");
 const SESSION = "01995000-7a11-7000-8000-0000000051c0";
 const NAME = "AIDLC_DISABLE_REVIEW_FREEZE_HOOK";
 const ASKED = "turn the review freeze check off for this project";
-const OFF = "The review freeze check is off for this project since ";
+const FREEZE = "The review freeze check (it stops edits to work you already approved)";
+const OFF = `${FREEZE} is off for this project since `;
 const FROM_CHAT = `because you said: "${ASKED}"`;
 // A line the engine cannot source never claims where the switch came from.
 const NOT_FROM_CHAT = "your chat";
-const UNDO = `Say "turn it back on" to restore it (`;
+// The way back, in its three forms: the offer AI-DLC makes in a chat, the way
+// back stated after the person turned it off themselves, and the command named
+// where nobody is listening (`--show`, a doctor fix line).
+const OFFER = "Do you want it back on?";
+const KEPT = "You can turn it back on any time.";
+const UNDO = "To turn it back on: ";
 
 // Nothing in the environment decides these switches here: the settings files
 // do. The machine layer is a scratch install root.
@@ -159,7 +166,7 @@ function notices(proj: string, extra: Record<string, string | undefined> = {}): 
   expect(result.status, result.out).toBe(0);
   expect(result.directive, result.out).not.toBeNull();
   return ((result.directive as { change_notices?: string[] }).change_notices ?? [])
-    .filter((line) => line.includes(" check is off "));
+    .filter((line) => line.includes(" is off for this project "));
 }
 
 function sessionStart(proj: string): string {
@@ -193,7 +200,9 @@ describe("a check switched off for the project is always said, never refused", (
     expect(recorded.status, recorded.stdout + recorded.stderr).toBe(0);
     expect(recorded.stdout).toContain(OFF);
     expect(recorded.stdout).toContain(FROM_CHAT);
-    expect(recorded.stdout).toContain(`${UNDO}${clearSwitchCommand(NAME)}).`);
+    expect(recorded.stdout).toContain(KEPT);
+    // Their own act a moment ago: nothing asks them about it again.
+    expect(recorded.stdout).not.toContain(OFFER);
     expect(resolveProjectFlag(NAME, NONE, proj)).toBe("1");
 
     // The engine's next directive says it once; the one after does not.
@@ -210,18 +219,23 @@ describe("a check switched off for the project is always said, never refused", (
       expect(context).toContain(FROM_CHAT);
     }
 
-    // --show and doctor always name it; a warning never fails doctor.
+    // --show and doctor always name it; a warning never fails doctor. Neither has
+    // anyone to answer a question, so each names the one command instead.
     const show = flags(proj, "--show");
     expect(show.stdout).toContain(FROM_CHAT);
+    expect(show.stdout).toContain(UNDO);
+    expect(show.stdout).not.toContain(OFFER);
     const shown = JSON.parse(flags(proj, "--show", "--json").stdout) as { data: { switches: string[] } };
     expect(shown.data.switches).toHaveLength(1);
     expect(shown.data.switches[0]).toContain(FROM_CHAT);
     expect(shown.data.switches[0]).not.toContain("--project-dir");
     // Printed from somewhere else, the way back names the project.
-    expect(switchesOffLines(proj, NONE)[0]).toContain(`--clear-bypass ${NAME} --yes --project-dir ${proj})`);
-    const row = flagsDoctorCheck(proj, ".claude", switchesOffLines(proj, NONE));
+    expect(switchesOffLines(proj, NONE, "command")[0])
+      .toContain(`--clear-bypass ${NAME} --yes --project-dir ${proj}`);
+    const row = flagsDoctorCheck(proj, ".claude", switchesOffLines(proj, NONE, "command"));
     expect(row).toMatchObject({ pass: false, severity: "warn", label: "Flags: 1 check switched off" });
     expect(row.fix).toContain(FROM_CHAT);
+    expect(row.fix).toContain(UNDO);
 
     // Turning it back on needs nothing, and says so in one line.
     const cleared = flags(proj, "--clear-bypass", NAME, "--local", "--yes");
@@ -285,9 +299,7 @@ describe("a check switched off for the project is always said, never refused", (
     expect(existsSync(recordFile(proj))).toBe(false);
 
     const said = notices(proj);
-    expect(said).toEqual([
-      `${OFF}09:05. ${UNDO}${clearSwitchCommand(NAME)}).`,
-    ]);
+    expect(said).toEqual([`${OFF}09:05. ${OFFER}`]);
     expect(notices(proj)).toEqual([]);
     expect(sessionStart(proj)).toContain(`${OFF}09:05.`);
   });
@@ -301,7 +313,7 @@ describe("a check switched off for the project is always said, never refused", (
     });
     invalidateSettingsCache();
     expect(underEnv.status, underEnv.stdout + underEnv.stderr).toBe(0);
-    expect(underEnv.stdout).toContain(`The review freeze check is still off: ${NAME}=1 is set in the environment`);
+    expect(underEnv.stdout).toContain(`${FREEZE} is still off: ${NAME}=1 is set in the environment`);
     expect(underEnv.stdout).not.toContain("is on again");
 
     // The shared project file still records it: a clear aimed at the local
@@ -311,7 +323,7 @@ describe("a check switched off for the project is always said, never refused", (
     const local = flags(proj, "--clear-bypass", NAME, "--local", "--yes");
     expect(local.status, local.stdout + local.stderr).toBe(0);
     expect(local.stdout).toContain(`${NAME} is still recorded in aidlc.settings.json, so it stays on.`);
-    expect(local.stdout).not.toContain("The review freeze check is still off");
+    expect(local.stdout).not.toContain(`${FREEZE} is still off`);
     expect(local.stdout).not.toContain("is on again");
     expect(resolveProjectFlag(NAME, NONE, proj)).toBe("1");
 
@@ -336,8 +348,8 @@ describe("a check switched off for the project is always said, never refused", (
     const cleared = flags(proj, "--clear-bypass", NAME, "--yes");
     expect(cleared.status, cleared.stderr).toBe(0);
     expect(cleared.stdout).toContain(
-      "The review freeze check switch is cleared for this project, but it stays off for this piece of work: " +
-        'guard policy off (set by you). Say "turn it on for this work" to restore it there (/aidlc config set guard.review-freeze on).',
+      `${FREEZE} switch is cleared for this project, but it stays off for this piece of work: ` +
+        "guard policy off (set by you). Do you want it on for this piece of work too?",
     );
     expect(cleared.stdout).not.toContain("is on again");
   });
@@ -381,6 +393,11 @@ describe("a check switched off for the project is always said, never refused", (
     expect(switchesOffLines(proj, { [NAME]: "0" })).toEqual([]);
     expect(switchesOffLines(proj, NONE)).toHaveLength(1);
     expect(PERSON_CHECK_SWITCHES).toHaveLength(9);
+    // Every check the person reads about says, in a few plain words, what it does
+    // for them: a name on its own tells someone who has not met it nothing.
+    for (const name of PERSON_CHECK_SWITCHES) {
+      expect(settingPurpose(PERSON_CHECK_SWITCH_LABELS[name] ?? name), name).not.toBe("");
+    }
     expect(RECORDABLE_PROJECT_BYPASSES.filter((name) => PERSON_CHECK_SWITCH_LABELS[name] === undefined).sort())
       .toEqual(["AIDLC_DISABLE_LEARNINGS", "AIDLC_DISABLE_SENSORS", "AIDLC_DISABLE_USAGE_TRACKING"]);
   });
@@ -407,19 +424,26 @@ describe("a check switched off for the project is always said, never refused", (
       settingsPath: "/nonexistent",
       entry: { name: "AIDLC_DISABLE_PLAN_APPROVAL_GUARD", target, since: at(10), how: "chat", ...entry },
     });
+    const PLAN_APPROVAL = "The plan approval check (it shows you the plan before any code is written)";
+    const PLAN_SWITCH = "AIDLC_DISABLE_PLAN_APPROVAL_GUARD";
     expect(switchOffLine(off({ words: 'skip the "plan" stop' }), now)).toBe(
-      "The plan approval check is off for this project since 10:07, because you said: \"skip the 'plan' stop\". " +
-        `${UNDO}${clearSwitchCommand("AIDLC_DISABLE_PLAN_APPROVAL_GUARD")}).`,
+      `${PLAN_APPROVAL} is off for this project since 10:07, because you said: "skip the 'plan' stop". ` +
+        OFFER,
     );
     // No words of theirs on record: the line says what is off, since when, and
     // the way back, and claims nothing about where it came from.
-    expect(switchOffLine(off({}), now)).toBe(
-      "The plan approval check is off for this project since 10:07. " +
-        `${UNDO}${clearSwitchCommand("AIDLC_DISABLE_PLAN_APPROVAL_GUARD")}).`,
-    );
+    expect(switchOffLine(off({}), now)).toBe(`${PLAN_APPROVAL} is off for this project since 10:07. ${OFFER}`);
     expect(switchOffLine(off({ how: "other", since: at(8, 1) }, "global"), now)).toBe(
-      `The plan approval check is off on this machine since 2026-10-01 08:07. ` +
-        `${UNDO}${clearSwitchCommand("AIDLC_DISABLE_PLAN_APPROVAL_GUARD")}).`,
+      `${PLAN_APPROVAL} is off on this machine since 2026-10-01 08:07. ${OFFER}`,
+    );
+    // Right after they turned it off, the way back is stated, not put to them as
+    // a question about what they just decided; where nobody can answer a
+    // question (`--show`, a doctor fix line) the one command is named instead.
+    expect(switchOffLine(off({}), now, "statement")).toBe(
+      `${PLAN_APPROVAL} is off for this project since 10:07. ${KEPT}`,
+    );
+    expect(switchOffLine(off({}), now, "command")).toBe(
+      `${PLAN_APPROVAL} is off for this project since 10:07. ${UNDO}${clearSwitchCommand(PLAN_SWITCH)}`,
     );
     const long = switchOffLine(off({ words: `${"word ".repeat(80)}\nend` }), now);
     expect(long).toMatch(/because you said: "(?:word ){39}word\.\.\."/);

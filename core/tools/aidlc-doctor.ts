@@ -594,7 +594,7 @@ export async function main(argv: string[]): Promise<void> {
   checks.push(...settingsDoctorChecks(projectDir));
   checks.push(modelsPolicyCheck(projectDir, flags.verbose === "true"));
   checks.push(...await kiroSessionDoctorChecks(projectDir));
-  checks.push(flagsDoctorCheck(projectDir, harnessDir(), switchesOffLines(projectDir)));
+  checks.push(flagsDoctorCheck(projectDir, harnessDir(), switchesOffLines(projectDir, process.env, "command")));
   checks.push(providerDoctorCheck(projectDir, harnessDir()));
   checks.push(workspaceSiblingDoctorCheck(projectDir, harnessDir()));
   const requestCap = vscodeRequestCapDoctorCheck(projectDir, harnessDir());
