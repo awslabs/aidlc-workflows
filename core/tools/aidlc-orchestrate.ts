@@ -205,6 +205,8 @@ import {
   type GuardRecoveryAskData,
   humanAuthorityState,
   latestMainWorkflowStageRunFloorForProject,
+  unitLifecycleRunFloorForProject,
+  unitScopedLifecycleFloors,
   latestReviewRecordRefs,
   isAutonomousConstructionGate,
   isConstructionSwarmEnabled,
@@ -9098,8 +9100,11 @@ function nextUncoveredUnit(
 // Unit only on UNIT_COMPLETED). Handing back the stage body, or "run next",
 // only loops, so the step names the receipt's exact commands. The fresh review
 // is the evidence the files are this attempt's: a reopened or redone Unit's
-// earlier files never carry one. Null whenever anything but the receipt is
-// left, or a wave owns the stage's completions.
+// earlier files never carry one. With reviews off (#2021) the evidence is that
+// this is the stage's first attempt for the Unit: nothing has moved its floor
+// since the workflow (or the stage) began, so no earlier attempt left files.
+// Null whenever anything but the receipt is left, or a wave owns the stage's
+// completions.
 function unitReceiptOnlyStep(
   projectDir: string,
   node: GraphStage,
@@ -9111,7 +9116,7 @@ function unitReceiptOnlyStep(
   stateContent: string | null,
   scope: string,
 ): string | null {
-  if (stateContent === null || !node.reviewer) return null;
+  if (stateContent === null) return null;
   if (!ledger.inUse || ledger.receipts.has(unit) || ledger.skipped.has(unit)) return null;
   if (kindVacuous(node, unitKind) || ledger.mode === "wave" || ledger.mode === "mixed") return null;
   const unitMajor = getField(stateContent, "Construction Iteration")?.trim() === "unit-major";
@@ -9121,15 +9126,34 @@ function unitReceiptOnlyStep(
   if (ledger.checkpoint !== null && ledger.checkpoint.unit !== unit) return null;
   if (!unitCovered(projectDir, node, unit, recordPrefix, codekbCtx, unitKind)) return null;
   if (redoChosenForUnitStep(projectDir, node.slug, unit)) return null;
-  const reviewClass = resolveReviewClass(node.review_class ?? "adversarial", scope, stateContent);
-  if (reviewClass === "none") return null;
-  const review = freshReviewReceipts(projectDir, stateContent, node, { reviewClass });
-  // Only final verdicts are kept, the same evidence `unit complete` accepts.
-  if (!review.unitVerdicts.has(unit)) return null;
+  const reviewClass = node.reviewer
+    ? resolveReviewClass(node.review_class ?? "adversarial", scope, stateContent)
+    : "none";
+  if (reviewClass === "none") {
+    if (!unitFirstStageAttempt(projectDir, node.slug, unit, stateContent)) return null;
+  } else {
+    const review = freshReviewReceipts(projectDir, stateContent, node, { reviewClass });
+    // Only final verdicts are kept, the same evidence `unit complete` accepts.
+    if (!review.unitVerdicts.has(unit)) return null;
+  }
   const command = (action: string): string =>
     `\`${renderEngineInvocation({ route: "state", args: ["unit", action, "--stage", node.slug, "--unit", unit] })}\``;
   const steps = own ? command("complete") : `${command("start")}, then ${command("complete")}`;
-  return `Unit "${unit}"'s ${node.name} work is written and reviewed, but its completion is not recorded: run ${steps}.`;
+  const done = reviewClass === "none" ? "written" : "written and reviewed";
+  return `Unit "${unit}"'s ${node.name} work is ${done}, but its completion is not recorded: run ${steps}.`;
+}
+
+// True when the Unit's receipts for this stage are read against the first
+// boundary there is: the workflow's start, or (stage-major) the stage's first
+// start. Read with the floor `unit start` and `unit complete` stamp, so a jump,
+// a rejection or a restart makes it false.
+function unitFirstStageAttempt(projectDir: string, slug: string, unit: string, stateContent: string): boolean {
+  const unitMajor = getField(stateContent, "Construction Iteration")?.trim() === "unit-major" ||
+    getField(stateContent, "Construction Checkpoints") === "enabled";
+  const floor = unitLifecycleRunFloorForProject(
+    projectDir, slug, unitMajor, unit, undefined, unitScopedLifecycleFloors(stateContent),
+  );
+  return /^(?:WORKFLOW_STARTED|STAGE_STARTED):[^#]+#1$/.test(floor);
 }
 
 // `next` for a Unit that owes only its completion receipt: that step, then

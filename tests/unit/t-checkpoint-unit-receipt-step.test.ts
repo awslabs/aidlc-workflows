@@ -12,7 +12,7 @@
 import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS, NATIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import {
   AIDLC_SRC,
@@ -195,6 +195,45 @@ describe("t-checkpoint-unit-receipt-step: a checkpoint-enabled Unit done without
   test("reviews off: next names start then complete, and the Unit moves on", () => {
     project("none");
     bodyWithoutReceipts(false);
-    followStep(next(proj), [START, COMPLETE]);
+    const step = next(proj);
+    expect(String(step.message)).toContain("work is written, but its completion is not recorded");
+    expect(String(step.message)).not.toContain("reviewed");
+    // Every later `next` names the same step until it is run: no loop back to
+    // the stage.
+    expect(next(proj)).toEqual(step);
+    followStep(step, [START, COMPLETE]);
+  });
+
+  test("reviews off, the Unit already started: next names only complete", () => {
+    project("none");
+    expect(next(proj).unit).toBe(FIRST);
+    expect(unitVerb(proj, "start", FIRST).rc).toBe(0);
+    writeUnitArtifacts(proj, FIRST);
+    const step = next(proj);
+    expect(String(step.message), nexts.join("\n")).not.toContain(START);
+    followStep(step, [COMPLETE]);
+  });
+});
+
+describe("t-checkpoint-unit-receipt-step: reviews off, work genuinely left keeps the stage", () => {
+  // A jump moved the Unit's attempt on: the files on disk are the earlier
+  // attempt's, so the stage is handed back (its re-use question runs there).
+  test("files from before a jump: next hands back the stage", () => {
+    project("none");
+    bodyWithoutReceipts(false);
+    appendAuditEntry("STAGE_JUMPED", { From: "code-generation", To: SLUG, Stage: SLUG }, proj);
+    const d = next(proj);
+    expect(d.kind, nexts.join("\n")).toBe("run-stage");
+    expect(d.stage).toBe(SLUG);
+    expect(d.unit).toBe(FIRST);
+  });
+
+  test("a required file missing: next hands back the stage", () => {
+    project("none");
+    bodyWithoutReceipts(false);
+    rmSync(join(seededRecordDir(proj), "construction", FIRST, SLUG, artifactFilename("rules")));
+    const d = next(proj);
+    expect(d.kind, nexts.join("\n")).toBe("run-stage");
+    expect(d.unit).toBe(FIRST);
   });
 });
