@@ -1364,6 +1364,9 @@ interface EngineDirective {
   // The step offers the choice between continuing automatically and reviewing
   // each checkpoint, which no choice on record has settled yet.
   offerAutonomy?: boolean;
+  // A guard-recovery ask whose ways on are the agent's own work: no question
+  // for the person.
+  agent_work?: boolean;
 }
 
 // Run `aidlc-orchestrate.ts next` and return the parsed directive fields the
@@ -1491,6 +1494,7 @@ function runEngineNextDirective(
         : undefined;
       const offerAutonomy = policy !== null && typeof policy === "object" &&
         (policy as { offer_autonomy?: unknown }).offer_autonomy === true;
+      const agentWork = "agent_work" in parsed && (parsed as { agent_work?: unknown }).agent_work === true;
       return {
         kind,
         ...(stage.length > 0 ? { stage } : {}),
@@ -1505,6 +1509,7 @@ function runEngineNextDirective(
         ...(wave !== undefined ? { wave } : {}),
         ...(rulesContent ? { rulesContent } : {}),
         ...(offerAutonomy ? { offerAutonomy } : {}),
+        ...(agentWork ? { agent_work: true } : {}),
       };
     }
   } catch {
@@ -1905,8 +1910,10 @@ if (kind === "parked") {
 
 // `ask` → the engine is explicitly waiting for human input (for example,
 // freeform scope routing or a paused Unit). Allow the turn to end so the user
-// can respond, rather than re-feeding the loop.
-if (kind === "ask") {
+// can respond, rather than re-feeding the loop. A recovery ask whose ways on
+// are the agent's own work (`agent_work`) is no question for the person: it is
+// pending work like a run-stage, and the cap-bounded block below hands it back.
+if (kind === "ask" && directive.agent_work !== true) {
   return allowStop();
 }
 
@@ -1999,7 +2006,9 @@ if (!KNOWN_DIRECTIVE_KINDS.has(kind)) {
 // error falls through to the cap-bounded block below, unchanged. (This is the
 // current-stage-scoped successor to the broad `[?]` substring match that landed
 // in 679153d; scoping to the current slug and adding [R] is strictly safer.)
-if (isHumanWaitStop(projectDir, stateContent, activeStage, activeUnit)) {
+// An own-work recovery ask (finish the revision the [R] stage is in) is the
+// agent's work, not a wait on the person: it goes to the block below.
+if (directive.agent_work !== true && isHumanWaitStop(projectDir, stateContent, activeStage, activeUnit)) {
   recordHookTrace(
     projectDir,
     HOOK_NAME,

@@ -12719,7 +12719,8 @@ function remedyRepeatsPreflightedAction(
 // The ask for a refusal the router derived itself (a review request the wave
 // cannot make, a summary confirmation the Unit lacks). Always an ask, never an
 // error directive. The streak is the same one the enforcing tool keeps; an
-// observer reads it without writing.
+// observer reads it as it stands without writing, so a probe of an unchanged
+// refusal is the ask the agent holds, not a repeat put to the person.
 function routedRefusalDirective(
   projectDir: string,
   routed: RoutedGuardRefusal,
@@ -12730,6 +12731,7 @@ function routedRefusalDirective(
         routed.refusal,
         routed.attempt,
         routed.resources,
+        true,
       )
     : recordGuardRefusal(
         projectDir,

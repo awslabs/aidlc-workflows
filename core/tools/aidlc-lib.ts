@@ -29990,11 +29990,15 @@ export interface GuardRefusalStreak {
 // of the guard state, how many times it has repeated, and the ask that renders
 // it. Pure with respect to the project: it reads the prior record and writes
 // nothing, which is what an observer (the Stop-hook probe) is allowed to do.
+// With `asRecorded` an unchanged refusal reads as the streak stands, not as the
+// repeat recording it would make: the observer sees the ask the agent holds
+// (its own work the first time), never a question the person was not asked.
 export function guardRefusalStreakView(
   projectDir: string,
   refusal: GuardRefusal,
   attempt: GuardAttemptState,
   resourceFingerprints: ReadonlyArray<string> = [],
+  asRecorded = false,
 ): GuardRefusalStreak & { record: GuardRefusalRecord } {
   const path = guardRefusalPath(projectDir, refusal.stage, refusal.unit);
   const prior = readGuardRefusalRecord(path);
@@ -30032,7 +30036,7 @@ export function guardRefusalStreakView(
   const signature = createHash("sha256")
     .update(JSON.stringify({ stateSignature, codes }), "utf-8")
     .digest("hex");
-  const count = prior?.signature === signature ? prior.count + 1 : 1;
+  const count = prior?.signature === signature ? (asRecorded ? prior.count : prior.count + 1) : 1;
   const record: GuardRefusalRecord = {
     version: 1,
     stateSignature,
