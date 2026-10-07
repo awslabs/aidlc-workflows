@@ -20,8 +20,9 @@ Windows PowerShell:
 irm https://github.com/awslabs/aidlc-workflows/releases/latest/download/install.ps1 | iex
 ```
 
-The native installer includes every harness runtime and does not require Bun or
-Node.js. On Windows, it installs for the current account and automatically
+The native installer sets up everything AI-DLC needs, every harness runtime
+included; you do not need to install Bun or Node.js. On Windows, it installs for
+the current account and automatically
 registers the bin directory in User PATH; run it from a normal PowerShell window,
 since one opened with "Run as administrator" gets a warning and a prompt. If
 another session cannot find `aidlc`, open a new terminal. Use
