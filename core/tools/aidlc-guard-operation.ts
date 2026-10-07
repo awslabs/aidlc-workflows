@@ -1,7 +1,6 @@
 import { isSwitchableGuardFence, type SwitchableGuardFence } from "./aidlc-guard-fences.ts";
 import {
   aidlcInvocation,
-  entrySkillInvocation,
   quoteCommandArgument,
   runtimeHarnessDir,
 } from "./aidlc-runtime-paths.ts";
