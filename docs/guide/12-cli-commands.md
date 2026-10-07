@@ -1421,8 +1421,10 @@ refusal names the command; a human-presence refusal names no switch and says
 what happened to a reply the person already sent: on a harness that runs hooks
 only after the person acts, the steps that turn them on; elsewhere, one line
 for the person: "Your answer didn't reach AI-DLC. Please give it once more. If
-it happens again, type /aidlc --doctor." The agent is told never to offer to
-turn a check off for them.
+it happens again, type /aidlc --doctor." In Kiro CLI, where a reply typed to
+another agent picked in `/agent` is never recorded, that line is "Your answer
+didn't reach AI-DLC. Type /agent and pick aidlc, then give it once more." The
+agent is told never to offer to turn a check off for them.
 
 Only `AIDLC_SKIP_HUMAN_PRESENCE_GUARD=1` lowers human presence, set machine-wide
 or recorded with `aidlc config flags --bypass` (AI-DLC then says it is off).
