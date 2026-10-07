@@ -152,16 +152,6 @@ function flags(proj: string, ...args: string[]) {
   return result;
 }
 
-// The same, as the agent runs it in the person's chat: a command their host
-// starts carries that chat's session, which is how the line can quote them. A
-// command the person ran themselves, in their own terminal, carries none.
-function flagsInChat(proj: string, ...args: string[]) {
-  const result = dispatch(proj, ["config", "flags", "--project-dir", proj, ...args], undefined, {
-    AIDLC_SESSION_OVERRIDE: SESSION,
-  });
-  invalidateSettingsCache();
-  return result;
-}
 
 // `next` as the agent runs it: from the project.
 function notices(proj: string, extra: Record<string, string | undefined> = {}): string[] {
@@ -199,7 +189,7 @@ describe("a check switched off for the project is always said, never refused", (
     expect(personSpokeSinceGate(proj)).toBe(true);
     expect(latestPersonTurn(proj)?.words).toBe(ASKED);
 
-    const recorded = flagsInChat(proj, "--bypass", NAME, "--local", "--yes");
+    const recorded = flags(proj, "--bypass", NAME, "--local", "--yes");
     expect(recorded.status, recorded.stdout + recorded.stderr).toBe(0);
     expect(recorded.stdout).toContain(OFF);
     expect(recorded.stdout).toContain(FROM_CHAT);
@@ -247,7 +237,7 @@ describe("a check switched off for the project is always said, never refused", (
     const proj = installedProject();
     const long = `turn the review freeze check off ${"and keep going ".repeat(40)}`;
     says(proj, long);
-    const recorded = flagsInChat(proj, "--bypass", NAME, "--local", "--yes");
+    const recorded = flags(proj, "--bypass", NAME, "--local", "--yes");
     expect(recorded.status, recorded.stdout + recorded.stderr).toBe(0);
     expect(recorded.stdout).toMatch(/because you said: "turn the review freeze check off and keep going [^"]*\.\.\."/);
     const [entry] = JSON.parse(readFileSync(recordFile(proj), "utf-8")).switches as Array<{ words: string }>;

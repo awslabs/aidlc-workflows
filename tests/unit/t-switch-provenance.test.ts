@@ -318,11 +318,11 @@ describe("a check typed off before any work exists", () => {
 
 describe("a setter the person runs in their own terminal", () => {
   const ASKED = "show me the status";
-  // A terminal the person types at, with no chat identity on the command: the
-  // one thing that separates it from the agent's own tool call, which arrives
-  // with pipes. Process ancestry cannot: a chat records the whole ancestor chain
-  // that a terminal beside it shares, which is how an unrelated chat message
-  // ended up quoted as the reason for a command the person ran themselves.
+  // A terminal the person types at: both ends a terminal, no chat identity on the
+  // command, and no mark of a tool that runs terminals of its own. Ancestry
+  // cannot tell it from the agent's, because a chat records the whole ancestor
+  // chain that a terminal beside it shares, which is how an unrelated chat
+  // message ended up quoted as the reason for a command the person ran.
   const atATerminal = (proj: string, args: string[]): { status: number; out: string } => {
     const command = [
       BUN, DISPATCHER, "engine", "config", "set", ...args, "--project-dir", proj,
@@ -332,7 +332,12 @@ describe("a setter the person runs in their own terminal", () => {
     };
     delete env.AIDLC_SESSION_OVERRIDE;
     delete env.AIDLC_SESSION_OVERRIDE_SOURCE;
-    delete env.CODEX_THREAD_ID;
+    // A person's own shell carries no mark of a tool that starts its own
+    // terminals. This suite runs inside one, so its marks are cleared here.
+    delete env.TERM_PROGRAM;
+    for (const key of Object.keys(env)) {
+      if (/^(?:CLAUDECODE|CLAUDE_CODE_|CODEX_|CURSOR_|KIRO_|OPENCODE|COPILOT_|VSCODE_)/i.test(key)) delete env[key];
+    }
     const result = spawnSync("script", ["-qec", command, "/dev/null"], {
       cwd: proj,
       env: env as NodeJS.ProcessEnv,
@@ -358,14 +363,72 @@ describe("a setter the person runs in their own terminal", () => {
     expect(auditBlockField(disabled[0].block, "Person Reply")).toBeNull();
   });
 
-  test("run by the agent in the person's chat, their words still stand behind it", () => {
+  test("run by the agent for what they asked in the chat, their words stand behind it", () => {
     const proj = openWork();
     reply(proj, ASKED);
-    const off = configSet(proj, ["guard.state-transition", "off"], SESSION);
+    // The agent's own tool call: pipes, no terminal of theirs behind it.
+    const off = configSet(proj, ["guard.state-transition", "off"], null);
     expect(off.status, off.out).toBe(0);
     expect(off.out).toContain(`because you said: "${ASKED}"`);
     const disabled = readAuditShardEvents(proj).filter((row) => row.event === "GUARD_DISABLED");
     expect(auditBlockField(disabled[0].block, "Person Reply")).toBe(ASKED);
+  });
+});
+
+// Copilot in VS Code, Kiro IDE and Cursor run their agent's commands in real
+// integrated terminals, so a terminal alone says nothing about who typed the
+// command. Every one of those marks reads as the agent, never as the person.
+describe("a terminal that the person's own tool runs", () => {
+  const ASKED = "turn the state transition check off";
+  /** `engine config set` as the agent runs it in a host's own terminal. */
+  const inHostTerminal = (proj: string, mark: Record<string, string | undefined>): { status: number; out: string } => {
+    const env: Record<string, string | undefined> = {
+      ...process.env, ...CLEAR, CLAUDE_PROJECT_DIR: proj, AIDLC_PROJECT_DIR: proj,
+      // Both ends a terminal, as an integrated terminal is.
+      AIDLC_TEST_CONFIG_TTY: "1",
+      ...mark,
+    };
+    delete env.AIDLC_SESSION_OVERRIDE;
+    delete env.AIDLC_SESSION_OVERRIDE_SOURCE;
+    delete env.CODEX_THREAD_ID;
+    const result = spawnSync(BUN, [DISPATCHER, "engine", "config", "set", "guard.state-transition", "off", "--project-dir", proj], {
+      cwd: proj,
+      env: env as NodeJS.ProcessEnv,
+      encoding: "utf-8",
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+    });
+    return { status: result.status ?? -1, out: `${result.stdout ?? ""}${result.stderr ?? ""}` };
+  };
+
+  test.each([
+    { host: "VS Code", mark: { TERM_PROGRAM: "vscode" } },
+    { host: "Kiro", mark: { TERM_PROGRAM: "kiro" } },
+    { host: "Cursor", mark: { TERM_PROGRAM: "cursor" } },
+    { host: "Copilot", mark: { COPILOT_AGENT_ID: "a1" } },
+    { host: "Claude Code", mark: { CLAUDECODE: "1" } },
+  ])("$host: the switch is the agent's, so their own words stand behind it, never 'set by you'", ({ mark }) => {
+    const proj = openWork();
+    reply(proj, ASKED);
+    const off = inHostTerminal(proj, mark);
+    expect(off.status, off.out).toBe(0);
+    expect(off.out).toContain(`because you said: "${ASKED}"`);
+    expect(off.out).not.toContain("set by you.");
+  });
+
+  test.each([
+    { host: "VS Code", mark: { TERM_PROGRAM: "vscode" } },
+    { host: "Kiro", mark: { TERM_PROGRAM: "kiro" } },
+    { host: "Cursor", mark: { TERM_PROGRAM: "cursor" } },
+  ])("$host: with nobody on record it is refused, and the line says where to ask", ({ host, mark }) => {
+    const proj = openWork();
+    const before = readFileSync(seededStateFile(proj), "utf-8");
+    const refused = inHostTerminal(proj, mark);
+    expect(refused.status).not.toBe(0);
+    expect(refused.out).toContain(`To turn the state-transition check off, ask for it in your ${host} chat.`);
+    // No environment variable and no third person in what the person reads.
+    expect(refused.out).not.toContain("AIDLC_");
+    expect(refused.out).not.toContain("the person");
+    expect(readFileSync(seededStateFile(proj), "utf-8")).toBe(before);
   });
 });
 

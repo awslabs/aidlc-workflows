@@ -65,7 +65,7 @@ import {
   writePlanApprovalRuntimeRecord,
   writeStateFile,
   parseGuardPolicyStateLine,
-  runFromPersonsTerminal,
+  commandAtPersonsTerminal,
 } from "./aidlc-lib.ts";
 import { quoted } from "./aidlc-recorded-switches.ts";
 import { entrySkillInvocation } from "./aidlc-runtime-paths.ts";
@@ -448,25 +448,21 @@ export function applyIntentSettings(
     die(guardSwitchRefusal(lowering[0], "config", personSpokeSinceGate(projectDir), projectDir));
   }
   // The setter carries out what the person asked: their words go on the record.
-  // Their words stand behind a setter the agent runs in their chat. A command
-  // they ran themselves, in their own terminal, belongs to no chat: it is their
-  // own act, and no message of theirs is quoted for it or kept beside it. The
-  // chat that matters is the one RUNNING this command, never the one the work is
-  // bound to, which is the same chat whose words are on record. A command the
-  // person ran at their own terminal reads as nobody's chat (runFromPersonsTerminal):
-  // ancestry alone cannot tell it from the agent's, since a chat records the
-  // whole ancestor chain a terminal beside it shares.
-  const turn = lowering.length > 0 && !typedByPerson ? latestPersonTurn(projectDir) : null;
-  let running: string | null = null;
-  if (turn !== null && !runFromPersonsTerminal()) {
-    try {
-      running = resolveInvokingSessionId(projectDir);
-    } catch {
-      running = null;
-    }
-  }
-  const inThisChat = turn !== null && running !== null && turn.session === running;
-  const askedIn = inThisChat ? turn.words : null;
+  // A command they ran themselves, at their own terminal, is their own act and
+  // belongs to no chat, so no message of theirs is quoted for it. Everything else
+  // is the agent carrying out what they asked in the chat, and their words stand
+  // behind it. `commandAtPersonsTerminal` owns that test, including the hosts that
+  // run their agent's commands in a terminal of their own (Copilot in VS Code,
+  // Kiro IDE, Cursor), where a terminal says nothing about who typed it. Which
+  // session is RUNNING the command decides nothing: a chat records its whole
+  // ancestor chain, so a terminal beside it resolves the same session anyway, and
+  // the walk that resolves it fails closed under load, which would drop the
+  // person's own words from their record for no reason they could see.
+  const atTheirTerminal = lowering.length > 0 && !typedByPerson && commandAtPersonsTerminal();
+  const turn = lowering.length > 0 && !typedByPerson && !atTheirTerminal
+    ? latestPersonTurn(projectDir)
+    : null;
+  const askedIn = turn?.words ?? null;
   // Asked for in the chat (not typed): each check it turns off is said in one
   // line, in their words, with the way back, instead of the setter's own line.
   const askedInChat = lowering.length > 0 && !typedByPerson &&
@@ -690,7 +686,7 @@ export function applyIntentSettings(
     }
   }
   for (const item of lowering) {
-    if (saidAsAsked(item.key)) lines.push(askedSwitchLine(item, askedIn, cc.value, inThisChat));
+    if (saidAsAsked(item.key)) lines.push(askedSwitchLine(item, askedIn, cc.value, !atTheirTerminal));
   }
   return { content, audit, lines };
 }

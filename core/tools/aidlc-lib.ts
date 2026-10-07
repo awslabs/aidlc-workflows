@@ -25412,23 +25412,81 @@ export function hooksOffAgentStep(projectDir?: string, next?: string): string | 
   return `${HOOKS_OFF_AGENT_RULES} ${fillHookActivationText(activation.agentStep, projectDir, next)}`;
 }
 
-// A person typing AI-DLC commands at their own terminal: both ends of the
-// command are a terminal, no IDE terminal or agent host marks the environment,
-// and no chat has ever been recorded in this project. An agent's tool call is
-// never read as this, so the terminal step below (which names the supervised
-// presence switch) is never offered to an agent whose hooks are not running.
-export function personAtOwnTerminal(projectDir?: string, env: NodeJS.ProcessEnv = process.env): boolean {
-  const tty = (process.stdin.isTTY === true && process.stdout.isTTY === true) || env.AIDLC_TEST_CONFIG_TTY === "1";
-  if (!tty) return false;
-  if (["vscode", "cursor", "kiro"].includes((env.TERM_PROGRAM ?? "").toLowerCase())) return false;
-  // A host marks the processes it starts; a person's shell may still carry a
-  // tool's own settings (where it keeps its config), which say nothing.
-  if (Object.keys(env).some((key) =>
-    /^(?:CLAUDECODE|CLAUDE_CODE_|CODEX_|CURSOR_|KIRO_|OPENCODE|COPILOT_|VSCODE_)/i.test(key) &&
-    !/^(?:CODEX_HOME|COPILOT_HOME|OPENCODE_CONFIG_DIR|OPENCODE_CONFIG)$/i.test(key)
-  )) {
-    return false;
+/**
+ * This command is one the person typed at their own terminal: both ends of it are
+ * a terminal, nothing marks it as a chat's own command (no hook-injected session,
+ * no thread id a host gives the commands it runs), and no IDE or agent host marks
+ * the environment. The last part is load-bearing: Copilot in VS Code, Kiro IDE and
+ * Cursor run their agent's commands in real integrated terminals, so a terminal
+ * alone says nothing about who typed it.
+ *
+ * It is the one test for "the person's own command", used wherever that decides
+ * what a line says or whose act is recorded. An agent's tool call is never read
+ * as this.
+ */
+export function commandAtPersonsTerminal(env: NodeJS.ProcessEnv = process.env): boolean {
+  if (!atATerminal(env)) return false;
+  if (validSessionId(env.AIDLC_SESSION_OVERRIDE) !== null || validSessionId(env.CODEX_THREAD_ID) !== null) return false;
+  return agentHostMark(env) === null;
+}
+
+// Both ends of this command are a terminal. On its own this says nothing about
+// who typed it: an IDE runs its agent's commands in a terminal too.
+function atATerminal(env: NodeJS.ProcessEnv): boolean {
+  return (process.stdin.isTTY === true && process.stdout.isTTY === true) || env.AIDLC_TEST_CONFIG_TTY === "1";
+}
+
+/**
+ * The host to name when this command came from a terminal that host runs: the
+ * person works in its chat rather than in a shell of their own, so a line can
+ * tell them where to ask. Null when this is no terminal, or carries no mark.
+ */
+export function agentTerminalHost(env: NodeJS.ProcessEnv = process.env): string | null {
+  return atATerminal(env) ? agentHostMark(env) : null;
+}
+
+/**
+ * The host whose mark is on this environment, as the person knows it, or null for
+ * none. A host marks the processes it starts; a person's own shell may still carry
+ * a tool's settings (where it keeps its config), which say nothing about who is
+ * typing.
+ */
+export function agentHostMark(env: NodeJS.ProcessEnv = process.env): string | null {
+  const terminal = (env.TERM_PROGRAM ?? "").toLowerCase();
+  const named = AGENT_HOST_TERMINALS[terminal];
+  if (named !== undefined) return named;
+  for (const key of Object.keys(env)) {
+    if (/^(?:CODEX_HOME|COPILOT_HOME|OPENCODE_CONFIG_DIR|OPENCODE_CONFIG)$/i.test(key)) continue;
+    const prefix = Object.keys(AGENT_HOST_PREFIXES).find((candidate) =>
+      key.toUpperCase().startsWith(candidate));
+    if (prefix !== undefined) return AGENT_HOST_PREFIXES[prefix];
   }
+  return null;
+}
+
+// The hosts that run their agent's commands in a terminal of their own, named the
+// way the person knows them, so a line can tell them where to ask.
+const AGENT_HOST_TERMINALS: Readonly<Record<string, string>> = Object.freeze({
+  vscode: "VS Code",
+  cursor: "Cursor",
+  kiro: "Kiro",
+});
+const AGENT_HOST_PREFIXES: Readonly<Record<string, string>> = Object.freeze({
+  CLAUDECODE: "Claude Code",
+  CLAUDE_CODE_: "Claude Code",
+  CODEX_: "Codex",
+  CURSOR_: "Cursor",
+  KIRO_: "Kiro",
+  OPENCODE: "opencode",
+  COPILOT_: "Copilot",
+  VSCODE_: "VS Code",
+});
+
+// A person typing AI-DLC commands at their own terminal in a project where no
+// chat has ever been recorded, which is when the terminal step below (naming the
+// supervised presence switch) is the one thing that helps them.
+export function personAtOwnTerminal(projectDir?: string, env: NodeJS.ProcessEnv = process.env): boolean {
+  if (!commandAtPersonsTerminal(env)) return false;
   try {
     return readCurrentSessionId(resolveProjectDir(projectDir)) === null;
   } catch {
@@ -26197,35 +26255,11 @@ export function pickerAnswerNote(projectDir: string, details: string): string | 
   }
 }
 
-/**
- * Whether this command is one the person ran themselves at a terminal: they are
- * typing at it, and nothing marks it as a chat's own command. An agent's tool
- * call arrives with pipes on both ends, and a chat that starts one marks it (the
- * hook-injected session, or the thread id Codex gives every command it runs).
- * Process ancestry cannot tell the two apart: a chat records its whole ancestor
- * chain, which a terminal beside it shares.
- *
- * It decides one thing only: whether a message the person typed in a chat may be
- * quoted as the reason for what this command did. A command of theirs is their
- * own act either way, and it changes nothing about what the command does.
- */
-export function runFromPersonsTerminal(env: NodeJS.ProcessEnv = process.env): boolean {
-  if (validSessionId(env.AIDLC_SESSION_OVERRIDE) !== null || validSessionId(env.CODEX_THREAD_ID) !== null) {
-    return false;
-  }
-  return process.stdin.isTTY === true || process.stdout.isTTY === true;
-}
-
 // The person's latest chat turn in this clone's ledger for the selected work:
-// when it was, the chat it was typed in, and the words that chat kept right
-// after it (null when the hook kept none: a slash command, a picked option, an
-// over-long message). The session is how a caller tells a command the person's
-// own chat is running from one they ran themselves, which quotes no message of
-// theirs. Null when no turn is on record. It only words a notice, so it never
-// throws.
-export function latestPersonTurn(
-  projectDir: string,
-): { at: string; words: string | null; session: string | null } | null {
+// when it was, and the words its chat kept right after it (null when the hook
+// kept none: a slash command, a picked option, an over-long message). Null when
+// no turn is on record. It only words a notice, so it never throws.
+export function latestPersonTurn(projectDir: string): { at: string; words: string | null } | null {
   try {
     const shardPath = auditFilePath(projectDir);
     const content = readAppendOnlyFileNoFollowOrThrow(shardPath, "audit shard").toString("utf-8");
@@ -26254,7 +26288,7 @@ export function latestPersonTurn(
     const kept = record?.shard === projectRelativePath(projectDir, shardPath)
       ? record.messages.find((message) => message.offset > from && message.offset <= to)
       : undefined;
-    return { at, words: kept?.text ?? null, session };
+    return { at, words: kept?.text ?? null };
   } catch {
     return null;
   }
@@ -38107,6 +38141,20 @@ export function guardSwitchRefusal(
   asked = false,
   projectDir?: string,
 ): string {
+  // A terminal their own tool runs (Copilot in VS Code, Kiro IDE, Cursor): the
+  // person is working in its chat, so the one line they read says to ask there.
+  // Their tool is named as they know it, with no environment variable in sight.
+  const host = agentTerminalHost();
+  if (host !== null) {
+    const what = wanted.key === "guard-policy"
+      ? `set Guard Policy ${wanted.value}`
+      : wanted.key === "plan-approval"
+      ? "turn plan approval off"
+      : wanted.key === "summary-confirmation"
+      ? "turn summary confirmation off"
+      : `turn the ${wanted.key.slice("guard.".length)} check off`;
+    return `To ${what}, ask for it in your ${host} chat.`;
+  }
   // At the person's own terminal no chat reply can arrive, so the step that
   // works there is named in place of the chat's.
   const ownTerminal = humanTurnMintAllowed() && personAtOwnTerminal(projectDir);

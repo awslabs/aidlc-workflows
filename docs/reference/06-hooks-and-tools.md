@@ -354,20 +354,19 @@ with the question as shown and the reply as given. That row decides nothing
 and spends no turn. An answer the agent records with `log answer` carries the
 person's latest kept words as `Person Reply`.
 A setter that lowers one of the person's checks quotes their words, and records
-them as `Person Reply`, only when the command carrying it out runs in that same
-chat: `latestPersonTurn` reports the chat the words were typed in, and
-`runFromPersonsTerminal` (`aidlc-lib.ts`) answers whether this command is one the
-person ran themselves. A command of theirs at a terminal belongs to no chat: it
-is still their own act and still applies, the line reads `set by you`, and no
-message of theirs is quoted or kept beside it (the same rule words the project
-switch record, so a later chat claims nothing either). Process ancestry cannot
-make that distinction and is not used for it: a chat records its whole ancestor
-chain, which a terminal open beside it shares, so an ancestry match is not
-evidence that the chat started this command. What is: the hook-injected session,
-the thread id Codex gives every command it runs, and, against them, a terminal
-the person is typing at (an agent's tool call arrives with pipes on both ends).
-A harness that ran a tool call on a pseudo-terminal would read as the person's
-own terminal and lose the quoted clause; nothing else about the switch changes.
+them as `Person Reply`, unless the command carrying it out is one they ran
+themselves: `runFromPersonsTerminal` (`aidlc-lib.ts`) answers that, from a
+terminal they are typing at with no chat identity on the command (an agent's tool
+call arrives with pipes on both ends, and Codex marks the commands it runs). A
+command of theirs at a terminal belongs to no chat: it is still their own act and
+still applies, the line reads `set by you`, and no message of theirs is quoted or
+kept beside it (the same rule words the project switch record, so a later chat
+claims nothing either). Which session is running the command decides nothing
+here. Ancestry resolves the same session for a terminal open beside a chat, so it
+cannot tell them apart, and it fails closed under load, which would drop the
+person's own words from their record for no reason they could see. A harness that
+ran a tool call on a pseudo-terminal would read as the person's own terminal and
+lose the quoted clause; nothing else about the switch changes.
 
 ### Shared Characteristics
 

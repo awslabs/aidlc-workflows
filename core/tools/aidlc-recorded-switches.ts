@@ -28,8 +28,7 @@ import {
   normalizeDriveLetter,
   personSpokeSinceGate,
   readRegularFileNoFollowOrThrow,
-  resolveInvokingSessionId,
-  runFromPersonsTerminal,
+  commandAtPersonsTerminal,
   sessionsDir,
   writeFileAtomic,
 } from "./aidlc-lib.ts";
@@ -268,15 +267,13 @@ export function recordSwitchChange(
   const added = PERSON_CHECK_SWITCHES.filter((name) => after.has(name) && !before.has(name));
   const removed = PERSON_CHECK_SWITCHES.filter((name) => before.has(name) && !after.has(name));
   if (added.length === 0 && removed.length === 0) return [];
-  // Their words are behind a switch set from their own chat. A command they ran
-  // themselves, in their own terminal, belongs to no chat, so the record claims
-  // none and a later chat quotes no message at them.
+  // Their words are behind a switch the agent set from their chat. A command they
+  // ran themselves, at their own terminal, belongs to no chat, so the record
+  // claims none and a later chat quotes no message at them.
   let turn: ReturnType<typeof latestPersonTurn> = null;
-  if (added.length > 0) {
+  if (added.length > 0 && !commandAtPersonsTerminal()) {
     try {
-      const said = personSpokeSinceGate(projectDir) ? latestPersonTurn(projectDir) : null;
-      const running = runFromPersonsTerminal() ? null : resolveInvokingSessionId(projectDir);
-      turn = said !== null && running !== null && said.session === running ? said : null;
+      turn = personSpokeSinceGate(projectDir) ? latestPersonTurn(projectDir) : null;
     } catch {
       turn = null;
     }
