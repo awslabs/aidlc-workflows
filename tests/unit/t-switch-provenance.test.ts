@@ -514,6 +514,77 @@ describe("a flag-shaped word inside the request", () => {
   });
 });
 
+// A ceremony the person typed before any work existed was kept, promised to them
+// in the engine's step, and then spent at creation without being applied: the
+// stage ran with sensors or learnings on, and nothing said so.
+describe("a ceremony the person typed before any work exists", () => {
+  test.each([
+    { flag: "--sensors", field: "Sensors", scope: "poc" },
+    { flag: "--learnings", field: "Learnings", scope: "enterprise" },
+  ])("$flag off reaches the work they start next, as theirs ($scope)", ({ flag, field, scope }) => {
+    const proj = emptyProject();
+    reply(proj, `/aidlc ${flag} off`);
+    // The engine's step says what they set is kept for the work they start next.
+    expect(String(next(proj, []).directive?.message)).toContain("is kept for it");
+    const printed = next(proj, ["--scope", scope, "--", "build the export"]);
+    const made = createFromPrint(proj, printed);
+    expect(made.status, made.stderr).toBe(0);
+    expect(getField(activeState(proj), field)).toBe("off (set by you)");
+  });
+
+  // The plain path a person takes on main (issue 1962 F1): they type it, then
+  // describe the work in their own words and answer the plan question.
+  test("typed, then the work described in their own words: it is still off, and theirs", () => {
+    const proj = emptyProject();
+    reply(proj, "/aidlc --learnings off");
+    const asked = next(proj, ["--", "a tiny tool that reverses a string"]);
+    expect(asked.directive?.kind, asked.out).toBe("ask");
+    const route = asked.directive as {
+      confirm_command?: string;
+      scope_commands?: Array<{ scope: string; command: string }>;
+    };
+    const command = route.confirm_command ?? route.scope_commands?.find((row) => row.scope === "poc")?.command;
+    const printed = next(proj, answerArgs(command));
+    const made = createFromPrint(proj, printed);
+    expect(made.status, made.stderr).toBe(0);
+    expect(getField(activeState(proj), "Learnings")).toBe("off (set by you)");
+  });
+
+  test("a flag the agent passes at creation still wins, and is recorded as the command's", () => {
+    const proj = emptyProject();
+    reply(proj, "/aidlc --sensors off");
+    const printed = next(proj, ["--scope", "poc", "--", "build the export"]);
+    const message = String(printed.directive?.message);
+    const made = utility(proj, [
+      "intent-create",
+      "--request",
+      requestIn(message, printed.out),
+      "--scope",
+      "poc",
+      "--sensors",
+      "on",
+    ]);
+    expect(made.status, made.stderr).toBe(0);
+    expect(getField(activeState(proj), "Sensors")).toBe("on (set by a command)");
+  });
+
+  test("the work after it starts at its scope default: the words are spent, not standing", () => {
+    const proj = emptyProject();
+    reply(proj, "/aidlc --sensors off");
+    const first = next(proj, ["--scope", "poc", "--", "build the export"]);
+    expect(createFromPrint(proj, first).status).toBe(0);
+    expect(getField(activeState(proj), "Sensors")).toBe("off (set by you)");
+    // A second piece of work in the same chat is not covered by those words. The
+    // person asks for it in the chat, which is also the hook heartbeat the engine
+    // looks for once a state file exists.
+    reply(proj, "and now add the importer");
+    const second = next(proj, ["--new-intent", "--scope", "poc", "--", "add the importer"]);
+    const made = createFromPrint(proj, second);
+    expect(made.status, made.stderr).toBe(0);
+    expect(getField(activeState(proj), "Sensors") ?? "").not.toContain("set by you");
+  });
+});
+
 describe("a project switch with no words of theirs on record", () => {
   test("says what the check is for, that it is off, since when, and offers it back", () => {
     const line = switchOffLine({

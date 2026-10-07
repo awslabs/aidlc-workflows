@@ -7738,7 +7738,16 @@ function handleIntentCreate(projectDir: string, flags: Record<string, string>): 
   const ceremoniesAsked = ceremoniesCreationGranted(projectDir, initialSelection.sessionId, questionId ?? null);
   consumeCeremoniesCreationGrant(projectDir, initialSelection.sessionId);
   for (const key of CEREMONY_KEYS) {
-    if (key !== "plan_approval" && requestedCeremony[key] !== undefined && requestedCeremony[key] === ceremoniesAsked[key]) {
+    if (key === "plan_approval") continue;
+    // Their words carry the value, the way plan approval does above: a ceremony
+    // they typed before this work existed is applied here, not merely labelled,
+    // because the step that kept it told them it would reach the work they start
+    // next. A flag the agent passes with the creation still wins, and is
+    // recorded as the command's.
+    if (requestedCeremony[key] === undefined && ceremoniesAsked[key] !== undefined) {
+      requestedCeremony[key] = ceremoniesAsked[key];
+      ceremonySetByPerson[key] = true;
+    } else if (requestedCeremony[key] !== undefined && requestedCeremony[key] === ceremoniesAsked[key]) {
       ceremonySetByPerson[key] = true;
     }
   }
