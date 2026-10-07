@@ -14,7 +14,7 @@ import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync,
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { projectionFiles, rootBlockPath } from "../../core/tools/aidlc-distribution.ts";
+import { copyChannelOmits, projectionFiles, rootBlockPath, walkFiles } from "../../core/tools/aidlc-distribution.ts";
 import { HARNESS_MATRIX } from "../harness/harness-matrix.ts";
 import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS, NATIVE_STARTUP_TIMEOUT_MS } from "../harness/test-budget.ts";
 
@@ -90,6 +90,26 @@ describe("a root file's part is the root file's text", () => {
       }
     });
   }
+
+  // A copied project config never ran in (the copy channel's setup line is
+  // optional) moves to the native install of the same release: every file is
+  // the copy's, untouched, so config adopts them all (troubleshooting).
+  test("copilot: an untouched copied project with no record configures from the native release", () => {
+    const copy = join(REPO_ROOT, "dist", "copilot");
+    const omitted = copyChannelOmits(projectionFiles(copy).descriptor);
+    const project = temp("aidlc-t-native-part-copied-");
+    mkdirSync(join(project, ".git"));
+    for (const rel of walkFiles(copy)) {
+      if (omitted.has(rel.replaceAll("\\", "/"))) continue;
+      mkdirSync(dirname(join(project, rel)), { recursive: true });
+      cpSync(join(copy, rel), join(project, rel));
+    }
+    expect(existsSync(join(project, ".aidlc", "tools", "data", "aidlc-manifest.json"))).toBe(false);
+    const configured = config(project, join(REPO_ROOT, "dist-release", "copilot"), "copilot");
+    expect(configured.status, configured.out).toBe(0);
+    expect(configured.out).not.toContain("locally modified or unowned");
+    expect(readFileSync(join(project, "AGENTS.md"), "utf-8")).toContain(NATIVE_LINE);
+  });
 
   test("copilot: a native project already told it needs bun refreshes to the native wording", () => {
     // What a refresh wrote before this fix: AI-DLC's part in the copy wording.

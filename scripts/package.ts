@@ -1491,6 +1491,9 @@ function rewriteNativeInvocations(
       emitTrustSeed(m.harnessDir, m.name, "aidlc", TRUSTED_ROUTE_NAMESPACE),
     );
   }
+  // Before the copy's hashes are recorded below, so a part that changed here
+  // still has its copy bytes recognized, and --check builds it the same way.
+  syncRootBlockParts(outRoot, m);
   const descriptorPath = join(outRoot, m.harnessDir, PROJECTION_DATA);
   const descriptor = JSON.parse(readFileSync(descriptorPath, "utf-8")) as {
     managedDirectories: string[];
@@ -1704,7 +1707,6 @@ function writeReleaseHarness(name: string): void {
   if (existsSync(releaseDir)) rmSync(releaseDir, { recursive: true, force: true });
   buildTree(m, releaseDir, "aidlc");
   rewriteNativeInvocations(releaseDir, m, copyRoot);
-  syncRootBlockParts(releaseDir, m);
   console.log(`[${name}] regenerated dist-release/${name}/${m.harnessDir}`);
 }
 
