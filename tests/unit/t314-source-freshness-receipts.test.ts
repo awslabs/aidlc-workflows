@@ -2767,6 +2767,34 @@ describe("t314 multi-unit source attribution", () => {
     expect(row).toContain("**Changed**: alpha-extra.ts");
   }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
+  // A manifest rewritten with the same paths after its review changes no file:
+  // the row says so instead of carrying an empty list.
+  test("under relaxed, a manifest-only rewrite after the review is the no-paths case, not a blank list", () => {
+    const statePath = seededStateFile(proj);
+    writeFileSync(statePath, readFileSync(statePath, "utf-8").replace(
+      /^- \*\*Change Control\*\*: .*$/m,
+      "- **Guard Policy**: relaxed (set by you)",
+    ));
+    writeFileSync(join(proj, "alpha.ts"), "export const alpha = 1;\n", "utf-8");
+    git(proj, ["add", "-A"]);
+    git(proj, ["commit", "-qm", "alpha code"]);
+    recordReview(proj, "code-generation", REVIEWER, "alpha", "READY", [{ path: "alpha.ts" }]);
+    writeFileSync(join(proj, "beta.ts"), "export const beta = 2;\n", "utf-8");
+    git(proj, ["add", "-A"]);
+    git(proj, ["commit", "-qm", "beta code"]);
+    recordReview(proj, "code-generation", REVIEWER, "beta", "READY", [{ path: "beta.ts" }]);
+
+    const manifest = join(seededRecordDir(proj), "construction", "alpha", "code-generation", "source-manifest.json");
+    writeFileSync(manifest, `${readFileSync(manifest, "utf-8")}\n`, "utf-8");
+
+    const r = guarded(proj, ["approve", "code-generation", "--user-input", "ship it"]);
+    expect(r.rc, r.out).toBe(0);
+    expect(r.out).toContain("The alpha Unit's list of files changed after it was reviewed; carrying on.");
+    const row = readAllAuditShards(proj).split(/\n---\n/).find((block) =>
+      block.includes("**Event**: CHANGE_ACCEPTED") && block.includes("**Unit**: alpha"));
+    expect(row).toContain("**Changed**: (paths unavailable)");
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
+
   // Re-reviewing alpha refreshes the global outer binding, but beta's own
   // snapshot still detects the unreviewed beta.ts edit and invalidates beta.
   test("re-reviewing an earlier unit refuses a later unit's stale receipt", () => {

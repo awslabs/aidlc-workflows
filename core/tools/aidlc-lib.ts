@@ -19632,7 +19632,9 @@ export function freshReviewReceipts(
       checkpoint: "review-receipt",
       stage: stage.slug,
       unit: newestSourceUnit,
-      changed: paths,
+      // A moved fingerprint with no path to name (an excluded file, a
+      // manifest-only rewrite) is the no-paths case, not an empty list.
+      changed: paths !== null && paths.length > 0 ? paths : null,
       recorded: newestSourceFingerprint,
       current: currentSourceFingerprint,
       notice: relaxedReviewNotice(
@@ -19732,7 +19734,7 @@ export function freshReviewReceipts(
               checkpoint: "review-receipt",
               stage: stage.slug,
               unit,
-              changed: paths,
+              changed: paths.length > 0 ? paths : null,
               recorded: receipt.fingerprint,
               current: unitSourceFingerprint(currentSourceListing, claimModel, manifest.rawBytesSha256),
               notice: `The ${unitPlainName(unit)} Unit's list of files changed after it was reviewed; carrying on.`,
