@@ -7332,12 +7332,13 @@ function routeNext(args: string[], projectDir: string | undefined): void {
   //   2. STALE-BY-PROGRESS - only emit `parked` while `Parked At Stage` still
   //      equals `Current Stage`. If the workflow has advanced past the parked
   //      slug (a stale marker), ignore it and fall through to the normal route.
-  // A change the person typed to the parked work's plan (another scope, stages
-  // to skip or add, a reshape) is made as a typed setting is, and the work
-  // stays parked: answering it with the park would drop it.
-  const parkedPlanChange = stateContent !== null && (
+  // A change the person typed to the parked work (another scope, stages to
+  // skip or add, a reshape, a setting) is made, and the work stays parked:
+  // answering it with the park would drop it.
+  const parkedWorkChange = stateContent !== null && (
     (flags.scope !== undefined && flags.scope !== (getField(stateContent, "Scope") ?? "").trim()) ||
-    flags.planChanges !== undefined || Boolean(flags.compose || flags.newScope || flags.report)
+    flags.planChanges !== undefined || Boolean(flags.compose || flags.newScope || flags.report) ||
+    typedSettingModifiers(flags).length > 0
   );
   if (
     stateContent &&
@@ -7345,8 +7346,7 @@ function routeNext(args: string[], projectDir: string | undefined): void {
     !flags.resume &&
     !flags.stage &&
     !flags.phase &&
-    !flags.review &&
-    !parkedPlanChange &&
+    !parkedWorkChange &&
     !flags.newIntent &&
     (getField(stateContent, "Parked") ?? "").trim().length > 0
   ) {
@@ -7729,7 +7729,9 @@ function routeNext(args: string[], projectDir: string | undefined): void {
     // and no stage work starts from it.
     if (!describedWork && !flags.resume && typedSettingModifiers(flags).length > 0) {
       emit(keptWhilePlanWaits(
-        turnEndingPrint("The setting the person typed is already applied: say the line it printed, then stop."),
+        turnEndingPrint(stillParked === null
+          ? "The setting the person typed is already applied: say the line it printed, then stop."
+          : `The setting the person typed is already applied: say the line it printed followed by "${stillParked}", then stop.`),
         planApprovalAskIsOpen(pd),
       ));
       return;
