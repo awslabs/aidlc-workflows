@@ -1902,7 +1902,9 @@ the Unit as it is, add `--over-unfinished-review` to `verify`: under Guard Polic
 `relaxed` and `off`, with the person's words on record and a review that was asked
 for, the Unit is verified and asked about once (`review_not_finished.question`),
 and its approval records the review as not finished. Under `strict`, or a team's
-locked `strict`, the review finishes first:
+locked `strict`, the review finishes first. A Unit review never asked for is
+required under every Guard Policy: `rereview` carries `first` and names its
+first request:
 
 ```bash
 aidlc engine bolt checkpoint --action status --unit "<Unit>" --kind <unit|skeleton>

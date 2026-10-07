@@ -142,10 +142,11 @@ export interface ConstructionCheckpoint {
   /** Only the Unit's reviewed code or documents changed since its review: the
    *  one review request that re-checks them, run before verifying again. With
    *  `unfinished`, the Unit's own review has not finished instead: asked for
-   *  with no verdict yet, or NOT-READY with a pass left (repaired first). */
+   *  with no verdict yet, or NOT-READY with a pass left (repaired first). With
+   *  `first`, it was never asked for: this is its first request. */
   rereview: {
     stage: string; reviewer: string; iteration: number; command: string;
-    unfinished?: "no-verdict" | "not-ready";
+    unfinished?: "no-verdict" | "not-ready"; first?: true;
   } | null;
   /** The current review is that re-check, of the Unit's code or documents.
    *  `approved_before` says the person had approved this Unit before then. */
@@ -787,6 +788,15 @@ function snapshot(
             };
             unfinishedMayGoOn = !pending.recovery && pending.verificationFailed !== true;
           }
+        } else if (!review && !receipts.openBoltUnits.has(unit) && !receipts.unitStaleProgress.has(unit)) {
+          // The Unit's review was never asked for: the step is its first request.
+          const reviewer = stage.reviewer!;
+          recheckable++;
+          rereview ??= {
+            stage: slug, reviewer, iteration: 1,
+            command: renderReviewRequestCommand({ projectDir, stage: slug, reviewer, unit, iteration: 1 }),
+            first: true,
+          };
         }
       } else if (request && auditBlockField(request.block, "Recovery") === "stale-receipt") {
         // A re-check of code alone asked about the documents the review before
@@ -997,6 +1007,9 @@ function requireReady(current: Snapshot): void {
     // The person may let the Unit go on without a review that did not finish;
     // strict, in the state or locked by the team, keeps it required.
     const rereview = !step ? ""
+      : step.first
+        ? ` The ${reviewsNamed([step.stage])} for ${result.unit} was never asked for: request it with \`${step.command}\`, ` +
+          "record the verdict, then verify."
       : !step.unfinished
         ? ` What ${step.stage} reviewed changed since its review: request the re-check with \`${step.command}\`, record the verdict, then verify.`
         : ` The ${reviewsNamed([step.stage])} for ${result.unit} ` +

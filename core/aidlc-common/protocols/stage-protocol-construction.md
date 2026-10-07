@@ -255,6 +255,9 @@ what it found first): run it the same way. When the person said to approve the U
 as it is, run `verify` with `--over-unfinished-review` instead; the checkpoint then
 carries `review_not_finished`, whose `question` takes the place of "Approve this
 completed <unit>?", and `approve` returns the one line to say.
+A `rereview` with `first` is the Unit's review that was never asked for, under any
+Guard Policy: run it the same way. It is required, so `--over-unfinished-review`
+does not apply.
 
 Otherwise, if `ready` is false or evidence became stale, explain `errors`.
 Repair the named missing review or receipt through its owning procedure,

@@ -293,10 +293,11 @@ export interface RunStageDirective {
     // Only the Unit's reviewed code changed since its review: run this review
     // request now, without asking, then verify again. With `unfinished`, the
     // Unit's own review has not finished instead: no verdict yet, or
-    // NOT-READY with a pass left (repaired first).
+    // NOT-READY with a pass left (repaired first). With `first`, it was never
+    // asked for: this is its first request.
     rereview?: {
       stage: string; reviewer: string; iteration: number; command: string;
-      unfinished?: "no-verdict" | "not-ready";
+      unfinished?: "no-verdict" | "not-ready"; first?: true;
     };
     // The current review re-checked that changed code or those documents; the
     // person gets one approval question that says so.

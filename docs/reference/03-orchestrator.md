@@ -562,7 +562,9 @@ when the current review is that re-check. A `rereview` with `unfinished`
 (`no-verdict` or `not-ready`) names the request that finishes the Unit's own
 review instead; after the person's "approve it as it is" (`verify
 --over-unfinished-review`, Guard Policy `relaxed` or `off`), `review_not_finished`
-(`{stages, question}`) carries the one approval question. `verification_command` is the full canonical recorded command,
+(`{stages, question}`) carries the one approval question. A `rereview` with
+`first` is the first request of a Unit review never asked for, under any Guard
+Policy. `verification_command` is the full canonical recorded command,
 never an abbreviated display label. A skeleton checkpoint requires an actual end-to-end project check,
 current artifact/source/attempt-bound proof,
 and a real human approval. An ordinary Unit checkpoint requires verification
