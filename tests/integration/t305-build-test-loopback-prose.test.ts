@@ -212,8 +212,10 @@ describe("t305 construction protocol module — Build-and-Test failure loop-back
     // which answers with the validated reopen print the conductor runs verbatim.
     expect(CONSTRUCTION_PROTOCOL).toContain("run the command its `print` directive\n   names verbatim");
     expect(CONSTRUCTION_PROTOCOL).toContain("`aidlc-jump.ts reopen --target\n   code-generation ... --units <unit>`");
-    // Only a cause that spans every unit takes the stage-wide jump.
+    // Only a cause that spans every unit takes the stage-wide jump, and stage
+    // by stage it is taken at once, with no question.
     expect(CONSTRUCTION_PROTOCOL).toContain("Only for a cause that spans every\n   unit, or names none, run `next --stage code-generation` instead");
+    expect(CONSTRUCTION_PROTOCOL).toContain("`unit-major`), one unit cannot be reopened alone: run that\n   `next --stage code-generation` at once, without asking");
     expect(CONSTRUCTION_PROTOCOL).toContain("`aidlc-jump.ts execute --target code-generation --direction backward\n   --scope <scope>`");
     expect(CONSTRUCTION_PROTOCOL).toContain(
       "Never compose the `reopen` or `execute` call by hand: the engine's print\n   is the validated form.",
@@ -531,6 +533,8 @@ describe("t305 stage-protocol-recovery.md — crash-resume bullet", () => {
     expect(RECOVERY).toContain(
       "re-execute the jump per the construction\nprotocol module (`aidlc-common/protocols/stage-protocol-construction.md`)",
     );
+    // A loop-back cut off between two Units' reopens reopens the rest.
+    expect(RECOVERY).toContain("reopen the others\nthe same way before going on");
   });
 
   test("on any resume the loop-back count is the ledger's entry count, never zero", () => {

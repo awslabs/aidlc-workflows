@@ -32,6 +32,7 @@
     "t-scope-run-moves-jump-back": 600,
     "t-scope-run-moves-jump-back-one-unit": 400,
     "t-scope-run-moves-jump-back-retry": 400,
+    "t-scope-run-moves-late-question-change": 450,
     "t-scope-run-moves-switch": 570,
     "t-scope-run-moves-words": 570,
     "t-scope-run-mvp": 790,

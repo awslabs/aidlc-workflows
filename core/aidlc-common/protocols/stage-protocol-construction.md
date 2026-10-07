@@ -499,11 +499,12 @@ impact-estimated fix identified):
    unit, or names none, run `next --stage code-generation` instead: its print
    names `aidlc-jump.ts execute --target code-generation --direction backward
    --scope <scope>`, which resets Code Generation and the stages after it for
-   every unit and emits the canonical `STAGE_JUMPED`. When the print says Code
-   Generation can only be reopened for every unit (stage-by-stage
-   Construction), run the `next --stage code-generation --every-unit` it
-   names without asking: "Retry with fix" (or the autonomy grant) already
-   chose the repair. Then re-run `next` and continue the forwarding loop.
+   every unit and emits the canonical `STAGE_JUMPED`. When Construction runs
+   stage by stage (`Construction Iteration` in aidlc-state.md is not
+   `unit-major`), one unit cannot be reopened alone: run that
+   `next --stage code-generation` at once, without asking; "Retry with fix"
+   (or the autonomy grant) already chose the repair. Then re-run `next` and
+   continue the forwarding loop.
    Never compose the `reopen` or `execute` call by hand: the engine's print
    is the validated form.
 3. On the code-generation re-entry, follow "Re-entry settlement and review"

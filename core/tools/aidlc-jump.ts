@@ -45,6 +45,8 @@ import {
   entrySkillInvocation,
   REDO_REUSE_SOURCE,
   answerModeStageStartedFields,
+  personsGateFeedback,
+  resolveInvokingSessionId,
 } from "./aidlc-lib.js";
 
 // The EFFECTIVE per-stage action: the live state file's EXECUTE/SKIP suffix
@@ -220,6 +222,8 @@ function parseFlags(
 // through it again. Every other Unit keeps its finished, approved work. Inside
 // the walk nothing else changes: no checkbox, no Current Stage, no files. Once
 // the walk has moved on to a later stage, the work moves back to the target.
+// `--via change` is the person's change at the open late question: the rows
+// keep their words as the change.
 // The active Unit's lifecycle mirror is dropped; the next `unit start` writes
 // it again.
 
@@ -230,10 +234,14 @@ function handleReopen(args: string[]): void {
   const targetSlug = flags.target;
   const units = (flags.units ?? "").split(",").map((unit) => unit.trim()).filter(Boolean);
   if (!targetSlug || units.length === 0) {
-    error("Usage: reopen --target <slug> [--stages <slug[,slug...]>] --units <unit[,unit...]> [--via redo] [--scope <scope>]");
+    error("Usage: reopen --target <slug> [--stages <slug[,slug...]>] --units <unit[,unit...]> [--via redo|change] [--scope <scope>]");
   }
   // `--via redo`: the person asked to redo the step on re-entry, not a jump.
-  if (flags.via !== undefined && flags.via !== "redo") error(`Unknown --via: ${flags.via} (only "redo")`);
+  // `--via change`: the person asked for a change at the open gate, and it
+  // belongs to these Units' step.
+  if (flags.via !== undefined && flags.via !== "redo" && flags.via !== "change") {
+    error(`Unknown --via: ${flags.via} (only "redo" or "change")`);
+  }
   const targetStage = findStageBySlug(targetSlug);
   if (!targetStage || !isPerUnitStage(targetStage)) error(`Not a per-unit stage: ${targetSlug}`);
   // The target and the later per-unit steps it reopens with it.
@@ -247,17 +255,26 @@ function handleReopen(args: string[]): void {
     if (!UNIT_NAME_REGEX.test(unit)) error(`Invalid Unit name: ${unit}`);
   }
   const stageName = targetStage.name ?? targetSlug;
+  // A change is kept in the person's own words, from the gate they answered.
+  const gateStage = getField(content, "Current Stage")?.trim() ?? targetSlug;
+  const changeWords = flags.via === "change"
+    ? personsGateFeedback(pd, resolveInvokingSessionId(pd), { stage: gateStage })
+    : null;
   for (const unit of units) {
     emitAudit(pd, "GATE_REJECTED", {
       Stage: targetSlug,
       "Gate Stages": stages.join(", "),
       "Gate Scope": "unit-end",
       Unit: unit,
-      // Marks the row as the person's redo, not a change asked for at a gate.
-      Reopen: flags.via === "redo" ? "redo" : "jump",
+      // Marks the row as the person's redo or jump, or the change they asked
+      // for at the gate.
+      Reopen: flags.via ?? "jump",
+      ...(flags.via === "change" ? { "User Input": "Request Changes" } : {}),
       Feedback: flags.via === "redo"
         ? `Redid ${stageName} for unit ${unit} at the person's request (redo on re-entry).`
-        : `Reopened ${stageName} for unit ${unit} at the person's request (/aidlc --stage ${targetSlug}).`,
+        : flags.via === "change"
+          ? changeWords ?? `Reopened ${stageName} for unit ${unit} for a change.`
+          : `Reopened ${stageName} for unit ${unit} (/aidlc --stage ${targetSlug}).`,
     });
     // Redo is the person's answer to the re-use question for this Unit's step
     // too: recorded here, so the reopened step redoes it without asking again.

@@ -3538,6 +3538,7 @@ interface ParsedFlags {
   phase?: string;
   jumpUnit?: string; // --unit <name> with --stage: reopen that per-unit stage for this Unit (unit-major)
   everyUnit?: boolean; // --every-unit with --stage: reopen that per-unit stage for every Unit (unit-major)
+  change?: boolean; // --change with --stage and --unit or --every-unit: the reopen is the person's change at the open gate
   depth?: string;
   testStrategy?: string;
   projectType?: "greenfield" | "brownfield"; // --project-type: the person's word on new project vs existing code
@@ -3781,6 +3782,8 @@ function parseNextFlags(argv: string[]): ParsedFlags {
       }
     } else if (a === "--every-unit") {
       flags.everyUnit = true;
+    } else if (a === "--change") {
+      flags.change = true;
     } else if (a === "--depth" || a === "--test-strategy") {
       // Checked here, like --review: the value is echoed into the command the
       // conductor runs, so only the three level words may pass.
@@ -5920,7 +5923,10 @@ function buildRunStageDirective(
   if (node.phase === "construction") {
     protocolModules.push("construction");
   }
-  if (ceremony.learnings === "on") protocolModules.push("learnings");
+  // The learnings ritual runs at a gate's first showing, never again for a
+  // revision of it (stage-protocol.md, Request Changes).
+  const revising = stateContent !== null && checkboxStateOf(parseCheckboxes(stateContent), node.slug) === "revising";
+  if (ceremony.learnings === "on" && !revising) protocolModules.push("learnings");
   if (protocolModules.length > 0) {
     directive.protocol_modules = protocolModules;
   }
@@ -7923,12 +7929,20 @@ function routeNext(args: string[], projectDir: string | undefined): void {
   // filter for the jumped-to stage). An explicit target also wins when combined
   // with --resume: `next --resume --stage <slug>` reaches this jump branch.
   // `--unit` and `--every-unit` say which Units a jump back reopens a per-unit
-  // step for, so they mean nothing without the step.
+  // step for, so they mean nothing without the step; `--change` says the
+  // reopen is the person's change, so it needs them both.
   if ((flags.jumpUnit !== undefined || flags.everyUnit) && (!flags.stage || (flags.jumpUnit !== undefined && flags.everyUnit))) {
     emit(errorDirective(
       flags.stage
         ? "Use either --unit <name> or --every-unit with --stage, not both."
         : `--unit and --every-unit need the step to reopen: for example \`${entrySkillInvocation()} --stage nfr-design --unit beta\`.`,
+    ));
+    return;
+  }
+  if (flags.change && (!flags.stage || (flags.jumpUnit === undefined && !flags.everyUnit))) {
+    emit(errorDirective(
+      "--change needs the step and the Units the change is for: for example " +
+        `\`${aidlcToolInvocation("orchestrate")} next --stage nfr-design --unit beta --change\`.`,
     ));
     return;
   }
@@ -8408,7 +8422,13 @@ function routeNext(args: string[], projectDir: string | undefined): void {
   }
 
   if (currentIsInFlight) {
-    if (currentState === "awaiting-approval") {
+    // A Unit reopened at an open gate in a solo unit-major walk owes its step
+    // first: the walk runs it, and the gate comes back once it is done.
+    const walkOwes = (): boolean => {
+      const walk = unitMajorWalkBeat(pd, scope, stateContent, currentSlug);
+      return walk !== null && (walk.step.kind === "work" || walk.step.kind === "summary" || walk.step.kind === "paused");
+    };
+    if (currentState === "awaiting-approval" && !walkOwes()) {
       const currentNode = nodeForSlug(currentSlug);
       if (currentNode !== undefined) {
         const preflight = preflightDirective(
@@ -8449,6 +8469,9 @@ function routeNext(args: string[], projectDir: string | undefined): void {
           if (isSettledAutonomousSwarm(currentNode, scope, stateContent, pd)) {
             applySettledSwarmShape(directive);
           }
+          // The one late question is shown again as the same one question.
+          const together = approveTogetherFor(pd, stateContent, currentNode, recordPrefix, codekbCtx);
+          if (together) directive.approve_together = together;
           const gate = applyGateOnlyShape(directive, pd, stateContent);
           emit(withChangeNotices(gate, [
             ...((gate as Directive).change_notices ?? []),
@@ -11231,7 +11254,23 @@ function unitMajorReopen(
     : `Reopened ${reopenedText}.` +
       (kept.length > 0 ? `${keptLine} Say 'for every unit' to redo it for ${kept.length === 1 ? kept[0] : "them"} too.` : "");
   const reopen =
-    `${aidlcToolInvocation("jump")} reopen --target ${targetSlug} --stages ${stages.join(",")} --units ${reopened.join(",")} --scope ${scopeArg(scope)}`;
+    `${aidlcToolInvocation("jump")} reopen --target ${targetSlug} --stages ${stages.join(",")} --units ${reopened.join(",")} --scope ${scopeArg(scope)}` +
+    (flags.change ? " --via change" : "");
+  // The person's change at the open gate: their words are the change, and
+  // they already said what it is.
+  if (flags.change) {
+    return {
+      kind: "print",
+      message:
+        `Run ${unpark}${asides.map((entry) => `\`${entry.aside.command}\`, then `).join("")}\`${reopen}\` ` +
+        `to reopen "${targetSlug}" and the steps after it for ${list(reopened.map((unit) => `unit "${unit}"`))} only, ` +
+        `as the person's change, then tell the person in one line: "Making your change in ${reopenedText}.${keptLine}" ` +
+        `and re-run \`next\` to continue. When "${targetSlug}" comes back for ${list(reopened.map((unit) => `unit "${unit}"`))}, ` +
+        "make the change from their own words; they already said what to change, so do not ask whether to keep, " +
+        "change or redo its files." +
+        (first ? backTo(first.unit, first.aside.stage) : ""),
+    };
+  }
   return {
     kind: "print",
     message:
@@ -14349,6 +14388,14 @@ function handleReport(args: string[], projectDir: string | undefined): void {
     if (flags.result === "awaiting-approval") {
       if (stageCheckbox.state === "awaiting-approval") {
         revalidatingOpenGate = true;
+      }
+      // After a revision the gate is shown again with `revised`.
+      if (stageCheckbox.state === "revising") {
+        emit(errorDirective(
+          `Stage "${slug}" is being revised, so its gate is shown again with \`${aidlcToolInvocation("orchestrate")} ` +
+            `report --stage ${shellArg(slug)} --result revised\`: run it, then ask the person the approval question.`,
+        ));
+        return;
       }
       if (
         stageCheckbox.state !== "in-progress" &&

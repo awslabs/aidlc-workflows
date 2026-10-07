@@ -256,10 +256,16 @@ they answer them with ONE question. Show one completion message covering every
 listed stage, then the question above with `approve_together.prompt` as its
 `prompt`, and the same two options. Open and report the gate for
 `directive.stage` only, exactly once: an approval there approves every listed
-stage, and the engine says which. A change request is Request Changes for
-`directive.stage`; make the change in the listed stage it belongs to, through
-that stage's own revision steps, say in one line what changed, then show the
-same one question again. If the approval stops at a listed stage that is not
+stage, and the engine says which. A change request for a listed stage is a
+change for the Units it is about: run `{{INVOKE}} engine orchestrate next
+--stage <that stage> --unit <unit> --change` (`--every-unit` in place of
+`--unit <unit>` when it is for every Unit) and do what its `print` says. That
+stage and the listed stages after it run again for those Units only; when the
+stage comes back, make the change from the person's own words, with no keep,
+change or redo question; the same one question comes back once they are done.
+A change request for the work as a whole is Request Changes for
+`directive.stage`: make the change through that stage's own revision steps,
+say in one line what changed, then show the same one question again. If the approval stops at a listed stage that is not
 ready yet, do what its reply names, then report that stage approved with the
 same choice: do not ask the person again.
 

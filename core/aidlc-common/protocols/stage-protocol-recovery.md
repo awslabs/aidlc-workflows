@@ -72,7 +72,9 @@ no matching `STAGE_JUMPED` (Target: code-generation) after it, and no
 unit-tagged `GATE_REJECTED` (Stage: code-generation) for a unit the fix names, the session
 died between logging and jumping — re-execute the jump per the construction
 protocol module (`aidlc-common/protocols/stage-protocol-construction.md`),
-"Build-and-Test failure loop-back", rather than re-diagnosing. On any resume,
+"Build-and-Test failure loop-back", rather than re-diagnosing. When the fix
+names several units and only some have that row after it, reopen the others
+the same way before going on. On any resume,
 the loop-back count is the ledger's entry count, never zero. If the matching
 jump already exists, resume the settlement-aware re-entry instead:
 receipt-mode continues from the first unsettled unit, artifact-only mode
