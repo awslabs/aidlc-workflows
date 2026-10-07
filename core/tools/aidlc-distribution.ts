@@ -1262,6 +1262,11 @@ export function jsonEntryId(path: readonly string[]): string {
   return JSON.stringify({ path });
 }
 
+/** The hash of a JSON entry's value, as mergeJsonEntries records it. */
+export function jsonEntryHash(value: unknown): string {
+  return sha256Bytes(canonical(value));
+}
+
 /** Who owns the entries already in the file before this merge. */
 export type JsonEntriesOwnership =
   /** The entries AI-DLC recorded, with the value hash it wrote. */

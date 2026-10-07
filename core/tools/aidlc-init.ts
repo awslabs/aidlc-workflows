@@ -225,6 +225,7 @@ import {
   insideGitRepository,
   managedBlockMarkers,
   normalizeProvidersRecord,
+  openCodeFileProvider,
   openCodeProviderEntryIds,
   withRecordedMcpRegion,
   normalizeProjectChoicesRecord,
@@ -2077,7 +2078,9 @@ function diagnosticWizard(
       );
       const profileAnswer = promptTextDefault(
         "  AWS profile",
-        recordedBedrock?.profile ?? "default credential chain",
+        recordedBedrock?.profile ??
+          (selected.harness === "opencode" ? openCodeFileProvider(projectDir).profile : undefined) ??
+          "default credential chain",
       );
       const profile = profileAnswer === "default credential chain"
         ? ""
@@ -7886,6 +7889,7 @@ function providerForHarness(
 }
 
 function customizeFirstRun(
+  projectDir: string,
   initial: InstalledSourceCandidate,
   candidates: readonly InstalledSourceCandidate[],
   detection: FirstRunDetection,
@@ -7992,7 +7996,9 @@ function customizeFirstRun(
         choices.region = promptTextDefault("  AWS region", choices.region);
         const profile = promptTextDefault(
           "  AWS profile",
-          choices.profile || "default credential chain",
+          choices.profile ||
+            (harness === "opencode" ? openCodeFileProvider(projectDir).profile : undefined) ||
+            "default credential chain",
         );
         choices.profile = profile === "default credential chain" ? "" : profile;
         if (choices.candidate.stamp.distribution === "opencode") {
@@ -8331,7 +8337,7 @@ async function runFirstRunWizard(projectDir: string): Promise<boolean> {
       }
     }
   } else {
-    choices = customizeFirstRun(candidate, candidates, detection);
+    choices = customizeFirstRun(projectDir, candidate, candidates, detection);
   }
   if (!choices) return true;
   const snapshot = snapshotFirstRunMutationPaths(projectDir, choices);
@@ -8680,26 +8686,19 @@ function openCodeProviderClaim(
     return { entries: {} };
   }
   const ids = openCodeProviderEntryIds(provider);
+  const file = openCodeFileProvider(projectDir);
+  const was = file.region ?? null;
+  const profileWas = file.profile ?? null;
+  const regionChanged = was !== null && was !== provider.region;
+  const profileChanged = Boolean(provider.profile) && profileWas !== null && profileWas !== provider.profile;
   let note: string | undefined;
-  try {
-    const path = join(projectDir, "opencode.json");
-    const value = regularFile(path)
-      ? Bun.JSONC.parse(withoutBom(readFileSync(path, "utf-8"))) as Record<string, unknown>
-      : null;
-    const providers = value && isRecord(value.provider) ? value.provider : {};
-    const bedrock = isRecord(providers["amazon-bedrock"]) ? providers["amazon-bedrock"] : {};
-    const current = isRecord(bedrock.options) ? bedrock.options : {};
-    const was = typeof current.region === "string" ? current.region : null;
-    const profileWas = typeof current.profile === "string" ? current.profile : null;
-    const regionChanged = was !== null && was !== provider.region;
-    const profileChanged = Boolean(provider.profile) && profileWas !== null && profileWas !== provider.profile;
-    if (regionChanged || profileChanged) {
-      const now = provider.profile ? `${provider.region} with profile ${provider.profile}` : provider.region;
-      const before = profileWas ? `${was ?? provider.region}, profile ${profileWas}` : was ?? provider.region;
-      note = `opencode.json now uses Bedrock in ${now} (was ${before}).`;
-    }
-  } catch {
-    // An unreadable team file is reported by the merge itself.
+  if (regionChanged || profileChanged) {
+    // A profile the record does not name is not touched: the team's stays in
+    // force, and the line says so rather than reading as if it were gone.
+    const now = provider.profile ? `${provider.region} with profile ${provider.profile}` : provider.region;
+    const before = provider.profile && profileWas ? `${was ?? provider.region}, profile ${profileWas}` : was ?? provider.region;
+    const keeps = !provider.profile && profileWas ? `; profile ${profileWas} from opencode.json still applies` : "";
+    note = `opencode.json now uses Bedrock in ${now} (was ${before})${keeps}.`;
   }
   return { entries: { "opencode.json": ids }, ...(note ? { note } : {}) };
 }
