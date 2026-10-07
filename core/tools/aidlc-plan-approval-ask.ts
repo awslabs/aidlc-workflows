@@ -1156,11 +1156,23 @@ function approveTarget(
   // empty, there is nothing to repair and nothing of theirs to ask about: the
   // next `next` routes the planning step that writes it (plan readiness names
   // the file), and the person is asked once afterwards.
-  const missing = (note: string): TargetApproval => ({
-    ok: false,
-    notice: `AIDLC Plan Approval: ${note} Nothing was approved for ${targetLabel(unit)}. Run next and follow the ` +
-      "step it names: the plan is written first, then the person is asked once.",
-  });
+  //
+  // Their own editing turn has to end even so. The record goes back to "ask"
+  // only when an answer records a result, and while it still says "editing" the
+  // question comes back as the edit-mode one and the guard keeps those files to
+  // them: nobody could write the file, the person would be asked to say done
+  // again, and a "stop for today" on the same answer would be lost with the
+  // refusal. So their turn ends with a repair result, carrying no `edited` flag
+  // because an empty file is not the edit they made.
+  const missing = (note: string): TargetApproval => {
+    const notice = `AIDLC Plan Approval: ${note} Nothing was approved for ${targetLabel(unit)}. ` +
+      (theirEdit
+        ? "Run next: write it, and the engine will ask the person to approve the plan."
+        : "Run next and follow the step it names: the plan is written first, then the person is asked once.");
+    return theirEdit
+      ? { ok: false, result: { unit, choice: "repair", fingerprint: "", note }, notice }
+      : { ok: false, notice };
+  };
   if (!plan.trim()) return missing(`${view.plan_path} is empty.`);
   if (!instructions.trim()) return missing(`${view.instructions_path} is empty.`);
   const read = readTestingContract(plan);

@@ -48,7 +48,7 @@ interface Emitted {
   kind: string;
   ask_type?: string;
   question?: string;
-  plan_approval?: { status?: string; note?: string };
+  plan_approval?: { status?: string; note?: string; editing?: boolean };
 }
 
 const created: string[] = [];
@@ -112,10 +112,10 @@ function reply(proj: string, prompt: string): void {
   expect(result.status, result.stderr).toBe(0);
 }
 
-function answer(proj: string, details: string): { code: number; message: string } {
+function answer(proj: string, details: string, extra: string[] = []): { code: number; message: string } {
   const result = spawnSync(BUN, [
     join(AIDLC_SRC, "tools", "aidlc-log.ts"), "answer", "--stage", "code-generation", "--checkpoint", "plan-approval",
-    "--details", details, "--project-dir", proj,
+    "--details", details, ...extra, "--project-dir", proj,
   ], {
     cwd: proj,
     env: { ...process.env, CLAUDE_PROJECT_DIR: proj, AIDLC_PROJECT_DIR: proj, AIDLC_UNATTENDED: "0" },
@@ -193,6 +193,45 @@ describe("a repair the person did not cause never claims their edit", () => {
     expect(asked.ask_type).toBe("plan-approval");
     expect(asked.question).toBe("Approve the code plan?");
     claimsNoEditOfTheirs(JSON.stringify(asked), "the question");
+  });
+
+  // Their own editing turn has to end even when what they left is empty. While
+  // the record still says they are editing, the question comes back as the
+  // edit-mode one and the guard keeps the files to them, so nobody could write
+  // the file and they would be asked to say done again.
+  test("edit mode: an emptied plan ends their turn, and the question that follows is the plain one", () => {
+    const proj = project();
+    askFor(proj);
+    reply(proj, "3");
+    expect(next(proj).plan_approval?.editing).toBe(true);
+    writeFileSync(planPath(proj), "", "utf-8");
+    reply(proj, "done");
+    const said = answer(proj, "Approve Plan");
+    expect(said.message).toContain("code-generation-plan.md");
+    claimsNoEditOfTheirs(said.message, "the refusal");
+    // Their editing turn is over: this is no longer the edit-mode question.
+    const routed = next(proj);
+    expect(routed.kind, JSON.stringify(routed)).toBe("run-stage");
+    expect(routed.plan_approval?.editing, JSON.stringify(routed)).toBeUndefined();
+    claimsNoEditOfTheirs(JSON.stringify(routed), "the directive");
+    // The agent writes the plan again, and they are asked once, plainly.
+    writePlan(proj);
+    const asked = next(proj);
+    expect(asked.ask_type).toBe("plan-approval");
+    expect(asked.question).toBe("Approve the code plan?");
+  });
+
+  test("edit mode: an emptied test instructions file with \"stop for today\" still parks", () => {
+    const proj = project();
+    askFor(proj);
+    reply(proj, "3");
+    expect(next(proj).plan_approval?.editing).toBe(true);
+    writeFileSync(instructionsPath(proj), "", "utf-8");
+    reply(proj, "done, stop for today");
+    const said = answer(proj, "Approve Plan", ["--park"]);
+    expect(said.message).toContain("unit-test-instructions.md");
+    expect(said.message).toContain("parked");
+    expect(next(proj).kind).toBe("parked");
   });
 
   // The one case the wording was written for: they chose to edit the files, and
