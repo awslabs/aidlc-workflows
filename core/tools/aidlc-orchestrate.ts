@@ -5588,6 +5588,25 @@ function boundedContextWarnings(warnings: string[]): string[] {
 // stage-level Construction directory. `scope` + `stateContent` feed the gate
 // computation (the skeleton round-trip) and the first-run-stage persona delivery
 // (decision D-E).
+// This stage's `<slug>-questions.md` when it already holds an answer of the
+// person's (an `[Answer]:` with more than blanks or underscores), as a path from
+// the project; null when it has none or cannot be read. A stage resumed in a
+// new chat keeps it instead of being asked from the start again (#1873).
+function answeredQuestionsFile(projectDir: string, node: GraphStage, unit: string | null): string | null {
+  try {
+    const dir = node.phase === "construction" && unit !== null && unit !== UNIT_NAME_PLACEHOLDER
+      ? join(docsRoot(projectDir), "construction", unit, node.slug)
+      : stageDir(projectDir, node.phase, node.slug);
+    const path = join(dir, `${node.slug}-questions.md`);
+    if (!existsSync(path)) return null;
+    return /^\[Answer\]:[ \t]*[^\s_][^\n]*$/m.test(readFileSync(path, "utf-8"))
+      ? relative(projectDir, path).replaceAll("\\", "/")
+      : null;
+  } catch {
+    return null;
+  }
+}
+
 function buildRunStageDirective(
   node: GraphStage,
   projectType: "brownfield" | "greenfield" | null = null,
@@ -5709,6 +5728,10 @@ function buildRunStageDirective(
       links: evidence.links,
       completed: evidence.completed,
     };
+  }
+  if (!singleRun && stateContent && codekbCtx) {
+    const kept = answeredQuestionsFile(codekbCtx.projectDir, node, artifactUnit);
+    if (kept !== null) directive.questions_answered = { path: kept };
   }
   if (inlineContext.warnings.length > 0) {
     directive.context_warnings = inlineContext.warnings;
@@ -11286,6 +11309,7 @@ function emitUnitMajorRunStage(
     directive.unit = step.unit;
     if (redoChosenForUnitStep(projectDir, step.stage.slug, step.unit)) {
       directive.artifact_reuse = { decision: "redo", unit: step.unit };
+      delete directive.questions_answered;
     }
     emitUnitStepOrStage(
       unitReceiptOnlyStep(
@@ -14774,6 +14798,7 @@ function handleContinue(args: string[], projectDir: string | undefined): void {
   // Read again from the audit, so an answer spent since is not handed out.
   if (payload.e === true && payload.u !== null && redoChosenForUnitStep(pd, node.slug, payload.u)) {
     directive.artifact_reuse = { decision: "redo", unit: payload.u };
+    delete directive.questions_answered;
   }
   if (payload.w) {
     const resolution = resolveBoltDag(pd);

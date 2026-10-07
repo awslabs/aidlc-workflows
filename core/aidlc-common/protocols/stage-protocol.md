@@ -439,6 +439,16 @@ When a stage needs to ask the user questions:
 
 **The questions file is always the source of truth.** Regardless of how many questions a stage has, the flow is:
 
+**A stage whose questions are already answered.** When the directive carries
+`questions_answered`, the file it names already holds the person's answers:
+the stage was started before, in this chat or another. Never create it again
+and never ask an answered question again, whatever the stage file's steps say.
+Read it and carry on from where its answers stop: the questions whose
+`[Answer]:` is still blank (Step 2 says how), then the Consolidated Summary
+Confirmation when it is not answered yet, then the stage's next step. Only a
+redo the person asked for starts the questions afresh (`artifact_reuse`, or
+**Redo from scratch** under "Artifact Re-use").
+
 **Step 1: Create the questions file** in the appropriate `<record>/` directory with full [Answer]: tag format:
 - Include options A-E as appropriate for each question
 - EVERY ordinary question MUST end with `X. Other (please specify)` as the final

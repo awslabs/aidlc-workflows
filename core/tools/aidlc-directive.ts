@@ -313,6 +313,12 @@ export interface RunStageDirective {
     decision: "redo";
     unit: string;
   };
+  // This stage's questions file already holds the person's answers (a resume,
+  // a new chat): the conductor keeps it and carries on from where the answers
+  // stop, never creating it again or asking them again (#1873).
+  questions_answered?: {
+    path: string;
+  };
   memory_path: string;
   // consumes carries only the declared inputs that EXIST on disk at emit time;
   // declared inputs whose file is absent move to consumes_absent so the
@@ -822,6 +828,7 @@ const RUN_STAGE_FIELDS = [
   "construction_checkpoint",
   "swarm_checkpoint",
   "artifact_reuse",
+  "questions_answered",
   "memory_path",
   "consumes",
   "produces",
@@ -1492,6 +1499,12 @@ function checkRunStageShared(
     const reuse = o.artifact_reuse;
     if (!isObject(reuse) || o.phase !== "construction" || reuse.unit !== o.unit || reuse.decision !== "redo") {
       errors.push(`${kind}: artifact_reuse must be the redo decision for this Construction Unit`);
+    }
+  }
+  if ("questions_answered" in o) {
+    const kept = o.questions_answered;
+    if (!isObject(kept) || typeof kept.path !== "string" || !kept.path.endsWith("-questions.md")) {
+      errors.push(`${kind}: questions_answered must name the stage's questions file`);
     }
   }
   if ("swarm_checkpoint" in o) {
