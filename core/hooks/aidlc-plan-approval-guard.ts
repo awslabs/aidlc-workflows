@@ -2440,11 +2440,12 @@ async function evaluate(
           contractHash: approval.contractHash,
           ...(approval.ok ? {} : { reason: approval.reason }),
         };
-        // While the plan is written and before its question is asked, only the
-        // build waits too: a file the plan on disk does not name, written as
-        // the person asked, goes through (before any plan, only a document).
+        // While the plan is written and before the person has approved it,
+        // only the build waits too: a file the plan on disk does not name,
+        // written as the person asked, goes through (before any plan, only a
+        // document). Once they approved, every write waits on that approval.
         if (
-          !approvalEvidenceIsCurrent(evidence) && knownMutationTool && !mutation.opaqueShell && !mutation.runsAidlc &&
+          !evidence.approved && knownMutationTool && !mutation.opaqueShell && !mutation.runsAidlc &&
           mutation.targets.length > 0 &&
           mutation.targets.every((candidate) =>
             isPlanWaitSideWrite(projectDir, candidate, planApprovalPlanNamedPaths(projectDir, unit)))
