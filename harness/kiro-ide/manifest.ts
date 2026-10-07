@@ -8,7 +8,9 @@
 //     The default v2 engine runs no .kiro/hooks at all, and a hook cannot
 //     detect that from inside, so the pin is the only guard. Kiro IDE does not
 //     read this file.
-//   - Always-included steering preloads the active-space memory tree.
+//   - Always-included steering carries the active-space memory text, written
+//     by the engine (core/tools/aidlc-includes.ts kiroIdeSteering) and
+//     gitignored; the shipped file is its reference form.
 //   - Hooks ship as v1 .kiro/hooks/*.json only; both surfaces register them at
 //     session start. IDE 0.x .kiro.hook files are not shipped: IDE 1.x never
 //     executes them.
@@ -225,6 +227,8 @@ const manifest: HarnessManifest = {
           "sha256:e0829e668399a331c6fda7c267e3983b56ee23029ce8d5520394e3e70cf7d21d",
           // The variant shipped with notes above each group of lines.
           "sha256:88d6960720e5cd14f848a5e93ba9a503322518fe180c4bf55bcc3a6b8c151394",
+          // The variant shipped before AI-DLC wrote the memory text into the steering file.
+          "sha256:28a69800dcac189aa2a976820db237b45bcf6dd7d7e6d4fae5c1603225b9957a",
         ],
       },
     },
@@ -279,6 +283,8 @@ const manifest: HarnessManifest = {
     { src: "skills/aidlc/SKILL.md", dst: "skills/aidlc/SKILL.md" },
     { src: "skills/aidlc/question-rendering.md", dst: "skills/aidlc/question-rendering.md" },
     { src: "skills/aidlc/composer.md", dst: "skills/aidlc/composer.md" },
+    // The reference form; the packager writes the shipped memory's text over
+    // it, as the engine does with the project's own memory for every chat.
     { src: "steering/aidlc-active-memory.md", dst: "steering/aidlc-active-memory.md" },
     { src: "agents/aidlc.md", dst: "agents/aidlc.md" },
     { src: "settings/cli.json", dst: "settings/cli.json" },

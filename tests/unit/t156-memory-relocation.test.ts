@@ -243,7 +243,7 @@ describe("t156 method relocation to aidlc/spaces/default/memory/ + per-harness i
     expect(checkedAgents).toBe(expectedAgents);
   });
 
-  test("7b: Kiro IDE standing rules use always-included live file references", () => {
+  test("7b: Kiro IDE standing rules ride in always-included steering that carries the memory text", () => {
     const ide = HARNESS_MATRIX.find((harness) => harness.name === "kiro-ide");
     expect(ide?.capabilities.memoryInclude).toBe("kiro-steering");
     const steering = readFileSync(
@@ -256,11 +256,12 @@ describe("t156 method relocation to aidlc/spaces/default/memory/ + per-harness i
     );
     expect(steering).toMatch(/^---\ninclusion: always\n---/);
     expect(steering).toContain(
-      "#[[file:aidlc/spaces/default/memory/org.md]]",
+      '<memory-file path="aidlc/spaces/default/memory/org.md">',
     );
     expect(steering).toContain(
-      "#[[file:aidlc/spaces/default/memory/phases/operation.md]]",
+      '<memory-file path="aidlc/spaces/default/memory/phases/operation.md">',
     );
+    expect(steering).not.toContain("#[[file:");
   });
 
   test("8: Codex include is wired (AIDLC_RULES_DIR seam + AGENTS.md)", () => {

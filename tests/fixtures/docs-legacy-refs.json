@@ -24,7 +24,7 @@
     },
     {
       "file": "docs/guide/harnesses/kiro-ide.md",
-      "text": "- `.kiro/steering/aidlc-active-memory.md` \u2014 always-included IDE steering whose",
+      "text": "- `.kiro/steering/aidlc-active-memory.md`: always-included steering that carries",
       "why": "documents Kiro IDE's native always-included steering file"
     },
     {

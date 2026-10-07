@@ -124,6 +124,7 @@ import {
   _resetHarnessDataForTests,
   _resetScopeMappingForTests,
   _resetStageGraphForTests,
+  activeSpace,
   activeWorkflowDescriptions,
   DEFAULT_SPACE,
   fileIdentity,
@@ -136,6 +137,7 @@ import {
   writeFileAtomic,
 } from "./aidlc-lib.ts";
 import { regenerateRunnerSurfaces } from "./aidlc-runner-gen.ts";
+import { KIRO_IDE_STEERING, kiroIdeSteering } from "./aidlc-includes.ts";
 import {
   activeWorkflowPluginDependencies,
   canonicalScopeTableRegion,
@@ -4334,11 +4336,20 @@ function runtimeGenerated(
   regenerated: ReadonlySet<string>,
 ): boolean {
   const normalized = rel.replaceAll("\\", "/");
-  return regenerated.has(normalized) || [
+  return regenerated.has(normalized) || unbaselinedGenerated(harnessDir).includes(normalized);
+}
+
+// Written by the engine from project state, so never recorded as shipped: a
+// refresh writes the staged copy over whatever is there, and never reports it
+// as a local change. Kiro IDE's steering file carries the project's memory text
+// (aidlc-includes.ts kiroIdeSteering).
+function unbaselinedGenerated(harnessDir: string): string[] {
+  return [
     `${harnessDir}/tools/data/harness.json`,
     `${harnessDir}/tools/data/stage-graph.json`,
     `${harnessDir}/tools/data/scope-grid.json`,
-  ].includes(normalized);
+    ...(harnessDir === ".kiro" ? [KIRO_IDE_STEERING] : []),
+  ];
 }
 
 // Compose records a plugin's consumed artifacts as objects, so the sidecar
@@ -5995,6 +6006,11 @@ function prepareRefreshSource(
     },
     previousProvider,
   );
+  // Kiro IDE's steering file carries the project's own memory text, not the
+  // release's reference form.
+  if (descriptor.distribution === "kiro-ide" && regularFile(join(root, KIRO_IDE_STEERING))) {
+    writeFileSync(join(root, KIRO_IDE_STEERING), kiroIdeSteering(projectDir, activeSpace(projectDir)).text);
+  }
   for (const directory of descriptor.managedDirectories) {
     const stagedDirectory = join(root, directory);
     if (!existsSync(stagedDirectory) || !lstatSync(stagedDirectory).isDirectory()) continue;
@@ -8451,14 +8467,7 @@ function planManagedFiles(
         actions.push({ path: rel, action: "preserve", detail: "project-owned" });
         continue;
       }
-      if (
-        !projectOwned &&
-        ![
-          `${descriptor.harnessDir}/tools/data/harness.json`,
-          `${descriptor.harnessDir}/tools/data/stage-graph.json`,
-          `${descriptor.harnessDir}/tools/data/scope-grid.json`,
-        ].includes(rel)
-      ) {
+      if (!projectOwned && !unbaselinedGenerated(descriptor.harnessDir).includes(rel)) {
         // In-place answers can advance ownership only from an unmodified base.
         const nextHash = retainBaseline
           ? regenerated.has(rel) && targetRegular && currentHash === priorHash ? hash : priorHash

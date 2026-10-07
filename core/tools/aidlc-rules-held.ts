@@ -18,18 +18,30 @@
 //   - Codex has no include and a compaction drops every tool result. The proof
 //     is that this thread was handed the bundle, that no session start or
 //     compaction hook ran since, and that its rollout shows no compaction after.
-//   - Kiro IDE (steering file references are not expanded), Cursor and Copilot
-//     have no proven copy, so they always get the text.
+//   - Kiro IDE (and Kiro CLI v3, which runs the same tree) puts the
+//     always-included steering file in a chat once, when the chat starts and
+//     before its SessionStart hook runs, and keeps that copy through summaries
+//     and reloads; a mid-chat edit is never read (live on 1.2.4). AI-DLC writes
+//     the memory text into that file (aidlc-includes.ts). The proof is that the
+//     chat's session start found the file as the memory files make it now and
+//     did not rewrite it, and that the file is still exactly that. Kiro IDE
+//     gives the agent's shell no chat id, so which chat ran a command is known
+//     only from the process tree, where the latest chat to start wins. So the
+//     pointer also needs every chat with an open turn (a prompt with no Stop
+//     since) to hold the same file; Kiro CLI v3 names the chat in
+//     KIRO_SESSION_ID instead.
+//   - Cursor and Copilot have no proven copy, so they always get the text.
 //
 // The host is identified twice: by the installed tree that wrote the record and
 // by the variable the host itself puts in the command's environment. Anything
 // missing or unreadable means the full text.
 
 import { createHash } from "node:crypto";
-import { existsSync, readFileSync, rmSync, statSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";
 import { isoTimestamp, isStopHookProbe, sessionsDir, toPosix, validSessionId, writeFileAtomic } from "./aidlc-lib.ts";
 import { runtimeHarnessDir, runtimeHarnessName } from "./aidlc-runtime-paths.ts";
+import { KIRO_IDE_STEERING, kiroIdeSteering } from "./aidlc-includes.ts";
 
 type LoadRecord = {
   v: 1;
@@ -39,9 +51,12 @@ type LoadRecord = {
   space: string;
   // per-request: the host re-reads every file under `dir` on each request.
   // at-load: the host read `files` (sha256 by path) when this chat last loaded.
-  refresh: "per-request" | "at-load" | "none";
+  // at-start: the chat holds the steering file it captured when it started
+  // (`steering`, its sha256), whatever happens later.
+  refresh: "per-request" | "at-load" | "at-start" | "none";
   dir?: string;
   files?: Record<string, string>;
+  steering?: string;
   // Older copies of the files may also be in the chat (a resume or fork after
   // an edit, or an include re-pointed while the chat started).
   stale?: true;
@@ -91,6 +106,18 @@ function loadRecordPath(projectDir: string, sessionId: string): string {
 
 function deliveryRecordPath(projectDir: string, sessionId: string): string {
   return join(sessionsDir(projectDir), `${sessionId}.rules-delivered.json`);
+}
+
+// A turn whose Stop never came (Kiro sends none after Cancel) stops counting
+// as open after this long.
+const OPEN_TURN_MAX_MS = 4 * 60 * 60 * 1000;
+
+function turnOpenPath(projectDir: string, sessionId: string): string {
+  return join(sessionsDir(projectDir), `${sessionId}.turn-open`);
+}
+
+function sha256Text(text: string): string {
+  return createHash("sha256").update(text, "utf-8").digest("hex");
 }
 
 function sha256File(path: string): string {
@@ -183,7 +210,17 @@ export function recordRulesLoad(
   const harness = runtimeHarnessName(projectDir);
   const base = { v: 1 as const, harness, source, at: isoTimestamp(), space };
   let record: LoadRecord | null = null;
-  if (harness === "claude") {
+  if (harness === "kiro-ide") {
+    // A chat keeps what it captured when it started: a later session start
+    // for it (a switch back, a resume) records nothing new.
+    if (existsSync(path) || source !== "startup") return;
+    const { text, inlined } = kiroIdeSteering(projectDir, space);
+    const steering = sha256File(join(projectDir, KIRO_IDE_STEERING));
+    // This start rewrote the file, or it does not carry the memory text: the
+    // chat holds an older copy, or none.
+    const current = !includeChanged && inlined.length > 0 && steering === sha256Text(text);
+    record = { ...base, refresh: "at-start", steering, ...(current ? {} : { stale: true as const }) };
+  } else if (harness === "claude") {
     const files: Record<string, string> = {};
     for (const rel of claudeImportedFiles(projectDir, runtimeHarnessDir(projectDir))) {
       files[rel] = sha256File(join(projectDir, rel));
@@ -237,6 +274,10 @@ function hostRunsThisChat(harness: string, sessionId: string): boolean {
       return env.CLAUDE_CODE_SESSION_ID ? env.CLAUDE_CODE_SESSION_ID === sessionId : env.CLAUDECODE === "1";
     case "kiro":
       return env.KIRO_SESSION_ID === sessionId;
+    case "kiro-ide":
+      // Kiro CLI v3 names the chat; Kiro IDE's shell has no chat id, so
+      // chatHoldsRules checks every open turn instead.
+      return env.KIRO_SESSION_ID ? env.KIRO_SESSION_ID === sessionId : true;
     case "opencode":
       return env.OPENCODE === "1";
     case "codex":
@@ -244,6 +285,54 @@ function hostRunsThisChat(harness: string, sessionId: string): boolean {
     default:
       return false;
   }
+}
+
+/**
+ * Kiro IDE: a prompt opens its chat's turn, and the turn's Stop closes it.
+ */
+export function noteKiroIdeTurn(projectDir: string, sessionId: string | undefined, open: boolean): void {
+  const sid = validSessionId(sessionId);
+  if (sid === null) return;
+  if (!open) {
+    removeQuietly(turnOpenPath(projectDir, sid));
+    return;
+  }
+  try {
+    writeFileAtomic(turnOpenPath(projectDir, sid), `${new Date().toISOString()}\n`);
+  } catch {
+    // With no open turn on record, this chat gets the rules in full.
+  }
+}
+
+// Kiro IDE: whether this chat has an open turn and every other chat with an
+// open turn holds `steering` too, so whichever of them ran the command holds
+// it.
+function openTurnsHold(projectDir: string, sid: string, space: string, steering: string): boolean {
+  const now = Date.now();
+  let own = false;
+  for (const name of readdirSync(sessionsDir(projectDir))) {
+    if (!name.endsWith(".turn-open")) continue;
+    const other = name.slice(0, -".turn-open".length);
+    let at = NaN;
+    try {
+      at = Date.parse(readFileSync(join(sessionsDir(projectDir), name), "utf-8").trim());
+    } catch {
+      // A marker that cannot be read is skipped like an old one.
+    }
+    if (!Number.isFinite(at) || now - at > OPEN_TURN_MAX_MS) continue;
+    if (other === sid) {
+      own = true;
+      continue;
+    }
+    const record = readJson<LoadRecord>(loadRecordPath(projectDir, other));
+    if (
+      record?.v !== 1 || record.harness !== "kiro-ide" || record.refresh !== "at-start" ||
+      record.stale === true || record.space !== space || record.steering !== steering
+    ) {
+      return false;
+    }
+  }
+  return own;
 }
 
 /**
@@ -381,6 +470,14 @@ export function chatHoldsRules(
     const delivered = readDelivery(projectDir, sid);
     // The rules changed since this chat's last step: the text once.
     if (delivered !== null && delivered.last !== bundle) return false;
+    if (record.refresh === "at-start") {
+      if (record.stale === true || !record.steering) return false;
+      const { text, inlined } = kiroIdeSteering(projectDir, space);
+      const steering = sha256Text(text);
+      if (record.steering !== steering || !paths.every((path) => inlined.includes(path))) return false;
+      if (sha256File(join(projectDir, KIRO_IDE_STEERING)) !== steering) return false;
+      return process.env.KIRO_SESSION_ID ? true : openTurnsHold(projectDir, sid, space, steering);
+    }
     if (record.refresh === "per-request") {
       const dir = record.dir ?? "";
       return dir !== "" && paths.every((path) => path.startsWith(dir) && path.endsWith(".md"));
