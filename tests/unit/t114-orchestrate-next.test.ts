@@ -1048,6 +1048,35 @@ describe("t114 parked branch (#367)", () => {
     expect(read.kind).toBe("print");
     expect(read.message).toContain("report --result resumed --choice <redo|jump|fresh>");
   });
+
+  // The person came back after the park with words about the work, was asked
+  // where they belong, and chose "part of that work, continue it": the work
+  // carries on, as it does for a bare next; it is not answered with the park.
+  test("after a park, choosing to continue the work in progress carries on, never parks again", () => {
+    proj = createOrchestrationTestProject();
+    seedStateFile(proj, MID_IDEATION);
+    park(proj);
+    appendAuditEntry("HUMAN_TURN", {}, proj);
+    const words = "also compare the two biggest competitors on pricing";
+    const said = JSON.parse(runNext(proj, [words]).out) as { kind: string; message?: string };
+    expect(said.kind, JSON.stringify(said)).toBe("print");
+    const request = /`[^`]* next (--request [0-9a-f]{8})`/.exec(said.message ?? "")?.[1];
+    expect(request, said.message).toBeDefined();
+    const asked = JSON.parse(runNext(proj, (request as string).split(" ")).out) as {
+      kind: string; ask_type?: string; continue_command?: string;
+    };
+    expect(asked.ask_type, JSON.stringify(asked)).toBe("new-work-routing");
+    appendAuditEntry("HUMAN_TURN", {}, proj);
+    const chosen = (asked.continue_command ?? "").replace(/^.* next /, "").split(" ");
+    const back = JSON.parse(runNext(proj, chosen).out) as { kind: string; message?: string };
+    expect(back.kind, JSON.stringify(back)).toBe("print");
+    expect(back.message).toContain("aidlc-state.ts unpark");
+    expect(back.message).toContain("then re-run `next` to continue");
+    spawnSync(BUN, [STATE, "unpark", "--project-dir", proj], {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8", cwd: proj, env: directStateEnv,
+    });
+    expect(JSON.parse(runNext(proj, []).out).kind).toBe("run-stage");
+  });
 });
 
 // ===========================================================================

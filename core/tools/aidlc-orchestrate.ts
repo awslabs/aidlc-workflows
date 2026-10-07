@@ -7622,8 +7622,10 @@ function routeNext(args: string[], projectDir: string | undefined): void {
       // or their own words): the work carries on, as `--resume` does, and
       // their words are read below. The Stop hook's probe still sees the park.
       const back = !isReadOnlyEngineProbe() && personSpokeSincePark(pd);
-      // "carry on", "resume" and the like, said on their own, are no words.
-      if (back && (args.length === 0 || bareContinuation)) {
+      // "carry on", "resume" and the like, said on their own, are no words;
+      // "part of that work, continue it", chosen on the routing question, is
+      // that same carrying on (its words were read when the question was asked).
+      if (back && (args.length === 0 || bareContinuation || routingAnsweredAsActiveWork)) {
         emit(printDirective(
           `This workflow is parked. Run \`${aidlcToolInvocation("state")} unpark\` ` +
             "to clear the park marker, then re-run `next` to continue.",
