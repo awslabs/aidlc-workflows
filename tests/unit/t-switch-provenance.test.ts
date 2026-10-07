@@ -514,6 +514,47 @@ describe("a flag-shaped word inside the request", () => {
   });
 });
 
+// A switch typed while the engine's own question waits was kept for that
+// question, and the step that followed asked the person to describe the work
+// again: a retype, and then the work started with the check still on, because
+// their fresh description was a different request from the one the grant named.
+describe("a switch typed while the engine's question is open, before any work exists", () => {
+  test("brings that question back instead of asking for the work again", () => {
+    const proj = emptyProject();
+    // The person described the work, so the engine asked about the plan for it.
+    const asked = next(proj, ["--", "a tiny tool that reverses a string"]);
+    expect(asked.directive?.kind, asked.out).toBe("ask");
+    const question = String(asked.directive?.question ?? "");
+    expect(question).toContain("reverses a string");
+
+    // They turn a check off while that question waits.
+    expect(reply(proj, "/aidlc --guard.review-freeze off")).toContain(FOR_WORK_STARTING_NOW);
+
+    // The step puts their own question back, rather than asking them to say
+    // what to build when they already have.
+    const again = next(proj, []);
+    expect(String(again.directive?.narration ?? ""), again.out).not.toContain("Tell me what to build");
+    expect(again.directive?.kind, again.out).toBe("ask");
+    expect(String(again.directive?.question ?? "")).toContain("reverses a string");
+
+    // Answering it starts the work with the check they turned off.
+    const route = (again.directive as { confirm_command?: string; scope_commands?: Array<{ scope: string; command: string }> });
+    const command = route.confirm_command ??
+      route.scope_commands?.find((row) => row.scope === "poc")?.command;
+    const printed = next(proj, answerArgs(command));
+    const made = createFromPrint(proj, printed);
+    expect(made.status, made.stderr).toBe(0);
+    expect(guardsOff(activeState(proj))).toContain("review-freeze");
+  });
+
+  test("with nothing of theirs waiting, the step still asks what to build", () => {
+    const proj = emptyProject();
+    expect(reply(proj, "/aidlc --guard.review-freeze off")).toContain(FOR_WORK_STARTING_NOW);
+    const step = next(proj, []);
+    expect(String(step.directive?.narration ?? ""), step.out).toContain("Tell me what to build");
+  });
+});
+
 // A ceremony the person typed before any work existed was kept, promised to them
 // in the engine's step, and then spent at creation without being applied: the
 // stage ran with sensors or learnings on, and nothing said so.

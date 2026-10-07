@@ -1375,31 +1375,49 @@ export function fencesOffCreationGranted(
 }
 
 /**
- * Whether this chat holds anything the person set for the piece of work they
- * start next: a check off, a Guard Policy, a ceremony, or plan approval off.
- * Read without a request, so a step before any work exists can say the person's
- * words are kept rather than reporting that nothing is in progress.
+ * What this chat holds for the piece of work the person starts next: a check
+ * off, a Guard Policy, a ceremony, or plan approval off. Null when it holds
+ * nothing. Read without a request, so a step before any work exists can say
+ * their words are kept rather than reporting that nothing is in progress.
+ *
+ * `request` is the question those words answered, when it is one this project
+ * still has: the step can put that question back instead of asking the person
+ * to describe the work they have already described, and the work that question
+ * creates is the one their words were for. Null when the words were said with
+ * no question open, or the question is gone (a compose entry among them reads as
+ * gone here: re-offering one is a composer dispatch, not a question).
  */
-export function switchKeptForNextWork(projectDir: string, sessionId: string | null): boolean {
-  if (!sessionId || process.env.AIDLC_UNATTENDED === "1") return false;
+export function switchKeptForNextWork(
+  projectDir: string,
+  sessionId: string | null,
+): { request: string | null } | null {
+  if (!sessionId || process.env.AIDLC_UNATTENDED === "1") return null;
   const fresh = (grant: PlanApprovalCreationGrant | null): boolean => {
     if (grant?.version !== 1 || grant.session !== sessionId) return false;
     const said = Date.parse(grant.recordedAt);
     return !Number.isNaN(said) && Date.now() - said <= OPEN_QUESTION_WINDOW_MS;
   };
   try {
-    return fresh(readFencesOffCreationGrant(projectDir, sessionId)) ||
-      fresh(readCeremoniesCreationGrant(projectDir, sessionId)) ||
-      fresh(readPlanApprovalRuntimeRecord<GuardPolicyCreationGrant>(
+    const held = [
+      readFencesOffCreationGrant(projectDir, sessionId),
+      readCeremoniesCreationGrant(projectDir, sessionId),
+      readPlanApprovalRuntimeRecord<GuardPolicyCreationGrant>(
         guardPolicyCreationGrantPath(projectDir, sessionId),
         "Guard Policy creation grant",
-      )) ||
-      fresh(readPlanApprovalRuntimeRecord<PlanApprovalCreationGrant>(
+      ),
+      readPlanApprovalRuntimeRecord<PlanApprovalCreationGrant>(
         planApprovalCreationGrantPath(projectDir, sessionId),
         "plan approval creation grant",
-      ));
+      ),
+    ].filter((grant): grant is PlanApprovalCreationGrant => fresh(grant));
+    if (held.length === 0) return null;
+    for (const grant of held) {
+      const asked = grant.request;
+      if (asked !== null && readQuestion(projectDir, asked) !== null) return { request: asked };
+    }
+    return { request: null };
   } catch {
-    return false;
+    return null;
   }
 }
 

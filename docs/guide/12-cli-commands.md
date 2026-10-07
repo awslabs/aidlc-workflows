@@ -1240,9 +1240,12 @@ application and refuses CLI lowering.
 Scope defaults apply without asking.
 An already-off fence or an identical policy word already marked `set by you`
 needs no key because the CLI update is a no-op.
-After memory-strict and unattended checks, `fenceKeyBypassed` is the only way a
-CLI setter lowers without the person's prompt: it recognizes the fixture or
-harness-launch presence bypass, not an inline environment assignment.
+After memory-strict and unattended checks, a CLI setter lowers without the
+person's prompt in two cases only: you typed it at your own terminal (both ends a
+terminal, no chat identity on the command, and no mark of a host that opens
+terminals for its agent), which is your own act; or `fenceKeyBypassed` recognizes
+the fixture or harness-launch presence bypass, not an inline environment
+assignment.
 The session-start hook keeps its `presence-bypass-<session>` stamp in the Plan
 Approval runtime directory for an attended harness launched with
 `AIDLC_SKIP_HUMAN_PRESENCE_GUARD=1`.

@@ -2304,9 +2304,12 @@ function scopeConfirmAskDirective(
   carried = "",
   newWork = false,
   declaredType?: "greenfield" | "brownfield",
+  // The request these words reached this ask through, when an earlier question
+  // held them: the answer to this one is still the answer to that request.
+  derivedFrom?: string,
 ): AskDirective {
   const tool = aidlcToolInvocation("orchestrate");
-  const stored = saveQuestion(projectDir, intentText, proposedScope, "front", undefined, newWork);
+  const stored = saveQuestion(projectDir, intentText, proposedScope, "front", undefined, newWork, derivedFrom);
   const confirmCommand = `${tool} next --scope ${scopeArg(proposedScope)} --request ${stored.id}${carried}`;
   const composeCommand = `${tool} next compose --request ${stored.id}${carried}`;
   return {
@@ -2334,9 +2337,11 @@ function composeOfferAskDirective(
   carried = "",
   newWork = false,
   declaredType?: "greenfield" | "brownfield",
+  // As above: the request an earlier question held these words for.
+  derivedFrom?: string,
 ): AskDirective {
   const tool = aidlcToolInvocation("orchestrate");
-  const stored = saveQuestion(projectDir, intentText, "", "front", undefined, newWork);
+  const stored = saveQuestion(projectDir, intentText, "", "front", undefined, newWork, derivedFrom);
   return {
     kind: "ask",
     ask_type: "compose-offer",
@@ -4063,6 +4068,7 @@ function freshWorkOfferDirective(
   flags: ParsedFlags,
   pd: string,
   inferred: InferResult,
+  derivedFrom?: string,
 ): AskDirective {
   const intentText = flags.intent ?? "";
   if (inferred.source === "keyword") {
@@ -4080,6 +4086,7 @@ function freshWorkOfferDirective(
       carriedCreationFlags(flags),
       flags.newIntent === true,
       flags.projectType,
+      derivedFrom,
     );
   }
   // Anchor the compose offer with the counts for the named scopes so the
@@ -4103,6 +4110,7 @@ function freshWorkOfferDirective(
     carriedCreationFlags(flags),
     flags.newIntent === true,
     flags.projectType,
+    derivedFrom,
   );
 }
 
@@ -4127,17 +4135,25 @@ function freshWorkOfferDirective(
 // Branch 8's answer to prose that names no scope and continues nothing: on
 // Kiro a cursor-less space first asks which existing record it belongs to,
 // otherwise the plan offer for new work.
-function freshWorkRoute(flags: ParsedFlags, description: string, pd: string): Directive {
+function freshWorkRoute(
+  flags: ParsedFlags,
+  description: string,
+  pd: string,
+  // An earlier question held these words: the ask this builds records that
+  // request as its root, so what the person set for it still reaches the work.
+  derivedFrom?: string,
+): Directive {
   const inferred = inferScopeFromText(authoritativeRequest(description));
   if (isKiroRoutingHarness()) {
     const pick = intentPickPromptIfRecordsExist(pd, {
       description,
       proposedScope: inferred.scope,
       carried: carriedRoutingFlags(flags),
+      ...(derivedFrom === undefined ? {} : { derivedFrom }),
     });
     if (pick) return pick;
   }
-  return freshWorkOfferDirective(flags, pd, inferred);
+  return freshWorkOfferDirective(flags, pd, inferred, derivedFrom);
 }
 
 // The selected workflow has nothing left to run: its current stage is done or
@@ -8157,7 +8173,19 @@ function routeNext(args: string[], projectDir: string | undefined): void {
     // chat still holds it: nothing is wrong, so this is a step and not an error.
     // The line they were told rides it, and no error means no relay repeating
     // machinery at them.
-    if (switchKeptForNextWork(pd, engineSessionId ?? null)) {
+    const held = switchKeptForNextWork(pd, engineSessionId ?? null);
+    if (held) {
+      // Their words answered a question of this engine's that is still here, so
+      // they have already said what to build: asking again would cost them a
+      // retype, and the work their fresh words created would be a different
+      // request from the one their switch was kept for, which left the check on
+      // after they were told it was off. The question comes back instead, with
+      // their words as its root, so answering it starts the work they set up.
+      const asked = held.request === null ? null : readQuestion(pd, held.request);
+      if (asked !== null && asked.text.trim().length > 0) {
+        emit(freshWorkRoute({ ...flags, intent: asked.text }, asked.text, pd, asked.id));
+        return;
+      }
       const kept = turnEndingPrint(
         "Nothing is in progress here yet, and what the person set for the piece of work they start next is kept for " +
           "it. Say the line above, then wait: when they say what to build, run that as their request " +
