@@ -254,7 +254,9 @@ A `rereview` with `unfinished` is instead the Unit's own review that did not fin
 what it found first): run it the same way. When the person said to approve the Unit
 as it is, run `verify` with `--over-unfinished-review` instead; the checkpoint then
 carries `review_not_finished`, whose `question` takes the place of "Approve this
-completed <unit>?", and `approve` returns the one line to say. Only a strict the
+completed <unit>?", and `approve` returns the one line to say. A verdict for that
+review that comes in after the approval is recorded as usual and leaves the Unit
+approved. Only a strict the
 team locks keeps the review required: `verify` then names the review step, and
 you run it without asking the person. A Unit whose review
 ended in the reviewer module's NOT-READY fallback carries `review_not_finished` the

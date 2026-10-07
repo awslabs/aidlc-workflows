@@ -750,6 +750,10 @@ function snapshot(
       : "none";
     let review: AuditShardEvent | null = null;
     let waived = false;
+    // The person approved this Unit as it was over this stage's review, and
+    // that review's verdict came in after: it is on record, and the approval
+    // stands on the review as it was then, so the Unit is not asked about again.
+    let lateVerdict = false;
     if (reviewClass !== "none") {
       let receipts = shared.receipts.get(slug);
       if (!receipts) {
@@ -781,6 +785,10 @@ function snapshot(
         eventMatchesClaimAttempt(projectDir, row.block, unit),
       ));
       const binding = request ? reviewRequestBindingFromBlock(request.block) : null;
+      lateVerdict = review !== null && request !== null && gate?.event === "GATE_APPROVED" &&
+        auditBlockField(gate.block, "Unit") === unit && auditBlockField(gate.block, "Review") === "not finished" &&
+        notFinishedBefore.get(slug) === floor &&
+        attemptEventDefinitelyBefore(request, gate) && attemptEventDefinitelyBefore(gate, review);
       // Another Unit's own reviewed build of a path this Unit claims, or any
       // change to its code or documents the Guard Policy accepts, is not a
       // change to this Unit's approved work: its review's binding still holds.
@@ -940,7 +948,7 @@ function snapshot(
       // Receipt presence/currentness is checked above. Re-recording the same
       // evidence is not a change to the approved work.
       reviewer: reviewClass === "none" ? null : stage.reviewer ?? null,
-      review_verdict: review ? auditBlockField(review.block, "Verdict") : null,
+      review_verdict: review && !lateVerdict ? auditBlockField(review.block, "Verdict") : null,
     });
   }
   if (listing === null && (sourceStages === 0 || sourceKeptUnread < sourceStages)) {

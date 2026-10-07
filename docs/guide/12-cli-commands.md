@@ -1919,7 +1919,8 @@ the Unit as it is, add `--over-unfinished-review` to `verify`: under Guard Polic
 `off`, `relaxed`, or a `strict` set for the work, with the person's words on record
 and a review that was asked for, the Unit is verified and asked about once
 (`review_not_finished.question`), and its approval records the review as not
-finished, as at a stage gate. Under a team's locked `strict` the review finishes
+finished, as at a stage gate. A verdict for that review that comes in later is
+recorded and leaves the Unit approved. Under a team's locked `strict` the review finishes
 first, without asking the person. A Unit whose review ended in the NOT-READY
 fallback the conductor records when a retried review still wrote nothing is asked
 about and approved the same way, with no option to pass. A Unit review never asked
