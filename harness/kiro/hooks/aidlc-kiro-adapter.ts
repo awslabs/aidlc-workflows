@@ -355,6 +355,12 @@ function anchoredArgs(prompt: string): string | null {
 const BARE_WORD = process.platform === "win32"
   ? /^(?:--?)?[A-Za-z_][A-Za-z0-9_.:/=+%-]*$|^[0-9]+(?:\.[0-9]+)?$/
   : /^[A-Za-z0-9_@%+=:,./-]+$/;
+// PowerShell reads the curly quotes U+2018-U+201B as single quotes and
+// U+201C-U+201F as double quotes (text pasted from a document holds them), so
+// on Windows every word that is not bare takes the single-quoted form with each
+// single-quote-class character doubled, which PowerShell reads back as typed.
+// The person's characters are never changed.
+const WIN32_SINGLE_QUOTE = /['\u2018-\u201B]/g;
 function forwardedArgs(raw: string, args: string[]): string {
   if (
     /^[A-Za-z0-9_@%+=:,./ \t"-]*$/.test(raw) &&
@@ -364,9 +370,10 @@ function forwardedArgs(raw: string, args: string[]): string {
   }
   const quote = (arg: string): string => {
     if (BARE_WORD.test(arg)) return arg;
+    if (process.platform === "win32") return `'${arg.replace(WIN32_SINGLE_QUOTE, (q) => q + q)}'`;
     if (!arg.includes("'")) return `'${arg}'`;
     if (!/["`$\\]/.test(arg)) return `"${arg}"`;
-    return `'${arg.replaceAll("'", process.platform === "win32" ? "''" : "'\\''")}'`;
+    return `'${arg.replaceAll("'", "'\\''")}'`;
   };
   return args.map(quote).join(" ");
 }

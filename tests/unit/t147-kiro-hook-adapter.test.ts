@@ -2688,9 +2688,11 @@ describe("t147 Kiro CLI reads what the person typed from the expanded skill body
       expect(cut.code).toBe(2);
       expect(cut.stderr).toContain(call);
       expect(guard(`bun .kiro/tools/aidlc.ts ${call}`).code).toBe(0);
-      // A word with an apostrophe takes double quotes, literal in sh and PowerShell alike.
+      // A word with an apostrophe takes double quotes in sh; PowerShell gets its own single-quoted form.
       const apostrophe = runAdapter(dir, "verb-intercept", { cwd: dir, session_id: session, prompt: expanded(`say "it's done" now; really`) }, [], env);
-      const quoted = `engine orchestrate next say "it's done" 'now;' really`;
+      const quoted = process.platform === "win32"
+        ? "engine orchestrate next say 'it''s done' 'now;' really"
+        : `engine orchestrate next say "it's done" 'now;' really`;
       expect(apostrophe.stdout).toContain(`${quoted}\n`);
       expect(guard(`bun .kiro/tools/aidlc.ts ${quoted}`).code).toBe(0);
       // A word a shell would read as a comment or a glob is quoted too.
@@ -2722,9 +2724,10 @@ describe("t147 Kiro CLI reads what the person typed from the expanded skill body
       const words = ["fix", "it,", "it's", "broken", "and", "don't", "touch", "the", "users'", "files"];
       const latch = join(dir, "aidlc", ".aidlc-forwarding-latch");
       expect(JSON.parse(readFileSync(latch, "utf8")).args).toEqual(words);
-      // PowerShell reads a bare comma as a list, so Windows quotes "it," too.
-      const comma = process.platform === "win32" ? "'it,'" : "it,";
-      const quoted = `fix ${comma} "it's" broken and "don't" touch the "users'" files`;
+      // PowerShell reads a bare comma as a list and gets its own single-quoted form for every word that is not bare.
+      const quoted = process.platform === "win32"
+        ? "fix 'it,' 'it''s' broken and 'don''t' touch the 'users''' files"
+        : `fix it, "it's" broken and "don't" touch the "users'" files`;
       expect(r.stdout).toContain(`engine orchestrate next ${quoted}\n`);
       // A shell reads that call as the same words, so running it as told works.
       // Windows runs the call in PowerShell (the case below); its hook job also
@@ -2740,22 +2743,33 @@ describe("t147 Kiro CLI reads what the person typed from the expanded skill body
     } finally { rmSync(dir, { recursive: true, force: true }); }
   });
 
-  // On Windows the call runs in PowerShell. Only a word with no `$`, backtick,
-  // double quote or backslash is double-quoted, so PowerShell expands nothing
-  // in it; "$5" is single-quoted, and PowerShell reads every word back as typed.
-  // A word holding an apostrophe and a backslash takes PowerShell's own form
-  // ('can''t open C:\temp\x'); PowerShell reads it back whole, and the guard
-  // accepts the call as the hook asked for it.
+  // On Windows the call runs in PowerShell. Every word that is not a plain
+  // word, an option or a plain number is single-quoted with each single-quote
+  // character doubled, PowerShell's own form: an apostrophe, a dollar word, a
+  // comma, a backslash, and the curly quotes a document pastes (PowerShell
+  // reads U+2018-U+201B as single quotes and U+201C-U+201F as double quotes).
+  // PowerShell reads every word back as typed, and the guard accepts the call
+  // as the hook asked for it.
   test.skipIf(process.platform !== "win32")("PowerShell reads the quoted call as the same words, a dollar word included", () => {
     const dir = scratchProject(true);
     try {
-      const said = String.raw`don't touch the users' files it's $5 off, the error says "can't open C:\temp\x"`;
+      const curly = { open: "\u2018", close: "\u2019", dopen: "\u201C", dclose: "\u201D" };
+      const said = String.raw`don't touch the users' files it's $5 off, the error says "can't open C:\temp\x" and ` +
+        `${curly.open}don${curly.close}t${curly.close} ${curly.dopen}stop${curly.dclose}`;
       const r = runAdapter(dir, "verb-intercept", { cwd: dir, session_id: session, prompt: expanded(said) }, [], env);
       expect(r.code, r.stderr).toBe(0);
-      const quoted = String.raw`"don't" touch the "users'" files "it's" '$5' 'off,' the error says 'can''t open C:\temp\x'`;
+      const quoted = String.raw`'don''t' touch the 'users''' files 'it''s' '$5' 'off,' the error says 'can''t open C:\temp\x' and ` +
+        `'${curly.open}${curly.open}don${curly.close}${curly.close}t${curly.close}${curly.close}' '${curly.dopen}stop${curly.dclose}'`;
       expect(r.stdout).toContain(`engine orchestrate next ${quoted}\n`);
-      const pwsh = spawnSync("powershell", ["-NoProfile", "-NonInteractive", "-Command", `& { foreach ($a in $args) { $a } } ${quoted}`], { encoding: "utf-8" });
-      expect(pwsh.stdout.trimEnd().split(/\r?\n/)).toEqual(["don't", "touch", "the", "users'", "files", "it's", "$5", "off,", "the", "error", "says", String.raw`can't open C:\temp\x`]);
+      const pwsh = spawnSync(
+        "powershell",
+        ["-NoProfile", "-NonInteractive", "-Command", `[Console]::OutputEncoding = [Text.Encoding]::UTF8; & { foreach ($a in $args) { $a } } ${quoted}`],
+        { encoding: "utf-8" },
+      );
+      expect(pwsh.stdout.trimEnd().split(/\r?\n/)).toEqual([
+        "don't", "touch", "the", "users'", "files", "it's", "$5", "off,", "the", "error", "says", String.raw`can't open C:\temp\x`,
+        "and", `${curly.open}don${curly.close}t${curly.close}`, `${curly.dopen}stop${curly.dclose}`,
+      ]);
       const guard = runAdapter(dir, "guard-tool-call", {
         cwd: dir, tool_name: "execute_bash", tool_input: { command: `bun .kiro/tools/aidlc.ts engine orchestrate next ${quoted}` },
       });
