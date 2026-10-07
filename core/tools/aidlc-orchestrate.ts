@@ -2206,6 +2206,12 @@ function typedSettingModifiers(flags: ParsedFlags): string[] {
   return modifiers;
 }
 
+// The `next --resume` an unpark print names, with the settings typed beside
+// the resume (`--depth comprehensive`), so none of them is dropped on the re-run.
+function resumeAgain(flags: ParsedFlags): string {
+  return ["next --resume", ...typedSettingModifiers(flags).map((modifier) => `--${modifier}`)].join(" ");
+}
+
 // A typed `guard-policy <value>` the state already holds as set by you.
 function typedPolicyApplied(modifier: string, stateContent: string): boolean {
   const [key, value] = modifier.split(" ");
@@ -7668,7 +7674,8 @@ function routeNext(args: string[], projectDir: string | undefined): void {
     existsSync(unitParkedPath(pd))
   ) {
     emit(printDirective(
-      `Run \`${aidlcToolInvocation("state")} unpark\` to clear this checkout's Unit park marker, then re-run \`next --resume\`.`,
+      `Run \`${aidlcToolInvocation("state")} unpark\` to clear this checkout's Unit park marker, ` +
+        `then re-run \`${resumeAgain(flags)}\`.`,
     ));
     return;
   }
@@ -7748,7 +7755,7 @@ function routeNext(args: string[], projectDir: string | undefined): void {
   ) {
     emit(printDirective(
       `This workflow is parked. Run \`${aidlcToolInvocation("state")} unpark\` ` +
-        "to clear the park marker, then re-run `next --resume` to continue.",
+        `to clear the park marker, then re-run \`${resumeAgain(flags)}\` to continue.`,
     ));
     return;
   }

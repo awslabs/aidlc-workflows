@@ -364,6 +364,25 @@ describe("t-parked-work-takes-plan-changes: a change typed over parked work is m
     });
   }
 
+  // A setting typed with the resume itself: the unpark print used to name a
+  // bare `next --resume`, so the setting was dropped and nobody said so.
+  test("/aidlc --resume --depth comprehensive: the setting is applied on the resume, not dropped", async () => {
+    const walk = await parkedProject();
+    expect(walk.field("Depth")).not.toMatch(/: Comprehensive\b/);
+    walk.say("/aidlc --resume --depth comprehensive");
+    const first = walk.next(["--resume", "--depth", "comprehensive"]);
+    expect(first.json?.kind, first.out).toBe("print");
+    const message = String(first.json?.message ?? "");
+    const rerun = /then re-run `next ([^`]+)`/.exec(message)?.[1];
+    expect(rerun, message).toBe("--resume --depth comprehensive");
+    for (const ran of walk.runNamed(message)) expect(ran.code, ran.out).toBe(0);
+    expect(walk.parked()).toBe(false);
+    const applied = walk.next((rerun as string).split(" "));
+    expect(applied.json?.kind, applied.out).toBe("print");
+    for (const ran of walk.runNamed(String(applied.json?.message ?? ""))) expect(ran.code, ran.out).toBe(0);
+    expect(walk.field("Depth")).toMatch(/: Comprehensive\b/);
+  });
+
   test("parked at the plan question: --skip deployment-execution is made, and --resume asks the plan question again", async () => {
     const walk = await parkedProject("plan question");
     const said = typeChange(walk, ["--skip", "deployment-execution"]);
