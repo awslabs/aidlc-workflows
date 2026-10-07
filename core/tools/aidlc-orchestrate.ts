@@ -4958,6 +4958,11 @@ type SteeringTokenPayload = {
   // How the rules were cut into parts (steeringLayout). A part cut under one
   // limit is never continued with parts cut under another.
   l?: string;
+  // The lines for the person that the gate reports this `next` settled itself
+  // printed (settledNotices): `continue` rebuilds the run-stage in a new process,
+  // and these ride the payload so the rebuilt step says them and keeps the
+  // directive identity the parts were cut for.
+  N?: string[];
 };
 
 const runStageRoutes = new WeakMap<RunStageDirective, RunStageRoute>();
@@ -6420,7 +6425,8 @@ function markerSteeringPayload(
     (p.t !== undefined && p.t !== true) ||
     (p.m !== undefined && p.m !== true) ||
     (p.h !== null && typeof p.h !== "string") ||
-    (p.l !== undefined && typeof p.l !== "string")
+    (p.l !== undefined && typeof p.l !== "string") ||
+    (p.N !== undefined && (!Array.isArray(p.N) || !p.N.every((line) => typeof line === "string")))
   ) {
     return null;
   }
@@ -6471,6 +6477,7 @@ function steeringTokenPayload(
     m: directive.approve_together !== undefined ? true : undefined,
     h: route.stateHash,
     l: layout,
+    ...(settledNotices.length > 0 ? { N: [...settledNotices] } : {}),
   };
 }
 
@@ -6800,7 +6807,8 @@ let routingArgs: string[] | null = null;
 let settledGates = 0;
 // The lines for the person the reports of those settled gates printed (a
 // change their Guard Policy accepted), said with the step this `next` hands
-// over (prepareEmission).
+// over (prepareEmission). A run-stage delivered in parts carries them on its
+// steering payload, and `continue` restores them here (handleContinue).
 let settledNotices: string[] = [];
 
 function handleNext(args: string[], projectDir: string | undefined): void {
@@ -15143,6 +15151,10 @@ function handleContinue(args: string[], projectDir: string | undefined): void {
       : undefined;
   activeRetiredGuardPolicyNotice =
     payload.a && liveState !== null ? retiredGuardPolicyNotice(pd, liveState) : null;
+  // The lines the settled gate reports printed ride the payload: the rebuilt
+  // step carries them as the first part's step did, so its identity is the one
+  // the parts were cut for and the person hears them on the final run-stage.
+  settledNotices = payload.N ? [...payload.N] : [];
   const cursor = inspectContinuationCursor(pd, liveState);
 
   const directive = buildRunStageDirective(

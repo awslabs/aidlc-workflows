@@ -13,7 +13,18 @@ import {
 } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import {
+  appendFileSync,
+  chmodSync,
+  cpSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, relative } from "node:path";
 import {
@@ -2741,6 +2752,34 @@ describe("t342 a unit-major recovery keeps every Unit's finished work", () => {
       expect(acceptedFor(p, "alpha")).toHaveLength(1);
       expect(said, JSON.stringify(said)).toHaveLength(recorded() - before);
       expect(approved(p, "alpha")).toBe(true);
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+  }
+
+  // The same, with the stage's rules too big to ride beside the run-stage, so
+  // the step arrives in parts (the usual shape on Copilot) and is rebuilt by
+  // `continue`: the line still reaches the final run-stage, once, and no part
+  // is delivered twice (the rebuilt step is the one the parts belong to).
+  for (const policy of ["off (from scope classic)", "relaxed (set by you)"]) {
+    test(`Guard Policy ${policy.split(" ")[0]}: the change line reaches a run-stage delivered in parts, and the parts are delivered once`, () => {
+      const p = policyFixture("classic", policy);
+      for (const unit of ["alpha", "beta"]) {
+        buildReviewed(p, unit);
+        approve(p, unit);
+      }
+      writeFileSync(join(p, "src", "alpha.ts"), "export const alpha = 2;\n");
+      let filler = "";
+      for (let i = 0; i < 12; i++) {
+        filler += `\n## Extra rule section ${i}\n\n${"Lorem ipsum dolor sit amet, consectetur adipiscing elit. ".repeat(60)}\n`;
+      }
+      appendFileSync(join(p, "aidlc", "spaces", "default", "memory", "org.md"), filler, "utf-8");
+      const result = runOrchestrateNext(join(AIDLC_SRC, "tools/aidlc-orchestrate.ts"), p, [], { env: process.env });
+      const step = result.directive as { kind: string; change_notices?: string[] } | null;
+      expect(step?.kind, result.stderr).toBe("run-stage");
+      expect(result.steering.length, result.out.slice(0, 400)).toBeGreaterThan(0);
+      expect(result.steering.map((part) => part.part)).toEqual(result.steering.map((_, index) => index + 1));
+      const said = step?.change_notices ?? [];
+      expect(said.filter((line) => line === ALPHA_EDIT_LINE), JSON.stringify(said)).toHaveLength(1);
+      expect(acceptedFor(p, "alpha")).toHaveLength(1);
     }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
   }
 
