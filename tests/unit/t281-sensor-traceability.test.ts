@@ -644,7 +644,10 @@ describe("t281 zero-Unit plans: every per-Unit stage", () => {
       const other = stages.find((slug) => slug !== stage)!;
       const misplaced = trace(proj, `construction/${other}/traceability.json`, body);
       out = run(proj, stage, misplaced);
-      expect(out.result.reason).toContain(`cannot derive the construction unit from output path: ${misplaced}`);
+      // The reason names the path with forward slashes on every OS.
+      expect(out.result.reason).toContain(
+        `cannot derive the construction unit from output path: ${misplaced.replaceAll("\\", "/")}`,
+      );
 
       seedUnits(proj);
       out = run(proj, stage, own);
