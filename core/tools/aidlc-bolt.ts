@@ -53,8 +53,8 @@ import {
   holdsAuditLock,
   commandTurnHint,
   humanPresenceGuardDisabled,
-  keepPlanApprovalAskOverStateWrite,
-  personAskedSinceGate,
+  keepActiveDirectiveOverAutonomyWrite,
+  personSpokeSinceGate,
   readAuditShardEvents,
   recordHookDrop,
   unattendedHumanPresenceHint,
@@ -1236,7 +1236,7 @@ function handleSetAutonomy(args: string[]): void {
     if (
       flags.mode === "autonomous" &&
       !humanPresenceGuardDisabled() &&
-      !personAskedSinceGate(pd)
+      !personSpokeSinceGate(pd, { replies: true, outlivesApproval: true })
     ) {
       error(
         "Refusing to switch Construction to autonomous: no reply from the person is on record since " +
@@ -1279,10 +1279,10 @@ function handleSetAutonomy(args: string[]): void {
       error(`Audit emission failed: ${errorMessage(e)}`);
     }
     writeStateFile(pd, updated);
-    // Asked for while the code plan's question waits, it stays the open step:
-    // the plan is still the person's to approve, and their reply answers it.
+    // The step already issued stays the open step: the plan question is still
+    // the person's to answer, and the build of a plan they approved goes on.
     try {
-      keepPlanApprovalAskOverStateWrite(pd, content, updated);
+      keepActiveDirectiveOverAutonomyWrite(pd, content, updated);
     } catch (e) {
       recordHookDrop(pd, "active-directive", errorMessage(e));
     }

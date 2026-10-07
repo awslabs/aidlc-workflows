@@ -9155,6 +9155,23 @@ export function keepPlanApprovalAskOverStateWrite(
       : { marker, result: false, preserve: true });
 }
 
+// Running Construction on its own changes how later approvals are taken, not
+// the step already issued: the plan question, or the build of the plan the
+// person approved, stays the open step, so nothing they answered is asked
+// again. Only its state digest follows the write; a step mid-claim is left as
+// it is.
+export function keepActiveDirectiveOverAutonomyWrite(
+  projectDir: string,
+  previousStateContent: string,
+  nextStateContent: string,
+): boolean {
+  return transactActiveDirective(projectDir, (marker) =>
+    marker?.version === 2 && marker.active_attempt?.status !== "pending" &&
+      marker.state_sha256 === stateDigest(previousStateContent)
+      ? { marker: { ...marker, state_sha256: stateDigest(nextStateContent) }, result: true }
+      : { marker, result: false, preserve: true });
+}
+
 export function refreshActiveDirectiveMarker(
   projectDir: string,
   stage: string,
@@ -11290,7 +11307,7 @@ export function commandTurnHint(projectDir: string): string {
 // second approval, or an approval after a message that was no reply (so not
 // from it) uses it up, as it does everywhere else. Turns at the same second
 // in two shards are unordered, so they prove nothing.
-function requestOutlivesItsApproval(projectDir: string, intent?: string, space?: string): boolean {
+function requestOutlivesItsApproval(projectDir: string, intent?: string, space?: string, replies = false): boolean {
   try {
     const unreadable: string[] = [];
     const rows = readAuditShardEvents(projectDir, intent, space, unreadable);
@@ -11300,7 +11317,7 @@ function requestOutlivesItsApproval(projectDir: string, intent?: string, space?:
     const latest = turns.filter((row) => row.timestamp === latestTs);
     if (latest.length === 0 || latest.some((row) => row.shardIndex !== latest[0].shardIndex)) return false;
     const turn = latest.reduce((last, row) => (row.pos > last.pos ? row : last));
-    if (!isRequestTurn(turn)) return false;
+    if (!isRequestTurn(turn) || (replies && !isReplyTurn(turn))) return false;
     const theirs = new Set<string>();
     for (const row of rows) {
       const after = row.timestamp > turn.timestamp ||
@@ -11330,8 +11347,9 @@ function requestOutlivesItsApproval(projectDir: string, intent?: string, space?:
 // With `replies`, the turn must be a reply, not only a command to AIDLC; with
 // `requests`, anything but a question about a switch. With `intent` and
 // `space`, the turn must be on that work's record. With `outlivesApproval`,
-// for what the message asks for (a setter, a stop), the approval given in it
-// and the run's own approvals do not use it up (requestOutlivesItsApproval).
+// for what the message asks for (a setter, a stop, the grant of autonomy), the
+// approval given in it and the run's own approvals do not use it up
+// (requestOutlivesItsApproval); with `replies` too, that message is a reply.
 // An approval or an answer never reads it that way: each needs a reply of its own.
 export function personSpokeSinceGate(
   projectDir: string,
@@ -11339,7 +11357,8 @@ export function personSpokeSinceGate(
 ): boolean {
   if (
     humanTurnState(projectDir, options) !== "acted" &&
-    !(options.outlivesApproval === true && requestOutlivesItsApproval(projectDir, options.intent, options.space))
+    !(options.outlivesApproval === true &&
+      requestOutlivesItsApproval(projectDir, options.intent, options.space, options.replies === true))
   ) {
     return false;
   }
