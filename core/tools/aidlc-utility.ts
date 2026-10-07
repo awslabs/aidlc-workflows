@@ -11259,10 +11259,10 @@ function handleRecompose(projectDir: string, flags: Record<string, string>, rawA
     // explicit flag, not the default.
     if (getField(content, "Construction Autonomy Mode")?.trim() === "autonomous") {
       die(
-        "Cannot change the plan while Construction is running unattended (Construction Autonomy " +
-          "Mode is autonomous). Changing the plan needs someone to approve it, and nobody is being " +
-          "asked right now. Either switch back to stopping for approval at each Bolt " +
-          "(aidlc-bolt set-autonomy --mode gated) or wait for the current build to finish, then recompose.",
+        "Cannot change the plan while Construction runs unattended (Construction Autonomy Mode is " +
+          "autonomous) with nobody here to approve it. Run " +
+          `\`${aidlcToolInvocation("bolt")} set-autonomy --mode gated\` (Construction then stops for ` +
+          "approval at each Bolt), then recompose.",
       );
     }
     // Only a RUNNING workflow has a live plan to re-shape. A Completed (or

@@ -358,7 +358,7 @@ describe("t194 recompose - rejections", () => {
     expect(auditText(proj)).toContain("**Reason**: jump to user-stories");
   });
 
-  test("autonomous Construction rejected: recompose refuses with the remediation named", () => {
+  test("autonomous Construction rejected: recompose refuses and names a setter that runs", () => {
     // The engine-side anchor for the "never recompose under autonomous
     // Construction" rule (mirrors the park guard). A created feature project has no
     // Construction Autonomy Mode field, so inject it as autonomous the way
@@ -375,7 +375,11 @@ describe("t194 recompose - rejections", () => {
     const r = run(proj, "aidlc-utility.ts", ["recompose", "--skip", "market-research"]);
     expect(r.status).not.toBe(0);
     expect(r.out).toContain("Construction Autonomy Mode is autonomous");
-    expect(r.out).toContain("set-autonomy --mode gated");
+    // The step it names is one that runs: the setter's real command, and no
+    // wait that never ends (the mode stays autonomous to the end of the run).
+    expect(r.out).toMatch(/`[^`]*aidlc[^`]*bolt[^`]* set-autonomy --mode gated`/);
+    expect(r.out).not.toContain("(aidlc-bolt set-autonomy");
+    expect(r.out).not.toContain("wait for the current build");
     // The state file is untouched by the refusal (still autonomous, still EXECUTE).
     expect(readState(proj)).toBe(withAutonomy);
   });
