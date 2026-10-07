@@ -1007,6 +1007,9 @@ function prepareEmission(directive: Directive): PreparedEmission {
   // Before transport, so a run-stage delivered in parts (rebuilt by
   // `continue`) carries the person's kept replies too.
   directive = withKeptReplies(directive);
+  // The agent notes count toward the size transport measures, so a step that
+  // only fits without them is delivered in parts like any other.
+  directive = withAgentNotes(directive, aidlcToolInvocation("orchestrate"));
   // A route check asks one question: which Unit would the engine route now? It
   // never loads rules, so it skips transport entirely - which also keeps it from
   // minting the machine-local steering key on a checkout that has none.
@@ -1035,6 +1038,7 @@ function prepareEmission(directive: Directive): PreparedEmission {
     }
   }
   transported = withPickUpLine(transported);
+  // Again for what was added after transport (a rebind notice).
   transported = withAgentNotes(transported, aidlcToolInvocation("orchestrate"));
   const personLinesSaid = sayPendingPersonLines(requested, transported);
   const result = validateDirective(transported);
