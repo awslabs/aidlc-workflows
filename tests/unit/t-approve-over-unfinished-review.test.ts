@@ -67,8 +67,8 @@ const state = (proj: string, args: string[], extra: Record<string, string> = {})
 const events = (proj: string, name: string) => readAuditShardEvents(proj).filter((row) => row.event === name);
 
 // `report` as the agent runs it.
-function report(proj: string, args: string[]): Record<string, unknown> {
-  const r = run(ORCHESTRATE, ["report", ...args, "--project-dir", proj]);
+function report(proj: string, args: string[], extra: Record<string, string> = {}): Record<string, unknown> {
+  const r = run(ORCHESTRATE, ["report", ...args, "--project-dir", proj], extra);
   const line = r.out.split("\n").find((entry) => entry.startsWith("{"));
   expect(line, r.out).toBeDefined();
   return JSON.parse(line as string) as Record<string, unknown>;
@@ -264,5 +264,110 @@ describe("the person's approval goes through over a review that never finished",
     expect(refused.kind).not.toBe("done");
     expect(JSON.stringify(refused)).toContain("REVIEW_EVIDENCE_MISSING");
     expect(events(proj, "GATE_APPROVED")).toHaveLength(0);
+  });
+});
+
+// Code Generation reviews the project source too. The person asked for its
+// review again after the source changed, that review never finished, and they
+// said they do not need it: their approval goes over it, as at a stage with no
+// source, under any Guard Policy but a team-locked strict.
+describe("Code Generation: the person's approval goes over a review of changed source that never finished", () => {
+  const CG = "code-generation";
+  const CG_REVIEWER = "aidlc-architecture-reviewer-agent";
+  const CG_NOTICE = "Approved. The Code Generation review did not finish.";
+  const DASH = "\u2014"; // the state file's stage-line separator
+  const cgEnv = { AIDLC_DISABLE_PLAN_APPROVAL_GUARD: "1" };
+  let proj: string;
+  beforeEach(() => {
+    resetAidlcEnv();
+    proj = createTestProject();
+    seedAidlcMemory(proj);
+    writeFileSync(seededStateFile(proj), `# AI-DLC State Tracking
+## Project Information
+- **Project**: A bug fix with changed source
+- **Project Type**: Brownfield
+- **Scope**: bugfix
+- **State Version**: 8
+## Runtime State
+- **Revision Count**: 0
+- **Guard Policy**: strict (set by you)
+- **Review Override**: advisory
+## Scope Configuration
+- **Stages to Execute**: all
+- **Stages to Skip**: none
+- **Depth**: Minimal
+- **Test Strategy**: Minimal
+## Stage Progress
+### INCEPTION PHASE
+- [x] requirements-analysis ${DASH} EXECUTE
+- [S] units-generation ${DASH} SKIP
+### CONSTRUCTION PHASE
+- [-] code-generation ${DASH} EXECUTE
+- [ ] build-and-test ${DASH} EXECUTE
+## Current Status
+- **Lifecycle Phase**: CONSTRUCTION
+- **Current Stage**: code-generation
+- **Status**: Running
+`);
+  });
+  afterEach(() => cleanupTestProject(proj));
+
+  const cgReview = (iteration: number, extra: string[] = []) =>
+    run(LOG, ["review", "--stage", CG, "--reviewer", CG_REVIEWER, "--iteration", String(iteration), ...extra, "--project-dir", proj], cgEnv);
+
+  // The code reviewed READY, the source changed after it (strict makes that
+  // review stale), and the person asked for the review again: that one
+  // recovery pass never finished.
+  function recoveryOfChangedSource(): void {
+    mkdirSync(join(proj, "src"), { recursive: true });
+    writeFileSync(join(proj, "src", "app.ts"), "export const total = 1;\n");
+    const dir = join(seededRecordDir(proj), "construction", CG);
+    mkdirSync(dir, { recursive: true });
+    for (const name of ["code-generation-plan.md", "unit-test-instructions.md", "code-summary.md", "traceability.json"]) {
+      writeFileSync(join(dir, name), name.endsWith(".json") ? "{}\n" : `# ${name}\n`);
+    }
+    const first = cgReview(1);
+    expect(first.rc, first.out).toBe(0);
+    const file = (JSON.parse(first.out.split("\n").find((line) => line.startsWith("{")) as string) as { reviewFile: string })
+      .reviewFile;
+    writeFileSync(
+      join(proj, file),
+      `## Review\n\n**Verdict:** READY\n**Reviewer:** ${CG_REVIEWER}\n**Iteration:** 1\n\n` +
+        "### Findings\n\n**New findings**\n\n| Severity | Location | Finding | Required action |\n|---|---|---|---|\n",
+    );
+    const ready = cgReview(1, ["--verdict", "READY"]);
+    expect(ready.rc, ready.out).toBe(0);
+    writeFileSync(join(proj, "src", "app.ts"), "export const total = 2;\n");
+    says(proj, "review the code again before I approve");
+    const again = cgReview(2);
+    expect(again.rc, again.out).toBe(0);
+    const request = events(proj, "REVIEW_REQUESTED").at(-1);
+    expect(auditBlockField(request?.block ?? "", "Recovery"), request?.block).toBe("stale-receipt");
+  }
+
+  test("strict set for the work: approved, the review shown as not finished, one line", () => {
+    recoveryOfChangedSource();
+    says(proj, WORDS);
+    const done = report(proj, ["--stage", CG, "--result", "approved", "--user-input", WORDS], cgEnv);
+    expect(done.kind, JSON.stringify(done)).toBe("done");
+    expect(JSON.stringify(done)).not.toContain("SOURCE_REVIEW_STALE");
+    expect(notices(done)).toContain(CG_NOTICE);
+    const approved = events(proj, "GATE_APPROVED");
+    expect(approved).toHaveLength(1);
+    expect(auditBlockField(approved[0].block, "Review")).toBe("not finished");
+    expect(events(proj, "GATE_REJECTED")).toHaveLength(0);
+  });
+
+  test("a team-locked strict keeps the review required, and names its retry", () => {
+    lockStrict(proj);
+    recoveryOfChangedSource();
+    says(proj, WORDS);
+    const refused = report(proj, ["--stage", CG, "--result", "approved", "--user-input", WORDS], cgEnv);
+    expect(refused.kind).not.toBe("done");
+    expect(JSON.stringify(refused)).toContain("REVIEW_RECOVERY_PENDING");
+    expect(JSON.stringify(refused)).toContain("--retry-pending");
+    expect(events(proj, "GATE_APPROVED")).toHaveLength(0);
+    const retry = cgReview(2, ["--retry-pending"]);
+    expect(retry.rc, retry.out).toBe(0);
   });
 });
