@@ -4580,6 +4580,46 @@ describe("t218 Kiro IDE plan-approval enforcement", () => {
     }
   });
 
+  // A helper agent reports where it is to the chat that sent it with
+  // report_progress. While Code Generation waited, Kiro IDE refused it ("Plan
+  // Approval fallback blocked this tool because Code Generation authority state
+  // is missing or corrupt", a live Kiro IDE run), so the composer could not say
+  // what it was doing. It changes nothing in the workspace, so it passes under
+  // every Guard Policy; a tool the table does not know still waits.
+  for (const policy of ["off", "strict"] as const) {
+    test(`a helper's report_progress passes while Code Generation waits (Guard Policy ${policy})`, () => {
+      const dir = scratchProject(true);
+      try {
+        seedCodeGenerationDirective(dir);
+        const statePath = seededStateFile(dir);
+        const state = readFileSync(statePath, "utf-8").replace(
+          "- **Change Control**: strict (from scope feature)",
+          policy === "off" ? "- **Guard Policy**: off (from scope feature)" : "- **Guard Policy**: strict (set by you)",
+        );
+        writeFileSync(statePath, state);
+        const call = (toolName: string) => runIdeStdin(dir, "plan-approval-guard", JSON.stringify({
+          hook_event_name: "PreToolUse",
+          session_id: `ide-report-progress-${policy}`,
+          cwd: dir,
+          tool_name: toolName,
+          tool_input: { message: "Reading the stage graph for the new work" },
+        }));
+        // The plan question is open, and while the stage runs before approval.
+        for (const marker of [
+          { kind: "ask", ask_type: "plan-approval", stage: "code-generation" },
+          { kind: "run-stage", stage: "code-generation" },
+        ] as const) {
+          writeActiveDirectiveMarker(dir, { ...marker, state_sha256: stateDigest(state) });
+          const progress = call("report_progress");
+          expect(progress.code, `${marker.kind}: ${progress.stderr}`).toBe(0);
+          expect(call("unknown_mutation_tool").code, marker.kind).toBe(2);
+        }
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
+  }
+
   test("malformed Plan Approval payloads fail closed during active Code Generation", () => {
     const dir = scratchProject(true);
     try {

@@ -82,6 +82,10 @@ const KIRO_TOOLS: Record<string, KiroTool> = {
   disclose_context: { role: "read" },
   thinking: { role: "read" },
   todo_list: { role: "read" },
+  // A helper agent's word to the chat that sent it about where it is; it has
+  // no write surface, and refusing it left the composer unable to say why it
+  // stopped while Code Generation waited.
+  report_progress: { role: "read" },
 };
 
 // `subagent_<agent>` is the named dispatch an agent gets from the `subagent`

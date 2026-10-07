@@ -155,6 +155,7 @@ describe("t245 Kiro IDE hook registrations (v2 schema contract)", () => {
         for (const name of [
           "read", "fs_read", "read_file", "read_files", "read_code", "list_directory", "file_search", "glob",
           "grep_search", "grep", "web_fetch", "web_search", "disclose_context", "thinking", "todo_list",
+          "report_progress",
         ]) {
           expect(isPlanApprovalSafeReadTool(name), name).toBe(true);
           expect(matcher.test(name), name).toBe(false);
@@ -162,7 +163,7 @@ describe("t245 Kiro IDE hook registrations (v2 schema contract)", () => {
         for (const name of [
           "fs_write", "str_replace", "fs_append", "write", "create_file", "delete_file", "apply_patch", "edit_file",
           "execute_bash", "execute_pwsh", "shell", "invoke_sub_agent", "orchestrate_subagent",
-          "subagent_aidlc-developer-agent", "subagent_response", "memory", "user_input", "report_progress",
+          "subagent_aidlc-developer-agent", "subagent_response", "memory", "user_input",
           "mcp_some_server_tool", "read_file_and_write", "some_future_tool", "",
         ]) {
           expect(matcher.test(name), name).toBe(true);
