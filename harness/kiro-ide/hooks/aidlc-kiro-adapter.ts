@@ -1465,13 +1465,20 @@ function toolTerminalInvocation(command: string): TerminalInvocation | null {
   return { raw, args: splitKiroCommandArgs(raw) };
 }
 
-// Whether a shell call names AIDLC: its text, with line continuations, quotes
-// (also bash's `$'...'` and `$"..."`) and escapes (backslash, PowerShell's
-// backtick, cmd.exe's caret) taken out, holds `aidlc`. A name the shell builds
-// by expansion (a variable, braces, a glob, an escape inside `$'...'`, an
-// alias) is not seen.
-function namesAidlc(command: string): boolean {
-  return command.replace(/[\\`^]\r?\n/g, "").replace(/\$?['"]|[`\\^]/g, "").toLowerCase().includes("aidlc");
+// Whether `latch` is this chat's terminal command of its recorded turn, read
+// before that turn is started again, with the chat named by the payload: then
+// no other shell call of the chat runs in that turn.
+function holdsThisTurn(latch: TerminalLatch | null, recordedTurn: number): latch is TerminalLatch {
+  return latch !== null && recordedTurn > 0 && latch.turn === recordedTurn && (ide.sessionId?.trim() ?? "") !== "";
+}
+
+// The one same-turn shell check: refuses the call when this chat's terminal
+// command holds the turn.
+function refusesShellThisTurn(sessionId: string, recordedTurn: number): boolean {
+  const latch = readTerminalLatch(sessionId);
+  if (!holdsThisTurn(latch, recordedTurn)) return false;
+  process.stderr.write(sameTurnShellRefusal(latch));
+  return true;
 }
 
 function terminalTyped(
@@ -1793,7 +1800,7 @@ function terminalContext(result: TerminalResult): string {
     "SYSTEM (deterministic harness dispatch): The command " +
     `\`/aidlc ${result.typed}\` has ALREADY been run by the harness. ` +
     `It carries no workflow work. Relay the output below ${relayAsTextBlock(result.output)}, then STOP. ` +
-    "Do not call any AIDLC tool this turn.\n\n" +
+    "Do not run any shell command or call any AIDLC tool this turn.\n\n" +
     fenceCommandOutput(result.output, result.exitCode)
   );
 }
@@ -1803,7 +1810,7 @@ function terminalRefusal(result: TerminalResult): string {
     "AIDLC deterministic terminal command complete. The requested command has " +
     "already run inside the hook, and this shell call is intentionally refused " +
     "to keep Kiro's Windows shell transport from changing its UTF-8 output. " +
-    "Do not retry or run another AIDLC command this turn. Relay the output below " +
+    "Do not retry or run another shell command this turn. Relay the output below " +
     `to the user ${relayAsTextBlock(result.output)}, then stop.\n\n` +
     fenceCommandOutput(result.output, result.exitCode)
   );
@@ -1811,10 +1818,10 @@ function terminalRefusal(result: TerminalResult): string {
 
 // The terminal command's output already went to the agent to relay, so this
 // names the step and does not hand it over a second time.
-function sameTurnAidlcRefusal(result: TerminalResult): string {
+function sameTurnShellRefusal(result: TerminalResult): string {
   return (
     `AIDLC already ran \`/aidlc ${result.typed}\` this turn and gave you its output to show the person, ` +
-    "so no other AIDLC command runs this turn. Relay that output and end the turn.\n"
+    "so no other shell command runs this turn. Relay that output and end the turn.\n"
   );
 }
 
@@ -1836,8 +1843,16 @@ if (target === "verb-intercept") {
 }
 
 if (target === "terminal-command-guard") {
-  if ((ide.malformedFields?.length ?? 0) > 0) return 0;
   const tool = ide.toolName ?? "";
+  if ((ide.malformedFields?.length ?? 0) > 0) {
+    // A shell call whose tool input cannot be read still runs nothing in a
+    // turn the chat's terminal command holds; nothing else here reads it.
+    if (isKiroShellTool(tool) && (ide.sessionId?.trim() ?? "") !== "") {
+      const sessionId = terminalSessionId();
+      if (refusesShellThisTurn(sessionId, readTurn(sessionId))) return 2;
+    }
+    return 0;
+  }
   if (!isKiroShellTool(tool)) {
     return 0;
   }
@@ -1895,22 +1910,16 @@ if (target === "terminal-command-guard") {
     process.stderr.write(terminalRefusal(existing));
     return 2;
   }
-  // Any other call that names AIDLC in the same turn, through the dispatcher,
-  // the native `aidlc` or anything else: the agent was told to relay the output
-  // and call no AIDLC tool this turn (terminalContext), and a `next` there would
-  // hand out the next stage on a turn that asked only for a terminal command.
-  // No shell reading decides which of these calls is harmless, so none runs.
-  // Only the chat the payload names is judged; with no session in it, this
-  // stays out. (The engine's own guard for this, Branch 0, reads only the
-  // agent-v1 project-wide latch; the engine could tell this chat's latch from
-  // another's only by process ancestry, which one IDE window shares.)
-  if (
-    existing !== null && recordedTurn > 0 && existing.turn === recordedTurn &&
-    (ide.sessionId?.trim() ?? "") !== "" && namesAidlc(rawCommand)
-  ) {
-    process.stderr.write(sameTurnAidlcRefusal(existing));
-    return 2;
-  }
+  // Any other shell call in the same turn: the agent was told to relay the
+  // output and stop (terminalContext), and a call there can hand out the next
+  // stage on a turn that asked only for a terminal command, through the
+  // dispatcher, the native `aidlc`, or a name the shell builds at run time. No
+  // reading of the command decides which call is harmless, so none runs. Only
+  // the chat the payload names is judged; with no session in it, this stays
+  // out. (The engine's own guard for this, Branch 0, reads only the agent-v1
+  // project-wide latch; the engine could tell this chat's latch from another's
+  // only by process ancestry, which one IDE window shares.)
+  if (refusesShellThisTurn(sessionId, recordedTurn)) return 2;
   if (invocation === null) return 0;
   const command = classifyTerminalCommand(invocation.args);
   if (command === null) return 0;

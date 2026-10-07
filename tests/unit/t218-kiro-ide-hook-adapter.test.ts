@@ -6849,11 +6849,12 @@ describe("t218 terminal-command-guard holds a command with a lone carriage retur
 // UserPromptSubmit hook and leaves this chat's terminal latch. The engine's own
 // Branch 0 guard reads only the agent-v1 latch files, so on this row the
 // PreToolUse hook is what keeps a `next` that same turn from handing out the
-// next stage: the agent was told to call no AIDLC tool, so no call that names
-// AIDLC runs, with or without arguments. A call that names none, another chat,
-// a later turn, or a payload with no session is not this guard's.
-describe("t218 a call that names AIDLC on a turn whose terminal command already ran is refused", () => {
-  const SAME_TURN = "this turn and gave you its output to show the person, so no other AIDLC command runs this turn. Relay that output and end the turn.";
+// next stage: the agent was told to relay the output and stop, so no other
+// shell call of that chat runs, however it is spelled. Another chat, a later
+// turn, a tool that is not a shell, or a payload with no session is not this
+// guard's.
+describe("t218 a shell call on a turn whose terminal command already ran is refused", () => {
+  const SAME_TURN = "this turn and gave you its output to show the person, so no other shell command runs this turn. Relay that output and end the turn.";
 
   function submit(dir: string, sessionId: string, prompt: string) {
     const r = runIdeStdin(dir, "verb-intercept", JSON.stringify({
@@ -6876,7 +6877,8 @@ describe("t218 a call that names AIDLC on a turn whose terminal command already 
   }
 
   // The direct `aidlc-orchestrate.ts` spelling is the one the existing refusal
-  // already read; every other spelling that names AIDLC is refused too.
+  // already read; these are the other ways a shell call can reach the engine,
+  // all refused by the same rule, which reads no command.
   const BARE_SPELLINGS: Array<[string, string]> = [
     ["execute_bash", "bun .kiro/tools/aidlc.ts engine orchestrate next"],
     ["execute_bash", "aidlc engine orchestrate next"],
@@ -6962,7 +6964,7 @@ describe("t218 a call that names AIDLC on a turn whose terminal command already 
     ["execute_bash", "if cd /elsewhere/project; then\naidlc next\nfi"],
   ];
 
-  test("every spelling that names AIDLC is refused, in one line", () => {
+  test("every shell call is refused, in one line", () => {
     const dir = scratchProject(true);
     try {
       submit(dir, "sess_bare_a", "/aidlc --help");
@@ -6991,6 +6993,14 @@ describe("t218 a call that names AIDLC on a turn whose terminal command already 
         ["execute_pwsh", "cmd /c ai^\r\ndlc next"],
         ["execute_pwsh", "aidlc.cmd next --stage requirements-analysis > $null"],
         ["execute_pwsh", "Write-Output 'aidlc.cmd next'"],
+        // A name the shell builds, and calls that name no AIDLC at all.
+        ["execute_bash", "x=dl; ai$" + "{x}c next"],
+        ["execute_bash", "echo done"],
+        ["execute_bash", "ls"],
+        ["execute_bash", "git status"],
+        ["execute_bash", "bun test"],
+        ["shell", "echo done"],
+        ["execute_pwsh", "Write-Output done"],
       ];
       for (const [tool, command] of [...BARE_SPELLINGS, ...own]) {
         // Twice: a refusal does not start a turn of its own.
@@ -7011,31 +7021,46 @@ describe("t218 a call that names AIDLC on a turn whose terminal command already 
       }));
       expect(card.code, card.stderr).toBe(2);
       expect(card.stderr).toBe(`AIDLC already ran \`/aidlc --help\` ${SAME_TURN}\n`);
+      // A shell call whose input cannot be read is refused the same way.
+      const unreadable = runIdeStdin(dir, "terminal-command-guard", JSON.stringify({
+        session_id: "sess_bare_a",
+        hook_event_name: "PreToolUse",
+        cwd: dir,
+        tool_name: "execute_bash",
+        tool_input: "aidlc next",
+      }));
+      expect(unreadable.code, unreadable.stderr).toBe(2);
+      expect(unreadable.stderr).toBe(`AIDLC already ran \`/aidlc --help\` ${SAME_TURN}\n`);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
   });
 
-  test("a call that names no AIDLC, another chat, and a later turn are not this guard's", () => {
+  test("another chat, a later turn, and a tool that is not a shell are not this guard's", () => {
     const dir = scratchProject(true);
     try {
       submit(dir, "sess_bare_a", "/aidlc --help");
-      for (const command of ["echo done", "ls", "cat notes.md", "git status", "bun test"]) {
-        const r = shell(dir, command, "sess_bare_a");
-        expect(r.code, `${command}\n${r.stderr}`).toBe(0);
-        expect(r.stderr).toBe("");
-      }
-      const pwsh = shell(dir, "Write-Output done", "sess_bare_a", "execute_pwsh");
-      expect(pwsh.code, pwsh.stderr).toBe(0);
-      expect(pwsh.stderr).toBe("");
+      const read = runIdeStdin(dir, "terminal-command-guard", JSON.stringify({
+        session_id: "sess_bare_a",
+        hook_event_name: "PreToolUse",
+        cwd: dir,
+        tool_name: "read_file",
+        tool_input: { path: "notes.md" },
+      }));
+      expect(read.code, read.stderr).toBe(0);
+      expect(read.stderr).toBe("");
       // Another chat in the same folder: its bare next is its own.
       submit(dir, "sess_bare_b", "carry on with the work");
-      const other = shell(dir, "bun .kiro/tools/aidlc.ts engine orchestrate next", "sess_bare_b");
-      expect(other.code, other.stderr).toBe(0);
+      for (const command of ["bun .kiro/tools/aidlc.ts engine orchestrate next", "ls"]) {
+        const other = shell(dir, command, "sess_bare_b");
+        expect(other.code, `${command}\n${other.stderr}`).toBe(0);
+      }
       // The first chat's next message is a new turn.
       submit(dir, "sess_bare_a", "carry on with the work");
-      const later = shell(dir, "bun .kiro/tools/aidlc.ts engine orchestrate next", "sess_bare_a");
-      expect(later.code, later.stderr).toBe(0);
+      for (const command of ["bun .kiro/tools/aidlc.ts engine orchestrate next", "ls"]) {
+        const later = shell(dir, command, "sess_bare_a");
+        expect(later.code, `${command}\n${later.stderr}`).toBe(0);
+      }
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

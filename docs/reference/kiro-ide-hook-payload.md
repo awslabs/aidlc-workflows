@@ -316,37 +316,31 @@ The two hooks after a shell command run the same way as one,
   session identity use the host-derived identity or the retained session, with
   an explicit legacy bucket when neither is available. The 0.12 camelCase
   fallback reads the command from `toolArgs.command`.
-- **An AIDLC call after a terminal command**: in the same turn, the fallback
+- **A shell call after a terminal command**: in the same turn, the fallback
   above also refuses a terminal command typed again through the shell, a
   lowering guard setting, and a call naming the tool files `aidlc-orchestrate.ts`,
   `aidlc-utility.ts` or `aidlc-knowledge.ts`. Once a terminal command has run for a
-  chat's turn, the agent is told to relay its output and call no AIDLC tool
-  that turn, and `terminal-command-guard` also refuses (exit 2, one line on
-  stderr saying to relay the output and end the turn) that chat's every other
-  shell call whose text, with line continuations, quotes (also bash's `$'...'`
-  and `$"..."`) and escapes (backslash, PowerShell's backtick, cmd.exe's caret)
-  taken out, holds `aidlc`: the dispatcher
-  `.kiro/tools/aidlc.ts`, the native `aidlc`, `aidlc.cmd` or `aidlc.exe`, with
-  or without arguments, for any project, and also an `echo`, `grep` or `cat`
-  that names it. No shell reading decides which such call is harmless: a `next`
-  can hide behind a chain, a redirection, a subshell, a wrapper, a shell given a
-  script, or a project the shell picks at run time. A dispatcher name the shell
-  builds by expansion (a variable, braces, a glob, an escape inside `$'...'`, an
-  alias), a script written to a file and run by a later call, and
-  a script the project already has that runs the dispatcher (an npm or make
-  target, a git or shell alias) are not seen. A turn moves on only with the
+  chat's turn, the agent is told to relay its output and stop, and
+  `terminal-command-guard` also refuses (exit 2, a short reason on stderr that
+  quotes the terminal command and says to relay the output and end the turn)
+  that chat's every other shell call in that turn, also one whose tool input
+  cannot be read: the dispatcher or the native `aidlc` with any arguments, for any
+  project, a name the shell builds at run time, and a call that names no AIDLC
+  at all. No reading of the command decides which call is harmless. Tools that
+  are not a shell are not this check's. A turn moves on only with the
   person's message (`UserPromptSubmit`): an agent run Kiro starts without one
-  keeps the turn, and the person's next message releases it. The same-turn AIDLC check judges only the chat the payload's `session_id`
-  names, against a turn that chat has recorded: with no session in the payload,
-  another chat's latch, or a later turn it refuses nothing. The turn count is
-  read only as a whole number, and whenever it has to start again (missing or
-  unreadable) the latch beside it is dropped; when the latch cannot be removed,
-  the new count starts past its turn. A count that cannot be written takes the
-  latch with it. Only when the count cannot be written and the latch cannot be
-  removed does the latch keep matching, until one of them can be changed again
-  or the person opens a new chat. The terminal-command refusal
-  still follows the host's or the retained session when a payload names none.
-  The engine's own
+  keeps the turn, and the person's next message releases it. The same-turn
+  shell check judges only the chat the payload's `session_id` names, against a
+  turn that chat has recorded: with no session in the payload, another chat's
+  latch, or a later turn it refuses nothing. The turn count is read only as a
+  whole number, and whenever it has to start again (missing or unreadable) the
+  latch beside it is dropped; when the latch cannot be removed, the new count
+  starts past its turn. A count that cannot be written takes the latch with
+  it, so that turn's terminal command leaves no latch and its shell calls run.
+  Only when the count cannot be written and the latch cannot be removed does
+  the latch keep matching, until one of them can be changed again or the
+  person opens a new chat. The terminal-command refusal still follows the
+  host's or the retained session when a payload names none. The engine's own
   guard for this (Branch 0) reads only the agent-v1 project-wide latch, not
   these per-chat ones: the engine could tell one chat's latch from another's
   only through process ancestry, and the chats of one Kiro IDE window share a
