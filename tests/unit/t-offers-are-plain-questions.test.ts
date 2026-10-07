@@ -28,7 +28,7 @@ const OWNED = [
   "Say 'back to ",
   "say 'back to ",
   "Say \"go back to the approved plan\" to undo",
-  "Type \\`${entrySkillInvocation()} config set ${guardFenceConfigKey",
+  "off\\` yourself ",
 ];
 // A break-glass override the person must type in their own words on purpose.
 const KEPT = ["Last resort, human only: type "];
