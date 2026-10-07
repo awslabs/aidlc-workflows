@@ -36,11 +36,13 @@ afterEach(() => {
   while (projects.length) cleanupTestProject(projects.pop());
 });
 
-const STAGE_VALIDITY_NOTE =
-  "Say stage_validity.warning to the person word for word if you have not said it in this chat yet, then carry " +
-  "on with this step; it is about their own change, so never say who made it or call it stray or a mistake, and " +
-  "a yes in their next reply redoes that stage.";
-const CHANGE_NOTICES_NOTE = "Say each change_notices line to the person once, word for word, and add nothing about why.";
+const STAGE_VALIDITY_SAY =
+  "Say stage_validity.warning to the person word for word, as your own sentence with nothing in front of it, if " +
+  "you have not said it in this chat yet, then carry on with this step; it is about their own change, so never say " +
+  "who made it or call it stray or a mistake.";
+const CHANGE_NOTICES_NOTE =
+  "Say each change_notices line to the person once, word for word, as your own sentence with nothing in front of " +
+  "it, and add nothing about why.";
 const QUESTION_NOTE =
   "This question is for the person, not for you: show it to them with its choices as given, end your turn, and " +
   "act only on their reply.";
@@ -148,7 +150,10 @@ describe("t-rules-travel-with-steps: a person-facing field says what to do with 
     editTeamPractices(proj);
     const directive = next(proj);
     expect(directive.stage_validity, JSON.stringify(directive).slice(0, 400)).toBeDefined();
-    expect(directive.stage_validity_note).toBe(STAGE_VALIDITY_NOTE);
+    const note = String(directive.stage_validity_note);
+    expect(note.startsWith(STAGE_VALIDITY_SAY)).toBe(true);
+    // A yes to the redo question reopens the stage the warning names.
+    expect(note).toMatch(/ If their next reply says yes to it, run `[^`]*aidlc-orchestrate\.ts next --stage practices-discovery` and follow the step it returns\.$/);
   });
 
   test("with nothing changed there is no warning and no sentence for it", () => {
@@ -203,7 +208,12 @@ describe("t-rules-travel-with-steps: the notes and their checks", () => {
       earliest_affected_stage: "requirements-analysis", warning: "requirements.md changed after Requirements Analysis finished.",
     };
     const print = add({ kind: "print", message: "x", stage_validity: stageValidity, change_notices: ["A line."] }, "bun x.ts");
-    expect(print.stage_validity_note).toBe(STAGE_VALIDITY_NOTE);
+    expect(print.stage_validity_note).toBe(
+      `${STAGE_VALIDITY_SAY} If their next reply says yes to it, run \`bun x.ts next --stage requirements-analysis\` and follow the step it returns.`,
+    );
+    // An advisory that names no stage has nothing to redo.
+    const unnamed = add({ kind: "print", message: "x", stage_validity: { ...stageValidity, earliest_affected_stage: null } }, "bun x.ts");
+    expect(unnamed.stage_validity_note).toBe(STAGE_VALIDITY_SAY);
     expect(print.change_notices_note).toBe(CHANGE_NOTICES_NOTE);
     expect(print.question_note).toBeUndefined();
     expect(add({ kind: "print", message: "x" }, "bun x.ts")).toEqual({ kind: "print", message: "x" });
@@ -218,7 +228,7 @@ describe("t-rules-travel-with-steps: the notes and their checks", () => {
   });
 
   test("the validator refuses a note without its field", () => {
-    expect(validateDirective({ kind: "print", message: "x", stage_validity_note: STAGE_VALIDITY_NOTE }).valid).toBe(false);
+    expect(validateDirective({ kind: "print", message: "x", stage_validity_note: STAGE_VALIDITY_SAY }).valid).toBe(false);
     expect(validateDirective({ kind: "print", message: "x", change_notices_note: CHANGE_NOTICES_NOTE }).valid).toBe(false);
     expect(validateDirective({ kind: "print", message: "x", question_note: QUESTION_NOTE }).valid).toBe(false);
     expect(validateDirective({ kind: "print", message: "x", change_notices: ["A line."], change_notices_note: CHANGE_NOTICES_NOTE }).valid).toBe(true);

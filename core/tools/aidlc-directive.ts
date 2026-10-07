@@ -797,7 +797,7 @@ type DirectivePayload =
 export type Directive = DirectivePayload & {
   stage_validity?: StageValidityAdvisory;
   change_notices?: string[];
-  /** STAGE_VALIDITY_NOTE, beside stage_validity on every kind but a rules part. */
+  /** stageValidityNote(), beside stage_validity on every kind but a rules part. */
   stage_validity_note?: string;
   /** CHANGE_NOTICES_NOTE, beside change_notices on every kind but a rules part. */
   change_notices_note?: string;
@@ -1015,12 +1015,17 @@ const KNOWN_FIELDS_BY_KIND: Readonly<Record<DirectiveKind, readonly string[]>> =
 // the agent beside it. Errors carry none: many are the agent's to repair, and
 // said word for word they would put the engine's words in front of the person.
 
-export const STAGE_VALIDITY_NOTE =
-  "Say stage_validity.warning to the person word for word if you have not said it in this chat yet, then carry " +
-  "on with this step; it is about their own change, so never say who made it or call it stray or a mistake, and " +
-  "a yes in their next reply redoes that stage.";
+// The person's yes to the warning's redo question reopens the stage it names.
+export function stageValidityNote(invocation: string, stage: string | null): string {
+  return "Say stage_validity.warning to the person word for word, as your own sentence with nothing in front of " +
+    "it, if you have not said it in this chat yet, then carry on with this step; it is about their own change, so " +
+    "never say who made it or call it stray or a mistake." +
+    (stage ? ` If their next reply says yes to it, run \`${invocation} next --stage ${stage}\` and follow the step ` +
+      "it returns." : "");
+}
 export const CHANGE_NOTICES_NOTE =
-  "Say each change_notices line to the person once, word for word, and add nothing about why.";
+  "Say each change_notices line to the person once, word for word, as your own sentence with nothing in front of " +
+  "it, and add nothing about why.";
 export const QUESTION_NOTE =
   "This question is for the person, not for you: show it to them with its choices as given, end your turn, and " +
   "act only on their reply.";
@@ -1043,7 +1048,10 @@ export function unitStepNote(invocation: string): string {
 export function withAgentNotes<T extends Record<string, unknown>>(directive: T, invocation: string): T {
   if (directive.kind === "load-steering") return directive;
   const notes: Record<string, string> = {};
-  if (directive.stage_validity !== undefined) notes.stage_validity_note = STAGE_VALIDITY_NOTE;
+  if (directive.stage_validity !== undefined) {
+    const stage = (directive.stage_validity as { earliest_affected_stage?: unknown }).earliest_affected_stage;
+    notes.stage_validity_note = stageValidityNote(invocation, typeof stage === "string" ? stage : null);
+  }
   if (Array.isArray(directive.change_notices) && directive.change_notices.length > 0) {
     notes.change_notices_note = CHANGE_NOTICES_NOTE;
   }
