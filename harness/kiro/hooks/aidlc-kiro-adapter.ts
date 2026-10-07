@@ -347,10 +347,23 @@ function anchoredArgs(prompt: string): string | null {
 // word and runs none. Single quotes are literal in sh and in PowerShell alike;
 // a word with an apostrophe takes double quotes when nothing in it expands
 // there, and otherwise this host's own shell form.
+// A word sh reads as typed. On Windows the call runs in PowerShell, whose
+// argument mode reads a comma as a list, a leading `@` as splatting, a leading
+// `#` as a comment and a number-like word (1kb, 0x10) as a number, so there
+// only a plain word, an option or a plain number stays bare; every other word
+// is single-quoted, which PowerShell reads literally.
+const BARE_WORD = process.platform === "win32"
+  ? /^(?:--?)?[A-Za-z_][A-Za-z0-9_.:/=+%-]*$|^[0-9]+(?:\.[0-9]+)?$/
+  : /^[A-Za-z0-9_@%+=:,./-]+$/;
 function forwardedArgs(raw: string, args: string[]): string {
-  if (/^[A-Za-z0-9_@%+=:,./ \t"-]*$/.test(raw)) return raw;
+  if (
+    /^[A-Za-z0-9_@%+=:,./ \t"-]*$/.test(raw) &&
+    (process.platform !== "win32" || args.every((arg) => BARE_WORD.test(arg)))
+  ) {
+    return raw;
+  }
   const quote = (arg: string): string => {
-    if (/^[A-Za-z0-9_@%+=:,./-]+$/.test(arg)) return arg;
+    if (BARE_WORD.test(arg)) return arg;
     if (!arg.includes("'")) return `'${arg}'`;
     if (!/["`$\\]/.test(arg)) return `"${arg}"`;
     return `'${arg.replaceAll("'", process.platform === "win32" ? "''" : "'\\''")}'`;

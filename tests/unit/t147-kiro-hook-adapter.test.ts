@@ -2722,7 +2722,9 @@ describe("t147 Kiro CLI reads what the person typed from the expanded skill body
       const words = ["fix", "it,", "it's", "broken", "and", "don't", "touch", "the", "users'", "files"];
       const latch = join(dir, "aidlc", ".aidlc-forwarding-latch");
       expect(JSON.parse(readFileSync(latch, "utf8")).args).toEqual(words);
-      const quoted = `fix it, "it's" broken and "don't" touch the "users'" files`;
+      // PowerShell reads a bare comma as a list, so Windows quotes "it," too.
+      const comma = process.platform === "win32" ? "'it,'" : "it,";
+      const quoted = `fix ${comma} "it's" broken and "don't" touch the "users'" files`;
       expect(r.stdout).toContain(`engine orchestrate next ${quoted}\n`);
       // A shell reads that call as the same words, so running it as told works.
       // Windows runs the call in PowerShell (the case below); its hook job also
@@ -2750,7 +2752,7 @@ describe("t147 Kiro CLI reads what the person typed from the expanded skill body
       const said = String.raw`don't touch the users' files it's $5 off, the error says "can't open C:\temp\x"`;
       const r = runAdapter(dir, "verb-intercept", { cwd: dir, session_id: session, prompt: expanded(said) }, [], env);
       expect(r.code, r.stderr).toBe(0);
-      const quoted = String.raw`"don't" touch the "users'" files "it's" '$5' off, the error says 'can''t open C:\temp\x'`;
+      const quoted = String.raw`"don't" touch the "users'" files "it's" '$5' 'off,' the error says 'can''t open C:\temp\x'`;
       expect(r.stdout).toContain(`engine orchestrate next ${quoted}\n`);
       const pwsh = spawnSync("powershell", ["-NoProfile", "-NonInteractive", "-Command", `& { foreach ($a in $args) { $a } } ${quoted}`], { encoding: "utf-8" });
       expect(pwsh.stdout.trimEnd().split(/\r?\n/)).toEqual(["don't", "touch", "the", "users'", "files", "it's", "$5", "off,", "the", "error", "says", String.raw`can't open C:\temp\x`]);
