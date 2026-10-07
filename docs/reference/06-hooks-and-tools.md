@@ -904,7 +904,7 @@ chat that runs the command provably holds that exact text
 |---|---|---|
 | Kiro CLI (`kiro`, 2.0 agent engine) | the conductor agent's `resources` glob covers the stage's files; the host sends them with every request, so an edit is seen at once | session start (agentSpawn) |
 | opencode | `opencode.json` `instructions` covers the stage's files; same per-request reload | session start (first chat message) |
-| Claude Code | every file the `.claude/rules/aidlc.md` import names still has the hash recorded at the chat's last load (startup, resume, clear, compact or fork); a mid-chat edit is not reloaded by the host, and a resume or fork after an edit can carry older copies | SessionStart |
+| Claude Code | every memory file Claude's import names (the @-import stub beside CLAUDE.md) still has the hash recorded at the chat's last load (startup, resume, clear, compact or fork); a mid-chat edit is not reloaded by the host, and a resume or fork after an edit can carry older copies | SessionStart |
 | Codex | this thread was handed the bundle, no SessionStart or PreCompact ran since, and the thread's rollout shows no `compacted` entry after it | the engine, when a run-stage carries the text |
 
 The command must also run inside that tool's chat (its own variable:
