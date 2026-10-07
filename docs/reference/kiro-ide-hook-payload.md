@@ -197,7 +197,7 @@ The two hooks after a shell command run the same way as one,
   so agent-authored result prose cannot misattribute the audit row — and falls
   back to the `**Reviewer:**` / `**Agent:**` result marker from #459, which is
   the only identity signal on the 0.12 `invoke_sub_agent` shape.
-- **review-freeze / state-transition-guard** — each runs in the
+- **review-freeze / state-transition-guard**: each runs in the
   `aidlc-guard-tool-call` card with its own matcher, which names exactly the write and shell tools the adapter
   forwards (`write`, `fs_write`, `create_file`, `str_replace`, `fs_append`,
   `delete_file`, `apply_patch`, `edit_file`, `execute_bash`, `execute_pwsh`,
