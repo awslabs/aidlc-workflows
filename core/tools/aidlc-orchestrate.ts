@@ -297,6 +297,7 @@ import {
   isBareContinuationPhrase,
   sortAttemptEvents,
   resolveBoltDag,
+  unitsBlockRepair,
   type BoltDagResolution,
   resolveCeremony,
   resolveProjectDir,
@@ -8288,8 +8289,8 @@ function routeNext(args: string[], projectDir: string | undefined): void {
             ? resolveBoltBatches(pd, routingEvidenceFor(pd, stateContent))
             : null;
           if (dag?.state === "malformed") {
-            emit(errorDirective(
-              `Cannot resolve the gate Unit for stage "${currentSlug}": ${dag.reason} (${dag.detail}).`,
+            emit(printDirective(
+              `${unitsBlockRepair(dag.reason, dag.detail)} Then run \`${aidlcToolInvocation("orchestrate")} next\`.`,
             ));
             return;
           }
@@ -9653,11 +9654,9 @@ function emitPerUnitRunStage(
       );
       return;
     case "malformed":
-      emit({
-        kind: "error",
-        message:
-          `Cannot iterate units for stage "${node.slug}": inception/units-generation/unit-of-work-dependency.md is authoritative for the unit set and is ${r.reason} (${r.detail}). Fix the fenced units block in that artifact, then run next again.`,
-      });
+      emit(printDirective(
+        `${unitsBlockRepair(r.reason, r.detail)} Then run \`${aidlcToolInvocation("orchestrate")} next\`.`,
+      ));
       return;
     case "ok":
       break;
@@ -12841,15 +12840,25 @@ function checkStageCompletionEvidence(
     }
   }
 
+  // Construction walks its Units from Units Generation's units block, so the
+  // stage's gate never opens over a block the engine cannot read: the agent
+  // writes it, then runs the same report again.
+  const reportAgain = retry ??
+    `\`${renderEngineInvocation({ route: "orchestrate", args: ["report", "--stage", slug, "--result", "awaiting-approval"] })}\` again`;
+  if (slug === "units-generation") {
+    const dag = resolveBoltDag(pd);
+    if (dag.state === "malformed") {
+      return { ok: false, step: true, message: `${unitsBlockRepair(dag.reason, dag.detail)} Then run ${reportAgain}.` };
+    }
+  }
+
   if (isPerUnit(node) && !stageLevelPerUnit && !settledSwarm) {
     const resolution = boltResolution ?? resolveBoltBatches(pd);
     if (resolution.state === "malformed") {
       return {
         ok: false,
-        message:
-          `Stage "${slug}" is per-unit (for_each: unit-of-work) but the unit list cannot be resolved: ` +
-          `inception/units-generation/unit-of-work-dependency.md is ${resolution.reason} ` +
-          `(${resolution.detail}). Fix the fenced units block before entering approval.`,
+        step: true,
+        message: `${unitsBlockRepair(resolution.reason, resolution.detail)} Then run ${reportAgain}.`,
       };
     }
     if (resolution.state === "ok") {

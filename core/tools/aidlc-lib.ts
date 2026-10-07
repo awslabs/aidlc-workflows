@@ -40315,6 +40315,20 @@ export function parseBoltDag(body: string): BoltDagParse {
   return { ok: true, units: edges, batches };
 }
 
+// The step for a units block the engine cannot read: the exact defect and the
+// shape it reads. Construction walks its Units from this block, so it is the
+// agent's to write from the Units Units Generation already lists, never the
+// person's. Callers add the command to run again.
+export function unitsBlockRepair(reason: string, detail: string): string {
+  return (
+    `The units block in inception/units-generation/unit-of-work-dependency.md cannot be read (${reason}: ${detail}), ` +
+    "and Construction walks its Units from it. Write it from the Units in unit-of-work.md and the dependencies " +
+    "that file describes: one fenced yaml block that starts with `units:` and has, for each Unit, " +
+    "`- name: <unit>` and `depends_on: [<the Units it depends on>]` (`[]` for none), plus " +
+    "`kind: service|spec|ui|packaging|library` when its kind is known."
+  );
+}
+
 export type BoltDagResolution =
   | {
       state: "ok";

@@ -131,6 +131,7 @@ import {
   renderReviewVerdictCommand,
   REVIEW_RECORD_MAX_BYTES,
   resolveBoltDag,
+  unitsBlockRepair,
   reviewAttemptAccounting,
   reviewAttemptEventMatchesCurrentClaim,
   reviewAttemptWindow,
@@ -2971,6 +2972,15 @@ function handleReview(args: string[]): void {
   if (flags.verdict === undefined) {
     if (!flags.iteration || !/^[1-9][0-9]*$/.test(flags.iteration)) {
       error("Starting a review requires --iteration <positive integer>.");
+    }
+    // Construction walks its Units from Units Generation's units block, so a
+    // block the engine cannot read is fixed before the review, while the
+    // document can still change.
+    if (flags.stage === "units-generation" && flags.single !== "true") {
+      const dag = resolveBoltDag(pd, intent, space);
+      if (dag.state === "malformed") {
+        error(`${unitsBlockRepair(dag.reason, dag.detail)} Then request this review again.`);
+      }
     }
     const iteration = Number(flags.iteration);
     fields.Iteration = flags.iteration;

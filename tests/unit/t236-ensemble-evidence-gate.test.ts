@@ -1126,8 +1126,9 @@ describe("t236 ensemble evidence gate — mob approval requires contribution fil
     );
     const graph = nonSkeletonSwarmGraph(proj);
     const d = report(proj, { AIDLC_STAGE_GRAPH: graph });
-    expect(d.kind).toBe("error");
-    expect(d.message).toContain("unit list cannot be resolved");
+    // The agent's step: repair the block, then the same report.
+    expect(d.kind).toBe("print");
+    expect(d.message).toContain("unit-of-work-dependency.md cannot be read");
   });
 
   test("a fully converged autonomous swarm is exempt from main-tree evidence", () => {

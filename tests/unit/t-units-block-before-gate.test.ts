@@ -204,7 +204,7 @@ describe("t-units-block-before-gate: a block that breaks after approval is the a
   for (const [label, broken] of Object.entries(BROKEN)) {
     test(`block ${label}: Construction's next names the repair and next, never an error for the person`, () => {
       const proj = project("functional-design", null, broken.body);
-      const env = { ...process.env, AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD: "1" };
+      const env: NodeJS.ProcessEnv = { ...process.env, AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD: "1" };
       delete env.AWS_AIDLC_DEFAULT_SCOPE;
       const d = runOrchestrateNext(ORCH, proj, [], { env }).directive ?? {};
       expect(d.kind, JSON.stringify(d)).toBe("print");
