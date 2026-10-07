@@ -945,7 +945,14 @@ This stage has a **two-part structure**: planning followed by generation.
    work; the conductor reads it and records their choice with `answer
    --checkpoint plan-approval`, which takes the fingerprint of the files as they
    are then and writes the answer, the receipt, and the `PLAN_APPROVAL_RECORDED`
-   row with the person's words. The
+   row with the person's words. The person may instead write their answer on the
+   questions file's own `[Answer]:` line, as that file invites, and say so: the
+   engine never overwrites an answer they wrote there while the same question
+   stands, and on an exact "done" it reads that line and records an answer that
+   is one of the choices, the same way it records an exact pick typed in chat,
+   naming the file in one line for the conductor. When the person says it in
+   their own words instead ("I put my answer in the file"), the conductor reads
+   the line and records the choice they made. The
    next `next` returns the run-stage with `plan_approval.status: "approved"`
    (build), `revise` (with the person's words), `repair` (a Testing Contract an
    edit broke), or `plan` (finish the files). In edit mode the person changes the

@@ -446,6 +446,7 @@ import {
   publishPlanApprovalAsk,
   publishPlanApprovalSkip,
   routeCodeGenerationPlanApproval,
+  saidDone,
   settleBuiltPlanReviews,
   withBuiltPlanReviews,
 } from "./aidlc-plan-approval-ask.ts";
@@ -8128,8 +8129,10 @@ function routeNext(args: string[], projectDir: string | undefined): void {
             "Ask what they want changed when they did not say."));
         return;
       }
-      // Exactly one of its choices, already recorded from their reply.
-      if (planQuestion.answered && planQuestion.isChoice) {
+      // Exactly one of its choices, already recorded from their reply; or they
+      // answered on the questions file's own `[Answer]:` line and said done,
+      // which is recorded the same way.
+      if (planQuestion.answered && (planQuestion.isChoice || saidDone(args.join(" ")))) {
         emit(printDirective(
           "The person's reply answered the code plan question, and it is recorded. Run bare " +
             `\`${aidlcToolInvocation("orchestrate")} next\`: it carries out their choice.`,

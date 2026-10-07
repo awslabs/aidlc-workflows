@@ -236,6 +236,20 @@ describe("an approved code plan is built as it is", () => {
         "do not rewrite it or the test instructions; go to Step 4.",
     );
   });
+
+  // The questions file invites the person to answer on its `[Answer]:` line and
+  // say done. A tool reads that line on an exact "done"; every other way they
+  // say it is the conductor's to read, so the stage rule has to tell it to look
+  // there whatever words they use. No unit test can drive the conductor's
+  // reading, so the sentence itself is pinned (and a live run exercises it).
+  test("the stage file sends the conductor to the questions file in the person's own words", () => {
+    expect(flat("core/aidlc-common/stages/construction/code-generation.md")).toContain(
+      "When the person says they answered in the file, in whatever words they use " +
+        "(\"done\", \"I put my answer in the file\", \"my answer is in the questions file\"), " +
+        "their answer is on the `[Answer]:` line of `questions_path`: read it and record the choice they made, " +
+        "exactly as you would a reply typed in chat.",
+    );
+  });
 });
 
 describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () => {

@@ -501,6 +501,22 @@ function promptSha256(questions: string): string {
     .digest("hex");
 }
 
+// The person's own answer on the `[Answer]:` line, as the file's instructions
+// invite ("write your answer after `[Answer]:` and say done"). Empty when they
+// have written nothing there, and never the engine's own recorded answer.
+function answerWrittenInFile(questions: string): string {
+  const line = /^\[Answer\]:[ \t]*(.*)$/m.exec(questions);
+  return line === undefined || line === null ? "" : line[1].trim();
+}
+
+// The same question, with only the person's written answer differing from what
+// the engine would write now: the question stands, so their words stay.
+function onlyTheirAnswerDiffers(onDisk: string, template: string): boolean {
+  if (!onDisk.trim() || !answerWrittenInFile(onDisk)) return false;
+  const blank = (text: string) => text.replace(/^\[Answer\]:[ \t]*.*$/gm, "[Answer]:");
+  return blank(onDisk) === blank(template);
+}
+
 // --- Routing: plan, ask, or build --------------------------------------------
 
 type TargetState =
@@ -826,7 +842,14 @@ export function publishPlanApprovalAsk(projectDir: string, directive: PlanApprov
         source?.fingerprint ?? "unbindable",
         "",
       );
-      if (readText(path) !== content) writeFileAtomic(path, content);
+      const onDisk = readText(path);
+      if (onDisk === content) return;
+      // The file invites the person to answer on its `[Answer]:` line. While
+      // the same question stands, their answer is the only difference from the
+      // template, so it stays: the engine never erases what they wrote. A new
+      // question, or a file changed in any other way, is written as usual.
+      if (same && onlyTheirAnswerDiffers(onDisk, content)) return;
+      writeFileAtomic(path, content);
     });
   });
 }
@@ -1253,6 +1276,71 @@ export function notePlanApprovalAskReply(
       }
     }
     return true;
+  });
+}
+
+/**
+ * The person's message is exactly "done", the word the questions file's own
+ * instructions name. That is syntax, like an exact option pick, so a tool may
+ * act on it; every other way of saying it ("I put my answer in the file") is
+ * the agent's to read, and the stage rule tells it to read the file then.
+ */
+export function saidDone(words: string): boolean {
+  return /^["'`*_\s]*done[.!]*["'`*_\s]*$/i.test(words ?? "");
+}
+
+/**
+ * The hook's second part while the engine's Plan Approval question is open: the
+ * person wrote their answer on the questions file's `[Answer]:` line, as the
+ * file invites, and said done. An exact choice there is recorded now, through
+ * the same path an exact pick typed in chat takes; anything else they wrote is
+ * the agent's to read, and the line says where it is. Null when there is
+ * nothing to say. Call after the turn's HUMAN_TURN and kept reply are on
+ * record, so the recorded answer stands on their own turn.
+ */
+export function notePlanApprovalFileAnswer(
+  projectDir: string,
+  session: string,
+  words: string,
+): string | null {
+  if (!saidDone(words)) return null;
+  return withAuditLock(projectDir, () => {
+    const open = currentPlanApprovalAsk(projectDir);
+    // Edit mode is the agent's to read: the person may have changed the plan
+    // files too, and the file can still hold the engine's own earlier answer.
+    if (open === null || open.record.mode !== "ask") return null;
+    const { record } = open;
+    const written = record.targets.map((target) => ({
+      unit: target.unit,
+      path: join(codeGenerationRecordDir(projectDir, target.unit), QUESTIONS_FILE),
+    })).map((target) => ({
+      ...target,
+      answer: answerWrittenInFile(readText(target.path)),
+    })).filter((target) => target.answer !== "" && !isNonAnswer(target.answer));
+    if (written.length === 0) return null;
+    const where = written.map((target) => toPosix(relative(projectDir, target.path))).join(", ");
+    const answers = [...new Set(written.map((target) => target.answer))];
+    const pick = answers.length === 1 ? exactOptionPick(answers[0], record.choices) : null;
+    const choice: PlanApprovalAnswerChoice | null = pick === 0 ? "approve"
+      : pick === 1 && record.targets.length === 1 ? "request-changes"
+      : pick === 2 ? "edit"
+      : null;
+    // Every plan the question asks about needs its own written answer before one
+    // choice can stand for all of them.
+    if (choice === null || written.length !== record.targets.length) {
+      return `AIDLC Plan Approval: the person wrote an answer in ${where}: ${
+        answers.map((answer) => `"${answer.slice(0, 200)}"`).join(", ")
+      }. Read it with their message and record the choice they made.`;
+    }
+    try {
+      const result = recordPlanApprovalAnswer(projectDir, session, { choice, exactPick: true });
+      return `AIDLC Plan Approval: the answer the person wrote in ${where}, "${answers[0].slice(0, 200)}", ` +
+        `is recorded. ${result.message}`;
+    } catch {
+      // Their words stay on the line; the agent reads them and records the choice.
+      return `AIDLC Plan Approval: the person wrote their answer in ${where}: "${answers[0].slice(0, 200)}". ` +
+        "Read it with their message and record the choice they made.";
+    }
   });
 }
 
@@ -1862,6 +1950,20 @@ export function requestPlanApprovalReviewNow(projectDir: string): string | null 
       delete reopened.replies;
       if (results.length > 0) reopened.results = results; else delete reopened.results;
       writePlanApprovalAsk(projectDir, reopened);
+      // The answer on each file's `[Answer]:` line was the engine's own record
+      // of the choice it is now withdrawing. Clear it, so the fresh question is
+      // answered only by what the person writes or says next, and the engine's
+      // own line is never read back to them as theirs.
+      for (const unit of looked) {
+        const path = join(codeGenerationRecordDir(projectDir, unit), QUESTIONS_FILE);
+        const questions = readText(path);
+        if (!questions.trim() || !answerWrittenInFile(questions)) continue;
+        try {
+          writeFileAtomic(path, questions.replace(/^\[Answer\]:[ \t]*.*$/m, "[Answer]:"));
+        } catch {
+          // The question is asked again either way; the file is the record.
+        }
+      }
     }
     return `Recorded that the person wants to review the plan${units.length > 0 ? ` for ${labels(units)}` : ""}. ` +
       "Run next: the plan is shown for approval before anything else is built.";
