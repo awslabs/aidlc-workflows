@@ -24856,12 +24856,20 @@ export function unitSourceFingerprint(
   manifestSha256: string,
 ): string {
   const fingerprint = `sha256:${sourceListingSha256(serializeUnitSourceListing(listing, claimModel, manifestSha256))}`;
-  // The same listing bound to the manifest's raw bytes, as recorded before
-  // line endings were read as LF.
+  // The same listing over raw bytes (the files' and the manifest's), as
+  // recorded before line endings were read as LF.
   const rawManifest = rawFingerprintForm(manifestSha256);
-  if (rawManifest !== null) {
+  let rawListing: Map<string, string> | null = null;
+  for (const [key, entry] of listing) {
+    const raw = rawFingerprintForm(entry);
+    if (raw === null) continue;
+    rawListing ??= new Map(listing);
+    rawListing.set(key, raw);
+  }
+  if (rawManifest !== null || rawListing !== null) {
     rememberRawFingerprint(
-      `sha256:${sourceListingSha256(serializeUnitSourceListing(listing, claimModel, rawManifest))}`, fingerprint,
+      `sha256:${sourceListingSha256(serializeUnitSourceListing(rawListing ?? listing, claimModel, rawManifest ?? manifestSha256))}`,
+      fingerprint,
     );
   }
   return fingerprint;
