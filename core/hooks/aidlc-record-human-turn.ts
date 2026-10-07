@@ -60,6 +60,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   addPendingPersonLines,
+  carryPendingPersonLines,
   clearSessionIntentHandoff,
   emptyPickerResult,
   enterHookWorkflow,
@@ -517,8 +518,8 @@ try {
         // companion flag, a rule the team holds) stays exactly as it was: the
         // agent reads it and answers the person itself.
         notes.push(outcome.applied
-          ? `AIDLC Guard Policy: ${lines.join(" ")} The engine says this to the person with its next step, so you ` +
-            "need not repeat it; the switch is already applied, so never run a setter for it."
+          ? `AIDLC Guard Policy: ${lines.join(" ")} Say that line to the person in your reply, in those words; the ` +
+            "switch is already applied, so never run a setter for it."
           : `AIDLC Guard Policy: ${lines.join(" ")}`);
         if (outcome.applied) {
           const session = sessionId;
@@ -669,6 +670,14 @@ try {
       }
     }
     markHumanTurn(projectDir);
+    // This turn is now the one lines are keyed to. Anything the person has not
+    // heard yet follows them into it: a line queued for the turn before is still
+    // about what they asked for, and they may have answered a question the agent
+    // asked of its own accord in between.
+    if (sessionId) {
+      const session = sessionId;
+      forThePerson.push(() => carryPendingPersonLines(projectDir, session));
+    }
   }
 } catch {
   // Non-fatal — a mint failure must never block the human's turn.

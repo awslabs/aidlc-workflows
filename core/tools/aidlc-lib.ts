@@ -5840,9 +5840,11 @@ export function takeSessionSelectionNotice(projectDir: string, sessionId: string
 // through without speaking (the print that creates the work, the reply to
 // "new project or existing code"). They are kept for this chat and said, in
 // order, with the next step the agent speaks from, then cleared. They belong to
-// the person's current turn: a newer prompt on the selected work, or an age
-// past PENDING_PERSON_LINES_MAX_AGE_MS when no prompt hook ran, drops them, so
-// a line never surfaces in a later turn or another chat. The same file keeps,
+// the person's current turn, and a line still waiting when that turn ends is
+// carried into the next one (carryPendingPersonLines, from the prompt hook and
+// from creation), so one the person has not heard yet is not lost because they
+// answered something in between; an age past PENDING_PERSON_LINES_MAX_AGE_MS
+// ends the wait, and nothing surfaces in another chat. The same file keeps,
 // per work, the lines this chat has already heard that the engine would
 // otherwise repeat (a finished stage that is out of date).
 const PENDING_PERSON_LINES_MAX_AGE_MS = 15 * 60 * 1000;
@@ -5954,31 +5956,38 @@ export function pendingPersonLines(projectDir: string, sessionId: string): { lin
 }
 
 /**
- * Keep the lines waiting when this chat starts new work: they were queued for
- * the work it was on, and creation selects the new record, which would leave
- * them keyed to a work this chat is no longer reading. The chat carries on with
- * the work it just created, so the lines follow it there and its first step says
- * them (the creation print's own line among them).
+ * Keep the lines the person has not heard yet when what they are keyed to moves
+ * on: this chat starts new work (creation selects the new record), or the person
+ * takes another turn before any step said them (they answered a question the
+ * agent asked of its own accord, which is how a switch line went unsaid on Kiro
+ * CLI). Either way the line is still about what they just asked for, so it
+ * follows them and the next step the agent speaks from says it. Each line keeps
+ * the time it was first queued, so the age cap still ends the wait.
  */
 export function carryPendingPersonLines(projectDir: string, sessionId: string | null): void {
   if (!sessionId) return;
   const path = pendingPersonLinesPath(projectDir, sessionId);
   if (!path || !existsSync(path)) return;
   try {
-    const raw = JSON.parse(readFileSync(path, "utf-8")) as { lines?: unknown };
-    const waiting = (Array.isArray(raw.lines) ? raw.lines : [])
-      .filter((entry): entry is PendingPersonLine =>
-        entry !== null && typeof entry === "object" && typeof (entry as PendingPersonLine).line === "string")
-      .map((entry) => entry.line);
+    const raw = JSON.parse(readFileSync(path, "utf-8")) as { work?: unknown; lines?: unknown; said?: unknown };
+    const now = Date.now();
+    const waiting = (Array.isArray(raw.lines) ? raw.lines : []).filter((entry): entry is PendingPersonLine =>
+      entry !== null && typeof entry === "object" &&
+      typeof (entry as PendingPersonLine).line === "string" &&
+      typeof (entry as PendingPersonLine).at === "number" &&
+      now - (entry as PendingPersonLine).at <= PENDING_PERSON_LINES_MAX_AGE_MS);
     if (waiting.length === 0) return;
     const { turn, work } = personTurnAndWork(projectDir);
-    const at = Date.now();
+    // What this chat already heard belongs to the work it heard it on.
+    const said = raw.work === work && Array.isArray(raw.said)
+      ? raw.said.filter((line): line is string => typeof line === "string")
+      : [];
     writePendingPersonLines(projectDir, path, work, {
-      lines: waiting.map((line) => ({ line, at, turn })),
-      said: [],
+      lines: waiting.map((entry) => ({ line: entry.line, at: entry.at, turn })),
+      said,
     });
   } catch {
-    // A line the person may miss never blocks creation.
+    // A line the person may miss never blocks the turn or creation.
   }
 }
 

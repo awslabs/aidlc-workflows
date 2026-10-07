@@ -254,6 +254,33 @@ describe("a check typed off with a request, routed through a second question", (
     expect(disabled.length).toBeGreaterThan(0);
   });
 
+  // The Kiro CLI live run: the agent asked its own question before running the
+  // engine's, the person answered it, and that turn dropped the line they had
+  // not heard yet. A line still waiting follows them into their next turn.
+  test("the line survives a question the agent asked in between, and the engine's own question says it", () => {
+    const { proj } = oneOpenRecord();
+    holdAtGate(proj);
+    expect(reply(proj, TYPED)).toContain(FOR_THE_REQUEST);
+    // The engine hands the words on, with no line of its own to speak yet.
+    const handedOn = next(proj, ["--guard.review-freeze", "off", "--", "fix the parser"]);
+    const request = requestIn(handedOn.directive?.message, handedOn.out);
+    // The agent asks its own question first; the person answers it. That turn is
+    // what used to drop the line before any step could say it.
+    reply(proj, "it's a separate new piece of work");
+    const routing = next(proj, ["--request", request]);
+    expect((routing.directive as { ask_type?: string } | null)?.ask_type, routing.out).toBe("new-work-routing");
+    expect(heard(proj, routing), routing.out).toContain(FOR_THE_REQUEST);
+  });
+
+  test("the note tells the agent to say the line, never that it need not", () => {
+    const { proj } = oneOpenRecord();
+    const note = reply(proj, TYPED);
+    expect(note).toContain(FOR_THE_REQUEST);
+    expect(note).toContain("Say that line to the person in your reply");
+    expect(note).toContain("never run a setter for it");
+    expect(note).not.toContain("need not repeat");
+  });
+
   test("the person hears the line with the question the engine asks about it", () => {
     const { proj } = oneOpenRecord();
     reply(proj, TYPED);
