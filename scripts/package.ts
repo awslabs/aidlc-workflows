@@ -1704,7 +1704,26 @@ function writeReleaseHarness(name: string): void {
   if (existsSync(releaseDir)) rmSync(releaseDir, { recursive: true, force: true });
   buildTree(m, releaseDir, "aidlc");
   rewriteNativeInvocations(releaseDir, m, copyRoot);
+  syncRootBlockParts(releaseDir, m);
   console.log(`[${name}] regenerated dist-release/${name}/${m.harnessDir}`);
+}
+
+// A root file's part under tools/data/root-blocks/ is that file's text, as
+// buildTree writes it. The native rewrite changes the root file (AGENTS.md's
+// native wording) and skips the part, which has no extension, so the part
+// takes the rewritten text again: config and the engine merge AI-DLC's text
+// from it, and a native install must never be told it needs bun.
+function syncRootBlockParts(outRoot: string, m: HarnessManifest): void {
+  for (const integration of m.rootIntegrations) {
+    const part = integration.policy === "managed-block"
+      ? integration.marker || basename(integration.path)
+      : copyStartsWithout(integration) || integration.policy === "json-entries"
+      ? basename(integration.path)
+      : undefined;
+    const file = join(outRoot, integration.path);
+    const dst = part === undefined ? undefined : join(outRoot, m.harnessDir, "tools", "data", "root-blocks", part);
+    if (dst !== undefined && existsSync(file) && existsSync(dst)) writeFileSync(dst, readFileSync(file));
+  }
 }
 
 // ---------------------------------------------------------------------------
