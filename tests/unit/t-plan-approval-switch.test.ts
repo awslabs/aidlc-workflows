@@ -411,7 +411,9 @@ describe("plan approval off builds the plan as written", () => {
     expect(resolvePlanApprovalSetting(proj, readFileSync(statePath, "utf-8")).source).toBe("this piece of work's settings");
     writePlan(proj);
     const build = next(proj);
-    expect(build.plan_approval.notice).toContain("Plan approval is off for this piece of work (from this piece of work's settings).");
+    expect(build.plan_approval.notice).toContain(
+      "Plan approval (you approve each code plan before it is built) is off for this piece of work (from this piece of work's settings).",
+    );
     expect(build.plan_approval.notice).not.toContain("rm -rf");
     // Saved text naming the machine switch is not the machine switch: on stays
     // on, and off still yields to a memory lock.

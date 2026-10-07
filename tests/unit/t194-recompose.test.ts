@@ -512,7 +512,7 @@ describe("t194 recompose - the jump readers honour the recomposed plan", () => {
     expect(readState(proj)).toContain("- **Unit Stage**: user-stories");
     const jr = run(proj, "aidlc-jump.ts", ["execute", "--target", "code-generation", "--direction", "forward"]);
     expect(jr.status).toBe(0);
-    expect((JSON.parse(jr.out) as { notice?: string }).notice).toContain("--stage user-stories`.");
+    expect((JSON.parse(jr.out) as { notice?: string }).notice).toContain("You can go back to User Stories any time.");
   });
 
   test("only a forward jump's instruction asks for its notice; a backward one is unchanged", () => {
@@ -657,9 +657,9 @@ describe("t194 recompose - the jump readers honour the recomposed plan", () => {
     // Behind the cursor, going back would rerun what follows: the refusal
     // names the isolated run, which runs it without touching the plan.
     const behind = directive(["--stage", "intent-capture"]);
-    expect(behind.kind).toBe("error");
-    expect(behind.message).toContain('comes before the current stage "user-stories"');
-    expect(behind.message).toContain("`/aidlc --stage intent-capture --single`");
+    expect(behind.kind).toBe("print");
+    expect(behind.message).toContain("comes before the current stage, User Stories");
+    expect(behind.message).toContain("next --stage intent-capture --single`");
     const before = readState(proj);
     const alone = directive(["--stage", "intent-capture", "--single"]) as { kind?: string; stage?: string; change_notices?: string[] };
     expect(alone.kind).toBe("run-stage");

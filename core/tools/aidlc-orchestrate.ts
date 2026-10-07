@@ -11875,7 +11875,8 @@ function skippedJumpDirective(target: string, direction: string, current: string
   return turnEndingPrint(
     `Run nothing. Tell the person in one line: "${offPlan}, and ${direction === "redo"
       ? "it is the current stage, which the plan moves past"
-      : `it comes before the current stage "${current}": going back to it would run every stage after it again`}. ` +
+      : `it comes before the current stage, ${nodeForSlug(current)?.name || current}: going back to it would run ` +
+        "every stage after it again"}. ` +
       "Do you want me to run it on its own now, leaving the plan and your progress as they are?\" " +
       `If they want that, run \`${aidlcToolInvocation("orchestrate")} next --stage ${target} --single\`.`,
   );

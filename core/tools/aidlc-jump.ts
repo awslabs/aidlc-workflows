@@ -177,7 +177,17 @@ export function forwardJumpNotice(
     .filter((name): name is string => name !== null);
   const list = names.length <= 1 ? names.join("") : `${names.slice(0, -1).join(", ")} and ${names.at(-1)}`;
   return `Moved to ${stageLabel(target, target.slug) ?? "that stage"}${list ? `; skipped ${list}` : ""}. ` +
-    `You can go back to ${stageLabel(findStageBySlug(cameFrom), cameFrom) ?? "where you were"} any time.`;
+    `You can go back to ${stageLabel(stageOrNone(cameFrom), cameFrom) ?? "where you were"} any time.`;
+}
+
+// A stage by slug, or none when the graph cannot be read: the line then says
+// the slug, as stageLabel does for a stage it does not know.
+function stageOrNone(slug: string): { slug: string; name: string; plugin?: string } | undefined {
+  try {
+    return findStageBySlug(slug);
+  } catch {
+    return undefined;
+  }
 }
 
 // A backward jump says where it moved and how to return: the forward jump back

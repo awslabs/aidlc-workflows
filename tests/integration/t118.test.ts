@@ -544,7 +544,7 @@ describe("t118 differential corpus — engine vs aidlc-jump resolve (migrated fr
       "utf-8",
     );
     const laterStep = report("--choice", "redo", "--target", "code-generation", "--every-unit");
-    expect(laterStep.kind).toBe("error");
+    expect(laterStep.kind).toBe("print");
     expect(laterStep.message).toContain("Code Generation has not run yet, so there is nothing to redo.");
     writeFileSync(statePath(p), before, "utf-8");
     // Unit by Unit, the step the Unit is on is the current one too.

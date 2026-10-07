@@ -52,3 +52,4 @@ export const GUARD_POLICY_GLOSS: Record<"strict" | "relaxed" | "off", string> = 
   off: "AI-DLC carries on with a note and skips some of its own checks",
 };
 export const SCOPE_GLOSS = "the set of stages this work runs";
+export const CHECKPOINT_GLOSS = "a stop after each Unit for you to check and approve it";

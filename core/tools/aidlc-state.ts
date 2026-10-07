@@ -1,4 +1,5 @@
 import { DEFAULT_SUBPROCESS_TIMEOUT_MS } from "./aidlc-runtime-budget.ts";
+import { CHECKPOINT_GLOSS } from "./aidlc-guard-fences.ts";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
@@ -1184,7 +1185,6 @@ function handleSetConstructionPolicy(field: string, args: string[]): void {
 // what it is now, what it was, and that it can be switched back (the person
 // changed it, so nothing waits on an answer), or that it already was so.
 // Construction checkpoints are named with what they do.
-const CHECKPOINT_GLOSS = "a stop after each Unit for you to check and approve it";
 function constructionPolicyNotice(before: string, after: string, field: string): { notice?: string } {
   const previous = getField(before, field)?.trim() ?? "";
   const value = getField(after, field)?.trim() ?? "";

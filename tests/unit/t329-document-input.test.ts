@@ -210,7 +210,7 @@ describe("t329 project-description and document-input boundaries", () => {
         "never ask the user to run a command or type a document id",
         '**SAY:** "[the `onboard_note`, word for word]". Use that id',
         "When it returns an `ask` instead, the file is git-ignored (or git could not say) and nothing was copied",
-        "Only after they say to use it anyway, run",
+        "Only after they say they want it copied anyway, run",
         "document-input --onboard --include-ignored`",
       ]) {
         expect(flat, `${file}: ${phrase}`).toContain(phrase);

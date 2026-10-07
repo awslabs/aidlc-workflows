@@ -259,13 +259,14 @@ describe("t117 jump-direction delegation (migrated from t117-orchestrate-branche
   // the engine names the isolated run instead of "change scope". resolve marks
   // the skipped target (the engine asks with --allow-skipped) and still refuses
   // it for a caller that does not.
-  test("4: jump behind the cursor to a skipped stage -> error naming the isolated run", () => {
+  test("4: jump behind the cursor to a skipped stage -> a question offering the isolated run", () => {
     const p = proj("state-mid-inception.md");
     const r = next(["--stage", "intent-capture"], p);
-    // S1: the directive is a well-formed error directive, not a stray substring.
+    // S1: the directive is a well-formed step that ends the turn on the question.
     const d = directive(r.stdout);
-    expect(d.kind).toBe("error");
-    expect(d.message).toContain('comes before the current stage "requirements-analysis"');
+    expect(d.kind).toBe("print");
+    expect(d.message).toContain("comes before the current stage, Requirements Analysis");
+    expect(d.message).toContain("Do you want me to run it on its own now");
     expect(d.message).toContain("--stage intent-capture --single");
     expect(d.message).not.toContain("change scope");
     const marked = directive(jumpResolve(["--stage", "intent-capture", "--allow-skipped"], p).stdout);

@@ -339,7 +339,7 @@ describe("t198 Branch 8: inference confirm + compose offer", () => {
     expect(d.kind).toBe("ask");
     // bugfix carries keyword "fix"; the old code would have said "feature".
     expect(String(d.question)).toContain('"bugfix"');
-    expect(String(d.question)).toContain("compose");
+    expect(String(d.question)).toContain("tailor one to this task");
   });
 
   test("rich prose (no clear hit) -> the compose offer, never a silent default", () => {

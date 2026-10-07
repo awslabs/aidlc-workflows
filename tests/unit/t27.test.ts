@@ -849,7 +849,8 @@ describe("t27 aidlc-utility scope-change", () => {
       const changed = util(["scope-change", "--scope", "mvp"], p);
       expect(changed.status, changed.out).toBe(0);
       expect(changed.out).toContain(`Skipped Market Research (${was}): mvp does not run it.`);
-      expect(changed.out).toContain("/aidlc --stage market-research --single");
+      expect(changed.out).toContain("You can still run it on its own any time.");
+      expect(changed.out).not.toContain("--single");
       expect(readFileSync(statePath(p), "utf-8")).toContain("- [S] market-research \u2014 SKIP");
       expect(auditEventCount(auditPath(p), "SCOPE_CHANGED")).toBe(1);
       expect(auditEventCount(auditPath(p), "STAGE_SKIPPED")).toBe(skipsBefore + 1);
