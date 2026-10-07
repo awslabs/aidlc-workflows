@@ -1,8 +1,7 @@
 /** Human review of a completed native swarm batch, independent of its driver. */
 import { createHash } from "node:crypto";
-import { relative } from "node:path";
 import { appendAuditEntries, appendAuditEntryUnlocked } from "./aidlc-audit.ts";
-import { loadConstructionEvidence, type ConstructionEvidence } from "./aidlc-construction-checkpoints.ts";
+import { checkpointRecordForms, loadConstructionEvidence, type ConstructionEvidence } from "./aidlc-construction-checkpoints.ts";
 import {
   activeIntentUuid,
   approvedConstructionUnits,
@@ -291,10 +290,15 @@ function snapshot(pd: string, batch: number, requested: string[], stateContent?:
       review_verdict: review ? auditBlockField(review.block, "Verdict") : null,
     };
   });
-  const fingerprint = hash({
-    version: 1, intent, record: relative(pd, root), batch, units, floor,
+  const [record, olderRecord] = checkpointRecordForms(pd, root);
+  const fingerprintFor = (recordPath: string): string => hash({
+    version: 1, intent, record: recordPath, batch, units, floor,
     workflow: workflow ? hash(workflow.block) : null, evidence,
   });
+  const fingerprint = fingerprintFor(record);
+  let olderFingerprint: string | undefined;
+  const isFingerprint = (value: string | null): boolean => value === fingerprint ||
+    (value !== null && value === (olderFingerprint ??= fingerprintFor(olderRecord)));
   const gate = latest(rows.filter((row) =>
     (row.event === "GATE_APPROVED" || row.event === "GATE_REJECTED") &&
     auditBlockField(row.block, "Checkpoint") === CHECKPOINT &&
@@ -305,7 +309,7 @@ function snapshot(pd: string, batch: number, requested: string[], stateContent?:
     auditBlockField(gate.block, "Stage") === STAGE &&
     auditBlockField(gate.block, "Intent") === intent &&
     auditBlockField(gate.block, "Units") === units.join(", ") &&
-    auditBlockField(gate.block, "Fingerprint") === fingerprint &&
+    isFingerprint(auditBlockField(gate.block, "Fingerprint")) &&
     auditBlockField(gate.block, "Run floor") === floor &&
     auditBlockField(gate.block, "Command SHA-256") === commandSha256 &&
     (auditBlockField(gate.block, "User Input") === "Approve" ||

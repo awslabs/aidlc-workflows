@@ -66,6 +66,7 @@ import {
   sortAttemptEvents,
   sourceListingChangedPaths,
   stageJumpReaches,
+  toPosix,
   unitLifecycleSnapshot,
   unitMajorConstructionStageSlugs,
   unitSkippedUnits,
@@ -177,6 +178,14 @@ export function checkpointPolicyEnabled(stateContent: string): boolean {
 
 function digest(value: unknown): string {
   return `sha256:${createHash("sha256").update(JSON.stringify(value)).digest("hex")}`;
+}
+
+// The record folder in a checkpoint fingerprint, as a path from the project
+// with forward slashes, so an approval made on one OS counts on another. Windows
+// wrote it with backslashes before, and an approval it recorded so still counts.
+export function checkpointRecordForms(projectDir: string, root: string): [string, string] {
+  const record = toPosix(relative(projectDir, root));
+  return [record, record.replaceAll("/", "\\")];
 }
 
 function checkpointName(kind: ConstructionCheckpointKind): string {
@@ -939,14 +948,21 @@ function snapshot(
   }
   if (sourceStages === 0) errors.push("No applicable stage supplies the Unit's source manifest.");
   if (errors.length !== recheckable) rereview = null;
-  const fresh = digest({
-    version: 1, intent, record: relative(projectDir, root), kind, unit,
+  const [record, olderRecord] = checkpointRecordForms(projectDir, root);
+  const fingerprintFor = (recordPath: string): string => digest({
+    version: 1, intent, record: recordPath, kind, unit,
     unit_kind: dag.unitKinds?.get(unit) ?? null,
     workflow: workflow ? digest(workflow.block) : null,
     claim: claimAttemptFields(projectDir, unit),
     stages: evidence,
   });
-  const fingerprint = fingerprintKeptOverScopeChange(rows, workflow, unit, kind, fresh, stages, approvedEvidence, floors) ?? fresh;
+  const fresh = fingerprintFor(record);
+  // Windows wrote the record folder with backslashes before: that form of the
+  // same evidence is no change to keep over a scope change, and still counts.
+  const olderFresh = fingerprintFor(olderRecord);
+  const kept = fingerprintKeptOverScopeChange(rows, workflow, unit, kind, fresh, stages, approvedEvidence, floors);
+  const fingerprint = kept !== null && kept !== olderFresh ? kept : fresh;
+  const isFingerprint = (value: string | null | undefined): boolean => value === fingerprint || value === olderFresh;
   const proofPath = proofRelativePath(unit, kind);
   const proof = readProof(root, proofPath);
   const proofFile = proof;
@@ -958,13 +974,13 @@ function snapshot(
     commandSha256 !== undefined &&
     proof.kind === kind && proof.unit === unit &&
     proof.command_sha256 === commandSha256 &&
-    proof.fingerprint === fingerprint && proof.verified === true &&
+    isFingerprint(proof.fingerprint) && proof.verified === true &&
     proof.evidence_unchanged === true && proof.exit_code === 0 &&
     proof.signal === null && proof.error === null &&
     typeof proof.finished_at === "string" && verification !== null &&
     auditBlockField(verification.block, "Run floor") === floors[stages.at(-1)!] &&
     auditBlockField(verification.block, "Verification Id") === proof.id &&
-    auditBlockField(verification.block, "Fingerprint") === fingerprint &&
+    isFingerprint(auditBlockField(verification.block, "Fingerprint")) &&
     auditBlockField(verification.block, "Command SHA-256") === commandSha256 &&
     auditBlockField(verification.block, "Verified") === "true";
   const verifiedNow = verifiedWith(shared.verificationCommand?.sha256);
@@ -973,7 +989,7 @@ function snapshot(
     auditBlockField(gate.block, "Stage") === stages.at(-1) &&
     auditBlockField(gate.block, "Stages") === stages.join(", ") &&
     auditBlockField(gate.block, "Gate Scope") === "unit-end" &&
-    auditBlockField(gate.block, "Fingerprint") === fingerprint &&
+    isFingerprint(auditBlockField(gate.block, "Fingerprint")) &&
     commandSha256 !== undefined &&
     auditBlockField(gate.block, "Verification Command SHA-256") === commandSha256 &&
     auditBlockField(gate.block, "Run floor") === floors[stages.at(-1)!] &&

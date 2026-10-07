@@ -434,6 +434,10 @@ The same rule keeps the fingerprint of a checkpoint question asked before the
 change (its `DECISION_RECORDED` row's `Asked Evidence`), for the same kind of
 checkpoint: its verification and the open question still match, so the
 person's one answer records the approval.
+The Unit and batch checkpoint fingerprints hold the record folder as a path
+from the project with forward slashes, so an approval made on Linux or macOS
+counts on Windows and the other way round. An approval Windows recorded with
+backslashes before still counts.
 
 `WORKFLOW_STARTED`, `STAGE_JUMPED`, and a `workspace_requires`
 `STAGE_STARTED` record content-addressed source-listing baselines. After every
