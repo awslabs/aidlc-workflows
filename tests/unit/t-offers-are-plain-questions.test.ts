@@ -86,10 +86,10 @@ describe("t-offers-are-plain-questions: the lines say what happened, then a plai
     );
   });
 
-  test("changed code after a plan's approval carries on and asks whether to look at the plan first", () => {
+  test("changed code after a plan's approval carries on and asks whether to go over the plan again", () => {
     expect(planSourceDriftRelaxedNotice(["src/a.ts"])).toBe(
       "1 file changed since this plan was approved: src/a.ts. Carrying on. " +
-        "Do you want to look at the plan again and approve it first?",
+        "Do you want me to go over the plan with you again?",
     );
   });
 });

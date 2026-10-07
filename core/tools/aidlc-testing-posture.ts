@@ -364,7 +364,7 @@ export function planSourceDriftStrictMessage(paths: string[] | null, unbound = f
 export function planSourceDriftRelaxedNotice(paths: string[] | null, unbound = false): string {
   return (
     `${describeSourceDrift(paths, unbound)} Carrying on. ` +
-    "Do you want to look at the plan again and approve it first?"
+    "Do you want me to go over the plan with you again?"
   );
 }
 
@@ -425,7 +425,7 @@ function judgePlanSourceDrift(
         ? planSourceMovedNotice(paths, unit)
         : loweredFence && resolution.value === "strict"
           ? `${describeSourceDrift(paths, unbound)} Carrying on, since the plan approval check (${CHECK_GLOSS["plan-approval"]}) ` +
-            "is off for this work. Do you want to look at the plan again and approve it first?"
+            "is off for this work. Do you want me to go over the plan with you again?"
           : planSourceDriftRelaxedNotice(paths, unbound),
     },
   };
