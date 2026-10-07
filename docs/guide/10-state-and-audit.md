@@ -162,8 +162,9 @@ entries with their heading and body text. `--event NOTE` selects notes;
 `--stage` excludes them.
 
 Run `aidlc engine log answers --stage <slug>` (add `--unit <unit>` for a Unit)
-for paired earlier questions and answers. Unresolved questions and ambiguous
-answers are reported separately, so a follow-up can name the prior context.
+for paired earlier questions and answers. One reply pairs with every question
+logged for the menu it answered. Open questions and the rare ambiguous answer
+(no question before it, or writers tied at one second) are reported apart.
 Neither command changes files or takes a lock.
 
 ### Audit event flow

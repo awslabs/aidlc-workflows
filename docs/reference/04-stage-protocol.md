@@ -344,10 +344,11 @@ and ambiguity detection.
 Never re-ask an answered question. Read the record's question files with their
 question text and options before adding another question. For audit-only
 interactions, run `aidlc engine log answers --stage <slug>` (add `--unit <unit>`
-when unit-scoped). Use `answered` for paired questions and answers, and check
-`open` and `ambiguous` for unresolved interactions. Do not infer an ambiguous
-answer from its text alone; ask a narrow follow-up naming the candidate prior
-question and answer. If the latest applicable answer resolves the topic, use
+when unit-scoped). Use `answered` for paired questions and answers and `open`
+for questions nobody has answered. One reply closes every question logged for
+the menu it answered, so a menu answered once never comes back; `ambiguous`
+holds only an answer with no question before it, or two writers at the same
+second, and is nothing to ask the person about again. If the latest applicable answer resolves the topic, use
 it. If it conflicts with newer evidence, name that earlier answer in the
 follow-up instead of reopening the whole question.
 
@@ -617,7 +618,8 @@ boundary, and reads stay open by any means.
   must be COMPLETE and UNMODIFIED.
 - Earlier questions: `aidlc engine log answers --stage <slug>` (add
   `--unit <unit>` when unit-scoped). It returns `answered`, `open`, and
-  `ambiguous`; ask a narrow follow-up for ambiguity.
+  `ambiguous` (an answer with no question before it, or two writers tied at
+  one second); never ask the person a question `answered` already holds.
 - Timeline: `aidlc engine audit history`, with optional `--stage <slug>`,
   repeatable `--event <TYPE>`, and `--limit <n>` to keep the newest n. Results
   are oldest first; `unordered: true` marks tied events with no known order

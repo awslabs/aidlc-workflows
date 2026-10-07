@@ -2189,7 +2189,7 @@ function carriedCreationFlags(flags: ParsedFlags): string {
 
 // Every setting typed with a command, in the config setter's words ("depth
 // minimal", "review none"): the one list a config change applies.
-function typedSettingModifiers(flags: ParsedFlags): string[] {
+export function typedSettingModifiers(flags: ParsedFlags): string[] {
   const modifiers: string[] = [];
   if (flags.depth) modifiers.push(`depth ${flags.depth}`);
   if (flags.testStrategy) modifiers.push(`test-strategy ${flags.testStrategy}`);
@@ -3604,7 +3604,7 @@ function costClause(
 
 // --- Flag parsing ---
 
-interface ParsedFlags {
+export interface ParsedFlags {
   scope?: string;
   positionalScope?: string; // leading valid scope token (e.g. `/aidlc bugfix Fix the crash`)
   stage?: string;
@@ -3705,7 +3705,7 @@ function unreadSettingOnly(words: readonly string[]): string | null {
   return tokens[0] ?? null;
 }
 
-function parseNextFlags(argv: string[]): ParsedFlags {
+export function parseNextFlags(argv: string[]): ParsedFlags {
   const args = withoutEntryWord(argv);
   // A SOLE bare `help` / `-h` token is a help REQUEST, not intent text. Without
   // this, the token falls into intentWords and the freeform funnel offers to

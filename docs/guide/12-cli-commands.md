@@ -1705,7 +1705,7 @@ aidlc engine log answers --stage requirements-analysis
 aidlc engine audit history
 ```
 
-`log answers` returns JSON with paired answers, open questions, and ambiguous answers.
+`log answers` returns JSON with paired answers, open questions, and the rare ambiguous answer (one with no question before it, or two writers tied at one second). One reply closes every question logged for the menu it answered.
 `audit history` returns a JSON timeline of events and free-form notes.
 
 An answer whose text holds a character a shell acts on (`$`, a backtick, a quote,
