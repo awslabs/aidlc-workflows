@@ -20130,6 +20130,7 @@ export function workspaceSourceExclusionPathspecs(
 // never hold application source.
 const SOURCE_FINGERPRINT_HARD_EXCLUDED_NAMES = [
   ".cache",
+  ".devenv",
   ".git",
   ".gradle",
   ".mypy_cache",
