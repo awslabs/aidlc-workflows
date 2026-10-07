@@ -489,9 +489,11 @@ The 6-step process:
 2. **Load conductor-owned context.** A mob directive carries its lead's complete
    path roster in `inline_context_paths`; fully dispatched subagent/pipeline
    directives carry an empty roster.
-3. **Prepare briefs: rules as content, artifacts as paths.** Paste the
+3. **Prepare briefs: rules as content, artifacts as paths.** Deliver the
    stage's rule bundle (`run-stage.rules_content`, or the accumulated
-   `load-steering` parts) verbatim; pass relevant artifact paths and task
+   `load-steering` parts) per `stage-protocol.md` § "For subagent stages"
+   step 2 — through the harness's declared native preload where one exists,
+   verbatim paste otherwise; pass relevant artifact paths and task
    instructions. The named
    harness agent config loads persona and knowledge; do not copy either into
    the prompt.

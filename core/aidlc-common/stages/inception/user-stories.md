@@ -138,7 +138,9 @@ participants, and the Product Leader reviews afterwards (`stage-protocol-reviewe
 dispatch exactly the collaborators the directive lists in `support_agents`, in
 parallel against the draft (artifacts by path: the two draft artifacts, the Q&A
 file, requirements.md; rules as the stage's rule bundle — `run-stage.rules_content`,
-or the accumulated `load-steering` parts), mutually blind. Each WRITES its contribution file at
+or the accumulated `load-steering` parts — per `stage-protocol.md` § "For subagent
+stages" step 2: through the harness's declared native preload where one exists,
+verbatim paste otherwise), mutually blind. Each WRITES its contribution file at
 `<record>/inception/user-stories/contributions/<agent-slug>.md` (§11 format:
 identity-marker first line, Contribution, Positions): design on UX and
 persona fidelity, developer on implementability and story sizing, quality on

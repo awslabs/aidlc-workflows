@@ -1089,6 +1089,30 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
     }
   });
 
+  // The shared dispatch recipes are read on every harness, Kiro CLI included,
+  // so each defers to step 2 rather than telling the conductor to paste.
+  test("shared dispatch recipes keep step 2's native-preload exception", () => {
+    const read = (rel: string) => readFileSync(join(REPO_ROOT, rel), "utf-8");
+    const section = (rel: string, start: string, end: string) => {
+      const body = read(rel);
+      const from = body.indexOf(start);
+      expect(from, `${rel}: ${start}`).toBeGreaterThan(-1);
+      const to = body.indexOf(end, from + start.length);
+      return body.slice(from, to === -1 ? undefined : to).replace(/\s+/g, " ");
+    };
+    for (const [rel, recipe] of [
+      ["docs/reference/03-orchestrator.md", section("docs/reference/03-orchestrator.md", "3. **Prepare briefs:", "\n4. ")],
+      ["docs/reference/15-stage-definition.md", section("docs/reference/15-stage-definition.md", "- `subagent` — hub-and-spoke.", "\n- `pipeline`")],
+      ...["core/aidlc-common/stages", "dist/kiro/.kiro/aidlc-common/stages"].map((root) => {
+        const rel = `${root}/inception/user-stories.md`;
+        return [rel, section(rel, "**Round 1 — dispatch the mob.**", "\n\n")] as const;
+      }),
+    ] as const) {
+      expect(recipe, rel).toContain('`stage-protocol.md` § "For subagent stages" step 2');
+      expect(recipe, rel).toContain("native preload where one exists, verbatim paste otherwise");
+    }
+  });
+
 
   // A Unit approval after a re-check or a redo the person asked for asks once:
   // its line takes the place of the usual question, never follows it.

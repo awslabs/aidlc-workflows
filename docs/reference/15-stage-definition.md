@@ -385,8 +385,10 @@ runs. Five values, four active:
   `support_agents`, each one is dispatched as a real spoke against the
   lead's returned draft (mutually blind briefs carrying artifacts by path
   and the stage's rule bundle, `run-stage.rules_content` or the
-  accumulated `load-steering` parts) and the lead is dispatched once
-  more to integrate.
+  accumulated `load-steering` parts, delivered per `stage-protocol.md` §
+  "For subagent stages" step 2: through the harness's declared native
+  preload where one exists, verbatim paste otherwise) and the lead is
+  dispatched once more to integrate.
 - `pipeline` — chain. The lead drafts; each support agent enriches in
   declared order, every link seeing the draft plus all earlier
   contributions. Order is the point. Requires non-empty `support_agents`, and
