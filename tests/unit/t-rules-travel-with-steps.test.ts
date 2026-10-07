@@ -242,7 +242,9 @@ describe("t-rules-travel-with-steps: the Kiro agent prompts", () => {
     test(`${tool}: the must-follow list holds without the skill`, () => {
       expect(prompt).toContain("read .kiro/skills/aidlc/SKILL.md unless the aidlc skill is already in this chat");
       expect(prompt).toContain("say the lines AI-DLC gives you for the person (its warnings, notices and questions) to them word for word");
-      expect(prompt).toContain("AI-DLC's questions are for the person, not for you: never answer one yourself");
+      expect(prompt).toContain("a question AI-DLC puts to the person is theirs to answer, never yours");
+      // Live: "never answer one yourself" alone made the agent ask the person for the work's folder label.
+      expect(prompt).toContain("a step AI-DLC hands you (a command to run, a label to choose) is yours to do without asking them");
       expect(prompt).toContain("never guess who changed a file, and never call a person's change stray or a mistake");
     });
   }
