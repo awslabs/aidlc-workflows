@@ -26160,10 +26160,15 @@ export function pickerAnswerNote(projectDir: string, details: string): string | 
 }
 
 // The person's latest chat turn in this clone's ledger for the selected work:
-// when it was, and the words its chat kept right after it (null when the hook
-// kept none: a slash command, a picked option, an over-long message). Null when
-// no turn is on record. It only words a notice, so it never throws.
-export function latestPersonTurn(projectDir: string): { at: string; words: string | null } | null {
+// when it was, the chat it was typed in, and the words that chat kept right
+// after it (null when the hook kept none: a slash command, a picked option, an
+// over-long message). The session is how a caller tells a command the person's
+// own chat is running from one they ran themselves, which quotes no message of
+// theirs. Null when no turn is on record. It only words a notice, so it never
+// throws.
+export function latestPersonTurn(
+  projectDir: string,
+): { at: string; words: string | null; session: string | null } | null {
   try {
     const shardPath = auditFilePath(projectDir);
     const content = readAppendOnlyFileNoFollowOrThrow(shardPath, "audit shard").toString("utf-8");
@@ -26192,7 +26197,7 @@ export function latestPersonTurn(projectDir: string): { at: string; words: strin
     const kept = record?.shard === projectRelativePath(projectDir, shardPath)
       ? record.messages.find((message) => message.offset > from && message.offset <= to)
       : undefined;
-    return { at, words: kept?.text ?? null };
+    return { at, words: kept?.text ?? null, session };
   } catch {
     return null;
   }

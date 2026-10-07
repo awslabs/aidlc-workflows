@@ -59,6 +59,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
+  addPendingPersonLines,
   clearSessionIntentHandoff,
   emptyPickerResult,
   enterHookWorkflow,
@@ -350,16 +351,31 @@ function pickedLabels(toolResponse: unknown): string[] {
 //
 // What the agent should hear from this turn is printed once, as one context
 // line: Claude Code reads a single hook response, and two lines make it drop both.
+//
+// What the PERSON hears does not travel that way. A host may fold hook output
+// away, an adapter may drop it, and an agent may not pass it on, which is how a
+// check the person typed off went unsaid on every tool. So a line for them is
+// queued for the engine's next step instead (addPendingPersonLines). It is
+// queued once this turn is recorded, because a line belongs to the turn that is
+// marked when it is written.
 async function run(input: string): Promise<number> {
   const notes: string[] = [];
+  const forThePerson: Array<() => void> = [];
   try {
-    return await respond(input, notes);
+    return await respond(input, notes, forThePerson);
   } finally {
+    for (const queue of forThePerson) {
+      try {
+        queue();
+      } catch {
+        // A line the person may miss never blocks their turn.
+      }
+    }
     if (notes.length > 0) process.stdout.write(hookContextLine("UserPromptSubmit", notes.join("\n")));
   }
 }
 
-async function respond(input: string, notes: string[]): Promise<number> {
+async function respond(input: string, notes: string[], forThePerson: Array<() => void>): Promise<number> {
 try {
   const projectDir = resolveProjectDirFromHook(import.meta.url);
   let sessionId = "";
@@ -495,7 +511,19 @@ try {
         keepPlanApprovalAskOverStateWrite(projectDir, before, readFileSync(stateFilePath(projectDir), "utf-8"));
       }
       if (outcome !== null) {
-        notes.push(`AIDLC Guard Policy: ${outcome.lines.join(" ")}`);
+        const lines = outcome.lines;
+        // Only a switch that went through is already done, and only its line is
+        // the engine's to say next. An outcome that changed nothing (a typo in a
+        // companion flag, a rule the team holds) stays exactly as it was: the
+        // agent reads it and answers the person itself.
+        notes.push(outcome.applied
+          ? `AIDLC Guard Policy: ${lines.join(" ")} The engine says this to the person with its next step, so you ` +
+            "need not repeat it; the switch is already applied, so never run a setter for it."
+          : `AIDLC Guard Policy: ${lines.join(" ")}`);
+        if (outcome.applied) {
+          const session = sessionId;
+          forThePerson.push(() => addPendingPersonLines(projectDir, session, lines));
+        }
       }
     } catch {
       // A switch failure must never block the human's turn.

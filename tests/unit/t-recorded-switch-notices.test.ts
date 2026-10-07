@@ -152,6 +152,17 @@ function flags(proj: string, ...args: string[]) {
   return result;
 }
 
+// The same, as the agent runs it in the person's chat: a command their host
+// starts carries that chat's session, which is how the line can quote them. A
+// command the person ran themselves, in their own terminal, carries none.
+function flagsInChat(proj: string, ...args: string[]) {
+  const result = dispatch(proj, ["config", "flags", "--project-dir", proj, ...args], undefined, {
+    AIDLC_SESSION_OVERRIDE: SESSION,
+  });
+  invalidateSettingsCache();
+  return result;
+}
+
 // `next` as the agent runs it: from the project.
 function notices(proj: string, extra: Record<string, string | undefined> = {}): string[] {
   const result = runOrchestrateNext(ORCHESTRATE, proj, [], { cwd: proj, env: quietEnv(extra) });
@@ -188,7 +199,7 @@ describe("a check switched off for the project is always said, never refused", (
     expect(personSpokeSinceGate(proj)).toBe(true);
     expect(latestPersonTurn(proj)?.words).toBe(ASKED);
 
-    const recorded = flags(proj, "--bypass", NAME, "--local", "--yes");
+    const recorded = flagsInChat(proj, "--bypass", NAME, "--local", "--yes");
     expect(recorded.status, recorded.stdout + recorded.stderr).toBe(0);
     expect(recorded.stdout).toContain(OFF);
     expect(recorded.stdout).toContain(FROM_CHAT);
@@ -236,7 +247,7 @@ describe("a check switched off for the project is always said, never refused", (
     const proj = installedProject();
     const long = `turn the review freeze check off ${"and keep going ".repeat(40)}`;
     says(proj, long);
-    const recorded = flags(proj, "--bypass", NAME, "--local", "--yes");
+    const recorded = flagsInChat(proj, "--bypass", NAME, "--local", "--yes");
     expect(recorded.status, recorded.stdout + recorded.stderr).toBe(0);
     expect(recorded.stdout).toMatch(/because you said: "turn the review freeze check off and keep going [^"]*\.\.\."/);
     const [entry] = JSON.parse(readFileSync(recordFile(proj), "utf-8")).switches as Array<{ words: string }>;
@@ -410,7 +421,12 @@ describe("a check switched off for the project is always said, never refused", (
       "The plan approval check is off for this project since 10:07, because you said: \"skip the 'plan' stop\". " +
         `${UNDO}${clearSwitchCommand("AIDLC_DISABLE_PLAN_APPROVAL_GUARD")}).`,
     );
-    expect(switchOffLine(off({}), now)).toContain("since 10:07, set after your last message in the chat.");
+    // No words of theirs on record: the line says what is off, since when, and
+    // the way back, and claims nothing about where it came from.
+    expect(switchOffLine(off({}), now)).toBe(
+      "The plan approval check is off for this project since 10:07. " +
+        `${UNDO}${clearSwitchCommand("AIDLC_DISABLE_PLAN_APPROVAL_GUARD")}).`,
+    );
     expect(switchOffLine(off({ how: "other", since: at(8, 1) }, "global"), now)).toBe(
       `The plan approval check is off on this machine since 2026-10-01 08:07. ` +
         `${UNDO}${clearSwitchCommand("AIDLC_DISABLE_PLAN_APPROVAL_GUARD")}).`,

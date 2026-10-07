@@ -468,6 +468,7 @@ import {
   planApprovalOffAtCreation,
   planApprovalEnv,
   planApprovalOffForOpenRequest,
+  switchKeptForNextWork,
   resolvePlanApprovalSetting,
 } from "./aidlc-guard-switch.ts";
 import {
@@ -2841,6 +2842,11 @@ function newWorkRoutingAskDirective(
   stateSha256?: string,
   carried: RoutingCarried = { creation: "", newWork: "", existingWork: "", planChanges: "" },
   approvedRequest?: string,
+  // The request this ask is about, when the person's words reached it through an
+  // earlier question (the print that handed them on, or this ask asked again):
+  // the stored copy keeps that request's root, so a switch the person typed with
+  // the words still reaches the work this ask creates.
+  derivedFrom?: string,
 ): AskDirective {
   // Once emitted, this typed ask is the sole route authority for the pending
   // prose. Harnesses render it and stop rather than reclassifying the request.
@@ -2848,7 +2854,7 @@ function newWorkRoutingAskDirective(
   // Its own question: this ask is about work that exists, so its continue and
   // reshape routes act only on the item(s) it names, and ask again otherwise.
   const stored = saveQuestion(
-    projectDir, description, proposedScope, "routing", askedAbout, false, undefined, stateSha256,
+    projectDir, description, proposedScope, "routing", askedAbout, false, derivedFrom, stateSha256,
     routingSettings(carried), approvedRequest,
   );
   const tool = aidlcToolInvocation("orchestrate");
@@ -4577,7 +4583,14 @@ function unselectedRecordsDigest(selectable: UnselectedRecords["selectable"]): s
 // read-only: it emits a directive, it does not touch the cursor.
 function intentPickPromptIfRecordsExist(
   projectDir: string,
-  pendingWork?: { description: string; proposedScope: string; carried: RoutingCarried; approvedRequest?: string },
+  pendingWork?: {
+    description: string;
+    proposedScope: string;
+    carried: RoutingCarried;
+    approvedRequest?: string;
+    /** The request these words reached this ask through, when an earlier question held them. */
+    derivedFrom?: string;
+  },
 ): AskDirective | ErrorDirective | null {
   const records = unselectedRecords(projectDir);
   if (records === null) return null;
@@ -4627,6 +4640,7 @@ function intentPickPromptIfRecordsExist(
       unselectedRecordsDigest(selectable),
       pendingWork.carried,
       pendingWork.approvedRequest,
+      pendingWork.derivedFrom,
     );
   }
   // One piece of work is still the person's to choose: the question asks them,
@@ -7361,6 +7375,7 @@ function routeNext(args: string[], projectDir: string | undefined): void {
           proposedScope: question.proposedScope,
           carried: kept,
           approvedRequest: question.approvedRequest,
+          derivedFrom: question.id,
         });
         if (again) {
           emit(again);
@@ -7973,6 +7988,7 @@ function routeNext(args: string[], projectDir: string | undefined): void {
             proposedScope: flags.positionalScope,
             carried: carriedRoutingFlags(flags),
             approvedRequest: flags.request,
+            derivedFrom: flags.request,
           }
         : undefined,
     );
@@ -8050,6 +8066,7 @@ function routeNext(args: string[], projectDir: string | undefined): void {
               proposedScope: scope,
               carried: carriedRoutingFlags(flags),
               approvedRequest: flags.request,
+              derivedFrom: flags.request,
             }
           : undefined,
       );
@@ -8079,6 +8096,20 @@ function routeNext(args: string[], projectDir: string | undefined): void {
     const pick = intentPickPromptIfRecordsExist(pd);
     if (pick) {
       emit(pick);
+      return;
+    }
+    // The person set something for the piece of work they start next, and this
+    // chat still holds it: nothing is wrong, so this is a step and not an error.
+    // The line they were told rides it, and no error means no relay repeating
+    // machinery at them.
+    if (switchKeptForNextWork(pd, engineSessionId ?? null)) {
+      const kept = turnEndingPrint(
+        "Nothing is in progress here yet, and what the person set for the piece of work they start next is kept for " +
+          "it. Say the line above, then wait: when they say what to build, run that as their request " +
+          `(${entrySkillInvocation()} "<their words>"), and the work it creates starts with what they set.`,
+      );
+      kept.narration = "Tell me what to build and I'll start it.";
+      emit(kept);
       return;
     }
     emit(errorDirective(
@@ -8257,6 +8288,7 @@ function routeNext(args: string[], projectDir: string | undefined): void {
       stateDigest(stateContent),
       scopeChange ? { ...carried, continueScope: inferred.scope } : carried,
       askedAgain?.question.approvedRequest,
+      question?.id,
     ));
     return;
   }

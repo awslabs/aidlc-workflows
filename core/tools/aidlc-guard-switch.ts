@@ -447,7 +447,12 @@ export function applyIntentSettings(
     die(guardSwitchRefusal(lowering[0], "config", personSpokeSinceGate(projectDir), projectDir));
   }
   // The setter carries out what the person asked: their words go on the record.
-  const askedIn = lowering.length > 0 && !typedByPerson ? latestPersonTurn(projectDir)?.words ?? null : null;
+  // Their words stand behind a setter the agent runs in their chat. A command
+  // they ran themselves, in their own terminal, belongs to no chat: it is their
+  // own act, and no message of theirs is quoted for it or kept beside it.
+  const turn = lowering.length > 0 && !typedByPerson ? latestPersonTurn(projectDir) : null;
+  const inThisChat = turn !== null && sessionId !== null && turn.session === sessionId;
+  const askedIn = inThisChat ? turn.words : null;
   // Asked for in the chat (not typed): each check it turns off is said in one
   // line, in their words, with the way back, instead of the setter's own line.
   const askedInChat = lowering.length > 0 && !typedByPerson &&
@@ -591,6 +596,23 @@ export function applyIntentSettings(
       if (nextOn.length !== raised.length) updated = setGuardsOnLine(updated, nextOn);
       const after = resolveFences(policy, updated)[request.fence];
       if (before.value === after.value) {
+        // The plan this work runs already leaves the check where the person
+        // asked for it. An off they set themselves is still recorded as theirs,
+        // so the work says whose decision it was (status reads "(set by you)"
+        // instead of crediting the plan, and the audit carries the row) rather
+        // than leaving their own switch with nothing behind it. A later Guard
+        // Policy word still clears per-check entries, as it always has, and
+        // nothing the person reads here changes.
+        if (typedByPerson && request.value === "off" && updated !== content) {
+          content = updated;
+          audit.push({
+            eventType: "GUARD_DISABLED",
+            fields: {
+              Guard: request.fence, Scope: scopeName, Source: request.source,
+              ...(askedIn ? { "Person Reply": askedIn } : {}),
+            },
+          });
+        }
         lines.push(`The ${checkLabel(request.fence)} is already ${after.value}`);
         continue;
       }
@@ -654,7 +676,7 @@ export function applyIntentSettings(
     }
   }
   for (const item of lowering) {
-    if (saidAsAsked(item.key)) lines.push(askedSwitchLine(item, askedIn, cc.value));
+    if (saidAsAsked(item.key)) lines.push(askedSwitchLine(item, askedIn, cc.value, inThisChat));
   }
   return { content, audit, lines };
 }
@@ -664,12 +686,18 @@ function checkLabel(fence: string): string {
   return `${fence.replace("reviewer-scope", "reviewer read scope").replaceAll("-", " ")} check`;
 }
 
-// What the person hears when the agent turned one of their checks off because
-// they asked in the chat: what is off, for this piece of work, in their words,
-// and the way back.
-function askedSwitchLine(item: GuardSwitch, words: string | null, previousPolicy: string): string {
+// What the person hears when one of their checks went off: what is off, for
+// this piece of work, and the way back. Why it went off is said as far as it is
+// known: their own words, the chat they asked in, or, for a command they ran
+// themselves, that they set it.
+function askedSwitchLine(
+  item: GuardSwitch,
+  words: string | null,
+  previousPolicy: string,
+  inThisChat: boolean,
+): string {
   const entry = entrySkillInvocation();
-  const why = words ? `because you said: "${quoted(words)}"` : "as you asked in the chat";
+  const why = words ? `because you said: "${quoted(words)}"` : inThisChat ? "as you asked in the chat" : "set by you";
   if (item.key === "guard-policy") {
     return `Guard Policy is ${item.value} for this piece of work, ${why}. ` +
       `Say "put Guard Policy back to ${previousPolicy}" to restore it (${entry} --guard-policy ${previousPolicy}).`;
@@ -922,6 +950,25 @@ interface PlanApprovalCreationGrant {
 // A reply belongs to the question asked in this sitting, not to one left open for days.
 const OPEN_QUESTION_WINDOW_MS = 60 * 60 * 1000;
 
+/**
+ * Whether the words behind `grant` are the ones `request` carries: the question
+ * they answered, or the request that question was derived from, however many
+ * asks the engine made on the way. Binding to a request is what keeps a plan the
+ * person rejected from leaving its switch on the work they describe instead. A
+ * creation naming no request carries nobody's words.
+ */
+function grantCovers(
+  projectDir: string,
+  grant: PlanApprovalCreationGrant,
+  request: string | null,
+): boolean {
+  if (request === null) return false;
+  const answered = grant.request ??
+    firstFrontQuestionSince(projectDir, grant.recordedAt, OPEN_QUESTION_WINDOW_MS, { routing: grant.withDescription === true });
+  return answered !== null &&
+    (answered === request || readQuestion(projectDir, request)?.composedFrom === answered);
+}
+
 function planApprovalCreationGrantPath(projectDir: string, sessionId: string): string {
   const segment = sessionId.replace(/[^A-Za-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 96);
   return planApprovalRuntimeFile(projectDir, `plan-approval-off-at-creation-${segment}.json`);
@@ -979,12 +1026,9 @@ export function planApprovalCreationGranted(
       "plan approval creation grant",
     );
     if (grant?.version !== 1 || grant.session !== sessionId || request === null) return false;
-    const answered = grant.request ??
-      firstFrontQuestionSince(projectDir, grant.recordedAt, OPEN_QUESTION_WINDOW_MS, { routing: grant.withDescription === true });
     // Words said at a report-only or task-less composition's gate answer that
     // composition, so they reach the request its approval described, and no other.
-    return answered !== null &&
-      (answered === request || readQuestion(projectDir, request)?.composedFrom === answered);
+    return grantCovers(projectDir, grant, request);
   } catch {
     return false;
   }
@@ -1075,10 +1119,7 @@ export function guardPolicyCreationGranted(
     if (grant?.version !== 1 || grant.session !== sessionId || (grant.value !== "relaxed" && grant.value !== "off")) {
       return null;
     }
-    const answered = grant.request ??
-      firstFrontQuestionSince(projectDir, grant.recordedAt, OPEN_QUESTION_WINDOW_MS, { routing: grant.withDescription === true });
-    return answered !== null && (answered === request || readQuestion(projectDir, request)?.composedFrom === answered)
-      ? grant.value : null;
+    return grantCovers(projectDir, grant, request) ? grant.value : null;
   } catch {
     return null;
   }
@@ -1169,9 +1210,7 @@ export function ceremoniesCreationGranted(
   try {
     const grant = readCeremoniesCreationGrant(projectDir, sessionId);
     if (grant === null) return {};
-    const answered = grant.request ??
-      firstFrontQuestionSince(projectDir, grant.recordedAt, OPEN_QUESTION_WINDOW_MS, { routing: grant.withDescription === true });
-    if (answered === null || (answered !== request && readQuestion(projectDir, request)?.composedFrom !== answered)) return {};
+    if (!grantCovers(projectDir, grant, request)) return {};
     const out: Partial<Record<CeremonyKey, "on" | "off">> = {};
     for (const [flag, value] of Object.entries(grant.settings)) {
       const key = CEREMONY_KEYS.find((candidate) => CEREMONY_FLAGS[candidate] === `--${flag}`);
@@ -1269,12 +1308,39 @@ export function fencesOffCreationGranted(
   try {
     const grant = readFencesOffCreationGrant(projectDir, sessionId);
     if (grant === null) return [];
-    const answered = grant.request ??
-      firstFrontQuestionSince(projectDir, grant.recordedAt, OPEN_QUESTION_WINDOW_MS, { routing: grant.withDescription === true });
-    return answered !== null && (answered === request || readQuestion(projectDir, request)?.composedFrom === answered)
+    return grantCovers(projectDir, grant, request)
       ? SWITCHABLE_GUARD_FENCES.filter((fence) => grant.fences.includes(fence)) : [];
   } catch {
     return [];
+  }
+}
+
+/**
+ * Whether this chat holds anything the person set for the piece of work they
+ * start next: a check off, a Guard Policy, a ceremony, or plan approval off.
+ * Read without a request, so a step before any work exists can say the person's
+ * words are kept rather than reporting that nothing is in progress.
+ */
+export function switchKeptForNextWork(projectDir: string, sessionId: string | null): boolean {
+  if (!sessionId || process.env.AIDLC_UNATTENDED === "1") return false;
+  const fresh = (grant: PlanApprovalCreationGrant | null): boolean => {
+    if (grant?.version !== 1 || grant.session !== sessionId) return false;
+    const said = Date.parse(grant.recordedAt);
+    return !Number.isNaN(said) && Date.now() - said <= OPEN_QUESTION_WINDOW_MS;
+  };
+  try {
+    return fresh(readFencesOffCreationGrant(projectDir, sessionId)) ||
+      fresh(readCeremoniesCreationGrant(projectDir, sessionId)) ||
+      fresh(readPlanApprovalRuntimeRecord<GuardPolicyCreationGrant>(
+        guardPolicyCreationGrantPath(projectDir, sessionId),
+        "Guard Policy creation grant",
+      )) ||
+      fresh(readPlanApprovalRuntimeRecord<PlanApprovalCreationGrant>(
+        planApprovalCreationGrantPath(projectDir, sessionId),
+        "plan approval creation grant",
+      ));
+  } catch {
+    return false;
   }
 }
 

@@ -46,7 +46,12 @@ export interface StoredQuestion {
   askedAbout?: QuestionAskedAbout;
   /** The person asked for new work (`next --new-intent`), so its answer starts it. */
   newWork?: true;
-  /** For a request described when a composition was approved: that `compose` entry's id. */
+  /**
+   * The request this question was derived from, as that request's OWN root: the
+   * `compose` entry a description was approved on, or the question whose answer
+   * this one asks about. One hop always reaches the root, so words the person
+   * typed for the first question reach the work the last one creates.
+   */
   composedFrom?: string;
   /**
    * For a routing question shown with options: the asked workflow's state
@@ -360,6 +365,9 @@ export function saveQuestion(
   approvedRequest?: string,
 ): StoredQuestion {
   pruneExpiredQuestions(projectDir);
+  // A question derived from another keeps that one's root, never the parent, so
+  // a chain of asks stays one hop from where the person's words were said.
+  const root = composedFrom ? readStoredQuestion(projectDir, composedFrom)?.composedFrom ?? composedFrom : undefined;
   const question: StoredQuestion = {
     id: mintQuestionId(projectDir),
     text,
@@ -367,7 +375,7 @@ export function saveQuestion(
     origin,
     ...(askedAbout ? { askedAbout } : {}),
     ...(newWork ? { newWork: true as const } : {}),
-    ...(composedFrom ? { composedFrom } : {}),
+    ...(root ? { composedFrom: root } : {}),
     ...(stateSha256 ? { stateSha256 } : {}),
     ...(settings && (settings.newWork.length > 0 || settings.existingWork.length > 0) ? { settings } : {}),
     ...(approvedRequest && QUESTION_ID.test(approvedRequest) ? { approvedRequest } : {}),

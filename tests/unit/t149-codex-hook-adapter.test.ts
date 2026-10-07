@@ -589,6 +589,32 @@ describe("t149 Codex typed guard switch", () => {
       rmSync(dir, { recursive: true, force: true });
     }
   });
+
+  // The adapter used to drop the core hook's stdout here, so the agent never
+  // heard that the switch was applied and ran a setter of its own on the piece
+  // of work that was open instead of the one the person asked about.
+  test("the note saying what the switch did reaches the agent, so it runs no setter of its own", () => {
+    const dir = scratchProject(true);
+    try {
+      const typed = runAdapter(dir, "record-human-turn", {
+        hook_event_name: "UserPromptSubmit",
+        session_id: "codex-typed-session",
+        turn_id: "typed-fence-off",
+        cwd: dir,
+        prompt: "$aidlc --guard.review-freeze off fix the parser",
+      });
+      expect(typed.code, typed.stderr).toBe(0);
+      const context = JSON.parse(typed.stdout) as {
+        hookSpecificOutput?: { hookEventName?: string; additionalContext?: string };
+      };
+      expect(context.hookSpecificOutput?.hookEventName).toBe("UserPromptSubmit");
+      const note = context.hookSpecificOutput?.additionalContext ?? "";
+      expect(note).toContain("The review freeze check is off for the work you are asking for (set by you).");
+      expect(note).toContain("never run a setter for it");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });
 
 // #1411: Codex runs UserPromptSubmit for every user input in a thread,

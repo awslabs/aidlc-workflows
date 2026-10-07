@@ -571,7 +571,10 @@ describe("t338 summary confirmation off is the person's switch", () => {
   test("asked for in the chat, the agent's off says it in one line with their words and the way back", () => {
     const { proj, state } = project("feature");
     recordHumanPrompt(proj, "skip the looks correct check from now on");
-    const changed = run(DISPATCHER, ["engine", "config", "set", "summary-confirmation", "off"], proj, SESSIONLESS);
+    // The agent's setter runs in the chat the person typed in, as every host
+    // starts it: that is how their words can stand behind it.
+    const inTheirChat = { ...SESSIONLESS, AIDLC_SESSION_OVERRIDE: "t338-human" };
+    const changed = run(DISPATCHER, ["engine", "config", "set", "summary-confirmation", "off"], proj, inTheirChat);
     expect(changed.status, changed.stderr).toBe(0);
     expect(getField(readFileSync(state, "utf-8"), "Summary Confirmation")).toStartWith("off (");
     const audit = rows(proj);
