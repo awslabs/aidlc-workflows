@@ -1870,19 +1870,20 @@ describe("t342 a unit-major recovery keeps every Unit's finished work", () => {
     const p = fixture({ iteration: "stage-major" });
     for (const unit of ["alpha", "beta"]) cover(p, unit, stages.slice(0, 1));
     const before = readFileSync(seededStateFile(p), "utf-8");
-    // The person sees one line that speaks to them; the command for "for every
-    // unit" is for the agent only.
+    // The person sees one line that asks them in plain words; the command for
+    // their yes is for the agent only.
     const refused = (args: string[]): string => {
       const said = JSON.parse(tool(p, "orchestrate", ["next", ...args]).stdout);
       expect(said.kind, JSON.stringify(said)).toBe("print");
       expect(said.message).not.toContain("jump.ts");
       const target = args[1];
-      expect(said.message).toContain(`If they say 'for every unit', run \`next --stage ${target} --every-unit\``);
+      expect(said.message).toContain(`If they say yes, run \`next --stage ${target} --every-unit\``);
       const line = /Tell the person in one line: "([^"]+)"/.exec(said.message)?.[1];
       expect(line, said.message).toBeDefined();
       for (const leak of ["Tell the person", "next --stage", "run `", "/aidlc --"]) expect(line!).not.toContain(leak);
       expect(line!).toContain("Nothing changed.");
-      expect(line!).toContain("Say 'for every unit'");
+      expect(line!).toMatch(/Do you want me to re(?:do|open) it for every unit\?$/);
+      expect(line!).not.toContain("Say '");
       return line!;
     };
     expect(refused(["--stage", "functional-design", "--unit", "alpha"])).toContain(
@@ -1914,9 +1915,9 @@ describe("t342 a unit-major recovery keeps every Unit's finished work", () => {
     expect(said.kind, JSON.stringify(said)).toBe("print");
     expect(said.message).toContain(
       "Tell the person in one line: \"NFR Design was approved for every unit at its stage approval, so it can only " +
-        "be reopened for every unit. Nothing changed. Say 'for every unit' to do that.\"",
+        "be reopened for every unit. Nothing changed. Do you want me to reopen it for every unit?\"",
     );
-    expect(said.message).toContain("If they say 'for every unit', run `next --stage nfr-design --every-unit`");
+    expect(said.message).toContain("If they say yes, run `next --stage nfr-design --every-unit`");
     expect(readFileSync(seededStateFile(p), "utf-8")).toBe(before);
     expect(jumped(p)).toBe(0);
     // Saying "for every unit" then does it.

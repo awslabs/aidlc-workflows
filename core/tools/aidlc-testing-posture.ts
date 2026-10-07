@@ -90,6 +90,7 @@ import {
   serializeSourceListing,
   sourceListingSha256,
   parseSourceListing,
+  personSpokeSinceGate,
   structuredField,
   structuredFieldSpan,
   toPosix,
@@ -1583,19 +1584,12 @@ export function keepApprovedPlanCopy(
   }
 }
 
-const APPROVED_PLAN_UNDO_WORDS = "go back to the approved plan";
-const APPROVED_PLAN_UNDO = `Say "${APPROVED_PLAN_UNDO_WORDS}" to undo.`;
-
-/**
- * True when the text is the words the change line gives the person, and
- * nothing more: case, spacing, quotes around them, "please" before or after,
- * and a closing "." or "!" do not matter.
- */
-export function isApprovedPlanUndoRequest(text: string): boolean {
-  const words = text.toLowerCase().replace(/\s+/g, " ").trim().replace(/^["']|["']$/g, "").replace(/[.!]+$/, "")
-    .replace(/^["']|["']$/g, "").trim();
-  return words.replace(/^please,? /, "").replace(/,? please$/, "") === APPROVED_PLAN_UNDO_WORDS;
-}
+// The way back the change line offers. When the edited plan is built on, the
+// line asks; when it is asked about again, the plan question follows the line,
+// so the way back is offered beside that question instead of asking a second
+// one. Their reply is the agent's to read; restore needs their word.
+const APPROVED_PLAN_UNDO_QUESTION = "Do you want me to go back to the plan you approved?";
+const APPROVED_PLAN_UNDO_OFFER = "I can also go back to the plan you approved.";
 
 function quotedStep(text: string): string {
   return `"${text.length > 80 ? `${text.slice(0, 77).trimEnd()}...` : text}"`;
@@ -1623,15 +1617,21 @@ function changedSteps(before: string[], after: string[]): string {
   return others > 0 ? `${what}, and ${others} more ${others === 1 ? "step" : "steps"} changed` : what;
 }
 
-export function approvedPlanChangeText(copy: ApprovedPlanCopy, plan: string, instructions: string): string | null {
+export function approvedPlanChangeText(
+  copy: ApprovedPlanCopy,
+  plan: string,
+  instructions: string,
+  planAsked = false,
+): string | null {
   const planChanged = projectPlanApprovalContent(plan) !== projectPlanApprovalContent(copy.plan);
   const lf = (text: string) => text.replace(/\r\n/g, "\n");
   const instructionsChanged = lf(instructions) !== lf(copy.instructions);
   if (!planChanged && !instructionsChanged) return null;
-  if (!planChanged) return `Your approved test instructions changed before the build. ${APPROVED_PLAN_UNDO}`;
+  const wayBack = planAsked ? APPROVED_PLAN_UNDO_OFFER : APPROVED_PLAN_UNDO_QUESTION;
+  if (!planChanged) return `Your approved test instructions changed before the build. ${wayBack}`;
   const what = changedSteps(planSteps(copy.plan).map((step) => step.text), planSteps(plan).map((step) => step.text));
   return `Your approved plan changed before the build: ${what}${instructionsChanged ? ", and the test instructions changed too" : ""}. ` +
-    APPROVED_PLAN_UNDO;
+    wayBack;
 }
 
 /** The approved files for this target and attempt, when the person approved them and the build has not started. */
@@ -1650,11 +1650,13 @@ function unbuiltApprovedCopy(
 /**
  * The one line the person hears when the plan they approved changed before the
  * build, or null when it did not (or nothing was approved in this attempt).
+ * With `planAsked`, the plan question follows the line.
  */
 export function approvedPlanChangeLine(
   projectDir: string,
   target: CodeGenerationTarget,
   issued?: CodeGenerationIssuance,
+  planAsked = false,
 ): string | null {
   try {
     const authority = resolveCodeGenerationAuthority(projectDir, target, issued);
@@ -1664,14 +1666,26 @@ export function approvedPlanChangeLine(
       copy,
       readFileSync(join(authority.stageDir, "code-generation-plan.md"), "utf-8"),
       readFileSync(join(authority.stageDir, "unit-test-instructions.md"), "utf-8"),
+      planAsked,
     );
   } catch {
     return null;
   }
 }
 
-/** Write the approved plan, test instructions and answer back: the person said to go back to the plan they approved. */
+/**
+ * Write the approved plan, test instructions and answer back: the person said
+ * to go back to the plan they approved. Their word since their last decision
+ * stands behind it: the agent going back on its own would undo an edit that
+ * may be the person's.
+ */
 export function restoreApprovedPlan(projectDir: string, target: CodeGenerationTarget): string {
+  if (!personSpokeSinceGate(projectDir, { requests: true })) {
+    throw new Error(
+      "The person has not said to go back to the plan they approved. Ask them \"" + APPROVED_PLAN_UNDO_QUESTION +
+        "\" and run this again only after they say yes.",
+    );
+  }
   const authority = resolveCodeGenerationAuthority(projectDir, target);
   const copy = readApprovedPlanCopy(projectDir, authority);
   const receipt = copy === null ? null : readPlanApprovalReceipt(projectDir, {

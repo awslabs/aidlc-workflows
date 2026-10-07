@@ -264,10 +264,12 @@ After approval:
   changed. Under `relaxed` or `off`, the build continues with the edited files
   and one `change_notices` line saying what changed; the earlier answer stays
   the record of what was approved.
-- When the person asks to go back to the plan they approved ("go back to the
-  approved plan"), run `{{INVOKE}} engine testing-posture restore --unit
-  <directive.unit>` (`--stage-level` for zero-Unit work), say the line it
-  prints, then run `next`.
+- The line saying what changed asks whether to go back to the plan the person
+  approved (under `strict` it offers that beside the plan question). When they
+  say yes, or ask for it in their own words, run `{{INVOKE}} engine
+  testing-posture restore --unit <directive.unit>` (`--stage-level` for
+  zero-Unit work), say the line it prints, then run `next`. Never run it
+  without their word: it refuses then.
 - Other code moving after approval (a `git pull`, another Unit landing) never
   asks again, on any Guard Policy: the build continues and a `change_notices`
   line names the files. Say it once.
