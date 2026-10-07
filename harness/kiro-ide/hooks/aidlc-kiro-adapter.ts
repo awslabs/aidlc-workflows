@@ -1468,16 +1468,15 @@ function toolTerminalInvocation(command: string): TerminalInvocation | null {
 // Whether `latch` is this chat's terminal command of its recorded turn, read
 // before that turn is started again, with the chat named by the payload: then
 // no other shell call of the chat runs in that turn.
-function holdsThisTurn(latch: TerminalLatch | null, recordedTurn: number): latch is TerminalLatch {
+function holdsThisTurn(latch: TerminalLatch | null, recordedTurn: number): boolean {
   return latch !== null && recordedTurn > 0 && latch.turn === recordedTurn && (ide.sessionId?.trim() ?? "") !== "";
 }
 
 // The one same-turn shell check: refuses the call when this chat's terminal
 // command holds the turn.
-function refusesShellThisTurn(sessionId: string, recordedTurn: number): boolean {
-  const latch = readTerminalLatch(sessionId);
+function refusesShellThisTurn(latch: TerminalLatch | null, recordedTurn: number): boolean {
   if (!holdsThisTurn(latch, recordedTurn)) return false;
-  process.stderr.write(sameTurnShellRefusal(latch));
+  process.stderr.write(sameTurnShellRefusal());
   return true;
 }
 
@@ -1817,10 +1816,11 @@ function terminalRefusal(result: TerminalResult): string {
 }
 
 // The terminal command's output already went to the agent to relay, so this
-// names the step and does not hand it over a second time.
-function sameTurnShellRefusal(result: TerminalResult): string {
+// names the step and does not hand it over a second time. It quotes nothing
+// the command carried: its arguments can hold text from the repository.
+function sameTurnShellRefusal(): string {
   return (
-    `AIDLC already ran \`/aidlc ${result.typed}\` this turn and gave you its output to show the person, ` +
+    "AIDLC already ran this turn's terminal command and gave you its output to show the person, " +
     "so no other shell command runs this turn. Relay that output and end the turn.\n"
   );
 }
@@ -1849,7 +1849,7 @@ if (target === "terminal-command-guard") {
     // turn the chat's terminal command holds; nothing else here reads it.
     if (isKiroShellTool(tool) && (ide.sessionId?.trim() ?? "") !== "") {
       const sessionId = terminalSessionId();
-      if (refusesShellThisTurn(sessionId, readTurn(sessionId))) return 2;
+      if (refusesShellThisTurn(readTerminalLatch(sessionId), readTurn(sessionId))) return 2;
     }
     return 0;
   }
@@ -1919,7 +1919,7 @@ if (target === "terminal-command-guard") {
   // out. (The engine's own guard for this, Branch 0, reads only the agent-v1
   // project-wide latch; the engine could tell this chat's latch from another's
   // only by process ancestry, which one IDE window shares.)
-  if (refusesShellThisTurn(sessionId, recordedTurn)) return 2;
+  if (refusesShellThisTurn(existing, recordedTurn)) return 2;
   if (invocation === null) return 0;
   const command = classifyTerminalCommand(invocation.args);
   if (command === null) return 0;

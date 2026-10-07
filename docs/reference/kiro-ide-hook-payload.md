@@ -321,10 +321,10 @@ The two hooks after a shell command run the same way as one,
   lowering guard setting, and a call naming the tool files `aidlc-orchestrate.ts`,
   `aidlc-utility.ts` or `aidlc-knowledge.ts`. Once a terminal command has run for a
   chat's turn, the agent is told to relay its output and stop, and
-  `terminal-command-guard` also refuses (exit 2, a short reason on stderr that
-  quotes the terminal command and says to relay the output and end the turn)
-  that chat's every other shell call in that turn, also one whose tool input
-  cannot be read: the dispatcher or the native `aidlc` with any arguments, for any
+  `terminal-command-guard` also refuses that chat's every other shell call in
+  that turn, also one whose tool input cannot be read, with exit 2 and one fixed
+  line on stderr that says to relay the output and end the turn and quotes
+  nothing the command carried: the dispatcher or the native `aidlc` with any arguments, for any
   project, a name the shell builds at run time, and a call that names no AIDLC
   at all. No reading of the command decides which call is harmless. Tools that
   are not a shell are not this check's. A turn moves on only with the
