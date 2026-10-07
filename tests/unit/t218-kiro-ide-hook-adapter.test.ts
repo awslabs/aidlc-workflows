@@ -33,7 +33,6 @@ import {
   readFileSync,
   readdirSync,
   rmSync,
-  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { hostname, tmpdir } from "node:os";
@@ -6849,12 +6848,12 @@ describe("t218 terminal-command-guard holds a command with a lone carriage retur
 // A terminal command typed as the chat message (`/aidlc --help`) runs inside the
 // UserPromptSubmit hook and leaves this chat's terminal latch. The engine's own
 // Branch 0 guard reads only the agent-v1 latch files, so on this row the
-// PreToolUse hook is what keeps a bare `next` that same turn from handing out
-// the next stage, in every spelling the conductor can run it. A `next` with an
-// argument, another chat, a later turn, or a payload with no session is not
-// this guard's.
-describe("t218 a bare next on a turn whose terminal command already ran is refused through the dispatcher", () => {
-  const SAME_TURN = "this turn and gave you its output to show the person, so this `next` would move the workflow on a turn that asked for no workflow work. End the turn.";
+// PreToolUse hook is what keeps a `next` that same turn from handing out the
+// next stage: the agent was told to call no AIDLC tool, so no call that names
+// AIDLC runs, with or without arguments. A call that names none, another chat,
+// a later turn, or a payload with no session is not this guard's.
+describe("t218 a call that names AIDLC on a turn whose terminal command already ran is refused", () => {
+  const SAME_TURN = "this turn and gave you its output to show the person, so no other AIDLC command runs this turn. Relay that output and end the turn.";
 
   function submit(dir: string, sessionId: string, prompt: string) {
     const r = runIdeStdin(dir, "verb-intercept", JSON.stringify({
@@ -6866,18 +6865,18 @@ describe("t218 a bare next on a turn whose terminal command already ran is refus
     expect(r.code, r.stderr).toBe(0);
   }
 
-  function shell(dir: string, command: string, sessionId?: string, tool = "execute_bash", toolCwd?: string) {
+  function shell(dir: string, command: string, sessionId?: string, tool = "execute_bash") {
     return runIdeStdin(dir, "terminal-command-guard", JSON.stringify({
       ...(sessionId === undefined ? {} : { session_id: sessionId }),
       hook_event_name: "PreToolUse",
       cwd: dir,
       tool_name: tool,
-      tool_input: { command, ...(toolCwd === undefined ? {} : { cwd: toolCwd }) },
+      tool_input: { command },
     }));
   }
 
   // The direct `aidlc-orchestrate.ts` spelling is the one the existing refusal
-  // already read; these go through the dispatcher.
+  // already read; every other spelling that names AIDLC is refused too.
   const BARE_SPELLINGS: Array<[string, string]> = [
     ["execute_bash", "bun .kiro/tools/aidlc.ts engine orchestrate next"],
     ["execute_bash", "aidlc engine orchestrate next"],
@@ -6899,23 +6898,99 @@ describe("t218 a bare next on a turn whose terminal command already ran is refus
     ["execute_bash", "aidlc next | cat"],
     ["execute_bash", "aidlc next || true"],
     ["execute_pwsh", "aidlc.cmd engine orchestrate next; Write-Output done"],
+    // Shell syntax around it that is not an argument, and launchers.
+    ["execute_bash", "aidlc next &"],
+    ["execute_bash", "aidlc next & wait"],
+    ["execute_bash", "aidlc next >/dev/null"],
+    ["execute_bash", "aidlc next 2>/dev/null"],
+    ["execute_bash", "aidlc next > out.txt 2>&1"],
+    ["execute_bash", "aidlc next # carry on"],
+    ["execute_bash", "aidlc next\r\n"],
+    ["execute_bash", "time aidlc next"],
+    ["execute_bash", "nohup aidlc next"],
+    ["execute_bash", "FOO=1 aidlc next"],
+    ["execute_bash", "env FOO=1 aidlc next"],
+    ["execute_bash", "bash -c 'aidlc next'"],
+    ["execute_bash", "(aidlc next)"],
+    ["execute_bash", "{ aidlc next; }"],
+    ["execute_bash", "for s in 1; do aidlc next; done"],
+    ["execute_bash", "cat <<EOF\n$(aidlc next)\nEOF"],
+    // Text handed to a shell, or a here-document, which a shell may read.
+    ["execute_bash", "echo 'aidlc next' | bash"],
+    ["execute_bash", "printf 'aidlc next' | sh"],
+    ["execute_bash", "cat <<'EOF' | bash\naidlc next\nEOF"],
+    ["execute_bash", "/bin/bash <<'EOF'\naidlc next\nEOF"],
+    ["execute_bash", "cat > notes.md <<'EOF'\nRun:\naidlc next\nEOF"],
+    ["execute_bash", "true <<<X\naidlc next"],
+    ["execute_bash", "echo next | xargs aidlc engine orchestrate"],
+    // A word the shell builds, or a program that runs its arguments.
+    ["execute_bash", "echo x > \"$(aidlc next)\""],
+    ["execute_bash", "echo \"$(aidlc next)\" cd"],
+    ["execute_bash", "x=next; aidlc engine orchestrate \"$x\""],
+    ["execute_bash", "\"aid\"lc next"],
+    ["execute_bash", "aidlc ne\\xt"],
+    ["execute_bash", "aidlc engine orchestrate ne''xt"],
+    ["execute_bash", "sudo aidlc next"],
+    ["execute_bash", "timeout 5 aidlc next"],
+    ["execute_bash", "bun .kiro/tools/./aidlc.ts next"],
+    ["execute_bash", "cd .kiro/tools && bun aidlc.ts next"],
+    // A trailing `--` carries no words.
+    ["execute_bash", "aidlc next --"],
+    // Any other program may run what it is given, also a shell it is handed or
+    // a file the call wrote.
+    ["execute_bash", "nice sh -c '\"aidlc\" next'"],
+    ["execute_bash", "echo 'aidlc next' | nice sh"],
+    ["execute_bash", "printf 'aidlc next' > f.sh && bash -c '. ./f.sh'"],
+    ["execute_bash", "printf 'aidlc next' > f.sh && chmod +x f.sh && ./f.sh"],
+    ["execute_bash", "git -c 'alias.n=!aidlc next' n"],
+    ["execute_bash", "git commit -m 'docs: explain aidlc next'"],
+    ["execute_bash", "awk 'BEGIN{system(\"aidlc next\")}'"],
+    ["execute_bash", "python3.11 -c \"import os; os.system('aidlc next')\""],
+    ["execute_bash", "BASH_ENV=f bash -c true; aidlc next --stage requirements-analysis"],
+    ["execute_bash", "./.kiro/tools/aidlc.ts next"],
+    ["execute_bash", "command cd /elsewhere && aidlc next"],
+    ["execute_bash", "aidlc ne$" + "{E}xt"],
+    ["execute_bash", "AIDLC_PROJECT_DIR=~/elsewhere aidlc next"],
+    ["execute_pwsh", "iex \"& 'aidlc.cmd' next\""],
+    ["execute_pwsh", "aidlc.cmd next > $null"],
+    ["execute_pwsh", "aidlc.cmd next *>&1"],
+    ["execute_pwsh", "pwsh -Command \"aidlc.cmd next\""],
+    // Where the project is unknown, it may be this one.
+    ["execute_bash", "cd \"$WORK\" && aidlc next"],
+    ["execute_bash", "cd /elsewhere/project; aidlc next"],
+    ["execute_bash", "export AIDLC_PROJECT_DIR=/elsewhere/project; aidlc next"],
+    ["execute_bash", "if cd /elsewhere/project; then\naidlc next\nfi"],
   ];
 
-  test("the literal dispatcher spellings of a bare next are refused, in one line", () => {
+  test("every spelling that names AIDLC is refused, in one line", () => {
     const dir = scratchProject(true);
     try {
       submit(dir, "sess_bare_a", "/aidlc --help");
       // The prelude and the stream merge the conductor's own commands carry,
-      // and this project named; quoted, so a Windows path reads as one word.
-      // A link to this project (a junction on Windows) is this project.
-      const link = `${dir}-link`;
-      symlinkSync(dir, link, process.platform === "win32" ? "junction" : "dir");
+      // this project or another named, and a next with arguments, another
+      // route, or text that names it.
       const own: Array<[string, string]> = [
         ["execute_bash", `cd '${dir}' && aidlc engine orchestrate next 2>&1`],
         ["execute_bash", `aidlc --project-dir '${dir}' engine orchestrate next`],
-        ["execute_bash", `cd '${link}' && aidlc next`],
-        ["execute_bash", `aidlc --project-dir '${link}' next`],
-        ["execute_bash", `cd /elsewhere/project; cd '${dir}' && aidlc next`],
+        ["execute_bash", `cd '${dir}' || aidlc next`],
+        ["execute_bash", "AIDLC_PROJECT_DIR=/elsewhere/project aidlc --project-dir . next"],
+        ["execute_bash", "aidlc next --stage requirements-analysis"],
+        ["execute_bash", "bun .kiro/tools/aidlc.ts engine orchestrate next compose 'drop market research'"],
+        ["execute_bash", "aidlc --status"],
+        ["execute_bash", "aidlc engine orchestrate report"],
+        ["execute_bash", "aidlc --project-dir /elsewhere/project engine orchestrate next"],
+        ["execute_bash", "cd src && bun ../.kiro/tools/aidlc.ts next"],
+        ["execute_bash", "echo 'aidlc next' > notes.txt"],
+        ["execute_bash", "grep -n 'aidlc next' notes.md"],
+        ["execute_bash", "cat aidlc/aidlc-docs/next-steps.md"],
+        ["execute_bash", "cat <({aidlc,next})"],
+        ["execute_bash", "aid\\\nlc next"],
+        ["execute_bash", "ai$''dlc next"],
+        ["execute_bash", "ai$\"\"dlc next"],
+        ["execute_pwsh", "cmd /c ai^dlc next"],
+        ["execute_pwsh", "cmd /c ai^\r\ndlc next"],
+        ["execute_pwsh", "aidlc.cmd next --stage requirements-analysis > $null"],
+        ["execute_pwsh", "Write-Output 'aidlc.cmd next'"],
       ];
       for (const [tool, command] of [...BARE_SPELLINGS, ...own]) {
         // Twice: a refusal does not start a turn of its own.
@@ -6926,48 +7001,33 @@ describe("t218 a bare next on a turn whose terminal command already ran is refus
           expect(r.stderr, command).toBe(`AIDLC already ran \`/aidlc --help\` ${SAME_TURN}\n`);
         }
       }
-      // The commands run from the call's own cwd: from a subdirectory, `cd ..`
-      // is this project.
-      mkdirSync(join(dir, "packages"), { recursive: true });
-      const fromSub = shell(dir, "cd .. && aidlc next", "sess_bare_a", "execute_bash", join(dir, "packages"));
-      expect(fromSub.code, fromSub.stderr).toBe(2);
+      // Through the card Kiro runs it in, the refusal is said once.
+      const card = runIdeStdin(dir, "guard-tool-call", JSON.stringify({
+        session_id: "sess_bare_a",
+        hook_event_name: "PreToolUse",
+        cwd: dir,
+        tool_name: "execute_bash",
+        tool_input: { command: "aidlc next >/dev/null" },
+      }));
+      expect(card.code, card.stderr).toBe(2);
+      expect(card.stderr).toBe(`AIDLC already ran \`/aidlc --help\` ${SAME_TURN}\n`);
     } finally {
-      rmSync(`${dir}-link`, { force: true });
       rmSync(dir, { recursive: true, force: true });
     }
   });
 
-  test("a next with an argument, a later turn, and another chat are not this guard's", () => {
+  test("a call that names no AIDLC, another chat, and a later turn are not this guard's", () => {
     const dir = scratchProject(true);
     try {
       submit(dir, "sess_bare_a", "/aidlc --help");
-      for (const command of [
-        "bun .kiro/tools/aidlc.ts engine orchestrate next --stage requirements-analysis",
-        "aidlc engine orchestrate next --skip market-research",
-        "aidlc engine orchestrate next --request 0123abcd --continue",
-        "aidlc engine orchestrate next fix the login bug",
-        "bun .kiro/tools/aidlc.ts engine orchestrate next compose 'drop market research'",
-        "echo bun .kiro/tools/aidlc.ts engine orchestrate next",
-        "echo 'aidlc next; echo done'",
-        "aidlc engine orchestrate next --stage requirements-analysis; echo done",
-        "cd \"$WORK\" && aidlc next",
-        // A cd that may fail, or runs in a pipeline, leaves the directory unknown.
-        `cd '${dir}' || aidlc next`,
-        "cd /elsewhere/project; aidlc next",
-        // Another project named by a variable an earlier command sets.
-        "export AIDLC_PROJECT_DIR=/elsewhere/project; aidlc next",
-        // Lines that are not all commands, and a conditional directory change.
-        "cat > notes.md <<'EOF'\nRun:\naidlc next\nEOF",
-        "if cd /elsewhere/project; then\naidlc next\nfi",
-        "aidlc engine orchestrate report",
-        "aidlc --project-dir /elsewhere/project engine orchestrate next",
-        "cd /elsewhere/project && aidlc engine orchestrate next",
-        "AIDLC_PROJECT_DIR=/elsewhere/project aidlc next",
-      ]) {
+      for (const command of ["echo done", "ls", "cat notes.md", "git status", "bun test"]) {
         const r = shell(dir, command, "sess_bare_a");
         expect(r.code, `${command}\n${r.stderr}`).toBe(0);
         expect(r.stderr).toBe("");
       }
+      const pwsh = shell(dir, "Write-Output done", "sess_bare_a", "execute_pwsh");
+      expect(pwsh.code, pwsh.stderr).toBe(0);
+      expect(pwsh.stderr).toBe("");
       // Another chat in the same folder: its bare next is its own.
       submit(dir, "sess_bare_b", "carry on with the work");
       const other = shell(dir, "bun .kiro/tools/aidlc.ts engine orchestrate next", "sess_bare_b");
@@ -7031,4 +7091,51 @@ describe("t218 a bare next on a turn whose terminal command already ran is refus
       rmSync(dir, { recursive: true, force: true });
     }
   });
+
+  // A directory that refuses removals still lets an existing count be
+  // rewritten, and a count file without write permission refuses its write;
+  // Windows file modes do not express that, and root ignores them.
+  test.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
+    "a latch or a count that cannot be changed does not hold the next message",
+    () => {
+      const dir = scratchProject(true);
+      const sessionDir = join(
+        dir, "aidlc", ".aidlc-sessions", "kiro-terminal",
+        createHash("sha256").update("sess_bare_a").digest("hex"),
+      );
+      const restore = () => {
+        if (existsSync(sessionDir)) chmodSync(sessionDir, 0o755);
+        if (existsSync(join(sessionDir, "turn"))) chmodSync(join(sessionDir, "turn"), 0o644);
+      };
+      try {
+        // A latch that cannot be removed: the new count starts past its turn.
+        submit(dir, "sess_bare_a", "/aidlc --help");
+        writeFileSync(join(sessionDir, "turn"), "x\n", "utf-8");
+        chmodSync(sessionDir, 0o555);
+        submit(dir, "sess_bare_a", "carry on with the work");
+        for (const attempt of [1, 2]) {
+          const r = shell(dir, "aidlc next", "sess_bare_a");
+          expect(r.code, `#${attempt}\n${r.stderr}`).toBe(0);
+          expect(r.stderr).toBe("");
+        }
+        expect(readFileSync(join(sessionDir, "turn"), "utf-8")).toBe("2\n");
+        expect(JSON.parse(readFileSync(join(sessionDir, "latch.json"), "utf-8")).turn).toBe(1);
+        // A count that cannot be written: the latch goes with it.
+        restore();
+        rmSync(sessionDir, { recursive: true, force: true });
+        submit(dir, "sess_bare_a", "/aidlc --help");
+        chmodSync(join(sessionDir, "turn"), 0o444);
+        submit(dir, "sess_bare_a", "carry on with the work");
+        for (const attempt of [1, 2]) {
+          const r = shell(dir, "aidlc next", "sess_bare_a");
+          expect(r.code, `count #${attempt}\n${r.stderr}`).toBe(0);
+          expect(r.stderr).toBe("");
+        }
+        expect(existsSync(join(sessionDir, "latch.json"))).toBe(false);
+      } finally {
+        restore();
+        rmSync(dir, { recursive: true, force: true });
+      }
+    },
+  );
 });

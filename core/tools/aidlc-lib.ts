@@ -2100,7 +2100,7 @@ function unescapeUnquotedShellTextForEngagement(text: string): string {
   return result;
 }
 
-export function sameDirectory(left: string, right: string): boolean {
+function sameDirectory(left: string, right: string): boolean {
   const canonical = (directory: string): string => {
     let path = resolvePath(directory);
     try {
@@ -2644,7 +2644,7 @@ export function isEngineEngagementSegment(
   return false;
 }
 
-export function shellCommandSegments(command: string): string[] {
+function shellCommandSegments(command: string): string[] {
   const segments: string[] = [];
   let start = 0;
   let quote: "'" | '"' | null = null;

@@ -316,43 +316,41 @@ The two hooks after a shell command run the same way as one,
   session identity use the host-derived identity or the retained session, with
   an explicit legacy bucket when neither is available. The 0.12 camelCase
   fallback reads the command from `toolArgs.command`.
-- **A bare `next` after a terminal command**: the refusal above reads only the
-  direct `aidlc-orchestrate.ts` spelling. Once a terminal command has run for a
-  chat's turn, `terminal-command-guard` also refuses (exit 2, one line on
-  stderr saying to end the turn) that chat's `next` with no arguments in the
-  same turn when it goes through the dispatcher: `.kiro/tools/aidlc.ts`
-  through `bun`, `bun run` or `bun.exe`, or the native `aidlc`, `aidlc.cmd` or
-  `aidlc.exe`, by name or path, also after `command` or `exec`. The
-  dispatcher's own route resolution decides that the call is orchestrate
-  `next` (`engine orchestrate next` or the top-level `next`). Besides `next`
-  it may carry only `--aidlc-attempt-id` or an output flag (`--json`,
-  `--quiet`, `--no-color`, `--yes`, `--offline`, `--verbose`). The call is
-  split at its unquoted `;`, `|`, `&&`, `||` and line breaks, and each command
-  is read as literal words (on PowerShell a leading `&`, a trailing `2>&1` and
-  `\` paths), so a command before or after the `next` does not hide it and a
-  separator inside quotes is text. The commands run from the call's own
-  `cwd`. A literal `cd`, `chdir` or `pushd` (on PowerShell also
-  `Set-Location`, `sl`, `Push-Location`) followed by `&&` moves that directory
-  for the later commands. One that cannot be read, or that another separator
-  follows (it may fail, or run in a pipeline), leaves the directory unknown,
-  and nothing after it is judged until an absolute one; so does a command that
-  sets `AIDLC_PROJECT_DIR`, `CLAUDE_PROJECT_DIR` or `KIRO_PROJECT_DIR`. A call
-  with a heredoc or a shell keyword (`if`, `for`, `while`, `case`, a function)
-  is not judged at all. The project the `next` is for (that directory,
-  or a `--project-dir`) is compared with this one by the same rule the other
-  hooks use (real path, any case on Windows), so a link to this project counts
-  as this project. Another project's `next`, a command with a leading
-  assignment such as `AIDLC_PROJECT_DIR=`, an `echo`, or a `next` with any
-  other argument (a stage, `--skip`, a request, `compose`, typed words) is not
-  refused. This check judges only the chat the payload's `session_id` names,
-  against a turn that chat has recorded: with no session in the payload,
+- **An AIDLC call after a terminal command**: in the same turn, the fallback
+  above also refuses a terminal command typed again through the shell, a
+  lowering guard setting, and a call naming the tool files `aidlc-orchestrate.ts`,
+  `aidlc-utility.ts` or `aidlc-knowledge.ts`. Once a terminal command has run for a
+  chat's turn, the agent is told to relay its output and call no AIDLC tool
+  that turn, and `terminal-command-guard` also refuses (exit 2, one line on
+  stderr saying to relay the output and end the turn) that chat's every other
+  shell call whose text, with line continuations, quotes (also bash's `$'...'`
+  and `$"..."`) and escapes (backslash, PowerShell's backtick, cmd.exe's caret)
+  taken out, holds `aidlc`: the dispatcher
+  `.kiro/tools/aidlc.ts`, the native `aidlc`, `aidlc.cmd` or `aidlc.exe`, with
+  or without arguments, for any project, and also an `echo`, `grep` or `cat`
+  that names it. No shell reading decides which such call is harmless: a `next`
+  can hide behind a chain, a redirection, a subshell, a wrapper, a shell given a
+  script, or a project the shell picks at run time. A dispatcher name the shell
+  builds by expansion (a variable, braces, a glob, an escape inside `$'...'`, an
+  alias), a script written to a file and run by a later call, and
+  a script the project already has that runs the dispatcher (an npm or make
+  target, a git or shell alias) are not seen. A turn moves on only with the
+  person's message (`UserPromptSubmit`): an agent run Kiro starts without one
+  keeps the turn, and the person's next message releases it. The same-turn AIDLC check judges only the chat the payload's `session_id`
+  names, against a turn that chat has recorded: with no session in the payload,
   another chat's latch, or a later turn it refuses nothing. The turn count is
   read only as a whole number, and whenever it has to start again (missing or
-  unreadable) the latch beside it is dropped, so neither refusal matches a
-  latch from before. The engine's own guard for this (Branch 0) does not read
-  these per-chat latches: it finds its chat through process ancestry, and the
-  chats of one Kiro IDE window share a process, so it could pick another
-  chat's latch.
+  unreadable) the latch beside it is dropped; when the latch cannot be removed,
+  the new count starts past its turn. A count that cannot be written takes the
+  latch with it. Only when the count cannot be written and the latch cannot be
+  removed does the latch keep matching, until one of them can be changed again
+  or the person opens a new chat. The terminal-command refusal
+  still follows the host's or the retained session when a payload names none.
+  The engine's own
+  guard for this (Branch 0) reads only the agent-v1 project-wide latch, not
+  these per-chat ones: the engine could tell one chat's latch from another's
+  only through process ancestry, and the chats of one Kiro IDE window share a
+  process.
 - **cmd.exe metacharacters**: native Windows `aidlc` is `aidlc.cmd`, so cmd.exe
   reads the command line Windows PowerShell 5.1 builds for it: a value holding
   a space is wrapped in double quotes with its own double quotes left as they

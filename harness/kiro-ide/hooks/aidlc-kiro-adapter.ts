@@ -124,9 +124,6 @@ import {
   isAutonomousMode,
   isSwitchableGuardFence,
   kiroIdeLegacyPlanApprovalSessionId,
-  parseLiteralShellInvocation,
-  sameDirectory,
-  shellCommandSegments,
   markKiroIdeLegacyPlanApprovalHost,
   clearPlanApprovalLegacyWindow,
   recordHookDrop,
@@ -164,8 +161,7 @@ import {
 import { normalizeRetiredGuardPolicyField } from "../tools/aidlc-guard-switch.ts";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { aidlcEngineCommand, aidlcInvocation } from "../tools/aidlc-runtime-paths.ts";
-import { resolveAction, terminalDispatcherArgv } from "../tools/aidlc.ts";
-import { LAUNCHER_GLOBAL_FLAGS } from "../tools/aidlc-command.ts";
+import { terminalDispatcherArgv } from "../tools/aidlc.ts";
 import {
   canonicalWriteTool,
   isKiroAppendTool,
@@ -1468,115 +1464,13 @@ function toolTerminalInvocation(command: string): TerminalInvocation | null {
   return { raw, args: splitKiroCommandArgs(raw) };
 }
 
-// Whether one shell call runs a bare engine `next` for this project through
-// the dispatcher in any of its commands. The call is split at its unquoted
-// `;`, `|`, `&&`, `||` and line breaks (`shellCommandSegments`), so a suffix such
-// as `; echo done` does not hide the `next`, and a separator inside quotes is
-// text. The commands run from the call's own `cwd`. A literal `cd`, `chdir`,
-// `pushd` (or PowerShell's `Set-Location`, `sl`, `Push-Location`) followed by
-// `&&` moves that directory for the later commands; one that cannot be read,
-// or that another separator follows (it may fail, or run in a pipeline), leaves
-// it unknown, and nothing after it is judged. So does a command that sets a
-// project variable (`AIDLC_PROJECT_DIR`, `CLAUDE_PROJECT_DIR`,
-// `KIRO_PROJECT_DIR`). A call with a heredoc or a shell keyword (`if`, `for`,
-// `while`, `case`, a function) is not judged at all: its lines are not all
-// commands, and its directory changes are conditional.
-function runsBareDispatcherNext(command: string, powershell: boolean, cwd: string): boolean {
-  if (/<<|<<<|@['"]/.test(command)) return false;
-  let base: string | null = cwd;
-  let offset = 0;
-  for (const segment of shellCommandSegments(command)) {
-    const at = command.indexOf(segment, offset);
-    offset = (at < 0 ? offset : at) + segment.length;
-    const followedByAnd = command.slice(offset).trimStart().startsWith("&&");
-    if (/^\s*(?:if|then|else|elif|fi|for|while|until|do|done|case|esac|function|select|\{|\})(?:\s|$)/i.test(segment)) {
-      return false;
-    }
-    if (/(?:^|[\s;$:])(?:AIDLC|CLAUDE|KIRO)_PROJECT_DIR\s*=/i.test(segment)) {
-      base = null;
-      continue;
-    }
-    const words = segmentWords(segment, powershell);
-    const first = (words?.[0] ?? "").toLowerCase();
-    const changesDirectory = /^(?:cd|chdir|pushd|popd|set-location|sl|push-location|pop-location)$/.test(first) ||
-      (words === null && /(?:^|[\s(])(?:cd|chdir|pushd|popd|set-location|sl|push-location|pop-location)\b/i.test(segment));
-    if (changesDirectory) {
-      // The directory named, past `--` and PowerShell's -Path/-LiteralPath.
-      const operands = (words ?? []).slice(1).filter((word) =>
-        word !== "--" && !/^-(?:path|literalpath)$/i.test(word)
-      );
-      const target = words !== null && followedByAnd && first !== "popd" && first !== "pop-location" &&
-          operands.length === 1 && !/^[-~+]/.test(operands[0]) && !operands[0].includes("$")
-        ? operands[0]
-        : null;
-      // An absolute directory is known even after an unknown one.
-      base = target !== null && (base !== null || isAbsolute(target)) ? resolve(base ?? target, target) : null;
-      continue;
-    }
-    if (base === null || words === null) continue;
-    if (isBareDispatcherNext(words, base)) return true;
-  }
-  return false;
-}
-
-// One command's words: the literal shell reader for a POSIX shell, which
-// refuses expansions and redirections other than a trailing `2>&1`; for
-// PowerShell a leading `&` and a trailing `2>&1` are taken off and `\` paths
-// kept. Null when the command cannot be read as literal words.
-function segmentWords(segment: string, powershell: boolean): string[] | null {
-  if (segment.trim() === "") return null;
-  if (powershell) {
-    const text = segment.trim().replace(/^&\s*/, "").replace(/\s+2>&1$/, "");
-    if (/[;&|<>`\r\n()]|\$\(/.test(text)) return null;
-    return splitKiroCommandArgs(text);
-  }
-  return parseLiteralShellInvocation(segment)?.argv ?? null;
-}
-
-// Whether one command is the dispatcher's bare orchestrate `next` for this
-// project: the Bun `.kiro/tools/aidlc.ts` (through `bun`, `bun run` or
-// `bun.exe`) or the native `aidlc`, `aidlc.cmd` or `aidlc.exe`, by name or path,
-// also after `command` or `exec`, whose route the dispatcher itself resolves
-// (`resolveAction`) to `next` with no argument but `--aidlc-attempt-id` or an
-// output flag (`--json`, `--quiet`, ...). The project is the one `base` (where
-// the command runs) or a `--project-dir` names, compared with sameDirectory, so
-// a symlink or a Windows case spelling of this project is this project. A
-// leading assignment (`AIDLC_PROJECT_DIR=...`) can name another project, so a
-// command that sets one is not judged. The direct `aidlc-orchestrate.ts`
-// spelling is the earlier refusal's.
-function isBareDispatcherNext(words: string[], base: string): boolean {
-  let i = 0;
-  if (words[i] === "command" || words[i] === "exec") i++;
-  if (words[i] === "env") i++;
-  if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(words[i] ?? "")) return false;
-  const name = (word: string | undefined) =>
-    (word ?? "").replaceAll("\\", "/").split("/").pop()?.toLowerCase() ?? "";
-  const viaBun = name(words[i]) === "bun" || name(words[i]) === "bun.exe";
-  if (viaBun) i++;
-  if (viaBun && words[i] === "run") i++;
-  const program = (words[i] ?? "").replaceAll("\\", "/");
-  const dispatcher = viaBun
-    ? /(?:^|\/)\.kiro\/tools\/aidlc\.ts$/i.test(program)
-    : /^aidlc(?:\.cmd|\.exe)?$/.test(name(program));
-  if (!dispatcher) return false;
-  const routeWords = words.slice(i + 1);
-  // The dispatcher resolves a relative --project-dir from where it runs.
-  let project = base;
-  const named = routeWords.indexOf("--project-dir");
-  if (named >= 0) project = resolve(base, routeWords[named + 1] ?? "");
-  const action = resolveAction(routeWords, true);
-  if (action.type !== "delegate" || action.tool !== "aidlc-orchestrate.ts") return false;
-  const args: string[] = [];
-  for (let j = 0; j < action.args.length; j++) {
-    const word = action.args[j];
-    if (word === "--project-dir" || word === "--aidlc-attempt-id") {
-      j++;
-    } else if (!LAUNCHER_GLOBAL_FLAGS.has(word)) {
-      args.push(word);
-    }
-  }
-  // Another project's next is not this latch's to judge.
-  return args.length === 1 && args[0] === "next" && sameDirectory(project, projectDir);
+// Whether a shell call names AIDLC: its text, with line continuations, quotes
+// (also bash's `$'...'` and `$"..."`) and escapes (backslash, PowerShell's
+// backtick, cmd.exe's caret) taken out, holds `aidlc`. A name the shell builds
+// by expansion (a variable, braces, a glob, an escape inside `$'...'`, an
+// alias) is not seen.
+function namesAidlc(command: string): boolean {
+  return command.replace(/[\\`^]\r?\n/g, "").replace(/\$?['"]|[`\\^]/g, "").toLowerCase().includes("aidlc");
 }
 
 function terminalTyped(
@@ -1685,12 +1579,18 @@ function markSessionStarted(sessionId: string): void {
   }
 }
 
-// The chat's recorded turn, or 0 when the count is missing or is not a whole
-// number (a count with anything after its digits is not one).
+// A turn number a count can hold and still move on from.
+function usableTurn(turn: unknown): turn is number {
+  return typeof turn === "number" && Number.isSafeInteger(turn) && turn > 0 && turn < Number.MAX_SAFE_INTEGER - 1;
+}
+
+// The chat's recorded turn, or 0 when the count is missing or is not a usable
+// whole number (a count with anything after its digits is not one).
 function readTurn(sessionId: string): number {
   try {
     const text = readFileSync(turnCounterPath(sessionId), "utf-8").trim();
-    return /^\d+$/.test(text) ? Number.parseInt(text, 10) : 0;
+    const turn = /^\d+$/.test(text) ? Number.parseInt(text, 10) : 0;
+    return usableTurn(turn) ? turn : 0;
   } catch {
     return 0;
   }
@@ -1698,19 +1598,29 @@ function readTurn(sessionId: string): number {
 
 // The one place a turn count starts or moves on. Starting it again (the count
 // was missing or unreadable) also drops the latch left beside it: a latch from
-// before the count was lost cannot be shown to be this turn's.
+// before the count was lost cannot be shown to be this turn's. A latch that
+// cannot be removed stays behind the new count, which starts past its turn. A
+// count that cannot be written takes the latch with it, so the previous turn's
+// latch does not match the turns after it.
 function bumpTurn(sessionId: string): number {
   const recorded = readTurn(sessionId);
+  let start = recorded;
   if (recorded === 0) {
     try {
       rmSync(terminalLatchPath(sessionId), { force: true });
-    } catch { /* best-effort; a latch with no count beside it is not read as fresh */ }
+    } catch {
+      const latchTurn = readTerminalLatch(sessionId)?.turn;
+      start = usableTurn(latchTurn) ? latchTurn : 0;
+    }
   }
-  const turn = recorded + 1;
+  const turn = start + 1;
   try {
     mkdirSync(terminalSessionDir(sessionId), { recursive: true });
     writeFileSync(turnCounterPath(sessionId), `${turn}\n`, "utf-8");
   } catch {
+    try {
+      rmSync(terminalLatchPath(sessionId), { force: true });
+    } catch { /* both files are held: nothing here can move the turn on */ }
     return 0;
   }
   return turn;
@@ -1900,10 +1810,10 @@ function terminalRefusal(result: TerminalResult): string {
 
 // The terminal command's output already went to the agent to relay, so this
 // names the step and does not hand it over a second time.
-function sameTurnNextRefusal(result: TerminalResult): string {
+function sameTurnAidlcRefusal(result: TerminalResult): string {
   return (
     `AIDLC already ran \`/aidlc ${result.typed}\` this turn and gave you its output to show the person, ` +
-    "so this `next` would move the workflow on a turn that asked for no workflow work. End the turn.\n"
+    "so no other AIDLC command runs this turn. Relay that output and end the turn.\n"
   );
 }
 
@@ -1984,19 +1894,20 @@ if (target === "terminal-command-guard") {
     process.stderr.write(terminalRefusal(existing));
     return 2;
   }
-  // The same turn's bare `next` through the dispatcher, which the line above
-  // does not read: it would hand out the next stage on a turn that asked only
-  // for a terminal command. A `next` with any argument names work of its own
-  // and runs. Only the chat the payload names is judged; with no session in it,
-  // this stays out. (The engine's own guard for this, Branch 0, reads the
-  // agent-v1 latch only: it finds its chat by process ancestry, which one IDE
-  // window shares.)
+  // Any other call that names AIDLC in the same turn, through the dispatcher,
+  // the native `aidlc` or anything else: the agent was told to relay the output
+  // and call no AIDLC tool this turn (terminalContext), and a `next` there would
+  // hand out the next stage on a turn that asked only for a terminal command.
+  // No shell reading decides which of these calls is harmless, so none runs.
+  // Only the chat the payload names is judged; with no session in it, this
+  // stays out. (The engine's own guard for this, Branch 0, reads only the
+  // agent-v1 project-wide latch; the engine could tell this chat's latch from
+  // another's only by process ancestry, which one IDE window shares.)
   if (
     existing !== null && recordedTurn > 0 && existing.turn === recordedTurn &&
-    (ide.sessionId?.trim() ?? "") !== "" &&
-    runsBareDispatcherNext(rawCommand, isKiroPowerShellTool(tool), shellToolCwd(tool, ide.toolArgs ?? {}))
+    (ide.sessionId?.trim() ?? "") !== "" && namesAidlc(rawCommand)
   ) {
-    process.stderr.write(sameTurnNextRefusal(existing));
+    process.stderr.write(sameTurnAidlcRefusal(existing));
     return 2;
   }
   if (invocation === null) return 0;
