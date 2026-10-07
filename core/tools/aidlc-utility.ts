@@ -10828,21 +10828,17 @@ function handleScopeChange(projectDir: string, flags: Record<string, string>): v
     const newScopeDef = scopeMapping[newScope];
     if (!newScopeDef) die(`Unknown scope: ${newScope}. Valid scopes: ${Object.keys(scopeMapping).join(", ")}`);
     // The person's own request for the change, on this work's record, with no
-    // unattended driver in the way.
+    // unattended driver in the way. One reply that approves and asks for the
+    // change does both: the approval recorded from it does not use it up.
     const personAsked = (): boolean =>
       process.env.AIDLC_UNATTENDED !== "1" &&
-      personSpokeSinceGate(projectDir, { requests: true, intent, space });
+      personSpokeSinceGate(projectDir, { requests: true, outlivesApproval: true, intent, space });
     // Under "Continue automatically" the person's own scope change goes
     // through like any other, and the remaining work keeps their autonomy
-    // choice; one reply that approves and asks for the change does both.
-    // Only a change nobody asked for (an unattended driver) is refused,
-    // naming the setter that lets it through. Keep this guard ahead of the
-    // same-scope path, including no-ops.
-    if (
-      isAutonomousMode(contentBefore) &&
-      !(process.env.AIDLC_UNATTENDED !== "1" &&
-        personSpokeSinceGate(projectDir, { requests: true, outlivesApproval: true, intent, space }))
-    ) {
+    // choice. Only a change nobody asked for (an unattended driver) is
+    // refused, naming the setter that lets it through. Keep this guard ahead
+    // of the same-scope path, including no-ops.
+    if (isAutonomousMode(contentBefore) && !personAsked()) {
       die(
         "Cannot change scope while Construction runs unattended (Construction Autonomy Mode is " +
           "autonomous) with nobody here to approve the new plan. Run " +

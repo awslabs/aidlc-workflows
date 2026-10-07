@@ -398,6 +398,31 @@ describe("t36 aidlc-utility scope-change — CLI contract (migrated from t36-uti
     });
   });
 
+  // One reply that approves and asks for a lower-policy scope: the approval
+  // recorded from it does not use up the request, so the scope's own lower
+  // Guard Policy follows, as when the person asked for the change alone.
+  test("8d: \"approve it, and switch to mvp\" on enterprise lowers Guard Policy with the scope", () => {
+    const p = proj();
+    const sp = statePath(p);
+    writeFileSync(sp, readFileSync(sp, "utf-8")
+      .replace("- **Scope**: feature", "- **Scope**: enterprise")
+      .replace("- **Change Control**: strict (from scope feature)", "- **Guard Policy**: strict (from scope enterprise)"), "utf-8");
+    const hook = spawnSync(BUN, [join(REPO_ROOT, "dist", "claude", ".claude", "tools", "aidlc.ts"), "engine", "hook", "record-human-turn"], {
+      cwd: p,
+      input: JSON.stringify({ hook_event_name: "UserPromptSubmit", cwd: p, session_id: "t36-person", prompt: "approve it, and switch to mvp" }),
+      env: { ...process.env, CLAUDE_PROJECT_DIR: p },
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+      encoding: "utf-8",
+    });
+    expect(hook.status, `${hook.stdout}${hook.stderr}`).toBe(0);
+    appendAuditEntry("GATE_APPROVED", { Stage: "feasibility", "User Input": "Approve" }, p);
+    const r = scopeChange(["--scope", "mvp"], p);
+    expect(r.status, r.out).toBe(0);
+    expect(r.out).toContain("Switched to mvp");
+    expect(r.out).not.toContain("Guard Policy stays");
+    expect(stateField(sp, "Guard Policy")).toBe("off (from scope mvp)");
+  });
+
   test("8b: gated Construction proceeds - scope-change flips as today when autonomy is not autonomous", () => {
     const p = proj();
     const sp = statePath(p);
