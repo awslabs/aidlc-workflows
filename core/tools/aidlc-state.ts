@@ -4098,6 +4098,12 @@ function verifySummaryConfirmationPrecondition(
 //
 type ReviewerPreconditionAction = "complete" | "present-approval-gate";
 
+// The way out for a spent recovery names the one Unit it is for, never the
+// Unit the walk happens to be on.
+function spentUnit(units: string[]): { unit?: string } {
+  return units.length === 1 ? { unit: units[0] } : {};
+}
+
 function reviewerPreconditionPrefix(
   slug: string,
   action: ReviewerPreconditionAction,
@@ -4527,7 +4533,7 @@ function verifyReviewerPrecondition(
       const exhausted =
         recoverySpent.length > 0
           ? ` Recovery was already spent for ${recoverySpent.join(", ")}. ` +
-            recoveryGuidance(pd, content, stage.slug) +
+            recoveryGuidance(pd, content, stage.slug, spentUnit(recoverySpent)) +
             (requestChangesResetIsExecutable(content, stage.slug)
               ? " Only a human Request Changes decision resets that review attempt."
               : "")
@@ -4569,7 +4575,7 @@ function verifyReviewerPrecondition(
             `attempt restores one review allowance.`
           : `For units whose recovery was already spent (${recoverySpent.join(", ")}), ` +
             `the one recovery review was already used and their output changed ` +
-            `again. ${recoveryGuidance(pd, content, stage.slug)}` +
+            `again. ${recoveryGuidance(pd, content, stage.slug, spentUnit(recoverySpent))}` +
             (requestChangesResetIsExecutable(content, stage.slug)
               ? " Only a human Request Changes decision resets the review attempt; " +
                 "do not record that rejection on the human's behalf."
