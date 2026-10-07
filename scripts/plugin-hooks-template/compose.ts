@@ -2505,7 +2505,9 @@ try {
         Number.isSafeInteger(f.order) && typeof f.hash === "string" &&
         !seenFragKeys.has(`${target}:${PLUGIN_NAME}:${f.anchor}:${f.order}`));
       if (stale.length === 0) continue;
-      const stageFile = findStageFile(target);
+      // The sidecar is project data: a key that is not a plain stage slug is
+      // not resolved to a path.
+      const stageFile = /^[a-z0-9][a-z0-9-]*$/.test(target) ? findStageFile(target) : null;
       if (stageFile) {
         let content = readFileSync(stageFile, "utf-8").replace(/\r\n/g, "\n");
         const before = content;

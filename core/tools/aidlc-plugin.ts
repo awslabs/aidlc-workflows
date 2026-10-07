@@ -877,23 +877,45 @@ function writeCompositionRecords(
   const dataDir = harnessDataDir(stagedProject, harnessDir);
   mkdirSync(dataDir, { recursive: true });
   const files = new Map<string, OwnershipFile>();
-  for (const candidate of pluginPrimitiveTargets(plugin, stagedProject, harnessDir)) {
-    if (claimedPaths.has(candidate.path)) continue;
-    const target = join(stagedProject, candidate.path);
-    if (
-      !lstatSync(target).isFile() ||
-      !readFileSync(target).equals(projectedSourceBytes(candidate.source, harnessDir))
-    ) continue;
-    const liveTarget = join(liveProject, candidate.path);
-    const legacyMatch = existsSync(liveTarget) &&
-      lstatSync(liveTarget).isFile() &&
-      readFileSync(liveTarget).equals(projectedSourceBytes(candidate.source, harnessDir));
-    if (existsSync(liveTarget) && !legacyMatch && !priorOwnedPaths.has(candidate.path)) continue;
-    files.set(candidate.path, {
-      path: candidate.path,
-      sha256: sha256File(target),
-    });
-    claimedPaths.add(candidate.path);
+  // The compose hook records what it installed: the files it wrote, replaced,
+  // or found identical to its own harness-shaped copy, with their hashes. Keep
+  // that record. Rebuilding it from byte-equality with the plugin source lost
+  // every file a harness reshapes at install (a Kiro, Cursor, OpenCode, or
+  // Copilot agent), so the plugin's next update of that file was refused.
+  const composed = parseOwnership(join(dataDir, `plugin-owned-${plugin.key}.json`));
+  if (composed && composed.name === plugin.key) {
+    for (const file of composed.files) {
+      if (claimedPaths.has(file.path)) continue;
+      const target = assertOwnedPath(stagedProject, file.path);
+      if (
+        !existsSync(target) ||
+        !lstatSync(target).isFile() ||
+        sha256File(target) !== file.sha256
+      ) continue;
+      files.set(file.path, { path: file.path, sha256: file.sha256 });
+      claimedPaths.add(file.path);
+    }
+  } else {
+    // A plugin whose vendored compose hook predates the record: prove
+    // ownership from the source bytes, as before.
+    for (const candidate of pluginPrimitiveTargets(plugin, stagedProject, harnessDir)) {
+      if (claimedPaths.has(candidate.path)) continue;
+      const target = join(stagedProject, candidate.path);
+      if (
+        !lstatSync(target).isFile() ||
+        !readFileSync(target).equals(projectedSourceBytes(candidate.source, harnessDir))
+      ) continue;
+      const liveTarget = join(liveProject, candidate.path);
+      const legacyMatch = existsSync(liveTarget) &&
+        lstatSync(liveTarget).isFile() &&
+        readFileSync(liveTarget).equals(projectedSourceBytes(candidate.source, harnessDir));
+      if (existsSync(liveTarget) && !legacyMatch && !priorOwnedPaths.has(candidate.path)) continue;
+      files.set(candidate.path, {
+        path: candidate.path,
+        sha256: sha256File(target),
+      });
+      claimedPaths.add(candidate.path);
+    }
   }
   const ownership: OwnershipRecord = {
     schemaVersion: 1,

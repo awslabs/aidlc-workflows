@@ -42,12 +42,14 @@ import {
 } from "../harness/fixtures.ts";
 import {
   HARNESS_MATRIX,
+  harnessByName,
   type ShippedHarnessName,
 } from "../harness/harness-matrix.ts";
 import {
   assertNonEmptyStageBody,
   buildPluginProjection,
   composePluginFixture,
+  copyHarnessInstall,
 } from "../harness/plugin-kit.ts";
 import { writeWindowsBunLauncher } from "../harness/windows-native-executable.ts";
 import { DEFAULT_SUBPROCESS_TIMEOUT_MS } from "../../core/tools/aidlc-runtime-budget.ts";
@@ -2150,6 +2152,71 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
     expect(sync.stderr).toContain('tool "aidlc-sensor-syn-upgrade-check.ts" collides with an existing file this plugin has no record of installing');
     expect(sync.stderr).not.toMatch(/aidlc-plugin-sync-[^/]+\/project/);
   });
+
+  // Harnesses that reshape an agent at install: Kiro strips disallowedTools and
+  // model, Cursor and the two .aidlc hosts project the persona, so the installed
+  // bytes never equal the plugin source. Sync must still record those files as
+  // the plugin's (the compose hook already does), or the plugin's next update of
+  // that agent is refused as a file with no record and the person has to delete
+  // it by hand.
+  const RESHAPING_HARNESSES: Array<{ harness: ShippedHarnessName; leaf: string; manifestDir: string; agentSource: string }> = [
+    { harness: "kiro", leaf: ".kiro", manifestDir: ".kiro-plugin", agentSource: "agents" },
+    { harness: "cursor", leaf: ".cursor", manifestDir: ".cursor-plugin", agentSource: join("aidlc", "agents") },
+    { harness: "opencode", leaf: ".aidlc", manifestDir: ".opencode-plugin", agentSource: "agents" },
+    { harness: "copilot", leaf: ".aidlc", manifestDir: ".plugin", agentSource: "agents" },
+  ];
+  for (const { harness, leaf, manifestDir, agentSource } of RESHAPING_HARNESSES) {
+    test(`plugin sync records a reshaped ${harness} agent and a later update replaces it`, () => {
+      const projectDir = mkdtempSync(join(tmp, `sync-reshape-${harness}-`));
+      if (harness === "cursor") {
+        const install = spawnSync(BUN, [join(harnessByName("cursor").distRoot, "install.ts"), projectDir], {
+          cwd: REPO_ROOT, encoding: "utf-8", timeout: remainingOperationTimeoutMs(NATIVE_RUNTIME_CASE_TIMEOUT_MS),
+        });
+        expect(install.status, install.stderr).toBe(0);
+      } else {
+        copyHarnessInstall(harness, projectDir);
+      }
+      const root = join(tmp, `plugin-reshape-${harness}`);
+      cpSync(pluginBuilds.get(harness)!, root, { recursive: true });
+      const sync = (): SpawnSyncReturns<string> =>
+        spawnSync(BUN, [join(projectDir, leaf, "tools", "aidlc-plugin.ts"), "sync"], {
+          cwd: projectDir, encoding: "utf-8", timeout: remainingOperationTimeoutMs(NATIVE_RUNTIME_CASE_TIMEOUT_MS),
+          env: {
+            ...process.env,
+            PLUGIN_ROOT: root,
+            AIDLC_PLUGIN_ROOT: root,
+            CLAUDE_PLUGIN_ROOT: root,
+            AIDLC_PROJECT_DIR: projectDir,
+            CLAUDE_PROJECT_DIR: projectDir,
+            AIDLC_HARNESS_DIR: leaf,
+            AIDLC_HARNESS_NAME: harness,
+          },
+        });
+
+      const first = sync();
+      expect(first.status, first.stderr).toBe(0);
+      const agentRel = `${leaf}/agents/test-pro-metrics-agent.md`;
+      const installedAgent = join(projectDir, agentRel);
+      expect(existsSync(installedAgent)).toBe(true);
+      const record = JSON.parse(
+        readFileSync(join(projectDir, leaf, "tools", "data", "plugin-owned-test-pro.json"), "utf-8"),
+      ) as { files: Array<{ path: string; sha256: string }> };
+      expect(record.files.map((file) => file.path)).toContain(agentRel);
+      expect(record.files.find((file) => file.path === agentRel)?.sha256).toBe(sha256Of(installedAgent));
+
+      // The plugin's next version changes that agent's prose.
+      const source = join(root, agentSource, "test-pro-metrics-agent.md");
+      writeFileSync(source, `${readFileSync(source, "utf-8")}\nRESHAPE-UPDATE marker.\n`);
+      const manifestPath = join(root, manifestDir, "plugin.json");
+      const manifest = JSON.parse(readFileSync(manifestPath, "utf-8")) as { version?: string };
+      manifest.version = "9.9.9";
+      writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+
+      const second = sync();
+      expect(second.status, second.stderr).toBe(0);
+      expect(readFileSync(installedAgent, "utf-8")).toContain("RESHAPE-UPDATE marker");
+    });
+  }
 
   // --- Compile self-heal (a prior compile that didn't land must retry) ---
   test("compose recompiles when the graph lost the plugin's stages", () => {
