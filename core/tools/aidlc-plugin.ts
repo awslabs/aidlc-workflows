@@ -1051,14 +1051,17 @@ async function runComposer(
   const aidlcRoot = join(stagedProject, "aidlc");
   if (existsSync(aidlcRoot)) {
     for (const file of surfaceFiles(aidlcRoot)) {
-      if (
-        basename(file) === `plugin-compose-${plugin.key}.drops` &&
-        readFileSync(file, "utf-8").includes("[degraded]")
-      ) drops.push(file);
+      if (basename(file) !== `plugin-compose-${plugin.key}.drops`) continue;
+      // The staged drops file is gone with the staging directory, so the
+      // error carries the reasons themselves.
+      for (const line of readFileSync(file, "utf-8").split(/\r?\n/)) {
+        const degraded = line.match(/\t\[degraded\] (.+)$/);
+        if (degraded) drops.push(degraded[1]);
+      }
     }
   }
   if (drops.length > 0) {
-    throw new Error(`plugin ${plugin.key} composition reported degraded drops: ${drops.join(", ")}`);
+    throw new Error(`plugin ${plugin.key} composition reported degraded drops: ${drops.join("; ")}`);
   }
   if (pluginSourceHash(plugin.root) !== plugin.sourceHash) {
     throw new Error(`plugin ${plugin.key} source changed during composition`);
