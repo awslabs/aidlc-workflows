@@ -291,11 +291,19 @@ export interface RunStageDirective {
     verification_command: string | null;
     command_authorized: boolean;
     // Only the Unit's reviewed code changed since its review: run this review
-    // request now, without asking, then verify again.
-    rereview?: { stage: string; reviewer: string; iteration: number; command: string };
+    // request now, without asking, then verify again. With `unfinished`, the
+    // Unit's own review has not finished instead: no verdict yet, or
+    // NOT-READY with a pass left (repaired first).
+    rereview?: {
+      stage: string; reviewer: string; iteration: number; command: string;
+      unfinished?: "no-verdict" | "not-ready";
+    };
     // The current review re-checked that changed code or those documents; the
     // person gets one approval question that says so.
     rechecked?: { verdict: string; approved_before: boolean; changed: "code" | "documents" };
+    // The person let the Unit go on without these stages' unfinished reviews;
+    // `question` is the one approval question.
+    review_not_finished?: { stages: string[]; question: string };
   };
   swarm_checkpoint?: {
     batch: number;
@@ -1486,6 +1494,12 @@ function checkRunStageShared(
         (!isObject(rechecked) || typeof rechecked.verdict !== "string" || typeof rechecked.approved_before !== "boolean" ||
           (rechecked.changed !== "code" && rechecked.changed !== "documents"))
       ) errors.push(`${kind}: construction_checkpoint.rechecked must carry its verdict`);
+      const notFinished = checkpoint.review_not_finished;
+      if (
+        "review_not_finished" in checkpoint &&
+        (!isObject(notFinished) || typeof notFinished.question !== "string" || !Array.isArray(notFinished.stages) ||
+          !notFinished.stages.every((stage: unknown) => typeof stage === "string"))
+      ) errors.push(`${kind}: construction_checkpoint.review_not_finished must carry its stages and question`);
     }
   }
   if ("artifact_reuse" in o) {

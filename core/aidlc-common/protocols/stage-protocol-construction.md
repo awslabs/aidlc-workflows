@@ -249,6 +249,12 @@ approved Unit's work keeps its approval, and its one line arrives in
 own check. A change made after the approval question was asked and before the
 person answers is accepted the same way: their `approve` records it, and its one
 line arrives in that command's `change_notices`.
+A `rereview` with `unfinished` is instead the Unit's own review that did not finish
+(`no-verdict`: never answered; `not-ready`: NOT-READY with a pass left, so repair
+what it found first): run it the same way. When the person said to approve the Unit
+as it is, run `verify` with `--over-unfinished-review` instead; the checkpoint then
+carries `review_not_finished`, whose `question` takes the place of "Approve this
+completed <unit>?", and `approve` returns the one line to say.
 
 Otherwise, if `ready` is false or evidence became stale, explain `errors`.
 Repair the named missing review or receipt through its owning procedure,

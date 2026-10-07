@@ -224,7 +224,7 @@ import {
 } from "./aidlc-usage.ts";
 import { deriveTeamUnitProgressModel } from "./aidlc-orchestrate.ts";
 import { promotableTestingPosture } from "./aidlc-testing-posture.ts";
-import { approvedUnitChanges } from "./aidlc-construction-checkpoints.ts";
+import { approvedOverUnfinishedReview, approvedUnitChanges } from "./aidlc-construction-checkpoints.ts";
 
 // All valid checkbox states (lib.ts adds [?] awaiting-approval and [R] revising)
 const VALID_CHECKBOX_STATES: CheckboxState[] = [
@@ -4497,8 +4497,11 @@ function verifyReviewerPrecondition(
   }
   if (reviewUnits.length === 0) return;
 
+  // A Unit the person approved at its checkpoint as it was, over this
+  // stage's review that did not finish, owes no verdict here either.
   const missing = reviewUnits.filter(
-    (u) => !reviewedUnits.has(u) && !approvableUnfinishedReview(pd, content, receipts, personCall, u),
+    (u) => !reviewedUnits.has(u) && !approvableUnfinishedReview(pd, content, receipts, personCall, u) &&
+      !approvedOverUnfinishedReview(pd, content, stage.slug, u),
   );
   if (missing.length > 0) {
     if (noDagObserved) {

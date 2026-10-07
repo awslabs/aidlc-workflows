@@ -1318,7 +1318,13 @@ function checkpointSession(pd: string, flagged: string | undefined, required: bo
 }
 
 function handleCheckpoint(args: string[]): void {
-  const flags = parseFlags(args);
+  // The person said to approve the Unit as it is over a review that did not
+  // finish; verify reads it, and the engine checks their words are on record.
+  const overUnfinishedReview = args.includes("--over-unfinished-review");
+  const flags = parseFlags(args.filter((arg) => arg !== "--over-unfinished-review"));
+  if (overUnfinishedReview && flags.action !== "verify") {
+    error("checkpoint --over-unfinished-review goes with --action verify.");
+  }
   if (flags["check-cmd"] !== undefined) {
     error("checkpoint no longer accepts --check-cmd. " + VERIFICATION_COMMAND_RECOVERY + " Run checkpoint --action verify without --check-cmd.");
   }
@@ -1339,7 +1345,7 @@ function handleCheckpoint(args: string[]): void {
       break;
     case "verify":
       result = verifyConstructionCheckpoint(
-        pd, flags.unit, checkpointKind,
+        pd, flags.unit, checkpointKind, { overUnfinishedReview },
       );
       break;
     case "approve":

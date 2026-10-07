@@ -1893,11 +1893,19 @@ the one re-check request, and the agent runs it before verifying. That happens
 under Guard Policy `strict`; under `relaxed` and `off` the change is accepted
 instead, an approved Unit stays approved, and `verify` returns its one line as
 `change_notices`. The same holds with reviews off: the next Unit's `verify`, or
-the Construction stage's own check, returns the line:
+the Construction stage's own check, returns the line. When the Unit's own review
+did not finish (no verdict yet, or NOT-READY with a pass left), `rereview` carries
+`unfinished` and names the request that finishes it. If the person says to approve
+the Unit as it is, add `--over-unfinished-review` to `verify`: under Guard Policy
+`relaxed` and `off`, with the person's words on record and a review that was asked
+for, the Unit is verified and asked about once (`review_not_finished.question`),
+and its approval records the review as not finished. Under `strict`, or a team's
+locked `strict`, the review finishes first:
 
 ```bash
 aidlc engine bolt checkpoint --action status --unit "<Unit>" --kind <unit|skeleton>
 aidlc engine bolt checkpoint --action verify --unit "<unit>" --kind <unit|skeleton>
+aidlc engine bolt checkpoint --action verify --unit "<unit>" --kind <unit|skeleton> --over-unfinished-review
 ```
 
 Verification runs the recorded, human-authorized `Construction Verification

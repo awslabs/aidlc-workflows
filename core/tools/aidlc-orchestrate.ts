@@ -8528,6 +8528,7 @@ function applyConstructionCheckpointShape(
     command_authorized: checkpoint.command_authorized,
     ...(checkpoint.rereview ? { rereview: checkpoint.rereview } : {}),
     ...(checkpoint.rechecked ? { rechecked: checkpoint.rechecked } : {}),
+    ...(checkpoint.review_not_finished ? { review_not_finished: checkpoint.review_not_finished } : {}),
   };
   if (directive.construction_policy) {
     directive.construction_policy.human_completion_required = checkpoint.human_required;
@@ -8565,6 +8566,11 @@ function applyConstructionCheckpointShape(
     !checkpoint.rereview && !checkpoint.rechecked && !checkpoint.asked
   ) {
     directive.protocol_modules.push("learnings");
+  }
+  // After the person's "approve it as it is", the one question they get is
+  // the approval itself.
+  if (checkpoint.review_not_finished) {
+    directive.protocol_modules = directive.protocol_modules.filter((module) => module !== "learnings");
   }
 }
 

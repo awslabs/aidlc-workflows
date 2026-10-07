@@ -42,7 +42,9 @@ import {
   latestMainWorkflowStageRunFloorForProject,
   loadStageGraph,
   maximalAttemptEvents,
+  memoryStrictHoldsGuardPolicy,
   parseCheckboxes,
+  personSpokeSinceGate,
   readAuditShardEvents,
   readRegularFileNoFollowOrThrow,
   readStateFile,
@@ -137,8 +139,13 @@ export interface ConstructionCheckpoint {
   verification_command: string | null;
   command_authorized: boolean;
   /** Only the Unit's reviewed code or documents changed since its review: the
-   *  one review request that re-checks them, run before verifying again. */
-  rereview: { stage: string; reviewer: string; iteration: number; command: string } | null;
+   *  one review request that re-checks them, run before verifying again. With
+   *  `unfinished`, the Unit's own review has not finished instead: asked for
+   *  with no verdict yet, or NOT-READY with a pass left (repaired first). */
+  rereview: {
+    stage: string; reviewer: string; iteration: number; command: string;
+    unfinished?: "no-verdict" | "not-ready";
+  } | null;
   /** The current review is that re-check, of the Unit's code or documents.
    *  `approved_before` says the person had approved this Unit before then. */
   rechecked: {
@@ -146,6 +153,9 @@ export interface ConstructionCheckpoint {
     /** The person chose Redo for this approved Unit's work, so it is asked about as new work. */
     redone?: true;
   } | null;
+  /** The stages whose unfinished review the person let this Unit go on
+   *  without ("approve it as it is"), and the one approval question. */
+  review_not_finished?: { stages: string[]; question: string };
   /** From verify: the one line for each change to this Unit's reviewed work
    *  its Guard Policy accepted, said before the person is asked. */
   change_notices?: string[];
@@ -358,6 +368,9 @@ interface Snapshot {
   accepted: AcceptedChange[];
   /** Each stage's evidence as an approval of the Unit records it. */
   approvedEvidence: string;
+  /** This work's Guard Policy lets the person approve the Unit over the
+   *  unfinished review `rereview` names. */
+  overAllowed: boolean;
 }
 
 /** One stage's evidence as an approval of the Unit saw it. */
@@ -445,6 +458,31 @@ function approvedWorkChange(
   };
 }
 
+// "Review Not Finished" on a verification row: one JSON line from each stage
+// whose unfinished review the person let the Unit go on without to that
+// stage's run floor then. Empty when the row has none or it is unreadable.
+function notFinishedReviews(row: AuditShardEvent | null): Map<string, string> {
+  const stages = new Map<string, string>();
+  const value = row ? auditBlockField(row.block, "Review Not Finished") : null;
+  if (value === null) return stages;
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) return stages;
+    for (const [slug, floor] of Object.entries(parsed)) if (typeof floor === "string") stages.set(slug, floor);
+  } catch {
+    // Unreadable: no review is recorded as not finished.
+  }
+  return stages;
+}
+
+// The reviews of these stages as the person reads them: "Code Generation
+// review", or "Functional Design and Code Generation reviews".
+function reviewsNamed(slugs: readonly string[]): string {
+  const names = slugs.map((slug) => findStageBySlug(slug)?.name ?? slug);
+  const named = names.length < 2 ? names.join("") : `${names.slice(0, -1).join(", ")} and ${names.at(-1)}`;
+  return `${named} review${names.length > 1 ? "s" : ""}`;
+}
+
 function locked<T>(
   projectDir: string,
   fn: () => T extends Promise<unknown> ? never : T,
@@ -464,6 +502,7 @@ function snapshot(
   kind: ConstructionCheckpointKind,
   stateContent?: string,
   sharedEvidence?: ConstructionEvidence,
+  personAllows = false,
 ): Snapshot {
   const unitError = validateUnitName(unit);
   if (unitError) throw new Error(unitError);
@@ -522,6 +561,22 @@ function snapshot(
   const recordedEvidence = askedEvidence ?? (gate?.event === "GATE_APPROVED" && auditBlockField(gate.block, "Unit") === unit
     ? readApprovedEvidence(gate.block) : null);
   const approvedEvidence: Record<string, [string | null, string | null] | [string | null, string, Record<string, string>]> = {};
+  const verification = onlyLatest(rows.filter((row) =>
+    row.event === "CHECKPOINT_VERIFICATION_RECORDED" &&
+    auditBlockField(row.block, "Unit") === unit &&
+    auditBlockField(row.block, "Kind") === kind &&
+    eventMatchesClaimAttempt(projectDir, row.block, unit),
+  ));
+  // The person said to approve the Unit as it is over a review of its that
+  // has not finished: in their words now (`personAllows`), or as the
+  // verification that took them recorded it, per stage at its run floor. Only
+  // under off and relaxed, and never over a strict the team locks.
+  const notFinishedBefore = notFinishedReviews(verification);
+  const notFinished: string[] = [];
+  let mayGoOn: boolean | null = null;
+  const overAllowed = (): boolean => (mayGoOn ??= acceptsChanges() && !memoryStrictHoldsGuardPolicy(projectDir, state));
+  // The unfinished review `rereview` names is one the person may go on without.
+  let unfinishedMayGoOn = false;
 
   for (const slug of stages) {
     const stage = findStageBySlug(slug);
@@ -595,6 +650,7 @@ function snapshot(
       ? resolveReviewClass(stage.review_class ?? "adversarial", scope, state)
       : "none";
     let review: AuditShardEvent | null = null;
+    let waived = false;
     if (reviewClass !== "none") {
       let receipts = shared.receipts.get(slug);
       if (!receipts) {
@@ -650,7 +706,7 @@ function snapshot(
         artifact !== null && reviewedArtifact !== null && reviewedArtifact !== artifact &&
         receipts.unitVerdicts.has(unit) && acceptsChanges()
       ) artifact = reviewedArtifact;
-      if (
+      const reviewMissing = (
         !review || !receipts.unitVerdicts.has(unit) ||
         !binding || (
           !completionCarriesVerifiedReview(projectDir, binding, review.block) &&
@@ -667,7 +723,17 @@ function snapshot(
           auditBlockField(review.block, "Source Freshness Bypass") !== null ||
           auditBlockField(review.block, "Unit Source Binding Bypass") !== null
         ))
+      );
+      // The Unit's own review was asked for in this attempt and has not
+      // finished: no verdict yet, or NOT-READY with a pass left.
+      const pending = receipts.unitPending.get(unit);
+      if (
+        reviewMissing && pending !== undefined && !pending.recovery && pending.verificationFailed !== true &&
+        (personAllows || notFinishedBefore.get(slug) === floor) && overAllowed()
       ) {
+        notFinished.push(slug);
+        waived = true;
+      } else if (reviewMissing) {
         errors.push(`${slug}: current artifact/source-bound terminal review evidence is required.`);
         // Only the reviewed code or documents moved (no review is waiting):
         // the one recovery review re-checks them. So does readable code the
@@ -700,6 +766,23 @@ function snapshot(
               projectDir, stage: slug, reviewer, unit, iteration, ...(retryPending ? { retryPending: true } : {}),
             }),
           };
+        } else if (pending !== undefined) {
+          // The step that finishes the Unit's own review: the same request
+          // again, or the next pass after a NOT-READY's repair.
+          const reviewer = stage.reviewer!;
+          const iteration = pending.state === "repair-required" ? pending.iteration + 1 : pending.iteration;
+          recheckable++;
+          if (rereview === null) {
+            rereview = {
+              stage: slug, reviewer, iteration,
+              command: renderReviewRequestCommand({
+                projectDir, stage: slug, reviewer, unit, iteration,
+                ...(pending.state === "retry-required" ? { retryPending: true } : {}),
+              }),
+              unfinished: receipts.awaitingVerdict?.has(unit) ? "no-verdict" : "not-ready",
+            };
+            unfinishedMayGoOn = !pending.recovery && pending.verificationFailed !== true;
+          }
         }
       } else if (request && auditBlockField(request.block, "Recovery") === "stale-receipt") {
         // A re-check of code alone asked about the documents the review before
@@ -717,10 +800,12 @@ function snapshot(
           }
         }
       }
-    } else {
-      // No review re-checks this stage: a later change to the work the person
-      // approved, which its Guard Policy accepts, keeps the approved values in
-      // the fingerprint and is said once.
+    }
+    if (reviewClass === "none" || waived) {
+      // No review re-checks this stage (or the person let the Unit go on
+      // without it): a later change to the work the person approved, which
+      // its Guard Policy accepts, keeps the approved values in the
+      // fingerprint and is said once.
       const recorded = recordedEvidence?.get(slug);
       if (
         recorded && recorded.floor === floor && artifact !== null &&
@@ -763,12 +848,6 @@ function snapshot(
   const proofPath = proofRelativePath(unit, kind);
   const proof = readProof(root, proofPath);
   const proofFile = proof;
-  const verification = onlyLatest(rows.filter((row) =>
-    row.event === "CHECKPOINT_VERIFICATION_RECORDED" &&
-    auditBlockField(row.block, "Unit") === unit &&
-    auditBlockField(row.block, "Kind") === kind &&
-    eventMatchesClaimAttempt(projectDir, row.block, unit),
-  ));
   const ready = errors.length === 0;
   const verifiedWith = (
     commandSha256: string | undefined,
@@ -844,11 +923,15 @@ function snapshot(
   return {
     root, rows, state, verificationCommand: shared.verificationCommand, accepted,
     approvedEvidence: JSON.stringify(approvedEvidence),
+    overAllowed: rereview?.unfinished !== undefined && unfinishedMayGoOn && overAllowed(),
     result: {
       kind, unit, stages, fingerprint, verified, approved,
       human_required: humanRequired, enabled, ready, errors,
       verification_command: shared.verificationCommand?.label ?? null,
       command_authorized: shared.verificationCommand !== null,
+      ...(notFinished.length > 0 ? {
+        review_not_finished: { stages: notFinished, question: `Approve ${unit}? Its ${reviewsNamed(notFinished)} did not finish.` },
+      } : {}),
       run_floor: floors[stages.at(-1)!] ?? "unstarted#0",
       run_floors: floors, proof_path: `${root}/${proofPath}`, verification: proof ?? restored,
       rereview, rechecked,
@@ -900,11 +983,24 @@ export function approvedUnitChanges(
   return { changeControlRead: acceptedChanges.length > 0, acceptedChanges };
 }
 
-function requireReady(result: ConstructionCheckpoint): void {
+function requireReady(current: Snapshot): void {
+  const result = current.result;
   if (!result.ready) {
-    const rereview = result.rereview
-      ? ` What ${result.rereview.stage} reviewed changed since its review: request the re-check with \`${result.rereview.command}\`, record the verdict, then verify.`
-      : "";
+    const step = result.rereview;
+    const finish = step?.unfinished === "not-ready"
+      ? `repair what it found, request the next pass with \`${step.command}\`, record the verdict, then verify`
+      : `request it again with \`${step?.command}\`, record the verdict, then verify`;
+    // The person may let the Unit go on without a review that did not finish;
+    // strict, in the state or locked by the team, keeps it required.
+    const rereview = !step ? ""
+      : !step.unfinished
+        ? ` What ${step.stage} reviewed changed since its review: request the re-check with \`${step.command}\`, record the verdict, then verify.`
+        : ` The ${reviewsNamed([step.stage])} for ${result.unit} ` +
+          `${step.unfinished === "no-verdict" ? "did not finish" : "is NOT-READY with a pass left"}. ` +
+          (current.overAllowed
+            ? `If the person said to approve ${result.unit} as it is (their words since the last question), verify ` +
+              `with --over-unfinished-review; otherwise finish the review: ${finish}.`
+            : `Finish it first: ${finish}.`);
     throw new Error(`Construction checkpoint is not ready: ${result.errors.join(" ")}${rereview}`);
   }
 }
@@ -950,13 +1046,15 @@ export function verifyConstructionCheckpoint(
   projectDir: string,
   unit: string,
   kind: ConstructionCheckpointKind,
+  options: { overUnfinishedReview?: boolean } = {},
 ): ConstructionCheckpoint {
   // A check that formats or regenerates the Unit's files changes what it
   // checked, so it runs once more against the files as they are now.
-  const first = verifyOnce(projectDir, unit, kind, false);
+  const over = options.overUnfinishedReview === true;
+  const first = verifyOnce(projectDir, unit, kind, false, over);
   if (!first.rerun) return first.result;
   // The line about an accepted change is said once, on whichever run made it.
-  const second = verifyOnce(projectDir, unit, kind, true).result;
+  const second = verifyOnce(projectDir, unit, kind, true, over).result;
   const notices = [...(first.result.change_notices ?? []), ...(second.change_notices ?? [])];
   return notices.length > 0 ? { ...second, change_notices: notices } : second;
 }
@@ -970,11 +1068,15 @@ function verifyOnce(
   unit: string,
   kind: ConstructionCheckpointKind,
   secondRun: boolean,
+  overUnfinishedReview: boolean,
 ): { result: ConstructionCheckpoint; rerun: boolean } {
+  // The agent passes on the person's "approve it as it is"; their words since
+  // the last decision are what let the Unit go on without its review.
+  const personAllows = overUnfinishedReview && personSpokeSinceGate(projectDir, { requests: true });
   const before = locked(projectDir, () => {
     withdrawProtectedQuestions(projectDir, "*");
-    const current = snapshot(projectDir, unit, kind);
-    requireReady(current.result);
+    const current = snapshot(projectDir, unit, kind, undefined, undefined, personAllows);
+    requireReady(current);
     // A change to this Unit's reviewed work that its Guard Policy accepts is
     // recorded and said once, before the person is asked to approve; so is one
     // to another approved Unit's work that no step has said yet.
@@ -1052,7 +1154,7 @@ function verifyOnce(
     if (!stillOurs) throw new Error("Construction checkpoint verification was superseded by another check.");
     let after: Snapshot;
     try {
-      after = snapshot(projectDir, unit, kind);
+      after = snapshot(projectDir, unit, kind, undefined, undefined, personAllows);
     } catch (error) {
       proof.error = `Evidence became unavailable after check: ${String(error)}`;
       writeRecordFileNoFollow(before.root, proofRelativePath(unit, kind), `${JSON.stringify(proof, null, 2)}\n`);
@@ -1082,6 +1184,10 @@ function verifyOnce(
       "Exit Code": String(proof.exit_code),
       Verified: String(proof.verified),
       "Run floor": before.result.run_floor,
+      ...(before.result.review_not_finished ? {
+        "Review Not Finished": JSON.stringify(Object.fromEntries(before.result.review_not_finished.stages
+          .map((stage) => [stage, before.result.run_floors[stage]]))),
+      } : {}),
       ...claimAttemptFields(projectDir, unit),
     }, projectDir);
     const result = resolveConstructionCheckpoint(projectDir, unit, kind);
@@ -1171,7 +1277,7 @@ export function approveConstructionCheckpoint(
   // hook; nothing here second-guesses the conductor's reading.
   return locked(projectDir, () => {
     const current = snapshot(projectDir, unit, kind);
-    requireReady(current.result);
+    requireReady(current);
     if (!current.result.verified) {
       throw new Error(`Verify the current Construction checkpoint before approval: a matching CHECKPOINT_VERIFICATION_RECORDED receipt and passing proof are required. Run aidlc-bolt.ts checkpoint --unit "${unit}" --kind ${kind} --action verify.`);
     }
@@ -1197,6 +1303,10 @@ export function approveConstructionCheckpoint(
     // accepts, is said once here, with their approval.
     if (rechecked.accepted.length > 0) governedGuardPolicy(projectDir, rechecked.state);
     const notices = recordAcceptedChanges(projectDir, rechecked.accepted);
+    // The person let the Unit go on without a review that did not finish: the
+    // approval says so, and so does the one line they hear.
+    const notFinished = rechecked.result.review_not_finished;
+    if (notFinished) notices.push(`Approved. The ${reviewsNamed(notFinished.stages)} for ${unit} did not finish.`);
     appendAuditEntryUnlocked("GATE_APPROVED", {
       ...gateFields(projectDir, rechecked.result, rechecked.state),
       "Verification Id": rechecked.result.verification!.id,
@@ -1204,11 +1314,36 @@ export function approveConstructionCheckpoint(
       ...(humanRequired ? { Session: session } : {}),
       ...(humanRequired ? { "User Input": "Approve" } : { Autonomous: "true" }),
       ...(words ? { "Person Reply": words } : {}),
+      ...(notFinished ? { Review: "not finished" } : {}),
     }, projectDir);
     if (humanRequired) consumeProtectedQuestion(projectDir, session);
     const result = resolveConstructionCheckpoint(projectDir, unit, kind);
     return notices.length > 0 ? { ...result, change_notices: notices } : result;
   });
+}
+
+/**
+ * Whether the person approved this Unit at its checkpoint over its review of
+ * `stage` that did not finish. The stage's own gate then needs no verdict for
+ * the Unit: the person already let it go on without one.
+ */
+export function approvedOverUnfinishedReview(
+  projectDir: string,
+  stateContent: string,
+  stage: string,
+  unit: string,
+): boolean {
+  if (!checkpointPolicyEnabled(stateContent)) return false;
+  try {
+    const dag = resolveBoltDag(projectDir);
+    if (dag.state !== "ok" || !dag.units.includes(unit)) return false;
+    const kind = constructionCheckpointKind(stateContent, unit, dag.batches.flat());
+    const checkpoint = resolveConstructionCheckpoint(projectDir, unit, kind, stateContent);
+    return checkpoint.approved && checkpoint.review_not_finished?.stages.includes(stage) === true;
+  } catch {
+    // Missing, stale or malformed evidence is no approval.
+    return false;
+  }
 }
 
 export function rejectConstructionCheckpoint(
