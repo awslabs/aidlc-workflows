@@ -490,17 +490,23 @@ function plansNamedPaths(projectDir: string, units: Array<string | null>): strin
   return [...named];
 }
 
+// What the person reads when their own edit broke the generated block and the
+// engine put it back: the term is the one their plan file shows, with a few
+// plain words on what it does for them, because nobody should need the
+// vocabulary to answer the question.
+const REPAIRED_CONTRACT = "I repaired the plan's Testing Contract (the test rules your build follows).";
+
 function planQuestion(units: Array<string | null>, repaired: boolean): string {
   if (units.length > 1) {
     return repaired
-      ? `I repaired the Testing Contract block. Approve these ${units.length} code plans?`
+      ? `${REPAIRED_CONTRACT} Approve these ${units.length} code plans?`
       : `Approve these ${units.length} code plans?`;
   }
   const unit = units[0] ?? null;
   if (repaired) {
     return unit === null
-      ? "I repaired the Testing Contract block. Build your edited plan?"
-      : `I repaired the Testing Contract block. Build your edited plan for ${unit}?`;
+      ? `${REPAIRED_CONTRACT} Build your edited plan?`
+      : `${REPAIRED_CONTRACT} Build your edited plan for ${unit}?`;
   }
   return unit === null ? "Approve the code plan?" : `Approve the code plan for ${unit}?`;
 }

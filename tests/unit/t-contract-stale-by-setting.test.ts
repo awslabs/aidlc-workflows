@@ -216,7 +216,7 @@ describe("a Testing Contract left stale by a setting the person changed", () => 
     expect(repair.kind).toBe("run-stage");
     expect(repair.plan_approval?.status).toBe("repair");
     writePlan(proj, "- [ ] Step 1: write slugify\n- [ ] Step 2: handle unicode\n");
-    expect(next(proj).question).toBe("I repaired the Testing Contract block. Build your edited plan?");
+    expect(next(proj).question).toBe("I repaired the plan's Testing Contract (the test rules your build follows). Build your edited plan?");
   });
 
   test("a plan with no Testing Contract section is never approved as it stands", () => {

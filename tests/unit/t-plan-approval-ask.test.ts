@@ -943,7 +943,7 @@ describe("the engine asks for Plan Approval", () => {
     writePlan(proj, "- [ ] Step 2: handle unicode\n");
     const ask = next(proj);
     expect(ask.kind).toBe("ask");
-    expect(ask.question).toBe("I repaired the Testing Contract block. Build your edited plan?");
+    expect(ask.question).toBe("I repaired the plan's Testing Contract (the test rules your build follows). Build your edited plan?");
   });
 
   // The person's stop holds even when the plan they approved needs repair

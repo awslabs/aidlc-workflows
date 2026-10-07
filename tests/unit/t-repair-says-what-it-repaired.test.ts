@@ -1,7 +1,8 @@
 // covers: function:approveTarget, function:planQuestion, function:routeCodeGenerationPlanApproval
 //
-// "I repaired the Testing Contract block. Build your edited plan?" is the truth
-// when the person chose "I'll edit the files" and their edit broke the block.
+// "I repaired the plan's Testing Contract (the test rules your build follows).
+// Build your edited plan?" is the truth when the person chose "I'll edit the
+// files" and their edit broke the block.
 // It was also said to a person who edited nothing: an empty test-instructions
 // file, an empty plan, or a contract the agent itself wrote badly all took the
 // same repair wording, and all of them claimed an edit of theirs.
@@ -144,7 +145,7 @@ function askFor(proj: string): void {
 function claimsNoEditOfTheirs(text: string, label: string): void {
   expect(text, label).not.toContain("your edited plan");
   expect(text, label).not.toContain("the edit broke");
-  expect(text, label).not.toContain("I repaired the Testing Contract block");
+  expect(text, label).not.toContain("I repaired the plan");
 }
 
 describe("a repair the person did not cause never claims their edit", () => {
@@ -207,6 +208,6 @@ describe("a repair the person did not cause never claims their edit", () => {
     const repair = next(proj);
     expect(repair.plan_approval?.status).toBe("repair");
     writePlan(proj, "- [ ] Step 2: handle unicode\n");
-    expect(next(proj).question).toBe("I repaired the Testing Contract block. Build your edited plan?");
+    expect(next(proj).question).toBe("I repaired the plan's Testing Contract (the test rules your build follows). Build your edited plan?");
   });
 });
