@@ -133,9 +133,11 @@ function sha256File(path: string): string {
   }
 }
 
+// AI-DLC's own records are plain JSON; the team's opencode.jsonc may hold
+// comments, trailing commas and a byte order mark, so every read allows them.
 function readJson<T>(path: string): T | null {
   try {
-    return JSON.parse(readFileSync(path, "utf-8")) as T;
+    return Bun.JSONC.parse(readFileSync(path, "utf-8").replace(/^\uFEFF/, "")) as T;
   } catch {
     return null;
   }
