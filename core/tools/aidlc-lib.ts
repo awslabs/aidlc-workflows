@@ -3435,11 +3435,13 @@ function treeGeneration(
         return false;
       }
       const dotnetProject = skipGenerated && holdsDotnetProject(names);
+      const dependencyDirs = skipGenerated ? manifestDependencyDirs(names) : new Set<string>();
       for (const name of names) {
         const childPortable = portable === "." ? name : `${portable}/${name}`;
         const generatedDir = skipGenerated && (
           SOURCE_FINGERPRINT_HARD_EXCLUDED_DIRS.has(name) ||
-          (dotnetProject && SOURCE_FINGERPRINT_DOTNET_OUTPUT_NAMES.has(name))
+          (dotnetProject && SOURCE_FINGERPRINT_DOTNET_OUTPUT_NAMES.has(name)) ||
+          dependencyDirs.has(name)
         );
         const generatedFile = skipGenerated && sourceFingerprintHardExcludedFile(name);
         if (!visit(join(absPath, name), childPortable, generatedDir, generatedFile)) return false;
@@ -20398,6 +20400,35 @@ const DOTNET_PROJECT_FILE_RE = /\.(?:cs|fs|vb)proj$/i;
 function holdsDotnetProject(names: readonly string[]): boolean {
   return names.some((name) => DOTNET_PROJECT_FILE_RE.test(name));
 }
+// A package manager fills a fixed directory beside the manifest it reads:
+// Composer's vendor/ beside composer.json (one tree per sub-project in a
+// monorepo; a reporter's held over a gigabyte, and every freshness walk read
+// all of it), `go mod vendor` into vendor/ beside go.mod, CocoaPods' Pods/
+// beside a Podfile, Mix's deps/ and _build/ beside mix.exs, and so on down the
+// table. Elsewhere these names can hold real source (vendor/ often holds the
+// submodules C projects keep there), so each is conditional only beside its
+// manifest; a registered path under it is bound again. One row per manifest:
+// its file name, then the directories it owns in the same directory. Bundler's
+// vendor/bundle is not a row: it sits two levels below its Gemfile, and Rails
+// keeps real source in vendor/assets.
+const SOURCE_FINGERPRINT_MANIFEST_DEPENDENCY_DIRS: ReadonlyMap<string, ReadonlySet<string>> = new Map([
+  ["composer.json", new Set(["vendor"])],
+  ["go.mod", new Set(["vendor"])],
+  ["Podfile", new Set(["Pods"])],
+  ["mix.exs", new Set(["deps", "_build"])],
+  ["pubspec.yaml", new Set([".dart_tool"])],
+  ["bower.json", new Set(["bower_components"])],
+  ["Gemfile", new Set([".bundle"])],
+  ["stack.yaml", new Set([".stack-work"])],
+]);
+/** The dependency directories the manifests among `names` own in that directory. */
+function manifestDependencyDirs(names: readonly string[]): ReadonlySet<string> {
+  const owned = new Set<string>();
+  for (const name of names) {
+    for (const dir of SOURCE_FINGERPRINT_MANIFEST_DEPENDENCY_DIRS.get(name) ?? []) owned.add(dir);
+  }
+  return owned;
+}
 const SOURCE_FINGERPRINT_REGISTRY = ".aidlc-source-paths.json";
 
 // Git for Windows stops at MAX_PATH unless core.longpaths is on. A Bolt
@@ -22849,11 +22880,20 @@ function filesystemSourceIdentity(
       entries.sort((a, b) =>
         a.name < b.name ? -1 : a.name > b.name ? 1 : 0
       );
-      const dotnetProject = holdsDotnetProject(entries.map((entry) => entry.name));
+      const names = entries.map((entry) => entry.name);
+      const dotnetProject = holdsDotnetProject(names);
+      const dependencyDirs = manifestDependencyDirs(names);
       // A tracked output tree deleted on disk keeps HEAD's copy too.
       if (dotnetProject && dotnetOutputs && snapshotEligible) {
         for (const name of SOURCE_FINGERPRINT_DOTNET_OUTPUT_NAMES) {
-          if (!entries.some((entry) => entry.name === name)) {
+          if (!names.includes(name)) {
+            excludedOutputPathspecs.add(`:(top,literal)${snapshotRel ? `${snapshotRel}/` : ""}${name}`);
+          }
+        }
+      }
+      if (snapshotEligible) {
+        for (const name of dependencyDirs) {
+          if (!names.includes(name)) {
             excludedOutputPathspecs.add(`:(top,literal)${snapshotRel ? `${snapshotRel}/` : ""}${name}`);
           }
         }
@@ -22943,12 +22983,15 @@ function filesystemSourceIdentity(
           SOURCE_FINGERPRINT_DOTNET_OUTPUT_NAMES.has(entry.name);
         dotnetOutputSeen ||= dotnetOutput;
         const earlierOutput = dotnetOutput && !dotnetOutputs;
+        const manifestDependency =
+          (entry.isDirectory() || entry.isSymbolicLink()) &&
+          dependencyDirs.has(entry.name);
         const conditionalBoundary =
           (entry.isDirectory() || entry.isSymbolicLink()) &&
-          (SOURCE_FINGERPRINT_CONDITIONAL_DIRS.has(entry.name) || (dotnetOutput && dotnetOutputs));
+          (SOURCE_FINGERPRINT_CONDITIONAL_DIRS.has(entry.name) || (dotnetOutput && dotnetOutputs) || manifestDependency);
         // No static glob names this directory, so the snapshot index resets it
         // by path; a registered path is re-added after the reset.
-        if (conditionalBoundary && dotnetOutput && snapshotEligible && !entry.isSymbolicLink()) {
+        if (conditionalBoundary && (dotnetOutput || manifestDependency) && snapshotEligible && !entry.isSymbolicLink()) {
           excludedOutputPathspecs.add(`:(top,literal)${childSnapshotRel}`);
         }
         if (

@@ -478,11 +478,18 @@ workspace-roof files remain bound, apart from AI-DLC's own `aidlc.settings.json`
 and `aidlc.settings.local.json` there. Framework state, exact sensor caches, VCS
 metadata, dependency/cache directories or symlinks, unregistered
 `build/`, `coverage/`, `dist/`, `logs/`, `target/`, and `tmp/` directories or
-symlinks, and unregistered `bin/`, `obj/`, and `out/` directories or symlinks
-beside a `.csproj`, `.fsproj`, or `.vbproj` file (the .NET build outputs)
-remain outside the source boundary. Elsewhere those three names stay bound,
-because Node and Rails `bin/` scripts and hexagonal `adapter/out/` packages are
-real source. Evidence recorded before .NET outputs left the boundary still
+symlinks, unregistered `bin/`, `obj/`, and `out/` directories or symlinks
+beside a `.csproj`, `.fsproj`, or `.vbproj` file (the .NET build outputs), and
+the unregistered directory or symlink a package manager fills beside its
+manifest (`vendor/` beside a `composer.json` or `go.mod`, `Pods/` beside a
+`Podfile`, `deps/` and `_build/` beside `mix.exs`, `.dart_tool/` beside
+`pubspec.yaml`, `bower_components/` beside `bower.json`, `.bundle/` beside a
+`Gemfile`, `.stack-work/` beside `stack.yaml`) remain outside the source
+boundary. Elsewhere those names stay bound, because Node and Rails `bin/`
+scripts, hexagonal `adapter/out/` packages, and the submodules C projects keep
+under `vendor/` are real source. Bundler's `vendor/bundle` is not excluded:
+Rails keeps real source in `vendor/assets`, so `vendor/` beside a `Gemfile`
+stays bound. Evidence recorded before .NET outputs left the boundary still
 matches until the source or those outputs change.
 
 Real source beneath a conditional generated-output directory, including binary
