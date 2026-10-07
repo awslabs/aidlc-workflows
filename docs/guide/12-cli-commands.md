@@ -36,6 +36,7 @@ diagnostic and lifecycle routes.
 | `/aidlc team-board [--snapshot] [--space <name>] [--intent <name>]` | Read-only Team Construction board (Unit progress, claims, merge readiness) |
 | `/aidlc intent [name]` | List intents in the active space (`--all` includes archived), or switch to an existing intent |
 | `/aidlc intent archive <name>` | Retire an in-flight or completed intent without deleting its record; `unarchive <name>` brings it back |
+| `/aidlc intent add-repo <name>` | Add a sibling repo to the active piece of work, until Units Generation is approved; `remove-repo <name>` takes one out (never the last) |
 | `/aidlc space [name]` | List spaces, or switch to an existing space |
 | `/aidlc space-create <name>` | Create a new space from the framework baseline |
 | `/aidlc knowledge <verb>` | Index and read your own documents (`onboard`, `sync`, `list`, `show`, `associate`, `dissociate`, `rebind`, `summarize`) |
@@ -364,6 +365,32 @@ recorded. Only `archive` records a reason; a `--reason` given to `unarchive` is
 not recorded, and the output says so. It does not move the cursor; switch to
 the revived intent with `/aidlc intent <name>` when you want to continue it.
 
+
+### `/aidlc intent add-repo <name>`: add a sibling repo to work already under way
+
+A piece of work records the sibling repos it touches when it is created (the
+`.git` children of the workspace at that moment, or an explicit `--repos`). When
+it turns out in Requirements Analysis or Domain Design that the work also
+touches another repo, say so and the agent runs `/aidlc intent add-repo <name>`
+for you: the repo is recorded, the change lands in the audit trail as
+`INTENT_REPOS_CHANGED`, and you read one line saying what happens next. If
+Reverse Engineering has already run, it and the stages that read the code
+knowledge show as behind for the new repo until you revisit them; if it has not
+run yet, it covers the new repo when it does. `/aidlc intent remove-repo <name>`
+is the mirror image. Neither asks a question: it is your own action, and the
+line says how to undo it.
+
+The name must be a folder directly under the workspace that is a Git checkout
+(a real `.git` entry): a folder merely shaped like a repository is refused, as
+is a name with separators. The command serves work that already records repos;
+work that records none treats the workspace folder itself as its repo
+(`workspace reclassify` records its first repos). Removing the last recorded
+repo is refused for the same reason.
+
+Units Generation is the cut-off: once it is approved, each Unit names its repo,
+so the command changes nothing and asks instead whether to go back to Units
+Generation with the repo added (or without it). Say yes and the agent reopens
+Units Generation and runs the change again.
 ### `/aidlc space [name]` — List or switch spaces
 
 Bare `/aidlc space` lists spaces; add `--json` for structured output.

@@ -42,9 +42,9 @@ shorter than what was said:
 - A picked option in a picker is kept only when it is one of a stage gate's own
   choices; other picked labels are the conductor's text, not the person's words.
 
-## Event Registry (115 events, 25 categories)
+## Event Registry (116 events, 25 categories)
 
-### Workflow Lifecycle (6 events)
+### Workflow Lifecycle (7 events)
 
 | Event | When | Required Fields | Emitter |
 |-------|------|-----------------|---------|
@@ -54,6 +54,7 @@ shorter than what was said:
 | ✓ `WORKFLOW_UNPARKED` | Park marker cleared on explicit `--resume` re-entry | Timestamp | `tools/aidlc-state.ts unpark` |
 | ✓ `WORKFLOW_ARCHIVED` | In-flight or completed intent retired by a human (`Status: Archived`, registry `archived`); record and audit shards preserved | Timestamp, Stage; optional Reason | `tools/aidlc-utility.ts intent archive` |
 | ✓ `WORKFLOW_UNARCHIVED` | Archived intent returned to `Running` / `in-flight`, or `Completed` / `complete` when it was archived complete | Timestamp, Stage | `tools/aidlc-utility.ts intent unarchive` |
+| `INTENT_REPOS_CHANGED` | The person added a sibling repo to, or removed one from, a piece of work that already records repos (`intent add-repo <name>` / `intent remove-repo <name>`), before Units Generation is approved; written to that intent's own shard | Timestamp, Stage, Repos (the set after the change), and Added or Removed (the one repo) | `tools/aidlc-utility.ts intent add-repo` / `intent remove-repo` |
 
 ### Phase Lifecycle (4 events)
 

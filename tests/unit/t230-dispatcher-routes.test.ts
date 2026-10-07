@@ -444,6 +444,20 @@ describe("t230 dispatcher route parity", () => {
       fixture: true,
     },
     {
+      name: "intent add-repo maps through workspace parser with its name",
+      routerArgs: ["engine", "intent", "add-repo", "no-such-repo"],
+      tool: "aidlc-utility.ts",
+      toolArgs: ["intent", "add-repo", "no-such-repo"],
+      fixture: true,
+    },
+    {
+      name: "intent remove-repo maps through workspace parser with its name",
+      routerArgs: ["engine", "intent", "remove-repo", "no-such-repo"],
+      tool: "aidlc-utility.ts",
+      toolArgs: ["intent", "remove-repo", "no-such-repo"],
+      fixture: true,
+    },
+    {
       name: "intent list --all maps through workspace parser",
       routerArgs: ["engine", "intent", "list", "--all"],
       tool: "aidlc-utility.ts",

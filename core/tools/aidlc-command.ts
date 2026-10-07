@@ -195,6 +195,8 @@ const DISPATCHER_INTENT_VERBS = new Set([
   "create",
   "archive",
   "unarchive",
+  "add-repo",
+  "remove-repo",
 ]);
 const DISPATCHER_SPACE_VERBS = new Set(["list", "switch", "create"]);
 const DISPATCHER_RESERVED_FUTURE = new Set([
@@ -204,11 +206,12 @@ const DISPATCHER_RESERVED_FUTURE = new Set([
 ]);
 
 type DispatcherIntentLifecycleVerb = "archive" | "unarchive";
+type DispatcherIntentRepoVerb = "add-repo" | "remove-repo";
 
 export type DispatcherWorkspaceCommand =
   | { kind: "list"; noun: DispatcherWorkspaceNoun; json: boolean; all?: true }
   | {
-      kind: DispatcherIntentLifecycleVerb;
+      kind: DispatcherIntentLifecycleVerb | DispatcherIntentRepoVerb;
       noun: "intent";
       name: string;
       rest: string[];
@@ -231,7 +234,7 @@ export type DispatcherWorkspaceCommand =
 
 function missingDispatcherWorkspaceName(
   noun: DispatcherWorkspaceNoun,
-  verb: "switch" | "create" | "space-create" | DispatcherIntentLifecycleVerb,
+  verb: "switch" | "create" | "space-create" | DispatcherIntentLifecycleVerb | DispatcherIntentRepoVerb,
 ): DispatcherWorkspaceCommand {
   const usage = verb === "space-create"
     ? "space-create <name>"
@@ -253,6 +256,12 @@ function isDispatcherIntentLifecycleVerb(
   token: string | undefined,
 ): token is DispatcherIntentLifecycleVerb {
   return token === "archive" || token === "unarchive";
+}
+
+function isDispatcherIntentRepoVerb(
+  token: string | undefined,
+): token is DispatcherIntentRepoVerb {
+  return token === "add-repo" || token === "remove-repo";
 }
 
 // `intent list [--json] [--all]` / `space list [--json]`: the flags may appear
@@ -312,7 +321,7 @@ export function parseDispatcherWorkspaceCommand(
     if (verbOrName === "create") {
       return { kind: "create-intent", noun, rest: tokens.slice(2) };
     }
-    if (isDispatcherIntentLifecycleVerb(verbOrName)) {
+    if (isDispatcherIntentLifecycleVerb(verbOrName) || isDispatcherIntentRepoVerb(verbOrName)) {
       const name = tokens[2];
       return name === undefined || name.startsWith("--")
         ? missingDispatcherWorkspaceName(noun, verbOrName)
@@ -355,7 +364,9 @@ export function dispatcherWorkspaceUtilityArgv(
     }
     case "archive":
     case "unarchive":
-      // Lifecycle verbs forward verbatim, trailing flags included:
+    case "add-repo":
+    case "remove-repo":
+      // Lifecycle and repo verbs forward verbatim, trailing flags included:
       // `intent archive <name> --reason <text>`.
       return [command.noun, command.kind, command.name, ...command.rest];
     case "switch":

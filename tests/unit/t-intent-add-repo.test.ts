@@ -20,10 +20,45 @@ import {
   seededStateFile,
   seedStateFile,
 } from "../harness/fixtures.ts";
-import { readUnitSourceManifest } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import {
+  readUnitSourceManifest,
+  stateDigest,
+  writeActiveDirectiveMarker,
+} from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
 const UTIL = join(AIDLC_SRC, "tools", "aidlc-utility.ts");
+const DISPATCHER = join(AIDLC_SRC, "tools", "aidlc.ts");
+const GUARD = join(AIDLC_SRC, "hooks", "aidlc-plan-approval-guard.ts");
+const SESSION = "01995000-7a11-7000-8000-00000000ad01";
 let proj: string;
+
+// The plan-approval guard's verdict on a shell command the agent is about to run.
+function guardBash(command: string): { code: number; stderr: string } {
+  const r = spawnSync(process.execPath, [GUARD], {
+    cwd: proj,
+    input: JSON.stringify({
+      hook_event_name: "PreToolUse",
+      session_id: SESSION,
+      cwd: proj,
+      tool_name: "Bash",
+      tool_input: { command },
+    }),
+    env: { ...process.env, CLAUDE_PROJECT_DIR: proj, AIDLC_PROJECT_DIR: proj },
+    encoding: "utf-8",
+  });
+  return { code: r.status ?? -1, stderr: r.stderr ?? "" };
+}
+
+// The person speaks in the chat: the human-turn hook records their words.
+function personSays(prompt: string): void {
+  const r = spawnSync(process.execPath, [DISPATCHER, "engine", "hook", "record-human-turn"], {
+    cwd: proj,
+    input: JSON.stringify({ hook_event_name: "UserPromptSubmit", session_id: SESSION, prompt }),
+    env: { ...process.env, CLAUDE_PROJECT_DIR: proj, AIDLC_PROJECT_DIR: proj, AIDLC_UNATTENDED: "0" },
+    encoding: "utf-8",
+  });
+  if (r.status !== 0) throw new Error(`record-human-turn failed: ${r.stderr}`);
+}
 
 function utility(args: string[]): { rc: number; out: string } {
   const r = spawnSync(process.execPath, [UTIL, ...args, "--project-dir", proj], {
@@ -181,6 +216,36 @@ describe("intent add-repo / remove-repo", () => {
       "Units Generation is already approved, so its Units do not cover app-b. Do you want me to go back to Units Generation with app-b added?",
     );
     expect(audit()).not.toContain("INTENT_REPOS_CHANGED");
+  });
+
+  // In Code Generation, before a plan is approved, the plan-approval guard holds
+  // the agent's shell commands. The person's own repo change is not the agent
+  // writing code: once they have spoken, the engine command passes; with no
+  // person on record it stays held. (The native `aidlc engine ...` spelling is
+  // judged here; the per-tool spelling is judged by the same admission once the
+  // installed tools exist, which this bare fixture does not ship.)
+  test("the plan-approval guard lets the person's repo change through while a plan waits", () => {
+    const statePath = seededStateFile(proj);
+    writeFileSync(
+      statePath,
+      readFileSync(statePath, "utf-8").replace("- **Current Stage**: feasibility", "- **Current Stage**: code-generation"),
+    );
+    // The engine has named the step (Code Generation runs, its plan not yet
+    // approved), so the guard watches the agent's commands.
+    writeActiveDirectiveMarker(proj, {
+      kind: "run-stage",
+      stage: "code-generation",
+      state_sha256: stateDigest(readFileSync(statePath, "utf-8")),
+    });
+    const held = guardBash("aidlc engine intent add-repo app-b");
+    expect(held.code, held.stderr).not.toBe(0);
+    personSays("the consent banner also needs a change in app-b, add that repo to this piece of work");
+    const addition = guardBash("aidlc engine intent add-repo app-b");
+    expect(addition.code, addition.stderr).toBe(0);
+    const removal = guardBash("aidlc engine intent remove-repo app-b");
+    expect(removal.code, removal.stderr).toBe(0);
+    // Anything more than the one change on the line is not this admission.
+    expect(guardBash("aidlc engine intent add-repo app-b --project-dir /elsewhere").code).not.toBe(0);
   });
 
   test("the line says what Reverse Engineering will do for the new repo", () => {

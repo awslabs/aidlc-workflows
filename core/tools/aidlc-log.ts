@@ -207,7 +207,7 @@ import {
   recordPlanApprovalOverrideReceipt,
   recordPlanApprovalReceipt,
 } from "./aidlc-testing-posture.js";
-import { entrySkillInvocation } from "./aidlc-runtime-paths.ts";
+import { aidlcDispatcherInvocation, entrySkillInvocation } from "./aidlc-runtime-paths.ts";
 import {
   APPROVAL_GATE_CHOICES,
   SUMMARY_CONFIRMATION_CHOICES,
@@ -215,6 +215,26 @@ import {
 
 // The checkpoints `decision` and `answer` accept. The learnings question is an
 // ordinary question, so it is named with the way to run it.
+
+// A manifest that names a repo the piece of work does not record is not a
+// manifest to rewrite: the code was written where the person put it, so the
+// way on is to record that repo (`intent add-repo` says what that means for
+// the plan). Any other invalid manifest is the agent's to write properly.
+function unitManifestRefusal(
+  unit: string,
+  manifestPath: string,
+  manifest: { reason: string; unrecordedRepo?: string },
+  rewrite: string,
+): string {
+  if (manifest.unrecordedRepo !== undefined) {
+    const repo = manifest.unrecordedRepo;
+    return `unit "${unit}"'s source manifest at ${manifestPath} names repo ${JSON.stringify(repo)}, which this piece of work does not record. ` +
+      `Ask the person whether this work also touches ${repo}; if it does, run \`${aidlcDispatcherInvocation(`intent add-repo ${repo}`)}\` ` +
+      "(it says what that means for the plan), then request the review again. Do not rewrite the manifest to drop a repo the code was written in.";
+  }
+  return `unit "${unit}" has no valid source manifest at ${manifestPath} (${manifest.reason}). ${rewrite}`;
+}
+
 function unknownCheckpointMessage(checkpoint: string): string {
   if (checkpoint === "learnings") {
     return 'The learnings question takes no --checkpoint: run the same command without it.';
@@ -2850,9 +2870,12 @@ function handleReview(args: string[]): void {
     if (!manifest.ok) {
       const manifestPath = `${relativeRecordDir(pd, intent, space) ?? "aidlc"}/construction/${flags.unit}/${flags.stage}/source-manifest.json`;
       refuseReview(
-        `Cannot record REVIEW_REQUESTED for "${flags.stage}": unit "${flags.unit}" has no valid source manifest at ` +
-          `${manifestPath} (${manifest.reason}). Write the manifest listing every application-source path ` +
-          "the reviewer will inspect, then dispatch the review.",
+        `Cannot record REVIEW_REQUESTED for "${flags.stage}": ${unitManifestRefusal(
+          flags.unit as string,
+          manifestPath,
+          manifest,
+          "Write the manifest listing every application-source path the reviewer will inspect, then dispatch the review.",
+        )}`,
       );
     }
     fields["Unit Source Fingerprint"] =
@@ -3606,10 +3629,12 @@ function handleReview(args: string[]): void {
       if (manifest?.ok === false) {
         const manifestPath = `${relativeRecordDir(pd, intent, space) ?? "aidlc"}/construction/${flags.unit}/${flags.stage}/source-manifest.json`;
         refuseReview(
-          `Cannot record review for "${flags.stage}": unit "${flags.unit}" has no valid source manifest at ` +
-            `${manifestPath} (${manifest.reason}). Write the manifest listing every application-source path ` +
-            "this unit created or modified, including shell- or generator-written files, then request and " +
-            "record the review again.",
+          `Cannot record review for "${flags.stage}": ${unitManifestRefusal(
+            flags.unit as string,
+            manifestPath,
+            manifest,
+            "Write the manifest listing every application-source path this unit created or modified, including shell- or generator-written files, then request and record the review again.",
+          )}`,
         );
       }
 

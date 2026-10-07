@@ -682,6 +682,8 @@ Utilities:
   intent switch <name>  Switch the active intent (bare intent <name> still works)
   intent archive <name> [--reason <text>]  Retire an in-flight or completed intent; its record stays on disk and leaves the default list
   intent unarchive <name>  Bring an archived intent back as it was (in-flight or complete)
+  intent add-repo <name>  Add a sibling repo to the active piece of work (until Units Generation is approved)
+  intent remove-repo <name>  Take a sibling repo out of the active piece of work (never the last one)
   space list        List spaces (read-only; --json for structured output)
   space switch <name>  Switch the active space (bare space <name> still works)
   space create <name>  Create a new space (space-create <name> still works)
@@ -8641,6 +8643,10 @@ function handleIntent(
     handleIntentLifecycle(projectDir, verbOrTarget, positional[2], flags, missingValueFlags);
     return;
   }
+  if (verbOrTarget === "add-repo" || verbOrTarget === "remove-repo") {
+    handleIntentRepos(projectDir, verbOrTarget, positional[2]);
+    return;
+  }
   const target = verbOrTarget === "switch" ? positional[2] : verbOrTarget;
   if (verbOrTarget === "switch" && !target) {
     die("Usage: aidlc-utility intent switch <name>");
@@ -8895,6 +8901,108 @@ function handleIntentLifecycle(
         ? `Its Bolt worktree(s) stay on disk as they are (${boltRefs.join(", ")}); ${entrySkillInvocation()} intent unarchive ${dirName} brings that work back.\n`
         : ""),
   );
+}
+
+// `/aidlc intent add-repo <name>` / `/aidlc intent remove-repo <name>`: the
+// person's own change to which sibling repos a piece of work touches, for work
+// that already records repos (work with none treats the workspace folder itself
+// as its repo; `workspace reclassify` records its first repos). The name must be
+// a repo name and the folder a real Git checkout under the workspace: a commit
+// can never carry a .git entry, so a committed folder merely shaped like a repo
+// is refused and its config never read. Allowed until Units Generation is
+// approved: after that each Unit names its repo, so the command changes nothing
+// and asks the go-back question instead. Same locks (workspace, then intent)
+// and audit-first order as the lifecycle verbs.
+function handleIntentRepos(
+  projectDir: string,
+  verb: "add-repo" | "remove-repo",
+  name: string | undefined,
+): void {
+  if (!name) die(`Usage: aidlc-utility intent ${verb} <name>`);
+  if (!isValidRepoName(name)) {
+    die(`intent ${verb} refused: "${name}" is not a repo name (one folder name under the workspace, no separators).`);
+  }
+  const selection = resolveWorkflowSelection(projectDir);
+  const space = selection.space;
+  const dirName = selection.intent;
+  if (!dirName) {
+    die(`No piece of work is active in space "${space}"; switch to one first (${entrySkillInvocation()} intent list).`);
+  }
+  const outcome = withAuditLock(projectDir, () =>
+    withAuditLock(projectDir, () => {
+      const list = readIntentRegistry(projectDir, space);
+      const row = list.find((entry) => recordDirMatches(entry, dirName));
+      if (!row) {
+        die(`Intent "${dirName}" has no intents.json row in space "${space}"; nothing was changed. Repair the registry first (${entrySkillInvocation()} --doctor names the mismatch).`);
+      }
+      const current = row.repos ?? [];
+      if (current.length === 0) {
+        die(`intent ${verb} refused: this piece of work treats the workspace folder itself as its code repo, so it records no repos to change.`);
+      }
+      const state = readStateFile(projectDir, dirName, space);
+      const boxes = new Map(parseCheckboxes(state).map((box) => [box.slug, box.state]));
+      if (boxes.get("units-generation") === "completed") return { kind: "cutoff" as const };
+      if (verb === "add-repo") {
+        if (current.includes(name)) return { kind: "already" as const };
+        if (!isGitRepoDir(repoDir(projectDir, name))) {
+          die(`intent add-repo refused: "${name}" is not a Git checkout under the workspace folder (no .git entry at ${repoDir(projectDir, name)}). Clone or create the repo there first.`);
+        }
+      } else {
+        if (!current.includes(name)) return { kind: "absent" as const, current };
+        if (current.length === 1) {
+          die(`intent remove-repo refused: "${name}" is the only repo this piece of work records; removing it would leave none.`);
+        }
+      }
+      const next = verb === "add-repo" ? [...current, name].sort() : current.filter((repo) => repo !== name);
+      appendAuditEntryUnlocked(
+        "INTENT_REPOS_CHANGED",
+        {
+          Stage: (getField(state, "Current Stage") ?? "").trim() || "none",
+          [verb === "add-repo" ? "Added" : "Removed"]: name,
+          Repos: next.join(", "),
+        },
+        projectDir,
+        dirName,
+        space,
+      );
+      row.repos = next;
+      writeFileAtomic(intentsRegistryPath(projectDir, space), `${JSON.stringify(list, null, 2)}\n`);
+      const reAction = parseStateStageSuffixes(state).get("reverse-engineering") ??
+        loadScopeMapping()[getField(state, "Scope") ?? ""]?.stages["reverse-engineering"];
+      return { kind: "changed" as const, reState: boxes.get("reverse-engineering"), reAction };
+    }, dirName, space),
+  );
+  // What the person hears: what happened and the way back, in their words.
+  const lines: string[] = [];
+  switch (outcome.kind) {
+    case "cutoff":
+      lines.push(
+        verb === "add-repo"
+          ? `Units Generation is already approved, so its Units do not cover ${name}. Do you want me to go back to Units Generation with ${name} added?`
+          : `Units Generation is already approved, so its Units may be written for ${name}. Do you want me to go back to Units Generation without ${name}?`,
+      );
+      break;
+    case "already":
+      lines.push(`${name} is already one of this piece of work's repos; nothing changed.`);
+      break;
+    case "absent":
+      lines.push(`${name} is not one of this piece of work's repos (${outcome.current.join(", ")}); nothing changed.`);
+      break;
+    case "changed":
+      if (verb === "add-repo") {
+        lines.push(`Added ${name} to this piece of work's repos.`);
+        if (outcome.reState === "completed") {
+          lines.push(`Reverse Engineering has not documented ${name} yet, so it and the stages that read the code knowledge may show as behind until you revisit them.`);
+        } else if (outcome.reAction === "EXECUTE") {
+          lines.push(`Reverse Engineering will cover ${name} when it runs.`);
+        }
+        lines.push("You can remove it again any time.");
+      } else {
+        lines.push(`Removed ${name} from this piece of work's repos. You can add it back any time.`);
+      }
+      break;
+  }
+  process.stdout.write(`${lines.join(" ")}\n`);
 }
 
 // `/aidlc space` (list) · `/aidlc space <name>` (switch the active-space

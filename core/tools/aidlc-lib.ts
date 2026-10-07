@@ -1133,6 +1133,8 @@ export const INTENT_VERBS: ReadonlySet<string> = new Set([
   "create",
   "archive",
   "unarchive",
+  "add-repo",
+  "remove-repo",
 ]);
 
 export const SPACE_VERBS: ReadonlySet<string> = new Set([
@@ -1152,6 +1154,10 @@ export const RESERVED_FUTURE: ReadonlySet<string> = new Set([
 // `archived` status, `unarchive` brings it back to the status it had.
 export type IntentLifecycleVerb = "archive" | "unarchive";
 
+// The two repo verbs that change which sibling repos a piece of work touches,
+// by the person's word: `add-repo` records one more, `remove-repo` drops one.
+export type IntentRepoVerb = "add-repo" | "remove-repo";
+
 export type WorkspaceCommand =
   // `all` is only ever set (true) for `intent list --all`; a plain list omits
   // it so existing shape consumers keep matching the two-field object.
@@ -1162,12 +1168,13 @@ export type WorkspaceCommand =
   // `rest` carries the verb's trailing flags (`--reason <text>`) through to the
   // utility argv verbatim, the same way `create-intent` forwards its args.
   | { kind: IntentLifecycleVerb; noun: "intent"; name: string; rest: string[] }
+  | { kind: IntentRepoVerb; noun: "intent"; name: string; rest: string[] }
   | { kind: "help"; noun: WorkspaceNoun }
   | {
       kind: "error";
       noun: WorkspaceNoun;
       code: "missing-name" | "unexpected-arguments";
-      verb: "switch" | "create" | "space-create" | IntentLifecycleVerb;
+      verb: "switch" | "create" | "space-create" | IntentLifecycleVerb | IntentRepoVerb;
       message: string;
     }
   | {
@@ -1181,7 +1188,7 @@ export type WorkspaceCommand =
 
 function missingWorkspaceName(
   noun: WorkspaceNoun,
-  verb: "switch" | "create" | "space-create" | IntentLifecycleVerb,
+  verb: "switch" | "create" | "space-create" | IntentLifecycleVerb | IntentRepoVerb,
 ): WorkspaceCommand {
   const usage = verb === "space-create"
     ? "space-create <name>"
@@ -1240,6 +1247,10 @@ function isIntentLifecycleVerb(token: string | undefined): token is IntentLifecy
   return token === "archive" || token === "unarchive";
 }
 
+function isIntentRepoVerb(token: string | undefined): token is IntentRepoVerb {
+  return token === "add-repo" || token === "remove-repo";
+}
+
 // `intent list [--json] [--all]` / `space list [--json]`. The flags may appear
 // in either order after the verb. `--all` (intents only) includes archived
 // records, which the default listing hides; the `all` field is set only when
@@ -1296,7 +1307,7 @@ export function parseWorkspaceCommand(tokens: readonly string[]): WorkspaceComma
     if (verbOrName === "create") {
       return { kind: "create-intent", noun, rest: tokens.slice(2) };
     }
-    if (isIntentLifecycleVerb(verbOrName)) {
+    if (isIntentLifecycleVerb(verbOrName) || isIntentRepoVerb(verbOrName)) {
       const name = tokens[2];
       if (name === undefined || name.startsWith("--")) {
         return missingWorkspaceName(noun, verbOrName);
@@ -1339,7 +1350,9 @@ export function workspaceCommandUtilityArgv(
     }
     case "archive":
     case "unarchive":
-      // The lifecycle verbs forward verbatim, trailing flags included:
+    case "add-repo":
+    case "remove-repo":
+      // The lifecycle and repo verbs forward verbatim, trailing flags included:
       // `intent archive <name> --reason <text>`.
       return [command.noun, command.kind, command.name, ...command.rest];
     case "switch":
@@ -23648,7 +23661,10 @@ export type ReadUnitSourceManifestResult =
       prefixes: string[];
       rawBytesSha256: string;
     }
-  | { ok: false; reason: string };
+  // `unrecordedRepo` names the one repo a write claimed that the piece of work
+  // does not record: the way on is to record that repo, not to rewrite the
+  // manifest.
+  | { ok: false; reason: string; unrecordedRepo?: string };
 
 function sourceListingFieldEncode(value: string): string {
   return value
@@ -24624,7 +24640,9 @@ function validateUnitSourceManifestBytes(
     let canonicalRepo = declaredRepo;
     if (canonicalRepo !== undefined) {
       if (!isValidRepoName(canonicalRepo)) return { ok: false, reason: `writes[${index}].repo is not a valid recorded-repo name` };
-      if (!recordedRepoSet.has(canonicalRepo)) return { ok: false, reason: `writes[${index}].repo ${JSON.stringify(canonicalRepo)} is not recorded for this intent` };
+      if (!recordedRepoSet.has(canonicalRepo)) {
+        return { ok: false, reason: `writes[${index}].repo ${JSON.stringify(canonicalRepo)} is not recorded for this intent`, unrecordedRepo: canonicalRepo };
+      }
     } else if (recordedRepos.length > 1) {
       return { ok: false, reason: `writes[${index}].repo is required for a multi-repo intent` };
     } else if (recordedRepos.length === 1) {
@@ -24704,7 +24722,7 @@ export function readCommittedUnitSourceManifest(
   stageSlug: string,
   unit: string,
   rawBytes: Buffer,
-): { ok: false; reason: string } |
+): { ok: false; reason: string; unrecordedRepo?: string } |
   (Extract<ReadUnitSourceManifestResult, { ok: true }> & { listing: WorkspaceSourceListing }) {
   if (!GIT_OBJECT_ID_RE.test(commit) || !/^[a-z][a-z0-9-]*$/.test(stageSlug) ||
     validateUnitName(unit) !== null) {

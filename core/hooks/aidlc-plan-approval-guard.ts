@@ -1417,8 +1417,22 @@ function planWaitAdmits(
   const personSpoke = () => personSpokeSinceGate(projectDir, { requests: true });
   return isPlanApprovalPrerequisite(engineArgs, gateHeld, personSpoke) ||
     askAdmits(engineArgs) || isReadOnlyDiagnostic(engineArgs) || recordedSwitchChangeAdmitted(projectDir, engineArgs) ||
-    chatSwitchChangeAdmitted(projectDir, engineArgs) || everyHelperMayRun(engineArgs) ||
+    chatSwitchChangeAdmitted(projectDir, engineArgs) || intentRepoChangeAdmitted(engineArgs, personSpoke) ||
+    everyHelperMayRun(engineArgs) ||
     engineDirectedWhilePlanWaits(engineArgs, () => personSpoke() && lastStepAdmitsPersonsMoves(projectDir));
+}
+
+// A sibling repo added to or removed from this piece of work, and nothing else:
+// `engine intent add-repo|remove-repo <name>`, or the same through its source
+// tool (`engine utility intent ...`). It is the person's call, so while a plan
+// waits it passes once they have spoken in the chat since the last decision:
+// the setter records it in the audit trail and says what it means for the plan
+// (after Units Generation is approved it only asks the go-back question).
+function intentRepoChangeAdmitted(args: readonly string[], personSpoke: () => boolean): boolean {
+  const rest = args[0] === "engine" && args[1] === "utility" ? args.slice(2) : args[0] === "engine" ? args.slice(1) : null;
+  if (rest === null || rest.length !== 3 || rest[0] !== "intent") return false;
+  if (rest[1] !== "add-repo" && rest[1] !== "remove-repo") return false;
+  return personSpoke();
 }
 
 function isPlanApprovalPrerequisite(

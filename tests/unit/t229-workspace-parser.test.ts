@@ -355,6 +355,8 @@ describe("parseWorkspaceCommand", () => {
       "create",
       "archive",
       "unarchive",
+      "add-repo",
+      "remove-repo",
       "rename",
       "show",
       "birth",
