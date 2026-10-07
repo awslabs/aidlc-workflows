@@ -89,6 +89,7 @@ export async function run(input: string): Promise<number> {
   if (!transcriptPath) return 0;
   const [
     {
+      readActiveDirectiveMarker,
       resolveProjectDirFromHook,
       resolveWorkflowSelection,
       stateFilePathForSelection,
@@ -136,7 +137,11 @@ export async function run(input: string): Promise<number> {
     }
     const statePath = stateFilePathForSelection(projectDir, selection);
     if (existsSync(statePath)) {
-      currentStage = currentStageSlug(readFileSync(statePath, "utf-8")) || null;
+      // Under unit-major Current Stage stays on the block's first stage while
+      // a later stage runs for a Unit; the active directive names that stage.
+      const stateContent = readFileSync(statePath, "utf-8");
+      currentStage = readActiveDirectiveMarker(projectDir, stateContent)?.stage ??
+        (currentStageSlug(stateContent) || null);
     }
   } catch {
     currentStage = null;

@@ -1720,7 +1720,10 @@ try {
 if (transcriptPath && transcriptFormat === "claude") {
   try {
     writeCurrentTranscriptPath(projectDir, sessionId, transcriptPath);
-    const currentStage = currentStageSlug(stateContent) || null;
+    // The active directive's stage first: under unit-major Current Stage stays
+    // on the block's first stage while a later stage runs for a Unit.
+    const currentStage = readActiveDirectiveMarker(projectDir, stateContent)?.stage ??
+      (currentStageSlug(stateContent) || null);
     // The turn is ending, so every file's last message-id group is complete and
     // must be counted now (PostToolUse holds it back; Stop closes it).
     foldTranscriptIntoLedger(
