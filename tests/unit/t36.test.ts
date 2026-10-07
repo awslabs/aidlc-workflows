@@ -93,6 +93,7 @@ import { afterAll, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import { readAllAuditShards } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import {
   cleanupTestProject,
@@ -346,7 +347,7 @@ describe("t36 aidlc-utility scope-change — CLI contract (migrated from t36-uti
   // automatically": it goes through like any other, and the remaining work
   // keeps running automatically. An unattended driver is still refused.
   describe("8c: autonomous Construction, the person asked for the change", () => {
-    const autonomousWithRequest = (): { p: string; sp: string } => {
+    const autonomousWithRequest = (prompt = "/aidlc --scope mvp"): { p: string; sp: string } => {
       const p = proj();
       const sp = statePath(p);
       writeFileSync(sp, readFileSync(sp, "utf-8").replace(
@@ -355,7 +356,7 @@ describe("t36 aidlc-utility scope-change — CLI contract (migrated from t36-uti
       ), "utf-8");
       const hook = spawnSync(BUN, [join(REPO_ROOT, "dist", "claude", ".claude", "tools", "aidlc.ts"), "engine", "hook", "record-human-turn"], {
         cwd: p,
-        input: JSON.stringify({ hook_event_name: "UserPromptSubmit", cwd: p, session_id: "t36-person", prompt: "/aidlc --scope mvp" }),
+        input: JSON.stringify({ hook_event_name: "UserPromptSubmit", cwd: p, session_id: "t36-person", prompt }),
         env: { ...process.env, CLAUDE_PROJECT_DIR: p },
         timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
         encoding: "utf-8",
@@ -373,6 +374,17 @@ describe("t36 aidlc-utility scope-change — CLI contract (migrated from t36-uti
       expect(stateField(sp, "Scope")).toBe("mvp");
       expect(stateField(sp, "Construction Autonomy Mode")).toBe("autonomous");
       expect(scopeChangedCount(readAllAuditShards(p))).toBe(1);
+    });
+
+    test("one reply that approves and asks for the change does both", () => {
+      // "approve it, and make this an mvp": the approval recorded from the
+      // reply does not use up the request in it.
+      const { p, sp } = autonomousWithRequest("approve it, and make this an mvp");
+      appendAuditEntry("GATE_APPROVED", { Stage: "feasibility", "User Input": "Approve" }, p);
+      const r = scopeChange(["--scope", "mvp"], p);
+      expect(r.status, r.out).toBe(0);
+      expect(r.out).toContain("Switched to mvp");
+      expect(stateField(sp, "Construction Autonomy Mode")).toBe("autonomous");
     });
 
     test("an unattended driver is still refused, naming the setter", () => {

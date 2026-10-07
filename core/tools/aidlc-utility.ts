@@ -10834,10 +10834,15 @@ function handleScopeChange(projectDir: string, flags: Record<string, string>): v
       personSpokeSinceGate(projectDir, { requests: true, intent, space });
     // Under "Continue automatically" the person's own scope change goes
     // through like any other, and the remaining work keeps their autonomy
-    // choice. Only a change nobody asked for (an unattended driver) is refused,
+    // choice; one reply that approves and asks for the change does both.
+    // Only a change nobody asked for (an unattended driver) is refused,
     // naming the setter that lets it through. Keep this guard ahead of the
     // same-scope path, including no-ops.
-    if (isAutonomousMode(contentBefore) && !personAsked()) {
+    if (
+      isAutonomousMode(contentBefore) &&
+      !(process.env.AIDLC_UNATTENDED !== "1" &&
+        personSpokeSinceGate(projectDir, { requests: true, outlivesApproval: true, intent, space }))
+    ) {
       die(
         "Cannot change scope while Construction runs unattended (Construction Autonomy Mode is " +
           "autonomous) with nobody here to approve the new plan. Run " +
