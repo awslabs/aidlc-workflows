@@ -444,7 +444,7 @@ export function applyIntentSettings(
     !personSpokeSinceGate(projectDir, { requests: true, outlivesApproval: true })
   ) {
     // A question about the switch ("skip plan approval?") asks for nothing.
-    die(guardSwitchRefusal(lowering[0], "config", personSpokeSinceGate(projectDir)));
+    die(guardSwitchRefusal(lowering[0], "config", personSpokeSinceGate(projectDir), projectDir));
   }
   // The setter carries out what the person asked: their words go on the record.
   const askedIn = lowering.length > 0 && !typedByPerson ? latestPersonTurn(projectDir)?.words ?? null : null;

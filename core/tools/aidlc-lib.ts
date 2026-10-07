@@ -37855,8 +37855,12 @@ export function guardSwitchRefusal(
   context: "config" | "intent-create",
   // The person only asked about the switch since the last decision.
   asked = false,
+  projectDir?: string,
 ): string {
-  const hint = humanTurnMintAllowed() ? "" : unattendedHumanPresenceHint();
+  // At the person's own terminal no chat reply can arrive, so the step that
+  // works there is named in place of the chat's.
+  const ownTerminal = humanTurnMintAllowed() && personAtOwnTerminal(projectDir);
+  const hint = humanTurnMintAllowed() && !ownTerminal ? "" : unattendedHumanPresenceHint(projectDir);
   const entry = entrySkillInvocation();
   // Before the work exists, the person's own words at the compose gate or
   // scope confirmation are what turn a check off for it. Otherwise the agent
@@ -37877,23 +37881,25 @@ export function guardSwitchRefusal(
   // Lowering a check is the person's call: the setter carries it out when a
   // person has spoken since the last decision, so this refusal means no reply
   // from them has arrived (or an unattended driver is running).
-  const wait = "No reply from the person has arrived since the last decision: run it when they ask for it.";
+  const wait = (typed: string): string => ownTerminal
+    ? ""
+    : ` No reply from the person has arrived since the last decision: run it when they ask for it. They can also type \`${typed}\`.`;
   if (asked) {
     return "The person asked a question about this check, which turns nothing off. Answer it in one line, offer to " +
       "turn it off for this piece of work, and show the question you asked them again. When they say yes or ask " +
       `for it, run the setter.${hint}`;
   }
   if (wanted.key === "plan-approval") {
-    return `Turning plan approval off lets code generation start without the person approving the plan, so it is their call. ${wait} They can also type \`${entry} config set plan-approval off\`.${hint}`;
+    return `Turning plan approval off lets code generation start without the person approving the plan, so it is their call.${wait(`${entry} config set plan-approval off`)}${hint}`;
   }
   if (wanted.key === "summary-confirmation") {
-    return `Turning summary confirmation off skips the person's \`Looks correct\` check before a stage writes its output, so it is their call. ${wait} They can also type \`${entry} config set summary-confirmation off\`.${hint}`;
+    return `Turning summary confirmation off skips the person's \`Looks correct\` check before a stage writes its output, so it is their call.${wait(`${entry} config set summary-confirmation off`)}${hint}`;
   }
   if (wanted.key !== "guard-policy") {
     const fence = wanted.key.slice("guard.".length);
-    return `Turning the ${fence} check off is the person's call. ${wait} They can also type \`${entry} config set guard.${fence} off\`.${hint}`;
+    return `Turning the ${fence} check off is the person's call.${wait(`${entry} config set guard.${fence} off`)}${hint}`;
   }
-  return `Setting Guard Policy ${wanted.value} lowers fences, which is the person's call. ${wait} They can also type \`${entry} --guard-policy ${wanted.value}\`.${hint}`;
+  return `Setting Guard Policy ${wanted.value} lowers fences, which is the person's call.${wait(`${entry} --guard-policy ${wanted.value}`)}${hint}`;
 }
 
 export function parseGuardFence(raw: string | null | undefined): GuardFence | null {
