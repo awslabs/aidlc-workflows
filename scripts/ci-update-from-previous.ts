@@ -18,6 +18,7 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, 
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
+import { KIRO_HOOK_GROUPS } from "../harness/kiro-ide/hooks/aidlc-kiro-tool-names.ts";
 
 export const HARNESSES = ["claude", "codex", "copilot", "cursor", "kiro", "kiro-ide", "opencode"] as const;
 const HARNESS_DIRS: Record<(typeof HARNESSES)[number], string> = {
@@ -104,15 +105,34 @@ export function hooksTracedToCompletion(directory: string): Set<string> {
     const phases = readFileSync(join(directory, file), "utf-8").split("\n").filter(Boolean)
       .map((line) => { try { return JSON.parse(line) as { phase?: string; code?: unknown; hook?: unknown; adapter?: unknown }; } catch { return {}; } });
     const start = phases.find((p) => p.phase === "dispatcher-start");
-    // A hook loads its code in this process, or (the human-turn hook) in a child.
+    // A hook loads its code in this process, or (the human-turn hook) in a
+    // child, or the front gate saw nothing it reads had changed and skipped it
+    // before the engine loads (Kiro IDE's shell follow-ups, #1946).
     const loaded = phases.some((p) =>
-      p.phase === "hook-import-end" || p.phase === "adapter-import-end" || p.phase === "hook-child-started");
+      p.phase === "hook-import-end" || p.phase === "adapter-import-end" || p.phase === "hook-child-started" ||
+      p.phase === "adapter-front-gate-skip");
     const ended = phases.filter((p) => p.phase === "hook-run-end" || p.phase === "adapter-run-end" || p.phase === "exit");
     if (start && loaded && ended.length > 0 && ended.every((p) => p.code === 0)) {
       done.add(String(start.hook ?? start.adapter ?? ""));
     }
   }
   return done;
+}
+
+// What Kiro IDE sends its tool-call guards: it always names the tool they
+// check (docs/reference/kiro-ide-hook-payload.md), and they refuse a payload
+// that names none. A shell command that changes nothing passes every guard.
+const KIRO_IDE_TOOL_CALL = JSON.stringify({
+  hook_event_name: "PreToolUse",
+  tool_name: "execute_bash",
+  tool_input: { command: "git status" },
+});
+const KIRO_IDE_TOOL_CALL_TARGETS = new Set(["guard-tool-call", ...KIRO_HOOK_GROUPS["guard-tool-call"].map((member) => member.target)]);
+
+/** The payload a hook command gets on stdin: Kiro IDE's tool-call guards a tool call, every other hook "{}". */
+export function hookInput(harness: string, command: string): string {
+  const target = /^aidlc engine adapter kiro-ide ([a-z0-9-]+)$/.exec(command.trim())?.[1];
+  return harness === "kiro-ide" && target !== undefined && KIRO_IDE_TOOL_CALL_TARGETS.has(target) ? KIRO_IDE_TOOL_CALL : "{}";
 }
 
 /** Whether the hook phase trace in `directory` shows the engine ran a hook and it ended with code 0. */
@@ -278,7 +298,7 @@ function check(previous: string, candidate: string, target: string, root: string
         cwd: project,
         env: { ...env, CLAUDE_PROJECT_DIR: project, AIDLC_HOOK_TRACE_DIR: trace },
         encoding: "utf-8",
-        input: "{}",
+        input: hookInput(harness, command),
         timeout: within(HOOK_TIMEOUT_MS),
       });
       if (r.error && (r.error as NodeJS.ErrnoException).code === "ETIMEDOUT") {

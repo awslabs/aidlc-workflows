@@ -8,6 +8,7 @@ import { join } from "node:path";
 import {
   childEnvironment,
   hookCommands,
+  hookInput,
   hooksTracedToCompletion,
   opencodeHookCommands,
   tracedToCompletion,
@@ -110,5 +111,33 @@ describe("ci-update-from-previous helpers", () => {
     writeFileSync(join(both, "hook-2.ndjson"), [{ phase: "dispatcher-start", hook: "continue-workflow" }, { phase: "exit", code: 1 }]
       .map((phase) => JSON.stringify(phase)).join("\n"));
     expect([...hooksTracedToCompletion(both)]).toEqual(["session-start"]);
+  });
+
+  // Kiro IDE's shell-follow-up hooks are skipped before the engine loads when
+  // nothing they read changed (#1946): that is the hook working, not failing.
+  test("a hook the front gate skipped with code 0 ran to its end", () => {
+    const root = scratch();
+    const skip = (dir: string, code: number) => trace(join(root, dir),
+      { phase: "dispatcher-start", adapter: "kiro-ide", target: "after-shell" },
+      { phase: "adapter-front-gate-skip", target: "after-shell" },
+      { phase: "exit", code });
+    expect(tracedToCompletion(skip("a", 0))).toBe(true);
+    expect(tracedToCompletion(skip("b", 1))).toBe(false);
+  });
+
+  // Kiro IDE always names the tool a PreToolUse guard checks; an empty payload
+  // is one it never sends, and the guards rightly refuse it.
+  test("Kiro IDE's tool-call guards get a tool call; every other hook an empty payload", () => {
+    for (const target of ["guard-tool-call", "review-freeze", "state-transition-guard", "plan-approval-guard"]) {
+      const input = JSON.parse(hookInput("kiro-ide", `aidlc engine adapter kiro-ide ${target}`));
+      expect(input, target).toEqual({
+        hook_event_name: "PreToolUse",
+        tool_name: "execute_bash",
+        tool_input: { command: "git status" },
+      });
+    }
+    expect(hookInput("kiro-ide", "aidlc engine adapter kiro-ide after-shell")).toBe("{}");
+    expect(hookInput("kiro", "aidlc engine adapter kiro guard-tool-call")).toBe("{}");
+    expect(hookInput("claude", "aidlc engine hook review-freeze")).toBe("{}");
   });
 });
