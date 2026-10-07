@@ -294,7 +294,7 @@ export interface RunStageDirective {
     // request now, without asking, then verify again. With `unfinished`, the
     // Unit's own review has not finished instead: no verdict yet, or
     // NOT-READY with a pass left (repaired first). With `first`, it was never
-    // asked for: this is its first request.
+    // asked for in this run of the Unit's work: this is that run's first request.
     rereview?: {
       stage: string; reviewer: string; iteration: number; command: string;
       unfinished?: "no-verdict" | "not-ready"; first?: true;

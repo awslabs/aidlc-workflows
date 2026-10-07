@@ -1924,8 +1924,9 @@ recorded and leaves the Unit approved. Under a team's locked `strict` the review
 first, without asking the person. A Unit whose review ended in the NOT-READY
 fallback the conductor records when a retried review still wrote nothing is asked
 about and approved the same way, with no option to pass. A Unit review never asked
-for is required under every Guard Policy: `rereview` carries `first` and names its
-first request:
+for in this run of the Unit's work (after a jump back or a reopen, a review from
+before does not count) is required under every Guard Policy: `rereview` carries
+`first` and names that run's first request:
 
 ```bash
 aidlc engine bolt checkpoint --action status --unit "<Unit>" --kind <unit|skeleton>

@@ -60,6 +60,8 @@ import {
   resolveWorkflowSelection,
   restrictSourceListing,
   reviewArtifactFingerprint,
+  reviewAttemptAccounting,
+  reviewAttemptEventMatchesCurrentClaim,
   reviewAttemptWindow,
   reviewRequestBindingFromBlock,
   selfAttributedDecisionMarker,
@@ -145,7 +147,8 @@ export interface ConstructionCheckpoint {
    *  one review request that re-checks them, run before verifying again. With
    *  `unfinished`, the Unit's own review has not finished instead: asked for
    *  with no verdict yet, or NOT-READY with a pass left (repaired first). With
-   *  `first`, it was never asked for: this is its first request. */
+   *  `first`, it was never asked for in this run of the Unit's work (a jump
+   *  back or a reopen starts a new one): this is that run's first request. */
   rereview: {
     stage: string; reviewer: string; iteration: number; command: string;
     unfinished?: "no-verdict" | "not-ready"; first?: true;
@@ -872,7 +875,21 @@ function snapshot(
         const moved = changed ?? (retryPending
           ? { nextIteration: receipts.unitIterations.get(unit) ?? 1, recoverySpent: false }
           : undefined);
-        if (review && moved && !moved.recoverySpent && (!receipts.unitPending.has(unit) || retryPending)) {
+        // A jump back or a reopen starts the Unit's work again: a review asked
+        // for before it is not this run's, so with none asked for since, the
+        // step is this run's first request.
+        const latestRequest = onlyLatest(rows.filter((row) =>
+          row.event === "REVIEW_REQUESTED" &&
+          auditBlockField(row.block, "Stage") === slug &&
+          auditBlockField(row.block, "Unit") === unit &&
+          auditBlockField(row.block, "Reviewer") === stage.reviewer &&
+          !auditBlockField(row.block, "Workflow")?.startsWith("single-stage:") &&
+          eventMatchesClaimAttempt(projectDir, row.block, unit),
+        ));
+        const requestedThisRun = latestRequest !== null && latestMainWorkflowStageRunFloorForProject(
+          projectDir, slug, true, unit, rows.filter((row) => attemptEventDefinitelyBefore(row, latestRequest)),
+        ) === floor;
+        if (requestedThisRun && review && moved && !moved.recoverySpent && (!receipts.unitPending.has(unit) || retryPending)) {
           const reviewer = stage.reviewer!;
           const iteration = moved.nextIteration;
           recheckable++;
@@ -899,13 +916,18 @@ function snapshot(
             };
             unfinishedMayGoOn = pending.verificationFailed !== true;
           }
-        } else if (!review && !receipts.openBoltUnits.has(unit) && !receipts.unitStaleProgress.has(unit)) {
-          // The Unit's review was never asked for: the step is its first request.
+        } else if (!requestedThisRun && !receipts.openBoltUnits.has(unit)) {
+          // The Unit's review was never asked for in this run of its work: the
+          // step is its first request, at the pass the review log expects.
           const reviewer = stage.reviewer!;
+          const iteration = reviewAttemptAccounting(
+            projectDir, reviewAttemptWindow(projectDir, state, stage, shared.allRows), state, stage, reviewer, unit,
+            undefined, { eventFilter: (row) => reviewAttemptEventMatchesCurrentClaim(projectDir, state, unit, row) },
+          ).requestCount + 1;
           recheckable++;
           rereview ??= {
-            stage: slug, reviewer, iteration: 1,
-            command: renderReviewRequestCommand({ projectDir, stage: slug, reviewer, unit, iteration: 1 }),
+            stage: slug, reviewer, iteration,
+            command: renderReviewRequestCommand({ projectDir, stage: slug, reviewer, unit, iteration }),
             first: true,
           };
         }
@@ -1133,7 +1155,8 @@ function requireReady(current: Snapshot): void {
     // without asking them.
     const rereview = !step ? ""
       : step.first
-        ? ` The ${reviewsNamed([step.stage])} for ${result.unit} was never asked for: request it with \`${step.command}\`, ` +
+        ? ` The ${reviewsNamed([step.stage])} for ${result.unit} was never asked for in this run of its work: ` +
+          `request it with \`${step.command}\`, ` +
           "record the verdict, then verify."
       : !step.unfinished
         ? ` What ${step.stage} reviewed changed since its review: request the re-check with \`${step.command}\`, record the verdict, then verify.`

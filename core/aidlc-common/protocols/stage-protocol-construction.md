@@ -261,8 +261,9 @@ team locks keeps the review required: `verify` then names the review step, and
 you run it without asking the person. A Unit whose review
 ended in the reviewer module's NOT-READY fallback carries `review_not_finished` the
 same way, with no option to pass: that receipt is no reviewer's verdict.
-A `rereview` with `first` is the Unit's review that was never asked for, under any
-Guard Policy: run it the same way. It is required, so `--over-unfinished-review`
+A `rereview` with `first` is the Unit's review that was never asked for in this run of
+its work (a jump back or a reopen starts a new run, so a review from before it does
+not count), under any Guard Policy: run it the same way. It is required, so `--over-unfinished-review`
 does not apply.
 
 Otherwise, if `ready` is false or evidence became stale, explain `errors`.

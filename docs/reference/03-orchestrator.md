@@ -565,8 +565,9 @@ review instead; after the person's "approve it as it is" (`verify
 (`{stages, question}`) carries the one approval question. It also carries the
 stages whose review ended in the reviewer module's NOT-READY fallback (no
 reviewer gave that verdict), under every Guard Policy, with readiness unchanged. A `rereview` with
-`first` is the first request of a Unit review never asked for, under any Guard
-Policy. `verification_command` is the full canonical recorded command,
+`first` is the first request of a Unit review never asked for in this run of the
+Unit's work (a jump back or a reopen starts a new run), at the pass `log review`
+expects, under any Guard Policy. `verification_command` is the full canonical recorded command,
 never an abbreviated display label. A skeleton checkpoint requires an actual end-to-end project check,
 current artifact/source/attempt-bound proof,
 and a real human approval. An ordinary Unit checkpoint requires verification
