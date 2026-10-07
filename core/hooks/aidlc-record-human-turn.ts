@@ -103,7 +103,11 @@ import {
   recordPlanApprovalOverrideRequest,
   recordProtectedHumanResponse,
 } from "../tools/aidlc-testing-posture.ts";
-import { notePlanApprovalAskReply, openPlanApprovalQuestion } from "../tools/aidlc-plan-approval-ask.ts";
+import {
+  engineQuestionHoldsReplies,
+  notePlanApprovalAskReply,
+  openPlanApprovalQuestion,
+} from "../tools/aidlc-plan-approval-ask.ts";
 import { aidlcEntryWords, isAidlcCommandPrompt } from "../tools/aidlc-reply-reader.ts";
 
 // "/aidlc approve the code plan" is the person's reply: the engine reads the
@@ -537,6 +541,11 @@ try {
       // A reply typed after the entry is the words after it, so "/aidlc 1"
       // picks the first choice as "1" does.
       const replyText = entryReply ?? humanResponseText;
+      // Another engine question on top (where the work belongs, which plan)
+      // takes this reply: it answers no question beneath it, so no
+      // checkpoint, verification command, gate, or legacy plan question keeps
+      // it, and decisions on those skip it as they skip a command.
+      const answersEngineQuestion = replyText !== "" && engineQuestionHoldsReplies(projectDir);
       let keptWordsOffset: number | null = null;
       try {
         withAuditLock(projectDir, () => {
@@ -546,7 +555,9 @@ try {
           // ("/aidlc use postgres") are a reply.
           appendAuditEntryUnlocked("HUMAN_TURN", {
             ...(sessionId ? { Session: sessionId } : {}),
-            ...(switchQuestion ? { Reply: QUESTION_TURN_REPLY } : notAReply ? { Reply: COMMAND_TURN_REPLY } : {}),
+            ...(switchQuestion
+              ? { Reply: QUESTION_TURN_REPLY }
+              : notAReply || answersEngineQuestion ? { Reply: COMMAND_TURN_REPLY } : {}),
             ...(picked.length > 0 ? { Picked: JSON.stringify(picked) } : {}),
           }, projectDir);
           // Keep what the person typed in this chat, so a decision at a stage
@@ -555,7 +566,7 @@ try {
           // switch, or break-glass phrase instructs the framework; of a picker
           // reply, free text typed into it counts, and so does a picked gate
           // choice, which is their exact pick. Never blocks the turn.
-          const typedWords = typedPrompt
+          const typedWords = answersEngineQuestion ? "" : typedPrompt
             ? (notAReply ? "" : entryReply ?? typedPrompt)
             : pickerFreeText(humanResponseText, pickerQuestion) || pickedGateLabel(humanResponseText, pickerQuestion);
           if (sessionId && typedWords) {
@@ -574,7 +585,7 @@ try {
           // words for the conductor to answer.
           const engineQuestionOwnsReply = replyText !== "" && (!notAReply || switchQuestion) &&
             notePlanApprovalAskReply(projectDir, sessionId, replyText, pickerQuestion);
-          if (!engineQuestionOwnsReply && sessionId && replyText) {
+          if (!engineQuestionOwnsReply && sessionId && replyText && !answersEngineQuestion) {
             const plan = existsSync(join(projectDir, planApprovalChallengeRelativePath(projectDir, sessionId)));
             const protectedQuestion = existsSync(join(projectDir, protectedQuestionRelativePath(projectDir, sessionId)));
             if (plan && protectedQuestion) {

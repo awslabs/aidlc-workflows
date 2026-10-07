@@ -33,6 +33,8 @@ import {
   errorMessage,
   fenceSwitchSentence,
   getField,
+  GUARD_RECOVERY_ASK_TYPE,
+  isoTimestamp,
   isReplyTurn,
   personAtOwnTerminal,
   personRepliedAfter,
@@ -1395,6 +1397,69 @@ export function planApprovalReplyEditableFiles(projectDir: string): string[] {
     });
   } catch {
     return [];
+  }
+}
+
+// An engine question with no reply machinery of its own (where the work
+// belongs, the new-work offers, which record or plan) is the open question
+// from when it is asked until `next` names another step, or until the engine
+// asks another question after it (a checkpoint or verification question asked
+// again, a gate shown again), which then owns the person's reply.
+interface OpenEngineQuestion {
+  version: 1;
+  askType: string;
+  stateSha256: string;
+  askedAt: string;
+}
+
+const LATER_QUESTION_EVENTS = new Set(["DECISION_RECORDED", "STAGE_AWAITING_APPROVAL"]);
+
+function openEngineQuestionPath(projectDir: string): string {
+  return planApprovalRuntimeFile(projectDir, "open-engine-question.json");
+}
+
+/** Called once such a question's marker is published. */
+export function noteOpenEngineQuestion(projectDir: string, marker: { ask_type?: string; state_sha256: string }): void {
+  if (!marker.ask_type) return;
+  const record: OpenEngineQuestion = {
+    version: 1, askType: marker.ask_type, stateSha256: marker.state_sha256, askedAt: isoTimestamp(),
+  };
+  writePlanApprovalRuntimeRecord(projectDir, openEngineQuestionPath(projectDir), `${JSON.stringify(record)}\n`);
+}
+
+/**
+ * Whether such an engine question is the open step. The person's reply
+ * answers it, so no question it was asked over keeps it.
+ */
+export function engineQuestionHoldsReplies(projectDir: string): boolean {
+  try {
+    const marker = readActiveDirectiveMarker(projectDir, readFileSync(stateFilePath(projectDir), "utf-8"));
+    if (
+      marker?.version !== 2 || marker.kind !== "ask" || typeof marker.ask_type !== "string" ||
+      marker.ask_type === PLAN_APPROVAL_ASK_TYPE || marker.ask_type === GUARD_RECOVERY_ASK_TYPE
+    ) {
+      return false;
+    }
+    const noted = readPlanApprovalRuntimeRecord<OpenEngineQuestion>(openEngineQuestionPath(projectDir), "Open engine question");
+    if (noted?.version !== 1 || noted.askType !== marker.ask_type || noted.stateSha256 !== marker.state_sha256) return true;
+    return !readAuditShardEvents(projectDir).some((row) => LATER_QUESTION_EVENTS.has(row.event) && row.timestamp > noted.askedAt);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Whether the open Plan Approval question already holds a reply of the
+ * person's, kept since it was shown, that no answer records yet: their words
+ * are for the conductor to read as their choice, not a reason to ask again.
+ */
+export function planApprovalKeptReplyWaits(projectDir: string): boolean {
+  try {
+    const open = currentPlanApprovalAsk(projectDir);
+    return open !== null && open.record.mode === "ask" && (open.record.replies?.length ?? 0) > 0 &&
+      (open.record.repliesFrom === undefined || personRepliedAfter(projectDir, open.record.repliesFrom));
+  } catch {
+    return false;
   }
 }
 

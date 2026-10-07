@@ -36179,7 +36179,12 @@ export function usesStageLevelPerUnitArtifacts(
   scope: string | null | undefined,
   stateContent: string | null,
 ): boolean {
-  return effectivePlanAction("units-generation", scope, stateContent) !== "EXECUTE";
+  if (effectivePlanAction("units-generation", scope, stateContent) === "EXECUTE") return false;
+  // Units Generation that already ran keeps its Units when a later scope
+  // change or recompose drops the stage: the Unit work carries on per Unit
+  // (#1401), rather than switching to stage-level paths no Unit gate reads.
+  return !(stateContent !== null &&
+    parseCheckboxes(stateContent).some((c) => c.slug === "units-generation" && c.state === "completed"));
 }
 
 // Parse each stage's EXECUTE or SKIP suffix from Stage Progress. The suffix is

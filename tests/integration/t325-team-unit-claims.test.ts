@@ -12,7 +12,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import {
   worktreePath,
   activeIntentUuid,
@@ -297,6 +297,36 @@ function localRuntimeSnapshot(projectDir: string): Record<string, string | null>
 }
 
 describe("t325 atomic team Unit claims", () => {
+  const removableStages = [
+    "nfr-requirements", "nfr-design", "infrastructure-design",
+    "deployment-pipeline", "environment-provisioning", "observability-setup",
+    "incident-response", "performance-validation", "deployment-execution",
+    "feedback-optimization",
+  ].join(",");
+  // #1401: the person's plan change goes through whatever another clone
+  // holds, and no network read can stop it.
+  test("a plan change goes through while another clone holds a claim published after this clone was made", () => {
+    const { remote } = makeSeed();
+    const planner = clone(remote, "planner");
+    const owner = clone(remote, "owner");
+    const claimed = run(UNIT, ["claim", "alpha", "--team", "owner"], owner);
+    expect(claimed.status, claimed.out).toBe(0);
+    const changed = run(UTILITY, ["recompose", "--skip", removableStages], planner);
+    expect(changed.status, changed.out).toBe(0);
+    expect(readFileSync(seededStateFile(planner), "utf8")).toContain("- [ ] nfr-requirements \u2014 SKIP");
+    // Nothing was fetched to decide it.
+    expect(git(planner, ["for-each-ref", "--format=%(refname)", "refs/remotes/origin/claim/"]))
+      .toBe("");
+  });
+  test("a plan change goes through when the remote cannot be reached", () => {
+    const { remote } = makeSeed();
+    const planner = clone(remote, "offline-planner");
+    git(planner, ["remote", "set-url", "origin", join(planner, "missing-remote")]);
+    const changed = run(UTILITY, ["recompose", "--skip", removableStages], planner);
+    expect(changed.status, changed.out).toBe(0);
+    expect(changed.out).not.toContain("claim registry");
+    expect(readFileSync(seededStateFile(planner), "utf8")).toContain("- [ ] nfr-requirements \u2014 SKIP");
+  });
   test("a fresh clone can adopt the checked-out live claim and publish", () => {
     const { remote } = makeSeed();
     const owner = clone(remote, "adopt-owner");
@@ -1132,8 +1162,11 @@ describe("t325 atomic team Unit claims", () => {
     );
     expect(reclaimed.status, reclaimed.out).toBe(0);
     writeFileSync(join(partial, "partial-candidate.txt"), "candidate\n");
-    git(partial, ["add", "partial-candidate.txt"]);
+    // Reclaim also updates the tracked workflow state; publish requires both
+    // that state and the candidate to be committed.
+    git(partial, ["add", "-A"]);
     git(partial, ["commit", "-m", "partial candidate"]);
+    expect(git(partial, ["status", "--short"])).toBe("");
     const published = run(
       UNIT,
       ["publish", "alpha"],
@@ -1269,7 +1302,7 @@ describe("t325 atomic team Unit claims", () => {
   test("no-remote sibling worktree claim uses the shared local ref namespace", () => {
     const { seed } = makeSeed();
     git(seed, ["remote", "remove", "origin"]);
-    const sibling = join(dirname(seed), `${seed.split("/").at(-1)}-unit-wt`);
+    const sibling = join(dirname(seed), `${basename(seed)}-unit-wt`);
     git(seed, ["worktree", "add", sibling, "-b", "unit-work", "main"]);
     tempDirs.push(sibling);
     const claim = run(

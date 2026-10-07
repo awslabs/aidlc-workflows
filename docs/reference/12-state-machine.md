@@ -1770,7 +1770,9 @@ Artifact resolution follows the approved workflow plan for per-Unit stages.
 When Units Generation is skipped, including express and recomposed zero-Unit
 plans, validity resolves one stage-level artifact instance under
 `<record>/construction/<stage>/` and does not inspect a Bolt DAG or stale
-per-Unit directories. When Units Generation executes, normal Bolt DAG expansion
+per-Unit directories. Units Generation that already completed is the
+exception: a later scope change or recompose that skips it keeps its Units, so
+per-Unit stages keep resolving per Unit (#1401). When Units Generation executes, normal Bolt DAG expansion
 and the legacy no-DAG directory fallback remain unchanged. Missing or ambiguous
 plan state makes receipt capture or inspection unavailable with a non-blocking
 warning rather than reporting false drift.

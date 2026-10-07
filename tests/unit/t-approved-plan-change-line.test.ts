@@ -1,5 +1,6 @@
 // covers: subcommand:aidlc-orchestrate:next, subcommand:aidlc-testing-posture:restore,
-// function:approvedPlanChangeLine, function:approvedPlanChangeText, function:restoreApprovedPlan
+// function:approvedPlanChangeLine, function:approvedPlanChangeText, function:restoreApprovedPlan,
+// function:isApprovedPlanUndoRequest
 //
 // An approved code plan that changes before the build is named for the person
 // in one line, and they can go back to the plan they approved. A resumed build
@@ -15,11 +16,14 @@
 //     the approval holds again, and the line is gone;
 //   - ticking a step is not a change, an added step is named as added, and
 //     once the build has started nothing is said before the build any more;
-//   - the plan-approval guard lets restore through while the plan waits.
+//   - the plan-approval guard lets restore through while the plan waits;
+//   - the line's own words, typed with /aidlc in a new chat, name the restore
+//     (a person once got a question about where the words belong instead,
+//     and their "1" built, or under strict approved, the edited plan).
 import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS, NATIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { cpSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   AIDLC_SRC,
@@ -257,6 +261,88 @@ describe("an approved plan that changed before the build is named, and can be un
       tool_input: { command },
     }));
     expect(hook.status, `${command}\n${hook.stderr}`).toBe(0);
+  });
+});
+
+describe("the change line's own words go back to the approved plan from any chat", () => {
+  const OTHER_SESSION = "01995000-7a11-7000-8000-00000000c1df";
+
+  function nextWith(proj: string, args: string[]): Emitted & { message?: string } {
+    const result = runOrchestrateNext(ORCHESTRATE, proj, args, { env: env(proj) });
+    expect(result.status, result.out).toBe(0);
+    expect(result.directive, result.out).not.toBeNull();
+    return result.directive as unknown as Emitted & { message?: string };
+  }
+
+  // The person types the words in a new chat, through the real human-turn hook.
+  function sayInNewChat(proj: string, prompt: string): void {
+    const turn = run(proj, [DISPATCHER, "engine", "hook", "record-human-turn"],
+      JSON.stringify({ hook_event_name: "UserPromptSubmit", session_id: OTHER_SESSION, prompt }));
+    expect(turn.status, String(turn.stderr)).toBe(0);
+  }
+
+  // The restore the print names, through the plan-approval guard, then run as
+  // given in the project's own installed tools.
+  function runNamedRestore(proj: string, message: string | undefined): string {
+    const command = /`(bun \.claude\/tools\/[^`]* restore --unit [^`]+)`/.exec(message ?? "")?.[1];
+    expect(command, message).toBeDefined();
+    if (!command) return "";
+    cpSync(AIDLC_SRC, join(proj, ".claude"), { recursive: true });
+    const hook = run(proj, [GUARD], JSON.stringify({
+      hook_event_name: "PreToolUse", session_id: OTHER_SESSION, cwd: proj, tool_name: "Bash", tool_input: { command },
+    }));
+    expect(hook.status, `${command}\n${hook.stderr}`).toBe(0);
+    const ran = run(proj, command.split(" ").slice(1));
+    expect(ran.status, String(ran.stderr)).toBe(0);
+    return String(ran.stdout).trim();
+  }
+
+  const planAnswers = (proj: string) =>
+    readFileSync(join(recordDir(proj), "code-generation-questions.md"), "utf-8").match(/^\[Answer\]:.*$/gm) ?? [];
+
+  for (const words of ["go back to the approved plan", '"Go back to the approved plan."', "go back to the approved plan, please"]) {
+    test(`relaxed: /aidlc ${words} in a new chat names the restore, and the approved plan is built`, () => {
+      const proj = project("relaxed");
+      approvedPlan(proj);
+      const approved = readFileSync(planPath(proj), "utf-8");
+      rewrite(proj);
+      expect(next(proj).change_notices).toContain(CHANGED);
+      sayInNewChat(proj, `/aidlc ${words}`);
+      const print = nextWith(proj, [words]);
+      expect(print.kind, JSON.stringify(print)).toBe("print");
+      expect(print.message).not.toContain("--request");
+      expect(runNamedRestore(proj, print.message)).toBe("Back to the plan you approved.");
+      expect(readFileSync(planPath(proj), "utf-8")).toBe(approved);
+      const build = next(proj);
+      expect(build.plan_approval).toEqual({ status: "approved" });
+      expect(build.change_notices ?? []).toEqual([]);
+    });
+  }
+
+  test("strict: the words in a new chat while the edited plan is asked about name the restore, and approve nothing", () => {
+    const proj = project("strict");
+    approvedPlan(proj);
+    rewrite(proj);
+    expect(next(proj).plan_approval?.note).toBe(CHANGED);
+    const answersBefore = planAnswers(proj);
+    sayInNewChat(proj, "/aidlc go back to the approved plan");
+    const print = nextWith(proj, ["go back to the approved plan"]);
+    expect(print.kind, JSON.stringify(print)).toBe("print");
+    expect(print.message).not.toContain("--request");
+    expect(planAnswers(proj)).toEqual(answersBefore);
+    expect(runNamedRestore(proj, print.message)).toBe("Back to the plan you approved.");
+    expect(evaluateCodeGenerationApproval(proj, { unit: UNIT }).ok).toBe(true);
+    const build = next(proj);
+    expect(build.kind).toBe("run-stage");
+    expect(build.plan_approval).toEqual({ status: "approved" });
+  });
+
+  test("with nothing changed since the approval, the words are read like any others", () => {
+    const proj = project("relaxed");
+    approvedPlan(proj);
+    const print = nextWith(proj, ["go back to the approved plan"]);
+    expect(print.kind).toBe("print");
+    expect(print.message).not.toContain(" restore ");
   });
 });
 

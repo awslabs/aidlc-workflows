@@ -813,7 +813,7 @@ describe("t324 team-owned unit progress and per-unit gates", () => {
     expect(directive.unit).toBeUndefined();
   });
 
-  test("team routing fails closed when Current Stage is outside the active Unit block", () => {
+  test("team routing moves past a current stage the plan skips, the way solo routing does", () => {
     const proj = seedProject({ ownership: "team" }, ["alpha"]);
     writeFileSync(
       seededStateFile(proj),
@@ -823,10 +823,12 @@ describe("t324 team-owned unit progress and per-unit gates", () => {
       ),
     );
     const directive = runNext(proj);
-    expect(directive.kind).toBe("error");
-    expect(directive.message).toContain(
-      'current stage "functional-design": it is not in the active unskipped per-unit Construction block',
-    );
+    expect(directive.kind).toBe("print");
+    expect(directive.message).toContain("--result skipped");
+    expect(runReport(proj, [
+      "--stage", "functional-design", "--result", "skipped", "--reason", "stage is SKIP in the approved workflow plan",
+    ]).kind).not.toBe("error");
+    expect(runNext(proj)).toMatchObject({ kind: "run-stage", stage: "nfr-requirements", unit: "alpha" });
   });
 
   test("grid is derived, rewrites hand edits, derives columns, and refresh is guarded", () => {
@@ -1439,42 +1441,91 @@ describe("t324 doctor stage drift against the engine (#1190)", () => {
     );
   }, 60000);
 
-  test("scope-change refuses to skip the current team Unit stage and leaves next routable", () => {
-    // bugfix skips functional-design. Under team ownership its Unit gates live
-    // in Unit Progress while the box reads [-], and team routing refuses a
-    // current per-unit stage outside the unskipped block, so the change would
-    // strand the workflow.
+  test("scope-change skips the current team Unit stage when asked, and next routes past it", () => {
+    // bugfix skips functional-design. The person asked for that scope, so the
+    // change goes through with team ownership too, and next moves past the
+    // skipped stage the same way for team and solo work.
     const scopeChange = (proj: string) =>
       spawnSync(BUN, [UTIL, "scope-change", "--scope", "bugfix", "--project-dir", proj], {
         encoding: "utf-8",
         env: ENV,
       });
-
-    const team = seedProject({ ownership: "team" });
-    const before = state(team);
-    const refused = scopeChange(team);
-    expect(refused.status).toBe(1);
-    expect(`${refused.stdout}${refused.stderr}`).toContain(
-      "Cannot change scope to bugfix while functional-design is the current team Unit stage",
-    );
-    expect(state(team)).toBe(before);
-    expect(readAllAuditShards(team)).not.toContain("SCOPE_CHANGED");
-    expect(runNext(team)).toMatchObject({ kind: "run-stage", stage: "functional-design" });
-
-    // Without team ownership the same change routes: next asks for the skip.
-    const solo = seedProject({});
-    // The rebuild keys on the legend line an engine-created state carries.
-    writeFileSync(
-      seededStateFile(solo),
-      state(solo).replace(
-        "## Stage Progress\n",
-        "## Stage Progress\n<!-- Checkbox states: [ ] not started -->\n",
-      ),
-    );
-    const changed = scopeChange(solo);
-    expect(changed.status, `${changed.stdout}${changed.stderr}`).toBe(0);
-    const recovery = runNext(solo);
-    expect(recovery.kind).toBe("print");
-    expect(recovery.message).toContain("--result skipped");
+    for (const opts of [{ ownership: "team" }, {}]) {
+      const proj = seedProject(opts);
+      // The rebuild keys on the legend line an engine-created state carries.
+      writeFileSync(
+        seededStateFile(proj),
+        state(proj).replace(
+          "## Stage Progress\n",
+          "## Stage Progress\n<!-- Checkbox states: [ ] not started -->\n",
+        ),
+      );
+      const changed = scopeChange(proj);
+      expect(changed.status, `${changed.stdout}${changed.stderr}`).toBe(0);
+      expect(readAllAuditShards(proj)).toContain("SCOPE_CHANGED");
+      const recovery = runNext(proj);
+      expect(recovery.kind).toBe("print");
+      expect(recovery.message).toContain("--result skipped");
+    }
   }, 60000);
+});
+
+describe("t324 scope-change Unit topology (#1401)", () => {
+  // A team-owned feature run whose later Unit gate waits while the cursor
+  // still reads functional-design: alpha's NFR Requirements gate is open.
+  function atLaterUnitGate(): string {
+    const proj = seedProject({ ownership: "team", rhythm: "per-stage" });
+    // Units Generation ran: the Units it made are the ones in the Unit DAG.
+    writeFileSync(seededStateFile(proj), state(proj).replace(
+      "## Stage Progress\n",
+      "## Stage Progress\n<!-- Checkbox states: [ ] not started -->\n\n### INCEPTION PHASE\n- [x] units-generation \u2014 EXECUTE\n",
+    ));
+    const first = runNext(proj);
+    settleBody(proj, first);
+    approveGate(proj, runNext(proj));
+    const later = runNext(proj);
+    expect(later).toMatchObject({ stage: "nfr-requirements", unit: "alpha", gate: false });
+    settleBody(proj, later);
+    const gate = runNext(proj);
+    expect(gate).toMatchObject({ stage: "nfr-requirements", unit: "alpha", unit_gate: "per-stage", gate: true });
+    expect(runReport(proj, [
+      "--stage", "nfr-requirements", "--unit", "alpha", "--result", "awaiting-approval",
+    ]).kind).toBe("print");
+    expect(state(proj)).toContain("- **Current Stage**: functional-design");
+    return proj;
+  }
+  const scopeChange = (proj: string, scope: string) => spawnSync(BUN, [
+    UTIL, "scope-change", "--scope", scope, "--project-dir", proj,
+  ], { encoding: "utf-8", env: ENV, timeout: NATIVE_STARTUP_TIMEOUT_MS });
+
+  test("feature to refactor at a later Unit gate goes through, names the dropped approval, and the Units carry on", () => {
+    const proj = atLaterUnitGate();
+    const changed = scopeChange(proj, "refactor");
+    expect(changed.status, changed.stdout + changed.stderr).toBe(0);
+    expect(changed.stdout).toContain("The alpha Unit's NFR Requirements approval is no longer part of the plan.");
+    expect(state(proj)).toContain("- **Scope**: refactor");
+    // On main this fell back to a stage-level step whose report needed a Unit
+    // (#1401). Now alpha carries on at the next stage refactor runs, per Unit.
+    const next = runNext(proj);
+    expect(next).toMatchObject({ kind: "run-stage", stage: "code-generation", unit: "alpha", gate: false });
+    expect((next.produces as string[])[0]).toContain("/construction/alpha/code-generation/");
+    settleBody(proj, next);
+    const gate = runNext(proj);
+    expect(gate).toMatchObject({ stage: "code-generation", unit: "alpha", unit_gate: "per-stage", gate: true });
+    approveGate(proj, gate);
+    expect(runNext(proj)).toMatchObject({ kind: "run-stage", stage: "functional-design", unit: "beta" });
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("a later Unit gate the new scope keeps is still asked after the switch", () => {
+    const proj = atLaterUnitGate();
+    const retained = scopeChange(proj, "mvp");
+    expect(retained.status, retained.stdout + retained.stderr).toBe(0);
+    expect(retained.stdout).not.toContain("no longer part of the plan");
+    const sameGate = runNext(proj);
+    expect(sameGate).toMatchObject({
+      stage: "nfr-requirements", unit: "alpha", unit_gate: "per-stage", gate: true,
+    });
+    approveGate(proj, sameGate);
+    expect(runNext(proj)).toMatchObject({ stage: "nfr-design", unit: "alpha", gate: false });
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });
