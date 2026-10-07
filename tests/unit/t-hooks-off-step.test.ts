@@ -659,6 +659,44 @@ describe("a person at their own terminal is told the step that works there", () 
     expect(`${agent.stdout}${agent.stderr}`).not.toMatch(/AIDLC_SKIP_/);
   });
 
+  // Saying the folder is existing code at their own terminal was refused with
+  // the agent's words ("Ask them the question you were given"): no step.
+  test("saying what the folder is at their own terminal names the same switch, and with it set the word is recorded", () => {
+    const h = HARNESSES[0];
+    const proj = installed(h);
+    intentCreate(proj, h);
+    const terminalEnv = (extra: Record<string, string> = {}): NodeJS.ProcessEnv => {
+      const env = attendedEnv(ownTerminal(extra));
+      for (const key of Object.keys(env)) if (HOST_MARKER.test(key)) delete env[key];
+      return env;
+    };
+    const reclassify = (dir: string) =>
+      [join(dir, h.dir, "tools", "aidlc.ts"), "engine", "workspace", "reclassify", "--project-type", "brownfield"];
+    const projectType = () => {
+      const intents = join(proj, "aidlc", "spaces", "default", "intents");
+      const dir = readdirSync(intents, { withFileTypes: true }).find((entry) => entry.isDirectory() && !entry.name.startsWith("."));
+      return readFileSync(join(intents, dir!.name, "aidlc-state.md"), "utf-8").split("\n")
+        .find((line) => line.includes("**Project Type**:")) ?? "";
+    };
+    const refused = run(proj, reclassify(proj), terminalEnv());
+    expect(refused.code).not.toBe(0);
+    const said = `${refused.stdout}${refused.stderr}`;
+    expect(said).toContain("AI-DLC cannot see a chat in this terminal");
+    expect(said).toContain("AIDLC_SKIP_HUMAN_PRESENCE_GUARD=1");
+    expect(said).not.toContain("Ask them the question you were given");
+    expect(projectType()).not.toContain("Brownfield");
+    const ran = run(proj, reclassify(proj), terminalEnv({ AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "1" }));
+    expect(ran.code, `${ran.stdout}${ran.stderr}`).toBe(0);
+    expect(projectType()).toContain("Brownfield");
+    // An agent's tool call, with no terminal at both ends, keeps the agent's words.
+    const other = installed(h);
+    intentCreate(other, h);
+    const agent = run(other, reclassify(other), attendedEnv());
+    expect(agent.code).not.toBe(0);
+    expect(`${agent.stdout}${agent.stderr}`).toContain("Ask them the question you were given");
+    expect(`${agent.stdout}${agent.stderr}`).not.toMatch(/AIDLC_SKIP_/);
+  });
+
   test("an IDE terminal, or a project a chat has run in, keeps the chat tool's step and never names the switch", () => {
     const h = HARNESSES[0];
     const proj = installed(h);
