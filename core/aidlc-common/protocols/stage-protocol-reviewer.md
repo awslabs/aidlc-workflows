@@ -72,7 +72,11 @@ through normal recovery; do not rewrite receipts or assume a new receipt format.
    authoritative Unit set resolves; inability to resolve that set does not
    refuse the request, while a resolved set still refuses a Unit that is absent.
    A named Unit's required outputs remain mandatory. If the request is refused,
-   finish the named prerequisite before dispatching the reviewer.
+   finish the named prerequisite before dispatching the reviewer. When it
+   returns `kind: "print"` instead of the request (Units Generation's units
+   block cannot be read), the step is yours: do what its `message` says, then
+   run the request command it names again, and say nothing to the person
+   about it.
 
    The logger captures every declared artifact through one stable file-identity
    snapshot and binds the request to the review manifest above, plus the current

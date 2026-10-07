@@ -2975,11 +2975,24 @@ function handleReview(args: string[]): void {
     }
     // Construction walks its Units from Units Generation's units block, so a
     // block the engine cannot read is fixed before the review, while the
-    // document can still change.
+    // document can still change. Writing it is the agent's step, so it comes
+    // back as a print with the same request to run again: a failed command
+    // would have the agent tell the person a step to take.
     if (flags.stage === "units-generation" && flags.single !== "true") {
       const dag = resolveBoltDag(pd, intent, space);
       if (dag.state === "malformed") {
-        error(`${unitsBlockRepair(dag.reason, dag.detail)} Then request this review again.`);
+        const again = renderReviewRequestCommand({
+          projectDir: pd,
+          stage: flags.stage,
+          reviewer: flags.reviewer,
+          iteration: Number(flags.iteration),
+          ...(retryPending ? { retryPending: true } : {}),
+        });
+        console.log(JSON.stringify({
+          kind: "print",
+          message: `${unitsBlockRepair(dag.reason, dag.detail)} Then run \`${again}\` again.`,
+        }));
+        return;
       }
     }
     const iteration = Number(flags.iteration);
