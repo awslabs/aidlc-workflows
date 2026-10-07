@@ -1558,7 +1558,10 @@ through no symlink. When the plans name no path at all, only a Markdown or
 plain-text document (`.md`, `.markdown`, `.txt`, `.rst`, `.adoc`) is beside the
 build. The conductor does what was asked and says "Done. The code plan still
 waits for your approval." Once the person's approval is on record, a write made
-together with the `next` that carries it out goes through the same way. Once
+together with the `next` that carries it out goes through the same way, and so
+does a write made while the plan is written and its question not yet asked: a
+file-tool or shell write to a file the plan on disk does not name (before any
+plan is written, only a document). Once
 they have replied, the conductor can write the asked plan's own plan
 and test instructions with a file tool, for what they asked with their answer
 ("approve, but add a test for the empty cart"), and then records their choice;

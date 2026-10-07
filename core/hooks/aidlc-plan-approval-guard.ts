@@ -828,11 +828,12 @@ function isPlanWaitSideWrite(projectDir: string, target: string, planPaths: stri
 }
 
 // The files and folders the waiting plans name, loaded only while the engine's
-// Plan Approval question is open. Null when that module cannot be read.
-function planApprovalPlanNamedPaths(projectDir: string): string[] | null {
+// Plan Approval question is open, or one target's plan before it is asked.
+// Null when that module cannot be read.
+function planApprovalPlanNamedPaths(projectDir: string, unit?: string | null): string[] | null {
   try {
-    return (require("../tools/aidlc-plan-approval-ask.ts") as typeof import("../tools/aidlc-plan-approval-ask.ts"))
-      .planApprovalPlanNamedPaths(projectDir);
+    const ask = require("../tools/aidlc-plan-approval-ask.ts") as typeof import("../tools/aidlc-plan-approval-ask.ts");
+    return unit === undefined ? ask.planApprovalPlanNamedPaths(projectDir) : ask.codeGenerationPlanNamedPaths(projectDir, unit);
   } catch {
     return null;
   }
@@ -2439,6 +2440,15 @@ async function evaluate(
           contractHash: approval.contractHash,
           ...(approval.ok ? {} : { reason: approval.reason }),
         };
+        // While the plan is written and before its question is asked, only the
+        // build waits too: a file the plan on disk does not name, written as
+        // the person asked, goes through (before any plan, only a document).
+        if (
+          !approvalEvidenceIsCurrent(evidence) && knownMutationTool && !mutation.opaqueShell && !mutation.runsAidlc &&
+          mutation.targets.length > 0 &&
+          mutation.targets.every((candidate) =>
+            isPlanWaitSideWrite(projectDir, candidate, planApprovalPlanNamedPaths(projectDir, unit)))
+        ) return 0;
         verdict = {
           block: !approvalEvidenceIsCurrent(evidence),
           mentioned: [unit ?? `stage:${GUARDED_STAGE}`],

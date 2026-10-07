@@ -390,6 +390,30 @@ describe("the engine asks for Plan Approval", () => {
     });
   }
 
+  // K6c on Kiro IDE: the plan is written and the agent writes the person's
+  // standing notify line in the same batch as the `next` that asks the plan
+  // question, so the write is judged while the plan step is still current.
+  // That window holds only the build too: a file the plan on disk does not
+  // name goes through; before any plan is written, only a document does.
+  for (const policy of ["strict", "off"] as const) {
+    test(`before the plan question is asked, a file the plan does not name can be written (${policy})`, () => {
+      const proj = project(policy);
+      expect(next(proj).plan_approval.status).toBe("plan");
+      expect(guardWrite(proj, join(proj, "scratch", "notify.txt")).code).toBe(0);
+      expect(guardWrite(proj, join(proj, "src", "other.ts")).code).toBe(2);
+      writePlan(proj);
+      for (const path of [join(proj, "scratch", "notify.txt"), join(proj, "src", "base.ts")]) {
+        const result = guardWrite(proj, path);
+        expect(result.code, `${path}\n${result.stderr}`).toBe(0);
+      }
+      expect(guardBash(proj, "echo 'approval needed' >> scratch/notify.txt").code).toBe(0);
+      for (const path of [join(proj, "src", "slugify.ts"), join(proj, "src", "slugify.test.ts")]) {
+        expect(guardWrite(proj, path).code, path).toBe(2);
+      }
+      expect(guardBash(proj, "echo 'export const s = 1;' > src/slugify.ts").code).toBe(2);
+    });
+  }
+
   test("while the question is open, the old conductor commands point back to next, and a record needs their reply", () => {
     const proj = project();
     askFor(proj);

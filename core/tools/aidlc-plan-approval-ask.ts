@@ -449,25 +449,37 @@ const PLAN_PATH_WORD_RE = /^[A-Za-z0-9_.@~][A-Za-z0-9_.@~/+-]*$/;
 export function planApprovalPlanNamedPaths(projectDir: string): string[] | null {
   try {
     const open = currentPlanApprovalAsk(projectDir, "some");
-    if (open === null) return null;
-    const own = ["aidlc/", `${harnessDir()}/`];
-    const named = new Set<string>();
-    for (const target of open.record.targets) {
-      const dir = codeGenerationRecordDir(projectDir, target.unit);
-      for (const file of [PLAN_FILE, INSTRUCTIONS_FILE]) {
-        const text = readText(join(dir, file)).replace(/^## Testing Contract[^\n]*\n\s*```json[\s\S]*?\n```/m, "");
-        for (const raw of text.split(/[\s`'"()<>[\]{},;|*]+/)) {
-          const word = raw.replace(/\\/g, "/").replace(/^\.\//, "").replace(/[.:!?]+$/, "");
-          if (word.length > 300 || word.startsWith("..") || word.includes("//") || !PLAN_PATH_WORD_RE.test(word)) continue;
-          if (own.some((prefix) => word.startsWith(prefix)) || [PLAN_FILE, INSTRUCTIONS_FILE, QUESTIONS_FILE].includes(word)) continue;
-          if (word.includes("/") || /\.[A-Za-z][A-Za-z0-9]{0,9}$/.test(word)) named.add(word);
-        }
-      }
-    }
-    return [...named];
+    return open === null ? null : plansNamedPaths(projectDir, open.record.targets.map((target) => target.unit));
   } catch {
     return null;
   }
+}
+
+/** The same, for one target's plan as it is on disk, before its question is asked. */
+export function codeGenerationPlanNamedPaths(projectDir: string, unit: string | null): string[] | null {
+  try {
+    return plansNamedPaths(projectDir, [unit]);
+  } catch {
+    return null;
+  }
+}
+
+function plansNamedPaths(projectDir: string, units: Array<string | null>): string[] {
+  const own = ["aidlc/", `${harnessDir()}/`];
+  const named = new Set<string>();
+  for (const unit of units) {
+    const dir = codeGenerationRecordDir(projectDir, unit);
+    for (const file of [PLAN_FILE, INSTRUCTIONS_FILE]) {
+      const text = readText(join(dir, file)).replace(/^## Testing Contract[^\n]*\n\s*```json[\s\S]*?\n```/m, "");
+      for (const raw of text.split(/[\s`'"()<>[\]{},;|*]+/)) {
+        const word = raw.replace(/\\/g, "/").replace(/^\.\//, "").replace(/[.:!?]+$/, "");
+        if (word.length > 300 || word.startsWith("..") || word.includes("//") || !PLAN_PATH_WORD_RE.test(word)) continue;
+        if (own.some((prefix) => word.startsWith(prefix)) || [PLAN_FILE, INSTRUCTIONS_FILE, QUESTIONS_FILE].includes(word)) continue;
+        if (word.includes("/") || /\.[A-Za-z][A-Za-z0-9]{0,9}$/.test(word)) named.add(word);
+      }
+    }
+  }
+  return [...named];
 }
 
 function planQuestion(units: Array<string | null>, repaired: boolean): string {
