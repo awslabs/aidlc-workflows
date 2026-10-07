@@ -1409,13 +1409,16 @@ Memory-held strict refuses first and overrides a fence lowered earlier, which
 machine-wide kill switch takes precedence. Its persisted `Guards Off` entry
 remains and takes effect again only after the memory line no longer holds strict.
 
-A setter that would turn the review-freeze fence off, run when no reply from the
-person has arrived since the last decision, refuses with:
+A setter that would turn the review-freeze fence off, run by the agent on your
+behalf when no reply of yours has arrived since the last decision, refuses with:
 
 > Turning the review-freeze check off is the person's call. No reply from the person has arrived since the last decision: run it when they ask for it. They can also type `/aidlc config set guard.review-freeze off`.
 
 The other fence refusals substitute that fence's name; unattended runs also
-receive the driver guidance. This command controls the three switchable fences,
+receive the driver guidance. The same command typed by you at your own terminal
+is never refused for that reason: it is your own act, so it is carried out, said
+in one line ("The review freeze check is off for this piece of work, set by
+you."), and recorded as set by you. This command controls the three switchable fences,
 including any the policy word leaves up. A switchable fence's main-session
 refusal names the command; a human-presence refusal names no switch and says
 what happened to a reply the person already sent: on a harness that runs hooks

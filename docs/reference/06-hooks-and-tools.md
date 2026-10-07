@@ -134,13 +134,14 @@ The outcome is `{ applied, lines }`; the hook prints a context line
 result lines the CLI prints, and harnesses that inject hook context deliver it
 to the conductor.
 What the PERSON hears does not travel that way: a host may fold hook output
-away, an adapter may drop it, and an agent may not pass it on. So when the
-switch applied, the same lines are kept for the engine's next step
-(`addPendingPersonLines`, queued once the turn is marked), which says them in
-every harness, and the note adds that the engine says it and that the switch is
-already applied, so the conductor runs no setter of its own. An outcome that
-applied nothing (a companion flag the parser refuses, a rule the team holds)
-keeps exactly its earlier shape: the note alone, for the conductor to answer.
+away, an adapter may drop it, and an agent may not pass it on. So the same lines
+are kept for the engine's next step (`addPendingPersonLines`, queued once the
+turn is marked), which says them in every harness, and the note asks the
+conductor to say that line in its reply, in those words. A switch that applied
+adds that it is already applied, so the conductor runs no setter of its own. An
+outcome that changed nothing (a setting with no value, a rule the team holds) is
+carried the same way, because a switch of theirs that did nothing is exactly what
+the person must not be left guessing about.
 An unrecognized prompt returns `null` and applies nothing. When
 `AIDLC_UNATTENDED=1` withholds authority, a recognized typed lowering switch
 applies nothing and the hook emits this `additionalContext` line:
@@ -163,6 +164,17 @@ forms:
   non-flag token and ignore the remaining description. Collect
   `--guard-policy relaxed|off`, the retired `--change-control relaxed|off`,
   `--guard.<fence> off` for a switchable fence, `--intent <name>`, and `--space <name>`.
+  A flag-shaped token this parser does not know never costs the person a switch it
+  does know. After the description has begun it is one of their words
+  (`--guard.review-freeze off add a --help flag to the reverser` keeps the switch
+  and reads `--help` as theirs, with the token after it a word too rather than its
+  value); before the description it is left out, the switches still apply, and the
+  outcome adds one sentence, `I could not read "--nonsense"; if that was a setting,
+  type it again on its own.` (`unread` on the parse). Two cases change nothing and
+  say so instead, because there is no reading of them: a setting the parser knows
+  with no value after it, and `guard-policy` typed under both of its names with two
+  different values, which is put back to the person once, naming both. A repeated or
+  valueless `--intent`, `--space` or `--scope` applies nothing, silently, as before.
   Example form:
   `/aidlc --guard-policy relaxed|off [--guard.<fence> off] [--intent <name>] [--space <name>] <description>`.
   Here `|` separates alternatives, square brackets mark optional flags, and
@@ -624,6 +636,15 @@ typed prompt through the shared settings transaction.
 `config-change` and `scope-change` refuse a lowering from `you` unless the
 fence is already off, the policy word already matches a line with source `you`,
 or `fenceKeyBypassed` permits the fixture/harness-launch presence bypass.
+The refusal is aimed at a worker lowering one of the person's checks on their
+behalf, so it does not stand in front of a command the person ran themselves:
+when `runFromPersonsTerminal` answers yes (a terminal they are typing at, with no
+chat identity on the command), the lowering is carried out with no turn of theirs
+required, recorded with `Source: you` and no `Person Reply`, and said in the same
+one line they get when a turn is on record. An agent's tool call arrives with
+pipes and is refused exactly as before, and `AIDLC_UNATTENDED=1` refuses first in
+either case. Nothing here touches approval authority: a Unit checkpoint, a stage
+gate and the plan-approval receipt still need the person's recorded reply.
 Direct `intent create --guard-policy relaxed|off` from chat is refused when the
 value is below the selected scope's default (`relaxed` on an `off` scope is a
 raise and applies): create the piece of work,

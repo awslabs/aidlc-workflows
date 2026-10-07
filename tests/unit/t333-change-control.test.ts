@@ -2337,42 +2337,42 @@ describe("t333 (9) fences: the policy lowers a fixed set; per-run switches can l
     expect(guardPolicyRows(proj)).toEqual(rows);
   });
 
+  // Nothing in the selected work's state moves until every part of the command
+  // reads, and the person always hears which part did not: a switch of theirs
+  // that changes nothing in silence is the one outcome that is never allowed.
   test.each([
     {
       prompt: "/aidlc --guard-policy relaxed --depth impossible",
-      error: 'Unknown depth: "impossible". Valid depths: minimal, standard, comprehensive.',
+      says: 'Unknown depth: "impossible". Valid depths: minimal, standard, comprehensive.',
     },
     {
+      // A flag-shaped token among their words is one of their words, so the
+      // switch they typed is kept for the work they are describing.
       prompt: "/aidlc --guard-policy relaxed build auth --unknown value",
-      error: null,
+      says: "Guard Policy relaxed for the work you are asking for (set by you).",
     },
     {
       prompt: "/aidlc config set guard-policy relaxed --depth",
-      error: null,
+      says: 'Nothing changed: "--depth" came with no value.',
     },
     {
       prompt: "/aidlc --guard-policy relaxed --change-control off",
-      error: null,
+      says: "you typed Guard Policy twice in that command, as relaxed and off. Which did you mean?",
     },
     {
       prompt: "/aidlc --change-control relaxed --guard-policy off",
-      error: null,
+      says: "you typed Guard Policy twice in that command, as relaxed and off. Which did you mean?",
     },
     {
       prompt: "/aidlc --scope not-a-scope --guard-policy relaxed",
-      error: 'Unknown scope "not-a-scope".',
+      says: 'Unknown scope "not-a-scope".',
     },
-  ])("a typed lowering command validates every companion before changing state: $prompt", ({ prompt, error }) => {
+  ])("a typed lowering command validates every companion before changing state: $prompt", ({ prompt, says }) => {
     const { proj, state } = project("enterprise");
     const before = readFileSync(state, "utf-8");
     const ledger = mutationRows(proj);
-    const output = recordHumanPrompt(proj, prompt);
-    if (error === null) {
-      expect(output).toBe("");
-    } else {
-      const context = JSON.parse(output);
-      expect(context.additionalContext).toBe(`AIDLC Guard Policy: ${error}`);
-    }
+    const context = JSON.parse(recordHumanPrompt(proj, prompt));
+    expect(context.additionalContext).toContain(says);
     expect(readFileSync(state, "utf-8")).toBe(before);
     expect(mutationRows(proj)).toEqual(ledger);
   });

@@ -520,11 +520,13 @@ try {
         notes.push(outcome.applied
           ? `AIDLC Guard Policy: ${lines.join(" ")} Say that line to the person in your reply, in those words; the ` +
             "switch is already applied, so never run a setter for it."
-          : `AIDLC Guard Policy: ${lines.join(" ")}`);
-        if (outcome.applied) {
-          const session = sessionId;
-          forThePerson.push(() => addPendingPersonLines(projectDir, session, lines));
-        }
+          : `AIDLC Guard Policy: ${lines.join(" ")} Say that line to the person in your reply, in those words.`);
+        // Whatever the switch did or did not do, the person hears it from the
+        // engine's next step as well: a switch of theirs that changed nothing
+        // (a word the parser cannot read, a rule their team holds) is exactly
+        // what they must not be left guessing about.
+        const session = sessionId;
+        forThePerson.push(() => addPendingPersonLines(projectDir, session, lines));
       }
     } catch {
       // A switch failure must never block the human's turn.

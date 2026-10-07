@@ -37972,6 +37972,11 @@ export function parseTypedGuardSwitchRequest(prompt: string, options: { wordsAns
   asked?: true;
   /** The words typed after the flags, when there are any. */
   words?: string;
+  /**
+   * A flag-shaped token before the person's words that this parser cannot read.
+   * What it could read is carried out, and this is named back to them after.
+   */
+  unread?: string;
 } {
   const trimmed = prompt.trim();
   const trailing = trimmed.match(/[.,;:!?]+$/)?.[0] ?? "";
@@ -38009,6 +38014,15 @@ export function parseTypedGuardSwitchRequest(prompt: string, options: { wordsAns
     };
   }
   const tokens = splitKiroCommandArgs(text.slice(command[0].length).trim());
+  // `guard.plan-approval` is another spelling of `plan-approval`, and
+  // `change-control` of `guard-policy`.
+  const settingName = (key: string): string =>
+    key === "change-control" ? "guard-policy" : key === "guard.plan-approval" ? "plan-approval" : key;
+  // A flag name this parser knows: a setting, one of the request's own flags, or
+  // where the work is.
+  const knownFlag = (key: string): boolean =>
+    key === "space" || key === "intent" || key === "scope" ||
+    TYPED_REQUEST_FLAGS.has(key) || TYPED_INTENT_SETTING_KEYS.has(settingName(key));
   // Workspace commands own the whole invocation. In particular, never apply
   // a trailing lowering flag to the currently active selection before a
   // switch/create command resolves its destination.
@@ -38025,6 +38039,20 @@ export function parseTypedGuardSwitchRequest(prompt: string, options: { wordsAns
   let guardPolicySpelling: "guard-policy" | "change-control" | null = null;
   let described = false;
   const words: string[] = [];
+  const empty = { switches: [], settings: [], space: null, intent: null, scope: null, error: null } as const;
+  // A switch of theirs never does nothing in silence. Where the message holds a
+  // contradiction, or a setting with no value, nothing is changed and they are
+  // told which part, with their own switch echoed back as the way to type it
+  // again. A switch they typed readably is never thrown away for the sake of
+  // another token: that case skips the token and says so afterwards (`unread`).
+  const lost = (reason: (typed: string) => string) => {
+    if (switches.size === 0 && settings.size === 0) return empty;
+    const typed = [...settings].map(([key, value]) => `--${key} ${value}`).join(" ");
+    return { ...empty, error: reason(typed) };
+  };
+  // A flag-shaped token before they described anything that this parser cannot
+  // read: the first one is named back to them once the rest has been carried out.
+  let unread: string | null = null;
   let index = configForm ? 2 : 0;
   if (configForm && tokens.length < 4) {
     return { switches: [], settings: [], space: null, intent: null, scope: null, error: null };
@@ -38052,36 +38080,49 @@ export function parseTypedGuardSwitchRequest(prompt: string, options: { wordsAns
       }
       return { switches: [], settings: [], space: null, intent: null, scope: null, error: null };
     }
+    // A flag-shaped token this parser does not know. Once they have started
+    // describing the work it is one of their words ("add a --help flag to the
+    // reverser"): it keeps its place in the description, and the token after it
+    // is a word too rather than its value. Before any description, the switches
+    // they typed still stand; the token, and a value-shaped token after it, are
+    // left out and named back to them once those are carried out.
+    if (!configForm && !knownFlag(configKey)) {
+      if (described) {
+        words.push(token);
+        continue;
+      }
+      unread ??= token;
+      if (tokens[index] !== undefined && !tokens[index].startsWith("--")) index++;
+      continue;
+    }
     const value = tokens[index] !== undefined && !tokens[index].startsWith("--")
       ? tokens[index++]
       : undefined;
     if (value === undefined || value.trim().length === 0) {
-      return { switches: [], settings: [], space: null, intent: null, scope: null, error: null };
+      // A setting of theirs with nothing after it: there is no value to apply, so
+      // nothing changes and they are told which flag is missing one.
+      return TYPED_INTENT_SETTING_KEYS.has(settingName(configKey))
+        ? lost((typed) =>
+          `Nothing changed: "--${configKey}" came with no value. Type it again with the value you want, ` +
+          `or type the switch on its own: ${entrySkillInvocation()} ${typed}`)
+        : empty;
     }
     if (configKey === "space" || configKey === "intent") {
-      if ((configKey === "space" ? space : intent) !== null) {
-        return { switches: [], settings: [], space: null, intent: null, scope: null, error: null };
-      }
+      if ((configKey === "space" ? space : intent) !== null) return empty;
       if (configKey === "space") space = value;
       else intent = value;
       continue;
     }
     if (!configForm && configKey === "scope") {
-      if (scope !== null) {
-        return { switches: [], settings: [], space: null, intent: null, scope: null, error: null };
-      }
+      if (scope !== null) return empty;
       scope = value;
       continue;
     }
     if (!configForm && TYPED_REQUEST_FLAGS.has(configKey)) continue;
     // `guard.plan-approval` is another way to say `plan-approval`: one switch,
     // no plan stops. Whether an edited plan asks again is Guard Policy's call.
-    const currentKey = configKey === "change-control"
-      ? "guard-policy"
-      : configKey === "guard.plan-approval" ? "plan-approval" : configKey;
-    if (!TYPED_INTENT_SETTING_KEYS.has(currentKey)) {
-      return { switches: [], settings: [], space: null, intent: null, scope: null, error: null };
-    }
+    const currentKey = settingName(configKey);
+    if (!TYPED_INTENT_SETTING_KEYS.has(currentKey)) return empty;
     const normalizedValue = value.toLowerCase();
     const previous = settings.get(currentKey);
     if (
@@ -38091,7 +38132,11 @@ export function parseTypedGuardSwitchRequest(prompt: string, options: { wordsAns
       previous !== undefined &&
       previous !== normalizedValue
     ) {
-      return { switches: [], settings: [], space: null, intent: null, scope: null, error: null };
+      // Both names of the same setting, with two different values: there is no
+      // reading of that message, so it is put back to them once, naming both.
+      return lost(() =>
+        `Nothing changed: you typed Guard Policy twice in that command, as ${previous} and ${normalizedValue}. ` +
+        "Which did you mean?");
     }
     if (currentKey === "guard-policy") {
       guardPolicySpelling = configKey as "guard-policy" | "change-control";
@@ -38170,6 +38215,7 @@ export function parseTypedGuardSwitchRequest(prompt: string, options: { wordsAns
     ...(Object.keys(newWorkCeremonies).length > 0 ? { newWorkCeremonies } : {}),
     ...(newWorkFencesOff.length > 0 ? { newWorkFencesOff } : {}),
     ...(words.length > 0 ? { words: words.join(" ") } : {}),
+    ...(unread === null ? {} : { unread }),
   };
 }
 

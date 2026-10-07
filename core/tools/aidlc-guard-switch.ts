@@ -440,8 +440,13 @@ export function applyIntentSettings(
   // and so does this setter when a person has spoken since the last decision
   // (the approval they gave in the same message leaves the rest of it standing):
   // the conductor runs what they asked for, in their own words.
+  // A command the person ran at their own terminal carries itself: this rule
+  // protects them from a worker lowering a check on their behalf, and it has no
+  // business standing in front of what they typed. An agent's tool call arrives
+  // with pipes and no chat identity on it, and is refused exactly as before.
+  const atTheirTerminal = lowering.length > 0 && !typedByPerson && runFromPersonsTerminal();
   if (
-    lowering.length > 0 && !typedByPerson && !fenceKeyBypassed(projectDir, sessionId) &&
+    lowering.length > 0 && !typedByPerson && !atTheirTerminal && !fenceKeyBypassed(projectDir, sessionId) &&
     !personSpokeSinceGate(projectDir, { requests: true, outlivesApproval: true })
   ) {
     // A question about the switch ("skip plan approval?") asks for nothing.
@@ -467,12 +472,16 @@ export function applyIntentSettings(
   // line, in their words, with the way back, instead of the setter's own line.
   const askedInChat = lowering.length > 0 && !typedByPerson &&
     personSpokeSinceGate(projectDir, { requests: true, outlivesApproval: true });
+  // Theirs either way: asked for in their chat, or run by them at their terminal.
+  // Both get the one line that names the check, where it applies and the way
+  // back, and both record the person as the one who set it.
+  const personsOwn = askedInChat || atTheirTerminal;
   const saidAsAsked = (key: string): boolean =>
-    askedInChat && key !== "plan-approval" && lowering.some((item) => item.key === key);
+    personsOwn && key !== "plan-approval" && lowering.some((item) => item.key === key);
   // A check the person asked in the chat to turn off is theirs, whoever runs the
   // setter: turning one off needs their turn, so it is on record behind it.
   const personAsked = (key: string): boolean =>
-    typedByPerson || (askedInChat && lowering.some((item) => item.key === key));
+    typedByPerson || (personsOwn && lowering.some((item) => item.key === key));
 
   const audit: AuditEntryInput[] = [];
   const lines: string[] = [];
@@ -736,8 +745,32 @@ export function applyTypedGuardSwitchPrompt(
   prompt: string,
   options: { wordsAnswer?: boolean } = {},
 ): TypedGuardSwitchOutcome | null {
+  const outcome = applyReadTypedGuardSwitches(projectDir, sessionId, prompt, options);
+  // A flag-shaped token this parser could not read never costs them the switches
+  // it could: those are carried out and said as usual, and the part that was not
+  // read is named after, once, so they know what to type again.
+  const unread = parseTypedGuardSwitchRequest(prompt, options).unread;
+  if (outcome === null || unread === undefined) return outcome;
+  return {
+    ...outcome,
+    lines: [
+      ...outcome.lines,
+      `I could not read "${unread}"; if that was a setting, type it again on its own.`,
+    ],
+  };
+}
+
+function applyReadTypedGuardSwitches(
+  projectDir: string,
+  sessionId: string,
+  prompt: string,
+  options: { wordsAnswer?: boolean } = {},
+): TypedGuardSwitchOutcome | null {
   const parsed = parseTypedGuardSwitchRequest(prompt, options);
   if (process.env.AIDLC_UNATTENDED === "1") return null;
+  // Read as a switch, but not readable as a whole: the person hears why, rather
+  // than having typed a switch that quietly does nothing.
+  if (parsed.error !== null) return { applied: false, lines: [parsed.error] };
   // Plan approval back on, typed before the work exists, withdraws an earlier off.
   if (parsed.settings.some((setting) => setting.key === "plan-approval" && setting.value === "on")) {
     consumePlanApprovalCreationGrant(projectDir, sessionId);
