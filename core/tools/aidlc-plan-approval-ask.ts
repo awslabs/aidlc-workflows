@@ -925,7 +925,7 @@ function planApprovalOffNotice(projectDir: string, units: Array<string | null>, 
   const written = paths.length === 1 ? `Plan written: ${paths[0]}.` : `Plans written: ${paths.join(", ")}.`;
   return `${written} Plan approval (${CHECK_GLOSS["plan-approval"]}) is off for this piece of work ` +
     `(${changeControlSourceLabel(setting.source)}). Starting code generation now. ` +
-    "Do you want to look at the plan and approve it first?";
+    "Do you want me to go over the plan with you?";
 }
 
 /**

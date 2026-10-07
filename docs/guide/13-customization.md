@@ -288,7 +288,7 @@ plan. The `plan_approval` ceremony decides whether it asks on this piece of work
 - **Off** (express and poc): once the plan is written you see one line, and the
   build starts:
 
-  > Plan written: aidlc/spaces/default/intents/260820-checkout/construction/code-generation/code-generation-plan.md. Plan approval (you approve each code plan before it is built) is off for this piece of work (from scope poc). Starting code generation now. Do you want to look at the plan and approve it first?
+  > Plan written: aidlc/spaces/default/intents/260820-checkout/construction/code-generation/code-generation-plan.md. Plan approval (you approve each code plan before it is built) is off for this piece of work (from scope poc). Starting code generation now. Do you want me to go over the plan with you?
 
   The audit trail gets a `PLAN_APPROVAL_SKIPPED` row carrying the fingerprint of
   the plan that was built, and the questions file reads

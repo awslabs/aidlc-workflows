@@ -23,12 +23,6 @@ import { planSourceDriftRelaxedNotice } from "../../dist/claude/.claude/tools/ai
 // Files another piece of open work owns whole, and exact phrases it rewords.
 const OWNED_FILES = new Set(["aidlc-guard-switch.ts", "aidlc-recorded-switches.ts"]);
 const OWNED = [
-  "Say 'for every unit'",
-  "say 'for every unit'",
-  "Say 'back to ",
-  "say 'back to ",
-  "Say \"go back to the approved plan\" to undo",
-  "const APPROVED_PLAN_UNDO = `Say \"",
   "off\\` yourself ",
 ];
 // A break-glass override the person must type in their own words on purpose.
