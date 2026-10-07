@@ -655,7 +655,7 @@ describe("a person at their own terminal is told the step that works there", () 
     intentCreate(other, h);
     const agent = run(other, [join(other, h.dir, "tools", "aidlc.ts"), "engine", "config", "set", "guard.plan-approval", "off"], attendedEnv());
     expect(agent.code).not.toBe(0);
-    expect(`${agent.stdout}${agent.stderr}`).toContain("config set plan-approval off`");
+    expect(`${agent.stdout}${agent.stderr}`).toContain("No reply from the person");
     expect(`${agent.stdout}${agent.stderr}`).not.toMatch(/AIDLC_SKIP_/);
   });
 

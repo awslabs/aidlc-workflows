@@ -3397,6 +3397,11 @@ function stillParkedLine(): string {
   return "Your work is still paused. Do you want to pick it back up now?";
 }
 
+// For the agent, after the still-paused line: what a yes to it runs.
+function resumeOnYes(): string {
+  return ` If they say yes, run \`${aidlcToolInvocation("orchestrate")} next --resume\`.`;
+}
+
 // The `parked` a successful park answers with. A team Unit checkout parks
 // only its Unit, locally, so it names the Unit.
 function parkedAfterPark(pd: string, parkStdout: string): ParkedDirective {
@@ -7877,7 +7882,7 @@ function routeNext(args: string[], projectDir: string | undefined): void {
     const stillParked = !unitScope && parkedWhereItStands(stateContent) ? stillParkedLine() : null;
     const verbatimThenStop = stillParked === null
       ? "print its output verbatim and stop."
-      : `print its output verbatim followed by "${stillParked}", and stop.`;
+      : `print its output verbatim followed by "${stillParked}", and stop.${resumeOnYes()}`;
     if (
       flags.scope &&
       validScopes().has(flags.scope) &&
@@ -7917,7 +7922,7 @@ function routeNext(args: string[], projectDir: string | undefined): void {
       emit(keptWhilePlanWaits(
         turnEndingPrint(stillParked === null
           ? "The setting the person typed is already applied: say the line it printed, then stop."
-          : `The setting the person typed is already applied: say the line it printed followed by "${stillParked}", then stop.`),
+          : `The setting the person typed is already applied: say the line it printed followed by "${stillParked}", then stop.${resumeOnYes()}`),
         planApprovalAskIsOpen(pd),
       ));
       return;
@@ -11810,6 +11815,7 @@ function planChangeDirective(
   const kept = (directive: PrintDirective): PrintDirective => keptWhilePlanWaits(directive, planWaits);
   const end = " Then stop.";
   const parkedTail = stillParked === null ? "" : ` ${stillParked}`;
+  const resume = stillParked === null ? "" : resumeOnYes();
   // A stage the plan already skips or runs is no change: it is said, not sent
   // to recompose, so the undo line names only what changed. After a scope
   // change (plan null) the new plan is not known here, so every flip is sent.
@@ -11827,7 +11833,7 @@ function planChangeDirective(
   if (skip.length === 0 && add.length === 0) {
     return kept(turnEndingPrint(
       `${before ? `Run \`${before}\` and print its output verbatim, then tell` : "Tell"} the person in one line: ` +
-        `"${noted} The plan is unchanged.${parkedTail}"${end}`,
+        `"${noted} The plan is unchanged.${parkedTail}"${end}${resume}`,
     ));
   }
   const flips = (skipped: string[], added: string[]): string => [
@@ -11847,7 +11853,7 @@ function planChangeDirective(
       "instead, then stop. " +
       `Otherwise tell the person in one line: "${summary.charAt(0).toUpperCase()}${summary.slice(1)}. ` +
       `You can undo that any time.${noted ? ` ${noted}` : ""}${parkedTail}"${end} If they later ask to undo it, run ` +
-      `\`${aidlcDispatcherInvocation("recompose")} ${flips(add, skip)}\`.`,
+      `\`${aidlcDispatcherInvocation("recompose")} ${flips(add, skip)}\`.${resume}`,
   ));
 }
 

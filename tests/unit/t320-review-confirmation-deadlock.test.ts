@@ -593,7 +593,7 @@ describe("t320 recovery guidance", () => {
       skippedState,
       "user-stories",
     );
-    expect(skippedGuidance).toContain("/aidlc --scope");
+    expect(skippedGuidance).toContain("next --scope <scope>");
     expect(skippedGuidance).not.toContain("/aidlc compose");
     expect(skippedGuidance).not.toContain("/aidlc --stage user-stories");
     expect(
