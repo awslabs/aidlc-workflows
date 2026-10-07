@@ -4,8 +4,8 @@
 // requirements.md during a later stage. The line they heard said
 // "Requirements Analysis finished before something it used changed", and the
 // agent went on to call their own line stray (a live Kiro IDE run). Now the
-// line names the document that changed, says the change stands, and names the
-// redo. A document that is gone, or an input that changed, keeps the line it
+// line names the document that changed, says the work carries on with it, and
+// asks in plain words whether to redo the stage. A document that is gone, or an input that changed, keeps the line it
 // had.
 import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS, NATIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
@@ -28,8 +28,8 @@ afterEach(() => {
 });
 
 const STAGE = "requirements-analysis";
-const LINE = 'requirements.md changed after Requirements Analysis finished; carrying on with it as it is. ' +
-  'Say "redo requirements analysis" to go over the stage again with the change.';
+const LINE = "requirements.md changed after Requirements Analysis finished. I'm carrying on with it as it is. " +
+  "Do you want me to redo Requirements Analysis with your change instead?";
 
 // Requirements Analysis approved with its completion record.
 function project(policy: "off" | "strict"): { proj: string; requirements: string } {
@@ -62,7 +62,7 @@ function status(proj: string): string {
 
 describe("t-own-document-changed-line: an edit to a finished stage's own document", () => {
   for (const policy of ["off", "strict"] as const) {
-    test(`the line names the document, says the change stands, and names the redo (Guard Policy ${policy})`, () => {
+    test(`the line names the document, carries on with it, and asks about the redo (Guard Policy ${policy})`, () => {
       const { proj, requirements } = project(policy);
       appendFileSync(requirements, "- FR-2: a title is at most 200 characters.\n");
       const state = readFileSync(seededStateFile(proj), "utf-8");
@@ -83,14 +83,14 @@ describe("t-own-document-changed-line: an edit to a finished stage's own documen
       expect(staleStageNote("Requirements Analysis", issue!, state)).toBe(
         'Requirements Analysis finished before something it used changed; say "redo requirements analysis" to bring it up to date.',
       );
-      expect(status(proj)).not.toContain("carrying on with it as it is");
+      expect(status(proj)).not.toContain("I'm carrying on with it as it is");
     });
   }
 
   test("several documents are named together; an input that changed keeps its line", () => {
     expect(staleStageNote("User Stories", { reasons: ["output:personas", "output:stories"], edited: true }, "")).toBe(
-      'personas.md and stories.md changed after User Stories finished; carrying on with them as they are. ' +
-        'Say "redo user stories" to go over the stage again with the change.',
+      "personas.md and stories.md changed after User Stories finished. I'm carrying on with them as they are. " +
+        "Do you want me to redo User Stories with your changes instead?",
     );
     expect(staleStageNote("User Stories", { reasons: ["input:requirements", "output:stories"] }, "")).toBe(
       'User Stories finished before something it used changed; say "redo user stories" to bring it up to date.',

@@ -776,12 +776,13 @@ export function staleStageNote(
     : staleStageLine(name);
 }
 
-// A finished stage's own documents changed: what the person hears, with no
-// guess about who changed them.
+// A finished stage's own documents changed: the work carries on with them, and
+// the person answers in their own words whether to redo the stage instead.
 export function ownDocumentChangedLine(name: string, files: readonly string[]): string {
-  const listed = files.length > 1 ? `${files.slice(0, -1).join(", ")} and ${files.at(-1)}` : files[0];
-  return `${listed} changed after ${name} finished; carrying on with ${files.length > 1 ? "them as they are" : "it as it is"}. ` +
-    `Say "redo ${name.toLowerCase()}" to go over the stage again with the change.`;
+  const several = files.length > 1;
+  const listed = several ? `${files.slice(0, -1).join(", ")} and ${files.at(-1)}` : files[0];
+  return `${listed} changed after ${name} finished. I'm carrying on with ${several ? "them as they are" : "it as it is"}. ` +
+    `Do you want me to redo ${name} with your ${several ? "changes" : "change"} instead?`;
 }
 
 // A finished stage that ran before the project's code was there, and the redo.
