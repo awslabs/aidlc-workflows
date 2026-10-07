@@ -14050,21 +14050,22 @@ function handleReport(args: string[], projectDir: string | undefined): void {
     }
     // A Current Stage skip marks the stage skipped for every unit. Under
     // unit-major the walk may already have finished units' work for it (the
-    // late gate still has to approve that work), so refuse it then.
-    if (
+    // late gate still has to approve that work), so refuse it then. Once the
+    // person's plan no longer runs the stage (they changed scope), the skip
+    // goes through and the Units' files stay as they are.
+    const unitsDone =
       readConstructionIteration(stateContent) === "unit-major" &&
       node.phase === "construction" && isPerUnit(node)
-    ) {
-      const done = unitsWithStageWork(pd, node, unitWorkContext(pd));
-      if (done.length > 0) {
-        emit(errorDirective(
-          `Cannot skip "${slug}": ${unitNames(done)} already ` +
-            `${done.length === 1 ? "has" : "have"} this step's files, and skipping the step ` +
-            "now would drop that work from its approval. Continue with " +
-            `\`${entrySkillInvocation()}\` and do the step it shows.`,
-        ));
-        return;
-      }
+        ? unitsWithStageWork(pd, node, unitWorkContext(pd))
+        : [];
+    if (unitsDone.length > 0 && planAction !== "SKIP") {
+      emit(errorDirective(
+        `Cannot skip "${slug}": ${unitNames(unitsDone)} already ` +
+          `${unitsDone.length === 1 ? "has" : "have"} this step's files, and skipping the step ` +
+          "now would drop that work from its approval. Continue with " +
+          `\`${entrySkillInvocation()}\` and do the step it shows.`,
+      ));
+      return;
     }
     // A stage at its open gate is skipped only when the plan no longer runs
     // it (the person said the work is a new project): their decision closes
@@ -14102,7 +14103,9 @@ function handleReport(args: string[], projectDir: string | undefined): void {
         `Committed skip for "${slug}" (scope: ${scope}). ` +
         "State routed forward; run next to continue.",
       ...workflowContinues(pd),
-      narration: `${node.name} does not apply here, so I skipped it.`,
+      narration: unitsDone.length > 0
+        ? `${node.name} is not part of the ${scope} plan; what the Units already did for it stays as it is.`
+        : `${node.name} does not apply here, so I skipped it.`,
     };
     // Carried only while the work goes on; the last stage's skip is said here.
     if (skipped.kind === "done" && skipped.workflow_continues === true) carriesNarration.add(skipped);

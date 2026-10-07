@@ -12914,6 +12914,32 @@ export function summaryConfirmationOwed(
   return stage.summary_confirmation !== undefined;
 }
 
+// A Unit's stage work finished while summary confirmation was off owes no
+// summary when a later change turns it on (the person's scope change or
+// setting): finished work is never re-checked against a ceremony it was never
+// asked for. A Unit that starts the stage again after that asks it as usual.
+function unitFinishedBeforeSummaryOn(
+  projectDir: string,
+  slug: string,
+  unit: string,
+  stateContent: string,
+  auditRows: readonly AuditShardEvent[],
+): boolean {
+  const on = sortAttemptEvents(auditRows.filter((row) =>
+    row.event === "CEREMONY_SET" &&
+    auditBlockField(row.block, "Key") === "summary_confirmation" &&
+    auditBlockField(row.block, "New") === "on")).at(-1);
+  if (on === undefined) return false;
+  const unitMajor =
+    getField(stateContent, "Construction Iteration")?.trim() === "unit-major" ||
+    getField(stateContent, "Construction Checkpoints") === "enabled";
+  const last = currentUnitLifecycleRows(projectDir, "", slug, unitMajor, auditRows, stateContent)
+    .filter((row) => row.unit === unit)
+    .at(-1);
+  return last?.event === "UNIT_COMPLETED" &&
+    (last.ts < on.timestamp || (last.ts === on.timestamp && last.shard === on.shard && last.pos < on.pos));
+}
+
 /** The stage's questions file (for one Unit on a per-unit stage), relative to the project. */
 export function summaryQuestionFileRelative(
   projectDir: string,
@@ -13070,6 +13096,14 @@ export function checkSummaryConfirmationEvidence(
   if (!summaryConfirmationOwed(stage, options)) {
     return { ok: true, required: false };
   }
+  let auditRowsRead: AuditShardEvent[] | null = null;
+  const readAuditRows = (): AuditShardEvent[] => (auditRowsRead ??= readAuditShardEvents(projectDir));
+  const finishedBeforeOn = (unit: string): boolean =>
+    options.workflow === undefined && isPerUnitStage(stage) && typeof options.stateContent === "string" &&
+    unitFinishedBeforeSummaryOn(projectDir, stage.slug, unit, options.stateContent, readAuditRows());
+  if (options.unit !== undefined && finishedBeforeOn(options.unit)) {
+    return { ok: true, required: false };
+  }
 
   // Isolated review callers also supply parent state for ceremony, refusal,
   // and Change Control policy. Its plan must not redirect isolated questions;
@@ -13123,6 +13157,7 @@ export function checkSummaryConfirmationEvidence(
       );
       requiredUnits = resolution.units.filter((unit) =>
         !skipped.has(unit) &&
+        !finishedBeforeOn(unit) &&
         filterProducesByKind(
           stage.produces_kinds,
           stage.produces ?? [],
@@ -13167,7 +13202,7 @@ export function checkSummaryConfirmationEvidence(
     );
   }
 
-  const auditRows = readAuditShardEvents(projectDir);
+  const auditRows = readAuditRows();
   const events = auditRows.filter((entry) => SUMMARY_EVIDENCE_EVENTS.has(entry.event));
   if (events.length === 0) {
     return failure(

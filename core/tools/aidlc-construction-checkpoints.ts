@@ -423,6 +423,93 @@ function readApprovedEvidence(block: string, field = "Approved Evidence"): Map<s
   }
 }
 
+// What the person was asked about or approved for a Unit stays theirs when they
+// change scope after it: the new plan's steps, review cap or walking skeleton
+// never ask about the same finished work again. Both rules below hold while
+// nothing has reopened the Unit since (no jump, no start, pause or skip of the
+// Unit, no rejection) and each step the plan still runs for it holds the work
+// recorded on that row (`current`, from slug to [artifact, source, ...]).
+function workKeptOverScopeChange(
+  rows: readonly AuditShardEvent[],
+  since: AuditShardEvent,
+  recordedRow: AuditShardEvent,
+  unit: string,
+  stages: readonly string[],
+  current: Record<string, readonly unknown[]>,
+  floors: Record<string, string>,
+): boolean {
+  const after = rows.filter((row) => attemptEventDefinitelyBefore(since, row));
+  if (!after.some((row) => row.event === "SCOPE_CHANGED")) return false;
+  if (after.some((row) => row.event === "STAGE_JUMPED" || (
+    ["UNIT_STARTED", "UNIT_RESUMED", "UNIT_PAUSED", "UNIT_SKIPPED", "GATE_REJECTED"].includes(row.event) &&
+    auditBlockField(row.block, "Unit") === unit
+  ))) return false;
+  const recorded = readApprovedEvidence(recordedRow.block,
+    recordedRow.event === "DECISION_RECORDED" ? "Asked Evidence" : "Approved Evidence");
+  // A step the Unit owes nothing (skipped for it, or not for its kind) holds no work.
+  const owed = stages.filter((slug) => current[slug] !== undefined);
+  return recorded !== null && owed.length > 0 && owed.every((slug) => {
+    const then = recorded.get(slug);
+    return then !== undefined && then.floor === floors[slug] &&
+      current[slug][0] === then.artifact && current[slug][1] === then.source;
+  });
+}
+
+const isCheckpointGate = (row: AuditShardEvent, unit: string): boolean =>
+  (row.event === "GATE_APPROVED" || row.event === "GATE_REJECTED") &&
+  auditBlockField(row.block, "Unit") === unit &&
+  auditBlockField(row.block, "Gate Scope") === "unit-end" &&
+  ["construction-unit", "walking-skeleton"].includes(auditBlockField(row.block, "Checkpoint") ?? "");
+
+const isCheckpointAsk = (row: AuditShardEvent, unit: string): boolean =>
+  row.event === "DECISION_RECORDED" && auditBlockField(row.block, "Checkpoint") === "Construction Unit Approval" &&
+  auditBlockField(row.block, "Unit") === unit;
+
+// A Unit approved at its checkpoint before a scope change stays approved.
+function approvalKeptOverScopeChange(
+  rows: readonly AuditShardEvent[],
+  workflow: AuditShardEvent | null,
+  unit: string,
+  stages: readonly string[],
+  current: Record<string, readonly unknown[]>,
+  floors: Record<string, string>,
+): boolean {
+  const last = onlyLatest(rows.filter((row) => isCheckpointGate(row, unit)));
+  if (last?.event !== "GATE_APPROVED" || (workflow !== null && !attemptEventDefinitelyBefore(workflow, last))) return false;
+  if (auditBlockField(last.block, "User Input") !== "Approve" && auditBlockField(last.block, "Autonomous") !== "true") return false;
+  return workKeptOverScopeChange(rows, last, last, unit, stages, current, floors);
+}
+
+// A Unit's checkpoint keeps the fingerprint the person was asked about (or
+// approved) before a scope change, so its verification and an open question
+// still stand: the person answers the question they were shown, once.
+function fingerprintKeptOverScopeChange(
+  rows: readonly AuditShardEvent[],
+  workflow: AuditShardEvent | null,
+  unit: string,
+  kind: ConstructionCheckpointKind,
+  fresh: string,
+  stages: readonly string[],
+  current: Record<string, readonly unknown[]>,
+  floors: Record<string, string>,
+): string | null {
+  const last = onlyLatest(rows.filter((row) => isCheckpointAsk(row, unit) || isCheckpointGate(row, unit)));
+  if (last === null || last.event === "GATE_REJECTED") return null;
+  if (workflow !== null && !attemptEventDefinitelyBefore(workflow, last)) return null;
+  // Kept only for the same kind of checkpoint: its proof and question are that kind's.
+  const lastKind = last.event === "DECISION_RECORDED" ? auditBlockField(last.block, "Kind")
+    : auditBlockField(last.block, "Checkpoint") === "walking-skeleton" ? "skeleton" : "unit";
+  if (lastKind !== kind) return null;
+  const kept = auditBlockField(last.block, "Fingerprint");
+  if (kept === null || kept === fresh) return null;
+  // The row that first carried that fingerprint: the scope change came after it.
+  const first = rows.find((row) => (isCheckpointAsk(row, unit) || isCheckpointGate(row, unit)) &&
+    auditBlockField(row.block, "Fingerprint") === kept &&
+    (workflow === null || attemptEventDefinitelyBefore(workflow, row)));
+  if (first === undefined) return null;
+  return workKeptOverScopeChange(rows, first, last, unit, stages, current, floors) ? kept : null;
+}
+
 // The one change an approved Unit's work made to a stage no review re-checks.
 // Its files are named only from a kept listing that is the approved one: the
 // listing reproduces the approved source fingerprint under the Unit's manifest.
@@ -852,13 +939,14 @@ function snapshot(
   }
   if (sourceStages === 0) errors.push("No applicable stage supplies the Unit's source manifest.");
   if (errors.length !== recheckable) rereview = null;
-  const fingerprint = digest({
+  const fresh = digest({
     version: 1, intent, record: relative(projectDir, root), kind, unit,
     unit_kind: dag.unitKinds?.get(unit) ?? null,
     workflow: workflow ? digest(workflow.block) : null,
     claim: claimAttemptFields(projectDir, unit),
     stages: evidence,
   });
+  const fingerprint = fingerprintKeptOverScopeChange(rows, workflow, unit, kind, fresh, stages, approvedEvidence, floors) ?? fresh;
   const proofPath = proofRelativePath(unit, kind);
   const proof = readProof(root, proofPath);
   const proofFile = proof;
@@ -918,6 +1006,7 @@ function snapshot(
       };
     }
   }
+  if (!approved && approvalKeptOverScopeChange(rows, workflow, unit, stages, approvedEvidence, floors)) approved = true;
   const approvedBefore = gate?.event === "GATE_APPROVED" && auditBlockField(gate.block, "Unit") === unit &&
     auditBlockField(gate.block, "Run floor") === floors[stages.at(-1)!];
   // The person chose Redo for one of this Unit's stages after approving it, and
