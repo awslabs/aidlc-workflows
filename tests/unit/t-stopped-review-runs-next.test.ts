@@ -30,7 +30,7 @@ import {
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import {
   artifactFilename, auditBlockField, findStageBySlug, latestMainWorkflowStageRunFloorForProject,
-  readAuditShardEvents, reviewArtifactFingerprint,
+  readAuditShardEvents, reviewArtifactFingerprint, sourceBaselineAuditFields,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
@@ -142,7 +142,8 @@ ${skipped.map((stage) => `- [S] ${stage} ${DASH} SKIP`).join("\n")}
   seedBoltDag(p, ["alpha", "beta"]);
   mkdirSync(join(p, "src"), { recursive: true });
   for (const unit of ["alpha", "beta"]) writeFileSync(join(p, "src", `${unit}.ts`), `export const ${unit} = 1;\n`);
-  appendAuditEntry("WORKFLOW_STARTED", { Scope: "classic" }, p);
+  // The workspace as the work started, which strict reads to close the stage.
+  appendAuditEntry("WORKFLOW_STARTED", { Scope: "classic", ...sourceBaselineAuditFields(p, CG) }, p);
   recordCommand(p);
   return p;
 }
@@ -232,10 +233,8 @@ const unitApprovals = (p: string, unit: string) => events(p, "GATE_APPROVED")
   .filter((row) => auditBlockField(row.block, "Checkpoint") === "construction-unit" && auditBlockField(row.block, "Unit") === unit);
 
 // After alpha: beta is built, reviewed and approved as usual, and one bare
-// `next` closes Code Generation. Strict closes a stage only against the record
-// of the workspace it started from, which this fixture never wrote, so that
-// last step is read under off.
-function walkCarriesOn(p: string, policy: Policy): void {
+// `next` closes Code Generation.
+function walkCarriesOn(p: string): void {
   build(p, "beta");
   review(p, "beta", "READY");
   expect(checkpoint(p, "beta", "verify").json?.verified).toBe(true);
@@ -244,7 +243,6 @@ function walkCarriesOn(p: string, policy: Policy): void {
   const approved = checkpoint(p, "beta", "approve", ["--user-input", "Approve"]);
   expect(approved.json?.approved, approved.out).toBe(true);
   expect(approved.json?.change_notices ?? []).not.toContainEqual(expect.stringContaining("did not finish"));
-  if (policy === "strict") return;
   const settled = runOrchestrateNext(join(AIDLC_SRC, "tools/aidlc-orchestrate.ts"), p, [], { env: agentEnv() });
   expect((settled.directive as Directive | null)?.kind, settled.out).not.toBe("error");
   expect(readFileSync(seededStateFile(p), "utf-8")).toMatch(/^- \[x\] code-generation /m);
@@ -383,7 +381,7 @@ describe("(b) the NOT-READY fallback the agent records reads as a review that di
       const approvals = unitApprovals(p, "alpha");
       expect(approvals).toHaveLength(1);
       expect(auditBlockField(approvals[0].block, "Review")).toBe("not finished");
-      walkCarriesOn(p, policy);
+      walkCarriesOn(p);
     }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
   }
 
@@ -469,6 +467,56 @@ describe("(b) the NOT-READY fallback the agent records reads as a review that di
     expect(notices(done)).not.toContain(RA_NOTICE);
     expect(auditBlockField(events(p, "GATE_APPROVED")[0].block, "Review")).toBeNull();
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+});
+
+// The person stopped alpha's review and approved alpha as it is, but the
+// reviewer was still running (on Claude Code, Esc does not stop a helper in
+// the background). Its verdict comes in later and the agent records it: it is
+// on record, and alpha stays approved, so nothing asks about alpha again.
+describe("a verdict that comes in after the person approved the Unit as it is", () => {
+  function approvedAsItIs(p: string): string {
+    build(p, "alpha");
+    const requested = tool(p, "log", reviewArgs("alpha", 1));
+    expect(requested.status, requested.out).toBe(0);
+    says(p, AS_IT_IS);
+    const verified = checkpoint(p, "alpha", "verify", ["--over-unfinished-review"]);
+    expect(verified.json?.verified, verified.out).toBe(true);
+    expect(checkpoint(p, "alpha", "ask").status).toBe(0);
+    says(p, "yes");
+    const approved = checkpoint(p, "alpha", "approve", ["--user-input", "yes"]);
+    expect(approved.json?.approved, approved.out).toBe(true);
+    expect(approved.json?.change_notices).toEqual([NOTICE]);
+    return String(requested.json?.reviewFile);
+  }
+
+  function lateVerdict(p: string, file: string, verdict: "READY" | "NOT-READY"): void {
+    mkdirSync(dirname(join(p, file)), { recursive: true });
+    writeFileSync(join(p, file), `**Verdict:** ${verdict}\n**Reviewer:** ${REVIEWER}\n**Iteration:** 1\n\n### Findings\n\n` +
+      (verdict === "READY" ? "No blocking findings.\n" :
+        "| ID | Severity | Location | Finding | Required action | Status |\n|---|---|---|---|---|---|\n" +
+        "| R-01 | Major | src/alpha.ts | It is not covered. | Cover it. | New |\n"));
+    const recorded = tool(p, "log", [...reviewArgs("alpha", 1), "--verdict", verdict]);
+    expect(recorded.status, recorded.out).toBe(0);
+  }
+
+  const cases: Array<[Policy, "advisory" | "adversarial", "READY" | "NOT-READY"]> = [
+    ["off", "advisory", "READY"], ["off", "advisory", "NOT-READY"],
+    ["strict", "advisory", "READY"], ["strict", "advisory", "NOT-READY"],
+    ["off", "adversarial", "NOT-READY"],
+  ];
+  for (const [policy, reviewClass, verdict] of cases) {
+    test(`Guard Policy ${policy}, ${reviewClass}, a late ${verdict}: recorded, alpha stays approved, and the stage closes`, () => {
+      const p = fixture(policy, reviewClass);
+      const file = approvedAsItIs(p);
+      lateVerdict(p, file, verdict);
+      expect(events(p, "REVIEW_COMPLETED").filter((row) => auditBlockField(row.block, "Unit") === "alpha")).toHaveLength(1);
+      const after = routed(p);
+      expect(after.construction_checkpoint?.unit, JSON.stringify(after).slice(0, 800)).not.toBe("alpha");
+      expect(after).toMatchObject({ stage: CG, unit: "beta" });
+      walkCarriesOn(p);
+      expect(unitApprovals(p, "alpha")).toHaveLength(1);
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+  }
 });
 
 describe("the reviewer protocol says when the agent retries and when it runs next", () => {
