@@ -787,7 +787,8 @@ export function ownDocumentChangedLine(name: string, files: readonly string[]): 
 
 // A finished stage that ran before the project's code was there, and the redo.
 export function codeArrivedStageLine(name: string): string {
-  return `${name} ran before the code was here; say "redo ${name.toLowerCase()}" to include it.`;
+  return `${name} ran before the code was here. I'm carrying on with it as it is. ` +
+    `Do you want me to redo ${name} with the code?`;
 }
 
 export function inspectStageValidity(

@@ -270,8 +270,10 @@ describe("plan approval off builds the plan as written", () => {
     expect(build.plan_approval.status).toBe("approved");
     expect(build.plan_approval.skipped).toBe(true);
     expect(build.plan_approval.notice).toMatch(PLAN_PATH_RE);
-    expect(build.plan_approval.notice).toContain("Plan approval is off for this piece of work (from scope poc).");
-    expect(build.plan_approval.notice).toContain("Say 'review the plan first' to stop and approve it.");
+    expect(build.plan_approval.notice).toContain(
+      "Plan approval (you approve each code plan before it is built) is off for this piece of work (from scope poc).",
+    );
+    expect(build.plan_approval.notice).toContain("Do you want to look at the plan and approve it first?");
     // The record says it was not asked; it never claims the person approved.
     const audit = auditText(proj);
     expect(audit).toContain("**Event**: PLAN_APPROVAL_SKIPPED");
@@ -409,7 +411,9 @@ describe("plan approval off builds the plan as written", () => {
     expect(resolvePlanApprovalSetting(proj, readFileSync(statePath, "utf-8")).source).toBe("this piece of work's settings");
     writePlan(proj);
     const build = next(proj);
-    expect(build.plan_approval.notice).toContain("Plan approval is off for this piece of work (from this piece of work's settings).");
+    expect(build.plan_approval.notice).toContain(
+      "Plan approval (you approve each code plan before it is built) is off for this piece of work (from this piece of work's settings).",
+    );
     expect(build.plan_approval.notice).not.toContain("rm -rf");
     // Saved text naming the machine switch is not the machine switch: on stays
     // on, and off still yields to a memory lock.
@@ -570,7 +574,7 @@ describe("only the person turns plan approval off", () => {
     });
     expect(off.status, `${off.stdout}${off.stderr}`).toBe(0);
     expect(planApprovalLine(proj)).toStartWith("off (");
-    expect(off.stdout).toContain("Say 'review the plan first' to look at one before it is built.");
+    expect(off.stdout).toContain("You can ask to see one before it is built any time.");
     // The way back runs as written.
     const back = utility(proj, ["config-change", "--plan-approval", "on"]);
     expect(back.status, back.stderr).toBe(0);
@@ -634,7 +638,7 @@ describe("asked before the piece of work exists", () => {
     const proj = emptyProject();
     const asked = requestOf(proj, "build the export");
     const context = reply(proj, "skip plan approval for this work");
-    expect(context).toContain("Plan approval will be off for the piece of work you start now (set by you)");
+    expect(context).toContain("Plan approval (it shows you the plan before any code is written) will be off for the piece of work you start now (set by you)");
     expect(planApprovalCreationGranted(proj, SESSION, asked.id)).toBe(true);
     // The creation line the person sees, for that request, says what creation will do.
     const line = runOrchestrateNext(ORCHESTRATE, proj, ["--scope", "feature", "--request", asked.id], {
@@ -679,7 +683,7 @@ describe("asked before the piece of work exists", () => {
       askedMinutesAgo(proj, older.id, 5);
       const composition = composeOf(proj, compose);
       const context = reply(proj, "skip plan approval for this work");
-      expect(context).toContain("Plan approval will be off for the piece of work you start now (set by you)");
+      expect(context).toContain("Plan approval (it shows you the plan before any code is written) will be off for the piece of work you start now (set by you)");
       expect(planApprovalCreationGranted(proj, SESSION, older.id)).toBe(false);
       const asked = approveComposed(proj, composition, "fix the null checks the scan found");
       expect(asked.id).not.toBe(composition);
@@ -781,7 +785,7 @@ describe("asked before the piece of work exists", () => {
       });
       const composition = /--request ([0-9a-f]{8})/.exec(String((dispatch.directive as { message?: unknown } | null)?.message))?.[1];
       if (composition === undefined) throw new Error(`no request in ${dispatch.out}`);
-      expect(reply(proj, "skip plan approval for this work")).toContain("Plan approval will be off for the piece of work you start now (set by you)");
+      expect(reply(proj, "skip plan approval for this work")).toContain("Plan approval (it shows you the plan before any code is written) will be off for the piece of work you start now (set by you)");
       const approval = runOrchestrateNext(ORCHESTRATE, proj, [
         "--scope", "feature", "--request", composition, "--sensors", "off", ...(taskless ? ["--", "fix the date parser"] : []),
       ], { env: { ...process.env, ...CLEAR } });
@@ -813,7 +817,7 @@ describe("asked before the piece of work exists", () => {
       mkdirSync(health, { recursive: true });
       writeFileSync(join(health, "write-audit-log.last"), new Date().toISOString());
       expect(reply(proj, "/aidlc --plan-approval off fix the parser")).toContain(
-        "Plan approval will be off for the piece of work you start now (set by you)",
+        "Plan approval (it shows you the plan before any code is written) will be off for the piece of work you start now (set by you)",
       );
       const routing = runOrchestrateNext(ORCHESTRATE, proj, ["--plan-approval", "off", "--", "fix the parser"], {
         env: { ...process.env, ...CLEAR },
@@ -923,8 +927,8 @@ describe("asked before the piece of work exists", () => {
     const proj = emptyProject();
     const context = reply(proj,
       "/aidlc --project-type greenfield --skip user-stories --collaborators off --guard-policy off --plan-approval off build the export");
-    expect(context).toContain("Plan approval will be off for the piece of work you start now (set by you)");
-    expect(context).toContain("Guard Policy off for the work you are asking for (set by you).");
+    expect(context).toContain("Plan approval (it shows you the plan before any code is written) will be off for the piece of work you start now (set by you)");
+    expect(context).toContain("Guard Policy (it sets how many checks run) is off for the work you are asking for (set by you).");
     const asked = requestOf(proj, "build the export", ["--skip", "user-stories", "--plan-approval", "off"]);
     expect(asked.message).toContain("--plan-approval off");
     const made = utility(proj, ["intent-create", "--request", asked.id, "--skip", "user-stories", "--plan-approval", "off"]);
@@ -985,7 +989,7 @@ describe("Guard Policy typed before or with the new work", () => {
   test("typed before the work is described, it is set on the next piece of work this chat starts", () => {
     const proj = emptyProject();
     expect(reply(proj, "/aidlc --guard-policy off")).toContain(
-      "Guard Policy off for the piece of work you start now (set by you).",
+      "Guard Policy (it sets how many checks run) is off for the piece of work you start now (set by you).",
     );
     const asked = requestFor(proj, "build the export");
     const made = utility(proj, ["intent-create", "--request", asked.id]);
@@ -996,7 +1000,7 @@ describe("Guard Policy typed before or with the new work", () => {
   test.each(["off", "relaxed"] as const)("%s, then strict, before the work: the new work starts strict", (lower) => {
     const proj = emptyProject();
     expect(reply(proj, `/aidlc --guard-policy ${lower}`)).toContain(
-      `Guard Policy ${lower} for the piece of work you start now (set by you).`,
+      `Guard Policy (it sets how many checks run) is ${lower} for the piece of work you start now (set by you).`,
     );
     reply(proj, "/aidlc --guard-policy strict");
     const asked = requestFor(proj, "build the export");
@@ -1008,7 +1012,7 @@ describe("Guard Policy typed before or with the new work", () => {
   test("typed with the description, creation takes it with no refusal", () => {
     const proj = emptyProject();
     expect(reply(proj, "/aidlc --guard-policy relaxed --scope enterprise -- build the export")).toContain(
-      "Guard Policy relaxed for the work you are asking for (set by you).",
+      "Guard Policy (it sets how many checks run) is relaxed for the work you are asking for (set by you).",
     );
     const asked = requestFor(proj, "build the export", ["--guard-policy", "relaxed"]);
     const made = utility(proj, ["intent-create", "--request", asked.id, "--guard-policy", "relaxed"]);
@@ -1021,7 +1025,7 @@ describe("Guard Policy typed before or with the new work", () => {
     setPolicy(proj, "strict");
     const before = readFileSync(seededStateFile(proj), "utf-8");
     expect(reply(proj, "/aidlc --guard-policy off -- add a CSV export")).toContain(
-      "Guard Policy off for the work you are asking for (set by you).",
+      "Guard Policy (it sets how many checks run) is off for the work you are asking for (set by you).",
     );
     expect(readFileSync(seededStateFile(proj), "utf-8")).toBe(before);
   });
@@ -1037,7 +1041,7 @@ describe("Guard Policy typed before or with the new work", () => {
     const open = readFileSync(join(intents, "active-intent"), "utf-8").trim();
     const openBefore = readFileSync(join(intents, open, "aidlc-state.md"), "utf-8");
     expect(reply(proj, "/aidlc --guard-policy off enterprise fix the parser")).toContain(
-      "Guard Policy off for the work you are asking for (set by you).",
+      "Guard Policy (it sets how many checks run) is off for the work you are asking for (set by you).",
     );
     const routing = runOrchestrateNext(
       ORCHESTRATE, proj, ["--guard-policy", "off", "enterprise", "fix the parser"],
@@ -1052,7 +1056,7 @@ describe("Guard Policy typed before or with the new work", () => {
     });
     // The person hears it with the next step the agent speaks from.
     expect(pendingPersonLines(proj, SESSION).lines.join(" "), routed.out).toContain(
-      "Guard Policy off for the new work (set by you).",
+      "Guard Policy (it sets how many checks run) is off for the new work (set by you).",
     );
     const id = /--request ([0-9a-f]{8})/.exec(String((routed.directive as { message?: unknown } | null)?.message))?.[1];
     if (id === undefined) throw new Error(`no request in ${routed.out}`);

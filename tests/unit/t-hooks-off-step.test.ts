@@ -621,8 +621,11 @@ describe("a person at their own terminal is told the step that works there", () 
   });
 
   // Turning plan approval off at their own terminal was refused naming only the
-  // chat command, which their terminal refuses the same way: no way out.
-  test("turning a check off at their own terminal names the same switch, and with it set the check turns off", () => {
+  // chat command, which their terminal refuses the same way: no way out. Then the
+  // refusal named the one switch that works there. It is not refused at all now:
+  // a command at the person's own terminal is their own act, and the terminal is
+  // the evidence a chat cannot be in a project whose hooks never run.
+  test("turning a check off at their own terminal is carried out, and an agent's call still waits for them", () => {
     const h = HARNESSES[0];
     const proj = installed(h);
     intentCreate(proj, h);
@@ -638,24 +641,24 @@ describe("a person at their own terminal is told the step that works there", () 
       return readFileSync(join(intents, dir!.name, "aidlc-state.md"), "utf-8").split("\n")
         .find((line) => line.includes("**Plan Approval**")) ?? "";
     };
-    const refused = run(proj, setter, terminalEnv());
-    expect(refused.code).not.toBe(0);
-    const said = `${refused.stdout}${refused.stderr}`;
-    expect(said).toContain("AI-DLC cannot see a chat in this terminal");
-    expect(said).toContain("AIDLC_SKIP_HUMAN_PRESENCE_GUARD=1");
-    // Neither the chat command, which a terminal refuses the same way, nor the agent's wait.
-    expect(said).not.toContain("config set plan-approval off`");
-    expect(said).not.toContain("No reply from the person");
-    expect(planApproval()).toContain("on");
-    const ran = run(proj, setter, terminalEnv({ AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "1" }));
+    const ran = run(proj, setter, terminalEnv());
     expect(ran.code, `${ran.stdout}${ran.stderr}`).toBe(0);
+    const said = `${ran.stdout}${ran.stderr}`;
+    // Nothing is put to them about a chat that cannot exist here, or a variable.
+    expect(said).not.toContain("AI-DLC cannot see a chat in this terminal");
+    expect(said).not.toContain("AIDLC_SKIP_HUMAN_PRESENCE_GUARD=1");
+    expect(said).not.toContain("No reply from the person");
+    expect(planApproval()).toMatch(/\*\*Plan Approval\*\*: off/);
+    // The way out it used to name still works, and changes nothing here.
+    const again = run(proj, setter, terminalEnv({ AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "1" }));
+    expect(again.code, `${again.stdout}${again.stderr}`).toBe(0);
     expect(planApproval()).toMatch(/\*\*Plan Approval\*\*: off/);
     // An agent's tool call, with no terminal at both ends, keeps the chat's words.
     const other = installed(h);
     intentCreate(other, h);
     const agent = run(other, [join(other, h.dir, "tools", "aidlc.ts"), "engine", "config", "set", "guard.plan-approval", "off"], attendedEnv());
     expect(agent.code).not.toBe(0);
-    expect(`${agent.stdout}${agent.stderr}`).toContain("config set plan-approval off`");
+    expect(`${agent.stdout}${agent.stderr}`).toContain("No reply from the person");
     expect(`${agent.stdout}${agent.stderr}`).not.toMatch(/AIDLC_SKIP_/);
   });
 

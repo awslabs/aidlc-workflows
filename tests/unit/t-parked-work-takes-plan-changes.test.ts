@@ -195,8 +195,10 @@ class Walk {
   }
 
   /** Every engine command a print names, run as printed and in order. */
+  // The commands the message names for now, not the ones for a later yes or undo.
   runNamed(message: string): Ran[] {
-    const commands = [...message.matchAll(/`(bun \.claude\/tools\/[^`]+)`/g)].map((m) => m[1]);
+    const now = message.split(/ If they (?:say yes|later ask)/)[0];
+    const commands = [...now.matchAll(/`(bun \.claude\/tools\/[^`]+)`/g)].map((m) => m[1]);
     return commands.map((command) => this.bash(command));
   }
 

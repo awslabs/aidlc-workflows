@@ -1028,7 +1028,11 @@ installed runtime or recorded in the install baseline.
 Locally modified framework-owned files conflict against the prior baseline.
 `--force` replaces those files with the refreshed candidate, including local
 edits to hand-authored orchestrator prose. It does not claim unrelated
-project content.
+project content. Line endings alone are not a local change: Git rewrites them
+on checkout (Git for Windows checks LF files out as CRLF by default), so a
+clone, branch switch, stash pop, or new worktree of a configured project
+refreshes without conflicts. `aidlc doctor` names the files a refresh would
+refuse in its `AI-DLC files` row.
 
 An unchanged framework file the new release no longer ships is removed, and
 config names each one: the refresh prints `Removed N files that are no longer

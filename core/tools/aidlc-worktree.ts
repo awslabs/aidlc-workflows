@@ -2073,8 +2073,8 @@ function assertAggregateSourceBeforeMerge(
       errorWithSlug(
         slug,
         "refusing to merge: the main checkout source changed after the previous reviewed-source merge. " +
-          "Undo those changes in the main checkout and run the merge again, or say 'guard policy relaxed' " +
-          "for this piece of work to keep them, then run the merge again.",
+          "Undo those changes in the main checkout and run the merge again; or, if the person wants to keep " +
+          "them, set Guard Policy relaxed for this piece of work with their go-ahead, then run the merge again.",
       );
     }
     return {
@@ -2111,7 +2111,7 @@ function assertAggregateSourceBeforeMerge(
     errorWithSlug(
       slug,
       `refusing to merge: the main checkout source changed since the stage-entry baseline (${renderChangedPaths(changed) || "unknown paths"}). ` +
-        "Undo those changes and run the merge again, or say 'guard policy relaxed' for this piece of work to keep them, then run the merge again.",
+        "Undo those changes and run the merge again; or, if the person wants to keep them, set Guard Policy relaxed for this piece of work with their go-ahead, then run the merge again.",
     );
   }
   if (
@@ -2122,7 +2122,7 @@ function assertAggregateSourceBeforeMerge(
     errorWithSlug(
       slug,
       "refusing to merge: the main checkout source does not match the prior attempt's final reviewed aggregate. " +
-        "Undo the changes made since then and run the merge again, or say 'guard policy relaxed' for this piece of work to keep them, then run the merge again.",
+        "Undo the changes made since then and run the merge again; or, if the person wants to keep them, set Guard Policy relaxed for this piece of work with their go-ahead, then run the merge again.",
     );
   }
   return {

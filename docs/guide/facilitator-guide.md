@@ -252,11 +252,11 @@ aidlc config flags --bypass AIDLC_DISABLE_PLAN_APPROVAL_GUARD --local --yes
 
 It works while the workflow is running, and the check is off from the agent's
 next action, for every workflow in this project on this machine. AI-DLC then
-says in the chat that the check is off, since when, and how to turn it back on,
-and repeats it at the start of every chat while it stays off (except on
-opencode, which shows no session-start context). As soon as the
-team is past the problem, say "turn it back on", or run the same command with
-`--clear-bypass` in place of `--bypass`.
+says in the chat what the check is for, that it is off and since when, and offers
+to turn it back on, and repeats it at the start of every chat while it stays off
+(except on opencode, which shows no session-start context). As soon as the
+team is past the problem, answer that offer in your own words, or run the same
+command with `--clear-bypass` in place of `--bypass`.
 
 Or set `AIDLC_DISABLE_PLAN_APPROVAL_GUARD=1` in the environment the harness
 starts with, for every workflow in a harness started with it. The hooks read

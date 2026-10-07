@@ -7,7 +7,8 @@
 // engine-read file. Now the block is checked before the review and before the
 // gate, and a block that breaks later is a step for the agent: the exact defect,
 // the block's shape, and the command to run again. Nothing tells the person to
-// fix it.
+// fix it. The review request hands the same step back as a print, not a failed
+// command: a failed command has the agent tell the person a step to take.
 //
 // Mechanism: cli. Every step drives the real aidlc-log.ts and
 // aidlc-orchestrate.ts against a seeded record.
@@ -142,11 +143,8 @@ function directiveOf(out: string): Record<string, unknown> {
   return line ? JSON.parse(line) as Record<string, unknown> : {};
 }
 
-// The request's output, with a refusal's words read out of its {"error": ...} line.
 function reviewRequest(proj: string): { rc: number; out: string } {
-  const r = run(LOG, ["review", "--stage", STAGE, "--reviewer", findStageBySlug(STAGE)!.reviewer!, "--iteration", "1"], proj);
-  const refusal = directiveOf(r.out).error;
-  return typeof refusal === "string" ? { rc: r.rc, out: refusal } : r;
+  return run(LOG, ["review", "--stage", STAGE, "--reviewer", findStageBySlug(STAGE)!.reviewer!, "--iteration", "1"], proj);
 }
 
 // The step names the file, the exact defect and the block's shape, and never
@@ -161,12 +159,20 @@ function expectRepairStep(said: string, defect: string): void {
 
 describe("t-units-block-before-gate: Units Generation's units block is checked before its review and its gate", () => {
   for (const [label, broken] of Object.entries(BROKEN)) {
-    test(`block ${label}: the review request names the fix, and the review is not recorded`, () => {
+    test(`block ${label}: the review request hands the agent the fix and the same request, and records no review`, () => {
       const proj = project("units-generation", null, broken.body);
-      const refused = reviewRequest(proj);
-      expect(refused.rc, refused.out).not.toBe(0);
-      expectRepairStep(refused.out, broken.defect);
+      const step = reviewRequest(proj);
+      // A step the agent follows, not a failed command it reports to the person.
+      expect(step.rc, step.out).toBe(0);
+      const d = directiveOf(step.out);
+      expect(d.kind, step.out).toBe("print");
+      expectRepairStep(String(d.message), broken.defect);
+      expect(String(d.message)).toMatch(
+        new RegExp(`review --stage ${STAGE} --reviewer ${findStageBySlug(STAGE)!.reviewer!} --iteration 1 --project-dir \\S+\` again\\.$`),
+      );
+      expect(step.out).not.toContain('"error"');
       expect(readAllAuditShards(proj)).not.toContain("REVIEW_REQUESTED");
+      expect(readAllAuditShards(proj)).not.toContain("ERROR_LOGGED");
 
       // Once the block reads, the same request goes through.
       writeDependency(proj, GOOD);

@@ -210,7 +210,7 @@ describe("t329 project-description and document-input boundaries", () => {
         "never ask the user to run a command or type a document id",
         '**SAY:** "[the `onboard_note`, word for word]". Use that id',
         "When it returns an `ask` instead, the file is git-ignored (or git could not say) and nothing was copied",
-        "Only after they say to use it anyway, run",
+        "Only after they say they want it copied anyway, run",
         "document-input --onboard --include-ignored`",
       ]) {
         expect(flat, `${file}: ${phrase}`).toContain(phrase);
@@ -788,7 +788,7 @@ describe("t329 project-description and document-input boundaries", () => {
     expect(question.path_notice).toContain("UNTRUSTED PATHS");
     expect(question.path).toBe("private/plan.docx");
     expect(question.ask).toBe(
-      "\"private/plan.docx\" is git-ignored, so I haven't copied it into the shared knowledge folder (it would be committed). Say 'use it anyway' to copy it.",
+      "\"private/plan.docx\" is git-ignored, so I haven't copied it into the shared knowledge folder (it would be committed). Do you want me to copy it anyway?",
     );
     expect(question.next).toContain("Only after they say to use it anyway, run document-input --onboard --include-ignored.");
     expect(question.document_id).toBeUndefined();
@@ -850,7 +850,7 @@ describe("t329 project-description and document-input boundaries", () => {
     expect(ask.status, ask.stderr).toBe(0);
     const question = JSON.parse(ask.stdout);
     expect(question.ask).toBe(
-      "I couldn't check whether git ignores \"plan.docx\", so I haven't copied it into the shared knowledge folder (it might be committed). Say 'use it anyway' to copy it.",
+      "I couldn't check whether git ignores \"plan.docx\", so I haven't copied it into the shared knowledge folder (it might be committed). Do you want me to copy it anyway?",
     );
     expect(question.document_id).toBeUndefined();
     expect(existsSync(join(dir, DOCUMENTS))).toBe(false);

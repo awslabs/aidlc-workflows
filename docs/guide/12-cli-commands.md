@@ -197,7 +197,7 @@ Describe what you want to build and the engine auto-detects the appropriate scop
 
 ```
 /aidlc Fix the ProfileSerializer null pointer
-> This looks like "bugfix" work, so I'd run the "bugfix" plan for: "Fix the ProfileSerializer null pointer" - 5 stages, 5 approval gates; no learnings ritual or summary confirmation; lead agent only. Say go ahead, name a different plan, or say "compose" and I'll tailor one to this task.
+> This looks like "bugfix" work, so I'd run the "bugfix" plan for: "Fix the ProfileSerializer null pointer" - 5 stages, 5 approval gates; no learnings ritual or summary confirmation; lead agent only. Do you want me to go ahead with it, use a different plan, or tailor one to this task?
 ```
 
 **A request no shell can carry.** On Windows, cmd.exe ends a command at a line
@@ -475,7 +475,7 @@ Display current workflow progress without modifying anything.
 /aidlc --status
 ```
 
-**Behavior:** Reads the active intent's `aidlc-state.md` and displays: the scope (or, for a plan composed for this piece of work, its `Plan:` line instead), whether the work is a new project or existing code (`Project Type: existing code (you said so)`), and for existing code when Reverse Engineering last scanned it, also when it ran on its own (`, scanned 2026-10-03 23:17 UTC`), the depth with where it came from (`Depth: Standard (from scope feature)`, or `set for this piece of work`; for a plan composed for this piece of work, a setting that came with the stock scope it runs on reads `(from the approved plan)`, on the depth, Guard Policy and setting lines alike) and the test strategy when it differs, current phase, current stage, completed/total stage count, the intent's Guard Policy value with where it came from (`Guard Policy: strict (from project.md)`, `off (from scope classic)`, `strict (set by you)`, or `strict (not set)` for an older intent without the field), a `Checks off:` line only when you or an environment switch turned a check off, naming each with why (`Checks off: state-transition (set by you)`; the checks a lower Guard Policy turns off go with the Guard Policy line), the stage progress list, and, when other work in this space is still open, an `Also open:` line naming it with the command that switches to it (`Also open: 261003-lunch-poll (type /aidlc intent 261003-lunch-poll to switch)`). An invalid Guard Policy field is shown as unavailable with the validation error and the repair command. It also inspects completed-stage validation receipts: when a finished stage's inputs changed since it was approved, it says so in the line the next step uses, with the words to redo it (`Practices Discovery finished before something it used changed; say "redo practices discovery" to bring it up to date.`, or `... ran before the code was here; say "redo practices discovery" to include it.` once the work became existing code, or, when only its own documents were edited, `requirements.md changed after Requirements Analysis finished. I'm carrying on with it as it is. Do you want me to redo Requirements Analysis with your change instead?`), and names any later stage it affects (`Also affected: ...`). The check is advisory and does not change routing; receipts it cannot read, and completions without one, are not shown. When the current stage is awaiting approval, status says since when, in plain time (`waiting since 2026-10-04 12:24 UTC, about 2 minutes`). If no workflow is active, reports that no workflow is in progress.
+**Behavior:** Reads the active intent's `aidlc-state.md` and displays: the scope (or, for a plan composed for this piece of work, its `Plan:` line instead), whether the work is a new project or existing code (`Project Type: existing code (you said so)`), and for existing code when Reverse Engineering last scanned it, also when it ran on its own (`, scanned 2026-10-03 23:17 UTC`), the depth with where it came from (`Depth: Standard (from scope feature)`, or `set for this piece of work`; for a plan composed for this piece of work, a setting that came with the stock scope it runs on reads `(from the approved plan)`, on the depth, Guard Policy and setting lines alike) and the test strategy when it differs, current phase, current stage, completed/total stage count, the intent's Guard Policy value with where it came from (`Guard Policy: strict (from project.md)`, `off (from scope classic)`, `strict (set by you)`, or `strict (not set)` for an older intent without the field), a `Checks off:` line only when you or an environment switch turned a check off, naming each with why (`Checks off: state-transition (set by you)`; the checks a lower Guard Policy turns off go with the Guard Policy line), the stage progress list, and, when other work in this space is still open, an `Also open:` line naming it, and you can ask to switch to it (`Also open: 261003-lunch-poll (ask to switch to it)`). An invalid Guard Policy field is shown as unavailable with the validation error and the repair command. It also inspects completed-stage validation receipts: when a finished stage's inputs changed since it was approved, it says so in the line the next step uses and asks whether to redo it (`Something Practices Discovery used changed after it finished. I'm carrying on with it as it is. Do you want me to redo Practices Discovery with the change?`, or `Practices Discovery ran before the code was here. I'm carrying on with it as it is. Do you want me to redo Practices Discovery with the code?` once the work became existing code, or, when only its own documents were edited, `requirements.md changed after Requirements Analysis finished. I'm carrying on with it as it is. Do you want me to redo Requirements Analysis with your change instead?`), and names any later stage it affects (`Also affected: ...`). The check is advisory and does not change routing; receipts it cannot read, and completions without one, are not shown. When the current stage is awaiting approval, status says since when, in plain time (`waiting since 2026-10-04 12:24 UTC, about 2 minutes`). If no workflow is active, reports that no workflow is in progress.
 
 Status also shows separate **Sensors**, **Learnings**, and **Summary Confirmation**
 rows with each effective value and its source, for example `Sensors: on (from
@@ -927,7 +927,7 @@ Change the active scope of a running workflow.
 
 The reply's first line gives the new plan's stages, how many are done, and its approval gates, and says how to go back (`/aidlc --scope <old scope>`). Then comes one line per stage the change skipped, one naming the Unit work it dropped, and one per setting whose value changed; a default the new scope leaves as it was is not listed, while a setting you typed with the scope is always reported, changed or not. The `; no ...` clause after the approval gate count lists ceremonies effectively disabled after the change, including retained human overrides and environment kill switches, rather than only the new scope's defaults. The reviewers entry follows the scope's review cap.
 
-Refused under autonomous Construction (`Construction Autonomy Mode: autonomous`), the same rule as `recompose`: re-shaping the plan needs a human at the gate, and an unattended run has none. Switch to gated Construction first (`aidlc-bolt set-autonomy --mode gated`) or let the swarm finish.
+Under autonomous Construction (`Construction Autonomy Mode: autonomous`, the person chose "Continue automatically"), a scope change the person asked for goes through like any other, and the remaining work keeps running automatically. A change with no request of theirs on record, or run with `AIDLC_UNATTENDED=1`, is refused (nobody is there to approve the new plan), and the refusal names `bun .claude/tools/aidlc-bolt.ts set-autonomy --mode gated`, which switches to stopping for approval at each Bolt so the change can go through. `recompose` keeps its own refusal under autonomous Construction, which names the same setter.
 
 On a fresh project with no workflow yet, `--scope <name>` starts one instead: it behaves exactly like `/aidlc <name>` — the workspace is initialized with the named scope and the workflow begins at its first stage.
 
@@ -1240,9 +1240,12 @@ application and refuses CLI lowering.
 Scope defaults apply without asking.
 An already-off fence or an identical policy word already marked `set by you`
 needs no key because the CLI update is a no-op.
-After memory-strict and unattended checks, `fenceKeyBypassed` is the only way a
-CLI setter lowers without the person's prompt: it recognizes the fixture or
-harness-launch presence bypass, not an inline environment assignment.
+After memory-strict and unattended checks, a CLI setter lowers without the
+person's prompt in two cases only: you typed it at your own terminal (both ends a
+terminal, no chat identity on the command, and no mark of a host that opens
+terminals for its agent), which is your own act; or `fenceKeyBypassed` recognizes
+the fixture or harness-launch presence bypass, not an inline environment
+assignment.
 The session-start hook keeps its `presence-bypass-<session>` stamp in the Plan
 Approval runtime directory for an attended harness launched with
 `AIDLC_SKIP_HUMAN_PRESENCE_GUARD=1`.
@@ -1264,7 +1267,7 @@ Codex uses `$aidlc`, and its refusals name `$aidlc` instead of `/aidlc`.
 A setter that would change the policy to `relaxed`, run when no reply from the
 person has arrived since the last decision, refuses with:
 
-> Setting Guard Policy relaxed lowers fences, which is the person's call. No reply from the person has arrived since the last decision: run it when they ask for it. They can also type `/aidlc --guard-policy relaxed`.
+> Setting Guard Policy relaxed lowers fences, which is the person's call. No reply from the person has arrived since the last decision: run it when they ask for it.
 
 Direct `scope change --guard-policy relaxed|off` uses the same rule. Direct
 `intent create --guard-policy relaxed|off` from chat is refused when the value
@@ -1409,13 +1412,20 @@ Memory-held strict refuses first and overrides a fence lowered earlier, which
 machine-wide kill switch takes precedence. Its persisted `Guards Off` entry
 remains and takes effect again only after the memory line no longer holds strict.
 
-A setter that would turn the review-freeze fence off, run when no reply from the
-person has arrived since the last decision, refuses with:
+A setter that would turn the review-freeze fence off, run by the agent on your
+behalf when no reply of yours has arrived since the last decision, refuses with:
 
-> Turning the review-freeze check off is the person's call. No reply from the person has arrived since the last decision: run it when they ask for it. They can also type `/aidlc config set guard.review-freeze off`.
+> Turning the review-freeze check off is the person's call. No reply from the person has arrived since the last decision: run it when they ask for it.
 
 The other fence refusals substitute that fence's name; unattended runs also
-receive the driver guidance. This command controls the three switchable fences,
+receive the driver guidance. The same command typed by you at your own terminal
+is never refused for that reason: it is your own act, so it is carried out, said
+in one line ("The review freeze check (it stops edits to work you already
+approved) is off for this piece of work, set by you. You can turn it back on any
+time."), and recorded as set by you. A terminal your editor opens for its own
+agent (Copilot in VS Code, Kiro IDE, Cursor) is not your terminal: there the
+refusal reads "To turn the review-freeze check off, ask for it in your Kiro
+chat.", naming your tool. This command controls the three switchable fences,
 including any the policy word leaves up. A switchable fence's main-session
 refusal names the command; a human-presence refusal names no switch and says
 what happened to a reply the person already sent: on a harness that runs hooks
@@ -1423,7 +1433,10 @@ only after the person acts, the steps that turn them on; elsewhere, one line
 for the person: "Your answer didn't reach AI-DLC. Please give it once more. If
 it happens again, type /aidlc --doctor." In Kiro CLI, where a reply typed to
 another agent picked in `/agent` is never recorded, that line is "Your answer
-didn't reach AI-DLC. Type /agent and pick aidlc, then give it once more." The
+didn't reach AI-DLC. Type /agent and pick aidlc, then give it once more." When
+Kiro says agent "aidlc" needs upgrading for its 3.0 engine, the line is "Your
+answer didn't reach AI-DLC. Quit Kiro and start it again in this folder with:
+kiro-cli chat --agent-engine v2 --agent aidlc, then give it once more." The
 agent is told never to offer to turn a check off for them.
 
 Only `AIDLC_SKIP_HUMAN_PRESENCE_GUARD=1` lowers human presence, set machine-wide
@@ -1505,7 +1518,7 @@ when it is created. When the person asks in their own words, the agent runs the 
 set`, `config-change`, or `scope-change`); run when no reply from the person has
 arrived since the last decision, it refuses with:
 
-> Turning summary confirmation off skips the person's `Looks correct` check before a stage writes its output, so it is their call. No reply from the person has arrived since the last decision: run it when they ask for it. They can also type `/aidlc config set summary-confirmation off`.
+> Turning summary confirmation off skips the person's `Looks correct` check before a stage writes its output, so it is their call. No reply from the person has arrived since the last decision: run it when they ask for it.
 
 An off already saved as an explicit choice is a no-op. A scope-owned off (for
 example `off (from scope classic)`) still needs the person, because saving it
@@ -1570,23 +1583,27 @@ terminal, or an edit to the file. The nine that take a check away from you
 (plan approval, review freeze, reviewer read scope, human presence, summary
 confirmation and its check, the stage output check, the revision backstop, and
 the pipeline handoff check) are always said. The next step the agent relays
-carries one line naming the check, since when, how it was set, and the command
-that turns it back on, for example:
+carries one line naming the check, what it is for, since when, how it was set,
+and an offer to turn it back on, for example:
 
-> The review freeze check is off for this project since 10:42, because you said: "turn the review freeze check off for this project". Say "turn it back on" to restore it (aidlc config flags --clear-bypass AIDLC_DISABLE_REVIEW_FREEZE_HOOK --yes).
+> The review freeze check (it stops edits to work you already approved) is off for this project since 10:42, because you said: "turn the review freeze check off for this project". Do you want it back on?
+
+Right after you turn a check off yourself, that line states the way back instead
+of asking about what you just decided: "You can turn it back on any time."
 
 When the engine cannot tie it to a message of yours in the chat, the line says
 only that the check is off and since when. Every new chat opens with the
 same line while the check stays off (except on opencode, which shows no
 session-start context), and `config flags --show` and the doctor Flags row (a
-warning, which does not change doctor's exit code) list it. Say "turn it back
-on" and the agent runs that command; if something else still keeps the check
-off (the environment variable, or another settings file), the command says so
-and names it. When the switch is cleared but the open piece of work keeps the
-check off on its own (its scope or its Guard Policy), the line says so and names
-the way to turn it on for that work too, for example:
+warning, which does not change doctor's exit code) list it. Answer that offer in
+your own words and the agent runs the command; if something else still keeps the
+check off (the environment variable, or another settings file), the command says
+so and asks whether you want that cleared too. When the switch is cleared but the
+open piece of work keeps the check off on its own (its scope or its Guard
+Policy), the line says so and offers to turn it on for that work too, for
+example:
 
-> The review freeze check switch is cleared for this project, but it stays off for this piece of work: guard policy off (set by you). Say "turn it on for this work" to restore it there (/aidlc config set guard.review-freeze on).
+> The review freeze check (it stops edits to work you already approved) switch is cleared for this project, but it stays off for this piece of work: guard policy off (set by you). Do you want it on for this piece of work too?
 
 `config get` names where a switch keeps a check off: `off (AIDLC_DISABLE_REVIEW_FREEZE_HOOK in aidlc.settings.local.json)`
 when a settings file records it, or `off (env AIDLC_DISABLE_REVIEW_FREEZE_HOOK)`
@@ -1627,7 +1644,7 @@ so in their own words ("skip plan approval for this work") and the agent runs
 the setter. A setter run when no reply from the person has arrived since the
 last decision refuses with:
 
-> Turning plan approval off lets code generation start without the person approving the plan, so it is their call. No reply from the person has arrived since the last decision: run it when they ask for it. They can also type `/aidlc config set plan-approval off`.
+> Turning plan approval off lets code generation start without the person approving the plan, so it is their call. No reply from the person has arrived since the last decision: run it when they ask for it.
 
 With memory holding strict, the refusal names the memory file instead. Said
 before the work exists (at the compose gate or the scope confirmation), the
@@ -1639,7 +1656,7 @@ keeps the scope's value. Turning it `on` needs no typed turn. A scope change car
 new scope's default in both directions and keeps a value set for this intent.
 `guard.plan-approval` names the same setting, so
 `/aidlc config set guard.plan-approval off` writes the `Plan Approval` line
-rather than a `Guards Off` entry. Saying "review the plan first" while it is off
+rather than a `Guards Off` entry. Asking to review the plan while it is off
 shows that one plan for approval without changing the setting. See
 [Plan approval](13-customization.md#plan-approval) for the full behavior.
 
@@ -1753,9 +1770,9 @@ Command`; use `set-construction-checkpoints`, `set-construction-execution`,
 During Construction you change any of these in your own words ("turn
 checkpoints off", "from here on, build one unit at a time", "run the Units in
 parallel"). The agent does it in that turn, with no question first, and says one
-line with what changed and the words that undo it, for example "Construction
-checkpoints are off for this work now (they were on). Say 'turn checkpoints back
-on' to undo." The change is recorded as `CONSTRUCTION_POLICY_SET` with your words.
+line with what changed and that you can switch back, for example "Construction
+checkpoints (a stop after each Unit for you to check and approve it) are off for
+this work now (they were on). You can switch back any time." The change is recorded as `CONSTRUCTION_POLICY_SET` with your words.
 The setter makes the change only when a message from you since the last decision
 is on record, so the agent cannot change these on its own, and an unattended run
 never changes them. A change that needs another first (parallel Units need
@@ -2376,7 +2393,7 @@ requires a fresh re-merge rather than a last-writer-wins overwrite. Source
 movement under a strict Guard Policy returns `CODEKB_SOURCE_CHANGED` (or
 `CODEKB_CANDIDATE_STALE`) and publishes nothing until a fresh scan. Under
 `relaxed` or `off` the scan is published as captured, with one line
-(`change_notices` in `--json`) that names "redo reverse engineering" to scan
+(`change_notices` in `--json`) that asks whether you want the code scanned
 again.
 
 After a successful publication the utility renames the staged directory aside
@@ -2561,7 +2578,7 @@ directory. Build also defaults its plugin root to the current directory; pass
 {{INVOKE}} engine recompose --add market-research --add team-formation
 ```
 
-Runs under the audit lock, rejects flips that would starve a remaining stage of a required input (and flips of completed/in-progress stages, behind-cursor stages, any flip that would move the first EXECUTE stage of Construction - the protected stage-routing anchor - in either direction, any recompose against a workflow whose Status is not Running, and any recompose under autonomous Construction - re-shaping the plan needs a human at the gate, so switch to gated first or let the swarm finish), rebuilds the derived state fields, and emits `RECOMPOSED`. Each refusal of a stage names what you can do instead: jump to or past the stage, run it on its own with `/aidlc --stage <slug> --single`, add or skip the stages a missing input involves, or change to a scope that runs or skips it. Reached through `/aidlc --skip <slug>`, `/aidlc --add <slug>`, a jump to a skipped stage, and `/aidlc compose` mid-workflow, not typed directly.
+Runs under the audit lock, rejects flips that would starve a remaining stage of a required input (and flips of completed/in-progress stages, behind-cursor stages, any flip that would move the first EXECUTE stage of Construction - the protected stage-routing anchor - in either direction, any recompose against a workflow whose Status is not Running, and any recompose under autonomous Construction - re-shaping the plan needs a human at the gate, so the refusal names `aidlc-bolt.ts set-autonomy --mode gated`, which switches to stopping for approval at each Bolt first), rebuilds the derived state fields, and emits `RECOMPOSED`. Each refusal of a stage names what you can do instead: jump to or past the stage, run it on its own with `/aidlc --stage <slug> --single`, add or skip the stages a missing input involves, or change to a scope that runs or skips it. Reached through `/aidlc --skip <slug>`, `/aidlc --add <slug>`, a jump to a skipped stage, and `/aidlc compose` mid-workflow, not typed directly.
 
 ### `aidlc engine scope save` - keep a plan as a scope
 

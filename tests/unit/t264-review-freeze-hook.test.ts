@@ -1117,9 +1117,12 @@ describe("t264 (c) harness registration", () => {
     }
   });
 
-  test("Codex hooks.json carries the adapter target; the adapter has the case", () => {
+  test("Codex hooks.json runs the freeze inside the guard-tool-call group; the adapter has the case", () => {
     const hooksJson = readFileSync(join(REPO_ROOT, "dist", "codex", ".codex", "hooks.json"), "utf-8");
-    expect(hooksJson).toContain("adapter codex review-freeze");
+    // One PreToolUse process runs the five checks (#2066): the freeze is a
+    // member of guard-tool-call, not a handler of its own.
+    expect(hooksJson).toContain("adapter codex guard-tool-call");
+    expect(hooksJson).not.toContain("adapter codex review-freeze");
     const adapter = readFileSync(
       join(REPO_ROOT, "harness", "codex", "hooks", "aidlc-codex-adapter.ts"),
       "utf-8",

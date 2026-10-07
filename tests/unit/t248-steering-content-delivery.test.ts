@@ -547,7 +547,7 @@ describe("t248 deterministic steering delivery", () => {
     expect(result.final).not.toHaveProperty("rules_content");
     expect(result.sizes.every((bytes) => bytes <= MAX_DIRECTIVE_BYTES)).toBe(true);
     const notices = result.loads[0]?.change_notices;
-    expect(notices).toEqual([expect.stringContaining("retired Change Control")]);
+    expect(notices).toEqual([expect.stringContaining("This work still has an old setting")]);
     for (const directive of [...result.loads, result.final]) {
       expect(directive.change_notices).toEqual(notices);
       expect(directive.stage_validity).toEqual(inline.directive.stage_validity);

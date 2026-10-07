@@ -108,6 +108,7 @@ import {
 import {
   engineQuestionHoldsReplies,
   notePlanApprovalAskReply,
+  notePlanApprovalFileAnswer,
   openPlanApprovalQuestion,
 } from "../tools/aidlc-plan-approval-ask.ts";
 import { aidlcEntryWords, isAidlcCommandPrompt } from "../tools/aidlc-reply-reader.ts";
@@ -520,11 +521,13 @@ try {
         notes.push(outcome.applied
           ? `AIDLC Guard Policy: ${lines.join(" ")} Say that line to the person in your reply, in those words; the ` +
             "switch is already applied, so never run a setter for it."
-          : `AIDLC Guard Policy: ${lines.join(" ")}`);
-        if (outcome.applied) {
-          const session = sessionId;
-          forThePerson.push(() => addPendingPersonLines(projectDir, session, lines));
-        }
+          : `AIDLC Guard Policy: ${lines.join(" ")} Say that line to the person in your reply, in those words.`);
+        // Whatever the switch did or did not do, the person hears it from the
+        // engine's next step as well: a switch of theirs that changed nothing
+        // (a word the parser cannot read, a rule their team holds) is exactly
+        // what they must not be left guessing about.
+        const session = sessionId;
+        forThePerson.push(() => addPendingPersonLines(projectDir, session, lines));
       }
     } catch {
       // A switch failure must never block the human's turn.
@@ -651,6 +654,22 @@ try {
         });
       } catch {
         // Authority bookkeeping remains fail-open for the human's turn.
+      }
+      try {
+        // The questions file invites the person to answer on its `[Answer]:`
+        // line and say done. Their turn and their words are on record now, so
+        // an exact choice they wrote there is recorded the way an exact pick
+        // typed in chat is, and anything else they wrote is named for the
+        // agent to read. Never blocks the turn.
+        // Another engine question on screen owns the reply, and the plan
+        // question's own record is bound to its own marker, so this reads the
+        // file only while the plan question is the open step.
+        if (!notAReply && !answersEngineQuestion && replyText) {
+          const fileAnswer = notePlanApprovalFileAnswer(projectDir, sessionId, replyText);
+          if (fileAnswer !== null) notes.push(fileAnswer);
+        }
+      } catch {
+        // Their words stay on the line; the agent reads them as before.
       }
       try {
         // A reply the engine's guard-recovery ask took as its answer is that

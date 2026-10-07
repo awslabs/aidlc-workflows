@@ -432,7 +432,7 @@ describe("t304 source and store generation interleavings", () => {
     const published = publish(project, candidate, sourcePaths, baseline);
     expect(published.status, published.stderr).toBe(0);
     expect(JSON.parse(published.stdout).change_notices).toEqual([
-      "The code changed while it was being scanned; saved the scan as it was. Say \"redo reverse engineering\" to scan it again.",
+      "The code changed while it was being scanned, so I saved the scan as it was. Do you want me to scan it again?",
     ]);
     expect(readFileSync(join(storeDir(project), "architecture.md"), "utf-8")).toContain("PAYMENTS AS SCANNED");
   });

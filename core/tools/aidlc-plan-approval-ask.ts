@@ -65,6 +65,7 @@ import {
   type ActiveDirectiveMarker,
   type PlanApprovalRuntimeReceipt,
 } from "./aidlc-lib.ts";
+import { CHECK_GLOSS } from "./aidlc-guard-fences.ts";
 import {
   approvalFingerprint,
   approvedPlanChangeLine,
@@ -76,6 +77,7 @@ import {
   keepApprovedPlanCopy,
   PlanApprovalUnbindableError,
   readTestingContract,
+  replaceTestingContractSection,
   resolveCodeGenerationAuthority,
   resolveTestingPosture,
   testingContractDefectMessage,
@@ -507,7 +509,7 @@ const ANSWER_HERE_INTRO = [
 const BUILT_WITHOUT_ASKING_INTRO = [
   "AI-DLC built this plan without asking because plan approval is off for this",
   "piece of work. This file is the record and asks nothing; to look at a plan",
-  "before it is built, say \"review the plan first\" in chat.",
+  "before it is built, ask in chat.",
 ];
 
 function questionsFileContent(
@@ -547,6 +549,22 @@ function promptSha256(questions: string): string {
   return createHash("sha256")
     .update(`${questions.replace(/^\[Answer\]:[ \t]*.*$/gm, "[Answer]:").trimEnd()}\n`, "utf-8")
     .digest("hex");
+}
+
+// The person's own answer on the `[Answer]:` line, as the file's instructions
+// invite ("write your answer after `[Answer]:` and say done"). Empty when they
+// have written nothing there, and never the engine's own recorded answer.
+function answerWrittenInFile(questions: string): string {
+  const line = /^\[Answer\]:[ \t]*(.*)$/m.exec(questions);
+  return line === undefined || line === null ? "" : line[1].trim();
+}
+
+// The same question, with only the person's written answer differing from what
+// the engine would write now: the question stands, so their words stay.
+function onlyTheirAnswerDiffers(onDisk: string, template: string): boolean {
+  if (!onDisk.trim() || !answerWrittenInFile(onDisk)) return false;
+  const blank = (text: string) => text.replace(/^\[Answer\]:[ \t]*.*$/gm, "[Answer]:");
+  return blank(onDisk) === blank(template);
 }
 
 // --- Routing: plan, ask, or build --------------------------------------------
@@ -874,7 +892,14 @@ export function publishPlanApprovalAsk(projectDir: string, directive: PlanApprov
         source?.fingerprint ?? "unbindable",
         "",
       );
-      if (readText(path) !== content) writeFileAtomic(path, content);
+      const onDisk = readText(path);
+      if (onDisk === content) return;
+      // The file invites the person to answer on its `[Answer]:` line. While
+      // the same question stands, their answer is the only difference from the
+      // template, so it stays: the engine never erases what they wrote. A new
+      // question, or a file changed in any other way, is written as usual.
+      if (same && onlyTheirAnswerDiffers(onDisk, content)) return;
+      writeFileAtomic(path, content);
     });
   });
 }
@@ -920,8 +945,9 @@ export function legacyPlanApprovalOffNotice(
 function planApprovalOffNotice(projectDir: string, units: Array<string | null>, setting: PlanApprovalSetting): string {
   const paths = units.map((unit) => targetView(projectDir, unit).plan_path);
   const written = paths.length === 1 ? `Plan written: ${paths[0]}.` : `Plans written: ${paths.join(", ")}.`;
-  return `${written} Plan approval is off for this piece of work (${changeControlSourceLabel(setting.source)}). ` +
-    "Starting code generation now. Say 'review the plan first' to stop and approve it.";
+  return `${written} Plan approval (${CHECK_GLOSS["plan-approval"]}) is off for this piece of work ` +
+    `(${changeControlSourceLabel(setting.source)}). Starting code generation now. ` +
+    "Do you want to look at the plan and approve it first?";
 }
 
 /**
@@ -1081,7 +1107,7 @@ export function openPlanApprovalQuestion(
 }
 
 type TargetApproval =
-  | { ok: true; result: PlanApprovalAskResult; changed: boolean }
+  | { ok: true; result: PlanApprovalAskResult; changed: boolean; notice?: string }
   | { ok: false; result?: PlanApprovalAskResult; notice: string };
 
 // Approve one target with its files exactly as they are now. Caller holds the
@@ -1096,7 +1122,8 @@ function approveTarget(
 ): TargetApproval {
   const dir = codeGenerationRecordDir(projectDir, unit);
   const planPath = join(dir, PLAN_FILE);
-  const plan = readText(planPath);
+  const planAsFound = readText(planPath);
+  let plan = planAsFound;
   const instructions = readText(join(dir, INSTRUCTIONS_FILE));
   const view = targetView(projectDir, unit);
   const repair = (note: string): TargetApproval => ({
@@ -1111,10 +1138,25 @@ function approveTarget(
   if (!("contract" in read)) {
     return repair(`the edit broke the Testing Contract block in ${view.plan_path} (${read.defect}).`);
   }
-  if (read.contract.contract_sha256 !== resolveTestingPosture(projectDir).contract_sha256) {
-    return repair(`the Testing Contract in ${view.plan_path} is out of date and needs to be rendered again.`);
+  // The block the engine rendered is out of date because a scope or setting the
+  // person changed moved the posture under it (a block they edited themselves
+  // fails its own hash and took the branch above). It is engine output, so the
+  // engine renders it again and their approval counts for the plan with the
+  // fresh block: nothing is put back to them for a staleness they did not cause.
+  const posture = resolveTestingPosture(projectDir);
+  let contractHash = read.contract.contract_sha256;
+  let rendered: string | null = null;
+  if (contractHash !== posture.contract_sha256) {
+    const refreshed = usableTestingContract(posture) ? replaceTestingContractSection(plan, posture) : null;
+    if (refreshed === null) {
+      return repair(`the Testing Contract in ${view.plan_path} is out of date and needs to be rendered again.`);
+    }
+    plan = refreshed;
+    contractHash = posture.contract_sha256;
+    rendered = "AIDLC Plan Approval: the plan's Testing Contract (the test rules your build follows) was rendered " +
+      "again because the scope or settings changed; the plan's steps are unchanged. Tell them in one line.";
   }
-  if (!usableTestingContract(read.contract)) {
+  if (!usableTestingContract(rendered === null ? read.contract : posture)) {
     return repair(`the Testing Contract in ${view.plan_path} has missing or inconsistent executable fields.`);
   }
   const source = workspaceSourceState(projectDir);
@@ -1127,7 +1169,13 @@ function approveTarget(
   }
   const sourceFingerprint = source?.fingerprint ?? UNBINDABLE_FINGERPRINT;
   const authority = resolveCodeGenerationAuthority(projectDir, { unit });
-  const fingerprint = approvalFingerprint(plan, instructions, read.contract.contract_sha256, authority);
+  const fingerprint = approvalFingerprint(plan, instructions, contractHash, authority);
+  // What the person's own content came to when the question was answered: a
+  // re-rendered contract block moves the fingerprint on its own, and that is
+  // not the plan changing since they read it.
+  const theirContent = rendered === null
+    ? fingerprint
+    : approvalFingerprint(planAsFound, instructions, read.contract.contract_sha256, authority);
   const asked = record.targets.find((target) => target.unit === unit)?.fingerprint;
   const questionsPath = join(dir, QUESTIONS_FILE);
   const questions = questionsFileContent(
@@ -1154,6 +1202,9 @@ function approveTarget(
     status: "approved",
   };
   withActiveDirectiveLock(projectDir, () => {
+    // The re-rendered plan is written first: the receipt, the copy kept for the
+    // way back, and the fingerprint all describe the plan as it now stands.
+    if (rendered !== null) writeFileAtomic(planPath, plan);
     writeFileAtomic(questionsPath, questions);
     writePlanApprovalReceipt(projectDir, receipt);
     keepApprovedPlanCopy(projectDir, authority, fingerprint, questions);
@@ -1181,7 +1232,8 @@ function approveTarget(
   return {
     ok: true,
     result: { unit, choice: "approve", fingerprint },
-    changed: asked !== undefined && asked !== fingerprint,
+    changed: asked !== undefined && asked !== theirContent,
+    ...(rendered !== null ? { notice: rendered } : {}),
   };
 }
 
@@ -1301,6 +1353,71 @@ export function notePlanApprovalAskReply(
       }
     }
     return true;
+  });
+}
+
+/**
+ * The person's message is exactly "done", the word the questions file's own
+ * instructions name. That is syntax, like an exact option pick, so a tool may
+ * act on it; every other way of saying it ("I put my answer in the file") is
+ * the agent's to read, and the stage rule tells it to read the file then.
+ */
+export function saidDone(words: string): boolean {
+  return /^["'`*_\s]*done[.!]*["'`*_\s]*$/i.test(words ?? "");
+}
+
+/**
+ * The hook's second part while the engine's Plan Approval question is open: the
+ * person wrote their answer on the questions file's `[Answer]:` line, as the
+ * file invites, and said done. An exact choice there is recorded now, through
+ * the same path an exact pick typed in chat takes; anything else they wrote is
+ * the agent's to read, and the line says where it is. Null when there is
+ * nothing to say. Call after the turn's HUMAN_TURN and kept reply are on
+ * record, so the recorded answer stands on their own turn.
+ */
+export function notePlanApprovalFileAnswer(
+  projectDir: string,
+  session: string,
+  words: string,
+): string | null {
+  if (!saidDone(words)) return null;
+  return withAuditLock(projectDir, () => {
+    const open = currentPlanApprovalAsk(projectDir);
+    // Edit mode is the agent's to read: the person may have changed the plan
+    // files too, and the file can still hold the engine's own earlier answer.
+    if (open === null || open.record.mode !== "ask") return null;
+    const { record } = open;
+    const written = record.targets.map((target) => ({
+      unit: target.unit,
+      path: join(codeGenerationRecordDir(projectDir, target.unit), QUESTIONS_FILE),
+    })).map((target) => ({
+      ...target,
+      answer: answerWrittenInFile(readText(target.path)),
+    })).filter((target) => target.answer !== "" && !isNonAnswer(target.answer));
+    if (written.length === 0) return null;
+    const where = written.map((target) => toPosix(relative(projectDir, target.path))).join(", ");
+    const answers = [...new Set(written.map((target) => target.answer))];
+    const pick = answers.length === 1 ? exactOptionPick(answers[0], record.choices) : null;
+    const choice: PlanApprovalAnswerChoice | null = pick === 0 ? "approve"
+      : pick === 1 && record.targets.length === 1 ? "request-changes"
+      : pick === 2 ? "edit"
+      : null;
+    // Every plan the question asks about needs its own written answer before one
+    // choice can stand for all of them.
+    if (choice === null || written.length !== record.targets.length) {
+      return `AIDLC Plan Approval: the person wrote an answer in ${where}: ${
+        answers.map((answer) => `"${answer.slice(0, 200)}"`).join(", ")
+      }. Read it with their message and record the choice they made.`;
+    }
+    try {
+      const result = recordPlanApprovalAnswer(projectDir, session, { choice, exactPick: true });
+      return `AIDLC Plan Approval: the answer the person wrote in ${where}, "${answers[0].slice(0, 200)}", ` +
+        `is recorded. ${result.message}`;
+    } catch {
+      // Their words stay on the line; the agent reads them and records the choice.
+      return `AIDLC Plan Approval: the person wrote their answer in ${where}: "${answers[0].slice(0, 200)}". ` +
+        "Read it with their message and record the choice they made.";
+    }
   });
 }
 
@@ -1681,6 +1798,7 @@ export function recordPlanApprovalAnswer(
         results.push(outcome.result);
         approved.push(unit);
         if (outcome.changed) edited.push(unit);
+        if (outcome.notice) repairs.push(outcome.notice);
       } else if (outcome.result) {
         results.push(outcome.result);
         repairs.push(outcome.notice);
@@ -1928,6 +2046,20 @@ export function requestPlanApprovalReviewNow(projectDir: string): string | null 
       delete reopened.replies;
       if (results.length > 0) reopened.results = results; else delete reopened.results;
       writePlanApprovalAsk(projectDir, reopened);
+      // The answer on each file's `[Answer]:` line was the engine's own record
+      // of the choice it is now withdrawing. Clear it, so the fresh question is
+      // answered only by what the person writes or says next, and the engine's
+      // own line is never read back to them as theirs.
+      for (const unit of looked) {
+        const path = join(codeGenerationRecordDir(projectDir, unit), QUESTIONS_FILE);
+        const questions = readText(path);
+        if (!questions.trim() || !answerWrittenInFile(questions)) continue;
+        try {
+          writeFileAtomic(path, questions.replace(/^\[Answer\]:[ \t]*.*$/m, "[Answer]:"));
+        } catch {
+          // The question is asked again either way; the file is the record.
+        }
+      }
     }
     return `Recorded that the person wants to review the plan${units.length > 0 ? ` for ${labels(units)}` : ""}. ` +
       "Run next: the plan is shown for approval before anything else is built.";

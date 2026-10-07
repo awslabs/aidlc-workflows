@@ -49,10 +49,6 @@ const TRUST_SUFFIXES = [
   "user_prompt_submit:0:0",
   "pre_tool_use:0:0",
   "pre_tool_use:1:0",
-  "pre_tool_use:2:0",
-  "pre_tool_use:3:0",
-  "pre_tool_use:4:0",
-  "pre_tool_use:5:0",
   "post_tool_use:0:0",
   "post_tool_use:1:0",
   "post_tool_use:2:0",
@@ -359,10 +355,13 @@ describe("t150 dist/codex packaging determinism + trust", () => {
       wiring.hooks.PostToolUse.find((group) => group.matcher === "request_user_input")
         ?.hooks[0]?.command,
     ).toBe("bun .codex/tools/aidlc.ts engine adapter codex record-human-turn");
-    expect(
-      wiring.hooks.PreToolUse.find((group) => group.matcher === "Bash")
-        ?.hooks[0]?.command,
-    ).toBe("bun .codex/tools/aidlc.ts engine adapter codex bind-bash-session");
+    // One matcher-free PreToolUse group runs the five checks in one process
+    // (#2066); deliver-stage-rules keeps its spawn_agent row.
+    expect(wiring.hooks.PreToolUse.map((group) => group.matcher)).toEqual([undefined, "spawn_agent"]);
+    expect(wiring.hooks.PreToolUse[0]?.hooks[0]?.command).toBe(
+      "bun .codex/tools/aidlc.ts engine adapter codex guard-tool-call",
+    );
+    expect(wiring.hooks.PreToolUse[0]?.hooks).toHaveLength(1);
     // Every registration routes through the single authored adapter.
     for (const groups of Object.values(wiring.hooks)) {
       for (const g of groups) {
@@ -420,14 +419,17 @@ describe("t150 dist/codex packaging determinism + trust", () => {
     expect(shippedBody).toContain(
       'session_start:0:0"]\ntrusted_hash = "sha256:58956c1f8f0b66e96c0f4d02e26946e79979e0f30599e8dc06a512ebecf03843"',
     );
-    // Codex hashes a group's matcher too. These two are the hashes Codex 0.160.0
-    // itself wrote for the Bash-matched hooks after "Trust all": a seed without
-    // the matcher left every matched hook untrusted, and they never ran.
-    expect(shippedBody).toContain(
-      'pre_tool_use:0:0"]\ntrusted_hash = "sha256:e7a90e58ec814e697217f2bc230585e508be24e62833294da2e2095dc66ff0d4"',
-    );
+    // Codex hashes a group's matcher too. This is the hash Codex 0.160.0
+    // itself wrote for the Bash-matched PostToolUse hook after "Trust all": a
+    // seed without the matcher left every matched hook untrusted, and they
+    // never ran. (The Bash-matched PreToolUse row it was pinned beside became
+    // the matcher-free guard-tool-call group, #2066; its hash is the recipe's,
+    // pinned below.)
     expect(shippedBody).toContain(
       'post_tool_use:3:0"]\ntrusted_hash = "sha256:5f9a79604c580af77ffe63c58e0b76871e229f051df824b8add818dfbd44c388"',
+    );
+    expect(shippedBody).toContain(
+      'pre_tool_use:0:0"]\ntrusted_hash = "sha256:b1ea78813660ef5ca5039c39fa0c7c6b0a67d9cf1f88cdb3a73f789eab1884ae"',
     );
   });
 

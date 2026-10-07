@@ -1,4 +1,5 @@
 import { DEFAULT_SUBPROCESS_TIMEOUT_MS } from "./aidlc-runtime-budget.ts";
+import { CHECKPOINT_GLOSS } from "./aidlc-guard-fences.ts";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
@@ -210,6 +211,8 @@ import {
   writeUnitScopeStamp,
   writeFileAtomic,
   answerModeStageStartedFields,
+  keepPlanApprovalAskOverStateWrite,
+  recordHookDrop,
 } from "./aidlc-lib.js";
 import { memoryDirFor } from "./aidlc-graph.ts";
 import { inspectRequiredArtifactInstances } from "./aidlc-artifact-resolution.ts";
@@ -1176,52 +1179,61 @@ function handleSetConstructionPolicy(field: string, args: string[]): void {
       emitConstructionPolicySet(pd, content, updated, field, args[0], words);
     }
     writeStateFile(pd, updated);
+    keepPlanQuestionOver(pd, content, updated);
     console.log(JSON.stringify({ updated: true, field, value: args[0], ...constructionPolicyNotice(content, updated, field) }));
   });
 }
 
+// Asked for while the code plan's question waits, a change to how Construction
+// runs leaves that question the open step, so the person's next reply is kept
+// as their answer to it.
+function keepPlanQuestionOver(pd: string, before: string, after: string): void {
+  if (after === before) return;
+  try {
+    keepPlanApprovalAskOverStateWrite(pd, before, after);
+  } catch (e) {
+    recordHookDrop(pd, "active-directive", errorMessage(e));
+  }
+}
+
 // The one line the person hears for a Construction setting they asked for:
-// what it is now, what it was, and the words that bring the old value back, or
-// that it already was so. Each entry says the value as it is now, as it was,
-// how to ask for it, and that nothing changed.
+// what it is now, what it was, and that it can be switched back (the person
+// changed it, so nothing waits on an answer), or that it already was so.
+// Construction checkpoints are named with what they do.
 function constructionPolicyNotice(before: string, after: string, field: string): { notice?: string } {
   const previous = getField(before, field)?.trim() ?? "";
   const value = getField(after, field)?.trim() ?? "";
-  const lines: Record<string, { now: string; was: string; undo: string; already: string }> = {
+  const lines: Record<string, { now: string; was: string; already: string }> = {
     enabled: {
-      now: "Construction checkpoints are on for this work now", was: "they were on", undo: "turn checkpoints back on",
-      already: "Construction checkpoints are already on for this work",
+      now: `Construction checkpoints (${CHECKPOINT_GLOSS}) are on for this work now`, was: "they were on",
+      already: `Construction checkpoints (${CHECKPOINT_GLOSS}) are already on for this work`,
     },
     disabled: {
-      now: "Construction checkpoints are off for this work now", was: "they were off", undo: "turn checkpoints off",
-      already: "Construction checkpoints are already off for this work",
+      now: `Construction checkpoints (${CHECKPOINT_GLOSS}) are off for this work now`, was: "they were off",
+      already: `Construction checkpoints (${CHECKPOINT_GLOSS}) are already off for this work`,
     },
     "unit-major": {
-      now: "Construction now builds one Unit at a time", was: "it built one Unit at a time", undo: "build one Unit at a time",
+      now: "Construction now builds one Unit at a time", was: "it built one Unit at a time",
       already: "Construction already builds one Unit at a time",
     },
     "stage-major": {
-      now: "Construction now goes stage by stage", was: "it went stage by stage", undo: "go stage by stage",
+      now: "Construction now goes stage by stage", was: "it went stage by stage",
       already: "Construction already goes stage by stage",
     },
     swarm: {
-      now: "Construction now builds the Units in parallel", was: "it built the Units in parallel", undo: "build the Units in parallel",
+      now: "Construction now builds the Units in parallel", was: "it built the Units in parallel",
       already: "Construction already builds the Units in parallel",
     },
     serial: {
       now: "Construction now builds the Units one after another", was: "it built the Units one after another",
-      undo: "build the Units one after another", already: "Construction already builds the Units one after another",
+      already: "Construction already builds the Units one after another",
     },
-  };
-  const other: Record<string, string> = {
-    enabled: "disabled", disabled: "enabled", "unit-major": "stage-major", "stage-major": "unit-major",
-    swarm: "serial", serial: "swarm",
   };
   const line = lines[value];
   if (previous === value) return { notice: line ? `${line.already}.` : `${field} is already ${value}.` };
   if (!line) return { notice: `${field} is now ${value}.` };
   const was = lines[previous];
-  return { notice: `${line.now}${was ? ` (${was.was})` : ""}. Say '${(was ?? lines[other[value]]).undo}' to undo.` };
+  return { notice: `${line.now}${was ? ` (${was.was})` : ""}. You can switch back any time.` };
 }
 
 // Every applied Construction policy change is in the audit with the value it
@@ -1360,6 +1372,7 @@ function handleSetConstructionIteration(args: string[]): void {
     emitConstructionPolicySet(pd, content, updated, "Construction Iteration", value, words);
   }
   writeStateFile(pd, updated);
+  keepPlanQuestionOver(pd, content, updated);
   console.log(JSON.stringify({
     updated: true, construction_iteration: value, ...constructionPolicyNotice(content, updated, "Construction Iteration"),
   }));

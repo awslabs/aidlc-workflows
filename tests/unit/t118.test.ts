@@ -440,9 +440,10 @@ describe("t118 engine differential corpus — aidlc-orchestrate next (migrated f
         const r = emitScopeStage(row.scope, skip);
         const msg = r.directive.message ?? "";
         // The message names the SKIPPED stage and the scope that skips it.
-        expect(msg).toContain(`Stage "${skip}" is not on this workflow's plan (the ${row.scope} scope skips it)`);
+        expect(msg).toContain(`is not part of this work: its ${row.scope} scope (the set of stages this work runs) leaves it out`);
         if (skip === "intent-capture") {
-          expect(r.directive.kind).toBe("error");
+          expect(r.directive.kind).toBe("print");
+          expect(msg).toContain("Do you want me to run it on its own now");
           expect(msg).toContain("it is the current stage");
           expect(msg).toContain(`--stage ${skip} --single`);
         } else {

@@ -259,13 +259,14 @@ describe("t117 jump-direction delegation (migrated from t117-orchestrate-branche
   // the engine names the isolated run instead of "change scope". resolve marks
   // the skipped target (the engine asks with --allow-skipped) and still refuses
   // it for a caller that does not.
-  test("4: jump behind the cursor to a skipped stage -> error naming the isolated run", () => {
+  test("4: jump behind the cursor to a skipped stage -> a question offering the isolated run", () => {
     const p = proj("state-mid-inception.md");
     const r = next(["--stage", "intent-capture"], p);
-    // S1: the directive is a well-formed error directive, not a stray substring.
+    // S1: the directive is a well-formed step that ends the turn on the question.
     const d = directive(r.stdout);
-    expect(d.kind).toBe("error");
-    expect(d.message).toContain('comes before the current stage "requirements-analysis"');
+    expect(d.kind).toBe("print");
+    expect(d.message).toContain("comes before the current stage, Requirements Analysis");
+    expect(d.message).toContain("Do you want me to run it on its own now");
     expect(d.message).toContain("--stage intent-capture --single");
     expect(d.message).not.toContain("change scope");
     const marked = directive(jumpResolve(["--stage", "intent-capture", "--allow-skipped"], p).stdout);
@@ -429,11 +430,13 @@ describe("t117 flag-validation, env-scope, scope/config change, phase jump, free
 
 describe("t117 init-stage jump guard", () => {
   // --- Test 15: init-stage jump guard — --stage <init>, state present ---
-  test("15: jump to init stage (state present) → error, not run-stage", () => {
+  // With work under way the refusal is a plain question the agent acts on.
+  test("15: jump to init stage (state present) → refused with the rescan offered, not run-stage", () => {
     const p = proj("state-jumped.md");
     const r = next(["--stage", "state-init"], p);
     expect(r.out).toContain("Cannot jump to initialization stages");
-    expect(directive(r.stdout).kind).toBe("error");
+    expect(r.out).toContain("Do you want me to scan the code again for this work?");
+    expect(directive(r.stdout).kind).toBe("print");
   });
 
   // --- Test 16: init-stage jump guard — --phase initialization ---
@@ -441,7 +444,7 @@ describe("t117 init-stage jump guard", () => {
     const p = proj("state-jumped.md");
     const r = next(["--phase", "initialization"], p);
     expect(r.out).toContain("Cannot jump to initialization stages");
-    expect(directive(r.stdout).kind).toBe("error");
+    expect(directive(r.stdout).kind).toBe("print");
   });
 
   // --- Test 16b: with work under way, the refusal names the rescan, and it runs ---
@@ -449,7 +452,7 @@ describe("t117 init-stage jump guard", () => {
     const p = proj("state-jumped.md");
     for (const args of [["--stage", "workspace-detection"], ["--phase", "initialization"], ["--stage", "workspace-detection", "--single"]]) {
       const r = next(args, p);
-      expect(directive(r.stdout).kind, args.join(" ")).toBe("error");
+      expect(directive(r.stdout).kind, args.join(" ")).toBe("print");
       expect(r.out, args.join(" ")).toContain("--project-type brownfield");
     }
     // The named step is accepted: it routes to the rescan, not an error.

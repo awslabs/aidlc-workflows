@@ -301,6 +301,9 @@ import {
   stageJumpReaches,
   resolveBoltDag,
   unitsBlockRepair,
+  CHECK_GLOSS,
+  GUARD_POLICY_GLOSS,
+  SCOPE_GLOSS,
   type BoltDagResolution,
   resolveCeremony,
   resolveProjectDir,
@@ -452,6 +455,7 @@ import {
   publishPlanApprovalAsk,
   publishPlanApprovalSkip,
   routeCodeGenerationPlanApproval,
+  saidDone,
   settleBuiltPlanReviews,
   withBuiltPlanReviews,
 } from "./aidlc-plan-approval-ask.ts";
@@ -468,6 +472,7 @@ import {
   checksNamed,
   fencesOffCreationGranted,
   guardPolicyCreationGranted,
+  guardPolicyNamed,
   planApprovalOffAtCreation,
   planApprovalEnv,
   planApprovalOffForOpenRequest,
@@ -1735,7 +1740,7 @@ function emit(requested: Directive): void {
           // name the answer instead.
           recordHookDrop(projectDir, "active-directive", "fresh next arrived while the resume question waits");
           writePrepared(prepareEmission(errorDirective(
-            `The workflow is waiting for an answer to its resume question in the Copilot chat that asked it, so this \`next\` did not run. Answer that question there, or type \`${entrySkillInvocation()} --resume\` in that chat to pick the work up.`,
+            `The workflow is waiting for an answer to its resume question in the Copilot chat that asked it, so this \`next\` did not run. Answer that question there, or ask there to pick the work up.`,
           )));
           return;
         }
@@ -2303,9 +2308,12 @@ function scopeConfirmAskDirective(
   carried = "",
   newWork = false,
   declaredType?: "greenfield" | "brownfield",
+  // The request these words reached this ask through, when an earlier question
+  // held them: the answer to this one is still the answer to that request.
+  derivedFrom?: string,
 ): AskDirective {
   const tool = aidlcToolInvocation("orchestrate");
-  const stored = saveQuestion(projectDir, intentText, proposedScope, "front", undefined, newWork);
+  const stored = saveQuestion(projectDir, intentText, proposedScope, "front", undefined, newWork, derivedFrom);
   const confirmCommand = `${tool} next --scope ${scopeArg(proposedScope)} --request ${stored.id}${carried}`;
   const composeCommand = `${tool} next compose --request ${stored.id}${carried}`;
   return {
@@ -2333,9 +2341,11 @@ function composeOfferAskDirective(
   carried = "",
   newWork = false,
   declaredType?: "greenfield" | "brownfield",
+  // As above: the request an earlier question held these words for.
+  derivedFrom?: string,
 ): AskDirective {
   const tool = aidlcToolInvocation("orchestrate");
-  const stored = saveQuestion(projectDir, intentText, "", "front", undefined, newWork);
+  const stored = saveQuestion(projectDir, intentText, "", "front", undefined, newWork, derivedFrom);
   return {
     kind: "ask",
     ask_type: "compose-offer",
@@ -2370,8 +2380,8 @@ function repeatedAnswerDirective(
       : inferScopeFromText(authoritativeRequest(description)).scope;
     return scopeConfirmAskDirective(
       `You already started this as ${dirName}, which is ${archived ? "archived" : "complete"}. ` +
-        `Start it again as new work? Say go ahead to set it up again as "${scope}" work, name a different ` +
-        "plan, or say \"compose\" and I'll tailor one to this task.",
+        `Do you want to start it again as new "${scope}" work, use a different plan, or have me tailor ` +
+        "one to this task?",
       scope,
       description,
       projectDir,
@@ -3427,7 +3437,12 @@ function parkedWhereItStands(stateContent: string): boolean {
 
 // What the person hears after a change made over parked work.
 function stillParkedLine(): string {
-  return `Your work is still paused. Type \`${entrySkillInvocation()} --resume\` when you want to pick it back up.`;
+  return "Your work is still paused. Do you want to pick it back up now?";
+}
+
+// For the agent, after the still-paused line: what a yes to it runs.
+function resumeOnYes(): string {
+  return ` If they say yes, run \`${aidlcToolInvocation("orchestrate")} next --resume\`.`;
 }
 
 // The `parked` a successful park answers with. A team Unit checkout parks
@@ -4062,6 +4077,7 @@ function freshWorkOfferDirective(
   flags: ParsedFlags,
   pd: string,
   inferred: InferResult,
+  derivedFrom?: string,
 ): AskDirective {
   const intentText = flags.intent ?? "";
   if (inferred.source === "keyword") {
@@ -4072,13 +4088,14 @@ function freshWorkOfferDirective(
     const cost = clause ? ` - ${clause}` : "";
     return scopeConfirmAskDirective(
       `This looks like "${inferred.scope}" work, so I'd run the "${inferred.scope}" plan for: "${requestPreview(intentText)}"${cost}.${documentSplitSentence(intentText)} ` +
-        "Say go ahead, name a different plan, or say \"compose\" and I'll tailor one to this task.",
+        "Do you want me to go ahead with it, use a different plan, or tailor one to this task?",
       inferred.scope,
       intentText,
       pd,
       carriedCreationFlags(flags),
       flags.newIntent === true,
       flags.projectType,
+      derivedFrom,
     );
   }
   // Anchor the compose offer with the counts for the named scopes so the
@@ -4102,6 +4119,7 @@ function freshWorkOfferDirective(
     carriedCreationFlags(flags),
     flags.newIntent === true,
     flags.projectType,
+    derivedFrom,
   );
 }
 
@@ -4126,17 +4144,25 @@ function freshWorkOfferDirective(
 // Branch 8's answer to prose that names no scope and continues nothing: on
 // Kiro a cursor-less space first asks which existing record it belongs to,
 // otherwise the plan offer for new work.
-function freshWorkRoute(flags: ParsedFlags, description: string, pd: string): Directive {
+function freshWorkRoute(
+  flags: ParsedFlags,
+  description: string,
+  pd: string,
+  // An earlier question held these words: the ask this builds records that
+  // request as its root, so what the person set for it still reaches the work.
+  derivedFrom?: string,
+): Directive {
   const inferred = inferScopeFromText(authoritativeRequest(description));
   if (isKiroRoutingHarness()) {
     const pick = intentPickPromptIfRecordsExist(pd, {
       description,
       proposedScope: inferred.scope,
       carried: carriedRoutingFlags(flags),
+      ...(derivedFrom === undefined ? {} : { derivedFrom }),
     });
     if (pick) return pick;
   }
-  return freshWorkOfferDirective(flags, pd, inferred);
+  return freshWorkOfferDirective(flags, pd, inferred, derivedFrom);
 }
 
 // The selected workflow has nothing left to run: its current stage is done or
@@ -4285,9 +4311,9 @@ function routedGuardPolicyNote(flags: ParsedFlags, projectDir: string, question:
     session = null;
   }
   if (guardPolicyCreationGranted(projectDir, session, question.id) === value) {
-    return `Guard Policy ${value} for the new work (set by you).`;
+    // What the setting does comes with its name, as it does on the check line beside it.
+    return `${guardPolicyNamed()} is ${value} for the new work (set by you).`;
   }
-  const words = value === "off" ? "turn the guard policy off" : "relax the guard policy";
   const target = question.askedAbout?.targets.length === 1 ? question.askedAbout.targets[0] : undefined;
   let askedState: string | null = null;
   if (target?.intent) {
@@ -4313,10 +4339,12 @@ function routedGuardPolicyNote(flags: ParsedFlags, projectDir: string, question:
       landed = false;
     }
   }
+  const gloss = GUARD_POLICY_GLOSS[value as "relaxed" | "off"] ?? "";
   return askedState !== null && landed
-    ? `Guard Policy ${value} is on for "${activeWorkLabel(askedState)}" (you typed it with the request); ` +
-      `the new work starts at the default. Say '${words} here too' to change it.`
-    : `The new work starts at the default Guard Policy, not the ${value} you typed with the request. Say '${words}' to change it.`;
+    ? `Guard Policy ${value} (${gloss}) is on for "${activeWorkLabel(askedState)}", as you typed it with the ` +
+      `request; the new work starts at the default. Do you want ${value} for the new work too?`
+    : `The new work starts at the default Guard Policy, not ${value} (${gloss}) as you typed with the request. ` +
+      `Do you want ${value} for it?`;
 }
 
 // New work picked on a routing question with checks typed off: the person's
@@ -4344,8 +4372,9 @@ function routedFencesNote(flags: ParsedFlags, projectDir: string, question: Stor
   }
   if (on.length > 0 && !locked) {
     const named = checksNamed(on);
-    lines.push(`The new work starts with the ${named} on, not off as you typed with the request. ` +
-      `Say 'turn the ${named} off' to change it.`);
+    const gloss = on.length === 1 ? ` (${CHECK_GLOSS[on[0]]})` : "";
+    lines.push(`The new work starts with the ${named}${gloss} on, not off as you typed with the request. ` +
+      `Do you want ${on.length === 1 ? "it" : "them"} off?`);
   }
   return lines.join(" ");
 }
@@ -7925,7 +7954,7 @@ function routeNext(args: string[], projectDir: string | undefined): void {
     const stillParked = !unitScope && parkedWhereItStands(stateContent) ? stillParkedLine() : null;
     const verbatimThenStop = stillParked === null
       ? "print its output verbatim and stop."
-      : `print its output verbatim followed by "${stillParked}", and stop.`;
+      : `print its output verbatim followed by "${stillParked}", and stop.${resumeOnYes()}`;
     if (
       flags.scope &&
       validScopes().has(flags.scope) &&
@@ -7965,7 +7994,7 @@ function routeNext(args: string[], projectDir: string | undefined): void {
       emit(keptWhilePlanWaits(
         turnEndingPrint(stillParked === null
           ? "The setting the person typed is already applied: say the line it printed, then stop."
-          : `The setting the person typed is already applied: say the line it printed followed by "${stillParked}", then stop.`),
+          : `The setting the person typed is already applied: say the line it printed followed by "${stillParked}", then stop.${resumeOnYes()}`),
         planApprovalAskIsOpen(pd),
       ));
       return;
@@ -8155,7 +8184,19 @@ function routeNext(args: string[], projectDir: string | undefined): void {
     // chat still holds it: nothing is wrong, so this is a step and not an error.
     // The line they were told rides it, and no error means no relay repeating
     // machinery at them.
-    if (switchKeptForNextWork(pd, engineSessionId ?? null)) {
+    const held = switchKeptForNextWork(pd, engineSessionId ?? null);
+    if (held) {
+      // Their words answered a question of this engine's that is still here, so
+      // they have already said what to build: asking again would cost them a
+      // retype, and the work their fresh words created would be a different
+      // request from the one their switch was kept for, which left the check on
+      // after they were told it was off. The question comes back instead, with
+      // their words as its root, so answering it starts the work they set up.
+      const asked = held.request === null ? null : readQuestion(pd, held.request);
+      if (asked !== null && asked.text.trim().length > 0) {
+        emit(freshWorkRoute({ ...flags, intent: asked.text }, asked.text, pd, asked.id));
+        return;
+      }
       const kept = turnEndingPrint(
         "Nothing is in progress here yet, and what the person set for the piece of work they start next is kept for " +
           "it. Say the line above, then wait: when they say what to build, run that as their request " +
@@ -8240,8 +8281,10 @@ function routeNext(args: string[], projectDir: string | undefined): void {
             "Ask what they want changed when they did not say."));
         return;
       }
-      // Exactly one of its choices, already recorded from their reply.
-      if (planQuestion.answered && planQuestion.isChoice) {
+      // Exactly one of its choices, already recorded from their reply; or they
+      // answered on the questions file's own `[Answer]:` line and said done,
+      // which is recorded the same way.
+      if (planQuestion.answered && (planQuestion.isChoice || saidDone(args.join(" ")))) {
         emit(printDirective(
           "The person's reply answered the code plan question, and it is recorded. Run bare " +
             `\`${aidlcToolInvocation("orchestrate")} next\`: it carries out their choice.`,
@@ -11807,7 +11850,7 @@ function emitSingleRunStage(
     return;
   }
   if (node.phase === "initialization") {
-    emit(errorDirective(initStageError(SINGLE_INIT_ERROR, projectDir)));
+    emit(initStageDirective(SINGLE_INIT_ERROR, projectDir));
     return;
   }
   // An isolated run never touches the plan or the cursor, so a stage the
@@ -11875,6 +11918,7 @@ function planChangeDirective(
   const kept = (directive: PrintDirective): PrintDirective => keptWhilePlanWaits(directive, planWaits);
   const end = " Then stop.";
   const parkedTail = stillParked === null ? "" : ` ${stillParked}`;
+  const resume = stillParked === null ? "" : resumeOnYes();
   // A stage the plan already skips or runs is no change: it is said, not sent
   // to recompose, so the undo line names only what changed. After a scope
   // change (plan null) the new plan is not known here, so every flip is sent.
@@ -11892,7 +11936,7 @@ function planChangeDirective(
   if (skip.length === 0 && add.length === 0) {
     return kept(turnEndingPrint(
       `${before ? `Run \`${before}\` and print its output verbatim, then tell` : "Tell"} the person in one line: ` +
-        `"${noted} The plan is unchanged.${parkedTail}"${end}`,
+        `"${noted} The plan is unchanged.${parkedTail}"${end}${resume}`,
     ));
   }
   const flips = (skipped: string[], added: string[]): string => [
@@ -11911,7 +11955,8 @@ function planChangeDirective(
       "If a command refuses, tell the person in plain words why it could not, and the way it names to do it " +
       "instead, then stop. " +
       `Otherwise tell the person in one line: "${summary.charAt(0).toUpperCase()}${summary.slice(1)}. ` +
-      `To undo it, type \`${entrySkillInvocation()} ${flips(add, skip)}\`.${noted ? ` ${noted}` : ""}${parkedTail}"${end}`,
+      `You can undo that any time.${noted ? ` ${noted}` : ""}${parkedTail}"${end} If they later ask to undo it, run ` +
+      `\`${aidlcDispatcherInvocation("recompose")} ${flips(add, skip)}\`.${resume}`,
   ));
 }
 
@@ -11923,7 +11968,7 @@ function planChangeDirective(
 // person can weigh, so the refusal names the isolated run that leaves the plan
 // and their progress as they are.
 function skippedJumpDirective(target: string, direction: string, current: string, scope: string): Directive {
-  const offPlan = `Stage "${target}" is not on this workflow's plan (the ${scope} scope skips it)`;
+  const offPlan = `${nodeForSlug(target)?.name || target} is not part of this work: its ${scope} scope (${SCOPE_GLOSS}) leaves it out`;
   if (direction === "forward") {
     return printDirective(
       `${offPlan}, and the person asked to jump to it, so put it back on the plan and jump: run ` +
@@ -11931,16 +11976,18 @@ function skippedJumpDirective(target: string, direction: string, current: string
         `\`${aidlcToolInvocation("jump")} execute --target ${target} --direction forward --scope ${scopeArg(scope)}\`, ` +
         "then re-run `next` to continue from the jump target. If recompose refuses, tell the person in plain " +
         "words why it could not, and the way it names to do it instead, and run nothing else. After the jump, tell the person in one line: " +
-        `"${target} was not on the plan; it is now, and the workflow moved to it. To go back, type ` +
-        `\`${entrySkillInvocation()} --stage ${current}\`."`,
+        `"${nodeForSlug(target)?.name || target} was not on the plan; it is now, and the workflow moved to it. ` +
+        `You can go back to ${nodeForSlug(current)?.name || current} any time." If they ask to go back, run ` +
+        `\`${aidlcToolInvocation("orchestrate")} next --stage ${current}\`.`,
     );
   }
-  return errorDirective(
-    `${offPlan}, and ${direction === "redo"
+  return turnEndingPrint(
+    `Run nothing. Tell the person in one line: "${offPlan}, and ${direction === "redo"
       ? "it is the current stage, which the plan moves past"
-      : `it comes before the current stage "${current}": going back to it would run every stage after it again`}. ` +
-      `To run it now on its own, leaving the plan and your progress as they are, type ` +
-      `\`${entrySkillInvocation()} --stage ${target} --single\`.`,
+      : `it comes before the current stage, ${nodeForSlug(current)?.name || current}: going back to it would run ` +
+        "every stage after it again"}. ` +
+      "Do you want me to run it on its own now, leaving the plan and your progress as they are?\" " +
+      `If they want that, run \`${aidlcToolInvocation("orchestrate")} next --stage ${target} --single\`.`,
   );
 }
 
@@ -11983,11 +12030,14 @@ function skippedJumpDirective(target: string, direction: string, current: string
 const INIT_JUMP_ERROR =
   `Cannot jump to initialization stages. The Initialization phase runs automatically when you start a workflow (describe what to build, e.g. ${entrySkillInvocation()} "build the auth service").`;
 // With work already under way, asking for an initialization stage is asking to
-// look at the code again: name the rescan, which runs from here.
-function initStageError(base: string, projectDir: string): string {
-  if (!existsSync(engineStateFilePath(projectDir))) return base;
-  return `${base} To scan the code again for this work, type \`${entrySkillInvocation()} --project-type brownfield\` ` +
-    "(or `--project-type greenfield` for a new project).";
+// look at the code again: offer the rescan, which the agent runs from here.
+function initStageDirective(base: string, projectDir: string): Directive {
+  if (!existsSync(engineStateFilePath(projectDir))) return errorDirective(base);
+  return turnEndingPrint(
+    `Run nothing. Tell the person in one line: "${base} Do you want me to scan the code again for this work?" ` +
+      `If they want that, run \`${aidlcToolInvocation("orchestrate")} next --project-type brownfield\` ` +
+      "(`--project-type greenfield` when it is a new project).",
+  );
 }
 
 // Why a jump cannot reopen its target for the unit the person named, said
@@ -12020,7 +12070,7 @@ function emitJumpDirective(
 ): "route" | undefined {
   // --phase initialization is rejected up front (applies with or without state).
   if (flags.phase && canonicalisePhase(flags.phase) === "initialization") {
-    emit(errorDirective(initStageError(INIT_JUMP_ERROR, projectDir)));
+    emit(initStageDirective(INIT_JUMP_ERROR, projectDir));
     return;
   }
 
@@ -12051,7 +12101,7 @@ function emitJumpDirective(
     // on the resolved target (covers --stage <init> against existing state).
     const targetNode = nodeForSlug(targetSlug);
     if (targetNode && targetNode.phase === "initialization") {
-      emit(errorDirective(initStageError(INIT_JUMP_ERROR, projectDir)));
+      emit(initStageDirective(INIT_JUMP_ERROR, projectDir));
       return;
     }
     if (resolved.targetSkipped) {
@@ -12581,9 +12631,9 @@ function retiredGuardPolicyNotice(projectDir: string, stateContent: string): str
     const resolution = resolveGuardPolicy(projectDir, stateContent, { tolerateInvalidState: true });
     if (resolution.memoryStrict !== null) return null;
     if (resolution.conflict !== undefined) {
-      const { guardPolicy, changeControl } = resolution.conflict;
-      return `Guard Policy: this piece of work carries both \`Guard Policy: ${guardPolicy}\` and the retired \`Change Control: ${changeControl}\`, ` +
-        "so strict applies until you choose. Say 'guard policy strict', 'guard policy relaxed', or 'guard policy off' to keep one line; this notice repeats until you do.";
+      return "This work has two settings for how closely AI-DLC checks changes, and they disagree, so AI-DLC " +
+        "checks everything for now. Do you want it to keep checking everything, carry on with a note when " +
+        "something you approved changes, or also skip some of its own checks? I'll ask again until you choose.";
     }
     if (guardPolicyStateField(stateContent) !== CHANGE_CONTROL_FIELD) return null;
     value = resolution.value;
@@ -12591,13 +12641,8 @@ function retiredGuardPolicyNotice(projectDir: string, stateContent: string): str
     return null;
   }
   if (value === "strict") return null;
-  const fences = value === "relaxed"
-    ? "plan-approval and review-freeze fences"
-    : "plan-approval, review-freeze, state-transition and reviewer-scope fences";
-  return `Guard Policy: ${value} was carried over from this piece of work's retired Change Control line. ` +
-    `Under Guard Policy, ${value} now also lowers the ${fences} for work nobody directed, ` +
-    "and every pass is recorded in the audit trail. " +
-    `Say 'guard policy ${value}' to keep it, or 'guard policy strict' to raise them again; this notice repeats until you choose.`;
+  return "This work still has an old setting that lets AI-DLC skip some of its checks (it asks you to confirm " +
+    "less often). Do you want to keep that, or have AI-DLC check everything again? I'll ask again until you choose.";
 }
 
 // The guard-recovery ask an enforcing tool carried on the last line of its
@@ -13692,12 +13737,17 @@ function emitTypedResumeChoice(
     }
     else if (box === "completed") choice = "jump";
     else {
-      // Shown to the person as written: what happened, and what they can say.
+      // What happened and a plain question; the agent runs what they pick.
       const name = node?.name || wanted;
-      emit(errorDirective(node
-        ? `${name} has not run yet, so there is nothing to redo. ` +
-          `Say "jump to ${name}" to go there now, or "redo" to redo the step you are on.`
-        : `No stage is named "${wanted}". Say the stage again by its name, or "redo" to redo the step you are on.`));
+      const report = (args: string): string =>
+        `\`${aidlcToolInvocation("orchestrate")} report --result resumed --choice ${args}\``;
+      const redoHere = `If they want the step they are on redone, run ${report("redo")}.`;
+      emit(turnEndingPrint(node
+        ? `Run nothing. Tell the person in one line: "${name} has not run yet, so there is nothing to redo. ` +
+          `Do you want to go there now, or redo the step you are on?" If they want to go there, run ` +
+          `${report(`jump --target ${shellArg(wanted)}`)}. ${redoHere}`
+        : `Run nothing. Tell the person in one line: "No stage is named ${wanted}. Which stage did you mean, or ` +
+          `do you want me to redo the step you are on?" ${redoHere}`));
       return;
     }
   }
@@ -13784,7 +13834,10 @@ function emitTypedResumeChoice(
     }
     const node = nodeForSlug(target);
     if (node === undefined) {
-      emit(errorDirective(`No stage is named "${target}". Say the stage again by its name.`));
+      emit(turnEndingPrint(
+        `Run nothing. Tell the person in one line: "No stage is named ${target}. Which stage did you mean?" ` +
+          "When they say, report again with `--choice jump --target <stage>`.",
+      ));
       return;
     }
     emit(move(printDirective(
@@ -14120,21 +14173,22 @@ function handleReport(args: string[], projectDir: string | undefined): void {
     }
     // A Current Stage skip marks the stage skipped for every unit. Under
     // unit-major the walk may already have finished units' work for it (the
-    // late gate still has to approve that work), so refuse it then.
-    if (
+    // late gate still has to approve that work), so refuse it then. Once the
+    // person's plan no longer runs the stage (they changed scope), the skip
+    // goes through and the Units' files stay as they are.
+    const unitsDone =
       readConstructionIteration(stateContent) === "unit-major" &&
       node.phase === "construction" && isPerUnit(node)
-    ) {
-      const done = unitsWithStageWork(pd, node, unitWorkContext(pd));
-      if (done.length > 0) {
-        emit(errorDirective(
-          `Cannot skip "${slug}": ${unitNames(done)} already ` +
-            `${done.length === 1 ? "has" : "have"} this step's files, and skipping the step ` +
-            "now would drop that work from its approval. Continue with " +
-            `\`${entrySkillInvocation()}\` and do the step it shows.`,
-        ));
-        return;
-      }
+        ? unitsWithStageWork(pd, node, unitWorkContext(pd))
+        : [];
+    if (unitsDone.length > 0 && planAction !== "SKIP") {
+      emit(errorDirective(
+        `Cannot skip "${slug}": ${unitNames(unitsDone)} already ` +
+          `${unitsDone.length === 1 ? "has" : "have"} this step's files, and skipping the step ` +
+          "now would drop that work from its approval. Continue with " +
+          `\`${entrySkillInvocation()}\` and do the step it shows.`,
+      ));
+      return;
     }
     // A stage at its open gate is skipped only when the plan no longer runs
     // it (the person said the work is a new project): their decision closes
@@ -14172,7 +14226,9 @@ function handleReport(args: string[], projectDir: string | undefined): void {
         `Committed skip for "${slug}" (scope: ${scope}). ` +
         "State routed forward; run next to continue.",
       ...workflowContinues(pd),
-      narration: `${node.name} does not apply here, so I skipped it.`,
+      narration: unitsDone.length > 0
+        ? `${node.name} is not part of the ${scope} plan; what the Units already did for it stays as it is.`
+        : `${node.name} does not apply here, so I skipped it.`,
     };
     // Carried only while the work goes on; the last stage's skip is said here.
     if (skipped.kind === "done" && skipped.workflow_continues === true) carriesNarration.add(skipped);

@@ -55,10 +55,16 @@ const manifest: HarnessManifest = {
     // A session without the aidlc agent runs none of these hooks, even after
     // an earlier session did, so the person's reply can go unrecorded. Measured
     // live: with the hooks running, a reply typed to another agent picked in
-    // /agent is never recorded, and `/agent` and aidlc are the way back.
+    // /agent is never recorded, and `/agent` and aidlc are the way back. On the
+    // 3.0 engine with the agent not upgraded, an earlier v2 session's heartbeat
+    // sends this text, not agentStep, and only a start on v2 is the way back.
     missedReply:
-      "If the person already replied, that reply was not recorded for this question. Tell them exactly this, " +
-      "with nothing about why: \"Your answer didn't reach AI-DLC. Type /agent and pick aidlc, then give it once more.\"",
+      "If the person already replied, that reply was not recorded for this question. If Kiro's own line " +
+      'under your replies says `agent "aidlc" needs upgrading for this agent engine, using "default"`, ' +
+      "tell them exactly this, with nothing about why: \"Your answer didn't reach AI-DLC. Quit Kiro and start " +
+      "it again in this folder with: kiro-cli chat --agent-engine v2 --agent aidlc, then give it once more.\" " +
+      "Otherwise tell them exactly this, with nothing about why: \"Your answer didn't reach AI-DLC. Type /agent " +
+      "and pick aidlc, then give it once more.\"",
     notRunYet:
       "This is expected before your first Kiro CLI chat in this folder. If you already started one, type /agent " +
       "and pick aidlc; if Kiro says agent \"aidlc\" needs upgrading for this agent engine, quit Kiro and start " +

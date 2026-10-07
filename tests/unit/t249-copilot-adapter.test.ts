@@ -3137,7 +3137,7 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     const refused = JSON.parse(outside.stdout.trim()) as { kind?: string; message?: string };
     expect(refused.kind).toBe("error");
     expect(refused.message).toContain("waiting for an answer to its resume question in the Copilot chat");
-    expect(refused.message).toContain("--resume` in that chat");
+    expect(refused.message).toContain("ask there to pick the work up");
     expect(refused.message).not.toContain("--doctor");
     const resumed = runLifecycle(dir, session, "direct", ["next", "--resume"], "resume-wait-answer");
     expect(resumed.directive).toMatchObject({ kind: "load-steering", stage: "requirements-analysis" });

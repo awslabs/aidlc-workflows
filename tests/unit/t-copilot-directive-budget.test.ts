@@ -410,7 +410,7 @@ describe("t-copilot-directive-budget: every Copilot directive fits VS Code's ter
     const { results, final } = delivery;
     expect(results[0]?.directive.parts ?? 0).toBeGreaterThan(2);
     const notices = final.change_notices;
-    expect(notices).toEqual([expect.stringContaining("retired Change Control")]);
+    expect(notices).toEqual([expect.stringContaining("This work still has an old setting")]);
     for (const { directive } of results) expect(directive.change_notices).toEqual(notices);
     const sizes = results.map(({ stdout }) => Buffer.byteLength(stdout, "utf-8"));
     expect(Math.max(...sizes)).toBeGreaterThan(budget - 1024);
@@ -870,7 +870,7 @@ describe("t-copilot-directive-budget: Code Generation's rules in parts keep Plan
     const plan = build[0]?.plan_approval;
     expect(plan?.status).toBe("approved");
     expect(plan?.skipped).toBe(true);
-    expect(plan?.notice).toContain("Plan approval is off for this piece of work (from scope poc).");
+    expect(plan?.notice).toContain("is off for this piece of work (from scope poc).");
     expect(auditEvents(proj, "PLAN_APPROVAL_SKIPPED")).toBe(1);
     expect(auditEvents(proj, "PLAN_APPROVAL_RECORDED")).toBe(0);
     expect(readFileSync(join(codeGenerationDir(proj), "code-generation-questions.md"), "utf-8"))

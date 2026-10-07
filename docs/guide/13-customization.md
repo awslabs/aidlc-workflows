@@ -288,14 +288,15 @@ plan. The `plan_approval` ceremony decides whether it asks on this piece of work
 - **Off** (express and poc): once the plan is written you see one line, and the
   build starts:
 
-  > Plan written: aidlc/spaces/default/intents/260820-checkout/construction/code-generation/code-generation-plan.md. Plan approval is off for this piece of work (from scope poc). Starting code generation now. Say 'review the plan first' to stop and approve it.
+  > Plan written: aidlc/spaces/default/intents/260820-checkout/construction/code-generation/code-generation-plan.md. Plan approval (you approve each code plan before it is built) is off for this piece of work (from scope poc). Starting code generation now. Do you want to look at the plan and approve it first?
 
   The audit trail gets a `PLAN_APPROVAL_SKIPPED` row carrying the fingerprint of
   the plan that was built, and the questions file reads
   `[Answer]: Plan approval off`. Nothing records that you approved it.
 
-**Review the plan first.** With plan approval off, say "review the plan first"
-(or ask to review the plan in your own words) and that plan is shown for
+**Review the plan first.** With plan approval off, the line that names each
+plan asks whether you want to look at it first; say yes, or ask to review the
+plan in your own words at any time, and that plan is shown for
 approval while the build waits. The setting stays off: the next plan builds
 without asking. If the plan is already being built when you ask, that build
 finishes, then its plan is shown beside what was built, and nothing else starts
@@ -352,7 +353,7 @@ checkout. With plan approval off it is built there without asking, and the
 team merge accepts the skipped record in place of an approval.
 
 **Kiro IDE.** A Kiro IDE build that passes hooks no message text cannot hear
-"review the plan first" or your own words, so every plan is still shown for
+a request to review the plan, so every plan is still shown for
 approval there, and one line says that updating Kiro IDE lets plans build
 without asking.
 
@@ -411,13 +412,13 @@ If both agree, the `Guard Policy` line is used. Any write of the policy line rem
 the retired line, leaving one setting. Until a conflict is resolved, `next` carries
 this notice with `<a>` and `<b>` replaced by the raw line values:
 
-> Guard Policy: this piece of work carries both `Guard Policy: <a>` and the retired `Change Control: <b>`, so strict applies until you choose. Say 'guard policy strict', 'guard policy relaxed', or 'guard policy off' to keep one line; this notice repeats until you do.
+> This work has two settings for how closely AI-DLC checks changes, and they disagree, so AI-DLC checks everything for now. Do you want it to keep checking everything, carry on with a note when something you approved changes, or also skip some of its own checks? I'll ask again until you choose.
 
 #### This setting used to be called Change Control
 
 Every old spelling still works in this release and is removed in the next minor version: the scope key `change_control`, the state field `Change Control`, the memory heading `## Change Control`, the flag `--change-control`, and the config key `change-control`. Typing the retired flag or config key prints one line naming the new spellings; a retired scope key or memory heading is read without comment. Nothing writes an old name again: any write of the policy line removes the retired `Change Control` line, whether it was the only line or appeared beside `Guard Policy`. The `CHANGE_CONTROL_SET` audit event stays readable in older ledgers; new rows are `GUARD_POLICY_SET`.
 
-While a piece of work carries only the retired `Change Control: relaxed` or `Change Control: off` line, every `/aidlc` run carries a notice in the directive's `change_notices`; displaying this notice does not automatically rewrite the line. For example: `Guard Policy: relaxed was carried over from this piece of work's retired Change Control line. Under Guard Policy, relaxed now also lowers the plan-approval and review-freeze fences for work nobody directed, and every pass is recorded in the audit trail. Say 'guard policy relaxed' to keep it, or 'guard policy strict' to raise them again; this notice repeats until you choose.` Type `/aidlc config set guard-policy relaxed` or `guard policy relaxed` to have the human-turn hook keep that value and rewrite the line as `Guard Policy`, or request strict to have the conductor raise the fences through the setter; either write stops the notice. A retired strict line alone gets no notice and is rewritten the next time any Guard Policy setting is written.
+While a piece of work carries only the retired `Change Control: relaxed` or `Change Control: off` line, every `/aidlc` run carries a notice in the directive's `change_notices`; displaying this notice does not automatically rewrite the line. For example: `This work still has an old setting that lets AI-DLC skip some of its checks (it asks you to confirm less often). Do you want to keep that, or have AI-DLC check everything again? I'll ask again until you choose.` Type `/aidlc config set guard-policy relaxed` or `guard policy relaxed` to have the human-turn hook keep that value and rewrite the line as `Guard Policy`, or request strict to have the conductor raise the fences through the setter; either write stops the notice. A retired strict line alone gets no notice and is rewritten the next time any Guard Policy setting is written.
 
 ### The five fences
 
@@ -444,7 +445,7 @@ When a guard question offers "turn the check off for this piece of work", choosi
 
 What counts as typing the switch: a message that begins with `/aidlc` (or `$aidlc`, or `aidlc`) and carries the flags first, such as `/aidlc --guard-policy relaxed`, `/aidlc --guard-policy off --guard.state-transition off`, or `/aidlc --guard-policy relaxed build the auth service` (the description follows the flags and is not read); `config set guard-policy relaxed|off` or `config set guard.<fence> off` after the same command head, followed only by optional `--intent <name>` and `--space <name>` pairs, each at most once and in either order; or the confirmation words `guard policy relaxed|off` on their own. Any other extra token in the config form applies no switch. Case and a trailing period do not matter. A question or remark that mentions a switch is not a switch: `/aidlc why was config set guard.plan-approval off suggested?` changes nothing, and neither does a flag placed after the description.
 
-Direct `intent create --guard-policy relaxed|off` from chat is refused when the value is below the selected scope's default (`relaxed` on an `off` scope is a raise and applies): create the piece of work, and the agent runs the setter when you ask for the lower value. A value you typed before the work existed, or with the new work, is recorded as `set by you` for the work you asked for. Direct `scope change --guard-policy relaxed|off` follows the same lowering rule as `config-change`; a lower scope default applies when the person asked for the scope change; any other scope change keeps the running workflow's stricter value and says so in one line. `AIDLC_UNATTENDED=1` suppresses prompt-time application and refuses CLI lowering. After memory-strict and unattended checks, `fenceKeyBypassed` is the only way a CLI setter lowers without the person's prompt through the fixture or harness-launch presence bypass, not an inline environment assignment. The session-start hook keeps its `presence-bypass-<session>` stamp in the Plan Approval runtime directory for an attended harness launched with `AIDLC_SKIP_HUMAN_PRESENCE_GUARD=1`.
+Direct `intent create --guard-policy relaxed|off` from chat is refused when the value is below the selected scope's default (`relaxed` on an `off` scope is a raise and applies): create the piece of work, and the agent runs the setter when you ask for the lower value. A value you typed before the work existed, or with the new work, is recorded as `set by you` for the work you asked for. Direct `scope change --guard-policy relaxed|off` follows the same lowering rule as `config-change`; a lower scope default applies when the person asked for the scope change; any other scope change keeps the running workflow's stricter value and says so in one line. `AIDLC_UNATTENDED=1` suppresses prompt-time application and refuses CLI lowering. After memory-strict and unattended checks, a CLI setter lowers without the person's prompt only when you typed it at your own terminal (your own act), or when `fenceKeyBypassed` recognizes the fixture or harness-launch presence bypass, not an inline environment assignment. The session-start hook keeps its `presence-bypass-<session>` stamp in the Plan Approval runtime directory for an attended harness launched with `AIDLC_SKIP_HUMAN_PRESENCE_GUARD=1`.
 
 Model tools cannot invoke hooks or write `aidlc/.aidlc-sessions/` or any `.aidlc-plan-approval/` or `<record>/.aidlc-engine/gate-words/` directory, as enforced by the [state-transition guard](../reference/06-hooks-and-tools.md#pretooluse-aidlc-state-transition-guardts).
 
@@ -458,15 +459,15 @@ The reviewer-scope setting governs the dispatched reviewer's read/search bound. 
 
 Ask in your own words and the agent carries it out; the typed switch is a shortcut the human-turn hook applies as you type it. A switchable fence's main-session refusal names its switch. A setter that would turn a fence off, run when no reply from you has arrived since the last decision, says:
 
-> Turning the review-freeze check off is the person's call. No reply from the person has arrived since the last decision: run it when they ask for it. They can also type `/aidlc config set guard.review-freeze off`.
+> Turning the review-freeze check off is the person's call. No reply from the person has arrived since the last decision: run it when they ask for it.
 
 A CLI setter that would turn plan approval off says:
 
-> Turning plan approval off lets code generation start without the person approving the plan, so it is their call. No reply from the person has arrived since the last decision: run it when they ask for it. They can also type `/aidlc config set plan-approval off`.
+> Turning plan approval off lets code generation start without the person approving the plan, so it is their call. No reply from the person has arrived since the last decision: run it when they ask for it.
 
 A setter that would change the policy to `relaxed`, run when no reply from you has arrived since the last decision, says:
 
-> Setting Guard Policy relaxed lowers fences, which is the person's call. No reply from the person has arrived since the last decision: run it when they ask for it. They can also type `/aidlc --guard-policy relaxed`.
+> Setting Guard Policy relaxed lowers fences, which is the person's call. No reply from the person has arrived since the last decision: run it when they ask for it.
 
 Creation with an explicit `relaxed` flag says:
 

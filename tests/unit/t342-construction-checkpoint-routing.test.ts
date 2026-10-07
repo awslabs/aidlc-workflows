@@ -990,7 +990,8 @@ describe("t342 Construction checkpoint routing", () => {
     const applied = policyCli(p, "state", ["set-construction-checkpoints", "disabled"]);
     expect(applied.status, `${applied.stdout}${applied.stderr}`).toBe(0);
     expect(JSON.parse(applied.stdout).notice).toBe(
-      "Construction checkpoints are off for this work now (they were on). Say 'turn checkpoints back on' to undo.",
+      "Construction checkpoints (a stop after each Unit for you to check and approve it) are off for this work now " +
+        "(they were on). You can switch back any time.",
     );
     expect(readFileSync(seededStateFile(p), "utf-8")).toContain("- **Construction Checkpoints**: disabled");
     const row = readAuditShardEvents(p).findLast((r) => r.event === "CONSTRUCTION_POLICY_SET")!;
@@ -1000,7 +1001,7 @@ describe("t342 Construction checkpoint routing", () => {
     const iteration = policyCli(p, "state", ["set-construction-iteration", "stage-major"]);
     expect(iteration.status, `${iteration.stdout}${iteration.stderr}`).toBe(0);
     expect(JSON.parse(iteration.stdout).notice).toBe(
-      "Construction now goes stage by stage (it built one Unit at a time). Say 'build one Unit at a time' to undo.",
+      "Construction now goes stage by stage (it built one Unit at a time). You can switch back any time.",
     );
     // Asking for what is already in force changes nothing and says so.
     const rows = readAuditShardEvents(p).length;
@@ -1008,7 +1009,9 @@ describe("t342 Construction checkpoint routing", () => {
     expect(same.status).toBe(0);
     expect(JSON.parse(same.stdout).notice).toBe("Construction already goes stage by stage.");
     const off = policyCli(p, "state", ["set-construction-checkpoints", "disabled"]);
-    expect(JSON.parse(off.stdout).notice).toBe("Construction checkpoints are already off for this work.");
+    expect(JSON.parse(off.stdout).notice).toBe(
+      "Construction checkpoints (a stop after each Unit for you to check and approve it) are already off for this work.",
+    );
     expect(readAuditShardEvents(p)).toHaveLength(rows);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 

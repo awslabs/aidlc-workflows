@@ -156,7 +156,7 @@ describe("a fence switch typed with a request beside open work", () => {
     test(`"${typed}" leaves the open work's checks as they are and says whose it is`, () => {
       const proj = openWork();
       const before = readFileSync(seededStateFile(proj), "utf-8");
-      expect(reply(proj, typed)).toContain("The review freeze check is off for the work you are asking for (set by you).");
+      expect(reply(proj, typed)).toContain("The review freeze check (it stops edits to work you already approved) is off for the work you are asking for (set by you).");
       expect(readFileSync(seededStateFile(proj), "utf-8")).toBe(before);
     });
   }
@@ -174,7 +174,7 @@ describe("a fence switch typed with a request beside open work", () => {
     // The person picks new work.
     const routed = next(proj, answerArgs(ask?.new_intent_command));
     expect(pendingPersonLines(proj, SESSION).lines.join(" "), routed.out).toContain(
-      "The review freeze check is off for the new work (set by you).",
+      "The review freeze check (it stops edits to work you already approved) is off for the new work (set by you).",
     );
     const made = utility(proj, ["intent-create", "--request", requestIn(routed.directive?.message, routed.out)]);
     expect(made.status, made.stderr).toBe(0);
@@ -206,7 +206,7 @@ describe("a fence switch typed with a request beside open work", () => {
 
   test("typed alone, with no request, it is for the open work at once", () => {
     const proj = openWork();
-    expect(reply(proj, "/aidlc --guard.review-freeze off")).toContain("The review freeze check is off for this piece of work");
+    expect(reply(proj, "/aidlc --guard.review-freeze off")).toContain("The review freeze check is off for this piece of work (logged; back on for the next one)");
     expect(guardsOff(readFileSync(seededStateFile(proj), "utf-8"))).toContain("review-freeze");
   });
 });
@@ -220,7 +220,7 @@ describe("a fence switch typed before any work exists", () => {
   test("it is for the piece of work this chat starts next", () => {
     const proj = emptyProject();
     expect(reply(proj, "/aidlc --guard.review-freeze off")).toContain(
-      "The review freeze check is off for the piece of work you start now (set by you).",
+      "The review freeze check (it stops edits to work you already approved) is off for the piece of work you start now (set by you).",
     );
     const asked = requestOf(proj, "build the export");
     const made = utility(proj, ["intent-create", "--request", asked.id]);
@@ -230,7 +230,7 @@ describe("a fence switch typed before any work exists", () => {
 
   test("typed with the request, creation takes it", () => {
     const proj = emptyProject();
-    expect(reply(proj, TYPED)).toContain("The review freeze check is off for the work you are asking for (set by you).");
+    expect(reply(proj, TYPED)).toContain("The review freeze check (it stops edits to work you already approved) is off for the work you are asking for (set by you).");
     const asked = requestOf(proj, "fix the parser");
     const made = utility(proj, ["intent-create", "--request", asked.id]);
     expect(made.status, made.stderr).toBe(0);

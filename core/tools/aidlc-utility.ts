@@ -390,6 +390,7 @@ import {
   UTILITY_COMMANDS,
   carryPendingPersonLines,
 } from "./aidlc-lib.ts";
+import { GUARD_POLICY_GLOSS, SCOPE_GLOSS } from "./aidlc-guard-fences.ts";
 import { validateStageFrontmatter } from "./aidlc-stage-schema.ts";
 import { isRuleStale } from "./aidlc-rule-schema.ts";
 import {
@@ -2125,7 +2126,7 @@ To get started:
   }
   const alsoOpen = others.length === 0
     ? ""
-    : `Also open:      ${others.join(", ")} (type \`${entrySkillInvocation()} intent ${others.length === 1 ? others[0] : "<name>"}\` to switch)\n`;
+    : `Also open:      ${others.join(", ")} (ask to switch to ${others.length === 1 ? "it" : "one"})\n`;
   const output = `AI-DLC Workflow Status
 ==============================
 Project:        ${project}
@@ -7611,8 +7612,7 @@ function handleIntentCreate(projectDir: string, flags: Record<string, string>): 
       "intent-create refused: no --scope, --arguments, or --label given. Creation " +
         "is a mutation and a bare invocation mints a garbage default-scope " +
         `intent. Start work via \`${entrySkillInvocation()} "<what to build>"\` (the engine names ` +
-        "the create move for you; the person can also type " +
-        `\`${entrySkillInvocation()}-init [--scope <name>] <description>\`); ` +
+        "the create move for you); " +
         "to invoke this tool directly, pass at least `--scope <name>` (and " +
         "ideally `--arguments \"<description>\" --label \"<2-3 word essence>\"`).",
     );
@@ -7738,7 +7738,16 @@ function handleIntentCreate(projectDir: string, flags: Record<string, string>): 
   const ceremoniesAsked = ceremoniesCreationGranted(projectDir, initialSelection.sessionId, questionId ?? null);
   consumeCeremoniesCreationGrant(projectDir, initialSelection.sessionId);
   for (const key of CEREMONY_KEYS) {
-    if (key !== "plan_approval" && requestedCeremony[key] !== undefined && requestedCeremony[key] === ceremoniesAsked[key]) {
+    if (key === "plan_approval") continue;
+    // Their words carry the value, the way plan approval does above: a ceremony
+    // they typed before this work existed is applied here, not merely labelled,
+    // because the step that kept it told them it would reach the work they start
+    // next. A flag the agent passes with the creation still wins, and is
+    // recorded as the command's.
+    if (requestedCeremony[key] === undefined && ceremoniesAsked[key] !== undefined) {
+      requestedCeremony[key] = ceremoniesAsked[key];
+      ceremonySetByPerson[key] = true;
+    } else if (requestedCeremony[key] !== undefined && requestedCeremony[key] === ceremoniesAsked[key]) {
       ceremonySetByPerson[key] = true;
     }
   }
@@ -9430,9 +9439,9 @@ function onboardDocumentInput(
         path: portablePath,
         ask: ignored === "yes"
           ? `${quoted} is git-ignored, so I haven't copied it into the shared knowledge folder ` +
-            "(it would be committed). Say 'use it anyway' to copy it."
+            "(it would be committed). Do you want me to copy it anyway?"
           : `I couldn't check whether git ignores ${quoted}, so I haven't copied it into the shared ` +
-            "knowledge folder (it might be committed). Say 'use it anyway' to copy it.",
+            "knowledge folder (it might be committed). Do you want me to copy it anyway?",
         next:
           "Tell the person the ask line and wait for their reply. Only after they say to use " +
           "it anyway, run document-input --onboard --include-ignored.",
@@ -10034,7 +10043,7 @@ function handleCodekbPublish(
     );
   }
   const changeNotice = movedDuringScan
-    ? "The code changed while it was being scanned; saved the scan as it was. Say \"redo reverse engineering\" to scan it again."
+    ? "The code changed while it was being scanned, so I saved the scan as it was. Do you want me to scan it again?"
     : null;
   process.stdout.write(
     flags.json === "true"
@@ -10620,7 +10629,8 @@ function handleReclassify(projectDir: string, flags: Record<string, string>, raw
           lines.push(codeArrivedStageLine(stageNames(doneWithoutCode)));
         } else if (doneWithoutCode.length > 1) {
           lines.push(
-            `${stageNames(doneWithoutCode)} ran before the code was here; say "redo" and a stage's name to include it there.`,
+            `${stageNames(doneWithoutCode)} ran before the code was here. I'm carrying on with them as they are. ` +
+              "Do you want me to redo any of them with the code?",
           );
         }
       } else if (planChange === "reopened") {
@@ -10831,14 +10841,23 @@ function handleScopeChange(projectDir: string, flags: Record<string, string>): v
     const scopeMapping = loadScopeMapping();
     const newScopeDef = scopeMapping[newScope];
     if (!newScopeDef) die(`Unknown scope: ${newScope}. Valid scopes: ${Object.keys(scopeMapping).join(", ")}`);
-    // Like recompose, reshaping an unattended Construction plan requires a
-    // human. Keep this guard ahead of the same-scope path, including no-ops.
-    if (isAutonomousMode(contentBefore)) {
+    // The person's own request for the change, on this work's record, with no
+    // unattended driver in the way. One reply that approves and asks for the
+    // change does both: the approval recorded from it does not use it up.
+    const personAsked = (): boolean =>
+      process.env.AIDLC_UNATTENDED !== "1" &&
+      personSpokeSinceGate(projectDir, { requests: true, outlivesApproval: true, intent, space });
+    // Under "Continue automatically" the person's own scope change goes
+    // through like any other, and the remaining work keeps their autonomy
+    // choice. Only a change nobody asked for (an unattended driver) is
+    // refused, naming the setter that lets it through. Keep this guard ahead
+    // of the same-scope path, including no-ops.
+    if (isAutonomousMode(contentBefore) && !personAsked()) {
       die(
-        "Cannot change scope while Construction is running unattended (Construction Autonomy Mode " +
-          "is autonomous). Changing the plan needs someone to approve it, and nobody is being asked " +
-          "right now. Either switch back to stopping for approval at each Bolt " +
-          "(aidlc-bolt set-autonomy --mode gated) or wait for the current build to finish, then change scope.",
+        "Cannot change scope while Construction runs unattended (Construction Autonomy Mode is " +
+          "autonomous) with nobody here to approve the new plan. Run " +
+          `\`${aidlcToolInvocation("bolt")} set-autonomy --mode gated\` (Construction then stops for ` +
+          "approval at each Bolt), then change scope.",
       );
     }
     const oldScope = getField(contentBefore, "Scope");
@@ -10865,21 +10884,15 @@ function handleScopeChange(projectDir: string, flags: Record<string, string>): v
         // says so in one line.
         if (strictness[nextPolicy] >= strictness[previousCC.value]) {
           requested["guard-policy"] ??= { value: nextPolicy, source };
-        } else if (
-          process.env.AIDLC_UNATTENDED !== "1" &&
-          personSpokeSinceGate(projectDir, { requests: true, intent, space })
-        ) {
+        } else if (personAsked()) {
           requested["guard-policy"] ??= { value: nextPolicy, source };
         } else {
-          // Work picked by name is switched by name: the plain words reach
-          // the work this chat is on.
-          const switchWords = flags.intent
-            ? `${entrySkillInvocation()} config set guard-policy ${nextPolicy} --intent ${intent}` +
-              (flags.space ? ` --space ${space}` : "")
-            : `guard policy ${nextPolicy}`;
+          // The person asked for the switch: the setting it kept is said as a
+          // fact, with the way to match the new scope.
           keptPolicyLine =
-            `Guard Policy stays ${previousCC.value} (from ${previousCC.source}). ` +
-            `Say "${switchWords}" to match ${newScope}.`;
+            `Guard Policy stays ${previousCC.value} (${GUARD_POLICY_GLOSS[previousCC.value as "strict" | "relaxed" | "off"] ?? previousCC.value}; ` +
+            `from ${previousCC.source}). ` +
+            `${newScope} would use ${nextPolicy}; you can switch to it any time.`;
         }
       }
       for (const key of CEREMONY_KEYS) {
@@ -11060,12 +11073,12 @@ function handleScopeChange(projectDir: string, flags: Record<string, string>): v
       // work it dropped, and each setting whose value changed. Nothing runs
       // until the person asks.
       outputLines = [
-        `Switched to ${newScope}: ${summary.shown} stages (${shownDone} done), ` +
+        `Switched to ${newScope} (${SCOPE_GLOSS}): ${summary.shown} stages (${shownDone} done), ` +
           `${gates} approval gates${ceremonyOffClause(summary)}.` +
-          (isScopeName(oldScope) ? ` To go back, type \`${entrySkillInvocation()} --scope ${scopeArg(oldScope)}\`.` : ""),
+          (isScopeName(oldScope) ? ` You can switch back to ${oldScope} any time.` : ""),
         ...skippedNow.map(({ slug, was }) =>
           `Skipped ${findStageBySlug(slug)?.name ?? slug} (${was}): ${newScope} does not run it. ` +
-            `To run it on its own, type \`${entrySkillInvocation()} --stage ${slug} --single\`.`),
+            "You can still run it on its own any time."),
         ...(droppedUnitWork === null ? [] : [droppedUnitWork]),
         ...update.lines,
         ...(keptPolicyLine === null ? [] : [keptPolicyLine]),
@@ -11258,10 +11271,10 @@ function handleRecompose(projectDir: string, flags: Record<string, string>, rawA
     // explicit flag, not the default.
     if (getField(content, "Construction Autonomy Mode")?.trim() === "autonomous") {
       die(
-        "Cannot change the plan while Construction is running unattended (Construction Autonomy " +
-          "Mode is autonomous). Changing the plan needs someone to approve it, and nobody is being " +
-          "asked right now. Either switch back to stopping for approval at each Bolt " +
-          "(aidlc-bolt set-autonomy --mode gated) or wait for the current build to finish, then recompose.",
+        "Cannot change the plan while Construction runs unattended (Construction Autonomy Mode is " +
+          "autonomous) with nobody here to approve it. Run " +
+          `\`${aidlcToolInvocation("bolt")} set-autonomy --mode gated\` (Construction then stops for ` +
+          "approval at each Bolt), then recompose.",
       );
     }
     // Only a RUNNING workflow has a live plan to re-shape. A Completed (or

@@ -242,7 +242,9 @@ but its `GATE_APPROVED` / `GATE_REJECTED` row leaves the stage out of `Gate
 Stages`, so Request Changes at a checkpoint does not reopen a stage that is
 `[S]` for every unit. A unit whose files for the stage are already written cannot
 be skipped, and under unit-major a Current Stage skip outside a beat is refused
-once any unit has that stage's files. Any other skip names the step (and unit)
+once any unit has that stage's files, unless the plan no longer runs the stage
+(the person changed scope): that skip goes through and the units' files stay as
+they are. Any other skip names the step (and unit)
 that can be skipped in its refusal, and offers a skip command only where
 following it drops no unit's written work; otherwise it says to continue with
 the workflow's entry command.
@@ -421,7 +423,17 @@ records the same values as `Asked Evidence`, so a change made after the question
 and before the person answers keeps what they were shown: under `relaxed` and
 `off` their `approve` records it, writes the one `CHANGE_ACCEPTED` row and says
 it in its `change_notices`. Under `strict`, or for an approval recorded before
-`Approved Evidence` existed, the Unit is asked about again.
+`Approved Evidence` existed, the Unit is asked about again. A scope change after
+a Unit's approval keeps it too, under every Guard Policy: the new plan's stage
+list, review cap or walking skeleton changes the checkpoint's identity, so the
+Unit stays approved while its latest checkpoint row is that `GATE_APPROVED`,
+a `SCOPE_CHANGED` row follows it, no jump or Unit start, pause, skip or
+rejection for that Unit follows it, and each stage the plan still runs for the
+Unit holds the artifact, source and run floor its `Approved Evidence` recorded.
+The same rule keeps the fingerprint of a checkpoint question asked before the
+change (its `DECISION_RECORDED` row's `Asked Evidence`), for the same kind of
+checkpoint: its verification and the open question still match, so the
+person's one answer records the approval.
 
 `WORKFLOW_STARTED`, `STAGE_JUMPED`, and a `workspace_requires`
 `STAGE_STARTED` record content-addressed source-listing baselines. After every
@@ -848,13 +860,13 @@ policy write removes the retired line. Until a conflict is resolved, `next`
 includes this notice in `change_notices`, substituting the raw values for `<a>`
 and `<b>` without changing the state file:
 
-> Guard Policy: this piece of work carries both `Guard Policy: <a>` and the retired `Change Control: <b>`, so strict applies until you choose. Say 'guard policy strict', 'guard policy relaxed', or 'guard policy off' to keep one line; this notice repeats until you do.
+> This work has two settings for how closely AI-DLC checks changes, and they disagree, so AI-DLC checks everything for now. Do you want it to keep checking everything, carry on with a note when something you approved changes, or also skip some of its own checks? I'll ask again until you choose.
 
 Typing `guard policy relaxed|off` applies the choice through the human-turn
 hook immediately; `guard policy strict` runs the strict setter through the
 conductor, and either policy write removes the retired line and stops the notice.
 
-Ceremony settings control sensors, learnings, and consolidated-summary confirmation independently. Every shipped scope declares all three explicitly: `classic` sets sensors and learnings to `on` and summary confirmation to `off`, `bugfix` sets sensors to `on` and learnings and summary confirmation to `off`, `express` sets all three to `off`, and the other eight set all three to `on`. A scope file that omits a key still falls back to `on`. An explicit setting writes `<value> (set by you)` to the selected intent when the person typed it and `<value> (set by a command)` when the agent or a script ran it. Turning summary confirmation off on a running piece of work is the person's call, like a fence: their typed switch, or the setter the agent runs when they asked in their own words. `summary_confirmation: off` skips only the consolidated-summary "Looks correct" checkpoint declared by stage frontmatter; intent-capture's separate Assumption Confirmation decision remains. Turning a ceremony off does not remove lifecycle hooks or the autonomous single pre-merge reviewer.
+Ceremony settings control sensors, learnings, and consolidated-summary confirmation independently. Every shipped scope declares all three explicitly: `classic` sets sensors and learnings to `on` and summary confirmation to `off`, `bugfix` sets sensors to `on` and learnings and summary confirmation to `off`, `express` sets all three to `off`, and the other eight set all three to `on`. A scope file that omits a key still falls back to `on`. An explicit setting writes `<value> (set by you)` to the selected intent when the person typed it and `<value> (set by a command)` when the agent or a script ran it. Turning summary confirmation off on a running piece of work is the person's call, like a fence: their typed switch, or the setter the agent runs when they asked in their own words. `summary_confirmation: off` skips only the consolidated-summary "Looks correct" checkpoint declared by stage frontmatter; intent-capture's separate Assumption Confirmation decision remains. Turned on later (a scope change or the setting), it applies to stage work from then on: a Unit whose work for a per-Unit stage finished before the latest `CEREMONY_SET` that turned it on owes that stage no summary, until the Unit starts the stage again. Turning a ceremony off does not remove lifecycle hooks or the autonomous single pre-merge reviewer.
 
 Ceremony precedence is environment kill switch (`1`) → valid per-intent field
 → scope default → `on`. A kill switch never rewrites the saved override. An

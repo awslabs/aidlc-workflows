@@ -1066,7 +1066,7 @@ describe("t165 intent archive / unarchive (issue #980)", () => {
   test("status names other open work and how to switch to it", () => {
     const { a, b } = createTwo();
     const status = util(["status"]).stdout;
-    expect(status).toContain(`Also open:      ${a} (type \`/aidlc intent ${a}\` to switch)\n`);
+    expect(status).toContain(`Also open:      ${a} (ask to switch to it)\n`);
     expect(status).not.toContain(`Also open:      ${b}`);
     // Archived work is not open.
     expect(util(["intent", "archive", a]).status).toBe(0);

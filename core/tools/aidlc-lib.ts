@@ -55,6 +55,9 @@ export {
   GUARD_FENCE_CONFIG_PREFIX,
   guardFenceConfigKey,
   guardFenceFromConfigKey,
+  CHECK_GLOSS,
+  GUARD_POLICY_GLOSS,
+  SCOPE_GLOSS,
 } from "./aidlc-guard-fences.ts";
 import {
   artifactFilename,
@@ -6051,9 +6054,10 @@ export function personLineHeard(projectDir: string, sessionId: string, line: str
 }
 
 // What the person hears about a finished stage that is behind something it
-// used, with the words that redo it.
+// used: the work carries on, and the redo is offered as a plain question.
 export function staleStageLine(name: string): string {
-  return `${name} finished before something it used changed; say "redo ${name.toLowerCase()}" to bring it up to date.`;
+  return `Something ${name} used changed after it finished. I'm carrying on with it as it is. ` +
+    `Do you want me to redo ${name} with the change?`;
 }
 
 interface SessionPidEntry {
@@ -9755,8 +9759,8 @@ const GUARD_REMEDY_ANSWER_ROUTES: Record<GuardRemedyOp, GuardRemedyAnswerPhases 
   "redo-unit-step": null,
   "reopen-unit-step": null,
   "review-advisory-gate": null,
-  // The person types `/aidlc --scope <scope>`, which runs through `next`: the
-  // Scope is theirs, never a value the conductor fills in.
+  // The agent switches scope through `next --scope <scope>` once the person
+  // picks it, asking which scope only when more than one fits.
   "change-scope": null,
   "restore-scope": null,
   "abort-bolt": null,
@@ -11447,6 +11451,8 @@ function requestOutlivesItsApproval(projectDir: string, intent?: string, space?:
       if (!after) continue;
       if (row.event === "GATE_APPROVED") {
         if (auditBlockField(row.block, "User Input") === null || auditBlockField(row.block, "Autonomous") === "true") continue;
+        // A stage approved together with another is part of that one approval.
+        if (auditBlockField(row.block, APPROVED_TOGETHER_WITH_FIELD) !== null) continue;
         theirs.add(`${row.shardIndex}:${row.pos}`);
       } else if (row.event === "PLAN_APPROVAL_RECORDED") {
         theirs.add("plan");
@@ -12990,6 +12996,32 @@ export function summaryConfirmationOwed(
   return stage.summary_confirmation !== undefined;
 }
 
+// A Unit's stage work finished while summary confirmation was off owes no
+// summary when a later change turns it on (the person's scope change or
+// setting): finished work is never re-checked against a ceremony it was never
+// asked for. A Unit that starts the stage again after that asks it as usual.
+function unitFinishedBeforeSummaryOn(
+  projectDir: string,
+  slug: string,
+  unit: string,
+  stateContent: string,
+  auditRows: readonly AuditShardEvent[],
+): boolean {
+  const on = sortAttemptEvents(auditRows.filter((row) =>
+    row.event === "CEREMONY_SET" &&
+    auditBlockField(row.block, "Key") === "summary_confirmation" &&
+    auditBlockField(row.block, "New") === "on")).at(-1);
+  if (on === undefined) return false;
+  const unitMajor =
+    getField(stateContent, "Construction Iteration")?.trim() === "unit-major" ||
+    getField(stateContent, "Construction Checkpoints") === "enabled";
+  const last = currentUnitLifecycleRows(projectDir, "", slug, unitMajor, auditRows, stateContent)
+    .filter((row) => row.unit === unit)
+    .at(-1);
+  return last?.event === "UNIT_COMPLETED" &&
+    (last.ts < on.timestamp || (last.ts === on.timestamp && last.shard === on.shard && last.pos < on.pos));
+}
+
 /** The stage's questions file (for one Unit on a per-unit stage), relative to the project. */
 export function summaryQuestionFileRelative(
   projectDir: string,
@@ -13146,6 +13178,14 @@ export function checkSummaryConfirmationEvidence(
   if (!summaryConfirmationOwed(stage, options)) {
     return { ok: true, required: false };
   }
+  let auditRowsRead: AuditShardEvent[] | null = null;
+  const readAuditRows = (): AuditShardEvent[] => (auditRowsRead ??= readAuditShardEvents(projectDir));
+  const finishedBeforeOn = (unit: string): boolean =>
+    options.workflow === undefined && isPerUnitStage(stage) && typeof options.stateContent === "string" &&
+    unitFinishedBeforeSummaryOn(projectDir, stage.slug, unit, options.stateContent, readAuditRows());
+  if (options.unit !== undefined && finishedBeforeOn(options.unit)) {
+    return { ok: true, required: false };
+  }
 
   // Isolated review callers also supply parent state for ceremony, refusal,
   // and Change Control policy. Its plan must not redirect isolated questions;
@@ -13199,6 +13239,7 @@ export function checkSummaryConfirmationEvidence(
       );
       requiredUnits = resolution.units.filter((unit) =>
         !skipped.has(unit) &&
+        !finishedBeforeOn(unit) &&
         filterProducesByKind(
           stage.produces_kinds,
           stage.produces ?? [],
@@ -13243,7 +13284,7 @@ export function checkSummaryConfirmationEvidence(
     );
   }
 
-  const auditRows = readAuditShardEvents(projectDir);
+  const auditRows = readAuditRows();
   const events = auditRows.filter((entry) => SUMMARY_EVIDENCE_EVENTS.has(entry.event));
   if (events.length === 0) {
     return failure(
@@ -28970,10 +29011,11 @@ export function fenceSwitchSentence(
       // A memory layer's Mode line is the one that cannot be read.
     }
     return (
-      `Guard Policy could not be read, so the ${fence} check cannot be turned off from chat; ` +
+      "Guard Policy (how closely AI-DLC checks changes to what you approved) could not be read, so the " +
+      `${fence} check cannot be turned off from chat. ` +
       (stateLineOnly
-        ? `type \`${entrySkillInvocation()} --guard-policy off\` (or strict, or relaxed) to repair it, then try again.`
-        : "a Guard Policy line in this space's org.md, team.md or project.md cannot be read: correct it there " +
+        ? "Do you want me to set it again, to strict, relaxed or off, and then try again?"
+        : "A Guard Policy line in this space's org.md, team.md or project.md cannot be read: correct it there " +
           "(Mode: strict, relaxed or off), then try again.")
     );
   }
@@ -29174,6 +29216,42 @@ export function requestChangesReportCommand(projectDir: string, stage: string, u
   );
 }
 
+// The scopes whose plan runs this stage, for a remedy that switches to one.
+function scopesRunningStage(slug: string): string[] {
+  try {
+    return Object.entries(loadScopeMapping())
+      .filter(([, definition]) => definition.stages[slug] === "EXECUTE")
+      .map(([name]) => name)
+      .sort();
+  } catch {
+    return [];
+  }
+}
+
+// The scopes whose plan runs at least one per-Unit Construction stage.
+function scopesRunningAnyPerUnitStage(): string[] {
+  try {
+    const perUnit = new Set(loadStageGraphAll().filter((stage) => stage.for_each === "unit-of-work").map((stage) => stage.slug));
+    return Object.entries(loadScopeMapping())
+      .filter(([, definition]) =>
+        Object.entries(definition.stages).some(([slug, run]) => run === "EXECUTE" && perUnit.has(slug)))
+      .map(([name]) => name)
+      .sort();
+  } catch {
+    return [];
+  }
+}
+
+// Which scope the agent switches to: the one that fits, or the person's pick
+// when several do (named when they are few).
+function scopeChoice(scopes: readonly string[]): string {
+  if (scopes.length === 1) return `\`${scopes[0]}\`, the one scope that fits`;
+  if (scopes.length >= 2 && scopes.length <= 4) {
+    return `the one the person picks from ${scopes.join(", ")} (ask them which, in plain words)`;
+  }
+  return "the scope the person picks (ask them which, in plain words)";
+}
+
 function unresolvedTeamGateRemedy(
   resolution: Extract<TeamUnitGateResolution, { resolved: false }>,
 ): GuardRemedy {
@@ -29181,9 +29259,9 @@ function unresolvedTeamGateRemedy(
     op: "restore-scope",
     action:
       "This Unit's gate cannot be resolved: no active per-Unit Construction " +
-      `gate stage exists in the current plan (${resolution.reason}). Restore a ` +
-      "valid Scope that includes at least one active per-Unit Construction " +
-      "stage, then retry.",
+      `gate stage exists in the current plan (${resolution.reason}). Switch to a scope ` +
+      `with one: run \`${aidlcToolInvocation("orchestrate")} next --scope <scope>\` with ` +
+      scopeChoice(scopesRunningAnyPerUnitStage()) + ", then retry.",
     requiresHuman: true,
     executableNow: true,
   };
@@ -29200,8 +29278,9 @@ function lifecycleResetRemedies(
     const scopeRemedy: GuardRemedy = {
       op: "change-scope",
       action:
-        "This stage is excluded from the current plan; change to a scope that " +
-        `includes it with ${entrySkillInvocation()} --scope <scope>, then restart ${input.stage}.`,
+        `This stage is excluded from the current plan. Switch to a scope that includes it: run ` +
+        `\`${aidlcToolInvocation("orchestrate")} next --scope <scope>\` with ` +
+        `${scopeChoice(scopesRunningStage(input.stage))}, then restart ${input.stage}.`,
       requiresHuman: true,
       executableNow: true,
     };
@@ -37972,6 +38051,11 @@ export function parseTypedGuardSwitchRequest(prompt: string, options: { wordsAns
   asked?: true;
   /** The words typed after the flags, when there are any. */
   words?: string;
+  /**
+   * A flag-shaped token before the person's words that this parser cannot read.
+   * What it could read is carried out, and this is named back to them after.
+   */
+  unread?: string;
 } {
   const trimmed = prompt.trim();
   const trailing = trimmed.match(/[.,;:!?]+$/)?.[0] ?? "";
@@ -38009,6 +38093,15 @@ export function parseTypedGuardSwitchRequest(prompt: string, options: { wordsAns
     };
   }
   const tokens = splitKiroCommandArgs(text.slice(command[0].length).trim());
+  // `guard.plan-approval` is another spelling of `plan-approval`, and
+  // `change-control` of `guard-policy`.
+  const settingName = (key: string): string =>
+    key === "change-control" ? "guard-policy" : key === "guard.plan-approval" ? "plan-approval" : key;
+  // A flag name this parser knows: a setting, one of the request's own flags, or
+  // where the work is.
+  const knownFlag = (key: string): boolean =>
+    key === "space" || key === "intent" || key === "scope" ||
+    TYPED_REQUEST_FLAGS.has(key) || TYPED_INTENT_SETTING_KEYS.has(settingName(key));
   // Workspace commands own the whole invocation. In particular, never apply
   // a trailing lowering flag to the currently active selection before a
   // switch/create command resolves its destination.
@@ -38025,6 +38118,26 @@ export function parseTypedGuardSwitchRequest(prompt: string, options: { wordsAns
   let guardPolicySpelling: "guard-policy" | "change-control" | null = null;
   let described = false;
   const words: string[] = [];
+  const empty = (): {
+    switches: GuardSwitch[];
+    settings: Array<{ key: string; value: string }>;
+    space: null;
+    intent: null;
+    scope: null;
+    error: string | null;
+  } => ({ switches: [], settings: [], space: null, intent: null, scope: null, error: null });
+  // A switch of theirs never does nothing in silence. Where the message holds a
+  // contradiction, or a setting with no value, nothing is changed and they hear
+  // which part could not be read, as a question they answer in their own words.
+  // A switch they typed readably is never thrown away for the sake of another
+  // token: that case skips the token and says so afterwards (`unread`).
+  const lost = (reason: () => string) => {
+    if (switches.size === 0 && settings.size === 0) return empty();
+    return { ...empty(), error: reason() };
+  };
+  // A flag-shaped token before they described anything that this parser cannot
+  // read: the first one is named back to them once the rest has been carried out.
+  let unread: string | null = null;
   let index = configForm ? 2 : 0;
   if (configForm && tokens.length < 4) {
     return { switches: [], settings: [], space: null, intent: null, scope: null, error: null };
@@ -38052,36 +38165,47 @@ export function parseTypedGuardSwitchRequest(prompt: string, options: { wordsAns
       }
       return { switches: [], settings: [], space: null, intent: null, scope: null, error: null };
     }
+    // A flag-shaped token this parser does not know. Once they have started
+    // describing the work it is one of their words ("add a --help flag to the
+    // reverser"): it keeps its place in the description, and the token after it
+    // is a word too rather than its value. Before any description, the switches
+    // they typed still stand; the token, and a value-shaped token after it, are
+    // left out and named back to them once those are carried out.
+    if (!configForm && !knownFlag(configKey)) {
+      if (described) {
+        words.push(token);
+        continue;
+      }
+      unread ??= token;
+      if (tokens[index] !== undefined && !tokens[index].startsWith("--")) index++;
+      continue;
+    }
     const value = tokens[index] !== undefined && !tokens[index].startsWith("--")
       ? tokens[index++]
       : undefined;
     if (value === undefined || value.trim().length === 0) {
-      return { switches: [], settings: [], space: null, intent: null, scope: null, error: null };
+      // A setting of theirs with nothing after it: there is no value to apply, so
+      // nothing changes and they are told which flag is missing one.
+      return TYPED_INTENT_SETTING_KEYS.has(settingName(configKey))
+        ? lost(() => `Nothing changed: "--${configKey}" came with no value. Which value did you mean for it?`)
+        : empty();
     }
     if (configKey === "space" || configKey === "intent") {
-      if ((configKey === "space" ? space : intent) !== null) {
-        return { switches: [], settings: [], space: null, intent: null, scope: null, error: null };
-      }
+      if ((configKey === "space" ? space : intent) !== null) return empty();
       if (configKey === "space") space = value;
       else intent = value;
       continue;
     }
     if (!configForm && configKey === "scope") {
-      if (scope !== null) {
-        return { switches: [], settings: [], space: null, intent: null, scope: null, error: null };
-      }
+      if (scope !== null) return empty();
       scope = value;
       continue;
     }
     if (!configForm && TYPED_REQUEST_FLAGS.has(configKey)) continue;
     // `guard.plan-approval` is another way to say `plan-approval`: one switch,
     // no plan stops. Whether an edited plan asks again is Guard Policy's call.
-    const currentKey = configKey === "change-control"
-      ? "guard-policy"
-      : configKey === "guard.plan-approval" ? "plan-approval" : configKey;
-    if (!TYPED_INTENT_SETTING_KEYS.has(currentKey)) {
-      return { switches: [], settings: [], space: null, intent: null, scope: null, error: null };
-    }
+    const currentKey = settingName(configKey);
+    if (!TYPED_INTENT_SETTING_KEYS.has(currentKey)) return empty();
     const normalizedValue = value.toLowerCase();
     const previous = settings.get(currentKey);
     if (
@@ -38091,7 +38215,11 @@ export function parseTypedGuardSwitchRequest(prompt: string, options: { wordsAns
       previous !== undefined &&
       previous !== normalizedValue
     ) {
-      return { switches: [], settings: [], space: null, intent: null, scope: null, error: null };
+      // Both names of the same setting, with two different values: there is no
+      // reading of that message, so it is put back to them once, naming both.
+      return lost(() =>
+        `Nothing changed: you typed Guard Policy twice in that command, as ${previous} and ${normalizedValue}. ` +
+        "Which did you mean?");
     }
     if (currentKey === "guard-policy") {
       guardPolicySpelling = configKey as "guard-policy" | "change-control";
@@ -38170,6 +38298,7 @@ export function parseTypedGuardSwitchRequest(prompt: string, options: { wordsAns
     ...(Object.keys(newWorkCeremonies).length > 0 ? { newWorkCeremonies } : {}),
     ...(newWorkFencesOff.length > 0 ? { newWorkFencesOff } : {}),
     ...(words.length > 0 ? { words: words.join(" ") } : {}),
+    ...(unread === null ? {} : { unread }),
   };
 }
 
@@ -38202,7 +38331,6 @@ export function guardSwitchRefusal(
   // works there is named in place of the chat's.
   const ownTerminal = humanTurnMintAllowed() && personAtOwnTerminal(projectDir);
   const hint = humanTurnMintAllowed() && !ownTerminal ? "" : unattendedHumanPresenceHint(projectDir);
-  const entry = entrySkillInvocation();
   // Before the work exists, the person's own words at the compose gate or
   // scope confirmation are what turn a check off for it. Otherwise the agent
   // creates the work and then runs the setter itself for what they asked.
@@ -38222,25 +38350,25 @@ export function guardSwitchRefusal(
   // Lowering a check is the person's call: the setter carries it out when a
   // person has spoken since the last decision, so this refusal means no reply
   // from them has arrived (or an unattended driver is running).
-  const wait = (typed: string): string => ownTerminal
+  const wait = ownTerminal
     ? ""
-    : ` No reply from the person has arrived since the last decision: run it when they ask for it. They can also type \`${typed}\`.`;
+    : " No reply from the person has arrived since the last decision: run it when they ask for it.";
   if (asked) {
     return "The person asked a question about this check, which turns nothing off. Answer it in one line, offer to " +
       "turn it off for this piece of work, and show the question you asked them again. When they say yes or ask " +
       `for it, run the setter.${hint}`;
   }
   if (wanted.key === "plan-approval") {
-    return `Turning plan approval off lets code generation start without the person approving the plan, so it is their call.${wait(`${entry} config set plan-approval off`)}${hint}`;
+    return `Turning plan approval off lets code generation start without the person approving the plan, so it is their call.${wait}${hint}`;
   }
   if (wanted.key === "summary-confirmation") {
-    return `Turning summary confirmation off skips the person's \`Looks correct\` check before a stage writes its output, so it is their call.${wait(`${entry} config set summary-confirmation off`)}${hint}`;
+    return `Turning summary confirmation off skips the person's \`Looks correct\` check before a stage writes its output, so it is their call.${wait}${hint}`;
   }
   if (wanted.key !== "guard-policy") {
     const fence = wanted.key.slice("guard.".length);
-    return `Turning the ${fence} check off is the person's call.${wait(`${entry} config set guard.${fence} off`)}${hint}`;
+    return `Turning the ${fence} check off is the person's call.${wait}${hint}`;
   }
-  return `Setting Guard Policy ${wanted.value} lowers fences, which is the person's call.${wait(`${entry} --guard-policy ${wanted.value}`)}${hint}`;
+  return `Setting Guard Policy ${wanted.value} lowers fences, which is the person's call.${wait}${hint}`;
 }
 
 export function parseGuardFence(raw: string | null | undefined): GuardFence | null {

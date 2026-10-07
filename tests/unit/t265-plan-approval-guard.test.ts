@@ -3751,9 +3751,14 @@ describe("t265c registrations", () => {
     }
   });
 
-  test("codex: hooks.json wires the plan-approval-guard adapter target", () => {
+  test("codex: hooks.json runs the plan-approval guard inside the guard-tool-call group", () => {
     const hooksJson = readFileSync(join(REPO_ROOT, "dist", "codex", ".codex", "hooks.json"), "utf-8");
-    expect(hooksJson).toContain("adapter codex plan-approval-guard");
+    // One PreToolUse process runs the five checks (#2066); the adapter keeps
+    // its plan-approval-guard case as a member of that group.
+    expect(hooksJson).toContain("adapter codex guard-tool-call");
+    expect(hooksJson).not.toContain("adapter codex plan-approval-guard");
+    const adapter = readFileSync(join(REPO_ROOT, "harness", "codex", "hooks", "aidlc-codex-adapter.ts"), "utf-8");
+    expect(adapter).toContain('case "plan-approval-guard"');
   });
 
   test("copilot: the shared tool guard invokes the plan-approval guard", () => {

@@ -171,9 +171,9 @@ describe.skipIf(
       const asked = "please stop asking me to re-approve when files change, turn the guards off";
       const plain = await drive(asked, 150_000, {
         toolName: "Bash",
-        resultIncludes: "Guard Policy is off for this piece of work",
+        resultIncludes: "Guard Policy (it sets how many checks run) is off for this piece of work",
       });
-      assertToolResultContains(plain, "Bash", `Guard Policy is off for this piece of work, because you said: "${asked}".`);
+      assertToolResultContains(plain, "Bash", `Guard Policy (it sets how many checks run) is off for this piece of work, because you said: "${asked}".`);
       expect(stateLines()).toContain("- **Guard Policy**: off (set by you)");
       const plainRows = readAuditShardEvents(projectDir).filter((entry) => entry.event === "GUARD_POLICY_SET");
       expect(plainRows).toHaveLength(2);

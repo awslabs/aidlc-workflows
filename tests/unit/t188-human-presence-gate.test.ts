@@ -388,7 +388,8 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
   // The refusal gives the person's step in fixed words, and the agent never
   // offers to turn a check off for them. In Kiro CLI, with its hooks running, a
   // reply goes unrecorded when it was typed to another agent (a live run), so
-  // the step is to pick aidlc and give it once more.
+  // the step is to pick aidlc and give it once more, or, when Kiro says the
+  // agent needs upgrading for its 3.0 engine, to start again on v2.
   test("A5: a reply that was not recorded gets only the person's step, never hooks or a check to turn off", () => {
     const first = field(proj, "Current Stage"); // feasibility
     guarded(proj, ["checkbox", `${first}=in-progress`]);
@@ -412,6 +413,17 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
       expect(refusal).toContain("Never offer to turn a check off for them.");
       expect(refusal).not.toMatch(/hook/i);
       expect(refusal).not.toContain("AIDLC_SKIP");
+      // On Kiro CLI's 3.0 engine with the agent not upgraded, picking aidlc
+      // again never brings the shipped hooks back, even after an earlier v2
+      // session left a heartbeat (AIDA #2042 F1): Kiro's own upgrade line
+      // tells the agent to give the v2 restart instead.
+      if (state === KIRO_CLI_STATE) {
+        expect(refusal).toContain('If Kiro\'s own line under your replies says `agent "aidlc" needs upgrading');
+        expect(refusal).toContain(
+          '"Your answer didn\'t reach AI-DLC. Quit Kiro and start it again in this folder with: ' +
+            'kiro-cli chat --agent-engine v2 --agent aidlc, then give it once more."',
+        );
+      }
     }
     expect(eventCount(proj, "GATE_APPROVED")).toBe(1);
   });
@@ -1913,7 +1925,7 @@ describe("t188: what the person's message asks for outlives the approval given i
     expect(approved.rc, approved.out).toBe(0);
     const off = setter(["config-change", "--plan-approval", "off"]);
     expect(off.rc, off.out).toBe(0);
-    expect(off.out).toContain("Each code plan is now built without asking.");
+    expect(off.out).toContain("Each code plan is now built without asking you first.");
     expect(planApproval()).toBe("off");
   });
 

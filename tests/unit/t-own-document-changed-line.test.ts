@@ -71,7 +71,7 @@ describe("t-own-document-changed-line: an edit to a finished stage's own documen
       expect(staleStageNote("Requirements Analysis", issue!, state)).toBe(LINE);
       // `/aidlc --status` says the same line.
       expect(status(proj)).toContain(LINE);
-      expect(status(proj)).not.toContain("finished before something it used changed");
+      expect(status(proj)).not.toContain("used changed after it finished");
     });
 
     test(`a document that is gone keeps the line it had (Guard Policy ${policy})`, () => {
@@ -81,9 +81,10 @@ describe("t-own-document-changed-line: an edit to a finished stage's own documen
       const issue = inspectStageValidity(proj, state).issues.find((entry) => entry.stage === STAGE);
       expect(issue?.direct, JSON.stringify(issue)).toBe(true);
       expect(staleStageNote("Requirements Analysis", issue!, state)).toBe(
-        'Requirements Analysis finished before something it used changed; say "redo requirements analysis" to bring it up to date.',
+        "Something Requirements Analysis used changed after it finished. I'm carrying on with it as it is. Do you want me to redo Requirements Analysis with the change?",
       );
-      expect(status(proj)).not.toContain("I'm carrying on with it as it is");
+      // The own-document line is not said for a document that is gone.
+      expect(status(proj)).not.toContain("requirements.md changed after");
     });
   }
 
@@ -93,7 +94,7 @@ describe("t-own-document-changed-line: an edit to a finished stage's own documen
         "Do you want me to redo User Stories with your changes instead?",
     );
     expect(staleStageNote("User Stories", { reasons: ["input:requirements", "output:stories"] }, "")).toBe(
-      'User Stories finished before something it used changed; say "redo user stories" to bring it up to date.',
+      "Something User Stories used changed after it finished. I'm carrying on with it as it is. Do you want me to redo User Stories with the change?",
     );
   });
 });

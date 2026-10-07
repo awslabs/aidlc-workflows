@@ -42,7 +42,6 @@ import {
   toPosix,
   UNIT_NAME_REGEX,
   writeStateFile,
-  entrySkillInvocation,
   REDO_REUSE_SOURCE,
   answerModeStageStartedFields,
   personsGateFeedback,
@@ -178,7 +177,17 @@ export function forwardJumpNotice(
     .filter((name): name is string => name !== null);
   const list = names.length <= 1 ? names.join("") : `${names.slice(0, -1).join(", ")} and ${names.at(-1)}`;
   return `Moved to ${stageLabel(target, target.slug) ?? "that stage"}${list ? `; skipped ${list}` : ""}. ` +
-    `To go back, type \`${entrySkillInvocation()} --stage ${cameFrom}\`.`;
+    `You can go back to ${stageLabel(stageOrNone(cameFrom), cameFrom) ?? "where you were"} any time.`;
+}
+
+// A stage by slug, or none when the graph cannot be read: the line then says
+// the slug, as stageLabel does for a stage it does not know.
+function stageOrNone(slug: string): { slug: string; name: string; plugin?: string } | undefined {
+  try {
+    return findStageBySlug(slug);
+  } catch {
+    return undefined;
+  }
 }
 
 // A backward jump says where it moved and how to return: the forward jump back
@@ -189,7 +198,7 @@ export function backwardJumpNotice(
   from: { slug: string; name: string; plugin?: string },
 ): string {
   return `Moved back to ${stageLabel(target, target.slug) ?? "that stage"}. ` +
-    `To return to ${stageLabel(from, from.slug) ?? "where you were"}, type \`${entrySkillInvocation()} --stage ${from.slug}\`.`;
+    `You can return to ${stageLabel(from, from.slug) ?? "where you were"} any time.`;
 }
 
 if (import.meta.main) {

@@ -50,9 +50,9 @@ const CLEAR = {
   AIDLC_UNATTENDED: "0",
 };
 const TYPED = "/aidlc --guard.review-freeze off fix the parser";
-const FOR_THE_REQUEST = "The review freeze check is off for the work you are asking for (set by you).";
-const FOR_NEW_WORK = "The review freeze check is off for the new work (set by you).";
-const FOR_WORK_STARTING_NOW = "The review freeze check is off for the piece of work you start now (set by you).";
+const FOR_THE_REQUEST = "The review freeze check (it stops edits to work you already approved) is off for the work you are asking for (set by you).";
+const FOR_NEW_WORK = "The review freeze check (it stops edits to work you already approved) is off for the new work (set by you).";
+const FOR_WORK_STARTING_NOW = "The review freeze check (it stops edits to work you already approved) is off for the piece of work you start now (set by you).";
 const STARTS_ON = "not off as you typed with the request";
 
 const created: string[] = [];
@@ -189,6 +189,37 @@ function createFromPrint(proj: string, step: { directive: Record<string, unknown
   ]);
 }
 
+// A terminal the person types at: both ends a terminal, no chat identity on the
+// command, and no mark of a tool that runs terminals of its own. Ancestry cannot
+// tell it from the agent's, because a chat records the whole ancestor chain that
+// a terminal beside it shares, which is how an unrelated chat message ended up
+// quoted as the reason for a command the person ran themselves.
+function atATerminal(proj: string, args: string[]): { status: number; out: string } {
+  const command = [
+    BUN, DISPATCHER, "engine", "config", "set", ...args, "--project-dir", proj,
+  ].map((part) => `'${part.replaceAll("'", "'\\''")}'`).join(" ");
+  const env: Record<string, string | undefined> = {
+    ...process.env, ...CLEAR, CLAUDE_PROJECT_DIR: proj, AIDLC_PROJECT_DIR: proj,
+  };
+  delete env.AIDLC_SESSION_OVERRIDE;
+  delete env.AIDLC_SESSION_OVERRIDE_SOURCE;
+  // A person's own shell carries no mark of a tool that starts its own
+  // terminals. This suite runs inside one, so its marks are cleared here.
+  delete env.TERM_PROGRAM;
+  for (const key of Object.keys(env)) {
+    if (/^(?:CLAUDECODE|CLAUDE_CODE_|CODEX_|CURSOR_|KIRO_|OPENCODE|COPILOT_|VSCODE_)/i.test(key)) delete env[key];
+  }
+  const result = spawnSync("script", ["-qec", command, "/dev/null"], {
+    cwd: proj,
+    env: env as NodeJS.ProcessEnv,
+    encoding: "utf-8",
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+  });
+  return { status: result.status ?? -1, out: `${result.stdout ?? ""}${result.stderr ?? ""}` };
+}
+
+const hasPty = spawnSync("script", ["-qec", "true", "/dev/null"], { encoding: "utf-8" }).status === 0;
+
 /** Everything the person hears from this step: its own line and the kept ones. */
 function heard(proj: string, step: { directive: Record<string, unknown> | null }): string {
   return `${String(step.directive?.narration ?? "")} ${pendingPersonLines(proj, SESSION).lines.join(" ")}`;
@@ -318,36 +349,6 @@ describe("a check typed off before any work exists", () => {
 
 describe("a setter the person runs in their own terminal", () => {
   const ASKED = "show me the status";
-  // A terminal the person types at: both ends a terminal, no chat identity on the
-  // command, and no mark of a tool that runs terminals of its own. Ancestry
-  // cannot tell it from the agent's, because a chat records the whole ancestor
-  // chain that a terminal beside it shares, which is how an unrelated chat
-  // message ended up quoted as the reason for a command the person ran.
-  const atATerminal = (proj: string, args: string[]): { status: number; out: string } => {
-    const command = [
-      BUN, DISPATCHER, "engine", "config", "set", ...args, "--project-dir", proj,
-    ].map((part) => `'${part.replaceAll("'", "'\\''")}'`).join(" ");
-    const env: Record<string, string | undefined> = {
-      ...process.env, ...CLEAR, CLAUDE_PROJECT_DIR: proj, AIDLC_PROJECT_DIR: proj,
-    };
-    delete env.AIDLC_SESSION_OVERRIDE;
-    delete env.AIDLC_SESSION_OVERRIDE_SOURCE;
-    // A person's own shell carries no mark of a tool that starts its own
-    // terminals. This suite runs inside one, so its marks are cleared here.
-    delete env.TERM_PROGRAM;
-    for (const key of Object.keys(env)) {
-      if (/^(?:CLAUDECODE|CLAUDE_CODE_|CODEX_|CURSOR_|KIRO_|OPENCODE|COPILOT_|VSCODE_)/i.test(key)) delete env[key];
-    }
-    const result = spawnSync("script", ["-qec", command, "/dev/null"], {
-      cwd: proj,
-      env: env as NodeJS.ProcessEnv,
-      encoding: "utf-8",
-      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
-    });
-    return { status: result.status ?? -1, out: `${result.stdout ?? ""}${result.stderr ?? ""}` };
-  };
-  const hasPty = spawnSync("script", ["-qec", "true", "/dev/null"], { encoding: "utf-8" }).status === 0;
-
   test.skipIf(!hasPty)("is their own act, and quotes no chat message", () => {
     const proj = openWork();
     reply(proj, ASKED);
@@ -356,7 +357,7 @@ describe("a setter the person runs in their own terminal", () => {
     expect(off.status, off.out).toBe(0);
     expect(off.out).not.toContain(ASKED);
     expect(off.out).not.toContain("as you asked in the chat");
-    expect(off.out).toContain("The state transition check is off for this piece of work, set by you.");
+    expect(off.out).toContain("The state transition check (it keeps the engine, not an agent, moving the work along) is off for this piece of work, set by you.");
     expect(guardsOff(readFileSync(seededStateFile(proj), "utf-8"))).toContain("state-transition");
     const disabled = readAuditShardEvents(proj).filter((row) => row.event === "GUARD_DISABLED");
     expect(disabled).toHaveLength(1);
@@ -432,8 +433,203 @@ describe("a terminal that the person's own tool runs", () => {
   });
 });
 
+// Finding 1 from the live runs: the authority rule that stops an agent lowering
+// one of the person's checks was also applied to the person themselves.
+describe("a command the person typed, with no turn of theirs on record", () => {
+  test.skipIf(!hasPty)("is carried out, not refused, and reads as theirs", () => {
+    const proj = openWork();
+    // Nobody has typed in the chat at all: no turn, no words, no bypass.
+    const off = atATerminal(proj, ["guard.state-transition", "off"]);
+    expect(off.status, off.out).toBe(0);
+    expect(off.out).toContain("The state transition check (it keeps the engine, not an agent, moving the work along) is off for this piece of work, set by you.");
+    expect(off.out).not.toContain("No reply from the person has arrived");
+    expect(guardsOff(readFileSync(seededStateFile(proj), "utf-8"))).toContain("state-transition");
+    const disabled = readAuditShardEvents(proj).filter((row) => row.event === "GUARD_DISABLED");
+    expect(disabled).toHaveLength(1);
+    expect(auditBlockField(disabled[0].block, "Source")).toBe("you");
+    expect(auditBlockField(disabled[0].block, "Person Reply")).toBeNull();
+  });
+
+  test.skipIf(!hasPty)("a ceremony they set at their terminal is theirs, not a command's", () => {
+    const proj = openWork();
+    const off = atATerminal(proj, ["summary-confirmation", "off"]);
+    expect(off.status, off.out).toBe(0);
+    expect(getField(readFileSync(seededStateFile(proj), "utf-8"), "Summary Confirmation") ?? "")
+      .toBe("off (set by you)");
+  });
+
+  // The rule itself stands where it belongs: an agent's own tool call arrives
+  // with pipes on both ends and no chat identity, and is still refused.
+  test("the same command from an agent, with nobody on record, is still refused", () => {
+    const proj = openWork();
+    const before = readFileSync(seededStateFile(proj), "utf-8");
+    const refused = configSet(proj, ["guard.state-transition", "off"], null);
+    expect(refused.status).not.toBe(0);
+    expect(refused.out).toContain("No reply from the person has arrived");
+    expect(readFileSync(seededStateFile(proj), "utf-8")).toBe(before);
+  });
+});
+
+// Finding 2 from the live runs: a flag-shaped word in the request threw the
+// whole prompt away, so the switch was lost and nothing was said.
+describe("a flag-shaped word inside the request", () => {
+  test("is part of what they described, and the switch they typed still applies", () => {
+    const proj = emptyProject();
+    const note = reply(proj, "/aidlc --guard.review-freeze off add a --help flag to the reverser");
+    expect(note).toContain(FOR_THE_REQUEST);
+    const printed = next(proj, ["--scope", "poc", "--", "add a --help flag to the reverser"]);
+    const made = createFromPrint(proj, printed);
+    expect(made.status, made.stderr).toBe(0);
+    expect(guardsOff(activeState(proj))).toContain("review-freeze");
+  });
+
+  // Their switch is readable, so it is carried out: only the part that was not
+  // read is named back, and they are never told to retype what worked.
+  test("before any words, what was read is still carried out and only the rest is named", () => {
+    const proj = emptyProject();
+    const note = reply(proj, "/aidlc --guard.review-freeze off --nonsense 1");
+    expect(note).toContain(FOR_WORK_STARTING_NOW);
+    expect(note).toContain('I could not read "--nonsense". Was that a setting you wanted?');
+    expect(note).not.toContain("Nothing changed");
+    // Two sentences, not one run together: the line before it ends in a stop.
+    expect(note).not.toMatch(/[a-z)] I could not read/);
+    // And it really did apply: the work they start next has the check off.
+    const printed = next(proj, ["--scope", "poc", "--", "build the export"]);
+    const made = createFromPrint(proj, printed);
+    expect(made.status, made.stderr).toBe(0);
+    expect(guardsOff(activeState(proj))).toContain("review-freeze");
+  });
+
+  test("the same setting typed twice with two values is put back to them once", () => {
+    const proj = emptyProject();
+    const note = reply(proj, "/aidlc --guard-policy relaxed --change-control off");
+    expect(note).toContain("Nothing changed: you typed Guard Policy twice in that command, as relaxed and off.");
+    expect(note).toContain("Which did you mean?");
+  });
+
+  test("a setting with no value after it asks which value they meant", () => {
+    const proj = emptyProject();
+    const note = reply(proj, "/aidlc --guard.review-freeze off --depth");
+    expect(note).toContain('Nothing changed: "--depth" came with no value. Which value did you mean for it?');
+    // AI-DLC could not read it, so it asks: it never tells them what to type.
+    expect(note).not.toContain("Type it again");
+  });
+});
+
+// A switch typed while the engine's own question waits was kept for that
+// question, and the step that followed asked the person to describe the work
+// again: a retype, and then the work started with the check still on, because
+// their fresh description was a different request from the one the grant named.
+describe("a switch typed while the engine's question is open, before any work exists", () => {
+  test("brings that question back instead of asking for the work again", () => {
+    const proj = emptyProject();
+    // The person described the work, so the engine asked about the plan for it.
+    const asked = next(proj, ["--", "a tiny tool that reverses a string"]);
+    expect(asked.directive?.kind, asked.out).toBe("ask");
+    const question = String(asked.directive?.question ?? "");
+    expect(question).toContain("reverses a string");
+
+    // They turn a check off while that question waits.
+    expect(reply(proj, "/aidlc --guard.review-freeze off")).toContain(FOR_WORK_STARTING_NOW);
+
+    // The step puts their own question back, rather than asking them to say
+    // what to build when they already have.
+    const again = next(proj, []);
+    expect(String(again.directive?.narration ?? ""), again.out).not.toContain("Tell me what to build");
+    expect(again.directive?.kind, again.out).toBe("ask");
+    expect(String(again.directive?.question ?? "")).toContain("reverses a string");
+
+    // Answering it starts the work with the check they turned off.
+    const route = (again.directive as { confirm_command?: string; scope_commands?: Array<{ scope: string; command: string }> });
+    const command = route.confirm_command ??
+      route.scope_commands?.find((row) => row.scope === "poc")?.command;
+    const printed = next(proj, answerArgs(command));
+    const made = createFromPrint(proj, printed);
+    expect(made.status, made.stderr).toBe(0);
+    expect(guardsOff(activeState(proj))).toContain("review-freeze");
+  });
+
+  test("with nothing of theirs waiting, the step still asks what to build", () => {
+    const proj = emptyProject();
+    expect(reply(proj, "/aidlc --guard.review-freeze off")).toContain(FOR_WORK_STARTING_NOW);
+    const step = next(proj, []);
+    expect(String(step.directive?.narration ?? ""), step.out).toContain("Tell me what to build");
+  });
+});
+
+// A ceremony the person typed before any work existed was kept, promised to them
+// in the engine's step, and then spent at creation without being applied: the
+// stage ran with sensors or learnings on, and nothing said so.
+describe("a ceremony the person typed before any work exists", () => {
+  test.each([
+    { flag: "--sensors", field: "Sensors", scope: "poc" },
+    { flag: "--learnings", field: "Learnings", scope: "enterprise" },
+  ])("$flag off reaches the work they start next, as theirs ($scope)", ({ flag, field, scope }) => {
+    const proj = emptyProject();
+    reply(proj, `/aidlc ${flag} off`);
+    // The engine's step says what they set is kept for the work they start next.
+    expect(String(next(proj, []).directive?.message)).toContain("is kept for it");
+    const printed = next(proj, ["--scope", scope, "--", "build the export"]);
+    const made = createFromPrint(proj, printed);
+    expect(made.status, made.stderr).toBe(0);
+    expect(getField(activeState(proj), field)).toBe("off (set by you)");
+  });
+
+  // The plain path a person takes on main (issue 1962 F1): they type it, then
+  // describe the work in their own words and answer the plan question.
+  test("typed, then the work described in their own words: it is still off, and theirs", () => {
+    const proj = emptyProject();
+    reply(proj, "/aidlc --learnings off");
+    const asked = next(proj, ["--", "a tiny tool that reverses a string"]);
+    expect(asked.directive?.kind, asked.out).toBe("ask");
+    const route = asked.directive as {
+      confirm_command?: string;
+      scope_commands?: Array<{ scope: string; command: string }>;
+    };
+    const command = route.confirm_command ?? route.scope_commands?.find((row) => row.scope === "poc")?.command;
+    const printed = next(proj, answerArgs(command));
+    const made = createFromPrint(proj, printed);
+    expect(made.status, made.stderr).toBe(0);
+    expect(getField(activeState(proj), "Learnings")).toBe("off (set by you)");
+  });
+
+  test("a flag the agent passes at creation still wins, and is recorded as the command's", () => {
+    const proj = emptyProject();
+    reply(proj, "/aidlc --sensors off");
+    const printed = next(proj, ["--scope", "poc", "--", "build the export"]);
+    const message = String(printed.directive?.message);
+    const made = utility(proj, [
+      "intent-create",
+      "--request",
+      requestIn(message, printed.out),
+      "--scope",
+      "poc",
+      "--sensors",
+      "on",
+    ]);
+    expect(made.status, made.stderr).toBe(0);
+    expect(getField(activeState(proj), "Sensors")).toBe("on (set by a command)");
+  });
+
+  test("the work after it starts at its scope default: the words are spent, not standing", () => {
+    const proj = emptyProject();
+    reply(proj, "/aidlc --sensors off");
+    const first = next(proj, ["--scope", "poc", "--", "build the export"]);
+    expect(createFromPrint(proj, first).status).toBe(0);
+    expect(getField(activeState(proj), "Sensors")).toBe("off (set by you)");
+    // A second piece of work in the same chat is not covered by those words. The
+    // person asks for it in the chat, which is also the hook heartbeat the engine
+    // looks for once a state file exists.
+    reply(proj, "and now add the importer");
+    const second = next(proj, ["--new-intent", "--scope", "poc", "--", "add the importer"]);
+    const made = createFromPrint(proj, second);
+    expect(made.status, made.stderr).toBe(0);
+    expect(getField(activeState(proj), "Sensors") ?? "").not.toContain("set by you");
+  });
+});
+
 describe("a project switch with no words of theirs on record", () => {
-  test("says only that the check is off, since when, and how to turn it back on", () => {
+  test("says what the check is for, that it is off, since when, and offers it back", () => {
     const line = switchOffLine({
       name: "AIDLC_DISABLE_REVIEW_FREEZE_HOOK",
       target: "local",
@@ -445,7 +641,10 @@ describe("a project switch with no words of theirs on record", () => {
         how: "chat",
       },
     }, new Date(2026, 9, 7, 12, 0, 0));
-    expect(line).toContain("The review freeze check is off for this project since 10:07.");
+    expect(line).toBe(
+      "The review freeze check (it stops edits to work you already approved) is off for this project " +
+        "since 10:07. Do you want it back on?",
+    );
     expect(line).not.toContain("your last message");
   });
 });

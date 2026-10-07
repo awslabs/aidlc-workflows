@@ -358,7 +358,7 @@ describe("t194 recompose - rejections", () => {
     expect(auditText(proj)).toContain("**Reason**: jump to user-stories");
   });
 
-  test("autonomous Construction rejected: recompose refuses with the remediation named", () => {
+  test("autonomous Construction rejected: recompose refuses and names a setter that runs", () => {
     // The engine-side anchor for the "never recompose under autonomous
     // Construction" rule (mirrors the park guard). A created feature project has no
     // Construction Autonomy Mode field, so inject it as autonomous the way
@@ -375,7 +375,11 @@ describe("t194 recompose - rejections", () => {
     const r = run(proj, "aidlc-utility.ts", ["recompose", "--skip", "market-research"]);
     expect(r.status).not.toBe(0);
     expect(r.out).toContain("Construction Autonomy Mode is autonomous");
-    expect(r.out).toContain("set-autonomy --mode gated");
+    // The step it names is one that runs: the setter's real command, and no
+    // wait that never ends (the mode stays autonomous to the end of the run).
+    expect(r.out).toMatch(/`[^`]*aidlc[^`]*bolt[^`]* set-autonomy --mode gated`/);
+    expect(r.out).not.toContain("(aidlc-bolt set-autonomy");
+    expect(r.out).not.toContain("wait for the current build");
     // The state file is untouched by the refusal (still autonomous, still EXECUTE).
     expect(readState(proj)).toBe(withAutonomy);
   });
@@ -473,8 +477,8 @@ describe("t194 recompose - the jump readers honour the recomposed plan", () => {
     expect(jr.status).toBe(0);
     const body = JSON.parse(jr.out) as { notice?: string; stages_skipped: string[] };
     expect(body.stages_skipped).toContain("user-stories");
-    expect(body.notice).toMatch(/^Moved to Code Generation; skipped .*User Stories.*\. To go back, type `[^`]* --stage /);
-    expect(body.notice).toContain(`--stage ${before}\``);
+    expect(body.notice).toMatch(/^Moved to Code Generation; skipped .*User Stories.*\. You can go back to [A-Z][^.]* any time\.$/);
+    expect(body.notice).not.toContain("--stage");
     // One plain line: no stage slugs, no internals.
     expect(body.notice).not.toContain("[S]");
     const back = run(proj, "aidlc-jump.ts", [
@@ -512,7 +516,7 @@ describe("t194 recompose - the jump readers honour the recomposed plan", () => {
     expect(readState(proj)).toContain("- **Unit Stage**: user-stories");
     const jr = run(proj, "aidlc-jump.ts", ["execute", "--target", "code-generation", "--direction", "forward"]);
     expect(jr.status).toBe(0);
-    expect((JSON.parse(jr.out) as { notice?: string }).notice).toContain("--stage user-stories`.");
+    expect((JSON.parse(jr.out) as { notice?: string }).notice).toContain("You can go back to User Stories any time.");
   });
 
   test("only a forward jump's instruction asks for its notice; a backward one is unchanged", () => {
@@ -559,10 +563,8 @@ describe("t194 recompose - the jump readers honour the recomposed plan", () => {
       {}) as { kind?: string; narration?: string };
     const said = nextIn();
     expect(said.kind).toBe("run-stage");
-    expect(String(said.narration)).toContain(
-      "To return to Code Generation, type `/aidlc --stage code-generation`.",
-    );
-    expect(String(said.narration)).toMatch(/^Moved back to [A-Z][^.;`]*\. To return to Code Generation/);
+    expect(String(said.narration)).toContain("You can return to Code Generation any time.");
+    expect(String(said.narration)).toMatch(/^Moved back to [A-Z][^.;`]*\. You can return to Code Generation/);
     // Said once.
     expect(String(nextIn().narration ?? "")).not.toContain("To return to Code Generation");
     // And the way back works: the jump it names goes through.
@@ -579,7 +581,7 @@ describe("t194 recompose - the jump readers honour the recomposed plan", () => {
     const back = run(proj, "aidlc-jump.ts", ["execute", "--target", String(before), "--direction", "backward"]);
     expect(back.status, back.out).toBe(0);
     expect((JSON.parse(back.out) as { notice?: string }).notice).toMatch(
-      /^Moved back to [A-Z][^.;`]*\. To return to Code Generation, type `\/aidlc --stage code-generation`\.$/,
+      /^Moved back to [A-Z][^.;`]*\. You can return to Code Generation any time\.$/,
     );
     expect(readState(proj)).toContain(`- **Current Stage**: ${before}`);
   });
@@ -608,7 +610,7 @@ describe("t194 recompose - the jump readers honour the recomposed plan", () => {
     delete nextEnv.AIDLC_SCOPE_MAPPING;
     const said = (runOrchestrateNext(toolIn(proj, "aidlc-orchestrate.ts"), proj, [], { env: nextEnv }).directive ??
       {}) as { narration?: string };
-    expect(String(said.narration)).toContain("To return to Code Generation, type `/aidlc --stage code-generation`.");
+    expect(String(said.narration)).toContain("You can return to Code Generation any time.");
   });
 
   test("backward jump resets a promoted stage's [S/x] like any on-plan stage", () => {
@@ -640,7 +642,8 @@ describe("t194 recompose - the jump readers honour the recomposed plan", () => {
     const jump = message.indexOf("execute --target user-stories --direction forward --scope bugfix");
     expect(add, message).toBeGreaterThan(-1);
     expect(jump).toBeGreaterThan(add);
-    expect(message).toContain("To go back, type `/aidlc --stage requirements-analysis`.");
+    expect(message).toContain("You can go back to Requirements Analysis any time.");
+    expect(message).toContain("next --stage requirements-analysis`.");
     expect(message).not.toContain("change scope");
 
     // The commands it names, in order, land the workflow on the stage.
@@ -658,9 +661,9 @@ describe("t194 recompose - the jump readers honour the recomposed plan", () => {
     // Behind the cursor, going back would rerun what follows: the refusal
     // names the isolated run, which runs it without touching the plan.
     const behind = directive(["--stage", "intent-capture"]);
-    expect(behind.kind).toBe("error");
-    expect(behind.message).toContain('comes before the current stage "user-stories"');
-    expect(behind.message).toContain("`/aidlc --stage intent-capture --single`");
+    expect(behind.kind).toBe("print");
+    expect(behind.message).toContain("comes before the current stage, User Stories");
+    expect(behind.message).toContain("next --stage intent-capture --single`");
     const before = readState(proj);
     const alone = directive(["--stage", "intent-capture", "--single"]) as { kind?: string; stage?: string; change_notices?: string[] };
     expect(alone.kind).toBe("run-stage");
