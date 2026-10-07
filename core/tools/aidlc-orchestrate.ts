@@ -440,7 +440,9 @@ import { renderEngineInvocation, sameGuardOperation } from "./aidlc-guard-operat
 import {
   isPlanApprovalBeat,
   legacyPlanApprovalOffNotice,
+  noteOpenEngineQuestion,
   openPlanApprovalQuestion,
+  planApprovalKeptReplyWaits,
   publishPlanApprovalAsk,
   publishPlanApprovalSkip,
   routeCodeGenerationPlanApproval,
@@ -737,6 +739,13 @@ const KEPT_REQUEST_FLAGS = new Set([
 ]);
 // Said first on the step the kept request leads to.
 let activeKeptRequestLine: string | null = null;
+// The markers of engine questions that publish none of their own machinery
+// (see prepareEmission): shown as they are when the marker cannot be written.
+const openQuestionMarkers = new WeakSet<object>();
+// The person answered a routing question "part of that work": a code plan
+// question that work is waiting on, with their words already kept as its
+// reply, is answered by those words (see emit).
+let routingAnsweredAsActiveWork = false;
 
 function isKeptRequest(args: readonly string[]): boolean {
   const flags = parseNextFlags([...args]);
@@ -1071,6 +1080,44 @@ function prepareEmission(directive: Directive): PreparedEmission {
         : units.length > 1 ? { units } : {}),
       state_sha256: stateDigest(askState),
     };
+  }
+  // Every other question the engine asks (where the work belongs, which plan,
+  // which record) is the open question itself until it is answered: the
+  // person's next reply answers it, never a question it was asked over (the
+  // code plan question, a Unit checkpoint, a recovery question), which the
+  // next `next` asks again once it is answered. It stands for the same stage
+  // and work as the step beneath it. A running swarm keeps its own step; the
+  // code plan question, a recovery question, a Unit claim and the legacy
+  // recovery keep their own machinery; the conductor's own work is no question.
+  if (
+    transported.kind === "ask" &&
+    marker === undefined &&
+    transported.ask_type !== PLAN_APPROVAL_ASK_TYPE &&
+    transported.ask_type !== GUARD_RECOVERY_ASK_TYPE &&
+    transported.ask_type !== "legacy-plan-approval-recovery" &&
+    transported.ask_type !== "unit-claim" &&
+    (transported as { agent_work?: unknown }).agent_work !== true &&
+    askState !== null &&
+    engineProjectDir
+  ) {
+    const beneath = readActiveDirectiveMarker(engineProjectDir, askState);
+    const asked = transported as { stage?: unknown; unit?: unknown };
+    const stage = typeof asked.stage === "string"
+      ? asked.stage
+      : beneath?.version === 2 ? beneath.stage : getField(askState, "Current Stage")?.trim() ?? "";
+    if (beneath?.kind !== "invoke-swarm" && /^[a-z][a-z0-9-]*$/.test(stage)) {
+      marker = {
+        kind: "ask",
+        stage,
+        ask_type: transported.ask_type,
+        ...(typeof asked.unit === "string"
+          ? { unit: asked.unit }
+          : beneath?.version !== 2 ? {}
+          : beneath.unit !== undefined ? { unit: beneath.unit } : beneath.units?.length ? { units: beneath.units } : {}),
+        state_sha256: stateDigest(askState),
+      };
+      openQuestionMarkers.add(marker);
+    }
   }
   if ((transported.kind === "load-steering" || transported.kind === "run-stage") && route) {
     const markerStateHash =
@@ -1604,6 +1651,15 @@ function emit(requested: Directive): void {
             : {}),
           resultSha256: prepared.resultSha256,
         });
+        // An engine question whose marker another step's own machinery kept
+        // (a Copilot resume question, a legacy Kiro IDE approval) is still asked.
+        if (
+          openQuestionMarkers.has(prepared.marker) &&
+          !["copilot-committed", "generic-committed", "stale-attempt"].includes(publication)
+        ) {
+          writePrepared(prepared);
+          return;
+        }
         if (publication === "legacy-plan-approval-owned") {
           writePrepared(prepareEmission(errorDirective(
             "Legacy Kiro Plan Approval is owned by another active IDE window. Continue the pending approval there; this call did not receive or rotate its protected choices.",
@@ -1659,6 +1715,7 @@ function emit(requested: Directive): void {
         }
         // The marker took the cursor, so the fallback must not shadow it.
         recordSteeringCursor(projectDir, prepared.marker, false);
+        if (openQuestionMarkers.has(prepared.marker)) noteOpenEngineQuestion(projectDir, prepared.marker);
         if (
           prepared.transported.kind === "ask" &&
           prepared.transported.ask_type === PLAN_APPROVAL_ASK_TYPE
@@ -1668,6 +1725,19 @@ function emit(requested: Directive): void {
           recordPlanBuiltWithoutAsking(projectDir, prepared.transported);
         }
         settleBuiltPlanReviews(projectDir, prepared.transported);
+        // Asked where their words belong, the person said the work in
+        // progress, which waits on its code plan question: the question is
+        // the open step again, and the words it kept as their reply answer it.
+        if (
+          routingAnsweredAsActiveWork &&
+          prepared.transported.kind === "ask" &&
+          prepared.transported.ask_type === PLAN_APPROVAL_ASK_TYPE &&
+          !prepared.transported.plan_approval.editing &&
+          planApprovalKeptReplyWaits(projectDir)
+        ) {
+          writePrepared(prepareEmission(planQuestionAnsweredByWordsDirective()));
+          return;
+        }
       }
     } catch (e) {
       // A barrier violation is an engine defect, not a workflow problem, and must
@@ -1678,6 +1748,10 @@ function emit(requested: Directive): void {
       if (e instanceof EngineModeViolationError) throw e;
       if (projectDir) {
         recordHookDrop(projectDir, "active-directive", errorMessage(e));
+      }
+      if (prepared.marker !== undefined && openQuestionMarkers.has(prepared.marker)) {
+        writePrepared(prepared);
+        return;
       }
       writePrepared(prepareEmission(errorDirective(
         `The directive could not be published, so no work directive was issued. Retry the command; if coordination remains busy, run \`${entrySkillInvocation()} --doctor\`.`,
@@ -2632,6 +2706,21 @@ function openPlanQuestionReplyDirective(editing: boolean, requestId: string): Pr
       `\`${orchestrate} next --request ${requestId}\` and follow what it returns: the engine kept their words and asks ` +
       "them where that work belongs. If you cannot tell which it is, ask the person in one short question and follow " +
       "their answer.",
+  );
+}
+
+// The person said their words are part of the work in progress, and that work
+// waits on the code plan question: the words, kept as their reply to it, are
+// their answer, read by the conductor like any reply to it.
+function planQuestionAnsweredByWordsDirective(): PrintDirective {
+  const orchestrate = aidlcToolInvocation("orchestrate");
+  return printDirective(
+    "The person said their words are part of the work in progress, and that work is waiting on their answer to the " +
+      "code plan question, so their words are that answer. Read them and record the choice they made with " +
+      `\`${aidlcToolInvocation("log")} answer --stage code-generation --checkpoint plan-approval --details "<their choice>"\`` +
+      ' (a change they ask for is "Request Changes": the engine keeps their words as what to change), then run bare ' +
+      `\`${orchestrate} next\`. If you cannot tell which choice it is, run bare \`${orchestrate} next\`, show the person ` +
+      "the question it returns, and end the turn.",
   );
 }
 
@@ -7170,6 +7259,7 @@ function routeNext(args: string[], projectDir: string | undefined): void {
       flags.request = undefined;
       flags.scope = typedScope;
       question = undefined;
+      routingAnsweredAsActiveWork = true;
     } else if (!named) {
       // Never act on the answer: ask again about the work that exists now.
       flags.compose = false;
@@ -15248,6 +15338,7 @@ export function main(argv: string[]): void {
     activeHookHealthNotice = undefined;
     activeSwitchOffNotices = null;
     activeKeptRequestLine = null;
+    routingAnsweredAsActiveWork = false;
     engineProjectDir = undefined;
     resolvedDirectiveLimit = null;
     engineSessionId = undefined;
