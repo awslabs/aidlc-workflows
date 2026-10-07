@@ -1235,12 +1235,14 @@ export class AgentStandIn {
     const forUnit = unit === null ? [] : ["--unit", unit];
     const pass = String(iteration);
     const requestArgs = ["log", "review", "--stage", stage, "--reviewer", reviewer, "--iteration", pass, ...forUnit];
-    let request: Record<string, unknown>;
-    try {
-      request = this.must(...requestArgs);
-    } catch (error) {
-      // A request refused for the units block is the agent's to fix, then ask again.
-      if (!(error instanceof ScopeRunRefused) || !this.repairUnitsBlockIfNamed(error.refusal, "review")) throw error;
+    let request = this.must(...requestArgs);
+    // A units block the engine cannot read comes back as the agent's step, a
+    // print: write the block, then ask again. A failed command over it would
+    // have the agent tell the person a step instead, so that stops the run.
+    if (request.kind === "print") {
+      if (!this.repairUnitsBlockIfNamed(String(request.message ?? ""), "review")) {
+        this.fail(`the ${stage} review request printed a step the stand-in has no repair for: ${String(request.message)}`);
+      }
       request = this.must(...requestArgs);
     }
     const file = typeof request.reviewFile === "string" ? request.reviewFile : null;
