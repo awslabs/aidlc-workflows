@@ -121,6 +121,8 @@ import {
   recordGuardStoodAside,
   unattendedHumanPresenceHint,
   intentRepos,
+  isGitRepoDir,
+  isValidRepoName,
   repoDir,
   isAutonomousConstructionGate,
   approvedConstructionUnits,
@@ -3871,10 +3873,12 @@ function isNonDocPath(p: string): boolean {
 }
 
 // Run git in the workspace, fail-safe: returns null on any spawn/exec problem so
-// callers fall back to the filesystem check rather than trapping.
+// callers fall back to the filesystem check rather than trapping. A probe reads
+// state and never needs the filesystem monitor hook, so the one git setting
+// that runs a configured program on `status` is off for it.
 function git(pd: string, args: string[]): string | null {
   try {
-    const r = spawnSync("git", args, {
+    const r = spawnSync("git", ["-c", "core.fsmonitor=false", ...args], {
       cwd: pd,
       encoding: "utf-8",
       timeout: DEFAULT_SUBPROCESS_TIMEOUT_MS,
@@ -3956,11 +3960,21 @@ function dirHasSourceWork(dir: string): boolean {
 // sibling, with or without AI-DLC in it): the workspace's git never lists that
 // repo's files, so each of the intent's recorded repos - the same set the review
 // source binding and the unit manifest follow - is asked the same question. A
-// recorded repo missing on this clone fails safe (git spawn error -> null,
-// unreadable dir -> false).
+// recorded repo missing on this clone fails safe (unreadable dir -> false).
+//
+// A recorded name is text in the committed intents.json, and a folder shaped
+// like a repo (HEAD, objects/, refs/, config) can be committed by anyone whose
+// repo the person clones; a .git entry cannot. Git run in such a folder reads
+// the author's committed config and runs its commands, so git is asked only in
+// a folder with a real .git entry (a clone, submodule or init the person made,
+// whose config is theirs); any other folder gets the filesystem check alone.
 function workspaceHasWork(pd: string): boolean {
   if (dirHasSourceWork(pd)) return true;
-  return intentRepos(pd).some((repo) => dirHasSourceWork(repoDir(pd, repo)));
+  return intentRepos(pd).some((repo) => {
+    if (!isValidRepoName(repo)) return false;
+    const dir = repoDir(pd, repo);
+    return isGitRepoDir(dir) ? dirHasSourceWork(dir) : workspaceHasSourceFile(dir);
+  });
 }
 
 // The guard itself. Called from approve/advance/finalize/complete-workflow

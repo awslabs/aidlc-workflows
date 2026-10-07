@@ -55,6 +55,7 @@ import {
   mkdirSync,
   readFileSync,
   renameSync,
+  symlinkSync,
   utimesSync,
   writeFileSync,
 } from "node:fs";
@@ -2166,9 +2167,9 @@ X. Other (please specify)
     }
     // Workspace repo: the shell and a .gitignore hiding the child repo, in a
     // first commit, so the records-only commit below is the LAST one.
-    function initWorkspaceRepo(): void {
+    function initWorkspaceRepo(ignore = `${REPO}/\n`): void {
       initGitRepo(proj);
-      writeFileSync(join(proj, ".gitignore"), `${REPO}/\n`);
+      writeFileSync(join(proj, ".gitignore"), ignore);
       git(proj, ["add", "-A"]);
       git(proj, ["commit", "-q", "-m", "workspace shell"]);
     }
@@ -2245,6 +2246,53 @@ X. Other (please specify)
       writeFileSync(join(repo, "aidlc", "spaces", "notes.md"), "# notes\n");
       git(repo, ["add", "-A"]);
       git(repo, ["commit", "-q", "-m", "the code and its records"]);
+      stageCodeGenDocsOnly();
+      commitRecordsOnly();
+      const { gate, approve } = gateAndApprove();
+      expect(gate.rc, gate.out).toBe(0);
+      expect(approve.rc, approve.out).toBe(0);
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+    // A recorded name is text in the committed intents.json, and a folder shaped
+    // like a repo (HEAD, objects/, refs/, config) can be committed by anyone
+    // whose repo the person clones; a .git entry cannot. Git run in that folder
+    // reads the author's committed config and runs its commands (core.fsmonitor
+    // on status), so the probe asks git only in a folder with a real .git entry
+    // and with the monitor hook off; the shaped folder gets the filesystem check.
+    test("does not run git configuration committed in a repo-shaped folder recorded as a repo", () => {
+      initWorkspaceRepo();
+      const marker = join(proj, "fsmonitor-ran");
+      const shaped = join(proj, "vendor");
+      mkdirSync(join(shaped, "objects", "info"), { recursive: true });
+      mkdirSync(join(shaped, "refs", "heads"), { recursive: true });
+      writeFileSync(join(shaped, "HEAD"), "ref: refs/heads/main\n");
+      writeFileSync(join(shaped, "objects", "info", "keep"), "");
+      writeFileSync(join(shaped, "refs", "heads", "keep"), "");
+      writeFileSync(
+        join(shaped, "config"),
+        `[core]\n\trepositoryformatversion = 0\n\tbare = false\n\tworktree = .\n\tfsmonitor = touch ${marker}; false\n`,
+      );
+      git(proj, ["add", "-A"]);
+      git(proj, ["commit", "-q", "-m", "a committed folder shaped like a repo"]);
+      recordRepos(["vendor"]);
+      stageCodeGenDocsOnly();
+      commitRecordsOnly();
+      gateAndApprove();
+      expect(existsSync(marker)).toBe(false);
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+    // Sibling discovery accepts a symlinked child repo, so the probe must too:
+    // the link's target has the real .git entry.
+    test.skipIf(process.platform === "win32")("PASSES when the recorded child repo is a symlink to a real repo", () => {
+      initWorkspaceRepo(`${REPO}/\n.repos/\n`);
+      recordRepos([REPO]);
+      const real = join(proj, ".repos", "app-real");
+      initGitRepo(real);
+      git(real, ["commit", "-q", "--allow-empty", "-m", "init"]);
+      writeWorkspaceFile(proj, ".repos/app-real/src/auth/login.ts");
+      git(real, ["add", "-A"]);
+      git(real, ["commit", "-q", "-m", "the code"]);
+      symlinkSync(join(".repos", "app-real"), join(proj, REPO));
       stageCodeGenDocsOnly();
       commitRecordsOnly();
       const { gate, approve } = gateAndApprove();

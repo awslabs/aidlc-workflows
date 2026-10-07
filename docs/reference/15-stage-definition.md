@@ -218,7 +218,10 @@ How "source work" is detected depends on the workspace:
   repos (the `repos` of its registry row) rather than the workspace repo, for
   example a gitignored child repo with or without AI-DLC in it. The guard asks
   each recorded repo the same question it asks the workspace, so a brownfield
-  child repo with no new code does not pass either.
+  child repo with no new code does not pass either. Git is asked only in a
+  folder with a real `.git` entry (a clone, submodule or init the person made);
+  a committed folder merely shaped like a repo gets the filesystem check, so
+  its committed git config never runs.
 
 Today only `code-generation` declares it. Its per-unit reviews additionally
 require `<record>/construction/<unit>/code-generation/source-manifest.json`:
