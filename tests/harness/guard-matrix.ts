@@ -19,7 +19,7 @@
  * meets across a whole run.
  */
 import { execFileSync, spawnSync } from "node:child_process";
-import { appendFileSync, cpSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterAll, describe, expect, test } from "bun:test";
 import { REPO_ROOT } from "./fixtures.ts";
@@ -74,6 +74,16 @@ export const GUARD_CHANGES = {
   "engine-update": "resume after the engine version changes",
   /** While Unit 2's code plan waits, the person asks for Unit 1 to be reviewed again. */
   "review-while-plan-waits": "the person asks for a review of Unit 1 while Unit 2's plan waits",
+  /** While Unit 2 builds, its agent edits Unit 1's functional design. */
+  "doc-edit-agent": "Unit 2's agent edits Unit 1's functional design",
+  /** While Unit 2 builds, the person edits Unit 1's functional design by hand. */
+  "doc-edit-hand": "the person hand-edits Unit 1's functional design",
+  /** While Unit 2 builds, its agent edits Unit 1's approved code plan. */
+  "plan-edit-after-approval-agent": "Unit 2's agent edits Unit 1's approved code plan",
+  /** While Unit 2 builds, the person edits Unit 1's approved code plan by hand. */
+  "plan-edit-after-approval-hand": "the person hand-edits Unit 1's approved code plan",
+  /** While Unit 2 builds, Unit 1's functional design is deleted: it has to be made again. */
+  "doc-delete": "Unit 1's functional design is deleted",
 } as const;
 export type GuardChange = keyof typeof GUARD_CHANGES | "none";
 
@@ -84,6 +94,16 @@ export const MATRIX_SKIP = [
 ];
 
 export const MATRIX_UNITS = ["core", "extra"];
+
+/** Changes to a Unit's documents: their cells walk Functional Design too. */
+export const DOCUMENT_CHANGES: ReadonlySet<GuardChange> = new Set<GuardChange>([
+  "doc-edit-agent", "doc-edit-hand", "plan-edit-after-approval-agent", "plan-edit-after-approval-hand", "doc-delete",
+]);
+
+/** The stages a change's cells leave out. */
+export function matrixSkip(change: GuardChange): string[] {
+  return DOCUMENT_CHANGES.has(change) ? MATRIX_SKIP.filter((s) => s !== "functional-design") : MATRIX_SKIP;
+}
 
 /** Changes to the first Unit's reviewed source after its review. */
 const REVIEWED_SOURCE_CHANGES = new Set<GuardChange>(["later-unit-edit", "later-unit-edit-unclaimed", "hand-edit-source", "revert"]);
@@ -100,6 +120,26 @@ export function changeHooks(change: GuardChange): Partial<ScopeRunOptions> {
     appendFileSync(join(agent.host.proj, path), `${line}\n`);
   const git = (agent: AgentStandIn, ...args: string[]) =>
     execFileSync("git", args, { cwd: agent.host.proj, encoding: "utf-8", stdio: ["ignore", "pipe", "pipe"] }).trim();
+  // Unit 1's functional design: the first document its Functional Design wrote.
+  const design = (agent: AgentStandIn) => {
+    const path = docOf(agent);
+    if (!path) agent.fail(`Functional Design wrote no document for ${MATRIX_UNITS[0]}`);
+    return path;
+  };
+  const corePlan = (agent: AgentStandIn) => {
+    const plan = agent.plans.get(MATRIX_UNITS[0]);
+    if (!plan) agent.fail(`no approved code plan for ${MATRIX_UNITS[0]}`);
+    return plan;
+  };
+  // An edit while Unit 2 builds: the agent's goes through its Write tool, the person's does not.
+  const whileExtraBuilds = (edit: (agent: AgentStandIn) => void) => ({
+    onCode: (unit: string, agent: AgentStandIn) => {
+      once(unit === MATRIX_UNITS[1], () => edit(agent));
+      return [];
+    },
+  });
+  const agentAppends = (agent: AgentStandIn, path: string, line: string) =>
+    agent.host.write(path, `${readFileSync(join(agent.host.proj, path), "utf-8")}${line}\n`);
   const requirements = (agent: AgentStandIn) => {
     const ra = agent.worked.find((d) => d.stage === "requirements-analysis");
     const path = ((ra?.produces as string[] | undefined) ?? []).find((p) => p.endsWith("requirements.md"));
@@ -185,6 +225,16 @@ export function changeHooks(change: GuardChange): Partial<ScopeRunOptions> {
           agent.reviewAgain("code-generation", MATRIX_UNITS[0]);
         }),
       };
+    case "doc-edit-agent":
+      return whileExtraBuilds((agent) => agentAppends(agent, design(agent), "\n- Extra also reads the core total."));
+    case "doc-edit-hand":
+      return whileExtraBuilds((agent) => appendBy(agent, design(agent), "\n- Note from the person: keep totals in cents."));
+    case "plan-edit-after-approval-agent":
+      return whileExtraBuilds((agent) => agentAppends(agent, corePlan(agent), "- [x] Step 3: Note how extra uses core"));
+    case "plan-edit-after-approval-hand":
+      return whileExtraBuilds((agent) => appendBy(agent, corePlan(agent), "- [x] Step 3: Note added by hand"));
+    case "doc-delete":
+      return whileExtraBuilds((agent) => rmSync(join(agent.host.proj, design(agent))));
     case "engine-update":
       return {
         afterCheckpoint: (unit, _kind, agent) => once(unit === "core", () => agent.stopForTheDay(() => updateEngine(agent.host.proj))),
@@ -206,8 +256,14 @@ export function updateEngine(proj: string): void {
   }
 }
 
-export function cellFlags(cell: GuardCell): string[] {
-  return ["--skip", MATRIX_SKIP.join(","), "--guard-policy", cell.policy, "--review", cell.review, "--plan-approval", cell.plan];
+/** Unit 1's functional design, as its Functional Design wrote it. */
+export function docOf(agent: AgentStandIn): string {
+  const fd = agent.worked.find((d) => d.stage === "functional-design" && d.unit === MATRIX_UNITS[0]);
+  return ((fd?.produces as string[] | undefined) ?? []).find((p) => p.endsWith(".md") && !p.endsWith("-questions.md")) ?? "";
+}
+
+export function cellFlags(cell: GuardCell, change: GuardChange = "none"): string[] {
+  return ["--skip", matrixSkip(change).join(","), "--guard-policy", cell.policy, "--review", cell.review, "--plan-approval", cell.plan];
 }
 
 export interface CellRun {
@@ -230,6 +286,13 @@ export interface CellOptions {
   shipped?: boolean;
   /** Fire the guard on every Bash and Write, as Claude Code does (on for changes the guard holds). */
   fullHost?: boolean;
+  /**
+   * After Units Generation the person asks to build stage by stage, so the
+   * design stage runs as waves; with `thenUnits`, once its gate is approved
+   * they ask for one Unit at a time again, so each Unit gets its checkpoint.
+   */
+  stageMajor?: boolean;
+  thenUnits?: boolean;
 }
 
 /** A scope that does not ship: its file, its stages, and how it gets into the project (a composer's grid by default). */
@@ -350,6 +413,21 @@ export function runCell(cell: GuardCell, change: GuardChange, options: CellOptio
       return then;
     }
     : afterRequirements;
+  // Stage by stage: the person asks once Units Generation is approved, and the agent sets it.
+  const beforeWaves = afterApproval;
+  const afterAnyApproval = options.stageMajor
+    ? (stage: string, agent: AgentStandIn): Directive | undefined => {
+      const then = beforeWaves?.(stage, agent);
+      const walk = (mode: string, words: string) => {
+        agent.person.say(words);
+        const set = agent.host.bash(`bun .claude/tools/aidlc-state.ts set-construction-iteration ${mode}`);
+        if (set.status !== 0) agent.fail(`${mode} was refused: ${set.stderr || set.stdout}`);
+      };
+      if (stage === "units-generation") walk("stage-major", "build it stage by stage: every Unit through each stage before the next");
+      if (stage === "functional-design" && options.thenUnits) walk("unit-major", "now build one Unit at a time");
+      return then;
+    }
+    : afterApproval;
   const policyAtChange: GuardPolicy = options.personSwitchesOff ? "off" : cell.policy;
   const result: CellRun = { cell, change, policyAtChange, composed: options.composed, shipped: options.shipped };
   const composed = options.composed;
@@ -359,12 +437,12 @@ export function runCell(cell: GuardCell, change: GuardChange, options: CellOptio
   try {
     result.run = runScope(composed?.name ?? "classic", {
       // A composed scope carries its own switches; the plan approval axis is still typed.
-      flags: composed ? ["--plan-approval", cell.plan] : options.shipped ? [] : cellFlags(cell),
+      flags: composed ? ["--plan-approval", cell.plan] : options.shipped ? [] : cellFlags(cell, change),
       units: MATRIX_UNITS,
       followRefusals: true,
       fullHost: options.fullHost ?? change === "review-while-plan-waits",
       ...hooks,
-      afterApproval,
+      afterApproval: afterAnyApproval,
       ...(composed
         ? { scopeFile, prepare: (proj: string) => void (composed.install ?? ((p: string) => installComposed(p, composed)))(proj) }
         : {}),
@@ -403,8 +481,9 @@ export function cellProblems(c: CellRun): string[] {
   const run = c.run;
   const { agent } = run;
   const problems: string[] = [];
+  const skip = matrixSkip(c.change);
   const stages = c.composed?.stages ??
-    expectedStages("classic", false).filter((s) => c.shipped || !MATRIX_SKIP.includes(s));
+    expectedStages("classic", false).filter((s) => c.shipped || !skip.includes(s));
   problems.push(...scopeRunProblems(run, { stages, skip: ["switches"] }).filter((p) =>
     // The person reverted Unit 1's code on purpose.
     !(c.change === "revert" && /the code for core is not at the project root/.test(p))));
@@ -446,11 +525,19 @@ export function cellProblems(c: CellRun): string[] {
   const recoveries = agent.asked.filter((a) => a.what === "guard recovery").map((a) => `a guard-recovery question at ${a.stage}`);
   const refusals = agent.refusalsMet.map((r) => r.said.split("\n")[0].slice(0, 300));
   const repairs = [...agent.repaired].map((r) => `a fresh review before ${r.split(" ")[0]}'s checkpoint`);
-  if (c.policyAtChange === "off") {
-    for (const r of refusals) problems.push(`Guard Policy off, yet the engine refused: ${r}`);
-    for (const r of repairs) problems.push(`Guard Policy off, yet it asked for ${r}`);
-    for (const a of [...again, ...recoveries]) problems.push(`Guard Policy off, yet the person was asked again: ${a}`);
-  } else if (again.length + recoveries.length > 1) {
+  // A changed document never stops the work under relaxed either. A deleted
+  // one has to be made again: that one stop is the only one it may cost.
+  const offLike = c.policyAtChange === "off" || (DOCUMENT_CHANGES.has(c.change) && c.policyAtChange === "relaxed");
+  const remake = c.change === "doc-delete" ? 1 : 0;
+  if (c.change === "doc-delete" && c.run && !existsSync(join(c.run.proj, docOf(c.run.agent)))) {
+    problems.push(`${MATRIX_UNITS[0]}'s functional design was never made again`);
+  }
+  if (offLike) {
+    const label = `Guard Policy ${c.policyAtChange}`;
+    for (const r of refusals.slice(remake)) problems.push(`${label}, yet the engine refused: ${r}`);
+    for (const r of repairs) problems.push(`${label}, yet it asked for ${r}`);
+    for (const a of [...again, ...recoveries].slice(remake)) problems.push(`${label}, yet the person was asked again: ${a}`);
+  } else if (again.length + recoveries.length > 1 + remake) {
     problems.push(`the person was asked ${again.length + recoveries.length} times about one change: ${[...again, ...recoveries].join("; ")}`);
   }
   return problems;

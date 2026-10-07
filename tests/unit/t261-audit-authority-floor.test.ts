@@ -66,7 +66,7 @@ import {
   seededStateFile,
   seedStateFile,
 } from "../harness/fixtures.ts";
-import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
+import { appendAuditEntry, CLI_PROTECTED_EVENT_TYPES } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import {
   findAllEvents,
   humanActedSinceGate,
@@ -205,6 +205,15 @@ describe("t261 public audit CLI refuses authority-bearing receipts", () => {
     expect(readAllAuditShards(proj)).not.toContain("STAGE_COMPLETED");
     expect(readAllAuditShards(proj)).not.toContain("HUMAN_TURN");
     expect(readAllAuditShards(proj)).not.toContain("QUESTION_UNANSWERED");
+  });
+
+  test("the audit format guide names exactly the events the CLI refuses", () => {
+    // A harness engineer reads this paragraph to learn what the public append refuses.
+    const guide = readFileSync(join(AIDLC_SRC, "knowledge", "aidlc-shared", "audit-format.md"), "utf-8");
+    const paragraph = guide.split("\n").find((line) => line.startsWith("The public `aidlc-audit.ts append` CLI is a diagnostic escape hatch"));
+    expect(paragraph, "the escape-hatch paragraph is gone").toBeDefined();
+    const named = [...(paragraph ?? "").matchAll(/`([A-Z][A-Z0-9_]+)`/g)].map((m) => m[1]).filter((name) => name !== "CLI_PROTECTED_EVENT_TYPES");
+    expect([...named].sort()).toEqual([...CLI_PROTECTED_EVENT_TYPES].sort());
   });
 
   test("append-batch refuses a protected event smuggled among diagnostics", () => {

@@ -209,6 +209,7 @@ import {
   writeStateFile,
   writeUnitScopeStamp,
   writeFileAtomic,
+  answerModeStageStartedFields,
 } from "./aidlc-lib.js";
 import { memoryDirFor } from "./aidlc-graph.ts";
 import { inspectRequiredArtifactInstances } from "./aidlc-artifact-resolution.ts";
@@ -543,7 +544,7 @@ function auditTailHasFields(
 //   3. at least one HUMAN_TURN after the anchor (the human responded at the
 //      gate), AND
 //   4. at least one ARTIFACT_CREATED/ARTIFACT_UPDATED to a declared produces file
-//      AFTER the FIRST post-anchor HUMAN_TURN.
+//      AFTER the FIRST post-anchor HUMAN_TURN and BEFORE the LAST one.
 //
 // The HUMAN_TURN pivot in conjunct 4 is load-bearing: the reviewer appends its
 // `## Review` section to the stage's review_artifact BEFORE the human responds at the
@@ -551,6 +552,12 @@ function auditTailHasFields(
 // Anchoring the artifact window at the first post-anchor human turn (not the gate
 // open) excludes that legitimate pre-response append, so the reviewer's edit is
 // never mistaken for a human-driven revision.
+//
+// The LAST post-anchor HUMAN_TURN closes the window: it is the turn this approval
+// reports. A write after it is the conductor carrying out the approval (noting it
+// in the stage's decision log, for example), not a revision, so a lone post-gate
+// human turn never backfills a rejection the person did not give. Only a write a
+// later human turn followed (changes asked for, revised, then approved) counts.
 //
 // When the anchor is the STAGE_STARTED fallback (no organic gate row for this
 // run), one extra conjunct applies: a produces-file write must ALSO exist
@@ -639,28 +646,30 @@ function unrecordedRevisionSinceGateOpen(
   // evidence the human was reacting to produced work rather than coaching a
   // stage that had produced nothing yet.
   let firstHuman = -1;
+  let lastHuman = -1;
   let wroteBeforeHuman = false;
   for (let i = anchor + 1; i < events.length; i++) {
     const e = events[i];
     if (e.event === "GATE_REJECTED" && e.stage === stage.slug) {
       return false;
     }
-    if (firstHuman === -1) {
-      if (e.event === "HUMAN_TURN") {
-        firstHuman = i;
-      } else if (
-        (e.event === "ARTIFACT_CREATED" || e.event === "ARTIFACT_UPDATED") &&
-        e.file !== null &&
-        producesArtifactFile(stage, e.file, recordedRepos)
-      ) {
-        wroteBeforeHuman = true;
-      }
+    if (e.event === "HUMAN_TURN") {
+      if (firstHuman === -1) firstHuman = i;
+      lastHuman = i;
+    } else if (
+      firstHuman === -1 &&
+      (e.event === "ARTIFACT_CREATED" || e.event === "ARTIFACT_UPDATED") &&
+      e.file !== null &&
+      producesArtifactFile(stage, e.file, recordedRepos)
+    ) {
+      wroteBeforeHuman = true;
     }
   }
   if (firstHuman === -1) return false;
   if (!anchorIsGateOpen && !wroteBeforeHuman) return false;
-  // 4. A produces-file artifact write after the first post-anchor human turn.
-  for (let i = firstHuman + 1; i < events.length; i++) {
+  // 4. A produces-file artifact write after the first post-anchor human turn
+  // and before the last one (the approving turn; see the function comment).
+  for (let i = firstHuman + 1; i < lastHuman; i++) {
     const e = events[i];
     if (
       (e.event === "ARTIFACT_CREATED" || e.event === "ARTIFACT_UPDATED") &&
@@ -1852,6 +1861,7 @@ function handleRefreshUnitProgress(
         emitAudit(pd, "STAGE_STARTED", {
           Stage: started,
           Agent: next?.lead_agent ?? "",
+          ...answerModeStageStartedFields(pd),
         });
       }
       if (workflowCompleted && completedFinalStage) {
@@ -5147,6 +5157,7 @@ function handleAdvance(
     emitAudit(pd, "STAGE_STARTED", {
       Stage: nextSlug,
       Agent: nextStage.lead_agent,
+      ...answerModeStageStartedFields(pd),
       ...(nextStage.workspace_requires
         ? sourceBaselineAuditFields(pd, nextSlug)
         : {}),
@@ -6296,8 +6307,10 @@ function handleApprove(args: string[]): void {
   // Gate-revision backstop: reconcile a revision the conductor performed at an
   // open gate but never recorded (it skipped the `reject` verb). When the ledger
   // proves the human revised this stage's artifact at the open gate with no
-  // recorded reject (unrecordedRevisionSinceGateOpen), backfill the missing
-  // GATE_REJECTED + STAGE_REVISING pair (tagged Recovered) and persist [R].
+  // recorded reject (unrecordedRevisionSinceGateOpen; a write after the
+  // person's approving turn carries out the approval and does not count),
+  // backfill the missing GATE_REJECTED + STAGE_REVISING pair (tagged Recovered)
+  // and persist [R].
   // A reviewer-bearing stage must then obtain a fresh post-rejection receipt
   // before this command may emit the recovered gate re-entry. When that guard
   // refuses, the durable [R] state routes the conductor through normal `revise`
@@ -7260,6 +7273,7 @@ function handleSkip(args: string[]): void {
         emitAudit(pd, "STAGE_STARTED", {
           Stage: nextStage.slug,
           Agent: nextStage.lead_agent,
+          ...answerModeStageStartedFields(pd),
           ...(nextStage.workspace_requires
             ? sourceBaselineAuditFields(pd, nextStage.slug)
             : {}),

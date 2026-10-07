@@ -473,6 +473,9 @@ aidlc config models --reset --project --yes
 aidlc config models --session-model claude-opus-4.8   # Kiro CLI: your personal session model
 ```
 
+A change ends with what changed, its undo command and who picks it up (plus
+any setup step still outstanding); `--json` and `--quiet` output are unchanged.
+
 `--show --json` prints every agent's effective model, effort, and provenance.
 `--check` is the CI inverse and exits non-zero when the recorded policy is not
 fully reflected in the harness surfaces.
@@ -547,10 +550,13 @@ Kiro settings
 ([Session model and effort](harnesses/kiro-cli.md#session-model-and-effort));
 explicit group dials have no Kiro surface, and a per-agent model exception
 carries its effort through the project's `chat.modelDefaults`, which then
-replaces your personal effort map in that project. Kiro IDE, Cursor, and GitHub Copilot cannot portably pin
-agent models or effort, so setup records no preset there; a policy you record
-anyway is kept, and the command reports the unsupported fields instead of
-writing inert keys. On those three, every agent uses the session's model and
+replaces your personal effort map in that project. An effort set on Kiro CLI
+without a model is kept for other tools, and the command says so in one line.
+Kiro IDE, Cursor, and GitHub Copilot cannot portably pin
+agent models or effort, so setup records no preset there. A model or effort you
+set anyway is kept for teammates on tools that apply it, writes no inert keys,
+and the command says in one line that this tool uses the model you choose in its
+own model picker. On those three, every agent uses the session's model and
 effort: the setup check and `aidlc doctor` say so instead of asking for a
 policy, and doctor warns only about an agent model recorded for that harness
 by name.
@@ -848,6 +854,9 @@ The recordable bypass set includes the documented recovery and ceremony switches
 
 The wizard never offers bypasses. They require an explicit `--bypass <name>`;
 `--show` surfaces every enabled bypass and its guard-weakening consequence.
+Recording or clearing one prints only what changed with its undo command and
+the line for the check it switched (plus any setup step still outstanding);
+`--json` and `--quiet` output are unchanged.
 Every bypass except usage tracking, sensors, and learnings takes a check away
 from the person, so while one is on AI-DLC says so in one line: on the next
 step, at the start of every chat (not on opencode, which shows no session-start
@@ -966,7 +975,9 @@ release. Each prints what changed and, where one command
 puts the earlier value back, that command. A model or flag change also names
 the open workflows that pick it up: a bypass, hook debug, the sensor timeout,
 and question retention apply right away, with no restart; models and swarm
-apply from the next step (a step already running keeps what it started with);
+apply from the next step (a step already running keeps what it started with),
+except that on Kiro CLI a model or effort change applies from your next Kiro CLI
+session, since a running one keeps what it started with;
 a default scope applies to new work only, and a saved model profile changes
 nothing until `--from` loads it. The runtime, providers, and trust answers
 print no workflow line.
@@ -1738,11 +1749,17 @@ Uninstall uses an explicit list of installer-owned files and checks their
 contents before deleting them. It does not recursively remove installation or
 version directories. Directories are removed only when empty; project trees,
 unlisted files, changed files, and linked targets are preserved. The result
-reports unowned or changed paths kept for review.
+lists, once, each path it left because AI-DLC did not install it or it changed
+after install.
 
 New installations record a full per-version `installed-files.json` inventory,
 whose hash is stored in `version.json`. Older installations use their verified
-runtime inventory where available; files without ownership evidence are kept.
+runtime inventory where available, plus the plugin folders their release
+unpacked beside it, which carry the marker the release build wrote; other files
+without ownership evidence are kept. A shell completion counts as AI-DLC's when
+it is exactly what an AI-DLC release renders, so the completions an earlier
+release wrote while it updated to this one are removed, and an edited one is
+kept.
 Without `--purge`, machine config, update cache, pin registrations, and the
 default harness are also preserved. `--purge` selects those known machine
 records for removal; it does not broaden deletion to unrelated files.
@@ -1759,7 +1776,8 @@ project roots, as well as root-owned, package-manager-owned, or
 mixed-ownership commands. On Windows, a bound file list and expected checksums
 are recorded before cleanup is scheduled. The worker rechecks paths and hashes,
 refuses reparse points, and deletes files individually after the running command
-exits. An interrupted continuation can resume only with its validated file plan.
+exits; uninstall is done when the `aidlc` command is no longer found. An
+interrupted continuation can resume only with its validated file plan.
 Older journals without such a plan are refused and left for inspection. See
 [Transactions and Recovery](#transactions-and-recovery) for how a failed
 cleanup is reported and retried.

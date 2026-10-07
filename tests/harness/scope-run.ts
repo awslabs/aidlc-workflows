@@ -933,6 +933,10 @@ export class AgentStandIn {
       this.must("orchestrate", "report", "--skeleton-stance", "scope-dependent");
       return;
     }
+    if (d.wave) {
+      this.wave(d);
+      return;
+    }
     const plan = d.plan_approval as { status?: string } | undefined;
     if (stage === "code-generation" && plan?.status && plan.status !== "approved") {
       this.writeCodePlan(d);
@@ -957,8 +961,9 @@ export class AgentStandIn {
           "--field", "Drafts: team-practices.md, discovered-rules.md");
       }
     };
-    if (d.gate_only === true) {
-      // The gate is re-presented: the body and its review are settled.
+    if (d.gate_only === true || (d.gate === true && d.build_settled === true)) {
+      // The gate is re-presented, or presented on the last Unit once every
+      // Unit is built (stage by stage): the body and its review are settled.
       if ((d.protocol_modules as string[] | undefined)?.includes("learnings")) this.learnings(d);
       this.gate(d);
       return;
@@ -982,6 +987,40 @@ export class AgentStandIn {
       return;
     }
     this.gate(d);
+  }
+
+  /**
+   * A stage-major wave (the construction protocol's per-unit batch waves):
+   * each entry is built, reviewed at its iteration and completed with
+   * `unit complete --wave`; then the loop runs `next` again, with no report.
+   */
+  wave(d: Directive): void {
+    const stage = String(d.stage);
+    this.worked.push(d);
+    const entries = (d.wave as { entries: Array<Record<string, unknown>> }).entries;
+    for (const entry of entries) {
+      const unit = String(entry.unit);
+      const produces = [...new Set([
+        ...((entry.required_produces as string[] | undefined) ?? []),
+        ...((entry.produces as string[] | undefined) ?? []),
+      ])];
+      // What this entry wrote, for the matrix's changes: an entry reads as the Unit's own body.
+      this.worked.push({ ...d, unit, produces, wave: undefined });
+      if (entry.build_required === true) {
+        // The builder runs the Unit's own question flow, then writes its outputs.
+        const questions = produces.find((p) => p.endsWith(`${stage}-questions.md`));
+        if (questions) this.askQuestions({ ...d, unit, wave: undefined }, questions);
+        for (const p of produces) {
+          if (p === questions || existsSync(join(this.host.proj, p))) continue;
+          this.host.write(p, unitArtifactText(p, this.units) ?? artifactText(p, stage));
+        }
+      }
+      const reviewState = String(entry.review_state ?? "not-required");
+      if (typeof d.reviewer === "string" && ["outstanding", "recovery-required"].includes(reviewState)) {
+        this.reviewPass(stage, unit, d.reviewer, Number(entry.review_iteration ?? 1));
+      }
+      if (entry.completion_required === true) this.must("state", "unit", "complete", "--wave", "--stage", stage, "--unit", unit);
+    }
   }
 
   /** A Unit or skeleton checkpoint: the person approves the verified, completed Unit. */
@@ -1113,6 +1152,10 @@ export class AgentStandIn {
   askQuestions(d: Directive, questions: string): void {
     const stage = String(d.stage);
     const unit = typeof d.unit === "string" ? ["--unit", d.unit] : [];
+    // A stage done again over answers already on file (its output was lost)
+    // does not ask them again: the answers stand.
+    const path = join(this.host.proj, questions);
+    if (existsSync(path) && /^\[Answer\]:[ \t]*\S/m.test(readFileSync(path, "utf-8"))) return;
     this.host.write(questions, questionsText(stage, ""));
     this.must("log", "decision", "--stage", stage, "--decision", "How would you like to answer the questions?",
       "--options", "Guide me,I'll edit the file,Chat", ...unit);
@@ -1141,7 +1184,9 @@ export class AgentStandIn {
   review(d: Directive): void {
     const stage = String(d.stage);
     const unit = typeof d.unit === "string" ? d.unit : null;
-    this.reviewPass(stage, unit, String(d.reviewer), 1);
+    // A stage done again is reviewed at the next pass.
+    const last = this.reviews.get(`${stage} ${unit ?? ""}`);
+    this.reviewPass(stage, unit, String(d.reviewer), last ? last.iteration + 1 : 1);
     this.hooks.afterReview?.(stage, unit, this);
   }
 

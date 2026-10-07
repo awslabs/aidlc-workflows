@@ -602,8 +602,13 @@ describe("t295 flags section", () => {
 
     const recorded = flags("--bypass", name, "--plan-token", planToken, "--yes");
     expect(recorded.status, recorded.stdout + recorded.stderr).toBe(0);
-    expect(recorded.stdout).toContain(`configured flags settings for ${project}`);
-    // It says what happened and how to undo it.
+    // It says what happened and how to undo it, first, with no flags summary,
+    // warning or closing "configured" line around it.
+    expect(recorded.stdout.startsWith(`Recorded ${name} in aidlc.settings.local.json. To undo: `), recorded.stdout)
+      .toBe(true);
+    for (const extra of ["Flags        ", "weakens a deterministic guard", "configured flags settings for"]) {
+      expect(recorded.stdout).not.toContain(extra);
+    }
     expect(recorded.stdout).toContain(`Recorded ${name} in aidlc.settings.local.json. To undo: `);
     expect(recorded.stdout).toContain(`config flags --clear-bypass ${name} --local --yes`);
     // A guard reads the switch at every check, so the running step gets it too.
@@ -771,7 +776,9 @@ describe("t295 flags section", () => {
     expect(flags("--project", "--bypass", "AIDLC_DISABLE_LEARNINGS", "--yes").status).toBe(0);
     const cleared = flags("--clear-bypass", "AIDLC_DISABLE_LEARNINGS");
     expect(cleared.status, cleared.stdout + cleared.stderr).toBe(0);
-    expect(cleared.stdout).toContain("Cleared AIDLC_DISABLE_LEARNINGS from aidlc.settings.json.");
+    expect(cleared.stdout.startsWith("Cleared AIDLC_DISABLE_LEARNINGS from aidlc.settings.json."), cleared.stdout)
+      .toBe(true);
+    expect(cleared.stdout).not.toContain("configured flags settings for");
     expect(bypasses("aidlc.settings.json")).toBeUndefined();
     expect(resolvedFlags(project)?.bypasses).toEqual(["AIDLC_DISABLE_SENSORS"]);
     // Recorded in both files, a clear with no layer clears both; two names spread

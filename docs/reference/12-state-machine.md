@@ -510,9 +510,10 @@ must repeat the same switch.
 **Gate-revision backstop.** If the conductor revises an artifact at an open
 gate without first reporting rejection, the `approved` report reconciles the
 missing `GATE_REJECTED` + `STAGE_REVISING` pair before completion when audit
-evidence proves a post-gate human turn followed by an artifact write. The
-backfilled rows carry `Recovered: true`; reviewer writes before the human turn
-do not count. Reviewer-bearing stages persist `[R]` after that recovered
+evidence proves an artifact write after a post-gate human turn and before the
+person's later, approving turn. The backfilled rows carry `Recovered: true`;
+reviewer writes before the human turn do not count, and a write after the
+approving turn carries out the approval, so it is not a revision. Reviewer-bearing stages persist `[R]` after that recovered
 rejection and require a fresh review plus the normal `revised` report before
 the gate can reopen. Bypass with `AIDLC_SKIP_REVISION_BACKSTOP=1`.
 

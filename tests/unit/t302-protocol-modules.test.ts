@@ -373,3 +373,22 @@ describe("t302 conditional protocol modules", () => {
     ]);
   });
 });
+
+// A multi-select with nothing ticked read as unanswered: Claude Code's review
+// screen warned "You have not answered all questions" when the person kept no
+// note (a live run). Keeping none is a choice of its own, first in the list.
+describe("t302 learnings: keeping no note is a pick", () => {
+  const learnings = readFileSync(
+    join(import.meta.dir, "../../core/aidlc-common/protocols/stage-protocol-learnings.md"),
+    "utf8",
+  );
+
+  test("the notes question starts with Keep none of these", () => {
+    expect(learnings).toContain(
+      "Put **Keep none of these** first in every call of this question, so keeping no note is a pick of its own " +
+        "(some tools read a multi-select with nothing ticked as unanswered); picked alone it keeps no note, and " +
+        "beside other picks the notes picked are kept.",
+    );
+    expect(learnings).not.toMatch(/[Ll]eave (them )?all unticked/);
+  });
+});

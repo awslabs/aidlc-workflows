@@ -182,7 +182,7 @@ question MUST use unordered bullets, never numbered items.
 ### Critical Compliance Checklist (most commonly missed steps)
 Before and during EVERY stage, verify:
 1. [ ] **Use the engine for every lifecycle transition** — before the prompt, `aidlc-orchestrate.ts report --stage <slug> --result awaiting-approval`; after the response, report `approved` or `rejected`; after revision work, report `revised`. A blocking-sensor refusal is a separate logged non-gate decision: offer Fix findings / Override blocking sensors, and only retry with the override after the exact human-backed answer receipt exists. Autonomous mode never offers or accepts that override. When the active stage's own condition proves it does not apply, report `skipped --reason "<reason>"`. Never call lifecycle verbs on `aidlc-state.ts` directly. The engine emits the correct audit events and routes only on approval, completion, or a justified skip. Do NOT call `aidlc-audit.ts append` separately. (§2)
-2. [ ] **Log non-gate questions via `aidlc-log.ts`** — before presenting a structured question that is not an approval gate: `{{INVOKE}} engine log decision --stage <slug> --decision "<summary>" --options "<csv>"`. After response: `{{INVOKE}} engine log answer --stage <slug> --details '<exact choice>'`. Approval choices go only through `aidlc-orchestrate.ts report`. (§2, §3)
+2. [ ] **Log non-gate questions via `aidlc-log.ts`**: before presenting a structured question that is not an approval gate: `{{INVOKE}} engine log decision --stage <slug> --decision "<summary>" --options "<csv>"`. After response: `{{INVOKE}} engine log answer --stage <slug> --details '<exact choice>'`. Log every question a menu shows before you show the menu, and put all of one reply's answers in a single `log answer` (`--details 'Q1: <choice>; Q2: <choice>'`), even when the reply came before the log. Approval choices go only through `aidlc-orchestrate.ts report`. (§2, §3)
 3. [ ] **Record the choice the person made**: read their reply and record their choice; the human-turn hook keeps their exact words with it. Never choose for them unless they leave the choice to you (§3, `--on-instruction`), and never paraphrase their words in an answer or note. (§1, §2, §3)
 4. [ ] **Task transitions + state sync** — Mark previous task `completed`, then `TaskUpdate({ ..., status: "in_progress", activeForm: "Running [Stage] [slug]" })`. The `[slug]` suffix triggers the PostToolUse hook that syncs the state file. Only when `TaskCreate`/`TaskUpdate`, or the plan or todo tool your skill maps them to, is in your tool list; otherwise skip task transitions silently. `aidlc-orchestrate.ts report --stage <slug> --result approved --user-input '<exact choice>'` auto-advances to the next in-scope stage (or completes the workflow on the final stage) — do NOT call `advance` separately after approval. (§4)
 5. [ ] **Stage ritual is ATOMIC** — once a stage starts, EVERY step in its protocol fires: questions → artifact → reviewer (if declared) → learnings (only when the directive lists the `learnings` protocol module) → gate. No step is skippable based on inferred user intent. "Skip to stage X" means skip INTERMEDIATE stages, NOT shortcut the TARGET stage's ritual. If a user jumps forward from a stage at its gate, the current stage's learnings ritual (§13) MUST fire before the jump executes only when the directive lists the `learnings` protocol module. EXCEPTION: the Build-and-Test failure loop-back in the construction protocol module (`aidlc-common/protocols/stage-protocol-construction.md`) jumps back from a deliberately in-flight failed stage; its §13 learnings ritual defers to the eventual passing run.
@@ -484,7 +484,32 @@ Stage files list **topic areas and example questions** — they are guidance, no
 - **Give each question one line of context** — why it is being asked or what depends on the answer — when the reason is not obvious from the prompt itself. "We found two conflicting retention values in the requirements (30 days vs 90 days); which governs?" beats "What is the retention period?".
 - **Prefer a concrete phrasing over an abstract one.** Ask about the actual decision in the user's domain terms, not the framework's internal vocabulary. If you would need to explain the question when asked to rephrase it, phrase it that clear way the first time.
 
-**Step 2: Offer the user a choice of interaction mode:**
+**Step 2: Use the person's earlier answer mode, or ask for it.**
+
+The person picks how to answer once per piece of work, at the first stage with
+questions; later stages reuse that choice. The run-stage directive's
+`answer_mode` carries it:
+
+- `answer_mode.ask === false`: do not ask the mode question. Say
+  `answer_mode.notice` as one line, then go straight to the step for
+  `answer_mode.mode` (`guide` is Step 3a, `file` is Step 3b, `chat` is Step 3c).
+  Log nothing for the mode: the stage's `STAGE_STARTED` row already records it.
+- `answer_mode.ask === true` (or no `answer_mode` field): offer the choice
+  below. After the person answers, say `answer_mode.notice` as one line.
+
+Record the mode the person chose as its option label (`Guide me`, `I'll edit
+the file`, or `Chat`): the one they picked, or the one you understood when they
+answered in their own words. The engine reuses only a recorded label and hands
+back an answer that names none, so the person is never asked again because of
+how they worded it. If their reply
+leaves the mode unclear, ask one short follow-up instead of guessing.
+
+When the person asks for a different way at any stage ("let me just edit the
+file"), switch for this stage (see "Users can switch modes mid-stage" below) and
+record the new choice as below, with `--on-instruction '<their words>'`, so the
+later stages use it too.
+
+Offer the user a choice of interaction mode:
 ```question
 prompt: "I've created [N] questions at `[file path]`. How would you like to answer them?"
 header: Questions
@@ -503,14 +528,15 @@ numbered lines: `1. Guide me`, `2. I'll edit the file`, `3. Chat`, and the final
 `4. Other`. Mentioning Other in a nearby tip or sentence does not satisfy the
 structured-question contract.
 
-Record the mode question and the user's mode choice through the log tool, the same pair every non-gate question uses (section 2 checklist item 2): `{{INVOKE}} engine log decision --stage <slug> --decision "How would you like to answer the questions?" --options "Guide me,I'll edit the file,Chat"` before presenting it, then `{{INVOKE}} engine log answer --stage <slug> --details '<exact choice>'` after the response. When their request already said how they want to answer ("guide me through it"), do not ask it again: log the question as usual, record that choice with `--on-instruction '<their words>'` (in single quotes, as **Their words on a command line** above says), and say **SAY:** "You asked to be guided, so I'll ask the questions here. Say if you'd rather edit the file or chat." The tool stamps the row. Never write the audit shard yourself.
+Record the mode question and the user's mode choice through the log tool, the same pair every non-gate question uses (section 2 checklist item 2): `{{INVOKE}} engine log decision --stage <slug> --decision "How would you like to answer the questions?" --options "Guide me,I'll edit the file,Chat"` before presenting it, then `{{INVOKE}} engine log answer --stage <slug> --details '<the option label>'` after the response. When their request already said how they want to answer ("guide me through it"), do not ask it again: log the question as usual, record that choice with `--on-instruction '<their words>'` (in single quotes, as **Their words on a command line** above says), and say **SAY:** "You asked to be guided, so I'll ask the questions here. Say if you'd rather edit the file or chat." The tool stamps the row. Never write the audit shard yourself.
 
 **Step 3a: If "Guide me" (interactive mode):**
 - Present questions as structured questions in batches (batching limits are harness-specific — see the question-rendering annex)
+- Where the tool shows questions as a numbered list, number every option and never ask for a file letter: a batch ends with "Reply with each question's number and the number of your choice (for example Q1: 2, Q2: 1), or just tell me." and a single question with "Reply with a number (or just tell me)."
 - For questions with 5+ options (single-select or multi-select): present ALL answer options, splitting across multiple structured questions if the harness's per-question option limit requires it (e.g., options A-D first, then options E+ in a follow-up). The user must see every option to make an informed choice. The file retains the full option set as the authoritative record.
 - Every structured question offers an "Other" escape (built into the harness UI or rendered as an explicit option per the annex). In interactive mode, when the user selects "Other" and answers in their own words, those words are their answer for that question. When they select it to ask about the question or talk it through, engage in conversation, then record what they settle on before continuing the batch. Explicitly tell the user this before the first batch, naming the escape the way their tool labels it (Claude Code's picker: "Type something"; Codex's question tool: "None of the above"; a numbered list: "Other"; the question-rendering annex gives it too): "Pick "[the escape's label]" on any question to answer in your own words or talk it through."
+- Before you show each batch, record it, and record its answers once they come, through the same log pair: `{{INVOKE}} engine log decision --stage <slug> --decision "<question numbers presented>" --options "<csv of the options shown>"` before the batch and `{{INVOKE}} engine log answer --stage <slug> --details '<the exact selections>'` after it. The tool stamps every row with its own fresh timestamp; there is no `date -u` call and no hand-written entry.
 - After each batch of answers, IMMEDIATELY write the answers back to the questions file (update each `[Answer]:` tag)
-- Record each batch through the same log pair: `{{INVOKE}} engine log decision --stage <slug> --decision "<question numbers presented>" --options "<csv of the options shown>"` before the batch and `{{INVOKE}} engine log answer --stage <slug> --details '<the exact selections>'` after it. The tool stamps every row with its own fresh timestamp; there is no `date -u` call and no hand-written entry.
 - Continue until all questions are answered
 - When the `run-stage` directive carries `kept_replies`, the person already replied to these questions in a chat that ended before their answers were written down: do what its `note` says, recording each answer they gave before asking anything, and never ask them again what they already answered
 - **Consolidated summary before generation**: The checkpoint below applies only when `directive.ceremony.summary_confirmation === "on"`. When it is `"off"`, generate directly from the answers with no confirmation prompt, confirmation entry, or receipt. With it on, after all questions have been
@@ -726,7 +752,9 @@ This pair is also a deterministic human-wait signal for the forwarding-loop Stop
 hook, including learning prompts that do not add a blank tag to the stage
 questions file. Once `decision` succeeds, render that question and END THE TURN.
 If you showed the question before recording it, the person already has it: end
-the turn without showing it again. Never interpret hook feedback, a continuation reminder, or silence as its
+the turn without showing it again.
+If they already replied, log the question now, then put all of that reply's answers in a single `log answer`: a second `log answer` for one reply is refused.
+Never interpret hook feedback, a continuation reminder, or silence as its
 answer; only the human's next interaction may be followed by `answer`.
 
 ### Stage progress notation
@@ -1151,7 +1179,7 @@ When the directive carries `artifact_reuse` (the person asked to redo this Unit'
 When a stage detects existing output artifacts in its artifact directory:
 
 1. List the existing artifacts found
-2. When the person's request already chose (they asked to redo the current stage on re-entry, or said "redo it from scratch", "keep what is there", or what to change in it), record that choice below and go on. Otherwise present a 3-option structured question:
+2. When the person's request already chose (they asked to redo the current stage on re-entry, or said "redo it from scratch", "keep what is there", or what to change in it), record that choice below and go on. Otherwise present a 3-option structured question, the option you recommend first, its label ending in "(Recommended)" and its description saying why (for example Keep when the artifacts are complete and nothing they were built from changed, Redo from scratch when one is missing and nothing else holds what it said):
    - **Keep** — Accept existing artifacts as-is, skip this stage's generation steps, proceed to approval gate
    - **Modify** — Display existing artifacts as starting context, then walk through the stage's question flow to identify what should change. Update artifacts in-place.
    - **Redo from scratch** — Ignore existing artifacts entirely and execute the stage fresh. Existing files are overwritten.

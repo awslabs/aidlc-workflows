@@ -135,6 +135,7 @@ const manifest: HarnessManifest = {
     // opencode.json skills.paths glob, like every generated runner).
     { src: "skills/aidlc/SKILL.md", dst: "skills/aidlc/SKILL.md" },
     { src: "skills/aidlc/question-rendering.md", dst: "skills/aidlc/question-rendering.md" },
+    { src: "skills/aidlc/composer.md", dst: "skills/aidlc/composer.md" },
     // Project config at the dist ROOT (opencode reads ./opencode.json):
     // skills.paths (skill discovery), instructions glob (the method include),
     // and the native aidlc command permissions.

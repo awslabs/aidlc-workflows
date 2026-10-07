@@ -212,6 +212,8 @@ export type AnswerSpec =
  *                    questions not matched fall back to option 1.
  *   - sequence     — answer the Nth AskUserQuestion menu (across the whole run)
  *                    with the Nth spec; menus past the array fall back to default.
+ *   - pick: a function chooses each question's answer as the person would,
+ *     seeing the whole menu (a live journey's person script).
  *
  * `sequence` indexes per-MENU (one AskUserQuestion tool call), and within a
  * menu each question uses the same spec; for fine per-question control inside
@@ -221,7 +223,9 @@ export type AnswerScript =
   | "default"
   | { kind: "default" }
   | { kind: "byHeader"; map: Record<string, AnswerSpec>; fallback?: AnswerSpec }
-  | { kind: "sequence"; specs: AnswerSpec[]; fallback?: AnswerSpec };
+  | { kind: "sequence"; specs: AnswerSpec[]; fallback?: AnswerSpec }
+  /** The person decides per question, seeing the whole menu; undefined takes option 1. */
+  | { kind: "pick"; pick: (question: AskUserQuestionItem, menu: AskUserQuestionItem[], menuIndex: number) => AnswerSpec | undefined };
 
 const DEFAULT_SPEC: AnswerSpec = { optionIndex: 0 };
 
@@ -274,6 +278,8 @@ function buildAnswers(
       spec = norm.map[key] ?? norm.map[q.question] ?? norm.fallback ?? DEFAULT_SPEC;
     } else if (norm.kind === "sequence") {
       spec = norm.specs[menuIndex] ?? norm.fallback ?? DEFAULT_SPEC;
+    } else if (norm.kind === "pick") {
+      spec = norm.pick(q, questions, menuIndex) ?? DEFAULT_SPEC;
     }
     answers[q.question] = resolveSpec(q, spec);
   }

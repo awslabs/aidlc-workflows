@@ -14,7 +14,7 @@ AI-DLC provides three ways to interact with agents during stages, plus approval 
 
 ## Tri-Mode Question Flow
 
-When a stage gathers your input, the agent presents three interaction modes. You choose which mode works best for the current stage.
+When a stage gathers your input, the agent presents three interaction modes. You choose the one that suits you; later stages reuse that choice (see [Asked Once, Then Reused](#asked-once-then-reused)).
 
 ```
 ▸ Choose interaction mode:
@@ -50,6 +50,20 @@ Freeform conversation with the agent. Best for exploring ideas or when your requ
 ### Switching Modes Mid-Stage
 
 You can switch between modes at any point during a stage. All three modes converge on the questions file as the canonical record of decisions. Switching does not lose progress — answers already captured remain in the file.
+
+### Asked Once, Then Reused
+
+You choose the mode once per piece of work: the first stage with questions asks,
+and later stages reuse your choice without asking again. Each of those stages
+still tells you, in one line, which mode it is using:
+
+```
+Answering the way you chose earlier: Guide me. Say if you'd rather edit the file or chat.
+```
+
+To change it, just say so ("let me edit the file this time"). The agent switches
+and later stages use your new choice. However you word your answer, the agent
+records the mode you meant, so you are not asked again because of the wording.
 
 ---
 

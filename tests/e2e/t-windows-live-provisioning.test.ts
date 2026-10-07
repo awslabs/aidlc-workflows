@@ -147,6 +147,27 @@ public static class NativeOutputFixture {
     if (WaitForSingleObject(process, 0) == 258) Check(TerminateProcess(process, 99), "Owned fixture termination failed.");
     Check(WaitForSingleObject(process, ${NATIVE_PROCESS_CLEANUP_TIMEOUT_MS}) == 0, "Owned fixture retirement unconfirmed.");
   }
+  // An on-access scan can hold a just-written or just-renamed handoff file for
+  // a moment ("being used by another process"). Retry only that, within the
+  // same handshake deadline; any other error still fails at once.
+  private static T InUseRetry<T>(Func<T> operation) {
+    var deadline = DateTime.UtcNow.AddMilliseconds(${NATIVE_PROCESS_IDENTITY_TIMEOUT_MS});
+    while (true) {
+      try { return operation(); }
+      catch (System.IO.IOException error) {
+        int code = System.Runtime.InteropServices.Marshal.GetHRForException(error) & 0xFFFF;
+        if ((code != 32 && code != 33) || DateTime.UtcNow >= deadline) throw;
+        System.Threading.Thread.Sleep(10);
+      }
+    }
+  }
+  private static string ReadHandoff(string path) {
+    return InUseRetry(() => {
+      using (var stream = new System.IO.FileStream(path, System.IO.FileMode.Open, System.IO.FileAccess.Read,
+        System.IO.FileShare.ReadWrite | System.IO.FileShare.Delete))
+      using (var reader = new System.IO.StreamReader(stream)) return reader.ReadToEnd();
+    });
+  }
   private static void AwaitFile(string path) {
     var deadline = DateTime.UtcNow.AddMilliseconds(${NATIVE_PROCESS_IDENTITY_TIMEOUT_MS});
     while (!System.IO.File.Exists(path)) {
@@ -186,7 +207,7 @@ public static class NativeOutputFixture {
       System.IO.File.WriteAllText(path + ".record-writing",
         System.Diagnostics.Process.GetCurrentProcess().Id + "," + Created(GetCurrentProcess()) + "," +
         descendant.Pid + "," + Created(descendant.Process));
-      System.IO.File.Move(path + ".record-writing", path + ".record");
+      InUseRetry(() => { System.IO.File.Move(path + ".record-writing", path + ".record"); return true; });
       AwaitFile(path + ".ack"); handedOff = true;
       AwaitFile(path + ".ready"); // both large output writes have completed
       Check(WaitForSingleObject(descendant.Process, 0) == 258, "Descendant ended before its leader.");
@@ -219,7 +240,7 @@ public static class NativeOutputFixture {
         catch (Exception error) { failure = error; }
       });
       AwaitFile(path + ".record");
-      string[] identity = System.IO.File.ReadAllText(path + ".record").Split(',');
+      string[] identity = ReadHandoff(path + ".record").Split(',');
       Check(identity.Length == 4, "Incomplete fixture identity handoff.");
       leader = Retain(uint.Parse(identity[0]), long.Parse(identity[1]));
       descendant = Retain(uint.Parse(identity[2]), long.Parse(identity[3]));
@@ -258,7 +279,7 @@ public static class NativeOutputFixture {
       if (leader != IntPtr.Zero) CloseHandle(leader);
       CloseHandle(unrelated.Process);
       foreach (string suffix in new string[] { ".record-writing", ".record", ".ack", ".ready", ".control" })
-        if (System.IO.File.Exists(path + suffix)) System.IO.File.Delete(path + suffix);
+        if (System.IO.File.Exists(path + suffix)) InUseRetry(() => { System.IO.File.Delete(path + suffix); return true; });
     }
   }
   private static int CapabilityFixture(string scenario) {

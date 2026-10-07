@@ -149,6 +149,14 @@ Evaluate coverage across six dimensions:
 
 Identify gaps in each dimension.
 
+At Standard and Comprehensive depth, sweep the User scenarios dimension with
+`{{HARNESS_DIR}}/knowledge/aidlc-product-agent/corner-checklist.md`: cross each
+component the request names with the conditions it touches. Carry every
+condition that applies into `requirements.md` as a requirement or acceptance
+criterion, an assumption with its reason, or an out-of-scope item. Ask about a
+corner only when it depends on a fact about the user's world that you cannot
+know.
+
 ### Step 6: Generate Clarifying Questions
 
 PROACTIVE: Always generate clarifying questions unless requirements are exceptionally clear and complete across all six dimensions.

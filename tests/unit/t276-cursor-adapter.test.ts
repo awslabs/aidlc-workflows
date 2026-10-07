@@ -42,6 +42,7 @@ import {
   cpSync,
   existsSync,
   mkdirSync,
+  mkdtempSync,
   readdirSync,
   readFileSync,
   rmSync,
@@ -50,6 +51,7 @@ import {
   utimesSync,
   writeFileSync,
 } from "node:fs";
+import { tmpdir } from "node:os";
 import { basename, dirname, join, relative, sep, win32 } from "node:path";
 import { resolveAction } from "../../dist/cursor/.cursor/tools/aidlc.ts";
 import {
@@ -102,6 +104,25 @@ function setCurrentStage(project: string, stage: string): void {
       `- **Current Stage**: ${stage}`,
     ),
   );
+}
+
+/**
+ * The home `~user` names, as a shell and the adapter read it: the account's
+ * /etc/passwd entry, else HOME. The two differ when HOME is an isolated test
+ * home.
+ */
+function accountHome(user: string | undefined): string | undefined {
+  if (user && process.platform !== "win32") {
+    try {
+      const row = readFileSync("/etc/passwd", "utf-8").split(/\r?\n/)
+        .find((line) => line.split(":", 1)[0] === user);
+      const home = row?.split(":")[5];
+      if (home?.startsWith("/")) return home;
+    } catch {
+      // No account data: a shell falls back to HOME for the current user.
+    }
+  }
+  return process.env.HOME;
 }
 
 /** A workspace-shell project with the shipped .cursor engine installed. */
@@ -3792,7 +3813,7 @@ if (import.meta.main) {
       expectAllowJson(safeOld, safeOldCommand);
 
       const username = process.env.USER ?? process.env.LOGNAME;
-      const actualHome = process.env.HOME;
+      const actualHome = accountHome(username);
       expect(username).toBeTruthy();
       expect(actualHome).toBeTruthy();
       const namedAlias = join(
@@ -3832,6 +3853,22 @@ if (import.meta.main) {
       );
       expectAllowJson(safeNamedRemoval, namedSafe);
     }
+  });
+
+  // A tab or harness can run the suite with HOME set to an isolated home, which
+  // is not where `~user` points; case 33 must hold there too.
+  test("the home-alias case holds when HOME is not the account's home", () => {
+    if (process.platform === "win32") return;
+    const isolatedHome = mkdtempSync(join(tmpdir(), "aidlc-t276-home-"));
+    scratch.push(isolatedHome);
+    const run = spawnSync(process.execPath, [
+      "test", join(import.meta.dir, basename(import.meta.path)), "-t", "33: POSIX and PowerShell home aliases",
+    ], {
+      cwd: REPO_ROOT, encoding: "utf-8", timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+      env: { ...process.env, HOME: isolatedHome },
+    });
+    expect(run.status, `${run.stdout}${run.stderr}`).toBe(0);
+    expect(`${run.stdout}${run.stderr}`).toContain("1 pass");
   });
 
   test("34: shell-internal directory changes rebase later path operands", () => {

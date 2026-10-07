@@ -2144,7 +2144,9 @@ sets the plan file's task markers back to `[ ]`, touching no other byte and
 leaving the fingerprint unchanged, so a later pick-up counts only that build's
 ticks; a resume, whose receipt is already at `generation`, and a swarm batch
 clear nothing. Missing artifacts or malformed Testing Contract JSON still require
-repair before execution, not an automatic new approval ceremony. The tool is
+repair before execution, not an automatic new approval ceremony. The brief
+also names the plan file, which the worker ticks as it finishes each step and
+otherwise leaves alone. The tool is
 the only sanctioned source of a worker brief; the plan's excluded review
 appendix is never work to execute. Omitting `--unit` (or
 passing `--stage-level`) selects zero-Unit `construction/code-generation/`
@@ -2184,6 +2186,8 @@ The tool-as-actor half of the stage-protocol §13 learning ritual. `surface` rea
 |------------|---------|-------|
 | `surface --slug <stage-slug>` | Read-only. Partition `memory.md` entries into keep-candidates (Interpretations / Deviations / Tradeoffs) and parked open questions; print a structured JSON candidate set. The slug is the stage that just ran: the Current Stage, or a stage of the Construction checkpoint now at its approval (ready, not yet approved), which covers every stage its Unit walked while Current Stage waits on the first one, or a stage the one late approval names (`approve_together`: unit-major with Unit checkpoints off) | - |
 | `persist --slug <stage-slug> --selections-json <path>` | Write each confirmed learning as a dated practice (default scope project) to the `project.md` / `team.md` memory file in the space bound when `surface` ran, with audit and locking pinned to that same surface-time space/intent; for a Sensor-binding learning, scaffold a project-tier manifest and append its id to the originating stage's `sensors:` frontmatter — both writes inside one `withAuditLock` | `RULE_LEARNED`, `SENSOR_PROPOSED` |
+
+At a Unit's Construction checkpoint, `surface` lists that Unit's entries (a line that carries `[unit <name>]` right after its timestamp) and the entries that name no Unit, so a later Unit's checkpoint does not offer an earlier Unit's notes again; a stage's own approval gate lists the whole diary.
 
 Each entry in the selections file's `selections[]` names its candidate with `candidate_id`, and `id` — the spelling `surface` prints for each candidate — is accepted as an alias; the selection schema is stated in full in the stage protocol's §13 step 5.
 

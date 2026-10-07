@@ -355,6 +355,7 @@ An MCP server appearing in the session is a function of `.mcp.json` plus availab
 | Settings | `.claude/settings.json` | Every conversation | Pre-approve Claude Code tools |
 | Rules | `aidlc/spaces/<active-space>/memory/*.md` (via `.claude/rules/aidlc.md` @-stub) | Every conversation | Minimal guardrails; self-learning corrections |
 | Skill | `.claude/skills/aidlc/SKILL.md` | On `/aidlc` invocation | Orchestrator: session, scope, stage graph, delegation |
+| Skill annex | `.claude/skills/aidlc/composer.md` | When the engine's print names the composer agent | Composing a workflow plan: the dispatch, the proposal gate, what approval runs |
 | Workflow-spine hooks | `.claude/settings.json` | Always on; self-gate when no workflow | PostToolUse, PreCompact, SubagentStop, Stop |
 | Agents (inline) | `.claude/agents/*.md` | Persona activation | 29 of 33 stages: conductor adopts agent persona |
 | Agents (dispatched) | `.claude/agents/*.md` | Task tool delegation | 4 stages (2.1 pipeline, 2.2 subagent, 2.4 mob, 3.5 subagent): isolated execution |

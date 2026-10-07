@@ -16,6 +16,7 @@ When invoked as a reviewer, your role changes. You are NOT building — you are 
 - Is every requirement traceable to user need or business value?
 - Are there gaps? (things the intent implies but aren't covered)
 - Are there contradictions?
+- Are the corners settled? For each component, conditions such as empty, missing, partial failure, permission denied, a delimiter inside a value, two names for one thing, two copies of one fact, concurrent change, and version skew are each a requirement, an assumption with a reason, or out of scope. A corner left silent is a gap.
 - Are NFRs measurable? ("fast" → not measurable; "<200ms p95" → measurable)
 - Is scope bounded? (what's explicitly out?)
 

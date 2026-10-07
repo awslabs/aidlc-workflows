@@ -65,10 +65,10 @@ outputs: application code + code-generation-plan.md, code-generation-questions.m
 
 ### Critical Rules
 
-- Application code goes to workspace root, NEVER to the record dir
+- Application code goes to workspace root, NEVER to the record dir. The developer's one change there is ticking each step's box in the plan as it finishes that step
 - Brownfield: modify files in-place. NEVER create duplicates like ClassName_modified.java
 - Add data-testid attributes to interactive UI elements for test automation
-- Work in this order: plan (Step 2), Step 3 (the person's Plan Approval; with plan approval off, only its one-line notice), generation (Step 4), the Step 5 files, then the review (when `directive.protocol_modules` lists `reviewer`) and the completion handoff (Step 6). The review checks the finished work: never dispatch the reviewer before the Step 5 files exist
+- Work in this order: plan (Step 2), Step 3 (the person's Plan Approval; with plan approval off, only its one-line notice), generation (Step 4), the Step 5 files, then the review (when `directive.protocol_modules` lists `reviewer`) and the completion handoff (Step 6). The review checks the finished work: never dispatch the reviewer before the Step 5 files exist. When the directive already carries `plan_approval.status: "approved"` (a resumed or continued build), the plan and test instructions on disk are the approved ones: skip Steps 2 and 3 and build them as they are. Never rewrite an approved plan or its test instructions; change them only when the person asks
 - For a Unit (`directive.unit` present), write `source-manifest.json` in Step 5, before the review, listing every application-source path this unit created, modified, or deleted, including shell-, scaffolding-, and generator-written files. Zero-Unit work writes no `source-manifest.json`
 - Measurable quality targets from NFR Requirements, NFR Design, and the Testing
   Contract coverage floor are inputs, not suggestions. NEVER relax, lower, or
@@ -110,6 +110,8 @@ directive exactly once:
   `<record>/construction/code-generation/`
 
 ### Step 2: PART 1 — Planning
+
+When the directive already carries `plan_approval.status: "approved"`, this plan is written and approved: do not rewrite it or the test instructions; go to Step 4.
 
 Create a detailed code generation plan at
 `<code-generation-record>/code-generation-plan.md` with checkboxes for each
