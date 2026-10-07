@@ -184,7 +184,7 @@ describe("t327 rewritten refusal strings stay in project language", () => {
     expect(log).not.toContain("stop and present the approval gate");
 
     const state = read("core/tools/aidlc-state.ts");
-    expect(state).toContain("recoveryGuidance(pd, content, stage.slug)");
+    expect(state).toContain("recoveryGuidance(pd, content, stage.slug, spentUnit(recoverySpent))");
     expect(state).toContain("recoveryGuidance(pd, content, slug)");
     expect(state).not.toContain(
       "present the situation to the human at the approval gate. Only a human",
