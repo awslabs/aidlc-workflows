@@ -2741,16 +2741,23 @@ describe("t147 Kiro CLI reads what the person typed from the expanded skill body
   // On Windows the call runs in PowerShell. Only a word with no `$`, backtick,
   // double quote or backslash is double-quoted, so PowerShell expands nothing
   // in it; "$5" is single-quoted, and PowerShell reads every word back as typed.
+  // A word holding an apostrophe and a backslash takes PowerShell's own form
+  // ('can''t open C:\temp\x'); PowerShell reads it back whole, and the guard
+  // accepts the call as the hook asked for it.
   test.skipIf(process.platform !== "win32")("PowerShell reads the quoted call as the same words, a dollar word included", () => {
     const dir = scratchProject(true);
     try {
-      const said = "don't touch the users' files it's $5 off";
+      const said = String.raw`don't touch the users' files it's $5 off, the error says "can't open C:\temp\x"`;
       const r = runAdapter(dir, "verb-intercept", { cwd: dir, session_id: session, prompt: expanded(said) }, [], env);
       expect(r.code, r.stderr).toBe(0);
-      const quoted = `"don't" touch the "users'" files "it's" '$5' off`;
+      const quoted = String.raw`"don't" touch the "users'" files "it's" '$5' off, the error says 'can''t open C:\temp\x'`;
       expect(r.stdout).toContain(`engine orchestrate next ${quoted}\n`);
       const pwsh = spawnSync("powershell", ["-NoProfile", "-NonInteractive", "-Command", `& { foreach ($a in $args) { $a } } ${quoted}`], { encoding: "utf-8" });
-      expect(pwsh.stdout.trimEnd().split(/\r?\n/)).toEqual(["don't", "touch", "the", "users'", "files", "it's", "$5", "off"]);
+      expect(pwsh.stdout.trimEnd().split(/\r?\n/)).toEqual(["don't", "touch", "the", "users'", "files", "it's", "$5", "off,", "the", "error", "says", String.raw`can't open C:\temp\x`]);
+      const guard = runAdapter(dir, "guard-tool-call", {
+        cwd: dir, tool_name: "execute_bash", tool_input: { command: `bun .kiro/tools/aidlc.ts engine orchestrate next ${quoted}` },
+      });
+      expect(guard.code, guard.stderr).toBe(0);
     } finally { rmSync(dir, { recursive: true, force: true }); }
   });
 
@@ -2763,6 +2770,34 @@ describe("t147 Kiro CLI reads what the person typed from the expanded skill body
       expect(existsSync(calls)).toBe(false);
       expect(r.stdout).not.toContain("<slug>");
       expect(readAudit(dir)).not.toContain("Unknown stage");
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+});
+
+// On native Windows the call the agent is told to run quotes a word that holds
+// an apostrophe and a backslash PowerShell's way ('can''t open C:\temp\x').
+// The guard accepts that exact call as the latch's own text before it re-splits
+// anything, so the person's request reaches the workflow instead of a
+// "Run exactly" loop that names the same call again.
+describe("the forwarded call is accepted as written", () => {
+  test("a PowerShell-quoted apostrophe passes the first-next guard; a cut call still does not", () => {
+    const dir = scratchProject(true);
+    try {
+      const raw = String.raw`'can''t open C:\temp\x'`;
+      mkdirSync(join(dir, "aidlc"), { recursive: true });
+      writeFileSync(join(dir, "aidlc", ".aidlc-turn-counter"), "1\n");
+      writeFileSync(
+        join(dir, "aidlc", ".aidlc-forwarding-latch"),
+        `${JSON.stringify({ turn: 1, raw, args: [String.raw`can't open C:\temp\x`] })}\n`,
+      );
+      const guard = (command: string) => runAdapter(dir, "guard-tool-call", {
+        cwd: dir, tool_name: "execute_bash", tool_input: { command },
+      });
+      const cut = guard(String.raw`bun .kiro/tools/aidlc.ts engine orchestrate next 'can''t`);
+      expect(cut.code).toBe(2);
+      expect(cut.stderr).toContain(`Run exactly: {{INVOKE}} engine orchestrate next ${raw}`);
+      const exact = guard(`bun .kiro/tools/aidlc.ts engine orchestrate next ${raw}`);
+      expect(exact.code, exact.stderr).toBe(0);
     } finally { rmSync(dir, { recursive: true, force: true }); }
   });
 });

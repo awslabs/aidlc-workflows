@@ -715,9 +715,13 @@ if (target === "guard-tool-call") {
         forwarding.turn === counter &&
         Array.isArray(forwarding.args)
       ) {
+        // The call exactly as this hook asked for it is right before any
+        // re-split: PowerShell's doubled apostrophe ('can''t') does not split
+        // back to the word, and refusing it would ask for the same call again.
         const matches =
-          forwarding.args.length === raw.length &&
-          forwarding.args.every((arg, index) => arg === raw[index]);
+          (typeof forwarding.raw === "string" && m[1].trim() === forwarding.raw) ||
+          (forwarding.args.length === raw.length &&
+            forwarding.args.every((arg, index) => arg === raw[index]));
         if (!matches) {
           process.stderr.write(
             "The first aidlc-orchestrate next call dropped or changed the user's arguments. " +
