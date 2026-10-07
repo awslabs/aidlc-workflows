@@ -39,22 +39,21 @@ import {
 const HOOK_WIRING: Array<{ event: string; matcher?: string; target: string }> = [
   { event: "SessionStart", target: "session-start" },
   { event: "UserPromptSubmit", target: "record-human-turn" },
-  // POSIX Codex commands receive the validated payload session directly, so
-  // sandboxed macOS does not depend on `ps` ancestry for workflow isolation.
-  { event: "PreToolUse", matcher: "Bash", target: "bind-bash-session" },
+  // One matcher-free group runs the five PreToolUse checks in one process:
+  // bind-bash-session (POSIX commands receive the validated payload session
+  // directly, so sandboxed macOS does not depend on `ps` ancestry for workflow
+  // isolation), then the state-transition, reviewer-scope, review-freeze and
+  // plan-approval guards. Codex starts every matching handler at once, and
+  // each guard's child engine doubled it, so five rows cost nine engine loads
+  // per shell call (#2066). No matcher: each member self-filters on tool_name
+  // (Bash, apply_patch, and spawn_agent naming the developer agent; Codex read
+  // access rides the shell tool anyway), so a renamed Codex tool cannot
+  // silently drop a guard, and the group beats in the record before each
+  // engine command (hook health reads that heartbeat). Verified on 0.142.5:
+  // subagent tool calls carry agent_type, and a PreToolUse exit 2 + stderr
+  // blocks the call with the reason relayed.
+  { event: "PreToolUse", target: "guard-tool-call" },
   { event: "PreToolUse", matcher: "spawn_agent", target: "deliver-stage-rules" },
-  { event: "PreToolUse", target: "state-transition-guard" },
-  // No matcher: the reviewer-scope target self-filters (Bash + apply_patch;
-  // everything else exits 0 instantly), and Codex read access rides the shell
-  // tool anyway. Verified on 0.142.5: subagent tool calls carry agent_type,
-  // and a PreToolUse exit 2 + stderr blocks the call with the reason relayed.
-  { event: "PreToolUse", target: "reviewer-scope" },
-  // No matcher for the same reason: the review-freeze target self-filters to
-  // apply_patch and mutation-capable Bash commands.
-  { event: "PreToolUse", target: "review-freeze" },
-  // No matcher: the plan-approval-guard target self-filters to spawn_agent
-  // naming the developer agent plus mutation-capable Bash/apply_patch calls.
-  { event: "PreToolUse", target: "plan-approval-guard" },
   { event: "PostToolUse", matcher: "request_user_input", target: "record-human-turn" },
   { event: "PostToolUse", matcher: "apply_patch", target: "audit-and-sensors" },
   { event: "PostToolUse", matcher: "update_plan", target: "sync-workflow-state" },

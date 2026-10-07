@@ -22,7 +22,7 @@ const manifest: HarnessManifest = {
   name: "codex",
   productName: "Codex CLI",
   configNextStep: "run `codex` (when it asks about hooks, choose Trust all and continue), then `$aidlc --doctor`",
-  // Its matcher-free PreToolUse groups beat in the record before each engine
+  // Its matcher-free PreToolUse group beats in the record before each engine
   // command. Codex runs a project's hooks only once the person trusts them in
   // its /hooks screen, which nothing outside Codex can do for them; measured
   // live, the trust counts for the next message in the same chat.

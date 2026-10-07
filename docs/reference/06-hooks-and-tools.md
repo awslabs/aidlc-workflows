@@ -329,6 +329,27 @@ identical to its brief is not counted, and the person replies again.
 
 #### Codex adapter
 
+Codex starts every handler that matches an event at once. Before a shell
+command, `.codex/hooks.json` registers one matcher-free PreToolUse group,
+`guard-tool-call`, and the adapter runs its five members in that one process, in
+order: bind-bash-session (the session rewrite), then the state-transition,
+reviewer-scope, review-freeze and plan-approval guards, each as the same case it
+ran as its own handler, and each guard's core hook runs inside that process too
+(imported from beside the adapter and called, never spawned as a second engine).
+Every member runs even after one refuses; the call is refused when any member
+refuses, with each refusal once on stderr and nothing on stdout, and when every
+member lets it through the output is bind-bash-session's rewrite. A member that
+fails on its own refuses nothing. The PostToolUse `rebuild-stage-graph` target
+runs its core hook the same way. Five handlers that each spawned a child engine
+cost nine engine loads per shell command, which on a small machine running
+Codex's six sub-agent threads reached gigabytes and ended runs mid-stage
+(#2066); one process costs one. Each member keeps its own `tool_name`
+self-filter (Bash, apply_patch, and spawn_agent naming the developer agent), so
+there is no matcher for a renamed Codex tool to miss, and the guards' heartbeats
+still beat in the record before each engine command. Codex trusts hooks by
+their registration, so this change asks the person to trust the project's hooks
+once more on upgrade (see the Codex guide).
+
 Codex runs UserPromptSubmit for every input to a thread, including a
 subagent's: the brief `spawn_agent` sends and each follow-up the agent sends it
 arrive as `prompt` under the root `session_id`. A thread-spawned subagent's
