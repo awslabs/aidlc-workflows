@@ -1124,7 +1124,7 @@ describe("t221 (c) harness registration and protocol prose", () => {
     }
   });
 
-  test("Codex hooks.json wires the adapter's reviewer-scope target on PreToolUse", () => {
+  test("Codex hooks.json wires the reviewer-scope bound through the one matcher-free guard-tool-call group", () => {
     const harnesses = HARNESS_MATRIX.filter(
       (harness) => harness.capabilities.reviewerScopeRegistration === "codex-hooks",
     );
@@ -1132,16 +1132,22 @@ describe("t221 (c) harness registration and protocol prose", () => {
     for (const harness of harnesses) {
       const wiring = JSON.parse(
         readFileSync(join(harness.engineRoot, "hooks.json"), "utf-8"),
-      ) as { hooks: Record<string, Array<{ hooks: Array<{ command: string }> }>> };
+      ) as { hooks: Record<string, Array<{ matcher?: string; hooks: Array<{ command: string }> }>> };
       const pre = wiring.hooks.PreToolUse ?? [];
-      expect(
-        pre.some((g) =>
-          g.hooks.some(
-            (h) => h.command ===
-              `bun ${harness.manifest.harnessDir}/tools/aidlc.ts engine adapter codex reviewer-scope`,
-          ),
+      // One process runs the five PreToolUse checks (#2066); the adapter's
+      // reviewer-scope case is a member of that group, not its own handler.
+      const group = pre.filter((g) =>
+        g.hooks.some(
+          (h) => h.command ===
+            `bun ${harness.manifest.harnessDir}/tools/aidlc.ts engine adapter codex guard-tool-call`,
         ),
-      ).toBe(true);
+      );
+      expect(group, harness.name).toHaveLength(1);
+      expect(group[0]?.matcher, harness.name).toBeUndefined();
+      expect(
+        pre.some((g) => g.hooks.some((h) => h.command.endsWith(" adapter codex reviewer-scope"))),
+        harness.name,
+      ).toBe(false);
     }
   });
 

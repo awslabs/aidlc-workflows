@@ -288,7 +288,7 @@ function runAdapter(
   target: string,
   payload: unknown,
   envOverrides: NodeJS.ProcessEnv = {},
-): { stdout: string; stderr: string; code: number } {
+): { stdout: string; stderr: string; code: number; pid: number } {
   if (target === "record-human-turn" && payload !== null && typeof payload === "object") {
     const session = (payload as { session_id?: unknown }).session_id;
     if (typeof session === "string") writeSessionPidEntry(projectDir, process.pid, session);
@@ -315,6 +315,7 @@ function runAdapter(
     stdout: r.stdout ?? "",
     stderr: r.stderr ?? "",
     code: r.status ?? -1,
+    pid: r.pid ?? -1,
   };
 }
 
@@ -1904,5 +1905,193 @@ describe("t149 Codex hook adapter (live-captured payload fixtures)", () => {
     );
     expect(/spawnSync\(\s*\[\s*"bun"/.test(src)).toBe(false);
     expect(src).toContain("process.execPath");
+  });
+});
+
+// --- guard-tool-call: the five PreToolUse checks in one process (#2066) ------
+//
+// Codex ran five PreToolUse handlers per shell call, and four of them spawned a
+// child engine for the core hook: nine engine loads for one `ls`. hooks.json now
+// wires one matcher-free group, and the adapter runs the members in its own
+// process. These cases drive the group through the real adapter subprocess and,
+// where process identity matters, swap a core hook for a stand-in that records
+// the pid it ran in.
+function standInHook(
+  capture: string,
+  hook: string,
+  answer: { code: number; stderr?: string; throws?: boolean },
+): string {
+  return [
+    'import { appendFileSync } from "node:fs";',
+    "export async function run(_input: string): Promise<number> {",
+    `  appendFileSync(${JSON.stringify(capture)}, JSON.stringify({ pid: process.pid, hook: ${JSON.stringify(hook)} }) + "\\n");`,
+    answer.throws ? '  throw new Error("STANDIN-THREW");' : "",
+    answer.stderr ? `  process.stderr.write(${JSON.stringify(answer.stderr)});` : "",
+    `  return ${answer.code};`,
+    "}",
+    "if (import.meta.main) process.exit(await run(await Bun.stdin.text()));",
+  ].join("\n");
+}
+
+function recordedRuns(capture: string): Array<{ pid: number; hook: string }> {
+  if (!existsSync(capture)) return [];
+  return readFileSync(capture, "utf-8").trim().split("\n").filter(Boolean)
+    .map((line) => JSON.parse(line) as { pid: number; hook: string });
+}
+
+const GUARD_HOOKS = [
+  "aidlc-state-transition-guard.ts",
+  "aidlc-reviewer-scope.ts",
+  "aidlc-review-freeze.ts",
+  "aidlc-plan-approval-guard.ts",
+] as const;
+
+function shellCall(dir: string, command: string, extra: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    hook_event_name: "PreToolUse",
+    cwd: dir,
+    session_id: "codex-command-session",
+    tool_name: "Bash",
+    tool_input: { command },
+    ...extra,
+  };
+}
+
+describe("t149 Codex guard-tool-call runs the five PreToolUse checks in one process", () => {
+  test("1: an ordinary shell command passes, with bind-bash-session's rewrite as the one output", () => {
+    const dir = scratchProject(true);
+    try {
+      const r = runAdapter(dir, "guard-tool-call", shellCall(dir, "ls"));
+      expect(r.code, r.stderr).toBe(0);
+      expect(r.stderr).toBe("");
+      if (process.platform !== "win32") {
+        const out = JSON.parse(r.stdout) as {
+          hookSpecificOutput?: { permissionDecision?: string; updatedInput?: { command?: string } };
+        };
+        expect(out.hookSpecificOutput?.permissionDecision).toBe("allow");
+        expect(out.hookSpecificOutput?.updatedInput?.command).toBe(
+          "export AIDLC_SESSION_OVERRIDE='codex-command-session' AIDLC_SESSION_OVERRIDE_SOURCE='payload'; ls",
+        );
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("2: a direct state transition is refused with the state-transition guard's own words", () => {
+    const dir = scratchProject(false);
+    try {
+      const r = runAdapter(dir, "guard-tool-call", shellCall(dir, "bun .codex/tools/aidlc-state.ts reject feasibility"));
+      expect(r.code).toBe(2);
+      expect(r.stdout).toBe("");
+      expect(r.stderr).toContain("Stage status cannot be changed with aidlc-state.ts reject");
+      expect(r.stderr).toContain("aidlc-orchestrate.ts report");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("3: dispatching the developer before plan approval is refused with the plan-approval guard's words", () => {
+    const dir = scratchProject(true);
+    try {
+      seedUnapprovedCodeGeneration(dir, "todo-core");
+      const r = runAdapter(dir, "guard-tool-call", {
+        hook_event_name: "PreToolUse",
+        cwd: dir,
+        agent_type: "aidlc-quality-agent",
+        tool_name: "spawn_agent",
+        tool_input: { agent_type: "aidlc-developer-agent", message: "AIDLC-UNIT: todo-core\nImplement todo-core" },
+      });
+      expect(r.code).toBe(2);
+      expect(r.stdout).toBe("");
+      expect(r.stderr).toContain("Code generation cannot start");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("4: the four core checks run inside the adapter's own process, in order", () => {
+    const dir = scratchProject(true);
+    try {
+      const capture = join(dir, "guard-runs.ndjson");
+      for (const hook of GUARD_HOOKS) {
+        writeFileSync(join(dir, ".codex", "hooks", hook), standInHook(capture, hook, { code: 0 }), "utf-8");
+      }
+      const r = runAdapter(dir, "guard-tool-call", shellCall(dir, "echo hi"));
+      expect(r.code, r.stderr).toBe(0);
+      const runs = recordedRuns(capture);
+      expect(runs.map((run) => run.hook)).toEqual([...GUARD_HOOKS]);
+      expect(r.pid).toBeGreaterThan(0);
+      expect(runs.map((run) => run.pid)).toEqual(GUARD_HOOKS.map(() => r.pid));
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("5: a check that throws fails alone; the others still run and a refusal still reaches the agent", () => {
+    const dir = scratchProject(true);
+    try {
+      const capture = join(dir, "guard-runs.ndjson");
+      const answers: Record<string, { code: number; stderr?: string; throws?: boolean }> = {
+        "aidlc-state-transition-guard.ts": { code: 0 },
+        "aidlc-reviewer-scope.ts": { code: 0, throws: true },
+        "aidlc-review-freeze.ts": { code: 2, stderr: "STANDIN-FREEZE-REFUSAL: the reviewed file is frozen.\n" },
+        "aidlc-plan-approval-guard.ts": { code: 0 },
+      };
+      for (const hook of GUARD_HOOKS) {
+        writeFileSync(join(dir, ".codex", "hooks", hook), standInHook(capture, hook, answers[hook]), "utf-8");
+      }
+      const r = runAdapter(dir, "guard-tool-call", shellCall(dir, "echo hi"));
+      expect(r.code).toBe(2);
+      expect(r.stdout).toBe("");
+      expect(r.stderr).toContain("STANDIN-FREEZE-REFUSAL");
+      // The one that threw does not hide the refusal, and the members after it ran.
+      expect(recordedRuns(capture).map((run) => run.hook)).toEqual([...GUARD_HOOKS]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("6: the duplicate delivery replays the refusal without running the checks again", () => {
+    const dir = scratchProject(true);
+    try {
+      const capture = join(dir, "guard-runs.ndjson");
+      for (const hook of GUARD_HOOKS) {
+        writeFileSync(
+          join(dir, ".codex", "hooks", hook),
+          standInHook(capture, hook, hook === "aidlc-review-freeze.ts" ? { code: 2, stderr: "STANDIN-FREEZE-REFUSAL\n" } : { code: 0 }),
+          "utf-8",
+        );
+      }
+      const payload = shellCall(dir, "echo twice", { tool_use_id: "call-twice" });
+      const first = runAdapter(dir, "guard-tool-call", payload);
+      const second = runAdapter(dir, "guard-tool-call", payload);
+      expect(first.code).toBe(2);
+      expect(second.code).toBe(2);
+      expect(first.stderr).toContain("STANDIN-FREEZE-REFUSAL");
+      expect(second.stderr).toBe(first.stderr);
+      expect(recordedRuns(capture)).toHaveLength(GUARD_HOOKS.length);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("7: rebuild-stage-graph runs its core hook inside the adapter's process", () => {
+    const dir = scratchProject(true);
+    try {
+      const capture = join(dir, "rebuild-runs.ndjson");
+      writeFileSync(
+        join(dir, ".codex", "hooks", "aidlc-rebuild-stage-graph.ts"),
+        standInHook(capture, "aidlc-rebuild-stage-graph.ts", { code: 0 }),
+        "utf-8",
+      );
+      const r = runAdapter(dir, "rebuild-stage-graph", withCwd(FIXTURES.postToolUse_bash, dir));
+      expect(r.code, r.stderr).toBe(0);
+      const runs = recordedRuns(capture);
+      expect(runs).toHaveLength(1);
+      expect(runs[0]?.pid).toBe(r.pid);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
