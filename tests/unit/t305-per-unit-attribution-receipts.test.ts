@@ -191,6 +191,54 @@ describe("t305 strict source-manifest validation", () => {
     }
   });
 
+  test("accepts route-segment claims as literal paths, never as Git wildcards", () => {
+    const { project, record } = fixture();
+    const items = join(project, "src", "app", "items");
+    mkdirSync(join(items, "[itemId]"), { recursive: true });
+    mkdirSync(join(items, "[[...slug]]"), { recursive: true });
+    writeFileSync(join(items, "[itemId]", "page.tsx"), "export default function Item() {}\n");
+    writeFileSync(join(items, "[[...slug]]", "page.tsx"), "export default function Slug() {}\n");
+    // `d` is one of the characters in `[itemId]`. Read as a Git wildcard, the
+    // directory claim would take in this ignored sibling and be refused.
+    writeFileSync(join(project, ".gitignore"), "src/app/items/d\n");
+    writeFileSync(join(items, "d"), "ignored sibling\n");
+    manifest(record, "alpha", {
+      stage: "code-generation",
+      unit: "alpha",
+      version: 1,
+      writes: [
+        { path: "src/app/items/[itemId]/" },
+        { path: "src/app/items/[[...slug]]/page.tsx" },
+      ],
+    });
+
+    const accepted = readUnitSourceManifest(
+      project,
+      "code-generation",
+      "alpha",
+    );
+    expect(accepted.ok ? "accepted" : accepted.reason).toBe("accepted");
+    if (accepted.ok) {
+      expect(sourceClaimCovers("\0src/app/items/[itemId]/page.tsx", accepted)).toBe(true);
+      expect(sourceClaimCovers("\0src/app/items/[[...slug]]/page.tsx", accepted)).toBe(true);
+      expect(sourceClaimCovers("\0src/app/items/d", accepted)).toBe(false);
+    }
+
+    manifest(record, "alpha", {
+      stage: "code-generation",
+      unit: "alpha",
+      version: 1,
+      writes: [{ path: "src/app/items/[itemId]" }],
+    });
+    const slashless = readUnitSourceManifest(
+      project,
+      "code-generation",
+      "alpha",
+    );
+    expect(slashless.ok).toBe(false);
+    if (!slashless.ok) expect(slashless.reason).toContain("must end with");
+  });
+
   test("accepts an exact claim when a committed directory becomes a file", () => {
     const { project, record } = fixture();
     mkdirSync(join(project, "generated"), { recursive: true });
