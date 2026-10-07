@@ -870,10 +870,14 @@ function snapshot(
             (receipts.unitStale.has(unit) && listing !== null)
           ) ? receipts.unitStaleProgress.get(unit) : undefined);
         // That review still counts as waiting for its verdict, so the re-check
-        // repeats the same iteration and records it again here.
+        // repeats that same pass (the one still waiting, after a review in
+        // several passes) and records it again here.
         const retryPending = changed === undefined && recordNotHere;
         const moved = changed ?? (retryPending
-          ? { nextIteration: receipts.unitIterations.get(unit) ?? 1, recoverySpent: false }
+          ? {
+            nextIteration: receipts.unitPending.get(unit)?.iteration ?? receipts.unitIterations.get(unit) ?? 1,
+            recoverySpent: false,
+          }
           : undefined);
         // A jump back or a reopen starts the Unit's work again: a review asked
         // for before it is not this run's, so with none asked for since, the

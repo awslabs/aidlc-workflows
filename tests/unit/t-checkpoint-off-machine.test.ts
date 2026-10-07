@@ -366,6 +366,8 @@ describe("t-checkpoint-off-machine: an approved Unit whose reviewed evidence can
         ...(status.rereview.command.includes("--retry-pending") ? ["--retry-pending"] : []),
       ]);
     }
+    console.log(`t-checkpoint-off-machine two passes: re-checks ${JSON.stringify(offered.map((step) =>
+      `${step.stage} ${step.iteration}${step.command.includes("--retry-pending") ? " retry" : ""}`))}`);
     const codeGeneration = offered.find((step) => step.stage === "code-generation");
     expect(codeGeneration, JSON.stringify(offered)).toBeDefined();
     expect(codeGeneration?.iteration).toBe(2);
