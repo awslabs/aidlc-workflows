@@ -20160,11 +20160,18 @@ export function workspaceSourceExclusionPathspecs(
 // so one that cannot be hashed fails the whole source-boundary bind and refuses
 // Plan Approval while nothing a human authored has changed. Like the other
 // names here it is skipped unconditionally in both modes — these cache dirs
-// never hold application source.
+// never hold application source. `.idea` (JetBrains' project state, whose
+// workspace.xml is rewritten on every IDE action), `.codegraph` (a local code
+// indexer's database and the lock its daemon holds) and `DerivedData` (Xcode's
+// build output when a project keeps it in-tree) are the same kind of tree: the
+// first moved the fingerprint on every save, the other two made the boundary
+// unbindable (an unreadable lock, a tree past the walk's budget).
 const SOURCE_FINGERPRINT_HARD_EXCLUDED_NAMES = [
   ".cache",
+  ".codegraph",
   ".git",
   ".gradle",
+  ".idea",
   ".mypy_cache",
   ".next",
   ".nuxt",
@@ -20173,6 +20180,7 @@ const SOURCE_FINGERPRINT_HARD_EXCLUDED_NAMES = [
   ".tox",
   ".venv",
   ".vs",
+  "DerivedData",
   "__pycache__",
   "node_modules",
   "venv",
