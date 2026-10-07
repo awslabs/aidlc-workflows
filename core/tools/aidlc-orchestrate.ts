@@ -1227,13 +1227,17 @@ function legacyKiroPlanApprovalSession(projectDir: string): string | null {
 function writePrepared(prepared: PreparedEmission): void {
   writeFileSync(1, `${prepared.serialized}\n`, "utf-8");
   prepared.personLinesSaid?.();
-  // A run-stage that carried its rules (inline, or after its parts) leaves the
-  // chat holding them, until a session start or a compaction says otherwise.
+  // What a run-stage handed the chat (the text, inline or after its parts, or
+  // a pointer), so the next step can tell whether the chat still holds it.
   if (
-    prepared.transported.kind === "run-stage" && preparedRulesDelivery !== null &&
-    !preparedRulesDelivery.held && !isReadOnlyEngineProbe()
+    prepared.transported.kind === "run-stage" && preparedRulesDelivery !== null && !isReadOnlyEngineProbe()
   ) {
-    noteRulesDelivered(preparedRulesDelivery.projectDir, engineSessionId, preparedRulesDelivery.bundle);
+    noteRulesDelivered(
+      preparedRulesDelivery.projectDir,
+      engineSessionId,
+      preparedRulesDelivery.bundle,
+      preparedRulesDelivery.held,
+    );
   }
   // Stage work handed to the session, by any path (a fresh publication, the
   // same work handed over again, or a `continue` to the next part), ends a

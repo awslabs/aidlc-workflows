@@ -49,7 +49,37 @@ type LoadRecord = {
   transcript?: string;
 };
 
-type DeliveryRecord = { v: 1; bundle: string; at: string };
+// What this chat's steps were handed. `last` is the bundle the last step named
+// (in full or by pointer): a step whose bundle differs gets the full text once,
+// even where the host holds the new files, so the change is in front of the
+// agent (live on Kiro CLI, an agent that held the edited file still repeated
+// what it did under the old rule). `full` is the last full-text delivery, the
+// only proof Codex has; a session start or a compaction forgets it.
+type DeliveryRecord = { v: 2; last: string; full?: { bundle: string; at: string } };
+
+function readDelivery(projectDir: string, sid: string): DeliveryRecord | null {
+  const record = readJson<DeliveryRecord>(deliveryRecordPath(projectDir, sid));
+  return record?.v === 2 && typeof record.last === "string" ? record : null;
+}
+
+function writeDelivery(projectDir: string, sid: string, record: DeliveryRecord): void {
+  try {
+    writeFileAtomic(deliveryRecordPath(projectDir, sid), `${JSON.stringify(record)}\n`);
+  } catch {
+    removeQuietly(deliveryRecordPath(projectDir, sid));
+  }
+}
+
+// The chat may no longer hold what it was handed in full; what its last step
+// named is kept.
+function forgetFullDelivery(projectDir: string, sid: string): void {
+  const record = readDelivery(projectDir, sid);
+  if (record === null) {
+    removeQuietly(deliveryRecordPath(projectDir, sid));
+  } else if (record.full !== undefined) {
+    writeDelivery(projectDir, sid, { v: 2, last: record.last });
+  }
+}
 
 // A rollout read for the compaction check is bounded; a longer one counts as
 // unreadable, which means the full text.
@@ -133,7 +163,8 @@ function removeQuietly(path: string): void {
 /**
  * Record what the host loaded when this chat started, resumed, cleared,
  * compacted or forked (the session-start hook). Every session start also
- * forgets what the thread was handed, since the chat may no longer hold it.
+ * forgets the full text the thread was handed, since the chat may no longer
+ * hold it.
  * `includeChanged` says the session start just re-pointed the include, so the
  * host may have loaded the old one.
  */
@@ -147,7 +178,7 @@ export function recordRulesLoad(
 ): void {
   const sid = validSessionId(sessionId);
   if (sid === null) return;
-  removeQuietly(deliveryRecordPath(projectDir, sid));
+  forgetFullDelivery(projectDir, sid);
   const path = loadRecordPath(projectDir, sid);
   const harness = runtimeHarnessName(projectDir);
   const base = { v: 1 as const, harness, source, at: isoTimestamp(), space };
@@ -183,10 +214,10 @@ export function recordRulesLoad(
   }
 }
 
-/** A compaction (PreCompact) forgets what the thread was handed. */
+/** A compaction (PreCompact) forgets the full text the thread was handed. */
 export function clearRulesDelivered(projectDir: string, sessionId: string): void {
   const sid = validSessionId(sessionId);
-  if (sid !== null) removeQuietly(deliveryRecordPath(projectDir, sid));
+  if (sid !== null) forgetFullDelivery(projectDir, sid);
 }
 
 // The host's own variable says this command runs inside that host's chat. The
@@ -216,43 +247,64 @@ function hostRunsThisChat(harness: string, sessionId: string): boolean {
 }
 
 /**
- * Remember that this Codex thread was just handed the bundle's full text. Only
- * Codex needs it: the other tools' proof is their own include.
+ * Remember what a run-stage just handed this chat: the bundle it named, and
+ * whether it carried the full text (`held` false).
  */
-export function noteRulesDelivered(projectDir: string, sessionId: string | undefined, bundle: string): void {
+export function noteRulesDelivered(
+  projectDir: string,
+  sessionId: string | undefined,
+  bundle: string,
+  held: boolean,
+): void {
   const sid = validSessionId(sessionId);
   if (sid === null) return;
-  if (runtimeHarnessName(projectDir) !== "codex" || !hostRunsThisChat("codex", sid)) return;
-  const record = readJson<LoadRecord>(loadRecordPath(projectDir, sid));
-  if (record?.harness !== "codex") return;
-  try {
-    // Milliseconds, so a compaction in the same second as the delivery is never read as before it.
-    writeFileAtomic(deliveryRecordPath(projectDir, sid), `${JSON.stringify({ v: 1, bundle, at: new Date().toISOString() })}\n`);
-  } catch {
-    removeQuietly(deliveryRecordPath(projectDir, sid));
-  }
+  const harness = runtimeHarnessName(projectDir);
+  if (!hostRunsThisChat(harness, sid)) return;
+  const previous = readDelivery(projectDir, sid);
+  // Milliseconds, so a compaction in the same second as the delivery is never read as before it.
+  const full = held ? previous?.full : { bundle, at: new Date().toISOString() };
+  writeDelivery(projectDir, sid, { v: 2, last: bundle, ...(full ? { full } : {}) });
 }
 
-// The last compaction the rollout records, as a time, or null when it records
-// none. Undefined when the rollout cannot be read.
-function lastRolloutCompaction(transcript: string): number | null | undefined {
+// What the thread's rollout says since its last compaction: when that was (null
+// for none), and whether an AI-DLC step it was handed since then was cut short
+// (Codex trims a command's output to the token budget the model asked for, live:
+// a 20 KB rules part kept 8 KB). A cut step is a directive that no longer parses.
+// Undefined when the rollout cannot be read.
+function rolloutSinceCompaction(transcript: string): { compacted: number | null; cut: boolean } | undefined {
   try {
     if (statSync(transcript).size > ROLLOUT_MAX_BYTES) return undefined;
-    let last: number | null = null;
+    let compacted: number | null = null;
+    let cut = false;
     for (const line of readFileSync(transcript, "utf-8").split("\n")) {
-      if (!line.includes('"compacted"')) continue;
+      const compaction = line.includes('"compacted"');
+      const output = line.includes('"function_call_output"') && line.includes('{\\"kind\\":\\"');
+      if (!compaction && !output) continue;
+      let entry: { type?: unknown; timestamp?: unknown; payload?: { type?: unknown; output?: unknown } };
       try {
-        const entry = JSON.parse(line) as { type?: unknown; timestamp?: unknown };
-        if (entry.type !== "compacted") continue;
+        entry = JSON.parse(line);
+      } catch {
+        // A line still being written is read on the next call.
+        continue;
+      }
+      if (entry.type === "compacted") {
         const at = typeof entry.timestamp === "string" ? Date.parse(entry.timestamp) : NaN;
         // A compaction with no readable time could be after anything.
         if (!Number.isFinite(at)) return undefined;
-        last = last === null ? at : Math.max(last, at);
-      } catch {
-        // A line still being written is read on the next call.
+        compacted = compacted === null ? at : Math.max(compacted, at);
+        cut = false;
+      } else if (entry.type === "response_item" && entry.payload?.type === "function_call_output") {
+        const text = typeof entry.payload.output === "string" ? entry.payload.output : "";
+        const at = text.search(/\{"kind":"(run-stage|load-steering)"/);
+        if (at < 0) continue;
+        try {
+          JSON.parse(text.slice(at).trim());
+        } catch {
+          cut = true;
+        }
       }
     }
-    return last;
+    return { compacted, cut };
   } catch {
     return undefined;
   }
@@ -276,6 +328,9 @@ export function chatHoldsRules(
     if (!hostRunsThisChat(harness, sid)) return false;
     const record = readJson<LoadRecord>(loadRecordPath(projectDir, sid));
     if (record?.v !== 1 || record.harness !== harness || record.space !== space) return false;
+    const delivered = readDelivery(projectDir, sid);
+    // The rules changed since this chat's last step: the text once.
+    if (delivered !== null && delivered.last !== bundle) return false;
     if (record.refresh === "per-request") {
       const dir = record.dir ?? "";
       return dir !== "" && paths.every((path) => path.startsWith(dir) && path.endsWith(".md"));
@@ -286,13 +341,13 @@ export function chatHoldsRules(
       return Object.entries(files).every(([rel, hash]) => sha256File(join(projectDir, rel)) === hash);
     }
     if (harness === "codex") {
-      const delivered = readJson<DeliveryRecord>(deliveryRecordPath(projectDir, sid));
-      if (delivered?.v !== 1 || delivered.bundle !== bundle || !record.transcript) return false;
+      const full = delivered?.full;
+      if (full === undefined || full.bundle !== bundle || !record.transcript) return false;
       if (!existsSync(record.transcript)) return false;
-      const compacted = lastRolloutCompaction(record.transcript);
-      const deliveredAt = Date.parse(delivered.at);
-      return compacted !== undefined && Number.isFinite(deliveredAt) &&
-        (compacted === null || compacted < deliveredAt);
+      const since = rolloutSinceCompaction(record.transcript);
+      const deliveredAt = Date.parse(full.at);
+      return since !== undefined && !since.cut && Number.isFinite(deliveredAt) &&
+        (since.compacted === null || since.compacted < deliveredAt);
     }
     return false;
   } catch {

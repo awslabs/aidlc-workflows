@@ -9,6 +9,8 @@
 //   - Kiro CLI and opencode put the memory files in context on every request
 //     (live: an edit is seen at once and survives a compaction), so the pointer
 //     needs only the host's own include to cover the stage's files.
+//   - On every tool, a step whose bundle differs from the one this chat's last
+//     step named gets the text once, so a changed rule is in front of the agent.
 //   - Claude Code loads them at startup, resume, clear, compact and fork, but
 //     not after a mid-chat edit, so the pointer needs the hashes the session
 //     start recorded for this chat to match the files now. A resume or fork
@@ -303,7 +305,17 @@ describe("Kiro CLI and opencode: the host sends the memory files with every requ
     const env = { AIDLC_SESSION_OVERRIDE: sid, KIRO_SESSION_ID: sid };
     await sessionStart(proj, "kiro", sid, "startup");
     expect(pointerOnly(await next(proj, "kiro", env))).toBe(true);
+    // Kiro holds the edited file at once, but the step after a change hands the
+    // text once, so the change is in front of the agent; then the pointer again.
     editTeam(proj, "Every queue has a dead-letter alarm.");
+    const changed = await next(proj, "kiro", env);
+    expect(sentInFull(changed)).toBe(true);
+    expect(JSON.stringify(changed.results)).toContain("Every queue has a dead-letter alarm.");
+    expect(pointerOnly(await next(proj, "kiro", env))).toBe(true);
+    // A chat resumed after the rules changed while it was closed: the text once.
+    editTeam(proj, "Every alarm names its runbook.");
+    await sessionStart(proj, "kiro", sid, "startup");
+    expect(sentInFull(await next(proj, "kiro", env))).toBe(true);
     expect(pointerOnly(await next(proj, "kiro", env))).toBe(true);
 
     expect(sentInFull(await next(proj, "kiro", { AIDLC_SESSION_OVERRIDE: sid }))).toBe(true);
@@ -321,6 +333,9 @@ describe("Kiro CLI and opencode: the host sends the memory files with every requ
     const proj = await projectFor("opencode");
     const sid = randomUUID();
     await sessionStart(proj, "opencode", sid, "startup");
+    expect(pointerOnly(await next(proj, "opencode", { AIDLC_SESSION_OVERRIDE: sid, OPENCODE: "1" }))).toBe(true);
+    editTeam(proj, "Every endpoint has an owner.");
+    expect(sentInFull(await next(proj, "opencode", { AIDLC_SESSION_OVERRIDE: sid, OPENCODE: "1" }))).toBe(true);
     expect(pointerOnly(await next(proj, "opencode", { AIDLC_SESSION_OVERRIDE: sid, OPENCODE: "1" }))).toBe(true);
     expect(sentInFull(await next(proj, "opencode", { AIDLC_SESSION_OVERRIDE: sid }))).toBe(true);
 
@@ -357,6 +372,18 @@ describe("Codex: this thread was given the bundle and nothing since could have d
     expect(sentInFull(await next(proj, "codex", probe))).toBe(true);
     expect(sentInFull(await next(proj, "codex", env))).toBe(true);
     expect(pointerOnly(await next(proj, "codex", env))).toBe(true);
+
+    // A step Codex cut short (the model asked for fewer output tokens than the
+    // step had): the thread may hold part of the text, so it gets all of it
+    // again, every step until a compaction.
+    const cutStep = `{"kind":"load-steering","stage":"${STAGE}","bundle":"sha256:${"0".repeat(64)}","rules_content":[{"path":"org.md","text":"# Org`;
+    appendFileSync(rollout, `${JSON.stringify({
+      timestamp: new Date().toISOString(),
+      type: "response_item",
+      payload: { type: "function_call_output", output: `Output:\nWarning: truncated output\n${cutStep}` },
+    })}\n`);
+    expect(sentInFull(await next(proj, "codex", env))).toBe(true);
+    expect(sentInFull(await next(proj, "codex", env))).toBe(true);
 
     // A compaction no hook reported, seen in the thread's own rollout.
     appendFileSync(rollout, `${JSON.stringify({ timestamp: new Date(Date.now() + 1_000).toISOString(), type: "compacted", payload: { message: "" } })}\n`);
