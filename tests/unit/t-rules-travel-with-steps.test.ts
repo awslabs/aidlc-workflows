@@ -175,6 +175,14 @@ describe("t-rules-travel-with-steps: a person-facing field says what to do with 
     expect(directive.gate).toBe("unresolved");
     const note = String(directive.gate_note);
     expect(note).toContain("## Walking Skeleton");
+    // The agent reads what the team says it does (AIDA #2094 F2): "We don't run a
+    // walking skeleton" is off and "every greenfield feature" is on, as the
+    // conductor persona says; no list of literal words.
+    expect(note).toContain(
+      "on if the team always runs a walking skeleton, off if it says it does not run one, scope-dependent if it says neither",
+    );
+    expect(note).not.toContain('"never" is off');
+    expect(note).not.toContain("anything else is scope-dependent");
     expect(note).toContain("report --skeleton-stance <on|off|scope-dependent>");
     expect(note).toContain("then run `");
     expect(note).toMatch(/aidlc-orchestrate\.ts next`/);
@@ -207,6 +215,35 @@ describe("t-rules-travel-with-steps: a person-facing field says what to do with 
   });
 });
 
+describe("t-rules-travel-with-steps: a solo report that names a Unit", () => {
+  // AIDA #2094 F3: answering every solo `report --unit` with "run next" dropped
+  // the person's decision (approve, or their changes); next showed the gate again.
+  for (const [result, extra] of [
+    ["approved", ["--user-input", "Approve"]],
+    ["rejected", ["--user-input", "Request Changes", "--reason", "add a dark mode"]],
+  ] as const) {
+    test(`--result ${result} with a stale --unit is answered as the same decision for the stage`, () => {
+      const withUnit = finishedPractices("strict (set by you)");
+      const without = finishedPractices("strict (set by you)");
+      for (const proj of [withUnit, without]) next(proj);
+      const named = report(withUnit, ["--stage", "requirements-analysis", "--result", result, "--unit", "alpha", ...extra]);
+      const plain = report(without, ["--stage", "requirements-analysis", "--result", result, ...extra]);
+      expect(String(named.message ?? named.reason)).not.toContain("A Unit is not reported on its own");
+      expect(named.kind).toBe(plain.kind);
+      expect(String(named.message ?? named.reason ?? "").replaceAll(withUnit, "<p>"))
+        .toBe(String(plain.message ?? plain.reason ?? "").replaceAll(without, "<p>"));
+    });
+  }
+
+  test("a completion report with a stale --unit still gets the step on", () => {
+    const proj = finishedPractices("strict (set by you)");
+    next(proj);
+    const directive = report(proj, ["--stage", "requirements-analysis", "--result", "awaiting-approval", "--unit", "alpha"]);
+    expect(directive.kind).toBe("print");
+    expect(String(directive.message)).toContain("A Unit is not reported on its own in this work");
+  });
+});
+
 describe("t-rules-travel-with-steps: the notes and their checks", () => {
   test("each note goes only beside its field", () => {
     expect(typeof withAgentNotes).toBe("function");
@@ -233,6 +270,18 @@ describe("t-rules-travel-with-steps: the notes and their checks", () => {
     const own = add({ kind: "ask", ask_type: "guard-recovery", question: "q", agent_work: true }, "bun x.ts");
     expect(own.question_note).toBeUndefined();
     expect(add({ kind: "ask", ask_type: "scope-confirm", question: "q" }, "bun x.ts").question_note).toBe(QUESTION_NOTE);
+    // AIDA #2094 F1: with no skill the plan question's answer had no recording
+    // step, so "looks good, build it" got the same question again.
+    const plan = String(
+      (add as unknown as (d: Json, i: string, l: string) => Json)(
+        { kind: "ask", ask_type: "plan-approval", question: "q" }, "bun x/aidlc-orchestrate.ts", "bun x/aidlc-log.ts",
+      ).question_note,
+    );
+    expect(plan.startsWith(QUESTION_NOTE.replace(/\.$/, ""))).toBe(true);
+    expect(plan).toContain(
+      "record the choice they made with `bun x/aidlc-log.ts answer --stage code-generation --checkpoint plan-approval " +
+        "--details '<their choice>'`, then run `bun x/aidlc-orchestrate.ts next`",
+    );
   });
 
   test("the validator refuses a note without its field", () => {
