@@ -68,7 +68,10 @@ a `plan-approval` ask (see the `ask` row) shows each plan's summary and path wit
 Approve Plan, Request Changes, and I'll edit the files. Read the person's
 reply and record the choice they made (Code Generation Step 3), then run `next`;
 never write the questions file, an answer line, a fingerprint, or a receipt
-yourself. A
+yourself. While that question is open, a request of the person's that is not
+the build (a commit, an install, a change to a file the plan does not build)
+runs at once: do it, then **SAY:** "Done. The code plan still waits for your
+approval." and end the turn, without showing the question again. A
 code-generation `run-stage` carries `plan_approval.status`: `approved` builds
 (Step 4) from the plan and test instructions as they are: never rewrite an
 approved plan unless the person asks. `plan`, `revise`, and `repair` return to

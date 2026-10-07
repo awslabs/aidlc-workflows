@@ -51,6 +51,7 @@ import {
   steeringPayloadAuthenticAt,
   steeringTokenKeyPathFor,
   toPosix,
+  harnessDir,
   UNBINDABLE_FINGERPRINT,
   visibleMarkdownLines,
   withActiveDirectiveLock,
@@ -432,6 +433,41 @@ function targetView(projectDir: string, unit: string | null): PlanApprovalAskTar
     questions_path: rel(QUESTIONS_FILE),
     summary: planSummaryLines(readText(join(dir, PLAN_FILE)), readText(join(dir, INSTRUCTIONS_FILE))),
   };
+}
+
+// A word in a plan that names a file or folder: it has a "/" or a file
+// extension, and no scheme, flag or variable.
+const PLAN_PATH_WORD_RE = /^[A-Za-z0-9_.@~][A-Za-z0-9_.@~/+-]*$/;
+
+/**
+ * The files and folders the waiting plans name, project-relative with "/":
+ * every path-like word in each asked plan and its test instructions, the
+ * Touches line and the steps alike, leaving out the engine's own Testing
+ * Contract block and AI-DLC's own files. A folder ends in "/". Empty when they
+ * name none; null when no plan question is open or its plans cannot be read.
+ */
+export function planApprovalPlanNamedPaths(projectDir: string): string[] | null {
+  try {
+    const open = currentPlanApprovalAsk(projectDir, "some");
+    if (open === null) return null;
+    const own = ["aidlc/", `${harnessDir()}/`];
+    const named = new Set<string>();
+    for (const target of open.record.targets) {
+      const dir = codeGenerationRecordDir(projectDir, target.unit);
+      for (const file of [PLAN_FILE, INSTRUCTIONS_FILE]) {
+        const text = readText(join(dir, file)).replace(/^## Testing Contract[^\n]*\n\s*```json[\s\S]*?\n```/m, "");
+        for (const raw of text.split(/[\s`'"()<>[\]{},;|*]+/)) {
+          const word = raw.replace(/\\/g, "/").replace(/^\.\//, "").replace(/[.:!?]+$/, "");
+          if (word.length > 300 || word.startsWith("..") || word.includes("//") || !PLAN_PATH_WORD_RE.test(word)) continue;
+          if (own.some((prefix) => word.startsWith(prefix)) || [PLAN_FILE, INSTRUCTIONS_FILE, QUESTIONS_FILE].includes(word)) continue;
+          if (word.includes("/") || /\.[A-Za-z][A-Za-z0-9]{0,9}$/.test(word)) named.add(word);
+        }
+      }
+    }
+    return [...named];
+  } catch {
+    return null;
+  }
 }
 
 function planQuestion(units: Array<string | null>, repaired: boolean): string {

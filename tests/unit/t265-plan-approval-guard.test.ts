@@ -1830,6 +1830,60 @@ describe("t265b hook lifecycle", () => {
     }
   });
 
+  // Only the build waits for the plan (NB-4): while the engine asks the person
+  // to approve it, what else they ask for runs at once under every Guard
+  // Policy. This plan names no files, so a commit, an install, and an edit to a
+  // document beside the code pass; the developer, code, AI-DLC's records and
+  // AI-DLC's own commands wait.
+  for (const policy of ["strict (set by you)", "off (from scope poc)"]) {
+    test(`while the plan waits, the person's other asks run and the build still waits (Guard Policy ${policy})`, () => {
+      const proj = scratchProject();
+      try {
+        seedState(proj);
+        const statePath = join(proj, RECORD_REL, "aidlc-state.md");
+        writeFileSync(statePath, readFileSync(statePath, "utf-8")
+          .replace("- **Scope**: poc\n", `- **Scope**: poc\n- **Guard Policy**: ${policy}\n`), "utf-8");
+        seedUnit(proj, null, { plan: true, answer: null });
+        writeActiveDirectiveMarker(proj, {
+          kind: "ask",
+          ask_type: "plan-approval",
+          stage: "code-generation",
+          state_sha256: stateDigest(readFileSync(statePath, "utf-8")),
+        });
+        for (const ask of [
+          'git commit -am "wip: before the blank-title fix"',
+          "git commit -m \"$(cat <<'EOF'\nwip: before the fix\nEOF\n)\"",
+          "npm install",
+          "echo 'Titles cannot be blank.' >> README.md",
+        ]) {
+          const result = runHook(proj, BASH(ask));
+          expect(result.code, `${ask}\n${result.stderr}`).toBe(0);
+        }
+        for (const doc of [join(proj, "README.md"), join(proj, "docs", "notes.md")]) {
+          const result = runHook(proj, WRITE(doc));
+          expect(result.code, `${doc}\n${result.stderr}`).toBe(0);
+        }
+        // The build waits as before: code, the plan's own record, AI-DLC's
+        // commands, and the developer.
+        const record = join(proj, RECORD_REL, "construction", "code-generation");
+        for (const payload of [
+          WRITE(join(proj, "src", "inline.ts")),
+          BASH("echo 'export const x = 1;' > src/inline.ts"),
+          WRITE(join(record, "code-generation-questions.md")),
+          BASH('aidlc engine orchestrate report --stage code-generation --result approved --user-input "Approve"'),
+          STAGE_DISPATCH(proj, "Build the plan."),
+        ]) {
+          const result = runHook(proj, payload);
+          expect(result.code, JSON.stringify(payload)).toBe(2);
+        }
+        expect(runHook(proj, WRITE(join(proj, "src", "inline.ts"))).stderr)
+          .toContain("Nothing is built or changed while the plan waits for your approval.");
+      } finally {
+        rmSync(proj, { recursive: true, force: true });
+      }
+    });
+  }
+
   test("a selected restart continues in its source-install spelling too", () => {
     const proj = scratchProject();
     try {

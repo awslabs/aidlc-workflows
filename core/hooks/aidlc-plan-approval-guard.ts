@@ -53,7 +53,7 @@ import {
   realpathSync,
   statSync,
 } from "node:fs";
-import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { appendAuditEntryUnlocked } from "../tools/aidlc-audit.ts";
 import { commandPath, readActiveExecutable } from "../tools/aidlc-install-paths.ts";
 import {
@@ -798,6 +798,46 @@ function isTrustedRecordTarget(
   }
 }
 
+// A write the person asks for while the plan waits, beside the build: a file
+// in the project, outside AI-DLC's own folders and reached through no symlink,
+// that the waiting plans do not name. A named folder covers what is under it,
+// and a bare file name covers that name anywhere. When the plans name no path,
+// only a document (Markdown or plain text) is beside the build.
+const DOCUMENT_EXTENSIONS = new Set([".md", ".markdown", ".txt", ".rst", ".adoc"]);
+
+function isPlanWaitSideWrite(projectDir: string, target: string, planPaths: string[] | null): boolean {
+  try {
+    const projectLexical = resolve(projectDir);
+    const targetAbs = resolve(target);
+    if (targetAbs === projectLexical || !isWithinDir(targetAbs, projectLexical)) return false;
+    if (
+      isWithinDir(targetAbs, resolve(dirname(spacesRoot(projectDir)))) ||
+      isWithinDir(targetAbs, resolve(projectLexical, harnessDir()))
+    ) return false;
+    assertNoSymlinkInChainOrThrow(realpathSync(projectLexical), relative(projectLexical, targetAbs));
+  } catch {
+    return false;
+  }
+  if (planPaths === null || planPaths.length === 0) return DOCUMENT_EXTENSIONS.has(extname(target).toLowerCase());
+  const fold = (path: string): string => process.platform === "win32" ? path.toLowerCase() : path;
+  const rel = fold(relative(resolve(projectDir), resolve(target)).split(sep).join("/"));
+  return !planPaths.some((named) => {
+    const path = fold(named.replace(/\/+$/, ""));
+    return rel === path || rel.startsWith(`${path}/`) || (!path.includes("/") && rel.split("/").at(-1) === path);
+  });
+}
+
+// The files and folders the waiting plans name, loaded only while the engine's
+// Plan Approval question is open. Null when that module cannot be read.
+function planApprovalPlanNamedPaths(projectDir: string): string[] | null {
+  try {
+    return (require("../tools/aidlc-plan-approval-ask.ts") as typeof import("../tools/aidlc-plan-approval-ask.ts"))
+      .planApprovalPlanNamedPaths(projectDir);
+  } catch {
+    return null;
+  }
+}
+
 // The asked plans' own plan files the person's reply opened, loaded only while
 // the engine's Plan Approval question is open. Nothing is open when that module
 // cannot be read, so the write is refused as before.
@@ -930,6 +970,8 @@ interface MutationIntent {
   opaqueShell: boolean;
   shellCommand: string | null;
   swarmUnits?: string[];
+  /** The command runs AI-DLC itself, or may (a dynamic command naming it). */
+  runsAidlc?: boolean;
 }
 
 function normalizedCommandName(name: string): string {
@@ -1929,6 +1971,7 @@ async function mutationIntent(
   let opaqueShell = false;
   let shellCommand: string | null = null;
   let swarmUnits: string[] | null = null;
+  let runsAidlc = false;
   if (toolName === "Bash") {
     const command = toolInput?.command;
     if (typeof command !== "string") {
@@ -1977,6 +2020,10 @@ async function mutationIntent(
     if (!dynamic && targets.length === 0) {
       swarmUnits = swarmCommandUnits(projectDir, cwd, analysed, invocations);
     }
+    runsAidlc = invocations.some((invocation) =>
+      normalizedCommandName(invocation.name).replace(/\.(?:cmd|ps1)$/, "") === "aidlc" ||
+      invocation.args.some((arg) => /^aidlc(?:-[A-Za-z0-9._-]+)?\.ts$/.test(basename(arg)))) ||
+      (dynamic && /\baidlc\b/i.test(analysed));
   } else if (WRITE_TOOLS.has(toolName)) {
     const input = toolInput ?? {};
     const add = (value: unknown) => {
@@ -1994,6 +2041,7 @@ async function mutationIntent(
     opaqueShell,
     shellCommand,
     ...(swarmUnits ? { swarmUnits } : {}),
+    ...(runsAidlc ? { runsAidlc } : {}),
   };
 }
 
@@ -2334,6 +2382,14 @@ async function evaluate(
           reviewing.length > 0 && !mutation.opaqueShell && mutation.targets.length > 0 &&
           mutation.targets.every((candidate) => isOpenReviewTarget(projectDir, candidate, reviewing))
         ) return 0;
+        // Only the build waits for the plan: the developer, the files the plan
+        // names, AI-DLC's own records, and AI-DLC's own commands. What else the
+        // person asks for runs now: a commit, an install, a test run, or a
+        // write to a file the plan does not name, under every Guard Policy.
+        if (knownMutationTool && !mutation.runsAidlc) {
+          const planPaths = mutation.targets.length > 0 ? planApprovalPlanNamedPaths(projectDir) : null;
+          if (mutation.targets.every((candidate) => isPlanWaitSideWrite(projectDir, candidate, planPaths))) return 0;
+        }
         authorityFailure = PLAN_APPROVAL_ASK_OPEN;
         standing = planStanding(projectDir, activeDirective);
         // Loaded only here: the question's own record, read the way its owner

@@ -363,6 +363,33 @@ describe("the engine asks for Plan Approval", () => {
       .toBe(2);
   });
 
+  // Only the build waits for the plan (K6c): a write to a file the waiting plan
+  // does not name goes through, whatever its type, under every Guard Policy;
+  // the files it names (its summary and its test command) wait. Once the
+  // person's approval is on record, a side write made with `next` goes through.
+  for (const policy of ["strict", "off"] as const) {
+    test(`while the plan waits, a file it does not name can be written and its own files wait (${policy})`, () => {
+      const proj = project(policy);
+      askFor(proj);
+      for (const path of [join(proj, "scratch", "notify.txt"), join(proj, "src", "base.ts"), join(proj, "README.md")]) {
+        const result = guardWrite(proj, path);
+        expect(result.code, `${path}\n${result.stderr}`).toBe(0);
+      }
+      expect(guardBash(proj, "echo 'approval needed' >> scratch/notify.txt").code).toBe(0);
+      for (const path of [join(proj, "src", "slugify.ts"), join(proj, "src", "slugify.test.ts")]) {
+        const blocked = guardWrite(proj, path);
+        expect(blocked.code, path).toBe(2);
+        expect(blocked.stderr.trim()).toBe("Nothing is built or changed while the plan waits for your approval.");
+      }
+      expect(guardWrite(proj, join(stageDir(proj), "code-generation-questions.md")).code).toBe(2);
+      expect(guardBash(proj, "echo 'export const s = 1;' > src/slugify.ts").code).toBe(2);
+      reply(proj, "approve the plan, and write approval needed to scratch/notify.txt next time");
+      expect(answer(proj, "Approve Plan").code).toBe(0);
+      const side = guardWrite(proj, join(proj, "scratch", "notify.txt"));
+      expect(side.code, side.stderr).toBe(0);
+    });
+  }
+
   test("while the question is open, the old conductor commands point back to next, and a record needs their reply", () => {
     const proj = project();
     askFor(proj);
