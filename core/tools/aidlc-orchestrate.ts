@@ -485,7 +485,7 @@ import {
   rulesContentEntries,
   type RuleContent,
 } from "./aidlc-steering.ts";
-import { chatHoldsRules, noteRulesDelivered } from "./aidlc-rules-held.ts";
+import { chatHoldsRules, noteRulesDelivered, RULES_HELD_NOTE } from "./aidlc-rules-held.ts";
 import { refreshKiroIdeSteering } from "./aidlc-includes.ts";
 
 // Read the workflow state file if it exists, else null. The engine's `next` is
@@ -6553,7 +6553,10 @@ function transportRunStage(
     directive.rules_in_context,
     bundle,
   );
-  if (held) directive.rules_held = bundle;
+  if (held) {
+    directive.rules_held = bundle;
+    directive.rules_held_note = RULES_HELD_NOTE;
+  }
   const content = held ? [] : loaded.content;
   preparedRulesDelivery = { projectDir: route.codekbCtx.projectDir, space: route.codekbCtx.space, bundle, held };
   const directiveHash = sha256(JSON.stringify(directive));

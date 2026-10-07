@@ -908,10 +908,13 @@ chat that runs the command provably holds that exact text
 | Kiro IDE (`kiro-ide`; Kiro CLI v3 runs the same tree) | the chat's session start found its always-included steering file `aidlc-active-memory.md` exactly as the memory files make it now (AI-DLC writes their text into it, `aidlc-includes.ts`), did not rewrite it, and the file is still that; Kiro captures steering once when a chat starts, before its hooks run, and keeps that copy through summaries and reloads, never a mid-chat edit. Kiro IDE gives the agent's shell no chat id, so every chat with an open turn (a prompt with no Stop since) must hold the same file; Kiro CLI v3 names the chat in `KIRO_SESSION_ID` instead | session start (SessionStart, or the chat's first prompt) |
 | Codex | this thread was handed the bundle in full, no SessionStart or PreCompact ran since, and the thread's rollout shows no `compacted` entry after it and the rule text it was handed since its last compaction rebuilds exactly to the bundle digest (Codex trims a command's output to the token budget the model asks for by cutting out the middle, which can leave valid JSON) | the engine, when a run-stage carries the text |
 
-On every tool, a step whose bundle differs from the one the chat's last step
-named gets the full text once, so a changed rule is in front of the agent (live
-on Kiro CLI, an agent holding the edited file still repeated its old behaviour
-when the step only named the rules). The command must also run inside that tool's chat (its own variable:
+On every tool, a chat's first step, and a step whose bundle differs from the one
+the chat's last step named, gets the full text once, so the rules are in front of
+the agent (live on Kiro CLI, an agent holding the edited file still repeated its
+old behaviour when the step only named the rules; live on Kiro IDE, an agent in a
+new chat once ignored a team rule its steering held). A pointer step also carries
+`rules_held_note`, one sentence telling the agent that the step's rules are the
+memory text already in its context, so it applies them with no skill loaded. The command must also run inside that tool's chat (its own variable:
 `CLAUDE_CODE_SESSION_ID`, `KIRO_SESSION_ID`, `OPENCODE`, `CODEX_THREAD_ID`; on
 Kiro IDE, an open turn). Cursor and Copilot always get the text, and so does
 every case where a record, a session id or a file is missing or unreadable. The records live in

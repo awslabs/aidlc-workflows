@@ -64,6 +64,10 @@ type LoadRecord = {
   transcript?: string;
 };
 
+/** The sentence a pointer step carries beside `rules_held`. */
+export const RULES_HELD_NOTE =
+  "This step's rules are the AI-DLC memory text already in your context; apply them to every file you write in this step.";
+
 // What this chat's steps were handed. `last` is the bundle the last step named
 // (in full or by pointer): a step whose bundle differs gets the full text once,
 // even where the host holds the new files, so the change is in front of the
@@ -468,8 +472,10 @@ export function chatHoldsRules(
     const record = readJson<LoadRecord>(loadRecordPath(projectDir, sid));
     if (record?.v !== 1 || record.harness !== harness || record.space !== space) return false;
     const delivered = readDelivery(projectDir, sid);
-    // The rules changed since this chat's last step: the text once.
-    if (delivered !== null && delivered.last !== bundle) return false;
+    // The chat's first step, or the rules changed since its last step: the
+    // text once, so the rules are in front of the agent (live on Kiro IDE, an
+    // agent in a new chat once ignored a team rule its steering held).
+    if (delivered === null || delivered.last !== bundle) return false;
     if (record.refresh === "at-start") {
       if (record.stale === true || !record.steering) return false;
       const { text, inlined } = kiroIdeSteering(projectDir, space);

@@ -346,6 +346,9 @@ export interface RunStageDirective {
   // unchanged (the host's own copy of the memory files, or what this Codex
   // thread was handed; see aidlc-rules-held.ts). Never beside rules_content.
   rules_held?: string;
+  // Beside rules_held: one sentence telling the agent where those rules are,
+  // so the step applies them with no skill loaded.
+  rules_held_note?: string;
   // Presentation projection only: detailed fire policy remains on stage-graph.
   sensors_applicable: string[];
   // Engine-resolved ceremony switches apply equally to inline and dispatched work.
@@ -848,6 +851,7 @@ const RUN_STAGE_FIELDS = [
   "rules_in_context",
   "rules_content",
   "rules_held",
+  "rules_held_note",
   "sensors_applicable",
   "ceremony",
   "answer_mode",
@@ -1411,6 +1415,13 @@ function checkRunStageShared(
       errors.push(`${kind}: rules_held must be a sha256 bundle digest`);
     } else if (o.rules_content !== undefined) {
       errors.push(`${kind}: rules_held and rules_content cannot both be present`);
+    }
+  }
+  if (o.rules_held_note !== undefined) {
+    if (typeof o.rules_held_note !== "string" || o.rules_held_note === "") {
+      errors.push(`${kind}: rules_held_note must be a non-empty string`);
+    } else if (o.rules_held === undefined) {
+      errors.push(`${kind}: rules_held_note goes only beside rules_held`);
     }
   }
   checkStringArray(o, "sensors_applicable", kind, errors);
