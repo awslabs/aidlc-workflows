@@ -2633,6 +2633,8 @@ interface CodeGenerationContinuation {
   fence: ReturnType<typeof decideFence>;
   /** Read-only drift preview; generation start records it under the authority locks. */
   sourceChange?: AcceptedChange;
+  /** The approval was given in the attempt the person's own change request closed. */
+  carried?: true;
 }
 
 /**
@@ -2643,11 +2645,68 @@ interface CodeGenerationContinuation {
 // The human's earlier "Approve Plan" for this target and attempt, proven by its
 // receipt, whatever has changed in the plan or source since. A lowered fence
 // can only continue from this; it never stands in for it.
+/**
+ * The approval the person gave in the attempt their own change request closed.
+ *
+ * At a gate they say "rename the test file" or "do it differently". The engine
+ * sends the plan back with their words, the agent revises it, and that gate
+ * rejection opened a new stage attempt, so the receipt for their approval is
+ * keyed to the attempt before it. Asking them to approve a plan revised only
+ * for what they just asked is asking twice, so while the fence is lowered their
+ * approval carries to it; strict still asks, because its whole point is to ask.
+ *
+ * A reopen or a Redo is not that: it is a fresh attempt, whose plan comes back
+ * for approval. Its `GATE_REJECTED` row carries `Reopen` (`jump` or `redo`,
+ * written by `aidlc-jump.ts reopen`), and nothing carries across it. The two are
+ * told apart by that field alone, never by reading the row's feedback text.
+ *
+ * Only the person's own approval of this question, for this target and piece of
+ * work, counts: the receipt must match the questions file's fingerprint and
+ * prompt hash exactly, so the only field it may differ in is the attempt floor.
+ *
+ * And only once the plan has actually been revised. While it still reads as the
+ * plan they approved, their change request has not been carried out yet, and
+ * `next` owes them the `revise` step that hands the agent their words; carrying
+ * the approval then would skip it and build the unchanged plan. Ticking a step
+ * is not a revision: the fingerprint's projection already leaves task markers
+ * out, so the build that their rejection closed does not look like a change.
+ */
+function approvalFromTheirChangeRequest(
+  projectDir: string,
+  authority: CodeGenerationAuthority,
+  identity: PlanApprovalRuntimeIdentity,
+): PlanApprovalRuntimeReceipt | null {
+  const floor = /^GATE_REJECTED:(.+)#\d+$/.exec(authority.runFloor);
+  if (floor === null) return null;
+  const rejection = readAuditShardEvents(projectDir).find((row) =>
+    row.event === "GATE_REJECTED" && row.timestamp === floor[1] &&
+    [null, authority.unit].includes(auditBlockField(row.block, "Unit")));
+  if (rejection === undefined || auditBlockField(rejection.block, "Reopen") !== null) return null;
+  const plan = readFileSync(join(authority.stageDir, "code-generation-plan.md"), "utf-8");
+  const instructions = readFileSync(join(authority.stageDir, "unit-test-instructions.md"), "utf-8");
+  const contract = parseTestingContract(plan);
+  if (contract === null) return null;
+  return stalePlanApprovalReceiptsForTarget(
+    projectDir, identity.intentId, identity.targetId, authority.runFloor,
+  ).find((receipt) =>
+    receipt.choice === "Approve Plan" &&
+    runtimeIdentityMatches(receipt, { ...identity, runFloor: receipt.runFloor, promptSha256: receipt.promptSha256 }) &&
+    // Judged against that approval's own attempt, the way the revision route
+    // judges it: equal means the plan is still the one they approved.
+    approvalFingerprint(plan, instructions, contract.contract_sha256, receipt) !== receipt.fingerprint
+  ) ?? null;
+}
+
 function earlierPlanApproval(
   projectDir: string,
   target: CodeGenerationTarget,
   issued?: CodeGenerationIssuance,
-): { authority: CodeGenerationAuthority; receipt: PlanApprovalRuntimeReceipt } | null {
+): {
+  authority: CodeGenerationAuthority;
+  receipt: PlanApprovalRuntimeReceipt;
+  /** The approval was given in the attempt the person's own change request closed. */
+  carried?: true;
+} | null {
   const authority = resolveCodeGenerationAuthority(projectDir, target, issued);
   const questionsPath = join(authority.stageDir, "code-generation-questions.md");
   // A checkout that changed its line endings has not changed the answer.
@@ -2669,13 +2728,20 @@ function earlierPlanApproval(
   // A lowered fence continues past a changed questions file too (a note, a
   // reformat): the approval is of the plan content and attempt the receipt
   // names, and only this machine's own receipt counts.
+  const standing = receipt ?? approvalFromTheirChangeRequest(projectDir, authority, identity);
   if (
-    receipt?.choice !== "Approve Plan" ||
-    !runtimeIdentityMatches(receipt, { ...identity, promptSha256: receipt.promptSha256 })
+    standing?.choice !== "Approve Plan" ||
+    !runtimeIdentityMatches(standing, {
+      ...identity, runFloor: standing.runFloor, promptSha256: standing.promptSha256,
+    })
   ) return null;
   const violation = readPlanApprovalViolation(projectDir);
   if (violation?.version === 1 && violation.markerRevision === authority.markerRevision) return null;
-  return { authority, receipt };
+  return {
+    authority,
+    receipt: standing,
+    ...(standing.runFloor === authority.runFloor ? {} : { carried: true as const }),
+  };
 }
 
 // What an earlier approval needs to be executed under a lowered fence: the
@@ -2733,7 +2799,7 @@ function codeGenerationContinuation(
     if (fence.decision !== "stand-aside") return null;
     const material = continuationMaterial(projectDir, earlier, contractProject);
     if (material === null) return null;
-    return { authority, receipt, fence, ...material };
+    return { authority, receipt, fence, ...material, ...(earlier.carried ? { carried: true as const } : {}) };
   } catch {
     return null;
   }
@@ -4803,7 +4869,11 @@ function prepareCodeGenerationStart(projectDir: string, target: CodeGenerationTa
   const authority = continuation?.authority ?? resolveCodeGenerationAuthority(projectDir, target);
   const receiptKey: PlanApprovalReceiptKey = {
     targetId: authority.targetId,
-    runFloor: authority.runFloor,
+    // The receipt a continuation builds from is its own: for an approval the
+    // person's change request carried into this attempt, that is the attempt
+    // their rejection closed. Every other continuation's receipt is at this
+    // attempt's own floor, so this reads the same key as before.
+    runFloor: continuation?.receipt.runFloor ?? authority.runFloor,
     fingerprint: continuation?.receipt.fingerprint ?? approval.approvalFingerprint!,
   };
   const receipt = readPlanApprovalReceipt(projectDir, receiptKey);
@@ -4953,7 +5023,12 @@ export function beginCodeGenerationBatch(
           // the start is published. A swarm batch and a worktree delegation keep
           // their own continuation rule.
           const pickUp = started.receipt.delegation === undefined && !swarm;
-          if (started.receipt.status !== "generation" && pickUp) {
+          // An approval the person's change request carried into this attempt
+          // was already spent by the build their rejection closed, so its
+          // receipt stands at `generation` with that build's ticks on the plan.
+          // Those ticks are the previous attempt's progress, not this build's:
+          // the revised plan starts its steps fresh, as a new approval does.
+          if ((started.receipt.status !== "generation" || started.continuation?.carried) && pickUp) {
             clearPlanFileTicks(projectDir, started.authority.stageDir);
           }
           notices.push(...publishCodeGenerationStart(projectDir, started, options, originals, pickUp));

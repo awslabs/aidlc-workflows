@@ -1134,8 +1134,11 @@ describe("the engine asks for Plan Approval", () => {
     expect(evaluateCodeGenerationApproval(proj, { unit: null }).ok).toBe(false);
   });
 
+  // Under strict, a revised plan is asked about again: the policy's purpose is
+  // to ask. Under off and relaxed the person's own change request is not put
+  // back to them (t-plan-revised-for-their-request.test.ts).
   test("a rejected gate sends the approved plan back with the person's words, then asks about the revised plan", () => {
-    const proj = project();
+    const proj = project("strict");
     askFor(proj);
     reply(proj, "1");
     expect(next(proj).plan_approval).toEqual({ status: "approved" });
@@ -1147,6 +1150,23 @@ describe("the engine asks for Plan Approval", () => {
     expect(revise.plan_approval).toEqual({ status: "revise", feedback: "log every slug" });
     writePlan(proj, "- [ ] Step 2: log every slug\n");
     expect(next(proj).kind).toBe("ask");
+  });
+
+  // The same chain under a lowered fence: they asked for the change, so the
+  // revised plan builds and the gate after it collects their judgement.
+  test("under relaxed, the plan revised for their own change request builds with no second question", () => {
+    const proj = project();
+    askFor(proj);
+    reply(proj, "1");
+    expect(next(proj).plan_approval).toEqual({ status: "approved" });
+    appendAuditEntry("GATE_REJECTED", {
+      Stage: "code-generation", "User Input": "Request Changes", Feedback: "log every slug",
+    }, proj);
+    expect(next(proj).plan_approval).toEqual({ status: "revise", feedback: "log every slug" });
+    writePlan(proj, "- [ ] Step 2: log every slug\n");
+    const build = next(proj);
+    expect(build.kind, JSON.stringify(build)).toBe("run-stage");
+    expect(build.plan_approval?.status).toBe("approved");
   });
 });
 
