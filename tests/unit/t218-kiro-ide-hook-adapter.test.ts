@@ -6703,3 +6703,149 @@ describe("t218 terminal-command-guard holds a command with a lone carriage retur
     }
   });
 });
+
+// Kiro IDE shows one "Run Command Hook" card for every hook run, so the five
+// tool-call checks share one registration (guard-tool-call) and the two
+// after-shell hooks another (after-shell) (#2022). Each check keeps the tools
+// its own registration selected, every check still runs after one refuses (as
+// Kiro ran every hook), and the call is refused when any check refuses.
+describe("t218 one card runs the checks that had their own cards (#2022)", () => {
+  const FLOOR = "An approval is waiting for the person's answer, so nothing runs until they give it: end the turn.";
+  const RUNTIME = "AIDLC runtime records and hooks belong to the harness";
+  const count = (text: string, part: string) => text.split(part).length - 1;
+  const call = (dir: string, payload: Record<string, unknown>) =>
+    JSON.stringify({ hook_event_name: "PreToolUse", cwd: dir, session_id: "S-IDE", ...payload });
+  // An approval the person has not answered: the state shows the gate and no
+  // human turn follows the stage's start.
+  function waitingGate(dir: string): void {
+    const statePath = seededStateFile(dir);
+    writeFileSync(
+      statePath,
+      readFileSync(statePath, "utf-8").replace("- [-] requirements-analysis", "- [?] requirements-analysis"),
+    );
+    appendStageStarted(dir, "requirements-analysis", "2026-01-01T00:00:00Z");
+  }
+  const env = { AIDLC_COMPILED_EXECUTABLE: "", AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "0" };
+
+  test("a read runs while an approval waits; a write is refused with the floor's words once", () => {
+    const dir = scratchProject(true);
+    try {
+      waitingGate(dir);
+      const read = runIdeStdin(dir, "guard-tool-call", call(dir, {
+        tool_name: "read_file",
+        tool_input: { path: "README.md" },
+      }), env);
+      expect(read.code, read.stderr).toBe(0);
+      expect(read.stderr).toBe("");
+      const write = runIdeStdin(dir, "guard-tool-call", call(dir, {
+        tool_name: "fs_write",
+        tool_input: { path: "scratch/notify.txt", text: "approval needed" },
+      }), env);
+      expect(write.code, write.stderr).toBe(2);
+      expect(count(write.stderr, FLOOR)).toBe(1);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("every check still runs after one refuses, and a check that lets the call through adds no words", () => {
+    const dir = scratchProject(true);
+    try {
+      waitingGate(dir);
+      const capture = join(dir, "after-refusal.jsonl");
+      for (const hookFile of ["aidlc-review-freeze.ts", "aidlc-state-transition-guard.ts"]) {
+        writeFileSync(
+          join(dir, ".kiro", "hooks", hookFile),
+          recordingGuard(capture).replace("  return 0;", '  process.stderr.write("stand-in note\\n");\n  return 0;'),
+          "utf-8",
+        );
+      }
+      const r = runIdeStdin(dir, "guard-tool-call", call(dir, {
+        tool_name: "fs_write",
+        tool_input: { path: join(dir, "aidlc", "notes.md"), text: "x" },
+      }), env);
+      expect(r.code, r.stderr).toBe(2);
+      expect(count(r.stderr, FLOOR)).toBe(1);
+      expect(r.stderr).not.toContain("stand-in note");
+      // Both write checks ran after the floor refused.
+      expect(readFileSync(capture, "utf-8").trim().split("\n")).toHaveLength(2);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("two checks refusing for the same reason say it once", () => {
+    const dir = scratchProject(true);
+    try {
+      const r = runIdeStdin(dir, "guard-tool-call", call(dir, {
+        tool_name: "fs_write",
+        tool_input: { path: ".kiro/hooks/aidlc-kiro-adapter.ts", text: "// probe" },
+      }), { AIDLC_COMPILED_EXECUTABLE: "" });
+      expect(r.code, r.stderr).toBe(2);
+      expect(count(r.stderr, RUNTIME)).toBe(1);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("each check is reached only by the tools its own registration selected", () => {
+    const dir = scratchProject(true);
+    try {
+      const capture = join(dir, "selected.jsonl");
+      writeFileSync(join(dir, ".kiro", "hooks", "aidlc-review-freeze.ts"), recordingGuard(capture), "utf-8");
+      for (const payload of [
+        { tool_name: "invoke_sub_agent", tool_input: { name: "aidlc-product-agent", prompt: "x" } },
+        { tool_name: "memory", tool_input: { note: "x" } },
+        { tool_name: "execute_pwsh", tool_input: { command: "node --version" } },
+        { tool_name: "str_replace", tool_input: { path: join(dir, "aidlc", "notes.md"), oldStr: "a", newStr: "b" } },
+      ]) {
+        const r = runIdeStdin(dir, "guard-tool-call", call(dir, payload), { AIDLC_COMPILED_EXECUTABLE: "" });
+        expect(r.code, `${payload.tool_name} ${r.stderr}`).toBe(0);
+      }
+      const forwarded = readFileSync(capture, "utf-8").trim().split("\n")
+        .map((line) => (JSON.parse(line) as { tool_name: string }).tool_name);
+      expect(forwarded).toEqual(["Bash", "Edit"]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("the after-shell card runs the rebuild, then the sync", () => {
+    const dir = scratchProject(true);
+    try {
+      const capture = join(dir, "after-shell.jsonl");
+      for (const hookFile of ["aidlc-rebuild-stage-graph.ts", "aidlc-sync-workflow-state.ts"]) {
+        writeFileSync(join(dir, ".kiro", "hooks", hookFile), recordingGuard(capture), "utf-8");
+      }
+      const r = runIdeStdin(dir, "after-shell", ctx1x("execute_pwsh", "Output:\nok\nExit Code: 0"), {
+        AIDLC_COMPILED_EXECUTABLE: "",
+      });
+      expect(r.code, r.stderr).toBe(0);
+      const ran = readFileSync(capture, "utf-8").trim().split("\n")
+        .map((line) => (JSON.parse(line) as { tool_name: string }).tool_name);
+      expect(ran).toEqual(["Bash", "TaskUpdate"]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("through the dispatcher both cards read their payload", () => {
+    const dir = scratchProject(true);
+    try {
+      const capture = join(dir, "dispatcher.jsonl");
+      writeFileSync(join(dir, ".kiro", "hooks", "aidlc-rebuild-stage-graph.ts"), recordingGuard(capture), "utf-8");
+      const write = runIdeDispatcherStdin(dir, "guard-tool-call", call(dir, {
+        tool_name: "fs_write",
+        tool_input: { path: ".kiro/hooks/aidlc-kiro-adapter.ts", text: "// probe" },
+      }));
+      expect(write.code, write.stderr).toBe(2);
+      expect(count(write.stderr, RUNTIME)).toBe(1);
+      const after = runIdeDispatcherStdin(dir, "after-shell", ctx1x("execute_bash", "Output:\nok\nExit Code: 0", "PostToolUse", "S-DISPATCH"));
+      expect(after.code, after.stderr).toBe(0);
+      const forwarded = JSON.parse(readFileSync(capture, "utf-8").trim()) as { session_id?: string };
+      expect(forwarded.session_id).toBe("S-DISPATCH");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});

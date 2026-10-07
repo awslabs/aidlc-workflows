@@ -132,7 +132,7 @@ function shellHook(dir: string, target: string, env: Record<string, string> = {}
   const ran = join(dir, `hook-ran-${calls}`);
   const payload = JSON.stringify({
     session_id: "sess_front_gate",
-    hook_event_name: target === "enforce-approval-gate" ? "PreToolUse" : "PostToolUse",
+    hook_event_name: target === "enforce-approval-gate" || target === "guard-tool-call" ? "PreToolUse" : "PostToolUse",
     cwd: dir,
     tool_name: "execute_bash",
     tool_input: {},
@@ -199,6 +199,22 @@ describe("a shell command that changed nothing the hook reads skips the engine",
     expect(shellHook(dir, "enforce-approval-gate").ran).toBe(true);
   });
 
+  // Kiro IDE runs both as one after-shell card (#2022): it skips the engine
+  // when neither has anything to do, and the one guard card always runs.
+  test("the after-shell card skips the engine when neither hook has anything to do", () => {
+    const dir = project();
+    settled(dir, "rebuild-stage-graph");
+    settled(dir, "sync-workflow-state");
+    expectSkipped(shellHook(dir, "after-shell"));
+  });
+
+  test("the one guard card always loads the engine", () => {
+    const dir = project();
+    settled(dir, "rebuild-stage-graph");
+    settled(dir, "sync-workflow-state");
+    expect(shellHook(dir, "guard-tool-call").ran).toBe(true);
+  });
+
   test("a skipped rebuild still says the hook fired", () => {
     const dir = project();
     settled(dir, "rebuild-stage-graph");
@@ -224,6 +240,17 @@ describe("anything that might matter runs the full hook", () => {
     appendStageStarted(dir, "user-stories");
     setTime(mark(dir, "sync-workflow-state"), -30_000);
     const call = shellHook(dir, "sync-workflow-state");
+    expect(call.ran).toBe(true);
+    expect(currentStage(dir)).toBe("user-stories");
+  });
+
+  test("a new stage started after the marks: the after-shell card runs and the sync moves the stage", () => {
+    const dir = project();
+    settled(dir, "rebuild-stage-graph");
+    settled(dir, "sync-workflow-state");
+    appendStageStarted(dir, "user-stories");
+    setTime(mark(dir, "sync-workflow-state"), -30_000);
+    const call = shellHook(dir, "after-shell");
     expect(call.ran).toBe(true);
     expect(currentStage(dir)).toBe("user-stories");
   });
