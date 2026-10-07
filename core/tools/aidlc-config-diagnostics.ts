@@ -16,12 +16,14 @@ import { delimiter, dirname, extname, join, relative, resolve } from "node:path"
 import {
   assertProjectionPathHasNoSymlinks,
   isSafeOnboardingPath,
+  jsonEntryId,
   jsonFileText,
   jsoncRootMembers,
   jsoncSettingValue,
   managedBlockIsSafe,
   managedBlockMarkers,
   mergeBlock,
+  mergeJsonEntries,
   missingJsonEntries,
   readJsonFile,
   type RootIntegration,
@@ -1512,14 +1514,41 @@ function openCodeJsonOrNull(path: string): Record<string, unknown> | null {
   }
 }
 
+/**
+ * The entries of the team's opencode.json an explicit Bedrock choice sets:
+ * provider.amazon-bedrock.options.region, and .profile when one is recorded.
+ */
+export function openCodeProviderEntryIds(record: ProvidersRecord): string[] {
+  const options = ["provider", "amazon-bedrock", "options"];
+  return [
+    jsonEntryId([...options, "region"]),
+    ...(record.profile ? [jsonEntryId([...options, "profile"])] : []),
+  ];
+}
+
 function writeOpenCodeProvider(
   projectionRoot: string,
   record: ProvidersRecord,
 ): void {
   if (!record.opencodeDefault) return;
   const path = join(projectionRoot, "opencode.json");
+  if (!existsSync(path)) return;
   const value = openCodeJsonOrNull(path);
-  if (value === null) return;
+  if (value === null) {
+    // The team's own file with comments (a copy's own tree): set the two
+    // leaves in place and keep everything else, comments included.
+    const current = readFileSync(path, "utf-8");
+    const options = { region: record.region, ...(record.profile ? { profile: record.profile } : {}) };
+    const merged = mergeJsonEntries(
+      current,
+      JSON.stringify({ provider: { "amazon-bedrock": { options } } }),
+      { kind: "none" },
+      false,
+      openCodeProviderEntryIds(record),
+    );
+    if (!("conflict" in merged) && merged.text !== current) writeFileSync(path, merged.text);
+    return;
+  }
   const providers = isRecord(value.provider) ? { ...value.provider } : {};
   const existing = isRecord(providers["amazon-bedrock"])
     ? providers["amazon-bedrock"]

@@ -381,3 +381,40 @@ describe("the entry merge", () => {
     }
   });
 });
+
+// The person picks or types a Bedrock region; setup says "Using amazon-bedrock
+// in <region>". The team's file already names a region of its own, so the
+// explicit choice must still reach it: the region and profile leaves become
+// AI-DLC's, the file says so once, and doctor reports no mismatch.
+describe("an explicit provider choice reaches the team's opencode.json", () => {
+  test.each([
+    ["with comments", TEAM_FILE],
+    ["plain JSON", `${JSON.stringify(parse(TEAM_FILE), null, 2)}\n`],
+  ])("config providers --region replaces the team's region, says so once, and doctor agrees (%s)", (label, teamFile) => {
+    const dir = project(teamFile);
+    configured(dir);
+    const changed = run([
+      "config", "providers", "--project-dir", dir,
+      "--provider", "amazon-bedrock", "--region", "us-east-1", "--opencode-default", "yes", "--yes",
+    ], dir);
+    expect(changed.status, changed.stdout + changed.stderr).toBe(0);
+    const text = readFileSync(join(dir, "opencode.json"), "utf-8");
+    if (label === "with comments") expect(text).toContain("// The team's own model and provider.");
+    const value = parse(text);
+    expect(value.provider["amazon-bedrock"].options.region).toBe("us-east-1");
+    expect(value.model).toBe("amazon-bedrock/team-model");
+    expect(value.permission.bash["*"]).toBe("allow");
+    expect(Object.keys(contribution(dir).entries)).toContain(JSON.stringify({ path: ["provider", "amazon-bedrock", "options", "region"] }));
+    expect(changed.stdout).toContain("opencode.json now uses Bedrock in us-east-1 (was eu-west-1)");
+    expect(changed.stdout.match(/now uses Bedrock/g)).toHaveLength(1);
+    const check = run(["config", "providers", "--project-dir", dir, "--check"], dir);
+    expect(check.stdout + check.stderr).not.toContain("provider-opencode");
+    // Rerunning with the same choice changes nothing and says nothing new.
+    const again = run([
+      "config", "providers", "--project-dir", dir,
+      "--provider", "amazon-bedrock", "--region", "us-east-1", "--opencode-default", "yes", "--yes",
+    ], dir);
+    expect(again.status, again.stdout + again.stderr).toBe(0);
+    expect(again.stdout).not.toContain("now uses Bedrock");
+  });
+});

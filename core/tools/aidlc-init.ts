@@ -225,6 +225,7 @@ import {
   insideGitRepository,
   managedBlockMarkers,
   normalizeProvidersRecord,
+  openCodeProviderEntryIds,
   withRecordedMcpRegion,
   normalizeProjectChoicesRecord,
   normalizeRuntimeRecord,
@@ -8660,6 +8661,49 @@ function sameJsonText(left: string, right: string): boolean {
   }
 }
 
+// The two leaves of the team's opencode.json an explicit `config providers`
+// Bedrock choice sets this run (provider.amazon-bedrock.options.region and
+// .profile), and the one line that says what changed, when the file said
+// something else before. A refresh, a reset or another section claims nothing.
+function openCodeProviderClaim(
+  projectDir: string,
+  harness: ModelHarness,
+  overrides: ConfigDiagnosticOverrides | undefined,
+): { entries: Record<string, readonly string[]>; note?: string } {
+  const provider = overrides && Object.hasOwn(overrides, "providers")
+    ? normalizeProvidersRecord(overrides.providers)
+    : null;
+  if (
+    harness !== "opencode" || provider?.provider !== "amazon-bedrock" ||
+    provider.opencodeDefault !== true || !provider.region
+  ) {
+    return { entries: {} };
+  }
+  const ids = openCodeProviderEntryIds(provider);
+  let note: string | undefined;
+  try {
+    const path = join(projectDir, "opencode.json");
+    const value = regularFile(path)
+      ? Bun.JSONC.parse(withoutBom(readFileSync(path, "utf-8"))) as Record<string, unknown>
+      : null;
+    const providers = value && isRecord(value.provider) ? value.provider : {};
+    const bedrock = isRecord(providers["amazon-bedrock"]) ? providers["amazon-bedrock"] : {};
+    const current = isRecord(bedrock.options) ? bedrock.options : {};
+    const was = typeof current.region === "string" ? current.region : null;
+    const profileWas = typeof current.profile === "string" ? current.profile : null;
+    const regionChanged = was !== null && was !== provider.region;
+    const profileChanged = Boolean(provider.profile) && profileWas !== null && profileWas !== provider.profile;
+    if (regionChanged || profileChanged) {
+      const now = provider.profile ? `${provider.region} with profile ${provider.profile}` : provider.region;
+      const before = profileWas ? `${was ?? provider.region}, profile ${profileWas}` : was ?? provider.region;
+      note = `opencode.json now uses Bedrock in ${now} (was ${before}).`;
+    }
+  } catch {
+    // An unreadable team file is reported by the merge itself.
+  }
+  return { entries: { "opencode.json": ids }, ...(note ? { note } : {}) };
+}
+
 function planRootIntegrations(
   projectDir: string,
   sourceRoot: string,
@@ -8682,6 +8726,9 @@ function planRootIntegrations(
   // The source is the project's own copied tree, whose json-entries file is
   // the team's own with AI-DLC's part merged in.
   ownJsonEntries = ownBytes,
+  // Entries the person set in this run, by root integration path: an explicit
+  // provider choice replaces the team's value for exactly those leaves.
+  claimJsonEntries: Record<string, readonly string[]> = {},
 ): void {
   let siblings: ProjectHarness[] | undefined;
   let siblingProjections: Array<{
@@ -9070,7 +9117,7 @@ function planRootIntegrations(
           ? { kind: "whole" }
           : { kind: "none" };
       }
-      const merged = mergeJsonEntries(current, shippedText, ownership, force);
+      const merged = mergeJsonEntries(current, shippedText, ownership, force, claimJsonEntries[integration.path] ?? []);
       if ("conflict" in merged) {
         actions.push({ path: integration.path, action: "conflict", detail: merged.conflict });
         continue;
@@ -11566,6 +11613,15 @@ export async function main(
         detail: "retired attributable manifestless hook",
       });
     }
+    // An explicit Bedrock choice for OpenCode owns the region and profile leaves
+    // of the team's opencode.json from now on, and says so once when it changes
+    // what the file said.
+    const openCodeClaim = openCodeProviderClaim(
+      projectDir,
+      modelHarness(descriptor.distribution),
+      diagnosticsContext?.overrides,
+    );
+    if (openCodeClaim.note && diagnosticsContext) diagnosticsContext.notes.push(openCodeClaim.note);
     if (!selected.projectProjection) {
       planRootIntegrations(
         projectDir,
@@ -11581,6 +11637,8 @@ export async function main(
         rootContributions,
         false,
         keepPresentServers,
+        false,
+        openCodeClaim.entries,
       );
       planRemovedRootIntegrations(
         projectDir,
@@ -11618,6 +11676,7 @@ export async function main(
           ownFilesProject,
           keepPresentServers,
           true,
+          openCodeClaim.entries,
         );
       }
     }
