@@ -4269,8 +4269,10 @@ function verifyReviewerPrecondition(
   const perUnit =
     stage.for_each === "unit-of-work" &&
     !usesStageLevelPerUnitArtifacts(getField(content, "Scope"), content);
+  // A Unit the person approved at its checkpoint as it was owes this stage no
+  // recovery review either.
   const pendingRecoveryUnits = Array.from(receipts.unitPending)
-    .filter(([, pending]) => pending.recovery)
+    .filter(([unit, pending]) => pending.recovery && !approvedOverUnfinishedReview(pd, content, stage.slug, unit))
     .map(([unit]) => unit);
   const verificationFailedUnits = Array.from(receipts.unitPending)
     .filter(([, pending]) => pending.verificationFailed === true)

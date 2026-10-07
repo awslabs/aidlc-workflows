@@ -733,7 +733,7 @@ function snapshot(
       // finished: no verdict yet, or NOT-READY with a pass left.
       const pending = receipts.unitPending.get(unit);
       if (
-        reviewMissing && pending !== undefined && !pending.recovery && pending.verificationFailed !== true &&
+        reviewMissing && pending !== undefined && pending.verificationFailed !== true &&
         (personAllows || notFinishedBefore.get(slug) === floor) && overAllowed()
       ) {
         notFinished.push(slug);
@@ -786,7 +786,7 @@ function snapshot(
               }),
               unfinished: receipts.awaitingVerdict?.has(unit) ? "no-verdict" : "not-ready",
             };
-            unfinishedMayGoOn = !pending.recovery && pending.verificationFailed !== true;
+            unfinishedMayGoOn = pending.verificationFailed !== true;
           }
         } else if (!review && !receipts.openBoltUnits.has(unit) && !receipts.unitStaleProgress.has(unit)) {
           // The Unit's review was never asked for: the step is its first request.
