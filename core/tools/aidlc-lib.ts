@@ -28369,7 +28369,7 @@ function hooksNeverRanHere(projectDir?: string): boolean {
 // Said to the agent after every missed-reply step: the person turns a check off, never the agent's offer.
 const NO_CHECK_OFF_OFFER = "Never offer to turn a check off for them.";
 
-export function unattendedHumanPresenceHint(projectDir?: string): string {
+export function unattendedHumanPresenceHint(projectDir?: string, options: { missedReply?: boolean } = {}): string {
   // Explain unattended submissions when relevant.
   if (!humanTurnMintAllowed()) {
     return " AIDLC_UNATTENDED=1 is set, so automated prompt submissions cannot count " +
@@ -28392,6 +28392,8 @@ export function unattendedHumanPresenceHint(projectDir?: string): string {
     return " If the person already replied, that reply was not recorded because AI-DLC's hooks are not " +
       `running here, so do not ask them to answer again; do this instead: ${agentStep} ${NO_CHECK_OFF_OFFER}`;
   }
+  // The caller refuses for a reply not given yet, not for one the hooks missed.
+  if (options.missedReply === false) return "";
   const activation = hookActivation();
   const host = activation?.missedReplyInHost;
   const inHost = host?.env.some((name) => Boolean(process.env[name]?.trim())) === true;

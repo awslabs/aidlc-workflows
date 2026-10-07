@@ -92,7 +92,7 @@ function run(args: string[], proj: string, extraEnv: Record<string, string> = {}
     stderr: "pipe",
   });
   const stderr = result.stderr.toString();
-  return { status: result.exitCode, stderr, error: refusalText(stderr) };
+  return { status: result.exitCode, stdout: result.stdout.toString(), stderr, error: refusalText(stderr) };
 }
 
 // Refusals are printed as one JSON object; read its message so quoted flags
@@ -184,7 +184,9 @@ describe("t-summary-confirmation-plain-form: the plain form is refused where it 
     expect(rows(proj, "HUMAN_TURN")).toHaveLength(turns);
   });
 
-  test("a reply after another question in between is that question's, not the plain summary's", () => {
+  // The tool proves only a reply since the person's last answer; which question
+  // it answers is the agent's reading, so the engine says it back.
+  test("a reply after another question in between counts when the agent reads it as the summary's, said back", () => {
     const { proj, questions } = project();
     appendAuditEntry("DECISION_RECORDED", {
       Stage: STAGE, Decision: "Does this all look correct?", Options: "Looks correct,Request changes",
@@ -204,15 +206,17 @@ describe("t-summary-confirmation-plain-form: the plain form is refused where it 
         "--details", "Looks correct"],
       proj,
     );
-    expect(recorded.status).toBe(1);
-    expect(recorded.error).toContain("no human reply has arrived after this question");
-    expect(rows(proj, "SUMMARY_CONFIRMATION_RECORDED")).toHaveLength(0);
+    expect(recorded.status, recorded.error).toBe(0);
+    expect(rows(proj, "SUMMARY_CONFIRMATION_RECORDED")).toHaveLength(1);
+    expect((JSON.parse(recorded.stdout.trim().split("\n").at(-1)!) as { say?: string }).say)
+      .toBe('Recorded your reply for "Does this all look correct?".');
   });
 
-  test("a summary recorded with its checkpoint after an unrelated reply still waits for the person", () => {
+  test("a summary recorded with its checkpoint after another answer still waits for the person", () => {
     const { proj, questions } = project();
-    // A reply before any summary question is not an answer to it.
+    // A reply already used by another answer is not one to the summary.
     appendAuditEntry("HUMAN_TURN", {}, proj);
+    appendAuditEntry("QUESTION_ANSWERED", { Stage: STAGE, Details: "The form" }, proj);
     const decision = run(
       ["decision", "--stage", STAGE, "--checkpoint", "summary-confirmation", "--questions-file", questions,
         "--decision", "Does this all look correct?", "--options", "Looks correct,Request changes"],
@@ -226,7 +230,7 @@ describe("t-summary-confirmation-plain-form: the plain form is refused where it 
       proj,
     );
     expect(early.status).toBe(1);
-    expect(early.error).toContain("no human reply has arrived after this question");
+    expect(early.error).toContain("no human reply has arrived since their last answer");
   });
 
   test("a plain answer of Request changes carries that choice into the command", () => {

@@ -135,7 +135,8 @@ stage's question flow:
 
 The receipt is not inferred from markdown alone. `aidlc-log.ts` records the
 reserved `SUMMARY_CONFIRMATION_RECORDED` event after a matching prompt record
-and a later human turn, binding it to the questions-file digest and its recorded
+and a reply of the person's since their last answer (before or after that
+record), with their words as `Person Reply`, binding it to the questions-file digest and its recorded
 `Hash Scope`. New receipts use `confirmed-content-v2`: the unchanged raw-content
 SHA-256 algorithm normalizes CRLF/lone CR to LF, retains sections in file order,
 and trims trailing whitespace once from the resulting content. All visible

@@ -596,9 +596,11 @@ Record the mode question and the user's mode choice through the log tool, the sa
   --details "Looks correct"` (or `--details 'Request changes: <what they asked
   to change>'`, single-quoted as below) using the same `--unit` / `--single`
   identity (see "Reading the person's reply at a checkpoint" in section 1). The tool refuses a
-  self-selected answer, a response without a matching prompt record and later
-  human turn, or a questions file whose stored choice differs from the one you
-  record.
+  self-selected answer, a response without a matching prompt record or with no
+  reply of theirs since their last answer, or a questions file whose stored
+  choice differs from the one you record. Their reply counts even when you
+  recorded the prompt after showing it; when the receipt output carries `say`,
+  tell the person that line once.
   An **Other** selection with no words of their own follows the Other-escape
   rule in section 1: discuss it, re-present the confirmation, and leave the tag
   and receipt untouched. Every other reply follows the reply-reading rule there.

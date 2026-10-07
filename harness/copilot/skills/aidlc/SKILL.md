@@ -114,7 +114,7 @@ wait for the human. Read their reply, persist the choice they made, then run the
 checkpoint-specific `aidlc-log.ts answer` command with `--details "Looks correct"`
 or `--details 'Request changes: <what they asked to change>'`; ask **"What should change?"**
 only when they did not say, and end the turn. Do not
-write artifacts until the Looks correct answer and receipt both exist.
+write artifacts until the Looks correct answer and receipt both exist. When the receipt output carries `say`, tell the person that line once.
 
 ### Acting on a directive
 

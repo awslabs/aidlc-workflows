@@ -1221,7 +1221,7 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
         "Looks correct",
       ]);
       expect(result.rc).not.toBe(0);
-      expect(result.out).toContain("that turn was already used by another decision");
+      expect(result.out).toContain("no human reply has arrived since their last answer");
       expect(eventCount(proj, "SUMMARY_CONFIRMATION_RECORDED")).toBe(0);
     });
 
