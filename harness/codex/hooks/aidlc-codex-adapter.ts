@@ -533,10 +533,14 @@ switch (target) {
     // SESSION_STARTED) and resume-rebind OFFER (on source=resume) become
     // reachable — Codex already carries a real `source`, so with session_id
     // present the whole P8 rebind path works on Codex.
+    // The thread's rollout lets `next` see a compaction no hook reported
+    // (#2023). It is not passed as transcript_path, which names a Claude
+    // transcript to the usage tools.
     const fwd = JSON.stringify({
       hook_event_name: "SessionStart",
       source: codex.source ?? "startup",
       ...(codex.session_id ? { session_id: codex.session_id } : {}),
+      ...(typeof codex.transcript_path === "string" ? { rollout_path: codex.transcript_path } : {}),
     });
     const r = runCore("aidlc-session-start.ts", fwd);
     const wrapped = wrapContext(r.stdout, "SessionStart");

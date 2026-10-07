@@ -24,6 +24,7 @@ import {
   stateFilePath,
   validSessionId,
 } from "../tools/aidlc-lib.ts";
+import { clearRulesDelivered } from "../tools/aidlc-rules-held.ts";
 
 export async function run(input: string): Promise<number> {
   const projectDir = resolveProjectDirFromHook(import.meta.url);
@@ -34,6 +35,9 @@ export async function run(input: string): Promise<number> {
   } catch {
     // Missing/malformed payload: resolve without a payload session.
   }
+  // The compacted chat no longer holds the rule text it was handed (#2023),
+  // whatever workflow it works on.
+  if (typeof payloadSession === "string") clearRulesDelivered(projectDir, payloadSession);
   // A compaction in a conversation that has not joined the selected workflow
   // leaves that workflow's heartbeat, breadcrumb and ledger alone.
   const workflow = enterHookWorkflow(projectDir, payloadSession);

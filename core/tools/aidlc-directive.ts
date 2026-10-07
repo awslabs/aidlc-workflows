@@ -327,6 +327,10 @@ export interface RunStageDirective {
   // (every shipped stage does). Absent only when the bundle arrived through a
   // preceding load-steering sequence.
   rules_content?: Array<{ path: string; text: string }>;
+  // Instead of rules_content: the digest of a bundle the chat already holds,
+  // unchanged (the host's own copy of the memory files, or what this Codex
+  // thread was handed; see aidlc-rules-held.ts). Never beside rules_content.
+  rules_held?: string;
   // Presentation projection only: detailed fire policy remains on stage-graph.
   sensors_applicable: string[];
   // Engine-resolved ceremony switches apply equally to inline and dispatched work.
@@ -827,6 +831,7 @@ const RUN_STAGE_FIELDS = [
   "produces",
   "rules_in_context",
   "rules_content",
+  "rules_held",
   "sensors_applicable",
   "ceremony",
   "answer_mode",
@@ -1384,6 +1389,13 @@ function checkRunStageShared(
   checkStringArray(o, "rules_in_context", kind, errors);
   if (o.rules_content !== undefined) {
     checkPathTextArray(o, "rules_content", kind, errors);
+  }
+  if (o.rules_held !== undefined) {
+    if (typeof o.rules_held !== "string" || !/^sha256:[0-9a-f]{64}$/.test(o.rules_held)) {
+      errors.push(`${kind}: rules_held must be a sha256 bundle digest`);
+    } else if (o.rules_content !== undefined) {
+      errors.push(`${kind}: rules_held and rules_content cannot both be present`);
+    }
   }
   checkStringArray(o, "sensors_applicable", kind, errors);
   checkCeremony(o, kind, errors);

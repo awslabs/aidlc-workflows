@@ -83,6 +83,7 @@ import {
   clearSessionRebindOffer,
 } from "../tools/aidlc-lib.ts";
 import { writeCurrentTranscriptPath } from "../tools/aidlc-usage.ts";
+import { recordRulesLoad } from "../tools/aidlc-rules-held.ts";
 import { aidlcToolInvocation, entrySkillInvocation, hidesStopNote, runtimeHarnessName } from "../tools/aidlc-runtime-paths.ts";
 import { switchesOffLines } from "../tools/aidlc-recorded-switches.ts";
 
@@ -118,6 +119,9 @@ let sessionId = "";
 // below so the statusline/state tools can find the transcript even before the
 // first Stop/PostToolUse fold writes the pointer. "" when absent.
 let transcriptPath = "";
+// The Codex thread's rollout file (the adapter forwards it), read only to see
+// compactions (#2023).
+let rolloutPath = "";
 if (!process.stdin.isTTY) {
   try {
     if (input.length > 0) {
@@ -131,6 +135,9 @@ if (!process.stdin.isTTY) {
           const rawObj = raw as Record<string, unknown>;
           if (typeof rawObj.transcript_path === "string") {
             transcriptPath = rawObj.transcript_path;
+          }
+          if (typeof rawObj.rollout_path === "string") {
+            rolloutPath = rawObj.rollout_path;
           }
           rebindCheckOnly = rawObj.rebind_check === true;
         } else {
@@ -245,11 +252,23 @@ if (sessionId) {
 // config never ran in first gets AI-DLC's part of .gitignore and AGENTS.md,
 // after the team's own content, so a part written here is aligned too.
 ensureActiveSpaceCursor(projectDir);
-addRootBlocks(projectDir);
+// A file written here may be one the host already read for this chat.
+let includeRepointed = addRootBlocks(projectDir).length > 0;
 try {
-  repointHarnessIncludes(projectDir, selection.space);
+  if (repointHarnessIncludes(projectDir, selection.space).length > 0) includeRepointed = true;
 } catch {
   // non-fatal — includes self-heal on the next /aidlc / switch / --doctor
+}
+
+// What the host loaded into this chat, so `next` can tell whether the chat
+// already holds a stage's rule text (#2023). A failure only means the full
+// text is sent, so it never blocks the start.
+if (sessionId && !rebindCheckOnly) {
+  try {
+    recordRulesLoad(projectDir, sessionId, source, selection.space, rolloutPath, includeRepointed);
+  } catch {
+    // the next stage gets its rules in full
+  }
 }
 
 const stateFile = stateFilePathForSelection(projectDir, selection);
