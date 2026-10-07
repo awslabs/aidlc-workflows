@@ -11371,6 +11371,8 @@ function requestOutlivesItsApproval(projectDir: string, intent?: string, space?:
       if (!after) continue;
       if (row.event === "GATE_APPROVED") {
         if (auditBlockField(row.block, "User Input") === null || auditBlockField(row.block, "Autonomous") === "true") continue;
+        // A stage approved together with another is part of that one approval.
+        if (auditBlockField(row.block, APPROVED_TOGETHER_WITH_FIELD) !== null) continue;
         theirs.add(`${row.shardIndex}:${row.pos}`);
       } else if (row.event === "PLAN_APPROVAL_RECORDED") {
         theirs.add("plan");

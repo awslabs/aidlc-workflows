@@ -20,6 +20,7 @@ import {
   readAuditShardEvents,
   setField,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import { HUMAN_PRESENCE_NO_SWITCH } from "../../dist/claude/.claude/tools/aidlc-command.ts";
 import {
   AIDLC_SRC,
@@ -587,6 +588,21 @@ describe("t338 summary confirmation off is the person's switch", () => {
     expect(run(UTILITY, ["config-change", "--summary-confirmation", "off"], unattended.proj, {
       ...SESSIONLESS, AIDLC_UNATTENDED: "1",
     }).status).toBe(1);
+  });
+
+  // One reply that approves several stages together and asks for a setting:
+  // the stages approved with the first are that one approval, so the request
+  // in the same reply still stands (#1981 F5).
+  test("\"approve, and turn the summary confirmation off\" at a grouped approval does both", () => {
+    const { proj, state } = project("feature");
+    recordHumanPrompt(proj, "approve, and turn the summary confirmation off");
+    appendAuditEntry("GATE_APPROVED", { Stage: "functional-design", "User Input": "Approve" }, proj);
+    appendAuditEntry("GATE_APPROVED", {
+      Stage: "nfr-requirements", "User Input": "Approve", "Approved Together With": "functional-design",
+    }, proj);
+    const changed = run(DISPATCHER, ["engine", "config", "set", "summary-confirmation", "off"], proj, SESSIONLESS);
+    expect(changed.status, changed.stderr).toBe(0);
+    expect(getField(readFileSync(state, "utf-8"), "Summary Confirmation")).toStartWith("off (");
   });
 
   test("turning it on stays free for a command", () => {
