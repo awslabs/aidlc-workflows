@@ -23534,7 +23534,9 @@ export function normalizeManifestSourcePath(path: string): { path: string; prefi
   if (path.startsWith("/") || /^[A-Za-z]:\//.test(path)) {
     return { reason: "writes[].path must be relative, not absolute" };
   }
-  if (/[*?[\]{}]/.test(path)) return { reason: "writes[].path cannot contain glob syntax" };
+  // Claims are literal paths. `[` and `]` name route folders (Next.js `[id]`);
+  // the other glob characters stay refused.
+  if (/[*?{}]/.test(path)) return { reason: "writes[].path cannot contain the glob characters '*', '?', '{' or '}'" };
   const inputSegments = path.split("/");
   if (inputSegments.includes("..")) return { reason: "writes[].path cannot contain '..' segments" };
   const prefix = path.endsWith("/");
@@ -23845,10 +23847,11 @@ function currentGitPathMode(
   // The cache accumulates prior single-path additions, but each probe stages
   // and reads only its exact literal path. An earlier path cannot create or
   // change that exact index entry; ordinary directories still have no exact
-  // entry, while embedded repositories remain mode 160000.
+  // entry, while embedded repositories remain mode 160000. Literal pathspecs
+  // keep a `[id]` route folder from matching its one-character siblings.
   const added = spawnSync(
     "git",
-    ["-C", sourceRepoDir, "add", "--", `./${literalPath}`],
+    ["--literal-pathspecs", "-C", sourceRepoDir, "add", "--", `./${literalPath}`],
     {
       env: index.env,
       encoding: "utf-8",
@@ -23858,7 +23861,7 @@ function currentGitPathMode(
   if (added.status !== 0) return { ok: false, mode: null };
   const listed = spawnSync(
     "git",
-    ["-C", sourceRepoDir, "ls-files", "-s", "-z", "--", `./${literalPath}`],
+    ["--literal-pathspecs", "-C", sourceRepoDir, "ls-files", "-s", "-z", "--", `./${literalPath}`],
     {
       env: index.env,
       encoding: "utf-8",
@@ -24061,6 +24064,7 @@ function ignoredSourceClaimReason(
     const ignoredDescendants = spawnSync(
       "git",
       [
+        "--literal-pathspecs",
         "-C",
         sourceRepoDir,
         "ls-files",

@@ -177,6 +177,9 @@ describe("t311 committed reviewed-source evidence", () => {
     expect(normalizeManifestSourcePath("src/generated/")).toEqual({ path: "src/generated/", prefix: true });
     expect(normalizeManifestSourcePath("./src//app.ts")).toEqual({ path: "src/app.ts", prefix: false });
     expect(normalizeManifestSourcePath("src/./gen/")).toEqual({ path: "src/gen/", prefix: true });
+    // Route folders name literal paths: `[` and `]` are ordinary file-name characters.
+    expect(normalizeManifestSourcePath("src/app/items/[itemId]/")).toEqual({ path: "src/app/items/[itemId]/", prefix: true });
+    expect(normalizeManifestSourcePath("src/app/[[...slug]]/page.tsx")).toEqual({ path: "src/app/[[...slug]]/page.tsx", prefix: false });
 
     const reason = (path: string): string => {
       const result = normalizeManifestSourcePath(path);
@@ -188,6 +191,8 @@ describe("t311 committed reviewed-source evidence", () => {
     expect(reason("/absolute.ts")).toContain("must be relative");
     expect(reason("C:/windows.ts")).toContain("must be relative");
     expect(reason("*.ts")).toContain("glob");
+    expect(reason("src/app?.ts")).toContain("glob");
+    expect(reason("src/{a,b}.ts")).toContain("glob");
     expect(reason("src/../escape.ts")).toContain("'..' segments");
     expect(reason(".")).toContain("below the repository root");
     expect(reason("./")).toContain("below the repository root");
