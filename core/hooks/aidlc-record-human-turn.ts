@@ -59,6 +59,8 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
+  addPendingPersonLines,
+  carryPendingPersonLines,
   clearSessionIntentHandoff,
   emptyPickerResult,
   enterHookWorkflow,
@@ -103,7 +105,11 @@ import {
   recordPlanApprovalOverrideRequest,
   recordProtectedHumanResponse,
 } from "../tools/aidlc-testing-posture.ts";
-import { notePlanApprovalAskReply, openPlanApprovalQuestion } from "../tools/aidlc-plan-approval-ask.ts";
+import {
+  engineQuestionHoldsReplies,
+  notePlanApprovalAskReply,
+  openPlanApprovalQuestion,
+} from "../tools/aidlc-plan-approval-ask.ts";
 import { aidlcEntryWords, isAidlcCommandPrompt } from "../tools/aidlc-reply-reader.ts";
 
 // "/aidlc approve the code plan" is the person's reply: the engine reads the
@@ -346,16 +352,31 @@ function pickedLabels(toolResponse: unknown): string[] {
 //
 // What the agent should hear from this turn is printed once, as one context
 // line: Claude Code reads a single hook response, and two lines make it drop both.
+//
+// What the PERSON hears does not travel that way. A host may fold hook output
+// away, an adapter may drop it, and an agent may not pass it on, which is how a
+// check the person typed off went unsaid on every tool. So a line for them is
+// queued for the engine's next step instead (addPendingPersonLines). It is
+// queued once this turn is recorded, because a line belongs to the turn that is
+// marked when it is written.
 async function run(input: string): Promise<number> {
   const notes: string[] = [];
+  const forThePerson: Array<() => void> = [];
   try {
-    return await respond(input, notes);
+    return await respond(input, notes, forThePerson);
   } finally {
+    for (const queue of forThePerson) {
+      try {
+        queue();
+      } catch {
+        // A line the person may miss never blocks their turn.
+      }
+    }
     if (notes.length > 0) process.stdout.write(hookContextLine("UserPromptSubmit", notes.join("\n")));
   }
 }
 
-async function respond(input: string, notes: string[]): Promise<number> {
+async function respond(input: string, notes: string[], forThePerson: Array<() => void>): Promise<number> {
 try {
   const projectDir = resolveProjectDirFromHook(import.meta.url);
   let sessionId = "";
@@ -491,7 +512,19 @@ try {
         keepPlanApprovalAskOverStateWrite(projectDir, before, readFileSync(stateFilePath(projectDir), "utf-8"));
       }
       if (outcome !== null) {
-        notes.push(`AIDLC Guard Policy: ${outcome.lines.join(" ")}`);
+        const lines = outcome.lines;
+        // Only a switch that went through is already done, and only its line is
+        // the engine's to say next. An outcome that changed nothing (a typo in a
+        // companion flag, a rule the team holds) stays exactly as it was: the
+        // agent reads it and answers the person itself.
+        notes.push(outcome.applied
+          ? `AIDLC Guard Policy: ${lines.join(" ")} Say that line to the person in your reply, in those words; the ` +
+            "switch is already applied, so never run a setter for it."
+          : `AIDLC Guard Policy: ${lines.join(" ")}`);
+        if (outcome.applied) {
+          const session = sessionId;
+          forThePerson.push(() => addPendingPersonLines(projectDir, session, lines));
+        }
       }
     } catch {
       // A switch failure must never block the human's turn.
@@ -537,6 +570,11 @@ try {
       // A reply typed after the entry is the words after it, so "/aidlc 1"
       // picks the first choice as "1" does.
       const replyText = entryReply ?? humanResponseText;
+      // Another engine question on top (where the work belongs, which plan)
+      // takes this reply: it answers no question beneath it, so no
+      // checkpoint, verification command, gate, or legacy plan question keeps
+      // it, and decisions on those skip it as they skip a command.
+      const answersEngineQuestion = replyText !== "" && engineQuestionHoldsReplies(projectDir);
       let keptWordsOffset: number | null = null;
       try {
         withAuditLock(projectDir, () => {
@@ -546,7 +584,9 @@ try {
           // ("/aidlc use postgres") are a reply.
           appendAuditEntryUnlocked("HUMAN_TURN", {
             ...(sessionId ? { Session: sessionId } : {}),
-            ...(switchQuestion ? { Reply: QUESTION_TURN_REPLY } : notAReply ? { Reply: COMMAND_TURN_REPLY } : {}),
+            ...(switchQuestion
+              ? { Reply: QUESTION_TURN_REPLY }
+              : notAReply || answersEngineQuestion ? { Reply: COMMAND_TURN_REPLY } : {}),
             ...(picked.length > 0 ? { Picked: JSON.stringify(picked) } : {}),
           }, projectDir);
           // Keep what the person typed in this chat, so a decision at a stage
@@ -555,7 +595,7 @@ try {
           // switch, or break-glass phrase instructs the framework; of a picker
           // reply, free text typed into it counts, and so does a picked gate
           // choice, which is their exact pick. Never blocks the turn.
-          const typedWords = typedPrompt
+          const typedWords = answersEngineQuestion ? "" : typedPrompt
             ? (notAReply ? "" : entryReply ?? typedPrompt)
             : pickerFreeText(humanResponseText, pickerQuestion) || pickedGateLabel(humanResponseText, pickerQuestion);
           if (sessionId && typedWords) {
@@ -574,7 +614,7 @@ try {
           // words for the conductor to answer.
           const engineQuestionOwnsReply = replyText !== "" && (!notAReply || switchQuestion) &&
             notePlanApprovalAskReply(projectDir, sessionId, replyText, pickerQuestion);
-          if (!engineQuestionOwnsReply && sessionId && replyText) {
+          if (!engineQuestionOwnsReply && sessionId && replyText && !answersEngineQuestion) {
             const plan = existsSync(join(projectDir, planApprovalChallengeRelativePath(projectDir, sessionId)));
             const protectedQuestion = existsSync(join(projectDir, protectedQuestionRelativePath(projectDir, sessionId)));
             if (plan && protectedQuestion) {
@@ -630,6 +670,14 @@ try {
       }
     }
     markHumanTurn(projectDir);
+    // This turn is now the one lines are keyed to. Anything the person has not
+    // heard yet follows them into it: a line queued for the turn before is still
+    // about what they asked for, and they may have answered a question the agent
+    // asked of its own accord in between.
+    if (sessionId) {
+      const session = sessionId;
+      forThePerson.push(() => carryPendingPersonLines(projectDir, session));
+    }
   }
 } catch {
   // Non-fatal — a mint failure must never block the human's turn.

@@ -256,10 +256,16 @@ they answer them with ONE question. Show one completion message covering every
 listed stage, then the question above with `approve_together.prompt` as its
 `prompt`, and the same two options. Open and report the gate for
 `directive.stage` only, exactly once: an approval there approves every listed
-stage, and the engine says which. A change request is Request Changes for
-`directive.stage`; make the change in the listed stage it belongs to, through
-that stage's own revision steps, say in one line what changed, then show the
-same one question again. If the approval stops at a listed stage that is not
+stage, and the engine says which. A change request for a listed stage is a
+change for the Units it is about: run `{{INVOKE}} engine orchestrate next
+--stage <that stage> --unit <unit> --change` (`--every-unit` in place of
+`--unit <unit>` when it is for every Unit) and do what its `print` says. That
+stage and the listed stages after it run again for those Units only; when the
+stage comes back, make the change from the person's own words, with no keep,
+change or redo question; the same one question comes back once they are done.
+A change request for the work as a whole is Request Changes for
+`directive.stage`: make the change through that stage's own revision steps,
+say in one line what changed, then show the same one question again. If the approval stops at a listed stage that is not
 ready yet, do what its reply names, then report that stage approved with the
 same choice: do not ask the person again.
 
@@ -439,6 +445,16 @@ When a stage needs to ask the user questions:
 
 **The questions file is always the source of truth.** Regardless of how many questions a stage has, the flow is:
 
+**A stage whose questions are already answered.** When the directive carries
+`questions_answered`, the file it names already holds the person's answers:
+the stage was started before, in this chat or another. Never create it again
+and never ask an answered question again, whatever the stage file's steps say.
+Read it and carry on from where its answers stop: the questions whose
+`[Answer]:` is still blank (Step 2 says how), then the Consolidated Summary
+Confirmation when it is not answered yet, then the stage's next step. Only a
+redo the person asked for starts the questions afresh (`artifact_reuse`, or
+**Redo from scratch** under "Artifact Re-use").
+
 **Step 1: Create the questions file** in the appropriate `<record>/` directory with full [Answer]: tag format:
 - Include options A-E as appropriate for each question
 - EVERY ordinary question MUST end with `X. Other (please specify)` as the final
@@ -586,9 +602,11 @@ Record the mode question and the user's mode choice through the log tool, the sa
   --details "Looks correct"` (or `--details 'Request changes: <what they asked
   to change>'`, single-quoted as below) using the same `--unit` / `--single`
   identity (see "Reading the person's reply at a checkpoint" in section 1). The tool refuses a
-  self-selected answer, a response without a matching prompt record and later
-  human turn, or a questions file whose stored choice differs from the one you
-  record.
+  self-selected answer, a response without a matching prompt record or with no
+  reply of theirs since their last answer, or a questions file whose stored
+  choice differs from the one you record. Their reply counts even when you
+  recorded the prompt after showing it; when the receipt output carries `say`,
+  tell the person that line once.
   An **Other** selection with no words of their own follows the Other-escape
   rule in section 1: discuss it, re-present the confirmation, and leave the tag
   and receipt untouched. Every other reply follows the reply-reading rule there.

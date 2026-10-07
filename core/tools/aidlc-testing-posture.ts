@@ -1581,7 +1581,19 @@ export function keepApprovedPlanCopy(
   }
 }
 
-const APPROVED_PLAN_UNDO = 'Say "go back to the approved plan" to undo.';
+const APPROVED_PLAN_UNDO_WORDS = "go back to the approved plan";
+const APPROVED_PLAN_UNDO = `Say "${APPROVED_PLAN_UNDO_WORDS}" to undo.`;
+
+/**
+ * True when the text is the words the change line gives the person, and
+ * nothing more: case, spacing, quotes around them, "please" before or after,
+ * and a closing "." or "!" do not matter.
+ */
+export function isApprovedPlanUndoRequest(text: string): boolean {
+  const words = text.toLowerCase().replace(/\s+/g, " ").trim().replace(/^["']|["']$/g, "").replace(/[.!]+$/, "")
+    .replace(/^["']|["']$/g, "").trim();
+  return words.replace(/^please,? /, "").replace(/,? please$/, "") === APPROVED_PLAN_UNDO_WORDS;
+}
 
 function quotedStep(text: string): string {
   return `"${text.length > 80 ? `${text.slice(0, 77).trimEnd()}...` : text}"`;
@@ -2369,7 +2381,8 @@ export const FILE_TOOLS_RULE =
   "a scaffolder, a migration, a formatter, a code generator, even a `mkdir`), still runs as written. " +
   "Read, list, and search (your own knowledge files included) with your file tools where you have them; where the shell " +
   "is your only way to read, use one plain read command (no `cd` before it, no pipe or second command " +
-  `after it). Run every AI-DLC command ${AS_ITS_OWN_COMMAND}: a shell line can stop and ask the person to approve it.`;
+  `after it). Run every AI-DLC command ${AS_ITS_OWN_COMMAND}, keeping its path as written (never a full path): ` +
+  "a shell line can stop and ask the person to approve it.";
 
 // A rules part's receipt as the engine mints it: 8 base64url characters
 // (`steeringReceipt` in aidlc-orchestrate.ts).

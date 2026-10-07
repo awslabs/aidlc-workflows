@@ -162,6 +162,7 @@ import { normalizeRetiredGuardPolicyField } from "../tools/aidlc-guard-switch.ts
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { aidlcEngineCommand, aidlcInvocation } from "../tools/aidlc-runtime-paths.ts";
 import { terminalDispatcherArgv } from "../tools/aidlc.ts";
+import { noteKiroIdeTurn } from "../tools/aidlc-rules-held.ts";
 import {
   canonicalWriteTool,
   isKiroAppendTool,
@@ -2305,6 +2306,9 @@ function buildForward(): Forward {
       // SessionStart callback. Retain only an event-supplied identity here;
       // never manufacture a current-session marker from the legacy fallback.
       if (eventSessionId) rememberKiroIdeSessionId(eventSessionId);
+      // The chat's turn is open until its Stop, so `next` can tell which chats
+      // may be running a command (#2023, aidlc-rules-held.ts).
+      noteKiroIdeTurn(projectDir, eventSessionId, true);
       recordPromptEmpty(sessionId, readTurn(sessionId) || bumpTurn(sessionId));
       if (promptEmpty && !ideStandsOutside(projectDir, resolvedPlanApprovalSessionId(ide))) {
         try {
@@ -3084,6 +3088,7 @@ function buildForward(): Forward {
       // workspace-global SessionStart marker so concurrent chats cannot consume
       // one another's post-create or post-switch handoff receipt; retain the
       // marker for legacy agentStop and broken modern channels.
+      noteKiroIdeTurn(projectDir, ide.sessionId?.trim(), false);
       return {
         hook: "aidlc-continue-workflow.ts",
         input: {

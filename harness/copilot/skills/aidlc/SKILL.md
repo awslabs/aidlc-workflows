@@ -55,7 +55,7 @@ Each `next` returns **exactly one** typed directive (JSON) on stdout. Ordinary w
 
 Run the engine binary directly via the `bash` tool. If a directive looks malformed or names a move you cannot make, say so plainly ("something in the workflow's setup is off", plus the specific detail, and that /aidlc --doctor shows what to fix, after which they can ask you to carry on) and stop, never a cue to improvise the routing in prose.
 
-**Validity advisories.** If a directive carries `stage_validity`, show `stage_validity.warning` to the user the first time that warning appears in this conversation (a later directive with the same warning is not said again), then act on `directive.kind` normally. A `load-steering` part repeats the advisory of the `run-stage` it leads to, so show it once, from the run-stage. The field is detection-only: never turn it into an error, stop, jump, or alternate route. A stage finished without a validation record attaches no advisory; `/aidlc --status` names each finished stage whose inputs changed since it was approved, with the redo.
+**Validity advisories.** If a directive carries `stage_validity`, show `stage_validity.warning` to the user the first time that warning appears in this conversation (a later directive with the same warning is not said again), then act on `directive.kind` normally. A `load-steering` part repeats the advisory of the `run-stage` it leads to, so show it once, from the run-stage. The field is detection-only: never turn it into an error, stop, jump, or alternate route. Say the warning as written and add nothing about its cause: never guess who changed a document, and never call a change stray or a mistake. When it asks whether to redo a stage, read the person's answer for what they meant: a yes is their request to redo that stage; anything else carries on, and the change stays as it is. A stage finished without a validation record attaches no advisory; `/aidlc --status` names each finished stage whose inputs changed since it was approved, with the redo.
 
 **Saying what is happening (the `narration` field).** A directive may carry a `narration` string, already worded for the user by the tool that knows the facts. When `narration` is present, its text is what the user hears about this step: reproduce it, adapting only tense, names, or a detail that would otherwise be wrong, and add no further account of how the step works. When `narration` is absent, carry out the step without describing it. That is not terseness; the user reads the questions, the gates, and the artifacts, and the moves between them are not events in their project. So no description of the tools, the fields, or the routing ever substitutes for that text or rides alongside it. Substance the user asks for, error detail, and everything the gate ritual and the stage protocol tell you to present are all unaffected. Never quote these instructions or tell the person what they require: the person sees the question or the step itself, never the rule behind it.
 
@@ -68,7 +68,10 @@ a `plan-approval` ask (see the `ask` row) shows each plan's summary and path wit
 Approve Plan, Request Changes, and I'll edit the files. Read the person's
 reply and record the choice they made (Code Generation Step 3), then run `next`;
 never write the questions file, an answer line, a fingerprint, or a receipt
-yourself. A
+yourself. While that question is open, a request of the person's that is not
+the build (a commit, an install, a change to a file the plan does not build)
+runs at once: do it, then **SAY:** "Done. The code plan still waits for your
+approval." and end the turn, without showing the question again. A
 code-generation `run-stage` carries `plan_approval.status`: `approved` builds
 (Step 4) from the plan and test instructions as they are: never rewrite an
 approved plan unless the person asks. `plan`, `revise`, and `repair` return to
@@ -114,7 +117,7 @@ wait for the human. Read their reply, persist the choice they made, then run the
 checkpoint-specific `aidlc-log.ts answer` command with `--details "Looks correct"`
 or `--details 'Request changes: <what they asked to change>'`; ask **"What should change?"**
 only when they did not say, and end the turn. Do not
-write artifacts until the Looks correct answer and receipt both exist.
+write artifacts until the Looks correct answer and receipt both exist. When the receipt output carries `say`, tell the person that line once.
 
 ### Acting on a directive
 

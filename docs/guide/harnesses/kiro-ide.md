@@ -199,9 +199,12 @@ The install ships:
   `clientCapabilities._meta.kiro.hooks` as `{ enabled: true, v2: true }` in its
   `initialize` request, or the session runs no hooks (see
   [Kiro CLI hooks not running](../15-troubleshooting.md#kiro-cli-hooks-not-running)).
-- `.kiro/steering/aidlc-active-memory.md` — always-included IDE steering whose
-  live file references preload the active-space memory files for both the
-  conductor and delegated agents.
+- `.kiro/steering/aidlc-active-memory.md`: always-included steering that carries
+  the active space's memory text for the conductor and delegated agents. AI-DLC
+  writes it from `aidlc/spaces/<active-space>/memory/` for each chat and keeps it
+  out of git; edit the memory files, never this one. A chat keeps the copy it
+  started with, so after a memory edit the stage rules arrive with each step
+  until a new chat starts.
 - `.kiro/steering/aidlc-onboarding.md` — always-included harness setup and commands.
 - `.kiro/hooks/aidlc-*.json` — the framework hooks in Kiro's v2 hook format.
   Both surfaces register them when a session starts; in Kiro IDE they appear

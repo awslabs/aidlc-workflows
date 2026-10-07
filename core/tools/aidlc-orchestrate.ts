@@ -205,6 +205,8 @@ import {
   type GuardRecoveryAskData,
   humanAuthorityState,
   latestMainWorkflowStageRunFloorForProject,
+  unitLifecycleRunFloorForProject,
+  unitScopedLifecycleFloors,
   latestReviewRecordRefs,
   isAutonomousConstructionGate,
   isConstructionSwarmEnabled,
@@ -296,7 +298,9 @@ import {
   withoutEntryWord,
   isBareContinuationPhrase,
   sortAttemptEvents,
+  stageJumpReaches,
   resolveBoltDag,
+  unitsBlockRepair,
   type BoltDagResolution,
   resolveCeremony,
   resolveProjectDir,
@@ -351,6 +355,7 @@ import {
   sessionsDir,
   type WorkspaceCommand,
   type WorkflowSelection,
+  withdrawProtectedReplyWords,
   writeActiveDirectiveMarker,
   type PlanApprovalLegacyOfferCandidate,
   workspaceCommandUtilityArgv,
@@ -434,20 +439,30 @@ import {
   resolveHarnessRoot,
 } from "./aidlc-runtime-paths.ts";
 import { terminalDispatcherArgv } from "./aidlc.ts";
-import { appendAuditEntries } from "./aidlc-audit.ts";
+import { appendAuditEntries, appendAuditEntry } from "./aidlc-audit.ts";
 import { inspectRequiredArtifactInstances } from "./aidlc-artifact-resolution.ts";
 import { renderEngineInvocation, sameGuardOperation } from "./aidlc-guard-operation.ts";
 import {
   isPlanApprovalBeat,
   legacyPlanApprovalOffNotice,
+  noteOpenEngineQuestion,
   openPlanApprovalQuestion,
+  planApprovalKeptReplyWaits,
+  withdrawPlanApprovalReplies,
   publishPlanApprovalAsk,
   publishPlanApprovalSkip,
   routeCodeGenerationPlanApproval,
   settleBuiltPlanReviews,
   withBuiltPlanReviews,
 } from "./aidlc-plan-approval-ask.ts";
-import { codeGenerationResumeNarration, codeGenerationStartNarration, promotableTestingPosture } from "./aidlc-testing-posture.ts";
+import {
+  approvedPlanChangeLine,
+  codeGenerationIssuance,
+  codeGenerationResumeNarration,
+  codeGenerationStartNarration,
+  isApprovedPlanUndoRequest,
+  promotableTestingPosture,
+} from "./aidlc-testing-posture.ts";
 import {
   checksAre,
   checksNamed,
@@ -456,6 +471,7 @@ import {
   planApprovalOffAtCreation,
   planApprovalEnv,
   planApprovalOffForOpenRequest,
+  switchKeptForNextWork,
   resolvePlanApprovalSetting,
 } from "./aidlc-guard-switch.ts";
 import {
@@ -472,6 +488,8 @@ import {
   rulesContentEntries,
   type RuleContent,
 } from "./aidlc-steering.ts";
+import { chatHoldsRules, noteRulesDelivered, RULES_HELD_NOTE } from "./aidlc-rules-held.ts";
+import { refreshKiroIdeSteering } from "./aidlc-includes.ts";
 
 // Read the workflow state file if it exists, else null. The engine's `next` is
 // a pure read: an absent state file is a legitimate branch (no workflow yet),
@@ -737,6 +755,13 @@ const KEPT_REQUEST_FLAGS = new Set([
 ]);
 // Said first on the step the kept request leads to.
 let activeKeptRequestLine: string | null = null;
+// The markers of engine questions that publish none of their own machinery
+// (see prepareEmission): shown as they are when the marker cannot be written.
+const openQuestionMarkers = new WeakSet<object>();
+// The person answered a routing question "part of that work": a code plan
+// question that work is waiting on, with their words already kept as its
+// reply, is answered by those words (see emit).
+let routingAnsweredAsActiveWork = false;
 
 function isKeptRequest(args: readonly string[]): boolean {
   const flags = parseNextFlags([...args]);
@@ -1072,6 +1097,44 @@ function prepareEmission(directive: Directive): PreparedEmission {
       state_sha256: stateDigest(askState),
     };
   }
+  // Every other question the engine asks (where the work belongs, which plan,
+  // which record) is the open question itself until it is answered: the
+  // person's next reply answers it, never a question it was asked over (the
+  // code plan question, a Unit checkpoint, a recovery question), which the
+  // next `next` asks again once it is answered. It stands for the same stage
+  // and work as the step beneath it. A running swarm keeps its own step; the
+  // code plan question, a recovery question, a Unit claim and the legacy
+  // recovery keep their own machinery; the conductor's own work is no question.
+  if (
+    transported.kind === "ask" &&
+    marker === undefined &&
+    transported.ask_type !== PLAN_APPROVAL_ASK_TYPE &&
+    transported.ask_type !== GUARD_RECOVERY_ASK_TYPE &&
+    transported.ask_type !== "legacy-plan-approval-recovery" &&
+    transported.ask_type !== "unit-claim" &&
+    (transported as { agent_work?: unknown }).agent_work !== true &&
+    askState !== null &&
+    engineProjectDir
+  ) {
+    const beneath = readActiveDirectiveMarker(engineProjectDir, askState);
+    const asked = transported as { stage?: unknown; unit?: unknown };
+    const stage = typeof asked.stage === "string"
+      ? asked.stage
+      : beneath?.version === 2 ? beneath.stage : getField(askState, "Current Stage")?.trim() ?? "";
+    if (beneath?.kind !== "invoke-swarm" && /^[a-z][a-z0-9-]*$/.test(stage)) {
+      marker = {
+        kind: "ask",
+        stage,
+        ask_type: transported.ask_type,
+        ...(typeof asked.unit === "string"
+          ? { unit: asked.unit }
+          : beneath?.version !== 2 ? {}
+          : beneath.unit !== undefined ? { unit: beneath.unit } : beneath.units?.length ? { units: beneath.units } : {}),
+        state_sha256: stateDigest(askState),
+      };
+      openQuestionMarkers.add(marker);
+    }
+  }
   if ((transported.kind === "load-steering" || transported.kind === "run-stage") && route) {
     const markerStateHash =
       route.stateHash ??
@@ -1226,6 +1289,23 @@ function legacyKiroPlanApprovalSession(projectDir: string): string | null {
 function writePrepared(prepared: PreparedEmission): void {
   writeFileSync(1, `${prepared.serialized}\n`, "utf-8");
   prepared.personLinesSaid?.();
+  // What a run-stage handed the chat (the text, inline or after its parts, or
+  // a pointer), so the next step can tell whether the chat still holds it.
+  if (
+    prepared.transported.kind === "run-stage" && preparedRulesDelivery !== null && !isReadOnlyEngineProbe()
+  ) {
+    noteRulesDelivered(
+      preparedRulesDelivery.projectDir,
+      engineSessionId,
+      preparedRulesDelivery.bundle,
+      preparedRulesDelivery.held,
+    );
+    // Kiro IDE: a chat that starts after the memory files changed captures
+    // their new text (a no-op when the steering file already holds it).
+    if (!preparedRulesDelivery.held) {
+      refreshKiroIdeSteering(preparedRulesDelivery.projectDir, preparedRulesDelivery.space);
+    }
+  }
   // Stage work handed to the session, by any path (a fresh publication, the
   // same work handed over again, or a `continue` to the next part), ends a
   // switch's one-shot stop, so the loop holds it like any other work (#1263).
@@ -1604,6 +1684,15 @@ function emit(requested: Directive): void {
             : {}),
           resultSha256: prepared.resultSha256,
         });
+        // An engine question whose marker another step's own machinery kept
+        // (a Copilot resume question, a legacy Kiro IDE approval) is still asked.
+        if (
+          openQuestionMarkers.has(prepared.marker) &&
+          !["copilot-committed", "generic-committed", "stale-attempt"].includes(publication)
+        ) {
+          writePrepared(prepared);
+          return;
+        }
         if (publication === "legacy-plan-approval-owned") {
           writePrepared(prepareEmission(errorDirective(
             "Legacy Kiro Plan Approval is owned by another active IDE window. Continue the pending approval there; this call did not receive or rotate its protected choices.",
@@ -1659,6 +1748,7 @@ function emit(requested: Directive): void {
         }
         // The marker took the cursor, so the fallback must not shadow it.
         recordSteeringCursor(projectDir, prepared.marker, false);
+        if (openQuestionMarkers.has(prepared.marker)) noteOpenEngineQuestion(projectDir, prepared.marker);
         if (
           prepared.transported.kind === "ask" &&
           prepared.transported.ask_type === PLAN_APPROVAL_ASK_TYPE
@@ -1668,6 +1758,19 @@ function emit(requested: Directive): void {
           recordPlanBuiltWithoutAsking(projectDir, prepared.transported);
         }
         settleBuiltPlanReviews(projectDir, prepared.transported);
+        // Asked where their words belong, the person said the work in
+        // progress, which waits on its code plan question: the question is
+        // the open step again, and the words it kept as their reply answer it.
+        if (
+          routingAnsweredAsActiveWork &&
+          prepared.transported.kind === "ask" &&
+          prepared.transported.ask_type === PLAN_APPROVAL_ASK_TYPE &&
+          !prepared.transported.plan_approval.editing &&
+          planApprovalKeptReplyWaits(projectDir)
+        ) {
+          writePrepared(prepareEmission(planQuestionAnsweredByWordsDirective()));
+          return;
+        }
       }
     } catch (e) {
       // A barrier violation is an engine defect, not a workflow problem, and must
@@ -1678,6 +1781,10 @@ function emit(requested: Directive): void {
       if (e instanceof EngineModeViolationError) throw e;
       if (projectDir) {
         recordHookDrop(projectDir, "active-directive", errorMessage(e));
+      }
+      if (prepared.marker !== undefined && openQuestionMarkers.has(prepared.marker)) {
+        writePrepared(prepared);
+        return;
       }
       writePrepared(prepareEmission(errorDirective(
         `The directive could not be published, so no work directive was issued. Retry the command; if coordination remains busy, run \`${entrySkillInvocation()} --doctor\`.`,
@@ -2635,6 +2742,63 @@ function openPlanQuestionReplyDirective(editing: boolean, requestId: string): Pr
   );
 }
 
+// The person said their words are part of the work in progress, and that work
+// waits on the code plan question: the words, kept as their reply to it, are
+// their answer, read by the conductor like any reply to it.
+function planQuestionAnsweredByWordsDirective(): PrintDirective {
+  const orchestrate = aidlcToolInvocation("orchestrate");
+  return printDirective(
+    "The person said their words are part of the work in progress, and that work is waiting on their answer to the " +
+      "code plan question, so their words are that answer. Read them and record the choice they made with " +
+      `\`${aidlcToolInvocation("log")} answer --stage code-generation --checkpoint plan-approval --details "<their choice>"\`` +
+      ' (a change they ask for is "Request Changes": the engine keeps their words as what to change), then run bare ' +
+      `\`${orchestrate} next\`. If you cannot tell which choice it is, run bare \`${orchestrate} next\`, show the person ` +
+      "the question it returns, and end the turn.",
+  );
+}
+
+// Words the person sent to separate new work, or to reshaping the plan, are
+// no reply to the question the work in progress has open (a checkpoint, a
+// gate, the stage's questions, the code plan question): they are taken back
+// from it once, and the row that says so keeps any decision on it from
+// standing on them.
+function withdrawRoutedWords(projectDir: string, question: StoredQuestion): void {
+  if (isReadOnlyEngineProbe()) return;
+  try {
+    const routed = readAuditShardEvents(projectDir).some((row) =>
+      row.event === "REQUEST_ROUTED" && auditBlockField(row.block, "Request") === question.id);
+    if (routed) return;
+    withdrawProtectedReplyWords(projectDir, question.text);
+    withdrawPlanApprovalReplies(projectDir, question.text);
+    appendAuditEntry("REQUEST_ROUTED", {
+      Request: question.id,
+      ...(engineSessionId ? { Session: engineSessionId } : {}),
+    }, projectDir);
+  } catch (e) {
+    recordHookDrop(projectDir, "routed-words", errorMessage(e));
+  }
+}
+
+// The words the change line gives the person ("go back to the approved
+// plan"), said in any chat while a plan they approved has changed and is not
+// built yet: the restore of that plan, as the stage rules name it, then next.
+function approvedPlanUndoDirective(projectDir: string, stateContent: string): PrintDirective | null {
+  const marker = readActiveDirectiveMarker(projectDir, stateContent);
+  if (marker?.version !== 2 || marker.stage !== "code-generation") return null;
+  const issued = codeGenerationIssuance(marker, true);
+  if (issued === null) return null;
+  const units = issued.kind === "run-stage" ? [issued.unit ?? null] : issued.units;
+  const changed = units.filter((unit) => approvedPlanChangeLine(projectDir, { unit }, issued) !== null);
+  if (changed.length === 0) return null;
+  const posture = aidlcToolInvocation("testing-posture");
+  const restores = changed.map((unit) =>
+    `\`${posture} restore ${unit === null ? "--stage-level" : `--unit ${shellArg(unit)}`}\``);
+  return printDirective(
+    `The person asked to go back to the plan they approved. Run ${restores.join(", then ")}, say the line it ` +
+      `prints, then run bare \`${aidlcToolInvocation("orchestrate")} next\`.`,
+  );
+}
+
 // Words while a workflow is active may ask to redo, jump to a stage, or start
 // fresh ("/aidlc take me back to requirements analysis"), or be new work or a
 // change to this work: the conductor reads which, the same split as
@@ -2709,6 +2873,11 @@ function newWorkRoutingAskDirective(
   stateSha256?: string,
   carried: RoutingCarried = { creation: "", newWork: "", existingWork: "", planChanges: "" },
   approvedRequest?: string,
+  // The request this ask is about, when the person's words reached it through an
+  // earlier question (the print that handed them on, or this ask asked again):
+  // the stored copy keeps that request's root, so a switch the person typed with
+  // the words still reaches the work this ask creates.
+  derivedFrom?: string,
 ): AskDirective {
   // Once emitted, this typed ask is the sole route authority for the pending
   // prose. Harnesses render it and stop rather than reclassifying the request.
@@ -2716,7 +2885,7 @@ function newWorkRoutingAskDirective(
   // Its own question: this ask is about work that exists, so its continue and
   // reshape routes act only on the item(s) it names, and ask again otherwise.
   const stored = saveQuestion(
-    projectDir, description, proposedScope, "routing", askedAbout, false, undefined, stateSha256,
+    projectDir, description, proposedScope, "routing", askedAbout, false, derivedFrom, stateSha256,
     routingSettings(carried), approvedRequest,
   );
   const tool = aidlcToolInvocation("orchestrate");
@@ -3406,6 +3575,7 @@ interface ParsedFlags {
   phase?: string;
   jumpUnit?: string; // --unit <name> with --stage: reopen that per-unit stage for this Unit (unit-major)
   everyUnit?: boolean; // --every-unit with --stage: reopen that per-unit stage for every Unit (unit-major)
+  change?: boolean; // --change with --stage and --unit or --every-unit: the reopen is the person's change at the open gate
   depth?: string;
   testStrategy?: string;
   projectType?: "greenfield" | "brownfield"; // --project-type: the person's word on new project vs existing code
@@ -3649,6 +3819,8 @@ function parseNextFlags(argv: string[]): ParsedFlags {
       }
     } else if (a === "--every-unit") {
       flags.everyUnit = true;
+    } else if (a === "--change") {
+      flags.change = true;
     } else if (a === "--depth" || a === "--test-strategy") {
       // Checked here, like --review: the value is echoed into the command the
       // conductor runs, so only the three level words may pass.
@@ -4445,7 +4617,14 @@ function unselectedRecordsDigest(selectable: UnselectedRecords["selectable"]): s
 // read-only: it emits a directive, it does not touch the cursor.
 function intentPickPromptIfRecordsExist(
   projectDir: string,
-  pendingWork?: { description: string; proposedScope: string; carried: RoutingCarried; approvedRequest?: string },
+  pendingWork?: {
+    description: string;
+    proposedScope: string;
+    carried: RoutingCarried;
+    approvedRequest?: string;
+    /** The request these words reached this ask through, when an earlier question held them. */
+    derivedFrom?: string;
+  },
 ): AskDirective | ErrorDirective | null {
   const records = unselectedRecords(projectDir);
   if (records === null) return null;
@@ -4495,6 +4674,7 @@ function intentPickPromptIfRecordsExist(
       unselectedRecordsDigest(selectable),
       pendingWork.carried,
       pendingWork.approvedRequest,
+      pendingWork.derivedFrom,
     );
   }
   // One piece of work is still the person's to choose: the question asks them,
@@ -4788,6 +4968,10 @@ let retainedIssuedDirective = false;
 // The content identity of the transport this invocation prepared, so the marker
 // records what the conductor was actually handed.
 let preparedTransportIdentity: { bundle: string; directiveSha256: string } | null = null;
+// The rule bundle this invocation prepared, and whether the chat already held
+// it, so writing a run-stage that carried the text can record it (Codex, see
+// aidlc-rules-held.ts).
+let preparedRulesDelivery: { projectDir: string; space: string; bundle: string; held: boolean } | null = null;
 
 // "First run-stage of the workflow" — the deterministic signal D-E delivery
 // keys on. The engine is stateless per call, so it cannot track a "session";
@@ -5588,6 +5772,25 @@ function boundedContextWarnings(warnings: string[]): string[] {
 // stage-level Construction directory. `scope` + `stateContent` feed the gate
 // computation (the skeleton round-trip) and the first-run-stage persona delivery
 // (decision D-E).
+// This stage's `<slug>-questions.md` when it already holds an answer of the
+// person's (an `[Answer]:` with more than blanks or underscores), as a path from
+// the project; null when it has none or cannot be read. A stage resumed in a
+// new chat keeps it instead of being asked from the start again (#1873).
+function answeredQuestionsFile(projectDir: string, node: GraphStage, unit: string | null): string | null {
+  try {
+    const dir = node.phase === "construction" && unit !== null && unit !== UNIT_NAME_PLACEHOLDER
+      ? join(docsRoot(projectDir), "construction", unit, node.slug)
+      : stageDir(projectDir, node.phase, node.slug);
+    const path = join(dir, `${node.slug}-questions.md`);
+    if (!existsSync(path)) return null;
+    return /^\[Answer\]:[ \t]*[^\s_][^\n]*$/m.test(readFileSync(path, "utf-8"))
+      ? relative(projectDir, path).replaceAll("\\", "/")
+      : null;
+  } catch {
+    return null;
+  }
+}
+
 function buildRunStageDirective(
   node: GraphStage,
   projectType: "brownfield" | "greenfield" | null = null,
@@ -5710,6 +5913,10 @@ function buildRunStageDirective(
       completed: evidence.completed,
     };
   }
+  if (!singleRun && stateContent && codekbCtx) {
+    const kept = answeredQuestionsFile(codekbCtx.projectDir, node, artifactUnit);
+    if (kept !== null) directive.questions_answered = { path: kept };
+  }
   if (inlineContext.warnings.length > 0) {
     directive.context_warnings = inlineContext.warnings;
   }
@@ -5761,7 +5968,10 @@ function buildRunStageDirective(
   if (node.phase === "construction") {
     protocolModules.push("construction");
   }
-  if (ceremony.learnings === "on") protocolModules.push("learnings");
+  // The learnings ritual runs at a gate's first showing, never again for a
+  // revision of it (stage-protocol.md, Request Changes).
+  const revising = stateContent !== null && checkboxStateOf(parseCheckboxes(stateContent), node.slug) === "revising";
+  if (ceremony.learnings === "on" && !revising) protocolModules.push("learnings");
   if (protocolModules.length > 0) {
     directive.protocol_modules = protocolModules;
   }
@@ -6376,13 +6586,30 @@ function transportRunStage(
     ...new Set(loaded.content.map((entry) => entry.path)),
   ];
   const bundle = `sha256:${sha256(JSON.stringify(loaded.content))}`;
+  // The chat this command runs in already holds this exact text (#2023, see
+  // aidlc-rules-held.ts): the run-stage names the bundle instead of carrying
+  // it. Decided before the directive digest, so a delivery to a chat that holds
+  // the rules and one to a chat that does not are never mixed.
+  const held = loaded.content.length > 0 && chatHoldsRules(
+    route.codekbCtx.projectDir,
+    engineSessionId,
+    route.codekbCtx.space,
+    directive.rules_in_context,
+    bundle,
+  );
+  if (held) {
+    directive.rules_held = bundle;
+    directive.rules_held_note = RULES_HELD_NOTE;
+  }
+  const content = held ? [] : loaded.content;
+  preparedRulesDelivery = { projectDir: route.codekbCtx.projectDir, space: route.codekbCtx.space, bundle, held };
   const directiveHash = sha256(JSON.stringify(directive));
   const persona = personaSentAhead(directive);
   if (persona !== null) delete directive.conductor_persona;
-  const ruleChunks = steeringChunks(loaded.content, steeringTextTargetBytes(directive));
+  const ruleChunks = steeringChunks(content, steeringTextTargetBytes(directive));
   // With the persona gone ahead the run-stage may now carry its rules itself,
   // which saves the rules parts: the delivery is then the persona part alone.
-  const rulesRide = persona !== null && rulesFitBeside(directive, loaded.content);
+  const rulesRide = persona !== null && rulesFitBeside(directive, content);
   const chunks = persona === null ? ruleChunks : rulesRide ? [[]] : [[], ...ruleChunks];
   const layout = steeringLayout(chunks);
   // A run-stage that cannot fit even alone is refused before any rules part is
@@ -6446,7 +6673,7 @@ function transportRunStage(
       bundle,
       directiveHash,
       chunks,
-      loaded.content,
+      content,
       persona,
       rulesRide,
     );
@@ -6459,10 +6686,10 @@ function transportRunStage(
   if (requested) {
     if (requested.i === chunks.length) {
       preparedSteeringPayload = requested;
-      if (rulesRide) attachRulesIfTheyFit(directive, loaded.content);
+      if (rulesRide) attachRulesIfTheyFit(directive, content);
       return directive;
     }
-  } else if (persona === null && attachRulesIfTheyFit(directive, loaded.content)) {
+  } else if (persona === null && attachRulesIfTheyFit(directive, content)) {
     // One message: the rules ride inside the run-stage directive. This is the
     // ordinary case for every shipped stage; the chunked delivery below is the
     // fallback for a bundle that does not fit beside its run-stage. The payload
@@ -7170,6 +7397,7 @@ function routeNext(args: string[], projectDir: string | undefined): void {
       flags.request = undefined;
       flags.scope = typedScope;
       question = undefined;
+      routingAnsweredAsActiveWork = true;
     } else if (!named) {
       // Never act on the answer: ask again about the work that exists now.
       flags.compose = false;
@@ -7187,6 +7415,7 @@ function routeNext(args: string[], projectDir: string | undefined): void {
           proposedScope: question.proposedScope,
           carried: kept,
           approvedRequest: question.approvedRequest,
+          derivedFrom: question.id,
         });
         if (again) {
           emit(again);
@@ -7206,6 +7435,11 @@ function routeNext(args: string[], projectDir: string | undefined): void {
       "--continue answers a new-work routing question; run the command that question supplied.",
     ));
     return;
+  }
+  // Words sent to separate new work, or to reshaping the plan, answer no
+  // question the work in progress has open.
+  if (question?.origin === "routing" && question.askedAbout && (flags.newIntent || flags.compose)) {
+    withdrawRoutedWords(pd, question);
   }
   // New work started from a routing question that stopped an answer (a plan
   // approval, a scope confirmation) answers that request, whichever plan is
@@ -7332,12 +7566,13 @@ function routeNext(args: string[], projectDir: string | undefined): void {
   //   2. STALE-BY-PROGRESS - only emit `parked` while `Parked At Stage` still
   //      equals `Current Stage`. If the workflow has advanced past the parked
   //      slug (a stale marker), ignore it and fall through to the normal route.
-  // A change the person typed to the parked work's plan (another scope, stages
-  // to skip or add, a reshape) is made as a typed setting is, and the work
-  // stays parked: answering it with the park would drop it.
-  const parkedPlanChange = stateContent !== null && (
+  // A change the person typed to the parked work (another scope, stages to
+  // skip or add, a reshape, a setting) is made, and the work stays parked:
+  // answering it with the park would drop it.
+  const parkedWorkChange = stateContent !== null && (
     (flags.scope !== undefined && flags.scope !== (getField(stateContent, "Scope") ?? "").trim()) ||
-    flags.planChanges !== undefined || Boolean(flags.compose || flags.newScope || flags.report)
+    flags.planChanges !== undefined || Boolean(flags.compose || flags.newScope || flags.report) ||
+    typedSettingModifiers(flags).length > 0
   );
   if (
     stateContent &&
@@ -7345,8 +7580,7 @@ function routeNext(args: string[], projectDir: string | undefined): void {
     !flags.resume &&
     !flags.stage &&
     !flags.phase &&
-    !flags.review &&
-    !parkedPlanChange &&
+    !parkedWorkChange &&
     !flags.newIntent &&
     (getField(stateContent, "Parked") ?? "").trim().length > 0
   ) {
@@ -7729,7 +7963,9 @@ function routeNext(args: string[], projectDir: string | undefined): void {
     // and no stage work starts from it.
     if (!describedWork && !flags.resume && typedSettingModifiers(flags).length > 0) {
       emit(keptWhilePlanWaits(
-        turnEndingPrint("The setting the person typed is already applied: say the line it printed, then stop."),
+        turnEndingPrint(stillParked === null
+          ? "The setting the person typed is already applied: say the line it printed, then stop."
+          : `The setting the person typed is already applied: say the line it printed followed by "${stillParked}", then stop.`),
         planApprovalAskIsOpen(pd),
       ));
       return;
@@ -7747,12 +7983,20 @@ function routeNext(args: string[], projectDir: string | undefined): void {
   // filter for the jumped-to stage). An explicit target also wins when combined
   // with --resume: `next --resume --stage <slug>` reaches this jump branch.
   // `--unit` and `--every-unit` say which Units a jump back reopens a per-unit
-  // step for, so they mean nothing without the step.
+  // step for, so they mean nothing without the step; `--change` says the
+  // reopen is the person's change, so it needs them both.
   if ((flags.jumpUnit !== undefined || flags.everyUnit) && (!flags.stage || (flags.jumpUnit !== undefined && flags.everyUnit))) {
     emit(errorDirective(
       flags.stage
         ? "Use either --unit <name> or --every-unit with --stage, not both."
         : `--unit and --every-unit need the step to reopen: for example \`${entrySkillInvocation()} --stage nfr-design --unit beta\`.`,
+    ));
+    return;
+  }
+  if (flags.change && (!flags.stage || (flags.jumpUnit === undefined && !flags.everyUnit))) {
+    emit(errorDirective(
+      "--change needs the step and the Units the change is for: for example " +
+        `\`${aidlcToolInvocation("orchestrate")} next --stage nfr-design --unit beta --change\`.`,
     ));
     return;
   }
@@ -7797,6 +8041,7 @@ function routeNext(args: string[], projectDir: string | undefined): void {
             proposedScope: flags.positionalScope,
             carried: carriedRoutingFlags(flags),
             approvedRequest: flags.request,
+            derivedFrom: flags.request,
           }
         : undefined,
     );
@@ -7874,6 +8119,7 @@ function routeNext(args: string[], projectDir: string | undefined): void {
               proposedScope: scope,
               carried: carriedRoutingFlags(flags),
               approvedRequest: flags.request,
+              derivedFrom: flags.request,
             }
           : undefined,
       );
@@ -7903,6 +8149,20 @@ function routeNext(args: string[], projectDir: string | undefined): void {
     const pick = intentPickPromptIfRecordsExist(pd);
     if (pick) {
       emit(pick);
+      return;
+    }
+    // The person set something for the piece of work they start next, and this
+    // chat still holds it: nothing is wrong, so this is a step and not an error.
+    // The line they were told rides it, and no error means no relay repeating
+    // machinery at them.
+    if (switchKeptForNextWork(pd, engineSessionId ?? null)) {
+      const kept = turnEndingPrint(
+        "Nothing is in progress here yet, and what the person set for the piece of work they start next is kept for " +
+          "it. Say the line above, then wait: when they say what to build, run that as their request " +
+          `(${entrySkillInvocation()} "<their words>"), and the work it creates starts with what they set.`,
+      );
+      kept.narration = "Tell me what to build and I'll start it.";
+      emit(kept);
       return;
     }
     emit(errorDirective(
@@ -7951,6 +8211,13 @@ function routeNext(args: string[], projectDir: string | undefined): void {
     flags.intent && !flags.scope && !flags.positionalScope && !flags.resume && question === undefined &&
     !isTeamUnitOwnership(stateContent)
   ) {
+    // The words the change line told the person to say undo the change, in
+    // any chat: never a question about where they belong.
+    const undo = isApprovedPlanUndoRequest(flags.intent) ? approvedPlanUndoDirective(pd, stateContent) : null;
+    if (undo !== null) {
+      emit(undo);
+      return;
+    }
     // The engine's own code plan question takes the reply from any chat, so
     // words beside it ("approve the code plan", typed in a new chat) are read
     // as its answer first, never asked about as new work.
@@ -8074,6 +8341,7 @@ function routeNext(args: string[], projectDir: string | undefined): void {
       stateDigest(stateContent),
       scopeChange ? { ...carried, continueScope: inferred.scope } : carried,
       askedAgain?.question.approvedRequest,
+      question?.id,
     ));
     return;
   }
@@ -8206,17 +8474,6 @@ function routeNext(args: string[], projectDir: string | undefined): void {
     (currentIsInFlight || currentState === "skipped") &&
     effectivePlanAction(currentSlug, scope, stateContent) === "SKIP"
   ) {
-    const currentNode = nodeForSlug(currentSlug);
-    if (
-      isTeamUnitOwnership(stateContent) &&
-      currentNode?.phase === "construction" &&
-      isPerUnit(currentNode)
-    ) {
-      emit(errorDirective(
-        `Unit Ownership: team cannot route current stage "${currentSlug}": it is not in the active unskipped per-unit Construction block.`,
-      ));
-      return;
-    }
     if (currentState !== "in-progress" && currentState !== "revising" && currentState !== "skipped" && currentState !== "awaiting-approval") {
       emit(errorDirective(
         `Stage "${currentSlug}" is SKIP in the approved workflow plan but its active cursor state is ` +
@@ -8236,7 +8493,13 @@ function routeNext(args: string[], projectDir: string | undefined): void {
   }
 
   if (currentIsInFlight) {
-    if (currentState === "awaiting-approval") {
+    // A Unit reopened at an open gate in a solo unit-major walk owes its step
+    // first: the walk runs it, and the gate comes back once it is done.
+    const walkOwes = (): boolean => {
+      const walk = unitMajorWalkBeat(pd, scope, stateContent, currentSlug);
+      return walk !== null && (walk.step.kind === "work" || walk.step.kind === "summary" || walk.step.kind === "paused");
+    };
+    if (currentState === "awaiting-approval" && !walkOwes()) {
       const currentNode = nodeForSlug(currentSlug);
       if (currentNode !== undefined) {
         const preflight = preflightDirective(
@@ -8257,8 +8520,8 @@ function routeNext(args: string[], projectDir: string | undefined): void {
             ? resolveBoltBatches(pd, routingEvidenceFor(pd, stateContent))
             : null;
           if (dag?.state === "malformed") {
-            emit(errorDirective(
-              `Cannot resolve the gate Unit for stage "${currentSlug}": ${dag.reason} (${dag.detail}).`,
+            emit(printDirective(
+              `${unitsBlockRepair(dag.reason, dag.detail)} Then run \`${aidlcToolInvocation("orchestrate")} next\`.`,
             ));
             return;
           }
@@ -8277,6 +8540,9 @@ function routeNext(args: string[], projectDir: string | undefined): void {
           if (isSettledAutonomousSwarm(currentNode, scope, stateContent, pd)) {
             applySettledSwarmShape(directive);
           }
+          // The one late question is shown again as the same one question.
+          const together = approveTogetherFor(pd, stateContent, currentNode, recordPrefix, codekbCtx);
+          if (together) directive.approve_together = together;
           const gate = applyGateOnlyShape(directive, pd, stateContent);
           emit(withChangeNotices(gate, [
             ...((gate as Directive).change_notices ?? []),
@@ -8528,6 +8794,7 @@ function applyConstructionCheckpointShape(
     command_authorized: checkpoint.command_authorized,
     ...(checkpoint.rereview ? { rereview: checkpoint.rereview } : {}),
     ...(checkpoint.rechecked ? { rechecked: checkpoint.rechecked } : {}),
+    ...(checkpoint.review_not_finished ? { review_not_finished: checkpoint.review_not_finished } : {}),
   };
   if (directive.construction_policy) {
     directive.construction_policy.human_completion_required = checkpoint.human_required;
@@ -8565,6 +8832,11 @@ function applyConstructionCheckpointShape(
     !checkpoint.rereview && !checkpoint.rechecked && !checkpoint.asked
   ) {
     directive.protocol_modules.push("learnings");
+  }
+  // After the person's "approve it as it is", the one question they get is
+  // the approval itself.
+  if (checkpoint.review_not_finished) {
+    directive.protocol_modules = directive.protocol_modules.filter((module) => module !== "learnings");
   }
 }
 
@@ -9098,8 +9370,11 @@ function nextUncoveredUnit(
 // Unit only on UNIT_COMPLETED). Handing back the stage body, or "run next",
 // only loops, so the step names the receipt's exact commands. The fresh review
 // is the evidence the files are this attempt's: a reopened or redone Unit's
-// earlier files never carry one. Null whenever anything but the receipt is
-// left, or a wave owns the stage's completions.
+// earlier files never carry one. With reviews off (#2021) the evidence is that
+// this is the stage's first attempt for the Unit: nothing has moved its floor
+// since the workflow (or the stage) began, so no earlier attempt left files.
+// Null whenever anything but the receipt is left, or a wave owns the stage's
+// completions.
 function unitReceiptOnlyStep(
   projectDir: string,
   node: GraphStage,
@@ -9111,7 +9386,7 @@ function unitReceiptOnlyStep(
   stateContent: string | null,
   scope: string,
 ): string | null {
-  if (stateContent === null || !node.reviewer) return null;
+  if (stateContent === null) return null;
   if (!ledger.inUse || ledger.receipts.has(unit) || ledger.skipped.has(unit)) return null;
   if (kindVacuous(node, unitKind) || ledger.mode === "wave" || ledger.mode === "mixed") return null;
   const unitMajor = getField(stateContent, "Construction Iteration")?.trim() === "unit-major";
@@ -9121,15 +9396,34 @@ function unitReceiptOnlyStep(
   if (ledger.checkpoint !== null && ledger.checkpoint.unit !== unit) return null;
   if (!unitCovered(projectDir, node, unit, recordPrefix, codekbCtx, unitKind)) return null;
   if (redoChosenForUnitStep(projectDir, node.slug, unit)) return null;
-  const reviewClass = resolveReviewClass(node.review_class ?? "adversarial", scope, stateContent);
-  if (reviewClass === "none") return null;
-  const review = freshReviewReceipts(projectDir, stateContent, node, { reviewClass });
-  // Only final verdicts are kept, the same evidence `unit complete` accepts.
-  if (!review.unitVerdicts.has(unit)) return null;
+  const reviewClass = node.reviewer
+    ? resolveReviewClass(node.review_class ?? "adversarial", scope, stateContent)
+    : "none";
+  if (reviewClass === "none") {
+    if (!unitFirstStageAttempt(projectDir, node.slug, unit, stateContent)) return null;
+  } else {
+    const review = freshReviewReceipts(projectDir, stateContent, node, { reviewClass });
+    // Only final verdicts are kept, the same evidence `unit complete` accepts.
+    if (!review.unitVerdicts.has(unit)) return null;
+  }
   const command = (action: string): string =>
     `\`${renderEngineInvocation({ route: "state", args: ["unit", action, "--stage", node.slug, "--unit", unit] })}\``;
   const steps = own ? command("complete") : `${command("start")}, then ${command("complete")}`;
-  return `Unit "${unit}"'s ${node.name} work is written and reviewed, but its completion is not recorded: run ${steps}.`;
+  const done = reviewClass === "none" ? "written" : "written and reviewed";
+  return `Unit "${unit}"'s ${node.name} work is ${done}, but its completion is not recorded: run ${steps}.`;
+}
+
+// True when the Unit's receipts for this stage are read against the first
+// boundary there is: the workflow's start, or (stage-major) the stage's first
+// start. Read with the floor `unit start` and `unit complete` stamp, so a jump,
+// a rejection or a restart makes it false.
+function unitFirstStageAttempt(projectDir: string, slug: string, unit: string, stateContent: string): boolean {
+  const unitMajor = getField(stateContent, "Construction Iteration")?.trim() === "unit-major" ||
+    getField(stateContent, "Construction Checkpoints") === "enabled";
+  const floor = unitLifecycleRunFloorForProject(
+    projectDir, slug, unitMajor, unit, undefined, unitScopedLifecycleFloors(stateContent),
+  );
+  return /^(?:WORKFLOW_STARTED|STAGE_STARTED):[^#]+#1$/.test(floor);
 }
 
 // `next` for a Unit that owes only its completion receipt: that step, then
@@ -9622,11 +9916,9 @@ function emitPerUnitRunStage(
       );
       return;
     case "malformed":
-      emit({
-        kind: "error",
-        message:
-          `Cannot iterate units for stage "${node.slug}": inception/units-generation/unit-of-work-dependency.md is authoritative for the unit set and is ${r.reason} (${r.detail}). Fix the fenced units block in that artifact, then run next again.`,
-      });
+      emit(printDirective(
+        `${unitsBlockRepair(r.reason, r.detail)} Then run \`${aidlcToolInvocation("orchestrate")} next\`.`,
+      ));
       return;
     case "ok":
       break;
@@ -10695,6 +10987,34 @@ function unitMajorWalkBeat(
   };
 }
 
+// The per-unit block of a solo unit-major walk once Current Stage has moved
+// on past it to a later Construction stage (Build and Test, say), as a walk
+// whose Units are all covered; null on the same conditions as
+// unitMajorWalkBeat. From here a jump back that names one Unit reopens its
+// step for that Unit only.
+function unitMajorFinishedWalk(
+  projectDir: string,
+  scope: string,
+  stateContent: string,
+  currentSlug: string,
+): { step: UnitMajorWalkStep; block: GraphStage[]; context: UnitWorkContext } | null {
+  if (readConstructionIteration(stateContent) !== "unit-major") return null;
+  if (isTeamUnitOwnership(stateContent)) return null;
+  const node = nodeForSlug(currentSlug);
+  if (!node || isPerUnit(node) || node.phase !== "construction") return null;
+  const checkpoints = checkpointPolicyEnabled(stateContent);
+  if (checkpoints && getField(stateContent, "Construction Execution") === "swarm") return null;
+  if (usesStageLevelPerUnitArtifacts(scope, stateContent)) return null;
+  const context = unitWorkContext(projectDir);
+  if (!context || context.units.length === 0) return null;
+  const block = constructionUnitMajorBlock(scope, stateContent, checkpoints);
+  const graph = loadGraph();
+  const at = (slug: string): number => graph.findIndex((stage) => stage.slug === slug);
+  const last = block.at(-1);
+  if (!last || at(currentSlug) <= at(last.slug)) return null;
+  return { step: { kind: "covered" }, block, context };
+}
+
 // What the stage-work check needs about the Unit DAG, resolved once per call.
 type UnitWorkContext = {
   units: string[];
@@ -10835,7 +11155,8 @@ function redoChosenForUnitStep(projectDir: string, slug: string, unit: string): 
     auditBlockField(row.block, "Decision") === "redo" &&
     auditBlockField(row.block, "Source") === REDO_REUSE_SOURCE;
   const spends = (row: AuditShardEvent): boolean => {
-    if (row.event === "STAGE_JUMPED" || row.event === "WORKFLOW_STARTED") return true;
+    if (row.event === "WORKFLOW_STARTED") return true;
+    if (row.event === "STAGE_JUMPED") return stageJumpReaches(row.block, slug);
     if (auditBlockField(row.block, "Unit") !== unit) return false;
     if (row.event === "UNIT_STARTED") return auditBlockField(row.block, "Stage") === slug;
     if (row.event !== "GATE_REJECTED") return false;
@@ -10853,7 +11174,8 @@ function redoChosenForUnitStep(projectDir: string, slug: string, unit: string): 
 
 // A jump back to a per-unit stage a Unit already finished, in a solo unit-major
 // walk (#1411). Current Stage stays on the first per-unit stage there, or has
-// moved on to a later per-unit stage's gate, so that jump would be a
+// moved on to a later per-unit stage's gate (or, for a named Unit, past the
+// block to Build and Test, say), so that jump would be a
 // stage-wide jump that starts every Unit's finished work over. It reopens the
 // stage for the Unit in flight only, the way a Unit checkpoint's Request
 // Changes redoes one Unit, unless the person named a Unit (`--unit`) or asked
@@ -10870,7 +11192,10 @@ function unitMajorReopen(
   flags: ParsedFlags,
 ): PrintDirective | { kind: "error"; message: string } | "route" | null {
   const currentSlug = getField(stateContent, "Current Stage")?.trim() ?? "";
-  const walk = unitMajorWalkBeat(projectDir, scope, stateContent, currentSlug);
+  // Past the block, only a named Unit is reopened here: for every Unit the
+  // backward jump redoes the target and keeps the steps before it.
+  const walk = unitMajorWalkBeat(projectDir, scope, stateContent, currentSlug) ??
+    (flags.jumpUnit !== undefined ? unitMajorFinishedWalk(projectDir, scope, stateContent, currentSlug) : null);
   if (!walk) return null;
   const blockSlugs = walk.block.map((stage) => stage.slug);
   const targetIndex = blockSlugs.indexOf(targetSlug);
@@ -10998,7 +11323,23 @@ function unitMajorReopen(
     : `Reopened ${reopenedText}.` +
       (kept.length > 0 ? `${keptLine} Say 'for every unit' to redo it for ${kept.length === 1 ? kept[0] : "them"} too.` : "");
   const reopen =
-    `${aidlcToolInvocation("jump")} reopen --target ${targetSlug} --stages ${stages.join(",")} --units ${reopened.join(",")} --scope ${scopeArg(scope)}`;
+    `${aidlcToolInvocation("jump")} reopen --target ${targetSlug} --stages ${stages.join(",")} --units ${reopened.join(",")} --scope ${scopeArg(scope)}` +
+    (flags.change ? " --via change" : "");
+  // The person's change at the open gate: their words are the change, and
+  // they already said what it is.
+  if (flags.change) {
+    return {
+      kind: "print",
+      message:
+        `Run ${unpark}${asides.map((entry) => `\`${entry.aside.command}\`, then `).join("")}\`${reopen}\` ` +
+        `to reopen "${targetSlug}" and the steps after it for ${list(reopened.map((unit) => `unit "${unit}"`))} only, ` +
+        `as the person's change, then tell the person in one line: "Making your change in ${reopenedText}.${keptLine}" ` +
+        `and re-run \`next\` to continue. When "${targetSlug}" comes back for ${list(reopened.map((unit) => `unit "${unit}"`))}, ` +
+        "make the change from their own words; they already said what to change, so do not ask whether to keep, " +
+        "change or redo its files." +
+        (first ? backTo(first.unit, first.aside.stage) : ""),
+    };
+  }
   return {
     kind: "print",
     message:
@@ -11286,6 +11627,7 @@ function emitUnitMajorRunStage(
     directive.unit = step.unit;
     if (redoChosenForUnitStep(projectDir, step.stage.slug, step.unit)) {
       directive.artifact_reuse = { decision: "redo", unit: step.unit };
+      delete directive.questions_answered;
     }
     emitUnitStepOrStage(
       unitReceiptOnlyStep(
@@ -11660,8 +12002,10 @@ function unitChoiceRefusal(stateContent: string, targetSlug: string): string {
     : readConstructionIteration(stateContent) === "unit-major" && !checkpointPolicyEnabled(stateContent)
       ? `${name} was approved for every unit at its stage approval, so it can only be reopened for every unit. ` +
         "Nothing changed. Say 'for every unit' to do that."
-      : `${name} can be reopened for one unit only while Construction builds one unit at a time; here it can ` +
-        "only be reopened for every unit. Nothing changed. Say 'for every unit' to do that.";
+      : readConstructionIteration(stateContent) === "unit-major"
+        ? `${name} can only be reopened for every unit from here. Nothing changed. Say 'for every unit' to do that.`
+        : `${name} can be reopened for one unit only while Construction builds one unit at a time; here it can ` +
+          "only be reopened for every unit. Nothing changed. Say 'for every unit' to do that.";
   return `Run nothing. Tell the person in one line: "${why}" If they say 'for every unit', ` +
     `run \`next --stage ${targetSlug} --every-unit\`.`;
 }
@@ -12810,15 +13154,25 @@ function checkStageCompletionEvidence(
     }
   }
 
+  // Construction walks its Units from Units Generation's units block, so the
+  // stage's gate never opens over a block the engine cannot read: the agent
+  // writes it, then runs the same report again.
+  const reportAgain = retry ??
+    `\`${renderEngineInvocation({ route: "orchestrate", args: ["report", "--stage", slug, "--result", "awaiting-approval"] })}\` again`;
+  if (slug === "units-generation") {
+    const dag = resolveBoltDag(pd);
+    if (dag.state === "malformed") {
+      return { ok: false, step: true, message: `${unitsBlockRepair(dag.reason, dag.detail)} Then run ${reportAgain}.` };
+    }
+  }
+
   if (isPerUnit(node) && !stageLevelPerUnit && !settledSwarm) {
     const resolution = boltResolution ?? resolveBoltBatches(pd);
     if (resolution.state === "malformed") {
       return {
         ok: false,
-        message:
-          `Stage "${slug}" is per-unit (for_each: unit-of-work) but the unit list cannot be resolved: ` +
-          `inception/units-generation/unit-of-work-dependency.md is ${resolution.reason} ` +
-          `(${resolution.detail}). Fix the fenced units block before entering approval.`,
+        step: true,
+        message: `${unitsBlockRepair(resolution.reason, resolution.detail)} Then run ${reportAgain}.`,
       };
     }
     if (resolution.state === "ok") {
@@ -14114,6 +14468,14 @@ function handleReport(args: string[], projectDir: string | undefined): void {
       if (stageCheckbox.state === "awaiting-approval") {
         revalidatingOpenGate = true;
       }
+      // After a revision the gate is shown again with `revised`.
+      if (stageCheckbox.state === "revising") {
+        emit(errorDirective(
+          `Stage "${slug}" is being revised, so its gate is shown again with \`${aidlcToolInvocation("orchestrate")} ` +
+            `report --stage ${shellArg(slug)} --result revised\`: run it, then ask the person the approval question.`,
+        ));
+        return;
+      }
       if (
         stageCheckbox.state !== "in-progress" &&
         stageCheckbox.state !== "awaiting-approval"
@@ -14774,6 +15136,7 @@ function handleContinue(args: string[], projectDir: string | undefined): void {
   // Read again from the audit, so an answer spent since is not handed out.
   if (payload.e === true && payload.u !== null && redoChosenForUnitStep(pd, node.slug, payload.u)) {
     directive.artifact_reuse = { decision: "redo", unit: payload.u };
+    delete directive.questions_answered;
   }
   if (payload.w) {
     const resolution = resolveBoltDag(pd);
@@ -15248,6 +15611,7 @@ export function main(argv: string[]): void {
     activeHookHealthNotice = undefined;
     activeSwitchOffNotices = null;
     activeKeptRequestLine = null;
+    routingAnsweredAsActiveWork = false;
     engineProjectDir = undefined;
     resolvedDirectiveLimit = null;
     engineSessionId = undefined;
@@ -15256,6 +15620,7 @@ export function main(argv: string[]): void {
     preparedSteeringPayload = null;
     retainedIssuedDirective = false;
     preparedTransportIdentity = null;
+    preparedRulesDelivery = null;
   }
 }
 

@@ -249,6 +249,15 @@ approved Unit's work keeps its approval, and its one line arrives in
 own check. A change made after the approval question was asked and before the
 person answers is accepted the same way: their `approve` records it, and its one
 line arrives in that command's `change_notices`.
+A `rereview` with `unfinished` is instead the Unit's own review that did not finish
+(`no-verdict`: never answered; `not-ready`: NOT-READY with a pass left, so repair
+what it found first): run it the same way. When the person said to approve the Unit
+as it is, run `verify` with `--over-unfinished-review` instead; the checkpoint then
+carries `review_not_finished`, whose `question` takes the place of "Approve this
+completed <unit>?", and `approve` returns the one line to say.
+A `rereview` with `first` is the Unit's review that was never asked for, under any
+Guard Policy: run it the same way. It is required, so `--over-unfinished-review`
+does not apply.
 
 Otherwise, if `ready` is false or evidence became stale, explain `errors`.
 Repair the named missing review or receipt through its owning procedure,
@@ -453,18 +462,27 @@ run is deliberately left in-flight — its gate is NOT presented and its enabled
 learnings ritual DEFERS to the eventual passing run (when the `learnings` module is listed, the stage diary
 memory.md persists across the loop; otherwise no diary or ritual runs).
 
+**Which units go back.** The loop-back reopens Code Generation for the
+unit(s) the diagnosis names. Every other unit keeps its finished work,
+reviews, Plan Approval and checkpoint approval, and is not re-run, reviewed or
+asked about again. Only a cause that spans every unit, or cannot be pinned to
+one, reopens Code Generation for every unit. Either way the stages before Code
+Generation keep their work. Below, an "applicable unit" is a reopened one.
+
 **The loop-back counter** lives in test-results.md under `## Loop-Back Log`:
 the count of `### Loop-back N` entries IS the bound (max 3 per intent). This
-artifact ledger is chosen over parsing STAGE_JUMPED audit rows because it
+artifact ledger is chosen over parsing the jump's audit rows because it
 survives the backward jump (jumps reset checkboxes, never artifacts), is
 colocated with the diagnosis it must carry anyway, and is readable at the
-final gate; the STAGE_JUMPED rows the jump tool emits remain the
+final gate; the rows the jump tool emits (a `STAGE_JUMPED` for every unit, a
+unit-tagged `GATE_REJECTED` per reopened unit) remain the
 deterministic audit cross-check. The log is append-only. A human-directed
 backward jump does not count against the bound — only entries this protocol
 writes do.
 
-**Plan approval on replay.** The jump opens a new stage attempt, so the prior
-Plan Approval (bound to the previous attempt) cannot authorize the replay.
+**Plan approval on replay.** The jump opens a new stage attempt for each
+unit it reopens, so that unit's prior Plan Approval (bound to the previous
+attempt) cannot authorize the replay.
 Preserve the Loop-Back Log; after the repaired plan is written, `next` asks the
 person for Plan Approval again before generation (Code Generation Step 3). The
 human's "Retry with fix" choice authorizes the loop-back jump; it is not approval
@@ -475,15 +493,23 @@ impact-estimated fix identified):
 1. Append the `### Loop-back N — <ISO timestamp>` entry (Diagnosis /
    Root-cause stage / Planned fix / Estimated impact) to test-results.md and a matching
    Deviations entry to this stage's memory.md.
-2. Execute the jump through the ENGINE: run
-   `bun {{HARNESS_DIR}}/tools/aidlc-orchestrate.ts next --stage code-generation`.
-   The engine validates the target and answers with a `print` directive naming
-   the exact `aidlc-jump.ts execute --target code-generation --direction
-   backward --scope <scope>` command; run that printed command verbatim (it
-   resets the target + downstream stages, emits the canonical `STAGE_JUMPED`,
-   and pivots Current Stage), then re-run `next` and continue the forwarding
-   loop. Never compose the `execute` call by hand — the engine's print is the
-   validated form.
+2. Execute the jump through the ENGINE: for each unit the diagnosis names,
+   run `bun {{HARNESS_DIR}}/tools/aidlc-orchestrate.ts next --stage
+   code-generation --unit <unit>` and run the command its `print` directive
+   names verbatim before the next unit (an `aidlc-jump.ts reopen --target
+   code-generation ... --units <unit>` that reopens that unit and moves
+   Current Stage back to Code Generation). Only for a cause that spans every
+   unit, or names none, run `next --stage code-generation` instead: its print
+   names `aidlc-jump.ts execute --target code-generation --direction backward
+   --scope <scope>`, which resets Code Generation and the stages after it for
+   every unit and emits the canonical `STAGE_JUMPED`. When Construction runs
+   stage by stage (`Construction Iteration` in aidlc-state.md is not
+   `unit-major`), one unit cannot be reopened alone: run that
+   `next --stage code-generation` at once, without asking; "Retry with fix"
+   (or the autonomy grant) already chose the repair. Then re-run `next` and
+   continue the forwarding loop.
+   Never compose the `reopen` or `execute` call by hand: the engine's print
+   is the validated form.
 3. On the code-generation re-entry, follow "Re-entry settlement and review"
    below. Before any fix generation, the engine asks for Plan Approval of the
    repaired plan as required above; this is a human stop even though Construction
@@ -504,23 +530,26 @@ route depends on whether code-generation has ever used the unit lifecycle
 ledger:
 
 1. **Artifact-only workflow** — when no code-generation lifecycle row has ever
-   been emitted, artifacts remain the settlement signal. The re-entry `next`
+   been emitted and Construction checkpoints are off (with them on, receipts
+   are required from the first unit), artifacts remain the settlement signal. The re-entry `next`
    call can therefore emit the all-covered `gate: true` fast path. Apply the
    planned fix and the deterministic Modify/Keep decisions through the
    re-entry override BEFORE presenting or auto-approving that gate.
 2. **Receipt-mode workflow** — once any code-generation lifecycle row exists,
-   receipt mode is sticky. The jump invalidates the old attempt's settlement
-   receipts, so re-entry emits per-unit `run-stage` directives. For each
-   applicable unit, re-mint `unit start` / `unit complete`, applying the planned
-   fix to targeted units and the deterministic **Modify targeted / Keep rest**
-   Artifact Re-use decision inline as that unit re-runs.
+   receipt mode is sticky (with Construction checkpoints on it applies from the
+   first unit). The reopen invalidates each applicable unit's old
+   settlement receipts, so re-entry emits per-unit `run-stage` directives for
+   those units. For each applicable unit,
+   re-mint `unit start` / `unit complete`, applying the planned fix to targeted
+   units and the deterministic **Modify targeted / Keep rest** Artifact Re-use
+   decision inline as that unit re-runs.
 
 On BOTH paths, after every fix and re-use decision and BEFORE presenting or
 auto-approving the settle/approval gate, dispatch code-generation's declared
 reviewer for every applicable unit and record fresh current-attempt
-`REVIEW_COMPLETED` receipts. The backward jump's `STAGE_JUMPED` invalidates
-every prior review receipt, and the engine refuses approval while any applicable
-unit lacks a fresh one. Under unit-major iteration the autonomous swarm never
+`REVIEW_COMPLETED` receipts. The reopen invalidates each applicable unit's
+prior review receipts (every unit's, after the stage-wide `STAGE_JUMPED`), and
+the engine refuses approval while any applicable unit lacks a fresh one. Under unit-major iteration the autonomous swarm never
 fires: the replay follows the ordinary per-unit walk, re-mints lifecycle and
 review receipts per unit as above. Fresh target-bound Plan Approval remains
 a human stop for the repair; autonomy does not waive it.
@@ -637,7 +666,7 @@ impact-unestimated give-up option is a protocol violation.
 
 **Engine-driven per-unit iteration.** The orchestration engine now drives the per-Unit loop for the inline per-Unit design stages (functional-design, nfr-requirements, nfr-design, infrastructure-design) the same way it always has for code-generation: on a `next` that lands on an in-flight per-Unit stage (off the swarm path), the engine emits ONE `run-stage` directive per Unit, in Bolt build order, carrying the resolved Unit name in `directive.unit` and its artifact paths. The engine substitutes the next unsettled Unit on each `next`. For a stage-major or legacy stage gate, the stage's per-Unit gate is **suppressed** (`gate: false`) on every not-yet-settled Unit, and the stage's real gate is presented exactly once, on the re-entry after the LAST Unit settles, so a single stage-level approval covers all Units and cannot be reached until every Unit is built (the same "per-Unit gate suppressed, single gate replaces it" rule, now applied across all five per-Unit stages, and enforced deterministically: `report --result approved` on a not-yet-completed per-Unit stage is refused while any Unit is unsettled). A workflow with no units-generation dependency artifact on disk degrades to one single-iteration directive (unchanged behaviour). When the artifact exists, the engine validates the compiled `bolt_dag` against it and recomputes the unit batches on the spot if the cache is missing or stale, so the per-unit loop never silently shrinks to an outdated unit set; an artifact whose units block does not parse is surfaced as an error instead.
 
-**Unit lifecycle receipts.** On a per-Unit body directive without `directive.wave`, `construction_checkpoint`, or `construction_policy.completion_only`, bracket the Unit's work with the receipt verbs: `{{INVOKE}} engine state unit start --stage <slug> --unit <name>` before the body, and `... unit complete --stage <slug> --unit <name>` after the Unit's artifacts are written (complete verifies that every required artifact is a regular file on disk and refuses directories or missing paths — the receipt is the completion signal, artifacts are the evidence it checks). Pass the exact `directive.stage` + `directive.unit` pair emitted by the engine: `unit start` re-runs the route as a read-only engine observation (it publishes no directive and writes no state, receipt, or approval evidence, and a durable write from that path fails loudly rather than silently) and refuses a DAG member whose dependencies or earlier same-batch Units are not settled. New Unit names use lowercase kebab-case; safe legacy single-segment names (including digit-leading names, uppercase letters, underscores, and dots) remain accepted by existing DAGs and autonomous swarms, which use a deterministic internal Bolt slug without changing the Unit identity. An autonomy grant does not disable these receipts when a backward jump routes an inline per-Unit stage; only a stage currently owned by the autonomous swarm refuses them. If the Unit must stop before completion (blocking question, failed dependency, session ending mid-Unit), record the checkpoint with single-line text: `... unit pause --stage <slug> --unit <name> --reason "<why>" --next-action "<the exact next step>"`. Every lifecycle row carries an exact stage-attempt `Run floor` (`<boundary-event>:<timestamp>#<ordinal>`); when equal second-precision boundaries in different audit shards are causally unordered, the engine uses a deterministic `AMBIGUOUS:<timestamp>#<digest>` floor that invalidates older receipts instead of trusting shard filename order. Receipt validity is decided by the attempt floor and the content bindings on the row, never by the order in which shards or rows were written. Once any receipt exists for a stage, every later attempt stays in receipt mode and requires a current-attempt `UNIT_COMPLETED` receipt per Unit. Artifact files alone no longer settle a Unit, so a stale, paused, reopened, or partially-written Unit can never be mistaken for done. A paused Unit routes FIRST and hard-stops the loop: the engine emits an `ask` naming the Unit, its recorded reason, and next action (`unit_state: paused`), and no other work may start until an explicit `... unit resume --stage <slug> --unit <name>`. `unit start` refuses while another Unit of the stage is open (one active Unit at a time; resume or complete it first). The one exception is a Unit the person set aside for another (a pause with `--set-aside-for <unit>`, which a unit-major reopen or pick-up names): follow the engine's route, which takes the Unit it was set aside for first, lets that Unit start even on the paused Unit's stage, and then asks to resume the set-aside Unit. When Construction checkpoints apply (`Construction Checkpoints: enabled` on solo work whose Construction includes a source-producing per-Unit stage), the receipt is required from the first Unit, so artifact files alone never settle one; without them, a workflow that never calls the verbs keeps artifact-driven coverage. When a Unit's files are written and its final review is recorded but its receipt is not, `next` prints the receipt commands instead of the stage body: run them, then `next`.
+**Unit lifecycle receipts.** On a per-Unit body directive without `directive.wave`, `construction_checkpoint`, or `construction_policy.completion_only`, bracket the Unit's work with the receipt verbs: `{{INVOKE}} engine state unit start --stage <slug> --unit <name>` before the body, and `... unit complete --stage <slug> --unit <name>` after the Unit's artifacts are written (complete verifies that every required artifact is a regular file on disk and refuses directories or missing paths — the receipt is the completion signal, artifacts are the evidence it checks). Pass the exact `directive.stage` + `directive.unit` pair emitted by the engine: `unit start` re-runs the route as a read-only engine observation (it publishes no directive and writes no state, receipt, or approval evidence, and a durable write from that path fails loudly rather than silently) and refuses a DAG member whose dependencies or earlier same-batch Units are not settled. New Unit names use lowercase kebab-case; safe legacy single-segment names (including digit-leading names, uppercase letters, underscores, and dots) remain accepted by existing DAGs and autonomous swarms, which use a deterministic internal Bolt slug without changing the Unit identity. An autonomy grant does not disable these receipts when a backward jump routes an inline per-Unit stage; only a stage currently owned by the autonomous swarm refuses them. If the Unit must stop before completion (blocking question, failed dependency, session ending mid-Unit), record the checkpoint with single-line text: `... unit pause --stage <slug> --unit <name> --reason "<why>" --next-action "<the exact next step>"`. Every lifecycle row carries an exact stage-attempt `Run floor` (`<boundary-event>:<timestamp>#<ordinal>`); when equal second-precision boundaries in different audit shards are causally unordered, the engine uses a deterministic `AMBIGUOUS:<timestamp>#<digest>` floor that invalidates older receipts instead of trusting shard filename order. Receipt validity is decided by the attempt floor and the content bindings on the row, never by the order in which shards or rows were written. Once any receipt exists for a stage, every later attempt stays in receipt mode and requires a current-attempt `UNIT_COMPLETED` receipt per Unit. Artifact files alone no longer settle a Unit, so a stale, paused, reopened, or partially-written Unit can never be mistaken for done. A paused Unit routes FIRST and hard-stops the loop: the engine emits an `ask` naming the Unit, its recorded reason, and next action (`unit_state: paused`), and no other work may start until an explicit `... unit resume --stage <slug> --unit <name>`. `unit start` refuses while another Unit of the stage is open (one active Unit at a time; resume or complete it first). The one exception is a Unit the person set aside for another (a pause with `--set-aside-for <unit>`, which a unit-major reopen or pick-up names): follow the engine's route, which takes the Unit it was set aside for first, lets that Unit start even on the paused Unit's stage, and then asks to resume the set-aside Unit. When Construction checkpoints apply (`Construction Checkpoints: enabled` on solo work whose Construction includes a source-producing per-Unit stage), the receipt is required from the first Unit, so artifact files alone never settle one; without them, a workflow that never calls the verbs keeps artifact-driven coverage. When a Unit's files are written and its final review is recorded but its receipt is not, `next` prints the receipt commands instead of the stage body: run them, then `next`. With reviews off there is no review to record, so `next` prints them when it is the Unit's first attempt at the stage; after a jump or a rejection the stage body comes back.
 
 **Per-unit batch waves (optional, stage-major only).** For functional-design, nfr-requirements, nfr-design, and infrastructure-design on an explicitly selected stage-major walk, the engine may emit `directive.wave` from one healed Bolt-DAG snapshot. Code Generation remains wave-ineligible because it writes the shared workspace and hard-stops for Plan Approval. Each entry carries resolved Unit-local inputs/outputs, `required_produces`, `unit_memory_path`, `build_required`, `completion_required`, and receipt-backed `review_state` / `review_iteration`; kind-vacuous and fully settled Units are omitted, and large batches arrive as deterministic same-batch prefixes. The parent retains `stage_file`, the complete `inline_context_paths`, `context_warnings`, the accumulated steering bundle, effective `review_class`, reviewer settings, sensors, and the stage-level `memory_path`. Never reconstruct siblings from `runtime-graph.json`.
 

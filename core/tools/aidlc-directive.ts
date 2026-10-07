@@ -291,11 +291,20 @@ export interface RunStageDirective {
     verification_command: string | null;
     command_authorized: boolean;
     // Only the Unit's reviewed code changed since its review: run this review
-    // request now, without asking, then verify again.
-    rereview?: { stage: string; reviewer: string; iteration: number; command: string };
+    // request now, without asking, then verify again. With `unfinished`, the
+    // Unit's own review has not finished instead: no verdict yet, or
+    // NOT-READY with a pass left (repaired first). With `first`, it was never
+    // asked for: this is its first request.
+    rereview?: {
+      stage: string; reviewer: string; iteration: number; command: string;
+      unfinished?: "no-verdict" | "not-ready"; first?: true;
+    };
     // The current review re-checked that changed code or those documents; the
     // person gets one approval question that says so.
     rechecked?: { verdict: string; approved_before: boolean; changed: "code" | "documents" };
+    // The person let the Unit go on without these stages' unfinished reviews;
+    // `question` is the one approval question.
+    review_not_finished?: { stages: string[]; question: string };
   };
   swarm_checkpoint?: {
     batch: number;
@@ -313,6 +322,12 @@ export interface RunStageDirective {
     decision: "redo";
     unit: string;
   };
+  // This stage's questions file already holds the person's answers (a resume,
+  // a new chat): the conductor keeps it and carries on from where the answers
+  // stop, never creating it again or asking them again (#1873).
+  questions_answered?: {
+    path: string;
+  };
   memory_path: string;
   // consumes carries only the declared inputs that EXIST on disk at emit time;
   // declared inputs whose file is absent move to consumes_absent so the
@@ -327,6 +342,13 @@ export interface RunStageDirective {
   // (every shipped stage does). Absent only when the bundle arrived through a
   // preceding load-steering sequence.
   rules_content?: Array<{ path: string; text: string }>;
+  // Instead of rules_content: the digest of a bundle the chat already holds,
+  // unchanged (the host's own copy of the memory files, or what this Codex
+  // thread was handed; see aidlc-rules-held.ts). Never beside rules_content.
+  rules_held?: string;
+  // Beside rules_held: one sentence telling the agent where those rules are,
+  // so the step applies them with no skill loaded.
+  rules_held_note?: string;
   // Presentation projection only: detailed fire policy remains on stage-graph.
   sensors_applicable: string[];
   // Engine-resolved ceremony switches apply equally to inline and dispatched work.
@@ -822,11 +844,14 @@ const RUN_STAGE_FIELDS = [
   "construction_checkpoint",
   "swarm_checkpoint",
   "artifact_reuse",
+  "questions_answered",
   "memory_path",
   "consumes",
   "produces",
   "rules_in_context",
   "rules_content",
+  "rules_held",
+  "rules_held_note",
   "sensors_applicable",
   "ceremony",
   "answer_mode",
@@ -1385,6 +1410,20 @@ function checkRunStageShared(
   if (o.rules_content !== undefined) {
     checkPathTextArray(o, "rules_content", kind, errors);
   }
+  if (o.rules_held !== undefined) {
+    if (typeof o.rules_held !== "string" || !/^sha256:[0-9a-f]{64}$/.test(o.rules_held)) {
+      errors.push(`${kind}: rules_held must be a sha256 bundle digest`);
+    } else if (o.rules_content !== undefined) {
+      errors.push(`${kind}: rules_held and rules_content cannot both be present`);
+    }
+  }
+  if (o.rules_held_note !== undefined) {
+    if (typeof o.rules_held_note !== "string" || o.rules_held_note === "") {
+      errors.push(`${kind}: rules_held_note must be a non-empty string`);
+    } else if (o.rules_held === undefined) {
+      errors.push(`${kind}: rules_held_note goes only beside rules_held`);
+    }
+  }
   checkStringArray(o, "sensors_applicable", kind, errors);
   checkCeremony(o, kind, errors);
   checkOptionalAnswerMode(o, kind, errors);
@@ -1486,12 +1525,24 @@ function checkRunStageShared(
         (!isObject(rechecked) || typeof rechecked.verdict !== "string" || typeof rechecked.approved_before !== "boolean" ||
           (rechecked.changed !== "code" && rechecked.changed !== "documents"))
       ) errors.push(`${kind}: construction_checkpoint.rechecked must carry its verdict`);
+      const notFinished = checkpoint.review_not_finished;
+      if (
+        "review_not_finished" in checkpoint &&
+        (!isObject(notFinished) || typeof notFinished.question !== "string" || !Array.isArray(notFinished.stages) ||
+          !notFinished.stages.every((stage: unknown) => typeof stage === "string"))
+      ) errors.push(`${kind}: construction_checkpoint.review_not_finished must carry its stages and question`);
     }
   }
   if ("artifact_reuse" in o) {
     const reuse = o.artifact_reuse;
     if (!isObject(reuse) || o.phase !== "construction" || reuse.unit !== o.unit || reuse.decision !== "redo") {
       errors.push(`${kind}: artifact_reuse must be the redo decision for this Construction Unit`);
+    }
+  }
+  if ("questions_answered" in o) {
+    const kept = o.questions_answered;
+    if (!isObject(kept) || typeof kept.path !== "string" || !kept.path.endsWith("-questions.md")) {
+      errors.push(`${kind}: questions_answered must name the stage's questions file`);
     }
   }
   if ("swarm_checkpoint" in o) {

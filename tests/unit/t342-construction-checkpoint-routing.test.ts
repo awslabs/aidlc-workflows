@@ -142,7 +142,7 @@ function next(p: string, env: NodeJS.ProcessEnv = process.env) {
     reviewer?: string;
     construction_policy?: { offer_autonomy: boolean; completion_only: boolean; human_completion_required: boolean };
     artifact_reuse?: { decision: string; unit: string };
-    ask_type?: string; narration?: string; plan_approval?: { status?: string; feedback?: string };
+    ask_type?: string; narration?: string; message?: string; plan_approval?: { status?: string; feedback?: string };
     protocol_modules?: string[]; change_notices?: string[];
   };
 }
@@ -807,10 +807,17 @@ describe("t342 Construction checkpoint routing", () => {
   test("reused artifacts get lifecycle receipts before the Unit checkpoint", () => {
     const p = fixture();
     cover(p, "alpha", stages, false);
+    // Reviews are off and every file is on disk in the stage's first attempt,
+    // so the step left is the Unit's receipts (#2021); the route `unit start`
+    // checks is still the Unit's stage.
     const directive = next(p);
     expect(directive.construction_checkpoint).toBeUndefined();
-    expect(directive.stage).toBe("functional-design");
-    expect(directive.unit).toBe("alpha");
+    expect(directive.kind, JSON.stringify(directive)).toBe("print");
+    expect(directive.message).toContain("unit start --stage functional-design --unit alpha");
+    expect(directive.message).toContain("unit complete --stage functional-design --unit alpha");
+    const route = routed(p);
+    expect(route.stage).toBe("functional-design");
+    expect(route.unit).toBe("alpha");
     for (const action of ["start", "complete"]) {
       const recorded = spawnSync(process.execPath, [
         join(AIDLC_SRC, "tools/aidlc-state.ts"), "unit", action,
@@ -818,7 +825,9 @@ describe("t342 Construction checkpoint routing", () => {
       ], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" });
       expect(recorded.status, `${recorded.stdout}${recorded.stderr}`).toBe(0);
     }
-    expect(next(p).stage).toBe("nfr-requirements");
+    // The walk moves on to the Unit's next stage, whose files are on disk too.
+    expect(routed(p).stage).toBe("nfr-requirements");
+    expect(next(p).message).toContain("unit start --stage nfr-requirements --unit alpha");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("the actual skeleton checkpoint remains human-owned after an early grant", () => {

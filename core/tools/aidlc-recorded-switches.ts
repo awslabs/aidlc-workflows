@@ -28,6 +28,7 @@ import {
   normalizeDriveLetter,
   personSpokeSinceGate,
   readRegularFileNoFollowOrThrow,
+  commandAtPersonsTerminal,
   sessionsDir,
   writeFileAtomic,
 } from "./aidlc-lib.ts";
@@ -201,13 +202,12 @@ export function clearSwitchCommand(
 export function switchOffLine(off: SwitchOff, now: Date = new Date()): string {
   const label = PERSON_CHECK_SWITCH_LABELS[off.name] ?? off.name;
   const since = clock(off.entry?.since ?? fileTime(off.settingsPath), now);
-  // Where it came from is said only when the person's words are on record:
-  // a switch nothing ties to their chat may still be theirs.
-  const how = off.entry?.how !== "chat"
-    ? ""
-    : off.entry.words
+  // Where it came from is said only when the person's own words are on record:
+  // a switch nothing ties to words of theirs may still be theirs, so the line
+  // claims nothing about it and says what is off, since when, and the way back.
+  const how = off.entry?.how === "chat" && off.entry.words
     ? `, because you said: "${quoted(off.entry.words)}"`
-    : ", set after your last message in the chat";
+    : "";
   return `The ${label} is off ${where(off.target)} since ${since}${how}. ` +
     `Say "turn it back on" to restore it (${clearSwitchCommand(off.name, off.projectDir)}).`;
 }
@@ -267,8 +267,11 @@ export function recordSwitchChange(
   const added = PERSON_CHECK_SWITCHES.filter((name) => after.has(name) && !before.has(name));
   const removed = PERSON_CHECK_SWITCHES.filter((name) => before.has(name) && !after.has(name));
   if (added.length === 0 && removed.length === 0) return [];
+  // Their words are behind a switch the agent set from their chat. A command they
+  // ran themselves, at their own terminal, belongs to no chat, so the record
+  // claims none and a later chat quotes no message at them.
   let turn: ReturnType<typeof latestPersonTurn> = null;
-  if (added.length > 0) {
+  if (added.length > 0 && !commandAtPersonsTerminal()) {
     try {
       turn = personSpokeSinceGate(projectDir) ? latestPersonTurn(projectDir) : null;
     } catch {

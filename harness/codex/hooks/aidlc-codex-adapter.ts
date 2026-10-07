@@ -533,10 +533,14 @@ switch (target) {
     // SESSION_STARTED) and resume-rebind OFFER (on source=resume) become
     // reachable — Codex already carries a real `source`, so with session_id
     // present the whole P8 rebind path works on Codex.
+    // The thread's rollout lets `next` see a compaction no hook reported
+    // (#2023). It is not passed as transcript_path, which names a Claude
+    // transcript to the usage tools.
     const fwd = JSON.stringify({
       hook_event_name: "SessionStart",
       source: codex.source ?? "startup",
       ...(codex.session_id ? { session_id: codex.session_id } : {}),
+      ...(typeof codex.transcript_path === "string" ? { rollout_path: codex.transcript_path } : {}),
     });
     const r = runCore("aidlc-session-start.ts", fwd);
     const wrapped = wrapContext(r.stdout, "SessionStart");
@@ -894,8 +898,15 @@ switch (target) {
             ...(codex.session_id ? { session_id: codex.session_id } : {}),
             prompt: codex.prompt || codex.user_prompt || codex.message || "",
           };
-    runCoreWithStderr("aidlc-record-human-turn.ts", JSON.stringify(forwarded));
-    persistResponse("", 0);
+    const turn = runCoreWithStderr("aidlc-record-human-turn.ts", JSON.stringify(forwarded));
+    // The core hook's note says what a switch the person typed did, and that the
+    // engine already tells them. Dropping it is why the agent ran a setter of its
+    // own on the piece of work that was open instead of the one they asked about.
+    // Same context envelope as session-start; an output with nothing in it stays
+    // empty, so a turn with no note answers exactly as before.
+    const context = wrapContext(turn.stdout, "UserPromptSubmit");
+    persistResponse(context, 0);
+    if (context) process.stdout.write(context);
     return 0;
   }
 

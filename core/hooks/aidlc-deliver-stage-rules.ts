@@ -8,7 +8,7 @@
 // and relies on native agent resource preload. Kiro IDE does not register this
 // hook because tool-argument delivery is not uniform across supported
 // generations; it instead preloads active memory through always-included
-// workspace steering with live file references.
+// workspace steering that carries the memory text (aidlc-includes.ts).
 //
 // On Claude it also runs at PostToolUse, only to confirm a background launch
 // the PreToolUse input did not announce (see isBackgroundDispatch).

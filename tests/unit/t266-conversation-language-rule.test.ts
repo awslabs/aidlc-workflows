@@ -440,10 +440,11 @@ describe("t266 conversation-language rule layer", () => {
           required = `- ${MEMORY_DIR}/org.md`;
           break;
         case "kiro-steering":
-          // The IDE's real surface: an always-included steering file whose
-          // #[[file:...]] references pull the live memory tree in verbatim.
+          // The IDE's real surface: an always-included steering file that
+          // carries the memory text itself (Kiro IDE does not expand
+          // #[[file:...]] references in steering).
           surface = join(harness.engineRoot, "steering", "aidlc-active-memory.md");
-          required = `#[[file:${MEMORY_DIR}/org.md]]`;
+          required = `<memory-file path="${MEMORY_DIR}/org.md">`;
           break;
         case "kiro-resources":
           // Kiro CLI: the conductor is itself an agent config, so its own
@@ -475,6 +476,9 @@ describe("t266 conversation-language rule layer", () => {
           /^---\n(?:.*\n)*?inclusion:\s*always\n(?:.*\n)*?---/.test(body),
           `${harness.name}'s steering file declares inclusion: always`,
         ).toBe(true);
+        for (const label of RULE_LABELS) {
+          expect(body.includes(label), `${harness.name}'s steering file carries ${label}`).toBe(true);
+        }
       }
       if (include === "cursor-rule") {
         expect(

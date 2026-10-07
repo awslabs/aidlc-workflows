@@ -184,8 +184,12 @@ describe("t148 dist/kiro file structure", () => {
       "phases/construction.md",
       "phases/operation.md",
     ]) {
+      // Kiro IDE does not expand file references in steering, so the file
+      // carries each memory file's text.
       expect(steering).toContain(
-        `#[[file:aidlc/spaces/default/memory/${file}]]`,
+        `<memory-file path="aidlc/spaces/default/memory/${file}">\n${
+          readFileSync(join(REPO_ROOT, "dist", "kiro-ide", "aidlc", "spaces", "default", "memory", file), "utf-8")
+        }`,
       );
     }
   });

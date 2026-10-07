@@ -4739,6 +4739,41 @@ export function readProtectedResponse(projectDir: string, session: string): Prot
     ? value : null;
 }
 
+// The person sent these words to separate new work or a reshape: no protected
+// question (a checkpoint, the verification command) keeps them as its reply.
+// Their other replies stay; a pick read from a reply that is gone goes too.
+export function withdrawProtectedReplyWords(projectDir: string, text: string): void {
+  const same = (line: string): boolean => line.replace(/\s+/g, " ").trim().toLowerCase() ===
+    text.replace(/\s+/g, " ").trim().toLowerCase();
+  let names: string[];
+  try {
+    names = readdirSync(planApprovalRuntimeDir(projectDir));
+  } catch {
+    return;
+  }
+  for (const name of names.filter((entry) => /^protected-question-response-.+\.json$/.test(entry)).sort()) {
+    const session = readPlanApprovalRuntimeJson<{ session?: unknown }>(join(planApprovalRuntimeDir(projectDir), name),
+      "Protected response")?.session;
+    const response = typeof session === "string" ? readProtectedResponse(projectDir, session) : null;
+    if (response === null || response.words === undefined) continue;
+    const lines = response.words.split("\n");
+    const kept = lines.filter((line) => !same(line));
+    if (kept.length === lines.length) continue;
+    if (kept.length === 0) {
+      removeRuntimeFile(protectedResponsePath(projectDir, response.session));
+      continue;
+    }
+    const words = kept.join("\n");
+    const lastKept = kept[kept.length - 1] === lines[lines.length - 1];
+    writeProtectedResponse(projectDir, {
+      version: 1, session: response.session, challengeId: response.challengeId,
+      ...(lastKept && response.choice !== undefined ? { choice: response.choice } : {}),
+      responseSha256: createHash("sha256").update(words, "utf-8").digest("hex"),
+      words,
+    });
+  }
+}
+
 export function requireProtectedResponse(
   projectDir: string, session: string,
   expected: { kind: ProtectedQuestion["kind"]; targetDigest: string; choice: string },
@@ -5840,9 +5875,11 @@ export function takeSessionSelectionNotice(projectDir: string, sessionId: string
 // through without speaking (the print that creates the work, the reply to
 // "new project or existing code"). They are kept for this chat and said, in
 // order, with the next step the agent speaks from, then cleared. They belong to
-// the person's current turn: a newer prompt on the selected work, or an age
-// past PENDING_PERSON_LINES_MAX_AGE_MS when no prompt hook ran, drops them, so
-// a line never surfaces in a later turn or another chat. The same file keeps,
+// the person's current turn, and a line still waiting when that turn ends is
+// carried into the next one (carryPendingPersonLines, from the prompt hook and
+// from creation), so one the person has not heard yet is not lost because they
+// answered something in between; an age past PENDING_PERSON_LINES_MAX_AGE_MS
+// ends the wait, and nothing surfaces in another chat. The same file keeps,
 // per work, the lines this chat has already heard that the engine would
 // otherwise repeat (a finished stage that is out of date).
 const PENDING_PERSON_LINES_MAX_AGE_MS = 15 * 60 * 1000;
@@ -5951,6 +5988,42 @@ export function pendingPersonLines(projectDir: string, sessionId: string): { lin
       }
     },
   };
+}
+
+/**
+ * Keep the lines the person has not heard yet when what they are keyed to moves
+ * on: this chat starts new work (creation selects the new record), or the person
+ * takes another turn before any step said them (they answered a question the
+ * agent asked of its own accord, which is how a switch line went unsaid on Kiro
+ * CLI). Either way the line is still about what they just asked for, so it
+ * follows them and the next step the agent speaks from says it. Each line keeps
+ * the time it was first queued, so the age cap still ends the wait.
+ */
+export function carryPendingPersonLines(projectDir: string, sessionId: string | null): void {
+  if (!sessionId) return;
+  const path = pendingPersonLinesPath(projectDir, sessionId);
+  if (!path || !existsSync(path)) return;
+  try {
+    const raw = JSON.parse(readFileSync(path, "utf-8")) as { work?: unknown; lines?: unknown; said?: unknown };
+    const now = Date.now();
+    const waiting = (Array.isArray(raw.lines) ? raw.lines : []).filter((entry): entry is PendingPersonLine =>
+      entry !== null && typeof entry === "object" &&
+      typeof (entry as PendingPersonLine).line === "string" &&
+      typeof (entry as PendingPersonLine).at === "number" &&
+      now - (entry as PendingPersonLine).at <= PENDING_PERSON_LINES_MAX_AGE_MS);
+    if (waiting.length === 0) return;
+    const { turn, work } = personTurnAndWork(projectDir);
+    // What this chat already heard belongs to the work it heard it on.
+    const said = raw.work === work && Array.isArray(raw.said)
+      ? raw.said.filter((line): line is string => typeof line === "string")
+      : [];
+    writePendingPersonLines(projectDir, path, work, {
+      lines: waiting.map((entry) => ({ line: entry.line, at: entry.at, turn })),
+      said,
+    });
+  } catch {
+    // A line the person may miss never blocks the turn or creation.
+  }
 }
 
 // Count `lines` as heard in this chat on the selected work, so the engine does
@@ -11234,9 +11307,12 @@ export function humanTurnState(
       // QUESTION_UNANSWERED (hook-owned: a question box closed with no answer)
       // spends any earlier turn, so a remark typed before the box never answers
       // the question asked in it. The question itself stays open.
+      // Words the person sent to separate new work or a reshape reply to no
+      // question here; what they asked for still stands for the new work.
       const isResolution =
         GATE_RESOLUTION_EVENTS.has(ev) ||
         ev === "QUESTION_UNANSWERED" ||
+        (options.replies === true && ev === "REQUEST_ROUTED") ||
         (ev === "AUTONOMY_MODE_SET" &&
           auditBlockField(blocks[i], "Mode") === "autonomous");
       if (!isResolution && ev !== "HUMAN_TURN") continue;
@@ -12604,9 +12680,8 @@ export function summaryAttemptFloors(
       );
     }
     if (eventWorkflow?.startsWith("single-stage:")) return false;
-    if (entry.event === "WORKFLOW_STARTED" || entry.event === "STAGE_JUMPED") {
-      return true;
-    }
+    if (entry.event === "WORKFLOW_STARTED") return true;
+    if (entry.event === "STAGE_JUMPED") return stageJumpReaches(entry.block, stageSlug);
     return (
       auditBlockField(entry.block, "Stage") === stageSlug &&
       entry.event === "STAGE_STARTED" &&
@@ -13848,7 +13923,8 @@ export function hasPendingDecision(
   if (workflowAttempt) {
     const boundary = events.findLastIndex(
       (event) =>
-        event.event === "WORKFLOW_STARTED" || event.event === "STAGE_JUMPED",
+        event.event === "WORKFLOW_STARTED" ||
+        (event.event === "STAGE_JUMPED" && stageJumpReaches(event.block, stage)),
     );
     if (boundary >= 0) start = afterBoundary(boundary);
   } else if (afterEvent) {
@@ -17515,7 +17591,7 @@ function sourceBaselineBoundaryValue(
   }
   const qualifies =
     event.event === "WORKFLOW_STARTED" ||
-    event.event === "STAGE_JUMPED" ||
+    (event.event === "STAGE_JUMPED" && stageJumpReaches(event.block, stageSlug)) ||
     (
     event.event === "STAGE_STARTED" &&
     !unitMajor &&
@@ -17620,7 +17696,7 @@ export function reviewInvalidationAttemptView(
     events.filter(
       (event) =>
         event.event === "WORKFLOW_STARTED" ||
-        event.event === "STAGE_JUMPED" ||
+        (event.event === "STAGE_JUMPED" && stageJumpReaches(event.block, stageSlug)) ||
         ((event.event === "GATE_APPROVED" ||
           event.event === "GATE_REJECTED") &&
           auditBlockField(event.block, "Stage") === stageSlug),
@@ -17718,8 +17794,8 @@ export function reviewAttemptWindow(
   let floorIdx = -1;
   for (let i = 0; i < events.length; i++) {
     const event = events[i];
-    let boundary =
-      event.event === "WORKFLOW_STARTED" || event.event === "STAGE_JUMPED";
+    let boundary = event.event === "WORKFLOW_STARTED" ||
+      (event.event === "STAGE_JUMPED" && stageJumpReaches(event.block, stage.slug));
     if (!boundary && auditBlockField(event.block, "Stage") === stage.slug) {
       boundary =
         (event.event === "GATE_REJECTED" &&
@@ -18051,7 +18127,10 @@ export function reviewAttemptAccounting(
       }
       continue;
     }
-    if (entry.event === "WORKFLOW_STARTED" || entry.event === "STAGE_JUMPED") {
+    if (
+      entry.event === "WORKFLOW_STARTED" ||
+      (entry.event === "STAGE_JUMPED" && stageJumpReaches(entry.block, stage.slug))
+    ) {
       if (teamOwnership && tiedAcrossShards(i)) {
         ambiguity = `cross-shard boundary tie at ${entry.timestamp}`;
       }
@@ -19703,7 +19782,7 @@ export function freshReviewReceipts(
       if (auditBlockField(events[i].block, "Workflow")?.startsWith("single-stage:")) continue;
       if (
         events[i].event === "WORKFLOW_STARTED" ||
-        events[i].event === "STAGE_JUMPED"
+        (events[i].event === "STAGE_JUMPED" && stageJumpReaches(events[i].block, stage.slug))
       ) {
         boundary = i;
       }
@@ -24898,7 +24977,7 @@ export function currentStageSourceBaseline(
   for (let index = 0; index < events.length; index++) {
     if (
       events[index].event === "WORKFLOW_STARTED" ||
-      events[index].event === "STAGE_JUMPED"
+      (events[index].event === "STAGE_JUMPED" && stageJumpReaches(events[index].block, stageSlug))
     ) {
       boundary = index;
     }
@@ -25371,23 +25450,81 @@ export function hooksOffAgentStep(projectDir?: string, next?: string): string | 
   return `${HOOKS_OFF_AGENT_RULES} ${fillHookActivationText(activation.agentStep, projectDir, next)}`;
 }
 
-// A person typing AI-DLC commands at their own terminal: both ends of the
-// command are a terminal, no IDE terminal or agent host marks the environment,
-// and no chat has ever been recorded in this project. An agent's tool call is
-// never read as this, so the terminal step below (which names the supervised
-// presence switch) is never offered to an agent whose hooks are not running.
-export function personAtOwnTerminal(projectDir?: string, env: NodeJS.ProcessEnv = process.env): boolean {
-  const tty = (process.stdin.isTTY === true && process.stdout.isTTY === true) || env.AIDLC_TEST_CONFIG_TTY === "1";
-  if (!tty) return false;
-  if (["vscode", "cursor", "kiro"].includes((env.TERM_PROGRAM ?? "").toLowerCase())) return false;
-  // A host marks the processes it starts; a person's shell may still carry a
-  // tool's own settings (where it keeps its config), which say nothing.
-  if (Object.keys(env).some((key) =>
-    /^(?:CLAUDECODE|CLAUDE_CODE_|CODEX_|CURSOR_|KIRO_|OPENCODE|COPILOT_|VSCODE_)/i.test(key) &&
-    !/^(?:CODEX_HOME|COPILOT_HOME|OPENCODE_CONFIG_DIR|OPENCODE_CONFIG)$/i.test(key)
-  )) {
-    return false;
+/**
+ * This command is one the person typed at their own terminal: both ends of it are
+ * a terminal, nothing marks it as a chat's own command (no hook-injected session,
+ * no thread id a host gives the commands it runs), and no IDE or agent host marks
+ * the environment. The last part is load-bearing: Copilot in VS Code, Kiro IDE and
+ * Cursor run their agent's commands in real integrated terminals, so a terminal
+ * alone says nothing about who typed it.
+ *
+ * It is the one test for "the person's own command", used wherever that decides
+ * what a line says or whose act is recorded. An agent's tool call is never read
+ * as this.
+ */
+export function commandAtPersonsTerminal(env: NodeJS.ProcessEnv = process.env): boolean {
+  if (!atATerminal(env)) return false;
+  if (validSessionId(env.AIDLC_SESSION_OVERRIDE) !== null || validSessionId(env.CODEX_THREAD_ID) !== null) return false;
+  return agentHostMark(env) === null;
+}
+
+// Both ends of this command are a terminal. On its own this says nothing about
+// who typed it: an IDE runs its agent's commands in a terminal too.
+function atATerminal(env: NodeJS.ProcessEnv): boolean {
+  return (process.stdin.isTTY === true && process.stdout.isTTY === true) || env.AIDLC_TEST_CONFIG_TTY === "1";
+}
+
+/**
+ * The host to name when this command came from a terminal that host runs: the
+ * person works in its chat rather than in a shell of their own, so a line can
+ * tell them where to ask. Null when this is no terminal, or carries no mark.
+ */
+export function agentTerminalHost(env: NodeJS.ProcessEnv = process.env): string | null {
+  return atATerminal(env) ? agentHostMark(env) : null;
+}
+
+/**
+ * The host whose mark is on this environment, as the person knows it, or null for
+ * none. A host marks the processes it starts; a person's own shell may still carry
+ * a tool's settings (where it keeps its config), which say nothing about who is
+ * typing.
+ */
+export function agentHostMark(env: NodeJS.ProcessEnv = process.env): string | null {
+  const terminal = (env.TERM_PROGRAM ?? "").toLowerCase();
+  const named = AGENT_HOST_TERMINALS[terminal];
+  if (named !== undefined) return named;
+  for (const key of Object.keys(env)) {
+    if (/^(?:CODEX_HOME|COPILOT_HOME|OPENCODE_CONFIG_DIR|OPENCODE_CONFIG)$/i.test(key)) continue;
+    const prefix = Object.keys(AGENT_HOST_PREFIXES).find((candidate) =>
+      key.toUpperCase().startsWith(candidate));
+    if (prefix !== undefined) return AGENT_HOST_PREFIXES[prefix];
   }
+  return null;
+}
+
+// The hosts that run their agent's commands in a terminal of their own, named the
+// way the person knows them, so a line can tell them where to ask.
+const AGENT_HOST_TERMINALS: Readonly<Record<string, string>> = Object.freeze({
+  vscode: "VS Code",
+  cursor: "Cursor",
+  kiro: "Kiro",
+});
+const AGENT_HOST_PREFIXES: Readonly<Record<string, string>> = Object.freeze({
+  CLAUDECODE: "Claude Code",
+  CLAUDE_CODE_: "Claude Code",
+  CODEX_: "Codex",
+  CURSOR_: "Cursor",
+  KIRO_: "Kiro",
+  OPENCODE: "opencode",
+  COPILOT_: "Copilot",
+  VSCODE_: "VS Code",
+});
+
+// A person typing AI-DLC commands at their own terminal in a project where no
+// chat has ever been recorded, which is when the terminal step below (naming the
+// supervised presence switch) is the one thing that helps them.
+export function personAtOwnTerminal(projectDir?: string, env: NodeJS.ProcessEnv = process.env): boolean {
+  if (!commandAtPersonsTerminal(env)) return false;
   try {
     return readCurrentSessionId(resolveProjectDir(projectDir)) === null;
   } catch {
@@ -25895,6 +26032,8 @@ export const GATE_WORDS_SPENT_BY: ReadonlySet<string> = new Set([
 const GATE_WORDS_ANSWERED_BY: ReadonlySet<string> = new Set([
   ...GATE_RESOLUTION_EVENTS,
   "AUTONOMY_MODE_SET",
+  // The person sent their words to separate new work or a reshape.
+  "REQUEST_ROUTED",
 ]);
 
 function gateWordsDir(projectDir: string): string {
@@ -28366,7 +28505,7 @@ function hooksNeverRanHere(projectDir?: string): boolean {
 // Said to the agent after every missed-reply step: the person turns a check off, never the agent's offer.
 const NO_CHECK_OFF_OFFER = "Never offer to turn a check off for them.";
 
-export function unattendedHumanPresenceHint(projectDir?: string): string {
+export function unattendedHumanPresenceHint(projectDir?: string, options: { missedReply?: boolean } = {}): string {
   // Explain unattended submissions when relevant.
   if (!humanTurnMintAllowed()) {
     return " AIDLC_UNATTENDED=1 is set, so automated prompt submissions cannot count " +
@@ -28389,6 +28528,8 @@ export function unattendedHumanPresenceHint(projectDir?: string): string {
     return " If the person already replied, that reply was not recorded because AI-DLC's hooks are not " +
       `running here, so do not ask them to answer again; do this instead: ${agentStep} ${NO_CHECK_OFF_OFFER}`;
   }
+  // The caller refuses for a reply not given yet, not for one the hooks missed.
+  if (options.missedReply === false) return "";
   const activation = hookActivation();
   const host = activation?.missedReplyInHost;
   const inHost = host?.env.some((name) => Boolean(process.env[name]?.trim())) === true;
@@ -32716,7 +32857,7 @@ function pipelineAttemptFloor(
       !singleRun &&
       (
         entry.event === "WORKFLOW_STARTED" ||
-        entry.event === "STAGE_JUMPED" ||
+        (entry.event === "STAGE_JUMPED" && stageJumpReaches(entry.block, stageSlug)) ||
         (
           entry.event === "GATE_REJECTED" &&
           !rejectionKeepsReceipts &&
@@ -33179,9 +33320,8 @@ export function unitGateStatus(
       end++;
     }
     const relevant = rows.slice(start, end).filter((row) => {
-      if (row.event === "WORKFLOW_STARTED" || row.event === "STAGE_JUMPED") {
-        return true;
-      }
+      if (row.event === "WORKFLOW_STARTED") return true;
+      if (row.event === "STAGE_JUMPED") return stageJumpReaches(row.block, stage);
       if (
         row.event !== "STAGE_AWAITING_APPROVAL" &&
         row.event !== "STAGE_REVISING" &&
@@ -33397,6 +33537,24 @@ export function unitLifecycleRunFloorForProject(
   return latestMainWorkflowStageRunFloorFromRows(rows, slug, unitMajor, floored, true);
 }
 
+// Whether a STAGE_JUMPED row starts a new attempt for `slug`. A jump resets
+// its Target and every stage after it in the stage graph (`jump execute`), so
+// a stage before the Target keeps its attempt: a jump back to Code Generation
+// leaves each Unit's Functional Design as it was. A row whose Target, or a
+// stage, the graph does not know, or a graph that cannot be read, reaches
+// every stage.
+export function stageJumpReaches(block: string, slug: string): boolean {
+  const name = auditBlockField(block, "Target");
+  if (!name || name === slug) return true;
+  try {
+    const target = stageIndex(name);
+    const at = stageIndex(slug);
+    return target === -1 || at === -1 || at >= target;
+  } catch {
+    return true;
+  }
+}
+
 // Callers may hand in raw readAuditShardEvents rows, which are shard-major,
 // so the boundary order is settled here and never trusted from input.
 function latestMainWorkflowStageRunFloorFromRows(
@@ -33424,12 +33582,23 @@ function latestMainWorkflowStageRunFloorFromRows(
   const startOrdinals = new Map(
     sortAttemptEvents(rowsInput.filter(stageStart)).map((row, index) => [row, index + 1]),
   );
+  const byTime = (a: AuditShardEvent, b: AuditShardEvent): number => {
+    if (a.timestamp !== b.timestamp) {
+      return a.timestamp < b.timestamp ? -1 : 1;
+    }
+    if (a.shardIndex !== b.shardIndex) return a.shardIndex - b.shardIndex;
+    return a.pos - b.pos;
+  };
+  // A jump keeps its place among every jump, so its token is the same for
+  // each stage it reaches.
+  const jumpOrdinals = new Map(
+    rowsInput.filter((row) => row.event === "STAGE_JUMPED").sort(byTime).map((row, index) => [row, index + 1]),
+  );
   const rows = rowsInput
     .filter((row) => {
       if (!relevant.has(row.event)) return false;
-      if (row.event === "WORKFLOW_STARTED" || row.event === "STAGE_JUMPED") {
-        return true;
-      }
+      if (row.event === "WORKFLOW_STARTED") return true;
+      if (row.event === "STAGE_JUMPED") return stageJumpReaches(row.block, slug);
       if (row.event === "GATE_REJECTED") {
         return gateRejectionMatchesAttempt(row.block, slug, unit);
       }
@@ -33437,13 +33606,7 @@ function latestMainWorkflowStageRunFloorFromRows(
         (stageFloored === null || stageFloored.has(row)) &&
         (unitFloored === null || !unitFloored.has(row));
     });
-  rows.sort((a, b) => {
-    if (a.timestamp !== b.timestamp) {
-      return a.timestamp < b.timestamp ? -1 : 1;
-    }
-    if (a.shardIndex !== b.shardIndex) return a.shardIndex - b.shardIndex;
-    return a.pos - b.pos;
-  });
+  rows.sort(byTime);
   if (rows.length === 0) return "unstarted#0";
 
   const latestTimestamp = rows[rows.length - 1].timestamp;
@@ -33476,7 +33639,9 @@ function latestMainWorkflowStageRunFloorFromRows(
   for (const row of rows) {
     const ordinal = row.event === "STAGE_STARTED"
       ? startOrdinals.get(row) ?? 0
-      : (ordinals.get(row.event) ?? 0) + 1;
+      : row.event === "STAGE_JUMPED"
+        ? jumpOrdinals.get(row) ?? 0
+        : (ordinals.get(row.event) ?? 0) + 1;
     ordinals.set(row.event, ordinal);
     floor = `${row.event}:${row.timestamp}#${ordinal}`;
   }
@@ -33561,7 +33726,9 @@ function stageStartsUnderUnitFlooring(
     const slug = auditBlockField(start.block, "Stage");
     if (!slug || auditBlockField(start.block, "Workflow")?.startsWith("single-stage:")) continue;
     const opened = (row: AuditShardEvent): boolean =>
-      before(row, start) && !boundaries.some((boundary) => before(row, boundary) && before(boundary, start));
+      before(row, start) && !boundaries.some((boundary) =>
+        (boundary.event === "WORKFLOW_STARTED" || stageJumpReaches(boundary.block, slug)) &&
+        before(row, boundary) && before(boundary, start));
     const first = !rows.some((other) =>
       other !== start && other.event === "STAGE_STARTED" &&
       auditBlockField(other.block, "Stage") === slug &&
@@ -36179,7 +36346,12 @@ export function usesStageLevelPerUnitArtifacts(
   scope: string | null | undefined,
   stateContent: string | null,
 ): boolean {
-  return effectivePlanAction("units-generation", scope, stateContent) !== "EXECUTE";
+  if (effectivePlanAction("units-generation", scope, stateContent) === "EXECUTE") return false;
+  // Units Generation that already ran keeps its Units when a later scope
+  // change or recompose drops the stage: the Unit work carries on per Unit
+  // (#1401), rather than switching to stage-level paths no Unit gate reads.
+  return !(stateContent !== null &&
+    parseCheckboxes(stateContent).some((c) => c.slug === "units-generation" && c.state === "completed"));
 }
 
 // Parse each stage's EXECUTE or SKIP suffix from Stage Progress. The suffix is
@@ -36264,6 +36436,7 @@ const APPROVED_TOGETHER_ENDS = new Set([
   "GATE_REJECTED",
   "QUESTION_ANSWERED",
   "QUESTION_UNANSWERED",
+  "REQUEST_ROUTED",
   "DECISION_RECORDED",
   "AUTONOMY_MODE_SET",
   "WORKFLOW_STARTED",
@@ -38011,6 +38184,20 @@ export function guardSwitchRefusal(
   asked = false,
   projectDir?: string,
 ): string {
+  // A terminal their own tool runs (Copilot in VS Code, Kiro IDE, Cursor): the
+  // person is working in its chat, so the one line they read says to ask there.
+  // Their tool is named as they know it, with no environment variable in sight.
+  const host = agentTerminalHost();
+  if (host !== null) {
+    const what = wanted.key === "guard-policy"
+      ? `set Guard Policy ${wanted.value}`
+      : wanted.key === "plan-approval"
+      ? "turn plan approval off"
+      : wanted.key === "summary-confirmation"
+      ? "turn summary confirmation off"
+      : `turn the ${wanted.key.slice("guard.".length)} check off`;
+    return `To ${what}, ask for it in your ${host} chat.`;
+  }
   // At the person's own terminal no chat reply can arrive, so the step that
   // works there is named in place of the chat's.
   const ownTerminal = humanTurnMintAllowed() && personAtOwnTerminal(projectDir);
@@ -40313,6 +40500,20 @@ export function parseBoltDag(body: string): BoltDagParse {
     return { ok: false, reason: "cyclic", detail: "dependency cycle detected" };
   }
   return { ok: true, units: edges, batches };
+}
+
+// The step for a units block the engine cannot read: the exact defect and the
+// shape it reads. Construction walks its Units from this block, so it is the
+// agent's to write from the Units Units Generation already lists, never the
+// person's. Callers add the command to run again.
+export function unitsBlockRepair(reason: string, detail: string): string {
+  return (
+    `The units block in inception/units-generation/unit-of-work-dependency.md cannot be read (${reason}: ${detail}), ` +
+    "and Construction walks its Units from it. Write it from the Units in unit-of-work.md and the dependencies " +
+    "that file describes: one fenced yaml block that starts with `units:` and has, for each Unit, " +
+    "`- name: <unit>` and `depends_on: [<the Units it depends on>]` (`[]` for none), plus " +
+    "`kind: service|spec|ui|packaging|library` when its kind is known."
+  );
 }
 
 export type BoltDagResolution =

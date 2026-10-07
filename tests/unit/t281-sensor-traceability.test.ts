@@ -672,8 +672,9 @@ describe("t281 zero-Unit plans: every per-Unit stage", () => {
         { id: "FR2", status: "OK", target: "BR1.2" },
       ],
     });
+    // Units Generation never ran in this plan: the DAG on disk is left over.
     const plan = (unitsAction: "EXECUTE" | "SKIP") => stageProgress(proj, [
-      ["x", "units-generation", unitsAction],
+      [" ", "units-generation", unitsAction],
       ["-", "functional-design", "EXECUTE"],
     ]);
     plan("SKIP");
@@ -691,6 +692,29 @@ describe("t281 zero-Unit plans: every per-Unit stage", () => {
     plan("SKIP");
     out = run(proj, "functional-design", file);
     expect(out.result.pass).toBe(true);
+  });
+
+  test("Units Generation that already ran keeps its Units when a scope change skips it: a stage-level file is refused", () => {
+    // #1401: the Units it made carry on per Unit, where the engine writes them.
+    const proj = project();
+    seedRequirements(proj);
+    seedUnits(proj);
+    write(proj, "construction/functional-design/rules.md", "# Rules\n\n- BR1.1 Validate credentials\n- BR1.2 Lock after failures\n");
+    const file = trace(proj, "construction/functional-design/traceability.json", {
+      stage: "functional-design",
+      upstream_ids: ["FR1", "FR2"],
+      coverage: [
+        { id: "FR1", status: "OK", target: "BR1.1" },
+        { id: "FR2", status: "OK", target: "BR1.2" },
+      ],
+    });
+    stageProgress(proj, [
+      ["x", "units-generation", "SKIP"],
+      ["-", "functional-design", "EXECUTE"],
+    ]);
+    const out = run(proj, "functional-design", file);
+    expect(out.result.pass).toBe(false);
+    expect(out.result.reason).toContain(UNITS_DECLARED);
   });
 
   test("functional-design checks BR targets against the stage-level rules.md", () => {

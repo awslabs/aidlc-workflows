@@ -131,6 +131,7 @@ import {
   renderReviewVerdictCommand,
   REVIEW_RECORD_MAX_BYTES,
   resolveBoltDag,
+  unitsBlockRepair,
   reviewAttemptAccounting,
   reviewAttemptEventMatchesCurrentClaim,
   reviewAttemptWindow,
@@ -1196,7 +1197,7 @@ function pendingSummaryDecision(
   unit: string | undefined,
   workflow: string | undefined,
   questionsFile: string,
-): { pending: boolean; humanAfterDecision: boolean; ambiguity?: string } {
+): { pending: boolean; humanAfterDecision: boolean; ambiguity?: string; question?: string } {
   const entries = readAuditShardEvents(pd).filter((entry) => {
     // A turn that was only a command to AIDLC is no reply to the summary.
     if (entry.event === "HUMAN_TURN") return isReplyTurn(entry);
@@ -1301,6 +1302,11 @@ function pendingSummaryDecision(
     return { pending: false, humanAfterDecision: false };
   }
 
+  // The person's reply since their last answer is theirs to give whenever the
+  // conductor recorded the question: the conductor says which question it
+  // answers, and the caller proves the reply. This says only whether it came
+  // after the question's record; a turn in another shard at the record's own
+  // second proves neither.
   const humans = entries.filter((entry) => entry.event === "HUMAN_TURN");
   const humanRelations = humans.map((human) =>
     latestActions.map((decision) => follows(human, decision))
@@ -1326,50 +1332,9 @@ function pendingSummaryDecision(
   }
   return {
     pending: true,
-    humanAfterDecision: plainSummaryAnsweredBefore(pd, stage, unit, workflow, latestActions),
+    humanAfterDecision: false,
+    question: auditBlockField(latestActions[0].block, "Decision") ?? undefined,
   };
-}
-
-// The summary was first asked as a plain question (its two choices, no
-// checkpoint), the person answered it, and the conductor then recorded the
-// question with its checkpoint. Their reply to the question as first asked
-// answers it, so they are not asked again. Holds only within one shard, with
-// that reply between the two records and nothing else asked or answered in
-// between, for this or any other work item: that reply may have been for it.
-// A question asked or answered, or a gate shown or decided, for any work item.
-const PLAIN_SUMMARY_INTERVENING_EVENTS = new Set([
-  "DECISION_RECORDED", "QUESTION_ANSWERED", "SUMMARY_CONFIRMATION_RECORDED", "VERIFICATION_COMMAND_RECORDED",
-  "CONSTRUCTION_POLICY_RECORDED", "PLAN_APPROVAL_RECORDED", "STAGE_AWAITING_APPROVAL", "GATE_APPROVED", "GATE_REJECTED",
-]);
-function plainSummaryAnsweredBefore(
-  pd: string,
-  stage: string,
-  unit: string | undefined,
-  workflow: string | undefined,
-  recorded: Array<{ shard: string; pos: number }>,
-): boolean {
-  if (recorded.length !== 1) return false;
-  const [decision] = recorded;
-  const rows = readAuditShardEvents(pd)
-    .filter((row) => row.shard === decision.shard && row.pos < decision.pos)
-    .sort((a, b) => b.pos - a.pos);
-  let replied = false;
-  for (const row of rows) {
-    if (row.event === "HUMAN_TURN") {
-      replied ||= isReplyTurn(row);
-      continue;
-    }
-    const sameItem = auditBlockField(row.block, "Stage") === stage &&
-      (auditBlockField(row.block, "Unit") ?? undefined) === unit &&
-      (auditBlockField(row.block, "Workflow") ?? undefined) === workflow;
-    if (sameItem && row.event === "DECISION_RECORDED") {
-      return replied && auditBlockField(row.block, "Checkpoint") === null &&
-        isSummaryConfirmationOptions(auditBlockField(row.block, "Options") ?? undefined);
-    }
-    if (PLAIN_SUMMARY_INTERVENING_EVENTS.has(row.event)) return false;
-    if (sameItem && row.event === "STAGE_COMPLETED") return false;
-  }
-  return false;
 }
 
 function pendingVerificationDecision(pd: string, stage: string, sha256: string, session: string): boolean {
@@ -1934,16 +1899,19 @@ function handleAnswer(args: string[]): void {
           "wait for the human's choice.",
         );
       }
-      if (
-        !humanPresenceGuardDisabled() &&
-        (!pending.humanAfterDecision || !humanActedSinceLastAnswer(pd))
-      ) {
+      if (!humanPresenceGuardDisabled() && !humanActedSinceLastAnswer(pd)) {
         error(
-          "Cannot record the summary choice because no human reply has arrived after this "
-            + "question, or that turn was already used by another decision. End the turn, "
-            + `wait for the human's choice, then try again.${unattendedHumanPresenceHint(pd)}`,
+          "Cannot record the summary choice because no human reply has arrived since their last "
+            + "answer. End the turn, wait for the human's choice, then try again."
+            + unattendedHumanPresenceHint(pd, { missedReply: false }),
         );
       }
+      // Their words go on the receipt. A reply that came before the question
+      // was recorded is the conductor's reading, so the engine says it back.
+      const words = latestPersonTurn(pd)?.words;
+      if (words && !isNonAnswer(words)) fields["Person Reply"] = words;
+      const kept = words && !isNonAnswer(words) ? `"${words.replace(/\s+/g, " ").trim()}"` : "reply";
+      const sayBack = pending.question !== undefined ? `Recorded your ${kept} for "${pending.question}".` : null;
       // The confirmation authorizes the outputs generated from it. Mint the
       // authorization id from the attempt, the scope, and the confirmed content
       // (identical confirmations mint the same id; changed answers a new one),
@@ -2044,6 +2012,7 @@ function handleAnswer(args: string[]): void {
           choice: flags.details,
           ...(positive ? { summary_authorization_id: authorization.id } : {}),
           ...(summaryFeedback !== null ? { feedback: summaryFeedback } : {}),
+          ...(sayBack !== null ? { say: sayBack } : {}),
         }),
       );
       return;
@@ -2971,6 +2940,15 @@ function handleReview(args: string[]): void {
   if (flags.verdict === undefined) {
     if (!flags.iteration || !/^[1-9][0-9]*$/.test(flags.iteration)) {
       error("Starting a review requires --iteration <positive integer>.");
+    }
+    // Construction walks its Units from Units Generation's units block, so a
+    // block the engine cannot read is fixed before the review, while the
+    // document can still change.
+    if (flags.stage === "units-generation" && flags.single !== "true") {
+      const dag = resolveBoltDag(pd, intent, space);
+      if (dag.state === "malformed") {
+        error(`${unitsBlockRepair(dag.reason, dag.detail)} Then request this review again.`);
+      }
     }
     const iteration = Number(flags.iteration);
     fields.Iteration = flags.iteration;

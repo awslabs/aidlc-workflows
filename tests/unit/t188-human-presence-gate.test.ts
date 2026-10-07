@@ -355,7 +355,8 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
   // person after a setting that is already right: an earlier turn was spent,
   // the prompt hook stamped its marker, and another hook left a heartbeat
   // seconds ago. It says what happened to a reply they sent and where to look,
-  // and still never asks them to answer again.
+  // and still never asks them to answer again. (Kiro CLI's line names its agent
+  // picker for a reply typed to another agent: that is not the hooks-off step.)
   test("A4: with fresh hook activity the refusal gives no hooks-off step", () => {
     const first = field(proj, "Current Stage"); // feasibility
     guarded(proj, ["checkbox", `${first}=in-progress`]);
@@ -375,7 +376,7 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
       expect(r.rc).not.toBe(0);
       const refusal = JSON.parse(r.out).error as string;
       expect(refusal).toContain(steps);
-      expect(refusal).not.toContain("Type /agent and pick aidlc");
+      expect(refusal).not.toContain("Type /agent and pick aidlc, then carry on.");
       expect(refusal).not.toContain("answer again;");
     }
     expect(eventCount(proj, "GATE_APPROVED")).toBe(1);
@@ -385,7 +386,9 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
   // A live Kiro CLI run turned "doctor shows whether AI-DLC's hooks run here"
   // into talk of hooks, then offered to switch human presence off machine-wide.
   // The refusal gives the person's step in fixed words, and the agent never
-  // offers to turn a check off for them.
+  // offers to turn a check off for them. In Kiro CLI, with its hooks running, a
+  // reply goes unrecorded when it was typed to another agent (a live run), so
+  // the step is to pick aidlc and give it once more.
   test("A5: a reply that was not recorded gets only the person's step, never hooks or a check to turn off", () => {
     const first = field(proj, "Current Stage"); // feasibility
     guarded(proj, ["checkbox", `${first}=in-progress`]);
@@ -399,7 +402,7 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
     writeHeartbeat(proj, Date.now());
     for (const [state, line] of [
       [STATE, `"Your answer didn't reach AI-DLC. Please give it once more. If it happens again, type /aidlc --doctor."`],
-      [KIRO_CLI_STATE, `"Your answer didn't reach AI-DLC. Please give it once more. If it happens again, type /aidlc --doctor."`],
+      [KIRO_CLI_STATE, `"Your answer didn't reach AI-DLC. Type /agent and pick aidlc, then give it once more."`],
       [KIRO_IDE_STATE, `"Your answer was not recorded, so you don't need to answer again.`],
     ] as const) {
       const r = guarded(proj, ["approve", slug, "--user-input", "Approve"], false, state);
@@ -1218,7 +1221,7 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
         "Looks correct",
       ]);
       expect(result.rc).not.toBe(0);
-      expect(result.out).toContain("that turn was already used by another decision");
+      expect(result.out).toContain("no human reply has arrived since their last answer");
       expect(eventCount(proj, "SUMMARY_CONFIRMATION_RECORDED")).toBe(0);
     });
 

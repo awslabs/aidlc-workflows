@@ -809,6 +809,19 @@ if (target === "state-transition-guard") {
   );
   if (r.exitCode === 2) {
     process.stderr.write(r.stderr?.toString() ?? "");
+    // A helper picked in /agent holds the person's own chat: its tool calls
+    // carry the chat's session id (KIRO_SESSION_ID), where a delegation has
+    // its own (measured live). What the person types to it never reaches
+    // AI-DLC, so the refusal gives them the way back. A missing or other id
+    // keeps the refusal as it is.
+    const chat = process.env.KIRO_SESSION_ID?.trim();
+    if (registeredAgent && chat && kiro.session_id === chat) {
+      process.stderr.write(
+        "This chat is running you, not the aidlc agent, so what the person types here never reaches AI-DLC. " +
+          "Tell them exactly this, with nothing about why: \"Your answer didn't reach AI-DLC. Type /agent and " +
+          "pick aidlc, then give it once more.\" Never offer to turn a check off for them. Then end your turn.\n",
+      );
+    }
     process.exit(2);
   }
   process.exit(0);

@@ -204,6 +204,10 @@ class Walk {
     return readFileSync(seededStateFile(this.proj), "utf-8");
   }
 
+  field(name: string): string {
+    return this.state().split("\n").find((line) => line.startsWith(`- **${name}**:`)) ?? `(no ${name} line)`;
+  }
+
   row(slug: string): string {
     return this.state().split("\n").find((line) => line.includes(` ${slug} ${SEP} `)) ?? `(no ${slug} row)`;
   }
@@ -336,6 +340,27 @@ describe("t-parked-work-takes-plan-changes: a change typed over parked work is m
     expect(back.stage).toBe("code-generation");
     expect(walk.row("ci-pipeline")).toContain("EXECUTE");
   });
+
+  // A setting typed over parked work: the same, a setting at a time.
+  for (const { flags, field, now } of [
+    { flags: ["--depth", "comprehensive"], field: "Depth", now: /: Comprehensive\b/ },
+    { flags: ["--test-strategy", "comprehensive"], field: "Test Strategy", now: /: Comprehensive\b/ },
+    { flags: ["--learnings", "on"], field: "Learnings", now: /: on\b/ },
+    { flags: ["--sensors", "off"], field: "Sensors", now: /: off\b/ },
+    { flags: ["--summary-confirmation", "on"], field: "Summary Confirmation", now: /: on\b/ },
+  ]) {
+    test(`/aidlc ${flags.join(" ")}: the setting changes, the work stays parked, and --resume carries on with it`, async () => {
+      const walk = await parkedProject();
+      expect(walk.field(field)).not.toMatch(now);
+      const said = typeChange(walk, flags);
+      expect(said.message).toContain("--resume");
+      expect(walk.field(field)).toMatch(now);
+      expect(walk.parked()).toBe(true);
+      const back = resume(walk);
+      expect(back.stage).toBe("code-generation");
+      expect(walk.field(field)).toMatch(now);
+    });
+  }
 
   test("parked at the plan question: --skip deployment-execution is made, and --resume asks the plan question again", async () => {
     const walk = await parkedProject("plan question");

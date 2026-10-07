@@ -53,8 +53,12 @@ const manifest: HarnessManifest = {
       "kiro-cli chat --agent-engine v2 --agent aidlc (from an ACP client, start " +
       "`kiro-cli acp --agent-engine v2`).",
     // A session without the aidlc agent runs none of these hooks, even after
-    // an earlier session did, so the person's reply can go unrecorded.
-    missesReplies: true,
+    // an earlier session did, so the person's reply can go unrecorded. Measured
+    // live: with the hooks running, a reply typed to another agent picked in
+    // /agent is never recorded, and `/agent` and aidlc are the way back.
+    missedReply:
+      "If the person already replied, that reply was not recorded for this question. Tell them exactly this, " +
+      "with nothing about why: \"Your answer didn't reach AI-DLC. Type /agent and pick aidlc, then give it once more.\"",
     notRunYet:
       "This is expected before your first Kiro CLI chat in this folder. If you already started one, type /agent " +
       "and pick aidlc; if Kiro says agent \"aidlc\" needs upgrading for this agent engine, quit Kiro and start " +

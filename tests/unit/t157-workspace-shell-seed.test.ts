@@ -150,7 +150,7 @@ describe("t157 seeded workspace shell + re-rooted .gitignore (SEED)", () => {
         );
         expect(steering).toMatch(/^---\ninclusion: always\n---/);
         expect(steering).toContain(
-          "#[[file:aidlc/spaces/default/memory/org.md]]",
+          '<memory-file path="aidlc/spaces/default/memory/org.md">',
         );
       } else if (harness.capabilities.memoryInclude === "codex-env") {
         const config = readFileSync(join(harness.engineRoot, "config.toml"), "utf-8");

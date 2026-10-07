@@ -167,15 +167,18 @@ protocol module (`aidlc-common/protocols/stage-protocol-construction.md`,
 "Build-and-Test failure loop-back" -- the bounded 3.6 to 3.5 repair loop with
 its impact-estimated halt-and-ask question).
 
-The loop-back has two deterministic re-entry routes. If Code Generation has
-never used lifecycle receipts, preserved artifacts can settle every Unit and
-the engine may emit the all-covered `gate: true` fast path. Once any lifecycle
-row exists, receipt mode is sticky: the jump invalidates the old settlement
-receipts and the engine re-emits per-Unit work so `unit start` / `unit complete`
+The loop-back reopens Code Generation for the Unit(s) the diagnosis names;
+every other Unit keeps its finished work, reviews and approvals, and only a
+cause that spans every Unit reopens it for all of them. It has two
+deterministic re-entry routes. If Construction checkpoints are off and Code
+Generation has never used lifecycle receipts, preserved artifacts can settle every Unit and
+the engine may emit the all-covered `gate: true` fast path. With checkpoints on,
+or once any lifecycle row exists, receipt mode applies and is sticky: the reopen invalidates the reopened Units'
+settlement receipts and the engine re-emits their per-Unit work so `unit start` / `unit complete`
 are minted again. Both routes apply the planned fix and deterministic
 Modify/Keep decisions before the gate and MUST produce a fresh
-`REVIEW_COMPLETED` for every applicable Unit, because `STAGE_JUMPED` invalidates
-all earlier reviews and the completion precondition refuses stale coverage.
+`REVIEW_COMPLETED` for every reopened Unit, because the reopen invalidates
+their earlier reviews and the completion precondition refuses stale coverage.
 Under unit-major the replay stays on this serial walk and never swarms.
 
 The jump opens a new stage attempt, so Plan Approval IS asked again for the
@@ -358,6 +361,15 @@ changes** options are unlettered. All `[Answer]:` tags start blank.
 Multi-select questions add "(select all that apply)" to the question text;
 answer format: `[Answer]: A, B, E`.
 
+When the stage's `<slug>-questions.md` already holds an answer of the person's
+(an `[Answer]:` with more than blanks or underscores), the run-stage directive
+carries `questions_answered` (`path`), on `next --resume`, a bare `next` and
+every re-issue alike, in a new chat or the same one. The conductor keeps the
+file and carries on from where its answers stop (blank questions, then an
+unanswered summary confirmation, then the stage's next step), never creating it
+again or asking an answered question again (#1873). A redo the person asked for
+(`artifact_reuse`, which drops the field, or Redo from scratch) starts afresh.
+
 **Step 2: Use the directive's answer mode, or present the mode choice.** The
 run-stage directive carries `answer_mode` (`mode`, `ask`, `reused_from`,
 `notice`). The first stage with questions in a piece of work asks; the engine
@@ -422,7 +434,10 @@ modes mid-stage.
   <path>`, stop for the human, read their reply, write the choice they made, then
   record it with the matching `aidlc-log.ts answer` command (`--details "Looks
   correct"`, or `--details 'Request changes: <what they asked to change>'`). The
-  receipt binds the human turn to the exact questions-file digest. On **Request
+  receipt binds the human turn to the exact questions-file digest and keeps
+  their words. A reply that came before the prompt was recorded still counts,
+  and the receipt output's `say` line tells the person once what was recorded
+  for which question. On **Request
   changes**, ask **"What should change?"** only when they did not say, and stop
   again before editing any answer. After feedback and revision, reset the confirmation to
   blank before re-prompting. A reply that picks neither choice gets the one

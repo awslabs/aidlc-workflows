@@ -98,6 +98,9 @@ const VALID_EVENT_TYPES = new Set([
   "QUESTION_UNANSWERED",
   // Hook-owned: what a question box carried back, question by question.
   "QUESTION_REPLIED",
+  // Engine-owned: the person sent their words to separate new work or a
+  // reshape, so they answer no question the work in progress has open.
+  "REQUEST_ROUTED",
   "SUMMARY_CONFIRMATION_RECORDED",
   "VERIFICATION_COMMAND_RECORDED",
   "CONSTRUCTION_POLICY_RECORDED",
@@ -304,6 +307,7 @@ const EVENT_HEADINGS: Record<string, string> = {
   QUESTION_ANSWERED: "Question Answered",
   QUESTION_UNANSWERED: "Question Unanswered",
   QUESTION_REPLIED: "Question Replied",
+  REQUEST_ROUTED: "Request Routed",
   SUMMARY_CONFIRMATION_RECORDED: "Summary Confirmation Recorded",
   VERIFICATION_COMMAND_RECORDED: "Verification Command Recorded",
   CONSTRUCTION_POLICY_RECORDED: "Construction Policy Recorded",
@@ -475,6 +479,7 @@ export const CLI_PROTECTED_EVENT_TYPES = new Set([
   "HUMAN_TURN",
   "QUESTION_UNANSWERED",
   "QUESTION_REPLIED",
+  "REQUEST_ROUTED",
   "GATE_APPROVED",
   "GATE_REJECTED",
   "QUESTION_ANSWERED",
@@ -571,6 +576,7 @@ const MERGE_PROTECTED_EVENT_TYPES = new Set([
   "HUMAN_TURN",
   "QUESTION_UNANSWERED",
   "QUESTION_REPLIED",
+  "REQUEST_ROUTED",
   "GATE_APPROVED",
   "GATE_REJECTED",
   "QUESTION_ANSWERED",

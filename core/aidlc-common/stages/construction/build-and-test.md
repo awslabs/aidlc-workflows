@@ -193,7 +193,8 @@ quality target is never an acceptable fix.
    construction protocol module
    (`aidlc-common/protocols/stage-protocol-construction.md`),
    "Build-and-Test failure loop-back". Record the diagnosis +
-   impact-estimated fix plan, then jump back to code-generation and replay
+   impact-estimated fix plan, then reopen code-generation for the unit(s) the
+   fix names (every unit only when the cause spans them all) and replay
    forward through its settlement-aware route. Do NOT present this stage's
    approval gate on the failed run.
 4. **Halt-and-ask** — if the mode is gated (or unset), the 3-loop-back bound
@@ -213,8 +214,9 @@ code-generation workflows may
 settle directly to the all-covered gate, while sticky receipt-mode workflows
 re-emit per-unit work. Both routes apply the planned fix and deterministic
 Modify/Keep decisions before the gate, then record a fresh current-attempt
-review for every applicable code-generation unit; `STAGE_JUMPED` invalidates
-the prior reviews and approval fails without replacements. Under unit-major
+review for every reopened code-generation unit; the reopen invalidates those
+units' prior reviews and approval fails without replacements. Units the fix
+does not name keep their work and approvals. Under unit-major
 iteration the replay uses the serial per-unit walk, never the autonomous swarm.
 
 **Single-stage runs**: in a `--single` run (`/aidlc --stage build-and-test

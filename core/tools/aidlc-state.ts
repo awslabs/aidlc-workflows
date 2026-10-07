@@ -224,7 +224,7 @@ import {
 } from "./aidlc-usage.ts";
 import { deriveTeamUnitProgressModel } from "./aidlc-orchestrate.ts";
 import { promotableTestingPosture } from "./aidlc-testing-posture.ts";
-import { approvedUnitChanges } from "./aidlc-construction-checkpoints.ts";
+import { approvedOverUnfinishedReview, approvedUnitChanges } from "./aidlc-construction-checkpoints.ts";
 
 // All valid checkbox states (lib.ts adds [?] awaiting-approval and [R] revising)
 const VALID_CHECKBOX_STATES: CheckboxState[] = [
@@ -4181,9 +4181,9 @@ function personMayApproveOverUnfinishedReview(pd: string, content: string): bool
   return !memoryStrictHoldsGuardPolicy(pd, content);
 }
 
-// A review request with no verdict yet that the person may approve over. A
-// recovery review in flight, or a result that could not be verified, still
-// finishes first.
+// A review request with no verdict yet that the person may approve over,
+// including the recovery review they asked for again. A result that could not
+// be verified still finishes first.
 function approvableUnfinishedReview(
   pd: string,
   content: string,
@@ -4197,7 +4197,6 @@ function approvableUnfinishedReview(
     receipts.awaitingVerdict?.has(unit ?? "") !== true ||
     pending === null ||
     pending === undefined ||
-    pending.recovery ||
     pending.verificationFailed === true ||
     !personMayApproveOverUnfinishedReview(pd, content)
   ) {
@@ -4270,8 +4269,10 @@ function verifyReviewerPrecondition(
   const perUnit =
     stage.for_each === "unit-of-work" &&
     !usesStageLevelPerUnitArtifacts(getField(content, "Scope"), content);
+  // A Unit the person approved at its checkpoint as it was owes this stage no
+  // recovery review either.
   const pendingRecoveryUnits = Array.from(receipts.unitPending)
-    .filter(([, pending]) => pending.recovery)
+    .filter(([unit, pending]) => pending.recovery && !approvedOverUnfinishedReview(pd, content, stage.slug, unit))
     .map(([unit]) => unit);
   const verificationFailedUnits = Array.from(receipts.unitPending)
     .filter(([, pending]) => pending.verificationFailed === true)
@@ -4305,10 +4306,17 @@ function verifyReviewerPrecondition(
       unit,
     });
   }
-  if (receipts.stagePending?.recovery || pendingRecoveryUnits.length > 0) {
+  // The person's own approval goes over a recovery review that never finished,
+  // as over any other unfinished review, unless their team locks it.
+  const heldRecoveryUnits = pendingRecoveryUnits.filter(
+    (unit) => !approvableUnfinishedReview(pd, content, receipts, personCall, unit),
+  );
+  const stageRecoveryHeld = receipts.stagePending?.recovery === true &&
+    !approvableUnfinishedReview(pd, content, receipts, personCall);
+  if (stageRecoveryHeld || heldRecoveryUnits.length > 0) {
     const scope =
-      pendingRecoveryUnits.length > 0
-        ? ` for Unit${pendingRecoveryUnits.length === 1 ? "" : "s"} ${pendingRecoveryUnits.join(", ")}`
+      heldRecoveryUnits.length > 0
+        ? ` for Unit${heldRecoveryUnits.length === 1 ? "" : "s"} ${heldRecoveryUnits.join(", ")}`
         : "";
     const message =
       `${reviewerPreconditionPrefix(stage.slug, action)}: the recovery review${scope} ` +
@@ -4321,8 +4329,8 @@ function verifyReviewerPrecondition(
       userMessage: message,
       receipts,
       unit:
-        pendingRecoveryUnits.length === 1
-          ? pendingRecoveryUnits[0]
+        heldRecoveryUnits.length === 1
+          ? heldRecoveryUnits[0]
           : undefined,
     });
   }
@@ -4497,8 +4505,11 @@ function verifyReviewerPrecondition(
   }
   if (reviewUnits.length === 0) return;
 
+  // A Unit the person approved at its checkpoint as it was, over this
+  // stage's review that did not finish, owes no verdict here either.
   const missing = reviewUnits.filter(
-    (u) => !reviewedUnits.has(u) && !approvableUnfinishedReview(pd, content, receipts, personCall, u),
+    (u) => !reviewedUnits.has(u) && !approvableUnfinishedReview(pd, content, receipts, personCall, u) &&
+      !approvedOverUnfinishedReview(pd, content, stage.slug, u),
   );
   if (missing.length > 0) {
     if (noDagObserved) {
@@ -4947,6 +4958,7 @@ function reviewRecoverySpentInCurrentAttempt(
 function handleAdvance(
   args: string[],
   inheritedValidationWarning?: string,
+  personCall?: PersonApproval,
 ): void {
   // Keep only the positional <completed-slug> [<next-slug>]; any flags are
   // filtered out so they are not misread as the next slug.
@@ -5088,6 +5100,7 @@ function handleAdvance(
   admitStageAction(pd, content, completedStage, {
     action: "complete",
     entrypoint: "advance",
+    ...(personCall ? { personCall } : {}),
   });
 
   // Detect phase boundary (for PHASE_COMPLETED/VERIFIED/STARTED emissions)
@@ -5286,6 +5299,7 @@ function handleFinalize(args: string[]): void {
 function handleCompleteWorkflow(
   args: string[],
   inheritedValidationWarning?: string,
+  personCall?: PersonApproval,
 ): void {
   // Keep <completed-slug> positional and distinct from the --reason value.
   // --reason takes a value, so its argument is excluded from positionals too.
@@ -5335,6 +5349,7 @@ function handleCompleteWorkflow(
   admitStageAction(pd, content, completedStage, {
     action: "complete",
     entrypoint: "complete-workflow",
+    ...(personCall ? { personCall } : {}),
   });
 
   // 1. Mark completed
@@ -5764,6 +5779,7 @@ function admitStageAction(
       stage,
       "complete",
       !alreadyCompleted,
+      options.personCall,
     );
     if (!alreadyCompleted) {
       verifyStageArtifacts(pd, stage);
@@ -6477,12 +6493,12 @@ function handleApprove(args: string[]): void {
     // Delegate to handleAdvance. The slug is now [x], so handleAdvance takes
     // the alreadyMarkedCompleted path and skips re-emitting STAGE_COMPLETED.
     // Reentrant call — runs under the depth-2 lock without re-acquire.
-    handleAdvance([slug], validationWarning);
+    handleAdvance([slug], validationWarning, personCall);
   } else {
     // Final stage — complete the workflow. handleCompleteWorkflow re-sets
     // the checkbox to [x] (idempotent) and emits PHASE_COMPLETED +
     // PHASE_VERIFIED + WORKFLOW_COMPLETED. Reentrant call — see above.
-    handleCompleteWorkflow([slug], validationWarning);
+    handleCompleteWorkflow([slug], validationWarning, personCall);
   }
   });
 }

@@ -116,8 +116,11 @@ describe("t334 F22 initial execution requirements survive a lowered fence", () =
       ];
       // A direct write selects the active directive target, so only the
       // dispatch variant can express this intentionally foreign prompt target.
+      // Before any approval only the build waits, so that write is to a file
+      // the plan names (its test file); after one, every write waits.
+      const written = fault === "never-approved" ? "src/unit.test.ts" : "src/base.ts";
       if (fault !== "invalid-target" && fault !== "missing-target") operations.unshift([
-        "Write", { file_path: join(project, "src/base.ts"), content: "export const base = 2;\n" },
+        "Write", { file_path: join(project, written), content: "export const base = 2;\n" },
       ]);
       for (const [tool_name, tool_input] of operations) {
         const guarded = runChangeControlTool([BUN, GUARD], project, JSON.stringify({

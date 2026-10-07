@@ -1,4 +1,4 @@
-// covers: function:repointHarnessIncludes, function:addRootBlocks
+// covers: function:repointHarnessIncludes, function:addRootBlocks, function:kiroIdeSteering
 //
 // t-active-space-includes — the harness-native rule includes FOLLOW the
 // active-space cursor (gap #1, the (A) ambient channel).
@@ -42,7 +42,7 @@ import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { NATIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "../harness/test-budget.ts";
 import { sha256Bytes, unionBlocks } from "../../core/tools/aidlc-distribution.ts";
-import { addRootBlocks, repointHarnessIncludes } from "../../core/tools/aidlc-includes.ts";
+import { addRootBlocks, kiroIdeSteering, repointHarnessIncludes } from "../../core/tools/aidlc-includes.ts";
 
 const REPO_ROOT = join(import.meta.dir, "..", "..");
 const distSurface = (h: string, ...parts: string[]): string =>
@@ -232,58 +232,66 @@ describe("t-active-space-includes: Kiro agents/*.json resources glob", () => {
   });
 });
 
-describe("t-active-space-includes: Kiro IDE steering follows the active space", () => {
+describe("t-active-space-includes: Kiro IDE steering carries the active space's memory text", () => {
+  // Kiro IDE does not expand `#[[file:]]` references in steering (1.2.4), so the
+  // always-included file holds the memory files' text itself (#2023).
   beforeEach(() => {
     process.env.AIDLC_HARNESS_DIR = ".kiro";
+    process.env.AIDLC_HARNESS_NAME = "kiro-ide";
   });
 
-  test("re-points all live memory references in the always-included IDE steering file", () => {
+  function setup(): { root: string; steeringPath: string } {
     const root = freshRoot();
     seedSpaces(root);
     const steeringDir = join(root, ".kiro", "steering");
     mkdirSync(steeringDir, { recursive: true });
     const steeringPath = join(steeringDir, "aidlc-active-memory.md");
-    cpSync(
-      distSurface(
-        "kiro-ide",
-        ".kiro",
-        "steering",
-        "aidlc-active-memory.md",
-      ),
-      steeringPath,
-    );
+    cpSync(distSurface("kiro-ide", ".kiro", "steering", "aidlc-active-memory.md"), steeringPath);
+    return { root, steeringPath };
+  }
+
+  test("writes the requested space's memory text into the always-included steering file", () => {
+    const { root, steeringPath } = setup();
     const written = portablePaths(repointHarnessIncludes(root, "teamB"));
     expect(written).toEqual([".kiro/steering/aidlc-active-memory.md"]);
 
     const after = readFileSync(steeringPath, "utf-8");
-    expect(after).toContain("inclusion: always");
-    expect(after).toContain(
-      "#[[file:aidlc/spaces/teamB/memory/org.md]]",
-    );
-    expect(after).toContain(
-      "#[[file:aidlc/spaces/teamB/memory/phases/operation.md]]",
-    );
+    expect(after).toMatch(/^---\ninclusion: always\n---\n/);
+    expect(after).toContain('<memory-file path="aidlc/spaces/teamB/memory/org.md">\n# org teamB\n</memory-file>');
     expect(after).not.toContain("aidlc/spaces/default/memory/");
+    expect(after).not.toContain("#[[file:");
   });
 
-  test("re-pointing the IDE steering file to default is a no-op", () => {
-    const root = freshRoot();
-    seedSpaces(root);
-    const steeringDir = join(root, ".kiro", "steering");
-    mkdirSync(steeringDir, { recursive: true });
-    const steeringPath = join(steeringDir, "aidlc-active-memory.md");
-    cpSync(
-      distSurface(
-        "kiro-ide",
-        ".kiro",
-        "steering",
-        "aidlc-active-memory.md",
-      ),
-      steeringPath,
-    );
+  test("writing it again for the same space is a no-op", () => {
+    const { root, steeringPath } = setup();
+    expect(portablePaths(repointHarnessIncludes(root, "default"))).toEqual([".kiro/steering/aidlc-active-memory.md"]);
     const before = readFileSync(steeringPath, "utf-8");
     expect(repointHarnessIncludes(root, "default")).toEqual([]);
     expect(readFileSync(steeringPath, "utf-8")).toBe(before);
+  });
+
+  test("a memory with no file to inline gets the authored reference form, byte for byte", () => {
+    const root = freshRoot();
+    expect(kiroIdeSteering(root, "default")).toEqual({
+      text: readFileSync(join(REPO_ROOT, "harness", "kiro-ide", "steering", "aidlc-active-memory.md"), "utf-8"),
+      inlined: [],
+    });
+  });
+
+  test("the shipped file is what the engine writes for the shipped memory", () => {
+    const shipped = kiroIdeSteering(distSurface("kiro-ide"), "default");
+    expect(readFileSync(distSurface("kiro-ide", ".kiro", "steering", "aidlc-active-memory.md"), "utf-8")).toBe(shipped.text);
+    expect(shipped.inlined).toContain("aidlc/spaces/default/memory/team.md");
+  });
+
+  test("a steering folder that leads out of the project is not written through", () => {
+    const root = freshRoot();
+    seedSpaces(root);
+    const outside = freshRoot();
+    mkdirSync(join(root, ".kiro"), { recursive: true });
+    symlinkSync(outside, join(root, ".kiro", "steering"), process.platform === "win32" ? "junction" : "dir");
+    expect(repointHarnessIncludes(root, "default")).toEqual([]);
+    expect(readdirSync(outside)).toEqual([]);
   });
 });
 

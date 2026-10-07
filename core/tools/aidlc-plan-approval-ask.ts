@@ -33,6 +33,8 @@ import {
   errorMessage,
   fenceSwitchSentence,
   getField,
+  GUARD_RECOVERY_ASK_TYPE,
+  isoTimestamp,
   isReplyTurn,
   personAtOwnTerminal,
   personRepliedAfter,
@@ -49,6 +51,7 @@ import {
   steeringPayloadAuthenticAt,
   steeringTokenKeyPathFor,
   toPosix,
+  harnessDir,
   UNBINDABLE_FINGERPRINT,
   visibleMarkdownLines,
   withActiveDirectiveLock,
@@ -430,6 +433,53 @@ function targetView(projectDir: string, unit: string | null): PlanApprovalAskTar
     questions_path: rel(QUESTIONS_FILE),
     summary: planSummaryLines(readText(join(dir, PLAN_FILE)), readText(join(dir, INSTRUCTIONS_FILE))),
   };
+}
+
+// A word in a plan that names a file or folder: it has a "/" or a file
+// extension, and no scheme, flag or variable.
+const PLAN_PATH_WORD_RE = /^[A-Za-z0-9_.@~][A-Za-z0-9_.@~/+-]*$/;
+
+/**
+ * The files and folders the waiting plans name, project-relative with "/":
+ * every path-like word in each asked plan and its test instructions, the
+ * Touches line and the steps alike, leaving out the engine's own Testing
+ * Contract block and AI-DLC's own files. A folder ends in "/". Empty when they
+ * name none; null when no plan question is open or its plans cannot be read.
+ */
+export function planApprovalPlanNamedPaths(projectDir: string): string[] | null {
+  try {
+    const open = currentPlanApprovalAsk(projectDir, "some");
+    return open === null ? null : plansNamedPaths(projectDir, open.record.targets.map((target) => target.unit));
+  } catch {
+    return null;
+  }
+}
+
+/** The same, for one target's plan as it is on disk, before its question is asked. */
+export function codeGenerationPlanNamedPaths(projectDir: string, unit: string | null): string[] | null {
+  try {
+    return plansNamedPaths(projectDir, [unit]);
+  } catch {
+    return null;
+  }
+}
+
+function plansNamedPaths(projectDir: string, units: Array<string | null>): string[] {
+  const own = ["aidlc/", `${harnessDir()}/`];
+  const named = new Set<string>();
+  for (const unit of units) {
+    const dir = codeGenerationRecordDir(projectDir, unit);
+    for (const file of [PLAN_FILE, INSTRUCTIONS_FILE]) {
+      const text = readText(join(dir, file)).replace(/^## Testing Contract[^\n]*\n\s*```json[\s\S]*?\n```/m, "");
+      for (const raw of text.split(/[\s`'"()<>[\]{},;|*]+/)) {
+        const word = raw.replace(/\\/g, "/").replace(/^\.\//, "").replace(/[.:!?]+$/, "");
+        if (word.length > 300 || word.startsWith("..") || word.includes("//") || !PLAN_PATH_WORD_RE.test(word)) continue;
+        if (own.some((prefix) => word.startsWith(prefix)) || [PLAN_FILE, INSTRUCTIONS_FILE, QUESTIONS_FILE].includes(word)) continue;
+        if (word.includes("/") || /\.[A-Za-z][A-Za-z0-9]{0,9}$/.test(word)) named.add(word);
+      }
+    }
+  }
+  return [...named];
 }
 
 function planQuestion(units: Array<string | null>, repaired: boolean): string {
@@ -1395,6 +1445,87 @@ export function planApprovalReplyEditableFiles(projectDir: string): string[] {
     });
   } catch {
     return [];
+  }
+}
+
+// An engine question with no reply machinery of its own (where the work
+// belongs, the new-work offers, which record or plan) is the open question
+// from when it is asked until `next` names another step, until the engine
+// asks another question after it (a checkpoint or verification question asked
+// again, a gate shown again), which then owns the person's reply, or until
+// its answer sent their words to other work.
+interface OpenEngineQuestion {
+  version: 1;
+  askType: string;
+  stateSha256: string;
+  askedAt: string;
+}
+
+const LATER_QUESTION_EVENTS = new Set(["DECISION_RECORDED", "STAGE_AWAITING_APPROVAL"]);
+
+function openEngineQuestionPath(projectDir: string): string {
+  return planApprovalRuntimeFile(projectDir, "open-engine-question.json");
+}
+
+/** Called once such a question's marker is published. */
+export function noteOpenEngineQuestion(projectDir: string, marker: { ask_type?: string; state_sha256: string }): void {
+  if (!marker.ask_type) return;
+  const record: OpenEngineQuestion = {
+    version: 1, askType: marker.ask_type, stateSha256: marker.state_sha256, askedAt: isoTimestamp(),
+  };
+  writePlanApprovalRuntimeRecord(projectDir, openEngineQuestionPath(projectDir), `${JSON.stringify(record)}\n`);
+}
+
+/**
+ * Whether such an engine question is the open step. The person's reply
+ * answers it, so no question it was asked over keeps it.
+ */
+export function engineQuestionHoldsReplies(projectDir: string): boolean {
+  try {
+    const marker = readActiveDirectiveMarker(projectDir, readFileSync(stateFilePath(projectDir), "utf-8"));
+    if (
+      marker?.version !== 2 || marker.kind !== "ask" || typeof marker.ask_type !== "string" ||
+      marker.ask_type === PLAN_APPROVAL_ASK_TYPE || marker.ask_type === GUARD_RECOVERY_ASK_TYPE
+    ) {
+      return false;
+    }
+    const noted = readPlanApprovalRuntimeRecord<OpenEngineQuestion>(openEngineQuestionPath(projectDir), "Open engine question");
+    if (noted?.version !== 1 || noted.askType !== marker.ask_type || noted.stateSha256 !== marker.state_sha256) return true;
+    // A routing answer can only follow its question, so the same second counts.
+    return !readAuditShardEvents(projectDir).some((row) =>
+      (LATER_QUESTION_EVENTS.has(row.event) && row.timestamp > noted.askedAt) ||
+      (row.event === "REQUEST_ROUTED" && row.timestamp >= noted.askedAt));
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * The person sent these words to separate new work or a reshape: the code plan
+ * question of this piece of work keeps none of them as its reply.
+ */
+export function withdrawPlanApprovalReplies(projectDir: string, text: string): void {
+  const same = (reply: string): boolean => reply.replace(/\s+/g, " ").trim().toLowerCase() ===
+    text.replace(/\s+/g, " ").trim().toLowerCase();
+  withAuditLock(projectDir, () => {
+    const record = readPlanApprovalAsk(projectDir, intentIdFor(projectDir));
+    if (record === null || !record.replies?.some((reply) => same(reply.text))) return;
+    writePlanApprovalAsk(projectDir, { ...record, replies: record.replies.filter((reply) => !same(reply.text)) });
+  });
+}
+
+/**
+ * Whether the open Plan Approval question already holds a reply of the
+ * person's, kept since it was shown, that no answer records yet: their words
+ * are for the conductor to read as their choice, not a reason to ask again.
+ */
+export function planApprovalKeptReplyWaits(projectDir: string): boolean {
+  try {
+    const open = currentPlanApprovalAsk(projectDir);
+    return open !== null && open.record.mode === "ask" && (open.record.replies?.length ?? 0) > 0 &&
+      (open.record.repliesFrom === undefined || personRepliedAfter(projectDir, open.record.repliesFrom));
+  } catch {
+    return false;
   }
 }
 

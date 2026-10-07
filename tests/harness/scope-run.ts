@@ -562,6 +562,8 @@ export interface StandInOptions {
   beforePlanAnswer?: (unit: string | null, agent: AgentStandIn) => void;
   /** Follow each refusal's named step instead of stopping (the guard matrix). */
   followRefusals?: boolean;
+  /** What a stage's body writes to one of its files instead of the stand-in's own text. */
+  artifactText?: (path: string, stage: string) => string | undefined;
 }
 
 /**
@@ -601,7 +603,9 @@ export class AgentStandIn {
   readonly units: string[];
   answers: PersonAnswers;
   readonly afterApproval?: StandInOptions["afterApproval"];
-  readonly hooks: Pick<StandInOptions, "onCode" | "afterCheckpoint" | "afterReview" | "beforePlanAnswer">;
+  readonly hooks: Pick<StandInOptions, "onCode" | "afterCheckpoint" | "afterReview" | "beforePlanAnswer" | "artifactText">;
+  /** Each time an engine step sent the agent to repair the units block: where, and how many questions came before. */
+  readonly unitsBlockRepairs: { where: string; asked: number }[] = [];
   private steps = 0;
   /** A directive a person move produced, acted on before the next `next`. */
   private pending: Directive | undefined;
@@ -620,6 +624,7 @@ export class AgentStandIn {
     this.hooks = {
       onCode: options.onCode, afterCheckpoint: options.afterCheckpoint,
       afterReview: options.afterReview, beforePlanAnswer: options.beforePlanAnswer,
+      artifactText: options.artifactText,
     };
     this.followRefusals = options.followRefusals ?? false;
   }
@@ -638,6 +643,19 @@ export class AgentStandIn {
       if (res.status !== 0 || out?.kind === "error") this.fail(`${command[1]} was refused: ${clip(res.stdout + res.stderr, 1200)}`, d);
     }
     return /\bstop\b/i.test(message);
+  }
+
+  /**
+   * The agent's knowledge for a step that says the units block cannot be read:
+   * write the block again from the Units it wrote in unit-of-work.md. True when
+   * the words named that step.
+   */
+  repairUnitsBlockIfNamed(said: string, where: string): boolean {
+    if (!/unit-of-work-dependency\.md cannot be read/.test(said)) return false;
+    const rel = `${activeRecord(this.host.proj).dir.slice(this.host.proj.length + 1)}/inception/units-generation/unit-of-work-dependency.md`;
+    this.host.write(rel, unitArtifactText(rel, this.units) ?? "");
+    this.unitsBlockRepairs.push({ where, asked: this.asked.length });
+    return true;
   }
 
   /** The person types a line into the chat; a slash command goes to `next` as the skill forwards it. */
@@ -892,7 +910,9 @@ export class AgentStandIn {
             break;
           }
           if (!/`bun \.claude\/tools\/[^`]+`/.test(message)) this.fail("a print mid-run named no step to take", d);
-          this.actOnPrint(d);
+          // The agent's own work the step names: the units block, from the Units it wrote.
+          const repaired = this.repairUnitsBlockIfNamed(message, "next");
+          if (!repaired || !/orchestrate\.ts next`\.$/.test(message)) this.actOnPrint(d);
           this.pending = /next --resume/.test(message) ? this.next("--resume") : this.next();
           break;
         }
@@ -954,7 +974,7 @@ export class AgentStandIn {
       if (stage === "code-generation") this.writeCode(d);
       for (const p of produces) {
         if (p === questions || existsSync(join(this.host.proj, p))) continue;
-        this.host.write(p, unitArtifactText(p, this.units) ?? artifactText(p, stage));
+        this.host.write(p, this.hooks.artifactText?.(p, stage) ?? unitArtifactText(p, this.units) ?? artifactText(p, stage));
       }
       if (stage === "practices-discovery") {
         this.must("state", "practices-event", "--type", "discovered", "--field", "Sources Scanned: none",
@@ -1012,7 +1032,7 @@ export class AgentStandIn {
         if (questions) this.askQuestions({ ...d, unit, wave: undefined }, questions);
         for (const p of produces) {
           if (p === questions || existsSync(join(this.host.proj, p))) continue;
-          this.host.write(p, unitArtifactText(p, this.units) ?? artifactText(p, stage));
+          this.host.write(p, this.hooks.artifactText?.(p, stage) ?? unitArtifactText(p, this.units) ?? artifactText(p, stage));
         }
       }
       const reviewState = String(entry.review_state ?? "not-required");
@@ -1184,9 +1204,20 @@ export class AgentStandIn {
   review(d: Directive): void {
     const stage = String(d.stage);
     const unit = typeof d.unit === "string" ? d.unit : null;
-    // A stage done again is reviewed at the next pass.
+    // A stage done again is reviewed at the next pass. After a jump or a
+    // reopen the engine starts the count again, and a wrong iteration is
+    // answered with the one it names, as the skill says.
     const last = this.reviews.get(`${stage} ${unit ?? ""}`);
-    this.reviewPass(stage, unit, String(d.reviewer), last ? last.iteration + 1 : 1);
+    const iteration = last ? last.iteration + 1 : 1;
+    try {
+      this.reviewPass(stage, unit, String(d.reviewer), iteration);
+    } catch (error) {
+      const named = error instanceof ScopeRunRefused
+        ? Number(/Retry with --iteration (\d+)/.exec(error.refusal)?.[1] ?? Number.NaN)
+        : Number.NaN;
+      if (!Number.isInteger(named) || named === iteration) throw error;
+      this.reviewPass(stage, unit, String(d.reviewer), named);
+    }
     this.hooks.afterReview?.(stage, unit, this);
   }
 
@@ -1203,7 +1234,15 @@ export class AgentStandIn {
   private reviewPass(stage: string, unit: string | null, reviewer: string, iteration: number): void {
     const forUnit = unit === null ? [] : ["--unit", unit];
     const pass = String(iteration);
-    const request = this.must("log", "review", "--stage", stage, "--reviewer", reviewer, "--iteration", pass, ...forUnit);
+    const requestArgs = ["log", "review", "--stage", stage, "--reviewer", reviewer, "--iteration", pass, ...forUnit];
+    let request: Record<string, unknown>;
+    try {
+      request = this.must(...requestArgs);
+    } catch (error) {
+      // A request refused for the units block is the agent's to fix, then ask again.
+      if (!(error instanceof ScopeRunRefused) || !this.repairUnitsBlockIfNamed(error.refusal, "review")) throw error;
+      request = this.must(...requestArgs);
+    }
     const file = typeof request.reviewFile === "string" ? request.reviewFile : null;
     if (!file) this.fail("review request named no review file");
     // A per-Unit review on a host with reviewer-scope enforcement writes its
@@ -1233,7 +1272,14 @@ export class AgentStandIn {
       this.report(stage, "--result", "completed");
       return;
     }
-    if (d.gate_only !== true) this.report(stage, "--result", "awaiting-approval");
+    if (d.gate_only !== true) {
+      const opened = this.report(stage, "--result", "awaiting-approval");
+      // The gate does not open over a units block the engine cannot read: the
+      // agent repairs it and runs the same report again.
+      if (opened.kind === "print" && this.repairUnitsBlockIfNamed(String(opened.message ?? ""), "gate")) {
+        this.actOnPrint(opened as Directive);
+      }
+    }
     if (this.answers.stopAt?.(stage) && !this.stopped.has(stage)) {
       this.stopped.add(stage);
       this.stopForTheDay();
@@ -1270,7 +1316,11 @@ export class AgentStandIn {
     if (!planPath || !tests) this.fail("code-generation names no plan or test instructions", d);
     const contract = this.host.bash("bun .claude/tools/aidlc-testing-posture.ts render");
     if (contract.status !== 0) this.fail(`testing posture render failed: ${clip(contract.stderr)}`, d);
-    this.host.write(planPath, codePlanText(contract.stdout));
+    // A revision puts the requested change in the plan as its own step
+    // (Code Generation Step 3), so the plan asked about is the revised one.
+    const plan = d.plan_approval as { status?: string; feedback?: string } | undefined;
+    const change = plan?.status === "revise" ? plan.feedback ?? "Apply the requested change" : null;
+    this.host.write(planPath, codePlanText(contract.stdout, change));
     const name = typeof d.unit === "string" ? d.unit : "scope-run";
     this.plans.set(name, planPath);
     this.host.write(tests, `# Unit Test Instructions\n\n- Run: \`bun test test/${name}.test.ts\`\n`);
@@ -1468,8 +1518,9 @@ function reviewText(reviewer: string, iteration = 1): string {
   return `## Review\n\n**Verdict:** READY\n**Reviewer:** ${reviewer}\n**Date:** 2026-01-01T00:00:00Z\n**Iteration:** ${iteration}\n\n### Findings\n\n**Prior findings**\n\n| ID | Now | Severity | Note |\n|---|---|---|---|\n\n**New findings**\n\n| Severity | Location | Finding | Required action |\n|---|---|---|---|\n\n### Summary\n\nReady.\n`;
 }
 
-function codePlanText(contract: string): string {
-  return `# Code Generation Plan\n\n## Summary\n\n- Builds: one function and its test\n- Touches: src/scope-run.ts, test/scope-run.test.ts\n- Tests: 1 unit test\n\n## Steps\n\n- [ ] Step 1: Write src/scope-run.ts (FR1)\n- [ ] Step 2: Write and run test/scope-run.test.ts (FR1)\n\n${contract.trim()}\n`;
+function codePlanText(contract: string, change: string | null = null): string {
+  const revised = change === null ? "" : `- [ ] Step 3: ${change.replace(/\s+/g, " ").trim()}\n`;
+  return `# Code Generation Plan\n\n## Summary\n\n- Builds: one function and its test\n- Touches: src/scope-run.ts, test/scope-run.test.ts\n- Tests: 1 unit test\n\n## Steps\n\n- [ ] Step 1: Write src/scope-run.ts (FR1)\n- [ ] Step 2: Write and run test/scope-run.test.ts (FR1)\n${revised}\n${contract.trim()}\n`;
 }
 
 /** The active intent's record dir and state file. */

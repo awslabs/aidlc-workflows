@@ -100,6 +100,7 @@ import { copyChannelDispatcherCommands, copyChannelToolScripts, ROUTES, TOOLS } 
 import { AIDLC_VERSION } from "../core/tools/aidlc-version.ts";
 import { BUILD_VERSION_ENV, releaseBuildVersion } from "../core/tools/aidlc-channel.ts";
 import { copyStartsWithout, sha256Bytes, writtenRootIntegration } from "../core/tools/aidlc-distribution.ts";
+import { kiroIdeSteering } from "../core/tools/aidlc-includes.ts";
 import { AIDLC_SETTINGS_SCHEMA } from "../core/tools/aidlc-settings.ts";
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -934,6 +935,12 @@ function buildTree(
   //     (AIDLC_RULES_DIR points there below), so it has to exist first.
   const memoryDir = join(outRoot, MEMORY_DST);
   emitMemory(outRoot, harnessDir, m.rulesRename, harnessKind, invoke);
+  // Kiro IDE's always-included steering carries the memory text itself (Kiro
+  // IDE does not expand file references there), so a fresh install's first
+  // chat already holds the shipped memory the engine would write.
+  if (m.name === "kiro-ide") {
+    writeFileSync(join(treeRoot, "steering", "aidlc-active-memory.md"), kiroIdeSteering(outRoot, "default").text);
+  }
 
   // 2d. Emit the active-space cursor (aidlc/active-space -> "default") — part of
   //     the shipped shell so a fresh copy resolves the default space with no

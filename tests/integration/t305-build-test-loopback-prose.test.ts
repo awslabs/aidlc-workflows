@@ -197,7 +197,9 @@ describe("t305 construction protocol module — Build-and-Test failure loop-back
     expect(CONSTRUCTION_PROTOCOL).toContain("survives the backward jump (jumps reset checkboxes, never artifacts)");
     expect(CONSTRUCTION_PROTOCOL).toContain("colocated with the diagnosis");
     expect(CONSTRUCTION_PROTOCOL).toContain("readable at the\nfinal gate");
-    expect(CONSTRUCTION_PROTOCOL).toContain("STAGE_JUMPED rows the jump tool emits remain the\ndeterministic audit cross-check");
+    expect(CONSTRUCTION_PROTOCOL).toContain(
+      "the rows the jump tool emits (a `STAGE_JUMPED` for every unit, a\nunit-tagged `GATE_REJECTED` per reopened unit) remain the\ndeterministic audit cross-check",
+    );
     expect(CONSTRUCTION_PROTOCOL).toContain("The log is append-only.");
     expect(CONSTRUCTION_PROTOCOL).toContain(
       "A human-directed\nbackward jump does not count against the bound",
@@ -205,13 +207,18 @@ describe("t305 construction protocol module — Build-and-Test failure loop-back
   });
 
   test("autonomous procedure routes the jump through the ENGINE, not a hand-composed execute", () => {
-    // Step 2 names the engine invocation…
-    expect(CONSTRUCTION_PROTOCOL).toContain("tools/aidlc-orchestrate.ts next --stage code-generation`");
-    // …which answers with the validated jump print the conductor runs verbatim.
-    expect(CONSTRUCTION_PROTOCOL).toContain("`aidlc-jump.ts execute --target code-generation --direction\n   backward --scope <scope>`");
-    expect(CONSTRUCTION_PROTOCOL).toContain("run that printed command verbatim");
+    // Step 2 names the engine invocation, for each unit the diagnosis names,
+    expect(CONSTRUCTION_PROTOCOL).toContain("tools/aidlc-orchestrate.ts next --stage\n   code-generation --unit <unit>`");
+    // which answers with the validated reopen print the conductor runs verbatim.
+    expect(CONSTRUCTION_PROTOCOL).toContain("run the command its `print` directive\n   names verbatim");
+    expect(CONSTRUCTION_PROTOCOL).toContain("`aidlc-jump.ts reopen --target\n   code-generation ... --units <unit>`");
+    // Only a cause that spans every unit takes the stage-wide jump, and stage
+    // by stage it is taken at once, with no question.
+    expect(CONSTRUCTION_PROTOCOL).toContain("Only for a cause that spans every\n   unit, or names none, run `next --stage code-generation` instead");
+    expect(CONSTRUCTION_PROTOCOL).toContain("`unit-major`), one unit cannot be reopened alone: run that\n   `next --stage code-generation` at once, without asking");
+    expect(CONSTRUCTION_PROTOCOL).toContain("`aidlc-jump.ts execute --target code-generation --direction backward\n   --scope <scope>`");
     expect(CONSTRUCTION_PROTOCOL).toContain(
-      "Never compose the `execute` call by hand — the engine's print is the\n   validated form.",
+      "Never compose the `reopen` or `execute` call by hand: the engine's print\n   is the validated form.",
     );
   });
 
@@ -291,7 +298,7 @@ describe("t305 construction protocol module — Build-and-Test failure loop-back
       "On BOTH paths, after every fix and re-use decision and BEFORE presenting or\nauto-approving the settle/approval gate, dispatch code-generation's declared\nreviewer for every applicable unit",
     );
     expect(CONSTRUCTION_PROTOCOL).toContain(
-      "The backward jump's `STAGE_JUMPED` invalidates\nevery prior review receipt, and the engine refuses approval",
+      "The reopen invalidates each applicable unit's\nprior review receipts (every unit's, after the stage-wide `STAGE_JUMPED`), and\nthe engine refuses approval",
     );
   });
 
@@ -526,6 +533,8 @@ describe("t305 stage-protocol-recovery.md — crash-resume bullet", () => {
     expect(RECOVERY).toContain(
       "re-execute the jump per the construction\nprotocol module (`aidlc-common/protocols/stage-protocol-construction.md`)",
     );
+    // A loop-back cut off between two Units' reopens reopens the rest.
+    expect(RECOVERY).toContain("reopen the others\nthe same way before going on");
   });
 
   test("on any resume the loop-back count is the ledger's entry count, never zero", () => {

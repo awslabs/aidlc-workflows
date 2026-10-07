@@ -6,7 +6,7 @@ This chapter is the schema-level reference for the v0.5.0 rule system: where rul
 
 ## Layout
 
-Rules live in the active space memory layer at `aidlc/spaces/<active-space>/memory/` (one hand-editable set at the workspace root, read by every harness via its native include — Claude `@`-import stub, Kiro CLI agent resources, Kiro IDE always-included steering with live file references, Codex `AIDLC_RULES_DIR`) with neutral scope-named files:
+Rules live in the active space memory layer at `aidlc/spaces/<active-space>/memory/` (one hand-editable set at the workspace root, read by every harness via its native include: Claude `@`-import stub, Kiro CLI agent resources, Kiro IDE always-included steering that carries the memory text, Codex `AIDLC_RULES_DIR`) with neutral scope-named files:
 
 ```
 aidlc/spaces/<active-space>/memory/
