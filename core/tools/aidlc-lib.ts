@@ -15377,6 +15377,58 @@ function readStableReviewArtifacts(
   }
 }
 
+// A committed text file's bytes as its identity: CRLF and a lone CR read as
+// LF, so a checkout that turns line endings (Git for Windows' default) is no
+// change to the work. Bytes that are not UTF-8 text are taken as they are, and
+// a file with LF line endings is the same either way.
+export function committedTextBytes(bytes: Buffer): Buffer {
+  if (!bytes.includes(13) || bytes.includes(0) || process.env.AIDLC_TEST_RAW_LINE_ENDINGS === "1") return bytes;
+  let text: string;
+  try {
+    text = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes);
+  } catch {
+    return bytes;
+  }
+  return Buffer.from(text.replace(/\r\n?/g, "\n"), "utf-8");
+}
+
+// The sha256 hex of a committed file's text, as committedTextBytes reads it.
+// A different raw form is remembered, so a value recorded from those bytes
+// before line endings were read as LF still matches.
+export function committedTextSha256(bytes: Buffer): string {
+  const text = committedTextBytes(bytes);
+  const current = createHash("sha256").update(text).digest("hex");
+  if (text !== bytes) rememberRawFingerprint(createHash("sha256").update(bytes).digest("hex"), current);
+  return current;
+}
+
+// Fingerprints this process computed both from the raw bytes (how a value was
+// recorded before line endings were read as LF) and as they are read now. Only
+// content read in this process is here, so a recorded raw value maps to the
+// current form of the same content and nothing else.
+const RAW_FINGERPRINTS = new Map<string, string>();
+const CURRENT_FINGERPRINTS = new Map<string, string>();
+export function rememberRawFingerprint(raw: string, current: string): void {
+  if (raw === current) return;
+  RAW_FINGERPRINTS.set(raw, current);
+  CURRENT_FINGERPRINTS.set(current, raw);
+}
+// A recorded fingerprint in its current form: the value as recorded, or, when
+// it was taken over raw line endings of content read here, that content's
+// current fingerprint.
+export function currentFingerprintForm(value: string | null): string | null {
+  return value === null ? null : RAW_FINGERPRINTS.get(value) ?? value;
+}
+// The raw-bytes form of a current fingerprint this process computed, if it
+// differs.
+export function rawFingerprintForm(value: string | null): string | null {
+  return value === null ? null : CURRENT_FINGERPRINTS.get(value) ?? null;
+}
+// A fingerprint field of an audit row in its current form (see above).
+export function recordedFingerprintField(block: string, field: string): string | null {
+  return currentFingerprintForm(auditBlockField(block, field));
+}
+
 function reviewArtifactContentsFingerprint(
   contents: ReviewArtifactContent[],
   options: {
@@ -15386,26 +15438,34 @@ function reviewArtifactContentsFingerprint(
   } = {},
 ): string | null {
   const manifest: Array<[string, string]> = [];
+  // The same manifest over raw bytes, as it was recorded before line endings
+  // were read as LF; remembered when it differs.
+  const rawManifest: Array<[string, string]> = [];
+  let rawDiffers = false;
   let matchedAppendix = options.appendixArtifact === undefined;
   for (const entry of contents) {
     if (entry.summaryInput) {
       if (entry.state !== "file" && entry.required && options.requireRequiredArtifacts === true) return null;
-      manifest.push([
+      const value: [string, string] = [
         entry.logicalPath,
         entry.state === "file"
           ? `summary-input:sha256:${summaryInputReviewFingerprint(entry.body)}`
           : entry.state,
-      ]);
+      ];
+      manifest.push(value);
+      rawManifest.push(value);
       continue;
     }
     if (entry.state === "missing") {
       if (entry.required && options.requireRequiredArtifacts === true) return null;
       manifest.push([entry.logicalPath, "missing"]);
+      rawManifest.push([entry.logicalPath, "missing"]);
       continue;
     }
     if (entry.state === "not-file") {
       if (entry.required && options.requireRequiredArtifacts === true) return null;
       manifest.push([entry.logicalPath, "not-file"]);
+      rawManifest.push([entry.logicalPath, "not-file"]);
       continue;
     }
 
@@ -15422,11 +15482,17 @@ function reviewArtifactContentsFingerprint(
       fingerprintedBody = entry.body.subarray(0, options.appendixOffset);
       matchedAppendix = true;
     }
-    const digest = createHash("sha256").update(fingerprintedBody).digest("hex");
-    manifest.push([entry.logicalPath, `sha256:${digest}`]);
+    const text = committedTextBytes(fingerprintedBody);
+    manifest.push([entry.logicalPath, `sha256:${createHash("sha256").update(text).digest("hex")}`]);
+    rawManifest.push([entry.logicalPath, `sha256:${createHash("sha256").update(fingerprintedBody).digest("hex")}`]);
+    if (text !== fingerprintedBody) rawDiffers = true;
   }
   if (!matchedAppendix) return null;
-  return `sha256:${createHash("sha256").update(JSON.stringify(manifest)).digest("hex")}`;
+  const fingerprint = `sha256:${createHash("sha256").update(JSON.stringify(manifest)).digest("hex")}`;
+  if (rawDiffers) {
+    rememberRawFingerprint(`sha256:${createHash("sha256").update(JSON.stringify(rawManifest)).digest("hex")}`, fingerprint);
+  }
+  return fingerprint;
 }
 
 export interface ReviewArtifactSnapshot {
@@ -15916,7 +15982,7 @@ export function reviewRequestBindingIsModern(
 export function reviewRequestBindingFromBlock(
   block: string,
 ): ReviewRequestBinding | null {
-  const artifactFingerprint = auditBlockField(block, "Artifact Fingerprint");
+  const artifactFingerprint = recordedFingerprintField(block, "Artifact Fingerprint");
   if (
     artifactFingerprint === null ||
     !REVIEW_FINGERPRINT_RE.test(artifactFingerprint)
@@ -15980,10 +16046,7 @@ export function reviewRequestBindingFromBlock(
   ) {
     return null;
   }
-  const unitSourceFingerprint = auditBlockField(
-    block,
-    "Unit Source Fingerprint",
-  );
+  const unitSourceFingerprint = recordedFingerprintField(block, "Unit Source Fingerprint");
   if (
     unitSourceFingerprint !== null &&
     !UNIT_SOURCE_FINGERPRINT_RE.test(unitSourceFingerprint)
@@ -16061,10 +16124,7 @@ export function reviewCompletionMatchesRequest(
 ): boolean {
   const verdict = auditBlockField(completionBlock, "Verdict");
   if (verdict !== "READY" && verdict !== "NOT-READY") return false;
-  const recordedFingerprint = auditBlockField(
-    completionBlock,
-    "Artifact Fingerprint",
-  );
+  const recordedFingerprint = recordedFingerprintField(completionBlock, "Artifact Fingerprint");
   if (
     recordedFingerprint === null ||
     !REVIEW_FINGERPRINT_RE.test(recordedFingerprint)
@@ -16072,7 +16132,7 @@ export function reviewCompletionMatchesRequest(
     return false;
   }
   const completedRequestFingerprint =
-    auditBlockField(completionBlock, "Request Fingerprint") ??
+    recordedFingerprintField(completionBlock, "Request Fingerprint") ??
     recordedFingerprint;
   if (completedRequestFingerprint !== request.artifactFingerprint) return false;
 
@@ -16159,7 +16219,7 @@ export function reviewCompletionMatchesRequest(
   }
   if (
     request.unitSourceFingerprint !== null &&
-    auditBlockField(completionBlock, "Unit Source Fingerprint") !==
+    recordedFingerprintField(completionBlock, "Unit Source Fingerprint") !==
       request.unitSourceFingerprint
   ) {
     return false;
@@ -17194,9 +17254,9 @@ export function reviewRecordMatchesCompletion(record: ReviewRecord, completionBl
     record.reviewer === auditBlockField(completionBlock, "Reviewer") &&
     record.verdict === auditBlockField(completionBlock, "Verdict") &&
     record.request_id === auditBlockField(completionBlock, "Request Id") &&
-    record.artifact_fingerprint === auditBlockField(completionBlock, "Artifact Fingerprint") &&
+    record.artifact_fingerprint === recordedFingerprintField(completionBlock, "Artifact Fingerprint") &&
     record.source_fingerprint === auditBlockField(completionBlock, "Source Fingerprint") &&
-    record.unit_source_fingerprint === auditBlockField(completionBlock, "Unit Source Fingerprint") &&
+    record.unit_source_fingerprint === recordedFingerprintField(completionBlock, "Unit Source Fingerprint") &&
     record.request_challenge === auditBlockField(completionBlock, "Review Challenge")
   );
 }
@@ -17624,7 +17684,7 @@ function hasModernSourceBindingEvidence(
     if (
       row.event === "REVIEW_COMPLETED" &&
       auditBlockField(row.block, "Unit") !== null &&
-      (auditBlockField(row.block, "Unit Source Fingerprint") !== null ||
+      (recordedFingerprintField(row.block, "Unit Source Fingerprint") !== null ||
         auditBlockField(row.block, "Unit Source Binding Bypass") !== null)
     ) {
       return true;
@@ -18919,7 +18979,7 @@ export function candidateReviewCoverageProjection(
     pending.delete(iteration);
     ready =
       auditBlockField(event.block, "Verdict") === "READY" &&
-      auditBlockField(event.block, "Artifact Fingerprint") ===
+      recordedFingerprintField(event.block, "Artifact Fingerprint") ===
         options.expectedFingerprint;
   }
   return ready;
@@ -19402,7 +19462,7 @@ export function freshReviewReceipts(
       });
     }
     pendingRequests.delete(requestKey);
-    const recordedFingerprint = auditBlockField(e.block, "Artifact Fingerprint");
+    const recordedFingerprint = recordedFingerprintField(e.block, "Artifact Fingerprint");
     const artifactFingerprintUsable = recordedFingerprint !== null;
     const currentFingerprint = reviewArtifactFingerprint(
       projectDir,
@@ -19516,7 +19576,7 @@ export function freshReviewReceipts(
       unitReceiptRecovery.set(unit, request.recovery);
       unitPending.delete(unit);
       modernUnitReceipts.set(unit, {
-        fingerprint: auditBlockField(e.block, "Unit Source Fingerprint"),
+        fingerprint: recordedFingerprintField(e.block, "Unit Source Fingerprint"),
         bypass: auditBlockField(e.block, "Unit Source Binding Bypass") === "true",
         order: i,
         timestamp: e.timestamp,
@@ -19699,7 +19759,7 @@ export function freshReviewReceipts(
           receipt.fingerprint,
         );
         const manifest = readUnitSourceManifest(projectDir, stage.slug, unit);
-        if (snapshot === null || !manifest.ok || snapshot.manifestSha256 !== manifest.rawBytesSha256) {
+        if (snapshot === null || !manifest.ok || currentFingerprintForm(snapshot.manifestSha256) !== manifest.rawBytesSha256) {
           if (!isRelaxed()) {
             stale = true;
           } else if (snapshot === null || !manifest.ok) {
@@ -24651,7 +24711,7 @@ function validateUnitSourceManifestBytes(
     manifest: { stage: stageSlug, unit, version: 1, writes },
     claims,
     prefixes,
-    rawBytesSha256: createHash("sha256").update(rawBytes).digest("hex"),
+    rawBytesSha256: committedTextSha256(rawBytes),
   };
   } finally {
     for (const index of pathModeIndexes.values()) {
@@ -24751,7 +24811,16 @@ export function unitSourceFingerprint(
   claimModel: SourceClaimModel,
   manifestSha256: string,
 ): string {
-  return `sha256:${sourceListingSha256(serializeUnitSourceListing(listing, claimModel, manifestSha256))}`;
+  const fingerprint = `sha256:${sourceListingSha256(serializeUnitSourceListing(listing, claimModel, manifestSha256))}`;
+  // The same listing bound to the manifest's raw bytes, as recorded before
+  // line endings were read as LF.
+  const rawManifest = rawFingerprintForm(manifestSha256);
+  if (rawManifest !== null) {
+    rememberRawFingerprint(
+      `sha256:${sourceListingSha256(serializeUnitSourceListing(listing, claimModel, rawManifest))}`, fingerprint,
+    );
+  }
+  return fingerprint;
 }
 
 /** Parse committed reviewed-source evidence bytes (the serializeUnitSourceListing
@@ -24936,8 +25005,13 @@ function readSourceSnapshot(path: string, fingerprint: string): string | null {
   if (expected === null) return null;
   try {
     const bytes = readFileSync(path);
-    if (createHash("sha256").update(bytes).digest("hex") !== expected) return null;
-    return bytes.toString("utf-8");
+    const text = committedTextBytes(bytes);
+    // A checkout with CRLF line endings holds the same listing.
+    if (
+      createHash("sha256").update(text).digest("hex") !== expected &&
+      createHash("sha256").update(bytes).digest("hex") !== expected
+    ) return null;
+    return text.toString("utf-8");
   } catch {
     return null;
   }
@@ -34788,7 +34862,7 @@ export function unitLifecycleSnapshot(
       receipts.add(row.unit);
       continue;
     }
-    const recorded = auditBlockField(row.block, "Artifact Fingerprint");
+    const recorded = recordedFingerprintField(row.block, "Artifact Fingerprint");
     const current =
       stage === undefined
         ? null
@@ -34846,7 +34920,7 @@ export function unitCompletedReceipts(
       done.add(row.unit);
       continue;
     }
-    const recorded = auditBlockField(row.block, "Artifact Fingerprint");
+    const recorded = recordedFingerprintField(row.block, "Artifact Fingerprint");
     const current =
       stage === undefined
         ? null

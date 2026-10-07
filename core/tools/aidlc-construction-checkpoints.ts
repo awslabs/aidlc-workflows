@@ -86,6 +86,10 @@ import {
   type UnitLifecycleSnapshot,
   type WorkspaceSourceListing,
   type WorkspaceSourceState,
+  currentFingerprintForm,
+  rawFingerprintForm,
+  recordedFingerprintField,
+  committedTextSha256,
 } from "./aidlc-lib.ts";
 
 
@@ -403,6 +407,16 @@ interface ApprovedStageEvidence {
 
 const APPROVED_FILES_CAP = 50;
 
+// Recorded approved work in its current form: a value recorded over raw line
+// endings of documents read here reads as their current fingerprint.
+function inCurrentForm(evidence: ApprovedStageEvidence | undefined): ApprovedStageEvidence | undefined {
+  return evidence && {
+    ...evidence,
+    artifact: currentFingerprintForm(evidence.artifact) ?? evidence.artifact,
+    source: currentFingerprintForm(evidence.source),
+  };
+}
+
 // "Approved Evidence" on a GATE_APPROVED row: one JSON line from stage slug to
 // [artifact fingerprint, source fingerprint or null] plus, for a stage with
 // source and at most APPROVED_FILES_CAP claimed paths, an object of those path
@@ -465,7 +479,7 @@ function workKeptOverScopeChange(
   // A step the Unit owes nothing (skipped for it, or not for its kind) holds no work.
   const owed = stages.filter((slug) => current[slug] !== undefined);
   return recorded !== null && owed.length > 0 && owed.every((slug) => {
-    const then = recorded.get(slug);
+    const then = inCurrentForm(recorded.get(slug));
     return then !== undefined && then.floor === floors[slug] &&
       current[slug][0] === then.artifact && current[slug][1] === then.source;
   });
@@ -744,7 +758,7 @@ function snapshot(
         const manifest = readUnitSourceManifest(projectDir, slug, unit);
         if (
           !manifest.ok ||
-          manifest.rawBytesSha256 !== createHash("sha256").update(bytes).digest("hex")
+          manifest.rawBytesSha256 !== committedTextSha256(bytes)
         ) {
           errors.push(`${slug}: ${manifest.ok ? "source manifest changed while reading" : manifest.reason}`);
         } else if (listing !== null) {
@@ -807,7 +821,7 @@ function snapshot(
       // So is source the Guard Policy keeps without a compare: the reviewed
       // listing not on this machine, the Unit's list of files changed after
       // its review, or source that cannot be read here.
-      const reviewedSource = review ? auditBlockField(review.block, "Unit Source Fingerprint") : null;
+      const reviewedSource = review ? recordedFingerprintField(review.block, "Unit Source Fingerprint") : null;
       const sourceKept = receipts.unitSourceKept.has(unit) && acceptsChanges();
       if (
         stage.workspace_requires && reviewedSource !== null && reviewedSource !== source && (
@@ -820,7 +834,7 @@ function snapshot(
         if (source === null && listing === null) sourceKeptUnread++;
         source = reviewedSource;
       }
-      const reviewedArtifact = review ? auditBlockField(review.block, "Artifact Fingerprint") : null;
+      const reviewedArtifact = review ? recordedFingerprintField(review.block, "Artifact Fingerprint") : null;
       if (
         artifact !== null && reviewedArtifact !== null && reviewedArtifact !== artifact &&
         receipts.unitVerdicts.has(unit) && acceptsChanges()
@@ -834,11 +848,11 @@ function snapshot(
         ) ||
         receipts.unitPending.has(unit) || receipts.openBoltUnits.has(unit) ||
         reviewFloor !== floor ||
-        auditBlockField(review.block, "Artifact Fingerprint") !== artifact ||
+        recordedFingerprintField(review.block, "Artifact Fingerprint") !== artifact ||
         auditBlockField(review.block, "Iteration") !== String(receipts.unitIterations.get(unit)) ||
         (stage.workspace_requires && (
           source === null ||
-          auditBlockField(review.block, "Unit Source Fingerprint") !== source ||
+          recordedFingerprintField(review.block, "Unit Source Fingerprint") !== source ||
           auditBlockField(review.block, "Source Freshness Bypass") !== null ||
           auditBlockField(review.block, "Unit Source Binding Bypass") !== null
         ))
@@ -866,7 +880,7 @@ function snapshot(
           reviewRecordNotHere(projectDir, binding, review.block);
         const changed = receipts.unitSourceMoved.get(unit) ??
           (review && (
-            auditBlockField(review.block, "Artifact Fingerprint") !== artifact ||
+            recordedFingerprintField(review.block, "Artifact Fingerprint") !== artifact ||
             (receipts.unitStale.has(unit) && listing !== null)
           ) ? receipts.unitStaleProgress.get(unit) : undefined);
         // That review still counts as waiting for its verdict, so the re-check
@@ -948,7 +962,7 @@ function snapshot(
         ));
         if (prior) {
           recheckVerdict = auditBlockField(review!.block, "Verdict");
-          if (auditBlockField(prior.block, "Artifact Fingerprint") !== auditBlockField(request.block, "Artifact Fingerprint")) {
+          if (recordedFingerprintField(prior.block, "Artifact Fingerprint") !== recordedFingerprintField(request.block, "Artifact Fingerprint")) {
             recheckChanged = "documents";
           }
         }
@@ -959,7 +973,7 @@ function snapshot(
       // without it): a later change to the work the person approved, which
       // its Guard Policy accepts, keeps the approved values in the
       // fingerprint and is said once.
-      const recorded = recordedEvidence?.get(slug);
+      const recorded = inCurrentForm(recordedEvidence?.get(slug));
       if (
         recorded && recorded.floor === floor && artifact !== null &&
         (source !== null) === Boolean(stage.workspace_requires) &&
@@ -992,20 +1006,29 @@ function snapshot(
   if (sourceStages === 0) errors.push("No applicable stage supplies the Unit's source manifest.");
   if (errors.length !== recheckable) rereview = null;
   const [record, olderRecord] = checkpointRecordForms(projectDir, root);
-  const fingerprintFor = (recordPath: string): string => digest({
+  const fingerprintFor = (recordPath: string, stagesEvidence: unknown[] = evidence): string => digest({
     version: 1, intent, record: recordPath, kind, unit,
     unit_kind: dag.unitKinds?.get(unit) ?? null,
     workflow: workflow ? digest(workflow.block) : null,
     claim: claimAttemptFields(projectDir, unit),
-    stages: evidence,
+    stages: stagesEvidence,
   });
   const fresh = fingerprintFor(record);
-  // Windows wrote the record folder with backslashes before: that form of the
-  // same evidence is no change to keep over a scope change, and still counts.
-  const olderFresh = fingerprintFor(olderRecord);
+  // The same evidence as it was recorded before: Windows wrote the record
+  // folder with backslashes, and documents were hashed with their raw line
+  // endings. Those forms are no change to keep over a scope change, and they
+  // still count.
+  const rawForm = (value: unknown): unknown => typeof value === "string" ? rawFingerprintForm(value) ?? value : value;
+  const rawEvidence = (evidence as Array<Record<string, unknown>>).map((entry) =>
+    ({ ...entry, ...("artifact" in entry ? { artifact: rawForm(entry.artifact), source: rawForm(entry.source) } : {}) }));
+  const olderForms = new Set([
+    fingerprintFor(olderRecord), fingerprintFor(record, rawEvidence), fingerprintFor(olderRecord, rawEvidence),
+  ]);
+  olderForms.delete(fresh);
   const kept = fingerprintKeptOverScopeChange(rows, workflow, unit, kind, fresh, stages, approvedEvidence, floors);
-  const fingerprint = kept !== null && kept !== olderFresh ? kept : fresh;
-  const isFingerprint = (value: string | null | undefined): boolean => value === fingerprint || value === olderFresh;
+  const fingerprint = kept !== null && !olderForms.has(kept) ? kept : fresh;
+  const isFingerprint = (value: string | null | undefined): boolean =>
+    value === fingerprint || (value !== null && value !== undefined && olderForms.has(value));
   const proofPath = proofRelativePath(unit, kind);
   const proof = readProof(root, proofPath);
   const proofFile = proof;

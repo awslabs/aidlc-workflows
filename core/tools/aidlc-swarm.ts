@@ -162,6 +162,8 @@ import {
   type AuditShardEvent,
   type BoltIdentity,
   type WorkflowSelection,
+  currentFingerprintForm,
+  recordedFingerprintField,
 } from "./aidlc-lib.ts";
 import { compiledExecutable } from "./aidlc-runtime-paths.ts";
 import {
@@ -584,7 +586,7 @@ function reviewerReceiptError(
   // Under relaxed or off, what changed after a real review is kept and said
   // once; under strict the Unit goes back for a fresh review.
   const acceptsChanges = guardPolicyAcceptsChanges(projectDir);
-  const recordedArtifactFp = auditBlockField(latestTerminal.block, "Artifact Fingerprint");
+  const recordedArtifactFp = recordedFingerprintField(latestTerminal.block, "Artifact Fingerprint");
   const currentArtifactFp = definition
     ? reviewArtifactFingerprint(wt, definition, unit, {
         requireRequiredArtifacts: true,
@@ -671,10 +673,7 @@ function reviewerReceiptError(
   // that the reviewer saw before trusting its claims for footprint coverage.
   let unitSourceFingerprint: string | undefined;
   if (baseCommit !== null) {
-    const recordedUnitFp = auditBlockField(
-      latestTerminal.block,
-      "Unit Source Fingerprint",
-    );
+    const recordedUnitFp = recordedFingerprintField(latestTerminal.block, "Unit Source Fingerprint");
     const bindingBypass =
       auditBlockField(latestTerminal.block, "Unit Source Binding Bypass") ===
       "true";
@@ -694,7 +693,7 @@ function reviewerReceiptError(
     // after it or its review copy is not on this machine; the change is kept.
     if (
       acceptsChanges && manifest.ok &&
-      (snapshot === null || snapshot.manifestSha256 !== manifest.rawBytesSha256)
+      (snapshot === null || currentFingerprintForm(snapshot.manifestSha256) !== manifest.rawBytesSha256)
     ) {
       manifestKept = true;
       accepted.push({
@@ -705,7 +704,7 @@ function reviewerReceiptError(
     } else if (
       !manifest.ok ||
       snapshot === null ||
-      snapshot.manifestSha256 !== manifest.rawBytesSha256
+      currentFingerprintForm(snapshot.manifestSha256) !== manifest.rawBytesSha256
     ) {
       return {
         error:
@@ -880,7 +879,7 @@ function captureReviewedRecordSnapshot(
     // the evidence of what was reviewed.
     if (
       !manifest.ok ||
-      (!receipt.manifestKept && (snapshot === null || snapshot.manifestSha256 !== manifest.rawBytesSha256))
+      (!receipt.manifestKept && (snapshot === null || currentFingerprintForm(snapshot.manifestSha256) !== manifest.rawBytesSha256))
     ) {
       return {
         error:

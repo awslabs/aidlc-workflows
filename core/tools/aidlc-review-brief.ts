@@ -46,6 +46,7 @@ import {
   maximalAttemptEvents,
   toPosix,
   unreadableFindingsTableFinding,
+  recordedFingerprintField,
 } from "./aidlc-lib.js";
 import {
   constructionCheckpointKind,
@@ -1851,11 +1852,8 @@ export function reviewInvalidationDetails(
         projectDir,
         stage.slug,
         unit,
-        auditBlockField(
-          staleReview.block,
-          "Unit Source Fingerprint",
-        ),
-        auditBlockField(event.block, "Unit Source Fingerprint"),
+        recordedFingerprintField(staleReview.block, "Unit Source Fingerprint"),
+        recordedFingerprintField(event.block, "Unit Source Fingerprint"),
       );
       for (const path of sourceChanges.paths) changedUpstream.add(path);
       if (sourceChanges.paths.length > 0) addContextReviews(unit);
