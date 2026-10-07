@@ -913,8 +913,11 @@ function sayPendingPersonLines(requested: Directive, transported: Directive): ((
 
 function prepareEmission(directive: Directive): PreparedEmission {
   const requested = directive;
-  // Read before the notices below can copy the directive.
-  const endsTurn = directive.kind === "ask" || turnEndingPrints.has(directive);
+  // Read before the notices below can copy the directive. A guard-recovery
+  // ask whose ways on are the conductor's own work (agent_work) is no question
+  // for the person: the turn goes on, and the conductor carries them out.
+  const endsTurn = (directive.kind === "ask" && (directive as { agent_work?: unknown }).agent_work !== true) ||
+    turnEndingPrints.has(directive);
   if (
     directive.kind === "run-stage" && directive.construction_policy &&
     directive.gate === false

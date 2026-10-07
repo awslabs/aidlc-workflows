@@ -1445,7 +1445,8 @@ remedy put to the person also carries a `label` and `description` in their
 words (`GUARD_REMEDY_WORDING` in `aidlc-lib.ts`). The first time a refusal has
 an executable `external-work` remedy, the ask is the conductor's own work
 (`agent_work: true`, only those remedies, never published): it carries out the
-first that applies without asking. When the same refusal comes back, or there
+first that applies without asking, and the turn does not end on it (the Stop
+hook hands the work back if the conductor stops). When the same refusal comes back, or there
 is none, the person is asked with the other executable remedies only. The
 conductor offers them by label and description, waits for the human's
 selection, and follows the selected interaction:
