@@ -1,0 +1,13 @@
+{
+  "version": "v1",
+  "hooks": [
+    {
+      "name": "aidlc-after-shell",
+      "trigger": "PostToolUse",
+      "matcher": "execute_bash|execute_pwsh|shell",
+      "description": "After each terminal command, keeps the workflow's current stage and its plan of remaining stages in step with what happened.",
+      "action": { "type": "command", "command": "{{INVOKE}} engine adapter kiro-ide after-shell" },
+      "timeout": 1800
+    }
+  ]
+}

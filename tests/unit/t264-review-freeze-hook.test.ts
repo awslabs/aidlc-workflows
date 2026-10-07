@@ -60,6 +60,7 @@ import {
   writeTargets,
 } from "../../dist/claude/.claude/hooks/aidlc-review-freeze.ts";
 import { readAllAuditShards } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import { KIRO_HOOK_GROUPS } from "../../harness/kiro-ide/hooks/aidlc-kiro-tool-names.ts";
 import {
   cleanupTestProject,
   createTestProject,
@@ -1194,25 +1195,27 @@ describe("t264 (c) harness registration", () => {
     expect(adapter).toContain('input: claudeShaped("PreToolUse", reviewerToolName)');
   });
 
-  test("Kiro IDE registers review-freeze as its own PreToolUse hook", () => {
-    // Kiro runs every PreToolUse hook even after an earlier one blocks, so the
-    // freeze is a file of its own beside plan-approval-guard, not a branch of it.
+  test("Kiro IDE runs review-freeze as its own member of the guard card", () => {
+    // Kiro shows a card per hook run, so the freeze runs inside the one
+    // PreToolUse card (#2022) as a target of its own beside plan-approval-guard,
+    // not a branch of it; the card runs every member even after one refuses.
     for (const root of [
       join(REPO_ROOT, "harness", "kiro-ide", "hooks"),
       join(REPO_ROOT, "dist", "kiro-ide", ".kiro", "hooks"),
     ]) {
-      const manifest = JSON.parse(readFileSync(join(root, "aidlc-review-freeze.json"), "utf-8")) as {
+      const manifest = JSON.parse(readFileSync(join(root, "aidlc-guard-tool-call.json"), "utf-8")) as {
         hooks: Array<{ trigger: string; matcher?: string; action: { command: string } }>;
       };
       expect(manifest.hooks).toHaveLength(1);
       expect(manifest.hooks[0].trigger).toBe("PreToolUse");
-      // It fires for the write and shell tools the adapter forwards (t218 pins
-      // that the two sets agree), not for reads.
-      const matcher = new RegExp(manifest.hooks[0].matcher ?? "^$");
-      expect(matcher.test("fs_write") && matcher.test("execute_bash")).toBe(true);
-      expect(matcher.test("read_file")).toBe(false);
-      expect(manifest.hooks[0].action.command).toEndWith(" engine adapter kiro-ide review-freeze");
+      expect(manifest.hooks[0].action.command).toEndWith(" engine adapter kiro-ide guard-tool-call");
     }
+    // It runs for the write and shell tools the adapter forwards (t218 pins
+    // that the two sets agree), not for reads.
+    const member = KIRO_HOOK_GROUPS["guard-tool-call"].find((m) => m.target === "review-freeze");
+    const matcher = new RegExp(member?.matcher ?? "^$");
+    expect(matcher.test("fs_write") && matcher.test("execute_bash")).toBe(true);
+    expect(matcher.test("read_file")).toBe(false);
     expect(existsSync(join(REPO_ROOT, "dist", "kiro-ide", ".kiro", "hooks", "aidlc-review-freeze.ts"))).toBe(true);
     const adapter = readFileSync(
       join(REPO_ROOT, "harness", "kiro-ide", "hooks", "aidlc-kiro-adapter.ts"),

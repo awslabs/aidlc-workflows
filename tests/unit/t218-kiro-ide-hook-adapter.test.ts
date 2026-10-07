@@ -38,7 +38,7 @@ import {
 import { hostname, tmpdir } from "node:os";
 import { dirname, isAbsolute, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
-import { canonicalWriteTool, isKiroShellTool } from "../../harness/kiro-ide/hooks/aidlc-kiro-tool-names.ts";
+import { canonicalWriteTool, isKiroShellTool, KIRO_HOOK_GROUPS } from "../../harness/kiro-ide/hooks/aidlc-kiro-tool-names.ts";
 import {
   createIntent,
   readAllAuditShards,
@@ -2570,20 +2570,19 @@ describe("t218 Kiro IDE plan-approval enforcement", () => {
     }
   });
 
-  // Both registrations carry a matcher so Kiro starts them only for the tools
-  // the adapter forwards (the tool-name table's writes and shells; t245
-  // pins each matcher to the table), and each forwarded name reaches the guard.
+  // Both checks carry a matcher in the guard card (KIRO_HOOK_GROUPS), so the
+  // card runs them only for the tools the adapter forwards (the tool-name
+  // table's writes and shells; t245 pins each matcher to the table), and each
+  // forwarded name reaches the guard.
   test("the guard matcher selects exactly the tools the adapter forwards", () => {
     const forwardedNames = [
       "write", "fs_write", "create_file", "str_replace", "fs_append", "delete_file", "apply_patch", "edit_file",
       "execute_bash", "execute_pwsh", "shell",
     ];
     for (const name of forwardedNames) expect(canonicalWriteTool(name) !== "" || isKiroShellTool(name), name).toBe(true);
-    for (const file of ["aidlc-review-freeze.json", "aidlc-state-transition-guard.json"]) {
-      const hook = (JSON.parse(readFileSync(join(REPO_ROOT, "harness", "kiro-ide", "hooks", file), "utf-8")) as {
-        hooks: Array<{ matcher?: string }>;
-      }).hooks[0];
-      const matcher = new RegExp(hook.matcher ?? "");
+    for (const file of ["review-freeze", "state-transition-guard"]) {
+      const member = KIRO_HOOK_GROUPS["guard-tool-call"].find((m) => m.target === file);
+      const matcher = new RegExp(member?.matcher ?? "^$");
       for (const name of forwardedNames) expect(matcher.test(name), `${file} ${name}`).toBe(true);
       // Observed Kiro names the adapter does not forward.
       for (const name of [
