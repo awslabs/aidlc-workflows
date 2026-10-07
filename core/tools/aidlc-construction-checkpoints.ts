@@ -63,6 +63,7 @@ import {
   setField,
   sortAttemptEvents,
   sourceListingChangedPaths,
+  stageJumpReaches,
   unitLifecycleSnapshot,
   unitMajorConstructionStageSlugs,
   unitSkippedUnits,
@@ -503,8 +504,11 @@ function snapshot(
   // reads it.
   let accepting: boolean | null = null;
   const acceptsChanges = (): boolean => (accepting ??= guardPolicyAcceptsChanges(projectDir, state));
+  // A jump counts only when it reaches one of this Unit's stages: a jump back
+  // to a later stage leaves the Unit's approval as the person gave it.
   const gate = onlyLatest(rows.filter((row) => {
-    if (row.event === "WORKFLOW_STARTED" || row.event === "STAGE_JUMPED") return true;
+    if (row.event === "WORKFLOW_STARTED") return true;
+    if (row.event === "STAGE_JUMPED") return stages.some((stage) => stageJumpReaches(row.block, stage));
     if (row.event !== "GATE_APPROVED" && row.event !== "GATE_REJECTED") return false;
     const rowUnit = auditBlockField(row.block, "Unit");
     if (rowUnit !== null && rowUnit !== unit) return false;

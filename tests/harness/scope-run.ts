@@ -1184,9 +1184,20 @@ export class AgentStandIn {
   review(d: Directive): void {
     const stage = String(d.stage);
     const unit = typeof d.unit === "string" ? d.unit : null;
-    // A stage done again is reviewed at the next pass.
+    // A stage done again is reviewed at the next pass. After a jump or a
+    // reopen the engine starts the count again, and a wrong iteration is
+    // answered with the one it names, as the skill says.
     const last = this.reviews.get(`${stage} ${unit ?? ""}`);
-    this.reviewPass(stage, unit, String(d.reviewer), last ? last.iteration + 1 : 1);
+    const iteration = last ? last.iteration + 1 : 1;
+    try {
+      this.reviewPass(stage, unit, String(d.reviewer), iteration);
+    } catch (error) {
+      const named = error instanceof ScopeRunRefused
+        ? Number(/Retry with --iteration (\d+)/.exec(error.refusal)?.[1] ?? Number.NaN)
+        : Number.NaN;
+      if (!Number.isInteger(named) || named === iteration) throw error;
+      this.reviewPass(stage, unit, String(d.reviewer), named);
+    }
     this.hooks.afterReview?.(stage, unit, this);
   }
 
@@ -1270,7 +1281,11 @@ export class AgentStandIn {
     if (!planPath || !tests) this.fail("code-generation names no plan or test instructions", d);
     const contract = this.host.bash("bun .claude/tools/aidlc-testing-posture.ts render");
     if (contract.status !== 0) this.fail(`testing posture render failed: ${clip(contract.stderr)}`, d);
-    this.host.write(planPath, codePlanText(contract.stdout));
+    // A revision puts the requested change in the plan as its own step
+    // (Code Generation Step 3), so the plan asked about is the revised one.
+    const plan = d.plan_approval as { status?: string; feedback?: string } | undefined;
+    const change = plan?.status === "revise" ? plan.feedback ?? "Apply the requested change" : null;
+    this.host.write(planPath, codePlanText(contract.stdout, change));
     const name = typeof d.unit === "string" ? d.unit : "scope-run";
     this.plans.set(name, planPath);
     this.host.write(tests, `# Unit Test Instructions\n\n- Run: \`bun test test/${name}.test.ts\`\n`);
@@ -1468,8 +1483,9 @@ function reviewText(reviewer: string, iteration = 1): string {
   return `## Review\n\n**Verdict:** READY\n**Reviewer:** ${reviewer}\n**Date:** 2026-01-01T00:00:00Z\n**Iteration:** ${iteration}\n\n### Findings\n\n**Prior findings**\n\n| ID | Now | Severity | Note |\n|---|---|---|---|\n\n**New findings**\n\n| Severity | Location | Finding | Required action |\n|---|---|---|---|\n\n### Summary\n\nReady.\n`;
 }
 
-function codePlanText(contract: string): string {
-  return `# Code Generation Plan\n\n## Summary\n\n- Builds: one function and its test\n- Touches: src/scope-run.ts, test/scope-run.test.ts\n- Tests: 1 unit test\n\n## Steps\n\n- [ ] Step 1: Write src/scope-run.ts (FR1)\n- [ ] Step 2: Write and run test/scope-run.test.ts (FR1)\n\n${contract.trim()}\n`;
+function codePlanText(contract: string, change: string | null = null): string {
+  const revised = change === null ? "" : `- [ ] Step 3: ${change.replace(/\s+/g, " ").trim()}\n`;
+  return `# Code Generation Plan\n\n## Summary\n\n- Builds: one function and its test\n- Touches: src/scope-run.ts, test/scope-run.test.ts\n- Tests: 1 unit test\n\n## Steps\n\n- [ ] Step 1: Write src/scope-run.ts (FR1)\n- [ ] Step 2: Write and run test/scope-run.test.ts (FR1)\n${revised}\n${contract.trim()}\n`;
 }
 
 /** The active intent's record dir and state file. */

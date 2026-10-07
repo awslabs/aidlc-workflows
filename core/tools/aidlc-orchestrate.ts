@@ -296,6 +296,7 @@ import {
   withoutEntryWord,
   isBareContinuationPhrase,
   sortAttemptEvents,
+  stageJumpReaches,
   resolveBoltDag,
   type BoltDagResolution,
   resolveCeremony,
@@ -10695,6 +10696,34 @@ function unitMajorWalkBeat(
   };
 }
 
+// The per-unit block of a solo unit-major walk once Current Stage has moved
+// on past it to a later Construction stage (Build and Test, say), as a walk
+// whose Units are all covered; null on the same conditions as
+// unitMajorWalkBeat. From here a jump back that names one Unit reopens its
+// step for that Unit only.
+function unitMajorFinishedWalk(
+  projectDir: string,
+  scope: string,
+  stateContent: string,
+  currentSlug: string,
+): { step: UnitMajorWalkStep; block: GraphStage[]; context: UnitWorkContext } | null {
+  if (readConstructionIteration(stateContent) !== "unit-major") return null;
+  if (isTeamUnitOwnership(stateContent)) return null;
+  const node = nodeForSlug(currentSlug);
+  if (!node || isPerUnit(node) || node.phase !== "construction") return null;
+  const checkpoints = checkpointPolicyEnabled(stateContent);
+  if (checkpoints && getField(stateContent, "Construction Execution") === "swarm") return null;
+  if (usesStageLevelPerUnitArtifacts(scope, stateContent)) return null;
+  const context = unitWorkContext(projectDir);
+  if (!context || context.units.length === 0) return null;
+  const block = constructionUnitMajorBlock(scope, stateContent, checkpoints);
+  const graph = loadGraph();
+  const at = (slug: string): number => graph.findIndex((stage) => stage.slug === slug);
+  const last = block.at(-1);
+  if (!last || at(currentSlug) <= at(last.slug)) return null;
+  return { step: { kind: "covered" }, block, context };
+}
+
 // What the stage-work check needs about the Unit DAG, resolved once per call.
 type UnitWorkContext = {
   units: string[];
@@ -10835,7 +10864,8 @@ function redoChosenForUnitStep(projectDir: string, slug: string, unit: string): 
     auditBlockField(row.block, "Decision") === "redo" &&
     auditBlockField(row.block, "Source") === REDO_REUSE_SOURCE;
   const spends = (row: AuditShardEvent): boolean => {
-    if (row.event === "STAGE_JUMPED" || row.event === "WORKFLOW_STARTED") return true;
+    if (row.event === "WORKFLOW_STARTED") return true;
+    if (row.event === "STAGE_JUMPED") return stageJumpReaches(row.block, slug);
     if (auditBlockField(row.block, "Unit") !== unit) return false;
     if (row.event === "UNIT_STARTED") return auditBlockField(row.block, "Stage") === slug;
     if (row.event !== "GATE_REJECTED") return false;
@@ -10853,7 +10883,8 @@ function redoChosenForUnitStep(projectDir: string, slug: string, unit: string): 
 
 // A jump back to a per-unit stage a Unit already finished, in a solo unit-major
 // walk (#1411). Current Stage stays on the first per-unit stage there, or has
-// moved on to a later per-unit stage's gate, so that jump would be a
+// moved on to a later per-unit stage's gate (or, for a named Unit, past the
+// block to Build and Test, say), so that jump would be a
 // stage-wide jump that starts every Unit's finished work over. It reopens the
 // stage for the Unit in flight only, the way a Unit checkpoint's Request
 // Changes redoes one Unit, unless the person named a Unit (`--unit`) or asked
@@ -10870,7 +10901,10 @@ function unitMajorReopen(
   flags: ParsedFlags,
 ): PrintDirective | { kind: "error"; message: string } | "route" | null {
   const currentSlug = getField(stateContent, "Current Stage")?.trim() ?? "";
-  const walk = unitMajorWalkBeat(projectDir, scope, stateContent, currentSlug);
+  // Past the block, only a named Unit is reopened here: for every Unit the
+  // backward jump redoes the target and keeps the steps before it.
+  const walk = unitMajorWalkBeat(projectDir, scope, stateContent, currentSlug) ??
+    (flags.jumpUnit !== undefined ? unitMajorFinishedWalk(projectDir, scope, stateContent, currentSlug) : null);
   if (!walk) return null;
   const blockSlugs = walk.block.map((stage) => stage.slug);
   const targetIndex = blockSlugs.indexOf(targetSlug);
@@ -11660,8 +11694,10 @@ function unitChoiceRefusal(stateContent: string, targetSlug: string): string {
     : readConstructionIteration(stateContent) === "unit-major" && !checkpointPolicyEnabled(stateContent)
       ? `${name} was approved for every unit at its stage approval, so it can only be reopened for every unit. ` +
         "Nothing changed. Say 'for every unit' to do that."
-      : `${name} can be reopened for one unit only while Construction builds one unit at a time; here it can ` +
-        "only be reopened for every unit. Nothing changed. Say 'for every unit' to do that.";
+      : readConstructionIteration(stateContent) === "unit-major"
+        ? `${name} can only be reopened for every unit from here. Nothing changed. Say 'for every unit' to do that.`
+        : `${name} can be reopened for one unit only while Construction builds one unit at a time; here it can ` +
+          "only be reopened for every unit. Nothing changed. Say 'for every unit' to do that.";
   return `Run nothing. Tell the person in one line: "${why}" If they say 'for every unit', ` +
     `run \`next --stage ${targetSlug} --every-unit\`.`;
 }

@@ -217,9 +217,11 @@ function parseFlags(
 // starts every Unit's finished work over. Reopening writes, per Unit, the same
 // Unit-scoped GATE_REJECTED a Unit checkpoint's Request Changes writes: a new
 // attempt for exactly that Unit and stage, so the walk takes only that Unit
-// through it again. Every other Unit keeps its finished, approved work. Nothing
-// else changes: no checkbox, no Current Stage, no files. The active Unit's
-// lifecycle mirror is dropped; the next `unit start` writes it again.
+// through it again. Every other Unit keeps its finished, approved work. Inside
+// the walk nothing else changes: no checkbox, no Current Stage, no files. Once
+// the walk has moved on to a later stage, the work moves back to the target.
+// The active Unit's lifecycle mirror is dropped; the next `unit start` writes
+// it again.
 
 function handleReopen(args: string[]): void {
   const flags = parseFlags(args);
@@ -251,6 +253,8 @@ function handleReopen(args: string[]): void {
       "Gate Stages": stages.join(", "),
       "Gate Scope": "unit-end",
       Unit: unit,
+      // Marks the row as the person's redo, not a change asked for at a gate.
+      Reopen: flags.via === "redo" ? "redo" : "jump",
       Feedback: flags.via === "redo"
         ? `Redid ${stageName} for unit ${unit} at the person's request (redo on re-entry).`
         : `Reopened ${stageName} for unit ${unit} at the person's request (/aidlc --stage ${targetSlug}).`,
@@ -271,8 +275,28 @@ function handleReopen(args: string[]): void {
     content = removeField(content, field);
   }
   content = setField(content, "Last Updated", isoTimestamp());
+  // From a later stage of the same phase (Build and Test, say) the work moves
+  // back to the target as a backward jump moves it, but with no STAGE_JUMPED:
+  // only these Units start the step again.
+  const current = getField(content, "Current Stage")?.trim() ?? "";
+  const from = findStageBySlug(current);
+  let stagesReset: string[] = [];
+  if (from && !isPerUnitStage(from) && from.phase === targetStage.phase && stageIndex(current) > stageIndex(targetSlug)) {
+    const scope = flags.scope || getField(content, "Scope") || "feature";
+    const scopeMapping = loadScopeMapping()[scope];
+    if (!scopeMapping) error(`Unknown scope: ${scope}`);
+    const suffixes = scope === (getField(content, "Scope") || "")
+      ? parseStateStageSuffixes(content)
+      : new Map<string, "EXECUTE" | "SKIP">();
+    const moved = movedState(content, targetSlug, targetStage, "backward", scope, suffixes, scopeMapping);
+    content = moved.content;
+    stagesReset = moved.stagesReset;
+  }
   writeStateFile(pd, content);
-  console.log(JSON.stringify({ reopened: targetSlug, stages, units, state_updated: true, audit_appended: true }));
+  console.log(JSON.stringify({
+    reopened: targetSlug, stages, units, ...(stagesReset.length > 0 ? { stages_reset: stagesReset } : {}),
+    state_updated: true, audit_appended: true,
+  }));
 }
 
 // --- Subcommand: resolve ---
@@ -397,55 +421,29 @@ function handleResolve(args: string[]): void {
   );
 }
 
-// --- Subcommand: execute ---
-
-function handleExecute(args: string[]): void {
-  const flags = parseFlags(args);
-  const pd = resolveProjectDir(projectDir);
-  let content = readStateFile(pd);
-
-  const targetSlug = flags.target;
-  if (!targetSlug) error("Usage: execute --target <slug> --direction <forward|backward|redo> [--units <unit[,unit...]> [--stages <slug[,slug...]>]] [--scope <scope>]");
-
-  const direction = flags.direction;
-  if (
-    direction !== "forward" &&
-    direction !== "backward" &&
-    direction !== "redo"
-  ) {
-    error(`Invalid direction: ${flags.direction}. Valid: forward, backward, redo`);
-  }
-
-  const scope = flags.scope || getField(content, "Scope") || "feature";
-  const scopeMapping = loadScopeMapping()[scope];
-  if (!scopeMapping) error(`Unknown scope: ${scope}`);
-  // The live plan's suffix overrides - execute resolves the same EFFECTIVE
-  // plan resolve does (see effectiveAction), so a recomposed stage is
-  // reachable and a recompose-SKIPped one refused here too. Same
-  // scope-matches-state guard as resolve: a foreign --scope consults the
-  // static grid only.
-  const suffixes =
-    scope === (getField(content, "Scope") || "")
-      ? parseStateStageSuffixes(content)
-      : new Map<string, "EXECUTE" | "SKIP">();
-
-  const targetStage = findStageBySlug(targetSlug);
-  if (!targetStage) error(`Unknown stage: ${targetSlug}`);
-
-  // Scope validation - target must be EXECUTE on the EFFECTIVE plan (mirrors
-  // resolve). Without this, an orchestrator bypassing resolve can land the
-  // workflow on a stage the plan says should be skipped.
-  if (effectiveAction(suffixes, scopeMapping, targetSlug) === "SKIP") {
-    error(
-      `Stage "${targetSlug}" is skipped for scope "${scope}". Use \`next --stage ${targetSlug}\`, which handles a stage the plan skips.`
-    );
-  }
-
-  if (flags.units !== undefined) {
-    executeUnitsForward(pd, flags, targetStage, direction);
-    return;
-  }
-
+// The state a jump to `targetSlug` leaves: the stages it skips (forward) or
+// resets (backward: the target and every later stage on the effective plan),
+// the target in progress, and Current Stage with its projections on the
+// target. `execute` writes it with its STAGE_JUMPED; a reopen from a later
+// stage writes it with the Units' own rejections instead.
+function movedState(
+  content: string,
+  targetSlug: string,
+  targetStage: StageEntry,
+  direction: "forward" | "backward" | "redo",
+  scope: string,
+  suffixes: Map<string, "EXECUTE" | "SKIP">,
+  scopeMapping: { stages: Record<string, string> },
+): {
+  content: string;
+  stagesSkipped: string[];
+  stagesReset: string[];
+  currentSlug: string;
+  currentStageForPhase: StageEntry | undefined;
+  crossesPhaseBoundary: boolean;
+  completedCount: number;
+  timestamp: string;
+} {
   const graph = loadStageGraph();
   const targetIdx = stageIndex(targetSlug);
   const checkboxes = parseCheckboxes(content);
@@ -456,16 +454,7 @@ function handleExecute(args: string[]): void {
   const stagesSkipped: string[] = [];
   const stagesReset: string[] = [];
 
-  // Get current stage for audit
   const currentSlug = getField(content, "Current Stage") || "state-init";
-  // Where the person was: the active Unit's own step in a unit-at-a-time walk,
-  // which Current Stage does not name, or else the step the engine last put to
-  // them (a Unit's code plan, say) while it still matches this state.
-  const unitStage = getField(content, "Unit Stage")?.trim() ?? "";
-  const shownStage = readActiveDirectiveMarker(pd, content)?.stage?.trim() ?? "";
-  const cameFrom = graph.some((node) => node.slug === unitStage)
-    ? unitStage
-    : shownStage !== targetSlug && graph.some((node) => node.slug === shownStage) ? shownStage : currentSlug;
 
   // States that count as "in-flight" (skip on forward jump, reset on backward jump)
   const IN_FLIGHT_STATES: CheckboxState[] = [
@@ -612,6 +601,75 @@ function handleExecute(args: string[]): void {
     }
   }
   content = setField(content, "Last Completed Stage", lastCompleted);
+  return {
+    content, stagesSkipped, stagesReset, currentSlug, currentStageForPhase,
+    crossesPhaseBoundary, completedCount, timestamp,
+  };
+}
+
+// --- Subcommand: execute ---
+
+function handleExecute(args: string[]): void {
+  const flags = parseFlags(args);
+  const pd = resolveProjectDir(projectDir);
+  let content = readStateFile(pd);
+
+  const targetSlug = flags.target;
+  if (!targetSlug) error("Usage: execute --target <slug> --direction <forward|backward|redo> [--units <unit[,unit...]> [--stages <slug[,slug...]>]] [--scope <scope>]");
+
+  const direction = flags.direction;
+  if (
+    direction !== "forward" &&
+    direction !== "backward" &&
+    direction !== "redo"
+  ) {
+    error(`Invalid direction: ${flags.direction}. Valid: forward, backward, redo`);
+  }
+
+  const scope = flags.scope || getField(content, "Scope") || "feature";
+  const scopeMapping = loadScopeMapping()[scope];
+  if (!scopeMapping) error(`Unknown scope: ${scope}`);
+  // The live plan's suffix overrides - execute resolves the same EFFECTIVE
+  // plan resolve does (see effectiveAction), so a recomposed stage is
+  // reachable and a recompose-SKIPped one refused here too. Same
+  // scope-matches-state guard as resolve: a foreign --scope consults the
+  // static grid only.
+  const suffixes =
+    scope === (getField(content, "Scope") || "")
+      ? parseStateStageSuffixes(content)
+      : new Map<string, "EXECUTE" | "SKIP">();
+
+  const targetStage = findStageBySlug(targetSlug);
+  if (!targetStage) error(`Unknown stage: ${targetSlug}`);
+
+  // Scope validation - target must be EXECUTE on the EFFECTIVE plan (mirrors
+  // resolve). Without this, an orchestrator bypassing resolve can land the
+  // workflow on a stage the plan says should be skipped.
+  if (effectiveAction(suffixes, scopeMapping, targetSlug) === "SKIP") {
+    error(
+      `Stage "${targetSlug}" is skipped for scope "${scope}". Use \`next --stage ${targetSlug}\`, which handles a stage the plan skips.`
+    );
+  }
+
+  if (flags.units !== undefined) {
+    executeUnitsForward(pd, flags, targetStage, direction);
+    return;
+  }
+
+  const graph = loadStageGraph();
+  // Get current stage for audit
+  const currentSlug = getField(content, "Current Stage") || "state-init";
+  // Where the person was: the active Unit's own step in a unit-at-a-time walk,
+  // which Current Stage does not name, or else the step the engine last put to
+  // them (a Unit's code plan, say) while it still matches this state.
+  const unitStage = getField(content, "Unit Stage")?.trim() ?? "";
+  const shownStage = readActiveDirectiveMarker(pd, content)?.stage?.trim() ?? "";
+  const cameFrom = graph.some((node) => node.slug === unitStage)
+    ? unitStage
+    : shownStage !== targetSlug && graph.some((node) => node.slug === shownStage) ? shownStage : currentSlug;
+  const moved = movedState(content, targetSlug, targetStage, direction, scope, suffixes, scopeMapping);
+  content = moved.content;
+  const { stagesSkipped, stagesReset, currentStageForPhase, crossesPhaseBoundary, completedCount, timestamp } = moved;
 
   // One content-addressed snapshot is shared by both rows in the jump
   // transition. The companion STAGE_STARTED repeats the SAME authority rather

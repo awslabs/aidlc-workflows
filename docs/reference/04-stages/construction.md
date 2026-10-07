@@ -1309,8 +1309,9 @@ with the aidlc-devsecops-agent providing security testing expertise.
        feasible path out of scope on an impact-unestimated effort assumption.
     3. **Autonomous bounded loop-back** -- if `Construction Autonomy Mode:
        autonomous`, an impact-estimated fix exists, and fewer than 3 entries exist under
-       `## Loop-Back Log`: record the diagnosis + impact-estimated fix, jump
-       back to code-generation via the engine, and replay forward through its
+       `## Loop-Back Log`: record the diagnosis + impact-estimated fix, reopen
+       code-generation via the engine for the Unit(s) the fix names (every Unit
+       only when the cause spans them all), and replay forward through its
        settlement-aware route per the construction protocol module
        (`aidlc-common/protocols/stage-protocol-construction.md`),
        "Build-and-Test failure loop-back". The failed run's gate is not
@@ -1323,15 +1324,18 @@ with the aidlc-devsecops-agent providing security testing expertise.
        Accept failure / Abort) when a candidate fix exists, or the no-fix
        2-option variant (Accept failure / Abort) when rung 2 found none.
 
-    **Loop-back replay routing:** If Code Generation never used unit lifecycle
-    receipts, preserved artifacts can take the all-covered `gate: true` fast
-    path; apply the planned fix and deterministic Modify/Keep decisions before
-    that gate. Once any lifecycle row exists, receipt mode is sticky and the
+    **Loop-back replay routing:** If Construction checkpoints are off and Code
+    Generation never used unit lifecycle receipts, preserved artifacts can take
+    the all-covered `gate: true` fast path; apply the planned fix and
+    deterministic Modify/Keep decisions before that gate. With checkpoints on
+    (receipts are required from the first Unit), or once any lifecycle row
+    exists, receipt mode is sticky and the
     jump re-emits per-Unit work: re-mint `unit start` / `unit complete`, apply
     Modify to targeted Units and Keep to the rest, and run the declared reviewer
     per Unit. Both paths MUST record a fresh current-attempt
-    `REVIEW_COMPLETED` for every applicable Unit before the settle/approval
-    gate because `STAGE_JUMPED` invalidates all earlier reviews. Under
+    `REVIEW_COMPLETED` for every reopened Unit before the settle/approval
+    gate because the reopen invalidates those Units' earlier reviews; Units the
+    fix does not name keep their work and approvals. Under
     unit-major the swarm never fires; replay follows the serial per-Unit walk.
     A revised Code Generation plan still requires fresh human Plan Approval.
 

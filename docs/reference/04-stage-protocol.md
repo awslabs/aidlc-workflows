@@ -167,15 +167,18 @@ protocol module (`aidlc-common/protocols/stage-protocol-construction.md`,
 "Build-and-Test failure loop-back" -- the bounded 3.6 to 3.5 repair loop with
 its impact-estimated halt-and-ask question).
 
-The loop-back has two deterministic re-entry routes. If Code Generation has
-never used lifecycle receipts, preserved artifacts can settle every Unit and
-the engine may emit the all-covered `gate: true` fast path. Once any lifecycle
-row exists, receipt mode is sticky: the jump invalidates the old settlement
-receipts and the engine re-emits per-Unit work so `unit start` / `unit complete`
+The loop-back reopens Code Generation for the Unit(s) the diagnosis names;
+every other Unit keeps its finished work, reviews and approvals, and only a
+cause that spans every Unit reopens it for all of them. It has two
+deterministic re-entry routes. If Construction checkpoints are off and Code
+Generation has never used lifecycle receipts, preserved artifacts can settle every Unit and
+the engine may emit the all-covered `gate: true` fast path. With checkpoints on,
+or once any lifecycle row exists, receipt mode applies and is sticky: the reopen invalidates the reopened Units'
+settlement receipts and the engine re-emits their per-Unit work so `unit start` / `unit complete`
 are minted again. Both routes apply the planned fix and deterministic
 Modify/Keep decisions before the gate and MUST produce a fresh
-`REVIEW_COMPLETED` for every applicable Unit, because `STAGE_JUMPED` invalidates
-all earlier reviews and the completion precondition refuses stale coverage.
+`REVIEW_COMPLETED` for every reopened Unit, because the reopen invalidates
+their earlier reviews and the completion precondition refuses stale coverage.
 Under unit-major the replay stays on this serial walk and never swarms.
 
 The jump opens a new stage attempt, so Plan Approval IS asked again for the

@@ -12604,9 +12604,8 @@ export function summaryAttemptFloors(
       );
     }
     if (eventWorkflow?.startsWith("single-stage:")) return false;
-    if (entry.event === "WORKFLOW_STARTED" || entry.event === "STAGE_JUMPED") {
-      return true;
-    }
+    if (entry.event === "WORKFLOW_STARTED") return true;
+    if (entry.event === "STAGE_JUMPED") return stageJumpReaches(entry.block, stageSlug);
     return (
       auditBlockField(entry.block, "Stage") === stageSlug &&
       entry.event === "STAGE_STARTED" &&
@@ -13848,7 +13847,8 @@ export function hasPendingDecision(
   if (workflowAttempt) {
     const boundary = events.findLastIndex(
       (event) =>
-        event.event === "WORKFLOW_STARTED" || event.event === "STAGE_JUMPED",
+        event.event === "WORKFLOW_STARTED" ||
+        (event.event === "STAGE_JUMPED" && stageJumpReaches(event.block, stage)),
     );
     if (boundary >= 0) start = afterBoundary(boundary);
   } else if (afterEvent) {
@@ -17515,7 +17515,7 @@ function sourceBaselineBoundaryValue(
   }
   const qualifies =
     event.event === "WORKFLOW_STARTED" ||
-    event.event === "STAGE_JUMPED" ||
+    (event.event === "STAGE_JUMPED" && stageJumpReaches(event.block, stageSlug)) ||
     (
     event.event === "STAGE_STARTED" &&
     !unitMajor &&
@@ -17620,7 +17620,7 @@ export function reviewInvalidationAttemptView(
     events.filter(
       (event) =>
         event.event === "WORKFLOW_STARTED" ||
-        event.event === "STAGE_JUMPED" ||
+        (event.event === "STAGE_JUMPED" && stageJumpReaches(event.block, stageSlug)) ||
         ((event.event === "GATE_APPROVED" ||
           event.event === "GATE_REJECTED") &&
           auditBlockField(event.block, "Stage") === stageSlug),
@@ -17718,8 +17718,8 @@ export function reviewAttemptWindow(
   let floorIdx = -1;
   for (let i = 0; i < events.length; i++) {
     const event = events[i];
-    let boundary =
-      event.event === "WORKFLOW_STARTED" || event.event === "STAGE_JUMPED";
+    let boundary = event.event === "WORKFLOW_STARTED" ||
+      (event.event === "STAGE_JUMPED" && stageJumpReaches(event.block, stage.slug));
     if (!boundary && auditBlockField(event.block, "Stage") === stage.slug) {
       boundary =
         (event.event === "GATE_REJECTED" &&
@@ -18051,7 +18051,10 @@ export function reviewAttemptAccounting(
       }
       continue;
     }
-    if (entry.event === "WORKFLOW_STARTED" || entry.event === "STAGE_JUMPED") {
+    if (
+      entry.event === "WORKFLOW_STARTED" ||
+      (entry.event === "STAGE_JUMPED" && stageJumpReaches(entry.block, stage.slug))
+    ) {
       if (teamOwnership && tiedAcrossShards(i)) {
         ambiguity = `cross-shard boundary tie at ${entry.timestamp}`;
       }
@@ -19703,7 +19706,7 @@ export function freshReviewReceipts(
       if (auditBlockField(events[i].block, "Workflow")?.startsWith("single-stage:")) continue;
       if (
         events[i].event === "WORKFLOW_STARTED" ||
-        events[i].event === "STAGE_JUMPED"
+        (events[i].event === "STAGE_JUMPED" && stageJumpReaches(events[i].block, stage.slug))
       ) {
         boundary = i;
       }
@@ -24898,7 +24901,7 @@ export function currentStageSourceBaseline(
   for (let index = 0; index < events.length; index++) {
     if (
       events[index].event === "WORKFLOW_STARTED" ||
-      events[index].event === "STAGE_JUMPED"
+      (events[index].event === "STAGE_JUMPED" && stageJumpReaches(events[index].block, stageSlug))
     ) {
       boundary = index;
     }
@@ -32716,7 +32719,7 @@ function pipelineAttemptFloor(
       !singleRun &&
       (
         entry.event === "WORKFLOW_STARTED" ||
-        entry.event === "STAGE_JUMPED" ||
+        (entry.event === "STAGE_JUMPED" && stageJumpReaches(entry.block, stageSlug)) ||
         (
           entry.event === "GATE_REJECTED" &&
           !rejectionKeepsReceipts &&
@@ -33179,9 +33182,8 @@ export function unitGateStatus(
       end++;
     }
     const relevant = rows.slice(start, end).filter((row) => {
-      if (row.event === "WORKFLOW_STARTED" || row.event === "STAGE_JUMPED") {
-        return true;
-      }
+      if (row.event === "WORKFLOW_STARTED") return true;
+      if (row.event === "STAGE_JUMPED") return stageJumpReaches(row.block, stage);
       if (
         row.event !== "STAGE_AWAITING_APPROVAL" &&
         row.event !== "STAGE_REVISING" &&
@@ -33397,6 +33399,24 @@ export function unitLifecycleRunFloorForProject(
   return latestMainWorkflowStageRunFloorFromRows(rows, slug, unitMajor, floored, true);
 }
 
+// Whether a STAGE_JUMPED row starts a new attempt for `slug`. A jump resets
+// its Target and every stage after it in the stage graph (`jump execute`), so
+// a stage before the Target keeps its attempt: a jump back to Code Generation
+// leaves each Unit's Functional Design as it was. A row whose Target, or a
+// stage, the graph does not know, or a graph that cannot be read, reaches
+// every stage.
+export function stageJumpReaches(block: string, slug: string): boolean {
+  const name = auditBlockField(block, "Target");
+  if (!name || name === slug) return true;
+  try {
+    const target = stageIndex(name);
+    const at = stageIndex(slug);
+    return target === -1 || at === -1 || at >= target;
+  } catch {
+    return true;
+  }
+}
+
 // Callers may hand in raw readAuditShardEvents rows, which are shard-major,
 // so the boundary order is settled here and never trusted from input.
 function latestMainWorkflowStageRunFloorFromRows(
@@ -33424,12 +33444,23 @@ function latestMainWorkflowStageRunFloorFromRows(
   const startOrdinals = new Map(
     sortAttemptEvents(rowsInput.filter(stageStart)).map((row, index) => [row, index + 1]),
   );
+  const byTime = (a: AuditShardEvent, b: AuditShardEvent): number => {
+    if (a.timestamp !== b.timestamp) {
+      return a.timestamp < b.timestamp ? -1 : 1;
+    }
+    if (a.shardIndex !== b.shardIndex) return a.shardIndex - b.shardIndex;
+    return a.pos - b.pos;
+  };
+  // A jump keeps its place among every jump, so its token is the same for
+  // each stage it reaches.
+  const jumpOrdinals = new Map(
+    rowsInput.filter((row) => row.event === "STAGE_JUMPED").sort(byTime).map((row, index) => [row, index + 1]),
+  );
   const rows = rowsInput
     .filter((row) => {
       if (!relevant.has(row.event)) return false;
-      if (row.event === "WORKFLOW_STARTED" || row.event === "STAGE_JUMPED") {
-        return true;
-      }
+      if (row.event === "WORKFLOW_STARTED") return true;
+      if (row.event === "STAGE_JUMPED") return stageJumpReaches(row.block, slug);
       if (row.event === "GATE_REJECTED") {
         return gateRejectionMatchesAttempt(row.block, slug, unit);
       }
@@ -33437,13 +33468,7 @@ function latestMainWorkflowStageRunFloorFromRows(
         (stageFloored === null || stageFloored.has(row)) &&
         (unitFloored === null || !unitFloored.has(row));
     });
-  rows.sort((a, b) => {
-    if (a.timestamp !== b.timestamp) {
-      return a.timestamp < b.timestamp ? -1 : 1;
-    }
-    if (a.shardIndex !== b.shardIndex) return a.shardIndex - b.shardIndex;
-    return a.pos - b.pos;
-  });
+  rows.sort(byTime);
   if (rows.length === 0) return "unstarted#0";
 
   const latestTimestamp = rows[rows.length - 1].timestamp;
@@ -33476,7 +33501,9 @@ function latestMainWorkflowStageRunFloorFromRows(
   for (const row of rows) {
     const ordinal = row.event === "STAGE_STARTED"
       ? startOrdinals.get(row) ?? 0
-      : (ordinals.get(row.event) ?? 0) + 1;
+      : row.event === "STAGE_JUMPED"
+        ? jumpOrdinals.get(row) ?? 0
+        : (ordinals.get(row.event) ?? 0) + 1;
     ordinals.set(row.event, ordinal);
     floor = `${row.event}:${row.timestamp}#${ordinal}`;
   }
@@ -33561,7 +33588,9 @@ function stageStartsUnderUnitFlooring(
     const slug = auditBlockField(start.block, "Stage");
     if (!slug || auditBlockField(start.block, "Workflow")?.startsWith("single-stage:")) continue;
     const opened = (row: AuditShardEvent): boolean =>
-      before(row, start) && !boundaries.some((boundary) => before(row, boundary) && before(boundary, start));
+      before(row, start) && !boundaries.some((boundary) =>
+        (boundary.event === "WORKFLOW_STARTED" || stageJumpReaches(boundary.block, slug)) &&
+        before(row, boundary) && before(boundary, start));
     const first = !rows.some((other) =>
       other !== start && other.event === "STAGE_STARTED" &&
       auditBlockField(other.block, "Stage") === slug &&

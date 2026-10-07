@@ -68,7 +68,8 @@ it this way, never as Request Changes.
 **Build-and-Test failure loop-back, logged-but-not-jumped detection**: if
 `<record>/construction/build-and-test/test-results.md` contains a
 `## Loop-Back Log` whose latest entry has a planned fix but the audit shows
-no matching `STAGE_JUMPED` (Target: code-generation) after it, the session
+no matching `STAGE_JUMPED` (Target: code-generation) after it, and no
+unit-tagged `GATE_REJECTED` (Stage: code-generation) for a unit the fix names, the session
 died between logging and jumping — re-execute the jump per the construction
 protocol module (`aidlc-common/protocols/stage-protocol-construction.md`),
 "Build-and-Test failure loop-back", rather than re-diagnosing. On any resume,

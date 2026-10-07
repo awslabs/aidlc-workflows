@@ -453,18 +453,27 @@ run is deliberately left in-flight — its gate is NOT presented and its enabled
 learnings ritual DEFERS to the eventual passing run (when the `learnings` module is listed, the stage diary
 memory.md persists across the loop; otherwise no diary or ritual runs).
 
+**Which units go back.** The loop-back reopens Code Generation for the
+unit(s) the diagnosis names. Every other unit keeps its finished work,
+reviews, Plan Approval and checkpoint approval, and is not re-run, reviewed or
+asked about again. Only a cause that spans every unit, or cannot be pinned to
+one, reopens Code Generation for every unit. Either way the stages before Code
+Generation keep their work. Below, an "applicable unit" is a reopened one.
+
 **The loop-back counter** lives in test-results.md under `## Loop-Back Log`:
 the count of `### Loop-back N` entries IS the bound (max 3 per intent). This
-artifact ledger is chosen over parsing STAGE_JUMPED audit rows because it
+artifact ledger is chosen over parsing the jump's audit rows because it
 survives the backward jump (jumps reset checkboxes, never artifacts), is
 colocated with the diagnosis it must carry anyway, and is readable at the
-final gate; the STAGE_JUMPED rows the jump tool emits remain the
+final gate; the rows the jump tool emits (a `STAGE_JUMPED` for every unit, a
+unit-tagged `GATE_REJECTED` per reopened unit) remain the
 deterministic audit cross-check. The log is append-only. A human-directed
 backward jump does not count against the bound — only entries this protocol
 writes do.
 
-**Plan approval on replay.** The jump opens a new stage attempt, so the prior
-Plan Approval (bound to the previous attempt) cannot authorize the replay.
+**Plan approval on replay.** The jump opens a new stage attempt for each
+unit it reopens, so that unit's prior Plan Approval (bound to the previous
+attempt) cannot authorize the replay.
 Preserve the Loop-Back Log; after the repaired plan is written, `next` asks the
 person for Plan Approval again before generation (Code Generation Step 3). The
 human's "Retry with fix" choice authorizes the loop-back jump; it is not approval
@@ -475,15 +484,22 @@ impact-estimated fix identified):
 1. Append the `### Loop-back N — <ISO timestamp>` entry (Diagnosis /
    Root-cause stage / Planned fix / Estimated impact) to test-results.md and a matching
    Deviations entry to this stage's memory.md.
-2. Execute the jump through the ENGINE: run
-   `bun {{HARNESS_DIR}}/tools/aidlc-orchestrate.ts next --stage code-generation`.
-   The engine validates the target and answers with a `print` directive naming
-   the exact `aidlc-jump.ts execute --target code-generation --direction
-   backward --scope <scope>` command; run that printed command verbatim (it
-   resets the target + downstream stages, emits the canonical `STAGE_JUMPED`,
-   and pivots Current Stage), then re-run `next` and continue the forwarding
-   loop. Never compose the `execute` call by hand — the engine's print is the
-   validated form.
+2. Execute the jump through the ENGINE: for each unit the diagnosis names,
+   run `bun {{HARNESS_DIR}}/tools/aidlc-orchestrate.ts next --stage
+   code-generation --unit <unit>` and run the command its `print` directive
+   names verbatim before the next unit (an `aidlc-jump.ts reopen --target
+   code-generation ... --units <unit>` that reopens that unit and moves
+   Current Stage back to Code Generation). Only for a cause that spans every
+   unit, or names none, run `next --stage code-generation` instead: its print
+   names `aidlc-jump.ts execute --target code-generation --direction backward
+   --scope <scope>`, which resets Code Generation and the stages after it for
+   every unit and emits the canonical `STAGE_JUMPED`. When the print says Code
+   Generation can only be reopened for every unit (stage-by-stage
+   Construction), run the `next --stage code-generation --every-unit` it
+   names without asking: "Retry with fix" (or the autonomy grant) already
+   chose the repair. Then re-run `next` and continue the forwarding loop.
+   Never compose the `reopen` or `execute` call by hand: the engine's print
+   is the validated form.
 3. On the code-generation re-entry, follow "Re-entry settlement and review"
    below. Before any fix generation, the engine asks for Plan Approval of the
    repaired plan as required above; this is a human stop even though Construction
@@ -504,23 +520,26 @@ route depends on whether code-generation has ever used the unit lifecycle
 ledger:
 
 1. **Artifact-only workflow** — when no code-generation lifecycle row has ever
-   been emitted, artifacts remain the settlement signal. The re-entry `next`
+   been emitted and Construction checkpoints are off (with them on, receipts
+   are required from the first unit), artifacts remain the settlement signal. The re-entry `next`
    call can therefore emit the all-covered `gate: true` fast path. Apply the
    planned fix and the deterministic Modify/Keep decisions through the
    re-entry override BEFORE presenting or auto-approving that gate.
 2. **Receipt-mode workflow** — once any code-generation lifecycle row exists,
-   receipt mode is sticky. The jump invalidates the old attempt's settlement
-   receipts, so re-entry emits per-unit `run-stage` directives. For each
-   applicable unit, re-mint `unit start` / `unit complete`, applying the planned
-   fix to targeted units and the deterministic **Modify targeted / Keep rest**
-   Artifact Re-use decision inline as that unit re-runs.
+   receipt mode is sticky (with Construction checkpoints on it applies from the
+   first unit). The reopen invalidates each applicable unit's old
+   settlement receipts, so re-entry emits per-unit `run-stage` directives for
+   those units. For each applicable unit,
+   re-mint `unit start` / `unit complete`, applying the planned fix to targeted
+   units and the deterministic **Modify targeted / Keep rest** Artifact Re-use
+   decision inline as that unit re-runs.
 
 On BOTH paths, after every fix and re-use decision and BEFORE presenting or
 auto-approving the settle/approval gate, dispatch code-generation's declared
 reviewer for every applicable unit and record fresh current-attempt
-`REVIEW_COMPLETED` receipts. The backward jump's `STAGE_JUMPED` invalidates
-every prior review receipt, and the engine refuses approval while any applicable
-unit lacks a fresh one. Under unit-major iteration the autonomous swarm never
+`REVIEW_COMPLETED` receipts. The reopen invalidates each applicable unit's
+prior review receipts (every unit's, after the stage-wide `STAGE_JUMPED`), and
+the engine refuses approval while any applicable unit lacks a fresh one. Under unit-major iteration the autonomous swarm never
 fires: the replay follows the ordinary per-unit walk, re-mints lifecycle and
 review receipts per unit as above. Fresh target-bound Plan Approval remains
 a human stop for the repair; autonomy does not waive it.
