@@ -895,6 +895,28 @@ continuation at all: one `next`, one directive, `rules_content` inline. The
 cursor below governs the fallback, a bundle a team's memory files pushed past the
 cap, which arrives as `load-steering` parts of up to 20 KiB of rule text each.
 
+**Rules the chat already holds (#2023).** A run-stage carries `rules_held` (the
+bundle's digest) instead of `rules_content`, with no parts before it, when the
+chat that runs the command provably holds that exact text
+(`core/tools/aidlc-rules-held.ts`). The proof differs by tool, as measured live:
+
+| Tool | The chat holds the text when | Recorded by |
+|---|---|---|
+| Kiro CLI (`kiro`, 2.0 agent engine) | the conductor agent's `resources` glob covers the stage's files; the host sends them with every request, so an edit is seen at once | session start (agentSpawn) |
+| opencode | `opencode.json` `instructions` covers the stage's files; same per-request reload | session start (first chat message) |
+| Claude Code | every memory file Claude's import names (the @-import stub beside CLAUDE.md) still has the hash recorded at the chat's last load (startup, resume, clear, compact or fork); a mid-chat edit is not reloaded by the host, and a resume or fork after an edit can carry older copies | SessionStart |
+| Codex | this thread was handed the bundle in full, no SessionStart or PreCompact ran since, and the thread's rollout shows no `compacted` entry after it and the rule text it was handed since its last compaction rebuilds exactly to the bundle digest (Codex trims a command's output to the token budget the model asks for by cutting out the middle, which can leave valid JSON) | the engine, when a run-stage carries the text |
+
+On every tool, a step whose bundle differs from the one the chat's last step
+named gets the full text once, so a changed rule is in front of the agent (live
+on Kiro CLI, an agent holding the edited file still repeated its old behaviour
+when the step only named the rules). The command must also run inside that tool's chat (its own variable:
+`CLAUDE_CODE_SESSION_ID`, `KIRO_SESSION_ID`, `OPENCODE`, `CODEX_THREAD_ID`). Kiro
+IDE (its steering file's `#[[file:]]` references are not expanded), Cursor and
+Copilot always get the text, and so does every case where a record, a session id
+or a file is missing or unreadable. The records live in
+`aidlc/.aidlc-sessions/<session>.rules-held.json` and `.rules-delivered.json`.
+
 A harness whose host keeps less of one shell result declares a smaller budget as
 `directiveMaxBytes` in its `tools/data/harness.json`, and every directive stays
 at or under it. Copilot declares 19,000 bytes: VS Code's `run_in_terminal` tool

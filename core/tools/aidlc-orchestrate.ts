@@ -472,6 +472,7 @@ import {
   rulesContentEntries,
   type RuleContent,
 } from "./aidlc-steering.ts";
+import { chatHoldsRules, noteRulesDelivered } from "./aidlc-rules-held.ts";
 
 // Read the workflow state file if it exists, else null. The engine's `next` is
 // a pure read: an absent state file is a legitimate branch (no workflow yet),
@@ -1226,6 +1227,18 @@ function legacyKiroPlanApprovalSession(projectDir: string): string | null {
 function writePrepared(prepared: PreparedEmission): void {
   writeFileSync(1, `${prepared.serialized}\n`, "utf-8");
   prepared.personLinesSaid?.();
+  // What a run-stage handed the chat (the text, inline or after its parts, or
+  // a pointer), so the next step can tell whether the chat still holds it.
+  if (
+    prepared.transported.kind === "run-stage" && preparedRulesDelivery !== null && !isReadOnlyEngineProbe()
+  ) {
+    noteRulesDelivered(
+      preparedRulesDelivery.projectDir,
+      engineSessionId,
+      preparedRulesDelivery.bundle,
+      preparedRulesDelivery.held,
+    );
+  }
   // Stage work handed to the session, by any path (a fresh publication, the
   // same work handed over again, or a `continue` to the next part), ends a
   // switch's one-shot stop, so the loop holds it like any other work (#1263).
@@ -4788,6 +4801,10 @@ let retainedIssuedDirective = false;
 // The content identity of the transport this invocation prepared, so the marker
 // records what the conductor was actually handed.
 let preparedTransportIdentity: { bundle: string; directiveSha256: string } | null = null;
+// The rule bundle this invocation prepared, and whether the chat already held
+// it, so writing a run-stage that carried the text can record it (Codex, see
+// aidlc-rules-held.ts).
+let preparedRulesDelivery: { projectDir: string; bundle: string; held: boolean } | null = null;
 
 // "First run-stage of the workflow" — the deterministic signal D-E delivery
 // keys on. The engine is stateless per call, so it cannot track a "session";
@@ -6376,13 +6393,27 @@ function transportRunStage(
     ...new Set(loaded.content.map((entry) => entry.path)),
   ];
   const bundle = `sha256:${sha256(JSON.stringify(loaded.content))}`;
+  // The chat this command runs in already holds this exact text (#2023, see
+  // aidlc-rules-held.ts): the run-stage names the bundle instead of carrying
+  // it. Decided before the directive digest, so a delivery to a chat that holds
+  // the rules and one to a chat that does not are never mixed.
+  const held = loaded.content.length > 0 && chatHoldsRules(
+    route.codekbCtx.projectDir,
+    engineSessionId,
+    route.codekbCtx.space,
+    directive.rules_in_context,
+    bundle,
+  );
+  if (held) directive.rules_held = bundle;
+  const content = held ? [] : loaded.content;
+  preparedRulesDelivery = { projectDir: route.codekbCtx.projectDir, bundle, held };
   const directiveHash = sha256(JSON.stringify(directive));
   const persona = personaSentAhead(directive);
   if (persona !== null) delete directive.conductor_persona;
-  const ruleChunks = steeringChunks(loaded.content, steeringTextTargetBytes(directive));
+  const ruleChunks = steeringChunks(content, steeringTextTargetBytes(directive));
   // With the persona gone ahead the run-stage may now carry its rules itself,
   // which saves the rules parts: the delivery is then the persona part alone.
-  const rulesRide = persona !== null && rulesFitBeside(directive, loaded.content);
+  const rulesRide = persona !== null && rulesFitBeside(directive, content);
   const chunks = persona === null ? ruleChunks : rulesRide ? [[]] : [[], ...ruleChunks];
   const layout = steeringLayout(chunks);
   // A run-stage that cannot fit even alone is refused before any rules part is
@@ -6446,7 +6477,7 @@ function transportRunStage(
       bundle,
       directiveHash,
       chunks,
-      loaded.content,
+      content,
       persona,
       rulesRide,
     );
@@ -6459,10 +6490,10 @@ function transportRunStage(
   if (requested) {
     if (requested.i === chunks.length) {
       preparedSteeringPayload = requested;
-      if (rulesRide) attachRulesIfTheyFit(directive, loaded.content);
+      if (rulesRide) attachRulesIfTheyFit(directive, content);
       return directive;
     }
-  } else if (persona === null && attachRulesIfTheyFit(directive, loaded.content)) {
+  } else if (persona === null && attachRulesIfTheyFit(directive, content)) {
     // One message: the rules ride inside the run-stage directive. This is the
     // ordinary case for every shipped stage; the chunked delivery below is the
     // fallback for a bundle that does not fit beside its run-stage. The payload
@@ -15256,6 +15287,7 @@ export function main(argv: string[]): void {
     preparedSteeringPayload = null;
     retainedIssuedDirective = false;
     preparedTransportIdentity = null;
+    preparedRulesDelivery = null;
   }
 }
 

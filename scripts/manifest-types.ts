@@ -154,7 +154,7 @@ export type HarnessManifest = {
     recovery: string;
     /**
      * Sentence added to the engine's attended "no new human reply" refusals,
-     * for a harness without `agentStep` (which gives that sentence instead).
+     * unless `agentStep` gives that sentence instead (the hooks never ran here).
      */
     missedReply?: string;
     /**

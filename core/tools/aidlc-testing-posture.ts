@@ -2369,7 +2369,8 @@ export const FILE_TOOLS_RULE =
   "a scaffolder, a migration, a formatter, a code generator, even a `mkdir`), still runs as written. " +
   "Read, list, and search (your own knowledge files included) with your file tools where you have them; where the shell " +
   "is your only way to read, use one plain read command (no `cd` before it, no pipe or second command " +
-  `after it). Run every AI-DLC command ${AS_ITS_OWN_COMMAND}: a shell line can stop and ask the person to approve it.`;
+  `after it). Run every AI-DLC command ${AS_ITS_OWN_COMMAND}, keeping its path as written (never a full path): ` +
+  "a shell line can stop and ask the person to approve it.";
 
 // A rules part's receipt as the engine mints it: 8 base64url characters
 // (`steeringReceipt` in aidlc-orchestrate.ts).

@@ -1915,6 +1915,61 @@ if (args[0] === "engine" && args[1] === "orchestrate") {
     }
   });
 
+  // A helper picked in /agent holds the person's own chat: its tool calls carry
+  // the chat's session id (KIRO_SESSION_ID), where a delegation has its own
+  // (measured live on Kiro CLI). Under strict the helper's lifecycle command is
+  // refused either way; only the person's own chat gets the way back to aidlc.
+  describe("5e2: a helper's refusal in the person's own chat names /agent and aidlc", () => {
+    const CHAT = "369a3cd4-55a1-4d61-a812-d6b8fe4fba99";
+    const LINE = "\"Your answer didn't reach AI-DLC. Type /agent and pick aidlc, then give it once more.\"";
+    const REFUSED = 'Delegated agent "aidlc-architect-agent" cannot run';
+    function helperReports(session: string | undefined, chat: string | undefined) {
+      const dir = scratchProject(true);
+      try {
+        const path = seededStateFile(dir);
+        writeFileSync(
+          path,
+          readFileSync(path, "utf-8").replace(/^(- \*\*Current Stage\*\*:.*)$/m, "$1\n- **Guard Policy**: strict (set by you)"),
+        );
+        return runAdapter(
+          dir,
+          "state-transition-guard",
+          {
+            cwd: dir,
+            ...(session ? { session_id: session } : {}),
+            tool_name: "shell",
+            tool_input: {
+              command:
+                'bun .kiro/tools/aidlc.ts engine orchestrate report --stage requirements-analysis --result approved --user-input "Approve"',
+            },
+          },
+          ["aidlc-architect-agent"],
+          { KIRO_SESSION_ID: chat },
+        );
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    }
+
+    test("the helper the person is talking to: refused, with the way back", () => {
+      const r = helperReports(CHAT, CHAT);
+      expect(r.code).toBe(2);
+      expect(r.stderr).toContain(REFUSED);
+      expect(r.stderr).toContain(LINE);
+    });
+
+    test.each([
+      ["a delegation, with its own session", "81a63708-483d-44a7-8b78-1766b546d0e9", CHAT],
+      ["no session in the payload", undefined, CHAT],
+      ["no chat session in the environment", CHAT, undefined],
+    ] as const)("%s: refused as before, with no line for the person", (_case, session, chat) => {
+      const r = helperReports(session, chat);
+      expect(r.code).toBe(2);
+      expect(r.stderr).toContain(REFUSED);
+      expect(r.stderr).not.toContain("/agent");
+    });
+  });
+
   test("5f: defensive read and mutation shapes reach the scoped guard adapters", () => {
     const dir = scratchProject(true);
     try {
