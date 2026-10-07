@@ -210,6 +210,8 @@ import {
   writeUnitScopeStamp,
   writeFileAtomic,
   answerModeStageStartedFields,
+  keepPlanApprovalAskOverStateWrite,
+  recordHookDrop,
 } from "./aidlc-lib.js";
 import { memoryDirFor } from "./aidlc-graph.ts";
 import { inspectRequiredArtifactInstances } from "./aidlc-artifact-resolution.ts";
@@ -1176,8 +1178,21 @@ function handleSetConstructionPolicy(field: string, args: string[]): void {
       emitConstructionPolicySet(pd, content, updated, field, args[0], words);
     }
     writeStateFile(pd, updated);
+    keepPlanQuestionOver(pd, content, updated);
     console.log(JSON.stringify({ updated: true, field, value: args[0], ...constructionPolicyNotice(content, updated, field) }));
   });
+}
+
+// Asked for while the code plan's question waits, a change to how Construction
+// runs leaves that question the open step, so the person's next reply is kept
+// as their answer to it.
+function keepPlanQuestionOver(pd: string, before: string, after: string): void {
+  if (after === before) return;
+  try {
+    keepPlanApprovalAskOverStateWrite(pd, before, after);
+  } catch (e) {
+    recordHookDrop(pd, "active-directive", errorMessage(e));
+  }
 }
 
 // The one line the person hears for a Construction setting they asked for:
@@ -1360,6 +1375,7 @@ function handleSetConstructionIteration(args: string[]): void {
     emitConstructionPolicySet(pd, content, updated, "Construction Iteration", value, words);
   }
   writeStateFile(pd, updated);
+  keepPlanQuestionOver(pd, content, updated);
   console.log(JSON.stringify({
     updated: true, construction_iteration: value, ...constructionPolicyNotice(content, updated, "Construction Iteration"),
   }));

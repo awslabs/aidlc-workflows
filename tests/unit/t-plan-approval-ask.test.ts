@@ -2403,6 +2403,35 @@ describe("what the engine names while a plan waits", () => {
     }
   });
 
+  // "From here on, stop after each Unit" while the plan waits: the agent runs
+  // the Construction setter, says its line and keeps the plan question open, so
+  // the person's next "approve" is kept as their answer to that question.
+  test.each([
+    ["checkpoints on", "from here on, stop after each Unit so I can look", ["set-construction-checkpoints enabled"]],
+    ["checkpoints off", "no need to stop after each Unit", ["set-construction-checkpoints disabled"]],
+    ["one Unit at a time", "build them one at a time", ["set-construction-iteration unit-major"]],
+    ["stage by stage", "do it stage by stage across the Units", ["set-construction-iteration stage-major"]],
+    [
+      "checkpoints on and serial execution",
+      "stop after each Unit, and run them one after another",
+      ["set-construction-checkpoints enabled", "set-construction-execution serial"],
+    ],
+  ] as const)("a Construction setting (%s) while the plan waits keeps the plan question open", (_label, typed, setters) => {
+    const proj = waitingPlan();
+    reply(proj, typed);
+    for (const setter of setters) {
+      const command = `bun .claude/tools/aidlc.ts engine state ${setter}`;
+      const verdict = guardBash(proj, command);
+      expect(verdict.code, `${command}\n${verdict.stderr}`).toBe(0);
+      runInstalled(proj, command);
+    }
+    expect(planApprovalAskIsOpen(proj)).toBe(true);
+    reply(proj, "approve");
+    const said = answer(proj, "Approve Plan");
+    expect(said.code, said.message).toBe(0);
+    expect(said.recorded).toBe("approve");
+  });
+
   // Only the skip's own write keeps the plan question open: any other change
   // to the work's state still leaves it out of date, and the engine asks again.
   test("a state change from anything but the skip still leaves the plan question out of date", () => {
