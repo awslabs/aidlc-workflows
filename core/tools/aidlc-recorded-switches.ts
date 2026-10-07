@@ -29,6 +29,7 @@ import {
   personSpokeSinceGate,
   readRegularFileNoFollowOrThrow,
   resolveInvokingSessionId,
+  runFromPersonsTerminal,
   sessionsDir,
   writeFileAtomic,
 } from "./aidlc-lib.ts";
@@ -274,7 +275,7 @@ export function recordSwitchChange(
   if (added.length > 0) {
     try {
       const said = personSpokeSinceGate(projectDir) ? latestPersonTurn(projectDir) : null;
-      const running = resolveInvokingSessionId(projectDir);
+      const running = runFromPersonsTerminal() ? null : resolveInvokingSessionId(projectDir);
       turn = said !== null && running !== null && said.session === running ? said : null;
     } catch {
       turn = null;

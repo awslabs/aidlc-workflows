@@ -388,6 +388,7 @@ import {
   removeRecordFileNoFollow,
   toPosix,
   UTILITY_COMMANDS,
+  carryPendingPersonLines,
 } from "./aidlc-lib.ts";
 import { validateStageFrontmatter } from "./aidlc-stage-schema.ts";
 import { isRuleStale } from "./aidlc-rule-schema.ts";
@@ -8086,6 +8087,9 @@ function handleIntentCreate(projectDir: string, flags: Record<string, string>): 
       questionId,
     );
     failIntentCreateAt("after-list");
+    // This chat is now on the work it just created: anything it was still owed
+    // (the creation line naming what the person set for this work) follows it.
+    carryPendingPersonLines(projectDir, initialSelection.sessionId);
     if (questionId !== undefined) deleteQuestion(projectDir, questionId);
   }, undefined, undefined, WORKSPACE_MUTATION_LOCK_RETRIES);
 }

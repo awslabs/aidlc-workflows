@@ -65,6 +65,7 @@ import {
   writePlanApprovalRuntimeRecord,
   writeStateFile,
   parseGuardPolicyStateLine,
+  runFromPersonsTerminal,
 } from "./aidlc-lib.ts";
 import { quoted } from "./aidlc-recorded-switches.ts";
 import { entrySkillInvocation } from "./aidlc-runtime-paths.ts";
@@ -449,9 +450,22 @@ export function applyIntentSettings(
   // The setter carries out what the person asked: their words go on the record.
   // Their words stand behind a setter the agent runs in their chat. A command
   // they ran themselves, in their own terminal, belongs to no chat: it is their
-  // own act, and no message of theirs is quoted for it or kept beside it.
+  // own act, and no message of theirs is quoted for it or kept beside it. The
+  // chat that matters is the one RUNNING this command, never the one the work is
+  // bound to, which is the same chat whose words are on record. A command the
+  // person ran at their own terminal reads as nobody's chat (runFromPersonsTerminal):
+  // ancestry alone cannot tell it from the agent's, since a chat records the
+  // whole ancestor chain a terminal beside it shares.
   const turn = lowering.length > 0 && !typedByPerson ? latestPersonTurn(projectDir) : null;
-  const inThisChat = turn !== null && sessionId !== null && turn.session === sessionId;
+  let running: string | null = null;
+  if (turn !== null && !runFromPersonsTerminal()) {
+    try {
+      running = resolveInvokingSessionId(projectDir);
+    } catch {
+      running = null;
+    }
+  }
+  const inThisChat = turn !== null && running !== null && turn.session === running;
   const askedIn = inThisChat ? turn.words : null;
   // Asked for in the chat (not typed): each check it turns off is said in one
   // line, in their words, with the way back, instead of the setter's own line.

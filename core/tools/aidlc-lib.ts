@@ -5953,6 +5953,35 @@ export function pendingPersonLines(projectDir: string, sessionId: string): { lin
   };
 }
 
+/**
+ * Keep the lines waiting when this chat starts new work: they were queued for
+ * the work it was on, and creation selects the new record, which would leave
+ * them keyed to a work this chat is no longer reading. The chat carries on with
+ * the work it just created, so the lines follow it there and its first step says
+ * them (the creation print's own line among them).
+ */
+export function carryPendingPersonLines(projectDir: string, sessionId: string | null): void {
+  if (!sessionId) return;
+  const path = pendingPersonLinesPath(projectDir, sessionId);
+  if (!path || !existsSync(path)) return;
+  try {
+    const raw = JSON.parse(readFileSync(path, "utf-8")) as { lines?: unknown };
+    const waiting = (Array.isArray(raw.lines) ? raw.lines : [])
+      .filter((entry): entry is PendingPersonLine =>
+        entry !== null && typeof entry === "object" && typeof (entry as PendingPersonLine).line === "string")
+      .map((entry) => entry.line);
+    if (waiting.length === 0) return;
+    const { turn, work } = personTurnAndWork(projectDir);
+    const at = Date.now();
+    writePendingPersonLines(projectDir, path, work, {
+      lines: waiting.map((line) => ({ line, at, turn })),
+      said: [],
+    });
+  } catch {
+    // A line the person may miss never blocks creation.
+  }
+}
+
 // Count `lines` as heard in this chat on the selected work, so the engine does
 // not say them again there.
 export function markPersonLinesHeard(projectDir: string, sessionId: string, lines: readonly string[]): void {
@@ -26157,6 +26186,25 @@ export function pickerAnswerNote(projectDir: string, details: string): string | 
   } catch {
     return null;
   }
+}
+
+/**
+ * Whether this command is one the person ran themselves at a terminal: they are
+ * typing at it, and nothing marks it as a chat's own command. An agent's tool
+ * call arrives with pipes on both ends, and a chat that starts one marks it (the
+ * hook-injected session, or the thread id Codex gives every command it runs).
+ * Process ancestry cannot tell the two apart: a chat records its whole ancestor
+ * chain, which a terminal beside it shares.
+ *
+ * It decides one thing only: whether a message the person typed in a chat may be
+ * quoted as the reason for what this command did. A command of theirs is their
+ * own act either way, and it changes nothing about what the command does.
+ */
+export function runFromPersonsTerminal(env: NodeJS.ProcessEnv = process.env): boolean {
+  if (validSessionId(env.AIDLC_SESSION_OVERRIDE) !== null || validSessionId(env.CODEX_THREAD_ID) !== null) {
+    return false;
+  }
+  return process.stdin.isTTY === true || process.stdout.isTTY === true;
 }
 
 // The person's latest chat turn in this clone's ledger for the selected work:

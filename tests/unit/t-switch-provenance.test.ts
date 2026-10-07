@@ -67,6 +67,11 @@ function openWork(): string {
   const state = readFileSync(join(FIXTURES_DIR, "state-brownfield-feature.md"), "utf-8")
     .replace("- **Change Control**: strict (from scope feature)", "- **Guard Policy**: strict (set by you)");
   writeFileSync(seededStateFile(proj), state, "utf-8");
+  // The person's chat is the one this project last saw, as a live project has
+  // it: a command run outside that chat must not read it as its own.
+  const sessions = join(proj, "aidlc", ".aidlc-sessions");
+  mkdirSync(sessions, { recursive: true });
+  writeFileSync(join(sessions, ".current-session"), `${SESSION}\n`, "utf-8");
   return proj;
 }
 
@@ -220,6 +225,10 @@ describe("a check typed off with a request, routed through a second question", (
     const made = createFromPrint(proj, routed);
     expect(made.status, made.stderr).toBe(0);
     expect(guardsOff(activeState(proj))).toContain("review-freeze");
+    // Creation selects the new work, and the line still reaches the person: its
+    // first step says it, as the live run showed it must.
+    const onNewWork = next(proj, []);
+    expect(heard(proj, onNewWork), onNewWork.out).toContain(FOR_NEW_WORK);
     // The work the person did not ask about keeps its checks.
     expect(readFileSync(join(intents(proj), open, "aidlc-state.md"), "utf-8")).toBe(openBefore);
   });
@@ -282,12 +291,36 @@ describe("a check typed off before any work exists", () => {
 
 describe("a setter the person runs in their own terminal", () => {
   const ASKED = "show me the status";
+  // A terminal the person types at, with no chat identity on the command: the
+  // one thing that separates it from the agent's own tool call, which arrives
+  // with pipes. Process ancestry cannot: a chat records the whole ancestor chain
+  // that a terminal beside it shares, which is how an unrelated chat message
+  // ended up quoted as the reason for a command the person ran themselves.
+  const atATerminal = (proj: string, args: string[]): { status: number; out: string } => {
+    const command = [
+      BUN, DISPATCHER, "engine", "config", "set", ...args, "--project-dir", proj,
+    ].map((part) => `'${part.replaceAll("'", "'\\''")}'`).join(" ");
+    const env: Record<string, string | undefined> = {
+      ...process.env, ...CLEAR, CLAUDE_PROJECT_DIR: proj, AIDLC_PROJECT_DIR: proj,
+    };
+    delete env.AIDLC_SESSION_OVERRIDE;
+    delete env.AIDLC_SESSION_OVERRIDE_SOURCE;
+    delete env.CODEX_THREAD_ID;
+    const result = spawnSync("script", ["-qec", command, "/dev/null"], {
+      cwd: proj,
+      env: env as NodeJS.ProcessEnv,
+      encoding: "utf-8",
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+    });
+    return { status: result.status ?? -1, out: `${result.stdout ?? ""}${result.stderr ?? ""}` };
+  };
+  const hasPty = spawnSync("script", ["-qec", "true", "/dev/null"], { encoding: "utf-8" }).status === 0;
 
-  test("is their own act, and quotes no chat message", () => {
+  test.skipIf(!hasPty)("is their own act, and quotes no chat message", () => {
     const proj = openWork();
     reply(proj, ASKED);
-    // No chat session runs this command: the person typed it in a terminal.
-    const off = configSet(proj, ["guard.state-transition", "off"], null);
+    // The person typed this command at their own terminal.
+    const off = atATerminal(proj, ["guard.state-transition", "off"]);
     expect(off.status, off.out).toBe(0);
     expect(off.out).not.toContain(ASKED);
     expect(off.out).not.toContain("as you asked in the chat");
