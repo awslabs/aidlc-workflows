@@ -26265,8 +26265,10 @@ export function personRepliedSincePresentation(
     .some((block) => isReplyTurn({ event: auditBlockField(block, "Event") ?? "", block }));
 }
 
-// What the person typed in any chat since the stage started, after the latest
-// answer the engine recorded, in the order they typed it, or null. These are
+// What the person replied in any chat since the stage started, after the
+// latest answer the engine recorded, in the order they gave it, or null: the
+// words they typed (kept by the human-turn hook) and the labels they picked
+// in a question box (the `Picked` field of their HUMAN_TURN rows). These are
 // replies no answer holds yet: a chat that ended before the agent wrote or
 // logged them leaves them here for the stage's next run. `answered` is the
 // stage's questions and answers already on record, so a later chat knows what
@@ -26279,25 +26281,26 @@ export function keptRepliesSinceStageStart(
 ): { replies: string[]; answered: Array<{ question: string; answer: string }> } | null {
   const shardPath = auditFilePath(projectDir);
   const shard = projectRelativePath(projectDir, shardPath);
-  let records: GateWordsRecord[];
+  let records: GateWordsRecord[] = [];
   let content: string;
   try {
     const dir = gateWordsDir(projectDir);
-    if (!existsSync(dir)) return null;
-    // Every chat's file: the stage may have been asked in an earlier one.
-    records = readdirSync(dir).flatMap((name) => {
-      if (!name.endsWith(".json")) return [];
-      let session: unknown;
-      try {
-        session = (JSON.parse(readRegularFileNoFollowOrThrow(join(dir, name), "gate words", GATE_WORDS_MAX_FILE_BYTES)
-          .toString("utf-8")) as { session?: unknown } | null)?.session;
-      } catch {
-        return [];
-      }
-      const record = typeof session === "string" ? readGateWords(projectDir, session) : null;
-      return record !== null && record.shard === shard && record.messages.length > 0 ? [record] : [];
-    });
-    if (records.length === 0) return null;
+    // Every chat's file: the stage may have been asked in an earlier one. A
+    // chat that only picked in the question box typed nothing and has none.
+    if (existsSync(dir)) {
+      records = readdirSync(dir).flatMap((name) => {
+        if (!name.endsWith(".json")) return [];
+        let session: unknown;
+        try {
+          session = (JSON.parse(readRegularFileNoFollowOrThrow(join(dir, name), "gate words", GATE_WORDS_MAX_FILE_BYTES)
+            .toString("utf-8")) as { session?: unknown } | null)?.session;
+        } catch {
+          return [];
+        }
+        const record = typeof session === "string" ? readGateWords(projectDir, session) : null;
+        return record !== null && record.shard === shard && record.messages.length > 0 ? [record] : [];
+      });
+    }
     content = readAppendOnlyFileNoFollowOrThrow(shardPath, "audit shard").toString("utf-8");
   } catch {
     return null;
@@ -26307,8 +26310,14 @@ export function keptRepliesSinceStageStart(
   let from = 0;
   let answered: Array<{ question: string; answer: string }> = [];
   let asked: string | null = null;
+  // A turn that picked in the question box: where its row ends (the shard size
+  // right after it, which is where words typed in that turn were kept), and
+  // the labels picked. A turn that answered another engine question (where
+  // the work belongs, a switch) is no reply to the stage.
+  const picked: Array<{ end: number; labels: string[] }> = [];
   for (;;) {
     const match = separator.exec(content);
+    const end = match ? match.index + match[0].length : content.length;
     const block = content.slice(start, match ? match.index : content.length).replace(/\r\n/g, "\n");
     const event = auditBlockField(block, "Event");
     const ours = auditBlockField(block, "Stage") === stage.stage &&
@@ -26326,14 +26335,34 @@ export function keptRepliesSinceStageStart(
       }
     } else if (event === "DECISION_RECORDED" && ours) {
       asked = auditBlockField(block, "Decision");
+    } else if (event === "HUMAN_TURN" && auditBlockField(block, "Reply") === null) {
+      const raw = auditBlockField(block, "Picked");
+      let labels: unknown = null;
+      try {
+        labels = raw === null ? null : JSON.parse(raw);
+      } catch {
+        labels = null;
+      }
+      if (Array.isArray(labels)) {
+        const texts = labels.filter((label): label is string => typeof label === "string" && label.trim().length > 0);
+        if (texts.length > 0) picked.push({ end, labels: texts });
+      }
     }
     if (match === null) break;
-    start = match.index + match[0].length;
+    start = end;
   }
   const floor = Buffer.byteLength(content.slice(0, from), "utf-8");
   if (records.some((record) => record.dropped > floor)) return null;
-  const replies = records
-    .flatMap((record) => record.messages.filter((message) => message.offset > floor))
+  const typed = records.flatMap((record) => record.messages.filter((message) => message.offset > floor));
+  const replies = [
+    ...typed,
+    // A turn whose typed words were kept is not handed back twice.
+    ...picked.flatMap(({ end, labels }) => {
+      const offset = Buffer.byteLength(content.slice(0, end), "utf-8");
+      if (offset <= floor || typed.some((message) => message.offset === offset)) return [];
+      return labels.map((text) => ({ offset, text }));
+    }),
+  ]
     .sort((a, b) => a.offset - b.offset)
     .map((message) => message.text);
   return replies.length > 0 ? { replies, answered } : null;

@@ -67,6 +67,31 @@ function says(proj: string, prompt: string): void {
   expect(r.status, r.stderr).toBe(0);
 }
 
+// What the person picks in the harness's question box (Claude Code's
+// AskUserQuestion; Codex's request_user_input arrives through the same hook
+// shape): one question, or several, each answered with one of its labels.
+function picks(proj: string, answers: Record<string, string>): void {
+  const questions = Object.keys(answers).map((question) => ({
+    question,
+    options: [{ label: answers[question] }, { label: "Something else" }],
+  }));
+  const r = spawnSync(BUN, [DISPATCHER, "engine", "hook", "record-human-turn"], {
+    cwd: proj,
+    input: JSON.stringify({
+      hook_event_name: "PostToolUse", tool_name: "AskUserQuestion", session_id: SESSION,
+      tool_input: { questions }, tool_response: { questions, answers },
+    }),
+    env: { ...env(SESSION), CLAUDE_PROJECT_DIR: proj, AIDLC_PROJECT_DIR: proj },
+    encoding: "utf-8",
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+  });
+  expect(r.status, r.stderr).toBe(0);
+}
+
+const Q1 = "Who runs this command?";
+const Q2 = "How should months be grouped?";
+const SHOP = "A) A shop owner wants a monthly summary from the terminal";
+
 // The stage resumed from a later chat.
 function resumed(proj: string): { directive: Record<string, unknown>; parts: number } {
   const r = runOrchestrateNext(ORCHESTRATE, proj, [], { cwd: proj, env: env(LATER) });
@@ -171,5 +196,58 @@ describe("a stage resumed with blank answers hands back what the person already 
     says(proj, "1");
     writeFileSync(questionsFile, QUESTIONS.replaceAll("[Answer]:", "[Answer]: A"));
     expect(resumed(proj).directive.kept_replies).toBeUndefined();
+  });
+
+  // Live (Claude Code, Guide me): the person picked the first question's answer
+  // in the question box, the chat ended before the agent wrote it, and the next
+  // chat asked the same question again.
+  test("a pick in the question box, never written or logged, comes back on resume as the label picked", () => {
+    picks(proj, { [Q1]: SHOP });
+    const kept = resumed(proj).directive.kept_replies as { replies: string[]; answered: unknown[] } | undefined;
+    expect(kept?.replies).toEqual([SHOP]);
+    expect(kept?.answered).toEqual([{ question: "How would you like to answer the questions?", answer: "Guide me" }]);
+  });
+
+  test("a pick and a typed reply come back in the order they were given", () => {
+    picks(proj, { [Q1]: SHOP });
+    says(proj, "B, every year counts on its own though");
+    expect((resumed(proj).directive.kept_replies as { replies: string[] }).replies)
+      .toEqual([SHOP, "B, every year counts on its own though"]);
+  });
+
+  test("a box that asked two questions hands back both picks, in order", () => {
+    picks(proj, { [Q1]: SHOP, [Q2]: "A) By year-month" });
+    expect((resumed(proj).directive.kept_replies as { replies: string[] }).replies).toEqual([SHOP, "A) By year-month"]);
+  });
+
+  test("a pick whose answer was logged is not handed back", () => {
+    picks(proj, { [Q1]: SHOP });
+    log(proj, ["answer", "--stage", STAGE, "--details", "Q1: A"]);
+    expect(resumed(proj).directive.kept_replies).toBeUndefined();
+  });
+});
+
+describe("a chat that only picked in the question box, with nothing typed, hands its picks back", () => {
+  let proj: string;
+  beforeEach(() => {
+    resetAidlcEnv();
+    proj = createOrchestrationTestProject();
+    seedStateFile(proj, join(FIXTURES_DIR, "state-mid-ideation.md"));
+    appendAuditEntry("STAGE_STARTED", { Stage: STAGE, Agent: "aidlc-architect-agent" }, proj);
+    const dir = join(seededRecordDir(proj), "ideation", STAGE);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, `${STAGE}-questions.md`), QUESTIONS);
+    log(proj, ["decision", "--stage", STAGE, "--decision", "How would you like to answer the questions?",
+      "--options", "Guide me,I'll edit the file,Chat"]);
+    picks(proj, { "How would you like to answer the questions?": "Guide me" });
+    log(proj, ["answer", "--stage", STAGE, "--details", "Guide me"]);
+  });
+  afterEach(() => cleanupTestProject(proj));
+
+  test("the picks come back, and the way to answer is on record before them", () => {
+    picks(proj, { [Q1]: SHOP });
+    const kept = resumed(proj).directive.kept_replies as { replies: string[]; answered: unknown[] } | undefined;
+    expect(kept?.replies).toEqual([SHOP]);
+    expect(kept?.answered).toEqual([{ question: "How would you like to answer the questions?", answer: "Guide me" }]);
   });
 });
