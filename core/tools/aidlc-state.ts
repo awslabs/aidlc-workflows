@@ -109,7 +109,7 @@ import {
   commandTurnHint,
   humanRepliedSinceGate,
   humanPresenceGuardDisabled,
-  memoryStrictHoldsGuardPolicy,
+  personMayApproveOverUnfinishedReview,
   humanTurnMintAllowed,
   hookActivation,
   personRepliedSincePresentation,
@@ -4186,13 +4186,6 @@ function refuseStateGuard(
 // when it did, so the approval is recorded that way.
 export interface PersonApproval {
   overUnfinishedReview: boolean;
-}
-
-// Whether the person's approval may go over an unfinished review here. A team
-// that locks Guard Policy strict keeps every review required; asking for the
-// review again always works. The one place that says which lock counts.
-function personMayApproveOverUnfinishedReview(pd: string, content: string): boolean {
-  return !memoryStrictHoldsGuardPolicy(pd, content);
 }
 
 // A review request with no verdict yet that the person may approve over,

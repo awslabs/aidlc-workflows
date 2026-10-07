@@ -561,7 +561,7 @@ Unit stays approved), and `rechecked` (`{verdict, approved_before, changed}`)
 when the current review is that re-check. A `rereview` with `unfinished`
 (`no-verdict` or `not-ready`) names the request that finishes the Unit's own
 review instead; after the person's "approve it as it is" (`verify
---over-unfinished-review`, Guard Policy `relaxed` or `off`), `review_not_finished`
+--over-unfinished-review`, any Guard Policy but a team-locked `strict`), `review_not_finished`
 (`{stages, question}`) carries the one approval question. It also carries the
 stages whose review ended in the reviewer module's NOT-READY fallback (no
 reviewer gave that verdict), under every Guard Policy, with readiness unchanged. A `rereview` with

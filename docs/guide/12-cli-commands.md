@@ -1916,13 +1916,14 @@ the Construction stage's own check, returns the line. When the Unit's own review
 did not finish (no verdict yet, or NOT-READY with a pass left), `rereview` carries
 `unfinished` and names the request that finishes it. If the person says to approve
 the Unit as it is, add `--over-unfinished-review` to `verify`: under Guard Policy
-`relaxed` and `off`, with the person's words on record and a review that was asked
-for, the Unit is verified and asked about once (`review_not_finished.question`),
-and its approval records the review as not finished. A Unit whose review ended in
-the NOT-READY fallback the conductor records when a retried review still wrote
-nothing is asked about and approved the same way, with no option to pass. Under `strict`, or a team's
-locked `strict`, the review finishes first. A Unit review never asked for is
-required under every Guard Policy: `rereview` carries `first` and names its
+`off`, `relaxed`, or a `strict` set for the work, with the person's words on record
+and a review that was asked for, the Unit is verified and asked about once
+(`review_not_finished.question`), and its approval records the review as not
+finished, as at a stage gate. Under a team's locked `strict` the review finishes
+first, without asking the person. A Unit whose review ended in the NOT-READY
+fallback the conductor records when a retried review still wrote nothing is asked
+about and approved the same way, with no option to pass. A Unit review never asked
+for is required under every Guard Policy: `rereview` carries `first` and names its
 first request:
 
 ```bash

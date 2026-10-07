@@ -43,7 +43,7 @@ import {
   latestMainWorkflowStageRunFloorForProject,
   loadStageGraph,
   maximalAttemptEvents,
-  memoryStrictHoldsGuardPolicy,
+  personMayApproveOverUnfinishedReview,
   parseCheckboxes,
   personSpokeSinceGate,
   readAuditShardEvents,
@@ -665,15 +665,15 @@ function snapshot(
   ));
   // The person said to approve the Unit as it is over a review of its that
   // has not finished: in their words now (`personAllows`), or as the
-  // verification that took them recorded it, per stage at its run floor. Only
-  // under off and relaxed, and never over a strict the team locks.
+  // verification that took them recorded it, per stage at its run floor. As at
+  // a stage gate: never over a strict the team locks.
   const notFinishedBefore = notFinishedReviews(verification);
   const notFinished: string[] = [];
   // Stages whose review ended in the NOT-READY fallback no reviewer gave:
   // ready as before, and asked about and approved as not finished.
   const endedUnfinished: string[] = [];
   let mayGoOn: boolean | null = null;
-  const overAllowed = (): boolean => (mayGoOn ??= acceptsChanges() && !memoryStrictHoldsGuardPolicy(projectDir, state));
+  const overAllowed = (): boolean => (mayGoOn ??= personMayApproveOverUnfinishedReview(projectDir, state));
   // The unfinished review `rereview` names is one the person may go on without.
   let unfinishedMayGoOn = false;
 
@@ -1105,7 +1105,8 @@ function requireReady(current: Snapshot): void {
       ? `repair what it found, request the next pass with \`${step.command}\`, record the verdict, then verify`
       : `request it again with \`${step?.command}\`, record the verdict, then verify`;
     // The person may let the Unit go on without a review that did not finish;
-    // strict, in the state or locked by the team, keeps it required.
+    // a strict the team locks keeps it required, and the agent finishes it
+    // without asking them.
     const rereview = !step ? ""
       : step.first
         ? ` The ${reviewsNamed([step.stage])} for ${result.unit} was never asked for: request it with \`${step.command}\`, ` +
@@ -1117,7 +1118,7 @@ function requireReady(current: Snapshot): void {
           (current.overAllowed
             ? `If the person said to approve ${result.unit} as it is (their words since the last question), verify ` +
               `with --over-unfinished-review; otherwise finish the review: ${finish}.`
-            : `Finish it first: ${finish}.`);
+            : `Finish it first, without asking the person: ${finish}.`);
     throw new Error(`Construction checkpoint is not ready: ${result.errors.join(" ")}${rereview}`);
   }
 }

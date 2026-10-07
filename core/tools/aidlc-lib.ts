@@ -29020,6 +29020,20 @@ export function memoryStrictHoldsGuardPolicy(
   }
 }
 
+/**
+ * Whether the person's own approval may go over a review that did not finish
+ * (asked for, with no verdict yet), at a stage gate and at a Unit checkpoint
+ * alike. Off, relaxed and a strict set for this piece of work let it; only a
+ * strict the team locks in memory keeps the review required. The one place
+ * that says which setting counts.
+ */
+export function personMayApproveOverUnfinishedReview(
+  projectDir: string,
+  stateContent?: string | null,
+): boolean {
+  return !memoryStrictHoldsGuardPolicy(projectDir, stateContent);
+}
+
 /** Name the memory hold instead of offering a switch that chat cannot change. */
 export function fenceSwitchSentence(
   projectDir: string,
