@@ -487,7 +487,8 @@ The 6-step process:
    path roster in `inline_context_paths`; fully dispatched subagent/pipeline
    directives carry an empty roster.
 3. **Prepare briefs: rules as content, artifacts as paths.** Paste the
-   accumulated steering bundle verbatim; pass relevant artifact paths and task
+   stage's rule bundle (`run-stage.rules_content`, or the accumulated
+   `load-steering` parts) verbatim; pass relevant artifact paths and task
    instructions. The named
    harness agent config loads persona and knowledge; do not copy either into
    the prompt.

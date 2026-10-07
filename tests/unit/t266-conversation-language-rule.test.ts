@@ -392,6 +392,64 @@ describe("t266 conversation-language rule layer", () => {
     }
   });
 
+  // (c2b) Kiro IDE has neither the hook rewrite nor a preload, so the brief the
+  // conductor writes is the only channel, and what reaches the worker is what
+  // the conductor is told to paste. The bundle arrives as `rules_content` on the
+  // run-stage (the ordinary case) or as `load-steering` parts (the fallback), so
+  // every instruction that says what goes into a brief must name both shapes; a
+  // wording that names only `load-steering` lets an ordinary stage dispatch a
+  // worker with no rules, silently. Check the authored and the packaged skill,
+  // both prompt fields, and the packaged protocol files the conductor loads.
+  test("c2b: every Kiro IDE brief instruction names the whole stage rule bundle", () => {
+    const ide = HARNESS_MATRIX.find((h) => h.name === "kiro-ide");
+    if (ide === undefined) throw new Error("kiro-ide is missing from HARNESS_MATRIX");
+    const bothShapes = /`(?:run-stage\.)?rules_content`,\s+or the\s+accumulated\s+`load-steering` parts/;
+    const loadSteeringOnly =
+      /rules as the accumulated load-steering bundle|Deliver the `load-steering` rule bundle|accumulated steering bundle/;
+    const lineStarting = (body: string, anchor: string, where: string): string => {
+      const line = body.split("\n").find((l) => l.startsWith(anchor));
+      if (line === undefined) throw new Error(`${where}: no line starts with ${anchor}`);
+      return line;
+    };
+
+    for (const path of [
+      join(ide.authoredRoot, "skills", "aidlc", "SKILL.md"),
+      join(ide.skillsRoot, "aidlc", "SKILL.md"),
+    ]) {
+      const skill = readFileSync(path, "utf-8");
+      const note = lineStarting(skill, "- **No native preload here, so the brief carries the rules.**", path);
+      expect(note, path).toMatch(bothShapes);
+      expect(note, path).toContain("`prompt` on `invoke_sub_agent`");
+      expect(note, path).toContain("`prompt_template` on `orchestrate_subagent`");
+      expect(lineStarting(skill, "**Per-unit batch waves (optional).**", path), path).toMatch(bothShapes);
+      expect(skill, path).not.toMatch(loadSteeringOnly);
+    }
+
+    const protocols = join(ide.engineRoot, "aidlc-common", "protocols");
+    const stepTwo = readFileSync(join(protocols, "stage-protocol.md"), "utf-8");
+    expect(stepTwo).toMatch(bothShapes);
+    const construction = readFileSync(join(protocols, "stage-protocol-construction.md"), "utf-8");
+    expect(construction).toMatch(bothShapes);
+    expect(construction).not.toMatch(loadSteeringOnly);
+    // A shipped tree carries only its own tool's binding, so the Kiro IDE
+    // subsection may run to the end of the file.
+    const ensemble = readFileSync(join(protocols, "stage-protocol-ensemble.md"), "utf-8");
+    const start = ensemble.indexOf("### Kiro IDE\n");
+    expect(start).toBeGreaterThan(-1);
+    const next = ensemble.slice(start + 1).search(/\n#{2,3} /);
+    const binding = ensemble.slice(start, next === -1 ? undefined : start + 1 + next);
+    expect(binding).toMatch(bothShapes);
+    expect(binding).not.toMatch(loadSteeringOnly);
+    // The one shipped mob stage writes its own Round 1 brief instruction.
+    const userStories = join(ide.engineRoot, "aidlc-common", "stages", "inception", "user-stories.md");
+    const mobBrief = readFileSync(userStories, "utf-8")
+      .split("\n\n")
+      .find((paragraph) => paragraph.startsWith("**Round 1 — dispatch the mob.**"));
+    if (mobBrief === undefined) throw new Error(`${userStories}: no Round 1 mob paragraph`);
+    expect(mobBrief).toMatch(bothShapes);
+    expect(mobBrief).not.toMatch(loadSteeringOnly);
+  });
+
   // (c2) covers the DELEGATE side. It does not cover the CONDUCTOR, and on Kiro
   // IDE it does not even cover the right file: the agent-v1 JSONs it inspects
   // are a Kiro CLI compatibility surface the IDE ignores (harness/kiro-ide/

@@ -1674,8 +1674,10 @@ describe("t278 wave protocol parity", () => {
       if (harness.name === "kiro" || harness.name === "kiro-ide") {
         for (const body of [authored, generated]) {
           expect(body).toContain(
-            'Deliver the `load-steering` rule bundle per `stage-protocol.md` § "For subagent stages" step 2',
+            "Deliver the stage's rule bundle (`run-stage.rules_content`, or the accumulated `load-steering` parts) " +
+              'per `stage-protocol.md` § "For subagent stages" step 2',
           );
+          expect(body).not.toContain("Deliver the `load-steering` rule bundle");
           expect(body).toContain("native preload where one exists, verbatim paste otherwise");
         }
       } else {
@@ -1717,10 +1719,15 @@ describe("t278 wave protocol parity", () => {
     expect(core).toContain('"escalation-required"');
     expect(core).toContain("unit complete --wave");
     expect(core).toContain("UNIT_COMPLETED");
-    expect(core).toContain("accumulated steering bundle");
     expect(core).toContain(
-      'Deliver the `load-steering` rule bundle per `stage-protocol.md` § "For subagent stages" step 2',
+      "`context_warnings`, the stage's rule bundle (`run-stage.rules_content`, or the accumulated `load-steering` parts)",
     );
+    expect(core).not.toContain("accumulated steering bundle");
+    expect(core).toContain(
+      "Deliver the stage's rule bundle (`run-stage.rules_content`, or the accumulated `load-steering` parts) " +
+        'per `stage-protocol.md` § "For subagent stages" step 2',
+    );
+    expect(core).not.toContain("Deliver the `load-steering` rule bundle");
     expect(core).toContain("native preload where one exists, verbatim paste otherwise");
     expect(core).not.toContain(
       "read `bolt_dag.batches` from the intent's `runtime-graph.json`",
