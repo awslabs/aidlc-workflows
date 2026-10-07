@@ -73,12 +73,12 @@ Every directive is validated against the frozen contract in `aidlc-directive.ts`
 |---|---|---|
 | `stage_validity_note` | `stage_validity` | say the warning word for word once, with nothing in front of it, and carry on; never say who changed the document or call it stray; a yes in their next reply runs `next --stage <earliest_affected_stage>` |
 | `change_notices_note` | non-empty `change_notices` | say each line once, word for word |
-| `question_note` | every `ask` except a guard-recovery ask that is the agent's own work | the question is the person's: show it, end the turn, act on their reply |
+| `question_note` | every `ask` except a guard-recovery ask that is the agent's own work | the question is the person's: show it, end the turn, act on their reply; on a `plan-approval` ask it also names `log answer --stage code-generation --checkpoint plan-approval --details '<their choice>'` and then `next` |
 | `protocol_note` | every `run-stage` | unless the chat holds them, read `stage-protocol.md` and the `stage-protocol-<module>.md` of each `protocol_modules` entry, named from the step's own `stage_file` |
-| `gate_note` | `gate: "unresolved"` | settle the walking-skeleton stance from the memory text with `report --skeleton-stance`, then `next` |
+| `gate_note` | `gate: "unresolved"` | read what the team's `## Walking Skeleton` says it does (on if it always runs one, off if it says it does not, scope-dependent if neither), report it with `report --skeleton-stance`, then `next` |
 | `gate_note` | a Unit's `run-stage` with `gate: false` (no checkpoint, wave or settle) | do not report it or ask for approval; run `next` when its work is done |
 
-A rules part (`load-steering`) carries no note: its `run-stage` repeats the advisory and the notices, and they are said from there. `error` carries no note, because many errors are the agent's to repair, and saying one word for word would put the engine's words in front of the person. A solo walk's `report --unit` answers with the agent's next step (run `next`), not an error.
+A rules part (`load-steering`) carries no note: its `run-stage` repeats the advisory and the notices, and they are said from there. `error` carries no note, because many errors are the agent's to repair, and saying one word for word would put the engine's words in front of the person. In a solo walk, `report --unit` with a decision (`approved`, `rejected`, `revised`) is recorded for the stage, as the same report without `--unit`; any other result answers with the agent's next step (run `next`), not an error.
 
 **Guard-recovery interaction.** After the human selects an executable remedy:
 

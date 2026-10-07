@@ -208,7 +208,8 @@ describe("t-rules-travel-with-steps: a person-facing field says what to do with 
   test("a Unit reported on its own in a solo walk gets its next step, not an error to show", () => {
     const proj = constructionProject("on");
     next(proj);
-    const directive = report(proj, ["--stage", "functional-design", "--unit", "alpha", "--result", "approved", "--user-input", "approve"]);
+    // A completion report for the Unit (the live journey's misstep); a decision is the stage's (below).
+    const directive = report(proj, ["--stage", "functional-design", "--unit", "alpha", "--result", "completed"]);
     expect(directive.kind).toBe("print");
     expect(String(directive.message)).not.toContain("requires Unit Ownership");
     expect(String(directive.message)).toMatch(/run `[^`]*aidlc-orchestrate\.ts next`/);

@@ -1035,14 +1035,23 @@ export const QUESTION_NOTE =
 
 export function unresolvedGateNote(invocation: string): string {
   return 'Do no work on this stage yet: read the "## Walking Skeleton" section of the memory text (project.md over ' +
-    `team.md over org.md), run \`${invocation} report --skeleton-stance <on|off|scope-dependent>\` ("always" is ` +
-    `on, "never" is off, anything else is scope-dependent), then run \`${invocation} next\` and follow the step it ` +
-    "returns.";
+    "team.md over org.md) and settle what the team says it does: on if the team always runs a walking skeleton, off " +
+    "if it says it does not run one, scope-dependent if it says neither. Run " +
+    `\`${invocation} report --skeleton-stance <on|off|scope-dependent>\` with that stance, then run \`${invocation} next\` ` +
+    "and follow the step it returns.";
 }
 
 // The protocol files a step runs by, named from its own stage file, so a chat
 // with no skill loaded reads them (seen live: a Unit's step looped on a review
 // and an autonomy question the agent never knew about).
+// The plan question's answer is recorded as the person's choice, then the
+// step goes on; with no skill loaded nothing else names that command.
+export function planApprovalQuestionNote(invocation: string, logInvocation: string): string {
+  return `${QUESTION_NOTE.replace(/\.$/, "")}. When they answer, record the choice they made with ` +
+    `\`${logInvocation} answer --stage code-generation --checkpoint plan-approval --details '<their choice>'\`, then ` +
+    `run \`${invocation} next\`.`;
+}
+
 export function protocolNote(stageFile: string, modules: readonly string[]): string | null {
   const at = stageFile.indexOf("/aidlc-common/");
   if (at < 0) return null;
@@ -1059,7 +1068,11 @@ export function unitStepNote(invocation: string): string {
 // The notes for one emitted directive. `invocation` is how this install runs
 // the orchestrate tool. A rules part carries none: its run-stage repeats the
 // advisory and the notices, and they are said from there, once.
-export function withAgentNotes<T extends object>(directive: T, invocation: string): T {
+export function withAgentNotes<T extends object>(
+  directive: T,
+  invocation: string,
+  logInvocation = invocation.replace(/aidlc-orchestrate\.ts$/, "aidlc-log.ts").replace(/ orchestrate$/, " log"),
+): T {
   const d = directive as Record<string, unknown>;
   if (d.kind === "load-steering") return directive;
   const notes: Record<string, string> = {};
@@ -1070,7 +1083,11 @@ export function withAgentNotes<T extends object>(directive: T, invocation: strin
   if (Array.isArray(d.change_notices) && d.change_notices.length > 0) {
     notes.change_notices_note = CHANGE_NOTICES_NOTE;
   }
-  if (d.kind === "ask" && d.agent_work !== true) notes.question_note = QUESTION_NOTE;
+  if (d.kind === "ask" && d.agent_work !== true) {
+    notes.question_note = d.ask_type === "plan-approval"
+      ? planApprovalQuestionNote(invocation, logInvocation)
+      : QUESTION_NOTE;
+  }
   if (d.kind === "run-stage" && typeof d.stage_file === "string") {
     const modules = Array.isArray(d.protocol_modules)
       ? d.protocol_modules.filter((module): module is string => typeof module === "string" && /^[a-z]+$/.test(module))
