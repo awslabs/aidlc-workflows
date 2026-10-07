@@ -446,7 +446,15 @@ large scope with significant unknowns.
    6. Quality attributes -- maintainability, testability, accessibility,
       usability
 
-   Identify gaps in each dimension.
+   Identify gaps in each dimension. At Standard and Comprehensive depth, the
+   User scenarios dimension is swept with the product agent's
+   `corner-checklist.md`: each component the request names is crossed with
+   the edge conditions it touches (empty, missing, partial failure, two copies
+   of one fact, and so on), and every condition that applies lands in
+   `requirements.md` as a requirement, an assumption with its reason, or an
+   out-of-scope item. A corner becomes a question only when it depends on a
+   fact about the user's world the agent cannot know. Minimal depth does not
+   load the checklist.
 
 6. **Generate Clarifying Questions** -- PROACTIVE: always generate clarifying
    questions unless requirements are exceptionally clear and complete across

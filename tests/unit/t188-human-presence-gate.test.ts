@@ -382,6 +382,37 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
     expect(field(proj, "Current Stage")).toBe(slug);
   });
 
+  // A live Kiro CLI run turned "doctor shows whether AI-DLC's hooks run here"
+  // into talk of hooks, then offered to switch human presence off machine-wide.
+  // The refusal gives the person's step in fixed words, and the agent never
+  // offers to turn a check off for them.
+  test("A5: a reply that was not recorded gets only the person's step, never hooks or a check to turn off", () => {
+    const first = field(proj, "Current Stage"); // feasibility
+    guarded(proj, ["checkbox", `${first}=in-progress`]);
+    recordHumanTurn(proj);
+    guarded(proj, ["gate-start", first]);
+    expect(guarded(proj, ["approve", first, "--user-input", "Approve"]).rc).toBe(0);
+    const slug = field(proj, "Current Stage");
+    guarded(proj, ["checkbox", `${slug}=in-progress`]);
+    guarded(proj, ["gate-start", slug]);
+    stampPrompt(proj, Date.now());
+    writeHeartbeat(proj, Date.now());
+    for (const [state, line] of [
+      [STATE, `"Your answer didn't reach AI-DLC. Please give it once more. If it happens again, type /aidlc --doctor."`],
+      [KIRO_CLI_STATE, `"Your answer didn't reach AI-DLC. Please give it once more. If it happens again, type /aidlc --doctor."`],
+      [KIRO_IDE_STATE, `"Your answer was not recorded, so you don't need to answer again.`],
+    ] as const) {
+      const r = guarded(proj, ["approve", slug, "--user-input", "Approve"], false, state);
+      expect(r.rc).not.toBe(0);
+      const refusal = JSON.parse(r.out).error as string;
+      expect(refusal).toContain(line);
+      expect(refusal).toContain("Never offer to turn a check off for them.");
+      expect(refusal).not.toMatch(/hook/i);
+      expect(refusal).not.toContain("AIDLC_SKIP");
+    }
+    expect(eventCount(proj, "GATE_APPROVED")).toBe(1);
+  });
+
   // --- Scenario B: LEGIT (human turn after gate-open) ------------------------
   //
   // The realistic flow: the human types (HUMAN_TURN), then the agent opens the
@@ -1334,6 +1365,45 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
       expect(eventCount(proj, "QUESTION_ANSWERED")).toBe(3);
     });
 
+    // From block-sweep probes: the person answered three questions in one
+    // Claude Code question box, the agent logged the batch's question after
+    // the reply and then one answer per question, and the second and third were
+    // refused, so the person was told their answer never arrived and typed it
+    // again. A question box answers the questions it showed: each pick it
+    // carried backs one answer, however the agent ordered its records.
+    function boxReply(answers: string[]): void {
+      recordHumanTurn(proj);
+      for (const [index, reply] of answers.entries()) {
+        appendAuditEntry("QUESTION_REPLIED", { Question: `Q${index + 1}?`, Reply: reply }, proj);
+      }
+    }
+
+    test("one question box reply backs one answer per pick, though the batch was logged after it; one more waits", () => {
+      const slug = field(proj, "Current Stage");
+      boxReply(["In the API handler", "A toast", "Yes, to Untitled"]);
+      expect(guardedLog(proj, ["decision", "--stage", slug, "--decision", "Q1-Q3", "--options", "A,B"]).rc).toBe(0);
+      for (const reply of ["Q1: In the API handler", "Q2: A toast", "Q3: Yes, to Untitled"]) {
+        const r = guardedLog(proj, ["answer", "--stage", slug, "--details", reply]);
+        expect(r.rc, r.out).toBe(0);
+      }
+      expect(eventCount(proj, "QUESTION_ANSWERED")).toBe(3);
+      // The box carried three picks: a fourth answer has no pick behind it.
+      const fourth = guardedLog(proj, ["answer", "--stage", slug, "--details", "Q4: anything"]);
+      expect(fourth.rc).not.toBe(0);
+      expect(eventCount(proj, "QUESTION_ANSWERED")).toBe(3);
+    });
+
+    test("a question box reply backs its answers when each question is logged after it, one at a time", () => {
+      const slug = field(proj, "Current Stage");
+      boxReply(["In the API handler", "A toast"]);
+      for (const [question, reply] of [["Q1?", "In the API handler"], ["Q2?", "A toast"]]) {
+        expect(guardedLog(proj, ["decision", "--stage", slug, "--decision", question, "--options", "A,B"]).rc).toBe(0);
+        const r = guardedLog(proj, ["answer", "--stage", slug, "--details", reply]);
+        expect(r.rc, r.out).toBe(0);
+      }
+      expect(eventCount(proj, "QUESTION_ANSWERED")).toBe(2);
+    });
+
     test("with no HUMAN_TURN on record, an attended answer still asks for a reply", () => {
       const slug = field(proj, "Current Stage");
       expect(guardedLog(proj, ["decision", "--stage", slug, "--decision", "Choose", "--options", "A,B"]).rc).toBe(0);
@@ -1367,6 +1437,37 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
       expect(r.out).toContain("no new human reply has arrived for the question");
       expect(r.out).not.toContain("already recorded as an answer");
       expect(eventCount(proj, "QUESTION_ANSWERED")).toBe(1);
+    });
+
+    // From a live Windows run: the person answered a four-question menu, and only
+    // then did the agent log the menu's questions, with all four answers in one
+    // entry. The one reply is recorded once and nothing is left open, so they are
+    // never asked again.
+    test("a menu answered before its questions were logged, with one combined answer, is recorded once", () => {
+      const slug = field(proj, "Current Stage");
+      recordHumanTurn(proj);
+      expect(guardedLog(proj, ["decision", "--stage", slug, "--decision", "Q1-Q4", "--options", "A,B,C"]).rc).toBe(0);
+      const r = guardedLog(proj, [
+        "answer", "--stage", slug, "--details",
+        "Q1: A Silent no-op; Q2: A Trim only inside addTodo; Q3: A Targeted only; Q4: A renderHook",
+      ]);
+      expect(r.rc, r.out).toBe(0);
+      expect(eventCount(proj, "QUESTION_ANSWERED")).toBe(1);
+      const answers = JSON.parse(guardedLog(proj, ["answers", "--stage", slug]).out);
+      expect(answers.answered).toHaveLength(1);
+      expect(answers.open).toEqual([]);
+    });
+
+    test("the stage protocol logs a menu's questions first and puts one reply's answers in one log answer", () => {
+      const protocol = readFileSync(join(REPO_ROOT, "core", "aidlc-common", "protocols", "stage-protocol.md"), "utf-8");
+      expect(protocol).toContain(
+        "Log every question a menu shows before you show the menu, and put all of one reply's answers in a " +
+          "single `log answer` (`--details 'Q1: <choice>; Q2: <choice>'`), even when the reply came before the log.",
+      );
+      expect(protocol).toContain(
+        "If they already replied, log the question now, then put all of that reply's answers in a single " +
+          "`log answer`: a second `log answer` for one reply is refused.",
+      );
     });
 
     // "Choose the recommended answers", said before the questions came: the

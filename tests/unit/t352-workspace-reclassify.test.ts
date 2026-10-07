@@ -1192,7 +1192,8 @@ describe("t352 the lines the person must hear ride the next step the agent speak
     expect(created.status, `${created.stdout}${created.stderr}`).toBe(0);
     const said = String(nextIn(proj).narration);
     expect(said).toStartWith("Setting up the plan you approved for this: ");
-    expect(said).toContain("Starting the plan you approved for this project.");
+    // Said again where the work is picked up, by someone who may not have approved it.
+    expect(said).toContain("Starting the approved plan for this project.");
     expect(said).not.toMatch(/\bpoc\b/);
   });
 });

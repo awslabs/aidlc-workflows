@@ -39,6 +39,8 @@
       "tests/e2e/t59-workflow-depth-override.test.ts": 20,
       "tests/integration/t-e2e-isolated-runner.test.ts": 29,
       "tests/integration/t-guard-live-chat-lowering.sdk.test.ts": 59,
+      "tests/integration/t-journey-golden-bugfix.sdk.test.ts": 1700,
+      "tests/integration/t-journey-golden-poc.sdk.test.ts": 1700,
       "tests/integration/t-journey-workspace.sdk.test.ts": 450,
       "tests/integration/t141-enterprise-scope-routing.test.ts": 14,
       "tests/integration/t143-scope-start-creation.test.ts": 13,

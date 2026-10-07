@@ -358,7 +358,20 @@ changes** options are unlettered. All `[Answer]:` tags start blank.
 Multi-select questions add "(select all that apply)" to the question text;
 answer format: `[Answer]: A, B, E`.
 
-**Step 2: Present mode choice:**
+**Step 2: Use the directive's answer mode, or present the mode choice.** The
+run-stage directive carries `answer_mode` (`mode`, `ask`, `reused_from`,
+`notice`). The first stage with questions in a piece of work asks; the engine
+then reuses the latest recorded answer to the mode question
+(`latestRecordedAnswerMode`, the same DECISION_RECORDED / QUESTION_ANSWERED
+pairing the Stop hook reads). When `ask` is false the conductor says `notice`
+as one line and goes straight to `mode` (Guide me, I'll edit the file, or Chat)
+without asking or logging a mode question, and the stage's `STAGE_STARTED` row
+records the reused mode in its `Answer Mode` field. When `ask` is true it
+presents the choice below. The conductor records the chosen mode as its option
+label, read from the person's reply in whatever words they used, and the engine
+reads only that label or its number. The person changes the mode by saying so;
+the new choice is recorded the same way. A reused mode opens no decision, so
+`hasPendingDecision` and the gate-answer pairing are unchanged.
 
 ```
 AskUserQuestion({
@@ -1266,7 +1279,9 @@ tool-as-actor Learnings Ritual, not a separate guardrail-emission flow.
 When `directive.protocol_modules` lists `learnings`, the ritual runs between the completion message and the approval gate. Bootstrap stages keep only a diary; isolated `single: true` runs keep no diary or ritual; per-unit `gate: false` iterations defer the ritual to the final stage gate, except team-owned unit-major gates run it at each emitted Unit gate. Gate revisions never rerun it. With the module absent, keep no diary, surface no candidates, ask no learning question, and go directly to the approval gate. The enabled ritual is:
 
 1. **Diary**: the agent maintains a per-stage `memory.md` (Interpretations /
-   Deviations / Tradeoffs / Open questions) as it works.
+   Deviations / Tradeoffs / Open questions) as it works. A Unit's turn tags its
+   entries `[unit <name>]` after the timestamp, so a Unit's checkpoint surfaces
+   that Unit's entries and the untagged ones.
 2. **Surface**: `aidlc-learnings.ts surface --slug <slug>` reads the diary and
    emits structured candidates — the LLM does not re-parse or classify.
 3. **Confirm**: the conductor renders the candidates; the user picks which to

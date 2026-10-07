@@ -278,6 +278,7 @@ const manifest: HarnessManifest = {
   harnessFiles: [
     { src: "skills/aidlc/SKILL.md", dst: "skills/aidlc/SKILL.md" },
     { src: "skills/aidlc/question-rendering.md", dst: "skills/aidlc/question-rendering.md" },
+    { src: "skills/aidlc/composer.md", dst: "skills/aidlc/composer.md" },
     { src: "steering/aidlc-active-memory.md", dst: "steering/aidlc-active-memory.md" },
     { src: "agents/aidlc.md", dst: "agents/aidlc.md" },
     { src: "settings/cli.json", dst: "settings/cli.json" },

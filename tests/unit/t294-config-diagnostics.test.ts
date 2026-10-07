@@ -4495,6 +4495,25 @@ process.exit(0);
     }
   }, 120_000);
 
+  // The copy channel: the person copies the runtime in, then runs the copy's
+  // own setup. The settings file then already holds this release's
+  // announcements, which are AI-DLC's, not the person's.
+  test("a copied runtime's own announcements are not reported as the person's", () => {
+    const env = runtimeEnv();
+    const project = temp("aidlc-t294-copied-announcements-");
+    mkdirSync(join(project, ".git"));
+    cpSync(join(DIST_RELEASE, "claude"), project, { recursive: true });
+    const shipped = JSON.parse(readFileSync(join(project, ".claude", "settings.json"), "utf-8")).companyAnnouncements;
+    const configured = run([
+      "config", "--project-dir", project,
+      "--from", join(DIST_RELEASE, "claude"), "--harness", "claude", "--yes",
+    ], project, env);
+    expect(configured.status, configured.stdout + configured.stderr).toBe(0);
+    expect(configured.stdout).not.toContain("companyAnnouncements");
+    expect(JSON.parse(readFileSync(join(project, ".claude", "settings.json"), "utf-8")).companyAnnouncements)
+      .toEqual(shipped);
+  }, 90_000);
+
   test("a project's own settings.json is kept on first install, with AI-DLC's entries added", () => {
     const project = temp("aidlc-t294-claude-own-settings-");
     mkdirSync(join(project, ".git"));

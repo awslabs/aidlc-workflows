@@ -517,6 +517,24 @@ describe("a fresh start for the steps", () => {
   });
 });
 
+// The worker ticks the plan file as it builds, and a pick-up reads those ticks.
+// A worker told only to keep out of the record folder never ticked, so the
+// brief names the plan file and the one change the worker makes to it.
+describe("the brief names the plan file the worker ticks", () => {
+  test("Unit and zero-Unit briefs name the plan file and say ticking is the only change to it", () => {
+    const proj = project();
+    const { first } = approvedBuild(proj);
+    const unitPlan = relative(proj, planPath(proj)).replace(/\\/g, "/");
+    const tickLine = (path: string) =>
+      `\n## The plan file\n\nTick each step's box in \`${path}\` as you finish the step. That is the only change you make to that file.\n`;
+    expect(first).toContain(tickLine(unitPlan));
+    expect(first.indexOf("## The plan file")).toBeLessThan(first.indexOf("## Approved plan"));
+    const stage = stageLevelProject();
+    const { first: stageBrief } = approvedBuild(stage, null);
+    expect(stageBrief).toContain(tickLine(relative(stage, planPath(stage, null)).replace(/\\/g, "/")));
+  });
+});
+
 describe("a swarm batch keeps its own continuation rule", () => {
   test("a started swarm Unit with ticks gets no progress section", () => {
     const pd = setupWorktreeFixture();

@@ -30,7 +30,9 @@ body.
 This applies to **every** structured-question site, including but not limited to:
 
 - approval gates (every stage completion);
-- the questions interaction-mode choice (Guide me / I'll edit the file / Chat);
+- the questions interaction-mode choice (Guide me / I'll edit the file / Chat),
+  when `directive.answer_mode.ask` is true (otherwise print its one-line
+  `notice` and use `answer_mode.mode`; stage-protocol.md §3 Step 2);
 - the ladder prompt (autonomy mode after the walking skeleton);
 - halt-and-ask on Bolt failure (Retry / Skip / Abort);
 - consolidated-summary confirmation before artifact generation;
@@ -151,5 +153,6 @@ Rules:
 - **Batching**: no harness limit on options per question, but keep batches
   readable — at most ~4 questions per message, and for 5+ options prefer one
   message per question. The questions FILE remains the authoritative record.
+  A message with several questions labels them Q1, Q2, and so on, and ends with: "Reply with each question's number and the number of your choice (for example Q1: 2, Q2: 1), or just tell me." Never give an example answer with letters.
 - **No emergent options**: render exactly the spec's options (+ Other). The
   NO EMERGENT BEHAVIOR rule applies to the rendering, not just the spec.

@@ -34,6 +34,15 @@ export type VerificationFamily = (typeof VERIFICATION_FAMILIES)[number];
 export const LIVE_SHARD_COUNTS: Partial<Record<LiveFamily, number>> = {
   "claude-sdk": 2, "claude-tui": 3, codex: 1, opencode: 1, "release-contract": 1,
 };
+/** More shards where a family's files run on one OS only (the golden journeys run on Linux). */
+export const LIVE_PLATFORM_SHARD_COUNTS: Partial<Record<LiveFamily, Partial<Record<NodeJS.Platform, number>>>> = {
+  "claude-sdk": { linux: 4 },
+};
+
+/** The shards a family gets on one OS. */
+export function liveShardCount(family: LiveFamily, platform: NodeJS.Platform): number {
+  return LIVE_PLATFORM_SHARD_COUNTS[family]?.[platform] ?? LIVE_SHARD_COUNTS[family] ?? 1;
+}
 
 let invocationFiles: Map<LiveFamily, string[]> | undefined;
 function liveInvocationFiles(): Map<LiveFamily, string[]> {
@@ -93,6 +102,9 @@ export const PLATFORM_ONLY: Record<string, readonly NodeJS.Platform[]> = {
   "tests/e2e/t-acp-kiro-new-work-routing.serial.test.ts": ["win32"],
   "tests/e2e/t-tui-journey-orientation-windows.serial.test.ts": ["win32"],
   "tests/e2e/t-tui-windows-user-settings-isolation.serial.test.ts": ["win32"],
+  // The golden journeys run nightly on Linux; stage logic is the same on every OS.
+  "tests/integration/t-journey-golden-bugfix.sdk.test.ts": ["linux"],
+  "tests/integration/t-journey-golden-poc.sdk.test.ts": ["linux"],
 };
 
 const LIVE_RUNNERS = { linux: "ubuntu-latest", darwin: "macos-15", win32: "windows-latest" } as const;
@@ -121,7 +133,7 @@ function eligibleLiveFiles(partition: Map<LiveFamily, string[]>, family: LiveFam
 /** Timing hints balance work; discovery alone determines which files must run. */
 export function assignLiveShards(files: string[], family: LiveFamily, platform: NodeJS.Platform): string[][] {
   const hints = liveTimings.platforms[platform as keyof typeof liveTimings.platforms] as Record<string, number> | undefined;
-  return assignWeightedShards(files, Math.min(LIVE_SHARD_COUNTS[family] ?? 1, files.length), {
+  return assignWeightedShards(files, Math.min(liveShardCount(family, platform), files.length), {
     defaultSeconds: liveTimings.defaultSeconds,
     weights: Object.fromEntries(files.filter(file => hints?.[file] !== undefined).map(file => [file, hints![file]])),
     affinityGroups: [],

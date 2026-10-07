@@ -396,6 +396,13 @@ function tuiSettingSources(env: NodeJS.ProcessEnv = process.env): string | null 
   return value;
 }
 
+// The suite often runs from inside a Claude Code session, which marks every
+// child process with CLAUDE_CODE_CHILD_SESSION. A Claude started with that
+// marker saves no transcript ("Transcript saving is off"), so the TUI under
+// test would not be the session a person starts. Every session starts without
+// it, on both backends.
+const LAUNCHING_SESSION_MARKERS = ["CLAUDE_CODE_CHILD_SESSION"];
+
 /**
  * Keep live TUI runs isolated from developer/user-level Claude settings and
  * hooks by default, mirroring sdk-drive's `settingSources: ["project"]`.
@@ -511,7 +518,9 @@ const tmuxBackend: Backend = {
     // Build a single shell command so cwd + the target command run in one PTY.
     // We cd then exec so the child replaces the shell (clean kill semantics).
     const inner = cmd.map((s) => `'${s.replaceAll("'", "'\\''")}'`).join(" ");
-    const shellCmd = `cd '${cwd.replaceAll("'", "'\\''")}' && exec ${inner}`;
+    // An existing tmux server keeps the environment it started with.
+    const unsetMarkers = LAUNCHING_SESSION_MARKERS.map((name) => `unset ${name}; `).join("");
+    const shellCmd = `${unsetMarkers}cd '${cwd.replaceAll("'", "'\\''")}' && exec ${inner}`;
 
     const r = tmux([
       "new-session",
@@ -703,6 +712,7 @@ async function cmdStart(backend: Backend, a: Args): Promise<void> {
     requestedCommand: command.join("\0") === a.rest.join("\0") ? undefined : a.rest,
   });
   if (isOwnedTuiFixture(cwd)) startPersonTurnSession(session, realpathSync(cwd));
+  for (const name of LAUNCHING_SESSION_MARKERS) delete process.env[name];
   await backend.start(session, cwd, width, height, command);
 }
 

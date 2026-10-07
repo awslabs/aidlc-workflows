@@ -202,6 +202,42 @@ function stageTableRows(body: string): string[] {
     .slice(2);
 }
 
+// An approved code plan is the plan. A resumed build once rewrote it before
+// building (and dropped an approved step), because the stage file's work order
+// always started at writing the plan. Every conductor SKILL, the stage file and
+// its reference say an approved plan is built as it is.
+describe("an approved code plan is built as it is", () => {
+  const flat = (rel: string) => readFileSync(join(REPO_ROOT, rel), "utf-8").replace(/\s+/g, " ");
+
+  test("every conductor SKILL builds an approved plan as it is", () => {
+    const keep = "`approved` builds (Step 4) from the plan and test instructions as they are: " +
+      "never rewrite an approved plan unless the person asks.";
+    const missing = harnessSkills().filter((rel) => !flat(rel).includes(keep));
+    expect(missing).toEqual([]);
+    // The old sentence said only "builds (Step 4)", with nothing on the plan.
+    expect(harnessSkills().filter((rel) => flat(rel).includes("`approved` builds (Step 4);"))).toEqual([]);
+  });
+
+  test("the stage file and its reference skip the plan steps once the plan is approved", () => {
+    const stage = flat("core/aidlc-common/stages/construction/code-generation.md");
+    const reference = flat("docs/reference/04-stages/construction.md");
+    for (const [rel, body] of [["code-generation.md", stage], ["construction.md", reference]] as const) {
+      expect(body, rel).toContain(
+        "When the directive already carries `plan_approval.status: \"approved\"` (a resumed or continued build), " +
+          "the plan and test instructions on disk are the approved ones: skip Steps 2 and 3 and build them as they are. " +
+          "Never rewrite an approved plan or its test instructions; change them only when the person asks",
+      );
+      expect(body, rel).toContain(
+        "The developer's one change there is ticking each step's box in the plan as it finishes that step",
+      );
+    }
+    expect(stage).toContain(
+      "When the directive already carries `plan_approval.status: \"approved\"`, this plan is written and approved: " +
+        "do not rewrite it or the test instructions; go to Step 4.",
+    );
+  });
+});
+
 describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () => {
   const skills = harnessSkills();
 
@@ -257,9 +293,9 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
     expect([...blocks.values()][0]).toEqual(skills);
   });
 
-  test("every shipped conductor SKILL separates in-flight deltas from stock routing", () => {
+  test("every shipped conductor composer.md separates in-flight deltas from stock routing", () => {
     const missing: string[] = [];
-    for (const rel of skills) {
+    for (const rel of skills.map((skill) => skill.replace(/SKILL\.md$/, "composer.md"))) {
       const body = readFileSync(join(REPO_ROOT, rel), "utf-8");
       for (const tok of COMPOSER_ROUTE_TOKENS) {
         if (!body.includes(tok)) missing.push(`${rel}  missing: ${tok}`);
@@ -313,6 +349,26 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
       }
       if (body.includes("Every invocation starts here")) missing.push(`${rel}  still overrides the steps before the loop`);
     }
+    expect(missing).toEqual([]);
+  });
+
+  // Kiro IDE's agent quoted "/aidlc classic: ..." whole as one argument, so the
+  // person was asked which plan to use after naming it. Every SKILL that passes
+  // the request on verbatim has the agent give a named plan its own argument;
+  // Codex already forwards the words as separate arguments.
+  test("every shipped conductor SKILL gives a plan the person named its own argument", () => {
+    const passOn = "Pass `$ARGUMENTS` through to the first `next` verbatim - the engine parses flags";
+    const named = "The one thing you read first is whether the request opens with the name of a plan, as in " +
+      "`/aidlc classic Build a notes app` or `/aidlc express: add a version flag`: give that name its own argument before the rest, " +
+      "which you quote as usual (`next classic 'Build a notes app'`), so the person is not asked for the plan they already named; " +
+      "when the opening word is part of what they want built (`/aidlc classic car rental website`), it stays in the request.";
+    const missing = skills.flatMap((rel) => {
+      const body = readFileSync(join(REPO_ROOT, rel), "utf-8");
+      if (!body.includes(passOn)) {
+        return body.includes("as separate arguments, never re-quoted into one string") ? [] : [`${rel}: no pass-on rule`];
+      }
+      return body.includes(named) ? [] : [rel];
+    });
     expect(missing).toEqual([]);
   });
 
@@ -373,6 +429,23 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
       "harness/kiro/skills/aidlc/SKILL.md",
       "harness/opencode/skills/aidlc/SKILL.md",
     ]);
+  });
+
+  test("every shipped conductor SKILL names its utilities as arguments to next, never commands of their own", () => {
+    // A live Kiro IDE agent asked to show the settings ran `aidlc --config`, a
+    // command that does not exist, because the utility list in the skill's
+    // description read like the command-line tool's own commands. Every utility
+    // goes to the loop's first `next`, as step 1 says.
+    const lead =
+      "Utilities, each an argument to `{{INVOKE}} engine orchestrate next` and never a command of its own: --status, --doctor, --config [section],";
+    const missing: string[] = [];
+    for (const rel of skills) {
+      const body = readFileSync(join(REPO_ROOT, rel), "utf-8");
+      const frontmatter = body.slice(0, body.indexOf("\n---", 4)).replace(/\s+/g, " ");
+      if (!frontmatter.includes(lead)) missing.push(`${rel}  utility list does not say where the utilities go`);
+      if (/\{\{INVOKE\}\} --config\b/.test(body)) missing.push(`${rel}  names --config as a command of its own`);
+    }
+    expect(missing).toEqual([]);
   });
 
   test("every SKILL and the onboarding switch a check when the person asks, with no typing for them", () => {
@@ -489,6 +562,24 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
     expect(missing).toEqual([]);
   });
 
+  // Kiro CLI shows every word the agent writes between tool calls: a live run
+  // showed "The request carries a change_notices line I must relay to you",
+  // a literal SAY: "..." and "that's the review freeze fence".
+  test("what the person reads carries no marker, field name, or check machinery", () => {
+    const notice = "Say a notice as a plain sentence of your own with nothing in front of it: never name the field, " +
+      "never say you were asked to pass it on, never call a check a fence, and add no reason of your own for carrying on.";
+    const speech = 'So a message never starts with "SAY:", never puts the sentence in quotation marks, and never ' +
+      "names a field, a directive, a protocol, or a fence.";
+    const missing = skills.flatMap((rel) => {
+      const body = readFileSync(join(REPO_ROOT, rel), "utf-8");
+      return [
+        ...(body.includes(notice) ? [] : [`${rel}: change_notices`]),
+        ...(body.includes(speech) ? [] : [`${rel}: speaking`]),
+      ];
+    });
+    expect(missing).toEqual([]);
+  });
+
   test("the narration rule is worded identically across every harness", () => {
     // Byte-alignment, not just presence: the rule is authored once and ported,
     // so a per-harness reword is drift. Extracted by its own anchors rather than
@@ -565,7 +656,10 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
   test("the plan offer is short, with the stage table and scores on request", () => {
     const short = "**Keep the offer short: a plain recommendation and the plan, with the details on request.**";
     const missing = skills.flatMap((rel) => {
-      const body = readFileSync(join(REPO_ROOT, rel), "utf-8");
+      // The plan offer's rules live in the composer.md beside SKILL.md.
+      const body = [rel, rel.replace(/SKILL\.md$/, "composer.md")]
+        .map((file) => readFileSync(join(REPO_ROOT, file), "utf-8"))
+        .join("\n");
       return [
         ...(body.includes(short) ? [] : [`${rel}: short offer`]),
         ...(body.includes("the scores and per-stage reasoning must be on screen before the user decides")
@@ -579,10 +673,9 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
   });
 
   test("Codex conductor guidance uses its native $aidlc invocation", () => {
-    const body = readFileSync(
-      join(REPO_ROOT, "harness/codex/skills/aidlc/SKILL.md"),
-      "utf-8",
-    );
+    const body = ["SKILL.md", "composer.md"]
+      .map((file) => readFileSync(join(REPO_ROOT, "harness/codex/skills/aidlc", file), "utf-8"))
+      .join("\n");
     for (const stale of [
       "`/aidlc --resume`",
       "fresh `/aidlc`",
@@ -802,7 +895,10 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
     for (const root of roots) walk(root);
     expect(found).toEqual([]);
     for (const rel of skills) {
-      const body = readFileSync(join(REPO_ROOT, rel), "utf-8");
+      // The composer gate's setters live in the composer.md beside SKILL.md.
+      const body = [rel, rel.replace(/SKILL\.md$/, "composer.md")]
+        .map((file) => readFileSync(join(REPO_ROOT, file), "utf-8"))
+        .join("\n");
       for (const setter of [
         "run `{{INVOKE}} engine config set guard-policy <value>` yourself",
         "running `{{INVOKE}} engine config set summary-confirmation off` yourself",

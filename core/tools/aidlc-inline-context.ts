@@ -143,6 +143,7 @@ const SHIPPED_INLINE_KNOWLEDGE: Readonly<
     "verification.md",
   ]),
   "aidlc-product-agent": new Set([
+    "corner-checklist.md",
     "functional-design-guide.md",
     "market-research-methods.md",
     "prioritization-frameworks.md",

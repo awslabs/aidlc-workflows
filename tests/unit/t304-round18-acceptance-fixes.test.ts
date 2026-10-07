@@ -820,6 +820,12 @@ describe("t304 copied projection configuration", () => {
       expect(followed.stdout).toContain(
         `Downloaded ${asset} and verified its checksum and release attestation.`,
       );
+      // Captured output keeps one line for the download itself, none for the
+      // checksum and attestation files read to verify it.
+      expect(
+        followed.stderr.split(/\r?\n/).filter((line) => line.startsWith("Downloaded ")),
+        followed.stderr,
+      ).toEqual([`Downloaded ${asset}`]);
       expect(frameworkVersionOf(project)).toBe(OTHER_VERSION);
       expect(JSON.parse(readFileSync(join(project, "aidlc.settings.json"), "utf-8")).models.preset)
         .toBe("balanced");

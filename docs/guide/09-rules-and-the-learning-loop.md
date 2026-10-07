@@ -70,7 +70,7 @@ Before each approval gate, the framework runs the learning gate (the protocol ca
 1. **Your agent's diary, surfaced verbatim.** A deterministic tool reads `memory.md` and emits each non-blank line under the four headings as a candidate, with its source heading attached. No paraphrase, no "interesting" filtering — the lines are shown as written.
 2. **A free-text channel that always asks "Anything to add for next time?"** You type the observation and pick which of the four headings it belongs under. That heading pick is the only classification asked of you.
 
-You tick the candidates you want to keep. If `memory.md` was empty for the stage, no one asks you to attest to whether the diary was kept — the framework records that quietly and moves on.
+You tick the candidates you want to keep, or **Keep none of these**, the first choice, to keep none. If `memory.md` was empty for the stage, no one asks you to attest to whether the diary was kept — the framework records that quietly and moves on.
 
 ### Where a kept learning goes
 

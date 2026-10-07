@@ -883,7 +883,7 @@ describe("t230 dispatcher route parity", () => {
       );
       expect(result.exitCode, project).toBe(1);
       expect(result.stderr.toString()).toContain(
-        "cannot use an AI-DLC machine install or command directory as its project directory",
+        "Start the session from your project's folder.",
       );
       expect(existsSync(join(project, "aidlc", "spaces"))).toBe(false);
     }
@@ -918,7 +918,7 @@ describe("t230 dispatcher route parity", () => {
     );
     expect(pinnedStatus.exitCode).toBe(1);
     expect(`${pinnedStatus.stdout}${pinnedStatus.stderr}`).toContain(
-      "cannot use an AI-DLC machine install or command directory as its project directory",
+      "Start the session from your project's folder.",
     );
     expect(`${pinnedStatus.stdout}${pinnedStatus.stderr}`).not.toContain(
       "pin is not registered",
@@ -950,7 +950,7 @@ describe("t230 dispatcher route parity", () => {
     );
     expect(parentResult.exitCode).toBe(1);
     expect(`${parentResult.stdout}${parentResult.stderr}`).toContain(
-      "cannot use an AI-DLC machine install or command directory as its project directory",
+      "Start the session from your project's folder.",
     );
     expect(existsSync(join(nestedInstall, "spaces"))).toBe(false);
 
@@ -988,7 +988,7 @@ describe("t230 dispatcher route parity", () => {
         );
         expect(symlinkResult.exitCode, installRoot).toBe(1);
         expect(`${symlinkResult.stdout}${symlinkResult.stderr}`).toContain(
-          "cannot use an AI-DLC machine install or command directory as its project directory",
+          "Start the session from your project's folder.",
         );
         expect(existsSync(join(externalMachine, "spaces"))).toBe(false);
       }
@@ -1085,7 +1085,7 @@ describe("t230 dispatcher route parity", () => {
     );
   });
 
-  test("host hooks in a folder that holds the machine roots refuse and say why", () => {
+  test("host hooks stand aside in a folder that holds the machine roots, and AI-DLC itself names the step", () => {
     const home = mkdtempSync(join(tmpdir(), "aidlc-t230-home-hooks-"));
     tempProjects.add(home);
     const bin = join(home, ".local", "bin");
@@ -1100,49 +1100,45 @@ describe("t230 dispatcher route parity", () => {
       tool_name: "bash",
       tool_input: { command: "echo hi" },
     });
-    const why = `AI-DLC can't run in ${home}`;
 
-    // Copilot and Cursor deny a failed hook without its reason, so their tool
-    // guards refuse in the host's own deny form. The call is still denied.
+    // AI-DLC never runs here, so the person's other work goes on: Copilot's
+    // tool guard gives no decision (its own permission rules apply), and
+    // Cursor's failClosed guard gets an explicit allow.
     for (const args of [
       ["engine", "adapter", "copilot", "guard-tool-call"],
       ["engine", "hook", "copilot-adapter", "guard-tool-call"],
     ]) {
       const result = viaDispatcher(args, home, env, payload);
       expect(result.exitCode, args.join(" ")).toBe(0);
-      const decision = (JSON.parse(result.stdout.toString()) as {
-        hookSpecificOutput: Record<string, string>;
-      }).hookSpecificOutput;
-      expect(decision.hookEventName).toBe("PreToolUse");
-      expect(decision.permissionDecision).toBe("deny");
-      expect(decision.permissionDecisionReason).toContain(why);
-      expect(decision.permissionDecisionReason).toContain(
-        "Start the session from your project's folder.",
-      );
+      expect(result.stdout.toString(), args.join(" ")).toBe("");
+      expect(result.stderr.toString(), args.join(" ")).toBe("");
     }
     const cursor = viaDispatcher(["engine", "adapter", "cursor", "guards"], home, env, payload);
     expect(cursor.exitCode).toBe(0);
-    const cursorDecision = JSON.parse(cursor.stdout.toString()) as Record<string, string>;
-    expect(cursorDecision.permission).toBe("deny");
-    expect(cursorDecision.agent_message).toContain(why);
+    expect(JSON.parse(cursor.stdout.toString())).toEqual({ permission: "allow" });
 
-    // Every other host route keeps its exit code, and its first stderr line,
-    // the line hosts show, names the folder and what to do.
+    // Every other host route stands aside quietly too.
     for (const args of [
       ["engine", "hook", "plan-approval-guard"],
       ["engine", "adapter", "copilot", "session-start"],
       ["engine", "statusline"],
     ]) {
       const result = viaDispatcher(args, home, env, payload);
-      expect(result.exitCode, args.join(" ")).toBe(1);
+      expect(result.exitCode, args.join(" ")).toBe(0);
       expect(result.stdout.toString(), args.join(" ")).toBe("");
-      const firstLine = result.stderr.toString().split("\n")[0];
-      expect(firstLine, args.join(" ")).toContain(why);
-      expect(firstLine, args.join(" ")).toContain("start the session from your project's folder");
+      expect(result.stderr.toString(), args.join(" ")).toBe("");
     }
     expect(existsSync(join(home, "aidlc"))).toBe(false);
 
-    // However a project comes to overlap the install, its tool guard denies.
+    // Asked for AI-DLC itself there, the engine says the one step.
+    const asked = viaDispatcher(["engine", "orchestrate", "next"], home, env);
+    expect(asked.exitCode).toBe(1);
+    expect(asked.stderr.toString()).toContain(
+      `AI-DLC can't run in ${home}. Start the session from your project's folder.`,
+    );
+    expect(existsSync(join(home, "aidlc"))).toBe(false);
+
+    // A project that is itself named as the install stands aside the same way.
     const project = makeProject();
     const named = viaDispatcher(
       ["engine", "adapter", "copilot", "guard-tool-call"],
@@ -1151,13 +1147,7 @@ describe("t230 dispatcher route parity", () => {
       payload,
     );
     expect(named.exitCode).toBe(0);
-    const namedDecision = (JSON.parse(named.stdout.toString()) as {
-      hookSpecificOutput: Record<string, string>;
-    }).hookSpecificOutput;
-    expect(namedDecision.permissionDecision).toBe("deny");
-    expect(namedDecision.permissionDecisionReason).toContain(
-      `AI-DLC can't run in ${project}. Start the session from your project's folder.`,
-    );
+    expect(named.stdout.toString()).toBe("");
   });
 
   test("--project-dir is global and may be interleaved with workspace tokens", () => {
@@ -1238,6 +1228,7 @@ describe("t230 version-aware startup", () => {
       expect(output).not.toContain(
         "cannot use an AI-DLC machine install or command directory",
       );
+      expect(output).not.toContain("AI-DLC can't run in");
     }
   });
 

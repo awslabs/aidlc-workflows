@@ -178,12 +178,14 @@ import {
   activeModelGroups,
   applyModelPolicyToProjection,
   HARNESS_HONESTY,
+  HARNESS_PRODUCT_NAMES,
   harnessHonestyNotes,
   isModelEffort,
   isModelPreset,
   MODEL_EFFORTS,
   MODEL_GROUPS,
   MODEL_PRESETS,
+  modelPolicyAgentsDir,
   modelPolicyIsEmpty,
   modelPolicySurfaceDrift,
   normalizeModelPolicy,
@@ -2300,23 +2302,31 @@ function sameFile(left: string, right: string): boolean {
   }
 }
 
+// The harness this config run sets up or refreshes, once it is known. No
+// projection names one in the source tree, so the commands this run prints
+// name this harness's tool there, not the first install the project shows.
+let configTargetHarnessDir: string | null = null;
+
 // How a printed command starts so it runs from where the user is: `aidlc`, or
 // the Bun tool that ran this command. The project's own tool is named from the
 // project when run there and by its path in the project when not. Any other
 // tool (a runtime unpacked elsewhere, which may be adding a harness the project
 // does not have yet) is named by its own path, unless it is the one under the
-// working directory. In the source tree the project's own tool stands in.
+// working directory. In the source tree the project's own tool of the harness
+// being set up stands in.
 function configInvocationFor(projectDir = process.cwd()): string {
   const invocation = aidlcInvocation();
   if (invocation === "aidlc") return invocation;
   const ran = projectedDispatcher();
   // A projection's relative invocation names the harness directory it was
   // built for, whatever the environment says the harness is.
-  const harnessDir = ran === null ? runtimeHarnessDir() : basename(dirname(dirname(ran)));
+  const harnessDir = ran === null
+    ? configTargetHarnessDir ?? runtimeHarnessDir()
+    : basename(dirname(dirname(ran)));
   const toolIn = (root: string) => join(root, harnessDir, "tools", "aidlc.ts");
   if (ran === null || sameFile(ran, toolIn(projectDir))) {
     return ranFromProject(projectDir)
-      ? invocation
+      ? ran === null ? `bun ${harnessDir}/tools/aidlc.ts` : invocation
       : `bun ${quoteCommandArgument(toolIn(projectDir))}`;
   }
   return sameFile(ran, toolIn(process.cwd())) ? invocation : `bun ${quoteCommandArgument(ran)}`;
@@ -4755,9 +4765,12 @@ function preserveClaudeProviderFields(
     }
     staged.statusLine = current.statusLine;
   }
+  // A value equal to this release's own is AI-DLC's, not the person's: a
+  // copied runtime brings it in before the first setup records anything.
   if (
     Object.hasOwn(current, "companyAnnouncements") &&
-    sha256Bytes(canonical(current.companyAnnouncements)) !== priorEntries?.companyAnnouncements
+    sha256Bytes(canonical(current.companyAnnouncements)) !== priorEntries?.companyAnnouncements &&
+    canonical(current.companyAnnouncements) !== canonical(staged.companyAnnouncements)
   ) {
     if (shippedChanged("companyAnnouncements")) {
       notes.push(
@@ -10286,7 +10299,12 @@ const RIGHT_AWAY_FLAGS = new Map([
   ["flags.questionRetentionDays", "question retention"],
 ]);
 
-function openWorkflowLine(projectDir: string, mutations: readonly SettingsMutation[]): string | null {
+// `nextSession` names a tool that reads the change only when a session starts.
+function openWorkflowLine(
+  projectDir: string,
+  mutations: readonly SettingsMutation[],
+  nextSession?: string,
+): string | null {
   const open = activeWorkflowDescriptions(projectDir);
   const [first, ...rest] = mutations;
   if (open.length === 0 || !first) return null;
@@ -10316,16 +10334,19 @@ function openWorkflowLine(projectDir: string, mutations: readonly SettingsMutati
     ...changed.flatMap((id) => RIGHT_AWAY_FLAGS.get(id) ?? []),
   ];
   const nextStep = changed.some((id) => id !== "flags.defaultScope" && !RIGHT_AWAY_FLAGS.has(id));
-  const later = "a step already running keeps what it started with";
+  const from = nextSession ? `from your next ${nextSession} session` : "from the next step";
+  const later = nextSession
+    ? `the ${nextSession} session already running keeps what it started with`
+    : "a step already running keeps what it started with";
   const scopeNote = changed.includes("flags.defaultScope") ? "; the default scope applies to new work only" : "";
   if (rightAway.length > 0 && nextStep) {
     const named = rightAway.length === 1
       ? rightAway[0]
       : `${rightAway.slice(0, -1).join(", ")} and ${rightAway[rightAway.length - 1]}`;
-    return `${who} ${verb("pick")} up ${named} right away, with no restart, and the other settings from the next step; ${later}${scopeNote}.`;
+    return `${who} ${verb("pick")} up ${named} right away, with no restart, and the other settings ${from}; ${later}${scopeNote}.`;
   }
   if (rightAway.length > 0) return `${who} ${verb("pick")} this up right away, with no restart${scopeNote}.`;
-  if (nextStep) return `${who} ${verb("pick")} this up from the next step; ${later}${scopeNote}.`;
+  if (nextStep) return `${who} ${verb("pick")} this up ${from}; ${later}${scopeNote}.`;
   if (scopeNote) return `The default scope applies to new work; ${who} ${verb("keep")} the scope it started with.`;
   // The file changed, but what open work reads did not: another file sets the
   // same thing, or outranks it. A saved profile reaches nothing either.
@@ -10638,25 +10659,33 @@ function recordBypassesOnly(
     const switchLines = [...new Set(mutations.flatMap((change) =>
       recordSwitchChange(projectDir, change.target, change.previous, change.next, { otherFiles: false })
     ))];
-    if (options.mode === "human") {
-      writeMenuLines("", context.summaryLines);
-      writeMenuLines("", context.notes.map((note) => `  Note: ${note}`));
-      writeMenuLines("", changes.map((line) => `  ${line}`));
-      writeMenuLines("", notes.map((note) => `  Note: ${note}`));
-      writeMenuLines("", switchLines.map((line) => `  ${line}`));
-    }
     // With several harnesses and none named, no one harness's setup is the
     // person's to finish here.
     const outstandingActions = setupWalkChild || context.anyHarness
       ? []
       : postApplyOutstandingActions(projectDir, context.harnessDir, context.harness);
+    if (options.mode === "human") {
+      // The person sees what changed with its undo, and which check is now
+      // off or on again; anything more only when something still needs them.
+      writeMenuLines("", changes);
+      writeMenuLines("", notes.map((note) => `Note: ${note}`));
+      writeMenuLines("", switchLines);
+      if (changes.length + notes.length + switchLines.length === 0) {
+        writeMenuLines("", [`configured flags settings for ${projectDir}`]);
+      }
+      if (outstandingActions.length > 0) {
+        process.stdout.write(`${menuText(configCompletionMessage("", outstandingActions, "human").trimStart())}\n`);
+      }
+      process.exitCode = EXIT.ok;
+      return;
+    }
     const completion = configCompletionMessage(
       `configured flags settings for ${projectDir}`,
       outstandingActions,
       options.mode,
     );
     emitResult(success(
-      options.mode === "human" ? menuText(completion) : completion,
+      completion,
       {
         projectDir,
         ...(context.anyHarness ? {} : { distribution: context.distribution }),
@@ -10760,6 +10789,8 @@ export async function main(
   input: string[],
   internal: ConfigMainInternal = {},
 ): Promise<void> {
+  // A setup walk's own sections run inside the walk, for the harness it set up.
+  if (!internal.setupWalkChild) configTargetHarnessDir = null;
   let argv = stripVerb(input);
   const options = globalOptions(argv);
   const positionals = configPositionals(argv);
@@ -11323,6 +11354,7 @@ export async function main(
       }
     }
     const { stamp, descriptor } = selected;
+    configTargetHarnessDir = descriptor.harnessDir;
     if (existing.distribution && existing.distribution !== stamp.distribution) {
       throw new Error(`project uses ${existing.distribution}; refusing ${stamp.distribution}`);
     }
@@ -12007,13 +12039,25 @@ export async function main(
     ];
     // A model policy reaches running work only through the agent files it
     // rewrites; a harness whose agents inherit the session says so in a note.
+    // Kiro CLI reads its agent files and its cli.json effort only when a
+    // session starts, so there the change reaches open work from the next one.
+    const policyHarness = modelHarness(descriptor.distribution);
+    const agentsDir = modelPolicyAgentsDir(policyHarness, descriptor.harnessDir);
+    const kiroCliSettings = policyHarness === "kiro" ? `${descriptor.harnessDir}/settings/cli.json` : null;
     const reachesWork = Boolean(settingsMutation) && (
       !modelsContext ||
-      actions.some((item) => item.path.startsWith(`${descriptor.harnessDir}/agents/`) && item.action !== "preserve")
+      (agentsDir !== null &&
+        actions.some((item) =>
+          item.action !== "preserve" && (item.path.startsWith(`${agentsDir}/`) || item.path === kiroCliSettings)
+        ))
     );
     if (choicesContext?.section === "project") changes.push(...projectChangeLines(projectDir, choicesContext));
     const openLine = recordOnly && reachesWork && settingsMutation
-      ? openWorkflowLine(projectDir, [settingsMutation])
+      ? openWorkflowLine(
+        projectDir,
+        [settingsMutation],
+        modelsContext && policyHarness === "kiro" ? HARNESS_PRODUCT_NAMES.kiro : undefined,
+      )
       : null;
     if (openLine) changes.push(openLine);
     if (!recordOnly) {
@@ -12101,6 +12145,15 @@ export async function main(
     // asked for until the printed command runs again.
     const kiroUnsaved = kiroSession !== null && !kiroSession.ok;
     const completed = kiroUnsaved ? `${completion}; your Kiro session was not saved` : completion;
+    // A model change the person sees ends with what changed and its undo;
+    // anything more only when something still needs them.
+    if (modelsContext && options.mode === "human" && changes.length > 0 && !kiroUnsaved) {
+      if (outstandingActions.length > 0) {
+        process.stdout.write(`${menuText(configCompletionMessage("", outstandingActions, "human").trimStart())}\n`);
+      }
+      process.exitCode = EXIT.ok;
+      return;
+    }
     const configured = success(
       // Only the human line is laid out for the terminal; JSON and --quiet
       // output keep the message exactly.

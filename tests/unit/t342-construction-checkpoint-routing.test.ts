@@ -320,6 +320,36 @@ describe("t342 Construction checkpoint routing", () => {
     expect(surface("code-generation").stderr).toContain('slug mismatch: requested "code-generation"');
   });
 
+  // Every Unit's turn at a stage writes the one stage diary. A Unit's
+  // checkpoint lists the notes written for that Unit and the notes that name
+  // no Unit, never an earlier Unit's notes again.
+  test("a Unit's checkpoint lists only that Unit's notes and the notes that name no Unit", () => {
+    const p = fixture();
+    const surface = learningsSurface(p);
+    const dash = "\u2014"; // the diary line's separator, an em dash
+    const diary = join(seededRecordDir(p), "construction", "functional-design", "memory.md");
+    mkdirSync(dirname(diary), { recursive: true });
+    writeFileSync(diary, [
+      "## Interpretations",
+      `- 2026-10-05T10:00:00Z [unit alpha] ${dash} alpha keeps its own store; it owns the data`,
+      `- 2026-10-05T10:05:00Z ${dash} every Unit logs in UTC; the team asked for it`,
+      `- 2026-10-05T11:00:00Z [unit beta] ${dash} beta reads the store through alpha; no second copy`,
+      "",
+    ].join("\n"));
+    const offered = () => {
+      const result = surface("functional-design");
+      expect(result.status, result.stderr).toBe(0);
+      return (JSON.parse(result.stdout).candidates as Array<{ summary: string }>).map((c) => c.summary);
+    };
+    cover(p, "alpha");
+    expect(next(p).construction_checkpoint?.unit).toBe("alpha");
+    expect(offered()).toEqual(["alpha keeps its own store", "every Unit logs in UTC"]);
+    approve(p, "alpha");
+    cover(p, "beta");
+    expect(next(p).construction_checkpoint?.unit).toBe("beta");
+    expect(offered()).toEqual(["every Unit logs in UTC", "beta reads the store through alpha"]);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
   test("the working skeleton's checkpoint offers the learnings of the stages its Unit walked", () => {
     const p = fixture({ stance: "on", iteration: "stage-major" });
     seedBoltDag(p, [{ name: "beta", depends_on: ["alpha"] }, "alpha"], [["alpha"], ["beta"]]);
@@ -376,6 +406,48 @@ describe("t342 Construction checkpoint routing", () => {
       expect(result.status, `${result.stdout}${result.stderr}`).toBe(0);
     }
     expect(stop()).toBe("ends");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  // The chat ends while a Unit's checkpoint question is open, and the person
+  // answers it in a new chat. Current Stage still names the Unit's first
+  // stage, so their words were asked about as new work; they now reach the
+  // checkpoint's own question, as the Stop hook already reads it.
+  test("words typed in a new chat answer a Unit checkpoint's open question", () => {
+    const p = fixture();
+    cover(p, "alpha");
+    recordCommand(p);
+    const directive = next(p);
+    expect(directive.construction_checkpoint?.unit, JSON.stringify(directive)).toBe("alpha");
+    expect(directive.stage).toBe("code-generation");
+    const tool = (name: string, args: string[]) => {
+      const result = spawnSync(process.execPath, [join(AIDLC_SRC, `tools/aidlc-${name}.ts`), ...args, "--project-dir", p], {
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+        encoding: "utf-8", env: { ...process.env, AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "1" },
+      });
+      expect(result.status, `${result.stdout}${result.stderr}`).toBe(0);
+    };
+    const reply = (words: string) => {
+      const result = runOrchestrateNext(join(AIDLC_SRC, "tools/aidlc-orchestrate.ts"), p, [words]);
+      expect(result.directive, result.stderr).not.toBeNull();
+      return result.directive as { kind: string; ask_type?: string; message?: string };
+    };
+    tool("log", ["decision", "--stage", "code-generation", "--decision", "Anything to add for next time?", "--options", "Nothing to add,Add a note"]);
+    const learnings = reply("Nothing to add");
+    expect(learnings.kind, JSON.stringify(learnings)).toBe("print");
+    expect(learnings.message).toContain('Stage "code-generation" has a question you asked');
+    expect(learnings.message).toContain("answer --stage code-generation --details");
+    tool("log", ["answer", "--stage", "code-generation", "--details", "Nothing to add"]);
+    // Answered, the same words no longer reach that question: they are routed
+    // as any words are when no question is open.
+    const answered = reply("Nothing to add");
+    expect(answered.message ?? "", JSON.stringify(answered)).not.toContain('Stage "code-generation" has a question you asked');
+    for (const action of [["--action", "verify"], ["--action", "ask", "--session", "t342-break"]]) {
+      tool("bolt", ["checkpoint", "--unit", "alpha", "--kind", "unit", ...action]);
+    }
+    const approval = reply("approve it");
+    expect(approval.kind, JSON.stringify(approval)).toBe("print");
+    expect(approval.message).toContain('Stage "code-generation" has a question you asked');
+    expect(approval.message).toContain("checkpoint --action approve");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("unit-major reviews alpha before starting beta", () => {

@@ -154,7 +154,9 @@ Generate the following in `<record>/construction/{unit-name}/infrastructure-desi
 Create
 `<record>/construction/{unit-name}/infrastructure-design/traceability.json`.
 Enumerate every `NFRx.y` design decision that requires infrastructure and map
-it to the concrete resource or configuration:
+it to the concrete resource or configuration (if NFR Design did not run, take
+the `NFRx.y` IDs from NFR Requirements; if NFR Requirements did not run,
+enumerate every `NFRn` in `requirements.md` instead):
 
 ```json
 {

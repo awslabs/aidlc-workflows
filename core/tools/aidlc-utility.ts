@@ -192,6 +192,7 @@ import {
   defaultScopeResolution,
   DEFAULT_SPACE,
   detectLeakedLocks,
+  intentDisplayLabel,
   documentInputRequestFilePath,
   DOCUMENT_INPUT_REQUEST_FILE,
   docsDir,
@@ -8671,7 +8672,10 @@ function handleIntent(
       recordSessionIntentSwitch(projectDir, sid, priorUuid, recordIntentKey(space, match.dirName));
     }
   }
-  process.stdout.write(`Active intent -> ${match.dirName} (space: ${space})\n`);
+  // What the person sees after picking or switching: the work they are on now,
+  // by the name they know it by.
+  const where = space === DEFAULT_SPACE ? "" : ` in space \`${space}\``;
+  process.stdout.write(`Now working on \`${intentDisplayLabel(match)}\`${where}.\n`);
 }
 
 // A human's free-text `--reason` becomes one audit field value: one physical
@@ -8957,7 +8961,8 @@ function handleSpace(projectDir: string, positional: string[], flags: Record<str
   // own resolver; the CLI-native include is the ambient channel). Surgical
   // in-place rewrite of the pointer segment only — preserves all engine wiring.
   const repointed = repointHarnessIncludes(projectDir, target);
-  process.stdout.write(`Active space -> ${target}\n`);
+  // The person's words for the move, as the intent switch says it.
+  process.stdout.write(`Now working in space \`${target}\`.\n`);
   if (repointed.length > 0) {
     process.stdout.write(`  repointed ${repointed.length} harness include(s) -> ${target}\n`);
   }

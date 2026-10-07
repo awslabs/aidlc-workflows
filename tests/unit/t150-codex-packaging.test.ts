@@ -619,9 +619,10 @@ describe("t150 dist/codex packaging determinism + trust", () => {
           exists = false;
         }
         expect(exists).toBe(false);
-        // The orchestrator ships its question-rendering annex beside SKILL.md.
+        // The orchestrator ships its question-rendering and composer annexes beside SKILL.md.
         expect(readdirSync(join(skillsDir, d)).sort()).toEqual([
           "SKILL.md",
+          "composer.md",
           "question-rendering.md",
         ]);
       } else {

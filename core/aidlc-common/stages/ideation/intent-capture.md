@@ -132,14 +132,16 @@ Then create consecutively numbered `## Q<n>.` questions covering:
 - Who are the key stakeholders and what does each care about?
 - Who decides scope or priority, and who influences those decisions?
 - Are there communication requirements or a reporting cadence?
-- The workflow was started with the scope in `[scope]`; does that scope match
-  the user's intended product boundary?
+- What this first version leaves out. Name the scope in `[scope]` as already chosen
+  (the person picked or approved it) and ask only what this first version should
+  not do; never ask whether the scope is the right one.
 
 Every question MUST include an explicit `Not yet defined`, `None`,
 `Not identified`, or `Not applicable` option as appropriate so a narrow intent
 never forces the user to select invented detail.
-The scope question MUST distinguish confirming the workflow-selected scope
-from defining a different product boundary. Use the [Answer]: tag format from
+The boundary question asks about the product (what is out of this first
+version), never about the workflow scope, which the person already chose. Use
+the [Answer]: tag format from
 stage-protocol.md. Include A-E options with X (Other) as final option. Leave
 all [Answer]: tags blank. Follow-up questions continue the same `Q<n>`
 numbering so their source ids remain stable.
@@ -167,8 +169,8 @@ Apply this grounding contract to both artifacts:
 3. Every substantive claim block — a paragraph, list item, or table data row —
    MUST carry one or more inline source tags.
 4. `[scope]` proves only workflow-selected scope. Label it
-   `workflow-selected`; use the scope-confirmation question's `[Q<n>]` tag for
-   any user-confirmed product boundary.
+   `workflow-selected`; use the boundary question's `[Q<n>]` tag for any
+   user-confirmed product boundary.
 5. Never turn an unselected option into an exclusion or requirement.
 6. Unsupported content is omitted or elicited with a follow-up. If it is
    useful to preserve but cannot be confirmed, put it only under

@@ -44,6 +44,7 @@ import {
   writeStateFile,
   entrySkillInvocation,
   REDO_REUSE_SOURCE,
+  answerModeStageStartedFields,
 } from "./aidlc-lib.js";
 
 // The EFFECTIVE per-stage action: the live state file's EXECUTE/SKIP suffix
@@ -693,6 +694,7 @@ function handleExecute(args: string[]): void {
     emitAudit(pd, "STAGE_STARTED", {
       Stage: targetSlug,
       Agent: targetStage.lead_agent,
+      ...answerModeStageStartedFields(pd),
       ...jumpSourceBaseline,
     });
   } catch (e) {

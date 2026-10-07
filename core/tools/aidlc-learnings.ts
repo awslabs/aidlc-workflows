@@ -344,20 +344,20 @@ function resolveMemoryPath(
 // A Construction checkpoint the person approves covers every stage its Unit
 // walked, while Current Stage waits on the first one until every Unit is past
 // it. A stage of the checkpoint now at its approval (ready, not yet approved)
-// is the one that just ran.
-function checkpointStage(projectDir: string, stateContent: string, slug: string): boolean {
-  if (!constructionCheckpointsApply(stateContent)) return false;
+// is the one that just ran. The Units whose checkpoint that is.
+function checkpointUnits(projectDir: string, stateContent: string, slug: string): string[] {
+  if (!constructionCheckpointsApply(stateContent)) return [];
   try {
     const dag = resolveBoltDag(projectDir);
-    if (dag.state !== "ok") return false;
+    if (dag.state !== "ok") return [];
     const units = dag.batches.flat();
-    return units.some((unit) => {
+    return units.filter((unit) => {
       const kind = constructionCheckpointKind(stateContent, unit, units);
       const checkpoint = resolveConstructionCheckpoint(projectDir, unit, kind, stateContent);
       return checkpoint.ready && !checkpoint.approved && checkpoint.stages.includes(slug);
     });
   } catch {
-    return false;
+    return [];
   }
 }
 
@@ -371,14 +371,14 @@ function approvedTogetherStage(stateContent: string, current: string, slug: stri
 // The §13 ritual runs while the just-completed stage is still the Active
 // (Current Stage) row at the approval gate. Reject a slug that isn't the
 // active one — the orchestrator must surface the stage it just ran.
-function assertActiveStage(projectDir: string, stateContent: string, slug: string): void {
+function assertActiveStage(stateContent: string, slug: string, atCheckpoint: string[]): void {
   const current = getField(stateContent, "Current Stage");
   if (current === null) {
     fail("state file has no Current Stage field", 1);
   }
   if (
     current !== slug &&
-    !checkpointStage(projectDir, stateContent, slug) &&
+    atCheckpoint.length === 0 &&
     !approvedTogetherStage(stateContent, current, slug)
   ) {
     // --slug takes a stage's slug. When the value is no stage at all (an
@@ -417,7 +417,8 @@ function handleSurface(args: string[], projectDir: string): void {
     fail(`could not read state: ${errorMessage(e)}`, 1);
   }
 
-  assertActiveStage(projectDir, stateContent, slug);
+  const atCheckpoint = checkpointUnits(projectDir, stateContent, slug);
+  assertActiveStage(stateContent, slug, atCheckpoint);
 
   const memRel = resolveMemoryPath(projectDir, slug, pinnedIntent, space);
   const memAbs = join(projectDir, memRel);
@@ -426,7 +427,10 @@ function handleSurface(args: string[], projectDir: string): void {
   // creation; if a stage ran without it, surface zero candidates rather than
   // failing the gate).
   const raw = existsSync(memAbs) ? readFileSync(memAbs, "utf-8") : "";
-  const entries = parseMemoryEntries(raw);
+  // Every Unit's turn at a stage writes the one stage diary. At a Unit's
+  // checkpoint, offer that Unit's entries and the ones that name no Unit.
+  const unit = atCheckpoint.length === 1 ? atCheckpoint[0] : null;
+  const entries = parseMemoryEntries(raw).filter((e) => unit === null || e.unit === undefined || e.unit === unit);
 
   // memory_path always ends `<prefix>/<phase>/<stageSlug>/memory.md` (see
   // relativeMemoryPath), so the phase is the third-from-last segment regardless

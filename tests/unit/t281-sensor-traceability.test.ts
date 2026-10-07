@@ -7,7 +7,7 @@ import {
 } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   artifactFilename,
@@ -573,5 +573,385 @@ describe("t281 per-Unit scope, reverse derivation, and code targets", () => {
     });
     expect(spawned.status).toBe(1);
     expect(spawned.stderr).toContain("--output-path is required");
+  });
+});
+
+// Every stage file that runs once per Unit and declares the traceability
+// sensor, read from frontmatter so a new per-Unit stage is pinned as well.
+function perUnitTraceabilityStages(): string[] {
+  const slugs: string[] = [];
+  for (const phase of readdirSync(STAGES, { withFileTypes: true }).filter((entry) => entry.isDirectory())) {
+    for (const file of readdirSync(join(STAGES, phase.name)).filter((name) => name.endsWith(".md"))) {
+      const frontmatter = parseStageFrontmatter(readFileSync(join(STAGES, phase.name, file), "utf-8"));
+      const sensors = Array.isArray(frontmatter.sensors) ? frontmatter.sensors : [];
+      if (frontmatter.for_each === "unit-of-work" && sensors.includes("traceability")) {
+        slugs.push(String(frontmatter.slug));
+      }
+    }
+  }
+  return slugs.sort();
+}
+
+function stageProgress(proj: string, lines: Array<[string, string, "EXECUTE" | "SKIP"]>): void {
+  writeFileSync(seededStateFile(proj), [
+    "# State",
+    "",
+    "## Stage Progress",
+    ...lines.map(([mark, slug, action]) => `- [${mark}] ${slug} \u2014 ${action}`),
+    "",
+  ].join("\n"));
+}
+
+function seedRequirements(proj: string): void {
+  write(proj, "inception/requirements-analysis/requirements.md", [
+    "# Requirements",
+    "",
+    "## Functional",
+    "- FR1 Login",
+    "- FR2 Recovery",
+    "",
+    "## Non-functional",
+    "- NFR1 Latency",
+    "- NFR2 Availability",
+  ].join("\n"));
+}
+
+const UNITS_DECLARED =
+  "cannot derive the construction unit from output path while unit-of-work-dependency.md declares Units";
+
+// When the plan has no Units, the engine writes every per-Unit stage under
+// construction/<stage>/ with no Unit segment. The sensor must resolve that
+// location for each of them, not only code-generation.
+describe("t281 zero-Unit plans: every per-Unit stage", () => {
+  test("each per-Unit stage resolves its own stage-level folder, and only that folder", () => {
+    const stages = perUnitTraceabilityStages();
+    for (const known of ["code-generation", "functional-design", "infrastructure-design", "nfr-design", "nfr-requirements"]) {
+      expect(stages).toContain(known);
+    }
+    for (const stage of stages) {
+      const proj = project();
+      seedRequirements(proj);
+      const body = {
+        stage,
+        upstream_ids: ["FR1"],
+        coverage: [{ id: "FR1", status: "OK", target: "covered" }],
+      };
+      const own = trace(proj, `construction/${stage}/traceability.json`, body);
+      let out = run(proj, stage, own);
+      expect(out.result.reason ?? "").not.toContain("cannot derive the construction unit");
+      expect(out.result.reason ?? "").not.toContain("has no traceability upstream resolver");
+
+      const other = stages.find((slug) => slug !== stage)!;
+      const misplaced = trace(proj, `construction/${other}/traceability.json`, body);
+      out = run(proj, stage, misplaced);
+      // The reason names the path with forward slashes on every OS.
+      expect(out.result.reason).toContain(
+        `cannot derive the construction unit from output path: ${misplaced.replaceAll("\\", "/")}`,
+      );
+
+      seedUnits(proj);
+      out = run(proj, stage, own);
+      expect(out.result.pass).toBe(false);
+      expect(out.result.reason).toContain(UNITS_DECLARED);
+    }
+  });
+
+  // A scope change after Units Generation leaves the old Unit DAG on disk while
+  // the plan now skips Units Generation. The engine then places artifacts at
+  // stage level and ignores that DAG, so the sensor follows the plan too.
+  test("a plan that skips Units Generation wins over a Unit DAG left on disk", () => {
+    const proj = project();
+    seedRequirements(proj);
+    seedUnits(proj);
+    write(proj, "construction/functional-design/rules.md", "# Rules\n\n- BR1.1 Validate credentials\n- BR1.2 Lock after failures\n");
+    const file = trace(proj, "construction/functional-design/traceability.json", {
+      stage: "functional-design",
+      upstream_ids: ["FR1", "FR2"],
+      coverage: [
+        { id: "FR1", status: "OK", target: "BR1.1" },
+        { id: "FR2", status: "OK", target: "BR1.2" },
+      ],
+    });
+    const plan = (unitsAction: "EXECUTE" | "SKIP") => stageProgress(proj, [
+      ["x", "units-generation", unitsAction],
+      ["-", "functional-design", "EXECUTE"],
+    ]);
+    plan("SKIP");
+    let out = run(proj, "functional-design", file);
+    expect(out.result.pass).toBe(true);
+
+    plan("EXECUTE");
+    out = run(proj, "functional-design", file);
+    expect(out.result.reason).toContain(UNITS_DECLARED);
+
+    write(proj, "inception/units-generation/unit-of-work-dependency.md", "# Dependencies\n\nNo units block.\n");
+    out = run(proj, "functional-design", file);
+    expect(out.result.reason).toContain("unit-of-work-dependency.md is");
+
+    plan("SKIP");
+    out = run(proj, "functional-design", file);
+    expect(out.result.pass).toBe(true);
+  });
+
+  test("functional-design checks BR targets against the stage-level rules.md", () => {
+    const proj = project();
+    seedRequirements(proj);
+    write(proj, "construction/functional-design/rules.md", "# Rules\n\n- BR1.1 Validate credentials\n- BR1.2 Lock after failures\n");
+    const file = trace(proj, "construction/functional-design/traceability.json", {
+      stage: "functional-design",
+      upstream_ids: ["FR1", "FR2"],
+      coverage: [
+        { id: "FR1", status: "OK", target: "BR1.1" },
+        { id: "FR2", status: "OK", target: "BR1.2" },
+      ],
+    });
+    let out = run(proj, "functional-design", file);
+    expect(out.result.pass).toBe(true);
+
+    trace(proj, "construction/functional-design/traceability.json", {
+      stage: "functional-design",
+      upstream_ids: ["FR1", "FR2"],
+      coverage: [
+        { id: "FR1", status: "OK", target: "BR1.1" },
+        { id: "FR2", status: "OK", target: "BR9.9" },
+      ],
+    });
+    out = run(proj, "functional-design", file);
+    expect(out.result.pass).toBe(false);
+    expect(out.result.invalid_targets).toContain("FR2: target BR9.9 is absent from rules.md");
+    expect(out.result.orphans).toContain("BR1.2");
+  });
+
+  test("nfr-requirements traces the NFRs in requirements.md", () => {
+    const proj = project();
+    seedRequirements(proj);
+    const file = trace(proj, "construction/nfr-requirements/traceability.json", {
+      stage: "nfr-requirements",
+      upstream_ids: ["NFR1", "NFR2"],
+      coverage: [
+        { id: "NFR1", status: "OK", target: "NFR1.1" },
+        { id: "NFR2", status: "OK", target: "NFR2.1" },
+      ],
+    });
+    let out = run(proj, "nfr-requirements", file);
+    expect(out.result.pass).toBe(true);
+
+    trace(proj, "construction/nfr-requirements/traceability.json", {
+      stage: "nfr-requirements",
+      upstream_ids: ["NFR1"],
+      coverage: [{ id: "NFR1", status: "OK", target: "NFR1.1" }],
+    });
+    out = run(proj, "nfr-requirements", file);
+    expect(out.result.pass).toBe(false);
+    expect(out.result.missing_from_upstream_ids).toContain("NFR2");
+  });
+
+  test("nfr-design reads the stage-level NFR requirements", () => {
+    const proj = project();
+    write(proj, "construction/nfr-requirements/security-requirements.md", "# Security\n\n- NFR1.1 Encrypt at rest\n- NFR1.2 Rotate keys\n");
+    const file = trace(proj, "construction/nfr-design/traceability.json", {
+      stage: "nfr-design",
+      upstream_ids: ["NFR1.1", "NFR1.2"],
+      coverage: [
+        { id: "NFR1.1", status: "OK", target: "KMS-backed storage" },
+        { id: "NFR1.2", status: "OK", target: "Scheduled key rotation" },
+      ],
+    });
+    let out = run(proj, "nfr-design", file);
+    expect(out.result.pass).toBe(true);
+
+    trace(proj, "construction/nfr-design/traceability.json", {
+      stage: "nfr-design",
+      upstream_ids: ["NFR1.1"],
+      coverage: [{ id: "NFR1.1", status: "OK", target: "KMS-backed storage" }],
+    });
+    out = run(proj, "nfr-design", file);
+    expect(out.result.missing_from_upstream_ids).toContain("NFR1.2");
+
+    write(proj, "construction/nfr-requirements/security-requirements.md", "# Security\n\nNothing numbered yet.\n");
+    out = run(proj, "nfr-design", file);
+    expect(out.result.reason).toContain("NFR requirement artifacts for the zero-Unit run contain no NFRx.y IDs");
+  });
+
+  test("infrastructure-design reads the stage-level NFR design", () => {
+    const proj = project();
+    write(proj, "construction/nfr-design/security-design.md", "# Security design\n\n- NFR1.1 KMS-backed storage\n- NFR1.2 Key rotation\n");
+    const file = trace(proj, "construction/infrastructure-design/traceability.json", {
+      stage: "infrastructure-design",
+      upstream_ids: ["NFR1.1", "NFR1.2"],
+      coverage: [
+        { id: "NFR1.1", status: "OK", target: "KMS key" },
+        { id: "NFR1.2", status: "OK", target: "Rotation schedule" },
+      ],
+    });
+    let out = run(proj, "infrastructure-design", file);
+    expect(out.result.pass).toBe(true);
+
+    trace(proj, "construction/infrastructure-design/traceability.json", {
+      stage: "infrastructure-design",
+      upstream_ids: ["NFR1.1"],
+      coverage: [{ id: "NFR1.1", status: "OK", target: "KMS key" }],
+    });
+    out = run(proj, "infrastructure-design", file);
+    expect(out.result.missing_from_upstream_ids).toContain("NFR1.2");
+  });
+});
+
+// A later NFR stage traces the nearest earlier NFR stage that ran. A stage the
+// plan or the run skipped hands over to the one before it; without NFR
+// Requirements the IDs are the NFRn ones in requirements.md.
+describe("t281 skipped earlier NFR stages", () => {
+  test("infrastructure-design traces NFR Requirements when NFR Design did not run", () => {
+    const proj = project();
+    seedUnits(proj);
+    stageProgress(proj, [
+      ["x", "units-generation", "EXECUTE"],
+      ["x", "nfr-requirements", "EXECUTE"],
+      [" ", "nfr-design", "SKIP"],
+      ["-", "infrastructure-design", "EXECUTE"],
+    ]);
+    write(proj, "construction/u1-auth/nfr-requirements/performance-requirements.md", "# Performance\n\n- NFR2.1 p95 under 200ms\n- NFR2.2 1k rps\n");
+    const file = trace(proj, "construction/u1-auth/infrastructure-design/traceability.json", {
+      stage: "infrastructure-design",
+      unit: "u1-auth",
+      upstream_ids: ["NFR2.1", "NFR2.2"],
+      coverage: [
+        { id: "NFR2.1", status: "OK", target: "CloudFront cache" },
+        { id: "NFR2.2", status: "OK", target: "Autoscaling group" },
+      ],
+    });
+    let out = run(proj, "infrastructure-design", file);
+    expect(out.result.pass).toBe(true);
+
+    trace(proj, "construction/u1-auth/infrastructure-design/traceability.json", {
+      stage: "infrastructure-design",
+      unit: "u1-auth",
+      upstream_ids: ["NFR2.1"],
+      coverage: [{ id: "NFR2.1", status: "OK", target: "CloudFront cache" }],
+    });
+    out = run(proj, "infrastructure-design", file);
+    expect(out.result.missing_from_upstream_ids).toContain("NFR2.2");
+
+    // Unit runs keep naming the Unit in the empty-source message.
+    write(proj, "construction/u1-auth/nfr-requirements/performance-requirements.md", "# Performance\n\nNothing numbered yet.\n");
+    out = run(proj, "infrastructure-design", file);
+    expect(out.result.reason).toContain('NFR requirement artifacts for unit "u1-auth" contain no NFRx.y IDs');
+
+    // NFR Design files that do exist are read even though the plan skipped it.
+    write(proj, "construction/u1-auth/nfr-design/security-design.md", "# Security design\n\n- NFR9.1 WAF\n");
+    out = run(proj, "infrastructure-design", file);
+    expect(out.result.missing_from_upstream_ids).toEqual(["NFR9.1"]);
+  });
+
+  test("with both NFR stages skipped, infrastructure-design traces requirements.md", () => {
+    const proj = project();
+    seedRequirements(proj);
+    stageProgress(proj, [
+      [" ", "units-generation", "SKIP"],
+      [" ", "nfr-requirements", "SKIP"],
+      [" ", "nfr-design", "SKIP"],
+      ["-", "infrastructure-design", "EXECUTE"],
+    ]);
+    const file = trace(proj, "construction/infrastructure-design/traceability.json", {
+      stage: "infrastructure-design",
+      upstream_ids: ["NFR1", "NFR2"],
+      coverage: [
+        { id: "NFR1", status: "OK", target: "Single small instance" },
+        { id: "NFR2", status: "OK", target: "Multi-AZ deployment" },
+      ],
+    });
+    let out = run(proj, "infrastructure-design", file);
+    expect(out.result.pass).toBe(true);
+
+    trace(proj, "construction/infrastructure-design/traceability.json", {
+      stage: "infrastructure-design",
+      upstream_ids: ["NFR1"],
+      coverage: [{ id: "NFR1", status: "OK", target: "Single small instance" }],
+    });
+    out = run(proj, "infrastructure-design", file);
+    expect(out.result.pass).toBe(false);
+    expect(out.result.missing_from_upstream_ids).toEqual(["NFR2"]);
+  });
+
+  test("NFR Requirements skipped at runtime: both later NFR stages trace requirements.md", () => {
+    const proj = project();
+    seedRequirements(proj);
+    stageProgress(proj, [
+      [" ", "units-generation", "SKIP"],
+      ["S", "nfr-requirements", "EXECUTE"],
+      ["x", "nfr-design", "EXECUTE"],
+      ["-", "infrastructure-design", "EXECUTE"],
+    ]);
+    // An NFR Design that ran without NFR Requirements cites NFRn, not NFRx.y.
+    write(proj, "construction/nfr-design/security-design.md", "# Security design\n\n- NFR1 small instance\n- NFR2 multi-AZ\n");
+    const body = (stage: string) => ({
+      stage,
+      upstream_ids: ["NFR1", "NFR2"],
+      coverage: [
+        { id: "NFR1", status: "OK", target: "Single small instance" },
+        { id: "NFR2", status: "OK", target: "Multi-AZ deployment" },
+      ],
+    });
+    const design = trace(proj, "construction/nfr-design/traceability.json", body("nfr-design"));
+    let out = run(proj, "nfr-design", design);
+    expect(out.result.pass).toBe(true);
+    const infra = trace(proj, "construction/infrastructure-design/traceability.json", body("infrastructure-design"));
+    out = run(proj, "infrastructure-design", infra);
+    expect(out.result.pass).toBe(true);
+  });
+
+  test("an earlier NFR stage that ran but left no files still fails closed", () => {
+    const proj = project();
+    seedRequirements(proj);
+    stageProgress(proj, [
+      [" ", "units-generation", "SKIP"],
+      ["x", "nfr-requirements", "EXECUTE"],
+      ["x", "nfr-design", "EXECUTE"],
+      ["-", "infrastructure-design", "EXECUTE"],
+    ]);
+    const design = trace(proj, "construction/nfr-design/traceability.json", {
+      stage: "nfr-design",
+      upstream_ids: ["NFR1"],
+      coverage: [{ id: "NFR1", status: "OK", target: "Single small instance" }],
+    });
+    let out = run(proj, "nfr-design", design);
+    expect(out.result.pass).toBe(false);
+    expect(out.result.reason).toContain("required upstream NFR requirement artifacts are missing under");
+
+    write(proj, "construction/nfr-requirements/security-requirements.md", "# Security\n\n- NFR1.1 Encrypt at rest\n");
+    const infra = trace(proj, "construction/infrastructure-design/traceability.json", {
+      stage: "infrastructure-design",
+      upstream_ids: ["NFR1.1"],
+      coverage: [{ id: "NFR1.1", status: "OK", target: "KMS key" }],
+    });
+    out = run(proj, "infrastructure-design", infra);
+    expect(out.result.pass).toBe(false);
+    expect(out.result.reason).toContain("required upstream NFR design artifacts are missing under");
+
+    // No Stage Progress at all reads as "ran": the same refusal.
+    writeFileSync(seededStateFile(proj), "# State\n");
+    out = run(proj, "infrastructure-design", infra);
+    expect(out.result.reason).toContain("required upstream NFR design artifacts are missing under");
+
+    // NFR Design ran with no files while NFR Requirements was skipped: still
+    // red, not a fallback to requirements.md.
+    stageProgress(proj, [
+      [" ", "units-generation", "SKIP"],
+      ["S", "nfr-requirements", "EXECUTE"],
+      ["x", "nfr-design", "EXECUTE"],
+      ["-", "infrastructure-design", "EXECUTE"],
+    ]);
+    rmSync(join(seededRecordDir(proj), "construction", "nfr-requirements"), { recursive: true });
+    const nfrOnly = trace(proj, "construction/infrastructure-design/traceability.json", {
+      stage: "infrastructure-design",
+      upstream_ids: ["NFR1", "NFR2"],
+      coverage: [
+        { id: "NFR1", status: "OK", target: "Single small instance" },
+        { id: "NFR2", status: "OK", target: "Multi-AZ deployment" },
+      ],
+    });
+    out = run(proj, "infrastructure-design", nfrOnly);
+    expect(out.result.pass).toBe(false);
+    expect(out.result.reason).toContain("required upstream NFR design artifacts are missing under");
   });
 });

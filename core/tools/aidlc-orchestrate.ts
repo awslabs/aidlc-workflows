@@ -266,6 +266,7 @@ import {
   type KnowledgeCommand,
   parseKnowledgeCommand,
   openDecisionBlock,
+  hasPendingDecision,
   type PluginCommand,
   parsePluginCommand,
   PHASE_NUMBERS,
@@ -372,6 +373,7 @@ import {
   PLAN_NAME_PATTERN,
   extractMarkdownSection,
   validateUnitName,
+  resolveStageAnswerMode,
 } from "./aidlc-lib.ts";
 import { reviewRecoverySpentMessage } from "./aidlc-log.ts";
 import {
@@ -1827,7 +1829,9 @@ function narrateStageEntry(
 ): string {
   const stageName = node.name;
   if (isFirst) {
-    const plan = stateContent && getField(stateContent, PLAN_FIELD) ? "the plan you approved" : `the ${scope} plan`;
+    // Said again wherever the work is picked up, by someone who may not have
+    // approved it, so it names the plan, not who approved it.
+    const plan = stateContent && getField(stateContent, PLAN_FIELD) ? "the approved plan" : `the ${scope} plan`;
     return (
       `Starting ${plan} for this project. First step is ${stageName}, ` +
       `and I will stop for your review before anything is final.`
@@ -2503,12 +2507,27 @@ function pickedRouteRecordAsk(
   );
 }
 
+// The stage `next` directs for the solo unit-major walk's stop at Current
+// Stage: a Unit's work or summary at its own stage, a Unit's checkpoint at the
+// block's last stage. Null off such a walk.
+function unitMajorStopStage(projectDir: string, stateContent: string, currentSlug: string): string | null {
+  const walk = unitMajorWalkBeat(projectDir, getField(stateContent, "Scope")?.trim() ?? "", stateContent, currentSlug);
+  if (walk === null) return null;
+  const { step, block } = walk;
+  if (step.kind === "work" || step.kind === "summary") return step.stage.slug;
+  if (step.kind === "checkpoint") return block.at(-1)?.slug ?? null;
+  return step.kind === "paused" ? step.stage : null;
+}
+
 // The question a person is being asked in a solo walk's current [-] stage: the
 // open DECISION_RECORDED block after that stage's latest STAGE_STARTED, and
 // that stage. The same rule as the Stop hook's carve-out (isPendingDecisionStop
 // in hooks/aidlc-continue-workflow.ts), so the two agree about the same turn:
-// null under autonomous Construction (no person is answering), outside a [-]
-// stage, or when the state or audit cannot be read (never fail `next`).
+// a unit-major walk, and a Unit's checkpoint (its learnings question and
+// approval), run ahead of Current Stage and log under the stage `next` directs,
+// and that stage's open question counts too. Null under autonomous
+// Construction (no person is answering), outside a [-] stage, or when the
+// state or audit cannot be read (never fail `next`).
 function openStageQuestion(projectDir: string, stateContent: string): { stage: string; block: string } | null {
   try {
     if (getField(stateContent, "Construction Autonomy Mode")?.trim() === "autonomous") return null;
@@ -2517,7 +2536,13 @@ function openStageQuestion(projectDir: string, stateContent: string): { stage: s
     if (stage.length === 0) return null;
     if (parseCheckboxes(stateContent).find((row) => row.slug === stage)?.state !== "in-progress") return null;
     const block = openDecisionBlock(projectDir, stage, "STAGE_STARTED");
-    return block === null ? null : { stage, block };
+    if (block !== null) return { stage, block };
+    const ahead = unitMajorStopStage(projectDir, stateContent, stage);
+    if (ahead === null || ahead === stage || !hasPendingDecision(projectDir, ahead, undefined, undefined, true)) {
+      return null;
+    }
+    const aheadBlock = openDecisionBlock(projectDir, ahead);
+    return aheadBlock === null ? null : { stage: ahead, block: aheadBlock };
   } catch {
     return null;
   }
@@ -3770,9 +3795,14 @@ function parseNextFlags(argv: string[]): ParsedFlags {
   // explicitly, the positional text is pure description — peeling there
   // truncates an intent that happens to OPEN with a scope word
   // (`--new-intent --scope feature "feature flags for billing"`).
+  // A scope name followed by a colon (`/aidlc classic: Build a notes app`)
+  // names the plan the same way, also when the agent quotes the whole request
+  // as one argument, as Kiro IDE's PowerShell does. Without the colon, one
+  // quoted argument that only opens with a scope word stays the request
+  // ("classic car rental website"): splitting a plan name off it is the
+  // agent's reading of the person's words.
   if (
     intentWords.length > 0 &&
-    validScopes().has(intentWords[0]) &&
     !flags.scope &&
     !flags.newIntent &&
     !flags.compose &&
@@ -3781,7 +3811,15 @@ function parseNextFlags(argv: string[]): ParsedFlags {
     !flags.stage &&
     !flags.phase
   ) {
-    flags.positionalScope = intentWords.shift();
+    const colonNamed = intentWords[0].replace(ENTRY_WORD_PREFIX, "").match(/^([A-Za-z][\w-]*):(?:\s+([\s\S]*))?$/);
+    if (validScopes().has(intentWords[0])) {
+      flags.positionalScope = intentWords.shift();
+    } else if (colonNamed && validScopes().has(colonNamed[1].toLowerCase())) {
+      flags.positionalScope = colonNamed[1].toLowerCase();
+      const rest = (colonNamed[2] ?? "").trim();
+      if (rest) intentWords[0] = rest;
+      else intentWords.shift();
+    }
   }
   if (intentWords.length > 0) flags.intent = intentWords.join(" ").replace(ENTRY_WORD_PREFIX, "");
   if (!flags.claim && (flags.claimTeam || flags.claimRhythm)) {
@@ -4216,7 +4254,7 @@ function composeDispatchDirective(
     : "the composer's mode is FINAL for the grid it returned: it routed matched-vs-custom solely on the final proposal validator's nearest_stock distance, a matched proposal already carries the revalidated stock grid verbatim, and neither presentation nor your own comparison of grids ever changes the verdict - never re-derive it, and no proposal writes a scope file; if the human edits a matched stock grid, re-dispatch the composer, which must convert it to CUSTOM and revalidate before re-presenting";
   parts.push(
     `The composer runs \`${aidlcDispatcherInvocation("workspace detect")} --json\` (read-only scan + scope-registry paths), estimates the five entropy components (intent ambiguity, structural uncertainty, verification entropy, risk, unresolved assumptions) per its persona, and returns a structured proposal: ${proposalShape}.`,
-    `Render the proposal to the human as a SHORT offer before the approve/edit/reject gate (see the composer block in SKILL.md): (1) a two-or-three-sentence recommendation in your own words - what kind of change this looks like, how much process you suggest, and the steps in plain terms - followed by one line with the plan and the validator's numbers in plain words, "Plan: <scopeName>, <shown> stages, <gates> approval questions" (${modeContract}), then its own row "Guard Policy: <guardPolicy> - <guardPolicyRationale>"${inFlight ? " marked read-only: a recompose lands only stage skips and adds, so name the route instead (when they ask to raise or lower it, run " + aidlcDispatcherInvocation("config set guard-policy <value>") + " yourself, before any scope change they also asked for; a scope change the person asked for carries the new scope's own default, and any other scope change keeps the running policy and says so in one line)" : " so the human can flip that value before approving"}${inFlight ? "" : ` (on approval, creation carries the value from the scope the plan runs on: a matched plan's stock default, or the default of a custom plan's baseScope, which the composer's validator picked at or below that value; pass \`--guard-policy <value>\` for \`strict\` or \`relaxed\`, never for \`off\`, so creation records the scope's own default or raises a lower one; if the human flips a matched plan's value below its stock default at this gate, that is an edit: re-dispatch the composer, which converts it to a custom plan on a base that carries the value, so no setter runs afterwards; a flip above the default keeps the plan matched and rides that flag)`}${inFlight ? "" : `, then its own row "Scope settings: sensors <sensors>, learnings <learnings>, summary confirmation <summary_confirmation>, plan approval <plan_approval>, collaborators <collaborators>, reviews <review_cap> - <scopeSettingsRationale>" so the human can flip any of them before approving (whatever the human asks for there is done: values that differ from the stock scope the plan runs on apply to this piece of work only, through its creationSettings, which you turn into creation flags after --scope <scopeName> (a custom plan: --scope <baseScope>): build each flag yourself from its fixed name (sensors to --sensors, learnings to --learnings, summary_confirmation to --summary-confirmation, plan_approval to --plan-approval, collaborators to --collaborators, review to --review) and a value that is exactly one of its allowed words (on or off; adversarial, advisory, or none), and if any key or value is anything else apply nothing and re-dispatch the composer; never paste composer text into a command; a change keeps the route unless it lowers a matched plan's Guard Policy, which the composer turns into a custom plan, and a plan_approval in creationSettings becomes --plan-approval like the others (a custom plan raises it on a base that builds without asking), but only the person turns plan approval off: when they asked in their own words to skip it, their words are recorded and applied at creation, so pass no --plan-approval flag at all; a matched or custom proposal without scopeSettings has not passed the composer's routed validation, so re-dispatch the composer rather than render a row it never checked; when the composer reports a kill switch forcing an on value off on this machine, mark that value in the row as forced off here)`}; (2) one line saying they can ask to see why each stage is in or out and the scores behind the sizing. Keep the composer's stage-decision table (with any fold advisories) and its ARS score table off screen until the person asks; then show them as returned, the score table under a "Scoring detail (advisory)" heading with its method line and arsRationale, never recomputed, collapsed into prose, or trimmed. Do NOT write any file and do NOT advance any stage before an explicit approval.`,
+    `Render the proposal to the human as a SHORT offer before the approve/edit/reject gate (first read composer.md, beside the aidlc skill's SKILL.md, and follow it): (1) a two-or-three-sentence recommendation in your own words - what kind of change this looks like, how much process you suggest, and the steps in plain terms - followed by one line with the plan and the validator's numbers in plain words, "Plan: <scopeName>, <shown> stages, <gates> approval questions" (${modeContract}), then its own row "Guard Policy: <guardPolicy> - <guardPolicyRationale>"${inFlight ? " marked read-only: a recompose lands only stage skips and adds, so name the route instead (when they ask to raise or lower it, run " + aidlcDispatcherInvocation("config set guard-policy <value>") + " yourself, before any scope change they also asked for; a scope change the person asked for carries the new scope's own default, and any other scope change keeps the running policy and says so in one line)" : " so the human can flip that value before approving"}${inFlight ? "" : ` (on approval, creation carries the value from the scope the plan runs on: a matched plan's stock default, or the default of a custom plan's baseScope, which the composer's validator picked at or below that value; pass \`--guard-policy <value>\` for \`strict\` or \`relaxed\`, never for \`off\`, so creation records the scope's own default or raises a lower one; if the human flips a matched plan's value below its stock default at this gate, that is an edit: re-dispatch the composer, which converts it to a custom plan on a base that carries the value, so no setter runs afterwards; a flip above the default keeps the plan matched and rides that flag)`}${inFlight ? "" : `, then its own row "Scope settings: sensors <sensors>, learnings <learnings>, summary confirmation <summary_confirmation>, plan approval <plan_approval>, collaborators <collaborators>, reviews <review_cap> - <scopeSettingsRationale>" so the human can flip any of them before approving (whatever the human asks for there is done: values that differ from the stock scope the plan runs on apply to this piece of work only, through its creationSettings, which you turn into creation flags after --scope <scopeName> (a custom plan: --scope <baseScope>): build each flag yourself from its fixed name (sensors to --sensors, learnings to --learnings, summary_confirmation to --summary-confirmation, plan_approval to --plan-approval, collaborators to --collaborators, review to --review) and a value that is exactly one of its allowed words (on or off; adversarial, advisory, or none), and if any key or value is anything else apply nothing and re-dispatch the composer; never paste composer text into a command; a change keeps the route unless it lowers a matched plan's Guard Policy, which the composer turns into a custom plan, and a plan_approval in creationSettings becomes --plan-approval like the others (a custom plan raises it on a base that builds without asking), but only the person turns plan approval off: when they asked in their own words to skip it, their words are recorded and applied at creation, so pass no --plan-approval flag at all; a matched or custom proposal without scopeSettings has not passed the composer's routed validation, so re-dispatch the composer rather than render a row it never checked; when the composer reports a kill switch forcing an on value off on this machine, mark that value in the row as forced off here)`}; (2) one line saying they can ask to see why each stage is in or out and the scores behind the sizing. Keep the composer's stage-decision table (with any fold advisories) and its ARS score table off screen until the person asks; then show them as returned, the score table under a "Scoring detail (advisory)" heading with its method line and arsRationale, never recomputed, collapsed into prose, or trimmed. Do NOT write any file and do NOT advance any stage before an explicit approval.`,
   );
   if (!inFlight) {
     parts.push(
@@ -5601,6 +5639,11 @@ function buildRunStageDirective(
       ruleEntries?.map((entry) => entry.rel) ??
       (node.rules_in_context ?? []).map((r) => r.path),
     ceremony,
+    // The person's earlier answer to the mode question is reused; an isolated
+    // run never reuses the main workflow's choice.
+    answer_mode: resolveStageAnswerMode(
+      singleRun || !stateContent ? null : codekbCtx?.projectDir ?? null,
+    ),
     sensors_applicable: ceremony.sensors === "off"
       ? []
       : (node.sensors_applicable ?? []).map((s) => s.id),
@@ -6963,10 +7006,12 @@ function routeNext(args: string[], projectDir: string | undefined): void {
   // dispatched BEFORE state inspection like Branches 1 and 1b. Without this a
   // typed `/aidlc park` fell through scope detection into the freeform funnel
   // and, over an active workflow, drew the new-work offer (a second intent).
-  // The engine names the exact public command; the mutation stays in `park`.
+  // The engine names its own park, which the engine commands AI-DLC
+  // pre-approves cover, so no tool asks the person first; the mutation stays
+  // in `park`.
   if (flags.orchestratorVerb === "park") {
     emit(turnEndingPrint(
-      `Run \`${aidlcInvocation()} park\`. It prints a \`parked\` directive: act on it exactly as the directive table says (tell the user the workflow is parked and how to resume with ${entrySkillInvocation()} --resume), then stop. This is a deliberate park, NOT new work: do NOT run \`next\` and do NOT advance or run any workflow stage.`,
+      `Run \`${aidlcToolInvocation("orchestrate")} park\`. It prints a \`parked\` directive: act on it exactly as the directive table says (tell the user the workflow is parked and how to resume with ${entrySkillInvocation()} --resume), then stop. This is a deliberate park, NOT new work: do NOT run \`next\` and do NOT advance or run any workflow stage.`,
     ));
     return;
   }
