@@ -1537,7 +1537,7 @@ describe("t218 Kiro IDE hook adapter (USER_PROMPT env context)", () => {
       }), GUARD_SWITCH_ENV);
       expect(result.code, result.stderr).toBe(0);
       expect(result.stdout).toContain("AIDLC Guard Policy:");
-      expect(result.stdout).toContain("Fence review-freeze is off");
+      expect(result.stdout).toContain("The review freeze check is off");
       expect(readFileSync(seededStateFile(dir), "utf-8")).toContain(
         "- **Guards Off**: review-freeze (set by you)",
       );
@@ -1660,7 +1660,7 @@ describe("t218 Kiro IDE hook adapter (USER_PROMPT env context)", () => {
         timeout: 30_000,
       });
       expect(setter.status, setter.stderr).toBe(0);
-      expect(setter.stdout).toContain("Fence review-freeze is already off");
+      expect(setter.stdout).toContain("The review freeze check is already off");
       expect(readFileSync(seededStateFile(dir), "utf-8")).toBe(state);
       expect(readAudit(dir)).toBe(audit);
     } finally {
