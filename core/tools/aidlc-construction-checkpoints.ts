@@ -9,6 +9,7 @@ import { closeSync, existsSync, lstatSync, mkdtempSync, openSync, readSync, rmdi
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import { appendAuditEntryUnlocked } from "./aidlc-audit.ts";
+import { aidlcToolInvocation } from "./aidlc-runtime-paths.ts";
 import {
   activeIntentUuid,
   attemptEventDefinitelyBefore,
@@ -1416,7 +1417,7 @@ export function askConstructionCheckpoint(
       throw new Error("Construction checkpoints are not enabled or have no applicable stages.");
     }
     if (!current.result.ready || !current.result.verified) {
-      throw new Error(`Verify the current Construction checkpoint first, before asking for approval. Run aidlc-bolt.ts checkpoint --unit "${unit}" --kind ${kind} --action verify and require verified: true.`);
+      throw new Error(`Verify the current Construction checkpoint first, before asking for approval. Run ${aidlcToolInvocation("bolt")} checkpoint --unit "${unit}" --kind ${kind} --action verify and require verified: true.`);
     }
     withdrawProtectedQuestions(projectDir, session);
     appendAuditEntryUnlocked("DECISION_RECORDED", {
@@ -1448,7 +1449,7 @@ export function approveConstructionCheckpoint(
     const current = snapshot(projectDir, unit, kind);
     requireReady(current);
     if (!current.result.verified) {
-      throw new Error(`Verify the current Construction checkpoint before approval: a matching CHECKPOINT_VERIFICATION_RECORDED receipt and passing proof are required. Run aidlc-bolt.ts checkpoint --unit "${unit}" --kind ${kind} --action verify.`);
+      throw new Error(`Verify the current Construction checkpoint before approval: a matching CHECKPOINT_VERIFICATION_RECORDED receipt and passing proof are required. Run ${aidlcToolInvocation("bolt")} checkpoint --unit "${unit}" --kind ${kind} --action verify.`);
     }
     const humanRequired = current.result.human_required || reply !== undefined;
     let words: string | undefined;

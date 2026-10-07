@@ -31,6 +31,7 @@ import {
   artifactFilename, auditBlockField, findStageBySlug, latestMainWorkflowStageRunFloorForProject,
   readAuditShardEvents, reviewArtifactFingerprint,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import { aidlcToolInvocation } from "../../dist/claude/.claude/tools/aidlc-runtime-paths.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
@@ -269,6 +270,23 @@ function walkCarriesOn(p: string): void {
 }
 
 describe("approving a Unit as it is over a review that did not finish", () => {
+  test("the verify step names the command this install runs, not a file a native install lacks", () => {
+    // Both refusals named `aidlc-bolt.ts checkpoint` outright. A native install
+    // has no such file: its commands are `aidlc engine bolt ...`. Every other
+    // step the engine names already renders through aidlcToolInvocation.
+    const p = fixture("relaxed");
+    build(p, "alpha");
+    review(p, "alpha", 1, "READY");
+    const bolt = `${aidlcToolInvocation("bolt")} checkpoint`;
+    const asked = checkpoint(p, "alpha", "ask");
+    expect(asked.status, asked.out).not.toBe(0);
+    expect(asked.out).toContain(`Run ${bolt} --unit`);
+    const approved = checkpoint(p, "alpha", "approve", ["--user-input", "Approve"]);
+    expect(approved.status, approved.out).not.toBe(0);
+    expect(approved.out).toContain(`Run ${bolt} --unit`);
+    for (const out of [asked.out, approved.out]) expect(out).not.toMatch(/Run aidlc-bolt\.ts checkpoint/);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
   test("next names the retry of an interrupted review, and the refusal names it and the person's way on", () => {
     const p = fixture("off");
     build(p, "alpha");
