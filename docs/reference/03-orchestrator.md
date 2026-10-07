@@ -1163,6 +1163,11 @@ engine keeps the normal directive kind and attaches a machine-readable
 (which finished stage is behind and what to say to redo it, or that a check
 could not run); the conductor says it the first time it appears in a
 conversation and not again for the same warning, then continues routing.
+When the only change is an edit to the stage's own documents, still there, the
+line names them and says the change stands: "requirements.md changed after
+Requirements Analysis finished; carrying on with it as it is. Say "redo
+requirements analysis" to go over the stage again with the change." The
+conductor says it as written and never guesses who made the change.
 Under Guard Policy `relaxed` or `off` an edit to a document that is still there
 is not raised on `next`: the guard accepts it and says it once. A document that
 is gone, a project-type change and a stage-graph change still are, and

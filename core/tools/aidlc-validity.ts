@@ -9,6 +9,7 @@ import {
 } from "./aidlc-lib.js";
 import { loadGraph } from "./aidlc-graph.ts";
 import { SLUG_RE as STAGE_SLUG_RE } from "./aidlc-stage-schema.ts";
+import { artifactFilename } from "./aidlc-artifact-vocabulary.ts";
 import {
   resolveArtifactInstances,
   type ArtifactResolutionOptions,
@@ -58,6 +59,8 @@ export interface StageValidityIssue {
   direct: boolean;
   reasons: string[];
   roots: string[];
+  /** Every reason is an edit to one of the stage's own documents, still there. */
+  edited?: true;
 }
 
 export interface StageValidityInspection {
@@ -760,10 +763,25 @@ export function stageLabel(stage: { slug: string; name: string; plugin?: string 
  * ran, the code arriving is the reason it gives; otherwise an input changed.
  * The engine's advisory and status both say it this way.
  */
-export function staleStageNote(name: string, issue: Pick<StageValidityIssue, "reasons">, stateContent: string): string {
-  return issue.reasons.includes("project-type") && projectTypeFrom(stateContent) === "brownfield"
-    ? codeArrivedStageLine(name)
+export function staleStageNote(
+  name: string, issue: Pick<StageValidityIssue, "reasons" | "edited">, stateContent: string,
+): string {
+  if (issue.reasons.includes("project-type") && projectTypeFrom(stateContent) === "brownfield") {
+    return codeArrivedStageLine(name);
+  }
+  // Only the stage's own documents were edited after it finished: the change
+  // stands, and the redo goes over the stage again with it.
+  return issue.edited && issue.reasons.length > 0
+    ? ownDocumentChangedLine(name, issue.reasons.map((reason) => artifactFilename(reason.slice("output:".length))))
     : staleStageLine(name);
+}
+
+// A finished stage's own documents changed: what the person hears, with no
+// guess about who changed them.
+export function ownDocumentChangedLine(name: string, files: readonly string[]): string {
+  const listed = files.length > 1 ? `${files.slice(0, -1).join(", ")} and ${files.at(-1)}` : files[0];
+  return `${listed} changed after ${name} finished; carrying on with ${files.length > 1 ? "them as they are" : "it as it is"}. ` +
+    `Say "redo ${name.toLowerCase()}" to go over the stage again with the change.`;
 }
 
 // A finished stage that ran before the project's code was there, and the redo.
@@ -795,6 +813,7 @@ export function inspectStageValidity(
   const audit = options.audit ?? readAllAuditShards(projectDir);
   const receipts = completionReceiptsFromAudit(audit);
   const directReasons = new Map<string, string[]>();
+  const edits = new Map<string, Set<string>>();
   const warnings: string[] = [];
   const unavailable = new Set<string>();
 
@@ -814,12 +833,13 @@ export function inspectStageValidity(
       );
       continue;
     }
-    const contentOnly = options.acceptContentChanges === true
-      ? contentOnlyChanges(previous, current) : new Set<string>();
+    const edited = contentOnlyChanges(previous, current);
+    const contentOnly = options.acceptContentChanges === true ? edited : new Set<string>();
     const changes = diffStageValidationBasis(previous, current).filter(
       (change) => (change !== "project-type" || workDependsOnProjectType(stage)) && !contentOnly.has(change),
     );
     if (changes.length > 0) directReasons.set(slug, changes);
+    edits.set(slug, edited);
   }
 
   const issues = propagateStageInvalidation(
@@ -827,7 +847,9 @@ export function inspectStageValidity(
     completedSlugs,
     directReasons,
     receipts.latestKnown,
-  );
+  ).map((issue) => issue.direct && issue.reasons.every((reason) =>
+    reason.startsWith("output:") && edits.get(issue.stage)?.has(reason))
+    ? { ...issue, edited: true as const } : issue);
   const untracked = stages
     .filter(
       (stage) =>
