@@ -103,6 +103,8 @@ import {
 import { addRootBlocks, repointHarnessIncludes } from "./aidlc-includes.ts";
 import {
   codexHookTrustHash,
+  hookGroupMemberNames,
+  PRE_TOOL_USE_GROUP_TARGET,
   HUMAN_PRESENCE_NO_SWITCH,
   TRUSTED_COMMAND_PREFIX,
   TRUSTED_COMMAND_TOKENS,
@@ -2998,6 +3000,9 @@ function projectSettingsRepair(distribution: string): string {
 const FLOW_ALTERING_CLAUDE_HOOKS = new Set([
   "continue-workflow",
   "deliver-stage-rules",
+  // The one registration that runs the four tool-call checks: drift on its row
+  // lowers all four, so it is blocking, like the rows it replaced.
+  PRE_TOOL_USE_GROUP_TARGET,
   "plan-approval-guard",
   "review-freeze",
   "reviewer-scope",
@@ -4096,7 +4101,16 @@ export async function collectDoctorReport(
       for (const command of commands) {
         const target = aidlcDispatcherTarget(command, true, projectDir);
         if (target === "statusline") refs.add("aidlc-statusline.ts");
-        else if (target !== null) refs.add(`aidlc-${target}.ts`);
+        else if (target === null) continue;
+        else {
+          // One registration can run several hooks in one process
+          // (aidlc-command.ts HOOK_GROUPS): the files it stands for are its
+          // members', so the roster below checks those and no shipped guard
+          // reads as unwired.
+          const members = hookGroupMemberNames(target);
+          if (members.length > 0) for (const hook of members) refs.add(`aidlc-${hook}.ts`);
+          else refs.add(`aidlc-${target}.ts`);
+        }
       }
       expectedHooks = [...refs].sort();
     } catch {
