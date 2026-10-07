@@ -557,6 +557,47 @@ describe("a switch typed while the engine's question is open, before any work ex
   });
 });
 
+// A setting the person typed that no parser can read, and nothing else with it:
+// the hook reads no switch at all, so it says nothing, and before this the
+// routing question at least echoed their words back. The turn now ends with what
+// could not be read, rather than running the stage on top of it while they
+// believe a check is off.
+describe("a setting the engine cannot read, typed on its own", () => {
+  test.each([
+    { typed: "--review-freeze", reason: "the guard. prefix is missing" },
+    { typed: "--plan-aprroval", reason: "the name is misspelt" },
+  ])("with work open, the turn ends naming it ($reason)", ({ typed }) => {
+    const proj = openWork();
+    // The hook reads no switch here, so nothing of theirs is applied or said.
+    expect(reply(proj, `/aidlc ${typed} off`)).not.toContain("could not read");
+    const before = readFileSync(seededStateFile(proj), "utf-8");
+
+    const step = next(proj, [typed, "off"]);
+    expect(step.directive?.kind, step.out).toBe("print");
+    expect(String(step.directive?.narration ?? ""), step.out)
+      .toContain(`I could not read "${typed}". Was that a setting you wanted?`);
+    // Nothing ran on top of the question, and nothing changed.
+    expect(readFileSync(seededStateFile(proj), "utf-8")).toBe(before);
+  });
+
+  test("before any work exists, the same line ends the turn", () => {
+    const proj = emptyProject();
+    const step = next(proj, ["--plan-aprroval", "off"]);
+    expect(step.directive?.kind, step.out).toBe("print");
+    expect(String(step.directive?.narration ?? ""), step.out)
+      .toContain('I could not read "--plan-aprroval". Was that a setting you wanted?');
+  });
+
+  test("said once: a readable switch beside it already told them", () => {
+    const proj = emptyProject();
+    const note = reply(proj, "/aidlc --guard.review-freeze off --nonsense 1");
+    expect(note).toContain('I could not read "--nonsense". Was that a setting you wanted?');
+    const step = next(proj, ["--nonsense", "1"]);
+    const said = String(step.directive?.narration ?? "");
+    expect(said.split("I could not read").length - 1, said).toBe(1);
+  });
+});
+
 // Live on Claude Code: the agent passed a token the engine had just said it could
 // not read to `next` as the work description, the engine offered a plan for
 // "--nonsense 1", and when the person abandoned that offer and described real
