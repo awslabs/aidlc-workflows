@@ -102,7 +102,7 @@ const AUDIT_MD = join(AIDLC_SRC, "knowledge", "aidlc-shared", "audit-format.md")
 // QUESTION_REPLIED (what a question box carried back, question by question)
 // takes it to 114. REQUEST_ROUTED (words the person sent to other work leave the
 // question the work in progress has open) takes it to 115.
-const CANONICAL_COUNT = 115;
+const CANONICAL_COUNT = 116;
 
 /** Slice the lines of `text` BETWEEN the first line matching `start` and the
  *  next line matching `end` (inclusive of both), reproducing `sed -n

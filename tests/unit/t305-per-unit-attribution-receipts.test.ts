@@ -1316,6 +1316,16 @@ describe("t305 real receipt and guard flows", () => {
     expect([...(snapshot?.listing.keys() ?? [])]).toEqual(["\0src/app/items/[itemId]/page.tsx"]);
   }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
+  test("REVIEW_REQUESTED with a manifest naming an unrecorded repo offers to add the repo, not to rewrite the manifest", () => {
+    const { project, record } = runtimeFixture();
+    writeManifest(record, "alpha", [{ repo: "app-b", path: "src/" }]);
+    const refused = cli(LOG, ["review", "--stage", "code-generation", "--reviewer", REVIEWER, "--unit", "alpha", "--iteration", "1"], project);
+    expect(refused.rc).toBe(1);
+    expect(refused.out).toContain('names repo "app-b", which this piece of work does not record');
+    expect(refused.out).toContain("intent add-repo app-b");
+    expect(refused.out).not.toContain("Write the manifest listing every application-source path");
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
+
   test("REVIEW_COMPLETED and retry-pending refuse source edited after dispatch", () => {
     const { project, record } = runtimeFixture();
     writeManifest(record, "alpha", [{ path: "app.ts" }]);

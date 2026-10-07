@@ -230,6 +230,29 @@ describe("parseWorkspaceCommand", () => {
     }
   });
 
+  test("intent add-repo / remove-repo parse as repo commands that forward verbatim", () => {
+    expect(parseWorkspaceCommand(["intent", "add-repo", "app-b"])).toEqual({
+      kind: "add-repo",
+      noun: "intent",
+      name: "app-b",
+      rest: [],
+    });
+    expect(
+      workspaceCommandUtilityArgv({ kind: "add-repo", noun: "intent", name: "app-b", rest: [] }),
+    ).toEqual(["intent", "add-repo", "app-b"]);
+    expect(parseWorkspaceCommand(["intent", "remove-repo", "app-b"])).toEqual({
+      kind: "remove-repo",
+      noun: "intent",
+      name: "app-b",
+      rest: [],
+    });
+    expect(parseWorkspaceCommand(["intent", "add-repo"])).toMatchObject({
+      kind: "error",
+      code: "missing-name",
+      verb: "add-repo",
+    });
+  });
+
   test("intent archive / unarchive parse as lifecycle commands that forward verbatim (issue #980)", () => {
     expect(parseWorkspaceCommand(["intent", "archive", "260903-old-spike"])).toEqual({
       kind: "archive",
