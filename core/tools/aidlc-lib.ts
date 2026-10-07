@@ -15424,10 +15424,6 @@ export function currentFingerprintForm(value: string | null): string | null {
 export function rawFingerprintForm(value: string | null): string | null {
   return value === null ? null : CURRENT_FINGERPRINTS.get(value) ?? null;
 }
-// A fingerprint field of an audit row in its current form (see above).
-export function recordedFingerprintField(block: string, field: string): string | null {
-  return currentFingerprintForm(auditBlockField(block, field));
-}
 
 function reviewArtifactContentsFingerprint(
   contents: ReviewArtifactContent[],
@@ -15982,7 +15978,7 @@ export function reviewRequestBindingIsModern(
 export function reviewRequestBindingFromBlock(
   block: string,
 ): ReviewRequestBinding | null {
-  const artifactFingerprint = recordedFingerprintField(block, "Artifact Fingerprint");
+  const artifactFingerprint = auditBlockField(block, "Artifact Fingerprint");
   if (
     artifactFingerprint === null ||
     !REVIEW_FINGERPRINT_RE.test(artifactFingerprint)
@@ -16046,7 +16042,7 @@ export function reviewRequestBindingFromBlock(
   ) {
     return null;
   }
-  const unitSourceFingerprint = recordedFingerprintField(block, "Unit Source Fingerprint");
+  const unitSourceFingerprint = auditBlockField(block, "Unit Source Fingerprint");
   if (
     unitSourceFingerprint !== null &&
     !UNIT_SOURCE_FINGERPRINT_RE.test(unitSourceFingerprint)
@@ -16124,7 +16120,7 @@ export function reviewCompletionMatchesRequest(
 ): boolean {
   const verdict = auditBlockField(completionBlock, "Verdict");
   if (verdict !== "READY" && verdict !== "NOT-READY") return false;
-  const recordedFingerprint = recordedFingerprintField(completionBlock, "Artifact Fingerprint");
+  const recordedFingerprint = auditBlockField(completionBlock, "Artifact Fingerprint");
   if (
     recordedFingerprint === null ||
     !REVIEW_FINGERPRINT_RE.test(recordedFingerprint)
@@ -16132,7 +16128,7 @@ export function reviewCompletionMatchesRequest(
     return false;
   }
   const completedRequestFingerprint =
-    recordedFingerprintField(completionBlock, "Request Fingerprint") ??
+    auditBlockField(completionBlock, "Request Fingerprint") ??
     recordedFingerprint;
   if (completedRequestFingerprint !== request.artifactFingerprint) return false;
 
@@ -16219,7 +16215,7 @@ export function reviewCompletionMatchesRequest(
   }
   if (
     request.unitSourceFingerprint !== null &&
-    recordedFingerprintField(completionBlock, "Unit Source Fingerprint") !==
+    auditBlockField(completionBlock, "Unit Source Fingerprint") !==
       request.unitSourceFingerprint
   ) {
     return false;
@@ -17254,9 +17250,9 @@ export function reviewRecordMatchesCompletion(record: ReviewRecord, completionBl
     record.reviewer === auditBlockField(completionBlock, "Reviewer") &&
     record.verdict === auditBlockField(completionBlock, "Verdict") &&
     record.request_id === auditBlockField(completionBlock, "Request Id") &&
-    record.artifact_fingerprint === recordedFingerprintField(completionBlock, "Artifact Fingerprint") &&
+    record.artifact_fingerprint === auditBlockField(completionBlock, "Artifact Fingerprint") &&
     record.source_fingerprint === auditBlockField(completionBlock, "Source Fingerprint") &&
-    record.unit_source_fingerprint === recordedFingerprintField(completionBlock, "Unit Source Fingerprint") &&
+    record.unit_source_fingerprint === auditBlockField(completionBlock, "Unit Source Fingerprint") &&
     record.request_challenge === auditBlockField(completionBlock, "Review Challenge")
   );
 }
@@ -17684,7 +17680,7 @@ function hasModernSourceBindingEvidence(
     if (
       row.event === "REVIEW_COMPLETED" &&
       auditBlockField(row.block, "Unit") !== null &&
-      (recordedFingerprintField(row.block, "Unit Source Fingerprint") !== null ||
+      (auditBlockField(row.block, "Unit Source Fingerprint") !== null ||
         auditBlockField(row.block, "Unit Source Binding Bypass") !== null)
     ) {
       return true;
@@ -18547,9 +18543,11 @@ export function reviewRequestArtifactsCurrent(
   binding: ReviewRequestBinding,
   snapshot: ReviewArtifactSnapshot,
 ): boolean {
+  // A request recorded over raw line endings reads in its current form.
+  const requested = currentFingerprintForm(binding.artifactFingerprint) ?? binding.artifactFingerprint;
   return binding.legacyAppendix !== null
-    ? snapshot.bodyFingerprints.includes(binding.artifactFingerprint)
-    : snapshot.fingerprint === binding.artifactFingerprint;
+    ? snapshot.bodyFingerprints.includes(requested)
+    : snapshot.fingerprint === requested;
 }
 
 // Deprecated migration tolerance: a reviewer that still appends `## Review` to
@@ -18563,9 +18561,10 @@ export function reviewAppendedAfterRequest(
   snapshot: ReviewArtifactSnapshot,
 ): boolean {
   if (snapshot.appendix.length === 0) return false;
-  if (!snapshot.bodyFingerprints.includes(binding.artifactFingerprint)) return false;
+  const requested = currentFingerprintForm(binding.artifactFingerprint) ?? binding.artifactFingerprint;
+  if (!snapshot.bodyFingerprints.includes(requested)) return false;
   return binding.legacyAppendix === null
-    ? snapshot.fingerprint !== binding.artifactFingerprint
+    ? snapshot.fingerprint !== requested
     : !binding.legacyAppendix.priorAppendix;
 }
 
@@ -18644,7 +18643,7 @@ export function pendingRequestCurrency(
             );
       if (
         binding.unitSourceFingerprint !== null &&
-        currentUnitSource !== binding.unitSourceFingerprint
+        currentUnitSource !== currentFingerprintForm(binding.unitSourceFingerprint)
       ) {
         requestCurrent = false;
       }
@@ -18979,7 +18978,7 @@ export function candidateReviewCoverageProjection(
     pending.delete(iteration);
     ready =
       auditBlockField(event.block, "Verdict") === "READY" &&
-      recordedFingerprintField(event.block, "Artifact Fingerprint") ===
+      currentFingerprintForm(auditBlockField(event.block, "Artifact Fingerprint")) ===
         options.expectedFingerprint;
   }
   return ready;
@@ -19462,7 +19461,7 @@ export function freshReviewReceipts(
       });
     }
     pendingRequests.delete(requestKey);
-    const recordedFingerprint = recordedFingerprintField(e.block, "Artifact Fingerprint");
+    const recordedFingerprint = auditBlockField(e.block, "Artifact Fingerprint");
     const artifactFingerprintUsable = recordedFingerprint !== null;
     const currentFingerprint = reviewArtifactFingerprint(
       projectDir,
@@ -19477,7 +19476,7 @@ export function freshReviewReceipts(
     const fingerprintUsable =
       artifactFingerprintUsable && currentFingerprint !== null;
     const fingerprintMatches =
-      fingerprintUsable && recordedFingerprint === currentFingerprint;
+      fingerprintUsable && currentFingerprintForm(recordedFingerprint) === currentFingerprint;
     const terminalVerdict = request.recovery
       ? verdict
       : terminalReviewVerdict(
@@ -19576,7 +19575,7 @@ export function freshReviewReceipts(
       unitReceiptRecovery.set(unit, request.recovery);
       unitPending.delete(unit);
       modernUnitReceipts.set(unit, {
-        fingerprint: recordedFingerprintField(e.block, "Unit Source Fingerprint"),
+        fingerprint: auditBlockField(e.block, "Unit Source Fingerprint"),
         bypass: auditBlockField(e.block, "Unit Source Binding Bypass") === "true",
         order: i,
         timestamp: e.timestamp,
@@ -34862,7 +34861,7 @@ export function unitLifecycleSnapshot(
       receipts.add(row.unit);
       continue;
     }
-    const recorded = recordedFingerprintField(row.block, "Artifact Fingerprint");
+    const recorded = auditBlockField(row.block, "Artifact Fingerprint");
     const current =
       stage === undefined
         ? null
@@ -34871,7 +34870,7 @@ export function unitLifecycleSnapshot(
           : reviewArtifactFingerprint(projectDir, stage, row.unit, {
               requireRequiredArtifacts: true,
             });
-    if (waveCompletionHolds(recorded, current, options.keepChangedWaveCompletions === true)) {
+    if (waveCompletionHolds(currentFingerprintForm(recorded), current, options.keepChangedWaveCompletions === true)) {
       receipts.add(row.unit);
     } else {
       receipts.delete(row.unit);
@@ -34920,14 +34919,14 @@ export function unitCompletedReceipts(
       done.add(row.unit);
       continue;
     }
-    const recorded = recordedFingerprintField(row.block, "Artifact Fingerprint");
+    const recorded = auditBlockField(row.block, "Artifact Fingerprint");
     const current =
       stage === undefined
         ? null
         : reviewArtifactFingerprint(projectDir, stage, row.unit, {
             requireRequiredArtifacts: true,
           });
-    if (waveCompletionHolds(recorded, current, options.keepChangedWaveCompletions === true)) {
+    if (waveCompletionHolds(currentFingerprintForm(recorded), current, options.keepChangedWaveCompletions === true)) {
       done.add(row.unit);
     } else {
       done.delete(row.unit);

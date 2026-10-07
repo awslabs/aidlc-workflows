@@ -88,7 +88,6 @@ import {
   type WorkspaceSourceState,
   currentFingerprintForm,
   rawFingerprintForm,
-  recordedFingerprintField,
   committedTextSha256,
 } from "./aidlc-lib.ts";
 
@@ -821,7 +820,8 @@ function snapshot(
       // So is source the Guard Policy keeps without a compare: the reviewed
       // listing not on this machine, the Unit's list of files changed after
       // its review, or source that cannot be read here.
-      const reviewedSource = review ? recordedFingerprintField(review.block, "Unit Source Fingerprint") : null;
+      // Values the review recorded over raw line endings read in their current form.
+      const reviewedSource = review ? currentFingerprintForm(auditBlockField(review.block, "Unit Source Fingerprint")) : null;
       const sourceKept = receipts.unitSourceKept.has(unit) && acceptsChanges();
       if (
         stage.workspace_requires && reviewedSource !== null && reviewedSource !== source && (
@@ -834,7 +834,7 @@ function snapshot(
         if (source === null && listing === null) sourceKeptUnread++;
         source = reviewedSource;
       }
-      const reviewedArtifact = review ? recordedFingerprintField(review.block, "Artifact Fingerprint") : null;
+      const reviewedArtifact = review ? currentFingerprintForm(auditBlockField(review.block, "Artifact Fingerprint")) : null;
       if (
         artifact !== null && reviewedArtifact !== null && reviewedArtifact !== artifact &&
         receipts.unitVerdicts.has(unit) && acceptsChanges()
@@ -848,11 +848,11 @@ function snapshot(
         ) ||
         receipts.unitPending.has(unit) || receipts.openBoltUnits.has(unit) ||
         reviewFloor !== floor ||
-        recordedFingerprintField(review.block, "Artifact Fingerprint") !== artifact ||
+        reviewedArtifact !== artifact ||
         auditBlockField(review.block, "Iteration") !== String(receipts.unitIterations.get(unit)) ||
         (stage.workspace_requires && (
           source === null ||
-          recordedFingerprintField(review.block, "Unit Source Fingerprint") !== source ||
+          reviewedSource !== source ||
           auditBlockField(review.block, "Source Freshness Bypass") !== null ||
           auditBlockField(review.block, "Unit Source Binding Bypass") !== null
         ))
@@ -880,7 +880,7 @@ function snapshot(
           reviewRecordNotHere(projectDir, binding, review.block);
         const changed = receipts.unitSourceMoved.get(unit) ??
           (review && (
-            recordedFingerprintField(review.block, "Artifact Fingerprint") !== artifact ||
+            currentFingerprintForm(auditBlockField(review.block, "Artifact Fingerprint")) !== artifact ||
             (receipts.unitStale.has(unit) && listing !== null)
           ) ? receipts.unitStaleProgress.get(unit) : undefined);
         // That review still counts as waiting for its verdict, so the re-check
@@ -962,7 +962,7 @@ function snapshot(
         ));
         if (prior) {
           recheckVerdict = auditBlockField(review!.block, "Verdict");
-          if (recordedFingerprintField(prior.block, "Artifact Fingerprint") !== recordedFingerprintField(request.block, "Artifact Fingerprint")) {
+          if (auditBlockField(prior.block, "Artifact Fingerprint") !== auditBlockField(request.block, "Artifact Fingerprint")) {
             recheckChanged = "documents";
           }
         }

@@ -52,7 +52,6 @@ import {
   type AuditShardEvent,
   currentFingerprintForm,
   rawFingerprintForm,
-  recordedFingerprintField,
 } from "./aidlc-lib.ts";
 
 export interface SwarmCheckpoint {
@@ -212,7 +211,7 @@ function snapshot(pd: string, batch: number, requested: string[], stateContent?:
       auditBlockField(row.block, "Stage") === STAGE && auditBlockField(row.block, "Unit") === unit &&
       review.timestamp <= row.timestamp) : [];
     const reviewedOrKept = (field: string): string | null => {
-      const recorded = review ? recordedFingerprintField(review.block, field) : null;
+      const recorded = review ? currentFingerprintForm(auditBlockField(review.block, field)) : null;
       const kept = latest(keptRows.filter((row) => currentFingerprintForm(auditBlockField(row.block, "Recorded")) === recorded));
       return kept ? currentFingerprintForm(auditBlockField(kept.block, "Current")) : recorded;
     };
@@ -251,7 +250,7 @@ function snapshot(pd: string, batch: number, requested: string[], stateContent?:
       // A Unit finalize kept a change for lands as it was kept, not as reviewed.
       // A list of files changed after that is kept under relaxed or off.
       const bound = unitSourceFingerprint(committed, manifest, manifest.rawBytesSha256);
-      const reviewedBinding = recordedFingerprintField(review.block, "Unit Source Fingerprint");
+      const reviewedBinding = currentFingerprintForm(auditBlockField(review.block, "Unit Source Fingerprint"));
       if (keptRows.length === 0 && bound !== reviewedBinding) {
         const error = "source manifest or claimed source does not match the native reviewed binding";
         if (!acceptsChanges) throw new Error(error);

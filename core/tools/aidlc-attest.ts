@@ -100,7 +100,6 @@ import {
   UNBINDABLE_FINGERPRINT,
   unitStageRecordRelPath,
   type WorkspaceSourceListing,
-  recordedFingerprintField,
   committedTextBytes,
 } from "./aidlc-lib.ts";
 
@@ -910,7 +909,7 @@ function buildOwnershipIndex(
             auditBlockField(event.block, "Verdict") === "READY" &&
             auditBlockField(event.block, "Unit") !== null &&
             auditBlockField(event.block, "Stage") !== null &&
-            recordedFingerprintField(event.block, "Unit Source Fingerprint") !== null,
+            auditBlockField(event.block, "Unit Source Fingerprint") !== null,
         )
         .sort(compareShardEvents);
       const newestPerUnit = new Map<string, AuditShardEvent>();
@@ -920,7 +919,7 @@ function buildOwnershipIndex(
 
       for (const [unit, chosen] of newestPerUnit) {
         const stage = auditBlockField(chosen.block, "Stage") as string;
-        const fingerprint = recordedFingerprintField(chosen.block, "Unit Source Fingerprint") as string;
+        const fingerprint = auditBlockField(chosen.block, "Unit Source Fingerprint") as string;
         const iterationRaw = auditBlockField(chosen.block, "Iteration");
         const iteration =
           iterationRaw !== null && /^[1-9][0-9]*$/.test(iterationRaw)

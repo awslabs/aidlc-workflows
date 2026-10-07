@@ -163,7 +163,6 @@ import {
   type BoltIdentity,
   type WorkflowSelection,
   currentFingerprintForm,
-  recordedFingerprintField,
 } from "./aidlc-lib.ts";
 import { compiledExecutable } from "./aidlc-runtime-paths.ts";
 import {
@@ -586,7 +585,7 @@ function reviewerReceiptError(
   // Under relaxed or off, what changed after a real review is kept and said
   // once; under strict the Unit goes back for a fresh review.
   const acceptsChanges = guardPolicyAcceptsChanges(projectDir);
-  const recordedArtifactFp = recordedFingerprintField(latestTerminal.block, "Artifact Fingerprint");
+  const recordedArtifactFp = auditBlockField(latestTerminal.block, "Artifact Fingerprint");
   const currentArtifactFp = definition
     ? reviewArtifactFingerprint(wt, definition, unit, {
         requireRequiredArtifacts: true,
@@ -605,7 +604,7 @@ function reviewerReceiptError(
   }
   const documents = `${definition?.name ?? stage} documents`;
   let artifactFingerprint = recordedArtifactFp;
-  if (recordedArtifactFp !== currentArtifactFp) {
+  if (currentFingerprintForm(recordedArtifactFp) !== currentArtifactFp) {
     if (!acceptsChanges) {
       return {
         error:
@@ -673,7 +672,7 @@ function reviewerReceiptError(
   // that the reviewer saw before trusting its claims for footprint coverage.
   let unitSourceFingerprint: string | undefined;
   if (baseCommit !== null) {
-    const recordedUnitFp = recordedFingerprintField(latestTerminal.block, "Unit Source Fingerprint");
+    const recordedUnitFp = auditBlockField(latestTerminal.block, "Unit Source Fingerprint");
     const bindingBypass =
       auditBlockField(latestTerminal.block, "Unit Source Binding Bypass") ===
       "true";
