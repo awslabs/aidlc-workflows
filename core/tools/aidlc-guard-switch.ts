@@ -762,12 +762,15 @@ export function applyTypedGuardSwitchPrompt(
   // part is a question of its own rather than an instruction to type anything.
   const unread = parseTypedGuardSwitchRequest(prompt, options).unread;
   if (outcome === null || unread === undefined) return outcome;
+  // The lines reach the person as one sentence after another, so the one this
+  // follows ends in a stop: a line that stands alone needs none, and read live
+  // the two ran together ("... is already off I could not read ...").
+  const said = outcome.lines.map((line, index) =>
+    index === outcome.lines.length - 1 && !/[.?!]$/.test(line.trimEnd()) ? `${line.trimEnd()}.` : line
+  );
   return {
     ...outcome,
-    lines: [
-      ...outcome.lines,
-      `I could not read "${unread}". Was that a setting you wanted?`,
-    ],
+    lines: [...said, `I could not read "${unread}". Was that a setting you wanted?`],
   };
 }
 

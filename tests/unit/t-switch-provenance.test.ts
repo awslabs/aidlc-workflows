@@ -491,6 +491,8 @@ describe("a flag-shaped word inside the request", () => {
     expect(note).toContain(FOR_WORK_STARTING_NOW);
     expect(note).toContain('I could not read "--nonsense". Was that a setting you wanted?');
     expect(note).not.toContain("Nothing changed");
+    // Two sentences, not one run together: the line before it ends in a stop.
+    expect(note).not.toMatch(/[a-z)] I could not read/);
     // And it really did apply: the work they start next has the check off.
     const printed = next(proj, ["--scope", "poc", "--", "build the export"]);
     const made = createFromPrint(proj, printed);
