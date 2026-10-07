@@ -479,6 +479,26 @@ describe("a team that keeps opencode.jsonc", () => {
     expect(check.stdout + check.stderr).not.toContain("provider-opencode");
   });
 
+  // A problem in the team's jsonc is reported against that file, never against
+  // an opencode.json the team does not have.
+  test("a shape or a non-file at opencode.jsonc is reported as opencode.jsonc", () => {
+    const shape = project();
+    const text = '{\n  "permission": "ask"\n}\n';
+    writeFileSync(join(shape, "opencode.jsonc"), text);
+    const result = configure(shape);
+    expect(result.status).toBe(4);
+    expect(result.stdout + result.stderr).toContain("opencode.jsonc (permission must be a JSON object)");
+    expect(result.stdout + result.stderr).not.toContain("opencode.json (");
+    expect(readFileSync(join(shape, "opencode.jsonc"), "utf-8")).toBe(text);
+    expect(existsSync(join(shape, "opencode.json"))).toBe(false);
+    const folder = project();
+    mkdirSync(join(folder, "opencode.jsonc"));
+    const blocked = configure(folder);
+    expect(blocked.status).toBe(4);
+    expect(blocked.stdout + blocked.stderr).toContain("opencode.jsonc (root integration is not a regular file)");
+    expect(blocked.stdout + blocked.stderr).not.toContain("opencode.json (");
+  });
+
   test("where setup never ran, the first session adds AI-DLC's part to opencode.jsonc", async () => {
     const dir = project();
     cpSync(join(DIST, "opencode"), dir, { recursive: true });
