@@ -238,7 +238,9 @@ describe("t-crlf-clone-keeps-approvals: committed text checked out with CRLF", (
       approve(p, "alpha");
       const before = checkpointStatus(p, "alpha") as Status & { fingerprint: string };
       expect(before.approved).toBe(true);
-      expect(checkOutWithCrlf(p)).toBeGreaterThan(10);
+      // The record folder: source files are read through Git's own copy, which
+      // keeps no line endings of the checkout, and this project has no Git.
+      expect(checkOutWithCrlf(join(p, "aidlc"))).toBeGreaterThan(10);
       const after = checkpointStatus(p, "alpha") as Status & { fingerprint: string };
       expect(after, JSON.stringify(after)).toMatchObject({ approved: true, errors: [], fingerprint: before.fingerprint });
     }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
