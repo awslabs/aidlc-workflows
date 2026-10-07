@@ -242,8 +242,11 @@ describe("t34 stage-protocol.md structure + cross-references (migrated from t34-
     // teaches the conductor the shard format.
     expect(protocolHas("engine log answers --stage <slug>")).toBe(true);
     expect(protocolHas("<record>/audit/*.md")).toBe(false);
-    expect(protocolHas("Do not infer an ambiguous answer")).toBe(true);
-    expect(protocolHas("An answer's text alone does not identify its question")).toBe(true);
+    // One reply closes every question logged for the menu it answered; the
+    // follow-up that re-asked an "ambiguous" answer is gone.
+    expect(protocolHas("One reply closes every question logged for the menu it answered")).toBe(true);
+    expect(protocolHas("it is nothing to ask the person about again")).toBe(true);
+    expect(protocolHas("Do not infer an ambiguous answer")).toBe(false);
   });
 
   // =========================================================================
