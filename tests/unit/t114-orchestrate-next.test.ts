@@ -1071,11 +1071,14 @@ describe("t114 parked branch (#367)", () => {
     const back = JSON.parse(runNext(proj, chosen).out) as { kind: string; message?: string };
     expect(back.kind, JSON.stringify(back)).toBe("print");
     expect(back.message).toContain("aidlc-state.ts unpark");
-    expect(back.message).toContain("then re-run `next` to continue");
+    // The re-run is the routing answer as it was, so the work it continues
+    // still knows the words were about it.
+    const rerun = /then re-run `next ([^`]+)` to continue/.exec(back.message ?? "")?.[1];
+    expect(rerun, back.message).toBe(chosen.join(" "));
     spawnSync(BUN, [STATE, "unpark", "--project-dir", proj], {
       timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8", cwd: proj, env: directStateEnv,
     });
-    expect(JSON.parse(runNext(proj, []).out).kind).toBe("run-stage");
+    expect(JSON.parse(runNext(proj, (rerun as string).split(" ")).out).kind).toBe("run-stage");
   });
 });
 

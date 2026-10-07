@@ -231,6 +231,38 @@ describe("a number for the routing question answers it alone while the code plan
     });
   }
 
+  // Parked at the plan question ("let's stop here"), the person comes back with
+  // a change to the plan and chooses "part of that work, continue it": the work
+  // is unparked and their words answer the plan question. Before, the agent was
+  // told to unpark and re-run next, and the question came back with the words
+  // unread.
+  for (const policy of ["off", "strict"] as const) {
+    test(`${policy}: parked at the plan question, "part of that work" unparks and the words answer the question`, () => {
+      const proj = project(policy);
+      expect(next(proj).ask_type).toBe("plan-approval");
+      say(proj, "let's stop here for today");
+      run(proj, [ORCHESTRATE, "park", "--project-dir", proj], "");
+      const routing = routingQuestionOverThePlan(proj, false);
+      say(proj, "1");
+      const back = nextNamed(proj, routing.continue_command);
+      expect(back.kind, JSON.stringify(back)).toBe("print");
+      expect(back.message).toContain("unpark");
+      // The re-run is the routing answer as it was, not a bare next.
+      const rerun = /re-run `([^`]+)`/.exec(back.message ?? "")?.[1];
+      expect(rerun, back.message).toContain("--continue --request");
+      run(proj, [join(AIDLC_SRC, "tools", "aidlc-state.ts"), "unpark", "--project-dir", proj], "");
+      const read = next(proj, (rerun as string).replace(/^next /, "").split(" "));
+      expect(read.kind, JSON.stringify(read)).toBe("print");
+      expect(read.message).toContain("--checkpoint plan-approval");
+      expect(read.message).not.toContain("--request");
+      expect(answer(proj, "Request Changes")).toContain("with the person's words as what to change");
+      const revise = next(proj);
+      expect(revise.kind, JSON.stringify(revise)).toBe("run-stage");
+      expect(revise.plan_approval?.status).toBe("revise");
+      expect(revise.plan_approval?.feedback).toBe(CHANGE);
+    });
+  }
+
   test('off: an approved plan stays approved through a routing question at the build step', () => {
     const proj = project("off");
     expect(next(proj).ask_type).toBe("plan-approval");

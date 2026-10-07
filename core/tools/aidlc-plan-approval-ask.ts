@@ -1634,6 +1634,18 @@ export function withdrawPlanApprovalReplies(projectDir: string, text: string): v
 }
 
 /**
+ * The person's latest message asked to park the work: an instruction to the
+ * framework, like a slash command, not a reply the code plan question keeps.
+ */
+export function withdrawLatestPlanApprovalReply(projectDir: string): void {
+  withAuditLock(projectDir, () => {
+    const record = readPlanApprovalAsk(projectDir, intentIdFor(projectDir));
+    if (record === null || !record.replies?.length) return;
+    writePlanApprovalAsk(projectDir, { ...record, replies: record.replies.slice(0, -1) });
+  });
+}
+
+/**
  * Whether the open Plan Approval question already holds a reply of the
  * person's, kept since it was shown, that no answer records yet: their words
  * are for the conductor to read as their choice, not a reason to ask again.
