@@ -1,22 +1,26 @@
-// covers: function:reviewArtifactFingerprint, function:inspectStageValidity, subcommand:aidlc-bolt:checkpoint, subcommand:aidlc-utility:status
+// covers: function:reviewArtifactFingerprint, function:inspectStageValidity, subcommand:aidlc-bolt:checkpoint, subcommand:aidlc-utility:status, subcommand:aidlc-log:review, subcommand:aidlc-swarm:finalize
 //
 // A Windows teammate clones work begun on Linux or macOS, and Git checks its
 // text files out with CRLF line endings (Git for Windows' default). Under Guard
 // Policy strict every finished stage then read as changed ("... changed after
 // Practices Discovery finished. Do you want me to redo ...?"), and a Unit
 // approved before was asked about again; under off `/aidlc --status` named
-// every finished stage. A line ending is no change: committed text is hashed
-// with CRLF and lone CR read as LF, so the fingerprints match the ones
-// recorded before, under every Guard Policy. An approval recorded over CRLF
-// text before this change (the raw bytes) still counts.
+// every finished stage, and a swarm Unit whose files the agent wrote with CRLF
+// could not finalize. A line ending is no change: committed text is hashed
+// with CRLF read as LF, so the fingerprints match the ones recorded before,
+// under every Guard Policy. Only text Git itself converts is read so: a lone
+// CR, or a file Git takes as binary, is still a change. An approval or a
+// review recorded over CRLF text before this change (the raw bytes) still
+// counts.
 import {
   NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS,
   NATIVE_STARTUP_TIMEOUT_MS,
   remainingOperationTimeoutMs,
 } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import {
   AIDLC_SRC, cleanupTestProject, createTestProject, resetAidlcEnv,
@@ -27,7 +31,12 @@ import { loadGraph } from "../../dist/claude/.claude/tools/aidlc-graph.ts";
 import {
   artifactFilename, findStageBySlug, latestMainWorkflowStageRunFloorForProject, reviewArtifactFingerprint,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import { codeGenerationRecordDir } from "../../dist/claude/.claude/tools/aidlc-testing-posture.ts";
 import { inspectStageValidity, stageValidationAuditFields } from "../../dist/claude/.claude/tools/aidlc-validity.ts";
+import {
+  cleanupCheckpointFixtures, fixture as swarmFixture, git, ISOLATED_GIT_ENV, prepare, publish, runCheckpointTool,
+  STAGE, swarm, writeUnitSource, wt,
+} from "../harness/swarm-checkpoint.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
@@ -35,6 +44,7 @@ resetAidlcEnv();
 const projects: string[] = [];
 afterEach(() => {
   while (projects.length) cleanupTestProject(projects.pop());
+  cleanupCheckpointFixtures();
 });
 const stages = ["functional-design", "nfr-requirements", "nfr-design", "infrastructure-design", "code-generation"];
 const REVIEWER = findStageBySlug("code-generation")!.reviewer!;
@@ -223,11 +233,63 @@ function checkOutWithCrlf(dir: string): number {
 // engine hash them that way while the test builds it.
 function withRawLineEndings<T>(run: () => T): T {
   process.env.AIDLC_TEST_RAW_LINE_ENDINGS = "1";
+  ISOLATED_GIT_ENV.AIDLC_TEST_RAW_LINE_ENDINGS = "1";
   try {
     return run();
   } finally {
     delete process.env.AIDLC_TEST_RAW_LINE_ENDINGS;
+    delete ISOLATED_GIT_ENV.AIDLC_TEST_RAW_LINE_ENDINGS;
   }
+}
+
+// The source is read 64 KiB at a time: this file's first line ending falls
+// across the first two reads once it is CRLF.
+const LONG_SOURCE = `//${"x".repeat(64 * 1024 - 3)}\nexport const alpha = 1;\n`;
+
+// A swarm Unit checked, then its files written with CRLF line endings (as an
+// agent on Windows writes them) in a worktree of a CRLF checkout, reviewed
+// there, and finalized.
+function swarmReviewedOverCrlf(policy: string, raw: boolean) {
+  const pd = swarmFixture(["alpha"]);
+  if (policy !== "strict") {
+    const path = seededStateFile(pd);
+    writeFileSync(path, readFileSync(path, "utf-8").replace(/^- \*\*Change Control\*\*: .*$/m, `- **Guard Policy**: ${policy}`));
+    publish(pd, ["alpha"]);
+  }
+  const prepared = prepare(pd);
+  expect(prepared.code, `${prepared.out}\n${prepared.err}`).toBe(0);
+  writeUnitSource(pd, "alpha", 2);
+  const checked = swarm(pd, ["check", "alpha"]);
+  expect(checked.code, `${checked.out}\n${checked.err}`).toBe(0);
+  const child = wt(pd);
+  const dir = codeGenerationRecordDir(child, "alpha");
+  writeFileSync(join(dir, "source-manifest.json"), `${JSON.stringify({
+    stage: STAGE, unit: "alpha", version: 1, writes: [{ path: "src/alpha.ts" }],
+  }, null, 2)}\n`);
+  const planPath = join(dir, "code-generation-plan.md");
+  writeFileSync(planPath, readFileSync(planPath, "utf-8").replace("- [ ] Implement", "- [x] Implement"));
+  for (const path of [join(dir, "source-manifest.json"), planPath, join(child, "src", "alpha.ts")]) {
+    writeFileSync(path, readFileSync(path, "utf-8").replace(/\r?\n/g, "\r\n"));
+  }
+  git(child, ["config", "core.autocrlf", "true"]);
+  const args = [
+    "review", "--stage", STAGE, "--unit", "alpha", "--reviewer", "aidlc-architecture-reviewer-agent",
+    "--iteration", "1", "--project-dir", child,
+  ];
+  const review = () => {
+    const request = runCheckpointTool(child, "tools/aidlc-log.ts", args);
+    expect(request.code, `${request.out}\n${request.err}`).toBe(0);
+    appendFileSync(planPath, "\r\n## Review\r\n\r\n**Verdict:** READY\r\n**Reviewer:** aidlc-architecture-reviewer-agent\r\n" +
+      "**Iteration:** 1\r\n\r\n### Findings\r\n\r\nNo blocking findings.\r\n");
+    const receipt = runCheckpointTool(child, "tools/aidlc-log.ts", [...args, "--verdict", "READY"]);
+    expect(receipt.code, `${receipt.out}\n${receipt.err}`).toBe(0);
+  };
+  if (raw) withRawLineEndings(review);
+  else review();
+  const finalized = swarm(pd, ["finalize", "--batch", "1", "--units", "alpha", "--claimed", "alpha"]);
+  const row = (JSON.parse(finalized.out) as { units: Array<{ unit: string; detail?: string; change_notices?: string[] }> })
+    .units.find((unit) => unit.unit === "alpha");
+  return { finalized, row };
 }
 
 describe("t-crlf-clone-keeps-approvals: committed text checked out with CRLF", () => {
@@ -278,5 +340,48 @@ describe("t-crlf-clone-keeps-approvals: committed text checked out with CRLF", (
       const after = checkpointStatus(p, "alpha");
       expect(after, JSON.stringify(after)).toMatchObject({ approved: true, errors: [] });
     }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+    test(`Guard Policy ${policy.split(" ")[0]}: a CRLF across two reads of a source file is one line ending${policy.startsWith("strict") ? "; a lone CR is a change" : ""}`, () => {
+      const p = fixture(policy);
+      writeFileSync(join(p, "src", "alpha.ts"), LONG_SOURCE);
+      build(p, "alpha");
+      approve(p, "alpha");
+      const before = checkpointStatus(p, "alpha") as Status & { fingerprint: string };
+      writeFileSync(join(p, "src", "alpha.ts"), LONG_SOURCE.replaceAll("\n", "\r\n"));
+      expect(readFileSync(join(p, "src", "alpha.ts"))[64 * 1024 - 1]).toBe(13);
+      const crlf = checkpointStatus(p, "alpha") as Status & { fingerprint: string };
+      expect(crlf, JSON.stringify(crlf)).toMatchObject({ approved: true, errors: [], fingerprint: before.fingerprint });
+      // Under off a change to approved code keeps the approval and its
+      // fingerprint, so a lone CR shows as the change it is under strict.
+      if (!policy.startsWith("strict")) return;
+      writeFileSync(join(p, "src", "alpha.ts"), LONG_SOURCE.replace("\nexport", "\rexport"));
+      const loneCr = checkpointStatus(p, "alpha") as Status & { fingerprint: string };
+      expect(loneCr.fingerprint).not.toBe(before.fingerprint);
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+    test(`Guard Policy ${policy.split(" ")[0]}: a swarm Unit whose files have CRLF line endings finalizes, reviewed before this change or after it`, () => {
+      for (const raw of [false, true]) {
+        const { finalized, row } = swarmReviewedOverCrlf(policy === "strict (set by you)" ? "strict" : "off (set by you)", raw);
+        expect(finalized.code, `${raw ? "raw: " : ""}${row?.detail ?? ""}\n${finalized.out}\n${finalized.err}`).toBe(0);
+        expect(row?.change_notices ?? []).toEqual([]);
+      }
+    }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS * 2);
   }
+
+  test("a document Git takes as binary, or with a lone CR, keeps its line endings", () => {
+    const p = fixture("strict (set by you)");
+    const stage = findStageBySlug("functional-design")!;
+    const dir = join(seededRecordDir(p), "construction", "alpha", "functional-design");
+    mkdirSync(dir, { recursive: true });
+    const files = (stage.produces ?? []).map((name) => join(dir, artifactFilename(name)));
+    const fingerprint = (body: string) => {
+      for (const file of files) writeFileSync(file, body);
+      return reviewArtifactFingerprint(p, stage, "alpha", { requireRequiredArtifacts: true });
+    };
+    // Mostly control bytes: Git leaves such a file as it is at checkout.
+    const binary = "\u0001\u0002\u0003\u0004\u0005\u0006\r\n\u0007\u0011\u0012\u0013\r\n";
+    expect(fingerprint(binary)).not.toBe(fingerprint(binary.replaceAll("\r\n", "\n")));
+    expect(fingerprint("# Design\r\nA lone CR\rhere.\r\n")).not.toBe(fingerprint("# Design\nA lone CR\nhere.\n"));
+    expect(fingerprint("# Design\r\nText.\r\n")).toBe(fingerprint("# Design\nText.\n"));
+  });
 });

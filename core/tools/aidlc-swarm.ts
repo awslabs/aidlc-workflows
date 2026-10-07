@@ -162,6 +162,7 @@ import {
   type AuditShardEvent,
   type BoltIdentity,
   type WorkflowSelection,
+  committedTextSha256,
   currentFingerprintForm,
 } from "./aidlc-lib.ts";
 import { compiledExecutable } from "./aidlc-runtime-paths.ts";
@@ -603,8 +604,9 @@ function reviewerReceiptError(
     };
   }
   const documents = `${definition?.name ?? stage} documents`;
-  let artifactFingerprint = recordedArtifactFp;
-  if (currentFingerprintForm(recordedArtifactFp) !== currentArtifactFp) {
+  // A receipt taken over raw line endings binds what it reviewed in its current form.
+  let artifactFingerprint = currentFingerprintForm(recordedArtifactFp) ?? recordedArtifactFp;
+  if (artifactFingerprint !== currentArtifactFp) {
     if (!acceptsChanges) {
       return {
         error:
@@ -906,10 +908,7 @@ function captureReviewedRecordSnapshot(
     } catch {
       return { error: `cannot capture reviewed source evidence for unit "${unit}"` };
     }
-    if (
-      createHash("sha256").update(manifestBytes).digest("hex") !==
-        manifest.rawBytesSha256
-    ) {
+    if (committedTextSha256(manifestBytes) !== manifest.rawBytesSha256) {
       return {
         error:
           `reviewed source evidence changed while finalizing unit "${unit}"; ` +
@@ -960,7 +959,11 @@ function captureReviewedRecordSnapshot(
         evidenceBytes = Buffer.from(snapshot.serialized, "utf-8");
       }
     }
-    if (createHash("sha256").update(evidenceBytes).digest("hex") !== hex) {
+    // A checkout with CRLF line endings holds the same evidence.
+    if (
+      createHash("sha256").update(evidenceBytes).digest("hex") !== hex &&
+      committedTextSha256(evidenceBytes) !== hex
+    ) {
       return {
         error:
           `reviewed source evidence changed while finalizing unit "${unit}"; ` +

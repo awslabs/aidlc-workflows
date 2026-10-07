@@ -15377,24 +15377,57 @@ function readStableReviewArtifacts(
   }
 }
 
-// A committed text file's bytes as its identity: CRLF and a lone CR read as
-// LF, so a checkout that turns line endings (Git for Windows' default) is no
-// change to the work. A file with a NUL byte is binary and taken as it is, and
-// a file with LF line endings is the same either way.
+// A committed text file's bytes as its identity: CRLF reads as LF, so a
+// checkout that turns line endings (Git for Windows' default) is no change to
+// the work. Only a file Git itself converts is read this way; one it takes as
+// binary (a NUL, a lone CR, or more than one control byte in 128 printable
+// ones, as Git's convert.c counts them) is taken as it is, and a file with LF
+// line endings is the same either way.
 export function committedTextBytes(bytes: Buffer): Buffer {
-  if (!bytes.includes(13) || bytes.includes(0) || process.env.AIDLC_TEST_RAW_LINE_ENDINGS === "1") return bytes;
-  const out = Buffer.allocUnsafe(bytes.length);
-  let length = 0;
-  for (let at = 0; at < bytes.length; at++) {
-    const byte = bytes[at];
-    if (byte === 13) {
-      out[length++] = 10;
-      if (bytes[at + 1] === 10) at++;
-    } else {
-      out[length++] = byte;
+  if (!bytes.includes(13) || process.env.AIDLC_TEST_RAW_LINE_ENDINGS === "1") return bytes;
+  const parts: Buffer[] = [];
+  return committedTextParts([bytes], (part) => parts.push(part)) ? Buffer.concat(parts) : bytes;
+}
+
+// Hands `emit` the text of `chunks` with each CRLF read as LF, a chunk at a
+// time, and says whether that reading applies: true only for text with a CRLF.
+// The caller takes the raw bytes when it is false.
+function committedTextParts(chunks: Iterable<Buffer>, emit: (part: Buffer) => void): boolean {
+  let crlf = false;
+  let pendingCr = false;
+  let printable = 0;
+  let nonprintable = 0;
+  let last = -1;
+  for (const chunk of chunks) {
+    if (chunk.length === 0) continue;
+    if (pendingCr) {
+      if (chunk[0] !== 10) return false;
+      pendingCr = false;
     }
+    let start = 0;
+    for (let at = 0; at < chunk.length; at++) {
+      const byte = chunk[at];
+      if (byte === 13) {
+        if (at + 1 === chunk.length) pendingCr = true;
+        else if (chunk[at + 1] !== 10) return false;
+        crlf = true;
+        emit(chunk.subarray(start, at));
+        start = at + 1;
+        at++;
+      } else if (byte === 0) {
+        return false;
+      } else if (byte === 127 || (byte < 32 && byte !== 10 && byte !== 8 && byte !== 9 && byte !== 27 && byte !== 12)) {
+        nonprintable++;
+      } else if (byte !== 10) {
+        printable++;
+      }
+    }
+    emit(chunk.subarray(start));
+    last = chunk[chunk.length - 1];
   }
-  return out.subarray(0, length);
+  // A trailing DOS end-of-file mark is not counted against the text.
+  if (last === 26) nonprintable--;
+  return crlf && !pendingCr && (printable >> 7) >= nonprintable;
 }
 
 // The sha256 hex of a committed file's text, as committedTextBytes reads it.
@@ -17531,7 +17564,8 @@ export function reviewArtifactBytesSnapshot(
         safePath,
         `review artifact ${entry.logicalPath}`,
       );
-      const digest = createHash("sha256").update(bytes).digest("hex");
+      // CRLF text reads as LF, as review receipts record it.
+      const digest = createHash("sha256").update(committedTextBytes(bytes)).digest("hex");
       manifest.push([
         entry.logicalPath,
         entry.summaryInput
@@ -21789,37 +21823,44 @@ function isAidlcSensorCachePath(path: string): boolean {
 
 // A source file's sha256 with its line endings read as LF (committedTextBytes),
 // so a checkout that turns them is no change, and the raw bytes' digest when
-// that differs.
+// that differs. The file is read a chunk at a time, never whole; only one with
+// a CR is read a second time, for its text form.
 function stableFileShas(path: string): { sha: string; raw?: string } | null {
   let fd: number | undefined;
   try {
     fd = openSync(path, "r");
-    const before = fstatSync(fd);
+    const opened = fd;
+    const before = fstatSync(opened);
     if (!before.isFile()) return null;
-    const hash = createHash("sha256");
     const buffer = Buffer.allocUnsafe(64 * 1024);
-    const chunks: Buffer[] = [];
     let position = 0;
-    while (true) {
-      const count = readSync(fd, buffer, 0, buffer.length, position);
-      if (count === 0) break;
-      hash.update(buffer.subarray(0, count));
-      chunks.push(Buffer.from(buffer.subarray(0, count)));
-      position += count;
+    const chunks = function* (): Generator<Buffer> {
+      for (position = 0; ; ) {
+        const count = readSync(opened, buffer, 0, buffer.length, position);
+        if (count === 0) return;
+        position += count;
+        yield buffer.subarray(0, count);
+      }
+    };
+    const unchanged = (): boolean => {
+      const after = fstatSync(opened);
+      return before.size === after.size &&
+        before.mtimeMs === after.mtimeMs &&
+        before.ctimeMs === after.ctimeMs &&
+        position === after.size;
+    };
+    const hash = createHash("sha256");
+    let carriageReturn = false;
+    for (const chunk of chunks()) {
+      hash.update(chunk);
+      carriageReturn ||= chunk.includes(13);
     }
-    const after = fstatSync(fd);
-    if (
-      before.size !== after.size ||
-      before.mtimeMs !== after.mtimeMs ||
-      before.ctimeMs !== after.ctimeMs ||
-      position !== after.size
-    ) {
-      return null;
-    }
+    if (!unchanged()) return null;
     const raw = hash.digest("hex");
-    const bytes = Buffer.concat(chunks);
-    const text = committedTextBytes(bytes);
-    return text === bytes ? { sha: raw } : { sha: createHash("sha256").update(text).digest("hex"), raw };
+    if (!carriageReturn || process.env.AIDLC_TEST_RAW_LINE_ENDINGS === "1") return { sha: raw };
+    const text = createHash("sha256");
+    if (!committedTextParts(chunks(), (part) => text.update(part))) return { sha: raw };
+    return unchanged() ? { sha: text.digest("hex"), raw } : null;
   } catch {
     return null;
   } finally {

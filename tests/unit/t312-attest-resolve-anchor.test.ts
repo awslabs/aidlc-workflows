@@ -362,10 +362,16 @@ describe("t312 aidlc-attest resolve/anchor", () => {
     expect(pathStatus(report, "app.ts")?.status).toBe("drifted");
 
     // Byte-form conversion is announced rather than silently drifting paths.
+    // CRLF text reads as LF on both sides, so core.autocrlf alone converts
+    // nothing that could drift.
     expect(report.warnings).toEqual([]);
     git(project, ["config", "core.autocrlf", "true"]);
     report = JSON.parse(attest(["resolve", c2], project).stdout);
-    expect(report.warnings.join("\n")).toContain("core.autocrlf=true");
+    expect(report.warnings).toEqual([]);
+    writeFileSync(join(project, ".gitattributes"), "*.bin filter=lfs diff=lfs merge=lfs -text\n");
+    const c4 = commitAll(project, "attributes");
+    report = JSON.parse(attest(["resolve", c4], project).stdout);
+    expect(report.warnings.join("\n")).toContain(".gitattributes may convert bytes");
     expect(report.warnings.join("\n")).toContain("can report drifted");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
