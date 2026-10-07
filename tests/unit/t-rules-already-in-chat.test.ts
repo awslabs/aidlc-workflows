@@ -1,4 +1,4 @@
-// covers: function:chatHoldsRules, function:recordRulesLoad, function:noteRulesDelivered, function:clearRulesDelivered, subcommand:aidlc-orchestrate:next, subcommand:aidlc-orchestrate:continue
+// covers: function:chatHoldsRules, function:recordRulesLoad, function:noteRulesDelivered, function:clearRulesDelivered, function:noteKiroIdeTurn, function:kiroIdeSteering, function:refreshKiroIdeSteering, function:trackedKiroIdeSteeringAsk, subcommand:aidlc-orchestrate:next, subcommand:aidlc-orchestrate:continue
 //
 // #2023: every `next` sent the stage's whole rule bundle again (17 KB with the
 // shipped memory, 34 KB in three tool results with a grown team.md), so a long
@@ -18,11 +18,19 @@
 //   - Codex has no include: the pointer needs this thread to have been given
 //     the bundle, with no session start or compaction since, and no compaction
 //     in its rollout after it.
-//   - Kiro IDE, Cursor and Copilot, and every missing signal: full text.
+//   - Kiro IDE (and Kiro CLI v3 on the same files) keeps the always-included
+//     steering file a chat captured when it started, through summaries and
+//     reloads, never a mid-chat edit (live on 1.2.4). AI-DLC writes the memory
+//     text into that gitignored file, so the pointer needs the chat's session
+//     start to have found it current and unchanged since. Kiro IDE's shell has
+//     no chat id, so every chat with an open turn must hold the same file.
+//   - Cursor and Copilot, and every missing signal: full text.
 
 import { afterAll, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { randomUUID } from "node:crypto";
-import { appendFileSync, cpSync, readFileSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { appendFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   cleanupTestProject,
@@ -433,8 +441,184 @@ describe("Codex: this thread was given the bundle and nothing since could have d
   });
 });
 
+// Kiro IDE's hooks, as the host runs them: a prompt (UserPromptSubmit, which
+// starts a chat that has not started) and the end of a turn (Stop).
+async function kiroIdeHook(proj: string, target: string, payload: Record<string, unknown>): Promise<string> {
+  return await run(
+    proj,
+    [process.execPath, join(proj, ".kiro", "tools", "aidlc.ts"), "engine", "adapter", "kiro-ide", target],
+    {},
+    JSON.stringify({ cwd: proj, ...payload }),
+  );
+}
+
+function kiroIdePrompt(proj: string, sessionId: string): Promise<string> {
+  return kiroIdeHook(proj, "record-human-turn", { hook_event_name: "UserPromptSubmit", session_id: sessionId, prompt: "carry on" });
+}
+
+function kiroIdeStop(proj: string, sessionId: string): Promise<string> {
+  return kiroIdeHook(proj, "continue-workflow", { hook_event_name: "Stop", session_id: sessionId });
+}
+
+const kiroChat = (): string => `sess_${randomUUID()}`;
+// The chat runs `next` in a shell with no chat id (Kiro IDE).
+const inKiroIde = (sid: string): Record<string, string> => ({ AIDLC_SESSION_OVERRIDE: sid });
+const STEERING = [".kiro", "steering", "aidlc-active-memory.md"];
+
+// A copy whose first chat ran a turn: its session start wrote the memory text
+// into the steering file (that chat had captured the shipped reference form).
+async function kiroIdeProject(): Promise<string> {
+  const proj = copiedProject("kiro-ide");
+  const first = kiroChat();
+  await kiroIdePrompt(proj, first);
+  expect(sentInFull(await next(proj, "kiro-ide", inKiroIde(first)))).toBe(true);
+  await kiroIdeStop(proj, first);
+  return proj;
+}
+
+describe("Kiro IDE: the chat holds the steering file it captured when it started", () => {
+  test("the memory text goes into the gitignored steering file; a chat that started with it gets the pointer, an edit the text", async () => {
+    const proj = await kiroIdeProject();
+    const steering = readFileSync(join(proj, ...STEERING), "utf-8");
+    expect(steering).toMatch(/^---\ninclusion: always\n---\n/);
+    expect(steering).toContain('<memory-file path="aidlc/spaces/default/memory/org.md">');
+    expect(steering).toContain(readFileSync(memoryFile(proj, "org.md"), "utf-8"));
+    expect(steering).toContain("Do not edit it");
+    expect(readFileSync(join(REPO_ROOT, "dist", "kiro-ide", ".gitignore"), "utf-8"))
+      .toContain("\n.kiro/steering/aidlc-active-memory.md\n");
+
+    const sid = kiroChat();
+    await kiroIdePrompt(proj, sid);
+    const held = await next(proj, "kiro-ide", inKiroIde(sid));
+    expect(pointerOnly(held), JSON.stringify(held.final).slice(0, 400)).toBe(true);
+    expect(held.bytes).toBeLessThan(8_000);
+    expect(pointerOnly(await next(proj, "kiro-ide", inKiroIde(sid)))).toBe(true);
+
+    // The chat keeps the copy it started with: after an edit, the text every step.
+    editTeam(proj, "Every queue has a dead-letter alarm.");
+    const edited = await next(proj, "kiro-ide", inKiroIde(sid));
+    expect(sentInFull(edited)).toBe(true);
+    expect(JSON.stringify(edited.results)).toContain("Every queue has a dead-letter alarm.");
+    expect(sentInFull(await next(proj, "kiro-ide", inKiroIde(sid)))).toBe(true);
+    await kiroIdeStop(proj, sid);
+
+    // That step wrote the new text into the file, so a chat that starts now holds it.
+    expect(readFileSync(join(proj, ...STEERING), "utf-8")).toContain("Every queue has a dead-letter alarm.");
+    const later = kiroChat();
+    await kiroIdePrompt(proj, later);
+    expect(pointerOnly(await next(proj, "kiro-ide", inKiroIde(later)))).toBe(true);
+    await kiroIdeStop(proj, later);
+
+    // Going back to the older chat starts nothing new for it: still the text.
+    await kiroIdePrompt(proj, sid);
+    expect(sentInFull(await next(proj, "kiro-ide", inKiroIde(sid)))).toBe(true);
+  });
+
+  test("two chats at once: the text unless every chat with an open turn holds the same file", async () => {
+    const proj = await kiroIdeProject();
+    const a = kiroChat();
+    await kiroIdePrompt(proj, a);
+    expect(pointerOnly(await next(proj, "kiro-ide", inKiroIde(a)))).toBe(true);
+    // B starts while A's turn runs: both hold the same file, so either is fine.
+    const b = kiroChat();
+    await kiroIdePrompt(proj, b);
+    expect(pointerOnly(await next(proj, "kiro-ide", inKiroIde(b)))).toBe(true);
+
+    // The memory changes and C starts with the new text while A, holding the
+    // old one, still has its turn open: a command placed in C may be A's.
+    editTeam(proj, "Every alarm names its runbook.");
+    expect(sentInFull(await next(proj, "kiro-ide", inKiroIde(b)))).toBe(true);
+    await kiroIdeStop(proj, b);
+    const c = kiroChat();
+    await kiroIdePrompt(proj, c);
+    expect(sentInFull(await next(proj, "kiro-ide", inKiroIde(c)))).toBe(true);
+    // A's turn ends: C alone runs, and C holds the file.
+    await kiroIdeStop(proj, a);
+    expect(pointerOnly(await next(proj, "kiro-ide", inKiroIde(c)))).toBe(true);
+    // A command from a chat with no open turn: the text.
+    await kiroIdeStop(proj, c);
+    expect(sentInFull(await next(proj, "kiro-ide", inKiroIde(c)))).toBe(true);
+  });
+
+  test("Kiro CLI v3 on the same files: the chat its shell names", async () => {
+    const proj = await kiroIdeProject();
+    const sid = kiroChat();
+    await kiroIdePrompt(proj, sid);
+    expect(pointerOnly(await next(proj, "kiro-ide", { ...inKiroIde(sid), KIRO_SESSION_ID: sid }))).toBe(true);
+    expect(sentInFull(await next(proj, "kiro-ide", { ...inKiroIde(sid), KIRO_SESSION_ID: kiroChat() }))).toBe(true);
+  });
+
+  test("a fresh clone without the file, or a memory too large to put in every chat: the text", async () => {
+    const proj = await kiroIdeProject();
+    // The file is gitignored, so a fresh clone has none: its first chat captured nothing.
+    rmSync(join(proj, ...STEERING));
+    const clone = kiroChat();
+    await kiroIdePrompt(proj, clone);
+    expect(existsSync(join(proj, ...STEERING))).toBe(true);
+    expect(sentInFull(await next(proj, "kiro-ide", inKiroIde(clone)))).toBe(true);
+    await kiroIdeStop(proj, clone);
+    const second = kiroChat();
+    await kiroIdePrompt(proj, second);
+    expect(pointerOnly(await next(proj, "kiro-ide", inKiroIde(second)))).toBe(true);
+    await kiroIdeStop(proj, second);
+
+    editTeam(proj, Array.from({ length: 80 }, (_, index) => `Team practice ${index}: ${"x".repeat(900)}`).join("\n- "));
+    for (const big of [kiroChat(), kiroChat()]) {
+      await kiroIdePrompt(proj, big);
+      expect(readFileSync(join(proj, ...STEERING), "utf-8")).toContain("#[[file:aidlc/spaces/default/memory/team.md]]");
+      expect(sentInFull(await next(proj, "kiro-ide", inKiroIde(big)))).toBe(true);
+      await kiroIdeStop(proj, big);
+    }
+  });
+
+  test("a repo that still tracks the steering file is asked once whether to stop tracking it", async () => {
+    // An earlier release shipped the file, and the team committed it.
+    const proj = copiedProject("kiro-ide");
+    const git = (...args: string[]) => spawnSync("git", args, { cwd: proj, encoding: "utf-8" });
+    expect(git("init", "-q").status).toBe(0);
+    expect(git("add", "--", ".kiro/steering/aidlc-active-memory.md").status).toBe(0);
+    const asked = await kiroIdePrompt(proj, kiroChat());
+    expect(asked).toContain("Your repo tracks .kiro/steering/aidlc-active-memory.md, which AI-DLC now rebuilds for each chat.");
+    expect(asked).toContain("Do you want me to stop tracking it? Your memory files stay as they are.");
+    expect(asked).toContain("git rm --cached -- .kiro/steering/aidlc-active-memory.md");
+    expect(await kiroIdePrompt(proj, kiroChat())).not.toContain("Your repo tracks");
+  });
+
+  test("config writes the project's memory text into the file and refreshes over the engine's copy", () => {
+    const release = join(REPO_ROOT, "dist-release", "kiro-ide");
+    const dir = mkdtempSync(join(realpathSync(tmpdir()), "aidlc-t-rules-kiro-ide-"));
+    projects.push(dir);
+    mkdirSync(join(dir, ".git"));
+    const machine = mkdtempSync(join(realpathSync(tmpdir()), "aidlc-t-rules-machine-"));
+    projects.push(machine);
+    const config = () => spawnSync(process.execPath, [
+      join(REPO_ROOT, "core", "tools", "aidlc-init.ts"),
+      "config", "--project-dir", dir, "--from", release, "--harness", "kiro-ide", "--mcp", "none", "--yes",
+    ], {
+      cwd: dir,
+      encoding: "utf-8",
+      env: { ...childEnv({}), AIDLC_INSTALL_ROOT: join(machine, "share", "aidlc"), AIDLC_BIN_DIR: join(machine, "bin") },
+    });
+    const first = config();
+    expect(first.status, `${first.stdout}${first.stderr}`).toBe(0);
+    const steering = join(dir, ...STEERING);
+    expect(readFileSync(steering, "utf-8")).toContain('<memory-file path="aidlc/spaces/default/memory/team.md">');
+    // The engine writes the file again after an edit; the next refresh neither
+    // refuses it as a local change nor puts the reference form back.
+    editTeam(dir, "Every schema change has a migration test.");
+    writeFileSync(steering, `${readFileSync(steering, "utf-8")}\n`);
+    const refreshed = config();
+    expect(refreshed.status, `${refreshed.stdout}${refreshed.stderr}`).toBe(0);
+    expect(readFileSync(steering, "utf-8")).toContain("Every schema change has a migration test.");
+    const manifest = JSON.parse(readFileSync(join(dir, ".kiro", "tools", "data", "aidlc-manifest.json"), "utf-8")) as {
+      files?: Record<string, string>;
+    };
+    expect(Object.keys(manifest.files ?? {})).not.toContain(".kiro/steering/aidlc-active-memory.md");
+  });
+});
+
 describe("tools with no proven copy keep sending the text", () => {
-  for (const harness of ["kiro-ide", "cursor", "copilot"]) {
+  for (const harness of ["cursor", "copilot"]) {
     test(harness, async () => {
       const proj = await projectFor(harness);
       const sid = randomUUID();
