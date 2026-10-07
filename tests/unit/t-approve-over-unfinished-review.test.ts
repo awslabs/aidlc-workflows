@@ -108,6 +108,38 @@ function reviewAskedNeverFinished(proj: string): void {
   expect(asked.rc, asked.out).toBe(0);
 }
 
+// The review finished READY, the document changed after it (so the Guard
+// Policy, strict here, makes that review stale), and the person asked for it
+// again: that request is the one recovery pass, and it never finished.
+function recoveryAskedNeverFinished(proj: string): void {
+  const dir = join(seededRecordDir(proj), "inception", SLUG);
+  mkdirSync(dir, { recursive: true });
+  for (const name of ["requirements.md", "requirements-analysis-questions.md"]) {
+    const path = join(dir, name);
+    if (!existsSync(path)) writeFileSync(path, `# ${name}\n`);
+  }
+  const first = run(LOG, ["review", "--stage", SLUG, "--reviewer", REVIEWER, "--iteration", "1", "--project-dir", proj]);
+  expect(first.rc, first.out).toBe(0);
+  const file = (JSON.parse(first.out.split("\n").find((line) => line.startsWith("{")) as string) as { reviewFile: string })
+    .reviewFile;
+  writeFileSync(
+    join(proj, file),
+    `## Review\n\n**Verdict:** READY\n**Reviewer:** ${REVIEWER}\n**Date:** 2026-01-01T00:00:00Z\n**Iteration:** 1\n\n` +
+      "### Findings\n\n**New findings**\n\n| Severity | Location | Finding | Required action |\n|---|---|---|---|\n\n" +
+      "### Summary\n\nReady.\n",
+  );
+  const ready = run(LOG, [
+    "review", "--stage", SLUG, "--reviewer", REVIEWER, "--iteration", "1", "--verdict", "READY", "--project-dir", proj,
+  ]);
+  expect(ready.rc, ready.out).toBe(0);
+  writeFileSync(join(dir, "requirements.md"), "# requirements.md\n\n- A title cannot be blank.\n");
+  says(proj, "review the requirements again before I approve");
+  const again = run(LOG, ["review", "--stage", SLUG, "--reviewer", REVIEWER, "--iteration", "2", "--project-dir", proj]);
+  expect(again.rc, again.out).toBe(0);
+  const request = events(proj, "REVIEW_REQUESTED").at(-1);
+  expect(auditBlockField(request?.block ?? "", "Recovery"), request?.block).toBe("stale-receipt");
+}
+
 function lockStrict(proj: string): void {
   const dir = join(proj, "aidlc", "spaces", "default", "memory");
   mkdirSync(dir, { recursive: true });
@@ -192,6 +224,36 @@ describe("the person's approval goes through over a review that never finished",
     expect(refused.kind).not.toBe("done");
     expect(JSON.stringify(refused)).toContain("REVIEW_EVIDENCE_MISSING");
     expect(events(proj, "GATE_APPROVED")).toHaveLength(0);
+  });
+
+  // The person asked for the review again and then said they do not need it:
+  // a recovery review is their call too.
+  test("over a recovery review that never finished: approved, the review shown as not finished, one line", () => {
+    recoveryAskedNeverFinished(proj);
+    says(proj, WORDS);
+    const done = report(proj, ["--stage", SLUG, "--result", "approved", "--user-input", WORDS]);
+    expect(done.kind, JSON.stringify(done)).toBe("done");
+    expect(notices(done)).toContain(NOTICE);
+    const approved = events(proj, "GATE_APPROVED");
+    expect(approved).toHaveLength(1);
+    expect(auditBlockField(approved[0].block, "Review")).toBe("not finished");
+    expect(events(proj, "GATE_REJECTED")).toHaveLength(0);
+    expect(completed(proj)).toBe(true);
+  });
+
+  test("a team that locks Guard Policy strict keeps the recovery review required, and its way on works", () => {
+    lockStrict(proj);
+    recoveryAskedNeverFinished(proj);
+    says(proj, WORDS);
+    const refused = report(proj, ["--stage", SLUG, "--result", "approved", "--user-input", WORDS]);
+    expect(refused.kind).not.toBe("done");
+    expect(JSON.stringify(refused)).toContain("REVIEW_RECOVERY_PENDING");
+    expect(events(proj, "GATE_APPROVED")).toHaveLength(0);
+    // The review it waits for can be asked for again: the same pass, once more.
+    const retry = run(LOG, [
+      "review", "--stage", SLUG, "--reviewer", REVIEWER, "--iteration", "2", "--retry-pending", "--project-dir", proj,
+    ]);
+    expect(retry.rc, retry.out).toBe(0);
   });
 
   test("a team that locks Guard Policy strict keeps the review required", () => {
