@@ -2784,6 +2784,60 @@ describe("t147 Kiro CLI reads what the person typed from the expanded skill body
     } finally { rmSync(dir, { recursive: true, force: true }); }
   });
 
+  // Native Windows `aidlc` is aidlc.cmd: PowerShell hands the call to cmd.exe,
+  // which acts on & | < > ^ in a word with no space and ends the command there
+  // ("add a Q&A page" runs "A page" as a command), and the launcher's helper
+  // then reads the arguments the Windows way (CommandLineToArgvW). The chain
+  // here is the installer's launcher shape (aidlc.cmd, the helper's argument
+  // path) with an argv-echoing script in place of aidlc.exe; every word the
+  // hook read must come out of it as typed.
+  test.skipIf(process.platform !== "win32")("the forwarded call survives the aidlc.cmd hop: cmd.exe metacharacters and double quotes reach the engine as typed", () => {
+    const dir = scratchProject(true);
+    try {
+      const chain = join(dir, "launcher");
+      mkdirSync(chain, { recursive: true });
+      const echo = join(chain, "echo.ts");
+      writeFileSync(echo, "console.log(JSON.stringify(process.argv.slice(2)));\n");
+      const helper = join(chain, "aidlc-shim.ps1");
+      writeFileSync(helper, [
+        "$ErrorActionPreference = 'Stop'",
+        "function Format-NativeArgument([string]$value) {",
+        "  $quote = $value.Length -eq 0",
+        "  $out = ''",
+        "  $slashes = 0",
+        "  foreach ($c in $value.ToCharArray()) {",
+        "    if ([char]::IsWhiteSpace($c)) { $quote = $true }",
+        "    if ($c -eq [char]'\\') { $slashes++; continue }",
+        "    if ($c -eq [char]'\"') { $out += ('\\' * ($slashes * 2 + 1)) + '\"' } else { $out += ('\\' * $slashes) + $c }",
+        "    $slashes = 0",
+        "  }",
+        "  if ($quote) { return '\"' + $out + ('\\' * ($slashes * 2)) + '\"' }",
+        "  return $out + ('\\' * $slashes)",
+        "}",
+        `$executable = '${process.execPath.replaceAll("'", "''")}'`,
+        `$env:AIDLC_SHIM_ARGS = '${echo.replaceAll("'", "''")} ' + (@(foreach ($argument in $args) { Format-NativeArgument $argument }) -join ' ')`,
+        "& $executable --% %AIDLC_SHIM_ARGS%",
+        "exit $LASTEXITCODE",
+        "",
+      ].join("\r\n"));
+      const launcher = join(chain, "aidlc.cmd");
+      writeFileSync(launcher, `@echo off\r\npowershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "${helper.replaceAll("%", "%%")}" %*\r\nexit /b %ERRORLEVEL%\r\n`);
+      const said = String.raw`add a Q&A page, pipe a|b, less a<b, more a>b, caret a^b, say "hi" to it's & co, the error \"boom\", open "can't open C:\temp\x"`;
+      const r = runAdapter(dir, "verb-intercept", { cwd: dir, session_id: session, prompt: expanded(said) }, [], env);
+      expect(r.code, r.stderr).toBe(0);
+      const forwarded = /engine orchestrate next (.*)\n/.exec(r.stdout)?.[1] ?? "";
+      const words = JSON.parse(readFileSync(join(dir, "aidlc", ".aidlc-forwarding-latch"), "utf8")).args as string[];
+      expect(words).toContain("Q&A");
+      const hop = spawnSync(
+        "powershell",
+        ["-NoProfile", "-NonInteractive", "-Command", `& '${launcher.replaceAll("'", "''")}' engine orchestrate next ${forwarded}`],
+        { encoding: "utf-8" },
+      );
+      const received = hop.stdout.trim().split(/\r?\n/).pop() ?? "[]";
+      expect(JSON.parse(received), hop.stdout + hop.stderr).toEqual(["engine", "orchestrate", "next", ...words]);
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+
   test("a bare `/aidlc` dispatches nothing, and no `--stage <slug>`", () => {
     const dir = scratchProject(true);
     try {
