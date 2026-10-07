@@ -2099,7 +2099,7 @@ function diagnosticWizard(
       );
       if (selected.harness === "opencode") {
         const offer = promptYesDefault(
-          "  Write amazon-bedrock provider options to opencode.json?",
+          `  Write amazon-bedrock provider options to ${rootIntegrationTarget(projectDir, "opencode.json")}?`,
           recordedBedrock?.opencodeDefault ?? false,
         );
         args.push("--opencode-default", offer ? "yes" : "no");
@@ -8792,7 +8792,7 @@ function planRootIntegrations(
     const targetRegular = targetExists && lstatSync(targetPath).isFile();
     if (targetExists && !targetRegular && !force) {
       actions.push({
-        path: integration.path,
+        path: targetRel,
         action: "conflict",
         detail: "root integration is not a regular file",
       });
@@ -9185,7 +9185,7 @@ function planRootIntegrations(
       }
       const merged = mergeJsonEntries(current, shippedText, ownership, force, claimJsonEntries[integration.path] ?? []);
       if ("conflict" in merged) {
-        actions.push({ path: integration.path, action: "conflict", detail: merged.conflict });
+        actions.push({ path: targetRel, action: "conflict", detail: merged.conflict });
         continue;
       }
       const created = !targetExists || priorContribution?.policy === "whole-file" ||
