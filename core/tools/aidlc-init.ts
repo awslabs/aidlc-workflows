@@ -8902,9 +8902,12 @@ function planRootIntegrations(
           const body = restored.slice(begin.length, restored.length - end.length).trim().replace(/\r\n/g, "\n");
           return body === shippedBody || (legacyWholeFileHashes ?? []).includes(sha256Bytes(`${body}\n`));
         };
+        // A space switch may also have pointed its include lines elsewhere.
         const own = ownTitleLine(
           current.slice(current.indexOf(begin), current.indexOf(end) + end.length),
-          (restored) => priorHash ? sha256Matching(restored, [priorHash]) === priorHash : shippedPart(restored),
+          (restored) => [restored, withSpace(restored, DEFAULT_SPACE)].some((text) =>
+            priorHash ? sha256Matching(text, [priorHash]) === priorHash : shippedPart(text)
+          ),
         );
         const beginAt = value.indexOf(begin);
         const endAt = value.indexOf(end) + end.length;

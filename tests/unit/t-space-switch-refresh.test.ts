@@ -86,11 +86,13 @@ function pointing(project: string, at: string): string[] {
 function switched(
   harness: keyof typeof HARNESS_DIRS,
   from: string,
+  first: (project: string) => void = () => {},
 ): { project: string; repointed: Map<string, string> } {
   const project = temp(`aidlc-t-space-${harness}-`);
   mkdirSync(join(project, ".git"));
   const installed = config(project, from, harness, "--yes");
   expect(installed.status, installed.out).toBe(0);
+  first(project);
   const env = { AIDLC_HARNESS_DIR: HARNESS_DIRS[harness] };
   const created = run(UTILITY, ["space", "create", "teamb", "--project-dir", project], project, env);
   expect(created.status, created.out).toBe(0);
@@ -139,6 +141,26 @@ describe("a space switch is not a config conflict", () => {
       }
     });
   }
+
+  // The title line of AI-DLC's part is the person's to replace (#2058); a
+  // space switch after that is still no conflict, and both changes stay.
+  test("copilot: a replaced title and a space switch together are no conflict", () => {
+    const { project } = switched("copilot", release("copilot"), (dir) => {
+      const agents = join(dir, "AGENTS.md");
+      const text = readFileSync(agents, "utf-8");
+      expect(text.split("\n")).toContain("# AI-DLC");
+      writeFileSync(agents, text.split("\n").map((line) => line === "# AI-DLC" ? "# Demo Project" : line).join("\n"));
+    });
+    expect(conflicts(project, release("copilot"), "copilot")).toEqual([]);
+    expect(instructionFileDoctorCheck(project, ".aidlc").pass).toBe(true);
+    const refreshed = config(project, release("copilot"), "copilot", "--yes");
+    expect(refreshed.status, refreshed.out).toBe(0);
+    const text = readFileSync(join(project, "AGENTS.md"), "utf-8");
+    expect(text.split("\n")).toContain("# Demo Project");
+    expect(text).toContain(TEAM);
+    expect(repointedIncludeText("AGENTS.md", text, "teamb")).toBeNull();
+    expect(instructionFileDoctorCheck(project, ".aidlc").pass).toBe(true);
+  });
 
   test("claude: a real edit to the repointed include is still the person's to resolve", () => {
     const { project } = switched("claude", release("claude"));

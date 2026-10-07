@@ -2999,7 +2999,10 @@ function instructionStates(
     // A line the person wrote in place of the onboarding's title is theirs,
     // and config keeps it, so it is not a change to AI-DLC's text (#2058).
     const ownTitleOnly = (text: string, hash: string): boolean =>
-      ownTitleLine(text, (restored) => sha256Matching(restored, [hash]) === hash) !== null;
+      ownTitleLine(text, (restored) =>
+        // A space switch may also have pointed its include lines elsewhere.
+        [restored, withSpace(restored, "default")].some((form) => sha256Matching(form, [hash]) === hash)
+      ) !== null;
     if (contribution.policy === "whole-file") {
       return {
         path,
