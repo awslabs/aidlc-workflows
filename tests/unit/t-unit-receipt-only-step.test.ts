@@ -421,8 +421,10 @@ describe("t-unit-receipt-only-step: work genuinely left keeps Run next", () => {
       const byUnit = directiveOf(
         run(ORCHESTRATE, ["report", "--stage", SLUG, "--result", "approved", "--unit", "unit-b", "--user-input", "Approve"], proj).out,
       );
-      expect(byUnit.kind).toBe("error");
-      expect(String(byUnit.message)).toContain("Unit Ownership: team");
+      // A solo walk reports its Units itself: the agent is handed the step on.
+      expect(byUnit.kind).toBe("print");
+      expect(String(byUnit.message)).toContain("A Unit is not reported on its own in this work");
+      expect(String(byUnit.message)).not.toContain("Unit Ownership");
     });
   }
 
