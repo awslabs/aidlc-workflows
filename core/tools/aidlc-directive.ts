@@ -1045,26 +1045,27 @@ export function unitStepNote(invocation: string): string {
 // The notes for one emitted directive. `invocation` is how this install runs
 // the orchestrate tool. A rules part carries none: its run-stage repeats the
 // advisory and the notices, and they are said from there, once.
-export function withAgentNotes<T extends Record<string, unknown>>(directive: T, invocation: string): T {
-  if (directive.kind === "load-steering") return directive;
+export function withAgentNotes<T extends object>(directive: T, invocation: string): T {
+  const d = directive as Record<string, unknown>;
+  if (d.kind === "load-steering") return directive;
   const notes: Record<string, string> = {};
-  if (directive.stage_validity !== undefined) {
-    const stage = (directive.stage_validity as { earliest_affected_stage?: unknown }).earliest_affected_stage;
+  if (d.stage_validity !== undefined) {
+    const stage = (d.stage_validity as { earliest_affected_stage?: unknown }).earliest_affected_stage;
     notes.stage_validity_note = stageValidityNote(invocation, typeof stage === "string" ? stage : null);
   }
-  if (Array.isArray(directive.change_notices) && directive.change_notices.length > 0) {
+  if (Array.isArray(d.change_notices) && d.change_notices.length > 0) {
     notes.change_notices_note = CHANGE_NOTICES_NOTE;
   }
-  if (directive.kind === "ask" && directive.agent_work !== true) notes.question_note = QUESTION_NOTE;
-  if (directive.kind === "run-stage") {
-    if (directive.gate === GATE_UNRESOLVED) {
+  if (d.kind === "ask" && d.agent_work !== true) notes.question_note = QUESTION_NOTE;
+  if (d.kind === "run-stage") {
+    if (d.gate === GATE_UNRESOLVED) {
       notes.gate_note = unresolvedGateNote(invocation);
     } else if (
-      directive.gate === false && typeof directive.unit === "string" &&
+      d.gate === false && typeof d.unit === "string" &&
       ![
         "construction_checkpoint", "swarm_checkpoint", "unit_gate", "wave", "swarm_settled", "single",
-      ].some((field) => field in directive) &&
-      (directive.construction_policy as { completion_only?: boolean } | undefined)?.completion_only !== true
+      ].some((field) => field in d) &&
+      (d.construction_policy as { completion_only?: boolean } | undefined)?.completion_only !== true
     ) {
       notes.gate_note = unitStepNote(invocation);
     }
