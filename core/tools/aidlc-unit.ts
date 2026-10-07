@@ -440,6 +440,10 @@ function currentClaim(
   };
 }
 
+// git's own words when it has no author or committer identity to use.
+const NO_GIT_IDENTITY =
+  /identity unknown|Please tell me who you are|auto-detect email|no (?:email|name) was given/i;
+
 function createClaimCommit(
   projectDir: string,
   parentOid: string,
@@ -450,13 +454,11 @@ function createClaimCommit(
   const scratch = mkdtempSync(join(tmpdir(), "aidlc-unit-claim-"));
   const index = join(scratch, "index");
   try {
-    const env = {
-      GIT_INDEX_FILE: index,
-      GIT_AUTHOR_NAME: "AI-DLC Unit Claims",
-      GIT_AUTHOR_EMAIL: "aidlc-unit@local",
-      GIT_COMMITTER_NAME: "AI-DLC Unit Claims",
-      GIT_COMMITTER_EMAIL: "aidlc-unit@local",
-    };
+    // The claim is the person's own commit: their git name, email and signing
+    // settings apply as they do to any commit they make, so a remote that
+    // matches the committer to the pusher accepts it, and the claim history
+    // shows who claimed.
+    const env = { GIT_INDEX_FILE: index };
     const read = git(projectDir, ["read-tree", sourceTreeOid ?? parentOid], env);
     if (!read.ok) fail(`git read-tree failed: ${read.stderr.trim()}`);
     const blob = spawnSync("git", ["hash-object", "-w", "--stdin"], {
@@ -473,34 +475,69 @@ function createClaimCommit(
     if (!update.ok) fail(`git update-index failed: ${update.stderr.trim()}`);
     const tree = git(projectDir, ["write-tree"], env);
     if (!tree.ok) fail(`git write-tree failed: ${tree.stderr.trim()}`);
+    // commit-tree does not read commit.gpgsign on its own; porcelain commits do.
+    const signed =
+      git(projectDir, ["config", "--type=bool", "commit.gpgsign"]).stdout.trim() === "true";
     const commitArgs = [
       "commit-tree",
       tree.stdout.trim(),
       "-p",
       parentOid,
       ...(additionalParentOid ? ["-p", additionalParentOid] : []),
+      ...(signed ? ["-S"] : []),
       "-m",
       `aidlc unit ${payload.status}: ${payload.unit} generation ${payload.generation}`,
     ];
     const commit = git(projectDir, commitArgs, env);
-    if (!commit.ok) fail(`git commit-tree failed: ${commit.stderr.trim()}`);
+    if (!commit.ok) {
+      if (NO_GIT_IDENTITY.test(commit.stderr)) {
+        fail(
+          "Git has no name and email for your commits yet. Set them with " +
+            'git config --global user.name "Your Name" and git config --global user.email "you@example.com", ' +
+            "then run the command again.",
+        );
+      }
+      fail(`git commit-tree failed: ${commit.stderr.trim()}`);
+    }
     return commit.stdout.trim();
   } finally {
     rmSync(scratch, { recursive: true, force: true });
   }
 }
 
+// What the remote said when it refused a push: its own `remote:` lines, then
+// git's reason in parentheses; the whole stderr when it printed neither.
+function pushRefusal(stderr: string): string {
+  const lines = stderr.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  const remoteSaid = lines
+    .filter((line) => line.startsWith("remote:"))
+    .map((line) => line.slice("remote:".length).trim())
+    .filter(Boolean);
+  const reason = lines
+    .map((line) => /\[(?:remote )?rejected\][^(]*\(([^)]+)\)/.exec(line)?.[1])
+    .find(Boolean);
+  const parts = [...remoteSaid, ...(reason ? [`(${reason})`] : [])];
+  return (parts.length > 0 ? parts : lines).join(" ");
+}
+
+// The compare-and-swap: ok when the ref moved from expectedOid to commitOid.
+// A stale lease, or a ref the remote could not lock because another push got
+// there first, is another claimant winning; any other push failure is the
+// remote refusing the commit, and `refused` carries its reason for the person.
+const CLAIM_RACE_LOST = /stale info|failed to update ref|cannot lock ref/;
 function updateClaimRef(
   projectDir: string,
   remote: string | null,
   ref: string,
   commitOid: string,
   expectedOid: string | null,
-): boolean {
+): { ok: boolean; refused?: string } {
   if (remote) {
     const lease = `--force-with-lease=${ref}:${expectedOid ?? ""}`;
     const pushed = git(projectDir, ["push", remote, lease, `${commitOid}:${ref}`]);
-    return pushed.ok;
+    if (pushed.ok) return { ok: true };
+    if (CLAIM_RACE_LOST.test(pushed.stderr)) return { ok: false };
+    return { ok: false, refused: pushRefusal(pushed.stderr) };
   }
   const updated = git(projectDir, [
     "update-ref",
@@ -508,7 +545,7 @@ function updateClaimRef(
     commitOid,
     expectedOid ?? ZERO_OID,
   ]);
-  return updated.ok;
+  return { ok: updated.ok };
 }
 
 function activeIdentity(projectDir: string): {
@@ -1766,7 +1803,11 @@ function publishUnit(args: string[], projectDir?: string): void {
     headTree,
     headOid,
   );
-  if (!updateClaimRef(pd, remote, stamp.claim_ref, commit, current.oid)) {
+  const pushed = updateClaimRef(pd, remote, stamp.claim_ref, commit, current.oid);
+  if (!pushed.ok) {
+    if (pushed.refused) {
+      fail(`Unit "${unit}" publication was rejected by ${remote}: ${pushed.refused}`);
+    }
     fail(`Unit "${unit}" publication compare-and-swap failed; refresh the claim and retry.`);
   }
   invalidateLiveClaimPayloadCache(pd, unit);
@@ -3471,14 +3512,15 @@ function claimUnit(args: string[], projectDir?: string): void {
   // Persist the intended claim before the CAS. A process killed after the push
   // can validate this nonce on retry and finish without creating a new attempt.
   writeUnitScopeStamp(pd, stamp);
-  if (!updateClaimRef(pd, integration.remote, ref, commit, current?.oid ?? null)) {
+  const pushed = updateClaimRef(pd, integration.remote, ref, commit, current?.oid ?? null);
+  if (!pushed.ok) {
     clearUnitScopeStamp(pd);
     const winner = currentClaim(pd, integration.remote, ref);
-    fail(
-      winner?.status === "claimed"
-        ? `Unit "${unit}" claim lost to "${winner.owner}".`
-        : `Unit "${unit}" claim compare-and-swap failed.`,
-    );
+    if (winner?.status === "claimed") fail(`Unit "${unit}" claim lost to "${winner.owner}".`);
+    if (pushed.refused) {
+      fail(`Unit "${unit}" claim was rejected by ${integration.remote}: ${pushed.refused}`);
+    }
+    fail(`Unit "${unit}" claim compare-and-swap failed.`);
   }
   invalidateLiveClaimPayloadCache(pd, unit);
   const winner = currentClaim(pd, integration.remote, ref);
@@ -3614,7 +3656,11 @@ function releaseUnit(args: string[], projectDir?: string): void {
     predecessor_oid: current.oid,
   };
   const commit = createClaimCommit(pd, current.oid, payload);
-  if (!updateClaimRef(pd, integration.remote, ref, commit, current.oid)) {
+  const pushed = updateClaimRef(pd, integration.remote, ref, commit, current.oid);
+  if (!pushed.ok) {
+    if (pushed.refused) {
+      fail(`Unit "${unit}" release was rejected by ${integration.remote}: ${pushed.refused}`);
+    }
     fail(`Unit "${unit}" release compare-and-swap failed.`);
   }
   invalidateLiveClaimPayloadCache(pd, unit);

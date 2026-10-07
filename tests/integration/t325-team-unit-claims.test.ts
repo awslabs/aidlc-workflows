@@ -5,6 +5,7 @@ import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
   appendFileSync,
+  chmodSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -1558,6 +1559,75 @@ describe("t325 atomic team Unit claims", () => {
     expect(absent.out).toContain('branch \\"integration\\"');
     expect(absent.out).toContain("memory/team.md");
     expect(absent.out).toContain("could not be fetched from origin");
+  });
+
+  // #2117: a claim is the claimant's own commit, so a remote that only takes
+  // the pusher's own committer email accepts it; a push the remote refuses is
+  // reported with the remote's reason, never as a lost race.
+  test("claim commits carry the claimant's git identity and a refused push is reported with the remote's reason", () => {
+    const { seed, remote } = makeSeed();
+    // The forge rule: the committer email must be one of the pusher's own.
+    const hook = join(remote, "hooks", "pre-receive");
+    writeFileSync(
+      hook,
+      [
+        "#!/bin/sh",
+        "while read old new ref; do",
+        '  for c in $(git rev-list "$new" --not --all); do',
+        '    email=$(git log -1 --format=%ce "$c")',
+        '    case "$email" in',
+        "      *@example.test) ;;",
+        "      *) echo \"GL-HOOK-ERR: You cannot push commits for '$email'. You can only push commits if the committer email is one of your own verified emails.\" >&2; exit 1 ;;",
+        "    esac",
+        "  done",
+        "done",
+        "exit 0",
+        "",
+      ].join("\n"),
+    );
+    chmodSync(hook, 0o755);
+
+    const alice = clone(remote, "alice");
+    const claimed = run(UNIT, ["claim", "alpha", "--team", "alice"], alice);
+    expect(claimed.status, claimed.out).toBe(0);
+    const stamp = JSON.parse(claimed.stdout) as { claim_ref: string };
+    expect(git(remote, ["log", "-1", "--format=%an <%ae> %cn <%ce>", stamp.claim_ref])).toBe(
+      "alice <alice@example.test> alice <alice@example.test>",
+    );
+    const released = run(UNIT, ["release", "alpha"], seed);
+    expect(released.status, released.out).toBe(0);
+    expect(git(remote, ["log", "-1", "--format=%ce", stamp.claim_ref])).toBe("seed@example.test");
+
+    const outsider = clone(remote, "outsider");
+    git(outsider, ["config", "user.email", "outsider@example.org"]);
+    const refused = run(UNIT, ["claim", "gamma", "--team", "outsider"], outsider);
+    expect(refused.status).not.toBe(0);
+    expect(refused.out).toContain('Unit \\"gamma\\" claim was rejected by origin: ');
+    expect(refused.out).toContain("You cannot push commits for 'outsider@example.org'");
+    expect(refused.out).not.toContain("compare-and-swap");
+    expect(exists(join(outsider, "aidlc", ".aidlc-unit-scope.json"))).toBe(false);
+    const second = clone(remote, "second");
+    const accepted = run(UNIT, ["claim", "gamma", "--team", "second"], second);
+    expect(accepted.status, accepted.out).toBe(0);
+
+    const nameless = clone(remote, "nameless");
+    git(nameless, ["config", "--unset", "user.name"]);
+    git(nameless, ["config", "--unset", "user.email"]);
+    git(nameless, ["config", "user.useConfigOnly", "true"]);
+    const unknown = run(UNIT, ["claim", "alpha", "--team", "nameless"], nameless, {
+      GIT_CONFIG_GLOBAL: join(nameless, "no-global-gitconfig"),
+      GIT_CONFIG_NOSYSTEM: "1",
+    });
+    expect(unknown.status).not.toBe(0);
+    expect(unknown.out).toContain("Git has no name and email for your commits yet.");
+    expect(unknown.out).toContain("git config --global user.email");
+    expect(unknown.out).not.toContain("Please tell me who you are");
+
+    // The person's signing setting applies to these commits too.
+    git(seed, ["config", "commit.gpgsign", "true"]);
+    git(seed, ["config", "gpg.format", "ssh"]);
+    git(seed, ["config", "user.signingkey", "no-such-signing-key"]);
+    expect(run(UNIT, ["release", "gamma"], seed).status).not.toBe(0);
   });
 });
 
