@@ -2582,17 +2582,25 @@ function openGateReplyDirective(stage: string, requestId: string): PrintDirectiv
 // the question's own answer command, or `next --request` with the person's
 // words, kept as `requestId`, which asks where that work belongs. The
 // question's text stays in the audit, never in this directive.
-function openQuestionReplyDirective(stage: string, checkpoint: string | null, requestId: string): PrintDirective {
+// A checkpoint's commands name its Unit or batch from the question's own row,
+// so a new chat, which never saw the question asked, has all it needs.
+function openQuestionReplyDirective(stage: string, block: string, requestId: string): PrintDirective {
   const orchestrate = aidlcToolInvocation("orchestrate");
-  const gate = checkpoint === "Construction Unit Approval"
-    ? `${aidlcToolInvocation("bolt")} checkpoint`
+  const checkpoint = auditBlockField(block, "Checkpoint");
+  const unit = auditBlockField(block, "Unit");
+  const batch = auditBlockField(block, "Batch number");
+  const units = auditBlockField(block, "Units");
+  const [gate, target] = checkpoint === "Construction Unit Approval"
+    ? [`${aidlcToolInvocation("bolt")} checkpoint`,
+      unit ? ` --unit ${shellArg(unit)} --kind ${shellArg(auditBlockField(block, "Kind") ?? "unit")}` : ""]
     : checkpoint === "Swarm Batch Approval"
-      ? `${aidlcToolInvocation("bolt")} swarm-checkpoint`
-      : null;
+      ? [`${aidlcToolInvocation("bolt")} swarm-checkpoint`,
+        batch && units ? ` --batch ${shellArg(batch)} --units ${shellArg(units)}` : ""]
+      : [null, ""];
   const answer = gate
-    ? `answer it through that checkpoint, never \`log answer\` (which would not approve it): run \`${gate} --action approve\` ` +
-      "or `--action reject` with the same Unit or batch and session you asked with, passing the person's reply " +
-      "unchanged as `--user-input` (and their feedback as `--reason` when they ask for changes)"
+    ? `answer it through that checkpoint, never \`log answer\` (which would not approve it): run \`${gate} --action ` +
+      `approve${target}\` or \`${gate} --action reject${target}\`${target ? "" : " for that Unit or batch"}, passing ` +
+      "the person's reply unchanged as `--user-input` (and their feedback as `--reason` when they ask for changes)"
     : `record it with \`${aidlcToolInvocation("log")} answer --stage ${shellArg(stage)} --details '<their exact reply>'\` ` +
       "(with the checkpoint flags that question was logged with, when it has them)";
   return printDirective(
@@ -7945,7 +7953,7 @@ function routeNext(args: string[], projectDir: string | undefined): void {
         pd, flags.intent, "", "routing", { space: selection.space, targets: routingTargets() }, false, undefined,
         undefined, routingSettings(carriedRoutingFlags(flags)),
       );
-      emit(openQuestionReplyDirective(open.stage, auditBlockField(open.block, "Checkpoint"), words.id));
+      emit(openQuestionReplyDirective(open.stage, open.block, words.id));
       return;
     }
     // Words at an approval gate the person is looking at ("approve") may be
@@ -8505,10 +8513,12 @@ function applyConstructionCheckpointShape(
   directive.protocol_modules = checkpoint.rereview ? ["reviewer", "construction"] : ["construction"];
   // A checkpoint the person approves offers one learnings ritual for the
   // stages it covers, as a stage's own approval gate does. A re-check of
-  // changed code asks only for the approval.
+  // changed code asks only for the approval, and so does a checkpoint whose
+  // approval was already asked (in this chat or another): its learnings
+  // question came first.
   if (
     directive.ceremony.learnings === "on" && checkpoint.human_required &&
-    !checkpoint.rereview && !checkpoint.rechecked
+    !checkpoint.rereview && !checkpoint.rechecked && !checkpoint.asked
   ) {
     directive.protocol_modules.push("learnings");
   }

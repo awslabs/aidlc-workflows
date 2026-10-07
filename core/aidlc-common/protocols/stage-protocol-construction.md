@@ -302,11 +302,12 @@ says <verdict>. Approve it?" ("code" in place of "design" when
 `rechecked.changed` is code). On a `NOT-READY` verdict, print the Review brief
 first, as the reviewer module asks after a recovery verdict:
 `bun {{HARNESS_DIR}}/tools/aidlc-review-brief.ts review --stage "<directive.stage>" --unit "<unit>" --why stale`.
-The human's reply in this session, to this checkpoint question, authorizes the
-action you read from it: approve, or reject with what they asked to change
-(their words are kept with the record; add `--reason` when you want to say
-more). A reply from another session, or to a
-different question, does not count. When they approved and asked for a change,
+The human's reply to this checkpoint question, in this chat or a new one,
+authorizes the action you read from it: approve, or reject with what they asked
+to change (their words are kept with the record; add `--reason` when you want to
+say more). A reply typed in a new chat is kept for the question while it is the
+newest question asked; run the approve or reject command there, with no session,
+and never ask it again. A reply to a different question does not count. When they approved and asked for a change,
 approve, then make the change and say in one line what you changed. The response is
 one-shot and bound to this Unit, kind, current fingerprint, verification proof ID,
 and authorized command digest. If the checkpoint changes, obtain a new directive,

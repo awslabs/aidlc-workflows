@@ -4785,6 +4785,30 @@ export function requireProtectedResponse(
   }
 }
 
+/** The protected questions open in chats other than `session`'s, in file-name order. */
+export function protectedQuestionsElsewhere(projectDir: string, session: string): ProtectedQuestion[] {
+  const dir = planApprovalRuntimeDir(projectDir);
+  const own = basename(protectedQuestionPath(projectDir, session));
+  let names: string[];
+  try { names = readdirSync(dir).sort(); } catch { return []; }
+  return names.filter((name) => /^protected-question-(?!response-).+\.json$/.test(name) && name !== own)
+    .map((name) => readPlanApprovalRuntimeJson<ProtectedQuestion>(join(dir, name), "Protected question"))
+    .map((value) => typeof value?.session === "string" ? readProtectedQuestion(projectDir, value.session) : null)
+    .filter((question): question is ProtectedQuestion => question !== null && question.session !== session);
+}
+
+/** A question another chat asked, and any reply kept for it, now belong to `session`'s chat. */
+export function moveProtectedQuestion(projectDir: string, question: ProtectedQuestion, session: string): ProtectedQuestion {
+  const response = readProtectedResponse(projectDir, question.session);
+  const moved = { ...question, session };
+  ensurePlanApprovalRuntimeDir(projectDir);
+  writeFileAtomic(protectedQuestionPath(projectDir, session), `${JSON.stringify(moved, null, 2)}\n`);
+  if (response?.challengeId === question.challengeId) writeProtectedResponse(projectDir, { ...response, session });
+  removeRuntimeFile(protectedQuestionPath(projectDir, question.session));
+  removeRuntimeFile(protectedResponsePath(projectDir, question.session));
+  return moved;
+}
+
 export function consumeProtectedQuestion(projectDir: string, session: string): void {
   withdrawProtectedQuestions(projectDir, session);
 }

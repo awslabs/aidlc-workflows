@@ -126,9 +126,11 @@ Only after `verify` reports `verified: true` and the current checkpoint has
 only after status reports `ready: true`, run
 `aidlc engine bolt swarm-checkpoint --action ask --batch <N> --units "<Units>"`.
 Then present **Approve** / **Request Changes** and wait. The human's exact reply
-in that session, to this checkpoint question, authorizes the matching action;
-an unrelated reply, another session's reply, or a reply to a different question
-does not. These commands find their own session; never pass `--user-input`
+to this checkpoint question authorizes the matching action, in that chat or a
+new one: with no question of its own, a new chat's reply is kept for the
+checkpoint question another chat asked, while it is the newest question asked
+and still open. An unrelated reply, the agent's own words, or a reply to a
+different question does not. These commands find their own session; never pass `--user-input`
 the human did not choose. Consent is one-shot and bound to the
 current checkpoint fingerprint, verification proof ID, and authorized command
 digest (batch questions bind the fingerprint and per-Unit `Command SHA-256` set).
