@@ -129,6 +129,7 @@ import {
   reviewRequestArtifactsCurrent,
   renderReviewRequestCommand,
   renderReviewVerdictCommand,
+  REVIEW_FINISHED_FIELD,
   REVIEW_RECORD_MAX_BYTES,
   resolveBoltDag,
   unitsBlockRepair,
@@ -3735,6 +3736,9 @@ function handleReview(args: string[]): void {
         }
       }
 
+      // No reviewer wrote this verdict: the review did not finish, and every
+      // reader says so (reviewCompletionDidNotFinish).
+      if (incompleteFallback) fields[REVIEW_FINISHED_FIELD] = "no";
       fields["Request Fingerprint"] = requestBinding.artifactFingerprint;
       fields["Artifact Fingerprint"] = artifactsMoved ? requestBinding.artifactFingerprint : snapshot.fingerprint;
       if (requestBinding.requestId !== null) {

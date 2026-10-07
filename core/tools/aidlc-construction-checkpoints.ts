@@ -19,6 +19,7 @@ import {
   type VerificationCommand,
   claimAttemptFields,
   completionCarriesVerifiedReview,
+  reviewCompletionDidNotFinish,
   reviewRecordNotHere,
   effectivePlanAction,
   eventMatchesClaimAttempt,
@@ -373,6 +374,9 @@ interface Snapshot {
   /** This work's Guard Policy lets the person approve the Unit over the
    *  unfinished review `rereview` names. */
   overAllowed: boolean;
+  /** The stages whose unfinished review the person let the Unit go on
+   *  without, which its verification records. */
+  waivedStages: string[];
 }
 
 /** One stage's evidence as an approval of the Unit saw it. */
@@ -665,6 +669,9 @@ function snapshot(
   // under off and relaxed, and never over a strict the team locks.
   const notFinishedBefore = notFinishedReviews(verification);
   const notFinished: string[] = [];
+  // Stages whose review ended in the NOT-READY fallback no reviewer gave:
+  // ready as before, and asked about and approved as not finished.
+  const endedUnfinished: string[] = [];
   let mayGoOn: boolean | null = null;
   const overAllowed = (): boolean => (mayGoOn ??= acceptsChanges() && !memoryStrictHoldsGuardPolicy(projectDir, state));
   // The unfinished review `rereview` names is one the person may go on without.
@@ -871,7 +878,7 @@ function snapshot(
                 projectDir, stage: slug, reviewer, unit, iteration,
                 ...(pending.state === "retry-required" ? { retryPending: true } : {}),
               }),
-              unfinished: receipts.awaitingVerdict?.has(unit) ? "no-verdict" : "not-ready",
+              unfinished: receipts.awaitingVerdict?.has(unit) || pending.didNotFinish ? "no-verdict" : "not-ready",
             };
             unfinishedMayGoOn = pending.verificationFailed !== true;
           }
@@ -885,6 +892,8 @@ function snapshot(
             first: true,
           };
         }
+      } else if (review && reviewCompletionDidNotFinish(projectDir, review.block)) {
+        endedUnfinished.push(slug);
       } else if (request && auditBlockField(request.block, "Recovery") === "stale-receipt") {
         // A re-check of code alone asked about the documents the review before
         // it saw; a re-check of documents asked about new ones.
@@ -1023,17 +1032,19 @@ function snapshot(
       verdict: recheckVerdict, approved_before: approvedBefore, changed: recheckChanged,
       ...(redone ? { redone: true as const } : {}),
     };
+  const unfinishedStages = stages.filter((slug) => notFinished.includes(slug) || endedUnfinished.includes(slug));
   return {
     root, rows, state, verificationCommand: shared.verificationCommand, accepted,
     approvedEvidence: JSON.stringify(approvedEvidence),
     overAllowed: rereview?.unfinished !== undefined && unfinishedMayGoOn && overAllowed(),
+    waivedStages: notFinished,
     result: {
       kind, unit, stages, fingerprint, verified, approved,
       human_required: humanRequired, enabled, ready, errors,
       verification_command: shared.verificationCommand?.label ?? null,
       command_authorized: shared.verificationCommand !== null,
-      ...(notFinished.length > 0 ? {
-        review_not_finished: { stages: notFinished, question: `Approve ${unit}? Its ${reviewsNamed(notFinished)} did not finish.` },
+      ...(unfinishedStages.length > 0 ? {
+        review_not_finished: { stages: unfinishedStages, question: `Approve ${unit}? Its ${reviewsNamed(unfinishedStages)} did not finish.` },
       } : {}),
       run_floor: floors[stages.at(-1)!] ?? "unstarted#0",
       run_floors: floors, proof_path: `${root}/${proofPath}`, verification: proof ?? restored,
@@ -1290,8 +1301,8 @@ function verifyOnce(
       "Exit Code": String(proof.exit_code),
       Verified: String(proof.verified),
       "Run floor": before.result.run_floor,
-      ...(before.result.review_not_finished ? {
-        "Review Not Finished": JSON.stringify(Object.fromEntries(before.result.review_not_finished.stages
+      ...(before.waivedStages.length > 0 ? {
+        "Review Not Finished": JSON.stringify(Object.fromEntries(before.waivedStages
           .map((stage) => [stage, before.result.run_floors[stage]]))),
       } : {}),
       ...claimAttemptFields(projectDir, unit),

@@ -232,8 +232,10 @@ const unitApprovals = (p: string, unit: string) => events(p, "GATE_APPROVED")
   .filter((row) => auditBlockField(row.block, "Checkpoint") === "construction-unit" && auditBlockField(row.block, "Unit") === unit);
 
 // After alpha: beta is built, reviewed and approved as usual, and one bare
-// `next` closes Code Generation.
-function walkCarriesOn(p: string): void {
+// `next` closes Code Generation. Strict closes a stage only against the record
+// of the workspace it started from, which this fixture never wrote, so that
+// last step is read under off.
+function walkCarriesOn(p: string, policy: Policy): void {
   build(p, "beta");
   review(p, "beta", "READY");
   expect(checkpoint(p, "beta", "verify").json?.verified).toBe(true);
@@ -242,6 +244,7 @@ function walkCarriesOn(p: string): void {
   const approved = checkpoint(p, "beta", "approve", ["--user-input", "Approve"]);
   expect(approved.json?.approved, approved.out).toBe(true);
   expect(approved.json?.change_notices ?? []).not.toContainEqual(expect.stringContaining("did not finish"));
+  if (policy === "strict") return;
   const settled = runOrchestrateNext(join(AIDLC_SRC, "tools/aidlc-orchestrate.ts"), p, [], { env: agentEnv() });
   expect((settled.directive as Directive | null)?.kind, settled.out).not.toBe("error");
   expect(readFileSync(seededStateFile(p), "utf-8")).toMatch(/^- \[x\] code-generation /m);
@@ -380,7 +383,7 @@ describe("(b) the NOT-READY fallback the agent records reads as a review that di
       const approvals = unitApprovals(p, "alpha");
       expect(approvals).toHaveLength(1);
       expect(auditBlockField(approvals[0].block, "Review")).toBe("not finished");
-      walkCarriesOn(p);
+      walkCarriesOn(p, policy);
     }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
   }
 

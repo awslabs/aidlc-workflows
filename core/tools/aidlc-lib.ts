@@ -14795,6 +14795,9 @@ export interface PendingReviewProgress {
   iteration: number;
   recovery: boolean;
   verificationFailed?: boolean;
+  /** The NOT-READY is the fallback no reviewer gave (reviewCompletionDidNotFinish):
+   *  the pass left is a review that did not finish, with nothing to repair. */
+  didNotFinish?: true;
 }
 
 export interface StaleReviewProgress {
@@ -14873,6 +14876,10 @@ export interface FreshReviewReceipts {
   /** Review requests in this attempt that have no verdict yet: "" for the
    *  stage-level request, else the Unit's name. */
   awaitingVerdict?: Set<string>;
+  /** Scopes ("" for the stage, else the Unit) whose fresh terminal verdict is
+   *  the NOT-READY fallback no reviewer gave (reviewCompletionDidNotFinish).
+   *  Read only beside stageVerdict / unitVerdicts. */
+  unfinishedVerdicts?: Set<string>;
   /**
    * Units with a merge-confirmed Bolt attempt. A name-only attempt is
    * confirmed by its BOLT_COMPLETED row; a slug-backed (worktree) attempt is
@@ -17044,6 +17051,23 @@ export function completionCarriesVerifiedReview(
   ) !== null;
 }
 
+/** The REVIEW_COMPLETED field the logger writes, as `no`, on the NOT-READY
+ *  fallback recorded when a retried review still wrote nothing. */
+export const REVIEW_FINISHED_FIELD = "Review Finished";
+
+/**
+ * Whether a REVIEW_COMPLETED row is that fallback: no reviewer gave its
+ * verdict, so the review did not finish. A row recorded before the field is
+ * known by its empty review record. Read for what the person is asked and
+ * what their approval records; it changes no readiness and no fingerprint.
+ */
+export function reviewCompletionDidNotFinish(projectDir: string, completionBlock: string): boolean {
+  const marked = auditBlockField(completionBlock, REVIEW_FINISHED_FIELD);
+  if (marked !== null) return marked === "no";
+  if (auditBlockField(completionBlock, "Verdict") !== "NOT-READY") return false;
+  return pairedReviewRecordForCompletion(projectDir, completionBlock)?.body === "";
+}
+
 /**
  * The review each scope of a stage most recently recorded, in the stage's
  * whole history: the record the newest PAIRED REVIEW_COMPLETED row names (null
@@ -18949,6 +18973,7 @@ export function freshReviewReceipts(
     stagePending: null,
     unitPending: new Map(),
     awaitingVerdict: new Set(),
+    unfinishedVerdicts: new Set(),
     mergedBoltUnits: new Set(),
     openBoltUnits: new Set(),
     acceptedChanges: [],
@@ -19052,6 +19077,8 @@ export function freshReviewReceipts(
   // an ambiguous matching path fails closed by clearing every unit receipt.
   const recordedRepos = new Set(intentRepos(projectDir));
   const unitVerdicts = new Map<string, ReviewVerdict>();
+  // Read beside the verdicts above: which of them no reviewer gave.
+  const unfinishedVerdicts = new Set<string>();
   const unitStale = new Set<string>();
   const unitStaleProgress = new Map<string, StaleReviewProgress>();
   const unitIterations = new Map<string, number>();
@@ -19412,6 +19439,8 @@ export function freshReviewReceipts(
         };
       }
     }
+    // The NOT-READY fallback no reviewer gave: its review did not finish.
+    const didNotFinish = verdict === "NOT-READY" && reviewCompletionDidNotFinish(projectDir, e.block);
     if (terminalVerdict === null) {
       if (verdict !== "NOT-READY" || !fingerprintUsable) continue;
       const pending: PendingReviewProgress = fingerprintMatches
@@ -19419,6 +19448,7 @@ export function freshReviewReceipts(
             state: "repair-required",
             iteration,
             recovery: request.recovery,
+            ...(didNotFinish ? { didNotFinish: true as const } : {}),
           }
         : {
             state: "outstanding",
@@ -19474,6 +19504,8 @@ export function freshReviewReceipts(
       // (an entry exists only under relaxed; nothing is read here).
       acceptedArtifactChanges.delete(unit ?? "");
     }
+    if (didNotFinish) unfinishedVerdicts.add(unit ?? "");
+    else unfinishedVerdicts.delete(unit ?? "");
     if (unit) {
       unitVerdicts.set(unit, terminalVerdict);
       unitStale.delete(unit);
@@ -19919,6 +19951,7 @@ export function freshReviewReceipts(
     stagePending,
     unitPending,
     awaitingVerdict,
+    unfinishedVerdicts,
     mergedBoltUnits,
     openBoltUnits,
     acceptedChanges: [

@@ -1195,7 +1195,14 @@ change. See
    incomplete attempt records the terminal receipt `--verdict NOT-READY` with no
    review file and the brief's fallback finding "review did not complete within
    its turn budget" - the gate is reached with a concrete finding, never
-   presented on (or deadlocked by) a silently missing verdict.
+   presented on (or deadlocked by) a silently missing verdict. That receipt
+   is no reviewer's verdict: the logger marks its row `Review Finished: no`,
+   a Unit checkpoint asks about it with `review_not_finished.question`, and the
+   person's approval over it records `Review: not finished` and says the
+   review did not finish. The retry and the fallback are for a review that
+   stopped with no person involved; once the person has written since the
+   dispatch, the conductor re-runs `next` first and follows it with what they
+   asked.
    On `adversarial` with iterations remaining the re-invoke skips the lead
    (the artifact was never reviewed; there is nothing for the builder to act
    on).
@@ -1279,7 +1286,11 @@ per request; a second incomplete attempt records the terminal `NOT-READY`
 receipt instead. The logger accepts this recovery only for the same unmatched
 request, records `Retry: pending-request`, and does not consume another
 iteration. A completed request cannot be retried; stale-receipt recovery is a
-distinct request at the next ordinal.
+distinct request at the next ordinal. When the person has written since the
+review was dispatched (they stopped it, or said anything at all), the conductor
+re-runs `next` first instead of retrying or recording the fallback: the
+human-turn hook adds one context line saying so while that request has no
+verdict.
 
 ---
 

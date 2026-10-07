@@ -60,10 +60,14 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   addPendingPersonLines,
+  auditBlockField,
   carryPendingPersonLines,
   clearSessionIntentHandoff,
   emptyPickerResult,
   enterHookWorkflow,
+  findStageBySlug,
+  freshReviewReceipts,
+  getField,
   hookStandsOutside,
   hostEnvelopeTurnText,
   clearPlanApprovalChallenge,
@@ -81,9 +85,12 @@ import {
   keepPlanApprovalAskOverStateWrite,
   markHumanTurn,
   parseTypedGuardSwitchRequest,
+  readAuditShardEvents,
   recordGateWords,
   recordPreWorkflowHeartbeat,
   resolveProjectDirFromHook,
+  resolveReviewClass,
+  sortAttemptEvents,
   splitKiroCommandArgs,
   stateFilePath,
   stripRecommendedDecorator,
@@ -92,6 +99,7 @@ import {
   writeProjectHookStatusFile,
 } from "../tools/aidlc-lib.ts";
 import { appendAuditEntryUnlocked } from "../tools/aidlc-audit.ts";
+import { aidlcToolInvocation } from "../tools/aidlc-runtime-paths.ts";
 import {
   applyTypedGuardSwitchPrompt,
   isTypedGuardSwitchPrompt,
@@ -258,6 +266,57 @@ const QUESTION_UNANSWERED_NOTICE =
   "The question box closed with no answer, so nothing was answered or recorded. " +
   "Ask the same question again in your reply as numbered options, not in the question box, " +
   "and end the turn; never pick an answer for the person.";
+
+// Rows after a review request that say the work went past it: a question was
+// put to the person or answered, a checkpoint verified, a gate opened or
+// decided, the stage left or the workflow started again. A message then
+// answers that, not the review.
+const PAST_REVIEW_REQUEST = new Set([
+  "DECISION_RECORDED", "QUESTION_ANSWERED", "CHECKPOINT_VERIFICATION_RECORDED", "STAGE_AWAITING_APPROVAL",
+  "GATE_APPROVED", "GATE_REJECTED", "STAGE_COMPLETED", "STAGE_JUMPED", "WORKFLOW_STARTED",
+]);
+
+// The person wrote while a review the agent asked for in this workflow has no
+// verdict (they may have stopped it): the agent hears to run `next` first,
+// which names the step that finishes the review or the person's way on, so it
+// never retries the review or records a result for it on its own. The trail
+// names the open request; `next`'s own review receipts confirm it still waits
+// for its verdict. Null when nothing waits, and on any read error.
+function stoppedReviewNote(projectDir: string): string | null {
+  try {
+    const open = new Map<string, { stage: string; unit: string | undefined }>();
+    for (const row of sortAttemptEvents(readAuditShardEvents(projectDir))) {
+      if (PAST_REVIEW_REQUEST.has(row.event)) {
+        open.clear();
+        continue;
+      }
+      if (row.event !== "REVIEW_REQUESTED" && row.event !== "REVIEW_COMPLETED") continue;
+      if (auditBlockField(row.block, "Workflow")?.startsWith("single-stage:")) continue;
+      const stage = auditBlockField(row.block, "Stage");
+      if (stage === null) continue;
+      const unit = auditBlockField(row.block, "Unit") ?? undefined;
+      const key = `${stage}\u0000${unit ?? ""}\u0000${auditBlockField(row.block, "Iteration") ?? ""}`;
+      if (row.event === "REVIEW_REQUESTED") open.set(key, { stage, unit });
+      else open.delete(key);
+    }
+    if (open.size === 0) return null;
+    const state = readFileSync(stateFilePath(projectDir), "utf-8");
+    for (const request of open.values()) {
+      const stage = findStageBySlug(request.stage);
+      if (!stage?.reviewer) continue;
+      const reviewClass = resolveReviewClass(stage.review_class ?? "adversarial", getField(state, "Scope") ?? "", state);
+      if (reviewClass === "none") continue;
+      if (freshReviewReceipts(projectDir, state, stage, { reviewClass }).awaitingVerdict?.has(request.unit ?? "")) {
+        return "A review was asked for and has no verdict yet (it may have been stopped). " +
+          `Run \`${aidlcToolInvocation("orchestrate")} next\` before retrying it or recording anything, ` +
+          "and follow the step it prints.";
+      }
+    }
+  } catch {
+    // A note, never a block: a read that fails says nothing.
+  }
+  return null;
+}
 
 // The words a person typed into a single-choice picker's free-text field. A
 // pick of one of the offered labels is the conductor's wording, not theirs.
@@ -687,6 +746,11 @@ try {
       } catch {
         // Non-authority marker consumption is independently best-effort.
       }
+    }
+    // After the turn is kept, so the note never stands in its way.
+    if (mintAllowed && promptSubmitted && typedPrompt.trim().length > 0) {
+      const note = stoppedReviewNote(projectDir);
+      if (note !== null) notes.push(note);
     }
     markHumanTurn(projectDir);
     // This turn is now the one lines are keyed to. Anything the person has not

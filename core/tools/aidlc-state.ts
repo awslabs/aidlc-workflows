@@ -4181,8 +4181,9 @@ function refuseStateGuard(
 }
 
 // The person's own approval, carried through the admission chain. It goes over
-// a review the agent asked for that has no verdict yet; the chain sets
-// overUnfinishedReview when it did, so the approval is recorded that way.
+// a review the agent asked for that has no verdict yet, or one whose verdict is
+// the NOT-READY fallback no reviewer gave; the chain sets overUnfinishedReview
+// when it did, so the approval is recorded that way.
 export interface PersonApproval {
   overUnfinishedReview: boolean;
 }
@@ -4217,6 +4218,22 @@ function approvableUnfinishedReview(
   }
   personCall.overUnfinishedReview = true;
   return true;
+}
+
+// A verdict that is the NOT-READY fallback no reviewer gave stands as before,
+// and the person's approval over it is recorded and said as over a review that
+// did not finish.
+function noteVerdictNotFinished(
+  receipts: ReturnType<typeof freshReviewReceipts>,
+  personCall: PersonApproval | undefined,
+  unit?: string,
+): void {
+  if (personCall === undefined) return;
+  const scopes = unit === undefined ? [...(receipts.unfinishedVerdicts ?? [])] : [unit];
+  if (scopes.some((scope) => receipts.unfinishedVerdicts?.has(scope) === true &&
+    (scope === "" ? receipts.stageVerdict !== null : receipts.unitVerdicts.has(scope)))) {
+    personCall.overUnfinishedReview = true;
+  }
 }
 
 // The one line the person hears when their approval went over that review.
@@ -4453,6 +4470,7 @@ function verifyReviewerPrecondition(
   // modern global binding was still compared above, preserving crash recovery.
   if (!requireReceiptExistence) return;
 
+  noteVerdictNotFinished(receipts, personCall);
   const sawStageReview = receipts.stageVerdict !== null;
   const reviewedUnits = new Set(receipts.unitVerdicts.keys());
 
@@ -5588,6 +5606,7 @@ function verifyReviewerPreconditionForUnit(
   // The same governed checkpoint as the stage-level verifier, for one Unit.
   const receipts = freshReviewReceipts(pd, content, stage, { reviewClass });
   observeChangeControl(pd, content, receipts);
+  noteVerdictNotFinished(receipts, personCall, unit);
   if (!receipts.unitVerdicts.has(unit) && !approvableUnfinishedReview(pd, content, receipts, personCall, unit)) {
     const message =
       `Refusing gate for unit "${unit}" of "${stage.slug}": no fresh ` +
