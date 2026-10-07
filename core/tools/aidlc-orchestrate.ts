@@ -355,6 +355,7 @@ import {
   sessionsDir,
   type WorkspaceCommand,
   type WorkflowSelection,
+  withdrawProtectedReplyWords,
   writeActiveDirectiveMarker,
   type PlanApprovalLegacyOfferCandidate,
   workspaceCommandUtilityArgv,
@@ -438,7 +439,7 @@ import {
   resolveHarnessRoot,
 } from "./aidlc-runtime-paths.ts";
 import { terminalDispatcherArgv } from "./aidlc.ts";
-import { appendAuditEntries } from "./aidlc-audit.ts";
+import { appendAuditEntries, appendAuditEntry } from "./aidlc-audit.ts";
 import { inspectRequiredArtifactInstances } from "./aidlc-artifact-resolution.ts";
 import { renderEngineInvocation, sameGuardOperation } from "./aidlc-guard-operation.ts";
 import {
@@ -447,6 +448,7 @@ import {
   noteOpenEngineQuestion,
   openPlanApprovalQuestion,
   planApprovalKeptReplyWaits,
+  withdrawPlanApprovalReplies,
   publishPlanApprovalAsk,
   publishPlanApprovalSkip,
   routeCodeGenerationPlanApproval,
@@ -2746,6 +2748,28 @@ function planQuestionAnsweredByWordsDirective(): PrintDirective {
       `\`${orchestrate} next\`. If you cannot tell which choice it is, run bare \`${orchestrate} next\`, show the person ` +
       "the question it returns, and end the turn.",
   );
+}
+
+// Words the person sent to separate new work, or to reshaping the plan, are
+// no reply to the question the work in progress has open (a checkpoint, a
+// gate, the stage's questions, the code plan question): they are taken back
+// from it once, and the row that says so keeps any decision on it from
+// standing on them.
+function withdrawRoutedWords(projectDir: string, question: StoredQuestion): void {
+  if (isReadOnlyEngineProbe()) return;
+  try {
+    const routed = readAuditShardEvents(projectDir).some((row) =>
+      row.event === "REQUEST_ROUTED" && auditBlockField(row.block, "Request") === question.id);
+    if (routed) return;
+    withdrawProtectedReplyWords(projectDir, question.text);
+    withdrawPlanApprovalReplies(projectDir, question.text);
+    appendAuditEntry("REQUEST_ROUTED", {
+      Request: question.id,
+      ...(engineSessionId ? { Session: engineSessionId } : {}),
+    }, projectDir);
+  } catch (e) {
+    recordHookDrop(projectDir, "routed-words", errorMessage(e));
+  }
 }
 
 // The words the change line gives the person ("go back to the approved
@@ -7381,6 +7405,11 @@ function routeNext(args: string[], projectDir: string | undefined): void {
       "--continue answers a new-work routing question; run the command that question supplied.",
     ));
     return;
+  }
+  // Words sent to separate new work, or to reshaping the plan, answer no
+  // question the work in progress has open.
+  if (question?.origin === "routing" && question.askedAbout && (flags.newIntent || flags.compose)) {
+    withdrawRoutedWords(pd, question);
   }
   // New work started from a routing question that stopped an answer (a plan
   // approval, a scope confirmation) answers that request, whichever plan is

@@ -4739,6 +4739,41 @@ export function readProtectedResponse(projectDir: string, session: string): Prot
     ? value : null;
 }
 
+// The person sent these words to separate new work or a reshape: no protected
+// question (a checkpoint, the verification command) keeps them as its reply.
+// Their other replies stay; a pick read from a reply that is gone goes too.
+export function withdrawProtectedReplyWords(projectDir: string, text: string): void {
+  const same = (line: string): boolean => line.replace(/\s+/g, " ").trim().toLowerCase() ===
+    text.replace(/\s+/g, " ").trim().toLowerCase();
+  let names: string[];
+  try {
+    names = readdirSync(planApprovalRuntimeDir(projectDir));
+  } catch {
+    return;
+  }
+  for (const name of names.filter((entry) => /^protected-question-response-.+\.json$/.test(entry)).sort()) {
+    const session = readPlanApprovalRuntimeJson<{ session?: unknown }>(join(planApprovalRuntimeDir(projectDir), name),
+      "Protected response")?.session;
+    const response = typeof session === "string" ? readProtectedResponse(projectDir, session) : null;
+    if (response === null || response.words === undefined) continue;
+    const lines = response.words.split("\n");
+    const kept = lines.filter((line) => !same(line));
+    if (kept.length === lines.length) continue;
+    if (kept.length === 0) {
+      removeRuntimeFile(protectedResponsePath(projectDir, response.session));
+      continue;
+    }
+    const words = kept.join("\n");
+    const lastKept = kept[kept.length - 1] === lines[lines.length - 1];
+    writeProtectedResponse(projectDir, {
+      version: 1, session: response.session, challengeId: response.challengeId,
+      ...(lastKept && response.choice !== undefined ? { choice: response.choice } : {}),
+      responseSha256: createHash("sha256").update(words, "utf-8").digest("hex"),
+      words,
+    });
+  }
+}
+
 export function requireProtectedResponse(
   projectDir: string, session: string,
   expected: { kind: ProtectedQuestion["kind"]; targetDigest: string; choice: string },
@@ -11234,9 +11269,12 @@ export function humanTurnState(
       // QUESTION_UNANSWERED (hook-owned: a question box closed with no answer)
       // spends any earlier turn, so a remark typed before the box never answers
       // the question asked in it. The question itself stays open.
+      // Words the person sent to separate new work or a reshape reply to no
+      // question here; what they asked for still stands for the new work.
       const isResolution =
         GATE_RESOLUTION_EVENTS.has(ev) ||
         ev === "QUESTION_UNANSWERED" ||
+        (options.replies === true && ev === "REQUEST_ROUTED") ||
         (ev === "AUTONOMY_MODE_SET" &&
           auditBlockField(blocks[i], "Mode") === "autonomous");
       if (!isResolution && ev !== "HUMAN_TURN") continue;
@@ -25898,6 +25936,8 @@ export const GATE_WORDS_SPENT_BY: ReadonlySet<string> = new Set([
 const GATE_WORDS_ANSWERED_BY: ReadonlySet<string> = new Set([
   ...GATE_RESOLUTION_EVENTS,
   "AUTONOMY_MODE_SET",
+  // The person sent their words to separate new work or a reshape.
+  "REQUEST_ROUTED",
 ]);
 
 function gateWordsDir(projectDir: string): string {
@@ -36298,6 +36338,7 @@ const APPROVED_TOGETHER_ENDS = new Set([
   "GATE_REJECTED",
   "QUESTION_ANSWERED",
   "QUESTION_UNANSWERED",
+  "REQUEST_ROUTED",
   "DECISION_RECORDED",
   "AUTONOMY_MODE_SET",
   "WORKFLOW_STARTED",

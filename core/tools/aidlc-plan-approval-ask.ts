@@ -1402,9 +1402,10 @@ export function planApprovalReplyEditableFiles(projectDir: string): string[] {
 
 // An engine question with no reply machinery of its own (where the work
 // belongs, the new-work offers, which record or plan) is the open question
-// from when it is asked until `next` names another step, or until the engine
+// from when it is asked until `next` names another step, until the engine
 // asks another question after it (a checkpoint or verification question asked
-// again, a gate shown again), which then owns the person's reply.
+// again, a gate shown again), which then owns the person's reply, or until
+// its answer sent their words to other work.
 interface OpenEngineQuestion {
   version: 1;
   askType: string;
@@ -1442,10 +1443,27 @@ export function engineQuestionHoldsReplies(projectDir: string): boolean {
     }
     const noted = readPlanApprovalRuntimeRecord<OpenEngineQuestion>(openEngineQuestionPath(projectDir), "Open engine question");
     if (noted?.version !== 1 || noted.askType !== marker.ask_type || noted.stateSha256 !== marker.state_sha256) return true;
-    return !readAuditShardEvents(projectDir).some((row) => LATER_QUESTION_EVENTS.has(row.event) && row.timestamp > noted.askedAt);
+    // A routing answer can only follow its question, so the same second counts.
+    return !readAuditShardEvents(projectDir).some((row) =>
+      (LATER_QUESTION_EVENTS.has(row.event) && row.timestamp > noted.askedAt) ||
+      (row.event === "REQUEST_ROUTED" && row.timestamp >= noted.askedAt));
   } catch {
     return false;
   }
+}
+
+/**
+ * The person sent these words to separate new work or a reshape: the code plan
+ * question of this piece of work keeps none of them as its reply.
+ */
+export function withdrawPlanApprovalReplies(projectDir: string, text: string): void {
+  const same = (reply: string): boolean => reply.replace(/\s+/g, " ").trim().toLowerCase() ===
+    text.replace(/\s+/g, " ").trim().toLowerCase();
+  withAuditLock(projectDir, () => {
+    const record = readPlanApprovalAsk(projectDir, intentIdFor(projectDir));
+    if (record === null || !record.replies?.some((reply) => same(reply.text))) return;
+    writePlanApprovalAsk(projectDir, { ...record, replies: record.replies.filter((reply) => !same(reply.text)) });
+  });
 }
 
 /**
