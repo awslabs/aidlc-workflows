@@ -24741,13 +24741,15 @@ function sourceSnapshotDir(
   return record === null ? null : join(engineDirFor(record), "source-review", stageSlug);
 }
 
-// Read side of the same directory. Snapshots are audit-referenced evidence, so a
-// stage that recorded its baseline before the engine-directory move must still
-// find it: per stage, the legacy directory is used only while the new one is
-// absent. Writers never use this.
-function sourceSnapshotReadDir(
+// Read side of the same directory. Snapshots are audit-referenced evidence, so
+// one recorded before the engine-directory move must still be found after it,
+// however many snapshots the stage has written since: per file, the new
+// location is read when it exists, else the legacy one. A record upgraded
+// mid-run keeps both until the end. Writers never use this.
+function sourceSnapshotReadPath(
   projectDir: string,
   stageSlug: string,
+  fileName: string,
   intent?: string,
   space?: string,
 ): string | null {
@@ -24755,7 +24757,10 @@ function sourceSnapshotReadDir(
   if (current === null) return null;
   const record = recordDir(projectDir, intent, space);
   if (record === null) return null;
-  return engineReadDirFor(record, current, join(LEGACY_SOURCE_REVIEW_DIR, stageSlug));
+  const path = join(current, fileName);
+  if (existsSync(path)) return path;
+  const legacy = join(record, LEGACY_SOURCE_REVIEW_DIR, stageSlug, fileName);
+  return existsSync(legacy) ? legacy : path;
 }
 
 function writeSourceSnapshot(path: string, serialized: string): string {
@@ -24908,10 +24913,11 @@ export function readBaselineSourceSnapshot(
   intent?: string,
   space?: string,
 ): WorkspaceSourceListing | null {
-  const dir = sourceSnapshotReadDir(projectDir, stageSlug, intent, space);
   const hash = validSourceSnapshotFingerprint(fingerprint);
-  if (dir === null || hash === null) return null;
-  const serialized = readSourceSnapshot(join(dir, `baseline-${hash.slice(0, 12)}.tsv`), fingerprint);
+  if (hash === null) return null;
+  const path = sourceSnapshotReadPath(projectDir, stageSlug, `baseline-${hash.slice(0, 12)}.tsv`, intent, space);
+  if (path === null) return null;
+  const serialized = readSourceSnapshot(path, fingerprint);
   return serialized === null ? null : parseSourceListing(serialized);
 }
 
@@ -24926,14 +24932,20 @@ export function readBaselineSourceSnapshot(
 
 const WORKSPACE_SNAPSHOT_HEADER = "workspace";
 
+function workspaceSourceSnapshotName(fingerprint: string): string | null {
+  return /^[0-9a-f]{64}$/.test(fingerprint)
+    ? `${WORKSPACE_SNAPSHOT_HEADER}-${fingerprint.slice(0, 12)}.tsv`
+    : null;
+}
+
 function workspaceSourceSnapshotPath(
   projectDir: string,
   stageSlug: string,
   fingerprint: string,
 ): string | null {
   const dir = sourceSnapshotDir(projectDir, stageSlug);
-  if (dir === null || !/^[0-9a-f]{64}$/.test(fingerprint)) return null;
-  return join(dir, `${WORKSPACE_SNAPSHOT_HEADER}-${fingerprint.slice(0, 12)}.tsv`);
+  const name = workspaceSourceSnapshotName(fingerprint);
+  return dir === null || name === null ? null : join(dir, name);
 }
 
 /** Persist the listing behind one workspace fingerprint; a no-op when it exists. */
@@ -24960,7 +24972,8 @@ export function readWorkspaceSourceSnapshot(
   stageSlug: string,
   fingerprint: string,
 ): WorkspaceSourceListing | null {
-  const path = workspaceSourceSnapshotPath(projectDir, stageSlug, fingerprint);
+  const name = workspaceSourceSnapshotName(fingerprint);
+  const path = name === null ? null : sourceSnapshotReadPath(projectDir, stageSlug, name);
   if (path === null) return null;
   let serialized: string;
   try {
@@ -25128,10 +25141,11 @@ export function readUnitSourceSnapshot(
   unit: string,
   fingerprint: string,
 ): UnitSourceSnapshot | null {
-  const dir = sourceSnapshotReadDir(projectDir, stageSlug);
   const hash = validSourceSnapshotFingerprint(fingerprint);
-  if (dir === null || hash === null || validateUnitName(unit) !== null) return null;
-  const serialized = readSourceSnapshot(join(dir, `unit-${unit}-${hash.slice(0, 12)}.tsv`), fingerprint);
+  if (hash === null || validateUnitName(unit) !== null) return null;
+  const path = sourceSnapshotReadPath(projectDir, stageSlug, `unit-${unit}-${hash.slice(0, 12)}.tsv`);
+  if (path === null) return null;
+  const serialized = readSourceSnapshot(path, fingerprint);
   if (serialized === null) return null;
   const newline = serialized.indexOf("\n");
   if (newline === -1) return null;
@@ -25395,8 +25409,9 @@ export function docsRoot(projectDir: string, intent?: string, space?: string): s
 }
 
 // All record-local framework state lives here. Review audit references retain
-// their exact legacy paths; sensors, hook health, summary authorizations, and
-// source review have read-only directory fallbacks. Everything else is
+// their exact legacy paths; sensors, hook health, and summary authorizations
+// have read-only directory fallbacks, and source-review snapshots fall back per
+// file (sourceSnapshotReadPath). Everything else is
 // transient or derived and is rebuilt at the new path without a fallback.
 // These helpers never create directories.
 export function engineDir(projectDir: string, intent?: string, space?: string): string {
