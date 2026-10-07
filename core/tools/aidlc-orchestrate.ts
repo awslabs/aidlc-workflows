@@ -5742,7 +5742,14 @@ function splitConsumesByPresence(
   stateContent?: string | null,
 ): { present: string[]; absent: Array<{ path: string; expected: boolean }> } {
   if (!codekbCtx) return { present: consumes.map((c) => c.path), absent: [] };
-  const onPath = new Set(subgraphForScope(scope).map((s) => s.slug));
+  // On the path means on this work's plan: the scope's grid with the stage
+  // changes its state records (creation's --skip/--add, recompose), so a
+  // producer the person left out reads as expected, and one they added does not.
+  const onPath = new Set(
+    loadGraph()
+      .filter((s) => effectivePlanAction(s.slug, scope, stateContent ?? null) === "EXECUTE")
+      .map((s) => s.slug),
+  );
   const conditionallySkipped = conditionalRuntimeSkipStages(
     codekbCtx.projectDir,
   );

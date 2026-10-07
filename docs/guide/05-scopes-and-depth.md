@@ -322,13 +322,13 @@ Whatever you want to write, including a "## Stage Grid" heading of your own.
 <!-- END aidlc composed-scope-grid -->
 ````
 
-Reshape the plan with `/aidlc compose`, not by editing the region — a hand-edited grid is not validated against the stage graph, so it can starve a stage of an input it requires.
+Reshape the plan with `/aidlc compose`, not by editing the region. If you do edit it, or write a record by hand, `graph compile` checks the grid the way it checks every plan: each key must be a stage slug, and the initialization stages (`workspace-scaffold`, `workspace-detection`, `state-init`) must be `EXECUTE`. A record that breaks either rule is refused, naming the file and each problem, nothing of it is projected (so `--scope <name>` does not resolve until you fix it), and `aidlc --doctor` names it too. A stage the grid leaves out runs as `SKIP`. Compile does not check that every stage gets the inputs it requires; run `aidlc engine graph validate-scope <name>` to see what a stage would run without.
 
 Editing the part above the sentinel is fine, but note that `graph compile` writes the harness scope file only when it is **missing**; it does not overwrite one you have edited. So if you change `depth` or `description` in the record, delete `<harness>/scopes/aidlc-<name>.md` and recompile to re-project it. The plan itself always comes from the record, so this only affects descriptive fields.
 
 #### When a record is unreadable
 
-A record missing its frontmatter, its `name`, or its generated grid region **stops** `graph compile` and `aidlc update` with the file path and the required edit named — it is committed work, so it is never silently skipped. Repair the named file, or delete it: if the harness projection is still present, the next compile back-fills a fresh record from it. `/aidlc --doctor`'s **Composed scope durability** check reports a scope file with no grid column, a record that has not been projected yet, and a runnable workflow whose scope no longer resolves.
+A record missing its frontmatter, its `name`, or its generated grid region **stops** `graph compile` and `aidlc update` with the file path and the required edit named — it is committed work, so it is never silently skipped. Repair the named file, or delete it: if the harness projection is still present, the next compile back-fills a fresh record from it. A record whose grid names a stage that does not exist, or does not run the initialization stages, stops `graph compile` the same way (see [The record's shape](#the-records-shape)). `/aidlc --doctor`'s **Composed scope durability** check reports a scope file with no grid column, a record that has not been projected yet, a record whose grid no plan can run, and a runnable workflow whose scope no longer resolves.
 
 ---
 

@@ -539,6 +539,8 @@ export interface ComposedScopeRecord {
   identity: string;
   /** The EXECUTE/SKIP grid this scope resolves to. */
   stages: Record<string, "EXECUTE" | "SKIP">;
+  /** The record file, so a grid problem found later names it. */
+  path?: string;
 }
 
 export { isScopeName };
@@ -638,7 +640,7 @@ export function parseComposedScopeRecord(
     }
     stages[slug] = action;
   }
-  return { name, identity: body.slice(0, beginAt).replace(/\n+$/, "\n"), stages };
+  return { name, identity: body.slice(0, beginAt).replace(/\n+$/, "\n"), stages, path: filePath };
 }
 
 /** Render a record from a harness identity `.md` plus a grid — the back-fill and
@@ -831,8 +833,22 @@ export function backfillComposedScopeRecords(
  *  harness tree. The caller holds the workspace lock around all three, so a
  *  reader never observes a scope half-restored. */
 export function writeCompiledGraphLocked(projectDir: string): void {
-  if (materializeComposedScopeIdentities(projectDir).length > 0) __resetGraphCache();
-  const { json, gridJson, composedScopes } = compileStageGraph();
+  const projected = materializeComposedScopeIdentities(projectDir);
+  if (projected.length > 0) __resetGraphCache();
+  let compiled: ReturnType<typeof compileStageGraph>;
+  try {
+    compiled = compileStageGraph();
+  } catch (error) {
+    // A compile that refuses a record leaves no projection of it behind: an
+    // identity file with no grid column would resolve as an empty plan.
+    for (const name of projected) {
+      const path = harnessScopeFileFor(projectDir, name);
+      if (path !== null) rmSync(path, { force: true });
+    }
+    if (projected.length > 0) __resetGraphCache();
+    throw error;
+  }
+  const { json, gridJson, composedScopes } = compiled;
   writeFileAtomic(mutableStageGraphPath(projectDir), json);
   writeFileAtomic(mutableScopeGridPath(projectDir), gridJson);
   backfillComposedScopeRecords(projectDir, composedScopes.gridOnlyNames, gridJson);
@@ -1753,6 +1769,54 @@ export function validateGrid(
     grid as Record<string, "EXECUTE" | "SKIP">,
   );
   return { valid: errors.length === 0, errors, advisories, summary, nearest_stock };
+}
+
+/** The rules a plan obeys on every route, whatever its stages: every slug is a
+ *  compiled stage and every initialization stage runs. `stages` defaults to
+ *  the compiled graph; compile passes the stages it is compiling. */
+export function planStructureErrors(
+  grid: Record<string, string>,
+  stages: readonly Pick<GraphStage, "slug" | "phase" | "enabled">[] = loadGraph(),
+): string[] {
+  const known = new Set(stages.map((stage) => stage.slug));
+  const errors = Object.keys(grid)
+    .filter((slug) => !known.has(slug))
+    .map((slug) => `Grid names unknown stage "${slug}" - not in the compiled stage graph.`);
+  for (const stage of stages) {
+    if (stage.phase === "initialization" && stage.enabled !== false && grid[stage.slug] !== "EXECUTE") {
+      errors.push(`Grid does not run "${stage.slug}", an initialization stage; those always run.`);
+    }
+  }
+  return errors;
+}
+
+/** Validate a plan change: `proposed` against the `base` it was made from. The
+ *  one check behind every route that changes which stages run (stage changes at
+ *  creation, recompose). Only what the change itself introduces counts, so a
+ *  stock scope's own advisories never veto an unrelated change: `errors` are
+ *  the validator's errors (plus planStructureErrors) present in `proposed` but
+ *  not in `base`, and `advisories` the same for its advisories. With
+ *  `strict`, a required input the change leaves with no producer on the plan
+ *  is an error, as recompose has it; without, it is an advisory. */
+export function validatePlan(
+  base: Record<string, string>,
+  proposed: Record<string, string>,
+  opts: { projectType?: "brownfield" | "greenfield"; strict?: boolean; label?: string } = {},
+): { errors: string[]; advisories: string[] } {
+  const check = (grid: Record<string, string>) => {
+    const validation = validateGrid(grid, opts);
+    return {
+      errors: [...new Set([...validation.errors, ...planStructureErrors(grid)])],
+      advisories: validation.advisories,
+    };
+  };
+  const before = check(base);
+  const after = check(proposed);
+  const introduced = (now: string[], was: string[]) => now.filter((entry) => !was.includes(entry));
+  return {
+    errors: introduced(after.errors, before.errors),
+    advisories: introduced(after.advisories, before.advisories),
+  };
 }
 
 /** Check a composer proposal's `scopeSettings` member. All four keys are
@@ -2807,12 +2871,26 @@ export function compileStageGraph(): {
   }
   const selectedScopeNames = enabledScopeNames();
   const installedScopeNames = new Set(Object.keys(loadScopeMetadataAll()));
+  const records = loadComposedScopeRecords();
   const foldBack = composedFoldBack(
-    loadComposedScopeRecords(),
+    records,
     onDiskGrid,
     stockScopeNames,
     installedScopeNames,
   );
+  // A record is hand-editable, so its grid obeys the rules every plan obeys
+  // before it becomes a scope: a typo'd slug never passes as an extra stage, and
+  // a record never drops the initialization stages. Checked against the stages
+  // compiled here, not the graph on disk, which this compile is replacing.
+  for (const name of foldBack.recordNames) {
+    const errors = planStructureErrors(records[name].stages, stages);
+    if (errors.length > 0) {
+      throw new Error(
+        `Composed scope record ${records[name].path ?? name} has a stage grid no plan can run: ${errors.join(" ")} ` +
+          "Fix the grid in that file, or delete it and save the plan again with `scope save`.",
+      );
+    }
+  }
   const composedNames = foldBack.names;
   const seededScopeNames =
     selectedScopeNames === null
