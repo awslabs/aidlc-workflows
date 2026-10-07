@@ -388,8 +388,9 @@ lost.
 `workspace_requires` stage, every terminal review still carries the workspace-
 global `Source Fingerprint`; the newest modern binding is normally the outer
 post-review-mutation boundary on all four completion routes. Per-unit receipts
-add `Unit Source Fingerprint`, which binds the raw bytes of the unit's strict
-`source-manifest.json` and the current content of every exact/directory claim.
+add `Unit Source Fingerprint`, which binds the bytes of the unit's strict
+`source-manifest.json` and the current content of every exact/directory claim
+(CRLF text read as LF, see the stage protocol's line endings rule).
 Receipts are evaluated newest-first, so a newer validated claimant may shield
 an older receipt for an intentional shared path. An uncovered edit, deletion,
 or new path in an exact/directory claim invalidates only the owning unit and

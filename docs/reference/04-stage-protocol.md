@@ -1081,15 +1081,17 @@ snapshots retain the actual bytes for swarm merging. Only confirmation
 bookkeeping preserves the review fingerprint; substantive question changes
 invalidate its content binding even though the write is permitted.
 
-**Line endings.** Every committed text file is fingerprinted with CRLF and a
-lone CR read as LF (`committedTextBytes`): stage documents in review receipts
-and checkpoint evidence, stage validity receipts, a Unit's
-`source-manifest.json` and reviewed-source evidence, and the source files of
-the workspace listing. A checkout that turns line endings, such as Git for
-Windows' `core.autocrlf`, is no change to approved work, and a file with LF
-line endings fingerprints as it always did. A value recorded over the raw
-bytes before this (a CRLF working tree) still matches the same content. A
-file with a NUL byte is binary and fingerprinted as it is.
+**Line endings.** Every committed text file is fingerprinted with CRLF read
+as LF (`committedTextBytes`): stage documents in review receipts and
+checkpoint evidence, stage validity receipts, a Unit's `source-manifest.json`
+and reviewed-source evidence, and the source files of the workspace listing.
+A checkout that turns line endings, such as Git for Windows' `core.autocrlf`,
+is no change to approved work, and a file with LF line endings fingerprints
+as it always did. A value recorded over the raw bytes before this (a CRLF
+working tree) still matches the same content. Only text Git itself converts
+is read this way: a file with a NUL byte, a lone CR, or more than one control
+byte in 128 printable ones is binary to Git and fingerprinted as it is, so a
+lone CR in it is a change. Source files are read a chunk at a time.
 
 Reviewed outputs remain frozen. If `review_artifact` explicitly names a
 questions artifact, it remains fully byte-bound and frozen, including its
