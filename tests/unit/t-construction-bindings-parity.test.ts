@@ -9,6 +9,9 @@
 // per-unit `gate: false`, while the agent on another tool was not. This pin
 // holds every copy to one text, in the authored module and in every shipped
 // tree (a tree may carry all seven subsections or only its own).
+//
+// It also holds the module's Unit lifecycle receipts paragraph to what receipt
+// mode actually does, in the same trees.
 
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
@@ -101,6 +104,24 @@ describe("Construction bindings say the same thing on every tool", () => {
       for (const [tool, body] of shipped) {
         expect(body, `${harness.name} ${tool} subsection`).toBe(core.get("Claude Code") ?? "");
       }
+    });
+  }
+});
+
+// The receipts paragraph once said a workflow that never calls the verbs keeps
+// artifact-driven coverage. Under checkpoints the engine is in receipt mode from
+// the first Unit, so an agent that believed it skipped the receipt and looped.
+describe("the Unit lifecycle receipts paragraph matches receipt mode", () => {
+  const trees = [
+    { name: "core", path: join(REPO_ROOT, "core", MODULE) },
+    ...HARNESS_MATRIX.map((harness) => ({ name: harness.name, path: join(harness.engineRoot, MODULE) })),
+  ];
+  for (const tree of trees) {
+    test(`${tree.name}: receipts are required under checkpoints, and the printed receipt step is named`, () => {
+      const text = readFileSync(tree.path, "utf-8");
+      expect(text).not.toContain("workflows that never call the verbs keep today's artifact-driven coverage unchanged");
+      expect(text).toContain("the receipt is required from the first Unit, so artifact files alone never settle one");
+      expect(text).toContain("`next` prints the receipt commands instead of the stage body");
     });
   }
 });

@@ -205,11 +205,12 @@ Then present the choices and wait for the human. Show "Verified with
 `<full command>` (exit 0). Approve this completed batch?" using the complete
 recorded command, never abbreviated. Copy the canonical `command` from the
 verification-command tool output into a code span whose delimiter preserves any
-backticks. The human's reply in this session, to this checkpoint question,
+backticks. The human's reply to this checkpoint question, in this chat or a new one,
 authorizes the action you read from it: approve, or reject with what they asked
 to change (their words are kept with the record; add `--reason` when you want to
-say more). A reply from another session, or to a different question, does not
-count. When they approved and asked for a change, approve, then make the change
+say more). A reply typed in a new chat is kept for the question while it is the
+newest question asked; run the approve or reject command there, with no session,
+and never ask it again. A reply to a different question does not count. When they approved and asked for a change, approve, then make the change
 and say in one line what you changed. The response is one-shot and
 bound to this batch, exact Unit set, current fingerprint, and per-Unit command
 digest set. Re-running swarm `finalize` withdraws every open checkpoint question

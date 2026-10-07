@@ -527,7 +527,7 @@ interface PreparedEmission {
     steering_payload?: SteeringTokenPayload;
     steering_payload_receipt?: string;
     ask_type?: string;
-    remedies?: Array<Pick<GuardRemedy, "op" | "action" | "operation" | "interaction">>;
+    remedies?: Array<Pick<GuardRemedy, "op" | "label" | "action" | "operation" | "interaction">>;
   };
 }
 
@@ -1028,10 +1028,12 @@ function prepareEmission(directive: Directive): PreparedEmission {
   // A guard-recovery ask is published as a marker so the human's selection has
   // somewhere to live across turns. Other asks keep their own machinery (the
   // resume choice) or none; publishing every ask would supersede a live
-  // run-stage marker for a question the engine re-derives on every call.
+  // run-stage marker for a question the engine re-derives on every call. The
+  // conductor's own work is no question: it leaves the issued step in place.
   if (
     transported.kind === "ask" &&
     transported.ask_type === GUARD_RECOVERY_ASK_TYPE &&
+    transported.agent_work !== true &&
     askState !== null
   ) {
     marker = {
@@ -1039,8 +1041,9 @@ function prepareEmission(directive: Directive): PreparedEmission {
       stage: transported.stage,
       ask_type: GUARD_RECOVERY_ASK_TYPE,
       ...(typeof transported.unit === "string" ? { unit: transported.unit } : {}),
-      remedies: transported.remedies.map(({ op, action, operation, interaction }) => ({
+      remedies: transported.remedies.map(({ op, label, action, operation, interaction }) => ({
         op,
+        ...(label ? { label } : {}),
         action,
         ...(operation ? { operation } : {}),
         ...(interaction ? { interaction } : {}),
@@ -1289,6 +1292,7 @@ function guardRecoveryAskMarkerIsCurrent(
     current.remedies.length === marker.remedies.length &&
     current.remedies.every((remedy, index) =>
       remedy.op === marker.remedies?.[index]?.op &&
+      remedy.label === marker.remedies[index]?.label &&
       remedy.action === marker.remedies[index]?.action &&
       remedy.interaction === marker.remedies[index]?.interaction &&
       sameGuardOperation(remedy.operation, marker.remedies[index]?.operation)
@@ -2582,17 +2586,25 @@ function openGateReplyDirective(stage: string, requestId: string): PrintDirectiv
 // the question's own answer command, or `next --request` with the person's
 // words, kept as `requestId`, which asks where that work belongs. The
 // question's text stays in the audit, never in this directive.
-function openQuestionReplyDirective(stage: string, checkpoint: string | null, requestId: string): PrintDirective {
+// A checkpoint's commands name its Unit or batch from the question's own row,
+// so a new chat, which never saw the question asked, has all it needs.
+function openQuestionReplyDirective(stage: string, block: string, requestId: string): PrintDirective {
   const orchestrate = aidlcToolInvocation("orchestrate");
-  const gate = checkpoint === "Construction Unit Approval"
-    ? `${aidlcToolInvocation("bolt")} checkpoint`
+  const checkpoint = auditBlockField(block, "Checkpoint");
+  const unit = auditBlockField(block, "Unit");
+  const batch = auditBlockField(block, "Batch number");
+  const units = auditBlockField(block, "Units");
+  const [gate, target] = checkpoint === "Construction Unit Approval"
+    ? [`${aidlcToolInvocation("bolt")} checkpoint`,
+      unit ? ` --unit ${shellArg(unit)} --kind ${shellArg(auditBlockField(block, "Kind") ?? "unit")}` : ""]
     : checkpoint === "Swarm Batch Approval"
-      ? `${aidlcToolInvocation("bolt")} swarm-checkpoint`
-      : null;
+      ? [`${aidlcToolInvocation("bolt")} swarm-checkpoint`,
+        batch && units ? ` --batch ${shellArg(batch)} --units ${shellArg(units)}` : ""]
+      : [null, ""];
   const answer = gate
-    ? `answer it through that checkpoint, never \`log answer\` (which would not approve it): run \`${gate} --action approve\` ` +
-      "or `--action reject` with the same Unit or batch and session you asked with, passing the person's reply " +
-      "unchanged as `--user-input` (and their feedback as `--reason` when they ask for changes)"
+    ? `answer it through that checkpoint, never \`log answer\` (which would not approve it): run \`${gate} --action ` +
+      `approve${target}\` or \`${gate} --action reject${target}\`${target ? "" : " for that Unit or batch"}, passing ` +
+      "the person's reply unchanged as `--user-input` (and their feedback as `--reason` when they ask for changes)"
     : `record it with \`${aidlcToolInvocation("log")} answer --stage ${shellArg(stage)} --details '<their exact reply>'\` ` +
       "(with the checkpoint flags that question was logged with, when it has them)";
   return printDirective(
@@ -3234,6 +3246,19 @@ function workflowParkedDirective(
         `Workflow parked at "${parkedAt}". Resume with ${entrySkillInvocation()} --resume.`,
         parkedAt,
       );
+}
+
+// Whether the workflow is parked where it stands. A park the workflow has
+// since moved past is stale and holds nothing.
+function parkedWhereItStands(stateContent: string): boolean {
+  const parkedAt = (getField(stateContent, "Parked At Stage") ?? "").trim();
+  return (getField(stateContent, "Parked") ?? "").trim().length > 0 && parkedAt.length > 0 &&
+    parkedAt === (getField(stateContent, "Current Stage") ?? "").trim();
+}
+
+// What the person hears after a change made over parked work.
+function stillParkedLine(): string {
+  return `Your work is still paused. Type \`${entrySkillInvocation()} --resume\` when you want to pick it back up.`;
 }
 
 // The `parked` a successful park answers with. A team Unit checkout parks
@@ -7307,6 +7332,13 @@ function routeNext(args: string[], projectDir: string | undefined): void {
   //   2. STALE-BY-PROGRESS - only emit `parked` while `Parked At Stage` still
   //      equals `Current Stage`. If the workflow has advanced past the parked
   //      slug (a stale marker), ignore it and fall through to the normal route.
+  // A change the person typed to the parked work's plan (another scope, stages
+  // to skip or add, a reshape) is made as a typed setting is, and the work
+  // stays parked: answering it with the park would drop it.
+  const parkedPlanChange = stateContent !== null && (
+    (flags.scope !== undefined && flags.scope !== (getField(stateContent, "Scope") ?? "").trim()) ||
+    flags.planChanges !== undefined || Boolean(flags.compose || flags.newScope || flags.report)
+  );
   if (
     stateContent &&
     !unitScope &&
@@ -7314,6 +7346,7 @@ function routeNext(args: string[], projectDir: string | undefined): void {
     !flags.stage &&
     !flags.phase &&
     !flags.review &&
+    !parkedPlanChange &&
     !flags.newIntent &&
     (getField(stateContent, "Parked") ?? "").trim().length > 0
   ) {
@@ -7653,6 +7686,12 @@ function routeNext(args: string[], projectDir: string | undefined): void {
     // Words typed with a differing scope may be new work or the reason for
     // the change: Branch 9c asks which, so they are never dropped.
     const scopeWithWords = Boolean(flags.intent) && !planChanges && !flags.resume;
+    // Parked work stays parked through the change: the line the person reads
+    // also says so, and how to pick the work back up.
+    const stillParked = !unitScope && parkedWhereItStands(stateContent) ? stillParkedLine() : null;
+    const verbatimThenStop = stillParked === null
+      ? "print its output verbatim and stop."
+      : `print its output verbatim followed by "${stillParked}", and stop.`;
     if (
       flags.scope &&
       validScopes().has(flags.scope) &&
@@ -7662,8 +7701,8 @@ function routeNext(args: string[], projectDir: string | undefined): void {
       const parts = [`--scope ${scopeArg(flags.scope)}`];
       for (const modifier of modifiers) parts.push(`--${modifier}`);
       const command = `${aidlcDispatcherInvocation("scope change")} ${parts.join(" ")}`;
-      emit(planChanges ? planChangeDirective(planChanges, command, null, planApprovalAskIsOpen(pd)) : keptWhilePlanWaits(
-        turnEndingPrint(`Run \`${command}\` to change scope, then print its output verbatim and stop.`),
+      emit(planChanges ? planChangeDirective(planChanges, command, null, planApprovalAskIsOpen(pd), stillParked) : keptWhilePlanWaits(
+        turnEndingPrint(`Run \`${command}\` to change scope, then ${verbatimThenStop}`),
         planApprovalAskIsOpen(pd),
       ));
       return;
@@ -7676,14 +7715,14 @@ function routeNext(args: string[], projectDir: string | undefined): void {
     // same-as-current --scope: no sibling modifier may be silently discarded.
     if (modifiers.length > 0 && !describedWork) {
       const command = configSetCommand(modifiers);
-      emit(planChanges ? planChangeDirective(planChanges, command, plan, planApprovalAskIsOpen(pd)) : keptWhilePlanWaits(
-        turnEndingPrint(`Run \`${command}\` to update the configuration, then print its output verbatim and stop.`),
+      emit(planChanges ? planChangeDirective(planChanges, command, plan, planApprovalAskIsOpen(pd), stillParked) : keptWhilePlanWaits(
+        turnEndingPrint(`Run \`${command}\` to update the configuration, then ${verbatimThenStop}`),
         planApprovalAskIsOpen(pd),
       ));
       return;
     }
     if (planChanges) {
-      emit(planChangeDirective(planChanges, null, plan, planApprovalAskIsOpen(pd)));
+      emit(planChangeDirective(planChanges, null, plan, planApprovalAskIsOpen(pd), stillParked));
       return;
     }
     // Only a setting the hook already applied was typed: the command is done,
@@ -7958,7 +7997,7 @@ function routeNext(args: string[], projectDir: string | undefined): void {
         pd, flags.intent, "", "routing", { space: selection.space, targets: routingTargets() }, false, undefined,
         undefined, routingSettings(carriedRoutingFlags(flags)),
       );
-      emit(openQuestionReplyDirective(open.stage, auditBlockField(open.block, "Checkpoint"), words.id));
+      emit(openQuestionReplyDirective(open.stage, open.block, words.id));
       return;
     }
     // Words at an approval gate the person is looking at ("approve") may be
@@ -8518,10 +8557,12 @@ function applyConstructionCheckpointShape(
   directive.protocol_modules = checkpoint.rereview ? ["reviewer", "construction"] : ["construction"];
   // A checkpoint the person approves offers one learnings ritual for the
   // stages it covers, as a stage's own approval gate does. A re-check of
-  // changed code asks only for the approval.
+  // changed code asks only for the approval, and so does a checkpoint whose
+  // approval was already asked (in this chat or another): its learnings
+  // question came first.
   if (
     directive.ceremony.learnings === "on" && checkpoint.human_required &&
-    !checkpoint.rereview && !checkpoint.rechecked
+    !checkpoint.rereview && !checkpoint.rechecked && !checkpoint.asked
   ) {
     directive.protocol_modules.push("learnings");
   }
@@ -11486,9 +11527,12 @@ function planChangeDirective(
   // The code plan's question is open: it stays the open step, so what the
   // person says next is kept as their answer to it.
   planWaits = false,
+  // Parked work stays parked: the one line ends by saying so.
+  stillParked: string | null = null,
 ): PrintDirective {
   const kept = (directive: PrintDirective): PrintDirective => keptWhilePlanWaits(directive, planWaits);
   const end = " Then stop.";
+  const parkedTail = stillParked === null ? "" : ` ${stillParked}`;
   // A stage the plan already skips or runs is no change: it is said, not sent
   // to recompose, so the undo line names only what changed. After a scope
   // change (plan null) the new plan is not known here, so every flip is sent.
@@ -11506,7 +11550,7 @@ function planChangeDirective(
   if (skip.length === 0 && add.length === 0) {
     return kept(turnEndingPrint(
       `${before ? `Run \`${before}\` and print its output verbatim, then tell` : "Tell"} the person in one line: ` +
-        `"${noted} The plan is unchanged."${end}`,
+        `"${noted} The plan is unchanged.${parkedTail}"${end}`,
     ));
   }
   const flips = (skipped: string[], added: string[]): string => [
@@ -11525,7 +11569,7 @@ function planChangeDirective(
       "If a command refuses, tell the person in plain words why it could not, and the way it names to do it " +
       "instead, then stop. " +
       `Otherwise tell the person in one line: "${summary.charAt(0).toUpperCase()}${summary.slice(1)}. ` +
-      `To undo it, type \`${entrySkillInvocation()} ${flips(add, skip)}\`.${noted ? ` ${noted}` : ""}"${end}`,
+      `To undo it, type \`${entrySkillInvocation()} ${flips(add, skip)}\`.${noted ? ` ${noted}` : ""}${parkedTail}"${end}`,
   ));
 }
 

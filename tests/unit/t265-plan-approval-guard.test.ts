@@ -3752,7 +3752,13 @@ describe("t265c registrations", () => {
   test("kiro-ide: populated PreToolUse payloads route through the plan guard", () => {
     const ideHooks = join(REPO_ROOT, "harness", "kiro-ide", "hooks");
     expect(existsSync(join(ideHooks, "aidlc-plan-approval-guard.kiro.hook"))).toBe(false);
-    expect(existsSync(join(ideHooks, "aidlc-plan-approval-guard.json"))).toBe(true);
+    // The guard runs inside the one PreToolUse card (#2022), for every tool but a read.
+    const card = JSON.parse(readFileSync(join(ideHooks, "aidlc-guard-tool-call.json"), "utf-8")) as {
+      hooks: Array<{ action: { command: string } }>;
+    };
+    expect(card.hooks[0].action.command).toEndWith(" engine adapter kiro-ide guard-tool-call");
+    expect(readFileSync(join(ideHooks, "aidlc-kiro-tool-names.ts"), "utf-8"))
+      .toContain('{ target: "plan-approval-guard", matcher: KIRO_HOOK_MATCHERS.notReadPreToolUse }');
     const skill = readFileSync(
       join(REPO_ROOT, "harness", "kiro-ide", "skills", "aidlc", "SKILL.md"),
       "utf-8",

@@ -127,7 +127,7 @@ describe.skipIf(
 
       const disabled = await drive("/aidlc config set guard.state-transition off", 90_000, {
         toolName: "Bash",
-        resultIncludes: "Fence state-transition",
+        resultIncludes: "The state transition check",
       });
       expect(stateLines()).toContain(RELAXED_LINE);
       expect(stateLines()).toContain("- **Guards Off**: state-transition (set by you)");
@@ -139,7 +139,7 @@ describe.skipIf(
       expect(disabledRows).toHaveLength(1);
       expect(auditBlockField(disabledRows[0].block, "Guard")).toBe("state-transition");
       expect(auditBlockField(disabledRows[0].block, "Source")).toBe("you");
-      assertToolResultContains(disabled, "Bash", "Fence state-transition");
+      assertToolResultContains(disabled, "Bash", "The state transition check");
 
       const status = await drive("/aidlc --status", 60_000, {
         toolName: "Bash",

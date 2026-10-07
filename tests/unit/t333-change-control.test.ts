@@ -1904,7 +1904,7 @@ describe("t333 (9) fences: the policy lowers a fixed set; per-run switches can l
     const context = JSON.parse(recordHumanPrompt(proj, "/aidlc config set guard.state-transition off"));
     expect(context.additionalContext).toContain("AIDLC Guard Policy:");
     expect(context.additionalContext).toContain(
-      "Fence state-transition is off for this piece of work (logged; back on for the next one)",
+      "The state transition check is off for this piece of work (logged; back on for the next one)",
     );
     const content = readFileSync(state, "utf-8");
     expect(getField(content, GUARDS_OFF_FIELD)).toBe("state-transition (set by you)");
@@ -1926,7 +1926,7 @@ describe("t333 (9) fences: the policy lowers a fixed set; per-run switches can l
     const before = readFileSync(state, "utf-8");
     const again = run(UTILITY, ["config-change", "--guard.state-transition", "off"], proj, FENCE_ENV_CLEAR);
     expect(again.status, again.stderr).toBe(0);
-    expect(again.stdout).toContain("Fence state-transition is already off");
+    expect(again.stdout).toContain("The state transition check is already off");
     expect(readFileSync(state, "utf-8")).toBe(before);
     expect(rowsOf(proj, "GUARD_DISABLED")).toHaveLength(1);
     // A second switchable fence joins the line in canonical order.
@@ -1942,7 +1942,7 @@ describe("t333 (9) fences: the policy lowers a fixed set; per-run switches can l
     // Back on: GUARD_RESTORED, the line shrinks, the read returns to the default.
     const restored = run(UTILITY, ["config-change", "--guard.state-transition", "on"], proj, FENCE_ENV_CLEAR);
     expect(restored.status, restored.stderr).toBe(0);
-    expect(restored.stdout).toContain("Fence state-transition is back on for this piece of work");
+    expect(restored.stdout).toContain("The state transition check is back on for this piece of work");
     expect(getField(readFileSync(state, "utf-8"), GUARDS_OFF_FIELD)).toBe("review-freeze (set by you)");
     const restoredRows = rowsOf(proj, "GUARD_RESTORED");
     expect(restoredRows).toHaveLength(1);
@@ -1988,7 +1988,7 @@ describe("t333 (9) fences: the policy lowers a fixed set; per-run switches can l
     expect(run(UTILITY, ["status"], proj, FENCE_ENV_CLEAR).stdout).not.toContain(STATUS_FENCES);
     const again = run(dispatcher, ["engine", "config", "set", "guard.review-freeze", "on"], proj, FENCE_ENV_CLEAR);
     expect(again.status, again.stderr).toBe(0);
-    expect(again.stdout).toContain("Fence review-freeze is already on");
+    expect(again.stdout).toContain("The review freeze check is already on");
     expect(readFileSync(state, "utf-8")).toBe(onState);
     expect(rowsOf(proj, "GUARD_RESTORED")).toHaveLength(1);
     recordHumanPrompt(proj, "/aidlc config set guard.review-freeze off");
@@ -2001,7 +2001,7 @@ describe("t333 (9) fences: the policy lowers a fixed set; per-run switches can l
     expect(run(UTILITY, ["config-get", "guard.review-freeze"], proj, FENCE_ENV_CLEAR).stdout).toBe("off (set by you)\n");
     const unchanged = run(dispatcher, ["engine", "config", "set", "guard.review-freeze", "off"], proj, FENCE_ENV_CLEAR);
     expect(unchanged.status, unchanged.stderr).toBe(0);
-    expect(unchanged.stdout).toContain("Fence review-freeze is already off");
+    expect(unchanged.stdout).toContain("The review freeze check is already off");
     expect(readFileSync(state, "utf-8")).toBe(offState);
     expect(rowsOf(proj, "GUARD_DISABLED")).toHaveLength(1);
   });
@@ -2213,7 +2213,7 @@ describe("t333 (9) fences: the policy lowers a fixed set; per-run switches can l
     expect(getField(readFileSync(state, "utf-8"), field)).toBe(lowered);
     // One line, in their words, with the way back; the record keeps the words as delivered.
     expect(changed.stdout).toContain(line);
-    expect(changed.stdout).not.toMatch(/Fence state-transition is off|Guard Policy changed:/);
+    expect(changed.stdout).not.toMatch(/The state transition check is off for this piece of work \(logged|Fence state-transition|Guard Policy changed:/);
     expect(auditBlockField(rowsOf(proj, event)[0].block, "Person Reply")).toBe(asked);
   });
 
@@ -2300,7 +2300,7 @@ describe("t333 (9) fences: the policy lowers a fixed set; per-run switches can l
     const ledger = mutationRows(proj);
     const unchanged = run(UTILITY, ["config-change", "--guard.review-freeze", "off"], proj, FENCE_ENV_CLEAR);
     expect(unchanged.status, unchanged.stderr).toBe(0);
-    expect(unchanged.stdout).toContain("Fence review-freeze is already off");
+    expect(unchanged.stdout).toContain("The review freeze check is already off");
     expect(readFileSync(state, "utf-8")).toBe(before);
     expect(mutationRows(proj)).toEqual(ledger);
     const refused = run(UTILITY, [
@@ -2703,7 +2703,7 @@ describe("t333 (9) fences: the policy lowers a fixed set; per-run switches can l
     const before = readFileSync(state, "utf-8");
     const unchanged = run(UTILITY, ["config-change", "--guard.state-transition", "on"], proj, FENCE_ENV_CLEAR);
     expect(unchanged.status, unchanged.stderr).toBe(0);
-    expect(unchanged.stdout).toContain("Fence state-transition is already on");
+    expect(unchanged.stdout).toContain("The state transition check is already on");
     expect(readFileSync(state, "utf-8")).toBe(before);
     expect(rowsOf(proj, "GUARD_DISABLED")).toHaveLength(0);
     expect(rowsOf(proj, "GUARD_RESTORED")).toHaveLength(0);

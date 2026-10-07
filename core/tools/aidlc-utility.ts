@@ -374,6 +374,8 @@ import {
   parkedRefPrefix,
   normalizeDriveLetter,
   humanPresenceGuardDisabled,
+  OWN_TERMINAL_PRESENCE_STEP,
+  personAtOwnTerminal,
   personSpokeSinceGate,
   personSaidProjectType,
   clearProjectTypeAsked,
@@ -10481,11 +10483,13 @@ function handleReclassify(projectDir: string, flags: Record<string, string>, raw
   // What the folder is, is the person's word: it is recorded as theirs only
   // once they have said something since the last decision (an answer to the
   // question, or the command they typed), after the question when it was asked.
+  // At the person's own terminal no chat answer can arrive: the step that
+  // works there is named instead.
   if (!humanPresenceGuardDisabled() && !personSaidProjectType(projectDir)) {
-    die(
-      "The person has not said yet whether this folder is existing code. Ask them the question you were given, " +
-        "end the turn, and run this command after they answer.",
-    );
+    die(personAtOwnTerminal(projectDir)
+      ? OWN_TERMINAL_PRESENCE_STEP
+      : "The person has not said yet whether this folder is existing code. Ask them the question you were given, " +
+        "end the turn, and run this command after they answer.");
   }
 
   // The registry row is workspace state and the plan is the work's own: hold

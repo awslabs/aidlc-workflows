@@ -519,7 +519,7 @@ the gate can reopen. Bypass with `AIDLC_SKIP_REVISION_BACKSTOP=1`.
 
 **Archive (issue #980).** `aidlc-utility intent archive <name> [--reason <text>]` retires an in-flight intent the team will not finish, or hides a completed one from the default listing. Under the workspace lock it emits `WORKFLOW_ARCHIVED` into that intent's own audit shard first, then flips the state file's `Status` to `Archived` (keeping the Status it replaced in `Archived From`) and the `intents.json` row to `archived`; the record dir, its artifacts, its audit shards, and any Bolt worktrees are never moved or deleted. A subsequent `next` on that record (a stale per-user cursor or session binding) emits a terminal `done` naming `intent unarchive`, so retired stages never resume by accident; `park` refuses an archived workflow the same way it refuses a completed one. Archiving is refused only for a team-owned intent with claimed Units. An intent with Bolt worktrees archives and the output names them; their `Bolt Refs` stay in the state file, Bolt start, complete, and merge refuse until unarchive, and doctor still counts them as active forks. `intent unarchive <name>` reverses the field writes, restoring `Completed` / `complete` when `Archived From` says `Completed` and `Running` / `in-flight` otherwise, and emits `WORKFLOW_UNARCHIVED`; a `--reason` given to it is not recorded, and the output says so. The default `intent` listing hides archived rows (`--all` shows them; `--json` always carries every row), the creation gate ignores them, and the lone-record fallback never resolves one implicitly.
 
-**Park (issue #365/#367).** `aidlc-orchestrate park` writes a `Parked` / `Parked At Stage` runtime marker (via `aidlc-state.ts park`, which emits `WORKFLOW_PARKED`) without advancing any stage; a subsequent plain `next` re-emits a terminal `parked` directive and the Stop hook lets the turn end, so a long workflow can pause across sessions instead of rubber-stamping the remaining stages to reach `done`. `/aidlc --resume` clears the marker (`unpark` emits `WORKFLOW_UNPARKED`) before continuing. An unattended autonomous Construction run (`Construction Autonomy Mode: autonomous`) refuses to park: both the tool and the Stop hook's `parked` allow decline under autonomous mode, so the loop keeps moving with no human to resume it. The one exception is a stop the person asks for. With a reply from them on record since the last decision, `park` (and an approval reported with `--park`) parks as attended (`parkWorkflow` in `aidlc-state.ts`) and records `Parked By: person`, which the Stop hook honors under autonomy too; `unpark` clears it. The run's own approvals after their message do not use it up; any other decision does. On a host whose hooks can miss a reply (its `hookActivation` names one), an attended session's park is recorded as the person's even with no reply on record, and its result carries a note saying so. `AIDLC_UNATTENDED=1` always refuses.
+**Park (issue #365/#367).** `aidlc-orchestrate park` writes a `Parked` / `Parked At Stage` runtime marker (via `aidlc-state.ts park`, which emits `WORKFLOW_PARKED`) without advancing any stage; a subsequent plain `next` re-emits a terminal `parked` directive and the Stop hook lets the turn end, so a long workflow can pause across sessions instead of rubber-stamping the remaining stages to reach `done`. A change the person types over the parked work (another scope, `--skip` or `--add`, a setting, or `compose`) is made while the work stays parked, and the one line they read says it is still paused and that `/aidlc --resume` picks it back up. `/aidlc --resume` clears the marker (`unpark` emits `WORKFLOW_UNPARKED`) before continuing. An unattended autonomous Construction run (`Construction Autonomy Mode: autonomous`) refuses to park: both the tool and the Stop hook's `parked` allow decline under autonomous mode, so the loop keeps moving with no human to resume it. The one exception is a stop the person asks for. With a reply from them on record since the last decision, `park` (and an approval reported with `--park`) parks as attended (`parkWorkflow` in `aidlc-state.ts`) and records `Parked By: person`, which the Stop hook honors under autonomy too; `unpark` clears it. The run's own approvals after their message do not use it up; any other decision does. On a host whose hooks can miss a reply (its `hookActivation` names one), an attended session's park is recorded as the person's even with no reply on record, and its result carries a note saying so. `AIDLC_UNATTENDED=1` always refuses.
 
 A park the person comes back to carries on. Once they have spoken after it (a `HUMAN_TURN` after the latest `WORKFLOW_PARKED`), a bare `next`, such as a bare `/aidlc` in the same chat, names the unpark and carries on instead of re-emitting `parked`, and words passed to `next` are read as on active work; the agent's own loop, whose stop came from the reply before the park, and the Stop hook's probe still get `parked`.
 
@@ -1429,9 +1429,15 @@ remain the outer boundary.
 No in-repo check can provide stronger provenance on today's harnesses.
 
 **Operations and interaction.** Emitted remedies carry `interaction`, an
-`action` for presentation, `requiresHuman`, and `executableNow`. The conductor
-offers only executable remedies, waits for the human's selection, and follows
-the selected interaction:
+`action` that instructs the conductor, `requiresHuman`, and `executableNow`; a
+remedy put to the person also carries a `label` and `description` in their
+words (`GUARD_REMEDY_WORDING` in `aidlc-lib.ts`). The first time a refusal has
+an executable `external-work` remedy, the ask is the conductor's own work
+(`agent_work: true`, only those remedies, never published): it carries out the
+first that applies without asking. When the same refusal comes back, or there
+is none, the person is asked with the other executable remedies only. The
+conductor offers them by label and description, waits for the human's
+selection, and follows the selected interaction:
 
 | `interaction` | Contract after selection |
 |---|---|
@@ -1597,7 +1603,8 @@ lifecycle state, attempt fields, the latest session/workflow/jump/rejection
 boundary, and the resource fingerprints); it carries no authority, and an
 observer reads it without writing. A refusal with no executable remedy is still a
 question: a terminal ask with an empty remedy list that names the situation, and
-past the repetition cap the guard-state signature for escalation. This shared
+past the repetition cap the guard-state signature for escalation. The tool's own
+message is on its `detail` for the conductor, never in the question. This shared
 guard-refusal path emits asks. An ordinary tool failure without that typed ask
 must be surfaced with its actual error; it is not a recovery directive or a
 successful operation. The refusal streak counts these guard states, not every
@@ -1606,8 +1613,8 @@ tool failure.
 **The human's selection survives the re-ask.** An engine-published guard-recovery
 ask is stored as an active-directive marker (`kind: "ask"`,
 `ask_type: "guard-recovery"`); a tool-printed ask alone does not publish one, and neither does the review-freeze hook's ask when `next` asks it, so the person's own words from the request that led to the refusal still carry their Request Changes.
-The marker carries `remedies`, the offered `op`, `action`, `operation` (when present),
-and `interaction` entries in display order. The human-turn hook records that the
+The marker carries `remedies`, the offered `op`, `label` (when shown), `action`,
+`operation` (when present), and `interaction` entries in display order. The human-turn hook records that the
 person replied (`delivery: consumed`, `selection_sha256` over their words,
 `selected_op: null`); the conductor reads the reply and records the remedy they
 picked with `answer --checkpoint guard-recovery --details '<the remedy's op>'`
@@ -1630,7 +1637,7 @@ before the picked remedy runs withdraws the pick so the conductor reads the new
 reply, while an identical re-recorded response is idempotent.
 
 A repeated `next` preserves that response only when the state, gate, and ordered
-remedy `op`, `action`, structured `operation`, and `interaction` still match.
+remedy `op`, `label`, `action`, structured `operation`, and `interaction` still match.
 A changed target or interaction therefore cannot inherit the old selection.
 The Stop hook releases the turn on the ask. `reject` is allowed only
 after `selected_op` records `request-changes` and matching human feedback arrives:
