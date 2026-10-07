@@ -23,6 +23,7 @@
     "t-guard-native-remedies": 277.9,
     "t-review-verdict-unit-state": 110,
     "t-runner-process-lifecycle": 160.9,
+    "t-scope-change-automatic": 450,
     "t-scope-change-keeps-unit-work": 900,
     "t-scope-run-bugfix": 220,
     "t-scope-run-classic": 600,

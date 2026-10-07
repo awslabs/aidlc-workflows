@@ -10827,14 +10827,22 @@ function handleScopeChange(projectDir: string, flags: Record<string, string>): v
     const scopeMapping = loadScopeMapping();
     const newScopeDef = scopeMapping[newScope];
     if (!newScopeDef) die(`Unknown scope: ${newScope}. Valid scopes: ${Object.keys(scopeMapping).join(", ")}`);
-    // Like recompose, reshaping an unattended Construction plan requires a
-    // human. Keep this guard ahead of the same-scope path, including no-ops.
-    if (isAutonomousMode(contentBefore)) {
+    // The person's own request for the change, on this work's record, with no
+    // unattended driver in the way.
+    const personAsked = (): boolean =>
+      process.env.AIDLC_UNATTENDED !== "1" &&
+      personSpokeSinceGate(projectDir, { requests: true, intent, space });
+    // Under "Continue automatically" the person's own scope change goes
+    // through like any other, and the remaining work keeps their autonomy
+    // choice. Only a change nobody asked for (an unattended driver) is refused,
+    // naming the setter that lets it through. Keep this guard ahead of the
+    // same-scope path, including no-ops.
+    if (isAutonomousMode(contentBefore) && !personAsked()) {
       die(
-        "Cannot change scope while Construction is running unattended (Construction Autonomy Mode " +
-          "is autonomous). Changing the plan needs someone to approve it, and nobody is being asked " +
-          "right now. Either switch back to stopping for approval at each Bolt " +
-          "(aidlc-bolt set-autonomy --mode gated) or wait for the current build to finish, then change scope.",
+        "Cannot change scope while Construction runs unattended (Construction Autonomy Mode is " +
+          "autonomous) with nobody here to approve the new plan. Run " +
+          `\`${aidlcToolInvocation("bolt")} set-autonomy --mode gated\` (Construction then stops for ` +
+          "approval at each Bolt), then change scope.",
       );
     }
     const oldScope = getField(contentBefore, "Scope");
@@ -10861,10 +10869,7 @@ function handleScopeChange(projectDir: string, flags: Record<string, string>): v
         // says so in one line.
         if (strictness[nextPolicy] >= strictness[previousCC.value]) {
           requested["guard-policy"] ??= { value: nextPolicy, source };
-        } else if (
-          process.env.AIDLC_UNATTENDED !== "1" &&
-          personSpokeSinceGate(projectDir, { requests: true, intent, space })
-        ) {
+        } else if (personAsked()) {
           requested["guard-policy"] ??= { value: nextPolicy, source };
         } else {
           // Work picked by name is switched by name: the plain words reach

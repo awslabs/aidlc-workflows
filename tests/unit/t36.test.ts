@@ -170,10 +170,11 @@ interface CliResult {
 }
 
 /** Spawn `bun aidlc-utility.ts scope-change <args...> --project-dir <p>`. */
-function scopeChange(args: string[], p: string): CliResult {
+function scopeChange(args: string[], p: string, env: Record<string, string> = {}): CliResult {
   const res = spawnSync(BUN, [TOOL, "scope-change", ...args, "--project-dir", p], {
     timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     encoding: "utf-8",
+    env: { ...process.env, ...env },
   });
   return {
     status: res.status ?? -1,
@@ -314,7 +315,7 @@ describe("t36 aidlc-utility scope-change — CLI contract (migrated from t36-uti
   });
 
   // --- Autonomy guard (the recompose guard's twin) ---
-  test("8: autonomous Construction rejected - scope-change refuses with the remediation named", () => {
+  test("8: autonomous Construction with nobody asking - scope-change refuses and names a setter that runs", () => {
     // scope-change flips stage EXECUTE/SKIP suffixes exactly like recompose;
     // under an unattended autonomous run there is no human at the gate, so the
     // verb must refuse (t194 pins the recompose side of the same rule). The
@@ -331,10 +332,58 @@ describe("t36 aidlc-utility scope-change — CLI contract (migrated from t36-uti
     const r = scopeChange(["--scope", "mvp"], p);
     expect(r.status).not.toBe(0);
     expect(r.out).toContain("Construction Autonomy Mode is autonomous");
-    expect(r.out).toContain("set-autonomy --mode gated");
+    // The step it names is one that runs: the setter's real command, and no
+    // wait that never ends (the mode stays autonomous to the end of the run).
+    expect(r.out).toMatch(/`[^`]*aidlc[^`]*bolt[^`]* set-autonomy --mode gated`/);
+    expect(r.out).not.toContain("(aidlc-bolt set-autonomy");
+    expect(r.out).not.toContain("wait for the current build");
     // The refusal mutates nothing: state byte-identical, no SCOPE_CHANGED row.
     expect(readFileSync(sp, "utf-8")).toBe(withAutonomy);
     expect(scopeChangedCount(readAllAuditShards(p))).toBe(0);
+  });
+
+  // The person typed the change while Construction runs "Continue
+  // automatically": it goes through like any other, and the remaining work
+  // keeps running automatically. An unattended driver is still refused.
+  describe("8c: autonomous Construction, the person asked for the change", () => {
+    const autonomousWithRequest = (): { p: string; sp: string } => {
+      const p = proj();
+      const sp = statePath(p);
+      writeFileSync(sp, readFileSync(sp, "utf-8").replace(
+        /- \*\*Status\*\*: Running/,
+        "- **Status**: Running\n- **Construction Autonomy Mode**: autonomous",
+      ), "utf-8");
+      const hook = spawnSync(BUN, [join(REPO_ROOT, "dist", "claude", ".claude", "tools", "aidlc.ts"), "engine", "hook", "record-human-turn"], {
+        cwd: p,
+        input: JSON.stringify({ hook_event_name: "UserPromptSubmit", cwd: p, session_id: "t36-person", prompt: "/aidlc --scope mvp" }),
+        env: { ...process.env, CLAUDE_PROJECT_DIR: p },
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+        encoding: "utf-8",
+      });
+      expect(hook.status, `${hook.stdout}${hook.stderr}`).toBe(0);
+      return { p, sp };
+    };
+
+    test("the change goes through and the autonomy choice stays", () => {
+      const { p, sp } = autonomousWithRequest();
+      const r = scopeChange(["--scope", "mvp"], p);
+      expect(r.status, r.out).toBe(0);
+      expect(r.out).toContain("Switched to mvp");
+      expect(r.out).not.toContain("unattended");
+      expect(stateField(sp, "Scope")).toBe("mvp");
+      expect(stateField(sp, "Construction Autonomy Mode")).toBe("autonomous");
+      expect(scopeChangedCount(readAllAuditShards(p))).toBe(1);
+    });
+
+    test("an unattended driver is still refused, naming the setter", () => {
+      const { p, sp } = autonomousWithRequest();
+      const before = readFileSync(sp, "utf-8");
+      const r = scopeChange(["--scope", "mvp"], p, { AIDLC_UNATTENDED: "1" });
+      expect(r.status).not.toBe(0);
+      expect(r.out).toMatch(/`[^`]*aidlc[^`]*bolt[^`]* set-autonomy --mode gated`/);
+      expect(readFileSync(sp, "utf-8")).toBe(before);
+      expect(scopeChangedCount(readAllAuditShards(p))).toBe(0);
+    });
   });
 
   test("8b: gated Construction proceeds - scope-change flips as today when autonomy is not autonomous", () => {
