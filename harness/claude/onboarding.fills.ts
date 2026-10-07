@@ -18,7 +18,9 @@ const fills: OnboardingFills = {
   (G1 PASS) — see tmp/workspace-vision/at-import-spike/RESULTS.md.
 -->
 
-# Project Name <!-- Replace with your project name -->
+# AI-DLC
+
+Your project's name, notes and rules go in \`aidlc/spaces/default/memory/project.md\`. Every AI tool in this project reads it.
 
 This project uses AI-DLC (AI-Driven Development Life Cycle) for structured development. The workspace shell ships in \`.claude/\` (no setup command); describe what you want to build and it sets up the workflow for you. Run \`/aidlc\` followed by a scope or project description to begin. Run \`/aidlc --doctor\` to validate your setup. Run \`/aidlc --version\` to print the framework version. Run \`/aidlc --stage <slug>\` to jump to a specific stage, \`/aidlc --phase <name>\` to jump to a phase, \`/aidlc --depth <level>\` to override depth, \`/aidlc --test-strategy <level>\` to override test volume, \`/aidlc --review <class>\` to cap stage reviews (adversarial, advisory, none). Run \`/aidlc compose "<task>"\` to get a plan tailored to that task (works up front, from a scan report via \`--report <path>\`, and mid-workflow to re-shape the pending stages - every proposal stops at an approve/edit/reject gate).`,
 

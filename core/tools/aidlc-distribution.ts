@@ -741,6 +741,36 @@ export function mergeBlock(
   };
 }
 
+// The onboarding's title line: this release's, then the one earlier releases
+// shipped, which asked to be replaced with the project's name (#2058).
+const ONBOARDING_TITLES = ["# AI-DLC", "# Project Name <!-- Replace with your project name -->"];
+
+// The line the person wrote in place of the onboarding's title, when that one
+// line is all that differs from what AI-DLC wrote: `matches` says whether the
+// text with AI-DLC's title put back is that. The line is theirs to keep.
+export function ownTitleLine(text: string, matches: (restored: string) => boolean): string | null {
+  const lines = text.split("\n");
+  for (let index = 0; index < lines.length; index++) {
+    const cr = lines[index].endsWith("\r") ? "\r" : "";
+    const line = lines[index].slice(0, lines[index].length - cr.length);
+    for (const title of ONBOARDING_TITLES) {
+      if (line === title) continue;
+      if (matches([...lines.slice(0, index), `${title}${cr}`, ...lines.slice(index + 1)].join("\n"))) return line;
+    }
+  }
+  return null;
+}
+
+// Shipped onboarding text with the person's own line in place of its title,
+// or null when the text has no title line to replace.
+export function withOwnTitleLine(shipped: string, own: string): string | null {
+  const lines = shipped.split("\n");
+  const index = lines.findIndex((line) => ONBOARDING_TITLES.includes(line.replace(/\r$/, "")));
+  if (index < 0) return null;
+  lines[index] = `${own}${lines[index].endsWith("\r") ? "\r" : ""}`;
+  return lines.join("\n");
+}
+
 export function projectionFiles(root: string): {
   stamp: ProjectionStamp;
   descriptor: ProjectionDescriptor;
