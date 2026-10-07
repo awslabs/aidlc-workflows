@@ -396,7 +396,7 @@ export function chatHoldsRules(
       if (!existsSync(record.transcript)) return false;
       const since = rolloutHolds(record.transcript, bundle);
       const deliveredAt = Date.parse(full.at);
-      return since !== undefined && since.holds && Number.isFinite(deliveredAt) &&
+      return since?.holds === true && Number.isFinite(deliveredAt) &&
         (since.compacted === null || since.compacted < deliveredAt);
     }
     return false;
