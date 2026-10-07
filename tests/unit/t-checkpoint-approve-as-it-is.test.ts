@@ -369,6 +369,50 @@ describe("approving a Unit as it is over a review that did not finish", () => {
     }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
   }
 
+  // The person asked for alpha's review again after its code changed, and that
+  // review was interrupted: "approve it as it is" goes over it the same way, as
+  // a stage gate's approval goes over a recovery review that never finished.
+  function recoveryInterrupted(p: string): void {
+    build(p, "alpha");
+    review(p, "alpha", 1, "READY");
+    const output = join(seededRecordDir(p), "construction", "alpha", CG);
+    const doc = join(output, artifactFilename(findStageBySlug(CG)!.produces![0]));
+    writeFileSync(doc, `${readFileSync(doc, "utf-8")}\n- Titles cannot be blank.\n`);
+    says(p, "review alpha's code again before I approve");
+    review(p, "alpha", 2);
+    const request = events(p, "REVIEW_REQUESTED").at(-1);
+    expect(auditBlockField(request?.block ?? "", "Recovery"), request?.block).toBe("stale-receipt");
+  }
+
+  test("Guard Policy off: a recovery review that was interrupted, approved as it is with one question, and the walk carries on", () => {
+    const p = fixture("off");
+    recoveryInterrupted(p);
+    says(p, AS_IT_IS);
+    const verified = checkpoint(p, "alpha", "verify", ["--over-unfinished-review"]);
+    expect(verified.status, verified.out).toBe(0);
+    expect(verified.json?.review_not_finished).toEqual({ stages: [CG], question: QUESTION });
+    expect(checkpoint(p, "alpha", "ask").status).toBe(0);
+    says(p, "yes");
+    const approved = checkpoint(p, "alpha", "approve", ["--user-input", "yes"]);
+    expect(approved.status, approved.out).toBe(0);
+    expect(approved.json?.change_notices).toContain(NOTICE);
+    const approvals = unitApprovals(p, "alpha");
+    expect(approvals).toHaveLength(1);
+    expect(auditBlockField(approvals[0].block, "Review")).toBe("not finished");
+    walkCarriesOn(p);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("Guard Policy strict: a recovery review that was interrupted still finishes first, and the refusal names its retry", () => {
+    const p = fixture("strict");
+    recoveryInterrupted(p);
+    says(p, AS_IT_IS);
+    const refused = checkpoint(p, "alpha", "verify", ["--over-unfinished-review"]);
+    expect(refused.status).not.toBe(0);
+    expect(refused.out).toContain(reviewArgs("alpha", 2).join(" "));
+    expect(refused.out).not.toContain("verify with --over-unfinished-review");
+    expect(unitApprovals(p, "alpha")).toHaveLength(0);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
   test("the agent cannot let a Unit go on without its review on its own", () => {
     const p = fixture("off");
     build(p, "alpha");
