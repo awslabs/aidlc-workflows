@@ -1272,7 +1272,8 @@ to run. `fire_on: write` runs during matching writes and remains advisory in
 this release, even when the manifest declares `blocking`. `fire_on: gate` runs
 against matching declared deliverables when the stage enters or re-enters its
 approval gate. Advisory outcomes emit their audit rows but do not stop the
-gate. A blocking gate sensor requires a verified pass: findings, unavailable
+gate; a gate the engine approves itself under Construction autonomy runs only
+its blocking sensors, since advisory evidence has no reader there. A blocking gate sensor requires a verified pass: findings, unavailable
 evaluation, malformed output, and timeouts refuse gate entry until the issue
 is fixed or the human-backed override flow in §2 completes. Autonomous mode
 cannot override a blocking sensor.

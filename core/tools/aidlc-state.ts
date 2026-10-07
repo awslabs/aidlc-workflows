@@ -3462,11 +3462,24 @@ function artifactFingerprint(path: string): string | null {
   }
 }
 
+// A person answers every team Unit gate and every gate outside a Construction
+// autonomy grant. The gate the grant answers (the engine approves it itself,
+// isAutonomousConstructionGate) has no reader for advisory sensor evidence.
+function personAnswersGate(
+  pd: string,
+  stateContent: string,
+  stage: NonNullable<ReturnType<typeof findStageBySlug>>,
+  teamGate: ReturnType<typeof teamGateContext>,
+): boolean {
+  return teamGate !== null || !isAutonomousConstructionGate(stateContent, stage, pd);
+}
+
 function fireGateSensors(
   pd: string,
   stage: NonNullable<ReturnType<typeof findStageBySlug>>,
   stateContent: string,
   artifacts?: string,
+  personAnswers = true,
 ): GateSensorEvaluation {
   const issues: BlockingSensorIssue[] = [];
   const fingerprints = new Map<string, string>();
@@ -3476,8 +3489,11 @@ function fireGateSensors(
   const paths = existingDeclaredArtifactPaths(pd, stage, artifacts);
   if (paths.length === 0) return { issues, fingerprints };
 
+  // Advisory gate sensors are evidence for whoever answers the gate. When no
+  // person will, only the blocking sensors, which halt an unattended run, fire:
+  // a check nobody reads costs the gate its time and the audit its signal.
   const sensors = (stage.sensors_applicable ?? []).filter((sensor) =>
-    sensor.fire_on === "gate"
+    sensor.fire_on === "gate" && (personAnswers || sensor.default_severity === "blocking")
   );
   for (const sensor of sensors) {
     if (sensor.default_severity !== "blocking") continue;
@@ -5943,6 +5959,7 @@ function handleGateStart(args: string[]): void {
     preflightStage,
     preflightContent,
     artifacts,
+    personAnswersGate(pd, preflightContent, preflightStage, preflightTeamGate),
   );
   enforceBlockingGateSensors(
     pd,
@@ -6939,7 +6956,13 @@ function handleRevise(args: string[]): void {
     action: "revise",
     ...(preflightTeamGate ? { unit: preflightTeamGate.unit } : {}),
   });
-  const gateSensorEvaluation = fireGateSensors(pd, preflightStage, preflightContent);
+  const gateSensorEvaluation = fireGateSensors(
+    pd,
+    preflightStage,
+    preflightContent,
+    undefined,
+    personAnswersGate(pd, preflightContent, preflightStage, preflightTeamGate),
+  );
   enforceBlockingGateSensors(
     pd,
     preflightContent,
