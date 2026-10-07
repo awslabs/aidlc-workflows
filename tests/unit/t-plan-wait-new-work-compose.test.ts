@@ -218,11 +218,11 @@ function buildWaits(proj: string): void {
     prompt: `AIDLC-STAGE: code-generation\nAIDLC-TESTING-CONTRACT: ${resolveTestingPosture(proj).contract_sha256}\nBuild it.`,
   });
   expect(developer.code).toBe(2);
-  // A helper that writes it is refused too, and never told to run a routing
-  // step: a helper cannot run `next`, so it hands the refusal back.
+  // A helper that writes it is refused too. Whatever step the refusal names
+  // is the main session's: the composer hands it back (its Boundaries, pinned
+  // below), since a helper cannot run `next`.
   const helperWrite = write(proj, join(proj, "src", "slugify.ts"), { agent_type: COMPOSER });
   expect(helperWrite.code).toBe(2);
-  expect(helperWrite.stderr).not.toMatch(/orchestrate|`[^`]*\bnext\b[^`]*`/);
 }
 
 describe("while a code plan waits, new work the person asks for is composed", () => {
