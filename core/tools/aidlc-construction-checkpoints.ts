@@ -149,6 +149,9 @@ export interface ConstructionCheckpoint {
   /** From verify: the one line for each change to this Unit's reviewed work
    *  its Guard Policy accepted, said before the person is asked. */
   change_notices?: string[];
+  /** The person was asked to approve this Unit since its last checkpoint
+   *  decision, so its learnings question, asked first, is behind them. */
+  asked?: true;
 }
 
 const PROOF_DIR = ".aidlc-construction-checkpoints";
@@ -849,6 +852,7 @@ function snapshot(
       run_floor: floors[stages.at(-1)!] ?? "unstarted#0",
       run_floors: floors, proof_path: `${root}/${proofPath}`, verification: proof ?? restored,
       rereview, rechecked,
+      ...(asked && !approved ? { asked: true as const } : {}),
     },
   };
 }

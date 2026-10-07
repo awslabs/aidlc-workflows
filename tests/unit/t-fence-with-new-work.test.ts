@@ -206,7 +206,7 @@ describe("a fence switch typed with a request beside open work", () => {
 
   test("typed alone, with no request, it is for the open work at once", () => {
     const proj = openWork();
-    expect(reply(proj, "/aidlc --guard.review-freeze off")).toContain("Fence review-freeze is off for this piece of work");
+    expect(reply(proj, "/aidlc --guard.review-freeze off")).toContain("The review freeze check is off for this piece of work");
     expect(guardsOff(readFileSync(seededStateFile(proj), "utf-8"))).toContain("review-freeze");
   });
 });

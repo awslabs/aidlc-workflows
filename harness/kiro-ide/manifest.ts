@@ -287,13 +287,11 @@ const manifest: HarnessManifest = {
     { src: "hooks/aidlc-write-audit-log.json", dst: "hooks/aidlc-write-audit-log.json" },
     { src: "hooks/aidlc-record-human-turn.json", dst: "hooks/aidlc-record-human-turn.json" },
     { src: "hooks/aidlc-terminal-command.json", dst: "hooks/aidlc-terminal-command.json" },
-    { src: "hooks/aidlc-terminal-command-guard.json", dst: "hooks/aidlc-terminal-command-guard.json" },
-    { src: "hooks/aidlc-enforce-approval-gate.json", dst: "hooks/aidlc-enforce-approval-gate.json" },
-    { src: "hooks/aidlc-plan-approval-guard.json", dst: "hooks/aidlc-plan-approval-guard.json" },
-    { src: "hooks/aidlc-review-freeze.json", dst: "hooks/aidlc-review-freeze.json" },
-    { src: "hooks/aidlc-state-transition-guard.json", dst: "hooks/aidlc-state-transition-guard.json" },
+    // Kiro IDE shows a card for every hook run, so one registration runs the
+    // five tool-call checks and another the two hooks after a shell command (#2022).
+    { src: "hooks/aidlc-guard-tool-call.json", dst: "hooks/aidlc-guard-tool-call.json" },
     { src: "hooks/aidlc-log-subagent.json", dst: "hooks/aidlc-log-subagent.json" },
-    { src: "hooks/aidlc-rebuild-stage-graph.json", dst: "hooks/aidlc-rebuild-stage-graph.json" },
+    { src: "hooks/aidlc-after-shell.json", dst: "hooks/aidlc-after-shell.json" },
     // No session-end registration: Kiro's Stop trigger fires at the end of every
     // assistant turn (not at conversation close) on both surfaces, so a
     // registration would append a spurious SESSION_ENDED between prompts.
@@ -301,7 +299,6 @@ const manifest: HarnessManifest = {
     // event.
     { src: "hooks/aidlc-session-start.json", dst: "hooks/aidlc-session-start.json" },
     { src: "hooks/aidlc-continue-workflow.json", dst: "hooks/aidlc-continue-workflow.json" },
-    { src: "hooks/aidlc-sync-workflow-state.json", dst: "hooks/aidlc-sync-workflow-state.json" },
     // Project-root .gitignore (beside .kiro/, not inside it) — same workspace-layout
     // committed-vs-ignored split as the Kiro CLI tree: per-user cursors + machine-local
     // runtime ignored, the shared work (memory/codekb/registry/state/audit shards/

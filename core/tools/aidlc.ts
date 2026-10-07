@@ -2472,12 +2472,18 @@ async function runAdapter(action: Extract<Action, { type: "adapter" }>): Promise
     process.env.AIDLC_COMPILED_EXECUTABLE = process.execPath;
   }
   try {
-    // Kiro IDE runs these two after every shell command. When nothing they read
-    // changed since they last found nothing to do, they are skipped before the
-    // engine loads; whenever the gate cannot tell, they run as before.
-    if (kasAdapter(action) && (action.target === "rebuild-stage-graph" || action.target === "sync-workflow-state")) {
+    // Kiro IDE runs these two after every shell command, as one after-shell
+    // card. When nothing they read changed since they last found nothing to do,
+    // they are skipped before the engine loads; the card is skipped only when
+    // both are, and whenever the gate cannot tell, they run as before.
+    if (
+      kasAdapter(action) &&
+      (action.target === "rebuild-stage-graph" || action.target === "sync-workflow-state" || action.target === "after-shell")
+    ) {
       const gate = await import("./aidlc-hook-front-gate.ts");
-      if (gate.frontGateSkips(action.target, gate.frontGateProjectDirs(action.path))) {
+      const dirs = gate.frontGateProjectDirs(action.path);
+      const gated = action.target === "after-shell" ? gate.FRONT_GATED_TARGETS : [action.target];
+      if (gated.every((target) => gate.frontGateSkips(target, dirs))) {
         hookTrace("adapter-front-gate-skip", { target: action.target });
         return 0;
       }
@@ -2504,7 +2510,9 @@ async function runAdapter(action: Extract<Action, { type: "adapter" }>): Promise
       action.target === "session-start" ||
       action.target === "continue-workflow" ||
       action.target === "verb-intercept" ||
-      action.target === "terminal-command-guard"
+      action.target === "terminal-command-guard" ||
+      action.target === "guard-tool-call" ||
+      action.target === "after-shell"
     ) {
       // Mirror the adapter entry point's dual-generation channel contract.
       // IDE 0.12 provides USER_PROMPT and leaves stdin open forever, so consume

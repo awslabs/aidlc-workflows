@@ -1685,11 +1685,31 @@ describe("t115 reviewer precondition (report refuses approve without a recorded 
     expect(result.out).toContain(
       '"reason_codes":["REVIEW_EVIDENCE_MISSING"]',
     );
-    expect(result.out).toContain('Otherwise ask \\"What should change?\\"');
+    // First time, a fresh review is the agent's own work: nothing is put to
+    // the person, and no question is published for them to answer.
+    expect(result.out).toContain('"agent_work":true');
+    expect(result.out).toContain("Request review iteration 1 against the current artifact");
+    expect(result.out).not.toContain("Request Changes");
     expect(result.out).not.toContain("Record the verdict for pending review");
     expect(result.out).not.toContain("--retry-pending");
+    const marker = join(seededRecordDir(p), ".aidlc-engine/active-directive.json");
+    const published = () => existsSync(marker) && /"ask_type":\s*"guard-recovery"/.test(readFileSync(marker, "utf-8"));
+    expect(published()).toBe(false);
     expect(readFileSync(statePath(p), "utf-8")).toBe(stateBefore);
     expect(readAllAuditShards(p)).toBe(auditBefore);
+
+    // The same refusal again: the person decides, by the words they read.
+    const again = orchestrate(
+      ["report", "--stage", "requirements-analysis", "--result", "awaiting-approval"],
+      p,
+      { AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD: "1" },
+    );
+    expect(again.status).toBe(0);
+    expect(again.out).not.toContain('"agent_work"');
+    expect(again.out).toContain('"label":"Request Changes"');
+    expect(again.out).toContain('Otherwise ask \\"What should change?\\"');
+    expect(again.out).not.toContain("Request review iteration 1");
+    expect(published()).toBe(true);
   }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   // R6 (blocker 1): the guard lives in handleApprove, so a DIRECT

@@ -1317,9 +1317,13 @@ function engineDirectedWhilePlanWaits(args: readonly string[], personAsked: () =
 // its recovery question, whose own picked remedy is the one move it carries out
 // (guardRecoveryAnswerAdmits). A step gone stale or superseded since names
 // nothing the person's earlier words still ask for: `next` names the step now.
+// Parked work's last step is the park, which no issued step outlives: what the
+// person types over it is theirs to make, and `next` names it.
 function lastStepAdmitsPersonsMoves(projectDir: string): boolean {
   try {
-    const marker = readActiveDirectiveMarker(projectDir, readFileSync(stateFilePath(projectDir), "utf-8"));
+    const state = readFileSync(stateFilePath(projectDir), "utf-8");
+    if ((getField(state, "Parked") ?? "").trim().length > 0) return true;
+    const marker = readActiveDirectiveMarker(projectDir, state);
     return marker !== null && marker.delivery !== "superseded" &&
       !(marker.kind === "ask" && marker.ask_type === GUARD_RECOVERY_ASK_TYPE);
   } catch {

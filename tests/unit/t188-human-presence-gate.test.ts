@@ -1850,6 +1850,59 @@ describe("t188: what the person's message asks for outlives the approval given i
 
   const planApproval = () => /- \*\*Plan Approval\*\*: (\S+)/.exec(readFileSync(seededStateFile(proj), "utf-8"))?.[1];
 
+  function autonomy(mode: "autonomous" | "gated"): { rc: number; out: string } {
+    const env: NodeJS.ProcessEnv = { ...process.env };
+    delete env.AIDLC_SKIP_HUMAN_PRESENCE_GUARD;
+    delete env.AIDLC_UNATTENDED;
+    const r = spawnSync(BUN, [join(AIDLC_SRC, "tools", "aidlc-bolt.ts"), "set-autonomy", "--mode", mode, "--project-dir", proj], {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+      encoding: "utf-8",
+      env,
+    });
+    return { rc: r.status ?? -1, out: `${r.stdout ?? ""}${r.stderr ?? ""}` };
+  }
+
+  const autonomyMode = () =>
+    /- \*\*Construction Autonomy Mode\*\*: (\S+)/.exec(readFileSync(seededStateFile(proj), "utf-8"))?.[1];
+
+  test("approve, and run Construction on its own: both halves of the one message are carried out", () => {
+    const slug = openGate();
+    recordHumanTurn(proj);
+    const approved = guarded(proj, ["approve", slug, "--user-input", "Approve"]);
+    expect(approved.rc, approved.out).toBe(0);
+    const grant = autonomy("autonomous");
+    expect(grant.rc, grant.out).toBe(0);
+    expect(autonomyMode()).toBe("autonomous");
+  });
+
+  test("approve the plan, and run Construction on its own: the plan answer leaves the grant standing", () => {
+    recordHumanTurn(proj);
+    appendAuditEntry("PLAN_APPROVAL_RECORDED", { Stage: "code-generation", Details: "Approve Plan", "Asked By": "engine" }, proj);
+    const grant = autonomy("autonomous");
+    expect(grant.rc, grant.out).toBe(0);
+    expect(autonomyMode()).toBe("autonomous");
+  });
+
+  test("the grant after an approval from an earlier message, or a second grant, waits for the person to say it again", () => {
+    const slug = openGate();
+    recordHumanTurn(proj);
+    expect(guarded(proj, ["approve", slug, "--user-input", "Approve"]).rc).toBe(0);
+    const next = field(proj, "Current Stage");
+    expect(guardedLog(proj, ["decision", "--stage", next, "--decision", "Which name?", "--options", "A,B"]).rc).toBe(0);
+    recordHumanTurn(proj);
+    expect(guardedLog(proj, ["answer", "--stage", next, "--details", "A"]).rc).toBe(0);
+    const refused = autonomy("autonomous");
+    expect(refused.rc).not.toBe(0);
+    expect(refused.out).toContain("no reply from the person is on record");
+    expect(autonomyMode()).not.toBe("autonomous");
+    // The step the refusal names: they choose it, and the grant runs once.
+    recordHumanTurn(proj);
+    expect(autonomy("autonomous").rc).toBe(0);
+    expect(autonomy("gated").rc).toBe(0);
+    expect(autonomy("autonomous").rc).not.toBe(0);
+    expect(autonomyMode()).toBe("gated");
+  });
+
   test("approve, and turn plan approval off: both halves of the one message are carried out", () => {
     const slug = openGate();
     recordHumanTurn(proj);

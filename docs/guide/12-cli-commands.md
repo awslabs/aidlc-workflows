@@ -1710,7 +1710,9 @@ aidlc engine bolt set-autonomy --mode gated
 ```
 
 Both update `Construction Autonomy Mode` and emit `AUTONOMY_MODE_SET`. Granting
-autonomy requires a fresh human turn; revocation does not. New checkpoint
+autonomy requires a message from the person since the last decision; an approval
+in that same message ("approve the plan, and run Construction on its own from
+here") leaves it standing. Revocation needs no message. New checkpoint
 workflows offer the choice at Construction entry with skeleton-off, or after
 the first working integrated Unit has passed its skeleton checkpoint with
 skeleton-on. A known choice is not asked again; on-demand changes remain valid.

@@ -34,8 +34,9 @@
 // Payload acquisition is GATED to tool-payload targets, the deterministic
 // terminal-command seams, and lifecycle boundaries that carry modern session
 // identity (SessionStart and Stop). Every other target is payload-independent
-// and never touches stdin — block fires on EVERY PreToolUse, and a 2s stall on
-// a never-closing stdin there would be felt on every tool call.
+// and never touches stdin. The guard card fires on every PreToolUse but a
+// read, and a 2s stall on a never-closing stdin there would be felt on nearly
+// every tool call.
 //
 // Consequences, by target:
 //   - audit-and-sensors: scrape the written file path from toolResult prose
@@ -96,7 +97,11 @@
 //                  audit-and-sensors | rebuild-stage-graph |
 //                  sync-workflow-state | log-subagent | continue-workflow |
 //                  session-end | verb-intercept | terminal-command-guard |
-//                  plan-approval-guard | review-freeze | state-transition-guard
+//                  plan-approval-guard | review-freeze | state-transition-guard |
+//                  guard-tool-call | after-shell
+// guard-tool-call and after-shell are registrations that run several of the
+// others (KIRO_HOOK_GROUPS in aidlc-kiro-tool-names.ts): Kiro shows one card
+// per hook run, so the person sees one card where they saw five, or two (#2022).
 
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { createHash, randomUUID } from "node:crypto";
@@ -171,6 +176,7 @@ import {
   isKiroShellTool,
   isLegacyPlanningWriteTool,
   isPlanApprovalSafeReadTool,
+  KIRO_HOOK_GROUPS,
   kiroNamedDelegate,
   mutationCapableTool,
 } from "./aidlc-kiro-tool-names.ts";
@@ -221,6 +227,7 @@ const INPUT_TARGETS = new Set([
   ...PAYLOAD_TARGETS,
   ...SESSION_ID_TARGETS,
   "verb-intercept",
+  ...Object.keys(KIRO_HOOK_GROUPS),
 ]);
 const LEGACY_SESSION_ID = "kiro-ide-legacy-current";
 const KIRO_IDE_SESSION_FILE = ".kiro-ide-current-session";
@@ -1195,11 +1202,75 @@ function aidlcCodeArgumentRefusal(hazard: CodeArgumentHazard): string {
   );
 }
 
+// The tool a hook payload names, from either channel's spelling, or null when
+// the payload cannot be read: then every member runs and judges it itself.
+function payloadToolName(input: string): string | null {
+  const raw = input.trim().length > 0 ? input : process.env.USER_PROMPT ?? "";
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (!isRecord(parsed)) return null;
+    const name = parsed.tool_name ?? parsed.toolName;
+    return typeof name === "string" ? name : null;
+  } catch {
+    return null;
+  }
+}
+
+// One registration, several targets (KIRO_HOOK_GROUPS). A member runs for the
+// tools its own registration selected. Every member runs, in order, even after
+// one refuses, as Kiro ran every hook; the call is refused when any member
+// refuses, and Kiro hands the agent the text on stderr, so it carries each
+// refusal once and nothing from a member that let the call through.
+async function runHookGroup(
+  members: ReadonlyArray<{ target: string; matcher: string }>,
+  input: string,
+  extraArgs: string[],
+): Promise<number> {
+  const toolName = payloadToolName(input);
+  const write = process.stderr.write;
+  let code = 0;
+  const refusals: string[] = [];
+  const failures: string[] = [];
+  for (const member of members) {
+    if (toolName !== null && !new RegExp(member.matcher).test(toolName)) continue;
+    standsOutsideMemo = undefined;
+    let said = "";
+    process.stderr.write = ((chunk: string | Uint8Array) => {
+      said += typeof chunk === "string" ? chunk : new TextDecoder().decode(chunk);
+      return true;
+    }) as typeof process.stderr.write;
+    let memberCode: number;
+    try {
+      memberCode = await run(member.target, input, extraArgs);
+    } catch (error) {
+      // A member that throws fails alone, as its own hook process did.
+      said += `${error instanceof Error ? error.stack ?? error.message : String(error)}\n`;
+      memberCode = 1;
+    } finally {
+      process.stderr.write = write;
+    }
+    if (memberCode === 2) {
+      code = 2;
+      if (said && !refusals.includes(said)) refusals.push(said);
+    } else if (memberCode !== 0) {
+      if (code === 0) code = memberCode;
+      if (said && !failures.includes(said)) failures.push(said);
+    }
+  }
+  const text = code === 2 ? refusals : failures;
+  if (code !== 0 && text.length > 0) process.stderr.write(text.join(""));
+  return code;
+}
+
 export async function run(
   target: string,
   input: string,
   _extraArgs: string[] = [],
 ): Promise<number> {
+// guard-tool-call and after-shell run their members, each as its own target.
+const group = Object.hasOwn(KIRO_HOOK_GROUPS, target) ? KIRO_HOOK_GROUPS[target] : undefined;
+if (group) return runHookGroup(group, input, _extraArgs);
+
 // LOAD-BEARING (not debug-only): this is the base dir for resolve(projectDir,
 // rawPath) that turns the IDE's workspace-relative write path into the absolute
 // path the core write-audit-log's record-root check needs — the core fix of this
@@ -1947,9 +2018,10 @@ if (target === "terminal-command-guard") {
 // and the conversational Stop marker only when workflow state exists.
 // The adapter separately tracks empty prompts against the terminal turn so
 // lowering is refused when IDE 1.0.242 hides what the person typed.
-// --- block: the preToolUse human-presence floor ---
+// --- enforce-approval-gate: the preToolUse human-presence floor ---
 //
-// Wired by aidlc-block.json (PreToolUse). Hard-blocks tool calls ONLY while
+// Run by aidlc-guard-tool-call.json (PreToolUse) for every tool but a read,
+// which cannot answer or change anything. Hard-blocks tool calls ONLY while
 // an approval gate is actually OPEN (a stage sits at [?] in the state file) and
 // no HUMAN_TURN has been recorded since the last gate resolution - the exit-2
 // floor behind the core handleApprove check. The gate-open predicate is

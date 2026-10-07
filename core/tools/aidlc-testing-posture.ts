@@ -59,6 +59,12 @@ import {
   readPlanApprovalResponse,
   readPlanApprovalViolation,
   readProtectedQuestion,
+  protectedQuestionsElsewhere,
+  moveProtectedQuestion,
+  DECISION_PAIRING_EVENTS,
+  decisionAnsweredBy,
+  sortAttemptEvents,
+  planApprovalChallengeRelativePath,
   readRegularFileNoFollowOrThrow,
   recordDir,
   recordFileTargetOrThrow,
@@ -3518,6 +3524,37 @@ function pickerAsksProtectedQuestion(
   return isOneOfChoices(picked, APPROVAL_GATE_CHOICES);
 }
 
+// The person may answer a Unit or batch checkpoint question in any chat. With
+// no question of its own in this chat, the checkpoint question another chat
+// asked moves here, with any reply already kept for it, so this reply pairs
+// with it and its approval needs no second answer. Only the newest question
+// asked in any chat moves, while nothing has answered it: a reply never pairs
+// with an older question, nor with one when another was asked after it.
+function checkpointQuestionFromAnotherChat(projectDir: string, session: string): ProtectedQuestion | null {
+  if (existsSync(join(projectDir, planApprovalChallengeRelativePath(projectDir, session)))) return null;
+  const elsewhere = protectedQuestionsElsewhere(projectDir, session)
+    .filter((question) => question.kind === "checkpoint-approval");
+  if (elsewhere.length === 0) return null;
+  const rows = sortAttemptEvents(readAuditShardEvents(projectDir).filter((row) => DECISION_PAIRING_EVENTS.has(row.event)));
+  const at = rows.findLastIndex((row) => row.event === "DECISION_RECORDED");
+  if (at === -1) return null;
+  const asked = rows[at].block;
+  const field = (name: string): string | null => auditBlockField(asked, name);
+  if (rows.slice(at + 1).some((row) =>
+    auditBlockField(row.block, "Stage") === field("Stage") && decisionAnsweredBy(asked, row.event, row.block))) {
+    return null;
+  }
+  const askedAbout = (target: Record<string, unknown>): boolean => target.fingerprint === field("Fingerprint") &&
+    (field("Checkpoint") === "Construction Unit Approval"
+      ? target.kind === "unit" && target.unit === field("Unit") && target.checkpointKind === field("Kind")
+      : field("Checkpoint") === "Swarm Batch Approval" && target.kind === "batch" &&
+        String(target.batch) === field("Batch number"));
+  const matching = elsewhere.filter((question) => askedAbout(question.target));
+  const question = matching.find((candidate) =>
+    readProtectedResponse(projectDir, candidate.session)?.challengeId === candidate.challengeId) ?? matching[0];
+  return question ? moveProtectedQuestion(projectDir, question, session) : null;
+}
+
 // The person's reply to a construction policy, verification command, or
 // Construction checkpoint question. The hook keeps that a person replied to
 // this exact question and their words, verbatim; the conductor reads them and
@@ -3528,13 +3565,14 @@ export function recordProtectedHumanResponse(
   picker?: PlanApprovalPickerQuestion,
 ): { recorded: boolean } {
   return withAuditLock(projectDir, () => {
-    const question = readProtectedQuestion(projectDir, session);
+    const text = responseText.trim();
+    const question = readProtectedQuestion(projectDir, session) ??
+      (text && !isNonAnswer(text) ? checkpointQuestionFromAnotherChat(projectDir, session) : null);
     if (!question) return { recorded: false };
     const picked = question.promptDigest !== undefined && questionText !== null;
     if (picked && !pickerAsksProtectedQuestion(question, questionText, picker, responseText)) {
       return { recorded: false };
     }
-    const text = responseText.trim();
     if (!text || isNonAnswer(text)) return { recorded: false };
     const previous = readProtectedResponse(projectDir, session);
     const earlier = previous?.challengeId === question.challengeId ? previous.words : undefined;

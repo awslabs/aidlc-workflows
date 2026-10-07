@@ -163,6 +163,7 @@ export function mutationCapableTool(name: string): boolean {
 }
 
 const shellNames = namesWhere((tool) => tool.role === "shell").join("|");
+const readNames = namesWhere((tool) => tool.role === "read").join("|");
 
 // The matcher each registration must carry, built from the table (read by
 // t245; the registrations themselves are hand-written JSON). PostToolUse
@@ -181,4 +182,25 @@ export const KIRO_HOOK_MATCHERS = {
   delegateCompletion: `^(${
     [`${NAMED_DELEGATE_PREFIX}.+`, ...namesWhere((tool) => tool.role === "delegate")].join("|")
   })$`,
+  // Every name but the table's reads, which cannot change the workspace, so a
+  // name the table does not know still reaches the checks.
+  notReadPreToolUse: `^(?!(?:${readNames})$)`,
 } as const;
+
+// Kiro IDE shows a card for every hook run (#2022), so one registration runs
+// several adapter targets: the five tool-call checks, and the two hooks after a
+// shell command. Each member keeps the matcher its own registration had, in the
+// file-name order Kiro ran those registrations; the read-only tools reach none.
+export const KIRO_HOOK_GROUPS: Readonly<Record<string, ReadonlyArray<{ target: string; matcher: string }>>> = {
+  "guard-tool-call": [
+    { target: "enforce-approval-gate", matcher: KIRO_HOOK_MATCHERS.notReadPreToolUse },
+    { target: "plan-approval-guard", matcher: KIRO_HOOK_MATCHERS.notReadPreToolUse },
+    { target: "review-freeze", matcher: KIRO_HOOK_MATCHERS.writeOrShellPreToolUse },
+    { target: "state-transition-guard", matcher: KIRO_HOOK_MATCHERS.writeOrShellPreToolUse },
+    { target: "terminal-command-guard", matcher: KIRO_HOOK_MATCHERS.shellPreToolUse },
+  ],
+  "after-shell": [
+    { target: "rebuild-stage-graph", matcher: KIRO_HOOK_MATCHERS.shellPostToolUse },
+    { target: "sync-workflow-state", matcher: KIRO_HOOK_MATCHERS.shellPostToolUse },
+  ],
+};

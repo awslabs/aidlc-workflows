@@ -182,14 +182,18 @@ export const REVIEW_FREEZE_FALLBACK_GUIDANCE =
   "change (ask only if they have not said), before editing the document; that " +
   "unlocks it for revision and a fresh review.";
 
+// The way out names the Unit whose document was refused, never the Unit the
+// walk happens to be on: redoing another Unit's step throws its work away and
+// leaves this document frozen.
 export function reviewFreezeRecoveryGuidance(
   projectDir: string,
   stateContent: string,
   stageSlug: string,
   guidanceReader: typeof recoveryGuidance = recoveryGuidance,
+  options: Parameters<typeof recoveryGuidance>[3] = {},
 ): string {
   try {
-    return guidanceReader(projectDir, stateContent, stageSlug);
+    return guidanceReader(projectDir, stateContent, stageSlug, options);
   } catch {
     return REVIEW_FREEZE_FALLBACK_GUIDANCE;
   }
@@ -423,7 +427,10 @@ async function checkFreeze(input: string, projectDir: string): Promise<number> {
   });
   const guidance =
     evaluated.remedies.find((remedy) => remedy.executableNow)?.action ??
-    reviewFreezeRecoveryGuidance(projectDir, stateContent, stage.slug);
+    reviewFreezeRecoveryGuidance(projectDir, stateContent, stage.slug, recoveryGuidance, {
+      ...(verdict.unit ? { unit: verdict.unit } : {}),
+      ...(teamGate ? { teamGate } : {}),
+    });
   const refusal = {
     ...evaluated,
     userMessage: blockReason(verdict, guidance),

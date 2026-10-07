@@ -1022,10 +1022,14 @@ describe("t278 engine-emitted wave contract", () => {
     expect(frozen.out).toContain("--result revised");
     expect(frozen.out).not.toContain("Request Changes");
     expect(frozen.out).not.toContain("--result rejected");
-    // The recovery question the refusal left is what the next `next` asks.
+    // What the refusal left is what the next `next` hands on: finishing the
+    // revision is the agent's own work, so the person is not asked to choose it
+    // over starting the stage again; they judge at the approval it reopens.
     const asked = JSON.stringify(next(proj).directive);
     expect(asked).toContain('"ask_type":"guard-recovery"');
-    expect(asked).toContain("/aidlc --stage functional-design");
+    expect(asked).toContain('"agent_work":true');
+    expect(asked).toContain("--result revised");
+    expect(asked).not.toContain("/aidlc --stage functional-design");
     expect(asked).not.toContain("Request Changes");
     expect(asked).not.toContain("--result rejected");
 

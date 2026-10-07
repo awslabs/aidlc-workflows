@@ -128,11 +128,21 @@ route that refuses a tool call does, and a forwarded core hook's stderr is
 relayed when it exits 2; stdout from a PreToolUse hook never reaches the model.
 Several PreToolUse hooks run one after another in file-name order, every one
 runs even after an earlier one blocks, and a block from a hook between two
-others still delivers its reason. So `aidlc-terminal-command-guard`, which
-runs after `aidlc-enforce-approval-gate`, runs no terminal command while that
-hook's approval gate is waiting for the person: the gate hook refuses the call,
-and the command would otherwise still act. A hook with no matcher also sees Kiro's own background
-`memory` tool calls. On 1.1.14 the PreToolUse `fs_write` input is
+others still delivers its reason. Kiro IDE shows one "Run Command Hook" card
+for every hook run, so AI-DLC registers its five tool-call checks as one hook,
+`aidlc-guard-tool-call`, which runs them as Kiro ran the separate hooks: in the
+same order (`enforce-approval-gate`, `plan-approval-guard`, `review-freeze`,
+`state-transition-guard`, `terminal-command-guard`), each for the tools its
+own registration selected, every one even after an earlier one refuses. The
+call is refused when any check refuses, with each refusal's text once and
+nothing from a check that let it through (#2022). So `terminal-command-guard`
+runs no terminal command while the approval gate is waiting for the person:
+the gate check refuses the call, and the command would otherwise still act.
+Its matcher leaves out only the reads in the adapter's tool-name table, which
+cannot answer an approval or change the workspace; a name the table does not
+know, such as Kiro's own background `memory` tool, still reaches the checks.
+The two hooks after a shell command run the same way as one,
+`aidlc-after-shell`. On 1.1.14 the PreToolUse `fs_write` input is
 `{path, text}`, and the shell input matches the 1.0.242 row above.
 
 ## Consequences for each hook
@@ -163,7 +173,8 @@ and the command would otherwise still act. A hook with no matcher also sees Kiro
   `execute_bash`, Windows `execute_pwsh`, and the `shell` alias — the
   IDE surfaces no task event the sync could parse.
 - **front gate for the two audit-tail hooks**: they run after every shell
-  command, so the dispatcher's `engine adapter kiro-ide` route looks first,
+  command, as the `aidlc-after-shell` card, so the dispatcher's
+  `engine adapter kiro-ide` route looks first,
   without loading the engine (`core/tools/aidlc-hook-front-gate.ts`). When
   either hook finds nothing to do from a record's files it leaves
   `<hook>.noop` in that record's `.aidlc-engine/hooks-health/`. The gate skips
@@ -173,7 +184,8 @@ and the command would otherwise still act. A hook with no matcher also sees Kiro
   rewrites its existing `rebuild-stage-graph.last` heartbeat as the full hook
   would. A link, the flat layout from before spaces, hook debugging, a timestamp
   ahead of the clock, or a change within the margin runs the full hook. The
-  guards, writes, prompts and every other target always run in full.
+  card is skipped only when both hooks are. The guards, writes, prompts and
+  every other target always run in full.
 - **log-subagent** — payload-dependent. IDE 0.12 sent `invoke_sub_agent`; 1.x
   (1.0.89-1.0.138) sent `subagent_<agent>` instead, each preceded by an empty
   `subagent_response` shell (`"Response recorded."`). The registration matcher
@@ -185,11 +197,11 @@ and the command would otherwise still act. A hook with no matcher also sees Kiro
   so agent-authored result prose cannot misattribute the audit row — and falls
   back to the `**Reviewer:**` / `**Agent:**` result marker from #459, which is
   the only identity signal on the 0.12 `invoke_sub_agent` shape.
-- **review-freeze / state-transition-guard** — each has its own PreToolUse
-  registration. Its matcher names exactly the write and shell tools the adapter
+- **review-freeze / state-transition-guard**: each runs in the
+  `aidlc-guard-tool-call` card with its own matcher, which names exactly the write and shell tools the adapter
   forwards (`write`, `fs_write`, `create_file`, `str_replace`, `fs_append`,
   `delete_file`, `apply_patch`, `edit_file`, `execute_bash`, `execute_pwsh`,
-  `shell`), so a read, a search or a `memory` call starts neither hook. No
+  `shell`), so a read, a search or a `memory` call reaches neither check. No
   payload of `create_file`, `apply_patch` or `edit_file` is captured: each is
   checked by the path fields the adapter reads, and one with none (a patch
   whose paths are only in its text) is refused as described below. A write tool the adapter recognizes is forwarded

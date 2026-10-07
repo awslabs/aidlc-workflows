@@ -27,11 +27,14 @@ import {
 } from "./aidlc-runtime-paths.ts";
 export { entrySkillInvocation, SPACE_NAME_REGEX } from "./aidlc-runtime-paths.ts";
 import {
+  GUARD_REMEDY_WORDING,
   guardOperationInvocation,
   guardOperationMatchesEngineArgs,
   guardOperationMatchesRemedy,
   type GuardRecoveryInteraction,
   type GuardRecoveryOperation,
+  type GuardRemedyWording,
+  type GuardRemedyWordingContext,
   isGuardRecoveryOperation,
   renderEngineInvocation,
   renderGuardOperation,
@@ -4785,6 +4788,30 @@ export function requireProtectedResponse(
   }
 }
 
+/** The protected questions open in chats other than `session`'s, in file-name order. */
+export function protectedQuestionsElsewhere(projectDir: string, session: string): ProtectedQuestion[] {
+  const dir = planApprovalRuntimeDir(projectDir);
+  const own = basename(protectedQuestionPath(projectDir, session));
+  let names: string[];
+  try { names = readdirSync(dir).sort(); } catch { return []; }
+  return names.filter((name) => /^protected-question-(?!response-).+\.json$/.test(name) && name !== own)
+    .map((name) => readPlanApprovalRuntimeJson<ProtectedQuestion>(join(dir, name), "Protected question"))
+    .map((value) => typeof value?.session === "string" ? readProtectedQuestion(projectDir, value.session) : null)
+    .filter((question): question is ProtectedQuestion => question !== null && question.session !== session);
+}
+
+/** A question another chat asked, and any reply kept for it, now belong to `session`'s chat. */
+export function moveProtectedQuestion(projectDir: string, question: ProtectedQuestion, session: string): ProtectedQuestion {
+  const response = readProtectedResponse(projectDir, question.session);
+  const moved = { ...question, session };
+  ensurePlanApprovalRuntimeDir(projectDir);
+  writeFileAtomic(protectedQuestionPath(projectDir, session), `${JSON.stringify(moved, null, 2)}\n`);
+  if (response?.challengeId === question.challengeId) writeProtectedResponse(projectDir, { ...response, session });
+  removeRuntimeFile(protectedQuestionPath(projectDir, question.session));
+  removeRuntimeFile(protectedResponsePath(projectDir, question.session));
+  return moved;
+}
+
 export function consumeProtectedQuestion(projectDir: string, session: string): void {
   withdrawProtectedQuestions(projectDir, session);
 }
@@ -7493,6 +7520,8 @@ export interface ActiveDirectiveOutOfDate {
 
 export interface ActiveDirectiveGuardRemedy {
   op: GuardRemedyOp;
+  // The name the person was shown, so typing it back is an exact pick.
+  label?: string;
   action: string;
   operation?: GuardRecoveryOperation;
   interaction?: GuardRecoveryInteraction;
@@ -8282,9 +8311,10 @@ function validActiveDirectiveGuardRemedies(
   return Array.isArray(value) && value.every((remedy) => {
     if (!isPlainObject(remedy)) return false;
     return Object.keys(remedy).every((key) =>
-      ["op", "action", "operation", "interaction"].includes(key)
+      ["op", "label", "action", "operation", "interaction"].includes(key)
     ) &&
       isGuardRemedyOp(remedy.op) &&
+      (!("label" in remedy) || typeof remedy.label === "string") &&
       typeof remedy.action === "string" &&
       (!("operation" in remedy) || isGuardRecoveryOperation(remedy.operation)) &&
       (!("interaction" in remedy) ||
@@ -9155,6 +9185,23 @@ export function keepPlanApprovalAskOverStateWrite(
       : { marker, result: false, preserve: true });
 }
 
+// Running Construction on its own changes how later approvals are taken, not
+// the step already issued: the plan question, or the build of the plan the
+// person approved, stays the open step, so nothing they answered is asked
+// again. Only its state digest follows the write; a step mid-claim is left as
+// it is.
+export function keepActiveDirectiveOverAutonomyWrite(
+  projectDir: string,
+  previousStateContent: string,
+  nextStateContent: string,
+): boolean {
+  return transactActiveDirective(projectDir, (marker) =>
+    marker?.version === 2 && marker.active_attempt?.status !== "pending" &&
+      marker.state_sha256 === stateDigest(previousStateContent)
+      ? { marker: { ...marker, state_sha256: stateDigest(nextStateContent) }, result: true }
+      : { marker, result: false, preserve: true });
+}
+
 export function refreshActiveDirectiveMarker(
   projectDir: string,
   stage: string,
@@ -9292,10 +9339,12 @@ export function consumeSharedDirectiveAsk(
     const response = marker.guard_recovery_response;
     // A reply that is exactly one remedy ("2", its label) is the person's pick:
     // syntax, recorded now. Any other reply waits for the conductor's reading.
-    // The person sees the agent's rendering of each remedy: its number, the op
-    // as written or in plain words ("Request Changes"), or its action text.
+    // The person sees each remedy by its number and the name the engine wrote
+    // for them (`label`); an older rendering showed the op as written or in
+    // plain words ("Request Changes"), or its action text.
     const remedies = marker.remedies ?? [];
-    const pick = exactOptionPick(humanResponseText, remedies.map((remedy) => remedy.action)) ??
+    const pick = exactOptionPick(humanResponseText, remedies.map((remedy) => remedy.label ?? remedy.action)) ??
+      exactOptionPick(humanResponseText, remedies.map((remedy) => remedy.action)) ??
       exactOptionPick(humanResponseText, remedies.map((remedy) => remedy.op)) ??
       exactOptionPick(humanResponseText, remedies.map((remedy) => remedy.op.replace(/-/g, " ")));
     const picked = pick === null ? null : remedies[pick];
@@ -9414,6 +9463,7 @@ function offeredGuardRemedy(
   const head = text.split(/[:;]/)[0].trim();
   const matches = remedies.filter((remedy) =>
     remedy.op === head || remedy.op.replace(/-/g, " ") === head ||
+    (remedy.label !== undefined && remedy.label.trim().toLowerCase() === head) ||
     stripRecommendedDecorator(remedy.action).trim().toLowerCase() === head);
   return matches.length === 1 ? matches[0] : null;
 }
@@ -9469,7 +9519,7 @@ export function recordGuardRecoveryChoice(
     if (response.picked_by === "person" && response.selected_op && response.selected_op !== remedy.op) {
       const theirs = (marker.remedies ?? []).find((offered) => offered.op === response.selected_op);
       throw new Error(
-        `The person picked "${theirs?.action ?? response.selected_op}" on this question. Carry that out, or ask ` +
+        `The person picked "${theirs?.label ?? theirs?.action ?? response.selected_op}" on this question. Carry that out, or ask ` +
           "them if they meant something else.",
       );
     }
@@ -11303,7 +11353,7 @@ export function commandTurnHint(projectDir: string): string {
 // second approval, or an approval after a message that was no reply (so not
 // from it) uses it up, as it does everywhere else. Turns at the same second
 // in two shards are unordered, so they prove nothing.
-function requestOutlivesItsApproval(projectDir: string, intent?: string, space?: string): boolean {
+function requestOutlivesItsApproval(projectDir: string, intent?: string, space?: string, replies = false): boolean {
   try {
     const unreadable: string[] = [];
     const rows = readAuditShardEvents(projectDir, intent, space, unreadable);
@@ -11313,7 +11363,7 @@ function requestOutlivesItsApproval(projectDir: string, intent?: string, space?:
     const latest = turns.filter((row) => row.timestamp === latestTs);
     if (latest.length === 0 || latest.some((row) => row.shardIndex !== latest[0].shardIndex)) return false;
     const turn = latest.reduce((last, row) => (row.pos > last.pos ? row : last));
-    if (!isRequestTurn(turn)) return false;
+    if (!isRequestTurn(turn) || (replies && !isReplyTurn(turn))) return false;
     const theirs = new Set<string>();
     for (const row of rows) {
       const after = row.timestamp > turn.timestamp ||
@@ -11343,8 +11393,9 @@ function requestOutlivesItsApproval(projectDir: string, intent?: string, space?:
 // With `replies`, the turn must be a reply, not only a command to AIDLC; with
 // `requests`, anything but a question about a switch. With `intent` and
 // `space`, the turn must be on that work's record. With `outlivesApproval`,
-// for what the message asks for (a setter, a stop), the approval given in it
-// and the run's own approvals do not use it up (requestOutlivesItsApproval).
+// for what the message asks for (a setter, a stop, the grant of autonomy), the
+// approval given in it and the run's own approvals do not use it up
+// (requestOutlivesItsApproval); with `replies` too, that message is a reply.
 // An approval or an answer never reads it that way: each needs a reply of its own.
 export function personSpokeSinceGate(
   projectDir: string,
@@ -11352,7 +11403,8 @@ export function personSpokeSinceGate(
 ): boolean {
   if (
     humanTurnState(projectDir, options) !== "acted" &&
-    !(options.outlivesApproval === true && requestOutlivesItsApproval(projectDir, options.intent, options.space))
+    !(options.outlivesApproval === true &&
+      requestOutlivesItsApproval(projectDir, options.intent, options.space, options.replies === true))
   ) {
     return false;
   }
@@ -28590,6 +28642,11 @@ export type GuardRemedyOp = (typeof GUARD_REMEDY_OPS)[number];
 
 export interface GuardRemedy {
   op: GuardRemedyOp;
+  // A way on put to the person: its name and one line saying what happens,
+  // in their words (GUARD_REMEDY_WORDING). The conductor's own ways on
+  // (`external-work`) carry none; it does them without asking.
+  label?: string;
+  description?: string;
   action: string;
   operation?: GuardRecoveryOperation;
   interaction?: GuardRecoveryInteraction;
@@ -29139,6 +29196,20 @@ function remedyInteraction(remedy: GuardRemedy): GuardRecoveryInteraction {
   return remedy.operation ? "command" : remedy.requiresHuman ? "human-input" : "external-work";
 }
 
+// The stage as the person knows it. The way-on question must never fail to
+// build, so an unreadable stage graph leaves the stage named as it is stored.
+function guardStageName(stage: string): string {
+  try {
+    return findStageBySlug(stage)?.name ?? stage;
+  } catch {
+    return stage;
+  }
+}
+
+// Every op decides what the person reads (or that it is the conductor's own
+// work): a new op cannot compile without an entry.
+const GUARD_REMEDY_WORDING_BY_OP: Record<GuardRemedyOp, GuardRemedyWording> = GUARD_REMEDY_WORDING;
+
 // Pure: reads nothing from disk. The same input always yields the same refusal,
 // which is what lets the enforcing tool and the router agree.
 export function evaluateGuardRefusal(
@@ -29377,6 +29448,17 @@ export function evaluateGuardRefusal(
     remedies.push(lowerFenceRemedy(input.fence));
   }
 
+  const wordingUnit = input.unit ?? input.autonomousBolt?.unit;
+  const stageName = guardStageName(input.stage);
+  const wording: GuardRemedyWordingContext = {
+    code: input.code,
+    stage: stageName,
+    target: wordingUnit ? `${stageName} for ${wordingUnit}` : stageName,
+    ...(wordingUnit ? { unit: wordingUnit } : {}),
+    ...(input.fence ? { fence: input.fence } : {}),
+    sourceUnbindable: input.attempt.sourceCoverage === "unbindable",
+    everyUnit: soloUnitMajorRefusal(input) !== null,
+  };
   return {
     code: input.code,
     blockedAction: input.blockedAction,
@@ -29385,7 +29467,11 @@ export function evaluateGuardRefusal(
     state,
     invariant: input.invariant,
     userMessage: input.userMessage,
-    remedies: remedies.map((remedy) => ({ ...remedy, interaction: remedyInteraction(remedy) })),
+    remedies: remedies.map((remedy) => {
+      const interaction = remedyInteraction(remedy);
+      const words = interaction === "external-work" ? null : GUARD_REMEDY_WORDING_BY_OP[remedy.op]?.(wording);
+      return { ...(words ? { op: remedy.op, ...words } : {}), ...remedy, interaction };
+    }),
   };
 }
 
@@ -29645,6 +29731,11 @@ export interface GuardRecoveryAskData {
   // Present only on the terminal ask: the same guard state has refused past the
   // cap with no executable remedy. Names the situation for escalation.
   state_signature?: string;
+  // The ways on are the conductor's own work: it carries out the first that
+  // applies without asking. Never published as the person's question.
+  agent_work?: true;
+  // Terminal ask only: the refusal as the tool told it, for the conductor.
+  detail?: string;
 }
 
 function guardRefusalPath(
@@ -29811,7 +29902,18 @@ export function guardRefusalStreakView(
     refusal,
     updatedAt: isoTimestamp(),
   };
-  const ask = guardRecoveryAskForRefusal(refusal);
+  // The conductor takes the ways on it can do itself, the first time. Only
+  // when the same refusal comes back, or there are none, is the person asked,
+  // and then only with the ways on that need them.
+  const own = (remedy: GuardRemedy) => (remedy.interaction ?? remedyInteraction(remedy)) === "external-work";
+  const theirs = refusal.remedies.filter((remedy) => !own(remedy));
+  const ownWork = count === 1
+    ? guardRecoveryAskForRefusal({ ...refusal, remedies: refusal.remedies.filter(own) })
+    : null;
+  if (ownWork !== null) {
+    return { count, signature, record, ask: { ...ownWork, agent_work: true } };
+  }
+  const ask = guardRecoveryAskForRefusal({ ...refusal, remedies: theirs });
   if (ask !== null) {
     return {
       count,
@@ -29878,16 +29980,9 @@ export function recordGuardRefusal(
   return streak;
 }
 
-// The stage, and its Unit when there is one, as the person knows them. The
-// way-out question must never fail to build, so an unreadable stage graph
-// leaves the stage named as it is stored.
+// The stage, and its Unit when there is one, as the person knows them.
 function guardRefusalTarget(refusal: GuardRefusal): string {
-  let name = refusal.stage;
-  try {
-    name = findStageBySlug(refusal.stage)?.name ?? refusal.stage;
-  } catch {
-    // The stage graph is unreadable here: keep the stored name.
-  }
+  const name = guardStageName(refusal.stage);
   return refusal.unit ? `${name} for ${refusal.unit}` : name;
 }
 
@@ -29934,12 +30029,13 @@ export function guardTerminalAskForRefusal(
 ): GuardRecoveryAskData {
   // In the person's terms: where the work stopped and that it needs them. The
   // refusal code and the state signature stay in the ask's fields (and the
-  // signature at the end of a repeated stop, for a report).
+  // signature at the end of a repeated stop, for a report). The tool's own
+  // message talks to the conductor, so it goes on `detail`, never the question.
   const target = guardRefusalTarget(refusal);
-  const why = refusal.userMessage.trim().length > 0 ? ` ${refusal.userMessage.trim()}` : "";
+  const why = refusal.userMessage.trim();
   const situation =
     `I stopped at ${target}: this step cannot go ahead, and there is ` +
-    `nothing I can safely do about it on my own.${why}`;
+    "nothing I can safely do about it on my own.";
   return {
     kind: "ask",
     ask_type: GUARD_RECOVERY_ASK_TYPE,
@@ -29953,6 +30049,7 @@ export function guardTerminalAskForRefusal(
     reason_codes: streak.codes,
     remedies: [],
     state_signature: streak.signature,
+    detail: `${refusal.code} on ${refusal.blockedAction} (${refusal.state}).${why ? ` ${why}` : ""}`,
   };
 }
 
@@ -37912,8 +38009,12 @@ export function guardSwitchRefusal(
   context: "config" | "intent-create",
   // The person only asked about the switch since the last decision.
   asked = false,
+  projectDir?: string,
 ): string {
-  const hint = humanTurnMintAllowed() ? "" : unattendedHumanPresenceHint();
+  // At the person's own terminal no chat reply can arrive, so the step that
+  // works there is named in place of the chat's.
+  const ownTerminal = humanTurnMintAllowed() && personAtOwnTerminal(projectDir);
+  const hint = humanTurnMintAllowed() && !ownTerminal ? "" : unattendedHumanPresenceHint(projectDir);
   const entry = entrySkillInvocation();
   // Before the work exists, the person's own words at the compose gate or
   // scope confirmation are what turn a check off for it. Otherwise the agent
@@ -37934,23 +38035,25 @@ export function guardSwitchRefusal(
   // Lowering a check is the person's call: the setter carries it out when a
   // person has spoken since the last decision, so this refusal means no reply
   // from them has arrived (or an unattended driver is running).
-  const wait = "No reply from the person has arrived since the last decision: run it when they ask for it.";
+  const wait = (typed: string): string => ownTerminal
+    ? ""
+    : ` No reply from the person has arrived since the last decision: run it when they ask for it. They can also type \`${typed}\`.`;
   if (asked) {
     return "The person asked a question about this check, which turns nothing off. Answer it in one line, offer to " +
       "turn it off for this piece of work, and show the question you asked them again. When they say yes or ask " +
       `for it, run the setter.${hint}`;
   }
   if (wanted.key === "plan-approval") {
-    return `Turning plan approval off lets code generation start without the person approving the plan, so it is their call. ${wait} They can also type \`${entry} config set plan-approval off\`.${hint}`;
+    return `Turning plan approval off lets code generation start without the person approving the plan, so it is their call.${wait(`${entry} config set plan-approval off`)}${hint}`;
   }
   if (wanted.key === "summary-confirmation") {
-    return `Turning summary confirmation off skips the person's \`Looks correct\` check before a stage writes its output, so it is their call. ${wait} They can also type \`${entry} config set summary-confirmation off\`.${hint}`;
+    return `Turning summary confirmation off skips the person's \`Looks correct\` check before a stage writes its output, so it is their call.${wait(`${entry} config set summary-confirmation off`)}${hint}`;
   }
   if (wanted.key !== "guard-policy") {
     const fence = wanted.key.slice("guard.".length);
-    return `Turning the ${fence} check off is the person's call. ${wait} They can also type \`${entry} config set guard.${fence} off\`.${hint}`;
+    return `Turning the ${fence} check off is the person's call.${wait(`${entry} config set guard.${fence} off`)}${hint}`;
   }
-  return `Setting Guard Policy ${wanted.value} lowers fences, which is the person's call. ${wait} They can also type \`${entry} --guard-policy ${wanted.value}\`.${hint}`;
+  return `Setting Guard Policy ${wanted.value} lowers fences, which is the person's call.${wait(`${entry} --guard-policy ${wanted.value}`)}${hint}`;
 }
 
 export function parseGuardFence(raw: string | null | undefined): GuardFence | null {

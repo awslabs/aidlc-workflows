@@ -16,6 +16,7 @@ import {
   isKiroDelegationTool,
   isKiroShellTool,
   isPlanApprovalSafeReadTool,
+  KIRO_HOOK_GROUPS,
   KIRO_HOOK_MATCHERS,
   mutationCapableTool,
 } from "../../harness/kiro-ide/hooks/aidlc-kiro-tool-names.ts";
@@ -60,14 +61,11 @@ const EXPECTED_V2_REGISTRATIONS: Array<{
   { file: "aidlc-session-start.json", trigger: "SessionStart", matcher: null, adapterTarget: "session-start" },
   { file: "aidlc-record-human-turn.json", trigger: "UserPromptSubmit", matcher: null, adapterTarget: "record-human-turn" },
   { file: "aidlc-terminal-command.json", trigger: "UserPromptSubmit", matcher: null, adapterTarget: "verb-intercept" },
-  { file: "aidlc-terminal-command-guard.json", trigger: "PreToolUse", matcher: KIRO_HOOK_MATCHERS.shellPreToolUse, adapterTarget: "terminal-command-guard" },
-  { file: "aidlc-enforce-approval-gate.json", trigger: "PreToolUse", matcher: null, adapterTarget: "enforce-approval-gate" },
-  { file: "aidlc-plan-approval-guard.json", trigger: "PreToolUse", matcher: null, adapterTarget: "plan-approval-guard" },
-  { file: "aidlc-review-freeze.json", trigger: "PreToolUse", matcher: KIRO_HOOK_MATCHERS.writeOrShellPreToolUse, adapterTarget: "review-freeze" },
-  { file: "aidlc-state-transition-guard.json", trigger: "PreToolUse", matcher: KIRO_HOOK_MATCHERS.writeOrShellPreToolUse, adapterTarget: "state-transition-guard" },
+  // Kiro IDE shows a card for every hook run (#2022), so the five tool-call
+  // checks share one registration and the two after-shell hooks another.
+  { file: "aidlc-guard-tool-call.json", trigger: "PreToolUse", matcher: KIRO_HOOK_MATCHERS.notReadPreToolUse, adapterTarget: "guard-tool-call" },
   { file: "aidlc-write-audit-log.json", trigger: "PostToolUse", matcher: KIRO_HOOK_MATCHERS.auditedWrite, adapterTarget: "audit-and-sensors" },
-  { file: "aidlc-rebuild-stage-graph.json", trigger: "PostToolUse", matcher: KIRO_HOOK_MATCHERS.shellPostToolUse, adapterTarget: "rebuild-stage-graph" },
-  { file: "aidlc-sync-workflow-state.json", trigger: "PostToolUse", matcher: KIRO_HOOK_MATCHERS.shellPostToolUse, adapterTarget: "sync-workflow-state" },
+  { file: "aidlc-after-shell.json", trigger: "PostToolUse", matcher: KIRO_HOOK_MATCHERS.shellPostToolUse, adapterTarget: "after-shell" },
   { file: "aidlc-log-subagent.json", trigger: "PostToolUse", matcher: KIRO_HOOK_MATCHERS.delegateCompletion, adapterTarget: "log-subagent" },
   { file: "aidlc-continue-workflow.json", trigger: "Stop", matcher: null, adapterTarget: "continue-workflow" },
 ];
@@ -79,6 +77,14 @@ const RETIRED_HOOK_BASENAMES = [
   "runtime-compile",
   "stop",
   "sync-statusline",
+  // Folded into aidlc-guard-tool-call and aidlc-after-shell (#2022).
+  "enforce-approval-gate",
+  "plan-approval-guard",
+  "review-freeze",
+  "state-transition-guard",
+  "terminal-command-guard",
+  "rebuild-stage-graph",
+  "sync-workflow-state",
 ];
 
 function parseHookJson(dir: string, file: string): HookFile {
@@ -138,6 +144,29 @@ describe("t245 Kiro IDE hook registrations (v2 schema contract)", () => {
         // Unrelated tools must not.
         expect(matcher.test("fs_write")).toBe(false);
         expect(matcher.test("execute_bash")).toBe(false);
+      });
+
+      // Kiro compiles a matcher with new RegExp and tests it against the tool
+      // name; one that does not compile makes the hook never run, so the
+      // checks would stop silently. The reads are the only tools left out.
+      test("the one guard card skips exactly the table's reads, as Kiro compiles its matcher", () => {
+        const parsed = parseHookJson(tree.dir, "aidlc-guard-tool-call.json");
+        const matcher = new RegExp(parsed.hooks[0].matcher ?? "");
+        for (const name of [
+          "read", "fs_read", "read_file", "read_files", "read_code", "list_directory", "file_search", "glob",
+          "grep_search", "grep", "web_fetch", "web_search", "disclose_context", "thinking", "todo_list",
+        ]) {
+          expect(isPlanApprovalSafeReadTool(name), name).toBe(true);
+          expect(matcher.test(name), name).toBe(false);
+        }
+        for (const name of [
+          "fs_write", "str_replace", "fs_append", "write", "create_file", "delete_file", "apply_patch", "edit_file",
+          "execute_bash", "execute_pwsh", "shell", "invoke_sub_agent", "orchestrate_subagent",
+          "subagent_aidlc-developer-agent", "subagent_response", "memory", "user_input", "report_progress",
+          "mcp_some_server_tool", "read_file_and_write", "some_future_tool", "",
+        ]) {
+          expect(matcher.test(name), name).toBe(true);
+        }
       });
 
       test("the tool-name table ships beside the adapter, which reads it", () => {
@@ -271,6 +300,43 @@ describe("t245 Kiro IDE hook registrations (v2 schema contract)", () => {
         row.transport.deterministic_output,
       );
       expect(row.model.followup.length).toBeGreaterThan(0);
+    }
+  });
+});
+
+// Each check that now shares a registration keeps the tools its own
+// registration selected, in the order Kiro ran those files (file-name order).
+describe("t245 one card runs the checks that had their own cards", () => {
+  test("the guard card runs the five tool-call checks in their old order with their old matchers", () => {
+    expect(KIRO_HOOK_GROUPS["guard-tool-call"]).toEqual([
+      { target: "enforce-approval-gate", matcher: KIRO_HOOK_MATCHERS.notReadPreToolUse },
+      { target: "plan-approval-guard", matcher: KIRO_HOOK_MATCHERS.notReadPreToolUse },
+      { target: "review-freeze", matcher: KIRO_HOOK_MATCHERS.writeOrShellPreToolUse },
+      { target: "state-transition-guard", matcher: KIRO_HOOK_MATCHERS.writeOrShellPreToolUse },
+      { target: "terminal-command-guard", matcher: KIRO_HOOK_MATCHERS.shellPreToolUse },
+    ]);
+  });
+
+  test("the after-shell card runs the rebuild, then the sync, for the old shell matcher", () => {
+    expect(KIRO_HOOK_GROUPS["after-shell"]).toEqual([
+      { target: "rebuild-stage-graph", matcher: KIRO_HOOK_MATCHERS.shellPostToolUse },
+      { target: "sync-workflow-state", matcher: KIRO_HOOK_MATCHERS.shellPostToolUse },
+    ]);
+  });
+
+  test("each card's matcher reaches every tool one of its checks acts on", () => {
+    for (const [file, group] of [
+      ["aidlc-guard-tool-call.json", "guard-tool-call"],
+      ["aidlc-after-shell.json", "after-shell"],
+    ] as const) {
+      const registration = new RegExp(parseHookJson(AUTHORED_HOOKS, file).hooks[0].matcher ?? "");
+      for (const name of [
+        "read_file", "list_directory", "fs_write", "str_replace", "fs_append", "delete_file", "execute_bash",
+        "execute_pwsh", "shell", "invoke_sub_agent", "subagent_response", "memory", "some_future_tool",
+      ]) {
+        const anyCheck = KIRO_HOOK_GROUPS[group].some((member) => new RegExp(member.matcher).test(name));
+        expect(registration.test(name), `${file} ${name}`).toBe(anyCheck);
+      }
     }
   });
 });

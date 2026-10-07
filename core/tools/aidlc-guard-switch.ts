@@ -444,7 +444,7 @@ export function applyIntentSettings(
     !personSpokeSinceGate(projectDir, { requests: true, outlivesApproval: true })
   ) {
     // A question about the switch ("skip plan approval?") asks for nothing.
-    die(guardSwitchRefusal(lowering[0], "config", personSpokeSinceGate(projectDir)));
+    die(guardSwitchRefusal(lowering[0], "config", personSpokeSinceGate(projectDir), projectDir));
   }
   // The setter carries out what the person asked: their words go on the record.
   const askedIn = lowering.length > 0 && !typedByPerson ? latestPersonTurn(projectDir)?.words ?? null : null;
@@ -591,7 +591,7 @@ export function applyIntentSettings(
       if (nextOn.length !== raised.length) updated = setGuardsOnLine(updated, nextOn);
       const after = resolveFences(policy, updated)[request.fence];
       if (before.value === after.value) {
-        lines.push(`Fence ${request.fence} is already ${after.value}`);
+        lines.push(`The ${checkLabel(request.fence)} is already ${after.value}`);
         continue;
       }
       content = updated;
@@ -610,8 +610,8 @@ export function applyIntentSettings(
       if (!saidAsAsked(`guard.${request.fence}`)) {
         lines.push(
           after.value === "off"
-            ? `Fence ${request.fence} is off for this piece of work (logged; back on for the next one)`
-            : `Fence ${request.fence} is back on for this piece of work`,
+            ? `The ${checkLabel(request.fence)} is off for this piece of work (logged; back on for the next one)`
+            : `The ${checkLabel(request.fence)} is back on for this piece of work`,
         );
       }
     }

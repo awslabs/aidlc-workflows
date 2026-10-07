@@ -356,9 +356,11 @@ describe("t329 a guard-recovery ask holds the turn and keeps the human's selecti
     expect(marker?.unit).toBe(UNIT);
     expect(marker?.delivery).toBe("issued");
     expect(marker?.guard_recovery_response).toBeUndefined();
+    // The marker keeps the name the person was shown, so typing it picks it.
     expect(marker?.remedies).toEqual(
-      remedies.map(({ op, action }) => ({ op, action, interaction: "human-input" })),
+      remedies.map(({ op, label, action }) => ({ op, label, action, interaction: "human-input" })),
     );
+    expect(remedies.map((remedy) => remedy.label)).toEqual(["Confirm the summary again", "Request Changes"]);
 
     // The observer sees the same ask and publishes nothing.
     const before = readFileSync(p.markerPath, "utf-8");
