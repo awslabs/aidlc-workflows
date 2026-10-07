@@ -597,6 +597,18 @@ export function rootBlockPath(
 
 // Where a projection holds the bytes it ships for a root integration: the root
 // file, or for one the copy runtime leaves out, its root-blocks copy.
+/**
+ * The team's file a root integration lands in, relative to the project: the
+ * integration's own path, except that AI-DLC's opencode.json part goes into
+ * the opencode.jsonc a team keeps instead of it (opencode reads both files and
+ * merges them, so a second file would compete with theirs). The record keeps
+ * the integration's path as its key either way.
+ */
+export function rootIntegrationTarget(projectDir: string, path: string): string {
+  if (path !== "opencode.json" || existsSync(join(projectDir, path))) return path;
+  return existsSync(join(projectDir, "opencode.jsonc")) ? "opencode.jsonc" : path;
+}
+
 export function shippedRootIntegrationPath(
   root: string,
   harnessDir: string,

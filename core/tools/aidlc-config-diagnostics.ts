@@ -31,6 +31,7 @@ import {
   removeJsonEntries,
   type RootIntegration,
   rootBlockPath,
+  rootIntegrationTarget,
   sha256Matching,
 } from "./aidlc-distribution.ts";
 import {
@@ -1545,7 +1546,9 @@ function openCodeProviderEntryHashes(record: ProvidersRecord): Record<string, st
  */
 export function openCodeFileProvider(projectDir: string): { region?: string; profile?: string } {
   try {
-    const value = Bun.JSONC.parse(readFileSync(join(projectDir, "opencode.json"), "utf-8").replace(/^\uFEFF/, ""));
+    const value = Bun.JSONC.parse(
+      readFileSync(join(projectDir, rootIntegrationTarget(projectDir, "opencode.json")), "utf-8").replace(/^\uFEFF/, ""),
+    );
     const providers = isRecord(value) && isRecord(value.provider) ? value.provider : {};
     const bedrock = isRecord(providers["amazon-bedrock"]) ? providers["amazon-bedrock"] : {};
     const options = isRecord(bedrock.options) ? bedrock.options : {};
@@ -1753,7 +1756,7 @@ export function providerFiles(
     } else if (harness === "opencode") {
       files.push({
         setting: "opencode project configuration",
-        file: "opencode.json",
+        file: rootIntegrationTarget(projectDir, "opencode.json"),
       });
     }
     return files.map((entry) => ({
@@ -1776,7 +1779,7 @@ export function providerFiles(
   } else if (harness === "opencode" && record.opencodeDefault) {
     files.push({
       setting: "amazon-bedrock provider options",
-      file: "opencode.json",
+      file: rootIntegrationTarget(projectDir, "opencode.json"),
     });
   }
   return files.map((entry) => ({
@@ -2263,7 +2266,7 @@ export function providerSurfaceIssues(
           }
         }
       } else if (harness === "opencode" && record.provider === "other") {
-        const path = join(projectDir, "opencode.json");
+        const path = join(projectDir, rootIntegrationTarget(projectDir, "opencode.json"));
         const value = readTeamJsonFile(path) as Record<string, unknown>;
         const providers = isRecord(value.provider) ? value.provider : {};
         if (Object.hasOwn(providers, "amazon-bedrock")) {
@@ -2332,7 +2335,7 @@ export function providerSurfaceIssues(
         }
       }
     } else if (harness === "opencode" && record.opencodeDefault) {
-      const path = join(projectDir, "opencode.json");
+      const path = join(projectDir, rootIntegrationTarget(projectDir, "opencode.json"));
       const value = readTeamJsonFile(path) as Record<string, unknown>;
       const providers = isRecord(value.provider) ? value.provider : {};
       const bedrock = isRecord(providers["amazon-bedrock"]) ? providers["amazon-bedrock"] : {};
@@ -2655,7 +2658,7 @@ export function trustFilesForHarness(
   if (harness === "copilot") {
     files.push(join(projectDir, ".github", "hooks", "aidlc.json"), copilotConfigPath());
   }
-  if (harness === "opencode") files.push(join(projectDir, "opencode.json"));
+  if (harness === "opencode") files.push(join(projectDir, rootIntegrationTarget(projectDir, "opencode.json")));
   return [...new Set(files)];
 }
 
@@ -2982,7 +2985,10 @@ function instructionStates(
       state: "missing",
     }];
   }
-  const states: InstructionState[] = tracked.map(({ path, contribution }) => {
+  const states: InstructionState[] = tracked.map(({ path: key, contribution }) => {
+    // The team's file the record's entries live in (the opencode.jsonc a team
+    // keeps, for opencode.json); AI-DLC's shipped part stays under the key.
+    const path = rootIntegrationTarget(projectDir, key);
     if (path === onboardingPath && onboardingConflict) {
       return { path, kind: "whole-file", state: "conflict" };
     }
@@ -3014,8 +3020,8 @@ function instructionStates(
       // there; everything else in it is theirs.
       let shipped: string;
       try {
-        assertProjectionPathHasNoSymlinks(projectDir, `${harnessDir}/tools/data/root-blocks/${path}`);
-        shipped = readFileSync(join(projectDir, harnessDir, "tools", "data", "root-blocks", path), "utf-8");
+        assertProjectionPathHasNoSymlinks(projectDir, `${harnessDir}/tools/data/root-blocks/${key}`);
+        shipped = readFileSync(join(projectDir, harnessDir, "tools", "data", "root-blocks", key), "utf-8");
       } catch {
         return { path, kind: contribution.policy, state: "intact" };
       }

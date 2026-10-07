@@ -99,7 +99,8 @@ then set `RUNTIME_ROOT` to the extracted `runtime/` directory.
    method-tree glob, the one entry `/aidlc space <name>` re-points), and
    permission rules for AIDLC bash entrypoints plus edits under
    `.aidlc/tools/` and `.aidlc/hooks/`. If you keep an `opencode.jsonc`
-   instead, add those three parts to it by hand.
+   instead, step 2 adds those parts to it, comments kept, and creates no
+   `opencode.json` beside it.
    The adapter enforces the permission boundary: the target must be an entrypoint
    embedded from the packaged tree, invoked as one direct command with no
    chaining, redirection, expansion, or command substitution. Engine-code edits

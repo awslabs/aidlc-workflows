@@ -55,6 +55,7 @@ import {
   readRootIntegrations,
   type RootIntegration,
   rootBlockPath,
+  rootIntegrationTarget,
   unionBlocks,
 } from "./aidlc-distribution.ts";
 import { activeSpace, harnessDir, sessionsDir, writeFileAtomic } from "./aidlc-lib.ts";
@@ -669,8 +670,10 @@ export function addRootBlocks(projectDir: string): string[] {
       // Leave the file as it was; the next session or config tries again.
     }
   }
-  for (const [path, part] of entryParts) {
+  for (const [key, part] of entryParts) {
     if (part.configured) continue;
+    // The team's file (the opencode.jsonc a team keeps, for opencode.json).
+    const path = rootIntegrationTarget(projectDir, key);
     const target = join(projectDir, path);
     let current = "";
     try {
