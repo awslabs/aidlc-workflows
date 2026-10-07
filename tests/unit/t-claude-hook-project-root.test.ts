@@ -82,7 +82,9 @@ describe("Claude hook project-root anchoring", () => {
       const hooks = settings("dist").hooks.PreToolUse
         .filter((group) => new RegExp(`^(?:${group.matcher})$`).test("Bash"))
         .flatMap((group) => group.hooks);
-      const entry = hooks.find((hook) => hook.command.endsWith(" engine hook plan-approval-guard"));
+      // One process runs the PreToolUse checks (#2066), so the shipped entry for
+      // a shell call is the guard group that carries the plan-approval guard.
+      const entry = hooks.find((hook) => hook.command.endsWith(" engine hook guard-tool-call"));
       expect(entry).toBeDefined();
       const env: NodeJS.ProcessEnv = {
         ...process.env,

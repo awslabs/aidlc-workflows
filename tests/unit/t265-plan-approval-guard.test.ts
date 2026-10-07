@@ -15,6 +15,7 @@
 //       absence.
 
 import { describe, expect, setDefaultTimeout, test } from "bun:test";
+import { hookGroupMembers } from "../../core/tools/aidlc-command.ts";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
@@ -3735,20 +3736,31 @@ describe("t265c registrations", () => {
     }
   });
 
-  test("claude: settings.json wires the guard on the Task matcher", () => {
+  test("claude: the guard group row reaches dispatch and mutation, and so does the guard inside it", () => {
     const settings = JSON.parse(
       readFileSync(join(REPO_ROOT, "dist", "claude", ".claude", "settings.json"), "utf-8"),
     ) as { hooks: { PreToolUse: Array<{ matcher: string; hooks: Array<{ command: string }> }> } };
-    const taskGroup = settings.hooks.PreToolUse.find((g) =>
-      g.hooks.some((h) => h.command.includes("hook plan-approval-guard"))
+    // One process runs the PreToolUse checks (#2066): the plan-approval guard is
+    // a member of the guard group, keeping the matcher its own row had.
+    const groupRow = settings.hooks.PreToolUse.find((g) =>
+      g.hooks.some((h) => h.command.includes("hook guard-tool-call"))
     );
-    expect(taskGroup).toBeDefined();
+    expect(groupRow).toBeDefined();
     expect(
-      taskGroup?.hooks.some((h) => h.command.includes("hook plan-approval-guard")),
-    ).toBe(true);
-    for (const mutationTool of ["Edit", "Write", "Bash"]) {
-      expect(taskGroup?.matcher.split("|")).toContain(mutationTool);
+      settings.hooks.PreToolUse.some((g) =>
+        g.hooks.some((h) => h.command.includes("hook plan-approval-guard"))
+      ),
+    ).toBe(false);
+    const member = (hookGroupMembers("guard-tool-call") ?? [])
+      .find((entry) => entry.hook === "plan-approval-guard");
+    expect(member).toBeDefined();
+    for (const guardedTool of ["Edit", "Write", "Bash", "Task", "Agent"]) {
+      expect(groupRow?.matcher.split("|"), guardedTool).toContain(guardedTool);
+      expect(new RegExp(member?.matcher ?? "$^").test(guardedTool), guardedTool).toBe(true);
     }
+    // A read reaches the group row but not this member.
+    expect(groupRow?.matcher.split("|")).toContain("Read");
+    expect(new RegExp(member?.matcher ?? "$^").test("Read")).toBe(false);
   });
 
   test("codex: hooks.json runs the plan-approval guard inside the guard-tool-call group", () => {
