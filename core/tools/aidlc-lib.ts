@@ -38039,16 +38039,23 @@ export function parseTypedGuardSwitchRequest(prompt: string, options: { wordsAns
   let guardPolicySpelling: "guard-policy" | "change-control" | null = null;
   let described = false;
   const words: string[] = [];
-  const empty = { switches: [], settings: [], space: null, intent: null, scope: null, error: null } as const;
+  const empty = (): {
+    switches: GuardSwitch[];
+    settings: Array<{ key: string; value: string }>;
+    space: null;
+    intent: null;
+    scope: null;
+    error: string | null;
+  } => ({ switches: [], settings: [], space: null, intent: null, scope: null, error: null });
   // A switch of theirs never does nothing in silence. Where the message holds a
   // contradiction, or a setting with no value, nothing is changed and they are
   // told which part, with their own switch echoed back as the way to type it
   // again. A switch they typed readably is never thrown away for the sake of
   // another token: that case skips the token and says so afterwards (`unread`).
   const lost = (reason: (typed: string) => string) => {
-    if (switches.size === 0 && settings.size === 0) return empty;
+    if (switches.size === 0 && settings.size === 0) return empty();
     const typed = [...settings].map(([key, value]) => `--${key} ${value}`).join(" ");
-    return { ...empty, error: reason(typed) };
+    return { ...empty(), error: reason(typed) };
   };
   // A flag-shaped token before they described anything that this parser cannot
   // read: the first one is named back to them once the rest has been carried out.
@@ -38105,16 +38112,16 @@ export function parseTypedGuardSwitchRequest(prompt: string, options: { wordsAns
         ? lost((typed) =>
           `Nothing changed: "--${configKey}" came with no value. Type it again with the value you want, ` +
           `or type the switch on its own: ${entrySkillInvocation()} ${typed}`)
-        : empty;
+        : empty();
     }
     if (configKey === "space" || configKey === "intent") {
-      if ((configKey === "space" ? space : intent) !== null) return empty;
+      if ((configKey === "space" ? space : intent) !== null) return empty();
       if (configKey === "space") space = value;
       else intent = value;
       continue;
     }
     if (!configForm && configKey === "scope") {
-      if (scope !== null) return empty;
+      if (scope !== null) return empty();
       scope = value;
       continue;
     }
@@ -38122,7 +38129,7 @@ export function parseTypedGuardSwitchRequest(prompt: string, options: { wordsAns
     // `guard.plan-approval` is another way to say `plan-approval`: one switch,
     // no plan stops. Whether an edited plan asks again is Guard Policy's call.
     const currentKey = settingName(configKey);
-    if (!TYPED_INTENT_SETTING_KEYS.has(currentKey)) return empty;
+    if (!TYPED_INTENT_SETTING_KEYS.has(currentKey)) return empty();
     const normalizedValue = value.toLowerCase();
     const previous = settings.get(currentKey);
     if (
