@@ -361,6 +361,28 @@ const BARE_WORD = process.platform === "win32"
 // single-quote-class character doubled, which PowerShell reads back as typed.
 // The person's characters are never changed.
 const WIN32_SINGLE_QUOTE = /['\u2018-\u201B]/g;
+// Native Windows `aidlc` is aidlc.cmd, so the call also crosses cmd.exe, which
+// acts on & | < > ^ in a word with no space, and the launcher then reads the
+// arguments the Windows way (CommandLineToArgvW). A word holding one of those
+// characters, or a double quote, travels as '"word"': PowerShell keeps the
+// literal double quotes, cmd.exe reads the word as quoted, and the launcher
+// reads it back as typed (a double quote inside escaped as \", a backslash
+// run before one or at the end doubled). cmd.exe still expands %NAME% inside
+// quotes; no form of the call prevents that.
+const CMD_METACHARACTER = /[&|<>^"]/;
+function windowsArgv(arg: string): string {
+  let out = "";
+  let slashes = 0;
+  for (const ch of arg) {
+    if (ch === "\\") {
+      slashes++;
+      continue;
+    }
+    out += ch === '"' ? `${"\\".repeat(slashes * 2 + 1)}"` : `${"\\".repeat(slashes)}${ch}`;
+    slashes = 0;
+  }
+  return `"${out}${"\\".repeat(slashes * 2)}"`;
+}
 function forwardedArgs(raw: string, args: string[]): string {
   if (
     /^[A-Za-z0-9_@%+=:,./ \t"-]*$/.test(raw) &&
@@ -370,7 +392,10 @@ function forwardedArgs(raw: string, args: string[]): string {
   }
   const quote = (arg: string): string => {
     if (BARE_WORD.test(arg)) return arg;
-    if (process.platform === "win32") return `'${arg.replace(WIN32_SINGLE_QUOTE, (q) => q + q)}'`;
+    if (process.platform === "win32") {
+      const word = CMD_METACHARACTER.test(arg) ? windowsArgv(arg) : arg;
+      return `'${word.replace(WIN32_SINGLE_QUOTE, (q) => q + q)}'`;
+    }
     if (!arg.includes("'")) return `'${arg}'`;
     if (!/["`$\\]/.test(arg)) return `"${arg}"`;
     return `'${arg.replaceAll("'", "'\\''")}'`;
