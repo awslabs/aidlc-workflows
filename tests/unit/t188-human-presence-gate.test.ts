@@ -1453,7 +1453,7 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
 
     test("two exchanges in a row pair separately, and a question logged after the reply waits", () => {
       const slug = field(proj, "Current Stage");
-      const row = (event: string, fields: Record<string, string>): void => appendAuditEntry(event, { Stage: slug, ...fields }, proj);
+      const row = (event: string, fields: Record<string, string>) => appendAuditEntry(event, { Stage: slug, ...fields }, proj);
       row("DECISION_RECORDED", { Decision: "Q1", Options: "A, B" });
       row("QUESTION_ANSWERED", { Details: "a" });
       row("DECISION_RECORDED", { Decision: "Q2", Options: "A, B" });
@@ -1467,7 +1467,7 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
 
     test("an orphan answer stays ambiguous, scopes pair apart, and a cancelled box leaves its question open", () => {
       const slug = field(proj, "Current Stage");
-      const row = (event: string, fields: Record<string, string>): void => appendAuditEntry(event, { Stage: slug, ...fields }, proj);
+      const row = (event: string, fields: Record<string, string>) => appendAuditEntry(event, { Stage: slug, ...fields }, proj);
       row("QUESTION_ANSWERED", { Details: "nothing was asked" });
       row("DECISION_RECORDED", { Decision: "Q1", Options: "A, B" });
       row("QUESTION_ANSWERED", { Details: "a" });

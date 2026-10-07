@@ -252,10 +252,17 @@ function runEngine(projectDir: string, args: string[]) {
 function stubNext(projectDir: string, response: string): string {
   const calls = join(projectDir, "next-calls.ndjson");
   writeFileSync(join(projectDir, "next-response.txt"), response);
+  // Guarded like the real engine: the human-turn hook imports the engine's
+  // parser from this file, so an unguarded stub would record the hook's own
+  // argv as a call and print the response into the hook's context.
   writeFileSync(join(projectDir, ".kiro", "tools", "aidlc-orchestrate.ts"), `
 import { appendFileSync, readFileSync } from "node:fs";
-appendFileSync(${JSON.stringify(calls)}, JSON.stringify(process.argv.slice(2)) + "\\n");
-process.stdout.write(readFileSync(${JSON.stringify(join(projectDir, "next-response.txt"))}, "utf8"));
+export function parseNextFlags() { return { intent: "" }; }
+export function typedSettingModifiers() { return []; }
+if (import.meta.main) {
+  appendFileSync(${JSON.stringify(calls)}, JSON.stringify(process.argv.slice(2)) + "\\n");
+  process.stdout.write(readFileSync(${JSON.stringify(join(projectDir, "next-response.txt"))}, "utf8"));
+}
 `);
   return calls;
 }
