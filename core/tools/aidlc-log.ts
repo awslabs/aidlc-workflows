@@ -168,6 +168,7 @@ import {
   withWorkspaceSourceStateCache,
   workspaceSourceState,
   writeUnitSourceSnapshot,
+  writeWorkspaceSourceSnapshot,
   PLAN_APPROVAL_ASKED_BY_ENGINE,
   planApprovalAskIsOpen,
 } from "./aidlc-lib.js";
@@ -2800,6 +2801,9 @@ function handleReview(args: string[]): void {
     const sourceState = workspaceSourceState(pd, intent, space);
     fields["Source Fingerprint"] =
       sourceState?.fingerprint ?? UNBINDABLE_FINGERPRINT;
+    // Keep the listing behind that fingerprint, as Plan Approval keeps its
+    // own, so a change after the review can be told to the person as paths.
+    if (sourceState !== null) writeWorkspaceSourceSnapshot(pd, flags.stage as string, sourceState);
     const bindsUnitSource =
       flags.unit !== undefined &&
       node.for_each === "unit-of-work" &&

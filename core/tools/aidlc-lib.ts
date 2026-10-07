@@ -19620,14 +19620,25 @@ export function freshReviewReceipts(
     !unitBound &&
     isRelaxed()
   ) {
+    // The paths that moved since the review, when its listing was kept: the
+    // person's line names them, the way a Unit's own change is named below.
+    const paths = workspaceSourceChangedPaths(
+      projectDir,
+      stage.slug,
+      newestSourceFingerprint,
+      currentSourceState,
+    );
     acceptedChanges.push({
       checkpoint: "review-receipt",
       stage: stage.slug,
       unit: newestSourceUnit,
-      changed: null,
+      changed: paths,
       recorded: newestSourceFingerprint,
       current: currentSourceFingerprint,
-      notice: relaxedReviewNotice("The project's code", newestSourceUnit),
+      notice: relaxedReviewNotice(
+        paths === null || paths.length === 0 ? "The project's code" : renderChangedPaths(paths),
+        newestSourceUnit,
+      ),
     });
   }
 
@@ -19711,11 +19722,17 @@ export function freshReviewReceipts(
             // since): the verdict stands, the new claims count, said once.
             claimModel = { claims: manifest.claims, prefixes: manifest.prefixes };
             unitSourceKept.add(unit);
+            // The paths that differ between the listing the reviewer saw and
+            // what the Unit claims now.
+            const paths = sourceListingChangedPaths(
+              recordedSourceListingUnderCurrentBoundary(snapshot.listing, currentSourceListing),
+              restrictSourceListing(currentSourceListing, claimModel),
+            );
             acceptedChanges.push({
               checkpoint: "review-receipt",
               stage: stage.slug,
               unit,
-              changed: null,
+              changed: paths,
               recorded: receipt.fingerprint,
               current: unitSourceFingerprint(currentSourceListing, claimModel, manifest.rawBytesSha256),
               notice: `The ${unitPlainName(unit)} Unit's list of files changed after it was reviewed; carrying on.`,
