@@ -2848,9 +2848,9 @@ describe("the zero-Unit Code Generation lockout reported in #1172", () => {
       const parkAdmitted = guardBash(proj, park);
       expect(parkAdmitted.code, parkAdmitted.stderr).toBe(0);
       expect(JSON.parse(runInstalled(proj, park)).kind).toBe("parked");
-      // Parked, a workspace command is refused; the refusal names `next`, and
+      // Parked, a write to the code is refused; the refusal names `next`, and
       // `next --resume` names the unpark, which the guard lets through.
-      const parked = guardBash(proj, "git add -A");
+      const parked = guardBash(proj, "printf changed > src/inline.ts");
       expect(parked.code).toBe(2);
       expect(parked.stderr).toContain(" next`");
       const unpark = resumeNamesUnpark(proj);

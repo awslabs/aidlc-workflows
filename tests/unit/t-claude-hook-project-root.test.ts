@@ -131,14 +131,18 @@ describe("Claude hook project-root anchoring", () => {
       });
       expect(afterHook.join("\n").trim()).toBe(cwd);
       expect(readFileSync(join(cwd, "source.ts"), "utf-8")).toBe("export const value = 1;\n");
-      // The hook also loads for a cd-to-root recovery attempt. Preserve the
-      // guard's existing refusal of this mutation-capable compound command.
+      // The hook also loads for a cd-to-root compound command: one that writes
+      // nothing passes (a cd changes no file), one that writes code is refused.
       const rootRelative = relative(cwd, project).split("\\").join("/");
       const recover = run(`cd "${rootRelative}" && pwd`);
-      expect(recover.status, recover.stderr).toBe(2);
-      expect(recover.stderr).toContain("Code generation cannot run mutation-capable shell command");
+      expect(recover.status, recover.stderr).toBe(0);
       expect(recover.stderr).not.toContain("Module not found");
       expect(recover.stdout.trim().split("\n").at(-1)).toBe(cwd);
+      const compound = run(`cd "${rootRelative}" && printf changed > source.ts`);
+      expect(compound.status, compound.stderr).toBe(2);
+      expect(compound.stderr).toContain("Code generation cannot modify workspace paths");
+      expect(compound.stderr).not.toContain("Module not found");
+      expect(compound.stdout.trim().split("\n").at(-1)).toBe(cwd);
     } finally {
       rmSync(project, { recursive: true, force: true });
     }
