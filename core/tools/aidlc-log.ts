@@ -59,6 +59,9 @@ import {
   summaryAuthorizationTargetOrThrow,
   writeRecordFileNoFollow,
   reviewerDispatchPath,
+  legacyWorktreePath,
+  worktreePath,
+  engineDirFor,
   writeSummaryAuthorization,
   emitError,
   errorMessage,
@@ -2646,6 +2649,59 @@ function derivedRecordFinding(
   };
 }
 
+/**
+ * The main workspace's intent record when `projectDir` is a swarm Unit's
+ * worktree (`<parent>/.aidlc/worktrees/<bolt>`, named by its own
+ * `.aidlc/worktree-meta.json`), else null. A structural read only: the verdict
+ * tidies a record the conductor wrote, it grants nothing, so the creation
+ * authority delegatedWorktreeIntent demands (and single-repo swarms lack) is not
+ * needed here.
+ */
+function swarmWorktreeParentRecord(projectDir: string, unit: string | undefined): string | null {
+  const metaPath = join(projectDir, ".aidlc", "worktree-meta.json");
+  if (!existsSync(metaPath)) return null;
+  const meta = JSON.parse(readFileSync(metaPath, "utf-8")) as {
+    version?: unknown; intentRecord?: unknown; boltSlug?: unknown; intentId8?: unknown; swarmUnit?: unknown;
+  };
+  if (
+    meta.version !== 1 || typeof meta.intentRecord !== "string" || typeof meta.boltSlug !== "string" ||
+    typeof meta.swarmUnit !== "string" || meta.swarmUnit !== unit ||
+    !/^aidlc\/spaces\/[a-z][a-z0-9-]*\/intents\/[^/]+$/.test(meta.intentRecord) || /\/\.\.?$/.test(meta.intentRecord)
+  ) {
+    return null;
+  }
+  const child = realpathSync(projectDir);
+  const parent = dirname(dirname(dirname(child)));
+  const expected = typeof meta.intentId8 === "string"
+    ? worktreePath(parent, meta.intentId8, meta.boltSlug)
+    : legacyWorktreePath(parent, meta.boltSlug);
+  if (!existsSync(expected) || realpathSync(expected) !== child) return null;
+  return join(parent, meta.intentRecord);
+}
+
+/**
+ * The main workspace's reviewer dispatch record, removed when `projectDir` is a
+ * swarm Unit's worktree and the record names this review (same reviewer, stage
+ * and unit). Best effort: the verdict stands either way.
+ */
+function removeParentReviewerDispatch(
+  projectDir: string,
+  review: { reviewer?: string; stage?: string; unit?: string },
+): void {
+  try {
+    const recordRoot = swarmWorktreeParentRecord(projectDir, review.unit);
+    if (recordRoot === null) return;
+    const path = join(engineDirFor(recordRoot), "reviewer-dispatch.json");
+    if (!existsSync(path)) return;
+    const record = JSON.parse(readFileSync(path, "utf-8")) as { reviewer?: unknown; stage?: unknown; unit?: unknown };
+    if (record.reviewer === review.reviewer && record.stage === review.stage && record.unit === review.unit) {
+      rmSync(path, { force: true });
+    }
+  } catch {
+    // Unreadable provenance or record: leave it to the hook's TTL.
+  }
+}
+
 function handleReview(args: string[]): void {
   const { flags } = parseFlags(args);
   if (!flags.stage) error("Missing --stage <slug>");
@@ -4045,6 +4101,11 @@ function handleReview(args: string[]): void {
   } catch {
     // Best effort: the verdict is recorded either way.
   }
+  // In a swarm the verdict runs with --project-dir <worktree>, while the
+  // conductor wrote the record in the MAIN workspace's intent record, where
+  // the reviewer-scope hook reads it. Remove that one too, when it is this
+  // review's own record; another Unit's review keeps its window.
+  removeParentReviewerDispatch(pd, { reviewer: flags.reviewer, stage: flags.stage, unit: flags.unit });
 
   console.log(JSON.stringify({
     emitted: "REVIEW_COMPLETED",
