@@ -293,6 +293,10 @@ deletes content for a missing installed source. Explicit
 `--yes` when non-interactive, and hash-proven ownership; it refuses locally
 modified or unowned paths. At a terminal it asks nothing: it names the plugins
 it prunes and how to get them back, then prunes.
+A plugin file's identity is its committed text: a checkout that turns line
+endings (Git for Windows' `core.autocrlf`) is no change to the plugin's files,
+for sync and for the compose hook alike (the rule in
+[docs/reference/04-stage-protocol.md](04-stage-protocol.md), "Line endings").
 
 Neither list, doctor, nor sync checks a remote plugin registry. The host remains
 responsible for published-version discovery.

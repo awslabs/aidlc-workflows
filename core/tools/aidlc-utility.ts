@@ -4658,7 +4658,9 @@ export async function collectDoctorReport(
       for (const f of readdirSync(dir).filter((name) => name.endsWith(".md")).sort()) {
         const path = join(dir, f);
         try {
-          const content = readFileSync(path, "utf-8");
+          // CRLF read as LF: compose hashes fragment prose over that text, and a
+          // checkout that turns line endings must not read as a missing fragment.
+          const content = readFileSync(path, "utf-8").replace(/\r\n/g, "\n");
           const parsed = parseStageFrontmatter(content) as Record<string, unknown>;
           const slug = typeof parsed.slug === "string" ? parsed.slug : f.replace(/\.md$/, "");
           const plugin = typeof parsed.plugin === "string" ? parsed.plugin : undefined;

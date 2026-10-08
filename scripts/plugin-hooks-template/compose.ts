@@ -101,6 +101,7 @@ const STAGE_TABLE_END = "<!-- END: compiled stage graph -->";
 type ParseStageFrontmatter = (raw: string) => Record<string, unknown>;
 interface InstalledAidlcLib {
   hooksHealthDir?: (projectDir: string) => string;
+  committedTextBytes?: (bytes: Buffer) => Buffer;
   writeHookStatusFile?: (healthDir: string, fileName: string, data: string) => boolean;
   removeHookStatusFile?: (healthDir: string, fileName: string) => boolean;
   parseStageFrontmatter?: ParseStageFrontmatter;
@@ -585,7 +586,12 @@ function rollbackComposeWrites(): void {
 // never reached a project composed without sync in front (the Kiro CLI
 // fallback, a hand run, the plugin test tool).
 const ownedRecordPath = join(HARNESS_DIR, "tools", "data", `plugin-owned-${PLUGIN_KEY}.json`);
-const sha256Of = (bytes: Buffer): string => `sha256:${createHash("sha256").update(bytes).digest("hex")}`;
+// A file's identity is its committed text (the installed engine's rule: CRLF
+// reads as LF, so a checkout that turns line endings is no change). An engine
+// without the rule compares raw bytes, as before.
+const committedText: (bytes: Buffer) => Buffer =
+  typeof lockLib.committedTextBytes === "function" ? lockLib.committedTextBytes : (bytes) => bytes;
+const sha256Of = (bytes: Buffer): string => `sha256:${createHash("sha256").update(committedText(bytes)).digest("hex")}`;
 const projectRelPosix = (path: string): string => relative(PROJECT_DIR, path).replace(/\\/g, "/");
 let _priorOwned: Map<string, string> | null = null;
 function priorOwned(): Map<string, string> {
@@ -1660,7 +1666,7 @@ function copyTreeNoClobber(
           current = null;
         }
       }
-      if (current !== null && installed.equals(current)) {
+      if (current !== null && committedText(installed).equals(committedText(current))) {
         composedPaths?.add(rel.replace(/\\/g, "/"));
         ownedThisRun.set(projectRelPosix(dest), sha256Of(installed));
         continue;

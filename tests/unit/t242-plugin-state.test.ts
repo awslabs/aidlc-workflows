@@ -915,6 +915,62 @@ describe("t242 transactional sync and ownership-safe prune", () => {
     ]);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
+  // What Git for Windows does at checkout (core.autocrlf=true): every committed
+  // text file gets CRLF. The engine's runtime folders are not committed.
+  const RUNTIME_DIRS = new Set([".aidlc-engine", ".aidlc-construction-checkpoints", ".aidlc-sessions", ".git"]);
+  function checkOutWithCrlf(dir: string): number {
+    let converted = 0;
+    for (const name of readdirSync(dir)) {
+      if (RUNTIME_DIRS.has(name)) continue;
+      const path = join(dir, name);
+      if (lstatSync(path).isDirectory()) {
+        converted += checkOutWithCrlf(path);
+        continue;
+      }
+      if (!/\.(md|json|tsv|ts|cjs|js|yaml|yml|txt)$/.test(name)) continue;
+      const text = readFileSync(path, "utf-8");
+      if (text.includes("\r") || !text.includes("\n")) continue;
+      writeFileSync(path, text.replace(/\n/g, "\r\n"));
+      converted++;
+    }
+    return converted;
+  }
+
+  test("a CRLF checkout of a plugin-composed project is current and takes the next update", async () => {
+    const project = installedProject();
+    const root = temp("aidlc-plugin-crlf-");
+    cpSync(TEST_PRO, root, { recursive: true });
+    withClaudeFixture(root);
+    await syncPlugins(project, [], ".claude");
+    expect(checkOutWithCrlf(project)).toBeGreaterThan(0);
+
+    // Line endings alone are not a change: nothing to sync, nothing refused.
+    const same = await syncPlugins(project, [], ".claude");
+    expect(same.operations).toBe(0);
+    expect(collectPluginStatus(project, ".claude").statuses).toEqual([
+      expect.objectContaining({ key: "test-pro", state: "current" }),
+    ]);
+
+    // The plugin's next version lands on the CRLF checkout like on any other.
+    const source = join(root, "stages", "construction", "test-pro-integration.md");
+    writeFileSync(source, `${readFileSync(source, "utf-8")}\nCRLF-UPGRADE marker\n`);
+    writeFileSync(
+      join(root, ".claude-plugin", "plugin.json"),
+      `${JSON.stringify({ name: "aidlc-test-pro", version: "0.2.0" }, null, 2)}\n`,
+    );
+    writeFileSync(
+      process.env.AIDLC_CLAUDE_PLUGIN_REGISTRY as string,
+      readFileSync(process.env.AIDLC_CLAUDE_PLUGIN_REGISTRY as string, "utf-8")
+        .replaceAll('"version": "0.1.0"', '"version": "0.2.0"'),
+    );
+    await syncPlugins(project, [], ".claude");
+    const target = join(project, ".claude", "aidlc-common", "stages", "construction", "test-pro-integration.md");
+    expect(readFileSync(target, "utf-8")).toContain("CRLF-UPGRADE marker");
+    expect(collectPluginStatus(project, ".claude").statuses).toEqual([
+      expect.objectContaining({ key: "test-pro", installedVersion: "0.2.0", state: "current" }),
+    ]);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
   test("same-version source drift replaces prior hash-proven primitive files", async () => {
     const project = installedProject();
     const root = temp("aidlc-plugin-source-drift-");

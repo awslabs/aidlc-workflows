@@ -17,6 +17,7 @@ import { pathToFileURL } from "node:url";
 import { spawnSync } from "node:child_process";
 import { DEFAULT_SUBPROCESS_TIMEOUT_MS } from "./aidlc-runtime-budget.ts";
 import {
+  committedTextBytes,
   errorMessage,
   parseArgs,
   resolveProjectDir,
@@ -826,8 +827,11 @@ export function renderPluginStatuses(statuses: PluginStatus[], verbose = false):
   return `${[render(headings), ...values.map(render)].join("\n")}\n`;
 }
 
+// A file's identity is its committed text: CRLF reads as LF, so a checkout
+// that turns line endings (Git for Windows' default) is no change to a plugin's
+// files and never a refusal.
 function sha256File(path: string): string {
-  return `sha256:${createHash("sha256").update(readFileSync(path)).digest("hex")}`;
+  return `sha256:${createHash("sha256").update(committedTextBytes(readFileSync(path))).digest("hex")}`;
 }
 
 function pluginPrimitiveTargets(
@@ -901,14 +905,15 @@ function writeCompositionRecords(
     for (const candidate of pluginPrimitiveTargets(plugin, stagedProject, harnessDir)) {
       if (claimedPaths.has(candidate.path)) continue;
       const target = join(stagedProject, candidate.path);
+      const projected = committedTextBytes(projectedSourceBytes(candidate.source, harnessDir));
       if (
         !lstatSync(target).isFile() ||
-        !readFileSync(target).equals(projectedSourceBytes(candidate.source, harnessDir))
+        !committedTextBytes(readFileSync(target)).equals(projected)
       ) continue;
       const liveTarget = join(liveProject, candidate.path);
       const legacyMatch = existsSync(liveTarget) &&
         lstatSync(liveTarget).isFile() &&
-        readFileSync(liveTarget).equals(projectedSourceBytes(candidate.source, harnessDir));
+        committedTextBytes(readFileSync(liveTarget)).equals(projected);
       if (existsSync(liveTarget) && !legacyMatch && !priorOwnedPaths.has(candidate.path)) continue;
       files.set(candidate.path, {
         path: candidate.path,
