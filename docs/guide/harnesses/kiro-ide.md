@@ -483,6 +483,31 @@ Kiro's own **Disable Workflows** and **Enable Workflows** commands do the same.
 sub-agent tool with Workflows on (unless you turn its "Workflows: sub-agent
 tool" setting off), so it needs nothing.
 
+### Command Prompt as Kiro's terminal on Windows
+
+Kiro IDE runs its agent's commands in your default terminal profile. When that
+is **Command Prompt**, AI-DLC's commands, written for PowerShell, can split
+your words at their quotes (a value reaches AI-DLC as several pieces, or your
+request is recorded with its quotes), and every command looks like it failed:
+Kiro shows exit code -1 for each one. Kiro itself recommends PowerShell.
+
+When Kiro's terminal is Command Prompt and you have not answered before on this
+computer, AI-DLC asks you once whether to set it to PowerShell: during
+`aidlc config`, or in your first Kiro IDE chat. `aidlc config --yes` takes the
+recommended answer and sets it. Say yes and AI-DLC changes only that one Kiro
+setting (`terminal.integrated.defaultProfile.windows`, for all your projects);
+then restart Kiro so its chats use it. Say no and it stays as it is, and AI-DLC
+does not ask again.
+
+To set it later, ask the agent, or run:
+
+```bash
+aidlc config trust --kiro-terminal powershell --yes
+```
+
+Kiro's own **Terminal: Select Default Profile** command does the same.
+`/aidlc --doctor` shows a warning while Kiro's terminal is Command Prompt.
+
 ### Command cards end with "dministrator: ...powershell.exe" on Windows
 
 On Windows, a Kiro IDE command card can end with a line such as

@@ -196,6 +196,18 @@ import {
   type KiroWorkflowsAnswer,
 } from "./aidlc-kiro-ide-workflows.ts";
 import {
+  KIRO_TERMINAL_ISSUE_ID,
+  KIRO_TERMINAL_QUESTION,
+  kiroTerminalKeptLine,
+  kiroTerminalQuestionDue,
+  kiroTerminalSetLine,
+  readKiroIdeTerminal,
+  readKiroTerminalAnswer,
+  recordKiroTerminalAnswer,
+  setKiroIdeTerminalPowerShell,
+  type KiroTerminalAnswer,
+} from "./aidlc-kiro-ide-terminal.ts";
+import {
   activeModelGroups,
   applyModelPolicyToProjection,
   HARNESS_HONESTY,
@@ -416,6 +428,7 @@ type SettingsMutation = {
 const CONFIG_VALUE_FLAGS = new Set([
   "--agent",
   "--kiro-workflows",
+  "--kiro-terminal",
   "--ca-bundle",
   "--channel",
   "--deciding-effort",
@@ -485,6 +498,7 @@ const CHOICE_BARE_FLAGS = new Set([
 const DIAGNOSTIC_VALUE_FLAGS = new Set([
   "--harness",
   "--kiro-workflows",
+  "--kiro-terminal",
   "--mark-done",
   "--opencode-default",
   "--plan-token",
@@ -1469,7 +1483,7 @@ function validateDiagnosticArgs(
         "--region",
       ])
     : section === "trust"
-    ? new Set(["--harness", "--kiro-workflows", "--plan-token", "--project-dir"])
+    ? new Set(["--harness", "--kiro-workflows", "--kiro-terminal", "--plan-token", "--project-dir"])
     : new Set(["--harness", "--plan-token", "--project-dir"]);
   const sectionBare = section === "runtime"
     ? new Set([...DIAGNOSTIC_BARE_FLAGS, "--record-paths"])
@@ -1498,7 +1512,7 @@ function validateDiagnosticArgs(
         "--region",
         "--reset",
       ]
-    : ["--acknowledge", "--kiro-workflows", "--reset"];
+    : ["--acknowledge", "--kiro-workflows", "--kiro-terminal", "--reset"];
   return validateConfigMutationModes(argv, section, mutationFlags);
 }
 
@@ -1541,6 +1555,7 @@ function diagnosticHelp(section: DiagnosticSection): string {
         heading("Trust answers:", out),
         "  --acknowledge",
         "  --kiro-workflows <on|off>   Kiro IDE: turn Kiro's Workflows feature on or off, a Kiro setting for all your projects (while it is on, AI-DLC's reviews and helpers do not run)",
+        "  --kiro-terminal powershell  Kiro IDE on Windows: set Kiro's default terminal to PowerShell, a Kiro setting for all your projects (in Command Prompt, AI-DLC's commands can split your words)",
         "",
         "Trust is read, verified, and instructed. This section never regenerates trust seeds or permission rules.",
         "On Copilot, the step says whether the Copilot CLI has trusted this folder and how to trust it with the CLI's own prompt; it never edits the CLI's config.",
@@ -1809,6 +1824,9 @@ function showDiagnosticSection(
     output += `  Allowlist reviewed: ${status.record?.reviewed === true ? "yes" : "not recorded"}\n`;
     if (status.kiroWorkflows?.settingsPath) {
       output += `  Kiro Workflows: ${status.kiroWorkflows.enabled ? "on" : "off"} (${status.kiroWorkflows.settingsPath})\n`;
+    }
+    if (status.kiroTerminal?.commandPrompt) {
+      output += `  Kiro terminal: Command Prompt (${status.kiroTerminal.settingsPath})\n`;
     }
     output += "  Trust and allowlist files:\n";
     output += compactHumanFileList(status.files, "trust", (file) => file);
@@ -2185,6 +2203,7 @@ function diagnosticWizard(
     return next;
   }
   if (selected.harness === "kiro-ide") askKiroWorkflows(projectDir);
+  if (selected.harness === "kiro-ide") askKiroTerminal(projectDir);
   // Codex's own hook trust comes first, so the review question below never
   // reads as that step.
   const codexStep = selected.harness === "codex"
@@ -2278,6 +2297,75 @@ function applyKiroWorkflowsAnswer(projectDir: string, off: boolean): string {
   }
   recordKiroWorkflowsAnswer("off");
   return kiroWorkflowsOffLine();
+}
+
+// Kiro IDE's default terminal is the person's Kiro setting for all their
+// projects, outside this project: set on its own, never inside the project's
+// transaction, and only when they ask for it. It only ever moves to PowerShell,
+// the shell AI-DLC's commands are written for and Kiro recommends.
+function kiroTerminalSwitch(
+  selected: ReturnType<typeof selectedDiagnosticHarness>,
+  argv: readonly string[],
+  options: ReturnType<typeof globalOptions>,
+): CommandResult {
+  const value = valueAfter([...argv], "--kiro-terminal");
+  if (value?.toLowerCase() !== "powershell") return usage("--kiro-terminal must be powershell", configCommand("trust --help"));
+  if (selected.harness !== "kiro-ide") {
+    return usage(`--kiro-terminal applies to Kiro IDE projects; this project is set up for ${selected.distribution}`);
+  }
+  const other = ["--acknowledge", "--reset", "--kiro-workflows"].find((flag) => argv.includes(flag));
+  if (other) return usage(`--kiro-terminal cannot be combined with ${other}`);
+  const state = readKiroIdeTerminal();
+  if (!state.settingsPath) return failure("Kiro IDE's settings are not in reach here", EXIT.failure);
+  const data = (answer: KiroTerminalAnswer | null) => ({
+    kiroTerminal: { commandPrompt: false, profile: "PowerShell", settingsPath: state.settingsPath, answer },
+  });
+  if (argv.includes("--dry-run")) {
+    return success(`would set Kiro's terminal to PowerShell in ${state.settingsPath}`, data(readKiroTerminalAnswer()));
+  }
+  if (!options.yes) {
+    if (!configInputIsTty()) {
+      return usage(
+        "non-interactive trust mutation requires --yes; --yes confirms but never chooses",
+        configMutationRerun("trust", [...argv]),
+      );
+    }
+    if (!promptYesDefault("  Set Kiro's terminal to PowerShell? It is a Kiro setting for all your projects.", true)) {
+      return success("Kiro's terminal left as it is");
+    }
+  }
+  try {
+    setKiroIdeTerminalPowerShell();
+  } catch (error) {
+    return failure(error instanceof Error ? error.message : String(error), EXIT.failure);
+  }
+  recordKiroTerminalAnswer("powershell");
+  return success(kiroTerminalSetLine(), data("powershell"));
+}
+
+// Asked once per machine while Kiro's terminal is Command Prompt and the person
+// never answered: yes sets PowerShell, no keeps it, and either way no chat or
+// setup asks again.
+function askKiroTerminal(projectDir: string): void {
+  if (!kiroTerminalQuestionDue()) return;
+  const set = promptYesDefault(`\n  ${KIRO_TERMINAL_QUESTION}`, true);
+  writeMenuText(`  ${applyKiroTerminalAnswer(projectDir, set)}\n\n`);
+}
+
+/** Record the person's answer and, on yes, set Kiro's terminal to PowerShell; the line to show them. */
+function applyKiroTerminalAnswer(projectDir: string, set: boolean): string {
+  const invoke = configInvocationFor(projectDir);
+  if (!set) {
+    recordKiroTerminalAnswer("kept");
+    return kiroTerminalKeptLine(invoke);
+  }
+  try {
+    setKiroIdeTerminalPowerShell();
+  } catch (error) {
+    return error instanceof Error ? error.message : String(error);
+  }
+  recordKiroTerminalAnswer("powershell");
+  return kiroTerminalSetLine();
 }
 
 // The Copilot trust step. Hooks in VS Code need a trusted folder and Chat: Use
@@ -2571,7 +2659,7 @@ function setupMapRows(
   // names them as the person's to check instead of reporting all trust as met.
   const copilot = modelHarness(distribution) === "copilot";
   const trustDetail = trust.length === 1 &&
-      (trust[0].id === "copilot-folder-untrusted" || trust[0].id === KIRO_WORKFLOWS_ISSUE_ID || trust[0].step)
+      (trust[0].id === "copilot-folder-untrusted" || trust[0].id === KIRO_WORKFLOWS_ISSUE_ID || trust[0].id === KIRO_TERMINAL_ISSUE_ID || trust[0].step)
     ? trust[0].message
     : trust.length > 0
     ? `${trust.length} host trust issue${trust.length === 1 ? "" : "s"}`
@@ -2905,7 +2993,7 @@ function prepareDiagnosticSection(
         "--region",
         "--reset",
       ]
-    : ["--acknowledge", "--kiro-workflows", "--reset"];
+    : ["--acknowledge", "--kiro-workflows", "--kiro-terminal", "--reset"];
   const hasMutationFlags = mutationFlags.some((flag) => argv.includes(flag));
   if (
     (argv.includes("--show") || argv.includes("--check")) &&
@@ -2938,6 +3026,10 @@ function prepareDiagnosticSection(
   }
   if (section === "trust" && argv.includes("--kiro-workflows")) {
     emitResult(kiroWorkflowsSwitch(selected, argv, options), options);
+    return null;
+  }
+  if (section === "trust" && argv.includes("--kiro-terminal")) {
+    emitResult(kiroTerminalSwitch(selected, argv, options), options);
     return null;
   }
   if (section === "providers" && harnessOwnsModelAccess(selected.harness) && !hasMutationFlags) {
@@ -7000,6 +7092,8 @@ type FirstRunChoices = {
   kiro?: FirstRunKiroSession | null;
   // Kiro IDE only, asked while its Workflows feature is on: true turns it off.
   kiroWorkflowsOff?: boolean;
+  // Kiro IDE on Windows only, asked while its terminal is Command Prompt: true sets PowerShell.
+  kiroTerminalPowerShell?: boolean;
 };
 
 type FirstRunKiroSession = {
@@ -8459,6 +8553,9 @@ async function runFirstRunWizard(projectDir: string): Promise<boolean> {
   if (choices.candidate.stamp.distribution === "kiro-ide" && kiroWorkflowsQuestionDue()) {
     choices.kiroWorkflowsOff = promptYesDefault(`\n  ${KIRO_WORKFLOWS_QUESTION}`, true);
   }
+  if (choices.candidate.stamp.distribution === "kiro-ide" && kiroTerminalQuestionDue()) {
+    choices.kiroTerminalPowerShell = promptYesDefault(`\n  ${KIRO_TERMINAL_QUESTION}`, true);
+  }
   const snapshot = snapshotFirstRunMutationPaths(projectDir, choices);
   let preserveSnapshot = false;
   try {
@@ -8471,6 +8568,10 @@ async function runFirstRunWizard(projectDir: string): Promise<boolean> {
     if (choices.kiroWorkflowsOff !== undefined) {
       process.stdout.write("\n");
       writeMenuRow("  ", applyKiroWorkflowsAnswer(projectDir, choices.kiroWorkflowsOff));
+    }
+    if (choices.kiroTerminalPowerShell !== undefined) {
+      process.stdout.write("\n");
+      writeMenuRow("  ", applyKiroTerminalAnswer(projectDir, choices.kiroTerminalPowerShell));
     }
     renderFirstRunEnding(projectDir, choices, kiroResult);
   } catch (error) {
@@ -12442,6 +12543,14 @@ export async function main(
       descriptor.distribution === "kiro-ide" && !argv.includes("--dry-run") && kiroWorkflowsQuestionDue()
     ) {
       changes.push(applyKiroWorkflowsAnswer(projectDir, true));
+    }
+    // Command Prompt as Kiro's terminal splits the person's words in AI-DLC's
+    // commands; --yes takes the recommended answer, PowerShell, the same way.
+    if (
+      options.yes && !deferKiro && !recordOnly && !modelsContext && !diagnosticsContext && !choicesContext &&
+      descriptor.distribution === "kiro-ide" && !argv.includes("--dry-run") && kiroTerminalQuestionDue()
+    ) {
+      changes.push(applyKiroTerminalAnswer(projectDir, true));
     }
     if (options.mode === "human") writeMenuLines("", changes.map((line) => `  ${line}`));
     // Cursor may skip project hooks in a folder outside any git repository

@@ -348,7 +348,7 @@ export function buildUninstallPlan(purge: boolean): UninstallPlan {
 
   const known = [
     "active-version", "active-executable", "rollback-version", "aidlc-shim.ps1", "windows-path.json",
-    ...(purge ? ["aidlc.settings.json", "update-check.json", "pins.json", "default-harness", "channel", "kiro-ide-workflows"] : []),
+    ...(purge ? ["aidlc.settings.json", "update-check.json", "pins.json", "default-harness", "channel", "kiro-ide-workflows", "kiro-ide-terminal"] : []),
   ];
   for (const name of known) addFile(join(root, ...name.split("/")));
   for (const [shell, name] of Object.entries({
@@ -410,7 +410,7 @@ export function buildUninstallPlan(purge: boolean): UninstallPlan {
     }
   }
   directories.add(root);
-  const keptSettings = new Set(["aidlc.settings.json", "update-check.json", "pins.json", "default-harness", "channel", "kiro-ide-workflows"]);
+  const keptSettings = new Set(["aidlc.settings.json", "update-check.json", "pins.json", "default-harness", "channel", "kiro-ide-workflows", "kiro-ide-terminal"]);
   for (const directory of directories) {
     if (within(directory, versions)) continue;
     if (!noLinks(directory, root)) {

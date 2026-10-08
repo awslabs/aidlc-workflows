@@ -53,7 +53,7 @@ The person is in charge of their work, and AIDLC enforces their will. Read what 
 
 This is the orchestrator's whole control structure. Run it from the moment `/aidlc` is invoked.
 
-**When a command comes back with no output and exit code -1**, Kiro has not been allowed to run commands in this folder yet. Do not retry, and do not suggest reinstalling or starting Kiro another way. Give the person this line and end your turn: "In Kiro IDE, trust this folder: choose Trust Folder & Continue when Kiro asks whether you trust it, or select Manage on the Restricted Mode banner, then Trust. Then run Developer: Reload Window from the Command Palette (Ctrl+Shift+P, or Cmd+Shift+P on macOS), and say carry on." When they say carry on, run your command again.
+**When a command comes back with no output and exit code -1**, Kiro has not been allowed to run commands in this folder yet. (When Kiro says your shell is cmd, every command reports exit code -1, so there go by what it printed.) Do not retry, and do not suggest reinstalling or starting Kiro another way. Give the person this line and end your turn: "In Kiro IDE, trust this folder: choose Trust Folder & Continue when Kiro asks whether you trust it, or select Manage on the Restricted Mode banner, then Trust. Then run Developer: Reload Window from the Command Palette (Ctrl+Shift+P, or Cmd+Shift+P on macOS), and say carry on." When they say carry on, run your command again.
 
 ```
 Loop:
