@@ -106,6 +106,12 @@ The ownership split is deliberate:
 | `aidlc/spaces/<space>/knowledge/documentkb/` | AI-DLC | Derived index, metadata, and extracted text |
 
 Use `/aidlc knowledge onboard [path]` to add one document or sweep the folder.
+You can name a file or folder anywhere in your project: one that is not already
+under `documents/` is copied in for you, keeping its name and a folder's layout,
+and the result says where the copy is. Your own file is not followed afterwards,
+so edit the copy or add the file again. A path outside the project is refused,
+and the folder is created if it is missing, so a sweep of an empty space adds
+nothing and says nothing is there.
 Use `sync` after files are added, edited, moved, or deleted; `list` shows every
 catalog row and state, and `show <id>` returns one citable record plus current
 extracted text when available. The `/aidlc-knowledge` skill guides the same

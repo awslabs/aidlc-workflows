@@ -61,9 +61,10 @@ import {
   realpathSync,
   statSync,
 } from "node:fs";
-import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import {
   assertNoSymlinkInChainOrThrow,
+  toPosix,
   auditBlockField,
   auditShardName,
   documentExtractors,
@@ -2172,6 +2173,33 @@ export const UNTRUSTED_TAGS_NOTICE =
  * FIRST line, ahead of any name it describes. A verb added later inherits both
  * by calling these instead of `process.stdout.write`.
  */
+/**
+ * What to say when the document the person named was copied in for them: what
+ * was copied, where it is now (once), that their own copy is not followed
+ * afterwards, and, when their original is git-ignored, that this copy is not.
+ * Null when nothing was copied. Plain words: no record paths, no flags.
+ */
+export function onboardCopyNote(
+  projectDir: string,
+  copiedFrom: string | undefined,
+  target: string | undefined,
+  gitIgnored: string | undefined,
+  indexed: number,
+): string | null {
+  if (copiedFrom === undefined || target === undefined) return null;
+  const name = basename(copiedFrom);
+  const where = toPosix(relative(projectDir, target));
+  const what = indexed === 1 ? "it" : `${indexed} documents`;
+  const theirs = indexed === 1 ? `your own ${name}` : `your own copies`;
+  const ignored = gitIgnored === "yes" || gitIgnored === "unknown"
+    ? ` Your ${name} is ${gitIgnored === "yes" ? "" : "likely "}kept out of git, but this copy is not, ` +
+      "so it will be committed unless you keep it out there too."
+    : "";
+  return `Copied ${name} into AI-DLC's documents as ${where} and added ${what}. ` +
+    `Later changes to ${theirs} are not in the knowledge base until you add ${indexed === 1 ? "it" : "them"} again.` +
+    ignored;
+}
+
 function emitJson(payload: Record<string, unknown>): void {
   process.stdout.write(`${JSON.stringify({ path_notice: UNTRUSTED_PATH_NOTICE, ...payload })}\n`);
 }
@@ -4138,7 +4166,8 @@ function parseFlags(
     } else if (a === "--allow-inactive") {
       allowInactive = true;
     } else if (
-      a === "--to" || a === "--text-file" || a === "--source-revision" || a === "--tags"
+      a === "--to" || a === "--text-file" || a === "--source-revision" || a === "--tags" ||
+      a === "--copied-from" || a === "--copied-ignored"
     ) {
       if (!allowedValueFlags.has(a)) throw new Error(`Unknown flag: ${a}`);
       if (values[a] !== undefined) throw new Error(`${a} may be specified only once`);
@@ -4170,7 +4199,12 @@ export function main(argv: string[]): void {
   try {
     switch (subcommand) {
       case "onboard": {
-        const { space: spaceFlag, intent, allowInactive, positional } = parseFlags(args.slice(1));
+        // `--copied-from` and `--copied-ignored` are set by the dispatcher when
+        // it copied a document the person named from elsewhere in the project
+        // (withNamedDocumentCopied in aidlc.ts). They say what happened; the
+        // indexing below is the same either way.
+        const { space: spaceFlag, intent, allowInactive, positional, values } =
+          parseFlags(args.slice(1), ["--copied-from", "--copied-ignored"]);
         const pd = resolveProjectDir(projectDir);
         const space = resolveSpaceFlag(spaceFlag, pd);
         assertKnowledgeRootTrusted(pd, space);
@@ -4183,7 +4217,17 @@ export function main(argv: string[]): void {
         if (result.refused) {
           error(`Refused ${result.refused.path}: ${result.refused.reason}`);
         }
-        emitJson(result as unknown as Record<string, unknown>);
+        const note = onboardCopyNote(
+          pd,
+          values["--copied-from"],
+          positional[0],
+          values["--copied-ignored"],
+          result.indexed.length,
+        );
+        emitJson({
+          ...(note === null ? {} : { onboard_note: note }),
+          ...(result as unknown as Record<string, unknown>),
+        });
         break;
       }
       case "list": {

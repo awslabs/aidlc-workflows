@@ -9561,6 +9561,71 @@ function documentInputGitIgnored(projectRoot: string, relPath: string): "yes" | 
   return checked.status === 0 ? "yes" : checked.status === 1 ? "no" : "unknown";
 }
 
+/**
+ * The document or folder the person named by path, copied into the space's
+ * `knowledge/documents/` so the ordinary `knowledge onboard` can index it. The
+ * folder is created when it is missing, a file keeps its own name under the
+ * copy rule below, and a folder keeps its relative layout under a folder of
+ * its own name. Only regular files are copied, through the knowledge walk's
+ * own rules, so a symlink inside the named folder is passed over rather than
+ * followed.
+ *
+ * The caller decides WHETHER to copy: a path already inside `documents/` is
+ * indexed where it is, and a path outside the project is refused by the
+ * knowledge tool as before. This does the copy and says what it did; it never
+ * touches `documentkb/`, which is why it lives here and not in the knowledge
+ * module (that module's fs mutations are confined to `documentkb/` by
+ * tests/unit/t289, and `documents/` is the person's own folder).
+ */
+export function ensureKnowledgeDocumentsFolder(
+  projectDir: string,
+  kb: typeof import("./aidlc-knowledge.ts"),
+  space: string,
+): string {
+  const documentsAbs = kb.documentsDir(projectDir, space);
+  mkdirSync(documentsAbs, { recursive: true });
+  // The folder is new or the person's; either way the knowledge root must still
+  // be theirs, checked after the create exactly as the document-input path does.
+  kb.assertKnowledgeRootTrusted(projectDir, space);
+  return realpathSync(documentsAbs);
+}
+
+export function copyNamedDocumentIntoKnowledge(
+  projectDir: string,
+  kb: typeof import("./aidlc-knowledge.ts"),
+  space: string,
+  absPath: string,
+): { target: string; files: number; gitIgnored: "yes" | "no" | "unknown" } {
+  const documentsReal = ensureKnowledgeDocumentsFolder(projectDir, kb, space);
+  const gitIgnored = documentInputGitIgnored(projectDir, toPosix(relative(projectDir, absPath)));
+  const real = realpathSync(absPath);
+  if (!statSync(real).isDirectory()) {
+    const { target } = copyIntoDocuments(kb, documentsReal, basename(real), readFileSync(real));
+    return { target, files: 1, gitIgnored };
+  }
+  // A folder of its own name, never merged into one already there: the copy is
+  // this folder as it is now, not a blend of two.
+  const base = basename(real).replace(/^\.+/, "") || "documents";
+  let root = join(documentsReal, base);
+  for (let n = 2; existsSync(root); n++) {
+    if (n > DOCUMENT_INPUT_COPY_NAME_LIMIT) {
+      throw new Error(`every name from ${base} to ${base}-${DOCUMENT_INPUT_COPY_NAME_LIMIT} is already taken`);
+    }
+    root = join(documentsReal, `${base}-${n}`);
+  }
+  let files = 0;
+  for (const file of kb.walkDocuments(real)) {
+    const target = join(root, relative(real, file));
+    mkdirSync(dirname(target), { recursive: true });
+    writeFileSync(target, readFileSync(file), { flag: "wx" });
+    files++;
+  }
+  if (files === 0) {
+    throw new Error(`${toPosix(relative(projectDir, absPath))} holds no documents to add`);
+  }
+  return { target: root, files, gitIgnored };
+}
+
 // Why an onboarded document came back with no text, in the person's terms.
 function documentInputNoTextReason(shown: { state: string }): string {
   // Only the tool's own words: the extractor's output and its configured

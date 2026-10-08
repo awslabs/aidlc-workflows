@@ -130,7 +130,14 @@ function flagsInTool(source: string): Set<string> {
 // human or an agent ever passes -- the same "human help hides plumbing nouns" rule
 // t230 enforces on the dispatcher. Named here so its absence is a decision on the
 // record rather than a gap the extractor happened to miss.
-const PLUMBING_FLAGS = new Set(["--project-dir"]);
+//
+// `--copied-from` and `--copied-ignored` are the same class, one layer up: the
+// dispatcher sets them on the onboard it delegates after copying a document the
+// person named from elsewhere in the project (withNamedDocumentCopied in
+// aidlc.ts), so the verb can say what happened. Neither a person nor an agent
+// ever types them, and the skill tells the agent to run the engine route that
+// adds them.
+const PLUMBING_FLAGS = new Set(["--project-dir", "--copied-from", "--copied-ignored"]);
 
 let proj: string | undefined;
 
