@@ -90,9 +90,11 @@ Create `harness/<name>/manifest.ts` exporting a `HarnessManifest`
   yet ("If the person already replied, ..."). `missedReplyInHost`
   (`{ env, text }`) gives one host its own line when any of the named
   environment variables is set in the agent's shell (a `NAME=value` entry
-  when it holds that value); Kiro IDE uses it for `TERM_PROGRAM=kiro`, which
-  its agent's commands carry, and `VSCODE_IPC_HOOK`/`VSCODE_PID`, which only
-  its hooks carry. `agentStepInHost` (`{ env, text }`) does the same for
+  when it holds that value, and none when a `NAME=value` variable holds
+  another value); Kiro IDE uses it for `TERM_PROGRAM=kiro`, which its agent's
+  commands carry, and `VSCODE_IPC_HOOK`/`VSCODE_PID`, which only its hooks
+  carry, so Kiro CLI in VS Code's terminal (`TERM_PROGRAM=vscode`) is not
+  taken for Kiro IDE. `agentStepInHost` (`{ env, text }`) does the same for
   `agentStep`, so the agent gets only its own tool's line: given one line
   per tool, an agent showed the wrong one. Set `notRunYet` only when the
   harness's hooks leave a heartbeat on every chat message, the first one before

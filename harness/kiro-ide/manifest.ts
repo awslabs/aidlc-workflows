@@ -141,7 +141,9 @@ const KIRO_CLI_ACP_STEP =
 const ANSWER_NOT_RECORDED = "Your answer was not recorded, so you don't need to answer again.";
 
 // Inside Kiro IDE: its agent's own commands carry TERM_PROGRAM=kiro, its hooks
-// VSCODE_IPC_HOOK and VSCODE_PID (measured live on Kiro IDE 1.2.37, #2167).
+// VSCODE_IPC_HOOK and VSCODE_PID and no TERM_PROGRAM (measured live on Kiro IDE
+// 1.2.37, #2167). Another TERM_PROGRAM rules Kiro IDE out: Kiro CLI started from
+// VS Code's terminal has TERM_PROGRAM=vscode beside VS Code's own VSCODE_PID.
 const KIRO_IDE_AGENT_SHELL = ["TERM_PROGRAM=kiro", "VSCODE_IPC_HOOK", "VSCODE_PID"];
 
 // What the agent does when Kiro is not running AI-DLC's hooks, before the one line it shows.

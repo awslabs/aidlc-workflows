@@ -393,12 +393,15 @@ function hostLine<K extends "missedReplyInHost" | "agentStepInHost">(
 
 // Whether the agent's shell is in the host a harness's `{ env }` names: `NAME`
 // matches when set, `NAME=value` when it holds that value (TERM_PROGRAM=kiro).
+// A `NAME=value` variable holding another value rules the host out: Kiro CLI in
+// VS Code's terminal has TERM_PROGRAM=vscode beside VS Code's own VSCODE_PID.
 function inHostShell(env: readonly string[] | undefined): boolean {
-  return env?.some((entry) => {
+  const entries = (env ?? []).map((entry) => {
     const [name, value] = entry.split("=", 2);
-    const actual = process.env[name]?.trim();
-    return value === undefined ? Boolean(actual) : actual?.toLowerCase() === value.toLowerCase();
-  }) === true;
+    return { value: value?.toLowerCase(), actual: process.env[name]?.trim().toLowerCase() };
+  });
+  if (entries.some(({ value, actual }) => value !== undefined && actual && actual !== value)) return false;
+  return entries.some(({ value, actual }) => value === undefined ? Boolean(actual) : actual === value);
 }
 
 /** A harness's advice for a host that runs no project hooks until the person acts (trust, reload, engine). */

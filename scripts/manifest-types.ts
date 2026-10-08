@@ -161,7 +161,8 @@ export type HarnessManifest = {
      * `missedReply` for one host this tree runs in, told apart by environment
      * variables that host sets for the agent's shell commands (any one: a
      * `NAME` entry matches when it is set, a `NAME=value` entry when it holds
-     * that value, in any case). Without them, `missedReply` stands.
+     * that value, in any case; a `NAME=value` variable holding another value
+     * rules the host out). Without them, `missedReply` stands.
      */
     missedReplyInHost?: { env: string[]; text: string };
     /**
