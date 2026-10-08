@@ -2757,6 +2757,11 @@ All three are read-only — no stage advance, no audit emit — and source every
 
 ## Environment Variables
 
+AI-DLC reads every variable below from the environment the host tool runs it in: your shell, the host's own
+settings (such as the `.claude/settings.json` `env` block), or the values the engine passes to its own child
+processes. A project's `.env` files are not an AI-DLC setting: the installed engine never reads them, so a
+repository you clone cannot change how AI-DLC behaves by shipping one.
+
 ### `AWS_AIDLC_DEFAULT_SCOPE`
 
 Pre-set the implicit scope for a project. The resolver reads the real environment variable (including a value supplied by the `.claude/settings.json` `env` block), then the recorded `aidlc config flags --default-scope` value, then `classic`.
