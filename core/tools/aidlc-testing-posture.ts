@@ -1634,6 +1634,12 @@ export function keepApprovedPlanCopy(
 // one. Their reply is the agent's to read; restore needs their word.
 const APPROVED_PLAN_UNDO_QUESTION = "Do you want me to go back to the plan you approved?";
 const APPROVED_PLAN_UNDO_OFFER = "I can also go back to the plan you approved.";
+// Once the build has started there is nothing to go back to before it: the
+// code is being written from the plan as it is now. So the line says that and
+// offers the thing that is still true, building the approved plan instead.
+const APPROVED_PLAN_REBUILD_QUESTION =
+  "I am building it as it is now. Do you want me to build the plan you approved instead?";
+const APPROVED_PLAN_REBUILD_OFFER = "I can also build the plan you approved instead.";
 
 function quotedStep(text: string): string {
   return `"${text.length > 80 ? `${text.slice(0, 77).trimEnd()}...` : text}"`;
@@ -1666,35 +1672,49 @@ export function approvedPlanChangeText(
   plan: string,
   instructions: string,
   planAsked = false,
+  built = false,
 ): string | null {
   const planChanged = projectPlanApprovalContent(plan) !== projectPlanApprovalContent(copy.plan);
   const lf = (text: string) => text.replace(/\r\n/g, "\n");
   const instructionsChanged = lf(instructions) !== lf(copy.instructions);
   if (!planChanged && !instructionsChanged) return null;
-  const wayBack = planAsked ? APPROVED_PLAN_UNDO_OFFER : APPROVED_PLAN_UNDO_QUESTION;
-  if (!planChanged) return `Your approved test instructions changed before the build. ${wayBack}`;
+  const wayBack = built
+    ? planAsked ? APPROVED_PLAN_REBUILD_OFFER : APPROVED_PLAN_REBUILD_QUESTION
+    : planAsked ? APPROVED_PLAN_UNDO_OFFER : APPROVED_PLAN_UNDO_QUESTION;
+  const when = built ? "after the build started" : "before the build";
+  if (!planChanged) return `Your approved test instructions changed ${when}. ${wayBack}`;
   const what = changedSteps(planSteps(copy.plan).map((step) => step.text), planSteps(plan).map((step) => step.text));
-  return `Your approved plan changed before the build: ${what}${instructionsChanged ? ", and the test instructions changed too" : ""}. ` +
+  return `Your approved plan changed ${when}: ${what}${instructionsChanged ? ", and the test instructions changed too" : ""}. ` +
     wayBack;
 }
 
-/** The approved files for this target and attempt, when the person approved them and the build has not started. */
-function unbuiltApprovedCopy(
+/**
+ * The approved files for this target and attempt, with whether its build has
+ * started. Both states are returned: before the build the person can go back
+ * to the plan they approved, and once it has started they can have that plan
+ * built instead. Reading only the unbuilt state left the offer unanswerable,
+ * because generation moves the receipt to `generation` in the same turn the
+ * question is asked (#2084 F1).
+ */
+function approvedCopyForAttempt(
   projectDir: string,
   authority: CodeGenerationAuthority,
-): ApprovedPlanCopy | null {
+): { copy: ApprovedPlanCopy; built: boolean } | null {
   const copy = readApprovedPlanCopy(projectDir, authority);
   if (copy === null) return null;
   const receipt = readPlanApprovalReceipt(projectDir, {
     targetId: authority.targetId, runFloor: authority.runFloor, fingerprint: copy.fingerprint,
   });
-  return receipt?.choice === "Approve Plan" && receipt.status === "approved" ? copy : null;
+  if (receipt?.choice !== "Approve Plan") return null;
+  return { copy, built: receipt.status === "generation" };
 }
 
 /**
- * The one line the person hears when the plan they approved changed before the
- * build, or null when it did not (or nothing was approved in this attempt).
- * With `planAsked`, the plan question follows the line.
+ * The one line the person hears when the plan they approved changed, or null
+ * when it did not (or nothing was approved in this attempt). Before the build
+ * it offers to go back to that plan; once the build has started it says the
+ * build is going ahead and offers to build the approved plan instead. With
+ * `planAsked`, the plan question follows the line.
  */
 export function approvedPlanChangeLine(
   projectDir: string,
@@ -1704,16 +1724,43 @@ export function approvedPlanChangeLine(
 ): string | null {
   try {
     const authority = resolveCodeGenerationAuthority(projectDir, target, issued);
-    const copy = unbuiltApprovedCopy(projectDir, authority);
-    if (copy === null) return null;
+    const approved = approvedCopyForAttempt(projectDir, authority);
+    if (approved === null) return null;
     return approvedPlanChangeText(
-      copy,
+      approved.copy,
       readFileSync(join(authority.stageDir, "code-generation-plan.md"), "utf-8"),
       readFileSync(join(authority.stageDir, "unit-test-instructions.md"), "utf-8"),
       planAsked,
+      approved.built,
     );
   } catch {
     return null;
+  }
+}
+
+/**
+ * True when this target's approved plan changed and its build has already
+ * started, so going back to that plan means building it again. The undo
+ * reading names that step beside the restore.
+ */
+export function approvedPlanChangeNeedsRebuild(
+  projectDir: string,
+  target: CodeGenerationTarget,
+  issued?: CodeGenerationIssuance,
+): boolean {
+  try {
+    const authority = resolveCodeGenerationAuthority(projectDir, target, issued);
+    const approved = approvedCopyForAttempt(projectDir, authority);
+    if (approved === null || !approved.built) return false;
+    return approvedPlanChangeText(
+      approved.copy,
+      readFileSync(join(authority.stageDir, "code-generation-plan.md"), "utf-8"),
+      readFileSync(join(authority.stageDir, "unit-test-instructions.md"), "utf-8"),
+      false,
+      true,
+    ) !== null;
+  } catch {
+    return false;
   }
 }
 
@@ -1741,6 +1788,10 @@ export function restoreApprovedPlan(projectDir: string, target: CodeGenerationTa
         "Show the person the plan as it is now.",
     );
   }
+  // Once the build has started the code on disk came from the plan being
+  // replaced, so going back means building that step again. The line says so,
+  // and the undo reading names the step that does it.
+  const built = receipt.status === "generation";
   withActiveDirectiveLock(projectDir, () => {
     for (const [name, content] of [
       ["code-generation-plan.md", copy.plan],
@@ -1750,7 +1801,9 @@ export function restoreApprovedPlan(projectDir: string, target: CodeGenerationTa
       writeRecordFileNoFollow(projectDir, relative(projectDir, join(authority.stageDir, name)), content);
     }
   });
-  return "Back to the plan you approved.";
+  return built
+    ? "Back to the plan you approved. I am building it again from that plan."
+    : "Back to the plan you approved.";
 }
 
 // --- Picking up an interrupted build ----------------------------------------------

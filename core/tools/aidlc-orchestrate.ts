@@ -464,6 +464,7 @@ import {
 } from "./aidlc-plan-approval-ask.ts";
 import {
   approvedPlanChangeLine,
+  approvedPlanChangeNeedsRebuild,
   codeGenerationIssuance,
   codeGenerationResumeNarration,
   codeGenerationStartNarration,
@@ -2816,10 +2817,12 @@ function withdrawRoutedWords(projectDir: string, question: StoredQuestion): void
   }
 }
 
-// A plan the person approved changed before the build, and the change line
-// asked whether to go back to it: their words, in any chat and in any wording,
-// may say yes. The conductor reads that first; the restore itself needs their
-// word on record. Empty when no plan they approved changed.
+// A plan the person approved changed, and the change line asked whether to go
+// back to it: their words, in any chat and in any wording, may say yes. The
+// conductor reads that first; the restore itself needs their word on record.
+// Once the build has started, going back means building that step again from
+// the approved plan, so the reading names that step beside the restore. Empty
+// when no plan they approved changed.
 function approvedPlanUndoReading(projectDir: string, stateContent: string): string {
   const marker = readActiveDirectiveMarker(projectDir, stateContent);
   if (marker?.version !== 2 || marker.stage !== "code-generation") return "";
@@ -2829,11 +2832,20 @@ function approvedPlanUndoReading(projectDir: string, stateContent: string): stri
   const changed = units.filter((unit) => approvedPlanChangeLine(projectDir, { unit }, issued) !== null);
   if (changed.length === 0) return "";
   const posture = aidlcToolInvocation("testing-posture");
-  const restores = changed.map((unit) =>
-    `\`${posture} restore ${unit === null ? "--stage-level" : `--unit ${shellArg(unit)}`}\``);
-  return "A plan the person approved changed before the build, and they were asked whether to go back to it. If " +
-    `their words say to go back to the plan they approved, run ${restores.join(", then ")}, say the line it prints, ` +
-    `then run bare \`${aidlcToolInvocation("orchestrate")} next\`. Otherwise: `;
+  const steps = changed.map((unit) => {
+    const restore = `\`${posture} restore ${unit === null ? "--stage-level" : `--unit ${shellArg(unit)}`}\``;
+    if (!approvedPlanChangeNeedsRebuild(projectDir, { unit }, issued)) return restore;
+    // The build already wrote code from the plan being replaced, so that step
+    // starts again from the approved plan.
+    const reopen = renderEngineInvocation({
+      route: "jump",
+      args: ["reopen", "--target", "code-generation", ...(unit === null ? [] : ["--units", unit])],
+    });
+    return `${restore}, then \`${reopen}\``;
+  });
+  return "A plan the person approved changed, and they were asked whether to go back to it. If " +
+    `their words say to go back to the plan they approved, run ${steps.join(", then ")}, say the line the restore ` +
+    `prints, then run bare \`${aidlcToolInvocation("orchestrate")} next\`. Otherwise: `;
 }
 
 // Words while a workflow is active may ask to redo, jump to a stage, or start

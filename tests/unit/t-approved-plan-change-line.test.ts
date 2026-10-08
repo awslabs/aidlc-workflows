@@ -65,6 +65,9 @@ const INSTRUCTIONS = "# Unit Test Instructions\n\nRun `bun test src/cart.test.ts
 // the way back is offered beside it.
 const ASK = "Do you want me to go back to the plan you approved?";
 const OFFER = "I can also go back to the plan you approved.";
+// Once the build has started there is no "before the build" to go back to, so
+// the line says what is happening and offers what is still true (#2084 F1).
+const REBUILD_ASK = "I am building it as it is now. Do you want me to build the plan you approved instead?";
 
 interface Emitted {
   kind: string;
@@ -182,9 +185,23 @@ function rewrite(proj: string): void {
   writeFileSync(instructionsPath(proj), `${INSTRUCTIONS}\nAlso run the linter.\n`, "utf-8");
 }
 
-const changed = (wayBack: string) =>
-  'Your approved plan changed before the build: step 4 now says "Step 4: Write code-summary.md and traceability.json" ' +
+const changed = (wayBack: string, when = "before the build") =>
+  `Your approved plan changed ${when}: step 4 now says "Step 4: Write code-summary.md and traceability.json" ` +
   `instead of "Step 4: Update the brief doc comment", and the test instructions changed too. ${wayBack}`;
+
+/** The worker brief at dispatch, which starts the build (the receipt moves to generation). */
+function startBuild(proj: string): void {
+  const brief = run(proj, [POSTURE, "brief", "--unit", UNIT, "--project-dir", proj]);
+  expect(brief.status, String(brief.stderr)).toBe(0);
+  const dispatch = run(proj, [GUARD], JSON.stringify({
+    hook_event_name: "PreToolUse",
+    session_id: SESSION,
+    cwd: proj,
+    tool_name: "Task",
+    tool_input: { subagent_type: "aidlc-developer-agent", prompt: String(brief.stdout) },
+  }));
+  expect(dispatch.status, String(dispatch.stderr)).toBe(0);
+}
 
 function restore(proj: string): string {
   const result = run(proj, [POSTURE, "restore", "--unit", UNIT, "--project-dir", proj]);
@@ -259,24 +276,32 @@ describe("an approved plan that changed before the build is named, and can be un
     });
   }
 
-  test("ticking a step is not a change; once the build has started, nothing is said about before the build", () => {
+  test("ticking a step is not a change; once the build has started, the line says so and offers the rebuild", () => {
     const proj = project("relaxed");
     approvedPlan(proj);
     writeFileSync(planPath(proj), readFileSync(planPath(proj), "utf-8").replace("- [ ] Step 1:", "- [x] Step 1:"), "utf-8");
     expect(next(proj).change_notices ?? []).toEqual([]);
-    // The worker brief starts the build at dispatch; a later edit is not "before the build".
-    const brief = run(proj, [POSTURE, "brief", "--unit", UNIT, "--project-dir", proj]);
-    expect(brief.status, String(brief.stderr)).toBe(0);
-    const dispatch = run(proj, [GUARD], JSON.stringify({
-      hook_event_name: "PreToolUse",
-      session_id: SESSION,
-      cwd: proj,
-      tool_name: "Task",
-      tool_input: { subagent_type: "aidlc-developer-agent", prompt: String(brief.stdout) },
-    }));
-    expect(dispatch.status, String(dispatch.stderr)).toBe(0);
+    // The worker brief starts the build at dispatch. The edit after that is not
+    // "before the build", and the offer that was true then is not true now:
+    // the line says the build is going ahead and offers the approved plan
+    // instead, which the person's yes can still reach (#2084 F1).
+    startBuild(proj);
     rewrite(proj);
-    expect((next(proj).change_notices ?? []).filter((line) => line.startsWith("Your approved"))).toEqual([]);
+    expect(next(proj).change_notices).toContain(changed(REBUILD_ASK, "after the build started"));
+  });
+
+  test("the person's yes after the build started restores the approved plan and builds it again", () => {
+    const proj = project("relaxed");
+    approvedPlan(proj);
+    const approved = readFileSync(planPath(proj), "utf-8");
+    startBuild(proj);
+    rewrite(proj);
+    expect(next(proj).change_notices).toContain(changed(REBUILD_ASK, "after the build started"));
+    say(proj, "yes, build what I approved");
+    expect(restore(proj)).toBe("Back to the plan you approved. I am building it again from that plan.");
+    expect(readFileSync(planPath(proj), "utf-8")).toBe(approved);
+    expect(readFileSync(instructionsPath(proj), "utf-8")).toBe(INSTRUCTIONS);
+    expect(evaluateCodeGenerationApproval(proj, { unit: UNIT }).ok).toBe(true);
   });
 
   test("the plan-approval guard lets restore through while the edited plan waits for the person", () => {
@@ -350,6 +375,26 @@ describe("their words in a new chat are read for the way back to the approved pl
       });
     }
   }
+
+  test("relaxed: their yes in a new chat after the build started names the restore and the step that builds it again", () => {
+    const proj = project("relaxed");
+    approvedPlan(proj);
+    const approved = readFileSync(planPath(proj), "utf-8");
+    startBuild(proj);
+    rewrite(proj);
+    expect(next(proj).change_notices).toContain(changed(REBUILD_ASK, "after the build started"));
+    say(proj, "/aidlc yes, build the plan I approved", OTHER_SESSION);
+    const print = nextWith(proj, ["yes, build the plan I approved"]);
+    expect(print.kind, JSON.stringify(print)).toBe("print");
+    expect(print.message).toContain("go back to the plan they approved");
+    // The restore alone leaves the code the replaced plan wrote, so the reading
+    // names the step that starts this Unit's Code Generation again.
+    expect(print.message).toMatch(/restore --unit unit-2`, then `bun \.claude\/tools\/aidlc-jump\.ts reopen --target code-generation --units unit-2`/);
+    expect(runNamedRestore(proj, print.message)).toBe(
+      "Back to the plan you approved. I am building it again from that plan.",
+    );
+    expect(readFileSync(planPath(proj), "utf-8")).toBe(approved);
+  });
 
   test("strict: their words in a new chat while the edited plan is asked about name the restore, and approve nothing", () => {
     const proj = project("strict");

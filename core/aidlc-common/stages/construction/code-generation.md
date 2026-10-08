@@ -272,7 +272,13 @@ After approval:
   person again: `next` shows the question, its `plan_approval.note` saying what
   changed. Under `relaxed` or `off`, the build continues with the edited files
   and one `change_notices` line saying what changed; the earlier answer stays
-  the record of what was approved.
+  the record of what was approved. Before the build the line offers to go back
+  to the plan they approved; once the build has started it says the build is
+  going ahead and offers to build the approved plan instead, because the code
+  on disk came from the plan being replaced. Either way their yes, in any
+  wording and from any chat, is read by you: `next` names the restore to run
+  and, after the build started, the step that starts this Unit's Code
+  Generation again from that plan.
 - The line saying what changed asks whether to go back to the plan the person
   approved (under `strict` it offers that beside the plan question). When they
   say yes, or ask for it in their own words, run `{{INVOKE}} engine
