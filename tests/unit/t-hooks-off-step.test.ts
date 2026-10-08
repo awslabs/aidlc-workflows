@@ -225,7 +225,13 @@ describe("next stops with the agent's step when the engine knows the hooks never
       expect(inIde.message).not.toContain("Kiro CLI");
       expect(inIde.message).not.toContain("ACP");
     }
-    const elsewhereHosts: Record<string, string>[] = [{}, { TERM_PROGRAM: "vscode" }];
+    // Kiro CLI started from VS Code's terminal: VS Code's own VSCODE_ variables, but not Kiro IDE.
+    const elsewhereHosts: Record<string, string>[] = [
+      {},
+      { TERM_PROGRAM: "vscode" },
+      { TERM_PROGRAM: "vscode", VSCODE_PID: "4242" },
+      { TERM_PROGRAM: "vscode", VSCODE_IPC_HOOK: "/tmp/vscode-ipc.sock" },
+    ];
     for (const host of elsewhereHosts) {
       const elsewhere = next(proj, KIRO_IDE, host);
       expect(isStop(elsewhere), JSON.stringify(host)).toBe(true);

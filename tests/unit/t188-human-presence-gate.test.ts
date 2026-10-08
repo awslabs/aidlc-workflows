@@ -316,6 +316,8 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
     const neverElsewhere = neverIn({});
     expect(neverElsewhere).toContain('Show the person this line: "In Kiro CLI, quit Kiro');
     expect(neverElsewhere).not.toContain("Reload Window");
+    // Kiro CLI started from VS Code's terminal carries VS Code's VSCODE_ variables: not Kiro IDE.
+    expect(neverIn({ TERM_PROGRAM: "vscode", VSCODE_PID: "4242" })).toBe(neverElsewhere);
     // A hook has run here, so the replies below were missed, not unrecordable.
     mkdirSync(hooksHealthDir(proj), { recursive: true });
     writeFileSync(join(hooksHealthDir(proj), "record-human-turn.last"), new Date().toISOString());
@@ -346,6 +348,9 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
     const elsewhere = refusalIn({});
     // Another editor's terminal is not Kiro IDE.
     expect(refusalIn({ TERM_PROGRAM: "vscode" })).toBe(elsewhere);
+    // Kiro CLI started from VS Code's terminal: VS Code's own VSCODE_ variables do not make it Kiro IDE.
+    expect(refusalIn({ TERM_PROGRAM: "vscode", VSCODE_PID: "4242" })).toBe(elsewhere);
+    expect(refusalIn({ TERM_PROGRAM: "vscode", VSCODE_IPC_HOOK: "/tmp/vscode-ipc.sock" })).toBe(elsewhere);
     expect(elsewhere).toContain(
       'Tell them exactly this, with nothing about why, then only the line below for the tool they are in: "Your answer was not recorded, so you don\'t need to answer again." In Kiro CLI, quit Kiro and start `kiro-cli` again in this folder. If you drive Kiro from an ACP client, the Kiro IDE guide names what that client must send.',
     );
