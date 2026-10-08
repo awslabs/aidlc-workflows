@@ -496,7 +496,12 @@ trusted command entry, Copilot checks the Copilot CLI's `trustedFolders`, and
 every harness checks required sibling directories. No trust seed or
 permission-rule generator is called by config trust, and it never writes the
 Copilot CLI's `config.json`: it points the person at the CLI's own trust
-prompt.
+prompt. On Kiro IDE it also reads Kiro's Workflows switch
+(`kiroAgent.workflows.enabled`, user settings only), which withholds the
+sub-agent tool from chats; `core/tools/aidlc-kiro-ide-workflows.ts` changes that
+one JSONC key on the person's answer (`--kiro-workflows`, setup, `config --yes`,
+or the once-per-machine chat ask from session start) and keeps the answer in the
+install root's `kiro-ide-workflows` marker.
 
 Every successful non-dry-run config transaction then runs a cheap post-apply
 sweep against the installed bytes. The runtime leg resolves only the binary

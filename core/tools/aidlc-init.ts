@@ -183,6 +183,19 @@ import {
   setByDotenvFile,
 } from "./aidlc-kiro-session.ts";
 import {
+  KIRO_WORKFLOWS_ISSUE_ID,
+  KIRO_WORKFLOWS_QUESTION,
+  kiroWorkflowsKeptLine,
+  kiroWorkflowsOffLine,
+  kiroWorkflowsOnLine,
+  kiroWorkflowsQuestionDue,
+  readKiroIdeWorkflows,
+  readKiroWorkflowsAnswer,
+  recordKiroWorkflowsAnswer,
+  setKiroIdeWorkflows,
+  type KiroWorkflowsAnswer,
+} from "./aidlc-kiro-ide-workflows.ts";
+import {
   activeModelGroups,
   applyModelPolicyToProjection,
   HARNESS_HONESTY,
@@ -400,6 +413,7 @@ type SettingsMutation = {
 
 const CONFIG_VALUE_FLAGS = new Set([
   "--agent",
+  "--kiro-workflows",
   "--ca-bundle",
   "--channel",
   "--deciding-effort",
@@ -468,6 +482,7 @@ const CHOICE_BARE_FLAGS = new Set([
 
 const DIAGNOSTIC_VALUE_FLAGS = new Set([
   "--harness",
+  "--kiro-workflows",
   "--mark-done",
   "--opencode-default",
   "--plan-token",
@@ -1446,6 +1461,8 @@ function validateDiagnosticArgs(
         "--provider",
         "--region",
       ])
+    : section === "trust"
+    ? new Set(["--harness", "--kiro-workflows", "--plan-token", "--project-dir"])
     : new Set(["--harness", "--plan-token", "--project-dir"]);
   const sectionBare = section === "runtime"
     ? new Set([...DIAGNOSTIC_BARE_FLAGS, "--record-paths"])
@@ -1474,7 +1491,7 @@ function validateDiagnosticArgs(
         "--region",
         "--reset",
       ]
-    : ["--acknowledge", "--reset"];
+    : ["--acknowledge", "--kiro-workflows", "--reset"];
   return validateConfigMutationModes(argv, section, mutationFlags);
 }
 
@@ -1516,6 +1533,7 @@ function diagnosticHelp(section: DiagnosticSection): string {
     : [
         heading("Trust answers:", out),
         "  --acknowledge",
+        "  --kiro-workflows <on|off>   Kiro IDE: turn Kiro's Workflows feature on or off, a Kiro setting for all your projects (while it is on, AI-DLC's reviews and helpers do not run)",
         "",
         "Trust is read, verified, and instructed. This section never regenerates trust seeds or permission rules.",
         "On Copilot, the step says whether the Copilot CLI has trusted this folder and how to trust it with the CLI's own prompt; it never edits the CLI's config.",
@@ -1782,6 +1800,9 @@ function showDiagnosticSection(
       record: TrustRecord | null;
     };
     output += `  Allowlist reviewed: ${status.record?.reviewed === true ? "yes" : "not recorded"}\n`;
+    if (status.kiroWorkflows?.settingsPath) {
+      output += `  Kiro Workflows: ${status.kiroWorkflows.enabled ? "on" : "off"} (${status.kiroWorkflows.settingsPath})\n`;
+    }
     output += "  Trust and allowlist files:\n";
     output += compactHumanFileList(status.files, "trust", (file) => file);
     for (const issue of status.issues) output += `  Unmet: ${issue.id} - ${issue.message}\n`;
@@ -2156,6 +2177,7 @@ function diagnosticWizard(
     }
     return next;
   }
+  if (selected.harness === "kiro-ide") askKiroWorkflows(projectDir);
   // Codex's own hook trust comes first, so the review question below never
   // reads as that step.
   const codexStep = selected.harness === "codex"
@@ -2177,6 +2199,79 @@ function diagnosticWizard(
   return answer
     ? { schemaVersion: 1, reviewed: true }
     : records.trust;
+}
+
+// Kiro IDE's Workflows switch is the person's Kiro setting for all their
+// projects, outside this project: it is set on its own, never inside the
+// project's transaction, and only when they ask for it.
+function kiroWorkflowsSwitch(
+  projectDir: string,
+  selected: ReturnType<typeof selectedDiagnosticHarness>,
+  argv: readonly string[],
+  options: ReturnType<typeof globalOptions>,
+): CommandResult {
+  const value = valueAfter([...argv], "--kiro-workflows");
+  if (value !== "on" && value !== "off") return usage("--kiro-workflows must be on or off", configCommand("trust --help"));
+  if (selected.harness !== "kiro-ide") {
+    return usage(`--kiro-workflows applies to Kiro IDE projects; this project is set up for ${selected.distribution}`);
+  }
+  const other = ["--acknowledge", "--reset"].find((flag) => argv.includes(flag));
+  if (other) return usage(`--kiro-workflows cannot be combined with ${other}`);
+  const state = readKiroIdeWorkflows();
+  if (!state.settingsPath) return failure("Kiro IDE's settings are not in reach here", EXIT.failure);
+  const enabled = value === "on";
+  const data = (answer: KiroWorkflowsAnswer | null) => ({
+    kiroWorkflows: { enabled, settingsPath: state.settingsPath, answer },
+  });
+  if (argv.includes("--dry-run")) {
+    return success(`would turn Kiro's Workflows feature ${value} in ${state.settingsPath}`, data(readKiroWorkflowsAnswer()));
+  }
+  if (!options.yes) {
+    if (!configInputIsTty()) {
+      return usage(
+        "non-interactive trust mutation requires --yes; --yes confirms but never chooses",
+        configMutationRerun("trust", [...argv]),
+      );
+    }
+    if (!promptYesDefault(`  Turn Kiro's Workflows feature ${value}? It is a Kiro setting for all your projects.`, true)) {
+      return success("Kiro's Workflows feature left as it is");
+    }
+  }
+  try {
+    setKiroIdeWorkflows(enabled);
+  } catch (error) {
+    return failure(error instanceof Error ? error.message : String(error), EXIT.failure);
+  }
+  recordKiroWorkflowsAnswer(value);
+  return success(
+    enabled ? kiroWorkflowsOnLine() : kiroWorkflowsOffLine(configInvocationFor(projectDir)),
+    data(value),
+  );
+}
+
+// Asked once per machine while Kiro's Workflows is on and the person never
+// answered: yes turns it off, no keeps it on, and either way no chat or setup
+// asks again.
+function askKiroWorkflows(projectDir: string): void {
+  if (!kiroWorkflowsQuestionDue()) return;
+  const off = promptYesDefault(`\n  ${KIRO_WORKFLOWS_QUESTION}`, true);
+  writeMenuText(`  ${applyKiroWorkflowsAnswer(projectDir, off)}\n\n`);
+}
+
+/** Record the person's answer and, on yes, turn Workflows off; the line to show them. */
+function applyKiroWorkflowsAnswer(projectDir: string, off: boolean): string {
+  const invoke = configInvocationFor(projectDir);
+  if (!off) {
+    recordKiroWorkflowsAnswer("on");
+    return kiroWorkflowsKeptLine(invoke);
+  }
+  try {
+    setKiroIdeWorkflows(false);
+  } catch (error) {
+    return error instanceof Error ? error.message : String(error);
+  }
+  recordKiroWorkflowsAnswer("off");
+  return kiroWorkflowsOffLine(invoke);
 }
 
 // The Copilot trust step. Hooks in VS Code need a trusted folder and Chat: Use
@@ -2469,7 +2564,8 @@ function setupMapRows(
   // Copilot in VS Code gates hooks on switches AI-DLC cannot read, so the row
   // names them as the person's to check instead of reporting all trust as met.
   const copilot = modelHarness(distribution) === "copilot";
-  const trustDetail = trust.length === 1 && (trust[0].id === "copilot-folder-untrusted" || trust[0].step)
+  const trustDetail = trust.length === 1 &&
+      (trust[0].id === "copilot-folder-untrusted" || trust[0].id === KIRO_WORKFLOWS_ISSUE_ID || trust[0].step)
     ? trust[0].message
     : trust.length > 0
     ? `${trust.length} host trust issue${trust.length === 1 ? "" : "s"}`
@@ -2803,7 +2899,7 @@ function prepareDiagnosticSection(
         "--region",
         "--reset",
       ]
-    : ["--acknowledge", "--reset"];
+    : ["--acknowledge", "--kiro-workflows", "--reset"];
   const hasMutationFlags = mutationFlags.some((flag) => argv.includes(flag));
   if (
     (argv.includes("--show") || argv.includes("--check")) &&
@@ -2832,6 +2928,10 @@ function prepareDiagnosticSection(
   }
   if (argv.includes("--check")) {
     checkDiagnosticSection(section, projectDir, selected, records, options);
+    return null;
+  }
+  if (section === "trust" && argv.includes("--kiro-workflows")) {
+    emitResult(kiroWorkflowsSwitch(projectDir, selected, argv, options), options);
     return null;
   }
   if (section === "providers" && harnessOwnsModelAccess(selected.harness) && !hasMutationFlags) {
@@ -6892,6 +6992,8 @@ type FirstRunChoices = {
   // Kiro CLI only: the person's session model, read from their personal Kiro
   // settings. null means Kiro could not be read, so the session is left alone.
   kiro?: FirstRunKiroSession | null;
+  // Kiro IDE only, asked while its Workflows feature is on: true turns it off.
+  kiroWorkflowsOff?: boolean;
 };
 
 type FirstRunKiroSession = {
@@ -8348,6 +8450,9 @@ async function runFirstRunWizard(projectDir: string): Promise<boolean> {
     choices = customizeFirstRun(projectDir, candidate, candidates, detection);
   }
   if (!choices) return true;
+  if (choices.candidate.stamp.distribution === "kiro-ide" && kiroWorkflowsQuestionDue()) {
+    choices.kiroWorkflowsOff = promptYesDefault(`\n  ${KIRO_WORKFLOWS_QUESTION}`, true);
+  }
   const snapshot = snapshotFirstRunMutationPaths(projectDir, choices);
   let preserveSnapshot = false;
   try {
@@ -8355,6 +8460,12 @@ async function runFirstRunWizard(projectDir: string): Promise<boolean> {
     // Personal Kiro settings sit outside the rollback snapshot, so they are
     // written last, once every AI-DLC step has succeeded.
     const kiroResult = await applyFirstRunKiroSession(choices);
+    // Kiro IDE's Workflows switch is the person's Kiro setting, outside the
+    // snapshot as well, so it is set last too.
+    if (choices.kiroWorkflowsOff !== undefined) {
+      process.stdout.write("\n");
+      writeMenuRow("  ", applyKiroWorkflowsAnswer(projectDir, choices.kiroWorkflowsOff));
+    }
     renderFirstRunEnding(projectDir, choices, kiroResult);
   } catch (error) {
     try {
@@ -12248,6 +12359,18 @@ export async function main(
           releaseBaseUrl: releaseSettings.baseUrl,
         },
       ));
+    }
+    // Kiro IDE's Workflows feature keeps AI-DLC's reviews and helpers from
+    // running. With --yes, setup takes the recommended answer and turns it off,
+    // once per machine, after AI-DLC's own files are saved. First-run setup
+    // asks the person itself, so its children leave it, as with the Kiro session.
+    const deferKiro = process.env.AIDLC_CONFIG_DEFER_KIRO_SESSION === "1" &&
+      !setByDotenvFile("AIDLC_CONFIG_DEFER_KIRO_SESSION");
+    if (
+      options.yes && !deferKiro && !recordOnly && !modelsContext && !diagnosticsContext && !choicesContext &&
+      descriptor.distribution === "kiro-ide" && !argv.includes("--dry-run") && kiroWorkflowsQuestionDue()
+    ) {
+      changes.push(applyKiroWorkflowsAnswer(projectDir, true));
     }
     if (options.mode === "human") writeMenuLines("", changes.map((line) => `  ${line}`));
     // Cursor may skip project hooks in a folder outside any git repository

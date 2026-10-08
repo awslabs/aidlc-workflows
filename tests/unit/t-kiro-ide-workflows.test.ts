@@ -219,17 +219,27 @@ describe("config trust and doctor", () => {
 
   test("doctor warns while Workflows is on and names the same command; ok when it is off", () => {
     const on = machine(ON_WITH_COMMENTS);
-    withEnv(on.env, () => {
-      const row = kiroIdeWorkflowsDoctorCheck(REPO_ROOT, ".kiro", "kiro-ide");
-      expect(row).toMatchObject({ pass: false, severity: "warn" });
-      expect(row?.label).toContain("Kiro Workflows is on");
-      expect(row?.fix).toContain("config trust --kiro-workflows off");
-      expect(kiroIdeWorkflowsDoctorCheck(REPO_ROOT, ".kiro", "claude")).toBeNull();
-    });
+    const { project } = installKiroIde({ ...on.env, AIDLC_TEST_KIRO_IDE_SETTINGS: join(on.root, "none.json") });
+    const row = kiroIdeWorkflowsDoctorCheck(project, ".kiro", on.env);
+    expect(row).toMatchObject({ pass: false, severity: "warn" });
+    expect(row?.label).toContain("Kiro Workflows is on, so AI-DLC's reviews and helpers do not run");
+    expect(row?.fix).toContain("config trust --kiro-workflows off");
+    expect(row?.fix).toContain("Developer: Reload Window");
     const off = machine(`{ "${KEY}": false }`);
-    withEnv(off.env, () => {
-      expect(kiroIdeWorkflowsDoctorCheck(REPO_ROOT, ".kiro", "kiro-ide")).toMatchObject({ pass: true, label: "Kiro Workflows is off" });
+    expect(kiroIdeWorkflowsDoctorCheck(project, ".kiro", off.env)).toEqual({ pass: true, label: "Kiro Workflows is off" });
+    // Outside a Kiro IDE project there is no row.
+    expect(kiroIdeWorkflowsDoctorCheck(temp("aidlc-t-kiro-workflows-empty-"), undefined, on.env)).toBeNull();
+  });
+
+  test("the doctor command shows the row", () => {
+    const on = machine(ON_WITH_COMMENTS);
+    const { project } = installKiroIde({ ...on.env, AIDLC_TEST_KIRO_IDE_SETTINGS: join(on.root, "none.json") });
+    const doctor = spawnSync(process.execPath, [join(REPO_ROOT, "core", "tools", "aidlc-doctor.ts"), "--project-dir", project], {
+      cwd: project,
+      env: childEnv(on.env),
+      encoding: "utf-8",
     });
+    expect(`${doctor.stdout}${doctor.stderr}`).toContain("Kiro Workflows is on, so AI-DLC's reviews and helpers do not run");
   });
 
   test("`config --yes` turns Workflows off, says so, and keeps the answer; without --yes it only lists the step", () => {

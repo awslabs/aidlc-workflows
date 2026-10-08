@@ -1,4 +1,12 @@
 import { DEFAULT_SUBPROCESS_TIMEOUT_MS } from "./aidlc-runtime-budget.ts";
+import {
+  KIRO_WORKFLOWS_ISSUE_ID,
+  kiroWorkflowsFix,
+  kiroWorkflowsIssueMessage,
+  readKiroIdeWorkflows,
+  readKiroWorkflowsAnswer,
+  type KiroWorkflowsAnswer,
+} from "./aidlc-kiro-ide-workflows.ts";
 import { spawnSync } from "node:child_process";
 import {
   accessSync,
@@ -239,6 +247,8 @@ export type DiagnosticFileSetting = {
 export type TrustStatus = {
   files: string[];
   issues: DiagnosticIssue[];
+  /** Kiro IDE only: its Workflows switch and the person's answer on this machine. */
+  kiroWorkflows?: { enabled: boolean; settingsPath: string; answer: KiroWorkflowsAnswer | null };
 };
 
 export type DiagnosticDoctorCheck = {
@@ -2714,9 +2724,26 @@ export function trustStatus(
   if (harness === "copilot") {
     issues.push(...copilotTrustIssues(projectDir, env));
   }
+  // Kiro IDE's Workflows feature keeps AI-DLC's reviews and helpers from
+  // running. It is the person's machine-wide Kiro setting, so it is named only
+  // until they answered once on this machine.
+  let kiroWorkflows: TrustStatus["kiroWorkflows"];
+  if (harness === "kiro-ide") {
+    const state = readKiroIdeWorkflows(env);
+    kiroWorkflows = { enabled: state.enabled, settingsPath: state.settingsPath, answer: readKiroWorkflowsAnswer() };
+    if (state.enabled && kiroWorkflows.answer === null) {
+      issues.push({
+        id: KIRO_WORKFLOWS_ISSUE_ID,
+        message: kiroWorkflowsIssueMessage(),
+        remediation: kiroWorkflowsFix(invocationForHarness(harnessDir)),
+        severity: "warn",
+      });
+    }
+  }
   return {
     files: trustFilesForHarness(projectDir, harnessDir, harness),
     issues,
+    ...(kiroWorkflows ? { kiroWorkflows } : {}),
   };
 }
 
@@ -2797,6 +2824,14 @@ export function postApplyOutstandingActions(
       options.env,
     ).issues.map((issue) => {
       const step = codexHookTrustStep(issue.id);
+      if (issue.id === KIRO_WORKFLOWS_ISSUE_ID) {
+        return {
+          section: "trust" as const,
+          id: issue.id,
+          message: issue.message,
+          command: `${invoke} config trust --kiro-workflows off`,
+        };
+      }
       return step
         ? {
             section: "trust" as const,
@@ -3231,6 +3266,33 @@ export function runtimeDoctorChecks(
 // Copilot project should allow 100 or more; config adds 200 when unset (#1411).
 const VSCODE_REQUEST_CAP_KEY = "chat.agent.maxRequests";
 const VSCODE_REQUEST_CAP_FLOOR = 100;
+
+// Doctor reads Kiro IDE's Workflows switch like the trust section does, and
+// names the command the agent runs when the person says yes.
+export function kiroIdeWorkflowsDoctorCheck(
+  projectDir: string,
+  harnessDirHint?: string,
+  env: NodeJS.ProcessEnv = process.env,
+): DiagnosticDoctorCheck | null {
+  const selected = selectedHarness(projectDir, harnessDirHint);
+  if (selected?.harness !== "kiro-ide") return null;
+  const state = readKiroIdeWorkflows(env);
+  if (!state.readable) {
+    return {
+      pass: false,
+      severity: "warn",
+      label: `Kiro Workflows: ${state.settingsPath} could not be read as JSONC`,
+      fix: "correct the file, or in Kiro run Disable Workflows from the Command Palette",
+    };
+  }
+  if (!state.enabled) return { pass: true, label: "Kiro Workflows is off" };
+  return {
+    pass: false,
+    severity: "warn",
+    label: "Kiro Workflows is on, so AI-DLC's reviews and helpers do not run in your Kiro IDE chats",
+    fix: kiroWorkflowsFix(invocationForHarness(selected.harnessDir)),
+  };
+}
 
 export function vscodeRequestCapDoctorCheck(
   projectDir: string,

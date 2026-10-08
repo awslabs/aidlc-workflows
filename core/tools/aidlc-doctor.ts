@@ -61,6 +61,7 @@ import {
 import {
   flagsDoctorCheck,
   frameworkFilesDoctorCheck,
+  kiroIdeWorkflowsDoctorCheck,
   providerDoctorCheck,
   settingsDoctorChecks,
   vscodeRequestCapDoctorCheck,
@@ -595,6 +596,8 @@ export async function main(argv: string[]): Promise<void> {
   checks.push(...settingsDoctorChecks(projectDir));
   checks.push(modelsPolicyCheck(projectDir, flags.verbose === "true"));
   checks.push(...await kiroSessionDoctorChecks(projectDir));
+  const kiroWorkflows = kiroIdeWorkflowsDoctorCheck(projectDir, harnessDir());
+  if (kiroWorkflows) checks.push(kiroWorkflows);
   checks.push(flagsDoctorCheck(projectDir, harnessDir(), switchesOffLines(projectDir, process.env, "command")));
   checks.push(providerDoctorCheck(projectDir, harnessDir()));
   checks.push(workspaceSiblingDoctorCheck(projectDir, harnessDir()));

@@ -452,6 +452,37 @@ harnesses (or running both side by side) is supported-but-untested; `/aidlc
 --doctor` will warn if it detects a conflicting harness setup with an active
 workflow.
 
+### Kiro's Workflows feature stops AI-DLC's reviews and helpers
+
+Kiro IDE's **Workflows** feature (Settings > **Kiro Agent > Workflows:
+Enabled**, or the **Enable Workflows** command) runs work as background
+workflows. While it is on, a chat loses the sub-agent tool AI-DLC uses for its
+reviews and helpers: on the `aidlc` agent they never run and the main chat does
+their work itself; on the Default agent they run in the background, the chat's
+turn ends before they finish, every command they run asks in an **Approval
+needed in agent-aidlc-...** panel, and Kiro can hand an `/aidlc` request to its
+own workflow instead of AI-DLC. Workflows is off unless you turned it on.
+
+The switch is a Kiro setting for all your projects: Kiro reads it only from
+your user settings, so a workspace `.vscode/settings.json` value does nothing.
+When it is on and you have not answered before on this computer, AI-DLC asks
+you once whether to turn it off: during `aidlc config`, or in your first Kiro
+IDE chat. `aidlc config --yes` takes the recommended answer and turns it off.
+Say yes and AI-DLC changes only that one setting; then run **Developer: Reload
+Window** from the Command Palette (Ctrl+Shift+P) so open chats pick it up. Say
+no and it stays on, and AI-DLC does not ask again.
+
+To change it later, ask the agent to turn Kiro Workflows off or back on, or run:
+
+```bash
+aidlc config trust --kiro-workflows off --yes   # or: on
+```
+
+Kiro's own **Disable Workflows** and **Enable Workflows** commands do the same.
+`/aidlc --doctor` shows a warning while Workflows is on. Kiro CLI keeps its
+sub-agent tool with Workflows on (unless you turn its "Workflows: sub-agent
+tool" setting off), so it needs nothing.
+
 ### Command cards end with "dministrator: ...powershell.exe" on Windows
 
 On Windows, a Kiro IDE command card can end with a line such as
