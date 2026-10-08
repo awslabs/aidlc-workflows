@@ -319,8 +319,10 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
     // Kiro CLI started from VS Code's terminal carries VS Code's VSCODE_ variables: not Kiro IDE.
     expect(neverIn({ TERM_PROGRAM: "vscode", VSCODE_PID: "4242" })).toBe(neverElsewhere);
     // A hook has run here, so the replies below were missed, not unrecordable.
+    // Its heartbeat is old by the clock: a fresh one would mean the person has
+    // not answered yet (the agent asked in this same turn), not a missed reply.
     mkdirSync(hooksHealthDir(proj), { recursive: true });
-    writeFileSync(join(hooksHealthDir(proj), "record-human-turn.last"), new Date().toISOString());
+    writeFileSync(join(hooksHealthDir(proj), "record-human-turn.last"), new Date(Date.now() - 10 * 60 * 1000).toISOString());
     const refusalIn = (host: NodeJS.ProcessEnv): string => {
       const r = guarded(proj, ["approve", slug, "--user-input", "Approve"], false, KIRO_IDE_STATE, host);
       expect(r.rc).not.toBe(0);

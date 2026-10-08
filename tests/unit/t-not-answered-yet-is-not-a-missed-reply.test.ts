@@ -72,13 +72,14 @@ function approvals(proj: string): number {
   return readAuditShardEvents(proj).filter((row) => row.event === "GATE_APPROVED").length;
 }
 
-// The k2-f1 shape: the person answered the first gate; the agent approved it,
-// opened the next stage's gate in the same turn, and went straight on.
+// The k2-f1 shape: the first gate was shown and the person answered it; the
+// agent approved it, opened the next stage's gate in the same turn, and went
+// straight on.
 function nextGateJustOpened(proj: string): string {
   const first = slugOf(proj);
   run(STATE, proj, ["checkbox", `${first}=in-progress`]);
-  appendAuditEntry("HUMAN_TURN", {}, proj);
   expect(run(STATE, proj, ["gate-start", first]).rc).toBe(0);
+  appendAuditEntry("HUMAN_TURN", {}, proj);
   expect(run(STATE, proj, ["approve", first, "--user-input", "Approve"]).rc).toBe(0);
   const slug = slugOf(proj);
   run(STATE, proj, ["checkbox", `${slug}=in-progress`]);
