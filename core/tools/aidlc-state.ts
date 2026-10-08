@@ -2550,21 +2550,26 @@ function handleUnit(args: string[]): void {
     // by a completion this way). Only "open and no verdict at all" refuses here;
     // a verdict the record could not verify, a stale receipt and every other
     // freshness, fingerprint or digest question are the gate's, and off under
-    // Guard Policy off. The person's words win: once they have spoken since the
-    // last question (their "approve it as it is", which the Unit's checkpoint
-    // takes with --over-unfinished-review and which needs this receipt first),
-    // or picked recording the receipt on a recovery ask, the receipt records
-    // and the review stays owed at the gate.
+    // Guard Policy off. The person's words win where the checkpoint lets their
+    // approval go over the review (personMayApproveOverUnfinishedReview: not
+    // under a strict the team locked in memory): once they have spoken since
+    // the last question (their "approve it as it is", which the Unit's
+    // checkpoint takes with --over-unfinished-review and which needs this
+    // receipt first), or picked recording the receipt on a recovery ask, the
+    // receipt records and the review stays owed at the gate.
     if (action === "complete" && !waveMode && !completionPicked) {
       const owed = openUnitReview(pd, content, stage, unit);
-      if (owed !== null && !personSpokeSinceGate(pd, { requests: true })) {
+      const theirsMayWin = owed !== null && personMayApproveOverUnfinishedReview(pd, content);
+      if (owed !== null && !(theirsMayWin && personSpokeSinceGate(pd, { requests: true }))) {
         const request =
           `${aidlcToolInvocation("log")} review --stage ${slug} --reviewer ${owed.reviewer} ` +
           `--unit ${unit} --iteration ${owed.iteration}`;
-        const theirs =
-          " If the person said to go on without this review, run this completion again: their words let it " +
-          "record, and their approval (the Unit checkpoint's `verify --over-unfinished-review`, or the stage gate) " +
-          "goes over the review.";
+        const theirs = theirsMayWin
+          ? " If the person said to go on without this review, run this completion again: their words let it " +
+            "record, and their approval (the Unit checkpoint's `verify --over-unfinished-review`, or the stage gate) " +
+            "goes over the review."
+          : " Finish it first, without asking the person: your team set Guard Policy to strict for everyone on " +
+            "this repo, so their words do not go over this review.";
         error(
           owed.requestAgain
             ? `Refusing to complete unit "${unit}" for "${slug}": its review (iteration ${owed.iteration}) was ` +

@@ -34,7 +34,7 @@ import {
 } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { appendFileSync, chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -1449,6 +1449,38 @@ describe("t260 the receipt waits for the Unit's review", () => {
     // Their "approve it as it is": the Unit's checkpoint takes it with
     // --over-unfinished-review, and that checkpoint needs this receipt first.
     appendAuditEntry("HUMAN_TURN", {}, proj);
+    const done = unitVerb(proj, "complete", "unit-a");
+    expect(done.rc, done.out).toBe(0);
+    expect(unitCompletedReceipts(proj, SLUG).has("unit-a")).toBe(true);
+  });
+
+  // The checkpoint lets the person's approval go over an unfinished review only
+  // where personMayApproveOverUnfinishedReview says so: a strict the team
+  // locked in a memory layer keeps the review required for everyone on the
+  // repo, so the receipt the checkpoint needs first stays refused there too.
+  test("a strict the team locked in memory keeps the receipt refused after the person spoke, and the refusal says so", () => {
+    constructionProject();
+    const reviewFile = startedAndRequested();
+    const space = seededStateFile(proj).match(/^(.*[\\/]spaces[\\/][^\\/]+)[\\/]/)?.[1];
+    expect(space).toBeDefined();
+    const memory = join(space as string, "memory");
+    mkdirSync(memory, { recursive: true });
+    const layer = join(memory, "project.md");
+    const existing = existsSync(layer) ? readFileSync(layer, "utf-8") : "# Project\n";
+    writeFileSync(layer, existing.includes("## Guard Policy\n")
+      ? existing.replace("## Guard Policy\n", "## Guard Policy\n\nMode: strict\n")
+      : `${existing.trimEnd()}\n\n## Guard Policy\n\nMode: strict\n`, "utf-8");
+    appendAuditEntry("HUMAN_TURN", {}, proj);
+    const refused = unitVerb(proj, "complete", "unit-a");
+    expect(refused.rc).not.toBe(0);
+    expect(refused.out).toContain("still waiting for a verdict");
+    expect(refused.out).toContain(
+      "Finish it first, without asking the person: your team set Guard Policy to strict for everyone on this repo",
+    );
+    expect(refused.out).not.toContain("run this completion again");
+    expect(readAllAuditShards(proj)).not.toContain("UNIT_COMPLETED");
+    // The way on is the review's verdict.
+    recordVerdict(reviewFile, "READY");
     const done = unitVerb(proj, "complete", "unit-a");
     expect(done.rc, done.out).toBe(0);
     expect(unitCompletedReceipts(proj, SLUG).has("unit-a")).toBe(true);
