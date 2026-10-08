@@ -156,8 +156,9 @@ function findProjectRoot(filePath: string): string | null {
 // its major: the project chose that version and its config together (an
 // ESLint 8 reads the .eslintrc.* it ships with; the pin cannot), and it is
 // already provisioned and never needs the bunx download cache. The one
-// exception keeps the case the pin was added for: a flat eslint.config.*
-// beside an install older than 9 takes the pin, which can read it.
+// exception keeps the case the pin was added for: a flat eslint.config.* at
+// the project root or above beside an install older than 9 takes the pin,
+// which can read it.
 const ESLINT_SPEC = "eslint@10";
 const FLAT_CONFIG_FILES = [
 	"eslint.config.js",
@@ -174,13 +175,27 @@ const LEGACY_CONFIG_FILES = [
 	".eslintrc",
 ];
 
+// A flat config at cwd or any ancestor governs the files under it (a monorepo
+// keeps one at its root while the sensor's project root is the package's own
+// package.json), so a pre-9 install hoisted beside it must not run and drop
+// those rules: look up to the filesystem root, not only at cwd.
+function flatConfigAbove(cwd: string): boolean {
+	let dir = resolve(cwd);
+	for (;;) {
+		if (FLAT_CONFIG_FILES.some((name) => existsSync(join(dir, name)))) return true;
+		const parent = dirname(dir);
+		if (parent === dir) return false;
+		dir = parent;
+	}
+}
+
 export function localEslintPath(cwd: string): string | null {
 	try {
 		const manifestPath = createRequire(join(cwd, "package.json")).resolve("eslint/package.json");
 		const manifest = JSON.parse(readFileSync(manifestPath, "utf-8"));
 		if (manifest.name !== "eslint" || typeof manifest.version !== "string") return null;
 		const major = Number(manifest.version.split(".")[0]);
-		if (major < 9 && FLAT_CONFIG_FILES.some((name) => existsSync(join(cwd, name)))) return null;
+		if (major < 9 && flatConfigAbove(cwd)) return null;
 		const cli = join(dirname(manifestPath), "bin", "eslint.js");
 		return existsSync(cli) ? cli : null;
 	} catch {

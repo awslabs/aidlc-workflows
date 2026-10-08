@@ -853,6 +853,18 @@ describe("t92 local ESLint resolution", () => {
     expect(localEslintPath(proj)).toBeNull();
   });
 
+  // A monorepo hoists ESLint to the root and keeps one flat config there; the
+  // sensor's project root is the nearest package.json, the package's own. The
+  // ancestor's flat config still governs that package, so a pre-9 hoisted
+  // install takes the pin here too, or its rules would be dropped.
+  test("a flat config above a nested package beside hoisted eslint 8 keeps the pinned fallback", () => {
+    const { proj } = localEslintProject("8.57.1", "eslint.config.js");
+    const pkg = join(proj, "packages", "app");
+    mkdirSync(pkg, { recursive: true });
+    writeFileSync(join(pkg, "package.json"), '{"name":"app","private":true}\n');
+    expect(localEslintPath(pkg)).toBeNull();
+  });
+
   test("eslint 8 with .eslintrc: the sensor runs the project's install and reports its finding", () => {
     const { proj, cli } = localEslintProject("8.57.1", ".eslintrc.cjs");
     writeFileSync(cli, FAKE_ESLINT_8_CLI);
