@@ -524,8 +524,8 @@ medium, `thorough` xhigh, or the model's next level down
 
 On upgrade, an install that recorded `preset: balanced` or `preset: minimal`
 picks up these efforts the next time its projections are regenerated. After
-`aidlc update`, run `aidlc config --yes` between workflows to reapply the
-recorded policy, or explicitly select it with
+`aidlc update`, run `aidlc config --yes` in each project to reapply the
+recorded policy (open work carries on), or explicitly select it with
 `aidlc config models --preset balanced --project --yes` (substitute `minimal`
 as needed). Update changes only the machine runtime; doctor and
 `aidlc config models --check` report issues without applying changes. Installs
