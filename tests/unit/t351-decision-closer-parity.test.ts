@@ -10,8 +10,10 @@
 // list had), and an answered Swarm Batch or Construction Unit Approval (a
 // GATE_APPROVED / GATE_REJECTED row of that checkpoint, which neither list had)
 // still read as a pending human wait (#1466). Both now step one shared pairing,
-// nextOpenDecision; this test pins what it closes on and fails if either
-// reader grows its own closer list again. The behavioural half lives in t121
+// nextOpenDecision (the lib's walk lives in openPendingDecision, which returns
+// the open block; hasPendingDecision is one call over it); this test pins what
+// it closes on and fails if either reader grows its own closer list again. The
+// behavioural half lives in t121
 // (s1)-(s5), (p1)-(p3) and (c1)-(c8), plus the real commands in t342 and the
 // gate-time answer router in t188. Mechanism: none (source + import).
 
@@ -130,7 +132,7 @@ describe("t351 decision closer parity (#1466)", () => {
   });
 
   for (const [file, name] of [
-    ["core/tools/aidlc-lib.ts", "hasPendingDecision"],
+    ["core/tools/aidlc-lib.ts", "openPendingDecision"],
     ["core/tools/aidlc-log.ts", "hasPendingDecisionAtGate"],
   ] as const) {
     test(`${name} steps the shared pairing and keeps no closer list of its own`, () => {
@@ -142,4 +144,13 @@ describe("t351 decision closer parity (#1466)", () => {
       }
     });
   }
+
+  test("hasPendingDecision is one call over openPendingDecision and keeps no closer list of its own", () => {
+    const body = functionBody("core/tools/aidlc-lib.ts", "hasPendingDecision");
+    expect(body).toContain("openPendingDecision(");
+    expect(body).not.toContain("DECISION_PAIRING_EVENTS");
+    for (const closer of [...CLOSERS, ...GATE_EVENTS]) {
+      expect(body).not.toContain(`"${closer}"`);
+    }
+  });
 });
