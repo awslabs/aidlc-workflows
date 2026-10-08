@@ -2902,6 +2902,14 @@ describe("t147 Kiro CLI reads what the person typed from the expanded skill body
       expect(marked.latch).toEqual(["--scope", "feature", "--request-file", requestFile]);
       expect(readFileSync(join(dir, requestFile), "utf8")).toBe('the "Save" button --single\n');
       expect(hop(marked.forwarded)).toEqual(["engine", "orchestrate", "next", ...marked.latch]);
+      // A leading plan name stays on the line, so the person is not asked for the plan they named.
+      const planned = forward(String.raw`bugfix fix the '"Save"' button`);
+      expect(planned.latch).toEqual(["bugfix", "--request-file", requestFile]);
+      expect(readFileSync(join(dir, requestFile), "utf8")).toBe('fix the "Save" button\n');
+      expect(hop(planned.forwarded)).toEqual(["engine", "orchestrate", "next", ...planned.latch]);
+      const colon = forward(String.raw`classic: build the '"notes"' app`);
+      expect(colon.latch).toEqual(["classic:", "--request-file", requestFile]);
+      expect(readFileSync(join(dir, requestFile), "utf8")).toBe('build the "notes" app\n');
       // A %NAME% pair, which cmd.exe would replace even inside quotes, goes through the file too.
       const named = forward(String.raw`set the path to '%TEMP%\x' now`);
       expect(named.latch).toEqual(["--request-file", requestFile]);

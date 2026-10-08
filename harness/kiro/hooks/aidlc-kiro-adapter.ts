@@ -413,7 +413,19 @@ async function requestFileForwarding(
       flags = [];
       words = [];
       const head = literal < 0 ? args : args.slice(0, literal);
-      for (let i = 0; i < head.length; i++) {
+      // A leading plan name (`bugfix`, `classic:`) names the plan only on the
+      // line: inside the file's text the engine reads it as a word and asks
+      // for the plan again. It stays there when nothing in it needs the file.
+      let from = 0;
+      const lead = head[0];
+      if (
+        lead !== undefined && !lead.includes('"') && !CMD_NAME_PAIR.test(lead) &&
+        parseNextFlags([lead]).positionalScope !== undefined
+      ) {
+        flags.push(lead);
+        from = 1;
+      }
+      for (let i = from; i < head.length; i++) {
         const token = head[i];
         // On the line only when the engine on its own reads the token as a
         // flag: a lone `-`, a `-x` or any token the engine reads as request text
