@@ -3026,10 +3026,11 @@ describe("t218 Kiro IDE plan-approval enforcement", () => {
     try {
       initGitWorkspace(dir);
       seedCodeGenerationDirective(dir);
-      // Blocked: an opaque mutation-capable command before approval.
+      // Blocked: a shell write to code before approval (a command that names no
+      // file it writes, such as `bun run build`, is not the plan's business).
       const blocked = SHELL_NAMES.map((toolName) => ({
         toolName,
-        ...runIdeStdin(dir, "plan-approval-guard", shellPayload(dir, toolName, "bun run build")),
+        ...runIdeStdin(dir, "plan-approval-guard", shellPayload(dir, toolName, "echo blocked > src/blocked.ts")),
       }));
       expect(blocked[0].code).toBe(2);
       expect(blocked[0].stderr).toContain("Code generation");
@@ -3098,11 +3099,14 @@ describe("t218 Kiro IDE plan-approval enforcement", () => {
             command: "aidlc engine orchestrate next 2>$null | Select-Object -Last 1",
             code: toolName === "execute_pwsh" ? 0 : 2,
           },
-          // The read-only cmdlets and Set-Location count only where the adapter
-          // says the command runs in PowerShell, on Windows too.
+          // A cmdlet on its own passes in every shell: read as PowerShell it is
+          // a read-only cmdlet; read as Bash it is a program the guard does not
+          // know, which writes nothing it can see. Set-Location beside the
+          // engine counts only where the adapter says the command runs in
+          // PowerShell, on Windows too.
           {
             command: "Get-Content aidlc/aidlc-state.md",
-            code: toolName === "execute_pwsh" ? 0 : 2,
+            code: 0,
           },
           {
             command: `Set-Location -LiteralPath '${dir}'; aidlc engine orchestrate next`,
