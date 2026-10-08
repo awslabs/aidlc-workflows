@@ -3446,7 +3446,14 @@ describe("t243 project initialization", () => {
       const git = (...args: string[]) => {
         const result = spawnSync("git", [
           "-C", project, "-c", "user.email=t243@example.com", "-c", "user.name=t243",
-          "-c", "commit.gpgsign=false", "-c", "core.autocrlf=false", ...args,
+          "-c", "commit.gpgsign=false", "-c", "core.autocrlf=false",
+          // This case watches what a refresh runs, so the case's own commands
+          // say no to the monitor and cannot be taken for it, and no to
+          // automatic maintenance: a commit otherwise hands work to a
+          // background git that outlives it and lands inside the window below,
+          // and `gc`, `maintenance run` and `repack -d` all run the program.
+          "-c", "core.fsmonitor=false", "-c", "gc.auto=0", "-c", "maintenance.auto=false",
+          ...args,
         ], { encoding: "utf-8" });
         expect(result.status, result.stderr).toBe(0);
       };
@@ -3504,11 +3511,26 @@ describe("t243 project initialization", () => {
       retire([solo]);
       const monitor = join(temp("aidlc-t243-fsmonitor-"), "fsmonitor.sh");
       const ran = `${monitor}.ran`;
-      writeFileSync(monitor, `#!/bin/sh\necho ran >> '${ran}'\n`, { mode: 0o755 });
+      // The program writes down who ran it, parents and all, so a failure here
+      // names the process instead of only saying that something did. `ps` reads
+      // the same on Linux and macOS; git calls the program with a protocol
+      // version and a token.
+      writeFileSync(
+        monitor,
+        `#!/bin/sh\n{ echo "ran with: $*"; pid=$PPID; depth=0;` +
+          ` while [ "$pid" != "1" ] && [ "$depth" -lt 6 ]; do` +
+          ` echo "  $pid: $(ps -o command= -p "$pid" 2>/dev/null)";` +
+          ` pid=$(ps -o ppid= -p "$pid" 2>/dev/null | tr -d " ");` +
+          ` [ -z "$pid" ] && break; depth=$((depth + 1)); done; } >> '${ran}' 2>&1\n`,
+        { mode: 0o755 },
+      );
       git("config", "core.fsmonitor", monitor);
       const monitored = refresh(project);
       git("config", "--unset", "core.fsmonitor");
-      expect(existsSync(ran)).toBe(false);
+      expect(
+        existsSync(ran) ? readFileSync(ran, "utf-8") : "",
+        "a refresh ran the repository's fsmonitor program; the lines name what ran it",
+      ).toBe("");
       expect(monitored.stdout).toContain(
         `Removed 1 file that is no longer part of AI-DLC ${AIDLC_VERSION}:\n  ${solo}\nTo get it back, run \`git restore ${solo}\`.\n`,
       );
