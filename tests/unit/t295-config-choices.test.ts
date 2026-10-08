@@ -610,7 +610,7 @@ describe("t295 flags section", () => {
       expect(recorded.stdout).not.toContain(extra);
     }
     expect(recorded.stdout).toContain(`Recorded ${name} in aidlc.settings.local.json. To undo: `);
-    expect(recorded.stdout).toContain(`config flags --clear-bypass ${name} --local --yes`);
+    expect(recorded.stdout).toContain(`config flags --clear-bypass ${name} --yes`);
     // A guard reads the switch at every check, so the running step gets it too.
     expect(recorded.stdout).toContain(`1 open workflow (default/${dirName}) picks this up right away, with no restart.`);
     // AI-DLC's managed .gitignore block already lists the local file. Plus the
@@ -767,9 +767,20 @@ describe("t295 flags section", () => {
     const bypasses = (file: string): string[] | undefined => existsSync(join(project, file))
       ? (JSON.parse(readFileSync(join(project, file), "utf-8")) as { flags?: { bypasses?: string[] } }).flags?.bypasses
       : undefined;
+    // Clearing a switch no file records changes nothing, and says only that.
+    const nothing = flags("--clear-bypass", "AIDLC_DISABLE_REVIEW_FREEZE_HOOK", "--yes");
+    expect(nothing.status, nothing.stdout + nothing.stderr).toBe(0);
+    expect(nothing.stdout.trim()).toBe(
+      "The review freeze check (it stops edits to work you already approved) is not off for this project, so there is nothing to turn back on.",
+    );
+    expect(existsSync(join(project, "aidlc.settings.local.json"))).toBe(false);
     const mine = flags("--bypass", "AIDLC_DISABLE_SENSORS");
     expect(mine.status, mine.stdout + mine.stderr).toBe(0);
     expect(mine.stdout).toContain("Recorded AIDLC_DISABLE_SENSORS in aidlc.settings.local.json.");
+    // One way back everywhere: the no-layer clear (it clears every file that
+    // records the switch), the form every other line and the skills name.
+    expect(mine.stdout).toContain("To undo: bun .claude/tools/aidlc.ts config flags --clear-bypass AIDLC_DISABLE_SENSORS --yes");
+    expect(mine.stdout).not.toContain("--clear-bypass AIDLC_DISABLE_SENSORS --local --yes");
     expect(bypasses("aidlc.settings.local.json")).toEqual(["AIDLC_DISABLE_SENSORS"]);
     expect(bypasses("aidlc.settings.json")).toBeUndefined();
     // Recorded for the team, a clear with no layer clears it there.
@@ -1017,7 +1028,7 @@ describe("t295 flags section", () => {
     );
     const recorded = flags("--bypass", name, "--yes");
     expect(recorded.status, recorded.stdout + recorded.stderr).toBe(0);
-    expect(recorded.stdout).toContain(`config flags --clear-bypass ${name} --local --yes`);
+    expect(recorded.stdout).toContain(`config flags --clear-bypass ${name} --yes`);
     expect(resolvedFlags(project)?.bypasses).toEqual([name]);
     const other = flags("--hook-debug", "on", "--yes");
     expect(other.status).toBe(2);

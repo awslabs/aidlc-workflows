@@ -1488,6 +1488,11 @@ export function renderCommandHelp(command: PublicCommand): string {
       sectionRow("flags", "Default scope, swarm, hook debug, sensor timeout, and bypasses"),
       sectionRow("project", "Plugins, MCP servers, and shell completions"),
       "",
+      heading("THE PIECE OF WORK YOU ARE ON", out),
+      `  ${cmd(`${invoke} config set <key> <value>`, out)}   Change one of its settings (depth, review, guard-policy, guard.<fence>, sensors, ...)`,
+      `  ${cmd(`${invoke} config get <key>`, out)}           Print one setting`,
+      `  ${cmd(`${invoke} config list`, out)}                List them all`,
+      "",
       heading("COMMON FLAGS", out),
       "  --pin <version>   Pin this project to an installed release",
       "  --download        Fetch and verify the release this project needs, if it is missing",
@@ -2058,6 +2063,13 @@ function resolveActionWithoutGlobalFlags(argv: string[]): Action {
 
   const alias = resolveAlias(argv);
   if (alias) return alias;
+
+  // The settings of the piece of work, typed at a terminal without `engine`
+  // (`config set guard.review-freeze off`, `config get depth`, `config list`):
+  // the same verbs the skills run. They used to fail as an unknown section.
+  if (argv[0] === "config" && ["set", "get", "list"].includes(argv[1] ?? "")) {
+    return resolveEngine(argv);
+  }
 
   const top = resolveTop(argv);
   if (top) return top;
@@ -3219,6 +3231,9 @@ async function publicCommandGrammarError(
   }
   const normalized = normalizePublicCommandArgv(argv, command, invocation);
   if (command === "config") {
+    // `config set|get|list` are the engine's verbs for the piece of work, routed
+    // by resolveActionWithoutGlobalFlags; the install sections' grammar is not theirs.
+    if (["set", "get", "list"].includes(normalized[1] ?? "")) return null;
     const { validatePublicConfigArgs } = await import("./aidlc-init.ts");
     return validatePublicConfigArgs(normalized);
   }

@@ -1119,7 +1119,9 @@ human-turn hook applies all listed intent settings together at prompt time:
 ```
 
 The native dispatcher form is `aidlc engine config set <key> <value>` followed
-by the other setting flags. Every key routes to the same utility command; the
+by the other setting flags; typed at a terminal, `aidlc config set <key> <value>`,
+`aidlc config get <key>` and `aidlc config list` reach the same verbs without
+`engine`. Every key routes to the same utility command; the
 first setting becomes `--<key> <value>`, with the remaining flags forwarded:
 
 ```bash

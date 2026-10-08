@@ -489,6 +489,29 @@ describe("t230 dispatcher route parity", () => {
       toolArgs: ["config-get", "depth"],
       fixture: true,
     },
+    // The person's own terminal form: `config set|get|list` with no `engine`
+    // routes to the same utility verbs (it used to fail as an unknown section).
+    {
+      name: "top-level config get maps to config-get",
+      routerArgs: ["config", "get", "depth"],
+      tool: "aidlc-utility.ts",
+      toolArgs: ["config-get", "depth"],
+      fixture: true,
+    },
+    {
+      name: "top-level config list maps to config-list",
+      routerArgs: ["config", "list"],
+      tool: "aidlc-utility.ts",
+      toolArgs: ["config-list"],
+      fixture: true,
+    },
+    {
+      name: "top-level config set maps to config-change",
+      routerArgs: ["config", "set", "guard.review-freeze", "off"],
+      tool: "aidlc-utility.ts",
+      toolArgs: ["config-change", "--guard.review-freeze", "off"],
+      fixture: true,
+    },
     {
       name: "config list maps to config-list",
       routerArgs: ["engine", "config", "list"],

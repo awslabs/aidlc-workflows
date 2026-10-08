@@ -271,6 +271,7 @@ import {
 import { committedRecordIgnoreConflicts } from "./aidlc-gitignore.ts";
 import {
   LOCAL_SETTINGS_FILE,
+  PERSON_CHECK_SWITCH_LABELS,
   invalidateSettingsCache,
   modelPolicyForHarness,
   readSettingsTarget,
@@ -278,10 +279,12 @@ import {
   resolveAidlcSettingsWithOverride,
   serializeAidlcSettings,
   settingsModelsFromHarnessPolicy,
+  settingPurpose,
   settingsPathForTarget,
   settingsSource,
   updateSettingsSection,
   type AidlcSettingsFile,
+  type RecordableProjectBypass,
   type ResolvedAidlcSettings,
   type SettingsTarget,
 } from "./aidlc-settings.ts";
@@ -10322,10 +10325,12 @@ function settingsChangeLines(
     const path = settingsPathForTarget(projectDir, target);
     return target === "global" ? path : relative(projectDir, path);
   };
-  const command = (section: "flags" | "models", args: string[], target: SettingsTarget): string =>
+  // `target` null: the no-layer form, which --clear-bypass reads as "every file
+  // that records the switch"; it is the one way back every other line names.
+  const command = (section: "flags" | "models", args: string[], target: SettingsTarget | null): string =>
     `${configInvocationFor(projectDir)} config ${section} ${
       args.map((arg) => quoteCommandArgument(arg)).join(" ")
-    } --${target} --yes${namedHarness(projectDir, harness)}${projectTarget(projectDir)}`;
+    }${target === null ? "" : ` --${target}`} --yes${namedHarness(projectDir, harness)}${projectTarget(projectDir)}`;
   const lines: string[] = [];
   for (const change of mutations) {
     const file = fileOf(change.target);
@@ -10333,7 +10338,7 @@ function settingsChangeLines(
     const after = new Set(change.next?.flags?.bypasses ?? []);
     for (const name of after) {
       if (!before.has(name)) {
-        lines.push(`Recorded ${name} in ${file}. To undo: ${command("flags", ["--clear-bypass", name], change.target)}`);
+        lines.push(`Recorded ${name} in ${file}. To undo: ${command("flags", ["--clear-bypass", name], null)}`);
       }
     }
     for (const name of before) {
@@ -10698,6 +10703,26 @@ function afterProjectSettings(
       `${files.join(" and ")} changed, but the machine settings file did not: ${reason}. Run the same command again to finish.`,
     );
   }
+}
+
+/**
+ * A `--clear-bypass` of switches that no settings file records would change
+ * nothing, yet the flags path would still create a file and say how open work
+ * picks the change up. Returns the one line per switch that says what is true,
+ * or null when the request is anything else (an add, a clear of a recorded
+ * switch, or other flags).
+ */
+function unrecordedClearLines(argv: readonly string[], projectDir: string): string[] | null {
+  const clears = valuesAfter(argv, "--clear-bypass");
+  if (clears.length === 0 || valuesAfter(argv, "--bypass").length > 0) return null;
+  if (!settingsProjectAvailable(projectDir)) return null;
+  if (!clears.every((name) => layersRecordingBypass(projectDir, name).length === 0)) return null;
+  return clears.map((name) => {
+    const label = PERSON_CHECK_SWITCH_LABELS[name as RecordableProjectBypass];
+    return label
+      ? `The ${label}${settingPurpose(label)} is not off for this project, so there is nothing to turn back on.`
+      : `${name} is not recorded for this project, so there is nothing to clear.`;
+  });
 }
 
 function recordBypassesOnly(
@@ -11083,6 +11108,19 @@ export async function main(
   } else if (section?.value === "flags" || section?.value === "project") {
     const choiceSection = section.value;
     argv = [...argv.slice(0, section.index), ...argv.slice(section.index + 1)];
+    const unrecorded = choiceSection === "flags" && !argv.includes("--show") && !argv.includes("--check") &&
+        !argv.includes("--dry-run") && !argv.includes("--help")
+      ? unrecordedClearLines(argv, projectDirFrom(argv))
+      : null;
+    if (unrecorded !== null) {
+      if (options.mode === "human") {
+        writeMenuLines("", unrecorded);
+        process.exitCode = EXIT.ok;
+      } else {
+        emitResult(success(unrecorded.join(" "), { projectDir: projectDirFrom(argv), changed: false, notes: unrecorded }), options);
+      }
+      return;
+    }
     try {
       const preparedChoices = prepareChoiceSection(
         choiceSection,
