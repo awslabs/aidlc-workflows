@@ -2233,12 +2233,17 @@ decision, is on record. While a plan they approved has changed, words typed in
 any chat or after the entry command make `next` name this restore for each plan
 that changed, for the conductor to run when the words say to go back; no phrase
 is matched. The plan-approval guard lets it through before approval and while a
-plan waits, since it writes back only what the person approved. Until the build starts, an approved plan or test instructions that changed
+plan waits, since it writes back only what the person approved. An approved plan or test instructions that changed
 on disk are named in one line ("Your approved plan changed before the build: step
 4 now says ... instead of ..."): in `next`'s `change_notices` under a lowered Guard
 Policy, ending "Do you want me to go back to the plan you approved?", and in the
 re-asked question's `plan_approval.note` under strict, ending "I can also go back
-to the plan you approved." because the plan question follows it.
+to the plan you approved." because the plan question follows it. Once the build
+has started the same line reads "Your approved plan changed after the build
+started: ..." and ends "I am building it as it is now. Do you want me to build
+the plan you approved instead?" (the offer form beside the strict question);
+the restore the reading names is the whole step, and the `next` after it issues
+the approved plan's build.
 `fingerprint --unit <unit>` and `verify --unit <unit>` bind and check per-unit
 evidence. The fingerprint covers a stable projection of the plan (a terminal
 `## Review` appendix erased, task markers reset, whitespace normalized), the

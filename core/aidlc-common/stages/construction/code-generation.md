@@ -276,9 +276,8 @@ After approval:
   to the plan they approved; once the build has started it says the build is
   going ahead and offers to build the approved plan instead, because the code
   on disk came from the plan being replaced. Either way their yes, in any
-  wording and from any chat, is read by you: `next` names the restore to run
-  and, after the build started, the step that starts this Unit's Code
-  Generation again from that plan.
+  wording and from any chat, is read by you: `next` names the restore to run,
+  and the build it issues after it is the approved plan's.
 - The line saying what changed asks whether to go back to the plan the person
   approved (under `strict` it offers that beside the plan question). When they
   say yes, or ask for it in their own words, run `{{INVOKE}} engine

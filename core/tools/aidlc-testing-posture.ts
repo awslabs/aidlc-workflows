@@ -1739,32 +1739,6 @@ export function approvedPlanChangeLine(
 }
 
 /**
- * True when this target's approved plan changed and its build has already
- * started, so going back to that plan means building it again. The undo
- * reading names that step beside the restore.
- */
-export function approvedPlanChangeNeedsRebuild(
-  projectDir: string,
-  target: CodeGenerationTarget,
-  issued?: CodeGenerationIssuance,
-): boolean {
-  try {
-    const authority = resolveCodeGenerationAuthority(projectDir, target, issued);
-    const approved = approvedCopyForAttempt(projectDir, authority);
-    if (approved === null || !approved.built) return false;
-    return approvedPlanChangeText(
-      approved.copy,
-      readFileSync(join(authority.stageDir, "code-generation-plan.md"), "utf-8"),
-      readFileSync(join(authority.stageDir, "unit-test-instructions.md"), "utf-8"),
-      false,
-      true,
-    ) !== null;
-  } catch {
-    return false;
-  }
-}
-
-/**
  * Write the approved plan, test instructions and answer back: the person said
  * to go back to the plan they approved. Their word since their last decision
  * stands behind it: the agent going back on its own would undo an edit that

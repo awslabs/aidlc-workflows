@@ -464,7 +464,6 @@ import {
 } from "./aidlc-plan-approval-ask.ts";
 import {
   approvedPlanChangeLine,
-  approvedPlanChangeNeedsRebuild,
   codeGenerationIssuance,
   codeGenerationResumeNarration,
   codeGenerationStartNarration,
@@ -2832,19 +2831,16 @@ function approvedPlanUndoReading(projectDir: string, stateContent: string): stri
   const changed = units.filter((unit) => approvedPlanChangeLine(projectDir, { unit }, issued) !== null);
   if (changed.length === 0) return "";
   const posture = aidlcToolInvocation("testing-posture");
-  const steps = changed.map((unit) => {
-    const restore = `\`${posture} restore ${unit === null ? "--stage-level" : `--unit ${shellArg(unit)}`}\``;
-    if (!approvedPlanChangeNeedsRebuild(projectDir, { unit }, issued)) return restore;
-    // The build already wrote code from the plan being replaced, so that step
-    // starts again from the approved plan.
-    const reopen = renderEngineInvocation({
-      route: "jump",
-      args: ["reopen", "--target", "code-generation", ...(unit === null ? [] : ["--units", unit])],
-    });
-    return `${restore}, then \`${reopen}\``;
-  });
+  // The restore and `next`, after the build has started as before it: the
+  // restore puts the approved content back, so the build `next` issues is the
+  // approved plan's. Naming a reopen beside it undid the person's approval
+  // (its `Reopen: jump` row drops the standing approval, so `next` asked them
+  // to approve again under a line promising the build) and the stage-level
+  // form of that command does not exist (#2084 F1 follow-up).
+  const restores = changed.map((unit) =>
+    `\`${posture} restore ${unit === null ? "--stage-level" : `--unit ${shellArg(unit)}`}\``);
   return "A plan the person approved changed, and they were asked whether to go back to it. If " +
-    `their words say to go back to the plan they approved, run ${steps.join(", then ")}, say the line the restore ` +
+    `their words say to go back to the plan they approved, run ${restores.join(", then ")}, say the line it ` +
     `prints, then run bare \`${aidlcToolInvocation("orchestrate")} next\`. Otherwise: `;
 }
 
