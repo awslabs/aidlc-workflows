@@ -111,6 +111,7 @@ import {
   resolveWorkflowSelection,
   SKELETON_STANCES,
   stateFilePath,
+  worktreesDir,
   writeGuardStoodAside,
 } from "../tools/aidlc-lib.ts";
 import type { planApprovalAskState } from "../tools/aidlc-plan-approval-ask.ts";
@@ -909,7 +910,8 @@ function isRepliedPlanFileTarget(projectDir: string, target: string, editable: s
 // request's own review file (the Review File of a REVIEW_REQUESTED with no
 // REVIEW_COMPLETED for its request id yet) and, while one is open, the reviewer
 // dispatch record beside it. Nothing is open when the trail cannot be read.
-function openReviewRequestFiles(projectDir: string): string[] {
+// With `units`, only requests for those Units count (a swarm batch's reviews).
+function openReviewRequestFiles(projectDir: string, units: readonly string[] | null = null): string[] {
   try {
     const record = docsRoot(projectDir);
     const open = new Map<string, string>();
@@ -918,6 +920,7 @@ function openReviewRequestFiles(projectDir: string): string[] {
       if (id === null) continue;
       if (row.event === "REVIEW_COMPLETED") open.delete(id);
       if (row.event !== "REVIEW_REQUESTED") continue;
+      if (units !== null && !units.includes(auditBlockField(row.block, "Unit") ?? "")) continue;
       // Audit rows are project text: only a slot inside the record's reviews
       // folder, as `log review` writes it, counts.
       const file = auditBlockField(row.block, "Review File");
@@ -943,6 +946,37 @@ function isOpenReviewTarget(projectDir: string, target: string, files: string[])
     return existing === undefined || (existing.isFile() && existing.nlink === 1);
   } catch {
     return false;
+  }
+}
+
+// The one prepared Bolt worktree every target lies in, named as the listed
+// Unit the engine bound it to: a folder directly under `.aidlc/worktrees/`,
+// reached through no symlink, whose own delegated approval (written by
+// `prepare`) lets that Unit build. The judgement is the one the worker's own
+// hook makes inside the worktree, so a lowered fence counts here exactly as it
+// counts there, and a plan changed since approval refuses here as it does
+// there. Null when a target lies elsewhere, when two worktrees are named, or
+// when the folder is one `prepare` did not bind to a listed Unit.
+function preparedBoltWorktreeUnit(projectDir: string, targets: string[], units: readonly string[]): string | null {
+  try {
+    const projectLexical = resolve(projectDir);
+    const projectReal = realpathSync(projectLexical);
+    const root = resolve(worktreesDir(projectDir));
+    let worktree: string | null = null;
+    for (const target of targets) {
+      const targetAbs = resolve(target);
+      const inside = relative(root, targetAbs);
+      if (inside === "" || inside.startsWith("..") || isAbsolute(inside)) return null;
+      const folder = resolve(root, inside.split(/[\\/]/)[0]);
+      if (folder === targetAbs || (worktree !== null && worktree !== folder)) return null;
+      worktree = folder;
+      assertNoSymlinkInChainOrThrow(projectReal, relative(projectLexical, targetAbs));
+    }
+    if (worktree === null) return null;
+    const bound = worktree;
+    return units.find((unit) => codeGenerationExecutionAllowed(bound, { unit })) ?? null;
+  } catch {
+    return null;
   }
 }
 
@@ -2294,6 +2328,10 @@ async function evaluate(
   // hands over may be built: before that, the `brief` it would name refuses too.
   let handoffDefect: HandoffDefect | null = null;
   let rulesArriving: string | null = null;
+  // A parallel batch is out and this write is not one of the three the batch
+  // admits: the refusal stands with the fence on, and a lowered fence stands
+  // aside for it as for any other write of an approved plan.
+  let swarmBatchOut = false;
   // Plain sentences: some hosts (Codex) show a hook's refusal to the person as
   // it is written. A path or command the reason quotes stays on the one line.
   // biome-ignore lint/suspicious/noControlCharactersInRegex: replacing them is the point
@@ -2533,17 +2571,38 @@ async function evaluate(
           asked = null;
         }
         verdict = { block: true, mentioned: [] };
-      } else if (
-        activeDirective.kind === "invoke-swarm" &&
-        !mutation.opaqueShell &&
-        mutation.targets.every((candidate) =>
-          (activeDirective.units ?? []).some((unit) =>
-            isTrustedRecordTarget(projectDir, candidate, resolve(codeGenerationRecordDir(projectDir, unit)))))
-      ) {
+      } else if (activeDirective.kind === "invoke-swarm") {
         // A swarm batch plans in the main workspace, one record directory per
-        // listed Unit, before any worktree exists. Writes there are planning;
-        // implementation still waits for the approved, prepared workers.
-        return 0;
+        // listed Unit, before any worktree exists; each Unit's code is written
+        // by its worker inside the worktree `prepare` created and bound to it,
+        // judged as the worker's own hook judges it; and the reviewer writes
+        // its open request's own file. The worker and the reviewer are
+        // subagents of this session, so this hook, with the parent as its
+        // project, is the one that sees their writes. Everything else in the
+        // main checkout waits until the batch lands.
+        const listed = activeDirective.units ?? [];
+        if (!mutation.opaqueShell && mutation.targets.length > 0) {
+          if (mutation.targets.every((candidate) => listed.some((unit) =>
+            isTrustedRecordTarget(projectDir, candidate, resolve(codeGenerationRecordDir(projectDir, unit)))))) return 0;
+          if (preparedBoltWorktreeUnit(projectDir, mutation.targets, listed) !== null) return 0;
+          const reviewing = openReviewRequestFiles(projectDir, listed);
+          if (
+            reviewing.length > 0 &&
+            mutation.targets.every((candidate) => isOpenReviewTarget(projectDir, candidate, reviewing))
+          ) return 0;
+        }
+        swarmBatchOut = true;
+        authorityFailure =
+          `workspace mutation cannot select one approval target from directive kind "${activeDirective.kind}"` +
+          outOfDateClause(activeDirective);
+        standing = planStanding(projectDir, activeDirective);
+        verdict = { block: true, mentioned: listed };
+        blockedMutation = {
+          target: mutation.targets[0] ?? (mutation.shellCommand ?? "").trim().slice(0, 160),
+          unit: null,
+          opaqueShell: mutation.targets.length === 0,
+          detail: null,
+        };
       } else if (activeDirective.kind !== "run-stage") {
         authorityFailure =
           `workspace mutation cannot select one approval target from directive kind "${activeDirective.kind}"` +
@@ -2679,7 +2738,7 @@ async function evaluate(
       // A lowered fence lets changed content through after an approval; it never
       // supplies a missing directive, target, or approval. Those refusals say
       // what they say with the fence on, so each names the step that ends it.
-      if (authorityFailure) {
+      if (authorityFailure && !swarmBatchOut) {
         // The plan question is open: the same words as with the fence on.
         const waiting = authorityFailure === PLAN_APPROVAL_ASK_OPEN;
         return refuseExecutionIneligible(authorityRemedy(authorityFailure, standing, asked), !waiting, !waiting);
