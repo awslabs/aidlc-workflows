@@ -3496,6 +3496,79 @@ export function kiroIdeIgnoreSourceChecks(
     : [{ pass: true, label: `${KIRO_IGNORE_PREFIX} none hide ${harness}/ (${sources.length} file(s) checked)` }];
 }
 
+// What stops working when the person switches an AI-DLC hook off in Kiro's
+// Agent Hooks. Legacy names stay while config has not yet removed their files.
+const FLOW_ALTERING_KIRO_HOOKS: Record<string, string> = {
+  "aidlc-guard-tool-call": "approvals, the approved plan, reviewed work and AI-DLC's records are not protected",
+  "aidlc-record-human-turn": "your replies are not recorded, so approval gates cannot tell your answer from the assistant's",
+  "aidlc-continue-workflow": "a workflow with work left is not kept moving when the assistant stops (on Kiro CLI v3; Kiro IDE only records it)",
+  "aidlc-enforce-approval-gate": "the assistant is not held while an approval waits for your answer",
+  "aidlc-plan-approval-guard": "the build is not kept to the plan you approved",
+  "aidlc-terminal-command-guard": "commands are not checked before they run",
+  "aidlc-state-transition-guard": "workflow state can change without the engine",
+  "aidlc-review-freeze": "reviewed work is not protected",
+};
+
+// The rest record or keep files current; what each one's loss costs.
+const ADVISORY_KIRO_HOOKS: Record<string, string> = {
+  "aidlc-session-start": "your first prompt starts the session instead",
+  "aidlc-log-subagent": "a specialist agent's finished part is not recorded",
+  "aidlc-terminal-command": "/aidlc utility commands typed in chat go to the assistant instead of running directly",
+  "aidlc-write-audit-log": "files you create or update are not recorded or checked",
+  "aidlc-sync-workflow-state": "the Current Stage in aidlc-state.md can fall behind",
+  "aidlc-rebuild-stage-graph": "the plan of remaining stages is not rebuilt after the workflow moves",
+};
+
+export function kiroDisabledHookChecks(projectDir: string, harness: string): DoctorCheck[] {
+  const hooksDir = join(projectDir, harness, "hooks");
+  if (!existsSync(hooksDir)) return [];
+  // The install manifest says which hook files are AI-DLC's; without one, the
+  // aidlc- prefix does.
+  let owned: Set<string> | null = null;
+  try {
+    const manifest = JSON.parse(readFileSync(join(projectDir, harness, "tools", "data", "aidlc-manifest.json"), "utf-8")) as { files?: Record<string, string> };
+    const prefix = `${harness}/hooks/`;
+    owned = new Set(Object.keys(manifest?.files ?? {}).filter((f) => f.startsWith(prefix)).map((f) => f.slice(prefix.length)));
+  } catch {
+    // no readable manifest
+  }
+  const rows: DoctorCheck[] = [];
+  const advisory: string[] = [];
+  for (const file of readdirSync(hooksDir).sort()) {
+    if (!/^aidlc-.*\.json$/.test(file) || (owned !== null && !owned.has(file))) continue;
+    let parsed: { enabled?: unknown; hooks?: unknown };
+    try {
+      parsed = JSON.parse(readFileSync(join(hooksDir, file), "utf-8"));
+    } catch {
+      continue;
+    }
+    if (parsed === null || typeof parsed !== "object") continue;
+    const name = file.replace(/\.json$/, "");
+    const entries = Array.isArray(parsed.hooks) ? parsed.hooks as Array<{ enabled?: unknown }> : [];
+    // Classified by the AI-DLC file, not its editable name field.
+    if (parsed.enabled !== false && !entries.some((entry) => entry?.enabled === false)) continue;
+    const protects = FLOW_ALTERING_KIRO_HOOKS[name];
+    if (!protects) {
+      advisory.push(name);
+      continue;
+    }
+    rows.push({
+      pass: false,
+      label: `AI-DLC hook ${name} is switched off in Kiro's Agent Hooks: ${protects}`,
+      fix: `turn ${name} back on under Kiro's Agent Hooks, or set "enabled": true in ${harness}/hooks/${file}`,
+    });
+  }
+  if (advisory.length > 0) {
+    rows.push({
+      pass: true,
+      severity: "warn",
+      label: `AI-DLC hooks switched off in Kiro's Agent Hooks: ${advisory.map((name) => `${name} (${ADVISORY_KIRO_HOOKS[name] ?? "it no longer runs"})`).join("; ")}`,
+      fix: `turn them back on under Kiro's Agent Hooks, or set "enabled": true in their ${harness}/hooks/ files`,
+    });
+  }
+  return rows;
+}
+
 // A heartbeat names no launch, so only a recent one speaks for this one: in a
 // working session the hook for the prompt that asked for the doctor fired
 // moments ago. An older heartbeat may be another launch (yesterday's terminal,
@@ -4425,6 +4498,7 @@ export async function collectDoctorReport(
       label: "agents/aidlc.{json,md} present (conductor wiring)",
       fix: `${projectedFileRepair("kiro", ".kiro/agents/aidlc.json")} (Kiro CLI) or ${projectedFileRepair("kiro-ide", ".kiro/agents/aidlc.md")} (Kiro IDE)`,
     });
+    results.push(...kiroDisabledHookChecks(projectDir, harness));
     if (hasJsonAgent) {
       const cliSettingsPath = join(projectDir, harness, "settings", "cli.json");
       results.push({

@@ -209,7 +209,8 @@ The install ships:
 - `.kiro/steering/aidlc-onboarding.md` — always-included harness setup and commands.
 - `.kiro/hooks/aidlc-*.json` — the framework hooks in Kiro's v2 hook format.
   Both surfaces register them when a session starts; in Kiro IDE they appear
-  in the Agent Hooks panel. The IDE 0.x `.kiro.hook` format is no longer
+  in the Agent Hooks panel. Switching one off there writes `"enabled": false`
+  into its file, and `/aidlc --doctor` reports it. The IDE 0.x `.kiro.hook` format is no longer
   shipped: Kiro IDE 1.x never executes it.
 
 ## First run

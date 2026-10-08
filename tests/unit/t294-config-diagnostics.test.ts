@@ -58,7 +58,7 @@ import {
   type ConfigDiagnosticRecords,
   type ProvidersRecord,
 } from "../../core/tools/aidlc-config-diagnostics.ts";
-import { collectDoctorReport, firingHooksLastFired } from "../../core/tools/aidlc-utility.ts";
+import { collectDoctorReport, firingHooksLastFired, kiroDisabledHookChecks } from "../../core/tools/aidlc-utility.ts";
 import * as runtimePaths from "../../core/tools/aidlc-runtime-paths.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
@@ -2228,6 +2228,89 @@ describe("t294 trust diagnostics", () => {
           "Claude hook wiring differs from its legacy shipped baseline; refresh is required before flow-altering hooks can be verified",
       }),
     );
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("Kiro hooks switched off in Agent Hooks: guards and the reply recorder fail, the rest warn", () => {
+    const ide = temp("aidlc-t294-kiro-ide-hooks-off-");
+    cpSync(join(DIST, "kiro-ide"), ide, { recursive: true });
+    const hooks = join(ide, ".kiro", "hooks");
+    expect(kiroDisabledHookChecks(ide, ".kiro")).toEqual([]);
+    const switchOff = (file: string, where: "file" | "entry") => {
+      const parsed = JSON.parse(readFileSync(join(hooks, file), "utf-8"));
+      if (where === "file") parsed.enabled = false;
+      else parsed.hooks[0].enabled = false;
+      writeFileSync(join(hooks, file), JSON.stringify(parsed));
+    };
+    switchOff("aidlc-guard-tool-call.json", "file");
+    {
+      const renamed = JSON.parse(readFileSync(join(hooks, "aidlc-guard-tool-call.json"), "utf-8"));
+      renamed.hooks[0].name = "my-renamed-guard";
+      writeFileSync(join(hooks, "aidlc-guard-tool-call.json"), JSON.stringify(renamed));
+    }
+    switchOff("aidlc-record-human-turn.json", "entry");
+    switchOff("aidlc-session-start.json", "file");
+    switchOff("aidlc-log-subagent.json", "entry");
+    writeFileSync(join(hooks, "team-guard.json"), JSON.stringify({ enabled: false, hooks: [{ name: "team-guard" }] }));
+    expect(kiroDisabledHookChecks(ide, ".kiro")).toEqual([
+      {
+        pass: false,
+        label: "AI-DLC hook aidlc-guard-tool-call is switched off in Kiro's Agent Hooks: approvals, the approved plan, reviewed work and AI-DLC's records are not protected",
+        fix: 'turn aidlc-guard-tool-call back on under Kiro\'s Agent Hooks, or set "enabled": true in .kiro/hooks/aidlc-guard-tool-call.json',
+      },
+      {
+        pass: false,
+        label: "AI-DLC hook aidlc-record-human-turn is switched off in Kiro's Agent Hooks: your replies are not recorded, so approval gates cannot tell your answer from the assistant's",
+        fix: 'turn aidlc-record-human-turn back on under Kiro\'s Agent Hooks, or set "enabled": true in .kiro/hooks/aidlc-record-human-turn.json',
+      },
+      {
+        pass: true,
+        severity: "warn",
+        label: "AI-DLC hooks switched off in Kiro's Agent Hooks: aidlc-log-subagent (a specialist agent's finished part is not recorded); aidlc-session-start (your first prompt starts the session instead)",
+        fix: 'turn them back on under Kiro\'s Agent Hooks, or set "enabled": true in their .kiro/hooks/ files',
+      },
+    ]);
+
+    // With an install manifest, an aidlc- file it does not list is the project's.
+    mkdirSync(join(ide, ".kiro", "tools", "data"), { recursive: true });
+    writeFileSync(join(ide, ".kiro", "tools", "data", "aidlc-manifest.json"), JSON.stringify({
+      files: { ".kiro/hooks/aidlc-guard-tool-call.json": "x", ".kiro/hooks/aidlc-record-human-turn.json": "x" },
+    }));
+    writeFileSync(join(hooks, "aidlc-team-extra.json"), JSON.stringify({ enabled: false, hooks: [{ name: "aidlc-team-extra" }] }));
+    expect(kiroDisabledHookChecks(ide, ".kiro").map((row) => row.label)).toEqual([
+      expect.stringContaining("aidlc-guard-tool-call is switched off"),
+      expect.stringContaining("aidlc-record-human-turn is switched off"),
+    ]);
+
+    // No Kiro engine runs the Kiro CLI tree's .kiro.hook files (#1487), so their
+    // flag protects nothing; a hook file that parses to a non-object is skipped.
+    const cli = temp("aidlc-t294-kiro-cli-hooks-off-");
+    cpSync(join(DIST, "kiro"), cli, { recursive: true });
+    const cliHook = join(cli, ".kiro", "hooks", "aidlc-plan-approval-guard.kiro.hook");
+    writeFileSync(cliHook, readFileSync(cliHook, "utf-8").replace('"enabled":true', '"enabled":false'));
+    writeFileSync(join(cli, ".kiro", "hooks", "aidlc-null.json"), "null");
+    expect(kiroDisabledHookChecks(cli, ".kiro")).toEqual([]);
+  });
+
+  test("doctor fails a Kiro IDE guard hook switched off in Agent Hooks", () => {
+    const project = install("kiro-ide");
+    const guard = join(project, ".kiro", "hooks", "aidlc-guard-tool-call.json");
+    writeFileSync(guard, JSON.stringify({ ...JSON.parse(readFileSync(guard, "utf-8")), enabled: false }));
+    const result = spawnSync(BUN, [
+      join(project, ".kiro", "tools", "aidlc.ts"),
+      "--doctor",
+      "--json",
+      "--offline",
+    ], {
+      cwd: project,
+      env: { ...process.env, ...runtimeEnv(), AIDLC_HARNESS_DIR: ".kiro", AIDLC_HARNESS_NAME: "kiro-ide" },
+      encoding: "utf-8",
+      timeout: 60_000,
+    });
+    if (result.error) throw result.error;
+    expect(JSON.parse(result.stdout).data.checks).toContainEqual(expect.objectContaining({
+      pass: false,
+      label: "AI-DLC hook aidlc-guard-tool-call is switched off in Kiro's Agent Hooks: approvals, the approved plan, reviewed work and AI-DLC's records are not protected",
+    }));
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });
 
