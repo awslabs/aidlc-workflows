@@ -2893,6 +2893,20 @@ describe("t147 Kiro CLI reads what the person typed from the expanded skill body
       expect(parked.latch).toEqual(["--request-file", requestFile]);
       expect(readFileSync(join(dir, requestFile), "utf8")).toBe('park "&echo PWNED&" for now\n');
       expect(hop(parked.forwarded)).toEqual(["engine", "orchestrate", "next", ...parked.latch]);
+      // A spaced hyphen is a word in its typed place, not a flag with a value.
+      const hyphen = forward(String.raw`fix the '"Save"' button - it does nothing`);
+      expect(hyphen.latch).toEqual(["--request-file", requestFile]);
+      expect(readFileSync(join(dir, requestFile), "utf8")).toBe('fix the "Save" button - it does nothing\n');
+      // A typed -- starts the words: everything after it lands in the file, flags before it stay.
+      const marked = forward(String.raw`--scope feature -- the '"Save"' button --single`);
+      expect(marked.latch).toEqual(["--scope", "feature", "--request-file", requestFile]);
+      expect(readFileSync(join(dir, requestFile), "utf8")).toBe('the "Save" button --single\n');
+      expect(hop(marked.forwarded)).toEqual(["engine", "orchestrate", "next", ...marked.latch]);
+      // A %NAME% pair, which cmd.exe would replace even inside quotes, goes through the file too.
+      const named = forward(String.raw`set the path to '%TEMP%\x' now`);
+      expect(named.latch).toEqual(["--request-file", requestFile]);
+      expect(readFileSync(join(dir, requestFile), "utf8")).toBe(String.raw`set the path to %TEMP%\x now` + "\n");
+      expect(hop(named.forwarded)).toEqual(["engine", "orchestrate", "next", ...named.latch]);
     } finally { rmSync(dir, { recursive: true, force: true }); }
   });
 

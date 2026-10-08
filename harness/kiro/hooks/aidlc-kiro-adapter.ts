@@ -368,16 +368,18 @@ const WIN32_SINGLE_QUOTE = /['\u2018-\u201B]/g;
 // cmd.exe reads the word as quoted, and the launcher reads it back as typed (a
 // backslash run at the end doubled). A word holding a double quote of its own
 // never takes this form: cmd.exe flips its quote state at every double quote,
-// escaped or not, so such words go through the request file instead (below).
-// cmd.exe still expands %NAME% inside quotes; no form of the call prevents that.
+// escaped or not; and cmd.exe replaces a %NAME% pair even inside quotes. Such
+// words go through the request file instead (below), off the line altogether.
 const CMD_METACHARACTER = /[&|<>^]/;
+const CMD_NAME_PAIR = /%[^%]+%/;
 function windowsArgv(arg: string): string {
   const trailing = /\\*$/.exec(arg)?.[0] ?? "";
   return `"${arg}${trailing}"`;
 }
-// On Windows a word holding a double quote cannot cross cmd.exe as written
-// (cmd.exe flips its quote state at every double quote, escaped or not, so an
-// & | < > ^ inside such a word would run a second command): the hook writes the
+// On Windows a word holding a double quote, or a %NAME% pair, cannot cross
+// cmd.exe as written (cmd.exe flips its quote state at every double quote,
+// escaped or not, so an & | < > ^ inside such a word would run a second
+// command, and it replaces the pair with a variable's value): the hook writes the
 // person's words itself to the request file the engine reads with no shell on
 // the way, and forwards `next <flags> --request-file <path>`. The rule this
 // keeps: no forwarded token holding a double quote ever reaches the cmd.exe
@@ -395,36 +397,45 @@ async function requestFileForwarding(
   args: readonly string[],
   cwd: string,
 ): Promise<{ args: string[]; forwarded: string } | null> {
-  if (process.platform !== "win32" || !args.some((arg) => arg.includes('"'))) return null;
+  if (process.platform !== "win32" || !args.some((arg) => arg.includes('"') || CMD_NAME_PAIR.test(arg))) return null;
+  // A typed `--` starts the words: everything after it is the request, as the
+  // engine reads it, and the marker itself is not a word.
+  const literal = args.indexOf("--");
+  const typed = literal < 0 ? [...args] : [...args.slice(0, literal), ...args.slice(literal + 1)];
   let flags: string[] = [];
-  let words: string[] = [...args];
+  let words: string[] = typed;
   if (args[0] === "compose") {
     flags = ["compose"];
-    words = args.slice(1);
+    words = typed.slice(1);
   } else if (leadingOrchestratorVerb(args) === null) {
     try {
       const { parseNextFlags } = await import("../tools/aidlc-orchestrate.ts");
       flags = [];
       words = [];
-      for (let i = 0; i < args.length; i++) {
-        const token = args[i];
-        if (!token.startsWith("-") || token.includes('"')) {
+      const head = literal < 0 ? args : args.slice(0, literal);
+      for (let i = 0; i < head.length; i++) {
+        const token = head[i];
+        // On the line only when the engine on its own reads the token as a
+        // flag: a lone `-`, a `-x` or any token the engine reads as request text
+        // stays a word, in its typed place.
+        if (!token.startsWith("-") || token.includes('"') || parseNextFlags([token]).intent !== undefined) {
           words.push(token);
           continue;
         }
         flags.push(token);
-        const value = args[i + 1];
+        const value = head[i + 1];
         if (
           value !== undefined && !value.startsWith("-") && !value.includes('"') &&
-          parseNextFlags([token, value]).intent !== value
+          parseNextFlags([token, value]).intent === undefined
         ) {
           flags.push(value);
           i++;
         }
       }
+      if (literal >= 0) words.push(...args.slice(literal + 1));
     } catch {
       flags = [];
-      words = [...args];
+      words = typed;
     }
   }
   try {
