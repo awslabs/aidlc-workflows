@@ -362,13 +362,14 @@ changes** options are unlettered. All `[Answer]:` tags start blank.
 Multi-select questions add "(select all that apply)" to the question text;
 answer format: `[Answer]: A, B, E`.
 
-When the stage's `<slug>-questions.md` already holds an answer of the person's
-(an `[Answer]:` with more than blanks or underscores), the run-stage directive
-carries `questions_answered` (`path`), on `next --resume`, a bare `next` and
-every re-issue alike, in a new chat or the same one. The conductor keeps the
-file and carries on from where its answers stop (blank questions, then an
-unanswered summary confirmation, then the stage's next step), never creating it
-again or asking an answered question again (#1873). A redo the person asked for
+When the stage's `<slug>-questions.md` already exists with its questions (an
+`[Answer]:` tag, filled in or still blank), the run-stage directive carries
+`questions_answered` (`path`), on `next --resume`, a bare `next` and every
+re-issue alike, in a new chat or the same one. The conductor keeps the file and
+carries on from where its answers stop (the blank questions as written, all of
+them when none is answered yet, then an unanswered summary confirmation, then
+the stage's next step), never creating it again, writing new questions over it,
+or asking an answered question again (#1873). A redo the person asked for
 (`artifact_reuse`, which drops the field, or Redo from scratch) starts afresh.
 
 **Step 2: Use the directive's answer mode, or present the mode choice.** The

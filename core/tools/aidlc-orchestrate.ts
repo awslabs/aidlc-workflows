@@ -5927,10 +5927,13 @@ function boundedContextWarnings(warnings: string[]): string[] {
 // stage-level Construction directory. `scope` + `stateContent` feed the gate
 // computation (the skeleton round-trip) and the first-run-stage persona delivery
 // (decision D-E).
-// This stage's `<slug>-questions.md` when it already holds an answer of the
-// person's (an `[Answer]:` with more than blanks or underscores), as a path from
-// the project; null when it has none or cannot be read. A stage resumed in a
-// new chat keeps it instead of being asked from the start again (#1873).
+// This stage's `<slug>-questions.md` when it already holds the stage's
+// questions (an `[Answer]:` tag, filled in or still blank), as a path from the
+// project; null when there is no such file or it cannot be read. A stage
+// resumed in a new chat keeps it and asks only the open questions, as written,
+// instead of being asked from the start again (#1873); a file whose questions
+// are all still open is kept the same way, or a resumed stage with two open
+// questions writes five new ones over them.
 function answeredQuestionsFile(projectDir: string, node: GraphStage, unit: string | null): string | null {
   try {
     const dir = node.phase === "construction" && unit !== null && unit !== UNIT_NAME_PLACEHOLDER
@@ -5938,7 +5941,7 @@ function answeredQuestionsFile(projectDir: string, node: GraphStage, unit: strin
       : stageDir(projectDir, node.phase, node.slug);
     const path = join(dir, `${node.slug}-questions.md`);
     if (!existsSync(path)) return null;
-    return /^\[Answer\]:[ \t]*[^\s_][^\n]*$/m.test(readFileSync(path, "utf-8"))
+    return /^\[Answer\]:/m.test(readFileSync(path, "utf-8"))
       ? relative(projectDir, path).replaceAll("\\", "/")
       : null;
   } catch {
