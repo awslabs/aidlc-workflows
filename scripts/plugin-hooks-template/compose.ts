@@ -31,6 +31,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { basename, dirname, join, relative, resolve } from "node:path";
+import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
@@ -65,6 +66,28 @@ const HARNESS_NAME = (() => {
   }
   return HARNESS_LEAF.replace(/^\./, "");
 })();
+// Whether the .kiro tree is the KAS layout (Markdown agents, standalone hook
+// JSON) rather than the agent-v1 JSON layout. Same reading as the runtime's
+// kiroTreeLayout (core/tools/aidlc-runtime-paths.ts), which this template ships
+// without: harness.json's kiroLayout, else the row name trees carried before it,
+// else the conductor file. `kiro-ide` names only the KAS adapter.
+const KIRO_KAS_LAYOUT = (() => {
+  if (HARNESS_LEAF !== ".kiro") return false;
+  if (process.env.AIDLC_HARNESS_NAME?.trim() === "kiro-ide") return true;
+  try {
+    const parsed = JSON.parse(
+      readFileSync(join(HARNESS_DIR, "tools", "data", "harness.json"), "utf-8"),
+    ) as { kiroLayout?: unknown; name?: unknown; distribution?: unknown };
+    if (parsed.kiroLayout === "kas" || parsed.kiroLayout === "agent-v1") {
+      return parsed.kiroLayout === "kas";
+    }
+    const row = typeof parsed.name === "string" ? parsed.name : parsed.distribution;
+    if (row === "kiro-ide" || row === "kiro") return row === "kiro-ide";
+  } catch {
+    // A tree without readable metadata still has its conductor file.
+  }
+  return existsSync(join(HARNESS_DIR, "agents", "aidlc.md"));
+})();
 const IS_COPILOT = HARNESS_NAME === "copilot";
 const IS_OPENCODE = HARNESS_NAME === "opencode";
 const STAGES_DIR = join(HARNESS_DIR, "aidlc-common", "stages");
@@ -72,13 +95,15 @@ const SKILLS_DIR = IS_COPILOT
   ? join(PROJECT_DIR, ".github", "skills")
   : join(HARNESS_DIR, "skills");
 const PHASES = ["initialization", "ideation", "inception", "construction", "operation"];
-const COMPOSE_LOCK_RETRIES = 600;
 const NATIVE_RUNTIME = Boolean(process.env.AIDLC_COMPILED_EXECUTABLE?.trim());
 const SCOPE_TABLE_END = "<!-- END: compiled scope grid -->";
 const STAGE_TABLE_END = "<!-- END: compiled stage graph -->";
 type ParseStageFrontmatter = (raw: string) => Record<string, unknown>;
 interface InstalledAidlcLib {
   hooksHealthDir?: (projectDir: string) => string;
+  committedTextBytes?: (bytes: Buffer) => Buffer;
+  writeHookStatusFile?: (healthDir: string, fileName: string, data: string) => boolean;
+  removeHookStatusFile?: (healthDir: string, fileName: string) => boolean;
   parseStageFrontmatter?: ParseStageFrontmatter;
   acquireAuditLock?: (
     projectDir: string,
@@ -102,6 +127,19 @@ function installedAidlcLib(): Promise<InstalledAidlcLib | null> {
     .then((module) => module as InstalledAidlcLib)
     .catch(() => null);
   return installedLibPromise;
+}
+
+async function composeLockRetries(): Promise<number> {
+  // Resolve from the installed engine: this template is copied into plugins,
+  // so repository-relative imports would break emitted hooks.
+  try {
+    const budget = await import(join(HARNESS_DIR, "tools", "aidlc-runtime-budget.ts"));
+    if (Number.isSafeInteger(budget.LONG_SUBPROCESS_TIMEOUT_MS) &&
+      budget.LONG_SUBPROCESS_TIMEOUT_MS > 0) {
+      return Math.ceil(budget.LONG_SUBPROCESS_TIMEOUT_MS / 100);
+    }
+  } catch { /* Older source installs do not contain the shared policy module. */ }
+  return 9000; // Fifteen-minute compatibility backstop, at the existing 100ms cadence.
 }
 
 function installedStageSchema(): Promise<InstalledStageSchema | null> {
@@ -240,15 +278,37 @@ function recordInstalledToolPayloadDrop(reason: string): void {
 // — a clean plugin's compose (or an early-exit guard) deleted another plugin's
 // live degraded drop, so doctor went green (round-6). Per-plugin files isolate
 // each plugin's signal; doctor globs `*.drops` and aggregates them all.
+// The file goes through the installed engine's hook status writer and
+// remover, which go through no link inside the record; an engine from before
+// them keeps the plain write and removal until it is upgraded.
+async function writeDropFile(healthDir: string, fileName: string, data: string): Promise<void> {
+  const lib = await installedAidlcLib();
+  if (typeof lib?.writeHookStatusFile === "function") {
+    lib.writeHookStatusFile(healthDir, fileName, data);
+    return;
+  }
+  mkdirSync(healthDir, { recursive: true });
+  writeFileSync(join(healthDir, fileName), data, { flag: "w" });
+}
+
+async function removeDropFile(healthDir: string, fileName: string): Promise<void> {
+  const lib = await installedAidlcLib();
+  if (typeof lib?.removeHookStatusFile === "function") {
+    lib.removeHookStatusFile(healthDir, fileName);
+    return;
+  }
+  const dropFile = join(healthDir, fileName);
+  if (existsSync(dropFile)) rmSync(dropFile, { force: true });
+}
+
 async function flushDrops(): Promise<void> {
   try {
     const healthDir = await resolveHealthDir();
-    const dropFile = join(healthDir, `plugin-compose-${PLUGIN_KEY}.drops`);
+    const dropName = `plugin-compose-${PLUGIN_KEY}.drops`;
     if (_drops.length === 0) {
-      if (existsSync(dropFile)) rmSync(dropFile, { force: true });
+      await removeDropFile(healthDir, dropName);
     } else {
-      mkdirSync(healthDir, { recursive: true });
-      writeFileSync(dropFile, _drops.map((l) => l + "\n").join(""), { flag: "w" });
+      await writeDropFile(healthDir, dropName, _drops.map((l) => l + "\n").join(""));
     }
   } catch { /* truly non-fatal */ }
   _drops.length = 0;
@@ -268,19 +328,11 @@ async function flushInstalledToolPayloadDrops(): Promise<void> {
   if (!installedToolPayloadAuditRan) return;
   try {
     const healthDir = await resolveHealthDir();
-    const dropFile = join(
-      healthDir,
-      `plugin-compose-installed-tool-payloads-${HARNESS_KEY}.drops`,
-    );
+    const dropName = `plugin-compose-installed-tool-payloads-${HARNESS_KEY}.drops`;
     if (_installedToolPayloadDrops.length === 0) {
-      if (existsSync(dropFile)) rmSync(dropFile, { force: true });
+      await removeDropFile(healthDir, dropName);
     } else {
-      mkdirSync(healthDir, { recursive: true });
-      writeFileSync(
-        dropFile,
-        _installedToolPayloadDrops.map((line) => line + "\n").join(""),
-        { flag: "w" },
-      );
+      await writeDropFile(healthDir, dropName, _installedToolPayloadDrops.map((line) => line + "\n").join(""));
     }
   } catch { /* truly non-fatal */ }
   _installedToolPayloadDrops.length = 0;
@@ -480,9 +532,9 @@ if (
   await flushDrops();
   return;
 }
-// A sibling compose can legitimately hold the lock for compile + runner
-// regeneration, so queue for ~60s rather than skipping after the default ~5s.
-if (!lockLib.acquireAuditLock(PROJECT_DIR, COMPOSE_LOCK_RETRIES)) {
+// A sibling compose can hold the lock across compilation and runner generation.
+// Use the installed compound-work backstop without changing owner/reaper rules.
+if (!lockLib.acquireAuditLock(PROJECT_DIR, await composeLockRetries())) {
   recordDrop("plugin compose skipped: could not acquire the shared workspace lock");
   await flushDrops();
   return;
@@ -496,6 +548,13 @@ function writeComposeFile(path: string, data: string | Buffer): void {
     composeFileSnapshots.set(path, existsSync(path) ? readFileSync(path) : null);
   }
   writeFileSync(path, data);
+}
+function removeComposeFile(path: string): void {
+  if (!existsSync(path)) return;
+  if (composeTransactionOpen && !composeFileSnapshots.has(path)) {
+    composeFileSnapshots.set(path, readFileSync(path));
+  }
+  rmSync(path, { force: true });
 }
 function commitComposeWrites(): void {
   composeTransactionOpen = false;
@@ -518,6 +577,50 @@ function rollbackComposeWrites(): void {
     recordDrop(`compose rollback could not restore ${failures.join("; ")}`);
   }
 }
+// --- what this plugin installed ---------------------------------------------
+// The same hash-proven record `aidlc engine plugin sync` writes and reads
+// (tools/data/plugin-owned-<key>.json: project-relative forward-slash paths, a
+// sha256 per file). It is what lets a re-compose tell the plugin's own older
+// copy (replace it) from a copy the person changed (report it). Without it
+// every differing file was a collision, so a plugin's fix to a sensor or tool
+// never reached a project composed without sync in front (the Kiro CLI
+// fallback, a hand run, the plugin test tool).
+const ownedRecordPath = join(HARNESS_DIR, "tools", "data", `plugin-owned-${PLUGIN_KEY}.json`);
+// A file's identity is its committed text (the installed engine's rule: CRLF
+// reads as LF, so a checkout that turns line endings is no change). An engine
+// without the rule compares raw bytes, as before.
+const committedText: (bytes: Buffer) => Buffer =
+  typeof lockLib.committedTextBytes === "function" ? lockLib.committedTextBytes : (bytes) => bytes;
+const sha256Of = (bytes: Buffer): string => `sha256:${createHash("sha256").update(committedText(bytes)).digest("hex")}`;
+// A record written before the rule holds the raw-bytes digest of a CRLF file;
+// identical bytes are no change either, so that record proves the file too.
+const recordedDigestMatches = (bytes: Buffer, recorded: string): boolean =>
+  recorded === sha256Of(bytes) || recorded === `sha256:${createHash("sha256").update(bytes).digest("hex")}`;
+const projectRelPosix = (path: string): string => relative(PROJECT_DIR, path).replace(/\\/g, "/");
+let _priorOwned: Map<string, string> | null = null;
+function priorOwned(): Map<string, string> {
+  if (_priorOwned) return _priorOwned;
+  const out = new Map<string, string>();
+  try {
+    const parsed = JSON.parse(readFileSync(ownedRecordPath, "utf-8")) as {
+      schemaVersion?: unknown;
+      name?: unknown;
+      files?: unknown;
+    };
+    if (parsed.schemaVersion === 1 && parsed.name === PLUGIN_KEY && Array.isArray(parsed.files)) {
+      for (const file of parsed.files as Array<{ path?: unknown; sha256?: unknown }>) {
+        if (typeof file?.path === "string" && typeof file?.sha256 === "string") out.set(file.path, file.sha256);
+      }
+    }
+  } catch {
+    // No record yet: a first compose, or a project composed before the record
+    // existed. Every differing file is then reported, never overwritten.
+  }
+  _priorOwned = out;
+  return out;
+}
+// Files this run wrote, replaced, or found byte-identical to the plugin's copy.
+const ownedThisRun = new Map<string, string>();
 
 if (!pluginEnabledBySelection()) {
   recordDrop(
@@ -1253,7 +1356,7 @@ async function kiroPluginAgentPrechecks(): Promise<KiroPluginAgentPrechecks | nu
   ) {
     return null;
   }
-  const isKiroIde = HARNESS_NAME === "kiro-ide";
+  const isKiroIde = KIRO_KAS_LAYOUT;
   const isKiroCli = HARNESS_LEAF === ".kiro" && !isKiroIde;
   const surfaceExt = isKiroIde
     ? ".md"
@@ -1535,11 +1638,15 @@ function copyTreeNoClobber(
     if (file.endsWith(".md")) {
       buf = Buffer.from(buf.toString("utf-8").replaceAll("{{HARNESS_DIR}}", HARNESS_LEAF));
     }
+    // The plugin's own earlier copy, unchanged since it was installed, that this
+    // run replaces; put back if a precheck refuses the new copy.
+    let replacing: Buffer | null = null;
     if (existsSync(dest)) {
-      // no-clobber — never replace core/another plugin. Log only a genuine
-      // content collision, not an identical idempotent re-copy. The installed
-      // copy was written transformed, so transform before comparing; a source
-      // the transform rejects cannot equal any installed copy.
+      // no-clobber: never replace core, another plugin, or a copy the person
+      // changed. Log only a genuine content collision, not an identical
+      // idempotent re-copy. The installed copy was written transformed, so
+      // transform before comparing; a source the transform rejects cannot equal
+      // any installed copy.
       const installed = readFileSync(dest);
       const existingAction = existingHandler?.({
         file,
@@ -1550,6 +1657,7 @@ function copyTreeNoClobber(
       }) ?? "compare";
       if (existingAction === "written") {
         composedPaths?.add(rel.replace(/\\/g, "/"));
+        ownedThisRun.set(projectRelPosix(dest), sha256Of(readFileSync(dest)));
         wrote = true;
         continue;
       }
@@ -1562,12 +1670,24 @@ function copyTreeNoClobber(
           current = null;
         }
       }
-      if (current !== null && installed.equals(current)) {
+      if (current !== null && committedText(installed).equals(committedText(current))) {
         composedPaths?.add(rel.replace(/\\/g, "/"));
-      } else {
-        recordDrop(`${kind} "${rel}" collides with an existing file (core or another plugin); not overwritten — rename it to a plugin-namespaced path`);
+        ownedThisRun.set(projectRelPosix(dest), sha256Of(installed));
+        continue;
       }
-      continue;
+      const recorded = priorOwned().get(projectRelPosix(dest));
+      if (recorded === undefined) {
+        recordDrop(`${kind} "${rel}" collides with an existing file this plugin has no record of installing (core, another plugin, an older copy of this plugin, or a local edit); not overwritten - if it is this plugin's older copy, remove it and re-run compose; if it is core's or another plugin's, rename yours to a plugin-namespaced path`);
+        continue;
+      }
+      if (!recordedDigestMatches(installed, recorded)) {
+        recordDrop(`${kind} "${rel}" was changed after this plugin installed it; not overwritten - to take the plugin's current copy, move your change elsewhere, remove the file, and re-run compose`);
+        continue;
+      }
+      // Remove the old copy first so the prechecks below judge a fresh copy,
+      // exactly as they would on a first install.
+      replacing = installed;
+      removeComposeFile(dest);
     }
     // Precheck BEFORE transform, on the pre-transform text: the precheck is
     // the skip-and-drop gate for exactly the shapes a transform throws on
@@ -1575,13 +1695,17 @@ function copyTreeNoClobber(
     // first turns a one-file drop into an aborted compose. It also keeps the
     // precheck's shape checks live — the emitter strips disallowedTools, so a
     // post-transform precheck could never reject an un-projectable value.
-    if (precheck && !precheck({ file, rel, dest, content: buf.toString("utf-8") })) continue;
+    if (precheck && !precheck({ file, rel, dest, content: buf.toString("utf-8") })) {
+      if (replacing) writeComposeFile(dest, replacing);
+      continue;
+    }
     if (transform) {
       buf = Buffer.from(transform({ file, rel, content: buf.toString("utf-8") }));
     }
     mkdirSync(join(dest, ".."), { recursive: true });
     writeComposeFile(dest, buf);
     composedPaths?.add(rel.replace(/\\/g, "/"));
+    ownedThisRun.set(projectRelPosix(dest), sha256Of(buf));
     wrote = true;
   }
   return wrote;
@@ -1990,6 +2114,36 @@ try {
     "tool",
     combinePrechecks(toolsTestPayloadPrecheck(), doctorScriptOwnershipPrecheck()),
   ) || changed;
+
+  // Record what this plugin installed. Prior entries stay while their file
+  // exists (an edited file keeps the hash the plugin installed, so the next
+  // run can name the edit); entries for files that are gone drop out; this
+  // run's files win. Under sync the same record is rewritten afterwards from
+  // the staged project, in the same shape.
+  {
+    const files = new Map<string, string>();
+    for (const [path, sha] of priorOwned()) {
+      if (existsSync(join(PROJECT_DIR, path))) files.set(path, sha);
+    }
+    for (const [path, sha] of ownedThisRun) files.set(path, sha);
+    const record = `${JSON.stringify({
+      schemaVersion: 1,
+      name: PLUGIN_KEY,
+      files: [...files].sort(([a], [b]) => a.localeCompare(b)).map(([path, sha256]) => ({ path, sha256 })),
+    }, null, 2)}\n`;
+    try {
+      const current = existsSync(ownedRecordPath) ? readFileSync(ownedRecordPath, "utf-8") : null;
+      if (files.size > 0 && current !== record) {
+        mkdirSync(dirname(ownedRecordPath), { recursive: true });
+        writeComposeFile(ownedRecordPath, record);
+      }
+    } catch (e) {
+      recordDrop(
+        `could not write the plugin file record ${relative(PROJECT_DIR, ownedRecordPath)}: ${e instanceof Error ? e.message : String(e)} - the next compose cannot tell this plugin's own older copies from local edits`,
+        "advisory",
+      );
+    }
+  }
 
   // 2. Merge contributions into stage SOURCE (structural + prose fragments).
   // Probe ONCE whether the installed engine accepts required_sections — writing
@@ -2425,13 +2579,57 @@ try {
     }
   }
 
+  // Fragments this plugin recorded earlier but did not ship this run (moved to
+  // another anchor, renumbered, or dropped) leave the stage and the record, so
+  // a moved fragment appears once and doctor's composed-surface check agrees.
+  // Gated like the merge itself: a readable sidecar and an enabled plugin.
+  if (!contribManifestLoadError && pluginEnabledBySelection()) {
+    for (const [target, rec] of Object.entries(contribManifest)) {
+      if (!Array.isArray(rec.fragments) || rec.fragments.length === 0) continue;
+      const stale = rec.fragments.filter((f) =>
+        f !== null && typeof f === "object" && typeof f.anchor === "string" &&
+        Number.isSafeInteger(f.order) && typeof f.hash === "string" &&
+        !seenFragKeys.has(`${target}:${PLUGIN_NAME}:${f.anchor}:${f.order}`));
+      if (stale.length === 0) continue;
+      // The sidecar is project data: a key that is not a plain stage slug is
+      // not resolved to a path.
+      const stageFile = /^[a-z0-9][a-z0-9-]*$/.test(target) ? findStageFile(target) : null;
+      if (stageFile) {
+        let content = readFileSync(stageFile, "utf-8").replace(/\r\n/g, "\n");
+        const before = content;
+        for (const f of stale) {
+          const open = `<!-- plugin:${PLUGIN_NAME}:${f.anchor}:${f.order}:${f.hash} -->`;
+          const close = `<!-- /plugin:${PLUGIN_NAME}:${f.anchor}:${f.order}:${f.hash} -->`;
+          const start = content.indexOf(open);
+          const end = start === -1 ? -1 : content.indexOf(close, start + open.length);
+          if (start === -1 || end === -1) continue;
+          // Close the seam the block leaves: one blank line, as before the splice.
+          const head = content.slice(0, start).replace(/\n*$/, "\n");
+          const tail = content.slice(end + close.length).replace(/^\n*/, "");
+          content = tail ? `${head}\n${tail}` : head;
+        }
+        if (content !== before) {
+          writeComposeFile(stageFile, content);
+          changed = true;
+        }
+      }
+      rec.fragments = rec.fragments.filter((f) => !stale.includes(f));
+      if (rec.fragments.length === 0) delete rec.fragments;
+      if (Object.keys(rec).length === 0) delete contribManifest[target];
+      contribManifestDirty = true;
+    }
+  }
+
   // Persist structural and fragment provenance when this run changes it.
   // A prose-only plugin therefore leaves a sidecar that doctor can verify after
   // a fresh engine distribution overwrites the composed stage source.
   if (contribManifestDirty) {
     try {
       mkdirSync(join(HARNESS_DIR, "tools", "data"), { recursive: true });
-      writeComposeFile(contribManifestPath, `${JSON.stringify(contribManifest, null, 2)}\n`);
+      // An empty sidecar is refused on the next load, so the last retired
+      // record takes the file with it.
+      if (Object.keys(contribManifest).length === 0) removeComposeFile(contribManifestPath);
+      else writeComposeFile(contribManifestPath, `${JSON.stringify(contribManifest, null, 2)}\n`);
     } catch (e) {
       recordDrop(`could not write the contribution sidecar ${relative(PROJECT_DIR, contribManifestPath)}: ${e instanceof Error ? e.message : String(e)} - doctor cannot verify the composed surface and disabling this plugin will not strip its merged contributions`);
       rollbackComposeWrites();

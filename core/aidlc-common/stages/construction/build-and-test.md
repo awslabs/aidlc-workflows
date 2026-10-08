@@ -62,7 +62,15 @@ generating instructions. Read all applicable stage-level and per-unit sources:
 
 - every artifact under `nfr-requirements/`
 - every artifact under `nfr-design/`
-- every approved `## Testing Contract` in `code-generation-plan.md`
+- every current `## Testing Contract` in `code-generation-plan.md`, including
+  postapproval edits permitted by Code Generation Step 3's lowered-fence rule;
+  do not describe those edits as human-approved.
+  A CI obligation (the contract's "Run the selected tests in CI before merge."
+  line, or a memory note's "CI execution before merge") applies only when the
+  plan runs CI Pipeline: `aidlc-state.md` lists `ci-pipeline` as an `EXECUTE`
+  stage whose checkbox is not `[S]`. When the plan does not run it, record that
+  target `N/A` with the reason "the plan runs no CI Pipeline": it is not
+  applicable, so it is never `Unverified` and never a failure.
 
 For each target, record a stable target ID (derive one from the source path and
 section when the source has none), source path/section, expected value, the
@@ -115,8 +123,9 @@ Create `<record>/construction/build-and-test/build-and-test-summary.md`:
   Target ID, Source, Expected, Actual, Evidence, Owning Stage, Verdict
 - Each applicable target begins with Actual and Evidence `Pending`, and Verdict
   `Pending`. `N/A` is valid only when the source inventory found no applicable
-  measurable target; in that case write one explanatory `N/A` row. An
-  applicable target may never use `N/A`.
+  measurable target (then write one explanatory `N/A` row), or for a target the
+  plan makes inapplicable, as Step 1 says for the CI obligation of a plan that
+  runs no CI Pipeline. An applicable target may never use `N/A`.
 - Readiness assessment (build-ready, test-ready, deployment-ready)
 - Known limitations or outstanding items
 
@@ -191,7 +200,8 @@ quality target is never an acceptable fix.
    construction protocol module
    (`aidlc-common/protocols/stage-protocol-construction.md`),
    "Build-and-Test failure loop-back". Record the diagnosis +
-   impact-estimated fix plan, then jump back to code-generation and replay
+   impact-estimated fix plan, then reopen code-generation for the unit(s) the
+   fix names (every unit only when the cause spans them all) and replay
    forward through its settlement-aware route. Do NOT present this stage's
    approval gate on the failed run.
 4. **Halt-and-ask** — if the mode is gated (or unset), the 3-loop-back bound
@@ -211,8 +221,9 @@ code-generation workflows may
 settle directly to the all-covered gate, while sticky receipt-mode workflows
 re-emit per-unit work. Both routes apply the planned fix and deterministic
 Modify/Keep decisions before the gate, then record a fresh current-attempt
-review for every applicable code-generation unit; `STAGE_JUMPED` invalidates
-the prior reviews and approval fails without replacements. Under unit-major
+review for every reopened code-generation unit; the reopen invalidates those
+units' prior reviews and approval fails without replacements. Units the fix
+does not name keep their work and approvals. Under unit-major
 iteration the replay uses the serial per-unit walk, never the autonomous swarm.
 
 **Single-stage runs**: in a `--single` run (`/aidlc --stage build-and-test

@@ -19,7 +19,8 @@ interface Result {
 	// "ineligible" when a template file resolves but the artifact is NOT in the
 	// dispatcher-threaded eligible set (a questions/timestamp marker), so the
 	// template is ignored and a config warning is emitted instead. Absent when
-	// no template resolves — the output keeps the generic ≥2-H2 floor.
+	// no template resolves — the output keeps the generic ≥2-H2 floor (a
+	// timestamp marker passes instead).
 	template?: "applied" | "ineligible";
 	// The template's expected `##` heading set (only when template === "applied").
 	template_expected?: string[];
@@ -43,7 +44,8 @@ interface Flags {
 	// Absolute path to the FRAMEWORK-DEFAULT templates dir
 	// (<harness>/tools/data/templates/) — the engine-shipped MIDDLE tier,
 	// consulted only when the team dir misses. Threaded by the dispatcher.
-	// Absent or a clean miss → fall through to the generic ≥2-H2 floor. The
+	// Absent or a clean miss → fall through to the generic ≥2-H2 floor (or a
+	// timestamp marker's pass). The
 	// framework ships zero defaults at GA, so this normally misses.
 	frameworkTemplatesDir?: string;
 	// Comma-joined set of artifact NAMES (output-filename stems) this stage
@@ -152,14 +154,23 @@ export function main(argv: string[]): void {
 	// char[2] is '#', not ' ', so deeper headings are excluded.
 	const headings = parseH2Headings(body);
 
+	// Timestamp markers (`<artifact>-timestamp.md`) are run records, not
+	// documents: practices-discovery specifies a single `Discovered: ...` line,
+	// so the floor failed every to-spec file. They pass, with their headings
+	// still reported. Questions markers keep the floor: each question is its own
+	// `##` section, so real question files clear it. The `-timestamp` suffix is
+	// the marker convention templateEligibleArtifacts (aidlc-graph.ts) keys on.
+	const stem = basename(flags.outputPath).replace(/\.md$/, "");
+	const timestampMarker = stem.endsWith("-timestamp");
+
 	const h2_count = headings.length;
-	let pass = h2_count >= 2;
+	let pass = timestampMarker || h2_count >= 2;
 	// findings_count derivation per locked plan: max(0, 2 - h2_count).
 	// Emitted by the script (not the dispatcher) per the v3 control-
 	// plane / data-plane separation: per-sensor scripts own their own
 	// findings derivation; the dispatcher reads out.findings_count
 	// generically and is sensor-id-agnostic.
-	let findings_count = Math.max(0, 2 - h2_count);
+	let findings_count = timestampMarker ? 0 : Math.max(0, 2 - h2_count);
 	const result: Result = { pass, h2_count, headings, findings_count };
 
 	// Template-override branch (TPL — template-override layer). When a
@@ -180,24 +191,27 @@ export function main(argv: string[]): void {
 	// resolution. The agent reads the SAME order (stage-protocol.md) — no drift.
 	//
 	// ELIGIBILITY GATE (required, not optional): the stem==artifact key is
-	// unsound for questions/timestamp markers (a `*-questions.md` Q&A file is
-	// intentionally not ≥2-H2). The per-sensor script cannot know the stage's
+	// unsound for questions/timestamp markers (a `*-questions.md` file's
+	// sections are the questions asked this run, not a fixed shape a template
+	// could describe). The per-sensor script cannot know the stage's
 	// artifact set, so the dispatcher threads --template-eligible. A resolved
 	// template applies ONLY when the stem ∈ that set; otherwise it is ignored
-	// and an advisory config warning is emitted (the output keeps its floor).
-	const stem = basename(flags.outputPath).replace(/\.md$/, "");
+	// and an advisory config warning is emitted (a questions marker keeps its
+	// floor; a timestamp marker still passes).
 	const templatePath = resolveTemplatePath(stem, flags);
 	if (templatePath) {
 		const eligible = (flags.templateEligible ?? []).includes(stem);
 		if (!eligible) {
 			// Template resolves but the artifact is not declared eligible —
-			// ignore it (keep the floor) + surface a config warning.
+			// ignore it (keep the verdict above) + surface a config warning.
 			result.template = "ineligible";
 			result.config_warning =
 				`template ${stem}.md resolved but artifact "${stem}" is not ` +
 				`template-eligible for stage "${flags.stage ?? "?"}" ` +
 				`(questions/timestamp markers are excluded); template ignored, ` +
-				`keeping the generic >=2-H2 floor.`;
+				(timestampMarker
+					? `and timestamp markers are not shape-checked.`
+					: `keeping the generic >=2-H2 floor.`);
 		} else {
 			let templateBody: string;
 			try {
@@ -222,7 +236,7 @@ export function main(argv: string[]): void {
 	// must carry the required fenced ```yaml units: edge block beside its prose.
 	// A malformed or cyclic block fails loud here, at the gate, rather than the
 	// runtime compiler silently mis-reading or omitting it downstream. Every
-	// other markdown artefact keeps the generic ≥2-H2 check untouched. (Orthogonal
+	// other markdown artefact keeps the verdict above untouched. (Orthogonal
 	// to the template branch above — the edge-block check still applies even if a
 	// template for unit-of-work-dependency resolves.)
 	if (basename(flags.outputPath) === "unit-of-work-dependency.md") {

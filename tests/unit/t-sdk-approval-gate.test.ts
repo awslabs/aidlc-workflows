@@ -3,7 +3,10 @@
 // Deterministic calibration of the real SDK driver and fixture evidence reader.
 // The suite runner starts each file in a separate Bun process; this transport
 // mock belongs only to this file. No Claude process or model request is made.
-import { afterEach, describe, expect, mock, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+} from "../harness/test-budget.ts";
+import { afterEach, describe, expect, mock, test, setDefaultTimeout } from "bun:test";
 import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { SDKMessage, query as sdkQuery } from "@anthropic-ai/claude-agent-sdk";
@@ -22,6 +25,8 @@ import {
 } from "../harness/fixtures.ts";
 import { readAuditShardEvents, runtimeGraphPath } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
 type QueryInput = Parameters<typeof sdkQuery>[0];
 let scenario: (input: QueryInput) => AsyncGenerator<SDKMessage> = (): AsyncGenerator<SDKMessage> => {
   throw new Error("Unexpected SDK query in deterministic calibration");
@@ -34,6 +39,7 @@ const {
   prepareSdkStageFixture,
   stageApprovalQuestionBoundary,
 } = await import("../harness/sdk-drive.ts");
+const { assertResultOk } = await import("../harness/assert.ts");
 
 const STAGE = "reverse-engineering";
 const TS = "2026-01-01T00:00:00Z";
@@ -301,5 +307,229 @@ describe("SDK question transport boundary", () => {
     await expect(driveAidlc("fixture", {
       ...legacy, stopAfterAskUserQuestionWhen: () => true,
     })).rejects.toThrow("either a question predicate");
+  });
+});
+
+// The real SDK's stdin rule (claude-agent-sdk sdk.mjs, Query.readMessages): a
+// string prompt is a single-turn query whose stdin closes at the first result,
+// and a permission request after that fails with "Stream closed". A message
+// stream stays open until the caller's iterable ends.
+function cliStdin(input: QueryInput) {
+  const singleTurn = typeof input.prompt === "string";
+  let closed = false;
+  let ended: Promise<void> = Promise.resolve();
+  if (!singleTurn) {
+    const messages = (input.prompt as AsyncIterable<unknown>)[Symbol.asyncIterator]();
+    ended = (async () => {
+      while (!(await messages.next()).done) { /* the prompt */ }
+      closed = true;
+    })();
+  }
+  return {
+    get closed() { return closed; },
+    /** Call as a result is emitted. */
+    result() { if (singleTurn) closed = true; },
+    /** Resolves once the caller has closed its input. */
+    ended,
+  };
+}
+
+const task = (subtype: string, taskId: string) => message({
+  type: "system", subtype, task_id: taskId, tool_use_id: `agent-${taskId}`,
+  ...(subtype === "task_updated" ? { patch: { status: "completed" } } : { status: "completed" }),
+});
+const bash = (id: string, command: string) => message({
+  type: "assistant", message: { content: [{ type: "tool_use", id, name: "Bash", input: { command } }] },
+});
+const output = (id: string, text: string, error = false) => message({
+  type: "user", message: { content: [{ type: "tool_result", tool_use_id: id, content: text, is_error: error }] },
+});
+const kiosk = () => menu("Kiosk privacy", ["A. Add an inactivity timeout", "B. Defer"],
+  "The designer and quality engineer flagged a privacy risk on shared kiosks. Add an inactivity timeout or defer?");
+const storiesApproval = () => menu("Approval", ["Approve", "Request Changes"], "Approve the user stories?");
+
+describe("the answer stream stays open while subagents still run", () => {
+  test("a turn that ends before the last support reports still gets its questions answered", async () => {
+    // Replays the t238 mob failures (live trace 2026-10-03T13-44-29Z): the last
+    // support is marked completed before the lead's turn ends, its
+    // notification arrives just after the result and resumes the session, and
+    // the lead then asks an extra judgement question before the approval.
+    const project = positionedProject();
+    scenario = async function* (input) {
+      const stdin = cliStdin(input);
+      for (const agent of ["design", "developer", "quality"]) yield task("task_started", agent);
+      yield task("task_notification", "design");
+      yield task("task_notification", "developer");
+      yield task("task_updated", "quality");
+      stdin.result();
+      yield success();
+      yield task("task_notification", "quality");
+      for (const [id, captured] of [["kiosk", kiosk()], ["approval", storiesApproval()]] as const) {
+        yield use(id, captured);
+        if (stdin.closed) {
+          yield output(id, "Tool permission request failed: Error: Stream closed", true);
+          continue;
+        }
+        await answer(input, id, captured);
+        yield result(id);
+      }
+      if (!stdin.closed) {
+        yield bash("report", "bun .claude/tools/aidlc.ts engine orchestrate report --stage user-stories --result approved");
+        yield output("report", "Committed approve for user-stories");
+      }
+      if (input.options!.abortController!.signal.aborted) throw new Error("SDK abort after the boundary");
+      stdin.result();
+      yield success();
+      await stdin.ended;
+    };
+    const driven = await driveAidlc("fixture", {
+      projectDir: project,
+      answerScript: { kind: "byHeader", map: { Approval: { labelContains: "Approve" } }, fallback: { labelContains: "Approve" } },
+      stopAfterToolResult: { toolName: "Bash", resultIncludes: "Committed approve for" },
+    });
+    expect(driven.toolResults.filter((row) => row.resultText.includes("Stream closed"))).toEqual([]);
+    expect(driven.askedQuestions.map((asked) => asked.questions[0].header)).toEqual(["Kiosk privacy", "Approval"]);
+    // The unexpected question takes its first option; the approval is the scripted one.
+    expect(driven.askedQuestions[0].answers).toEqual({ [kiosk().questions[0].question]: "A. Add an inactivity timeout" });
+    expect(driven.askedQuestions[1].answers).toEqual({ "Approve the user stories?": "Approve" });
+    expect(driven.stoppedAfterToolResult).toBe(true);
+  });
+
+  test("a result with no task pending closes the stream, so a finished run ends", async () => {
+    const project = positionedProject();
+    let closedByDriver = false;
+    scenario = async function* (input) {
+      const stdin = cliStdin(input);
+      yield task("task_started", "support");
+      yield task("task_notification", "support");
+      stdin.result();
+      yield success();
+      await stdin.ended;
+      closedByDriver = true;
+    };
+    const driven = await driveAidlc("fixture", { projectDir: project });
+    expect(closedByDriver).toBe(true);
+    expect(driven.resultEvent?.subtype).toBe("success");
+    expect(driven.timedOut).toBe(false);
+  });
+
+  test.each([
+    { case: "work after the last report", lateReport: false },
+    { case: "a report that arrives late", lateReport: true },
+  ])("$case still gets its question answered, however long the quiet", async ({ lateReport }) => {
+    const project = positionedProject();
+    scenario = async function* (input) {
+      const stdin = cliStdin(input);
+      yield task("task_started", "support");
+      stdin.result();
+      yield success();
+      if (lateReport) await Bun.sleep(300);
+      yield task("task_notification", "support");
+      // A long resumed turn (a slow tool, a slow model) sends nothing for a while.
+      if (!lateReport) await Bun.sleep(300);
+      const captured = storiesApproval();
+      yield use("approval", captured);
+      if (stdin.closed) {
+        yield output("approval", "Tool permission request failed: Error: Stream closed", true);
+      } else {
+        await answer(input, "approval", captured);
+        yield result("approval");
+      }
+      stdin.result();
+      yield success();
+      await stdin.ended;
+    };
+    const driven = await driveAidlc("fixture", { projectDir: project });
+    expect(driven.toolResults.filter((row) => row.resultText.includes("Stream closed"))).toEqual([]);
+    expect(driven.askedQuestions.map((asked) => asked.questions[0].header)).toEqual(["Approval"]);
+  });
+
+  test.each([
+    { case: "ends the drive", nextMessage: false },
+    { case: "sends the person's next message", nextMessage: true },
+  ])("a support that finished inside the turn, with no report after it, $case", async ({ nextMessage }) => {
+    // Replays the t238 hang (live trace 2026-10-04T15-09-21Z): the supports
+    // finish while the lead's turn still runs, the CLI hands their reports to
+    // the lead inside that turn, and no task_notification ever follows.
+    const project = positionedProject();
+    const sent: unknown[] = [];
+    let closedByDriver = false;
+    scenario = async function* (input) {
+      // The CLI's stdin: each message the driver sends, until it closes.
+      const prompts = (input.prompt as AsyncIterable<{ message: { content: unknown } }>)[Symbol.asyncIterator]();
+      const signal = input.options!.abortController!.signal;
+      const aborted = new Promise<undefined>((resolve) => signal.addEventListener("abort", () => resolve(undefined)));
+      sent.push((await prompts.next()).value?.message.content);
+      yield task("task_started", "support");
+      yield task("task_updated", "support");
+      yield success();
+      for (;;) {
+        const next = await Promise.race([prompts.next(), aborted]);
+        if (next === undefined) throw new Error("SDK abort at the drive timeout");
+        if (next.done) break;
+        sent.push(next.value.message.content);
+        yield success();
+      }
+      closedByDriver = true;
+    };
+    const driven = await driveAidlc("fixture", {
+      projectDir: project,
+      timeoutMs: 10_000,
+      settledTaskReportWaitMs: 50,
+      ...(nextMessage ? { nextMessage: (turn) => (turn.turn === 1 ? "carry on" : undefined) } : {}),
+    });
+    expect(closedByDriver).toBe(true);
+    expect(driven.timedOut).toBe(false);
+    expect(driven.resultEvent?.subtype).toBe("success");
+    expect(sent).toEqual(nextMessage ? ["fixture", "carry on"] : ["fixture"]);
+  });
+
+  test("a finished support's report that resumes the session keeps the stream open, however long the quiet", async () => {
+    const project = positionedProject();
+    scenario = async function* (input) {
+      const stdin = cliStdin(input);
+      yield task("task_started", "support");
+      yield task("task_updated", "support");
+      yield success();
+      yield task("task_notification", "support");
+      // The resumed turn goes quiet for longer than the wait for a report.
+      await Bun.sleep(300);
+      const captured = storiesApproval();
+      yield use("approval", captured);
+      if (stdin.closed) {
+        yield output("approval", "Tool permission request failed: Error: Stream closed", true);
+      } else {
+        await answer(input, "approval", captured);
+        yield result("approval");
+      }
+      stdin.result();
+      yield success();
+      await stdin.ended;
+    };
+    const driven = await driveAidlc("fixture", { projectDir: project, settledTaskReportWaitMs: 50 });
+    expect(driven.toolResults.filter((row) => row.resultText.includes("Stream closed"))).toEqual([]);
+    expect(driven.askedQuestions.map((asked) => asked.questions[0].header)).toEqual(["Approval"]);
+  });
+
+  test.each([
+    { case: "a task that never reports", update: undefined },
+    { case: "a task moved to the background but still running", update: { is_backgrounded: true } },
+  ])("$case keeps the stream open until the drive's own timeout", async ({ update }) => {
+    const project = positionedProject();
+    scenario = async function* (input) {
+      const stdin = cliStdin(input);
+      const signal = input.options!.abortController!.signal;
+      yield task("task_started", "lost");
+      if (update) yield message({ type: "system", subtype: "task_updated", task_id: "lost", patch: update });
+      stdin.result();
+      yield success();
+      await Promise.race([stdin.ended, new Promise((resolve) => signal.addEventListener("abort", resolve))]);
+      if (signal.aborted) throw new Error("SDK abort at the drive timeout");
+    };
+    const driven = await driveAidlc("fixture", { projectDir: project, timeoutMs: 300, settledTaskReportWaitMs: 50 });
+    expect(driven.timedOut).toBe(true);
+    expect(driven.resultEvent?.subtype).toBe("success");
+    // The earlier success does not make the timed-out run pass.
+    expect(() => assertResultOk(driven)).toThrow("the drive timed out");
   });
 });

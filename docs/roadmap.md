@@ -177,8 +177,9 @@ but do not yet have committed release versions.
   reported in `resolve`'s `warnings[]` today (see
   [Commit Provenance §10](reference/20-commit-provenance.md)):
   **one byte form** — review evidence hashes working-tree bytes while commit
-  listings read repository blobs, so LFS, `core.autocrlf`, working-tree
-  encodings, and submodule gitlinks can report unchanged content as `drifted`.
+  listings read repository blobs, so LFS, working-tree encodings, and
+  submodule gitlinks can report unchanged content as `drifted` (both sides
+  read CRLF text as LF, so `core.autocrlf` does not).
   Reconciling them changes what the `Unit Source Fingerprint` is computed over,
   so it needs its own change with a migration story for existing receipts.
   Beyond it, richer trust roots remain future work: per-approval signatures and

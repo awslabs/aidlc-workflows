@@ -1,12 +1,22 @@
-import { afterEach, describe, expect, spyOn, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_PROCESS_CLEANUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingCleanupTimeoutMs,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { afterEach, describe, expect, spyOn, test, setDefaultTimeout } from "bun:test";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { bunSessionPaths } from "../harness/tui-bun-backend.ts";
 import {
-  ensurePrivateRoot, privateDirectoryIdentity, publishTuiRecord, readPrivateRecord,
+  ensurePrivateRoot, privateDirectoryIdentity, publishTuiRecord, readPrivateRecord, validateAncestorStat,
 } from "../harness/tui-record-file.ts";
+import { createE2eNativeRoot } from "../lib/e2e-workers.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const scratch: string[] = [];
 function fixture() {
@@ -81,7 +91,7 @@ describe.skipIf(process.platform === "win32")("native private namespace", () => 
       await gate.promise;
       process.stdin.pause();
       await runBunDaemon(${JSON.stringify(paths.directory)}, ${JSON.stringify(fresh.generation)});
-    `], { env, stdin: "pipe", stdout: "pipe", stderr: "pipe", timeout: 15_000 });
+    `], { env, stdin: "pipe", stdout: "pipe", stderr: "pipe", timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS) });
     const ready = child.stdout.getReader();
     try {
       expect(new TextDecoder().decode((await ready.read()).value)).toBe("before-record-load\n");
@@ -101,7 +111,7 @@ describe.skipIf(process.platform === "win32")("native private namespace", () => 
       child.kill();
       await child.exited;
     }
-  }, 20_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("an explicit root below a group-writable non-sticky ancestor is rejected before spawn", async () => {
     const outer = fs.mkdtempSync(join(tmpdir(), "aidlc-native-ancestor-"));
@@ -114,12 +124,12 @@ describe.skipIf(process.platform === "win32")("native private namespace", () => 
     const driver = join(import.meta.dir, "../harness/tui-drive.ts");
     const child = Bun.spawn([process.execPath, driver, "start", "--session", session, "--cwd", outer,
       "--", process.execPath, "-e", `require('node:fs').writeFileSync(${JSON.stringify(marker)}, 'executed')`], {
-      env, stdout: "pipe", stderr: "pipe", timeout: 15_000,
+      env, stdout: "pipe", stderr: "pipe", timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     });
     const [code, stderr] = await Promise.all([child.exited, new Response(child.stderr).text()]);
     if (code === 0) {
       const cleanup = Bun.spawn([process.execPath, driver, "kill", "--session", session], {
-        env, stdout: "ignore", stderr: "ignore", timeout: 15_000,
+        env, stdout: "ignore", stderr: "ignore", timeout: remainingCleanupTimeoutMs(NATIVE_PROCESS_CLEANUP_TIMEOUT_MS),
       });
       await cleanup.exited;
     }
@@ -128,7 +138,66 @@ describe.skipIf(process.platform === "win32")("native private namespace", () => 
     expect(code).not.toBe(0);
     expect(fs.existsSync(marker)).toBe(false);
     expect(fs.existsSync(bunSessionPaths(session, env).record)).toBe(false);
-  }, 30_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("the ancestor check relaxes only ownership, and only under the opt-in", () => {
+    const stat = { uid: 0n, mode: 0o40755n, isDirectory: () => true };
+    const sandbox = { ...stat, uid: 65534n };
+    const optIn = { AIDLC_TUI_ALLOW_UNTRUSTED_ANCESTORS: "1" };
+    const refusal = (check: () => void) => {
+      try { check(); } catch (error) { return String(error); }
+      return "";
+    };
+    expect(() => validateAncestorStat("/", stat, 501, {})).not.toThrow();
+    expect(() => validateAncestorStat("/home", { ...stat, uid: 501n }, 501, {})).not.toThrow();
+    // Off by default: a sandbox-owned ancestor is refused, and the refusal names the way out.
+    const ownership = refusal(() => validateAncestorStat("/", sandbox, 501, {}));
+    expect(ownership).toContain("ancestor is not owned by current uid or uid 0 (owner uid 65534");
+    expect(ownership).toContain("AIDLC_TUI_ALLOW_UNTRUSTED_ANCESTORS=1");
+    expect(() => validateAncestorStat("/", sandbox, 501, optIn)).not.toThrow();
+    // The opt-in never relaxes the write axis or the directory check.
+    const writable = refusal(() => validateAncestorStat("/", { ...sandbox, mode: 0o40777n }, 501, optIn));
+    expect(writable).toContain("writable by other users without the sticky bit");
+    expect(writable).not.toContain("AIDLC_TUI_ALLOW_UNTRUSTED_ANCESTORS");
+    expect(() => validateAncestorStat("/", { ...sandbox, mode: 0o40775n }, 501, optIn)).toThrow("writable by other users");
+    expect(() => validateAncestorStat("/tmp", { ...sandbox, mode: 0o41777n }, 501, optIn)).not.toThrow();
+    expect(() => validateAncestorStat("/", { ...sandbox, isDirectory: () => false }, 501, optIn)).toThrow("not a directory");
+  });
+
+  test("e2e setup names the ownership opt-in, which then admits a sandbox-owned /", () => {
+    const outer = fs.mkdtempSync(join(tmpdir(), "aidlc-native-ancestors-"));
+    scratch.push(outer);
+    const realStat = fs.statSync;
+    // Report / as owned by the overflow uid, as an overlay/sandbox filesystem does.
+    const hook = spyOn(fs, "statSync").mockImplementation(((path: fs.PathLike, options?: fs.StatSyncOptions) => {
+      const result = realStat(path, options as never);
+      if (resolve(String(path)) !== "/" || !(options as { bigint?: boolean } | undefined)?.bigint || !result) return result;
+      return new Proxy(result, {
+        get: (target, key) => {
+          if (key === "uid") return 65534n;
+          const value = Reflect.get(target, key, target);
+          return typeof value === "function" ? value.bind(target) : value;
+        },
+      });
+    }) as typeof fs.statSync);
+    const previous = process.env.AIDLC_TUI_ALLOW_UNTRUSTED_ANCESTORS;
+    try {
+      delete process.env.AIDLC_TUI_ALLOW_UNTRUSTED_ANCESTORS;
+      let message = "";
+      try { createE2eNativeRoot(join(outer, "refused")); } catch (error) { message = (error as Error).message; }
+      expect(message).toContain("e2e needs an OS temporary directory with trusted native root ancestors");
+      expect(message).toContain("owner uid 65534");
+      expect(message).toContain("AIDLC_TUI_ALLOW_UNTRUSTED_ANCESTORS=1");
+      process.env.AIDLC_TUI_ALLOW_UNTRUSTED_ANCESTORS = "1";
+      const root = createE2eNativeRoot(join(outer, "admitted"));
+      scratch.push(dirname(root));
+      expect(fs.statSync(root).isDirectory()).toBe(true);
+    } finally {
+      hook.mockRestore();
+      if (previous === undefined) delete process.env.AIDLC_TUI_ALLOW_UNTRUSTED_ANCESTORS;
+      else process.env.AIDLC_TUI_ALLOW_UNTRUSTED_ANCESTORS = previous;
+    }
+  });
 
   test("unsafe roots and records are rejected, never chmod-repaired", () => {
     const f = fixture();

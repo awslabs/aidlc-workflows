@@ -21,6 +21,10 @@ import {
   normalizeTuiCommand,
   TUI_TEST_FIXTURE_MARKER,
 } from "../harness/tui-drive.ts";
+import { LIVE_STARTUP_TIMEOUT_MS } from "../harness/test-budget.ts";
+
+// Menu waits end at the shared startup backstop, at most one 150ms poll late.
+const MENU_WAIT_BOUND_MS = LIVE_STARTUP_TIMEOUT_MS + 150;
 
 const TRUST_NO = "Accessing workspace:\n\n❯ No, exit\n  Yes, I trust this folder\n\nEnter to confirm · Esc to cancel";
 const TRUST_YES = "Accessing workspace:\n\n  No, exit\n❯ Yes, I trust this folder\n\nEnter to confirm · Esc to cancel";
@@ -109,7 +113,7 @@ describe("Claude fixture trust menu", () => {
           send: (_session, key) => { sent.push(key); },
         }, `trust-${state}`, TRUST_NO, clock)).rejects.toThrow("refusing navigation");
         expect(sent).toEqual([]);
-        expect(clock.now()).toBeLessThanOrEqual(5_150);
+        expect(clock.now()).toBeLessThanOrEqual(MENU_WAIT_BOUND_MS);
       } finally {
         cleanupTuiProject(project);
       }
@@ -127,7 +131,7 @@ describe("Claude fixture trust menu", () => {
         send: (_session, key) => { sent.push(key); },
       }, "trust-dropped-down", TRUST_NO, clock)).rejects.toThrow("refusing Enter");
       expect(sent).toEqual(["Down"]);
-      expect(clock.now()).toBeLessThanOrEqual(5_750);
+      expect(clock.now()).toBeLessThanOrEqual(MENU_WAIT_BOUND_MS);
     } finally {
       cleanupTuiProject(project);
     }
@@ -289,7 +293,6 @@ describe("TUI user-settings journey guards", () => {
   test("isolated user profiles clear machine config and setting-source overrides", () => {
     const isolated = isolatedTuiUserProfileEnv(
       "C:\\probe\\user-home",
-      "C:\\Program Files\\nodejs\\node.exe",
       {
         USERPROFILE: "C:\\Users\\developer",
         HOME: "C:\\Users\\developer",
@@ -301,9 +304,6 @@ describe("TUI user-settings journey guards", () => {
 
     expect(isolated.USERPROFILE).toBe("C:\\probe\\user-home");
     expect(isolated.HOME).toBe("C:\\probe\\user-home");
-    expect(isolated.AIDLC_NODE_BIN).toBe(
-      "C:\\Program Files\\nodejs\\node.exe",
-    );
     expect(isolated.CLAUDE_CONFIG_DIR).toBeUndefined();
     expect(isolated.AIDLC_TUI_SETTING_SOURCES).toBeUndefined();
     expect(isolated.KEEP_ME).toBe("yes");

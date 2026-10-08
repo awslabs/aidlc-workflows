@@ -1,8 +1,15 @@
-import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { afterAll, beforeAll, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 // Windows exercises the production PS5.1 host. Other platforms can also check
 // PowerShell's native-exit scoping when pwsh is installed.
@@ -55,7 +62,7 @@ catch { $failure = $_.Exception.Message }
     const result = spawnSync(powershell!, [
       "-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
       "-EncodedCommand", Buffer.from(script, "utf16le").toString("base64"),
-    ], { encoding: "utf8", timeout: 60_000 });
+    ], { encoding: "utf8", timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS) });
     expect(result.error).toBeUndefined();
     expect(result.status, result.stderr).toBe(0);
     const lines = result.stdout.trim().split(/\r?\n/);
@@ -67,5 +74,5 @@ catch { $failure = $_.Exception.Message }
     }
     if (diagnostics) expect(result.stdout).toContain("fixed-phase-marker");
     if (!accepted) expect(outcome.failure).toBeTruthy();
-  }, 65_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });

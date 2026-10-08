@@ -77,7 +77,12 @@
 //   .sh T27 (envelope detail field non-empty prose)     -> "failure envelope detail field is non-empty user-facing prose"
 //   .sh T28 (default abort preserves worktree dir)      -> "default abort (no --discard) preserves the worktree directory"
 
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import {
+  NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { afterEach, beforeEach, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
   chmodSync,
@@ -104,6 +109,8 @@ import {
   seededStateFile,
 } from "../harness/fixtures.ts";
 
+setDefaultTimeout(NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
+
 const BUN = process.execPath; // the bun running this test
 const TOOL = join(AIDLC_SRC, "tools", "aidlc-bolt.ts");
 
@@ -114,7 +121,7 @@ interface Run {
 
 /** spawnSync the real aidlc-bolt.ts, capturing combined stdout+stderr. */
 function runBolt(args: string[]): Run {
-  const res = spawnSync(BUN, [TOOL, ...args], { encoding: "utf-8" });
+  const res = spawnSync(BUN, [TOOL, ...args], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" });
   return {
     status: res.status ?? -1,
     out: `${res.stdout ?? ""}${res.stderr ?? ""}`,
@@ -559,6 +566,7 @@ main(process.argv.slice(2));
 `);
       const result = spawnSync(BUN, [driver, "abort", "--name", "Legacy Park", "--slug", slug,
         "--reason", "retry after a mixed-version discard", "--discard", "--project-dir", proj], {
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
         cwd: proj, encoding: "utf-8",
         env: { ...process.env, AIDLC_HARNESS_DIR: fixture.unsafeHarness ? ".claude;echo injected" : ".claude" },
       });
@@ -593,7 +601,7 @@ main(process.argv.slice(2));
         "-c", "commit.gpgsign=false", "commit", "-qm", "saved source"],
       ["branch", boltName(fixtureIntentId8(proj), slug)],
     ]) {
-      const result = spawnSync("git", args, { cwd: proj, encoding: "utf-8" });
+      const result = spawnSync("git", args, { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), cwd: proj, encoding: "utf-8" });
       expect(result.status, result.stderr).toBe(0);
     }
     // An intent-scoped Bolt is only discard's to park when this intent recorded
@@ -604,13 +612,14 @@ main(process.argv.slice(2));
       "Worktree path": `.aidlc/worktrees/${name}`,
       "Branch name": name,
       "Base branch": "main",
-      "Base commit": spawnSync("git", ["rev-parse", "HEAD"], { cwd: proj, encoding: "utf-8" }).stdout.trim(),
+      "Base commit": spawnSync("git", ["rev-parse", "HEAD"], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), cwd: proj, encoding: "utf-8" }).stdout.trim(),
       Repo: "-",
       "Intent record": `aidlc/spaces/${DEFAULT_SPACE}/intents/${DEFAULT_RECORD_DIR}`,
     }, proj, DEFAULT_RECORD_DIR, DEFAULT_SPACE);
     const env = { ...process.env, AIDLC_HARNESS_DIR: ".claude;echo injected" };
     const aborted = spawnSync(BUN, [TOOL, "abort", "--name", "Unsafe Harness", "--slug", slug,
       "--reason", "retry safely", "--discard", "--project-dir", proj], {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
       cwd: proj, encoding: "utf-8", env,
     });
     expect(aborted.status, aborted.stderr).toBe(0);
@@ -623,12 +632,12 @@ main(process.argv.slice(2));
     });
     const restored = spawnSync(BUN, [join(AIDLC_SRC, "tools", "aidlc.ts"),
       "engine", parked.restore_operation.route, ...parked.restore_operation.args,
-      "--project-dir", proj], { cwd: proj, encoding: "utf-8", env });
+      "--project-dir", proj], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), cwd: proj, encoding: "utf-8", env });
     expect(restored.status, restored.stderr).toBe(0);
     const recovery = JSON.parse(restored.stdout);
     expect(recovery.parked_ref).toBe(parked.parked_ref);
     expect(readFileSync(join(recovery.worktree_path, "saved.txt"), "utf-8")).toBe(saved);
-  }, 30000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("default abort (no --discard) preserves the worktree directory [.sh T28]", () => {
     const proj = track(setupV7Project("exp-pres"));

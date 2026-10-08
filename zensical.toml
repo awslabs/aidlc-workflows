@@ -10,6 +10,7 @@ nav = [
     { "Getting Started" = [
       "guide/00-introduction.md",
       "guide/01-getting-started.md",
+      "guide/onboarding.md",
       "guide/workflow-profiles.md",
       "guide/02-your-first-workflow.md",
     ] },
@@ -58,6 +59,7 @@ nav = [
       "guide/15-troubleshooting.md",
       "guide/16-worked-examples.md",
       "guide/workshop-mode.md",
+      "guide/facilitator-guide.md",
       "guide/glossary.md",
     ] },
   ] },

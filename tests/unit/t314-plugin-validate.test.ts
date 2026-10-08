@@ -1,6 +1,11 @@
 // covers: file:core/tools/aidlc-plugin-validate.ts, function:validatePluginRoot
 
-import { afterAll, describe, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { afterAll, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
   mkdirSync,
@@ -18,6 +23,8 @@ import {
   bundledPluginComposeTemplatePath,
   validatePluginRoot,
 } from "../../dist/claude/.claude/tools/aidlc-plugin-validate.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const TOOL = join(
@@ -157,6 +164,7 @@ function runTool(args: string[]): {
   stderr: string;
 } {
   const result = spawnSync(process.execPath, [TOOL, ...args], {
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     cwd: tmpdir(),
     encoding: "utf-8",
   });

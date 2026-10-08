@@ -10,7 +10,12 @@
 // used by slice verification to point the same assertions at core/tools before
 // dist is regenerated.
 
-import { describe, expect, test } from "bun:test";
+import {
+  NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
   mkdtempSync,
@@ -22,6 +27,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { fileURLToPath } from "node:url";
+
+setDefaultTimeout(NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
 const BUN = process.execPath;
 const TOOLS_DIR =
@@ -105,7 +112,7 @@ function runImportProbe(file: string, projectDir: string) {
       cwd: projectDir,
       encoding: "utf-8",
       env: childEnv(projectDir),
-      timeout: 5000,
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     },
   );
 }
@@ -115,7 +122,7 @@ function runTool(file: string, args: string[], projectDir: string) {
     cwd: projectDir,
     encoding: "utf-8",
     env: childEnv(projectDir),
-    timeout: 5000,
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
   });
 }
 

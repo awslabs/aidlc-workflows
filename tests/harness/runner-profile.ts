@@ -13,6 +13,8 @@ export interface ParsedArgs {
   verbose: boolean;
   debug: boolean;
   filter: string;
+  /** Files to leave out of every tier, matched like `filter`; empty leaves none out. */
+  exclude: string;
   parallel: number;
   shard: ShardSpec | null;
   fullProfile: boolean;
@@ -21,6 +23,8 @@ export interface ParsedArgs {
   help: boolean;
   requireCoverage: boolean;
   isolatedE2e: boolean;
+  isolatedFiles: boolean;
+  fileRetries: number;
   e2ePlan: boolean;
   bedrockParallel: number;
   kiroParallel: number;
@@ -56,6 +60,7 @@ export function parseRunnerArgs(
     verbose: false,
     debug: false,
     filter: "",
+    exclude: "",
     parallel: 1,
     shard: null,
     fullProfile: false,
@@ -64,6 +69,8 @@ export function parseRunnerArgs(
     help: false,
     requireCoverage: false,
     isolatedE2e: false,
+    isolatedFiles: false,
+    fileRetries: 0,
     e2ePlan: false,
     bedrockParallel: 2,
     kiroParallel: 2,
@@ -137,6 +144,12 @@ export function parseRunnerArgs(
           throw new RunnerArgsError("ERROR: --filter requires a non-empty filename regex");
         }
         break;
+      case "--exclude":
+        out.exclude = argv[++i] ?? "";
+        if (!out.exclude) {
+          throw new RunnerArgsError("ERROR: --exclude requires a non-empty filename regex");
+        }
+        break;
       case "--parallel":
       case "-P": {
         const value = argv[++i] ?? "";
@@ -160,6 +173,15 @@ export function parseRunnerArgs(
       case "--isolated-e2e":
         out.isolatedE2e = true;
         break;
+      case "--isolated-files":
+        out.isolatedFiles = out.isolatedE2e = true;
+        break;
+      case "--file-retries": {
+        const value = argv[++i];
+        if (value !== "0" && value !== "1") throw new RunnerArgsError("--file-retries must be 0 or 1", 2, true);
+        out.fileRetries = Number(value);
+        break;
+      }
       case "--e2e-plan":
         out.e2ePlan = true;
         out.isolatedE2e = true;
@@ -221,7 +243,15 @@ export function parseRunnerArgs(
       "ERROR: --shard requires --unit with no other level or profile flags",
     );
   }
-  if ((out.isolatedE2e && !out.runE2e) || (workerOption && !out.isolatedE2e)) {
+  if (out.isolatedFiles && (out.runSmoke || out.runUnit || (!out.runIntegration && !out.runE2e))) {
+    throw new RunnerArgsError("--isolated-files requires integration and/or e2e only", 2, true);
+  }
+  // Ordinary smoke/unit/integration files retry in a fresh process (the merge
+  // queue); e2e files retry only in a fresh isolated worker.
+  if (out.fileRetries && !out.isolatedFiles && out.runE2e) {
+    throw new RunnerArgsError("--file-retries requires --isolated-files when e2e is selected", 2, true);
+  }
+  if ((out.isolatedE2e && !out.runE2e && !out.isolatedFiles) || (workerOption && !out.isolatedE2e)) {
     throw new RunnerArgsError("isolated e2e options require --e2e --isolated-e2e or --e2e --e2e-plan; --e2e-plan implies --isolated-e2e, not --e2e", 2, true);
   }
   if (out.isolatedE2e && (!Number.isSafeInteger(out.parallel) || out.parallel > 256)) {
@@ -244,7 +274,7 @@ export function parseRunnerArgs(
 export function runnerFileTimeoutSeconds(args: ParsedArgs, isolated: boolean): number {
   return isolated
     ? Math.min(args.e2eFileTimeout, args.fileTimeout ?? Number.POSITIVE_INFINITY)
-    : args.fileTimeout ?? 2400;
+    : args.fileTimeout ?? 7200;
 }
 
 /** POSIX exit statuses are eight bits; 256 failed files must never wrap to success. */

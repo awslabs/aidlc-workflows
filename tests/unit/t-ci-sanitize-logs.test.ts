@@ -1,10 +1,19 @@
 // covers: file:scripts/ci-sanitize-logs.ts
-import { afterEach, describe, expect, spyOn, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_PROCESS_CLEANUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingCleanupTimeoutMs,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { afterEach, describe, expect, spyOn, test, setDefaultTimeout } from "bun:test";
 import fs from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { redactSecrets, sanitizeLogs } from "../../scripts/ci-sanitize-logs.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const scratch: string[] = [];
 const accessKey = `AKIA${"A1".repeat(8)}`;
@@ -44,7 +53,8 @@ function traceFixture(root: string): string[] {
 
 afterEach(() => {
   for (const directory of scratch.splice(0)) {
-    fs.rmSync(directory, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    // Node linear retry delays sum to at most the shared cleanup backstop.
+    fs.rmSync(directory, { recursive: true, force: true, maxRetries: Math.floor((Math.sqrt(1 + 8 * remainingCleanupTimeoutMs(NATIVE_PROCESS_CLEANUP_TIMEOUT_MS) / 100) - 1) / 2), retryDelay: 100 });
   }
 });
 
@@ -292,7 +302,7 @@ describe("CI log credential redaction", () => {
     const log = put(root, "output.log", "ANTHROPIC_API_KEY=fixture-cli-log\n");
     const retained = Bun.spawnSync([process.execPath, cli, root], {
       env: { ...process.env, AIDLC_NIGHTLY_UPLOAD_TRACES: "1" },
-      stdout: "pipe", stderr: "pipe", timeout: 10_000,
+      stdout: "pipe", stderr: "pipe", timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     });
     expect(retained.exitCode, retained.stderr.toString()).toBe(0);
     expect(retained.stdout.toString()).toBe("");
@@ -301,7 +311,7 @@ describe("CI log credential redaction", () => {
 
     const pruned = Bun.spawnSync([process.execPath, cli, root], {
       env: { ...process.env, AIDLC_NIGHTLY_UPLOAD_TRACES: "true" },
-      stdout: "pipe", stderr: "pipe", timeout: 10_000,
+      stdout: "pipe", stderr: "pipe", timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     });
     expect(pruned.exitCode, pruned.stderr.toString()).toBe(0);
     expect(fs.existsSync(trace)).toBe(false);
@@ -312,7 +322,7 @@ describe("CI log credential redaction", () => {
     const root = fixture();
     const unsafe = put(root, "ANTHROPIC_API_KEY=fixture-not-for-logs", "not a directory");
     const result = Bun.spawnSync([process.execPath, cli, unsafe], {
-      stdout: "pipe", stderr: "pipe", timeout: 10_000,
+      stdout: "pipe", stderr: "pipe", timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     });
     expect(result.exitCode).toBe(1);
     expect(result.stdout.toString()).toBe("");

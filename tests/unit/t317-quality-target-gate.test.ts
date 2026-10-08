@@ -47,7 +47,7 @@ function assertQualityTargetGate(root: string, orgPath: string): void {
 
   const buildAndTest = read(root, FILES.buildAndTest);
   expect(buildAndTest).toContain(
-    "every approved `## Testing Contract` in `code-generation-plan.md`",
+    "every current `## Testing Contract` in `code-generation-plan.md`",
   );
   expect(buildAndTest).toContain(
     "Target ID, Source, Expected, Actual, Evidence, Owning Stage, Verdict",
@@ -77,6 +77,23 @@ function assertQualityTargetGate(root: string, orgPath: string): void {
   expect(buildAndTest).toContain(
     "Weakening, relaxing, lowering, or disabling a defined\n" +
       "quality target is never an acceptable fix.",
+  );
+  // The scope floor's CI obligation is a target only when the plan runs CI
+  // Pipeline: a plan that skips it is not a failed build (a live run asked the
+  // person to "Accept failure" over a CI step their plan never had).
+  expect(buildAndTest).toContain(
+    'A CI obligation (the contract\'s "Run the selected tests in CI before merge."\n' +
+      '  line, or a memory note\'s "CI execution before merge") applies only when the\n' +
+      "  plan runs CI Pipeline",
+  );
+  expect(buildAndTest).toContain(
+    "it is not\n  applicable, so it is never `Unverified` and never a failure",
+  );
+  expect(buildAndTest).toContain(
+    "or for a target the\n  plan makes inapplicable",
+  );
+  expect(codeGeneration).toContain(
+    "80% line coverage and, when the plan runs CI Pipeline, CI execution before merge",
   );
 
   expect(read(root, FILES.stageProtocol)).toContain(

@@ -2,8 +2,9 @@
 // Keep this module independent of tui-drive.ts: importing it never opens a PTY.
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { NATIVE_STARTUP_TIMEOUT_MS } from "./test-budget.ts";
 
-export type TuiBackendName = "bun" | "tmux" | "node-pty";
+export type TuiBackendName = "bun" | "tmux";
 
 type RuntimeEnv = Readonly<NodeJS.ProcessEnv>;
 type ProbeResult = {
@@ -30,11 +31,11 @@ export function selectedTuiBackend(
   if (selected === undefined || selected === "auto") {
     return platform === "linux" || platform === "win32" || platform === "darwin" ? "bun" : "tmux";
   }
-  if (selected === "bun" || selected === "tmux" || selected === "node-pty") {
+  if (selected === "bun" || selected === "tmux") {
     return selected;
   }
   throw new Error(
-    `Invalid AIDLC_TUI_BACKEND ${JSON.stringify(selected)}; expected auto, bun, tmux, or node-pty`,
+    `Invalid AIDLC_TUI_BACKEND ${JSON.stringify(selected)}; expected auto, bun, or tmux`,
   );
 }
 
@@ -58,7 +59,9 @@ function probe(bin: string, args: string[], env: RuntimeEnv): ProbeResult {
     cwd: PROBE_CWD,
     env,
     encoding: "utf-8",
-    timeout: 10_000,
+    // Selection also runs during coordinator cleanup after the file's work
+    // deadline. Its own bounded probe must not consume the expired work budget.
+    timeout: NATIVE_STARTUP_TIMEOUT_MS,
     windowsHide: true,
   });
   const captured: ProbeResult = {
@@ -79,34 +82,12 @@ function executableOverride(env: RuntimeEnv, name: string): string | undefined {
   return value;
 }
 
-function resolveNode(context: TuiRuntimeContext): string {
-  const env = context.env ?? process.env;
-  const override = executableOverride(env, "AIDLC_NODE_BIN");
-  if (override !== undefined) return override;
-  const run = context.probe ?? probe;
-  if (run("node", ["--version"], env).status === 0) return "node";
-  if ((context.platform ?? process.platform) === "win32") {
-    const installed = "C:\\Program Files\\nodejs\\node.exe";
-    if (run(installed, ["--version"], env).status === 0) return installed;
-  }
-  // Let the capability probe report absence; resolving a launch tuple must not
-  // turn an unavailable runtime into an import-time failure in a skipped test.
-  return "node";
-}
-
 export function resolveTuiRuntime(
   driverPath: string,
   context: TuiRuntimeContext = {},
 ): { bin: string; prefix: string[]; backend: TuiBackendName } {
   const env = context.env ?? process.env;
   const backend = selectedTuiBackend(env, context.platform ?? process.platform);
-  if (backend === "node-pty") {
-    return {
-      bin: resolveNode(context),
-      prefix: ["--experimental-strip-types", driverPath],
-      backend,
-    };
-  }
   const bin = executableOverride(env, "AIDLC_BUN_BIN") ??
     ((context.runningBun ?? Boolean(process.versions.bun))
       ? (context.execPath ?? process.execPath)
@@ -124,12 +105,6 @@ console.log(JSON.stringify({
   headlessError
 }));
 `;
-const NODE_PTY_PROBE = `
-if (process.versions.bun) throw new Error("node-pty requires Node, not Bun");
-require("node-pty");
-require("@xterm/headless");
-`;
-
 function supportsNativeTerminalVersion(version: string): boolean {
   const match = /^(\d+)\.(\d+)\.(\d+)(?:\+.*)?$/.exec(version);
   if (!match) return false;
@@ -142,22 +117,12 @@ export function tuiUnavailableReason(context: TuiRuntimeContext = {}): string | 
   const env = context.env ?? process.env;
   const platform = context.platform ?? process.platform;
   const backend = selectedTuiBackend(env, platform);
-  executableOverride(env, backend === "node-pty" ? "AIDLC_NODE_BIN" : "AIDLC_BUN_BIN");
+  executableOverride(env, "AIDLC_BUN_BIN");
   if (backend === "bun" && platform !== "linux" && platform !== "win32" && platform !== "darwin") {
     return `Bun TUI backend is unsupported on ${platform}; native lifecycle supports Linux, Windows and macOS only (select AIDLC_TUI_BACKEND=tmux)`;
   }
-  if (backend === "node-pty" && platform !== "win32") {
-    return `node-pty TUI backend is unsupported on ${platform}; the legacy backend supports Windows only`;
-  }
   const { bin } = resolveTuiRuntime("", context);
   const run = context.probe ?? probe;
-  if (backend === "node-pty") {
-    const result = run(bin, ["--experimental-strip-types", "-e", NODE_PTY_PROBE], env);
-    if (result.status !== 0) {
-      return `node-pty TUI backend requires Node with --experimental-strip-types, node-pty and @xterm/headless (${bin}): ${result.error?.message ?? (result.stderr.trim() || "runtime probe failed")}`;
-    }
-    return null;
-  }
   const result = run(
     bin,
     ["--eval", backend === "bun" ? BUN_TERMINAL_PROBE : BUN_VERSION_PROBE],

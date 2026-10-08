@@ -65,6 +65,16 @@
       ]
     }
   },
+  "preToolUse_delete_file": {
+    "_provenance": "Live-captured on Kiro CLI 2.x and Kiro IDE 1.x, 2026-09-14: 45 of 45 delete_file PreToolUse payloads (CLI 17, IDE 28) carried exactly these two keys, with the target under targetFile and no path, file_path, or paths field.",
+    "hook_event_name": "preToolUse",
+    "cwd": "/tmp/example-project",
+    "tool_name": "delete_file",
+    "tool_input": {
+      "explanation": "Closing the reviewer read-scope enforcement window.",
+      "targetFile": "aidlc/spaces/default/intents/example/.aidlc-engine/reviewer-dispatch.json"
+    }
+  },
   "postToolUse_fs_write_str_replace": {
     "hook_event_name": "postToolUse",
     "cwd": "/tmp/example-project",

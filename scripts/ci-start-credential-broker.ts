@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import { appendFileSync, mkdirSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { LONG_SUBPROCESS_TIMEOUT_MS } from "../core/tools/aidlc-runtime-budget.ts";
 import { CI_BEDROCK_MODELS } from "./ci-credential-broker.ts";
 
 /** The credential-bearing startup step exits before any agent or installer runs. */
@@ -26,7 +27,8 @@ export async function startBrokerProcess(input: {
   });
   try {
     const identity = await new Promise<{ port: number; account: string; arn: string }>((resolve, reject) => {
-      const timer = setTimeout(() => reject(new Error("Credential broker startup timed out")), 60_000);
+      // Enclose cold process startup and the broker's identity request.
+      const timer = setTimeout(() => reject(new Error("Credential broker startup timed out")), LONG_SUBPROCESS_TIMEOUT_MS);
       let buffer = "";
       const fail = () => { clearTimeout(timer); reject(new Error("Credential broker startup failed")); };
       child.once("error", fail);

@@ -24,9 +24,8 @@
 //                             abbreviateModel() to "BR:opus-4-8[1m]"), so the
 //                             painted right side is "<status> | BR:opus-4-8[1m]".
 //                             This asserts printLine's REAL production output and
-//                             is platform-invariant plain text (no colour escapes,
-//                             so the Windows node-pty backend captures it identically
-//                             — unlike statusline-colour, which is macOS-only).
+//                             is platform-invariant plain text (no colour escapes),
+//                             so every supported backend captures it identically.
 //
 // DIST/ FINDING (surfaced, not chased here): printLine's right-justify/padStart
 // branch (:180-183) only fires when process.stdout.columns > 0. Claude Code pipes
@@ -42,11 +41,12 @@
 // Needs the selected TUI substrate + claude + the distributable; absent any of those it SKIPs with a
 // reason — never a hollow pass.
 //
-// Spawn tui-drive.ts using the shared runtime selector: Bun for native and
-// tmux backends, Node with type stripping for explicit legacy node-pty. The
-// driver subprocess remains the source of the `tui` mechanism evidence.
+// Spawn tui-drive.ts using the shared runtime selector for the native Bun and
+// POSIX tmux backends. The driver subprocess remains the source of the `tui`
+// mechanism evidence.
 
-import { describe, expect, test } from "bun:test";
+import { liveCaseTimeoutMs, LIVE_LONG_OPERATION_TIMEOUT_MS, remainingOperationTimeoutMs, remainingCleanupTimeoutMs, fileCleanupReserveMs, NATIVE_TERMINAL_CLEANUP_TIMEOUT_MS, NATIVE_STARTUP_TIMEOUT_MS } from "../harness/test-budget.ts";
+import { beforeEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -55,6 +55,32 @@ import {
   setupTuiProject,
 } from "../harness/tui-fixtures.ts";
 import { resolveTuiRuntime, tuiUnavailableReason } from "../harness/tui-runtime.ts";
+
+function completedStartupProbe<T extends { error?: Error }>(result: T): T {
+  if ((result.error as NodeJS.ErrnoException | undefined)?.code === "ETIMEDOUT") throw result.error;
+  return result;
+}
+
+const TIMEOUT_S = Number(process.env.AIDLC_TEST_TIMEOUT);
+const TEST_TIMEOUT_MS = Number.isSafeInteger(TIMEOUT_S) && TIMEOUT_S > 0
+  ? TIMEOUT_S * 1000
+  : liveCaseTimeoutMs(LIVE_LONG_OPERATION_TIMEOUT_MS);
+let caseDeadlineMs: number;
+beforeEach(() => { caseDeadlineMs = Date.now() + TEST_TIMEOUT_MS; });
+function remainingWorkMs(): number {
+  return remainingOperationTimeoutMs(TEST_TIMEOUT_MS, {
+    deadlineMs: caseDeadlineMs,
+    reserveMs: fileCleanupReserveMs(TEST_TIMEOUT_MS),
+    phase: "E2E terminal work",
+  })!;
+}
+function remainingCleanupMs(): number {
+  return remainingCleanupTimeoutMs(NATIVE_TERMINAL_CLEANUP_TIMEOUT_MS, {
+    deadlineMs: caseDeadlineMs,
+    phase: "E2E terminal cleanup",
+  });
+}
+
 
 const DRIVER = join(import.meta.dir, "..", "harness", "tui-drive.ts");
 const AIDLC_SRC = join(import.meta.dir, "..", "..", "dist", "claude", ".claude");
@@ -67,7 +93,7 @@ interface Run {
 }
 function drive(args: string[]): Run {
   const { bin, prefix } = resolveTuiRuntime(DRIVER);
-  const res = spawnSync(bin, [...prefix, ...args], { encoding: "utf-8" });
+  const res = spawnSync(bin, [...prefix, ...args], { timeout: args[0] === "kill" ? remainingCleanupMs() : remainingWorkMs(), encoding: "utf-8" });
   return { rc: res.status ?? -1, stdout: res.stdout ?? "", stderr: res.stderr ?? "" };
 }
 // `wait` returns nonzero on timeout — boolean for the idempotent modal clears
@@ -93,7 +119,7 @@ function waitFor(session: string, pattern: string, timeoutMs: number, stableMs: 
 function absentReason(): string | null {
   const runtimeReason = tuiUnavailableReason();
   if (runtimeReason) return runtimeReason;
-  if (spawnSync("claude", ["--version"], { encoding: "utf-8" }).status !== 0) {
+  if (completedStartupProbe(spawnSync("claude", ["--version"], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" })).status !== 0) {
     return "claude CLI not found";
   }
   if (!existsSync(AIDLC_SRC)) return `distributable missing: ${AIDLC_SRC}`;
@@ -142,14 +168,14 @@ function captureWorkflowStatusline(): string {
     // consume separate timeout windows. Navigation stays fixture-scoped.
     const startup = drive([
       "startup", "--session", session,
-      "--ready-pattern", "\\[AIDLC\\].*IDEATION", "--timeout-ms", "60000",
+      "--ready-pattern", "\\[AIDLC\\].*IDEATION", "--timeout-ms", String(remainingWorkMs()),
     ]);
     if (startup.rc !== 0) throw new Error(`TUI startup failed: ${startup.stderr}`);
 
     // --- wait for the WORKFLOW statusline (IDEATION, not "ready") -----------
     // P9: the statusline now carries the orientation prefix ("<intent-slug> · ")
     // between [AIDLC] and the phase, so match with .* rather than a contiguous gap.
-    const sawMarker = waitFor(session, "\\[AIDLC\\].*IDEATION", 45000, 1000);
+    const sawMarker = waitFor(session, "\\[AIDLC\\].*IDEATION", remainingWorkMs(), 1000);
     const pane = drive(["capture", "--session", session]).stdout;
     if (!sawMarker) {
       throw new Error(
@@ -185,7 +211,7 @@ describe("t-tui-render statusline workflow branches (seeded mid-ideation, no tok
         "[AIDLC] fixture · IDEATION [▓▓░░░░░░░░] 2/7 > Feasibility -- Architect Agent | BR:opus-4-8[1m]",
       );
     },
-    90_000,
+    TEST_TIMEOUT_MS,
   );
 
   // statusline-counter — the "done/total" appended after the bar. Seeded
@@ -196,7 +222,7 @@ describe("t-tui-render statusline workflow branches (seeded mid-ideation, no tok
     () => {
       expect(pane()).toContain("░░] 2/7");
     },
-    90_000,
+    TEST_TIMEOUT_MS,
   );
 
   // statusline-stage-name — the "> Stage Name" segment, mapped through
@@ -207,7 +233,7 @@ describe("t-tui-render statusline workflow branches (seeded mid-ideation, no tok
     () => {
       expect(pane()).toContain("> Feasibility");
     },
-    90_000,
+    TEST_TIMEOUT_MS,
   );
 
   // statusline-align — printLine() joins the left status to the right side. With
@@ -215,14 +241,13 @@ describe("t-tui-render statusline workflow branches (seeded mid-ideation, no tok
   // the distributable pins the Opus model -> abbreviateModel() -> "BR:opus-4-8[1m]".
   // So the painted line ends "... | BR:opus-4-8[1m]". Anchored on the separator +
   // model token so a stray "BR:" elsewhere can't satisfy it. Platform-invariant
-  // plain text (no SGR escapes) -> the Windows node-pty backend captures it the
-  // same as tmux. (The padStart right-justify branch is dead in production — see
-  // the DIST/ FINDING in the header; this asserts what printLine really paints.)
+  // plain text (no SGR escapes) is captured consistently. The padStart
+  // right-justify branch is dead in production; see the DIST/ FINDING above.
   test.skipIf(ABSENT_REASON !== null)(
     `statusline-align paints the " | BR:opus-4-8[1m]" right side via printLine${ABSENT_REASON ? ` — SKIP: ${ABSENT_REASON}` : ""}`,
     () => {
       expect(pane()).toContain(" | BR:opus-4-8[1m]");
     },
-    90_000,
+    TEST_TIMEOUT_MS,
   );
 });

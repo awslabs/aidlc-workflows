@@ -31,10 +31,11 @@
 //       --resume-existing resumes a current swarm-batch Request Changes. It
 //       preserves surviving source/history and archives framework records, or
 //       creates a new child when native source landing removed the old one.
-//       Both paths require fresh protected Plan Approval before dispatch.
+//       Both paths require current Plan Approval or a protected continuation
+//       under a lowered plan-approval fence before dispatch.
 //   check <unit> [--check-cmd <cmd>] [--test-file <path>]
-//       Stateless single-unit verdict: the authorized Construction Verification
-//       Command under checkpoints; a required --check-cmd under legacy autonomy
+//       Single-unit verdict: the authorized Construction Verification Command,
+//       with or without checkpoints (a supplied --check-cmd must match it)
 //       (exit 0 = green,
 //       the AUTHORITATIVE signal — a worker's own success claim is never trusted)
 //       plus an anti-tamper compare of the protected file against its forked-git
@@ -78,6 +79,7 @@
 //   - aidlc-bolt fail              -> close a failed unit's Bolt lifecycle
 //     (BOLT_FAILED paired with the BOLT_STARTED that `start --worktree` emitted).
 
+import { DEFAULT_SUBPROCESS_TIMEOUT_MS, LONG_SUBPROCESS_TIMEOUT_MS, EXTENDED_SUBPROCESS_TIMEOUT_MS } from "./aidlc-runtime-budget.ts";
 import { spawnSync, type SpawnSyncReturns } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync } from "node:fs";
@@ -92,14 +94,18 @@ import {
   auditBlockField,
   auditShardDir,
   authorizedVerificationCommand,
+  unitPlainName,
   withdrawProtectedQuestions,
-  constructionCheckpointsApply,
   boltSlugForUnit,
   BoltIdentityError,
   filterProducesByKind,
   filteredRawIndexEntries,
   findAllEvents,
   getField,
+  guardPolicyAcceptsChanges,
+  recordAcceptedChanges,
+  renderChangedPaths,
+  type AcceptedChange,
   isRegularFile,
   latestMainWorkflowStageRunFloor,
   latestMainWorkflowStageRunFloorForProject,
@@ -131,7 +137,10 @@ import {
   sourceListingSha256,
   stateFilePath,
   setFieldStrict,
+  recordedSourceListingUnderCurrentBoundary,
+  sameWorkspaceSource,
   shapeSourceSnapshotIndex,
+  sourceRawDiffNameExcludedPaths,
   sourceClaimCovers,
   sourceListingEntriesEqual,
   type SourceClaimModel,
@@ -153,12 +162,15 @@ import {
   type AuditShardEvent,
   type BoltIdentity,
   type WorkflowSelection,
+  committedTextSha256,
+  currentFingerprintForm,
 } from "./aidlc-lib.ts";
 import { compiledExecutable } from "./aidlc-runtime-paths.ts";
 import {
   beginCodeGeneration,
   bindCodeGenerationWorktreeApproval,
   codeGenerationDiscardedBase,
+  codeGenerationExecutionAllowed,
   evaluateCodeGenerationApproval,
   readCodeGenerationWorktreeSourceBaseline,
   validateCodeGenerationWorktreeApproval,
@@ -189,6 +201,8 @@ interface UnitResult {
   reason?: FailureReason;
   detail?: string;
   tampered?: boolean;
+  /** Lines for the person: a change kept under relaxed or off. */
+  change_notices?: string[];
 }
 
 interface SourceBinding {
@@ -201,6 +215,10 @@ interface ReceiptCheck {
   artifactFingerprint?: string;
   sourceFingerprint?: string;
   unitSourceFingerprint?: string;
+  /** Changes kept under a relaxed or off Guard Policy, recorded once at finalize. */
+  accepted?: AcceptedChange[];
+  /** The Unit's manifest changed after its review and the review was kept. */
+  manifestKept?: boolean;
 }
 
 interface ReviewedRecordSnapshotEntry {
@@ -234,7 +252,7 @@ function runTool(toolFile: string, args: string[], projectDir: string): ToolRun 
   const result = spawnSync(command[0], command.slice(1), {
     encoding: "utf-8",
     cwd: projectDir,
-    timeout: 60_000,
+    timeout: LONG_SUBPROCESS_TIMEOUT_MS,
     env: { ...process.env, AIDLC_PROJECT_DIR: projectDir },
   });
   return {
@@ -262,11 +280,11 @@ function runTool(toolFile: string, args: string[], projectDir: string): ToolRun 
 //     would route through /bin/sh, which on dash-default distros (Debian/Ubuntu)
 //     would regress those bashisms — so we keep bash where it exists.
 //   - POSIX without /bin/bash: shell:true → /bin/sh (best available).
-// Exit-code semantics (0 = converged) and the 60s timeout are unchanged across
+// Exit-code semantics (0 = converged) and the project-check backstop agree across
 // all three.
 //
 // Shell interpretation is intentional only after command authorization has been
-// resolved from the parent intent. Legacy autonomy retains its supplied command.
+// resolved from the parent intent.
 function checkConverged(cwd: string, checkCmd: string): boolean {
   const shell =
     process.platform !== "win32" && existsSync("/bin/bash")
@@ -275,20 +293,20 @@ function checkConverged(cwd: string, checkCmd: string): boolean {
   const result = spawnSync(checkCmd, {
     cwd,
     encoding: "utf-8",
-    timeout: 60_000,
+    timeout: EXTENDED_SUBPROCESS_TIMEOUT_MS,
     shell,
   });
   return result.status === 0;
 }
 
+// Every check runs the Construction Verification Command the person approved
+// for this workflow, with or without Construction checkpoints; the person is
+// asked once, through the consent procedure the refusal names.
 function swarmCheckCommand(projectDir: string, supplied: string | undefined, action: string): { command: string; sha256?: string } {
-  // Legacy stateless checks can run without a workflow. An existing unreadable
-  // state must still fail closed rather than silently selecting legacy policy.
-  const state = existsSync(stateFilePath(projectDir)) ? readStateFile(projectDir) : "";
-  if (!constructionCheckpointsApply(state)) {
-    if (!supplied) fail(`${action} requires --check-cmd <shell command; exit 0 = converged>`);
-    return { command: supplied };
+  if (!existsSync(stateFilePath(projectDir))) {
+    fail(`${action} needs an active workflow: it runs only the Construction Verification Command the person approved for it.`);
   }
+  const state = readStateFile(projectDir);
   const authorization = authorizedVerificationCommand(projectDir, state);
   if (!authorization) {
     fail(`${action} requires an authorized Construction Verification Command. ${VERIFICATION_COMMAND_RECOVERY}`);
@@ -316,7 +334,7 @@ function fileTampered(cwd: string, relPath: string): boolean {
   const result = spawnSync("git", ["diff", "--quiet", "HEAD", "--", relPath], {
     cwd,
     encoding: "utf-8",
-    timeout: 60_000,
+    timeout: DEFAULT_SUBPROCESS_TIMEOUT_MS,
   });
   return result.status === 1;
 }
@@ -326,6 +344,8 @@ interface Verdict {
   converged: boolean;
   tampered: boolean;
   confineError?: string;
+  /** Under relaxed or off a changed protected test file is said, not refused. */
+  tamperNotice?: string;
 }
 
 function requiresCodeGenerationApproval(state: string): boolean {
@@ -369,6 +389,7 @@ function verdictFor(
   const converged = checkConverged(wt, checkCmd);
   let tampered = false;
   let confineError: string | undefined;
+  let tamperNotice: string | undefined;
   if (testFile) {
     // Confine the path inside the unit's worktree — a `../` escape would point
     // the guard at a file the worker never touched and silently DISABLE it, so
@@ -379,9 +400,13 @@ function verdictFor(
       confineError = `--test-file resolves outside the unit worktree: ${testFile}`;
     } else {
       tampered = fileTampered(wt, testFile);
+      if (tampered && guardPolicyAcceptsChanges(projectDir)) {
+        tampered = false;
+        tamperNotice = `Unit ${unit} changed its protected test file ${renderChangedPaths([testFile])}; its check passed with that change.`;
+      }
     }
   }
-  return { exists: true, converged, tampered, confineError };
+  return { exists: true, converged, tampered, confineError, ...(tamperNotice ? { tamperNotice } : {}) };
 }
 
 interface ReviewerRequirement {
@@ -556,6 +581,11 @@ function reviewerReceiptError(
   }
 
   const definition = resolveStage(stage);
+  const accepted: AcceptedChange[] = [];
+  let manifestKept = false;
+  // Under relaxed or off, what changed after a real review is kept and said
+  // once; under strict the Unit goes back for a fresh review.
+  const acceptsChanges = guardPolicyAcceptsChanges(projectDir);
   const recordedArtifactFp = auditBlockField(latestTerminal.block, "Artifact Fingerprint");
   const currentArtifactFp = definition
     ? reviewArtifactFingerprint(wt, definition, unit, {
@@ -565,8 +595,7 @@ function reviewerReceiptError(
   if (
     recordedArtifactFp === null ||
     !/^sha256:[0-9a-f]{64}$/.test(recordedArtifactFp) ||
-    currentArtifactFp === null ||
-    recordedArtifactFp !== currentArtifactFp
+    currentArtifactFp === null
   ) {
     return {
       error:
@@ -574,17 +603,38 @@ function reviewerReceiptError(
         `unit "${unit}", reviewer "${reviewer}" with a current artifact fingerprint exists after this Bolt started`,
     };
   }
+  const documents = `${definition?.name ?? stage} documents`;
+  // A receipt taken over raw line endings binds what it reviewed in its current form.
+  let artifactFingerprint = currentFingerprintForm(recordedArtifactFp) ?? recordedArtifactFp;
+  if (artifactFingerprint !== currentArtifactFp) {
+    if (!acceptsChanges) {
+      return {
+        error:
+          `claimed converged but unit "${unit}"'s ${documents} changed after its review; ` +
+          `re-invoke the reviewer against the current documents and record a fresh verdict before finalizing`,
+      };
+    }
+    accepted.push({
+      checkpoint: "review-receipt", stage, unit, changed: null,
+      recorded: recordedArtifactFp, current: currentArtifactFp,
+      notice: `The ${unitPlainName(unit)} Unit's ${documents} changed after it was reviewed. Kept them.`,
+    });
+    artifactFingerprint = currentArtifactFp;
+  }
+  const keptOnly = (): ReceiptCheck => ({
+    error: null, artifactFingerprint, ...(accepted.length > 0 ? { accepted } : {}),
+  });
 
   if (!definition?.workspace_requires) {
-    return { error: null, artifactFingerprint: recordedArtifactFp };
+    return keptOnly();
   }
   const recordedSourceFp = auditBlockField(latestTerminal.block, "Source Fingerprint");
   if (process.env.AIDLC_SKIP_SOURCE_FRESHNESS === "1") {
-    return { error: null, artifactFingerprint: recordedArtifactFp };
+    return keptOnly();
   }
   if (recordedSourceFp === null) {
     if (baseCommit === null) {
-      return { error: null, artifactFingerprint: recordedArtifactFp };
+      return keptOnly();
     }
     return {
       error:
@@ -593,10 +643,12 @@ function reviewerReceiptError(
     };
   }
   const currentSourceFp = worktreeSourceFingerprint(wt);
+  const sourceChanged = recordedSourceFp !== UNBINDABLE_FINGERPRINT && currentSourceFp !== null &&
+    !sameWorkspaceSource(recordedSourceFp, currentSourceFp);
   if (
     recordedSourceFp === UNBINDABLE_FINGERPRINT ||
     currentSourceFp === null ||
-    currentSourceFp !== recordedSourceFp
+    (sourceChanged && !acceptsChanges)
   ) {
     return {
       error:
@@ -606,16 +658,23 @@ function reviewerReceiptError(
         `verdict before finalizing`,
     };
   }
+  // The kept code is what finalize binds and lands.
+  let sourceFingerprint = recordedSourceFp;
+  if (sourceChanged) {
+    accepted.push({
+      checkpoint: "review-receipt", stage, unit, changed: null,
+      recorded: recordedSourceFp, current: currentSourceFp,
+      notice: `The ${unitPlainName(unit)} Unit's code changed after it was reviewed. Kept the change.`,
+    });
+    sourceFingerprint = currentSourceFp;
+  }
 
   // Pre-upgrade worktrees have no attested base commit and retain migration
   // fail-open behavior. Modern worktrees must validate the exact unit binding
   // that the reviewer saw before trusting its claims for footprint coverage.
   let unitSourceFingerprint: string | undefined;
   if (baseCommit !== null) {
-    const recordedUnitFp = auditBlockField(
-      latestTerminal.block,
-      "Unit Source Fingerprint",
-    );
+    const recordedUnitFp = auditBlockField(latestTerminal.block, "Unit Source Fingerprint");
     const bindingBypass =
       auditBlockField(latestTerminal.block, "Unit Source Binding Bypass") ===
       "true";
@@ -631,10 +690,22 @@ function reviewerReceiptError(
       worktreeRelative: true,
     });
     const snapshot = readUnitSourceSnapshot(wt, stage, unit, recordedUnitFp);
+    // Under relaxed or off the review stands when the Unit's manifest changed
+    // after it or its review copy is not on this machine; the change is kept.
     if (
+      acceptsChanges && manifest.ok &&
+      (snapshot === null || currentFingerprintForm(snapshot.manifestSha256) !== manifest.rawBytesSha256)
+    ) {
+      manifestKept = true;
+      accepted.push({
+        checkpoint: "review-receipt", stage, unit, changed: null,
+        recorded: snapshot?.manifestSha256 ?? recordedUnitFp, current: manifest.rawBytesSha256,
+        notice: `The ${unitPlainName(unit)} Unit's list of files changed after it was reviewed. Kept the review.`,
+      });
+    } else if (
       !manifest.ok ||
       snapshot === null ||
-      snapshot.manifestSha256 !== manifest.rawBytesSha256
+      currentFingerprintForm(snapshot.manifestSha256) !== manifest.rawBytesSha256
     ) {
       return {
         error:
@@ -668,22 +739,26 @@ function reviewerReceiptError(
       if (tree.status !== 0 || !tree.stdout.trim()) return { error: `claimed converged but the worktree footprint tree could not be written for unit "${unit}"` };
       const diff = git([
         "diff",
-        "--name-only",
+        "--raw",
         "-z",
         "--no-renames",
         baseCommit,
         tree.stdout.trim(),
       ]);
       if (diff.status !== 0) return { error: `claimed converged but the worktree footprint could not be compared for unit "${unit}"` };
+      // A file the source walk excludes by name (a stray .DS_Store, a coverage
+      // database) is not a write the Unit has to claim.
+      const excludedByName = new Set(sourceRawDiffNameExcludedPaths(diff.stdout));
       const outside = new Set(
         diff.stdout
           .split("\0")
-          .filter(Boolean),
+          .filter((token, index) => index % 2 === 1 && token.length > 0 && !excludedByName.has(token)),
       );
       const currentListing = workspaceSourceListing(wt);
       if (verifiedBaseListing === null || currentListing === null) {
         return { error: `claimed converged but raw-aware worktree footprint evidence is unavailable for unit "${unit}"` };
       }
+      verifiedBaseListing = recordedSourceListingUnderCurrentBoundary(verifiedBaseListing, currentListing);
       // A verified approval transfer may have fast-forwarded this preserved
       // worktree to the already-approved parent source. Those pre-existing
       // paths are the execution baseline, not new writes by this Unit.
@@ -711,7 +786,15 @@ function reviewerReceiptError(
       }
       const outsideClaims = [...outside]
         .filter((path) => !sourceClaimCovers(`\0${path}`, reviewedClaims));
-      if (outsideClaims.length > 0) {
+      if (outsideClaims.length > 0 && acceptsChanges) {
+        // Under relaxed or off the files stay and merge; they are named once.
+        accepted.push({
+          checkpoint: "review-receipt", stage, unit, changed: outsideClaims.sort(),
+          recorded: recordedUnitFp,
+          current: `sha256:${createHash("sha256").update(outsideClaims.join("\n")).digest("hex")}`,
+          notice: `The ${unitPlainName(unit)} Unit also changed ${renderChangedPaths(outsideClaims)} outside its planned files. Kept them.`,
+        });
+      } else if (outsideClaims.length > 0) {
         const rendered = outsideClaims.slice(0, 10).join(", ") +
           (outsideClaims.length > 10 ? ` … and ${outsideClaims.length - 10} more` : "");
         return {
@@ -727,9 +810,11 @@ function reviewerReceiptError(
   }
   return {
     error: null,
-    artifactFingerprint: recordedArtifactFp,
-    sourceFingerprint: recordedSourceFp,
+    artifactFingerprint,
+    sourceFingerprint,
     unitSourceFingerprint,
+    ...(accepted.length > 0 ? { accepted } : {}),
+    ...(manifestKept ? { manifestKept } : {}),
   };
 }
 
@@ -791,10 +876,11 @@ function captureReviewedRecordSnapshot(
       unit,
       receipt.unitSourceFingerprint,
     );
+    // A manifest change kept at the receipt check lands as it is now, beside
+    // the evidence of what was reviewed.
     if (
       !manifest.ok ||
-      snapshot === null ||
-      snapshot.manifestSha256 !== manifest.rawBytesSha256
+      (!receipt.manifestKept && (snapshot === null || currentFingerprintForm(snapshot.manifestSha256) !== manifest.rawBytesSha256))
     ) {
       return {
         error:
@@ -822,10 +908,7 @@ function captureReviewedRecordSnapshot(
     } catch {
       return { error: `cannot capture reviewed source evidence for unit "${unit}"` };
     }
-    if (
-      createHash("sha256").update(manifestBytes).digest("hex") !==
-        manifest.rawBytesSha256
-    ) {
+    if (committedTextSha256(manifestBytes) !== manifest.rawBytesSha256) {
       return {
         error:
           `reviewed source evidence changed while finalizing unit "${unit}"; ` +
@@ -870,10 +953,17 @@ function captureReviewedRecordSnapshot(
         // retain these exact, receipt-bound bytes in .aidlc-engine/source-review.
         // Promote them into the transferred snapshot so an in-flight swarm can
         // finish after upgrading without weakening the new provenance record.
+        if (snapshot === null) {
+          return { error: `cannot capture reviewed source evidence for unit "${unit}"` };
+        }
         evidenceBytes = Buffer.from(snapshot.serialized, "utf-8");
       }
     }
-    if (createHash("sha256").update(evidenceBytes).digest("hex") !== hex) {
+    // A checkout with CRLF line endings holds the same evidence.
+    if (
+      createHash("sha256").update(evidenceBytes).digest("hex") !== hex &&
+      committedTextSha256(evidenceBytes) !== hex
+    ) {
       return {
         error:
           `reviewed source evidence changed while finalizing unit "${unit}"; ` +
@@ -1135,8 +1225,8 @@ function resolveRelativeSubmoduleUrl(
   return resolve(parentUrl, metadataUrl);
 }
 
-const NEW_GITLINK_RECOVERY_BUDGET_MS = 30_000;
-const NEW_GITLINK_RECOVERY_COMMAND_TIMEOUT_MS = 15_000;
+const NEW_GITLINK_RECOVERY_BUDGET_MS = EXTENDED_SUBPROCESS_TIMEOUT_MS;
+const NEW_GITLINK_RECOVERY_COMMAND_TIMEOUT_MS = LONG_SUBPROCESS_TIMEOUT_MS;
 const NEW_GITLINK_RECOVERY_PROOF_CAP = 32;
 
 interface NewGitlinkRecoveryBudget {
@@ -1671,7 +1761,7 @@ function bindReviewedSource(
     const commit = git(["commit-tree", tree.stdout.trim(), "-p", head.stdout.trim(), "-m", `Reviewed source for Bolt ${identity.slug}`]);
     if (commit.status !== 0 || !commit.stdout.trim()) return { error: "cannot create the immutable reviewed-source commit" };
     const after = worktreeSourceFingerprint(wt);
-    if (after === null || after !== fingerprint) {
+    if (after === null || !sameWorkspaceSource(fingerprint, after)) {
       return { error: "source-fingerprint mismatch while binding the reviewed source; re-run the reviewer" };
     }
     const commitSha = commit.stdout.trim();
@@ -1704,7 +1794,7 @@ function emitSwarmStarted(
   concurrency: string,
   attempt: SwarmAttemptStamp,
   resumed: Record<string, string> = {},
-  resumeApprovals: Record<string, string> = {},
+  resumeFingerprints: Record<string, string> = {},
 ): void {
   appendAuditEntry(
     "SWARM_STARTED",
@@ -1719,7 +1809,7 @@ function emitSwarmStarted(
         "Resumed": "true",
         "Checkpoint": "swarm-batch",
         "Resume revisions": JSON.stringify(resumed),
-        "Resume approvals": JSON.stringify(resumeApprovals),
+        "Resume execution fingerprints": JSON.stringify(resumeFingerprints),
       } : {}),
     },
     pd
@@ -1837,6 +1927,8 @@ interface SwarmResume {
   worktree: string;
   recordPrefix: string;
   revision: string;
+  // Current executable content, also used to bind retries to the dispatched
+  // snapshot. This fingerprint alone does not certify human approval.
   approvalFingerprint: string;
   alreadyResumed: boolean;
   recreate: boolean;
@@ -1908,7 +2000,7 @@ function resumedRevision(row: AuditShardEvent, unit: string, field = "Resume rev
 }
 
 function resumeGit(cwd: string, args: string[]): string {
-  const result = spawnSync("git", args, { cwd, encoding: "utf-8", timeout: 10_000 });
+  const result = spawnSync("git", args, { cwd, encoding: "utf-8", timeout: DEFAULT_SUBPROCESS_TIMEOUT_MS });
   if (result.status !== 0) throw new Error(`Cannot validate preserved worktree: ${result.stderr.trim()}`);
   return result.stdout.trim();
 }
@@ -2019,10 +2111,13 @@ function validateSwarmResume(
   const creation = latestResumeRow(rows.filter((row) => row.event === "WORKTREE_CREATED" &&
     auditBlockField(row.block, "Bolt slug") === slug));
   const approval = evaluateCodeGenerationApproval(pd, { unit });
-  if (!approval.ok || !approval.approvalFingerprint) throw new Error(`${unit}: resume requires fresh Plan Approval: ${approval.reason}`);
+  if (!codeGenerationExecutionAllowed(pd, { unit }, approval) || !approval.approvalFingerprint) {
+    throw new Error(`${unit}: resume requires current Plan Approval or an allowed continuation: ${approval.reason}`);
+  }
+  const executionFingerprint = approval.approvalFingerprint;
   const journal = readResumeJournal(pd, revision, unit);
   const matchingJournal = !!creation && journal?.revision === revision &&
-    journal.approvalFingerprint === approval.approvalFingerprint &&
+    journal.approvalFingerprint === executionFingerprint &&
     journal.creation === checkpointRevision(creation);
   // Native source landing removes its child. A checkpoint revision may create a
   // new child only after that exact prior Unit source was durably landed.
@@ -2070,7 +2165,7 @@ function validateSwarmResume(
       throw new Error(`${unit}: missing worktree still has an active Bolt registration without a current native discard.`);
     }
     return {
-      unit, worktree, recordPrefix, revision, approvalFingerprint: approval.approvalFingerprint,
+      unit, worktree, recordPrefix, revision, approvalFingerprint: executionFingerprint,
       alreadyResumed: false, recreate: true, recovering: false, creation: checkpointRevision(creation),
       ...(discardedSha256 ? { discardedSha256 } : {}),
       ...(approvedBaseCommit ? { approvedBaseCommit } : {}),
@@ -2142,14 +2237,18 @@ function validateSwarmResume(
   const childState = recovering && !existsSync(childStatePath) ? "" :
     readRegularFileNoFollowOrThrow(childStatePath, "preserved worktree state").toString("utf-8");
   if (getField(childState, "Merge-Held") === "true") throw new Error(`${unit}: resolve its held merge before resuming.`);
-  if (alreadyResumed && resumedRevision(swarmStart!, unit, "Resume approvals") !== approval.approvalFingerprint) {
+  const resumedFingerprint = swarmStart
+    ? resumedRevision(swarmStart, unit, "Resume execution fingerprints") ??
+      resumedRevision(swarmStart, unit, "Resume approvals")
+    : null;
+  if (alreadyResumed && resumedFingerprint !== executionFingerprint) {
     throw new Error(`${unit}: this revision was already resumed under a different plan; preserve the active work and request a new checkpoint revision.`);
   }
   const discardedSha256 = matchingJournal ? journal?.discardedSha256 : undefined;
   if (!alreadyResumed) validateCodeGenerationWorktreeApproval(pd, worktree, unit, discardedSha256);
   return {
     unit, worktree, recordPrefix, revision, alreadyResumed, recovering, recreate: false,
-    creation: checkpointRevision(creation), approvalFingerprint: approval.approvalFingerprint,
+    creation: checkpointRevision(creation), approvalFingerprint: executionFingerprint,
     ...(discardedSha256 ? { discardedSha256 } : {}),
   };
 }
@@ -2244,19 +2343,19 @@ function handlePrepare(rest: string[]): void {
     .trim()
     .toLowerCase()
     .replace(/\s+/g, "-");
-  // Human lines for source drift accepted under Change Control `relaxed` when
-  // protected Code Generation authority started for the batch's units.
+  // Human lines for input changes accepted under a lowered guard when
+  // Code Generation starts for the batch's units.
   const swarmChangeNotices: string[] = [];
-  const requiresPlanApproval = requiresCodeGenerationApproval(state);
-  if (requiresPlanApproval) {
+  const requiresExecutionAllowance = requiresCodeGenerationApproval(state);
+  if (requiresExecutionAllowance) {
     const invalid = units
-      .map((unit) => evaluateCodeGenerationApproval(projectDir, { unit }))
-      .filter((approval) => !approval.ok);
+      .map((unit) => ({ unit, approval: evaluateCodeGenerationApproval(projectDir, { unit }) }))
+      .filter(({ unit, approval }) => !codeGenerationExecutionAllowed(projectDir, { unit }, approval));
     if (invalid.length > 0) {
       fail(
-        "prepare requires a current, explicitly approved Code Generation plan for every " +
+        "prepare requires a current, explicitly approved Code Generation plan or an allowed continuation for every " +
           `unit before worktrees are forked: ${invalid
-            .map((approval) => `${approval.unit} (${approval.reason})`)
+            .map(({ unit, approval }) => `${unit} (${approval.reason})`)
             .join("; ")}`,
       );
     }
@@ -2345,10 +2444,10 @@ function handlePrepare(rest: string[]): void {
   if (!resumeExisting && getField(state, "Construction Checkpoints") === "enabled") {
     const rows = readAuditShardEvents(projectDir);
     if (units.some((unit) => currentCheckpointRejection(rows, flags.batch, unit, attempt.floor))) {
-      fail("This batch has a checkpoint revision. Re-run prepare with --resume-existing after fresh Plan Approval.");
+      fail("This batch has a checkpoint revision. Re-run prepare with --resume-existing using current Plan Approval or an allowed continuation.");
     }
   }
-  if (!resumeExisting && requiresPlanApproval) {
+  if (!resumeExisting && requiresExecutionAllowance) {
     const unreadable: string[] = [];
     const rows = readAuditShardEvents(projectDir, undefined, undefined, unreadable);
     if (unreadable.length) fail("prepare cannot recover discarded workers from unreadable audit evidence");
@@ -2365,7 +2464,7 @@ function handlePrepare(rest: string[]): void {
       });
     }
   }
-  if (requiresPlanApproval) {
+  if (requiresExecutionAllowance) {
     try {
       // Validate the entire batch before the first fork or generation receipt.
       // An approved dirty parent is not a reproducible worktree base.
@@ -2383,7 +2482,7 @@ function handlePrepare(rest: string[]): void {
       fail(`prepare source preflight failed before creating worktrees: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
-  if (requiresPlanApproval) {
+  if (requiresExecutionAllowance) {
     try {
       for (const unit of units) {
         if (identityErrors.has(unit)) continue;
@@ -2436,6 +2535,9 @@ function handlePrepare(rest: string[]): void {
           const checked = withAuditLock(projectDir, () =>
             validateSwarmResume(projectDir, flags.batch, unit, identity, attempt, repoCwd, repoName));
           if (checked.revision !== resume.revision) throw new Error(`${unit}: checkpoint revision changed before resume`);
+          if (checked.approvalFingerprint !== resume.approvalFingerprint) {
+            throw new Error(`${unit}: executable plan changed before resume; retry prepare against the current plan`);
+          }
           writeResumeJournal(projectDir, checked);
           archive = archiveSwarmResume(checked);
           if (checked.recovering) releasePreparationRegistration(projectDir, unit);
@@ -2446,7 +2548,12 @@ function handlePrepare(rest: string[]): void {
           if (!started.ok) throw new Error(`resume Bolt start failed: ${started.stderr.trim() || started.stdout.trim()}`);
           bindCodeGenerationWorktreeApproval(projectDir, resume.worktree, unit, checked.discardedSha256);
           const approval = evaluateCodeGenerationApproval(projectDir, { unit });
-          if (!approval.ok) throw new Error(`${unit}: Plan Approval changed during resume: ${approval.reason}`);
+          if (!codeGenerationExecutionAllowed(projectDir, { unit }, approval)) {
+            throw new Error(`${unit}: Code Generation is no longer allowed during resume: ${approval.reason}`);
+          }
+          if (approval.approvalFingerprint !== checked.approvalFingerprint) {
+            throw new Error(`${unit}: executable plan changed during resume; preserve the active work and resolve the interrupted resume before retrying`);
+          }
         }
         prepared.push({
           unit, ok: true, worktree_path: resume.worktree, resumed: true,
@@ -2559,9 +2666,16 @@ function handlePrepare(rest: string[]): void {
       });
       continue;
     }
-    if (requiresPlanApproval) {
+    if (requiresExecutionAllowance) {
       try {
         bindCodeGenerationWorktreeApproval(projectDir, worktreeDir, unit, discarded?.discardedSha256);
+        if (resume) {
+          const approval = evaluateCodeGenerationApproval(projectDir, { unit });
+          if (!codeGenerationExecutionAllowed(projectDir, { unit }, approval) ||
+            approval.approvalFingerprint !== resume.approvalFingerprint) {
+            throw new Error(`${unit}: Code Generation allowance or executable plan changed during recreation`);
+          }
+        }
       } catch (error) {
         if (!resume) releasePreparationRegistration(projectDir, unit);
         prepared.push({
@@ -2660,6 +2774,7 @@ function handleCheck(rest: string[]): void {
     reason: verdict.tampered ? "error" : null,
   };
   if (verdict.tampered) out.detail = "protected test file was modified";
+  if (verdict.tamperNotice) out.change_notices = [verdict.tamperNotice];
   console.log(JSON.stringify(out));
   // Exit 0 ONLY for a genuine convergence — the seam the ultracode script and
   // the conductor gate on (a worker's self-claim is never read).
@@ -2858,7 +2973,11 @@ function handleFinalize(rest: string[]): void {
             recordSnapshots.set(unit, captured.snapshot);
             genuine.push(unit);
             preparedAttempts.set(unit, preparedAttempt);
-            results.push({ unit, status: "converged" });
+            const notices = [
+              ...(verdict.tamperNotice ? [verdict.tamperNotice] : []),
+              ...recordAcceptedChanges(projectDir, receipt.accepted ?? []),
+            ];
+            results.push({ unit, status: "converged", ...(notices.length > 0 ? { change_notices: notices } : {}) });
           }
         }
       } else {

@@ -1,8 +1,8 @@
 // covers: subcommand:aidlc-orchestrate:team-board, function:parseTeamBoardArgs, function:buildTeamConstructionBoard, function:buildTeamConstructionBoardForIntent, function:renderTeamConstructionBoard, function:localUnitClaimOverviewForIntent, function:unitMergeTransactionsForIdentity, function:CLAIM_ACTIVITY_STALE_HOURS
 
 import {
-  deterministicCaseTimeoutMs,
   NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS,
 } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
@@ -42,7 +42,7 @@ import {
 } from "../harness/fixtures.ts";
 
 // Every case spawns several tool processes plus real git remotes; bun's 5s default is too tight under --parallel 4.
-setDefaultTimeout(Math.max(60_000, deterministicCaseTimeoutMs()));
+setDefaultTimeout(NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
 const ORCH = join(AIDLC_SRC, "tools", "aidlc-orchestrate.ts");
 const UTILITY = join(AIDLC_SRC, "tools", "aidlc-utility.ts");
@@ -87,11 +87,11 @@ function nextDirective(
   let directive = JSON.parse(result.stdout) as Record<string, unknown>;
   while (
     directive.kind === "load-steering" &&
-    typeof directive.continue_token === "string"
+    typeof directive.receipt === "string"
   ) {
     result = run(
       ORCH,
-      ["continue", directive.continue_token],
+      ["continue", directive.receipt],
       project,
       env,
     );
@@ -427,6 +427,8 @@ function pickerFixture(teamMode: boolean, count: 1 | 3): string {
     join(intentsRoot, "intents.json"),
     `${JSON.stringify(rows, null, 2)}\n`,
   );
+  // A single record is this user's own workflow, selected by the local cursor.
+  if (count === 1) writeFileSync(join(intentsRoot, "active-intent"), "team-work-11111111\n");
   return project;
 }
 
@@ -823,7 +825,7 @@ describe("t327 team construction dispatcher", () => {
     }
   });
 
-  test("multi-intent picker annotates team, parked, and complete while dormant paths stay byte-identical", () => {
+  test("multi-intent picker annotates team and parked, leaves out finished work, while dormant paths stay byte-identical", () => {
     const team = pickerFixture(true, 3);
     const teamPicker = nextDirective(team, {}, ["--scope", "feature"]);
     expect(teamPicker).toMatchObject({ kind: "ask" });
@@ -834,9 +836,10 @@ describe("t327 team construction dispatcher", () => {
     expect(question).toContain(
       "`parked-work` (record: `parked-work-22222222`) (parked at code-generation)",
     );
-    expect(question).toContain(
-      "`done-work` (record: `done-work-33333333`) (complete)",
-    );
+    // Finished work has nothing to carry on: not listed, not counted.
+    expect(question).not.toContain("done-work-33333333");
+    expect(question).toContain("2 pieces of work in progress");
+    expect(teamPicker.available_intents).toEqual(["team-work-11111111", "parked-work-22222222"]);
 
     const parkedPath = join(
       team,
@@ -874,13 +877,23 @@ describe("t327 team construction dispatcher", () => {
       {},
       ["--scope", "feature"],
     ).question as string;
+    // Solo work says where each piece stands; Unit-by-Unit stages by their phase.
     expect(soloQuestion).toContain(
-      "`team-work` (record: `team-work-11111111`), " +
-        "`parked-work` (record: `parked-work-22222222`), " +
-        "`done-work` (record: `done-work-33333333`)",
+      "`team-work` (record: `team-work-11111111`) (in Construction), " +
+        "`parked-work` (record: `parked-work-22222222`) (in Construction). ",
     );
+    expect(soloQuestion).not.toContain("done-work-33333333");
+    expect(soloQuestion).toContain("2 pieces of work in progress");
     expect(soloQuestion).not.toContain("team construction");
     expect(soloQuestion).not.toContain("parked at");
+    // Stage by stage, Current Stage is where the work is, so it is named.
+    for (const record of ["team-work-11111111", "parked-work-22222222"]) {
+      const statePath = join(solo, "aidlc", "spaces", "default", "intents", record, "aidlc-state.md");
+      writeFileSync(statePath, readFileSync(statePath, "utf-8").replace("- **Construction Iteration**: unit-major", "- **Construction Iteration**: stage-major"));
+    }
+    const stageMajor = nextDirective(solo, {}, ["--scope", "feature"]).question as string;
+    expect(stageMajor).not.toContain("(in Construction)");
+    expect(stageMajor.match(/\(at [A-Z][^)]*\)/g) ?? []).toHaveLength(2);
 
     const single = pickerFixture(true, 1);
     const singleDirective = nextDirective(single);

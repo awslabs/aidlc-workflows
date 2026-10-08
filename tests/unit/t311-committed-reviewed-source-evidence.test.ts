@@ -13,7 +13,12 @@
 // predicates (normalizeManifestSourcePath, sourcePathIsExcluded) hold the
 // contracts aidlc-attest.ts resolve/anchor depend on.
 
-import { afterEach, describe, expect, test } from "bun:test";
+import {
+  NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { afterEach, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -32,6 +37,8 @@ import {
   writeUnitSourceSnapshot,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
+setDefaultTimeout(NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
+
 const dirs: string[] = [];
 
 afterEach(() => {
@@ -39,7 +46,7 @@ afterEach(() => {
 });
 
 function git(dir: string, args: string[]): void {
-  const result = spawnSync("git", ["-C", dir, ...args], { encoding: "utf-8" });
+  const result = spawnSync("git", ["-C", dir, ...args], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" });
   if (result.status !== 0) throw new Error(result.stderr || result.stdout);
 }
 
@@ -180,7 +187,14 @@ describe("t311 committed reviewed-source evidence", () => {
     expect(reason("a\\b.ts")).toContain("POSIX '/' separators");
     expect(reason("/absolute.ts")).toContain("must be relative");
     expect(reason("C:/windows.ts")).toContain("must be relative");
-    expect(reason("*.ts")).toContain("glob");
+    // A Next.js or SvelteKit route folder is a literal path: brackets and
+    // braces are plain characters in a file name on every platform.
+    expect(normalizeManifestSourcePath("src/app/items/[itemId]/")).toEqual({ path: "src/app/items/[itemId]/", prefix: true });
+    expect(normalizeManifestSourcePath("src/app/[...slug]/page.tsx")).toEqual({ path: "src/app/[...slug]/page.tsx", prefix: false });
+    expect(normalizeManifestSourcePath("src/app/[[...slug]]/page.tsx")).toEqual({ path: "src/app/[[...slug]]/page.tsx", prefix: false });
+    expect(normalizeManifestSourcePath("src/{a}/b.ts")).toEqual({ path: "src/{a}/b.ts", prefix: false });
+    expect(reason("*.ts")).toContain("literally");
+    expect(reason("src/a?.ts")).toContain("literally");
     expect(reason("src/../escape.ts")).toContain("'..' segments");
     expect(reason(".")).toContain("below the repository root");
     expect(reason("./")).toContain("below the repository root");

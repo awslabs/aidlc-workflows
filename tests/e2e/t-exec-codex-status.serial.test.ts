@@ -23,12 +23,15 @@
 // What this proves on the SHIPPED tree, structurally:
 //   - skill discovery at .agents/skills/aidlc under a real codex session;
 //   - the engine's print-directive terminal arm (status names no workflow);
-//   - nothing is scaffolded by a read-only utility (no aidlc-docs creature).
+//   - nothing is scaffolded by a read-only utility (no aidlc-docs creature);
+//   - the trust `package.ts codex trust` seeds is the trust Codex checks, so
+//     the project's hooks run, matched ones included.
 //
 // LIVE GATE: requires AIDLC_CODEX_EXEC_LIVE=1 + a codex >= 0.145.0 binary
-// (AIDLC_CODEX_BIN or PATH) + AWS creds for the Bedrock profile in
-// AIDLC_CODEX_AWS_PROFILE (default "codex"). Skips cleanly otherwise.
+// (AIDLC_CODEX_BIN or PATH). Bedrock uses the AWS default credential chain;
+// AIDLC_CODEX_AWS_PROFILE selects a named profile when needed.
 
+import { liveCaseTimeoutMs, LIVE_LONG_OPERATION_TIMEOUT_MS, NATIVE_STARTUP_TIMEOUT_MS, FILE_CLEANUP_RESERVE_MS, remainingOperationTimeoutMs } from "../harness/test-budget.ts";
 import { describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync } from "node:fs";
@@ -41,14 +44,21 @@ import {
 import { REPO_ROOT } from "../harness/fixtures.ts";
 import { codexExecDiagnostic, codexExecTimeout, withCodexFixture } from "../harness/codex-test-lifecycle.ts";
 
+function completedStartupProbe<T extends { error?: Error }>(result: T): T {
+  if ((result.error as NodeJS.ErrnoException | undefined)?.code === "ETIMEDOUT") throw result.error;
+  return result;
+}
+
 const CODEX_DIST = join(REPO_ROOT, "dist", "codex");
 const CODEX_BIN = process.env.AIDLC_CODEX_BIN ?? "codex";
 
-const TIMEOUT_S = Number.parseInt(process.env.AIDLC_TEST_TIMEOUT ?? "600", 10);
-const TEST_TIMEOUT_MS = (Number.isFinite(TIMEOUT_S) ? TIMEOUT_S : 600) * 1000;
+const TIMEOUT_S = Number(process.env.AIDLC_TEST_TIMEOUT);
+const TEST_TIMEOUT_MS = Number.isSafeInteger(TIMEOUT_S) && TIMEOUT_S > 0
+  ? TIMEOUT_S * 1000
+  : liveCaseTimeoutMs(LIVE_LONG_OPERATION_TIMEOUT_MS);
 
 function codexVersionOk(): boolean {
-  const r = spawnSync(CODEX_BIN, ["--version"], { encoding: "utf-8" });
+  const r = completedStartupProbe(spawnSync(CODEX_BIN, ["--version"], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" }));
   const m = (r.stdout ?? "").match(/(\d+)\.(\d+)\.(\d+)/);
   if (r.status !== 0 || !m) return false;
   const [maj, min] = [Number(m[1]), Number(m[2])];
@@ -103,7 +113,7 @@ describe("Codex fixture failure and retirement contract", () => {
     await withCodexFixture(unowned, () => {}, () => {
       expect(codexExecTimeout(600_000)).toBeLessThanOrEqual(15_000);
       expect(codexExecTimeout(600_000)).toBeGreaterThan(0);
-    }, performance.now() + 45_000);
+    }, performance.now() + FILE_CLEANUP_RESERVE_MS + 15_000);
   });
 
   test("Windows runner-owned fixture deletion is handed to post-job cleanup with a receipt", async () => {
@@ -144,6 +154,12 @@ describe("t-exec-codex-status — $aidlc --status on the shipped dist/codex via 
         // workspace signals are the state file and the scaffold tree.
         expect(existsSync(join(proj, "aidlc-docs", "aidlc-state.md"))).toBe(false);
         expect(existsSync(join(proj, "aidlc-docs", "ideation"))).toBe(false);
+        // The seeded trust is the trust Codex checks: Codex reports running the
+        // project's hooks, SessionStart and a matched one (every PostToolUse
+        // group has a matcher; this run's tool calls are Bash). With a seed
+        // Codex did not recognise, it ran none of them and this run passed.
+        expect(r.out, codexExecDiagnostic(r)).toContain("hook: SessionStart Completed");
+        expect(r.out, codexExecDiagnostic(r)).toContain("hook: PostToolUse Completed");
       }, deadlineMs);
     },
     TEST_TIMEOUT_MS,

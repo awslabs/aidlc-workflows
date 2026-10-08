@@ -300,6 +300,24 @@ changed. Consume records preserve and verify `artifact`, `required`, and optiona
 invalid sidecar cannot be reconstructed safely from an already-composed stage:
 refresh the stock engine, remove that sidecar, then run `plugin sync`.
 
+### Plugin upgrade lifecycle
+
+Re-composing a newer version of your plugin (a new session on a host with the
+compose hook, `aidlc engine plugin sync`, or `bun <plugin-root>/hooks/compose.ts`)
+takes your newer stages, scopes, agents, knowledge, sensors, and tools wherever
+the installed copy is still the one your plugin installed. Compose proves that
+with `tools/data/plugin-owned-<key>.json`, the same hash-proven record
+`plugin sync` writes. A copy the person changed stays as it is; the drops log
+(shown by `/aidlc --doctor`) names the file and the step: move the change
+elsewhere, remove the file, re-run compose. A project composed before that record
+existed (compose.ts run by hand on 2.10.0 or earlier) reports each differing file
+the same way; identical files are recorded on the first run of the current
+compose, so later upgrades need nothing. A prose fragment your new version no
+longer ships at its old `(anchor, order)` is removed together with its sidecar
+record, so a moved fragment appears once. Structural additions (`adds.*`) your
+new version no longer declares are not removed by compose alone; `plugin sync`
+strips them before it re-composes.
+
 ## 4. Packaging the other primitives
 
 `test-pro` ships stages, contributions, sensors, a support agent, a scope, and
@@ -312,7 +330,9 @@ projection remains deferred (doc 18 §9 Status).
   `agents/test-pro-metrics-agent.md` has `name: test-pro-metrics-agent`). It is
   discovered automatically after compose, and your plugin's stages may name it
   as `lead_agent`/`support_agents`. A same-path collision with different content
-  is not overwritten; compose records a drop log. OpenCode composition also
+  is not overwritten (compose records a drop log), unless the installed file is
+  your plugin's own earlier copy, unchanged since compose installed it: a
+  re-compose takes your newer copy. OpenCode composition also
   creates the native `.opencode/agents/` subagent twin and denies nested
   `task` delegation. See
   [Adding an Agent](03-adding-an-agent.md).
@@ -360,9 +380,9 @@ runs only while the plugin is enabled. It receives `AIDLC_PROJECT_DIR`,
 without other stdout:
 
 Doctor discovery derives installed plugin identities from owned stage and scope
-metadata. A plugin must therefore own at least one stage or scope for its doctor
-script to be discoverable; a tools-, sensors-, or knowledge-only plugin is not
-enough on its own.
+metadata and from the composition sidecars under `tools/data/`. A plugin whose
+compose merged contributions (sensors, produces, overlays) is discoverable even
+when it owns no stage or scope.
 
 ```typescript
 import { existsSync } from "node:fs";
@@ -429,8 +449,10 @@ there, writes `plugin-compose-<key>.json` and hash-proven
 `plugin-owned-<key>.json`, then commits the staged diff through the shared
 transaction engine. A fault restores all files, modes, stamps, and ownership
 records. `--prune-missing` is intentionally stricter: it requires a proved full
-host inventory, explicit confirmation (`--yes` in automation), and unchanged
-owned hashes; local or unowned bytes are refused.
+host inventory, `--yes` in automation, and unchanged owned hashes; local or
+unowned bytes are refused. At a terminal it asks nothing: it names the plugins
+it prunes and how to get them back (reinstall in the host, then sync), then
+prunes.
 
 ### Project selection
 
@@ -469,10 +491,10 @@ AIDLC_PLUGIN_ROOT="<plugin-root>" AIDLC_PROJECT_DIR="<project>" \
 # open in Kiro IDE or kiro-cli chat → /aidlc
 ```
 
-> **Kiro note.** Use the `kiro-ide` projection for Kiro IDE >= 1.0; its folder-drop
+> **Kiro note.** Use the `kiro-ide` projection for Kiro IDE 1.x or Kiro CLI v3; its folder-drop
 > includes a v2 `.kiro/hooks/aidlc-<plugin>-compose.json` SessionStart registration
 > that runs the cross-platform `hooks/aidlc-plugin-compose.ts` Bun launcher from
-> the workspace root. The `kiro` projection for Kiro CLI emits no hook registration,
+> the workspace root. The `kiro` projection emits no hook registration,
 > so run one of the explicit composer commands above. Neither projection emits the
 > retired `.kiro.hook` plugin registration.
 

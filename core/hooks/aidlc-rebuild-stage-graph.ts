@@ -19,17 +19,35 @@
 // Recursion guard: `aidlc-runtime.ts` is excluded from the command-regex
 // matcher set, AND MEMORY_EMPTY is not in the event-class regex. The
 // compile's own audit emits cannot re-trigger the compile.
+//
+// Engine error relay: before the command filter, when this Bash call was one
+// literal framework engine orchestrate invocation whose stdout is exactly the
+// canonical `error` directive the engine emitted, the message is handed to the
+// human byte for byte through the harness's hook-to-human channel (a
+// `systemMessage` on Claude Code and Codex, a toast via the opencode plugin).
+// The same line carries a PostToolUse `additionalContext` note telling the
+// model the person has seen it; the Claude and Codex skills then add no copy
+// of their own. It needs no workflow state: the engine errors before any
+// intent exists too.
 
-import { mkdirSync, statSync, writeFileSync } from "node:fs";
+import { LONG_SUBPROCESS_TIMEOUT_MS } from "../tools/aidlc-runtime-budget.ts";
+import { statSync } from "node:fs";
 import { join } from "node:path";
 import {
+  consumeCreationReceipt,
+  clearSessionIntentUuid,
+  isTrustedBindingSource,
+  readSessionBinding,
+  workflowParticipation,
   auditShards,
   classifyRuntimeCompileCommand,
   type ClaudeCodeHookInput,
+  engineErrorRelayMessage,
   errorMessage,
   hookChildEnv,
   hookDebug,
   hooksHealthDir,
+  writeHookStatusFile,
   isClaudeCodeHookInput,
   isoTimestamp,
   listIntents,
@@ -41,11 +59,13 @@ import {
   runtimeGraphPath,
   validSessionId,
   harnessDir,
+  writeEngineErrorRelay,
   writeSessionIntentHandoff,
   writeSessionBinding,
   writeSessionIntentUuid,
 } from "../tools/aidlc-lib.ts";
 import { aidlcEngineCommand } from "../tools/aidlc-runtime-paths.ts";
+
 
 // intent-create runs before a workflow exists, so SessionStart cannot stamp that
 // conversation yet. PostToolUse is the first boundary that carries both the
@@ -91,11 +111,58 @@ function bindCreatedIntentToInvokingSession(
     existingUuid: existingUuid ?? "",
   });
   if (!created?.uuid) return;
-  writeSessionBinding(projectDir, sessionId, space, dirName);
+  // Hosts whose tool processes cannot name the session bind the creator here.
+  // The response text alone proves nothing; the creation receipt intent create
+  // left on this machine does, once. A binding intent create already wrote for
+  // this record keeps its source.
+  const source = consumeCreationReceipt(projectDir, space, dirName) ? "create" : "observed-create";
+  const existing = readSessionBinding(projectDir, sessionId);
+  // Unproven text cannot move a session that takes part in another record, by
+  // any evidence participation accepts: its binding, handoff and stamp stay.
+  if (
+    source === "observed-create" &&
+    existing !== null &&
+    existing.intent !== null &&
+    (existing.space !== space || existing.intent !== dirName) &&
+    workflowParticipation(projectDir, {
+      space: existing.space,
+      intent: existing.intent,
+      sessionId,
+      binding: existing,
+    }) === "participant"
+  ) {
+    return;
+  }
+  if (existing?.space !== space || existing.intent !== dirName || existing.source === undefined) {
+    writeSessionBinding(projectDir, sessionId, space, dirName, source);
+  }
   if (existingUuid && existingUuid !== created.uuid) {
     writeSessionIntentHandoff(projectDir, sessionId, existingUuid, created.uuid);
   }
-  writeSessionIntentUuid(projectDir, sessionId, created.uuid);
+  // A stamp joins the session on resume, so only a session this creation joined
+  // is stamped; an observed creation clears the older stamp instead.
+  const bound = readSessionBinding(projectDir, sessionId);
+  if (bound?.intent === dirName && isTrustedBindingSource(bound.source)) {
+    writeSessionIntentUuid(projectDir, sessionId, created.uuid);
+  } else {
+    clearSessionIntentUuid(projectDir, sessionId);
+  }
+}
+
+// Both relay gates live in engineErrorRelayMessage (aidlc-lib.ts): one literal
+// engine orchestrate command, and stdout that is exactly the canonical `error`
+// directive. writeEngineErrorRelay decides per harness whether any channel
+// would show the line; where none does, the skill's verbatim-print rule stands.
+function relayEngineError(projectDir: string, parsed: ClaudeCodeHookInput): void {
+  const message = engineErrorRelayMessage(
+    parsed.tool_input?.command ?? "",
+    parsed.tool_response,
+  );
+  if (message === null) return;
+  hookDebug(projectDir, "rebuild-stage-graph", "engine-error-relay", {
+    bytes: Buffer.byteLength(message, "utf-8"),
+  });
+  writeEngineErrorRelay(message);
 }
 
 export async function run(input: string): Promise<number> {
@@ -116,6 +183,12 @@ try {
   return 0;
 }
 const command: string = parsed.tool_input?.command ?? "";
+
+// 2b. Engine error relay - independent of runtime-graph compilation and of any
+//     workflow state, so it runs before the command/audit filters below. An
+//     orchestrate `next` is not a transition-class command and exits at the
+//     next gate; its error directive must already have been relayed by then.
+relayEngineError(projectDir, parsed);
 
 // Session ownership is independent of runtime-graph compilation and must run
 // before the command/audit filters below. Most intent-create calls are not
@@ -161,6 +234,8 @@ if (!ideAuditMode) {
 const selection = resolveWorkflowSelection(projectDir, {
   sessionId: validSessionId(parsed.session_id) ?? undefined,
 });
+// A conversation that has not joined this workflow does not recompile its graph.
+if (selection.intent !== null && workflowParticipation(projectDir, selection) !== "participant") return 0;
 const space = selection.space;
 const intent = selection.intent ?? undefined;
 const audit = readAllAuditShards(projectDir, intent, space).replace(/\r\n/g, "\n");
@@ -174,8 +249,7 @@ if (audit.length === 0) {
 //    it (aidlc-utility.ts) and where recordHookDrop writes drops — the heartbeat
 //    is a per-hook liveness probe, not per-intent state.
 const healthDir = hooksHealthDir(projectDir, intent, space);
-mkdirSync(healthDir, { recursive: true });
-writeFileSync(join(healthDir, "rebuild-stage-graph.last"), isoTimestamp(), "utf-8");
+writeHookStatusFile(healthDir, "rebuild-stage-graph.last", isoTimestamp());
 
 // 6. Tail-read last 3 audit blocks. Three is the upper bound: a normal
 //    approve writes GATE_APPROVED + STAGE_COMPLETED + STAGE_STARTED in
@@ -194,12 +268,19 @@ const last3 = blocks.slice(-3);
 //    runtime-graph at gate-start — without it, the gate ritual reads a
 //    stale memory_entries count snapshotted at STAGE_STARTED time
 //    (before the orchestrator wrote any §13 entries).
-const transitionRegex = /^\*\*Event\*\*:\s*(GATE_APPROVED|STAGE_STARTED|STAGE_AWAITING_APPROVAL|AUDIT_MERGED|UNIT_MERGED|WORKFLOW_COMPLETED)\s*$/m;
+const transitionRegex = /^\*\*Event\*\*:[ \t]*(GATE_APPROVED|STAGE_STARTED|STAGE_AWAITING_APPROVAL|AUDIT_MERGED|UNIT_MERGED|WORKFLOW_COMPLETED)[ \t]*$/m;
 const hasTransition = last3.some((b) => transitionRegex.test(b));
 hookDebug(projectDir, "rebuild-stage-graph", "transition-gate", { hasTransition, last3count: last3.length });
+// Nothing to do from this record's files: the Kiro IDE front gate skips the
+// next shell command's call until one of them changes (the mark's name is
+// aidlc-hook-front-gate.ts noopMarkName; the hook names it without importing).
+const noop = (): number => {
+  if (ideAuditMode) writeHookStatusFile(healthDir, "rebuild-stage-graph.noop", isoTimestamp());
+  return 0;
+};
 if (!hasTransition) {
   hookDebug(projectDir, "rebuild-stage-graph", "exit: no transition in audit tail");
-  return 0;
+  return noop();
 }
 
 // 7b. Idempotency guard (IDE audit-tail mode only). On the CLI the command
@@ -229,7 +310,7 @@ if (ideAuditMode) {
         graphMtime,
         newestShard,
       });
-      return 0;
+      return noop();
     }
   } catch {
     // runtime-graph.json absent (never compiled) → fall through and compile.
@@ -252,7 +333,7 @@ try {
   const result = spawnSync(command, args, {
     cwd: projectDir,
     env: hookChildEnv(projectDir, parsed.session_id),
-    timeout: 30_000,
+    timeout: LONG_SUBPROCESS_TIMEOUT_MS,
     stdio: ["ignore", "pipe", "pipe"],
   });
   if (result.status !== 0) {

@@ -22,7 +22,12 @@
 // checkbox, bolt_dag with [alpha, beta], per-unit artifact dirs to control
 // coverage).
 
-import { afterEach, describe, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { afterEach, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { appendFileSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -41,6 +46,8 @@ import {
 } from "../harness/fixtures.ts";
 import { artifactFilename } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
 resetAidlcEnv();
 
 const BUN = process.execPath;
@@ -55,7 +62,7 @@ function logReviewReady(proj: string, stage: string, reviewer: string, unit?: st
   const args = [LOG, "review", "--stage", stage, "--reviewer", reviewer, "--iteration", "1"];
   if (unit) args.push("--unit", unit);
   args.push("--project-dir", proj);
-  const requested = spawnSync(BUN, args, { encoding: "utf-8" });
+  const requested = spawnSync(BUN, args, { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" });
   expect(requested.status).toBe(0);
   appendFileSync(
     join(
@@ -69,6 +76,7 @@ function logReviewReady(proj: string, stage: string, reviewer: string, unit?: st
     "utf-8",
   );
   const completed = spawnSync(BUN, [...args, "--verdict", "READY"], {
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     encoding: "utf-8",
   });
   // Keep a log-record failure local, not surfaced later as a confusing gate error.
@@ -90,7 +98,7 @@ function completeWave(proj: string, stage: string, unit: string): void {
       "--project-dir",
       proj,
     ],
-    { encoding: "utf-8" },
+    { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" },
   );
   expect(result.status).toBe(0);
 }
@@ -198,6 +206,7 @@ function runNext(proj: string): Directive {
 
 function runReport(proj: string, args: string[]): Directive {
   const r = spawnSync(BUN, [ORCH, "report", ...args, "--project-dir", proj], {
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     encoding: "utf-8",
     env: (() => {
       const e = { ...process.env };
@@ -246,7 +255,7 @@ describe("t206 optional_produces exempt from per-unit coverage", () => {
     );
     completeWave(proj, "functional-design", "alpha");
     expect(runNext(proj).unit).toBe("beta");
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   // 2: guard - a MISSING REQUIRED artifact still blocks coverage even when the
   // OPTIONAL one is present. Cover alpha with two required + the optional but
@@ -264,7 +273,7 @@ describe("t206 optional_produces exempt from per-unit coverage", () => {
     expect(d.kind).toBe("run-stage");
     expect(d.unit).toBe("alpha");
     expect(d.gate).toBe(false);
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   // 3: gate reachable - cover both units with required-only artifacts. next now
   // presents the stage's REAL gate on the last unit (beta), so the human
@@ -292,7 +301,7 @@ describe("t206 optional_produces exempt from per-unit coverage", () => {
     expect(d.kind).toBe("run-stage");
     expect(d.unit).toBe("beta");
     expect(d.gate).toBe(true);
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   // 4a: report guard passes on required-only coverage - approve commits (done),
   // no N/A stub for the conditional artifact required.
@@ -312,7 +321,7 @@ describe("t206 optional_produces exempt from per-unit coverage", () => {
       "approved",
     ]);
     expect(d.kind).toBe("done");
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   // 4b: report guard still refuses when a REQUIRED artifact is missing, naming
   // the uncovered unit (beta) - the exemption is scoped to optional_produces.
@@ -335,7 +344,7 @@ describe("t206 optional_produces exempt from per-unit coverage", () => {
     expect(d.kind).toBe("error");
     expect(d.message).toContain("beta");
     expect(d.message).not.toContain("alpha"); // alpha is covered, not named
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   // 5: directive paths keep the optional artifact. Any per-unit directive's
   // produces[] still includes the resolved frontend-components.md path (the
@@ -353,5 +362,5 @@ describe("t206 optional_produces exempt from per-unit coverage", () => {
     expect(d.produces).toContain(
       `${RP}/construction/alpha/functional-design/functional-spec.md`,
     );
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });

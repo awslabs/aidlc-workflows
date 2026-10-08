@@ -1,6 +1,6 @@
 // covers: function:classifyTerminalCommand function:parsePluginCommand function:parseKnowledgeCommand function:RESERVED_RECORD_NAMES
 // covers: function:READ_ONLY_FLAGS function:WORKSPACE_VERBS function:ORCHESTRATOR_VERBS function:leadingOrchestratorVerb
-// covers: function:isReadOnlyNextArgv
+// covers: function:isReadOnlyNextArgv function:isRefusedModifierNextArgv
 //
 // t178 — classifyTerminalCommand() in aidlc-lib.ts, plus the two exported sets
 // READ_ONLY_FLAGS and WORKSPACE_VERBS that it classifies off.
@@ -69,14 +69,26 @@ describe("classifyTerminalCommand() — read-only flags (match anywhere)", () =>
     });
   });
 
-  test("a read-only flag is matched even when NOT at index 0", () => {
-    // The loop scans every index, so a flag preceded by a non-verb token still
-    // classifies. "foo" is not a workspace verb (and not at a verb position
-    // that matches), so the scan reaches "--status".
-    expect(classifyTerminalCommand(["foo", "--status"])).toEqual({
+  test("a read-only flag after other flags and their values is still matched", () => {
+    expect(classifyTerminalCommand(["--scope", "poc", "--status"])).toEqual({
       subcommand: "status",
       source: "read-only-flag",
     });
+  });
+
+  // Live (Claude Code): "add a --version flag that prints the version from
+  // package.json" printed AI-DLC's version and started nothing. A utility flag
+  // among the person's own words is part of what they asked for.
+  test("a read-only flag among the person's words is part of the request, not a utility", () => {
+    for (const flag of ["--version", "--status", "--help", "--doctor"]) {
+      const words = ["add", "a", flag, "flag", "that", "prints", "the", "version", "from", "package.json"];
+      expect(classifyTerminalCommand(words)).toBeNull();
+      expect(isReadOnlyNextArgv(words)).toBe(false);
+      expect(isReadOnlyNextArgv(["/aidlc", ...words])).toBe(false);
+      expect(classifyTerminalCommand(["foo", flag])).toBeNull();
+    }
+    expect(isReadOnlyNextArgv(["--version"])).toBe(true);
+    expect(isReadOnlyNextArgv(["--scope", "poc", "--status"])).toBe(true);
   });
 
   test("--doctor carries allowlisted export and verbose args", () => {
@@ -224,10 +236,9 @@ describe("classifyTerminalCommand() - orchestrator verbs stay on the engine path
     expect(leadingOrchestratorVerb(["park", "--status"])).toBeNull();
     expect(leadingOrchestratorVerb(["unpark"])).toBeNull();
     expect(leadingOrchestratorVerb([])).toBeNull();
-    expect(classifyTerminalCommand(["park", "--status"])).toEqual({
-      subcommand: "status",
-      source: "read-only-flag",
-    });
+    // "park" here is one of the person's words, not the verb, so the flag is
+    // part of their words too (the engine reads it the same way).
+    expect(classifyTerminalCommand(["park", "--status"])).toBeNull();
   });
 
   test("a sole park or leading team-board stays on the engine path, even with a read-only flag after team-board", () => {
@@ -262,6 +273,14 @@ test("isReadOnlyNextArgv mirrors the engine's terminal early returns", () => {
     ["space", "teamb"],
     ["team-board"],
     ["team-board", "--status"],
+    // next refuses these before naming any command (Full Suite 36549553601).
+    ["--depth", "extreme"],
+    ["--test-strategy", "Extreme"],
+    ["--review", "loud"],
+    ["--guard-policy", "loose"],
+    ["--summary-confirmation", "maybe"],
+    ["--depth"],
+    ["--depth", "standard", "--review", "loud"],
   ]) {
     expect(isReadOnlyNextArgv(args), JSON.stringify(args)).toBe(true);
   }
@@ -282,8 +301,34 @@ test("isReadOnlyNextArgv mirrors the engine's terminal early returns", () => {
     ["plugin", "help"],
     ["knowledge", "list", "--status"],
     ["help", "me"],
+    // Accepted modifiers name a config command; other work keeps engagement.
+    ["--depth", "standard"],
+    ["--depth", "extreme", "build", "auth"],
+    ["--depth", "extreme", "--scope", "poc"],
   ]) {
     expect(isReadOnlyNextArgv(args), JSON.stringify(args)).toBe(false);
+  }
+});
+
+test("typed config commands are non-engaging but stay on the engine route", () => {
+  for (const args of [
+    ["config", "set", "guard.state-transition", "off"],
+    ["config", "get", "guard-policy"],
+    ["config", "list", "--json"],
+  ]) {
+    expect(isReadOnlyNextArgv(args), JSON.stringify(args)).toBe(true);
+    expect(classifyTerminalCommand(args), JSON.stringify(args)).toBeNull();
+  }
+});
+
+test("config without a typed subcommand and config in descriptions remain workflow work", () => {
+  for (const args of [
+    ["config"],
+    ["configure", "set", "x", "y"],
+    ["add", "config", "set", "docs"],
+  ]) {
+    expect(isReadOnlyNextArgv(args), JSON.stringify(args)).toBe(false);
+    expect(classifyTerminalCommand(args), JSON.stringify(args)).toBeNull();
   }
 });
 

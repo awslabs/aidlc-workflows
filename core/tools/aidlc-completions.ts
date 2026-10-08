@@ -195,12 +195,107 @@ ${powershellSwitch(data.nouns)}
 `;
 }
 
+const RENDERERS: Record<Shell, (data: CompletionInventory) => string> = { bash, zsh, fish, powershell };
+
 export function renderCompletion(shell: Shell): string {
-  const data = inventory();
-  if (shell === "bash") return bash(data);
-  if (shell === "zsh") return zsh(data);
-  if (shell === "fish") return fish(data);
-  return powershell(data);
+  return RENDERERS[shell](inventory());
+}
+
+// Rows between a block's opening line and its closing line, or null when any
+// line inside is not a row. A block with no rows renders one empty line.
+function blockRows(
+  lines: readonly string[],
+  open: string,
+  close: string,
+  row: RegExp,
+): Record<string, string> | null {
+  const start = lines.indexOf(open);
+  const end = start === -1 ? -1 : lines.indexOf(close, start + 1);
+  if (end === -1) return null;
+  const body = lines.slice(start + 1, end);
+  const rows: Record<string, string> = {};
+  if (body.length === 1 && body[0] === "") return rows;
+  for (const line of body) {
+    const match = row.exec(line);
+    if (!match) return null;
+    rows[match[1]] = match[2];
+  }
+  return rows;
+}
+
+function mapRows(
+  rows: Record<string, string> | null,
+  values: (text: string) => string[] | null,
+): Record<string, string[]> | null {
+  if (!rows) return null;
+  const result: Record<string, string[]> = {};
+  for (const [key, text] of Object.entries(rows)) {
+    const parsed = values(text);
+    if (!parsed) return null;
+    result[key] = parsed;
+  }
+  return result;
+}
+
+function psValues(text: string): string[] | null {
+  const inner = /^@\((.*)\)$/.exec(text)?.[1];
+  if (inner === undefined) return null;
+  return [...inner.matchAll(/'((?:[^']|'')*)'/g)].map((match) => match[1].replaceAll("''", "'"));
+}
+
+function parsedInventory(shell: Shell, content: string): CompletionInventory | null {
+  const lines = content.split("\n");
+  const words = (text: string): string[] => text.split(" ");
+  if (shell === "fish") {
+    const top: string[] = [];
+    const nouns: Record<string, string[]> = {};
+    const options: string[] = [];
+    for (const line of lines.slice(1, -1)) {
+      const command = /^complete -c aidlc -n '__fish_use_subcommand' -a '([^']*)'$/.exec(line);
+      const verb = /^complete -c aidlc -n '__fish_seen_subcommand_from ([^']*)' -a '([^']*)'$/.exec(line);
+      const option = /^complete -c aidlc -l '([^']*)'$/.exec(line);
+      if (command) top.push(command[1]);
+      else if (verb) nouns[verb[1]] = [...(nouns[verb[1]] ?? []), verb[2]];
+      else if (option) options.push(`--${option[1]}`);
+      else return null;
+    }
+    return { top, nouns, options: { "": options } };
+  }
+  if (shell === "powershell") {
+    const top = psValues(lines.find((line) => line.startsWith("    @("))?.slice(4) ?? "");
+    const row = /^ {6}'((?:[^']|'')*)' \{ (@\(.*\)); break \}$/;
+    const unquoteKeys = (rows: Record<string, string> | null) =>
+      rows && Object.fromEntries(Object.entries(rows).map(([key, text]) => [key.replaceAll("''", "'"), text]));
+    const options = mapRows(unquoteKeys(blockRows(lines, "    switch ($key) {", "      default { @() }", row)), psValues);
+    const nouns = mapRows(unquoteKeys(blockRows(lines, "    switch ($tokens[1]) {", "      default { @() }", row)), psValues);
+    return top && options && nouns ? { top, nouns, options } : null;
+  }
+  const [field, nounsOpen, row] = shell === "bash"
+    ? ["words=\"", `    case "\${COMP_WORDS[1]}" in`, /^ {6}'([^']*)'\) words="([^"]*)" ;;$/]
+    : ["values=(", `    case "\${words[2]}" in`, /^ {6}'([^']*)'\) values=\(([^)]*)\) ;;$/];
+  const topLine = lines.find((line) => line.startsWith(`    ${field}`));
+  const top = topLine === undefined ? null : words(topLine.slice(4 + field.length, -1));
+  const options = mapRows(blockRows(lines, '    case "$key" in', "    esac", row), words);
+  const nouns = mapRows(blockRows(lines, nounsOpen, "    esac", row), words);
+  return top && options && nouns ? { top, nouns, options } : null;
+}
+
+// Activation writes the completions of the release that runs it, so after an
+// update they come from the previous release. Every release renders through
+// these templates: content that parses back into a command list and renders
+// to the same text is AI-DLC's own, whichever release wrote it, while any
+// edited or added byte makes it the person's.
+export function isGeneratedCompletion(shell: Shell, content: string): boolean {
+  const data = parsedInventory(shell, content);
+  if (!data) return false;
+  const word = (value: string): boolean => /^(?:--)?[a-z][a-z0-9-]*$/.test(value);
+  const key = (value: string): boolean => /^[a-z][a-z0-9-]*(?: [a-z][a-z0-9-]*)?$/.test(value);
+  const commandList = data.top.every(word) &&
+    Object.entries(data.nouns).every(([noun, verbs]) => key(noun) && verbs.every(word)) &&
+    Object.entries(data.options).every(([name, values]) =>
+      (shell === "fish" ? name === "" : key(name)) && values.every(word)
+    );
+  return commandList && RENDERERS[shell](data) === content;
 }
 
 export async function main(argv: string[]): Promise<void> {

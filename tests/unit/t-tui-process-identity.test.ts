@@ -1,4 +1,7 @@
-import { describe, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+} from "../harness/test-budget.ts";
+import { describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawn } from "node:child_process";
 import { once } from "node:events";
 import {
@@ -12,13 +15,15 @@ import {
   type DarwinIdentityApi,
   getNativeProcessIdentity,
   getNativeProcessIdentityWithBun,
-  parseDarwinProcBsdInfo,
+  parseDarwinKinfoProc,
   parseLinuxNativeProcessIdentity,
   readDarwinProcessIdentity,
   readLinuxNativeProcessIdentity,
   readWindowsNativeProcessIdentity,
   type WindowsIdentityApi,
 } from "../harness/tui-process-identity.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 function procStat(pid: number, ticks: string, state = "S", comm = "process"): string {
   return `${pid} (${comm}) ${[state, "1", ...Array(17).fill("0"), ticks, "0"].join(" ")}\n`;
@@ -82,49 +87,58 @@ describe("Linux native process identity", () => {
 });
 
 describe("Darwin native process identity", () => {
-  test("start-time identities retain both 64-bit fields and distinguish PID reuse", () => {
-    const buffer = new Uint8Array(136);
+  // kinfo_proc (LP64): p_starttime @0 (int64 sec, int32 usec), p_stat @36,
+  // p_pid @40, e_ucred.cr_uid @420, e_ppid @560; 648 bytes.
+  const kinfo = (pid: number) => {
+    const buffer = new Uint8Array(648);
     const view = new DataView(buffer.buffer);
-    view.setUint32(4, 2, true);
-    view.setUint32(12, 42, true);
-    view.setUint32(16, 10, true);
-    view.setUint32(20, 501, true);
-    view.setBigUint64(120, 9007199254740993n, true);
-    view.setBigUint64(128, 999999n, true);
-    const before = parseDarwinProcBsdInfo(42, buffer);
+    view.setInt32(40, pid, true);
+    return { buffer, view };
+  };
+
+  test("start-time identities retain both fields and distinguish PID reuse", () => {
+    const { buffer, view } = kinfo(42);
+    view.setUint8(36, 2);
+    view.setInt32(560, 10, true);
+    view.setUint32(420, 501, true);
+    view.setBigInt64(0, 9007199254740993n, true);
+    view.setInt32(8, 999999, true);
+    const before = parseDarwinKinfoProc(42, buffer);
     expect(before).toEqual({ pid: 42, ppid: 10, uid: 501, status: 2,
       startSec: 9007199254740993n, startUsec: 999999n });
-    view.setBigUint64(128, 999998n, true);
-    expect(parseDarwinProcBsdInfo(42, buffer)).not.toEqual(before);
-    view.setUint32(4, 5, true);
-    expect(parseDarwinProcBsdInfo(42, buffer).status).toBe(5);
+    view.setInt32(8, 999998, true);
+    expect(parseDarwinKinfoProc(42, buffer)).not.toEqual(before);
+    view.setUint8(36, 5);
+    expect(parseDarwinKinfoProc(42, buffer).status).toBe(5);
   });
 
   test("incomplete and mismatched native identities fail instead of claiming process absence", () => {
-    const buffer = new Uint8Array(136);
-    new DataView(buffer.buffer).setUint32(12, 42, true);
-    expect(() => parseDarwinProcBsdInfo(43, buffer)).toThrow("invalid proc_bsdinfo identity");
-    for (const size of [0, 128, 135, 137]) {
-      expect(() => parseDarwinProcBsdInfo(42, new Uint8Array(size))).toThrow("136-byte buffer");
+    const { buffer } = kinfo(42);
+    expect(() => parseDarwinKinfoProc(43, buffer)).toThrow("invalid kinfo_proc identity");
+    for (const size of [0, 136, 647, 649]) {
+      expect(() => parseDarwinKinfoProc(42, new Uint8Array(size))).toThrow("648-byte buffer");
     }
   });
 
-  test("system enumeration excludes EPERM while required identities and other errors fail closed", () => {
+  test("an absent PID reads as absence; required identities and other errors fail closed", () => {
     const api: DarwinIdentityApi = {
-      tui_pidinfo(pid, buffer) {
-        if (pid === 43) return -1; // Foreign/protected process: EPERM.
-        if (pid === 44) return -3; // Exited during enumeration: ESRCH.
+      tui_kinfo(pid, buffer) {
+        if (pid === 43) return -1; // A refusal: EPERM.
+        if (pid === 44) return 0; // KERN_PROC_PID writes nothing for no such process.
         if (pid === 45) return -5; // EIO must never count as absence.
-        new DataView(buffer.buffer, buffer.byteOffset, buffer.byteLength).setUint32(12, pid, true);
-        return 136;
+        if (pid === 46) return 136; // A short reply is not an identity.
+        new DataView(buffer.buffer, buffer.byteOffset, buffer.byteLength).setInt32(40, pid, true);
+        return 648;
       },
     };
     const snapshot = [42, 43, 44]
       .map((pid) => readDarwinProcessIdentity(pid, api, undefined, "enumeration"))
       .filter((identity) => identity !== null);
     expect(snapshot.map((identity) => identity.pid)).toEqual([42]);
+    expect(readDarwinProcessIdentity(44, api)).toBeNull();
     expect(() => readDarwinProcessIdentity(43, api)).toThrow("errno 1");
     expect(() => readDarwinProcessIdentity(45, api, undefined, "enumeration")).toThrow("errno 5");
+    expect(() => readDarwinProcessIdentity(46, api)).toThrow("returned 136 bytes, expected 648");
   });
 });
 
@@ -245,7 +259,7 @@ describe.skipIf(!supported)("native process identity OS reads", () => {
     const child = spawn(process.execPath, ["-e", `
       process.stdin.resume();
       process.stdin.on("end", () => process.exit(0));
-      setTimeout(() => process.exit(91), 5000);
+      setTimeout(() => process.exit(91), ${NATIVE_FIXTURE_SETUP_TIMEOUT_MS});
       process.stdout.write("ready\\n");
     `], { stdio: ["pipe", "pipe", "ignore"] });
     const closed = once(child, "close");
@@ -259,13 +273,13 @@ describe.skipIf(!supported)("native process identity OS reads", () => {
       await closed;
     }
     expect(await getNativeProcessIdentity(child.pid!)).toBeNull();
-  }, 10_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("the bounded Bun entrypoint returns the same identity for a Node caller", async () => {
     expect(await getNativeProcessIdentityWithBun(process.pid, {
       ...process.env, AIDLC_BUN_BIN: process.execPath,
     })).toBe(await getNativeProcessIdentity(process.pid));
-  }, 10_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("an absent Bun override is an error, never a gone process", async () => {
     await expect(getNativeProcessIdentityWithBun(process.pid, {
@@ -361,7 +375,7 @@ describe.skipIf(!supported)("OS-owned native locks", () => {
         globalThis.ownedLockRelease = release;
         process.stdin.resume();
         process.stdin.on("end", () => process.exit(0));
-        setTimeout(() => process.exit(91), 10000);
+        setTimeout(() => process.exit(91), ${NATIVE_FIXTURE_SETUP_TIMEOUT_MS});
         process.stdout.write("locked\\n");
       `], { stdio: ["pipe", "pipe", "pipe"] });
       const closed = once(child, "close");
@@ -391,7 +405,7 @@ describe.skipIf(!supported)("OS-owned native locks", () => {
         release?.();
         rmSync(dir, { recursive: true, force: true });
       }
-    }, 15_000);
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
   }
 
   test("a spawned process cannot inherit and retain its parent's lock", async () => {
@@ -403,7 +417,7 @@ describe.skipIf(!supported)("OS-owned native locks", () => {
     const child = spawn(process.execPath, ["-e", `
       process.stdin.resume();
       process.stdin.on("end", () => process.exit(0));
-      setTimeout(() => process.exit(91), 10000);
+      setTimeout(() => process.exit(91), ${NATIVE_FIXTURE_SETUP_TIMEOUT_MS});
       process.stdout.write("ready\\n");
     `], { stdio: ["pipe", "pipe", "ignore"] });
     const closed = once(child, "close");
@@ -422,7 +436,7 @@ describe.skipIf(!supported)("OS-owned native locks", () => {
       await closed;
       rmSync(dir, { recursive: true, force: true });
     }
-  }, 15_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("filesystem errors do not masquerade as contention", async () => {
     const root = lockScratchRoot();

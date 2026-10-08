@@ -30,3 +30,10 @@ practices, or workflow questions:
 - aidlc/spaces/default/memory/org.md
 - aidlc/spaces/default/memory/team.md
 - aidlc/spaces/default/memory/project.md
+
+If every tool call here is refused before it runs, AI-DLC cannot start in
+this Cursor window, and nothing you retry will get through. Stop and tell the
+person, in one message: open a terminal in this folder and
+run `bun .cursor/tools/aidlc.ts doctor` (after installing Bun from https://bun.sh/install if `bun` is not found),
+whose Runtime hook PATH line names what to fix. Then quit Cursor fully and
+open this folder again.

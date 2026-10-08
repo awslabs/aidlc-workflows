@@ -76,7 +76,12 @@
 // can't shadow the fixture scope. Each fixture is emitted ONCE and the directive
 // reused across its tests (the .sh emitted BF/GF/FD/CG once each too).
 
-import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { afterAll, beforeAll, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { cpSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
@@ -91,6 +96,8 @@ import {
   seedStateFile,
   sedReplaceInFile,
 } from "../harness/fixtures.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const BUN = process.execPath; // the bun running this test
 const REPO_ROOT = join(import.meta.dir, "..", "..");
@@ -140,7 +147,7 @@ interface RunStageDirective {
   consumes: string[];
   consumes_absent?: Array<{ path: string; expected: boolean }>;
   produces: string[];
-  continue_token?: string;
+  receipt?: string;
 }
 
 /**
@@ -184,6 +191,7 @@ function emitForWithProject(
     return e;
   })();
   let res = spawnSync(BUN, [ORCH, "next", "--project-dir", proj], {
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     encoding: "utf-8",
     env,
   });
@@ -198,11 +206,11 @@ function emitForWithProject(
       );
     }
     if (dir.kind !== "load-steering") break;
-    expect(dir.continue_token).toBeString();
+    expect(dir.receipt).toBeString();
     res = spawnSync(
       BUN,
-      [ORCH, "continue", dir.continue_token ?? "", "--project-dir", proj],
-      { encoding: "utf-8", env },
+      [ORCH, "continue", dir.receipt ?? "", "--project-dir", proj],
+      { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8", env },
     );
   }
   // Sanity: the vehicle must land a run-stage for the target (else the path
@@ -618,6 +626,10 @@ describe("t116 inline context roster", () => {
       "domain-design",
       (proj) => {
         cpSync(AIDLC_MEMORY_SRC, join(proj, "aidlc"), { recursive: true });
+        // feature ships collaborators off; this case asserts the full inline
+        // roster, so pin the switch on for the directive it builds.
+        const sp = seededStateFile(proj);
+        writeFileSync(sp, `${readFileSync(sp, "utf-8")}- **Collaborators**: on (set by you)\n`);
         for (const relative of customPaths) {
           const absolute = join(proj, ...relative.split("/"));
           mkdirSync(dirname(absolute), { recursive: true });
@@ -661,6 +673,16 @@ describe("t116 inline context roster", () => {
     for (const path of customPaths) {
       expect(directive.inline_context_paths).toContain(path);
     }
+    // The project's own knowledge comes right after the personas, before any
+    // shipped knowledge, so it is read second and trimmed only after the
+    // shipped knowledge.
+    const roster: string[] = directive.inline_context_paths;
+    const lastPersona = Math.max(...roster.map((path, i) => (path.startsWith(".claude/agents/") ? i : -1)));
+    const firstShipped = roster.findIndex((path) => path.startsWith(".claude/knowledge/"));
+    for (const path of customPaths) {
+      expect(roster.indexOf(path), path).toBeGreaterThan(lastPersona);
+      expect(roster.indexOf(path), path).toBeLessThan(firstShipped);
+    }
     expect(new Set(directive.inline_context_paths).size).toBe(
       directive.inline_context_paths.length,
     );
@@ -694,6 +716,18 @@ describe("t116 inline context roster", () => {
         ),
       ).toBe(false);
     }
+  });
+
+  test("18b: a mob stage's lead reads its project knowledge right after its persona", () => {
+    const own = `aidlc/spaces/${DEFAULT_SPACE}/knowledge/aidlc-product-agent/stories-conventions.md`;
+    const { directive } = emitForWithProject("state-construction.md", "user-stories", (proj) => {
+      const absolute = join(proj, ...own.split("/"));
+      mkdirSync(dirname(absolute), { recursive: true });
+      writeFileSync(absolute, "# Story conventions\n", "utf-8");
+    });
+    expect(directive.mode).toBe("mob");
+    expect(directive.inline_context_paths[0]).toBe(".claude/agents/aidlc-product-agent.md");
+    expect(directive.inline_context_paths[1]).toBe(own);
   });
 
   test("19: fully-dispatched modes carry no inline context", () => {

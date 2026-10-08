@@ -145,7 +145,7 @@ diagnostic naming the reason and leaves `bolt_dag` off the envelope
 rather than emit a wrong-but-valid DAG. Those failures are surfaced
 upstream at the 2.7 gate by the `required-sections` sensor, which
 validates the same block and reports `edge_block: ok | absent |
-malformed | cyclic`. Authoring the edges as structured data (knowledge
+malformed | cyclic`. The engine reads the same block before the 2.7 review request and before the 2.7 gate opens, and while it cannot, it hands the agent the defect and the block's shape instead; a block that breaks after the approval stops Construction's `next` on the same repair step for the agent, never on an error for the person. Authoring the edges as structured data (knowledge
 work, once, behind the 2.7 approval gate) is what keeps the hook-fired
 `compile` byte-identical on re-run: no model sits in the compile path. The orchestrate engine validates a cached `bolt_dag` against `unit-of-work-dependency.md` and self-heals per-unit iteration on the read side when the node is absent or disagrees with that authored artifact; the graph file itself is only repaired by the next compile.
 
@@ -156,7 +156,10 @@ work, once, behind the 2.7 approval gate) is what keeps the hook-fired
 The compile is invoked by the PostToolUse Bash hook
 (`.claude/hooks/aidlc-rebuild-stage-graph.ts`) on every transition-class
 audit emit. The hook fires on every `Bash` tool call from the
-conductor and filters cheaply:
+conductor. Before these compile filters it relays an engine `error`
+directive's message to the human and binds a new intent to its session (see
+[Hooks and Tools](06-hooks-and-tools.md#posttooluse-rebuild-stage-graphts));
+neither affects the compile. It then filters cheaply:
 
 1. **Command filter** — only transition-capable `aidlc` state, jump, Bolt, and
    utility routes plus `orchestrate report` get past the early exit. The
@@ -415,7 +418,7 @@ load-bearing tenet documented in
 Runtime-graph compile is data-plane substrate that must be observable
 from outside any specific session. Coupling it to LLM-invoked tools
 means LLM omission breaks the determinism guarantee — if the
-conductor forgets to call `{{INVOKE}} engine orchestrate report --stage <slug> --result approved --user-input "<exact choice>"` after a human
+conductor forgets to call `{{INVOKE}} engine orchestrate report --stage <slug> --result approved --user-input "Approve"` after a human
 clicks Approve, the audit row never appends AND the compile never
 fires; runtime-graph silently lags, recovery substrate is corrupt.
 
@@ -512,7 +515,7 @@ main's location. Its lifecycle is:
 - **The lifecycle that triggers compile** — the workflow / phase /
   stage transitions whose audit emits drive the compile hook. See
   [State Machine](12-state-machine.md).
-- **The audit log this graph is derived from** - the 102-event taxonomy
+- **The audit log this graph is derived from** - the 117-event taxonomy
   and the emitter registry. See [State Machine](12-state-machine.md)
   and the User Guide's [State and Audit
   Trail](../guide/10-state-and-audit.md).
