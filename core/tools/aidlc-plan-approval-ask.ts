@@ -588,7 +588,7 @@ function planQuestion(units: Array<string | null>, repaired: boolean): string {
 // A plan built with plan approval off asked nothing, so its record says so.
 const ANSWER_HERE_INTRO = [
   "AI-DLC writes this file when it asks you to approve the plan. To answer here",
-  "instead of in chat, write your answer after `[Answer]:` and tell me here when you are done.",
+  "instead of in chat, write your answer after `[Answer]:` and tell me in chat when you are done.",
 ];
 const BUILT_WITHOUT_ASKING_INTRO = [
   "AI-DLC built this plan without asking because plan approval is off for this",
@@ -636,8 +636,8 @@ function promptSha256(questions: string): string {
 }
 
 // The person's own answer on the `[Answer]:` line, as the file's instructions
-// invite ("write your answer after `[Answer]:` and tell me here when you are
-// done"). Empty when they
+// invite ("write your answer after `[Answer]:` and tell me in chat when you
+// are done"). Empty when they
 // have written nothing there, and never the engine's own recorded answer.
 function answerWrittenInFile(questions: string): string {
   const line = /^\[Answer\]:[ \t]*(.*)$/m.exec(questions);

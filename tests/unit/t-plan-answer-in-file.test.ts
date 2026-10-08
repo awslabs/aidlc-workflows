@@ -1,7 +1,7 @@
 // covers: function:publishPlanApprovalAsk, function:notePlanApprovalFileAnswer, function:requestPlanApprovalReviewNow, hook:aidlc-record-human-turn
 //
 // The Plan Approval questions file says "write your answer after `[Answer]:`
-// and tell me here when you are done". These cases drive the real `next` and the real human-turn
+// and tell me in chat when you are done". These cases drive the real `next` and the real human-turn
 // hook (Claude Code's payload, and Kiro CLI's userPromptSubmit payload through
 // its adapter) over one poc workflow at Code Generation, under Guard Policy off
 // and strict, and check that:
@@ -163,7 +163,7 @@ describe("the questions file invites an answer without naming words to say", () 
   const read = (rel: string): string => readFileSync(join(REPO_ROOT, rel), "utf-8");
   test("the invite and the two guide rows ask them to tell the agent, in their words", () => {
     const invite = read("core/tools/aidlc-plan-approval-ask.ts");
-    expect(invite).toContain("write your answer after `[Answer]:` and tell me here when you are done");
+    expect(invite).toContain("write your answer after `[Answer]:` and tell me in chat when you are done");
     expect(invite).not.toContain("write your answer after `[Answer]:` and say done");
     for (const rel of ["docs/guide/07-interaction-modes.md", "docs/guide/13-customization.md"]) {
       expect(read(rel), rel).not.toContain("then send **done**");
