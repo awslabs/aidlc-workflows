@@ -473,7 +473,16 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
         "Policy is already `off`, say in one line that it is already off and change nothing.",
       "say the line the command prints, word for word, in your reply in that same turn, before any question, " +
         "picker or next step",
+      // Arden, 2026-10-08: widening is offered as a plain question the agent
+      // then acts on, never as words for the person to say. A live run had the
+      // agent end with "If you want it off for the whole project instead, say
+      // so and I'll set it there", which is the old "say X to get Y" shape.
+      "then ask one plain question offering the wider place (this project when it applied to this piece of work, " +
+        "this machine when it applied to this project), for example \"Do you want me to set it off for the whole " +
+        "project instead?\", and set it there yourself when they say yes",
     ];
+    // The wording this replaced, in any shipped prose.
+    const WIDEN_SAY = "say in one sentence how to widen it";
     const prose = [
       ...skills,
       "core/templates/onboarding-harness.md",
@@ -506,6 +515,11 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
       "`{{INVOKE}} engine config set <key> <on|off>`",
     ]) {
       if (!onboarding.includes(tok)) problems.push(`core/templates/onboarding-harness.md  missing: ${tok}`);
+    }
+    for (const rel of prose) {
+      if (readFileSync(join(REPO_ROOT, rel), "utf-8").includes(WIDEN_SAY)) {
+        problems.push(`${rel}  still carries: ${WIDEN_SAY}`);
+      }
     }
     for (const rel of skills) {
       const body = readFileSync(join(REPO_ROOT, rel), "utf-8");
