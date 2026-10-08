@@ -88,6 +88,17 @@ describe("next --request-file: the person's words arrive exactly, through no she
     expect(existsSync(join(proj, FILE))).toBe(false);
   });
 
+  // The Kiro CLI hook sends a compose request this way on Windows: the verb
+  // stays on the line and the file's words are its task text.
+  test("compose reads its task text from the file, and the file is removed", () => {
+    const proj = installed();
+    writeRequest(proj, `${WORDS}\n`);
+    const directive = next(proj, ["compose", "--request-file", FILE]);
+    expect(directive.kind, JSON.stringify(directive)).not.toBe("error");
+    expect(JSON.stringify(directive)).not.toContain("--request-file");
+    expect(existsSync(join(proj, FILE))).toBe(false);
+  });
+
   test("Windows slashes name the same file, and a scope typed with it still names the plan", () => {
     const proj = installed();
     writeRequest(proj, WORDS);

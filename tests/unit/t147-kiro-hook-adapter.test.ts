@@ -2883,6 +2883,40 @@ describe("t147 Kiro CLI reads what the person typed from the expanded skill body
       const again = forward(String.raw`say '"again"' please`);
       expect(again.latch).toEqual(["--request-file", requestFile]);
       expect(readFileSync(join(dir, requestFile), "utf8")).toBe('say "again" please\n');
+      // A pasted token that starts with a dash is a word, never a flag the line keeps.
+      const dashed = forward(String.raw`-'"&echo PWNED&"' fix it`);
+      expect(dashed.latch).toEqual(["--request-file", requestFile]);
+      expect(readFileSync(join(dir, requestFile), "utf8")).toBe('-"&echo PWNED&" fix it\n');
+      expect(hop(dashed.forwarded)).toEqual(["engine", "orchestrate", "next", ...dashed.latch]);
+      // A verb with a quoted word sends every token as words.
+      const parked = forward(String.raw`park '"&echo PWNED&"' for now`);
+      expect(parked.latch).toEqual(["--request-file", requestFile]);
+      expect(readFileSync(join(dir, requestFile), "utf8")).toBe('park "&echo PWNED&" for now\n');
+      expect(hop(parked.forwarded)).toEqual(["engine", "orchestrate", "next", ...parked.latch]);
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+
+  // compose takes free task text and is run inside the hook first; when that
+  // falls through to the agent, its text goes through the request file too.
+  // The same holds when the hook cannot read the engine's flag table at all:
+  // every token becomes words, so nothing holding a double quote is on the line.
+  test.skipIf(process.platform !== "win32")("compose text and a hook that cannot read flags both go through the request file", () => {
+    const dir = scratchProject(true);
+    try {
+      const { forward, hop } = launcherChain(dir);
+      const requestFile = "aidlc/.aidlc-request-text/request.txt";
+      // An engine that prints nothing makes the hook's own compose run fall through to the agent.
+      stubNext(dir, "");
+      const composed = forward(String.raw`compose build the '"&echo PWNED&"' thing`);
+      expect(composed.latch).toEqual(["compose", "--request-file", requestFile]);
+      expect(readFileSync(join(dir, requestFile), "utf8")).toBe('build the "&echo PWNED&" thing\n');
+      expect(hop(composed.forwarded)).toEqual(["engine", "orchestrate", "next", ...composed.latch]);
+      // An engine module without the flag table: every token is a word.
+      writeFileSync(join(dir, ".kiro", "tools", "aidlc-orchestrate.ts"), "export const nothing = 1;\n");
+      const blind = forward(String.raw`--scope feature say '"hi"' now`);
+      expect(blind.latch).toEqual(["--request-file", requestFile]);
+      expect(readFileSync(join(dir, requestFile), "utf8")).toBe('--scope feature say "hi" now\n');
+      expect(hop(blind.forwarded)).toEqual(["engine", "orchestrate", "next", ...blind.latch]);
     } finally { rmSync(dir, { recursive: true, force: true }); }
   });
 
