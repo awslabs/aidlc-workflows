@@ -29522,7 +29522,11 @@ export interface GuardAttemptState {
   };
   nextReview?: {
     iteration: number;
+    // That pass's exact request, as recordVerdict is for a verdict.
+    request?: string;
   };
+  // The exact request for the next permitted review when none is in flight.
+  requestReview?: string;
   summaryCoverage: "current" | "stale" | "missing";
   reviewCoverage: "current" | "stale" | "missing";
   sourceCoverage: "current" | "stale" | "missing" | "unbindable";
@@ -30096,6 +30100,18 @@ function guardStageName(stage: string): string {
 // work): a new op cannot compile without an entry.
 const GUARD_REMEDY_WORDING_BY_OP: Record<GuardRemedyOp, GuardRemedyWording> = GUARD_REMEDY_WORDING;
 
+// A review request way on, spelled out for the conductor: the exact request,
+// then the dispatch and the verdict it returns. With no reviewer protocol in
+// the chat, a bare "request the review" left the agent guessing (seen live on
+// Kiro IDE: it ran the reviewer with no request, so no review was recorded).
+function reviewRequestAction(lead: string, request: string | undefined): string {
+  if (request === undefined) return `${lead}.`;
+  return `${lead}: run \`${request}\`, have the reviewer named in it review the stage as ` +
+    `\`${harnessDir()}/aidlc-common/protocols/stage-protocol-reviewer.md\` step 1 says, writing its review ` +
+    "only to the `reviewFile` that command returns, then run the `recordVerdict` command it returns with " +
+    "the reviewer's verdict.";
+}
+
 // Pure: reads nothing from disk. The same input always yields the same refusal,
 // which is what lets the enforcing tool and the router agree.
 export function evaluateGuardRefusal(
@@ -30204,9 +30220,11 @@ export function evaluateGuardRefusal(
     if (input.attempt.nextReview) {
       remedies.push({
         op: "request-review",
-        action:
+        action: reviewRequestAction(
           `Request review iteration ${input.attempt.nextReview.iteration} ` +
-          "against the current artifact and source bytes.",
+            "against the current artifact and source bytes",
+          input.attempt.nextReview.request,
+        ),
         requiresHuman: false,
         executableNow: input.attempt.summaryCoverage === "current" && openForWork,
       });
@@ -30288,7 +30306,10 @@ export function evaluateGuardRefusal(
     ) {
       remedies.push({
         op: "request-review",
-        action: "Request the next permitted review for the current attempt.",
+        action: reviewRequestAction(
+          "Request the next permitted review for the current attempt",
+          input.attempt.requestReview,
+        ),
         requiresHuman: false,
         executableNow: input.attempt.summaryCoverage === "current" && openForWork,
       });
@@ -30525,11 +30546,21 @@ export function guardAttemptState(
       }),
     },
   });
+  // The exact request for a pass, named in the way on that asks for it.
+  const requestAt = (iteration: number) => renderReviewRequestCommand({
+    projectDir,
+    stage: stage.slug,
+    reviewer: stage.reviewer as string,
+    ...(unit ? { unit } : {}),
+    ...(options.single ? { single: true } : {}),
+    iteration,
+  });
+  const nextReviewAt = (iteration: number) => ({ nextReview: { iteration, request: requestAt(iteration) } });
   // A pending request that can never finish (its outputs or source changed
   // before a verdict) is requested again at the same pass, once per attempt.
   const pendingReviewFor = (iteration: number) =>
     pendingStatus?.iteration === iteration && pendingStatus.replaceable
-      ? { nextReview: { iteration } }
+      ? nextReviewAt(iteration)
       : pendingReviewAt(iteration);
   const budget = options.reviewBudget ?? null;
   const attempt: GuardAttemptState = {
@@ -30549,12 +30580,14 @@ export function guardAttemptState(
     ...(pending?.state === "repair-required"
       ? { repairReview: { iteration: pending.iteration } }
       : pending?.state === "outstanding"
-        ? { nextReview: { iteration: pending.iteration } }
+        ? nextReviewAt(pending.iteration)
         : pending
           ? pendingReviewFor(pending.iteration)
           : pendingIterations.length > 0
             ? pendingReviewFor(pendingIterations[0])
             : {}),
+    // The pass the review log expects next (its request count plus one).
+    ...(accounting === null || !stage.reviewer ? {} : { requestReview: requestAt(accounting.requestCount + 1) }),
     summaryCoverage: options.summaryCoverage ?? "current",
     reviewCoverage:
       unitVerdict !== null
