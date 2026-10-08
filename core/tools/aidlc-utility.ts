@@ -5869,11 +5869,15 @@ export async function collectDoctorReport(
       }
     }
   } catch (e) {
-    results.push({
-      pass: false,
-      label: "Stale branches: check failed",
-      fix: errorMessage(e),
-    });
+    // A machine with no git throws here instead of exiting non-zero: nothing
+    // before Construction needs git, so it is the same informational pass as
+    // a folder that is not a repo, in plain words. Any other throw is a failed
+    // evaluation.
+    results.push(
+      gitNotFound(e instanceof Error ? e : undefined)
+        ? { pass: true, label: "Stale branches: 0 observed (git is not installed)" }
+        : { pass: false, label: "Stale branches: check failed", fix: errorMessage(e) },
+    );
   }
 
   // ---------------------------------------------------------------------------
