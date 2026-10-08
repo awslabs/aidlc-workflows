@@ -29225,7 +29225,12 @@ export function unattendedHumanPresenceHint(projectDir?: string, options: { miss
   if (options.missedReply === false) return "";
   const activation = hookActivation();
   const host = activation?.missedReplyInHost;
-  const inHost = host?.env.some((name) => Boolean(process.env[name]?.trim())) === true;
+  // `NAME` matches when set, `NAME=value` when it holds that value (TERM_PROGRAM=kiro).
+  const inHost = host?.env.some((entry) => {
+    const [name, value] = entry.split("=", 2);
+    const actual = process.env[name]?.trim();
+    return value === undefined ? Boolean(actual) : actual?.toLowerCase() === value.toLowerCase();
+  }) === true;
   const missedReply = (inHost ? host?.text : activation?.missedReply) ??
     "If the person already replied, that reply was not recorded for this question. Tell them exactly this, " +
       "with nothing about why: \"Your answer didn't reach AI-DLC. Please give it once more. If it happens again, " +

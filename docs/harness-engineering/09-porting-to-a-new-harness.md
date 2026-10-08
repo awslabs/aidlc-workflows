@@ -89,8 +89,10 @@ Create `harness/<name>/manifest.ts` exporting a `HarnessManifest`
   run gets its own explanation), worded for a person who may not have replied
   yet ("If the person already replied, ..."). `missedReplyInHost`
   (`{ env, text }`) gives one host its own line when any of the named
-  environment variables is set in the agent's shell; Kiro IDE uses it for
-  `VSCODE_IPC_HOOK`/`VSCODE_PID`. Set `notRunYet` only when the
+  environment variables is set in the agent's shell (a `NAME=value` entry
+  when it holds that value); Kiro IDE uses it for `TERM_PROGRAM=kiro`, which
+  its agent's commands carry, and `VSCODE_IPC_HOOK`/`VSCODE_PID`, which only
+  its hooks carry. Set `notRunYet` only when the
   harness's hooks leave a heartbeat on every chat message, the first one before
   any workflow included (the human-turn hook does, and so do the Copilot and
   Kiro IDE adapters); doctor then warns with that text while no heartbeat

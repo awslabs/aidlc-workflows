@@ -184,15 +184,17 @@ const manifest: HarnessManifest = {
     recovery: `${KIRO_IDE_TRUST_STEP} ${KIRO_CLI_ACP_STEP}`,
     // Says what happened, asks for nothing again, and gives the person the step
     // for the tool they are in, in fixed words the agent relays without
-    // explaining why. Inside Kiro IDE (VSCODE_IPC_HOOK or VSCODE_PID set, the
-    // adapter's own signal) that is the Kiro IDE step alone; elsewhere Kiro
-    // CLI and an ACP client, which nothing tells apart, each get their line.
+    // explaining why. Inside Kiro IDE that is the Kiro IDE step alone;
+    // elsewhere Kiro CLI and an ACP client, which nothing tells apart, each get
+    // their line. Kiro IDE's hooks carry VSCODE_IPC_HOOK and VSCODE_PID, but the
+    // agent's own commands, where this refusal comes from, carry neither: they
+    // carry TERM_PROGRAM=kiro (measured live on Kiro IDE 1.2.37, #2167).
     missedReply:
       "If the person already replied, that reply was not recorded. Do not ask them to answer again. " +
       "Tell them exactly this, with nothing about why, then only the line below for the tool they are in: " +
       `"${ANSWER_NOT_RECORDED}" ${KIRO_CLI_ACP_STEP}`,
     missedReplyInHost: {
-      env: ["VSCODE_IPC_HOOK", "VSCODE_PID"],
+      env: ["TERM_PROGRAM=kiro", "VSCODE_IPC_HOOK", "VSCODE_PID"],
       text:
         "If the person already replied, that reply was not recorded. Do not ask them to answer again. " +
         `Tell them exactly this, with nothing about why: "${ANSWER_NOT_RECORDED} ${KIRO_IDE_TRUST_STEP}"`,
