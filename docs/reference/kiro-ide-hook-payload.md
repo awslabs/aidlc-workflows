@@ -324,10 +324,16 @@ The two hooks after a shell command run the same way as one,
   `terminal-command-guard` also refuses that chat's every other shell call in
   that turn, also one whose tool input cannot be read, with exit 2 and one fixed
   line on stderr that says to relay the output and end the turn and quotes
-  nothing the command carried: the dispatcher or the native `aidlc` with any arguments, for any
-  project, a name the shell builds at run time, and a call that names no AIDLC
-  at all. No reading of the command decides which call is harmless. Tools that
-  are not a shell are not this check's. A turn moves on only with the
+  nothing the command carried. For a chat the payload names, this is decided
+  before the refusals that ask for a fixed call (a lone carriage return, a value
+  cmd.exe would split, PowerShell code in an argument), so the agent is not told
+  to run the call again: the terminal command typed again, or a call naming a
+  tool file, gets the fallback's refusal with its output instead, also when it
+  carries such a character; a lowering setter keeps its own refusal, which names
+  the way out. It covers the dispatcher or the native `aidlc` with any
+  arguments, for any project, a name the shell builds at run time, and a call
+  that names no AIDLC at all. No reading of the command decides which call is
+  harmless. Tools that are not a shell are not this check's. A turn moves on only with the
   person's message (`UserPromptSubmit`): an agent run Kiro starts without one
   keeps the turn, and the person's next message releases it. The same-turn
   shell check judges only the chat the payload's `session_id` names, against a

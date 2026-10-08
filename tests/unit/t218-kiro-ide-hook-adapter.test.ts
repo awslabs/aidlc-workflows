@@ -7041,6 +7041,10 @@ describe("t218 a shell call on a turn whose terminal command already ran is refu
         ["execute_bash", "bun test"],
         ["shell", "echo done"],
         ["execute_pwsh", "Write-Output done"],
+        // Before the checks that would ask for a fixed call: a lone carriage
+        // return, and a value cmd.exe would split.
+        ["execute_bash", "ls\rpwd"],
+        ["execute_pwsh", "aidlc.cmd engine orchestrate next --request \"a&b\""],
       ];
       for (const [tool, command] of [...BARE_SPELLINGS, ...own]) {
         // Twice: a refusal does not start a turn of its own.
@@ -7049,6 +7053,22 @@ describe("t218 a shell call on a turn whose terminal command already ran is refu
           expect(r.code, `${tool} #${attempt}: ${command}\n${r.stderr}`).toBe(2);
           expect(r.stdout).toBe("");
           expect(r.stderr, command).toBe(`${SAME_TURN}\n`);
+        }
+      }
+      // The terminal command typed again, or a tool file named, gets the
+      // refusal that hands the output over, never one asking to run it again.
+      for (const [tool, command] of [
+        ["execute_bash", "bun .kiro/tools/aidlc-orchestrate.ts next foo\rbar"],
+        ["execute_pwsh", "bun .kiro/tools/aidlc-orchestrate.ts next --request $(whoami)"],
+        ["execute_bash", "cat .kiro/tools/aidlc-utility.ts\rpwd"],
+      ]) {
+        for (const attempt of [1, 2]) {
+          const r = shell(dir, command, "sess_bare_a", tool);
+          expect(r.code, `${tool} #${attempt}: ${command}\n${r.stderr}`).toBe(2);
+          expect(r.stdout).toBe("");
+          expect(r.stderr, command).toContain("already run inside the hook");
+          expect(r.stderr, command).not.toContain("run it again");
+          expect(r.stderr, command).not.toContain("run the command again");
         }
       }
       // Through the card Kiro runs it in, the refusal is said once.

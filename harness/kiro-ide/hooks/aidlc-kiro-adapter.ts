@@ -1468,15 +1468,28 @@ function toolTerminalInvocation(command: string): TerminalInvocation | null {
 // Whether `latch` is this chat's terminal command of its recorded turn, read
 // before that turn is started again, with the chat named by the payload: then
 // no other shell call of the chat runs in that turn.
-function holdsThisTurn(latch: TerminalLatch | null, recordedTurn: number): boolean {
+function holdsThisTurn(latch: TerminalLatch | null, recordedTurn: number): latch is TerminalLatch {
   return latch !== null && recordedTurn > 0 && latch.turn === recordedTurn && (ide.sessionId?.trim() ?? "") !== "";
 }
 
+// Whether a shell call is one the terminal-command refusal answers with the
+// command's output: the terminal command typed again, a lowering setter, or a
+// call naming a tool file.
+function getsTerminalRefusal(
+  invocation: TerminalInvocation | null,
+  lowering: ReturnType<typeof loweringGuardInvocation>,
+  rawCommand: string,
+): boolean {
+  return invocation !== null || Boolean(lowering) ||
+    /aidlc-(?:orchestrate|utility|knowledge)\.ts/i.test(rawCommand);
+}
+
 // The one same-turn shell check: refuses the call when this chat's terminal
-// command holds the turn.
-function refusesShellThisTurn(latch: TerminalLatch | null, recordedTurn: number): boolean {
+// command holds the turn, handing the output over again to a call the
+// terminal-command refusal answers.
+function refusesShellThisTurn(latch: TerminalLatch | null, recordedTurn: number, getsOutput: boolean): boolean {
   if (!holdsThisTurn(latch, recordedTurn)) return false;
-  process.stderr.write(sameTurnShellRefusal());
+  process.stderr.write(getsOutput ? terminalRefusal(latch) : sameTurnShellRefusal());
   return true;
 }
 
@@ -1849,7 +1862,7 @@ if (target === "terminal-command-guard") {
     // turn the chat's terminal command holds; nothing else here reads it.
     if (isKiroShellTool(tool) && (ide.sessionId?.trim() ?? "") !== "") {
       const sessionId = terminalSessionId();
-      if (refusesShellThisTurn(readTerminalLatch(sessionId), readTurn(sessionId))) return 2;
+      if (refusesShellThisTurn(readTerminalLatch(sessionId), readTurn(sessionId), false)) return 2;
     }
     return 0;
   }
@@ -1859,6 +1872,29 @@ if (target === "terminal-command-guard") {
   const rawCommand = typeof ide.toolArgs?.command === "string"
     ? ide.toolArgs.command
     : "";
+  const invocation = toolTerminalInvocation(rawCommand);
+  const lowering = loweringGuardInvocation(rawCommand);
+  const sessionId = terminalSessionId();
+  // Only a recorded turn can say a latch is this turn's (bumpTurn drops the
+  // latch when it has to start the count again).
+  const recordedTurn = readTurn(sessionId);
+  // Any other shell call in the turn the chat's terminal command ran in: the
+  // agent was told to relay the output and stop (terminalContext), and a call
+  // there can hand out the next stage on a turn that asked only for a terminal
+  // command, through the dispatcher, the native `aidlc`, or a name the shell
+  // builds at run time. No reading of the command decides which call is
+  // harmless, so none runs, and this comes before the checks below that would
+  // ask for a fixed call. The terminal command typed again gets the refusal
+  // that hands its output over once more; a lowering setter keeps its own
+  // refusal below, which names the way out. Only the chat the payload names is
+  // judged; with no session in it, this stays out. (The engine's own guard for
+  // this, Branch 0, reads only the agent-v1 project-wide latch; the engine
+  // could tell this chat's latch from another's only by process ancestry,
+  // which one IDE window shares.)
+  const held = readTerminalLatch(sessionId);
+  if (!lowering && refusesShellThisTurn(held, recordedTurn, getsTerminalRefusal(invocation, lowering, rawCommand))) {
+    return 2;
+  }
   // A lone carriage return, on any shell and any agent (a delegated call
   // carries no agent identity, and this reads none). The agents' rules cannot
   // name one (delegate-shell-deny.ts RISKY_SHELL_FORMS); a carriage return
@@ -1882,12 +1918,6 @@ if (target === "terminal-command-guard") {
     process.stderr.write(aidlcCodeArgumentRefusal(codeHazard));
     return 2;
   }
-  const invocation = toolTerminalInvocation(rawCommand);
-  const lowering = loweringGuardInvocation(rawCommand);
-  const sessionId = terminalSessionId();
-  // Only a recorded turn can say a latch is this turn's (bumpTurn drops the
-  // latch when it has to start the count again).
-  const recordedTurn = readTurn(sessionId);
   const turn = recordedTurn || bumpTurn(sessionId);
   const refused = invocation !== null ? loweringGuardFlags(invocation.args, false) : lowering;
   if (promptWasEmpty(sessionId, turn) && refused !== null) {
@@ -1898,28 +1928,12 @@ if (target === "terminal-command-guard") {
       : "Guard settings cannot be lowered for the active piece of work in this Kiro IDE session because this version does not provide the submitted message. Update Kiro IDE or start a new piece of work from a scope whose default already uses the lower setting. You can still select strict or turn a fence on.\n");
     return 2;
   }
-  const existing = readTerminalLatch(sessionId);
-  if (
-    existing?.turn === turn &&
-    (
-      invocation !== null ||
-      lowering ||
-      /aidlc-(?:orchestrate|utility|knowledge)\.ts/i.test(rawCommand)
-    )
-  ) {
+  // A count started again above leaves no latch that matches it.
+  const existing = recordedTurn > 0 ? held : null;
+  if (existing?.turn === turn && getsTerminalRefusal(invocation, lowering, rawCommand)) {
     process.stderr.write(terminalRefusal(existing));
     return 2;
   }
-  // Any other shell call in the same turn: the agent was told to relay the
-  // output and stop (terminalContext), and a call there can hand out the next
-  // stage on a turn that asked only for a terminal command, through the
-  // dispatcher, the native `aidlc`, or a name the shell builds at run time. No
-  // reading of the command decides which call is harmless, so none runs. Only
-  // the chat the payload names is judged; with no session in it, this stays
-  // out. (The engine's own guard for this, Branch 0, reads only the agent-v1
-  // project-wide latch; the engine could tell this chat's latch from another's
-  // only by process ancestry, which one IDE window shares.)
-  if (refusesShellThisTurn(existing, recordedTurn)) return 2;
   if (invocation === null) return 0;
   const command = classifyTerminalCommand(invocation.args);
   if (command === null) return 0;
