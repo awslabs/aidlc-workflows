@@ -26582,6 +26582,58 @@ export function gateWordsSincePresentation(
   return words.length > 0 ? words : null;
 }
 
+// The messages this chat's person typed while a Unit's review ran, before its
+// checkpoint question was asked: after the Unit's newest review request at one
+// of `stages`, and after any question asked or answered, or gate presented,
+// since. In order, leaving out non-answers. Null when this clone's record has
+// no review request for the Unit, nothing was typed since, or a message typed
+// since was not kept.
+export function gateWordsSinceUnitReview(
+  projectDir: string,
+  session: string,
+  unit: string,
+  stages: readonly string[],
+): string[] | null {
+  const record = readGateWords(projectDir, session);
+  if (record === null || record.messages.length === 0) return null;
+  const shardPath = auditFilePath(projectDir);
+  if (projectRelativePath(projectDir, shardPath) !== record.shard) return null;
+  let content: string;
+  try {
+    content = readAppendOnlyFileNoFollowOrThrow(shardPath, "audit shard").toString("utf-8");
+  } catch {
+    return null;
+  }
+  const separator = /\r?\n---\r?\n/g;
+  let start = 0;
+  let from: number | null = null;
+  for (;;) {
+    const match = separator.exec(content);
+    const block = content.slice(start, match ? match.index : content.length).replace(/\r\n/g, "\n");
+    const event = auditBlockField(block, "Event");
+    if (
+      event === "REVIEW_REQUESTED" && auditBlockField(block, "Unit") === unit &&
+      stages.includes(auditBlockField(block, "Stage") ?? "")
+    ) {
+      from = start;
+    } else if (
+      event !== null && from !== null &&
+      (event === "DECISION_RECORDED" || event === "QUESTION_UNANSWERED" ||
+        GATE_WORDS_ANSWERED_BY.has(event) || GATE_WORDS_SPENT_BY.has(event))
+    ) {
+      from = start;
+    }
+    if (match === null) break;
+    start = match.index + match[0].length;
+  }
+  if (from === null) return null;
+  const floor = Buffer.byteLength(content.slice(0, from), "utf-8");
+  if (record.dropped > floor) return null;
+  const words = record.messages.filter((message) => message.offset > floor && !isNonAnswer(message.text))
+    .map((message) => message.text);
+  return words.length > 0 ? words : null;
+}
+
 // Whether the person replied to the stage's approval question: a reply turn is
 // on this clone's record after its latest presentation (and after any other
 // question's answer since). A turn sent before the question was put to them is

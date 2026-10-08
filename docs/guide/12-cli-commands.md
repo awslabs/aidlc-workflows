@@ -1991,6 +1991,12 @@ tell which session this is:
 aidlc engine bolt checkpoint --action ask --unit "<unit>" --kind <unit|skeleton>
 ```
 
+When `ask` returns `earlier_reply`, the person already answered in that session
+while the Unit's review ran: their words typed since the review was asked for
+(and since any question asked or answered after it) are this question's reply.
+Read them and run the action they chose, with no question shown; when they
+answer nothing, present the question and wait as below.
+
 Wait for the human's **Approve** / **Request Changes** reply in that
 session, to this checkpoint question. It authorizes only the matching action;
 an unrelated reply, another session's reply, or a reply to a different question

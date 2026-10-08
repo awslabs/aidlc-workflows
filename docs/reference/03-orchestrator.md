@@ -629,7 +629,10 @@ Only after `verify` reports `verified: true` and the current checkpoint has
 `ask` refuses an unready or unverified checkpoint. For a human batch question,
 only after status reports `ready: true`, run
 `aidlc engine bolt swarm-checkpoint --action ask --batch <N> --units "<Units>"`.
-Then present **Approve** / **Request Changes** and wait. The human's exact reply
+Then present **Approve** / **Request Changes** and wait, unless `ask` returns
+`earlier_reply`: the person's words in that session since the Unit's review was
+asked for are the reply, so run the action they chose without presenting the
+question (or present it when they answer nothing). The human's exact reply
 in that session, to this checkpoint question, authorizes the matching action;
 an unrelated reply, another session's reply, or a reply to a different question
 does not. These commands find their own session; never pass `--user-input`
