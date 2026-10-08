@@ -48,6 +48,29 @@ describe("t-agent-conduct", () => {
     // through a shell loop.
     expect(FILE_TOOLS_RULE).toContain("Read, list, and search (your own knowledge files included) with your file tools");
     expect(FILE_TOOLS_RULE).not.toMatch(/never through the shell[^.]*`(?:cat|ls|rg|grep|find)`/);
+    // Live Claude Code runs: agents sent `orchestrate next` output to /tmp/r.json, wrote a
+    // helper script to /tmp, ran `cd /tmp; bun -e ...`. In default mode each one is a
+    // prompt outside the project, a denial, "Interrupted", and the person typing "keep
+    // everything in this folder, carry on".
+    expect(FILE_TOOLS_RULE).toContain("Every file you make stays inside the project");
+    expect(FILE_TOOLS_RULE).toContain("/tmp");
+    expect(FILE_TOOLS_RULE).toContain("never sent to a file");
+    // A live run on a zsh box (every macOS person): `echo ===gitignore` and an unquoted
+    // `--include=*.ts` failed, each a prompt, an error line, and a retry.
+    expect(FILE_TOOLS_RULE).toContain("--include='*.ts'");
+    expect(FILE_TOOLS_RULE).toContain("zsh");
+  });
+
+  // Two tools have a habit of their own that the shared rule cannot name: Copilot's agent
+  // wrote a "lesson" into Copilot's memory tool outside the project (W4-VC), and on Kiro IDE
+  // every pipe, `;`, `echo` or `Select-String` the agent adds to an AI-DLC command is one
+  // more approval card for the person (kiro-ide-win F4).
+  test("the Copilot and Kiro IDE skills carry their own conduct sentence", () => {
+    const copilot = readFileSync(join(REPO_ROOT, "harness", "copilot", "skills", "aidlc", "SKILL.md"), "utf-8");
+    expect(copilot).toContain("never into Copilot's memory tool");
+    const kiroIde = readFileSync(join(REPO_ROOT, "harness", "kiro-ide", "skills", "aidlc", "SKILL.md"), "utf-8");
+    expect(kiroIde).toContain("**Every AI-DLC command on its own.**");
+    expect(kiroIde).toContain("no pipe, no `;`, no `echo`, no `Select-String`");
   });
 
   test("the diary bootstrap uses the write tool, not a shell mkdir", () => {
