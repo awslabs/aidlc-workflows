@@ -1,3 +1,7 @@
+// First, before any other module body: drop every environment name a `.env` file in
+// the working directory assigned (see aidlc-dotenv.ts). Every entry imports this
+// module before its own body, so the guard runs before the first read.
+import "./aidlc-dotenv.ts";
 import { type Dirent, existsSync, lstatSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";

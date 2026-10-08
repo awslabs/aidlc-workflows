@@ -441,6 +441,11 @@ survives project roots containing spaces and application commands that change
 the working directory. It does not change the hook process's working directory
 or the `cwd` supplied in the JSON payload. Native release settings use
 `aidlc engine hook <name>` and `aidlc engine statusline`, without Bun.
+Either way the hook's environment is the host tool's, never the project's `.env` files: the
+compiled engine is built with Bun's dotenv and bunfig autoload off, and a Bun-run tree
+runs `core/tools/aidlc-dotenv.ts` first (imported by `aidlc-runtime-paths.ts`, which every
+entry evaluates before its own body) to drop every name those files assigned, in the
+dispatcher and in each tool it spawns.
 The compiled engine loads hook modules from the runtime payload beside the
 executable, and that tree is never a project: `engine hook` and sensor script
 routes take the project from `--project-dir`, then `AIDLC_PROJECT_DIR`,
