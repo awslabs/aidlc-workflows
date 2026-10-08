@@ -3500,7 +3500,7 @@ export function kiroIdeIgnoreSourceChecks(
 // Agent Hooks. Legacy names stay while config has not yet removed their files.
 const FLOW_ALTERING_KIRO_HOOKS: Record<string, string> = {
   "aidlc-guard-tool-call": "approvals, the approved plan, reviewed work and AI-DLC's records are not protected",
-  "aidlc-record-human-turn": "your replies are not recorded, so approval gates cannot tell your answer from the assistant's",
+  "aidlc-record-human-turn": "your replies are not recorded, so approval gates cannot tell your answer from the assistant's, and /aidlc commands typed in chat are not run directly",
   "aidlc-continue-workflow": "a workflow with work left is not kept moving when the assistant stops (on Kiro CLI v3; Kiro IDE only records it)",
   "aidlc-enforce-approval-gate": "the assistant is not held while an approval waits for your answer",
   "aidlc-plan-approval-guard": "the build is not kept to the plan you approved",
@@ -3517,6 +3517,7 @@ const ADVISORY_KIRO_HOOKS: Record<string, string> = {
   "aidlc-write-audit-log": "files you create or update are not recorded or checked",
   "aidlc-sync-workflow-state": "the Current Stage in aidlc-state.md can fall behind",
   "aidlc-rebuild-stage-graph": "the plan of remaining stages is not rebuilt after the workflow moves",
+  "aidlc-after-shell": "the current stage and the plan of remaining stages are not kept in step after a terminal command",
 };
 
 export function kiroDisabledHookChecks(projectDir: string, harness: string): DoctorCheck[] {

@@ -2259,7 +2259,7 @@ describe("t294 trust diagnostics", () => {
       },
       {
         pass: false,
-        label: "AI-DLC hook aidlc-record-human-turn is switched off in Kiro's Agent Hooks: your replies are not recorded, so approval gates cannot tell your answer from the assistant's",
+        label: "AI-DLC hook aidlc-record-human-turn is switched off in Kiro's Agent Hooks: your replies are not recorded, so approval gates cannot tell your answer from the assistant's, and /aidlc commands typed in chat are not run directly",
         fix: 'turn aidlc-record-human-turn back on under Kiro\'s Agent Hooks, or set "enabled": true in .kiro/hooks/aidlc-record-human-turn.json',
       },
       {
