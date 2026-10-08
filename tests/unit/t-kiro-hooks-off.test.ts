@@ -107,6 +107,13 @@ describe("t-kiro-hooks-off: a hook the person switched off in Kiro is named, nev
     expect(JSON.parse(readFileSync(join(proj, ".kiro", "hooks", `${GUARD}.json`), "utf-8")).hooks[0].enabled).toBe(false);
   });
 
+  test("a hook file saved with a byte order mark is read the same", () => {
+    const path = join(proj, ".kiro", "hooks", `${GUARD}.json`);
+    switchOff(GUARD);
+    writeFileSync(path, `\uFEFF${readFileSync(path, "utf-8")}`);
+    expect(kiroHooksSwitchedOff(proj).map((hook) => hook.name)).toEqual([GUARD]);
+  });
+
   test("a Kiro CLI .kiro.hook file with enabled false is found too; another harness has nothing", () => {
     writeFileSync(
       join(proj, ".kiro", "hooks", "aidlc-plan-approval-guard.kiro.hook"),
@@ -122,7 +129,7 @@ describe("t-kiro-hooks-off: a hook the person switched off in Kiro is named, nev
     switchOff(GUARD, new Date("2026-10-06T23:09:18.000Z"));
     const [hook] = kiroHooksSwitchedOff(proj);
     const line = kiroHookOffLine(hook, new Date("2026-10-08T06:46:00.000Z"));
-    expect(line).toContain("is switched off in Kiro's Agent Hooks (aidlc-guard-tool-call) since 2026-10-0");
+    expect(line).toContain("AI-DLC's check on the assistant's file changes, commands and helpers is switched off in Kiro's Agent Hooks (aidlc-guard-tool-call) since 2026-10-0");
     expect(line).toContain("approvals, the approved plan and AI-DLC's records are not protected while it is off.");
     expect(line.endsWith(KIRO_HOOKS_OFF_STEP)).toBe(true);
     expect(line).not.toMatch(/hook file|enabled|json/i);

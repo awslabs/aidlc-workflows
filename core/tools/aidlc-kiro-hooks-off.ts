@@ -25,27 +25,27 @@ export const KIRO_REPLY_HOOK = "aidlc-record-human-turn";
 // reported, by its name alone.
 const KIRO_HOOK_PROTECTS: Record<string, { what: string; off: string }> = {
   "aidlc-guard-tool-call": {
-    what: "the check on the assistant's file changes, commands and helpers",
+    what: "check on the assistant's file changes, commands and helpers",
     off: "approvals, the approved plan and AI-DLC's records are not protected",
   },
   [KIRO_REPLY_HOOK]: {
-    what: "the hook that records your replies",
+    what: "hook that records your replies",
     off: "your answers to AI-DLC's questions are not seen",
   },
   "aidlc-continue-workflow": {
-    what: "the hook that notices a turn ending with work pending",
+    what: "hook that notices a turn ending with work pending",
     off: "AI-DLC does not notice when the assistant stops with work left",
   },
   "aidlc-session-start": {
-    what: "the hook that gives each new chat its workflow context",
+    what: "hook that gives each new chat its workflow context",
     off: "a new chat starts without AI-DLC's context",
   },
   "aidlc-log-subagent": {
-    what: "the hook that records a helper's finished work",
+    what: "hook that records a helper's finished work",
     off: "helpers' work is not recorded",
   },
   "aidlc-plan-approval-guard": {
-    what: "the check that keeps code changes to the approved plan",
+    what: "check that keeps code changes to the approved plan",
     off: "code changes are not held to the approved plan",
   },
 };
@@ -68,11 +68,12 @@ function hookName(fileName: string): string {
 }
 
 // Kiro's `enabled` lives on the file's root (`.kiro.hook`) or on an entry of
-// its `hooks` array (Kiro IDE's v1 schema); either one false is off.
+// its `hooks` array (Kiro IDE's v1 schema); either one false is off. A file
+// an editor saved with a byte order mark is read the same.
 function switchedOff(text: string): boolean {
   let parsed: unknown;
   try {
-    parsed = JSON.parse(text);
+    parsed = JSON.parse(text.replace(/^\uFEFF/, ""));
   } catch {
     return false;
   }
@@ -103,7 +104,7 @@ export function kiroHooksSwitchedOff(projectDir: string, harnessDir = ".kiro"): 
     try {
       if (!switchedOff(readFileSync(path, "utf-8"))) continue;
       const name = hookName(fileName);
-      const protects = KIRO_HOOK_PROTECTS[name] ?? { what: `the hook ${name}`, off: "what it checks is not checked" };
+      const protects = KIRO_HOOK_PROTECTS[name] ?? { what: `hook ${name}`, off: "what it checks is not checked" };
       off.push({
         name,
         file: `${harnessDir}/hooks/${fileName}`,
