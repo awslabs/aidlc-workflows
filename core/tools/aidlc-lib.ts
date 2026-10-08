@@ -26584,10 +26584,11 @@ export function gateWordsSincePresentation(
 
 // The messages this chat's person typed while a Unit's review ran, before its
 // checkpoint question was asked: after the Unit's newest review request at one
-// of `stages`, and after any question asked or answered, or gate presented,
-// since. In order, leaving out non-answers. Null when this clone's record has
-// no review request for the Unit, nothing was typed since, or a message typed
-// since was not kept.
+// of `stages` (and after the answer to any question asked before it), up to the
+// first question asked since (the learnings question, say), whose reply is its
+// own. In order, leaving out non-answers. Null when this clone's record has no
+// review request for the Unit, a question asked since is still unanswered,
+// nothing was typed then, or a message typed since was not kept.
 export function gateWordsSinceUnitReview(
   projectDir: string,
   session: string,
@@ -26607,29 +26608,39 @@ export function gateWordsSinceUnitReview(
   const separator = /\r?\n---\r?\n/g;
   let start = 0;
   let from: number | null = null;
+  let until: number | null = null;
+  let open = false;
   for (;;) {
     const match = separator.exec(content);
     const block = content.slice(start, match ? match.index : content.length).replace(/\r\n/g, "\n");
     const event = auditBlockField(block, "Event");
+    const asks = event === "DECISION_RECORDED" || event === "STAGE_AWAITING_APPROVAL" || event === "QUESTION_UNANSWERED";
+    const answers = event !== null && !asks && (GATE_WORDS_ANSWERED_BY.has(event) || GATE_WORDS_SPENT_BY.has(event));
     if (
       event === "REVIEW_REQUESTED" && auditBlockField(block, "Unit") === unit &&
       stages.includes(auditBlockField(block, "Stage") ?? "")
     ) {
       from = start;
-    } else if (
-      event !== null && from !== null &&
-      (event === "DECISION_RECORDED" || event === "QUESTION_UNANSWERED" ||
-        GATE_WORDS_ANSWERED_BY.has(event) || GATE_WORDS_SPENT_BY.has(event))
-    ) {
-      from = start;
+      until = null;
+      open = false;
+    } else if (from !== null && asks) {
+      until ??= start;
+      open = true;
+    } else if (from !== null && answers) {
+      // Before any question here, an answer is to one asked before the review:
+      // what was typed until then was its reply.
+      if (until === null) from = start;
+      open = false;
     }
     if (match === null) break;
     start = match.index + match[0].length;
   }
-  if (from === null) return null;
+  if (from === null || open) return null;
   const floor = Buffer.byteLength(content.slice(0, from), "utf-8");
+  const ceiling = until === null ? Number.POSITIVE_INFINITY : Buffer.byteLength(content.slice(0, until), "utf-8");
   if (record.dropped > floor) return null;
-  const words = record.messages.filter((message) => message.offset > floor && !isNonAnswer(message.text))
+  const words = record.messages
+    .filter((message) => message.offset > floor && message.offset <= ceiling && !isNonAnswer(message.text))
     .map((message) => message.text);
   return words.length > 0 ? words : null;
 }

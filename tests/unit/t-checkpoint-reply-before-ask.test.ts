@@ -184,6 +184,14 @@ function verifyAndAsk(p: string, file: string) {
   return asked.json ?? {};
 }
 
+// The learnings question a gated Unit checkpoint asks first in classic and
+// enterprise (stage-protocol-learnings.md).
+function learnings(p: string): void {
+  const asked = tool(p, "log", ["decision", "--stage", CG, "--session", SESSION,
+    "--decision", "Anything to add for next time?", "--options", "Nothing to add,Add a note"]);
+  expect(asked.status, asked.out).toBe(0);
+}
+
 const events = (p: string, name: string) => readAuditShardEvents(p).filter((row) => row.event === name);
 const unitGates = (p: string, name: string) => events(p, name)
   .filter((row) => auditBlockField(row.block, "Checkpoint") === "construction-unit" && auditBlockField(row.block, "Unit") === "alpha");
@@ -239,6 +247,42 @@ describe("t-checkpoint-reply-before-ask: the person answers before the Unit's qu
       expect(questionsAsked(p)).toHaveLength(1);
     }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
   }
+
+  // In classic and enterprise the learnings question comes first. Its reply
+  // is its own; the words typed while the review ran still answer the Unit.
+  for (const policy of ["off", "strict"] as const) {
+    test(`Guard Policy ${policy}: the learnings question asked first leaves the words typed during the review to the Unit`, () => {
+      const p = fixture(policy);
+      const file = requestReview(p);
+      says(p, "approve it as it is");
+      reviewLands(p, file);
+      const verified = checkpoint(p, "verify");
+      expect(verified.json?.verified, verified.out).toBe(true);
+      learnings(p);
+      says(p, "Nothing to add");
+      expect(tool(p, "log", ["answer", "--stage", CG, "--session", SESSION, "--details", "Nothing to add"]).status).toBe(0);
+      const asked = checkpoint(p, "ask");
+      expect(asked.status, asked.out).toBe(0);
+      expect(asked.json?.earlier_reply).toBe("approve it as it is");
+      const approved = checkpoint(p, "approve", ["--user-input", "approve it as it is"]);
+      expect(approved.status, approved.out).toBe(0);
+      expect(auditBlockField(unitGates(p, "GATE_APPROVED")[0].block, "Person Reply")).toBe("approve it as it is");
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+  }
+
+  // A question asked since and not answered yet holds what the person types
+  // next: nothing is taken for the Unit while it waits.
+  test("a question asked since the review and not answered yet takes nothing", () => {
+    const p = fixture("off");
+    const file = requestReview(p);
+    says(p, "approve it as it is");
+    reviewLands(p, file);
+    expect(checkpoint(p, "verify").json?.verified).toBe(true);
+    learnings(p);
+    const asked = checkpoint(p, "ask");
+    expect(asked.status, asked.out).toBe(0);
+    expect(asked.json?.earlier_reply).toBeUndefined();
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   // "approve it as it is" over a review that has not finished: the verify
   // takes their words, and an approve run again records nothing more.

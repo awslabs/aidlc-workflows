@@ -1992,8 +1992,9 @@ aidlc engine bolt checkpoint --action ask --unit "<unit>" --kind <unit|skeleton>
 ```
 
 When `ask` returns `earlier_reply`, the person already answered in that session
-while the Unit's review ran: their words typed since the review was asked for
-(and since any question asked or answered after it) are this question's reply.
+while the Unit's review ran: their words typed after the review was asked for
+and before any other question was asked (such as the learnings question) are
+this question's reply.
 Read them and run the action they chose, with no question shown; when they
 answer nothing, present the question and wait as below.
 

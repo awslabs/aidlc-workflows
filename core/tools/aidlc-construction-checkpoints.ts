@@ -1458,8 +1458,9 @@ export function askConstructionCheckpoint(
       throw new Error(`Verify the current Construction checkpoint first, before asking for approval. Run ${aidlcToolInvocation("bolt")} checkpoint --unit "${unit}" --kind ${kind} --action verify and require verified: true.`);
     }
     // The person may have answered while the Unit's review ran: their words
-    // typed in this chat since it was asked for, read before this question's
-    // own row, are its reply, kept as a reply typed after it is.
+    // typed in this chat after it was asked for and before any other question
+    // was asked (gateWordsSinceUnitReview), read before this question's own
+    // row, are its reply, kept as a reply typed after it is.
     const earlier = gateWordsSinceUnitReview(projectDir, session, unit, current.result.stages);
     withdrawProtectedQuestions(projectDir, session);
     appendAuditEntryUnlocked("DECISION_RECORDED", {
