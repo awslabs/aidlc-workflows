@@ -395,9 +395,27 @@ function refuseSplitValues(subcommand: "decision" | "answer", rawArgs: string[])
     );
   }
   if (first === null) return;
-  error(
+  const split =
     `Cannot record ${what}: ${JSON.stringify(first.words.join(" "))} arrived as a separate argument after ` +
-      `${first.flag} ${JSON.stringify(first.value)}, so only ${JSON.stringify(first.value)} would be recorded. ` +
+    `${first.flag} ${JSON.stringify(first.value)}, so only ${JSON.stringify(first.value)} would be recorded. `;
+  // Command Prompt passes single quotes on as part of the words (Kiro IDE runs
+  // its shell tool there when that is the person's default terminal), so the
+  // value's own quotes on both ends name the shell and its fix (#2167).
+  if (first.value.startsWith("'") && first.words[first.words.length - 1]?.endsWith("'")) {
+    error(
+      split +
+        "The single quotes reached AI-DLC as part of the words, so this shell is Command Prompt, where single " +
+        "quotes do not hold words together. Run the command again with the value in double quotes, in the " +
+        `person's exact words (for example ${textFlag} "Chose Option A for auth").` +
+        (subcommand === "answer"
+          ? " An answer holding a double quote, &, |, <, >, ^, % or a line break goes in a file instead: write it " +
+            "to <record>/.aidlc-engine/answer-text/answer.txt with your file tool and pass " +
+            "--details-file .aidlc-engine/answer-text/answer.txt."
+          : ""),
+    );
+  }
+  error(
+    split +
       "A value splits like this when it is not quoted as one argument, or when Windows PowerShell passes a bare " +
       `double quote inside it (it removes those quotes). ${howToPass('Chose \\"Option A\\" for auth')}`,
   );
