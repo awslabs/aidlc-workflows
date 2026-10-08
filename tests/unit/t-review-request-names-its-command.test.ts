@@ -72,6 +72,9 @@ function refusalFor(attempt: Record<string, unknown>): { remedies: Remedy[] } {
 // The steps after the request, as the action says them to the agent.
 function expectRequestSteps(action: string, command: string): void {
   expect(action).toContain(`run \`${command}\``);
+  // The reviewer runs as its own agent (seen live: "have the reviewer review it"
+  // was read as the conductor writing the review in the reviewer's name).
+  expect(action).toContain("run the reviewer named in it as its own subagent (never review it yourself)");
   expect(action).toContain("stage-protocol-reviewer.md");
   expect(action).toContain("`reviewFile`");
   expect(action).toContain("`recordVerdict`");
