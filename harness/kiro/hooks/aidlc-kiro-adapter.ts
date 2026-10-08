@@ -364,24 +364,62 @@ const WIN32_SINGLE_QUOTE = /['\u2018-\u201B]/g;
 // Native Windows `aidlc` is aidlc.cmd, so the call also crosses cmd.exe, which
 // acts on & | < > ^ in a word with no space, and the launcher then reads the
 // arguments the Windows way (CommandLineToArgvW). A word holding one of those
-// characters, or a double quote, travels as '"word"': PowerShell keeps the
-// literal double quotes, cmd.exe reads the word as quoted, and the launcher
-// reads it back as typed (a double quote inside escaped as \", a backslash
-// run before one or at the end doubled). cmd.exe still expands %NAME% inside
-// quotes; no form of the call prevents that.
-const CMD_METACHARACTER = /[&|<>^"]/;
+// characters travels as '"word"': PowerShell keeps the literal double quotes,
+// cmd.exe reads the word as quoted, and the launcher reads it back as typed (a
+// backslash run at the end doubled). A word holding a double quote of its own
+// never takes this form: cmd.exe flips its quote state at every double quote,
+// escaped or not, so such words go through the request file instead (below).
+// cmd.exe still expands %NAME% inside quotes; no form of the call prevents that.
+const CMD_METACHARACTER = /[&|<>^]/;
 function windowsArgv(arg: string): string {
-  let out = "";
-  let slashes = 0;
-  for (const ch of arg) {
-    if (ch === "\\") {
-      slashes++;
-      continue;
-    }
-    out += ch === '"' ? `${"\\".repeat(slashes * 2 + 1)}"` : `${"\\".repeat(slashes)}${ch}`;
-    slashes = 0;
+  const trailing = /\\*$/.exec(arg)?.[0] ?? "";
+  return `"${arg}${trailing}"`;
+}
+// On Windows a word holding a double quote cannot cross cmd.exe as written: the
+// hook writes the person's words itself to the request file the engine reads
+// with no shell on the way, and forwards `next <flags> --request-file <path>`.
+// The flags stay on the line because the engine reads the file as words only,
+// never as flags; which tokens are flags, and which flag takes the next token
+// as its value, is the engine's own reading (parseNextFlags), asked per token.
+// A verb (park, team-board) or compose keeps its own form.
+const REQUEST_FILE = "aidlc/.aidlc-request-text/request.txt";
+async function requestFileForwarding(
+  args: readonly string[],
+  cwd: string,
+): Promise<{ args: string[]; forwarded: string } | null> {
+  if (
+    process.platform !== "win32" ||
+    !args.some((arg) => arg.includes('"')) ||
+    args[0] === "compose" ||
+    leadingOrchestratorVerb(args) !== null
+  ) {
+    return null;
   }
-  return `"${out}${"\\".repeat(slashes * 2)}"`;
+  try {
+    const { parseNextFlags } = await import("../tools/aidlc-orchestrate.ts");
+    const flags: string[] = [];
+    const words: string[] = [];
+    for (let i = 0; i < args.length; i++) {
+      const token = args[i];
+      if (!token.startsWith("-")) {
+        words.push(token);
+        continue;
+      }
+      flags.push(token);
+      const value = args[i + 1];
+      if (value !== undefined && !value.startsWith("-") && parseNextFlags([token, value]).intent !== value) {
+        flags.push(value);
+        i++;
+      }
+    }
+    if (words.length === 0 || flags.some((flag) => flag.includes('"'))) return null;
+    mkdirSync(join(cwd, "aidlc", ".aidlc-request-text"), { recursive: true });
+    writeFileSync(join(cwd, REQUEST_FILE), `${words.join(" ")}\n`, "utf-8");
+    const argv = [...flags, "--request-file", REQUEST_FILE];
+    return { args: argv, forwarded: forwardedArgs(argv.join(" "), argv) };
+  } catch {
+    return null; // the single-quoted form stands; the guard still holds the call to the latch
+  }
 }
 function forwardedArgs(raw: string, args: string[]): string {
   if (
@@ -599,13 +637,16 @@ if (target === "verb-intercept") {
     // shell-normalized argv and rejects a lossy call. A correct first next
     // consumes the latch, so subsequent loop iterations in this turn are bare.
     if (invocation.raw.length > 0) {
+      const viaFile = await requestFileForwarding(args, cwd);
+      const forwardedArgv = viaFile?.args ?? args;
+      const forwarded = viaFile?.forwarded ?? invocation.forwarded;
       try {
         writeFileSync(
           join(cwd, "aidlc", ".aidlc-forwarding-latch"),
           JSON.stringify({
             turn,
-            raw: invocation.forwarded,
-            args,
+            raw: forwarded,
+            args: forwardedArgv,
           }) + "\n",
           "utf-8",
         );
@@ -614,7 +655,7 @@ if (target === "verb-intercept") {
         preface +
         "SYSTEM (deterministic argument forwarding): Your immediate first tool call " +
           "must be exactly the engine call below. Preserve every argument; do not run a bare `next`.\n\n" +
-          `{{INVOKE}} engine orchestrate next ${invocation.forwarded}\n`,
+          `{{INVOKE}} engine orchestrate next ${forwarded}\n`,
       );
     } else if (preface) {
       process.stdout.write(preface);
