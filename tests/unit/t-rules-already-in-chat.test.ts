@@ -59,6 +59,7 @@ const HOST_ENV = [
 
 type Printed = {
   kind: string;
+  conductor_persona?: string;
   receipt?: string;
   rules_content?: Array<{ path: string; text: string }>;
   rules_held?: string;
@@ -668,4 +669,81 @@ describe("tools with no proven copy keep sending the text", () => {
       expect(sentInFull(await next(proj, harness, env))).toBe(true);
     });
   }
+});
+
+// The conductor persona (aidlc-common/conductor.md, 10.6 KB: how every agent
+// writes files and runs AI-DLC's commands, the diary rules, the voice rules)
+// used to ride the FIRST run-stage of the WORKFLOW only, so a person who
+// carried on in a new chat, or whose chat compacted, had an agent working
+// without it for the rest of the run. It now rides the first run-stage each
+// CHAT sees, on the hosts whose commands name their chat; Copilot and Cursor
+// keep one delivery per workflow, because there the persona travels on its own
+// part and every extra delivery is one more tool call the person sees.
+function personaSent(delivery: { results: Printed[] }): boolean {
+  return delivery.results.some((directive) =>
+    typeof directive.conductor_persona === "string" && directive.conductor_persona.length > 0
+  );
+}
+
+function editPersona(proj: string, harness: string, line: string): void {
+  const path = join(proj, HARNESS_DIR[harness], "aidlc-common", "conductor.md");
+  appendFileSync(path, `\n${line}\n`);
+}
+
+describe("the conductor persona reaches every chat that works on the workflow", () => {
+  test("Claude Code: the chat's first step carries it, the next does not, a compaction brings it back", async () => {
+    const proj = await projectFor("claude");
+    const sid = randomUUID();
+    const env = { AIDLC_SESSION_OVERRIDE: sid, CLAUDE_CODE_SESSION_ID: sid, CLAUDECODE: "1" };
+    await sessionStart(proj, "claude", sid, "startup");
+    // Mid-workflow (the fixture has finished stages behind it), so the old rule
+    // sent nothing here.
+    expect(personaSent(await next(proj, "claude", env))).toBe(true);
+    expect(personaSent(await next(proj, "claude", env))).toBe(false);
+
+    // The compacted chat no longer holds it.
+    await preCompact(proj, "claude", sid);
+    await sessionStart(proj, "claude", sid, "compact");
+    expect(personaSent(await next(proj, "claude", env))).toBe(true);
+    expect(personaSent(await next(proj, "claude", env))).toBe(false);
+
+    // Another chat on the same piece of work gets its own copy, once.
+    const second = randomUUID();
+    const secondEnv = { AIDLC_SESSION_OVERRIDE: second, CLAUDE_CODE_SESSION_ID: second, CLAUDECODE: "1" };
+    await sessionStart(proj, "claude", second, "startup");
+    expect(personaSent(await next(proj, "claude", secondEnv))).toBe(true);
+    expect(personaSent(await next(proj, "claude", secondEnv))).toBe(false);
+
+    // An updated install's persona reaches a chat that already had the old one.
+    editPersona(proj, "claude", "- Say the step, never the machinery.");
+    const updated = await next(proj, "claude", env);
+    expect(personaSent(updated)).toBe(true);
+    expect(JSON.stringify(updated.results)).toContain("Say the step, never the machinery.");
+    expect(personaSent(await next(proj, "claude", env))).toBe(false);
+  });
+
+  test("Kiro CLI and Codex: the same, under their own chat ids", async () => {
+    for (const harness of ["kiro", "codex"]) {
+      const proj = await projectFor(harness);
+      const sid = harness === "kiro" ? `sess_${randomUUID()}` : randomUUID();
+      const env = harness === "kiro"
+        ? { AIDLC_SESSION_OVERRIDE: sid, KIRO_SESSION_ID: sid }
+        : { AIDLC_SESSION_OVERRIDE: sid, CODEX_THREAD_ID: sid };
+      await sessionStart(proj, harness, sid, "startup");
+      expect(personaSent(await next(proj, harness, env)), harness).toBe(true);
+      expect(personaSent(await next(proj, harness, env)), harness).toBe(false);
+    }
+  });
+
+  test("Copilot and Cursor keep one delivery per workflow (no chat signal in the command)", async () => {
+    for (const harness of ["copilot", "cursor"]) {
+      const proj = await projectFor(harness);
+      const sid = randomUUID();
+      const env = { AIDLC_SESSION_OVERRIDE: sid, CLAUDE_CODE_SESSION_ID: sid, CLAUDECODE: "1" };
+      await sessionStart(proj, harness, sid, "startup");
+      // Mid-workflow and no proven chat: unchanged, so nothing new arrives.
+      expect(personaSent(await next(proj, harness, env)), harness).toBe(false);
+      expect(personaSent(await next(proj, harness, env)), harness).toBe(false);
+    }
+  });
 });
