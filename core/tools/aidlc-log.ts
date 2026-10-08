@@ -336,9 +336,13 @@ function refuseSplitValues(subcommand: "decision" | "answer", rawArgs: string[])
     const a = rawArgs[i];
     if (a.startsWith("--")) {
       if (!options.has(a)) {
+        // A wrong flag is named as one first: an agent that typed `--answer`
+        // reads the options it has, not a PowerShell cause that never applied.
+        // The split case (a fragment of a quoted value) keeps its way out second.
         error(
-          `Cannot record ${what}: ${JSON.stringify(a)} is not an option of log ${subcommand}, so it is probably ` +
-            `part of a value that a bare double quote split. ${howToPass('Run \\"todo --help\\" first')}`,
+          `Cannot record ${what}: ${JSON.stringify(a)} is not an option of log ${subcommand}. It takes ` +
+            `${[...options].sort().join(", ")}. If ${JSON.stringify(a)} is part of a value that a bare double ` +
+            `quote split: ${howToPass('Run \\"todo --help\\" first')}`,
         );
       }
       if (first === null && open !== null && open.words.length > 0) first = open;
@@ -702,16 +706,28 @@ function handlePlanApprovalBatch(
   }
 }
 
-function constructionPolicyFields(flags: Record<string, string>): Record<string, string> {
+// As verification-command does, the tool finds the session it runs in;
+// `--session` is only an override, so the agent never hunts for a session id.
+function constructionPolicyFields(pd: string, flags: Record<string, string>): Record<string, string> {
   if (!validConstructionPolicyChange(flags.field, flags.value)) {
     error("Construction policy requires a valid --field and --value: Construction Checkpoints (enabled|disabled), Construction Execution (serial|swarm), or Construction Iteration (unit-major|stage-major). " + CONSTRUCTION_POLICY_RECOVERY);
   }
   if (flags.single !== undefined || flags.unit !== undefined) {
     error("Construction policy applies to the whole intent; omit --single and --unit.");
   }
-  const session = flags.session?.trim();
+  let session = flags.session?.trim() ?? "";
   if (!session) {
-    error("Construction policy requires --session <id> from the invoking SessionStart context. " + CONSTRUCTION_POLICY_RECOVERY);
+    try {
+      session = resolveInvokingSessionId(pd) ?? "";
+    } catch (e) {
+      error(errorMessage(e));
+    }
+  }
+  if (!session) {
+    error(
+      "Could not tell which session this is. Run the command again with --session set to the Runtime Session " +
+        "shown in this session's AI-DLC context. " + CONSTRUCTION_POLICY_RECOVERY,
+    );
   }
   return { Checkpoint: CONSTRUCTION_POLICY_CHECKPOINT, Field: flags.field, Value: flags.value, Session: session };
 }
@@ -933,7 +949,7 @@ function handleDecision(args: string[]): void {
       error('Verification command decision requires --options "Approve,Request Changes". ' + VERIFICATION_COMMAND_RECOVERY);
     }
   }
-  const policyFields = flags.checkpoint === "construction-policy" ? constructionPolicyFields(flags) : null;
+  const policyFields = flags.checkpoint === "construction-policy" ? constructionPolicyFields(pd, flags) : null;
   if (policyFields) {
     Object.assign(fields, policyFields);
     const options = (flags.options ?? "").split(",").map((option) => option.trim());
@@ -1661,7 +1677,7 @@ function handleAnswer(args: string[]): void {
   }
   const verificationCheckpoint = flags.checkpoint === "verification-command";
   const policyCheckpoint = flags.checkpoint === "construction-policy";
-  const policyFields = policyCheckpoint ? constructionPolicyFields(flags) : null;
+  const policyFields = policyCheckpoint ? constructionPolicyFields(resolveActiveProjectDir(projectDir), flags) : null;
   if (verificationCheckpoint && (flags.single !== undefined || flags.unit !== undefined)) {
     error("Construction verification commands apply to the whole intent; omit --single and --unit.");
   }

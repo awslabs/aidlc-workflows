@@ -507,10 +507,13 @@ describe("t31 aidlc-log refuses a value that arrived split", () => {
       const before = readAllAuditShards(p);
       const r = log([subcommand, "--stage", "feasibility", valueFlag, "Run todo", ...fragments], p);
       expect(r.status).toBe(1);
-      expect(refusal(r)).toBe(
-        `Cannot record this ${subcommand}: ${JSON.stringify(fragment)} is not an option of log ${subcommand}, ` +
-          `so it is probably part of a value that a bare double quote split. ${howToPass(valueFlag, RUN_TODO)}`,
-      );
+      const message = refusal(r);
+      expect(message).toMatch(new RegExp(
+        `^Cannot record this ${subcommand}: ${JSON.stringify(fragment).replace(/[.*+?^${}()|[\]\\]/g, "\\$&")} is not an option of log ${subcommand}\\. It takes --`,
+      ));
+      expect(message.endsWith(
+        `If ${JSON.stringify(fragment)} is part of a value that a bare double quote split: ${howToPass(valueFlag, RUN_TODO)}`,
+      ), message).toBe(true);
       for (const event of ["DECISION_RECORDED", "QUESTION_ANSWERED"]) {
         expect(auditEventCount(readAllAuditShards(p), event)).toBe(auditEventCount(before, event));
       }
@@ -630,5 +633,47 @@ describe("t31 aidlc-log null-intent guard", () => {
     const entries = bareIntentsRootEntries(p);
     expect(entries).not.toContain("aidlc-state.md");
     expect(entries).not.toContain("audit");
+  });
+});
+
+// Agent-facing lines from the argument parser: a wrong flag is named as a wrong
+// flag first (the split-quote cause comes second), and the construction-policy
+// decision finds the session it runs in, as verification-command does.
+describe("t31 (u) the parser names the flag, and the policy decision finds its session", () => {
+  function logWith(args: string[], p: string, env: Record<string, string>): CliResult {
+    const res = spawnSync(BUN, [TOOL, ...args, "--project-dir", p], {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+      encoding: "utf-8",
+      env: { ...process.env, ...env },
+    });
+    const stdout = res.stdout ?? "";
+    return { status: res.status ?? -1, out: `${stdout}${res.stderr ?? ""}`, stdout };
+  }
+
+  test("an unknown flag is named as one, with the options the subcommand takes, before the split-quote cause", () => {
+    const r = log(["answer", "--stage", "feasibility", "--answer", "yes please"], proj());
+    expect(r.status).toBe(1);
+    const message = refusal(r);
+    expect(message).toMatch(/^Cannot record this answer: "--answer" is not an option of log answer\. It takes --[a-z-]+(, --[a-z-]+)*\. /);
+    expect(message).toContain("--details");
+    expect(message).toContain(`If "--answer" is part of a value that a bare double quote split: ${howToPass("--details", RUN_TODO)}`);
+    expect(message).not.toContain("so it is probably part of a value");
+  });
+
+  test("the construction-policy decision resolves the invoking session when --session is not passed", () => {
+    const p = proj();
+    const args = [
+      "decision", "--stage", "code-generation", "--checkpoint", "construction-policy",
+      "--field", "Construction Checkpoints", "--value", "disabled",
+      "--decision", "Turn checkpoints off?", "--options", "Approve,Request Changes",
+    ];
+    const resolved = logWith(args, p, { AIDLC_SESSION_OVERRIDE: "policy-session-1", AIDLC_SESSION_OVERRIDE_SOURCE: "payload" });
+    expect(resolved.status, resolved.out).toBe(0);
+    expect(resolved.stdout).toContain('"emitted":"DECISION_RECORDED"');
+    expect(readAllAuditShards(p)).toContain("**Session**: policy-session-1");
+    // No session anywhere: the refusal names the way, not an environment hunt.
+    const none = logWith(args, proj(), { AIDLC_SESSION_OVERRIDE: "", AIDLC_SESSION_OVERRIDE_SOURCE: "", CODEX_THREAD_ID: "" });
+    expect(none.status).toBe(1);
+    expect(refusal(none)).toContain("Could not tell which session this is. Run the command again with --session set to the Runtime Session");
   });
 });
