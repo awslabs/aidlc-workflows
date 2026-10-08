@@ -453,6 +453,31 @@ describe("t238 build-binaries release builder", () => {
       else expect(afterConfig).toBe(stateAfterSet);
     }
 
+    // A repository's own `.env` and `bunfig.toml` stay the repository's: the
+    // engine neither loads the one into its environment nor runs the other's
+    // preload, whatever folder a command runs in. A shell-set value still wins
+    // (the `--show` source then reads `env`), so this probes the file only.
+    const preloadMarker = join(configProject, "preload-ran");
+    writeFileSync(join(configProject, ".env"), "AWS_AIDLC_DEFAULT_SCOPE=workshop\n");
+    writeFileSync(
+      join(configProject, "preload.ts"),
+      `require("node:fs").writeFileSync(${JSON.stringify(preloadMarker)}, "");\n`,
+    );
+    writeFileSync(join(configProject, "bunfig.toml"), 'preload = ["./preload.ts"]\n');
+    const inClone = spawnSync(native.artifact, ["config", "flags", "--show", "--json"], {
+      cwd: configProject,
+      encoding: "utf-8",
+      timeout: 30_000,
+      env: { ...process.env, AIDLC_INSTALL_ROOT: join(root, "typed-config-install") },
+    });
+    const cloneCaptured = `${inClone.stdout ?? ""}${inClone.stderr ?? ""}`;
+    expect(inClone.error, cloneCaptured).toBeUndefined();
+    expect(inClone.status, cloneCaptured).toBe(0);
+    const shown = JSON.parse(inClone.stdout ?? "") as { data: { sources: Record<string, string> } };
+    expect(shown.data.sources.AWS_AIDLC_DEFAULT_SCOPE, cloneCaptured).toBe("shipped default");
+    expect(existsSync(preloadMarker), "the repository's bunfig preload ran inside the engine").toBe(false);
+    for (const name of [".env", "preload.ts", "bunfig.toml"]) rmSync(join(configProject, name), { force: true });
+
     const doctor = spawnSync(native.artifact, ["doctor"], {
       cwd: tempDirectory("rerun"),
       encoding: "utf-8",

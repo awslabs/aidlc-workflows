@@ -54,6 +54,10 @@ import {
   readPlanApprovalViolation,
   workspaceSourceState,
   writeSessionIntentUuid,
+  ANSWER_TEXT_DIR,
+  composerProposalPath,
+  docsRoot,
+  memoryFilePath,
 } from "../../core/tools/aidlc-lib.ts";
 import {
   approvalFingerprint,
@@ -677,21 +681,23 @@ describe("t218 Kiro IDE hook adapter (USER_PROMPT env context)", () => {
   });
 
   for (const tool of ["execute_bash", "execute_pwsh", "shell"]) {
-    // Both audit-tail hooks run in the one after-shell card (#2022).
-    test(`registered PostToolUse hooks dispatch audit-tail updates for ${tool}`, () => {
+    // Both audit-tail hooks run after a shell call, at the start of the next
+    // card (catch-up); the guard card that lets the call through notes it.
+    test(`a ${tool} call the guard card lets through brings the audit-tail updates at the next card`, () => {
       const dir = scratchProject(true);
       try {
         const registration = JSON.parse(
-          readFileSync(join(dir, ".kiro", "hooks", "aidlc-after-shell.json"), "utf-8"),
+          readFileSync(join(dir, ".kiro", "hooks", "aidlc-guard-tool-call.json"), "utf-8"),
         ) as { hooks: Array<{ trigger: string; matcher: string }> };
-        const hook = registration.hooks.find((candidate) =>
-          candidate.trigger === "PostToolUse" &&
-          new RegExp(`^(?:${candidate.matcher})$`).test(tool)
-        );
-        expect(hook, `after-shell must receive ${tool} events`).toBeDefined();
-        expect(new RegExp(`^(?:${hook?.matcher})$`).test("fs_write")).toBe(false);
+        expect(registration.hooks[0].trigger).toBe("PreToolUse");
+        expect(new RegExp(registration.hooks[0].matcher).test(tool), `the guard card must see ${tool}`).toBe(true);
+        expect(existsSync(join(dir, ".kiro", "hooks", "aidlc-after-shell.json"))).toBe(false);
         appendStageStarted(dir, "user-stories", "2026-06-30T10:00:00.000Z");
-        const result = runIdeStdin(dir, "after-shell", ctx1x(tool, "Output:\nok\n\nExit Code: 0"));
+        const call = (tool_name: string, tool_input: Record<string, unknown>) =>
+          JSON.stringify({ hook_event_name: "PreToolUse", cwd: dir, session_id: "sess_t218", tool_name, tool_input });
+        const shell = runIdeStdin(dir, "guard-tool-call", call(tool, { command: "echo ok", cwd: dir }));
+        expect(shell.code, shell.stderr).toBe(0);
+        const result = runIdeStdin(dir, "guard-tool-call", call("fs_write", { path: join(dir, "README.md"), text: "x" }));
         expect(result.code, result.stderr).toBe(0);
         expect(readFileSync(seededStateFile(dir), "utf-8")).toMatch(
           /\*\*Current Stage\*\*:\s*user-stories/,
@@ -3210,9 +3216,11 @@ describe("t218 Kiro IDE plan-approval enforcement", () => {
         hooks?: Array<{ trigger?: string; action?: { command?: string } }>;
       };
       expect(registration.hooks?.[0]?.trigger).toBe("UserPromptSubmit");
+      // The one message card runs record-human-turn (KIRO_HOOK_GROUPS).
       expect(registration.hooks?.[0]?.action?.command).toContain(
-        "engine adapter kiro-ide record-human-turn",
+        "engine adapter kiro-ide person-message",
       );
+      expect(KIRO_HOOK_GROUPS["person-message"].map((member) => member.target)).toContain("record-human-turn");
       initGitWorkspace(dir);
       seedCodeGenerationDirective(dir);
       const choices = seedLegacyDirectiveChoices(dir);
@@ -3330,6 +3338,47 @@ describe("t218 Kiro IDE plan-approval enforcement", () => {
       expect(readAudit(dir)).not.toContain(
         "**Event**: PLAN_APPROVAL_RECORDED",
       );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  // A record write the shared guard admits while a Unit's plan waits (the
+  // stage's learnings diary, the composer's proposal, a person's answer text)
+  // reaches PostToolUse with no arguments on Kiro IDE, so the adapter judges it
+  // from the result prose alone. None of them is a planning authority file: the
+  // write poisons nothing, and the person's approval builds.
+  test.each([
+    ["the stage learnings diary", (dir: string) => memoryFilePath(dir, "construction", "code-generation")],
+    ["the composer's proposal", (dir: string) => composerProposalPath(dir)],
+    ["a person's answer text", (dir: string) => join(docsRoot(dir), ANSWER_TEXT_DIR, "answer.md")],
+  ])("a write of %s during a Unit's plan wait does not poison Approve Plan", (_label, target) => {
+    const dir = scratchProject(true);
+    try {
+      initGitWorkspace(dir);
+      seedCodeGenerationDirective(dir, "u1");
+      const choices = seedLegacyDirectiveChoices(dir, {}, "u1");
+      expect(runIde(dir, "session-start", null).code).toBe(0);
+      const questions = seedStageLevelPlanApproval(dir, { unit: "u1" });
+      const file = target(dir);
+      mkdirSync(dirname(file), { recursive: true });
+      // PreToolUse names the path: the shared guard admits the write.
+      const admitted = runIde(dir, "plan-approval-guard", JSON.stringify({ toolName: "fs_write", toolArgs: { path: file } }));
+      expect(admitted.code, admitted.stderr).toBe(0);
+      writeFileSync(file, "- 2026-10-08: the first entry\n", "utf-8");
+      // PostToolUse carries no arguments; the path is the result prose.
+      expect(runIde(dir, "audit-and-sensors", ctx("fs_write", `Created the ${relative(dir, file)} file.`)).code).toBe(0);
+      expect(readPlanApprovalViolation(dir)).toBeNull();
+      // The person approves the plan.
+      expect(runIde(dir, "audit-and-sensors", ctx("fs_write", `Created the ${relative(dir, questions)} file.`)).code).toBe(0);
+      expect(runIde(dir, "record-human-turn", JSON.stringify({ prompt: choices.approve })).code).toBe(0);
+      writeFileSync(questions, readFileSync(questions, "utf-8").replace("[Answer]:", "[Answer]: Approve Plan"));
+      const approved = runIde(dir, "audit-and-sensors", ctx("fs_write", `Created the ${relative(dir, questions)} file.`));
+      expect(approved.code, approved.stderr).toBe(0);
+      expect(evaluateCodeGenerationApproval(dir, { unit: "u1" })).toMatchObject({ ok: true });
+      // The first build write runs.
+      const build = runIde(dir, "plan-approval-guard", JSON.stringify({ toolName: "fs_write", toolArgs: { path: join(dir, "src", "built.ts") } }));
+      expect(build.code, build.stderr).toBe(0);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -6177,8 +6226,8 @@ describe("t218 enforce-approval-gate refusal names doctor's trust step", () => {
   // The state tool's refusal for a reply that was not recorded says what
   // happened, not to ask again, and the step doctor names for the tool the
   // person is in, word for word, with nothing about how AI-DLC works. Inside
-  // Kiro IDE (VSCODE_IPC_HOOK or VSCODE_PID, the adapter's signal) that is its
-  // step alone; Kiro CLI and an ACP client, which nothing tells apart, get
+  // Kiro IDE (TERM_PROGRAM=kiro on the agent's own commands, VSCODE_IPC_HOOK or
+  // VSCODE_PID on its hooks) that is its step alone; Kiro CLI and an ACP client, which nothing tells apart, get
   // their own two lines and never Kiro IDE's.
   test("the missed-reply line gives the person's own tool's step, not how AI-DLC works", () => {
     const activation = (JSON.parse(readFileSync(join(KIRO_IDE_TREE, "tools", "data", "harness.json"), "utf-8")) as {
@@ -6190,7 +6239,7 @@ describe("t218 enforce-approval-gate refusal names doctor's trust step", () => {
     const said = "Your answer was not recorded, so you don't need to answer again.";
     const lead = "If the person already replied, that reply was not recorded. Do not ask them to answer again. ";
     expect(activation.missedReplyInHost).toEqual({
-      env: ["VSCODE_IPC_HOOK", "VSCODE_PID"],
+      env: ["TERM_PROGRAM=kiro", "VSCODE_IPC_HOOK", "VSCODE_PID"],
       text: `${lead}Tell them exactly this, with nothing about why: "${said} ${ideStep}"`,
     });
     expect(activation.missedReply).toBe(
@@ -6202,6 +6251,21 @@ describe("t218 enforce-approval-gate refusal names doctor's trust step", () => {
     for (const text of [activation.missedReply, activation.missedReplyInHost.text]) {
       for (const machinery of ["hook", "human turn"]) expect(text).not.toContain(machinery);
     }
+  });
+
+  // The hooks-off step is told apart by the same signal: an agent given both
+  // lines in Kiro IDE showed the Kiro CLI one (live on Kiro IDE 1.2.37, #2167).
+  test("the hooks-off step gives Kiro IDE its own line, by the same signal as the missed-reply line", () => {
+    const activation = (JSON.parse(readFileSync(join(KIRO_IDE_TREE, "tools", "data", "harness.json"), "utf-8")) as {
+      hookActivation: { recovery: string; agentStep: string; agentStepInHost: { env: string[]; text: string };
+        missedReplyInHost: { env: string[] } };
+    }).hookActivation;
+    const split = activation.recovery.indexOf(" In Kiro CLI,");
+    expect(activation.agentStepInHost.env).toEqual(activation.missedReplyInHost.env);
+    expect(activation.agentStepInHost.text).toContain(`Show the person this line: "${activation.recovery.slice(0, split)}"`);
+    expect(activation.agentStepInHost.text).not.toContain("Kiro CLI");
+    expect(activation.agentStep).toContain(`Show the person this line: "${activation.recovery.slice(split + 1)}"`);
+    expect(activation.agentStep).not.toContain("Reload Window");
   });
 
   // Measured on Kiro IDE: trusting the folder from the Restricted Mode banner
@@ -6842,6 +6906,77 @@ describe("t218 execute_pwsh aidlc values that cmd.exe would split", () => {
 // RISKY_SHELL_FORMS), so terminal-command-guard refuses a lone one before the
 // command runs, on every shell tool. A delegated call carries no agent
 // identity, and the check reads none, so a persona's call is held the same way.
+// An agent once sent every AI-DLC reply to a .tmp file in the project root and
+// read it back (#2167): 27 files, each step paid for twice. Measured live on Kiro
+// IDE 1.2.37: the command result holds the whole reply (20,000-character steps
+// came back whole in Command Prompt and in PowerShell), so the guard stops the
+// capture before it runs and the agent runs the same command on its own. The
+// person sees nothing new. A reader pipe, a stderr redirect and any other
+// program's redirect pass.
+describe("t218 terminal-command-guard stops an AI-DLC command whose reply goes to a file", () => {
+  const REFUSAL =
+    "AIDLC stopped this command before it ran: it sends AI-DLC's reply to a file. Run the same AI-DLC command " +
+    "again on its own, with nothing after it that writes to a file, and read the reply from the command's " +
+    "result: it comes back whole.\n";
+  const guard = (dir: string, tool: string, command: string) =>
+    runIdeStdin(dir, "terminal-command-guard", JSON.stringify({
+      session_id: "sess_capture_conductor",
+      hook_event_name: "PreToolUse",
+      cwd: dir,
+      tool_name: tool,
+      tool_input: { command, cwd: dir, run_in_background: false, timeout: null },
+    }));
+
+  test("a redirect or a file-writing pipe after an AI-DLC command, on every Kiro shell tool", () => {
+    const dir = scratchProject(false);
+    try {
+      for (const tool of ["execute_pwsh", "execute_bash", "shell"]) {
+        for (const command of [
+          "aidlc engine orchestrate next > output.tmp",
+          "aidlc engine orchestrate report --stage delivery-planning --result awaiting-approval >> dp-gate.tmp",
+          "aidlc engine log review --stage domain-design --reviewer aidlc-architecture-reviewer-agent 1> dd-review-req.tmp",
+          "aidlc engine orchestrate next *> all.tmp",
+          "aidlc engine orchestrate next | Out-File -Encoding utf8 next.tmp",
+          "aidlc engine orchestrate next | Set-Content next.tmp",
+          "aidlc engine orchestrate next | tee next.tmp",
+          "bun .kiro/tools/aidlc.ts engine orchestrate next > next.tmp",
+          "C:\\Users\\dev\\AppData\\Local\\aidlc\\bin\\aidlc.cmd engine orchestrate next >next.tmp",
+          "cd C:\\work\\app && aidlc engine orchestrate next > next.tmp",
+          "aidlc engine orchestrate next > next.tmp; Get-Content next.tmp",
+        ]) {
+          const r = guard(dir, tool, command);
+          expect(r.code, `${tool} ${JSON.stringify(command)}`).toBe(2);
+          expect(r.stderr).toBe(REFUSAL);
+        }
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("the bare command, a reader pipe, a stderr redirect, a quoted > and other programs pass", () => {
+    const dir = scratchProject(false);
+    try {
+      for (const tool of ["execute_pwsh", "execute_bash", "shell"]) {
+        for (const command of [
+          "aidlc engine orchestrate next",
+          "aidlc engine orchestrate next 2>&1",
+          "aidlc engine orchestrate next 2>$null",
+          "aidlc engine orchestrate next | ConvertFrom-Json",
+          "aidlc engine log decision --stage x --decision 'keep a > b as written'",
+          "npm test > test.log",
+          "echo done > notes.txt",
+        ]) {
+          const r = guard(dir, tool, command);
+          expect(r.stderr, `${tool} ${JSON.stringify(command)}`).not.toContain("sends AI-DLC's reply to a file");
+        }
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
 describe("t218 terminal-command-guard holds a command with a lone carriage return on every agent", () => {
   const REFUSAL =
     "AIDLC stopped this command before it ran. It holds a carriage return: put the whole command on one line and run it again.\n";

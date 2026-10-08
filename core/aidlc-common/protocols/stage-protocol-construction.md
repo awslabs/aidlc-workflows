@@ -300,6 +300,13 @@ so pass no session and never look one up:
 {{INVOKE}} engine bolt checkpoint --action ask --unit "<unit>" --kind <unit|skeleton>
 ```
 
+When `ask` returns `earlier_reply`, the person already answered in this chat
+while the Unit's review ran: those are their words, kept as this question's
+reply. Do not show the question; read their words and run `approve` or `reject`
+as they chose, with their words as `--user-input`. When their words answer
+nothing (a question of theirs, talk about something else), present the question
+as below and wait; their reply counts together with those words.
+
 Then present the choices and wait for the human. Show the complete recorded
 command, never abbreviated, in the approval question: "Verified with
 `<full command>` (exit 0). Approve this completed <unit>?" Use the full

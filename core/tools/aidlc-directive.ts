@@ -282,6 +282,12 @@ export interface RunStageDirective {
     human_completion_required: boolean;
     completion_only: boolean;
   };
+  /**
+   * AUTONOMY_CHOICE, only on a step whose `construction_policy.offer_autonomy`
+   * is true: the one question to put to the person, and the setter that records
+   * their answer.
+   */
+  construction_policy_note?: string;
   construction_checkpoint?: {
     kind: "unit" | "skeleton";
     unit: string;
@@ -855,6 +861,7 @@ const RUN_STAGE_FIELDS = [
   "protocol_note",
   "unit_gate",
   "construction_policy",
+  "construction_policy_note",
   "construction_checkpoint",
   "swarm_checkpoint",
   "artifact_reuse",
@@ -1066,6 +1073,32 @@ export function unitStepNote(invocation: string): string {
     `work for this stage is done, run \`${invocation} next\` and follow the step it returns.`;
 }
 
+/**
+ * The Construction autonomy choice, as a step. A live Kiro IDE run with no skill
+ * loaded never put it to the person, so they were never asked how to carry on.
+ * The question and the two choices are the protocol's own
+ * (stage-protocol-construction.md, "Autonomy choice"), and only the setter
+ * records the answer: `log decision` would record words with no grant.
+ */
+export function autonomyChoiceNote(boltInvocation: string): string {
+  return 'Before this step\'s work, put one question to the person: "How should I continue building the remaining ' +
+    'work?", with the choices "Continue automatically" (through the ordinary completion checkpoints; plans, enabled ' +
+    'summaries, the verification command and failures still come to them) and "Review each checkpoint" (they approve ' +
+    `each one). It is theirs to answer: never answer it yourself and never infer it from silence. Record what they ` +
+    `say with \`${boltInvocation} set-autonomy --mode <autonomous|gated>\` (Continue automatically is autonomous, ` +
+    "Review each checkpoint is gated), then run `next` again for the policy that now applies.";
+}
+
+/**
+ * Who writes a review, as a step. In the same run the agent wrote the
+ * reviewer's file itself and recorded READY, so the person got a review their
+ * reviewer never wrote.
+ */
+export function reviewRequestNote(reviewer: string, reviewFile: string, recordVerdict: string): string {
+  return `Dispatch ${reviewer} as a subagent and have it write ${reviewFile}: that file is the reviewer's, so never ` +
+    `write it yourself and never stand in for it. When its verdict is back, record it with \`${recordVerdict}\`.`;
+}
+
 // The notes for one emitted directive. `invocation` is how this install runs
 // the orchestrate tool. A rules part carries none: its run-stage repeats the
 // advisory and the notices, and they are said from there, once.
@@ -1073,6 +1106,7 @@ export function withAgentNotes<T extends object>(
   directive: T,
   invocation: string,
   logInvocation = invocation.replace(/aidlc-orchestrate\.ts$/, "aidlc-log.ts").replace(/ orchestrate$/, " log"),
+  boltInvocation = invocation.replace(/aidlc-orchestrate\.ts$/, "aidlc-bolt.ts").replace(/ orchestrate$/, " bolt"),
 ): T {
   const d = directive as Record<string, unknown>;
   if (d.kind === "load-steering") return directive;
@@ -1095,6 +1129,12 @@ export function withAgentNotes<T extends object>(
       : [];
     const note = protocolNote(d.stage_file, modules);
     if (note !== null) notes.protocol_note = note;
+  }
+  if (
+    d.kind === "run-stage" &&
+    (d.construction_policy as { offer_autonomy?: unknown } | undefined)?.offer_autonomy === true
+  ) {
+    notes.construction_policy_note = autonomyChoiceNote(boltInvocation);
   }
   if (d.kind === "run-stage") {
     if (d.gate === GATE_UNRESOLVED) {
@@ -1168,6 +1208,7 @@ export function validateDirective(obj: unknown): ValidationResult {
   checkAgentNote(o, "question_note", true, kind, errors);
   checkAgentNote(o, "gate_note", true, kind, errors);
   checkAgentNote(o, "protocol_note", true, kind, errors);
+  checkAgentNote(o, "construction_policy_note", true, kind, errors);
 
   // Rule 4-6: per-kind required-field presence + type checks, with specific,
   // kind-aware messages.

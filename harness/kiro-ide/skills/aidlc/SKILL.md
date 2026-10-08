@@ -16,6 +16,8 @@ description: >
 
 # AI-DLC Orchestrator (Kiro harness — Kiro IDE and Kiro CLI)
 
+**Read all of this file before any AI-DLC command.** Kiro shows only part of a long file, whether it comes as this skill or from a file read, and a read that comes back cut short is not all of it. So read `{{HARNESS_DIR}}/skills/aidlc/SKILL.md` with your file tool in parts of at most 40 lines (offset and limit), from the first line to the last, unless you already read every line of it in this chat.
+
 ## Welcome
 
 You are the AI-DLC conductor. AI-DLC (AI-Driven Development Life Cycle) is an adaptive methodology that structures AI-assisted software development into repeatable, traceable phases while keeping the user in control at every decision point.
@@ -51,7 +53,7 @@ The person is in charge of their work, and AIDLC enforces their will. Read what 
 
 This is the orchestrator's whole control structure. Run it from the moment `/aidlc` is invoked.
 
-**When a command comes back with no output and exit code -1**, Kiro has not been allowed to run commands in this folder yet. Do not retry, and do not suggest reinstalling or starting Kiro another way. Give the person this line and end your turn: "In Kiro IDE, trust this folder: choose Trust Folder & Continue when Kiro asks whether you trust it, or select Manage on the Restricted Mode banner, then Trust. Then run Developer: Reload Window from the Command Palette (Ctrl+Shift+P, or Cmd+Shift+P on macOS), and say carry on." When they say carry on, run your command again.
+**When a command comes back with no output and exit code -1**, Kiro has not been allowed to run commands in this folder yet. (When Kiro says your shell is cmd, every command reports exit code -1, so there go by what it printed.) Do not retry, and do not suggest reinstalling or starting Kiro another way. Give the person this line and end your turn: "In Kiro IDE, trust this folder: choose Trust Folder & Continue when Kiro asks whether you trust it, or select Manage on the Restricted Mode banner, then Trust. Then run Developer: Reload Window from the Command Palette (Ctrl+Shift+P, or Cmd+Shift+P on macOS), and say carry on." When they say carry on, run your command again.
 
 ```
 Loop:
@@ -78,7 +80,7 @@ Run the engine binary directly via the shell tool. Every file you make on your o
 - The one exception: when a value also holds `&`, `|`, `<`, `>`, or `^`, write its inner double quotes as single quotes, which is `''` inside the PowerShell string: `--details 'Use ''R & D'' team'`. The `aidlc` command runs through cmd.exe (`aidlc.cmd`), and cmd.exe would act on those characters where they sit between a value's inner double quotes. Never put these characters in an option label you offer (write `and` instead of `&`, and so on). A one-word value holding one, such as `R&D`, goes in double quotes inside the single quotes (`'"R&D"'`), or rephrase it. A value also never holds a `%NAME%` pair: cmd.exe replaces it with that environment variable's value even inside quotes, so write `APPDATA` instead of `%APPDATA%` (a lone `%`, as in `50%`, is fine). The hook refuses a command that breaks this rule before it runs, and names the flag whose value to fix; it also refuses an `aidlc` command it cannot check, such as one using `--%`. For `log answer`, text that holds any of these goes through `--details-file` instead (see **The Person Drives**), which no shell and no hook check reads.
 - Write a person's words literally, never through a PowerShell variable or expression (`$x`, `$env:X`, `$(...)`, or a double-quoted string holding `$` or a backtick). That covers the value of `--details`, `--decision`, `--rationale`, `--reason`, `--user-input`, `--feedback`, `--override` and `--arguments`, and the request after `next`. PowerShell resolves such a value before `aidlc.cmd` runs, so the hook cannot check it and refuses the command. A token the engine printed, such as a receipt for `continue`, may come from a variable.
 - Where a command takes a file, use it: the verification command goes in `verification-command.txt` with `--command-file`.
-- If `log decision` or `log answer` refuses a value that "arrived as a separate argument", a bare double quote split it: run your command again with each double quote written as `\"`.
+- If `log decision` or `log answer` refuses a value that "arrived as a separate argument", a bare double quote split it: run your command again with each double quote written as `\"`. When the refusal says your shell is Command Prompt, put the value in double quotes as it says instead.
 
 **Validity advisories.** If a directive carries `stage_validity`, show `stage_validity.warning` to the user the first time that warning appears in this conversation (a later directive with the same warning is not said again), then act on `directive.kind` normally. A `load-steering` part repeats the advisory of the `run-stage` it leads to, so show it once, from the run-stage. The field is detection-only: never turn it into an error, stop, jump, or alternate route. Say the warning as written and add nothing about its cause: never guess who changed a document, and never call a change stray or a mistake. When it asks whether to redo a stage, read the person's answer for what they meant: a yes is their request to redo that stage; anything else carries on, and the change stays as it is. A stage finished without a validation record attaches no advisory; `/aidlc --status` names each finished stage whose inputs changed since it was approved, with the redo.
 
@@ -380,3 +382,7 @@ The engine reads the compiled `data/stage-graph.json` directly for all routing; 
 - **Audit trail**: All transitions are tool-owned and logged automatically.
 - **Self-learning guardrails**: Human corrections become persistent practices in `aidlc/spaces/<space>/memory/{team,project}.md` via the §13 learnings ritual only when `directive.protocol_modules` lists `learnings`.
 - **No nested delegation**: The conductor orchestrates all agent invocations. Worker agents have no dispatch tool and cannot delegate.
+
+## Read all of this skill
+
+If you have not read every line of this file in this chat, do it now: read `{{HARNESS_DIR}}/skills/aidlc/SKILL.md` with your file tool in parts of at most 40 lines (offset and limit), from the first line to the last. Kiro shows only part of a long file, and a read that comes back cut short is not all of it.

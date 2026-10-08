@@ -414,7 +414,7 @@ them so agents can cite them instead of guessing.
 
 | Command | What it does |
 |---|---|
-| `/aidlc knowledge onboard [path]` | Index one file, or every not-yet-indexed file under `documents/` when no path is given |
+| `/aidlc knowledge onboard [path]` | Add one file or folder from anywhere in your project (one outside `documents/` is copied in first, and the result says where), or sweep every not-yet-indexed file under `documents/` when no path is given |
 | `/aidlc knowledge sync` | Reconcile the catalog with what is on disk; rebuild an index that was deleted |
 | `/aidlc knowledge list [--json]` | The catalog — every document with its state |
 | `/aidlc knowledge show <id>` | One document's full record plus its extracted text |
@@ -1749,8 +1749,16 @@ An answer whose text holds a character a shell acts on (`$`, a backtick, a quote
 a file instead of the command line: the agent writes it to
 `<record>/.aidlc-engine/answer-text/answer.txt` and passes `--details-file
 .aidlc-engine/answer-text/answer.txt` (`--on-instruction-file` for the words that
-left a choice to the agent). The engine reads only that folder, through no link,
+left a choice to the agent). The same file named from the project folder, or by
+its full path, is read too. The engine reads only that folder, through no link,
 up to 64 KiB, and removes the file once read.
+
+`log decision --message <id>` and `log answer --message <id>` name the person's
+message that answered a question the agent logged after the reply arrived. The
+engine proves the record exists, came through this chat, and is not spent by a
+later approval or decision, and reads none of its words; the answer is recorded
+and the person is not asked again. A refused answer names the id when such a
+message exists. The id is engine-to-agent text and is never shown to the person.
 See [Hooks and Tools](../reference/06-hooks-and-tools.md#read-only-audit-commands) for pairing rules, ordering, and filters.
 
 ### `aidlc engine bolt set-autonomy` - change Construction approvals
@@ -1992,6 +2000,13 @@ tell which session this is:
 ```bash
 aidlc engine bolt checkpoint --action ask --unit "<unit>" --kind <unit|skeleton>
 ```
+
+When `ask` returns `earlier_reply`, the person already answered in that session
+while the Unit's review ran: their words typed after the review was asked for
+and before any other question was asked (such as the learnings question) are
+this question's reply.
+Read them and run the action they chose, with no question shown; when they
+answer nothing, present the question and wait as below.
 
 Wait for the human's **Approve** / **Request Changes** reply in that
 session, to this checkpoint question. It authorizes only the matching action;
@@ -2642,7 +2657,7 @@ A name is lowercase letters, digits, and single hyphens, starting with a letter,
 
 ### `aidlc-graph ars` - deterministic ARS scoring
 
-`bun .claude/tools/aidlc-graph.ts ars --iae <s> --csu <s> --ve <s> --r <s> --ua <s> [--completed <csv>] [--project-type <t>]` computes the adaptive composer's Autonomy Risk Score arithmetic: the weighted composite with its band label, the LOW/MED/HIGH component bands, the per-stage expected-value screen against the shipped cost priors, the nearest stock scopes by grid diff count, and the two gate tables pre-rendered as markdown. Every constant - weights, band boundaries, stage cost priors, EV thresholds - is read from `tools/data/ars-priors.json`, so the same five scores always render the same numbers; the composer scores the components from evidence and copies this output instead of doing the multiplication. `--completed` (comma-separated slugs) keeps stages that already ran EXECUTE in the derived grid; `--project-type brownfield|greenfield` screens out stages whose compiled `condition:` restricts them to the other kind of project (today Reverse Engineering, brownfield-only). The JSON result lands on stdout; exit 1 on an out-of-range score, an unknown stage slug, or a priors-schema violation - never a silent fallback. The composite is an ADVISORY index for the human at the gate: nothing deterministic routes on it.
+`bun .claude/tools/aidlc-graph.ts ars --iae <s> --csu <s> --ve <s> --r <s> --ua <s> [--completed <csv>] [--project-type <t>]` computes the adaptive composer's Autonomy Risk Score arithmetic: the weighted composite with its band label, the LOW/MED/HIGH component bands, the per-stage expected-value screen against the shipped cost priors, the nearest stock scopes by grid diff count, and the two gate tables pre-rendered as markdown. Every constant - weights, band boundaries, stage cost priors, EV thresholds - is read from `tools/data/ars-priors.json`, so the same five scores always render the same numbers; the composer scores the components from evidence and copies this output instead of doing the multiplication. A plugin stage, which the file does not name, is screened from its own `ars:` frontmatter block (the file wins when both exist) or lands as a `no-prior` row; each row's `priorSource` says which (`shipped`, `stage` or `null`). `--completed` (comma-separated slugs) keeps stages that already ran EXECUTE in the derived grid; `--project-type brownfield|greenfield` screens out stages whose compiled `condition:` restricts them to the other kind of project (today Reverse Engineering, brownfield-only). The JSON result lands on stdout; exit 1 on an out-of-range score, an unknown stage slug, or a priors-schema violation - never a silent fallback. The composite is an ADVISORY index for the human at the gate: nothing deterministic routes on it.
 
 ```bash
 bun .claude/tools/aidlc-graph.ts ars --iae 0.55 --csu 0.75 --ve 0.65 --r 0.50 --ua 0.55
@@ -2758,6 +2773,11 @@ All three are read-only — no stage advance, no audit emit — and source every
 ---
 
 ## Environment Variables
+
+AI-DLC reads every variable below from the environment the host tool runs it in: your shell, the host's own
+settings (such as the `.claude/settings.json` `env` block), or the values the engine passes to its own child
+processes. A project's `.env` files are not an AI-DLC setting: the installed engine never reads them, so a
+repository you clone cannot change how AI-DLC behaves by shipping one.
 
 ### `AWS_AIDLC_DEFAULT_SCOPE`
 

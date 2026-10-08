@@ -196,6 +196,18 @@ import {
   type KiroWorkflowsAnswer,
 } from "./aidlc-kiro-ide-workflows.ts";
 import {
+  KIRO_TERMINAL_ISSUE_ID,
+  KIRO_TERMINAL_QUESTION,
+  kiroTerminalKeptLine,
+  kiroTerminalQuestionDue,
+  kiroTerminalSetLine,
+  readKiroIdeTerminal,
+  readKiroTerminalAnswer,
+  recordKiroTerminalAnswer,
+  setKiroIdeTerminalPowerShell,
+  type KiroTerminalAnswer,
+} from "./aidlc-kiro-ide-terminal.ts";
+import {
   activeModelGroups,
   applyModelPolicyToProjection,
   HARNESS_HONESTY,
@@ -216,6 +228,7 @@ import {
   sessionModelsDetail,
   sessionSetsAgentModels,
   type AgentTiers,
+  type ModelAgentPolicy,
   type ModelEffort,
   type ModelGroup,
   type ModelHarness,
@@ -417,6 +430,7 @@ type SettingsMutation = {
 const CONFIG_VALUE_FLAGS = new Set([
   "--agent",
   "--kiro-workflows",
+  "--kiro-terminal",
   "--ca-bundle",
   "--channel",
   "--deciding-effort",
@@ -486,6 +500,7 @@ const CHOICE_BARE_FLAGS = new Set([
 const DIAGNOSTIC_VALUE_FLAGS = new Set([
   "--harness",
   "--kiro-workflows",
+  "--kiro-terminal",
   "--mark-done",
   "--opencode-default",
   "--plan-token",
@@ -1008,6 +1023,7 @@ function modelPolicyHelp(): string {
     "  --reviewing-effort <low|medium|high|xhigh|max>",
     "  --writing-up-effort <low|medium|high|xhigh|max>",
     "  --agent <name> [--effort <value>] [--model <raw-id>]  (one or both)",
+    "  --agent <name> --effort default | --model default   remove that agent's own setting, so the preset or group applies again",
     "  --reset",
     "",
     heading("KIRO CLI", out),
@@ -1293,18 +1309,22 @@ function applyModelsFlags(
   }
   if (agent && !effort && !model) throw new Error("--agent requires --effort <value> or --model <raw-id>");
   if (!agent && (effort || model)) throw new Error("--effort and --model require --agent <name>");
-  if (effort && !isModelEffort(effort)) {
-    throw new Error(`--effort must be one of ${MODEL_EFFORTS.join(", ")}`);
+  if (effort && effort !== "default" && !isModelEffort(effort)) {
+    throw new Error(`--effort must be one of ${MODEL_EFFORTS.join(", ")}, or default to remove the agent's own effort`);
   }
   // A model alone leaves the agent's effort where it was, and an effort alone
-  // its model.
+  // its model. `default` removes that one setting of the agent's, so the
+  // preset or group applies to it again: the per-key way back from a change.
   if (agent && (effort || model)) {
     next.agents ??= {};
-    next.agents[agent] = {
-      ...(next.agents[agent] ?? {}),
-      ...(effort ? { effort: effort as ModelEffort } : {}),
-      ...(model ? { model } : {}),
-    };
+    const own: ModelAgentPolicy = { ...(next.agents[agent] ?? {}) };
+    if (effort === "default") delete own.effort;
+    else if (effort) own.effort = effort as ModelEffort;
+    if (model === "default") delete own.model;
+    else if (model) own.model = model;
+    if (Object.keys(own).length === 0) delete next.agents[agent];
+    else next.agents[agent] = own;
+    if (Object.keys(next.agents).length === 0) delete next.agents;
   }
   return modelPolicyIsEmpty(next) ? null : normalizeModelPolicy(next);
 }
@@ -1465,7 +1485,7 @@ function validateDiagnosticArgs(
         "--region",
       ])
     : section === "trust"
-    ? new Set(["--harness", "--kiro-workflows", "--plan-token", "--project-dir"])
+    ? new Set(["--harness", "--kiro-workflows", "--kiro-terminal", "--plan-token", "--project-dir"])
     : new Set(["--harness", "--plan-token", "--project-dir"]);
   const sectionBare = section === "runtime"
     ? new Set([...DIAGNOSTIC_BARE_FLAGS, "--record-paths"])
@@ -1494,7 +1514,7 @@ function validateDiagnosticArgs(
         "--region",
         "--reset",
       ]
-    : ["--acknowledge", "--kiro-workflows", "--reset"];
+    : ["--acknowledge", "--kiro-workflows", "--kiro-terminal", "--reset"];
   return validateConfigMutationModes(argv, section, mutationFlags);
 }
 
@@ -1537,6 +1557,7 @@ function diagnosticHelp(section: DiagnosticSection): string {
         heading("Trust answers:", out),
         "  --acknowledge",
         "  --kiro-workflows <on|off>   Kiro IDE: turn Kiro's Workflows feature on or off, a Kiro setting for all your projects (while it is on, AI-DLC's reviews and helpers do not run)",
+        "  --kiro-terminal powershell  Kiro IDE on Windows: set Kiro's default terminal to PowerShell, a Kiro setting for all your projects (in Command Prompt, AI-DLC's commands can split your words)",
         "",
         "Trust is read, verified, and instructed. This section never regenerates trust seeds or permission rules.",
         "On Copilot, the step says whether the Copilot CLI has trusted this folder and how to trust it with the CLI's own prompt; it never edits the CLI's config.",
@@ -1805,6 +1826,9 @@ function showDiagnosticSection(
     output += `  Allowlist reviewed: ${status.record?.reviewed === true ? "yes" : "not recorded"}\n`;
     if (status.kiroWorkflows?.settingsPath) {
       output += `  Kiro Workflows: ${status.kiroWorkflows.enabled ? "on" : "off"} (${status.kiroWorkflows.settingsPath})\n`;
+    }
+    if (status.kiroTerminal?.commandPrompt) {
+      output += `  Kiro terminal: Command Prompt (${status.kiroTerminal.settingsPath})\n`;
     }
     output += "  Trust and allowlist files:\n";
     output += compactHumanFileList(status.files, "trust", (file) => file);
@@ -2181,6 +2205,7 @@ function diagnosticWizard(
     return next;
   }
   if (selected.harness === "kiro-ide") askKiroWorkflows(projectDir);
+  if (selected.harness === "kiro-ide") askKiroTerminal(projectDir);
   // Codex's own hook trust comes first, so the review question below never
   // reads as that step.
   const codexStep = selected.harness === "codex"
@@ -2274,6 +2299,75 @@ function applyKiroWorkflowsAnswer(projectDir: string, off: boolean): string {
   }
   recordKiroWorkflowsAnswer("off");
   return kiroWorkflowsOffLine();
+}
+
+// Kiro IDE's default terminal is the person's Kiro setting for all their
+// projects, outside this project: set on its own, never inside the project's
+// transaction, and only when they ask for it. It only ever moves to PowerShell,
+// the shell AI-DLC's commands are written for and Kiro recommends.
+function kiroTerminalSwitch(
+  selected: ReturnType<typeof selectedDiagnosticHarness>,
+  argv: readonly string[],
+  options: ReturnType<typeof globalOptions>,
+): CommandResult {
+  const value = valueAfter([...argv], "--kiro-terminal");
+  if (value?.toLowerCase() !== "powershell") return usage("--kiro-terminal must be powershell", configCommand("trust --help"));
+  if (selected.harness !== "kiro-ide") {
+    return usage(`--kiro-terminal applies to Kiro IDE projects; this project is set up for ${selected.distribution}`);
+  }
+  const other = ["--acknowledge", "--reset", "--kiro-workflows"].find((flag) => argv.includes(flag));
+  if (other) return usage(`--kiro-terminal cannot be combined with ${other}`);
+  const state = readKiroIdeTerminal();
+  if (!state.settingsPath) return failure("Kiro IDE's settings are not in reach here", EXIT.failure);
+  const data = (answer: KiroTerminalAnswer | null) => ({
+    kiroTerminal: { commandPrompt: false, profile: "PowerShell", settingsPath: state.settingsPath, answer },
+  });
+  if (argv.includes("--dry-run")) {
+    return success(`would set Kiro's terminal to PowerShell in ${state.settingsPath}`, data(readKiroTerminalAnswer()));
+  }
+  if (!options.yes) {
+    if (!configInputIsTty()) {
+      return usage(
+        "non-interactive trust mutation requires --yes; --yes confirms but never chooses",
+        configMutationRerun("trust", [...argv]),
+      );
+    }
+    if (!promptYesDefault("  Set Kiro's terminal to PowerShell? It is a Kiro setting for all your projects.", true)) {
+      return success("Kiro's terminal left as it is");
+    }
+  }
+  try {
+    setKiroIdeTerminalPowerShell();
+  } catch (error) {
+    return failure(error instanceof Error ? error.message : String(error), EXIT.failure);
+  }
+  recordKiroTerminalAnswer("powershell");
+  return success(kiroTerminalSetLine(), data("powershell"));
+}
+
+// Asked once per machine while Kiro's terminal is Command Prompt and the person
+// never answered: yes sets PowerShell, no keeps it, and either way no chat or
+// setup asks again.
+function askKiroTerminal(projectDir: string): void {
+  if (!kiroTerminalQuestionDue()) return;
+  const set = promptYesDefault(`\n  ${KIRO_TERMINAL_QUESTION}`, true);
+  writeMenuText(`  ${applyKiroTerminalAnswer(projectDir, set)}\n\n`);
+}
+
+/** Record the person's answer and, on yes, set Kiro's terminal to PowerShell; the line to show them. */
+function applyKiroTerminalAnswer(projectDir: string, set: boolean): string {
+  const invoke = configInvocationFor(projectDir);
+  if (!set) {
+    recordKiroTerminalAnswer("kept");
+    return kiroTerminalKeptLine(invoke);
+  }
+  try {
+    setKiroIdeTerminalPowerShell();
+  } catch (error) {
+    return error instanceof Error ? error.message : String(error);
+  }
+  recordKiroTerminalAnswer("powershell");
+  return kiroTerminalSetLine();
 }
 
 // The Copilot trust step. Hooks in VS Code need a trusted folder and Chat: Use
@@ -2567,7 +2661,7 @@ function setupMapRows(
   // names them as the person's to check instead of reporting all trust as met.
   const copilot = modelHarness(distribution) === "copilot";
   const trustDetail = trust.length === 1 &&
-      (trust[0].id === "copilot-folder-untrusted" || trust[0].id === KIRO_WORKFLOWS_ISSUE_ID || trust[0].step)
+      (trust[0].id === "copilot-folder-untrusted" || trust[0].id === KIRO_WORKFLOWS_ISSUE_ID || trust[0].id === KIRO_TERMINAL_ISSUE_ID || trust[0].step)
     ? trust[0].message
     : trust.length > 0
     ? `${trust.length} host trust issue${trust.length === 1 ? "" : "s"}`
@@ -2901,7 +2995,7 @@ function prepareDiagnosticSection(
         "--region",
         "--reset",
       ]
-    : ["--acknowledge", "--kiro-workflows", "--reset"];
+    : ["--acknowledge", "--kiro-workflows", "--kiro-terminal", "--reset"];
   const hasMutationFlags = mutationFlags.some((flag) => argv.includes(flag));
   if (
     (argv.includes("--show") || argv.includes("--check")) &&
@@ -2934,6 +3028,10 @@ function prepareDiagnosticSection(
   }
   if (section === "trust" && argv.includes("--kiro-workflows")) {
     emitResult(kiroWorkflowsSwitch(selected, argv, options), options);
+    return null;
+  }
+  if (section === "trust" && argv.includes("--kiro-terminal")) {
+    emitResult(kiroTerminalSwitch(selected, argv, options), options);
     return null;
   }
   if (section === "providers" && harnessOwnsModelAccess(selected.harness) && !hasMutationFlags) {
@@ -4273,7 +4371,11 @@ function planProjectSettingsMutation(
   // the lookup at another one. A linked worktree's list is in the shared dir.
   const env = { ...process.env };
   for (const name of ["GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_INDEX_FILE"]) delete env[name];
-  const located = spawnSync("git", ["-C", projectDir, "rev-parse", "--git-common-dir"], {
+  // The repository's fsmonitor program stays out of a refresh (see the
+  // tracked-files check below).
+  const located = spawnSync("git", [
+    "-c", "core.fsmonitor=false", "-C", projectDir, "rev-parse", "--git-common-dir",
+  ], {
     encoding: "utf-8",
     env,
     timeout: 10_000,
@@ -7124,6 +7226,8 @@ type FirstRunChoices = {
   kiro?: FirstRunKiroSession | null;
   // Kiro IDE only, asked while its Workflows feature is on: true turns it off.
   kiroWorkflowsOff?: boolean;
+  // Kiro IDE on Windows only, asked while its terminal is Command Prompt: true sets PowerShell.
+  kiroTerminalPowerShell?: boolean;
 };
 
 type FirstRunKiroSession = {
@@ -8583,6 +8687,9 @@ async function runFirstRunWizard(projectDir: string): Promise<boolean> {
   if (choices.candidate.stamp.distribution === "kiro-ide" && kiroWorkflowsQuestionDue()) {
     choices.kiroWorkflowsOff = promptYesDefault(`\n  ${KIRO_WORKFLOWS_QUESTION}`, true);
   }
+  if (choices.candidate.stamp.distribution === "kiro-ide" && kiroTerminalQuestionDue()) {
+    choices.kiroTerminalPowerShell = promptYesDefault(`\n  ${KIRO_TERMINAL_QUESTION}`, true);
+  }
   const snapshot = snapshotFirstRunMutationPaths(projectDir, choices);
   let preserveSnapshot = false;
   try {
@@ -8595,6 +8702,10 @@ async function runFirstRunWizard(projectDir: string): Promise<boolean> {
     if (choices.kiroWorkflowsOff !== undefined) {
       process.stdout.write("\n");
       writeMenuRow("  ", applyKiroWorkflowsAnswer(projectDir, choices.kiroWorkflowsOff));
+    }
+    if (choices.kiroTerminalPowerShell !== undefined) {
+      process.stdout.write("\n");
+      writeMenuRow("  ", applyKiroTerminalAnswer(projectDir, choices.kiroTerminalPowerShell));
     }
     renderFirstRunEnding(projectDir, choices, kiroResult);
   } catch (error) {
@@ -10480,6 +10591,15 @@ const SHOWN_MODEL_ID = /^[A-Za-z0-9][A-Za-z0-9._:/@[\]+-]{0,199}$/;
  * Every setting a settings file records apart from bypasses, keyed by where it
  * lives. `args` is empty when no one command sets the value back by itself.
  */
+/** The `--agent <name> --effort default` (or `--model default --harness <h>`) that removes one agent key, from its leaf id. */
+function agentDefaultArgs(id: string): string[] | null {
+  const effort = /^models\.agents\.([^.]+)\.effort$/.exec(id);
+  if (effort) return ["--agent", effort[1], "--effort", "default"];
+  const model = /^models\.agents\.([^.]+)\.model\.([^.]+)$/.exec(id);
+  if (model) return ["--agent", model[1], "--model", "default", "--harness", model[2]];
+  return null;
+}
+
 function settingLeaves(file: AidlcSettingsFile | null): Map<string, SettingLeaf> {
   const leaves = new Map<string, SettingLeaf>();
   const flags = file?.flags;
@@ -10565,10 +10685,11 @@ function settingsChangeLines(
   };
   // `target` null: the no-layer form, which --clear-bypass reads as "every file
   // that records the switch"; it is the one way back every other line names.
+  // An undo that already names its harness (one agent's model) is not given it twice.
   const command = (section: "flags" | "models", args: string[], target: SettingsTarget | null): string =>
     `${configInvocationFor(projectDir)} config ${section} ${
       args.map((arg) => quoteCommandArgument(arg)).join(" ")
-    }${target === null ? "" : ` --${target}`} --yes${namedHarness(projectDir, harness)}${projectTarget(projectDir)}`;
+    }${target === null ? "" : ` --${target}`} --yes${args.includes("--harness") ? "" : namedHarness(projectDir, harness)}${projectTarget(projectDir)}`;
   const lines: string[] = [];
   for (const change of mutations) {
     const file = fileOf(change.target);
@@ -10593,10 +10714,14 @@ function settingsChangeLines(
       if (ids.length === 0) continue;
       // --reset removes the whole section, so it is the undo only when the
       // file had none of it before (saved profiles included) and, for flags,
-      // it would not also clear a bypass.
+      // it would not also clear a bypass. Never for one agent's key: run later,
+      // it would take every model setting recorded since; `default` removes
+      // that one key instead.
       const before = change.previous?.[section];
       const sectionWasEmpty = !before || Object.keys(before).every((key) => key === "schemaVersion");
-      const resetUndoes = sectionWasEmpty && (section === "models" || after.size === 0);
+      const agentKey = (id: string) => id.startsWith("models.agents.");
+      const resetUndoes = sectionWasEmpty &&
+        (section === "models" ? !ids.some(agentKey) : after.size === 0);
       if (resetUndoes) {
         lines.push(
           `Recorded ${ids.map((id) => shownValue(`${now.get(id)?.label} ${now.get(id)?.shown}`)).join(", ")} in ${file}. To undo: ${
@@ -10609,16 +10734,24 @@ function settingsChangeLines(
         const old = was.get(id);
         const fresh = now.get(id);
         const label = old?.label ?? fresh?.label ?? id;
+        // A new key of one agent's: `default` puts it back to the preset or group.
+        const agentDefault = !old && agentKey(id) ? agentDefaultArgs(id) : null;
         const undo = old && old.args.length > 0
           ? printableArgs(old.args) ? ` To undo: ${command(section, old.args, change.target)}` : ` ${UNPRINTABLE_UNDO}`
           : old && old.shown !== old.value
           ? ` ${UNPRINTABLE_UNDO}`
           : old
           ? ""
+          : agentDefault
+          ? ` To undo: ${command(section, agentDefault, change.target)}`
           : id === "flags.questionRetentionDays"
           ? ` To undo: ${command(section, ["--question-retention-days", "unlimited"], change.target)}`
           : " It was not set there before.";
-        lines.push(shownValue(`${label}: ${old?.shown ?? "not set"} -> ${fresh?.shown ?? "not set"} in ${file}.${undo}`));
+        // The file's first model setting keeps the "Recorded" shape the
+        // section-wide undo used, with the per-key command.
+        lines.push(shownValue(agentDefault && sectionWasEmpty
+          ? `Recorded ${label} ${fresh?.shown ?? ""} in ${file}.${undo}`
+          : `${label}: ${old?.shown ?? "not set"} -> ${fresh?.shown ?? "not set"} in ${file}.${undo}`));
       }
     }
   }
@@ -12550,6 +12683,14 @@ export async function main(
       descriptor.distribution === "kiro-ide" && !argv.includes("--dry-run") && kiroWorkflowsQuestionDue()
     ) {
       changes.push(applyKiroWorkflowsAnswer(projectDir, true));
+    }
+    // Command Prompt as Kiro's terminal splits the person's words in AI-DLC's
+    // commands; --yes takes the recommended answer, PowerShell, the same way.
+    if (
+      options.yes && !deferKiro && !recordOnly && !modelsContext && !diagnosticsContext && !choicesContext &&
+      descriptor.distribution === "kiro-ide" && !argv.includes("--dry-run") && kiroTerminalQuestionDue()
+    ) {
+      changes.push(applyKiroTerminalAnswer(projectDir, true));
     }
     if (options.mode === "human") writeMenuLines("", changes.map((line) => `  ${line}`));
     // Cursor may skip project hooks in a folder outside any git repository

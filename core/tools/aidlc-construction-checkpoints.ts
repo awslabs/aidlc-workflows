@@ -10,6 +10,7 @@ import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import { appendAuditEntryUnlocked } from "./aidlc-audit.ts";
 import { aidlcToolInvocation } from "./aidlc-runtime-paths.ts";
+import { APPROVAL_GATE_CHOICES, exactOptionPick } from "./aidlc-reply-reader.ts";
 import {
   activeIntentUuid,
   attemptEventDefinitelyBefore,
@@ -37,7 +38,11 @@ import {
   readProtectedResponse,
   requireProtectedResponse,
   protectedTargetDigest,
+  gateWordsSinceUnitReview,
+  markProtectedQuestionReplied,
   mintProtectedQuestion,
+  PROTECTED_RESPONSE_WORDS_MAX_CHARS,
+  writeProtectedResponse,
   isAutonomousMode,
   constructionCheckpointsApply,
   isNonAnswer,
@@ -176,6 +181,11 @@ export interface ConstructionCheckpoint {
   /** The person was asked to approve this Unit since its last checkpoint
    *  decision, so its learnings question, asked first, is behind them. */
   asked?: true;
+  /** From ask: what the person typed in this chat while the Unit's review ran,
+   *  before the question was asked, kept as its reply. The conductor reads it:
+   *  an answer is recorded with no question shown; anything else leaves the
+   *  question to show. */
+  earlier_reply?: string;
 }
 
 const PROOF_DIR = ".aidlc-construction-checkpoints";
@@ -1447,6 +1457,11 @@ export function askConstructionCheckpoint(
     if (!current.result.ready || !current.result.verified) {
       throw new Error(`Verify the current Construction checkpoint first, before asking for approval. Run ${aidlcToolInvocation("bolt")} checkpoint --unit "${unit}" --kind ${kind} --action verify and require verified: true.`);
     }
+    // The person may have answered while the Unit's review ran: their words
+    // typed in this chat after it was asked for and before any other question
+    // was asked (gateWordsSinceUnitReview), read before this question's own
+    // row, are its reply, kept as a reply typed after it is.
+    const earlier = gateWordsSinceUnitReview(projectDir, session, unit, current.result.stages);
     withdrawProtectedQuestions(projectDir, session);
     appendAuditEntryUnlocked("DECISION_RECORDED", {
       Checkpoint: "Construction Unit Approval", Unit: unit, Kind: kind,
@@ -1456,10 +1471,20 @@ export function askConstructionCheckpoint(
       // once instead of asking again (relaxed and off).
       "Asked Evidence": current.approvedEvidence, "Run floors": JSON.stringify(current.result.run_floors),
     }, projectDir);
-    mintProtectedQuestion(projectDir, {
+    const question = mintProtectedQuestion(projectDir, {
       kind: "checkpoint-approval", session, target: approvalTarget(current),
     });
-    return current.result;
+    if (earlier === null) return current.result;
+    const words = earlier.join("\n").slice(-PROTECTED_RESPONSE_WORDS_MAX_CHARS);
+    const pick = exactOptionPick(earlier.at(-1), APPROVAL_GATE_CHOICES);
+    markProtectedQuestionReplied(projectDir, question);
+    writeProtectedResponse(projectDir, {
+      version: 1, session, challengeId: question.challengeId,
+      ...(pick === 0 ? { choice: "Approve" as const } : pick === 1 ? { choice: "Request Changes" as const } : {}),
+      responseSha256: createHash("sha256").update(words, "utf-8").digest("hex"),
+      words,
+    });
+    return { ...current.result, earlier_reply: words };
   });
 }
 
@@ -1485,6 +1510,8 @@ export function approveConstructionCheckpoint(
     const inWords = current.result.review_not_finished?.approved_in_words === true;
     let words: string | undefined;
     if (humanRequired && inWords) {
+      // Already approved from their words: an approve run again records nothing more.
+      if (current.result.approved) return current.result;
       words = latestPersonTurn(projectDir)?.words ?? undefined;
     } else if (humanRequired) {
       requireProtectedResponse(projectDir, session, {

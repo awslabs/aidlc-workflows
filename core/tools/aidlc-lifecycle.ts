@@ -2757,7 +2757,7 @@ export function humanLifecycleNarration(
         `Updated aidlc from ${before ?? "not installed"} to ${target}.`,
         process.stdout,
       ),
-      "Project files were not changed. Run 'aidlc config' between workflows to refresh them.",
+      "Project files were not changed. Run 'aidlc config --yes' in each project to refresh them. Open work carries on.",
     ].join("\n");
   }
   if (command === "use") {

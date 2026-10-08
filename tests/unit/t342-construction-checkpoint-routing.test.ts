@@ -3167,3 +3167,70 @@ describe("t342 Build and Test after the per-unit stages", () => {
     expect(constructionCheckpointGaps(p, state, findStageBySlug("build-and-test")!)).toEqual(['skeleton Unit "alpha"']);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });
+
+// Live runs: in a Unit-by-Unit walk `/aidlc --status` said "Current Stage:
+// Functional Design" and "CONSTRUCTION 0/6" while the work was at Unit 2's
+// Code Generation checkpoint (the Unit Stage field is removed when the Unit
+// completes), and after "/aidlc --guard-policy strict" the agent built "we'll
+// pick up at Functional Design" from it. Status now names the step the engine
+// last handed out and counts Units while one is open, and the typed-switch
+// step says where the work picks up.
+describe("t342 status names the Unit's step and a typed switch says where the work picks up", () => {
+  const ORCH = join(AIDLC_SRC, "tools/aidlc-orchestrate.ts");
+
+  // alpha approved; beta designed and handed Code Generation by the engine.
+  function betaAtCodeGeneration(): string {
+    const p = fixture();
+    cover(p, "alpha");
+    approve(p, "alpha");
+    cover(p, "beta", stages.slice(0, 4));
+    const beat = next(p);
+    expect(beat.stage, JSON.stringify(beat)).toBe("code-generation");
+    expect(beat.unit).toBe("beta");
+    return p;
+  }
+
+  function status(p: string): string {
+    const result = spawnSync(process.execPath, [join(AIDLC_SRC, "tools/aidlc-utility.ts"), "status", "--project-dir", p], {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8",
+    });
+    expect(result.status, `${result.stdout}${result.stderr}`).toBe(0);
+    return result.stdout;
+  }
+
+  test("--status names the step the engine handed out and counts Units, not whole-stage boxes", () => {
+    const p = betaAtCodeGeneration();
+    const out = status(p);
+    expect(out).toContain("Current Stage:  Functional Design");
+    expect(out).toContain("Current Step:   code-generation for unit beta");
+    const construction = out.split("\n").find((line) => line.trimStart().startsWith("CONSTRUCTION")) ?? "";
+    expect(construction).toContain("Unit 2 of 2");
+    expect(construction).not.toMatch(/\b0\/\d+\b/);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("a typed setting says where the work picks up", () => {
+    const p = betaAtCodeGeneration();
+    const result = runOrchestrateNext(ORCH, p, ["--guard-policy", "strict"]);
+    expect(result.directive, result.stderr).not.toBeNull();
+    const directive = result.directive as { kind: string; narration?: string };
+    expect(directive.kind).toBe("print");
+    expect(directive.narration).toBe("The work picks up at Code Generation for beta.");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  // The state the live run was in: the Unit has finished Code Generation and
+  // waits at its checkpoint, where the walk is on no work step. The line names
+  // the checkpoint, never the block's first stage.
+  test("at a Unit's checkpoint, a typed setting says the work picks up at that checkpoint", () => {
+    const p = fixture();
+    cover(p, "alpha");
+    approve(p, "alpha");
+    cover(p, "beta");
+    const at = next(p);
+    expect(at.construction_checkpoint?.unit, JSON.stringify(at)).toBe("beta");
+    const result = runOrchestrateNext(ORCH, p, ["--guard-policy", "strict"]);
+    expect(result.directive, result.stderr).not.toBeNull();
+    const directive = result.directive as { kind: string; narration?: string };
+    expect(directive.kind).toBe("print");
+    expect(directive.narration).toBe("The work picks up at the Unit checkpoint for beta.");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+});

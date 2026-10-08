@@ -89,6 +89,7 @@ import {
   writeHookStatusFile,
   isClaudeCodeHookInput,
   isoTimestamp,
+  memoryFilePath,
   loadScopeMapping,
   loadStageGraph,
   parseCheckboxes,
@@ -981,6 +982,18 @@ function isAnswerTextTarget(projectDir: string, target: string): boolean {
     if (!record || !isTrustedRecordTarget(projectDir, target, join(record, ANSWER_TEXT_DIR))) return false;
     const existing = lstatSync(resolve(target), { throwIfNoEntry: false });
     return existing === undefined || (existing.isFile() && existing.nlink === 1);
+  } catch {
+    return false;
+  }
+}
+
+// The Code Generation stage's learnings diary (`<record>/construction/code-generation/memory.md`),
+// exactly, as a plain file inside AI-DLC's records: reached through no symlink
+// and not hard-linked to another file (isStageRecordOutput).
+function isStageDiaryTarget(projectDir: string, target: string): boolean {
+  try {
+    const diary = normalizeDriveLetter(resolve(memoryFilePath(projectDir, "construction", GUARDED_STAGE)));
+    return normalizeDriveLetter(resolve(target)) === diary && isStageRecordOutput(projectDir, target);
   } catch {
     return false;
   }
@@ -2394,6 +2407,18 @@ async function evaluate(
       !mutation.opaqueShell &&
       mutation.targets.length > 0 &&
       mutation.targets.every((candidate) => isAnswerTextTarget(projectDir, candidate))
+    ) {
+      return 0;
+    }
+    // So does a file-tool write of the stage's own learnings diary: the agent
+    // appends to it while it plans, for every Unit, and the diary lives in the
+    // stage's folder, not the Unit's. It is AI-DLC's record, not source, and
+    // nothing reads an approval from it.
+    if (
+      WRITE_TOOLS.has(toolName) &&
+      !mutation.opaqueShell &&
+      mutation.targets.length > 0 &&
+      mutation.targets.every((candidate) => isStageDiaryTarget(projectDir, candidate))
     ) {
       return 0;
     }

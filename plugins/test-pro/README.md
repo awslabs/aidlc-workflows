@@ -88,7 +88,12 @@ its `contributions/<phase>/<slug>.md` files are merged at compose time.
 | **`test-pro-integration`** (Cross-Unit Integration Testing) | construction | 3.85 | scopes: enterprise, feature, mvp, classic, workshop; CONDITIONAL (runs once after build-and-test when the build spans >1 unit) | `test-pro-integration-test-plan`, `test-pro-integration-test-results`, `test-pro-cross-unit-contract-matrix` |
 | **`test-pro-full-suite`** (Full Test Suite Execution) | operation | 4.45 | scopes: enterprise; declares `when: {producer-in-plan: test-pro-regression-suite}` (not evaluated yet — see Activation below; gates on scope today) | `test-pro-full-suite-results`, `test-pro-edge-api-report` |
 
-Both are led by `aidlc-quality-agent`, `mode: inline`.
+Both are led by `aidlc-quality-agent`, `mode: inline`. Each declares a composer
+prior in an `ars:` block in its frontmatter — `targets: [ve, r]` and `cost: 4` on
+the integration stage, `targets: [ve]` and `cost: 5` on the full suite — so
+`aidlc-graph ars` screens them like core stages instead of listing them as
+`no-prior` (doc 15 § `ars`); the shipped `tools/data/ars-priors.json` names core
+stages only.
 
 ## 5. Design & implementation
 

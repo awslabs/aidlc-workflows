@@ -1748,7 +1748,8 @@ describe("t271 review iteration ceiling", () => {
     const stage = resolveStage("requirements-analysis");
     if (!stage) throw new Error("requirements-analysis not in the stage graph");
     const before = guardAttemptState(proj, state, stage).attempt;
-    expect(before.nextReview).toEqual({ iteration: 1 });
+    expect(before.nextReview?.iteration).toBe(1);
+    expect(before.nextReview?.request).toMatch(/ review --stage requirements-analysis --reviewer \S+ --iteration 1 --project-dir \S/);
     expect(before.pendingReview).toBeUndefined();
 
     const again = runReview(proj, [...request, "--iteration", "1"]);

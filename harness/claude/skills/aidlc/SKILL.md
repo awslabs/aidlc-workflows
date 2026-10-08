@@ -198,6 +198,8 @@ For directives not already handled by Construction routing, `run-stage` folds th
 
 ## Execution Quality — the conductor's craft
 
+**Tool-call titles (Claude Code).** The one-line title you give a tool call is read by the person: say what the call does for their project ("Checking what this step needs", "Saving your answers", "Starting the design review"), never a field, a directive, a step's id, or a word from this skill.
+
 Everything above is mechanism. The irreducible knowledge-work — how to run a stage *well* (framing the persona, asking good questions, keeping the diary when enabled, the intra-stage Keep/Modify/Redo loop, classifying a practices-derived gate) — is authored once as the shared conductor persona. You do **not** load it from a path: the engine reads it and bakes its contents into the first `run-stage` directive of the workflow, or into the first `load-steering` part ahead of it when that run-stage would not fit with it (the directive carries a `conductor_persona` field). When you receive that field, adopt it for the whole run — it is your execution-quality charter. This keeps every entry point (framework and hand-written) on one persona with no per-skill diligence.
 
 ---

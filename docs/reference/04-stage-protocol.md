@@ -95,7 +95,7 @@ with a fresh timestamp.
 | # | Check |
 |---|-------|
 | 1 | At the approval gate, call `aidlc engine orchestrate report --stage <slug> --result awaiting-approval`. When `ceremony.sensors` is `on`, gate-bound sensors run once per existing deliverable before the transaction when a person will answer the gate (a gate the engine approves itself under Construction autonomy runs only its blocking sensors). A blocking binding requires a verified pass. To override, log and present the separate `Fix findings` / `Override blocking sensors` decision, wait for the exact human-backed answer, then retry with `--override-blocking-sensors --user-input "Override blocking sensors"`; a bare flag and autonomous mode are refused. The engine then flips state from `[-]` to `[?]` AwaitingApproval and emits `STAGE_AWAITING_APPROVAL` atomically, so status shows the held gate while the prompt is open. (`STAGE_STARTED` / the `[-]` transition was emitted when the stage became active.) |
-| 2 | For non-gate questions, log options BEFORE calling `AskUserQuestion` via `aidlc engine log decision` (not by hand-writing to the `audit/` shards), then log the exact response via `aidlc engine log answer`. |
+| 2 | For non-gate questions, log options BEFORE calling `AskUserQuestion` via `aidlc engine log decision` (not by hand-writing to the `audit/` shards), then log the exact response via `aidlc engine log answer`. A question logged after the person already replied takes that reply with `--message <id>` (the refusal names the id); the person is never asked again. |
 | 3 | After an approval-gate response, call `aidlc engine orchestrate report --stage <slug> --result approved --user-input "Approve"` for approval or `aidlc engine orchestrate report --stage <slug> --result rejected --user-input "Request Changes"` for request-changes, passing the choice they made by its label (the engine keeps their own words as the feedback; add `--reason '<what they asked to change>'` only to say more). Never call the log tool's `decision` or `answer` verb for the gate. After revision work, report `--result revised` before re-presenting it. |
 | 4 | Record the choice the person made, read from their reply; the human-turn hook keeps their exact words with it. Never choose for them or paraphrase their words in an answer or note; for automated stages use `N/A -- [reason]` |
 | 5 | One audit entry per interaction -- the log/state tools enforce single-event emission; never merge multiple events into one call |
@@ -318,6 +318,11 @@ Structured bullet-point summary of what was produced:
 
 Followed by the `AskUserQuestion` approval gate (see Approval Gates section).
 
+A stage whose artifacts end with decisions only the person can make may list them in a fenced `aidlc-decisions` block
+in a declared artifact (yaml: `decisions:` then `- id: <id>` items with `decision:`, `owner:` and `blocking:`). The
+gate-open row records their ids (`Open Decisions`, `Decisions`) and Approve records them as `Decisions Accepted Open`;
+a block the engine cannot read is recorded as `unreadable` and stops nothing.
+
 ### Part 4: Progress Update
 
 After user approves, display before proceeding:
@@ -362,13 +367,14 @@ changes** options are unlettered. All `[Answer]:` tags start blank.
 Multi-select questions add "(select all that apply)" to the question text;
 answer format: `[Answer]: A, B, E`.
 
-When the stage's `<slug>-questions.md` already holds an answer of the person's
-(an `[Answer]:` with more than blanks or underscores), the run-stage directive
-carries `questions_answered` (`path`), on `next --resume`, a bare `next` and
-every re-issue alike, in a new chat or the same one. The conductor keeps the
-file and carries on from where its answers stop (blank questions, then an
-unanswered summary confirmation, then the stage's next step), never creating it
-again or asking an answered question again (#1873). A redo the person asked for
+When the stage's `<slug>-questions.md` already exists with its questions (an
+`[Answer]:` tag, filled in or still blank), the run-stage directive carries
+`questions_answered` (`path`), on `next --resume`, a bare `next` and every
+re-issue alike, in a new chat or the same one. The conductor keeps the file and
+carries on from where its answers stop (the blank questions as written, all of
+them when none is answered yet, then an unanswered summary confirmation, then
+the stage's next step), never creating it again, writing new questions over it,
+or asking an answered question again (#1873). A redo the person asked for
 (`artifact_reuse`, which drops the field, or Redo from scratch) starts afresh.
 
 **Step 2: Use the directive's answer mode, or present the mode choice.** The

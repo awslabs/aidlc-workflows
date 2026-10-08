@@ -28,6 +28,9 @@ sensors:
 scopes:
   - enterprise
   - test-pro-validation
+ars:
+  targets: [ve]
+  cost: 5
 when:
   producer-in-plan: test-pro-regression-suite
 inputs: Deployed environment coordinates, the construction regression suite, and integration results

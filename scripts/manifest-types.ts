@@ -159,8 +159,10 @@ export type HarnessManifest = {
     missedReply?: string;
     /**
      * `missedReply` for one host this tree runs in, told apart by environment
-     * variables that host sets for the agent's shell commands (any one
-     * non-empty). Without them, `missedReply` stands.
+     * variables that host sets for the agent's shell commands (any one: a
+     * `NAME` entry matches when it is set, a `NAME=value` entry when it holds
+     * that value, in any case; a `NAME=value` variable holding another value
+     * rules the host out). Without them, `missedReply` stands.
      */
     missedReplyInHost?: { env: string[]; text: string };
     /**
@@ -197,6 +199,13 @@ export type HarnessManifest = {
      * words saying to run the stopped command again, so its request is kept.
      */
     agentStep?: string;
+    /**
+     * `agentStep` for one host this tree runs in, told apart the same way as
+     * `missedReplyInHost` (environment variables of the agent's shell). An
+     * agent given one line per tool can show the wrong one, so each host gets
+     * its own line alone. Without them, `agentStep` stands.
+     */
+    agentStepInHost?: { env: string[]; text: string };
     /**
      * The project file `agentStep` has the agent change, relative to the
      * project. When it, or a folder on the way to it, is a link, or it is

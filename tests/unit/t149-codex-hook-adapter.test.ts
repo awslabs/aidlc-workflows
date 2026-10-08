@@ -918,21 +918,40 @@ describe("t149 Codex hook adapter (live-captured payload fixtures)", () => {
         readFileSync(seededStateFile(dir), "utf-8"),
       );
       setActiveIntentCursor(dir, other.dirName, DEFAULT_SPACE);
+      // The whole delivery, the way the agent takes it: a step may arrive as
+      // rule parts (or the conductor persona for a chat that does not hold it)
+      // before the run-stage that names the record.
       const next = (thread: string | undefined) => {
-        const r = spawnSync("bun", [join(dir, ".codex", "tools", "aidlc-orchestrate.ts"), "next"], {
-          cwd: dir,
-          encoding: "utf-8",
-          env: {
-            ...process.env,
-            AIDLC_SESSION_OVERRIDE: undefined,
-            AIDLC_SESSION_OVERRIDE_SOURCE: undefined,
-            CLAUDE_PROJECT_DIR: undefined,
-            CODEX_SESSION_ID: undefined,
-            CODEX_THREAD_ID: thread,
-          } as NodeJS.ProcessEnv,
-          timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
-        });
-        return `${r.stdout ?? ""}${r.stderr ?? ""}`;
+        const run = (argv: string[]) => {
+          const r = spawnSync("bun", [join(dir, ".codex", "tools", "aidlc-orchestrate.ts"), ...argv], {
+            cwd: dir,
+            encoding: "utf-8",
+            env: {
+              ...process.env,
+              AIDLC_SESSION_OVERRIDE: undefined,
+              AIDLC_SESSION_OVERRIDE_SOURCE: undefined,
+              CLAUDE_PROJECT_DIR: undefined,
+              CODEX_SESSION_ID: undefined,
+              CODEX_THREAD_ID: thread,
+            } as NodeJS.ProcessEnv,
+            timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+          });
+          return `${r.stdout ?? ""}${r.stderr ?? ""}`;
+        };
+        let out = run(["next"]);
+        let whole = out;
+        for (let hop = 0; hop < 10; hop++) {
+          let step: { kind?: unknown; receipt?: unknown };
+          try {
+            step = JSON.parse(out.trim()) as { kind?: unknown; receipt?: unknown };
+          } catch {
+            break;
+          }
+          if (step.kind !== "load-steering" || typeof step.receipt !== "string") break;
+          out = run(["continue", step.receipt]);
+          whole += out;
+        }
+        return whole;
       };
       expect(next("codex-command-session")).toContain(`intents/${DEFAULT_RECORD_DIR}/`);
       expect(next(undefined)).toContain(`intents/${other.dirName}/`);

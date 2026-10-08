@@ -33,6 +33,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 import {
+  createIntent,
   turnEndIsOpen,
   turnEndMarkerPath,
   engineTouchMarkerPath,
@@ -40,10 +41,11 @@ import {
   markTurnEnd,
   markEngineTouch,
   markHumanTurn,
+  stateFilePath,
   STOP_HOOK_PROBE_ENV,
   turnMarkersShowConversational,
 } from "../../core/tools/aidlc-lib.ts";
-import { setupIntegrationProject } from "../harness/fixtures.ts";
+import { FIXTURES_DIR, setupIntegrationProject } from "../harness/fixtures.ts";
 
 const tempDirs: string[] = [];
 afterEach(() => {
@@ -367,4 +369,105 @@ describe("t259 the engine's last word ended the turn", () => {
       if (!copilot) expect(stop().stdout).toContain('"decision":"block"');
     });
   }
+});
+
+// Live runs on the transcript-free hosts (Kiro CLI, Kiro IDE, opencode): after
+// `/aidlc intent <older work>` whose record had no engine mark (work made before
+// the markers shipped, or a fresh clone, since .aidlc-engine/ is not committed),
+// a plain question's turn was blocked with "AI-DLC is carrying on with <first
+// stage>." and the agent started that stage unasked. A switch now leaves the
+// mark on the work it selects, as `intent create` does on new work.
+describe("t259 a switch leaves the engine mark on the work it selects", () => {
+  function markless(proj: string, label: string): string {
+    const record = createIntent(proj, label, "default", "feature").dirName;
+    writeFileSync(stateFilePath(proj, record, "default"), readFileSync(join(FIXTURES_DIR, "state-mid-ideation.md"), "utf-8"), "utf-8");
+    rmSync(engineTouchMarkerPath(proj, record, "default"), { force: true });
+    return record;
+  }
+
+  function tools(proj: string) {
+    const env: Record<string, string | undefined> = { ...process.env, CLAUDE_PROJECT_DIR: proj };
+    delete env[STOP_HOOK_PROBE_ENV];
+    const run = (tool: string, args: string[], input?: string) =>
+      spawnSync(process.execPath, [`.claude/tools/${tool}`, ...args], { cwd: proj, input, encoding: "utf-8", env });
+    const stop = () =>
+      run("aidlc.ts", ["engine", "hook", "continue-workflow"], JSON.stringify({ hook_event_name: "Stop", stop_hook_active: false, session_id: "t259-switch" }));
+    return { run, stop };
+  }
+
+  test("an intent switch writes the mark, so a plain question on the older work ends its turn; work handed out still does not", async () => {
+    const proj = setupIntegrationProject({ withState: "state-mid-ideation.md", stripEnvScope: true });
+    tempDirs.push(proj);
+    const older = markless(proj, "older-work");
+    const { run, stop } = tools(proj);
+    const switched = run("aidlc-utility.ts", ["intent", "switch", "older-work", "--project-dir", proj]);
+    expect(switched.status, switched.stderr).toBe(0);
+    expect(switched.stdout).toContain("Now working on");
+    expect(existsSync(engineTouchMarkerPath(proj, older, "default"))).toBe(true);
+    await Bun.sleep(20);
+    markHumanTurn(proj);
+    const ended = stop();
+    expect(ended.status, ended.stderr).toBe(0);
+    expect(ended.stdout).not.toContain('"decision":"block"');
+    // Work the engine hands out after that still keeps the turn going.
+    expect(JSON.parse(run("aidlc.ts", ["engine", "orchestrate", "next"]).stdout).kind).toBe("run-stage");
+    expect(stop().stdout).toContain('"decision":"block"');
+  });
+
+  // A new chat's first command names the work already selected (`/aidlc intent
+  // <it>`, `/aidlc space` for the current space, or the resume offer's Yes): a
+  // self-switch, which writes no switch receipt. On marked work mid-stage the
+  // turn ends at "Now working on ...", as it did before switches wrote the mark:
+  // the switch never refreshes a mark the record already has.
+  test("a self-switch on marked work leaves the mark alone, so its turn ends", async () => {
+    const proj = setupIntegrationProject({ withState: "state-mid-ideation.md", stripEnvScope: true });
+    tempDirs.push(proj);
+    const record = readFileSync(join(proj, "aidlc", "spaces", "default", "intents", "active-intent"), "utf-8").trim();
+    const { run, stop } = tools(proj);
+    markEngineTouch(proj);
+    await Bun.sleep(20);
+    markHumanTurn(proj);
+    const before = statSync(engineTouchMarkerPath(proj, record, "default")).mtimeMs;
+    for (const args of [["intent", "switch", record], ["space", "switch", "default"]]) {
+      const switched = run("aidlc-utility.ts", [...args, "--project-dir", proj]);
+      expect(switched.status, switched.stderr).toBe(0);
+      expect(statSync(engineTouchMarkerPath(proj, record, "default")).mtimeMs, args.join(" ")).toBe(before);
+      const ended = stop();
+      expect(ended.status, ended.stderr).toBe(0);
+      expect(ended.stdout, args.join(" ")).not.toContain('"decision":"block"');
+    }
+  });
+
+  // The same first command on work with no mark yet (a fresh clone): the mark
+  // the switch writes is dated before the person's turn, so the switch itself
+  // is never read as the engine's unfinished turn.
+  test("a self-switch on markless work dates the new mark before the person's turn, so its turn ends", async () => {
+    const proj = setupIntegrationProject({ withState: "state-mid-ideation.md", stripEnvScope: true });
+    tempDirs.push(proj);
+    const record = readFileSync(join(proj, "aidlc", "spaces", "default", "intents", "active-intent"), "utf-8").trim();
+    const { run, stop } = tools(proj);
+    rmSync(engineTouchMarkerPath(proj, record, "default"), { force: true });
+    markHumanTurn(proj);
+    const switched = run("aidlc-utility.ts", ["intent", "switch", record, "--project-dir", proj]);
+    expect(switched.status, switched.stderr).toBe(0);
+    const mark = statSync(engineTouchMarkerPath(proj, record, "default")).mtimeMs;
+    expect(mark).toBeLessThan(statSync(humanTurnMarkerPath(proj, record, "default")).mtimeMs);
+    const ended = stop();
+    expect(ended.status, ended.stderr).toBe(0);
+    expect(ended.stdout).not.toContain('"decision":"block"');
+  });
+
+  test("a space switch writes the mark on the record its cursor names", () => {
+    const proj = setupIntegrationProject({ withState: "state-mid-ideation.md", stripEnvScope: true });
+    tempDirs.push(proj);
+    const { run } = tools(proj);
+    const created = run("aidlc-utility.ts", ["space", "create", "other", "--project-dir", proj]);
+    expect(created.status, created.stderr).toBe(0);
+    const record = createIntent(proj, "other-work", "other", "feature").dirName;
+    writeFileSync(stateFilePath(proj, record, "other"), readFileSync(join(FIXTURES_DIR, "state-mid-ideation.md"), "utf-8"), "utf-8");
+    rmSync(engineTouchMarkerPath(proj, record, "other"), { force: true });
+    const switched = run("aidlc-utility.ts", ["space", "switch", "other", "--project-dir", proj]);
+    expect(switched.status, switched.stderr).toBe(0);
+    expect(existsSync(engineTouchMarkerPath(proj, record, "other"))).toBe(true);
+  });
 });

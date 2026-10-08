@@ -984,6 +984,25 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
     );
   });
 
+  // A live Claude Code run: the collapsed tool-call titles the person reads were
+  // "Continue loading the stage rules", "Ask the workflow for the next step",
+  // "Render prior review findings for the reviewer brief", "Close the reviewer
+  // read-scope window". Claude Code is the only shipped tool whose shell tool
+  // takes a one-line title the person sees, so the sentence lives in its skill.
+  test("the Claude skill says a tool call's title is in the person's words", () => {
+    // In this tool's own section, not the shared narration block the other
+    // cases hold byte-identical: only Claude Code's shell tool takes a title.
+    const body = readFileSync(join(REPO_ROOT, "harness/claude/skills/aidlc/SKILL.md"), "utf-8");
+    expect(body).toContain(
+      "**Tool-call titles (Claude Code).** The one-line title you give a tool call is read by the person: say what " +
+        "the call does for their project (\"Checking what this step needs\", \"Saving your answers\", \"Starting " +
+        "the design review\"), never a field, a directive, a step's id, or a word from this skill.",
+    );
+    for (const rel of skills.filter((r) => r !== "harness/claude/skills/aidlc/SKILL.md")) {
+      expect(readFileSync(join(REPO_ROOT, rel), "utf-8"), rel).not.toContain("**Tool-call titles");
+    }
+  });
+
   test("every harness Stage Graph table matches the canonical generated table", () => {
     const canonicalRel = "harness/claude/skills/aidlc/SKILL.md";
     const canonical = stageTableRows(

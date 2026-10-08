@@ -132,6 +132,7 @@ import {
   localUnitClaimOverviewForIntent,
   main as unitMain,
 } from "./aidlc-unit.ts";
+import { unitProgress } from "./aidlc-unit-walk-view.ts";
 import {
   isBindableIntentRecordName,
   isSafeIntentRecordName,
@@ -353,6 +354,7 @@ import {
   recordSessionIntentSwitch,
   clearSessionIntentHandoff,
   markEngineTouch,
+  markSelectedWork,
   LONE_INTENT_PREFIX,
   recordIntentKey,
   writeSessionIntentUuid,
@@ -2054,7 +2056,14 @@ To get started:
     const done = phaseCheckboxes.filter(
       (c) => c.state === "completed"
     ).length;
-    phaseProgress += `  ${(phaseLabels[p] || p).padEnd(16)} ${bar} ${done}/${phaseCheckboxes.length}\n`;
+    // Working one Unit at a time, the stage boxes tick only when the last Unit
+    // finishes a stage, so while a Unit is open the count is of Units: the one
+    // the person is on, of those planned (the status line counts the same way).
+    const units = p === "construction"
+      ? unitProgress(dirname(sp), getField(content, "Construction Iteration") ?? "")
+      : null;
+    const count = units ? `Unit ${units.current} of ${units.total}` : `${done}/${phaseCheckboxes.length}`;
+    phaseProgress += `  ${(phaseLabels[p] || p).padEnd(16)} ${bar} ${count}\n`;
   }
 
   // Only a change the person can act on: a stage whose inputs moved since it
@@ -2110,9 +2119,18 @@ To get started:
   // Solo unit-major Construction keeps Current Stage on the first per-unit
   // stage while each Unit works through the later ones, so the active Unit's
   // own step is named too, once its recorded values check out (#1411).
-  const stepUnit = getField(content, "Active Unit")?.trim() ?? "";
-  const stepStage = findStageBySlug(getField(content, "Unit Stage")?.trim() ?? "");
+  const fieldUnit = getField(content, "Active Unit")?.trim() ?? "";
+  const fieldStage = findStageBySlug(getField(content, "Unit Stage")?.trim() ?? "");
   const currentNode = findStageBySlug(currentStage);
+  // Between a Unit's steps (it just completed one, or waits at its checkpoint)
+  // those fields are gone, so the step the engine last handed out for this
+  // record names it instead; a step issued for another state is not it.
+  const marker = fieldStage === undefined && !flags.intent && !flags.space
+    ? readActiveDirectiveMarker(projectDir, content)
+    : null;
+  const markerUnit = marker?.delivery !== "superseded" && typeof marker?.unit === "string" ? marker.unit : "";
+  const stepStage = fieldStage ?? (markerUnit ? findStageBySlug(marker?.stage ?? "") : undefined);
+  const stepUnit = fieldStage ? fieldUnit : markerUnit;
   const currentStep =
     UNIT_NAME_REGEX.test(stepUnit) && stepStage && isPerUnitStage(stepStage) && stepStage.slug !== currentStage &&
     currentNode !== undefined && isPerUnitStage(currentNode)
@@ -8700,6 +8718,14 @@ function handleIntent(
     );
   }
   setActiveIntentCursor(projectDir, match.dirName, space);
+  // The selected work gets the engine mark new work gets from `intent create`,
+  // when it has none yet. Without it, on the hosts that read turn markers
+  // instead of a transcript, a record made before the markers shipped (or
+  // freshly cloned: .aidlc-engine/ is not committed) reads every later plain
+  // question as the engine's unfinished turn, and the Stop hook starts the
+  // work's first stage unasked. A mark the record already has is left alone, so
+  // a self-switch ends its turn as before (see markSelectedWork).
+  markSelectedWork(projectDir, match.dirName, space);
   // Re-stamp the LIVE conversation's session→intent record to the switched-to
   // intent. WHY: the resume-rebind stamp (session-start hook) is keyed by
   // session_id, which this tool never sees; only the hook does. Without this, a
@@ -9074,6 +9100,11 @@ function handleSpace(projectDir: string, positional: string[], flags: Record<str
   }
   const selection = resolveWorkflowSelection(projectDir);
   setActiveSpaceCursor(projectDir, target);
+  // The work the space selects (its cursor's record, or its lone record) gets
+  // the engine mark when it has none, as an intent switch leaves it; see
+  // handleIntent.
+  const selected = activeIntent(projectDir, target);
+  if (selected !== null) markSelectedWork(projectDir, selected, target);
   const sessionId = selection.sessionId ?? readCurrentSessionId(projectDir);
   const priorUuid = sessionId ? readSessionIntentUuid(projectDir, sessionId) : null;
   let spaceHasNoIntent = false;
@@ -9689,6 +9720,163 @@ function documentInputGitIgnored(projectRoot: string, relPath: string): "yes" | 
   );
   if (checked.error !== undefined || checked.signal !== null) return "unknown";
   return checked.status === 0 ? "yes" : checked.status === 1 ? "no" : "unknown";
+}
+
+/**
+ * The document or folder the person named by path, copied into the space's
+ * `knowledge/documents/` so the ordinary `knowledge onboard` can index it. The
+ * folder is created when it is missing, a file keeps its own name under the
+ * copy rule below, and a folder keeps its relative layout under a folder of
+ * its own name. Only regular files are copied, through the knowledge walk's
+ * own rules, so a symlink inside the named folder is passed over rather than
+ * followed, and a file inside it that git ignores is left where it is. A
+ * document over the per-document cap, or a folder over a batch cap, is refused
+ * before anything is copied rather than after.
+ *
+ * The caller decides WHETHER to copy: a path already inside `documents/` is
+ * indexed where it is, and a path outside the project is refused by the
+ * knowledge tool as before. This does the copy and says what it did; it never
+ * touches `documentkb/`, which is why it lives here and not in the knowledge
+ * module (that module's fs mutations are confined to `documentkb/` by
+ * tests/unit/t289, and `documents/` is the person's own folder).
+ */
+export function ensureKnowledgeDocumentsFolder(
+  projectDir: string,
+  kb: typeof import("./aidlc-knowledge.ts"),
+  space: string,
+): string {
+  // Trusted BEFORE anything is created, as the document-input path does at its
+  // own space resolution: in a cloned repo whose `knowledge` is a symlink, a
+  // create-then-check order makes the folder in the link's target, outside the
+  // project, before the refusal. Checked again after the create, in case the
+  // chain changed under us.
+  kb.assertKnowledgeRootTrusted(projectDir, space);
+  const documentsAbs = kb.documentsDir(projectDir, space);
+  mkdirSync(documentsAbs, { recursive: true });
+  kb.assertKnowledgeRootTrusted(projectDir, space);
+  return realpathSync(documentsAbs);
+}
+
+/**
+ * The paths among `absPaths` that git ignores, in one `check-ignore` call.
+ * Empty when git cannot say (not a repository, or the command failed): the
+ * named path's own ignore state is what the person is told about, and a check
+ * that could not run never silently drops a document.
+ */
+function gitIgnoredAmong(projectRoot: string, absPaths: string[]): Set<string> {
+  if (absPaths.length === 0 || !insideGitRepository(projectRoot)) return new Set();
+  const checked = spawnSync(
+    "git",
+    [...GIT_PLATFORM_ARGS, "-C", projectRoot, "check-ignore", "-z", "--stdin"],
+    {
+      env: gitEnvironment(process.env),
+      input: absPaths.join("\0"),
+      encoding: "utf-8",
+      timeout: DEFAULT_SUBPROCESS_TIMEOUT_MS,
+    },
+  );
+  // Status 0 means some of them are ignored, 1 means none are; anything else
+  // is git failing to answer.
+  if (checked.error !== undefined || checked.signal !== null || checked.status !== 0) return new Set();
+  return new Set(
+    (checked.stdout ?? "").split("\0").filter((line) => line !== "").map((line) => resolve(projectRoot, line)),
+  );
+}
+
+/**
+ * Why the engine will not copy what the person named: a single document over
+ * the per-document cap, or a folder over a batch cap. Checked BEFORE the copy,
+ * because the verb's own refusal comes after one, which used to leave the
+ * copies behind for a retry to duplicate. Null when the copy can go ahead.
+ */
+function knowledgeCopyCapRefusal(
+  projectDir: string,
+  shown: string,
+  entries: Array<{ file: string; size: number }>,
+  kb: typeof import("./aidlc-knowledge.ts"),
+): string | null {
+  const smaller = "Name a subfolder, or one document at a time.";
+  const big = entries.find((entry) => entry.size > kb.EXTRACT_INPUT_BYTE_CAP);
+  if (big !== undefined) {
+    return `${toPosix(relative(projectDir, big.file))} is ${big.size} bytes, over the ` +
+      `${kb.EXTRACT_INPUT_BYTE_CAP}-byte per-document cap; nothing was copied. Split it or reduce it ` +
+      "below the cap, then name it again.";
+  }
+  if (entries.length > kb.EXTRACT_BATCH_DOC_CAP) {
+    return `${shown} holds ${entries.length} documents, over the ${kb.EXTRACT_BATCH_DOC_CAP}-document ` +
+      `batch cap; nothing was copied or indexed. ${smaller}`;
+  }
+  const bytes = entries.reduce((total, entry) => total + entry.size, 0);
+  if (bytes > kb.EXTRACT_BATCH_BYTE_CAP) {
+    return `${shown} holds ${entries.length} documents of ${bytes} bytes, over the ` +
+      `${kb.EXTRACT_BATCH_BYTE_CAP}-byte batch cap; nothing was copied or indexed. ${smaller}`;
+  }
+  return null;
+}
+
+/** What the command layer copied in for the person, for the line it says. */
+export interface KnowledgeDocumentCopy {
+  target: string;
+  /** Documents copied, which is what the verb then indexes. */
+  files: number;
+  /** Whether git ignores the path they named. */
+  gitIgnored: "yes" | "no" | "unknown";
+  /** Files inside a named folder that git ignores, left where they are. */
+  leftOut: number;
+}
+
+export function copyNamedDocumentIntoKnowledge(
+  projectDir: string,
+  kb: typeof import("./aidlc-knowledge.ts"),
+  space: string,
+  absPath: string,
+): KnowledgeDocumentCopy | { refusal: string } {
+  const documentsReal = ensureKnowledgeDocumentsFolder(projectDir, kb, space);
+  const shown = toPosix(relative(projectDir, absPath));
+  const gitIgnored = documentInputGitIgnored(projectDir, shown);
+  const real = realpathSync(absPath);
+  const named = statSync(real);
+  if (!named.isDirectory()) {
+    const refusal = knowledgeCopyCapRefusal(projectDir, shown, [{ file: real, size: named.size }], kb);
+    if (refusal !== null) return { refusal };
+    const { target } = copyIntoDocuments(kb, documentsReal, basename(real), readFileSync(real));
+    return { target, files: 1, gitIgnored, leftOut: 0 };
+  }
+  const found: Array<{ file: string; size: number }> = [];
+  for (const file of kb.walkDocuments(real)) {
+    try {
+      found.push({ file, size: statSync(file).size });
+    } catch { /* vanished mid-walk; it is not copied and not counted */ }
+  }
+  // A file inside the folder that git ignores stays where it is: the person
+  // named the folder, not that file, and copying it in would commit what they
+  // keep out of git. A folder that is itself ignored is copied whole, because
+  // that one they did name, and the line tells them the copy is not ignored.
+  const ignoredInside = gitIgnored === "no"
+    ? gitIgnoredAmong(projectDir, found.map((entry) => entry.file))
+    : new Set<string>();
+  const copyable = found.filter((entry) => !ignoredInside.has(entry.file));
+  const refusal = knowledgeCopyCapRefusal(projectDir, shown, copyable, kb);
+  if (refusal !== null) return { refusal };
+  if (copyable.length === 0) {
+    throw new Error(`${shown} holds no documents to add`);
+  }
+  // A folder of its own name, never merged into one already there: the copy is
+  // this folder as it is now, not a blend of two.
+  const base = basename(real).replace(/^\.+/, "") || "documents";
+  let root = join(documentsReal, base);
+  for (let n = 2; existsSync(root); n++) {
+    if (n > DOCUMENT_INPUT_COPY_NAME_LIMIT) {
+      throw new Error(`every name from ${base} to ${base}-${DOCUMENT_INPUT_COPY_NAME_LIMIT} is already taken`);
+    }
+    root = join(documentsReal, `${base}-${n}`);
+  }
+  for (const entry of copyable) {
+    const target = join(root, relative(real, entry.file));
+    mkdirSync(dirname(target), { recursive: true });
+    writeFileSync(target, readFileSync(entry.file), { flag: "wx" });
+  }
+  return { target: root, files: copyable.length, gitIgnored, leftOut: found.length - copyable.length };
 }
 
 // Why an onboarded document came back with no text, in the person's terms.

@@ -29,6 +29,7 @@ import { appendFileSync, mkdtempSync, readdirSync, readFileSync, rmSync } from "
 import { homedir, tmpdir } from "node:os";
 import { basename, delimiter, isAbsolute, join } from "node:path";
 import { resolveExecutableOnPath } from "./aidlc-config-diagnostics.ts";
+import { setByDotenvFile } from "./aidlc-runtime-paths.ts";
 import type { KiroEffort } from "./aidlc-tiers.ts";
 
 export type KiroPreset = "minimal" | "balanced" | "thorough";
@@ -89,29 +90,9 @@ function isSeamWriteLog(path: string): boolean {
 
 // Bun loads the .env files of the folder it runs in, so a seam those files set
 // is ignored: only a variable the test runner set reaches the seam, never one a
-// project ships to forge Kiro's answers.
-const BUN_DOTENV_FILES = [
-  ".env",
-  ".env.local",
-  ".env.development",
-  ".env.development.local",
-  ".env.production",
-  ".env.production.local",
-  ".env.test",
-  ".env.test.local",
-];
-
-export function setByDotenvFile(name: string, dir = process.cwd()): boolean {
-  // Any casing counts: Windows reads environment names case-insensitively.
-  const assignment = new RegExp(`^\\s*(?:export\\s+)?${name}\\s*=`, "mi");
-  return BUN_DOTENV_FILES.some((file) => {
-    try {
-      return assignment.test(readFileSync(join(dir, file), "utf-8"));
-    } catch {
-      return false;
-    }
-  });
-}
+// project ships to forge Kiro's answers. aidlc-runtime-paths.ts drops such names from
+// process.env before any read; these checks stay as a second, per-name answer.
+export { setByDotenvFile };
 
 // The environment Kiro runs with. A KIRO_HOME that a project's .env sets is
 // dropped, so Kiro reads and writes the person's own settings, never a folder a

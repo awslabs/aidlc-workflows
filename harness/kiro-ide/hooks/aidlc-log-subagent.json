@@ -4,7 +4,7 @@
     {
       "name": "aidlc-log-subagent",
       "trigger": "PostToolUse",
-      "matcher": "^(subagent_.+|invoke_sub_agent|orchestrate_subagent)$",
+      "matcher": "^(?!subagent_response$)(subagent_.+|invoke_sub_agent|orchestrate_subagent)$",
       "description": "Records in the audit log when a specialist agent finishes its part of a stage.",
       "action": { "type": "command", "command": "{{INVOKE}} engine adapter kiro-ide log-subagent" },
       "timeout": 1800
