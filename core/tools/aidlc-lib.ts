@@ -39019,11 +39019,12 @@ export const ENGINE_ERROR_RELAY_NOTE =
  * user-facing message uses. Engine errors can quote values from the project
  * (a scope name, a path, a setting), so the warning keeps its own words and
  * the error's apart: this line is ours, and the message follows on its own
- * `> ` line, quoted exactly as reported. The relay only carries one printable line, so nothing in the
- * message can leave that quoted line.
+ * `> ` line, exactly as the engine wrote it. The relay only carries one
+ * printable line, so nothing in the message can leave that quoted line. The
+ * person reads this under the harness's own prefix ("PostToolUse:Bash says:"
+ * on Claude Code), so it says what happened and nothing about the relay.
  */
-export const ENGINE_ERROR_RELAY_LABEL =
-  "The workflow stopped with this error, quoted exactly as reported (it can include values from this project):";
+export const ENGINE_ERROR_RELAY_LABEL = "The workflow stopped with this error:";
 
 /** The text a relay shows the person: the fixed line, then the quoted message. */
 export function engineErrorRelayText(message: string): string {
