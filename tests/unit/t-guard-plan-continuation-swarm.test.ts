@@ -1051,3 +1051,23 @@ describe("a parallel batch's writes judged from the parent", () => {
     expect(raised.err).toContain(REFUSAL);
   });
 });
+
+// The engine's own recorder writes the person's choice with its option letter
+// ("[Answer]: A. Approve Plan"); a hand-recorded answer carries the bare label.
+// Both are the same answer to every reader, prepare's source preflight included.
+describe("prepare reads the answer the engine recorded", () => {
+  test("the lettered Approve Plan line forks the worker like the bare label does", () => {
+    const pd = fixture();
+    const questions = join(codeGenerationRecordDir(pd, UNIT), "code-generation-questions.md");
+    const recorded = readFileSync(questions, "utf-8");
+    expect(recorded).toContain("[Answer]: Approve Plan");
+    // The receipt binds the answer-blanked prompt, so the line's spelling is free to be the recorder's.
+    writeFileSync(questions, recorded.replace("[Answer]: Approve Plan", "[Answer]: A. Approve Plan"));
+    expect(evaluateCodeGenerationApproval(pd, TARGET).ok).toBe(true);
+    const prepared = prepare(pd);
+    expect(prepared.code, `${prepared.out}\n${prepared.err}`).toBe(0);
+    expect(prepared.err).not.toContain("must contain exactly [Answer]");
+    expect(existsSync(join(child(pd), "src", `${UNIT}.ts`))).toBe(true);
+    expect(starts(pd)).toHaveLength(1);
+  });
+});

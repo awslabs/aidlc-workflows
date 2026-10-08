@@ -540,6 +540,16 @@ export function recordedApprovalFingerprint(questions: string): string | null {
 // "Plan approval off" is the engine's own record for a plan built without
 // asking. It grants nothing alone: every reader also needs the engine's receipt.
 const APPROVE_PLAN_RE = /^(?:(?:[A-Z][.)][ \t]*)?["']?Approve Plan["']?|Plan approval off)$/i;
+
+/**
+ * The label on a recorded `[Answer]:` line: the option letter the engine's own
+ * recorder writes ("A. Approve Plan") or a picker echoes ("B) Request Changes"),
+ * and quotes around the label, are not the answer. Every reader compares the
+ * label, so the engine's recorded line and a hand-written one read the same.
+ */
+export function planApprovalAnswerLabel(answer: string): string {
+  return answer.trim().replace(/^[A-Z][.)][ \t]*/, "").replace(/^["']|["']$/g, "").trim();
+}
 const QUESTION_PREFIX_RE =
   /^(?:(?:q(?:uestion)?[ \t]*)?\d+[ \t]*[:.)-][ \t]*)/i;
 const NUMBERED_QUESTION_HEADING_RE =
@@ -4207,7 +4217,12 @@ function planApprovalQuestionEvidence(
     );
   }
   const latest = latestPlanApproval(artifacts.questions);
-  if (!latest.found || latest.answer === null || latest.answer !== expectedAnswer) {
+  // A blank is read exactly; a choice is read by its label (the recorder's
+  // option letter is not the answer, see planApprovalAnswerLabel).
+  const answered = latest.answer === null
+    ? null
+    : expectedAnswer === "" ? latest.answer : planApprovalAnswerLabel(latest.answer);
+  if (!latest.found || answered === null || answered.toLowerCase() !== expectedAnswer.toLowerCase()) {
     throw new Error(
       `Plan Approval questions file must contain exactly [Answer]: ${expectedAnswer || "(blank)"}`,
     );
