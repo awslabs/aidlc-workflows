@@ -261,6 +261,8 @@ import {
   personSpokeSinceGate,
   planApprovalAskIsOpen,
   recordDir,
+  renderReviewRequestCommand,
+  type FreshReviewReceipts,
   engineDir,
   isPlainObject,
   parseCeremonySetting,
@@ -496,7 +498,7 @@ import {
   rulesContentEntries,
   type RuleContent,
 } from "./aidlc-steering.ts";
-import { chatHoldsRules, noteRulesDelivered, RULES_HELD_NOTE } from "./aidlc-rules-held.ts";
+import { chatHoldsRules, chatNeedsPersona, noteRulesDelivered, RULES_HELD_NOTE } from "./aidlc-rules-held.ts";
 import { refreshKiroIdeSteering } from "./aidlc-includes.ts";
 
 // Read the workflow state file if it exists, else null. The engine's `next` is
@@ -513,6 +515,55 @@ function commonFolder(paths: readonly string[]): string {
     shared.push(segment);
   }
   return shared.join("/");
+}
+
+// What the stage produced, said with its approval question so the person sees
+// it even when no summary came before: the stage's files that are on disk, each
+// named by its path from the folder they share (a questions file with how many
+// questions it holds and how many are answered), and that folder. A stage that
+// writes once per repo (Reverse Engineering in a workspace of sibling repos)
+// names each file by its repo, "orders-svc/architecture.md"; a single-folder
+// stage names the bare file. "" when the folder cannot be named (a stage that
+// repeats per Unit, with no Unit named).
+function producedLine(node: GraphStage, unit: string | null, unitFolders: boolean, projectDir: string): string {
+  if (unitFolders && !unit) return "";
+  const paths = resolveProduces(node, unitFolders ? unit : null, engineRelativeRecordDir(projectDir), codekbCtxFor(projectDir));
+  const folder = commonFolder(paths);
+  if (!folder) return "";
+  const names = paths
+    .filter((path) => existsSync(join(projectDir, path)))
+    .map((path) => {
+      const name = path.startsWith(`${folder}/`) ? path.slice(folder.length + 1) : path;
+      return name.endsWith("-questions.md") ? `${name}${questionsCount(join(projectDir, path))}` : name;
+    });
+  if (names.length === 0) return `${node.name} is ready for your review. Its output goes in ${folder}/.`;
+  const list = names.length === 1 ? names[0] : `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
+  return `${node.name} is ready for your review. It produced ${list}, in ${folder}/.`;
+}
+
+// " (3 questions, 2 answered)" for a questions file: its `[Answer]:` lines
+// outside the Consolidated Summary Confirmation, and how many hold an answer.
+// "" when the file cannot be read (a symlink, a FIFO, or more than the cap, as
+// the other record reads refuse) or holds no question.
+const QUESTIONS_COUNT_MAX_BYTES = 1024 * 1024;
+function questionsCount(path: string): string {
+  const text = readBoundedRegularFile(path, QUESTIONS_COUNT_MAX_BYTES);
+  if (text === null) return "";
+  let total = 0;
+  let answered = 0;
+  for (const section of text.replace(/\r\n/g, "\n").split(/^(?=## )/m)) {
+    if (/^## [^\n]*summary confirmation/i.test(section)) continue;
+    for (const line of section.split("\n")) {
+      const match = /^\[Answer\]:[ \t]*(.*)$/.exec(line);
+      if (match === null) continue;
+      total++;
+      if (/[^\s_]/.test(match[1])) answered++;
+    }
+  }
+  if (total === 0) return "";
+  const noun = total === 1 ? "question" : "questions";
+  const done = answered === total ? "all answered" : answered === 0 ? "none answered" : `${answered} answered`;
+  return ` (${total} ${noun}, ${done})`;
 }
 
 function loadStateFileIfPresent(projectDir: string): string | null {
@@ -1317,6 +1368,7 @@ function writePrepared(prepared: PreparedEmission): void {
       engineSessionId,
       preparedRulesDelivery.bundle,
       preparedRulesDelivery.held,
+      preparedRulesDelivery.persona,
     );
     // Kiro IDE: a chat that starts after the memory files changed captures
     // their new text (a no-op when the steering file already holds it).
@@ -2711,13 +2763,15 @@ function openApprovalGateStage(stateContent: string): string | null {
 
 // Words while a stage's approval gate is open: the conductor reads whether
 // they answer it, the same split as openQuestionReplyDirective.
-function openGateReplyDirective(stage: string, requestId: string): PrintDirective {
+function openGateReplyDirective(stage: string, requestId: string, folder: string): PrintDirective {
   const orchestrate = aidlcToolInvocation("orchestrate");
   return printDirective(
     `Stage "${stage}" is waiting for the person's approval, and their reply may answer it. Read it. If it ` +
       `approves, run \`${orchestrate} report --stage ${shellArg(stage)} --result approved --user-input "Approve"\`; ` +
       `if it asks for changes, run \`${orchestrate} report --stage ${shellArg(stage)} --result rejected ` +
-      `--user-input "Request Changes"\`. Then follow what it returns. If it is about something else, such as new ` +
+      `--user-input "Request Changes"\`. Then follow what it returns. If it asks about what the stage found or ` +
+      `produced, answer it from the files in ${folder ? `${folder}/` : "the stage's folder"}, then ask the approval ` +
+      "question again. If it is about something else, such as new " +
       `work or a change to the plan, run \`${orchestrate} next --request ${requestId}\` and follow what it returns: ` +
       "the engine kept their words and asks them where that work belongs. If you cannot tell which it is, ask the " +
       "person in one short question and follow their answer.",
@@ -2816,10 +2870,12 @@ function withdrawRoutedWords(projectDir: string, question: StoredQuestion): void
   }
 }
 
-// A plan the person approved changed before the build, and the change line
-// asked whether to go back to it: their words, in any chat and in any wording,
-// may say yes. The conductor reads that first; the restore itself needs their
-// word on record. Empty when no plan they approved changed.
+// A plan the person approved changed, and the change line asked whether to go
+// back to it: their words, in any chat and in any wording, may say yes. The
+// conductor reads that first; the restore itself needs their word on record.
+// Once the build has started, going back means building that step again from
+// the approved plan: the reading names the restore, and the `next` after it
+// issues that build. Empty when no plan they approved changed.
 function approvedPlanUndoReading(projectDir: string, stateContent: string): string {
   const marker = readActiveDirectiveMarker(projectDir, stateContent);
   if (marker?.version !== 2 || marker.stage !== "code-generation") return "";
@@ -2829,11 +2885,17 @@ function approvedPlanUndoReading(projectDir: string, stateContent: string): stri
   const changed = units.filter((unit) => approvedPlanChangeLine(projectDir, { unit }, issued) !== null);
   if (changed.length === 0) return "";
   const posture = aidlcToolInvocation("testing-posture");
+  // The restore and `next`, after the build has started as before it: the
+  // restore puts the approved content back, so the build `next` issues is the
+  // approved plan's. Naming a reopen beside it undid the person's approval
+  // (its `Reopen: jump` row drops the standing approval, so `next` asked them
+  // to approve again under a line promising the build) and the stage-level
+  // form of that command does not exist (#2084 F1 follow-up).
   const restores = changed.map((unit) =>
     `\`${posture} restore ${unit === null ? "--stage-level" : `--unit ${shellArg(unit)}`}\``);
-  return "A plan the person approved changed before the build, and they were asked whether to go back to it. If " +
-    `their words say to go back to the plan they approved, run ${restores.join(", then ")}, say the line it prints, ` +
-    `then run bare \`${aidlcToolInvocation("orchestrate")} next\`. Otherwise: `;
+  return "A plan the person approved changed, and they were asked whether to go back to it. If " +
+    `their words say to go back to the plan they approved, run ${restores.join(", then ")}, say the line it ` +
+    `prints, then run bare \`${aidlcToolInvocation("orchestrate")} next\`. Otherwise: `;
 }
 
 // Words while a workflow is active may ask to redo, jump to a stage, or start
@@ -3661,6 +3723,11 @@ export interface ParsedFlags {
    * rather than running a stage while they believe a check went off.
    */
   unreadSetting?: string;
+  /**
+   * The line was only `--session <id>`: this chat's session, which the agent
+   * passed on from SessionStart, and none of the person's words.
+   */
+  agentSessionOnly?: boolean;
   retiredFlags?: string[];
   retiredOnly?: boolean;
 }
@@ -4042,6 +4109,13 @@ export function parseNextFlags(argv: string[]): ParsedFlags {
       i++;
     } else if (a === "--rhythm") {
       flags.parseError = "--rhythm requires <per-stage|unit-end>.";
+    } else if (a === "--session" && intentWords.length === 0 && i + 1 < args.length && !args[i + 1].startsWith("--")) {
+      // This chat's session id, which SessionStart gives the agent for Plan
+      // Approval's --session; `next` finds its session on its own. Read as task
+      // text it named the work "--session sess_...". After a word of the
+      // person's it is one of their words.
+      if (args.length === 2) flags.agentSessionOnly = true;
+      i++;
     } else if (a === "--init" || a === "--force") {
       // RETIRED flags; see the named "Branch 3 — the legacy `--init` flag —
       // retired in P4" note in routeNext. Record and consume them so they never
@@ -5073,7 +5147,9 @@ let preparedTransportIdentity: { bundle: string; directiveSha256: string } | nul
 // The rule bundle this invocation prepared, and whether the chat already held
 // it, so writing a run-stage that carried the text can record it (Codex, see
 // aidlc-rules-held.ts).
-let preparedRulesDelivery: { projectDir: string; space: string; bundle: string; held: boolean } | null = null;
+let preparedRulesDelivery:
+  | { projectDir: string; space: string; bundle: string; held: boolean; persona: string | null }
+  | null = null;
 
 // "First run-stage of the workflow" — the deterministic signal D-E delivery
 // keys on. The engine is stateless per call, so it cannot track a "session";
@@ -5087,13 +5163,12 @@ let preparedRulesDelivery: { projectDir: string; space: string; bundle: string; 
 // in-flight workflow; a resume that lands back on the very first stage correctly
 // re-delivers, which is harmless (the persona is idempotent in-context).
 //
-// HONEST LIMITATION: because the engine has no session memory, "first" means
-// "first of the workflow's substantive stages", not "first call this session".
-// In a long single session the persona is delivered once (at workflow open) and
-// the conductor carries it; a fresh session resuming mid-workflow relies on the
-// persona persisting in the prior context OR on the Stop-hook/loop re-priming —
-// it is NOT re-baked mid-workflow. This is the SPIKE-6 contract (deliver on the
-// opening directive); documented here so the boundary is visible, not faked.
+// "First" here means "first of the workflow's substantive stages". It is no
+// longer the only time the persona rides: a chat that did not get it (a new
+// chat on work under way, or one that compacted) is handed it on its own first
+// run-stage, from the per-chat record in aidlc-rules-held.ts. Hosts whose
+// commands do not name their chat (Copilot, Cursor) still get this one
+// delivery only, so the extra directive part never repeats there.
 function isFirstRunStageOfWorkflow(
   stateContent: string | null,
   node: GraphStage,
@@ -5874,10 +5949,13 @@ function boundedContextWarnings(warnings: string[]): string[] {
 // stage-level Construction directory. `scope` + `stateContent` feed the gate
 // computation (the skeleton round-trip) and the first-run-stage persona delivery
 // (decision D-E).
-// This stage's `<slug>-questions.md` when it already holds an answer of the
-// person's (an `[Answer]:` with more than blanks or underscores), as a path from
-// the project; null when it has none or cannot be read. A stage resumed in a
-// new chat keeps it instead of being asked from the start again (#1873).
+// This stage's `<slug>-questions.md` when it already holds the stage's
+// questions (an `[Answer]:` tag, filled in or still blank), as a path from the
+// project; null when there is no such file or it cannot be read. A stage
+// resumed in a new chat keeps it and asks only the open questions, as written,
+// instead of being asked from the start again (#1873); a file whose questions
+// are all still open is kept the same way, or a resumed stage with two open
+// questions writes five new ones over them.
 function answeredQuestionsFile(projectDir: string, node: GraphStage, unit: string | null): string | null {
   try {
     const dir = node.phase === "construction" && unit !== null && unit !== UNIT_NAME_PLACEHOLDER
@@ -5885,7 +5963,7 @@ function answeredQuestionsFile(projectDir: string, node: GraphStage, unit: strin
       : stageDir(projectDir, node.phase, node.slug);
     const path = join(dir, `${node.slug}-questions.md`);
     if (!existsSync(path)) return null;
-    return /^\[Answer\]:[ \t]*[^\s_][^\n]*$/m.test(readFileSync(path, "utf-8"))
+    return /^\[Answer\]:/m.test(readFileSync(path, "utf-8"))
       ? relative(projectDir, path).replaceAll("\\", "/")
       : null;
   } catch {
@@ -6085,9 +6163,22 @@ function buildRunStageDirective(
   // always the conductor's first of that run regardless of state - attached
   // HERE (not by the caller after build) so the final run-stage is complete.
   const firstOfWorkflow = isFirstRunStageOfWorkflow(stateContent, node);
-  if (forcePersona || firstOfWorkflow) {
-    const persona = readConductorPersona();
-    if (persona !== null) directive.conductor_persona = persona;
+  const persona = readConductorPersona();
+  // The chat this command runs in may be a new one on work already under way,
+  // or one that compacted away what it was handed: a host whose commands name
+  // their chat says so, and the persona rides again (aidlc-rules-held.ts).
+  // A read-only consultation (the Stop hook's own `next`) answers with exactly
+  // the step the agent's own call got, so it keeps the workflow-opening
+  // delivery and skips only the per-chat hand-over: it cannot record one, so
+  // asking for it every turn end would change the step it answers with and
+  // restart the rules delivery at part one.
+  if (
+    persona !== null &&
+    (forcePersona || firstOfWorkflow ||
+      (!isReadOnlyEngineProbe() &&
+        chatNeedsPersona(codekbCtx?.projectDir ?? engineProjectDir, engineSessionId, sha256(persona))))
+  ) {
+    directive.conductor_persona = persona;
   }
   // The spoken line for entering this stage. Attached here, where the scope and
   // first-of-workflow facts are in hand; emit() drops it again on a per-unit
@@ -6706,7 +6797,13 @@ function transportRunStage(
     directive.rules_held_note = RULES_HELD_NOTE;
   }
   const content = held ? [] : loaded.content;
-  preparedRulesDelivery = { projectDir: route.codekbCtx.projectDir, space: route.codekbCtx.space, bundle, held };
+  preparedRulesDelivery = {
+    projectDir: route.codekbCtx.projectDir,
+    space: route.codekbCtx.space,
+    bundle,
+    held,
+    persona: directive.conductor_persona === undefined ? null : sha256(directive.conductor_persona),
+  };
   const directiveHash = sha256(JSON.stringify(directive));
   const persona = personaSentAhead(directive);
   if (persona !== null) delete directive.conductor_persona;
@@ -8284,6 +8381,18 @@ function routeNext(args: string[], projectDir: string | undefined): void {
   // just typed `/aidlc <scope>` to type exactly that — circular now that a
   // named scope creates).
   if (!stateContent) {
+    // The agent passed this chat's session in place of the person's request.
+    // They may well have described their work, so the error below would ask
+    // them for it again: the agent runs `next` once more with their words.
+    if (flags.agentSessionOnly) {
+      const orchestrate = aidlcToolInvocation("orchestrate");
+      emit(printDirective(
+        "`next` takes the person's request, not `--session`, so nothing ran. Run " +
+          `\`${orchestrate} next "<what the person typed after ${entrySkillInvocation()}, word for word>"\` now and ` +
+          `follow what it returns; if they typed nothing after it, run \`${orchestrate} next\`.`,
+      ));
+      return;
+    }
     // Work in progress here with none selected (a teammate's fresh clone, or a
     // conversation that has not joined the record it found) is put to the
     // person by name, never answered as if there were none.
@@ -8427,7 +8536,14 @@ function routeNext(args: string[], projectDir: string | undefined): void {
         pd, flags.intent, "", "routing", { space: selection.space, targets: routingTargets() }, false, undefined,
         undefined, routingSettings(carriedRoutingFlags(flags)),
       );
-      emit(openGateReplyDirective(gateStage, words.id));
+      // Where the stage's files are, for a question about them; a stage that
+      // repeats per Unit names no folder here (no Unit is named with the words).
+      const gateNode = nodeForSlug(gateStage);
+      const gateScope = getField(stateContent, "Scope")?.trim() ?? "";
+      const gateFolder = gateNode && !(isPerUnit(gateNode) && !usesStageLevelPerUnitArtifacts(gateScope, stateContent))
+        ? commonFolder(resolveProduces(gateNode, null, engineRelativeRecordDir(pd), codekbCtxFor(pd)))
+        : "";
+      emit(openGateReplyDirective(gateStage, words.id, gateFolder));
       return;
     }
     // Words alone (nothing `next` reads as a flag, scope, verb or noun) may
@@ -8854,6 +8970,15 @@ function applyGateOnlyShape(
   directive.gate = true;
   delete directive.reviewer_max_iterations;
   delete directive.narration;
+  // The gate shown again says what the stage produced, as the reply that
+  // opened it did.
+  const gateNode = nodeForSlug(directive.stage);
+  if (gateNode) {
+    const scope = getField(stateContent, "Scope")?.trim() ?? "";
+    const unitFolders = isPerUnit(gateNode) && !usesStageLevelPerUnitArtifacts(scope, stateContent);
+    const line = producedLine(gateNode, directive.unit ?? null, unitFolders, projectDir);
+    if (line) directive.narration = line;
+  }
   directive.protocol_modules = (directive.protocol_modules ?? []).filter(
     (module) =>
       module !== "reviewer" &&
@@ -8985,8 +9110,8 @@ function applyConstructionCheckpointShape(
   ) {
     directive.protocol_modules.push("learnings");
   }
-  // After the person's "approve it as it is", the one question they get is
-  // the approval itself.
+  // After the person's "approve it as it is", or with a review that did not
+  // finish, no learnings question comes before the approval.
   if (checkpoint.review_not_finished) {
     directive.protocol_modules = directive.protocol_modules.filter((module) => module !== "learnings");
   }
@@ -9515,18 +9640,20 @@ function nextUncoveredUnit(
   return { unit: uncovered[0], uncovered };
 }
 
-// The step a Unit still owes when its work for this stage is done: every
-// required file is on disk and a fresh final review of them is recorded in this
-// attempt (READY, or NOT-READY once its review turns are spent, which goes to
-// the person as it is), but its completion receipt was never written (receipt mode settles a
-// Unit only on UNIT_COMPLETED). Handing back the stage body, or "run next",
-// only loops, so the step names the receipt's exact commands. The fresh review
-// is the evidence the files are this attempt's: a reopened or redone Unit's
-// earlier files never carry one. With reviews off (#2021) the evidence is that
-// this is the stage's first attempt for the Unit: nothing has moved its floor
-// since the workflow (or the stage) began, so no earlier attempt left files.
-// Null whenever anything but the receipt is left, or a wave owns the stage's
-// completions.
+// The step a Unit still owes when its work for this stage is on disk: every
+// required file is there, but one of the records that settles the Unit is not.
+// Either the review (never asked for, waiting for its verdict, or asking for
+// repairs) or, with the review recorded, the completion receipt (receipt mode
+// settles a Unit only on UNIT_COMPLETED). Handing back the stage body, or "run
+// next", only loops: the files get built again and nothing says which record is
+// missing, which is what sent live runs round the same Unit step with no reason
+// given. So the step names the exact commands instead. A fresh final review
+// (READY, or NOT-READY once its review turns are spent, which goes to the
+// person as it is) is the evidence the files are this attempt's; without one,
+// as with reviews off (#2021), the evidence is that this is the stage's first
+// attempt for the Unit: nothing has moved its floor since the workflow (or the
+// stage) began, so no earlier attempt left files. Null whenever anything but
+// those records is left, or a wave owns the stage's completions.
 function unitReceiptOnlyStep(
   projectDir: string,
   node: GraphStage,
@@ -9556,13 +9683,59 @@ function unitReceiptOnlyStep(
   } else {
     const review = freshReviewReceipts(projectDir, stateContent, node, { reviewClass });
     // Only final verdicts are kept, the same evidence `unit complete` accepts.
-    if (!review.unitVerdicts.has(unit)) return null;
+    if (!review.unitVerdicts.has(unit)) {
+      // The Unit's files are written and its review is what the stage still
+      // lacks. Handing the stage body back builds them again and says nothing
+      // about either, so the step names the review this attempt is waiting
+      // for. A review whose receipt went stale has its own recovery path and
+      // keeps it; a later attempt's files are not evidence of work done, as
+      // with reviews off.
+      if (review.unitStale.has(unit) || review.unitStaleProgress.has(unit)) return null;
+      if (!unitFirstStageAttempt(projectDir, node.slug, unit, stateContent)) return null;
+      return unitReviewStep(projectDir, node, unit, review);
+    }
   }
   const command = (action: string): string =>
     `\`${renderEngineInvocation({ route: "state", args: ["unit", action, "--stage", node.slug, "--unit", unit] })}\``;
   const steps = own ? command("complete") : `${command("start")}, then ${command("complete")}`;
   const done = reviewClass === "none" ? "written" : "written and reviewed";
   return `Unit "${unit}"'s ${node.name} work is ${done}, but its completion is not recorded: run ${steps}.`;
+}
+
+// The review a Unit's stage is still waiting for, as the step that gets it:
+// the first request when none was asked for in this attempt, the verdict when
+// one is waiting, and the next pass when the reviewer asked for repairs. The
+// same step the Construction checkpoint names when it is the checkpoint that
+// is not ready, said here for a stage whose Unit is otherwise done.
+function unitReviewStep(
+  projectDir: string,
+  node: GraphStage,
+  unit: string,
+  review: FreshReviewReceipts,
+): string {
+  const reviewer = node.reviewer as string;
+  const request = (iteration: number, retryPending = false): string =>
+    `\`${renderReviewRequestCommand({
+      projectDir,
+      stage: node.slug,
+      reviewer,
+      unit,
+      iteration,
+      ...(retryPending ? { retryPending: true } : {}),
+    })}\``;
+  const work = `Unit "${unit}"'s ${node.name} work is written`;
+  const pending = review.unitPending.get(unit);
+  if (pending === undefined) {
+    const iteration = (review.unitIterations.get(unit) ?? 0) + 1;
+    return `${work}, but its review was never asked for: request it with ${request(iteration)}, ` +
+      "then record the verdict.";
+  }
+  if (pending.state === "repair-required" && pending.didNotFinish !== true) {
+    return `${work} and its review asked for repairs: make them, then request pass ` +
+      `${pending.iteration + 1} with ${request(pending.iteration + 1)} and record the verdict.`;
+  }
+  return `${work} and its review is waiting for a verdict: record the verdict for pass ` +
+    `${pending.iteration}, or ask the reviewer again with ${request(pending.iteration, true)}.`;
 }
 
 // True when the Unit's receipts for this stage are read against the first
@@ -14762,17 +14935,15 @@ function handleReport(args: string[], projectDir: string | undefined): void {
         const listed = approvesTogetherFromToolOutput(res.stdout);
         const next = nextInScopeStage(listed.at(-1) ?? slug, scope, loadStateFileIfPresent(pd) ?? undefined);
         gateReply.next_stage = next ? next.name : null;
-        // Where the stage's output is, said with the gate, so the person can
-        // look even when no summary comes before the question. A stage that
+        // What the stage produced and where, said with the gate, so the person
+        // sees it even when no summary comes before the question. A stage that
         // repeats per unit writes under the unit's folder, so without the unit
-        // named no folder is said rather than a wrong one.
+        // named nothing is said rather than a wrong folder.
         const unit = flags.unit?.trim() || null;
         const gateState = loadStateFileIfPresent(pd);
         const unitFolders = isPerUnit(node) && !usesStageLevelPerUnitArtifacts(scope, gateState);
-        const folder = unitFolders && !unit
-          ? ""
-          : commonFolder(resolveProduces(node, unitFolders ? unit : null, engineRelativeRecordDir(pd), codekbCtxFor(pd)));
-        if (folder) gateReply.narration = `${node.name} is ready for your review: what it produced is in ${folder}/.`;
+        const line = producedLine(node, unit, unitFolders, pd);
+        if (line) gateReply.narration = line;
       }
     }
     emit(gateReply);

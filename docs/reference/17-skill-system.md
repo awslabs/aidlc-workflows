@@ -105,7 +105,7 @@ an ordinary failure is not a recovery directive or success.
 
 **The gate sentinel.** `run-stage`'s `gate` is a boolean for every deterministic case (`false` for the auto-proceeding bootstrap initialization stages, `true` for every other EXECUTE stage). One case is not deterministic: the first Construction Bolt's gate depends on the team's free-form `## Walking Skeleton` practices prose, which no parser can derive. The engine emits the string sentinel `GATE_UNRESOLVED` (`"unresolved"`) and defers the classification to the conductor's knowledge-work, which hands the stance back via `report --skeleton-stance <on|off|scope-dependent>`; the next `next` re-emits the same stage with a now-determined boolean gate.
 
-**The conductor persona delivery.** The conductor's execution-quality charter lives once at `aidlc-common/conductor.md`. No skill references it by path. Instead the engine reads it and bakes its contents into the `conductor_persona` field of the **first `run-stage` directive of the workflow**, or, when that run-stage would not fit the host's limit with it, of the first `load-steering` part ahead of it. When the conductor receives that field, it adopts the persona for the whole run. This keeps every entry point — framework runner and hand-written alike — on one persona with no per-skill diligence.
+**The conductor persona delivery.** The conductor's execution-quality charter lives once at `aidlc-common/conductor.md`. No skill references it by path. Instead the engine reads it and bakes its contents into the `conductor_persona` field of the **first `run-stage` directive each chat sees for the workflow**, or, when that run-stage would not fit the host's limit with it, of the first `load-steering` part ahead of it. A chat is known from the host's own identifier in the command's environment, and what it was handed is kept per chat (`aidlc/.aidlc-sessions/<chat>.rules-delivered.json`), so a new chat on work already under way, and a chat whose context was compacted, are handed the persona again. Copilot and Cursor name no chat in their commands, so there it rides the workflow's opening run-stage only. When the conductor receives that field, it adopts the persona for the whole run. This keeps every entry point — framework runner and hand-written alike — on one persona with no per-skill diligence.
 
 ---
 
@@ -201,7 +201,7 @@ batch. A successful native merge may remove its child; `--resume-existing`
 preserves the rejection revision, not an unconditional promise that the original
 child directory exists. See the [prepare and resume commands](../guide/12-cli-commands.md#aidlc-engine-swarm-prepare-prepare-a-reproducible-batch).
 
-These seven `SWARM_*` events are part of the 115-event audit taxonomy (see [State Machine](12-state-machine.md)). On an exit-2 envelope the conductor takes the baton back - failure always halts and re-engages the human regardless of autonomy mode.
+These seven `SWARM_*` events are part of the 117-event audit taxonomy (see [State Machine](12-state-machine.md)). On an exit-2 envelope the conductor takes the baton back - failure always halts and re-engages the human regardless of autonomy mode.
 
 **The driver seam.** `AIDLC_USE_SWARM=1` selects an inline Dynamic Workflow driver (the conductor authors a `Workflow` whose JS owns the per-unit pipeline and the iteration cap); unset selects the subagent floor (N parallel `Task` calls in one message, one per unit). If `=1` but the Workflow tool is unavailable, the conductor **loud-degrades** to the floor and passes `--degraded-from ultracode` so the referee emits `SWARM_DEGRADED`. The runaway backstop is not a cap inside the tool - it is the harness's Stop-hook ceiling, which is 8 blocks on this autonomous-Construction path (§3).
 
@@ -217,6 +217,6 @@ test instructions. Workers never re-resolve Testing Posture independently.
 
 - **The conductor's own chapter** — the forwarding loop, the gate ritual, and the learnings ritual in full. See [Orchestrator](03-orchestrator.md).
 - **The execution-truth artefact the engine and swarm read** — `runtime-graph.json` and its `bolt_dag` node. See [Runtime Graph](13-runtime-graph.md).
-- **The transitions `report` commits** - the workflow / phase / stage machines and the 115-event audit taxonomy. See [State Machine](12-state-machine.md).
+- **The transitions `report` commits** - the workflow / phase / stage machines and the 117-event audit taxonomy. See [State Machine](12-state-machine.md).
 - **The deterministic spine** — the Stop hook and the other framework hooks and tools. See [Hooks and Tools](06-hooks-and-tools.md).
 - **Using the runners day to day** — the typeable `/aidlc-<stage>` and `/aidlc-<scope>` commands. See the User Guide's [Skills and Runner Commands](../guide/17-skills.md).

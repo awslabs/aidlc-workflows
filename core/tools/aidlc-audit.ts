@@ -76,6 +76,7 @@ const VALID_EVENT_TYPES = new Set([
   "WORKFLOW_UNPARKED",
   "WORKFLOW_ARCHIVED",
   "WORKFLOW_UNARCHIVED",
+  "INTENT_REPOS_CHANGED",
   // Session events (hook-owned)
   "SESSION_STARTED",
   "SESSION_RESUMED",
@@ -85,6 +86,10 @@ const VALID_EVENT_TYPES = new Set([
   // approval/interview gate requires a HUMAN_TURN appended AFTER the last gate
   // resolution (in ledger order) before it commits.
   "HUMAN_TURN",
+  // Hook-owned, advisory, never a human turn: a prompt the host made for the
+  // agent (a workflow notice, a background task's notice, a brief) reached
+  // the prompt-submit seam and was not counted as the person's turn.
+  "HOST_TURN",
   // Initialization events (fire IN ADDITION TO STAGE_COMPLETED)
   "WORKSPACE_SCAFFOLDED",
   "WORKSPACE_SCANNED",
@@ -293,11 +298,13 @@ const EVENT_HEADINGS: Record<string, string> = {
   WORKFLOW_UNPARKED: "Workflow Unparked",
   WORKFLOW_ARCHIVED: "Workflow Archived",
   WORKFLOW_UNARCHIVED: "Workflow Unarchived",
+  INTENT_REPOS_CHANGED: "Intent Repos Changed",
   SESSION_STARTED: "Session Start",
   SESSION_RESUMED: "Session Resume",
   SESSION_COMPACTED: "Session Compacted",
   SESSION_ENDED: "Session End",
   HUMAN_TURN: "Human Turn",
+  HOST_TURN: "Host Turn",
   WORKSPACE_SCAFFOLDED: "Workspace Scaffolded",
   WORKSPACE_SCANNED: "Workspace Scanned",
   WORKSPACE_INITIALISED: "Workspace Initialised",
@@ -407,6 +414,9 @@ function jsonError(message: string): never {
 
 const CLI_RESERVED_EVENT_TYPES = new Set([
   "HUMAN_TURN",
+  // Hook-owned like HUMAN_TURN: only the hook that saw the host's prompt may
+  // say a turn was the host's.
+  "HOST_TURN",
   // Hook-owned like HUMAN_TURN: it spends a person's turn, so only the hook
   // that saw the empty question box may write it.
   "QUESTION_UNANSWERED",
@@ -477,6 +487,7 @@ export interface AuditEntryInput {
 export const CLI_PROTECTED_EVENT_TYPES = new Set([
   "STAGE_COMPLETED",
   "HUMAN_TURN",
+  "HOST_TURN",
   "QUESTION_UNANSWERED",
   "QUESTION_REPLIED",
   "REQUEST_ROUTED",

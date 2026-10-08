@@ -1875,10 +1875,7 @@ export function reviewInvalidationDetails(
         projectDir,
         stage.slug,
         unit,
-        auditBlockField(
-          staleReview.block,
-          "Unit Source Fingerprint",
-        ),
+        auditBlockField(staleReview.block, "Unit Source Fingerprint"),
         auditBlockField(event.block, "Unit Source Fingerprint"),
       );
       for (const path of sourceChanges.paths) changedUpstream.add(path);

@@ -1451,7 +1451,9 @@ describe("t115 reviewer precondition (report refuses approve without a recorded 
     expect(printed.kind).toBe("print");
     expect(printed.message).toBe('Recorded awaiting-approval for "requirements-analysis".');
     expect(typeof printed.next_stage).toBe("string");
-    expect(String(printed.narration)).toStartWith("Requirements Analysis is ready for your review: what it produced is in ");
+    expect(String(printed.narration)).toMatch(
+      /^Requirements Analysis is ready for your review\. (It produced .+, in|Its output goes in) aidlc\//,
+    );
     expect(countEvent(p, "STAGE_AWAITING_APPROVAL")).toBe(1);
   }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
@@ -2233,7 +2235,7 @@ describe("t115 the gate and a skip say what the plan does next", () => {
     expect(lastDirective(opened.stdout)).toMatchObject({ kind: "print", next_stage: "Scope Definition" });
     // Where the stage's output is, said with the gate.
     expect(String(lastDirective(opened.stdout).narration)).toMatch(
-      /^Feasibility[^:]* is ready for your review: what it produced is in aidlc\/spaces\/default\/intents\/[^/]+\/ideation\/feasibility\/\.$/,
+      /^Feasibility[^.]* is ready for your review\. It produced .*feasibility-questions\.md.*, in aidlc\/spaces\/default\/intents\/[^/]+\/ideation\/feasibility\/\.$/,
     );
 
     // Scope Definition is taken off the plan while Feasibility is still open.
@@ -2269,7 +2271,7 @@ describe("t115 the gate and a skip say what the plan does next", () => {
     });
     expect(opened.status, opened.out).toBe(0);
     expect(String(lastDirective(opened.stdout).narration)).toMatch(
-      /^Reverse Engineering is ready for your review: what it produced is in aidlc\/spaces\/default\/codekb\/[^/]+\/\.$/,
+      /^Reverse Engineering is ready for your review\. It produced .+, in aidlc\/spaces\/default\/codekb\/[^/]+\/\.$/,
     );
   });
 

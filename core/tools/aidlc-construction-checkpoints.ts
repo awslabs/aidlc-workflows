@@ -10,6 +10,7 @@ import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import { appendAuditEntryUnlocked } from "./aidlc-audit.ts";
 import { aidlcToolInvocation } from "./aidlc-runtime-paths.ts";
+import { APPROVAL_GATE_CHOICES, exactOptionPick } from "./aidlc-reply-reader.ts";
 import {
   activeIntentUuid,
   attemptEventDefinitelyBefore,
@@ -37,11 +38,16 @@ import {
   readProtectedResponse,
   requireProtectedResponse,
   protectedTargetDigest,
+  gateWordsSinceUnitReview,
+  markProtectedQuestionReplied,
   mintProtectedQuestion,
+  PROTECTED_RESPONSE_WORDS_MAX_CHARS,
+  writeProtectedResponse,
   isAutonomousMode,
   constructionCheckpointsApply,
   isNonAnswer,
   latestMainWorkflowStageRunFloorForProject,
+  latestPersonTurn,
   loadStageGraph,
   maximalAttemptEvents,
   personMayApproveOverUnfinishedReview,
@@ -87,6 +93,9 @@ import {
   type UnitLifecycleSnapshot,
   type WorkspaceSourceListing,
   type WorkspaceSourceState,
+  currentFingerprintForm,
+  rawFingerprintForm,
+  committedTextSha256,
 } from "./aidlc-lib.ts";
 
 
@@ -161,15 +170,22 @@ export interface ConstructionCheckpoint {
     /** The person chose Redo for this approved Unit's work, so it is asked about as new work. */
     redone?: true;
   } | null;
-  /** The stages whose unfinished review the person let this Unit go on
-   *  without ("approve it as it is"), and the one approval question. */
-  review_not_finished?: { stages: string[]; question: string };
+  /** The stages whose review did not finish. With `approved_in_words`, the
+   *  person's "approve it as it is" let this Unit go on without them, and is
+   *  its approval: nothing more is asked. Otherwise (a review that ended in
+   *  the NOT-READY fallback) `question` is the one approval question. */
+  review_not_finished?: { stages: string[]; question?: string; approved_in_words?: true };
   /** From verify: the one line for each change to this Unit's reviewed work
    *  its Guard Policy accepted, said before the person is asked. */
   change_notices?: string[];
   /** The person was asked to approve this Unit since its last checkpoint
    *  decision, so its learnings question, asked first, is behind them. */
   asked?: true;
+  /** From ask: what the person typed in this chat while the Unit's review ran,
+   *  before the question was asked, kept as its reply. The conductor reads it:
+   *  an answer is recorded with no question shown; anything else leaves the
+   *  question to show. */
+  earlier_reply?: string;
 }
 
 const PROOF_DIR = ".aidlc-construction-checkpoints";
@@ -404,6 +420,16 @@ interface ApprovedStageEvidence {
 
 const APPROVED_FILES_CAP = 50;
 
+// Recorded approved work in its current form: a value recorded over raw line
+// endings of documents read here reads as their current fingerprint.
+function inCurrentForm(evidence: ApprovedStageEvidence | undefined): ApprovedStageEvidence | undefined {
+  return evidence && {
+    ...evidence,
+    artifact: currentFingerprintForm(evidence.artifact) ?? evidence.artifact,
+    source: currentFingerprintForm(evidence.source),
+  };
+}
+
 // "Approved Evidence" on a GATE_APPROVED row: one JSON line from stage slug to
 // [artifact fingerprint, source fingerprint or null] plus, for a stage with
 // source and at most APPROVED_FILES_CAP claimed paths, an object of those path
@@ -466,7 +492,7 @@ function workKeptOverScopeChange(
   // A step the Unit owes nothing (skipped for it, or not for its kind) holds no work.
   const owed = stages.filter((slug) => current[slug] !== undefined);
   return recorded !== null && owed.length > 0 && owed.every((slug) => {
-    const then = recorded.get(slug);
+    const then = inCurrentForm(recorded.get(slug));
     return then !== undefined && then.floor === floors[slug] &&
       current[slug][0] === then.artifact && current[slug][1] === then.source;
   });
@@ -745,7 +771,7 @@ function snapshot(
         const manifest = readUnitSourceManifest(projectDir, slug, unit);
         if (
           !manifest.ok ||
-          manifest.rawBytesSha256 !== createHash("sha256").update(bytes).digest("hex")
+          manifest.rawBytesSha256 !== committedTextSha256(bytes)
         ) {
           errors.push(`${slug}: ${manifest.ok ? "source manifest changed while reading" : manifest.reason}`);
         } else if (listing !== null) {
@@ -808,7 +834,8 @@ function snapshot(
       // So is source the Guard Policy keeps without a compare: the reviewed
       // listing not on this machine, the Unit's list of files changed after
       // its review, or source that cannot be read here.
-      const reviewedSource = review ? auditBlockField(review.block, "Unit Source Fingerprint") : null;
+      // Values the review recorded over raw line endings read in their current form.
+      const reviewedSource = review ? currentFingerprintForm(auditBlockField(review.block, "Unit Source Fingerprint")) : null;
       const sourceKept = receipts.unitSourceKept.has(unit) && acceptsChanges();
       if (
         stage.workspace_requires && reviewedSource !== null && reviewedSource !== source && (
@@ -821,7 +848,7 @@ function snapshot(
         if (source === null && listing === null) sourceKeptUnread++;
         source = reviewedSource;
       }
-      const reviewedArtifact = review ? auditBlockField(review.block, "Artifact Fingerprint") : null;
+      const reviewedArtifact = review ? currentFingerprintForm(auditBlockField(review.block, "Artifact Fingerprint")) : null;
       if (
         artifact !== null && reviewedArtifact !== null && reviewedArtifact !== artifact &&
         receipts.unitVerdicts.has(unit) && acceptsChanges()
@@ -835,11 +862,11 @@ function snapshot(
         ) ||
         receipts.unitPending.has(unit) || receipts.openBoltUnits.has(unit) ||
         reviewFloor !== floor ||
-        auditBlockField(review.block, "Artifact Fingerprint") !== artifact ||
+        reviewedArtifact !== artifact ||
         auditBlockField(review.block, "Iteration") !== String(receipts.unitIterations.get(unit)) ||
         (stage.workspace_requires && (
           source === null ||
-          auditBlockField(review.block, "Unit Source Fingerprint") !== source ||
+          reviewedSource !== source ||
           auditBlockField(review.block, "Source Freshness Bypass") !== null ||
           auditBlockField(review.block, "Unit Source Binding Bypass") !== null
         ))
@@ -867,7 +894,7 @@ function snapshot(
           reviewRecordNotHere(projectDir, binding, review.block);
         const changed = receipts.unitSourceMoved.get(unit) ??
           (review && (
-            auditBlockField(review.block, "Artifact Fingerprint") !== artifact ||
+            currentFingerprintForm(auditBlockField(review.block, "Artifact Fingerprint")) !== artifact ||
             (receipts.unitStale.has(unit) && listing !== null)
           ) ? receipts.unitStaleProgress.get(unit) : undefined);
         // That review still counts as waiting for its verdict, so the re-check
@@ -960,7 +987,7 @@ function snapshot(
       // without it): a later change to the work the person approved, which
       // its Guard Policy accepts, keeps the approved values in the
       // fingerprint and is said once.
-      const recorded = recordedEvidence?.get(slug);
+      const recorded = inCurrentForm(recordedEvidence?.get(slug));
       if (
         recorded && recorded.floor === floor && artifact !== null &&
         (source !== null) === Boolean(stage.workspace_requires) &&
@@ -993,20 +1020,29 @@ function snapshot(
   if (sourceStages === 0) errors.push("No applicable stage supplies the Unit's source manifest.");
   if (errors.length !== recheckable) rereview = null;
   const [record, olderRecord] = checkpointRecordForms(projectDir, root);
-  const fingerprintFor = (recordPath: string): string => digest({
+  const fingerprintFor = (recordPath: string, stagesEvidence: unknown[] = evidence): string => digest({
     version: 1, intent, record: recordPath, kind, unit,
     unit_kind: dag.unitKinds?.get(unit) ?? null,
     workflow: workflow ? digest(workflow.block) : null,
     claim: claimAttemptFields(projectDir, unit),
-    stages: evidence,
+    stages: stagesEvidence,
   });
   const fresh = fingerprintFor(record);
-  // Windows wrote the record folder with backslashes before: that form of the
-  // same evidence is no change to keep over a scope change, and still counts.
-  const olderFresh = fingerprintFor(olderRecord);
+  // The same evidence as it was recorded before: Windows wrote the record
+  // folder with backslashes, and documents were hashed with their raw line
+  // endings. Those forms are no change to keep over a scope change, and they
+  // still count.
+  const rawForm = (value: unknown): unknown => typeof value === "string" ? rawFingerprintForm(value) ?? value : value;
+  const rawEvidence = (evidence as Array<Record<string, unknown>>).map((entry) =>
+    ({ ...entry, ...("artifact" in entry ? { artifact: rawForm(entry.artifact), source: rawForm(entry.source) } : {}) }));
+  const olderForms = new Set([
+    fingerprintFor(olderRecord), fingerprintFor(record, rawEvidence), fingerprintFor(olderRecord, rawEvidence),
+  ]);
+  olderForms.delete(fresh);
   const kept = fingerprintKeptOverScopeChange(rows, workflow, unit, kind, fresh, stages, approvedEvidence, floors);
-  const fingerprint = kept !== null && kept !== olderFresh ? kept : fresh;
-  const isFingerprint = (value: string | null | undefined): boolean => value === fingerprint || value === olderFresh;
+  const fingerprint = kept !== null && !olderForms.has(kept) ? kept : fresh;
+  const isFingerprint = (value: string | null | undefined): boolean =>
+    value === fingerprint || (value !== null && value !== undefined && olderForms.has(value));
   const proofPath = proofRelativePath(unit, kind);
   const proof = readProof(root, proofPath);
   const proofFile = proof;
@@ -1095,7 +1131,9 @@ function snapshot(
       verification_command: shared.verificationCommand?.label ?? null,
       command_authorized: shared.verificationCommand !== null,
       ...(unfinishedStages.length > 0 ? {
-        review_not_finished: { stages: unfinishedStages, question: `Approve ${unit}? Its ${reviewsNamed(unfinishedStages)} did not finish.` },
+        review_not_finished: notFinished.length > 0
+          ? { stages: unfinishedStages, approved_in_words: true as const }
+          : { stages: unfinishedStages, question: `Approve ${unit}? Its ${reviewsNamed(unfinishedStages)} did not finish.` },
       } : {}),
       run_floor: floors[stages.at(-1)!] ?? "unstarted#0",
       run_floors: floors, proof_path: `${root}/${proofPath}`, verification: proof ?? restored,
@@ -1419,6 +1457,11 @@ export function askConstructionCheckpoint(
     if (!current.result.ready || !current.result.verified) {
       throw new Error(`Verify the current Construction checkpoint first, before asking for approval. Run ${aidlcToolInvocation("bolt")} checkpoint --unit "${unit}" --kind ${kind} --action verify and require verified: true.`);
     }
+    // The person may have answered while the Unit's review ran: their words
+    // typed in this chat after it was asked for and before any other question
+    // was asked (gateWordsSinceUnitReview), read before this question's own
+    // row, are its reply, kept as a reply typed after it is.
+    const earlier = gateWordsSinceUnitReview(projectDir, session, unit, current.result.stages);
     withdrawProtectedQuestions(projectDir, session);
     appendAuditEntryUnlocked("DECISION_RECORDED", {
       Checkpoint: "Construction Unit Approval", Unit: unit, Kind: kind,
@@ -1428,10 +1471,20 @@ export function askConstructionCheckpoint(
       // once instead of asking again (relaxed and off).
       "Asked Evidence": current.approvedEvidence, "Run floors": JSON.stringify(current.result.run_floors),
     }, projectDir);
-    mintProtectedQuestion(projectDir, {
+    const question = mintProtectedQuestion(projectDir, {
       kind: "checkpoint-approval", session, target: approvalTarget(current),
     });
-    return current.result;
+    if (earlier === null) return current.result;
+    const words = earlier.join("\n").slice(-PROTECTED_RESPONSE_WORDS_MAX_CHARS);
+    const pick = exactOptionPick(earlier.at(-1), APPROVAL_GATE_CHOICES);
+    markProtectedQuestionReplied(projectDir, question);
+    writeProtectedResponse(projectDir, {
+      version: 1, session, challengeId: question.challengeId,
+      ...(pick === 0 ? { choice: "Approve" as const } : pick === 1 ? { choice: "Request Changes" as const } : {}),
+      responseSha256: createHash("sha256").update(words, "utf-8").digest("hex"),
+      words,
+    });
+    return { ...current.result, earlier_reply: words };
   });
 }
 
@@ -1452,8 +1505,15 @@ export function approveConstructionCheckpoint(
       throw new Error(`Verify the current Construction checkpoint before approval: a matching CHECKPOINT_VERIFICATION_RECORDED receipt and passing proof are required. Run ${aidlcToolInvocation("bolt")} checkpoint --unit "${unit}" --kind ${kind} --action verify.`);
     }
     const humanRequired = current.result.human_required || reply !== undefined;
+    // The person's "approve it as it is", which the verification took, is the
+    // approval; nothing more is asked of them.
+    const inWords = current.result.review_not_finished?.approved_in_words === true;
     let words: string | undefined;
-    if (humanRequired) {
+    if (humanRequired && inWords) {
+      // Already approved from their words: an approve run again records nothing more.
+      if (current.result.approved) return current.result;
+      words = latestPersonTurn(projectDir)?.words ?? undefined;
+    } else if (humanRequired) {
       requireProtectedResponse(projectDir, session, {
         kind: "checkpoint-approval", targetDigest: protectedTargetDigest(approvalTarget(current)), choice: "Approve",
       });

@@ -2,9 +2,12 @@ import { createHash } from "node:crypto";
 import { existsSync, readFileSync, statSync } from "node:fs";
 import {
   auditBlockField,
+  committedTextBytes,
+  currentFingerprintForm,
   getField,
   parseCheckboxes,
   readAllAuditShards,
+  rememberRawFingerprint,
   staleStageLine,
 } from "./aidlc-lib.js";
 import { loadGraph } from "./aidlc-graph.ts";
@@ -165,6 +168,8 @@ function graphContractFingerprint(stage: StageValidityNode): string {
 interface InstanceFingerprint {
   instance: ArtifactInstance;
   sha256: string;
+  /** The raw bytes' digest, when line endings made it differ. */
+  rawSha256?: string;
   present: boolean;
 }
 
@@ -177,9 +182,13 @@ function fingerprintInstance(instance: ArtifactInstance): InstanceFingerprint {
     if (!statSync(path).isFile()) {
       return { instance, sha256: "not-a-file", present: false };
     }
+    // A line ending is no change: text is read with CRLF and lone CR as LF.
+    const bytes = readFileSync(path);
+    const text = committedTextBytes(bytes);
     return {
       instance,
-      sha256: `sha256:${sha256(readFileSync(path))}`,
+      sha256: `sha256:${sha256(text)}`,
+      ...(text !== bytes ? { rawSha256: `sha256:${sha256(bytes)}` } : {}),
       present: true,
     };
   } catch (error) {
@@ -244,6 +253,16 @@ function aggregateArtifactBasis(
     sha256: digest,
     present,
   }));
+  const contentHash = `sha256:${sha256(canonicalJson(content))}`;
+  // As it was recorded before line endings were read as LF.
+  if (fingerprints.some((fingerprint) => fingerprint.rawSha256 !== undefined)) {
+    const raw = fingerprints.map(({ instance, sha256: digest, rawSha256, present }) => ({
+      path: instance.relativePath,
+      sha256: rawSha256 ?? digest,
+      present,
+    }));
+    rememberRawFingerprint(`sha256:${sha256(canonicalJson(raw))}`, contentHash);
+  }
 
   return {
     artifact,
@@ -252,7 +271,7 @@ function aggregateArtifactBasis(
     instanceCount: fingerprints.length,
     presentCount: fingerprints.filter((item) => item.present).length,
     structureHash: `sha256:${sha256(canonicalJson(structure))}`,
-    contentHash: `sha256:${sha256(canonicalJson(content))}`,
+    contentHash,
   };
 }
 
@@ -615,6 +634,12 @@ function contentOnlyChanges(before: StageValidationBasis, after: StageValidation
   return only;
 }
 
+function basisInCurrentForm(basis: StageValidationBasis): StageValidationBasis {
+  const current = (items: ArtifactBasis[]): ArtifactBasis[] =>
+    items.map((item) => ({ ...item, contentHash: currentFingerprintForm(item.contentHash) ?? item.contentHash }));
+  return { ...basis, inputs: current(basis.inputs), outputs: current(basis.outputs) };
+}
+
 export function diffStageValidationBasis(
   before: StageValidationBasis,
   after: StageValidationBasis,
@@ -835,9 +860,11 @@ export function inspectStageValidity(
       );
       continue;
     }
-    const edited = contentOnlyChanges(previous, current);
+    // Content recorded over raw line endings reads as the same content now.
+    const recorded = basisInCurrentForm(previous);
+    const edited = contentOnlyChanges(recorded, current);
     const contentOnly = options.acceptContentChanges === true ? edited : new Set<string>();
-    const changes = diffStageValidationBasis(previous, current).filter(
+    const changes = diffStageValidationBasis(recorded, current).filter(
       (change) => (change !== "project-type" || workDependsOnProjectType(stage)) && !contentOnly.has(change),
     );
     if (changes.length > 0) directReasons.set(slug, changes);

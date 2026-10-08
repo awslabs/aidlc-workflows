@@ -48,6 +48,45 @@ describe("t-agent-conduct", () => {
     // through a shell loop.
     expect(FILE_TOOLS_RULE).toContain("Read, list, and search (your own knowledge files included) with your file tools");
     expect(FILE_TOOLS_RULE).not.toMatch(/never through the shell[^.]*`(?:cat|ls|rg|grep|find)`/);
+    // Live Claude Code runs: agents sent `orchestrate next` output to /tmp/r.json, wrote a
+    // helper script to /tmp, ran `cd /tmp; bun -e ...`. In default mode each one is a
+    // prompt outside the project, a denial, "Interrupted", and the person typing "keep
+    // everything in this folder, carry on".
+    expect(FILE_TOOLS_RULE).toContain("Every file you make on your own, a scratch file, a helper script, a command's output, stays inside the");
+    // The person's own request, and a plan that names a path, are never refused
+    // or re-asked over this: the rule is about the agent's own files.
+    expect(FILE_TOOLS_RULE).toContain("a file the person asks for, or one the plan names, goes where they say");
+    expect(FILE_TOOLS_RULE).toContain("/tmp");
+    expect(FILE_TOOLS_RULE).toContain("never sent to a file");
+    // A live run on a zsh box (every macOS person): `echo ===gitignore` and an unquoted
+    // `--include=*.ts` failed, each a prompt, an error line, and a retry.
+    expect(FILE_TOOLS_RULE).toContain("--include='*.ts'");
+    expect(FILE_TOOLS_RULE).toContain("zsh");
+  });
+
+  // Two tools have a habit of their own that the shared rule cannot name: Copilot's agent
+  // wrote a "lesson" into Copilot's memory tool outside the project (W4-VC), and on Kiro IDE
+  // every pipe, `;`, `echo` or `Select-String` the agent adds to an AI-DLC command is one
+  // more approval card for the person (kiro-ide-win F4).
+  // The conductor persona (conductor.md, which carries the rule) is baked into the FIRST
+  // run-stage of a workflow only, so a lead that resumes work in a new chat never gets it;
+  // the skill is what the lead always has, so the one sentence about where files go rides
+  // in every skill's "run the engine" paragraph too.
+  test("every skill tells the lead that its files stay inside the project", () => {
+    for (const harness of ["claude", "codex", "copilot", "cursor", "kiro-ide", "kiro", "opencode"]) {
+      const skill = readFileSync(join(REPO_ROOT, "harness", harness, "skills", "aidlc", "SKILL.md"), "utf-8");
+      expect(skill, harness).toMatch(
+        /Run the engine binary directly via [^.]*\. Every file you make on your own, a scratch file, a helper script, a command's output, stays inside the project \(nothing in \/tmp or any folder outside it\), and a command's output is read from the tool result, never sent to a file; a file the person asks for, or one the plan names, goes where they say\./,
+      );
+    }
+  });
+
+  test("the Copilot and Kiro IDE skills carry their own conduct sentence", () => {
+    const copilot = readFileSync(join(REPO_ROOT, "harness", "copilot", "skills", "aidlc", "SKILL.md"), "utf-8");
+    expect(copilot).toContain("never into Copilot's memory tool");
+    const kiroIde = readFileSync(join(REPO_ROOT, "harness", "kiro-ide", "skills", "aidlc", "SKILL.md"), "utf-8");
+    expect(kiroIde).toContain("**Every AI-DLC command on its own.**");
+    expect(kiroIde).toContain("no pipe, no `;`, no `echo`, no `Select-String`");
   });
 
   test("the diary bootstrap uses the write tool, not a shell mkdir", () => {

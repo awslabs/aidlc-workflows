@@ -162,6 +162,8 @@ import {
   type AuditShardEvent,
   type BoltIdentity,
   type WorkflowSelection,
+  committedTextSha256,
+  currentFingerprintForm,
 } from "./aidlc-lib.ts";
 import { compiledExecutable } from "./aidlc-runtime-paths.ts";
 import {
@@ -602,8 +604,9 @@ function reviewerReceiptError(
     };
   }
   const documents = `${definition?.name ?? stage} documents`;
-  let artifactFingerprint = recordedArtifactFp;
-  if (recordedArtifactFp !== currentArtifactFp) {
+  // A receipt taken over raw line endings binds what it reviewed in its current form.
+  let artifactFingerprint = currentFingerprintForm(recordedArtifactFp) ?? recordedArtifactFp;
+  if (artifactFingerprint !== currentArtifactFp) {
     if (!acceptsChanges) {
       return {
         error:
@@ -671,10 +674,7 @@ function reviewerReceiptError(
   // that the reviewer saw before trusting its claims for footprint coverage.
   let unitSourceFingerprint: string | undefined;
   if (baseCommit !== null) {
-    const recordedUnitFp = auditBlockField(
-      latestTerminal.block,
-      "Unit Source Fingerprint",
-    );
+    const recordedUnitFp = auditBlockField(latestTerminal.block, "Unit Source Fingerprint");
     const bindingBypass =
       auditBlockField(latestTerminal.block, "Unit Source Binding Bypass") ===
       "true";
@@ -694,7 +694,7 @@ function reviewerReceiptError(
     // after it or its review copy is not on this machine; the change is kept.
     if (
       acceptsChanges && manifest.ok &&
-      (snapshot === null || snapshot.manifestSha256 !== manifest.rawBytesSha256)
+      (snapshot === null || currentFingerprintForm(snapshot.manifestSha256) !== manifest.rawBytesSha256)
     ) {
       manifestKept = true;
       accepted.push({
@@ -705,7 +705,7 @@ function reviewerReceiptError(
     } else if (
       !manifest.ok ||
       snapshot === null ||
-      snapshot.manifestSha256 !== manifest.rawBytesSha256
+      currentFingerprintForm(snapshot.manifestSha256) !== manifest.rawBytesSha256
     ) {
       return {
         error:
@@ -880,7 +880,7 @@ function captureReviewedRecordSnapshot(
     // the evidence of what was reviewed.
     if (
       !manifest.ok ||
-      (!receipt.manifestKept && (snapshot === null || snapshot.manifestSha256 !== manifest.rawBytesSha256))
+      (!receipt.manifestKept && (snapshot === null || currentFingerprintForm(snapshot.manifestSha256) !== manifest.rawBytesSha256))
     ) {
       return {
         error:
@@ -908,10 +908,7 @@ function captureReviewedRecordSnapshot(
     } catch {
       return { error: `cannot capture reviewed source evidence for unit "${unit}"` };
     }
-    if (
-      createHash("sha256").update(manifestBytes).digest("hex") !==
-        manifest.rawBytesSha256
-    ) {
+    if (committedTextSha256(manifestBytes) !== manifest.rawBytesSha256) {
       return {
         error:
           `reviewed source evidence changed while finalizing unit "${unit}"; ` +
@@ -962,7 +959,11 @@ function captureReviewedRecordSnapshot(
         evidenceBytes = Buffer.from(snapshot.serialized, "utf-8");
       }
     }
-    if (createHash("sha256").update(evidenceBytes).digest("hex") !== hex) {
+    // A checkout with CRLF line endings holds the same evidence.
+    if (
+      createHash("sha256").update(evidenceBytes).digest("hex") !== hex &&
+      committedTextSha256(evidenceBytes) !== hex
+    ) {
       return {
         error:
           `reviewed source evidence changed while finalizing unit "${unit}"; ` +

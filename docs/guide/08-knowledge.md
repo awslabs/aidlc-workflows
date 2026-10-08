@@ -52,7 +52,7 @@ Ships with the framework. Contains shared principles and per-agent methodology r
 .claude/knowledge/
 +-- aidlc-shared/                       # Methodology loaded by every agent, plus format references
 |   +-- ai-dlc-principles.md        # Core methodology principles
-|   +-- audit-format.md             # 115-event audit taxonomy
+|   +-- audit-format.md             # 117-event audit taxonomy
 |   +-- brownfield.md               # Brownfield safeguards and reverse-engineering guidance
 |   +-- knowledge-readme-template.md # Optional README template a team can copy into Tier 2
 |   +-- state-template.md           # State file contract
@@ -106,6 +106,17 @@ The ownership split is deliberate:
 | `aidlc/spaces/<space>/knowledge/documentkb/` | AI-DLC | Derived index, metadata, and extracted text |
 
 Use `/aidlc knowledge onboard [path]` to add one document or sweep the folder.
+You can name a file or folder anywhere in your project: one that is not already
+under `documents/` is copied in for you, keeping its name and a folder's layout,
+and the result says where the copy is. From then on the knowledge base reads
+that copy, so edit it under `documents/` and run `sync` to pick changes up.
+Inside a folder you name, files git ignores are left where they are and the
+line says how many (name one of them directly and it is added, since you asked
+for it by name). A folder holding more documents than the batch cap, or a
+document over the per-document cap, is refused before anything is copied, so
+nothing is left behind to duplicate. A path outside the project is refused, and
+the folder is created if it is missing, so a sweep of an empty space adds
+nothing and says nothing is there.
 Use `sync` after files are added, edited, moved, or deleted; `list` shows every
 catalog row and state, and `show <id>` returns one citable record plus current
 extracted text when available. The `/aidlc-knowledge` skill guides the same

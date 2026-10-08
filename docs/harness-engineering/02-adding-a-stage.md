@@ -235,7 +235,7 @@ A runner carries **no `hooks:` block** — the deterministic spine (audit, senso
 runtime-graph compile, state validation) is project-wide in `settings.json`, so
 every runner inherits it for free; there is nothing per-runner to replicate. And a
 runner does **not** load the conductor persona by hand: the engine delivers it,
-baked into the first `run-stage` directive. The runner body just states what it
+baked into the `run-stage` directive it hands the chat. The runner body just states what it
 does and the one command it drives.
 
 If you delete all the runner skills, every stage still runs via

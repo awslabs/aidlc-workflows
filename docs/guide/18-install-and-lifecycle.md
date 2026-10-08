@@ -759,14 +759,25 @@ actions can still be completed with `--mark-done`.
 ### Trust Diagnostics
 
 `aidlc config trust` reads and verifies host-native trust. It never regenerates
-trust seeds, permission rules, or IDE settings.
+trust seeds, permission rules, or IDE settings; its one write outside the
+project is Kiro IDE's Workflows switch, and only when you ask for it.
 
 ```bash
 aidlc config trust --show
 aidlc config trust --check
 aidlc config trust --acknowledge --yes
 aidlc config trust --reset --yes
+aidlc config trust --kiro-workflows off --yes   # Kiro IDE; or: on
 ```
+
+For Kiro IDE, `--show` and `--check` also read Kiro's Workflows switch
+(`kiroAgent.workflows.enabled` in Kiro's user settings, so it covers all your
+projects; while it is on, AI-DLC's reviews and helpers do not run).
+`--kiro-workflows off|on` changes that one key and keeps every other byte of
+the file. While Workflows is on and you have not answered on this computer,
+setup asks once and `aidlc config --yes` turns it off; your answer is kept in
+`kiro-ide-workflows` in the AI-DLC install folder, so no other project asks
+again. See [Kiro's Workflows feature](harnesses/kiro-ide.md#kiros-workflows-feature-stops-ai-dlcs-reviews-and-helpers).
 
 For Codex, the check requires the complete project-specific trust seed entry
 set in `$CODEX_HOME/config.toml`. The two supported remedies are one TUI

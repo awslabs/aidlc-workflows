@@ -102,7 +102,26 @@ describe("t-stop-carries-on-line: the agent's steps for the one-line Stop note",
       expect(question.slice(0, question.indexOf(". ") + 1), rel).toEndWith(
         "and end your turn without asking it again or saying anything else.",
       );
+      // The question case comes before "say the line": on the tools that hide
+      // the note, the agent said the line right after its own question when
+      // the exception followed the instruction (kiro-ide-win W1, W4).
+      if (tool !== undefined) {
+        expect(paragraph.indexOf("If you had just asked the person a question"), rel)
+          .toBeLessThan(paragraph.indexOf(`${tool} does not show the note to the person`));
+      }
     }
+  });
+
+  // The hook's own step, read by an agent with no skill loaded: the question
+  // case first, then the line, and the line is AI-DLC's, never the person's
+  // answer (a Kiro IDE agent recorded "user implicitly confirmed by hook
+  // trigger" as a decision right after saying it).
+  test("(b2) the hook's step puts the question case first and says the line confirms nothing", () => {
+    const stop = readFileSync(join(REPO_ROOT, "core/hooks/aidlc-continue-workflow.ts"), "utf-8");
+    const step = stop.slice(stop.indexOf("const SAY_THE_LINE ="), stop.indexOf("const STOP_NOTE ="));
+    expect(step.indexOf("If you had just asked the person a question")).toBeGreaterThan(0);
+    expect(step.indexOf("If you had just asked the person a question")).toBeLessThan(step.indexOf("first say that line"));
+    expect(step).toContain("it is AI-DLC's line, not the person's, and confirms nothing, so record nothing as theirs because of it");
   });
 
   test("(c) the old agent-addressed wordings are gone from prose and kept only as the hook's matcher", () => {

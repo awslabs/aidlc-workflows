@@ -26,13 +26,15 @@ import {
   NATIVE_STARTUP_TIMEOUT_MS,
 } from "../harness/test-budget.ts";
 import { afterAll, beforeAll, describe, expect, setDefaultTimeout, test } from "bun:test";
-import { spawnSync } from "node:child_process";
-import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { spawnSync, type SpawnSyncReturns } from "node:child_process";
+import { createHash } from "node:crypto";
+import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, dirname, join, posix, resolve, win32 } from "node:path";
 import {
   acquireAuditLock,
   auditLockDir,
+  committedTextBytes,
   releaseAuditLock,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import {
@@ -41,12 +43,14 @@ import {
 } from "../harness/fixtures.ts";
 import {
   HARNESS_MATRIX,
+  harnessByName,
   type ShippedHarnessName,
 } from "../harness/harness-matrix.ts";
 import {
   assertNonEmptyStageBody,
   buildPluginProjection,
   composePluginFixture,
+  copyHarnessInstall,
 } from "../harness/plugin-kit.ts";
 import { writeWindowsBunLauncher } from "../harness/windows-native-executable.ts";
 import { DEFAULT_SUBPROCESS_TIMEOUT_MS } from "../../core/tools/aidlc-runtime-budget.ts";
@@ -1948,6 +1952,427 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
     expect(count).toBe(1);
   });
 
+  // --- Upgrades: re-composing a newer version of the SAME plugin ---
+  // compose.ts is also the composer for runs without `aidlc engine plugin
+  // sync` in front of it (the Kiro CLI fallback, hand runs, the plugin test
+  // tool). Those runs must still take the plugin's own newer copy of a file it
+  // installed, report a copy the person changed, and drop a prose fragment the
+  // new version no longer ships. The record is the same hash-proven
+  // `plugin-owned-<key>.json` that sync writes and reads.
+  const UPGRADE_SENSOR = [
+    "---",
+    "id: syn-upgrade-check",
+    "kind: deterministic",
+    "command: bun {{HARNESS_DIR}}/tools/aidlc-sensor-syn-upgrade-check.ts",
+    "default_severity: advisory",
+    "description: synthetic upgrade sensor (advisory)",
+    "category: document-shape",
+    'matches: "**/{aidlc-docs,intents}/**"',
+    "input_schema:",
+    "  output_path: string",
+    "output_schema:",
+    "  pass: boolean",
+    "timeout_seconds: 5",
+    "---",
+    "",
+    "# syn-upgrade check",
+    "",
+  ].join("\n");
+  const upgradeTool = (version: string): string =>
+    `// syn-upgrade sensor ${version}\nconsole.log(JSON.stringify({ pass: true }));\n`;
+  const upgradeContribution = (name: string, anchor: string): string => [
+    "---",
+    "target: build-and-test",
+    `plugin: ${name}`,
+    "fragments:",
+    `  - anchor: ${anchor}`,
+    "    order: 50",
+    "---",
+    "",
+    `## fragment: ${anchor}`,
+    "",
+    `### Step syn-upgrade: fragment at ${anchor}`,
+    "",
+    "UPGRADE-PROSE.",
+    "",
+  ].join("\n");
+  const upgradeFiles = (name: string, version: string, anchor: string): Record<string, string> => ({
+    "sensors/aidlc-syn-upgrade-check.md": UPGRADE_SENSOR,
+    "tools/aidlc-sensor-syn-upgrade-check.ts": upgradeTool(version),
+    "contributions/construction/build-and-test.md": upgradeContribution(name, anchor),
+  });
+  // Rewrite the synthetic plugin's files in place and run compose.ts again
+  // against the SAME project; returns the drops of that second run.
+  function recomposeSynthetic(
+    proj: string,
+    name: string,
+    files: Record<string, string>,
+    harnessLeaf: ".claude" | ".kiro" = ".claude",
+  ): string {
+    const root = join(proj, `_plugin-${name}`);
+    for (const [rel, body] of Object.entries(files)) {
+      mkdirSync(dirname(join(root, rel)), { recursive: true });
+      writeFileSync(join(root, rel), body);
+    }
+    const r = spawnSync(BUN, [join(root, "hooks", "compose.ts")], {
+      cwd: proj, encoding: "utf-8", timeout: remainingOperationTimeoutMs(NATIVE_RUNTIME_CASE_TIMEOUT_MS),
+      env: { ...process.env, CLAUDE_PLUGIN_ROOT: root, CLAUDE_PROJECT_DIR: proj, AIDLC_HARNESS_DIR: harnessLeaf },
+    });
+    expect(r.status, r.stderr).toBe(0);
+    return hookDrops(proj);
+  }
+  const sha256Of = (path: string): string =>
+    `sha256:${createHash("sha256").update(readFileSync(path)).digest("hex")}`;
+
+  for (const harnessLeaf of [".claude", ".kiro"] as const) {
+    test(`re-composing a newer plugin version replaces its own unchanged files (${harnessLeaf})`, () => {
+      const name = harnessLeaf === ".kiro" ? "syn-upgrade-kiro" : "syn-upgrade";
+      const { proj, drops: first } = composeSynthetic(name, upgradeFiles(name, "v1", "after-step:8"), harnessLeaf);
+      expect(first).not.toContain("not overwritten");
+      const tool = join(proj, harnessLeaf, "tools", "aidlc-sensor-syn-upgrade-check.ts");
+      expect(readFileSync(tool, "utf-8")).toContain("sensor v1");
+
+      const drops = recomposeSynthetic(proj, name, upgradeFiles(name, "v2", "after-step:8"), harnessLeaf);
+      expect(readFileSync(tool, "utf-8")).toContain("sensor v2");
+      expect(drops).not.toContain("not overwritten");
+
+      // The record sync reads: the file this plugin installed, with its hash.
+      const record = JSON.parse(
+        readFileSync(join(proj, harnessLeaf, "tools", "data", `plugin-owned-${name}.json`), "utf-8"),
+      ) as { schemaVersion: number; name: string; files: Array<{ path: string; sha256: string }> };
+      expect(record.schemaVersion).toBe(1);
+      expect(record.name).toBe(name);
+      expect(record.files).toContainEqual({
+        path: `${harnessLeaf}/tools/aidlc-sensor-syn-upgrade-check.ts`,
+        sha256: sha256Of(tool),
+      });
+      expect(record.files).toContainEqual({
+        path: `${harnessLeaf}/sensors/aidlc-syn-upgrade-check.md`,
+        sha256: sha256Of(join(proj, harnessLeaf, "sensors", "aidlc-syn-upgrade-check.md")),
+      });
+    });
+  }
+
+  test("a plugin file edited after install is reported, never overwritten", () => {
+    const name = "syn-upgrade-edit";
+    const { proj } = composeSynthetic(name, upgradeFiles(name, "v1", "after-step:8"));
+    const tool = join(proj, ".claude", "tools", "aidlc-sensor-syn-upgrade-check.ts");
+    const edited = `${readFileSync(tool, "utf-8")}// my local change\n`;
+    writeFileSync(tool, edited);
+
+    const drops = recomposeSynthetic(proj, name, upgradeFiles(name, "v2", "after-step:8"));
+    expect(readFileSync(tool, "utf-8")).toBe(edited);
+    expect(parseHookDrops(drops)).toContainEqual({
+      severity: "degraded",
+      reason:
+        'tool "aidlc-sensor-syn-upgrade-check.ts" was changed after this plugin installed it; not overwritten - to take the plugin\'s current copy, move your change elsewhere, remove the file, and re-run compose',
+    });
+
+    // The step it names: with the file gone, the next run installs the
+    // plugin's current copy and records it.
+    rmSync(tool);
+    const again = recomposeSynthetic(proj, name, upgradeFiles(name, "v2", "after-step:8"));
+    expect(readFileSync(tool, "utf-8")).toContain("sensor v2");
+    expect(again).not.toContain("not overwritten");
+  });
+
+  test("a fragment the plugin no longer ships is removed with its record", () => {
+    const name = "syn-upgrade-frag";
+    const { proj } = composeSynthetic(name, upgradeFiles(name, "v1", "after-step:8"));
+    const stagePath = join(proj, ".claude", "aidlc-common", "stages", "construction", "build-and-test.md");
+    const sidecarPath = join(proj, ".claude", "tools", "data", `plugin-contrib-${name}.json`);
+    const fragmentsOf = () =>
+      (JSON.parse(readFileSync(sidecarPath, "utf-8"))["build-and-test"]?.fragments ?? []) as Array<{ anchor: string }>;
+    expect(readFileSync(stagePath, "utf-8")).toContain(`<!-- plugin:${name}:after-step:8:50:`);
+    expect(fragmentsOf().map((f) => f.anchor)).toEqual(["after-step:8"]);
+
+    // v2 moves the fragment to another anchor: one block, one record.
+    recomposeSynthetic(proj, name, upgradeFiles(name, "v2", "after-step:9"));
+    const moved = readFileSync(stagePath, "utf-8");
+    expect(moved).not.toContain(`plugin:${name}:after-step:8:`);
+    expect(moved).toContain(`<!-- plugin:${name}:after-step:9:50:`);
+    expect((moved.match(/UPGRADE-PROSE/g) ?? []).length).toBe(1);
+    expect(fragmentsOf().map((f) => f.anchor)).toEqual(["after-step:9"]);
+
+    // Doctor's composed-surface check agrees with the pruned record.
+    const doctor = spawnSync(BUN, [join(proj, ".claude", "tools", "aidlc-utility.ts"), "doctor", "--verbose"], {
+      cwd: proj, encoding: "utf-8", timeout: remainingOperationTimeoutMs(NATIVE_RUNTIME_CASE_TIMEOUT_MS),
+      env: { ...process.env, CLAUDE_PROJECT_DIR: proj },
+    });
+    const surfaceRow = `${doctor.stdout}${doctor.stderr}`.split("\n").find((l) => l.includes("Composed plugin surface"));
+    expect(surfaceRow).toBeDefined();
+    expect(surfaceRow!.trimStart().startsWith("fail")).toBe(false);
+
+    // v3 ships no contribution at all: the block and the record both go.
+    rmSync(join(proj, `_plugin-${name}`, "contributions", "construction", "build-and-test.md"));
+    recomposeSynthetic(proj, name, {
+      "tools/aidlc-sensor-syn-upgrade-check.ts": upgradeTool("v3"),
+    });
+    expect(readFileSync(stagePath, "utf-8")).not.toContain(`plugin:${name}:`);
+    expect(existsSync(sidecarPath)).toBe(false);
+  });
+
+  // The hook route: `aidlc engine plugin sync` (the project's aidlc-plugin.ts)
+  // in front of the same compose.ts. A project first composed by compose.ts
+  // alone must upgrade through sync, and when the staged compose refuses a
+  // file, the sync error must say why (the staged drops file is gone by then).
+  function syncSynthetic(proj: string, name: string, files: Record<string, string>): SpawnSyncReturns<string> {
+    const root = join(proj, `_plugin-${name}`);
+    for (const [rel, body] of Object.entries(files)) writeFileSync(join(root, rel), body);
+    return spawnSync(BUN, [join(proj, ".claude", "tools", "aidlc-plugin.ts"), "sync"], {
+      cwd: proj, encoding: "utf-8", timeout: remainingOperationTimeoutMs(NATIVE_RUNTIME_CASE_TIMEOUT_MS),
+      env: {
+        ...process.env,
+        CLAUDE_PLUGIN_ROOT: root,
+        CLAUDE_PROJECT_DIR: proj,
+        AIDLC_HARNESS_DIR: ".claude",
+        AIDLC_HARNESS_NAME: "claude",
+      },
+    });
+  }
+
+  test("a project composed by compose.ts upgrades through plugin sync", () => {
+    const name = "syn-upgrade-sync";
+    const { proj } = composeSynthetic(name, upgradeFiles(name, "v1", "after-step:8"));
+    const sync = syncSynthetic(proj, name, upgradeFiles(name, "v2", "after-step:9"));
+    expect(sync.status, sync.stderr).toBe(0);
+    expect(readFileSync(join(proj, ".claude", "tools", "aidlc-sensor-syn-upgrade-check.ts"), "utf-8")).toContain("sensor v2");
+    const body = readFileSync(join(proj, ".claude", "aidlc-common", "stages", "construction", "build-and-test.md"), "utf-8");
+    expect(body).not.toContain(`plugin:${name}:after-step:8:`);
+    expect(body).toContain(`<!-- plugin:${name}:after-step:9:50:`);
+  });
+
+  test("when the staged compose refuses a file, the sync error says why", () => {
+    const name = "syn-upgrade-why";
+    const { proj } = composeSynthetic(name, upgradeFiles(name, "v1", "after-step:8"));
+    // A project with no record of what the plugin installed (composed before
+    // the record existed) and a tool that differs from the plugin's copy.
+    rmSync(join(proj, ".claude", "tools", "data", `plugin-owned-${name}.json`), { force: true });
+    const sync = syncSynthetic(proj, name, upgradeFiles(name, "v2", "after-step:8"));
+    expect(sync.status).toBe(1);
+    expect(sync.stderr).toContain('tool "aidlc-sensor-syn-upgrade-check.ts" collides with an existing file this plugin has no record of installing');
+    expect(sync.stderr).not.toMatch(/aidlc-plugin-sync-[^/]+\/project/);
+  });
+
+  // Harnesses that reshape an agent at install: Kiro strips disallowedTools and
+  // model, Cursor and the two .aidlc hosts project the persona, so the installed
+  // bytes never equal the plugin source. Sync must still record those files as
+  // the plugin's (the compose hook already does), or the plugin's next update of
+  // that agent is refused as a file with no record and the person has to delete
+  // it by hand.
+  const RESHAPING_HARNESSES: Array<{ harness: ShippedHarnessName; leaf: string; manifestDir: string; agentSource: string }> = [
+    { harness: "kiro", leaf: ".kiro", manifestDir: ".kiro-plugin", agentSource: "agents" },
+    { harness: "cursor", leaf: ".cursor", manifestDir: ".cursor-plugin", agentSource: join("aidlc", "agents") },
+    { harness: "opencode", leaf: ".aidlc", manifestDir: ".opencode-plugin", agentSource: "agents" },
+    { harness: "copilot", leaf: ".aidlc", manifestDir: ".plugin", agentSource: "agents" },
+  ];
+  for (const { harness, leaf, manifestDir, agentSource } of RESHAPING_HARNESSES) {
+    test(`plugin sync records a reshaped ${harness} agent and a later update replaces it`, () => {
+      const projectDir = mkdtempSync(join(tmp, `sync-reshape-${harness}-`));
+      if (harness === "cursor") {
+        const install = spawnSync(BUN, [join(harnessByName("cursor").distRoot, "install.ts"), projectDir], {
+          cwd: REPO_ROOT, encoding: "utf-8", timeout: remainingOperationTimeoutMs(NATIVE_RUNTIME_CASE_TIMEOUT_MS),
+        });
+        expect(install.status, install.stderr).toBe(0);
+      } else {
+        copyHarnessInstall(harness, projectDir);
+      }
+      const root = join(tmp, `plugin-reshape-${harness}`);
+      cpSync(pluginBuilds.get(harness)!, root, { recursive: true });
+      const sync = (): SpawnSyncReturns<string> =>
+        spawnSync(BUN, [join(projectDir, leaf, "tools", "aidlc-plugin.ts"), "sync"], {
+          cwd: projectDir, encoding: "utf-8", timeout: remainingOperationTimeoutMs(NATIVE_RUNTIME_CASE_TIMEOUT_MS),
+          env: {
+            ...process.env,
+            PLUGIN_ROOT: root,
+            AIDLC_PLUGIN_ROOT: root,
+            CLAUDE_PLUGIN_ROOT: root,
+            AIDLC_PROJECT_DIR: projectDir,
+            CLAUDE_PROJECT_DIR: projectDir,
+            AIDLC_HARNESS_DIR: leaf,
+            AIDLC_HARNESS_NAME: harness,
+          },
+        });
+
+      const first = sync();
+      expect(first.status, first.stderr).toBe(0);
+      const agentRel = `${leaf}/agents/test-pro-metrics-agent.md`;
+      const installedAgent = join(projectDir, agentRel);
+      expect(existsSync(installedAgent)).toBe(true);
+      const record = JSON.parse(
+        readFileSync(join(projectDir, leaf, "tools", "data", "plugin-owned-test-pro.json"), "utf-8"),
+      ) as { files: Array<{ path: string; sha256: string }> };
+      expect(record.files.map((file) => file.path)).toContain(agentRel);
+      expect(record.files.find((file) => file.path === agentRel)?.sha256).toBe(sha256Of(installedAgent));
+
+      // The plugin's next version changes that agent's prose.
+      const source = join(root, agentSource, "test-pro-metrics-agent.md");
+      writeFileSync(source, `${readFileSync(source, "utf-8")}\nRESHAPE-UPDATE marker.\n`);
+      const manifestPath = join(root, manifestDir, "plugin.json");
+      const manifest = JSON.parse(readFileSync(manifestPath, "utf-8")) as { version?: string };
+      manifest.version = "9.9.9";
+      writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+
+      const second = sync();
+      expect(second.status, second.stderr).toBe(0);
+      expect(readFileSync(installedAgent, "utf-8")).toContain("RESHAPE-UPDATE marker");
+    });
+  }
+
+  // What Git for Windows does at checkout (core.autocrlf=true): every committed
+  // text file gets CRLF. Line endings alone are not a change to the plugin's
+  // files, so a re-compose on such a checkout must drop nothing and rewrite
+  // nothing, and doctor's composed-surface check must still find every fragment.
+  function checkOutWithCrlf(dir: string): number {
+    let converted = 0;
+    for (const name of readdirSync(dir)) {
+      if (name === ".git" || name.startsWith(".aidlc-")) continue;
+      const path = join(dir, name);
+      if (statSync(path).isDirectory()) {
+        converted += checkOutWithCrlf(path);
+        continue;
+      }
+      if (!/\.(md|json|tsv|ts|cjs|js|yaml|yml|txt)$/.test(name)) continue;
+      const text = readFileSync(path, "utf-8");
+      if (text.includes("\r") || !text.includes("\n")) continue;
+      writeFileSync(path, text.replace(/\n/g, "\r\n"));
+      converted++;
+    }
+    return converted;
+  }
+
+  test("re-composing on a CRLF checkout changes nothing and keeps doctor green", () => {
+    const crlfProject = composePluginFixture({
+      plugin: PLUGIN,
+      harness: "claude",
+      projectDir: join(tmp, "crlf-checkout"),
+      pluginBuilt,
+    }).projectDir;
+    expect(checkOutWithCrlf(crlfProject)).toBeGreaterThan(0);
+    const stagePath = stageSourcePath(crlfProject, "construction", "build-and-test");
+    const before = readFileSync(stagePath);
+
+    const rerun = spawnSync(BUN, [join(pluginBuilt, "hooks", "compose.ts")], {
+      cwd: crlfProject,
+      encoding: "utf-8",
+      timeout: remainingOperationTimeoutMs(NATIVE_RUNTIME_CASE_TIMEOUT_MS),
+      env: {
+        ...process.env,
+        CLAUDE_PLUGIN_ROOT: pluginBuilt,
+        CLAUDE_PROJECT_DIR: crlfProject,
+        AIDLC_HARNESS_DIR: ".claude",
+      },
+    });
+    expect(rerun.status, rerun.stderr).toBe(0);
+    expect(hookDrops(crlfProject)).toBe("");
+    expect(readFileSync(stagePath).equals(before)).toBe(true);
+
+    const doctor = spawnSync(BUN, [join(crlfProject, ".claude", "tools", "aidlc-utility.ts"), "doctor", "--verbose"], {
+      cwd: crlfProject, encoding: "utf-8", timeout: remainingOperationTimeoutMs(NATIVE_RUNTIME_CASE_TIMEOUT_MS),
+      env: { ...process.env, CLAUDE_PROJECT_DIR: crlfProject },
+    });
+    const surfaceRow = `${doctor.stdout}${doctor.stderr}`.split("\n").find((l) => l.includes("Composed plugin surface"));
+    expect(surfaceRow).toBeDefined();
+    expect(surfaceRow!.trimStart().startsWith("fail")).toBe(false);
+  });
+
+  // A record written before the committed-text rule holds the raw-bytes digest
+  // of a CRLF file. Identical bytes are no change, so compose still takes the
+  // plugin's newer copy and writes the record over the committed text.
+  test("a record written over raw CRLF bytes still proves the plugin's own copy to compose", () => {
+    const name = "syn-rawrecord";
+    const { proj } = composeSynthetic(name, upgradeFiles(name, "v1", "after-step:8"));
+    expect(checkOutWithCrlf(proj)).toBeGreaterThan(0);
+    const recordPath = join(proj, ".claude", "tools", "data", `plugin-owned-${name}.json`);
+    type Record = { files: Array<{ path: string; sha256: string }> };
+    const digest = (rel: string, read: (bytes: Buffer) => Buffer) =>
+      `sha256:${createHash("sha256").update(read(readFileSync(join(proj, rel)))).digest("hex")}`;
+    const record = JSON.parse(readFileSync(recordPath, "utf-8")) as Record;
+    writeFileSync(
+      recordPath,
+      `${JSON.stringify({ ...record, files: record.files.map((file) => ({ ...file, sha256: digest(file.path, (bytes) => bytes) })) }, null, 2)}\n`,
+    );
+
+    const drops = recomposeSynthetic(proj, name, upgradeFiles(name, "v2", "after-step:8"));
+    expect(drops).not.toContain("not overwritten");
+    expect(readFileSync(join(proj, ".claude", "tools", "aidlc-sensor-syn-upgrade-check.ts"), "utf-8")).toContain("sensor v2");
+    const rewritten = JSON.parse(readFileSync(recordPath, "utf-8")) as Record;
+    for (const file of rewritten.files) expect(file.sha256).toBe(digest(file.path, committedTextBytes));
+  });
+
+  // A plugin built with an AI-DLC from before the plugin file record carries a
+  // compose hook that neither writes nor removes tools/data/plugin-owned-<key>.json.
+  // Sync stages a copy of the project, previous record included, and removes the
+  // owned files but not that record; the old hook leaves it as it is, so sync
+  // must not take it for this run's record: changed files would fail the old hash
+  // and drop out, added files would never be listed, and the plugin's next update
+  // would be refused. Three versions: the record is complete after the second
+  // sync, the third replaces a changed file and prunes a dropped one.
+  test("plugin sync with a pre-record compose hook keeps a complete record across versions", () => {
+    const name = "syn-oldhook";
+    const proj = mkdtempSync(join(tmp, `syn-${name}-`));
+    cpSync(CLAUDE_DIST, join(proj, ".claude"), { recursive: true });
+    const toolA = (version: string) => `// ${name} tool A ${version}\n`;
+    const v1 = {
+      "sensors/aidlc-syn-oldhook-check.md": UPGRADE_SENSOR.replaceAll("syn-upgrade", name),
+      "tools/aidlc-sensor-syn-oldhook-check.ts": toolA("v1"),
+    };
+    const root = prepareSyntheticPlugin(proj, name, v1);
+    // The hook from before the record: compose as today, then put the previous
+    // record back exactly as it was (or leave none, as none was written).
+    renameSync(join(root, "hooks", "compose.ts"), join(root, "hooks", "compose-current.ts"));
+    writeFileSync(join(root, "hooks", "compose.ts"), [
+      'import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";',
+      'import { join } from "node:path";',
+      'import { compose } from "./compose-current.ts";',
+      `const record = join(process.env.CLAUDE_PROJECT_DIR ?? process.cwd(), ".claude", "tools", "data", "plugin-owned-${name}.json");`,
+      "const before = existsSync(record) ? readFileSync(record) : null;",
+      "await compose();",
+      "if (before === null) rmSync(record, { force: true });",
+      "else writeFileSync(record, before);",
+      "",
+    ].join("\n"));
+    const recordPaths = (): string[] =>
+      (JSON.parse(readFileSync(join(proj, ".claude", "tools", "data", `plugin-owned-${name}.json`), "utf-8")) as {
+        files: Array<{ path: string }>;
+      }).files.map((file) => file.path).sort();
+    const installedA = join(proj, ".claude", "tools", "aidlc-sensor-syn-oldhook-check.ts");
+    const installedB = join(proj, ".claude", "tools", "aidlc-sensor-syn-oldhook-extra.ts");
+
+    const first = syncSynthetic(proj, name, {});
+    expect(first.status, first.stderr).toBe(0);
+    expect(recordPaths()).toEqual([
+      ".claude/sensors/aidlc-syn-oldhook-check.md",
+      ".claude/tools/aidlc-sensor-syn-oldhook-check.ts",
+    ]);
+
+    // v2: tool A changes, tool B is added.
+    const second = syncSynthetic(proj, name, {
+      "tools/aidlc-sensor-syn-oldhook-check.ts": toolA("v2"),
+      "tools/aidlc-sensor-syn-oldhook-extra.ts": `// ${name} tool B\n`,
+    });
+    expect(second.status, second.stderr).toBe(0);
+    expect(readFileSync(installedA, "utf-8")).toContain("tool A v2");
+    expect(recordPaths()).toEqual([
+      ".claude/sensors/aidlc-syn-oldhook-check.md",
+      ".claude/tools/aidlc-sensor-syn-oldhook-check.ts",
+      ".claude/tools/aidlc-sensor-syn-oldhook-extra.ts",
+    ]);
+
+    // v3: tool A changes again, tool B is dropped.
+    rmSync(join(root, "tools", "aidlc-sensor-syn-oldhook-extra.ts"));
+    const third = syncSynthetic(proj, name, {
+      "tools/aidlc-sensor-syn-oldhook-check.ts": toolA("v3"),
+    });
+    expect(third.status, third.stderr).toBe(0);
+    expect(readFileSync(installedA, "utf-8")).toContain("tool A v3");
+    expect(existsSync(installedB)).toBe(false);
+    expect(recordPaths()).toEqual([
+      ".claude/sensors/aidlc-syn-oldhook-check.md",
+      ".claude/tools/aidlc-sensor-syn-oldhook-check.ts",
+    ]);
+  });
+
   // --- Compile self-heal (a prior compile that didn't land must retry) ---
   test("compose recompiles when the graph lost the plugin's stages", () => {
     // Simulate a transient compile failure: strip the plugin stages out of the
@@ -3428,17 +3853,17 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
       {
         severity: "degraded",
         reason:
-          'scopes "test-pro-validation.md" collides with an existing file (core or another plugin); not overwritten — rename it to a plugin-namespaced path',
+          'scopes "test-pro-validation.md" collides with an existing file this plugin has no record of installing (core, another plugin, an older copy of this plugin, or a local edit); not overwritten - if it is this plugin\'s older copy, remove it and re-run compose; if it is core\'s or another plugin\'s, rename yours to a plugin-namespaced path',
       },
       {
         severity: "degraded",
         reason:
-          'agents "test-pro-metrics-agent.md" collides with an existing file (core or another plugin); not overwritten — rename it to a plugin-namespaced path',
+          'agents "test-pro-metrics-agent.md" collides with an existing file this plugin has no record of installing (core, another plugin, an older copy of this plugin, or a local edit); not overwritten - if it is this plugin\'s older copy, remove it and re-run compose; if it is core\'s or another plugin\'s, rename yours to a plugin-namespaced path',
       },
       {
         severity: "degraded",
         reason:
-          'knowledge "test-pro-metrics-agent/methodology.md" collides with an existing file (core or another plugin); not overwritten — rename it to a plugin-namespaced path',
+          'knowledge "test-pro-metrics-agent/methodology.md" collides with an existing file this plugin has no record of installing (core, another plugin, an older copy of this plugin, or a local edit); not overwritten - if it is this plugin\'s older copy, remove it and re-run compose; if it is core\'s or another plugin\'s, rename yours to a plugin-namespaced path',
       },
     ]);
   });

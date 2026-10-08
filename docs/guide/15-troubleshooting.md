@@ -21,6 +21,7 @@ This chapter covers common issues and their solutions, organized by symptom.
 | Claude hooks are restricted by policy | Ask the Claude Code administrator to lift managed `allowManagedHooksOnly`; project settings cannot override it |
 | Cursor: approvals are never recorded | If the project is not in a git repository, run `git init` in it, then fully restart Cursor and trust the folder (see [Cursor project outside a git repository](#cursor-project-outside-a-git-repository)) |
 | Kiro IDE: `deny fs_read matching ".kiro/"` | Run `/aidlc --doctor`; remove the `.kiro/` rule from the ignore file it names (see [Kiro IDE Read Denials](#kiro-ide-read-denials)) |
+| Kiro IDE: AI-DLC's reviews and helpers do not run, the chat shows **Approval needed in agent-aidlc-...** panels, or `/aidlc` is handed to a Kiro workflow | Kiro's Workflows feature is on. Ask the agent to turn it off, or run `aidlc config trust --kiro-workflows off --yes`, then **Developer: Reload Window** (see [Kiro's Workflows feature](harnesses/kiro-ide.md#kiros-workflows-feature-stops-ai-dlcs-reviews-and-helpers)) |
 | Kiro IDE: the agent cites "my memory" and suggests bypassing a check or running a hook by hand | Ignore it and delete that Kiro memory (see [Kiro memories carry old AI-DLC advice](harnesses/kiro-ide.md#kiro-memories-carry-old-ai-dlc-advice)) |
 | State file corrupted | Run `/aidlc --doctor`, compare against state template |
 | Stuck at approval gate | Type your response; use `/aidlc --stage <target>` to jump past it |
@@ -351,6 +352,7 @@ Claude Code honours `"disableAllHooks": true` in any settings layer: enterprise 
 - If the offending layer is a **project or user file**, set `"disableAllHooks": false` in this project's `.claude/settings.local.json`. That file outranks the project and user files, so it covers a switch-off in any of them without changing your user settings, and it works in the same chat: no restart and no `/hooks`.
 - If it is **enterprise managed settings**, the highest-precedence layer, a project or user file cannot override it: ask your Claude Code administrator to allow project hooks.
 - If you **started Claude Code with a setting that turns hooks off** (for example `--settings '{"disableAllHooks": true}'`), a project file cannot override it either, and doctor cannot see it: start Claude Code again without that setting.
+- If **AI-DLC was set up while Claude Code was already open in this folder**, that session never loaded its hooks (on a native install they call `aidlc`, which the open session cannot find yet): exit Claude Code and start it again in this folder, then type `/aidlc`. Your first request is kept and carries on.
 
 The check reads the on-disk managed-settings **file** (`/etc/claude-code/managed-settings.json` on Linux, `/Library/Application Support/ClaudeCode/managed-settings.json` on macOS, `%ProgramFiles%\ClaudeCode\managed-settings.json` on current Windows — `%PROGRAMDATA%\ClaudeCode\` is a legacy secondary) plus alphabetical JSON files in the sibling `managed-settings.d/` directory. It does **not** inspect other managed channels Claude Code supports (MDM, Windows registry, or a remote/server-managed source), so a passing row means the resolved value is not `true` in any settings file the check could read, not a guarantee those channels are clean. If your managed file lives at a non-standard path, point the check at it with `AIDLC_MANAGED_SETTINGS_PATH=/path/to/managed-settings.json`; fragments beside that file are included.
 
@@ -601,10 +603,11 @@ the question open, so your answer still counts.
 
 If AI-DLC says the workspace source cannot be read, the plan cannot be approved
 yet, because nothing could say what the build starts from. Repair the source
-boundary the message names (shrink or exclude the offending path, declare real
-source under an excluded directory in `.aidlc-source-paths.json`, or remove a
-broken symlink), then run `/aidlc` (`$aidlc` on Codex). `/aidlc --doctor` has a
-"Workspace source boundary binds" check that names the failing path.
+boundary the message names (add the offending path to the exclude list in
+`.aidlc-source-paths.json`, declare real source under an excluded directory in
+its paths list, or remove a broken symlink), then run `/aidlc` (`$aidlc` on
+Codex). `/aidlc --doctor` has a "Workspace source boundary binds" check that
+names the failing path.
 
 If the plan's Testing Contract is refused, the message names one of three
 causes: the block is missing, it is not valid JSON, or it changed after it was

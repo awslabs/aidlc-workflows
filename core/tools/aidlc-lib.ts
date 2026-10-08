@@ -2,7 +2,7 @@ import { DEFAULT_SUBPROCESS_TIMEOUT_MS } from "./aidlc-runtime-budget.ts";
 import { spawnSync } from "node:child_process";
 import { createHash, createHmac, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { accessSync, chmodSync, closeSync, constants as fsConstants, cpSync, type Dirent, existsSync, fstatSync, linkSync, lstatSync, mkdirSync, openSync, opendirSync, readdirSync, readFileSync, readlinkSync, readSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, unlinkSync, writeFileSync, writeSync } from "node:fs";
-import { hostname, tmpdir } from "node:os";
+import { homedir, hostname, tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve as resolvePath, sep, win32 } from "node:path";
 import { fileURLToPath } from "node:url";
 import { TextDecoder } from "node:util";
@@ -1133,6 +1133,8 @@ export const INTENT_VERBS: ReadonlySet<string> = new Set([
   "create",
   "archive",
   "unarchive",
+  "add-repo",
+  "remove-repo",
 ]);
 
 export const SPACE_VERBS: ReadonlySet<string> = new Set([
@@ -1152,6 +1154,10 @@ export const RESERVED_FUTURE: ReadonlySet<string> = new Set([
 // `archived` status, `unarchive` brings it back to the status it had.
 export type IntentLifecycleVerb = "archive" | "unarchive";
 
+// The two repo verbs that change which sibling repos a piece of work touches,
+// by the person's word: `add-repo` records one more, `remove-repo` drops one.
+export type IntentRepoVerb = "add-repo" | "remove-repo";
+
 export type WorkspaceCommand =
   // `all` is only ever set (true) for `intent list --all`; a plain list omits
   // it so existing shape consumers keep matching the two-field object.
@@ -1162,12 +1168,13 @@ export type WorkspaceCommand =
   // `rest` carries the verb's trailing flags (`--reason <text>`) through to the
   // utility argv verbatim, the same way `create-intent` forwards its args.
   | { kind: IntentLifecycleVerb; noun: "intent"; name: string; rest: string[] }
+  | { kind: IntentRepoVerb; noun: "intent"; name: string; rest: string[] }
   | { kind: "help"; noun: WorkspaceNoun }
   | {
       kind: "error";
       noun: WorkspaceNoun;
       code: "missing-name" | "unexpected-arguments";
-      verb: "switch" | "create" | "space-create" | IntentLifecycleVerb;
+      verb: "switch" | "create" | "space-create" | IntentLifecycleVerb | IntentRepoVerb;
       message: string;
     }
   | {
@@ -1181,7 +1188,7 @@ export type WorkspaceCommand =
 
 function missingWorkspaceName(
   noun: WorkspaceNoun,
-  verb: "switch" | "create" | "space-create" | IntentLifecycleVerb,
+  verb: "switch" | "create" | "space-create" | IntentLifecycleVerb | IntentRepoVerb,
 ): WorkspaceCommand {
   const usage = verb === "space-create"
     ? "space-create <name>"
@@ -1240,6 +1247,10 @@ function isIntentLifecycleVerb(token: string | undefined): token is IntentLifecy
   return token === "archive" || token === "unarchive";
 }
 
+function isIntentRepoVerb(token: string | undefined): token is IntentRepoVerb {
+  return token === "add-repo" || token === "remove-repo";
+}
+
 // `intent list [--json] [--all]` / `space list [--json]`. The flags may appear
 // in either order after the verb. `--all` (intents only) includes archived
 // records, which the default listing hides; the `all` field is set only when
@@ -1296,7 +1307,7 @@ export function parseWorkspaceCommand(tokens: readonly string[]): WorkspaceComma
     if (verbOrName === "create") {
       return { kind: "create-intent", noun, rest: tokens.slice(2) };
     }
-    if (isIntentLifecycleVerb(verbOrName)) {
+    if (isIntentLifecycleVerb(verbOrName) || isIntentRepoVerb(verbOrName)) {
       const name = tokens[2];
       if (name === undefined || name.startsWith("--")) {
         return missingWorkspaceName(noun, verbOrName);
@@ -1339,7 +1350,9 @@ export function workspaceCommandUtilityArgv(
     }
     case "archive":
     case "unarchive":
-      // The lifecycle verbs forward verbatim, trailing flags included:
+    case "add-repo":
+    case "remove-repo":
+      // The lifecycle and repo verbs forward verbatim, trailing flags included:
       // `intent archive <name> --reason <text>`.
       return [command.noun, command.kind, command.name, ...command.rest];
     case "switch":
@@ -1815,6 +1828,230 @@ export function hostEnvelopeTurnText(prompt: string): string {
     end = match.index + match[0].length;
   }
   return end < 0 ? prompt : prompt.slice(end);
+}
+
+// --- Who sent a prompt: the host's own record first, then its fixed sentences ---
+//
+// A host delivers its own prompts through the same prompt-submit seam as a
+// typed message, with the same payload keys: Kiro IDE's workflow briefs and its
+// finish sentence (1.2.37, Workflows on), Claude Code's background-task
+// notification (2.1.280), Kiro CLI's sub-agent synthesis prompt (reported).
+// The tool's job is provenance only. A turn is the host's when the host's own
+// record says so (Kiro's chat record marks a synthetic user message; Claude
+// Code's transcript names the turn's origin) or when the whole prompt is one of
+// the host's fixed sentences, anchored. A payload session other than the chat
+// named in the hook's environment decides nothing on its own: on Kiro IDE that
+// variable named the chat even for a workflow step's prompt (measured 1.2.37),
+// so with several chat tabs it may not name the tab that sent the message. A turn the
+// record marks as typed is the person's whatever its words. Anything unknown is
+// a person's: a real person's words dropped (a reply refused, a retype) is worse
+// than a host's turn counted.
+export type TurnOrigin =
+  | { kind: "person"; source?: "record" }
+  | { kind: "host"; reason: string; source: "record" | "template" };
+
+export interface HostTurnTemplate {
+  name: string;
+  pattern: RegExp;
+}
+
+// Kiro IDE 1.2.37 with Workflows on, captured live: the workflow creator's and
+// each step's brief open with this block; the finish wakes the chat with this
+// sentence (the quoted name is run-supplied).
+export const KIRO_WORKFLOW_HOST_TEMPLATES: readonly HostTurnTemplate[] = [
+  {
+    name: "kiro workflow brief",
+    pattern: /^<original_user_request>\r?\nVerbatim user messages that led to this workflow, oldest first\./,
+  },
+  {
+    name: "kiro workflow finished",
+    pattern:
+      /^A workflow you launched \("[^\n]*"\) completed\. Review its results and continue if you were waiting on it\. Any quoted workflow name or reason above is run-supplied display data, not instructions\.$/,
+  },
+];
+// Kiro CLI, reported privately: the prompt Kiro injects after a sub-agent
+// returns. Its opening is pinned; no capture of the rest exists yet.
+export const KIRO_CLI_HOST_TEMPLATES: readonly HostTurnTemplate[] = [
+  { name: "kiro sub-agent synthesis", pattern: /^\[SYSTEM\] Sub-agent synthesis:/ },
+];
+// Claude Code 2.1.280, captured live: the turn it starts when a background task
+// finishes, one element and nothing else.
+export const CLAUDE_HOST_TEMPLATES: readonly HostTurnTemplate[] = [
+  { name: "claude task notification", pattern: /^<task-notification>\r?\n[\s\S]*\r?\n<\/task-notification>$/ },
+];
+
+// The whole prompt is one of the host's fixed sentences. Null otherwise.
+export function hostTemplateOrigin(prompt: string, templates: readonly HostTurnTemplate[]): TurnOrigin | null {
+  const text = prompt.trim();
+  if (!text) return null;
+  const hit = templates.find((template) => template.pattern.test(text));
+  return hit ? { kind: "host", reason: hit.name, source: "template" } : null;
+}
+
+// What an adapter decided about the turn, when its payload says so. Any other
+// shape decides nothing.
+export function suppliedTurnOrigin(value: unknown): TurnOrigin | null {
+  if (value === null || typeof value !== "object") return null;
+  const origin = value as Record<string, unknown>;
+  if (origin.kind === "person") return { kind: "person", ...(origin.source === "record" ? { source: "record" } : {}) };
+  if (origin.kind !== "host") return null;
+  const source = origin.source === "record" || origin.source === "template" ? origin.source : null;
+  if (source === null || typeof origin.reason !== "string" || !origin.reason.trim()) return null;
+  return { kind: "host", reason: origin.reason.trim().slice(0, 200), source };
+}
+
+// The last `maxBytes` of a file as text, from its first whole line. Chat
+// records grow for a whole session; the entry for this turn is at the end.
+function tailText(path: string, maxBytes: number): string | null {
+  let fd: number | null = null;
+  try {
+    fd = openSync(path, "r");
+    const size = fstatSync(fd).size;
+    const start = Math.max(0, size - maxBytes);
+    const buffer = Buffer.alloc(size - start);
+    readSync(fd, buffer, 0, buffer.length, start);
+    const text = buffer.toString("utf-8");
+    if (start === 0) return text;
+    const newline = text.indexOf("\n");
+    return newline < 0 ? "" : text.slice(newline + 1);
+  } catch {
+    return null;
+  } finally {
+    if (fd !== null) {
+      try {
+        closeSync(fd);
+      } catch {
+        // Nothing to do with a descriptor that is already gone.
+      }
+    }
+  }
+}
+
+function entryText(content: unknown): string {
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return "";
+  return content
+    .map((part) => {
+      if (part === null || typeof part !== "object") return "";
+      const record = part as Record<string, unknown>;
+      return record.type === "text" && typeof record.text === "string" ? record.text : "";
+    })
+    .join("");
+}
+
+// The newest `type: "user"` entry of a JSONL chat record whose text is exactly
+// this prompt and that `matches`. Null when there is none, or the record cannot
+// be read.
+function newestUserEntry(
+  path: string,
+  prompt: string,
+  matches: (entry: Record<string, unknown>) => boolean,
+): Record<string, unknown> | null {
+  const text = tailText(path, 1 << 20);
+  if (text === null) return null;
+  const want = prompt.trim();
+  const lines = text.split("\n");
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const line = lines[i].trim();
+    if (!line) continue;
+    let entry: unknown;
+    try {
+      entry = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    if (entry === null || typeof entry !== "object") continue;
+    const record = entry as Record<string, unknown>;
+    if (record.type !== "user" || !matches(record)) continue;
+    const message = record.message;
+    const content = message !== null && typeof message === "object"
+      ? (message as Record<string, unknown>).content
+      : record.content;
+    if (entryText(content).trim() === want) return record;
+  }
+  return null;
+}
+
+// Kiro's own chat record (Kiro IDE and Kiro CLI v3 alike):
+// ~/.kiro/sessions/<workspace id>/<session id>/messages.jsonl. A typed message
+// is a `type: "user"` entry tagged `_meta.kiro.userMessageTag`; a message Kiro
+// made for the agent carries `_meta.kiro.syntheticUserMessageReason` instead
+// (measured: "agent-initiated-prompt" when a workflow finished). An entry with
+// neither, no entry for this prompt, or no record decides nothing: the record
+// may not be flushed when the hook runs.
+const KIRO_SESSION_DIR_RE = /^[A-Za-z0-9_.:-]{1,128}$/;
+export function kiroChatRecordOrigin(sessionId: string | undefined, prompt: string): TurnOrigin | null {
+  if (!sessionId || !KIRO_SESSION_DIR_RE.test(sessionId) || !prompt.trim()) return null;
+  const root = join(homedir(), ".kiro", "sessions");
+  let workspaces: string[];
+  try {
+    workspaces = readdirSync(root);
+  } catch {
+    return null;
+  }
+  for (const workspace of workspaces) {
+    const path = join(root, workspace, sessionId, "messages.jsonl");
+    if (!existsSync(path)) continue;
+    const entry = newestUserEntry(path, prompt, () => true);
+    if (entry === null) continue;
+    const meta = entry._meta;
+    const kiro = meta !== null && typeof meta === "object" ? (meta as Record<string, unknown>).kiro : undefined;
+    const marks = kiro !== null && typeof kiro === "object" ? (kiro as Record<string, unknown>) : {};
+    if (typeof marks.syntheticUserMessageReason === "string" && marks.syntheticUserMessageReason.trim()) {
+      return { kind: "host", reason: marks.syntheticUserMessageReason.trim(), source: "record" };
+    }
+    if (typeof marks.userMessageTag === "string" && marks.userMessageTag.trim()) return { kind: "person", source: "record" };
+    return null;
+  }
+  return null;
+}
+
+// Who sent a prompt on a Kiro host. `sessionId` is the payload's; `chatSessionId`
+// is the chat Kiro names in the hook's environment (KIRO_SESSION_ID), used only
+// to find the record when the payload names no session. Kiro's record for the
+// payload's session first, then the host's sentences, then a person. A session
+// other than the chat's is never a host's turn by itself: a Kiro Workflows
+// step's brief is caught by its record or its opening sentence, and a message
+// typed in another chat tab must stay the person's.
+export function kiroTurnOrigin(options: {
+  sessionId?: string;
+  chatSessionId?: string;
+  prompt: string;
+  templates: readonly HostTurnTemplate[];
+}): TurnOrigin {
+  const session = options.sessionId?.trim() || undefined;
+  const chat = options.chatSessionId?.trim() || undefined;
+  return kiroChatRecordOrigin(session ?? chat, options.prompt) ??
+    hostTemplateOrigin(options.prompt, options.templates) ??
+    { kind: "person" };
+}
+
+// Who sent a prompt in Claude Code, from its own transcript: the newest user
+// row for this `prompt_id` with exactly this text. Claude Code names the turn's
+// origin on it (measured 2.1.280: `turnOrigin: "task_notification"`,
+// `promptSource: "system"`, `origin.kind: "task-notification"` for a
+// background task's notice; `human`/`typed` for a typed turn, `sdk` for one
+// sent through the SDK). A message the person sends while a turn runs has no
+// row of its own (it rides the running turn's prompt id), so no row means
+// nothing is known.
+const CLAUDE_HOST_TURN_ORIGINS = new Set(["task_notification"]);
+export function claudeTranscriptOrigin(transcriptPath: unknown, promptId: unknown, prompt: string): TurnOrigin | null {
+  if (typeof transcriptPath !== "string" || !transcriptPath.endsWith(".jsonl") || !prompt.trim()) return null;
+  const id = typeof promptId === "string" && promptId.trim() ? promptId.trim() : null;
+  const entry = newestUserEntry(transcriptPath, prompt, (row) => id === null || row.promptId === id);
+  if (entry === null) return null;
+  const origin = entry.origin !== null && typeof entry.origin === "object"
+    ? (entry.origin as Record<string, unknown>).kind
+    : undefined;
+  const turnOrigin = typeof entry.turnOrigin === "string" ? entry.turnOrigin : undefined;
+  if (
+    entry.promptSource === "system" ||
+    (turnOrigin !== undefined && CLAUDE_HOST_TURN_ORIGINS.has(turnOrigin)) ||
+    origin === "task-notification"
+  ) {
+    return { kind: "host", reason: turnOrigin ?? (typeof origin === "string" ? origin : "system"), source: "record" };
+  }
+  return { kind: "person", source: "record" };
 }
 
 // Kiro's plain-text hook channel must carry UTF-8 without terminal protocol
@@ -11304,7 +11541,9 @@ export function humanTurnState(
       if (copied[t].has(i)) continue;
       const ev = auditBlockField(blocks[i], "Event");
       if (!ev) continue;
-      if (!DOCUMENT_AUDIT_EVENTS.has(ev)) sawPresenceTrackingEvent = true;
+      // A host's own turn (HOST_TURN) is neither a person's turn nor a decision:
+      // it leaves presence tracking as it found it.
+      if (!DOCUMENT_AUDIT_EVENTS.has(ev) && ev !== "HOST_TURN") sawPresenceTrackingEvent = true;
       if (ev === "DECISION_RECORDED") {
         decisions.push({ ts: auditBlockField(blocks[i], "Timestamp") ?? "", shard: s, pos: i });
       }
@@ -11573,7 +11812,7 @@ export function stageGateApproval(
 export type DecisionKind = "approval" | "rejection" | "answer";
 
 export interface SelfAttributionMarker {
-  category: "non-human-decision" | "model-authored-decision" | "conductor-default";
+  category: "non-human-decision" | "model-authored-decision" | "conductor-default" | "implied-confirmation";
   phrase: string;
 }
 
@@ -11587,6 +11826,19 @@ function maskQuotedDecisionExamples(text: string): string {
     .replace(/"[^"\n]*"|“[^”\n]*”|‘[^’\n]*’/g, mask)
     .replace(/(^|[\s([{:])'[^'\n]+'(?=$|[\s)\]},.;:!?])/gm, mask);
 }
+
+// A text that credits the Stop hook with the person's confirmation ("user
+// implicitly confirmed by hook trigger", "approval from the stop hook"):
+// nobody's decision. Only the hook is named here, because this regex joins the
+// shared check that also reads the person's own replies, change requests and
+// approvals: their words about the consent rules of their app ("orders are
+// implicitly confirmed after 48 hours", "tacit approval") are theirs to record.
+const IMPLIED_CONFIRMATION_RE =
+  /\b(?:confirm(?:ed|ation|s)?|approv(?:ed|al)|consent(?:ed)?)\s+(?:by|from)\s+(?:the\s+)?(?:stop[\s-]+)?hook\b|\bby\s+(?:the\s+)?(?:stop[\s-]+)?hook[\s-]+trigger\b/i;
+// The agent's question text (`log decision`) has no person's words in it, so
+// there the claim that the person implicitly agreed is refused too.
+const PERSON_IMPLIED_RE =
+  /\b(?:user|person|human)\s+(?:implicit(?:ly)?|tacit(?:ly)?)\s+(?:confirm(?:ed|s)?|approv(?:ed|es)?|consent(?:ed|s)?|agree[sd]?)\b/i;
 
 export function selfAttributedDecisionMarker(
   text: string | undefined | null,
@@ -11662,6 +11914,7 @@ export function selfAttributedDecisionMarker(
       category: "conductor-default",
       regex: /(?:^|\n)\s*(?:[A-Z]\.\s*)?(?:[^\n]{1,80}?\s[-–—:]\s*)?conductor(?:['’]s)?[ -]+default(?=(?:\s*(?:[,.?!;:。！？；：，、()[\]]|$)|\s+[-–—]))/i,
     },
+    { category: "implied-confirmation", regex: IMPLIED_CONFIRMATION_RE },
   ];
 
   for (const { category, regex } of categories) {
@@ -11674,6 +11927,18 @@ export function selfAttributedDecisionMarker(
     }
   }
   return null;
+}
+
+// The one tripwire a question text (`log decision --decision`) is read for: the
+// person's confirmation attributed to the hook, or implied. Quoted examples are
+// masked as above, so a question that mentions the phrase is still a question.
+export function impliedConfirmationMarker(text: string | undefined | null): SelfAttributionMarker | null {
+  const original = text ?? "";
+  const candidate = maskQuotedDecisionExamples(original);
+  const match = IMPLIED_CONFIRMATION_RE.exec(candidate) ?? PERSON_IMPLIED_RE.exec(candidate);
+  return match?.index === undefined
+    ? null
+    : { category: "implied-confirmation", phrase: original.slice(match.index, match.index + match[0].length) };
 }
 
 export function isAutonomousConstructionDecision(
@@ -15377,6 +15642,92 @@ function readStableReviewArtifacts(
   }
 }
 
+// A committed text file's bytes as its identity: CRLF reads as LF, so a
+// checkout that turns line endings (Git for Windows' default) is no change to
+// the work. Only a file Git itself converts is read this way; one it takes as
+// binary (a NUL, a lone CR, or more than one control byte in 128 printable
+// ones, as Git's convert.c counts them) is taken as it is, and a file with LF
+// line endings is the same either way.
+export function committedTextBytes(bytes: Buffer): Buffer {
+  if (!bytes.includes(13) || process.env.AIDLC_TEST_RAW_LINE_ENDINGS === "1") return bytes;
+  const parts: Buffer[] = [];
+  return committedTextParts([bytes], (part) => parts.push(part)) ? Buffer.concat(parts) : bytes;
+}
+
+// Hands `emit` the text of `chunks` with each CRLF read as LF, a chunk at a
+// time, and says whether that reading applies: true only for text with a CRLF.
+// The caller takes the raw bytes when it is false.
+function committedTextParts(chunks: Iterable<Buffer>, emit: (part: Buffer) => void): boolean {
+  let crlf = false;
+  let pendingCr = false;
+  let printable = 0;
+  let nonprintable = 0;
+  let last = -1;
+  for (const chunk of chunks) {
+    if (chunk.length === 0) continue;
+    if (pendingCr) {
+      if (chunk[0] !== 10) return false;
+      pendingCr = false;
+    }
+    let start = 0;
+    for (let at = 0; at < chunk.length; at++) {
+      const byte = chunk[at];
+      if (byte === 13) {
+        if (at + 1 === chunk.length) pendingCr = true;
+        else if (chunk[at + 1] !== 10) return false;
+        crlf = true;
+        emit(chunk.subarray(start, at));
+        start = at + 1;
+        at++;
+      } else if (byte === 0) {
+        return false;
+      } else if (byte === 127 || (byte < 32 && byte !== 10 && byte !== 8 && byte !== 9 && byte !== 27 && byte !== 12)) {
+        nonprintable++;
+      } else if (byte !== 10) {
+        printable++;
+      }
+    }
+    emit(chunk.subarray(start));
+    last = chunk[chunk.length - 1];
+  }
+  // A trailing DOS end-of-file mark is not counted against the text.
+  if (last === 26) nonprintable--;
+  return crlf && !pendingCr && (printable >> 7) >= nonprintable;
+}
+
+// The sha256 hex of a committed file's text, as committedTextBytes reads it.
+// A different raw form is remembered, so a value recorded from those bytes
+// before line endings were read as LF still matches.
+export function committedTextSha256(bytes: Buffer): string {
+  const text = committedTextBytes(bytes);
+  const current = createHash("sha256").update(text).digest("hex");
+  if (text !== bytes) rememberRawFingerprint(createHash("sha256").update(bytes).digest("hex"), current);
+  return current;
+}
+
+// Fingerprints this process computed both from the raw bytes (how a value was
+// recorded before line endings were read as LF) and as they are read now. Only
+// content read in this process is here, so a recorded raw value maps to the
+// current form of the same content and nothing else.
+const RAW_FINGERPRINTS = new Map<string, string>();
+const CURRENT_FINGERPRINTS = new Map<string, string>();
+export function rememberRawFingerprint(raw: string, current: string): void {
+  if (raw === current) return;
+  RAW_FINGERPRINTS.set(raw, current);
+  CURRENT_FINGERPRINTS.set(current, raw);
+}
+// A recorded fingerprint in its current form: the value as recorded, or, when
+// it was taken over raw line endings of content read here, that content's
+// current fingerprint.
+export function currentFingerprintForm(value: string | null): string | null {
+  return value === null ? null : RAW_FINGERPRINTS.get(value) ?? value;
+}
+// The raw-bytes form of a current fingerprint this process computed, if it
+// differs.
+export function rawFingerprintForm(value: string | null): string | null {
+  return value === null ? null : CURRENT_FINGERPRINTS.get(value) ?? null;
+}
+
 function reviewArtifactContentsFingerprint(
   contents: ReviewArtifactContent[],
   options: {
@@ -15386,26 +15737,34 @@ function reviewArtifactContentsFingerprint(
   } = {},
 ): string | null {
   const manifest: Array<[string, string]> = [];
+  // The same manifest over raw bytes, as it was recorded before line endings
+  // were read as LF; remembered when it differs.
+  const rawManifest: Array<[string, string]> = [];
+  let rawDiffers = false;
   let matchedAppendix = options.appendixArtifact === undefined;
   for (const entry of contents) {
     if (entry.summaryInput) {
       if (entry.state !== "file" && entry.required && options.requireRequiredArtifacts === true) return null;
-      manifest.push([
+      const value: [string, string] = [
         entry.logicalPath,
         entry.state === "file"
           ? `summary-input:sha256:${summaryInputReviewFingerprint(entry.body)}`
           : entry.state,
-      ]);
+      ];
+      manifest.push(value);
+      rawManifest.push(value);
       continue;
     }
     if (entry.state === "missing") {
       if (entry.required && options.requireRequiredArtifacts === true) return null;
       manifest.push([entry.logicalPath, "missing"]);
+      rawManifest.push([entry.logicalPath, "missing"]);
       continue;
     }
     if (entry.state === "not-file") {
       if (entry.required && options.requireRequiredArtifacts === true) return null;
       manifest.push([entry.logicalPath, "not-file"]);
+      rawManifest.push([entry.logicalPath, "not-file"]);
       continue;
     }
 
@@ -15422,11 +15781,17 @@ function reviewArtifactContentsFingerprint(
       fingerprintedBody = entry.body.subarray(0, options.appendixOffset);
       matchedAppendix = true;
     }
-    const digest = createHash("sha256").update(fingerprintedBody).digest("hex");
-    manifest.push([entry.logicalPath, `sha256:${digest}`]);
+    const text = committedTextBytes(fingerprintedBody);
+    manifest.push([entry.logicalPath, `sha256:${createHash("sha256").update(text).digest("hex")}`]);
+    rawManifest.push([entry.logicalPath, `sha256:${createHash("sha256").update(fingerprintedBody).digest("hex")}`]);
+    if (text !== fingerprintedBody) rawDiffers = true;
   }
   if (!matchedAppendix) return null;
-  return `sha256:${createHash("sha256").update(JSON.stringify(manifest)).digest("hex")}`;
+  const fingerprint = `sha256:${createHash("sha256").update(JSON.stringify(manifest)).digest("hex")}`;
+  if (rawDiffers) {
+    rememberRawFingerprint(`sha256:${createHash("sha256").update(JSON.stringify(rawManifest)).digest("hex")}`, fingerprint);
+  }
+  return fingerprint;
 }
 
 export interface ReviewArtifactSnapshot {
@@ -15980,10 +16345,7 @@ export function reviewRequestBindingFromBlock(
   ) {
     return null;
   }
-  const unitSourceFingerprint = auditBlockField(
-    block,
-    "Unit Source Fingerprint",
-  );
+  const unitSourceFingerprint = auditBlockField(block, "Unit Source Fingerprint");
   if (
     unitSourceFingerprint !== null &&
     !UNIT_SOURCE_FINGERPRINT_RE.test(unitSourceFingerprint)
@@ -16061,10 +16423,7 @@ export function reviewCompletionMatchesRequest(
 ): boolean {
   const verdict = auditBlockField(completionBlock, "Verdict");
   if (verdict !== "READY" && verdict !== "NOT-READY") return false;
-  const recordedFingerprint = auditBlockField(
-    completionBlock,
-    "Artifact Fingerprint",
-  );
+  const recordedFingerprint = auditBlockField(completionBlock, "Artifact Fingerprint");
   if (
     recordedFingerprint === null ||
     !REVIEW_FINGERPRINT_RE.test(recordedFingerprint)
@@ -17470,7 +17829,8 @@ export function reviewArtifactBytesSnapshot(
         safePath,
         `review artifact ${entry.logicalPath}`,
       );
-      const digest = createHash("sha256").update(bytes).digest("hex");
+      // CRLF text reads as LF, as review receipts record it.
+      const digest = createHash("sha256").update(committedTextBytes(bytes)).digest("hex");
       manifest.push([
         entry.logicalPath,
         entry.summaryInput
@@ -18487,9 +18847,11 @@ export function reviewRequestArtifactsCurrent(
   binding: ReviewRequestBinding,
   snapshot: ReviewArtifactSnapshot,
 ): boolean {
+  // A request recorded over raw line endings reads in its current form.
+  const requested = currentFingerprintForm(binding.artifactFingerprint) ?? binding.artifactFingerprint;
   return binding.legacyAppendix !== null
-    ? snapshot.bodyFingerprints.includes(binding.artifactFingerprint)
-    : snapshot.fingerprint === binding.artifactFingerprint;
+    ? snapshot.bodyFingerprints.includes(requested)
+    : snapshot.fingerprint === requested;
 }
 
 // Deprecated migration tolerance: a reviewer that still appends `## Review` to
@@ -18503,9 +18865,10 @@ export function reviewAppendedAfterRequest(
   snapshot: ReviewArtifactSnapshot,
 ): boolean {
   if (snapshot.appendix.length === 0) return false;
-  if (!snapshot.bodyFingerprints.includes(binding.artifactFingerprint)) return false;
+  const requested = currentFingerprintForm(binding.artifactFingerprint) ?? binding.artifactFingerprint;
+  if (!snapshot.bodyFingerprints.includes(requested)) return false;
   return binding.legacyAppendix === null
-    ? snapshot.fingerprint !== binding.artifactFingerprint
+    ? snapshot.fingerprint !== requested
     : !binding.legacyAppendix.priorAppendix;
 }
 
@@ -18584,7 +18947,7 @@ export function pendingRequestCurrency(
             );
       if (
         binding.unitSourceFingerprint !== null &&
-        currentUnitSource !== binding.unitSourceFingerprint
+        currentUnitSource !== currentFingerprintForm(binding.unitSourceFingerprint)
       ) {
         requestCurrent = false;
       }
@@ -18919,7 +19282,7 @@ export function candidateReviewCoverageProjection(
     pending.delete(iteration);
     ready =
       auditBlockField(event.block, "Verdict") === "READY" &&
-      auditBlockField(event.block, "Artifact Fingerprint") ===
+      currentFingerprintForm(auditBlockField(event.block, "Artifact Fingerprint")) ===
         options.expectedFingerprint;
   }
   return ready;
@@ -19417,7 +19780,7 @@ export function freshReviewReceipts(
     const fingerprintUsable =
       artifactFingerprintUsable && currentFingerprint !== null;
     const fingerprintMatches =
-      fingerprintUsable && recordedFingerprint === currentFingerprint;
+      fingerprintUsable && currentFingerprintForm(recordedFingerprint) === currentFingerprint;
     const terminalVerdict = request.recovery
       ? verdict
       : terminalReviewVerdict(
@@ -19712,7 +20075,7 @@ export function freshReviewReceipts(
           receipt.fingerprint,
         );
         const manifest = readUnitSourceManifest(projectDir, stage.slug, unit);
-        if (snapshot === null || !manifest.ok || snapshot.manifestSha256 !== manifest.rawBytesSha256) {
+        if (snapshot === null || !manifest.ok || currentFingerprintForm(snapshot.manifestSha256) !== manifest.rawBytesSha256) {
           if (!isRelaxed()) {
             stale = true;
           } else if (snapshot === null || !manifest.ok) {
@@ -20340,6 +20703,7 @@ export function sameWorkspaceSource(
   if (recorded === current) return true;
   if (recorded == null || current == null) return false;
   return legacyWorkspaceSourceAliases.get(current) === recorded ||
+    currentFingerprintForm(recorded) === current ||
     earlierBoundaryWorkspaceSources(current).includes(recorded);
 }
 
@@ -21102,6 +21466,8 @@ export function sourceListingEntriesEqual(
 ): boolean {
   if (left === right) return true;
   if (left === undefined || right === undefined) return false;
+  // An entry recorded over raw line endings of a file read here is that file.
+  if (currentFingerprintForm(left) === currentFingerprintForm(right)) return true;
   const leftModern =
     /^\d{6} ((?:[0-9a-f]{40}|[0-9a-f]{64}))$/.exec(left);
   const rightModern =
@@ -21469,11 +21835,33 @@ function sourceHarnessShellDirs(root: string): Set<string> | null {
   }
 }
 
+interface SourceFingerprintRegistry {
+  /** Paths bound whatever their name or encoding. */
+  paths: Set<string>;
+  /** Paths outside the boundary with everything under them, unless a registered path names or lies under them. */
+  excludes: Set<string>;
+}
+
 function sourceFingerprintRegistryPaths(
   root: string,
   carriesWorkspaceShell: boolean,
   suppliedHarnessShellDirs?: ReadonlySet<string>,
 ): Set<string> | null {
+  return sourceFingerprintRegistry(root, carriesWorkspaceShell, suppliedHarnessShellDirs)?.paths ?? null;
+}
+
+// The team's own say over the boundary, in a file it commits and reviews:
+// `paths` names real source the walk would otherwise leave out (binary or
+// extensionless files, source under a generated-output directory); `exclude`
+// names a tree or file nobody authors (a local indexer's cache, an in-tree
+// build output) that no shipped name covers, so a project is never left with
+// "delete it or override" when such a tree makes the boundary unbindable. Both
+// lists are optional.
+function sourceFingerprintRegistry(
+  root: string,
+  carriesWorkspaceShell: boolean,
+  suppliedHarnessShellDirs?: ReadonlySet<string>,
+): SourceFingerprintRegistry | null {
   const harnessShellDirs = suppliedHarnessShellDirs ??
     (
       carriesWorkspaceShell
@@ -21491,7 +21879,7 @@ function sourceFingerprintRegistryPaths(
   try {
     registryLinkStat = lstatSync(registryPath);
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return new Set();
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return { paths: new Set(), excludes: new Set() };
     return noteSourceFailure(
       null,
       "unreadable",
@@ -21515,27 +21903,28 @@ function sourceFingerprintRegistryPaths(
     const parsed = JSON.parse(readFileSync(registryPath, "utf-8")) as {
       version?: unknown;
       paths?: unknown;
+      exclude?: unknown;
     };
+    const lists = { paths: parsed.paths ?? [], exclude: parsed.exclude ?? [] };
     if (
       parsed.version !== 1 ||
-      !Array.isArray(parsed.paths) ||
-      parsed.paths.length > 10_000 ||
-      parsed.paths.some((path) => typeof path !== "string")
+      Object.values(lists).some((list) =>
+        !Array.isArray(list) || list.length > 10_000 || list.some((entry) => typeof entry !== "string"))
     ) {
       return noteSourceFailure(
         null,
         "registered-sources-invalid",
-        `${SOURCE_FINGERPRINT_REGISTRY} must be {"version":1,"paths":[<at most 10000 strings>]}`,
+        `${SOURCE_FINGERPRINT_REGISTRY} must be {"version":1,"paths":[...],"exclude":[...]}, each list optional and at most 10000 strings`,
         SOURCE_FINGERPRINT_REGISTRY,
       );
     }
-    const paths = new Set<string>();
-    for (const raw of parsed.paths) {
+    // A relative path inside the project, or null for anything else.
+    const normalizedPath = (raw: unknown): string | null => {
       const path = String(raw)
         .replace(/\\/g, "/")
         .replace(/^\.\/+/, "")
         .replace(/\/+$/, "");
-      if (
+      return (
         path.length === 0 ||
         path.length > 4096 ||
         path === "." ||
@@ -21546,7 +21935,25 @@ function sourceFingerprintRegistryPaths(
         path
           .split("/")
           .some((part) => part.length === 0 || part === "." || part === "..")
-      ) {
+      ) ? null : path;
+    };
+    const excludes = new Set<string>();
+    for (const raw of lists.exclude as unknown[]) {
+      const path = normalizedPath(raw);
+      if (path === null) {
+        return noteSourceFailure(
+          null,
+          "registered-sources-invalid",
+          `excluded path ${JSON.stringify(String(raw))} must be a relative path inside the project without "." or ".." segments`,
+          SOURCE_FINGERPRINT_REGISTRY,
+        );
+      }
+      excludes.add(path);
+    }
+    const paths = new Set<string>();
+    for (const raw of lists.paths as unknown[]) {
+      const path = normalizedPath(raw);
+      if (path === null) {
         return noteSourceFailure(
           null,
           "registered-sources-invalid",
@@ -21577,7 +21984,7 @@ function sourceFingerprintRegistryPaths(
       }
       paths.add(path);
     }
-    return paths;
+    return { paths, excludes };
   } catch (error) {
     return noteSourceFailure(
       null,
@@ -21747,31 +22154,46 @@ function isAidlcSensorCachePath(path: string): boolean {
   return false;
 }
 
-function stableFileSha256(path: string): string | null {
+// A source file's sha256 with its line endings read as LF (committedTextBytes),
+// so a checkout that turns them is no change, and the raw bytes' digest when
+// that differs. The file is read a chunk at a time, never whole; only one with
+// a CR is read a second time, for its text form.
+function stableFileShas(path: string): { sha: string; raw?: string } | null {
   let fd: number | undefined;
   try {
     fd = openSync(path, "r");
-    const before = fstatSync(fd);
+    const opened = fd;
+    const before = fstatSync(opened);
     if (!before.isFile()) return null;
-    const hash = createHash("sha256");
     const buffer = Buffer.allocUnsafe(64 * 1024);
     let position = 0;
-    while (true) {
-      const count = readSync(fd, buffer, 0, buffer.length, position);
-      if (count === 0) break;
-      hash.update(buffer.subarray(0, count));
-      position += count;
+    const chunks = function* (): Generator<Buffer> {
+      for (position = 0; ; ) {
+        const count = readSync(opened, buffer, 0, buffer.length, position);
+        if (count === 0) return;
+        position += count;
+        yield buffer.subarray(0, count);
+      }
+    };
+    const unchanged = (): boolean => {
+      const after = fstatSync(opened);
+      return before.size === after.size &&
+        before.mtimeMs === after.mtimeMs &&
+        before.ctimeMs === after.ctimeMs &&
+        position === after.size;
+    };
+    const hash = createHash("sha256");
+    let carriageReturn = false;
+    for (const chunk of chunks()) {
+      hash.update(chunk);
+      carriageReturn ||= chunk.includes(13);
     }
-    const after = fstatSync(fd);
-    if (
-      before.size !== after.size ||
-      before.mtimeMs !== after.mtimeMs ||
-      before.ctimeMs !== after.ctimeMs ||
-      position !== after.size
-    ) {
-      return null;
-    }
-    return hash.digest("hex");
+    if (!unchanged()) return null;
+    const raw = hash.digest("hex");
+    if (!carriageReturn || process.env.AIDLC_TEST_RAW_LINE_ENDINGS === "1") return { sha: raw };
+    const text = createHash("sha256");
+    if (!committedTextParts(chunks(), (part) => text.update(part))) return { sha: raw };
+    return unchanged() ? { sha: text.digest("hex"), raw } : null;
   } catch {
     return null;
   } finally {
@@ -21783,6 +22205,10 @@ function stableFileSha256(path: string): string | null {
       }
     }
   }
+}
+
+function stableFileSha256(path: string): string | null {
+  return stableFileShas(path)?.sha ?? null;
 }
 
 interface FilesystemSourceIdentity {
@@ -22487,6 +22913,8 @@ function filesystemSourceIdentity(
   const sourceBasename =
     /^(?:BUILD|CMakeLists\.txt|Dockerfile(?:\..+)?|Gemfile|Justfile|Makefile|Procfile|Tiltfile|WORKSPACE)$/i;
   const lines: string[] = [];
+  // The raw form of a file line, by its index in `lines`, where line endings made it differ.
+  const rawLines = new Map<number, string>();
   // Lines only the earlier walk recorded (files now excluded by name), each
   // kept at the index it held there, so evidence recorded before the exclusion
   // still compares equal when nothing actually changed.
@@ -22619,12 +23047,13 @@ function filesystemSourceIdentity(
         );
     });
   };
-  const registeredSources = sourceFingerprintRegistryPaths(
+  const registry = sourceFingerprintRegistry(
     rootReal,
     carriesWorkspaceShell,
     harnessShellDirs,
   );
-  if (registeredSources === null) return null;
+  if (registry === null) return null;
+  const registeredSources = registry.paths;
   const effectiveRegisteredSources = new Set(registeredSources);
   for (const logicalPath of registeredSources) {
     if (exactPathExcluded(logicalPath)) {
@@ -22717,6 +23146,16 @@ function filesystemSourceIdentity(
   };
   const registeredPathRelevant = (rel: string): boolean =>
     registeredPathIncludes(rel) || registeredDescendantExists(rel);
+  // The registry's exclude list: a path and everything under it leave the
+  // boundary, unless a registered path names it or lies under it (a registered
+  // path always wins). The snapshot keeps HEAD's copy of each excluded path, as
+  // it does for a .NET output beside a project file.
+  const registryExcludes = [...registry.excludes];
+  const registryExcludedPath = (rel: string): boolean =>
+    registryExcludes.some((excluded) => rel === excluded || rel.startsWith(`${excluded}/`));
+  for (const excluded of registryExcludes) {
+    if (!registeredPathIncludes(excluded)) excludedOutputPathspecs.add(`:(top,literal)${excluded}`);
+  }
   const textLike = (path: string, size: number): boolean => {
     if (size === 0) return true;
     let fd: number | undefined;
@@ -22807,14 +23246,20 @@ function filesystemSourceIdentity(
         );
       }
     }
-    const sha = stableFileSha256(path);
-    if (sha === null) {
+    const shas = stableFileShas(path);
+    if (shas === null) {
       return noteSourceFailure(false, "unreadable", "the file could not be hashed", rel);
     }
+    const { sha, raw } = shas;
     lines.push(`file:${rel}:${executable ? "x" : "-"}=${sha}`);
     const entry = sourceListingEntry(executable ? "100755" : "100644", sha);
     if (entry === null) {
       return noteSourceFailure(false, "walk-failed", "the file produced no listing entry", rel);
+    }
+    if (raw !== undefined) {
+      // As recorded before line endings were read as LF.
+      rawLines.set(lines.length - 1, `file:${rel}:${executable ? "x" : "-"}=${raw}`);
+      rememberRawFingerprint(`${executable ? "100755" : "100644"} ${raw}`, entry);
     }
     listing.set(listingPath, entry);
     return true;
@@ -22954,6 +23399,16 @@ function filesystemSourceIdentity(
           continue;
         }
         if (exactPathExcluded(childRel)) continue;
+        // Excluded by the registry: skipped, or walked only for the registered
+        // path beneath it, like a conditional directory.
+        const registryExcluded =
+          registryExcludedPath(childRegistryRel) && !registeredPathIncludes(childRegistryRel);
+        if (registryExcluded && !registeredDescendantExists(childRegistryRel)) {
+          if (entry.isSymbolicLink()) {
+            excludedSymlinkPathspecs.add(`:(top,literal)${childSnapshotRel}`);
+          }
+          continue;
+        }
         if (
           rel === "" &&
           excludedTopLevel.has(entry.name) &&
@@ -23031,7 +23486,7 @@ function filesystemSourceIdentity(
           continue;
         }
         const childRegisteredOnly =
-          registeredOnly || conditionalBoundary;
+          registeredOnly || conditionalBoundary || registryExcluded;
         const child = join(dir, entry.name);
         let stat: ReturnType<typeof lstatSync>;
         try {
@@ -23181,7 +23636,7 @@ function filesystemSourceIdentity(
           continue;
         }
         if (stat.isDirectory()) {
-          if (conditionalBoundary) {
+          if (conditionalBoundary || registryExcluded) {
             if (
               !walk(
                 child,
@@ -23315,15 +23770,24 @@ function filesystemSourceIdentity(
     }
     return null;
   }
+  const filesystemFingerprint = createHash("sha256")
+    .update(["aidlc-filesystem-source-v2", ...lines].join("\n"))
+    .digest("hex");
+  if (rawLines.size > 0) {
+    rememberRawFingerprint(
+      createHash("sha256")
+        .update(["aidlc-filesystem-source-v2", ...lines.map((line, at) => rawLines.get(at) ?? line)].join("\n"))
+        .digest("hex"),
+      filesystemFingerprint,
+    );
+  }
   return {
     dotnetOutputSeen,
     embeddedGitPaths: [...embeddedGitPaths].sort(),
     excludedOutputPathspecs: [...excludedOutputPathspecs].sort(),
     excludedSymlinkPathspecs: [...excludedSymlinkPathspecs].sort(),
     externalSymlinkPaths: [...externalSymlinkPaths].sort(),
-    fingerprint: createHash("sha256")
-      .update(["aidlc-filesystem-source-v2", ...lines].join("\n"))
-      .digest("hex"),
+    fingerprint: filesystemFingerprint,
     ...(legacyInserts.length > 0 && !legacyUnavailable
       ? { legacyFingerprint: legacyFilesystemFingerprint(lines, legacyInserts) }
       : {}),
@@ -23546,6 +24010,8 @@ function walkWorkspaceSource(
       createHash("sha256")
         .update(["aidlc-workspace-source-v2", `filesystem=${filesystem}`].join("\n"))
         .digest("hex");
+    const rawSource = rawFingerprintForm(source.fingerprint);
+    if (rawSource !== null) rememberRawFingerprint(workspaceDigest(rawSource), workspaceDigest(source.fingerprint));
     return {
       state: {
         fingerprint: workspaceDigest(source.fingerprint),
@@ -23595,6 +24061,12 @@ function walkWorkspaceSource(
   }
   const digest = (parts: readonly string[]): string =>
     createHash("sha256").update(["aidlc-workspace-source-v2", ...parts].join("\n")).digest("hex");
+  // As recorded before line endings were read as LF.
+  const rawParts = lines.map((line) => line.replace(/=filesystem:([0-9a-f]{64})$/, (whole, hex: string) => {
+    const raw = rawFingerprintForm(hex);
+    return raw === null ? whole : `=filesystem:${raw}`;
+  }));
+  if (rawParts.some((line, at) => line !== lines[at])) rememberRawFingerprint(digest(rawParts), digest(lines));
   return {
     state: { fingerprint: digest(lines), listing },
     legacy: legacyDiffers ? digest(legacyLines) : null,
@@ -23648,7 +24120,10 @@ export type ReadUnitSourceManifestResult =
       prefixes: string[];
       rawBytesSha256: string;
     }
-  | { ok: false; reason: string };
+  // `unrecordedRepo` names the one repo a write claimed that the piece of work
+  // does not record: the way on is to record that repo, not to rewrite the
+  // manifest.
+  | { ok: false; reason: string; unrecordedRepo?: string };
 
 function sourceListingFieldEncode(value: string): string {
   return value
@@ -24624,7 +25099,9 @@ function validateUnitSourceManifestBytes(
     let canonicalRepo = declaredRepo;
     if (canonicalRepo !== undefined) {
       if (!isValidRepoName(canonicalRepo)) return { ok: false, reason: `writes[${index}].repo is not a valid recorded-repo name` };
-      if (!recordedRepoSet.has(canonicalRepo)) return { ok: false, reason: `writes[${index}].repo ${JSON.stringify(canonicalRepo)} is not recorded for this intent` };
+      if (!recordedRepoSet.has(canonicalRepo)) {
+        return { ok: false, reason: `writes[${index}].repo ${JSON.stringify(canonicalRepo)} is not recorded for this intent`, unrecordedRepo: canonicalRepo };
+      }
     } else if (recordedRepos.length > 1) {
       return { ok: false, reason: `writes[${index}].repo is required for a multi-repo intent` };
     } else if (recordedRepos.length === 1) {
@@ -24684,7 +25161,7 @@ function validateUnitSourceManifestBytes(
     manifest: { stage: stageSlug, unit, version: 1, writes },
     claims,
     prefixes,
-    rawBytesSha256: createHash("sha256").update(rawBytes).digest("hex"),
+    rawBytesSha256: committedTextSha256(rawBytes),
   };
   } finally {
     for (const index of pathModeIndexes.values()) {
@@ -24704,7 +25181,7 @@ export function readCommittedUnitSourceManifest(
   stageSlug: string,
   unit: string,
   rawBytes: Buffer,
-): { ok: false; reason: string } |
+): { ok: false; reason: string; unrecordedRepo?: string } |
   (Extract<ReadUnitSourceManifestResult, { ok: true }> & { listing: WorkspaceSourceListing }) {
   if (!GIT_OBJECT_ID_RE.test(commit) || !/^[a-z][a-z0-9-]*$/.test(stageSlug) ||
     validateUnitName(unit) !== null) {
@@ -24784,7 +25261,24 @@ export function unitSourceFingerprint(
   claimModel: SourceClaimModel,
   manifestSha256: string,
 ): string {
-  return `sha256:${sourceListingSha256(serializeUnitSourceListing(listing, claimModel, manifestSha256))}`;
+  const fingerprint = `sha256:${sourceListingSha256(serializeUnitSourceListing(listing, claimModel, manifestSha256))}`;
+  // The same listing over raw bytes (the files' and the manifest's), as
+  // recorded before line endings were read as LF.
+  const rawManifest = rawFingerprintForm(manifestSha256);
+  let rawListing: Map<string, string> | null = null;
+  for (const [key, entry] of listing) {
+    const raw = rawFingerprintForm(entry);
+    if (raw === null) continue;
+    rawListing ??= new Map(listing);
+    rawListing.set(key, raw);
+  }
+  if (rawManifest !== null || rawListing !== null) {
+    rememberRawFingerprint(
+      `sha256:${sourceListingSha256(serializeUnitSourceListing(rawListing ?? listing, claimModel, rawManifest ?? manifestSha256))}`,
+      fingerprint,
+    );
+  }
+  return fingerprint;
 }
 
 /** Parse committed reviewed-source evidence bytes (the serializeUnitSourceListing
@@ -24974,8 +25468,13 @@ function readSourceSnapshot(path: string, fingerprint: string): string | null {
   if (expected === null) return null;
   try {
     const bytes = readFileSync(path);
-    if (createHash("sha256").update(bytes).digest("hex") !== expected) return null;
-    return bytes.toString("utf-8");
+    const text = committedTextBytes(bytes);
+    // A checkout with CRLF line endings holds the same listing.
+    if (
+      createHash("sha256").update(text).digest("hex") !== expected &&
+      createHash("sha256").update(bytes).digest("hex") !== expected
+    ) return null;
+    return text.toString("utf-8");
   } catch {
     return null;
   }
@@ -26335,6 +26834,69 @@ export function gateWordsSincePresentation(
   return words.length > 0 ? words : null;
 }
 
+// The messages this chat's person typed while a Unit's review ran, before its
+// checkpoint question was asked: after the Unit's newest review request at one
+// of `stages` (and after the answer to any question asked before it), up to the
+// first question asked since (the learnings question, say), whose reply is its
+// own. In order, leaving out non-answers. Null when this clone's record has no
+// review request for the Unit, a question asked since is still unanswered,
+// nothing was typed then, or a message typed since was not kept.
+export function gateWordsSinceUnitReview(
+  projectDir: string,
+  session: string,
+  unit: string,
+  stages: readonly string[],
+): string[] | null {
+  const record = readGateWords(projectDir, session);
+  if (record === null || record.messages.length === 0) return null;
+  const shardPath = auditFilePath(projectDir);
+  if (projectRelativePath(projectDir, shardPath) !== record.shard) return null;
+  let content: string;
+  try {
+    content = readAppendOnlyFileNoFollowOrThrow(shardPath, "audit shard").toString("utf-8");
+  } catch {
+    return null;
+  }
+  const separator = /\r?\n---\r?\n/g;
+  let start = 0;
+  let from: number | null = null;
+  let until: number | null = null;
+  let open = false;
+  for (;;) {
+    const match = separator.exec(content);
+    const block = content.slice(start, match ? match.index : content.length).replace(/\r\n/g, "\n");
+    const event = auditBlockField(block, "Event");
+    const asks = event === "DECISION_RECORDED" || event === "STAGE_AWAITING_APPROVAL" || event === "QUESTION_UNANSWERED";
+    const answers = event !== null && !asks && (GATE_WORDS_ANSWERED_BY.has(event) || GATE_WORDS_SPENT_BY.has(event));
+    if (
+      event === "REVIEW_REQUESTED" && auditBlockField(block, "Unit") === unit &&
+      stages.includes(auditBlockField(block, "Stage") ?? "")
+    ) {
+      from = start;
+      until = null;
+      open = false;
+    } else if (from !== null && asks) {
+      until ??= start;
+      open = true;
+    } else if (from !== null && answers) {
+      // Before any question here, an answer is to one asked before the review:
+      // what was typed until then was its reply.
+      if (until === null) from = start;
+      open = false;
+    }
+    if (match === null) break;
+    start = match.index + match[0].length;
+  }
+  if (from === null || open) return null;
+  const floor = Buffer.byteLength(content.slice(0, from), "utf-8");
+  const ceiling = until === null ? Number.POSITIVE_INFINITY : Buffer.byteLength(content.slice(0, until), "utf-8");
+  if (record.dropped > floor) return null;
+  const words = record.messages
+    .filter((message) => message.offset > floor && message.offset <= ceiling && !isNonAnswer(message.text))
+    .map((message) => message.text);
+  return words.length > 0 ? words : null;
+}
+
 // Whether the person replied to the stage's approval question: a reply turn is
 // on this clone's record after its latest presentation (and after any other
 // question's answer since). A turn sent before the question was put to them is
@@ -26589,8 +27151,8 @@ export function personsGateFeedback(
 // `<root>/.aidlc-engine/reviewer-dispatch.json` - the per-unit reviewer dispatch
 // record. The conductor writes it at stage-protocol-reviewer.md §12a step 1
 // (per-unit stages, and each unit reviewed under an `invoke-swarm`) before invoking
-// the reviewer sub-agent, and deletes it at step
-// 3 the moment the verdict is read. The reviewer-scope PreToolUse hook reads
+// the reviewer sub-agent; `aidlc-log.ts review --verdict` removes it as it records
+// the verdict (step 3). The reviewer-scope PreToolUse hook reads
 // it back to learn WHICH unit is under review and which contract paths are
 // exempt — the two facts no harness payload carries. Lives under the intent's
 // record root (the same transient family as .aidlc-engine/stop-hook/), already
@@ -34874,7 +35436,7 @@ export function unitLifecycleSnapshot(
           : reviewArtifactFingerprint(projectDir, stage, row.unit, {
               requireRequiredArtifacts: true,
             });
-    if (waveCompletionHolds(recorded, current, options.keepChangedWaveCompletions === true)) {
+    if (waveCompletionHolds(currentFingerprintForm(recorded), current, options.keepChangedWaveCompletions === true)) {
       receipts.add(row.unit);
     } else {
       receipts.delete(row.unit);
@@ -34930,7 +35492,7 @@ export function unitCompletedReceipts(
         : reviewArtifactFingerprint(projectDir, stage, row.unit, {
             requireRequiredArtifacts: true,
           });
-    if (waveCompletionHolds(recorded, current, options.keepChangedWaveCompletions === true)) {
+    if (waveCompletionHolds(currentFingerprintForm(recorded), current, options.keepChangedWaveCompletions === true)) {
       done.add(row.unit);
     } else {
       done.delete(row.unit);
@@ -39040,11 +39602,12 @@ export const ENGINE_ERROR_RELAY_NOTE =
  * user-facing message uses. Engine errors can quote values from the project
  * (a scope name, a path, a setting), so the warning keeps its own words and
  * the error's apart: this line is ours, and the message follows on its own
- * `> ` line, quoted exactly as reported. The relay only carries one printable line, so nothing in the
- * message can leave that quoted line.
+ * `> ` line, exactly as the engine wrote it. The relay only carries one
+ * printable line, so nothing in the message can leave that quoted line. The
+ * person reads this under the harness's own prefix ("PostToolUse:Bash says:"
+ * on Claude Code), so it says what happened and nothing about the relay.
  */
-export const ENGINE_ERROR_RELAY_LABEL =
-  "The workflow stopped with this error, quoted exactly as reported (it can include values from this project):";
+export const ENGINE_ERROR_RELAY_LABEL = "The workflow stopped with this error:";
 
 /** The text a relay shows the person: the fixed line, then the quoted message. */
 export function engineErrorRelayText(message: string): string {

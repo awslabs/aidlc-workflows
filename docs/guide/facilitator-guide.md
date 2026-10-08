@@ -71,10 +71,9 @@ less.
    - Not ready: a `Hook failures, the latest within the last day` warning
      means a hook ran into a failure it could not report at the time; the row
      names the reasons.
-   - Not ready, although it is marked `ok`: a row reading
-     `Human-turn receipts: 0 HUMAN_TURN rows ... (advisory)` means your
-     answers are not being recorded, so approvals will be refused later.
-     This row shows only with `--verbose`.
+   - Not ready: a `Your replies are not being recorded: ...` warning means
+     your answers are not reaching AI-DLC, so approvals will be refused later.
+     Its fix line names the step for this tool.
 5. **Put the test away.** In the chat, run `/aidlc intent archive <name>`
    with the name of the test work (`/aidlc intent` lists the names). Nothing
    is deleted. The next `/aidlc` asks which work to continue, or, when none

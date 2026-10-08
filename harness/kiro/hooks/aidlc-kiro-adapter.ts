@@ -59,6 +59,8 @@ import {
   hookDebug,
   hostEnvelopeTurnText,
   humanPresenceGuardDisabled,
+  KIRO_CLI_HOST_TEMPLATES,
+  kiroTurnOrigin,
   isAidlcAgentFile,
   isAutonomousMode,
   leadingOrchestratorVerb,
@@ -361,6 +363,102 @@ const BARE_WORD = process.platform === "win32"
 // single-quote-class character doubled, which PowerShell reads back as typed.
 // The person's characters are never changed.
 const WIN32_SINGLE_QUOTE = /['\u2018-\u201B]/g;
+// Native Windows `aidlc` is aidlc.cmd, so the call also crosses cmd.exe, which
+// acts on & | < > ^ in a word with no space, and the launcher then reads the
+// arguments the Windows way (CommandLineToArgvW). A word holding one of those
+// characters travels as '"word"': PowerShell keeps the literal double quotes,
+// cmd.exe reads the word as quoted, and the launcher reads it back as typed (a
+// backslash run at the end doubled). A word holding a double quote of its own
+// never takes this form: cmd.exe flips its quote state at every double quote,
+// escaped or not; and cmd.exe replaces a %NAME% pair even inside quotes. Such
+// words go through the request file instead (below), off the line altogether.
+const CMD_METACHARACTER = /[&|<>^]/;
+const CMD_NAME_PAIR = /%[^%]+%/;
+function windowsArgv(arg: string): string {
+  const trailing = /\\*$/.exec(arg)?.[0] ?? "";
+  return `"${arg}${trailing}"`;
+}
+// On Windows a word holding a double quote, or a %NAME% pair, cannot cross
+// cmd.exe as written (cmd.exe flips its quote state at every double quote,
+// escaped or not, so an & | < > ^ inside such a word would run a second
+// command, and it replaces the pair with a variable's value): the hook writes the
+// person's words itself to the request file the engine reads with no shell on
+// the way, and forwards `next <flags> --request-file <path>`. The rule this
+// keeps: no forwarded token holding a double quote ever reaches the cmd.exe
+// line. The flags stay on the line because the engine reads the file as words
+// only, never as flags; which tokens are flags, and which flag takes the next
+// token as its value, is the engine's own reading (parseNextFlags), asked per
+// token, and a token holding a double quote is always a word. compose keeps
+// its verb on the line, the engine reads the file as its task text; another
+// verb (park, team-board), or a reading the hook cannot make, sends every
+// token as words: nothing runs, and at worst the engine shows a flag back as
+// words. A file that cannot be written still leaves the words off the line;
+// the engine then asks for the request again.
+const REQUEST_FILE = "aidlc/.aidlc-request-text/request.txt";
+async function requestFileForwarding(
+  args: readonly string[],
+  cwd: string,
+): Promise<{ args: string[]; forwarded: string } | null> {
+  if (process.platform !== "win32" || !args.some((arg) => arg.includes('"') || CMD_NAME_PAIR.test(arg))) return null;
+  // A typed `--` starts the words: everything after it is the request, as the
+  // engine reads it, and the marker itself is not a word.
+  const literal = args.indexOf("--");
+  const typed = literal < 0 ? [...args] : [...args.slice(0, literal), ...args.slice(literal + 1)];
+  let flags: string[] = [];
+  let words: string[] = typed;
+  if (args[0] === "compose") {
+    flags = ["compose"];
+    words = typed.slice(1);
+  } else if (leadingOrchestratorVerb(args) === null) {
+    try {
+      const { parseNextFlags } = await import("../tools/aidlc-orchestrate.ts");
+      flags = [];
+      words = [];
+      const head = literal < 0 ? args : args.slice(0, literal);
+      // A leading plan name (`bugfix`, `classic:`) names the plan only on the
+      // line: inside the file's text the engine reads it as a word and asks
+      // for the plan again. It stays there when nothing in it needs the file.
+      let from = 0;
+      const lead = head[0];
+      if (
+        lead !== undefined && !lead.includes('"') && !CMD_NAME_PAIR.test(lead) &&
+        parseNextFlags([lead]).positionalScope !== undefined
+      ) {
+        flags.push(lead);
+        from = 1;
+      }
+      for (let i = from; i < head.length; i++) {
+        const token = head[i];
+        // On the line only when the engine on its own reads the token as a
+        // flag: a lone `-`, a `-x` or any token the engine reads as request text
+        // stays a word, in its typed place.
+        if (!token.startsWith("-") || token.includes('"') || parseNextFlags([token]).intent !== undefined) {
+          words.push(token);
+          continue;
+        }
+        flags.push(token);
+        const value = head[i + 1];
+        if (
+          value !== undefined && !value.startsWith("-") && !value.includes('"') &&
+          parseNextFlags([token, value]).intent === undefined
+        ) {
+          flags.push(value);
+          i++;
+        }
+      }
+      if (literal >= 0) words.push(...args.slice(literal + 1));
+    } catch {
+      flags = [];
+      words = typed;
+    }
+  }
+  try {
+    mkdirSync(join(cwd, "aidlc", ".aidlc-request-text"), { recursive: true });
+    writeFileSync(join(cwd, REQUEST_FILE), `${words.join(" ")}\n`, "utf-8");
+  } catch { /* the engine reports the unread file; the words still stay off the line */ }
+  const argv = [...flags, "--request-file", REQUEST_FILE];
+  return { args: argv, forwarded: forwardedArgs(argv.join(" "), argv) };
+}
 function forwardedArgs(raw: string, args: string[]): string {
   if (
     /^[A-Za-z0-9_@%+=:,./ \t"-]*$/.test(raw) &&
@@ -370,7 +468,10 @@ function forwardedArgs(raw: string, args: string[]): string {
   }
   const quote = (arg: string): string => {
     if (BARE_WORD.test(arg)) return arg;
-    if (process.platform === "win32") return `'${arg.replace(WIN32_SINGLE_QUOTE, (q) => q + q)}'`;
+    if (process.platform === "win32") {
+      const word = CMD_METACHARACTER.test(arg) ? windowsArgv(arg) : arg;
+      return `'${word.replace(WIN32_SINGLE_QUOTE, (q) => q + q)}'`;
+    }
     if (!arg.includes("'")) return `'${arg}'`;
     if (!/["`$\\]/.test(arg)) return `"${arg}"`;
     return `'${arg.replaceAll("'", "'\\''")}'`;
@@ -493,10 +594,20 @@ if (target === "verb-intercept") {
     // typed switch (`/aidlc --guard-policy off`) is read as typed. Its lines
     // (what the switch did) lead whatever this seam writes: plain stdout is
     // Kiro's only context channel here.
+    // Who sent the turn (kiroTurnOrigin): a message Kiro's own chat record
+    // marks as its own, or Kiro's sub-agent synthesis sentence, is the host's
+    // (a session other than the chat's decides nothing by itself), and the core hook records it as HOST_TURN with nothing of the
+    // person's on it. Anything unknown is the person's.
     const recorded = runCore("aidlc-record-human-turn.ts", {
       hook_event_name: "UserPromptSubmit",
       ...(kiro.session_id ? { session_id: kiro.session_id } : {}),
       prompt: invocation.typed,
+      origin: kiroTurnOrigin({
+        sessionId: kiro.session_id,
+        chatSessionId: process.env.KIRO_SESSION_ID,
+        prompt: invocation.typed,
+        templates: KIRO_CLI_HOST_TEMPLATES,
+      }),
     });
     preface = hookContextText(recorded.stdout);
   } catch { /* presence best-effort - record-human-turn never blocks the turn */ }
@@ -574,13 +685,16 @@ if (target === "verb-intercept") {
     // shell-normalized argv and rejects a lossy call. A correct first next
     // consumes the latch, so subsequent loop iterations in this turn are bare.
     if (invocation.raw.length > 0) {
+      const viaFile = await requestFileForwarding(args, cwd);
+      const forwardedArgv = viaFile?.args ?? args;
+      const forwarded = viaFile?.forwarded ?? invocation.forwarded;
       try {
         writeFileSync(
           join(cwd, "aidlc", ".aidlc-forwarding-latch"),
           JSON.stringify({
             turn,
-            raw: invocation.forwarded,
-            args,
+            raw: forwarded,
+            args: forwardedArgv,
           }) + "\n",
           "utf-8",
         );
@@ -589,7 +703,7 @@ if (target === "verb-intercept") {
         preface +
         "SYSTEM (deterministic argument forwarding): Your immediate first tool call " +
           "must be exactly the engine call below. Preserve every argument; do not run a bare `next`.\n\n" +
-          `{{INVOKE}} engine orchestrate next ${invocation.forwarded}\n`,
+          `{{INVOKE}} engine orchestrate next ${forwarded}\n`,
       );
     } else if (preface) {
       process.stdout.write(preface);

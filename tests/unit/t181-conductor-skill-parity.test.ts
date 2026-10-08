@@ -607,10 +607,11 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
       expect(end, `${rel} lacks the isolated-run anchor`).toBeGreaterThan(start);
       // The one sentence on whether the agent says the Stop note's line
       // differs by tool on purpose (pinned by "only the skills of tools that
-      // hide the stop note have the agent say its line"); the rest is shared.
+      // hide the stop note have the agent say its line"); the rest is shared,
+      // the question case first on every tool.
       const block = body.slice(start, end).trim().replace(
-        /That note is from AI-DLC, not from the person, so never record it as their answer or reply to it as if they wrote it[^\n]*?(?:so say nothing about it\.|and nothing else about the note\.)/,
-        "<the per-tool Stop-note sentence>",
+        /; and it is for you, not for the person \(some tools show it to them too\), so say nothing about it|\s*Otherwise [A-Za-z ]+ does not show the note to the person, so if you carry on with the work[^\n]*?and nothing else about the note\./,
+        "",
       );
       const seen = blocks.get(block) ?? [];
       seen.push(rel);

@@ -100,6 +100,7 @@ import {
   UNBINDABLE_FINGERPRINT,
   unitStageRecordRelPath,
   type WorkspaceSourceListing,
+  committedTextBytes,
 } from "./aidlc-lib.ts";
 
 // --- Report vocabulary ---
@@ -972,11 +973,16 @@ function buildOwnershipIndex(
               const label = view.label(space, info.dirName, candidate.rel);
               const bytes = view.readRecordFile(space, info.dirName, candidate.rel);
               if (bytes === null) continue;
-              if (createHash("sha256").update(bytes).digest("hex") !== hex) {
+              // A checkout with CRLF line endings holds the same listing.
+              const text = committedTextBytes(bytes);
+              if (
+                createHash("sha256").update(text).digest("hex") !== hex &&
+                createHash("sha256").update(bytes).digest("hex") !== hex
+              ) {
                 problem = `evidence at ${label} does not hash to the receipt fingerprint`;
                 continue;
               }
-              const parsed = parseUnitSourceListing(bytes.toString("utf-8"));
+              const parsed = parseUnitSourceListing(text.toString("utf-8"));
               if (parsed === null) {
                 problem = `evidence at ${label} is not a parseable unit source listing`;
                 continue;
@@ -1023,10 +1029,12 @@ function buildOwnershipIndex(
         );
         let claims: SourceClaimModel | null = null;
         let claimsSource: UnitOwnership["claimsSource"] = null;
+        // A checkout with CRLF line endings holds the same manifest.
         if (
           manifestBytes !== null &&
           manifestSha !== null &&
-          createHash("sha256").update(manifestBytes).digest("hex") === manifestSha
+          (createHash("sha256").update(manifestBytes).digest("hex") === manifestSha ||
+            createHash("sha256").update(committedTextBytes(manifestBytes)).digest("hex") === manifestSha)
         ) {
           claims = parseManifestClaims(manifestBytes, recordedRepos);
           if (claims !== null) claimsSource = "manifest";
@@ -1210,22 +1218,17 @@ function unitFullyLanded(
 }
 
 /** Review evidence hashes working-tree bytes; commit listings hash repository
- *  bytes with checkout filters deliberately off. Where the repo converts between
- *  the two forms, unchanged content can report `drifted`, so say so up front. */
+ *  bytes with checkout filters deliberately off. Both read CRLF text as LF, so
+ *  core.autocrlf is no change; where .gitattributes converts otherwise (LFS
+ *  pointers, encodings), unchanged content can report `drifted`, so say so up
+ *  front. */
 function byteFormWarning(query: RepoQuery, head: string): string | null {
-  const autocrlf = git(query.dir, ["config", "--get", "core.autocrlf"])
-    .stdout.trim()
-    .toLowerCase();
-  const converts = autocrlf === "true" || autocrlf === "input";
   const attributes = git(query.dir, ["cat-file", "-e", `${head}:.gitattributes`]).status === 0;
-  if (!converts && !attributes) return null;
-  const cause = converts
-    ? `core.autocrlf=${autocrlf}${attributes ? " and .gitattributes" : ""}`
-    : ".gitattributes";
+  if (!attributes) return null;
   return (
-    `${cause} may convert bytes between the working tree and the repository; ` +
-    `reviewed evidence records working-tree bytes while this report reads repository ` +
-    `bytes, so converted paths (CRLF, LFS pointers, encodings) can report drifted`
+    ".gitattributes may convert bytes between the working tree and the repository; " +
+    "reviewed evidence records working-tree bytes while this report reads repository " +
+    "bytes, so converted paths (LFS pointers, encodings) can report drifted"
   );
 }
 

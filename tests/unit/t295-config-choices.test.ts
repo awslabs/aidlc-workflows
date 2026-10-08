@@ -610,7 +610,7 @@ describe("t295 flags section", () => {
       expect(recorded.stdout).not.toContain(extra);
     }
     expect(recorded.stdout).toContain(`Recorded ${name} in aidlc.settings.local.json. To undo: `);
-    expect(recorded.stdout).toContain(`config flags --clear-bypass ${name} --local --yes`);
+    expect(recorded.stdout).toContain(`config flags --clear-bypass ${name} --yes`);
     // A guard reads the switch at every check, so the running step gets it too.
     expect(recorded.stdout).toContain(`1 open workflow (default/${dirName}) picks this up right away, with no restart.`);
     // AI-DLC's managed .gitignore block already lists the local file. Plus the
@@ -757,6 +757,29 @@ describe("t295 flags section", () => {
     expect(named).toContain("2 open workflows (default/evil, default/active-flags) pick this up from the next step");
   });
 
+  test("clearing a switch no file records says the check stays off when the open work keeps it off", () => {
+    const project = install();
+    const intents = join(project, "aidlc", "spaces", "default", "intents");
+    const dirName = "held-off";
+    mkdirSync(join(intents, dirName), { recursive: true });
+    writeFileSync(join(intents, "active-intent"), `${dirName}\n`);
+    writeFileSync(
+      join(intents, dirName, "aidlc-state.md"),
+      "# AI-DLC State Tracking\n\n## Project Information\n- **Scope**: classic\n\n## Runtime State\n- **Guard Policy**: off (set by you)\n\n## Current Status\n- **Status**: Running\n",
+    );
+    const cleared = run(
+      ["config", "flags", "--project-dir", project, "--clear-bypass", "AIDLC_DISABLE_REVIEW_FREEZE_HOOK", "--yes"],
+      project,
+      runtimeEnv(),
+    );
+    expect(cleared.status, cleared.stdout + cleared.stderr).toBe(0);
+    expect(cleared.stdout).toContain(
+      "The review freeze check (it stops edits to work you already approved) is not recorded for this project, but it is off for this piece of work: ",
+    );
+    expect(cleared.stdout).not.toContain("nothing to turn back on");
+    expect(existsSync(join(project, "aidlc.settings.local.json"))).toBe(false);
+  });
+
   test("a bypass typed without a layer is the person's own, and a clear finds where it is recorded", () => {
     const project = install();
     const flags = (...args: string[]) => run(
@@ -767,9 +790,44 @@ describe("t295 flags section", () => {
     const bypasses = (file: string): string[] | undefined => existsSync(join(project, file))
       ? (JSON.parse(readFileSync(join(project, file), "utf-8")) as { flags?: { bypasses?: string[] } }).flags?.bypasses
       : undefined;
+    // Clearing a switch no file records changes nothing, and says only that.
+    const nothing = flags("--clear-bypass", "AIDLC_DISABLE_REVIEW_FREEZE_HOOK", "--yes");
+    expect(nothing.status, nothing.stdout + nothing.stderr).toBe(0);
+    expect(nothing.stdout.trim()).toBe(
+      "The review freeze check (it stops edits to work you already approved) is not off for this project, so there is nothing to turn back on.",
+    );
+    expect(existsSync(join(project, "aidlc.settings.local.json"))).toBe(false);
+    // The one-line answer is only for a clear and nothing else: a mistyped
+    // switch keeps its names error, and a change riding beside the clear is made.
+    const typo = flags("--clear-bypass", "AIDLC_DISABLE_REVIEW_FREEZE", "--yes");
+    expect(typo.status).toBe(2);
+    expect(typo.stdout + typo.stderr).toContain("--clear-bypass must be one of");
+    expect(typo.stdout + typo.stderr).not.toContain("nothing to clear");
+    const beside = flags("--clear-bypass", "AIDLC_DISABLE_REVIEW_FREEZE_HOOK", "--question-retention-days", "1", "--local", "--yes");
+    expect(beside.status, beside.stdout + beside.stderr).toBe(0);
+    expect(beside.stdout).toContain("Recorded question retention (days) 1 in aidlc.settings.local.json.");
+    expect(beside.stdout).not.toContain("nothing to turn back on");
+    expect(resolvedFlags(project)?.questionRetentionDays).toBe(1);
+    // The line is true: a switch the environment sets, or a check the piece of
+    // work keeps off, is off whatever the files record.
+    const fromEnv = run(
+      ["config", "flags", "--project-dir", project, "--clear-bypass", "AIDLC_DISABLE_REVIEW_FREEZE_HOOK", "--yes"],
+      project,
+      runtimeEnv({ AIDLC_DISABLE_REVIEW_FREEZE_HOOK: "1" }),
+    );
+    expect(fromEnv.status, fromEnv.stdout + fromEnv.stderr).toBe(0);
+    expect(fromEnv.stdout).toContain(
+      "The review freeze check (it stops edits to work you already approved) is not recorded for this project, but it is off: " +
+        "AIDLC_DISABLE_REVIEW_FREEZE_HOOK=1 is set in the environment this command ran in.",
+    );
+    expect(fromEnv.stdout).not.toContain("nothing to turn back on");
     const mine = flags("--bypass", "AIDLC_DISABLE_SENSORS");
     expect(mine.status, mine.stdout + mine.stderr).toBe(0);
     expect(mine.stdout).toContain("Recorded AIDLC_DISABLE_SENSORS in aidlc.settings.local.json.");
+    // One way back everywhere: the no-layer clear (it clears every file that
+    // records the switch), the form every other line and the skills name.
+    expect(mine.stdout).toContain("To undo: bun .claude/tools/aidlc.ts config flags --clear-bypass AIDLC_DISABLE_SENSORS --yes");
+    expect(mine.stdout).not.toContain("--clear-bypass AIDLC_DISABLE_SENSORS --local --yes");
     expect(bypasses("aidlc.settings.local.json")).toEqual(["AIDLC_DISABLE_SENSORS"]);
     expect(bypasses("aidlc.settings.json")).toBeUndefined();
     // Recorded for the team, a clear with no layer clears it there.
@@ -1017,7 +1075,7 @@ describe("t295 flags section", () => {
     );
     const recorded = flags("--bypass", name, "--yes");
     expect(recorded.status, recorded.stdout + recorded.stderr).toBe(0);
-    expect(recorded.stdout).toContain(`config flags --clear-bypass ${name} --local --yes`);
+    expect(recorded.stdout).toContain(`config flags --clear-bypass ${name} --yes`);
     expect(resolvedFlags(project)?.bypasses).toEqual([name]);
     const other = flags("--hook-debug", "on", "--yes");
     expect(other.status).toBe(2);

@@ -17,6 +17,7 @@ import { pathToFileURL } from "node:url";
 import { spawnSync } from "node:child_process";
 import { DEFAULT_SUBPROCESS_TIMEOUT_MS } from "./aidlc-runtime-budget.ts";
 import {
+  committedTextBytes,
   errorMessage,
   parseArgs,
   resolveProjectDir,
@@ -826,8 +827,22 @@ export function renderPluginStatuses(statuses: PluginStatus[], verbose = false):
   return `${[render(headings), ...values.map(render)].join("\n")}\n`;
 }
 
+// A file's identity is its committed text: CRLF reads as LF, so a checkout
+// that turns line endings (Git for Windows' default) is no change to a plugin's
+// files and never a refusal.
 function sha256File(path: string): string {
-  return `sha256:${createHash("sha256").update(readFileSync(path)).digest("hex")}`;
+  return `sha256:${createHash("sha256").update(committedTextBytes(readFileSync(path))).digest("hex")}`;
+}
+
+// Does a recorded digest still name this file? A record written before the
+// committed-text rule holds the raw-bytes digest of a CRLF file (a plugin root
+// that is itself a CRLF clone); identical bytes are no change either, so that
+// record proves the file too. The next record is written over the committed
+// text.
+function recordedDigestMatches(path: string, recorded: string): boolean {
+  const bytes = readFileSync(path);
+  const digest = (data: Buffer): string => `sha256:${createHash("sha256").update(data).digest("hex")}`;
+  return digest(committedTextBytes(bytes)) === recorded || digest(bytes) === recorded;
 }
 
 function pluginPrimitiveTargets(
@@ -877,23 +892,46 @@ function writeCompositionRecords(
   const dataDir = harnessDataDir(stagedProject, harnessDir);
   mkdirSync(dataDir, { recursive: true });
   const files = new Map<string, OwnershipFile>();
-  for (const candidate of pluginPrimitiveTargets(plugin, stagedProject, harnessDir)) {
-    if (claimedPaths.has(candidate.path)) continue;
-    const target = join(stagedProject, candidate.path);
-    if (
-      !lstatSync(target).isFile() ||
-      !readFileSync(target).equals(projectedSourceBytes(candidate.source, harnessDir))
-    ) continue;
-    const liveTarget = join(liveProject, candidate.path);
-    const legacyMatch = existsSync(liveTarget) &&
-      lstatSync(liveTarget).isFile() &&
-      readFileSync(liveTarget).equals(projectedSourceBytes(candidate.source, harnessDir));
-    if (existsSync(liveTarget) && !legacyMatch && !priorOwnedPaths.has(candidate.path)) continue;
-    files.set(candidate.path, {
-      path: candidate.path,
-      sha256: sha256File(target),
-    });
-    claimedPaths.add(candidate.path);
+  // The compose hook records what it installed: the files it wrote, replaced,
+  // or found identical to its own harness-shaped copy, with their hashes. Keep
+  // that record. Rebuilding it from byte-equality with the plugin source lost
+  // every file a harness reshapes at install (a Kiro, Cursor, OpenCode, or
+  // Copilot agent), so the plugin's next update of that file was refused.
+  const composed = parseOwnership(join(dataDir, `plugin-owned-${plugin.key}.json`));
+  if (composed && composed.name === plugin.key) {
+    for (const file of composed.files) {
+      if (claimedPaths.has(file.path)) continue;
+      const target = assertOwnedPath(stagedProject, file.path);
+      if (
+        !existsSync(target) ||
+        !lstatSync(target).isFile() ||
+        !recordedDigestMatches(target, file.sha256)
+      ) continue;
+      files.set(file.path, { path: file.path, sha256: sha256File(target) });
+      claimedPaths.add(file.path);
+    }
+  } else {
+    // A plugin whose vendored compose hook predates the record: prove
+    // ownership from the source bytes, as before.
+    for (const candidate of pluginPrimitiveTargets(plugin, stagedProject, harnessDir)) {
+      if (claimedPaths.has(candidate.path)) continue;
+      const target = join(stagedProject, candidate.path);
+      const projected = committedTextBytes(projectedSourceBytes(candidate.source, harnessDir));
+      if (
+        !lstatSync(target).isFile() ||
+        !committedTextBytes(readFileSync(target)).equals(projected)
+      ) continue;
+      const liveTarget = join(liveProject, candidate.path);
+      const legacyMatch = existsSync(liveTarget) &&
+        lstatSync(liveTarget).isFile() &&
+        committedTextBytes(readFileSync(liveTarget)).equals(projected);
+      if (existsSync(liveTarget) && !legacyMatch && !priorOwnedPaths.has(candidate.path)) continue;
+      files.set(candidate.path, {
+        path: candidate.path,
+        sha256: sha256File(target),
+      });
+      claimedPaths.add(candidate.path);
+    }
   }
   const ownership: OwnershipRecord = {
     schemaVersion: 1,
@@ -1051,14 +1089,17 @@ async function runComposer(
   const aidlcRoot = join(stagedProject, "aidlc");
   if (existsSync(aidlcRoot)) {
     for (const file of surfaceFiles(aidlcRoot)) {
-      if (
-        basename(file) === `plugin-compose-${plugin.key}.drops` &&
-        readFileSync(file, "utf-8").includes("[degraded]")
-      ) drops.push(file);
+      if (basename(file) !== `plugin-compose-${plugin.key}.drops`) continue;
+      // The staged drops file is gone with the staging directory, so the
+      // error carries the reasons themselves.
+      for (const line of readFileSync(file, "utf-8").split(/\r?\n/)) {
+        const degraded = line.match(/\t\[degraded\] (.+)$/);
+        if (degraded) drops.push(degraded[1]);
+      }
     }
   }
   if (drops.length > 0) {
-    throw new Error(`plugin ${plugin.key} composition reported degraded drops: ${drops.join(", ")}`);
+    throw new Error(`plugin ${plugin.key} composition reported degraded drops: ${drops.join("; ")}`);
   }
   if (pluginSourceHash(plugin.root) !== plugin.sourceHash) {
     throw new Error(`plugin ${plugin.key} source changed during composition`);
@@ -1190,7 +1231,7 @@ function pruneOwnedPlugin(
   for (const file of ownership.files) {
     const target = assertOwnedPath(stagedProject, file.path);
     if (!existsSync(target)) continue;
-    if (!lstatSync(target).isFile() || sha256File(target) !== file.sha256) {
+    if (!lstatSync(target).isFile() || !recordedDigestMatches(target, file.sha256)) {
       throw new Error(
         `cannot prune ${key}: owned path changed since composition: ${file.path}. To keep your ` +
           `change, move that file somewhere else, then run \`${aidlcInvocation()} engine plugin sync ` +
@@ -1220,7 +1261,7 @@ function replaceOwnedPluginPrimitives(
     const target = assertOwnedPath(stagedProject, file.path);
     ownedPaths.add(file.path);
     if (!existsSync(target)) continue;
-    if (!lstatSync(target).isFile() || sha256File(target) !== file.sha256) {
+    if (!lstatSync(target).isFile() || !recordedDigestMatches(target, file.sha256)) {
       throw new Error(
         `cannot sync ${key}: owned path changed since composition: ${file.path}. To keep your ` +
           `change, move that file somewhere else, then run \`${aidlcInvocation()} engine plugin sync\` ` +
@@ -1476,6 +1517,14 @@ export async function syncPlugins(
           plugin.key,
           evidence.ownership.get(plugin.key),
         ),
+      );
+      // The staged copy carries the previous record. A current compose hook
+      // writes a fresh one; a hook from before the record would leave the
+      // previous one in place and it would pass for this run's. Remove it, so
+      // that hook falls back to the source-bytes proof below.
+      rmSync(
+        join(harnessDataDir(stagedProject, harnessDir), `plugin-owned-${plugin.key}.json`),
+        { force: true },
       );
       await runComposer(plugin, stagedProject, harnessDir);
     }

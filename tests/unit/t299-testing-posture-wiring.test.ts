@@ -630,6 +630,19 @@ describe("t299 (3) runner bootstrap and test obligations", () => {
       combineTestObligations("poc", "minimal").scope_floor.join(" "),
     ).toContain("no extra new-test floor");
   });
+
+  // The CI obligation stays in the rendered contract for every plan: whether
+  // it applies is decided where the targets are judged (Build and Test, by the
+  // plan's CI Pipeline row), not here. Dropping it here would change
+  // contract_sha256 for every plan without CI Pipeline, and an approved plan
+  // under way would read as stale and be put back to the person.
+  test("the CI obligation is rendered for every scope that carries it, so no in-flight contract goes stale", () => {
+    for (const scope of ["mvp", "enterprise", "feature", "infra"]) {
+      expect(combineTestObligations(scope, "standard").scope_floor).toContain(
+        "Run the selected tests in CI before merge.",
+      );
+    }
+  });
 });
 
 describe("t299 (4) structured contract and approval fingerprint", () => {

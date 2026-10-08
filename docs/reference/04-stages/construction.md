@@ -1019,7 +1019,9 @@ This stage has a **two-part structure**: planning followed by generation.
    "Generating unit-2's code for 9 plan steps. This may take several minutes
    depending on project complexity. I'll show a summary when complete." at
    the start, and where an interrupted build picks up ("Picking up unit-2's
-   code at step 5 of 9 (1-4 done)."). When the plan groups its tasks under
+   code at step 5 of 9 (1-4 done)."; with the code written and no step marked,
+   "Picking up unit-2's code: the plan marks none of its 9 steps done, checking
+   what is built."). When the plan groups its tasks under
    "Step N" headings, both lines count the tasks and name the heading
    ("Generating unit-2's code for the 19 tasks in 4 plan steps ...", "Picking
    up unit-2's code at task 7 of 19, in Step 3 (tasks 1-6 done)."). The agent
@@ -1056,7 +1058,10 @@ This stage has a **two-part structure**: planning followed by generation.
      whose named files changed since the build started), each file a done step
      names in a code span that is not in the project (a bare file name counts
      when a file of that name is anywhere in it), stated as a fact for the
-     worker to judge, and the step to continue at. It appears only when the
+     worker to judge, and the step to continue at. When neither the ticks nor
+     the named files say what is done, it says the build wrote code and the plan
+     marks none of its steps, and asks for each finished step to be ticked.
+     It appears only when the
      build already started on the plan and instructions as they are now (the
      receipt for this target, stage attempt, and approved content is at
      `generation`, and the content on disk is the approved content or, when
@@ -1214,7 +1219,11 @@ with the aidlc-devsecops-agent providing security testing expertise.
 - Every current `## Testing Contract` in the stage-level or per-unit
   `code-generation-plan.md`, including postapproval edits permitted by a lowered
   plan re-approval fence and plans built with plan approval off; neither is
-  described as human-approved
+  described as human-approved. A CI obligation (the contract's "Run the selected
+  tests in CI before merge." line, or a memory note's "CI execution before
+  merge") is a target only when the plan runs CI Pipeline (`ci-pipeline` listed
+  as `EXECUTE` and not `[S]` in `aidlc-state.md`); otherwise it is recorded
+  `N/A` with that reason and is never a failure
 
 ### Steps
 
@@ -1257,7 +1266,9 @@ with the aidlc-devsecops-agent providing security testing expertise.
    - A Target Verification Matrix with Target ID, Source, Expected, Actual,
      Evidence, Owning Stage, and Verdict
    - Applicable targets begin `Pending`; `N/A` is valid only when the
-     source-complete inventory found no applicable measurable target
+     source-complete inventory found no applicable measurable target, or for a
+     target the plan makes inapplicable (the CI obligation of a plan that runs
+     no CI Pipeline)
    - Readiness assessment (build-ready, test-ready, deployment-ready)
    - Known limitations or outstanding items
 

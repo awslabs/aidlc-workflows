@@ -263,6 +263,24 @@ changed. Consume records preserve and verify `artifact`, `required`, and optiona
 invalid sidecar cannot be reconstructed safely from an already-composed stage:
 refresh the stock engine, remove that sidecar, then run `plugin sync`.
 
+### Plugin upgrade lifecycle
+
+Re-composing a newer version of your plugin (a new session on a host with the
+compose hook, `aidlc engine plugin sync`, or `bun <plugin-root>/hooks/compose.ts`)
+takes your newer stages, scopes, agents, knowledge, sensors, and tools wherever
+the installed copy is still the one your plugin installed. Compose proves that
+with `tools/data/plugin-owned-<key>.json`, the same hash-proven record
+`plugin sync` writes. A copy the person changed stays as it is; the drops log
+(shown by `/aidlc --doctor`) names the file and the step: move the change
+elsewhere, remove the file, re-run compose. A project composed before that record
+existed (compose.ts run by hand on 2.10.0 or earlier) reports each differing file
+the same way; identical files are recorded on the first run of the current
+compose, so later upgrades need nothing. A prose fragment your new version no
+longer ships at its old `(anchor, order)` is removed together with its sidecar
+record, so a moved fragment appears once. Structural additions (`adds.*`) your
+new version no longer declares are not removed by compose alone; `plugin sync`
+strips them before it re-composes.
+
 ## 4. Packaging the other primitives
 
 `test-pro` ships stages, contributions, sensors, a support agent, a scope, and
@@ -275,7 +293,9 @@ projection remains deferred (doc 18 §9 Status).
   `agents/test-pro-metrics-agent.md` has `name: test-pro-metrics-agent`). It is
   discovered automatically after compose, and your plugin's stages may name it
   as `lead_agent`/`support_agents`. A same-path collision with different content
-  is not overwritten; compose records a drop log. OpenCode composition also
+  is not overwritten (compose records a drop log), unless the installed file is
+  your plugin's own earlier copy, unchanged since compose installed it: a
+  re-compose takes your newer copy. OpenCode composition also
   creates the native `.opencode/agents/` subagent twin and denies nested
   `task` delegation. See
   [Adding an Agent](03-adding-an-agent.md).

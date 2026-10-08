@@ -36,6 +36,7 @@ diagnostic and lifecycle routes.
 | `/aidlc team-board [--snapshot] [--space <name>] [--intent <name>]` | Read-only Team Construction board (Unit progress, claims, merge readiness) |
 | `/aidlc intent [name]` | List intents in the active space (`--all` includes archived), or switch to an existing intent |
 | `/aidlc intent archive <name>` | Retire an in-flight or completed intent without deleting its record; `unarchive <name>` brings it back |
+| `/aidlc intent add-repo <name>` | Add a sibling repo to the active piece of work, until Units Generation is approved; `remove-repo <name>` takes one out (never the last) |
 | `/aidlc space [name]` | List spaces, or switch to an existing space |
 | `/aidlc space-create <name>` | Create a new space from the framework baseline |
 | `/aidlc knowledge <verb>` | Index and read your own documents (`onboard`, `sync`, `list`, `show`, `associate`, `dissociate`, `rebind`, `summarize`) |
@@ -364,6 +365,32 @@ recorded. Only `archive` records a reason; a `--reason` given to `unarchive` is
 not recorded, and the output says so. It does not move the cursor; switch to
 the revived intent with `/aidlc intent <name>` when you want to continue it.
 
+
+### `/aidlc intent add-repo <name>`: add a sibling repo to work already under way
+
+A piece of work records the sibling repos it touches when it is created (the
+`.git` children of the workspace at that moment, or an explicit `--repos`). When
+it turns out in Requirements Analysis or Domain Design that the work also
+touches another repo, say so and the agent runs `/aidlc intent add-repo <name>`
+for you: the repo is recorded, the change lands in the audit trail as
+`INTENT_REPOS_CHANGED`, and you read one line saying what happens next. If
+Reverse Engineering has already run, it and the stages that read the code
+knowledge show as behind for the new repo until you revisit them; if it has not
+run yet, it covers the new repo when it does. `/aidlc intent remove-repo <name>`
+is the mirror image. Neither asks a question: it is your own action, and the
+line says how to undo it.
+
+The name must be a folder directly under the workspace that is a Git checkout
+(a real `.git` entry): a folder merely shaped like a repository is refused, as
+is a name with separators. The command serves work that already records repos;
+work that records none treats the workspace folder itself as its repo
+(`workspace reclassify` records its first repos). Removing the last recorded
+repo is refused for the same reason.
+
+Units Generation is the cut-off: once it is approved, each Unit names its repo,
+so the command changes nothing and asks instead whether to go back to Units
+Generation with the repo added (or without it). Say yes and the agent reopens
+Units Generation and runs the change again.
 ### `/aidlc space [name]` — List or switch spaces
 
 Bare `/aidlc space` lists spaces; add `--json` for structured output.
@@ -387,7 +414,7 @@ them so agents can cite them instead of guessing.
 
 | Command | What it does |
 |---|---|
-| `/aidlc knowledge onboard [path]` | Index one file, or every not-yet-indexed file under `documents/` when no path is given |
+| `/aidlc knowledge onboard [path]` | Add one file or folder from anywhere in your project (one outside `documents/` is copied in first, and the result says where), or sweep every not-yet-indexed file under `documents/` when no path is given |
 | `/aidlc knowledge sync` | Reconcile the catalog with what is on disk; rebuild an index that was deleted |
 | `/aidlc knowledge list [--json]` | The catalog — every document with its state |
 | `/aidlc knowledge show <id>` | One document's full record plus its extracted text |
@@ -727,9 +754,9 @@ When a workflow has issues, `--doctor` also prints a **Workflow diagnosis** sect
 | Env scope | `AWS_AIDLC_DEFAULT_SCOPE` (if set) names a valid scope |
 | Hook heartbeats | `.aidlc-engine/hooks-health/` contains timestamps from hook executions. No heartbeat is advisory only before workflow progress; once work advances it fails, and a newest heartbeat more than five minutes behind the newest stage/gate event fails as stopped, with the harness's own step to get its hooks running (on Claude Code, `"disableAllHooks": false` in `.claude/settings.local.json`, or the organization policy) |
 | Claude managed hook policy | On the Claude harness only, uses the existing managed-settings resolver (`AIDLC_MANAGED_SETTINGS_PATH`, current and legacy Windows paths, macOS, Linux/WSL) plus alphabetical `managed-settings.d/` fragments and fails when effective `allowManagedHooksOnly` is `true` |
-| Human-turn receipts | When stage/gate events exist but the audit has no `HUMAN_TURN`, reports a passing advisory that presence-gated checkpoints will refuse |
+| Your replies are not being recorded | When stage/gate events exist but the audit has no `HUMAN_TURN`, warns that the person's replies are not being recorded (so the next approval will be refused), with the harness's own hook step as the fix |
 | Hook drops | Surfaces any `.aidlc-engine/hooks-health/<hook>.drops` telemetry - each records a failure a hook swallowed to avoid breaking your tool call - with the drop count, last timestamp, and most frequent reasons per hook, and the remediation (inspect, then delete the file). A hook whose latest failure is under 24 hours old is a warning shown without `--verbose` (`Hook failures, the latest within the last day`), counting every failure; it clears a day later or when the file is deleted. Each reason is shown only up to its first colon, the hook's own summary, with secrets redacted; the detail after it stays in the file. Older failures, and `[advisory]` lines from the plugin compose hook, are a passing advisory row. A hook's normal decisions (the Stop hook letting a turn end because you have to answer first) go to `<hook>.trace` instead and are never counted. Only a `[degraded]` drop (a half-applied plugin compose) fails |
-| Workspace source boundary binds | Only when workflow state exists: runs the same workspace source walk Plan Approval binds a plan to. Passes with the first 12 hex characters of the fingerprint; fails naming the reason code and path (for example `budget-entries at .`, `dangling-symlink at linked/src`, `excluded-path at node_modules/pkg`) with the repair text: shrink or exclude the offending path, declare real source under excluded directories in `.aidlc-source-paths.json`, remove the broken symlink, then run `next`; last resort, the human types `Override Plan Approval: <reason>` and the conductor follows the break-glass steps in the Code Generation stage |
+| Workspace source boundary binds | Only when workflow state exists: runs the same workspace source walk Plan Approval binds a plan to. Passes with the first 12 hex characters of the fingerprint; fails naming the reason code and path (for example `budget-entries at .`, `dangling-symlink at linked/src`, `excluded-path at node_modules/pkg`) with the repair text: add the offending path to the exclude list in `.aidlc-source-paths.json`, declare real source under an excluded directory in its paths list, remove the broken symlink, then run `next`; last resort, the human types `Override Plan Approval: <reason>` and the conductor follows the break-glass steps in the Code Generation stage |
 | Current step out of date | Only while it lasts: the step the assistant was working from went out of date (the chat was compacted, or the workflow state changed after the step was issued). Says when and why, and, when known, which state lines changed and which AI-DLC command wrote them; the fix is `next` as its own command, which hands the current step out again and keeps an approval that still matches (warning - never fails) |
 | State drift | the active intent's `aidlc-state.md` matches the last `WORKFLOW_COMPLETED` in the audit |
 | Pending approval | When the current stage has waited at an organic approval gate for more than 24 hours, identifies it as waiting for a human rather than stuck and points to `/aidlc --status` (advisory - never fails) |
@@ -1119,7 +1146,9 @@ human-turn hook applies all listed intent settings together at prompt time:
 ```
 
 The native dispatcher form is `aidlc engine config set <key> <value>` followed
-by the other setting flags. Every key routes to the same utility command; the
+by the other setting flags; typed at a terminal, `aidlc config set <key> <value>`,
+`aidlc config get <key>` and `aidlc config list` reach the same verbs without
+`engine`. Every key routes to the same utility command; the
 first setting becomes `--<key> <value>`, with the remaining flags forwarded:
 
 ```bash
@@ -1924,13 +1953,14 @@ did not finish (no verdict yet, or NOT-READY with a pass left), `rereview` carri
 `unfinished` and names the request that finishes it. If the person says to approve
 the Unit as it is, add `--over-unfinished-review` to `verify`: under Guard Policy
 `off`, `relaxed`, or a `strict` set for the work, with the person's words on record
-and a review that was asked for, the Unit is verified and asked about once
-(`review_not_finished.question`), and its approval records the review as not
-finished, as at a stage gate. A verdict for that review that comes in later is
+and a review that was asked for, the Unit is verified and their words are its
+approval (`review_not_finished.approved_in_words`: `approve` asks nothing more),
+recorded with the review as not finished, as at a stage gate. A verdict for that review that comes in later is
 recorded and leaves the Unit approved. Under a team's locked `strict` the review finishes
 first, without asking the person. A Unit whose review ended in the NOT-READY
 fallback the conductor records when a retried review still wrote nothing is asked
-about and approved the same way, with no option to pass. A Unit review never asked
+about once (`review_not_finished.question`) and approved the same way, with no
+option to pass. A Unit review never asked
 for in this run of the Unit's work (after a jump back or a reopen, a review from
 before does not count) is required under every Guard Policy: `rereview` carries
 `first` and names that run's first request:
@@ -1962,6 +1992,13 @@ tell which session this is:
 ```bash
 aidlc engine bolt checkpoint --action ask --unit "<unit>" --kind <unit|skeleton>
 ```
+
+When `ask` returns `earlier_reply`, the person already answered in that session
+while the Unit's review ran: their words typed after the review was asked for
+and before any other question was asked (such as the learnings question) are
+this question's reply.
+Read them and run the action they chose, with no question shown; when they
+answer nothing, present the question and wait as below.
 
 Wait for the human's **Approve** / **Request Changes** reply in that
 session, to this checkpoint question. It authorizes only the matching action;
@@ -2728,6 +2765,11 @@ All three are read-only — no stage advance, no audit emit — and source every
 ---
 
 ## Environment Variables
+
+AI-DLC reads every variable below from the environment the host tool runs it in: your shell, the host's own
+settings (such as the `.claude/settings.json` `env` block), or the values the engine passes to its own child
+processes. A project's `.env` files are not an AI-DLC setting: the installed engine never reads them, so a
+repository you clone cannot change how AI-DLC behaves by shipping one.
 
 ### `AWS_AIDLC_DEFAULT_SCOPE`
 

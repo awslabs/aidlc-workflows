@@ -5,6 +5,7 @@ import {
 } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import {
   cpSync,
   existsSync,
@@ -36,6 +37,7 @@ import {
   type PluginInventory,
   type ProjectEvidence,
 } from "../../core/tools/aidlc-plugin.ts";
+import { committedTextBytes } from "../../core/tools/aidlc-lib.ts";
 import { aidlcInvocation } from "../../core/tools/aidlc-runtime-paths.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
@@ -913,6 +915,96 @@ describe("t242 transactional sync and ownership-safe prune", () => {
         state: "current",
       }),
     ]);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  // What Git for Windows does at checkout (core.autocrlf=true): every committed
+  // text file gets CRLF. The engine's runtime folders are not committed.
+  const RUNTIME_DIRS = new Set([".aidlc-engine", ".aidlc-construction-checkpoints", ".aidlc-sessions", ".git"]);
+  function checkOutWithCrlf(dir: string): number {
+    let converted = 0;
+    for (const name of readdirSync(dir)) {
+      if (RUNTIME_DIRS.has(name)) continue;
+      const path = join(dir, name);
+      if (lstatSync(path).isDirectory()) {
+        converted += checkOutWithCrlf(path);
+        continue;
+      }
+      if (!/\.(md|json|tsv|ts|cjs|js|yaml|yml|txt)$/.test(name)) continue;
+      const text = readFileSync(path, "utf-8");
+      if (text.includes("\r") || !text.includes("\n")) continue;
+      writeFileSync(path, text.replace(/\n/g, "\r\n"));
+      converted++;
+    }
+    return converted;
+  }
+
+  test("a CRLF checkout of a plugin-composed project is current and takes the next update", async () => {
+    const project = installedProject();
+    const root = temp("aidlc-plugin-crlf-");
+    cpSync(TEST_PRO, root, { recursive: true });
+    withClaudeFixture(root);
+    await syncPlugins(project, [], ".claude");
+    expect(checkOutWithCrlf(project)).toBeGreaterThan(0);
+
+    // Line endings alone are not a change: nothing to sync, nothing refused.
+    const same = await syncPlugins(project, [], ".claude");
+    expect(same.operations).toBe(0);
+    expect(collectPluginStatus(project, ".claude").statuses).toEqual([
+      expect.objectContaining({ key: "test-pro", state: "current" }),
+    ]);
+
+    // The plugin's next version lands on the CRLF checkout like on any other.
+    const source = join(root, "stages", "construction", "test-pro-integration.md");
+    writeFileSync(source, `${readFileSync(source, "utf-8")}\nCRLF-UPGRADE marker\n`);
+    writeFileSync(
+      join(root, ".claude-plugin", "plugin.json"),
+      `${JSON.stringify({ name: "aidlc-test-pro", version: "0.2.0" }, null, 2)}\n`,
+    );
+    writeFileSync(
+      process.env.AIDLC_CLAUDE_PLUGIN_REGISTRY as string,
+      readFileSync(process.env.AIDLC_CLAUDE_PLUGIN_REGISTRY as string, "utf-8")
+        .replaceAll('"version": "0.1.0"', '"version": "0.2.0"'),
+    );
+    await syncPlugins(project, [], ".claude");
+    const target = join(project, ".claude", "aidlc-common", "stages", "construction", "test-pro-integration.md");
+    expect(readFileSync(target, "utf-8")).toContain("CRLF-UPGRADE marker");
+    expect(collectPluginStatus(project, ".claude").statuses).toEqual([
+      expect.objectContaining({ key: "test-pro", installedVersion: "0.2.0", state: "current" }),
+    ]);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("a record written over raw CRLF bytes syncs and is rewritten over the committed text", async () => {
+    const project = installedProject();
+    // The plugin root is itself a CRLF clone (a marketplace install or a Kiro
+    // folder-drop on Windows), so the composed files carry CRLF.
+    const root = temp("aidlc-plugin-crlf-root-");
+    cpSync(TEST_PRO, root, { recursive: true });
+    expect(checkOutWithCrlf(root)).toBeGreaterThan(0);
+    withClaudeFixture(root);
+    await syncPlugins(project, [], ".claude");
+
+    const recordPath = join(project, ".claude", "tools", "data", "plugin-owned-test-pro.json");
+    type Record = { files: Array<{ path: string; sha256: string }> };
+    const digest = (path: string, read: (bytes: Buffer) => Buffer) =>
+      `sha256:${createHash("sha256").update(read(readFileSync(join(project, path)))).digest("hex")}`;
+    const raw = (path: string) => digest(path, (bytes) => bytes);
+    const committed = (path: string) => digest(path, committedTextBytes);
+    const record = JSON.parse(readFileSync(recordPath, "utf-8")) as Record;
+    expect(record.files.some((file) => raw(file.path) !== committed(file.path))).toBe(true);
+    // Before the committed-text rule, sync recorded the raw-bytes digest.
+    writeFileSync(
+      recordPath,
+      `${JSON.stringify({ ...record, files: record.files.map((file) => ({ ...file, sha256: raw(file.path) })) }, null, 2)}\n`,
+    );
+
+    // Identical bytes are no change: the sync goes through and the record is
+    // written over the committed text, so the next one has nothing to do.
+    const sync = await syncPlugins(project, [], ".claude");
+    expect(sync.synced).toEqual(["test-pro"]);
+    const rewritten = JSON.parse(readFileSync(recordPath, "utf-8")) as Record;
+    expect(rewritten.files.length).toBe(record.files.length);
+    for (const file of rewritten.files) expect(file.sha256).toBe(committed(file.path));
+    expect((await syncPlugins(project, [], ".claude")).operations).toBe(0);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("same-version source drift replaces prior hash-proven primitive files", async () => {

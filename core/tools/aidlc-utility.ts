@@ -1,4 +1,5 @@
 import { DEFAULT_SUBPROCESS_TIMEOUT_MS, LONG_SUBPROCESS_TIMEOUT_MS } from "./aidlc-runtime-budget.ts";
+import { hasStoredMessages } from "./aidlc-message-store.ts";
 import { createHash, randomUUID } from "node:crypto";
 import {
   constants as fsConstants,
@@ -682,6 +683,8 @@ Utilities:
   intent switch <name>  Switch the active intent (bare intent <name> still works)
   intent archive <name> [--reason <text>]  Retire an in-flight or completed intent; its record stays on disk and leaves the default list
   intent unarchive <name>  Bring an archived intent back as it was (in-flight or complete)
+  intent add-repo <name>  Add a sibling repo to the active piece of work (until Units Generation is approved)
+  intent remove-repo <name>  Take a sibling repo out of the active piece of work (never the last one)
   space list        List spaces (read-only; --json for structured output)
   space switch <name>  Switch the active space (bare space <name> still works)
   space create <name>  Create a new space (space-create <name> still works)
@@ -4656,7 +4659,9 @@ export async function collectDoctorReport(
       for (const f of readdirSync(dir).filter((name) => name.endsWith(".md")).sort()) {
         const path = join(dir, f);
         try {
-          const content = readFileSync(path, "utf-8");
+          // CRLF read as LF: compose hashes fragment prose over that text, and a
+          // checkout that turns line endings must not read as a missing fragment.
+          const content = readFileSync(path, "utf-8").replace(/\r\n/g, "\n");
           const parsed = parseStageFrontmatter(content) as Record<string, unknown>;
           const slug = typeof parsed.slug === "string" ? parsed.slug : f.replace(/\.md$/, "");
           const plugin = typeof parsed.plugin === "string" ? parsed.plugin : undefined;
@@ -5056,11 +5061,23 @@ export async function collectDoctorReport(
 
   if (
     stageOrGateEvents.length > 0 &&
-    !auditShardEvents.some((event) => event.event === "HUMAN_TURN")
+    !auditShardEvents.some((event) => event.event === "HUMAN_TURN") &&
+    !hasStoredMessages(projectDir)
   ) {
+    // Steps and approvals happened, yet no message of the person's is on
+    // record: no HUMAN_TURN row, and nothing in the message store either (the
+    // hook saves the message a piece of work is started with before the work
+    // exists, so a brand-new workflow is not this case). Their replies are not
+    // being recorded, and the next approval will be refused. A warning the
+    // summary counts, with this harness's own step as the fix (every
+    // harness's hooks record the person's messages, so a workflow with none
+    // is never healthy).
+    const count = stageOrGateEvents.length;
     results.push({
-      pass: true,
-      label: `Human-turn receipts: 0 HUMAN_TURN rows across ${stageOrGateEvents.length} stage/gate event(s) (advisory) - receipts are not being minted, so presence-gated checkpoints will refuse`,
+      pass: false,
+      severity: "warn",
+      label: `Your replies are not being recorded: ${count} ${count === 1 ? "step or approval" : "steps or approvals"} so far and no message of yours on record`,
+      fix: hookExecutionRecovery,
     });
   }
 
@@ -5191,8 +5208,9 @@ export async function collectDoctorReport(
         label: `Workspace source boundary binds: no (${where})`,
         fix:
           "Plan Approval decisions are refused while the source cannot be bound. " +
-          "Shrink or exclude the offending path, declare the real source under excluded " +
-          "directories in .aidlc-source-paths.json, or remove the broken symlink; then run " +
+          "Add the offending path to the exclude list in .aidlc-source-paths.json " +
+          "({\"version\":1,\"exclude\":[\"<path>\"]}), declare the real source under an excluded " +
+          "directory in its paths list, or remove the broken symlink; then run " +
           "next. Last resort, human only: type " +
           "`Override Plan Approval: <reason>` in chat; the conductor records it with the " +
           "break-glass steps in code-generation.md.",
@@ -5868,11 +5886,15 @@ export async function collectDoctorReport(
       }
     }
   } catch (e) {
-    results.push({
-      pass: false,
-      label: "Stale branches: check failed",
-      fix: errorMessage(e),
-    });
+    // A machine with no git throws here instead of exiting non-zero: nothing
+    // before Construction needs git, so it is the same informational pass as
+    // a folder that is not a repo, in plain words. Any other throw is a failed
+    // evaluation.
+    results.push(
+      gitNotFound(e instanceof Error ? e : undefined)
+        ? { pass: true, label: "Stale branches: 0 observed (git is not installed)" }
+        : { pass: false, label: "Stale branches: check failed", fix: errorMessage(e) },
+    );
   }
 
   // ---------------------------------------------------------------------------
@@ -8641,6 +8663,10 @@ function handleIntent(
     handleIntentLifecycle(projectDir, verbOrTarget, positional[2], flags, missingValueFlags);
     return;
   }
+  if (verbOrTarget === "add-repo" || verbOrTarget === "remove-repo") {
+    handleIntentRepos(projectDir, verbOrTarget, positional[2]);
+    return;
+  }
   const target = verbOrTarget === "switch" ? positional[2] : verbOrTarget;
   if (verbOrTarget === "switch" && !target) {
     die("Usage: aidlc-utility intent switch <name>");
@@ -8895,6 +8921,108 @@ function handleIntentLifecycle(
         ? `Its Bolt worktree(s) stay on disk as they are (${boltRefs.join(", ")}); ${entrySkillInvocation()} intent unarchive ${dirName} brings that work back.\n`
         : ""),
   );
+}
+
+// `/aidlc intent add-repo <name>` / `/aidlc intent remove-repo <name>`: the
+// person's own change to which sibling repos a piece of work touches, for work
+// that already records repos (work with none treats the workspace folder itself
+// as its repo; `workspace reclassify` records its first repos). The name must be
+// a repo name and the folder a real Git checkout under the workspace: a commit
+// can never carry a .git entry, so a committed folder merely shaped like a repo
+// is refused and its config never read. Allowed until Units Generation is
+// approved: after that each Unit names its repo, so the command changes nothing
+// and asks the go-back question instead. Same locks (workspace, then intent)
+// and audit-first order as the lifecycle verbs.
+function handleIntentRepos(
+  projectDir: string,
+  verb: "add-repo" | "remove-repo",
+  name: string | undefined,
+): void {
+  if (!name) die(`Usage: aidlc-utility intent ${verb} <name>`);
+  if (!isValidRepoName(name)) {
+    die(`intent ${verb} refused: "${name}" is not a repo name (one folder name under the workspace, no separators).`);
+  }
+  const selection = resolveWorkflowSelection(projectDir);
+  const space = selection.space;
+  const dirName = selection.intent;
+  if (!dirName) {
+    die(`No piece of work is active in space "${space}"; switch to one first (${entrySkillInvocation()} intent list).`);
+  }
+  const outcome = withAuditLock(projectDir, () =>
+    withAuditLock(projectDir, () => {
+      const list = readIntentRegistry(projectDir, space);
+      const row = list.find((entry) => recordDirMatches(entry, dirName));
+      if (!row) {
+        die(`Intent "${dirName}" has no intents.json row in space "${space}"; nothing was changed. Repair the registry first (${entrySkillInvocation()} --doctor names the mismatch).`);
+      }
+      const current = row.repos ?? [];
+      if (current.length === 0) {
+        die(`intent ${verb} refused: this piece of work treats the workspace folder itself as its code repo, so it records no repos to change.`);
+      }
+      const state = readStateFile(projectDir, dirName, space);
+      const boxes = new Map(parseCheckboxes(state).map((box) => [box.slug, box.state]));
+      if (boxes.get("units-generation") === "completed") return { kind: "cutoff" as const };
+      if (verb === "add-repo") {
+        if (current.includes(name)) return { kind: "already" as const };
+        if (!isGitRepoDir(repoDir(projectDir, name))) {
+          die(`intent add-repo refused: "${name}" is not a Git checkout under the workspace folder (no .git entry at ${repoDir(projectDir, name)}). Clone or create the repo there first.`);
+        }
+      } else {
+        if (!current.includes(name)) return { kind: "absent" as const, current };
+        if (current.length === 1) {
+          die(`intent remove-repo refused: "${name}" is the only repo this piece of work records; removing it would leave none.`);
+        }
+      }
+      const next = verb === "add-repo" ? [...current, name].sort() : current.filter((repo) => repo !== name);
+      appendAuditEntryUnlocked(
+        "INTENT_REPOS_CHANGED",
+        {
+          Stage: (getField(state, "Current Stage") ?? "").trim() || "none",
+          [verb === "add-repo" ? "Added" : "Removed"]: name,
+          Repos: next.join(", "),
+        },
+        projectDir,
+        dirName,
+        space,
+      );
+      row.repos = next;
+      writeFileAtomic(intentsRegistryPath(projectDir, space), `${JSON.stringify(list, null, 2)}\n`);
+      const reAction = parseStateStageSuffixes(state).get("reverse-engineering") ??
+        loadScopeMapping()[getField(state, "Scope") ?? ""]?.stages["reverse-engineering"];
+      return { kind: "changed" as const, reState: boxes.get("reverse-engineering"), reAction };
+    }, dirName, space),
+  );
+  // What the person hears: what happened and the way back, in their words.
+  const lines: string[] = [];
+  switch (outcome.kind) {
+    case "cutoff":
+      lines.push(
+        verb === "add-repo"
+          ? `Units Generation is already approved, so its Units do not cover ${name}. Do you want me to go back to Units Generation with ${name} added?`
+          : `Units Generation is already approved, so its Units may be written for ${name}. Do you want me to go back to Units Generation without ${name}?`,
+      );
+      break;
+    case "already":
+      lines.push(`${name} is already one of this piece of work's repos; nothing changed.`);
+      break;
+    case "absent":
+      lines.push(`${name} is not one of this piece of work's repos (${outcome.current.join(", ")}); nothing changed.`);
+      break;
+    case "changed":
+      if (verb === "add-repo") {
+        lines.push(`Added ${name} to this piece of work's repos.`);
+        if (outcome.reState === "completed") {
+          lines.push(`Reverse Engineering has not documented ${name} yet, so it and the stages that read the code knowledge may show as behind until you revisit them.`);
+        } else if (outcome.reAction === "EXECUTE") {
+          lines.push(`Reverse Engineering will cover ${name} when it runs.`);
+        }
+        lines.push("You can remove it again any time.");
+      } else {
+        lines.push(`Removed ${name} from this piece of work's repos. You can add it back any time.`);
+      }
+      break;
+  }
+  process.stdout.write(`${lines.join(" ")}\n`);
 }
 
 // `/aidlc space` (list) · `/aidlc space <name>` (switch the active-space
@@ -9559,6 +9687,163 @@ function documentInputGitIgnored(projectRoot: string, relPath: string): "yes" | 
   );
   if (checked.error !== undefined || checked.signal !== null) return "unknown";
   return checked.status === 0 ? "yes" : checked.status === 1 ? "no" : "unknown";
+}
+
+/**
+ * The document or folder the person named by path, copied into the space's
+ * `knowledge/documents/` so the ordinary `knowledge onboard` can index it. The
+ * folder is created when it is missing, a file keeps its own name under the
+ * copy rule below, and a folder keeps its relative layout under a folder of
+ * its own name. Only regular files are copied, through the knowledge walk's
+ * own rules, so a symlink inside the named folder is passed over rather than
+ * followed, and a file inside it that git ignores is left where it is. A
+ * document over the per-document cap, or a folder over a batch cap, is refused
+ * before anything is copied rather than after.
+ *
+ * The caller decides WHETHER to copy: a path already inside `documents/` is
+ * indexed where it is, and a path outside the project is refused by the
+ * knowledge tool as before. This does the copy and says what it did; it never
+ * touches `documentkb/`, which is why it lives here and not in the knowledge
+ * module (that module's fs mutations are confined to `documentkb/` by
+ * tests/unit/t289, and `documents/` is the person's own folder).
+ */
+export function ensureKnowledgeDocumentsFolder(
+  projectDir: string,
+  kb: typeof import("./aidlc-knowledge.ts"),
+  space: string,
+): string {
+  // Trusted BEFORE anything is created, as the document-input path does at its
+  // own space resolution: in a cloned repo whose `knowledge` is a symlink, a
+  // create-then-check order makes the folder in the link's target, outside the
+  // project, before the refusal. Checked again after the create, in case the
+  // chain changed under us.
+  kb.assertKnowledgeRootTrusted(projectDir, space);
+  const documentsAbs = kb.documentsDir(projectDir, space);
+  mkdirSync(documentsAbs, { recursive: true });
+  kb.assertKnowledgeRootTrusted(projectDir, space);
+  return realpathSync(documentsAbs);
+}
+
+/**
+ * The paths among `absPaths` that git ignores, in one `check-ignore` call.
+ * Empty when git cannot say (not a repository, or the command failed): the
+ * named path's own ignore state is what the person is told about, and a check
+ * that could not run never silently drops a document.
+ */
+function gitIgnoredAmong(projectRoot: string, absPaths: string[]): Set<string> {
+  if (absPaths.length === 0 || !insideGitRepository(projectRoot)) return new Set();
+  const checked = spawnSync(
+    "git",
+    [...GIT_PLATFORM_ARGS, "-C", projectRoot, "check-ignore", "-z", "--stdin"],
+    {
+      env: gitEnvironment(process.env),
+      input: absPaths.join("\0"),
+      encoding: "utf-8",
+      timeout: DEFAULT_SUBPROCESS_TIMEOUT_MS,
+    },
+  );
+  // Status 0 means some of them are ignored, 1 means none are; anything else
+  // is git failing to answer.
+  if (checked.error !== undefined || checked.signal !== null || checked.status !== 0) return new Set();
+  return new Set(
+    (checked.stdout ?? "").split("\0").filter((line) => line !== "").map((line) => resolve(projectRoot, line)),
+  );
+}
+
+/**
+ * Why the engine will not copy what the person named: a single document over
+ * the per-document cap, or a folder over a batch cap. Checked BEFORE the copy,
+ * because the verb's own refusal comes after one, which used to leave the
+ * copies behind for a retry to duplicate. Null when the copy can go ahead.
+ */
+function knowledgeCopyCapRefusal(
+  projectDir: string,
+  shown: string,
+  entries: Array<{ file: string; size: number }>,
+  kb: typeof import("./aidlc-knowledge.ts"),
+): string | null {
+  const smaller = "Name a subfolder, or one document at a time.";
+  const big = entries.find((entry) => entry.size > kb.EXTRACT_INPUT_BYTE_CAP);
+  if (big !== undefined) {
+    return `${toPosix(relative(projectDir, big.file))} is ${big.size} bytes, over the ` +
+      `${kb.EXTRACT_INPUT_BYTE_CAP}-byte per-document cap; nothing was copied. Split it or reduce it ` +
+      "below the cap, then name it again.";
+  }
+  if (entries.length > kb.EXTRACT_BATCH_DOC_CAP) {
+    return `${shown} holds ${entries.length} documents, over the ${kb.EXTRACT_BATCH_DOC_CAP}-document ` +
+      `batch cap; nothing was copied or indexed. ${smaller}`;
+  }
+  const bytes = entries.reduce((total, entry) => total + entry.size, 0);
+  if (bytes > kb.EXTRACT_BATCH_BYTE_CAP) {
+    return `${shown} holds ${entries.length} documents of ${bytes} bytes, over the ` +
+      `${kb.EXTRACT_BATCH_BYTE_CAP}-byte batch cap; nothing was copied or indexed. ${smaller}`;
+  }
+  return null;
+}
+
+/** What the command layer copied in for the person, for the line it says. */
+export interface KnowledgeDocumentCopy {
+  target: string;
+  /** Documents copied, which is what the verb then indexes. */
+  files: number;
+  /** Whether git ignores the path they named. */
+  gitIgnored: "yes" | "no" | "unknown";
+  /** Files inside a named folder that git ignores, left where they are. */
+  leftOut: number;
+}
+
+export function copyNamedDocumentIntoKnowledge(
+  projectDir: string,
+  kb: typeof import("./aidlc-knowledge.ts"),
+  space: string,
+  absPath: string,
+): KnowledgeDocumentCopy | { refusal: string } {
+  const documentsReal = ensureKnowledgeDocumentsFolder(projectDir, kb, space);
+  const shown = toPosix(relative(projectDir, absPath));
+  const gitIgnored = documentInputGitIgnored(projectDir, shown);
+  const real = realpathSync(absPath);
+  const named = statSync(real);
+  if (!named.isDirectory()) {
+    const refusal = knowledgeCopyCapRefusal(projectDir, shown, [{ file: real, size: named.size }], kb);
+    if (refusal !== null) return { refusal };
+    const { target } = copyIntoDocuments(kb, documentsReal, basename(real), readFileSync(real));
+    return { target, files: 1, gitIgnored, leftOut: 0 };
+  }
+  const found: Array<{ file: string; size: number }> = [];
+  for (const file of kb.walkDocuments(real)) {
+    try {
+      found.push({ file, size: statSync(file).size });
+    } catch { /* vanished mid-walk; it is not copied and not counted */ }
+  }
+  // A file inside the folder that git ignores stays where it is: the person
+  // named the folder, not that file, and copying it in would commit what they
+  // keep out of git. A folder that is itself ignored is copied whole, because
+  // that one they did name, and the line tells them the copy is not ignored.
+  const ignoredInside = gitIgnored === "no"
+    ? gitIgnoredAmong(projectDir, found.map((entry) => entry.file))
+    : new Set<string>();
+  const copyable = found.filter((entry) => !ignoredInside.has(entry.file));
+  const refusal = knowledgeCopyCapRefusal(projectDir, shown, copyable, kb);
+  if (refusal !== null) return { refusal };
+  if (copyable.length === 0) {
+    throw new Error(`${shown} holds no documents to add`);
+  }
+  // A folder of its own name, never merged into one already there: the copy is
+  // this folder as it is now, not a blend of two.
+  const base = basename(real).replace(/^\.+/, "") || "documents";
+  let root = join(documentsReal, base);
+  for (let n = 2; existsSync(root); n++) {
+    if (n > DOCUMENT_INPUT_COPY_NAME_LIMIT) {
+      throw new Error(`every name from ${base} to ${base}-${DOCUMENT_INPUT_COPY_NAME_LIMIT} is already taken`);
+    }
+    root = join(documentsReal, `${base}-${n}`);
+  }
+  for (const entry of copyable) {
+    const target = join(root, relative(real, entry.file));
+    mkdirSync(dirname(target), { recursive: true });
+    writeFileSync(target, readFileSync(entry.file), { flag: "wx" });
+  }
+  return { target: root, files: copyable.length, gitIgnored, leftOut: found.length - copyable.length };
 }
 
 // Why an onboarded document came back with no text, in the person's terms.

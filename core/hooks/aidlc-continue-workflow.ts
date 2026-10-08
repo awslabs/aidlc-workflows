@@ -964,8 +964,9 @@ const SAY_NOTHING = "tell the person nothing about this note";
 // context (a plain prompt, no /aidlc), and the line stays first so logs and the
 // matcher read it the same way on every tool.
 const SAY_THE_LINE =
-  "If you carry on with the work, first say that line to the person once, on its own line; " +
-  "if you had just asked them a question, record it with `log decision` and end your turn saying nothing. " +
+  "If you had just asked the person a question, record it with `log decision` and end your turn saying nothing. " +
+  "Otherwise, if you carry on with the work, first say that line to the person once, on its own line; " +
+  "it is AI-DLC's line, not the person's, and confirms nothing, so record nothing as theirs because of it. " +
   "Say nothing else about this note.";
 // The one-line note the hook wrote before: "<step> is not finished yet. Next:
 // `<command>`." (or "Next: finish its steps, then `<command>`."). The command

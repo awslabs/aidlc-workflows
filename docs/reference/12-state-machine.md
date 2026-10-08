@@ -388,8 +388,9 @@ lost.
 `workspace_requires` stage, every terminal review still carries the workspace-
 global `Source Fingerprint`; the newest modern binding is normally the outer
 post-review-mutation boundary on all four completion routes. Per-unit receipts
-add `Unit Source Fingerprint`, which binds the raw bytes of the unit's strict
-`source-manifest.json` and the current content of every exact/directory claim.
+add `Unit Source Fingerprint`, which binds the bytes of the unit's strict
+`source-manifest.json` and the current content of every exact/directory claim
+(CRLF text read as LF, see the stage protocol's line endings rule).
 Receipts are evaluated newest-first, so a newer validated claimant may shield
 an older receipt for an intentional shared path. An uncovered edit, deletion,
 or new path in an exact/directory claim invalidates only the owning unit and
@@ -494,12 +495,17 @@ stays bound. Evidence recorded before .NET outputs left the boundary still
 matches until the source or those outputs change.
 
 Real source beneath a conditional generated-output directory, including binary
-or extensionless source, can be declared in root `.aidlc-source-paths.json`:
+or extensionless source, can be declared in root `.aidlc-source-paths.json`,
+and a machine-local tree or file no shipped name covers (a local indexer's
+cache, an in-tree build output) can be excluded there:
 
 ```json
-{"version":1,"paths":["dist/worker.js","build/source"]}
+{"version":1,"paths":["dist/worker.js","build/source"],"exclude":["tools/.indexer"]}
 ```
 
+Both lists are optional. An excluded path and everything under it leave the
+boundary, the swarm Source Commit keeps HEAD's copy of it, and a registered
+path beneath it still wins (it is bound, its excluded siblings are not).
 Registered paths are content-bound regardless of encoding and are included in
 the canonical listing and autonomous swarm Source Commit. Absolute, traversing,
 framework, sensor-cache, and dependency/cache paths are rejected. Missing
@@ -555,6 +561,8 @@ the gate can reopen. Bypass with `AIDLC_SKIP_REVISION_BACKSTOP=1`.
 
 **Archive (issue #980).** `aidlc-utility intent archive <name> [--reason <text>]` retires an in-flight intent the team will not finish, or hides a completed one from the default listing. Under the workspace lock it emits `WORKFLOW_ARCHIVED` into that intent's own audit shard first, then flips the state file's `Status` to `Archived` (keeping the Status it replaced in `Archived From`) and the `intents.json` row to `archived`; the record dir, its artifacts, its audit shards, and any Bolt worktrees are never moved or deleted. A subsequent `next` on that record (a stale per-user cursor or session binding) emits a terminal `done` naming `intent unarchive`, so retired stages never resume by accident; `park` refuses an archived workflow the same way it refuses a completed one. Archiving is refused only for a team-owned intent with claimed Units. An intent with Bolt worktrees archives and the output names them; their `Bolt Refs` stay in the state file, Bolt start, complete, and merge refuse until unarchive, and doctor still counts them as active forks. `intent unarchive <name>` reverses the field writes, restoring `Completed` / `complete` when `Archived From` says `Completed` and `Running` / `in-flight` otherwise, and emits `WORKFLOW_UNARCHIVED`; a `--reason` given to it is not recorded, and the output says so. The default `intent` listing hides archived rows (`--all` shows them; `--json` always carries every row), the creation gate ignores them, and the lone-record fallback never resolves one implicitly.
 
+**Repo set.** `aidlc-utility intent add-repo <name>` and `intent remove-repo <name>` change which sibling repos a piece of work records, for work that already records at least one (work with none treats the workspace folder itself as its repo; `workspace reclassify` records its first repos). Under the workspace lock, then the intent lock, the command emits `INTENT_REPOS_CHANGED` into that intent's own shard first (fields `Added` or `Removed`, and `Repos`, the set after the change), then rewrites the `intents.json` row. The name must pass the repo-name rule and the folder must carry a real `.git` entry (a committed folder shaped like a repository is refused and its config never read); the last recorded repo cannot be removed. Once Units Generation is approved each Unit names its repo, so the command changes nothing and asks whether to go back to Units Generation with the change. Every reader of the repo set (`intentRepos`) follows the row at once: Reverse Engineering's required artifacts resolve per recorded repo, so a finished run reads as stale for a repo with no CodeKB, and a Unit source manifest naming the repo is accepted.
+
 **Park (issue #365/#367).** `aidlc-orchestrate park` writes a `Parked` / `Parked At Stage` runtime marker (via `aidlc-state.ts park`, which emits `WORKFLOW_PARKED`) without advancing any stage; a subsequent plain `next` re-emits a terminal `parked` directive and the Stop hook lets the turn end, so a long workflow can pause across sessions instead of rubber-stamping the remaining stages to reach `done`. A change the person types over the parked work (another scope, `--skip` or `--add`, a setting, or `compose`) is made while the work stays parked, and the one line they read says it is still paused and that `/aidlc --resume` picks it back up. `/aidlc --resume` clears the marker (`unpark` emits `WORKFLOW_UNPARKED`) before continuing. An unattended autonomous Construction run (`Construction Autonomy Mode: autonomous`) refuses to park: both the tool and the Stop hook's `parked` allow decline under autonomous mode, so the loop keeps moving with no human to resume it. The one exception is a stop the person asks for. With a reply from them on record since the last decision, `park` (and an approval reported with `--park`) parks as attended (`parkWorkflow` in `aidlc-state.ts`) and records `Parked By: person`, which the Stop hook honors under autonomy too; `unpark` clears it. The run's own approvals after their message do not use it up; any other decision does. On a host whose hooks can miss a reply (its `hookActivation` names one), an attended session's park is recorded as the person's even with no reply on record, and its result carries a note saying so. `AIDLC_UNATTENDED=1` always refuses.
 
 A park the person comes back to carries on. Once they have spoken after it (a `HUMAN_TURN` after the latest `WORKFLOW_PARKED`), a bare `next`, such as a bare `/aidlc` in the same chat, names the unpark and carries on instead of re-emitting `parked`, and words passed to `next` are read as on active work; the agent's own loop, whose stop came from the reply before the park, and the Stop hook's probe still get `parked`.
@@ -606,7 +614,7 @@ Session hooks check for the active intent's `aidlc-state.md` (under `aidlc/space
 
 ## Audit event taxonomy
 
-**115 events**, grouped below into 20 categories (the canonical `audit-format.md` registry splits the same 115 into 25 - the grouping is presentational, the event set is the invariant). Each event's permitted tool or hook emitters are listed below. `GUARD_POLICY_SET` has distinct mutation and effective-memory-observation paths; neither duplicates the other's emission. Events pre-registered for an upcoming release have an Emitter cell reading `Reserved (v0.4.0 PR N)`, `Reserved (v0.5.0 PR N)`, or `Reserved (v0.6.0 PR N)`, and a retired event name that is still read but never written reads `Reserved (retired name)`; both are skipped by the drift test's forward check. The drift test `tests/integration/t48-audit-event-emitters.test.ts` enforces forward/reverse/tertiary/pairing/MD-MD consistency between this chapter's tables and the code.
+**117 events**, grouped below into 20 categories (the canonical `audit-format.md` registry splits the same 117 into 25 - the grouping is presentational, the event set is the invariant). Each event's permitted tool or hook emitters are listed below. `GUARD_POLICY_SET` has distinct mutation and effective-memory-observation paths; neither duplicates the other's emission. Events pre-registered for an upcoming release have an Emitter cell reading `Reserved (v0.4.0 PR N)`, `Reserved (v0.5.0 PR N)`, or `Reserved (v0.6.0 PR N)`, and a retired event name that is still read but never written reads `Reserved (retired name)`; both are skipped by the drift test's forward check. The drift test `tests/integration/t48-audit-event-emitters.test.ts` enforces forward/reverse/tertiary/pairing/MD-MD consistency between this chapter's tables and the code.
 
 ### Workflow lifecycle
 
@@ -618,6 +626,7 @@ Session hooks check for the active intent's `aidlc-state.md` (under `aidlc/space
 | `WORKFLOW_UNPARKED` | `tools/aidlc-state.ts` | `unpark` - park marker cleared on explicit `--resume` re-entry |
 | `WORKFLOW_ARCHIVED` | `tools/aidlc-utility.ts` | `intent archive <name>` - in-flight or completed intent retired to `Archived` / `archived`; record and audit shards preserved; written to that intent's own shard |
 | `WORKFLOW_UNARCHIVED` | `tools/aidlc-utility.ts` | `intent unarchive <name>` - archived intent returned to `Running` / `in-flight`, or `Completed` / `complete` when it was archived complete |
+| `INTENT_REPOS_CHANGED` | `tools/aidlc-utility.ts` | `intent add-repo <name>` / `intent remove-repo <name>` - a sibling repo added to or removed from a piece of work that already records repos, before Units Generation is approved; written to that intent's own shard |
 
 ### Phase lifecycle
 
@@ -918,6 +927,7 @@ and do not enforce that scope comparison.
 | `SESSION_COMPACTED` | `hooks/aidlc-validate-state.ts` | Emitted at PreCompact (not at next SessionStart) to avoid duplication |
 | `SESSION_ENDED` | `hooks/aidlc-session-end.ts` | Includes `Reason` field from Claude Code |
 | `HUMAN_TURN` | `hooks/aidlc-record-human-turn.ts` (+ per-harness prompt-submit adapters) | One per observed prompt-submit or answered-widget seam unless the driver declares `AIDLC_UNATTENDED=1`; the approval/interview gate requires one since the last gate resolution. A turn that was only a command to AIDLC (an AIDLC command (`/aidlc ...`, `/aidlc-<runner> ...`, `$aidlc ...` with a flag, scope, verb or noun that `next` reads; words alone after `/aidlc` or `$aidlc`, such as `/aidlc approve the code plan`, are a reply kept without the entry, and so is other text that starts with a slash), a typed switch, or the break-glass phrase) carries `Reply: command`, and a question about a switch ("skip plan approval?") carries `Reply: question`, which also lowers no check: it is presence for what the command asks for, but a decision on an open question (a stage gate, an answer, a Plan Approval correction, a recovery ask) does not count it as a reply, and the refusal tells the conductor to carry out the command and leave the question open. This is presence/freshness evidence, not an authenticated transcript or proof that later caller-supplied decision text was authored by the human. The row's optional `Message Id:` names the message record the hook wrote for the turn (`aidlc/.aidlc-sessions/messages/<id>.json`: the words as delivered and the typed settings); rows without it are read as before. |
+| `HOST_TURN` | `hooks/aidlc-record-human-turn.ts` (the Kiro CLI and Kiro IDE adapters decide for their hosts) | Advisory, never a human turn: a prompt the host made for the agent (a Kiro Workflows brief or finish notice, a Kiro sub-agent synthesis prompt, a Claude Code background-task notification) reached the prompt-submit seam and was not counted as the person's turn. Told apart by the host's own record or by the whole host sentence; anything unknown is a person's turn. Fields: optional Session, `Origin: host`, Reason, Source (`record`, `template`); never the prompt text, and no message record is written for it. `HUMAN_TURN` rows carry `Origin: person` and `Source: typed` or `picker` |
 | `SUBAGENT_COMPLETED` | `hooks/aidlc-log-subagent.ts` | Records subagent completion via SubagentStop hook |
 | `SUBAGENT_PROMPT_UNMATCHED` | `tools/aidlc-audit.ts` | Advisory, never a human turn: the Copilot adapter's `record-human-turn` saw a prompt within seconds of a subagent start in the same chat that matched no recorded subagent brief. The prompt is not counted as the person's turn (`Counted: no`); the Reason says whether no brief matched or the brief record could not be read |
 | `REVIEWER_SCOPE_BLOCKED` | `hooks/aidlc-reviewer-scope.ts` | A per-unit reviewer's tool call refused for reaching into sibling units' `construction/` paths (the reviewer-module read-scope bound); one row per refusal |

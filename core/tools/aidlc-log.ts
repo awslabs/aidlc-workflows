@@ -7,7 +7,7 @@
 // because they fire per-question / per-review, not per state transition.
 
 import { createHash, randomBytes } from "node:crypto";
-import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync } from "node:fs";
 import { dirname, isAbsolute, join, posix, relative, resolve, sep } from "node:path";
 import { appendAuditEntry, appendAuditEntryUnlocked } from "./aidlc-audit.ts";
 import {
@@ -58,6 +58,10 @@ import {
   summaryAuthorizationRelativePath,
   summaryAuthorizationTargetOrThrow,
   writeRecordFileNoFollow,
+  reviewerDispatchPath,
+  legacyWorktreePath,
+  worktreePath,
+  engineDirFor,
   writeSummaryAuthorization,
   emitError,
   errorMessage,
@@ -145,6 +149,7 @@ import {
   resolveWorkflowSelection,
   resolveReviewClass,
   selfAttributedDecisionMarker,
+  impliedConfirmationMarker,
   stripRecommendedDecorator,
   pickerAnswerNote,
   isSummaryConfirmationChoice,
@@ -207,7 +212,7 @@ import {
   recordPlanApprovalOverrideReceipt,
   recordPlanApprovalReceipt,
 } from "./aidlc-testing-posture.js";
-import { entrySkillInvocation } from "./aidlc-runtime-paths.ts";
+import { aidlcDispatcherInvocation, entrySkillInvocation } from "./aidlc-runtime-paths.ts";
 import {
   APPROVAL_GATE_CHOICES,
   SUMMARY_CONFIRMATION_CHOICES,
@@ -215,6 +220,26 @@ import {
 
 // The checkpoints `decision` and `answer` accept. The learnings question is an
 // ordinary question, so it is named with the way to run it.
+
+// A manifest that names a repo the piece of work does not record is not a
+// manifest to rewrite: the code was written where the person put it, so the
+// way on is to record that repo (`intent add-repo` says what that means for
+// the plan). Any other invalid manifest is the agent's to write properly.
+function unitManifestRefusal(
+  unit: string,
+  manifestPath: string,
+  manifest: { reason: string; unrecordedRepo?: string },
+  rewrite: string,
+): string {
+  if (manifest.unrecordedRepo !== undefined) {
+    const repo = manifest.unrecordedRepo;
+    return `unit "${unit}"'s source manifest at ${manifestPath} names repo ${JSON.stringify(repo)}, which this piece of work does not record. ` +
+      `Ask the person whether this work also touches ${repo}; if it does, run \`${aidlcDispatcherInvocation(`intent add-repo ${repo}`)}\` ` +
+      "(it says what that means for the plan), then request the review again. Do not rewrite the manifest to drop a repo the code was written in.";
+  }
+  return `unit "${unit}" has no valid source manifest at ${manifestPath} (${manifest.reason}). ${rewrite}`;
+}
+
 function unknownCheckpointMessage(checkpoint: string): string {
   if (checkpoint === "learnings") {
     return 'The learnings question takes no --checkpoint: run the same command without it.';
@@ -336,9 +361,13 @@ function refuseSplitValues(subcommand: "decision" | "answer", rawArgs: string[])
     const a = rawArgs[i];
     if (a.startsWith("--")) {
       if (!options.has(a)) {
+        // A wrong flag is named as one first: an agent that typed `--answer`
+        // reads the options it has, not a PowerShell cause that never applied.
+        // The split case (a fragment of a quoted value) keeps its way out second.
         error(
-          `Cannot record ${what}: ${JSON.stringify(a)} is not an option of log ${subcommand}, so it is probably ` +
-            `part of a value that a bare double quote split. ${howToPass('Run \\"todo --help\\" first')}`,
+          `Cannot record ${what}: ${JSON.stringify(a)} is not an option of log ${subcommand}. It takes ` +
+            `${[...options].sort().join(", ")}. If ${JSON.stringify(a)} is part of a value that a bare double ` +
+            `quote split: ${howToPass('Run \\"todo --help\\" first')}`,
         );
       }
       if (first === null && open !== null && open.words.length > 0) first = open;
@@ -702,16 +731,28 @@ function handlePlanApprovalBatch(
   }
 }
 
-function constructionPolicyFields(flags: Record<string, string>): Record<string, string> {
+// As verification-command does, the tool finds the session it runs in;
+// `--session` is only an override, so the agent never hunts for a session id.
+function constructionPolicyFields(pd: string, flags: Record<string, string>): Record<string, string> {
   if (!validConstructionPolicyChange(flags.field, flags.value)) {
     error("Construction policy requires a valid --field and --value: Construction Checkpoints (enabled|disabled), Construction Execution (serial|swarm), or Construction Iteration (unit-major|stage-major). " + CONSTRUCTION_POLICY_RECOVERY);
   }
   if (flags.single !== undefined || flags.unit !== undefined) {
     error("Construction policy applies to the whole intent; omit --single and --unit.");
   }
-  const session = flags.session?.trim();
+  let session = flags.session?.trim() ?? "";
   if (!session) {
-    error("Construction policy requires --session <id> from the invoking SessionStart context. " + CONSTRUCTION_POLICY_RECOVERY);
+    try {
+      session = resolveInvokingSessionId(pd) ?? "";
+    } catch (e) {
+      error(errorMessage(e));
+    }
+  }
+  if (!session) {
+    error(
+      "Could not tell which session this is. Run the command again with --session set to the Runtime Session " +
+        "shown in this session's AI-DLC context. " + CONSTRUCTION_POLICY_RECOVERY,
+    );
   }
   return { Checkpoint: CONSTRUCTION_POLICY_CHECKPOINT, Field: flags.field, Value: flags.value, Session: session };
 }
@@ -850,6 +891,18 @@ function handleDecision(args: string[]): void {
     error(unknownCheckpointMessage(flags.checkpoint));
   }
   refusePlainSummaryConfirmation(flags, "decision");
+  // A question text that says the person already confirmed ("Continue with X
+  // (user implicitly confirmed by hook trigger)") records a choice they never
+  // made: AI-DLC's carrying-on line is not their answer. Refused with the way
+  // on; a question in the agent's own words, or one quoting the phrase, passes.
+  const implied = humanPresenceGuardDisabled() ? null : impliedConfirmationMarker(flags.decision);
+  if (implied) {
+    error(
+      `Cannot record this question for "${flags.stage}" because --decision says the person confirmed it ` +
+        `(${implied.category}: "${implied.phrase}"). AI-DLC's carrying-on line is not their answer. ` +
+        "Ask them and record what they say, or carry on with no record.",
+    );
+  }
 
   const pd = resolveActiveProjectDir(projectDir);
   if (flags.checkpoint === "plan-approval" && planApprovalAskIsOpen(pd)) {
@@ -933,7 +986,7 @@ function handleDecision(args: string[]): void {
       error('Verification command decision requires --options "Approve,Request Changes". ' + VERIFICATION_COMMAND_RECOVERY);
     }
   }
-  const policyFields = flags.checkpoint === "construction-policy" ? constructionPolicyFields(flags) : null;
+  const policyFields = flags.checkpoint === "construction-policy" ? constructionPolicyFields(pd, flags) : null;
   if (policyFields) {
     Object.assign(fields, policyFields);
     const options = (flags.options ?? "").split(",").map((option) => option.trim());
@@ -1661,7 +1714,7 @@ function handleAnswer(args: string[]): void {
   }
   const verificationCheckpoint = flags.checkpoint === "verification-command";
   const policyCheckpoint = flags.checkpoint === "construction-policy";
-  const policyFields = policyCheckpoint ? constructionPolicyFields(flags) : null;
+  const policyFields = policyCheckpoint ? constructionPolicyFields(resolveActiveProjectDir(projectDir), flags) : null;
   if (verificationCheckpoint && (flags.single !== undefined || flags.unit !== undefined)) {
     error("Construction verification commands apply to the whole intent; omit --single and --unit.");
   }
@@ -2645,6 +2698,59 @@ function derivedRecordFinding(
   };
 }
 
+/**
+ * The main workspace's intent record when `projectDir` is a swarm Unit's
+ * worktree (`<parent>/.aidlc/worktrees/<bolt>`, named by its own
+ * `.aidlc/worktree-meta.json`), else null. A structural read only: the verdict
+ * tidies a record the conductor wrote, it grants nothing, so the creation
+ * authority delegatedWorktreeIntent demands (and single-repo swarms lack) is not
+ * needed here.
+ */
+function swarmWorktreeParentRecord(projectDir: string, unit: string | undefined): string | null {
+  const metaPath = join(projectDir, ".aidlc", "worktree-meta.json");
+  if (!existsSync(metaPath)) return null;
+  const meta = JSON.parse(readFileSync(metaPath, "utf-8")) as {
+    version?: unknown; intentRecord?: unknown; boltSlug?: unknown; intentId8?: unknown; swarmUnit?: unknown;
+  };
+  if (
+    meta.version !== 1 || typeof meta.intentRecord !== "string" || typeof meta.boltSlug !== "string" ||
+    typeof meta.swarmUnit !== "string" || meta.swarmUnit !== unit ||
+    !/^aidlc\/spaces\/[a-z][a-z0-9-]*\/intents\/[^/]+$/.test(meta.intentRecord) || /\/\.\.?$/.test(meta.intentRecord)
+  ) {
+    return null;
+  }
+  const child = realpathSync(projectDir);
+  const parent = dirname(dirname(dirname(child)));
+  const expected = typeof meta.intentId8 === "string"
+    ? worktreePath(parent, meta.intentId8, meta.boltSlug)
+    : legacyWorktreePath(parent, meta.boltSlug);
+  if (!existsSync(expected) || realpathSync(expected) !== child) return null;
+  return join(parent, meta.intentRecord);
+}
+
+/**
+ * The main workspace's reviewer dispatch record, removed when `projectDir` is a
+ * swarm Unit's worktree and the record names this review (same reviewer, stage
+ * and unit). Best effort: the verdict stands either way.
+ */
+function removeParentReviewerDispatch(
+  projectDir: string,
+  review: { reviewer?: string; stage?: string; unit?: string },
+): void {
+  try {
+    const recordRoot = swarmWorktreeParentRecord(projectDir, review.unit);
+    if (recordRoot === null) return;
+    const path = join(engineDirFor(recordRoot), "reviewer-dispatch.json");
+    if (!existsSync(path)) return;
+    const record = JSON.parse(readFileSync(path, "utf-8")) as { reviewer?: unknown; stage?: unknown; unit?: unknown };
+    if (record.reviewer === review.reviewer && record.stage === review.stage && record.unit === review.unit) {
+      rmSync(path, { force: true });
+    }
+  } catch {
+    // Unreadable provenance or record: leave it to the hook's TTL.
+  }
+}
+
 function handleReview(args: string[]): void {
   const { flags } = parseFlags(args);
   if (!flags.stage) error("Missing --stage <slug>");
@@ -2850,9 +2956,12 @@ function handleReview(args: string[]): void {
     if (!manifest.ok) {
       const manifestPath = `${relativeRecordDir(pd, intent, space) ?? "aidlc"}/construction/${flags.unit}/${flags.stage}/source-manifest.json`;
       refuseReview(
-        `Cannot record REVIEW_REQUESTED for "${flags.stage}": unit "${flags.unit}" has no valid source manifest at ` +
-          `${manifestPath} (${manifest.reason}). Write the manifest listing every application-source path ` +
-          "the reviewer will inspect, then dispatch the review.",
+        `Cannot record REVIEW_REQUESTED for "${flags.stage}": ${unitManifestRefusal(
+          flags.unit as string,
+          manifestPath,
+          manifest,
+          "Write the manifest listing every application-source path the reviewer will inspect, then dispatch the review.",
+        )}`,
       );
     }
     fields["Unit Source Fingerprint"] =
@@ -3606,10 +3715,12 @@ function handleReview(args: string[]): void {
       if (manifest?.ok === false) {
         const manifestPath = `${relativeRecordDir(pd, intent, space) ?? "aidlc"}/construction/${flags.unit}/${flags.stage}/source-manifest.json`;
         refuseReview(
-          `Cannot record review for "${flags.stage}": unit "${flags.unit}" has no valid source manifest at ` +
-            `${manifestPath} (${manifest.reason}). Write the manifest listing every application-source path ` +
-            "this unit created or modified, including shell- or generator-written files, then request and " +
-            "record the review again.",
+          `Cannot record review for "${flags.stage}": ${unitManifestRefusal(
+            flags.unit as string,
+            manifestPath,
+            manifest,
+            "Write the manifest listing every application-source path this unit created or modified, including shell- or generator-written files, then request and record the review again.",
+          )}`,
         );
       }
 
@@ -4034,6 +4145,21 @@ function handleReview(args: string[]): void {
     if (e instanceof ReviewRefusal) error(e.message, verdictChangeNotices);
     error(`Audit emission failed: ${errorMessage(e)}`, verdictChangeNotices);
   }
+  // The verdict closes the reviewer-scope enforcement window, so the dispatch
+  // record the conductor wrote before invoking the reviewer goes with it: the
+  // engine removes it here, and the agent never runs an `rm` (a permission card
+  // on Claude Code and Kiro CLI). A record left by a crashed review is covered
+  // by the scope hook's TTL as before.
+  try {
+    rmSync(reviewerDispatchPath(pd, intent, space), { force: true });
+  } catch {
+    // Best effort: the verdict is recorded either way.
+  }
+  // In a swarm the verdict runs with --project-dir <worktree>, while the
+  // conductor wrote the record in the MAIN workspace's intent record, where
+  // the reviewer-scope hook reads it. Remove that one too, when it is this
+  // review's own record; another Unit's review keeps its window.
+  removeParentReviewerDispatch(pd, { reviewer: flags.reviewer, stage: flags.stage, unit: flags.unit });
 
   console.log(JSON.stringify({
     emitted: "REVIEW_COMPLETED",

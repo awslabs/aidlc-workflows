@@ -307,9 +307,10 @@ export interface RunStageDirective {
     // The current review re-checked that changed code or those documents; the
     // person gets one approval question that says so.
     rechecked?: { verdict: string; approved_before: boolean; changed: "code" | "documents" };
-    // The person let the Unit go on without these stages' unfinished reviews;
-    // `question` is the one approval question.
-    review_not_finished?: { stages: string[]; question: string };
+    // These stages' reviews did not finish. With `approved_in_words` the
+    // person's "approve it as it is" is the approval and nothing is asked;
+    // otherwise `question` is the one approval question.
+    review_not_finished?: { stages: string[]; question?: string; approved_in_words?: true };
   };
   swarm_checkpoint?: {
     batch: number;
@@ -1658,9 +1659,10 @@ function checkRunStageShared(
       const notFinished = checkpoint.review_not_finished;
       if (
         "review_not_finished" in checkpoint &&
-        (!isObject(notFinished) || typeof notFinished.question !== "string" || !Array.isArray(notFinished.stages) ||
-          !notFinished.stages.every((stage: unknown) => typeof stage === "string"))
-      ) errors.push(`${kind}: construction_checkpoint.review_not_finished must carry its stages and question`);
+        (!isObject(notFinished) ||
+          (typeof notFinished.question !== "string" && notFinished.approved_in_words !== true) ||
+          !Array.isArray(notFinished.stages) || !notFinished.stages.every((stage: unknown) => typeof stage === "string"))
+      ) errors.push(`${kind}: construction_checkpoint.review_not_finished must carry its stages and its question or approved_in_words`);
     }
   }
   if ("artifact_reuse" in o) {

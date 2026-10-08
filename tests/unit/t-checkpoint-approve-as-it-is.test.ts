@@ -3,8 +3,9 @@
 // The person drives. A Unit's review never finished (the chat was interrupted
 // before its verdict, or it came back NOT-READY with a pass left) and the
 // person says "approve it as it is". Under Guard Policy off, relaxed, and a
-// strict set for this piece of work, the Unit goes on, as at a stage gate: its checkpoint is verified as usual and asked once, the
-// approval is recorded with the review shown as not finished, and the person
+// strict set for this piece of work, the Unit goes on, as at a stage gate: its
+// checkpoint is verified as usual and their words are the approval (no second
+// question), recorded with the review shown as not finished, and the person
 // hears one line. The walk then carries on to the next Unit and the stage
 // closes with no further question.
 //
@@ -45,7 +46,6 @@ const CG = "code-generation";
 const REVIEWER = findStageBySlug(CG)!.reviewer!;
 const SESSION = "01995000-7a11-7000-8000-00000000a515";
 const AS_IT_IS = "approve alpha as it is, I don't need that review";
-const QUESTION = "Approve alpha? Its Code Generation review did not finish.";
 const NOTICE = "Approved. The Code Generation review for alpha did not finish.";
 const DASH = "\u2014"; // the state file's stage-line separator, an em dash
 type Policy = "off" | "relaxed" | "strict";
@@ -190,7 +190,7 @@ type Directive = {
   construction_checkpoint?: {
     unit: string; ready: boolean; verified: boolean; errors: string[];
     rereview?: { stage: string; reviewer: string; iteration: number; command: string; unfinished?: string };
-    review_not_finished?: { stages: string[]; question: string };
+    review_not_finished?: { stages: string[]; question?: string; approved_in_words?: true };
   };
   construction_policy?: { completion_only?: boolean };
 };
@@ -220,33 +220,36 @@ const unitApprovals = (p: string, unit: string) => events(p, "GATE_APPROVED")
 const questionsAsked = (p: string, unit: string) => events(p, "DECISION_RECORDED")
   .filter((row) => auditBlockField(row.block, "Checkpoint") === "Construction Unit Approval" && auditBlockField(row.block, "Unit") === unit);
 
-// The person's "approve it as it is", then the one checkpoint question and
-// their answer to it: alpha is approved, recorded over the unfinished review.
-function approveAsItIs(p: string): void {
-  says(p, AS_IT_IS);
+// The person's "approve it as it is" is the approval: verify, then approve
+// with no question asked. Alpha is approved over the unfinished review, with
+// their words on the record.
+function approvedInWords(p: string): void {
   const verified = checkpoint(p, "alpha", "verify", ["--over-unfinished-review"]);
   expect(verified.status, verified.out).toBe(0);
   expect(verified.json?.verified).toBe(true);
-  expect(verified.json?.review_not_finished).toEqual({ stages: [CG], question: QUESTION });
+  expect(verified.json?.review_not_finished).toEqual({ stages: [CG], approved_in_words: true });
   const shown = routed(p);
   expect(shown.construction_checkpoint).toMatchObject({ unit: "alpha", ready: true, verified: true });
-  expect(shown.construction_checkpoint?.review_not_finished?.question).toBe(QUESTION);
+  expect(shown.construction_checkpoint?.review_not_finished).toEqual({ stages: [CG], approved_in_words: true });
   expect(shown.construction_checkpoint?.rereview).toBeUndefined();
-  // The approval is the one question: no learnings question comes before it.
+  // No learnings question comes before the approval either.
   expect(shown.protocol_modules).toEqual(["construction"]);
-  const asked = checkpoint(p, "alpha", "ask");
-  expect(asked.status, asked.out).toBe(0);
-  says(p, "yes");
-  const approved = checkpoint(p, "alpha", "approve", ["--user-input", "yes"]);
+  const approved = checkpoint(p, "alpha", "approve");
   expect(approved.status, approved.out).toBe(0);
   expect(approved.json?.approved).toBe(true);
   expect(approved.json?.change_notices).toEqual([NOTICE]);
 
-  expect(questionsAsked(p, "alpha")).toHaveLength(1);
+  expect(questionsAsked(p, "alpha")).toHaveLength(0);
   const approvals = unitApprovals(p, "alpha");
   expect(approvals).toHaveLength(1);
   expect(auditBlockField(approvals[0].block, "Review")).toBe("not finished");
+  expect(auditBlockField(approvals[0].block, "Person Reply")).toBe(AS_IT_IS);
   expect(events(p, "GATE_REJECTED")).toHaveLength(0);
+}
+
+function approveAsItIs(p: string): void {
+  says(p, AS_IT_IS);
+  approvedInWords(p);
 }
 
 // After alpha: beta is built, reviewed and approved as usual, and one bare
@@ -265,7 +268,8 @@ function walkCarriesOn(p: string): void {
   const settled = next(p);
   expect(settled.kind, JSON.stringify(settled).slice(0, 800)).not.toBe("error");
   expect(readFileSync(seededStateFile(p), "utf-8")).toMatch(/^- \[x\] code-generation /m);
-  expect(questionsAsked(p, "alpha")).toHaveLength(1);
+  // Their words were alpha's approval: it was never asked about.
+  expect(questionsAsked(p, "alpha")).toHaveLength(0);
   expect(events(p, "GATE_REJECTED")).toHaveLength(0);
 }
 
@@ -310,7 +314,7 @@ describe("approving a Unit as it is over a review that did not finish", () => {
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   for (const policy of ["off", "relaxed"] as const) {
-    test(`Guard Policy ${policy}: an interrupted review, approved as it is with one question, and the walk carries on`, () => {
+    test(`Guard Policy ${policy}: an interrupted review, approved as it is with no second question, and the walk carries on`, () => {
       const p = fixture(policy);
       build(p, "alpha");
       review(p, "alpha", 1);
@@ -337,7 +341,7 @@ describe("approving a Unit as it is over a review that did not finish", () => {
 
   // A strict set for this piece of work is the person's own setting: their
   // "approve it as it is" goes over the review, as at a stage gate.
-  test("strict in the state: an interrupted review, approved as it is with one question", () => {
+  test("strict in the state: an interrupted review, approved as it is with no second question", () => {
     const p = fixture("strict");
     build(p, "alpha");
     review(p, "alpha", 1);
@@ -439,39 +443,17 @@ describe("approving a Unit as it is over a review that did not finish", () => {
     expect(auditBlockField(request?.block ?? "", "Recovery"), request?.block).toBe("stale-receipt");
   }
 
-  test("Guard Policy off: a recovery review that was interrupted, approved as it is with one question, and the walk carries on", () => {
+  test("Guard Policy off: a recovery review that was interrupted, approved as it is with no second question, and the walk carries on", () => {
     const p = fixture("off");
     recoveryInterrupted(p);
-    says(p, AS_IT_IS);
-    const verified = checkpoint(p, "alpha", "verify", ["--over-unfinished-review"]);
-    expect(verified.status, verified.out).toBe(0);
-    expect(verified.json?.review_not_finished).toEqual({ stages: [CG], question: QUESTION });
-    expect(checkpoint(p, "alpha", "ask").status).toBe(0);
-    says(p, "yes");
-    const approved = checkpoint(p, "alpha", "approve", ["--user-input", "yes"]);
-    expect(approved.status, approved.out).toBe(0);
-    expect(approved.json?.change_notices).toContain(NOTICE);
-    const approvals = unitApprovals(p, "alpha");
-    expect(approvals).toHaveLength(1);
-    expect(auditBlockField(approvals[0].block, "Review")).toBe("not finished");
+    approveAsItIs(p);
     walkCarriesOn(p);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-  test("Guard Policy strict in the state: a recovery review that was interrupted, approved as it is with one question", () => {
+  test("Guard Policy strict in the state: a recovery review that was interrupted, approved as it is with no second question", () => {
     const p = fixture("strict");
     recoveryInterrupted(p);
-    says(p, AS_IT_IS);
-    const verified = checkpoint(p, "alpha", "verify", ["--over-unfinished-review"]);
-    expect(verified.status, verified.out).toBe(0);
-    expect(verified.json?.review_not_finished).toEqual({ stages: [CG], question: QUESTION });
-    expect(checkpoint(p, "alpha", "ask").status).toBe(0);
-    says(p, "yes");
-    const approved = checkpoint(p, "alpha", "approve", ["--user-input", "yes"]);
-    expect(approved.status, approved.out).toBe(0);
-    expect(approved.json?.change_notices).toContain(NOTICE);
-    const approvals = unitApprovals(p, "alpha");
-    expect(approvals).toHaveLength(1);
-    expect(auditBlockField(approvals[0].block, "Review")).toBe("not finished");
+    approveAsItIs(p);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("a team-locked strict: a recovery review that was interrupted still finishes first, and the refusal names its retry", () => {

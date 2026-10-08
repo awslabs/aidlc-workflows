@@ -108,6 +108,8 @@ import { createHash, randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import {
   hookOutsideGate,
+  KIRO_WORKFLOW_HOST_TEMPLATES,
+  kiroTurnOrigin,
   enterHookWorkflow,
   classifyTerminalCommand,
   decodeHarnessPlainText,
@@ -2314,6 +2316,31 @@ function buildForward(): Forward {
     case "record-human-turn": {
       recordPreWorkflowHeartbeat(projectDir, "record-human-turn");
       const eventSessionId = ide.sessionId?.trim();
+      // Who sent the turn (kiroTurnOrigin): a message Kiro's own chat record
+      // marks as its own, or one of Kiro's fixed workflow sentences (a Kiro
+      // Workflows step's brief opens with one), is the host's; a session other
+      // than the chat's decides nothing by itself, so a message typed in another
+      // chat tab stays the person's. A host's turn is a side worker's: it starts no session here, is not
+      // remembered as the chat, opens no turn, and the core hook records it as
+      // HOST_TURN with nothing of the person's on it. Anything unknown is the
+      // person's.
+      const origin = kiroTurnOrigin({
+        sessionId: eventSessionId,
+        chatSessionId: process.env.KIRO_SESSION_ID,
+        prompt: ide.userPrompt ?? "",
+        templates: KIRO_WORKFLOW_HOST_TEMPLATES,
+      });
+      if (origin.kind === "host") {
+        return {
+          hook: "aidlc-record-human-turn.ts",
+          input: {
+            hook_event_name: "UserPromptSubmit",
+            session_id: eventSessionId || terminalSessionId(),
+            prompt: ide.userPrompt ?? "",
+            origin,
+          },
+        };
+      }
       const sessionId = terminalSessionId();
       // Kiro IDE 1.1.14 runs no SessionStart hook when a chat starts, so a
       // chat's first prompt is the first event that names its session. A prompt
@@ -2369,6 +2396,7 @@ function buildForward(): Forward {
           hook_event_name: "UserPromptSubmit",
           session_id: sessionId,
           prompt: ide.userPrompt ?? "",
+          origin,
         },
       };
     }

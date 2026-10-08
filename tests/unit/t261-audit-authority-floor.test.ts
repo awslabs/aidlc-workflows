@@ -612,6 +612,75 @@ describe("t261 humanActedSinceGate cross-shard same-second ambiguity", () => {
   });
 });
 
+// A Kiro IDE agent, right after saying "AI-DLC is carrying on with Delivery
+// Planning.", ran `log decision --decision "Continue with Delivery Planning
+// (user implicitly confirmed by hook trigger)"`: a decision in the person's
+// name they never made, which the engine recorded. A decision or answer whose
+// text attributes the person's confirmation to the hook, or to an implied
+// consent, is refused with the way on; the person's own words never match it.
+describe("t261 an implied confirmation is nobody's decision", () => {
+  const stage = "feasibility";
+  const implied = [
+    "Continue with Feasibility (user implicitly confirmed by hook trigger)",
+    "Proceed: implied approval from the stop hook",
+    "Carry on, confirmed by the hook",
+    "Next stage (user implicitly confirmed)",
+  ];
+
+  test("log decision refuses a question text that says the person implicitly confirmed", () => {
+    proj = createTestProject();
+    seedStateFile(proj, join(FIXTURES, "state-mid-ideation.md"));
+    for (const decision of implied) {
+      const r = guarded(LOG, ["decision", "--stage", stage, "--decision", decision, "--options", "Continue,Stop"], proj);
+      expect(r.rc, decision).not.toBe(0);
+      expect(r.out, decision).toContain("the person confirmed");
+      expect(r.out, decision).toContain("AI-DLC's carrying-on line is not their answer");
+    }
+    expect(readAllAuditShards(proj)).not.toContain("DECISION_RECORDED");
+    // A question in the agent's own words, one quoting the phrase as an
+    // example, and questions about consent rules in the person's own app are
+    // recorded as before.
+    for (const decision of [
+      "Which storage backend?",
+      'Did you mean "implicitly confirmed" as a term?',
+      "Are orders implicitly confirmed after 48 hours?",
+      "Should an order carry an assumed approval after 3 days, or need a tacit approval step?",
+    ]) {
+      const r = guarded(LOG, ["decision", "--stage", stage, "--decision", decision, "--options", "A,B"], proj);
+      expect(r.rc, `${decision}: ${r.out}`).toBe(0);
+    }
+  });
+
+  // The shared check also reads replies, change requests and approvals, so it
+  // matches only text that credits the hook: a person's own words about the
+  // consent rules of their app are never refused as chosen by the assistant.
+  test("log answer refuses only a reply that credits the hook; the person's own words about consent land", () => {
+    proj = createTestProject();
+    seedStateFile(proj, join(FIXTURES, "state-mid-ideation.md"));
+    const asked = guarded(LOG, ["decision", "--stage", stage, "--decision", "Carry on?", "--options", "Yes,No"], proj);
+    expect(asked.rc, asked.out).toBe(0);
+    mintHumanTurn(proj);
+    const r = guarded(LOG, ["answer", "--stage", stage, "--details", "Yes (user implicitly confirmed by hook trigger)"], proj);
+    expect(r.rc).not.toBe(0);
+    expect(r.out).toContain("chosen by the assistant");
+    expect(readAllAuditShards(proj)).not.toContain("QUESTION_ANSWERED");
+    for (const details of [
+      "Yes",
+      "not implied consent",
+      "orders are implicitly confirmed after 48 hours",
+      "assumed approval after 3 days",
+      "tacit approval",
+      "Order confirmation by trigger",
+    ]) {
+      const again = guarded(LOG, ["decision", "--stage", stage, "--decision", "Carry on?", "--options", "Yes,No"], proj);
+      expect(again.rc, again.out).toBe(0);
+      mintHumanTurn(proj);
+      const reply = guarded(LOG, ["answer", "--stage", stage, "--details", details], proj);
+      expect(reply.rc, `${details}: ${reply.out}`).toBe(0);
+    }
+  });
+});
+
 describe("t261 cancellation boilerplate is not a decision", () => {
   function ideationProject(): string {
     const p = createTestProject();

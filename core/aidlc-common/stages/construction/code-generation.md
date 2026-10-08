@@ -135,7 +135,7 @@ Plan should cover (as applicable to the unit):
 - **Comprehensive strategy**: Unit + integration + E2E test files per component (10-15 tests each)
 
 Apply the active scope's floor additively:
-- `mvp`, `enterprise`, `feature`, `infra`: the selected strategy plus 80% line coverage and CI execution before merge.
+- `mvp`, `enterprise`, `feature`, `infra`: the selected strategy plus 80% line coverage and, when the plan runs CI Pipeline, CI execution before merge.
 - `bugfix`, `security-patch`: the selected strategy plus a targeted regression for the bug/vulnerability at the narrowest level that reproduces it, even when that adds one integration/E2E test beyond Minimal's unit-test default; the existing suite remains green.
 - `poc`, `refactor`, `workshop`: the selected strategy still applies; the scope adds no extra new-test floor, and the existing suite remains green.
 
@@ -272,7 +272,12 @@ After approval:
   person again: `next` shows the question, its `plan_approval.note` saying what
   changed. Under `relaxed` or `off`, the build continues with the edited files
   and one `change_notices` line saying what changed; the earlier answer stays
-  the record of what was approved.
+  the record of what was approved. Before the build the line offers to go back
+  to the plan they approved; once the build has started it says the build is
+  going ahead and offers to build the approved plan instead, because the code
+  on disk came from the plan being replaced. Either way their yes, in any
+  wording and from any chat, is read by you: `next` names the restore to run,
+  and the build it issues after it is the approved plan's.
 - The line saying what changed asks whether to go back to the plan the person
   approved (under `strict` it offers that beside the plan question). When they
   say yes, or ask for it in their own words, run `{{INVOKE}} engine
@@ -415,7 +420,10 @@ Include in the delegation prompt:
   ticks or, with none ticked, the ones whose named files changed since the build
   started), any file a done step names that is not in the project (the step may
   say not to add it: redo the step only if it should have made that file), and
-  the step to continue at
+  the step to continue at. When neither says what is done (no tick, and no step
+  naming a file the engine can check), that section says the build wrote code
+  and the plan marks none of its steps: check each step against the project,
+  tick the box of each one that is done, and carry on from the first that is not
 - Project workspace details (languages, frameworks, conventions from aidlc-state.md)
 - Instructions to execute each plan step sequentially and mark checkboxes as
   completed, starting where that progress section says when the output has one.

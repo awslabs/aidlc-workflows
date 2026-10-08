@@ -59,9 +59,11 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
+  CLAUDE_HOST_TEMPLATES,
   addPendingPersonLines,
   auditBlockField,
   carryPendingPersonLines,
+  claudeTranscriptOrigin,
   clearSessionIntentHandoff,
   emptyPickerResult,
   enterHookWorkflow,
@@ -80,6 +82,7 @@ import {
   forgetGateWords,
   hookContextLine,
   hooksHealthDir,
+  hostTemplateOrigin,
   humanTurnMintAllowed,
   isoTimestamp,
   keepPlanApprovalAskOverStateWrite,
@@ -94,6 +97,8 @@ import {
   splitKiroCommandArgs,
   stateFilePath,
   stripRecommendedDecorator,
+  suppliedTurnOrigin,
+  type TurnOrigin,
   validSessionId,
   withAuditLock,
   writeProjectHookStatusFile,
@@ -488,6 +493,10 @@ try {
   let pickerUnanswered = false;
   // Every pick a picker reply carried, for the record (pickerAnswerNote).
   let picked: string[] = [];
+  // Who sent this turn. An adapter that read its host's own signals says so in
+  // `origin`; Claude Code's transcript is read here; anything unknown is a
+  // person (kiroTurnOrigin, claudeTranscriptOrigin in aidlc-lib.ts).
+  let turnOrigin: TurnOrigin = { kind: "person" };
   try {
     const parsed = JSON.parse(input) as {
       hook_event_name?: unknown;
@@ -500,6 +509,9 @@ try {
       toolResponse?: unknown;
       tool_input?: unknown;
       toolInput?: unknown;
+      origin?: unknown;
+      prompt_id?: unknown;
+      transcript_path?: unknown;
     };
     if (typeof parsed.session_id === "string") sessionId = validSessionId(parsed.session_id.trim()) ?? "";
     questionText = extractQuestionText(parsed.tool_input ?? parsed.toolInput);
@@ -546,6 +558,17 @@ try {
         ),
       };
     }
+    const supplied = suppliedTurnOrigin(parsed.origin);
+    if (supplied !== null) {
+      turnOrigin = supplied;
+    } else if (promptSubmitted && typedPrompt && typeof parsed.transcript_path === "string") {
+      // Claude Code hands its transcript to the hook: its row for this prompt
+      // names who started the turn. With no row, only the whole notice
+      // sentence counts as the host's.
+      turnOrigin = claudeTranscriptOrigin(parsed.transcript_path, parsed.prompt_id, typedPrompt) ??
+        hostTemplateOrigin(typedPrompt, CLAUDE_HOST_TEMPLATES) ??
+        { kind: "person" };
+    }
   } catch { /* presence still records without identity on legacy payloads */ }
   // A new prompt starts a new turn: a one-shot stop left from an earlier turn
   // (a switch's, or a creation's whose Stop never ran) is spent here, before
@@ -591,6 +614,33 @@ try {
     notes.push(
       "AIDLC Guard Policy: the typed switch was not applied because AIDLC_UNATTENDED=1 withholds human authority on this driver; run it from an attended session.",
     );
+  }
+  // A turn the host made (its notice or brief, not the person's words): none of
+  // the person's authority rides on it. No turn, no kept words, no reply, no
+  // switch, no conversational marker. The record keeps that it happened and why,
+  // with no text, so a turn that stopped counting is visible there.
+  if (turnOrigin.kind === "host") {
+    const host = turnOrigin;
+    if (existsSync(stateFilePath(projectDir))) {
+      try {
+        writeProjectHookStatusFile(projectDir, hooksHealthDir(projectDir), "record-human-turn.last", isoTimestamp());
+      } catch {
+        // A heartbeat write failure is lost telemetry, never a blocked turn.
+      }
+      try {
+        withAuditLock(projectDir, () => {
+          appendAuditEntryUnlocked("HOST_TURN", {
+            ...(sessionId ? { Session: sessionId } : {}),
+            Origin: "host",
+            Reason: host.reason,
+            Source: host.source,
+          }, projectDir);
+        });
+      } catch {
+        // The row is the trace; its absence blocks nothing.
+      }
+    }
+    return 0;
   }
   // Apply before the state-file gate: Guard Policy relaxed or off and plan
   // approval off are kept for the piece of work this chat starts next, and any
@@ -714,6 +764,10 @@ try {
           // ("/aidlc use postgres") are a reply.
           appendAuditEntryUnlocked("HUMAN_TURN", {
             ...(sessionId ? { Session: sessionId } : {}),
+            // Who sent it and how, so a host's turn and a person's are told
+            // apart in the record from now on.
+            Origin: "person",
+            ...(promptSubmitted ? { Source: "typed" } : pickerQuestion !== undefined ? { Source: "picker" } : {}),
             ...(switchQuestion
               ? { Reply: QUESTION_TURN_REPLY }
               : notAReply || answersEngineQuestion ? { Reply: COMMAND_TURN_REPLY } : {}),

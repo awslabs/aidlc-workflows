@@ -268,8 +268,10 @@ describe("t10 session-start SessionStart hook (mechanism cli — spawned hook + 
     seedStateFile(proj, MID_IDEATION);
     for (const tool of ["kiro", "kiro-ide", "opencode"]) {
       const parsed = JSON.parse(fire(proj, '{"source":"compact"}', { AIDLC_HARNESS_NAME: tool }).stdout.trim());
+      // The question case comes first: the agent said the line right after its
+      // own question when the exception followed the instruction.
       expect(parsed.additionalContext, tool).toContain(
-        "This tool does not show that line to the person, so if you carry on with the work, first say it to them once, on its own line, and nothing else about it.",
+        "This tool does not show that line to the person. If you had just asked them a question, record it and end your turn saying nothing; otherwise, if you carry on with the work, first say it to them once, on its own line, and nothing else about it.",
       );
       expect(parsed.additionalContext, tool).not.toContain("and say nothing about it.");
     }

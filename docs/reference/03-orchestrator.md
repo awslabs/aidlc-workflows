@@ -562,9 +562,10 @@ when the current review is that re-check. A `rereview` with `unfinished`
 (`no-verdict` or `not-ready`) names the request that finishes the Unit's own
 review instead; after the person's "approve it as it is" (`verify
 --over-unfinished-review`, any Guard Policy but a team-locked `strict`), `review_not_finished`
-(`{stages, question}`) carries the one approval question. It also carries the
-stages whose review ended in the reviewer module's NOT-READY fallback (no
-reviewer gave that verdict), under every Guard Policy, with readiness unchanged. A `rereview` with
+(`{stages, approved_in_words}`) says their words are the approval, so `approve`
+runs with no question. For stages whose review ended in the reviewer module's
+NOT-READY fallback (no reviewer gave that verdict) it carries `{stages, question}`,
+the one approval question, under every Guard Policy, with readiness unchanged. A `rereview` with
 `first` is the first request of a Unit review never asked for in this run of the
 Unit's work (a jump back or a reopen starts a new run), at the pass `log review`
 expects, under any Guard Policy. `verification_command` is the full canonical recorded command,
@@ -628,7 +629,11 @@ Only after `verify` reports `verified: true` and the current checkpoint has
 `ask` refuses an unready or unverified checkpoint. For a human batch question,
 only after status reports `ready: true`, run
 `aidlc engine bolt swarm-checkpoint --action ask --batch <N> --units "<Units>"`.
-Then present **Approve** / **Request Changes** and wait. The human's exact reply
+Then present **Approve** / **Request Changes** and wait, unless `ask` returns
+`earlier_reply`: the person's words in that session after the Unit's review was
+asked for, and before any other question was asked, are the reply, so run the
+action they chose without presenting the
+question (or present it when they answer nothing). The human's exact reply
 in that session, to this checkpoint question, authorizes the matching action;
 an unrelated reply, another session's reply, or a reply to a different question
 does not. These commands find their own session; never pass `--user-input`
@@ -1078,10 +1083,14 @@ name of the next in-scope stage) on the reply that opened the gate (`report
 --result awaiting-approval` or `revised`, computed when the gate opens, so a
 plan change made during the stage is in it), else the run-stage directive's
 (computed at emit time), or `Complete workflow` when `next_stage` is null. The
-conductor never infers the next stage. The same reply's `narration` says where
-the stage's output is ("<Stage> is ready for your review: what it produced is
-in <folder>/."), so the person has a pointer even when no summary comes before
-the question.
+conductor never infers the next stage. The same reply's `narration` says what
+the stage produced and where ("<Stage> is ready for your review. It produced
+requirements.md and requirements-analysis-questions.md (5 questions, all
+answered), in <folder>/."), from the files on disk, so the person sees it even
+when no summary comes before the question; the gate shown again by a later
+`next` carries the same line. Words typed at an open gate that ask what the
+stage found are answered from those files first, then the approval question is
+asked again (the `next <words>` step says so before its new-work branch).
 
 ### Conditional 3-Option Gate (Ideation and Inception only)
 

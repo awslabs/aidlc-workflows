@@ -234,7 +234,7 @@ describe("documentation parity derives current behavior from authored implementa
   });
 
   test("event count and user-guide taxonomy match VALID_EVENT_TYPES", () => {
-    expect(eventTypes.length).toBe(115);
+    expect(eventTypes.length).toBe(117);
 
     const guide = read("docs", "guide", "10-state-and-audit.md");
     const guideTaxonomy = sliceBetween(
@@ -1016,10 +1016,10 @@ describe("documentation parity derives current behavior from authored implementa
     const rows = [...guide.matchAll(/^\| [^|]+ \| `\/aidlc ([a-z][a-z-]+) [^`]*` \| (\d+ \/ \d+) \|$/gm)];
     expect(rows.length, "the side-task table lists at least one scope").toBeGreaterThan(0);
     for (const [, scope, count] of rows) expect(count, `${scope} stage count`).toBe(stageCount(scope));
-    // The guide reads the human-turn row as "not ready although marked ok";
-    // that holds only while doctor prints it as a passing advisory row.
+    // The guide reads the replies row as a warning; that holds only while
+    // doctor prints it as one.
     expect(read("core", "tools", "aidlc-utility.ts")).toMatch(
-      /pass: true,\s*label: `Human-turn receipts: 0 HUMAN_TURN rows[^`]*\(advisory\)/,
+      /severity: "warn",\s*label: `Your replies are not being recorded: /,
     );
     expect(flat).toContain(`\`feature\` runs every stage (${stageCount("feature")})`);
     const [classicRan, classicTotal] = stageCount("classic").split(" / ");
@@ -1065,7 +1065,7 @@ describe("documentation parity derives current behavior from authored implementa
       "Hooks last fired: ",
       "Hooks have never executed although this workflow has progressed",
       "Hook heartbeat data",
-      "Human-turn receipts: 0 HUMAN_TURN rows",
+      "Your replies are not being recorded: ",
       "Plan Approval authority is ambiguous or stale",
       "cannot select one approval target",
       "Select Construction Execution: serial",

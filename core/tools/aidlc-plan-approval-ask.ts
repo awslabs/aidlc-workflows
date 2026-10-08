@@ -44,8 +44,14 @@ import {
   planApprovalRuntimeFile,
   readActiveDirectiveMarker,
   readAuditShardEvents,
+  readBaselineSourceSnapshot,
+  readPlanApprovalReceipt,
   readPlanApprovalRuntimeRecord,
+  readWorkspaceSourceSnapshot,
+  recordedSourceListingUnderCurrentBoundary,
   removePlanApprovalRuntimeRecord,
+  renderChangedPaths,
+  sourceListingChangedPaths,
   stalePlanApprovalReceiptsForTarget,
   stateFilePath,
   steeringPayloadAuthenticAt,
@@ -64,6 +70,7 @@ import {
   writeWorkspaceSourceSnapshot,
   type ActiveDirectiveMarker,
   type PlanApprovalRuntimeReceipt,
+  type WorkspaceSourceListing,
 } from "./aidlc-lib.ts";
 import { CHECK_GLOSS } from "./aidlc-guard-fences.ts";
 import {
@@ -431,16 +438,81 @@ export function planSummaryLines(plan: string, instructions: string): string[] {
   return fallback;
 }
 
-function targetView(projectDir: string, unit: string | null): PlanApprovalAskTargetView {
+// `changed` is the line naming source that already changed since Code
+// Generation started (changedBeforeApprovalLine), shown under the summary when
+// the question is asked or its record rewritten; null says nothing.
+function targetView(projectDir: string, unit: string | null, changed: string | null = null): PlanApprovalAskTargetView {
   const dir = codeGenerationRecordDir(projectDir, unit);
   const rel = (name: string) => toPosix(relative(projectDir, join(dir, name)));
+  const summary = planSummaryLines(readText(join(dir, PLAN_FILE)), readText(join(dir, INSTRUCTIONS_FILE)));
   return {
     unit,
     plan_path: rel(PLAN_FILE),
     instructions_path: rel(INSTRUCTIONS_FILE),
     questions_path: rel(QUESTIONS_FILE),
-    summary: planSummaryLines(readText(join(dir, PLAN_FILE)), readText(join(dir, INSTRUCTIONS_FILE))),
+    summary: changed === null ? summary : [...summary, changed],
   };
+}
+
+/**
+ * What already changed in the workspace source that no approved plan accounts
+ * for, said in the question so the person approves with that in front of them:
+ * an agent that ran ahead of the plan, or their own edits. Measured from the
+ * later of this stage's own start (its STAGE_STARTED Source Baseline) and the
+ * previous plan approval in this stage (the workspace snapshot kept at each
+ * approval), so a later Unit's question does not repeat what the person saw
+ * when they approved the earlier one, and a unit-major run's first question
+ * does not reach back into earlier stages. The files the plans approved since
+ * that start name are their own build, not something that ran ahead. Nothing
+ * is said when the start is not on record or cannot be read, or nothing changed.
+ */
+function changedBeforeApprovalLine(projectDir: string): string | null {
+  try {
+    const current = workspaceSourceState(projectDir);
+    if (current === null) return null;
+    const rows = readAuditShardEvents(projectDir)
+      .filter((row) =>
+        auditBlockField(row.block, "Stage") === STAGE &&
+        (row.event === "STAGE_STARTED" || row.event === "PLAN_APPROVAL_RECORDED" || row.event === "PLAN_APPROVAL_SKIPPED"))
+      .sort((a, b) => {
+        if (a.timestamp !== b.timestamp) return a.timestamp < b.timestamp ? -1 : 1;
+        if (a.shardIndex !== b.shardIndex) return a.shardIndex - b.shardIndex;
+        return a.pos - b.pos;
+      });
+    const last = rows.at(-1);
+    if (last === undefined) return null;
+    let start: WorkspaceSourceListing | null = null;
+    if (last.event === "STAGE_STARTED") {
+      const baseline = auditBlockField(last.block, "Source Baseline");
+      start = baseline === null ? null : readBaselineSourceSnapshot(projectDir, STAGE, baseline);
+    } else {
+      const targetId = auditBlockField(last.block, "Plan Target");
+      const runFloor = auditBlockField(last.block, "Run floor");
+      const fingerprint = auditBlockField(last.block, "Approval Fingerprint");
+      const receipt = targetId !== null && runFloor !== null && fingerprint !== null
+        ? readPlanApprovalReceipt(projectDir, { targetId, runFloor, fingerprint })
+        : null;
+      const recorded = receipt === null ? null : readWorkspaceSourceSnapshot(projectDir, STAGE, receipt.plannedSourceSha256);
+      start = recorded === null ? null : recordedSourceListingUnderCurrentBoundary(recorded, current.listing);
+    }
+    if (start === null) return null;
+    // The plans approved since this stage started: what they name is their build.
+    const approved: Array<string | null> = [];
+    for (let index = rows.length - 1; index >= 0 && rows[index].event !== "STAGE_STARTED"; index--) {
+      approved.push(auditBlockField(rows[index].block, "Unit"));
+    }
+    const named = approved.length === 0 ? [] : plansNamedPaths(projectDir, approved).map((path) => path.replace(/\/+$/, ""));
+    const theirBuild = (path: string): boolean =>
+      named.some((entry) =>
+        path === entry || path.startsWith(`${entry}/`) || (!entry.includes("/") && path.split("/").at(-1) === entry));
+    const changed = sourceListingChangedPaths(start, current.listing).filter((path) => !theirBuild(path));
+    if (changed.length === 0) return null;
+    return changed.length === 1
+      ? `Already changed before you approved: ${renderChangedPaths(changed)}.`
+      : `Already changed before you approved (${changed.length} files): ${renderChangedPaths(changed)}.`;
+  } catch {
+    return null;
+  }
 }
 
 // A word in a plan that names a file or folder: it has a "/" or a file
@@ -748,9 +820,9 @@ export function routeCodeGenerationPlanApproval(projectDir: string, directive: D
   // must re-read).
   const states = units.map((unit) => targetState(projectDir, unit, intentId, record, directive, planApprovalOff));
   if (states.every((state) => state.kind === "approved")) {
-    // Under a lowered Guard Policy an approved plan that changed before the
-    // build still builds; the person hears what changed and is asked whether
-    // to go back.
+    // Under a lowered Guard Policy an approved plan that changed still builds;
+    // the person hears what changed and is asked whether to go back to it, or,
+    // once the build has started, whether to build it instead.
     const approved = withPlanState(directive, { status: "approved" });
     const changed = units.flatMap((unit) => approvedPlanChangeLine(projectDir, { unit }, directive) ?? []);
     if (changed.length > 0) approved.change_notices = [...(approved.change_notices ?? []), ...changed];
@@ -820,6 +892,7 @@ function planApprovalAskDirective(
   options: { question: string; editing: boolean; note?: string },
 ): PlanApprovalAskDirective {
   const grouped = units.length > 1;
+  const changed = changedBeforeApprovalLine(projectDir);
   return {
     kind: "ask",
     ask_type: "plan-approval",
@@ -828,7 +901,7 @@ function planApprovalAskDirective(
     question: options.question,
     ...(units.length === 1 && units[0] !== null ? { unit: units[0] } : {}),
     plan_approval: {
-      targets: units.map((unit) => targetView(projectDir, unit)),
+      targets: units.map((unit) => targetView(projectDir, unit, changed)),
       choices: [...(grouped ? GROUPED_PLAN_APPROVAL_CHOICES : PLAN_APPROVAL_CHOICES)],
       editing: options.editing,
       ...(options.note ? { note: options.note } : {}),
@@ -1139,7 +1212,7 @@ function approveTarget(
   const planAsFound = readText(planPath);
   let plan = planAsFound;
   const instructions = readText(join(dir, INSTRUCTIONS_FILE));
-  const view = targetView(projectDir, unit);
+  const view = targetView(projectDir, unit, changedBeforeApprovalLine(projectDir));
   // Only the person's own editing turn makes a repair theirs. Anything else is
   // the engine's or the agent's own doing, and a question that calls it their
   // edit describes work they never did.
@@ -1291,7 +1364,7 @@ function requestChangesFor(
   const approval = evaluateCodeGenerationApproval(projectDir, { unit });
   const dir = codeGenerationRecordDir(projectDir, unit);
   const questionsPath = join(dir, QUESTIONS_FILE);
-  const view = targetView(projectDir, unit);
+  const view = targetView(projectDir, unit, changedBeforeApprovalLine(projectDir));
   const asked = record.targets.find((target) => target.unit === unit);
   const existing = readText(questionsPath);
   const fingerprintLine = /^\[Approval Fingerprint\]:[ \t]*(\S+)/m.exec(existing)?.[1] ?? asked?.fingerprint ?? "";

@@ -55,9 +55,10 @@ const manifest: HarnessManifest = {
       "this chat: do not ask for a restart and do not mention /hooks. Then run <next> and act " +
       "on what it returns, so the waiting question shows again. If it brings back this same " +
       "message, the hooks are still off from outside this project: show this line instead and " +
-      'end your turn: "Claude Code is still starting with its hooks off. If you started it with a ' +
-      "setting that turns hooks off, start it again without that setting; otherwise ask your " +
-      'Claude Code administrator to allow project hooks."',
+      'end your turn: "Claude Code is still starting with its hooks off. If AI-DLC was set up while ' +
+      "Claude Code was open, exit Claude Code and start it again in this folder, then type <entry>. " +
+      "If you started it with a setting that turns hooks off, start it again without that setting; " +
+      'otherwise ask your Claude Code administrator to allow project hooks."',
   },
   harnessDir: ".claude",
   orchestratorSkillPath: ".claude/skills/aidlc/SKILL.md",

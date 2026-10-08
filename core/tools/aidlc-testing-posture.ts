@@ -302,9 +302,9 @@ export interface PlanApprovalRemedy {
 }
 
 export const PLAN_APPROVAL_REPAIR_SOURCE_BOUNDARY_REMEDY =
-  "Repair the source boundary: shrink or exclude the offending path, declare real " +
-  "source under an excluded directory in .aidlc-source-paths.json, or remove the " +
-  "broken symlink; then run next.";
+  "Repair the source boundary: add the offending path to the exclude list in " +
+  ".aidlc-source-paths.json, declare real source under an excluded directory in its " +
+  "paths list, or remove the broken symlink; then run next.";
 
 export function planApprovalUnbindableRemedies(): PlanApprovalRemedy[] {
   return [
@@ -1634,6 +1634,12 @@ export function keepApprovedPlanCopy(
 // one. Their reply is the agent's to read; restore needs their word.
 const APPROVED_PLAN_UNDO_QUESTION = "Do you want me to go back to the plan you approved?";
 const APPROVED_PLAN_UNDO_OFFER = "I can also go back to the plan you approved.";
+// Once the build has started there is nothing to go back to before it: the
+// code is being written from the plan as it is now. So the line says that and
+// offers the thing that is still true, building the approved plan instead.
+const APPROVED_PLAN_REBUILD_QUESTION =
+  "I am building it as it is now. Do you want me to build the plan you approved instead?";
+const APPROVED_PLAN_REBUILD_OFFER = "I can also build the plan you approved instead.";
 
 function quotedStep(text: string): string {
   return `"${text.length > 80 ? `${text.slice(0, 77).trimEnd()}...` : text}"`;
@@ -1666,51 +1672,71 @@ export function approvedPlanChangeText(
   plan: string,
   instructions: string,
   planAsked = false,
+  built = false,
 ): string | null {
   const planChanged = projectPlanApprovalContent(plan) !== projectPlanApprovalContent(copy.plan);
   const lf = (text: string) => text.replace(/\r\n/g, "\n");
   const instructionsChanged = lf(instructions) !== lf(copy.instructions);
   if (!planChanged && !instructionsChanged) return null;
-  const wayBack = planAsked ? APPROVED_PLAN_UNDO_OFFER : APPROVED_PLAN_UNDO_QUESTION;
-  if (!planChanged) return `Your approved test instructions changed before the build. ${wayBack}`;
+  const wayBack = built
+    ? planAsked ? APPROVED_PLAN_REBUILD_OFFER : APPROVED_PLAN_REBUILD_QUESTION
+    : planAsked ? APPROVED_PLAN_UNDO_OFFER : APPROVED_PLAN_UNDO_QUESTION;
+  const when = built ? "after the build started" : "before the build";
+  if (!planChanged) return `Your approved test instructions changed ${when}. ${wayBack}`;
   const what = changedSteps(planSteps(copy.plan).map((step) => step.text), planSteps(plan).map((step) => step.text));
-  return `Your approved plan changed before the build: ${what}${instructionsChanged ? ", and the test instructions changed too" : ""}. ` +
+  return `Your approved plan changed ${when}: ${what}${instructionsChanged ? ", and the test instructions changed too" : ""}. ` +
     wayBack;
 }
 
-/** The approved files for this target and attempt, when the person approved them and the build has not started. */
-function unbuiltApprovedCopy(
+/**
+ * The approved files for this target and attempt, with whether its build has
+ * started. Both states are returned: before the build the person can go back
+ * to the plan they approved, and once it has started they can have that plan
+ * built instead. Reading only the unbuilt state left the offer unanswerable,
+ * because generation moves the receipt to `generation` in the same turn the
+ * question is asked (#2084 F1).
+ */
+function approvedCopyForAttempt(
   projectDir: string,
   authority: CodeGenerationAuthority,
-): ApprovedPlanCopy | null {
+): { copy: ApprovedPlanCopy; built: boolean } | null {
   const copy = readApprovedPlanCopy(projectDir, authority);
   if (copy === null) return null;
   const receipt = readPlanApprovalReceipt(projectDir, {
     targetId: authority.targetId, runFloor: authority.runFloor, fingerprint: copy.fingerprint,
   });
-  return receipt?.choice === "Approve Plan" && receipt.status === "approved" ? copy : null;
+  if (receipt?.choice !== "Approve Plan") return null;
+  return { copy, built: receipt.status === "generation" };
 }
 
 /**
- * The one line the person hears when the plan they approved changed before the
- * build, or null when it did not (or nothing was approved in this attempt).
- * With `planAsked`, the plan question follows the line.
+ * The one line the person hears when the plan they approved changed, or null
+ * when it did not (or nothing was approved in this attempt). Before the build
+ * it offers to go back to that plan; once the build has started it says the
+ * build is going ahead and offers to build the approved plan instead. With
+ * `planAsked`, the plan question follows the line.
+ *
+ * `afterBuild: false` keeps only the before-the-build line. The lowered
+ * plan-approval fence's own account uses it: there the person is owed the
+ * stand-aside line, and a fence that is off asks nothing new.
  */
 export function approvedPlanChangeLine(
   projectDir: string,
   target: CodeGenerationTarget,
   issued?: CodeGenerationIssuance,
   planAsked = false,
+  afterBuild = true,
 ): string | null {
   try {
     const authority = resolveCodeGenerationAuthority(projectDir, target, issued);
-    const copy = unbuiltApprovedCopy(projectDir, authority);
-    if (copy === null) return null;
+    const approved = approvedCopyForAttempt(projectDir, authority);
+    if (approved === null || (approved.built && !afterBuild)) return null;
     return approvedPlanChangeText(
-      copy,
+      approved.copy,
       readFileSync(join(authority.stageDir, "code-generation-plan.md"), "utf-8"),
       readFileSync(join(authority.stageDir, "unit-test-instructions.md"), "utf-8"),
       planAsked,
+      approved.built,
     );
   } catch {
     return null;
@@ -1741,6 +1767,10 @@ export function restoreApprovedPlan(projectDir: string, target: CodeGenerationTa
         "Show the person the plan as it is now.",
     );
   }
+  // Once the build has started the code on disk came from the plan being
+  // replaced, so going back means building that step again. The line says so,
+  // and the `next` after this restore issues that build.
+  const built = receipt.status === "generation";
   withActiveDirectiveLock(projectDir, () => {
     for (const [name, content] of [
       ["code-generation-plan.md", copy.plan],
@@ -1750,7 +1780,9 @@ export function restoreApprovedPlan(projectDir: string, target: CodeGenerationTa
       writeRecordFileNoFollow(projectDir, relative(projectDir, join(authority.stageDir, name)), content);
     }
   });
-  return "Back to the plan you approved.";
+  return built
+    ? "Back to the plan you approved. I am building it again from that plan."
+    : "Back to the plan you approved.";
 }
 
 // --- Picking up an interrupted build ----------------------------------------------
@@ -1769,7 +1801,12 @@ export function restoreApprovedPlan(projectDir: string, target: CodeGenerationTa
 // A worker that built steps without ticking them leaves no ticks. Then the
 // files the steps name are the record: the unbroken run of steps from step 1
 // whose named files all changed since the build started is where the build got
-// to, and it picks up at the first step that breaks that run.
+// to, and it picks up at the first step that breaks that run. When that run is
+// empty, because no step names a file the engine can check or the first one's
+// files did not change, the brief and the line say what is still certain: the
+// build wrote code, the plan marks none of its steps, and the finished ones are
+// the worker's to tick. Saying nothing re-emitted the starting line as if the
+// build had not run, which left the agent with no step to take.
 //
 // "Started on the plan as it is now" is the receipt the questions file names,
 // at status `generation`, when the plan and instructions on disk are the
@@ -1811,8 +1848,11 @@ export interface CodeGenerationResume {
   steps: PlanStep[];
   /** 1-based numbers of the steps done: ticked, or (with none ticked) whose named files were written. */
   ticked: number[];
-  /** How the done steps are known: the plan file's ticks, or the files the steps name. */
-  from: "ticks" | "files";
+  /** How the done steps are known: the plan file's ticks, or the files the steps
+   *  name. With `unmarked` neither says: the build wrote code, the plan ticks
+   *  nothing, and no step names a file the engine can check, so which steps are
+   *  done is the worker's to mark and `ticked` is empty. */
+  from: "ticks" | "files" | "unmarked";
   /** Done steps naming files that are not in the project: a fact for the worker to judge. */
   missing: Array<{ step: number; paths: string[] }>;
   /** The first step not done, or null when every step is done. */
@@ -1926,11 +1966,23 @@ export function codeGenerationResume(
     let next: number | null = steps.findIndex((step) => !step.ticked) + 1 || null;
     let from: CodeGenerationResume["from"] = "ticks";
     if (ticked.length === 0) {
-      const written = stepsWithWrittenFiles(projectDir, receipt.certifiedSourceSha256, steps);
-      if (written === 0) return null;
-      ticked = Array.from({ length: written }, (_, index) => index + 1);
-      next = written < steps.length ? written + 1 : null;
-      from = "files";
+      const run = stepsWithWrittenFiles(projectDir, receipt.certifiedSourceSha256, steps);
+      // Nothing changed since the build started: it has not got anywhere, so
+      // there is nothing to pick up and the build starts as it always did.
+      if (!run.changed) return null;
+      if (run.written === 0) {
+        // The build wrote code and nothing says which steps are done: no tick,
+        // and no step naming a file the engine can check (or the first step's
+        // files did not change). Which steps are done is the worker's to mark,
+        // so the engine says only that none is marked.
+        if (steps.length === 0) return null;
+        next = 1;
+        from = "unmarked";
+      } else {
+        ticked = Array.from({ length: run.written }, (_, index) => index + 1);
+        next = run.written < steps.length ? run.written + 1 : null;
+        from = "files";
+      }
     }
     // A multi-repo intent's plan may name paths inside a repository, and a step
     // may name one of this stage's own record files. A bare file name (no
@@ -1966,16 +2018,23 @@ function buildContentFingerprint(plan: string, instructions: string, authority: 
 /**
  * With no step ticked: the unbroken run of steps from step 1 whose named files
  * all changed since the build started (the source its receipt certified at
- * generation start), or 0 when none did or the start's file listing was not
- * kept. The run stops at the first step that names no file or whose files did
- * not all change: a later step naming a file an earlier one touched
- * (package.json, a README) says nothing about the steps between. A bare file
- * name matches a changed file of that name in any folder.
+ * generation start), and whether anything changed since then at all. The run
+ * stops at the first step that names no file or whose files did not all change:
+ * a later step naming a file an earlier one touched (package.json, a README)
+ * says nothing about the steps between. `written` is 0 when that run is empty,
+ * which a plan naming no checkable file always gives; `changed` is false when
+ * nothing changed or the start's file listing was not kept, so the build has not
+ * got anywhere to pick up. A bare file name matches a changed file of that name
+ * in any folder.
  */
-function stepsWithWrittenFiles(projectDir: string, startedSource: string, steps: PlanStep[]): number {
+function stepsWithWrittenFiles(
+  projectDir: string,
+  startedSource: string,
+  steps: PlanStep[],
+): { written: number; changed: boolean } {
   const current = workspaceSourceState(projectDir);
   const changed = workspaceSourceChangedPaths(projectDir, CODE_GENERATION_STAGE, startedSource, current);
-  if (changed === null || changed.length === 0) return 0;
+  if (changed === null || changed.length === 0) return { written: 0, changed: false };
   const names = new Set(changed.map((path) => basename(path)));
   const wrote = (path: string): boolean => path.endsWith("/")
     ? changed.some((file) => file.startsWith(path) || file.includes(`/${path}`))
@@ -1984,7 +2043,7 @@ function stepsWithWrittenFiles(projectDir: string, startedSource: string, steps:
       : names.has(path);
   let written = 0;
   while (written < steps.length && steps[written].paths.length > 0 && steps[written].paths.every(wrote)) written++;
-  return written;
+  return { written, changed: true };
 }
 
 /**
@@ -2064,6 +2123,18 @@ function progressSection(resume: CodeGenerationResume): string {
   const total = resume.steps.length;
   const lines = ["", "## Progress before the interruption", ""];
   const unticked = "the approved plan below shows none ticked, because ticks are not part of the approval";
+  // The build wrote code and marked nothing: no step is claimed done, so there
+  // is no file to check for one and no step to continue at that the engine can
+  // name. The worker reads the plan against the project and marks what it did.
+  if (resume.from === "unmarked") {
+    lines.push(
+      `This plan's build already wrote code, and the plan file ticks none of its ${total} steps (${unticked}). ` +
+        "Check each step against the files in the project, tick the box of each one that is done, " +
+        "and carry on from the first that is not.",
+      "",
+    );
+    return `${lines.join("\n")}\n`;
+  }
   if (resume.from === "files") {
     lines.push(
       `This plan's build stopped part way. The plan file ticks none of its ${total} steps, but the files ` +
@@ -2130,6 +2201,9 @@ export function codeGenerationResumeNarration(
   // heading the next one sits under, so every number matches the plan file.
   const grouped = stepHeadings(resume.steps) !== null;
   const item = grouped ? "task" : "step";
+  if (resume.from === "unmarked") {
+    return `Picking up ${whose}: the plan marks none of its ${total} ${item}s done, checking what is built.`;
+  }
   if (resume.next === null) {
     return `Picking up ${whose}: all ${total} ${item}s ${written ? "wrote their files, checking them" : "are done, checking their files"}.`;
   }
@@ -2441,6 +2515,11 @@ export const FILE_TOOLS_RULE =
   "`printf`, or `python3` writing a file, no `sed -i`, no `mkdir`; the file-write tool creates any " +
   "missing folder). A command the person asks for, or one the plan names (a package install, a build, " +
   "a scaffolder, a migration, a formatter, a code generator, even a `mkdir`), still runs as written. " +
+  "Every file you make on your own, a scratch file, a helper script, a command's output, stays inside the " +
+  "project (nothing in /tmp or any folder outside it), and a command's output is read from the tool result, " +
+  "never sent to a file; a file the person asks for, or one the plan names, goes where they say. " +
+  "Quote a pattern meant for the program, not the shell " +
+  "(`--include='*.ts'`), and never start an argument with `=`: zsh, the macOS default shell, stops on both. " +
   "Read, list, and search (your own knowledge files included) with your file tools where you have them; where the shell " +
   "is your only way to read, use one plain read command (no `cd` before it, no pipe or second command " +
   `after it). Run every AI-DLC command ${AS_ITS_OWN_COMMAND}, keeping its path as written (never a full path): ` +
@@ -2922,8 +3001,15 @@ function recordCodeGenerationContinuation(
   operation: string,
 ): string[] {
   const detail = `${operation} for ${continuation.authority.targetId} using current content; the earlier approval is unchanged`;
-  // An approved plan that changed before the build is named for the person.
-  const changed = approvedPlanChangeLine(projectDir, { unit: continuation.authority.unit });
+  // An approved plan that changed before the build is named for the person, in
+  // place of the stand-aside line below. Only before the build: this is the
+  // lowered fence's own account, where the person is owed that line and a fence
+  // that is off asks nothing new. Once the build has started, the change and
+  // the offer to build the approved plan instead reach them through the
+  // directive's own change notice, not through the fence's account.
+  const changed = approvedPlanChangeLine(
+    projectDir, { unit: continuation.authority.unit }, undefined, false, /* afterBuild */ false,
+  );
   const recorded = recordGuardStoodAside(projectDir, {
     fence: "plan-approval",
     authority: continuation.fence.authority,

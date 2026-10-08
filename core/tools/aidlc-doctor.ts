@@ -61,6 +61,7 @@ import {
 import {
   flagsDoctorCheck,
   frameworkFilesDoctorCheck,
+  kiroIdeWorkflowsDoctorCheck,
   providerDoctorCheck,
   settingsDoctorChecks,
   vscodeRequestCapDoctorCheck,
@@ -178,12 +179,17 @@ export function updateCheck(state: UpdateState): DoctorCheck {
   // follows, which may be older, so the fix names both ways.
   const running = versionChannel(state.currentVersion);
   const otherChannel = state.state === "behind" && running !== state.channel;
+  // A machine that has never checked is not behind: doctor refreshes the cache
+  // only in a terminal, so the first doctor from a chat tool would otherwise
+  // warn on every fresh install. The row passes and names the check.
+  const neverChecked = state.state === "absent";
   return {
-    pass: state.state === "current",
-    severity: state.state === "current" || state.state === "invalid-config"
+    pass: state.state === "current" || neverChecked,
+    severity: state.state === "current" || state.state === "invalid-config" || neverChecked
       ? undefined
       : "warn",
-    label: `Update: ${state.message}`,
+    // A passing row prints no fix line, so the hint rides in the label.
+    label: neverChecked ? `Update: not checked yet (run \`${invoke} update --check\` to check)` : `Update: ${state.message}`,
     fix: otherChannel
       ? `run \`${invoke} update\` to go to the newest ${state.channel} release, or ` +
         `\`${invoke} config --channel ${running}\` to keep ${running} releases`
@@ -595,6 +601,8 @@ export async function main(argv: string[]): Promise<void> {
   checks.push(...settingsDoctorChecks(projectDir));
   checks.push(modelsPolicyCheck(projectDir, flags.verbose === "true"));
   checks.push(...await kiroSessionDoctorChecks(projectDir));
+  const kiroWorkflows = kiroIdeWorkflowsDoctorCheck(projectDir, harnessDir());
+  if (kiroWorkflows) checks.push(kiroWorkflows);
   checks.push(flagsDoctorCheck(projectDir, harnessDir(), switchesOffLines(projectDir, process.env, "command")));
   checks.push(providerDoctorCheck(projectDir, harnessDir()));
   checks.push(workspaceSiblingDoctorCheck(projectDir, harnessDir()));

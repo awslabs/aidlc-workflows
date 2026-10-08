@@ -537,3 +537,14 @@ describe("t349 harness adapters", () => {
     expect(failing.toasts).toEqual([]);
   });
 });
+
+describe("t349 (f) the fixed line is one plain sentence", () => {
+  // The person reads the fixed line under the harness's own prefix ("PostToolUse:Bash
+  // says:" on Claude Code). It says what happened and nothing about how the relay
+  // works: no "quoted exactly as reported", no aside about project values.
+  test("the label says the workflow stopped and ends at the colon", () => {
+    expect(ENGINE_ERROR_RELAY_LABEL).toBe("The workflow stopped with this error:");
+    expect(ENGINE_ERROR_RELAY_LABEL).not.toMatch(/[()]/);
+    expect(engineErrorRelayText("boom")).toBe("The workflow stopped with this error:\n> boom");
+  });
+});

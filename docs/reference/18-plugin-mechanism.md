@@ -160,6 +160,17 @@ The steps (identical regardless of trigger):
 
 Because composition is one N-way merge (not a sequence of independent overlays), **two plugins that both contribute to the same stage are genuinely merged** — structural additions set-union, prose fragments order deterministically — rather than one silently overwriting the other. The runtime stays **read-only** with respect to composition: all merging happens at compose time, never per session. The merge edits **stage source** (not the compiled JSON), so it is **durable** across any later `aidlc-graph compile` (e.g. the rebuild-stage-graph hook) and **idempotent** — re-running on every SessionStart composes nothing new.
 
+Re-composing a newer version of the same plugin replaces the files that plugin
+installed when they are unchanged since it installed them. The proof is the
+hash-proven record `tools/data/plugin-owned-<key>.json`, written by
+`aidlc engine plugin sync` and by the compose hook alike. A file the person
+changed is never overwritten: the compose drops log names it and the step (move
+the change elsewhere, remove the file, re-run compose). A file the record does
+not cover (core, another plugin, a copy composed before the record existed, or a
+local edit) is kept and reported the same way. A prose fragment the new version
+no longer ships at its old anchor and order is removed from the stage and from
+the contribution sidecar, so a moved fragment appears once.
+
 An engine reinstall is different from a graph compile: copying a fresh
 `dist/<harness>/` overwrites the compiled graph and core stage sources, so
 plugin-owned files and sidecars may remain while graph entries and contribution
@@ -282,6 +293,10 @@ deletes content for a missing installed source. Explicit
 `--yes` when non-interactive, and hash-proven ownership; it refuses locally
 modified or unowned paths. At a terminal it asks nothing: it names the plugins
 it prunes and how to get them back, then prunes.
+A plugin file's identity is its committed text: a checkout that turns line
+endings (Git for Windows' `core.autocrlf`) is no change to the plugin's files,
+for sync and for the compose hook alike (the rule in
+[docs/reference/04-stage-protocol.md](04-stage-protocol.md), "Line endings").
 
 Neither list, doctor, nor sync checks a remote plugin registry. The host remains
 responsible for published-version discovery.
@@ -544,7 +559,7 @@ scope file must be installed before the merge.
 
 Independent authors who never coordinate are kept safe by:
 
-- **Namespacing.** Contributed artifact logical names are `<plugin>-`prefixed; `core-*` is reserved. A plugin's stages, agents, scopes, and sensors should be unique across the chosen set and against core. Primitive file collisions are no-clobber and drop-logged with attribution (no silent shadowing).
+- **Namespacing.** Contributed artifact logical names are `<plugin>-`prefixed; `core-*` is reserved. A plugin's stages, agents, scopes, and sensors should be unique across the chosen set and against core. Primitive file collisions are no-clobber and drop-logged with attribution (no silent shadowing); the one exception is the plugin's own file, unchanged since the plugin installed it, which a re-compose replaces with the plugin's newer copy.
 - **Dependency resolution is deferred.** `dependencies` records the intended
   semver contract, but the composer does not read it, resolve tags, or reject
   cycles yet. Authors must not rely on it for activation or ordering.

@@ -384,7 +384,7 @@ host shares it and is judged by the gates of the workflow it is bound to.
 | Hook | Trigger (matcher) | Purpose |
 |------|-------------------|---------|
 | `aidlc-session-start` | `SessionStart` | Injects workflow resume context when a new session takes its first prompt (both surfaces; resuming an existing session does not fire it). Kiro IDE 1.1.14 runs no SessionStart hook in a new chat, so `aidlc-record-human-turn` does this work instead |
-| `aidlc-record-human-turn` | `UserPromptSubmit` | Records a human-turn event on every prompt (human-presence gate). A prompt from a chat other than the last one seen, or from a chat not yet started, first starts that chat's session, as `aidlc-session-start` would, so the chat gets its `AIDLC Runtime Session:` line or resume context |
+| `aidlc-record-human-turn` | `UserPromptSubmit` | Records a human-turn event on every prompt (human-presence gate). A prompt from a chat other than the last one seen, or from a chat not yet started, first starts that chat's session, as `aidlc-session-start` would, so the chat gets its `AIDLC Runtime Session:` line or resume context. A prompt Kiro makes itself (a Workflows step's brief, the notice that a workflow finished) is not counted as your turn: it is recorded as `HOST_TURN`, starts no session and answers no question |
 | `aidlc-terminal-command` | `UserPromptSubmit` | Runs status, doctor, help, navigation, and other terminal utilities before the model when prompt text is available, for the chat that typed the command |
 | `aidlc-continue-workflow` | `Stop` | Forwarding-loop audit (advisory-only; the Stop trigger cannot block on the IDE - enforcement relies on the conductor's own Stop protocol) |
 | `aidlc-guard-tool-call` | `PreToolUse` (every tool but a read) | One card for the five checks below, run in this order on the same call. Each check runs only for the tools beside it; every check runs even after one refuses, and the call is refused when any check refuses, with each reason once. A read (`read_file`, `list_directory`, a search) runs with no card: it cannot answer an approval or change the workspace |
@@ -451,6 +451,37 @@ A project's `aidlc/` workspace is harness-neutral. Moving a project between
 harnesses (or running both side by side) is supported-but-untested; `/aidlc
 --doctor` will warn if it detects a conflicting harness setup with an active
 workflow.
+
+### Kiro's Workflows feature stops AI-DLC's reviews and helpers
+
+Kiro IDE's **Workflows** feature (Settings > **Kiro Agent > Workflows:
+Enabled**, or the **Enable Workflows** command) runs work as background
+workflows. While it is on, a chat loses the sub-agent tool AI-DLC uses for its
+reviews and helpers: on the `aidlc` agent they never run and the main chat does
+their work itself; on the Default agent they run in the background, the chat's
+turn ends before they finish, every command they run asks in an **Approval
+needed in agent-aidlc-...** panel, and Kiro can hand an `/aidlc` request to its
+own workflow instead of AI-DLC. Workflows is off unless you turned it on.
+
+The switch is a Kiro setting for all your projects: Kiro reads it only from
+your user settings, so a workspace `.vscode/settings.json` value does nothing.
+When it is on and you have not answered before on this computer, AI-DLC asks
+you once whether to turn it off: during `aidlc config`, or in your first Kiro
+IDE chat. `aidlc config --yes` takes the recommended answer and turns it off.
+Say yes and AI-DLC changes only that one setting; then run **Developer: Reload
+Window** from the Command Palette (Ctrl+Shift+P) so open chats pick it up. Say
+no and it stays on, and AI-DLC does not ask again.
+
+To change it later, ask the agent to turn Kiro Workflows off or back on, or run:
+
+```bash
+aidlc config trust --kiro-workflows off --yes   # or: on
+```
+
+Kiro's own **Disable Workflows** and **Enable Workflows** commands do the same.
+`/aidlc --doctor` shows a warning while Workflows is on. Kiro CLI keeps its
+sub-agent tool with Workflows on (unless you turn its "Workflows: sub-agent
+tool" setting off), so it needs nothing.
 
 ### Command cards end with "dministrator: ...powershell.exe" on Windows
 

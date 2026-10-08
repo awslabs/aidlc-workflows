@@ -19,8 +19,8 @@
 //
 // How the hook knows a review is in flight: the conductor writes a dispatch
 // record (reviewerDispatchPath, `<record>/.aidlc-engine/reviewer-dispatch.json`) at
-// stage-protocol-reviewer.md §12a step 1 before invoking a per-unit reviewer, and deletes it at step 3
-// when the verdict is read. The record carries {reviewer, stage, unit,
+// stage-protocol-reviewer.md §12a step 1 before invoking a per-unit reviewer; the engine
+// removes it when `aidlc-log.ts review --verdict` records the verdict (step 3). The record carries {reviewer, stage, unit,
 // exempt[]} - the facts no harness payload delivers. Identity comes from the
 // harness: Claude Code and Codex put the active subagent's name in the
 // payload's agent_type (absent on main-session calls; probe-verified on

@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
-import { existsSync, readFileSync, writeSync } from "node:fs";
-import { basename, dirname, isAbsolute, join, resolve } from "node:path";
+import { existsSync, readFileSync, realpathSync, writeSync } from "node:fs";
+import { basename, dirname, isAbsolute, join, resolve, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import {
   CONFIG_SECTIONS,
@@ -32,6 +32,7 @@ import {
   packagedDistributionRoot,
   discoverableRuntimeHarnessDir,
   runtimeHarnessDir,
+  runtimeProjectDir,
   runtimeHarnessName,
 } from "./aidlc-runtime-paths.ts";
 
@@ -401,7 +402,7 @@ export const ROUTES: readonly Route[] = [
       "config models [--deciding-effort <e>] [--reviewing-effort <e>] [--writing-up-effort <e>] [--agent <name> [--effort <e>] [--model <raw-id>]] [--session-model <id>] [--local|--project|--global] [--dry-run] [--yes] [--download [--release-base-url <url>] [--ca-bundle <path>]]",
       "config runtime [--show [--json]|--check|--record-paths|--reset] [--dry-run] [--yes] [--download [--release-base-url <url>] [--ca-bundle <path>]]",
       "config providers [--show [--json]|--check|--reset|--provider <current|amazon-bedrock|other>] [--region <region>] [--profile <profile>] [--opencode-default <yes|no>] [--acknowledge] [--mark-done <id>] [--dry-run] [--yes] [--download [--release-base-url <url>] [--ca-bundle <path>]]",
-      "config trust [--show [--json]|--check|--acknowledge|--reset] [--dry-run] [--yes] [--download [--release-base-url <url>] [--ca-bundle <path>]]",
+      "config trust [--show [--json]|--check|--acknowledge|--kiro-workflows <on|off>|--reset] [--dry-run] [--yes] [--download [--release-base-url <url>] [--ca-bundle <path>]]",
       "config flags [--show [--json]|--check|--reset] [--default-scope <name>] [--swarm <on|off>] [--hook-debug <on|off>] [--sensor-timeout-ms <n>] [--question-retention-days <days|unlimited>] [--bypass <name>] [--clear-bypass <name>] [--local|--project|--global] [--dry-run] [--yes] [--download [--release-base-url <url>] [--ca-bundle <path>]]",
       "config project [--show [--json]|--check|--reset] [--plugins <names|all>] [--mcp <defaults|none>] [--completions <shell|none>] [--dry-run] [--yes] [--download [--release-base-url <url>] [--ca-bundle <path>]]",
       "config --pin <version> [--from <dir>] [--release-base-url <url>] [--ca-bundle <path>] [--offline]",
@@ -825,13 +826,13 @@ export const ROUTES: readonly Route[] = [
     group: "intent",
     kind: "custom",
     classification: "translation",
-    verbs: ["list", "switch", "<name>", "create", "archive", "unarchive"],
+    verbs: ["list", "switch", "<name>", "create", "archive", "unarchive", "add-repo", "remove-repo"],
     custom: "workspace",
     ...PUBLIC_ENGINE,
     human: [
       {
-        command: "intent [list|switch|create|archive|unarchive]",
-        summary: "list, switch, create, archive, or unarchive intent context",
+        command: "intent [list|switch|create|archive|unarchive|add-repo|remove-repo]",
+        summary: "list, switch, create, archive, or unarchive intent context; add or remove one of its sibling repos",
       },
     ],
     all: [
@@ -841,6 +842,8 @@ export const ROUTES: readonly Route[] = [
       "create [args]",
       "archive <name> [--reason <text>]",
       "unarchive <name>",
+      "add-repo <name>",
+      "remove-repo <name>",
     ],
   },
   {
@@ -1488,6 +1491,11 @@ export function renderCommandHelp(command: PublicCommand): string {
       sectionRow("flags", "Default scope, swarm, hook debug, sensor timeout, and bypasses"),
       sectionRow("project", "Plugins, MCP servers, and shell completions"),
       "",
+      heading("THE PIECE OF WORK YOU ARE ON", out),
+      `  ${cmd(`${invoke} config set <key> <value>`, out)}   Change one of its settings (depth, review, guard-policy, guard.<fence>, sensors, ...)`,
+      `  ${cmd(`${invoke} config get <key>`, out)}           Print one setting`,
+      `  ${cmd(`${invoke} config list`, out)}                List them all`,
+      "",
       heading("COMMON FLAGS", out),
       "  --pin <version>   Pin this project to an installed release",
       "  --download        Fetch and verify the release this project needs, if it is missing",
@@ -2058,6 +2066,13 @@ function resolveActionWithoutGlobalFlags(argv: string[]): Action {
 
   const alias = resolveAlias(argv);
   if (alias) return alias;
+
+  // The settings of the piece of work, typed at a terminal without `engine`
+  // (`config set guard.review-freeze off`, `config get depth`, `config list`):
+  // the same verbs the skills run. They used to fail as an unknown section.
+  if (argv[0] === "config" && ["set", "get", "list"].includes(argv[1] ?? "")) {
+    return resolveEngine(argv);
+  }
 
   const top = resolveTop(argv);
   if (top) return top;
@@ -2701,9 +2716,94 @@ async function runSensorScriptFile(
   return typeof process.exitCode === "number" ? process.exitCode : 0;
 }
 
+/**
+ * `knowledge onboard <path>` for a document the person named outside the
+ * space's `documents/` folder: the copy happens here, at the command layer, and
+ * the verb then indexes the copy. Before this, the knowledge tool refused and
+ * told the person to make the folder and copy the file themselves, which is
+ * work the engine can do for them. The copy lives in aidlc-utility.ts, which
+ * already owns it for `document-input --onboard`; the knowledge module is left
+ * alone, so its own writes stay confined to `documentkb/`.
+ *
+ * Only a path inside the project is copied. A path outside it, a symlink that
+ * leaves it, and a path already under `documents/` all reach the verb
+ * unchanged: the first two are refused there as before, and the last is
+ * indexed where it lies. The returned args carry the copy's path and what to
+ * say about it. A document over the per-document cap, or a folder over a batch
+ * cap, is refused here instead: the refusal is said and nothing is copied, so
+ * the verb's own after-the-fact refusal no longer leaves copies behind.
+ */
+// The knowledge verbs' flags that take a value, so the path is found as the
+// one token that is neither a flag nor a flag's value.
+const KNOWLEDGE_VALUE_FLAGS = new Set([
+  "--space", "--to", "--text-file", "--source-revision", "--project-dir",
+  "--copied-from", "--copied-ignored", "--copied-left-out",
+]);
+
+function knowledgePositionalAt(args: readonly string[]): number {
+  for (let index = 1; index < args.length; index++) {
+    const token = args[index];
+    if (token.startsWith("--")) continue;
+    if (KNOWLEDGE_VALUE_FLAGS.has(args[index - 1])) continue;
+    // `--intent` takes an optional value: a token after it is that value.
+    if (args[index - 1] === "--intent") continue;
+    return index;
+  }
+  return -1;
+}
+
+async function withNamedDocumentCopied(args: string[]): Promise<string[] | { refusal: string }> {
+  if (args[0] !== "onboard") return args;
+  const at = knowledgePositionalAt(args);
+  try {
+    const kb = await import("./aidlc-knowledge.ts");
+    const utility = await import("./aidlc-utility.ts");
+    const projectDir = delegatedProjectDir(args) ?? runtimeProjectDir();
+    const spaceAt = args.indexOf("--space");
+    const space = kb.resolveSpaceFlag(spaceAt === -1 ? undefined : args[spaceAt + 1], projectDir);
+    // The folder the verb reads from is the person's to fill, and an empty one
+    // is not a refusal: a sweep of it simply finds nothing to add.
+    utility.ensureKnowledgeDocumentsFolder(projectDir, kb, space);
+    if (at === -1) return args;
+    const given = args[at];
+    const absolute = isAbsolute(given) ? given : resolve(projectDir, given);
+    if (!existsSync(absolute)) return args;
+    const real = realpathSync(absolute);
+    const inside = (root: string): boolean =>
+      real === root || real.startsWith(root.endsWith(sep) ? root : `${root}${sep}`);
+    if (!inside(realpathSync(projectDir))) return args;
+    const documents = kb.documentsDir(projectDir, space);
+    if (existsSync(documents) && inside(realpathSync(documents))) return args;
+    const copied = utility.copyNamedDocumentIntoKnowledge(projectDir, kb, space, absolute);
+    // Over a cap: the person hears why in their own terms, and nothing was
+    // copied, so a retry adds no second folder.
+    if ("refusal" in copied) return copied;
+    const next = [...args];
+    next[at] = copied.target;
+    return [
+      ...next,
+      "--copied-from", given,
+      "--copied-ignored", copied.gitIgnored,
+      ...(copied.leftOut > 0 ? ["--copied-left-out", String(copied.leftOut)] : []),
+    ];
+  } catch {
+    // Nothing copied and nothing said: the verb runs on what it was given and
+    // reports its own refusal.
+    return args;
+  }
+}
+
 async function execute(action: Action): Promise<number> {
   const isCompiled = isCompiledExecutable();
   if (action.type === "delegate") {
+    if (action.tool === TOOLS.knowledge) {
+      const prepared = await withNamedDocumentCopied(action.args);
+      if (!Array.isArray(prepared)) {
+        text(2, `${prepared.refusal}\n`);
+        return 1;
+      }
+      action = { ...action, args: prepared };
+    }
     // Tool modules are imported lazily in compiled mode to keep dev-mode startup
     // fast and to avoid loading every tool for help/version calls.
     return isCompiled
@@ -2885,6 +2985,30 @@ export function terminalDispatcherArgv(command: {
     route.namespace === "public" && route.group === "top" && route.verbs.includes(command.subcommand)
   );
   return publicTop ? [command.subcommand, ...forwarded] : ["engine", command.subcommand, ...forwarded];
+}
+
+/**
+ * `config set|get|list` typed at a terminal are the engine's verbs for the
+ * piece of work: the same argv with `engine` in front, so route policy, the
+ * major check, pin dispatch and the launcher's pin classification all see one
+ * route (in a project pinned to another release, the pinned engine writes the
+ * work's settings). Global flags before the command stay where they are. Any
+ * other `config` argv (the install sections) is returned unchanged.
+ */
+export function normalizeTopLevelConfigVerbs(argv: readonly string[]): string[] {
+  for (let index = 0; index < argv.length; index++) {
+    const token = argv[index];
+    if (token === "--project-dir") {
+      index++;
+      continue;
+    }
+    if (LAUNCHER_GLOBAL_FLAGS.has(token) || token === "--no-color") continue;
+    if (token === "config" && ["set", "get", "list"].includes(argv[index + 1] ?? "")) {
+      return [...argv.slice(0, index), "engine", ...argv.slice(index)];
+    }
+    return [...argv];
+  }
+  return [...argv];
 }
 
 export function routePolicyFor(argv: readonly string[]): Route | null {
@@ -3219,6 +3343,9 @@ async function publicCommandGrammarError(
   }
   const normalized = normalizePublicCommandArgv(argv, command, invocation);
   if (command === "config") {
+    // `config set|get|list` are the engine's verbs for the piece of work, routed
+    // by resolveActionWithoutGlobalFlags; the install sections' grammar is not theirs.
+    if (["set", "get", "list"].includes(normalized[1] ?? "")) return null;
     const { validatePublicConfigArgs } = await import("./aidlc-init.ts");
     return validatePublicConfigArgs(normalized);
   }
@@ -3401,8 +3528,8 @@ export async function main(rawArgv: string[]): Promise<void> {
     return;
   }
   // Canonicalized before route policy so stdin buffering, pinning, and
-  // dispatch see `engine hook`.
-  const argv = canonicalizeLegacyCopilotHookArgv(rawArgv);
+  // dispatch see `engine hook`, and `config set|get|list` as `engine config`.
+  const argv = normalizeTopLevelConfigVerbs(canonicalizeLegacyCopilotHookArgv(rawArgv));
   process.exitCode = 0;
   bufferedStdin = null;
   const tracedHook = tracedHookRoute(argv);

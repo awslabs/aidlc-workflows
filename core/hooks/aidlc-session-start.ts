@@ -35,6 +35,7 @@ import { runAnchor } from "../tools/aidlc-attest.ts";
 import { appendAuditEntry } from "../tools/aidlc-audit.ts";
 import { stageGraphDrift } from "../tools/aidlc-graph.ts";
 import { addRootBlocks, repointHarnessIncludes, trackedKiroIdeSteeringAsk } from "../tools/aidlc-includes.ts";
+import { kiroIdeWorkflowsAsk } from "../tools/aidlc-kiro-ide-workflows.ts";
 import {
   isBindableIntentRecordName,
   isSafeIntentRecordName,
@@ -84,7 +85,7 @@ import {
 } from "../tools/aidlc-lib.ts";
 import { writeCurrentTranscriptPath } from "../tools/aidlc-usage.ts";
 import { recordRulesLoad } from "../tools/aidlc-rules-held.ts";
-import { aidlcToolInvocation, entrySkillInvocation, hidesStopNote, runtimeHarnessName } from "../tools/aidlc-runtime-paths.ts";
+import { aidlcInvocation, aidlcToolInvocation, entrySkillInvocation, hidesStopNote, runtimeHarnessName } from "../tools/aidlc-runtime-paths.ts";
 import { switchesOffLines } from "../tools/aidlc-recorded-switches.ts";
 
 // While a recorded switch keeps one of the person's checks off, every new chat
@@ -272,14 +273,23 @@ if (sessionId && !rebindCheckOnly) {
 }
 
 // Kiro IDE: a repo that committed the steering file before AI-DLC wrote the
-// memory text into it keeps tracking it; the person is asked once.
+// memory text into it keeps tracking it; the person is asked once. With Kiro's
+// Workflows feature on, AI-DLC's reviews and helpers cannot run in the chat;
+// the person is asked once per machine whether to turn it off.
 let trackedSteeringAsk = "";
 if (sessionId && !rebindCheckOnly) {
+  const asks: string[] = [];
   try {
-    trackedSteeringAsk = trackedKiroIdeSteeringAsk(projectDir);
+    asks.push(trackedKiroIdeSteeringAsk(projectDir));
   } catch {
     // Asked at a later start.
   }
+  try {
+    if (runtimeHarnessName(projectDir) === "kiro-ide") asks.push(kiroIdeWorkflowsAsk(aidlcInvocation()));
+  } catch {
+    // Asked at a later start.
+  }
+  trackedSteeringAsk = asks.filter(Boolean).join("\n");
 }
 
 const stateFile = stateFilePathForSelection(projectDir, selection);
@@ -320,7 +330,8 @@ if (!existsSync(stateFile)) {
     process.stdout.write(hookContextLine(
       "SessionStart",
       `AIDLC Runtime Session: ${sessionId}\n` +
-        "Use this exact value for any Plan Approval --session argument in this conversation." +
+        "Use this exact value for any Plan Approval --session argument in this conversation. It goes only on a " +
+        "command that asks for --session, never on next." +
         rejoin +
         (rebindCheckOnly ? "" : switchOffContext(projectDir)) +
         (trackedSteeringAsk ? `\n${trackedSteeringAsk}` : ""),
@@ -569,7 +580,7 @@ try {
   // An unreadable install keeps the default step.
 }
 const sayTheLine = hidesTheNote
-  ? ". This tool does not show that line to the person, so if you carry on with the work, first say it to them once, on its own line, and nothing else about it."
+  ? ". This tool does not show that line to the person. If you had just asked them a question, record it and end your turn saying nothing; otherwise, if you carry on with the work, first say it to them once, on its own line, and nothing else about it."
   : ", and say nothing about it.";
 
 const context = `AIDLC WORKFLOW ACTIVE

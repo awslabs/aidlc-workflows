@@ -362,13 +362,14 @@ changes** options are unlettered. All `[Answer]:` tags start blank.
 Multi-select questions add "(select all that apply)" to the question text;
 answer format: `[Answer]: A, B, E`.
 
-When the stage's `<slug>-questions.md` already holds an answer of the person's
-(an `[Answer]:` with more than blanks or underscores), the run-stage directive
-carries `questions_answered` (`path`), on `next --resume`, a bare `next` and
-every re-issue alike, in a new chat or the same one. The conductor keeps the
-file and carries on from where its answers stop (blank questions, then an
-unanswered summary confirmation, then the stage's next step), never creating it
-again or asking an answered question again (#1873). A redo the person asked for
+When the stage's `<slug>-questions.md` already exists with its questions (an
+`[Answer]:` tag, filled in or still blank), the run-stage directive carries
+`questions_answered` (`path`), on `next --resume`, a bare `next` and every
+re-issue alike, in a new chat or the same one. The conductor keeps the file and
+carries on from where its answers stop (the blank questions as written, all of
+them when none is answered yet, then an unanswered summary confirmation, then
+the stage's next step), never creating it again, writing new questions over it,
+or asking an answered question again (#1873). A redo the person asked for
 (`artifact_reuse`, which drops the field, or Redo from scratch) starts afresh.
 
 **Step 2: Use the directive's answer mode, or present the mode choice.** The
@@ -1082,6 +1083,18 @@ distinct. Required-file presence and safe capture checks still apply, and
 snapshots retain the actual bytes for swarm merging. Only confirmation
 bookkeeping preserves the review fingerprint; substantive question changes
 invalidate its content binding even though the write is permitted.
+
+**Line endings.** Every committed text file is fingerprinted with CRLF read
+as LF (`committedTextBytes`): stage documents in review receipts and
+checkpoint evidence, stage validity receipts, a Unit's `source-manifest.json`
+and reviewed-source evidence, and the source files of the workspace listing.
+A checkout that turns line endings, such as Git for Windows' `core.autocrlf`,
+is no change to approved work, and a file with LF line endings fingerprints
+as it always did. A value recorded over the raw bytes before this (a CRLF
+working tree) still matches the same content. Only text Git itself converts
+is read this way: a file with a NUL byte, a lone CR, or more than one control
+byte in 128 printable ones is binary to Git and fingerprinted as it is, so a
+lone CR in it is a change. Source files are read a chunk at a time.
 
 Reviewed outputs remain frozen. If `review_artifact` explicitly names a
 questions artifact, it remains fully byte-bound and frozen, including its

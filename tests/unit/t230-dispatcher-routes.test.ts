@@ -40,6 +40,7 @@ import {
   renderNamespaceHelp,
   resolveAction,
   resolveHookPath,
+  normalizeTopLevelConfigVerbs,
   routePolicyFor,
 } from "../../core/tools/aidlc.ts";
 import { validatePublicConfigArgs } from "../../core/tools/aidlc-init.ts";
@@ -444,6 +445,20 @@ describe("t230 dispatcher route parity", () => {
       fixture: true,
     },
     {
+      name: "intent add-repo maps through workspace parser with its name",
+      routerArgs: ["engine", "intent", "add-repo", "no-such-repo"],
+      tool: "aidlc-utility.ts",
+      toolArgs: ["intent", "add-repo", "no-such-repo"],
+      fixture: true,
+    },
+    {
+      name: "intent remove-repo maps through workspace parser with its name",
+      routerArgs: ["engine", "intent", "remove-repo", "no-such-repo"],
+      tool: "aidlc-utility.ts",
+      toolArgs: ["intent", "remove-repo", "no-such-repo"],
+      fixture: true,
+    },
+    {
       name: "intent list --all maps through workspace parser",
       routerArgs: ["engine", "intent", "list", "--all"],
       tool: "aidlc-utility.ts",
@@ -487,6 +502,29 @@ describe("t230 dispatcher route parity", () => {
       routerArgs: ["engine", "config", "get", "depth"],
       tool: "aidlc-utility.ts",
       toolArgs: ["config-get", "depth"],
+      fixture: true,
+    },
+    // The person's own terminal form: `config set|get|list` with no `engine`
+    // routes to the same utility verbs (it used to fail as an unknown section).
+    {
+      name: "top-level config get maps to config-get",
+      routerArgs: ["config", "get", "depth"],
+      tool: "aidlc-utility.ts",
+      toolArgs: ["config-get", "depth"],
+      fixture: true,
+    },
+    {
+      name: "top-level config list maps to config-list",
+      routerArgs: ["config", "list"],
+      tool: "aidlc-utility.ts",
+      toolArgs: ["config-list"],
+      fixture: true,
+    },
+    {
+      name: "top-level config set maps to config-change",
+      routerArgs: ["config", "set", "guard.review-freeze", "off"],
+      tool: "aidlc-utility.ts",
+      toolArgs: ["config-change", "--guard.review-freeze", "off"],
       fixture: true,
     },
     {
@@ -2390,6 +2428,27 @@ describe("t230 dispatcher route completeness", () => {
       "versions-prune": { networkPolicy: "forbidden", mutationScope: "machine" },
       "workspace-sync": { networkPolicy: "required", mutationScope: "project" },
     });
+  });
+
+  test("top-level config set|get|list are the engine's verbs for route policy and pin dispatch", () => {
+    // main() rewrites them before route policy, so in a project pinned to
+    // another release the pinned engine writes the work's settings, and the
+    // launcher's pin classification (launcherRouteUsesPin) agrees.
+    for (const argv of [
+      ["config", "set", "guard.review-freeze", "off"],
+      ["config", "get", "depth"],
+      ["config", "list"],
+      ["--project-dir", "/tmp/example", "config", "set", "depth", "minimal", "--json"],
+    ]) {
+      const normalized = normalizeTopLevelConfigVerbs(argv);
+      expect(normalized, argv.join(" ")).toEqual([...argv.slice(0, argv.indexOf("config")), "engine", ...argv.slice(argv.indexOf("config"))]);
+      expect(routePolicyFor(normalized), argv.join(" ")).toEqual(expect.objectContaining({ id: "config", pinPolicy: "pinned" }));
+      expect(launcherRouteUsesPin(normalized), argv.join(" ")).toBe(true);
+    }
+    // The install sections keep their own route.
+    for (const argv of [["config"], ["config", "models", "--show"], ["config", "--pin", "2.10.0"], ["engine", "config", "list"]]) {
+      expect(normalizeTopLevelConfigVerbs(argv), argv.join(" ")).toEqual(argv);
+    }
   });
 
   test("aliases and system delegates resolve policy from the route registry", () => {

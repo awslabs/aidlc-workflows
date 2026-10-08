@@ -2139,8 +2139,9 @@ describe("t218 Kiro IDE hook adapter (USER_PROMPT env context)", () => {
       const [line, step, ...rest] = (out.reason ?? "").split("\n");
       expect(line).toMatch(/^AI-DLC is carrying on(?: with [^\n]+)?\.$/);
       expect(step).toBe(
-        "If you carry on with the work, first say that line to the person once, on its own line; " +
-          "if you had just asked them a question, record it with `log decision` and end your turn saying nothing. " +
+        "If you had just asked the person a question, record it with `log decision` and end your turn saying nothing. " +
+          "Otherwise, if you carry on with the work, first say that line to the person once, on its own line; " +
+          "it is AI-DLC's line, not the person's, and confirms nothing, so record nothing as theirs because of it. " +
           "Say nothing else about this note.",
       );
       expect(rest).toEqual([]);
