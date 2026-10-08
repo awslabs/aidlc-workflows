@@ -62,6 +62,7 @@ Path: `.claude/knowledge/aidlc-product-agent/`
 
 | File | Content |
 |------|---------|
+| corner-checklist.md | Edge conditions to sweep per component (empty, missing, partial failure, two copies of one fact, ...) when writing or reviewing requirements |
 | functional-design-guide.md | Functional design methodology |
 | market-research-methods.md | Market research techniques and templates |
 | prioritization-frameworks.md | MoSCoW, WSJF, RICE, Kano frameworks |

@@ -67,7 +67,8 @@
 // 0 (the .sh only grepped stdout); (c.1) asserts the abort subcommand reported
 // discarded:true on its stdout envelope on top of the on-disk teardown.
 
-import { afterAll, describe, expect, test } from "bun:test";
+import { NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS, NATIVE_FIXTURE_SETUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "../harness/test-budget.ts";
+import { afterAll, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
   existsSync,
@@ -90,6 +91,8 @@ import {
   setupWorktreeFixture,
 } from "../harness/fixtures.ts";
 
+setDefaultTimeout(NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
+
 const BUN = process.execPath;
 const WORKTREE_TOOL = join(AIDLC_SRC, "tools", "aidlc-worktree.ts");
 const BOLT_TOOL = join(AIDLC_SRC, "tools", "aidlc-bolt.ts");
@@ -109,7 +112,7 @@ interface CliResult {
 
 /** Spawn `bun <tool> ... --project-dir <proj>` from inside the project dir. */
 function run(tool: string, args: string[], proj: string): CliResult {
-  const res = spawnSync(BUN, [tool, ...args, "--project-dir", proj], {
+  const res = spawnSync(BUN, [tool, ...args, "--project-dir", proj], { timeout: remainingOperationTimeoutMs(NATIVE_FIXTURE_SETUP_TIMEOUT_MS),
     cwd: proj,
     encoding: "utf-8",
   });
@@ -169,14 +172,14 @@ function makeBoltFixture(): string {
     ].join("\n"),
     "utf-8",
   );
-  const add = spawnSync("git", ["add", "-A"], { cwd: proj, encoding: "utf-8" });
+  const add = spawnSync("git", ["add", "-A"], { timeout: remainingOperationTimeoutMs(NATIVE_FIXTURE_SETUP_TIMEOUT_MS), cwd: proj, encoding: "utf-8" });
   if ((add.status ?? -1) !== 0) {
     throw new Error(`git add -A failed: ${add.stderr ?? add.stdout}`);
   }
   const commit = spawnSync(
     "git",
     ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--amend", "--no-edit"],
-    { cwd: proj, encoding: "utf-8" },
+    { timeout: remainingOperationTimeoutMs(NATIVE_FIXTURE_SETUP_TIMEOUT_MS), cwd: proj, encoding: "utf-8" },
   );
   if ((commit.status ?? -1) !== 0) {
     throw new Error(`git commit --amend failed: ${commit.stderr ?? commit.stdout}`);
@@ -252,7 +255,7 @@ describe("t12 (a) single-Bolt round-trip (migrated from t12-bolt-runtime-graph-f
     expect(start.status).toBe(0);
     expect(start.stdout).toContain("RUNTIME_GRAPH_FORKED");
     expect(existsSync(wtFragment(proj, "solo"))).toBe(true);
-  }, 60000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("a.2 single-Bolt complete --merge: fragment removed + success-JSON carries RUNTIME_GRAPH_MERGED", () => {
     const proj = makeBoltFixture();
@@ -263,7 +266,7 @@ describe("t12 (a) single-Bolt round-trip (migrated from t12-bolt-runtime-graph-f
     expect(comp.status).toBe(0);
     expect(comp.stdout).toContain("RUNTIME_GRAPH_MERGED");
     expect(existsSync(wtFragment(proj, "solo"))).toBe(false);
-  }, 60000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("a.3 single-Bolt compile: no instances[] on the parent (L5 >=2 slug threshold)", () => {
     const proj = makeBoltFixture();
@@ -293,7 +296,7 @@ describe("t12 (a) single-Bolt round-trip (migrated from t12-bolt-runtime-graph-f
       // bun -e printed Boolean(cg && 'instances' in cg) === false in that case.
       expect(cg).toBeNull();
     }
-  }, 60000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 });
 
 // ===========================================================================
@@ -331,7 +334,7 @@ describe("t12 (b) 3-Bolt parallel batch + deterministic merge ordering", () => {
     expect(existsSync(frags.pay)).toBe(true);
     expect(existsSync(frags.auth)).toBe(true);
     expect(existsSync(frags.cart)).toBe(true);
-  }, 120000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("b.2 3-Bolt complete --merge (arbitrary order): all three fragments removed", () => {
     const { proj, frags } = buildThreeBoltFixture();
@@ -343,7 +346,7 @@ describe("t12 (b) 3-Bolt parallel batch + deterministic merge ordering", () => {
     expect(existsSync(frags.pay)).toBe(false);
     expect(existsSync(frags.auth)).toBe(false);
     expect(existsSync(frags.cart)).toBe(false);
-  }, 120000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("b.3 3-Bolt compile: instances[].bolt = [auth, cart, pay] (alphabetical, NOT merge order)", () => {
     const { proj } = buildThreeBoltFixture();
@@ -358,7 +361,7 @@ describe("t12 (b) 3-Bolt parallel batch + deterministic merge ordering", () => {
     // Alphabetical by Bolt slug regardless of the user's merge order
     // (aidlc-runtime.ts:485-486).
     expect((instances ?? []).map((i) => i.bolt)).toEqual(["auth", "cart", "pay"]);
-  }, 120000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 });
 
 // ===========================================================================
@@ -379,7 +382,7 @@ describe("t12 (c) abort-discard leaves no orphan fragments", () => {
     // via git worktree remove — no manual fragment-merge call needed.
     expect(existsSync(wtDir(proj, "doomed"))).toBe(false);
     expect(existsSync(wtFragment(proj, "doomed"))).toBe(false);
-  }, 60000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("c.2 abort without --discard: worktree + fragment preserved (halt-and-ask default)", () => {
     const proj = makeBoltFixture();
@@ -390,7 +393,7 @@ describe("t12 (c) abort-discard leaves no orphan fragments", () => {
     // No --discard => worktree dir + fragment both preserved for inspection.
     expect(existsSync(wtDir(proj, "kept"))).toBe(true);
     expect(existsSync(wtFragment(proj, "kept"))).toBe(true);
-  }, 60000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("c.3 manual aidlc-worktree discard: fragment removed transitively (defense-in-depth)", () => {
     const proj = makeBoltFixture();
@@ -405,5 +408,5 @@ describe("t12 (c) abort-discard leaves no orphan fragments", () => {
     expect(discard.status).toBe(0);
     expect(existsSync(wtDir(proj, "kept"))).toBe(false);
     expect(existsSync(wtFragment(proj, "kept"))).toBe(false);
-  }, 60000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 });

@@ -1,16 +1,29 @@
-import { FAMILIES, liveMatrix, VERIFICATION_FAMILIES, type VerificationFamily } from "./ci-live-filter.ts";
+import { FAMILIES, LIVE_MATRICES, liveMatrix, VERIFICATION_FAMILIES, type LiveMatrixKind, type VerificationFamily } from "./ci-live-filter.ts";
 
 export const FULL_SUITE_JOBS = [
-  "plan", "native_terminal", "native_reconcile", "deterministic", "production_guards", "live_prepare", "live_hosted",
-  "live_windows", "release_contract_windows",
+  "plan", "native_terminal", "native_reconcile", "deterministic", "scope_runs", "production_guards",
+  "live_prepare_linux", "live_prepare_macos", "live_prepare_windows", "live_linux",
+  "live_macos", "live_windows", "release_contract_windows",
 ] as const;
 
-// Stable promotion rejects evidence produced under the former optional-live policy.
-export const FULL_SUITE_COVERAGE_POLICY = "required-hosted-live-v1";
+// Stable promotion requires the current bounded-shard job and omission contract.
+export const FULL_SUITE_COVERAGE_POLICY = "required-hosted-live-shards-v3";
+export const RELEASE_OMITTED_JOBS = ["deterministic", "production_guards"] as const;
 export const LIVE_VERIFICATION_OMITTED_JOBS = [
-  "native_terminal", "native_reconcile", "deterministic", "production_guards",
+  "native_terminal", "native_reconcile", "deterministic", "scope_runs", "production_guards",
 ] as const;
-export type SuitePurpose = "release" | "live-verification";
+// Full verification may select an unmerged head, so it never reaches a job that
+// receives OIDC or AWS credentials; live coverage of a candidate uses
+// live-verification's separately authorized boundary. Its deterministic job
+// already runs the scope runs and the guard matrix, so it omits scope_runs.
+export const FULL_VERIFICATION_OMITTED_JOBS = [
+  "scope_runs", "live_prepare_linux", "live_prepare_macos", "live_prepare_windows", "live_linux", "live_macos", "live_windows",
+] as const;
+export type SuitePurpose = "release" | "live-verification" | "full-verification";
+
+function isSuitePurpose(value: string): value is SuitePurpose {
+  return value === "release" || value === "live-verification" || value === "full-verification";
+}
 
 type JobResult = "success" | "failure" | "cancelled" | "skipped";
 export type SuiteNeeds = Record<string, { result: JobResult }>;
@@ -33,7 +46,13 @@ export interface FullSuiteResult extends SuiteIdentity {
   omittedLegs: string[];
 }
 
-/** Required jobs succeed; only live verification may intentionally omit declared jobs. */
+/** The legs whose status this run's purpose does not accept: an omitted leg
+ *  must be skipped, every other leg must pass. */
+export function unmetLegs(legs: Record<string, string>, omittedLegs: readonly string[]): Array<[string, string]> {
+  return Object.entries(legs).filter(([job, status]) => status !== (omittedLegs.includes(job) ? "skipped" : "success"));
+}
+
+/** Every purpose has an explicit omission set; all other declared jobs are required. */
 export function fullSuiteResult(
   needs: SuiteNeeds,
   identity: SuiteIdentity,
@@ -45,25 +64,28 @@ export function fullSuiteResult(
     .map((job) => [job, needs[job]?.result ?? "missing"]));
   const excluded = Object.entries(FAMILIES).filter(([, family]) => family.hosting === "excluded")
     .map(([name]) => name).sort();
-  const omittedLegs: string[] = purpose === "live-verification" ? [...LIVE_VERIFICATION_OMITTED_JOBS] : [];
+  const omittedLegs: string[] = purpose === "live-verification" ? [...LIVE_VERIFICATION_OMITTED_JOBS]
+    : purpose === "full-verification" ? [...FULL_VERIFICATION_OMITTED_JOBS] : [...RELEASE_OMITTED_JOBS];
   if (purpose === "live-verification" && verificationFamily !== "all") omittedLegs.push("release_contract_windows");
   let validTestSelection = !verificationTest;
   let verificationPlatforms: NodeJS.Platform[] | undefined;
   if (verificationTest && purpose === "live-verification" && verificationFamily !== "all") {
     try {
-      const hosted = liveMatrix("hosted", verificationFamily, verificationTest).include;
-      const windows = liveMatrix("windows", verificationFamily, verificationTest).include;
-      verificationPlatforms = [...new Set([...hosted, ...windows].map(row => row.platform))];
+      const matrices = (Object.keys(LIVE_MATRICES) as LiveMatrixKind[])
+        .map((kind) => [kind, liveMatrix(kind, verificationFamily, verificationTest).include] as const);
+      verificationPlatforms = [...new Set(matrices.flatMap(([, rows]) => rows.map(row => row.platform)))];
       validTestSelection = verificationPlatforms.length > 0;
-      if (hosted.length === 0) omittedLegs.push("live_hosted");
-      if (windows.length === 0) omittedLegs.push("live_windows");
+      for (const [kind, rows] of matrices) {
+        if (rows.length === 0) omittedLegs.push(`live_${kind}`, `live_prepare_${kind}`);
+      }
     } catch { /* Unknown or mismatched selections never qualify. */ }
   }
   const passed = /^[a-f0-9]{40}$/.test(identity.sha) &&
+    isSuitePurpose(purpose) &&
     validTestSelection &&
     VERIFICATION_FAMILIES.includes(verificationFamily) &&
     (purpose === "live-verification" || verificationFamily === "all") &&
-    Object.entries(legs).every(([job, status]) => status === (omittedLegs.includes(job) ? "skipped" : "success"));
+    unmetLegs(legs, omittedLegs).length === 0;
   return {
     ...identity,
     purpose,
@@ -83,7 +105,7 @@ export function fullSuiteResult(
 
 if (import.meta.main) {
   const purpose = process.env.FULL_SUITE_PURPOSE ?? "release";
-  if (purpose !== "release" && purpose !== "live-verification") {
+  if (!isSuitePurpose(purpose)) {
     console.error(`::error::Invalid full-suite purpose: ${purpose}`);
     process.exit(1);
   }
@@ -105,12 +127,12 @@ if (import.meta.main) {
     if (result.verificationTest && (purpose !== "live-verification" || verificationFamily === "all")) {
       console.error("::error::Exact test selection requires live-verification mode and one verification family");
     }
-    if (purpose === "release" && verificationFamily !== "all") {
-      console.error("::error::Release evidence requires verificationFamily=all");
+    if (purpose !== "live-verification" && verificationFamily !== "all") {
+      const label = purpose === "release" ? "Release evidence" : "Full verification";
+      console.error(`::error::${label} requires verificationFamily=all`);
     }
     console.error(`::error::Incomplete full suite for ${result.sha || process.env.FULL_SUITE_REF || "unknown ref"}: ` +
-      Object.entries(result.legs).filter(([job, status]) => status !== (result.omittedLegs.includes(job) ? "skipped" : "success"))
-        .map(([job, status]) => `${job}=${status}`).join(", "));
+      unmetLegs(result.legs, result.omittedLegs).map(([job, status]) => `${job}=${status}`).join(", "));
     process.exitCode = 1;
   }
 }

@@ -13,7 +13,7 @@ export const TEST_MATRIX_LIVE_GATES = [
   "AIDLC_RELEASE_CONTRACT_LIVE",
 ] as const;
 export type AllowedLiveGate = typeof TEST_MATRIX_LIVE_GATES[number];
-export type TestMatrixBackend = "bun" | "tmux" | "node-pty" | "none";
+export type TestMatrixBackend = "bun" | "tmux" | "none";
 export interface TestMatrixCase { classname: string; name: string }
 export interface TestMatrixFile { path: string; cases: TestMatrixCase[] }
 export interface TestMatrixRuntimeIdentity {
@@ -90,7 +90,7 @@ export interface TestMatrixReceiptInput {
   gates: Record<string, string | null | undefined>;
 }
 
-const backends = ["bun", "tmux", "node-pty", "none"];
+const backends = ["bun", "tmux", "none"];
 const platforms = ["aix", "android", "darwin", "freebsd", "haiku", "linux", "openbsd", "sunos", "win32", "cygwin", "netbsd"];
 const fileStates = ["PASS", "FAIL", "SKIP", "TIMED_OUT", "INCOMPLETE", "ERROR"];
 const runStates = ["PASS", "FAIL", "ERROR", "INTERRUPTED", "INCOMPLETE"];

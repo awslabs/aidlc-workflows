@@ -49,7 +49,7 @@ from the compiled stage graph and scope grid:
   single-line preview to the state `Project` field
 - Project type (greenfield/brownfield from workspace-detection)
 - Workspace state (languages, frameworks, build system from workspace-detection)
-- Start date — run `date -u +'%Y-%m-%dT%H:%M:%SZ'` via Bash
+- Start date: the time `{{INVOKE}} engine now` prints
 - Scope configuration (stages to execute/skip per scope routing)
 - Full stage progress checkboxes (all stages, with INITIALIZATION stages marked [x] for workspace-scaffold, workspace-detection)
 - Mark state-init as `[-]` in progress
@@ -87,7 +87,7 @@ Update aidlc-state.md with the routing decision:
 ### Step 5: Update State and Audit
 
 1. Mark state-init as `[x]` completed in `<record>/aidlc-state.md`
-2. Append WORKSPACE_INITIALISED event to `<record>/audit/<host>-<clone>.md` with project type and tech stack summary
+2. The engine records WORKSPACE_INITIALISED in the audit trail, with the project type and tech stack summary; never append it yourself
 
 ### Step 6: Auto-Proceed
 

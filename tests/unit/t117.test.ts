@@ -10,9 +10,9 @@
 // in the covers header) because the jump branch's observable contract IS that
 // resolve's `direction` / `target_slug` is what the engine surfaces: tests 1-3
 // fire `bun aidlc-jump.ts resolve ...` directly and assert the same `direction`
-// value the engine relays into its run-stage directive, and the SKIP-for-scope
-// error (test 4) is resolve's VERBATIM `is skipped for scope` wording
-// (aidlc-jump.ts:117-119) the engine passes through unchanged.
+// value the engine relays into its run-stage directive, and test 4 pins
+// resolve's `target_skipped` mark for a stage the plan skips (the engine asks
+// with --allow-skipped; without it resolve still refuses).
 //
 // MECHANISM = cli: every .sh case shelled out to `bun "$TOOL" ...` (the engine)
 // and, for the jump cases, also `bun "$JUMP_TOOL" resolve ...`. We preserve the
@@ -32,7 +32,8 @@
 //   - .sh T3  OUT  '"stage":"code-generation"'        -> t3
 //             DIR  '"direction":"redo"'               -> t3
 //   - .sh T4  OUT  '"kind":"error"'                   -> t4
-//             OUT  'is skipped for scope'             -> t4 (resolve verbatim)
+//             OUT  'is skipped for scope'             -> t4 (resolve without
+//                  --allow-skipped; the engine's own message names --single)
 //   - .sh T5  OUT  direct continuation                -> t5 (resume, jumped)
 //   - .sh T6  OUT  direct continuation                -> t6 (resume, mid-ideation)
 //   - .sh T7  OUT  '"kind":"error"'                   -> t7 (init guard)
@@ -71,7 +72,12 @@
 // AWS_AIDLC_DEFAULT_SCOPE so a developer's exported value can't shadow the
 // fixtures; the env-scope case (t10) sets it explicitly in the spawn env only.
 
-import { afterAll, describe, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { afterAll, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
@@ -85,6 +91,8 @@ import {
   seededStateFile,
   seedStateFile,
 } from "../harness/fixtures.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const BUN = process.execPath; // the bun running this test
 const REPO_ROOT = join(import.meta.dir, "..", "..");
@@ -152,6 +160,7 @@ function run(
     delete childEnv.AWS_AIDLC_DEFAULT_SCOPE;
   }
   const res = spawnSync(BUN, [tool, ...args, "--project-dir", p], {
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     encoding: "utf-8",
     env: childEnv,
   });
@@ -244,18 +253,28 @@ describe("t117 jump-direction delegation (migrated from t117-orchestrate-branche
     expect(resolved.direction).toBe("redo");
   });
 
-  // --- Test 4: jump to a SKIP-for-scope stage → error (verbatim resolve wording) ---
-  // state-mid-inception is bugfix scope; intent-capture is SKIP. The engine
-  // relays resolve's VERBATIM `is skipped for scope` message (aidlc-jump.ts:117-119).
-  test("4: jump to SKIP-for-scope stage → error carrying resolve's verbatim wording", () => {
+  // --- Test 4: jump BEHIND the cursor to a stage the plan skips ---
+  // state-mid-inception is bugfix scope at requirements-analysis; intent-capture
+  // is SKIP and behind it. Going back would run every stage after it again, so
+  // the engine names the isolated run instead of "change scope". resolve marks
+  // the skipped target (the engine asks with --allow-skipped) and still refuses
+  // it for a caller that does not.
+  test("4: jump behind the cursor to a skipped stage -> a question offering the isolated run", () => {
     const p = proj("state-mid-inception.md");
     const r = next(["--stage", "intent-capture"], p);
-    expect(r.out).toContain('"kind":"error"');
-    expect(r.out).toContain("is skipped for scope");
-    // S1: the directive is a well-formed error directive, not a stray substring.
+    // S1: the directive is a well-formed step that ends the turn on the question.
     const d = directive(r.stdout);
-    expect(d.kind).toBe("error");
-    expect(d.message).toContain("is skipped for scope");
+    expect(d.kind).toBe("print");
+    expect(d.message).toContain("comes before the current stage, Requirements Analysis");
+    expect(d.message).toContain("Do you want me to run it on its own now");
+    expect(d.message).toContain("--stage intent-capture --single");
+    expect(d.message).not.toContain("change scope");
+    const marked = directive(jumpResolve(["--stage", "intent-capture", "--allow-skipped"], p).stdout);
+    expect(marked.target_skipped).toBe(true);
+    expect(marked.direction).toBe("backward");
+    const refused = jumpResolve(["--stage", "intent-capture"], p);
+    expect(refused.status).not.toBe(0);
+    expect(refused.out).toContain("is skipped for scope");
   });
 });
 
@@ -271,7 +290,13 @@ describe("t117 explicit resume routing", () => {
     const r = runOrchestrateNext(ORCH, p, ["--resume"]);
     expect(r.directive?.kind).toBe("run-stage");
     expect(r.directive?.stage).toBe("code-generation");
-    expect(r.steering.length).toBeGreaterThan(0);
+    // The rules ride inline on the run-stage (no load-steering hop): the
+    // delivered paths are exactly the rules the directive names.
+    expect(r.steering.length).toBe(0);
+    expect(inlineRulePaths(r.directive)).toEqual(
+      r.directive?.rules_in_context as string[],
+    );
+    expect(inlineRulePaths(r.directive).length).toBeGreaterThan(0);
   });
 
   // --- Test 6: resume over a mid-phase fixture → current stage ---
@@ -280,9 +305,19 @@ describe("t117 explicit resume routing", () => {
     const r = runOrchestrateNext(ORCH, p, ["--resume"]);
     expect(r.directive?.kind).toBe("run-stage");
     expect(r.directive?.stage).toBe("feasibility");
-    expect(r.steering.length).toBeGreaterThan(0);
+    expect(r.steering.length).toBe(0);
+    expect(inlineRulePaths(r.directive)).toEqual(
+      r.directive?.rules_in_context as string[],
+    );
+    expect(inlineRulePaths(r.directive).length).toBeGreaterThan(0);
   });
 });
+
+// The deduplicated rule paths a run-stage delivers inline through rules_content.
+function inlineRulePaths(directive: Record<string, unknown> | null): string[] {
+  const entries = (directive?.rules_content ?? []) as Array<{ path: string }>;
+  return [...new Set(entries.map((entry) => entry.path))];
+}
 
 // ============================================================
 // Init branch — guard rejection (state exists) and clean-workspace print.
@@ -395,11 +430,13 @@ describe("t117 flag-validation, env-scope, scope/config change, phase jump, free
 
 describe("t117 init-stage jump guard", () => {
   // --- Test 15: init-stage jump guard — --stage <init>, state present ---
-  test("15: jump to init stage (state present) → error, not run-stage", () => {
+  // With work under way the refusal is a plain question the agent acts on.
+  test("15: jump to init stage (state present) → refused with the rescan offered, not run-stage", () => {
     const p = proj("state-jumped.md");
     const r = next(["--stage", "state-init"], p);
     expect(r.out).toContain("Cannot jump to initialization stages");
-    expect(directive(r.stdout).kind).toBe("error");
+    expect(r.out).toContain("Do you want me to scan the code again for this work?");
+    expect(directive(r.stdout).kind).toBe("print");
   });
 
   // --- Test 16: init-stage jump guard — --phase initialization ---
@@ -407,7 +444,21 @@ describe("t117 init-stage jump guard", () => {
     const p = proj("state-jumped.md");
     const r = next(["--phase", "initialization"], p);
     expect(r.out).toContain("Cannot jump to initialization stages");
-    expect(directive(r.stdout).kind).toBe("error");
+    expect(directive(r.stdout).kind).toBe("print");
+  });
+
+  // --- Test 16b: with work under way, the refusal names the rescan, and it runs ---
+  test("16b: an init-stage jump on running work names the rescan, which the engine accepts", () => {
+    const p = proj("state-jumped.md");
+    for (const args of [["--stage", "workspace-detection"], ["--phase", "initialization"], ["--stage", "workspace-detection", "--single"]]) {
+      const r = next(args, p);
+      expect(directive(r.stdout).kind, args.join(" ")).toBe("print");
+      expect(r.out, args.join(" ")).toContain("--project-type brownfield");
+    }
+    // The named step is accepted: it routes to the rescan, not an error.
+    const rescan = next(["--project-type", "brownfield"], p);
+    expect(directive(rescan.stdout).kind).not.toBe("error");
+    expect(rescan.out).toContain("workspace reclassify");
   });
 
   // --- Test 17: init-stage jump guard holds on the no-state path too ---
@@ -416,5 +467,7 @@ describe("t117 init-stage jump guard", () => {
     const r = next(["--stage", "workspace-scaffold"], p);
     expect(r.out).toContain("Cannot jump to initialization stages");
     expect(directive(r.stdout).kind).toBe("error");
+    // Nothing is set up yet, so there is nothing to scan again.
+    expect(r.out).not.toContain("--project-type");
   });
 });

@@ -78,11 +78,18 @@
 // audit.md is involved — `artifacts` reads only the stage graph, writes
 // nothing.
 
-import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { afterAll, beforeAll, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const BUN = process.execPath; // the bun running this test
 const REPO_ROOT = join(import.meta.dir, "..", "..");
@@ -156,7 +163,7 @@ function graph(args: string[], stageGraph?: string): CliResult {
   const env = { ...process.env };
   if (stageGraph) env.AIDLC_STAGE_GRAPH = stageGraph;
   else delete env.AIDLC_STAGE_GRAPH;
-  const res = spawnSync(BUN, [TOOL, ...args], { encoding: "utf-8", env });
+  const res = spawnSync(BUN, [TOOL, ...args], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8", env });
   const stdout = res.stdout ?? "";
   const stderr = res.stderr ?? "";
   return {
@@ -235,6 +242,7 @@ describe("t63 aidlc-graph artifacts — CLI contract (migrated from t63-tool-gra
       console.log(a === b ? 'same-ref' : 'different-ref');
     `;
     const res = spawnSync(BUN, ["-e", script], {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
       encoding: "utf-8",
       env: { ...process.env, AIDLC_STAGE_GRAPH: fx("union.json") },
     });

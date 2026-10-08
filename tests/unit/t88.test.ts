@@ -322,3 +322,35 @@ describe("type guard — non-string raw throws", () => {
     );
   });
 });
+
+// ============================================================
+// The Unit a diary line was written for
+// ------------------------------------------------------------
+// A Unit's iteration of a stage tags its line `[unit <name>]` right after the
+// timestamp, so a Unit's checkpoint offers that Unit's notes only. An untagged
+// line parses as before and names no Unit.
+// ============================================================
+
+describe("parseMemoryEntries: the Unit tag", () => {
+  const dash = "\u2014"; // the diary line's separator, an em dash
+  const raw = [
+    "## Tradeoffs",
+    `- 2026-10-05T10:00:00Z [unit alpha] ${dash} kept one store; two would drift`,
+    `- 2026-10-05T10:05:00Z ${dash} logs stay in UTC; the team asked for it`,
+    "",
+  ].join("\n");
+
+  test("a tagged line names its Unit and keeps ts, summary and context", () => {
+    const [tagged, plain] = parseMemoryEntries(raw);
+    expect(tagged).toMatchObject({
+      heading: "Tradeoffs", ts: "2026-10-05T10:00:00Z", unit: "alpha",
+      summary: "kept one store", context: "two would drift",
+    });
+    expect(plain).toMatchObject({ ts: "2026-10-05T10:05:00Z", summary: "logs stay in UTC" });
+    expect(plain.unit).toBeUndefined();
+  });
+
+  test("length === total with a tagged line", () => {
+    expect(parseMemoryEntries(raw).length).toBe(parseMemoryHeadings(raw).total);
+  });
+});

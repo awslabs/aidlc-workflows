@@ -5,6 +5,7 @@
 // covers: function:askSwarmCheckpoint, function:requireProtectedResponse
 // covers: function:withdrawProtectedQuestions
 // covers: function:gitTreeLeafEntries
+// covers: function:hasPendingDecision
 
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
@@ -24,6 +25,7 @@ import {
 import {
   approvedConstructionUnits,
   artifactFilename,
+  hasPendingDecision,
   auditBlockField,
   authorizedVerificationCommand,
   boltSlugForUnit,
@@ -68,7 +70,11 @@ import {
   resolveCodeGenerationAuthority,
   resolveTestingPosture,
 } from "../../dist/claude/.claude/tools/aidlc-testing-posture.ts";
-import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS } from "../harness/test-budget.ts";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 resetAidlcEnv();
@@ -81,7 +87,7 @@ afterEach(() => {
 });
 
 function git(pd: string, args: string[]): string {
-  const result = Bun.spawnSync(["git", ...args], { cwd: pd, stdout: "pipe", stderr: "pipe" });
+  const result = Bun.spawnSync(["git", ...args], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), cwd: pd, stdout: "pipe", stderr: "pipe" });
   expect(result.exitCode, result.stderr.toString()).toBe(0);
   return result.stdout.toString().trim();
 }
@@ -180,16 +186,18 @@ function fixture(autonomous = false, repos: readonly string[] = [], authorize = 
   return pd;
 }
 
-function tool(pd: string, name: string, args: string[]) {
+function tool(pd: string, name: string, args: string[], extra: Record<string, string> = {}) {
   const result = spawnSync(process.execPath, [join(AIDLC_SRC, `tools/aidlc-${name}.ts`), ...args, "--project-dir", pd], {
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     cwd: pd, encoding: "utf-8",
-    env: { ...process.env, AIDLC_PROJECT_DIR: pd, CLAUDE_PROJECT_DIR: pd },
+    env: { ...process.env, AIDLC_PROJECT_DIR: pd, CLAUDE_PROJECT_DIR: pd, ...extra },
   });
   return { code: result.status, out: `${result.stdout}${result.stderr}`, stdout: result.stdout };
 }
 
 function choice(pd: string, session: string, prompt: string): void {
-  const result = spawnSync(process.execPath, [join(AIDLC_SRC, "hooks/aidlc-record-human-turn.ts")], {
+  const result = spawnSync(process.execPath, [join(AIDLC_SRC, "tools/aidlc.ts"), "engine", "hook", "record-human-turn"], {
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     cwd: pd, encoding: "utf-8", env: { ...process.env, AIDLC_PROJECT_DIR: pd, CLAUDE_PROJECT_DIR: pd },
     input: JSON.stringify({ hook_event_name: "UserPromptSubmit", session_id: session, prompt }),
   });
@@ -207,7 +215,7 @@ function recordCommand(pd: string, command: string): void {
   expect(applied.code, applied.out).toBe(0);
 }
 
-function prepareNative(pd: string): void {
+function prepareNative(pd: string, beforePrepare?: () => void): ReturnType<typeof tool> {
   writeActiveDirectiveMarker(pd, {
     kind: "invoke-swarm", stage: STAGE, units: BATCH,
     state_sha256: stateDigest(readFileSync(seededStateFile(pd), "utf-8")),
@@ -240,8 +248,10 @@ function prepareNative(pd: string): void {
     const answer = tool(pd, "log", ["answer", ...identity, "--details", "Approve Plan"]);
     expect(answer.code, answer.out).toBe(0);
   }
+  beforePrepare?.();
   const prepared = tool(pd, "swarm", ["prepare", "--batch", "1", "--units", BATCH.join(","), "--base", git(pd, ["branch", "--show-current"])]);
-  expect(prepared.code, prepared.out).toBe(0);
+  if (!beforePrepare) expect(prepared.code, prepared.out).toBe(0);
+  return prepared;
 }
 
 // Protected append factory stands in for the existing review/finalize/merge
@@ -304,6 +314,11 @@ function human(pd: string, prompt = "Approve"): void {
   choice(pd, "t343-checkpoint", prompt);
 }
 
+function setPolicy(pd: string, line: string): void {
+  const path = seededStateFile(pd);
+  writeFileSync(path, readFileSync(path, "utf-8").replace(/^- \*\*Change Control\*\*: .*$/m, `- **Guard Policy**: ${line}`));
+}
+
 function gates(pd: string, event = "GATE_APPROVED") {
   return readAuditShardEvents(pd).filter((row) => row.event === event && auditBlockField(row.block, "Checkpoint") === "swarm-batch");
 }
@@ -331,6 +346,40 @@ describe("t343 completed swarm batch checkpoints", () => {
     expect(resolveSwarmCheckpoint(pd, 1, BATCH).ready).toBe(false);
   });
 
+  // Without Construction checkpoints, and without a workflow at all, a check
+  // still runs only the command the person approved: a supplied one never runs.
+  test("a legacy workflow or no workflow runs no supplied check command", () => {
+    const pd = fixture(false, [], false);
+    const statePath = seededStateFile(pd);
+    writeFileSync(statePath, readFileSync(statePath, "utf-8")
+      .replace("- **Construction Checkpoints**: enabled", "- **Construction Checkpoints**: disabled"));
+    const marker = join(pd, "legacy-supplied-command-ran");
+    const supplied = `${JSON.stringify(process.execPath)} -e "require('fs').writeFileSync('${marker}','executed')"`;
+    const actions = [["check", "alpha"], ["finalize", "--batch", "1", "--units", BATCH.join(","), "--claimed", BATCH.join(",")]];
+    for (const action of actions) {
+      const legacy = tool(pd, "swarm", [...action, "--check-cmd", supplied]);
+      expect(legacy.code, legacy.out).not.toBe(0);
+      expect(legacy.out).toContain("set-construction-verification-command");
+    }
+    // The way on: the person approves a command once, and the check runs it.
+    recordCommand(pd, CHECK);
+    const approvedRun = tool(pd, "swarm", ["check", "alpha"]);
+    expect(approvedRun.out).not.toContain("set-construction-verification-command");
+    expect(approvedRun.out).toContain("no worktree for unit");
+    for (const action of actions) {
+      const substituted = tool(pd, "swarm", [...action, "--check-cmd", supplied]);
+      expect(substituted.code, substituted.out).not.toBe(0);
+      expect(substituted.out).toContain("does not match");
+    }
+    expect(readdirSync(pd)).not.toContain("legacy-supplied-command-ran");
+
+    const bare = createTestProject();
+    projects.push(bare);
+    const stateless = tool(bare, "swarm", ["finalize", "--batch", "1", "--units", "alpha", "--claimed", "alpha", "--check-cmd", supplied]);
+    expect(stateless.code, stateless.out).not.toBe(0);
+    expect(stateless.out).toContain("finalize needs an active workflow");
+  });
+
   test("older native convergence without its command digest cannot certify a batch", () => {
     const pd = fixture();
     converge(pd, 1, BATCH, "unchecked");
@@ -340,17 +389,29 @@ describe("t343 completed swarm batch checkpoints", () => {
     });
   });
 
-  test("changing the authorized command retires the batch approval even after re-verification", () => {
+  test("changing the authorized command keeps an approved batch approved, and the next batch is checked with the new one", () => {
     const pd = fixture(true);
     converge(pd);
     const approved = approveSwarmCheckpoint(pd, 1, BATCH);
     expect(approved.approved).toBe(true);
+    writeFileSync(join(pd, "src", "gamma.ts"), "export const gamma = 2;\n");
+    git(pd, ["add", "src/gamma.ts"]);
+    git(pd, ["commit", "-qm", "later unit"]);
+    converge(pd, 2, ["gamma"]);
     recordCommand(pd, "git diff --exit-code -- src");
-    expect(resolveSwarmCheckpoint(pd, 1, BATCH)).toMatchObject({ ready: false, approved: false });
-    converge(pd, 1, BATCH, "unmerged");
-    const checked = resolveSwarmCheckpoint(pd, 1, BATCH);
-    expect(checked).toMatchObject({ ready: true, approved: false, fingerprint: approved.fingerprint });
-    expect(approveSwarmCheckpoint(pd, 1, BATCH).approved).toBe(true);
+    // The approved batch keeps its approval under the earlier command.
+    expect(resolveSwarmCheckpoint(pd, 1, BATCH)).toMatchObject({
+      ready: true, approved: true, fingerprint: approved.fingerprint, errors: [],
+    });
+    // The batch not yet approved is checked with the new command first.
+    expect(resolveSwarmCheckpoint(pd, 2, ["gamma"])).toMatchObject({
+      ready: false, approved: false,
+      errors: ["gamma: batch was not checked with the authorized Construction Verification Command."],
+    });
+    converge(pd, 2, ["gamma"], "unmerged");
+    expect(resolveSwarmCheckpoint(pd, 2, ["gamma"]).ready).toBe(true);
+    expect(approveSwarmCheckpoint(pd, 2, ["gamma"]).approved).toBe(true);
+    expect(resolveSwarmCheckpoint(pd, 1, BATCH).approved).toBe(true);
   });
 
   test("a passing caller check cannot replace the failing authorized command", () => {
@@ -384,7 +445,7 @@ describe("t343 completed swarm batch checkpoints", () => {
     const report = () => spawnSync(process.execPath, [
       join(AIDLC_SRC, "tools/aidlc-orchestrate.ts"), "report",
       "--stage", STAGE, "--result", "awaiting-approval", "--project-dir", pd,
-    ], { encoding: "utf-8" });
+    ], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" });
     const refused = report();
     expect(JSON.parse(refused.stdout).kind, refused.stderr).toBe("error");
     expect(JSON.parse(refused.stdout).message).toContain("batch 1 (alpha, beta)");
@@ -420,7 +481,7 @@ describe("t343 completed swarm batch checkpoints", () => {
     const run = (units: string) => spawnSync(process.execPath, [
       join(AIDLC_SRC, "tools/aidlc-bolt.ts"), "swarm-checkpoint",
       "--action", "status", "--batch", "1", "--units", units, "--project-dir", pd,
-    ], { encoding: "utf-8" });
+    ], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" });
     const valid = run(BATCH.join(","));
     expect(valid.status, `${valid.stdout}${valid.stderr}`).toBe(0);
     expect(JSON.parse(valid.stdout).ready).toBe(true);
@@ -475,16 +536,18 @@ describe("t343 completed swarm batch checkpoints", () => {
     expect(gates(pd)).toHaveLength(0);
   });
 
-  test("gated mode requires the exact choice and a fresh actual human turn", () => {
+  test("gated mode requires the person's reply and a fresh actual human turn", () => {
     const pd = fixture();
     converge(pd);
-    expect(() => approveSwarmCheckpoint(pd, 1, BATCH)).toThrow("exact");
+    expect(() => approveSwarmCheckpoint(pd, 1, BATCH)).toThrow("requires the person's reply to this question");
     expect(() => approveSwarmCheckpoint(pd, 1, BATCH, "Approve", "t343-checkpoint")).toThrow("--action ask");
-    human(pd);
-    for (const choice of ["approve", "Approve (Recommended)", "yes", ""]) {
-      expect(() => approveSwarmCheckpoint(pd, 1, BATCH, choice, "t343-checkpoint")).toThrow("exact");
-    }
+    // An exact pick is the person's: the conductor cannot record the other choice.
+    human(pd, "Request Changes");
+    expect(() => approveSwarmCheckpoint(pd, 1, BATCH, "Approve", "t343-checkpoint")).toThrow('picked "Request Changes"');
+    // The conductor read their approval; the receipt carries their own words.
+    human(pd, "both look good");
     expect(approveSwarmCheckpoint(pd, 1, BATCH, "Approve", "t343-checkpoint").approved).toBe(true);
+    expect(auditBlockField(gates(pd)[0].block, "Person Reply")).toBe("both look good");
     expect(() => approveSwarmCheckpoint(pd, 1, BATCH, "Approve", "t343-checkpoint")).toThrow("--action ask");
     expect(gates(pd)).toHaveLength(1);
   });
@@ -494,7 +557,7 @@ describe("t343 completed swarm batch checkpoints", () => {
     writeFileSync(seededStateFile(pd), state(true));
     converge(pd);
     expect(resolveSwarmCheckpoint(pd, 1, BATCH).human_required).toBe(true);
-    expect(() => approveSwarmCheckpoint(pd, 1, BATCH)).toThrow("exact");
+    expect(() => approveSwarmCheckpoint(pd, 1, BATCH)).toThrow("requires the person's reply to this question");
     appendAuditEntry("AUTONOMY_MODE_SET", { Mode: "autonomous" }, pd);
     expect(resolveSwarmCheckpoint(pd, 1, BATCH).human_required).toBe(false);
     expect(() => approveSwarmCheckpoint(pd, 1, BATCH, "Approve", "t343-checkpoint")).toThrow("--action ask");
@@ -507,7 +570,7 @@ describe("t343 completed swarm batch checkpoints", () => {
     expect(revoked.human_required).toBe(true);
     converge(pd, 2, ["gamma"]);
     expect(resolveSwarmCheckpoint(pd, 2, ["gamma"]).approved).toBe(false);
-    expect(() => approveSwarmCheckpoint(pd, 2, ["gamma"])).toThrow("exact");
+    expect(() => approveSwarmCheckpoint(pd, 2, ["gamma"])).toThrow("requires the person's reply to this question");
   });
 
   test("rejection always needs human choice and reason, then retires each unit's evidence", () => {
@@ -515,8 +578,9 @@ describe("t343 completed swarm batch checkpoints", () => {
     converge(pd);
     approveSwarmCheckpoint(pd, 1, BATCH);
     expect(() => rejectSwarmCheckpoint(pd, 1, BATCH, "Request Changes", "Please fix the API", "t343-checkpoint")).toThrow("--action ask");
+    human(pd, "Approve");
+    expect(() => rejectSwarmCheckpoint(pd, 1, BATCH, "Request Changes", "Please fix the API", "t343-checkpoint")).toThrow('picked "Approve"');
     human(pd, "Request Changes");
-    expect(() => rejectSwarmCheckpoint(pd, 1, BATCH, "Reject", "Please fix the API", "t343-checkpoint")).toThrow("exact");
     for (const reason of ["", " ", "DISMISSED", "first\nsecond"]) {
       expect(() => rejectSwarmCheckpoint(pd, 1, BATCH, "Request Changes", reason, "t343-checkpoint")).toThrow("reason");
     }
@@ -643,7 +707,7 @@ describe("t343 completed swarm batch checkpoints", () => {
   test("raw Git trees reject nonportable paths before immutable manifest materialization", () => {
     const pd = fixture();
     const rawGit = (args: string[], input?: string): string => {
-      const result = spawnSync("git", ["-C", pd, ...args], { input, encoding: "utf-8" });
+      const result = spawnSync("git", ["-C", pd, ...args], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), input, encoding: "utf-8" });
       expect(result.status, result.stderr).toBe(0);
       return result.stdout.trim();
     };
@@ -705,6 +769,7 @@ for (const { commit, path, ok } of cases) {
 }
 `);
     const result = Bun.spawnSync([process.execPath, driver], {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
       cwd: pd, env: { ...process.env, TMPDIR: scratch, TMP: scratch, TEMP: scratch },
       stdout: "pipe", stderr: "pipe",
     });
@@ -813,15 +878,79 @@ if (invalid.ok) throw new Error("invalid manifest unexpectedly accepted");
     } else expect(resolveSwarmCheckpoint(pd, 1, BATCH).approved).toBe(false);
   });
 
-  test("source edits before approval cannot be certified by an older native receipt", () => {
+  test("source edits before approval cannot be certified by an older native receipt, and the batch can still be sent back", () => {
     const pd = fixture(true);
     converge(pd);
     writeFileSync(join(pd, "src", "alpha.ts"), "export const alpha = 2;\n");
-    expect(resolveSwarmCheckpoint(pd, 1, BATCH).errors.join(" ")).toContain("claimed source differs");
+    const status = resolveSwarmCheckpoint(pd, 1, BATCH);
+    expect(status.errors.join(" ")).toContain("claimed source differs");
+    expect(status.changed_after_check).toBe(true);
     expect(() => approveSwarmCheckpoint(pd, 1, BATCH)).toThrow("not ready");
-    const asked = tool(pd, "bolt", ["swarm-checkpoint", "--action", "ask", "--batch", "1", "--units", BATCH.join(","), "--session", "t343-checkpoint"]);
-    expect(asked.code).not.toBe(0);
     expect(() => rejectSwarmCheckpoint(pd, 1, BATCH, "Request Changes", "Please rework the changed source", "t343-checkpoint")).toThrow("--action ask");
+    // Under strict the person is still asked, with Request Changes as the way on.
+    const asked = tool(pd, "bolt", ["swarm-checkpoint", "--action", "ask", "--batch", "1", "--units", BATCH.join(","), "--session", "t343-checkpoint"]);
+    expect(asked.code, asked.out).toBe(0);
+    const question = readAuditShardEvents(pd).filter((row) => row.event === "DECISION_RECORDED" &&
+      auditBlockField(row.block, "Checkpoint") === "Swarm Batch Approval").at(-1)!;
+    expect(auditBlockField(question.block, "Options")).toBe("Request Changes");
+    choice(pd, "t343-checkpoint", "Request Changes");
+    rejectSwarmCheckpoint(pd, 1, BATCH, "Request Changes", "Please rework the changed source", "t343-checkpoint");
+    expect(gates(pd, "GATE_REJECTED")).toHaveLength(BATCH.length);
+  });
+
+  test("under Guard Policy off, prepare goes on when the parent source moved after Plan Approval", () => {
+    for (const policy of ["strict", "off (set by you)"]) {
+      const pd = fixture();
+      if (policy !== "strict") setPolicy(pd, policy);
+      const prepared = prepareNative(pd, () => {
+        // The person commits a change to the project after approving the plans.
+        writeFileSync(join(pd, "src", "gamma.ts"), "export const gamma = 2;\n");
+        git(pd, ["add", "src/gamma.ts"]);
+        git(pd, ["commit", "-qm", "the person's own change"]);
+      });
+      if (policy === "strict") {
+        expect(prepared.code).not.toBe(0);
+        expect(prepared.out).toContain("Parent source has changed since Plan Approval");
+      } else {
+        expect(prepared.code, prepared.out).toBe(0);
+        expect(prepared.out).toContain("src/gamma.ts");
+      }
+    }
+  });
+
+  test("under Guard Policy off or relaxed, a later change to an approved batch's files keeps its approval", () => {
+    for (const policy of ["off (set by you)", "relaxed (set by you)", "off (from scope feature)"]) {
+      const pd = fixture(true);
+      setPolicy(pd, policy);
+      converge(pd);
+      const approved = approveSwarmCheckpoint(pd, 1, BATCH);
+      expect(approved.approved).toBe(true);
+      // A later batch or the person changes a file this batch claims.
+      writeFileSync(join(pd, "src", "alpha.ts"), "export const alpha = 2;\n");
+      const later = resolveSwarmCheckpoint(pd, 1, BATCH);
+      expect(later.errors, policy).toEqual([]);
+      expect(later.approved, policy).toBe(true);
+      expect(later.fingerprint).toBe(approved.fingerprint);
+      expect(later.changed_after_check).toBe(false);
+    }
+  });
+
+  test("under Guard Policy off, a batch changed before its question is asked and approved, with one line", () => {
+    const pd = fixture();
+    setPolicy(pd, "off (set by you)");
+    converge(pd);
+    writeFileSync(join(pd, "src", "alpha.ts"), "export const alpha = 2;\n");
+    const asked = tool(pd, "bolt", ["swarm-checkpoint", "--action", "ask", "--batch", "1", "--units", BATCH.join(","), "--session", "t343-checkpoint"]);
+    expect(asked.code, asked.out).toBe(0);
+    expect(JSON.parse(asked.stdout).notices).toEqual([
+      "Files from the alpha Unit changed after its batch was checked: src/alpha.ts. Kept them.",
+    ]);
+    const accepted = readAuditShardEvents(pd).filter((row) => row.event === "CHANGE_ACCEPTED");
+    expect(accepted.map((row) => auditBlockField(row.block, "Checkpoint"))).toEqual(["swarm-batch"]);
+    choice(pd, "t343-checkpoint", "Approve");
+    expect(approveSwarmCheckpoint(pd, 1, BATCH, "Approve", "t343-checkpoint").approved).toBe(true);
+    // Recorded once: the approval adds no second row for the same change.
+    expect(readAuditShardEvents(pd).filter((row) => row.event === "CHANGE_ACCEPTED")).toHaveLength(1);
   });
 
   test("later unrelated source and native batches do not reopen an approved batch", () => {
@@ -942,7 +1071,7 @@ describe("t343 response-bound swarm decisions", () => {
     expect(approve().code).toBe(0);
   });
 
-  test("unrelated and cross-session prompts cannot approve; a consumed choice cannot replay", () => {
+  test("a prompt from before the question and cross-session prompts cannot approve; a consumed choice cannot replay", () => {
     const pd = fixture();
     converge(pd);
     choice(pd, session, "hello");
@@ -951,7 +1080,6 @@ describe("t343 response-bound swarm decisions", () => {
     expect(gates(pd)).toEqual([]);
     const ask = tool(pd, "bolt", [...route(), "--action", "ask"]);
     expect(ask.code, ask.out).toBe(0);
-    choice(pd, session, "hello");
     expect(approve().code).not.toBe(0);
     choice(pd, "other-session", "Approve");
     expect(approve().code).not.toBe(0);
@@ -1031,6 +1159,7 @@ describe("t343 checkpoint question interleaving", () => {
       expect(decision.code, decision.out).toBe(0);
     } else {
       const gate = spawnSync(process.execPath, [join(AIDLC_SRC, "tools/aidlc-state.ts"), "gate-start", "delivery-planning", "--project-dir", pd], {
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
         cwd: pd, encoding: "utf-8", env: { ...process.env, AIDLC_ALLOW_DIRECT_STATE_TRANSITIONS: "1", AIDLC_SKIP_REVIEWER_GATE_GUARD: "1" },
       });
       expect(gate.status, `${gate.stdout}${gate.stderr}`).toBe(0);
@@ -1049,5 +1178,71 @@ describe("t343 checkpoint question interleaving", () => {
     const accepted = approve();
     expect(accepted.code, accepted.out).toBe(0);
     expect(gates(pd)).toHaveLength(1);
+  });
+});
+
+// #1466: the Stop hook's logged-question carve-out reads hasPendingDecision.
+// `swarm-checkpoint --action ask` opens a DECISION_RECORDED (Checkpoint: Swarm
+// Batch Approval) and the human's approve or reject answers it with gate rows,
+// never QUESTION_ANSWERED. The cursor stays at [-] code-generation with the next
+// batch to run, so the answered checkpoint must not read as a human wait.
+describe("t343 an answered batch checkpoint is not a pending logged decision", () => {
+  for (const [action, prompt, extra] of [
+    ["approve", "Approve", ["--user-input", "Approve"]],
+    ["reject", "Request Changes", ["--user-input", "Request Changes", "--reason", "Please fix the API"]],
+  ] as const) {
+    test(`${action} closes the Swarm Batch Approval`, () => {
+      const pd = fixture();
+      converge(pd);
+      human(pd, prompt);
+      expect(hasPendingDecision(pd, STAGE, "STAGE_STARTED")).toBe(true);
+      const answered = tool(pd, "bolt", [
+        "swarm-checkpoint", "--action", action, "--batch", "1", "--units", BATCH.join(","),
+        "--session", "t343-checkpoint", ...extra,
+      ]);
+      expect(answered.code, answered.out).toBe(0);
+      expect(gates(pd, action === "approve" ? "GATE_APPROVED" : "GATE_REJECTED").length).toBeGreaterThan(0);
+      expect(hasPendingDecision(pd, STAGE, "STAGE_STARTED")).toBe(false);
+    });
+  }
+});
+
+describe("t343 a batch checkpoint finds the session it runs in", () => {
+  test("asking and approving need no --session", () => {
+    const pd = fixture();
+    converge(pd);
+    const own = "t343-own-session";
+    const inSession = { AIDLC_SESSION_OVERRIDE: own, AIDLC_SESSION_OVERRIDE_SOURCE: "payload" };
+    const batch = ["--batch", "1", "--units", BATCH.join(",")];
+    const asked = tool(pd, "bolt", ["swarm-checkpoint", "--action", "ask", ...batch], inSession);
+    expect(asked.code, asked.out).toBe(0);
+    expect(readProtectedQuestion(pd, own)).not.toBeNull();
+    choice(pd, own, "Approve");
+    const approved = tool(pd, "bolt", ["swarm-checkpoint", "--action", "approve", ...batch, "--user-input", "Approve"], inSession);
+    expect(approved.code, approved.out).toBe(0);
+    expect(gates(pd).map((row) => auditBlockField(row.block, "Session"))).toEqual([own]);
+  });
+
+  // With no session to find, the agent retries with the session it asked in,
+  // and the person's recorded reply is never asked for again.
+  test("with no session to find, a recorded batch reply goes through on a retry with --session", () => {
+    const pd = fixture();
+    converge(pd);
+    const named = "t343-named-session";
+    const outside = { AIDLC_SESSION_OVERRIDE: "", AIDLC_SESSION_OVERRIDE_SOURCE: "" };
+    const batch = ["--batch", "1", "--units", BATCH.join(",")];
+    const asked = tool(pd, "bolt", ["swarm-checkpoint", "--action", "ask", ...batch, "--session", named], outside);
+    expect(asked.code, asked.out).toBe(0);
+    choice(pd, named, "Approve");
+    const missed = tool(pd, "bolt", ["swarm-checkpoint", "--action", "approve", ...batch, "--user-input", "Approve"], outside);
+    expect(missed.code).not.toBe(0);
+    expect(missed.out).toContain("Could not tell which session this is.");
+    expect(missed.out).not.toContain("Re-ask");
+    expect(readProtectedResponse(pd, named)).not.toBeNull();
+    const retried = tool(pd, "bolt", [
+      "swarm-checkpoint", "--action", "approve", ...batch, "--user-input", "Approve", "--session", named,
+    ], outside);
+    expect(retried.code, retried.out).toBe(0);
+    expect(gates(pd).map((row) => auditBlockField(row.block, "Session"))).toEqual([named]);
   });
 });

@@ -50,21 +50,26 @@
 //
 // It SPENDS TOKENS — driveAidlc drives a real (tiny) /echo turn on Opus/Bedrock.
 
-import { liveCaseTimeoutMs } from "../harness/test-budget.ts";
+import {
+  liveCaseTimeoutMs,
+  LIVE_LONG_OPERATION_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+  fileCleanupReserveMs,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+} from "../harness/test-budget.ts";
 import { describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { driveAidlc } from "../harness/sdk-drive.ts";
 
 // ---------------------------------------------------------------------------
-// Work allowance follows AIDLC_TEST_TIMEOUT (seconds). Existing per-turn
-// limits are preserved; the shared profile adds fixture, startup and teardown
-// reserves before Bun's case ceiling.
-const TIMEOUT_S = Number.parseInt(process.env.AIDLC_TEST_TIMEOUT ?? "180", 10);
-const LIVE_WORK_TIMEOUT_MS = (Number.isFinite(TIMEOUT_S) ? TIMEOUT_S : 180) * 1000;
-const DRIVE_TIMEOUT_MS = Math.max(60_000, LIVE_WORK_TIMEOUT_MS - 15_000);
-// Preserve the existing work allowance and reserve fixture/startup/cleanup separately.
-const TEST_TIMEOUT_MS = liveCaseTimeoutMs(Math.max(LIVE_WORK_TIMEOUT_MS, DRIVE_TIMEOUT_MS));
-const AWS_STS_TIMEOUT_MS = 30_000;
+// The case and file own the work budget; each SDK call uses what remains.
+const TIMEOUT_S = Number.parseInt(process.env.AIDLC_TEST_TIMEOUT ?? String(LIVE_LONG_OPERATION_TIMEOUT_MS / 1000), 10);
+const LIVE_WORK_TIMEOUT_MS = Number.isFinite(TIMEOUT_S) && TIMEOUT_S > 0
+  ? TIMEOUT_S * 1000 : LIVE_LONG_OPERATION_TIMEOUT_MS;
+// Setup and cleanup allowances belong to the case; calls share its remaining work.
+const TEST_TIMEOUT_MS = liveCaseTimeoutMs(LIVE_WORK_TIMEOUT_MS);
+const AWS_STS_TIMEOUT_MS = NATIVE_STARTUP_TIMEOUT_MS;
 
 describe("t19 preflight health (sdk live substrate)", () => {
   // .sh test 2: AWS credentials valid. The exact .sh check — `aws sts
@@ -88,7 +93,7 @@ describe("t19 preflight health (sdk live substrate)", () => {
       const sts = spawnSync(
         "aws",
         ["sts", "get-caller-identity", "--query", "Account", "--output", "text"],
-        { encoding: "utf8", timeout: AWS_STS_TIMEOUT_MS, stdio: ["ignore", "pipe", "pipe"] },
+        { encoding: "utf8", timeout: remainingOperationTimeoutMs(AWS_STS_TIMEOUT_MS), stdio: ["ignore", "pipe", "pipe"] },
       );
       if (sts.status !== 0) {
         throw new Error(
@@ -98,7 +103,7 @@ describe("t19 preflight health (sdk live substrate)", () => {
       }
       expect(sts.status).toBe(0);
     },
-    AWS_STS_TIMEOUT_MS + 5_000,
+    NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
   );
 
   // .sh tests 1+3+4: a real driven turn completes cleanly with non-empty output.
@@ -110,10 +115,13 @@ describe("t19 preflight health (sdk live substrate)", () => {
   test(
     "a real driven turn completes (exit 0) and produces non-empty output",
     async () => {
+      const deadlineMs = Date.now() + TEST_TIMEOUT_MS;
       const r = await driveAidlc("echo ok", {
         // No projectDir / no AIDLC: this is a bare substrate probe (the .sh ran
         // `echo ok` in a throwaway project). The driver runs in cwd by default.
-        timeoutMs: DRIVE_TIMEOUT_MS,
+        timeoutMs: remainingOperationTimeoutMs(LIVE_WORK_TIMEOUT_MS, {
+          deadlineMs, reserveMs: fileCleanupReserveMs(TEST_TIMEOUT_MS), phase: "integration SDK drive",
+        }),
       });
 
       // .sh test 1+3: the turn reached a terminal result event and it is NOT an

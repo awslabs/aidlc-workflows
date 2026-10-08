@@ -63,8 +63,9 @@
 //   .sh (5) SWARM_BATON_RETURNED naming lose       -> "5: SWARM_BATON_RETURNED emitted for the failed unit (lose)"
 //   .sh (6) rc==2 + converged:1 + failed:1         -> "6: mixed batch exits 2 (baton returns) with 1 converged + 1 failed"
 
-import { afterAll, afterEach, describe, expect, test } from "bun:test";
-import { spawnSync } from "node:child_process";
+import { NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS } from "../harness/test-budget.ts";
+import { setDefaultTimeout, afterAll, afterEach, describe, expect, test } from "bun:test";
+import { type SpawnSyncOptionsWithStringEncoding, type SpawnSyncReturns, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
   existsSync,
@@ -92,6 +93,7 @@ import {
   seededStateFile,
   setupWorktreeFixture,
 } from "../harness/fixtures.ts";
+import { approveSuppliedCheckCommand, approveVerificationCommand } from "../harness/verification-command.ts";
 import {
   worktreePath,
   artifactFilename,
@@ -113,11 +115,20 @@ import {
   resolveTestingPosture,
 } from "../../dist/claude/.claude/tools/aidlc-testing-posture.ts";
 
+setDefaultTimeout(NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
+
 resetAidlcEnv();
 
 const BUN = process.execPath; // the bun running this test
 const TOOL = join(AIDLC_SRC, "tools", "aidlc-orchestrate.ts");
 const SWARM_TOOL = join(AIDLC_SRC, "tools", "aidlc-swarm.ts");
+
+// A swarm call that supplies a check command runs it only once the person has
+// approved it, so the fixture records that one approval first.
+function swarmSpawn(args: string[], options: SpawnSyncOptionsWithStringEncoding): SpawnSyncReturns<string> {
+  approveSuppliedCheckCommand(args[args.indexOf("--project-dir") + 1], args);
+  return spawnSync(BUN, args, options);
+}
 const LOG_TOOL = join(AIDLC_SRC, "tools", "aidlc-log.ts");
 
 // ---------------------------------------------------------------------------
@@ -272,6 +283,8 @@ function seedRefereeProject(units: string[]): string {
     ].join("\n"),
   );
   seedBoltDag(proj, units);
+  // The workflow is started and the person has approved its check command once.
+  approveVerificationCommand(proj, "true");
   spawnSync("git", ["add", "-A"], { cwd: proj });
   spawnSync(
     "git",
@@ -507,8 +520,7 @@ function finalizeWithNotReady(iteration: number): {
     );
   }
   logWorktreeReview(proj, unit, true, "NOT-READY", iteration);
-  const result = spawnSync(
-    BUN,
+  const result = swarmSpawn(
     [
       SWARM_TOOL,
       "--project-dir",
@@ -549,8 +561,7 @@ function setupReferee(): void {
 
   // Conductor step 3: finalize claiming BOTH (the conductor wrongly claims
   // lose). finalize re-verifies, refuses lose, returns the baton.
-  const fin = spawnSync(
-    BUN,
+  const fin = swarmSpawn(
     [
       SWARM_TOOL, "--project-dir", proj, "finalize",
       "--batch", "1", "--units", "win,lose", "--claimed", "win,lose",
@@ -571,8 +582,7 @@ function setupReviewRefusal(): void {
   const proj = seedRefereeProject(["unreviewed"]);
   reviewRefusalProj = proj;
   prepareRefereeProject(proj, "unreviewed");
-  const fin = spawnSync(
-    BUN,
+  const fin = swarmSpawn(
     [
       SWARM_TOOL, "--project-dir", proj, "finalize",
       "--batch", "1", "--units", "unreviewed", "--claimed", "unreviewed",
@@ -603,8 +613,7 @@ function setupStaleReviewRefusal(): void {
   logWorktreeReview(proj, "stale");
   writeFileSync(artifact, "changed after review\n");
 
-  const fin = spawnSync(
-    BUN,
+  const fin = swarmSpawn(
     [
       SWARM_TOOL, "--project-dir", proj, "finalize",
       "--batch", "1", "--units", "stale", "--claimed", "stale",
@@ -623,8 +632,7 @@ function setupMissingArtifactsRefusal(): void {
   missingArtifactsProj = proj;
   prepareRefereeProject(proj, "missing");
   logWorktreeReview(proj, "missing", false);
-  const fin = spawnSync(
-    BUN,
+  const fin = swarmSpawn(
     [
       SWARM_TOOL, "--project-dir", proj, "finalize",
       "--batch", "1", "--units", "missing", "--claimed", "missing",
@@ -694,7 +702,7 @@ describe("t135 engine — invoke-swarm emission gated on autonomy (migrated from
     expect(marker.kind).toBe("invoke-swarm");
     expect(marker.stage).toBe("code-generation");
     expect(marker.code_generation_source_sha256).toMatch(/^[0-9a-f]{64}$/);
-  }, 30000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("1a: legacy swarm planning selects concrete units from the real marker", () => {
     const proj = seedCodegenProject("autonomous");
@@ -706,14 +714,14 @@ describe("t135 engine — invoke-swarm emission gated on autonomy (migrated from
     expect(reentry.kind).toBe("invoke-swarm");
     expect(legacyPlanApprovalGuardState(proj).target).toEqual({ unit: "b" });
     expect(evaluateCodeGenerationApproval(proj, { unit: "a" }).ok).toBe(true);
-  }, 30000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("1b: invoke-swarm names the batch units off the compiled bolt_dag (order-preserved)", () => {
     const { directive } = runNext(seedCodegenProject("autonomous"));
     // STRONGER than the .sh's string compare of the JSON array: assert the
     // parsed units array equals the first batch, in order, off the DAG.
     expect(directive.units).toEqual(["a", "b"]);
-  }, 30000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("2: gated autonomy -> engine falls back to run-stage for code-generation (no swarm)", () => {
     const { directive } = runNext(seedCodegenProject("gated"));
@@ -722,7 +730,7 @@ describe("t135 engine — invoke-swarm emission gated on autonomy (migrated from
     expect(directive.stage).toBe("code-generation");
     // STRONGER: it is definitively NOT a swarm directive.
     expect(directive.kind).not.toBe("invoke-swarm");
-  }, 30000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("7: skeleton-gate stage is never swarmed even under autonomy (structural guard)", () => {
     // bugfix scope: code-generation IS the walking-skeleton gate stage (the
@@ -734,7 +742,7 @@ describe("t135 engine — invoke-swarm emission gated on autonomy (migrated from
     const { directive } = runNext(proj);
     expect(directive.kind).toBe("run-stage");
     expect(directive.kind).not.toBe("invoke-swarm");
-  }, 30000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 });
 
 // ---------------------------------------------------------------------------
@@ -745,7 +753,7 @@ describe("t135 referee — batch-level swarm audit taxonomy + baton return (the 
   test("3: SWARM_STARTED emitted at batch start (prepare)", () => {
     setupReferee();
     expect(auditBody).toContain("SWARM_STARTED");
-  }, 60000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("4: SWARM_COMPLETED emitted with converged/failed tally (finalize)", () => {
     setupReferee();
@@ -758,7 +766,7 @@ describe("t135 referee — batch-level swarm audit taxonomy + baton return (the 
     const block = auditBody.slice(auditBody.indexOf("SWARM_COMPLETED"));
     expect(block).toContain("**Converged count**: 1");
     expect(block).toContain("**Failed count**: 1");
-  }, 60000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("5: SWARM_BATON_RETURNED emitted for the failed unit (lose)", () => {
     setupReferee();
@@ -770,7 +778,7 @@ describe("t135 referee — batch-level swarm audit taxonomy + baton return (the 
     expect(idx).toBeGreaterThanOrEqual(0);
     const block = auditBody.slice(idx);
     expect(block).toContain("**Unit name**: lose");
-  }, 60000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("6: mixed batch exits 2 (baton returns) with 1 converged + 1 failed", () => {
     setupReferee();
@@ -779,7 +787,7 @@ describe("t135 referee — batch-level swarm audit taxonomy + baton return (the 
     expect(finalizeStatus).toBe(2);
     expect(finalizeOut).toContain('"converged": 1');
     expect(finalizeOut).toContain('"failed": 1');
-  }, 60000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("6b: the accepted worktree review receipt is merged into the main audit", () => {
     setupReferee();
@@ -788,13 +796,13 @@ describe("t135 referee — batch-level swarm audit taxonomy + baton return (the 
     expect(review).toContain("**Stage**: code-generation");
     expect(review).toContain("**Unit**: win");
     expect(review).toContain("**Reviewer**: aidlc-architecture-reviewer-agent");
-  }, 60000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("6c: the immutable reviewed-source commit needs no user Git identity", () => {
     setupReferee();
     expect(finalizeOut).not.toContain("cannot create the immutable reviewed-source commit");
     expect(finalizeOut).toContain('"converged": 1');
-  }, 60000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("6e: the review record travels with its receipt into the main intent record and renders the Unit's findings", () => {
     setupReferee();
@@ -814,7 +822,7 @@ describe("t135 referee — batch-level swarm audit taxonomy + baton return (the 
     expect(win?.verdict).toBe("READY");
     expect(win?.findings.map((finding) => finding.id)).toEqual(["R-01"]);
     expect(win?.findings[0]?.finding).toBe("Fixture finding for win");
-  }, 60000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("6d: finalize lands reviewed record artifacts, the bound source manifest, and its evidence", () => {
     setupReferee();
@@ -857,7 +865,7 @@ describe("t135 referee — batch-level swarm audit taxonomy + baton return (the 
     // Application source still lands only through the later, correlated
     // aidlc-worktree merge and its SWARM_SOURCE_MERGED authority.
     expect(existsSync(join(wtproj, "win.txt"))).toBe(false);
-  }, 60000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("6f: finalize promotes receipt-bound local evidence from a pre-upgrade review", () => {
     const unit = "pre-upgrade";
@@ -895,8 +903,7 @@ describe("t135 referee — batch-level swarm audit taxonomy + baton return (the 
     // receipt-bound snapshot exists, but dual-write did not yet create the
     // committed evidence file.
     rmSync(join(wtUnitRecord, evidenceName));
-    const result = spawnSync(
-      BUN,
+    const result = swarmSpawn(
       [SWARM_TOOL, "--project-dir", proj, "finalize", "--batch", "1", "--units", unit, "--claimed", unit, "--check-cmd", "true"],
       { encoding: "utf-8", env: identityFreeGitEnv(proj) },
     );
@@ -911,7 +918,7 @@ describe("t135 referee — batch-level swarm audit taxonomy + baton return (the 
       evidenceName,
     );
     expect(readFileSync(promotedEvidence).equals(expectedBytes)).toBe(true);
-  }, 60000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 });
 
 describe("t135 referee - autonomous reviewer receipt is a finalize precondition", () => {
@@ -958,7 +965,7 @@ describe("t135 referee - autonomous reviewer receipt is a finalize precondition"
       { encoding: "utf-8" },
     );
     expect(accepted.status).toBe(0);
-  }, 60000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("8: a green claimed unit without a worktree review is refused before merge", () => {
     setupReviewRefusal();
@@ -967,16 +974,16 @@ describe("t135 referee - autonomous reviewer receipt is a finalize precondition"
     expect(reviewRefusalOut).toContain('"converged": 0');
     expect(reviewRefusalOut).toContain('"failed": 1');
     expect(reviewRefusalAudit).not.toContain("**Event**: SWARM_UNIT_CONVERGED");
-  }, 60000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("9: a claimed unit whose artifact changed after review is refused before merge", () => {
     setupStaleReviewRefusal();
     expect(staleReviewStatus).toBe(2);
-    expect(staleReviewOut).toContain("current artifact fingerprint");
+    expect(staleReviewOut).toContain("Code Generation documents changed after its review");
     expect(staleReviewOut).toContain('"converged": 0');
     expect(staleReviewOut).toContain('"failed": 1');
     expect(staleReviewAudit).not.toContain("**Event**: SWARM_UNIT_CONVERGED");
-  }, 60000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("10: a matching receipt cannot certify missing required artifacts", () => {
     setupMissingArtifactsRefusal();
@@ -985,19 +992,19 @@ describe("t135 referee - autonomous reviewer receipt is a finalize precondition"
     expect(missingArtifactsOut).toContain('"converged": 0');
     expect(missingArtifactsOut).toContain('"failed": 1');
     expect(missingArtifactsAudit).not.toContain("**Event**: SWARM_UNIT_CONVERGED");
-  }, 60000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("11: a below-cap NOT-READY receipt cannot satisfy swarm finalize", () => {
     const result = finalizeWithNotReady(1);
     expect(result.status).toBe(2);
     expect(result.out).toContain("no terminal REVIEW_COMPLETED");
     expect(result.out).toContain('"converged": 0');
-  }, 60000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("12: a NOT-READY receipt at the configured cap satisfies swarm finalize", () => {
     const result = finalizeWithNotReady(2);
     expect(result.status).toBe(0);
     expect(result.out).toContain('"converged": 1');
     expect(result.out).toContain('"failed": 0');
-  }, 60000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 });

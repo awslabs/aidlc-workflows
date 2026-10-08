@@ -1,15 +1,18 @@
-import { describe, expect, test } from "bun:test";
-import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
-import { pathToFileURL } from "node:url";
-import { ensurePrivateRoot } from "../harness/tui-record-file.ts";
+import { describe, expect, test, setDefaultTimeout } from "bun:test";
+import {
+  FILE_CLEANUP_ENV,
+  FILE_DEADLINE_ENV,
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_RUNTIME_CASE_TIMEOUT_MS,
+} from "../harness/test-budget.ts";
 import {
   resolveTuiRuntime,
   selectedTuiBackend,
   type TuiRuntimeContext,
   tuiUnavailableReason,
 } from "../harness/tui-runtime.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const DRIVER = "/repo/tests/harness/tui-drive.ts";
 const noProbe: NonNullable<TuiRuntimeContext["probe"]> = () => {
@@ -18,70 +21,6 @@ const noProbe: NonNullable<TuiRuntimeContext["probe"]> = () => {
 const success = (stdout = "") => ({ status: 0, stdout, stderr: "" });
 const missing = { status: null, stdout: "", stderr: "", error: new Error("ENOENT") };
 
-function scratchRoot(): string {
-  let checkout = resolve(import.meta.dir, "../..");
-  const marker = join(checkout, ".git");
-  if (existsSync(marker) && statSync(marker).isFile()) {
-    const gitDir = resolve(checkout, readFileSync(marker, "utf8").trim().replace(/^gitdir: /, ""));
-    checkout = dirname(resolve(gitDir, readFileSync(join(gitDir, "commondir"), "utf8").trim()));
-  }
-  return join(checkout, "tmp", "combined-test-suite", "native-handoff");
-}
-
-describe("native driver Node handoff", () => {
-  test("a Node override fails after one handoff; a real Bun override executes the command", () => {
-    const parent = scratchRoot();
-    mkdirSync(parent, { recursive: true });
-    const scratch = mkdtempSync(join(parent, "handoff-"));
-    const directory = join(scratch, "private");
-    ensurePrivateRoot(directory);
-    const driver = resolve(import.meta.dir, "../harness/tui-drive.ts");
-    const node = resolveTuiRuntime(driver, {
-      env: { ...process.env, AIDLC_TUI_BACKEND: "node-pty" },
-    }).bin;
-    const preload = join(directory, "count-handoffs.mjs");
-    const hops = join(directory, "hops.log");
-    writeFileSync(preload, `
-import { appendFileSync } from "node:fs";
-const count = Number(process.env.AIDLC_HANDOFF_TEST_COUNT || "0") + 1;
-process.env.AIDLC_HANDOFF_TEST_COUNT = String(count);
-appendFileSync(${JSON.stringify(hops)}, count + "\\n");
-// A broken driver is capped independently; this regression must not leave a
-// recursive process chain behind when its assertion fails.
-if (count > 2) { console.error("fixture stopped repeated runtime handoff"); process.exit(93); }
-`);
-    const env: NodeJS.ProcessEnv = {
-      ...process.env, AIDLC_TUI_BACKEND: "bun", AIDLC_TUI_BUN_ROOT: directory,
-      AIDLC_TUI_BUN_HANDOFF: "", AIDLC_HANDOFF_TEST_COUNT: "0",
-      NODE_OPTIONS: `--experimental-strip-types --import=${pathToFileURL(preload).href}`,
-    };
-    delete env.BUN_OPTIONS;
-    const args = ["--experimental-strip-types", driver, "wait-dead", "--session", "absent"];
-    let passed = false;
-    try {
-      const wrong = spawnSync(node, args, {
-        env: { ...env, AIDLC_BUN_BIN: node }, encoding: "utf8", timeout: 8_000,
-      });
-      writeFileSync(join(directory, "wrong-runtime.log"), `${wrong.stdout ?? ""}\n${wrong.stderr ?? ""}`);
-      expect(wrong.error, wrong.stderr).toBeUndefined();
-      expect(wrong.status).toBe(2);
-      expect(wrong.stderr).toContain("native TUI handoff requires Bun");
-      expect(readFileSync(hops, "utf8").trim().split("\n")).toEqual(["1", "2"]);
-      const correct = spawnSync(node, args, {
-        env: { ...env, NODE_OPTIONS: "", AIDLC_BUN_BIN: process.execPath },
-        encoding: "utf8", timeout: 8_000,
-      });
-      writeFileSync(join(directory, "correct-runtime.log"), `${correct.stdout ?? ""}\n${correct.stderr ?? ""}`);
-      expect(correct.error, correct.stderr).toBeUndefined();
-      expect(correct.status, correct.stderr).toBe(0);
-      expect(correct.stdout).toContain("process tree exited");
-      passed = true;
-    } finally {
-      if (passed) rmSync(scratch, { recursive: true, force: true });
-      else console.error(`native handoff evidence retained: ${directory}`);
-    }
-  }, 20_000);
-});
 
 describe("TUI backend selection", () => {
   test("auto uses native Bun on Linux/Windows/macOS and tmux elsewhere", () => {
@@ -94,7 +33,7 @@ describe("TUI backend selection", () => {
   });
 
   test("explicit selections are retained independently of platform", () => {
-    for (const backend of ["bun", "tmux", "node-pty"] as const) {
+    for (const backend of ["bun", "tmux"] as const) {
       for (const platform of ["linux", "win32", "darwin"] as const) {
         expect(selectedTuiBackend({ AIDLC_TUI_BACKEND: backend }, platform)).toBe(backend);
       }
@@ -102,7 +41,7 @@ describe("TUI backend selection", () => {
   });
 
   test("unknown and empty selections throw instead of becoming capability skips", () => {
-    for (const value of ["", "BUN", "native", " bun ", "automatic"]) {
+    for (const value of ["", "BUN", "native", " bun ", "automatic", "node-pty"]) {
       const env = { AIDLC_TUI_BACKEND: value };
       expect(() => selectedTuiBackend(env, "linux")).toThrow("Invalid AIDLC_TUI_BACKEND");
       expect(() => resolveTuiRuntime(DRIVER, { env, probe: noProbe })).toThrow(
@@ -112,10 +51,26 @@ describe("TUI backend selection", () => {
         "Invalid AIDLC_TUI_BACKEND",
       );
     }
+    expect(() => selectedTuiBackend({ AIDLC_TUI_BACKEND: "node-pty" }, "win32")).toThrow(
+      'Invalid AIDLC_TUI_BACKEND "node-pty"; expected auto, bun, or tmux',
+    );
   });
 });
 
 describe("TUI driver runtime resolution", () => {
+  test("expired work budgets do not prevent runtime selection for cleanup", () => {
+    const env: NodeJS.ProcessEnv = {
+      ...process.env, AIDLC_TUI_BACKEND: "bun",
+      [FILE_DEADLINE_ENV]: "1", [FILE_CLEANUP_ENV]: "300000",
+    };
+    const runtime = resolveTuiRuntime(DRIVER, {
+      env, execPath: process.execPath, runningBun: true,
+    });
+    expect(runtime.backend).toBe("bun");
+    expect(runtime.bin.length).toBeGreaterThan(0);
+    expect(runtime.prefix).toEqual([DRIVER]);
+  }, NATIVE_RUNTIME_CASE_TIMEOUT_MS);
+
   test("Bun and tmux use the current Bun executable without probing Node", () => {
     for (const backend of ["bun", "tmux"] as const) {
       expect(resolveTuiRuntime(DRIVER, {
@@ -150,45 +105,11 @@ describe("TUI driver runtime resolution", () => {
     })).toEqual({ bin: "bun", prefix: [DRIVER], backend: "bun" });
   });
 
-  test("explicit legacy Windows selection uses its Node override and type stripping", () => {
-    expect(resolveTuiRuntime(DRIVER, {
-      env: {
-        AIDLC_TUI_BACKEND: "node-pty",
-        AIDLC_NODE_BIN: "C:\\Custom Node\\node.exe",
-        AIDLC_BUN_BIN: "",
-      },
-      platform: "win32",
-      probe: noProbe,
-    })).toEqual({
-      bin: "C:\\Custom Node\\node.exe",
-      prefix: ["--experimental-strip-types", DRIVER],
-      backend: "node-pty",
-    });
-  });
-
-  test("legacy Windows resolution finds an off-PATH Program Files Node installation", () => {
-    const tried: string[] = [];
-    const runtime = resolveTuiRuntime(DRIVER, {
-      env: { AIDLC_TUI_BACKEND: "node-pty" },
-      platform: "win32",
-      probe: (bin) => {
-        tried.push(bin);
-        return bin === "node" ? missing : success("v22.14.0");
-      },
-    });
-    expect(tried).toEqual(["node", "C:\\Program Files\\nodejs\\node.exe"]);
-    expect(runtime.bin).toBe("C:\\Program Files\\nodejs\\node.exe");
-    expect(runtime.prefix).toEqual(["--experimental-strip-types", DRIVER]);
-  });
-
   test("malformed selected executable overrides throw", () => {
     for (const value of ["", "   ", "bun\0other"]) {
       expect(() => resolveTuiRuntime(DRIVER, {
         env: { AIDLC_TUI_BACKEND: "bun", AIDLC_BUN_BIN: value },
       })).toThrow("Invalid AIDLC_BUN_BIN");
-      expect(() => resolveTuiRuntime(DRIVER, {
-        env: { AIDLC_TUI_BACKEND: "node-pty", AIDLC_NODE_BIN: value },
-      })).toThrow("Invalid AIDLC_NODE_BIN");
     }
   });
 });
@@ -223,11 +144,6 @@ describe("TUI substrate prerequisites", () => {
         probe: noProbe,
       })).toContain(`unsupported on ${platform}`);
     }
-    expect(tuiUnavailableReason({
-      env: { AIDLC_TUI_BACKEND: "node-pty" },
-      platform: "linux",
-      probe: noProbe,
-    })).toContain("legacy backend supports Windows only");
   });
 
   test("the selected Bun executable must meet the version and API requirements", () => {
@@ -295,38 +211,6 @@ describe("TUI substrate prerequisites", () => {
       ...context,
       probe: (bin) => bin === "tmux" ? missing : success('{"version":"1.3.1"}'),
     })).toBe("tmux not found");
-  });
-
-  test("legacy node-pty prerequisites use Node with type stripping and report load failures", () => {
-    const calls: string[] = [];
-    const context: TuiRuntimeContext = {
-      env: { AIDLC_TUI_BACKEND: "node-pty", AIDLC_NODE_BIN: "custom-node" },
-      platform: "win32",
-      probe: (bin, args) => {
-        calls.push(bin);
-        expect(args[0]).toBe("--experimental-strip-types");
-        return success();
-      },
-    };
-    expect(tuiUnavailableReason(context)).toBeNull();
-    expect(calls).toEqual(["custom-node"]);
-    expect(tuiUnavailableReason({
-      ...context,
-      probe: () => ({ status: 1, stdout: "", stderr: "Cannot find module 'node-pty'" }),
-    })).toContain("Cannot find module 'node-pty'");
-  });
-
-  test("missing Node is a capability reason, including an absent Windows fallback", () => {
-    const context: TuiRuntimeContext = {
-      env: { AIDLC_TUI_BACKEND: "node-pty" },
-      platform: "win32",
-      probe: () => missing,
-    };
-    expect(resolveTuiRuntime(DRIVER, context).prefix).toEqual([
-      "--experimental-strip-types",
-      DRIVER,
-    ]);
-    expect(tuiUnavailableReason(context)).toContain("node-pty TUI backend requires Node");
   });
 
   test("a non-Bun executable or malformed probe response is reported as unavailable", () => {

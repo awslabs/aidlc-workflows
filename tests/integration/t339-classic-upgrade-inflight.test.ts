@@ -6,7 +6,8 @@
 // function:completionCarriesVerifiedReview, function:readSummaryAuthorization,
 // function:clearSummaryAuthorization
 
-import { afterEach, describe, expect, test } from "bun:test";
+import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS } from "../harness/test-budget.ts";
+import { setDefaultTimeout, afterEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -23,6 +24,8 @@ import {
   readAuditShardEvents,
   readBaselineSourceSnapshot,
   readSummaryAuthorization,
+  readUnitSourceSnapshot,
+  readWorkspaceSourceSnapshot,
   reviewRecordDigest,
   reviewRequestBindingFromBlock,
   sensorsDir,
@@ -34,6 +37,8 @@ import {
   summaryAuthorizationRecordPath,
   writeBaselineSourceSnapshot,
   writeSummaryAuthorization,
+  writeUnitSourceSnapshot,
+  writeWorkspaceSourceSnapshot,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import {
   AIDLC_SRC,
@@ -41,6 +46,8 @@ import {
   createOrchestrationTestProject,
   runOrchestrateNext,
 } from "../harness/fixtures.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const TOOLS = join(AIDLC_SRC, "tools");
 const UTILITY = join(TOOLS, "aidlc-utility.ts");
@@ -187,30 +194,42 @@ describe("t339 upgrading an in-flight classic intent", () => {
     expect(sensorsReadDir(project)).toBe(current);
   });
 
-  test("legacy source-review baselines still verify until the stage's new snapshot directory exists", () => {
+  test("legacy source-review snapshots still read after the stage's new snapshot directory exists", () => {
     const { project, path } = legacyClassic();
     const record = dirname(path);
     const stage = "requirements-analysis";
     // Canonical listing entries: `<repo>\0<path>` keys and `<mode> <blob-sha>` values.
     const key = `app\0src/app.ts`;
-    const listing = new Map([[key, `100644 ${"a".repeat(40)}`]]);
-    // Recorded before the move: write with the current writer, then relocate the
-    // whole tree to where a pre-upgrade intent left it.
+    const entry = `100644 ${"a".repeat(40)}`;
+    const listing = new Map([[key, entry]]);
+    // Recorded before the move: write every snapshot kind with the current
+    // writers, then relocate the whole tree to where a pre-upgrade intent left it.
     const fingerprint = writeBaselineSourceSnapshot(project, stage, listing);
+    const unitFingerprint = writeUnitSourceSnapshot(
+      project, stage, "alpha", listing, { claims: new Set([key]), prefixes: [] }, "b".repeat(64),
+    );
+    const workspaceFingerprint = "c".repeat(64);
+    expect(writeWorkspaceSourceSnapshot(project, stage, { fingerprint: workspaceFingerprint, listing })).toBe(true);
     const current = join(record, ".aidlc-engine", "source-review");
     const legacy = join(record, ".aidlc-source-review");
     renameSync(current, legacy);
     expect(existsSync(current)).toBe(false);
-    const fromLegacy = readBaselineSourceSnapshot(project, stage, fingerprint);
-    expect(fromLegacy).not.toBeNull();
-    expect(fromLegacy?.get(key)).toBe(`100644 ${"a".repeat(40)}`);
-    // The fallback is per stage: another stage's new snapshot directory does not
-    // hide this stage's legacy baseline ...
+    const fromLegacy = () => ({
+      baseline: readBaselineSourceSnapshot(project, stage, fingerprint)?.get(key),
+      unit: readUnitSourceSnapshot(project, stage, "alpha", unitFingerprint)?.listing.get(key),
+      workspace: readWorkspaceSourceSnapshot(project, stage, workspaceFingerprint)?.get(key),
+    });
+    expect(fromLegacy()).toEqual({ baseline: entry, unit: entry, workspace: entry });
+    // The fallback is per file: another stage's new snapshot directory does not
+    // hide this stage's legacy snapshots ...
     mkdirSync(join(current, "user-stories"), { recursive: true });
-    expect(readBaselineSourceSnapshot(project, stage, fingerprint)).not.toBeNull();
-    // ... but once this stage has a new directory, only that one is read.
-    mkdirSync(join(current, stage), { recursive: true });
-    expect(readBaselineSourceSnapshot(project, stage, fingerprint)).toBeNull();
+    expect(fromLegacy()).toEqual({ baseline: entry, unit: entry, workspace: entry });
+    // ... and neither does this stage's own, once the upgraded engine has
+    // written a later snapshot there: the audit still names the older ones.
+    const later = writeBaselineSourceSnapshot(project, stage, new Map([[key, `100644 ${"d".repeat(40)}`]]));
+    expect(existsSync(join(current, stage))).toBe(true);
+    expect(fromLegacy()).toEqual({ baseline: entry, unit: entry, workspace: entry });
+    expect(readBaselineSourceSnapshot(project, stage, later)?.get(key)).toBe(`100644 ${"d".repeat(40)}`);
     expect(existsSync(join(legacy, stage))).toBe(true);
   });
 
@@ -255,7 +274,7 @@ describe("t339 upgrading an in-flight classic intent", () => {
     expect(run(STATE, project, ["lookup", "next-stage", "build-and-test", "classic"]).trim()).toBe("deployment-pipeline");
     const status = run(UTILITY, project, ["status"]);
     expect(status).toMatch(/^\s*OPERATION\s+\S+\s+0\/7$/m);
-    expect(status).toContain("Next Stage:     deployment-pipeline\n");
+    expect(status).toContain("Next Stage:     Deployment Pipeline\n");
     expect(readFileSync(path, "utf-8")).toBe(content);
   });
 
@@ -267,26 +286,26 @@ describe("t339 upgrading an in-flight classic intent", () => {
       expect(getField(readFileSync(path, "utf-8"), field)).toBeNull();
     }
     const defaults = next(project);
-    expect(defaults.ceremony).toEqual({ sensors: "on", learnings: "on", summary_confirmation: "off" });
+    expect(defaults.ceremony).toEqual({ sensors: "on", learnings: "on", summary_confirmation: "off", plan_approval: "on", collaborators: "off" });
     expect(defaults.sensors_applicable).toEqual(["required-sections", "upstream-coverage"]);
     expect(defaults.protocol_modules).toContain("learnings");
 
     run(UTILITY, project, ["config-change", "--sensors", "on", "--learnings", "on", "--summary-confirmation", "on"]);
     for (const field of ["Sensors", "Learnings", "Summary Confirmation"]) {
-      expect(getField(readFileSync(path, "utf-8"), field)).toBe("on (set by you)");
+      expect(getField(readFileSync(path, "utf-8"), field)).toBe("on (set by a command)");
     }
     const restored = next(project);
     expect(restored.stage).toBe("deployment-pipeline");
-    expect(restored.ceremony).toEqual({ sensors: "on", learnings: "on", summary_confirmation: "on" });
+    expect(restored.ceremony).toEqual({ sensors: "on", learnings: "on", summary_confirmation: "on", plan_approval: "on", collaborators: "off" });
     expect(restored.sensors_applicable).toEqual(["required-sections", "upstream-coverage"]);
     expect(restored.protocol_modules).toContain("learnings");
-  }, 15_000); // Setup and four real CLI handshakes exceeded the macOS 5s default.
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-  test("classic caps an adversarial override to advisory, while a none override still silences the reviewer", () => {
+  test("an adversarial override keeps a stage's declared advisory class, while a none override still silences the reviewer", () => {
     const { project, path } = legacyClassic();
     run(UTILITY, project, ["config-change", "--review", "adversarial"]);
-    // "adversarial" is no per-run ceiling, so the field stays empty (stage defaults).
-    expect(getField(readFileSync(path, "utf-8"), "Review Override")).toBe("");
+    // "adversarial" is stored and replaces classic's advisory cap as the ceiling.
+    expect(getField(readFileSync(path, "utf-8"), "Review Override")).toBe("adversarial");
     // Revisit a reviewer-bearing stage without asking an isolated runner, which
     // deliberately ignores the active intent's saved overrides.
     let content = setCheckbox(readFileSync(path, "utf-8"), "requirements-analysis", "in-progress");
@@ -297,7 +316,8 @@ describe("t339 upgrading an in-flight classic intent", () => {
       ["Next Stage", "user-stories"],
     ]) content = setField(content, field, value);
     writeFileSync(path, content);
-    // Low wins: the scope's advisory cap lowers the adversarial override.
+    // requirements-analysis declares advisory, and no ceiling raises a class
+    // past its declaration, so it stays advisory with the cap lifted.
     const capped = next(project);
     expect(capped.stage).toBe("requirements-analysis");
     expect(capped.reviewer).toBe("aidlc-product-lead-agent");
@@ -317,7 +337,6 @@ describe("t339 upgrading an in-flight classic intent", () => {
     expect(workshop.stage).toBe("requirements-analysis");
     expect(workshop.reviewer).toBeUndefined();
     expect(getField(readFileSync(path, "utf-8"), "Review Override")).toBe("none");
-    // Keep the complete override history together. Hosted Windows exhausted
-    // the former 10s cap at the final next handshake; ordinary runs stay fast.
-  }, process.platform === "win32" ? 30_000 : 10_000);
+    // Keep the complete override history within one fixture backstop.
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });

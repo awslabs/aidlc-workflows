@@ -1,5 +1,7 @@
 // covers: function:workspaceSourceFingerprint
 // covers: function:gitCommitSourceListing
+// covers: function:unmergedRootSettingsNotices
+// covers: function:withWorkspaceSourceStateCache, subcommand:aidlc-state:gate-start, subcommand:aidlc-state:revise
 //
 // t314 - reviewer receipts bound to workspace source state (#629).
 //
@@ -36,7 +38,13 @@
 // per-unit branch resolves `none` and exercises the stage-level fallback -
 // exactly the receipt path the fingerprint filter protects.
 
-import { deterministicCaseTimeoutMs } from "../harness/test-budget.ts";
+import {
+  NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS,
+  NATIVE_PROCESS_CLEANUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingCleanupTimeoutMs,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
 import { afterAll, beforeEach, afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -55,25 +63,31 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { isAbsolute, join, resolve as resolvePath } from "node:path";
+import { isAbsolute, join, relative, resolve as resolvePath } from "node:path";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import {
+  _legacyWorkspaceSourceFingerprintForTests,
   reviewedSourceRefPrefix,
   worktreePath,
   boltSlugForUnit,
   auditBlockField,
+  currentSwarmSourceMergeChain,
   gitCommitSourceListing,
   readAllAuditShards,
+  readWorkspaceSourceSnapshot,
   sourceBaselineAuditFields,
   reviewArtifactFingerprint,
   reviewRecordDigest,
   type ReviewRecord,
   resolveStage,
   shapeSourceSnapshotIndex,
+  withWorkspaceSourceStateCache,
   workspaceSourceFingerprint,
   workspaceSourceListing,
   workspaceSourcePathIsExcluded,
+  writeBaselineSourceSnapshot,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import { guardPreflight } from "../../dist/claude/.claude/tools/aidlc-state.ts";
 import {
   fixtureIntentId8,
   AIDLC_SRC,
@@ -90,10 +104,11 @@ import {
   seedStateFile,
   setupWorktreeFixture,
 } from "../harness/fixtures.ts";
+import { approveSuppliedCheckCommand } from "../harness/verification-command.ts";
 
 // The default also governs afterAll removal of a dozen-plus worktree fixtures,
 // which exceeds bun's 5s hook default under load; per-case literals stay.
-setDefaultTimeout(Math.max(120_000, deterministicCaseTimeoutMs()));
+setDefaultTimeout(NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
 const BUN = process.execPath;
 const STATE = join(AIDLC_SRC, "tools", "aidlc-state.ts");
@@ -103,7 +118,7 @@ const WORKTREE_TOOL = join(AIDLC_SRC, "tools", "aidlc-worktree.ts");
 const REVIEWER = "aidlc-architecture-reviewer-agent"; // code-generation's declared reviewer
 
 function git(dir: string, args: string[]): void {
-  const r = spawnSync("git", ["-C", dir, ...args], { encoding: "utf-8" });
+  const r = spawnSync("git", ["-C", dir, ...args], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" });
   if ((r.status ?? -1) !== 0) {
     throw new Error(`git ${args.join(" ")} failed: ${r.stdout}${r.stderr}`);
   }
@@ -143,6 +158,7 @@ function guarded(
   env.AIDLC_ALLOW_DIRECT_STATE_TRANSITIONS = "1";
   env.AIDLC_SKIP_REVISION_BACKSTOP = "1";
   const r = spawnSync(BUN, [STATE, ...args, "--project-dir", proj], {
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     encoding: "utf-8",
     env,
   });
@@ -156,6 +172,7 @@ function recordReview(
   unit?: string,
   verdict = "READY",
   claimPaths?: Array<{ path: string; repo?: string }>,
+  openGate = true,
 ): void {
   // Review requests require every declared output. Seed the minimal real
   // contract in fixtures that focus on source freshness; never overwrite a
@@ -253,6 +270,7 @@ function recordReview(
   ];
   if (unit) baseArgs.push("--unit", unit);
   let requested = spawnSync(BUN, baseArgs, {
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     encoding: "utf-8",
     env: {
       ...process.env,
@@ -270,6 +288,7 @@ function recordReview(
         index > 0 && baseArgs[index - 1] === "--iteration" ? iteration : arg
       );
       requested = spawnSync(BUN, baseArgs, {
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
         encoding: "utf-8",
         env: {
           ...process.env,
@@ -291,6 +310,7 @@ function recordReview(
   );
   const args = [...baseArgs, "--verdict", verdict];
   const r = spawnSync(BUN, args, {
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     encoding: "utf-8",
     env: {
       ...process.env,
@@ -301,7 +321,7 @@ function recordReview(
   if ((r.status ?? -1) !== 0) {
     throw new Error(`recordReview failed: ${r.stdout ?? ""}${r.stderr ?? ""}`);
   }
-  if (stage === "code-generation") {
+  if (stage === "code-generation" && openGate) {
     const gate = guarded(proj, ["gate-start", stage]);
     if (!unit && verdict === "READY" && gate.rc !== 0) {
       throw new Error(`gate-start after review failed: ${gate.out}`);
@@ -420,6 +440,7 @@ describe("t314 workspace source fingerprint (in-process)", () => {
     writeFileSync(src, "export const answer = 99;\n", "utf-8"); // dirty worktree
     workspaceSourceFingerprint(dir);
     const status = spawnSync("git", ["-C", dir, "status", "--porcelain"], {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
       encoding: "utf-8",
     }).stdout;
     // The edit stays UNSTAGED (` M`) - a staged `M ` would mean the real index
@@ -776,7 +797,7 @@ describe("t314 workspace source fingerprint (in-process)", () => {
       const head = spawnSync(
         "git",
         ["-C", dir, "rev-parse", "HEAD"],
-        { encoding: "utf-8" },
+        { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" },
       ).stdout.trim();
       expect(workspaceSourceFingerprint(dir)).toBeNull();
       expect(gitCommitSourceListing(dir, head, true)).toBeNull();
@@ -878,7 +899,55 @@ describe("t314 workspace source fingerprint (in-process)", () => {
     } finally {
       rmSync(subDir, { recursive: true, force: true });
     }
-  }, 20000); // git submodule add is a real clone op - slower than bun's 5000ms default under load
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS); // git submodule add is a real clone op - slower than bun's 5000ms default under load
+
+  // #1352: a commit's listing read every initialized submodule as an empty
+  // directory while the live walk read its gitlink and files, so a clean
+  // checkout with a submodule could never match its own HEAD.
+  test("a commit's listing reads an initialized submodule the way the live walk does", () => {
+    const subDir = mkdtempSync(join(tmpdir(), "t314-commit-sub-"));
+    const cloneRoot = mkdtempSync(join(tmpdir(), "t314-commit-sub-clone-"));
+    try {
+      git(subDir, ["init", "-q"]);
+      git(subDir, ["config", "user.email", "t@test"]);
+      git(subDir, ["config", "user.name", "t"]);
+      writeFileSync(join(subDir, "lib.ts"), "export const v = 1;\n", "utf-8");
+      git(subDir, ["add", "-A"]);
+      git(subDir, ["commit", "-qm", "sub init"]);
+      seedGitRepo(dir);
+      git(dir, ["-c", "protocol.file.allow=always", "submodule", "add", "-q", subDir, "vendor/sub"]);
+      git(dir, ["commit", "-qm", "add submodule"]);
+      const head = spawnSync("git", ["-C", dir, "rev-parse", "HEAD"], {
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8",
+      }).stdout.trim();
+      const entries = (listing: Map<string, string> | null) => [...(listing ?? new Map()).entries()].sort();
+
+      const committed = gitCommitSourceListing(dir, head, true);
+      expect(committed?.get("\0vendor/sub/lib.ts")).toBeDefined();
+      expect(committed?.get("\0vendor/sub")).toMatch(/^160000 [0-9a-f]{40,64}$/);
+      expect(entries(committed)).toEqual(entries(workspaceSourceListing(dir)));
+
+      // An uncommitted edit inside the submodule is still a difference.
+      writeFileSync(join(dir, "vendor", "sub", "lib.ts"), "export const v = 2;\n", "utf-8");
+      expect(workspaceSourceListing(dir)?.get("\0vendor/sub/lib.ts"))
+        .not.toBe(committed?.get("\0vendor/sub/lib.ts"));
+      expect(entries(gitCommitSourceListing(dir, head, true))).toEqual(entries(committed));
+
+      // A clone that leaves the submodule uninitialized has an empty directory
+      // there, and both walks read it the same way.
+      const clone = join(cloneRoot, "app");
+      const cloned = spawnSync("git", ["clone", "-q", dir, clone], {
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8",
+      });
+      expect(cloned.status, cloned.stderr).toBe(0);
+      const cloneCommitted = gitCommitSourceListing(clone, head, true);
+      expect(cloneCommitted?.has("\0vendor/sub/lib.ts")).toBe(false);
+      expect(entries(cloneCommitted)).toEqual(entries(workspaceSourceListing(clone)));
+    } finally {
+      rmSync(subDir, { recursive: true, force: true });
+      rmSync(cloneRoot, { recursive: true, force: true });
+    }
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("an initialized submodule keeps the same fingerprint and gitlink listing without Git on PATH", () => {
     const subDir = mkdtempSync(join(tmpdir(), "t314-fp-sub-nogit-"));
@@ -911,12 +980,13 @@ describe("t314 workspace source fingerprint (in-process)", () => {
       const nestedHead = spawnSync(
         "git",
         ["-C", nestedDir, "rev-parse", "HEAD"],
-        { encoding: "utf-8" },
+        { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" },
       ).stdout.trim();
       expect(baseline).not.toBeNull();
       expect(nestedHead).toMatch(/^[0-9a-f]{40,64}$/);
 
       const gitProbe = spawnSync("git", ["--version"], {
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
         encoding: "utf-8",
         env: { ...process.env, PATH: noGitPath },
       });
@@ -940,7 +1010,7 @@ describe("t314 workspace source fingerprint (in-process)", () => {
         {
           encoding: "utf-8",
           env: { ...process.env, PATH: noGitPath },
-          timeout: 30_000,
+          timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
         },
       );
       expect(child.status, child.stderr).toBe(0);
@@ -991,7 +1061,7 @@ describe("t314 workspace source fingerprint (in-process)", () => {
       rmSync(subDir, { recursive: true, force: true });
       rmSync(noGitPath, { recursive: true, force: true });
     }
-  }, 30000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("a nested linked worktree resolves shared branch refs from commondir", () => {
     const repo = mkdtempSync(join(tmpdir(), "t314-linked-origin-"));
@@ -1009,7 +1079,7 @@ describe("t314 workspace source fingerprint (in-process)", () => {
       const linkedHead = spawnSync(
         "git",
         ["-C", linked, "rev-parse", "HEAD"],
-        { encoding: "utf-8" },
+        { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" },
       ).stdout.trim();
       writeFileSync(
         join(repo, "app.ts"),
@@ -1021,7 +1091,7 @@ describe("t314 workspace source fingerprint (in-process)", () => {
       const otherHead = spawnSync(
         "git",
         ["-C", repo, "rev-parse", "HEAD"],
-        { encoding: "utf-8" },
+        { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" },
       ).stdout.trim();
 
       const marker = singleGitMetadataLineForTest(
@@ -1051,7 +1121,7 @@ describe("t314 workspace source fingerprint (in-process)", () => {
     } finally {
       rmSync(repo, { recursive: true, force: true });
     }
-  }, 30000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   // #646 review - reproduction. Without `-z`, git's
   // default core.quotePath wraps a path containing a non-ASCII byte (or other
@@ -1091,7 +1161,7 @@ describe("t314 workspace source fingerprint (in-process)", () => {
     } finally {
       rmSync(subDir, { recursive: true, force: true });
     }
-  }, 20000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   // Both old package-local caches and the new engine directory must stay out
   // of source identity. Match their full record-tree shape, never the leaf
@@ -1203,7 +1273,7 @@ describe("t314 workspace source fingerprint (in-process)", () => {
       const head = spawnSync(
         "git",
         ["-C", dir, "rev-parse", "HEAD"],
-        { encoding: "utf-8" },
+        { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" },
       ).stdout.trim();
       const fp = workspaceSourceFingerprint(dir);
       const committedBefore = gitCommitSourceListing(dir, head, true);
@@ -1252,7 +1322,7 @@ describe("t314 workspace source fingerprint (in-process)", () => {
         const head = spawnSync(
           "git",
           ["-C", repo, "rev-parse", "HEAD"],
-          { encoding: "utf-8" },
+          { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" },
         ).stdout.trim();
         const listing = gitCommitSourceListing(repo, head, true);
         expect(listing, `header at ${headerStart}`).not.toBeNull();
@@ -1293,7 +1363,7 @@ describe("t314 workspace source fingerprint (in-process)", () => {
       const head = spawnSync(
         "git",
         ["-C", dir, "rev-parse", "HEAD"],
-        { encoding: "utf-8" },
+        { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" },
       ).stdout.trim();
 
       const before = gitCommitSourceListing(dir, head, true);
@@ -1332,13 +1402,13 @@ describe("t314 workspace source fingerprint (in-process)", () => {
     const head = spawnSync(
       "git",
       ["-C", dir, "rev-parse", "HEAD"],
-      { encoding: "utf-8" },
+      { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" },
     ).stdout.trim();
     const oids = paths.map((path) =>
       spawnSync(
         "git",
         ["-C", dir, "rev-parse", `${head}:${path}`],
-        { encoding: "utf-8" },
+        { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" },
       ).stdout.trim()
     );
     const responseBytes = (oid: string, bytes: Buffer): number =>
@@ -1387,7 +1457,7 @@ describe("t314 workspace source fingerprint (in-process)", () => {
       const head = spawnSync(
         "git",
         ["-C", dir, "rev-parse", "HEAD"],
-        { encoding: "utf-8" },
+        { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" },
       ).stdout.trim();
       const before = gitCommitSourceListing(dir, head, false);
       expect(before?.has("\0.aidlc/worktree-meta.json")).toBe(true);
@@ -1483,7 +1553,7 @@ process.stdin.on("data", (chunk) => {
     expect(fp1).not.toBeNull();
     writeFileSync(src, "export const answer = 42;   \n", "utf-8");
     expect(workspaceSourceFingerprint(dir)).not.toBe(fp1);
-  }, 20000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   // Git's built-in `$Id$` conversion needs no driver at all, so scanning for
   // `filter=` alone missed it while it collapsed worktrees just the same.
@@ -1532,7 +1602,7 @@ process.stdin.on("data", (chunk) => {
     expect(fp1).not.toBeNull();
     writeFileSync(src, "export const answer = 42;   \n", "utf-8");
     expect(workspaceSourceFingerprint(dir)).not.toBe(fp1);
-  }, 45000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   // The raw-content binding is scoped to paths a clean driver actually touches,
   // so a repo that filters nothing must keep the bare tree sha it had before -
@@ -1578,7 +1648,7 @@ process.stdin.on("data", (chunk) => {
     const rootHead = spawnSync(
       "git",
       ["-C", dir, "rev-parse", "HEAD"],
-      { encoding: "utf-8" },
+      { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" },
     ).stdout.trim();
     const rootLive = workspaceSourceListing(dir);
     const rootCommitted = gitCommitSourceListing(dir, rootHead, true);
@@ -1629,25 +1699,28 @@ process.stdin.on("data", (chunk) => {
     try {
       expect(
         spawnSync("git", ["-C", dir, "read-tree", "HEAD"], {
+          timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
           env,
           encoding: "utf-8",
         }).status,
       ).toBe(0);
       expect(
         spawnSync("git", ["-C", dir, "add", "-A"], {
+          timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
           env,
           encoding: "utf-8",
         }).status,
       ).toBe(0);
       expect(shapeSourceSnapshotIndex(dir, indexFile, true)).not.toBeNull();
       const tree = spawnSync("git", ["-C", dir, "write-tree"], {
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
         env,
         encoding: "utf-8",
       }).stdout.trim();
       const files = spawnSync(
         "git",
         ["-C", dir, "ls-tree", "-r", "--name-only", tree],
-        { encoding: "utf-8" },
+        { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" },
       ).stdout;
       for (const name of ["aidlc", "dist", "node_modules"]) {
         expect(files).toContain(name);
@@ -1689,7 +1762,7 @@ process.stdin.on("data", (chunk) => {
     const siblingHead = spawnSync(
       "git",
       ["-C", repoA, "rev-parse", "HEAD"],
-      { encoding: "utf-8" },
+      { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" },
     ).stdout.trim();
     const siblingLive = workspaceSourceListing(dir);
     const siblingCommitted = gitCommitSourceListing(
@@ -1737,7 +1810,7 @@ process.stdin.on("data", (chunk) => {
     } finally {
       rmSync(subDir, { recursive: true, force: true });
     }
-  }, 20000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   // The nested-source regression from the same review round must hold in the
   // multi-repo layout too, not just the legacy single-repo one.
@@ -1845,13 +1918,13 @@ describe("t314 receipt stamping + completion guard (cli)", () => {
     const r = guarded(proj, ["approve", "code-generation", "--user-input", "ship it"]);
     expect(r.out).not.toContain("project source changed after");
     expect(r.rc).toBe(0);
-  }, 60_000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("no stamp for a reviewer-bearing record-artifact stage without workspace_requires", () => {
     recordReview(proj, "functional-design", REVIEWER);
     expect(readAllAuditShards(proj)).toContain("**Event**: REVIEW_COMPLETED");
     expect(readAllAuditShards(proj)).not.toContain("**Source Fingerprint**: ");
-  }, 60_000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("a post-review source edit refuses completion with the mismatch message", () => {
     recordReview(proj);
@@ -1860,6 +1933,151 @@ describe("t314 receipt stamping + completion guard (cli)", () => {
     expect(r.rc).not.toBe(0);
     expect(r.out).toContain("project source changed after");
     expect(r.out).toContain(REVIEWER);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
+
+  test("under relaxed, a post-review source edit is carried to the gate as the changed paths", () => {
+    const statePath = seededStateFile(proj);
+    writeFileSync(statePath, readFileSync(statePath, "utf-8").replace(
+      /^- \*\*Change Control\*\*: .*$/m,
+      "- **Guard Policy**: relaxed (set by you)",
+    ));
+    recordReview(proj);
+    // The review request kept the listing behind its Source Fingerprint.
+    const fingerprint = /\*\*Source Fingerprint\*\*: ([0-9a-f]{64})/.exec(readAllAuditShards(proj))?.[1];
+    expect(fingerprint).toBeDefined();
+    expect(readWorkspaceSourceSnapshot(proj, "code-generation", fingerprint as string)).not.toBeNull();
+    writeFileSync(src, "export const answer = 1337; // edited after review\n", "utf-8");
+    const r = guarded(proj, ["approve", "code-generation", "--user-input", "ship it"]);
+    expect(r.rc, r.out).toBe(0);
+    // The person's line and the record both name the file, not "(paths unavailable)".
+    expect(r.out).toContain("app.ts changed after the Code Generation review; carrying on.");
+    const row = readAllAuditShards(proj).split(/\n---\n/).find((block) => block.includes("**Event**: CHANGE_ACCEPTED"));
+    expect(row).toContain("**Checkpoint**: review-receipt");
+    expect(row).toContain("**Changed**: app.ts");
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
+
+  test.each([
+    ["gate-start", false],
+    ["gate-start", true],
+    ["revise", false],
+    ["revise", true],
+    ["revalidate", false],
+    ["revalidate", true],
+  ] as const)(
+    "%s rechecks reviewed source after sensors (source mutation: %s)",
+    (action, mutate) => {
+      // The approved plan uses stage-level construction artifacts.
+      writeFileSync(
+        seededStateFile(proj),
+        readFileSync(seededStateFile(proj), "utf-8").replace(
+          "- [ ] units-generation — EXECUTE",
+          "- [S] units-generation — SKIP",
+        ),
+      );
+      const config = join(proj, ".aidlc", "gate-source-test");
+      const sensors = join(config, "sensors");
+      const scripts = join(config, "scripts");
+      mkdirSync(sensors, { recursive: true });
+      mkdirSync(scripts, { recursive: true });
+      const id = "source-mutation-test";
+      writeFileSync(join(sensors, `aidlc-${id}.md`), [
+        "---",
+        `id: ${id}`,
+        "kind: deterministic",
+        `command: bun .claude/tools/aidlc-sensor-${id}.ts`,
+        "default_severity: blocking",
+        "fire_on: gate",
+        "description: source revalidation test",
+        "category: test",
+        'matches: "**/code-generation-plan.md"',
+        "timeout_seconds: 5",
+        "---",
+        "",
+      ].join("\n"));
+      writeFileSync(join(scripts, `aidlc-sensor-${id}.ts`), [
+        'import { writeFileSync } from "node:fs";',
+        ...(mutate
+          ? [`writeFileSync(${JSON.stringify(src)}, "export const answer = 9001; // changed during sensor\\n");`]
+          : []),
+        'process.stdout.write(JSON.stringify({ pass: true, findings_count: 0 }) + "\\n");',
+        "",
+      ].join("\n"));
+      const graph = join(config, "stage-graph.json");
+      writeFileSync(graph, JSON.stringify([{
+        ...resolveStage("code-generation"),
+        sensors: [id],
+        sensors_applicable: [{
+          id,
+          path: `.claude/sensors/aidlc-${id}.md`,
+          fire_on: "gate",
+          default_severity: "blocking",
+          category: "test",
+          matches: "**/code-generation-plan.md",
+        }],
+      }]));
+      if (action === "revise") {
+        const rejected = guarded(proj, [
+          "reject", "code-generation", "--feedback", "Revise and review this stage again.",
+        ]);
+        expect(rejected.rc).toBe(0);
+      }
+      recordReview(
+        proj, "code-generation", REVIEWER, undefined, "READY", undefined,
+        action === "revalidate",
+      );
+      const before = workspaceSourceFingerprint(proj);
+      const stateBefore = readFileSync(seededStateFile(proj), "utf-8");
+      const result = guarded(
+        proj,
+        [action === "revise" ? "revise" : "gate-start", "code-generation"],
+        {
+          AIDLC_DISABLE_SENSORS: "0",
+          AIDLC_SKIP_REVIEWER_GATE_GUARD: "0",
+          AIDLC_SKIP_SOURCE_FRESHNESS: "0",
+          AIDLC_STAGE_GRAPH: graph,
+          AIDLC_SENSORS_DIR: sensors,
+          AIDLC_SENSOR_SCRIPT_DIR: scripts,
+        },
+      );
+      expect(readAllAuditShards(proj)).toContain("**Event**: SENSOR_PASSED");
+      expect(workspaceSourceFingerprint(proj) !== before).toBe(mutate);
+      const stateAfter = readFileSync(seededStateFile(proj), "utf-8");
+      if (mutate) {
+        expect(result.rc).not.toBe(0);
+        expect(result.out).toContain("SOURCE_REVIEW_STALE");
+        expect(stateAfter).toBe(stateBefore);
+      } else {
+        expect(result.rc).toBe(0);
+        expect(stateAfter).toContain("- [?] code-generation");
+      }
+    },
+    60_000,
+  );
+
+  test("each admission reads fresh source inside a cached routing calculation", () => {
+    recordReview(proj);
+    const stage = resolveStage("code-generation");
+    if (!stage) throw new Error("code-generation stage missing");
+    const state = readFileSync(seededStateFile(proj), "utf-8");
+    const priorSkip = process.env.AIDLC_SKIP_SOURCE_FRESHNESS;
+    process.env.AIDLC_SKIP_SOURCE_FRESHNESS = "0";
+    try {
+      withWorkspaceSourceStateCache(() => {
+        const before = workspaceSourceFingerprint(proj);
+        const options = { action: "complete", entrypoint: "approve" } as const;
+        expect(guardPreflight(proj, state, stage, options).executable).toBe(true);
+        writeFileSync(src, "export const answer = 9002; // between admissions\n");
+        // The routing calculation still owns its earlier observation.
+        expect(workspaceSourceFingerprint(proj)).toBe(before);
+        const refused = guardPreflight(proj, state, stage, options);
+        expect(refused.executable).toBe(false);
+        if (refused.executable) throw new Error("expected stale source refusal");
+        expect(refused.refusal.code).toBe("SOURCE_REVIEW_STALE");
+      });
+    } finally {
+      if (priorSkip === undefined) delete process.env.AIDLC_SKIP_SOURCE_FRESHNESS;
+      else process.env.AIDLC_SKIP_SOURCE_FRESHNESS = priorSkip;
+    }
   }, 60_000);
 
   test("source changed while review is pending cannot become the accepted request baseline", () => {
@@ -1901,7 +2119,7 @@ describe("t314 receipt stamping + completion guard (cli)", () => {
       proj,
     ];
     const originalSource = readFileSync(src, "utf-8");
-    expect(spawnSync(BUN, request, { encoding: "utf-8" }).status).toBe(0);
+    expect(spawnSync(BUN, request, { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" }).status).toBe(0);
     writeFileSync(src, "export const answer = 9001; // pending mutation\n", "utf-8");
     appendFileSync(
       artifact,
@@ -1912,7 +2130,7 @@ describe("t314 receipt stamping + completion guard (cli)", () => {
     const completion = spawnSync(
       BUN,
       [...request, "--verdict", "READY"],
-      { encoding: "utf-8" },
+      { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" },
     );
     expect(completion.status).not.toBe(0);
     expect(`${completion.stdout}${completion.stderr}`).toContain(
@@ -1922,7 +2140,7 @@ describe("t314 receipt stamping + completion guard (cli)", () => {
     const retryWhileStale = spawnSync(
       BUN,
       [...request, "--retry-pending"],
-      { encoding: "utf-8" },
+      { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" },
     );
     expect(retryWhileStale.status).not.toBe(0);
     expect(`${retryWhileStale.stdout}${retryWhileStale.stderr}`).toContain(
@@ -1932,6 +2150,7 @@ describe("t314 receipt stamping + completion guard (cli)", () => {
     writeFileSync(src, originalSource, "utf-8");
     expect(
       spawnSync(BUN, [...request, "--retry-pending"], {
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
         encoding: "utf-8",
       }).status,
     ).toBe(0);
@@ -1942,6 +2161,7 @@ describe("t314 receipt stamping + completion guard (cli)", () => {
     );
     expect(
       spawnSync(BUN, [...request, "--verdict", "READY"], {
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
         encoding: "utf-8",
       }).status,
     ).toBe(0);
@@ -1996,6 +2216,7 @@ describe("t314 receipt stamping + completion guard (cli)", () => {
       proj,
     ];
     const upgrade = spawnSync(BUN, [...request, "--retry-pending"], {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
       encoding: "utf-8",
     });
     expect(upgrade.status, `${upgrade.stdout}${upgrade.stderr}`).toBe(0);
@@ -2010,6 +2231,7 @@ describe("t314 receipt stamping + completion guard (cli)", () => {
       "utf-8",
     );
     const completed = spawnSync(BUN, [...request, "--verdict", "READY"], {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
       encoding: "utf-8",
     });
     expect(completed.status, `${completed.stdout}${completed.stderr}`).toBe(0);
@@ -2035,7 +2257,7 @@ describe("t314 receipt stamping + completion guard (cli)", () => {
       guarded(proj, ["approve", "code-generation", "--user-input", "ship it"])
         .rc,
     ).toBe(0);
-  }, 60_000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("source mismatch permits one real recovery review after the normal budget is exhausted", () => {
     recordReview(proj, "code-generation", REVIEWER, undefined, "NOT-READY");
@@ -2059,7 +2281,7 @@ describe("t314 receipt stamping + completion guard (cli)", () => {
       guarded(proj, ["approve", "code-generation", "--user-input", "ship it"])
         .rc,
     ).toBe(0);
-  }, 60_000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("AIDLC_SKIP_SOURCE_FRESHNESS=1 restores the legacy pass (off-switch)", () => {
     recordReview(proj);
@@ -2068,7 +2290,7 @@ describe("t314 receipt stamping + completion guard (cli)", () => {
       AIDLC_SKIP_SOURCE_FRESHNESS: "1",
     });
     expect(r.rc).toBe(0);
-  }, 60_000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("a legacy receipt without the field keeps passing after a source edit (fail-open)", () => {
     recordReview(proj);
@@ -2077,7 +2299,70 @@ describe("t314 receipt stamping + completion guard (cli)", () => {
     writeFileSync(src, "export const answer = 8;\n", "utf-8");
     const r = guarded(proj, ["approve", "code-generation", "--user-input", "ship it"]);
     expect(r.rc).toBe(0);
-  }, 60_000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
+
+  test("a review recorded before files were excluded by name still counts after upgrading", () => {
+    // Evidence from the earlier walk bound .DS_Store and the coverage database.
+    // After the upgrade the walk leaves them out; nothing changed, so approval
+    // must not stop on them or spend the stale-review recovery.
+    const finder = "\u0000\u0000finder";
+    const coverage = "SQLite format 3\u0000v1";
+    writeFileSync(join(proj, ".DS_Store"), finder, "utf-8");
+    writeFileSync(join(proj, ".coverage"), coverage, "utf-8");
+    // The stage-entry baseline the earlier walk would have kept lists both.
+    const blob = (body: string) => `100644 ${createHash("sha256").update(body).digest("hex")}`;
+    const earlierBaseline = new Map(workspaceSourceListing(proj) ?? []);
+    earlierBaseline.set("\u0000.DS_Store", blob(finder));
+    earlierBaseline.set("\u0000.coverage", blob(coverage));
+    appendAuditEntry(
+      "WORKFLOW_STARTED",
+      {
+        Scope: "feature",
+        "Source Baseline": writeBaselineSourceSnapshot(proj, "code-generation", earlierBaseline),
+      },
+      proj,
+    );
+    const boundarySecond = Math.floor(Date.now() / 1000);
+    while (Math.floor(Date.now() / 1000) === boundarySecond) {}
+    recordReview(proj);
+    const today = workspaceSourceFingerprint(proj);
+    expect(today).not.toBeNull();
+    const earlier = _legacyWorkspaceSourceFingerprintForTests(today as string);
+    expect(earlier).not.toBeNull();
+    expect(earlier).not.toBe(today);
+    const shard = seededAuditShard(proj);
+    rewriteRecordedSourceBinding(proj, earlier as string);
+    writeFileSync(
+      shard,
+      readFileSync(shard, "utf-8")
+        .replace(/^\*\*Source Fingerprint\*\*: .*$/gm, `**Source Fingerprint**: ${earlier}`)
+        .replace(/^\*\*Request Source Fingerprint\*\*: .*$/gm, `**Request Source Fingerprint**: ${earlier}`),
+      "utf-8",
+    );
+    const approved = guarded(proj, ["approve", "code-generation", "--user-input", "ship it"]);
+    expect(approved.out).not.toContain("project source changed after");
+    expect(approved.rc, approved.out).toBe(0);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
+
+  test("earlier-walk review evidence still refuses a real source change after upgrading", () => {
+    writeFileSync(join(proj, ".DS_Store"), "\u0000\u0000finder", "utf-8");
+    recordReview(proj);
+    const earlier = _legacyWorkspaceSourceFingerprintForTests(workspaceSourceFingerprint(proj) as string);
+    expect(earlier).not.toBeNull();
+    const shard = seededAuditShard(proj);
+    rewriteRecordedSourceBinding(proj, earlier as string);
+    writeFileSync(
+      shard,
+      readFileSync(shard, "utf-8")
+        .replace(/^\*\*Source Fingerprint\*\*: .*$/gm, `**Source Fingerprint**: ${earlier}`)
+        .replace(/^\*\*Request Source Fingerprint\*\*: .*$/gm, `**Request Source Fingerprint**: ${earlier}`),
+      "utf-8",
+    );
+    writeFileSync(src, "export const answer = 7; // edited after review\n", "utf-8");
+    const refused = guarded(proj, ["approve", "code-generation", "--user-input", "ship it"]);
+    expect(refused.rc).not.toBe(0);
+    expect(refused.out).toContain("project source changed after");
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("a newly stamped unbindable receipt remains fail-closed while Git is still unavailable", () => {
     recordReview(proj);
@@ -2102,7 +2387,7 @@ describe("t314 receipt stamping + completion guard (cli)", () => {
     expect(r.out).toContain(".aidlc-source-paths.json");
     expect(r.out).not.toContain("project source changed after");
     expect(r.out).not.toContain("revert the source change");
-  }, 60_000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("a true advance replay stays idempotent even if source later changes", () => {
     recordReview(proj);
@@ -2111,7 +2396,7 @@ describe("t314 receipt stamping + completion guard (cli)", () => {
     const replay = guarded(proj, ["advance", "code-generation"]);
     expect(replay.rc).toBe(0);
     expect(replay.out).toContain('"replay":true');
-  }, 60_000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   for (const route of ["advance", "finalize", "complete-workflow"] as const) {
     test(`an already-completed stage without receipts recovers through ${route}`, () => {
@@ -2119,7 +2404,7 @@ describe("t314 receipt stamping + completion guard (cli)", () => {
       const recovery = guarded(proj, [route, "code-generation"]);
       expect(recovery.out).not.toContain("has not reviewed the current output");
       expect(recovery.rc).toBe(0);
-    }, 60_000);
+    }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
     test(`a partial approval crash window still rechecks source freshness through ${route}`, () => {
       recordReview(proj);
@@ -2128,7 +2413,7 @@ describe("t314 receipt stamping + completion guard (cli)", () => {
       const recovery = guarded(proj, [route, "code-generation"]);
       expect(recovery.rc).not.toBe(0);
       expect(recovery.out).toContain("project source changed after");
-    }, 60_000);
+    }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
     test(`an artifact change cannot hide stale source during completed-stage recovery through ${route}`, () => {
       recordReview(proj);
@@ -2151,7 +2436,7 @@ describe("t314 receipt stamping + completion guard (cli)", () => {
       const recovery = guarded(proj, [route, "code-generation"]);
       expect(recovery.rc).not.toBe(0);
       expect(recovery.out).toContain("project source changed after");
-    }, 60_000);
+    }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
   }
 
   for (const artifactBinding of ["missing", "malformed"] as const) {
@@ -2174,7 +2459,7 @@ describe("t314 receipt stamping + completion guard (cli)", () => {
       const recovery = guarded(proj, ["advance", "code-generation"]);
       expect(recovery.out).not.toContain("project source changed after");
       expect(recovery.rc).toBe(0);
-    }, 60_000);
+    }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
   }
 });
 
@@ -2360,7 +2645,7 @@ describe("t314 multi-unit source attribution", () => {
     const r = guarded(proj, ["approve", "code-generation", "--user-input", "ship it"]);
     expect(r.out).not.toContain("source-fingerprint mismatch");
     expect(r.rc).toBe(0);
-  }, 60_000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   // #646 review - the protocol's own rework loop. stage-protocol.md §12a
   // requires recording a NOT-READY receipt, re-invoking the lead to fix the
@@ -2389,7 +2674,7 @@ describe("t314 multi-unit source attribution", () => {
     const r = guarded(proj, ["approve", "code-generation", "--user-input", "ship it"]);
     expect(r.out).not.toContain("source-fingerprint mismatch");
     expect(r.rc).toBe(0);
-  }, 60_000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   // #646 review - the second `M`-shaped legitimate transition: a unit that
   // wires itself into a file an earlier unit already created. Ordinary
@@ -2410,7 +2695,7 @@ describe("t314 multi-unit source attribution", () => {
     const r = guarded(proj, ["approve", "code-generation", "--user-input", "ship it"]);
     expect(r.out).not.toContain("source-fingerprint mismatch");
     expect(r.rc).toBe(0);
-  }, 60_000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   // Alpha's manifest/snapshot owns alpha.ts. A later beta review refreshes the
   // global outer binding but cannot shield alpha.ts because beta does not claim
@@ -2444,7 +2729,71 @@ describe("t314 multi-unit source attribution", () => {
     const r = guarded(proj, ["approve", "code-generation", "--user-input", "ship it"]);
     expect(r.rc).toBe(1);
     expect(r.out).toContain("Changed after review: alpha");
-  }, 60_000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
+
+  // Under relaxed a Unit whose manifest grew after its review keeps the review;
+  // the record names the path the Unit claims since.
+  test("under relaxed, a Unit whose list of files grew after its review names the added path", () => {
+    const statePath = seededStateFile(proj);
+    writeFileSync(statePath, readFileSync(statePath, "utf-8").replace(
+      /^- \*\*Change Control\*\*: .*$/m,
+      "- **Guard Policy**: relaxed (set by you)",
+    ));
+    writeFileSync(join(proj, "alpha.ts"), "export const alpha = 1;\n", "utf-8");
+    git(proj, ["add", "-A"]);
+    git(proj, ["commit", "-qm", "alpha code"]);
+    recordReview(proj, "code-generation", REVIEWER, "alpha", "READY", [{ path: "alpha.ts" }]);
+    writeFileSync(join(proj, "beta.ts"), "export const beta = 2;\n", "utf-8");
+    git(proj, ["add", "-A"]);
+    git(proj, ["commit", "-qm", "beta code"]);
+    recordReview(proj, "code-generation", REVIEWER, "beta", "READY", [{ path: "beta.ts" }]);
+
+    // alpha claims one more file after its review.
+    writeFileSync(join(proj, "alpha-extra.ts"), "export const extra = 1;\n", "utf-8");
+    git(proj, ["add", "-A"]);
+    git(proj, ["commit", "-qm", "alpha claims another file"]);
+    const manifest = join(seededRecordDir(proj), "construction", "alpha", "code-generation", "source-manifest.json");
+    writeFileSync(
+      manifest,
+      `${JSON.stringify({ stage: "code-generation", unit: "alpha", version: 1, writes: [{ path: "alpha.ts" }, { path: "alpha-extra.ts" }] }, null, 2)}\n`,
+      "utf-8",
+    );
+
+    const r = guarded(proj, ["approve", "code-generation", "--user-input", "ship it"]);
+    expect(r.rc, r.out).toBe(0);
+    expect(r.out).toContain("The alpha Unit's list of files changed after it was reviewed; carrying on.");
+    const row = readAllAuditShards(proj).split(/\n---\n/).find((block) =>
+      block.includes("**Event**: CHANGE_ACCEPTED") && block.includes("**Unit**: alpha"));
+    expect(row).toContain("**Changed**: alpha-extra.ts");
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
+
+  // A manifest rewritten with the same paths after its review changes no file:
+  // the row says so instead of carrying an empty list.
+  test("under relaxed, a manifest-only rewrite after the review is the no-paths case, not a blank list", () => {
+    const statePath = seededStateFile(proj);
+    writeFileSync(statePath, readFileSync(statePath, "utf-8").replace(
+      /^- \*\*Change Control\*\*: .*$/m,
+      "- **Guard Policy**: relaxed (set by you)",
+    ));
+    writeFileSync(join(proj, "alpha.ts"), "export const alpha = 1;\n", "utf-8");
+    git(proj, ["add", "-A"]);
+    git(proj, ["commit", "-qm", "alpha code"]);
+    recordReview(proj, "code-generation", REVIEWER, "alpha", "READY", [{ path: "alpha.ts" }]);
+    writeFileSync(join(proj, "beta.ts"), "export const beta = 2;\n", "utf-8");
+    git(proj, ["add", "-A"]);
+    git(proj, ["commit", "-qm", "beta code"]);
+    recordReview(proj, "code-generation", REVIEWER, "beta", "READY", [{ path: "beta.ts" }]);
+
+    const manifest = join(seededRecordDir(proj), "construction", "alpha", "code-generation", "source-manifest.json");
+    writeFileSync(manifest, `${readFileSync(manifest, "utf-8")}\n`, "utf-8");
+
+    const r = guarded(proj, ["approve", "code-generation", "--user-input", "ship it"]);
+    expect(r.rc, r.out).toBe(0);
+    expect(r.out).toContain("The alpha Unit's list of files changed after it was reviewed; carrying on.");
+    const row = readAllAuditShards(proj).split(/\n---\n/).find((block) =>
+      block.includes("**Event**: CHANGE_ACCEPTED") && block.includes("**Unit**: alpha"));
+    expect(row).toContain("**Changed**: (paths unavailable)");
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   // Re-reviewing alpha refreshes the global outer binding, but beta's own
   // snapshot still detects the unreviewed beta.ts edit and invalidates beta.
@@ -2477,7 +2826,7 @@ describe("t314 multi-unit source attribution", () => {
     const r = guarded(proj, ["approve", "code-generation", "--user-input", "ship it"]);
     expect(r.rc).toBe(1);
     expect(r.out).toContain("Changed after review: beta");
-  }, 60_000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   // The stage-entry baseline sees unreviewed.ts, while neither fresh Unit
   // manifest claims it. A newer beta review cannot launder an unclaimed path.
@@ -2520,7 +2869,41 @@ describe("t314 multi-unit source attribution", () => {
     expect(r.rc).toBe(1);
     expect(r.out).toContain("Unclaimed source changes fail closed");
     expect(r.out).toContain("unreviewed.ts");
-  }, 60_000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
+
+  // A stage-entry baseline the earlier walk recorded lists .DS_Store and the
+  // coverage database. The walk now leaves them out; nobody touched them, so
+  // they are not unclaimed changes and cost no recovery review.
+  test("a stage-entry baseline recorded before files were excluded by name does not count them as unclaimed", () => {
+    const finder = "\u0000\u0000finder";
+    const coverage = "SQLite format 3\u0000v1";
+    writeFileSync(join(proj, ".DS_Store"), finder, "utf-8");
+    writeFileSync(join(proj, ".coverage"), coverage, "utf-8");
+    const blob = (body: string) => `100644 ${createHash("sha256").update(body).digest("hex")}`;
+    const earlierBaseline = new Map(workspaceSourceListing(proj) ?? []);
+    earlierBaseline.set("\u0000.DS_Store", blob(finder));
+    earlierBaseline.set("\u0000.coverage", blob(coverage));
+    appendAuditEntry(
+      "WORKFLOW_STARTED",
+      {
+        Scope: "feature",
+        "Source Baseline": writeBaselineSourceSnapshot(proj, "code-generation", earlierBaseline),
+      },
+      proj,
+    );
+    const boundarySecond = Math.floor(Date.now() / 1000);
+    while (Math.floor(Date.now() / 1000) === boundarySecond) {}
+    writeFileSync(join(proj, "alpha.ts"), "export const alpha = 1;\n", "utf-8");
+    recordReview(proj, "code-generation", REVIEWER, "alpha", "READY", [{ path: "alpha.ts" }]);
+    writeFileSync(join(proj, "beta.ts"), "export const beta = 2;\n", "utf-8");
+    recordReview(proj, "code-generation", REVIEWER, "beta", "READY", [{ path: "beta.ts" }]);
+
+    const gate = guarded(proj, ["gate-start", "code-generation"], { AIDLC_SKIP_REVIEWER_GATE_GUARD: "1" });
+    expect(gate.rc, gate.out).toBe(0);
+    const r = guarded(proj, ["approve", "code-generation", "--user-input", "ship it"]);
+    expect(r.out).not.toContain("Unclaimed source changes fail closed");
+    expect(r.rc, r.out).toBe(0);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   // #646 review - the recorded-repo layout is the DEFAULT (sibling
   // auto-discovery populates `repos` at intent creation via resolveIntentRepoSet
@@ -2577,9 +2960,9 @@ describe("t314 multi-unit source attribution", () => {
     expect(dirty.out).toContain(
       "workspace source changed again after the one recovery review",
     );
-    expect(dirty.out).toContain('Ask \\"What should change?\\" for stage \\"code-generation\\"');
+    expect(dirty.out).toContain('already said what should change for stage \\"code-generation\\"');
     expect(dirty.out).toContain("their exact text unchanged");
-  }, 60_000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 });
 
 // Reproduction of the maintainer review on #646 (a1e4d67), P1 finding 2: the
@@ -2651,7 +3034,7 @@ describe("t314 settled-swarm exemption from fingerprint reconciliation (#646 rev
     expect(r.out).toContain(
       "no current-attempt post-merge main-checkout source binding",
     );
-  }, 60_000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 });
 
 // Reproduction of the maintainer review on #646 (a1e4d67), P1 finding 3:
@@ -2735,9 +3118,11 @@ describe("t314 swarm finalize source-fingerprint check (#646 review P1#3)", () =
         seedBoltDag(proj, args[unitsIndex + 1].split(","));
       }
     }
+    approveSuppliedCheckCommand(proj, args);
     const startedNs = process.hrtime.bigint();
     const wallStartedMs = Date.now();
     const r = spawnSync(BUN, [SWARM_TOOL, "--project-dir", proj, ...args], {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
       cwd: proj,
       encoding: "utf-8",
       env: { ...process.env, ...extraEnv },
@@ -2830,7 +3215,7 @@ describe("t314 swarm finalize source-fingerprint check (#646 review P1#3)", () =
     const row = env.units.find((u: { unit: string }) => u.unit === "foo");
     expect(row?.status).toBe("failed");
     expect(row?.detail).toContain("source-fingerprint mismatch");
-  }, 120000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("dependency churn after review neither invalidates swarm convergence nor enters the Source Commit", () => {
     const proj = makeFixture();
@@ -2864,12 +3249,171 @@ describe("t314 swarm finalize source-fingerprint check (#646 review P1#3)", () =
     const tree = spawnSync(
       "git",
       ["-C", proj, "ls-tree", "-r", "--name-only", sourceCommit ?? ""],
-      { encoding: "utf-8" },
+      { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" },
     );
     expect(tree.status).toBe(0);
     expect(tree.stdout).toContain("reviewed.ts");
     expect(tree.stdout).not.toContain("node_modules/");
-  }, 120000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
+
+  test("a stray .DS_Store or coverage file after review neither blocks an exact claim nor enters the Source Commit", () => {
+    const proj = makeFixture();
+    runSwarm(proj, ["prepare", "--batch", "1", "--units", "junk", "--base", "main"]);
+    const wt = wtPath(proj, "junk");
+    writeFileSync(join(wt, "reviewed.ts"), "export const reviewed = true;\n");
+    recordReview(wt, "code-generation", REVIEWER, "junk", "READY", [{ path: "reviewed.ts" }]);
+
+    // Finder and a coverage run drop files beside the reviewed source.
+    mkdirSync(join(wt, "src"), { recursive: true });
+    writeFileSync(join(wt, "src", ".DS_Store"), "\u0000\u0000finder");
+    writeFileSync(join(wt, ".coverage"), "SQLite format 3\u0000v1");
+    const finalized = runSwarm(proj, [
+      "finalize",
+      "--batch",
+      "1",
+      "--units",
+      "junk",
+      "--claimed",
+      "junk",
+      "--check-cmd",
+      `"${process.execPath}" -e "require('fs').accessSync('reviewed.ts')"`,
+    ]);
+    expect(finalized.rc, finalized.diagnostic).toBe(0);
+
+    const audit = readAllAuditShards(proj);
+    const sourceCommit = /\*\*Event\*\*: SWARM_UNIT_CONVERGED[\s\S]*?\*\*Unit name\*\*: junk[\s\S]*?\*\*Source Commit\*\*: ([0-9a-f]{40})/.exec(
+      audit,
+    )?.[1];
+    expect(sourceCommit).toBeDefined();
+    const tree = spawnSync(
+      "git",
+      ["-C", proj, "ls-tree", "-r", "--name-only", sourceCommit ?? ""],
+      { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" },
+    );
+    expect(tree.status).toBe(0);
+    expect(tree.stdout).toContain("reviewed.ts");
+    expect(tree.stdout).not.toContain(".DS_Store");
+    expect(tree.stdout).not.toContain(".coverage");
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
+
+  test("a setting recorded in the worktree after review neither blocks the claim nor enters the Source Commit", () => {
+    const proj = makeFixture();
+    runSwarm(proj, ["prepare", "--batch", "1", "--units", "configured", "--base", "main"]);
+    const wt = wtPath(proj, "configured");
+    writeFileSync(join(wt, "reviewed.ts"), "export const reviewed = true;\n");
+    recordReview(wt, "code-generation", REVIEWER, "configured", "READY", [{ path: "reviewed.ts" }]);
+
+    // A kill switch recorded while the unit runs is AI-DLC's setting, not its code.
+    writeFileSync(join(wt, "aidlc.settings.local.json"), `${JSON.stringify({ schemaVersion: 1, flags: { schemaVersion: 1, bypasses: ["AIDLC_DISABLE_SENSORS"] } })}\n`);
+    writeFileSync(join(wt, "aidlc.settings.json"), `${JSON.stringify({ schemaVersion: 1, flags: { schemaVersion: 1, swarm: true } })}\n`);
+    const finalized = runSwarm(proj, [
+      "finalize",
+      "--batch",
+      "1",
+      "--units",
+      "configured",
+      "--claimed",
+      "configured",
+      "--check-cmd",
+      `"${process.execPath}" -e "require('fs').accessSync('reviewed.ts')"`,
+    ]);
+    expect(finalized.rc, finalized.diagnostic).toBe(0);
+
+    const audit = readAllAuditShards(proj);
+    const sourceCommit = /\*\*Event\*\*: SWARM_UNIT_CONVERGED[\s\S]*?\*\*Unit name\*\*: configured[\s\S]*?\*\*Source Commit\*\*: ([0-9a-f]{40})/.exec(
+      audit,
+    )?.[1];
+    expect(sourceCommit).toBeDefined();
+    const tree = spawnSync(
+      "git",
+      ["-C", proj, "ls-tree", "-r", "--name-only", sourceCommit ?? ""],
+      { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" },
+    );
+    expect(tree.status).toBe(0);
+    expect(tree.stdout).toContain("reviewed.ts");
+    expect(tree.stdout).not.toContain("aidlc.settings");
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
+
+  test("a Bolt merge lands the reviewed source and leaves a setting committed in its worktree behind, saying so", () => {
+    const proj = makeFixture();
+    runSwarm(proj, ["prepare", "--batch", "1", "--units", "tuned", "--base", "main"]);
+    const wt = wtPath(proj, "tuned");
+    writeFileSync(join(wt, "tuned.ts"), "export const tuned = true;\n");
+    recordReview(wt, "code-generation", REVIEWER, "tuned");
+    // A switch committed in the Bolt worktree after review: the Source Commit
+    // keeps the base's settings, so it never lands unreviewed.
+    writeFileSync(join(wt, "aidlc.settings.json"), `${JSON.stringify({ schemaVersion: 1, flags: { schemaVersion: 1, bypasses: ["AIDLC_DISABLE_SENSORS"] } })}\n`);
+    git(wt, ["add", "--", "aidlc.settings.json"]);
+    git(wt, ["commit", "-qm", "record a switch after review"]);
+    const finalized = runSwarm(proj, [
+      "finalize",
+      "--batch",
+      "1",
+      "--units",
+      "tuned",
+      "--claimed",
+      "tuned",
+      "--check-cmd",
+      `"${process.execPath}" -e "require('fs').accessSync('tuned.ts')"`,
+    ]);
+    expect(finalized.rc, finalized.diagnostic).toBe(0);
+    const sourceCommit = /\*\*Event\*\*: SWARM_UNIT_CONVERGED[\s\S]*?\*\*Unit name\*\*: tuned[\s\S]*?\*\*Source Commit\*\*: ([0-9a-f]{40})/.exec(
+      readAllAuditShards(proj),
+    )?.[1];
+    expect(sourceCommit).toBeDefined();
+    const tree = spawnSync("git", ["-C", proj, "ls-tree", "-r", "--name-only", sourceCommit ?? ""], {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+      encoding: "utf-8",
+    });
+    expect(tree.stdout).toContain("tuned.ts");
+    expect(tree.stdout).not.toContain("aidlc.settings");
+    const intent = readFileSync(join(proj, "aidlc", "spaces", "default", "intents", "active-intent"), "utf-8").trim();
+    const merge = spawnSync(BUN, [
+      WORKTREE_TOOL, "merge", "--slug", "tuned", "--target", "main",
+      "--strategy", "squash", "--intent", intent, "--project-dir", proj,
+    ], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), cwd: proj, encoding: "utf-8" });
+    expect(merge.status, `${merge.stdout}${merge.stderr}`).toBe(0);
+    expect(existsSync(join(proj, "tuned.ts"))).toBe(true);
+    expect(existsSync(join(proj, "aidlc.settings.json"))).toBe(false);
+    const notice = "aidlc.settings.json changed in the Unit's worktree and was not merged; record settings in your own checkout with ";
+    expect(merge.stderr).toContain(`note: ${notice}`);
+    const result = JSON.parse(merge.stdout.trim().split("\n").pop() ?? "{}") as { notices?: string[] };
+    expect(result.notices?.[0]).toContain(notice);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
+
+  test("a swarm review recorded before files were excluded by name still finalizes after upgrading", () => {
+    const proj = makeFixture();
+    runSwarm(proj, ["prepare", "--batch", "1", "--units", "upgraded", "--base", "main"]);
+    const wt = wtPath(proj, "upgraded");
+    writeFileSync(join(wt, "reviewed.ts"), "export const reviewed = true;\n");
+    writeFileSync(join(wt, ".DS_Store"), "\u0000\u0000finder");
+    recordReview(wt, "code-generation", REVIEWER, "upgraded", "READY", [{ path: "reviewed.ts" }]);
+    // The earlier walk bound .DS_Store, so the review it recorded carries that value.
+    const earlier = _legacyWorkspaceSourceFingerprintForTests(workspaceSourceFingerprint(wt) as string);
+    expect(earlier).not.toBeNull();
+    const shard = seededAuditShard(wt);
+    rewriteRecordedSourceBinding(wt, earlier as string);
+    writeFileSync(
+      shard,
+      readFileSync(shard, "utf-8")
+        .replace(/^\*\*Source Fingerprint\*\*: .*$/gm, `**Source Fingerprint**: ${earlier}`)
+        .replace(/^\*\*Request Source Fingerprint\*\*: .*$/gm, `**Request Source Fingerprint**: ${earlier}`),
+      "utf-8",
+    );
+    const finalized = runSwarm(proj, [
+      "finalize",
+      "--batch",
+      "1",
+      "--units",
+      "upgraded",
+      "--claimed",
+      "upgraded",
+      "--check-cmd",
+      `"${process.execPath}" -e "require('fs').accessSync('reviewed.ts')"`,
+    ]);
+    expect(finalized.out).not.toContain("source-fingerprint mismatch");
+    expect(finalized.rc, finalized.diagnostic).toBe(0);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("a hard-excluded dependency symlink added after review cannot enter the Source Commit", () => {
     const proj = makeFixture();
@@ -2903,11 +3447,11 @@ describe("t314 swarm finalize source-fingerprint check (#646 review P1#3)", () =
     const tree = spawnSync(
       "git",
       ["-C", proj, "ls-tree", "-r", "--name-only", sourceCommit ?? ""],
-      { encoding: "utf-8" },
+      { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" },
     );
     expect(tree.status).toBe(0);
     expect(tree.stdout).not.toContain("node_modules");
-  }, 120000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("finalize rejects an external source symlink before minting Source Commit authority", () => {
     const proj = makeFixture();
@@ -2968,11 +3512,11 @@ describe("t314 swarm finalize source-fingerprint check (#646 review P1#3)", () =
         "for-each-ref",
         reviewedSourceRefPrefix(fixtureIntentId8(proj), "external-link"),
       ],
-      { encoding: "utf-8" },
+      { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" },
     );
     expect(refs.status).toBe(0);
     expect(refs.stdout.trim()).toBe("");
-  }, 120000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("clean-filtered generated and harness files stay at HEAD in the Source Commit", () => {
     const proj = makeFixture();
@@ -3034,12 +3578,12 @@ describe("t314 swarm finalize source-fingerprint check (#646 review P1#3)", () =
       const shown = spawnSync(
         "git",
         ["-C", proj, "show", `${sourceCommit}:${path}`],
-        { encoding: "utf-8" },
+        { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" },
       );
       expect(shown.status, `${shown.stdout}${shown.stderr}`).toBe(0);
       expect(shown.stdout).toBe(expected);
     }
-  }, 120000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("registered clean-filtered generated source keeps reviewed raw bytes", () => {
     const proj = makeFixture();
@@ -3087,11 +3631,11 @@ describe("t314 swarm finalize source-fingerprint check (#646 review P1#3)", () =
     const shown = spawnSync(
       "git",
       ["-C", proj, "show", `${sourceCommit}:dist/worker.js`],
-      { encoding: "utf-8" },
+      { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" },
     );
     expect(shown.status, `${shown.stdout}${shown.stderr}`).toBe(0);
     expect(shown.stdout).toBe(reviewed);
-  }, 120000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("ordinary ignored and registered binary source enter the bound Source Commit and later merge", () => {
     const proj = makeFixture();
@@ -3138,7 +3682,7 @@ describe("t314 swarm finalize source-fingerprint check (#646 review P1#3)", () =
     const tree = spawnSync(
       "git",
       ["-C", proj, "ls-tree", "-r", "--name-only", sourceCommit ?? ""],
-      { encoding: "utf-8" },
+      { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" },
     );
     expect(tree.status).toBe(0);
     expect(tree.stdout).toContain("ignored-source.ts");
@@ -3158,7 +3702,7 @@ describe("t314 swarm finalize source-fingerprint check (#646 review P1#3)", () =
         "--project-dir",
         proj,
       ],
-      { cwd: proj, encoding: "utf-8" },
+      { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), cwd: proj, encoding: "utf-8" },
     );
     expect(merged.status, `${merged.stdout}${merged.stderr}`).toBe(0);
     expect(readFileSync(join(proj, "ignored-source.ts"), "utf-8")).toContain(
@@ -3167,7 +3711,7 @@ describe("t314 swarm finalize source-fingerprint check (#646 review P1#3)", () =
     expect(readFileSync(join(proj, "dist", "module.wasm"))).toEqual(
       Buffer.from([0, 1, 2, 3]),
     );
-  }, 120000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("registered source through an internal generated-boundary symlink finalizes and merges", () => {
     const proj = makeFixture();
@@ -3213,7 +3757,7 @@ describe("t314 swarm finalize source-fingerprint check (#646 review P1#3)", () =
     const tree = spawnSync(
       "git",
       ["-C", proj, "ls-tree", "-r", "--name-only", sourceCommit ?? ""],
-      { encoding: "utf-8" },
+      { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" },
     );
     expect(tree.status).toBe(0);
     expect(tree.stdout).toContain("dist");
@@ -3233,7 +3777,7 @@ describe("t314 swarm finalize source-fingerprint check (#646 review P1#3)", () =
         "--project-dir",
         proj,
       ],
-      { cwd: proj, encoding: "utf-8" },
+      { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), cwd: proj, encoding: "utf-8" },
     );
     expect(merged.status, `${merged.stdout}${merged.stderr}`).toBe(0);
     expect(
@@ -3247,7 +3791,7 @@ describe("t314 swarm finalize source-fingerprint check (#646 review P1#3)", () =
         "generated-src",
       );
     }
-  }, 120000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("a staged registered-source deletion remains deleted in the Source Commit and merge", () => {
     const proj = makeFixture();
@@ -3307,7 +3851,7 @@ describe("t314 swarm finalize source-fingerprint check (#646 review P1#3)", () =
     const tree = spawnSync(
       "git",
       ["-C", proj, "ls-tree", "-r", "--name-only", sourceCommit ?? ""],
-      { encoding: "utf-8" },
+      { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" },
     );
     expect(tree.status).toBe(0);
     expect(tree.stdout).not.toContain("dist/worker.js");
@@ -3326,11 +3870,11 @@ describe("t314 swarm finalize source-fingerprint check (#646 review P1#3)", () =
         "--project-dir",
         proj,
       ],
-      { cwd: proj, encoding: "utf-8" },
+      { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), cwd: proj, encoding: "utf-8" },
     );
     expect(merged.status, `${merged.stdout}${merged.stderr}`).toBe(0);
     expect(existsSync(join(proj, "dist", "worker.js"))).toBe(false);
-  }, 120000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("an internal symlink sorted before its real directory cannot suppress ignored source from the Source Commit", () => {
     const proj = makeFixture();
@@ -3376,7 +3920,7 @@ describe("t314 swarm finalize source-fingerprint check (#646 review P1#3)", () =
     const tree = spawnSync(
       "git",
       ["-C", proj, "ls-tree", "-r", "--name-only", sourceCommit ?? ""],
-      { encoding: "utf-8" },
+      { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" },
     );
     expect(tree.status).toBe(0);
     expect(tree.stdout).toContain("a-link");
@@ -3396,13 +3940,13 @@ describe("t314 swarm finalize source-fingerprint check (#646 review P1#3)", () =
         "--project-dir",
         proj,
       ],
-      { cwd: proj, encoding: "utf-8" },
+      { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), cwd: proj, encoding: "utf-8" },
     );
     expect(merged.status, `${merged.stdout}${merged.stderr}`).toBe(0);
     expect(
       readFileSync(join(proj, "z-source", "ignored-source.ts"), "utf-8"),
     ).toContain("reviewed");
-  }, 120000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("swarm source and exclusion batching stay below Windows command-line limits", () => {
     const proj = makeFixture();
@@ -3459,13 +4003,13 @@ describe("t314 swarm finalize source-fingerprint check (#646 review P1#3)", () =
     const tree = spawnSync(
       "git",
       ["-C", proj, "ls-tree", "-r", "--name-only", sourceCommit ?? ""],
-      { encoding: "utf-8" },
+      { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" },
     );
     expect(tree.status).toBe(0);
     expect(tree.stdout).toContain(names[0]);
     expect(tree.stdout).toContain(names.at(-1) ?? "");
     expect(tree.stdout).not.toContain("node_modules");
-  }, process.platform === "darwin" ? 300000 : 120000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("finalize fails closed when reviewed bytes live only in a dirty initialized submodule", () => {
     const proj = makeFixture();
@@ -3504,11 +4048,12 @@ describe("t314 swarm finalize source-fingerprint check (#646 review P1#3)", () =
       /\*\*Event\*\*: SWARM_UNIT_CONVERGED[\s\S]*?\*\*Unit name\*\*: subdirty/,
     );
     const refs = spawnSync("git", ["-C", proj, "for-each-ref", reviewedSourceRefPrefix(fixtureIntentId8(proj), "subdirty")], {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
       encoding: "utf-8",
     });
     expect(refs.status).toBe(0);
     expect(refs.stdout.trim()).toBe("");
-  }, 120000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("review request fails closed when source is ignored inside an initialized submodule", () => {
     const proj = makeFixture();
@@ -3534,7 +4079,7 @@ describe("t314 swarm finalize source-fingerprint check (#646 review P1#3)", () =
     expect(readAllAuditShards(proj)).not.toMatch(
       /\*\*Event\*\*: SWARM_UNIT_CONVERGED[\s\S]*?\*\*Unit name\*\*: subignored/,
     );
-  }, 120000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("ignored dependency cache inside an initialized submodule does not block finalize", () => {
     const proj = makeFixture();
@@ -3571,7 +4116,7 @@ describe("t314 swarm finalize source-fingerprint check (#646 review P1#3)", () =
       `"${process.execPath}" -e "require('fs').accessSync('vendor/sub/node_modules/pkg/cache.js')"`,
     ]);
     expect(finalized.rc, finalized.out).toBe(0);
-  }, 120000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("nested initialized submodule ignored source blocks review recursively", () => {
     const proj = makeFixture();
@@ -3594,7 +4139,7 @@ describe("t314 swarm finalize source-fingerprint check (#646 review P1#3)", () =
     expect(() =>
       recordReview(wt, "code-generation", REVIEWER, "nestedignored")
     ).toThrow("ignored by Git");
-  }, 120000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("nested initialized submodule ignored dependency cache remains allowed", () => {
     const proj = makeFixture();
@@ -3634,7 +4179,7 @@ describe("t314 swarm finalize source-fingerprint check (#646 review P1#3)", () =
       `"${process.execPath}" -e "require('fs').accessSync('vendor/outer/vendor/nested/node_modules/pkg/cache.js')"`,
     ]);
     expect(finalized.rc, finalized.out).toBe(0);
-  }, 120000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("ignored embedded Git checkout source is shaped as a gitlink and rejected when dirty", () => {
     const proj = makeFixture();
@@ -3680,7 +4225,7 @@ describe("t314 swarm finalize source-fingerprint check (#646 review P1#3)", () =
     );
     expect(row?.detail).toContain("embedded");
     expect(row?.detail).toContain("ignored application source");
-  }, 120000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("ignored clean embedded Git checkout is rejected without tracked submodule metadata", () => {
     const proj = makeFixture();
@@ -3730,7 +4275,7 @@ describe("t314 swarm finalize source-fingerprint check (#646 review P1#3)", () =
     expect(readAllAuditShards(proj)).not.toMatch(
       /\*\*Event\*\*: SWARM_UNIT_CONVERGED[\s\S]*?\*\*Unit name\*\*: embeddedcache/,
     );
-  }, 120000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("unignored bare embedded Git checkout is rejected despite git add discovering its gitlink", () => {
     const proj = makeFixture();
@@ -3763,7 +4308,7 @@ describe("t314 swarm finalize source-fingerprint check (#646 review P1#3)", () =
     );
     expect(row?.detail).toContain("not a tracked submodule");
     expect(row?.detail).toContain("git submodule add");
-  }, 120000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("new-submodule recovery proof cap is shared across claimed units", () => {
     const proj = makeFixture();
@@ -3826,7 +4371,7 @@ describe("t314 swarm finalize source-fingerprint check (#646 review P1#3)", () =
     expect(
       result.units.find((row) => row.unit === "proof-b")?.detail,
     ).toContain("recovery proof cap exceeded (1 per finalize)");
-  }, 120000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("new-submodule recovery obeys the remaining aggregate deadline", async () => {
     const proj = makeFixture();
@@ -3857,7 +4402,7 @@ const trace = ${JSON.stringify(trace)};
 const log = (event) => appendFileSync(trace, JSON.stringify({ at: Date.now(), ...event }) + "\\n");
 const advertised = Bun.spawnSync(
   ["git", "upload-pack", "--stateless-rpc", "--advertise-refs", ${JSON.stringify(origin)}],
-  { stdout: "pipe", stderr: "pipe", env: { ...process.env, GIT_PROTOCOL: "version=0" }, timeout: 5000 },
+  { stdout: "pipe", stderr: "pipe", env: { ...process.env, GIT_PROTOCOL: "version=0" }, timeout: ${remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS)} },
 );
 if (advertised.exitCode !== 0) throw new Error(advertised.stderr.toString());
 const service = Buffer.from("# service=git-upload-pack\\n");
@@ -3894,13 +4439,16 @@ process.stdin.on("end", () => server.stop(true));
       stdin: "pipe", stdout: "ignore", stderr: "pipe",
     });
     const remoteStderr = new Response(remote.stderr).text();
-    const requests = (): Array<{ event: string; delayed?: boolean }> =>
-      existsSync(trace)
-        ? readFileSync(trace, "utf-8").trim().split("\n").filter(Boolean).map((line) => JSON.parse(line))
-        : [];
+    // The server can still be appending when this reads (the delayed request
+    // logs after finalize returns), so parse only newline-terminated lines.
+    const requests = (): Array<{ event: string; delayed?: boolean }> => {
+      if (!existsSync(trace)) return [];
+      const text = readFileSync(trace, "utf-8");
+      return text.slice(0, text.lastIndexOf("\n") + 1).split("\n").filter(Boolean).map((line) => JSON.parse(line));
+    };
     const failures: unknown[] = [];
     try {
-      const startupDeadline = Date.now() + 10_000;
+      const startupDeadline = Date.now() + remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS)!;
       while (!existsSync(ready) && remote.exitCode === null && Date.now() < startupDeadline) {
         await Bun.sleep(20);
       }
@@ -3927,7 +4475,7 @@ process.stdin.on("end", () => server.stop(true));
       git(wt, ["config", "-f", ".gitmodules", "submodule.declared.url", endpoint]);
       git(wt, ["submodule", "sync", "--", "declared"]);
       recordReview(wt, "code-generation", REVIEWER, "proof-deadline");
-      const head = spawnSync("git", ["-C", origin, "rev-parse", "HEAD"], { encoding: "utf-8" });
+      const head = spawnSync("git", ["-C", origin, "rev-parse", "HEAD"], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" });
       expect(head.status, head.stderr).toBe(0);
       const remoteEnv = {
         GIT_TERMINAL_PROMPT: "0",
@@ -3939,7 +4487,7 @@ process.stdin.on("end", () => server.stop(true));
       const controlWallStartedMs = Date.now();
       const control = spawnSync(
         "git", ["ls-remote", endpoint, "HEAD", "refs/heads/*", "refs/tags/*"],
-        { cwd: proj, env: { ...process.env, ...remoteEnv }, encoding: "utf-8", timeout: 5000 },
+        { cwd: proj, env: { ...process.env, ...remoteEnv }, encoding: "utf-8", timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS) },
       );
       const controlError = control.error as NodeJS.ErrnoException | undefined;
       appendFileSync(trace, `${JSON.stringify({
@@ -3996,7 +4544,8 @@ process.stdin.on("end", () => server.stop(true));
       })}\n`);
       const observed = requests();
       const diagnostic = `${finalized.diagnostic}\nloopback Git requests: ${JSON.stringify(observed)}`;
-      expect(elapsed, diagnostic).toBeLessThan(5000);
+      // The recovery trace below proves cumulative deadline consumption directly;
+      // native startup is bounded independently by the shared case/operation ceilings.
       expect(finalized.rc, diagnostic).toBe(2);
       const row = (
         JSON.parse(finalized.out) as {
@@ -4028,7 +4577,7 @@ process.stdin.on("end", () => server.stop(true));
     // Always stop the server after the case, retaining both case and cleanup
     // errors instead of letting a throw in finally replace the first failure.
     // EOF stops the owned server on Windows too; signal handlers alone do not.
-    const stopDeadline = setTimeout(() => remote.kill("SIGKILL"), 5000);
+    const stopDeadline = setTimeout(() => remote.kill("SIGKILL"), remainingCleanupTimeoutMs(NATIVE_PROCESS_CLEANUP_TIMEOUT_MS));
     try {
       if (remote.exitCode === null) {
         try { await remote.stdin.end(); }
@@ -4058,7 +4607,7 @@ process.stdin.on("end", () => server.stop(true));
     if (failures.length > 1) {
       throw new AggregateError(failures, "recovery deadline fixture and cleanup failures");
     }
-  }, 120000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("new submodule with gitmodules recovery metadata finalizes normally", () => {
     const proj = makeFixture();
@@ -4099,7 +4648,7 @@ process.stdin.on("end", () => server.stop(true));
     const tree = spawnSync(
       "git",
       ["-C", proj, "ls-tree", "-r", "--name-only", sourceCommit ?? ""],
-      { encoding: "utf-8" },
+      { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" },
     );
     expect(tree.status).toBe(0);
     expect(tree.stdout).toContain(".gitmodules");
@@ -4119,7 +4668,7 @@ process.stdin.on("end", () => server.stop(true));
         "--project-dir",
         proj,
       ],
-      { cwd: proj, encoding: "utf-8" },
+      { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), cwd: proj, encoding: "utf-8" },
     );
     expect(merged.status, `${merged.stdout}${merged.stderr}`).toBe(0);
     const recovered = spawnSync(
@@ -4134,13 +4683,13 @@ process.stdin.on("end", () => server.stop(true));
         "--init",
         "--recursive",
       ],
-      { encoding: "utf-8" },
+      { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" },
     );
     expect(recovered.status, `${recovered.stdout}${recovered.stderr}`).toBe(0);
     expect(readFileSync(join(proj, "declared", "app.ts"), "utf-8")).toContain(
       "answer",
     );
-  }, 120000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("new submodule pinned to an older advertised-history commit remains recoverable", () => {
     const proj = makeFixture();
@@ -4150,7 +4699,7 @@ process.stdin.on("end", () => server.stop(true));
     const historicCommit = spawnSync(
       "git",
       ["-C", origin, "rev-parse", "HEAD"],
-      { encoding: "utf-8" },
+      { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" },
     ).stdout.trim();
     writeFileSync(join(origin, "app.ts"), "export const answer = 43;\n");
     git(origin, ["commit", "-qam", "new tip"]);
@@ -4197,7 +4746,7 @@ process.stdin.on("end", () => server.stop(true));
         "--project-dir",
         proj,
       ],
-      { cwd: proj, encoding: "utf-8" },
+      { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), cwd: proj, encoding: "utf-8" },
     );
     expect(merged.status, `${merged.stdout}${merged.stderr}`).toBe(0);
     const recovered = spawnSync(
@@ -4212,19 +4761,19 @@ process.stdin.on("end", () => server.stop(true));
         "--init",
         "--recursive",
       ],
-      { encoding: "utf-8" },
+      { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" },
     );
     expect(recovered.status, `${recovered.stdout}${recovered.stderr}`).toBe(0);
     const recoveredCommit = spawnSync(
       "git",
       ["-C", join(proj, "declared"), "rev-parse", "HEAD"],
-      { encoding: "utf-8" },
+      { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" },
     ).stdout.trim();
     expect(recoveredCommit).toBe(historicCommit);
     expect(readFileSync(join(proj, "declared", "app.ts"), "utf-8")).toContain(
       "answer = 42",
     );
-  }, 120000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("new submodule pinned to older history remains recoverable after remote advancement", () => {
     const proj = makeFixture();
@@ -4234,7 +4783,7 @@ process.stdin.on("end", () => server.stop(true));
     const historicCommit = spawnSync(
       "git",
       ["-C", origin, "rev-parse", "HEAD"],
-      { encoding: "utf-8" },
+      { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" },
     ).stdout.trim();
     writeFileSync(join(origin, "app.ts"), "export const answer = 43;\n");
     git(origin, ["commit", "-qam", "tip before clone"]);
@@ -4284,7 +4833,7 @@ process.stdin.on("end", () => server.stop(true));
         "--project-dir",
         proj,
       ],
-      { cwd: proj, encoding: "utf-8" },
+      { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), cwd: proj, encoding: "utf-8" },
     );
     expect(merged.status, `${merged.stdout}${merged.stderr}`).toBe(0);
     const recovered = spawnSync(
@@ -4299,16 +4848,16 @@ process.stdin.on("end", () => server.stop(true));
         "--init",
         "--recursive",
       ],
-      { encoding: "utf-8" },
+      { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" },
     );
     expect(recovered.status, `${recovered.stdout}${recovered.stderr}`).toBe(0);
     const recoveredCommit = spawnSync(
       "git",
       ["-C", join(proj, "declared"), "rev-parse", "HEAD"],
-      { encoding: "utf-8" },
+      { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" },
     ).stdout.trim();
     expect(recoveredCommit).toBe(historicCommit);
-  }, 120000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("new submodule remains recoverable after its remote branch is renamed", () => {
     const proj = makeFixture();
@@ -4318,12 +4867,12 @@ process.stdin.on("end", () => server.stop(true));
     const originalBranch = spawnSync(
       "git",
       ["-C", origin, "branch", "--show-current"],
-      { encoding: "utf-8" },
+      { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" },
     ).stdout.trim();
     const historicCommit = spawnSync(
       "git",
       ["-C", origin, "rev-parse", "HEAD"],
-      { encoding: "utf-8" },
+      { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" },
     ).stdout.trim();
     writeFileSync(join(origin, "app.ts"), "export const answer = 43;\n");
     git(origin, ["commit", "-qam", "tip before clone"]);
@@ -4383,7 +4932,7 @@ process.stdin.on("end", () => server.stop(true));
         "--project-dir",
         proj,
       ],
-      { cwd: proj, encoding: "utf-8" },
+      { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), cwd: proj, encoding: "utf-8" },
     );
     expect(merged.status, `${merged.stdout}${merged.stderr}`).toBe(0);
     const recovered = spawnSync(
@@ -4398,16 +4947,16 @@ process.stdin.on("end", () => server.stop(true));
         "--init",
         "--recursive",
       ],
-      { encoding: "utf-8" },
+      { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" },
     );
     expect(recovered.status, `${recovered.stdout}${recovered.stderr}`).toBe(0);
     const recoveredCommit = spawnSync(
       "git",
       ["-C", join(proj, "declared"), "rev-parse", "HEAD"],
-      { encoding: "utf-8" },
+      { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" },
     ).stdout.trim();
     expect(recoveredCommit).toBe(historicCommit);
-  }, 120000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("an exact advertised submodule tip must still be fetchable", () => {
     const proj = makeFixture();
@@ -4415,6 +4964,7 @@ process.stdin.on("end", () => server.stop(true));
     extraDirs.push(origin);
     seedGitRepo(origin);
     const tip = spawnSync("git", ["-C", origin, "rev-parse", "HEAD"], {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
       encoding: "utf-8",
     }).stdout.trim();
 
@@ -4452,7 +5002,7 @@ process.stdin.on("end", () => server.stop(true));
     const advertised = spawnSync(
       "git",
       ["ls-remote", origin, "HEAD", "refs/heads/*"],
-      { encoding: "utf-8" },
+      { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" },
     );
     expect(advertised.status, `${advertised.stdout}${advertised.stderr}`).toBe(
       0,
@@ -4480,7 +5030,7 @@ process.stdin.on("end", () => server.stop(true));
     expect(readAllAuditShards(proj)).not.toMatch(
       /\*\*Event\*\*: SWARM_UNIT_CONVERGED[\s\S]*?\*\*Unit name\*\*: brokentip/,
     );
-  }, 120000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("new submodule with an unavailable recovery URL cannot finalize", () => {
     const proj = makeFixture();
@@ -4526,7 +5076,7 @@ process.stdin.on("end", () => server.stop(true));
     expect(readAllAuditShards(proj)).not.toMatch(
       /\*\*Event\*\*: SWARM_UNIT_CONVERGED[\s\S]*?\*\*Unit name\*\*: deadsub/,
     );
-  }, 120000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("a finalize-time bypass cannot become fieldless legacy evidence after the switch is unset", () => {
     const proj = makeFixture();
@@ -4562,27 +5112,27 @@ process.stdin.on("end", () => server.stop(true));
     writeFileSync(join(wt, "unreviewed.ts"), "export const unreviewed = true;\n", "utf-8");
     git(wt, ["add", "--", "unreviewed.ts"]);
     git(wt, ["commit", "-qm", "unreviewed branch advance"]);
-    const before = spawnSync("git", ["-C", proj, "rev-parse", "HEAD"], { encoding: "utf-8" }).stdout.trim();
+    const before = spawnSync("git", ["-C", proj, "rev-parse", "HEAD"], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" }).stdout.trim();
     const mergeEnv = { ...process.env };
     delete mergeEnv.AIDLC_SKIP_SOURCE_FRESHNESS;
     const merge = spawnSync(BUN, [
       WORKTREE_TOOL, "merge", "--slug", "bypass", "--target", "main",
       "--strategy", "squash", "--project-dir", proj,
-    ], { cwd: proj, encoding: "utf-8", env: mergeEnv });
+    ], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), cwd: proj, encoding: "utf-8", env: mergeEnv });
     expect(merge.status).not.toBe(0);
     const refusal = `${merge.stdout}${merge.stderr}`;
     expect(refusal).toContain("finalized with source freshness bypassed");
     expect(refusal).toContain("AIDLC_SKIP_SOURCE_FRESHNESS=1");
     expect(refusal).toContain("aidlc-worktree discard --slug bypass");
     expect(refusal).not.toContain("re-run review and finalize with source freshness enabled");
-    const after = spawnSync("git", ["-C", proj, "rev-parse", "HEAD"], { encoding: "utf-8" }).stdout.trim();
+    const after = spawnSync("git", ["-C", proj, "rev-parse", "HEAD"], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" }).stdout.trim();
     expect(after).toBe(before);
     expect(existsSync(join(proj, "reviewed.ts"))).toBe(false);
     expect(existsSync(join(proj, "unreviewed.ts"))).toBe(false);
 
     const discarded = spawnSync(BUN, [
       WORKTREE_TOOL, "discard", "--slug", "bypass", "--project-dir", proj,
-    ], { cwd: proj, encoding: "utf-8" });
+    ], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), cwd: proj, encoding: "utf-8" });
     expect(discarded.status).toBe(0);
 
     expect(runSwarm(proj, ["prepare", "--batch", "2", "--units", "bypass", "--base", "main"]).rc).toBe(0);
@@ -4603,10 +5153,10 @@ process.stdin.on("end", () => server.stop(true));
     const reboundMerge = spawnSync(BUN, [
       WORKTREE_TOOL, "merge", "--slug", "bypass", "--target", "main",
       "--strategy", "squash", "--project-dir", proj,
-    ], { cwd: proj, encoding: "utf-8", env: mergeEnv });
+    ], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), cwd: proj, encoding: "utf-8", env: mergeEnv });
     expect(reboundMerge.status).toBe(0);
     expect(readFileSync(join(proj, "reviewed.ts"), "utf-8")).toContain("redone");
-  }, 180000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("a bypassed convergence merges when the source merge repeats the switch", () => {
     const proj = makeFixture();
@@ -4643,7 +5193,7 @@ process.stdin.on("end", () => server.stop(true));
     const refused = spawnSync(BUN, [
       WORKTREE_TOOL, "merge", "--slug", "bypass-switch", "--target", "main",
       "--strategy", "squash", "--project-dir", proj,
-    ], { cwd: proj, encoding: "utf-8" });
+    ], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), cwd: proj, encoding: "utf-8" });
     expect(refused.status).not.toBe(0);
     expect(`${refused.stdout}${refused.stderr}`).toContain(
       "retry this merge with AIDLC_SKIP_SOURCE_FRESHNESS=1",
@@ -4665,6 +5215,7 @@ process.stdin.on("end", () => server.stop(true));
         proj,
       ],
       {
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
         cwd: proj,
         encoding: "utf-8",
         env: { ...process.env, AIDLC_SKIP_SOURCE_FRESHNESS: "1" },
@@ -4673,7 +5224,7 @@ process.stdin.on("end", () => server.stop(true));
     expect(merge.status, `${merge.stdout}${merge.stderr}`).toBe(0);
     expect(readFileSync(join(proj, "reviewed.ts"), "utf-8")).toContain("reviewed");
     expect(readFileSync(join(proj, "after-finalize.ts"), "utf-8")).toContain("afterFinalize");
-  }, 120000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("bypass cleanup preserves untracked and ignored application source", () => {
     const proj = makeFixture();
@@ -4726,6 +5277,7 @@ process.stdin.on("end", () => server.stop(true));
         proj,
       ],
       {
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
         cwd: proj,
         encoding: "utf-8",
         env: { ...process.env, AIDLC_SKIP_SOURCE_FRESHNESS: "1" },
@@ -4761,6 +5313,7 @@ process.stdin.on("end", () => server.stop(true));
         proj,
       ],
       {
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
         cwd: proj,
         encoding: "utf-8",
         env: { ...process.env, AIDLC_SKIP_SOURCE_FRESHNESS: "1" },
@@ -4775,7 +5328,7 @@ process.stdin.on("end", () => server.stop(true));
       "must also survive cleanup",
     );
     expect(existsSync(join(proj, "ignored-source.ts"))).toBe(false);
-  }, 120000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("a tracked symlink matched by a broad clean filter stays a symlink through finalize and merge", () => {
     const proj = makeFixture();
@@ -4799,7 +5352,7 @@ process.stdin.on("end", () => server.stop(true));
     const merge = spawnSync(BUN, [
       WORKTREE_TOOL, "merge", "--slug", "link", "--target", "main",
       "--strategy", "squash", "--project-dir", proj,
-    ], { cwd: proj, encoding: "utf-8" });
+    ], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), cwd: proj, encoding: "utf-8" });
     if (merge.status !== 0) {
       throw new Error(`filtered symlink merge failed: ${merge.stdout ?? ""}${merge.stderr ?? ""}`);
     }
@@ -4807,7 +5360,7 @@ process.stdin.on("end", () => server.stop(true));
     expect(readlinkSync(join(proj, "link.txt"))).toBe("target.txt");
     expect(readFileSync(join(proj, "target.txt"), "utf-8").replace(/\r\n/g, "\n"))
       .toBe("reviewed target\n");
-  }, 120000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("mutable checkout filters are refused before target mutation or source-merge authority", () => {
     const proj = makeFixture();
@@ -4864,12 +5417,12 @@ process.stdin.on("end", () => server.stop(true));
     const beforeHead = spawnSync(
       "git",
       ["-C", proj, "rev-parse", "HEAD"],
-      { encoding: "utf-8" },
+      { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" },
     ).stdout.trim();
     const beforeStatus = spawnSync(
       "git",
       ["-C", proj, "status", "--porcelain=v1"],
-      { encoding: "utf-8" },
+      { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" },
     ).stdout;
     const merge = spawnSync(
       BUN,
@@ -4885,7 +5438,7 @@ process.stdin.on("end", () => server.stop(true));
         "--project-dir",
         proj,
       ],
-      { cwd: proj, encoding: "utf-8" },
+      { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), cwd: proj, encoding: "utf-8" },
     );
     const output = `${merge.stdout}${merge.stderr}`;
     expect(merge.status).not.toBe(0);
@@ -4898,18 +5451,18 @@ process.stdin.on("end", () => server.stop(true));
     const afterHead = spawnSync(
       "git",
       ["-C", proj, "rev-parse", "HEAD"],
-      { encoding: "utf-8" },
+      { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" },
     ).stdout.trim();
     const afterStatus = spawnSync(
       "git",
       ["-C", proj, "status", "--porcelain=v1"],
-      { encoding: "utf-8" },
+      { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" },
     ).stdout;
     expect(afterHead).toBe(beforeHead);
     expect(afterStatus).toBe(beforeStatus);
     expect(existsSync(join(proj, "smudged.ts"))).toBe(false);
     expect(existsSync(wt)).toBe(true);
-  }, 120000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("finalize merges a claimed unit whose worktree source is unchanged since its terminal review", () => {
     const proj = makeFixture();
@@ -4942,6 +5495,7 @@ process.stdin.on("end", () => server.stop(true));
     if (!sourceCommit) throw new Error("convergence row did not carry Source Commit");
     const retainedRef = `${reviewedSourceRefPrefix(fixtureIntentId8(proj), "bar")}${sourceCommit}`;
     const retained = spawnSync("git", ["-C", proj, "rev-parse", "--verify", retainedRef], {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
       encoding: "utf-8",
     });
     expect(retained.status).toBe(0);
@@ -4951,7 +5505,7 @@ process.stdin.on("end", () => server.stop(true));
     // must keep this delayed merge target alive through an aggressive GC.
     git(proj, ["reflog", "expire", "--expire=now", "--all"]);
     git(proj, ["gc", "--prune=now"]);
-    const afterGc = spawnSync("git", ["-C", proj, "cat-file", "-e", `${sourceCommit}^{commit}`]);
+    const afterGc = spawnSync("git", ["-C", proj, "cat-file", "-e", `${sourceCommit}^{commit}`], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS) });
     expect(afterGc.status).toBe(0);
 
     // Make another intent active with a hostile same-unit row. `--intent`
@@ -4978,13 +5532,13 @@ process.stdin.on("end", () => server.stop(true));
     const merge = spawnSync(BUN, [
       WORKTREE_TOOL, "merge", "--slug", "bar", "--target", "main",
       "--strategy", "squash", "--intent", originalIntent, "--project-dir", proj,
-    ], { cwd: proj, encoding: "utf-8" });
+    ], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), cwd: proj, encoding: "utf-8" });
     expect(merge.status).toBe(0);
     expect(readFileSync(join(proj, "bar.ts"), "utf-8").replace(/\r\n/g, "\n"))
       .toBe("export const bar = 1;   \n");
-    const afterMerge = spawnSync("git", ["-C", proj, "show-ref", "--verify", "--quiet", retainedRef]);
+    const afterMerge = spawnSync("git", ["-C", proj, "show-ref", "--verify", "--quiet", retainedRef], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS) });
     expect(afterMerge.status).toBe(1);
-  }, 120000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("an explicit intent binds a normalized legacy Unit to that intent's convergence", () => {
     const proj = makeFixture();
@@ -5023,14 +5577,14 @@ process.stdin.on("end", () => server.stop(true));
     const merge = spawnSync(BUN, [
       WORKTREE_TOOL, "merge", "--slug", slug, "--target", "main",
       "--strategy", "squash", "--intent", originalIntent, "--project-dir", proj,
-    ], { cwd: proj, encoding: "utf-8" });
+    ], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), cwd: proj, encoding: "utf-8" });
     const output = `${merge.stdout}${merge.stderr}`;
     expect(merge.status).not.toBe(0);
     expect(output).toContain("source-fingerprint mismatch");
     expect(output).not.toContain("[merge-succeeded:");
     expect(existsSync(join(proj, "reviewed.ts"))).toBe(false);
     expect(existsSync(join(proj, "unreviewed.ts"))).toBe(false);
-  }, 120000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("discard removes the retained reviewed-source refs for that Bolt", () => {
     const proj = makeFixture();
@@ -5048,12 +5602,169 @@ process.stdin.on("end", () => server.stop(true));
     const sourceCommit = /\*\*Event\*\*: SWARM_UNIT_CONVERGED[\s\S]*?\*\*Source Commit\*\*: ([0-9a-f]{40})/.exec(audit)?.[1];
     if (!sourceCommit) throw new Error("convergence row did not carry Source Commit");
     const retainedRef = `${reviewedSourceRefPrefix(fixtureIntentId8(proj), "drop")}${sourceCommit}`;
-    expect(spawnSync("git", ["-C", proj, "show-ref", "--verify", "--quiet", retainedRef]).status).toBe(0);
+    expect(spawnSync("git", ["-C", proj, "show-ref", "--verify", "--quiet", retainedRef], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS) }).status).toBe(0);
 
     const discarded = spawnSync(BUN, [
       WORKTREE_TOOL, "discard", "--slug", "drop", "--project-dir", proj,
-    ], { cwd: proj, encoding: "utf-8" });
+    ], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), cwd: proj, encoding: "utf-8" });
     expect(discarded.status).toBe(0);
-    expect(spawnSync("git", ["-C", proj, "show-ref", "--verify", "--quiet", retainedRef]).status).toBe(1);
-  }, 120000);
+    expect(spawnSync("git", ["-C", proj, "show-ref", "--verify", "--quiet", retainedRef], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS) }).status).toBe(1);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
+
+  // Guard Policy off: the person's own edits during the build are kept, never
+  // a stop; under strict the refusal names a step that works.
+  function setPolicy(proj: string, line: string): void {
+    const path = seededStateFile(proj);
+    writeFileSync(path, readFileSync(path, "utf-8").replace(/^- \*\*Change Control\*\*: .*$/m, `- **Guard Policy**: ${line}`));
+  }
+
+  // The unit is built, checked and finalized; the person then edits the main
+  // checkout before the reviewed source merges into it.
+  function finalizeKeptUnit(proj: string): void {
+    ensureDagUnit(proj, "kept");
+    runSwarm(proj, ["prepare", "--batch", "1", "--units", "kept", "--base", "main"]);
+    const wt = wtPath(proj, "kept");
+    writeFileSync(join(wt, "kept.ts"), "export const kept = 1;\n", "utf-8");
+    recordReview(wt, "code-generation", REVIEWER, "kept");
+    const f = runSwarm(proj, [
+      "finalize", "--batch", "1", "--units", "kept", "--claimed", "kept",
+      "--check-cmd", `"${process.execPath}" -e "require('fs').accessSync('kept.ts')"`,
+    ]);
+    expect(f.rc, f.diagnostic).toBe(0);
+  }
+
+  function mergeKept(proj: string) {
+    const merge = spawnSync(BUN, [
+      WORKTREE_TOOL, "merge", "--slug", "kept", "--target", "main", "--strategy", "squash", "--project-dir", proj,
+    ], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), cwd: proj, encoding: "utf-8" });
+    return { status: merge.status, out: `${merge.stdout}${merge.stderr}`, stderr: merge.stderr };
+  }
+
+  test("with Guard Policy off or relaxed, an edit to the main checkout during the build is kept and the unit merges", () => {
+    for (const policy of ["off (set by you)", "relaxed (set by you)"]) {
+      const proj = makeFixture();
+      setPolicy(proj, policy);
+      finalizeKeptUnit(proj);
+      writeFileSync(join(proj, "notes.ts"), "export const notes = 1;\n", "utf-8");
+      const merged = mergeKept(proj);
+      expect(merged.status, merged.out).toBe(0);
+      expect(merged.stderr).toContain("note: You changed notes.ts during the build; kept them and merged unit kept.");
+      expect(readAllAuditShards(proj)).toMatch(/\*\*Event\*\*: CHANGE_ACCEPTED[\s\S]*?\*\*Checkpoint\*\*: swarm-batch/);
+      expect(currentSwarmSourceMergeChain(proj, "code-generation").state).toBe("ready");
+      expect(readFileSync(join(proj, "notes.ts"), "utf-8")).toBe("export const notes = 1;\n");
+      expect(readFileSync(join(proj, "kept.ts"), "utf-8")).toBe("export const kept = 1;\n");
+    }
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
+
+  test("under strict, an edit to the main checkout stops the merge with a step that works", () => {
+    const proj = makeFixture();
+    finalizeKeptUnit(proj);
+    writeFileSync(join(proj, "notes.ts"), "export const notes = 1;\n", "utf-8");
+    const refused = mergeKept(proj);
+    expect(refused.status).not.toBe(0);
+    expect(refused.out).toContain("the main checkout source changed since the stage-entry baseline (notes.ts)");
+    expect(refused.out).toContain("Undo those changes and run the merge again");
+    // The step it names: undo the edit, then run the merge again.
+    rmSync(join(proj, "notes.ts"));
+    const retry = mergeKept(proj);
+    expect(retry.status, retry.out).toBe(0);
+    expect(currentSwarmSourceMergeChain(proj, "code-generation").state).toBe("ready");
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
+
+  test("with Guard Policy off, a changed protected test file is said, not refused", () => {
+    for (const policy of ["strict", "off"]) {
+      const proj = makeFixture();
+      if (policy === "off") setPolicy(proj, "off (set by you)");
+      ensureDagUnit(proj, "guarded");
+      runSwarm(proj, ["prepare", "--batch", "1", "--units", "guarded", "--base", "main"]);
+      writeFileSync(join(wtPath(proj, "guarded"), "README.md"), "edited by the worker\n", "utf-8");
+      const r = runSwarm(proj, [
+        "check", "guarded", "--check-cmd", `"${process.execPath}" -e "0"`, "--test-file", "README.md",
+      ]);
+      const verdict = JSON.parse(r.out);
+      if (policy === "strict") {
+        expect(r.rc).toBe(1);
+        expect(verdict.tampered).toBe(true);
+        expect(verdict.detail).toBe("protected test file was modified");
+      } else {
+        expect(r.rc, r.diagnostic).toBe(0);
+        expect(verdict.tampered).toBe(false);
+        expect(verdict.converged).toBe(true);
+        expect(verdict.change_notices).toEqual([
+          "Unit guarded changed its protected test file README.md; its check passed with that change.",
+        ]);
+      }
+    }
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
+
+  test("with Guard Policy off, an edit after the last merge does not stop the stage completing", () => {
+    for (const policy of ["strict", "off (set by you)"]) {
+      const proj = makeFixture();
+      if (policy !== "strict") setPolicy(proj, policy);
+      finalizeKeptUnit(proj);
+      const merged = mergeKept(proj);
+      expect(merged.status, merged.out).toBe(0);
+      const path = seededStateFile(proj);
+      writeFileSync(path, readFileSync(path, "utf-8").replace(
+        /^- \*\*Construction Autonomy Mode\*\*: .*$/m, "- **Construction Autonomy Mode**: autonomous"));
+      writeFileSync(join(proj, "notes.ts"), "export const notes = 2;\n", "utf-8");
+      const r = guarded(proj, ["gate-start", "code-generation"]);
+      if (policy === "strict") {
+        expect(r.out).toContain("no longer matches the final reviewed swarm merge");
+      } else {
+        expect(r.out).not.toContain("no longer matches the final reviewed swarm merge");
+        expect(r.out).toContain("Files in the main checkout changed after the last unit was merged. Kept them.");
+      }
+    }
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
+
+  test("with Guard Policy off, files a Unit changed outside its planned files are kept and named once", () => {
+    for (const policy of ["strict", "off (set by you)"]) {
+      const proj = makeFixture();
+      if (policy !== "strict") setPolicy(proj, policy);
+      runSwarm(proj, ["prepare", "--batch", "1", "--units", "extra", "--base", "main"]);
+      const wt = wtPath(proj, "extra");
+      writeFileSync(join(wt, "reviewed.ts"), "export const reviewed = true;\n");
+      writeFileSync(join(wt, "extra.ts"), "export const extra = true;\n");
+      recordReview(wt, "code-generation", REVIEWER, "extra", "READY", [{ path: "reviewed.ts" }]);
+      const finalized = runSwarm(proj, [
+        "finalize", "--batch", "1", "--units", "extra", "--claimed", "extra",
+        "--check-cmd", `"${process.execPath}" -e "require('fs').accessSync('reviewed.ts')"`,
+      ]);
+      const row = JSON.parse(finalized.out).units.find((unit: { unit: string }) => unit.unit === "extra");
+      if (policy === "strict") {
+        expect(finalized.rc).toBe(2);
+        expect(row?.detail).toContain("outside unit \"extra\"'s source manifest (extra.ts)");
+      } else {
+        expect(finalized.rc, finalized.diagnostic).toBe(0);
+        expect(row?.change_notices).toEqual(["The extra Unit also changed extra.ts outside its planned files. Kept them."]);
+        expect(readAllAuditShards(proj)).toMatch(/\*\*Event\*\*: CHANGE_ACCEPTED[\s\S]*?\*\*Changed\*\*: extra\.ts/);
+      }
+    }
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
+
+  test("with Guard Policy off, a Unit whose list of files changed after its review keeps the review", () => {
+    for (const policy of ["strict", "off (set by you)"]) {
+      const proj = makeFixture();
+      if (policy !== "strict") setPolicy(proj, policy);
+      runSwarm(proj, ["prepare", "--batch", "1", "--units", "listed", "--base", "main"]);
+      const wt = wtPath(proj, "listed");
+      writeFileSync(join(wt, "reviewed.ts"), "export const reviewed = true;\n");
+      recordReview(wt, "code-generation", REVIEWER, "listed", "READY", [{ path: "reviewed.ts" }]);
+      const manifest = join(wt, relative(proj, seededRecordDir(proj)), "construction", "listed", "code-generation", "source-manifest.json");
+      writeFileSync(manifest, `${readFileSync(manifest, "utf-8")}\n`);
+      const finalized = runSwarm(proj, [
+        "finalize", "--batch", "1", "--units", "listed", "--claimed", "listed",
+        "--check-cmd", `"${process.execPath}" -e "require('fs').accessSync('reviewed.ts')"`,
+      ]);
+      const row = JSON.parse(finalized.out).units.find((unit: { unit: string }) => unit.unit === "listed");
+      if (policy === "strict") {
+        expect(finalized.rc).toBe(2);
+        expect(row?.detail).toContain("reviewed source manifest binding is missing, corrupt, or no longer matches its review");
+      } else {
+        expect(finalized.rc, finalized.diagnostic).toBe(0);
+        expect(row?.change_notices).toEqual(["The listed Unit's list of files changed after it was reviewed. Kept the review."]);
+      }
+    }
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 });

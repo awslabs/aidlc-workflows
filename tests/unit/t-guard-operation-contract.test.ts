@@ -1,13 +1,18 @@
 // covers: function:isGuardRecoveryOperation, function:guardOperationInvocation,
 // function:renderGuardOperation, function:guardOperationMatchesCommand,
 // function:guardOperationMatchesRemedy, function:isGuardRecoveryEngineInvocation,
-// function:sameGuardOperation, function:aidlcEngineCommand, directive:guard-recovery
+// function:sameGuardOperation, function:aidlcEngineCommand, directive:guard-recovery,
+// function:guardRecoveryAnswerAdmits, function:guardOperationMatchesEngineArgs,
+// function:parseGuardRestartContinuationCommand
 import { afterEach, describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
+  type ActiveDirectiveMarker,
   consumeSharedDirectiveAsk,
+  recordGuardRecoveryChoice,
   evaluateGuardRefusal,
+  guardRecoveryAnswerAdmits,
   guardRecoveryAskForRefusal,
   readActiveDirectiveMarker,
   stateDigest,
@@ -16,7 +21,10 @@ import {
 import { validateDirective } from "../../core/tools/aidlc-directive.ts";
 import {
   type GuardRecoveryOperation,
+  guardOperationMatchesEngineArgs,
   isGuardRecoveryEngineInvocation,
+  isGuardRecoveryOperation,
+  parseGuardRestartContinuationCommand,
   renderGuardOperation,
   sameGuardOperation,
 } from "../../core/tools/aidlc-guard-operation.ts";
@@ -217,6 +225,220 @@ describe("structured guard recovery operations", () => {
   });
 });
 
+describe("the answers an open recovery ask admits", () => {
+  // An ask the person answered by picking `selected` (null: not answered yet).
+  const askMarker = (
+    remedies: NonNullable<ActiveDirectiveMarker["remedies"]>,
+    unit?: string,
+    selected: string | null = remedies[0]?.op ?? null,
+  ): ActiveDirectiveMarker => ({
+    version: 2,
+    kind: "ask",
+    ask_type: "guard-recovery",
+    stage: "code-generation",
+    ...(unit ? { unit } : {}),
+    state_sha256: "0".repeat(64),
+    needs_rehydrate: false,
+    remedies,
+    delivery: selected === null ? "issued" : "consumed",
+    ...(selected === null ? {} : {
+      guard_recovery_response: {
+        status: "ready" as const,
+        selection_sha256: "1".repeat(64),
+        selected_op: selected as never,
+        feedback_sha256: "2".repeat(64),
+      },
+    }),
+  });
+  const report = (...extra: string[]) =>
+    ["engine", "orchestrate", "report", "--stage", "code-generation", ...extra];
+
+  test("a Unit's missing completion receipt is recorded by an exact state command", () => {
+    const operation: GuardRecoveryOperation = {
+      kind: "record-unit-completion", stage: "code-generation", unit: "billing",
+    };
+    expect(isGuardRecoveryOperation(operation)).toBe(true);
+    expect(isGuardRecoveryOperation({ ...operation, unit: "../other" })).toBe(false);
+    expect(renderGuardOperation(operation, { mode: "native", shell: "posix" }))
+      .toBe("aidlc engine state unit complete --stage code-generation --unit billing");
+    const args = ["engine", "state", "unit", "complete", "--stage", "code-generation", "--unit", "billing"];
+    expect(guardOperationMatchesEngineArgs(operation, args)).toBe(true);
+    expect(guardOperationMatchesEngineArgs(operation, [...args, "--wave"])).toBe(false);
+    expect(guardOperationMatchesEngineArgs(operation, args.map((a) => a === "billing" ? "search" : a)))
+      .toBe(false);
+    const refusal = evaluateGuardRefusal({
+      code: "UNIT_COMPLETION_MISSING",
+      blockedAction: "present-approval-gate",
+      stage: "code-generation",
+      unit: "billing",
+      stateContent: "# State\n- [-] code-generation — EXECUTE\n",
+      invariant: "The Unit lifecycle is complete in the current attempt.",
+      userMessage: "no current UNIT_COMPLETED receipt is recorded.",
+      attempt: {
+        recovery: "available",
+        summaryCoverage: "current",
+        reviewCoverage: "current",
+        sourceCoverage: "current",
+      },
+      humanAuthority: { freshTurn: true, unattended: false },
+    });
+    expect(refusal.remedies[0]).toMatchObject({
+      op: "record-unit-completion",
+      interaction: "command",
+      executableNow: true,
+      requiresHuman: true,
+      operation,
+    });
+  });
+
+  test("one Unit's step starts again, and reviews go advisory, each by one exact command", () => {
+    const reopen: GuardRecoveryOperation = { kind: "reopen-unit", stage: "code-generation", unit: "beta" };
+    expect(isGuardRecoveryOperation(reopen)).toBe(true);
+    expect(isGuardRecoveryOperation({ ...reopen, unit: "../other" })).toBe(false);
+    expect(renderGuardOperation(reopen, { mode: "native", shell: "posix" }))
+      .toBe("aidlc engine jump reopen --target code-generation --units beta");
+    expect(renderGuardOperation(reopen, { mode: "source", harnessDir: ".claude", shell: "posix" }))
+      .toBe("bun .claude/tools/aidlc-jump.ts reopen --target code-generation --units beta");
+    const reopenArgs = ["engine", "jump", "reopen", "--target", "code-generation", "--units", "beta"];
+    expect(guardOperationMatchesEngineArgs(reopen, reopenArgs)).toBe(true);
+    expect(guardOperationMatchesEngineArgs(reopen, [...reopenArgs.slice(0, -1), "alpha,beta"])).toBe(false);
+    expect(sameGuardOperation(reopen, { ...reopen })).toBe(true);
+    expect(sameGuardOperation(reopen, { ...reopen, unit: "alpha" })).toBe(false);
+    const picked = askMarker([{
+      op: "reopen-unit-step", action: "Start it again.", interaction: "command", operation: reopen,
+    }], "beta");
+    expect(guardRecoveryAnswerAdmits(picked, reopenArgs)).toBe(true);
+    expect(guardRecoveryAnswerAdmits({ ...picked, delivery: "issued" }, reopenArgs)).toBe(false);
+
+    const advisory: GuardRecoveryOperation = { kind: "review-advisory" };
+    expect(isGuardRecoveryOperation(advisory)).toBe(true);
+    expect(isGuardRecoveryOperation({ ...advisory, review: "none" })).toBe(false);
+    expect(renderGuardOperation(advisory, { mode: "native", shell: "posix" }))
+      .toBe("aidlc engine config set review advisory");
+    expect(renderGuardOperation(advisory, { mode: "source", harnessDir: ".claude", shell: "posix" }))
+      .toBe("bun .claude/tools/aidlc-utility.ts config-change --review advisory");
+    expect(guardOperationMatchesEngineArgs(advisory, ["engine", "config", "set", "review", "advisory"])).toBe(true);
+    expect(guardOperationMatchesEngineArgs(advisory, ["engine", "config", "set", "review", "none"])).toBe(false);
+    // Neither is one of the Plan Approval recovery shapes.
+    expect(isGuardRecoveryEngineInvocation(reopenArgs)).toBe(false);
+    expect(isGuardRecoveryEngineInvocation(["engine", "config", "set", "review", "advisory"])).toBe(false);
+  });
+
+  test("only the answer the person picked, for the ask's own stage, Unit, and project", () => {
+    const remedies: NonNullable<ActiveDirectiveMarker["remedies"]> = [
+      { op: "request-changes", action: "Ask what should change.", interaction: "human-input" },
+      { op: "finish-revision", action: "Finish the revision.", interaction: "external-work" },
+    ];
+    const reject = report("--unit", "billing", "--result", "rejected",
+      "--user-input", "Request Changes", "--reason", "Use Stripe.");
+    // The offer alone grants nothing, and each pick admits only its own route.
+    expect(guardRecoveryAnswerAdmits(askMarker(remedies, "billing", null), reject)).toBe(false);
+    expect(guardRecoveryAnswerAdmits(askMarker(remedies, "billing", "finish-revision"), reject)).toBe(false);
+    expect(guardRecoveryAnswerAdmits(askMarker(remedies, "billing", "finish-revision"),
+      report("--result", "revised"))).toBe(true);
+    const marker = askMarker(remedies, "billing");
+    expect(guardRecoveryAnswerAdmits(marker, reject)).toBe(true);
+    expect(guardRecoveryAnswerAdmits(marker, [...reject, "--project-dir", "/work/shop"], "/work/shop"))
+      .toBe(true);
+    for (const foreign of [
+      [...reject, "--project-dir", "/work/other"],
+      [...reject, "--project-dir=/work/shop"],
+      [...reject, "--intent", "other-work"],
+      [...reject, "--space", "platform"],
+    ]) {
+      expect(guardRecoveryAnswerAdmits(marker, foreign, "/work/shop"), foreign.join(" ")).toBe(false);
+    }
+    for (const refused of [
+      report("--unit", "billing", "--result", "approved"),
+      report("--unit", "search", "--result", "rejected"),
+      ["engine", "orchestrate", "report", "--stage", "build-and-test", "--result", "rejected"],
+      ["engine", "orchestrate", "report", "--result", "rejected"],
+      ["engine", "state", "reject", "code-generation"],
+      ["engine", "log", "review", "--stage", "code-generation"],
+      ["orchestrate", "report", "--stage", "code-generation", "--result", "rejected"],
+    ]) {
+      expect(guardRecoveryAnswerAdmits(marker, refused), refused.join(" ")).toBe(false);
+    }
+    expect(guardRecoveryAnswerAdmits({ ...marker, kind: "run-stage" }, reject)).toBe(false);
+    expect(guardRecoveryAnswerAdmits({ ...marker, needs_rehydrate: true }, reject)).toBe(false);
+    expect(guardRecoveryAnswerAdmits(null, reject)).toBe(false);
+  });
+
+  test("a remedy with a follow-up opens each route in its own phase", () => {
+    const awaiting = (marker: ActiveDirectiveMarker): ActiveDirectiveMarker => ({
+      ...marker,
+      guard_recovery_response: {
+        status: "awaiting-feedback",
+        selection_sha256: "1".repeat(64),
+        selected_op: marker.guard_recovery_response?.selected_op as never,
+      },
+    });
+    const summary = (verb: string) =>
+      ["engine", "log", verb, "--stage", "code-generation", "--checkpoint", "summary-confirmation"];
+    const reconfirm = askMarker([
+      { op: "reconfirm-summary", action: "Present the summary.", interaction: "human-input" },
+    ]);
+    // Picked: the summary prompt can be recorded; the confirmation waits for the person.
+    expect(guardRecoveryAnswerAdmits(awaiting(reconfirm), summary("decision"))).toBe(true);
+    expect(guardRecoveryAnswerAdmits(awaiting(reconfirm), summary("answer"))).toBe(false);
+    expect(guardRecoveryAnswerAdmits(reconfirm, summary("answer"))).toBe(true);
+    const changes = askMarker([
+      { op: "request-changes", action: "Ask what should change.", interaction: "human-input" },
+    ]);
+    const reject = report("--result", "rejected", "--user-input", "Request Changes", "--reason", "x");
+    expect(guardRecoveryAnswerAdmits(awaiting(changes), reject)).toBe(false);
+    expect(guardRecoveryAnswerAdmits(changes, reject)).toBe(true);
+    // A Scope is the person's own typed `/aidlc --scope`, never a filled-in route.
+    const scope = askMarker([
+      { op: "change-scope", action: "Name the Scope.", interaction: "human-input" },
+    ]);
+    expect(guardRecoveryAnswerAdmits(scope, ["engine", "scope", "change", "--scope", "bugfix"]))
+      .toBe(false);
+  });
+
+  test("an offered operation is admitted in its native and source spellings only", () => {
+    const operation: GuardRecoveryOperation = {
+      kind: "record-unit-completion", stage: "code-generation", unit: "billing",
+    };
+    const marker = askMarker([{
+      op: "record-unit-completion", action: "Record it.", interaction: "command", operation,
+    }], "billing");
+    expect(guardRecoveryAnswerAdmits({ ...marker, delivery: "issued" },
+      ["engine", "state", "unit", "complete", "--stage", "code-generation", "--unit", "billing"]))
+      .toBe(false);
+    const args = ["engine", "state", "unit", "complete", "--stage", "code-generation", "--unit", "billing"];
+    expect(guardRecoveryAnswerAdmits(marker, args)).toBe(true);
+    expect(guardRecoveryAnswerAdmits(marker, [...args, "--project-dir", "/other"])).toBe(false);
+    expect(guardRecoveryAnswerAdmits(marker, report("--unit", "billing", "--result", "rejected")))
+      .toBe(false);
+  });
+
+  test("source installs spell the fence switch and the restart continuation through their tools", () => {
+    expect(isGuardRecoveryEngineInvocation(
+      ["engine", "utility", "config-change", "--guard.plan-approval", "off"],
+    )).toBe(true);
+    for (const changed of [
+      ["engine", "utility", "config-change", "--guard.plan-approval", "on"],
+      ["engine", "utility", "config-change", "--guard.human-presence", "off"],
+      ["engine", "utility", "config-change", "--guard.plan-approval", "off", "--intent", "x"],
+    ]) {
+      expect(isGuardRecoveryEngineInvocation(changed), changed.join(" ")).toBe(false);
+    }
+    const source = "bun .claude/tools/aidlc-jump.ts execute --target code-generation --direction redo --scope poc";
+    expect(parseGuardRestartContinuationCommand(source, { harnessDir: ".claude" })).toMatchObject({
+      operation: { kind: "restart-stage", stage: "code-generation" },
+      direction: "redo",
+      scope: "poc",
+    });
+    expect(parseGuardRestartContinuationCommand(source)).toBeNull();
+    expect(parseGuardRestartContinuationCommand(source, { harnessDir: ".kiro" })).toBeNull();
+    expect(parseGuardRestartContinuationCommand(source.replace("aidlc-jump.ts", "aidlc-state.ts"),
+      { harnessDir: ".claude" })).toBeNull();
+    expect(parseGuardRestartContinuationCommand(`${source} --force`, { harnessDir: ".claude" }))
+      .toBeNull();
+  });
+});
+
 describe("recovery selection records the next interaction", () => {
   function publish(interaction: "command" | "human-input", operation?: GuardRecoveryOperation) {
     const project = createTestProject();
@@ -257,6 +479,45 @@ describe("recovery selection records the next interaction", () => {
     expect(reselected.guard_recovery_response?.status).toBe("ready");
     expect(reselected.guard_recovery_response?.selected_op).toBe("restart-stage");
     expect(reselected.remedies).toEqual(selected.remedies);
+  });
+
+  // #1290: with Request Changes the only choice, its question asks "What should
+  // change?", so a reply that is not the bare pick is the answer to it. That is
+  // structure, not a reading of their words: the agent still decides whether to
+  // submit, and its own record of the same remedy changes nothing.
+  test("with Request Changes the only choice, a reply that does not pick it is the feedback (#1290)", () => {
+    const { project, state } = publish("human-input");
+    expect(consumeSharedDirectiveAsk(project, "Use Redis for the session store.")).toBe(true);
+    const response = readActiveDirectiveMarker(project, state)?.guard_recovery_response;
+    expect(response).toMatchObject({ status: "ready", selected_op: "request-changes", picked_by: "person" });
+    expect(response?.feedback_sha256).toMatch(/^[a-f0-9]{64}$/);
+    recordGuardRecoveryChoice(project, "Request Changes: Use Redis for the session store.", true);
+    expect(readActiveDirectiveMarker(project, state)?.guard_recovery_response).toEqual(response);
+  });
+
+  test("with Request Changes the only choice, the latest reply is the feedback until it is submitted", () => {
+    const { project, state } = publish("human-input");
+    expect(consumeSharedDirectiveAsk(project, "Why was this refused?")).toBe(true);
+    const first = readActiveDirectiveMarker(project, state)?.guard_recovery_response;
+    expect(consumeSharedDirectiveAsk(project, "Split the billing step in two.")).toBe(true);
+    const latest = readActiveDirectiveMarker(project, state)?.guard_recovery_response;
+    expect(latest).toMatchObject({ status: "ready", selected_op: "request-changes" });
+    expect(latest?.feedback_sha256).not.toBe(first?.feedback_sha256);
+    // Picking the option again, or a dismissed question, keeps the words given.
+    for (const kept of ["Request Changes", "Cancelled"]) {
+      consumeSharedDirectiveAsk(project, kept);
+      expect(readActiveDirectiveMarker(project, state)?.guard_recovery_response?.feedback_sha256)
+        .toBe(latest?.feedback_sha256);
+    }
+  });
+
+  test("a dismissed question is not a reply", () => {
+    const { project, state } = publish("human-input");
+    expect(consumeSharedDirectiveAsk(project, "Cancelled")).toBe(false);
+    expect(readActiveDirectiveMarker(project, state)?.guard_recovery_response).toBeUndefined();
+    expect(consumeSharedDirectiveAsk(project, "Split the billing step in two.")).toBe(true);
+    expect(readActiveDirectiveMarker(project, state)?.guard_recovery_response)
+      .toMatchObject({ status: "ready", selected_op: "request-changes" });
   });
 
   test("Request Changes still needs separate human feedback", () => {

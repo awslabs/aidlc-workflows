@@ -2,6 +2,7 @@
 // Sync the current git tree to the MR10 Windows test host through SSM.
 
 import { spawnSync } from "node:child_process";
+import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "../test-budget.ts";
 import { gzipSync } from "node:zlib";
 import { resolveInstanceId, sendPowerShell, waitForInvocation } from "./ssm-run.ts";
 
@@ -54,6 +55,7 @@ function gitArchive(ref: string): Buffer {
   const r = spawnSync("git", ["archive", "--format=tar", ref], {
     encoding: "buffer",
     maxBuffer: 200 * 1024 * 1024,
+    timeout: remainingOperationTimeoutMs(NATIVE_FIXTURE_SETUP_TIMEOUT_MS, { phase: "Windows sync archive" }),
   });
   if (r.status !== 0) {
     throw new Error((r.stderr as Buffer).toString("utf8") || `git archive ${ref} failed`);
@@ -65,9 +67,9 @@ function psSingle(s: string): string {
   return `'${s.replace(/'/g, "''")}'`;
 }
 
-async function runPs(instanceId: string, region: string, command: string, timeoutSeconds = 1800): Promise<void> {
+async function runPs(instanceId: string, region: string, command: string, timeoutSeconds = NATIVE_FIXTURE_SETUP_TIMEOUT_MS / 1000): Promise<void> {
   const commandId = sendPowerShell(instanceId, region, command, timeoutSeconds);
-  const inv = await waitForInvocation(instanceId, region, commandId, 3);
+  const inv = await waitForInvocation(instanceId, region, commandId, 3, 2 * timeoutSeconds * 1000);
   if (inv.stdout) process.stdout.write(inv.stdout);
   if (inv.stderr) process.stderr.write(inv.stderr);
   if (inv.status !== "Success" || inv.responseCode !== 0) {
@@ -110,7 +112,7 @@ if (import.meta.main) {
         instanceId,
         cli.region,
         `$dest = ${dest}; Add-Content -Path (Join-Path $dest 'tree.b64') -Value ${psSingle(parts[i])} -NoNewline; Write-Output 'chunk ${i + 1}/${parts.length}'`,
-        300,
+        NATIVE_FIXTURE_SETUP_TIMEOUT_MS / 1000,
       );
     }
 

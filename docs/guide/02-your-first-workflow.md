@@ -38,38 +38,64 @@ while keeping you in control at every decision point.
 ### Starting from an existing document
 
 There is no mandatory location for an existing vision document, PRD, or brief.
-For a direct text or Markdown read, reference one exact path in your initial
-request, for example `/aidlc Read ./vision.md and build what it describes`.
-Relative paths resolve from the project root; the workflow does not search by
-filename, follow symlinks, or read outside the project. Missing or ambiguous
-paths stop for clarification.
+For a direct text or Markdown read, name the file in your initial request, for
+example `/aidlc Read ./vision.md and build what it describes`. Relative paths
+resolve from the project root. When nothing is at that path, the workflow looks
+for project files with that name: with one match it reads it and tells you which
+file (at the latest when it asks you to approve the stage), with several it offers a numbered pick, and with none it asks for the
+path. It finds only document files (Markdown, text, PDF, Word, and similar),
+outside hidden folders such as `.docker` or `.aws` and outside any nested
+repository. It never lists git-ignored files, symlinks, or files that look like
+secrets (`.env`, `*.pem`, `*.key`, `id_*`, or a name with
+"secret", "credential", "password", or "token" in it), and never reads outside
+the project. When it cannot list every file, it chooses none and asks for the
+path.
 
-You can also paste document content directly into the request. Put exactly one
-document block at the end so the workflow can distinguish your directions from
-document data:
+You can also paste document content directly into the request. Wrap it in
+`<document>` and `</document>` so the workflow can tell your directions from
+document data. Your directions can come before the block, after it, or both:
 
 ```text
 /aidlc Build the product described below.
 <document>
 ...vision document content...
 </document>
+Keep the first release read-only.
 ```
 
-The delimited content is untrusted data, not instructions. Multiline input is
-stored as one JSON string in committed `<record>/project-description.json`,
-outside the
-line-oriented state file; its `Project` field remains a safe single-line preview
-of your directions outside the document block, so Markdown lines resembling
-workflow fields cannot alter the selected scope or lifecycle state.
-Unmatched, nested, or repeated markers, content after the closing marker, and a
-document with no directions outside the block are refused before a workflow
-record is created.
+The delimited content is untrusted data, not instructions. Everything from the
+first `<document>` to the last `</document>` is the document, so a
+`</document>` inside your pasted text cannot turn the rest of it into
+instructions. A `<document>` with no closing marker makes the rest of the
+message the document, and a `</document>` with no opening marker makes
+everything before it the document. The workflow says in one line how it split
+your message. Multiline input is stored as one JSON string in committed
+`<record>/project-description.json`, outside the line-oriented state file; its
+`Project` field remains a safe single-line preview of your directions outside
+the document, so Markdown lines resembling workflow fields cannot alter the
+selected scope or lifecycle state. A message that is only a document, with no
+words outside it, is taken as "Build what the pasted document describes.", and
+the plan question that follows says so.
 
-PDF, Word, oversized, and other unsupported direct-read formats use DocumentKB:
-place the file under `aidlc/spaces/<space>/knowledge/documents/`, run
-`/aidlc knowledge onboard <path>`, and use the resulting document id. Document
-paths, filenames, and content are always treated as untrusted data, never as
-instructions.
+A PDF or Word file works the same way: name it, for example
+`/aidlc Build what ./brief.pdf describes`. The workflow copies it into
+`aidlc/spaces/<space>/knowledge/documents/`, adds it to the
+[knowledge base](08-knowledge.md), tells you in one line where it copied it and
+its document id (at the latest when it asks you to approve the stage), and
+reads its text. You never run a command or type the id, and it never replaces a
+file already in that folder. When the file is git-ignored (or git cannot
+say), it asks first whether you want it copied anyway, because the copy would be committed. When no
+text can be read (no extractor for that kind of file, or a scanned document),
+it says why and asks you for a text or Markdown version. Text over 200,000
+characters is not read directly; the workflow asks you for a supported file.
+Document paths, filenames, and content are always treated as untrusted data,
+never as instructions.
+
+[Writing a Vision Document](writing-inputs/vision-document-guide.md) covers
+what to put in one, and
+[Writing a Technical Environment Document](writing-inputs/technical-environment-guide.md)
+covers the stack and its rules, which go in your space's team knowledge
+rather than the request.
 
 ---
 
@@ -98,7 +124,9 @@ artifact, so the record only ever lists work that produced something.
 
 ### Stage 0.2: Workspace Detection
 
-A deterministic rule-based scanner walks one level deep into the project plus known source directories (`src/`, `app/`, `lib/`, `pages/`, `components/`, `tests/`). It classifies greenfield vs brownfield based on source files, framework configs, and package manifests. When no top-level signal fires, it also descends one level into each arbitrarily-named subdirectory, so a project whose source lives in a container folder (e.g. `wordbook/`, `backend/`) is still detected as brownfield.
+A deterministic rule-based scanner walks one level deep into the project plus known source directories (`src/`, `app/`, `lib/`, `pages/`, `components/`, `tests/`). It classifies greenfield vs brownfield based on source files, framework configs, and package manifests. When no top-level signal fires, it also descends one level into each arbitrarily-named subdirectory, so a project whose source lives in a container folder (e.g. `wordbook/`, `backend/`) is still detected as brownfield. AI-DLC's own files, such as the harness directory, `aidlc/`, and Cursor's root `install.ts`, never count as your code, so an empty folder stays greenfield.
+
+Your word wins over the scan. Start with `/aidlc --project-type brownfield "<what to build>"` (or `greenfield`) to say which it is, or say it in plain words at any point ("this is existing code, the frontend is in ui-repo"). AI-DLC scans the folder again, records the type as yours, and for existing code runs Reverse Engineering, then returns to the stage you were on; finished stages stay finished, and the reply names any that were done before the code was known so you can redo one. If the work started as a new project in an empty folder and the folder gains code before Construction, AI-DLC asks you once which it is. The choice holds for that piece of work only; the next piece of work scans the folder again.
 
 ### Stage 0.3: State Initialization
 
@@ -144,7 +172,7 @@ The aidlc-product-agent asks you to choose an interaction mode:
 - **Edit File** opens the artifact for direct editing
 - **Chat** lets you discuss freely; the agent extracts decisions
 
-See [Interaction Modes](07-interaction-modes.md) for details on each mode. You can switch modes mid-stage.
+See [Interaction Modes](07-interaction-modes.md) for details on each mode. You can switch modes mid-stage. You choose once: later stages reuse your choice and say so in one line, and you change it by saying so.
 
 ### Approval Gate
 
@@ -162,9 +190,13 @@ After the agent completes its work, you see a completion summary and an approval
 **Review outcome:** One concern remains for your decision.
 **Why now:** First review completed.
 
-| ID | Severity | Location | Finding | Required action | Status |
-|---|---|---|---|---|---|
-| R-01 | Minor | aidlc/spaces/default/intents/260820-checkout/ideation/intent-capture/intent-statement.md > Success Criteria | The adoption target has no deadline | Add the date by which the adoption target should be reached | New |
+| ID | Severity | Where | Status |
+|---|---|---|---|
+| R-01 | Minor | intent-statement.md > Success Criteria | New |
+
+> R-01 Finding: The adoption target has no deadline
+
+> R-01 Required action: Add the date by which the adoption target should be reached
 
 **Decision options:**
 - **Approve** - continue with the open findings accepted.
@@ -177,19 +209,22 @@ After the agent completes its work, you see a completion summary and an approval
   (2) Request Changes — Return to the listed artifacts
 ```
 
-The stable finding ID lets later checks show whether the same concern was
-resolved, remains open, or was accepted as a risk. Choose **Approve** to
-continue with any open findings accepted, or **Request Changes** to return to
-the listed artifacts. An approval records `Accepted risk` outside the reviewed
-artifact, so a later re-check preserves that decision. When rejecting a finding
-as inapplicable, give its ID and reason; ordinary revision feedback leaves it
-open. See [Interaction Modes](07-interaction-modes.md) for details on the
-revision process.
+The engine owns the stable finding list. Later checks report only what changed,
+while your decisions remain exactly as you made them. Choose **Approve** to
+continue with every open finding accepted, or **Request Changes** to return to
+the listed artifacts. When rejecting an open finding as inapplicable, give its
+ID and reason. If a reviewer marks one fixed and you disagree, request changes
+with that ID and explain why it is not fixed; the engine reopens it for the
+next check. Ordinary revision feedback changes no finding decision. After a
+backward jump, Keep and Modify retain this list and its decisions. Redo from
+scratch starts a fresh list at `R-01`. Upgrading mid-workflow keeps earlier
+decisions by ID. See [Interaction Modes](07-interaction-modes.md) for details
+on the revision process.
 
 After approval, a progress line appears:
 
 ```
-Progress: 4/33 overall | 1/7 IDEATION stages complete. Next: Market Research
+Progress: 1/30 in-scope stages complete (4/33 overall) | 1/7 IDEATION. Next: Market Research
 ```
 
 ### Remaining Ideation Stages
@@ -317,7 +352,7 @@ sequenceDiagram
 
 ### Subagent Delegation
 
-Four stages dispatch to background subagents — 2.1 Reverse Engineering (pipeline: developer scan, then architect synthesis-and-write), 2.2 Practices Discovery (subagent hub-and-spoke: lead draft, three mutually blind support reviews, human interview, lead integration), 2.4 User Stories (mob: collaborators contribute in parallel, and judgment-call disagreements may surface to you mid-stage), and 3.5 Code Generation (subagent). Practices Discovery deliberately brings you into the room between the spokes and final integration; the User Stories mob may also surface judgment calls mid-stage. Workspace detection (0.2) runs deterministically inside `aidlc-utility intent-create` rather than as a subagent.
+Four stages dispatch to background subagents — 2.1 Reverse Engineering (pipeline: developer scan, then architect synthesis-and-write), 2.2 Practices Discovery (subagent hub-and-spoke: lead draft, three mutually blind support reviews, human interview, lead integration), 2.4 User Stories (mob: collaborators contribute in parallel, and judgment-call disagreements may surface to you mid-stage), and 3.5 Code Generation (subagent). Practices Discovery deliberately brings you into the room between the spokes and final integration; the User Stories mob may also surface judgment calls mid-stage. Those support agents take part when collaborators are on (the `collaborators` setting, shipped on only for `enterprise`; `/aidlc --collaborators on` turns it on for one piece of work). With collaborators off, the scope line says `lead agent only` and each of these stages runs its lead alone: the developer both scans the code and writes the code knowledge base, Practices Discovery goes from the lead's draft straight to your interview, and User Stories has no mob round. Workspace detection (0.2) runs deterministically inside `aidlc-utility intent-create` rather than as a subagent.
 
 ```mermaid
 sequenceDiagram

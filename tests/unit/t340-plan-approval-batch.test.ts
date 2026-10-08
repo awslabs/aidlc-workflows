@@ -2,7 +2,12 @@
 // function:recordPlanApprovalReceipt, function:evaluateCodeGenerationApproval,
 // function:beginCodeGeneration, hook:aidlc-record-human-turn
 
-import { afterAll, describe, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { afterAll, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join, relative } from "node:path";
@@ -36,6 +41,8 @@ import {
   setupIntegrationProject,
 } from "../harness/fixtures.ts";
 
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
 resetAidlcEnv();
 const projects: string[] = [];
 const SESSION = "batch-review";
@@ -43,10 +50,11 @@ const UNITS = ["auth", "api"];
 type Fixture = { project: string; file: string; units: Array<{ unit: string; questionsFile: string }> };
 afterAll(() => {
   for (const project of projects) cleanupTestProject(project);
-}, 30_000);
+}, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 function run(project: string, tool: string, args: string[], payload?: unknown) {
   const result = Bun.spawnSync([process.execPath, join(AIDLC_SRC, tool), ...args], {
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     cwd: project,
     env: { ...process.env, CLAUDE_PROJECT_DIR: project },
     ...(payload === undefined ? {} : { stdin: Buffer.from(JSON.stringify(payload)) }),
@@ -98,7 +106,7 @@ function fixture(stageLevel = false): Fixture {
     ["init", "-q"], ["config", "user.email", "tests@example.com"],
     ["config", "user.name", "AI-DLC Tests"], ["add", "-A"], ["commit", "-qm", "baseline"],
   ]) {
-    const result = Bun.spawnSync(["git", ...args], { cwd: project, stdout: "pipe", stderr: "pipe" });
+    const result = Bun.spawnSync(["git", ...args], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), cwd: project, stdout: "pipe", stderr: "pipe" });
     expect(result.exitCode, result.stderr.toString()).toBe(0);
   }
   publish(project, stageLevel ? null : UNITS);
@@ -121,7 +129,7 @@ function log(f: Fixture, action: "decision" | "answer", extra: string[] = []) {
 }
 
 function human(project: string, choice = "Approve Plans", session = SESSION): void {
-  const result = run(project, "hooks/aidlc-record-human-turn.ts", [], {
+  const result = run(project, "tools/aidlc.ts", ["engine", "hook", "record-human-turn"], {
     hook_event_name: "UserPromptSubmit", session_id: session, prompt: choice,
   });
   expect(result.code, result.stderr).toBe(0);
@@ -136,7 +144,7 @@ function answers(f: Fixture, choice = "Approve Plan"): void {
 
 function receiptFiles(project: string): string[] {
   const dir = join(sessionsDir(project), "plan-approval");
-  return existsSync(dir) ? readdirSync(dir).filter((file) => /^receipt-.*\.json$/.test(file)) : [];
+  return existsSync(dir) ? readdirSync(dir).filter((file) => /^receipt-.*\.json$/.test(file)).sort() : [];
 }
 
 function approve(f: Fixture): void {
@@ -162,14 +170,15 @@ describe("t340 exact reviewed Code Generation batch approval", () => {
     }
     expect(readPlanApprovalChallenge(f.project, SESSION)).toBeNull();
     expect(receiptFiles(f.project)).toHaveLength(0);
-  }, 30_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("manifest path cannot traverse a symlinked parent inside the active record", () => {
     const f = fixture();
     const outside = join(f.project, "outside-batches");
     mkdirSync(outside);
     writeFileSync(join(outside, "manifest.json"), readFileSync(f.file));
-    symlinkSync(outside, join(seededRecordDir(f.project), "redirected-batches"));
+    symlinkSync(outside, join(seededRecordDir(f.project), "redirected-batches"),
+      process.platform === "win32" ? "junction" : "dir");
     for (const action of ["decision", "answer"] as const) {
       const result = log(f, action, ["--batch-file", "redirected-batches/manifest.json"]);
       expect(result.code).not.toBe(0);
@@ -177,7 +186,7 @@ describe("t340 exact reviewed Code Generation batch approval", () => {
     }
     expect(readPlanApprovalChallenge(f.project, SESSION)).toBeNull();
     expect(receiptFiles(f.project)).toHaveLength(0);
-  }, 30_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("manifest larger than 64 KiB is refused before approval", () => {
     const f = fixture();
@@ -189,7 +198,7 @@ describe("t340 exact reviewed Code Generation batch approval", () => {
     }
     expect(readPlanApprovalChallenge(f.project, SESSION)).toBeNull();
     expect(receiptFiles(f.project)).toHaveLength(0);
-  }, 30_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("malformed manifest reports invalid JSON without exposing file contents", () => {
     const f = fixture();
@@ -203,7 +212,7 @@ describe("t340 exact reviewed Code Generation batch approval", () => {
     }
     expect(readPlanApprovalChallenge(f.project, SESSION)).toBeNull();
     expect(receiptFiles(f.project)).toHaveLength(0);
-  }, 30_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("a record-relative manifest at the size limit certifies every member and generation consumes ordinary receipts", () => {
     const f = fixture();
@@ -227,7 +236,7 @@ describe("t340 exact reviewed Code Generation batch approval", () => {
     }
     expect(readPlanApprovalChallenge(f.project, SESSION)).toBeNull();
     expect(readPlanApprovalResponse(f.project, SESSION)).toBeNull();
-  }, 30_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("no receipt without the actual offered response in this session", () => {
     const f = fixture();
@@ -237,9 +246,9 @@ describe("t340 exact reviewed Code Generation batch approval", () => {
     answers(f);
     const answer = log(f, "answer");
     expect(answer.code).not.toBe(0);
-    expect(answer.stderr).toContain("actual offered choice");
+    expect(answer.stderr).toContain("requires the person's reply to this prompt, in this session");
     expect(receiptFiles(f.project)).toHaveLength(0);
-  }, 30_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("same reviewed batch, reordered manifest and reissued directive keep the response", () => {
     const f = fixture();
@@ -254,7 +263,7 @@ describe("t340 exact reviewed Code Generation batch approval", () => {
     answers(f);
     const answer = log(f, "answer");
     expect(answer.code, answer.stderr).toBe(0);
-  }, 30_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test.each(["duplicate", "foreign", "subset", "noncanonical"] as const)("%s selection creates no partial challenge", (kind) => {
     const f = fixture();
@@ -266,7 +275,7 @@ describe("t340 exact reviewed Code Generation batch approval", () => {
     expect(log(f, "decision").code).not.toBe(0);
     expect(readPlanApprovalChallenge(f.project, SESSION)).toBeNull();
     expect(receiptFiles(f.project)).toHaveLength(0);
-  }, 30_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test.each(["name", "plan", "instructions", "attempt", "set", "source"] as const)("%s change after review refuses all receipts", (kind) => {
     const f = fixture();
@@ -284,7 +293,7 @@ describe("t340 exact reviewed Code Generation batch approval", () => {
     if (kind === "source") writeFileSync(join(f.project, "src", "base.ts"), "export const base = 2;\n");
     expect(log(f, "answer").code).not.toBe(0);
     expect(receiptFiles(f.project)).toHaveLength(0);
-  }, 30_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("progress checkboxes, a terminal review appendix and line endings preserve every grouped receipt", () => {
     const f = fixture();
@@ -312,7 +321,7 @@ describe("t340 exact reviewed Code Generation batch approval", () => {
     writeFileSync(instructions, readFileSync(instructions, "utf-8").replaceAll("\n", "\r\n"));
     assertCurrent();
     for (const unit of UNITS) expect(() => beginCodeGeneration(f.project, { unit })).not.toThrow();
-  }, 30_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test.each(["plan body", "instructions", "instructions review appendix", "nonterminal review"] as const)(
     "%s changes after approval invalidate every group member", (kind) => {
@@ -331,7 +340,7 @@ describe("t340 exact reviewed Code Generation batch approval", () => {
         expect(evaluateCodeGenerationApproval(f.project, { unit }).ok).toBe(false);
         expect(() => beginCodeGeneration(f.project, { unit })).toThrow();
       }
-    }, 30_000,
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
   );
 
   test("re-fingerprinting changed content rotates the group challenge and needs a new human response", () => {
@@ -358,21 +367,21 @@ describe("t340 exact reviewed Code Generation batch approval", () => {
     answers(f);
     expect(log(f, "answer").code).not.toBe(0);
     expect(receiptFiles(f.project)).toHaveLength(0);
-  }, 30_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("changing the live unit set after approval also retires the remaining unit's group receipt", () => {
     const f = fixture();
     approve(f);
     publish(f.project, ["auth"]);
     expect(evaluateCodeGenerationApproval(f.project, { unit: "auth" }).ok).toBe(false);
-  }, 30_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("incomplete receipt set cannot authorize even the member whose receipt exists", () => {
     const f = fixture();
     approve(f);
     rmSync(join(sessionsDir(f.project), "plan-approval", receiptFiles(f.project)[0]));
     for (const unit of UNITS) expect(evaluateCodeGenerationApproval(f.project, { unit }).ok).toBe(false);
-  }, 30_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("Request Changes withdraws the whole reviewed group and spends the response", () => {
     const f = fixture();
@@ -388,7 +397,7 @@ describe("t340 exact reviewed Code Generation batch approval", () => {
     expect(readPlanApprovalResponse(f.project, SESSION)).toBeNull();
     answers(f);
     expect(log(f, "answer").code).not.toBe(0);
-  }, 30_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("filesystem failure after receipt writes rolls back all authority and preserves the response", () => {
     const f = fixture();
@@ -409,7 +418,7 @@ describe("t340 exact reviewed Code Generation batch approval", () => {
     expect(readPlanApprovalResponse(f.project, SESSION)).toEqual(response);
     const retry = log(f, "answer");
     expect(retry.code, retry.stderr).toBe(0);
-  }, 30_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("loss of the shared commit marker leaves every receipt non-authorizing", () => {
     const f = fixture();
@@ -420,7 +429,7 @@ describe("t340 exact reviewed Code Generation batch approval", () => {
     rmSync(join(dir, commits[0]));
     expect(receiptFiles(f.project)).toHaveLength(2);
     for (const unit of UNITS) expect(evaluateCodeGenerationApproval(f.project, { unit }).ok).toBe(false);
-  }, 30_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("an obstructed member destination refuses without changing any runtime authority", () => {
     const f = fixture();
@@ -437,7 +446,7 @@ describe("t340 exact reviewed Code Generation batch approval", () => {
     expect(readPlanApprovalResponse(f.project, SESSION)).not.toBeNull();
     rmSync(blocked, { recursive: true });
     expect(log(f, "answer").code).toBe(0);
-  }, 30_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("failed rejection restores previous receipts and keeps the human response for retry", () => {
     const f = fixture();
@@ -462,7 +471,7 @@ describe("t340 exact reviewed Code Generation batch approval", () => {
     const retry = log(f, "answer", ["--details", "Request Changes"]);
     expect(retry.code, retry.stderr).toBe(0);
     expect(receiptFiles(f.project)).toHaveLength(0);
-  }, 30_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("legacy batch flags refuse with a single-unit fallback and no challenge", () => {
     const f = fixture();
@@ -470,7 +479,7 @@ describe("t340 exact reviewed Code Generation batch approval", () => {
     expect(decision.code).not.toBe(0);
     expect(decision.stderr).toContain("--unit <unit> --questions-file <path>");
     expect(readPlanApprovalChallenge(f.project, SESSION)).toBeNull();
-  }, 30_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test.each([false, true])("single route remains compatible, stage-level=%s, including protected choices", (stageLevel) => {
     const f = fixture(stageLevel);
@@ -492,7 +501,7 @@ describe("t340 exact reviewed Code Generation batch approval", () => {
     const answer = run(f.project, "tools/aidlc-log.ts", ["answer", ...identity, "--details", "Approve Plan"]);
     expect(answer.code, answer.stderr).toBe(0);
     expect(evaluateCodeGenerationApproval(f.project, { unit: stageLevel ? null : f.units[0].unit }).ok).toBe(true);
-  }, 30_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("a grouped response cannot be spent through the single-unit answer route", () => {
     const f = fixture();
@@ -507,5 +516,5 @@ describe("t340 exact reviewed Code Generation batch approval", () => {
     expect(answer.code).not.toBe(0);
     expect(receiptFiles(f.project)).toHaveLength(0);
     expect(log(f, "answer").code).toBe(0);
-  }, 30_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });

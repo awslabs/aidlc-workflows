@@ -1,13 +1,20 @@
 // covers: function:evaluateGuardRefusal, function:guardRecoveryAskForRefusal,
 // subcommand:aidlc-orchestrate:next, subcommand:aidlc-jump:execute,
-// subcommand:aidlc-bolt:abort
+// subcommand:aidlc-bolt:abort, subcommand:aidlc-testing-posture:fingerprint,
+// subcommand:aidlc-testing-posture:verify
 //
 // Execute the evaluator's actual source/native remedies, including the jump
 // command returned by next --stage. Lifecycle snapshots and spent recovery
 // inputs are synthetic; the resulting mutations/audit rows use owning CLIs.
 // Native evaluation imports dist-release under Bun; execution uses one compiled
 // dispatcher with a calibrated Bun-denial PATH sentinel. No model is invoked.
-import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+  NATIVE_COMPILE_TIMEOUT_MS,
+} from "../harness/test-budget.ts";
+import { setDefaultTimeout, afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
@@ -21,17 +28,25 @@ import {
   readdirSync,
   realpathSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { delimiter, dirname, join } from "node:path";
+import { appendAuditEntry } from "../../core/tools/aidlc-audit.ts";
 import {
   boltName,
   worktreePath,
   type ActiveDirectiveMarker,
+  getField,
+  GUARD_POLICY_FIELD,
   type GuardRefusal,
   type GuardRefusalInput,
+  setGuardPolicyLine,
   splitKiroCommandArgs,
+  stateDigest,
+  writeActiveDirectiveMarker,
 } from "../../core/tools/aidlc-lib.ts";
+import { codeGenerationRecordDir } from "../../core/tools/aidlc-testing-posture.ts";
 import {
   fixtureIntentId8,
   createTestProject,
@@ -44,6 +59,8 @@ import {
   seedStateFile,
 } from "../harness/fixtures.ts";
 import { testGuardEnvironment } from "../harness/runner-profile.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const HARNESS_RUNTIMES = [
   { name: "claude", dir: ".claude" },
@@ -101,6 +118,19 @@ let trace: string;
 let denialLog: string;
 let nativePath: string;
 
+// Windows inherits the variable as `Path`. A child given both `Path` and `PATH`
+// resolves the inherited one, so the Bun-denial sentinel never shadows Bun and
+// the calibration sees the real interpreter. Replace every case variant with
+// the single PATH this test intends.
+function withPath(env: NodeJS.ProcessEnv, path: string): NodeJS.ProcessEnv {
+  const next: NodeJS.ProcessEnv = {};
+  for (const [key, value] of Object.entries(env)) {
+    if (!/^path$/i.test(key)) next[key] = value;
+  }
+  next.PATH = path;
+  return next;
+}
+
 function run(
   argv: string[],
   cwd: string,
@@ -111,7 +141,7 @@ function run(
   const result = spawnSync(argv[0], argv.slice(1), {
     cwd, env, encoding: "utf-8",
     input: input === undefined ? undefined : JSON.stringify(input),
-    timeout: 60_000,
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     maxBuffer: 16 * 1024 * 1024,
   });
   const output = {
@@ -162,9 +192,12 @@ beforeAll(() => {
     "build", join(NATIVE_ROOT, "claude", ".claude", "tools", "aidlc.ts"),
     "--compile", "--outfile",
     join(binDir, process.platform === "win32" ? "aidlc.exe" : "aidlc"),
-  ], { cwd: REPO_ROOT, encoding: "utf-8", timeout: 120_000 });
+  ], { cwd: REPO_ROOT, encoding: "utf-8", timeout: remainingOperationTimeoutMs(NATIVE_COMPILE_TIMEOUT_MS) });
   writeFileSync(join(scratch, "compile.log"), `${build.stdout ?? ""}${build.stderr ?? ""}`);
   expect(build.status, `${build.stdout}\n${build.stderr}`).toBe(0);
+  // A compiled engine runs only the hooks and adapters packaged beside it, so
+  // lay the runtime out the way an install does.
+  symlinkSync(NATIVE_ROOT, join(binDir, "runtime"), "junction");
 
   const sentinel = join(binDir, process.platform === "win32" ? "bun.cmd" : "bun");
   writeFileSync(sentinel, process.platform === "win32"
@@ -182,18 +215,18 @@ beforeAll(() => {
     cwd: scratch,
     shell: true,
     encoding: "utf-8",
-    env: { ...process.env, PATH: nativePath, AIDLC_REMEDY_BUN_DENIAL_LOG: denialLog },
+    env: withPath({ ...process.env, AIDLC_REMEDY_BUN_DENIAL_LOG: denialLog }, nativePath),
   });
   expect(calibration.status, calibration.stdout + calibration.stderr).toBe(91);
   expect(readFileSync(denialLog, "utf-8")).toContain("unexpected Bun invocation");
   rmSync(denialLog);
-}, 150_000);
+}, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 afterAll(() => {
   // Retain compile/command/denial logs in ROOT/tmp for diagnosis.
   if (projectsDir) rmSync(projectsDir, { recursive: true, force: true });
   if (binDir) rmSync(binDir, { recursive: true, force: true });
-}, 30_000);
+}, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 class Fixture {
   readonly project: string;
@@ -224,6 +257,11 @@ class Fixture {
     ));
     mkdirSync(seededAuditDir(this.project), { recursive: true });
     writeFileSync(seededAuditShard(this.project), "# AI-DLC Audit Log\n");
+    // The session this fixture stands for runs AI-DLC's hooks: they have
+    // left a heartbeat in the record, so `next` does its work.
+    const health = join(seededRecordDir(this.project), ".aidlc-engine", "hooks-health");
+    mkdirSync(health, { recursive: true });
+    writeFileSync(join(health, "write-audit-log.last"), new Date().toISOString());
     mkdirSync(join(this.project, "src"));
     writeFileSync(join(this.project, "src", "base.ts"), "export const base = 1;\n");
     // The native commands are unchanged strings. Project context comes from
@@ -238,7 +276,7 @@ class Fixture {
       "AWS_AIDLC_DEFAULT_SCOPE", "AIDLC_COMPILED_EXECUTABLE",
       "AIDLC_RUNTIME_HARNESS_ROOT", "AIDLC_RUNTIME_PROJECT_DIR", "BUN_OPTIONS",
     ]) delete env[key];
-    this.evaluationEnv = {
+    this.evaluationEnv = withPath({
       ...env,
       AIDLC_PROJECT_DIR: this.project,
       CLAUDE_PROJECT_DIR: this.project,
@@ -246,11 +284,11 @@ class Fixture {
       AIDLC_HARNESS_NAME: harness.name,
       AIDLC_RUNTIME_ROOT: runtimeRoot,
       AIDLC_UNATTENDED: "0",
+      AIDLC_SESSION_OVERRIDE: "01995000-0995-7000-8000-000000000777",
       TMPDIR: scratch,
-      PATH: `${dirname(BUN)}${delimiter}${process.env.PATH ?? ""}`,
-    };
+    }, `${dirname(BUN)}${delimiter}${process.env.PATH ?? ""}`);
     this.env = projection === "native"
-      ? { ...this.evaluationEnv, PATH: nativePath, AIDLC_REMEDY_BUN_DENIAL_LOG: denialLog }
+      ? withPath({ ...this.evaluationEnv, AIDLC_REMEDY_BUN_DENIAL_LOG: denialLog }, nativePath)
       : this.evaluationEnv;
     for (const args of [
       ["init", "-q", "-b", "main"],
@@ -297,10 +335,13 @@ class Fixture {
   hook(name: string, payload: Json): Run {
     const argv = this.projection === "native"
       ? ["aidlc", "engine", "hook", name, "--project-dir", this.project]
-      : [BUN, join(this.project, this.harness.dir, "hooks", `aidlc-${name}.ts`)];
-    const output = run(argv, this.cwd, this.env, {
+      : name === "record-human-turn"
+        ? [BUN, join(this.tools, "aidlc.ts"), "engine", "hook", name]
+        : [BUN, join(this.project, this.harness.dir, "hooks", `aidlc-${name}.ts`)];
+    const input = {
       cwd: this.project, session_id: "01995000-0995-7000-8000-000000000777", ...payload,
-    });
+    };
+    const output = run(argv, this.cwd, this.env, input);
     if (this.projection === "native") expect(existsSync(denialLog), output.stderr).toBe(false);
     return output;
   }
@@ -316,10 +357,10 @@ class Fixture {
     const argv = this.projection === "native"
       ? ["aidlc", "engine", "adapter", "copilot", target, "--project-dir", this.project]
       : [BUN, join(this.project, this.harness.dir, "hooks", "aidlc-copilot-adapter.ts"), target];
-    const output = run(
-      argv, this.cwd, this.env,
-      { cwd: this.project, session_id: "01995000-0995-7000-8000-000000000777", ...payload },
-    );
+    const input = {
+      cwd: this.project, session_id: "01995000-0995-7000-8000-000000000777", ...payload,
+    };
+    const output = run(argv, this.cwd, this.env, input);
     if (this.projection === "native") expect(existsSync(denialLog), output.stderr).toBe(false);
     return output;
   }
@@ -480,7 +521,7 @@ describe("source and native guard remedies execute their owning operations", () 
       expect(targetAudit).toContain("**Event**: REVIEW_COMPLETED");
       expect(p.audit()).not.toContain("**Event**: REVIEW_COMPLETED");
       p.assertNoNestedState();
-    }, 120_000);
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
   }
 
   test("finish-revision reopens the gate without executing the restart operation", () => {
@@ -541,7 +582,7 @@ describe("source and native guard remedies execute their owning operations", () 
     expect(appended).toContain("**Event**: STAGE_AWAITING_APPROVAL");
     expect(appended).not.toContain("**Event**: STAGE_JUMPED");
     p.assertNoNestedState();
-  }, 120_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("native jump resolution before human selection does not authorize its returned reset", () => {
     const { p, remedy } = restartFixture();
@@ -555,7 +596,7 @@ describe("source and native guard remedies execute their owning operations", () 
     expect(p.audit()).not.toContain("**Event**: STAGE_JUMPED");
     expect(p.audit()).not.toContain("**Event**: PLAN_APPROVAL_RECORDED");
     p.assertNoNestedState();
-  }, 60_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   for (const harness of [HARNESS_RUNTIMES[0], HARNESS_RUNTIMES[2]]) {
     test(`native/${harness.name}: human selection survives next --stage and admits only the returned reset`, () => {
@@ -646,7 +687,7 @@ describe("source and native guard remedies execute their owning operations", () 
       }).status).toBe(2);
       expect(existsSync(join(p.project, "src", "unapproved.ts"))).toBe(false);
       p.assertNoNestedState();
-    }, 90_000);
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
   }
 
   test("source/copilot: the selected restart print settles with the source command representation", () => {
@@ -691,7 +732,7 @@ describe("source and native guard remedies execute their owning operations", () 
     });
     expect(p.audit()).not.toContain("**Event**: PLAN_APPROVAL_RECORDED");
     expect(p.guard("Write", { file_path: join(p.project, "src", "unapproved.ts") }).status).toBe(2);
-  }, 90_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   for (const mismatch of ["ordinary-print", "unrelated-command", "changed-state"] as const) {
     test(`native/copilot: ${mismatch} cannot preserve a selected restart through settlement`, () => {
@@ -748,7 +789,7 @@ describe("source and native guard remedies execute their owning operations", () 
       expect(p.audit()).not.toContain("**Event**: STAGE_JUMPED");
       expect(p.audit()).not.toContain("**Event**: PLAN_APPROVAL_RECORDED");
       p.assertNoNestedState();
-    }, 90_000);
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
   }
 
   for (const choice of ["wrong", "stale"] as const) {
@@ -781,7 +822,7 @@ describe("source and native guard remedies execute their owning operations", () 
       expect(p.audit()).not.toContain("**Event**: PLAN_APPROVAL_RECORDED");
       expect(p.guard("Write", { file_path: join(p.project, "src", "unapproved.ts") }).status).toBe(2);
       p.assertNoNestedState();
-    }, 60_000);
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
   }
 
   // t331 keeps its existing seven-source-harness proof. Here source Claude
@@ -843,16 +884,17 @@ describe("source and native guard remedies execute their owning operations", () 
           expect(readFileSync(questions, "utf-8")).toBe(answers);
 
           let directive = json(p.tool("orchestrate", ["next"]));
+          // Copilot's smaller directive budget sends the stage's rules first.
           for (let i = 0; directive.kind === "load-steering" && i < 64; i++) {
-            expect(typeof directive.continue_token).toBe("string");
-            directive = json(p.tool("orchestrate", ["continue", directive.continue_token as string]));
+            expect(typeof directive.receipt).toBe("string");
+            directive = json(p.tool("orchestrate", ["continue", directive.receipt as string]));
           }
           expect(directive, JSON.stringify(directive)).toMatchObject({
             kind: "run-stage", stage: STAGE,
           });
           expect(p.state()).toContain(`- [-] ${STAGE} — EXECUTE`);
           p.assertNoNestedState();
-        }, 120_000);
+        }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
       }
     }
 
@@ -915,6 +957,75 @@ describe("source and native guard remedies execute their owning operations", () 
       expect(existsSync(join(p.project, "src", "unapproved.ts"))).toBe(false);
       expect(p.state()).not.toMatch(new RegExp(`^- \\*\\*Bolt Refs\\*\\*:.*${slug}`, "m"));
       p.assertNoNestedState();
-    }, 120_000);
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+    test(`${projection}/claude: after approval, strict source drift hands over the build and names the moved file`, () => {
+      const p = new Fixture(projection, HARNESS_RUNTIMES[0], "state-construction.md");
+      const session = "01995000-0995-7000-8000-000000000777";
+      let state = p.state()
+        .replace("- **Current Stage**: functional-design", "- **Current Stage**: code-generation")
+        .replace("- [-] functional-design — EXECUTE", "- [x] functional-design — EXECUTE")
+        .replace("- [ ] code-generation — EXECUTE", "- [-] code-generation — EXECUTE");
+      state = setGuardPolicyLine(state, "strict (set by you)");
+      expect(getField(state, GUARD_POLICY_FIELD)).toBe("strict (set by you)");
+      writeFileSync(seededStateFile(p.project), state);
+      writeActiveDirectiveMarker(p.project, {
+        kind: "run-stage", stage: "code-generation", state_sha256: stateDigest(state),
+      });
+
+      // Present and approve the plan through the owning tools, as the stage does.
+      const dir = codeGenerationRecordDir(p.project, null);
+      mkdirSync(dir, { recursive: true });
+      const contract = succeeded(p.tool("testing-posture", ["render"])).stdout;
+      writeFileSync(join(dir, "code-generation-plan.md"), `# Plan\n\n${contract}\n## Steps\n\n- [ ] Implement\n`);
+      writeFileSync(join(dir, "unit-test-instructions.md"), "# Unit Test Instructions\n\n## Command\n\n`bun test unit.test.ts`\n");
+      const questions = join(dir, "code-generation-questions.md");
+      writeFileSync(questions, "## Plan Approval\n[Answer]:\n");
+      const tags = succeeded(p.tool("testing-posture", ["fingerprint", "--stage-level"])).stdout.trim().split("\n");
+      expect(tags).toHaveLength(2);
+      writeFileSync(questions, ["## Plan Approval", ...tags, "A. Approve Plan", "B. Request Changes", "[Answer]:", ""].join("\n"));
+      const identity = [
+        "--stage", "code-generation", "--checkpoint", "plan-approval",
+        "--questions-file", questions, "--session", session, "--stage-level",
+      ];
+      appendAuditEntry("SESSION_STARTED", { Source: "startup", Session: session }, p.project);
+      succeeded(p.tool("log", [
+        "decision", ...identity,
+        "--decision", "Approve this exact Code Generation plan?",
+        "--options", "Approve Plan,Request Changes",
+      ]));
+      succeeded(p.hook("record-human-turn", { hook_event_name: "UserPromptSubmit", prompt: "Approve Plan" }));
+      writeFileSync(questions, readFileSync(questions, "utf-8").replace(/\[Answer\]:\s*$/, "[Answer]: Approve Plan"));
+      succeeded(p.tool("log", ["answer", ...identity, "--details", "Approve Plan"]));
+      succeeded(p.tool("testing-posture", ["verify", "--stage-level"]));
+
+      // Other code moves after approval. The approval is about the plan, so a
+      // stale hash is refused for the hash alone and asks nothing, and the
+      // current brief is handed over on strict too, naming the file once.
+      writeFileSync(join(p.project, "src", "after.ts"), "export const after = 1;\n");
+      succeeded(p.tool("testing-posture", ["verify", "--stage-level"]));
+      const stale = p.guard("Task", {
+        subagent_type: "aidlc-developer-agent",
+        prompt: `AIDLC-STAGE: code-generation\nAIDLC-TESTING-CONTRACT: sha256:${"0".repeat(64)}`,
+      });
+      expect(stale.status, stale.stderr).toBe(2);
+      expect(stale.stderr).not.toContain("PLAN_SOURCE_DRIFT");
+      expect(stale.stderr).not.toContain("src/after.ts");
+      const handed = p.guard("Task", {
+        subagent_type: "aidlc-developer-agent",
+        prompt: succeeded(p.tool("testing-posture", ["brief", "--stage-level"])).stdout,
+      });
+      expect(handed.status, handed.stderr).toBe(0);
+      expect(handed.stdout).toContain(
+        "1 file changed since this plan was approved: src/after.ts. Building the code now.",
+      );
+      const audit = p.audit();
+      expect(audit.split("**Event**: PLAN_APPROVAL_RECORDED").length - 1).toBe(1);
+      expect(audit.split("**Event**: CHANGE_ACCEPTED").length - 1).toBe(1);
+      expect(audit).not.toContain("**Event**: GUARD_STOOD_ASIDE");
+      expect(p.marker()).toMatchObject({ kind: "run-stage", stage: "code-generation" });
+      expect(existsSync(join(p.project, "src", "unapproved.ts"))).toBe(false);
+      p.assertNoNestedState();
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
   }
 });

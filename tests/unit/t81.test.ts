@@ -72,12 +72,19 @@
 // none). NOTHING is written under tests/fixtures/**; all temp dirs cleaned in
 // afterAll.
 
-import { afterAll, describe, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { afterAll, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { readAllAuditShards } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { cleanupTestProject, createTestProject } from "../harness/fixtures.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const BUN = process.execPath; // the bun running this test
 const REPO_ROOT = join(import.meta.dir, "..", "..");
@@ -114,6 +121,7 @@ interface CliResult {
  */
 function practicesEvent(args: string[], p: string): CliResult {
   const res = spawnSync(BUN, [TOOL, "practices-event", ...args, "--project-dir", p], {
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     encoding: "utf-8",
   });
   const stdout = res.stdout ?? "";
@@ -247,14 +255,14 @@ describe("t81 aidlc-state practices-event — bolt-plan-marker-conflict override
   });
 
   // --- Test 3: canonical event count includes both new receipts -------------
-  test("3: framework event count pinned at 102", () => {
+  test("3: framework event count pinned at 116", () => {
     // The .sh read t28's pinned $TS_COUNT. Under milestone 4, t28 is now a
     // .test.ts (no `assert_eq N "$TS_COUNT"` line to grep), so pin the SAME
     // observable against the SOURCE OF TRUTH instead — VALID_EVENT_TYPES in
     // aidlc-audit.ts — which is stronger (it asserts the real count, not a
     // sibling test's transcription of it). bolt-plan-marker-conflict reuses
     // PRACTICES_OVERRIDE (discriminator-field disambiguation) and registers no
-    // new event. The framework total is 102: the v0.6.0 Wave 4 milestone 16
+    // new event. The framework total is 115: the v0.6.0 Wave 4 milestone 16
     // baseline of 67 (SWARM_DEGRADED was the last event created then), plus
     // WORKFLOW_PARKED + WORKFLOW_UNPARKED (the park/unpark lifecycle, +2),
     // less TEST_RUN_MODE_ENABLED (removed, -1), plus HUMAN_TURN (+1), plus
@@ -278,7 +286,25 @@ describe("t81 aidlc-state practices-event — bolt-plan-marker-conflict override
     // CEREMONY_SET (per-intent ceremony settings) = 99;
     // VERIFICATION_COMMAND_RECORDED (human-approved Construction check) = 100;
     // CHECKPOINT_VERIFICATION_RECORDED (tool-owned checkpoint proof receipt) = 101;
-    // CONSTRUCTION_POLICY_RECORDED (human-approved policy change) = 102.
+    // CONSTRUCTION_POLICY_RECORDED (human-approved policy change) = 102;
+    // GUARD_POLICY_SET (the Guard Policy setting row that replaces
+    // CHANGE_CONTROL_SET, which stays registered as a read-only legacy row) +
+    // GUARD_RESTORED (the per-run fence switch going back on) +
+    // GUARD_STOOD_ASIDE (a fence that stood aside under a lowered policy word or
+    // a per-run switch) (+3) = 105; SCOPE_SAVED (a piece of work's plan kept
+    // as a reusable scope) = 106; PLAN_APPROVAL_SKIPPED (a plan built with
+    // plan approval off, never a person's approval) = 107; UNIT_SKIPPED (one
+    // unit-major (stage, unit) conditional skip) = 108; SUBAGENT_PROMPT_UNMATCHED
+    // (the Copilot adapter's advisory row, never a human turn) = 109;
+    // COORDINATION_STOOD_ASIDE (the Copilot adapter's stand-aside row) = 110;
+    // CONSTRUCTION_POLICY_SET (an applied Construction policy change) = 111;
+    // WORKSPACE_RECLASSIFIED (the person's word on new project or existing
+    // code) = 112; QUESTION_UNANSWERED (a question box with no answer) = 113;
+    // QUESTION_REPLIED (what a question box carried back) = 114;
+    // REQUEST_ROUTED (a request the routing question sent to new work) = 115.
+    // INTENT_REPOS_CHANGED (a sibling repo added to or removed from a piece of
+    // work by the person, until Units Generation is approved) = 116;
+    // HOST_TURN (a prompt the host made, never a human turn) = 117.
     const auditSrc = readFileSync(
       join(REPO_ROOT, "dist", "claude", ".claude", "tools", "aidlc-audit.ts"),
       "utf-8",
@@ -286,7 +312,7 @@ describe("t81 aidlc-state practices-event — bolt-plan-marker-conflict override
     const block = auditSrc.match(/const VALID_EVENT_TYPES = new Set\(\[([\s\S]*?)\]\)/);
     expect(block).not.toBeNull();
     const count = (block ? block[1].match(/"[A-Z0-9_]+"/g) : null)?.length ?? -1;
-    expect(count).toBe(102);
+    expect(count).toBe(117);
   });
 
   // --- Test 4: milestone 8 write-failure path coexists (different Reason value) ---

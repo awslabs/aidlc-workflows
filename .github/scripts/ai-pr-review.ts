@@ -1162,12 +1162,12 @@ export function findingInScope(
   });
 }
 
+// Review text may quote marker-like syntax (a PR about HTML comments needs to
+// say `<!--`); renderReview escapes every model-written field and then checks
+// that the posted body carries markers only where it writes them.
 function requiredText(value: unknown, field: string, maxLength: number): string {
   if (typeof value !== "string" || value.trim().length === 0 || value.length > maxLength) {
     throw new Error(`${field} must be a non-empty string up to ${maxLength} characters`);
-  }
-  if (/\[AI-PR-|<!--|^\*\*P[0-3]:/m.test(value)) {
-    throw new Error(`${field} contains reserved review syntax`);
   }
   return value.trim();
 }
@@ -1822,6 +1822,25 @@ function codeText(value: string): string {
   return value.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
 }
 
+// Model-written text reaches the body only through markdownText or codeText,
+// which turn `<` into `&lt;`, and markdownText escapes a leading `[`. So an
+// HTML comment may appear only in the two leading marker lines and a line may
+// start with `[AI-PR-` only as the closing tag; anything else means a render
+// path skipped escaping, and the review is not posted.
+export function assertReviewBodyMarkers(body: string): void {
+  const lines = body.split("\n");
+  if (!lines[0].startsWith(AI_REVIEW_MARKER) || !lines[1]?.startsWith(AI_REVIEW_DECISION_MARKER)) {
+    throw new Error("rendered review does not open with its context and decision markers");
+  }
+  const misplaced = lines.findIndex((line, index) =>
+    (index > 1 && line.includes("<!--")) ||
+    (index < lines.length - 1 && line.startsWith("[AI-PR-"))
+  );
+  if (misplaced >= 0) {
+    throw new Error(`rendered review contains reserved review syntax outside its markers (line ${misplaced + 1})`);
+  }
+}
+
 export function renderReview(review: StructuredReview, contextId: string): ReviewPayload {
   if (!/^[0-9a-f]{64}$/.test(contextId)) {
     throw new Error("context id must be a lowercase SHA-256 digest");
@@ -2027,7 +2046,9 @@ export function renderReview(review: StructuredReview, contextId: string): Revie
       review.findings.some(item => item.priority === "P0" || item.priority === "P1")
     ? "REQUEST_CHANGES"
     : "COMMENT";
-  return { commit_id: review.head, body: lines.join("\n"), event };
+  const body = lines.join("\n");
+  assertReviewBodyMarkers(body);
+  return { commit_id: review.head, body, event };
 }
 
 let lastValidateInput: string | null = null;

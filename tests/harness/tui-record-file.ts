@@ -2,6 +2,11 @@ import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import { dirname, resolve } from "node:path";
+import {
+  remainingCleanupTimeoutMs,
+  NATIVE_PROCESS_CLEANUP_TIMEOUT_MS,
+  NATIVE_PROCESS_IDENTITY_TIMEOUT_MS,
+} from "./test-budget.ts";
 
 export interface DirectoryIdentity { dev: string; ino: string }
 
@@ -44,7 +49,7 @@ $value = & { ${script} }
 @{ userSid = $sid.Value; value = $value } | ConvertTo-Json -Compress -Depth 5
 `], {
     env: { ...process.env, AIDLC_PRIVATE_PATH: resolve(path), AIDLC_PRIVATE_USER_SID: windowsUserSid ?? "" },
-    encoding: "utf8", timeout: 60_000, windowsHide: true,
+    encoding: "utf8", timeout: remainingCleanupTimeoutMs(NATIVE_PROCESS_IDENTITY_TIMEOUT_MS), windowsHide: true,
   });
   if (result.error || result.status !== 0) throw unsafe(path, `Windows security check failed: ${result.error ?? result.stderr}`);
   const response = JSON.parse(result.stdout.trim()) as { userSid?: unknown; value?: unknown };
@@ -121,13 +126,32 @@ function validateRootAncestors(root: string, policy: "explicit" | "temporary"): 
       if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
       throw error;
     }
-    if (!stat.isDirectory()) throw unsafe(path, "ancestor is not a directory");
-    if (stat.uid !== 0n && stat.uid !== BigInt(uid)) throw unsafe(path, "ancestor is not owned by current uid or uid 0");
-    if ((stat.mode & 0o022n) !== 0n && (stat.mode & 0o1000n) === 0n) {
-      throw unsafe(path, "ancestor is writable by other users without the sticky bit");
-    }
+    validateAncestorStat(path, stat, uid);
     // Also walk resolved ancestry: a symlink may cross into a different tree.
     ancestors.add(fs.realpathSync(path));
+  }
+}
+
+/** The explicit-policy check for one POSIX ancestor of a native root. */
+export function validateAncestorStat(
+  path: string,
+  stat: Pick<fs.BigIntStats, "uid" | "mode" | "isDirectory">,
+  uid: number,
+  env: NodeJS.ProcessEnv = process.env,
+): void {
+  if (!stat.isDirectory()) throw unsafe(path, "ancestor is not a directory");
+  // Opt-in (default off) to run the e2e native-root tiers on a host whose
+  // temp-dir ancestors are owned by neither uid 0 nor the current user
+  // (for example an overlay/sandbox filesystem where / is owned by `nobody`).
+  // This relaxes ONLY the ancestor-ownership requirement; every other defense
+  // (symlink rejection, root-body ownership/mode, dev/ino pin, and the
+  // others-writable-without-sticky rejection below) stays enforced.
+  const allowUntrustedAncestors = env.AIDLC_TUI_ALLOW_UNTRUSTED_ANCESTORS === "1";
+  if (!allowUntrustedAncestors && stat.uid !== 0n && stat.uid !== BigInt(uid)) {
+    throw unsafe(path, `ancestor is not owned by current uid or uid 0 (owner uid ${stat.uid}; on a controlled test host whose temp-dir ancestors belong to a sandbox uid, set AIDLC_TUI_ALLOW_UNTRUSTED_ANCESTORS=1 to relax only this ownership check)`);
+  }
+  if ((stat.mode & 0o022n) !== 0n && (stat.mode & 0o1000n) === 0n) {
+    throw unsafe(path, "ancestor is writable by other users without the sticky bit");
   }
 }
 
@@ -196,7 +220,7 @@ export function readPrivateRecord<T extends { directoryIdentity: DirectoryIdenti
   throw unsafe(file, "record identity changed while opening (3 attempts)");
 }
 
-const RENAME_RETRY_MS = 250;
+const RENAME_RETRY_MS = NATIVE_PROCESS_CLEANUP_TIMEOUT_MS;
 const RETRY_DELAY_MS = 5;
 const waitWord = new Int32Array(new SharedArrayBuffer(4));
 
@@ -237,7 +261,7 @@ Set-Acl -LiteralPath $resolvedPath -AclObject $acl
     const written = fd;
     fd = undefined;
     fs.closeSync(written); // Close the complete file before making it visible.
-    const deadline = performance.now() + RENAME_RETRY_MS;
+    const deadline = performance.now() + remainingCleanupTimeoutMs(RENAME_RETRY_MS);
     while (true) {
       verify();
       try {

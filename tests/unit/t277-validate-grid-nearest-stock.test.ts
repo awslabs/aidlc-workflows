@@ -27,7 +27,12 @@
 // Mechanism: MIXED - in-process imports against the shipped grid for the
 // arithmetic rows, one spawn for the CLI surface (same pattern as t190).
 
-import { describe, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -38,6 +43,8 @@ import {
   validateGrid,
 } from "../../dist/claude/.claude/tools/aidlc-graph.ts";
 import { AIDLC_SRC } from "../harness/fixtures.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const BUN = process.execPath;
 const GRAPH_TOOL = join(AIDLC_SRC, "tools", "aidlc-graph.ts");
@@ -192,7 +199,7 @@ describe("t277 validate-grid CLI carries nearest_stock", () => {
       const r = spawnSync(
         BUN,
         [GRAPH_TOOL, "validate-grid", "--proposal", proposal],
-        { encoding: "utf-8" },
+        { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" },
       );
       expect(r.status).toBe(0);
       const body = JSON.parse(r.stdout) as {
@@ -217,7 +224,7 @@ describe("t277 validate-grid CLI carries nearest_stock", () => {
       const r = spawnSync(
         BUN,
         [GRAPH_TOOL, "validate-grid", "--proposal", proposal],
-        { encoding: "utf-8" },
+        { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" },
       );
       expect(r.status).toBe(1);
       const body = JSON.parse(r.stdout) as {
@@ -253,6 +260,7 @@ describe("t277 validate-grid CLI carries nearest_stock", () => {
         BUN,
         [GRAPH_TOOL, "validate-grid", "--proposal", proposal],
         {
+          timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
           encoding: "utf-8",
           env: { ...process.env, AIDLC_SCOPE_GRID: gridPath },
         },
@@ -266,5 +274,68 @@ describe("t277 validate-grid CLI carries nearest_stock", () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+});
+
+// A code-findings report is a fix (composer contract, Report item 2): it lands
+// on bugfix, or security-patch when a hotspot must deploy. Ranked over every
+// stock scope, a report grid that sits nearer to express was created on
+// express, with no reviewers, plan approval or regression floor. The
+// composer's report run passes --report, so only the fix scopes rank.
+describe("t277 validate-grid --report keeps a code-findings report on a fix scope", () => {
+  const FIX = ["bugfix", "security-patch"];
+  const SETTINGS = {
+    sensors: "on", learnings: "on", summary_confirmation: "on", plan_approval: "on", collaborators: "off", review_cap: "adversarial",
+  };
+  type Body = {
+    errors: string[];
+    nearest_stock: Array<{ scope: string; diff: number; differs: string[] }>;
+    base_scope?: string;
+    routing?: string;
+  };
+  function validate(proposal: unknown, extra: string[]): { status: number | null; body: Body } {
+    const dir = mkdtempSync(join(tmpdir(), "aidlc-t277-report-"));
+    try {
+      const path = join(dir, "p.json");
+      writeFileSync(path, JSON.stringify(proposal), "utf-8");
+      const r = spawnSync(BUN, [GRAPH_TOOL, "validate-grid", "--proposal", path, ...extra], {
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+        encoding: "utf-8",
+      });
+      return { status: r.status, body: JSON.parse(r.stdout) as Body };
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }
+  const express = () => ({ ...loadScopeGrid().express.stages });
+
+  test("an express-nearer grid ranks a fix scope first under --report, express first without it", () => {
+    expect(validate(express(), []).body.nearest_stock[0].scope).toBe("express");
+    const report = validate(express(), ["--report"]);
+    expect(report.status).toBe(0);
+    expect(report.body.nearest_stock).toEqual(nearestStockScopes(express()).filter((row) => FIX.includes(row.scope)));
+    expect(report.body.nearest_stock.map((row) => row.scope).sort()).toEqual(FIX);
+  });
+
+  test("--report refuses a match to a scope that is not a fix scope", () => {
+    const refused = validate({ stages: express(), scopeSettings: SETTINGS, guardPolicy: "strict" }, ["--report", "--matched", "express"]);
+    expect(refused.status).toBe(1);
+    expect(refused.body.errors.join("\n")).toContain(
+      'A code-findings report runs on bugfix or security-patch, so it cannot be matched to "express".',
+    );
+    const bugfix = validate(
+      { stages: loadScopeGrid().bugfix.stages, scopeSettings: SETTINGS, guardPolicy: "strict" },
+      ["--report", "--matched", "bugfix"],
+    );
+    expect(bugfix.status, bugfix.body.errors.join("\n")).toBe(0);
+    expect(bugfix.body.routing).toBe("matched");
+  });
+
+  test("a custom report plan runs on a fix scope, where the same plan without --report runs on express", () => {
+    const proposal = { stages: express(), scopeSettings: SETTINGS, guardPolicy: "strict", depth: "minimal" };
+    expect(validate(proposal, ["--custom"]).body.base_scope).toBe("express");
+    const report = validate(proposal, ["--report", "--custom"]);
+    expect(report.status, report.body.errors.join("\n")).toBe(0);
+    expect(FIX).toContain(report.body.base_scope ?? "");
   });
 });

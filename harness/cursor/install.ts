@@ -25,6 +25,13 @@ const GITIGNORE_BEGIN = "# BEGIN AIDLC CURSOR";
 const GITIGNORE_END = "# END AIDLC CURSOR";
 const RECEIPT_REL = ".cursor/aidlc-install.json";
 
+// The copy runtime leaves the root .gitignore and AGENTS.md out (a copy would
+// replace the team's own); their shipped text is in the harness folder.
+function shippedRootFile(name: string, marker: string): string {
+  const root = join(DIST_ROOT, name);
+  return existsSync(root) ? root : join(DIST_ROOT, ".cursor", "tools", "data", "root-blocks", marker);
+}
+
 type JsonObject = Record<string, unknown>;
 type WriteAction =
   | { kind: "copy"; source: string; target: string }
@@ -55,7 +62,9 @@ function assertNoSymlinks(
   }
   const label = relative(root, candidate).replaceAll("\\", "/") || ".";
   if (stat.isSymbolicLink()) {
-    throw new Error(`${label}: symlinked installer targets are not allowed`);
+    throw new Error(
+      `${label}: symlinked installer targets are not allowed. Replace that link with a regular file or folder, then run the installer again.`,
+    );
   }
   if (!recursive || !stat.isDirectory()) return;
   for (const name of readdirSync(candidate)) {
@@ -105,11 +114,14 @@ function readReceipt(path: string): InstallReceipt | null {
   return { schemaVersion: 1, managedFiles };
 }
 
-function activeSpaceFor(targetRoot: string): string {
+// The same active space the engine reads, by the rule it ships with.
+async function activeSpaceFor(targetRoot: string): Promise<string> {
   const pointer = join(targetRoot, "aidlc", "active-space");
   if (!existsSync(pointer)) return "default";
-  const space = readFileSync(pointer, "utf-8").trim();
-  return /^[a-z0-9][a-z0-9._-]*$/.test(space) ? space : "default";
+  const module = await import(pathToFileURL(join(DIST_ROOT, ".cursor", "tools", "aidlc-runtime-paths.ts")).href) as {
+    knownActiveSpace: (workspaceRootDir: string, cursorText: string) => string;
+  };
+  return module.knownActiveSpace(join(targetRoot, "aidlc"), readFileSync(pointer, "utf-8"));
 }
 
 function parseBufferObject(content: Buffer, label: string): JsonObject {
@@ -1042,6 +1054,8 @@ function mergeHooks(sourcePath: string, targetPath: string): string {
   return `${JSON.stringify(merged, null, 2)}\n`;
 }
 
+const RETIRED_SHIPPED_ALLOW = new Set(["Shell(bun)"]);
+
 function mergeCli(sourcePath: string, targetPath: string): string {
   const source = parseObject(sourcePath);
   const existing = existsSync(targetPath) ? parseObject(targetPath) : {};
@@ -1054,7 +1068,10 @@ function mergeCli(sourcePath: string, targetPath: string): string {
 
   const shippedAllow = stringArray(sourcePermissions.allow, `${sourcePath}: permissions.allow`);
   const shippedDeny = stringArray(sourcePermissions.deny, `${sourcePath}: permissions.deny`);
-  const projectAllow = stringArray(existingPermissions?.allow, `${targetPath}: permissions.allow`);
+  // The allow entry earlier releases shipped, which covered every bun command;
+  // the narrower shipped entries replace it on refresh.
+  const projectAllow = stringArray(existingPermissions?.allow, `${targetPath}: permissions.allow`)
+    .filter((entry) => !RETIRED_SHIPPED_ALLOW.has(entry));
   const projectDeny = stringArray(existingPermissions?.deny, `${targetPath}: permissions.deny`);
   const conflicts = [
     ...shippedAllow.filter((entry) => projectDeny.includes(entry)),
@@ -1101,6 +1118,19 @@ function* filesUnder(root: string): Generator<string> {
   }
 }
 
+// Cursor may skip project hooks in a folder outside any git repository
+// (issue #976), so the installer says so instead of finishing silently. It asks
+// the engine it just installed, so the installer and doctor agree on what
+// counts as a repository.
+async function insideGitRepository(targetRoot: string): Promise<boolean> {
+  const diagnosticsPath = join(targetRoot, ".cursor", "tools", "aidlc-config-diagnostics.ts");
+  const module = await import(pathToFileURL(diagnosticsPath).href) as {
+    insideGitRepository?: (dir: string) => boolean;
+  };
+  return typeof module.insideGitRepository !== "function" ||
+    module.insideGitRepository(targetRoot);
+}
+
 async function refreshPluginRouting(targetRoot: string): Promise<void> {
   const utilityPath = join(targetRoot, ".cursor", "tools", "aidlc-utility.ts");
   const module = await import(pathToFileURL(utilityPath).href) as {
@@ -1136,7 +1166,7 @@ export async function install(targetDir: string): Promise<void> {
   const sharedJson = new Set([".cursor/hooks.json", ".cursor/cli.json"]);
   const receiptTarget = join(targetRoot, RECEIPT_REL);
   const priorReceipt = readReceipt(receiptTarget);
-  const activeSpace = activeSpaceFor(targetRoot);
+  const activeSpace = await activeSpaceFor(targetRoot);
   const selectedPlugins = activePluginSelection(targetRoot);
   const pluginRuntime = pluginRuntimeState(targetRoot);
   const requiresEdgeHolds = requiresEdgeOracle(targetRoot, priorReceipt);
@@ -1259,7 +1289,7 @@ export async function install(targetDir: string): Promise<void> {
   actions.push({ kind: "write", target: hooksTarget, content: hooks });
   actions.push({ kind: "write", target: cliTarget, content: cli });
 
-  const agentsSource = readFileSync(join(DIST_ROOT, "AGENTS.md"), "utf-8");
+  const agentsSource = readFileSync(shippedRootFile("AGENTS.md", "agents"), "utf-8");
   const agentsTarget = join(targetRoot, "AGENTS.md");
   const agentsExisting = existsSync(agentsTarget) ? readFileSync(agentsTarget, "utf-8") : "";
   if (agentsExisting.includes("<!-- BEGIN AI-DLC:agents -->")) {
@@ -1278,7 +1308,7 @@ export async function install(targetDir: string): Promise<void> {
     ),
   });
 
-  const gitignoreSource = readFileSync(join(DIST_ROOT, ".gitignore"), "utf-8");
+  const gitignoreSource = readFileSync(shippedRootFile(".gitignore", "gitignore"), "utf-8");
   const aidlcBlockStart = gitignoreSource.indexOf("# AI-DLC");
   if (aidlcBlockStart === -1) throw new Error("shipped .gitignore has no AI-DLC section");
   const gitignoreTarget = join(targetRoot, ".gitignore");
@@ -1303,7 +1333,8 @@ export async function install(targetDir: string): Promise<void> {
 
   if (collisions.length > 0) {
     throw new Error(
-      `refusing to overwrite existing files that differ:\n${collisions.map((path) => `  ${path}`).join("\n")}`,
+      `refusing to overwrite existing files that differ:\n${collisions.map((path) => `  ${path}`).join("\n")}\n` +
+        "To keep your changes, move these files somewhere else, then run the installer again.",
     );
   }
 
@@ -1341,6 +1372,11 @@ if (import.meta.main) {
   try {
     await install(target);
     console.log(`AI-DLC Cursor harness installed into ${resolve(target)}`);
+    if (!(await insideGitRepository(resolve(target)))) {
+      console.log(
+        "Note: this project is not in a git repository. Cursor may skip AI-DLC's hooks there, and without them your approvals are not recorded. Run `git init` in it before opening it in Cursor (fully restart Cursor if it is already open).",
+      );
+    }
   } catch (error) {
     console.error(`Cursor install failed: ${error instanceof Error ? error.message : error}`);
     process.exit(1);

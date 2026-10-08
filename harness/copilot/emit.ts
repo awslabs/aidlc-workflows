@@ -33,6 +33,7 @@ import {
   writeMarkdownAgentSurface,
 } from "../../core/tools/aidlc-model-policy.ts";
 import { injectDelegatedKnowledgePreflight } from "../../scripts/agent-knowledge.ts";
+import { EXTENDED_SUBPROCESS_TIMEOUT_MS } from "../../core/tools/aidlc-runtime-budget.ts";
 
 // ---------------------------------------------------------------------------
 // Hook wiring. PascalCase events; register ONLY events with a real core-hook
@@ -42,15 +43,17 @@ import { injectDelegatedKnowledgePreflight } from "../../scripts/agent-knowledge
 // event. The shared manifest must be valid on both hosts, so both use the
 // adapter's next-SessionStart reconciliation path for SESSION_ENDED.
 // ---------------------------------------------------------------------------
+const HOOK_TIMEOUT_SECONDS = EXTENDED_SUBPROCESS_TIMEOUT_MS / 1000;
+const COMPOUND_HOOK_TIMEOUT_SECONDS = HOOK_TIMEOUT_SECONDS * 2;
 const HOOK_WIRING: Array<{ event: string; target: string; timeoutSec: number }> = [
-  { event: "SessionStart", target: "session-start", timeoutSec: 30 },
-  { event: "UserPromptSubmit", target: "record-human-turn", timeoutSec: 30 },
-  { event: "PreToolUse", target: "guard-tool-call", timeoutSec: 30 },
-  { event: "PostToolUse", target: "post-tool", timeoutSec: 30 },
-  { event: "PreCompact", target: "validate-state", timeoutSec: 30 },
-  { event: "SubagentStart", target: "subagent-start", timeoutSec: 30 },
-  { event: "SubagentStop", target: "log-subagent", timeoutSec: 30 },
-  { event: "Stop", target: "continue-workflow", timeoutSec: 60 },
+  { event: "SessionStart", target: "session-start", timeoutSec: HOOK_TIMEOUT_SECONDS },
+  { event: "UserPromptSubmit", target: "record-human-turn", timeoutSec: HOOK_TIMEOUT_SECONDS },
+  { event: "PreToolUse", target: "guard-tool-call", timeoutSec: HOOK_TIMEOUT_SECONDS },
+  { event: "PostToolUse", target: "post-tool", timeoutSec: COMPOUND_HOOK_TIMEOUT_SECONDS },
+  { event: "PreCompact", target: "validate-state", timeoutSec: HOOK_TIMEOUT_SECONDS },
+  { event: "SubagentStart", target: "subagent-start", timeoutSec: HOOK_TIMEOUT_SECONDS },
+  { event: "SubagentStop", target: "log-subagent", timeoutSec: HOOK_TIMEOUT_SECONDS },
+  { event: "Stop", target: "continue-workflow", timeoutSec: COMPOUND_HOOK_TIMEOUT_SECONDS },
 ];
 
 function emitHooksJson(harnessDir: string): string {
@@ -182,7 +185,7 @@ export default function emit(ctx: EmitContext): void {
   }
 
   // (a) authored orchestrator shell — token-substituted from harness/copilot/.
-  for (const f of ["SKILL.md", "question-rendering.md"]) {
+  for (const f of ["SKILL.md", "question-rendering.md", "composer.md"]) {
     emissions.push({
       path: join(SKILLS_DST, "aidlc", f),
       content: () => substituteToken(readFileSync(join(harnessRoot, "skills", "aidlc", f), "utf-8")),

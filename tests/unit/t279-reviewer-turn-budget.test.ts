@@ -233,7 +233,10 @@ describe("t279 reviewer turn budget is stated on every surface", () => {
       expect(request).toBeGreaterThan(-1);
       expect(hydrate).toBeGreaterThan(request);
       expect(dispatch).toBeGreaterThan(hydrate);
-      expect(labelled).toContain("durable human dispositions from the audit ledger");
+      expect(labelled).toContain("settled decisions from the engine-owned list");
+      expect(labelled.replace(/\s+/g, " ")).toContain(
+        "excludes fixed findings",
+      );
       expect(labelled).toContain("as the one file the reviewer writes");
       // The reviewer's write contract: one file, nothing else.
       expect(labelled).toContain("Writes exactly ONE file: its review, at the passed `reviewFile` path");
@@ -256,11 +259,10 @@ describe("t279 reviewer turn budget is stated on every surface", () => {
     ]) {
       const body = readFileSync(path, "utf-8");
       const labelled = `${path}\n${body}`;
-      // t221's ordering (read verdict AFTER deleting the dispatch record)
-      // still holds around the record write.
-      expect(labelled).toMatch(
-        /Read verdict.*delete `<record>\/\.aidlc-engine\/reviewer-dispatch\.json`.*validates it/s,
-      );
+      // The verdict step records the receipt and validates the review; the
+      // dispatch record is the engine's to remove (t221), not a step here.
+      expect(labelled).toMatch(/Read verdict.*record the terminal receipt.*validates it/s);
+      expect(labelled).not.toMatch(/delete `<record>\/\.aidlc-engine\/reviewer-dispatch\.json`/);
       expect(labelled).toContain(
         "writes the review record `<record>/.aidlc-engine/reviews/<stage>/stage/<attempt>/<iteration>.json` (or the Unit path under `units/<unit>/`)",
       );
@@ -398,8 +400,9 @@ describe("t279 reviewer turn budget is stated on every surface", () => {
       expect(inList).toContain(
         "in any form including a table or a section of its own",
       );
-      expect(labelled).toContain(
-        "durable human dispositions from the audit ledger",
+      expect(labelled).toContain("settled decisions from the engine-owned list");
+      expect(labelled.replace(/\s+/g, " ")).toContain(
+        "excludes fixed findings",
       );
       expect(labelled).toContain("Writes exactly ONE file: its review, at the passed `reviewFile` path");
       expect(labelled).toContain("Writes NOTHING else");

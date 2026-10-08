@@ -5,8 +5,9 @@
 // attach the exact bundle to a subagent brief, so the conductor-to-worker hop
 // cannot drift from the engine-to-conductor hop.
 
-import { readFileSync } from "node:fs";
+import { lstatSync, readFileSync } from "node:fs";
 import { isAbsolute, join, resolve } from "node:path";
+import { entrySkillInvocation } from "./aidlc-runtime-paths.ts";
 import {
   errorMessage,
   resolveWorkflowSelection,
@@ -95,11 +96,22 @@ export function readRuleBundle(
       const bytes = readFileSync(entry.abs);
       text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
     } catch (error) {
+      // Only a missing file is put back from version control: one that is
+      // there holds the team's edits, so it is repaired in place.
+      let missing = false;
+      try {
+        missing = lstatSync(entry.abs, { throwIfNoEntry: false }) === undefined;
+      } catch {
+        missing = false;
+      }
       return {
         content: [],
         error:
-          `Cannot load required stage rule "${entry.rel}" (${errorMessage(error)}). ` +
-          "The stage has not started. Restore the file or fix its permissions/UTF-8 encoding, then run `next` again.",
+          `Cannot load required stage rule "${entry.rel}" (${errorMessage(error)}). The stage has not started. ` +
+          (missing
+            ? `Put the file back (for example \`git checkout -- ${entry.rel}\` when the project tracks it), `
+            : "Keep a copy of the file, then fix its permissions or save it as UTF-8, ") +
+          `then run \`next\` again. \`${entrySkillInvocation()} --doctor\` names what is wrong with it.`,
       };
     }
     if (isSubstantiveRuleText(text)) content.push({ path: entry.rel, text });

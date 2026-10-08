@@ -105,9 +105,9 @@ import {
 // __workspace__ sentinel), not bare projectDir — import the real resolver so the
 // planted-lock bucket matches the one audit-merge actually acquires.
 import { auditLockDir as realAuditLockDir, worktreePath } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
-import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS } from "../harness/test-budget.ts";
+import { NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS, NATIVE_FIXTURE_SETUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "../harness/test-budget.ts";
 
-setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+setDefaultTimeout(NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
 // A FIXED clone-id token seeded into every clone (main + each worktree) so the
 // per-clone audit shard is deterministic and SINGLE: the main shard the header
@@ -149,7 +149,7 @@ afterAll(() => {
     }
     cleanupWorktreeFixture(f);
   }
-}, 30_000);
+}, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
 // The MAIN per-clone audit shard (the seeded fixed-clone-id shard). The header is
 // written here so audit-fork copies it and audit-merge hashes/extends it.
@@ -177,7 +177,7 @@ interface CliResult {
 }
 
 function runAudit(args: string[], env?: Record<string, string>): CliResult {
-  const res = spawnSync(BUN, [AUDIT_TOOL, ...args], {
+  const res = spawnSync(BUN, [AUDIT_TOOL, ...args], { timeout: remainingOperationTimeoutMs(NATIVE_FIXTURE_SETUP_TIMEOUT_MS),
     encoding: "utf-8",
     env: env ? { ...process.env, ...env } : process.env,
   });
@@ -193,7 +193,7 @@ function createWorktree(p: string, slug: string): void {
   const res = spawnSync(
     BUN,
     [WORKTREE_TOOL, "create", "--slug", slug, "--base", "main", "--project-dir", p],
-    { cwd: p, encoding: "utf-8" },
+    { timeout: remainingOperationTimeoutMs(NATIVE_FIXTURE_SETUP_TIMEOUT_MS), cwd: p, encoding: "utf-8" },
   );
   if ((res.status ?? -1) !== 0) {
     throw new Error(
@@ -245,11 +245,11 @@ function makeFixture(): string {
       "",
     ].join("\n"),
   );
-  spawnSync("git", ["-C", p, "add", "-A"], { encoding: "utf-8" });
+  spawnSync("git", ["-C", p, "add", "-A"], { timeout: remainingOperationTimeoutMs(NATIVE_FIXTURE_SETUP_TIMEOUT_MS), encoding: "utf-8" });
   spawnSync(
     "git",
     ["-C", p, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--amend", "--no-edit"],
-    { encoding: "utf-8" },
+    { timeout: remainingOperationTimeoutMs(NATIVE_FIXTURE_SETUP_TIMEOUT_MS), encoding: "utf-8" },
   );
   return p;
 }
@@ -322,12 +322,12 @@ describe("t07 Phase A — primitive smoke (migrated from t07-audit-fork-merge.sh
   test("base source budget failure names its cause without a worktree or creation event", () => {
     const p = makeFixture();
     const auditBefore = readFileSync(auditPath(p), "utf8");
-    const base = spawnSync("git", ["-C", p, "rev-parse", "main"], { encoding: "utf8" });
+    const base = spawnSync("git", ["-C", p, "rev-parse", "main"], { timeout: remainingOperationTimeoutMs(NATIVE_FIXTURE_SETUP_TIMEOUT_MS), encoding: "utf8" });
     expect(base.status, base.stderr).toBe(0);
     const refused = spawnSync(
       BUN,
       [WORKTREE_TOOL, "create", "--slug", "source-budget", "--base", "main", "--project-dir", p],
-      { cwd: p, encoding: "utf8", env: { ...process.env, AIDLC_TEST_SOURCE_MAX_ENTRIES: "1" } },
+      { timeout: remainingOperationTimeoutMs(NATIVE_FIXTURE_SETUP_TIMEOUT_MS), cwd: p, encoding: "utf8", env: { ...process.env, AIDLC_TEST_SOURCE_MAX_ENTRIES: "1" } },
     );
     expect(refused.status, refused.stderr).toBe(1);
     const message = JSON.parse(refused.stderr).error;
@@ -548,7 +548,7 @@ describe("t07 Phase B — edge cases", () => {
       new Promise((resolve) => {
         const child = spawn(BUN, [
           AUDIT_TOOL, "audit-merge", "--slug", slug, "--project-dir", p,
-        ], { stdio: "ignore" });
+        ], { timeout: remainingOperationTimeoutMs(NATIVE_FIXTURE_SETUP_TIMEOUT_MS), killSignal: "SIGKILL", stdio: "ignore" });
         child.once("close", (code) => resolve(code ?? -1));
       });
 

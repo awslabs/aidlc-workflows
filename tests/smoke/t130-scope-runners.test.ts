@@ -213,18 +213,41 @@ describe("t130 scope-runners — structural conformance of the shipped first-bat
       // adjacent lines.)
       const collapsed = body.replace(/\s+/g, " ");
       expect(collapsed).toContain(`baked \`${scope}\``);
-      // On confirm the runner hands off to a fresh session: a 2nd, unrelated
-      // intent shouldn't inherit the prior intent's context, so the prose names
-      // /clear and stopping rather than continuing in-session.
-      expect(body).toContain("/clear");
-      expect(collapsed.toLowerCase()).toContain("fresh session");
+      // On confirm the runner carries on into the new work in the same chat,
+      // with no stop and no restart.
+      expect(collapsed).toContain("carry on into the new work's first stage in this chat");
+      expect(collapsed.toLowerCase()).not.toContain("fresh session");
+      expect(collapsed).not.toContain("**STOP**");
       // STRONGER: the on-disk bytes match the generator's own render.
       const rendered = renderRunner(scope, DISCOVERED[scope]?.description ?? "");
       expect(rendered).toContain("next --new-intent --scope <the confirmed scope>");
       expect(rendered).toContain("`intent-create` command");
       expect(rendered).not.toContain(`\`${retiredIntentCommand}\``);
       expect(rendered.replace(/\s+/g, " ")).toContain(`baked \`${scope}\``);
-      expect(rendered).toContain("/clear");
+      expect(rendered).toContain("carry on into the new work's first stage in this chat");
+    });
+  }
+
+  // ===========================================================================
+  // A recorded step continues with a bare `next` (#1411). Re-sending the
+  // runner's own arguments would repeat a jump or a setting the person already
+  // asked for; a person who asked to stop there gets `park`.
+  // ===========================================================================
+  for (const scope of BATCH) {
+    test(`aidlc-${scope}: continues a recorded step with bare next and parks when asked`, () => {
+      const rendered = renderRunner(scope, DISCOVERED[scope]?.description ?? "");
+      for (const body of [readFileSync(runnerPath(scope), "utf-8"), rendered]) {
+        const collapsed = body.replace(/\s+/g, " ");
+        // $ARGUMENTS reach only the first next; every later pass is bare.
+        expect(collapsed).toContain(
+          "Pass `$ARGUMENTS` only to the first `next` in step 1: every later pass runs bare `bun .claude/tools/aidlc-orchestrate.ts next`, with no `--scope` and no `$ARGUMENTS`",
+        );
+        expect(collapsed).not.toContain("Repeat from step 1");
+        expect(collapsed).toContain("A `done` that carries it only recorded a step: run that bare `next` at once");
+        expect(collapsed).toContain(
+          "also asked to stop the workflow there for now (not to pause on one decision inside the work), run `bun .claude/tools/aidlc-orchestrate.ts park` instead",
+        );
+      }
     });
   }
 

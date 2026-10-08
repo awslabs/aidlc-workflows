@@ -1,6 +1,11 @@
 // covers: function:defaultScopeResolution, function:defaultScope, subcommand:aidlc-utility:intent-create, subcommand:aidlc-utility:doctor, subcommand:aidlc-orchestrate:next
 
-import { afterEach, describe, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { afterEach, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -11,6 +16,8 @@ import {
   removeWorkspaceRecord,
   runOrchestrateNext,
 } from "../harness/fixtures.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const HARNESS_ROOT = join(REPO_ROOT, "dist", "claude", ".claude");
 const UTILITY = join(HARNESS_ROOT, "tools", "aidlc-utility.ts");
@@ -52,6 +59,9 @@ function childEnv(project: string, scope?: string): NodeJS.ProcessEnv {
     AIDLC_HARNESS_DIR: ".claude",
     // Do not inherit a machine-level defaultScope or ceremony policy.
     AIDLC_INSTALL_ROOT: join(project, ".machine"),
+    // No chat runs here, so no hook leaves a heartbeat; these runs are about
+    // the scope, not about hooks that never ran.
+    AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "1",
   });
   if (scope !== undefined) env.AWS_AIDLC_DEFAULT_SCOPE = scope;
   return env;
@@ -72,7 +82,7 @@ function createIntent(project: string, env: NodeJS.ProcessEnv): string {
       "--project-dir",
       project,
     ],
-    { cwd: project, env, encoding: "utf-8", timeout: 30_000 },
+    { cwd: project, env, encoding: "utf-8", timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS) },
   );
   if (result.error) throw result.error;
   expect(result.status, `${result.stdout}${result.stderr}`).toBe(0);
@@ -99,11 +109,14 @@ describe("t340 shared implicit scope resolution", () => {
     const project = emptyProject("feature");
     const env = childEnv(project);
     // Ideation runs in feature but is skipped by classic, making the route
-    // sensitive to the recorded default rather than merely accepting any scope.
-    expect(intentCapture(project, env)).toMatchObject({
+    // sensitive to the recorded default rather than merely accepting any scope:
+    // a scope that skips the stage still runs it, with a notice naming that scope.
+    const directive = intentCapture(project, env);
+    expect(directive).toMatchObject({
       kind: "run-stage",
       stage: "intent-capture",
     });
+    expect(directive?.change_notices ?? []).toEqual([]);
     expect(createIntent(project, env).split("\n")).toContain("- **Scope**: feature");
   });
 
@@ -111,8 +124,8 @@ describe("t340 shared implicit scope resolution", () => {
     const project = emptyProject("feature");
     const env = childEnv(project, "classic");
     const directive = intentCapture(project, env);
-    expect(directive?.kind).toBe("error");
-    expect(directive?.message).toContain('is skipped for scope "classic"');
+    expect(directive?.kind).toBe("run-stage");
+    expect(String(directive?.change_notices)).toContain('"intent-capture" is not part of the classic plan.');
     expect(createIntent(project, env).split("\n")).toContain("- **Scope**: classic");
   });
 
@@ -120,8 +133,8 @@ describe("t340 shared implicit scope resolution", () => {
     const project = emptyProject();
     const env = childEnv(project);
     const directive = intentCapture(project, env);
-    expect(directive?.kind).toBe("error");
-    expect(directive?.message).toContain('is skipped for scope "classic"');
+    expect(directive?.kind).toBe("run-stage");
+    expect(String(directive?.change_notices)).toContain('"intent-capture" is not part of the classic plan.');
     expect(createIntent(project, env).split("\n")).toContain("- **Scope**: classic");
   });
 
@@ -146,11 +159,12 @@ describe("t340 shared implicit scope resolution", () => {
     const resolved = spawnSync(process.execPath, [
       "--eval",
       `import { defaultScopeResolution } from ${JSON.stringify(join(HARNESS_ROOT, "tools", "aidlc-lib.ts"))}; console.log(JSON.stringify(defaultScopeResolution()));`,
-    ], { cwd: project, env, encoding: "utf-8" });
+    ], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), cwd: project, env, encoding: "utf-8" });
     expect(resolved.status, resolved.stderr).toBe(0);
     expect(JSON.parse(resolved.stdout)).toEqual({ scope: "classic", source: "default" });
 
     const doctor = spawnSync(process.execPath, [UTILITY, "doctor", "--json", "--project-dir", project], {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
       cwd: project,
       env,
       encoding: "utf-8",

@@ -5,7 +5,12 @@
 // script. This keeps exit-code assertions focused on the plugin runner instead
 // of unrelated missing-install failures.
 
-import { afterEach, describe, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { afterEach, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
   cpSync,
@@ -22,6 +27,9 @@ import {
   cleanupTestProject,
   createTestProject,
 } from "../harness/fixtures.ts";
+import { getNativeProcessIdentity } from "../harness/tui-process-identity.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const PLUGIN = "doctor-probe";
 const created: string[] = [];
@@ -76,6 +84,7 @@ function runDoctor(
   project: string,
   args: string[] = [],
   envOverrides: Record<string, string> = {},
+  preload?: string,
 ) {
   const env: NodeJS.ProcessEnv = {
     ...process.env,
@@ -87,16 +96,20 @@ function runDoctor(
     ...envOverrides,
   };
   if (!("AIDLC_PLUGIN_DOCTOR_TIMEOUT_MS" in envOverrides)) {
-    delete env.AIDLC_PLUGIN_DOCTOR_TIMEOUT_MS;
+    env.AIDLC_PLUGIN_DOCTOR_TIMEOUT_MS = String(remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS));
   }
   return spawnSync(
     process.execPath,
-    [join(project, ".claude", "tools", "aidlc-utility.ts"), "doctor", ...args, "--project-dir", project],
+    [
+      ...(preload ? ["--preload", preload] : []),
+      join(project, ".claude", "tools", "aidlc-utility.ts"),
+      "doctor", ...args, "--project-dir", project,
+    ],
     {
       cwd: project,
       encoding: "utf-8",
       env,
-      timeout: 30_000,
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     },
   );
 }
@@ -236,21 +249,58 @@ describe("t313 plugin doctor checks", () => {
     expect(out).toContain("required JSON shape");
   });
 
-  test("timeout SIGKILLs a script that traps SIGTERM and returns promptly", () => {
+  test("timeout SIGKILLs a script that traps SIGTERM and returns promptly", async () => {
     const project = freshProject();
+    const naturalExit = join(project, "doctor-natural-exit");
+    const receiptPath = join(project, "doctor-spawn-result.json");
+    const preload = join(project, "observe-plugin-doctor.ts");
     writeDoctorScript(
       project,
-      'process.on("SIGTERM", () => {});\nawait Bun.sleep(60_000);\n',
+      [
+        'import { writeFileSync } from "node:fs";',
+        'process.on("SIGTERM", () => {});',
+        "await Bun.sleep(60_000);",
+        `writeFileSync(${JSON.stringify(naturalExit)}, "natural expiration");`,
+      ].join("\n"),
     );
+    // Observe the real native result without changing any spawn argument. A
+    // timeout before the child reaches JS must not become a tiny readiness gate.
+    writeFileSync(preload, `
+import { realpathSync, writeFileSync } from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
+const childProcess = require("node:child_process");
+const realSpawnSync = childProcess.spawnSync;
+const target = realpathSync(${JSON.stringify(scriptPath(project))});
+childProcess.spawnSync = function (...args) {
+  const result = realSpawnSync.apply(this, args);
+  if (args[1]?.[0] === target) {
+    writeFileSync(${JSON.stringify(receiptPath)}, JSON.stringify({
+      pid: result.pid,
+      signal: result.signal,
+      errorCode: result.error?.code,
+      timeout: args[2]?.timeout,
+      killSignal: args[2]?.killSignal,
+    }));
+  }
+  return result;
+};
+syncBuiltinESMExports();
+`);
 
-    const startedAt = Date.now();
-    const run = runDoctor(project, [], { AIDLC_PLUGIN_DOCTOR_TIMEOUT_MS: "50" });
-    const elapsedMs = Date.now() - startedAt;
+    const run = runDoctor(project, [], { AIDLC_PLUGIN_DOCTOR_TIMEOUT_MS: "50" }, preload);
+    expect(run.error, output(run)).toBeUndefined();
     expect(run.status).toBe(1);
-    expect(elapsedMs).toBeLessThan(5_000);
     expect(output(run)).toContain(
       `fail  Plugin check (${PLUGIN}): check script timed out after 50ms`,
     );
+    expect(existsSync(receiptPath), output(run)).toBe(true);
+    const receipt = JSON.parse(readFileSync(receiptPath, "utf-8"));
+    expect(receipt).toMatchObject({ timeout: 50, killSignal: "SIGKILL" });
+    expect(receipt.errorCode === "ETIMEDOUT" || receipt.signal === "SIGKILL").toBe(true);
+    if (process.platform !== "win32") expect(receipt.signal).toBe("SIGKILL");
+    expect(Number.isSafeInteger(receipt.pid) && receipt.pid > 0).toBe(true);
+    expect(await getNativeProcessIdentity(receipt.pid)).toBeNull();
+    expect(existsSync(naturalExit), "natural expiration cannot prove SIGKILL").toBe(false);
   });
 
   test("disabled plugin script is inert", () => {

@@ -86,7 +86,12 @@
 // here, so post-fire counts are unambiguous). All temp dirs cleaned in afterAll.
 // NOTHING is written under tests/fixtures/**.
 
-import { afterAll, describe, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { afterAll, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
   appendFileSync,
@@ -114,11 +119,14 @@ import {
   toPortablePath,
 } from "../harness/fixtures.ts";
 
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
 const BUN = process.execPath; // the bun running this test
 const REPO_ROOT = join(import.meta.dir, "..", "..");
 const TOOL = join(REPO_ROOT, "dist", "claude", ".claude", "tools", "aidlc-utility.ts");
 const STATE_TOOL = join(REPO_ROOT, "dist", "claude", ".claude", "tools", "aidlc-state.ts");
 const LOG_TOOL = join(REPO_ROOT, "dist", "claude", ".claude", "tools", "aidlc-log.ts");
+const ORCH_TOOL = join(REPO_ROOT, "dist", "claude", ".claude", "tools", "aidlc-orchestrate.ts");
 const STATE_FIXTURE = join(FIXTURES_DIR, "state-mid-ideation.md");
 
 const tempDirs: string[] = [];
@@ -141,6 +149,7 @@ function util(args: string[], p?: string, env?: Record<string, string>): CliResu
     childEnv.AIDLC_STATUSLINE_OWNER = `statusline:${process.pid}`;
   }
   const res = spawnSync(BUN, finalArgs, {
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     encoding: "utf-8",
     // reset_aidlc_env: strip AWS_AIDLC_DEFAULT_SCOPE from the parent env so a
     // developer's shell default cannot shadow the tests (fixtures.sh:28-30).
@@ -153,6 +162,7 @@ function util(args: string[], p?: string, env?: Record<string, string>): CliResu
 /** Spawn the state tool (used by status [?]/[R] cases 67/68). */
 function state(args: string[], p: string): CliResult {
   const res = spawnSync(BUN, [STATE_TOOL, ...args, "--project-dir", p], {
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     encoding: "utf-8",
     env: {
       ...stripScope(),
@@ -438,7 +448,7 @@ describe("t27 aidlc-utility status", () => {
       "--project-dir",
       p,
     ];
-    const request = spawnSync(BUN, reviewArgs, { encoding: "utf-8" });
+    const request = spawnSync(BUN, reviewArgs, { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" });
     if ((request.status ?? -1) !== 0) {
       throw new Error(`review request failed: ${request.stdout}${request.stderr}`);
     }
@@ -452,6 +462,7 @@ describe("t27 aidlc-utility status", () => {
       "utf-8",
     );
     const verdict = spawnSync(BUN, [...reviewArgs, "--verdict", "READY"], {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
       encoding: "utf-8",
     });
     if ((verdict.status ?? -1) !== 0) {
@@ -460,7 +471,7 @@ describe("t27 aidlc-utility status", () => {
     state(["gate-start", current], p);
     const r = util(["status"], p);
     expect(r.stdout).toContain("Awaiting your approval");
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("67b: status uses ASCII text for approved and skipped work", () => {
     const p = bareProj();
@@ -476,7 +487,7 @@ describe("t27 aidlc-utility status", () => {
     expect(r.stdout).toContain(" - 1 skipped");
     expect(r.stdout).not.toContain("\u2014");
     expect(r.stdout).not.toContain("\u2192");
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("68: status shows Revising and revision count for [R] stage", () => {
     const p = bareProj();
@@ -490,7 +501,7 @@ describe("t27 aidlc-utility status", () => {
     const r = util(["status"], p);
     expect(r.stdout).toContain("Revising");
     expect(r.stdout).toContain("revision 1 of 3");
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });
 
 // ============================================================
@@ -715,7 +726,8 @@ describe("t27 aidlc-utility scope-change", () => {
   test("16: scope-change poc->mvp updates Scope field to mvp", () => {
     const p = pocStateAuditProj();
     const result = util(["scope-change", "--scope", "mvp"], p);
-    expect(result.stdout).toContain("Scope changed: poc -> mvp");
+    expect(result.stdout).toContain("Switched to mvp (the set of stages this work runs): ");
+    expect(result.stdout).toContain("You can switch back to poc any time.");
     expect(stateField(p, "Scope")).toBe("mvp");
     // STRONGER: the SCOPE_CHANGED audit row records New Scope = mvp.
     expect(auditField(auditPath(p), "SCOPE_CHANGED", "New Scope")).toBe("mvp");
@@ -759,10 +771,153 @@ describe("t27 aidlc-utility scope-change", () => {
     expect(auditEventCount(auditPath(p), "SCOPE_CHANGED")).toBe(1);
   });
 
+  test("22b: scope-change records a setting only when its value changes", () => {
+    const p = emptyDir();
+    expect(util(["intent-create", "--scope", "bugfix"], p).status).toBe(0);
+    expect(util(["scope-change", "--scope", "feature"], p).status).toBe(0);
+    // The rows the scope change wrote follow its own SCOPE_CHANGED row.
+    const blocks = readAudit(p).split(/\n---\n/);
+    const changed = blocks.findIndex((block) => /^\*\*Event\*\*: SCOPE_CHANGED$/m.test(block));
+    expect(changed).toBeGreaterThanOrEqual(0);
+    const settings = blocks.slice(changed + 1)
+      .filter((block) => /^\*\*Event\*\*: (CEREMONY_SET|GUARD_POLICY_SET)$/m.test(block));
+    for (const row of settings) {
+      const before = /^\*\*Old(?: Value)?\*\*: (.*)$/m.exec(row)?.[1];
+      const after = /^\*\*New(?: Value)?\*\*: (.*)$/m.exec(row)?.[1];
+      expect(after, row).not.toBe(before);
+    }
+    // The state still says which scope each kept value now comes from.
+    expect(stateField(p, "Guard Policy")).toBe("off (from scope feature)");
+  });
+
   test("44: scope-change with --depth overrides default (Comprehensive)", () => {
     const p = pocStateAuditProj(true);
     util(["scope-change", "--scope", "mvp", "--depth", "comprehensive"], p);
     expect(stateField(p, "Depth")).toBe("Comprehensive");
+  });
+
+  test("70: scope-change keeps an open gate's [?] and a revision's [R]", () => {
+    // Collapsing either to [ ] left a gate the audit shows open reading as a
+    // stage that never started, so report refused it as still pending.
+    for (const marker of ["[?]", "[R]"]) {
+      const p = pocStateAuditProj();
+      // The rebuild keys on the legend line an engine-created state file
+      // carries under the heading; the fixture omits it.
+      sedReplaceInFile(
+        statePath(p),
+        "## Stage Progress\n",
+        "## Stage Progress\n<!-- Checkbox states: [ ] not started -->\n",
+      );
+      sedReplaceInFile(statePath(p), "- [-] feasibility", `- ${marker} feasibility`);
+      const r = util(["scope-change", "--scope", "mvp"], p);
+      expect(r.status, r.out).toBe(0);
+      const after = readFileSync(statePath(p), "utf-8");
+      // Proof the rebuild ran: mvp skips reverse-engineering on greenfield.
+      expect(after).toContain("- [ ] reverse-engineering \u2014 SKIP");
+      expect(after).toContain(`- ${marker} feasibility`);
+      expect(after).toContain("[?] awaiting approval (gate open), [R] revising (user rejected gate)");
+    }
+  });
+
+  test("71: scope-change skips an open gate or an unstarted current stage it drops; next routes past it", () => {
+    // mvp skips market-research. The person asked for that scope, so the stage
+    // is skipped with the change ([S] plus one STAGE_SKIPPED), and next routes
+    // past it through the report-owned skip, which writes no second row.
+    const atMarketResearch = (marker: string): string => {
+      const p = stateAuditProj();
+      sedReplaceInFile(
+        statePath(p),
+        "## Stage Progress\n",
+        "## Stage Progress\n<!-- Checkbox states: [ ] not started -->\n",
+      );
+      sedReplaceInFile(statePath(p), "- [x] market-research", `- ${marker} market-research`);
+      sedReplaceInFile(statePath(p), "- [-] feasibility", "- [ ] feasibility");
+      sedReplaceInFile(statePath(p), "**Current Stage**: feasibility", "**Current Stage**: market-research");
+      return p;
+    };
+    const orch = (args: string[], p: string): { kind?: string; message?: string; reason?: string } => {
+      const res = spawnSync(BUN, [ORCH_TOOL, ...args, "--project-dir", p], {
+        encoding: "utf-8",
+        env: stripScope(),
+      });
+      return JSON.parse((res.stdout ?? "").trim());
+    };
+
+    for (const [marker, was] of [["[?]", "it was waiting for your approval"], ["[ ]", "it had not started"]]) {
+      const p = atMarketResearch(marker);
+      const skipsBefore = auditEventCount(auditPath(p), "STAGE_SKIPPED");
+      const changed = util(["scope-change", "--scope", "mvp"], p);
+      expect(changed.status, changed.out).toBe(0);
+      expect(changed.out).toContain(`Skipped Market Research (${was}): mvp does not run it.`);
+      expect(changed.out).toContain("You can still run it on its own any time.");
+      expect(changed.out).not.toContain("--single");
+      expect(readFileSync(statePath(p), "utf-8")).toContain("- [S] market-research \u2014 SKIP");
+      expect(auditEventCount(auditPath(p), "SCOPE_CHANGED")).toBe(1);
+      expect(auditEventCount(auditPath(p), "STAGE_SKIPPED")).toBe(skipsBefore + 1);
+      expect(auditField(auditPath(p), "STAGE_SKIPPED", "Skip Kind")).toBe("scope-change");
+      expect(auditField(auditPath(p), "STAGE_SKIPPED", "Reason")).toBe(
+        "Scope changed to mvp, which does not run this stage",
+      );
+
+      const directive = orch(["next"], p);
+      expect(directive.kind, JSON.stringify(directive)).toBe("print");
+      expect(directive.message).toContain("--stage market-research --result skipped");
+      const routed = orch(
+        ["report", "--stage", "market-research", "--result", "skipped", "--reason", "stage is SKIP in the approved workflow plan"],
+        p,
+      );
+      expect(routed.kind, JSON.stringify(routed)).toBe("done");
+      expect(stateField(p, "Current Stage")).toBe("feasibility");
+      expect(readFileSync(statePath(p), "utf-8")).toContain("- [-] feasibility");
+      expect(auditEventCount(auditPath(p), "STAGE_SKIPPED")).toBe(skipsBefore + 1);
+    }
+
+    // The reply is what happened and how to go back, then each stage it
+    // skipped and each setting whose value changed: the defaults mvp shares
+    // with feature are not listed as changes.
+    const waiting = atMarketResearch("[?]");
+    // The settings a live run listed as "changed: off (from scope feature) to
+    // off (from scope mvp)": recorded under the new scope, never said.
+    sedReplaceInFile(
+      statePath(waiting),
+      "- **Change Control**: strict (from scope feature)",
+      [
+        "- **Guard Policy**: off (from scope feature)",
+        "- **Sensors**: on (from scope feature)",
+        "- **Learnings**: on (from scope feature)",
+        "- **Summary Confirmation**: on (from scope feature)",
+        "- **Plan Approval**: on (from scope feature)",
+      ].join("\n"),
+    );
+    const lines = util(["scope-change", "--scope", "mvp"], waiting).stdout.trim().split("\n");
+    expect(stateField(waiting, "Guard Policy")).toBe("off (from scope mvp)");
+    expect(stateField(waiting, "Plan Approval")).toBe("on (from scope mvp)");
+    expect(lines).toHaveLength(2);
+    expect(lines[0]).toMatch(/^Switched to mvp \(the set of stages this work runs\): \d+ stages \(\d+ done\), \d+ approval gates.*\. You can switch back to feature any time\.$/);
+    expect(lines[1]).toBe(
+      "Skipped Market Research (it was waiting for your approval): mvp does not run it. " +
+        "You can still run it on its own any time.",
+    );
+    // A value that really changes is said.
+    const toPoc = util(["scope-change", "--scope", "poc"], stateAuditProj()).stdout;
+    expect(toPoc).toContain("Depth changed: Standard -> Minimal");
+    expect(toPoc).not.toContain("is already");
+
+    const revising = atMarketResearch("[R]");
+    const changed = util(["scope-change", "--scope", "mvp"], revising);
+    expect(changed.status, changed.out).toBe(0);
+    // A revision already routes, so it keeps its box.
+    expect(changed.out).not.toContain("Skipped Market Research");
+    expect(readFileSync(statePath(revising), "utf-8")).toContain(
+      "- [R] market-research \u2014 SKIP",
+    );
+    const next = spawnSync(BUN, [ORCH_TOOL, "next", "--project-dir", revising], {
+      encoding: "utf-8",
+      env: stripScope(),
+    });
+    const directive = JSON.parse((next.stdout ?? "").trim()) as { kind?: string; message?: string };
+    expect(directive.kind, next.stdout + next.stderr).toBe("print");
+    expect(directive.message).toContain("--result skipped");
   });
 });
 
@@ -967,14 +1122,14 @@ describe("t27 aidlc-utility detect-scope", () => {
     // STRONGER: the .sh only grepped the event; assert the JSON ack + field.
     expect(r.stdout).toContain('"emitted":"SCOPE_DETECTED"');
     expect(auditFieldIn(audit, "SCOPE_DETECTED", "Detected scope")).toBe("feature");
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("66: detect-scope rejects invalid scope (exit 1)", () => {
     const p = bareProj();
     util(["intent-create", "--scope", "bugfix"], p);
     const r = util(["detect-scope", "--scope", "bogus", "--input", "x"], p);
     expect(r.status).toBe(1);
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });
 
 // ============================================================

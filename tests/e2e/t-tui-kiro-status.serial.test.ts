@@ -19,7 +19,8 @@
 //   without state — the run reports no active workflow (and does NOT
 //                   create an intent or invent state).
 
-import { describe, expect, test } from "bun:test";
+import { liveCaseTimeoutMs, LIVE_LONG_OPERATION_TIMEOUT_MS, remainingOperationTimeoutMs, remainingCleanupTimeoutMs, fileCleanupReserveMs, NATIVE_TERMINAL_CLEANUP_TIMEOUT_MS, NATIVE_STARTUP_TIMEOUT_MS } from "../harness/test-budget.ts";
+import { beforeEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -31,14 +32,38 @@ import {
 } from "../harness/tui-fixtures.ts";
 import { resolveTuiRuntime, tuiUnavailableReason } from "../harness/tui-runtime.ts";
 
+function completedStartupProbe<T extends { error?: Error }>(result: T): T {
+  if ((result.error as NodeJS.ErrnoException | undefined)?.code === "ETIMEDOUT") throw result.error;
+  return result;
+}
+
 const DRIVER = join(import.meta.dir, "..", "harness", "tui-drive.ts");
 const { bin: DRIVE_BIN, prefix: DRIVE_PREFIX } = resolveTuiRuntime(DRIVER);
 
-const TIMEOUT_S = Number.parseInt(process.env.AIDLC_TEST_TIMEOUT ?? "900", 10);
-const TEST_TIMEOUT_MS = (Number.isFinite(TIMEOUT_S) ? TIMEOUT_S : 900) * 1000;
+const TIMEOUT_S = Number(process.env.AIDLC_TEST_TIMEOUT);
+const TEST_TIMEOUT_MS = Number.isSafeInteger(TIMEOUT_S) && TIMEOUT_S > 0
+  ? TIMEOUT_S * 1000
+  : liveCaseTimeoutMs(LIVE_LONG_OPERATION_TIMEOUT_MS);
+let caseDeadlineMs: number;
+beforeEach(() => { caseDeadlineMs = Date.now() + TEST_TIMEOUT_MS; });
+function remainingWorkMs(): number {
+  return remainingOperationTimeoutMs(TEST_TIMEOUT_MS, {
+    deadlineMs: caseDeadlineMs,
+    reserveMs: fileCleanupReserveMs(TEST_TIMEOUT_MS),
+    phase: "E2E live work",
+  })!;
+}
+function remainingCleanupMs(): number {
+  return remainingCleanupTimeoutMs(NATIVE_TERMINAL_CLEANUP_TIMEOUT_MS, {
+    deadlineMs: caseDeadlineMs,
+    phase: "E2E terminal cleanup",
+  });
+}
+
+
 
 function drive(args: string[]): { rc: number; stdout: string } {
-  const res = spawnSync(DRIVE_BIN, [...DRIVE_PREFIX, ...args], { encoding: "utf-8" });
+  const res = spawnSync(DRIVE_BIN, [...DRIVE_PREFIX, ...args], { timeout: args[0] === "kill" ? remainingCleanupMs() : remainingWorkMs(), encoding: "utf-8" });
   return { rc: res.status ?? -1, stdout: res.stdout ?? "" };
 }
 function waitFor(session: string, pattern: string, timeoutMs: number, stableMs: number): boolean {
@@ -63,10 +88,10 @@ function skipReason(): string | null {
   }
   const runtimeReason = tuiUnavailableReason();
   if (runtimeReason) return runtimeReason;
-  if (spawnSync("kiro-cli", ["--version"], { encoding: "utf-8" }).status !== 0) {
+  if (completedStartupProbe(spawnSync("kiro-cli", ["--version"], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" })).status !== 0) {
     return "kiro-cli not found";
   }
-  if (spawnSync("kiro-cli", ["whoami"], { encoding: "utf-8" }).status !== 0) {
+  if (completedStartupProbe(spawnSync("kiro-cli", ["whoami"], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" })).status !== 0) {
     return "kiro-cli not authenticated (run `kiro-cli login`)";
   }
   if (!existsSync(KIRO_SRC)) return `distributable missing: ${KIRO_SRC}`;
@@ -92,11 +117,12 @@ function launch(session: string, sandbox: string): void {
       "--trust-all-tools",
     ]).rc,
   ).toBe(0);
-  if (waitFor(session, "Yes, I accept", 30000, 400)) {
+  expect(waitFor(session, "Yes, I accept|ask a question or describe a task", remainingWorkMs(), 400)).toBe(true);
+  if (drive(["capture", "--session", session]).stdout.includes("Yes, I accept")) {
     drive(["send", "--session", session, "--keys", "Down", "--no-enter"]);
     drive(["send", "--session", session, "--keys", "Enter", "--no-enter"]);
   }
-  expect(waitFor(session, "ask a question or describe a task", 60000, 600)).toBe(true);
+  expect(waitFor(session, "ask a question or describe a task", remainingWorkMs(), 600)).toBe(true);
 }
 function submitStatus(session: string): void {
   drive(["send", "--session", session, "--keys", "/aidlc --status", "--literal", "--no-enter"]);
@@ -125,8 +151,8 @@ describe("t-tui-kiro-status (read-only status through the Kiro print-directive a
         // `Current Stage:  ${stageDisplay}` from the graph entry's `name`
         // (aidlc-utility.ts:347 / :267-282), so we wait on the display name, the
         // same calibration lesson the ACP twin (t-acp-kiro-utilities) encodes.
-        expect(waitFor(session, "Requirements Analysis", 240000, 0)).toBe(true);
-        expect(waitFor(session, "feature", 30000, 0)).toBe(true);
+        expect(waitFor(session, "Requirements Analysis", remainingWorkMs(), 0)).toBe(true);
+        expect(waitFor(session, "feature", remainingWorkMs(), 0)).toBe(true);
         // Read-only contract: the state file is byte-identical afterwards.
         expect(readFileSync(statePath, "utf8")).toBe(stateBefore);
       } finally {
@@ -150,7 +176,7 @@ describe("t-tui-kiro-status (read-only status through the Kiro print-directive a
         submitStatus(session);
         // The engine's no-state status path prints the utility's exact wording
         // (aidlc-utility.ts:186, verified live): "No active AI-DLC workflow".
-        expect(waitFor(session, "No active AI-DLC workflow", 240000, 0)).toBe(true);
+        expect(waitFor(session, "No active AI-DLC workflow", remainingWorkMs(), 0)).toBe(true);
         // And it must NOT scaffold: status is read-only even with no state. The
         // seeded record was stripped (noAidlcDocs); status creates nothing, so the
         // per-intent state file the seeded record would hold never appears.

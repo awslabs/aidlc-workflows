@@ -3,7 +3,12 @@
 // covers: function:RESERVED_RECORD_NAMES
 // covers: function:splitDoubleQuotedArgs
 
-import { describe, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
   mkdirSync,
@@ -24,6 +29,8 @@ import {
   splitDoubleQuotedArgs,
   workspaceCommandUtilityArgv,
 } from "../../core/tools/aidlc-lib.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const DISPATCHER = join(REPO_ROOT, "core", "tools", "aidlc.ts");
@@ -49,7 +56,7 @@ function runNext(projectDir: string, args: string[]): { status: number; stdout: 
     cwd: projectDir,
     encoding: "utf-8",
     env: { ...process.env, ...TOOL_ENV },
-    timeout: 30_000,
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
   });
   return { status: r.status ?? -1, stdout: r.stdout ?? "", stderr: r.stderr ?? "" };
 }
@@ -59,7 +66,7 @@ function runUtility(projectDir: string, args: string[]): { status: number; stdou
     cwd: projectDir,
     encoding: "utf-8",
     env: { ...process.env, ...TOOL_ENV },
-    timeout: 30_000,
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
   });
   const stdout = r.stdout ?? "";
   const stderr = r.stderr ?? "";
@@ -77,7 +84,7 @@ function runDispatcher(cwd: string, args: string[]): { status: number; stdout: s
     cwd,
     encoding: "utf-8",
     env,
-    timeout: 30_000,
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
   });
   return { status: r.status ?? -1, stdout: r.stdout ?? "", stderr: r.stderr ?? "" };
 }
@@ -180,6 +187,22 @@ describe("parseWorkspaceCommand", () => {
     expect(workspaceCommandUtilityArgv(command)).toEqual(["intent", "switch", "birth"]);
   });
 
+  test("switch and space creation reject trailing flags instead of routing them to another command", () => {
+    for (const tokens of [
+      ["intent", "switch", "target", "--guard-policy", "relaxed"],
+      ["intent", "target", "--guard-policy", "relaxed"],
+      ["space", "switch", "target", "--guard-policy", "relaxed"],
+      ["space", "target", "--guard-policy", "relaxed"],
+      ["space", "create", "target", "--guard-policy", "relaxed"],
+      ["space-create", "target", "--guard-policy", "relaxed"],
+    ]) {
+      expect(parseWorkspaceCommand(tokens)).toMatchObject({
+        kind: "error",
+        code: "unexpected-arguments",
+      });
+    }
+  });
+
   test("migration delta missing-name and reserved-future verbs are errors, not sugar switches", () => {
     expect(parseWorkspaceCommand(["space", "create"])).toMatchObject({
       kind: "error",
@@ -205,6 +228,29 @@ describe("parseWorkspaceCommand", () => {
         expect(parsed.kind === "error" ? parsed.message : "").toContain(`${noun} switch ${verb}`);
       }
     }
+  });
+
+  test("intent add-repo / remove-repo parse as repo commands that forward verbatim", () => {
+    expect(parseWorkspaceCommand(["intent", "add-repo", "app-b"])).toEqual({
+      kind: "add-repo",
+      noun: "intent",
+      name: "app-b",
+      rest: [],
+    });
+    expect(
+      workspaceCommandUtilityArgv({ kind: "add-repo", noun: "intent", name: "app-b", rest: [] }),
+    ).toEqual(["intent", "add-repo", "app-b"]);
+    expect(parseWorkspaceCommand(["intent", "remove-repo", "app-b"])).toEqual({
+      kind: "remove-repo",
+      noun: "intent",
+      name: "app-b",
+      rest: [],
+    });
+    expect(parseWorkspaceCommand(["intent", "add-repo"])).toMatchObject({
+      kind: "error",
+      code: "missing-name",
+      verb: "add-repo",
+    });
   });
 
   test("intent archive / unarchive parse as lifecycle commands that forward verbatim (issue #980)", () => {
@@ -309,6 +355,8 @@ describe("parseWorkspaceCommand", () => {
       "create",
       "archive",
       "unarchive",
+      "add-repo",
+      "remove-repo",
       "rename",
       "show",
       "birth",
@@ -334,7 +382,6 @@ describe("classifier and next parser parity", () => {
       { args: ["intent", "list"], invocation: "intent", route: "intent list" },
       { args: ["intent", "list", "--json"], invocation: "intent --json", route: "intent list --json" },
       { args: ["intent", "switch", "list"], invocation: "intent switch list", route: "intent switch list" },
-      { args: ["space", "foo", "--status"], invocation: "space foo", route: "space foo" },
     ];
     for (const row of rows) {
       const cmd = classifyTerminalCommand(row.args);
@@ -402,18 +449,19 @@ describe("classifier and next parser parity", () => {
     }
   });
 
-  test("precedence pin: leading workspace command wins over a later --status at both sites", () => {
+  test("a workspace switch rejects a later flag at both sites", () => {
     const cmd = classifyTerminalCommand(["space", "foo", "--status"]);
     expect(cmd).toEqual({
-      subcommand: "space",
-      arg: "foo",
+      subcommand: "error",
+      display: "space foo --status",
+      error: "Usage: aidlc space switch <name>",
       source: "workspace-verb",
     });
     const projectDir = scratchProject();
     try {
       const d = directive(projectDir, ["space", "foo", "--status"]);
-      expect(d.kind).toBe("print");
-      expect(d.message).toContain("aidlc.ts engine space foo");
+      expect(d.kind).toBe("error");
+      expect(d.message).toContain("Usage: aidlc space switch <name>");
       expect(d.message).not.toContain("aidlc.ts engine status");
     } finally {
       cleanup(projectDir);
@@ -444,7 +492,8 @@ describe("utility handlers and reservation chokepoints", () => {
 
       const switched = runUtility(projectDir, ["space", "switch", "My Space"]);
       expect(switched.status).toBe(0);
-      expect(switched.stdout).toContain("Active space -> my-space");
+      expect(switched.stdout).toContain("Now working in space `my-space`.");
+      expect(switched.stdout).not.toContain("Active space");
       expect(readFileSync(join(projectDir, "aidlc", "active-space"), "utf-8").trim()).toBe("my-space");
     } finally {
       cleanup(projectDir);
@@ -471,7 +520,8 @@ describe("utility handlers and reservation chokepoints", () => {
         projectDir,
       ]);
       expect(r.status).toBe(0);
-      expect(r.stdout).toContain("Active intent -> 260711-birth");
+      expect(r.stdout).toContain("Now working on `birth`.");
+      expect(r.stdout).not.toContain("Active intent");
       expect(r.stderr).toBe("");
       expect(readFileSync(registry, "utf-8")).toBe(before);
       expect(readFileSync(join(projectDir, "aidlc", "spaces", "default", "intents", "active-intent"), "utf-8").trim()).toBe("260711-birth");

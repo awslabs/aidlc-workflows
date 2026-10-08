@@ -1,5 +1,5 @@
 // covers: subcommand:aidlc-bolt:start, subcommand:aidlc-bolt:complete, subcommand:aidlc-bolt:abort, subcommand:aidlc-worktree:restore, subcommand:aidlc-worktree:purge
-// covers: function:recoveryRepoCandidates
+// covers: function:recoveryRepoCandidates, function:GIT_PLATFORM_ARGS
 //
 // bun:test port of tests/integration/t78-bolt-worktree-lifecycle.sh (TAP plan 13),
 // mechanism = cli. End-to-end per-Bolt worktree lifecycle: every .sh assertion
@@ -68,7 +68,8 @@
 // `git worktree add` (assertNotSiblingWorktree + real git, aidlc-worktree.ts).
 // NOTHING is written under tests/fixtures/**; all temp dirs cleaned in afterAll.
 
-import { afterAll, describe, expect, test } from "bun:test";
+import { NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS } from "../harness/test-budget.ts";
+import { setDefaultTimeout, afterAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
@@ -105,6 +106,8 @@ import {
   seededStateFile,
 } from "../harness/fixtures.ts";
 
+setDefaultTimeout(NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
+
 const BUN = process.execPath; // the bun running this test
 const BOLT = join(AIDLC_SRC, "tools", "aidlc-bolt.ts");
 const WT_TOOL = join(AIDLC_SRC, "tools", "aidlc-worktree.ts");
@@ -113,7 +116,7 @@ const tempDirs: string[] = [];
 
 afterAll(() => {
   for (const d of tempDirs) cleanupTestProject(d);
-}, 30_000);
+}, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
 interface RunResult {
   status: number;
@@ -613,6 +616,66 @@ describe("t78 aidlc-bolt per-Bolt worktree lifecycle (migrated from t78-bolt-wor
     });
   });
 
+  // ===========================================================================
+  // Lifecycle 5b: a tracked path that fits the main checkout but passes
+  // Windows MAX_PATH inside the Bolt checkout. Git for Windows handles such a
+  // path only with core.longpaths, so the tools must supply it themselves:
+  // global and system Git config are dropped for them here, as on a machine
+  // that never enabled it. The fixture's own Git calls opt in explicitly. The
+  // file carries `ident`, so discard also takes the raw-byte parking path,
+  // whose attribute and hash probes walk the same deep path.
+  // ===========================================================================
+  describe("Lifecycle 5b: a Bolt checkout past MAX_PATH is created and discarded", () => {
+    const proj = setupLifecycleProject();
+    const noMachineGitConfig: NodeJS.ProcessEnv = {
+      ...process.env,
+      GIT_CONFIG_GLOBAL: process.platform === "win32" ? "NUL" : "/dev/null",
+      GIT_CONFIG_NOSYSTEM: "1",
+    };
+    const runTool = (tool: string, ...args: string[]): RunResult => {
+      const res = spawnSync(BUN, [tool, ...args, "--project-dir", proj], {
+        encoding: "utf-8", cwd: proj, env: noMachineGitConfig,
+      });
+      return { status: res.status ?? -1, out: `${res.stdout ?? ""}${res.stderr ?? ""}` };
+    };
+    const segments = Array.from({ length: 10 }, (_, i) => `deeply-nested-segment-${i}`);
+    const deepRelative = join(...segments, "deep-file.txt");
+    const deepGitPath = [...segments, "deep-file.txt"].join("/");
+    mkdirSync(join(proj, ...segments), { recursive: true });
+    writeFileSync(join(proj, ".gitattributes"), "deep-file.txt ident\n");
+    writeFileSync(join(proj, deepRelative), "$Id$\ndeep\n");
+    const longGit = (...args: string[]) => git(proj, "-c", "core.longpaths=true", ...args);
+    longGit("init", "-q", "-b", "main");
+    longGit("config", "user.email", "t@t");
+    longGit("config", "user.name", "t");
+    longGit("add", "-A");
+    const committed = longGit("commit", "-q", "-m", "init");
+    const created = runTool(WT_TOOL, "create", "--slug", "deeppath", "--base", "main");
+    const wt = worktreeDir(proj, "deeppath");
+
+    test("L5b: create checks out a path longer than MAX_PATH", () => {
+      expect(committed.status, committed.stderr).toBe(0);
+      expect(created.status, created.out).toBe(0);
+      expect(join(wt, deepRelative).length).toBeGreaterThan(260);
+      expect(existsSync(join(wt, deepRelative))).toBe(true);
+    });
+
+    test("L5b: abort --discard parks the raw bytes and removes that checkout", () => {
+      // An expanded ident: the clean filter would collapse it to `$Id$`, so
+      // matching bytes prove the parked copy is raw.
+      const rawBytes = "$Id: 0123456789abcdef0123456789abcdef01234567 $\ndirty deep bytes\n";
+      writeFileSync(join(wt, deepRelative), rawBytes);
+      const aborted = runTool(
+        BOLT, "abort", "--name", "Deeppath", "--slug", "deeppath",
+        "--reason", "long path test", "--discard",
+      );
+      expect(aborted.status, aborted.out).toBe(0);
+      const { parked_ref: parkedRef } = JSON.parse(aborted.out) as { parked_ref: string };
+      expect(existsSync(wt)).toBe(false);
+      expect(longGit("cat-file", "-p", `${parkedRef}/head:${deepGitPath}`).stdout).toBe(rawBytes);
+    });
+  });
+
   describe("Recoverable discard", () => {
     test("abort parks source and review evidence; restore and purge never touch a recreated live Bolt", () => {
       // R4(d): namespaced snapshot recovery keeps every parked ref scoped to its recorded intent.
@@ -729,7 +792,7 @@ describe("t78 aidlc-bolt per-Bolt worktree lifecycle (migrated from t78-bolt-wor
       expect(readFileSync(join(wt, "live-only.txt"), "utf-8")).toBe("leave this live checkout alone\n");
       expect(existsSync(join(wt, "committed.txt"))).toBe(false);
       expect(existsSync(join(wt, "untracked.bin"))).toBe(false);
-    }, 30_000);
+    }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
     test("namespaced purge under another intent refuses the owner's exact parked stamp", () => {
       // R4(d): an explicit stamp cannot authorize recovery or purge outside its recording intent.
@@ -776,7 +839,7 @@ describe("t78 aidlc-bolt per-Bolt worktree lifecycle (migrated from t78-bolt-wor
       expect(git(proj, "for-each-ref", "--format=%(refname)", `${parked.parked_ref}/`).stdout).toBe("");
       expect(git(wtB, "rev-parse", "HEAD").stdout.trim()).toBe(headB);
       expect(readFileSync(join(wtB, "saved.txt"), "utf-8")).toBe("intent B live source\n");
-    }, 30_000);
+    }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
     test("abort recovery hint selects its exact snapshot after another same-slug park", () => {
       const proj = setupLifecycleProject();
@@ -831,7 +894,7 @@ describe("t78 aidlc-bolt per-Bolt worktree lifecycle (migrated from t78-bolt-wor
         parked_mode: "snapshot",
         parked_repo: null,
       });
-    }, 30_000);
+    }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
     test("abort keeps executable recovery argv when harness metacharacters prevent a display hint", () => {
       const proj = setupLifecycleProject();
@@ -860,7 +923,7 @@ describe("t78 aidlc-bolt per-Bolt worktree lifecycle (migrated from t78-bolt-wor
       const recovery = JSON.parse(restored.out);
       expect(recovery.parked_ref).toBe(parked.parked_ref);
       expect(readFileSync(join(recovery.worktree_path, "saved.bin"))).toEqual(savedBytes);
-    }, 10_000); // Real git create/park/restore sequence exceeded 5s on Windows CI.
+    }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
     test("saved root and sibling abort hints still recover their repository after a collision", () => {
       const proj = setupLifecycleProject();
@@ -938,7 +1001,7 @@ describe("t78 aidlc-bolt per-Bolt worktree lifecycle (migrated from t78-bolt-wor
         expect(purgedByDoctor.status, purgedByDoctor.out).toBe(0);
         expect(git(cwd, "for-each-ref", "--format=%(refname)", parkedRefPrefix(fixtureIntentId8(proj), slug)).stdout).toBe("");
       }
-    }, 30_000);
+    }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
     test("AUTO-recorded symlink abort hints and doctor commands restore saved bytes and purge refs", () => {
       const { proj, external } = setupRecordedSymlinkProject();
@@ -984,7 +1047,7 @@ describe("t78 aidlc-bolt per-Bolt worktree lifecycle (migrated from t78-bolt-wor
       expect(git(external, "for-each-ref", "--format=%(refname)", `${parked.parked_ref}/`).stdout).toBe("");
       expect(doctorAttempts(proj)).toEqual([]);
       expect(readFileSync(join(external, "saved.txt"), "utf-8")).toBe("linked repository base\n");
-    }, 30_000);
+    }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
     test("partial cleanup in an AUTO-recorded symlink repo discards and recovers the branch without --repo", () => {
       const { proj, external } = setupRecordedSymlinkProject();
@@ -1016,7 +1079,7 @@ describe("t78 aidlc-bolt per-Bolt worktree lifecycle (migrated from t78-bolt-wor
       const purged = runWorktree(proj, "purge", "--slug", slug);
       expect(purged.status, purged.out).toBe(0);
       expect(git(external, "for-each-ref", "--format=%(refname)", `${parked.parked_ref}/`).stdout).toBe("");
-    }, 30_000);
+    }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
     for (const matchingSlug of [true, false]) test(`discard-record-only linked recovery ${matchingSlug ? "admits the emitted slug" : "refuses a different recorded slug"}`, () => {
       const { proj, external } = setupRecordedSymlinkProject();
@@ -1076,7 +1139,7 @@ describe("t78 aidlc-bolt per-Bolt worktree lifecycle (migrated from t78-bolt-wor
       expect(git(external, "for-each-ref", "--format=%(refname)", `${parked.parked_ref}/`).stdout).toBe("");
       expect(doctorAttempts(proj)).toEqual([]);
       expect(readFileSync(join(external, "saved.txt"), "utf-8")).toBe("linked repository base\n");
-    }, 30_000);
+    }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
     test("purge --older-than preserves February 31 refs and reports skipped_unparseable", () => {
       const proj = setupLifecycleProject();
@@ -1277,7 +1340,7 @@ describe("t78 aidlc-bolt per-Bolt worktree lifecycle (migrated from t78-bolt-wor
         expect(JSON.parse(purged.out)).toEqual({ purged: 1, slug, stamps: [stamp], skipped_unparseable: [] });
         expect(git(cwd, "show-ref", "--verify", "--quiet", ref).status).toBe(1);
       }
-    }, 30_000);
+    }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
     for (const event of ["WORKTREE_CREATED", "WORKTREE_DISCARDED"]) test(`intent-only linked repos require a same-slug ${event} Repo audit row`, () => {
       const proj = setupLifecycleProject();
@@ -1368,7 +1431,7 @@ describe("t78 aidlc-bolt per-Bolt worktree lifecycle (migrated from t78-bolt-wor
       expect(git(external, "for-each-ref", "--format=%(refname)", `${prefix}/`).stdout).toBe("");
       expect(doctorAttempts(proj)).toEqual([]);
       expect(git(external, "show-ref", "--verify", "--quiet", unrelatedRef).status).toBe(0);
-    }, 30_000);
+    }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
     test("recovery refuses missing or non-repository sibling selectors and live operations reject the root selector", () => {
       const proj = setupLifecycleProject();
@@ -1491,7 +1554,7 @@ describe("t78 aidlc-bolt per-Bolt worktree lifecycle (migrated from t78-bolt-wor
       expect(await sha256(join(recovery.worktree_path, largeFile))).toBe(largeSha256);
       expect(recovery.materialized).toBe(parkedFiles.stdout.split("\0").filter(Boolean).length);
       expect(recovery.raw_bytes).toBe(true);
-    }, 30_000);
+    }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
     test("restore succeeds despite a required failing smudge filter", () => {
       const proj = setupLifecycleProject();
@@ -1802,7 +1865,7 @@ describe("t78 aidlc-bolt per-Bolt worktree lifecycle (migrated from t78-bolt-wor
       expect(JSON.parse(restored.out).raw_bytes).toBe(true);
       expect(recovery.materialized).toBe(parkedFileCount);
       expect(readFileSync(join(recovery.worktree_path, nameFor(fileCount - 1)))).toEqual(bytes);
-    }, 180_000);
+    }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
     test.skipIf(process.platform === "win32")("restore writes symlink target bytes as a regular file with core.symlinks=false", () => {
       const proj = setupLifecycleProject();
@@ -2224,6 +2287,6 @@ describe("t78 aidlc-bolt per-Bolt worktree lifecycle (migrated from t78-bolt-wor
         expect(readFileSync(join(ownerA, "owner.txt"), "utf-8")).toBe("A must survive\n");
         expect(readFileSync(join(wtB, "owner.txt"), "utf-8")).toBe("B must survive\n");
       }
-    }, 60000);
+    }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
   });
 });

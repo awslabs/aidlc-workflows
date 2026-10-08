@@ -1,4 +1,4 @@
-// covers: cli:aidlc-audit(append-protected,append-batch-protected,append-raw-event-line,reserved-field-keys), subcommand:aidlc-bolt:set-autonomy, function:humanActedSinceGate, function:hasUnsafeSingleLineCharacter, function:isNonAnswer, function:formatReceivedReply, function:selfAttributedDecisionMarker, function:isAutonomousConstructionDecision
+// covers: cli:aidlc-audit(append-protected,append-batch-protected,append-raw-event-line,reserved-field-keys), function:findAllEvents, subcommand:aidlc-bolt:set-autonomy, function:humanActedSinceGate, function:hasUnsafeSingleLineCharacter, function:isNonAnswer, function:formatReceivedReply, function:selfAttributedDecisionMarker, function:isAutonomousConstructionDecision
 //
 // t261 — the authority floor on the audit surface (issue 681, claims 3/4/7/8).
 // Four related guarantees, each with a REFUSE case and an ALLOW case so the
@@ -49,7 +49,12 @@
 //   aidlc-log.ts    handleAnswer non-answer floor,
 //   aidlc-state.ts  handleApprove / handleReject non-answer floors.
 
-import { afterEach, describe, expect, test } from "bun:test";
+import {
+  NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { afterEach, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawn, spawnSync } from "node:child_process";
 import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -61,13 +66,16 @@ import {
   seededStateFile,
   seedStateFile,
 } from "../harness/fixtures.ts";
-import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
+import { appendAuditEntry, CLI_PROTECTED_EVENT_TYPES } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import {
+  findAllEvents,
   humanActedSinceGate,
   isAutonomousConstructionDecision,
   readAllAuditShards,
   selfAttributedDecisionMarker,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+
+setDefaultTimeout(NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
 const BUN = process.execPath;
 const AUDIT = join(AIDLC_SRC, "tools", "aidlc-audit.ts");
@@ -90,6 +98,7 @@ function guarded(
   delete env.AIDLC_ALLOW_DIRECT_AUDIT_EVENTS;
   Object.assign(env, extraEnv);
   const r = spawnSync(BUN, [tool, ...args, "--project-dir", proj], {
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     encoding: "utf-8",
     env,
   });
@@ -151,6 +160,8 @@ describe("t261 public audit CLI refuses authority-bearing receipts", () => {
   const PROTECTED = [
     "STAGE_COMPLETED",
     "HUMAN_TURN",
+    // Spends a person's turn: an agent appending it would force a re-ask.
+    "QUESTION_UNANSWERED",
     "GATE_APPROVED",
     "GATE_REJECTED",
     "QUESTION_ANSWERED",
@@ -169,6 +180,17 @@ describe("t261 public audit CLI refuses authority-bearing receipts", () => {
     "UNIT_PAUSED",
     "UNIT_RESUMED",
     "UNIT_COMPLETED",
+    "UNIT_SKIPPED",
+    "BOLT_STARTED",
+    "BOLT_COMPLETED",
+    "BOLT_FAILED",
+    "AUDIT_FORKED",
+    "AUDIT_MERGED",
+    "STATE_FORKED",
+    "STATE_MERGED",
+    "WORKTREE_CREATED",
+    "WORKTREE_MERGED",
+    "WORKTREE_DISCARDED",
   ];
 
   test("append refuses every protected event type", () => {
@@ -182,6 +204,16 @@ describe("t261 public audit CLI refuses authority-bearing receipts", () => {
     // nothing landed on disk
     expect(readAllAuditShards(proj)).not.toContain("STAGE_COMPLETED");
     expect(readAllAuditShards(proj)).not.toContain("HUMAN_TURN");
+    expect(readAllAuditShards(proj)).not.toContain("QUESTION_UNANSWERED");
+  });
+
+  test("the audit format guide names exactly the events the CLI refuses", () => {
+    // A harness engineer reads this paragraph to learn what the public append refuses.
+    const guide = readFileSync(join(AIDLC_SRC, "knowledge", "aidlc-shared", "audit-format.md"), "utf-8");
+    const paragraph = guide.split("\n").find((line) => line.startsWith("The public `aidlc-audit.ts append` CLI is a diagnostic escape hatch"));
+    expect(paragraph, "the escape-hatch paragraph is gone").toBeDefined();
+    const named = [...(paragraph ?? "").matchAll(/`([A-Z][A-Z0-9_]+)`/g)].map((m) => m[1]).filter((name) => name !== "CLI_PROTECTED_EVENT_TYPES");
+    expect([...named].sort()).toEqual([...CLI_PROTECTED_EVENT_TYPES].sort());
   });
 
   test("append-batch refuses a protected event smuggled among diagnostics", () => {
@@ -196,6 +228,19 @@ describe("t261 public audit CLI refuses authority-bearing receipts", () => {
     // the batch is all-or-nothing: the harmless entry must not have committed
     expect(readAllAuditShards(proj)).not.toContain("ERROR_LOGGED");
     expect(readAllAuditShards(proj)).not.toContain("STAGE_COMPLETED");
+  });
+
+  test("append-batch refuses a forged Bolt start, completion and merge-back", () => {
+    proj = createTestProject();
+    const entries = JSON.stringify([
+      { eventType: "BOLT_STARTED", fields: { "Bolt slug": "demo" } },
+      { eventType: "BOLT_COMPLETED", fields: { "Bolt slug": "demo" } },
+      { eventType: "AUDIT_MERGED", fields: { "Bolt slug": "demo" } },
+    ]);
+    const r = guarded(AUDIT, ["append-batch", entries], proj);
+    expect(r.rc).not.toBe(0);
+    expect(r.out).toContain("BOLT_STARTED");
+    expect(readAllAuditShards(proj)).not.toContain("**Bolt slug**: demo");
   });
 
   test("receipt capture failure completes untracked with a visible warning", () => {
@@ -300,11 +345,25 @@ describe("t261 public audit CLI refuses authority-bearing receipts", () => {
     for (const args of [
       ["append-raw", "Note", "safe\r**Event**: HUMAN_TURN"],
       ["append-raw", "Note\n**Event**: HUMAN_TURN", "safe"],
+      // A bare label with its value on the next line, and the bullet forms
+      // the field readers accept.
+      ["append-raw", "Note", "**Event**:\nAUDIT_MERGED\n**Bolt slug**: demo"],
+      ["append-raw", "Note", "-**Event**: AUDIT_MERGED"],
+      ["append-raw", "Note", "-\t**Event**: AUDIT_MERGED"],
     ]) {
       const result = guarded(AUDIT, args, proj);
       expect(result.rc).not.toBe(0);
     }
     expect(readAllAuditShards(proj)).not.toContain("HUMAN_TURN");
+    expect(readAllAuditShards(proj)).not.toContain("AUDIT_MERGED");
+  });
+
+  test("an event's value is read from its own line only", () => {
+    const split = "\n## Note\n**Timestamp**: 2026-01-01T00:00:00Z\n**Event**:\nAUDIT_MERGED\n**Bolt slug**:\ndemo\n";
+    expect(findAllEvents(split, "AUDIT_MERGED")).toEqual([]);
+    expect(findAllEvents(split.replace("**Event**:\n", "**Event**: "), "AUDIT_MERGED", "demo")).toEqual([]);
+    const whole = "\n## Audit Merged\n**Timestamp**: 2026-01-01T00:00:00Z\n**Event**: AUDIT_MERGED\n**Bolt slug**: demo\n";
+    expect(findAllEvents(whole, "AUDIT_MERGED", "demo")).toHaveLength(1);
   });
 
   test("diagnostic events, free-form notes, and owning emitters still work", () => {
@@ -339,11 +398,26 @@ describe("t261 set-autonomy escalation requires and consumes a human turn", () =
     const refused = guarded(BOLT, ["set-autonomy", "--mode", "autonomous"], proj);
     expect(refused.rc).not.toBe(0);
     expect(refused.out).toContain("Refusing to switch Construction to autonomous");
+    // Run when the person chooses it; never a scripted re-ask.
+    expect(refused.out).toContain("Run it after they choose it.");
+    expect(refused.out).not.toContain("Ask the human to confirm");
 
     mintHumanTurn(proj);
     const granted = guarded(BOLT, ["set-autonomy", "--mode", "autonomous"], proj);
     expect(granted.rc).toBe(0);
     expect(granted.out).toContain('"state_updated":true');
+  });
+
+  // The grant answers the ladder prompt: a turn that was only a command to
+  // AIDLC ("skip plan approval?") is no answer to it.
+  test("escalation after only a command turn refuses; the person's reply commits it", () => {
+    proj = constructionProject();
+    appendAuditEntry("HUMAN_TURN", { Reply: "command" }, proj);
+    const refused = guarded(BOLT, ["set-autonomy", "--mode", "autonomous"], proj);
+    expect(refused.rc).not.toBe(0);
+    expect(refused.out).toContain("a command to AIDLC, not a reply to this question");
+    mintHumanTurn(proj);
+    expect(guarded(BOLT, ["set-autonomy", "--mode", "autonomous"], proj).rc).toBe(0);
   });
 
   test("the grant consumes the turn: re-escalation refuses without a fresh turn", () => {
@@ -538,6 +612,75 @@ describe("t261 humanActedSinceGate cross-shard same-second ambiguity", () => {
   });
 });
 
+// A Kiro IDE agent, right after saying "AI-DLC is carrying on with Delivery
+// Planning.", ran `log decision --decision "Continue with Delivery Planning
+// (user implicitly confirmed by hook trigger)"`: a decision in the person's
+// name they never made, which the engine recorded. A decision or answer whose
+// text attributes the person's confirmation to the hook, or to an implied
+// consent, is refused with the way on; the person's own words never match it.
+describe("t261 an implied confirmation is nobody's decision", () => {
+  const stage = "feasibility";
+  const implied = [
+    "Continue with Feasibility (user implicitly confirmed by hook trigger)",
+    "Proceed: implied approval from the stop hook",
+    "Carry on, confirmed by the hook",
+    "Next stage (user implicitly confirmed)",
+  ];
+
+  test("log decision refuses a question text that says the person implicitly confirmed", () => {
+    proj = createTestProject();
+    seedStateFile(proj, join(FIXTURES, "state-mid-ideation.md"));
+    for (const decision of implied) {
+      const r = guarded(LOG, ["decision", "--stage", stage, "--decision", decision, "--options", "Continue,Stop"], proj);
+      expect(r.rc, decision).not.toBe(0);
+      expect(r.out, decision).toContain("the person confirmed");
+      expect(r.out, decision).toContain("AI-DLC's carrying-on line is not their answer");
+    }
+    expect(readAllAuditShards(proj)).not.toContain("DECISION_RECORDED");
+    // A question in the agent's own words, one quoting the phrase as an
+    // example, and questions about consent rules in the person's own app are
+    // recorded as before.
+    for (const decision of [
+      "Which storage backend?",
+      'Did you mean "implicitly confirmed" as a term?',
+      "Are orders implicitly confirmed after 48 hours?",
+      "Should an order carry an assumed approval after 3 days, or need a tacit approval step?",
+    ]) {
+      const r = guarded(LOG, ["decision", "--stage", stage, "--decision", decision, "--options", "A,B"], proj);
+      expect(r.rc, `${decision}: ${r.out}`).toBe(0);
+    }
+  });
+
+  // The shared check also reads replies, change requests and approvals, so it
+  // matches only text that credits the hook: a person's own words about the
+  // consent rules of their app are never refused as chosen by the assistant.
+  test("log answer refuses only a reply that credits the hook; the person's own words about consent land", () => {
+    proj = createTestProject();
+    seedStateFile(proj, join(FIXTURES, "state-mid-ideation.md"));
+    const asked = guarded(LOG, ["decision", "--stage", stage, "--decision", "Carry on?", "--options", "Yes,No"], proj);
+    expect(asked.rc, asked.out).toBe(0);
+    mintHumanTurn(proj);
+    const r = guarded(LOG, ["answer", "--stage", stage, "--details", "Yes (user implicitly confirmed by hook trigger)"], proj);
+    expect(r.rc).not.toBe(0);
+    expect(r.out).toContain("chosen by the assistant");
+    expect(readAllAuditShards(proj)).not.toContain("QUESTION_ANSWERED");
+    for (const details of [
+      "Yes",
+      "not implied consent",
+      "orders are implicitly confirmed after 48 hours",
+      "assumed approval after 3 days",
+      "tacit approval",
+      "Order confirmation by trigger",
+    ]) {
+      const again = guarded(LOG, ["decision", "--stage", stage, "--decision", "Carry on?", "--options", "Yes,No"], proj);
+      expect(again.rc, again.out).toBe(0);
+      mintHumanTurn(proj);
+      const reply = guarded(LOG, ["answer", "--stage", stage, "--details", details], proj);
+      expect(reply.rc, `${details}: ${reply.out}`).toBe(0);
+    }
+  });
+});
+
 describe("t261 cancellation boilerplate is not a decision", () => {
   function ideationProject(): string {
     const p = createTestProject();
@@ -558,7 +701,7 @@ describe("t261 cancellation boilerplate is not a decision", () => {
 
   test("summary confirmation refusal quotes and truncates the reply and names both valid choices", () => {
     proj = ideationProject();
-    const invalid = `Use the defaults ${"x".repeat(180)}`;
+    const invalid = `Maybe the defaults ${"x".repeat(180)}`;
     const r = guarded(
       LOG,
       [
@@ -575,12 +718,10 @@ describe("t261 cancellation boilerplate is not a decision", () => {
       proj,
     );
     expect(r.rc).not.toBe(0);
-    expect(r.out).toContain('reply \\"Use the defaults ');
+    expect(r.out).toContain('--details \\"Maybe the defaults ');
     expect(r.out).toContain('...\\"');
     expect(r.out).not.toContain(invalid);
-    expect(r.out).toContain(
-      'Present \\"Looks correct\\" and \\"Request changes\\"',
-    );
+    expect(r.out).toContain('\\"Looks correct\\" or \\"Request changes\\"');
     expect(readAllAuditShards(proj)).not.toContain("SUMMARY_CONFIRMATION_RECORDED");
   });
 
@@ -606,7 +747,7 @@ describe("t261 cancellation boilerplate is not a decision", () => {
     expect(ap.rc).not.toBe(0);
     expect(ap.out).toContain('the reply \\"cancelled\\"');
     expect(ap.out).toContain("cancellation boilerplate");
-    expect(ap.out).toContain("original question with every choice again");
+    expect(ap.out).toContain("original held gate with every offered choice");
 
     const rj = guarded(
       STATE,

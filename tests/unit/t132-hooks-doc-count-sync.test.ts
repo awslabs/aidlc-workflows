@@ -43,6 +43,7 @@
 import { describe, expect, test } from "bun:test";
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { hookGroupMemberNames } from "../../core/tools/aidlc-command.ts";
 import { AIDLC_SRC, REPO_ROOT } from "../harness/fixtures.ts";
 
 const HOOKS_DIR = join(AIDLC_SRC, "hooks");
@@ -64,6 +65,12 @@ function diskHookCount(): number {
 // AskUserQuestion), so count UNIQUE commands instead: the guard's subject is
 // "scripts wired vs scripts on disk", and a wired-but-missing script still
 // changes the unique count. statusLine stays +1 (its own top-level key).
+//
+// One registration can also run SEVERAL hooks in one process (#2066: the four
+// tool-call checks ride `engine hook guard-tool-call`), so a group command
+// counts as the hooks it stands for, exactly as the doctor's roster expands it.
+// The subject is unchanged: a script on disk that no registration reaches,
+// directly or through a group, still fails the cross-check below.
 interface SettingsCounts {
   block: number;
   statusline: number;
@@ -75,10 +82,19 @@ function settingsCounts(): SettingsCounts {
     statusLine?: { command?: string };
   };
   const commands = new Set<string>();
+  const add = (command: string): void => {
+    const target = /engine hook ([A-Za-z0-9_-]+)\s*$/.exec(command)?.[1];
+    const members = target ? hookGroupMemberNames(target) : [];
+    if (members.length === 0) {
+      commands.add(command);
+      return;
+    }
+    for (const hook of members) commands.add(`${command} :: ${hook}`);
+  };
   for (const ev of Object.keys(s.hooks ?? {})) {
     for (const g of s.hooks![ev]) {
       for (const h of g.hooks ?? []) {
-        if (h.command) commands.add(h.command);
+        if (h.command) add(h.command);
       }
     }
   }

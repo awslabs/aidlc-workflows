@@ -187,7 +187,7 @@ const KNOWN_FIELDS = new Set<string>([...REQUIRED_FIELDS, ...OPTIONAL_FIELDS]);
 // digits, or hyphens. Spec says "kebab-case; must match filename stem".
 // compileStageGraph checks filename-stem equality where the filename is known;
 // here we only validate the shape.
-const SLUG_RE = /^[a-z][a-z0-9-]*$/;
+export const SLUG_RE = /^[a-z][a-z0-9-]*$/;
 
 // Stage display number: `<int>.<int>` (e.g. "0.1", "2.7", "4.50"). Shape only —
 // numericStageOrder (aidlc-graph.ts) parses it; an authored value is an

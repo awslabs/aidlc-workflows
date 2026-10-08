@@ -1,4 +1,9 @@
-import { afterAll, describe, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { setDefaultTimeout, afterAll, describe, expect, test } from "bun:test";
 import { randomUUID } from "node:crypto";
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -6,13 +11,15 @@ import { join } from "node:path";
 import { bunSessionPaths } from "../harness/tui-bun-backend.ts";
 import { ensurePrivateRoot, privateDirectoryIdentity, publishTuiRecord } from "../harness/tui-record-file.ts";
 
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
 const root = mkdtempSync(join(tmpdir(), "aidlc-native-namespace-posix-"));
 const driver = join(import.meta.dir, "../harness/tui-drive.ts");
 const env = { ...process.env, AIDLC_TUI_BACKEND: "bun", AIDLC_TUI_BUN_ROOT: root };
 
 async function drive(args: string[], extraEnv: NodeJS.ProcessEnv = {}) {
   const child = Bun.spawn([process.execPath, driver, ...args], {
-    env: { ...env, ...extraEnv }, stdout: "pipe", stderr: "pipe", timeout: 20_000,
+    env: { ...env, ...extraEnv }, stdout: "pipe", stderr: "pipe", timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
   });
   const [code, stdout, stderr] = await Promise.all([
     child.exited, new Response(child.stdout).text(), new Response(child.stderr).text(),
@@ -50,7 +57,7 @@ describe.skipIf(process.platform !== "linux" && process.platform !== "darwin")("
     writeFileSync(paths.record, "untrusted bytes", { mode: 0o600 });
     chmodSync(paths.directory, 0o777);
     const child = Bun.spawn([process.execPath, join(import.meta.dir, "../harness/tui-bun-backend.ts"), "--daemon", paths.directory, randomUUID()], {
-      env: childEnv, stdout: "pipe", stderr: "pipe", timeout: 5000,
+      env: childEnv, stdout: "pipe", stderr: "pipe", timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     });
     const [code, stderr] = await Promise.all([child.exited, new Response(child.stderr).text()]);
     expect(code).not.toBe(0);

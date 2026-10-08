@@ -1,7 +1,12 @@
 // covers: file:core/tools/aidlc-plugin-create.ts
 
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
 import { createHash } from "node:crypto";
-import { afterAll, describe, expect, test } from "bun:test";
+import { afterAll, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
   cpSync,
@@ -16,6 +21,8 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const SOURCE_TOOLS = join(
@@ -47,6 +54,7 @@ interface Run {
 
 function run(tool: string, args: string[], cwd = scratch): Run {
   const result = spawnSync(process.execPath, [tool, ...args], {
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     cwd,
     encoding: "utf-8",
   });
@@ -191,7 +199,7 @@ describe("t317 standalone plugin creator", () => {
     );
     expect(testJson.idempotent).toBe(true);
     expect(treeDigest(installRoot)).toBe(before);
-  }, process.platform === "win32" ? 20_000 : 5_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("non-empty targets and invalid names are refused without writes", () => {
     const name = "occupied-plugin";
