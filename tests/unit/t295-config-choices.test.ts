@@ -757,6 +757,29 @@ describe("t295 flags section", () => {
     expect(named).toContain("2 open workflows (default/evil, default/active-flags) pick this up from the next step");
   });
 
+  test("clearing a switch no file records says the check stays off when the open work keeps it off", () => {
+    const project = install();
+    const intents = join(project, "aidlc", "spaces", "default", "intents");
+    const dirName = "held-off";
+    mkdirSync(join(intents, dirName), { recursive: true });
+    writeFileSync(join(intents, "active-intent"), `${dirName}\n`);
+    writeFileSync(
+      join(intents, dirName, "aidlc-state.md"),
+      "# AI-DLC State Tracking\n\n## Project Information\n- **Scope**: classic\n\n## Runtime State\n- **Guard Policy**: off (set by you)\n\n## Current Status\n- **Status**: Running\n",
+    );
+    const cleared = run(
+      ["config", "flags", "--project-dir", project, "--clear-bypass", "AIDLC_DISABLE_REVIEW_FREEZE_HOOK", "--yes"],
+      project,
+      runtimeEnv(),
+    );
+    expect(cleared.status, cleared.stdout + cleared.stderr).toBe(0);
+    expect(cleared.stdout).toContain(
+      "The review freeze check (it stops edits to work you already approved) is not recorded for this project, but it is off for this piece of work: ",
+    );
+    expect(cleared.stdout).not.toContain("nothing to turn back on");
+    expect(existsSync(join(project, "aidlc.settings.local.json"))).toBe(false);
+  });
+
   test("a bypass typed without a layer is the person's own, and a clear finds where it is recorded", () => {
     const project = install();
     const flags = (...args: string[]) => run(
@@ -774,6 +797,30 @@ describe("t295 flags section", () => {
       "The review freeze check (it stops edits to work you already approved) is not off for this project, so there is nothing to turn back on.",
     );
     expect(existsSync(join(project, "aidlc.settings.local.json"))).toBe(false);
+    // The one-line answer is only for a clear and nothing else: a mistyped
+    // switch keeps its names error, and a change riding beside the clear is made.
+    const typo = flags("--clear-bypass", "AIDLC_DISABLE_REVIEW_FREEZE", "--yes");
+    expect(typo.status).toBe(2);
+    expect(typo.stdout + typo.stderr).toContain("--clear-bypass must be one of");
+    expect(typo.stdout + typo.stderr).not.toContain("nothing to clear");
+    const beside = flags("--clear-bypass", "AIDLC_DISABLE_REVIEW_FREEZE_HOOK", "--question-retention-days", "1", "--local", "--yes");
+    expect(beside.status, beside.stdout + beside.stderr).toBe(0);
+    expect(beside.stdout).toContain("Recorded question retention (days) 1 in aidlc.settings.local.json.");
+    expect(beside.stdout).not.toContain("nothing to turn back on");
+    expect(resolvedFlags(project)?.questionRetentionDays).toBe(1);
+    // The line is true: a switch the environment sets, or a check the piece of
+    // work keeps off, is off whatever the files record.
+    const fromEnv = run(
+      ["config", "flags", "--project-dir", project, "--clear-bypass", "AIDLC_DISABLE_REVIEW_FREEZE_HOOK", "--yes"],
+      project,
+      runtimeEnv({ AIDLC_DISABLE_REVIEW_FREEZE_HOOK: "1" }),
+    );
+    expect(fromEnv.status, fromEnv.stdout + fromEnv.stderr).toBe(0);
+    expect(fromEnv.stdout).toContain(
+      "The review freeze check (it stops edits to work you already approved) is not recorded for this project, but it is off: " +
+        "AIDLC_DISABLE_REVIEW_FREEZE_HOOK=1 is set in the environment this command ran in.",
+    );
+    expect(fromEnv.stdout).not.toContain("nothing to turn back on");
     const mine = flags("--bypass", "AIDLC_DISABLE_SENSORS");
     expect(mine.status, mine.stdout + mine.stderr).toBe(0);
     expect(mine.stdout).toContain("Recorded AIDLC_DISABLE_SENSORS in aidlc.settings.local.json.");

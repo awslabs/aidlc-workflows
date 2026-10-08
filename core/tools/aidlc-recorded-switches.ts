@@ -353,6 +353,29 @@ export function recordSwitchChange(
   return lines;
 }
 
+/**
+ * The one line for a `--clear-bypass` of a switch no settings file records.
+ * It makes the two checks a real clear makes, so it never says a check is on
+ * while something else keeps it off: the environment this command ran in, or
+ * the open piece of work (its scope or Guard Policy, the default under off).
+ */
+export function unrecordedSwitchLine(
+  projectDir: string,
+  name: RecordableProjectBypass,
+  env: NodeJS.ProcessEnv = process.env,
+): string {
+  const label = PERSON_CHECK_SWITCH_LABELS[name];
+  if (label === undefined) return `${name} is not recorded for this project, so there is nothing to clear.`;
+  const named = `The ${label}${settingPurpose(label)} is not recorded for this project`;
+  if (env[name] === "1") {
+    return `${named}, but it is off: ${name}=1 is set in the environment this command ran in. ` +
+      "Start the editor or CLI without it to turn the check back on.";
+  }
+  const held = heldOffByWork(projectDir, name);
+  if (held !== null) return `${named}, but it is off for this piece of work: ${held.source}.`;
+  return `The ${label}${settingPurpose(label)} is not off for this project, so there is nothing to turn back on.`;
+}
+
 // What still keeps a check off for the open piece of work once its switch is
 // cleared, in the words `config get` shows: its scope or its Guard Policy.
 // Null when nothing does, or nothing can be read: it only words a line.

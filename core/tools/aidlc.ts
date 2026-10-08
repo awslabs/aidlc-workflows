@@ -2899,6 +2899,30 @@ export function terminalDispatcherArgv(command: {
   return publicTop ? [command.subcommand, ...forwarded] : ["engine", command.subcommand, ...forwarded];
 }
 
+/**
+ * `config set|get|list` typed at a terminal are the engine's verbs for the
+ * piece of work: the same argv with `engine` in front, so route policy, the
+ * major check, pin dispatch and the launcher's pin classification all see one
+ * route (in a project pinned to another release, the pinned engine writes the
+ * work's settings). Global flags before the command stay where they are. Any
+ * other `config` argv (the install sections) is returned unchanged.
+ */
+export function normalizeTopLevelConfigVerbs(argv: readonly string[]): string[] {
+  for (let index = 0; index < argv.length; index++) {
+    const token = argv[index];
+    if (token === "--project-dir") {
+      index++;
+      continue;
+    }
+    if (LAUNCHER_GLOBAL_FLAGS.has(token) || token === "--no-color") continue;
+    if (token === "config" && ["set", "get", "list"].includes(argv[index + 1] ?? "")) {
+      return [...argv.slice(0, index), "engine", ...argv.slice(index)];
+    }
+    return [...argv];
+  }
+  return [...argv];
+}
+
 export function routePolicyFor(argv: readonly string[]): Route | null {
   const clean = withoutProjectDirFlag(argv);
   const head = clean[0];
@@ -3416,8 +3440,8 @@ export async function main(rawArgv: string[]): Promise<void> {
     return;
   }
   // Canonicalized before route policy so stdin buffering, pinning, and
-  // dispatch see `engine hook`.
-  const argv = canonicalizeLegacyCopilotHookArgv(rawArgv);
+  // dispatch see `engine hook`, and `config set|get|list` as `engine config`.
+  const argv = normalizeTopLevelConfigVerbs(canonicalizeLegacyCopilotHookArgv(rawArgv));
   process.exitCode = 0;
   bufferedStdin = null;
   const tracedHook = tracedHookRoute(argv);

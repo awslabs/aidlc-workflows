@@ -271,7 +271,6 @@ import {
 import { committedRecordIgnoreConflicts } from "./aidlc-gitignore.ts";
 import {
   LOCAL_SETTINGS_FILE,
-  PERSON_CHECK_SWITCH_LABELS,
   invalidateSettingsCache,
   modelPolicyForHarness,
   readSettingsTarget,
@@ -279,7 +278,6 @@ import {
   resolveAidlcSettingsWithOverride,
   serializeAidlcSettings,
   settingsModelsFromHarnessPolicy,
-  settingPurpose,
   settingsPathForTarget,
   settingsSource,
   updateSettingsSection,
@@ -288,7 +286,7 @@ import {
   type ResolvedAidlcSettings,
   type SettingsTarget,
 } from "./aidlc-settings.ts";
-import { recordSwitchChange, switchesOffLines } from "./aidlc-recorded-switches.ts";
+import { recordSwitchChange, switchesOffLines, unrecordedSwitchLine } from "./aidlc-recorded-switches.ts";
 
 type RootContribution =
   | { policy: "managed-block"; hash: string; marker?: string }
@@ -10708,21 +10706,29 @@ function afterProjectSettings(
 /**
  * A `--clear-bypass` of switches that no settings file records would change
  * nothing, yet the flags path would still create a file and say how open work
- * picks the change up. Returns the one line per switch that says what is true,
- * or null when the request is anything else (an add, a clear of a recorded
- * switch, or other flags).
+ * picks the change up. When the command is ONLY such clears (plus --yes, a
+ * layer, --project-dir and the output mode), say what is true in one line per
+ * switch and write nothing. Anything else takes the normal path: a name that
+ * is not a switch keeps its error, a change riding beside the clear is made.
  */
 function unrecordedClearLines(argv: readonly string[], projectDir: string): string[] | null {
-  const clears = valuesAfter(argv, "--clear-bypass");
-  if (clears.length === 0 || valuesAfter(argv, "--bypass").length > 0) return null;
-  if (!settingsProjectAvailable(projectDir)) return null;
+  const clears: string[] = [];
+  for (let index = 0; index < argv.length; index++) {
+    const token = argv[index];
+    if (token === "--clear-bypass" || token === "--project-dir") {
+      const value = argv[index + 1];
+      if (value === undefined || value.startsWith("--")) return null;
+      if (token === "--clear-bypass") clears.push(value);
+      index++;
+      continue;
+    }
+    if (["--yes", "--local", "--project", "--global", "--json", "--quiet", "--no-color"].includes(token)) continue;
+    return null;
+  }
+  if (clears.length === 0 || !settingsProjectAvailable(projectDir)) return null;
+  if (!clears.every((name) => (RECORDABLE_PROJECT_BYPASSES as readonly string[]).includes(name))) return null;
   if (!clears.every((name) => layersRecordingBypass(projectDir, name).length === 0)) return null;
-  return clears.map((name) => {
-    const label = PERSON_CHECK_SWITCH_LABELS[name as RecordableProjectBypass];
-    return label
-      ? `The ${label}${settingPurpose(label)} is not off for this project, so there is nothing to turn back on.`
-      : `${name} is not recorded for this project, so there is nothing to clear.`;
-  });
+  return clears.map((name) => unrecordedSwitchLine(projectDir, name as RecordableProjectBypass));
 }
 
 function recordBypassesOnly(

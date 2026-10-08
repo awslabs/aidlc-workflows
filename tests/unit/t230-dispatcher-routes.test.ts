@@ -40,6 +40,7 @@ import {
   renderNamespaceHelp,
   resolveAction,
   resolveHookPath,
+  normalizeTopLevelConfigVerbs,
   routePolicyFor,
 } from "../../core/tools/aidlc.ts";
 import { validatePublicConfigArgs } from "../../core/tools/aidlc-init.ts";
@@ -2413,6 +2414,27 @@ describe("t230 dispatcher route completeness", () => {
       "versions-prune": { networkPolicy: "forbidden", mutationScope: "machine" },
       "workspace-sync": { networkPolicy: "required", mutationScope: "project" },
     });
+  });
+
+  test("top-level config set|get|list are the engine's verbs for route policy and pin dispatch", () => {
+    // main() rewrites them before route policy, so in a project pinned to
+    // another release the pinned engine writes the work's settings, and the
+    // launcher's pin classification (launcherRouteUsesPin) agrees.
+    for (const argv of [
+      ["config", "set", "guard.review-freeze", "off"],
+      ["config", "get", "depth"],
+      ["config", "list"],
+      ["--project-dir", "/tmp/example", "config", "set", "depth", "minimal", "--json"],
+    ]) {
+      const normalized = normalizeTopLevelConfigVerbs(argv);
+      expect(normalized, argv.join(" ")).toEqual([...argv.slice(0, argv.indexOf("config")), "engine", ...argv.slice(argv.indexOf("config"))]);
+      expect(routePolicyFor(normalized), argv.join(" ")).toEqual(expect.objectContaining({ id: "config", pinPolicy: "pinned" }));
+      expect(launcherRouteUsesPin(normalized), argv.join(" ")).toBe(true);
+    }
+    // The install sections keep their own route.
+    for (const argv of [["config"], ["config", "models", "--show"], ["config", "--pin", "2.10.0"], ["engine", "config", "list"]]) {
+      expect(normalizeTopLevelConfigVerbs(argv), argv.join(" ")).toEqual(argv);
+    }
   });
 
   test("aliases and system delegates resolve policy from the route registry", () => {
