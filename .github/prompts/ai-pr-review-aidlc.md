@@ -12,12 +12,17 @@ be re-derived from the trusted base tree and immutable head snapshot.
 - Reconstruct every affected caller, writer, reader, fallback, persisted
   representation, state transition, audit record, receipt, hook, protocol, and
   trust boundary.
-- Challenge missing, malformed, stale, forged, conflicting, and partially
-  written input. Check interruption, retry, restart, idempotency, concurrency,
-  cleanup, rollback, old persisted state, and mixed-version operation.
-- Check relative and absolute paths, symlinks, multiple repositories, ambiguous
-  selectors, validation after mutation, silent fallback, fail-open behavior,
-  and authority bypasses when reachable.
+- Challenge the inputs a normal run produces: missing, stale, or old-format
+  state after an upgrade; an interrupted, retried, or resumed session; a second
+  chat on the same work; a Windows or CRLF checkout; a team clone; mixed
+  release versions across a team. Do not report forged records, hand-made
+  files, races between processes, or failing disks and writes (out of scope in
+  the shared contract).
+- Check relative and absolute paths, links the person's own setup uses (a
+  dotfiles link, a linked worktree), multiple repositories, ambiguous
+  selectors, validation after mutation, and silent fallback where a normal run
+  reaches them. A guard that fails toward the person's last instruction is the
+  intended design (AGENTS.md, Guards), not a defect.
 - Verify authored `core/` or `harness/` sources, generated projections, model
   contracts, documentation, and all affected harnesses remain consistent.
 - Enforce the repository release metadata policy. Feature, fix, documentation,
@@ -31,8 +36,9 @@ be re-derived from the trusted base tree and immutable head snapshot.
 - Compare the current base for work that supersedes, duplicates, or invalidates
   the proposed implementation.
 
-Report only defects caused or left unresolved by this head. Each candidate must
+Report only defects this head causes or makes worse; a gap the base already
+has is a "Pre-existing:" P2 at most (shared contract). Each candidate must
 identify the trigger, execution path, observable result, violated contract, and
-required correction. Consolidate shared root causes and discard speculation,
+suggested fix. Consolidate shared root causes and discard speculation,
 duplicate findings, unchanged-line nits, and findings conclusively owned by
 deterministic CI.

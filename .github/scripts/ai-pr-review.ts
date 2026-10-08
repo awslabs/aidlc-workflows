@@ -48,7 +48,9 @@ export type FindingCategory =
   | "contracts"
   | "workflow-state"
   | "correctness";
-export type ReviewEvent = "COMMENT" | "REQUEST_CHANGES";
+// AIDA is advisory: it never requests changes, so a review never blocks a
+// merge. The decision marker and the aida:* labels carry the next action.
+export type ReviewEvent = "COMMENT";
 export type DiffSide = "LEFT" | "RIGHT";
 export type PullRequestDecision =
   | { actor: "author"; action: "change"; rationale: string }
@@ -500,11 +502,12 @@ export function reconcileReviewLabels(
 export type RefreshOutcome = "applied" | "moved" | "no-review";
 
 // Applies a verdict re-derived from the findings ledger to every surface a
-// command owns for the reviewed head: the managed labels and the bot's review
-// state. `change` needs an active CHANGES_REQUESTED review from the bot on the
-// head (a stale merge review cannot be dismissed, so a blocking one is posted
-// under the same context); `merge` dismisses the bot's blocking reviews. The
-// workflow check of the original run is not rewritten.
+// command owns for the reviewed head: the managed labels, and the bot's review
+// state. AIDA is advisory, so for either decision the gate converges to no
+// blocking review from the bot on the head: a CHANGES_REQUESTED review left
+// from before AIDA stopped requesting changes is dismissed, and none is ever
+// posted. The labels carry the decision. The workflow check of the original
+// run is not rewritten.
 export function refreshVerdict(
   repository: string,
   pullRequest: number,
@@ -538,49 +541,28 @@ export function refreshVerdict(
     const reviews = reviewsForHead();
     if (reviews.length === 0) return "no-review";
     const blocking = reviews.filter(review => text(review.state) === "CHANGES_REQUESTED");
-    if (decision === "merge") {
-      for (const review of blocking) {
-        ghRaw(
-          [
-            "api",
-            "--method",
-            "PUT",
-            `repos/${repository}/pulls/${pullRequest}/reviews/${integer(review.id, "review id")}/dismissals`,
-            "--input",
-            "-",
-          ],
-          ghExecutable,
-          `${JSON.stringify({ message: `The decision for this head was re-derived as maintainer/merge from the findings ledger (${reason}).` })}\n`,
-        );
-      }
-    } else if (blocking.length === 0) {
-      const contextMatch = /<!-- ai-pr-review context=([0-9a-f]{64}) -->/.exec(text(reviews[0].body));
-      if (!contextMatch) return "no-review";
-      const body = [
-        `<!-- ai-pr-review context=${contextMatch[1]} -->`,
-        "<!-- ai-pr-review decision=author/change -->",
-        `The decision for \`${head}\` was re-derived as **author/change** from the findings ledger (${reason}). The open blocking findings are listed in the ledger comment; the earlier review body stays as the assessment of this head.`,
-        "",
-        "Reviewed by AIDA (AI-DLC Developer Agent).",
-        "",
-        `[AI-PR-REVIEWED] ${head}`,
-      ].join("\n");
+    for (const review of blocking) {
       ghRaw(
-        ["api", "--method", "POST", `repos/${repository}/pulls/${pullRequest}/reviews`, "--input", "-"],
+        [
+          "api",
+          "--method",
+          "PUT",
+          `repos/${repository}/pulls/${pullRequest}/reviews/${integer(review.id, "review id")}/dismissals`,
+          "--input",
+          "-",
+        ],
         ghExecutable,
-        `${JSON.stringify({ commit_id: head, event: "REQUEST_CHANGES", body })}\n`,
+        `${JSON.stringify({ message: `AIDA is advisory and no longer requests changes; the decision for this head is ${decision === "merge" ? "maintainer/merge" : "author/change"} (${reason}).` })}\n`,
       );
     }
 
-    const gateApplied = reviewsForHead().some(review => text(review.state) === "CHANGES_REQUESTED") ===
-      (decision === "change");
+    const gateApplied = !reviewsForHead().some(review => text(review.state) === "CHANGES_REQUESTED");
     if (!gateApplied) continue;
     if (!reconcileReviewLabels(repository, pullRequest, desiredLabels, head, ghExecutable)) {
       return "moved";
     }
     const labelsApplied = currentReviewLabelOutcome(repository, pullRequest, head, ghExecutable) === desiredLabels;
-    const gateStillApplied = reviewsForHead().some(review => text(review.state) === "CHANGES_REQUESTED") ===
-      (decision === "change");
+    const gateStillApplied = !reviewsForHead().some(review => text(review.state) === "CHANGES_REQUESTED");
     if (labelsApplied && gateStillApplied) return "applied";
   }
   throw new Error("review gate and labels did not converge after 3 attempts");
@@ -1674,10 +1656,9 @@ export function applyLedgerToReview(
       ? new Set(review.scope.files.flatMap(file => [file.path, ...(file.previousPath ? [file.previousPath] : [])]))
       : null;
   const result = reconcileLedger(loaded, inputs, review.head, at, presence, dispositions, changedFiles);
-  // The ledger's effective priority wins: a restatement never lowers an open
-  // finding's priority.
-  // The ledger's effective priority (and the title that came with it, when a
-  // duplicate raised the entry) wins over the restatement's own.
+  // The ledger's effective priority wins: the judge's current rating of the
+  // restatement (which may lower the entry), or the higher one a duplicate
+  // restatement in the same review raised it to, with its title.
   const kept = result.kept.map(entry => ({ ...entry.finding, priority: entry.priority, title: entry.title, ledgerId: entry.ledgerId }));
   // Every retained entry is rendered; only blocking ones bear on the verdict.
   const retained = result.retained;
@@ -1687,7 +1668,7 @@ export function applyLedgerToReview(
   let decision = review.decision;
   let decisionAdjusted = false;
   // The action is always re-derived from EFFECTIVE state after reconciliation:
-  // kept findings at the ledger's priority (a P1 restated as P2 is still a P1)
+  // kept findings at the ledger's priority (a P1 restated as P2 is now a P2)
   // plus retained blockers. Same one-line rule a later /aida command applies.
   const keptBlocking = kept.filter(finding => isBlocking(finding.priority));
   const derived = deriveDecision(retainedBlocking.length + keptBlocking.length);
@@ -1905,7 +1886,7 @@ export function renderReview(review: StructuredReview, contextId: string): Revie
       "",
       `Impact: ${markdownText(finding.impact)}`,
       "",
-      `Required correction: ${markdownText(finding.requiredCorrection)}`,
+      `Suggested fix: ${markdownText(finding.requiredCorrection)}`,
     );
   };
   const blocking = review.findings.filter(
@@ -1930,7 +1911,7 @@ export function renderReview(review: StructuredReview, contextId: string): Revie
         summary.resolvedByJudge.length > 0 ? ` (${summary.resolvedByJudge.join(", ")} declared corrected by the judge)` : ""
       }${summary.undisposed.length > 0 ? `; ${summary.undisposed.length} open entr${summary.undisposed.length === 1 ? "y" : "ies"} left undisposed by the judge (${summary.undisposed.join(", ")})` : ""}${
         summary.unverifiedResolutions.length > 0
-          ? `; the judge declared ${summary.unverifiedResolutions.join(", ")} corrected but the cited code and files are unchanged, so ${summary.unverifiedResolutions.length === 1 ? "it stays" : "they stay"} retained until a maintainer accepts`
+          ? `; the judge declared ${summary.unverifiedResolutions.join(", ")} corrected but the cited code and files are unchanged, so ${summary.unverifiedResolutions.length === 1 ? "it stays" : "they stay"} retained until a maintainer accepts or rejects ${summary.unverifiedResolutions.length === 1 ? "it" : "them"}`
           : ""
       }.${
         summary.decisionAdjusted ? " The next decision was re-derived from the ledger." : ""
@@ -1993,7 +1974,7 @@ export function renderReview(review: StructuredReview, contextId: string): Revie
       "",
       "## Retained blocking findings",
       "",
-      "Open P0/P1 findings from the ledger that this review did not restate and whose cited code is unchanged. They keep the next action with the author until the code changes or a maintainer accepts them.",
+      "Open P0/P1 findings from the ledger that this review did not restate and whose cited code is unchanged. They keep the next action with the author until the code changes or a maintainer accepts or rejects them.",
     );
     for (const entry of retainedBlockingEntries) {
       const paths = [...new Set(entry.anchors.map(anchor => anchor.path).filter((path): path is string => Boolean(path)))];
@@ -2041,11 +2022,7 @@ export function renderReview(review: StructuredReview, contextId: string): Revie
     "",
     `[AI-PR-REVIEWED] ${review.head}`,
   );
-  const retainedBlocking = (review.ledger?.retained.some(entry => entry.priority === "P0" || entry.priority === "P1")) ?? false;
-  const event = retainedBlocking ||
-      review.findings.some(item => item.priority === "P0" || item.priority === "P1")
-    ? "REQUEST_CHANGES"
-    : "COMMENT";
+  const event: ReviewEvent = "COMMENT";
   const body = lines.join("\n");
   assertReviewBodyMarkers(body);
   return { commit_id: review.head, body, event };

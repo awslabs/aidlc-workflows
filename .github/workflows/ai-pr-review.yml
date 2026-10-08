@@ -297,7 +297,7 @@ jobs:
               --repo "$REPO" --pr "$PR_NUMBER")"
             case "$(jq -r .decision <<<"$ledger_verdict")" in
               merge) label_outcome="reviewed-merge"; EXISTING_STATE="COMMENTED" ;;
-              change) label_outcome="reviewed-change"; EXISTING_STATE="CHANGES_REQUESTED" ;;
+              change) label_outcome="reviewed-change"; EXISTING_STATE="COMMENTED" ;;
             esac
           fi
           if [ -n "$label_outcome" ] \
@@ -307,10 +307,6 @@ jobs:
               --pr "$PR_NUMBER" \
               --expected-head "$HEAD_SHA" \
               --outcome "$label_outcome"
-          fi
-          if [ "$EXISTING_STATE" = "CHANGES_REQUESTED" ]; then
-            echo "::error::The existing SHA-bound AI review still requests changes"
-            exit 1
           fi
 
       - name: Install pinned review CLIs
@@ -732,20 +728,10 @@ jobs:
               --input .ai-pr-review-final/review.json --jq '.id')"
           else
             echo "Review context $CONTEXT_ID was already published as review $existing"
-            if [ "$existing_state" = "CHANGES_REQUESTED" ]; then
-              EVENT="REQUEST_CHANGES"
-            else
-              EVENT="COMMENT"
-            fi
           fi
 
           canonical_pr > /tmp/latest-pr.json
           if ! cmp -s .ai-review-context/pr.json /tmp/latest-pr.json; then
-            latest_head="$(jq -r '.head.sha' /tmp/latest-pr.json)"
-            if [ "$EVENT" = "REQUEST_CHANGES" ] && [ -n "$published" ]; then
-              gh api --method PUT "repos/$REPO/pulls/$PR_NUMBER/reviews/$published/dismissals" \
-                -f message="Dismissed because the PR advanced to $latest_head during publication" >/dev/null
-            fi
             echo "::error::PR metadata or revisions changed during publication"
             exit 1
           fi
@@ -759,10 +745,6 @@ jobs:
           if ! cmp -s \
             .ai-review-context/discussion-identity.json \
             /tmp/latest-discussion-identity.json; then
-            if [ "$EVENT" = "REQUEST_CHANGES" ] && [ -n "$published" ]; then
-              gh api --method PUT "repos/$REPO/pulls/$PR_NUMBER/reviews/$published/dismissals" \
-                -f message="Dismissed because the authoritative PR conversation changed during publication" >/dev/null
-            fi
             echo "::error::Authoritative PR conversation changed during publication"
             exit 1
           fi
@@ -788,19 +770,18 @@ jobs:
           fi
           live_verdict="$(bun .ai-review-controls/scripts/ai-pr-ledger.ts verdict \
             --repo "$REPO" --pr "$PR_NUMBER")"
+          # AIDA is advisory: a P0 or P1 sets author/change on the labels and the
+          # ledger, never a blocking review and never a failed run.
           case "$(jq -r .decision <<<"$live_verdict")" in
-            change) EVENT="REQUEST_CHANGES" ;;
-            merge) EVENT="COMMENT" ;;
+            change)
+              echo "::notice::AIDA found a P0 or P1 finding; the next action is the author's (advisory)"
+              ;;
+            merge) ;;
             *)
               echo "::error::The live ledger has no verdict for $HEAD_SHA"
               exit 1
               ;;
           esac
-
-          if [ "$EVENT" = "REQUEST_CHANGES" ]; then
-            echo "::error::AI review found a P0 or P1 issue"
-            exit 1
-          fi
 
       - name: Restore AIDA review labels after cancellation
         if: >-

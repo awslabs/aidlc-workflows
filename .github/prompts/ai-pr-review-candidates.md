@@ -8,8 +8,8 @@ GitHub verdict. For each candidate use:
 
 Evidence: `path/to/file:line-range` and any related locations.
 Problem: concrete condition -> execution or workflow path -> observable failure.
-Impact: affected user or contract and why this priority fits.
-Required correction: exact behavior and authoritative surfaces to reconcile.
+Impact: who meets it on which normal-run path, and why this priority fits.
+Suggested fix: the smallest change that keeps the person in charge (judge rules).
 ```
 
 Order candidates P0 through P3. Merge candidates with one root cause. If the

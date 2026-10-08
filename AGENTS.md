@@ -5,13 +5,24 @@ Development Life Cycle) methodology that ships to many CLI harnesses — today
 Claude Code, Kiro CLI, Kiro IDE, Codex CLI, Cursor, opencode, and GitHub Copilot, and any capable CLI you port it to — from
 a single hand-authored source.
 
-## Tenets: the human drives
+## Tenets: the human drives the engine
 
-**Tools for determinism, LLM for knowledge, human for judgement.**
+**The human drives the engine. Tools for determinism. LLM for knowledge. Human for judgement.**
 
 Every design, change, review finding, and question in this repository follows
-these three tenets:
+these four tenets, in this order. The first wins any conflict: no tool
+determinism, guard, or security concern overrides what the person explicitly
+asked for in their own project.
 
+- **The human drives the engine.** AI-DLC is a tool the person runs on their
+  own machine, in a project they chose, with their own coding agent, to drive
+  their own work. When they ask for something, the engine does it and says in
+  one line what happened. Their machine, shell and environment, git setup and
+  hooks, editor and host-tool settings, installed plugins, the project's files,
+  and their own words are theirs: AI-DLC works with them as they are and never
+  overrides or second-guesses them for its own safety. AI-DLC owns its engine,
+  its record of the work, what it tells the agent, and what it ships, and it
+  answers for those.
 - **Tools for determinism.** The engine and hooks do what must be exact and
   repeatable: record that a message arrived through the person's own prompt, in
   order, and not from the agent or a helper (an observed interaction, not proof
@@ -29,7 +40,7 @@ these three tenets:
 - **Human for judgement.** Where a decision needs judgement, the person makes
   it: what to build, whether the work is right, what to trade off, and when to
   stop. Nothing that knowledge or the tools can settle is put to the person, so
-  their attention goes only where they alone can decide. The human drives.
+  their attention goes only where they alone can decide.
 
 Think of AI-DLC as a software factory the person runs. Scopes are the production
 lines, stages are the stations on a line, and agents are the workers at each
@@ -64,6 +75,17 @@ mechanism decides whether the approval still holds (for Plan Approval, the
 contract in `docs/reference/06-hooks-and-tools.md`, "Plan-Approval Guard
 Hook"), and the flow never loops on it and never asks the person to approve
 again what that mechanism says still holds.
+
+**What guards are for.** Guards keep an honest agent on the person's path when
+it runs ahead, skips a step, or misreads (no build before the plan is approved,
+no decision recorded that the person did not make, no lost words). They are not
+a jail for an agent that deliberately works around them: the host tool's own
+permission prompts, the plan question, and the person watching are that layer.
+The person asking for something is never a bypass. AI-DLC's own engine must
+never leak the person's secrets, run a command nobody asked for, write or delete
+outside the project, or change the install or the person's settings unasked;
+that is AI-DLC answering for its own code, not defending against the person's
+setup or the project they chose to work in.
 
 **One owner per rule.** Every invariant (approval, transition, presence, the
 plan fingerprint) has one owner and one shared check. Enforcing that check at

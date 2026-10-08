@@ -15,8 +15,10 @@ Read `.ai-review-context/review-scope.json` before reviewing.
   do not re-review it and do not report findings about it — the publisher
   defers any such finding and it never affects the decision.
 
-Findings about security boundaries, prompt attacks, authorization, credentials,
-or trust are exempt: the security lenses always review the full head and their
-candidates are never deferred, and neither is any finding that cites a line one
+Findings in the security category (delivery and CI security, prompt attacks on
+this review, and AI-DLC's own code leaking a secret, running a command nobody
+asked for, or writing outside the project in a normal run) are exempt: the
+security lenses always review the full head and their candidates are never
+deferred, and neither is any finding that cites a line one
 of those lenses cited. If you notice such a defect outside your scope, name it
 in one line as a pointer for the security lens instead of a candidate.

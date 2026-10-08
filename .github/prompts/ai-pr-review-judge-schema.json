@@ -277,12 +277,14 @@
         "impact": {
           "type": "string",
           "minLength": 1,
-          "maxLength": 1500
+          "maxLength": 1500,
+          "description": "Who meets it, on which normal-run path (one sentence), and why this priority fits."
         },
         "requiredCorrection": {
           "type": "string",
           "minLength": 1,
-          "maxLength": 2000
+          "maxLength": 2000,
+          "description": "A suggested fix, rendered as Suggested fix: it keeps the person in charge and never adds a refusal, re-ask, or step to their explicit request."
         }
       }
     },

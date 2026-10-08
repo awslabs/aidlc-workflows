@@ -13,14 +13,17 @@ The direction to preserve is:
 - The workflow derives the appropriate scope from that intent and carries the
   work through the stations and gates the outcome needs. Scope can be small or
   broad, but it must remain explicit, traceable, and bounded by the workflow.
-- Tools for determinism, LLM for knowledge, human for judgement (the tenets in
-  `AGENTS.md`). The engine and hooks own state, the observed prompt channel and
-  its order, the person's words as the host delivers them, receipts, chains,
-  and the audit trail. The agent owns reading the person, answering,
-  applying instructions, and the station's work. The person owns judgement:
+- The human drives the engine: the first of the four tenets in `AGENTS.md`,
+  and it wins any conflict with the other three. AI-DLC runs on the person's
+  own machine, in their own project; their setup, their project, and their
+  words are theirs. An explicit request is done and reported in one line.
+- Tools for determinism, LLM for knowledge, human for judgement (the other
+  three tenets in `AGENTS.md`). The engine and hooks own state, the observed
+  prompt channel and its order, the person's words as the host delivers them,
+  receipts, chains, and the audit trail. The agent owns reading the person,
+  answering, applying instructions, and the station's work. The person owns judgement:
   what to build, whether it is right, trade-offs, and when to stop.
-- The human drives. An explicit request is done and reported in one line.
-  Guards aim at agent actions, name the exact next step, carry a human key, and
+- Guards aim at agent actions, name the exact next step, carry a human key, and
   fail toward the person's last recorded instruction when their own
   coordination bookkeeping is lost (a command claim, a lock, a project-identity
   hash). Evidence that selects or binds a human decision (an approval record,
@@ -29,7 +32,9 @@ The direction to preserve is:
   and the flow never loops on it.
   Explicit locks (a strict Guard Policy held in memory, an unattended run)
   outrank one chat request and are reported as a fact with where to change
-  them, not as a refusal. Defaults are not locks.
+  them, not as a refusal. Defaults are not locks. A guard keeps an honest agent
+  on the person's path; it is not a jail for an agent that deliberately evades
+  it, and it never stops the person's own request.
 - One owner per rule: each invariant has one owner and one shared check, which
   may be enforced at several trust boundaries.
 - AI-DLC is a framework with one hand-authored methodology and contract that is
@@ -40,6 +45,10 @@ The direction to preserve is:
   verified software and the artifacts needed to understand, operate, and evolve
   it. Decisions connect to implementation rather than becoming a disconnected
   set of commands, documents, or conversations.
+
+Read the four tenets first and check each candidate against tenet 1 before the
+others: a change that does what the person explicitly asked is the direction,
+even when it relaxes a guard or a check.
 
 Trace changes that weaken the intent-to-software chain or the tenets. Look for:
 
@@ -63,7 +72,12 @@ Trace changes that weaken the intent-to-software chain or the tenets. Look for:
   shared check enforced at several boundaries is fine);
 - harness-specific behavior that forks the lifecycle or drops engine or human
   output (notices, follow-ups, refusal reasons);
-- an agent bypassing a lifecycle guarantee the person did not waive;
+- an honest agent, following the engine's directive, skipping a lifecycle step
+  the person did not waive (a path that needs the agent to deliberately evade a
+  guard is out of scope);
+- a guard, check, scrub, or "safe default", justified by security or engine
+  integrity, that overrides the person's own setup or stands between the person
+  and what they asked for (P1 when it refuses, re-asks, or loops their request);
 - output that stops before producing or validating the software outcome the
   intent requested.
 

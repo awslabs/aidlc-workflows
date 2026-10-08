@@ -15,6 +15,10 @@ from a prematurely chosen implementation.
 
 ## Direction
 
+Judge the proposal against the four tenets in AGENTS.md, in order: the human
+drives the engine; tools for determinism; LLM for knowledge; human for
+judgement. The first wins any conflict.
+
 AI-DLC is a workflow, a framework, and a software factory. A person starts with
 one intent; the workflow derives an explicit scope and carries it through the
 stages, decisions, artifacts, implementation, validation, and operations needed
