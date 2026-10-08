@@ -52,7 +52,10 @@ describe("t-agent-conduct", () => {
     // helper script to /tmp, ran `cd /tmp; bun -e ...`. In default mode each one is a
     // prompt outside the project, a denial, "Interrupted", and the person typing "keep
     // everything in this folder, carry on".
-    expect(FILE_TOOLS_RULE).toContain("Every file you make stays inside the project");
+    expect(FILE_TOOLS_RULE).toContain("Every file you make on your own, a scratch file, a helper script, a command's output, stays inside the");
+    // The person's own request, and a plan that names a path, are never refused
+    // or re-asked over this: the rule is about the agent's own files.
+    expect(FILE_TOOLS_RULE).toContain("a file the person asks for, or one the plan names, goes where they say");
     expect(FILE_TOOLS_RULE).toContain("/tmp");
     expect(FILE_TOOLS_RULE).toContain("never sent to a file");
     // A live run on a zsh box (every macOS person): `echo ===gitignore` and an unquoted
@@ -73,7 +76,7 @@ describe("t-agent-conduct", () => {
     for (const harness of ["claude", "codex", "copilot", "cursor", "kiro-ide", "kiro", "opencode"]) {
       const skill = readFileSync(join(REPO_ROOT, "harness", harness, "skills", "aidlc", "SKILL.md"), "utf-8");
       expect(skill, harness).toMatch(
-        /Run the engine binary directly via [^.]*\. Every file you make stays inside the project \(nothing in \/tmp or any folder outside it\), and a command's output is read from the tool result, never sent to a file\./,
+        /Run the engine binary directly via [^.]*\. Every file you make on your own, a scratch file, a helper script, a command's output, stays inside the project \(nothing in \/tmp or any folder outside it\), and a command's output is read from the tool result, never sent to a file; a file the person asks for, or one the plan names, goes where they say\./,
       );
     }
   });

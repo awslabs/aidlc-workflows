@@ -2441,8 +2441,10 @@ export const FILE_TOOLS_RULE =
   "`printf`, or `python3` writing a file, no `sed -i`, no `mkdir`; the file-write tool creates any " +
   "missing folder). A command the person asks for, or one the plan names (a package install, a build, " +
   "a scaffolder, a migration, a formatter, a code generator, even a `mkdir`), still runs as written. " +
-  "Every file you make stays inside the project (nothing in /tmp or any folder outside it), and a command's " +
-  "output is read from the tool result, never sent to a file. Quote a pattern meant for the program, not the shell " +
+  "Every file you make on your own, a scratch file, a helper script, a command's output, stays inside the " +
+  "project (nothing in /tmp or any folder outside it), and a command's output is read from the tool result, " +
+  "never sent to a file; a file the person asks for, or one the plan names, goes where they say. " +
+  "Quote a pattern meant for the program, not the shell " +
   "(`--include='*.ts'`), and never start an argument with `=`: zsh, the macOS default shell, stops on both. " +
   "Read, list, and search (your own knowledge files included) with your file tools where you have them; where the shell " +
   "is your only way to read, use one plain read command (no `cd` before it, no pipe or second command " +
