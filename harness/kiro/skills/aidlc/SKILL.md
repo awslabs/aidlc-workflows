@@ -16,7 +16,7 @@ description: >
 
 # AI-DLC Orchestrator (Kiro CLI harness)
 
-**This skill is longer than Kiro shows.** Kiro cuts any result over 30,000 characters, so loading this skill shows only its start and its end. Before your first AI-DLC command, read `{{HARNESS_DIR}}/skills/aidlc/SKILL.md` with your file tool in parts of at most 40 lines (offset and limit), from the first line to the last, unless you already read all of it in this chat.
+**Read all of this file before any AI-DLC command.** Kiro shows only part of a long file, whether it comes as this skill or from a file read, and a read that comes back cut short is not all of it. So read `{{HARNESS_DIR}}/skills/aidlc/SKILL.md` with your file tool in parts of at most 40 lines (offset and limit), from the first line to the last, unless you already read every line of it in this chat.
 
 ## Welcome
 
@@ -373,4 +373,4 @@ The engine reads the compiled `data/stage-graph.json` directly for all routing; 
 
 ## Read all of this skill
 
-If you have not read every line of this file in this chat, do it now: read `{{HARNESS_DIR}}/skills/aidlc/SKILL.md` with your file tool in parts of at most 40 lines (offset and limit), from the first line to the last. Kiro shows only the start and the end of a long skill.
+If you have not read every line of this file in this chat, do it now: read `{{HARNESS_DIR}}/skills/aidlc/SKILL.md` with your file tool in parts of at most 40 lines (offset and limit), from the first line to the last. Kiro shows only part of a long file, and a read that comes back cut short is not all of it.
