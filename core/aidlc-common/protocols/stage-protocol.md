@@ -424,6 +424,14 @@ question.
 ```
 Then present the structured approval question as defined above.
 
+A stage whose artifacts end with decisions only the person can make may list
+them in a fenced `aidlc-decisions` block in a declared artifact (yaml:
+`decisions:` then `- id: <id>` items with `decision:`, `owner:` and
+`blocking:` beside each). The engine records their ids on the gate-open row
+(`Open Decisions`, `Decisions`) and Approve records them as accepted open; a
+block it cannot read is recorded as `unreadable` and stops nothing. Nothing is
+asked of the person for it.
+
 ### Part 4: Progress update (mandatory — after user approves)
 After the user selects "Approve", say the progress line the approval's reply carries as its `narration`, word for word; never count stages yourself. When the reply carries none, say no progress line.
 

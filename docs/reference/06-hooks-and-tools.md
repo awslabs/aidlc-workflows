@@ -2230,7 +2230,11 @@ by `summary`, `review`, or `context` and the mode's flags, including `--stage <s
 `summary` renders the pre-generation confirmation context from the stage graph
 and questions-file path. `review` renders a reviewer-backed gate from the
 engine-owned findings list (replayed from paired review records, gate
-decisions, and Redo receipts) and optional stale-path detail. `context` emits
+decisions, and Redo receipts) and optional stale-path detail. `review` also keeps the
+brief it printed beside the review record (`.aidlc-engine/reviews/<stage>/stage/briefs/<sha256>.md`, or under
+`units/<unit>/` for a Unit's own gate, with `latest.json` naming the newest), so the approval row (and a re-entered
+gate-open row) can record the digest of what the person was shown (`Brief Digest`) and a reader can open exactly that
+text later. `context` emits
 only the open findings to re-check and the settled decisions for a re-review
 dispatch, framed as data; it never includes an earlier reviewer's notes, and
 of fixed findings it includes only decided ones, marked reported fixed, so a

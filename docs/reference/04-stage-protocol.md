@@ -318,6 +318,11 @@ Structured bullet-point summary of what was produced:
 
 Followed by the `AskUserQuestion` approval gate (see Approval Gates section).
 
+A stage whose artifacts end with decisions only the person can make may list them in a fenced `aidlc-decisions` block
+in a declared artifact (yaml: `decisions:` then `- id: <id>` items with `decision:`, `owner:` and `blocking:`). The
+gate-open row records their ids (`Open Decisions`, `Decisions`) and Approve records them as `Decisions Accepted Open`;
+a block the engine cannot read is recorded as `unreadable` and stops nothing.
+
 ### Part 4: Progress Update
 
 After user approves, display before proceeding:

@@ -294,7 +294,7 @@ not the field or enum names.
 
 Completion emoji: :calendar:
 Review path: `<record>/inception/delivery-planning/`
-Approval gate: Approve (proceed to Construction) / Request Changes.
+Approval gate: Approve (Continue to `<directive.next_stage>`, the stage the engine names) / Request Changes.
 
 ## Sensors
 

@@ -167,7 +167,10 @@ question naming both. It is set only for solo work at the first pending block
 stage with at least two stages left; checkpoint-enabled, stage-major, team-owned
 and autonomous gates keep their own flow. Opening that gate records the list on
 `STAGE_AWAITING_APPROVAL` as `Approves Together`, and the reply's `next_stage` is
-the stage after the last listed one. `report --result approved` then approves
+the stage after the last listed one; the same row records that stage's slug as `Next
+Stage`, from the same computation, beside `Brief Digest`, `Sensor State` and `Open
+Decisions` (what the gate asked the person to decide, #2098); `GATE_APPROVED` carries `Brief Digest` (the brief the
+person decided on) and `Decisions Accepted Open`. `report --result approved` then approves
 each listed stage in order: the first `GATE_APPROVED` carries `Approves
 Together`, each later one `Approved Together With: <first stage>` plus the same
 `User Input` and person's words. Every stage still passes its own artifact,
