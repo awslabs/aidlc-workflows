@@ -909,6 +909,8 @@ const MESSAGE_SPENDING_EVENTS: ReadonlySet<string> = new Set([
   "VERIFICATION_COMMAND_RECORDED",
   "CONSTRUCTION_POLICY_RECORDED",
   "QUESTION_UNANSWERED",
+  // A routing answer sends the words before it to the work they named.
+  "REQUEST_ROUTED",
 ]);
 
 function latestSpendingTimestamp(rows: AuditShardEvent[]): string | null {
@@ -934,6 +936,24 @@ function invokingChat(pd: string): string | null {
 // through this chat and is not spent by a later decision, and reads no words.
 // A same-second tie with a spending row favours the message: one message can
 // give an approval and the answers beside it.
+// A message that can answer a question: it carries the person's words, and its
+// turn was not only a command to AIDLC or a question about a switch (the marks
+// the presence check reads on the HUMAN_TURN row).
+function messageIsReply(rows: AuditShardEvent[], message: StoredMessage): boolean {
+  if (message.words === null) return false;
+  for (const row of rows) {
+    if (row.event !== "HUMAN_TURN" || auditBlockField(row.block, "Message Id") !== message.id) continue;
+    const mark = auditBlockField(row.block, "Reply");
+    if (mark === "command" || mark === "question") return false;
+  }
+  return true;
+}
+
+// The chats that have sent messages since the last spending row.
+function chatsSince(pd: string, spentAt: string | null): Set<string> {
+  return new Set(listMessages(pd).filter((m) => spentAt === null || m.at >= spentAt).map((m) => m.session ?? "terminal"));
+}
+
 function proveMessage(pd: string, id: string, what: "answer" | "decision"): { message: StoredMessage } | { refusal: string } {
   const message = isMessageId(id) ? readMessage(pd, id) : null;
   if (message === null) {
@@ -942,7 +962,14 @@ function proveMessage(pd: string, id: string, what: "answer" | "decision"): { me
         "person's message that answered (a refused answer names it), or wait for their reply.",
     };
   }
-  const spentAt = latestSpendingTimestamp(readAuditShardEvents(pd));
+  const rows = readAuditShardEvents(pd);
+  if (!messageIsReply(rows, message)) {
+    return {
+      refusal: `Cannot record this ${what}: message ${id} carried no words of the person's own (a command to AIDLC, ` +
+        "or a message with no words), so it answers nothing. Name a message that carries their reply.",
+    };
+  }
+  const spentAt = latestSpendingTimestamp(rows);
   if (spentAt !== null && message.at < spentAt) {
     return {
       refusal: `Cannot record this ${what}: message ${id} arrived before the last approval or decision (${spentAt}), ` +
@@ -960,9 +987,7 @@ function proveMessage(pd: string, id: string, what: "answer" | "decision"): { me
     }
     return { message };
   }
-  const chats = new Set(
-    listMessages(pd).filter((m) => spentAt === null || m.at >= spentAt).map(chatOf),
-  );
+  const chats = chatsSince(pd, spentAt);
   if (chats.size > 1) {
     return {
       refusal: `Cannot record this ${what}: the engine cannot tell which chat this command serves, and more than ` +
@@ -1001,6 +1026,8 @@ function messagesBeforeQuestion(pd: string, stage: string, unit: string | undefi
   if (question === undefined) return [];
   const spentAt = latestSpendingTimestamp(rows);
   const chat = invokingChat(pd);
+  // With no chat the engine can name, the hint follows the proof's one-chat rule.
+  if (chat === null && chatsSince(pd, spentAt).size > 1) return [];
   const turnOf = new Map<string, AuditShardEvent>();
   for (const row of rows) {
     if (row.event !== "HUMAN_TURN") continue;
@@ -1012,6 +1039,7 @@ function messagesBeforeQuestion(pd: string, stage: string, unit: string | undefi
   return listMessages(pd).filter((message) => {
     if (chat !== null && message.session !== chat) return false;
     if (spentAt !== null && message.at < spentAt) return false;
+    if (!messageIsReply(rows, message)) return false;
     const turn = turnOf.get(message.id);
     return turn === undefined ? message.at < question.timestamp : before(turn);
   });

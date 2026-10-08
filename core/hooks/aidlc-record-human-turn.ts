@@ -386,12 +386,15 @@ function pickedGateLabel(text: string, picker: PlanApprovalPickerQuestion | unde
 // What the box carried back: one entry per question it asked, in the order shown, `reply` null where the person left
 // a question blank (AIDA F8 on #2107: an entry only for answered questions read "asked and left blank" as "never
 // asked"). A pick for a question the box did not list follows them. Strings are cut to the store's limit.
-function pickerReplies(input: string): { entries: Array<{ question: string; reply: string | null }>; cut: boolean } {
+function pickerReplies(
+  input: string,
+  limit = Number.POSITIVE_INFINITY,
+): { entries: Array<{ question: string; reply: string | null }>; cut: boolean } {
   let cut = false;
   const kept = (value: string): string => {
-    if (value.length <= MESSAGE_PICKER_MAX_CHARS) return value;
+    if (value.length <= limit) return value;
     cut = true;
-    return value.slice(0, MESSAGE_PICKER_MAX_CHARS);
+    return value.slice(0, limit);
   };
   try {
     const payload = JSON.parse(input) as {
@@ -717,7 +720,7 @@ try {
         : { ...noWords, words: humanResponseText.trim() || null };
       const full = promptSubmitted ? typedPrompt : humanResponseText;
       // Every stored string is cut (AIDA F5 on #2107: uncut words once put a record past the reader's cap).
-      const picker = promptSubmitted ? null : pickerReplies(input);
+      const picker = promptSubmitted ? null : pickerReplies(input, MESSAGE_PICKER_MAX_CHARS);
       const words = parsed.words !== null && parsed.words.length > MESSAGE_TEXT_MAX_CHARS
         ? parsed.words.slice(0, MESSAGE_TEXT_MAX_CHARS)
         : parsed.words;
