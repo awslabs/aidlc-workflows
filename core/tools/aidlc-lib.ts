@@ -7439,9 +7439,10 @@ export function registerIntentRecord(
 // bound its session leaves none to pick up.
 export function leaveCreationReceipt(recordDir: string, uuid: string): void {
   try {
-    const receiptDir = engineDirFor(recordDir);
-    mkdirSync(receiptDir, { recursive: true });
-    writeFileSync(join(receiptDir, CREATION_RECEIPT_FILE), `${uuid}\n`, { encoding: "utf-8", flag: "wx" });
+    const relativePath = `${ENGINE_DIR}/${CREATION_RECEIPT_FILE}`;
+    // One receipt per creation, never replaced; never written through a link.
+    if (existsSync(recordFileTargetOrThrow(recordDir, relativePath))) return;
+    writeRecordFileNoFollow(recordDir, relativePath, `${uuid}\n`);
   } catch {
     // Best-effort: without a receipt the observed creation stays unproven.
   }
@@ -8888,7 +8889,14 @@ function transactActiveDirectiveTarget<T>(
     process.off("exit", pendingRelease.handler);
     ACTIVE_DIRECTIVE_EXIT_HANDLERS.delete(target.markerPath);
   }
+  // The marker and its lock live under the record's engine folder; neither is
+  // created or written through a link planted there.
+  const recordRoot = dirname(target.statePath);
+  mkdirSync(recordRoot, { recursive: true });
+  assertRecordPathNoFollow(recordRoot, target.markerPath);
+  assertRecordPathNoFollow(recordRoot, target.lockDir);
   mkdirSync(dirname(target.markerPath), { recursive: true });
+  assertRecordPathNoFollow(recordRoot, target.markerPath);
   const receipt = acquireActiveDirectiveLock(target.lockDir);
   if (!receipt) throw new ActiveDirectiveLockContendedError();
   ACTIVE_DIRECTIVE_TRANSACTIONS.add(target.markerPath);
@@ -13008,6 +13016,33 @@ export function writeRecordFileNoFollow(
   assertNoSymlinkInChainOrThrow(anchorReal, relativePath);
   writeBufferAtomic(target, typeof data === "string" ? Buffer.from(data, "utf-8") : data);
   return target;
+}
+
+/**
+ * Write a record under the intent's engine folder (`.aidlc-engine/<name>`,
+ * `name` in posix form) through no symlink: a link planted at the folder, at a
+ * folder under it, or at the file refuses the write. The record root is created
+ * when missing (as the hooks-health writer does); nothing beneath it is
+ * followed.
+ */
+export function writeEngineFileNoFollow(
+  projectDir: string,
+  name: string,
+  data: string | Buffer,
+  intent?: string,
+  space?: string,
+): string {
+  const recordRoot = docsRoot(projectDir, intent, space);
+  mkdirSync(recordRoot, { recursive: true });
+  return writeRecordFileNoFollow(recordRoot, `${ENGINE_DIR}/${name}`, data);
+}
+
+/**
+ * Refuse a path under a record that is reached through a symlink. `recordRoot`
+ * must exist; `path` is absolute and lies under it.
+ */
+function assertRecordPathNoFollow(recordRoot: string, path: string): void {
+  assertNoSymlinkInChainOrThrow(realpathSync(recordRoot), toPosix(relative(recordRoot, path)));
 }
 
 /** Remove a framework-owned record file under `recordRoot`, never through a symlink. */
@@ -25333,9 +25368,14 @@ function sourceSnapshotReadPath(
   return existsSync(legacy) ? legacy : path;
 }
 
-function writeSourceSnapshot(path: string, serialized: string): string {
+// `path` lies under `recordRoot` (the engine folder's copy, or the committed
+// evidence beside a Unit's manifest); it is never written through a link.
+function writeSourceSnapshot(recordRoot: string, path: string, serialized: string): string {
   const hash = sourceListingSha256(serialized);
+  mkdirSync(recordRoot, { recursive: true });
+  assertRecordPathNoFollow(recordRoot, path);
   mkdirSync(dirname(path), { recursive: true });
+  assertRecordPathNoFollow(recordRoot, path);
   if (existsSync(path)) {
     const existing = readFileSync(path);
     if (existing.equals(Buffer.from(serialized, "utf-8"))) return `sha256:${hash}`;
@@ -25356,10 +25396,11 @@ export function writeBaselineSourceSnapshot(
   space?: string,
 ): string {
   const dir = sourceSnapshotDir(projectDir, stageSlug, intent, space);
-  if (dir === null) throw new Error("Cannot write source baseline without a valid active record and stage slug");
+  const record = recordDir(projectDir, intent, space);
+  if (dir === null || record === null) throw new Error("Cannot write source baseline without a valid active record and stage slug");
   const serialized = serializeSourceListing(listing);
   const hash = sourceListingSha256(serialized);
-  return writeSourceSnapshot(join(dir, `baseline-${hash.slice(0, 12)}.tsv`), serialized);
+  return writeSourceSnapshot(record, join(dir, `baseline-${hash.slice(0, 12)}.tsv`), serialized);
 }
 
 /** Build the modern source-baseline audit field for any workflow/stage boundary. */
@@ -25457,10 +25498,11 @@ export function writeUnitSourceSnapshot(
   // this file; a bare clone/CI checkout can resolve per-path reviewed OIDs
   // (aidlc-attest.ts) without the machine-local .aidlc-engine/source-review/ copy.
   writeSourceSnapshot(
+    record,
     reviewedSourceEvidencePath(record, unit, stageSlug, hash.slice(0, 12)),
     serialized,
   );
-  return writeSourceSnapshot(join(dir, `unit-${unit}-${hash.slice(0, 12)}.tsv`), serialized);
+  return writeSourceSnapshot(record, join(dir, `unit-${unit}-${hash.slice(0, 12)}.tsv`), serialized);
 }
 
 function readSourceSnapshot(path: string, fingerprint: string): string | null {
@@ -25530,11 +25572,12 @@ export function writeWorkspaceSourceSnapshot(
   state: WorkspaceSourceState,
 ): boolean {
   const path = workspaceSourceSnapshotPath(projectDir, stageSlug, state.fingerprint);
-  if (path === null) return false;
+  const record = recordDir(projectDir);
+  if (path === null || record === null) return false;
   const serialized =
     `${WORKSPACE_SNAPSHOT_HEADER}\t${state.fingerprint}\t-\n${serializeSourceListing(state.listing)}`;
   try {
-    writeSourceSnapshot(path, serialized);
+    writeSourceSnapshot(record, path, serialized);
     return true;
   } catch {
     return false;
@@ -30862,10 +30905,10 @@ export function recordGuardRefusal(
           ),
         }
       : record;
-    mkdirSync(dirname(path), { recursive: true });
-    writeFileSync(path, `${JSON.stringify(left, null, 2)}\n`, "utf-8");
+    writeEngineFileNoFollow(projectDir, toPosix(relative(engineDir(projectDir), path)), `${JSON.stringify(left, null, 2)}\n`);
   } catch {
     // Persistence failure under-counts repetitions; it never relaxes a guard.
+    // A link planted in the engine folder is one such failure.
   }
   return streak;
 }
@@ -31052,7 +31095,7 @@ export function pendingGuardRecoveryAsk(
   for (const { path, record } of cleared) {
     const { pendingAsk: _ask, pendingApproval: _approval, ...rest } = record;
     try {
-      writeFileSync(path, `${JSON.stringify(rest, null, 2)}\n`, "utf-8");
+      writeEngineFileNoFollow(projectDir, toPosix(relative(engineDir(projectDir), path)), `${JSON.stringify(rest, null, 2)}\n`);
     } catch {
       // A question that cannot be cleared may be asked again; it never relaxes a guard.
     }

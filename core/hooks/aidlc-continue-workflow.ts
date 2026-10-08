@@ -144,7 +144,7 @@
 
 import { DEFAULT_SUBPROCESS_TIMEOUT_MS } from "../tools/aidlc-runtime-budget.ts";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, statSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 import {
   hookStandsOutside,
@@ -202,7 +202,7 @@ import {
   unitLifecycleSnapshot,
   validateUnitName,
   withAuditLock,
-  writeFileAtomic,
+  writeEngineFileNoFollow,
 } from "../tools/aidlc-lib.ts";
 import { aidlcEngineCommand, hidesStopNote, runtimeHarnessName } from "../tools/aidlc-runtime-paths.ts";
 import {
@@ -307,6 +307,10 @@ interface GuardRecord {
   count: number; // consecutive no-progress blocks observed at this signature
 }
 
+// Under the record's engine folder: `.aidlc-engine/stop-hook/block-count.json`.
+const GUARD_FILE_NAME = "stop-hook/block-count.json";
+const ERROR_DIRECTIVE_FILE_NAME = "stop-hook/error-directive.json";
+
 function guardFilePath(projectDir: string): string {
   return join(stopHookDir(projectDir), "block-count.json");
 }
@@ -359,8 +363,13 @@ function claimErrorDirectiveDelivery(
       // newer errors evict an entry, that diagnostic may be delivered again.
       if (fingerprints.length === ERROR_DIRECTIVE_FINGERPRINT_LIMIT) fingerprints.shift();
       fingerprints.push(fingerprint);
-      mkdirSync(stopHookDir(projectDir, intent ?? undefined, space), { recursive: true });
-      writeFileAtomic(path, JSON.stringify({ fingerprints } satisfies ErrorDirectiveRecord));
+      writeEngineFileNoFollow(
+        projectDir,
+        ERROR_DIRECTIVE_FILE_NAME,
+        JSON.stringify({ fingerprints } satisfies ErrorDirectiveRecord),
+        intent ?? undefined,
+        space,
+      );
       return "deliver";
     }, intent ?? undefined, space);
   } catch {
@@ -500,9 +509,8 @@ function readGuard(projectDir: string): GuardRecord | null {
 
 function writeGuard(projectDir: string, record: GuardRecord): void {
   try {
-    const dir = stopHookDir(projectDir);
-    mkdirSync(dir, { recursive: true });
-    writeFileSync(guardFilePath(projectDir), JSON.stringify(record), "utf-8");
+    // Under the record's engine folder, through no link planted there.
+    writeEngineFileNoFollow(projectDir, GUARD_FILE_NAME, JSON.stringify(record));
   } catch {
     // If we cannot persist the counter we still proceed; the stop_hook_active
     // flag remains a second, native bound (see decideBlock). Worst case the
@@ -575,9 +583,7 @@ function decideBlock(
 // inheriting a stale streak from an earlier, since-resolved hang.
 function resetGuard(projectDir: string): void {
   try {
-    const dir = stopHookDir(projectDir);
-    mkdirSync(dir, { recursive: true });
-    writeFileSync(guardFilePath(projectDir), JSON.stringify({ signature: "", count: 0 }), "utf-8");
+    writeEngineFileNoFollow(projectDir, GUARD_FILE_NAME, JSON.stringify({ signature: "", count: 0 }));
   } catch {
     // Non-fatal — a stale streak only ever makes us release SOONER, never trap.
   }

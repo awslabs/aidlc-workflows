@@ -597,6 +597,13 @@ authority. The Stop probe must suppress it or the conversational carve-out below
 would be permanently dead; the route check does not, because `unit start` is real
 workflow engagement.
 
+Every record a hook or tool keeps under an intent's `.aidlc-engine/` folder (the
+block counter, the recovery breadcrumb, the active-directive marker, the source
+snapshots, the hooks-health files) is written from the record's own folder
+through no link: when a link sits at that folder, at a folder under it, or at
+the file, the record is not written there. The hooks carry on without it; a step
+publication or a snapshot that cannot be recorded refuses.
+
 **The barrier.** The guarantee is a property of the code shape, not of an
 enumeration someone has to remember. Alongside the per-call-site suppressions, a
 typed `EngineModeViolationError` sits at the durable write primitives: the

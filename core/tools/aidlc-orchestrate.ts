@@ -363,6 +363,7 @@ import {
   type WorkflowSelection,
   withdrawProtectedReplyWords,
   writeActiveDirectiveMarker,
+  writeEngineFileNoFollow,
   type PlanApprovalLegacyOfferCandidate,
   workspaceCommandUtilityArgv,
   classifyStateVersion,
@@ -1475,11 +1476,11 @@ function writeSteeringCursor(
   markerRevision: number | null,
 ): void {
   try {
-    mkdirSync(dirname(steeringCursorPath(projectDir)), { recursive: true });
-    writeFileSync(
-      steeringCursorPath(projectDir),
+    // Under the record's engine folder, through no link planted there.
+    writeEngineFileNoFollow(
+      projectDir,
+      "steering-cursor.json",
       `${JSON.stringify({ version: 1, receipt, payload, marker_revision: markerRevision })}\n`,
-      "utf-8",
     );
   } catch {
     // Advisory: the marker is the primary cursor, and a delivery whose marker
