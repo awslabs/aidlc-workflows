@@ -110,8 +110,10 @@
 //      block. Autonomous Construction is read the same way: a person who writes
 //      mid-run is present (the hook's own continuation is a host turn and never
 //      moves the human-turn marker), and every turn of an unattended run touches
-//      the engine, so nothing there is released by it. It only ever ALLOWS; it
-//      can never block more.
+//      the engine, so nothing there is released by it. An unattended driver
+//      (AIDLC_UNATTENDED=1) has nobody present, and a prompt it submits reads as
+//      a person's, so under autonomy it keeps the old guard. It only ever
+//      ALLOWS; it can never block more.
 //        NOT FULL PARITY. The marker path answers the same question more
 //        COARSELY than the transcript: it is blind to aidlc-jump / aidlc-bolt /
 //        aidlc-swarm and the mutating aidlc-state verbs, which the transcript
@@ -141,8 +143,12 @@
 //      offers the choice between continuing automatically and reviewing each
 //      checkpoint (construction_policy.offer_autonomy, offer_autonomy on a
 //      part), so no choice is on record. The protocol asks it without logging a
-//      question, so this is its only positive signal. Copilot's retained step
-//      does not carry the offer.
+//      question, so this is its only positive signal. On a rules part the
+//      agent's own active-directive marker (which the probe never overwrites)
+//      says whether it reached the step that asks: only a marker at the
+//      run-stage lets the turn end; a marker at a rules part is a delivery
+//      still under way, pending work. Copilot's retained step does not carry
+//      the offer.
 //
 // No-op outside AIDLC. The frontmatter Stop matcher scopes this to the `aidlc`
 // skill, but we defend here too: with no active workflow (no aidlc-state.md
@@ -179,6 +185,7 @@ import {
   hasCurrentSharedGuardRecoveryWait,
   auditBlockField,
   openPendingDecision,
+  humanTurnMintAllowed,
   hookChildEnv,
   isEngineToolCall,
   isShellToolName,
@@ -1339,8 +1346,10 @@ function transcriptIsConversational(transcriptPath: string, format: "claude" | "
 // cap-bounded block. An autonomous Construction run is read the same way: a
 // person who writes mid-run is present (the hook's own continuation is a host
 // turn, which never moves the human-turn marker), and every turn of an
-// unattended run touches the engine, so the predicate never releases one. This
-// function can only ever ALLOW a stop; it can never cause one to block.
+// unattended run touches the engine, so the predicate never releases one. An
+// unattended driver (AIDLC_UNATTENDED=1) has nobody present and its prompts
+// read as a person's, so under autonomy it keeps the old guard. This function
+// can only ever ALLOW a stop; it can never cause one to block.
 function isConversationalStop(
   projectDir: string,
   stateContent: string,
@@ -1349,6 +1358,12 @@ function isConversationalStop(
   copilotSession = "",
 ): boolean {
   try {
+    // An unattended driver (AIDLC_UNATTENDED=1) has nobody present, and a prompt
+    // it submits reads as a person's: under autonomous Construction the loop
+    // stays alive there as it always did.
+    if (!humanTurnMintAllowed() && getField(stateContent, "Construction Autonomy Mode")?.trim() === "autonomous") {
+      return false;
+    }
     if (copilotSession) return consumeCopilotConversation(projectDir, stateContent, copilotSession);
     if (transcriptPath === null || transcriptPath.length === 0) {
       // No transcript delivered — fall back to the marker mtimes.
@@ -2087,7 +2102,13 @@ if (isPendingDecisionStop(projectDir, stateContent, activeStage, activeUnit)) {
 // numbered prose nothing else shows the turn is waiting on the person.
 // Positive-confirmation only: the probed step itself carries the offer, on the
 // run-stage or on any rules part leading to it (the probe restarts at part 1).
-if ((kind === "run-stage" || kind === "load-steering") && directive.offerAutonomy === true) {
+// A rules part says the offer is open, not that the agent got to the step that
+// asks: its own active-directive marker does (the probe never overwrites it). A
+// marker at the run-stage means it did; a marker at a rules part, or none, is a
+// delivery still under way, so a quit after part k is pending work as before.
+const reachedTheStep = kind === "run-stage" ||
+  (kind === "load-steering" && activeMarker?.kind === "run-stage" && activeMarker.stage === directive.stage);
+if (reachedTheStep && directive.offerAutonomy === true) {
   recordHookTrace(
     projectDir,
     HOOK_NAME,
