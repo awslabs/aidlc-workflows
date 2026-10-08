@@ -199,6 +199,13 @@ export type HarnessManifest = {
      */
     agentStep?: string;
     /**
+     * `agentStep` for one host this tree runs in, told apart the same way as
+     * `missedReplyInHost` (environment variables of the agent's shell). An
+     * agent given one line per tool can show the wrong one, so each host gets
+     * its own line alone. Without them, `agentStep` stands.
+     */
+    agentStepInHost?: { env: string[]; text: string };
+    /**
      * The project file `agentStep` has the agent change, relative to the
      * project. When it, or a folder on the way to it, is a link, or it is
      * not one plain file, the agent changes nothing and shows the person

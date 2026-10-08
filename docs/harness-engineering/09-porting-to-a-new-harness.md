@@ -92,7 +92,9 @@ Create `harness/<name>/manifest.ts` exporting a `HarnessManifest`
   environment variables is set in the agent's shell (a `NAME=value` entry
   when it holds that value); Kiro IDE uses it for `TERM_PROGRAM=kiro`, which
   its agent's commands carry, and `VSCODE_IPC_HOOK`/`VSCODE_PID`, which only
-  its hooks carry. Set `notRunYet` only when the
+  its hooks carry. `agentStepInHost` (`{ env, text }`) does the same for
+  `agentStep`, so the agent gets only its own tool's line: given one line
+  per tool, an agent showed the wrong one. Set `notRunYet` only when the
   harness's hooks leave a heartbeat on every chat message, the first one before
   any workflow included (the human-turn hook does, and so do the Copilot and
   Kiro IDE adapters); doctor then warns with that text while no heartbeat
@@ -103,10 +105,10 @@ Create `harness/<name>/manifest.ts` exporting a `HarnessManifest`
   `change_notices` instead. Claude Code, Codex CLI, Kiro CLI and opencode
   declare `recovery`, `agentStep` and `notRunYet` (Kiro CLI also `missedReply`,
   which names its agent picker); Copilot also
-  `notRunInWorkflow`; Kiro IDE `recovery`,
-  `missedReply` and `notRunYet`, and keeps its agent's step in its
-  orchestrator skill, since in a folder Kiro has not been allowed to run
-  commands in no AI-DLC command can run.
+  `notRunInWorkflow`; Kiro IDE `recovery`, `missedReply`, `missedReplyInHost`,
+  `notRunYet`, `agentStep` and `agentStepInHost`. In a folder Kiro has not
+  been allowed to run commands in, no AI-DLC command can run, so Kiro IDE
+  also keeps that step in its orchestrator skill.
 - `directiveMaxBytes` (optional) - for a host that keeps less of one shell
   result than the engine's 28 KiB directive cap. The engine keeps every
   directive at or under it: stage rules ride inline only while they fit, and

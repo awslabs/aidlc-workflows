@@ -379,13 +379,26 @@ export interface DocumentExtractorSpec {
   timeoutMs?: number;
 }
 
-// A host-specific missed-reply line from harness.json, kept only when well formed.
-function missedReplyInHost(value: unknown): { missedReplyInHost?: { env: string[]; text: string } } {
+// A host-specific line from harness.json, kept only when well formed.
+function hostLine<K extends "missedReplyInHost" | "agentStepInHost">(
+  key: K,
+  value: unknown,
+): Partial<Record<K, { env: string[]; text: string }>> {
   const host = value as { env?: unknown; text?: unknown } | null | undefined;
   return Array.isArray(host?.env) && host.env.length > 0 &&
       host.env.every((name) => typeof name === "string" && name !== "") && typeof host.text === "string"
-    ? { missedReplyInHost: { env: [...host.env as string[]], text: host.text } }
+    ? { [key]: { env: [...host.env as string[]], text: host.text } } as Partial<Record<K, { env: string[]; text: string }>>
     : {};
+}
+
+// Whether the agent's shell is in the host a harness's `{ env }` names: `NAME`
+// matches when set, `NAME=value` when it holds that value (TERM_PROGRAM=kiro).
+function inHostShell(env: readonly string[] | undefined): boolean {
+  return env?.some((entry) => {
+    const [name, value] = entry.split("=", 2);
+    const actual = process.env[name]?.trim();
+    return value === undefined ? Boolean(actual) : actual?.toLowerCase() === value.toLowerCase();
+  }) === true;
 }
 
 /** A harness's advice for a host that runs no project hooks until the person acts (trust, reload, engine). */
@@ -397,6 +410,7 @@ export interface HookActivation {
   notRunYet?: string;
   notRunInWorkflow?: string;
   agentStep?: string;
+  agentStepInHost?: { env: string[]; text: string };
   agentStepEdits?: string;
 }
 
@@ -572,13 +586,14 @@ function readShippedHarnessData(): ShippedHarnessData {
         ? {
           recovery: activation.recovery,
           ...(typeof activation.missedReply === "string" ? { missedReply: activation.missedReply } : {}),
-          ...(missedReplyInHost(activation.missedReplyInHost)),
+          ...(hostLine("missedReplyInHost", activation.missedReplyInHost)),
           ...(activation.missesReplies === true ? { missesReplies: true as const } : {}),
           ...(typeof activation.notRunYet === "string" ? { notRunYet: activation.notRunYet } : {}),
           ...(typeof activation.notRunInWorkflow === "string"
             ? { notRunInWorkflow: activation.notRunInWorkflow }
             : {}),
           ...(typeof activation.agentStep === "string" ? { agentStep: activation.agentStep } : {}),
+          ...(typeof activation.agentStep === "string" ? hostLine("agentStepInHost", activation.agentStepInHost) : {}),
           ...(typeof activation.agentStepEdits === "string" ? { agentStepEdits: activation.agentStepEdits } : {}),
         }
         : null;
@@ -26240,7 +26255,9 @@ export function hooksOffAgentStep(projectDir?: string, next?: string): string | 
       `this line and end your turn: "${edits} in this project is a link, so it was left as it is. Make it a plain ` +
       `file in this project, then send your next message."`;
   }
-  return `${HOOKS_OFF_AGENT_RULES} ${fillHookActivationText(activation.agentStep, projectDir, next)}`;
+  // An agent given each tool's line showed the wrong one (#2167), so the engine picks it.
+  const step = inHostShell(activation.agentStepInHost?.env) ? activation.agentStepInHost!.text : activation.agentStep;
+  return `${HOOKS_OFF_AGENT_RULES} ${fillHookActivationText(step, projectDir, next)}`;
 }
 
 /**
@@ -29448,13 +29465,7 @@ export function unattendedHumanPresenceHint(projectDir?: string, options: { miss
   if (options.missedReply === false) return "";
   const activation = hookActivation();
   const host = activation?.missedReplyInHost;
-  // `NAME` matches when set, `NAME=value` when it holds that value (TERM_PROGRAM=kiro).
-  const inHost = host?.env.some((entry) => {
-    const [name, value] = entry.split("=", 2);
-    const actual = process.env[name]?.trim();
-    return value === undefined ? Boolean(actual) : actual?.toLowerCase() === value.toLowerCase();
-  }) === true;
-  const missedReply = (inHost ? host?.text : activation?.missedReply) ??
+  const missedReply = (inHostShell(host?.env) ? host?.text : activation?.missedReply) ??
     "If the person already replied, that reply was not recorded for this question. Tell them exactly this, " +
       "with nothing about why: \"Your answer didn't reach AI-DLC. Please give it once more. If it happens again, " +
       `type ${entrySkillInvocation()} --doctor."`;

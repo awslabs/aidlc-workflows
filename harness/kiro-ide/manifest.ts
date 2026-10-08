@@ -140,6 +140,15 @@ const KIRO_CLI_ACP_STEP =
 // The words the agent relays when the person's answer was not recorded.
 const ANSWER_NOT_RECORDED = "Your answer was not recorded, so you don't need to answer again.";
 
+// Inside Kiro IDE: its agent's own commands carry TERM_PROGRAM=kiro, its hooks
+// VSCODE_IPC_HOOK and VSCODE_PID (measured live on Kiro IDE 1.2.37, #2167).
+const KIRO_IDE_AGENT_SHELL = ["TERM_PROGRAM=kiro", "VSCODE_IPC_HOOK", "VSCODE_PID"];
+
+// What the agent does when Kiro is not running AI-DLC's hooks, before the one line it shows.
+const KIRO_HOOKS_OFF_AGENT =
+  "Kiro is not running AI-DLC's hooks in this folder. You cannot change that from inside the chat: " +
+  "do not approve, retry, or ask the person to answer again.";
+
 const manifest: HarnessManifest = {
   name: "kiro-ide",
   productName: "Kiro IDE",
@@ -194,7 +203,7 @@ const manifest: HarnessManifest = {
       "Tell them exactly this, with nothing about why, then only the line below for the tool they are in: " +
       `"${ANSWER_NOT_RECORDED}" ${KIRO_CLI_ACP_STEP}`,
     missedReplyInHost: {
-      env: ["TERM_PROGRAM=kiro", "VSCODE_IPC_HOOK", "VSCODE_PID"],
+      env: KIRO_IDE_AGENT_SHELL,
       text:
         "If the person already replied, that reply was not recorded. Do not ask them to answer again. " +
         `Tell them exactly this, with nothing about why: "${ANSWER_NOT_RECORDED} ${KIRO_IDE_TRUST_STEP}"`,
@@ -214,12 +223,14 @@ const manifest: HarnessManifest = {
     // until Developer: Reload Window. The guard hook on the agent's own shell
     // command beats before the engine runs, even with its fence switched off,
     // so a record with no heartbeat proves it, and `next` stops with the step
-    // instead of the person finding out at the first approval.
-    agentStep:
-      "Kiro is not running AI-DLC's hooks in this folder. You cannot change that from inside the chat: " +
-      "do not approve, retry, or ask the person to answer again. In Kiro IDE, show the person this line: " +
-      `"${KIRO_IDE_TRUST_STEP}" In Kiro CLI or an ACP client, show this line instead: "${KIRO_CLI_ACP_STEP}" ` +
-      "Then end your turn.",
+    // instead of the person finding out at the first approval. Given both
+    // lines, Kiro IDE's agent showed the Kiro CLI one there (live, 1.2.37), so
+    // inside Kiro IDE, by the missed-reply line's signal, it gets its own alone.
+    agentStep: `${KIRO_HOOKS_OFF_AGENT} Show the person this line: "${KIRO_CLI_ACP_STEP}" Then end your turn.`,
+    agentStepInHost: {
+      env: KIRO_IDE_AGENT_SHELL,
+      text: `${KIRO_HOOKS_OFF_AGENT} Show the person this line: "${KIRO_IDE_TRUST_STEP}" Then end your turn.`,
+    },
   },
   harnessDir: ".kiro",
   orchestratorSkillPath: ".kiro/skills/aidlc/SKILL.md",
