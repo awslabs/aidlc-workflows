@@ -37,7 +37,7 @@
 // missing or unreadable means the full text.
 
 import { createHash } from "node:crypto";
-import { existsSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";
 import { isoTimestamp, isStopHookProbe, sessionsDir, toPosix, validSessionId, writeFileAtomic } from "./aidlc-lib.ts";
 import { rootIntegrationTarget } from "./aidlc-distribution.ts";
@@ -93,6 +93,11 @@ function readDelivery(projectDir: string, sid: string): DeliveryRecord | null {
 
 function writeDelivery(projectDir: string, sid: string, record: DeliveryRecord): void {
   try {
+    // A project whose session records were never written yet (hooks off for a
+    // launch, a fresh clone) has no folder for them. Without it the write fails
+    // and nothing is remembered, which would hand this chat the conductor
+    // persona again on every step.
+    mkdirSync(sessionsDir(projectDir), { recursive: true });
     writeFileAtomic(deliveryRecordPath(projectDir, sid), `${JSON.stringify(record)}\n`);
   } catch {
     removeQuietly(deliveryRecordPath(projectDir, sid));

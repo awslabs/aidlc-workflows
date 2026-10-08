@@ -719,6 +719,13 @@ describe("the conductor persona reaches every chat that works on the workflow", 
     expect(personaSent(await next(proj, "claude", secondEnv))).toBe(true);
     expect(personaSent(await next(proj, "claude", secondEnv))).toBe(false);
 
+    // A project whose session records were never written (hooks off for a
+    // launch, a fresh clone): the record is created, so the persona is handed
+    // over once and not on every step.
+    rmSync(join(proj, "aidlc", ".aidlc-sessions"), { recursive: true, force: true });
+    expect(personaSent(await next(proj, "claude", env))).toBe(true);
+    expect(personaSent(await next(proj, "claude", env))).toBe(false);
+
     // An updated install's persona reaches a chat that already had the old one.
     editPersona(proj, "claude", "- Say the step, never the machinery.");
     const updated = await next(proj, "claude", env);
