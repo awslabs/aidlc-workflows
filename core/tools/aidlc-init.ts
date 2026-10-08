@@ -4874,6 +4874,11 @@ function replaceGeneratedRegion(
   }${current.slice(target.end)}`;
 }
 
+// The folders outside the harness dir where a harness keeps the skills and
+// agents the engine generates and a plugin composes: Codex's `.agents/`, and
+// Copilot's `.github/` (its skills and agent files both live there).
+const SHARED_SURFACE_DIRS = [".agents", ".github"] as const;
+
 function generatedOverlayCandidate(rel: string, harnessDir: string): boolean {
   return rel.startsWith(`${harnessDir}/aidlc-common/stages/`) ||
     rel.startsWith(`${harnessDir}/scopes/`) ||
@@ -4882,7 +4887,9 @@ function generatedOverlayCandidate(rel: string, harnessDir: string): boolean {
     rel.startsWith(`${harnessDir}/sensors/`) ||
     rel.startsWith(`${harnessDir}/tools/`) ||
     rel.startsWith(`${harnessDir}/skills/`) ||
-    rel.startsWith(".agents/skills/");
+    rel.startsWith(".agents/skills/") ||
+    rel.startsWith(".github/skills/") ||
+    rel.startsWith(".github/agents/");
 }
 
 // Keys the installed source owns: a refresh takes them from the new tree, not
@@ -6402,7 +6409,7 @@ function prepareRefreshSource(
 
   const projectOverlays = new Set<string>();
   for (const directory of descriptor.managedDirectories) {
-    if (directory !== descriptor.harnessDir && directory !== ".agents") continue;
+    if (directory !== descriptor.harnessDir && !SHARED_SURFACE_DIRS.includes(directory as typeof SHARED_SURFACE_DIRS[number])) continue;
     const currentDir = join(projectDir, directory);
     if (!pathPresent(currentDir) || !lstatSync(currentDir).isDirectory()) continue;
     for (const nested of regularFilesBelow(currentDir)) {
@@ -6591,9 +6598,11 @@ function prepareRefreshSource(
     regenerateRunnerSurfaces();
     resetProjectionCaches();
 
-    const skillPath = existsSync(join(stagedHarness, "skills", "aidlc", "SKILL.md"))
-      ? join(stagedHarness, "skills", "aidlc", "SKILL.md")
-      : join(root, ".agents", "skills", "aidlc", "SKILL.md");
+    // The harness's skills folder: inside the harness dir, or one of the shared
+    // folders (Codex's .agents/, Copilot's .github/).
+    const skillsDirs = [join(stagedHarness, "skills"), ...SHARED_SURFACE_DIRS.map((dir) => join(root, dir, "skills"))];
+    const skillPath = skillsDirs.map((dir) => join(dir, "aidlc", "SKILL.md")).find((path) => existsSync(path)) ??
+      join(stagedHarness, "skills", "aidlc", "SKILL.md");
     if (existsSync(skillPath)) {
       let generated = readFileSync(skillPath, "utf-8");
       generated = replaceGeneratedRegion(
@@ -6609,7 +6618,7 @@ function prepareRefreshSource(
       writeFileSync(skillPath, generated);
     }
     regenerated.add(`${descriptor.harnessDir}/tools/data/stage-graph.json`);
-    for (const directory of [join(stagedHarness, "skills"), join(root, ".agents", "skills")]) {
+    for (const directory of skillsDirs) {
       if (!existsSync(directory)) continue;
       for (const nested of walkFiles(directory)) {
         const path = join(directory, nested);
