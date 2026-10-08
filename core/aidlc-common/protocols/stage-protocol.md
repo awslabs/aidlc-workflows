@@ -1292,6 +1292,14 @@ Failed checks emit a `SENSOR_FAILED` audit row and write findings to
 `<record>/.aidlc-engine/sensors/<stage-slug>/<sensor>-<fire-id>.md`; use that detail
 file to correct the output and run the check again.
 
+When a gate opens, or is shown again, the engine's reply names each check that
+still fails on a declared output, with its detail file, in its `narration`
+beside what the stage produced: say it to the person with the approval
+question, never claim coverage a
+check reports against (every requirement traced, every section present), and
+when they ask for changes, correct from that detail file and run the check
+again.
+
 `required-sections` applies to markdown outputs. Unless a stage declares a
 more specific contract, it enforces the registry default of at least two H2
 headings. A stage's `## Sensors` compartment may retain extra requirements for

@@ -5976,15 +5976,19 @@ function latestGateBriefDigest(pd: string, stage: GateStage, unit: string | unde
 }
 
 // The latest terminal result of every applicable sensor for every declared
-// artifact on disk: `id@path=passed|failed(<n>) [detail: <path>]|not-run`,
-// failures first, at most 20 entries spelled out. Nothing is re-fired here.
-function sensorStateAtGate(pd: string, stage: GateStage): string {
-  // Spelled out here, not at module level: this file runs its command before
-  // later module-level declarations are initialized.
-  const SENSOR_STATE_MAX_ENTRIES = 20;
+// artifact on disk, from the audit shards; nothing is re-fired here. A failure
+// keeps what the gate row and the spoken line need (the findings count and the
+// detail file); a pass or a check that never ran is its `id@path` key with its
+// state, in the order the gate row spells them.
+type LatestCheckResults = {
+  failed: Array<{ id: string; rel: string; findings: string; detail: string | null }>;
+  rest: string[];
+};
+function latestCheckResults(pd: string, stage: GateStage): LatestCheckResults {
+  const results: LatestCheckResults = { failed: [], rest: [] };
   const sensors = stage.sensors_applicable ?? [];
   const paths = existingDeclaredArtifactPaths(pd, stage);
-  if (sensors.length === 0 || paths.length === 0) return "none";
+  if (sensors.length === 0 || paths.length === 0) return results;
   const latest = new Map<string, { kind: "passed" | "failed"; ts: string; pos: number; findings: string; detail: string | null }>();
   for (const row of readAuditShardEvents(pd)) {
     if (row.event !== "SENSOR_PASSED" && row.event !== "SENSOR_FAILED") continue;
@@ -6003,23 +6007,59 @@ function sensorStateAtGate(pd: string, stage: GateStage): string {
       detail: auditBlockField(row.block, "Detail path"),
     });
   }
-  const failed: string[] = [];
-  const rest: string[] = [];
   for (const sensor of sensors) {
     for (const path of paths) {
       if (!gateSensorMatchesOutput(sensor, path)) continue;
       const rel = relative(pd, path).split(sep).join("/");
       const result = latest.get(`${sensor.id}@${rel}`);
-      if (result === undefined) rest.push(`${sensor.id}@${rel}=not-run`);
-      else if (result.kind === "passed") rest.push(`${sensor.id}@${rel}=passed`);
-      else failed.push(`${sensor.id}@${rel}=failed(${result.findings})${result.detail ? ` [detail: ${result.detail}]` : ""}`);
+      if (result === undefined) results.rest.push(`${sensor.id}@${rel}=not-run`);
+      else if (result.kind === "passed") results.rest.push(`${sensor.id}@${rel}=passed`);
+      else results.failed.push({ id: sensor.id, rel, findings: result.findings, detail: result.detail });
     }
   }
-  const entries = [...failed, ...rest];
+  return results;
+}
+
+// The gate-open row's field: `id@path=passed|failed(<n>) [detail: <path>]|not-run`,
+// failures first, at most 20 entries spelled out.
+function sensorStateAtGate(pd: string, stage: GateStage): string {
+  // Spelled out here, not at module level: this file runs its command before
+  // later module-level declarations are initialized.
+  const SENSOR_STATE_MAX_ENTRIES = 20;
+  const { failed, rest } = latestCheckResults(pd, stage);
+  const entries = [
+    ...failed.map((f) => `${f.id}@${f.rel}=failed(${f.findings})${f.detail ? ` [detail: ${f.detail}]` : ""}`),
+    ...rest,
+  ];
   if (entries.length === 0) return "none";
   const shown = entries.slice(0, SENSOR_STATE_MAX_ENTRIES);
   const more = entries.length - shown.length;
   return `${shown.join("; ")}${more > 0 ? `; +${more} more` : ""}`;
+}
+
+// What the person hears when a gate opens, or is shown again, while a check
+// still fails on a declared output (#2201): one line per failing check, in
+// plain words, with the detail file the agent corrects from (stage protocol
+// section 14), at most three lines and then a count. The orchestrator carries
+// them as `change_notices`, which every harness's agent says once, word for
+// word. Nothing is re-fired; a check that passed later, or never ran, says
+// nothing, and an unreadable record says nothing about the checks.
+export function failedCheckNotices(pd: string, stage: GateStage): string[] {
+  const FAILED_CHECK_LINES = 3;
+  let failed: LatestCheckResults["failed"];
+  try {
+    failed = latestCheckResults(pd, stage).failed;
+  } catch {
+    return [];
+  }
+  const lines = failed.slice(0, FAILED_CHECK_LINES).map(({ id, rel, findings, detail }) => {
+    const check = id.endsWith("check") ? id : `${id} check`;
+    const count = /^\d+$/.test(findings) ? `${findings} finding${findings === "1" ? "" : "s"}` : "findings";
+    return `The ${check} reports ${count} in ${basename(rel)}${detail ? ` (details: ${detail})` : ""}.`;
+  });
+  const more = failed.length - lines.length;
+  if (more > 0) lines.push(`${more} more check${more === 1 ? " reports" : "s report"} findings on this stage's outputs.`);
+  return lines;
 }
 
 // A stage artifact may list the decisions only the person can make in a fenced
