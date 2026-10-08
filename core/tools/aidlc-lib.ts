@@ -30103,13 +30103,15 @@ const GUARD_REMEDY_WORDING_BY_OP: Record<GuardRemedyOp, GuardRemedyWording> = GU
 // A review request way on, spelled out for the conductor: the exact request,
 // then the dispatch and the verdict it returns. With no reviewer protocol in
 // the chat, a bare "request the review" left the agent guessing (seen live on
-// Kiro IDE: it ran the reviewer with no request, so no review was recorded).
+// Kiro IDE: it ran the reviewer with no request, so no review was recorded),
+// and "have the reviewer review it" was read as reviewing it in the reviewer's
+// name, so the reviewer is named as its own subagent.
 function reviewRequestAction(lead: string, request: string | undefined): string {
   if (request === undefined) return `${lead}.`;
-  return `${lead}: run \`${request}\`, have the reviewer named in it review the stage as ` +
-    `\`${harnessDir()}/aidlc-common/protocols/stage-protocol-reviewer.md\` step 1 says, writing its review ` +
-    "only to the `reviewFile` that command returns, then run the `recordVerdict` command it returns with " +
-    "the reviewer's verdict.";
+  return `${lead}: run \`${request}\`, then run the reviewer named in it as its own subagent (never review ` +
+    `it yourself), as \`${harnessDir()}/aidlc-common/protocols/stage-protocol-reviewer.md\` step 1 says, telling ` +
+    "it to write its review only to the `reviewFile` that command returns; then run the `recordVerdict` command " +
+    "it returns with the reviewer's verdict.";
 }
 
 // Pure: reads nothing from disk. The same input always yields the same refusal,
