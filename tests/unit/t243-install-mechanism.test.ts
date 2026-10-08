@@ -5409,6 +5409,7 @@ describe("t243 project initialization", () => {
   for (const twinCase of [
     { harness: "codex", leaf: ".codex", release: CODEX_RELEASE, manifest: ".codex-plugin", twin: ".codex/agents/aidlc-quality-agent.toml" },
     { harness: "opencode", leaf: ".aidlc", release: OPENCODE_RELEASE, manifest: ".opencode-plugin", twin: ".opencode/agents/aidlc-quality-agent.md" },
+    { harness: "copilot", leaf: ".aidlc", release: COPILOT_RELEASE, manifest: ".plugin", twin: ".github/agents/aidlc-quality-agent.md" },
   ] as const) {
     test(`refresh replays persona fragments into the ${twinCase.harness} native twin and keeps its own bytes`, () => {
       const project = temp(`aidlc-t240-twin-refresh-${twinCase.harness}-`);
