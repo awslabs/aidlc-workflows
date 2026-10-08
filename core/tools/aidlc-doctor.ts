@@ -58,6 +58,7 @@ import {
   sessionSetsAgentModels,
   type ModelHarness,
 } from "./aidlc-model-policy.ts";
+import { kiroHooksOffDoctorChecks } from "./aidlc-kiro-hooks-off.ts";
 import {
   flagsDoctorCheck,
   frameworkFilesDoctorCheck,
@@ -604,6 +605,8 @@ export async function main(argv: string[]): Promise<void> {
   checks.push(...await kiroSessionDoctorChecks(projectDir));
   const kiroWorkflows = kiroIdeWorkflowsDoctorCheck(projectDir, harnessDir());
   if (kiroWorkflows) checks.push(kiroWorkflows);
+  // A hook the person switched off in Kiro's Agent Hooks: named, with the step, never turned back on.
+  checks.push(...kiroHooksOffDoctorChecks(projectDir, harnessDir()));
   const kiroTerminal = kiroIdeTerminalDoctorCheck(projectDir, harnessDir());
   if (kiroTerminal) checks.push(kiroTerminal);
   checks.push(flagsDoctorCheck(projectDir, harnessDir(), switchesOffLines(projectDir, process.env, "command")));

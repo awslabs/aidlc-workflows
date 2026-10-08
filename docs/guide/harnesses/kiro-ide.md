@@ -343,6 +343,16 @@ reads is set in one table, `aidlc-kiro-tool-names.ts` beside the adapter. The
 adapter reads it; the hook registrations are hand-written JSON whose matchers
 list the same shell, delegation, and audited write names.
 
+The Agent Hooks panel lets you switch any of these hooks off; Kiro then writes
+`"enabled": false` into the hook's file. AI-DLC leaves your switch as it is and
+says what it costs: `aidlc doctor` fails one row per AI-DLC hook that is off
+(for example "AI-DLC hook aidlc-guard-tool-call is switched off in Kiro's Agent
+Hooks: approvals, the approved plan and AI-DLC's records are not protected while
+it is off"), the next AI-DLC step says the same once, and while the reply hook
+(`aidlc-record-human-turn`) is off an approval tells you to turn it back on
+under Agent Hooks rather than to trust the folder. Turning a hook back on in the
+panel is the whole fix.
+
 Kiro IDE 1.x and Kiro CLI v3 deliver hook context as **JSON on stdin** (snake_case:
 `{ session_id, tool_name, tool_input, tool_response }`; the older 0.12 builds instead set
 the `USER_PROMPT` environment variable with a camelCase equivalent, and the
