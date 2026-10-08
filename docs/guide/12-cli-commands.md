@@ -1463,10 +1463,13 @@ agent (Copilot in VS Code, Kiro IDE, Cursor) is not your terminal: there the
 refusal reads "To turn the review-freeze check off, ask for it in your Kiro
 chat.", naming your tool. This command controls the three switchable fences,
 including any the policy word leaves up. A switchable fence's main-session
-refusal names the command; a human-presence refusal names no switch and says
-what happened to a reply the person already sent: on a harness that runs hooks
-only after the person acts, the steps that turn them on; elsewhere, one line
-for the person: "Your answer didn't reach AI-DLC. Please give it once more. If
+refusal names the command; a human-presence refusal names no switch. While the
+prompt hook is running for this work (its heartbeat is fresh), it says the
+person has not answered yet and the agent ends its turn, with nothing for the
+person to hear. Otherwise it says what happened to a reply the person already
+sent: on a harness that runs hooks only after the person acts, the steps that
+turn them on; elsewhere, one line for the person: "Your answer didn't reach
+AI-DLC. Please give it once more. If
 it happens again, type /aidlc --doctor." In Kiro CLI, where a reply typed to
 another agent picked in `/agent` is never recorded, that line is "Your answer
 didn't reach AI-DLC. Type /agent and pick aidlc, then give it once more." When
