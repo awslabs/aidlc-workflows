@@ -3125,10 +3125,6 @@ describe("t294 config diagnostics CLI", () => {
       )
         .replace("# AI-DLC on Codex CLI", "# Team-owned Codex instructions")
         .replace(
-          'set = { AIDLC_RULES_DIR = "aidlc/spaces/default/memory" }',
-          'set = { AIDLC_RULES_DIR = "team/rules" }',
-        )
-        .replace(
           'sandbox_mode = "workspace-write"',
           'sandbox_mode = "read-only"',
         ),
@@ -3149,8 +3145,6 @@ describe("t294 config diagnostics CLI", () => {
     expect(parseToml(readFileSync(codexPath, "utf-8")).sandbox_mode).toBe("read-only");
     expect(readFileSync(codexPath, "utf-8"))
       .toContain("# Team-owned Codex instructions");
-    expect(readFileSync(codexPath, "utf-8"))
-      .toContain('AIDLC_RULES_DIR = "team/rules"');
     // The project's own values for AI-DLC's keys stay theirs on a refresh,
     // with or without --force; the release here ships the same values.
     const codexEdited = readFileSync(codexPath, "utf-8");
@@ -3172,8 +3166,6 @@ describe("t294 config diagnostics CLI", () => {
     expect(parseToml(readFileSync(codexPath, "utf-8")).sandbox_mode).toBe("read-only");
     expect(readFileSync(codexPath, "utf-8"))
       .toContain("# Team-owned Codex instructions");
-    expect(readFileSync(codexPath, "utf-8"))
-      .toContain('AIDLC_RULES_DIR = "team/rules"');
     expect(readFileSync(codexPath, "utf-8"))
       .toContain('model = "team-model"');
     expect(readFileSync(codexPath, "utf-8"))
@@ -3365,7 +3357,7 @@ describe("t294 config diagnostics CLI", () => {
     return source;
   }
 
-  const SHIPPED_SET_LINE = 'set = { AIDLC_RULES_DIR = "aidlc/spaces/default/memory" }';
+  const SHIPPED_INLINE_LINE = 'experimental_request_user_input = { enabled = true }';
 
   const SHIPPED_STATUS_LINE =
     'status_line = ["model-with-reasoning", "git-branch", "task-progress", "context-used"]';
@@ -3428,7 +3420,7 @@ describe("t294 config diagnostics CLI", () => {
       const configPath = join(project, ".codex", "config.toml");
       const shipped = readFileSync(configPath, "utf-8");
       const withoutTui = shipped.replace(/\[tui\][\s\S]*$/, "");
-      const firstTable = withoutTui.indexOf("[shell_environment_policy]");
+      const firstTable = withoutTui.indexOf("[sandbox_workspace_write]");
       const edited = withoutTui.slice(0, firstTable) + spelling + withoutTui.slice(firstTable);
       expect(() => parseToml(edited)).not.toThrow();
       writeFileSync(configPath, edited);
@@ -3455,7 +3447,7 @@ describe("t294 config diagnostics CLI", () => {
     const project = install("codex");
     const configPath = join(project, ".codex", "config.toml");
     const withoutTui = readFileSync(configPath, "utf-8").replace(/\[tui\][\s\S]*$/, "");
-    const firstTable = withoutTui.indexOf("[shell_environment_policy]");
+    const firstTable = withoutTui.indexOf("[sandbox_workspace_write]");
     writeFileSync(
       configPath,
       withoutTui.slice(0, firstTable) + spellings[0] + withoutTui.slice(firstTable),
@@ -3472,14 +3464,14 @@ describe("t294 config diagnostics CLI", () => {
   test("Codex refresh adds a release's new inline member beside the project's own", () => {
     const env = runtimeEnv();
     const release = codexRelease((text) => text.replace(
-      SHIPPED_SET_LINE,
-      'set = { AIDLC_RULES_DIR = "aidlc/spaces/default/memory", RELEASE_VAR = "new" }',
+      SHIPPED_INLINE_LINE,
+      'experimental_request_user_input = { enabled = true, release_var = "new" }',
     ));
     const project = install("codex");
     const configPath = join(project, ".codex", "config.toml");
     const edited = readFileSync(configPath, "utf-8").replace(
-      SHIPPED_SET_LINE,
-      'set = { AIDLC_RULES_DIR = "aidlc/spaces/default/memory", PROJECT_VAR = "must-stay" }',
+      SHIPPED_INLINE_LINE,
+      'experimental_request_user_input = { enabled = true, project_var = "must-stay" }',
     );
     writeFileSync(configPath, edited);
     const args = (dir: string) => [
@@ -3488,8 +3480,8 @@ describe("t294 config diagnostics CLI", () => {
     const refreshed = run(args(project), project, env);
     expect(refreshed.status, refreshed.stdout + refreshed.stderr).toBe(0);
     expect(readFileSync(configPath, "utf-8")).toBe(edited.replace(
-      'PROJECT_VAR = "must-stay" }',
-      'PROJECT_VAR = "must-stay", RELEASE_VAR = "new" }',
+      'project_var = "must-stay" }',
+      'project_var = "must-stay", release_var = "new" }',
     ));
 
     // Where the new key has no safe place beside the project's own dotted keys,
@@ -3497,8 +3489,8 @@ describe("t294 config diagnostics CLI", () => {
     const dotted = install("codex");
     const dottedPath = join(dotted, ".codex", "config.toml");
     const dottedEdited = readFileSync(dottedPath, "utf-8").replace(
-      SHIPPED_SET_LINE,
-      'set.AIDLC_RULES_DIR = "aidlc/spaces/default/memory"\nset.PROJECT_VAR = "must-stay"',
+      SHIPPED_INLINE_LINE,
+      'experimental_request_user_input.enabled = true\nexperimental_request_user_input.project_var = "must-stay"',
     );
     writeFileSync(dottedPath, dottedEdited);
     const written = run(["config", "--project-dir", dotted, "--yes"], dotted, env);
@@ -3552,24 +3544,46 @@ describe("t294 config diagnostics CLI", () => {
     expect(readFileSync(configPath, "utf-8")).toBe(edited);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-  test("Codex refresh keeps the team's active space and needs no --force", () => {
-    const project = install("codex");
+  test("Codex refresh removes the space pointer an earlier release shipped, at whichever space a switch left it", () => {
     const env = runtimeEnv();
-    const configPath = join(project, ".codex", "config.toml");
-    // What /aidlc space teamb writes at the next session start.
-    const onSpace = readFileSync(configPath, "utf-8").replace(
-      'AIDLC_RULES_DIR = "aidlc/spaces/default/memory"',
-      'AIDLC_RULES_DIR = "aidlc/spaces/teamb/memory"',
+    // Earlier releases shipped `AIDLC_RULES_DIR` under [shell_environment_policy]
+    // and a space switch rewrote it in place; this release ships neither, and
+    // the engine reads the active space itself.
+    const shipped = (value: string) =>
+      `[shell_environment_policy]\nset = { AIDLC_RULES_DIR = "${value}" }\n\n[sandbox_workspace_write]`;
+    for (const [label, value, form] of [
+      ["the default space", "aidlc/spaces/default/memory", "inline"],
+      ["a switched space", "aidlc/spaces/teamb/memory", "inline"],
+      ["a switched space, dotted", "aidlc/spaces/teamb/memory", "dotted"],
+    ] as const) {
+      const project = install("codex");
+      const configPath = join(project, ".codex", "config.toml");
+      const clean = readFileSync(configPath, "utf-8");
+      const older = clean.replace(
+        "[sandbox_workspace_write]",
+        form === "inline"
+          ? shipped(value)
+          : `[shell_environment_policy]\nset.AIDLC_RULES_DIR = "${value}"\n\n[sandbox_workspace_write]`,
+      );
+      expect(older, label).not.toBe(clean);
+      writeFileSync(configPath, older);
+      const refreshed = run(["config", "--project-dir", project, "--yes"], project, env);
+      expect(refreshed.status, `${label}: ${refreshed.stdout}${refreshed.stderr}`).toBe(0);
+      expect(refreshed.stdout, label).not.toContain("Note:");
+      // The table and its one line go; the blank line that separated it stays.
+      expect(readFileSync(configPath, "utf-8").replace("\n\n\n[sandbox_workspace_write]", "\n\n[sandbox_workspace_write]"), label).toBe(clean);
+    }
+    // A table the project extended keeps the pointer: it is not AI-DLC's alone to remove.
+    const extended = install("codex");
+    const extendedPath = join(extended, ".codex", "config.toml");
+    const kept = readFileSync(extendedPath, "utf-8").replace(
+      "[sandbox_workspace_write]",
+      '[shell_environment_policy]\nset = { AIDLC_RULES_DIR = "aidlc/spaces/teamb/memory", PROJECT_VAR = "must-stay" }\n\n[sandbox_workspace_write]',
     );
-    writeFileSync(configPath, onSpace);
-    const refreshed = run([
-      "config", "--project-dir", project, "--from", codexStatusRelease(RELEASE_STATUS),
-      "--harness", "codex", "--yes",
-    ], project, env);
-    expect(refreshed.status, refreshed.stdout + refreshed.stderr).toBe(0);
-    expect(refreshed.stdout).not.toContain("Note:");
-    expect(readFileSync(configPath, "utf-8"))
-      .toBe(onSpace.replace(SHIPPED_STATUS_VALUE, JSON.stringify(RELEASE_STATUS)));
+    writeFileSync(extendedPath, kept);
+    const left = run(["config", "--project-dir", extended, "--yes"], extended, env);
+    expect(left.status, left.stdout + left.stderr).toBe(0);
+    expect(readFileSync(extendedPath, "utf-8")).toBe(kept);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("first Codex install keeps a project's own config.toml and adds AI-DLC's settings", () => {
@@ -4871,7 +4885,6 @@ process.exit(0);
       features: hash,
       sandbox_mode: hash,
       sandbox_workspace_write: hash,
-      shell_environment_policy: hash,
       suppress_unstable_features_warning: hash,
       tool_output_token_limit: hash,
       tools: hash,
@@ -4880,7 +4893,6 @@ process.exit(0);
       'value:["sandbox_mode"]': hash,
       'value:["suppress_unstable_features_warning"]': hash,
       'value:["tool_output_token_limit"]': hash,
-      'value:["shell_environment_policy","set","AIDLC_RULES_DIR"]': hash,
       'value:["sandbox_workspace_write","network_access"]': hash,
       'value:["agents","max_depth"]': hash,
       'value:["tools","experimental_request_user_input","enabled"]': hash,

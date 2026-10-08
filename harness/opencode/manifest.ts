@@ -20,9 +20,9 @@
 //     auto-discovered plugin seam mapping opencode hook moments onto the core
 //     hook bodies in .aidlc/hooks/).
 //   - the method tree reaches ambient context via the `instructions` glob in
-//     the shipped opencode.json ("aidlc/spaces/default/memory/**/*.md",
-//     live-verified) — opencode's native include surface, re-pointed on a
-//     space switch by aidlc-includes.ts.
+//     the shipped opencode.json ("aidlc/active-memory/**/*.md",
+//     live-verified): opencode's native include surface, reading the engine's
+//     git-ignored copy of the active space's memory (aidlc-includes.ts).
 //   - opencode auto-reads the project-root AGENTS.md (its primary rules file).
 
 import type { HarnessManifest } from "../../scripts/manifest-types.ts";

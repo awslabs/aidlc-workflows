@@ -101,7 +101,7 @@ import {
   validateGrid,
   validateScope,
 } from "./aidlc-graph.ts";
-import { addRootBlocks, repointHarnessIncludes } from "./aidlc-includes.ts";
+import { ACTIVE_MEMORY_DIR, activeMemoryCopyDrift, addRootBlocks, refreshActiveMemory } from "./aidlc-includes.ts";
 import {
   codexHookTrustHash,
   hookGroupMemberNames,
@@ -4874,6 +4874,31 @@ export async function collectDoctorReport(
     })(),
   });
 
+  // 5b. The copy every harness include reads (aidlc/active-memory/)
+  // holds the active space's memory files. It is brought up to date here, as
+  // every session start does, so a difference left after that is a file the
+  // engine cannot write there.
+  {
+    const space = activeSpace(projectDir);
+    try {
+      refreshActiveMemory(projectDir, space);
+    } catch {
+      // The row below says what is behind.
+    }
+    const drift = activeMemoryCopyDrift(projectDir, space);
+    results.push(drift.length === 0
+      ? {
+        pass: true,
+        label: `active space method copy current (${ACTIVE_MEMORY_DIR}/ holds aidlc/spaces/${space}/memory/)`,
+      }
+      : {
+        pass: false,
+        severity: "warn",
+        label: `active space method copy is behind aidlc/spaces/${space}/memory/ (${drift.join(", ")}); your chats read that copy`,
+        fix: `make ${ACTIVE_MEMORY_DIR}/ writable in the project root (it is AI-DLC's git-ignored copy; remove what is there if it is not a plain folder of files), then run /aidlc or \`${aidlcInvocation()} engine space switch ${space}\``,
+      });
+  }
+
   // 5a. Naming consistency for agent/scope files. Duplicate declared names are
   // loader corruption and fail through loadAgents()/validScopes(); stem/name
   // drift is recoverable authoring drift, so it is advisory and names the file.
@@ -7575,14 +7600,11 @@ function ensureWorkspaceDirs(
     }
   }
   // A copy that config never ran in gets AI-DLC's part of .gitignore and
-  // AGENTS.md, after the team's own content. Before the includes are aligned,
-  // so a part written here points at the active space too.
+  // AGENTS.md, after the team's own content.
   addRootBlocks(projectDir);
-  // Align the harness-native includes with the active space at bootstrap (first
-  // /aidlc). A no-op when they already point there (the common default-cursor
-  // case) — so this never dirties a single-team committed tree; it self-heals a
-  // tree whose cursor and includes drifted out of sync.
-  repointHarnessIncludes(projectDir, activeSpace(projectDir));
+  // The copy the harness includes read holds the active space's memory files
+  // at bootstrap (first /aidlc). A no-op when it already does.
+  refreshActiveMemory(projectDir);
 }
 
 function waitAtIntentCreateChangeControlSnapshotBarrier(): void {
@@ -9053,13 +9075,11 @@ function handleIntentRepos(
 
 // `/aidlc space` (list) · `/aidlc space <name>` (switch the active-space
 // cursor). Switching a space does TWO per-user writes: move the gitignored
-// active-space cursor, then SURGICALLY repoint the harness-native rule includes
-// in place so the next turn loads the switched space's method (the ambient
-// channel — Claude @-stub / Kiro resources glob / Codex AIDLC_RULES_DIR). Both
-// are per-user: the cursor is gitignored, and the include re-point is a no-op at
-// `default` (so a single-team user never dirties the committed tree). Switching
-// to a non-existent space errors (use space-create). --json on the bare list
-// emits the structured shape.
+// active-space cursor, then write the switched space's memory files into the
+// gitignored copy every harness include reads (aidlc-includes.ts), so the next
+// turn loads that space's method. No tracked file changes. Switching to a
+// non-existent space errors (use space-create). --json on the bare list emits
+// the structured shape.
 function handleSpace(projectDir: string, positional: string[], flags: Record<string, string>): void {
   const asJson = flags.json === "true";
   const verbOrTarget = positional[1];
@@ -9149,16 +9169,12 @@ function handleSpace(projectDir: string, positional: string[], flags: Record<str
     else if (loneIntent) recordSessionIntentSwitch(projectDir, sessionId, priorUuid, `${LONE_INTENT_PREFIX}${loneIntent}`);
     else if (spaceHasNoIntent) clearSessionIntentHandoff(projectDir, sessionId);
   }
-  // Re-point the harness-native includes at the switched space so the NEXT turn
-  // loads its method into ambient context (the cursor alone only moves AIDLC's
-  // own resolver; the CLI-native include is the ambient channel). Surgical
-  // in-place rewrite of the pointer segment only — preserves all engine wiring.
-  const repointed = repointHarnessIncludes(projectDir, target);
+  // The copy the harness includes read gets the switched space's memory files,
+  // so the NEXT turn loads its method into ambient context (the cursor alone
+  // only moves AIDLC's own resolver).
+  refreshActiveMemory(projectDir, target);
   // The person's words for the move, as the intent switch says it.
   process.stdout.write(`Now working in space \`${target}\`.\n`);
-  if (repointed.length > 0) {
-    process.stdout.write(`  repointed ${repointed.length} harness include(s) -> ${target}\n`);
-  }
 }
 
 // `aidlc-utility.ts codekb-path [--repo <name>] [--json]` — read-only. Prints the

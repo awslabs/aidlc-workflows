@@ -242,17 +242,18 @@ The cursors remain write-through compatibility state. Older or unsupported
 environments with no binding therefore behave exactly as before.
 
 Session bindings isolate workflow selection across spaces, but the
-harness-native method include is still one mutable checkout-wide surface.
-SessionStart and the space switch verb re-point that surface to the selected
-space, so two simultaneous sessions in different spaces can overwrite which
-space's ambient rules the harness delivers next. This increment supports
-concurrent intents within one space; concurrent multi-space ambient method
-delivery remains future work.
+harness-native method include is still one checkout-wide surface: every
+include reads one git-ignored copy of the active space's memory files,
+`aidlc/active-memory/`, which SessionStart and the space switch verb
+write for the selected space. So two simultaneous sessions in different spaces
+can overwrite which space's ambient rules the harness delivers next. This
+increment supports concurrent intents within one space; concurrent
+multi-space ambient method delivery remains future work.
 
-That re-pointing is AI-DLC's own change, so `aidlc config` never reads it as a
-local edit: a refresh after a space switch plans no conflict, leaves the
-re-pointed files as they are, and writes a file the new release changed at the
-selected space.
+A space switch changes no tracked file: the includes are the same for every
+teammate, and `aidlc config` refreshes them like any other shipped file. An
+install whose includes an earlier release's switch pointed at another space
+is brought to the shipped files by the next refresh, with no conflict.
 
 On POSIX, the Codex adapter pins the validated hook payload session into every
 core-hook child and Bash command, so macOS sandbox denial of `ps` does not weaken
@@ -313,15 +314,18 @@ When you switch spaces, two things follow the cursor automatically:
 
 1. **AI-DLC's own resolvers** — the next intent you start, and the practices and
    knowledge agents load, all come from the space you switched into.
-2. **The rules your harness loads into context** — switching re-points your
-   harness's native rule include (Claude's `@`-import, Kiro CLI resources or IDE steering,
-   Codex's rules dir) at the new space's `memory/`, so the next turn works under
-   that team's method.
+2. **The rules your harness loads into context**: switching writes the new
+   space's `memory/` files into `aidlc/active-memory/`, the git-ignored
+   copy your harness's native rule include reads (Claude's `@`-import, Kiro CLI
+   resources, Cursor rules, opencode's instructions, Copilot's `AGENTS.md`;
+   Kiro IDE's steering file carries the text itself, and on Codex the engine
+   hands each step its rules), so the next turn works under that team's method.
 
-At `default` this re-pointing is a no-op, which is why a single-team workspace
-never churns its committed files. The include is checkout-global rather than
-session-local, so simultaneous sessions in different spaces can race on ambient
-method delivery even though their workflow record selection stays bound.
+No tracked file changes, so a switch never churns the committed tree and
+teammates who pull never pick up your space. The copy is checkout-global
+rather than session-local, so simultaneous sessions in different spaces can
+race on ambient method delivery even though their workflow record selection
+stays bound.
 
 ### Knowing which space you're in
 

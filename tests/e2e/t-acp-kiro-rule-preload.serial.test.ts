@@ -1,4 +1,4 @@
-// covers: function:repointHarnessIncludes, file:skills/aidlc/SKILL.md
+// covers: function:refreshActiveMemory, file:skills/aidlc/SKILL.md
 //
 // Known-answer native Kiro resource calibration. Fresh negative and positive
 // projects use distinct random markers. Only the registered worker may preload
@@ -78,13 +78,14 @@ async function probe(preload: boolean): Promise<string[]> {
       toolsSettings: { subagent: { trustedAgents: [WORKER] } },
       resources: [],
     };
-    // Use the same memory glob as the shipped registered worker; the public
-    // space command must repoint it before Kiro starts the fresh session.
+    // Use the same memory glob as the shipped registered worker: the engine's
+    // copy of the active space's memory, which the public space command writes
+    // before Kiro starts the fresh session.
     const shipped = JSON.parse(readFileSync(join(KIRO_SRC, "agents", "aidlc-developer-agent.json"), "utf8")) as {
       resources: string[];
     };
     const memoryResources = shipped.resources.filter((entry) =>
-      /^file:\/\/aidlc\/spaces\/default\/memory\/\*\*\/\*\.md$/.test(entry));
+      /^file:\/\/aidlc\/active-memory\/\*\*\/\*\.md$/.test(entry));
     expect(memoryResources).toHaveLength(1);
     const worker = {
       name: WORKER, prompt: WORKER_PROMPT,
@@ -110,7 +111,11 @@ async function probe(preload: boolean): Promise<string[]> {
     expect(switchSpace.status, switchSpace.stderr).toBe(0);
     const effectiveWorker = JSON.parse(readFileSync(join(agentDir, `${WORKER}.json`), "utf8"));
     const effectiveController = JSON.parse(readFileSync(join(agentDir, `${CONTROLLER}.json`), "utf8"));
-    expect(effectiveWorker.resources).toEqual(preload ? [`file://aidlc/spaces/${SPACE}/memory/**/*.md`] : []);
+    expect(effectiveWorker.resources).toEqual(preload ? ["file://aidlc/active-memory/**/*.md"] : []);
+    if (preload) {
+      expect(readFileSync(join(project, "aidlc", "active-memory", "org.md"), "utf8"))
+        .toBe(readFileSync(join(project, "aidlc", "spaces", SPACE, "memory", "org.md"), "utf8"));
+    }
     expect(effectiveController.resources).toEqual([]);
     expect(effectiveController.tools).toEqual(["subagent"]);
     expect(effectiveWorker.tools).toEqual([]);

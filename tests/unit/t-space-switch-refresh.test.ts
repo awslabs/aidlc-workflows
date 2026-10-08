@@ -1,12 +1,13 @@
 // covers: tool:aidlc-init, function:withSpace, function:frameworkFilesDoctorCheck, function:instructionFileDoctorCheck
 //
-// A space switch (`/aidlc space switch <name>`) points the tool's include
-// files at that space's memory: Claude Code's .claude/rules/aidlc.md, the
-// @-lines in AI-DLC's part of Copilot's AGENTS.md, the agent files of Copilot,
-// Kiro CLI, Cursor and opencode. That is the engine's own change, so a later
-// `aidlc config` refresh is not a conflict: the files stay at the space the
-// person chose, a file the release changed is written at that space, and a
-// real edit is still the person's to resolve.
+// A space switch (`/aidlc space switch <name>`) changes no tracked file: every
+// include of the tool reads the engine's git-ignored copy of the active
+// space's memory (aidlc-includes.ts), and the switch writes that copy. So a
+// later `aidlc config` refresh after a switch plans no conflict and leaves the
+// include files as installed. An install whose include files an EARLIER
+// release's switch pointed at another space's memory is AI-DLC's own change:
+// the refresh writes the shipped files over them with no conflict. A real edit
+// is still the person's to resolve.
 
 import { afterAll, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
@@ -19,7 +20,6 @@ import {
   instructionFileDoctorCheck,
 } from "../../core/tools/aidlc-config-diagnostics.ts";
 import { walkFiles, withSpace } from "../../core/tools/aidlc-distribution.ts";
-import { repointedIncludeText } from "../../core/tools/aidlc-includes.ts";
 import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS, NATIVE_STARTUP_TIMEOUT_MS } from "../harness/test-budget.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
@@ -34,8 +34,11 @@ const HARNESS_DIRS = {
   kiro: ".kiro",
   cursor: ".cursor",
   opencode: ".aidlc",
+  codex: ".codex",
 } as const;
+const COPY = "aidlc/active-memory";
 const TEAM = "aidlc/spaces/teamb/memory";
+const DEFAULT = "aidlc/spaces/default/memory";
 
 const temporary: string[] = [];
 afterAll(() => {
@@ -73,41 +76,64 @@ function conflicts(project: string, from: string, harness: string): string[] {
   return (parsed.data?.actions ?? []).filter((item) => item.action === "conflict").map((item) => `${item.path} (${item.detail})`);
 }
 
-// The files that point at a space, by what they point at.
+// The tool's files that carry `at`, by workspace-relative path (the shipped
+// tools and the memory itself left out).
 function pointing(project: string, at: string): string[] {
   return walkFiles(project)
     .map((rel) => rel.replaceAll("\\", "/"))
-    .filter((rel) => !rel.startsWith("aidlc/") && !rel.startsWith(".git/") && !rel.includes("/tools/"))
+    .filter((rel) => !rel.startsWith("aidlc/") && !rel.startsWith(".git/") && !rel.includes("/tools/") && !rel.endsWith(".ts"))
     .filter((rel) => readFileSync(join(project, rel), "utf-8").includes(at))
     .sort();
-}
-
-// A configured project switched to the space `teamb`, as the person does it.
-function switched(
-  harness: keyof typeof HARNESS_DIRS,
-  from: string,
-  first: (project: string) => void = () => {},
-): { project: string; repointed: Map<string, string> } {
-  const project = temp(`aidlc-t-space-${harness}-`);
-  mkdirSync(join(project, ".git"));
-  const installed = config(project, from, harness, "--yes");
-  expect(installed.status, installed.out).toBe(0);
-  first(project);
-  const env = { AIDLC_HARNESS_DIR: HARNESS_DIRS[harness] };
-  const created = run(UTILITY, ["space", "create", "teamb", "--project-dir", project], project, env);
-  expect(created.status, created.out).toBe(0);
-  const moved = run(UTILITY, ["space", "switch", "teamb", "--project-dir", project], project, env);
-  expect(moved.status, moved.out).toBe(0);
-  const repointed = new Map(pointing(project, TEAM).map((rel) => [rel, readFileSync(join(project, rel), "utf-8")]));
-  expect(repointed.size, moved.out).toBeGreaterThan(0);
-  return { project, repointed };
 }
 
 function release(harness: string): string {
   return join(REPO_ROOT, "dist-release", harness);
 }
 
-describe("a space switch is not a config conflict", () => {
+function installed(harness: keyof typeof HARNESS_DIRS, from: string): string {
+  const project = temp(`aidlc-t-space-${harness}-`);
+  mkdirSync(join(project, ".git"));
+  const result = config(project, from, harness, "--yes");
+  expect(result.status, result.out).toBe(0);
+  return project;
+}
+
+// A configured project switched to the space `teamb`, as the person does it.
+function switched(harness: keyof typeof HARNESS_DIRS, from: string): { project: string; includes: Map<string, string> } {
+  const project = installed(harness, from);
+  const includes = new Map(pointing(project, COPY).map((rel) => [rel, readFileSync(join(project, rel), "utf-8")]));
+  const env = { AIDLC_HARNESS_DIR: HARNESS_DIRS[harness] };
+  const created = run(UTILITY, ["space", "create", "teamb", "--project-dir", project], project, env);
+  expect(created.status, created.out).toBe(0);
+  writeFileSync(join(project, TEAM, "team.md"), "# Team\n\nEvery queue has a dead-letter alarm.\n");
+  const moved = run(UTILITY, ["space", "switch", "teamb", "--project-dir", project], project, env);
+  expect(moved.status, moved.out).toBe(0);
+  return { project, includes };
+}
+
+// The release as the one before the copy shipped it: include files naming the
+// default space's memory itself, and Codex's config.toml with the seam.
+function earlierRelease(harness: string): string {
+  const prior = join(temp(`aidlc-t-space-${harness}-prior-`), harness);
+  cpSync(release(harness), prior, { recursive: true });
+  for (const rel of walkFiles(prior).map((file) => file.replaceAll("\\", "/"))) {
+    if (rel.endsWith(".ts") || rel.startsWith("aidlc/")) continue;
+    const path = join(prior, rel);
+    const text = readFileSync(path, "utf-8");
+    if (!text.includes(`${COPY}/`)) continue;
+    writeFileSync(path, text.replaceAll(`${COPY}/`, `${DEFAULT}/`));
+  }
+  if (harness === "codex") {
+    const path = join(prior, ".codex", "config.toml");
+    writeFileSync(path, readFileSync(path, "utf-8").replace(
+      "[sandbox_workspace_write]",
+      `[shell_environment_policy]\nset = { AIDLC_RULES_DIR = "${DEFAULT}" }\n\n[sandbox_workspace_write]`,
+    ));
+  }
+  return prior;
+}
+
+describe("a space switch changes no tracked file, and a refresh after it is no conflict", () => {
   test("withSpace sets the active-space memory paths and leaves placeholders alone", () => {
     const text = [
       "@aidlc/spaces/teamb/memory/org.md",
@@ -126,43 +152,54 @@ describe("a space switch is not a config conflict", () => {
   });
 
   for (const [harness, harnessDir] of Object.entries(HARNESS_DIRS) as Array<[keyof typeof HARNESS_DIRS, string]>) {
-    test(`${harness}: a refresh after a space switch plans no conflict and keeps the switch`, () => {
-      const { project, repointed } = switched(harness, release(harness));
+    test(`${harness}: the switch writes the copy and no include; a refresh plans no conflict and changes nothing`, () => {
+      const { project, includes } = switched(harness, release(harness));
+      // Codex has no include; every other harness reads the copy from at least one file.
+      if (harness !== "codex") expect(includes.size, harness).toBeGreaterThan(0);
+      expect(pointing(project, TEAM)).toEqual([]);
+      for (const [rel, text] of includes) expect(readFileSync(join(project, rel), "utf-8"), rel).toBe(text);
+      expect(readFileSync(join(project, COPY, "team.md"), "utf-8")).toContain("dead-letter alarm");
+      expect(readFileSync(join(project, COPY, "org.md"), "utf-8")).toBe(readFileSync(join(project, TEAM, "org.md"), "utf-8"));
+
       expect(conflicts(project, release(harness), harness)).toEqual([]);
       expect(frameworkFilesDoctorCheck(project, harnessDir).pass).toBe(true);
       expect(instructionFileDoctorCheck(project, harnessDir).pass).toBe(true);
       const refreshed = config(project, release(harness), harness, "--yes");
       expect(refreshed.status, refreshed.out).toBe(0);
-      // Every line naming a space stays as the switch wrote it.
-      const spaceLines = (text: string): string[] => text.split("\n").filter((line) => line.includes("aidlc/spaces/"));
-      expect(pointing(project, TEAM)).toEqual([...repointed.keys()]);
-      for (const [rel, text] of repointed) {
-        expect(spaceLines(readFileSync(join(project, rel), "utf-8")), rel).toEqual(spaceLines(text));
+      for (const [rel, text] of includes) expect(readFileSync(join(project, rel), "utf-8"), rel).toBe(text);
+      expect(readFileSync(join(project, COPY, "team.md"), "utf-8")).toContain("dead-letter alarm");
+    });
+
+    test(`${harness}: include files an earlier release's switch pointed at another space are brought to the shipped files, no conflict`, () => {
+      const prior = earlierRelease(harness);
+      const project = installed(harness, prior);
+      const before = pointing(project, DEFAULT);
+      if (harness !== "codex") expect(before, harness).not.toEqual([]);
+      // As that release's switch wrote them: every include at the other space.
+      for (const rel of before) {
+        const path = join(project, rel);
+        writeFileSync(path, readFileSync(path, "utf-8").replaceAll(`${DEFAULT}`, TEAM));
+      }
+      expect(pointing(project, TEAM)).toEqual(before);
+      if (harness === "codex") {
+        expect(readFileSync(join(project, ".codex", "config.toml"), "utf-8")).toContain(`AIDLC_RULES_DIR = "${TEAM}"`);
+      }
+
+      expect(conflicts(project, release(harness), harness)).toEqual([]);
+      const refreshed = config(project, release(harness), harness, "--yes");
+      expect(refreshed.status, refreshed.out).toBe(0);
+      // No file names the other space any more: the includes read the copy,
+      // and Codex's config.toml has no pointer at all.
+      expect(pointing(project, TEAM)).toEqual([]);
+      if (harness === "codex") {
+        expect(readFileSync(join(project, ".codex", "config.toml"), "utf-8")).not.toContain("AIDLC_RULES_DIR");
+      } else {
+        expect(pointing(project, COPY).length).toBeGreaterThan(0);
       }
     });
   }
 
-  // The title line of AI-DLC's part is the person's to replace (#2058); a
-  // space switch after that is still no conflict, and both changes stay.
-  test("copilot: a replaced title and a space switch together are no conflict", () => {
-    const { project } = switched("copilot", release("copilot"), (dir) => {
-      const agents = join(dir, "AGENTS.md");
-      const text = readFileSync(agents, "utf-8");
-      expect(text.split("\n")).toContain("# AI-DLC");
-      writeFileSync(agents, text.split("\n").map((line) => line === "# AI-DLC" ? "# Demo Project" : line).join("\n"));
-    });
-    expect(conflicts(project, release("copilot"), "copilot")).toEqual([]);
-    expect(instructionFileDoctorCheck(project, ".aidlc").pass).toBe(true);
-    const refreshed = config(project, release("copilot"), "copilot", "--yes");
-    expect(refreshed.status, refreshed.out).toBe(0);
-    const text = readFileSync(join(project, "AGENTS.md"), "utf-8");
-    expect(text.split("\n")).toContain("# Demo Project");
-    expect(text).toContain(TEAM);
-    expect(repointedIncludeText("AGENTS.md", text, "teamb")).toBeNull();
-    expect(instructionFileDoctorCheck(project, ".aidlc").pass).toBe(true);
-  });
-
-  test("claude: a real edit to the repointed include is still the person's to resolve", () => {
+  test("claude: a real edit to the include is still the person's to resolve", () => {
     const { project } = switched("claude", release("claude"));
     const rules = join(project, ".claude", "rules", "aidlc.md");
     writeFileSync(rules, `${readFileSync(rules, "utf-8")}\nmy own rule\n`);
@@ -170,24 +207,25 @@ describe("a space switch is not a config conflict", () => {
     expect(frameworkFilesDoctorCheck(project, ".claude").label).toContain(".claude/rules/aidlc.md");
   });
 
-  for (const [harness, rel, part] of [
-    ["claude", ".claude/rules/aidlc.md", ".claude/rules/aidlc.md"],
-    ["copilot", "AGENTS.md", ".aidlc/tools/data/root-blocks/agents"],
-  ] as const) {
-    test(`${harness}: a release that changed a repointed include updates it at the chosen space`, () => {
-      const { project } = switched(harness, release(harness));
-      const next = join(temp(`aidlc-t-space-${harness}-next-`), harness);
-      cpSync(release(harness), next, { recursive: true });
-      const shipped = join(next, part);
-      writeFileSync(shipped, readFileSync(shipped, "utf-8").replace("\n", "\nA line the next release added.\n"));
-      expect(conflicts(project, next, harness)).toEqual([]);
-      const refreshed = config(project, next, harness, "--yes");
-      expect(refreshed.status, refreshed.out).toBe(0);
-      const text = readFileSync(join(project, rel), "utf-8");
-      expect(text).toContain("A line the next release added.");
-      // As a space switch writes it: every include line at the chosen space.
-      expect(repointedIncludeText(rel, text, "teamb")).toBeNull();
-      expect(text).toContain(TEAM);
-    });
-  }
+  // The title line of AI-DLC's part is the person's to replace (#2058); a
+  // space switch after that is still no conflict, and both stay.
+  test("copilot: a replaced title and a space switch together are no conflict", () => {
+    const project = installed("copilot", release("copilot"));
+    const agents = join(project, "AGENTS.md");
+    const text = readFileSync(agents, "utf-8");
+    expect(text.split("\n")).toContain("# AI-DLC");
+    writeFileSync(agents, text.split("\n").map((line) => line === "# AI-DLC" ? "# Demo Project" : line).join("\n"));
+    const env = { AIDLC_HARNESS_DIR: ".aidlc" };
+    expect(run(UTILITY, ["space", "create", "teamb", "--project-dir", project], project, env).status).toBe(0);
+    expect(run(UTILITY, ["space", "switch", "teamb", "--project-dir", project], project, env).status).toBe(0);
+    expect(conflicts(project, release("copilot"), "copilot")).toEqual([]);
+    expect(instructionFileDoctorCheck(project, ".aidlc").pass).toBe(true);
+    const refreshed = config(project, release("copilot"), "copilot", "--yes");
+    expect(refreshed.status, refreshed.out).toBe(0);
+    const after = readFileSync(agents, "utf-8");
+    expect(after.split("\n")).toContain("# Demo Project");
+    expect(after).toContain(`@${COPY}/org.md`);
+    expect(after).not.toContain("@aidlc/spaces/");
+    expect(instructionFileDoctorCheck(project, ".aidlc").pass).toBe(true);
+  });
 });

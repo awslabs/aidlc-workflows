@@ -289,6 +289,7 @@ cursors and machine-local derived state are ignored.
 | `verification/` phase check results | `aidlc/.aidlc-clone-id` (names this clone's shard; must stay machine-local) |
 | Space-level `aidlc/knowledge/` team knowledge files | `aidlc/.aidlc-sessions/` (per-session UUID stamps, workflow bindings, PID ancestry map) |
 | Per-stage `memory.md` diaries; space `memory/` layer | `.aidlc-engine/hooks-health/`, `.aidlc-engine/sensors/` (heartbeats, advisory findings) |
+| | `aidlc/active-memory/` (the engine's copy of the active space's `memory/` that every harness include reads; written at session start and on a space switch, so a switch changes no tracked file) |
 
 ---
 

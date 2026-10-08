@@ -143,7 +143,7 @@ import {
   writeFileAtomic,
 } from "./aidlc-lib.ts";
 import { regenerateRunnerSurfaces } from "./aidlc-runner-gen.ts";
-import { KIRO_IDE_STEERING, kiroIdeSteering, repointedIncludeText } from "./aidlc-includes.ts";
+import { KIRO_IDE_STEERING, kiroIdeSteering } from "./aidlc-includes.ts";
 import {
   activeWorkflowPluginDependencies,
   canonicalScopeTableRegion,
@@ -5458,7 +5458,8 @@ function codexValueText(value: unknown, skip: ReadonlySet<string> = new Set(), p
 }
 
 const CODEX_VALUE_ENTRY_PREFIX = "value:";
-const CODEX_SPACE_POINTER = JSON.stringify(["shell_environment_policy", "set", "AIDLC_RULES_DIR"]);
+const CODEX_SPACE_POINTER_PATH = ["shell_environment_policy", "set", "AIDLC_RULES_DIR"];
+const CODEX_SPACE_POINTER = JSON.stringify(CODEX_SPACE_POINTER_PATH);
 const CODEX_SPACE_MEMORY = /^aidlc\/spaces\/[^/"\\]+\/memory$/;
 
 function codexValueEntry(path: readonly string[]): string {
@@ -5585,10 +5586,7 @@ function planCodexEntries(
     const legacyKey = leaf[0];
     const record = perValue ? recorded[codexValueEntry(leaf)] : recorded[legacyKey];
     const same = now.found && codexValueText(now.value) === codexValueText(target);
-    const spacePointer = now.found && key === CODEX_SPACE_POINTER &&
-      typeof now.value === "string" && CODEX_SPACE_MEMORY.test(now.value) &&
-      typeof target === "string" && CODEX_SPACE_MEMORY.test(target);
-    if (same || spacePointer) {
+    if (same) {
       expected.set(key, now.value);
       continue;
     }
@@ -5625,7 +5623,7 @@ function planCodexEntries(
     for (const [entry, hash] of Object.entries(recorded)) {
       if (!entry.startsWith(CODEX_VALUE_ENTRY_PREFIX)) continue;
       const path = JSON.parse(entry.slice(CODEX_VALUE_ENTRY_PREFIX.length)) as string[];
-      if (shippedLeaves.has(JSON.stringify(path))) continue;
+      if (shippedLeaves.has(JSON.stringify(path)) || entry === codexValueEntry(CODEX_SPACE_POINTER_PATH)) continue;
       const now = tomlPathValue(currentObject, path);
       if (now.found && sha256Bytes(codexValueText(now.value)) === hash) retired.push(path);
     }
@@ -5643,6 +5641,28 @@ function planCodexEntries(
       if (!inSection || !ownedSection(statement.path[0])) continue;
       if (tomlPathValue(stagedObject, statement.path).found) continue;
       if (leaves.some((leaf) => pathStartsWith(leaf, statement.path))) continue;
+      retired.push(statement.path);
+    }
+  }
+
+  // The space pointer earlier releases shipped (`AIDLC_RULES_DIR`, which a
+  // space switch then rewrote) is AI-DLC's whichever space it names, so once
+  // no longer shipped it goes with its statement: the dotted key, or the
+  // `set = { ... }` table that holds nothing else. A table the project
+  // extended keeps it.
+  if (!shippedLeaves.has(CODEX_SPACE_POINTER)) {
+    const pointer = tomlPathValue(currentObject, CODEX_SPACE_POINTER_PATH);
+    const statement = currentStatements.find((candidate) =>
+      candidate.kind === "assignment" && !candidate.arrayTable && pathStartsWith(CODEX_SPACE_POINTER_PATH, candidate.path)
+    );
+    const table = tomlPathValue(currentObject, CODEX_SPACE_POINTER_PATH.slice(0, 2)).value;
+    if (
+      pointer.found && typeof pointer.value === "string" && CODEX_SPACE_MEMORY.test(pointer.value) &&
+      statement !== undefined &&
+      (statement.path.length === CODEX_SPACE_POINTER_PATH.length ||
+        (statement.path.length === 2 && isTomlTable(table) && Object.keys(table).length === 1)) &&
+      !retired.some((path) => JSON.stringify(path) === JSON.stringify(statement.path))
+    ) {
       retired.push(statement.path);
     }
   }
@@ -8648,17 +8668,18 @@ function workspaceState(rel: string): boolean {
 }
 
 // The hash a managed file counts as: its own, or the known one it equals once
-// line endings Git rewrote (#2057) or the include paths a space switch pointed
-// at another space are set aside; `switched` says it was the latter.
-function ownedFileHash(path: string, known: readonly (string | undefined)[]): { hash: string; switched: boolean } {
+// line endings Git rewrote (#2057) or the include paths an earlier release's
+// space switch pointed at another space are set aside (those files are
+// AI-DLC's, and the refresh writes the shipped file over them).
+function ownedFileHash(path: string, known: readonly (string | undefined)[]): { hash: string } {
   const bytes = readFileSync(path);
   const hash = sha256Matching(bytes, known);
-  if (known.includes(hash)) return { hash, switched: false };
+  if (known.includes(hash)) return { hash };
   const text = bytes.toString("utf-8");
   const shipped = withSpace(text, DEFAULT_SPACE);
-  if (shipped === text) return { hash, switched: false };
+  if (shipped === text) return { hash };
   const asShipped = sha256Matching(shipped, known);
-  return known.includes(asShipped) ? { hash: asShipped, switched: true } : { hash, switched: false };
+  return { hash: known.includes(asShipped) ? asShipped : hash };
 }
 
 function planManagedFiles(
@@ -8791,18 +8812,14 @@ function planManagedFiles(
         actions.push({ path: rel, action: "conflict", detail: "locally modified or unowned" });
         continue;
       }
-      // The update keeps the space the person switched to.
-      const atSpace = owned?.switched ? repointedIncludeText(rel, readFileSync(source, "utf-8"), activeSpace(projectDir)) : null;
-      operations.push(atSpace !== null
-        ? writeOperation(rel, atSpace, expected(target), statSync(source).mode & 0o777)
-        : {
-          kind: "copy",
-          path: rel,
-          source,
-          sourceHash: hash,
-          expected: expected(target),
-          mode: statSync(source).mode & 0o777,
-        });
+      operations.push({
+        kind: "copy",
+        path: rel,
+        source,
+        sourceHash: hash,
+        expected: expected(target),
+        mode: statSync(source).mode & 0o777,
+      });
       actions.push({
         path: rel,
         action: targetExists ? "update" : "create",
@@ -9183,10 +9200,6 @@ function planRootIntegrations(
           });
           continue;
         }
-      }
-      // Include lines a space switch pointed at another space stay there.
-      if (withSpace(current, DEFAULT_SPACE) !== current) {
-        value = repointedIncludeText(integration.path, value, activeSpace(projectDir)) ?? value;
       }
       contributions[integration.path] = {
         policy: "managed-block",

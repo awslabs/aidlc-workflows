@@ -1,7 +1,6 @@
 import { expect } from "bun:test";
 import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
-import { parse as parseToml } from "smol-toml";
 import {
   auditBlockField, getField, type IntentRegistryEntry, listIntents,
   readAuditShardEvents, readIntentRegistry,
@@ -108,10 +107,9 @@ export function expectCliSuccess<T>(
 
 export function expectSpaceInclude(root: string, space: string): void {
   expect(readFileSync(join(root, "aidlc", "active-space"), "utf-8").trim()).toBe(space);
-  const config = parseToml(readFileSync(join(root, ".codex", "config.toml"), "utf-8")) as {
-    shell_environment_policy?: { set?: { AIDLC_RULES_DIR?: string } };
-  };
-  expect(config.shell_environment_policy?.set?.AIDLC_RULES_DIR).toBe(`aidlc/spaces/${space}/memory`);
+  // The engine's copy every harness include reads holds this space's memory files.
+  expect(readFileSync(join(root, "aidlc", "active-memory", "org.md"), "utf-8"))
+    .toBe(readFileSync(join(root, "aidlc", "spaces", space, "memory", "org.md"), "utf-8"));
 }
 
 /** Session hooks may append audit rows; count creation events, not shard bytes. */

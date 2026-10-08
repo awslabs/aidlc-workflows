@@ -54,7 +54,7 @@ export function isSubstantiveRuleText(text: string): boolean {
 }
 
 // Resolve graph display paths against the active space. AIDLC_RULES_DIR keeps
-// its existing precedence for Codex and fixture-driven callers.
+// its existing precedence for fixture-driven callers.
 export function rulesContentEntries(
   node: GraphStage,
   projectDir: string,

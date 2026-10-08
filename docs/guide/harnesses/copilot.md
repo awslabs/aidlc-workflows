@@ -391,8 +391,9 @@ then use the ignored local `dist/copilot/` output.
   the next SessionStart with inferred provenance (the codex pattern).
 - **The method include rides AGENTS.md `@`-imports** (live-verified on the
   CLI; VS Code documents `@`-import expansion but it has not been verified
-  live there). `/aidlc space <name>` re-points the block in place, including
-  the `.github/agents/` persona twins.
+  live there). The `@`-lines and the `.github/agents/` persona twins read
+  `aidlc/active-memory/`, the engine's git-ignored copy of the active
+  space's method; `/aidlc space <name>` rewrites the copy, never the block.
 - **No statusline**; use `/aidlc --status` and the progress lines at gates.
 - **Construction swarm is subagent fan-out only** (`AIDLC_USE_SWARM=1` is a
   loud no-op).

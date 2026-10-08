@@ -757,7 +757,7 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
     expect(body).not.toMatch(/^disallowedTools:/m);
     expect(body).not.toMatch(/^model: sonnet$/m);
     expect(body).not.toContain(".aidlc/rules/");
-    expect(body).toContain("aidlc/spaces/default/memory/");
+    expect(body).toContain("aidlc/active-memory/");
   });
 
   test("Copilot compose and selection use .github agent and skill surfaces", () => {
@@ -788,7 +788,7 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
     const body = readFileSync(native, "utf-8");
     expect(body).toMatch(/^tools: \["read", "edit", "search", "execute", "web", "todo"\]$/m);
     expect(body).not.toMatch(/^(model|tier|effort|disallowedTools):/m);
-    expect(body).toContain("aidlc/spaces/default/memory/");
+    expect(body).toContain("aidlc/active-memory/");
 
     const unsafePlugin = join(tmp, "plugin", "copilot-missing-disallowed-tools");
     cpSync(pluginCopilot, unsafePlugin, { recursive: true });

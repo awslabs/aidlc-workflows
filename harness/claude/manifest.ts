@@ -143,10 +143,11 @@ const manifest: HarnessManifest = {
     { src: "skills/aidlc/SKILL.md", dst: "skills/aidlc/SKILL.md" },
     { src: "skills/aidlc/question-rendering.md", dst: "skills/aidlc/question-rendering.md" },
     { src: "skills/aidlc/composer.md", dst: "skills/aidlc/composer.md" },
-    // The AIDLC method @-import stub: .claude/rules/aidlc.md pulls the relocated
-    // method (aidlc/spaces/default/memory/*) into Claude's ambient context by
-    // reference (explicit @-imports, no copy). The rules/ dir is no longer a
-    // core projection — this stub is the only file in it.
+    // The AIDLC method @-import stub: .claude/rules/aidlc.md pulls the method
+    // into Claude's ambient context by reference (explicit @-imports of the
+    // engine's git-ignored copy of the active space's memory,
+    // aidlc/active-memory/*). The rules/ dir is no longer a core
+    // projection; this stub is the only file in it.
     { src: "rules-aidlc.md", dst: "rules/aidlc.md" },
     { src: "settings.json", dst: "settings.json" },
     { src: "settings.local.json.example", dst: "settings.local.json.example" },

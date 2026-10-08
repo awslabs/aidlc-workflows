@@ -682,7 +682,7 @@ dist/claude/.claude/
 |   +-- aidlc-session-end.ts
 |   +-- aidlc-statusline.ts
 +-- rules/
-|   +-- aidlc.md                  # @-import stub -> ../../aidlc/spaces/<active-space>/memory/ (NOT a copy; re-pointed in place on `space` switch)
+|   +-- aidlc.md                  # @-import stub -> ../../aidlc/active-memory/ (the engine's git-ignored copy of the active space's memory)
 +-- agents/
 |   +-- aidlc-product-agent.md
 |   +-- aidlc-design-agent.md
@@ -892,19 +892,22 @@ explicit selector, then the session binding, then the shared cursor as the
 final fallback. Helpers that receive a resolved `intent:null` retain its
 selected space when choosing the bare space root. Switching spaces with
 `/aidlc space <name>` also
-re-points each harness-native rule include (the Claude `@`-import stub described
-above, Kiro CLI resources or IDE steering, Codex's rules dir, opencode's
-`instructions` glob, and Copilot's `AGENTS.md` `@`-imports) at the switched space's
-`memory/`. At `default` the re-point is a byte-identical no-op, so a single-team
-committed tree never churns. SessionStart uses the resolved session space for
-that re-point, but the include remains one checkout-global mutable surface:
-workflow selection is session-bound across spaces, while simultaneous
-multi-space ambient method delivery can still race.
+writes the switched space's `memory/` files into `aidlc/active-memory/`,
+the git-ignored copy every harness-native rule include reads (the Claude
+`@`-import stub described above, Kiro CLI resources, Cursor rules, opencode's
+`instructions` glob, and Copilot's `AGENTS.md` `@`-imports; Kiro IDE's steering
+file carries the text itself, and Codex has no include: the engine hands each
+step its rules). No tracked file changes, so a committed tree never churns and
+teammates keep their own space. SessionStart writes the copy for the resolved
+session space, but the copy remains one checkout-global surface: workflow
+selection is session-bound across spaces, while simultaneous multi-space
+ambient method delivery can still race.
 
 **Committed vs gitignored.** `aidlc/` is checked in so a team shares its work.
 The split (`harness/claude/dot-gitignore`): the two cursors
 (`active-space`, `active-intent`), per-clone runtime (`.aidlc-clone-id`,
-`.aidlc-sessions/`), and derived state (`runtime-graph.json`, `.aidlc-*` under a
+`.aidlc-sessions/`), the engine's copy of the active space's method
+(`active-memory/`), and derived state (`runtime-graph.json`, `.aidlc-*` under a
 record) are **gitignored**; the method (`memory/**`), knowledge (`knowledge/**`,
 `codekb/**`), the `intents.json` registry, each record's `aidlc-state.md`, the
 `audit/` shards, and artifacts are **committed**. Audit is committed as per-clone

@@ -131,7 +131,8 @@ describe("t148 dist/kiro file structure", () => {
     // The AIDLC method relocated OUT of the harness dir (the old .kiro/steering/
     // rule layers) to the workspace root under aidlc/spaces/default/memory/ — one
     // hand-editable source of truth, identical on every harness, read by Kiro via
-    // the agent JSON `resources` globs (file://aidlc/spaces/default/memory/**/*.md).
+    // the agent JSON `resources` globs of the engine's git-ignored copy of the
+    // active space (file://aidlc/active-memory/**/*.md).
     // It sits beside .kiro/, so resolve from KIRO, not K.
     const mem = (...parts: string[]) =>
       join(KIRO, "aidlc", "spaces", "default", "memory", ...parts);

@@ -505,7 +505,7 @@ import {
   type RuleContent,
 } from "./aidlc-steering.ts";
 import { chatHoldsRules, chatNeedsPersona, noteRulesDelivered, RULES_HELD_NOTE } from "./aidlc-rules-held.ts";
-import { refreshKiroIdeSteering } from "./aidlc-includes.ts";
+import { refreshActiveMemory } from "./aidlc-includes.ts";
 
 // Read the workflow state file if it exists, else null. The engine's `next` is
 // a pure read: an absent state file is a legitimate branch (no workflow yet),
@@ -1376,10 +1376,12 @@ function writePrepared(prepared: PreparedEmission): void {
       preparedRulesDelivery.held,
       preparedRulesDelivery.persona,
     );
-    // Kiro IDE: a chat that starts after the memory files changed captures
-    // their new text (a no-op when the steering file already holds it).
+    // The rules went in full, so the memory files changed or the chat is new:
+    // the copy the harness includes read (and Kiro IDE's steering file) gets
+    // their text now, so the host's next request carries it too (a no-op when
+    // it already does).
     if (!preparedRulesDelivery.held) {
-      refreshKiroIdeSteering(preparedRulesDelivery.projectDir, preparedRulesDelivery.space);
+      refreshActiveMemory(preparedRulesDelivery.projectDir, preparedRulesDelivery.space);
     }
   }
   // Stage work handed to the session, by any path (a fresh publication, the

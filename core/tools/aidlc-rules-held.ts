@@ -9,7 +9,11 @@
 //   - Kiro CLI (agent `resources` glob) and opencode (`instructions` glob) put
 //     the memory files in context on every request: an edit is seen at once and
 //     survives a compaction. The proof is that the host's own include, as it
-//     stood when the chat started, covers every file of the stage's bundle.
+//     stood when the chat started, covers every file of the stage's bundle. The
+//     include reads the engine's copy of the active space's memory
+//     (aidlc-includes.ts ACTIVE_MEMORY_DIR), so the proof also needs that copy
+//     to be the memory files now; a step that finds it behind sends the text
+//     and brings the copy up to date for the next request.
 //   - Claude Code (the `.claude/rules/aidlc.md` @-import) loads them at startup,
 //     resume, clear, compact and fork, but not after a mid-chat edit, and it can
 //     clear old tool results with no hook. The proof is that the files still
@@ -42,7 +46,7 @@ import { dirname, join, relative, resolve } from "node:path";
 import { isoTimestamp, isStopHookProbe, sessionsDir, toPosix, validSessionId, writeFileAtomic } from "./aidlc-lib.ts";
 import { rootIntegrationTarget } from "./aidlc-distribution.ts";
 import { runtimeHarnessDir, runtimeHarnessName } from "./aidlc-runtime-paths.ts";
-import { KIRO_IDE_STEERING, kiroIdeSteering } from "./aidlc-includes.ts";
+import { ACTIVE_MEMORY_DIR, KIRO_IDE_STEERING, kiroIdeSteering } from "./aidlc-includes.ts";
 
 type LoadRecord = {
   v: 1;
@@ -161,10 +165,20 @@ function memoryDirRel(space: string): string {
   return `aidlc/spaces/${space}/memory/`;
 }
 
-// The files the Claude @-import stub names, as project-relative paths. The stub
-// lives at .claude/rules/aidlc.md and imports each memory file by a path
-// relative to itself.
-function claudeImportedFiles(projectDir: string, harnessDir: string): string[] {
+// The copy of the active space's memory that every include reads.
+const COPY_DIR_REL = `${ACTIVE_MEMORY_DIR}/`;
+
+// The memory file of `space` a path the host reads stands for: the same file
+// under the copy, or the file itself (an include from before the copy).
+function memoryFileFor(rel: string, space: string): string {
+  return rel.startsWith(COPY_DIR_REL) ? `${memoryDirRel(space)}${rel.slice(COPY_DIR_REL.length)}` : rel;
+}
+
+// The memory files the Claude @-import stub names, as project-relative paths.
+// The stub lives at .claude/rules/aidlc.md and imports each file of the copy
+// by a path relative to itself; the copy was made the memory files of `space`
+// before this is read.
+function claudeImportedFiles(projectDir: string, harnessDir: string, space: string): string[] {
   const stub = join(projectDir, harnessDir, "rules", "aidlc.md");
   let text: string;
   try {
@@ -177,27 +191,35 @@ function claudeImportedFiles(projectDir: string, harnessDir: string): string[] {
     const match = /^@(\S+\.md)\s*$/.exec(line.trim());
     if (!match) continue;
     const rel = toPosix(relative(projectDir, resolve(dirname(stub), match[1])));
-    if (!rel.startsWith("..")) files.push(rel);
+    if (!rel.startsWith("..")) files.push(memoryFileFor(rel, space));
   }
   return files;
+}
+
+// The directory a memory include reads, when `globs` holds the include for
+// the copy or for the files of `space` themselves; null for neither.
+function includedMemoryDir(globs: unknown, space: string, prefix: string): string | null {
+  if (!Array.isArray(globs)) return null;
+  for (const dir of [COPY_DIR_REL, memoryDirRel(space)]) {
+    if (globs.includes(`${prefix}${dir}**/*.md`)) return dir;
+  }
+  return null;
 }
 
 // Kiro CLI on its 2.0 agent engine: the conductor agent file is the one AI-DLC
 // ships (hooks keyed by event; the 3.0 upgrade rewrites them as a list) and its
 // resources glob carries the active space's whole memory tree.
-function kiroIncludesMemory(projectDir: string, space: string): boolean {
+function kiroIncludedMemoryDir(projectDir: string, space: string): string | null {
   const agent = readJson<{ hooks?: unknown; resources?: unknown }>(join(projectDir, ".kiro", "agents", "aidlc.json"));
   if (agent === null || agent.hooks === null || typeof agent.hooks !== "object" || Array.isArray(agent.hooks)) {
-    return false;
+    return null;
   }
-  return Array.isArray(agent.resources) &&
-    agent.resources.includes(`file://${memoryDirRel(space)}**/*.md`);
+  return includedMemoryDir(agent.resources, space, "file://");
 }
 
-function opencodeIncludesMemory(projectDir: string, space: string): boolean {
+function opencodeIncludedMemoryDir(projectDir: string, space: string): string | null {
   const config = readJson<{ instructions?: unknown }>(join(projectDir, rootIntegrationTarget(projectDir, "opencode.json")));
-  return Array.isArray(config?.instructions) &&
-    config.instructions.includes(`${memoryDirRel(space)}**/*.md`);
+  return includedMemoryDir(config?.instructions, space, "");
 }
 
 function removeQuietly(path: string): void {
@@ -243,7 +265,7 @@ export function recordRulesLoad(
     record = { ...base, refresh: "at-start", steering, ...(current ? {} : { stale: true as const }) };
   } else if (harness === "claude") {
     const files: Record<string, string> = {};
-    for (const rel of claudeImportedFiles(projectDir, runtimeHarnessDir(projectDir))) {
+    for (const rel of claudeImportedFiles(projectDir, runtimeHarnessDir(projectDir), space)) {
       files[rel] = sha256File(join(projectDir, rel));
     }
     const previous = readJson<LoadRecord>(path);
@@ -254,10 +276,10 @@ export function recordRulesLoad(
       !["startup", "clear", "compact", "resume"].includes(source);
     record = { ...base, refresh: "at-load", files, ...(stale ? { stale: true as const } : {}) };
   } else if (harness === "kiro" || harness === "opencode") {
-    const covered = !includeChanged && (harness === "kiro"
-      ? kiroIncludesMemory(projectDir, space)
-      : opencodeIncludesMemory(projectDir, space));
-    record = covered ? { ...base, refresh: "per-request", dir: memoryDirRel(space) } : null;
+    const dir = includeChanged ? null : (harness === "kiro"
+      ? kiroIncludedMemoryDir(projectDir, space)
+      : opencodeIncludedMemoryDir(projectDir, space));
+    record = dir !== null ? { ...base, refresh: "per-request", dir } : null;
   } else if (harness === "codex") {
     record = { ...base, refresh: "none", ...(transcriptPath ? { transcript: transcriptPath } : {}) };
   }
@@ -539,7 +561,18 @@ export function chatHoldsRules(
     }
     if (record.refresh === "per-request") {
       const dir = record.dir ?? "";
-      return dir !== "" && paths.every((path) => path.startsWith(dir) && path.endsWith(".md"));
+      if (dir === "") return false;
+      const memory = memoryDirRel(space);
+      // The host reads the copy with each request: it holds the exact text only
+      // while each file of the bundle is in the copy as the memory file is now.
+      if (dir === COPY_DIR_REL) {
+        return paths.every((path) => {
+          if (!path.startsWith(memory) || !path.endsWith(".md")) return false;
+          const hash = sha256File(join(projectDir, path));
+          return hash !== "" && hash === sha256File(join(projectDir, COPY_DIR_REL, path.slice(memory.length)));
+        });
+      }
+      return paths.every((path) => path.startsWith(dir) && path.endsWith(".md"));
     }
     if (record.refresh === "at-load") {
       const files = record.files ?? {};
