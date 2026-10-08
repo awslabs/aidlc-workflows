@@ -36,14 +36,17 @@ jobs:
           [[ "$RELEASE_TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]
           test "$GITHUB_EVENT_NAME" = "push"
           test "$GITHUB_REF" = "refs/tags/$RELEASE_TAG"
+          # release/2.11 is a release branch: 2.11.0 ships exactly the code
+          # tested as preview 2.10.1-preview.20261007.1 (main at 994eb96a8),
+          # so on this branch the tag must sit on release/2.11, not on main.
           git fetch --force origin \
-            "refs/tags/$RELEASE_TAG:refs/tags/$RELEASE_TAG" main
+            "refs/tags/$RELEASE_TAG:refs/tags/$RELEASE_TAG" release/2.11
           tag_sha="$(git rev-parse "$RELEASE_TAG^{commit}")"
-          main_sha="$(git rev-parse origin/main^{commit})"
+          branch_sha="$(git rev-parse origin/release/2.11^{commit})"
           test "$GITHUB_SHA" = "$tag_sha"
           test "$(git rev-parse HEAD^{commit})" = "$tag_sha"
-          if ! git merge-base --is-ancestor "$tag_sha" "$main_sha"; then
-            echo "::error::$RELEASE_TAG points at $tag_sha, which is not on main. Stable publication requires a tagged commit on main and a passing Full Suite for that exact commit."
+          if ! git merge-base --is-ancestor "$tag_sha" "$branch_sha"; then
+            echo "::error::$RELEASE_TAG points at $tag_sha, which is not on release/2.11. Stable publication from this branch requires a tagged commit on release/2.11 and a passing Full Suite for that exact commit."
             exit 1
           fi
           version="$(awk -F'"' '/^export const AIDLC_VERSION = "/ { print $2 }' core/tools/aidlc-version.ts)"
