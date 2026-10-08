@@ -300,14 +300,22 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
     expect(claude.out).not.toContain("reply again");
     expect(claude.out).not.toContain("Reload Window");
     // No hook has run in this record: the Kiro IDE tree's refusal carries the
-    // step the agent shows for each Kiro tool (#2167, measured on Kiro IDE 1.2.37).
-    const never = guarded(proj, ["approve", slug, "--user-input", "Approve"], false, KIRO_IDE_STATE);
-    expect(never.rc).not.toBe(0);
-    const neverRefusal = JSON.parse(never.out).error as string;
-    expect(neverRefusal).toContain("do not ask them to answer again");
-    expect(neverRefusal).toContain('In Kiro IDE, show the person this line: "In Kiro IDE, trust this folder:');
-    expect(neverRefusal).toContain("Then run Developer: Reload Window");
-    expect(neverRefusal).toContain('In Kiro CLI or an ACP client, show this line instead: "In Kiro CLI, quit Kiro');
+    // step the agent shows, for the Kiro tool its command runs in (#2167,
+    // measured on Kiro IDE 1.2.37, where an agent given both lines showed the wrong one).
+    const neverIn = (host: NodeJS.ProcessEnv): string => {
+      const r = guarded(proj, ["approve", slug, "--user-input", "Approve"], false, KIRO_IDE_STATE, host);
+      expect(r.rc).not.toBe(0);
+      const refusal = JSON.parse(r.out).error as string;
+      expect(refusal).toContain("do not ask them to answer again");
+      return refusal;
+    };
+    const neverInIde = neverIn({ TERM_PROGRAM: "kiro", KIRO_SESSION_ID: "sess_test" });
+    expect(neverInIde).toContain('Show the person this line: "In Kiro IDE, trust this folder:');
+    expect(neverInIde).toContain("Then run Developer: Reload Window");
+    expect(neverInIde).not.toContain("Kiro CLI");
+    const neverElsewhere = neverIn({});
+    expect(neverElsewhere).toContain('Show the person this line: "In Kiro CLI, quit Kiro');
+    expect(neverElsewhere).not.toContain("Reload Window");
     // A hook has run here, so the replies below were missed, not unrecordable.
     mkdirSync(hooksHealthDir(proj), { recursive: true });
     writeFileSync(join(hooksHealthDir(proj), "record-human-turn.last"), new Date().toISOString());

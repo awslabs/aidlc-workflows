@@ -85,13 +85,11 @@ const HARNESSES: Harness[] = [
   {
     // Measured live on Kiro IDE 1.2.37 (#2167): a folder trusted after Kiro
     // opened it runs the agent's commands but no hook until Developer: Reload
-    // Window. The same tree runs in Kiro CLI v3 and ACP clients.
+    // Window. The same tree runs in Kiro CLI v3 and ACP clients, which get
+    // this line; inside Kiro IDE the agent gets KIRO_IDE_LINE alone.
     name: "kiro-ide",
     dir: ".kiro",
     lines: () => [
-      "In Kiro IDE, trust this folder: choose Trust Folder & Continue when Kiro asks whether you trust it, or " +
-        "select Manage on the Restricted Mode banner, then Trust. Then run Developer: Reload Window from the " +
-        "Command Palette (Ctrl+Shift+P, or Cmd+Shift+P on macOS), and say carry on.",
       "In Kiro CLI, quit Kiro and start `kiro-cli` again in this folder. If you drive Kiro from an ACP client, " +
         "the Kiro IDE guide names what that client must send.",
     ],
@@ -99,6 +97,11 @@ const HARNESSES: Harness[] = [
 ];
 const COPILOT = HARNESSES[2];
 const OPENCODE = HARNESSES[4];
+const KIRO_IDE = HARNESSES[5];
+const KIRO_IDE_LINE =
+  "In Kiro IDE, trust this folder: choose Trust Folder & Continue when Kiro asks whether you trust it, or " +
+  "select Manage on the Restricted Mode banner, then Trust. Then run Developer: Reload Window from the " +
+  "Command Palette (Ctrl+Shift+P, or Cmd+Shift+P on macOS), and say carry on.";
 
 const projects: string[] = [];
 const outsides: string[] = [];
@@ -136,6 +139,10 @@ function attendedEnv(extra: Record<string, string> = {}): NodeJS.ProcessEnv {
     "AIDLC_RUNTIME_HARNESS_ROOT",
     "AIDLC_COPILOT_SESSION_ID",
     "AIDLC_UNATTENDED",
+    // The host the agent's shell is in is the case's own, never the runner's.
+    "TERM_PROGRAM",
+    "VSCODE_IPC_HOOK",
+    "VSCODE_PID",
   ]) delete env[key];
   env.AIDLC_SKIP_HUMAN_PRESENCE_GUARD = "0";
   return { ...env, ...extra };
@@ -201,6 +208,31 @@ describe("next stops with the agent's step when the engine knows the hooks never
       expect(isStop(next(proj, h))).toBe(false);
     });
   }
+
+  // Kiro IDE's agent, told both lines with "In Kiro IDE" and "In Kiro CLI or an
+  // ACP client", showed the Kiro CLI one in Kiro IDE (live on 1.2.37, #2167).
+  // Its own commands carry TERM_PROGRAM=kiro, so the engine picks the line.
+  test("kiro-ide: inside Kiro IDE the agent gets only the trust and reload line, elsewhere only the Kiro CLI one", () => {
+    const proj = installed(KIRO_IDE);
+    intentCreate(proj, KIRO_IDE);
+    const cliLine = KIRO_IDE.lines(proj)[0];
+    const agentShell = { TERM_PROGRAM: "kiro", KIRO_SESSION_ID: "sess_test", VSCODE_GIT_ASKPASS_NODE: "C:\\Kiro\\Kiro.exe" };
+    const inKiroIde: Record<string, string>[] = [agentShell, { TERM_PROGRAM: "Kiro" }, { VSCODE_PID: "4242" }];
+    for (const host of inKiroIde) {
+      const inIde = next(proj, KIRO_IDE, host);
+      expect(isStop(inIde), JSON.stringify(host)).toBe(true);
+      expect(inIde.message).toContain(`Show the person this line: "${KIRO_IDE_LINE}" Then end your turn.`);
+      expect(inIde.message).not.toContain("Kiro CLI");
+      expect(inIde.message).not.toContain("ACP");
+    }
+    const elsewhereHosts: Record<string, string>[] = [{}, { TERM_PROGRAM: "vscode" }];
+    for (const host of elsewhereHosts) {
+      const elsewhere = next(proj, KIRO_IDE, host);
+      expect(isStop(elsewhere), JSON.stringify(host)).toBe(true);
+      expect(elsewhere.message).toContain(`Show the person this line: "${cliLine}" Then end your turn.`);
+      expect(elsewhere.message).not.toContain("Reload Window");
+    }
+  });
 
   test("Claude's step runs the engine's own next command again, so the waiting question shows again", () => {
     const h = HARNESSES[0];

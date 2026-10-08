@@ -6249,6 +6249,21 @@ describe("t218 enforce-approval-gate refusal names doctor's trust step", () => {
     }
   });
 
+  // The hooks-off step is told apart by the same signal: an agent given both
+  // lines in Kiro IDE showed the Kiro CLI one (live on Kiro IDE 1.2.37, #2167).
+  test("the hooks-off step gives Kiro IDE its own line, by the same signal as the missed-reply line", () => {
+    const activation = (JSON.parse(readFileSync(join(KIRO_IDE_TREE, "tools", "data", "harness.json"), "utf-8")) as {
+      hookActivation: { recovery: string; agentStep: string; agentStepInHost: { env: string[]; text: string };
+        missedReplyInHost: { env: string[] } };
+    }).hookActivation;
+    const split = activation.recovery.indexOf(" In Kiro CLI,");
+    expect(activation.agentStepInHost.env).toEqual(activation.missedReplyInHost.env);
+    expect(activation.agentStepInHost.text).toContain(`Show the person this line: "${activation.recovery.slice(0, split)}"`);
+    expect(activation.agentStepInHost.text).not.toContain("Kiro CLI");
+    expect(activation.agentStep).toContain(`Show the person this line: "${activation.recovery.slice(split + 1)}"`);
+    expect(activation.agentStep).not.toContain("Reload Window");
+  });
+
   // Measured on Kiro IDE: trusting the folder from the Restricted Mode banner
   // runs no AI-DLC hook until Developer: Reload Window. Every copy of the trust
   // step the person or the agent reads (doctor, the refusals, the skill, the
