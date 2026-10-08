@@ -132,7 +132,13 @@ through normal recovery; do not rewrite receipts or assume a new receipt format.
      `source-manifest.json` path and its claimed source paths. Review the
      implementation differentially at those paths rather than sweeping the
      whole workspace; treat any claim that looks unrelated to the unit as a
-     finding.
+     finding. Also pass, as the validation tools to run, the exact test
+     command recorded in `unit-test-instructions.md` and the recorded
+     Construction Verification Command when one is recorded. The reviewer runs
+     them and quotes the result in the review. A command it could not run, or a
+     claim about test results or the coverage floor with no run behind it, is a
+     finding for the person to weigh; it is never by itself a reason to withhold
+     READY.
 
    Do NOT pass: `memory.md` (builder's diary) or any plan/reasoning files. The reviewer forms independent judgment.
 
@@ -180,7 +186,7 @@ through normal recovery; do not rewrite receipts or assume a new receipt format.
    - Reads the Q&A to understand context and constraints
    - Reads the artifact(s) to evaluate what WAS produced
    - Verifies cross-unit contract claims against the passed shared inception contracts, not by sweeping or searching sibling units' design directories (no cross-unit grep or glob patterns); opens another unit's file only when the current unit's design explicitly names it as an integration point, and only that file
-   - Runs any validation tools listed (via shell) and includes results in findings
+   - Runs any validation tools listed (via shell) and quotes their results in findings. A tool it could not run is noted as a finding with the reason, for the person to weigh; a missing run is never by itself grounds for NOT-READY
    - Writes exactly ONE file: its review, at the passed `reviewFile` path. The review uses the knowledge template and contains exactly one rendered `**Verdict:** READY|NOT-READY`, one rendered `**Reviewer:** <directive.reviewer>`, and one rendered `**Iteration:** <n>` line, with its Prior findings and New findings reports under `### Findings`. It may open with the template's `## Review` heading and use H3+ subsections, but no later H1, H2, setext, or raw-HTML H1/H2 heading may open unowned top-level content. Literal headings and ownership-field examples inside fenced or inline code do not count. Step 3 records a plain top-level `#` or `##` line as `###` and treats anything else as an incomplete review.
    - Judges the verdict from open findings only. A settled Critical finding does not make the review NOT-READY. Never write a person's decision, an ID for a new finding, or a status for a decided finding.
    - Writes NOTHING else: not the Q&A, not the reviewed artifact, not any other `produces[]` output, not `source-manifest.json`, not a claimed source path. The verdict certifies the dispatched reviewed output bytes and bound question content; the logger refuses a verdict whose review manifest or source binding changed.

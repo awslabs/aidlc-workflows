@@ -150,7 +150,15 @@ Command**, reused at every Unit/batch checkpoint. If
 matching receipt, or a changed state field), **do not run `verify`**. Propose a
 real project check from the project scan, such as `bun test`, `pytest`, or
 `make check`. It must demonstrate the skeleton's integrated slice end to end and
-check completed Units' working results. Use one nonblank line of at most 1024
+check completed Units' working results, and it must run every test level the
+Testing Contract requires (unit, integration, end-to-end as applicable) and the
+coverage check. When a required level cannot run on this machine (no container
+runtime, no running service), add to the Approve option's description the tests
+the command will not run and why, for example "Runs typecheck and unit tests.
+Does not run the integration tests: they need Docker, which is not installed."
+Never pick a narrower command to avoid a missing runtime without saying so, and
+never answer the gap with "CI runs them" when the plan skips CI Pipeline or the
+repository has no CI configuration. Use one nonblank line of at most 1024
 characters after trimming leading/trailing whitespace. The tools refuse control
 characters (including newline, CR, tab, or NUL) and display-spoofing characters:
 Unicode format characters (including zero-width and bidi controls), line/paragraph
