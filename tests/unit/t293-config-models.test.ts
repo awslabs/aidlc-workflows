@@ -975,6 +975,36 @@ describe("t293 config models CLI", () => {
     const named = run([...request, "--harness", "claude"], project, runtimeEnv());
     expect(named.status, named.stdout + named.stderr).toBe(0);
     expect(named.stdout).toContain("developer effort: not set -> high in aidlc.settings.json.");
+    // The undo printed for a model pin names the harness once, so it runs as printed:
+    // for a new pin (back to `default`) and for a changed one (back to the earlier model).
+    const printedUndo = (stdout: string): string[] => {
+      const line = /To undo: \S+(?: \S+)*? config models (.*)$/m.exec(stdout);
+      expect(line, stdout).not.toBeNull();
+      return (line as RegExpExecArray)[1].trim().split(/\s+/);
+    };
+    const runUndo = (args: string[]) =>
+      run(["config", "models", ...(args.includes("--project-dir") ? [] : ["--project-dir", project]), ...args], project, runtimeEnv());
+    const agentModels = () => (projectSettings(project).models as { agents?: Record<string, { effort?: string; model?: Record<string, string> }> }).agents;
+    const newPin = run([
+      "config", "models", "--project-dir", project, "--project", "--agent", "developer", "--model", "opus", "--harness", "claude", "--yes",
+    ], project, runtimeEnv());
+    expect(newPin.status, newPin.stdout + newPin.stderr).toBe(0);
+    const newPinUndo = printedUndo(newPin.stdout);
+    expect(newPinUndo.filter((arg) => arg === "--harness")).toEqual(["--harness"]);
+    expect(newPinUndo).toContain("default");
+    const removed = runUndo(newPinUndo);
+    expect(removed.status, removed.stdout + removed.stderr).toBe(0);
+    expect(agentModels()?.developer).toEqual({ effort: "high" });
+    const changedPin = run([
+      "config", "models", "--project-dir", project, "--project", "--agent", "architect", "--model", "opus", "--harness", "claude", "--yes",
+    ], project, runtimeEnv());
+    expect(changedPin.status, changedPin.stdout + changedPin.stderr).toBe(0);
+    expect(changedPin.stdout).toContain("architect model (claude): sonnet -> opus in aidlc.settings.json.");
+    const changedPinUndo = printedUndo(changedPin.stdout);
+    expect(changedPinUndo.filter((arg) => arg === "--harness")).toEqual(["--harness"]);
+    const restored = runUndo(changedPinUndo);
+    expect(restored.status, restored.stdout + restored.stderr).toBe(0);
+    expect(agentModels()?.architect?.model).toEqual({ claude: "sonnet" });
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("one agent's setting has a per-key undo: `default` removes it, and --reset is never the undo for an agent key", () => {

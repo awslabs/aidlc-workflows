@@ -10450,10 +10450,11 @@ function settingsChangeLines(
   };
   // `target` null: the no-layer form, which --clear-bypass reads as "every file
   // that records the switch"; it is the one way back every other line names.
+  // An undo that already names its harness (one agent's model) is not given it twice.
   const command = (section: "flags" | "models", args: string[], target: SettingsTarget | null): string =>
     `${configInvocationFor(projectDir)} config ${section} ${
       args.map((arg) => quoteCommandArgument(arg)).join(" ")
-    }${target === null ? "" : ` --${target}`} --yes${namedHarness(projectDir, harness)}${projectTarget(projectDir)}`;
+    }${target === null ? "" : ` --${target}`} --yes${args.includes("--harness") ? "" : namedHarness(projectDir, harness)}${projectTarget(projectDir)}`;
   const lines: string[] = [];
   for (const change of mutations) {
     const file = fileOf(change.target);
