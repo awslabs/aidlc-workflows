@@ -4369,11 +4369,7 @@ function planProjectSettingsMutation(
   // the lookup at another one. A linked worktree's list is in the shared dir.
   const env = { ...process.env };
   for (const name of ["GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_INDEX_FILE"]) delete env[name];
-  // The repository's fsmonitor program stays out of a refresh (see the
-  // tracked-files check below).
-  const located = spawnSync("git", [
-    "-c", "core.fsmonitor=false", "-C", projectDir, "rev-parse", "--git-common-dir",
-  ], {
+  const located = spawnSync("git", ["-C", projectDir, "rev-parse", "--git-common-dir"], {
     encoding: "utf-8",
     env,
     timeout: 10_000,
@@ -8904,8 +8900,7 @@ function gitTracksEvery(projectDir: string, paths: readonly string[]): boolean {
   const tops = [...new Set(paths.map((path) => path.split("/")[0]))];
   const listed = spawnSync(
     "git",
-    // A repository's fsmonitor program is never run just to word this line.
-    ["--literal-pathspecs", "-c", "core.fsmonitor=false", "-C", projectDir, "ls-files", "-z", "--", ...tops],
+    ["--literal-pathspecs", "-C", projectDir, "ls-files", "-z", "--", ...tops],
     { encoding: "utf-8", env, timeout: 10_000 },
   );
   if (listed.status !== 0) return false;

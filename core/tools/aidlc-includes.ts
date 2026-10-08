@@ -262,11 +262,7 @@ export function trackedKiroIdeSteeringAsk(projectDir: string): string {
   if (!kiroIdeTree(projectDir)) return "";
   const marker = join(sessionsDir(projectDir), TRACKED_STEERING_ASKED);
   if (existsSync(marker)) return "";
-  // A repository's fsmonitor program is never run just to word this ask, the
-  // same rule every git command AI-DLC runs for its own bookkeeping follows.
-  const listed = spawnSync("git", [
-    "-c", "core.fsmonitor=false", "ls-files", "--error-unmatch", "--", KIRO_IDE_STEERING,
-  ], {
+  const listed = spawnSync("git", ["ls-files", "--error-unmatch", "--", KIRO_IDE_STEERING], {
     cwd: projectDir,
     stdio: "ignore",
     timeout: 5000,

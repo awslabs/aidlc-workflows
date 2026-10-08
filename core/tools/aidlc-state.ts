@@ -3901,12 +3901,12 @@ function isNonDocPath(p: string): boolean {
 }
 
 // Run git in the workspace, fail-safe: returns null on any spawn/exec problem so
-// callers fall back to the filesystem check rather than trapping. A probe reads
-// state and never needs the filesystem monitor hook, so the one git setting
-// that runs a configured program on `status` is off for it.
+// callers fall back to the filesystem check rather than trapping. The person's
+// own git settings apply: this is their machine and their project, and git here
+// behaves as it does in their terminal.
 function git(pd: string, args: string[]): string | null {
   try {
-    const r = spawnSync("git", ["-c", "core.fsmonitor=false", ...args], {
+    const r = spawnSync("git", args, {
       cwd: pd,
       encoding: "utf-8",
       timeout: DEFAULT_SUBPROCESS_TIMEOUT_MS,

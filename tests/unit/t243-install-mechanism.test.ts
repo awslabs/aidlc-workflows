@@ -3447,12 +3447,10 @@ describe("t243 project initialization", () => {
         const result = spawnSync("git", [
           "-C", project, "-c", "user.email=t243@example.com", "-c", "user.name=t243",
           "-c", "commit.gpgsign=false", "-c", "core.autocrlf=false",
-          // This case watches what a refresh runs, so the case's own commands
-          // say no to the monitor and cannot be taken for it, and no to
-          // automatic maintenance: a commit otherwise hands work to a
-          // background git that outlives it and lands inside the window below,
-          // and `gc`, `maintenance run` and `repack -d` all run the program.
-          "-c", "core.fsmonitor=false", "-c", "gc.auto=0", "-c", "maintenance.auto=false",
+          // No automatic maintenance: a commit otherwise hands work to a
+          // background git that outlives it, and this case reads what a refresh
+          // leaves behind right after one.
+          "-c", "gc.auto=0", "-c", "maintenance.auto=false",
           ...args,
         ], { encoding: "utf-8" });
         expect(result.status, result.stderr).toBe(0);
@@ -3506,31 +3504,10 @@ describe("t243 project initialization", () => {
       expect(readFileSync(join(project, skills[0]), "utf-8")).toBe(`Shipped by an earlier release: ${skills[0]}\n`);
       expect(kept.stdout).not.toContain("no longer part of");
 
-      // The tracked-files check never runs the repository's fsmonitor program.
+      // One file on its own reads as one file, with the way back for that one.
       const solo = ".claude/hooks/aidlc-retired-hook.ts";
       retire([solo]);
-      const monitor = join(temp("aidlc-t243-fsmonitor-"), "fsmonitor.sh");
-      const ran = `${monitor}.ran`;
-      // The program writes down who ran it, parents and all, so a failure here
-      // names the process instead of only saying that something did. `ps` reads
-      // the same on Linux and macOS; git calls the program with a protocol
-      // version and a token.
-      writeFileSync(
-        monitor,
-        `#!/bin/sh\n{ echo "ran with: $*"; pid=$PPID; depth=0;` +
-          ` while [ "$pid" != "1" ] && [ "$depth" -lt 6 ]; do` +
-          ` echo "  $pid: $(ps -o command= -p "$pid" 2>/dev/null)";` +
-          ` pid=$(ps -o ppid= -p "$pid" 2>/dev/null | tr -d " ");` +
-          ` [ -z "$pid" ] && break; depth=$((depth + 1)); done; } >> '${ran}' 2>&1\n`,
-        { mode: 0o755 },
-      );
-      git("config", "core.fsmonitor", monitor);
       const monitored = refresh(project);
-      git("config", "--unset", "core.fsmonitor");
-      expect(
-        existsSync(ran) ? readFileSync(ran, "utf-8") : "",
-        "a refresh ran the repository's fsmonitor program; the lines name what ran it",
-      ).toBe("");
       expect(monitored.stdout).toContain(
         `Removed 1 file that is no longer part of AI-DLC ${AIDLC_VERSION}:\n  ${solo}\nTo get it back, run \`git restore ${solo}\`.\n`,
       );
@@ -3553,71 +3530,6 @@ describe("t243 project initialization", () => {
       expect(quoted.stdout).toContain(`no longer part of AI-DLC ${AIDLC_VERSION}:\n  ${quoteCommandArgument(crafted)}\n`);
       expect(quoted.stdout).not.toContain("git restore");
     }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
-
-    // The case above checks the behaviour on this machine's git. This one holds
-    // the rule that produces it, because which commands consult the monitor is
-    // the git version's business: `ls-files` runs it once the index carries the
-    // monitor's own extension, and a call site added without the setting would
-    // pass here and run a stranger's program on a newer git. A refresh reads a
-    // repository to word its own lines, so every command it runs says no.
-    test.skipIf(process.platform === "win32")(
-      "every git command a refresh runs turns the repository's fsmonitor off",
-      () => {
-        const project = temp("aidlc-t243-fsmonitor-rule-");
-        const git = (...args: string[]) => {
-          const result = spawnSync("git", [
-            "-C", project, "-c", "user.email=t243@example.com", "-c", "user.name=t243",
-            "-c", "commit.gpgsign=false", "-c", "core.autocrlf=false", ...args,
-          ], { encoding: "utf-8" });
-          expect(result.status, result.stderr).toBe(0);
-        };
-        git("init", "-q");
-        const installed = run(INIT, [
-          "config", "--project-dir", project, "--from", CLAUDE_RELEASE, "--harness", "claude",
-        ], project);
-        expect(installed.status, installed.stdout + installed.stderr).toBe(0);
-        // A file the release no longer ships, so the refresh also runs the
-        // tracked-files check that words the way back, and a rule of the
-        // project's own that hides a committed record, so the ignore check
-        // matches and the refresh asks for the repository root to word the
-        // warning. Between them the refresh makes every git call it has.
-        const retired = ".claude/hooks/aidlc-retired-rule.ts";
-        const body = `Shipped by an earlier release: ${retired}\n`;
-        put(project, retired, body);
-        const manifest = manifestOf(project);
-        manifest.files[retired] = sha256Bytes(body);
-        writeFileSync(join(project, manifestRel), `${JSON.stringify(manifest, null, 2)}\n`);
-        writeFileSync(join(project, ".gitignore"), "**/memory/**\n", "utf-8");
-        git("add", "-A");
-        git("commit", "-q", "-m", "a retired file and a rule that hides a record");
-
-        // A `git` ahead of the real one on PATH records what the refresh runs.
-        const recorder = temp("aidlc-t243-gitrecorder-");
-        const calls = join(recorder, "calls");
-        const realGit = Bun.which("git") ?? "/usr/bin/git";
-        writeFileSync(
-          join(recorder, "git"),
-          `#!/bin/sh\n{ printf 'CALL\\n'; for a in "$@"; do printf '%s\\n' "$a"; done; } >> '${calls}'\nexec '${realGit}' "$@"\n`,
-          { mode: 0o755 },
-        );
-        const refreshed = run(
-          INIT,
-          ["config", "--project-dir", project, "--from", CLAUDE_RELEASE],
-          project,
-          { PATH: `${recorder}${delimiter}${process.env.PATH ?? ""}` },
-        );
-        expect(refreshed.status, refreshed.stdout + refreshed.stderr).toBe(0);
-        const ran: string[][] = [];
-        for (const word of readFileSync(calls, "utf-8").split("\n").slice(0, -1)) {
-          if (word === "CALL") ran.push([]);
-          else ran[ran.length - 1]?.push(word);
-        }
-        // The ignore check, the repository root, and the tracked-files check.
-        expect(ran.length, ran.map((call) => `git ${call.join(" ")}`).join("\n")).toBeGreaterThanOrEqual(3);
-        for (const call of ran) expect(call, `git ${call.join(" ")}`).toContain("core.fsmonitor=false");
-      },
-      NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
-    );
 
     test("project files an older refresh recorded are kept and dropped from the record", () => {
       const project = installedProject();
