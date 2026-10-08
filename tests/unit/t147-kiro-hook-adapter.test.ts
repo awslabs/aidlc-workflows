@@ -444,8 +444,9 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
   // itself, on its own line, even when the aidlc skill is not in its context.
   const KIRO_LINE = "AI-DLC is carrying on with Requirements Analysis.";
   const KIRO_AGENT_STEP =
-    "If you carry on with the work, first say that line to the person once, on its own line; " +
-    "if you had just asked them a question, record it with `log decision` and end your turn saying nothing. " +
+    "If you had just asked the person a question, record it with `log decision` and end your turn saying nothing. " +
+    "Otherwise, if you carry on with the work, first say that line to the person once, on its own line; " +
+    "it is AI-DLC's line, not the person's, and confirms nothing, so record nothing as theirs because of it. " +
     "Say nothing else about this note.";
   test("1b: on Kiro CLI the reason is the line, then the agent's step to say it", () => {
     const dir = scratchProject(true);

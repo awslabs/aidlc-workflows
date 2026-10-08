@@ -11586,7 +11586,7 @@ export function stageGateApproval(
 export type DecisionKind = "approval" | "rejection" | "answer";
 
 export interface SelfAttributionMarker {
-  category: "non-human-decision" | "model-authored-decision" | "conductor-default";
+  category: "non-human-decision" | "model-authored-decision" | "conductor-default" | "implied-confirmation";
   phrase: string;
 }
 
@@ -11600,6 +11600,13 @@ function maskQuotedDecisionExamples(text: string): string {
     .replace(/"[^"\n]*"|“[^”\n]*”|‘[^’\n]*’/g, mask)
     .replace(/(^|[\s([{:])'[^'\n]+'(?=$|[\s)\]},.;:!?])/gm, mask);
 }
+
+// A decision or answer text that attributes the person's confirmation to the
+// Stop hook, or to an implied consent ("user implicitly confirmed by hook
+// trigger"): nobody's decision. One regex for the question text (`log
+// decision`) and the reply text (`log answer`).
+const IMPLIED_CONFIRMATION_RE =
+  /\b(?:implicit(?:ly)?|implied|tacit(?:ly)?|assumed)\s+(?:confirm(?:ed|ation|s)?|approv(?:ed|al)|consent(?:ed)?)\b|\bconfirm(?:ed|ation)\s+by\s+(?:the\s+)?(?:stop[\s-]+)?(?:hook|trigger)\b|\bby\s+(?:the\s+)?(?:stop[\s-]+)?hook[\s-]+trigger\b/i;
 
 export function selfAttributedDecisionMarker(
   text: string | undefined | null,
@@ -11675,6 +11682,7 @@ export function selfAttributedDecisionMarker(
       category: "conductor-default",
       regex: /(?:^|\n)\s*(?:[A-Z]\.\s*)?(?:[^\n]{1,80}?\s[-–—:]\s*)?conductor(?:['’]s)?[ -]+default(?=(?:\s*(?:[,.?!;:。！？；：，、()[\]]|$)|\s+[-–—]))/i,
     },
+    { category: "implied-confirmation", regex: IMPLIED_CONFIRMATION_RE },
   ];
 
   for (const { category, regex } of categories) {
@@ -11687,6 +11695,17 @@ export function selfAttributedDecisionMarker(
     }
   }
   return null;
+}
+
+// The one tripwire a question text (`log decision --decision`) is read for: the
+// person's confirmation attributed to the hook, or implied. Quoted examples are
+// masked as above, so a question that mentions the phrase is still a question.
+export function impliedConfirmationMarker(text: string | undefined | null): SelfAttributionMarker | null {
+  const original = text ?? "";
+  const match = IMPLIED_CONFIRMATION_RE.exec(maskQuotedDecisionExamples(original));
+  return match?.index === undefined
+    ? null
+    : { category: "implied-confirmation", phrase: original.slice(match.index, match.index + match[0].length) };
 }
 
 export function isAutonomousConstructionDecision(

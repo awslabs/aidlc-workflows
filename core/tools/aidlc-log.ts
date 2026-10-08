@@ -145,6 +145,7 @@ import {
   resolveWorkflowSelection,
   resolveReviewClass,
   selfAttributedDecisionMarker,
+  impliedConfirmationMarker,
   stripRecommendedDecorator,
   pickerAnswerNote,
   isSummaryConfirmationChoice,
@@ -870,6 +871,18 @@ function handleDecision(args: string[]): void {
     error(unknownCheckpointMessage(flags.checkpoint));
   }
   refusePlainSummaryConfirmation(flags, "decision");
+  // A question text that says the person already confirmed ("Continue with X
+  // (user implicitly confirmed by hook trigger)") records a choice they never
+  // made: AI-DLC's carrying-on line is not their answer. Refused with the way
+  // on; a question in the agent's own words, or one quoting the phrase, passes.
+  const implied = humanPresenceGuardDisabled() ? null : impliedConfirmationMarker(flags.decision);
+  if (implied) {
+    error(
+      `Cannot record this question for "${flags.stage}" because --decision says the person confirmed it ` +
+        `(${implied.category}: "${implied.phrase}"). AI-DLC's carrying-on line is not their answer. ` +
+        "Ask them and record what they say, or carry on with no record.",
+    );
+  }
 
   const pd = resolveActiveProjectDir(projectDir);
   if (flags.checkpoint === "plan-approval" && planApprovalAskIsOpen(pd)) {
