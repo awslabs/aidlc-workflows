@@ -7,7 +7,7 @@
 import { afterAll, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { existsSync, mkdirSync, readdirSync, symlinkSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
-import { join } from "node:path";
+import { join, relative } from "node:path";
 import { readAllAuditShards } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { cleanupTestProject, createTestProject, seededRecordDir, seedStateFile } from "../harness/fixtures.ts";
 import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS, NATIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "../harness/test-budget.ts";
@@ -135,6 +135,40 @@ const POWERSHELL = ["pwsh", "powershell"].find((exe) =>
     // Each refusal is logged as an error, and nothing was answered or copied.
     expect(answered(p)).toBe(0);
     expect(readAllAuditShards(p)).not.toContain("secret");
+  });
+
+  // A live run named the file from the project folder, and the refusal cost a
+  // round trip (#2167). It is the same file, so it is read under that name too,
+  // and the full path as well; a name that climbs out of the folder is not.
+  test("the folder's file named from the project folder, or in full, is the same file", () => {
+    for (const named of [
+      (p: string, name: string) => relative(p, join(seededRecordDir(p), FOLDER, name)),
+      (p: string, name: string) => relative(p, join(seededRecordDir(p), FOLDER, name)).replaceAll("/", "\\"),
+      (p: string, name: string) => join(seededRecordDir(p), FOLDER, name),
+    ]) {
+      const p = project();
+      askQuestion(p);
+      writeAnswer(p, "answer.txt", HOSTILE);
+      const r = log(p, ["answer", "--stage", "feasibility", "--details-file", named(p, "answer.txt")]);
+      expect(r.status, r.out).toBe(0);
+      expect(field(p, "QUESTION_ANSWERED", "Details")).toBe(HOSTILE);
+      expect(readdirSync(join(seededRecordDir(p), FOLDER))).toEqual([]);
+    }
+    const p = project();
+    askQuestion(p);
+    writeFileSync(join(seededRecordDir(p), "note.txt"), "secret\n");
+    writeAnswer(p, "answer.txt", "kept");
+    for (const file of [
+      relative(p, join(seededRecordDir(p), FOLDER, "..", "..", "note.txt")),
+      `${relative(p, join(seededRecordDir(p), FOLDER))}/../../note.txt`,
+      relative(p, join(seededRecordDir(p), FOLDER)),
+      join(p, FOLDER, "answer.txt"),
+    ]) {
+      const r = log(p, ["answer", "--stage", "feasibility", "--details-file", file]);
+      expect(r.status, `${file}: ${r.out}`).not.toBe(0);
+      expect(r.out).not.toContain("secret");
+    }
+    expect(answered(p)).toBe(0);
   });
 
   test.skipIf(process.platform === "win32")("a link in the folder, an oversized or empty file, or both flags are refused", () => {
