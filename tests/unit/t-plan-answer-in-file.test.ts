@@ -1,7 +1,7 @@
 // covers: function:publishPlanApprovalAsk, function:notePlanApprovalFileAnswer, function:requestPlanApprovalReviewNow, hook:aidlc-record-human-turn
 //
 // The Plan Approval questions file says "write your answer after `[Answer]:`
-// and say done". These cases drive the real `next` and the real human-turn
+// and tell me here when you are done". These cases drive the real `next` and the real human-turn
 // hook (Claude Code's payload, and Kiro CLI's userPromptSubmit payload through
 // its adapter) over one poc workflow at Code Generation, under Guard Policy off
 // and strict, and check that:
@@ -154,6 +154,23 @@ function askFor(proj: string): Emitted {
   expect(directive.ask_type).toBe("plan-approval");
   return directive;
 }
+
+// Arden, 2026-10-07: a person-facing line never asks the person to type exact
+// words. The questions file's own invite said "write your answer after
+// `[Answer]:` and say done", and two guide rows paraphrased it, so the file the
+// person opens told them a word to send back.
+describe("the questions file invites an answer without naming words to say", () => {
+  const read = (rel: string): string => readFileSync(join(REPO_ROOT, rel), "utf-8");
+  test("the invite and the two guide rows ask them to tell the agent, in their words", () => {
+    const invite = read("core/tools/aidlc-plan-approval-ask.ts");
+    expect(invite).toContain("write your answer after `[Answer]:` and tell me here when you are done");
+    expect(invite).not.toContain("write your answer after `[Answer]:` and say done");
+    for (const rel of ["docs/guide/07-interaction-modes.md", "docs/guide/13-customization.md"]) {
+      expect(read(rel), rel).not.toContain("then send **done**");
+      expect(read(rel), rel).not.toContain("then say done");
+    }
+  });
+});
 
 describe("an answer written in the Plan Approval questions file", () => {
   test("stays in the file when next shows the question again", () => {
