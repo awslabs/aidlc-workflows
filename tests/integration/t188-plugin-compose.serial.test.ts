@@ -28,7 +28,7 @@ import {
 import { afterAll, beforeAll, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync, type SpawnSyncReturns } from "node:child_process";
 import { createHash } from "node:crypto";
-import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, dirname, join, posix, resolve, win32 } from "node:path";
 import {
@@ -2217,6 +2217,79 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
       expect(readFileSync(installedAgent, "utf-8")).toContain("RESHAPE-UPDATE marker");
     });
   }
+
+  // A plugin built with an AI-DLC from before the plugin file record carries a
+  // compose hook that neither writes nor removes tools/data/plugin-owned-<key>.json.
+  // Sync stages a copy of the project, previous record included, and removes the
+  // owned files but not that record; the old hook leaves it as it is, so sync
+  // must not take it for this run's record: changed files would fail the old hash
+  // and drop out, added files would never be listed, and the plugin's next update
+  // would be refused. Three versions: the record is complete after the second
+  // sync, the third replaces a changed file and prunes a dropped one.
+  test("plugin sync with a pre-record compose hook keeps a complete record across versions", () => {
+    const name = "syn-oldhook";
+    const proj = mkdtempSync(join(tmp, `syn-${name}-`));
+    cpSync(CLAUDE_DIST, join(proj, ".claude"), { recursive: true });
+    const toolA = (version: string) => `// ${name} tool A ${version}\n`;
+    const v1 = {
+      "sensors/aidlc-syn-oldhook-check.md": UPGRADE_SENSOR.replaceAll("syn-upgrade", name),
+      "tools/aidlc-sensor-syn-oldhook-check.ts": toolA("v1"),
+    };
+    const root = prepareSyntheticPlugin(proj, name, v1);
+    // The hook from before the record: compose as today, then put the previous
+    // record back exactly as it was (or leave none, as none was written).
+    renameSync(join(root, "hooks", "compose.ts"), join(root, "hooks", "compose-current.ts"));
+    writeFileSync(join(root, "hooks", "compose.ts"), [
+      'import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";',
+      'import { join } from "node:path";',
+      'import { compose } from "./compose-current.ts";',
+      `const record = join(process.env.CLAUDE_PROJECT_DIR ?? process.cwd(), ".claude", "tools", "data", "plugin-owned-${name}.json");`,
+      "const before = existsSync(record) ? readFileSync(record) : null;",
+      "await compose();",
+      "if (before === null) rmSync(record, { force: true });",
+      "else writeFileSync(record, before);",
+      "",
+    ].join("\n"));
+    const recordPaths = (): string[] =>
+      (JSON.parse(readFileSync(join(proj, ".claude", "tools", "data", `plugin-owned-${name}.json`), "utf-8")) as {
+        files: Array<{ path: string }>;
+      }).files.map((file) => file.path).sort();
+    const installedA = join(proj, ".claude", "tools", "aidlc-sensor-syn-oldhook-check.ts");
+    const installedB = join(proj, ".claude", "tools", "aidlc-sensor-syn-oldhook-extra.ts");
+
+    const first = syncSynthetic(proj, name, {});
+    expect(first.status, first.stderr).toBe(0);
+    expect(recordPaths()).toEqual([
+      ".claude/sensors/aidlc-syn-oldhook-check.md",
+      ".claude/tools/aidlc-sensor-syn-oldhook-check.ts",
+    ]);
+
+    // v2: tool A changes, tool B is added.
+    const second = syncSynthetic(proj, name, {
+      "tools/aidlc-sensor-syn-oldhook-check.ts": toolA("v2"),
+      "tools/aidlc-sensor-syn-oldhook-extra.ts": `// ${name} tool B\n`,
+    });
+    expect(second.status, second.stderr).toBe(0);
+    expect(readFileSync(installedA, "utf-8")).toContain("tool A v2");
+    expect(recordPaths()).toEqual([
+      ".claude/sensors/aidlc-syn-oldhook-check.md",
+      ".claude/tools/aidlc-sensor-syn-oldhook-check.ts",
+      ".claude/tools/aidlc-sensor-syn-oldhook-extra.ts",
+    ]);
+
+    // v3: tool A changes again, tool B is dropped.
+    rmSync(join(root, "tools", "aidlc-sensor-syn-oldhook-extra.ts"));
+    const third = syncSynthetic(proj, name, {
+      "tools/aidlc-sensor-syn-oldhook-check.ts": toolA("v3"),
+    });
+    expect(third.status, third.stderr).toBe(0);
+    expect(readFileSync(installedA, "utf-8")).toContain("tool A v3");
+    expect(existsSync(installedB)).toBe(false);
+    expect(recordPaths()).toEqual([
+      ".claude/sensors/aidlc-syn-oldhook-check.md",
+      ".claude/tools/aidlc-sensor-syn-oldhook-check.ts",
+    ]);
+  });
 
   // --- Compile self-heal (a prior compile that didn't land must retry) ---
   test("compose recompiles when the graph lost the plugin's stages", () => {

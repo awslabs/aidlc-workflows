@@ -1502,6 +1502,14 @@ export async function syncPlugins(
           evidence.ownership.get(plugin.key),
         ),
       );
+      // The staged copy carries the previous record. A current compose hook
+      // writes a fresh one; a hook from before the record would leave the
+      // previous one in place and it would pass for this run's. Remove it, so
+      // that hook falls back to the source-bytes proof below.
+      rmSync(
+        join(harnessDataDir(stagedProject, harnessDir), `plugin-owned-${plugin.key}.json`),
+        { force: true },
+      );
       await runComposer(plugin, stagedProject, harnessDir);
     }
     for (const key of pruned) {
