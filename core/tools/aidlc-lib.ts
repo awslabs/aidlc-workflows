@@ -12284,12 +12284,17 @@ const ANSWER_TEXT_MAX_BYTES = 64 * 1024;
 export function readAnswerTextFile(projectDir: string, file: string): string {
   const root = recordDir(projectDir);
   if (!root) throw new Error("An answer text file needs an active piece of work.");
-  const relativePath = file.replaceAll("\\", "/");
-  const parts = relativePath.split("/");
-  if (
-    isAbsolute(file) || parts.some((part) => part === ".." || part === ".") ||
-    !relativePath.startsWith(`${ANSWER_TEXT_DIR}/`) || relativePath.length === ANSWER_TEXT_DIR.length + 1
-  ) {
+  const inFolder = (name: string): boolean =>
+    !name.split("/").some((part) => part === ".." || part === ".") &&
+    name.startsWith(`${ANSWER_TEXT_DIR}/`) && name.length > ANSWER_TEXT_DIR.length + 1;
+  const given = file.replaceAll("\\", "/");
+  // Named from the project folder or in full, it is the same file (#2167):
+  // read it under its name in the record, which still has to be in the folder.
+  const fromRecord = relative(root, resolvePath(projectDir, given)).replaceAll("\\", "/");
+  const relativePath = !isAbsolute(file) && inFolder(given)
+    ? given
+    : !isAbsolute(fromRecord) && inFolder(fromRecord) ? fromRecord : null;
+  if (relativePath === null) {
     throw new Error(
       `An answer text file must be inside ${ANSWER_TEXT_DIR}/ in the work's record, named relative to the record ` +
         `(for example ${ANSWER_TEXT_DIR}/answer.txt).`,

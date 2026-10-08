@@ -1749,7 +1749,8 @@ An answer whose text holds a character a shell acts on (`$`, a backtick, a quote
 a file instead of the command line: the agent writes it to
 `<record>/.aidlc-engine/answer-text/answer.txt` and passes `--details-file
 .aidlc-engine/answer-text/answer.txt` (`--on-instruction-file` for the words that
-left a choice to the agent). The engine reads only that folder, through no link,
+left a choice to the agent). The same file named from the project folder, or by
+its full path, is read too. The engine reads only that folder, through no link,
 up to 64 KiB, and removes the file once read.
 See [Hooks and Tools](../reference/06-hooks-and-tools.md#read-only-audit-commands) for pairing rules, ordering, and filters.
 
