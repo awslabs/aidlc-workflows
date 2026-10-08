@@ -9200,7 +9200,7 @@ const DOCUMENT_INPUT_EXTENSIONS = new Set([
 // on its path: keys, environment files, and anything that says it holds a
 // secret. An exact path the person typed is read as they gave it; only a
 // lookup is held to this.
-function documentInputLooksSecret(name: string): boolean {
+export function documentInputLooksSecret(name: string): boolean {
   return name.startsWith(".env") || name.endsWith(".env") || name.endsWith(".pem") ||
     name.endsWith(".key") || name.endsWith(".p12") || name.endsWith(".pfx") ||
     name.startsWith("id_") || /secret|credential|password|passwd|token|\.netrc|\.npmrc|\.pypirc|kubeconfig/.test(name);
