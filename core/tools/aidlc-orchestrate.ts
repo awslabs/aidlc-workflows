@@ -516,10 +516,13 @@ function commonFolder(paths: readonly string[]): string {
 }
 
 // What the stage produced, said with its approval question so the person sees
-// it even when no summary came before: the stage's files that are on disk, by
-// name (a questions file with how many questions it holds and how many are
-// answered), and the folder they are in. "" when the folder cannot be named (a
-// stage that repeats per Unit, with no Unit named).
+// it even when no summary came before: the stage's files that are on disk, each
+// named by its path from the folder they share (a questions file with how many
+// questions it holds and how many are answered), and that folder. A stage that
+// writes once per repo (Reverse Engineering in a workspace of sibling repos)
+// names each file by its repo, "orders-svc/architecture.md"; a single-folder
+// stage names the bare file. "" when the folder cannot be named (a stage that
+// repeats per Unit, with no Unit named).
 function producedLine(node: GraphStage, unit: string | null, unitFolders: boolean, projectDir: string): string {
   if (unitFolders && !unit) return "";
   const paths = resolveProduces(node, unitFolders ? unit : null, engineRelativeRecordDir(projectDir), codekbCtxFor(projectDir));
@@ -528,7 +531,7 @@ function producedLine(node: GraphStage, unit: string | null, unitFolders: boolea
   const names = paths
     .filter((path) => existsSync(join(projectDir, path)))
     .map((path) => {
-      const name = path.split("/").at(-1) ?? path;
+      const name = path.startsWith(`${folder}/`) ? path.slice(folder.length + 1) : path;
       return name.endsWith("-questions.md") ? `${name}${questionsCount(join(projectDir, path))}` : name;
     });
   if (names.length === 0) return `${node.name} is ready for your review. Its output goes in ${folder}/.`;
@@ -538,14 +541,12 @@ function producedLine(node: GraphStage, unit: string | null, unitFolders: boolea
 
 // " (3 questions, 2 answered)" for a questions file: its `[Answer]:` lines
 // outside the Consolidated Summary Confirmation, and how many hold an answer.
-// "" when the file cannot be read or holds no question.
+// "" when the file cannot be read (a symlink, a FIFO, or more than the cap, as
+// the other record reads refuse) or holds no question.
+const QUESTIONS_COUNT_MAX_BYTES = 1024 * 1024;
 function questionsCount(path: string): string {
-  let text: string;
-  try {
-    text = readFileSync(path, "utf-8");
-  } catch {
-    return "";
-  }
+  const text = readBoundedRegularFile(path, QUESTIONS_COUNT_MAX_BYTES);
+  if (text === null) return "";
   let total = 0;
   let answered = 0;
   for (const section of text.replace(/\r\n/g, "\n").split(/^(?=## )/m)) {

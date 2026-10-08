@@ -17,6 +17,7 @@ import {
   seededStateFile,
 } from "../harness/fixtures.ts";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
+import { artifactFilename, findStageBySlug } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 const created: string[] = [];
@@ -93,6 +94,43 @@ describe("t-gate-names-what-it-produced: the gate line names what the stage prod
     const reply = report(proj, ["--result", "awaiting-approval"]);
     expect(reply.narration).toStartWith("Requirements Analysis is ready for your review. Its output goes in ");
     expect(reply.narration).toMatch(/inception\/requirements-analysis\/\.$/);
+  });
+
+  // A brownfield workspace with two sibling repos: Reverse Engineering writes
+  // every document once per repo, under the space's codekb folder. Each file is
+  // named by its path from the shared folder, so no name repeats and the repo
+  // is said; a single-folder stage keeps reading as before.
+  test("a stage that writes per repo names each file by its repo, not twice by its bare name", () => {
+    const proj = createOrchestrationTestProject();
+    created.push(proj);
+    writeFileSync(seededStateFile(proj), readFileSync(join(FIXTURES_DIR, "state-brownfield-init-done.md"), "utf-8"), "utf-8");
+    const registry = join(proj, "aidlc", "spaces", "default", "intents", "intents.json");
+    const rows = JSON.parse(readFileSync(registry, "utf-8")) as Array<Record<string, unknown>>;
+    rows[0].repos = ["repo-a", "repo-b"];
+    writeFileSync(registry, `${JSON.stringify(rows, null, 2)}\n`, "utf-8");
+    const produces = findStageBySlug("reverse-engineering")?.produces ?? [];
+    expect(produces.length).toBeGreaterThan(1);
+    for (const repo of ["repo-a", "repo-b"]) {
+      const dir = join(proj, "aidlc", "spaces", "default", "codekb", repo);
+      mkdirSync(dir, { recursive: true });
+      for (const name of produces) writeFileSync(join(dir, artifactFilename(name)), `# ${repo} ${name}\n`, "utf-8");
+    }
+    appendAuditEntry("STAGE_STARTED", { Stage: "reverse-engineering" }, proj);
+    const result = spawnSync(process.execPath, [ORCH, "report", "--stage", "reverse-engineering", "--result", "awaiting-approval", "--project-dir", proj], {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8",
+      env: {
+        ...process.env, AIDLC_SKIP_REVIEWER_GATE_GUARD: "1", AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD: "1",
+        AIDLC_DISABLE_ENSEMBLE_EVIDENCE: "1",
+      },
+    });
+    expect(result.status, `${result.stdout}${result.stderr}`).toBe(0);
+    const reply = JSON.parse((result.stdout ?? "").trim().split(/\r?\n/).at(-1) ?? "{}") as { narration?: string };
+    const line = reply.narration ?? "";
+    expect(line).toStartWith("Reverse Engineering is ready for your review. It produced repo-a/");
+    expect(line).toContain("repo-a/architecture.md");
+    expect(line).toContain("repo-b/architecture.md");
+    expect(line).not.toContain(" architecture.md, architecture.md");
+    expect(line).toMatch(/, in aidlc\/spaces\/default\/codekb\/\.$/);
   });
 
   test("a second next at the open gate says the same line, and words at the gate get an answer-first step", () => {
