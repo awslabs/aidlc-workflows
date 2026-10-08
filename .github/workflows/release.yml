@@ -733,6 +733,9 @@ jobs:
         with:
           fetch-depth: 0
           ref: ${{ needs.validate.outputs.sha }}
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: 1.4.2
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: attested-release
@@ -750,6 +753,20 @@ jobs:
           test "$FULL_SUITE_SHA" = "$AUTHORIZED_SHA"
           test "$RELEASE_TAG" = "v$(jq -r .version build/release/version.json)"
           (cd build/release && sha256sum -c checksums.txt)
+      # The body is this version's CHANGELOG entry, written after the recheck
+      # above so it can only come from the commit this release was authorized
+      # for. GitHub's generated notes are not used: their "What's Changed" list
+      # names every contributing account by handle.
+      - name: Build release notes from CHANGELOG.md
+        env:
+          RELEASE_TAG: ${{ needs.validate.outputs.tag }}
+        run: |
+          set -euo pipefail
+          bun scripts/release-notes.ts \
+            --tag "$RELEASE_TAG" \
+            --changelog "$PWD/CHANGELOG.md" \
+            --out "$RUNNER_TEMP/release-notes.md"
+          test -s "$RUNNER_TEMP/release-notes.md"
       - name: Create GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -759,7 +776,7 @@ jobs:
           gh release create "$RELEASE_TAG" build/release/* \
             --verify-tag \
             --title "AI-DLC ${RELEASE_TAG#v}" \
-            --generate-notes
+            --notes-file "$RUNNER_TEMP/release-notes.md"
       - name: Verify uploaded asset inventory
         env:
           GH_TOKEN: ${{ github.token }}
