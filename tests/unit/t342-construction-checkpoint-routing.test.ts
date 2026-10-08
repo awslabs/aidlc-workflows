@@ -3216,4 +3216,21 @@ describe("t342 status names the Unit's step and a typed switch says where the wo
     expect(directive.kind).toBe("print");
     expect(directive.narration).toBe("The work picks up at Code Generation for beta.");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  // The state the live run was in: the Unit has finished Code Generation and
+  // waits at its checkpoint, where the walk is on no work step. The line names
+  // the checkpoint, never the block's first stage.
+  test("at a Unit's checkpoint, a typed setting says the work picks up at that checkpoint", () => {
+    const p = fixture();
+    cover(p, "alpha");
+    approve(p, "alpha");
+    cover(p, "beta");
+    const at = next(p);
+    expect(at.construction_checkpoint?.unit, JSON.stringify(at)).toBe("beta");
+    const result = runOrchestrateNext(ORCH, p, ["--guard-policy", "strict"]);
+    expect(result.directive, result.stderr).not.toBeNull();
+    const directive = result.directive as { kind: string; narration?: string };
+    expect(directive.kind).toBe("print");
+    expect(directive.narration).toBe("The work picks up at the Unit checkpoint for beta.");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });

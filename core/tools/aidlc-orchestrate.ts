@@ -3472,12 +3472,24 @@ function stillParkedLine(): string {
 // Where the work picks up, said with a setting the person typed, so the agent
 // has nothing to guess from Current Stage (under a Unit-by-Unit walk it stays
 // on the block's first stage while a Unit works through the later ones; a live
-// run read "we'll pick up at Functional Design" at Unit 2's Code Generation).
+// run read "we'll pick up at Functional Design" at Unit 2's Code Generation and
+// at its checkpoint). The walk's own step names it: the Unit's stage, the
+// summary confirmation after one, or the Unit's checkpoint. A paused walk is
+// already said to be paused, and a block whose Units are all covered has no
+// step of its own, so neither gets a line. Off a Unit walk, Current Stage is it.
 function withWorkPicksUpLine<T extends Directive>(directive: T, pd: string, scope: string, stateContent: string): T {
   const current = (getField(stateContent, "Current Stage") ?? "").trim();
-  const beat = scope ? unitMajorWorkBeat(pd, scope, stateContent, current) : null;
-  const name = beat ? `${beat.stage.name} for ${beat.unit}` : nodeForSlug(current)?.name ?? "";
-  if (name) (directive as { narration?: string }).narration = `The work picks up at ${name}.`;
+  const walk = scope ? unitMajorWalkBeat(pd, scope, stateContent, current) : null;
+  const at = walk === null
+    ? nodeForSlug(current)?.name ?? ""
+    : walk.step.kind === "work"
+      ? `${walk.step.stage.name} for ${walk.step.unit}`
+      : walk.step.kind === "summary"
+        ? `the summary confirmation of ${walk.step.stage.name} for ${walk.step.unit}`
+        : walk.step.kind === "checkpoint"
+          ? `the Unit checkpoint for ${walk.step.unit}`
+          : "";
+  if (at) (directive as { narration?: string }).narration = `The work picks up at ${at}.`;
   return directive;
 }
 
