@@ -2064,6 +2064,49 @@ describe("t188: a late-logged question takes the message that answered it", () =
     expect(refused.out).not.toContain("Wait for the human to type an answer");
   });
 
+  // AIDA 5450894846 on #2150: the sessionless hint listed other chats' messages; a
+  // command or a wordless message was offered and accepted as a reply; a routing
+  // answer did not spend the messages before it. The proof and the hint now follow
+  // the presence check's own rules.
+  test("with no chat the engine can name and two chats since the last decision, the hint lists no message", () => {
+    const slug = field(proj, "Current Stage");
+    reply("A from one chat");
+    reply("A from another", OTHER_CHAT);
+    expect(log(["decision", "--stage", slug, "--decision", "Q?", "--options", "A,B"]).rc).toBe(0);
+    expect(log(["answer", "--stage", slug, "--details", "A"]).rc).toBe(0);
+    const refused = log(["answer", "--stage", slug, "--details", "B"]);
+    expect(refused.rc).not.toBe(0);
+    expect(refused.out).not.toContain("--message");
+  });
+
+  test("a message with no words, or a turn that was only a command, is neither offered nor accepted as the reply", () => {
+    const slug = field(proj, "Current Stage");
+    const command = saveMessage(proj, {
+      session: CHAT, at: new Date().toISOString().replace(/\.\d{3}Z$/, "Z"), source: "prompt", text: "/aidlc --status", picker: null,
+      words: null, settings: [], route: { scope: null, newIntent: false, skip: [], add: [], projectType: null }, applied: [],
+    }).id;
+    appendAuditEntry("HUMAN_TURN", { Session: CHAT, Reply: "command", "Message Id": command }, proj);
+    expect(log(["decision", "--stage", slug, "--decision", "Q?", "--options", "A,B"], inChat).rc).toBe(0);
+    const named = log(["answer", "--stage", slug, "--details", "A", "--message", command], inChat);
+    expect(named.rc).not.toBe(0);
+    expect(named.out).toContain("no words");
+    const plain = log(["answer", "--stage", slug, "--details", "A"], inChat);
+    expect(plain.rc).not.toBe(0);
+    expect(plain.out).not.toContain(`--message ${command}`);
+    expect(rows("QUESTION_ANSWERED")).toHaveLength(0);
+  });
+
+  test("a routing answer spends the messages before it, like an approval", () => {
+    const slug = field(proj, "Current Stage");
+    const earlier = reply("add a flag", CHAT, 60);
+    appendAuditEntry("REQUEST_ROUTED", { Stage: slug, Route: "active-work" }, proj);
+    expect(log(["decision", "--stage", slug, "--decision", "After routing?", "--options", "A,B"], inChat).rc).toBe(0);
+    const stale = log(["answer", "--stage", slug, "--details", "A", "--message", earlier], inChat);
+    expect(stale.rc).not.toBe(0);
+    expect(stale.out).toContain(`message ${earlier}`);
+    expect(stale.out).toContain("spent");
+  });
+
   test("with no message before the question, or only a spent one, today's hint stands and names no id", () => {
     const slug = field(proj, "Current Stage");
     expect(log(["decision", "--stage", slug, "--decision", "Q?", "--options", "A,B"], inChat).rc).toBe(0);
