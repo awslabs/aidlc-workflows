@@ -549,6 +549,11 @@ interface AskDirectiveBase {
   question: string;
   /** QUESTION_NOTE, on every ask that waits for the person. */
   question_note?: string;
+  /**
+   * The request named a document in the project: how to add it to the knowledge
+   * base and read it from there. Absent when the request names none.
+   */
+  document_note?: string;
 }
 
 /** One plan the person can name instead: its complete command, and its stage count as the person sees it ("15 stages", the stages after Initialization). */
@@ -720,6 +725,8 @@ export interface PrintDirective {
   /** Optional spoken line for the user; presentation only (see NarrationField). */
   narration?: NarrationField;
   message: string;
+  /** As on an ask: the request named a document in the project. */
+  document_note?: string;
   // next_stage: on the reply that opens (or re-opens) a stage's approval gate,
   // the stage the Approve option continues to, computed when the gate opens so
   // a plan change made during the stage is in it. null = the final in-scope
@@ -939,6 +946,10 @@ const ASK_FIELDS = [
   "kind",
   "question",
   "question_note",
+  // The request names a document in the project: how to add it to the knowledge
+  // base instead of reading it by hand (a live run read a PDF with ad hoc
+  // python3, so the person saw raw bytes and a permission prompt).
+  "document_note",
   "ask_type",
   "response_route",
   "confirm_command",
@@ -969,7 +980,7 @@ const ASK_FIELDS = [
   "new_project_command",
   "choices",
 ] as const;
-const PRINT_FIELDS = ["kind", "message", "next_stage"] as const;
+const PRINT_FIELDS = ["kind", "message", "next_stage", "document_note"] as const;
 const ERROR_FIELDS = ["kind", "message"] as const;
 const DONE_FIELDS = ["kind", "reason", "workflow_continues"] as const;
 const PARKED_FIELDS = ["kind", "reason", "stage"] as const;
@@ -1166,6 +1177,7 @@ export function validateDirective(obj: unknown): ValidationResult {
     Array.isArray(o[CHANGE_NOTICES_FIELD]) && o[CHANGE_NOTICES_FIELD].length > 0, kind, errors,
   );
   checkAgentNote(o, "question_note", true, kind, errors);
+  checkAgentNote(o, "document_note", true, kind, errors);
   checkAgentNote(o, "gate_note", true, kind, errors);
   checkAgentNote(o, "protocol_note", true, kind, errors);
 
