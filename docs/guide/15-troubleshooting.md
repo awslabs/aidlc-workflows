@@ -204,9 +204,11 @@ sufficient.
 Kiro IDE runs a folder's hooks only after you allow it to run commands in that
 folder and then reload the window. Until you allow it, every command the agent
 runs comes back with no output and exit code -1, so no AI-DLC message can show;
-the agent gives you the step itself. Before your first chat message in the
-project, doctor warns "AIDLC hooks have not run in this project yet"; that is
-expected.
+the agent gives you the step itself. If you trusted the folder after Kiro opened
+it, commands run but the hooks still do not until the reload: AI-DLC then stops
+before any work and the agent shows you the same step. Before your first chat
+message in the project, doctor warns "AIDLC hooks have not run in this project
+yet"; that is expected.
 
 Trust only a folder whose contents you know (your own project, or one you have
 checked), because trusting lets the folder's `.kiro` hooks run commands on your

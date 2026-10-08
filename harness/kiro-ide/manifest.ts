@@ -207,6 +207,19 @@ const manifest: HarnessManifest = {
       "select Manage on the Restricted Mode banner, then Trust. Then run Developer: Reload Window " +
       "from the Command Palette (Ctrl+Shift+P, or Cmd+Shift+P on macOS), send a message and run " +
       "doctor again. In Kiro CLI, quit Kiro and start `kiro-cli` again in this folder.",
+    // A second cause, measured live on Kiro IDE 1.2.37 (#2167): a folder
+    // trusted after Kiro opened it runs the agent's commands, but Kiro's agent
+    // started with hooks off for the untrusted folder ("hooks.v2.execution
+    // DisabledUntrustedWorkspace") and runs none, and offers no aidlc agent,
+    // until Developer: Reload Window. The guard hook on the agent's own shell
+    // command beats before the engine runs, even with its fence switched off,
+    // so a record with no heartbeat proves it, and `next` stops with the step
+    // instead of the person finding out at the first approval.
+    agentStep:
+      "Kiro is not running AI-DLC's hooks in this folder. You cannot change that from inside the chat: " +
+      "do not approve, retry, or ask the person to answer again. In Kiro IDE, show the person this line: " +
+      `"${KIRO_IDE_TRUST_STEP}" In Kiro CLI or an ACP client, show this line instead: "${KIRO_CLI_ACP_STEP}" ` +
+      "Then end your turn.",
   },
   harnessDir: ".kiro",
   orchestratorSkillPath: ".kiro/skills/aidlc/SKILL.md",
