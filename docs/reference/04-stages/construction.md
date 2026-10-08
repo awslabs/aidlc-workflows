@@ -1214,7 +1214,11 @@ with the aidlc-devsecops-agent providing security testing expertise.
 - Every current `## Testing Contract` in the stage-level or per-unit
   `code-generation-plan.md`, including postapproval edits permitted by a lowered
   plan re-approval fence and plans built with plan approval off; neither is
-  described as human-approved
+  described as human-approved. A CI obligation (the contract's "Run the selected
+  tests in CI before merge." line, or a memory note's "CI execution before
+  merge") is a target only when the plan runs CI Pipeline (`ci-pipeline` listed
+  as `EXECUTE` and not `[S]` in `aidlc-state.md`); otherwise it is recorded
+  `N/A` with that reason and is never a failure
 
 ### Steps
 
@@ -1257,7 +1261,9 @@ with the aidlc-devsecops-agent providing security testing expertise.
    - A Target Verification Matrix with Target ID, Source, Expected, Actual,
      Evidence, Owning Stage, and Verdict
    - Applicable targets begin `Pending`; `N/A` is valid only when the
-     source-complete inventory found no applicable measurable target
+     source-complete inventory found no applicable measurable target, or for a
+     target the plan makes inapplicable (the CI obligation of a plan that runs
+     no CI Pipeline)
    - Readiness assessment (build-ready, test-ready, deployment-ready)
    - Known limitations or outstanding items
 

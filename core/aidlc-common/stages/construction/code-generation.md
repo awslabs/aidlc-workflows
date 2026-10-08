@@ -135,7 +135,7 @@ Plan should cover (as applicable to the unit):
 - **Comprehensive strategy**: Unit + integration + E2E test files per component (10-15 tests each)
 
 Apply the active scope's floor additively:
-- `mvp`, `enterprise`, `feature`, `infra`: the selected strategy plus 80% line coverage and CI execution before merge.
+- `mvp`, `enterprise`, `feature`, `infra`: the selected strategy plus 80% line coverage and, when the plan runs CI Pipeline, CI execution before merge.
 - `bugfix`, `security-patch`: the selected strategy plus a targeted regression for the bug/vulnerability at the narrowest level that reproduces it, even when that adds one integration/E2E test beyond Minimal's unit-test default; the existing suite remains green.
 - `poc`, `refactor`, `workshop`: the selected strategy still applies; the scope adds no extra new-test floor, and the existing suite remains green.
 

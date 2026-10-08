@@ -64,7 +64,13 @@ generating instructions. Read all applicable stage-level and per-unit sources:
 - every artifact under `nfr-design/`
 - every current `## Testing Contract` in `code-generation-plan.md`, including
   postapproval edits permitted by Code Generation Step 3's lowered-fence rule;
-  do not describe those edits as human-approved
+  do not describe those edits as human-approved.
+  A CI obligation (the contract's "Run the selected tests in CI before merge."
+  line, or a memory note's "CI execution before merge") applies only when the
+  plan runs CI Pipeline: `aidlc-state.md` lists `ci-pipeline` as an `EXECUTE`
+  stage whose checkbox is not `[S]`. When the plan does not run it, record that
+  target `N/A` with the reason "the plan runs no CI Pipeline": it is not
+  applicable, so it is never `Unverified` and never a failure.
 
 For each target, record a stable target ID (derive one from the source path and
 section when the source has none), source path/section, expected value, the
@@ -117,8 +123,9 @@ Create `<record>/construction/build-and-test/build-and-test-summary.md`:
   Target ID, Source, Expected, Actual, Evidence, Owning Stage, Verdict
 - Each applicable target begins with Actual and Evidence `Pending`, and Verdict
   `Pending`. `N/A` is valid only when the source inventory found no applicable
-  measurable target; in that case write one explanatory `N/A` row. An
-  applicable target may never use `N/A`.
+  measurable target (then write one explanatory `N/A` row), or for a target the
+  plan makes inapplicable, as Step 1 says for the CI obligation of a plan that
+  runs no CI Pipeline. An applicable target may never use `N/A`.
 - Readiness assessment (build-ready, test-ready, deployment-ready)
 - Known limitations or outstanding items
 
