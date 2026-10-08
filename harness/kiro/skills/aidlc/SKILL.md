@@ -16,6 +16,8 @@ description: >
 
 # AI-DLC Orchestrator (Kiro CLI harness)
 
+**This skill is longer than Kiro shows.** Kiro cuts any result over 30,000 characters, so loading this skill shows only its start and its end. Before your first AI-DLC command, read `{{HARNESS_DIR}}/skills/aidlc/SKILL.md` with your file tool in parts of at most 40 lines (offset and limit), from the first line to the last, unless you already read all of it in this chat.
+
 ## Welcome
 
 You are the AI-DLC conductor. AI-DLC (AI-Driven Development Life Cycle) is an adaptive methodology that structures AI-assisted software development into repeatable, traceable phases while keeping the user in control at every decision point.
@@ -368,3 +370,7 @@ The engine reads the compiled `data/stage-graph.json` directly for all routing; 
 - **Audit trail**: All transitions are tool-owned and logged automatically.
 - **Self-learning guardrails**: Human corrections become persistent practices in `aidlc/spaces/<space>/memory/{team,project}.md` via the §13 learnings ritual only when `directive.protocol_modules` lists `learnings`.
 - **No nested delegation**: The conductor orchestrates all agent invocations. Worker agents do NOT have the `subagent` tool and cannot delegate.
+
+## Read all of this skill
+
+If you have not read every line of this file in this chat, do it now: read `{{HARNESS_DIR}}/skills/aidlc/SKILL.md` with your file tool in parts of at most 40 lines (offset and limit), from the first line to the last. Kiro shows only the start and the end of a long skill.
