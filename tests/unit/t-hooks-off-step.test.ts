@@ -82,6 +82,20 @@ const HARNESSES: Harness[] = [
       `Quit opencode and start it again with just \`opencode\` in ${proj && normalize(proj)}, then type /aidlc to carry on.`,
     ],
   },
+  {
+    // Measured live on Kiro IDE 1.2.37 (#2167): a folder trusted after Kiro
+    // opened it runs the agent's commands but no hook until Developer: Reload
+    // Window. The same tree runs in Kiro CLI v3 and ACP clients.
+    name: "kiro-ide",
+    dir: ".kiro",
+    lines: () => [
+      "In Kiro IDE, trust this folder: choose Trust Folder & Continue when Kiro asks whether you trust it, or " +
+        "select Manage on the Restricted Mode banner, then Trust. Then run Developer: Reload Window from the " +
+        "Command Palette (Ctrl+Shift+P, or Cmd+Shift+P on macOS), and say carry on.",
+      "In Kiro CLI, quit Kiro and start `kiro-cli` again in this folder. If you drive Kiro from an ACP client, " +
+        "the Kiro IDE guide names what that client must send.",
+    ],
+  },
 ];
 const COPILOT = HARNESSES[2];
 const OPENCODE = HARNESSES[4];
@@ -331,9 +345,9 @@ describe("next stops with the agent's step when the engine knows the hooks never
     }
   });
 
-  for (const name of ["kiro-ide", "cursor"]) {
+  for (const name of ["cursor"]) {
     test(`${name} declares no step yet, so next never stops for this there`, () => {
-      const h: Harness = { name, dir: name === "cursor" ? ".cursor" : ".kiro", lines: () => [] };
+      const h: Harness = { name, dir: ".cursor", lines: () => [] };
       const proj = installed(h);
       expect(isStop(next(proj, h))).toBe(false);
       intentCreate(proj, h);
