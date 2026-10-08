@@ -1078,10 +1078,14 @@ name of the next in-scope stage) on the reply that opened the gate (`report
 --result awaiting-approval` or `revised`, computed when the gate opens, so a
 plan change made during the stage is in it), else the run-stage directive's
 (computed at emit time), or `Complete workflow` when `next_stage` is null. The
-conductor never infers the next stage. The same reply's `narration` says where
-the stage's output is ("<Stage> is ready for your review: what it produced is
-in <folder>/."), so the person has a pointer even when no summary comes before
-the question.
+conductor never infers the next stage. The same reply's `narration` says what
+the stage produced and where ("<Stage> is ready for your review. It produced
+requirements.md and requirements-analysis-questions.md (5 questions, all
+answered), in <folder>/."), from the files on disk, so the person sees it even
+when no summary comes before the question; the gate shown again by a later
+`next` carries the same line. Words typed at an open gate that ask what the
+stage found are answered from those files first, then the approval question is
+asked again (the `next <words>` step says so before its new-work branch).
 
 ### Conditional 3-Option Gate (Ideation and Inception only)
 

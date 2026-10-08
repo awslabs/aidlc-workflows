@@ -515,6 +515,54 @@ function commonFolder(paths: readonly string[]): string {
   return shared.join("/");
 }
 
+// What the stage produced, said with its approval question so the person sees
+// it even when no summary came before: the stage's files that are on disk, by
+// name (a questions file with how many questions it holds and how many are
+// answered), and the folder they are in. "" when the folder cannot be named (a
+// stage that repeats per Unit, with no Unit named).
+function producedLine(node: GraphStage, unit: string | null, unitFolders: boolean, projectDir: string): string {
+  if (unitFolders && !unit) return "";
+  const paths = resolveProduces(node, unitFolders ? unit : null, engineRelativeRecordDir(projectDir), codekbCtxFor(projectDir));
+  const folder = commonFolder(paths);
+  if (!folder) return "";
+  const names = paths
+    .filter((path) => existsSync(join(projectDir, path)))
+    .map((path) => {
+      const name = path.split("/").at(-1) ?? path;
+      return name.endsWith("-questions.md") ? `${name}${questionsCount(join(projectDir, path))}` : name;
+    });
+  if (names.length === 0) return `${node.name} is ready for your review. Its output goes in ${folder}/.`;
+  const list = names.length === 1 ? names[0] : `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
+  return `${node.name} is ready for your review. It produced ${list}, in ${folder}/.`;
+}
+
+// " (3 questions, 2 answered)" for a questions file: its `[Answer]:` lines
+// outside the Consolidated Summary Confirmation, and how many hold an answer.
+// "" when the file cannot be read or holds no question.
+function questionsCount(path: string): string {
+  let text: string;
+  try {
+    text = readFileSync(path, "utf-8");
+  } catch {
+    return "";
+  }
+  let total = 0;
+  let answered = 0;
+  for (const section of text.replace(/\r\n/g, "\n").split(/^(?=## )/m)) {
+    if (/^## [^\n]*summary confirmation/i.test(section)) continue;
+    for (const line of section.split("\n")) {
+      const match = /^\[Answer\]:[ \t]*(.*)$/.exec(line);
+      if (match === null) continue;
+      total++;
+      if (/[^\s_]/.test(match[1])) answered++;
+    }
+  }
+  if (total === 0) return "";
+  const noun = total === 1 ? "question" : "questions";
+  const done = answered === total ? "all answered" : answered === 0 ? "none answered" : `${answered} answered`;
+  return ` (${total} ${noun}, ${done})`;
+}
+
 function loadStateFileIfPresent(projectDir: string): string | null {
   const path = engineStateFilePath(projectDir);
   if (!existsSync(path)) return null;
@@ -2711,13 +2759,15 @@ function openApprovalGateStage(stateContent: string): string | null {
 
 // Words while a stage's approval gate is open: the conductor reads whether
 // they answer it, the same split as openQuestionReplyDirective.
-function openGateReplyDirective(stage: string, requestId: string): PrintDirective {
+function openGateReplyDirective(stage: string, requestId: string, folder: string): PrintDirective {
   const orchestrate = aidlcToolInvocation("orchestrate");
   return printDirective(
     `Stage "${stage}" is waiting for the person's approval, and their reply may answer it. Read it. If it ` +
       `approves, run \`${orchestrate} report --stage ${shellArg(stage)} --result approved --user-input "Approve"\`; ` +
       `if it asks for changes, run \`${orchestrate} report --stage ${shellArg(stage)} --result rejected ` +
-      `--user-input "Request Changes"\`. Then follow what it returns. If it is about something else, such as new ` +
+      `--user-input "Request Changes"\`. Then follow what it returns. If it asks about what the stage found or ` +
+      `produced, answer it from the files in ${folder ? `${folder}/` : "the stage's folder"}, then ask the approval ` +
+      "question again. If it is about something else, such as new " +
       `work or a change to the plan, run \`${orchestrate} next --request ${requestId}\` and follow what it returns: ` +
       "the engine kept their words and asks them where that work belongs. If you cannot tell which it is, ask the " +
       "person in one short question and follow their answer.",
@@ -8427,7 +8477,14 @@ function routeNext(args: string[], projectDir: string | undefined): void {
         pd, flags.intent, "", "routing", { space: selection.space, targets: routingTargets() }, false, undefined,
         undefined, routingSettings(carriedRoutingFlags(flags)),
       );
-      emit(openGateReplyDirective(gateStage, words.id));
+      // Where the stage's files are, for a question about them; a stage that
+      // repeats per Unit names no folder here (no Unit is named with the words).
+      const gateNode = nodeForSlug(gateStage);
+      const gateScope = getField(stateContent, "Scope")?.trim() ?? "";
+      const gateFolder = gateNode && !(isPerUnit(gateNode) && !usesStageLevelPerUnitArtifacts(gateScope, stateContent))
+        ? commonFolder(resolveProduces(gateNode, null, engineRelativeRecordDir(pd), codekbCtxFor(pd)))
+        : "";
+      emit(openGateReplyDirective(gateStage, words.id, gateFolder));
       return;
     }
     // Words alone (nothing `next` reads as a flag, scope, verb or noun) may
@@ -8854,6 +8911,15 @@ function applyGateOnlyShape(
   directive.gate = true;
   delete directive.reviewer_max_iterations;
   delete directive.narration;
+  // The gate shown again says what the stage produced, as the reply that
+  // opened it did.
+  const gateNode = nodeForSlug(directive.stage);
+  if (gateNode) {
+    const scope = getField(stateContent, "Scope")?.trim() ?? "";
+    const unitFolders = isPerUnit(gateNode) && !usesStageLevelPerUnitArtifacts(scope, stateContent);
+    const line = producedLine(gateNode, directive.unit ?? null, unitFolders, projectDir);
+    if (line) directive.narration = line;
+  }
   directive.protocol_modules = (directive.protocol_modules ?? []).filter(
     (module) =>
       module !== "reviewer" &&
@@ -14762,17 +14828,15 @@ function handleReport(args: string[], projectDir: string | undefined): void {
         const listed = approvesTogetherFromToolOutput(res.stdout);
         const next = nextInScopeStage(listed.at(-1) ?? slug, scope, loadStateFileIfPresent(pd) ?? undefined);
         gateReply.next_stage = next ? next.name : null;
-        // Where the stage's output is, said with the gate, so the person can
-        // look even when no summary comes before the question. A stage that
+        // What the stage produced and where, said with the gate, so the person
+        // sees it even when no summary comes before the question. A stage that
         // repeats per unit writes under the unit's folder, so without the unit
-        // named no folder is said rather than a wrong one.
+        // named nothing is said rather than a wrong folder.
         const unit = flags.unit?.trim() || null;
         const gateState = loadStateFileIfPresent(pd);
         const unitFolders = isPerUnit(node) && !usesStageLevelPerUnitArtifacts(scope, gateState);
-        const folder = unitFolders && !unit
-          ? ""
-          : commonFolder(resolveProduces(node, unitFolders ? unit : null, engineRelativeRecordDir(pd), codekbCtxFor(pd)));
-        if (folder) gateReply.narration = `${node.name} is ready for your review: what it produced is in ${folder}/.`;
+        const line = producedLine(node, unit, unitFolders, pd);
+        if (line) gateReply.narration = line;
       }
     }
     emit(gateReply);
