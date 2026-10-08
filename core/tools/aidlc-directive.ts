@@ -123,6 +123,13 @@ export interface LoadSteeringDirective {
    * would not fit the host's limit with it (see the run-stage field).
    */
   conductor_persona?: string;
+  /**
+   * The run-stage these parts lead to still offers the Construction autonomy
+   * choice (its `construction_policy.offer_autonomy`): the turn may be waiting
+   * on the person's answer at any part, not only at the run-stage. The
+   * question itself stays the run-stage's (construction_policy_note).
+   */
+  offer_autonomy?: true;
   rules_content: Array<{ path: string; text: string }>;
 }
 
@@ -911,6 +918,7 @@ const LOAD_STEERING_FIELDS = [
   "receipt",
   "next",
   "conductor_persona",
+  "offer_autonomy",
   "rules_content",
 ] as const;
 

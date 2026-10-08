@@ -6662,6 +6662,9 @@ function steeringPart(
     receipt,
     next: steeringNextCommand(receipt),
     ...(part === 1 && persona !== null ? { conductor_persona: persona } : {}),
+    // The Stop hook's own probe restarts the rules at part 1, so the offer the
+    // run-stage carries has to ride on every part for the hook to see it.
+    ...(directive.construction_policy?.offer_autonomy === true ? { offer_autonomy: true as const } : {}),
     rules_content: rules,
   };
 }

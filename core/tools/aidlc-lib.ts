@@ -14259,8 +14259,20 @@ export function hasPendingDecision(
   unit?: string,
   workflowAttempt = false,
 ): boolean {
+  return openPendingDecision(projectDir, stage, afterEvent, unit, workflowAttempt) !== null;
+}
+
+// The open DECISION_RECORDED block itself (null when none is open), so a reader
+// can tell a checkpoint question (its `Checkpoint` field) from a plain one.
+export function openPendingDecision(
+  projectDir: string,
+  stage: string,
+  afterEvent?: string,
+  unit?: string,
+  workflowAttempt = false,
+): string | null {
   if (!workflowAttempt) {
-    return openDecisionBlock(projectDir, stage, afterEvent) !== null;
+    return openDecisionBlock(projectDir, stage, afterEvent);
   }
 
   const relevant = new Set([
@@ -14281,7 +14293,7 @@ export function hasPendingDecision(
       if (a.shardIndex !== b.shardIndex) return a.shardIndex - b.shardIndex;
       return a.pos - b.pos;
     });
-  if (events.length === 0) return false;
+  if (events.length === 0) return null;
   const lastAtTimestamp = new Map<string, number>();
   const shardsAtTimestamp = new Map<string, Set<string>>();
   for (let i = 0; i < events.length; i++) {
@@ -14310,7 +14322,7 @@ export function hasPendingDecision(
         event.stage === stage &&
         !event.workflow?.startsWith("single-stage:"),
     );
-    if (boundary === -1) return false;
+    if (boundary === -1) return null;
     start = afterBoundary(boundary);
   }
 
@@ -14345,7 +14357,7 @@ export function hasPendingDecision(
     }
     groupStart = groupEnd;
   }
-  return open !== null;
+  return open;
 }
 
 // This clone's audit shard filename: `<host>-<clone-id>.md`, both parts from the
