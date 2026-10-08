@@ -101,6 +101,7 @@ export {
 // imports loadScopeMapping/loadStageGraph from this file). Type-only
 // imports are erased at runtime so they don't create the cycle.
 import { readRootIntegrations } from "./aidlc-distribution.ts";
+import { kiroReplyHookSwitchedOff } from "./aidlc-kiro-hooks-off.ts";
 import type { subgraphForScope as SubgraphForScope } from "./aidlc-graph.ts";
 import type * as SwarmCheckpoints from "./aidlc-swarm-checkpoints.ts";
 import type { ConstructionEvidence } from "./aidlc-construction-checkpoints.ts";
@@ -29581,6 +29582,16 @@ export function unattendedHumanPresenceHint(projectDir?: string, options: { miss
   }
   // The caller refuses for a reply not given yet, not for one the hooks missed.
   if (options.missedReply === false) return "";
+  // Kiro's Agent Hooks panel can switch the reply hook off (#2203): a reply not
+  // recorded is then that switch, not a folder Kiro has yet to trust, so the
+  // person is sent to the panel, never to the trust step.
+  if (kiroReplyHookSwitchedOff(resolveProjectDir(projectDir), harnessDir())) {
+    return " If the person already replied, that reply was not recorded because AI-DLC's hook that records your " +
+      "replies is switched off in Kiro's Agent Hooks. Do not ask them to answer again. Tell them exactly this, with " +
+      "nothing about why: \"Your answer was not recorded: AI-DLC's hook that records your replies " +
+      "(aidlc-record-human-turn) is switched off under Agent Hooks in Kiro. Turn it back on, then give your answer " +
+      `once more." ${NO_CHECK_OFF_OFFER}`;
+  }
   // The prompt hook runs here and nothing moved since it last did: the person
   // has not answered yet (the agent asked in this same turn), so the one step
   // is to end the turn, and the person hears nothing. Only a reply the hooks

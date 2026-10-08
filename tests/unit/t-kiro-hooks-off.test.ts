@@ -29,6 +29,7 @@ import {
   kiroReplyHookSwitchedOff,
   markKiroHooksOffSaid,
 } from "../../core/tools/aidlc-kiro-hooks-off.ts";
+import { unattendedHumanPresenceHint } from "../../core/tools/aidlc-lib.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
@@ -155,6 +156,26 @@ describe("t-kiro-hooks-off: a hook the person switched off in Kiro is named, nev
     expect(((nextDirective().change_notices as string[] | undefined) ?? []).some((line) => line.includes("Agent Hooks"))).toBe(false);
     switchOff(GUARD, new Date("2026-10-07T01:00:00.000Z"));
     expect(((nextDirective().change_notices as string[] | undefined) ?? []).some((line) => line.includes("Agent Hooks"))).toBe(true);
+  });
+
+  test("a reply not recorded while the reply hook is off names Agent Hooks, not the trust step", () => {
+    const harness = process.env.AIDLC_HARNESS_DIR;
+    process.env.AIDLC_HARNESS_DIR = ".kiro";
+    try {
+      const before = unattendedHumanPresenceHint(proj);
+      expect(before).not.toContain("Agent Hooks");
+      switchOff(REPLY);
+      const hint = unattendedHumanPresenceHint(proj);
+      expect(hint).toContain("switched off under Agent Hooks in Kiro");
+      expect(hint).toContain("Do not ask them to answer again");
+      expect(hint).toContain("Never offer to turn a check off for them.");
+      expect(hint).not.toMatch(/Trust Folder|Reload Window|Restricted Mode/);
+      switchOn(REPLY);
+      expect(unattendedHumanPresenceHint(proj)).not.toContain("Agent Hooks");
+    } finally {
+      if (harness === undefined) delete process.env.AIDLC_HARNESS_DIR;
+      else process.env.AIDLC_HARNESS_DIR = harness;
+    }
   });
 
   test("the said mark follows the file time, and the reply hook is told apart", () => {
