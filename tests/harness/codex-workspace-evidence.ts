@@ -107,9 +107,14 @@ export function expectCliSuccess<T>(
 
 export function expectSpaceInclude(root: string, space: string): void {
   expect(readFileSync(join(root, "aidlc", "active-space"), "utf-8").trim()).toBe(space);
-  // The engine's copy every harness include reads holds this space's memory files.
+  // The engine's copy every harness include reads holds this space's memory
+  // files, each behind one line that names the file to edit.
   expect(readFileSync(join(root, "aidlc", "active-memory", "org.md"), "utf-8"))
-    .toBe(readFileSync(join(root, "aidlc", "spaces", space, "memory", "org.md"), "utf-8"));
+    .toBe(`${copyHeader(space, "org.md")}${readFileSync(join(root, "aidlc", "spaces", space, "memory", "org.md"), "utf-8")}`);
+}
+
+export function copyHeader(space: string, rel: string): string {
+  return `<!-- AI-DLC keeps this copy in step with aidlc/spaces/${space}/memory/${rel}. Edit that file; this copy is replaced. -->\n`;
 }
 
 /** Session hooks may append audit rows; count creation events, not shard bytes. */

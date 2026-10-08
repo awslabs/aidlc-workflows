@@ -1629,7 +1629,11 @@ if (args[0] === "engine" && args[1] === "orchestrate") {
       expect(shipped.stderr).toBe("");
       // The copy the shipped glob reads now holds this space's files, and the
       // worker file itself was not touched.
-      expect(readFileSync(join(copy, "org.md"), "utf-8")).toBe("# Organization\n\nKeep the mandated review.\n");
+      // The copy is the file behind one line naming the file to edit.
+      expect(readFileSync(join(copy, "org.md"), "utf-8")).toBe(
+        "<!-- AI-DLC keeps this copy in step with aidlc/spaces/default/memory/org.md. Edit that file; this copy is replaced. -->\n" +
+          "# Organization\n\nKeep the mandated review.\n",
+      );
       expect(JSON.parse(readFileSync(workerFile, "utf-8")).resources).toContain("file://aidlc/active-memory/**/*.md");
       // An edit reaches the copy at the next dispatch.
       writeFileSync(join(memory, "org.md"), "# Organization\n\nEvery queue has a dead-letter alarm.\n");

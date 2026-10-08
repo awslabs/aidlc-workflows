@@ -46,7 +46,7 @@ import { dirname, join, relative, resolve } from "node:path";
 import { isoTimestamp, isStopHookProbe, sessionsDir, toPosix, validSessionId, writeFileAtomic } from "./aidlc-lib.ts";
 import { rootIntegrationTarget } from "./aidlc-distribution.ts";
 import { runtimeHarnessDir, runtimeHarnessName } from "./aidlc-runtime-paths.ts";
-import { ACTIVE_MEMORY_DIR, KIRO_IDE_STEERING, kiroIdeSteering } from "./aidlc-includes.ts";
+import { ACTIVE_MEMORY_DIR, activeMemoryCopyDrift, KIRO_IDE_STEERING, kiroIdeSteering } from "./aidlc-includes.ts";
 
 type LoadRecord = {
   v: 1;
@@ -566,11 +566,11 @@ export function chatHoldsRules(
       // The host reads the copy with each request: it holds the exact text only
       // while each file of the bundle is in the copy as the memory file is now.
       if (dir === COPY_DIR_REL) {
-        return paths.every((path) => {
-          if (!path.startsWith(memory) || !path.endsWith(".md")) return false;
-          const hash = sha256File(join(projectDir, path));
-          return hash !== "" && hash === sha256File(join(projectDir, COPY_DIR_REL, path.slice(memory.length)));
-        });
+        const behind = new Set(activeMemoryCopyDrift(projectDir, space));
+        return paths.every((path) =>
+          path.startsWith(memory) && path.endsWith(".md") &&
+          sha256File(join(projectDir, path)) !== "" && !behind.has(path.slice(memory.length))
+        );
       }
       return paths.every((path) => path.startsWith(dir) && path.endsWith(".md"));
     }

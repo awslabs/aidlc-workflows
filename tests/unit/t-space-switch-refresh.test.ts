@@ -38,6 +38,10 @@ const HARNESS_DIRS = {
 } as const;
 const COPY = "aidlc/active-memory";
 const TEAM = "aidlc/spaces/teamb/memory";
+// Every copied file starts with the line naming the file to edit.
+const copyHeader = (space: string, rel: string): string =>
+  `<!-- AI-DLC keeps this copy in step with aidlc/spaces/${space}/memory/${rel}. Edit that file; this copy is replaced. -->\n`;
+
 const DEFAULT = "aidlc/spaces/default/memory";
 
 const temporary: string[] = [];
@@ -159,7 +163,8 @@ describe("a space switch changes no tracked file, and a refresh after it is no c
       expect(pointing(project, TEAM)).toEqual([]);
       for (const [rel, text] of includes) expect(readFileSync(join(project, rel), "utf-8"), rel).toBe(text);
       expect(readFileSync(join(project, COPY, "team.md"), "utf-8")).toContain("dead-letter alarm");
-      expect(readFileSync(join(project, COPY, "org.md"), "utf-8")).toBe(readFileSync(join(project, TEAM, "org.md"), "utf-8"));
+      expect(readFileSync(join(project, COPY, "org.md"), "utf-8"))
+        .toBe(`${copyHeader("teamb", "org.md")}${readFileSync(join(project, TEAM, "org.md"), "utf-8")}`);
 
       expect(conflicts(project, release(harness), harness)).toEqual([]);
       expect(frameworkFilesDoctorCheck(project, harnessDir).pass).toBe(true);

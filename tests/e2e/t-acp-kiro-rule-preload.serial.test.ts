@@ -113,8 +113,10 @@ async function probe(preload: boolean): Promise<string[]> {
     const effectiveController = JSON.parse(readFileSync(join(agentDir, `${CONTROLLER}.json`), "utf8"));
     expect(effectiveWorker.resources).toEqual(preload ? ["file://aidlc/active-memory/**/*.md"] : []);
     if (preload) {
+      // The copy is the space's file behind one line that names the file to edit.
       expect(readFileSync(join(project, "aidlc", "active-memory", "org.md"), "utf8"))
-        .toBe(readFileSync(join(project, "aidlc", "spaces", SPACE, "memory", "org.md"), "utf8"));
+        .toBe(`<!-- AI-DLC keeps this copy in step with aidlc/spaces/${SPACE}/memory/org.md. Edit that file; this copy is replaced. -->\n${
+          readFileSync(join(project, "aidlc", "spaces", SPACE, "memory", "org.md"), "utf8")}`);
     }
     expect(effectiveController.resources).toEqual([]);
     expect(effectiveController.tools).toEqual(["subagent"]);

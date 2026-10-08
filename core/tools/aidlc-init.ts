@@ -5380,6 +5380,47 @@ function tomlInlineMemberSpan(
   return null;
 }
 
+// The span to cut one member (`key = value`) out of the inline table spanning
+// valueStart..valueEnd, with one of its separating commas, so the table stays
+// well formed: `{ a = 1, b = 2 }` less `b` is `{ a = 1 }`, less `a` is `{ b = 2 }`.
+// Null when the member is not there or the table is not plain.
+function tomlInlineMemberRemoval(
+  content: string,
+  valueStart: number,
+  valueEnd: number,
+  key: string,
+): { start: number; end: number } | null {
+  if (content[valueStart] !== "{" || content[valueEnd - 1] !== "}") return null;
+  const close = valueEnd - 1;
+  let index = valueStart + 1;
+  let previousEnd = -1;
+  while (index < close) {
+    while (index < close && /[\s,]/.test(content[index])) index++;
+    if (index >= close) break;
+    const equals = tomlKeyEquals(content, index, close);
+    if (equals < 0) return null;
+    const parsed = tomlParsedPath(`${content.slice(index, equals)}= 0\n`);
+    const value = tomlValueSpan(content, equals + 1, true, close + 1);
+    if (parsed === null || value === null) return null;
+    if (parsed.length === 1 && parsed[0] === key) {
+      let end = value.valueEnd;
+      let after = end;
+      while (after < close && /[ \t]/.test(content[after])) after++;
+      if (content[after] === ",") {
+        end = after + 1;
+        while (end < close && /[ \t]/.test(content[end])) end++;
+        return { start: index, end };
+      }
+      // The last member: the comma before it goes too.
+      const start = previousEnd >= 0 ? previousEnd : index;
+      return { start, end };
+    }
+    previousEnd = value.valueEnd;
+    index = value.end;
+  }
+  return null;
+}
+
 // The span of the value that defines `path`: its own assignment, wherever the
 // file puts it, or its member inside an enclosing inline table.
 function tomlValueSpanOf(
@@ -5647,9 +5688,10 @@ function planCodexEntries(
 
   // The space pointer earlier releases shipped (`AIDLC_RULES_DIR`, which a
   // space switch then rewrote) is AI-DLC's whichever space it names, so once
-  // no longer shipped it goes with its statement: the dotted key, or the
-  // `set = { ... }` table that holds nothing else. A table the project
-  // extended keeps it.
+  // no longer shipped it goes: with its statement (the dotted key, or the
+  // `set = { ... }` table that holds nothing else), or as one member out of a
+  // `set = { ... }` table the project extended, the way a member is added.
+  const retiredMembers: Array<{ path: string[]; start: number; end: number }> = [];
   if (!shippedLeaves.has(CODEX_SPACE_POINTER)) {
     const pointer = tomlPathValue(currentObject, CODEX_SPACE_POINTER_PATH);
     const statement = currentStatements.find((candidate) =>
@@ -5658,12 +5700,16 @@ function planCodexEntries(
     const table = tomlPathValue(currentObject, CODEX_SPACE_POINTER_PATH.slice(0, 2)).value;
     if (
       pointer.found && typeof pointer.value === "string" && CODEX_SPACE_MEMORY.test(pointer.value) &&
-      statement !== undefined &&
-      (statement.path.length === CODEX_SPACE_POINTER_PATH.length ||
-        (statement.path.length === 2 && isTomlTable(table) && Object.keys(table).length === 1)) &&
-      !retired.some((path) => JSON.stringify(path) === JSON.stringify(statement.path))
+      statement !== undefined
     ) {
-      retired.push(statement.path);
+      const whole = statement.path.length === CODEX_SPACE_POINTER_PATH.length ||
+        (statement.path.length === 2 && isTomlTable(table) && Object.keys(table).length === 1);
+      if (whole) {
+        if (!retired.some((path) => JSON.stringify(path) === JSON.stringify(statement.path))) retired.push(statement.path);
+      } else if (statement.path.length === 2 && current[statement.valueStart] === "{") {
+        const span = tomlInlineMemberRemoval(current, statement.valueStart, statement.valueEnd, CODEX_SPACE_POINTER_PATH[2]);
+        if (span !== null) retiredMembers.push({ path: CODEX_SPACE_POINTER_PATH, ...span });
+      }
     }
   }
 
@@ -5782,6 +5828,9 @@ function planCodexEntries(
     removed.add(existing.statement);
     edits.push({ start: existing.statement.start, end: existing.statement.end, text: "", order: edits.length });
   }
+  for (const member of retiredMembers) {
+    edits.push({ start: member.start, end: member.end, text: "", order: edits.length });
+  }
   // A retired table's header goes with its last setting.
   for (const [at, header] of currentStatements.entries()) {
     if (header.kind !== "header" || header.arrayTable || header.path.length !== 1) continue;
@@ -5813,8 +5862,10 @@ function planCodexEntries(
       return null;
     }
   }
-  for (const path of retired) if (tomlPathValue(mergedObject, path).found) return null;
-  const owned = new Set([...leaves, ...retired].map((path) => JSON.stringify(path)));
+  for (const path of [...retired, ...retiredMembers.map((member) => member.path)]) {
+    if (tomlPathValue(mergedObject, path).found) return null;
+  }
+  const owned = new Set([...leaves, ...retired, ...retiredMembers.map((member) => member.path)].map((path) => JSON.stringify(path)));
   if (codexValueText(mergedObject, owned) !== codexValueText(currentObject, owned)) return null;
 
   const notes: string[] = [];

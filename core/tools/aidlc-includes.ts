@@ -254,23 +254,37 @@ function spaceMemoryDir(projectDir: string, space: string): string {
   return join(projectDir, ...spaceMemoryRel(space).split("/"));
 }
 
-function sameBytes(left: string, right: string): boolean {
+/** The first line of every copied file: the file to edit, so an edit made in
+ *  the copy (by a person, or an agent that found it through an include path) is
+ *  never lost without notice; the next refresh replaces the copy. */
+export function activeMemoryCopyHeader(space: string, rel: string): string {
+  return `<!-- AI-DLC keeps this copy in step with ${spaceMemoryRel(space)}/${rel}. Edit that file; this copy is replaced. -->\n`;
+}
+
+// A file's text, or null when it is not UTF-8 (then it is not copied).
+function utf8Text(path: string): string | null {
   try {
-    return readFileSync(left).equals(readFileSync(right));
+    return new TextDecoder("utf-8", { fatal: true }).decode(readFileSync(path));
   } catch {
-    return false;
+    return null;
   }
 }
 
+// What the copy of a memory file holds: the header line, then the file.
+function copiedText(projectDir: string, space: string, rel: string): string | null {
+  const text = utf8Text(join(spaceMemoryDir(projectDir, space), rel));
+  return text === null ? null : `${activeMemoryCopyHeader(space, rel)}${text}`;
+}
+
 /** The copy's files that are not the memory files of `space` now, by their path
- *  under memory/: missing or different ones, and ones the space no longer has.
- *  Empty when the copy is current. */
+ *  under memory/: missing or different ones (the header line included), and ones
+ *  the space no longer has. Empty when the copy is current. */
 export function activeMemoryCopyDrift(projectDir: string, space: string): string[] {
   const source = spaceMemoryDir(projectDir, space);
   const copy = activeMemoryCopyDir(projectDir);
-  const wanted = memoryLayerFiles(source);
+  const wanted = memoryLayerFiles(source).filter((rel) => utf8Text(join(source, rel)) !== null);
   return [
-    ...wanted.filter((rel) => !sameBytes(join(source, rel), join(copy, rel))),
+    ...wanted.filter((rel) => utf8Text(join(copy, rel)) !== copiedText(projectDir, space, rel)),
     ...memoryLayerFiles(copy).filter((rel) => !wanted.includes(rel)),
   ];
 }
@@ -282,18 +296,16 @@ export function activeMemoryCopyDrift(projectDir: string, space: string): string
 export function refreshActiveMemoryCopy(projectDir: string, space: string): boolean {
   const drift = activeMemoryCopyDrift(projectDir, space);
   if (drift.length === 0) return false;
-  const source = spaceMemoryDir(projectDir, space);
   const copy = activeMemoryCopyDir(projectDir);
-  const wanted = new Set(memoryLayerFiles(source));
   let changed = false;
   for (const rel of drift) {
     const target = join(copy, rel);
     try {
       assertProjectionPathHasNoSymlinks(projectDir, `${ACTIVE_MEMORY_DIR}/${rel}`);
-      if (!wanted.has(rel)) {
+      const text = copiedText(projectDir, space, rel);
+      if (text === null) {
         rmSync(target, { force: true });
       } else {
-        const text = new TextDecoder("utf-8", { fatal: true }).decode(readFileSync(join(source, rel)));
         mkdirSync(dirname(target), { recursive: true });
         writeFileAtomic(target, text);
       }

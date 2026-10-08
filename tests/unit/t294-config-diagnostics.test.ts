@@ -3573,17 +3573,25 @@ describe("t294 config diagnostics CLI", () => {
       // The table and its one line go; the blank line that separated it stays.
       expect(readFileSync(configPath, "utf-8").replace("\n\n\n[sandbox_workspace_write]", "\n\n[sandbox_workspace_write]"), label).toBe(clean);
     }
-    // A table the project extended keeps the pointer: it is not AI-DLC's alone to remove.
-    const extended = install("codex");
-    const extendedPath = join(extended, ".codex", "config.toml");
-    const kept = readFileSync(extendedPath, "utf-8").replace(
-      "[sandbox_workspace_write]",
-      '[shell_environment_policy]\nset = { AIDLC_RULES_DIR = "aidlc/spaces/teamb/memory", PROJECT_VAR = "must-stay" }\n\n[sandbox_workspace_write]',
-    );
-    writeFileSync(extendedPath, kept);
-    const left = run(["config", "--project-dir", extended, "--yes"], extended, env);
-    expect(left.status, left.stdout + left.stderr).toBe(0);
-    expect(readFileSync(extendedPath, "utf-8")).toBe(kept);
+    // A table the project extended: only the pointer member goes, the project's
+    // own member and the table stay, whichever order they were written in.
+    for (const [members, left] of [
+      ['AIDLC_RULES_DIR = "aidlc/spaces/teamb/memory", PROJECT_VAR = "must-stay"', 'PROJECT_VAR = "must-stay"'],
+      ['PROJECT_VAR = "must-stay", AIDLC_RULES_DIR = "aidlc/spaces/teamb/memory"', 'PROJECT_VAR = "must-stay"'],
+      ['PROJECT_VAR = "must-stay", AIDLC_RULES_DIR = "aidlc/spaces/default/memory", OTHER = 1', 'PROJECT_VAR = "must-stay", OTHER = 1'],
+    ] as const) {
+      const extended = install("codex");
+      const extendedPath = join(extended, ".codex", "config.toml");
+      const before = readFileSync(extendedPath, "utf-8").replace(
+        "[sandbox_workspace_write]",
+        `[shell_environment_policy]\nset = { ${members} }\n\n[sandbox_workspace_write]`,
+      );
+      writeFileSync(extendedPath, before);
+      const refreshed = run(["config", "--project-dir", extended, "--yes"], extended, env);
+      expect(refreshed.status, `${members}: ${refreshed.stdout}${refreshed.stderr}`).toBe(0);
+      expect(refreshed.stdout, members).not.toContain("Note:");
+      expect(readFileSync(extendedPath, "utf-8"), members).toBe(before.replace(`set = { ${members} }`, `set = { ${left} }`));
+    }
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("first Codex install keeps a project's own config.toml and adds AI-DLC's settings", () => {
