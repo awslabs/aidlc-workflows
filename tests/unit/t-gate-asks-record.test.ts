@@ -15,7 +15,8 @@ import {
 import { afterEach, beforeEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import {
   AIDLC_SRC,
@@ -160,6 +161,42 @@ describe("t-gate-asks-record: the gate row says what the person was asked to dec
     appendAuditEntry("HUMAN_TURN", {}, proj);
     expect(run(STATE, ["approve", STAGE, "--user-input", "Approve"]).rc).toBe(0);
     expect(field(rows("GATE_APPROVED").at(-1)!, "Brief Digest")).toBe("none");
+  });
+
+  // AIDA on #2166 (F1): the kept brief was written with link-following calls under a path that joined an unchecked
+  // Unit name. A cloned repo can carry a planted link under the record's reviews tree; the keep must never follow it,
+  // and the brief must still print.
+  test("a briefs folder that is a link to the outside is not written through; the brief still prints", () => {
+    const outside = mkdtempSync(join(tmpdir(), "aidlc-outside-"));
+    const scopeDir = join(seededRecordDir(proj), ".aidlc-engine", "reviews", STAGE, "stage");
+    mkdirSync(scopeDir, { recursive: true });
+    symlinkSync(outside, join(scopeDir, "briefs"));
+    const rendered = run(BRIEF, ["review", "--stage", STAGE, "--why", "first"]);
+    expect(rendered.rc, rendered.out).toBe(0);
+    expect(rendered.out.length).toBeGreaterThan(0);
+    expect(readdirSync(outside)).toEqual([]);
+    expect(lstatSync(join(scopeDir, "briefs")).isSymbolicLink()).toBe(true);
+    expect(field(openGate(), "Brief Digest")).toBe("none");
+  });
+
+  test("a latest.json that is a link to the outside is left alone; the file it points at keeps its content", () => {
+    const outside = mkdtempSync(join(tmpdir(), "aidlc-outside-"));
+    const target = join(outside, "keep.json");
+    writeFileSync(target, "untouched\n");
+    const briefs = join(seededRecordDir(proj), ".aidlc-engine", "reviews", STAGE, "stage", "briefs");
+    mkdirSync(briefs, { recursive: true });
+    symlinkSync(target, join(briefs, "latest.json"));
+    const rendered = run(BRIEF, ["review", "--stage", STAGE, "--why", "first"]);
+    expect(rendered.rc, rendered.out).toBe(0);
+    expect(readFileSync(target, "utf-8")).toBe("untouched\n");
+    expect(lstatSync(join(briefs, "latest.json")).isSymbolicLink()).toBe(true);
+  });
+
+  test("a unit name that is not one is never joined into the kept brief's path", () => {
+    const rendered = run(BRIEF, ["review", "--stage", STAGE, "--why", "first", "--unit", "../../escape"]);
+    expect(rendered.rc, rendered.out).toBe(0);
+    expect(existsSync(join(seededRecordDir(proj), ".aidlc-engine", "reviews", STAGE, "units"))).toBe(false);
+    expect(existsSync(join(seededRecordDir(proj), "escape"))).toBe(false);
   });
 
   test("the row lists the latest result of every applicable check per declared artifact, failures first, with the detail path", () => {

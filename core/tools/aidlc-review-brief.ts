@@ -5,12 +5,12 @@
 // into rendered briefs and future reviewer dispatch context at read time.
 
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join, relative, resolve, sep } from "node:path";
 import {
   type AuditShardEvent,
   attemptEventAfterFrontier,
-  engineDir,
+  ENGINE_DIR,
   attemptEventDefinitelyBefore,
   auditBlockField,
   constructionCheckpointsApply,
@@ -48,6 +48,8 @@ import {
   maximalAttemptEvents,
   toPosix,
   unreadableFindingsTableFinding,
+  validateUnitName,
+  writeRecordFileNoFollow,
 } from "./aidlc-lib.js";
 import {
   constructionCheckpointKind,
@@ -2264,12 +2266,21 @@ function keepGateBrief(
   brief: string,
 ): void {
   try {
+    // A Unit name that is not one is never joined into a path, and both files
+    // are written under the record root through no link (a cloned repo can
+    // carry a planted link under the reviews tree), as the review record is.
+    if (unit !== undefined && validateUnitName(unit) !== null) return;
+    const root = recordDir(projectDir);
+    if (root === null) return;
     const scope = stage.for_each === "unit-of-work" && unit !== undefined ? join("units", unit) : "stage";
-    const dir = join(engineDir(projectDir), "reviews", stage.slug, scope, "briefs");
-    mkdirSync(dir, { recursive: true });
+    const dir = join(ENGINE_DIR, "reviews", stage.slug, scope, "briefs");
     const digest = createHash("sha256").update(brief).digest("hex");
-    writeFileSync(join(dir, `${digest}.md`), brief);
-    writeFileSync(join(dir, "latest.json"), `${JSON.stringify({ digest, why, at: new Date().toISOString().replace(/\.\d{3}Z$/, "Z") })}\n`);
+    writeRecordFileNoFollow(root, join(dir, `${digest}.md`), brief);
+    writeRecordFileNoFollow(
+      root,
+      join(dir, "latest.json"),
+      `${JSON.stringify({ digest, why, at: new Date().toISOString().replace(/\.\d{3}Z$/, "Z") })}\n`,
+    );
   } catch {
     // The print is the brief; the kept copy is the record's convenience.
   }
