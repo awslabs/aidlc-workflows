@@ -1191,7 +1191,7 @@ describe("t221 (c) harness registration and protocol prose", () => {
     }
   });
 
-  test("reviewer protocol module carries the dispatch-record write and delete", () => {
+  test("reviewer protocol module carries the dispatch-record write, and leaves the delete to the engine", () => {
     const body = readFileSync(
       join(
         AIDLC_SRC,
@@ -1209,8 +1209,11 @@ describe("t221 (c) harness registration and protocol prose", () => {
     expect(body).toMatch(/append its path to `exempt`/);
     expect(body).toContain("On a harness without reviewer-scope enforcement");
     expect(body).toContain("do not write the record");
-    // Step 3: the delete on verdict read.
-    expect(body).toMatch(/Read verdict.*delete `<record>\/\.aidlc-engine\/reviewer-dispatch\.json`/s);
+    // Step 3: the engine removes the record as it records the verdict
+    // (aidlc-log.ts review --verdict); the agent is never told to delete it,
+    // so no `rm` and no permission card follows a review.
+    expect(body).toMatch(/the engine removes it when the verdict is recorded at step 3; never delete it yourself/);
+    expect(body).not.toMatch(/delete `<record>\/\.aidlc-engine\/reviewer-dispatch\.json`/);
   });
 
   test("harnesses with reviewer-scope enforcement point at the shared module", () => {

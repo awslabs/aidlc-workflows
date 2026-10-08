@@ -7,7 +7,7 @@
 // because they fire per-question / per-review, not per state transition.
 
 import { createHash, randomBytes } from "node:crypto";
-import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync } from "node:fs";
 import { dirname, isAbsolute, join, posix, relative, resolve, sep } from "node:path";
 import { appendAuditEntry, appendAuditEntryUnlocked } from "./aidlc-audit.ts";
 import {
@@ -58,6 +58,7 @@ import {
   summaryAuthorizationRelativePath,
   summaryAuthorizationTargetOrThrow,
   writeRecordFileNoFollow,
+  reviewerDispatchPath,
   writeSummaryAuthorization,
   emitError,
   errorMessage,
@@ -4033,6 +4034,16 @@ function handleReview(args: string[]): void {
   } catch (e) {
     if (e instanceof ReviewRefusal) error(e.message, verdictChangeNotices);
     error(`Audit emission failed: ${errorMessage(e)}`, verdictChangeNotices);
+  }
+  // The verdict closes the reviewer-scope enforcement window, so the dispatch
+  // record the conductor wrote before invoking the reviewer goes with it: the
+  // engine removes it here, and the agent never runs an `rm` (a permission card
+  // on Claude Code and Kiro CLI). A record left by a crashed review is covered
+  // by the scope hook's TTL as before.
+  try {
+    rmSync(reviewerDispatchPath(pd, intent, space), { force: true });
+  } catch {
+    // Best effort: the verdict is recorded either way.
   }
 
   console.log(JSON.stringify({
