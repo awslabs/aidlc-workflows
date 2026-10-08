@@ -41,6 +41,7 @@ import {
   type ReviewFingerprintStage,
   reviewFindingsSectionLines,
   REVIEW_FINDINGS_REPORT_RETRY_MESSAGE,
+  findingsReportUnreadableMessage,
   reviewRecordFindings,
   reviewSectionVerdict,
   sortAttemptEvents,
@@ -994,7 +995,7 @@ export function deriveReviewFindingsList(
     findingsText = undefined;
     if (pending.unreadableReason !== undefined) {
       if (!pending.allowMalformed) {
-        malformedReport = REVIEW_FINDINGS_REPORT_RETRY_MESSAGE;
+        malformedReport = findingsReportUnreadableMessage(pending.unreadableReason);
       } else {
         findings = withUnreadable(
           unreadableFindingsTableFinding(
@@ -1019,17 +1020,28 @@ export function deriveReviewFindingsList(
           pending.body,
         );
         findings = applied.findings;
-        if ((applied.malformed || (applied.priorMissing && !firstReview)) && !pending.allowMalformed) {
-          malformedReport = REVIEW_FINDINGS_REPORT_RETRY_MESSAGE;
+        if (!pending.allowMalformed && applied.priorMissing && !firstReview) {
+          malformedReport = findingsReportUnreadableMessage(
+            "the Prior findings table is missing, and this review has earlier findings to report on",
+          );
+        } else if (!pending.allowMalformed && applied.malformed) {
+          malformedReport = findingsReportUnreadableMessage(
+            "a Prior findings row names an ID the review context does not list, or repeats an ID",
+          );
         }
-      } catch {
+      } catch (e) {
+        // The parser names the fault (the rule, the row and the cell); anything
+        // else that threw keeps the generic sentence.
+        const named = e instanceof Error && e.message.startsWith("the findings report could not be read")
+          ? e.message
+          : REVIEW_FINDINGS_REPORT_RETRY_MESSAGE;
         if (!pending.allowMalformed) {
-          malformedReport = REVIEW_FINDINGS_REPORT_RETRY_MESSAGE;
+          malformedReport = named;
         } else {
           findings = withUnreadable(
             unreadableFindingsTableFinding(
               pending.artifact,
-              REVIEW_FINDINGS_REPORT_RETRY_MESSAGE,
+              named,
               unit,
             ),
           );

@@ -38,6 +38,7 @@ import {
   readAllAuditShards,
   readAuditShardEvents,
   readFindingsTable,
+  validateReviewAppendix,
   reviewArtifactEntries,
   reviewRecordDigest,
   serializeReviewRecord,
@@ -2503,6 +2504,68 @@ describe("t304 engine-owned report replay and compatibility", () => {
     expect(parseReviewerFindingsReport(reviewReportMarkdown("READY", ["| R-01 | Fixed |  |  |"], []))?.prior).toEqual([
       { id: "R-01", now: "fixed", severity: "", note: "" },
     ]);
+  });
+
+  // One generic sentence stood for eleven faults, so a reviewer repeated the
+  // same mistake on its retry (a relabelled prior ID, an unescaped pipe) and
+  // the one retry was spent. The sentence now names the rule, the row and the
+  // cell, after the same opening every reader pins.
+  test("the refusal names the rule, the row and the cell", () => {
+    const faults: Array<[string, string]> = [
+      [
+        reviewReportMarkdown("READY", ["| M1 | Fixed | Major | relabelled |"], []),
+        "Prior findings row 1 has ID \"M1\"; use the engine's R-<n> id from the review context",
+      ],
+      [
+        reviewReportMarkdown("READY", ["| R-01 | Partially | Major | half |"], []),
+        "Prior findings row 1 has Now \"Partially\"; write Fixed or Still applies",
+      ],
+      [
+        reviewReportMarkdown("READY", [], ["| Minor | src/a.ts | a or b | fix it | extra |"]),
+        "New findings row 1 has 5 cells for 4 columns; escape | inside a cell as \\| (also inside a code span)",
+      ],
+      [
+        reviewReportMarkdown("READY", [], ["| - | - | No findings | - |"]),
+        "New findings row 1 is a placeholder; leave the table empty when there is nothing new",
+      ],
+      [
+        reviewReportMarkdown("READY", [], []).replace("**New findings**", "**New finding**"),
+        "the New findings heading (**New findings**) is missing",
+      ],
+      [
+        reviewReportMarkdown("READY", [], []).replace(
+          "| Severity | Location | Finding | Required action |",
+          "| Severity | Where | Finding | Required action |",
+        ),
+        "the New findings table header is | Severity | Where | Finding | Required action |; " +
+          "it must be | Severity | Location | Finding | Required action | (an extra ID column is allowed)",
+      ],
+    ];
+    for (const [report, fault] of faults) {
+      expect(() => parseReviewerFindingsReport(report)).toThrow(
+        `the findings report could not be read: ${fault}. Write the whole review again`,
+      );
+    }
+  });
+
+  // A reviewer asked to "end with the verdict line" writes it at the top and
+  // at the end: the same line twice is one line. Two different values stay two.
+  test("ownership lines repeated word for word are one line each; a different value is still refused", () => {
+    const expected = { verdict: "READY" as const, reviewer: "aidlc-product-lead-agent", iteration: 1, reviewChallenge: null };
+    const head =
+      "## Review\n\n**Verdict:** READY\n**Reviewer:** aidlc-product-lead-agent\n**Iteration:** 1\n\n### Findings\n\nNone.\n\n";
+    expect(validateReviewAppendix(
+      Buffer.from(`${head}**Verdict:** READY\n**Reviewer:** aidlc-product-lead-agent\n**Iteration:** 1\n`, "utf-8"),
+      expected,
+    )).toEqual({ valid: true });
+    expect(validateReviewAppendix(Buffer.from(`${head}**Verdict:** NOT-READY\n`, "utf-8"), expected)).toMatchObject({
+      valid: false,
+      reason: expect.stringContaining("exactly one canonical verdict line"),
+    });
+    expect(validateReviewAppendix(Buffer.from(`${head}**Iteration:** 2\n`, "utf-8"), expected)).toMatchObject({
+      valid: false,
+      reason: expect.stringContaining("exactly one Iteration line"),
+    });
   });
 
   test("You upgrade mid-workflow: a list seeds from an older release's records, keeping IDs and decisions without asking again", () => {
