@@ -271,6 +271,15 @@ function markdownCells(line: string): string[] {
   return line.split("|").slice(1, -1).map((cell) => cell.trim());
 }
 
+// The stage guidance names a Unit's directory `u{n}-{description}` while the
+// edge block may name the Unit without that prefix (the engine names
+// construction/<unit>/ after the edge block), so a cell names a Unit when it is
+// the name, the backticked name, or the name behind a `u{n}-` prefix.
+function namesUnit(cell: string, unit: string): boolean {
+  const bare = cell.trim().replace(/^`(.*)`$/, "$1");
+  return bare === unit || bare.replace(/^u\d+-/i, "") === unit;
+}
+
 function unitIdMap(unitFile: string, units: string[]): Map<string, string> {
   const map = new Map<string, string>();
   const read = readText(unitFile);
@@ -280,7 +289,7 @@ function unitIdMap(unitFile: string, units: string[]): Map<string, string> {
     if (cells.length === 0) continue;
     const id = cells.flatMap((cell) => cell.match(/\bU\d+\b/gi) ?? [])[0]?.toUpperCase();
     if (!id) continue;
-    const unit = units.find((candidate) => cells.some((cell) => cell === candidate || cell === `\`${candidate}\``));
+    const unit = units.find((candidate) => cells.some((cell) => namesUnit(cell, candidate)));
     if (unit) map.set(unit, id);
   }
   return map;
@@ -304,7 +313,7 @@ function storyAssignments(storyMapPath: string, units: string[], ids: Map<string
     if (stories.size === 0) continue;
     for (const unit of units) {
       const aliases = [unit, ids.get(unit)].filter((value): value is string => value !== undefined);
-      if (!cells.some((cell) => aliases.some((alias) => tokenPresent(cell, alias)))) continue;
+      if (!cells.some((cell) => aliases.some((alias) => tokenPresent(cell, alias)) || namesUnit(cell, unit))) continue;
       for (const story of stories) {
         const mapped = assignments.get(story) ?? new Set<string>();
         mapped.add(unit);
@@ -587,9 +596,8 @@ function verifyTargets(
     const reverseUnitIds = new Map([...upstream.unitContext.unitIds.entries()].map(([unit, id]) => [id, unit]));
     for (const entry of okEntries) {
       const rawTarget = entry.target?.trim() ?? "";
-      const unit = upstream.unitContext.units.includes(rawTarget)
-        ? rawTarget
-        : reverseUnitIds.get(rawTarget.toUpperCase());
+      const unit = upstream.unitContext.units.find((candidate) => namesUnit(rawTarget, candidate))
+        ?? reverseUnitIds.get(rawTarget.toUpperCase());
       if (!unit) {
         invalidTargets.push(`${entry.id}: target "${rawTarget}" is not a declared unit`);
       } else if (!upstream.storyAssignments.get(entry.id)?.has(unit)) {
