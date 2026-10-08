@@ -6094,7 +6094,7 @@ function buildRunStageDirective(
   if (
     persona !== null &&
     (forcePersona || firstOfWorkflow ||
-      chatNeedsPersona(engineProjectDir, engineSessionId, sha256(persona)))
+      chatNeedsPersona(codekbCtx?.projectDir ?? engineProjectDir, engineSessionId, sha256(persona)))
   ) {
     directive.conductor_persona = persona;
   }

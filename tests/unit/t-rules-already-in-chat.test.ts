@@ -738,7 +738,7 @@ describe("the conductor persona reaches every chat that works on the workflow", 
     for (const harness of ["kiro", "codex"]) {
       const proj = await projectFor(harness);
       const sid = harness === "kiro" ? `sess_${randomUUID()}` : randomUUID();
-      const env = harness === "kiro"
+      const env: Record<string, string> = harness === "kiro"
         ? { AIDLC_SESSION_OVERRIDE: sid, KIRO_SESSION_ID: sid }
         : { AIDLC_SESSION_OVERRIDE: sid, CODEX_THREAD_ID: sid };
       await sessionStart(proj, harness, sid, "startup");

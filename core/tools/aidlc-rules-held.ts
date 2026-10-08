@@ -396,13 +396,15 @@ export function noteRulesDelivered(
  * missing signal never turns into a delivery on every step.
  */
 export function chatNeedsPersona(
-  projectDir: string,
+  projectDir: string | undefined,
   sessionId: string | undefined,
   personaSha256: string,
 ): boolean {
   try {
     const sid = validSessionId(sessionId);
-    if (sid === null) return false;
+    // With no project dir resolved there is nowhere to keep the record, so a
+    // delivery could not be remembered and would repeat on every step.
+    if (sid === null || projectDir === undefined) return false;
     if (!hostRunsThisChat(runtimeHarnessName(projectDir), sid)) return false;
     return readDelivery(projectDir, sid)?.persona?.sha256 !== personaSha256;
   } catch {
