@@ -3532,6 +3532,71 @@ describe("t243 project initialization", () => {
       expect(quoted.stdout).not.toContain("git restore");
     }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
+    // The case above checks the behaviour on this machine's git. This one holds
+    // the rule that produces it, because which commands consult the monitor is
+    // the git version's business: `ls-files` runs it once the index carries the
+    // monitor's own extension, and a call site added without the setting would
+    // pass here and run a stranger's program on a newer git. A refresh reads a
+    // repository to word its own lines, so every command it runs says no.
+    test.skipIf(process.platform === "win32")(
+      "every git command a refresh runs turns the repository's fsmonitor off",
+      () => {
+        const project = temp("aidlc-t243-fsmonitor-rule-");
+        const git = (...args: string[]) => {
+          const result = spawnSync("git", [
+            "-C", project, "-c", "user.email=t243@example.com", "-c", "user.name=t243",
+            "-c", "commit.gpgsign=false", "-c", "core.autocrlf=false", ...args,
+          ], { encoding: "utf-8" });
+          expect(result.status, result.stderr).toBe(0);
+        };
+        git("init", "-q");
+        const installed = run(INIT, [
+          "config", "--project-dir", project, "--from", CLAUDE_RELEASE, "--harness", "claude",
+        ], project);
+        expect(installed.status, installed.stdout + installed.stderr).toBe(0);
+        // A file the release no longer ships, so the refresh also runs the
+        // tracked-files check that words the way back, and a rule of the
+        // project's own that hides a committed record, so the ignore check
+        // matches and the refresh asks for the repository root to word the
+        // warning. Between them the refresh makes every git call it has.
+        const retired = ".claude/hooks/aidlc-retired-rule.ts";
+        const body = `Shipped by an earlier release: ${retired}\n`;
+        put(project, retired, body);
+        const manifest = manifestOf(project);
+        manifest.files[retired] = sha256Bytes(body);
+        writeFileSync(join(project, manifestRel), `${JSON.stringify(manifest, null, 2)}\n`);
+        writeFileSync(join(project, ".gitignore"), "**/memory/**\n", "utf-8");
+        git("add", "-A");
+        git("commit", "-q", "-m", "a retired file and a rule that hides a record");
+
+        // A `git` ahead of the real one on PATH records what the refresh runs.
+        const recorder = temp("aidlc-t243-gitrecorder-");
+        const calls = join(recorder, "calls");
+        const realGit = Bun.which("git") ?? "/usr/bin/git";
+        writeFileSync(
+          join(recorder, "git"),
+          `#!/bin/sh\n{ printf 'CALL\\n'; for a in "$@"; do printf '%s\\n' "$a"; done; } >> '${calls}'\nexec '${realGit}' "$@"\n`,
+          { mode: 0o755 },
+        );
+        const refreshed = run(
+          INIT,
+          ["config", "--project-dir", project, "--from", CLAUDE_RELEASE],
+          project,
+          { PATH: `${recorder}${delimiter}${process.env.PATH ?? ""}` },
+        );
+        expect(refreshed.status, refreshed.stdout + refreshed.stderr).toBe(0);
+        const ran: string[][] = [];
+        for (const word of readFileSync(calls, "utf-8").split("\n").slice(0, -1)) {
+          if (word === "CALL") ran.push([]);
+          else ran[ran.length - 1]?.push(word);
+        }
+        // The ignore check, the repository root, and the tracked-files check.
+        expect(ran.length, ran.map((call) => `git ${call.join(" ")}`).join("\n")).toBeGreaterThanOrEqual(3);
+        for (const call of ran) expect(call, `git ${call.join(" ")}`).toContain("core.fsmonitor=false");
+      },
+      NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+    );
+
     test("project files an older refresh recorded are kept and dropped from the record", () => {
       const project = installedProject();
       const notesRel = ".claude/knowledge/team-notes/notes.md";
