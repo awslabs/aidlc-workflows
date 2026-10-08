@@ -5,6 +5,8 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import {
   CONFIG_SECTIONS,
   dispatcherWorkspaceUtilityArgv,
+  type HookGroupMember,
+  hookGroupMembers,
   HUMAN_PRESENCE_NO_SWITCH,
   LAUNCHER_GLOBAL_FLAGS,
   launcherRouteUsesPin,
@@ -1186,6 +1188,12 @@ export const ROUTES: readonly Route[] = [
 export type Action =
   | { type: "delegate"; tool: string; args: string[] }
   | { type: "hook"; name: string; path: string; projectDir?: string }
+  | {
+    type: "hook-group";
+    name: string;
+    members: ReadonlyArray<HookGroupMember & { path: string }>;
+    projectDir?: string;
+  }
   | { type: "statusline"; path: string; projectDir?: string }
   | { type: "adapter"; harness: AdapterHarness; target: string; extraArgs: string[]; path: string; projectDir?: string }
   | { type: "sensor-script-file"; id: string; args: string[]; projectDir?: string }
@@ -1818,6 +1826,19 @@ function handleRouteOnly(route: Route, argv: string[]): Action {
         target,
         extraArgs: argv.slice(3),
         path: resolveHookPath(adapterFile(harness), harness),
+      };
+    }
+    // One registration, several hooks: the checks a host would start as its own
+    // process each run here, in this process (aidlc-command.ts HOOK_GROUPS).
+    const members = hookGroupMembers(name);
+    if (members !== null) {
+      return {
+        type: "hook-group",
+        name,
+        members: members.map((member) => ({
+          ...member,
+          path: resolveHookPath(`aidlc-${member.hook}.ts`),
+        })),
       };
     }
     return { type: "hook", name, path: resolveHookPath(`aidlc-${name}.ts`) };
@@ -2544,6 +2565,110 @@ async function runAdapter(action: Extract<Action, { type: "adapter" }>): Promise
   }
 }
 
+// One registration that runs several hooks, in this process.
+//
+// Each member runs for the tools its own matcher selected, in order, and every
+// member runs even after one refuses, as the host ran every hook. The call is
+// refused when any member refuses (exit 2), carrying each refusal once; a
+// member that fails on its own (a damaged install, a hook that throws) refuses
+// nothing, exactly as its own failed process refused nothing. The whole group
+// goes through runHookModule, so the harness's own refusal channel (on Claude
+// Code, the deny decision built from stderr) is unchanged.
+async function runHookGroup(
+  action: Extract<Action, { type: "hook-group" }>,
+): Promise<number> {
+  const input = await readStdin();
+  const code = await runHookModule(() => runGroupMembers(action, input), input);
+  // The group's own run ended, with the code the host reads. A reader of the
+  // phase trace (the release check's hooksTracedToCompletion among them) sees
+  // the same begin/load/end shape here as for a hook that runs on its own.
+  hookTrace("hook-run-end", { code });
+  return code;
+}
+
+async function runGroupMembers(
+  action: Extract<Action, { type: "hook-group" }>,
+  input: string,
+): Promise<number> {
+  let toolName: string | null = null;
+  try {
+    const parsed = JSON.parse(input) as { tool_name?: unknown };
+    if (typeof parsed.tool_name === "string") toolName = parsed.tool_name;
+  } catch {
+    // A payload this process cannot read goes to every member, which judges it.
+  }
+  let code = 0;
+  const refusals: string[] = [];
+  const failures: string[] = [];
+  for (const member of action.members) {
+    if (toolName !== null && !new RegExp(member.matcher).test(toolName)) continue;
+    const said = await runGroupMember(member, input);
+    if (said.code === 2) {
+      code = 2;
+      if (said.reason && !refusals.includes(said.reason)) refusals.push(said.reason);
+    } else if (said.code !== 0) {
+      if (code === 0) code = said.code;
+      if (said.reason && !failures.includes(said.reason)) failures.push(said.reason);
+    }
+  }
+  const said = code === 2 ? refusals : failures;
+  // Through process.stderr, not the file descriptor: the harness refusal
+  // channel around this group reads what the hooks wrote there (on Claude Code
+  // it builds the deny decision from it), so a direct descriptor write would
+  // reach the person's terminal but leave that decision without its reason.
+  if (said.length > 0) process.stderr.write(said.join(""));
+  return code;
+}
+
+// One member, with what it said collected so the group can carry each refusal
+// once. A missing or unloadable hook file answers as its own process did: the
+// same line on stderr and exit 1, never a refusal.
+async function runGroupMember(
+  member: HookGroupMember & { path: string },
+  input: string,
+): Promise<{ code: number; reason: string }> {
+  if (!existsSync(member.path)) {
+    return {
+      code: 1,
+      reason: `aidlc engine hook ${member.hook}: not available in this install\n`,
+    };
+  }
+  hookTrace("hook-group-member-begin", { hook: member.hook });
+  const collected: string[] = [];
+  const stderrWrite = process.stderr.write;
+  process.stderr.write = ((chunk: unknown) => {
+    collected.push(
+      typeof chunk === "string" ? chunk : Buffer.from(chunk as Uint8Array).toString("utf-8"),
+    );
+    return true;
+  }) as typeof process.stderr.write;
+  let code: number;
+  try {
+    // Named phases, because this process loads the hook's code where a hook of
+    // its own would: the trace shows which hook was loaded and that it was.
+    hookTrace("hook-import-begin", { hook: member.hook });
+    const mod = await import(pathToFileURL(member.path).href);
+    hookTrace("hook-import-end", { hook: member.hook });
+    if (typeof mod.run !== "function") {
+      collected.push(
+        `aidlc engine hook ${member.hook}: hook does not export run(input)\n`,
+      );
+      code = 1;
+    } else {
+      code = await (mod.run as (value: string) => number | Promise<number>)(input);
+    }
+  } catch (error) {
+    collected.push(
+      `${error instanceof Error ? error.stack ?? error.message : String(error)}\n`,
+    );
+    code = 1;
+  } finally {
+    process.stderr.write = stderrWrite;
+  }
+  hookTrace("hook-group-member-end", { hook: member.hook, code });
+  return { code, reason: collected.join("") };
+}
+
 async function runSensorScriptFile(
   action: Extract<Action, { type: "sensor-script-file" }>,
 ): Promise<number> {
@@ -2625,6 +2750,9 @@ async function execute(action: Action): Promise<number> {
   }
   if (action.type === "hook") {
     return await withProjectDir(action.projectDir, () => runHook(action));
+  }
+  if (action.type === "hook-group") {
+    return await withProjectDir(action.projectDir, () => runHookGroup(action));
   }
   if (action.type === "statusline") {
     return await withProjectDir(action.projectDir, () => runStatusline(action));

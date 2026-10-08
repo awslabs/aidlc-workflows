@@ -217,7 +217,9 @@ For `fire_on: write`, `matches` is the fire filter: the hook compares the path
 being written against the glob and an entry without a glob never fires. For
 `fire_on: gate`, `gate-start` and `revise` enumerate every existing declared
 deliverable, skip paths outside each sensor's `matches` capability, and dispatch
-only matching paths; an omitted glob accepts every deliverable. All six shipped
+only matching paths; an omitted glob accepts every deliverable. A gate the engine
+approves itself under Construction autonomy dispatches only blocking sensors
+(advisory evidence has no reader there). All six shipped
 manifests declare a glob. The compile resolver copies it into
 `sensors_applicable[]`.
 
@@ -264,7 +266,9 @@ dispatch remains advisory.
 `write` is the default and preserves incremental PostToolUse feedback. `gate`
 fires once per existing declared deliverable immediately before `gate-start`
 opens the first gate, before `revise` re-enters the gate after revision work,
-and before the approve-time revision backstop performs recovered re-entry.
+and before the approve-time revision backstop performs recovered re-entry. When
+no person will answer the gate (the engine approves it itself under Construction
+autonomy), only blocking sensors fire: advisory evidence has no reader there.
 Dispatch happens outside the state transaction because `aidlc-sensor.ts fire`
 takes the audit lock around both its `SENSOR_FIRED` and terminal rows.
 Blocking dispatch fingerprints every matching artifact before evaluation,

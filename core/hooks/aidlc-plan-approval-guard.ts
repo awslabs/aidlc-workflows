@@ -143,6 +143,16 @@ const HOOK_NAME = "plan-approval-guard";
 const GUARDED_STAGE = "code-generation";
 const GUARDED_AGENT = "aidlc-developer-agent";
 const STAGE_TARGET = "stage-level";
+// Shells and evaluators that run text the lexer does not read: what such a
+// command writes is not visible, so it keeps the build's verdict.
+const SHELL_INTERPRETERS = new Set([
+  ".", "bash", "busybox", "cmd", "dash", "eval", "exec", "fish", "ksh", "powershell", "pwsh", "sh", "source", "zsh",
+]);
+// Language runtimes given a program on the command line (`bun -e`, `python -c`)
+// are evaluators of text the lexer does not read either; a script file or a
+// heredoc is a program the person can see.
+const INLINE_CODE_RUNTIMES = new Set(["bun", "deno", "node", "perl", "php", "python", "python2", "python3", "ruby"]);
+const INLINE_CODE_FLAGS = new Set(["-c", "-e", "-E", "-p", "-r", "--eval", "--print", "eval"]);
 const WRITE_TOOLS = new Set(["Write", "Edit", "MultiEdit", "NotebookEdit"]);
 const SAFE_READ_TOOLS = new Set([
   "Read",
@@ -488,7 +498,7 @@ export function blockReason(
         : "one target, but the brief does not name it";
   return (
     `Code generation cannot start for ${scope} because its plan and test instructions are ` +
-    `not approved yet.${detail ? ` Reason: ${detail}.` : ""} Finish code-generation-plan.md and ` +
+    `not approved yet.${detail ? ` Reason: ${detail.replace(/\.+$/, "")}.` : ""} Finish code-generation-plan.md and ` +
     `unit-test-instructions.md, then run ${nextOnItsOwn()}: the engine asks the person to ` +
     `approve the plan, and the \`next\` after their answer hands over the build. Then hand the ` +
     `developer the output of ${briefCommand(mentioned, targets)} first, as printed: it names the one ` +
@@ -547,7 +557,7 @@ export function mutationBlockReason(
   return (
     `Code generation cannot ${action} for ${scope} because ` +
     `the plan, unit-test instructions, and current Testing Contract do not have a current ` +
-    `matching approval.${detail ? ` Reason: ${detail}.` : ""} Writes inside the selected code-generation record directory remain ` +
+    `matching approval.${detail ? ` Reason: ${detail.replace(/\.+$/, "")}.` : ""} Writes inside the selected code-generation record directory remain ` +
     `available for planning. When the plan is ready, run ${nextOnItsOwn()}: the engine asks ` +
     `the person to approve it before any code is written.`
   );
@@ -827,6 +837,31 @@ function isPlanWaitSideWrite(projectDir: string, target: string, planPaths: stri
   });
 }
 
+// A write outside the project is never the plan's business: the path as
+// written lies outside the project, and so does the real path of its deepest
+// existing ancestor, so a link from outside into the project counts as inside
+// (a dangling link resolves to nothing and counts as inside too).
+function isOutsideProject(projectDir: string, target: string): boolean {
+  try {
+    const projectLexical = resolve(projectDir);
+    const projectReal = realpathSync(projectLexical);
+    const targetAbs = resolve(target);
+    if (isWithinDir(targetAbs, projectLexical) || isWithinDir(targetAbs, projectReal)) return false;
+    const suffix: string[] = [];
+    let cursor = targetAbs;
+    while (lstatSync(cursor, { throwIfNoEntry: false }) === undefined) {
+      const parent = dirname(cursor);
+      if (parent === cursor) return false;
+      suffix.unshift(basename(cursor));
+      cursor = parent;
+    }
+    const real = join(realpathSync(cursor), ...suffix);
+    return !isWithinDir(real, projectLexical) && !isWithinDir(real, projectReal);
+  } catch {
+    return false;
+  }
+}
+
 // The files and folders the waiting plans name, loaded only while the engine's
 // Plan Approval question is open, or one target's plan before it is asked.
 // Null when that module cannot be read.
@@ -973,6 +1008,11 @@ interface MutationIntent {
   swarmUnits?: string[];
   /** The command runs AI-DLC itself, or may (a dynamic command naming it). */
   runsAidlc?: boolean;
+  /** False when the lexer could not read the whole command: a variable or
+   *  substitution, whitespace or an operator it does not decode, a shell or
+   *  evaluator (a shell script, inline code) that runs text it cannot see, a
+   *  write through an option, or a PowerShell command not read as plain. */
+  readable?: boolean;
 }
 
 function normalizedCommandName(name: string): string {
@@ -992,17 +1032,16 @@ function lastFlagValue(args: string[], flag: string): string | null {
 }
 
 // Diagnostics that change nothing a plan governs. Refusing them while a plan
-// waits for approval left the person unable to ask what was wrong (#1383,
-// #1418). A doctor export writes a bundle, so it keeps the normal verdict.
+// waits for approval left the person unable to ask what was wrong. The doctor's
+// export writes its report bundle under aidlc/diagnostics (or a folder the
+// person names, which doctor keeps inside the project); no plan names it, so a
+// stuck person can always send one.
 function isReadOnlyDiagnostic(args: readonly string[]): boolean {
   const [head = "", ...rest] = args;
   if (["status", "--status", "version", "--version", "help", "--help"].includes(head)) return true;
   // The engine's clock, for a time a document asks for.
   if (head === "engine" && rest.length === 1 && rest[0] === "now") return true;
-  if (head !== "doctor" && head !== "--doctor") return false;
-  return !rest.some((arg) =>
-    arg === "--export" || arg === "--output" ||
-    arg.startsWith("--export=") || arg.startsWith("--output="));
+  return head === "doctor" || head === "--doctor";
 }
 
 // A recorded switch turned off or back on, and nothing else: `config flags`
@@ -1375,9 +1414,39 @@ function lastStepAdmitsPersonsMoves(projectDir: string): boolean {
   }
 }
 
+// What every helper may run, whoever runs it: the verbs the state-transition
+// guard admits every delegated agent (DELEGATE_ADMITTED_VERBS, from which the
+// Kiro IDE helpers' shell deny is built), in a spelling that guard does not
+// refuse a helper. They read, scan, validate, or do a helper's own work (the
+// composer's workspace scan and grid check, a sensor rerun, the developer's
+// brief). None changes stage status or routing or records a receipt or a
+// person's choice, so none builds a waiting plan or stands in for the
+// person's answer: new work the person asks for is planned while another plan
+// waits. A route is judged by the script and verb the dispatcher runs for it,
+// a tool script (`engine <stem> ...`, see isFrameworkToolInvocation) by its
+// own name. Both modules load only when a command gets this far.
+function everyHelperMayRun(engineArgs: readonly string[]): boolean {
+  if (engineArgs[0] !== "engine") return false;
+  try {
+    const { resolveAction } = require("../tools/aidlc.ts") as typeof import("../tools/aidlc.ts");
+    const { DELEGATE_ADMITTED_VERBS, delegatedLifecycleCommand } =
+      require("./aidlc-state-transition-guard.ts") as typeof import("./aidlc-state-transition-guard.ts");
+    const action = resolveAction([...engineArgs]);
+    const [tool, args] = action.type === "delegate"
+      ? [action.tool, action.args]
+      : [`aidlc-${engineArgs[1]}.ts`, engineArgs.slice(2)];
+    const verb = args.find((arg, i) => arg !== "--project-dir" && args[i - 1] !== "--project-dir");
+    const command = [`bun ${harnessDir()}/tools/${tool}`, ...args.map((arg) => quoteCommandArgument(arg, "posix"))];
+    return Object.hasOwn(DELEGATE_ADMITTED_VERBS, tool) && DELEGATE_ADMITTED_VERBS[tool].includes(verb ?? "") &&
+      delegatedLifecycleCommand(command.join(" ")) === null;
+  } catch {
+    return false;
+  }
+}
+
 // Everything admitted while a plan waits, in one place: the prerequisites
 // below, the open question's own answers, read-only diagnostics, a recorded
-// switch, and what the engine names.
+// switch, what every helper may run, and what the engine names.
 function planWaitAdmits(
   projectDir: string,
   engineArgs: string[],
@@ -1387,7 +1456,7 @@ function planWaitAdmits(
   const personSpoke = () => personSpokeSinceGate(projectDir, { requests: true });
   return isPlanApprovalPrerequisite(engineArgs, gateHeld, personSpoke) ||
     askAdmits(engineArgs) || isReadOnlyDiagnostic(engineArgs) || recordedSwitchChangeAdmitted(projectDir, engineArgs) ||
-    chatSwitchChangeAdmitted(projectDir, engineArgs) ||
+    chatSwitchChangeAdmitted(projectDir, engineArgs) || everyHelperMayRun(engineArgs) ||
     engineDirectedWhilePlanWaits(engineArgs, () => personSpoke() && lastStepAdmitsPersonsMoves(projectDir));
 }
 
@@ -1566,6 +1635,16 @@ function isSelectedGuardRestartContinuation(
   // Match aidlc-jump resolve's graph-order calculation, not the caller's
   // claimed direction. A selection cannot turn a forward move into a reset.
   return continuation.direction === (targetIndex === currentIndex ? "redo" : "backward");
+}
+
+// A file a command writes through an option or a second operand, which the
+// lexer does not place among the write targets: it is a write all the same.
+function writesThroughOption(name: string, args: readonly string[]): boolean {
+  if (name === "sort" || name === "git") {
+    return args.some((arg) => (name === "sort" && arg === "-o") || arg === "--output" || arg.startsWith("--output="));
+  }
+  if (name === "uniq") return args.filter((arg) => !arg.startsWith("-")).length >= 2;
+  return false;
 }
 
 function gitSubcommand(args: string[]): string | null {
@@ -1773,24 +1852,10 @@ function shellInvocationNeedsApproval(
     // A path, extension or wrapper would name some other program.
     return executable.toLowerCase() !== name || !unwrapped;
   }
-  if (name === "sort") {
-    return invocation.args.some(
-      (arg) => arg === "-o" || arg === "--output" || arg.startsWith("--output="),
-    );
-  }
-  if (name === "uniq") {
-    const operands = invocation.args.filter((arg) => !arg.startsWith("-"));
-    return operands.length >= 2;
-  }
+  if (name === "sort" || name === "uniq") return writesThroughOption(name, invocation.args);
   if (READ_ONLY_SHELL_COMMANDS.has(name)) return false;
   if (name === "git") {
-    if (
-      invocation.args.some(
-        (arg) => arg === "--output" || arg.startsWith("--output="),
-      )
-    ) {
-      return true;
-    }
+    if (writesThroughOption(name, invocation.args)) return true;
     const subcommand = gitSubcommand(invocation.args);
     if (subcommand === "branch") {
       return !invocation.args.includes("--show-current");
@@ -1974,6 +2039,7 @@ async function mutationIntent(
   let shellCommand: string | null = null;
   let swarmUnits: string[] | null = null;
   let runsAidlc = false;
+  let readable = true;
   if (toolName === "Bash") {
     const command = toolInput?.command;
     if (typeof command !== "string") {
@@ -2026,6 +2092,18 @@ async function mutationIntent(
       normalizedCommandName(invocation.name).replace(/\.(?:cmd|ps1)$/, "") === "aidlc" ||
       invocation.args.some((arg) => /^aidlc(?:-[A-Za-z0-9._-]+)?\.ts$/.test(basename(arg)))) ||
       (dynamic && /\baidlc\b/i.test(analysed));
+    // An escaped operator (`\>`, `\&`) is read as the lexer decodes it, which
+    // is not trusted here; a variable, substitution or backtick (`dynamic`) can
+    // hide a command or a write target, and a shell script run by name hides
+    // commands the lexer never sees.
+    readable = !dynamic && !/[^\S \t\n]/u.test(command) && !command.includes("\\\n") && !/\\[<>&|;]/.test(command) &&
+      !(powerShellHint && powerShellCommand === null) &&
+      !invocations.some((invocation) => {
+        const program = normalizedCommandName(invocation.executable ?? invocation.name);
+        return SHELL_INTERPRETERS.has(program) || writesThroughOption(program, invocation.args) ||
+          /\.(?:ps1|sh|bash|zsh|ksh|cmd|bat)$/.test(program) ||
+          (INLINE_CODE_RUNTIMES.has(program) && invocation.args.some((arg) => INLINE_CODE_FLAGS.has(arg)));
+      });
   } else if (WRITE_TOOLS.has(toolName)) {
     const input = toolInput ?? {};
     const add = (value: unknown) => {
@@ -2044,6 +2122,7 @@ async function mutationIntent(
     shellCommand,
     ...(swarmUnits ? { swarmUnits } : {}),
     ...(runsAidlc ? { runsAidlc } : {}),
+    ...(readable ? {} : { readable }),
   };
 }
 
@@ -2262,6 +2341,18 @@ async function evaluate(
             shellCommand: `unknown mutation-capable tool: ${toolName}`,
           };
     if (!guardedDispatch && mutation.targets.length === 0 && !mutation.opaqueShell) {
+      return 0;
+    }
+    // What the plan never governs, at any point of Code Generation and under
+    // every Guard Policy: a command the lexer read whole that names no file it
+    // writes and is not AI-DLC's own (a read, a scan, a test run), and a write
+    // whose every target is outside the project. The build waits as before:
+    // the developer, the plan's files and the code, AI-DLC's records and
+    // AI-DLC's own commands, and a command whose writes cannot be seen.
+    if (
+      !guardedDispatch && knownMutationTool && !mutation.runsAidlc && mutation.readable !== false &&
+      mutation.targets.every((candidate) => isOutsideProject(projectDir, candidate))
+    ) {
       return 0;
     }
     if (

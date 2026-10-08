@@ -74,6 +74,7 @@ import {
   currentSwarmSourceMergeChain,
   gitCommitSourceListing,
   readAllAuditShards,
+  readWorkspaceSourceSnapshot,
   sourceBaselineAuditFields,
   reviewArtifactFingerprint,
   reviewRecordDigest,
@@ -1934,6 +1935,27 @@ describe("t314 receipt stamping + completion guard (cli)", () => {
     expect(r.out).toContain(REVIEWER);
   }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
+  test("under relaxed, a post-review source edit is carried to the gate as the changed paths", () => {
+    const statePath = seededStateFile(proj);
+    writeFileSync(statePath, readFileSync(statePath, "utf-8").replace(
+      /^- \*\*Change Control\*\*: .*$/m,
+      "- **Guard Policy**: relaxed (set by you)",
+    ));
+    recordReview(proj);
+    // The review request kept the listing behind its Source Fingerprint.
+    const fingerprint = /\*\*Source Fingerprint\*\*: ([0-9a-f]{64})/.exec(readAllAuditShards(proj))?.[1];
+    expect(fingerprint).toBeDefined();
+    expect(readWorkspaceSourceSnapshot(proj, "code-generation", fingerprint as string)).not.toBeNull();
+    writeFileSync(src, "export const answer = 1337; // edited after review\n", "utf-8");
+    const r = guarded(proj, ["approve", "code-generation", "--user-input", "ship it"]);
+    expect(r.rc, r.out).toBe(0);
+    // The person's line and the record both name the file, not "(paths unavailable)".
+    expect(r.out).toContain("app.ts changed after the Code Generation review; carrying on.");
+    const row = readAllAuditShards(proj).split(/\n---\n/).find((block) => block.includes("**Event**: CHANGE_ACCEPTED"));
+    expect(row).toContain("**Checkpoint**: review-receipt");
+    expect(row).toContain("**Changed**: app.ts");
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
+
   test.each([
     ["gate-start", false],
     ["gate-start", true],
@@ -2707,6 +2729,70 @@ describe("t314 multi-unit source attribution", () => {
     const r = guarded(proj, ["approve", "code-generation", "--user-input", "ship it"]);
     expect(r.rc).toBe(1);
     expect(r.out).toContain("Changed after review: alpha");
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
+
+  // Under relaxed a Unit whose manifest grew after its review keeps the review;
+  // the record names the path the Unit claims since.
+  test("under relaxed, a Unit whose list of files grew after its review names the added path", () => {
+    const statePath = seededStateFile(proj);
+    writeFileSync(statePath, readFileSync(statePath, "utf-8").replace(
+      /^- \*\*Change Control\*\*: .*$/m,
+      "- **Guard Policy**: relaxed (set by you)",
+    ));
+    writeFileSync(join(proj, "alpha.ts"), "export const alpha = 1;\n", "utf-8");
+    git(proj, ["add", "-A"]);
+    git(proj, ["commit", "-qm", "alpha code"]);
+    recordReview(proj, "code-generation", REVIEWER, "alpha", "READY", [{ path: "alpha.ts" }]);
+    writeFileSync(join(proj, "beta.ts"), "export const beta = 2;\n", "utf-8");
+    git(proj, ["add", "-A"]);
+    git(proj, ["commit", "-qm", "beta code"]);
+    recordReview(proj, "code-generation", REVIEWER, "beta", "READY", [{ path: "beta.ts" }]);
+
+    // alpha claims one more file after its review.
+    writeFileSync(join(proj, "alpha-extra.ts"), "export const extra = 1;\n", "utf-8");
+    git(proj, ["add", "-A"]);
+    git(proj, ["commit", "-qm", "alpha claims another file"]);
+    const manifest = join(seededRecordDir(proj), "construction", "alpha", "code-generation", "source-manifest.json");
+    writeFileSync(
+      manifest,
+      `${JSON.stringify({ stage: "code-generation", unit: "alpha", version: 1, writes: [{ path: "alpha.ts" }, { path: "alpha-extra.ts" }] }, null, 2)}\n`,
+      "utf-8",
+    );
+
+    const r = guarded(proj, ["approve", "code-generation", "--user-input", "ship it"]);
+    expect(r.rc, r.out).toBe(0);
+    expect(r.out).toContain("The alpha Unit's list of files changed after it was reviewed; carrying on.");
+    const row = readAllAuditShards(proj).split(/\n---\n/).find((block) =>
+      block.includes("**Event**: CHANGE_ACCEPTED") && block.includes("**Unit**: alpha"));
+    expect(row).toContain("**Changed**: alpha-extra.ts");
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
+
+  // A manifest rewritten with the same paths after its review changes no file:
+  // the row says so instead of carrying an empty list.
+  test("under relaxed, a manifest-only rewrite after the review is the no-paths case, not a blank list", () => {
+    const statePath = seededStateFile(proj);
+    writeFileSync(statePath, readFileSync(statePath, "utf-8").replace(
+      /^- \*\*Change Control\*\*: .*$/m,
+      "- **Guard Policy**: relaxed (set by you)",
+    ));
+    writeFileSync(join(proj, "alpha.ts"), "export const alpha = 1;\n", "utf-8");
+    git(proj, ["add", "-A"]);
+    git(proj, ["commit", "-qm", "alpha code"]);
+    recordReview(proj, "code-generation", REVIEWER, "alpha", "READY", [{ path: "alpha.ts" }]);
+    writeFileSync(join(proj, "beta.ts"), "export const beta = 2;\n", "utf-8");
+    git(proj, ["add", "-A"]);
+    git(proj, ["commit", "-qm", "beta code"]);
+    recordReview(proj, "code-generation", REVIEWER, "beta", "READY", [{ path: "beta.ts" }]);
+
+    const manifest = join(seededRecordDir(proj), "construction", "alpha", "code-generation", "source-manifest.json");
+    writeFileSync(manifest, `${readFileSync(manifest, "utf-8")}\n`, "utf-8");
+
+    const r = guarded(proj, ["approve", "code-generation", "--user-input", "ship it"]);
+    expect(r.rc, r.out).toBe(0);
+    expect(r.out).toContain("The alpha Unit's list of files changed after it was reviewed; carrying on.");
+    const row = readAllAuditShards(proj).split(/\n---\n/).find((block) =>
+      block.includes("**Event**: CHANGE_ACCEPTED") && block.includes("**Unit**: alpha"));
+    expect(row).toContain("**Changed**: (paths unavailable)");
   }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   // Re-reviewing alpha refreshes the global outer binding, but beta's own

@@ -1546,6 +1546,73 @@ describe("t304 executable review brief scenarios", () => {
     expect(message).not.toContain(`${relativeArtifact}#R-01`);
   });
 
+  test("a short finding id selects the one current finding it names", () => {
+    // From a user report: the agent passed `components#R-01` for the one R-01 the
+    // gate held and was refused with the full path to retype. An unambiguous
+    // selector is the tool's to resolve: the file name with or without .md, a
+    // path tail, or the id alone when one current finding carries it.
+    const { proj, relativeArtifact } = requirementProject([ROW_NEW, ROW_NEW_SECOND]);
+    const stage = findStageBySlug("requirements-analysis")!;
+    for (const selector of [
+      "requirements#R-01",
+      "requirements.md#R-01",
+      "requirements-analysis/requirements.md#R-01",
+      "R-01",
+    ]) {
+      const field = rejectedFindingDispositionField(proj, stage, [`${selector}=Not applicable`]);
+      expect(field, selector).toBeDefined();
+      const envelope = JSON.parse(field as string) as {
+        dispositions: Array<{ artifact: string; id: string; status: string }>;
+      };
+      expect(envelope.dispositions, selector).toEqual([
+        expect.objectContaining({
+          artifact: relativeArtifact,
+          id: "R-01",
+          status: "Rejected: Not applicable",
+        }),
+      ]);
+    }
+    // A file name selects only a finding of that file: none is keyed to the questions file.
+    expect(() =>
+      rejectedFindingDispositionField(proj, stage, ["requirements-analysis-questions#R-02=Not applicable"])
+    ).toThrow("not a current review finding");
+  });
+
+  test("a short finding id that two current findings carry is refused naming both", () => {
+    // Per-Unit reviews number from R-01 each, so at a gate over several Units the
+    // id alone can name two findings; the engine names them back instead of
+    // choosing, and the same selector scoped to one Unit is that Unit's.
+    const { proj, artifacts } = perUnitReviewProject("code-generation", ["unit-a", "unit-b"]);
+    const unitB = artifacts.get("unit-b")!;
+    writeFileSync(
+      join(proj, unitB),
+      reviewMarkdown("NOT-READY", [
+        `| R-01 | Major | ${unitB} > section | unit-b concern | Fix unit-b | New |`,
+      ]),
+      "utf-8",
+    );
+    const stage = findStageBySlug("code-generation")!;
+    let message = "";
+    try {
+      rejectedFindingDispositionField(proj, stage, ["code-generation-plan#R-01=Not applicable"]);
+    } catch (error) {
+      message = error instanceof Error ? error.message : String(error);
+    }
+    expect(message).toContain("names 2 current review findings");
+    expect(message).toContain(`${artifacts.get("unit-a")}#R-01`);
+    expect(message).toContain(`${unitB}#R-01`);
+    const field = rejectedFindingDispositionField(
+      proj,
+      stage,
+      ["code-generation-plan#R-01=Not applicable"],
+      "unit-a",
+    );
+    const envelope = JSON.parse(field as string) as { dispositions: Array<{ artifact: string; id: string }> };
+    expect(envelope.dispositions).toEqual([
+      expect.objectContaining({ artifact: artifacts.get("unit-a"), id: "R-01" }),
+    ]);
+  });
+
   test("reviewer-free stages cannot record finding dispositions", () => {
     const { proj } = requirementProject([]);
     const stage = findStageBySlug("workspace-scaffold")!;

@@ -39,6 +39,7 @@ import {
   setDefaultTimeout,
   test,
 } from "bun:test";
+import { hookGroupMembers } from "../../core/tools/aidlc-command.ts";
 import { spawnSync } from "node:child_process";
 import {
   cpSync,
@@ -1105,15 +1106,26 @@ describe("t264 (c) harness registration", () => {
       const s = JSON.parse(readFileSync(join(root, "settings.json"), "utf-8")) as {
         hooks?: Record<string, Array<{ matcher?: string; hooks?: Array<{ command?: string }> }>>;
       };
+      // One process runs the PreToolUse checks (#2066): the freeze is a member
+      // of the guard group, with the matcher its own row had.
       const group = (s.hooks?.PreToolUse ?? []).find((g) =>
-        (g.hooks ?? []).some((h) => (h.command ?? "").includes("hook review-freeze")),
+        (g.hooks ?? []).some((h) => (h.command ?? "").includes("hook guard-tool-call")),
       );
       expect(group, root).toBeDefined();
-      // Shares the state-transition-guard/reviewer-scope matcher group, so the
-      // hook can inspect both file writes and mutation-capable shell commands.
-      expect(group?.matcher).toContain("Write");
-      expect(group?.matcher).toContain("Edit");
-      expect(group?.matcher).toContain("Bash");
+      expect(
+        (s.hooks?.PreToolUse ?? []).some((g) =>
+          (g.hooks ?? []).some((h) => (h.command ?? "").includes("hook review-freeze"))
+        ),
+        root,
+      ).toBe(false);
+      // The group row reaches both file writes and mutation-capable shell
+      // commands, and so does the member's own matcher inside it.
+      const member = (hookGroupMembers("guard-tool-call") ?? [])
+        .find((entry) => entry.hook === "review-freeze");
+      for (const tool of ["Write", "Edit", "Bash"]) {
+        expect(group?.matcher, `${root} ${tool}`).toContain(tool);
+        expect(new RegExp(member?.matcher ?? "$^").test(tool), `${root} ${tool}`).toBe(true);
+      }
     }
   });
 

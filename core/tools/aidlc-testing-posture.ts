@@ -90,6 +90,7 @@ import {
   serializeSourceListing,
   sourceListingSha256,
   parseSourceListing,
+  personSpokeSinceGate,
   structuredField,
   structuredFieldSpan,
   toPosix,
@@ -363,7 +364,7 @@ export function planSourceDriftStrictMessage(paths: string[] | null, unbound = f
 export function planSourceDriftRelaxedNotice(paths: string[] | null, unbound = false): string {
   return (
     `${describeSourceDrift(paths, unbound)} Carrying on. ` +
-    "Do you want to look at the plan again and approve it first?"
+    "Do you want me to go over the plan with you again?"
   );
 }
 
@@ -424,7 +425,7 @@ function judgePlanSourceDrift(
         ? planSourceMovedNotice(paths, unit)
         : loweredFence && resolution.value === "strict"
           ? `${describeSourceDrift(paths, unbound)} Carrying on, since the plan approval check (${CHECK_GLOSS["plan-approval"]}) ` +
-            "is off for this work. Do you want to look at the plan again and approve it first?"
+            "is off for this work. Do you want me to go over the plan with you again?"
           : planSourceDriftRelaxedNotice(paths, unbound),
     },
   };
@@ -1627,19 +1628,12 @@ export function keepApprovedPlanCopy(
   }
 }
 
-const APPROVED_PLAN_UNDO_WORDS = "go back to the approved plan";
-const APPROVED_PLAN_UNDO = `Say "${APPROVED_PLAN_UNDO_WORDS}" to undo.`;
-
-/**
- * True when the text is the words the change line gives the person, and
- * nothing more: case, spacing, quotes around them, "please" before or after,
- * and a closing "." or "!" do not matter.
- */
-export function isApprovedPlanUndoRequest(text: string): boolean {
-  const words = text.toLowerCase().replace(/\s+/g, " ").trim().replace(/^["']|["']$/g, "").replace(/[.!]+$/, "")
-    .replace(/^["']|["']$/g, "").trim();
-  return words.replace(/^please,? /, "").replace(/,? please$/, "") === APPROVED_PLAN_UNDO_WORDS;
-}
+// The way back the change line offers. When the edited plan is built on, the
+// line asks; when it is asked about again, the plan question follows the line,
+// so the way back is offered beside that question instead of asking a second
+// one. Their reply is the agent's to read; restore needs their word.
+const APPROVED_PLAN_UNDO_QUESTION = "Do you want me to go back to the plan you approved?";
+const APPROVED_PLAN_UNDO_OFFER = "I can also go back to the plan you approved.";
 
 function quotedStep(text: string): string {
   return `"${text.length > 80 ? `${text.slice(0, 77).trimEnd()}...` : text}"`;
@@ -1667,15 +1661,21 @@ function changedSteps(before: string[], after: string[]): string {
   return others > 0 ? `${what}, and ${others} more ${others === 1 ? "step" : "steps"} changed` : what;
 }
 
-export function approvedPlanChangeText(copy: ApprovedPlanCopy, plan: string, instructions: string): string | null {
+export function approvedPlanChangeText(
+  copy: ApprovedPlanCopy,
+  plan: string,
+  instructions: string,
+  planAsked = false,
+): string | null {
   const planChanged = projectPlanApprovalContent(plan) !== projectPlanApprovalContent(copy.plan);
   const lf = (text: string) => text.replace(/\r\n/g, "\n");
   const instructionsChanged = lf(instructions) !== lf(copy.instructions);
   if (!planChanged && !instructionsChanged) return null;
-  if (!planChanged) return `Your approved test instructions changed before the build. ${APPROVED_PLAN_UNDO}`;
+  const wayBack = planAsked ? APPROVED_PLAN_UNDO_OFFER : APPROVED_PLAN_UNDO_QUESTION;
+  if (!planChanged) return `Your approved test instructions changed before the build. ${wayBack}`;
   const what = changedSteps(planSteps(copy.plan).map((step) => step.text), planSteps(plan).map((step) => step.text));
   return `Your approved plan changed before the build: ${what}${instructionsChanged ? ", and the test instructions changed too" : ""}. ` +
-    APPROVED_PLAN_UNDO;
+    wayBack;
 }
 
 /** The approved files for this target and attempt, when the person approved them and the build has not started. */
@@ -1694,11 +1694,13 @@ function unbuiltApprovedCopy(
 /**
  * The one line the person hears when the plan they approved changed before the
  * build, or null when it did not (or nothing was approved in this attempt).
+ * With `planAsked`, the plan question follows the line.
  */
 export function approvedPlanChangeLine(
   projectDir: string,
   target: CodeGenerationTarget,
   issued?: CodeGenerationIssuance,
+  planAsked = false,
 ): string | null {
   try {
     const authority = resolveCodeGenerationAuthority(projectDir, target, issued);
@@ -1708,14 +1710,26 @@ export function approvedPlanChangeLine(
       copy,
       readFileSync(join(authority.stageDir, "code-generation-plan.md"), "utf-8"),
       readFileSync(join(authority.stageDir, "unit-test-instructions.md"), "utf-8"),
+      planAsked,
     );
   } catch {
     return null;
   }
 }
 
-/** Write the approved plan, test instructions and answer back: the person said to go back to the plan they approved. */
+/**
+ * Write the approved plan, test instructions and answer back: the person said
+ * to go back to the plan they approved. Their word since their last decision
+ * stands behind it: the agent going back on its own would undo an edit that
+ * may be the person's.
+ */
 export function restoreApprovedPlan(projectDir: string, target: CodeGenerationTarget): string {
+  if (!personSpokeSinceGate(projectDir, { requests: true })) {
+    throw new Error(
+      "The person has not said to go back to the plan they approved. Ask them \"" + APPROVED_PLAN_UNDO_QUESTION +
+        "\" and run this again only after they say yes.",
+    );
+  }
   const authority = resolveCodeGenerationAuthority(projectDir, target);
   const copy = readApprovedPlanCopy(projectDir, authority);
   const receipt = copy === null ? null : readPlanApprovalReceipt(projectDir, {
@@ -1753,8 +1767,9 @@ export function restoreApprovedPlan(projectDir: string, target: CodeGenerationTa
 // one line saying only what is certain: what is done and where it picks up.
 //
 // A worker that built steps without ticking them leaves no ticks. Then the
-// files the steps name are the record: the furthest step whose named files all
-// changed since the build started is where the build got to.
+// files the steps name are the record: the unbroken run of steps from step 1
+// whose named files all changed since the build started is where the build got
+// to, and it picks up at the first step that breaks that run.
 //
 // "Started on the plan as it is now" is the receipt the questions file names,
 // at status `generation`, when the plan and instructions on disk are the
@@ -1949,10 +1964,13 @@ function buildContentFingerprint(plan: string, instructions: string, authority: 
 }
 
 /**
- * With no step ticked: the furthest step whose named files all changed since
- * the build started (the source its receipt certified at generation start), or
- * 0 when none did or the start's file listing was not kept. A bare file name
- * matches a changed file of that name in any folder.
+ * With no step ticked: the unbroken run of steps from step 1 whose named files
+ * all changed since the build started (the source its receipt certified at
+ * generation start), or 0 when none did or the start's file listing was not
+ * kept. The run stops at the first step that names no file or whose files did
+ * not all change: a later step naming a file an earlier one touched
+ * (package.json, a README) says nothing about the steps between. A bare file
+ * name matches a changed file of that name in any folder.
  */
 function stepsWithWrittenFiles(projectDir: string, startedSource: string, steps: PlanStep[]): number {
   const current = workspaceSourceState(projectDir);
@@ -1964,11 +1982,9 @@ function stepsWithWrittenFiles(projectDir: string, startedSource: string, steps:
     : path.includes("/")
       ? changed.some((file) => file === path || file.endsWith(`/${path}`))
       : names.has(path);
-  let furthest = 0;
-  steps.forEach((step, index) => {
-    if (step.paths.length > 0 && step.paths.every(wrote)) furthest = index + 1;
-  });
-  return furthest;
+  let written = 0;
+  while (written < steps.length && steps[written].paths.length > 0 && steps[written].paths.every(wrote)) written++;
+  return written;
 }
 
 /**

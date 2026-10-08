@@ -31,8 +31,10 @@ before you author anything:
   omitted.
 - **`fire_on: gate` runs once per deliverable.** Immediately before
   `gate-start` opens its state transaction, the state tool fires each gate-bound
-  sensor once for every existing declared deliverable path. The dispatch stays
-  outside the transaction because the sensor dispatcher takes the audit lock.
+  sensor once for every existing declared deliverable path; a gate the engine
+  approves itself under Construction autonomy fires only blocking sensors, since
+  advisory evidence has no reader there. The dispatch stays outside the
+  transaction because the sensor dispatcher takes the audit lock.
 - **Severity controls gate enforcement.** `advisory` outcomes are recorded and
   the gate still opens. A `blocking` binding requires a verified pass: findings,
   unavailable tools, script/dispatcher errors, malformed verdicts, and timeouts

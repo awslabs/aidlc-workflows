@@ -55,6 +55,7 @@ import {
   readRootIntegrations,
   type RootIntegration,
   rootBlockPath,
+  rootIntegrationTarget,
   unionBlocks,
 } from "./aidlc-distribution.ts";
 import { activeSpace, harnessDir, sessionsDir, writeFileAtomic } from "./aidlc-lib.ts";
@@ -349,6 +350,30 @@ function repointFile(
   if (next !== null) {
     writeFileAtomic(absPath, next);
     written.push(relPath);
+  }
+}
+
+/** An include file's text as repointHarnessIncludes writes it for `space`, by
+ *  its workspace-relative path, or null when the path is not an include it
+ *  rewrites or nothing changes. A config refresh writes AI-DLC's updated
+ *  files this way, so a space switch survives it. */
+export function repointedIncludeText(rel: string, text: string, space: string): string | null {
+  const path = rel.replaceAll("\\", "/");
+  const rewrite = path === ".claude/rules/aidlc.md" || path === "AGENTS.md"
+    ? repointClaudeStub
+    : /^\.kiro\/agents\/[^/]+\.json$/.test(path)
+    ? repointKiroAgentResources
+    : /^\.cursor\/(?:rules\/[^/]+\.mdc|agents\/[^/]+\.md)$/.test(path) ||
+        /^(?:\.aidlc|\.opencode|\.github)\/agents\/[^/]+\.md$/.test(path)
+    ? repointOpencodeAgentMemory
+    : path === "opencode.json" || path === "opencode.jsonc"
+    ? repointOpencodeInstructions
+    : null;
+  if (!rewrite) return null;
+  try {
+    return rewrite(text, space);
+  } catch {
+    return null;
   }
 }
 
@@ -669,8 +694,10 @@ export function addRootBlocks(projectDir: string): string[] {
       // Leave the file as it was; the next session or config tries again.
     }
   }
-  for (const [path, part] of entryParts) {
+  for (const [key, part] of entryParts) {
     if (part.configured) continue;
+    // The team's file (the opencode.jsonc a team keeps, for opencode.json).
+    const path = rootIntegrationTarget(projectDir, key);
     const target = join(projectDir, path);
     let current = "";
     try {

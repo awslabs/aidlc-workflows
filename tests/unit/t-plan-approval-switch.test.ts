@@ -273,7 +273,7 @@ describe("plan approval off builds the plan as written", () => {
     expect(build.plan_approval.notice).toContain(
       "Plan approval (you approve each code plan before it is built) is off for this piece of work (from scope poc).",
     );
-    expect(build.plan_approval.notice).toContain("Do you want to look at the plan and approve it first?");
+    expect(build.plan_approval.notice).toContain("Starting code generation now. Do you want me to go over the plan with you?");
     // The record says it was not asked; it never claims the person approved.
     const audit = auditText(proj);
     expect(audit).toContain("**Event**: PLAN_APPROVAL_SKIPPED");

@@ -306,8 +306,12 @@ canonical READY / NOT-READY line (a capped, crashed, or cut-off reviewer) - the
 conductor re-dispatches that same review once, and a second incomplete attempt
 is recorded as NOT-READY with the finding "review did not complete within its
 turn budget", so a silent cutoff becomes a visible finding at the gate instead
-of a missing verdict. Every request opens a fresh review slot, so a stale
-pre-revision review can never be misread as covering new work. Reviews recorded
+of a missing verdict. That result is no reviewer's: you are told the review did
+not finish, and your approval records it that way. If you stop a review
+yourself and say what you want, the conductor does not retry it on its own: it
+checks the next step first and does what you asked. Every request opens a
+fresh review slot, so a stale pre-revision review can never be misread as
+covering new work. Reviews recorded
 by earlier releases as a `## Review` section inside the artifact stay readable
 at the gate until the next review replaces them.
 

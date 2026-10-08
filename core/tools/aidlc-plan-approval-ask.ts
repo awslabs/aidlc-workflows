@@ -121,6 +121,12 @@ export interface PlanApprovalAskResult {
   feedback?: string;
   /** What the conductor must repair before asking again. */
   note?: string;
+  /**
+   * The repair was of a file the person edited themselves, so the question that
+   * follows may say so. Absent when the engine or the agent broke it, or when
+   * the agent's own work was simply missing: the person edited nothing then.
+   */
+  edited?: true;
   /** Recorded from the conductor's reading of the reply, not an exact pick. */
   read?: true;
   /** How many human turns were on record when it was recorded; a newer turn lets it change. */
@@ -484,17 +490,23 @@ function plansNamedPaths(projectDir: string, units: Array<string | null>): strin
   return [...named];
 }
 
+// What the person reads when their own edit broke the generated block and the
+// engine put it back: the term is the one their plan file shows, with a few
+// plain words on what it does for them, because nobody should need the
+// vocabulary to answer the question.
+const REPAIRED_CONTRACT = "I repaired the plan's Testing Contract (the test rules your build follows).";
+
 function planQuestion(units: Array<string | null>, repaired: boolean): string {
   if (units.length > 1) {
     return repaired
-      ? `I repaired the Testing Contract block. Approve these ${units.length} code plans?`
+      ? `${REPAIRED_CONTRACT} Approve these ${units.length} code plans?`
       : `Approve these ${units.length} code plans?`;
   }
   const unit = units[0] ?? null;
   if (repaired) {
     return unit === null
-      ? "I repaired the Testing Contract block. Build your edited plan?"
-      : `I repaired the Testing Contract block. Build your edited plan for ${unit}?`;
+      ? `${REPAIRED_CONTRACT} Build your edited plan?`
+      : `${REPAIRED_CONTRACT} Build your edited plan for ${unit}?`;
   }
   return unit === null ? "Approve the code plan?" : `Approve the code plan for ${unit}?`;
 }
@@ -688,7 +700,7 @@ function targetState(
   // Plan approval is off: build the plan as written, unless the person asked to
   // review it first. That request is for this plan only; later Units still build.
   if (planApprovalOff && !reviewRequested) return { unit, kind: "skip" };
-  return { unit, kind: "ask", repaired: result?.choice === "repair" };
+  return { unit, kind: "ask", repaired: result?.choice === "repair" && result.edited === true };
 }
 
 // In place: the engine keys a run-stage's rule route and a swarm's publication
@@ -737,7 +749,8 @@ export function routeCodeGenerationPlanApproval(projectDir: string, directive: D
   const states = units.map((unit) => targetState(projectDir, unit, intentId, record, directive, planApprovalOff));
   if (states.every((state) => state.kind === "approved")) {
     // Under a lowered Guard Policy an approved plan that changed before the
-    // build still builds; the person hears what changed and how to go back.
+    // build still builds; the person hears what changed and is asked whether
+    // to go back.
     const approved = withPlanState(directive, { status: "approved" });
     const changed = units.flatMap((unit) => approvedPlanChangeLine(projectDir, { unit }, directive) ?? []);
     if (changed.length > 0) approved.change_notices = [...(approved.change_notices ?? []), ...changed];
@@ -789,8 +802,9 @@ export function routeCodeGenerationPlanApproval(projectDir: string, directive: D
   const reShown = record !== null && record.results === undefined && record.question === question &&
     record.targets.length === askUnits.length && record.targets.every((target) => askUnits.includes(target.unit));
   // Under strict a changed approved plan is asked about again; the question
-  // says first what changed since the person approved it.
-  const changed = askUnits.flatMap((unit) => approvedPlanChangeLine(projectDir, { unit }, directive) ?? []);
+  // says first what changed since the person approved it, and that they can
+  // go back to it.
+  const changed = askUnits.flatMap((unit) => approvedPlanChangeLine(projectDir, { unit }, directive, true) ?? []);
   return planApprovalAskDirective(projectDir, askUnits, {
     question,
     editing: false,
@@ -947,7 +961,7 @@ function planApprovalOffNotice(projectDir: string, units: Array<string | null>, 
   const written = paths.length === 1 ? `Plan written: ${paths[0]}.` : `Plans written: ${paths.join(", ")}.`;
   return `${written} Plan approval (${CHECK_GLOSS["plan-approval"]}) is off for this piece of work ` +
     `(${changeControlSourceLabel(setting.source)}). Starting code generation now. ` +
-    "Do you want to look at the plan and approve it first?";
+    "Do you want me to go over the plan with you?";
 }
 
 /**
@@ -1126,17 +1140,46 @@ function approveTarget(
   let plan = planAsFound;
   const instructions = readText(join(dir, INSTRUCTIONS_FILE));
   const view = targetView(projectDir, unit);
+  // Only the person's own editing turn makes a repair theirs. Anything else is
+  // the engine's or the agent's own doing, and a question that calls it their
+  // edit describes work they never did.
+  const theirEdit = record.mode === "editing";
   const repair = (note: string): TargetApproval => ({
     ok: false,
-    result: { unit, choice: "repair", fingerprint: "", note },
+    result: { unit, choice: "repair", fingerprint: "", note, ...(theirEdit ? { edited: true as const } : {}) },
     notice: `AIDLC Plan Approval: ${note} Nothing was approved for ${targetLabel(unit)}. Run next: repair it, and ` +
-      "the engine will ask the person once to build the edited plan.",
+      (theirEdit
+        ? "the engine will ask the person once to build the edited plan."
+        : "the engine will ask the person to approve the plan once it is sound."),
   });
-  if (!plan.trim()) return repair(`${view.plan_path} is empty.`);
-  if (!instructions.trim()) return repair(`${view.instructions_path} is empty.`);
+  // The plan or its test instructions are the agent's own output. Missing or
+  // empty, there is nothing to repair and nothing of theirs to ask about: the
+  // next `next` routes the planning step that writes it (plan readiness names
+  // the file), and the person is asked once afterwards.
+  //
+  // Their own editing turn has to end even so. The record goes back to "ask"
+  // only when an answer records a result, and while it still says "editing" the
+  // question comes back as the edit-mode one and the guard keeps those files to
+  // them: nobody could write the file, the person would be asked to say done
+  // again, and a "stop for today" on the same answer would be lost with the
+  // refusal. So their turn ends with a repair result, carrying no `edited` flag
+  // because an empty file is not the edit they made.
+  const missing = (note: string): TargetApproval => {
+    const notice = `AIDLC Plan Approval: ${note} Nothing was approved for ${targetLabel(unit)}. ` +
+      (theirEdit
+        ? "Run next: write it, and the engine will ask the person to approve the plan."
+        : "Run next and follow the step it names: the plan is written first, then the person is asked once.");
+    return theirEdit
+      ? { ok: false, result: { unit, choice: "repair", fingerprint: "", note }, notice }
+      : { ok: false, notice };
+  };
+  if (!plan.trim()) return missing(`${view.plan_path} is empty.`);
+  if (!instructions.trim()) return missing(`${view.instructions_path} is empty.`);
   const read = readTestingContract(plan);
   if (!("contract" in read)) {
-    return repair(`the edit broke the Testing Contract block in ${view.plan_path} (${read.defect}).`);
+    return repair(theirEdit
+      ? `the edit broke the Testing Contract block in ${view.plan_path} (${read.defect}).`
+      : `the Testing Contract block in ${view.plan_path} is not valid (${read.defect}).`);
   }
   // The block the engine rendered is out of date because a scope or setting the
   // person changed moved the posture under it (a block they edited themselves
@@ -1628,6 +1671,18 @@ export function withdrawPlanApprovalReplies(projectDir: string, text: string): v
     const record = readPlanApprovalAsk(projectDir, intentIdFor(projectDir));
     if (record === null || !record.replies?.some((reply) => same(reply.text))) return;
     writePlanApprovalAsk(projectDir, { ...record, replies: record.replies.filter((reply) => !same(reply.text)) });
+  });
+}
+
+/**
+ * The person's latest message asked to park the work: an instruction to the
+ * framework, like a slash command, not a reply the code plan question keeps.
+ */
+export function withdrawLatestPlanApprovalReply(projectDir: string): void {
+  withAuditLock(projectDir, () => {
+    const record = readPlanApprovalAsk(projectDir, intentIdFor(projectDir));
+    if (record === null || !record.replies?.length) return;
+    writePlanApprovalAsk(projectDir, { ...record, replies: record.replies.slice(0, -1) });
   });
 }
 

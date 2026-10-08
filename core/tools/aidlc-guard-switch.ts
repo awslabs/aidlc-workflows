@@ -749,6 +749,16 @@ export function isTypedGuardSwitchQuestion(prompt: string): boolean {
   return parseTypedGuardSwitchRequest(prompt).asked === true;
 }
 
+/**
+ * The one sentence for a flag-shaped token no parser here can read. One owner,
+ * because two places say it: the human-turn hook when a readable switch was on
+ * the line with it, and `next` when the whole line was that token, where the
+ * hook read nothing and said nothing.
+ */
+export function unreadSettingLine(token: string): string {
+  return `I could not read "${token}". Was that a setting you wanted?`;
+}
+
 export function applyTypedGuardSwitchPrompt(
   projectDir: string,
   sessionId: string,
@@ -770,7 +780,7 @@ export function applyTypedGuardSwitchPrompt(
   );
   return {
     ...outcome,
-    lines: [...said, `I could not read "${unread}". Was that a setting you wanted?`],
+    lines: [...said, unreadSettingLine(unread)],
   };
 }
 

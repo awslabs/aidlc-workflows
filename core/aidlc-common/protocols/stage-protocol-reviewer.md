@@ -147,6 +147,15 @@ through normal recovery; do not rewrite receipts or assume a new receipt format.
 
    When the current unit's design explicitly names an integration point in a sibling unit's file, resolve that single owning file via the shared contracts and append its path to `exempt` - the record is where the spot-check carve-out is granted. The `stage` field appears verbatim in any `REVIEWER_SCOPE_BLOCKED` audit row; use the current stage slug. The reviewer-scope PreToolUse hook reads this record to enforce the read-scope bound deterministically while the review is in flight; on a NOT-READY re-invoke (step 3 back to step 1), write a fresh record. Single-stage and other no-unit reviews write no record; under a swarm the record is per unit - written before that unit's reviewer and deleted at its step 3 before the next unit's review begins. The record always lives in the main workspace's intent record - the path the conductor's reviewer-scope hook resolves - never in the unit's worktree, even though `--project-dir` targets the worktree for the review request and receipt; the reviewer's tool calls run under the conductor's hooks, and the hook judges `construction/<unit>/` tokens in worktree paths the same way. On a harness without reviewer-scope enforcement (Kiro IDE today), do not write the record; the reviewer read-scope bound remains mandatory prose in the delegated task and reviewer persona.
 
+   When the person has written since this review was dispatched (they
+   stopped it, or said anything at all), re-run `next` first and follow the
+   step it prints together with what they asked. When they said to approve the
+   work as it is, report that approval with their words (at a Unit checkpoint,
+   verify with `--over-unfinished-review` as the construction module says).
+   Never retry the review or record the NOT-READY fallback (step 3) on your own
+   then: the retry and the fallback are for a review that stopped with no
+   person involved (its turn cap, a session that died).
+
    If that dispatch fails, times out, or ends without a recorded verdict - the
    session died, or the reviewer returned an incomplete attempt (step 3: no
    review file, or one without a single canonical verdict) - return to the
@@ -190,7 +199,8 @@ through normal recovery; do not rewrite receipts or assume a new receipt format.
    Anything else is an INCOMPLETE attempt, not a verdict: no review file at all (the reviewer has a hard turn cap and may have been stopped before writing it; the request opened an empty slot, so a missing file means an incomplete review on every path, first entry or revision alike), a review with no canonical verdict line or one that does not match `--verdict`, forged/missing/conflicting duplicate ownership fields, a later top-level heading the logger cannot make level 3, or a malformed findings report (once the request's retry is spent, a findings report is the one defect that records instead; see below). The logger refuses these; a malformed audit `REVIEW_COMPLETED` row is ignored and does not consume the pending request. A review file that is whole except for top-level `#` or `##` heading lines (for example `## What I verified`) is not one of these: the logger records those lines as `###`, checks the result the same way, and records the verdict, so the reviewer is not dispatched again.
 
    **On an incomplete attempt:** no verdict exists to record, so the step-1
-   request is still unmatched. If the ledger does not yet mark a retry on this
+   request is still unmatched. When the person has written since the dispatch,
+   step 1's rule comes first. If the ledger does not yet mark a retry on this
    request, re-dispatch it exactly once - return to step 1 and rerun the same
    request command with `--retry-pending` immediately before dispatch, and add
    this line to the dispatch as written: `Previous attempt: no review could be
@@ -220,7 +230,10 @@ through normal recovery; do not rewrite receipts or assume a new receipt format.
    If the retried attempt is ALSO incomplete, stop retrying: record the
    terminal receipt with `--verdict NOT-READY` and no review file; the logger
    accepts a missing review only for this retried NOT-READY fallback, and
-   writes an empty review record for it. Proceed as that NOT-READY verdict directs for the
+   writes an empty review record for it. That receipt is no reviewer's
+   verdict, and the person's approval over it is recorded as
+   `Review: not finished`. The person hears that the review did not finish,
+   never that the reviewer found the work not ready. Proceed as that NOT-READY verdict directs for the
    effective review class - on `advisory` it is terminal (present the gate using
    the required Review brief below, with
    `--fallback-finding "review did not complete within its turn budget"` so the
@@ -322,7 +335,10 @@ through normal recovery; do not rewrite receipts or assume a new receipt format.
      ordinary rejected report command for each rejected finding. When the human
      disagrees that a reviewer-fixed finding is fixed (for example
      `R-03 isn't fixed: <why>`), append
-     `--reopen-finding "<review-artifact>#R-03=<why>"`. Never
+     `--reopen-finding "<review-artifact>#R-03=<why>"`. The review artifact
+     may be its file name (`components#R-01`), or left out when one current
+     finding carries the id; when two findings share it, the refusal names
+     both. Never
      infer either decision from generic revision feedback. The same ID cannot
      appear in both flags. The state tool validates the artifact, ID, current
      status, and nonblank reason before recording the decision on

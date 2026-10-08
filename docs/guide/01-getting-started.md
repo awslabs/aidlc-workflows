@@ -1,8 +1,8 @@
 # Getting Started
 
 This guide takes you from installation to a verified first workflow. The native
-installer includes every supported harness runtime and does not require Bun or
-Node.js.
+installer sets up everything AI-DLC needs; you do not need to install Bun or
+Node.js. Bun is needed only for the manual-copy path below.
 
 ## Quick Start
 
@@ -20,7 +20,9 @@ Windows PowerShell:
 irm https://github.com/awslabs/aidlc-workflows/releases/latest/download/install.ps1 | iex
 ```
 
-The installer adds the native `aidlc` command and every harness runtime. On
+The installer sets up everything AI-DLC needs: the native `aidlc` command and
+every harness runtime. You do not need to install Bun or Node.js; a native
+install runs its hooks and commands through `aidlc` and does not call `bun`. On
 Windows, it installs for the current account, registers the bin directory in
 persistent User PATH, and updates the current PowerShell process. Run it from a
 normal PowerShell window; one opened with "Run as administrator" gets a warning
@@ -29,9 +31,9 @@ Use [`-NoModifyPath`](18-install-and-lifecycle.md#windows-powershell) to skip
 both PATH changes and invoke the printed direct command instead. On macOS,
 Linux, or WSL, apply the installer's PATH instruction if `aidlc` is not found.
 
-If you cannot install a native executable or prefer to manage the project files
-manually, install [Bun](https://bun.sh/), download
-`aidlc-copy-runtime-X.Y.Z.tar.gz` from the
+Prefer to manage the project files yourself, or cannot install a native
+executable? The manual-copy path is the one place Bun is needed: install
+[Bun](https://bun.sh/), download `aidlc-copy-runtime-X.Y.Z.tar.gz` from the
 [release](https://github.com/awslabs/aidlc-workflows/releases/latest), copy
 the complete `runtime/<harness>/` directory into the project, and run its own
 setup once, as [Copy Channel](18-install-and-lifecycle.md#copy-channel) shows.

@@ -254,9 +254,16 @@ A `rereview` with `unfinished` is instead the Unit's own review that did not fin
 what it found first): run it the same way. When the person said to approve the Unit
 as it is, run `verify` with `--over-unfinished-review` instead; the checkpoint then
 carries `review_not_finished`, whose `question` takes the place of "Approve this
-completed <unit>?", and `approve` returns the one line to say.
-A `rereview` with `first` is the Unit's review that was never asked for, under any
-Guard Policy: run it the same way. It is required, so `--over-unfinished-review`
+completed <unit>?", and `approve` returns the one line to say. A verdict for that
+review that comes in after the approval is recorded as usual and leaves the Unit
+approved. Only a strict the
+team locks keeps the review required: `verify` then names the review step, and
+you run it without asking the person. A Unit whose review
+ended in the reviewer module's NOT-READY fallback carries `review_not_finished` the
+same way, with no option to pass: that receipt is no reviewer's verdict.
+A `rereview` with `first` is the Unit's review that was never asked for in this run of
+its work (a jump back or a reopen starts a new run, so a review from before it does
+not count), under any Guard Policy: run it the same way. It is required, so `--over-unfinished-review`
 does not apply.
 
 Otherwise, if `ready` is false or evidence became stale, explain `errors`.

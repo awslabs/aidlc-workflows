@@ -1,4 +1,4 @@
-// covers: cli:aidlc-state(approve,advance,finalize,complete-workflow), function:handleApprove, function:handleAdvance, function:handleFinalize, function:handleCompleteWorkflow, function:verifyStageArtifacts, function:producesArtifactsExist, function:workspaceHasSourceFile, function:checkSummaryConfirmationEvidence, function:readAuditShardEvents, function:summaryConfirmationAnswer, function:summaryConfirmationContentHash, function:visibleMarkdownLines
+// covers: cli:aidlc-state(approve,advance,finalize,complete-workflow), function:handleApprove, function:handleAdvance, function:handleFinalize, function:handleCompleteWorkflow, function:verifyStageArtifacts, function:producesArtifactsExist, function:workspaceHasSourceFile, function:workspaceHasWork, function:gitHasSourceWork, function:checkSummaryConfirmationEvidence, function:readAuditShardEvents, function:summaryConfirmationAnswer, function:summaryConfirmationContentHash, function:visibleMarkdownLines
 //
 // t185 - stage-completion artifact guard (issue #366).
 //
@@ -55,6 +55,7 @@ import {
   mkdirSync,
   readFileSync,
   renameSync,
+  symlinkSync,
   utimesSync,
   writeFileSync,
 } from "node:fs";
@@ -2129,6 +2130,193 @@ X. Other (please specify)
       git(["commit", "-q", "-m", "first commit: code-generation output"]);
       const r = approveCodeGen();
       expect(r.rc, r.out).toBe(0);
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+  });
+
+  // --- Layer 2 (multi-repo): the code lives in a child repo -----------------
+  //
+  // A workspace repo that carries only the aidlc/ records, with the code in a
+  // sibling git repo the workspace gitignores. The workspace's own git never
+  // lists the sibling's files, and its last commit is records-only, so the
+  // git-aware check above read a definite "no source work" and refused the
+  // gate even though the code was committed in the child repo. The child repo
+  // is one of the intent's recorded repos (intents.json `repos`, the same set
+  // the review binding and the unit manifest follow), so the guard asks each
+  // recorded repo the same question it asks the workspace.
+  describe("workspace_requires with the code in a recorded child repo", () => {
+    const UNIT = "user-auth";
+    const REPO = "app-repo";
+
+    function git(cwd: string, args: string[]): void {
+      const r = spawnSync("git", args, { cwd, encoding: "utf-8" });
+      if (r.status !== 0) throw new Error(`git ${args.join(" ")} failed: ${r.stderr}`);
+    }
+    function initGitRepo(cwd: string): void {
+      mkdirSync(cwd, { recursive: true });
+      git(cwd, ["init", "-q"]);
+      git(cwd, ["config", "user.email", "t185@example.com"]);
+      git(cwd, ["config", "user.name", "t185"]);
+      git(cwd, ["config", "commit.gpgsign", "false"]);
+    }
+    // The intent's registry row names the child repo, as intent creation
+    // records it from sibling discovery.
+    function recordRepos(repos: string[]): void {
+      const registry = join(dirname(seededRecordDir(proj)), "intents.json");
+      const rows = JSON.parse(readFileSync(registry, "utf-8")) as Array<Record<string, unknown>>;
+      writeFileSync(registry, `${JSON.stringify(rows.map((row) => ({ ...row, repos })), null, 2)}\n`);
+    }
+    // Workspace repo: the shell and a .gitignore hiding the child repo, in a
+    // first commit, so the records-only commit below is the LAST one.
+    function initWorkspaceRepo(ignore = `${REPO}/\n`): void {
+      initGitRepo(proj);
+      writeFileSync(join(proj, ".gitignore"), ignore);
+      git(proj, ["add", "-A"]);
+      git(proj, ["commit", "-q", "-m", "workspace shell"]);
+    }
+    function stageCodeGenDocsOnly(): void {
+      guarded(proj, ["set", "Current Stage=code-generation"]);
+      guarded(proj, ["checkbox", "code-generation=in-progress"]);
+      appendAuditEntry(
+        "STAGE_STARTED",
+        {
+          Stage: "code-generation",
+          Agent: "aidlc-developer-agent",
+          ...sourceBaselineAuditFields(proj, "code-generation"),
+        },
+        proj,
+      );
+      const boundarySecond = Math.floor(Date.now() / 1000);
+      while (Math.floor(Date.now() / 1000) === boundarySecond) {}
+      writeRecordDoc(proj, `construction/${UNIT}/code-generation/code-generation-plan.md`);
+      writeRecordDoc(proj, `construction/${UNIT}/code-generation/code-summary.md`);
+      writeRecordDoc(proj, `construction/${UNIT}/code-generation/traceability.json`);
+    }
+    // The records-only commit in the workspace: a clean tree whose last commit
+    // touched nothing outside aidlc/.
+    function commitRecordsOnly(): void {
+      git(proj, ["add", "aidlc"]);
+      git(proj, ["commit", "-q", "-m", "code-generation records"]);
+    }
+    // The reporter's path: `orchestrate report --result awaiting-approval`
+    // runs gate-start with the guard on, then the approve.
+    function gateAndApprove(): { gate: { rc: number; out: string }; approve: { rc: number; out: string } } {
+      reviewCodeGen(proj, UNIT);
+      const gate = guarded(proj, ["gate-start", "code-generation"]);
+      const approve = guarded(proj, ["approve", "code-generation", "--user-input", "ok"]);
+      return { gate, approve };
+    }
+    function codeCommittedInChildRepo(): void {
+      const repo = join(proj, REPO);
+      initGitRepo(repo);
+      git(repo, ["commit", "-q", "--allow-empty", "-m", "init"]);
+      writeWorkspaceFile(proj, `${REPO}/src/auth/login.ts`);
+      git(repo, ["add", "-A"]);
+      git(repo, ["commit", "-q", "-m", "the code"]);
+    }
+
+    for (const policy of ["strict", "off"] as const) {
+      test(`PASSES under Guard Policy ${policy} when the code is committed in the child repo and the workspace commit is records only`, () => {
+        initWorkspaceRepo();
+        recordRepos([REPO]);
+        codeCommittedInChildRepo();
+        const sp = seededStateFile(proj);
+        writeFileSync(sp, `${readFileSync(sp, "utf-8")}- **Guard Policy**: ${policy} (set by you)\n`);
+        stageCodeGenDocsOnly();
+        commitRecordsOnly();
+        const { gate, approve } = gateAndApprove();
+        expect(gate.rc, gate.out).toBe(0);
+        expect(approve.rc, approve.out).toBe(0);
+      }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+    }
+
+    // The child repo may carry its own AI-DLC (records roof + harness dir) next
+    // to the code: those paths are docs, the code commit still counts.
+    test("PASSES when the child repo also has AI-DLC in it and the code is in its last commit", () => {
+      initWorkspaceRepo();
+      recordRepos([REPO]);
+      const repo = join(proj, REPO);
+      initGitRepo(repo);
+      mkdirSync(join(repo, "aidlc", "spaces"), { recursive: true });
+      mkdirSync(join(repo, ".claude", "tools"), { recursive: true });
+      writeFileSync(join(repo, "aidlc", "spaces", "README.md"), "# records\n");
+      writeFileSync(join(repo, ".claude", "tools", "aidlc-state.ts"), "// engine\n");
+      git(repo, ["add", "-A"]);
+      git(repo, ["commit", "-q", "-m", "AI-DLC installed in the child repo"]);
+      writeWorkspaceFile(proj, `${REPO}/src/auth/login.ts`);
+      writeFileSync(join(repo, "aidlc", "spaces", "notes.md"), "# notes\n");
+      git(repo, ["add", "-A"]);
+      git(repo, ["commit", "-q", "-m", "the code and its records"]);
+      stageCodeGenDocsOnly();
+      commitRecordsOnly();
+      const { gate, approve } = gateAndApprove();
+      expect(gate.rc, gate.out).toBe(0);
+      expect(approve.rc, approve.out).toBe(0);
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+    // A recorded name is text in the committed intents.json, and a folder shaped
+    // like a repo (HEAD, objects/, refs/, config) can be committed by anyone
+    // whose repo the person clones; a .git entry cannot. Git run in that folder
+    // reads the author's committed config and runs its commands (core.fsmonitor
+    // on status), so the probe asks git only in a folder with a real .git entry
+    // and with the monitor hook off; the shaped folder gets the filesystem check.
+    test("does not run git configuration committed in a repo-shaped folder recorded as a repo", () => {
+      initWorkspaceRepo();
+      const marker = join(proj, "fsmonitor-ran");
+      const shaped = join(proj, "vendor");
+      mkdirSync(join(shaped, "objects", "info"), { recursive: true });
+      mkdirSync(join(shaped, "refs", "heads"), { recursive: true });
+      writeFileSync(join(shaped, "HEAD"), "ref: refs/heads/main\n");
+      writeFileSync(join(shaped, "objects", "info", "keep"), "");
+      writeFileSync(join(shaped, "refs", "heads", "keep"), "");
+      writeFileSync(
+        join(shaped, "config"),
+        `[core]\n\trepositoryformatversion = 0\n\tbare = false\n\tworktree = .\n\tfsmonitor = touch ${marker}; false\n`,
+      );
+      git(proj, ["add", "-A"]);
+      git(proj, ["commit", "-q", "-m", "a committed folder shaped like a repo"]);
+      recordRepos(["vendor"]);
+      stageCodeGenDocsOnly();
+      commitRecordsOnly();
+      gateAndApprove();
+      expect(existsSync(marker)).toBe(false);
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+    // Sibling discovery accepts a symlinked child repo, so the probe must too:
+    // the link's target has the real .git entry.
+    test.skipIf(process.platform === "win32")("PASSES when the recorded child repo is a symlink to a real repo", () => {
+      initWorkspaceRepo(`${REPO}/\n.repos/\n`);
+      recordRepos([REPO]);
+      const real = join(proj, ".repos", "app-real");
+      initGitRepo(real);
+      git(real, ["commit", "-q", "--allow-empty", "-m", "init"]);
+      writeWorkspaceFile(proj, ".repos/app-real/src/auth/login.ts");
+      git(real, ["add", "-A"]);
+      git(real, ["commit", "-q", "-m", "the code"]);
+      symlinkSync(join(".repos", "app-real"), join(proj, REPO));
+      stageCodeGenDocsOnly();
+      commitRecordsOnly();
+      const { gate, approve } = gateAndApprove();
+      expect(gate.rc, gate.out).toBe(0);
+      expect(approve.rc, approve.out).toBe(0);
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+    // The child repo answers the same git-aware question as the workspace: a
+    // brownfield child whose last commit is docs only (its own aidlc/ notes)
+    // with a clean tree is no new code, so the guard still refuses.
+    test("REFUSES when the child repo's code predates this session and its last commit is docs only", () => {
+      initWorkspaceRepo();
+      recordRepos([REPO]);
+      codeCommittedInChildRepo();
+      const repo = join(proj, REPO);
+      mkdirSync(join(repo, "aidlc"), { recursive: true });
+      writeFileSync(join(repo, "aidlc", "notes.md"), "# notes\n");
+      git(repo, ["add", "-A"]);
+      git(repo, ["commit", "-q", "-m", "child records only"]);
+      stageCodeGenDocsOnly();
+      commitRecordsOnly();
+      const { gate } = gateAndApprove();
+      expect(gate.rc).not.toBe(0);
+      expect(gate.out).toContain("workspace_requires");
     }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
   });
 

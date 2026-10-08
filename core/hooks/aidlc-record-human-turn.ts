@@ -60,10 +60,14 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   addPendingPersonLines,
+  auditBlockField,
   carryPendingPersonLines,
   clearSessionIntentHandoff,
   emptyPickerResult,
   enterHookWorkflow,
+  findStageBySlug,
+  freshReviewReceipts,
+  getField,
   hookStandsOutside,
   hostEnvelopeTurnText,
   clearPlanApprovalChallenge,
@@ -81,9 +85,12 @@ import {
   keepPlanApprovalAskOverStateWrite,
   markHumanTurn,
   parseTypedGuardSwitchRequest,
+  readAuditShardEvents,
   recordGateWords,
   recordPreWorkflowHeartbeat,
   resolveProjectDirFromHook,
+  resolveReviewClass,
+  sortAttemptEvents,
   splitKiroCommandArgs,
   stateFilePath,
   stripRecommendedDecorator,
@@ -92,6 +99,7 @@ import {
   writeProjectHookStatusFile,
 } from "../tools/aidlc-lib.ts";
 import { appendAuditEntryUnlocked } from "../tools/aidlc-audit.ts";
+import { aidlcToolInvocation } from "../tools/aidlc-runtime-paths.ts";
 import {
   applyTypedGuardSwitchPrompt,
   isTypedGuardSwitchPrompt,
@@ -112,6 +120,7 @@ import {
   openPlanApprovalQuestion,
 } from "../tools/aidlc-plan-approval-ask.ts";
 import { aidlcEntryWords, isAidlcCommandPrompt } from "../tools/aidlc-reply-reader.ts";
+import { MESSAGE_TEXT_MAX_CHARS, saveMessage, type StoredMessage } from "../tools/aidlc-message-store.ts";
 
 // "/aidlc approve the code plan" is the person's reply: the engine reads the
 // words after the entry as nothing but words. Any flag, scope, verb or noun
@@ -125,6 +134,39 @@ async function aidlcEntryReply(prompt: string): Promise<string | null> {
     return nextArgsAreOnlyWords(splitKiroCommandArgs(words)) ? words : null;
   } catch {
     return null;
+  }
+}
+
+// The one parse of a typed line, for the message record (aidlc-message-store.ts):
+// flags are syntax, read by the engine's own parser, and everything after them
+// is the person's words. A prompt that does not start with the entry word is
+// words only. A line the parser refuses keeps the words and no settings: the
+// record proves what was said; the command itself is refused later, as today.
+async function messageParse(typedPrompt: string): Promise<Pick<StoredMessage, "words" | "settings" | "route">> {
+  const route = { scope: null, newIntent: false, skip: [] as string[], add: [] as string[], projectType: null };
+  const entryWords = aidlcEntryWords(typedPrompt);
+  if (entryWords === null) return { words: typedPrompt.trim() || null, settings: [], route };
+  const words = entryWords || null;
+  try {
+    const { parseNextFlags, typedSettingModifiers } = await import("../tools/aidlc-orchestrate.ts");
+    const flags = parseNextFlags(splitKiroCommandArgs(entryWords));
+    if (flags.parseError) return { words, settings: [], route };
+    return {
+      words: flags.intent?.trim() || null,
+      settings: typedSettingModifiers(flags).map((modifier) => {
+        const space = modifier.indexOf(" ");
+        return { key: modifier.slice(0, space), value: modifier.slice(space + 1) };
+      }),
+      route: {
+        scope: flags.scope ?? flags.positionalScope ?? null,
+        newIntent: flags.newIntent === true,
+        skip: flags.planChanges?.skip ?? [],
+        add: flags.planChanges?.add ?? [],
+        projectType: flags.projectType ?? null,
+      },
+    };
+  } catch {
+    return { words, settings: [], route };
   }
 }
 
@@ -258,6 +300,57 @@ const QUESTION_UNANSWERED_NOTICE =
   "The question box closed with no answer, so nothing was answered or recorded. " +
   "Ask the same question again in your reply as numbered options, not in the question box, " +
   "and end the turn; never pick an answer for the person.";
+
+// Rows after a review request that say the work went past it: a question was
+// put to the person or answered, a checkpoint verified, a gate opened or
+// decided, the stage left or the workflow started again. A message then
+// answers that, not the review.
+const PAST_REVIEW_REQUEST = new Set([
+  "DECISION_RECORDED", "QUESTION_ANSWERED", "CHECKPOINT_VERIFICATION_RECORDED", "STAGE_AWAITING_APPROVAL",
+  "GATE_APPROVED", "GATE_REJECTED", "STAGE_COMPLETED", "STAGE_JUMPED", "WORKFLOW_STARTED",
+]);
+
+// The person wrote while a review the agent asked for in this workflow has no
+// verdict (they may have stopped it): the agent hears to run `next` first,
+// which names the step that finishes the review or the person's way on, so it
+// never retries the review or records a result for it on its own. The trail
+// names the open request; `next`'s own review receipts confirm it still waits
+// for its verdict. Null when nothing waits, and on any read error.
+function stoppedReviewNote(projectDir: string): string | null {
+  try {
+    const open = new Map<string, { stage: string; unit: string | undefined }>();
+    for (const row of sortAttemptEvents(readAuditShardEvents(projectDir))) {
+      if (PAST_REVIEW_REQUEST.has(row.event)) {
+        open.clear();
+        continue;
+      }
+      if (row.event !== "REVIEW_REQUESTED" && row.event !== "REVIEW_COMPLETED") continue;
+      if (auditBlockField(row.block, "Workflow")?.startsWith("single-stage:")) continue;
+      const stage = auditBlockField(row.block, "Stage");
+      if (stage === null) continue;
+      const unit = auditBlockField(row.block, "Unit") ?? undefined;
+      const key = `${stage}\u0000${unit ?? ""}\u0000${auditBlockField(row.block, "Iteration") ?? ""}`;
+      if (row.event === "REVIEW_REQUESTED") open.set(key, { stage, unit });
+      else open.delete(key);
+    }
+    if (open.size === 0) return null;
+    const state = readFileSync(stateFilePath(projectDir), "utf-8");
+    for (const request of open.values()) {
+      const stage = findStageBySlug(request.stage);
+      if (!stage?.reviewer) continue;
+      const reviewClass = resolveReviewClass(stage.review_class ?? "adversarial", getField(state, "Scope") ?? "", state);
+      if (reviewClass === "none") continue;
+      if (freshReviewReceipts(projectDir, state, stage, { reviewClass }).awaitingVerdict?.has(request.unit ?? "")) {
+        return "A review was asked for and has no verdict yet (it may have been stopped). " +
+          `Run \`${aidlcToolInvocation("orchestrate")} next\` before retrying it or recording anything, ` +
+          "and follow the step it prints.";
+      }
+    }
+  } catch {
+    // A note, never a block: a read that fails says nothing.
+  }
+  return null;
+}
 
 // The words a person typed into a single-choice picker's free-text field. A
 // pick of one of the offered labels is the conductor's wording, not theirs.
@@ -503,6 +596,7 @@ try {
   // approval off are kept for the piece of work this chat starts next, and any
   // other first-use fence switch says to create it and type the switch again.
   const switchAnswer = typedPrompt ? planAnswerAfterSwitch(projectDir, typedPrompt) : null;
+  let applied: string[] = [];
   if (mintAllowed && sessionId && typedPrompt) {
     try {
       // A switch typed before a plan choice keeps the plan question open over
@@ -514,6 +608,7 @@ try {
       }
       if (outcome !== null) {
         const lines = outcome.lines;
+        applied = lines;
         // Only a switch that went through is already done, and only its line is
         // the engine's to say next. An outcome that changed nothing (a typo in a
         // companion flag, a rule the team holds) stays exactly as it was: the
@@ -531,6 +626,38 @@ try {
       }
     } catch {
       // A switch failure must never block the human's turn.
+    }
+  }
+  // The message record: proof that a person said this in this chat, and
+  // exactly what they said (aidlc-message-store.ts). Written before the
+  // state-file gate so a message before any work exists is kept, under no
+  // lock (one atomic file). It names no question: which question a message
+  // answers is the conductor's call when it records a decision. Keyed on the
+  // EVENT, never on the text: a prompt-submit whose prompt the host left empty
+  // is a prompt whose words are unknown, not a picker reply. Fail-open: a
+  // store failure never blocks the turn, and the row below still records it.
+  let messageId: string | null = null;
+  if (mintAllowed && !pickerUnanswered && (promptSubmitted || pickerQuestion !== undefined)) {
+    try {
+      const noWords: Pick<StoredMessage, "words" | "settings" | "route"> = {
+        words: null, settings: [], route: { scope: null, newIntent: false, skip: [], add: [], projectType: null },
+      };
+      const parsed = promptSubmitted
+        ? (typedPrompt ? await messageParse(typedPrompt) : noWords)
+        : { ...noWords, words: humanResponseText.trim() || null };
+      const full = promptSubmitted ? typedPrompt : humanResponseText;
+      messageId = saveMessage(projectDir, {
+        session: sessionId || null,
+        at: isoTimestamp(),
+        source: promptSubmitted ? "prompt" : "picker",
+        text: full.slice(0, MESSAGE_TEXT_MAX_CHARS),
+        ...(full.length > MESSAGE_TEXT_MAX_CHARS ? { cut: true as const } : {}),
+        picker: promptSubmitted ? null : pickerReplies(input),
+        ...parsed,
+        applied,
+      }).id;
+    } catch {
+      // The record is a convenience here; the turn and its row stand without it.
     }
   }
   if (existsSync(stateFilePath(projectDir))) {
@@ -591,6 +718,7 @@ try {
               ? { Reply: QUESTION_TURN_REPLY }
               : notAReply || answersEngineQuestion ? { Reply: COMMAND_TURN_REPLY } : {}),
             ...(picked.length > 0 ? { Picked: JSON.stringify(picked) } : {}),
+            ...(messageId ? { "Message Id": messageId } : {}),
           }, projectDir);
           // Keep what the person typed in this chat, so a decision at a stage
           // gate records their own words beside the conductor's reading
@@ -687,6 +815,11 @@ try {
       } catch {
         // Non-authority marker consumption is independently best-effort.
       }
+    }
+    // After the turn is kept, so the note never stands in its way.
+    if (mintAllowed && promptSubmitted && typedPrompt.trim().length > 0) {
+      const note = stoppedReviewNote(projectDir);
+      if (note !== null) notes.push(note);
     }
     markHumanTurn(projectDir);
     // This turn is now the one lines are keyed to. Anything the person has not

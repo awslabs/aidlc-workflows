@@ -799,8 +799,9 @@ Doctor also classifies the installed instruction file against the config
 ownership baseline. An intact managed block reports `block present, user
 content preserved`; a missing block or file says to run `aidlc config`; a
 hand-modified managed block or framework-owned whole file reports a conflict.
-The row follows the invoking harness when more than one harness tree is
-present.
+A line written in place of the onboarding's `# AI-DLC` title is not one: it
+is the project's own (see below). The row follows the invoking harness when
+more than one harness tree is present.
 
 ### Project Flags
 
@@ -1033,6 +1034,14 @@ on checkout (Git for Windows checks LF files out as CRLF by default), so a
 clone, branch switch, stash pop, or new worktree of a configured project
 refreshes without conflicts. `aidlc doctor` names the files a refresh would
 refuse in its `AI-DLC files` row.
+
+One line is the exception. Claude Code's `.claude/CLAUDE.md` and AI-DLC's part
+of Copilot's `AGENTS.md` open with a `# AI-DLC` title (earlier releases shipped
+`# Project Name <!-- Replace with your project name -->` there). When the only
+change is a line written in the title's place, a refresh keeps that line and
+updates the rest, with no conflict. Any other change conflicts as above. The
+project's name, notes and rules belong in
+`aidlc/spaces/<space>/memory/project.md`, which every tool reads.
 
 An unchanged framework file the new release no longer ships is removed, and
 config names each one: the refresh prints `Removed N files that are no longer

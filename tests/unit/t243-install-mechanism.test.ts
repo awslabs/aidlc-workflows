@@ -7850,8 +7850,9 @@ describe("t243 projection channel", () => {
   }
 
   test("native release onboarding retains its runtime contract", () => {
+    // Every harness, including the two whose onboarding file is the root
+    // document itself (Claude Code, Copilot): a native install never names bun.
     for (const harness of HARNESS_MATRIX) {
-      if (harness.capabilities.onboarding.harnessDist === harness.capabilities.onboarding.dist) continue;
       const onboarding = readFileSync(
         join(REPO_ROOT, "dist-release", harness.name, harness.capabilities.onboarding.harnessDist),
         "utf-8",
@@ -8034,6 +8035,7 @@ describe("t243 projection channel", () => {
           "sha256:00efc5b85d53364a162f5f0eb604842f96fa94fdcb1e23ee6c286b707b93f336",
           "sha256:7d1b6554a2de2b97b8e14f96ec99d218722d18c100de166cb1a5831bb2c11bfc",
           "sha256:cdfb9d50a7899b4c5a2aa3128d49a2f50c12ee9d3aba13dbe42ff92ad7a2f22e",
+          "sha256:3979d69468a5997423ef8fe3b7d9f9bc948ddf34524ca39e1c10112a6a80f835",
         ],
       },
     };

@@ -252,10 +252,17 @@ function runEngine(projectDir: string, args: string[]) {
 function stubNext(projectDir: string, response: string): string {
   const calls = join(projectDir, "next-calls.ndjson");
   writeFileSync(join(projectDir, "next-response.txt"), response);
+  // Guarded like the real engine: the human-turn hook imports the engine's
+  // parser from this file, so an unguarded stub would record the hook's own
+  // argv as a call and print the response into the hook's context.
   writeFileSync(join(projectDir, ".kiro", "tools", "aidlc-orchestrate.ts"), `
 import { appendFileSync, readFileSync } from "node:fs";
-appendFileSync(${JSON.stringify(calls)}, JSON.stringify(process.argv.slice(2)) + "\\n");
-process.stdout.write(readFileSync(${JSON.stringify(join(projectDir, "next-response.txt"))}, "utf8"));
+export function parseNextFlags() { return { intent: "" }; }
+export function typedSettingModifiers() { return []; }
+if (import.meta.main) {
+  appendFileSync(${JSON.stringify(calls)}, JSON.stringify(process.argv.slice(2)) + "\\n");
+  process.stdout.write(readFileSync(${JSON.stringify(join(projectDir, "next-response.txt"))}, "utf8"));
+}
 `);
   return calls;
 }
@@ -2688,9 +2695,11 @@ describe("t147 Kiro CLI reads what the person typed from the expanded skill body
       expect(cut.code).toBe(2);
       expect(cut.stderr).toContain(call);
       expect(guard(`bun .kiro/tools/aidlc.ts ${call}`).code).toBe(0);
-      // A word with an apostrophe takes double quotes, literal in sh and PowerShell alike.
+      // A word with an apostrophe takes double quotes in sh; PowerShell gets its own single-quoted form.
       const apostrophe = runAdapter(dir, "verb-intercept", { cwd: dir, session_id: session, prompt: expanded(`say "it's done" now; really`) }, [], env);
-      const quoted = `engine orchestrate next say "it's done" 'now;' really`;
+      const quoted = process.platform === "win32"
+        ? "engine orchestrate next say 'it''s done' 'now;' really"
+        : `engine orchestrate next say "it's done" 'now;' really`;
       expect(apostrophe.stdout).toContain(`${quoted}\n`);
       expect(guard(`bun .kiro/tools/aidlc.ts ${quoted}`).code).toBe(0);
       // A word a shell would read as a comment or a glob is quoted too.
@@ -2722,7 +2731,10 @@ describe("t147 Kiro CLI reads what the person typed from the expanded skill body
       const words = ["fix", "it,", "it's", "broken", "and", "don't", "touch", "the", "users'", "files"];
       const latch = join(dir, "aidlc", ".aidlc-forwarding-latch");
       expect(JSON.parse(readFileSync(latch, "utf8")).args).toEqual(words);
-      const quoted = `fix it, "it's" broken and "don't" touch the "users'" files`;
+      // PowerShell reads a bare comma as a list and gets its own single-quoted form for every word that is not bare.
+      const quoted = process.platform === "win32"
+        ? "fix 'it,' 'it''s' broken and 'don''t' touch the 'users''' files"
+        : `fix it, "it's" broken and "don't" touch the "users'" files`;
       expect(r.stdout).toContain(`engine orchestrate next ${quoted}\n`);
       // A shell reads that call as the same words, so running it as told works.
       // Windows runs the call in PowerShell (the case below); its hook job also
@@ -2738,19 +2750,37 @@ describe("t147 Kiro CLI reads what the person typed from the expanded skill body
     } finally { rmSync(dir, { recursive: true, force: true }); }
   });
 
-  // On Windows the call runs in PowerShell. Only a word with no `$`, backtick,
-  // double quote or backslash is double-quoted, so PowerShell expands nothing
-  // in it; "$5" is single-quoted, and PowerShell reads every word back as typed.
+  // On Windows the call runs in PowerShell. Every word that is not a plain
+  // word, an option or a plain number is single-quoted with each single-quote
+  // character doubled, PowerShell's own form: an apostrophe, a dollar word, a
+  // comma, a backslash, and the curly quotes a document pastes (PowerShell
+  // reads U+2018-U+201B as single quotes and U+201C-U+201F as double quotes).
+  // PowerShell reads every word back as typed, and the guard accepts the call
+  // as the hook asked for it.
   test.skipIf(process.platform !== "win32")("PowerShell reads the quoted call as the same words, a dollar word included", () => {
     const dir = scratchProject(true);
     try {
-      const said = "don't touch the users' files it's $5 off";
+      const curly = { open: "\u2018", close: "\u2019", dopen: "\u201C", dclose: "\u201D" };
+      const said = String.raw`don't touch the users' files it's $5 off, the error says "can't open C:\temp\x" and ` +
+        `${curly.open}don${curly.close}t${curly.close} ${curly.dopen}stop${curly.dclose}`;
       const r = runAdapter(dir, "verb-intercept", { cwd: dir, session_id: session, prompt: expanded(said) }, [], env);
       expect(r.code, r.stderr).toBe(0);
-      const quoted = `"don't" touch the "users'" files "it's" '$5' off`;
+      const quoted = String.raw`'don''t' touch the 'users''' files 'it''s' '$5' 'off,' the error says 'can''t open C:\temp\x' and ` +
+        `'${curly.open}${curly.open}don${curly.close}${curly.close}t${curly.close}${curly.close}' '${curly.dopen}stop${curly.dclose}'`;
       expect(r.stdout).toContain(`engine orchestrate next ${quoted}\n`);
-      const pwsh = spawnSync("powershell", ["-NoProfile", "-NonInteractive", "-Command", `& { foreach ($a in $args) { $a } } ${quoted}`], { encoding: "utf-8" });
-      expect(pwsh.stdout.trimEnd().split(/\r?\n/)).toEqual(["don't", "touch", "the", "users'", "files", "it's", "$5", "off"]);
+      const pwsh = spawnSync(
+        "powershell",
+        ["-NoProfile", "-NonInteractive", "-Command", `[Console]::OutputEncoding = [Text.Encoding]::UTF8; & { foreach ($a in $args) { $a } } ${quoted}`],
+        { encoding: "utf-8" },
+      );
+      expect(pwsh.stdout.trimEnd().split(/\r?\n/)).toEqual([
+        "don't", "touch", "the", "users'", "files", "it's", "$5", "off,", "the", "error", "says", String.raw`can't open C:\temp\x`,
+        "and", `${curly.open}don${curly.close}t${curly.close}`, `${curly.dopen}stop${curly.dclose}`,
+      ]);
+      const guard = runAdapter(dir, "guard-tool-call", {
+        cwd: dir, tool_name: "execute_bash", tool_input: { command: `bun .kiro/tools/aidlc.ts engine orchestrate next ${quoted}` },
+      });
+      expect(guard.code, guard.stderr).toBe(0);
     } finally { rmSync(dir, { recursive: true, force: true }); }
   });
 
@@ -2763,6 +2793,34 @@ describe("t147 Kiro CLI reads what the person typed from the expanded skill body
       expect(existsSync(calls)).toBe(false);
       expect(r.stdout).not.toContain("<slug>");
       expect(readAudit(dir)).not.toContain("Unknown stage");
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+});
+
+// On native Windows the call the agent is told to run quotes a word that holds
+// an apostrophe and a backslash PowerShell's way ('can''t open C:\temp\x').
+// The guard accepts that exact call as the latch's own text before it re-splits
+// anything, so the person's request reaches the workflow instead of a
+// "Run exactly" loop that names the same call again.
+describe("the forwarded call is accepted as written", () => {
+  test("a PowerShell-quoted apostrophe passes the first-next guard; a cut call still does not", () => {
+    const dir = scratchProject(true);
+    try {
+      const raw = String.raw`'can''t open C:\temp\x'`;
+      mkdirSync(join(dir, "aidlc"), { recursive: true });
+      writeFileSync(join(dir, "aidlc", ".aidlc-turn-counter"), "1\n");
+      writeFileSync(
+        join(dir, "aidlc", ".aidlc-forwarding-latch"),
+        `${JSON.stringify({ turn: 1, raw, args: [String.raw`can't open C:\temp\x`] })}\n`,
+      );
+      const guard = (command: string) => runAdapter(dir, "guard-tool-call", {
+        cwd: dir, tool_name: "execute_bash", tool_input: { command },
+      });
+      const cut = guard(String.raw`bun .kiro/tools/aidlc.ts engine orchestrate next 'can''t`);
+      expect(cut.code).toBe(2);
+      expect(cut.stderr).toContain(`Run exactly: {{INVOKE}} engine orchestrate next ${raw}`);
+      const exact = guard(`bun .kiro/tools/aidlc.ts engine orchestrate next ${raw}`);
+      expect(exact.code, exact.stderr).toBe(0);
     } finally { rmSync(dir, { recursive: true, force: true }); }
   });
 });

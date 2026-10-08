@@ -66,11 +66,16 @@ interface Fixture {
   scripts: string;
 }
 
+// `laterConstructionStage` places the probe as the second Construction stage,
+// behind a completed anchor, so a Construction autonomy grant makes its gate
+// one the engine approves itself (the first Construction approval is never
+// the grant's).
 function setupFixture(
   severity: "advisory" | "blocking",
   matches = "**/*",
   pass = false,
   scope = "bugfix",
+  laterConstructionStage = false,
 ): Fixture {
   const project = createTestProject();
   projects.push(project);
@@ -108,15 +113,37 @@ function setupFixture(
     "utf-8",
   );
 
+  const phase = laterConstructionStage ? "construction" : "inception";
   const graph = join(project, "stage-graph.json");
+  const anchor = {
+    slug: "anchor",
+    number: "0.9",
+    name: "Anchor",
+    phase,
+    execution: "ALWAYS",
+    lead_agent: "aidlc-product-agent",
+    support_agents: [],
+    mode: "inline",
+    produces: [],
+    optional_produces: [],
+    consumes: [],
+    requires_stage: [],
+    sensors: [],
+    scopes: [scope],
+    inputs: "",
+    outputs: "",
+    rules_in_context: [],
+    sensors_applicable: [],
+  };
   writeFileSync(
     graph,
     `${JSON.stringify([
+      ...(laterConstructionStage ? [anchor] : []),
       {
         slug: "probe",
         number: "1.0",
         name: "Probe",
-        phase: "inception",
+        phase,
         execution: "ALWAYS",
         lead_agent: "aidlc-product-agent",
         support_agents: [],
@@ -145,6 +172,7 @@ function setupFixture(
     "utf-8",
   );
 
+  const probeLine = "- [-] probe — EXECUTE";
   writeFileSync(
     seededStateFile(project),
     [
@@ -153,17 +181,18 @@ function setupFixture(
       `- **Workflow**: ${scope}`,
       "- **State Version**: 8",
       `- **Scope**: ${scope}`,
-      "- **Phase**: inception",
+      `- **Phase**: ${phase}`,
       "- **Current Stage**: probe",
       "",
-      "- [-] probe — EXECUTE",
+      ...(laterConstructionStage ? [probeLine.replace("[-] probe", "[x] anchor")] : []),
+      probeLine,
       "",
     ].join("\n"),
     "utf-8",
   );
   seedAuditFile(project);
 
-  const outputDir = join(seededRecordDir(project), "inception", "probe");
+  const outputDir = join(seededRecordDir(project), phase, "probe");
   mkdirSync(outputDir, { recursive: true });
   writeFileSync(join(outputDir, "one.md"), "# One\n", "utf-8");
   writeFileSync(join(outputDir, "two.md"), "# Two\n", "utf-8");
@@ -446,6 +475,35 @@ describe("t311 gate-bound sensor enforcement", () => {
     expect(eventCount(advisoryAudit, "SENSOR_FIRED")).toBe(2);
     expect(eventCount(advisoryAudit, "SENSOR_FAILED")).toBe(2);
     expect(advisoryAudit).not.toContain("**Blocking Sensor Override**:");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  // Advisory gate sensors are evidence for whoever answers the gate. A gate the
+  // engine approves itself under Construction autonomy has no reader, so only
+  // its blocking sensors (which halt an unattended run) fire; the same gate
+  // with a person answering keeps every sensor.
+  test("a gate the engine approves itself fires no advisory sensor; blocking ones and a person's gate are unchanged", () => {
+    const selfApproved = setupFixture("advisory", "**/*", false, "bugfix", true);
+    setAutonomous(selfApproved);
+    expect(gate(selfApproved).status).toBe(0);
+    expect(eventCount(audit(selfApproved.project), "SENSOR_FIRED")).toBe(0);
+    expect(readFileSync(seededStateFile(selfApproved.project), "utf-8")).toContain("- [?] probe");
+
+    const blocking = setupFixture("blocking", "**/*", false, "bugfix", true);
+    setAutonomous(blocking);
+    expect(gate(blocking).status).toBe(1);
+    expect(eventCount(audit(blocking.project), "SENSOR_FIRED")).toBe(2);
+    expect(eventCount(audit(blocking.project), "SENSOR_FAILED")).toBe(2);
+
+    // The same gate with a person answering: unchanged, and a revise re-entry
+    // after the grant arrives fires nothing advisory.
+    const answered = setupFixture("advisory", "**/*", false, "bugfix", true);
+    expect(gate(answered).status).toBe(0);
+    expect(eventCount(audit(answered.project), "SENSOR_FIRED")).toBe(2);
+    expect(stateCommand(answered, "reject", ["--feedback", "revise the deliverables"]).status).toBe(0);
+    setAutonomous(answered);
+    expect(stateCommand(answered, "revise").status).toBe(0);
+    expect(eventCount(audit(answered.project), "SENSOR_FIRED")).toBe(2);
+    expect(readFileSync(seededStateFile(answered.project), "utf-8")).toContain("- [?] probe");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("revise re-fires gate sensors, enforces blocking failures, and accepts the report override", () => {

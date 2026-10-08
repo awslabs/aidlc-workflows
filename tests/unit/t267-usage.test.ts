@@ -44,7 +44,7 @@ import {
 } from "node:fs";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import {
   attributeAgents,
   buildAgentTypeMapFromParent,
@@ -70,7 +70,9 @@ import {
   type UsageRow,
 } from "../../dist/claude/.claude/tools/aidlc-usage.ts";
 import {
+  activeDirectiveStorageDir,
   createIntent,
+  stateDigest,
   writeSessionBinding,
   writeSessionIntentUuid,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
@@ -1183,6 +1185,44 @@ describe("Task 6 - transcript path round-trip + foldTranscriptIntoLedger", () =>
         "stage-before-transition"
       ].byAgent["code-reviewer"].tokens.output,
     ).toBe(50);
+  });
+
+  test("the fold books usage to the active directive's stage, not to Current Stage", () => {
+    const dir = mkProject();
+    const stateDir = join(dir, "aidlc", "spaces", "default", "intents");
+    mkdirSync(stateDir, { recursive: true });
+    // Under unit-major Current Stage stays on the block's first stage while a
+    // later stage runs for a Unit; the engine's directive marker names that stage.
+    const state = "- **Current Stage**: `functional-design`\n";
+    writeFileSync(join(stateDir, "aidlc-state.md"), state);
+    const markerPath = join(activeDirectiveStorageDir(dir), "active-directive.json");
+    mkdirSync(dirname(markerPath), { recursive: true });
+    writeFileSync(markerPath, JSON.stringify({
+      version: 1, stage: "nfr-requirements", unit: "alpha", state_sha256: stateDigest(state),
+    }));
+    const transcript = join(dir, "session.jsonl");
+    writeFileSync(
+      transcript,
+      assistantLine({ uuid: "marked", timestamp: "t", model: "opus", input: 100, msgId: "marked-call" }),
+    );
+    const hook = join(import.meta.dir, "..", "..", "dist", "claude", ".claude", "hooks", "aidlc-fold-usage.ts");
+    const result = Bun.spawnSync([process.execPath, hook], {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+      env: { ...process.env, CLAUDE_PROJECT_DIR: dir },
+      stdin: new TextEncoder().encode(JSON.stringify({
+        hook_event_name: "PreToolUse",
+        tool_name: "Bash",
+        tool_input: { command: "bun .claude/tools/aidlc-orchestrate.ts report --stage nfr-requirements --result completed" },
+        session_id: "session-marked",
+        transcript_path: transcript,
+      })),
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    expect(result.exitCode).toBe(0);
+    const byStage = loadLedger(dir).workflows["record:default/legacy"].byStage;
+    expect(Object.keys(byStage)).toEqual(["nfr-requirements"]);
+    expect(byStage["nfr-requirements"].totals.tokens.input).toBe(100);
   });
 
   test("a session that left its workflow folds none of its usage", () => {

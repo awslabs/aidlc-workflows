@@ -57,6 +57,7 @@ import {
   legacyAidlcHookTarget,
   mergeBlock,
   mergeJsonEntries,
+  ownTitleLine,
   type ProjectionDescriptor,
   projectionFiles,
   readJsonFile,
@@ -66,6 +67,7 @@ import {
   replaceJsoncSetting,
   copyStartsWithout,
   rootBlockPath,
+  rootIntegrationTarget,
   sha256Bytes,
   sha256File,
   sha256FileMatching,
@@ -74,7 +76,9 @@ import {
   unionBlocks,
   validateProjectionDescriptor,
   walkFiles,
+  withOwnTitleLine,
   withoutBom,
+  withSpace,
 } from "./aidlc-distribution.ts";
 import {
   activeVersion,
@@ -139,7 +143,7 @@ import {
   writeFileAtomic,
 } from "./aidlc-lib.ts";
 import { regenerateRunnerSurfaces } from "./aidlc-runner-gen.ts";
-import { KIRO_IDE_STEERING, kiroIdeSteering } from "./aidlc-includes.ts";
+import { KIRO_IDE_STEERING, kiroIdeSteering, repointedIncludeText } from "./aidlc-includes.ts";
 import {
   activeWorkflowPluginDependencies,
   canonicalScopeTableRegion,
@@ -227,6 +231,8 @@ import {
   insideGitRepository,
   managedBlockMarkers,
   normalizeProvidersRecord,
+  openCodeFileProvider,
+  openCodeProviderEntryIds,
   withRecordedMcpRegion,
   normalizeProjectChoicesRecord,
   normalizeRuntimeRecord,
@@ -2078,7 +2084,9 @@ function diagnosticWizard(
       );
       const profileAnswer = promptTextDefault(
         "  AWS profile",
-        recordedBedrock?.profile ?? "default credential chain",
+        recordedBedrock?.profile ??
+          (selected.harness === "opencode" ? openCodeFileProvider(projectDir).profile : undefined) ??
+          "default credential chain",
       );
       const profile = profileAnswer === "default credential chain"
         ? ""
@@ -2092,7 +2100,7 @@ function diagnosticWizard(
       );
       if (selected.harness === "opencode") {
         const offer = promptYesDefault(
-          "  Write amazon-bedrock provider options to opencode.json?",
+          `  Write amazon-bedrock provider options to ${rootIntegrationTarget(projectDir, "opencode.json")}?`,
           recordedBedrock?.opencodeDefault ?? false,
         );
         args.push("--opencode-default", offer ? "yes" : "no");
@@ -6317,6 +6325,8 @@ function prepareRefreshSource(
 // files) in AI-DLC's part of .gitignore; a refresh keeps those lines as the
 // project's own and says so once.
 const KEPT_GITIGNORE_LINES_DETAIL = "kept your own ignore lines";
+// A line the person wrote in place of the onboarding's title stays (#2058).
+const KEPT_TITLE_LINE_DETAIL = "kept your title line";
 const KEPT_GITIGNORE_LINES_NOTE =
   "Kept your .gitignore entries for node_modules, dist and editor files; AI-DLC now adds only its own lines.";
 
@@ -7444,7 +7454,7 @@ function firstRunMutationPaths(
       join(projectDir, path)
     ),
     ...choices.candidate.descriptor.rootIntegrations.map((integration) =>
-      join(projectDir, integration.path)
+      join(projectDir, rootIntegrationTarget(projectDir, integration.path))
     ),
     join(projectDir, ".gitignore"),
     settingsPathForTarget(projectDir, choices.target),
@@ -7887,6 +7897,7 @@ function providerForHarness(
 }
 
 function customizeFirstRun(
+  projectDir: string,
   initial: InstalledSourceCandidate,
   candidates: readonly InstalledSourceCandidate[],
   detection: FirstRunDetection,
@@ -7993,7 +8004,9 @@ function customizeFirstRun(
         choices.region = promptTextDefault("  AWS region", choices.region);
         const profile = promptTextDefault(
           "  AWS profile",
-          choices.profile || "default credential chain",
+          choices.profile ||
+            (harness === "opencode" ? openCodeFileProvider(projectDir).profile : undefined) ||
+            "default credential chain",
         );
         choices.profile = profile === "default credential chain" ? "" : profile;
         if (choices.candidate.stamp.distribution === "opencode") {
@@ -8332,7 +8345,7 @@ async function runFirstRunWizard(projectDir: string): Promise<boolean> {
       }
     }
   } else {
-    choices = customizeFirstRun(candidate, candidates, detection);
+    choices = customizeFirstRun(projectDir, candidate, candidates, detection);
   }
   if (!choices) return true;
   const snapshot = snapshotFirstRunMutationPaths(projectDir, choices);
@@ -8412,6 +8425,20 @@ function workspaceState(rel: string): boolean {
   return rel.startsWith("aidlc/") && !workspaceSeed(rel);
 }
 
+// The hash a managed file counts as: its own, or the known one it equals once
+// line endings Git rewrote (#2057) or the include paths a space switch pointed
+// at another space are set aside; `switched` says it was the latter.
+function ownedFileHash(path: string, known: readonly (string | undefined)[]): { hash: string; switched: boolean } {
+  const bytes = readFileSync(path);
+  const hash = sha256Matching(bytes, known);
+  if (known.includes(hash)) return { hash, switched: false };
+  const text = bytes.toString("utf-8");
+  const shipped = withSpace(text, DEFAULT_SPACE);
+  if (shipped === text) return { hash, switched: false };
+  const asShipped = sha256Matching(shipped, known);
+  return known.includes(asShipped) ? { hash: asShipped, switched: true } : { hash, switched: false };
+}
+
 function planManagedFiles(
   projectDir: string,
   sourceRoot: string,
@@ -8440,10 +8467,12 @@ function planManagedFiles(
       const targetRegular = targetExists && lstatSync(target).isFile();
       const hash = sha256File(source);
       const priorHash = prior?.files[rel];
-      // A copy Git checked out with other line endings is the file it was.
-      const currentHash = targetRegular
-        ? sha256FileMatching(target, [hash, priorHash, ...(descriptor.legacyManagedFileHashes?.[rel] ?? [])])
+      // A copy Git checked out with other line endings is the file it was, and
+      // so is an include a space switch pointed at another space.
+      const owned = targetRegular
+        ? ownedFileHash(target, [hash, priorHash, ...(descriptor.legacyManagedFileHashes?.[rel] ?? [])])
         : undefined;
+      const currentHash = owned?.hash;
       const adoptedManagedFile = prior === null &&
         currentHash !== undefined &&
         (
@@ -8507,6 +8536,27 @@ function planManagedFiles(
         actions.push({ path: rel, action: "preserve" });
         continue;
       }
+      // A line the person wrote in place of the onboarding's title stays
+      // theirs, and the rest of the file refreshes around it (#2058). The
+      // baseline keeps the shipped file's hash, so the next refresh tells
+      // their line from AI-DLC's text the same way.
+      if (rel === descriptor.onboarding && targetRegular && !unproven.has(rel) && currentHash !== priorHash) {
+        const text = readFileSync(target, "utf-8");
+        // A copied tree config never ran in has no record: the file the release ships counts.
+        const owned = [priorHash, hash, ...(prior === null ? descriptor.legacyManagedFileHashes?.[rel] ?? [] : [])]
+          .filter((known): known is string => known !== undefined);
+        const own = ownTitleLine(text, (restored) => owned.includes(sha256Matching(restored, owned)));
+        const kept = own === null ? null : withOwnTitleLine(readFileSync(source, "utf-8"), own);
+        if (kept === text) {
+          actions.push({ path: rel, action: "preserve", detail: KEPT_TITLE_LINE_DETAIL });
+          continue;
+        }
+        if (kept !== null) {
+          operations.push(writeOperation(rel, kept, expected(target), statSync(source).mode & 0o777));
+          actions.push({ path: rel, action: "update", detail: KEPT_TITLE_LINE_DETAIL });
+          continue;
+        }
+      }
       if (
         targetExists &&
         (
@@ -8519,14 +8569,18 @@ function planManagedFiles(
         actions.push({ path: rel, action: "conflict", detail: "locally modified or unowned" });
         continue;
       }
-      operations.push({
-        kind: "copy",
-        path: rel,
-        source,
-        sourceHash: hash,
-        expected: expected(target),
-        mode: statSync(source).mode & 0o777,
-      });
+      // The update keeps the space the person switched to.
+      const atSpace = owned?.switched ? repointedIncludeText(rel, readFileSync(source, "utf-8"), activeSpace(projectDir)) : null;
+      operations.push(atSpace !== null
+        ? writeOperation(rel, atSpace, expected(target), statSync(source).mode & 0o777)
+        : {
+          kind: "copy",
+          path: rel,
+          source,
+          sourceHash: hash,
+          expected: expected(target),
+          mode: statSync(source).mode & 0o777,
+        });
       actions.push({
         path: rel,
         action: targetExists ? "update" : "create",
@@ -8665,6 +8719,43 @@ function sameJsonText(left: string, right: string): boolean {
   }
 }
 
+// The two leaves of the team's opencode.json an explicit `config providers`
+// Bedrock choice sets this run (provider.amazon-bedrock.options.region and
+// .profile), and the one line that says what changed, when the file said
+// something else before. A refresh, a reset or another section claims nothing.
+function openCodeProviderClaim(
+  projectDir: string,
+  harness: ModelHarness,
+  overrides: ConfigDiagnosticOverrides | undefined,
+): { entries: Record<string, readonly string[]>; note?: string } {
+  const provider = overrides && Object.hasOwn(overrides, "providers")
+    ? normalizeProvidersRecord(overrides.providers)
+    : null;
+  if (
+    harness !== "opencode" || provider?.provider !== "amazon-bedrock" ||
+    provider.opencodeDefault !== true || !provider.region
+  ) {
+    return { entries: {} };
+  }
+  const ids = openCodeProviderEntryIds(provider);
+  const file = openCodeFileProvider(projectDir);
+  const was = file.region ?? null;
+  const profileWas = file.profile ?? null;
+  const regionChanged = was !== null && was !== provider.region;
+  const profileChanged = Boolean(provider.profile) && profileWas !== null && profileWas !== provider.profile;
+  let note: string | undefined;
+  if (regionChanged || profileChanged) {
+    // A profile the record does not name is not touched: the team's stays in
+    // force, and the line says so rather than reading as if it were gone.
+    const fileName = rootIntegrationTarget(projectDir, "opencode.json");
+    const now = provider.profile ? `${provider.region} with profile ${provider.profile}` : provider.region;
+    const before = provider.profile && profileWas ? `${was ?? provider.region}, profile ${profileWas}` : was ?? provider.region;
+    const keeps = !provider.profile && profileWas ? `; profile ${profileWas} from ${fileName} still applies` : "";
+    note = `${fileName} now uses Bedrock in ${now} (was ${before})${keeps}.`;
+  }
+  return { entries: { "opencode.json": ids }, ...(note ? { note } : {}) };
+}
+
 function planRootIntegrations(
   projectDir: string,
   sourceRoot: string,
@@ -8687,6 +8778,9 @@ function planRootIntegrations(
   // The source is the project's own copied tree, whose json-entries file is
   // the team's own with AI-DLC's part merged in.
   ownJsonEntries = ownBytes,
+  // Entries the person set in this run, by root integration path: an explicit
+  // provider choice replaces the team's value for exactly those leaves.
+  claimJsonEntries: Record<string, readonly string[]> = {},
 ): void {
   let siblings: ProjectHarness[] | undefined;
   let siblingProjections: Array<{
@@ -8711,12 +8805,15 @@ function planRootIntegrations(
     const sourcePath = fromShippedCopy
       ? shippedCopy
       : shippedRootIntegrationPath(sourceRoot, descriptor.harnessDir, integration);
-    const targetPath = join(projectDir, integration.path);
+    // The team's file this lands in (the opencode.jsonc a team keeps, for
+    // opencode.json); the record stays keyed by the integration's own path.
+    const targetRel = rootIntegrationTarget(projectDir, integration.path);
+    const targetPath = join(projectDir, targetRel);
     const targetExists = pathPresent(targetPath);
     const targetRegular = targetExists && lstatSync(targetPath).isFile();
     if (targetExists && !targetRegular && !force) {
       actions.push({
-        path: integration.path,
+        path: targetRel,
         action: "conflict",
         detail: "root integration is not a regular file",
       });
@@ -8792,13 +8889,42 @@ function planRootIntegrations(
         });
         continue;
       }
-      const value = merged.value as string;
+      let value = merged.value as string;
       const priorHash = priorContribution?.policy === "managed-block"
         ? priorContribution.hash
         : undefined;
       let combinedWith: string | undefined;
 
+      // A line the person wrote in place of the title in AI-DLC's part stays
+      // theirs, and the rest of the part refreshes around it (#2058).
+      let keptTitle = false;
+      if (merged.currentHash && merged.currentHash !== merged.nextHash && merged.currentHash !== priorHash) {
+        const { begin, end } = managedBlockMarkers(integration.path, marker);
+        // With no record (a copied tree config never ran in), the part with the
+        // title put back must be one a release shipped, as mergeBlock reads it.
+        const shippedBody = shipped.trim().replace(/\r\n/g, "\n");
+        const shippedPart = (restored: string): boolean => {
+          const body = restored.slice(begin.length, restored.length - end.length).trim().replace(/\r\n/g, "\n");
+          return body === shippedBody || (legacyWholeFileHashes ?? []).includes(sha256Bytes(`${body}\n`));
+        };
+        // A space switch may also have pointed its include lines elsewhere.
+        const own = ownTitleLine(
+          current.slice(current.indexOf(begin), current.indexOf(end) + end.length),
+          (restored) => [restored, withSpace(restored, DEFAULT_SPACE)].some((text) =>
+            priorHash ? sha256Matching(text, [priorHash]) === priorHash : shippedPart(text)
+          ),
+        );
+        const beginAt = value.indexOf(begin);
+        const endAt = value.indexOf(end) + end.length;
+        const block = own === null ? null : withOwnTitleLine(value.slice(beginAt, endAt), own);
+        if (block !== null) {
+          value = `${value.slice(0, beginAt)}${block}${value.slice(endAt)}`;
+          keptTitle = true;
+        }
+      }
+
       if (
+        !keptTitle &&
         merged.currentHash &&
         merged.currentHash !== merged.nextHash &&
         merged.currentHash !== priorHash &&
@@ -8836,19 +8962,25 @@ function planRootIntegrations(
           continue;
         }
       }
+      // Include lines a space switch pointed at another space stay there.
+      if (withSpace(current, DEFAULT_SPACE) !== current) {
+        value = repointedIncludeText(integration.path, value, activeSpace(projectDir)) ?? value;
+      }
       contributions[integration.path] = {
         policy: "managed-block",
         hash: merged.nextHash as string,
         marker: integration.marker,
       };
       if (value === current) {
-        actions.push({ path: integration.path, action: "preserve" });
+        actions.push({ path: integration.path, action: "preserve", detail: keptTitle ? KEPT_TITLE_LINE_DETAIL : undefined });
       } else {
         operations.push(writeOperation(integration.path, value, expected(targetPath)));
         actions.push({
           path: integration.path,
           action: targetExists ? "merge" : "create",
-          detail: merged.keptOwnLines
+          detail: keptTitle
+            ? KEPT_TITLE_LINE_DETAIL
+            : merged.keptOwnLines
             ? KEPT_GITIGNORE_LINES_DETAIL
             : combinedWith
             ? `combined with ${combinedWith}`
@@ -9079,9 +9211,9 @@ function planRootIntegrations(
           ? { kind: "whole" }
           : { kind: "none" };
       }
-      const merged = mergeJsonEntries(current, shippedText, ownership, force);
+      const merged = mergeJsonEntries(current, shippedText, ownership, force, claimJsonEntries[integration.path] ?? []);
       if ("conflict" in merged) {
-        actions.push({ path: integration.path, action: "conflict", detail: merged.conflict });
+        actions.push({ path: targetRel, action: "conflict", detail: merged.conflict });
         continue;
       }
       const created = !targetExists || priorContribution?.policy === "whole-file" ||
@@ -9092,11 +9224,11 @@ function planRootIntegrations(
         ...(created ? { created: true } : {}),
       };
       if (merged.text === current) {
-        actions.push({ path: integration.path, action: "preserve" });
+        actions.push({ path: targetRel, action: "preserve" });
       } else {
-        operations.push(writeOperation(integration.path, merged.text, expected(targetPath)));
+        operations.push(writeOperation(targetRel, merged.text, expected(targetPath)));
         actions.push({
-          path: integration.path,
+          path: targetRel,
           action: !targetExists ? "create" : merged.whole ? "update" : "merge",
           detail: legacyMatch && priorContribution?.policy !== "json-entries" ? "adopted exact legacy signature" : undefined,
         });
@@ -9214,14 +9346,15 @@ function planRemovedRootIntegrations(
   const current = new Set(descriptor.rootIntegrations.map((item) => item.path));
   for (const [path, contribution] of Object.entries(prior?.rootContributions ?? {})) {
     if (current.has(path)) continue;
-    const targetPath = join(projectDir, path);
+    const targetRel = rootIntegrationTarget(projectDir, path);
+    const targetPath = join(projectDir, targetRel);
     if (!pathPresent(targetPath)) continue;
     if (!regularFile(targetPath)) {
       if (!force) {
         actions.push({ path, action: "conflict", detail: "retired root integration is not a regular file" });
         continue;
       }
-      operations.push({ kind: "remove", path, expected: expected(targetPath) });
+      operations.push({ kind: "remove", path: targetRel, expected: expected(targetPath) });
       actions.push({ path, action: "remove", detail: NO_LONGER_SHIPPED });
       continue;
     }
@@ -9246,10 +9379,10 @@ function planRemovedRootIntegrations(
       let value = `${text.slice(0, beginAt)}${text.slice(blockEnd)}`;
       value = value.replace(/^\r?\n/, "").replace(/\r?\n\r?\n$/, "\n");
       if (!value) {
-        operations.push({ kind: "remove", path, expected: expected(targetPath) });
+        operations.push({ kind: "remove", path: targetRel, expected: expected(targetPath) });
         actions.push({ path, action: "remove", detail: NO_LONGER_SHIPPED });
       } else {
-        operations.push(writeOperation(path, value, expected(targetPath)));
+        operations.push(writeOperation(targetRel, value, expected(targetPath)));
         actions.push({ path, action: "merge", detail: "removed retired managed block" });
       }
       continue;
@@ -9281,7 +9414,7 @@ function planRemovedRootIntegrations(
         actions.push({ path, action: "conflict", detail: "retired JSON entry was locally modified" });
         continue;
       }
-      operations.push(writeOperation(path, jsonFileText(parsed, text), expected(targetPath)));
+      operations.push(writeOperation(targetRel, jsonFileText(parsed, text), expected(targetPath)));
       actions.push({ path, action: "merge", detail: "removed retired JSON entries" });
       continue;
     }
@@ -9296,10 +9429,10 @@ function planRemovedRootIntegrations(
       if (value === text) {
         actions.push({ path, action: "preserve", detail: "retired settings were changed or already removed" });
       } else if (contribution.created && jsoncRootMembers(value)?.members.length === 0 && value.replace(/\s/g, "") === "{}") {
-        operations.push({ kind: "remove", path, expected: expected(targetPath) });
+        operations.push({ kind: "remove", path: targetRel, expected: expected(targetPath) });
         actions.push({ path, action: "remove", detail: NO_LONGER_SHIPPED });
       } else {
-        operations.push(writeOperation(path, value, expected(targetPath)));
+        operations.push(writeOperation(targetRel, value, expected(targetPath)));
         actions.push({ path, action: "merge", detail: "removed retired settings" });
       }
       continue;
@@ -9312,10 +9445,10 @@ function planRemovedRootIntegrations(
       } else if (value === text) {
         actions.push({ path, action: "preserve", detail: "retired entries were changed or already removed" });
       } else if (contribution.created && emptyJsonObject(value)) {
-        operations.push({ kind: "remove", path, expected: expected(targetPath) });
+        operations.push({ kind: "remove", path: targetRel, expected: expected(targetPath) });
         actions.push({ path, action: "remove", detail: NO_LONGER_SHIPPED });
       } else {
-        operations.push(writeOperation(path, value, expected(targetPath)));
+        operations.push(writeOperation(targetRel, value, expected(targetPath)));
         actions.push({ path, action: "merge", detail: "removed retired JSON entries" });
       }
       continue;
@@ -9339,7 +9472,7 @@ function planRemovedRootIntegrations(
         sha256Bytes(canonical(value)) !== contribution.entries[value]
       );
       if ((parsed[contribution.key] as unknown[]).length === 0) delete parsed[contribution.key];
-      operations.push(writeOperation(path, jsonFileText(parsed, text), expected(targetPath)));
+      operations.push(writeOperation(targetRel, jsonFileText(parsed, text), expected(targetPath)));
       actions.push({ path, action: "merge", detail: "removed retired JSON array entries" });
       continue;
     }
@@ -9347,7 +9480,7 @@ function planRemovedRootIntegrations(
       actions.push({ path, action: "conflict", detail: "retired whole-file integration was locally modified" });
       continue;
     }
-    operations.push({ kind: "remove", path, expected: expected(targetPath) });
+    operations.push({ kind: "remove", path: targetRel, expected: expected(targetPath) });
     actions.push({ path, action: "remove", detail: NO_LONGER_SHIPPED });
   }
 }
@@ -11576,6 +11709,15 @@ export async function main(
         detail: "retired attributable manifestless hook",
       });
     }
+    // An explicit Bedrock choice for OpenCode owns the region and profile leaves
+    // of the team's opencode.json from now on, and says so once when it changes
+    // what the file said.
+    const openCodeClaim = openCodeProviderClaim(
+      projectDir,
+      modelHarness(descriptor.distribution),
+      diagnosticsContext?.overrides,
+    );
+    if (openCodeClaim.note && diagnosticsContext) diagnosticsContext.notes.push(openCodeClaim.note);
     if (!selected.projectProjection) {
       planRootIntegrations(
         projectDir,
@@ -11591,6 +11733,8 @@ export async function main(
         rootContributions,
         false,
         keepPresentServers,
+        false,
+        openCodeClaim.entries,
       );
       planRemovedRootIntegrations(
         projectDir,
@@ -11628,6 +11772,7 @@ export async function main(
           ownFilesProject,
           keepPresentServers,
           true,
+          openCodeClaim.entries,
         );
       }
     }

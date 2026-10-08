@@ -2,16 +2,16 @@
 //
 // The person drives. A Unit's review never finished (the chat was interrupted
 // before its verdict, or it came back NOT-READY with a pass left) and the
-// person says "approve it as it is". Under Guard Policy off and relaxed the
-// Unit goes on: its checkpoint is verified as usual and asked once, the
+// person says "approve it as it is". Under Guard Policy off, relaxed, and a
+// strict set for this piece of work, the Unit goes on, as at a stage gate: its checkpoint is verified as usual and asked once, the
 // approval is recorded with the review shown as not finished, and the person
 // hears one line. The walk then carries on to the next Unit and the stage
 // closes with no further question.
 //
 // What stays: the person's words must be on record (the agent alone cannot let
 // a Unit skip its review), a review never asked for is still required, and
-// under strict (in the state, or locked by the team) the review finishes
-// first. Every refusal names the step that works, and `next` names the retry
+// under a strict the team locks the review finishes first, with no question
+// to the person. Every refusal names the step that works, and `next` names the retry
 // of an interrupted review, so the agent is never left without one.
 import {
   NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
@@ -31,6 +31,7 @@ import {
   artifactFilename, auditBlockField, findStageBySlug, latestMainWorkflowStageRunFloorForProject,
   readAuditShardEvents, reviewArtifactFingerprint,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import { aidlcToolInvocation } from "../../dist/claude/.claude/tools/aidlc-runtime-paths.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
@@ -269,6 +270,23 @@ function walkCarriesOn(p: string): void {
 }
 
 describe("approving a Unit as it is over a review that did not finish", () => {
+  test("the verify step names the command this install runs, not a file a native install lacks", () => {
+    // Both refusals named `aidlc-bolt.ts checkpoint` outright. A native install
+    // has no such file: its commands are `aidlc engine bolt ...`. Every other
+    // step the engine names already renders through aidlcToolInvocation.
+    const p = fixture("relaxed");
+    build(p, "alpha");
+    review(p, "alpha", 1, "READY");
+    const bolt = `${aidlcToolInvocation("bolt")} checkpoint`;
+    const asked = checkpoint(p, "alpha", "ask");
+    expect(asked.status, asked.out).not.toBe(0);
+    expect(asked.out).toContain(`Run ${bolt} --unit`);
+    const approved = checkpoint(p, "alpha", "approve", ["--user-input", "Approve"]);
+    expect(approved.status, approved.out).not.toBe(0);
+    expect(approved.out).toContain(`Run ${bolt} --unit`);
+    for (const out of [asked.out, approved.out]) expect(out).not.toMatch(/Run aidlc-bolt\.ts checkpoint/);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
   test("next names the retry of an interrupted review, and the refusal names it and the person's way on", () => {
     const p = fixture("off");
     build(p, "alpha");
@@ -317,15 +335,25 @@ describe("approving a Unit as it is over a review that did not finish", () => {
     walkCarriesOn(p);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-  for (const hold of ["strict in the state", "a team-locked strict"] as const) {
-    test(`${hold} keeps the review required, and the refusal names the retry`, () => {
-      const p = fixture(hold === "strict in the state" ? "strict" : "off");
-      if (hold === "a team-locked strict") lockStrict(p);
+  // A strict set for this piece of work is the person's own setting: their
+  // "approve it as it is" goes over the review, as at a stage gate.
+  test("strict in the state: an interrupted review, approved as it is with one question", () => {
+    const p = fixture("strict");
+    build(p, "alpha");
+    review(p, "alpha", 1);
+    approveAsItIs(p);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  for (const state of ["off", "strict"] as const) {
+    test(`a team-locked strict (state ${state}) keeps the review required, and the refusal names the retry`, () => {
+      const p = fixture(state);
+      lockStrict(p);
       build(p, "alpha");
       review(p, "alpha", 1);
       says(p, AS_IT_IS);
       const refused = checkpoint(p, "alpha", "verify", ["--over-unfinished-review"]);
       expect(refused.status).not.toBe(0);
+      expect(refused.out).toContain(`Finish it first, without asking the person: request it again with \``);
       expect(refused.out).toContain([...reviewArgs("alpha", 1), "--retry-pending"].join(" "));
       expect(refused.out).not.toContain("verify with --over-unfinished-review");
       expect(routed(p).construction_checkpoint?.rereview?.command).toContain("--retry-pending");
@@ -369,6 +397,33 @@ describe("approving a Unit as it is over a review that did not finish", () => {
     }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
   }
 
+  // A jump back or a reopen starts the Unit's work again. Rebuilt with no
+  // review asked for in this run, its review from before is not this run's:
+  // the step is this run's first request, which the review log accepts.
+  for (const policy of ["off", "strict"] as const) {
+    test(`Guard Policy ${policy}: after a reopen, a Unit rebuilt with no review is named its first request, and following it verifies the Unit`, () => {
+      const p = fixture(policy);
+      build(p, "alpha");
+      review(p, "alpha", 1, "READY");
+      expect(checkpoint(p, "alpha", "verify").json?.verified).toBe(true);
+      const reopened = tool(p, "jump", ["reopen", "--target", CG, "--units", "alpha"]);
+      expect(reopened.status, reopened.out).toBe(0);
+      build(p, "alpha");
+      const first = reviewArgs("alpha", 1).join(" ");
+      const step = routed(p);
+      expect(step.construction_checkpoint, JSON.stringify(step).slice(0, 800)).toMatchObject({ unit: "alpha", ready: false });
+      expect(step.construction_checkpoint?.rereview?.command).toContain(first);
+      expect(step.construction_checkpoint?.rereview?.command).not.toContain("--retry-pending");
+      expect(step.reviewer).toBe(REVIEWER);
+      const refused = checkpoint(p, "alpha", "verify");
+      expect(refused.status).not.toBe(0);
+      expect(refused.out).toContain(first);
+      review(p, "alpha", 1, "READY");
+      const ready = checkpoint(p, "alpha", "verify");
+      expect(ready.json?.verified, ready.out).toBe(true);
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+  }
+
   // The person asked for alpha's review again after its code changed, and that
   // review was interrupted: "approve it as it is" goes over it the same way, as
   // a stage gate's approval goes over a recovery review that never finished.
@@ -402,12 +457,31 @@ describe("approving a Unit as it is over a review that did not finish", () => {
     walkCarriesOn(p);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-  test("Guard Policy strict: a recovery review that was interrupted still finishes first, and the refusal names its retry", () => {
+  test("Guard Policy strict in the state: a recovery review that was interrupted, approved as it is with one question", () => {
     const p = fixture("strict");
+    recoveryInterrupted(p);
+    says(p, AS_IT_IS);
+    const verified = checkpoint(p, "alpha", "verify", ["--over-unfinished-review"]);
+    expect(verified.status, verified.out).toBe(0);
+    expect(verified.json?.review_not_finished).toEqual({ stages: [CG], question: QUESTION });
+    expect(checkpoint(p, "alpha", "ask").status).toBe(0);
+    says(p, "yes");
+    const approved = checkpoint(p, "alpha", "approve", ["--user-input", "yes"]);
+    expect(approved.status, approved.out).toBe(0);
+    expect(approved.json?.change_notices).toContain(NOTICE);
+    const approvals = unitApprovals(p, "alpha");
+    expect(approvals).toHaveLength(1);
+    expect(auditBlockField(approvals[0].block, "Review")).toBe("not finished");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("a team-locked strict: a recovery review that was interrupted still finishes first, and the refusal names its retry", () => {
+    const p = fixture("strict");
+    lockStrict(p);
     recoveryInterrupted(p);
     says(p, AS_IT_IS);
     const refused = checkpoint(p, "alpha", "verify", ["--over-unfinished-review"]);
     expect(refused.status).not.toBe(0);
+    expect(refused.out).toContain("Finish it first, without asking the person:");
     expect(refused.out).toContain(reviewArgs("alpha", 2).join(" "));
     expect(refused.out).not.toContain("verify with --over-unfinished-review");
     expect(unitApprovals(p, "alpha")).toHaveLength(0);

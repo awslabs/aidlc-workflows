@@ -143,7 +143,7 @@ describe("t151 neutral and native onboarding", () => {
           expect(root, harness.name).toBe(NEUTRAL);
           expect(setup, harness.name).not.toContain("## Where things live");
         } else {
-          expect(setup.match(/^#+ .+$/gm)?.[0], harness.name).toBe("# Project Name <!-- Replace with your project name -->");
+          expect(setup.match(/^#+ .+$/gm)?.[0], harness.name).toBe("# AI-DLC");
           expect(setup.endsWith("\n## Shared AI-DLC onboarding\n\n" + NEUTRAL), harness.name).toBe(true);
         }
       }

@@ -129,6 +129,7 @@ import {
   type ScopeCommandRow,
   type StageValidityAdvisory,
   validateDirective,
+  withAgentNotes,
 } from "./aidlc-directive.ts";
 import {
   docsRoot,
@@ -449,8 +450,10 @@ import {
   isPlanApprovalBeat,
   legacyPlanApprovalOffNotice,
   noteOpenEngineQuestion,
+  notePlanApprovalAskReply,
   openPlanApprovalQuestion,
   planApprovalKeptReplyWaits,
+  withdrawLatestPlanApprovalReply,
   withdrawPlanApprovalReplies,
   publishPlanApprovalAsk,
   publishPlanApprovalSkip,
@@ -464,7 +467,6 @@ import {
   codeGenerationIssuance,
   codeGenerationResumeNarration,
   codeGenerationStartNarration,
-  isApprovedPlanUndoRequest,
   promotableTestingPosture,
 } from "./aidlc-testing-posture.ts";
 import {
@@ -473,6 +475,7 @@ import {
   fencesOffCreationGranted,
   guardPolicyCreationGranted,
   guardPolicyNamed,
+  unreadSettingLine,
   planApprovalOffAtCreation,
   planApprovalEnv,
   planApprovalOffForOpenRequest,
@@ -767,6 +770,8 @@ const openQuestionMarkers = new WeakSet<object>();
 // question that work is waiting on, with their words already kept as its
 // reply, is answered by those words (see emit).
 let routingAnsweredAsActiveWork = false;
+// The words that answer was about, for the question the work in progress has open.
+let routingAnsweredWords: string | null = null;
 
 function isKeptRequest(args: readonly string[]): boolean {
   const flags = parseNextFlags([...args]);
@@ -918,8 +923,11 @@ function sayPendingPersonLines(requested: Directive, transported: Directive): ((
 
 function prepareEmission(directive: Directive): PreparedEmission {
   const requested = directive;
-  // Read before the notices below can copy the directive.
-  const endsTurn = directive.kind === "ask" || turnEndingPrints.has(directive);
+  // Read before the notices below can copy the directive. A guard-recovery
+  // ask whose ways on are the conductor's own work (agent_work) is no question
+  // for the person: the turn goes on, and the conductor carries them out.
+  const endsTurn = (directive.kind === "ask" && (directive as { agent_work?: unknown }).agent_work !== true) ||
+    turnEndingPrints.has(directive);
   if (
     directive.kind === "run-stage" && directive.construction_policy &&
     directive.gate === false
@@ -1004,6 +1012,9 @@ function prepareEmission(directive: Directive): PreparedEmission {
   // Before transport, so a run-stage delivered in parts (rebuilt by
   // `continue`) carries the person's kept replies too.
   directive = withKeptReplies(directive);
+  // The agent notes count toward the size transport measures, so a step that
+  // only fits without them is delivered in parts like any other.
+  directive = withAgentNotes(directive, aidlcToolInvocation("orchestrate"), aidlcToolInvocation("log"));
   // A route check asks one question: which Unit would the engine route now? It
   // never loads rules, so it skips transport entirely - which also keeps it from
   // minting the machine-local steering key on a checkout that has none.
@@ -1032,6 +1043,8 @@ function prepareEmission(directive: Directive): PreparedEmission {
     }
   }
   transported = withPickUpLine(transported);
+  // Again for what was added after transport (a rebind notice).
+  transported = withAgentNotes(transported, aidlcToolInvocation("orchestrate"), aidlcToolInvocation("log"));
   const personLinesSaid = sayPendingPersonLines(requested, transported);
   const result = validateDirective(transported);
   if (!result.valid) {
@@ -1766,15 +1779,23 @@ function emit(requested: Directive): void {
         // Asked where their words belong, the person said the work in
         // progress, which waits on its code plan question: the question is
         // the open step again, and the words it kept as their reply answer it.
+        // Words typed while the work was parked never reached the question
+        // (parked, it was not the open step): now that it is, they are its
+        // reply, kept once, as the latest.
         if (
           routingAnsweredAsActiveWork &&
           prepared.transported.kind === "ask" &&
           prepared.transported.ask_type === PLAN_APPROVAL_ASK_TYPE &&
-          !prepared.transported.plan_approval.editing &&
-          planApprovalKeptReplyWaits(projectDir)
+          !prepared.transported.plan_approval.editing
         ) {
-          writePrepared(prepareEmission(planQuestionAnsweredByWordsDirective()));
-          return;
+          if (routingAnsweredWords !== null && !isReadOnlyEngineProbe()) {
+            withdrawPlanApprovalReplies(projectDir, routingAnsweredWords);
+            notePlanApprovalAskReply(projectDir, engineSessionId ?? "", routingAnsweredWords);
+          }
+          if (planApprovalKeptReplyWaits(projectDir)) {
+            writePrepared(prepareEmission(planQuestionAnsweredByWordsDirective()));
+            return;
+          }
         }
       }
     } catch (e) {
@@ -2168,7 +2189,7 @@ function carriedCreationFlags(flags: ParsedFlags): string {
 
 // Every setting typed with a command, in the config setter's words ("depth
 // minimal", "review none"): the one list a config change applies.
-function typedSettingModifiers(flags: ParsedFlags): string[] {
+export function typedSettingModifiers(flags: ParsedFlags): string[] {
   const modifiers: string[] = [];
   if (flags.depth) modifiers.push(`depth ${flags.depth}`);
   if (flags.testStrategy) modifiers.push(`test-strategy ${flags.testStrategy}`);
@@ -2183,6 +2204,12 @@ function typedSettingModifiers(flags: ParsedFlags): string[] {
     if (flags.fences?.[fence]) modifiers.push(`guard.${fence} ${flags.fences[fence]}`);
   }
   return modifiers;
+}
+
+// The `next --resume` an unpark print names, with the settings typed beside
+// the resume (`--depth comprehensive`), so none of them is dropped on the re-run.
+function resumeAgain(flags: ParsedFlags): string {
+  return ["next --resume", ...typedSettingModifiers(flags).map((modifier) => `--${modifier}`)].join(" ");
 }
 
 // A typed `guard-policy <value>` the state already holds as set by you.
@@ -2737,7 +2764,7 @@ function openQuestionReplyDirective(stage: string, block: string, requestId: str
 // Prose while the engine's code plan question is open: the conductor reads
 // whether it answers that question (or, while the person edits the files,
 // says they are done), the same split as openQuestionReplyDirective.
-function openPlanQuestionReplyDirective(editing: boolean, requestId: string): PrintDirective {
+function openPlanQuestionReplyDirective(editing: boolean, requestId: string, undo = ""): PrintDirective {
   const orchestrate = aidlcToolInvocation("orchestrate");
   const answer = editing
     ? `The person is editing the code plan files themselves. If their reply says they are done, run bare \`${orchestrate} next\`.`
@@ -2745,7 +2772,7 @@ function openPlanQuestionReplyDirective(editing: boolean, requestId: string): Pr
       `they made with \`${aidlcToolInvocation("log")} answer --stage code-generation --checkpoint plan-approval ` +
       `--details "<their choice>"\`, then run bare \`${orchestrate} next\`.`;
   return printDirective(
-    `${answer} If it is about something else, such as new work or a change to the plan, run ` +
+    `${undo}${answer} If it is about something else, such as new work or a change to the plan, run ` +
       `\`${orchestrate} next --request ${requestId}\` and follow what it returns: the engine kept their words and asks ` +
       "them where that work belongs. If you cannot tell which it is, ask the person in one short question and follow " +
       "their answer.",
@@ -2789,24 +2816,24 @@ function withdrawRoutedWords(projectDir: string, question: StoredQuestion): void
   }
 }
 
-// The words the change line gives the person ("go back to the approved
-// plan"), said in any chat while a plan they approved has changed and is not
-// built yet: the restore of that plan, as the stage rules name it, then next.
-function approvedPlanUndoDirective(projectDir: string, stateContent: string): PrintDirective | null {
+// A plan the person approved changed before the build, and the change line
+// asked whether to go back to it: their words, in any chat and in any wording,
+// may say yes. The conductor reads that first; the restore itself needs their
+// word on record. Empty when no plan they approved changed.
+function approvedPlanUndoReading(projectDir: string, stateContent: string): string {
   const marker = readActiveDirectiveMarker(projectDir, stateContent);
-  if (marker?.version !== 2 || marker.stage !== "code-generation") return null;
+  if (marker?.version !== 2 || marker.stage !== "code-generation") return "";
   const issued = codeGenerationIssuance(marker, true);
-  if (issued === null) return null;
+  if (issued === null) return "";
   const units = issued.kind === "run-stage" ? [issued.unit ?? null] : issued.units;
   const changed = units.filter((unit) => approvedPlanChangeLine(projectDir, { unit }, issued) !== null);
-  if (changed.length === 0) return null;
+  if (changed.length === 0) return "";
   const posture = aidlcToolInvocation("testing-posture");
   const restores = changed.map((unit) =>
     `\`${posture} restore ${unit === null ? "--stage-level" : `--unit ${shellArg(unit)}`}\``);
-  return printDirective(
-    `The person asked to go back to the plan they approved. Run ${restores.join(", then ")}, say the line it ` +
-      `prints, then run bare \`${aidlcToolInvocation("orchestrate")} next\`.`,
-  );
+  return "A plan the person approved changed before the build, and they were asked whether to go back to it. If " +
+    `their words say to go back to the plan they approved, run ${restores.join(", then ")}, say the line it prints, ` +
+    `then run bare \`${aidlcToolInvocation("orchestrate")} next\`. Otherwise: `;
 }
 
 // Words while a workflow is active may ask to redo, jump to a stage, or start
@@ -2814,10 +2841,10 @@ function approvedPlanUndoDirective(projectDir: string, stateContent: string): Pr
 // change to this work: the conductor reads which, the same split as
 // openGateReplyDirective. The person's words never travel in the re-entry
 // report; the engine kept them for the other reading.
-function reentryReplyDirective(requestId: string): PrintDirective {
+function reentryReplyDirective(requestId: string, undo = ""): PrintDirective {
   const orchestrate = aidlcToolInvocation("orchestrate");
   return printDirective(
-    "Work is in progress, and the person's words may ask to redo, jump to a stage, or start fresh. Read them. If " +
+    `${undo}Work is in progress, and the person's words may ask to redo, jump to a stage, or start fresh. Read them. If ` +
       `they do, run \`${orchestrate} report --result resumed --choice <redo|jump|fresh>\` with the choice you read ` +
       "from their words (add `--target <stage slug>` for the stage they named, and `--unit <unit>` or `--every-unit` " +
       "when they named a Unit or said every Unit), then follow the print it returns. If they are about something " +
@@ -3583,7 +3610,7 @@ function costClause(
 
 // --- Flag parsing ---
 
-interface ParsedFlags {
+export interface ParsedFlags {
   scope?: string;
   positionalScope?: string; // leading valid scope token (e.g. `/aidlc bugfix Fix the crash`)
   stage?: string;
@@ -3627,6 +3654,13 @@ interface ParsedFlags {
   claimRhythm?: string;
   projectDir?: string;
   parseError?: string;
+  /**
+   * A flag-shaped token that is all the person typed, which no parser here reads
+   * as a setting (`--review-freeze off` without the `guard.` prefix, or a
+   * misspelt name). It describes no work, so `next` ends the turn naming it
+   * rather than running a stage while they believe a check went off.
+   */
+  unreadSetting?: string;
   retiredFlags?: string[];
   retiredOnly?: boolean;
 }
@@ -3653,7 +3687,31 @@ type ConfigSection = (typeof CONFIG_SECTIONS)[number];
 // the front of the description; either way the work is never named after it.
 const ENTRY_WORD_PREFIX = /^[/$]aidlc\s+/i;
 
-function parseNextFlags(argv: string[]): ParsedFlags {
+/**
+ * The first flag-shaped token of a line that describes no work, or null when the
+ * line is a description. A line made only of flag-shaped tokens this engine does
+ * not know, and the values that follow them, describes nothing: the person typed
+ * a setting whose name could not be read, and starting a piece of work called
+ * "--nonsense 1" would spend what they set on work they never asked for. The
+ * token comes back so the step can name it: with no readable switch beside it on
+ * the line, the human-turn hook read nothing and said nothing, so the step is the
+ * only place the person hears that their setting was not read.
+ * One flag-shaped word among real words is still their sentence, as the typed
+ * switch parser reads it the same way, and so are words the person marked as
+ * theirs (after `--`, or beside a plan they named), which this is not asked about.
+ */
+function unreadSettingOnly(words: readonly string[]): string | null {
+  // One quoted argument can hold the whole request, as Kiro IDE's PowerShell hands it over.
+  const tokens = words.flatMap((word) => word.split(/\s+/)).filter((token) => token.length > 0);
+  for (let index = 0; index < tokens.length; index++) {
+    if (!tokens[index].startsWith("--")) return null;
+    const next = tokens[index + 1];
+    if (next !== undefined && !next.startsWith("-")) index++;
+  }
+  return tokens[0] ?? null;
+}
+
+export function parseNextFlags(argv: string[]): ParsedFlags {
   const args = withoutEntryWord(argv);
   // A SOLE bare `help` / `-h` token is a help REQUEST, not intent text. Without
   // this, the token falls into intentWords and the freeform funnel offers to
@@ -4033,7 +4091,17 @@ function parseNextFlags(argv: string[]): ParsedFlags {
       else intentWords.shift();
     }
   }
-  if (intentWords.length > 0) flags.intent = intentWords.join(" ").replace(ENTRY_WORD_PREFIX, "");
+  // Words the person marked as theirs stand as they are: after the literal
+  // delimiter, or beside a plan they named, flag-shaped tokens are kept at
+  // creation (`t198-compose-surfaces`). Only an unmarked line the engine cannot
+  // read as a description is not one.
+  const planNamed = Boolean(flags.scope || flags.positionalScope || flags.newScope);
+  const unreadSetting = literalIntent || planNamed ? null : unreadSettingOnly(intentWords);
+  if (intentWords.length > 0 && unreadSetting === null) {
+    flags.intent = intentWords.join(" ").replace(ENTRY_WORD_PREFIX, "");
+  } else if (unreadSetting !== null) {
+    flags.unreadSetting = unreadSetting;
+  }
   if (!flags.claim && (flags.claimTeam || flags.claimRhythm)) {
     flags.parseError = "--team and --rhythm require --claim <unit>.";
   }
@@ -4956,6 +5024,11 @@ type SteeringTokenPayload = {
   // How the rules were cut into parts (steeringLayout). A part cut under one
   // limit is never continued with parts cut under another.
   l?: string;
+  // The lines for the person that the gate reports this `next` settled itself
+  // printed (settledNotices): `continue` rebuilds the run-stage in a new process,
+  // and these ride the payload so the rebuilt step says them and keeps the
+  // directive identity the parts were cut for.
+  N?: string[];
 };
 
 const runStageRoutes = new WeakMap<RunStageDirective, RunStageRoute>();
@@ -6418,7 +6491,8 @@ function markerSteeringPayload(
     (p.t !== undefined && p.t !== true) ||
     (p.m !== undefined && p.m !== true) ||
     (p.h !== null && typeof p.h !== "string") ||
-    (p.l !== undefined && typeof p.l !== "string")
+    (p.l !== undefined && typeof p.l !== "string") ||
+    (p.N !== undefined && (!Array.isArray(p.N) || !p.N.every((line) => typeof line === "string")))
   ) {
     return null;
   }
@@ -6469,6 +6543,7 @@ function steeringTokenPayload(
     m: directive.approve_together !== undefined ? true : undefined,
     h: route.stateHash,
     l: layout,
+    ...(settledNotices.length > 0 ? { N: [...settledNotices] } : {}),
   };
 }
 
@@ -6798,7 +6873,8 @@ let routingArgs: string[] | null = null;
 let settledGates = 0;
 // The lines for the person the reports of those settled gates printed (a
 // change their Guard Policy accepted), said with the step this `next` hands
-// over (prepareEmission).
+// over (prepareEmission). A run-stage delivered in parts carries them on its
+// steering payload, and `continue` restores them here (handleContinue).
 let settledNotices: string[] = [];
 
 function handleNext(args: string[], projectDir: string | undefined): void {
@@ -6871,6 +6947,34 @@ function routeNext(args: string[], projectDir: string | undefined): void {
   if (flags.parseError) {
     emit(errorDirective(flags.parseError));
     return;
+  }
+
+  // All the person typed was something that reads like a setting, and no parser
+  // here could read it: with no readable switch beside it the human-turn hook
+  // said nothing, so running a stage now would leave them believing a check went
+  // off while it is still on. The turn ends with the one sentence that is true,
+  // in the same words the hook uses when it can say it, and the agent runs the
+  // setter once they say what they meant. Nothing of theirs has changed.
+  if (flags.unreadSetting !== undefined) {
+    const line = unreadSettingLine(flags.unreadSetting);
+    // When the hook already said that sentence, a readable switch was on the line
+    // with it: what they set was applied, they have heard which part was not
+    // read, and the step they need now is the ordinary one for where they are
+    // (the one that keeps their switch for the work they start next, or the
+    // stage). Only when nothing said it is this the person's only word on it.
+    const heard = engineProjectDir && engineSessionId
+      ? pendingPersonLines(engineProjectDir, engineSessionId).lines
+      : [];
+    if (!heard.includes(line)) {
+      const step = turnEndingPrint(
+        "The person typed something that reads like a setting, and this engine cannot read it. Say the line above in " +
+          "your reply and wait: nothing of theirs changed, no stage ran, and when they say which setting they meant, " +
+          "run the setter for it.",
+      );
+      step.narration = line;
+      emit(step);
+      return;
+    }
   }
 
   if (flags.retiredOnly) {
@@ -7425,6 +7529,7 @@ function routeNext(args: string[], projectDir: string | undefined): void {
       flags.intent = undefined;
       flags.request = undefined;
       flags.scope = typedScope;
+      routingAnsweredWords = question.text;
       question = undefined;
       routingAnsweredAsActiveWork = true;
     } else if (!named) {
@@ -7577,7 +7682,8 @@ function routeNext(args: string[], projectDir: string | undefined): void {
     existsSync(unitParkedPath(pd))
   ) {
     emit(printDirective(
-      `Run \`${aidlcToolInvocation("state")} unpark\` to clear this checkout's Unit park marker, then re-run \`next --resume\`.`,
+      `Run \`${aidlcToolInvocation("state")} unpark\` to clear this checkout's Unit park marker, ` +
+        `then re-run \`${resumeAgain(flags)}\`.`,
     ));
     return;
   }
@@ -7620,11 +7726,17 @@ function routeNext(args: string[], projectDir: string | undefined): void {
       // or their own words): the work carries on, as `--resume` does, and
       // their words are read below. The Stop hook's probe still sees the park.
       const back = !isReadOnlyEngineProbe() && personSpokeSincePark(pd);
-      // "carry on", "resume" and the like, said on their own, are no words.
-      if (back && (args.length === 0 || bareContinuation)) {
+      // "carry on", "resume" and the like, said on their own, are no words;
+      // "part of that work, continue it", chosen on the routing question, is
+      // that same carrying on (its words were read when the question was asked).
+      if (back && (args.length === 0 || bareContinuation || routingAnsweredAsActiveWork)) {
+        // The routing answer is re-run as it was, so the work it continues
+        // still knows the person's words were about it (a bare `next` would
+        // ask the code plan question again with their reply unread).
+        const again = routingAnsweredAsActiveWork && args.length > 0 ? `next ${args.join(" ")}` : "next";
         emit(printDirective(
           `This workflow is parked. Run \`${aidlcToolInvocation("state")} unpark\` ` +
-            "to clear the park marker, then re-run `next` to continue.",
+            `to clear the park marker, then re-run \`${again}\` to continue.`,
         ));
         return;
       }
@@ -7651,7 +7763,7 @@ function routeNext(args: string[], projectDir: string | undefined): void {
   ) {
     emit(printDirective(
       `This workflow is parked. Run \`${aidlcToolInvocation("state")} unpark\` ` +
-        "to clear the park marker, then re-run `next --resume` to continue.",
+        `to clear the park marker, then re-run \`${resumeAgain(flags)}\` to continue.`,
     ));
     return;
   }
@@ -8252,13 +8364,10 @@ function routeNext(args: string[], projectDir: string | undefined): void {
     flags.intent && !flags.scope && !flags.positionalScope && !flags.resume && question === undefined &&
     !isTeamUnitOwnership(stateContent)
   ) {
-    // The words the change line told the person to say undo the change, in
-    // any chat: never a question about where they belong.
-    const undo = isApprovedPlanUndoRequest(flags.intent) ? approvedPlanUndoDirective(pd, stateContent) : null;
-    if (undo !== null) {
-      emit(undo);
-      return;
-    }
+    // While a plan the person approved changed before the build, their words
+    // may say to go back to it, in any chat: read before the rest, never a
+    // question about where they belong.
+    const undo = approvedPlanUndoReading(pd, stateContent);
     // The engine's own code plan question takes the reply from any chat, so
     // words beside it ("approve the code plan", typed in a new chat) are read
     // as its answer first, never asked about as new work.
@@ -8296,7 +8405,7 @@ function routeNext(args: string[], projectDir: string | undefined): void {
           pd, flags.intent, "", "routing", { space: selection.space, targets: routingTargets() }, false, undefined,
           undefined, routingSettings(carriedRoutingFlags(flags)),
         );
-        emit(openPlanQuestionReplyDirective(planQuestion.editing, words.id));
+        emit(openPlanQuestionReplyDirective(planQuestion.editing, words.id, undo));
         return;
       }
     }
@@ -8330,7 +8439,7 @@ function routeNext(args: string[], projectDir: string | undefined): void {
         pd, flags.intent, "", "routing", { space: selection.space, targets: routingTargets() }, false, undefined,
         undefined, routingSettings(carriedRoutingFlags(flags)),
       );
-      emit(reentryReplyDirective(words.id));
+      emit(reentryReplyDirective(words.id, undo));
       return;
     }
   }
@@ -11283,7 +11392,7 @@ function unitMajorReopen(
     ? `\`${aidlcToolInvocation("state")} unpark\`, then `
     : "";
   const backTo = (unit: string, stage: string): string =>
-    ` If they say 'back to ${unit}', run \`next --stage ${stage} --unit ${unit}\`.`;
+    ` If they ask to pick ${unit} up again, run \`next --stage ${stage} --unit ${unit}\`.`;
   // A Unit has reached the target when it finished it, skipped it in this
   // attempt (a jump ahead moved it past), or when the walk has it on a later
   // step of the block (or at its checkpoint, after every step).
@@ -11313,7 +11422,7 @@ function unitMajorReopen(
       const resume = `${aidlcToolInvocation("state")} unit resume --stage ${targetSlug} --unit ${named}`;
       const line = aside && inFlight !== null
         ? `Paused unit ${inFlight} at ${nameOf(aside.stage)} and picked unit ${named} up at ${stageName}. ` +
-          `Say 'back to ${inFlight}' to pick ${inFlight} up again.`
+          `You can pick ${inFlight} up again any time.`
         : `Picked unit ${named} up at ${stageName}.`;
       return {
         kind: "print",
@@ -11362,9 +11471,9 @@ function unitMajorReopen(
   const first = asides[0];
   const line = first
     ? `Paused ${list(asides.map((entry) => `unit ${entry.unit} at ${nameOf(entry.aside.stage)}`))} and reopened ` +
-      `${reopenedText}. Say 'back to ${first.unit}' to pick ${first.unit} up again.${keptLine}`
+      `${reopenedText}. You can pick ${first.unit} up again any time.${keptLine}`
     : `Reopened ${reopenedText}.` +
-      (kept.length > 0 ? `${keptLine} Say 'for every unit' to redo it for ${kept.length === 1 ? kept[0] : "them"} too.` : "");
+      (kept.length > 0 ? `${keptLine} You can redo it for ${kept.length === 1 ? kept[0] : "them"} too.` : "");
   const reopen =
     `${aidlcToolInvocation("jump")} reopen --target ${targetSlug} --stages ${stages.join(",")} --units ${reopened.join(",")} --scope ${scopeArg(scope)}` +
     (flags.change ? " --via change" : "");
@@ -12048,15 +12157,15 @@ function unitChoiceRefusal(stateContent: string, targetSlug: string): string {
   const name = node?.name || targetSlug;
   const why = !node || !isPerUnit(node)
     ? `${name} is done once for all units, so it cannot be redone for one unit. Nothing changed. ` +
-      "Say 'for every unit' to redo it."
+      "Do you want me to redo it for every unit?"
     : readConstructionIteration(stateContent) === "unit-major" && !checkpointPolicyEnabled(stateContent)
       ? `${name} was approved for every unit at its stage approval, so it can only be reopened for every unit. ` +
-        "Nothing changed. Say 'for every unit' to do that."
+        "Nothing changed. Do you want me to reopen it for every unit?"
       : readConstructionIteration(stateContent) === "unit-major"
-        ? `${name} can only be reopened for every unit from here. Nothing changed. Say 'for every unit' to do that.`
+        ? `${name} can only be reopened for every unit from here. Nothing changed. Do you want me to reopen it for every unit?`
         : `${name} can be reopened for one unit only while Construction builds one unit at a time; here it can ` +
-          "only be reopened for every unit. Nothing changed. Say 'for every unit' to do that.";
-  return `Run nothing. Tell the person in one line: "${why}" If they say 'for every unit', ` +
+          "only be reopened for every unit. Nothing changed. Do you want me to reopen it for every unit?";
+  return `Run nothing. Tell the person in one line: "${why}" If they say yes, ` +
     `run \`next --stage ${targetSlug} --every-unit\`.`;
 }
 
@@ -12314,6 +12423,8 @@ function completionOpensGateMessage(target: string): string {
 }
 const GATE_RESULTS = new Set(["awaiting-approval", "rejected", "revised"]);
 const RESUME_RESULTS = new Set(["resume", "resumed"]);
+// The results that carry the person's decision at a gate.
+const SOLO_DECISION_RESULTS = new Set(["approved", "rejected", "revised"]);
 const SKIP_RESULT = "skipped";
 const REPORT_RESULTS = new Set([
   ...FORWARD_RESULTS,
@@ -12761,7 +12872,8 @@ function remedyRepeatsPreflightedAction(
 // The ask for a refusal the router derived itself (a review request the wave
 // cannot make, a summary confirmation the Unit lacks). Always an ask, never an
 // error directive. The streak is the same one the enforcing tool keeps; an
-// observer reads it without writing.
+// observer reads it as it stands without writing, so a probe of an unchanged
+// refusal is the ask the agent holds, not a repeat put to the person.
 function routedRefusalDirective(
   projectDir: string,
   routed: RoutedGuardRefusal,
@@ -12772,6 +12884,7 @@ function routedRefusalDirective(
         routed.refusal,
         routed.attempt,
         routed.resources,
+        true,
       )
     : recordGuardRefusal(
         projectDir,
@@ -14421,13 +14534,22 @@ function handleReport(args: string[], projectDir: string | undefined): void {
       ));
       return;
     }
+  } else if (flags.unit && SOLO_DECISION_RESULTS.has(flags.result)) {
+    // The person's decision (their approval, or the changes they asked for)
+    // is the stage's in a solo walk: it is recorded for the stage, as the same
+    // report without --unit would be, so it is never lost.
+    flags.unit = undefined;
   } else if (flags.unit) {
     // A solo Unit cannot be reported on its own; when its work is done and
     // only its completion receipt is missing, that receipt is the step.
     const owed = soloUnitReceiptStep(pd, node, flags.unit, scope, stateContent);
-    emit(owed !== null
-      ? printDirective(`${owed} Then run \`${aidlcToolInvocation("orchestrate")} next\`.`)
-      : errorDirective("--unit gate reporting requires Unit Ownership: team."));
+    // Otherwise the agent reported a Unit the walk reports for it: the step is
+    // to carry on, never an error the person would be shown.
+    emit(printDirective(owed !== null
+      ? `${owed} Then run \`${aidlcToolInvocation("orchestrate")} next\`.`
+      : `A Unit is not reported on its own in this work: when this Unit's work for "${slug}" is done, run ` +
+        `\`${aidlcToolInvocation("orchestrate")} next\` and follow the step it returns; it asks the person ` +
+        "whatever needs their approval."));
     return;
   }
 
@@ -14943,6 +15065,16 @@ function handlePark(_args: string[], projectDir: string | undefined): void {
     emit(stateRefusalDirective("Cannot park the workflow", "this step", (res.stderr || res.stdout).trim()));
     return;
   }
+  // The message that asked for the park ("let's stop here for today") is no
+  // reply to an open code plan question: when the work comes back, the
+  // question is theirs to answer. A park typed as a command kept no such
+  // message, and an earlier reply of theirs stays.
+  try {
+    const turn = readAuditShardEvents(pd).filter((row) => row.event === "HUMAN_TURN").at(-1);
+    if (turn !== undefined && auditBlockField(turn.block, "Reply") === null) withdrawLatestPlanApprovalReply(pd);
+  } catch {
+    // The reply stays kept; the question is asked again with it.
+  }
   emit(parkedAfterPark(pd, res.stdout));
 }
 
@@ -15142,6 +15274,10 @@ function handleContinue(args: string[], projectDir: string | undefined): void {
       : undefined;
   activeRetiredGuardPolicyNotice =
     payload.a && liveState !== null ? retiredGuardPolicyNotice(pd, liveState) : null;
+  // The lines the settled gate reports printed ride the payload: the rebuilt
+  // step carries them as the first part's step did, so its identity is the one
+  // the parts were cut for and the person hears them on the final run-stage.
+  settledNotices = payload.N ? [...payload.N] : [];
   const cursor = inspectContinuationCursor(pd, liveState);
 
   const directive = buildRunStageDirective(
@@ -15668,6 +15804,7 @@ export function main(argv: string[]): void {
     activeSwitchOffNotices = null;
     activeKeptRequestLine = null;
     routingAnsweredAsActiveWork = false;
+    routingAnsweredWords = null;
     engineProjectDir = undefined;
     resolvedDirectiveLimit = null;
     engineSessionId = undefined;

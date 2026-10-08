@@ -77,6 +77,59 @@ export function cursorTrustedShell(): string {
 // Lightweight dispatcher grammar. aidlc-lib.ts retains the same public
 // workspace helpers for methodology callers; keeping this copy in the existing
 // command module avoids loading the full methodology graph at CLI startup.
+// --- Hook groups: one process for the checks before a tool call -------------
+//
+// A host that registers several hooks for one event starts each as its own
+// process, and each one loads the whole engine before its self-filter decides
+// there is nothing to do. On Claude Code a shell call started four guard
+// processes that way, and on a small machine with several helpers in flight
+// those loads reached gigabytes and ended runs mid-stage (#2066). So the
+// settings.json rows for the four checks are ONE row calling
+// `engine hook guard-tool-call`, and the dispatcher runs these members in its
+// own process. Each member keeps the matcher its own row had, as a regular
+// expression over the tool name, so a tool reaches exactly the checks it
+// reached before: reads and searches go to the three that read, while only a
+// write, a shell command or a dispatch reaches the plan-approval guard. The
+// group is a registration, not a check: it decides nothing itself.
+//
+// The doctor reads this table too (aidlc-utility.ts), to check that every
+// member's hook file ships and to treat drift on the row as flow-altering, so
+// the row and the files it stands for cannot drift apart.
+export const PRE_TOOL_USE_GROUP_TARGET = "guard-tool-call";
+
+export interface HookGroupMember {
+  /** The hook's name, as `engine hook <name>` and `aidlc-<name>.ts`. */
+  readonly hook: string;
+  /** The tools this member runs for: the matcher its own row had. */
+  readonly matcher: string;
+}
+
+const READ_WRITE_OR_SHELL =
+  "^(?:Read|NotebookRead|Edit|MultiEdit|Write|NotebookEdit|LS|Glob|Grep|Bash)$";
+const WRITE_SHELL_OR_DISPATCH =
+  "^(?:Edit|MultiEdit|Write|NotebookEdit|Bash|Task|Agent)$";
+
+const HOOK_GROUPS: Readonly<Record<string, ReadonlyArray<HookGroupMember>>> = {
+  [PRE_TOOL_USE_GROUP_TARGET]: [
+    { hook: "state-transition-guard", matcher: READ_WRITE_OR_SHELL },
+    { hook: "reviewer-scope", matcher: READ_WRITE_OR_SHELL },
+    { hook: "review-freeze", matcher: READ_WRITE_OR_SHELL },
+    { hook: "plan-approval-guard", matcher: WRITE_SHELL_OR_DISPATCH },
+  ],
+};
+
+/** The hooks this registration runs, in order, or null when it is not a group. */
+export function hookGroupMembers(
+  target: string,
+): ReadonlyArray<HookGroupMember> | null {
+  return Object.hasOwn(HOOK_GROUPS, target) ? HOOK_GROUPS[target] : null;
+}
+
+/** The hook names every group stands for, for a reader that checks files. */
+export function hookGroupMemberNames(target: string): string[] {
+  return (hookGroupMembers(target) ?? []).map((member) => member.hook);
+}
+
 export const PINNED_TOP_LEVEL_ROUTES = [
   "next",
   "continue",

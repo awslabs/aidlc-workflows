@@ -24,6 +24,8 @@ import {
   readAuditShardEvents,
   readBaselineSourceSnapshot,
   readSummaryAuthorization,
+  readUnitSourceSnapshot,
+  readWorkspaceSourceSnapshot,
   reviewRecordDigest,
   reviewRequestBindingFromBlock,
   sensorsDir,
@@ -35,6 +37,8 @@ import {
   summaryAuthorizationRecordPath,
   writeBaselineSourceSnapshot,
   writeSummaryAuthorization,
+  writeUnitSourceSnapshot,
+  writeWorkspaceSourceSnapshot,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import {
   AIDLC_SRC,
@@ -190,30 +194,42 @@ describe("t339 upgrading an in-flight classic intent", () => {
     expect(sensorsReadDir(project)).toBe(current);
   });
 
-  test("legacy source-review baselines still verify until the stage's new snapshot directory exists", () => {
+  test("legacy source-review snapshots still read after the stage's new snapshot directory exists", () => {
     const { project, path } = legacyClassic();
     const record = dirname(path);
     const stage = "requirements-analysis";
     // Canonical listing entries: `<repo>\0<path>` keys and `<mode> <blob-sha>` values.
     const key = `app\0src/app.ts`;
-    const listing = new Map([[key, `100644 ${"a".repeat(40)}`]]);
-    // Recorded before the move: write with the current writer, then relocate the
-    // whole tree to where a pre-upgrade intent left it.
+    const entry = `100644 ${"a".repeat(40)}`;
+    const listing = new Map([[key, entry]]);
+    // Recorded before the move: write every snapshot kind with the current
+    // writers, then relocate the whole tree to where a pre-upgrade intent left it.
     const fingerprint = writeBaselineSourceSnapshot(project, stage, listing);
+    const unitFingerprint = writeUnitSourceSnapshot(
+      project, stage, "alpha", listing, { claims: new Set([key]), prefixes: [] }, "b".repeat(64),
+    );
+    const workspaceFingerprint = "c".repeat(64);
+    expect(writeWorkspaceSourceSnapshot(project, stage, { fingerprint: workspaceFingerprint, listing })).toBe(true);
     const current = join(record, ".aidlc-engine", "source-review");
     const legacy = join(record, ".aidlc-source-review");
     renameSync(current, legacy);
     expect(existsSync(current)).toBe(false);
-    const fromLegacy = readBaselineSourceSnapshot(project, stage, fingerprint);
-    expect(fromLegacy).not.toBeNull();
-    expect(fromLegacy?.get(key)).toBe(`100644 ${"a".repeat(40)}`);
-    // The fallback is per stage: another stage's new snapshot directory does not
-    // hide this stage's legacy baseline ...
+    const fromLegacy = () => ({
+      baseline: readBaselineSourceSnapshot(project, stage, fingerprint)?.get(key),
+      unit: readUnitSourceSnapshot(project, stage, "alpha", unitFingerprint)?.listing.get(key),
+      workspace: readWorkspaceSourceSnapshot(project, stage, workspaceFingerprint)?.get(key),
+    });
+    expect(fromLegacy()).toEqual({ baseline: entry, unit: entry, workspace: entry });
+    // The fallback is per file: another stage's new snapshot directory does not
+    // hide this stage's legacy snapshots ...
     mkdirSync(join(current, "user-stories"), { recursive: true });
-    expect(readBaselineSourceSnapshot(project, stage, fingerprint)).not.toBeNull();
-    // ... but once this stage has a new directory, only that one is read.
-    mkdirSync(join(current, stage), { recursive: true });
-    expect(readBaselineSourceSnapshot(project, stage, fingerprint)).toBeNull();
+    expect(fromLegacy()).toEqual({ baseline: entry, unit: entry, workspace: entry });
+    // ... and neither does this stage's own, once the upgraded engine has
+    // written a later snapshot there: the audit still names the older ones.
+    const later = writeBaselineSourceSnapshot(project, stage, new Map([[key, `100644 ${"d".repeat(40)}`]]));
+    expect(existsSync(join(current, stage))).toBe(true);
+    expect(fromLegacy()).toEqual({ baseline: entry, unit: entry, workspace: entry });
+    expect(readBaselineSourceSnapshot(project, stage, later)?.get(key)).toBe(`100644 ${"d".repeat(40)}`);
     expect(existsSync(join(legacy, stage))).toBe(true);
   });
 

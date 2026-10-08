@@ -109,7 +109,7 @@ import {
   commandTurnHint,
   humanRepliedSinceGate,
   humanPresenceGuardDisabled,
-  memoryStrictHoldsGuardPolicy,
+  personMayApproveOverUnfinishedReview,
   humanTurnMintAllowed,
   hookActivation,
   personRepliedSincePresentation,
@@ -121,6 +121,9 @@ import {
   recordGuardStoodAside,
   unattendedHumanPresenceHint,
   intentRepos,
+  isGitRepoDir,
+  isValidRepoName,
+  repoDir,
   isAutonomousConstructionGate,
   approvedConstructionUnits,
   constructionCheckpointGaps,
@@ -2493,9 +2496,20 @@ function handleUnit(args: string[]): void {
       // artifacts, which are still checked below (#1289).
     } else if (action === "pause" || action === "complete") {
       if (!checkpoint || checkpoint.unit !== unit) {
+        // The refusal names the step that is true for this unit. A unit whose
+        // completion receipt stands has nothing left to do, and "start it
+        // first" would send the agent round the start/complete loop again.
+        if (unitCompletedReceipts(pd, slug).has(unit)) {
+          error(
+            `Refusing to ${action} unit "${unit}" for "${slug}": it is already completed. ` +
+              `Nothing more to do for it; run \`${aidlcToolInvocation("orchestrate")} next\` for the next step.`,
+          );
+        }
         error(
           `Refusing to ${action} unit "${unit}" for "${slug}": it is not the active unit` +
-            `${checkpoint ? ` (active: "${checkpoint.unit}", ${checkpoint.state})` : " (no unit is active — start it first)"}.`,
+            `${checkpoint
+              ? ` (active: "${checkpoint.unit}", ${checkpoint.state})`
+              : ` (no unit is active; start it first with \`${aidlcToolInvocation("state")} unit start --stage ${slug} --unit ${unit}\`)`}.`,
         );
       }
       if (action === "pause" && setAsideFor !== undefined && (!reason || !nextAction)) {
@@ -3462,11 +3476,24 @@ function artifactFingerprint(path: string): string | null {
   }
 }
 
+// A person answers every team Unit gate and every gate outside a Construction
+// autonomy grant. The gate the grant answers (the engine approves it itself,
+// isAutonomousConstructionGate) has no reader for advisory sensor evidence.
+function personAnswersGate(
+  pd: string,
+  stateContent: string,
+  stage: NonNullable<ReturnType<typeof findStageBySlug>>,
+  teamGate: ReturnType<typeof teamGateContext>,
+): boolean {
+  return teamGate !== null || !isAutonomousConstructionGate(stateContent, stage, pd);
+}
+
 function fireGateSensors(
   pd: string,
   stage: NonNullable<ReturnType<typeof findStageBySlug>>,
   stateContent: string,
   artifacts?: string,
+  personAnswers = true,
 ): GateSensorEvaluation {
   const issues: BlockingSensorIssue[] = [];
   const fingerprints = new Map<string, string>();
@@ -3476,8 +3503,11 @@ function fireGateSensors(
   const paths = existingDeclaredArtifactPaths(pd, stage, artifacts);
   if (paths.length === 0) return { issues, fingerprints };
 
+  // Advisory gate sensors are evidence for whoever answers the gate. When no
+  // person will, only the blocking sensors, which halt an unattended run, fire:
+  // a check nobody reads costs the gate its time and the audit its signal.
   const sensors = (stage.sensors_applicable ?? []).filter((sensor) =>
-    sensor.fire_on === "gate"
+    sensor.fire_on === "gate" && (personAnswers || sensor.default_severity === "blocking")
   );
   for (const sensor of sensors) {
     if (sensor.default_severity !== "blocking") continue;
@@ -3870,10 +3900,12 @@ function isNonDocPath(p: string): boolean {
 }
 
 // Run git in the workspace, fail-safe: returns null on any spawn/exec problem so
-// callers fall back to the filesystem check rather than trapping.
+// callers fall back to the filesystem check rather than trapping. A probe reads
+// state and never needs the filesystem monitor hook, so the one git setting
+// that runs a configured program on `status` is off for it.
 function git(pd: string, args: string[]): string | null {
   try {
-    const r = spawnSync("git", args, {
+    const r = spawnSync("git", ["-c", "core.fsmonitor=false", ...args], {
       cwd: pd,
       encoding: "utf-8",
       timeout: DEFAULT_SUBPROCESS_TIMEOUT_MS,
@@ -3938,16 +3970,38 @@ function gitHasSourceWork(pd: string): boolean | null {
   return null;
 }
 
-// The workspace_requires signal: git-aware when the workspace is a git repo
+// The source-work signal for one directory: git-aware when it is a git repo
 // (precise - tells session-produced code from a brownfield baseline), else the
 // filesystem-existence fallback (shell-free, reliable in non-git workspaces and
 // the test fixtures). Fail-open: a git error falls back to the FS check.
-function workspaceHasWork(pd: string): boolean {
-  if (isGitRepo(pd)) {
-    const gitVerdict = gitHasSourceWork(pd);
+function dirHasSourceWork(dir: string): boolean {
+  if (isGitRepo(dir)) {
+    const gitVerdict = gitHasSourceWork(dir);
     if (gitVerdict !== null) return gitVerdict;
   }
-  return workspaceHasSourceFile(pd);
+  return workspaceHasSourceFile(dir);
+}
+
+// The workspace_requires signal. The code may live in a child repo rather than
+// the workspace repo (the records in the workspace, the code in a gitignored
+// sibling, with or without AI-DLC in it): the workspace's git never lists that
+// repo's files, so each of the intent's recorded repos - the same set the review
+// source binding and the unit manifest follow - is asked the same question. A
+// recorded repo missing on this clone fails safe (unreadable dir -> false).
+//
+// A recorded name is text in the committed intents.json, and a folder shaped
+// like a repo (HEAD, objects/, refs/, config) can be committed by anyone whose
+// repo the person clones; a .git entry cannot. Git run in such a folder reads
+// the author's committed config and runs its commands, so git is asked only in
+// a folder with a real .git entry (a clone, submodule or init the person made,
+// whose config is theirs); any other folder gets the filesystem check alone.
+function workspaceHasWork(pd: string): boolean {
+  if (dirHasSourceWork(pd)) return true;
+  return intentRepos(pd).some((repo) => {
+    if (!isValidRepoName(repo)) return false;
+    const dir = repoDir(pd, repo);
+    return isGitRepoDir(dir) ? dirHasSourceWork(dir) : workspaceHasSourceFile(dir);
+  });
 }
 
 // The guard itself. Called from approve/advance/finalize/complete-workflow
@@ -4181,17 +4235,11 @@ function refuseStateGuard(
 }
 
 // The person's own approval, carried through the admission chain. It goes over
-// a review the agent asked for that has no verdict yet; the chain sets
-// overUnfinishedReview when it did, so the approval is recorded that way.
+// a review the agent asked for that has no verdict yet, or one whose verdict is
+// the NOT-READY fallback no reviewer gave; the chain sets overUnfinishedReview
+// when it did, so the approval is recorded that way.
 export interface PersonApproval {
   overUnfinishedReview: boolean;
-}
-
-// Whether the person's approval may go over an unfinished review here. A team
-// that locks Guard Policy strict keeps every review required; asking for the
-// review again always works. The one place that says which lock counts.
-function personMayApproveOverUnfinishedReview(pd: string, content: string): boolean {
-  return !memoryStrictHoldsGuardPolicy(pd, content);
 }
 
 // A review request with no verdict yet that the person may approve over,
@@ -4217,6 +4265,22 @@ function approvableUnfinishedReview(
   }
   personCall.overUnfinishedReview = true;
   return true;
+}
+
+// A verdict that is the NOT-READY fallback no reviewer gave stands as before,
+// and the person's approval over it is recorded and said as over a review that
+// did not finish.
+function noteVerdictNotFinished(
+  receipts: ReturnType<typeof freshReviewReceipts>,
+  personCall: PersonApproval | undefined,
+  unit?: string,
+): void {
+  if (personCall === undefined) return;
+  const scopes = unit === undefined ? [...(receipts.unfinishedVerdicts ?? [])] : [unit];
+  if (scopes.some((scope) => receipts.unfinishedVerdicts?.has(scope) === true &&
+    (scope === "" ? receipts.stageVerdict !== null : receipts.unitVerdicts.has(scope)))) {
+    personCall.overUnfinishedReview = true;
+  }
 }
 
 // The one line the person hears when their approval went over that review.
@@ -4432,7 +4496,14 @@ function verifyReviewerPrecondition(
     !settledSwarm &&
     receipts.sourceStale &&
     !baselineReversionReconciled;
-  if (staleSource) {
+  // The person's own approval goes over the recovery review of that changed
+  // source when it never finished, as at a stage with no source to review.
+  const staleUnit = receipts.newestSourceUnit ?? undefined;
+  const staleRecovery = staleUnit === undefined ? receipts.stagePending : receipts.unitPending.get(staleUnit);
+  if (
+    staleSource &&
+    !(staleRecovery?.recovery === true && approvableUnfinishedReview(pd, content, receipts, personCall, staleUnit))
+  ) {
     staleSourcePreconditionError(
       pd,
       content,
@@ -4453,6 +4524,7 @@ function verifyReviewerPrecondition(
   // modern global binding was still compared above, preserving crash recovery.
   if (!requireReceiptExistence) return;
 
+  noteVerdictNotFinished(receipts, personCall);
   const sawStageReview = receipts.stageVerdict !== null;
   const reviewedUnits = new Set(receipts.unitVerdicts.keys());
 
@@ -5588,6 +5660,7 @@ function verifyReviewerPreconditionForUnit(
   // The same governed checkpoint as the stage-level verifier, for one Unit.
   const receipts = freshReviewReceipts(pd, content, stage, { reviewClass });
   observeChangeControl(pd, content, receipts);
+  noteVerdictNotFinished(receipts, personCall, unit);
   if (!receipts.unitVerdicts.has(unit) && !approvableUnfinishedReview(pd, content, receipts, personCall, unit)) {
     const message =
       `Refusing gate for unit "${unit}" of "${stage.slug}": no fresh ` +
@@ -5924,6 +5997,7 @@ function handleGateStart(args: string[]): void {
     preflightStage,
     preflightContent,
     artifacts,
+    personAnswersGate(pd, preflightContent, preflightStage, preflightTeamGate),
   );
   enforceBlockingGateSensors(
     pd,
@@ -6920,7 +6994,13 @@ function handleRevise(args: string[]): void {
     action: "revise",
     ...(preflightTeamGate ? { unit: preflightTeamGate.unit } : {}),
   });
-  const gateSensorEvaluation = fireGateSensors(pd, preflightStage, preflightContent);
+  const gateSensorEvaluation = fireGateSensors(
+    pd,
+    preflightStage,
+    preflightContent,
+    undefined,
+    personAnswersGate(pd, preflightContent, preflightStage, preflightTeamGate),
+  );
   enforceBlockingGateSensors(
     pd,
     preflightContent,

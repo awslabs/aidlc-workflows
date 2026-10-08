@@ -347,13 +347,33 @@ function anchoredArgs(prompt: string): string | null {
 // word and runs none. Single quotes are literal in sh and in PowerShell alike;
 // a word with an apostrophe takes double quotes when nothing in it expands
 // there, and otherwise this host's own shell form.
+// A word sh reads as typed. On Windows the call runs in PowerShell, whose
+// argument mode reads a comma as a list, a leading `@` as splatting, a leading
+// `#` as a comment and a number-like word (1kb, 0x10) as a number, so there
+// only a plain word, an option or a plain number stays bare; every other word
+// is single-quoted, which PowerShell reads literally.
+const BARE_WORD = process.platform === "win32"
+  ? /^(?:--?)?[A-Za-z_][A-Za-z0-9_.:/=+%-]*$|^[0-9]+(?:\.[0-9]+)?$/
+  : /^[A-Za-z0-9_@%+=:,./-]+$/;
+// PowerShell reads the curly quotes U+2018-U+201B as single quotes and
+// U+201C-U+201F as double quotes (text pasted from a document holds them), so
+// on Windows every word that is not bare takes the single-quoted form with each
+// single-quote-class character doubled, which PowerShell reads back as typed.
+// The person's characters are never changed.
+const WIN32_SINGLE_QUOTE = /['\u2018-\u201B]/g;
 function forwardedArgs(raw: string, args: string[]): string {
-  if (/^[A-Za-z0-9_@%+=:,./ \t"-]*$/.test(raw)) return raw;
+  if (
+    /^[A-Za-z0-9_@%+=:,./ \t"-]*$/.test(raw) &&
+    (process.platform !== "win32" || args.every((arg) => BARE_WORD.test(arg)))
+  ) {
+    return raw;
+  }
   const quote = (arg: string): string => {
-    if (/^[A-Za-z0-9_@%+=:,./-]+$/.test(arg)) return arg;
+    if (BARE_WORD.test(arg)) return arg;
+    if (process.platform === "win32") return `'${arg.replace(WIN32_SINGLE_QUOTE, (q) => q + q)}'`;
     if (!arg.includes("'")) return `'${arg}'`;
     if (!/["`$\\]/.test(arg)) return `"${arg}"`;
-    return `'${arg.replaceAll("'", process.platform === "win32" ? "''" : "'\\''")}'`;
+    return `'${arg.replaceAll("'", "'\\''")}'`;
   };
   return args.map(quote).join(" ");
 }
@@ -715,9 +735,13 @@ if (target === "guard-tool-call") {
         forwarding.turn === counter &&
         Array.isArray(forwarding.args)
       ) {
+        // The call exactly as this hook asked for it is right before any
+        // re-split: PowerShell's doubled apostrophe ('can''t') does not split
+        // back to the word, and refusing it would ask for the same call again.
         const matches =
-          forwarding.args.length === raw.length &&
-          forwarding.args.every((arg, index) => arg === raw[index]);
+          (typeof forwarding.raw === "string" && m[1].trim() === forwarding.raw) ||
+          (forwarding.args.length === raw.length &&
+            forwarding.args.every((arg, index) => arg === raw[index]));
         if (!matches) {
           process.stderr.write(
             "The first aidlc-orchestrate next call dropped or changed the user's arguments. " +

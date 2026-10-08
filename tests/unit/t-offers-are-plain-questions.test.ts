@@ -23,12 +23,6 @@ import { planSourceDriftRelaxedNotice } from "../../dist/claude/.claude/tools/ai
 // Files another piece of open work owns whole, and exact phrases it rewords.
 const OWNED_FILES = new Set(["aidlc-guard-switch.ts", "aidlc-recorded-switches.ts"]);
 const OWNED = [
-  "Say 'for every unit'",
-  "say 'for every unit'",
-  "Say 'back to ",
-  "say 'back to ",
-  "Say \"go back to the approved plan\" to undo",
-  "const APPROVED_PLAN_UNDO = `Say \"",
   "off\\` yourself ",
 ];
 // A break-glass override the person must type in their own words on purpose.
@@ -92,10 +86,10 @@ describe("t-offers-are-plain-questions: the lines say what happened, then a plai
     );
   });
 
-  test("changed code after a plan's approval carries on and asks whether to look at the plan first", () => {
+  test("changed code after a plan's approval carries on and asks whether to go over the plan again", () => {
     expect(planSourceDriftRelaxedNotice(["src/a.ts"])).toBe(
       "1 file changed since this plan was approved: src/a.ts. Carrying on. " +
-        "Do you want to look at the plan again and approve it first?",
+        "Do you want me to go over the plan with you again?",
     );
   });
 });

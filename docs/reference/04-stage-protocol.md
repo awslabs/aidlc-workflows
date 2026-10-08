@@ -94,7 +94,7 @@ with a fresh timestamp.
 
 | # | Check |
 |---|-------|
-| 1 | At the approval gate, call `aidlc engine orchestrate report --stage <slug> --result awaiting-approval`. When `ceremony.sensors` is `on`, gate-bound sensors run once per existing deliverable before the transaction. A blocking binding requires a verified pass. To override, log and present the separate `Fix findings` / `Override blocking sensors` decision, wait for the exact human-backed answer, then retry with `--override-blocking-sensors --user-input "Override blocking sensors"`; a bare flag and autonomous mode are refused. The engine then flips state from `[-]` to `[?]` AwaitingApproval and emits `STAGE_AWAITING_APPROVAL` atomically, so status shows the held gate while the prompt is open. (`STAGE_STARTED` / the `[-]` transition was emitted when the stage became active.) |
+| 1 | At the approval gate, call `aidlc engine orchestrate report --stage <slug> --result awaiting-approval`. When `ceremony.sensors` is `on`, gate-bound sensors run once per existing deliverable before the transaction when a person will answer the gate (a gate the engine approves itself under Construction autonomy runs only its blocking sensors). A blocking binding requires a verified pass. To override, log and present the separate `Fix findings` / `Override blocking sensors` decision, wait for the exact human-backed answer, then retry with `--override-blocking-sensors --user-input "Override blocking sensors"`; a bare flag and autonomous mode are refused. The engine then flips state from `[-]` to `[?]` AwaitingApproval and emits `STAGE_AWAITING_APPROVAL` atomically, so status shows the held gate while the prompt is open. (`STAGE_STARTED` / the `[-]` transition was emitted when the stage became active.) |
 | 2 | For non-gate questions, log options BEFORE calling `AskUserQuestion` via `aidlc engine log decision` (not by hand-writing to the `audit/` shards), then log the exact response via `aidlc engine log answer`. |
 | 3 | After an approval-gate response, call `aidlc engine orchestrate report --stage <slug> --result approved --user-input "Approve"` for approval or `aidlc engine orchestrate report --stage <slug> --result rejected --user-input "Request Changes"` for request-changes, passing the choice they made by its label (the engine keeps their own words as the feedback; add `--reason '<what they asked to change>'` only to say more). Never call the log tool's `decision` or `answer` verb for the gate. After revision work, report `--result revised` before re-presenting it. |
 | 4 | Record the choice the person made, read from their reply; the human-turn hook keeps their exact words with it. Never choose for them or paraphrase their words in an answer or note; for automated stages use `N/A -- [reason]` |
@@ -344,10 +344,11 @@ and ambiguity detection.
 Never re-ask an answered question. Read the record's question files with their
 question text and options before adding another question. For audit-only
 interactions, run `aidlc engine log answers --stage <slug>` (add `--unit <unit>`
-when unit-scoped). Use `answered` for paired questions and answers, and check
-`open` and `ambiguous` for unresolved interactions. Do not infer an ambiguous
-answer from its text alone; ask a narrow follow-up naming the candidate prior
-question and answer. If the latest applicable answer resolves the topic, use
+when unit-scoped). Use `answered` for paired questions and answers and `open`
+for questions nobody has answered. One reply closes every question logged for
+the menu it answered, so a menu answered once never comes back; `ambiguous`
+holds only an answer with no question before it, or two writers at the same
+second, and is nothing to ask the person about again. If the latest applicable answer resolves the topic, use
 it. If it conflicts with newer evidence, name that earlier answer in the
 follow-up instead of reopening the whole question.
 
@@ -617,7 +618,8 @@ boundary, and reads stay open by any means.
   must be COMPLETE and UNMODIFIED.
 - Earlier questions: `aidlc engine log answers --stage <slug>` (add
   `--unit <unit>` when unit-scoped). It returns `answered`, `open`, and
-  `ambiguous`; ask a narrow follow-up for ambiguity.
+  `ambiguous` (an answer with no question before it, or two writers tied at
+  one second); never ask the person a question `answered` already holds.
 - Timeline: `aidlc engine audit history`, with optional `--stage <slug>`,
   repeatable `--event <TYPE>`, and `--limit <n>` to keep the newest n. Results
   are oldest first; `unordered: true` marks tied events with no known order
@@ -1195,7 +1197,14 @@ change. See
    incomplete attempt records the terminal receipt `--verdict NOT-READY` with no
    review file and the brief's fallback finding "review did not complete within
    its turn budget" - the gate is reached with a concrete finding, never
-   presented on (or deadlocked by) a silently missing verdict.
+   presented on (or deadlocked by) a silently missing verdict. That receipt
+   is no reviewer's verdict: the logger marks its row `Review Finished: no`,
+   a Unit checkpoint asks about it with `review_not_finished.question`, and the
+   person's approval over it records `Review: not finished` and says the
+   review did not finish. The retry and the fallback are for a review that
+   stopped with no person involved; once the person has written since the
+   dispatch, the conductor re-runs `next` first and follows it with what they
+   asked.
    On `adversarial` with iterations remaining the re-invoke skips the lead
    (the artifact was never reviewed; there is nothing for the builder to act
    on).
@@ -1239,7 +1248,9 @@ current open finding. A Request Changes report records `Rejected: <reason>`
 only for explicit
 `--reject-finding <review-artifact>#R-NN=<exact human reason>` values. It uses
 `--reopen-finding <review-artifact>#R-NN=<exact human reason>` when the person
-disagrees that a `Resolved (reviewer)` finding is fixed. The same ID cannot
+disagrees that a `Resolved (reviewer)` finding is fixed. The artifact may be
+given as its file name, or left out when one current finding carries the id;
+two findings sharing the id are named back. The same ID cannot
 appear in both flags. Generic revision feedback changes no finding decision.
 
 The iteration budget is engine-enforced: `aidlc-log.ts review` refuses a
@@ -1279,7 +1290,11 @@ per request; a second incomplete attempt records the terminal `NOT-READY`
 receipt instead. The logger accepts this recovery only for the same unmatched
 request, records `Retry: pending-request`, and does not consume another
 iteration. A completed request cannot be retried; stale-receipt recovery is a
-distinct request at the next ordinal.
+distinct request at the next ordinal. When the person has written since the
+review was dispatched (they stopped it, or said anything at all), the conductor
+re-runs `next` first instead of retrying or recording the fallback: the
+human-turn hook adds one context line saying so while that request has no
+verdict.
 
 ---
 

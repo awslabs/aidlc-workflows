@@ -129,6 +129,7 @@ import {
   reviewRequestArtifactsCurrent,
   renderReviewRequestCommand,
   renderReviewVerdictCommand,
+  REVIEW_FINISHED_FIELD,
   REVIEW_RECORD_MAX_BYTES,
   resolveBoltDag,
   unitsBlockRepair,
@@ -167,6 +168,7 @@ import {
   withWorkspaceSourceStateCache,
   workspaceSourceState,
   writeUnitSourceSnapshot,
+  writeWorkspaceSourceSnapshot,
   PLAN_APPROVAL_ASKED_BY_ENGINE,
   planApprovalAskIsOpen,
 } from "./aidlc-lib.js";
@@ -1078,6 +1080,14 @@ function handleAnswers(args: string[]): void {
   }> = [];
   const couldOwn = (question: AuditShardEvent, answer: AuditShardEvent): boolean =>
     sameInteractionScope(question, answer) && !attemptEventDefinitelyBefore(answer, question);
+  // Every question row, kept whole: an answer continues the exchange before it
+  // only when no question was logged in its scope between the two.
+  const asked = [...questions];
+  const scopeKey = (row: AuditShardEvent): string =>
+    JSON.stringify([auditBlockField(row.block, "Stage"), interactionScope(row)]);
+  // The latest closed exchange per scope: the answer that closed it and the
+  // answered entries it produced, so a further answer can join them.
+  const exchanges = new Map<string, { answer: AuditShardEvent; entries: typeof answered }>();
 
   while (pending.size > 0) {
     // Process only answers with no known predecessor. Timestamp ties between
@@ -1089,30 +1099,55 @@ function handleAnswers(args: string[]): void {
       ),
     );
     const cycle = frontier.length === 0;
+    // One reply answers every question that was open when it arrived: the
+    // protocol logs a menu's questions, then one answer for the reply, so all
+    // of them are that answer's questions (#2012 F2). The order is the engine's
+    // own row order, and nothing reads the answer's words. An answer with no
+    // open question of its own that follows a closed exchange, with no question
+    // logged in between, continues that exchange: a box that carried one pick
+    // per question is logged as one question and an answer per pick.
     const results = (cycle ? [...pending] : frontier).map((answer) => {
       const candidates = [...questions].filter((question) => couldOwn(question, answer));
-      const question = candidates.length === 1 ? candidates[0] : undefined;
-      const paired = !cycle && question !== undefined && !uncertain.has(question) &&
+      const paired = !cycle && candidates.length > 0 && candidates.every((question) =>
+        !uncertain.has(question) &&
         attemptEventDefinitelyBefore(question, answer) &&
         // A tied cancellation carries no answer, so it never competes with one.
         ![...pending].some(
           (other) => other !== answer && !isNonAnswer(auditBlockField(other.block, "Details")) &&
             couldOwn(question, other) && !attemptEventDefinitelyBefore(answer, other),
-        );
-      return { answer, candidates, question: paired ? question : undefined };
+        ));
+      return { answer, candidates, owned: paired ? candidates : [] };
     });
     for (const result of results) {
       const answer = auditBlockField(result.answer.block, "Details") ?? "";
       const nonAnswer = isNonAnswer(answer);
-      if (result.question) {
-        if (nonAnswer) {
-          unanswered.add(result.question);
-        } else {
-          answered.push({ ...questionView(result.question), answer, answeredAt: result.answer.timestamp });
+      if (result.owned.length > 0) {
+        const entries: typeof answered = [];
+        for (const question of result.owned) {
+          if (nonAnswer) {
+            unanswered.add(question);
+          } else {
+            const entry = { ...questionView(question), answer, answeredAt: result.answer.timestamp };
+            answered.push(entry);
+            entries.push(entry);
+          }
+          questions.delete(question);
         }
-        questions.delete(result.question);
-      } else {
-        if (!nonAnswer) {
+        if (!nonAnswer) exchanges.set(scopeKey(result.answer), { answer: result.answer, entries });
+      } else if (!nonAnswer) {
+        const prior = exchanges.get(scopeKey(result.answer));
+        const continues = result.candidates.length === 0 && prior !== undefined &&
+          attemptEventDefinitelyBefore(prior.answer, result.answer) &&
+          !asked.some((question) => sameInteractionScope(question, result.answer) &&
+            attemptEventDefinitelyBefore(prior.answer, question) &&
+            attemptEventDefinitelyBefore(question, result.answer));
+        if (continues) {
+          for (const entry of prior.entries) {
+            entry.answer = `${entry.answer}; ${answer}`;
+            entry.answeredAt = result.answer.timestamp;
+          }
+          exchanges.set(scopeKey(result.answer), { answer: result.answer, entries: prior.entries });
+        } else {
           ambiguous.push({
             ...interactionScope(result.answer),
             answer,
@@ -1122,8 +1157,8 @@ function handleAnswers(args: string[]): void {
           // A later answer cannot resolve whether this one already spent a prompt.
           for (const question of result.candidates) uncertain.add(question);
         }
-        // An unpaired non-answer carries no answer, so it spends no prompt.
       }
+      // An unpaired non-answer carries no answer, so it spends no prompt.
       pending.delete(result.answer);
     }
   }
@@ -2799,6 +2834,9 @@ function handleReview(args: string[]): void {
     const sourceState = workspaceSourceState(pd, intent, space);
     fields["Source Fingerprint"] =
       sourceState?.fingerprint ?? UNBINDABLE_FINGERPRINT;
+    // Keep the listing behind that fingerprint, as Plan Approval keeps its
+    // own, so a change after the review can be told to the person as paths.
+    if (sourceState !== null) writeWorkspaceSourceSnapshot(pd, flags.stage as string, sourceState);
     const bindsUnitSource =
       flags.unit !== undefined &&
       node.for_each === "unit-of-work" &&
@@ -3735,6 +3773,9 @@ function handleReview(args: string[]): void {
         }
       }
 
+      // No reviewer wrote this verdict: the review did not finish, and every
+      // reader says so (reviewCompletionDidNotFinish).
+      if (incompleteFallback) fields[REVIEW_FINISHED_FIELD] = "no";
       fields["Request Fingerprint"] = requestBinding.artifactFingerprint;
       fields["Artifact Fingerprint"] = artifactsMoved ? requestBinding.artifactFingerprint : snapshot.fingerprint;
       if (requestBinding.requestId !== null) {

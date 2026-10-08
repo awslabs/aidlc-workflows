@@ -40,6 +40,7 @@ import { createHash } from "node:crypto";
 import { existsSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";
 import { isoTimestamp, isStopHookProbe, sessionsDir, toPosix, validSessionId, writeFileAtomic } from "./aidlc-lib.ts";
+import { rootIntegrationTarget } from "./aidlc-distribution.ts";
 import { runtimeHarnessDir, runtimeHarnessName } from "./aidlc-runtime-paths.ts";
 import { KIRO_IDE_STEERING, kiroIdeSteering } from "./aidlc-includes.ts";
 
@@ -132,9 +133,11 @@ function sha256File(path: string): string {
   }
 }
 
+// AI-DLC's own records are plain JSON; the team's opencode.jsonc may hold
+// comments, trailing commas and a byte order mark, so every read allows them.
 function readJson<T>(path: string): T | null {
   try {
-    return JSON.parse(readFileSync(path, "utf-8")) as T;
+    return Bun.JSONC.parse(readFileSync(path, "utf-8").replace(/^\uFEFF/, "")) as T;
   } catch {
     return null;
   }
@@ -178,7 +181,7 @@ function kiroIncludesMemory(projectDir: string, space: string): boolean {
 }
 
 function opencodeIncludesMemory(projectDir: string, space: string): boolean {
-  const config = readJson<{ instructions?: unknown }>(join(projectDir, "opencode.json"));
+  const config = readJson<{ instructions?: unknown }>(join(projectDir, rootIntegrationTarget(projectDir, "opencode.json")));
   return Array.isArray(config?.instructions) &&
     config.instructions.includes(`${memoryDirRel(space)}**/*.md`);
 }

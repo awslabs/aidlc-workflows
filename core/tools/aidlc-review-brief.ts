@@ -1305,17 +1305,26 @@ function parseFindingDispositionSpec(
   spec: string,
   flag: "--reject-finding" | "--reopen-finding",
 ): { artifact: string; id: string; reason: string } {
-  const match = /^(.*)#(R-[0-9]+)=(\S[\s\S]*)$/.exec(spec.trim());
+  const match = /^(?:(.*)#)?(R-[0-9]+)=(\S[\s\S]*)$/.exec(spec.trim());
   if (!match) {
     throw new Error(
-      `Invalid ${flag} ${JSON.stringify(spec)}. Expected <review-artifact>#R-NN=<human reason>.`,
+      `Invalid ${flag} ${JSON.stringify(spec)}. Expected <review-artifact>#R-NN=<human reason>; ` +
+        "the artifact may be its file name, or left out when one current finding carries the id.",
     );
   }
   return {
-    artifact: toPosix(match[1].trim()),
+    artifact: toPosix((match[1] ?? "").trim()),
     id: match[2],
     reason: match[3].trim(),
   };
+}
+
+// A selector names the finding the way it was said: the full path, a path
+// tail, the file name with or without .md, or no artifact at all.
+function selectorNamesArtifact(selector: string, artifact: string): boolean {
+  if (selector === "" || selector === artifact) return true;
+  const file = selector.endsWith(".md") ? selector : `${selector}.md`;
+  return artifact === file || artifact.endsWith(`/${file}`);
 }
 
 export function rejectedFindingDispositionField(
@@ -1342,43 +1351,32 @@ export function rejectedFindingDispositionField(
       (context) => context.findings.map((finding) => ({ context, finding })),
     );
   });
-  const dispositions: ReviewFindingDisposition[] = [];
-  const seen = new Set<string>();
-  const rejectedKeys = new Set(
-    specs.map((raw) =>
-      dispositionKey(
-        parseFindingDispositionSpec(raw, "--reject-finding"),
-      )
-    ),
-  );
-  for (const raw of reopenSpecs) {
-    const reopened = parseFindingDispositionSpec(raw, "--reopen-finding");
-    if (rejectedKeys.has(dispositionKey(reopened))) {
-      throw new Error(
-        `Finding ${reopened.artifact}#${reopened.id} cannot appear more than once across ` +
-          "--reject-finding and --reopen-finding. Keep only the intended decision.",
-      );
-    }
-  }
-  const addDisposition = (
+  // A selector is resolved to its finding before anything is compared or
+  // recorded, so the file name and the full path name the same finding once.
+  // One current finding matching is the one meant; two are named back.
+  const select = (
     raw: string,
     kind: "reject" | "reopen",
-  ): void => {
+  ): { spec: ReturnType<typeof parseFindingDispositionSpec>; selected: (typeof findings)[number] } => {
     const flag = kind === "reject"
       ? "--reject-finding"
       : "--reopen-finding";
     const spec = parseFindingDispositionSpec(raw, flag);
-    const key = dispositionKey(spec);
-    if (seen.has(key)) {
-      throw new Error(
-        `Finding ${spec.artifact}#${spec.id} cannot appear more than once across ` +
-          "--reject-finding and --reopen-finding. Keep only the intended decision.",
-      );
-    }
-    seen.add(key);
-    const selected = findings.find(({ finding }) =>
+    const asked = spec.artifact ? `${spec.artifact}#${spec.id}` : spec.id;
+    const exact = findings.find(({ finding }) =>
       finding.artifact === spec.artifact && finding.id === spec.id
     );
+    const matches = exact ? [exact] : findings.filter(({ finding }) =>
+      finding.id === spec.id && selectorNamesArtifact(spec.artifact, finding.artifact)
+    );
+    if (matches.length > 1) {
+      throw new Error(
+        `Cannot ${kind} ${asked}: it names ${matches.length} current review findings at this gate: ` +
+          `${matches.map(({ finding }) => `${finding.artifact}#${finding.id}`).sort().join(", ")}. ` +
+          "Pass the one that is meant.",
+      );
+    }
+    const selected = matches[0];
     if (!selected) {
       // Name the accepted selectors: a stem-vs-full-path mismatch is otherwise invisible.
       const available = findings
@@ -1390,7 +1388,7 @@ export function rejectedFindingDispositionField(
         .map(({ finding }) => `${finding.artifact}#${finding.id}`)
         .sort();
       throw new Error(
-        `Cannot ${kind} ${spec.artifact}#${spec.id}: it is not a current review finding for this gate. ` +
+        `Cannot ${kind} ${asked}: it is not a current review finding for this gate. ` +
           (available.length > 0
             ? `Current ${kind === "reject" ? "rejectable" : "reopenable"} findings: ${available.join(", ")}.`
             : findings.length > 0
@@ -1400,11 +1398,37 @@ export function rejectedFindingDispositionField(
               : "This gate has no current review findings."),
       );
     }
+    return { spec, selected };
+  };
+  const rejected = specs.map((raw) => select(raw, "reject"));
+  const reopened = reopenSpecs.map((raw) => select(raw, "reopen"));
+  const duplicate = (finding: { artifact: string; id: string }): never => {
+    throw new Error(
+      `Finding ${finding.artifact}#${finding.id} cannot appear more than once across ` +
+        "--reject-finding and --reopen-finding. Keep only the intended decision.",
+    );
+  };
+  const rejectedKeys = new Set(
+    rejected.map(({ selected }) => dispositionKey(selected.finding)),
+  );
+  for (const { selected } of reopened) {
+    if (rejectedKeys.has(dispositionKey(selected.finding))) duplicate(selected.finding);
+  }
+  const dispositions: ReviewFindingDisposition[] = [];
+  const seen = new Set<string>();
+  const addDisposition = (
+    { spec, selected }: ReturnType<typeof select>,
+    kind: "reject" | "reopen",
+  ): void => {
     const { context, finding } = selected;
+    const key = dispositionKey(finding);
+    if (seen.has(key)) duplicate(finding);
+    seen.add(key);
+    const named = `${finding.artifact}#${finding.id}`;
     if (kind === "reject" && finding.resolvedByReviewer) {
       throw new Error(
-        `Cannot reject ${spec.artifact}#${spec.id}: the reviewer marked it fixed. ` +
-          `If it is not fixed, pass --reopen-finding "${spec.artifact}#${spec.id}=<reason>" instead.`,
+        `Cannot reject ${named}: the reviewer marked it fixed. ` +
+          `If it is not fixed, pass --reopen-finding "${named}=<reason>" instead.`,
       );
     }
     if (
@@ -1413,12 +1437,12 @@ export function rejectedFindingDispositionField(
       finding.status !== "Unresolved"
     ) {
       throw new Error(
-        `Cannot reject ${spec.artifact}#${spec.id}: current status is ${finding.status}.`,
+        `Cannot reject ${named}: current status is ${finding.status}.`,
       );
     }
     if (kind === "reopen" && !finding.resolvedByReviewer) {
       throw new Error(
-        `Cannot reopen ${spec.artifact}#${spec.id}: only a Resolved (reviewer) finding can be reopened. ` +
+        `Cannot reopen ${named}: only a Resolved (reviewer) finding can be reopened. ` +
           "Choose a resolved reviewer finding or leave ordinary revision feedback.",
       );
     }
@@ -1435,11 +1459,11 @@ export function rejectedFindingDispositionField(
         : {}),
     });
   };
-  for (const raw of specs) {
-    addDisposition(raw, "reject");
+  for (const entry of rejected) {
+    addDisposition(entry, "reject");
   }
-  for (const raw of reopenSpecs) {
-    addDisposition(raw, "reopen");
+  for (const entry of reopened) {
+    addDisposition(entry, "reopen");
   }
   return serializeReviewFindingDispositions(dispositions);
 }

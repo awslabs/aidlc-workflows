@@ -177,7 +177,8 @@ if (!existsSync(firstFiredMarker)) {
 // or stale markers fall back to Current Stage.
 const currentStage = getField(stateContent, "Current Stage") ?? "";
 if (!currentStage || currentStage === "none") return 0;
-const markedStage = readActiveDirectiveMarker(projectDir, stateContent)?.stage;
+const marker = readActiveDirectiveMarker(projectDir, stateContent);
+const markedStage = marker?.stage;
 let activeStage = markedStage ?? currentStage;
 
 // Step 10 — Stage-graph read (C4). loadGraph() returns GraphStage[]
@@ -201,6 +202,9 @@ try {
 }
 // Stage missing from graph (stale state-graph mismatch) — same exit.
 if (!stageNode) return 0;
+// The Unit the directive named, when its stage is the one dispatched: under
+// unit-major the rows say whose work the sensor looked at.
+const activeUnit = activeStage === markedStage ? marker?.unit : undefined;
 
 // No applicable sensors. Empty array is the workspace-scaffold case;
 // undefined is the unlikely missing-field case (compile guarantees it).
@@ -245,7 +249,10 @@ for (const entry of applicableSensors) {
     // when there is one and Bun's own absolute path otherwise.
     const [command, ...args] = aidlcEngineCommand(
       "sensor",
-      ["fire", entry.id, "--stage", activeStage, "--output-path", filePath],
+      [
+        "fire", entry.id, "--stage", activeStage, "--output-path", filePath,
+        ...(activeUnit ? ["--unit", activeUnit] : []),
+      ],
       sensorTs,
     );
     const result = spawnSync(

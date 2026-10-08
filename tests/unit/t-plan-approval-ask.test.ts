@@ -943,7 +943,7 @@ describe("the engine asks for Plan Approval", () => {
     writePlan(proj, "- [ ] Step 2: handle unicode\n");
     const ask = next(proj);
     expect(ask.kind).toBe("ask");
-    expect(ask.question).toBe("I repaired the Testing Contract block. Build your edited plan?");
+    expect(ask.question).toBe("I repaired the plan's Testing Contract (the test rules your build follows). Build your edited plan?");
   });
 
   // The person's stop holds even when the plan they approved needs repair
@@ -2848,9 +2848,9 @@ describe("the zero-Unit Code Generation lockout reported in #1172", () => {
       const parkAdmitted = guardBash(proj, park);
       expect(parkAdmitted.code, parkAdmitted.stderr).toBe(0);
       expect(JSON.parse(runInstalled(proj, park)).kind).toBe("parked");
-      // Parked, a workspace command is refused; the refusal names `next`, and
+      // Parked, a write to the code is refused; the refusal names `next`, and
       // `next --resume` names the unpark, which the guard lets through.
-      const parked = guardBash(proj, "git add -A");
+      const parked = guardBash(proj, "printf changed > src/inline.ts");
       expect(parked.code).toBe(2);
       expect(parked.stderr).toContain(" next`");
       const unpark = resumeNamesUnpark(proj);

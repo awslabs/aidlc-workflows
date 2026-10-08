@@ -1963,13 +1963,13 @@ describe("t294 trust diagnostics", () => {
 
   test("doctor fails changed flow hooks, warns on advisory drift, and ignores project hooks", () => {
     const env = runtimeEnv();
+    // The flow-altering rows settings.json registers. The four tool-call checks
+    // ride one of them, `guard-tool-call`, so that row is the drift that matters
+    // (#2066); their own names are no longer registrations.
     const flowHooks = [
       "continue-workflow",
       "deliver-stage-rules",
-      "plan-approval-guard",
-      "review-freeze",
-      "reviewer-scope",
-      "state-transition-guard",
+      "guard-tool-call",
     ];
     for (const [source, hook] of [[DIST, "session-end"], [DIST_RELEASE, "session-start"]]) {
       const project = temp("aidlc-t294-doctor-unwired-");
@@ -3958,10 +3958,10 @@ describe("t294 config diagnostics CLI", () => {
     const shippedHooks = structuredClone(settings.hooks);
     const guardGroup = settings.hooks.PreToolUse.find(
       (group: { hooks: Array<{ command: string }> }) =>
-        group.hooks.some((hook) => hook.command.includes("plan-approval-guard")),
+        group.hooks.some((hook) => hook.command.includes("guard-tool-call")),
     );
     const guardIndex = guardGroup.hooks.findIndex(
-      (hook: { command: string }) => hook.command.includes("plan-approval-guard"),
+      (hook: { command: string }) => hook.command.includes("guard-tool-call"),
     );
     const [guard] = guardGroup.hooks.splice(guardIndex, 1);
     const ownPreToolUse = {
@@ -3997,7 +3997,7 @@ describe("t294 config diagnostics CLI", () => {
     expect(after.hooks.PostToolUse).toEqual([...shippedHooks.PostToolUse, ownPostToolUse]);
     expect(after.hooks.PostToolUse.flatMap(
       (group: { hooks: Array<{ command: string }> }) => group.hooks,
-    ).some((hook: { command: string }) => hook.command.includes("plan-approval-guard"))).toBe(false);
+    ).some((hook: { command: string }) => hook.command.includes("guard-tool-call"))).toBe(false);
     expect(after.hooks.Notification).toEqual([ownNotification]);
     expect(after.permissions.deny).toEqual(["Bash(rm -rf:*)"]);
 
@@ -4026,16 +4026,15 @@ describe("t294 config diagnostics CLI", () => {
     const env = runtimeEnv();
     const settingsPath = join(project, ".claude", "settings.json");
     const settings = JSON.parse(readFileSync(settingsPath, "utf-8"));
-    const guardGroup = settings.hooks.PreToolUse.find(
-      (group: { hooks: Array<{ command: string }> }) =>
-        group.hooks.some((hook) => hook.command === "aidlc engine hook plan-approval-guard"),
-    );
-    const guard = guardGroup.hooks.find(
-      (hook: { command: string }) =>
-        hook.command === "aidlc engine hook plan-approval-guard",
-    );
-    guard.command =
+    // A project configured before one row carried the checks (#2066) holds the
+    // legacy per-file row for the guard itself; the refresh migrates it to the
+    // shipped wiring without claiming a command that only looks like AI-DLC's.
+    const legacyGuardCommand =
       'bun "$CLAUDE_PROJECT_DIR/.claude/hooks/aidlc-plan-approval-guard.ts"';
+    settings.hooks.PreToolUse.push({
+      matcher: "Edit|MultiEdit|Write|NotebookEdit|Bash|Task|Agent",
+      hooks: [{ type: "command", command: legacyGuardCommand }],
+    });
     const projectCommands = [
       "team-aidlc engine hook plan-approval-guard",
       "aidlc engine hook plan-approval-guard && team-audit",
@@ -4061,12 +4060,10 @@ describe("t294 config diagnostics CLI", () => {
         .flatMap((group) => group.hooks.map((hook) => hook.command)),
     );
     expect(commands.filter(
-      (command) => command === "aidlc engine hook plan-approval-guard",
+      (command) => command === "aidlc engine hook guard-tool-call",
     )).toHaveLength(1);
     expect(commands).toEqual(expect.arrayContaining(projectCommands));
-    expect(commands).not.toContain(
-      'bun "$CLAUDE_PROJECT_DIR/.claude/hooks/aidlc-plan-approval-guard.ts"',
-    );
+    expect(commands).not.toContain(legacyGuardCommand);
     expect(after.statusLine.command).toBe("aidlc engine statusline");
   }, 60_000);
 
@@ -4082,16 +4079,16 @@ describe("t294 config diagnostics CLI", () => {
       "aidlc.ts",
     ).replaceAll("\\", "/");
     const absoluteGuard =
-      `bun "${absoluteDispatcher}" engine hook plan-approval-guard`;
+      `bun "${absoluteDispatcher}" engine hook guard-tool-call`;
     const guardGroup = settings.hooks.PreToolUse.find(
       (group: { hooks: Array<{ command: string }> }) =>
         group.hooks.some((hook) =>
-          hook.command === "aidlc engine hook plan-approval-guard"
+          hook.command === "aidlc engine hook guard-tool-call"
         ),
     );
     guardGroup.hooks.find(
       (hook: { command: string }) =>
-        hook.command === "aidlc engine hook plan-approval-guard",
+        hook.command === "aidlc engine hook guard-tool-call",
     ).command = absoluteGuard;
     settings.statusLine.command =
       `bun "${absoluteDispatcher}" engine statusline`;
@@ -4108,7 +4105,7 @@ describe("t294 config diagnostics CLI", () => {
         .flatMap((group) => group.hooks.map((hook) => hook.command)),
     );
     expect(commands.filter((command) =>
-      command === "aidlc engine hook plan-approval-guard"
+      command === "aidlc engine hook guard-tool-call"
     )).toHaveLength(1);
     expect(commands).not.toContain(absoluteGuard);
     expect(after.statusLine.command).toBe("aidlc engine statusline");
@@ -4123,7 +4120,13 @@ describe("t294 config diagnostics CLI", () => {
       for (const group of groups as Array<{ hooks: Array<{ command: string }> }>) {
         for (const hook of group.hooks) {
           const target = /^aidlc engine hook ([A-Za-z0-9_-]+)$/.exec(hook.command)?.[1];
-          if (target) {
+          // Only a hook that ships a file of its own ever had the per-file form.
+          // One row runs several checks in one process (#2066) and ships no file,
+          // so no installation can carry a legacy spelling of it.
+          if (
+            target &&
+            existsSync(join(project, ".claude", "hooks", `aidlc-${target}.ts`))
+          ) {
             hook.command =
               `bun "$CLAUDE_PROJECT_DIR/.claude/hooks/aidlc-${target}.ts"`;
           }
@@ -4213,7 +4216,13 @@ describe("t294 config diagnostics CLI", () => {
       for (const group of groups as Array<{ hooks: Array<{ command: string }> }>) {
         for (const hook of group.hooks) {
           const target = /^aidlc engine hook ([A-Za-z0-9_-]+)$/.exec(hook.command)?.[1];
-          if (target) {
+          // Only a hook that ships a file of its own ever had the per-file form.
+          // One row runs several checks in one process (#2066) and ships no file,
+          // so no installation can carry a legacy spelling of it.
+          if (
+            target &&
+            existsSync(join(project, ".claude", "hooks", `aidlc-${target}.ts`))
+          ) {
             hook.command =
               `bun "$CLAUDE_PROJECT_DIR/.claude/hooks/aidlc-${target}.ts"`;
           }
@@ -4779,10 +4788,7 @@ process.exit(0);
     for (const target of [
       "continue-workflow",
       "deliver-stage-rules",
-      "plan-approval-guard",
-      "review-freeze",
-      "reviewer-scope",
-      "state-transition-guard",
+      "guard-tool-call",
     ]) {
       expect(baseline.entries[".claude/settings.json"][
         `hooksAidlc:${target}`

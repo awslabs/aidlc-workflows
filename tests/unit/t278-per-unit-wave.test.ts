@@ -19,10 +19,12 @@ import { spawnSync } from "node:child_process";
 import {
   appendFileSync,
   copyFileSync,
+  cpSync,
   existsSync,
   mkdirSync,
   readFileSync,
   readdirSync,
+  rmSync,
   symlinkSync,
   writeFileSync,
 } from "node:fs";
@@ -34,6 +36,7 @@ import {
   findStageBySlug,
   freshReviewReceipts,
   latestMainWorkflowStageRunFloorForProject,
+  markHumanTurn,
   readAllAuditShards,
   splitKiroCommandArgs,
   teamUnitGateStatus,
@@ -47,6 +50,7 @@ import {
   createTestProject,
   DEFAULT_RECORD_DIR,
   DEFAULT_SPACE,
+  REPO_ROOT,
   runOrchestrateNext,
   seedAidlcMemory,
   seedBoltDag,
@@ -971,6 +975,68 @@ describe("t278 engine-emitted wave contract", () => {
       reason_codes: ["REVIEW_RECOVERY_SPENT"],
       unit: "alpha",
     });
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  // A hook refused the agent's write mid-revision and left its own way on
+  // (finish the revision) for `next` to hand on. The agent stopped instead.
+  // The Stop hook's probe sees that same own-work ask and hands the work back:
+  // the person is neither left with a quiet agent nor asked to decide about
+  // work the agent never tried.
+  test("an own-work ask a hook refusal left: the Stop hook hands it back, on Claude Code and Codex", () => {
+    const proj = project("functional-design", "stage-major", undefined, undefined, "team");
+    seedBoltDag(proj, ["alpha"]);
+    cover(proj, "alpha", "functional-design", REQUIRED_FD);
+    for (const event of ["GATE_REJECTED", "STAGE_REVISING"]) {
+      appendAuditEntry(event, {
+        Stage: "functional-design", Unit: "alpha", "Gate Scope": "per-stage", "Gate Stages": "functional-design",
+        ...(event === "GATE_REJECTED" ? { Feedback: "revise alpha" } : {}),
+      }, proj);
+    }
+    review(proj, "alpha");
+    const artifact = join(seededRecordDir(proj), "construction", "alpha", "functional-design", "functional-spec.md");
+    const env: NodeJS.ProcessEnv = { ...process.env, AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD: "1" };
+    delete env.AWS_AIDLC_DEFAULT_SCOPE;
+    delete env.AIDLC_STOP_HOOK_PROBE;
+    markHumanTurn(proj);
+    expect(freezeWrite(proj, artifact).status).toBe(2);
+    // What a probe of `next` sees is the own-work ask the refusal left.
+    const probed = runOrchestrateNext(ORCH, proj, [], { env: { ...env, AIDLC_STOP_HOOK_PROBE: "1" } });
+    expect(probed.directive, probed.out).toMatchObject({ kind: "ask", ask_type: "guard-recovery", agent_work: true });
+    // The hook's probe runs the project's own tree.
+    for (const tree of ["claude", "codex"] as const) {
+      const dir = tree === "claude" ? ".claude" : ".codex";
+      if (!existsSync(join(proj, dir))) cpSync(join(REPO_ROOT, "dist", tree, dir), join(proj, dir), { recursive: true });
+    }
+    let stops = 0;
+    const stop = (tree: "claude" | "codex") => spawnSync(BUN, tree === "claude"
+      ? [join(AIDLC_SRC, "tools", "aidlc.ts"), "engine", "hook", "continue-workflow"]
+      : [join(proj, ".codex", "hooks", "aidlc-codex-adapter.ts"), "continue-workflow"], {
+      cwd: proj,
+      input: JSON.stringify({
+        hook_event_name: "Stop", stop_hook_active: false, session_id: "t278-agent-work", cwd: proj, turn_id: `t${++stops}`,
+      }),
+      encoding: "utf-8",
+      env: { ...env, CLAUDE_PROJECT_DIR: tree === "claude" ? proj : undefined, CODEX_THREAD_ID: undefined, CODEX_SESSION_ID: undefined },
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+    });
+    const traces = () => {
+      const traceDir = join(seededRecordDir(proj), ".aidlc-engine", "hooks-health");
+      return existsSync(traceDir)
+        ? readdirSync(traceDir).map((name) => `${name}:\n${readFileSync(join(traceDir, name), "utf-8")}`).join("\n")
+        : "(no hooks-health dir)";
+    };
+    for (const tree of ["claude", "codex"] as const) {
+      // Each tree is one agent's stop: the hook's no-progress block count is
+      // per project, so the second tree starts it afresh.
+      rmSync(join(seededRecordDir(proj), ".aidlc-engine", "stop-hook", "block-count.json"), { force: true });
+      const handedBack = stop(tree);
+      expect(handedBack.stdout, `${tree}: ${handedBack.stderr}\n${traces()}`).toContain('"decision":"block"');
+      expect(handedBack.stdout).toContain("AI-DLC is carrying on with Functional Design for alpha.");
+    }
+    // Handed back, the agent's own `next` is that same own-work ask.
+    const asked = JSON.stringify(runOrchestrateNext(ORCH, proj, [], { env }).directive);
+    expect(asked).toContain('"agent_work":true');
+    expect(asked).toContain("--result revised");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("team revising Units route freeze and spent-review refusals to redo", () => {

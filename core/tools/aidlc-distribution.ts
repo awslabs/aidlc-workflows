@@ -597,6 +597,18 @@ export function rootBlockPath(
 
 // Where a projection holds the bytes it ships for a root integration: the root
 // file, or for one the copy runtime leaves out, its root-blocks copy.
+/**
+ * The team's file a root integration lands in, relative to the project: the
+ * integration's own path, except that AI-DLC's opencode.json part goes into
+ * the opencode.jsonc a team keeps instead of it (opencode reads both files and
+ * merges them, so a second file would compete with theirs). The record keeps
+ * the integration's path as its key either way.
+ */
+export function rootIntegrationTarget(projectDir: string, path: string): string {
+  if (path !== "opencode.json" || existsSync(join(projectDir, path))) return path;
+  return existsSync(join(projectDir, "opencode.jsonc")) ? "opencode.jsonc" : path;
+}
+
 export function shippedRootIntegrationPath(
   root: string,
   harnessDir: string,
@@ -710,7 +722,11 @@ export function mergeBlock(
       value: `${current.slice(0, beginAt)}${kept ? `${kept}${newline}${newline}` : ""}${block}${
         current.slice(endAt + end.length)
       }`,
-      currentHash: sha256Matching(currentBlock, [sha256Bytes(block), ...recorded]),
+      // A part a space switch pointed at another space is still the one written.
+      currentHash: [currentBlock, withSpace(currentBlock, "default")]
+        .map((text) => sha256Matching(text, [sha256Bytes(block), ...recorded]))
+        .find((hash) => hash === sha256Bytes(block) || recorded.includes(hash)) ??
+        sha256Matching(currentBlock, [sha256Bytes(block), ...recorded]),
       nextHash: sha256Bytes(block),
       // A .gitignore part with exactly the shipped entries is a release's own,
       // whatever notes an earlier release put between them.
@@ -739,6 +755,36 @@ export function mergeBlock(
     value: `${prefix}${prefix ? newline : ""}${block}${newline}`,
     nextHash: sha256Bytes(block),
   };
+}
+
+// The onboarding's title line: this release's, then the one earlier releases
+// shipped, which asked to be replaced with the project's name (#2058).
+const ONBOARDING_TITLES = ["# AI-DLC", "# Project Name <!-- Replace with your project name -->"];
+
+// The line the person wrote in place of the onboarding's title, when that one
+// line is all that differs from what AI-DLC wrote: `matches` says whether the
+// text with AI-DLC's title put back is that. The line is theirs to keep.
+export function ownTitleLine(text: string, matches: (restored: string) => boolean): string | null {
+  const lines = text.split("\n");
+  for (let index = 0; index < lines.length; index++) {
+    const cr = lines[index].endsWith("\r") ? "\r" : "";
+    const line = lines[index].slice(0, lines[index].length - cr.length);
+    for (const title of ONBOARDING_TITLES) {
+      if (line === title) continue;
+      if (matches([...lines.slice(0, index), `${title}${cr}`, ...lines.slice(index + 1)].join("\n"))) return line;
+    }
+  }
+  return null;
+}
+
+// Shipped onboarding text with the person's own line in place of its title,
+// or null when the text has no title line to replace.
+export function withOwnTitleLine(shipped: string, own: string): string | null {
+  const lines = shipped.split("\n");
+  const index = lines.findIndex((line) => ONBOARDING_TITLES.includes(line.replace(/\r$/, "")));
+  if (index < 0) return null;
+  lines[index] = `${own}${lines[index].endsWith("\r") ? "\r" : ""}`;
+  return lines.join("\n");
 }
 
 export function projectionFiles(root: string): {
@@ -805,6 +851,14 @@ export function sha256Matching(value: string | Buffer, known: readonly (string |
 
 export function sha256FileMatching(path: string, known: readonly (string | undefined)[]): string {
   return sha256Matching(readFileSync(path), known);
+}
+
+// A space switch points the tool's include files at that space's memory
+// (aidlc-includes.ts repointHarnessIncludes); every release ships them at the
+// default space. The text with each active-space memory path set to `space`,
+// never a `<space>` or `${...}` placeholder.
+export function withSpace(text: string, space: string): string {
+  return text.replace(/aidlc\/spaces\/(?![<$])[^/"\s]+\/memory(?=[/"])/g, `aidlc/spaces/${space}/memory`);
 }
 
 // What a host tool installs for itself inside a directory AI-DLC manages:
@@ -1280,6 +1334,16 @@ function aidlcOwnEntry(entry: Pick<JsonEntry, "path" | "item">): boolean {
   );
 }
 
+/** The id of a JSON entry at `path`, as mergeJsonEntries records it. */
+export function jsonEntryId(path: readonly string[]): string {
+  return JSON.stringify({ path });
+}
+
+/** The hash of a JSON entry's value, as mergeJsonEntries records it. */
+export function jsonEntryHash(value: unknown): string {
+  return sha256Bytes(canonical(value));
+}
+
 /** Who owns the entries already in the file before this merge. */
 export type JsonEntriesOwnership =
   /** The entries AI-DLC recorded, with the value hash it wrote. */
@@ -1443,6 +1507,10 @@ export function mergeJsonEntries(
   shippedText: string,
   ownership: JsonEntriesOwnership,
   force = false,
+  // Entry ids the person set in this run (an explicit provider choice): a
+  // present one is taken over at its current value, so the shipped value
+  // replaces it and AI-DLC records it as its own from here on.
+  claim: readonly string[] = [],
 ): JsonEntriesResult {
   let shippedValue: unknown;
   try {
@@ -1464,7 +1532,7 @@ export function mergeJsonEntries(
   const present = jsonEntriesOf(currentValue);
   const presentHashes = new Map(present.map((entry) => [entry.id, entry.hash]));
   const prior: Record<string, string> = ownership.kind === "recorded"
-    ? ownership.entries
+    ? { ...ownership.entries }
     : ownership.kind === "whole"
     ? Object.fromEntries(presentHashes)
     : Object.fromEntries(
@@ -1472,6 +1540,10 @@ export function mergeJsonEntries(
         .filter((entry) => presentHashes.get(entry.id) === entry.hash && (ownership.kind === "matching" || aidlcOwnEntry(entry)))
         .map((entry) => [entry.id, entry.hash]),
     );
+  for (const id of claim) {
+    const hash = presentHashes.get(id);
+    if (hash !== undefined) prior[id] = hash;
+  }
   let plain = true;
   try {
     JSON.parse(withoutBom(current));

@@ -8,7 +8,9 @@ import type { OnboardingFills } from "../../scripts/onboarding.ts";
 const fills: OnboardingFills = {
   invoke: "/aidlc",
   slots: {
-    title_block: `# Project Name <!-- Replace with your project name -->
+    title_block: `# AI-DLC
+
+Your project's name, notes and rules go in \`aidlc/spaces/default/memory/project.md\`. Every AI tool in this project reads it.
 
 This project uses AI-DLC (AI-Driven Development Life Cycle) for structured development, running on the **GitHub Copilot harness** (one install serves Copilot CLI and VS Code agent mode). The workspace shell ships in \`.aidlc/\` (no setup command); describe what you want to build and it sets up the workflow for you. Run \`/aidlc\` followed by a scope or project description to begin. Run \`/aidlc --doctor\` to validate your setup, \`/aidlc --version\` to print the framework version, \`/aidlc --stage <slug>\` to jump to a specific stage, \`/aidlc --phase <name>\` to jump to a phase, \`/aidlc --depth <level>\` to override depth, \`/aidlc --test-strategy <level>\` to override test volume. Run \`/aidlc compose "<task>"\` to get a plan tailored to that task (works up front, from a scan report via \`--report <path>\`, and mid-workflow to re-shape the pending stages - every proposal stops at an approve/edit/reject gate).`,
 

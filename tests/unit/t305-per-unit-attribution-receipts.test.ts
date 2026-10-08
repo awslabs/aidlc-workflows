@@ -1294,6 +1294,28 @@ describe("t305 real receipt and guard flows", () => {
     expect(readAllAuditShards(project)).not.toContain("**Event**: REVIEW_REQUESTED");
   }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
+  // A Next.js dynamic route folder is a literal path: the claim is recorded,
+  // covers the file under it, and not a sibling folder a character class would
+  // have matched.
+  test("a bracketed route folder is a literal claim: recorded, covering its file and not a sibling", () => {
+    const { project, record } = runtimeFixture();
+    for (const dir of ["src/app/items/[itemId]", "src/app/items/i"]) {
+      mkdirSync(join(project, dir), { recursive: true });
+      writeFileSync(join(project, dir, "page.tsx"), `export default function Page() { return null; } // ${dir}\n`);
+    }
+    git(project, ["add", "-A"]);
+    git(project, ["commit", "-qm", "routes"]);
+    const { request } = review(project, record, "alpha", [{ path: "src/app/items/[itemId]/" }]);
+    expect(request.rc, request.out).toBe(0);
+    const row = readAllAuditShards(project).split("\n---\n").find((block) =>
+      auditBlockField(block, "Event") === "REVIEW_REQUESTED" && auditBlockField(block, "Unit") === "alpha");
+    const fingerprint = row === undefined ? null : auditBlockField(row, "Unit Source Fingerprint");
+    expect(fingerprint).not.toBeNull();
+    const snapshot = readUnitSourceSnapshot(project, "code-generation", "alpha", fingerprint ?? "");
+    expect(snapshot).not.toBeNull();
+    expect([...(snapshot?.listing.keys() ?? [])]).toEqual(["\0src/app/items/[itemId]/page.tsx"]);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
+
   test("REVIEW_COMPLETED and retry-pending refuse source edited after dispatch", () => {
     const { project, record } = runtimeFixture();
     writeManifest(record, "alpha", [{ path: "app.ts" }]);

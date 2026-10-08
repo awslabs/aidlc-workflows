@@ -395,6 +395,21 @@ describe("Kiro CLI and opencode: the host sends the memory files with every requ
     await sessionStart(proj, "opencode", fresh, "startup");
     expect(sentInFull(await next(proj, "opencode", { AIDLC_SESSION_OVERRIDE: fresh, OPENCODE: "1" }))).toBe(true);
   });
+
+  // A team that keeps opencode.jsonc writes comments and trailing commas in
+  // it; the include proof reads that file as jsonc, so the pointer still
+  // replaces the text once the chat holds it.
+  test("opencode: a commented opencode.jsonc with the memory instructions still proves the include", async () => {
+    const proj = await projectFor("opencode");
+    const config = join(proj, "opencode.json");
+    const body = JSON.stringify(JSON.parse(readFileSync(config, "utf-8")), null, 2).slice(1, -1).trimEnd();
+    rmSync(config);
+    writeFileSync(join(proj, "opencode.jsonc"), `{\n  // The team keeps its config as jsonc, with a trailing comma.${body},\n}\n`);
+    const sid = randomUUID();
+    await sessionStart(proj, "opencode", sid, "startup");
+    expect(sentInFull(await next(proj, "opencode", { AIDLC_SESSION_OVERRIDE: sid, OPENCODE: "1" }))).toBe(true);
+    expect(pointerOnly(await next(proj, "opencode", { AIDLC_SESSION_OVERRIDE: sid, OPENCODE: "1" }))).toBe(true);
+  });
 });
 
 describe("Codex: this thread was given the bundle and nothing since could have dropped it", () => {

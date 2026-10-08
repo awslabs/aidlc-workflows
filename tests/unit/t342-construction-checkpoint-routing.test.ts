@@ -13,7 +13,18 @@ import {
 } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import {
+  appendFileSync,
+  chmodSync,
+  cpSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, relative } from "node:path";
 import {
@@ -1657,7 +1668,7 @@ describe("t342 a unit-major recovery keeps every Unit's finished work", () => {
       "reopen --target nfr-design --stages nfr-design,infrastructure-design,code-generation --units beta ",
     );
     expect(said).toContain(
-      "\"Reopened NFR Design for unit beta. alpha keeps its finished work. Say 'for every unit' to redo it for alpha too.\"",
+      "\"Reopened NFR Design for unit beta. alpha keeps its finished work. You can redo it for alpha too.\"",
     );
     expect(said).not.toContain("jump.ts execute");
     expect(jumped(p)).toBe(0);
@@ -1870,19 +1881,20 @@ describe("t342 a unit-major recovery keeps every Unit's finished work", () => {
     const p = fixture({ iteration: "stage-major" });
     for (const unit of ["alpha", "beta"]) cover(p, unit, stages.slice(0, 1));
     const before = readFileSync(seededStateFile(p), "utf-8");
-    // The person sees one line that speaks to them; the command for "for every
-    // unit" is for the agent only.
+    // The person sees one line that asks them in plain words; the command for
+    // their yes is for the agent only.
     const refused = (args: string[]): string => {
       const said = JSON.parse(tool(p, "orchestrate", ["next", ...args]).stdout);
       expect(said.kind, JSON.stringify(said)).toBe("print");
       expect(said.message).not.toContain("jump.ts");
       const target = args[1];
-      expect(said.message).toContain(`If they say 'for every unit', run \`next --stage ${target} --every-unit\``);
+      expect(said.message).toContain(`If they say yes, run \`next --stage ${target} --every-unit\``);
       const line = /Tell the person in one line: "([^"]+)"/.exec(said.message)?.[1];
       expect(line, said.message).toBeDefined();
       for (const leak of ["Tell the person", "next --stage", "run `", "/aidlc --"]) expect(line!).not.toContain(leak);
       expect(line!).toContain("Nothing changed.");
-      expect(line!).toContain("Say 'for every unit'");
+      expect(line!).toMatch(/Do you want me to re(?:do|open) it for every unit\?$/);
+      expect(line!).not.toContain("Say '");
       return line!;
     };
     expect(refused(["--stage", "functional-design", "--unit", "alpha"])).toContain(
@@ -1914,9 +1926,9 @@ describe("t342 a unit-major recovery keeps every Unit's finished work", () => {
     expect(said.kind, JSON.stringify(said)).toBe("print");
     expect(said.message).toContain(
       "Tell the person in one line: \"NFR Design was approved for every unit at its stage approval, so it can only " +
-        "be reopened for every unit. Nothing changed. Say 'for every unit' to do that.\"",
+        "be reopened for every unit. Nothing changed. Do you want me to reopen it for every unit?\"",
     );
-    expect(said.message).toContain("If they say 'for every unit', run `next --stage nfr-design --every-unit`");
+    expect(said.message).toContain("If they say yes, run `next --stage nfr-design --every-unit`");
     expect(readFileSync(seededStateFile(p), "utf-8")).toBe(before);
     expect(jumped(p)).toBe(0);
     // Saying "for every unit" then does it.
@@ -1950,7 +1962,7 @@ describe("t342 a unit-major recovery keeps every Unit's finished work", () => {
   test("reopening alpha while beta builds pauses beta; alpha redoes its steps, then beta picks up where it stopped", () => {
     const { p, said } = alphaReopenedWhileBetaBuilds();
     expect(said).toContain(
-      "\"Paused unit beta at Code Generation and reopened NFR Design for unit alpha. Say 'back to beta' to pick beta up again.\"",
+      "\"Paused unit beta at Code Generation and reopened NFR Design for unit alpha. You can pick beta up again any time.\"",
     );
     expect(lastPause(p)).toEqual({ unit: "beta", stage: "code-generation", reason: "the person reopened alpha" });
     for (const slug of stages.slice(2)) {
@@ -2022,13 +2034,13 @@ describe("t342 a unit-major recovery keeps every Unit's finished work", () => {
     expect(next(p)).toMatchObject({ stage: "nfr-design", unit: "alpha" });
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-  test("'back to beta' in the middle of alpha's redo picks beta up, and 'back to alpha' returns", () => {
+  test("going back to beta in the middle of alpha's redo picks beta up, and going back to alpha returns", () => {
     const { p, said } = alphaReopenedWhileBetaBuilds();
-    expect(said).toContain("If they say 'back to beta', run `next --stage code-generation --unit beta`");
+    expect(said).toContain("If they ask to pick beta up again, run `next --stage code-generation --unit beta`");
     expect(tool(p, "state", ["unit", "start", "--stage", "nfr-design", "--unit", "alpha"]).status).toBe(0);
     const back = runPrinted(p, ["--stage", "code-generation", "--unit", "beta"]);
     expect(back).toContain(
-      "\"Paused unit alpha at NFR Design and picked unit beta up at Code Generation. Say 'back to alpha' to pick alpha up again.\"",
+      "\"Paused unit alpha at NFR Design and picked unit beta up at Code Generation. You can pick alpha up again any time.\"",
     );
     expect(back).not.toContain("jump.ts");
     expect(lastPause(p)).toEqual({ unit: "alpha", stage: "nfr-design", reason: "the person went back to beta" });
@@ -2740,6 +2752,34 @@ describe("t342 a unit-major recovery keeps every Unit's finished work", () => {
       expect(acceptedFor(p, "alpha")).toHaveLength(1);
       expect(said, JSON.stringify(said)).toHaveLength(recorded() - before);
       expect(approved(p, "alpha")).toBe(true);
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+  }
+
+  // The same, with the stage's rules too big to ride beside the run-stage, so
+  // the step arrives in parts (the usual shape on Copilot) and is rebuilt by
+  // `continue`: the line still reaches the final run-stage, once, and no part
+  // is delivered twice (the rebuilt step is the one the parts belong to).
+  for (const policy of ["off (from scope classic)", "relaxed (set by you)"]) {
+    test(`Guard Policy ${policy.split(" ")[0]}: the change line reaches a run-stage delivered in parts, and the parts are delivered once`, () => {
+      const p = policyFixture("classic", policy);
+      for (const unit of ["alpha", "beta"]) {
+        buildReviewed(p, unit);
+        approve(p, unit);
+      }
+      writeFileSync(join(p, "src", "alpha.ts"), "export const alpha = 2;\n");
+      let filler = "";
+      for (let i = 0; i < 12; i++) {
+        filler += `\n## Extra rule section ${i}\n\n${"Lorem ipsum dolor sit amet, consectetur adipiscing elit. ".repeat(60)}\n`;
+      }
+      appendFileSync(join(p, "aidlc", "spaces", "default", "memory", "org.md"), filler, "utf-8");
+      const result = runOrchestrateNext(join(AIDLC_SRC, "tools/aidlc-orchestrate.ts"), p, [], { env: process.env });
+      const step = result.directive as { kind: string; change_notices?: string[] } | null;
+      expect(step?.kind, result.stderr).toBe("run-stage");
+      expect(result.steering.length, result.out.slice(0, 400)).toBeGreaterThan(0);
+      expect(result.steering.map((part) => part.part)).toEqual(result.steering.map((_, index) => index + 1));
+      const said = step?.change_notices ?? [];
+      expect(said.filter((line) => line === ALPHA_EDIT_LINE), JSON.stringify(said)).toHaveLength(1);
+      expect(acceptedFor(p, "alpha")).toHaveLength(1);
     }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
   }
 

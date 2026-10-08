@@ -644,10 +644,10 @@ describe("t324 team-owned unit progress and per-unit gates", () => {
       "--result",
       "awaiting-approval",
     ]);
-    expect(foreignUnit.kind).toBe("error");
-    expect(foreignUnit.message).toContain(
-      "--unit gate reporting requires Unit Ownership: team",
-    );
+    // A solo walk reports its Units itself: the agent is handed the step on.
+    expect(foreignUnit.kind).toBe("print");
+    expect(foreignUnit.message).toContain("A Unit is not reported on its own in this work");
+    expect(foreignUnit.message).not.toContain("Unit Ownership");
   });
 
   test("stop-hook probe next leaves team state and audit byte-identical", () => {

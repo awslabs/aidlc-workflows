@@ -16,17 +16,24 @@ import { delimiter, dirname, extname, join, relative, resolve } from "node:path"
 import {
   assertProjectionPathHasNoSymlinks,
   isSafeOnboardingPath,
+  jsonEntryHash,
+  jsonEntryId,
   jsonFileText,
   jsoncRootMembers,
   jsoncSettingValue,
   managedBlockIsSafe,
   managedBlockMarkers,
   mergeBlock,
+  mergeJsonEntries,
   missingJsonEntries,
+  ownTitleLine,
   readJsonFile,
+  removeJsonEntries,
   type RootIntegration,
   rootBlockPath,
+  rootIntegrationTarget,
   sha256Matching,
+  withSpace,
 } from "./aidlc-distribution.ts";
 import {
   aidlcInvocation,
@@ -1512,14 +1519,72 @@ function openCodeJsonOrNull(path: string): Record<string, unknown> | null {
   }
 }
 
+/**
+ * The entries of the team's opencode.json an explicit Bedrock choice sets:
+ * provider.amazon-bedrock.options.region, and .profile when one is recorded.
+ */
+export function openCodeProviderEntryIds(record: ProvidersRecord): string[] {
+  const options = ["provider", "amazon-bedrock", "options"];
+  return [
+    jsonEntryId([...options, "region"]),
+    ...(record.profile ? [jsonEntryId([...options, "profile"])] : []),
+  ];
+}
+
+// The same entries with the values the record wrote, for removing them while
+// they still hold those values.
+function openCodeProviderEntryHashes(record: ProvidersRecord): Record<string, string> {
+  const options = ["provider", "amazon-bedrock", "options"];
+  return {
+    [jsonEntryId([...options, "region"])]: jsonEntryHash(record.region),
+    ...(record.profile ? { [jsonEntryId([...options, "profile"])]: jsonEntryHash(record.profile) } : {}),
+  };
+}
+
+/**
+ * The Bedrock region and profile the team's opencode.json names itself
+ * (comments allowed); empty when the file is absent, unreadable or names none.
+ */
+export function openCodeFileProvider(projectDir: string): { region?: string; profile?: string } {
+  try {
+    const value = Bun.JSONC.parse(
+      readFileSync(join(projectDir, rootIntegrationTarget(projectDir, "opencode.json")), "utf-8").replace(/^\uFEFF/, ""),
+    );
+    const providers = isRecord(value) && isRecord(value.provider) ? value.provider : {};
+    const bedrock = isRecord(providers["amazon-bedrock"]) ? providers["amazon-bedrock"] : {};
+    const options = isRecord(bedrock.options) ? bedrock.options : {};
+    return {
+      ...(typeof options.region === "string" ? { region: options.region } : {}),
+      ...(typeof options.profile === "string" ? { profile: options.profile } : {}),
+    };
+  } catch {
+    return {};
+  }
+}
+
 function writeOpenCodeProvider(
   projectionRoot: string,
   record: ProvidersRecord,
 ): void {
   if (!record.opencodeDefault) return;
   const path = join(projectionRoot, "opencode.json");
+  if (!existsSync(path)) return;
   const value = openCodeJsonOrNull(path);
-  if (value === null) return;
+  if (value === null) {
+    // The team's own file with comments (a copy's own tree): set the two
+    // leaves in place and keep everything else, comments included.
+    const current = readFileSync(path, "utf-8");
+    const options = { region: record.region, ...(record.profile ? { profile: record.profile } : {}) };
+    const merged = mergeJsonEntries(
+      current,
+      JSON.stringify({ provider: { "amazon-bedrock": { options } } }),
+      { kind: "none" },
+      false,
+      openCodeProviderEntryIds(record),
+    );
+    if (!("conflict" in merged) && merged.text !== current) writeFileSync(path, merged.text);
+    return;
+  }
   const providers = isRecord(value.provider) ? { ...value.provider } : {};
   const existing = isRecord(providers["amazon-bedrock"])
     ? providers["amazon-bedrock"]
@@ -1565,7 +1630,17 @@ function clearOpenCodeProvider(
   const path = join(projectionRoot, "opencode.json");
   if (!existsSync(path)) return;
   const value = openCodeJsonOrNull(path);
-  if (value === null || !isRecord(value.provider)) return;
+  if (value === null) {
+    // The team's own file with comments (a copy's own tree): remove the two
+    // leaves the previous choice wrote, while they still hold its values, the
+    // same comment-keeping way they were set.
+    if (previousProvider?.provider !== "amazon-bedrock" || previousProvider.opencodeDefault !== true || !previousProvider.region) return;
+    const current = readFileSync(path, "utf-8");
+    const next = removeJsonEntries(current, openCodeProviderEntryHashes(previousProvider));
+    if (next !== null && next !== current) writeFileSync(path, next);
+    return;
+  }
+  if (!isRecord(value.provider)) return;
   const providers = { ...value.provider };
   if (!openCodeProviderMatchesRecord(
     providers["amazon-bedrock"],
@@ -1682,7 +1757,7 @@ export function providerFiles(
     } else if (harness === "opencode") {
       files.push({
         setting: "opencode project configuration",
-        file: "opencode.json",
+        file: rootIntegrationTarget(projectDir, "opencode.json"),
       });
     }
     return files.map((entry) => ({
@@ -1705,7 +1780,7 @@ export function providerFiles(
   } else if (harness === "opencode" && record.opencodeDefault) {
     files.push({
       setting: "amazon-bedrock provider options",
-      file: "opencode.json",
+      file: rootIntegrationTarget(projectDir, "opencode.json"),
     });
   }
   return files.map((entry) => ({
@@ -2192,7 +2267,7 @@ export function providerSurfaceIssues(
           }
         }
       } else if (harness === "opencode" && record.provider === "other") {
-        const path = join(projectDir, "opencode.json");
+        const path = join(projectDir, rootIntegrationTarget(projectDir, "opencode.json"));
         const value = readTeamJsonFile(path) as Record<string, unknown>;
         const providers = isRecord(value.provider) ? value.provider : {};
         if (Object.hasOwn(providers, "amazon-bedrock")) {
@@ -2261,7 +2336,7 @@ export function providerSurfaceIssues(
         }
       }
     } else if (harness === "opencode" && record.opencodeDefault) {
-      const path = join(projectDir, "opencode.json");
+      const path = join(projectDir, rootIntegrationTarget(projectDir, "opencode.json"));
       const value = readTeamJsonFile(path) as Record<string, unknown>;
       const providers = isRecord(value.provider) ? value.provider : {};
       const bedrock = isRecord(providers["amazon-bedrock"]) ? providers["amazon-bedrock"] : {};
@@ -2584,7 +2659,7 @@ export function trustFilesForHarness(
   if (harness === "copilot") {
     files.push(join(projectDir, ".github", "hooks", "aidlc.json"), copilotConfigPath());
   }
-  if (harness === "opencode") files.push(join(projectDir, "opencode.json"));
+  if (harness === "opencode") files.push(join(projectDir, rootIntegrationTarget(projectDir, "opencode.json")));
   return [...new Set(files)];
 }
 
@@ -2911,7 +2986,10 @@ function instructionStates(
       state: "missing",
     }];
   }
-  const states: InstructionState[] = tracked.map(({ path, contribution }) => {
+  const states: InstructionState[] = tracked.map(({ path: key, contribution }) => {
+    // The team's file the record's entries live in (the opencode.jsonc a team
+    // keeps, for opencode.json); AI-DLC's shipped part stays under the key.
+    const path = rootIntegrationTarget(projectDir, key);
     if (path === onboardingPath && onboardingConflict) {
       return { path, kind: "whole-file", state: "conflict" };
     }
@@ -2924,11 +3002,21 @@ function instructionStates(
       };
     }
     const content = readFileSync(target);
+    // A line the person wrote in place of the onboarding's title is theirs,
+    // and config keeps it, so it is not a change to AI-DLC's text (#2058).
+    const ownTitleOnly = (text: string, hash: string): boolean =>
+      ownTitleLine(text, (restored) =>
+        // A space switch may also have pointed its include lines elsewhere.
+        [restored, withSpace(restored, "default")].some((form) => sha256Matching(form, [hash]) === hash)
+      ) !== null;
     if (contribution.policy === "whole-file") {
       return {
         path,
         kind: contribution.policy,
-        state: sha256Matching(content, [contribution.hash]) === contribution.hash ? "intact" : "conflict",
+        state: sha256Matching(content, [contribution.hash]) === contribution.hash ||
+            (path === onboardingPath && ownTitleOnly(content.toString("utf-8"), contribution.hash))
+          ? "intact"
+          : "conflict",
       };
     }
     if (contribution.policy === "json-entries") {
@@ -2936,8 +3024,8 @@ function instructionStates(
       // there; everything else in it is theirs.
       let shipped: string;
       try {
-        assertProjectionPathHasNoSymlinks(projectDir, `${harnessDir}/tools/data/root-blocks/${path}`);
-        shipped = readFileSync(join(projectDir, harnessDir, "tools", "data", "root-blocks", path), "utf-8");
+        assertProjectionPathHasNoSymlinks(projectDir, `${harnessDir}/tools/data/root-blocks/${key}`);
+        shipped = readFileSync(join(projectDir, harnessDir, "tools", "data", "root-blocks", key), "utf-8");
       } catch {
         return { path, kind: contribution.policy, state: "intact" };
       }
@@ -2967,7 +3055,12 @@ function instructionStates(
     return {
       path,
       kind: contribution.policy,
-      state: sha256Matching(block, [contribution.hash]) === contribution.hash ? "intact" : "conflict",
+      state: sha256Matching(block, [contribution.hash]) === contribution.hash ||
+          // A space switch pointed its include lines at another space.
+          sha256Matching(withSpace(block, "default"), [contribution.hash]) === contribution.hash ||
+          ownTitleOnly(block, contribution.hash)
+        ? "intact"
+        : "conflict",
     };
   });
   if (onboardingPath && !onboardingHash) {
@@ -3532,7 +3625,12 @@ function changedFrameworkFiles(
     }
     if (regular) {
       const content = readFileSync(path);
-      if (sha256Matching(content, [hash]) === hash || content.includes("generated-by: aidlc-runner-gen")) continue;
+      if (
+        sha256Matching(content, [hash]) === hash ||
+        // A space switch pointed its include lines at another space.
+        sha256Matching(withSpace(content.toString("utf-8"), "default"), [hash]) === hash ||
+        content.includes("generated-by: aidlc-runner-gen")
+      ) continue;
     }
     changed.push(rel);
   }

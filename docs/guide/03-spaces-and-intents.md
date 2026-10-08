@@ -249,6 +249,11 @@ space's ambient rules the harness delivers next. This increment supports
 concurrent intents within one space; concurrent multi-space ambient method
 delivery remains future work.
 
+That re-pointing is AI-DLC's own change, so `aidlc config` never reads it as a
+local edit: a refresh after a space switch plans no conflict, leaves the
+re-pointed files as they are, and writes a file the new release changed at the
+selected space.
+
 On POSIX, the Codex adapter pins the validated hook payload session into every
 core-hook child and Bash command, so macOS sandbox denial of `ps` does not weaken
 Codex workflow selection. Codex 0.160 and later also give every command the

@@ -490,7 +490,8 @@ describe("t180 verb-intercept turn-clock + read-only/nav latch", () => {
         readFileSync(forwardingPath(dir), "utf-8"),
       ) as { turn?: number; raw?: string; args?: string[] };
       expect(forwarding.turn).toBe(1);
-      expect(forwarding.raw).toBe(raw);
+      // sh keeps the typed text; PowerShell gets the same words in its own single-quoted form.
+      expect(forwarding.raw).toBe(process.platform === "win32" ? "bugfix 'Fix duplicate todos'" : raw);
       expect(forwarding.args).toEqual(["bugfix", "Fix duplicate todos"]);
     } finally {
       rmSync(dir, { recursive: true, force: true });

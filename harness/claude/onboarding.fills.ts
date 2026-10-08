@@ -18,7 +18,9 @@ const fills: OnboardingFills = {
   (G1 PASS) — see tmp/workspace-vision/at-import-spike/RESULTS.md.
 -->
 
-# Project Name <!-- Replace with your project name -->
+# AI-DLC
+
+Your project's name, notes and rules go in \`aidlc/spaces/default/memory/project.md\`. Every AI tool in this project reads it.
 
 This project uses AI-DLC (AI-Driven Development Life Cycle) for structured development. The workspace shell ships in \`.claude/\` (no setup command); describe what you want to build and it sets up the workflow for you. Run \`/aidlc\` followed by a scope or project description to begin. Run \`/aidlc --doctor\` to validate your setup. Run \`/aidlc --version\` to print the framework version. Run \`/aidlc --stage <slug>\` to jump to a specific stage, \`/aidlc --phase <name>\` to jump to a phase, \`/aidlc --depth <level>\` to override depth, \`/aidlc --test-strategy <level>\` to override test volume, \`/aidlc --review <class>\` to cap stage reviews (adversarial, advisory, none). Run \`/aidlc compose "<task>"\` to get a plan tailored to that task (works up front, from a scan report via \`--report <path>\`, and mid-workflow to re-shape the pending stages - every proposal stops at an approve/edit/reject gate).`,
 
@@ -26,7 +28,7 @@ This project uses AI-DLC (AI-Driven Development Life Cycle) for structured devel
 - **Model provider**: The shipped \`.claude/settings.json\` does not select a provider, model, region, or reasoning effort. Claude Code keeps your existing subscription, API, Bedrock, or enterprise-gateway configuration. Run \`{{INVOKE}} config providers\` to record and validate a project provider choice.
 - **MCP servers (optional)**: \`.mcp.json\` (project root, beside \`.claude/\`) declares the MCP servers available to the framework. \`context7\` (library/SDK documentation lookups) is an HTTP server that reads \`CONTEXT7_API_KEY\` from your environment. The four AWS servers (\`aws-mcp\`, \`aws-pricing\`, \`aws-iac\`, \`aws-serverless\`) launch via \`uvx\` and authenticate with your standard AWS credential chain — they require an AWS account with IAM credentials available to your shell (install \`uv\`/\`uvx\` via \`curl -fsSL https://astral.sh/uv/install.sh | sh\`). All credentials flow through environment passthrough; no keys are committed. Servers you have no credentials for are simply unavailable and never block a workflow. Declared servers are provisioned to the session and **inherited by every agent** — there is no per-agent grant; agents that should be prevented from using a server are narrowed via their \`tools:\` allowlist with fully-qualified \`mcp__<server>__<tool>\` ids.`,
 
-    prereq_bullets_tail: `- **Settings**: \`.claude/settings.json\` pre-approves the framework's own work (file edits inside the project, Task, WebSearch, and the bun .claude/tools/ engine commands) so workflows run without per-call permission prompts; a project's own build or test commands prompt once.
+    prereq_bullets_tail: `- **Settings**: \`.claude/settings.json\` pre-approves the framework's own work (file edits inside the project, Task, WebSearch, and the AI-DLC engine commands) so workflows run without per-call permission prompts; a project's own build or test commands prompt once.
 - **Personal overrides**: Copy \`.claude/settings.local.json.example\` to \`.claude/settings.local.json\` (gitignored) to override the model or set environment variables without affecting shared settings.`,
 
     hook_permissions_note: `After copying the project shell, approve its hooks when Claude Code prompts or through \`/hooks\`, then fully restart Claude Code; \`/clear\` is not enough. Organization-managed policy can block project hooks, and \`/aidlc --doctor\` detects the supported managed-policy restriction.`,

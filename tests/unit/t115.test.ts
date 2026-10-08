@@ -84,19 +84,24 @@ import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import {
   appendFileSync,
+  cpSync,
   existsSync,
   mkdirSync,
+  readdirSync,
   readFileSync,
+  rmSync,
   writeFileSync,
 } from "node:fs";
 import { dirname, join } from "node:path";
 import {
   auditLockDir,
+  markHumanTurn,
   readAllAuditShards,
   reviewArtifactFingerprint,
   renderReviewVerdictCommand,
   resolveStage,
   scopeCostSummary,
+  turnEndIsOpen,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import {
@@ -1668,6 +1673,9 @@ describe("t115 reviewer precondition (report refuses approve without a recorded 
 
     const stateBefore = readFileSync(statePath(p), "utf-8");
     const auditBefore = readAllAuditShards(p);
+    // The person's message that led here: the engine's answer decides whether
+    // the agent's turn ends after it.
+    markHumanTurn(p);
     const result = orchestrate(
       [
         "report",
@@ -1686,8 +1694,50 @@ describe("t115 reviewer precondition (report refuses approve without a recorded 
       '"reason_codes":["REVIEW_EVIDENCE_MISSING"]',
     );
     // First time, a fresh review is the agent's own work: nothing is put to
-    // the person, and no question is published for them to answer.
+    // the person, and no question is published for them to answer. The turn
+    // goes on: the agent requests the review itself instead of stopping with
+    // nothing on screen until the person types "carry on".
     expect(result.out).toContain('"agent_work":true');
+    expect(turnEndIsOpen(p)).toBe(false);
+    // The Stop hook hands the work back instead of letting the agent go quiet:
+    // Claude Code's Stop through the dispatcher, and Codex's through its adapter
+    // (the same core hook). Its probe runs the project's own tree.
+    for (const tree of ["claude", "codex"] as const) {
+      const dir = tree === "claude" ? ".claude" : ".codex";
+      if (!existsSync(join(p, dir))) cpSync(join(REPO_ROOT, "dist", tree, dir), join(p, dir), { recursive: true });
+    }
+    // Each stop is its own turn's event (Codex replays a byte-identical delivery).
+    let stops = 0;
+    const stop = (tree: "claude" | "codex") => spawnSync(BUN, tree === "claude"
+      ? [join(TOOLS_DIR, "aidlc.ts"), "engine", "hook", "continue-workflow"]
+      : [join(p, ".codex", "hooks", "aidlc-codex-adapter.ts"), "continue-workflow"], {
+      cwd: p,
+      input: JSON.stringify({
+        hook_event_name: "Stop", stop_hook_active: false, session_id: "t115-agent-work", cwd: p, turn_id: `t${++stops}`,
+      }),
+      encoding: "utf-8",
+      env: {
+        ...process.env,
+        CLAUDE_PROJECT_DIR: tree === "claude" ? p : undefined,
+        CODEX_THREAD_ID: undefined,
+        CODEX_SESSION_ID: undefined,
+        AIDLC_STOP_HOOK_PROBE: undefined,
+      },
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+    });
+    const traces = () => {
+      const traceDir = join(seededRecordDir(p), ".aidlc-engine", "hooks-health");
+      return existsSync(traceDir)
+        ? readdirSync(traceDir).map((name) => `${name}:\n${readFileSync(join(traceDir, name), "utf-8")}`).join("\n")
+        : "(no hooks-health dir)";
+    };
+    for (const tree of ["claude", "codex"] as const) {
+      // Each tree is one agent's stop: the hook's no-progress block count is
+      // per project, so the second tree starts it afresh.
+      rmSync(join(seededRecordDir(p), ".aidlc-engine", "stop-hook", "block-count.json"), { force: true });
+      const handedBack = stop(tree);
+      expect(handedBack.stdout, `${tree}: ${handedBack.stderr}\n${traces()}`).toContain('"decision":"block"');
+    }
     expect(result.out).toContain("Request review iteration 1 against the current artifact");
     expect(result.out).not.toContain("Request Changes");
     expect(result.out).not.toContain("Record the verdict for pending review");
@@ -1710,6 +1760,13 @@ describe("t115 reviewer precondition (report refuses approve without a recorded 
     expect(again.out).toContain('Otherwise ask \\"What should change?\\"');
     expect(again.out).not.toContain("Request review iteration 1");
     expect(published()).toBe(true);
+    // A question for the person ends the turn, and the Stop hook lets it.
+    expect(turnEndIsOpen(p)).toBe(true);
+    for (const tree of ["claude", "codex"] as const) {
+      const atQuestion = stop(tree);
+      expect(atQuestion.status, `${tree}: ${atQuestion.stderr}`).toBe(0);
+      expect(atQuestion.stdout, `${tree}: ${traces()}`).not.toContain('"decision":"block"');
+    }
   }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   // R6 (blocker 1): the guard lives in handleApprove, so a DIRECT

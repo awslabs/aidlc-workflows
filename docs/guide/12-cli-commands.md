@@ -656,6 +656,13 @@ Read the current integration state and claim registry, then print the claimable,
 claimed, and waiting Unit sets as JSON. This is a claim-time/status surface and
 may contact the configured git remote.
 
+Team mode reads the integration branch from the `## Way of Working` section of
+`project.md`, then `team.md`, then `org.md`: the first line that names the
+integration, base or merge-target branch in backticks wins, whatever the branch
+is called. When no layer names one, the remote's default branch is used. A named
+branch that git cannot use, or that is not on the remote, is reported with the
+file it came from instead of being replaced by another layer's choice.
+
 ```
 /aidlc unit status
 ```
@@ -1705,7 +1712,7 @@ aidlc engine log answers --stage requirements-analysis
 aidlc engine audit history
 ```
 
-`log answers` returns JSON with paired answers, open questions, and ambiguous answers.
+`log answers` returns JSON with paired answers, open questions, and the rare ambiguous answer (one with no question before it, or two writers tied at one second). One reply closes every question logged for the menu it answered.
 `audit history` returns a JSON timeline of events and free-form notes.
 
 An answer whose text holds a character a shell acts on (`$`, a backtick, a quote,
@@ -1916,12 +1923,17 @@ the Construction stage's own check, returns the line. When the Unit's own review
 did not finish (no verdict yet, or NOT-READY with a pass left), `rereview` carries
 `unfinished` and names the request that finishes it. If the person says to approve
 the Unit as it is, add `--over-unfinished-review` to `verify`: under Guard Policy
-`relaxed` and `off`, with the person's words on record and a review that was asked
-for, the Unit is verified and asked about once (`review_not_finished.question`),
-and its approval records the review as not finished. Under `strict`, or a team's
-locked `strict`, the review finishes first. A Unit review never asked for is
-required under every Guard Policy: `rereview` carries `first` and names its
-first request:
+`off`, `relaxed`, or a `strict` set for the work, with the person's words on record
+and a review that was asked for, the Unit is verified and asked about once
+(`review_not_finished.question`), and its approval records the review as not
+finished, as at a stage gate. A verdict for that review that comes in later is
+recorded and leaves the Unit approved. Under a team's locked `strict` the review finishes
+first, without asking the person. A Unit whose review ended in the NOT-READY
+fallback the conductor records when a retried review still wrote nothing is asked
+about and approved the same way, with no option to pass. A Unit review never asked
+for in this run of the Unit's work (after a jump back or a reopen, a review from
+before does not count) is required under every Guard Policy: `rereview` carries
+`first` and names that run's first request:
 
 ```bash
 aidlc engine bolt checkpoint --action status --unit "<Unit>" --kind <unit|skeleton>

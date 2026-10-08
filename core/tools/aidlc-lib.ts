@@ -3435,11 +3435,13 @@ function treeGeneration(
         return false;
       }
       const dotnetProject = skipGenerated && holdsDotnetProject(names);
+      const dependencyDirs = skipGenerated ? manifestDependencyDirs(names) : new Set<string>();
       for (const name of names) {
         const childPortable = portable === "." ? name : `${portable}/${name}`;
         const generatedDir = skipGenerated && (
           SOURCE_FINGERPRINT_HARD_EXCLUDED_DIRS.has(name) ||
-          (dotnetProject && SOURCE_FINGERPRINT_DOTNET_OUTPUT_NAMES.has(name))
+          (dotnetProject && SOURCE_FINGERPRINT_DOTNET_OUTPUT_NAMES.has(name)) ||
+          dependencyDirs.has(name)
         );
         const generatedFile = skipGenerated && sourceFingerprintHardExcludedFile(name);
         if (!visit(join(absPath, name), childPortable, generatedDir, generatedFile)) return false;
@@ -14795,6 +14797,9 @@ export interface PendingReviewProgress {
   iteration: number;
   recovery: boolean;
   verificationFailed?: boolean;
+  /** The NOT-READY is the fallback no reviewer gave (reviewCompletionDidNotFinish):
+   *  the pass left is a review that did not finish, with nothing to repair. */
+  didNotFinish?: true;
 }
 
 export interface StaleReviewProgress {
@@ -14873,6 +14878,10 @@ export interface FreshReviewReceipts {
   /** Review requests in this attempt that have no verdict yet: "" for the
    *  stage-level request, else the Unit's name. */
   awaitingVerdict?: Set<string>;
+  /** Scopes ("" for the stage, else the Unit) whose fresh terminal verdict is
+   *  the NOT-READY fallback no reviewer gave (reviewCompletionDidNotFinish).
+   *  Read only beside stageVerdict / unitVerdicts. */
+  unfinishedVerdicts?: Set<string>;
   /**
    * Units with a merge-confirmed Bolt attempt. A name-only attempt is
    * confirmed by its BOLT_COMPLETED row; a slug-backed (worktree) attempt is
@@ -17044,6 +17053,23 @@ export function completionCarriesVerifiedReview(
   ) !== null;
 }
 
+/** The REVIEW_COMPLETED field the logger writes, as `no`, on the NOT-READY
+ *  fallback recorded when a retried review still wrote nothing. */
+export const REVIEW_FINISHED_FIELD = "Review Finished";
+
+/**
+ * Whether a REVIEW_COMPLETED row is that fallback: no reviewer gave its
+ * verdict, so the review did not finish. A row recorded before the field is
+ * known by its empty review record. Read for what the person is asked and
+ * what their approval records; it changes no readiness and no fingerprint.
+ */
+export function reviewCompletionDidNotFinish(projectDir: string, completionBlock: string): boolean {
+  const marked = auditBlockField(completionBlock, REVIEW_FINISHED_FIELD);
+  if (marked !== null) return marked === "no";
+  if (auditBlockField(completionBlock, "Verdict") !== "NOT-READY") return false;
+  return pairedReviewRecordForCompletion(projectDir, completionBlock)?.body === "";
+}
+
 /**
  * The review each scope of a stage most recently recorded, in the stage's
  * whole history: the record the newest PAIRED REVIEW_COMPLETED row names (null
@@ -18949,6 +18975,7 @@ export function freshReviewReceipts(
     stagePending: null,
     unitPending: new Map(),
     awaitingVerdict: new Set(),
+    unfinishedVerdicts: new Set(),
     mergedBoltUnits: new Set(),
     openBoltUnits: new Set(),
     acceptedChanges: [],
@@ -19052,6 +19079,8 @@ export function freshReviewReceipts(
   // an ambiguous matching path fails closed by clearing every unit receipt.
   const recordedRepos = new Set(intentRepos(projectDir));
   const unitVerdicts = new Map<string, ReviewVerdict>();
+  // Read beside the verdicts above: which of them no reviewer gave.
+  const unfinishedVerdicts = new Set<string>();
   const unitStale = new Set<string>();
   const unitStaleProgress = new Map<string, StaleReviewProgress>();
   const unitIterations = new Map<string, number>();
@@ -19412,6 +19441,8 @@ export function freshReviewReceipts(
         };
       }
     }
+    // The NOT-READY fallback no reviewer gave: its review did not finish.
+    const didNotFinish = verdict === "NOT-READY" && reviewCompletionDidNotFinish(projectDir, e.block);
     if (terminalVerdict === null) {
       if (verdict !== "NOT-READY" || !fingerprintUsable) continue;
       const pending: PendingReviewProgress = fingerprintMatches
@@ -19419,6 +19450,7 @@ export function freshReviewReceipts(
             state: "repair-required",
             iteration,
             recovery: request.recovery,
+            ...(didNotFinish ? { didNotFinish: true as const } : {}),
           }
         : {
             state: "outstanding",
@@ -19474,6 +19506,8 @@ export function freshReviewReceipts(
       // (an entry exists only under relaxed; nothing is read here).
       acceptedArtifactChanges.delete(unit ?? "");
     }
+    if (didNotFinish) unfinishedVerdicts.add(unit ?? "");
+    else unfinishedVerdicts.delete(unit ?? "");
     if (unit) {
       unitVerdicts.set(unit, terminalVerdict);
       unitStale.delete(unit);
@@ -19588,14 +19622,27 @@ export function freshReviewReceipts(
     !unitBound &&
     isRelaxed()
   ) {
+    // The paths that moved since the review, when its listing was kept: the
+    // person's line names them, the way a Unit's own change is named below.
+    const paths = workspaceSourceChangedPaths(
+      projectDir,
+      stage.slug,
+      newestSourceFingerprint,
+      currentSourceState,
+    );
     acceptedChanges.push({
       checkpoint: "review-receipt",
       stage: stage.slug,
       unit: newestSourceUnit,
-      changed: null,
+      // A moved fingerprint with no path to name (an excluded file, a
+      // manifest-only rewrite) is the no-paths case, not an empty list.
+      changed: paths !== null && paths.length > 0 ? paths : null,
       recorded: newestSourceFingerprint,
       current: currentSourceFingerprint,
-      notice: relaxedReviewNotice("The project's code", newestSourceUnit),
+      notice: relaxedReviewNotice(
+        paths === null || paths.length === 0 ? "The project's code" : renderChangedPaths(paths),
+        newestSourceUnit,
+      ),
     });
   }
 
@@ -19679,11 +19726,17 @@ export function freshReviewReceipts(
             // since): the verdict stands, the new claims count, said once.
             claimModel = { claims: manifest.claims, prefixes: manifest.prefixes };
             unitSourceKept.add(unit);
+            // The paths that differ between the listing the reviewer saw and
+            // what the Unit claims now.
+            const paths = sourceListingChangedPaths(
+              recordedSourceListingUnderCurrentBoundary(snapshot.listing, currentSourceListing),
+              restrictSourceListing(currentSourceListing, claimModel),
+            );
             acceptedChanges.push({
               checkpoint: "review-receipt",
               stage: stage.slug,
               unit,
-              changed: null,
+              changed: paths.length > 0 ? paths : null,
               recorded: receipt.fingerprint,
               current: unitSourceFingerprint(currentSourceListing, claimModel, manifest.rawBytesSha256),
               notice: `The ${unitPlainName(unit)} Unit's list of files changed after it was reviewed; carrying on.`,
@@ -19919,6 +19972,7 @@ export function freshReviewReceipts(
     stagePending,
     unitPending,
     awaitingVerdict,
+    unfinishedVerdicts,
     mergedBoltUnits,
     openBoltUnits,
     acceptedChanges: [
@@ -20127,11 +20181,18 @@ export function workspaceSourceExclusionPathspecs(
 // so one that cannot be hashed fails the whole source-boundary bind and refuses
 // Plan Approval while nothing a human authored has changed. Like the other
 // names here it is skipped unconditionally in both modes — these cache dirs
-// never hold application source.
+// never hold application source. `.idea` (JetBrains' project state, whose
+// workspace.xml is rewritten on every IDE action), `.codegraph` (a local code
+// indexer's database and the lock its daemon holds) and `DerivedData` (Xcode's
+// build output when a project keeps it in-tree) are the same kind of tree: the
+// first moved the fingerprint on every save, the other two made the boundary
+// unbindable (an unreadable lock, a tree past the walk's budget).
 const SOURCE_FINGERPRINT_HARD_EXCLUDED_NAMES = [
   ".cache",
+  ".codegraph",
   ".git",
   ".gradle",
+  ".idea",
   ".mypy_cache",
   ".next",
   ".nuxt",
@@ -20140,6 +20201,7 @@ const SOURCE_FINGERPRINT_HARD_EXCLUDED_NAMES = [
   ".tox",
   ".venv",
   ".vs",
+  "DerivedData",
   "__pycache__",
   "node_modules",
   "venv",
@@ -20364,6 +20426,35 @@ const SOURCE_FINGERPRINT_DOTNET_OUTPUT_NAMES = new Set(["bin", "obj", "out"]);
 const DOTNET_PROJECT_FILE_RE = /\.(?:cs|fs|vb)proj$/i;
 function holdsDotnetProject(names: readonly string[]): boolean {
   return names.some((name) => DOTNET_PROJECT_FILE_RE.test(name));
+}
+// A package manager fills a fixed directory beside the manifest it reads:
+// Composer's vendor/ beside composer.json (one tree per sub-project in a
+// monorepo; a reporter's held over a gigabyte, and every freshness walk read
+// all of it), `go mod vendor` into vendor/ beside go.mod, CocoaPods' Pods/
+// beside a Podfile, Mix's deps/ and _build/ beside mix.exs, and so on down the
+// table. Elsewhere these names can hold real source (vendor/ often holds the
+// submodules C projects keep there), so each is conditional only beside its
+// manifest; a registered path under it is bound again. One row per manifest:
+// its file name, then the directories it owns in the same directory. Bundler's
+// vendor/bundle is not a row: it sits two levels below its Gemfile, and Rails
+// keeps real source in vendor/assets.
+const SOURCE_FINGERPRINT_MANIFEST_DEPENDENCY_DIRS: ReadonlyMap<string, ReadonlySet<string>> = new Map([
+  ["composer.json", new Set(["vendor"])],
+  ["go.mod", new Set(["vendor"])],
+  ["Podfile", new Set(["Pods"])],
+  ["mix.exs", new Set(["deps", "_build"])],
+  ["pubspec.yaml", new Set([".dart_tool"])],
+  ["bower.json", new Set(["bower_components"])],
+  ["Gemfile", new Set([".bundle"])],
+  ["stack.yaml", new Set([".stack-work"])],
+]);
+/** The dependency directories the manifests among `names` own in that directory. */
+function manifestDependencyDirs(names: readonly string[]): ReadonlySet<string> {
+  const owned = new Set<string>();
+  for (const name of names) {
+    for (const dir of SOURCE_FINGERPRINT_MANIFEST_DEPENDENCY_DIRS.get(name) ?? []) owned.add(dir);
+  }
+  return owned;
 }
 const SOURCE_FINGERPRINT_REGISTRY = ".aidlc-source-paths.json";
 
@@ -22816,11 +22907,20 @@ function filesystemSourceIdentity(
       entries.sort((a, b) =>
         a.name < b.name ? -1 : a.name > b.name ? 1 : 0
       );
-      const dotnetProject = holdsDotnetProject(entries.map((entry) => entry.name));
+      const names = entries.map((entry) => entry.name);
+      const dotnetProject = holdsDotnetProject(names);
+      const dependencyDirs = manifestDependencyDirs(names);
       // A tracked output tree deleted on disk keeps HEAD's copy too.
       if (dotnetProject && dotnetOutputs && snapshotEligible) {
         for (const name of SOURCE_FINGERPRINT_DOTNET_OUTPUT_NAMES) {
-          if (!entries.some((entry) => entry.name === name)) {
+          if (!names.includes(name)) {
+            excludedOutputPathspecs.add(`:(top,literal)${snapshotRel ? `${snapshotRel}/` : ""}${name}`);
+          }
+        }
+      }
+      if (snapshotEligible) {
+        for (const name of dependencyDirs) {
+          if (!names.includes(name)) {
             excludedOutputPathspecs.add(`:(top,literal)${snapshotRel ? `${snapshotRel}/` : ""}${name}`);
           }
         }
@@ -22910,12 +23010,15 @@ function filesystemSourceIdentity(
           SOURCE_FINGERPRINT_DOTNET_OUTPUT_NAMES.has(entry.name);
         dotnetOutputSeen ||= dotnetOutput;
         const earlierOutput = dotnetOutput && !dotnetOutputs;
+        const manifestDependency =
+          (entry.isDirectory() || entry.isSymbolicLink()) &&
+          dependencyDirs.has(entry.name);
         const conditionalBoundary =
           (entry.isDirectory() || entry.isSymbolicLink()) &&
-          (SOURCE_FINGERPRINT_CONDITIONAL_DIRS.has(entry.name) || (dotnetOutput && dotnetOutputs));
+          (SOURCE_FINGERPRINT_CONDITIONAL_DIRS.has(entry.name) || (dotnetOutput && dotnetOutputs) || manifestDependency);
         // No static glob names this directory, so the snapshot index resets it
         // by path; a registered path is re-added after the reset.
-        if (conditionalBoundary && dotnetOutput && snapshotEligible && !entry.isSymbolicLink()) {
+        if (conditionalBoundary && (dotnetOutput || manifestDependency) && snapshotEligible && !entry.isSymbolicLink()) {
           excludedOutputPathspecs.add(`:(top,literal)${childSnapshotRel}`);
         }
         if (
@@ -23654,7 +23757,12 @@ export function normalizeManifestSourcePath(path: string): { path: string; prefi
   if (path.startsWith("/") || /^[A-Za-z]:\//.test(path)) {
     return { reason: "writes[].path must be relative, not absolute" };
   }
-  if (/[*?[\]{}]/.test(path)) return { reason: "writes[].path cannot contain glob syntax" };
+  // A claim is a literal path: brackets and braces are plain characters in a
+  // file name (a Next.js `[id]` route folder, for one). Only `*` and `?`, which
+  // no Windows file name can carry and which read as a pattern, are refused.
+  if (/[*?]/.test(path)) {
+    return { reason: "writes[].path names one file or folder literally (a trailing / claims a folder); * and ? are not accepted" };
+  }
   const inputSegments = path.split("/");
   if (inputSegments.includes("..")) return { reason: "writes[].path cannot contain '..' segments" };
   const prefix = path.endsWith("/");
@@ -23965,10 +24073,11 @@ function currentGitPathMode(
   // The cache accumulates prior single-path additions, but each probe stages
   // and reads only its exact literal path. An earlier path cannot create or
   // change that exact index entry; ordinary directories still have no exact
-  // entry, while embedded repositories remain mode 160000.
+  // entry, while embedded repositories remain mode 160000. Both pathspecs are
+  // literal: git would otherwise read a route folder's `[id]` as a character class.
   const added = spawnSync(
     "git",
-    ["-C", sourceRepoDir, "add", "--", `./${literalPath}`],
+    ["-C", sourceRepoDir, "--literal-pathspecs", "add", "--", `./${literalPath}`],
     {
       env: index.env,
       encoding: "utf-8",
@@ -23978,7 +24087,7 @@ function currentGitPathMode(
   if (added.status !== 0) return { ok: false, mode: null };
   const listed = spawnSync(
     "git",
-    ["-C", sourceRepoDir, "ls-files", "-s", "-z", "--", `./${literalPath}`],
+    ["-C", sourceRepoDir, "--literal-pathspecs", "ls-files", "-s", "-z", "--", `./${literalPath}`],
     {
       env: index.env,
       encoding: "utf-8",
@@ -24708,13 +24817,15 @@ function sourceSnapshotDir(
   return record === null ? null : join(engineDirFor(record), "source-review", stageSlug);
 }
 
-// Read side of the same directory. Snapshots are audit-referenced evidence, so a
-// stage that recorded its baseline before the engine-directory move must still
-// find it: per stage, the legacy directory is used only while the new one is
-// absent. Writers never use this.
-function sourceSnapshotReadDir(
+// Read side of the same directory. Snapshots are audit-referenced evidence, so
+// one recorded before the engine-directory move must still be found after it,
+// however many snapshots the stage has written since: per file, the new
+// location is read when it exists, else the legacy one. A record upgraded
+// mid-run keeps both until the end. Writers never use this.
+function sourceSnapshotReadPath(
   projectDir: string,
   stageSlug: string,
+  fileName: string,
   intent?: string,
   space?: string,
 ): string | null {
@@ -24722,7 +24833,10 @@ function sourceSnapshotReadDir(
   if (current === null) return null;
   const record = recordDir(projectDir, intent, space);
   if (record === null) return null;
-  return engineReadDirFor(record, current, join(LEGACY_SOURCE_REVIEW_DIR, stageSlug));
+  const path = join(current, fileName);
+  if (existsSync(path)) return path;
+  const legacy = join(record, LEGACY_SOURCE_REVIEW_DIR, stageSlug, fileName);
+  return existsSync(legacy) ? legacy : path;
 }
 
 function writeSourceSnapshot(path: string, serialized: string): string {
@@ -24875,10 +24989,11 @@ export function readBaselineSourceSnapshot(
   intent?: string,
   space?: string,
 ): WorkspaceSourceListing | null {
-  const dir = sourceSnapshotReadDir(projectDir, stageSlug, intent, space);
   const hash = validSourceSnapshotFingerprint(fingerprint);
-  if (dir === null || hash === null) return null;
-  const serialized = readSourceSnapshot(join(dir, `baseline-${hash.slice(0, 12)}.tsv`), fingerprint);
+  if (hash === null) return null;
+  const path = sourceSnapshotReadPath(projectDir, stageSlug, `baseline-${hash.slice(0, 12)}.tsv`, intent, space);
+  if (path === null) return null;
+  const serialized = readSourceSnapshot(path, fingerprint);
   return serialized === null ? null : parseSourceListing(serialized);
 }
 
@@ -24893,14 +25008,20 @@ export function readBaselineSourceSnapshot(
 
 const WORKSPACE_SNAPSHOT_HEADER = "workspace";
 
+function workspaceSourceSnapshotName(fingerprint: string): string | null {
+  return /^[0-9a-f]{64}$/.test(fingerprint)
+    ? `${WORKSPACE_SNAPSHOT_HEADER}-${fingerprint.slice(0, 12)}.tsv`
+    : null;
+}
+
 function workspaceSourceSnapshotPath(
   projectDir: string,
   stageSlug: string,
   fingerprint: string,
 ): string | null {
   const dir = sourceSnapshotDir(projectDir, stageSlug);
-  if (dir === null || !/^[0-9a-f]{64}$/.test(fingerprint)) return null;
-  return join(dir, `${WORKSPACE_SNAPSHOT_HEADER}-${fingerprint.slice(0, 12)}.tsv`);
+  const name = workspaceSourceSnapshotName(fingerprint);
+  return dir === null || name === null ? null : join(dir, name);
 }
 
 /** Persist the listing behind one workspace fingerprint; a no-op when it exists. */
@@ -24927,7 +25048,8 @@ export function readWorkspaceSourceSnapshot(
   stageSlug: string,
   fingerprint: string,
 ): WorkspaceSourceListing | null {
-  const path = workspaceSourceSnapshotPath(projectDir, stageSlug, fingerprint);
+  const name = workspaceSourceSnapshotName(fingerprint);
+  const path = name === null ? null : sourceSnapshotReadPath(projectDir, stageSlug, name);
   if (path === null) return null;
   let serialized: string;
   try {
@@ -25095,10 +25217,11 @@ export function readUnitSourceSnapshot(
   unit: string,
   fingerprint: string,
 ): UnitSourceSnapshot | null {
-  const dir = sourceSnapshotReadDir(projectDir, stageSlug);
   const hash = validSourceSnapshotFingerprint(fingerprint);
-  if (dir === null || hash === null || validateUnitName(unit) !== null) return null;
-  const serialized = readSourceSnapshot(join(dir, `unit-${unit}-${hash.slice(0, 12)}.tsv`), fingerprint);
+  if (hash === null || validateUnitName(unit) !== null) return null;
+  const path = sourceSnapshotReadPath(projectDir, stageSlug, `unit-${unit}-${hash.slice(0, 12)}.tsv`);
+  if (path === null) return null;
+  const serialized = readSourceSnapshot(path, fingerprint);
   if (serialized === null) return null;
   const newline = serialized.indexOf("\n");
   if (newline === -1) return null;
@@ -25362,8 +25485,9 @@ export function docsRoot(projectDir: string, intent?: string, space?: string): s
 }
 
 // All record-local framework state lives here. Review audit references retain
-// their exact legacy paths; sensors, hook health, summary authorizations, and
-// source review have read-only directory fallbacks. Everything else is
+// their exact legacy paths; sensors, hook health, and summary authorizations
+// have read-only directory fallbacks, and source-review snapshots fall back per
+// file (sourceSnapshotReadPath). Everything else is
 // transient or derived and is rebuilt at the new path without a fallback.
 // These helpers never create directories.
 export function engineDir(projectDir: string, intent?: string, space?: string): string {
@@ -26232,8 +26356,10 @@ export function personRepliedSincePresentation(
     .some((block) => isReplyTurn({ event: auditBlockField(block, "Event") ?? "", block }));
 }
 
-// What the person typed in any chat since the stage started, after the latest
-// answer the engine recorded, in the order they typed it, or null. These are
+// What the person replied in any chat since the stage started, after the
+// latest answer the engine recorded, in the order they gave it, or null: the
+// words they typed (kept by the human-turn hook) and the labels they picked
+// in a question box (the `Picked` field of their HUMAN_TURN rows). These are
 // replies no answer holds yet: a chat that ended before the agent wrote or
 // logged them leaves them here for the stage's next run. `answered` is the
 // stage's questions and answers already on record, so a later chat knows what
@@ -26246,25 +26372,26 @@ export function keptRepliesSinceStageStart(
 ): { replies: string[]; answered: Array<{ question: string; answer: string }> } | null {
   const shardPath = auditFilePath(projectDir);
   const shard = projectRelativePath(projectDir, shardPath);
-  let records: GateWordsRecord[];
+  let records: GateWordsRecord[] = [];
   let content: string;
   try {
     const dir = gateWordsDir(projectDir);
-    if (!existsSync(dir)) return null;
-    // Every chat's file: the stage may have been asked in an earlier one.
-    records = readdirSync(dir).flatMap((name) => {
-      if (!name.endsWith(".json")) return [];
-      let session: unknown;
-      try {
-        session = (JSON.parse(readRegularFileNoFollowOrThrow(join(dir, name), "gate words", GATE_WORDS_MAX_FILE_BYTES)
-          .toString("utf-8")) as { session?: unknown } | null)?.session;
-      } catch {
-        return [];
-      }
-      const record = typeof session === "string" ? readGateWords(projectDir, session) : null;
-      return record !== null && record.shard === shard && record.messages.length > 0 ? [record] : [];
-    });
-    if (records.length === 0) return null;
+    // Every chat's file: the stage may have been asked in an earlier one. A
+    // chat that only picked in the question box typed nothing and has none.
+    if (existsSync(dir)) {
+      records = readdirSync(dir).flatMap((name) => {
+        if (!name.endsWith(".json")) return [];
+        let session: unknown;
+        try {
+          session = (JSON.parse(readRegularFileNoFollowOrThrow(join(dir, name), "gate words", GATE_WORDS_MAX_FILE_BYTES)
+            .toString("utf-8")) as { session?: unknown } | null)?.session;
+        } catch {
+          return [];
+        }
+        const record = typeof session === "string" ? readGateWords(projectDir, session) : null;
+        return record !== null && record.shard === shard && record.messages.length > 0 ? [record] : [];
+      });
+    }
     content = readAppendOnlyFileNoFollowOrThrow(shardPath, "audit shard").toString("utf-8");
   } catch {
     return null;
@@ -26274,8 +26401,14 @@ export function keptRepliesSinceStageStart(
   let from = 0;
   let answered: Array<{ question: string; answer: string }> = [];
   let asked: string | null = null;
+  // A turn that picked in the question box: where its row ends (the shard size
+  // right after it, which is where words typed in that turn were kept), and
+  // the labels picked. A turn that answered another engine question (where
+  // the work belongs, a switch) is no reply to the stage.
+  const picked: Array<{ end: number; labels: string[] }> = [];
   for (;;) {
     const match = separator.exec(content);
+    const end = match ? match.index + match[0].length : content.length;
     const block = content.slice(start, match ? match.index : content.length).replace(/\r\n/g, "\n");
     const event = auditBlockField(block, "Event");
     const ours = auditBlockField(block, "Stage") === stage.stage &&
@@ -26293,14 +26426,34 @@ export function keptRepliesSinceStageStart(
       }
     } else if (event === "DECISION_RECORDED" && ours) {
       asked = auditBlockField(block, "Decision");
+    } else if (event === "HUMAN_TURN" && auditBlockField(block, "Reply") === null) {
+      const raw = auditBlockField(block, "Picked");
+      let labels: unknown = null;
+      try {
+        labels = raw === null ? null : JSON.parse(raw);
+      } catch {
+        labels = null;
+      }
+      if (Array.isArray(labels)) {
+        const texts = labels.filter((label): label is string => typeof label === "string" && label.trim().length > 0);
+        if (texts.length > 0) picked.push({ end, labels: texts });
+      }
     }
     if (match === null) break;
-    start = match.index + match[0].length;
+    start = end;
   }
   const floor = Buffer.byteLength(content.slice(0, from), "utf-8");
   if (records.some((record) => record.dropped > floor)) return null;
-  const replies = records
-    .flatMap((record) => record.messages.filter((message) => message.offset > floor))
+  const typed = records.flatMap((record) => record.messages.filter((message) => message.offset > floor));
+  const replies = [
+    ...typed,
+    // A turn whose typed words were kept is not handed back twice.
+    ...picked.flatMap(({ end, labels }) => {
+      const offset = Buffer.byteLength(content.slice(0, end), "utf-8");
+      if (offset <= floor || typed.some((message) => message.offset === offset)) return [];
+      return labels.map((text) => ({ offset, text }));
+    }),
+  ]
     .sort((a, b) => a.offset - b.offset)
     .map((message) => message.text);
   return replies.length > 0 ? { replies, answered } : null;
@@ -28987,6 +29140,20 @@ export function memoryStrictHoldsGuardPolicy(
   }
 }
 
+/**
+ * Whether the person's own approval may go over a review that did not finish
+ * (asked for, with no verdict yet), at a stage gate and at a Unit checkpoint
+ * alike. Off, relaxed and a strict set for this piece of work let it; only a
+ * strict the team locks in memory keeps the review required. The one place
+ * that says which setting counts.
+ */
+export function personMayApproveOverUnfinishedReview(
+  projectDir: string,
+  stateContent?: string | null,
+): boolean {
+  return !memoryStrictHoldsGuardPolicy(projectDir, stateContent);
+}
+
 /** Name the memory hold instead of offering a switch that chat cannot change. */
 export function fenceSwitchSentence(
   projectDir: string,
@@ -30069,11 +30236,15 @@ export interface GuardRefusalStreak {
 // of the guard state, how many times it has repeated, and the ask that renders
 // it. Pure with respect to the project: it reads the prior record and writes
 // nothing, which is what an observer (the Stop-hook probe) is allowed to do.
+// With `asRecorded` an unchanged refusal reads as the streak stands, not as the
+// repeat recording it would make: the observer sees the ask the agent holds
+// (its own work the first time), never a question the person was not asked.
 export function guardRefusalStreakView(
   projectDir: string,
   refusal: GuardRefusal,
   attempt: GuardAttemptState,
   resourceFingerprints: ReadonlyArray<string> = [],
+  asRecorded = false,
 ): GuardRefusalStreak & { record: GuardRefusalRecord } {
   const path = guardRefusalPath(projectDir, refusal.stage, refusal.unit);
   const prior = readGuardRefusalRecord(path);
@@ -30111,7 +30282,7 @@ export function guardRefusalStreakView(
   const signature = createHash("sha256")
     .update(JSON.stringify({ stateSignature, codes }), "utf-8")
     .digest("hex");
-  const count = prior?.signature === signature ? prior.count + 1 : 1;
+  const count = prior?.signature === signature ? (asRecorded ? prior.count : prior.count + 1) : 1;
   const record: GuardRefusalRecord = {
     version: 1,
     stateSignature,

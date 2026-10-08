@@ -2074,6 +2074,9 @@ describe("AttemptView projections and refusal streaks", () => {
     const view = guardRefusalStreakView(project, refusalA, attempt);
     expect(view.count).toBe(2);
     expect(guardRefusalStreakView(project, refusalA, attempt).count).toBe(2);
+    // Read as recorded, an unchanged refusal is the streak as it stands: the
+    // ask the agent holds, not the repeat a recording would make.
+    expect(guardRefusalStreakView(project, refusalA, attempt, [], true).count).toBe(1);
   });
 
   test("the recovery question names the stage and the Unit as the person knows them, in plain words", () => {

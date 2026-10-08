@@ -167,6 +167,8 @@ const manifest: HarnessManifest = {
           // The variant whose Guards section did not say that "re-approve when
           // files change" is Guard Policy relaxed.
           "sha256:7d1b6554a2de2b97b8e14f96ec99d218722d18c100de166cb1a5831bb2c11bfc",
+          // The variant whose title asked to be replaced with the project's name (#2058).
+          "sha256:cdfb9d50a7899b4c5a2aa3128d49a2f50c12ee9d3aba13dbe42ff92ad7a2f22e",
         ],
       },
     },

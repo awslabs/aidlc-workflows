@@ -1408,6 +1408,85 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
       expect(eventCount(proj, "QUESTION_ANSWERED")).toBe(3);
     });
 
+    // #2012 F2 (AIDA back-audit): a menu of several questions answered once must
+    // not come back. `log answers` reads an exchange: the questions logged since
+    // the previous answers, closed by the answers logged after them, in the
+    // engine's own row order and with no reading of words. Both menu shapes the
+    // protocol allows land here: N questions then one combined answer, and one
+    // batch question then one answer per pick.
+    function logAnswers(slug: string): { answered: Array<{ question: string; answer: string; answeredAt: string }>; open: Array<{ question: string }>; ambiguous: unknown[] } {
+      const r = guardedLog(proj, ["answers", "--stage", slug]);
+      expect(r.rc, r.out).toBe(0);
+      return JSON.parse(r.out);
+    }
+
+    test("one combined answer closes every question the menu logged before it (#2012 F2)", () => {
+      const slug = field(proj, "Current Stage");
+      recordHumanTurn(proj);
+      for (const question of ["Where does the check live?", "Which notice?", "Rename to Untitled?"]) {
+        expect(guardedLog(proj, ["decision", "--stage", slug, "--decision", question, "--options", "A,B"]).rc).toBe(0);
+      }
+      const r = guardedLog(proj, ["answer", "--stage", slug, "--details", "Q1: In the API handler; Q2: A toast; Q3: Yes"]);
+      expect(r.rc, r.out).toBe(0);
+      const answers = logAnswers(slug);
+      expect(answers.answered.map((pair) => pair.question))
+        .toEqual(["Where does the check live?", "Which notice?", "Rename to Untitled?"]);
+      expect(answers.answered.every((pair) => pair.answer === "Q1: In the API handler; Q2: A toast; Q3: Yes")).toBe(true);
+      expect(answers.open).toEqual([]);
+      expect(answers.ambiguous).toEqual([]);
+    });
+
+    test("one batch question answered pick by pick is one answered question, not two orphans (#2012 F2)", () => {
+      const slug = field(proj, "Current Stage");
+      boxReply(["In the API handler", "A toast", "Yes, to Untitled"]);
+      expect(guardedLog(proj, ["decision", "--stage", slug, "--decision", "Q1-Q3", "--options", "A,B"]).rc).toBe(0);
+      for (const reply of ["Q1: In the API handler", "Q2: A toast", "Q3: Yes, to Untitled"]) {
+        expect(guardedLog(proj, ["answer", "--stage", slug, "--details", reply]).rc).toBe(0);
+      }
+      const answers = logAnswers(slug);
+      expect(answers.answered).toHaveLength(1);
+      expect(answers.answered[0].question).toBe("Q1-Q3");
+      expect(answers.answered[0].answer).toBe("Q1: In the API handler; Q2: A toast; Q3: Yes, to Untitled");
+      expect(answers.open).toEqual([]);
+      expect(answers.ambiguous).toEqual([]);
+    });
+
+    test("two exchanges in a row pair separately, and a question logged after the reply waits", () => {
+      const slug = field(proj, "Current Stage");
+      const row = (event: string, fields: Record<string, string>) => appendAuditEntry(event, { Stage: slug, ...fields }, proj);
+      row("DECISION_RECORDED", { Decision: "Q1", Options: "A, B" });
+      row("QUESTION_ANSWERED", { Details: "a" });
+      row("DECISION_RECORDED", { Decision: "Q2", Options: "A, B" });
+      row("QUESTION_ANSWERED", { Details: "b" });
+      row("DECISION_RECORDED", { Decision: "Q3", Options: "A, B" });
+      const answers = logAnswers(slug);
+      expect(answers.answered.map((pair) => [pair.question, pair.answer])).toEqual([["Q1", "a"], ["Q2", "b"]]);
+      expect(answers.open.map((question) => question.question)).toEqual(["Q3"]);
+      expect(answers.ambiguous).toEqual([]);
+    });
+
+    test("an orphan answer stays ambiguous, scopes pair apart, and a cancelled box leaves its question open", () => {
+      const slug = field(proj, "Current Stage");
+      const row = (event: string, fields: Record<string, string>) => appendAuditEntry(event, { Stage: slug, ...fields }, proj);
+      row("QUESTION_ANSWERED", { Details: "nothing was asked" });
+      row("DECISION_RECORDED", { Decision: "Q1", Options: "A, B" });
+      row("QUESTION_ANSWERED", { Details: "a" });
+      row("DECISION_RECORDED", { Decision: "U1?", Options: "A, B", Unit: "u1" });
+      row("DECISION_RECORDED", { Decision: "Q2", Options: "A, B" });
+      row("QUESTION_ANSWERED", { Details: "u", Unit: "u1" });
+      row("QUESTION_ANSWERED", { Details: "b" });
+      row("DECISION_RECORDED", { Decision: "Qx", Options: "A, B" });
+      row("QUESTION_ANSWERED", { Details: "Cancelled" });
+      const answers = logAnswers(slug);
+      // Scopes pair independently; their order in `answered` is not promised.
+      expect(answers.answered.map((pair) => [pair.question, pair.answer]).sort())
+        .toEqual([["Q1", "a"], ["Q2", "b"], ["U1?", "u"]]);
+      expect(answers.open.map((question) => question.question)).toEqual(["Qx"]);
+      expect(answers.ambiguous).toHaveLength(1);
+      expect((answers.ambiguous[0] as { answer: string; candidates: string[] }).answer).toBe("nothing was asked");
+      expect((answers.ambiguous[0] as { candidates: string[] }).candidates).toEqual([]);
+    });
+
     test("a question box reply backs its answers when each question is logged after it, one at a time", () => {
       const slug = field(proj, "Current Stage");
       boxReply(["In the API handler", "A toast"]);

@@ -216,14 +216,30 @@ describe("log answers", () => {
     }
   });
 
-  test("two open prompts make an answer ambiguous even when its text names one", () => {
+  // One reply answers every question that was open when it arrived: a menu of
+  // several logged questions and one combined answer is one exchange, read in
+  // the engine's row order with no reading of the answer's words (#2012 F2).
+  test("one answer closes every open prompt logged before it in its scope", () => {
     const pd = project();
-    shard(pd, "one", question("Authentication?") + question("Storage?") + answer("Authentication?"));
+    shard(pd, "one", question("Authentication?") + question("Storage?") + answer("Authentication: mTLS; Storage: S3"));
     expect(answers(pd)).toEqual({
       stage: STAGE,
-      answered: [],
-      open: ["Authentication?", "Storage?"].map((q) => ({ question: q, options: ["A", "B"], askedAt: T1 })),
-      ambiguous: [{ answer: "Authentication?", answeredAt: T2, candidates: ["Authentication?", "Storage?"] }],
+      answered: ["Authentication?", "Storage?"].map((q) => ({
+        question: q, options: ["A", "B"], answer: "Authentication: mTLS; Storage: S3", askedAt: T1, answeredAt: T2,
+      })),
+      open: [],
+      ambiguous: [],
+    });
+  });
+
+  test("answers that follow a closed exchange with no new prompt continue it", () => {
+    const pd = project();
+    shard(pd, "one", question("Q1-Q3") + answer("Q1: a", T2) + answer("Q2: b", T3) + answer("Q3: c", T3));
+    expect(answers(pd)).toEqual({
+      stage: STAGE,
+      answered: [{ question: "Q1-Q3", options: ["A", "B"], answer: "Q1: a; Q2: b; Q3: c", askedAt: T1, answeredAt: T3 }],
+      open: [],
+      ambiguous: [],
     });
   });
 

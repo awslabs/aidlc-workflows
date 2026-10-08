@@ -421,8 +421,12 @@ describe("t-unit-receipt-only-step: work genuinely left keeps Run next", () => {
       const byUnit = directiveOf(
         run(ORCHESTRATE, ["report", "--stage", SLUG, "--result", "approved", "--unit", "unit-b", "--user-input", "Approve"], proj).out,
       );
+      // A solo walk's approval is the stage's: it is refused the same way, with
+      // the same step on, never an Ownership error.
       expect(byUnit.kind).toBe("error");
-      expect(String(byUnit.message)).toContain("Unit Ownership: team");
+      expect(String(byUnit.message)).toContain("1 of 2 work items are not complete (unit-b)");
+      expect(String(byUnit.message)).toContain("Run `next`");
+      expect(String(byUnit.message)).not.toContain("Unit Ownership");
     });
   }
 
