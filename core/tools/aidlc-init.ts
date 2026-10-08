@@ -2205,7 +2205,6 @@ function diagnosticWizard(
 // projects, outside this project: it is set on its own, never inside the
 // project's transaction, and only when they ask for it.
 function kiroWorkflowsSwitch(
-  projectDir: string,
   selected: ReturnType<typeof selectedDiagnosticHarness>,
   argv: readonly string[],
   options: ReturnType<typeof globalOptions>,
@@ -2244,7 +2243,7 @@ function kiroWorkflowsSwitch(
   }
   recordKiroWorkflowsAnswer(value);
   return success(
-    enabled ? kiroWorkflowsOnLine() : kiroWorkflowsOffLine(configInvocationFor(projectDir)),
+    enabled ? kiroWorkflowsOnLine() : kiroWorkflowsOffLine(),
     data(value),
   );
 }
@@ -2271,7 +2270,7 @@ function applyKiroWorkflowsAnswer(projectDir: string, off: boolean): string {
     return error instanceof Error ? error.message : String(error);
   }
   recordKiroWorkflowsAnswer("off");
-  return kiroWorkflowsOffLine(invoke);
+  return kiroWorkflowsOffLine();
 }
 
 // The Copilot trust step. Hooks in VS Code need a trusted folder and Chat: Use
@@ -2931,7 +2930,7 @@ function prepareDiagnosticSection(
     return null;
   }
   if (section === "trust" && argv.includes("--kiro-workflows")) {
-    emitResult(kiroWorkflowsSwitch(projectDir, selected, argv, options), options);
+    emitResult(kiroWorkflowsSwitch(selected, argv, options), options);
     return null;
   }
   if (section === "providers" && harnessOwnsModelAccess(selected.harness) && !hasMutationFlags) {

@@ -147,10 +147,10 @@ export const KIRO_WORKFLOWS_QUESTION =
   "running in your chats. Turn Workflows off? It is a Kiro setting for all your projects, and you can turn it " +
   "back on any time.";
 
-/** The line after AI-DLC turned Workflows off (`invoke` names the command to undo it). */
-export function kiroWorkflowsOffLine(invoke: string): string {
+/** The line after AI-DLC turned Workflows off. */
+export function kiroWorkflowsOffLine(): string {
   return "Turned Kiro's Workflows feature off, so AI-DLC's reviews and helpers run in your chats. It is a Kiro " +
-    `setting for all your projects. ${RELOAD_STEP} To turn it back on: \`${invoke} config trust --kiro-workflows on\`.`;
+    `setting for all your projects. ${RELOAD_STEP} You can turn it back on any time.`;
 }
 
 export function kiroWorkflowsOnLine(): string {

@@ -247,7 +247,7 @@ describe("config trust and doctor", () => {
     const first = installKiroIde(yes.env);
     expect(readFileSync(yes.settingsPath, "utf-8")).toBe(ON_WITH_COMMENTS.replace(`"${KEY}": true`, `"${KEY}": false`));
     expect(first.out).toContain("Turned Kiro's Workflows feature off, so AI-DLC's reviews and helpers run in your chats.");
-    expect(first.out).toContain("--kiro-workflows on");
+    expect(first.out).toContain("You can turn it back on any time.");
     withEnv(yes.env, () => expect(readKiroWorkflowsAnswer()).toBe("off"));
 
     const asked = machine(ON_WITH_COMMENTS);
