@@ -8,15 +8,21 @@
 // and relies on native agent resource preload. Kiro IDE does not register this
 // hook because tool-argument delivery is not uniform across supported
 // generations; it instead preloads active memory through always-included
-// workspace steering with live file references.
+// workspace steering that carries the memory text (aidlc-includes.ts).
+//
+// On Claude it also runs at PostToolUse, only to confirm a background launch
+// the PreToolUse input did not announce (see isBackgroundDispatch).
 
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { isAbsolute, join, resolve } from "node:path";
 import {
+  hookStandsOutside,
+  enterHookWorkflow,
   agentsDir,
   authorityFor,
   getField,
+  isAidlcAgentFile,
   markSubagentInflight,
   resolveWorkflowSelection,
   stateFilePath,
@@ -34,9 +40,11 @@ import {
 
 type HookInput = {
   cwd?: string;
+  hook_event_name?: string;
   session_id?: unknown;
   tool_name?: string;
   tool_input?: Record<string, unknown>;
+  tool_response?: unknown;
 };
 
 export type DispatchRuleResult = {
@@ -58,6 +66,7 @@ function isAidlcAgent(value: unknown): value is string {
     typeof value === "string" &&
     /^[a-z0-9][a-z0-9-]*-agent$/.test(value) &&
     existsSync(join(agentsDir(), `${value}.md`)) &&
+    isAidlcAgentFile(join(agentsDir(), `${value}.md`)) &&
     !EXEMPT_AGENTS.has(value)
   );
 }
@@ -269,16 +278,30 @@ export function dispatchHookOutput(
   );
 }
 
+// Whether this call started a background worker. PreToolUse sees a requested
+// `run_in_background: true`. Claude Code also launches an Agent in the
+// background without that flag; only the PostToolUse response confirms it,
+// with status "async_launched". Count that case there, and only there, so no
+// launch is counted twice.
+function isBackgroundDispatch(parsed: HookInput): boolean {
+  const requested = parsed.tool_input?.run_in_background === true;
+  if (parsed.hook_event_name !== "PostToolUse") return requested;
+  const response = parsed.tool_response;
+  return (
+    !requested &&
+    response !== null &&
+    typeof response === "object" &&
+    (response as { status?: unknown }).status === "async_launched"
+  );
+}
+
 function recordAcceptedBackgroundDispatch(
   parsed: HookInput,
   projectDir: string,
 ): void {
   try {
     const toolName = (parsed.tool_name ?? "").toLowerCase();
-    if (
-      !DISPATCH_TOOLS.has(toolName) ||
-      parsed.tool_input?.run_in_background !== true
-    ) {
+    if (!DISPATCH_TOOLS.has(toolName) || !isBackgroundDispatch(parsed)) {
       return;
     }
     const rawSessionId = parsed.session_id;
@@ -328,6 +351,24 @@ export async function run(input: string): Promise<number> {
   const projectDir = isAbsolute(rawProjectDir)
     ? rawProjectDir
     : resolve(process.cwd(), rawProjectDir);
+  // A dispatch in a conversation that has not joined the selected workflow gets
+  // none of that workflow's stage rules and records nothing in its ledger.
+  const workflow = enterHookWorkflow(projectDir, parsed.session_id);
+  try {
+    if (hookStandsOutside(workflow)) return 0;
+    return deliver(parsed, projectDir);
+  } finally {
+    workflow.restore();
+  }
+}
+
+function deliver(parsed: HookInput, projectDir: string): number {
+  // The rules were delivered before the dispatch; afterwards the hook only
+  // records a background launch its input did not announce.
+  if (parsed.hook_event_name === "PostToolUse") {
+    recordAcceptedBackgroundDispatch(parsed, projectDir);
+    return 0;
+  }
   const result = dispatchHookOutput(parsed, projectDir);
   if (result.error) {
     process.stderr.write(`${result.error}\n`);

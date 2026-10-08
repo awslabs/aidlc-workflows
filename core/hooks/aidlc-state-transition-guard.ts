@@ -6,8 +6,11 @@
 // recovery/configuration verbs remain available.
 
 import {
+  hookStandsOutside,
+  enterHookWorkflow,
   type ClaudeCodeHookInput,
   decideFence,
+  guardStandAsideSpeaks,
   guardStoodAsideLine,
   isClaudeCodeHookInput,
   fenceSwitchSentence,
@@ -15,8 +18,10 @@ import {
   parseWorkspaceCommand,
   recordGuardStoodAside,
   resolveProjectDirFromHook,
+  TESTING_POSTURE_SUBCOMMANDS,
   writeGuardStoodAside,
 } from "../tools/aidlc-lib.ts";
+import { LAUNCHER_GLOBAL_FLAGS } from "../tools/aidlc-command.ts";
 import { refuseRuntimeIntegrityViolation } from "./runtime-integrity.ts";
 
 export const BLOCKED_STATE_TRANSITIONS = new Set([
@@ -39,6 +44,11 @@ export const DELEGATED_STATE_MUTATIONS = new Set([
   ...BLOCKED_STATE_TRANSITIONS,
   "set-skeleton-stance",
   "set-construction-iteration",
+  "set-construction-checkpoints",
+  "set-construction-execution",
+  "set-construction-verification-command",
+  "sync-unit-scope-stage",
+  "unit",
   "set-unit-ownership",
   "set-unit-gate-rhythm",
   "acknowledge-compaction",
@@ -49,6 +59,187 @@ export const DELEGATED_STATE_MUTATIONS = new Set([
   "merge",
   "unpark",
 ]);
+
+// The authored engine scripts a delegated agent may not use to change stage
+// status or routing, record an authority-bearing receipt, or apply the
+// person's choice, and their verbs (state's are DELEGATED_STATE_MUTATIONS, the
+// utility's DELEGATED_UTILITY_VERBS). The kiro-ide row, whose calls carry no
+// agent identity, builds each persona's shell deny from delegateAdmittedVerbs
+// below, filtered by these refusals.
+const DELEGATED_ORCHESTRATE_VERBS = ["next", "continue", "report", "park"];
+const DELEGATED_JUMP_VERBS = ["execute", "reopen"];
+// Team Unit coordination: claims, publication, the merge pin, the human merge
+// gate, and landing. merge-status and status are reads.
+const DELEGATED_UNIT_VERBS = ["adopt", "claim", "release", "participate", "publish", "pin", "gate", "land"];
+// Bolt and swarm lifecycle, the Construction autonomy grant, merge holds, and
+// checkpoint decisions; the referee calls belong to the conductor.
+const DELEGATED_BOLT_VERBS = [
+  "start",
+  "complete",
+  "fail",
+  "abort",
+  "set-autonomy",
+  "checkpoint",
+  "swarm-checkpoint",
+  "dispatch-event",
+  "hold-merge",
+  "release-merge",
+];
+const DELEGATED_SWARM_VERBS = ["prepare", "check", "finalize"];
+// Question, review and pipeline-link receipts; answers is a read.
+const DELEGATED_LOG_VERBS = ["decision", "answer", "review", "link"];
+const DELEGATED_LEARNINGS_VERBS = ["persist"];
+const DELEGATED_RUNTIME_VERBS = ["fragment-fork", "fragment-merge"];
+// The Code Generation boundary and the plan-approval fingerprint.
+const DELEGATED_TESTING_POSTURE_VERBS = ["begin", "fingerprint"];
+// Purging a Bolt's parked work deletes its only retained copy; the other
+// worktree verbs are reads or pipeline-deploy's work
+// (DELEGATE_ROLE_ADMITTED_VERBS).
+const DELEGATED_WORKTREE_VERBS = ["purge"];
+// The audit counterpart of state fork and merge: Bolt start and completion
+// run them, and the referee's merge-back owns the AUDIT_MERGED receipt.
+const DELEGATED_AUDIT_VERBS = ["fork", "merge"];
+const DELEGATED_SCRIPT_VERBS: Readonly<Record<string, readonly string[]>> = {
+  "aidlc-orchestrate.ts": DELEGATED_ORCHESTRATE_VERBS,
+  "aidlc-jump.ts": DELEGATED_JUMP_VERBS,
+  "aidlc-unit.ts": DELEGATED_UNIT_VERBS,
+  "aidlc-bolt.ts": DELEGATED_BOLT_VERBS,
+  "aidlc-swarm.ts": DELEGATED_SWARM_VERBS,
+  "aidlc-log.ts": DELEGATED_LOG_VERBS,
+  "aidlc-learnings.ts": DELEGATED_LEARNINGS_VERBS,
+  "aidlc-runtime.ts": DELEGATED_RUNTIME_VERBS,
+  "aidlc-testing-posture.ts": DELEGATED_TESTING_POSTURE_VERBS,
+  "aidlc-worktree.ts": DELEGATED_WORKTREE_VERBS,
+  "aidlc-audit.ts": DELEGATED_AUDIT_VERBS.map((verb) => `audit-${verb}`),
+  "aidlc-plugin.ts": ["sync"],
+};
+// Scripts no delegated agent runs at all: machine-config writes the person's
+// machine-wide settings, and no persona is given any of its commands.
+const DELEGATED_WHOLE_SCRIPTS = ["aidlc-machine-config.ts"];
+export const DELEGATED_LIFECYCLE_SCRIPTS: readonly string[] = [
+  "aidlc-state.ts",
+  "aidlc-utility.ts",
+  ...Object.keys(DELEGATED_SCRIPT_VERBS),
+];
+
+// What every delegated agent may run, by script and verb: reads, and the work
+// a persona is dispatched to do (CodeKB snapshot and publish for reverse
+// engineering, sensor fire to rerun the author's check, testing-posture brief,
+// and document-input with its onboarding forms, which Intent Capture and
+// Requirements Analysis require when a project runs them as a subagent).
+// DELEGATE_ROLE_ADMITTED_VERBS adds what only one persona is dispatched to do.
+// The kiro-ide row, whose calls carry no agent
+// identity, excludes only these from each persona's deny, and only where the
+// refusals above do not refuse them; a verb not listed here (a new one, or a
+// writer no persona is given, such as knowledge sync or runtime compile)
+// stays denied there. `select-plugins` is admitted as its bare query only.
+// The refusals above stay what the guard enforces where a call names its agent.
+export const DELEGATE_ADMITTED_VERBS: Readonly<Record<string, readonly string[]>> = {
+  "aidlc-utility.ts": [
+    "help", "version", "now", "status", "detect", "project-description", "codekb-path", "codekb-scope-diff",
+    "codekb-snapshot", "codekb-publish", "plugin-list", "plugin-validate", "config-get", "config-list",
+    "resolve-env-scope", "scope-table", "stage-table", "select-plugins", "document-input",
+  ],
+  "aidlc-state.ts": ["get", "count", "resume", "lookup"],
+  "aidlc-orchestrate.ts": ["wait", "team-board"],
+  "aidlc-jump.ts": ["resolve"],
+  "aidlc-unit.ts": ["merge-status", "status"],
+  "aidlc-log.ts": ["answers"],
+  "aidlc-learnings.ts": ["surface"],
+  "aidlc-runtime.ts": ["read", "summary"],
+  "aidlc-testing-posture.ts": ["resolve", "render", "verify", "reply", "brief"],
+  "aidlc-worktree.ts": ["list", "verify", "info"],
+  "aidlc-audit.ts": ["history"],
+  "aidlc-plugin.ts": ["list"],
+  "aidlc-graph.ts": [
+    "artifacts", "producers", "consumers", "topo", "cycles", "scope", "validate-scope", "validate-grid", "ars",
+    "export",
+  ],
+  "aidlc-sensor.ts": ["list", "describe", "fire"],
+  "aidlc-validate.ts": ["outputs"],
+  "aidlc-review-brief.ts": ["review", "context", "summary"],
+  "aidlc-attest.ts": ["resolve"],
+  "aidlc-knowledge.ts": ["list", "show"],
+};
+
+// The work only one persona is dispatched to do, by persona: the Bolt worktree
+// create, merge and discard, and restore on the person's request, belong to
+// pipeline-deploy (agents/aidlc-pipeline-deploy-agent.md, Worktree Branch
+// Lifecycle; its branching-strategies.md). The kiro-ide row excludes these
+// from that persona's deny only; the refusals above do not read this table.
+export const DELEGATE_ROLE_ADMITTED_VERBS: Readonly<
+  Record<string, Readonly<Record<string, readonly string[]>>>
+> = {
+  "aidlc-pipeline-deploy-agent": { "aidlc-worktree.ts": ["create", "merge", "discard", "restore"] },
+};
+
+// The verbs one persona is admitted: everyone's, then its own.
+export function delegateAdmittedVerbs(agent: string): Readonly<Record<string, readonly string[]>> {
+  const own = DELEGATE_ROLE_ADMITTED_VERBS[agent] ?? {};
+  const files = [...new Set([...Object.keys(DELEGATE_ADMITTED_VERBS), ...Object.keys(own)])];
+  return Object.fromEntries(
+    files.map((file) => [file, [...new Set([...(DELEGATE_ADMITTED_VERBS[file] ?? []), ...(own[file] ?? [])])]]),
+  );
+}
+
+// Bare, these print the current selection instead of changing it.
+const SELECTION_QUERIES = ["select-plugins"];
+const DELEGATED_UTILITY_VERBS = [
+  "scope-change",
+  "scope-save",
+  "config-change",
+  "recompose",
+  "intent-create",
+  "state-init",
+  "space-create",
+  "reclassify",
+  "select-plugins",
+  "plugin-sync",
+  "upgrade",
+  "claim",
+  "release",
+  "participate",
+  "set-status",
+];
+
+// The same rule through the `aidlc` dispatcher (script or native binary,
+// optionally under the engine/system namespace): top-level routing groups, and
+// lifecycle verbs per noun. `state` takes DELEGATED_STATE_MUTATIONS and `init`
+// and `set-status`, its routes to the utility's state-init and set-status. The workspace nouns' switch, create
+// and archive forms are read separately (workspaceMutation).
+const DELEGATED_DISPATCHER_GROUPS = [
+  ...DELEGATED_ORCHESTRATE_VERBS,
+  "--resume",
+  "--scope",
+  "--claim",
+  "--release",
+  "scope-change",
+  "scope-save",
+  "config-change",
+  "compose",
+  "recompose",
+  "init",
+];
+const DELEGATED_DISPATCHER_VERBS: Readonly<Record<string, readonly string[]>> = {
+  scope: ["change", "save"],
+  orchestrate: DELEGATED_ORCHESTRATE_VERBS,
+  intent: ["create"],
+  jump: DELEGATED_JUMP_VERBS,
+  config: ["set", "global"],
+  workspace: ["reclassify"],
+  plugin: ["select", "sync"],
+  unit: DELEGATED_UNIT_VERBS,
+  bolt: DELEGATED_BOLT_VERBS,
+  swarm: DELEGATED_SWARM_VERBS,
+  log: DELEGATED_LOG_VERBS,
+  learnings: DELEGATED_LEARNINGS_VERBS,
+  runtime: DELEGATED_RUNTIME_VERBS,
+  "testing-posture": DELEGATED_TESTING_POSTURE_VERBS,
+  worktree: DELEGATED_WORKTREE_VERBS,
+  audit: DELEGATED_AUDIT_VERBS,
+};
+
+const isOneOf = (list: readonly string[], word: string): boolean => list.includes(word);
 
 function maskQuotedCommandSeparators(command: string): string {
   const chars = [...command];
@@ -242,7 +433,7 @@ export function isLifecycleBoundaryCommand(command: string): boolean {
     const verb = match[4];
     if (tool === "orchestrate" && verb === "report") return true;
     if (tool === "state" && BLOCKED_STATE_TRANSITIONS.has(verb)) return true;
-    if (tool === "jump" && verb === "execute") return true;
+    if (tool === "jump" && (verb === "execute" || verb === "reopen")) return true;
   }
   const nativeInvocation =
     /(?:^|&&|\|\||[;|(\n{])[ \t]*(?:(?:command|exec)\s+)?(?:env(?:\s+-[^\s]+)*\s+)?(?:[A-Za-z_][A-Za-z0-9_]*=(?:"[^"\n]*"|'[^'\n]*'|[^\s;&|]+)\s+)*(?:"[^"\n]*\/aidlc(?:\.exe)?"|'[^'\n]*\/aidlc(?:\.exe)?'|[^\s"';&|({]*aidlc(?:\.exe)?)[ \t]+engine[ \t]+(orchestrate|state|jump)[ \t]+([a-z][a-z0-9-]*)\b/g;
@@ -251,7 +442,7 @@ export function isLifecycleBoundaryCommand(command: string): boolean {
     const verb = match[2];
     if (tool === "orchestrate" && (verb === "report" || verb === "park")) return true;
     if (tool === "state" && BLOCKED_STATE_TRANSITIONS.has(verb)) return true;
-    if (tool === "jump" && verb === "execute") return true;
+    if (tool === "jump" && (verb === "execute" || verb === "reopen")) return true;
   }
   return false;
 }
@@ -760,6 +951,19 @@ function withoutProjectDir(args: string[]): string[] {
   return out;
 }
 
+// The words a lifecycle script may take as its verb: the first word after
+// --project-dir, or the first after `--flag value` pairs (how aidlc-swarm.ts and
+// aidlc-plugin.ts read it), or for aidlc-testing-posture.ts the first of its
+// verbs anywhere in argv, as that tool reads it.
+function scriptVerbCandidates(script: string, args: string[]): string[] {
+  if (script === "aidlc-testing-posture.ts") {
+    const verb = args.find((arg) => (TESTING_POSTURE_SUBCOMMANDS as readonly string[]).includes(arg));
+    return verb === undefined ? [] : [verb];
+  }
+  const positional = withoutProjectDir(args);
+  return [positional[0] ?? "", parseArgs(positional).positional[0] ?? ""];
+}
+
 function workspaceMutation(prefix: string, args: string[]): string | null {
   if (args[1] === "--help") return null;
   const workspace = parseWorkspaceCommand(args);
@@ -776,11 +980,18 @@ function workspaceMutation(prefix: string, args: string[]): string | null {
   return null;
 }
 
+// The dispatcher drops its global flags before routing (`intent --json other`
+// switches intent), so the guard reads the same words.
+function withoutDispatcherFlags(args: string[]): string[] {
+  const literal = args.indexOf("--");
+  return args.filter((arg, i) => (literal >= 0 && i >= literal) || !LAUNCHER_GLOBAL_FLAGS.has(arg));
+}
+
 function delegatedDispatcherCommand(
   prefix: string,
   rawArgs: string[],
 ): string | null {
-  const raw = withoutProjectDir(rawArgs);
+  const raw = withoutDispatcherFlags(withoutProjectDir(rawArgs));
   const namespace = raw[0] === "engine" || raw[0] === "system"
     ? raw[0]
     : null;
@@ -788,43 +999,15 @@ function delegatedDispatcherCommand(
   const routePrefix = namespace ? `${prefix} ${namespace}` : prefix;
   const group = args[0] ?? "";
   const verb = args[1] ?? "";
-  if (
-    [
-      "next",
-      "continue",
-      "report",
-      "park",
-      "--resume",
-      "--scope",
-      "scope-change",
-      "config-change",
-      "compose",
-      "recompose",
-      "init",
-    ].includes(group)
-  ) {
+  if (isOneOf(DELEGATED_DISPATCHER_GROUPS, group)) {
     return `${routePrefix} ${group}`;
   }
-  if (group === "scope" && verb === "change") {
-    return `${routePrefix} scope change`;
+  if (group === "plugin" && verb === "select" && parseArgs(args.slice(2)).positional.length === 0) return null;
+  if (Object.hasOwn(DELEGATED_DISPATCHER_VERBS, group) && isOneOf(DELEGATED_DISPATCHER_VERBS[group], verb)) {
+    return `${routePrefix} ${group} ${verb}`;
   }
-  if (
-    group === "orchestrate" &&
-    ["next", "continue", "report", "park"].includes(verb)
-  ) {
-    return `${routePrefix} orchestrate ${verb}`;
-  }
-  if (group === "intent" && verb === "create") {
-    return `${routePrefix} intent create`;
-  }
-  if (group === "state" && DELEGATED_STATE_MUTATIONS.has(verb)) {
+  if (group === "state" && (DELEGATED_STATE_MUTATIONS.has(verb) || verb === "init" || verb === "set-status")) {
     return `${routePrefix} state ${verb}`;
-  }
-  if (group === "jump" && verb === "execute") {
-    return `${routePrefix} jump execute`;
-  }
-  if (group === "config" && verb === "set") {
-    return `${routePrefix} config set`;
   }
   return workspaceMutation(routePrefix, args);
 }
@@ -835,10 +1018,8 @@ function delegatedUtilityCommand(
 ): string | null {
   const { positional } = parseArgs(rawArgs);
   const verb = positional[0] ?? "";
-  if (
-    ["scope-change", "config-change", "recompose", "intent-create", "state-init", "space-create"]
-      .includes(verb)
-  ) {
+  if (isOneOf(SELECTION_QUERIES, verb) && positional.length === 1) return null;
+  if (isOneOf(DELEGATED_UTILITY_VERBS, verb)) {
     return `${prefix} ${verb}`;
   }
   return workspaceMutation(prefix, positional);
@@ -955,19 +1136,14 @@ function delegatedLifecycleCommandAtDepth(command: string, depth: number): strin
       script = invocation.script;
       args = invocation.args;
     }
-    const authored = script.match(/^aidlc-(orchestrate|state|jump|utility)\.ts$/);
-    if (authored) {
-      const tool = authored[1];
-      const positional = withoutProjectDir(args);
-      const verb = positional[0] ?? "";
-      if (
-        (tool === "orchestrate" && ["next", "continue", "report", "park"].includes(verb)) ||
-        (tool === "state" && DELEGATED_STATE_MUTATIONS.has(verb)) ||
-        (tool === "jump" && verb === "execute")
-      ) {
-        return `aidlc-${tool}.ts ${verb}`;
-      }
-      if (tool === "utility") {
+    if (isOneOf(DELEGATED_WHOLE_SCRIPTS, script)) return script;
+    if (isOneOf(DELEGATED_LIFECYCLE_SCRIPTS, script)) {
+      const refused = scriptVerbCandidates(script, args).find((verb) =>
+        (script === "aidlc-state.ts" && DELEGATED_STATE_MUTATIONS.has(verb)) ||
+        (Object.hasOwn(DELEGATED_SCRIPT_VERBS, script) && isOneOf(DELEGATED_SCRIPT_VERBS[script], verb))
+      );
+      if (refused !== undefined) return `${script} ${refused}`;
+      if (script === "aidlc-utility.ts") {
         const utility = delegatedUtilityCommand("aidlc-utility.ts", args);
         if (utility !== null) return utility;
       }
@@ -986,6 +1162,21 @@ function delegatedLifecycleCommandAtDepth(command: string, depth: number): strin
   return null;
 }
 
+function mainSessionStandsOutside(sessionId: unknown): boolean {
+  let projectDir: string;
+  try {
+    projectDir = resolveProjectDirFromHook(import.meta.url);
+  } catch {
+    return false;
+  }
+  const workflow = enterHookWorkflow(projectDir, sessionId);
+  try {
+    return hookStandsOutside(workflow);
+  } finally {
+    workflow.restore();
+  }
+}
+
 export async function run(input: string): Promise<number> {
   let parsed: ClaudeCodeHookInput;
   try {
@@ -999,8 +1190,10 @@ export async function run(input: string): Promise<number> {
   // memory, session presence, or a bypass before enforcing it.
   if (refuseRuntimeIntegrityViolation(parsed)) return 2;
   if (parsed.tool_name !== "Bash") return 0;
-  // The fence is up only while nobody with authority asked for this. A human
-  // message newer than the engine's last directive, or a lowered fence, lets
+  // The fence stands aside when it is LOWERED for this piece of work, by the
+  // guard policy word (off lowers this one) or by the human's own
+  // `guard.state-transition off` switch. A human message, however recent, does
+  // not lower it: see decideGuard in aidlc-lib.ts for why. A lowered fence lets
   // the command through with one line and one audit row instead of a refusal.
   const standAside = (detail: string): boolean => {
     let projectDir: string;
@@ -1009,21 +1202,31 @@ export async function run(input: string): Promise<number> {
     } catch {
       return false; // no workspace to read: the fence stays up
     }
-    let gate: ReturnType<typeof decideFence>;
+    // A lowered fence belongs to the workflow that lowered it: a conversation
+    // that has not joined that workflow keeps the fence up.
+    const workflow = enterHookWorkflow(projectDir, parsed.session_id);
     try {
-      gate = decideFence(projectDir, "state-transition", { hookInput: parsed });
-    } catch {
-      return false;
+      if (hookStandsOutside(workflow)) return false;
+      let gate: ReturnType<typeof decideFence>;
+      try {
+        gate = decideFence(projectDir, "state-transition", { hookInput: parsed });
+      } catch {
+        return false;
+      }
+      if (gate.decision !== "stand-aside") return false;
+      if (guardStandAsideSpeaks(gate)) {
+        writeGuardStoodAside(guardStoodAsideLine("state-transition", gate.source, detail));
+      }
+      recordGuardStoodAside(projectDir, {
+        fence: "state-transition",
+        authority: gate.authority,
+        tool: "Bash",
+        details: detail,
+      });
+      return true;
+    } finally {
+      workflow.restore();
     }
-    if (gate.decision !== "stand-aside") return false;
-    writeGuardStoodAside(guardStoodAsideLine("state-transition", gate.source, detail));
-    recordGuardStoodAside(projectDir, {
-      fence: "state-transition",
-      authority: gate.authority,
-      tool: "Bash",
-      details: detail,
-    });
-    return true;
   };
   const agentType = parsed.agent_type?.trim() ||
     (typeof parsed.tool_input?.subagent_type === "string"
@@ -1031,6 +1234,11 @@ export async function run(input: string): Promise<number> {
   const verb = directStateTransition(parsed.tool_input?.command ?? "");
   if (verb !== null) {
     if (standAside(`aidlc-state.ts ${verb}`)) return 0;
+    // A conversation that has not joined the workflow: the state tool's own
+    // check reads the same Guard Policy for the work it changes, and refuses
+    // with the same words where the check holds, so this hook does not stop it
+    // with an offer to turn off a check that may already be off.
+    if (agentType.length === 0 && mainSessionStandsOutside(parsed.session_id)) return 0;
     const switchSentence = agentType.length === 0
       ? fenceSwitchSentence(resolveProjectDirFromHook(import.meta.url), "state-transition")
       : "";

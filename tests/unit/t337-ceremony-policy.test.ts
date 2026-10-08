@@ -39,6 +39,7 @@ const POLICY_ENV = {
   AIDLC_DISABLE_LEARNINGS: "0",
   AIDLC_DISABLE_SUMMARY_CONFIRMATION: "0",
   AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD: "0",
+  AIDLC_DISABLE_PLAN_APPROVAL_GUARD: "0",
 };
 const tempDirs: string[] = [];
 
@@ -55,7 +56,7 @@ describe("t337 ceremony resolution", () => {
       mkdirSync(scopes);
       writeFileSync(join(scopes, "aidlc-quiet.md"), [
         "---", "name: quiet", "depth: Standard",
-        "sensors: off", "learnings: off", "summary_confirmation: off", "---", "",
+        "sensors: off", "learnings: off", "summary_confirmation: off", "plan_approval: off", "collaborators: off", "---", "",
       ].join("\n"));
       withEnvAndFreshCaches({ ...POLICY_ENV, AIDLC_SCOPES_DIR: scopes }, () => {
         const intent = `- **${CEREMONY_FIELDS[key]}**: on (set by you)\n`;
@@ -108,7 +109,7 @@ describe("t337 ceremony resolution", () => {
       expect(ceremonyPolicyValues("classic", state)).toEqual({
         sensors: "off",
         learnings: "on",
-        summary_confirmation: "off",
+        summary_confirmation: "off", plan_approval: "on", collaborators: "off",
       });
       expect(resolveCeremonyPolicy("classic", state).learnings.source).toBe("you");
     });
@@ -147,8 +148,8 @@ describe("t337 scope ceremony metadata", () => {
       expect(loadScopeMetadataAll().classic).toMatchObject({
         skeleton: false,
         reviewCap: "advisory",
-        guardPolicy: "relaxed",
-        ceremony: { sensors: "on", learnings: "on", summary_confirmation: "off" },
+        guardPolicy: "off",
+        ceremony: { sensors: "on", learnings: "on", summary_confirmation: "off", plan_approval: "on" },
       });
       expect(scopeCeremonyDefault("sensors", "classic")).toBe("on");
       expect(scopeCeremonyDefault("learnings", "classic")).toBe("on");
@@ -157,12 +158,12 @@ describe("t337 scope ceremony metadata", () => {
     });
   });
 
-  test("express switches every ceremony off by default; every other scope keeps them on", () => {
+  test("express switches every ceremony off by default, poc and bugfix some; collaborators ship off everywhere but enterprise", () => {
     withEnvAndFreshCaches(POLICY_ENV, () => {
       const all = loadScopeMetadataAll();
       expect(all.express).toMatchObject({
-        guardPolicy: "relaxed",
-        ceremony: { sensors: "off", learnings: "off", summary_confirmation: "off" },
+        guardPolicy: "off",
+        ceremony: { sensors: "off", learnings: "off", summary_confirmation: "off", plan_approval: "off" },
       });
       for (const key of CEREMONY_KEYS) {
         expect(scopeCeremonyDefault(key, "express"), key).toBe("off");
@@ -172,14 +173,23 @@ describe("t337 scope ceremony metadata", () => {
           scopeDefault: "off",
         });
       }
+      // poc keeps the other ceremonies but, like express, builds its plans
+      // without asking; collaborators ship off (only enterprise keeps them on).
+      expect(all.poc.ceremony).toEqual({ sensors: "on", learnings: "on", summary_confirmation: "on", plan_approval: "off", collaborators: "off" });
+      // bugfix asks no learnings question and no summary confirmation; its
+      // sensors and plan approval stay on; collaborators off.
+      expect(all.bugfix.ceremony).toEqual({ sensors: "on", learnings: "off", summary_confirmation: "off", plan_approval: "on", collaborators: "off" });
+      // enterprise is the one scope that ships collaborators on; every other
+      // scope keeps the first four ceremonies on but collaborators off.
+      expect(all.enterprise.ceremony).toEqual({ sensors: "on", learnings: "on", summary_confirmation: "on", plan_approval: "on", collaborators: "on" });
       for (const scope of Object.keys(all)) {
-        if (scope === "express" || scope === "classic") continue;
-        expect(all[scope].ceremony, scope).toEqual({ sensors: "on", learnings: "on", summary_confirmation: "on" });
+        if (scope === "express" || scope === "classic" || scope === "poc" || scope === "bugfix" || scope === "enterprise") continue;
+        expect(all[scope].ceremony, scope).toEqual({ sensors: "on", learnings: "on", summary_confirmation: "on", plan_approval: "on", collaborators: "off" });
       }
     });
   });
 
-  test("every shipped scope declares guard_policy and all three ceremony keys, so no ceremony falls back to the default", () => {
+  test("every shipped scope declares guard_policy and all four ceremony keys, so no ceremony falls back to the default", () => {
     withEnvAndFreshCaches(POLICY_ENV, () => {
       const all = loadScopeMetadataAll();
       expect(Object.keys(all).length).toBeGreaterThan(0);

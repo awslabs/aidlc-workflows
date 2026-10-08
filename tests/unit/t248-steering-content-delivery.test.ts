@@ -9,11 +9,17 @@
 // route; an unverifiable stateless route requires a fresh explicit `next`.
 // Optional persona/knowledge remains path-loaded with actionable warnings.
 
-import { afterAll, describe, expect, test } from "bun:test";
+import {
+  NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { afterAll, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { createHash, createHmac } from "node:crypto";
 import {
   appendFileSync,
+  unlinkSync,
   cpSync,
   existsSync,
   mkdirSync,
@@ -51,6 +57,8 @@ import {
 import { HARNESS_MATRIX } from "../harness/harness-matrix.ts";
 import { resolveCapturedToolInput } from "../harness/sdk-drive.ts";
 
+setDefaultTimeout(NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
+
 const BUN = process.execPath;
 const MAX_DIRECTIVE_BYTES = 28 * 1024;
 const RECEIPT_PATTERN = /^[A-Za-z0-9_-]{8}$/;
@@ -58,13 +66,15 @@ const CONTINUE_COMMAND_PREFIX =
   "bun .claude/tools/aidlc-orchestrate.ts continue ";
 // The steering payload stored on a marker. `n` (next_stage) and `q` (unit_gate)
 // are dropped by JSON when undefined, so only the rest are always present.
-// `o` carries the open-gate re-entry flag (gate_only) as a boolean.
+// `o` carries the open-gate re-entry flag (gate_only) as a boolean, and `t`
+// (present only when true) that every Unit was built (build_settled). `l` is how
+// the rules were cut into parts, so a part is never continued under another cut.
 const STEERING_PAYLOAD_KEYS = [
   "v", "s", "c", "i", "b", "d", "r", "a", "u", "k",
-  "f", "g", "n", "x", "p", "w", "z", "o", "q", "h",
+  "f", "g", "n", "x", "p", "w", "z", "o", "q", "t", "h", "l",
 ] as const;
 const STEERING_PAYLOAD_REQUIRED_KEYS = [
-  "v", "s", "c", "i", "b", "d", "r", "a", "u", "k", "f", "g", "x", "p", "w", "z", "o", "h",
+  "v", "s", "c", "i", "b", "d", "r", "a", "u", "k", "f", "g", "x", "p", "w", "z", "o", "h", "l",
 ] as const;
 const REVIEWER_AGENTS = [
   "aidlc-architecture-reviewer-agent",
@@ -165,7 +175,7 @@ function statefulProjectWithDrift(): string {
 // Removing every staged project can exceed bun's 5s hook default under load.
 afterAll(() => {
   for (const proj of projects) cleanupTestProject(proj);
-}, 120_000);
+}, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
 function invoke(
   proj: string,
@@ -184,7 +194,7 @@ function invoke(
       "--project-dir",
       proj,
     ],
-    { encoding: "utf-8", env: { ...env } },
+    { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8", env: { ...env } },
   );
   expect(res.status, res.stderr).toBe(0);
   const line = (res.stdout ?? "").trim();
@@ -338,6 +348,7 @@ function runDispatchHook(
     BUN,
     [join(proj, ".claude", "hooks", "aidlc-deliver-stage-rules.ts")],
     {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
       cwd: proj,
       input: JSON.stringify({
         hook_event_name: "PreToolUse",
@@ -493,10 +504,13 @@ describe("t248 deterministic steering delivery", () => {
     ).toBe(large);
     expect(result.final.kind).toBe("run-stage");
     expect(result.final).not.toHaveProperty("rules_content");
-  }, 30_000);
+  });
 
   test("a retired policy notice tips a near-limit inline bundle into bounded steering parts", () => {
     const proj = statefulProjectWithDrift();
+    // Under relaxed an edit to the finished document is accepted and not
+    // raised; a document that is gone still is, so the advisory stays.
+    unlinkSync(join(seededRecordDir(proj), "inception", "requirements-analysis", "requirements.md"));
     const statePath = seededStateFile(proj);
     const state = readFileSync(statePath, "utf-8").replace(
       /^- \*\*Change Control\*\*:.*$/m,
@@ -533,7 +547,7 @@ describe("t248 deterministic steering delivery", () => {
     expect(result.final).not.toHaveProperty("rules_content");
     expect(result.sizes.every((bytes) => bytes <= MAX_DIRECTIVE_BYTES)).toBe(true);
     const notices = result.loads[0]?.change_notices;
-    expect(notices).toEqual([expect.stringContaining("retired Change Control")]);
+    expect(notices).toEqual([expect.stringContaining("This work still has an old setting")]);
     for (const directive of [...result.loads, result.final]) {
       expect(directive.change_notices).toEqual(notices);
       expect(directive.stage_validity).toEqual(inline.directive.stage_validity);
@@ -544,7 +558,7 @@ describe("t248 deterministic steering delivery", () => {
         readFileSync(join(proj, path), "utf-8"),
       );
     }
-  }, 30_000);
+  });
 
   // Old and new property alike: chunk boundaries follow serialized size, so
   // JSON-escaped control characters still split into bounded parts.
@@ -566,7 +580,7 @@ describe("t248 deterministic steering delivery", () => {
       ),
     ).toBe(rule);
     expect(result.final.kind).toBe("run-stage");
-  }, 30_000);
+  });
 
   // Old property: repeated `next` reused one private machine-local key and so
   // minted the same 610-char token. New property: the same key file mints the
@@ -654,7 +668,7 @@ describe("t248 deterministic steering delivery", () => {
     expect(answered.kind).toBe("load-steering");
     expect(answered.part).toBe(1);
     expect(answered.receipt).toBe(first.receipt);
-  }, 30_000);
+  });
 
   // Old property: a token issued before the engine-directory migration stayed
   // valid. New property: the receipt does too, and continuing keeps the legacy
@@ -791,7 +805,7 @@ describe("t248 deterministic steering delivery", () => {
       existsSync(join(seededRecordDir(routed), ".aidlc-engine/steering-token-key")),
     ).toBe(false);
     expect(existsSync(statefulMarkerPath(routed))).toBe(false);
-  }, 30_000);
+  });
 
   // Old property: the second use of a token errored "no longer current". New
   // property: the first use advances to part 2; the second is answered as a
@@ -849,7 +863,7 @@ describe("t248 deterministic steering delivery", () => {
     }
     expect(directive.kind).toBe("run-stage");
     expect(directive.stage_validity?.state).toBe("drifted");
-  }, 30_000);
+  });
 
   // Old property: a token re-signed with the old public-path MAC errored
   // "Invalid steering continuation token". New property: no receipt that the
@@ -896,7 +910,7 @@ describe("t248 deterministic steering delivery", () => {
       expect(result.part, forged).toBe(1);
       expect(result.receipt, forged).toBe(first.receipt);
     }
-  }, 30_000);
+  });
 
   test("editing the marker payload index cannot skip chunks with a genuine receipt", () => {
     const proj = statefulProject();
@@ -996,7 +1010,7 @@ describe("t248 deterministic steering delivery", () => {
         );
         expect(treeDigest(runtime)).toEqual(before);
       }
-    }, 30_000);
+    });
   }
 
   test("a legacy stateless marker without an authenticated route refuses unmatched receipts", () => {
@@ -1064,7 +1078,7 @@ describe("t248 deterministic steering delivery", () => {
       expect(answer.directive.stage).toBe(delivered.final.stage);
       if (chunked) expect(answer.directive.part).toBe(1);
     }
-  }, 60_000);
+  });
 
   test("a stateless probe walks an authenticated route without publishing", () => {
     const proj = project();
@@ -1086,7 +1100,7 @@ describe("t248 deterministic steering delivery", () => {
     expect(current.stage).toBe(first.directive.stage);
     expect(first.directive.parts).toBe(hops);
     expect(treeDigest(join(proj, "aidlc"))).toEqual(before);
-  }, 30_000);
+  });
 
   // Old property: a rule edited mid-delivery errored "rules changed ... Run a
   // fresh `next`". New property: the receipt names a bundle that no longer
@@ -1127,7 +1141,7 @@ describe("t248 deterministic steering delivery", () => {
     expect(statefulStale.directive.bundle).not.toBe(statefulFirst.bundle);
     expect(statefulStale.directive.receipt).not.toBe(statefulFirst.receipt);
     expect(invoke(stateful, "next", []).line).toBe(statefulStale.line);
-  }, 30_000);
+  });
 
   // Old property: a moved workflow state errored "workflow state changed". New
   // property: the receipt no longer matches the current state, so the answer
@@ -1259,7 +1273,7 @@ describe("t248 deterministic steering delivery", () => {
     expect(marker.kind).toBe("run-stage");
     expect(marker).not.toHaveProperty("continue_token");
     expectSteeringPayload(marker.steering_payload);
-  }, 30_000);
+  });
 
   test("a mismatched receipt re-sends part 1 with the same receipt, stateful and stateless", () => {
     const stateful = statefulProject();
@@ -1297,9 +1311,9 @@ describe("t248 deterministic steering delivery", () => {
       expect(answer.directive.receipt, wrong).toBe(statelessFirst.directive.receipt);
       expect(answer.line, wrong).toBe(statelessFirst.line);
     }
-  }, 30_000);
+  });
 
-  test("a consumed receipt restarts delivery at part 1, and after run-stage every old receipt re-answers the run-stage", () => {
+  test("a consumed receipt restarts delivery at part 1, and after run-stage every repeat ask gets the rules again", () => {
     const proj = statefulProject();
     inflateOrg(proj);
     const first = invoke(proj, "next", []);
@@ -1327,16 +1341,23 @@ describe("t248 deterministic steering delivery", () => {
       expect(hops).toBeLessThan(100);
     }
     expect(current.kind).toBe("run-stage");
-    const finalLine = invoke(proj, "next", []).line;
-    expect(JSON.parse(finalLine)).toEqual(current);
-    for (const receipt of receipts) {
-      expect(invoke(proj, "continue", [receipt]).line, receipt).toBe(finalLine);
+    expect(current).not.toHaveProperty("rules_content");
+    // The Stop hook's own reading is the run-stage in hand and publishes nothing.
+    const atRunStage = readFileSync(statefulMarkerPath(proj), "utf-8");
+    const probeEnv = { ...process.env, AIDLC_STOP_HOOK_PROBE: "1" };
+    expect(JSON.parse(invoke(proj, "next", [], probeEnv).line)).toEqual(current);
+    expect(readFileSync(statefulMarkerPath(proj), "utf-8")).toBe(atRunStage);
+    // That run-stage arrived without its rules. A repeat ask cannot show it holds
+    // them (a new chat, a compacted context, a resume), so it restarts at part 1.
+    expect(invoke(proj, "next", []).line).toBe(first.line);
+    for (const receipt of receipts.slice(1)) {
+      expect(invoke(proj, "continue", [receipt]).line, receipt).toBe(first.line);
     }
     const marker = readMarker(statefulMarkerPath(proj));
-    expect(marker.kind).toBe("run-stage");
-    expect(marker).not.toHaveProperty("continue_token");
-    expect(marker).not.toHaveProperty("continue_token_sha256");
-  }, 60_000);
+    expect(marker.kind).toBe("load-steering");
+    expect(marker.part).toBe(1);
+    expect(marker.continue_token).toBe(r1);
+  });
 
   test("the Stop-hook probe retains the current part with its receipt and never publishes", () => {
     const proj = statefulProject();
@@ -1367,7 +1388,7 @@ describe("t248 deterministic steering delivery", () => {
     const restarted = invoke(proj, "next", []).directive;
     expect(restarted.part).toBe(1);
     expect(restarted.receipt).toBe(first.receipt);
-  }, 30_000);
+  });
 
   test("a Stop-hook probe walks an oversize delivery to run-stage and leaves state, audit, and marker byte-identical", () => {
     const proj = statefulProject();
@@ -1419,7 +1440,7 @@ describe("t248 deterministic steering delivery", () => {
     expect(walked.kind).toBe("run-stage");
     expect(treeDigest(runtime)).toEqual(issued);
     expect(readMarker(statefulMarkerPath(proj)).part).toBe(1);
-  }, 60_000);
+  });
 
   test("the directive validator requires receipt and next on load-steering and well-formed inline rules on run-stage", () => {
     const chunked = statefulProject();
@@ -1473,17 +1494,36 @@ describe("t248 deterministic steering delivery", () => {
 
   test("missing required rules block before stage work with repair guidance", () => {
     const proj = project();
-    rmSync(join(proj, "aidlc", "spaces", "default", "memory", "org.md"));
-    const result = invoke(proj, "next", [
-      "--scope",
-      "mvp",
-      "--stage",
-      "intent-capture",
-    ]).directive;
+    const orgPath = join(proj, "aidlc", "spaces", "default", "memory", "org.md");
+    const org = readFileSync(orgPath);
+    rmSync(orgPath);
+    const args = ["--scope", "mvp", "--stage", "intent-capture"];
+    const result = invoke(proj, "next", args).directive;
     expect(result.kind).toBe("error");
     expect(result.message).toContain("Cannot load required stage rule");
     expect(result.message).toContain("The stage has not started");
     expect(result.message).toContain("run `next` again");
+    // It names how to put the file back, and the doctor.
+    expect(result.message).toContain("git checkout -- aidlc/spaces/default/memory/org.md");
+    expect(result.message).toContain("--doctor");
+    // The named step works: with the file back, the same request starts the stage.
+    writeFileSync(orgPath, org);
+    expect(invoke(proj, "next", args).directive.kind).not.toBe("error");
+  });
+
+  test("a rule file that is there but not UTF-8 is repaired in place, never checked out over the team's edits", () => {
+    const proj = project();
+    const orgPath = join(proj, "aidlc", "spaces", "default", "memory", "org.md");
+    const org = readFileSync(orgPath);
+    writeFileSync(orgPath, Buffer.concat([org, Buffer.from([0xff, 0xfe, 0x00])]));
+    const args = ["--scope", "mvp", "--stage", "intent-capture"];
+    const result = invoke(proj, "next", args).directive;
+    expect(result.kind).toBe("error");
+    expect(result.message).toContain("Keep a copy of the file, then fix its permissions or save it as UTF-8");
+    expect(result.message).not.toContain("git checkout");
+    // The named step works: saved as UTF-8, the same request starts the stage.
+    writeFileSync(orgPath, org);
+    expect(invoke(proj, "next", args).directive.kind).not.toBe("error");
   });
 
   test("rejected background dispatch leaves no in-flight ledger", () => {
@@ -1582,15 +1622,14 @@ describe("t248 deterministic steering delivery", () => {
     ]);
     const paths = result.final.inline_context_paths ?? [];
 
+    // poc ships collaborators off, so only the lead's context is loaded.
     for (const path of [
       ".claude/agents/aidlc-product-agent.md",
-      ".claude/agents/aidlc-architect-agent.md",
       ".claude/knowledge/aidlc-shared/ai-dlc-principles.md",
       ".claude/knowledge/aidlc-shared/rules-reading.md",
       ".claude/knowledge/aidlc-shared/verification.md",
       ".claude/knowledge/aidlc-product-agent/requirements-elicitation.md",
       ".claude/knowledge/aidlc-product-agent/requirements-guide.md",
-      ".claude/knowledge/aidlc-architect-agent/architecture-guide.md",
     ]) {
       expect(paths).toContain(path);
     }
@@ -1630,6 +1669,9 @@ describe("t248 deterministic steering delivery", () => {
     );
     expect(paths).not.toContain(
       ".claude/knowledge/aidlc-product-agent/functional-design-guide.md",
+    );
+    expect(paths).not.toContain(
+      ".claude/knowledge/aidlc-product-agent/corner-checklist.md",
     );
   });
 
@@ -1677,6 +1719,7 @@ describe("t248 deterministic steering delivery", () => {
         BUN,
         [join(pluginRoot, "hooks", "compose.ts")],
         {
+          timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
           cwd: proj,
           encoding: "utf-8",
           env: {
@@ -1728,7 +1771,7 @@ describe("t248 deterministic steering delivery", () => {
     }
   });
 
-  test("Standard depth keeps the complete shipped knowledge roster", () => {
+  test("Standard depth keeps the complete shipped methodology roster", () => {
     const proj = project();
     const result = drive(proj, [
       "--scope",
@@ -1738,14 +1781,21 @@ describe("t248 deterministic steering delivery", () => {
     ]);
     const paths = result.final.inline_context_paths ?? [];
 
+    // The shared methodology stays; the format references never join a roster.
     expect(paths).toContain(
+      ".claude/knowledge/aidlc-shared/ai-dlc-principles.md",
+    );
+    expect(paths).not.toContain(
       ".claude/knowledge/aidlc-shared/audit-format.md",
     );
     expect(paths).toContain(
       ".claude/knowledge/aidlc-product-agent/market-research-methods.md",
     );
     expect(paths).toContain(
-      ".claude/knowledge/aidlc-architect-agent/architecture-patterns.md",
+      ".claude/knowledge/aidlc-product-agent/prioritization-frameworks.md",
+    );
+    expect(paths).toContain(
+      ".claude/knowledge/aidlc-product-agent/corner-checklist.md",
     );
   });
 
@@ -2101,7 +2151,12 @@ describe("t248 reviewer knowledge absorption", () => {
         expect(surface).toContain(
           `Absorbed at build time from knowledge/${reviewer}/reviewing.md`,
         );
-        expect(surface).toContain(source);
+        // The build writes {{INVOKE}} as this harness's own AI-DLC command.
+        const absorbed = source
+          .split("{{INVOKE}}")
+          .map((part) => part.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
+          .join("[^`\\n]+");
+        expect(surface).toMatch(new RegExp(absorbed));
       }
     });
   }
@@ -2150,4 +2205,33 @@ describe("t248 reviewer knowledge absorption", () => {
       rmSync(root, { recursive: true, force: true });
     }
   });
+});
+
+// What each tool's agent is told to do with the one-line Stop note, as the
+// shipped skill delivers it: the person on every tool gets the line once.
+// Tools that show the note have the agent say nothing about it; opencode,
+// Kiro IDE and Kiro CLI hide it, so the agent says the line itself when it
+// carries on, and a question it just asked ends the turn in silence.
+describe("t248 the shipped skill delivers the Stop-note step for its tool", () => {
+  const SAYS_THE_LINE: Record<string, string> = { opencode: "opencode", "kiro-ide": "Kiro IDE", kiro: "Kiro CLI" };
+  for (const harness of HARNESS_MATRIX) {
+    test(`${harness.name} ships one carrying-on paragraph with its own say-or-not step`, () => {
+      const skill = readFileSync(join(harness.skillsRoot, "aidlc", "SKILL.md"), "utf-8");
+      const paragraphs = skill.split("\n").filter((line) => line.startsWith("**When AI-DLC carries on by itself.**"));
+      expect(paragraphs.length).toBe(1);
+      const paragraph = paragraphs[0] as string;
+      expect(paragraph).not.toContain("{{INVOKE}}");
+      expect(paragraph).toContain("and end your turn without asking it again or saying anything else.");
+      const tool = SAYS_THE_LINE[harness.name];
+      if (tool === undefined) {
+        expect(paragraph).toContain("so say nothing about it.");
+        expect(paragraph).not.toContain("first say the carrying-on line to them once");
+      } else {
+        expect(paragraph).toContain(
+          `${tool} does not show the note to the person, so if you carry on with the work (the rules parts, the stage, or a fresh \`next\`), first say the carrying-on line to them once`,
+        );
+        expect(paragraph).not.toContain("so say nothing about it.");
+      }
+    });
+  }
 });

@@ -32,23 +32,27 @@
 //          Bash tool_result ("Status:         Completed" — the verbatim
 //          handleStatus emission, aidlc-utility.ts:296-310; deterministically
 //          confirmed on this exact fixture: Completion 32/32, Status Completed).
-//   3 the live hook fired and took the done->allow path
+//   3 the live hook fired and allowed the stop without a block
 //       -> GUARDED exactly like the .sh: the skill-scoped Stop hook does not
 //          fire on every headless turn, so when the heartbeat
 //          (aidlc-docs/.aidlc-engine/hooks-health/continue-workflow.last, aidlc-continue-workflow.ts:90) is
 //          absent we SKIP this sub-assertion (record the skip, never fail).
-//          When it IS present, the done branch ran resetGuard()
-//          (aidlc-continue-workflow.ts:241-248,357) which wrote block-count.json with
-//          count 0 — assert the parsed count === 0.
+//          When it IS present, the hook took one of the two allows a finished
+//          workflow's status turn reaches: the status print ended the turn
+//          (the engine marked it, so the hook allows before its `next` probe
+//          and traces "the engine's last step ended the turn"), or the probe
+//          answered `done` and resetGuard() wrote block-count.json with count
+//          0. Assert one of them, and that any block-count.json holds count 0
+//          (no block was counted).
 //   4 pending directive -> the REAL hook BLOCKS, against the REAL engine
 //       -> seed state-final-stage (final stage [-], engine emits a real
 //          run-stage for feedback-optimization), pipe {"stop_hook_active":false}
 //          into the real hook: stdout is a parseable {"decision":"block"} whose
-//          reason names the pending stage + re-feeds the loop
-//          (continuationReason, aidlc-continue-workflow.ts:298-307) and carries no
-//          override-shaped verbs. Deterministic — verified by direct invocation
-//          on this exact fixture (block reason names "feedback-optimization" +
-//          "aidlc-orchestrate"). Exit 0 (a block rides stdout, never the code).
+//          reason is the one plain line naming the pending stage
+//          (continuationReason in aidlc-continue-workflow.ts) and carries no
+//          override-shaped verbs. Deterministic, by direct invocation on this
+//          exact fixture ("AI-DLC is carrying on with Feedback & Optimization.").
+//          Exit 0 (a block rides stdout, never the code).
 //   5 done directive -> the REAL hook ALLOWS, against the REAL engine
 //       -> seed state-completed, same payload: empty stdout, exit 0
 //          (deterministically confirmed on this fixture).
@@ -59,8 +63,9 @@
 //          (stage, stable state digest, and directive fingerprint from
 //          aidlc-continue-workflow.ts:247) +
 //          stop_hook_active:true: the hook RELEASES (empty stdout, exit 0) and
-//          appends the drop record "recursion guard released the stop"
-//          (aidlc-continue-workflow.ts:370) to .aidlc-engine/hooks-health/continue-workflow.drops - a stuck loop
+//          appends the trace line "recursion guard released the stop"
+//          to .aidlc-engine/hooks-health/continue-workflow.trace, not to its
+//          .drops, since a release is the guard working - a stuck loop
 //          can never trap the session even with the directive genuinely pending.
 //          Deterministically confirmed on this fixture with the real engine
 //          directive and matching composite signature.
@@ -114,7 +119,7 @@
 //   - progress signature:        aidlc-continue-workflow.ts:247
 //   - resetGuard on done/allow:  aidlc-continue-workflow.ts:241-248 (count 0), invoked :357
 //   - block JSON + reason:       aidlc-continue-workflow.ts:104,298-307
-//   - release + drop record:     aidlc-continue-workflow.ts:364-371 ("recursion guard released the stop")
+//   - release + trace line:      aidlc-continue-workflow.ts ("recursion guard released the stop")
 //   - block cap env:             aidlc-continue-workflow.ts:69 (CLAUDE_CODE_STOP_HOOK_BLOCK_CAP, default 8)
 //   - status stdout:             aidlc-utility.ts:296-310 ("Status:         Completed")
 //   - fixtures: state-completed.md (Status=Completed, 32/32) /
@@ -124,8 +129,8 @@
 // Bedrock. Tests 4-6 are deterministic (no model in the loop) but spawn the
 // real engine, so they get a generous-but-bounded spawn timeout.
 
-import { liveCaseTimeoutMs } from "../harness/test-budget.ts";
-import { describe, expect, test } from "bun:test";
+import { liveCaseTimeoutMs, LIVE_LONG_OPERATION_TIMEOUT_MS, remainingOperationTimeoutMs, fileCleanupReserveMs } from "../harness/test-budget.ts";
+import { beforeEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
@@ -147,15 +152,22 @@ import {
 import { driveAidlc } from "../harness/sdk-drive.ts";
 
 // ---------------------------------------------------------------------------
-// Work allowance follows AIDLC_TEST_TIMEOUT (seconds). Existing per-turn
-// limits are preserved; the shared profile adds fixture, startup and teardown
-// reserves before Bun's case ceiling.
-const TIMEOUT_S = Number.parseInt(process.env.AIDLC_TEST_TIMEOUT ?? "420", 10);
-const LIVE_WORK_TIMEOUT_MS = (Number.isFinite(TIMEOUT_S) ? TIMEOUT_S : 420) * 1000;
-const DRIVE_TIMEOUT_MS = Math.max(120_000, LIVE_WORK_TIMEOUT_MS - 15_000);
+// AIDLC_TEST_TIMEOUT bounds the entire case, including setup and cleanup.
+const TIMEOUT_S = Number(process.env.AIDLC_TEST_TIMEOUT);
 // Preserve the existing work allowance and reserve fixture/startup/cleanup separately.
-const TEST_TIMEOUT_MS = liveCaseTimeoutMs(Math.max(LIVE_WORK_TIMEOUT_MS, DRIVE_TIMEOUT_MS));
-const HOOK_SPAWN_TIMEOUT_MS = 60_000;
+const TEST_TIMEOUT_MS = Number.isSafeInteger(TIMEOUT_S) && TIMEOUT_S > 0
+  ? TIMEOUT_S * 1000
+  : liveCaseTimeoutMs(LIVE_LONG_OPERATION_TIMEOUT_MS);
+let caseDeadlineMs: number;
+beforeEach(() => { caseDeadlineMs = Date.now() + TEST_TIMEOUT_MS; });
+function remainingWorkMs(): number {
+  return remainingOperationTimeoutMs(TEST_TIMEOUT_MS, {
+    deadlineMs: caseDeadlineMs,
+    reserveMs: fileCleanupReserveMs(TEST_TIMEOUT_MS),
+    phase: "E2E live work",
+  })!;
+}
+
 
 const BUN = process.execPath;
 // P9 per-intent layout: the stop hook's guard / heartbeat / drops re-root under
@@ -168,11 +180,14 @@ const heartbeatPath = (proj: string): string =>
   join(hooksHealthDir(proj), "continue-workflow.last");
 const dropsPath = (proj: string): string =>
   join(hooksHealthDir(proj), "continue-workflow.drops");
+const tracePath = (proj: string): string =>
+  join(hooksHealthDir(proj), "continue-workflow.trace");
 
 // Known-answer literals from the SHIPPED handlers (see header for cites).
 const STATUS_COMPLETED_LINE = "Status:         Completed"; // utility.ts:302 (padEnd shape confirmed by direct run)
 const PENDING_STAGE = "feedback-optimization"; // state-final-stage.md:90 ([-] final stage)
-const DROP_RECORD = "recursion guard released the stop"; // aidlc-continue-workflow.ts:370
+const RELEASE_RECORD = "recursion guard released the stop";
+const TURN_END_RECORD = "the engine's last step ended the turn";
 
 /** Pipe a real Stop payload into the SHIPPED hook with the project's REAL
  *  engine resolved via CLAUDE_PROJECT_DIR. Returns exit code + trimmed stdout
@@ -191,7 +206,7 @@ function runRealHook(
     input: payload,
     encoding: "utf-8",
     env,
-    timeout: HOOK_SPAWN_TIMEOUT_MS,
+    timeout: remainingWorkMs(),
   });
   return { rc: res.status ?? -1, out: (res.stdout ?? "").trim() };
 }
@@ -221,7 +236,7 @@ function runEngineNextDirective(proj: string): ProgressDirective {
     ],
     {
       encoding: "utf-8",
-      timeout: HOOK_SPAWN_TIMEOUT_MS,
+      timeout: remainingWorkMs(),
       env: { ...process.env, [STOP_HOOK_PROBE_ENV]: "1" },
     },
   );
@@ -340,7 +355,7 @@ describe("t122 Stop hook end-to-end — real hook, real engine (sdk+cli)", () =>
   // session runs to completion (no hang).
   // =========================================================================
   test(
-    "(e2e) /aidlc --status over a completed workflow runs to done under the live Stop hook; done->allow trace asserted when the hook fires",
+    "(e2e) /aidlc --status over a completed workflow runs to done under the live Stop hook; the hook's allow asserted when it fires",
     async () => {
       const proj = setupIntegrationProject({
         withState: "state-completed.md",
@@ -355,7 +370,7 @@ describe("t122 Stop hook end-to-end — real hook, real engine (sdk+cli)", () =>
         // resultEvent undefined).
         const r = await driveAidlc("/aidlc --status", {
           projectDir: proj,
-          timeoutMs: DRIVE_TIMEOUT_MS,
+          timeoutMs: remainingWorkMs(),
         });
 
         // .sh test 1: the live turn did not hang under the Stop hook. A
@@ -372,14 +387,19 @@ describe("t122 Stop hook end-to-end — real hook, real engine (sdk+cli)", () =>
 
         // .sh test 3 (GUARDED, the .sh's exact discipline): the skill-scoped
         // Stop hook does not fire on every headless turn. When the heartbeat is
-        // present, the done branch ran resetGuard() -> block-count.json count 0.
+        // present, the hook allowed the stop: either the status print ended
+        // the turn (the trace line) or the `done` probe ran resetGuard()
+        // (block-count.json), and no block was counted.
         // When absent, record the skip explicitly — the run-to-done assertions
         // above hold either way (an un-fired hook simply lets the turn end).
         if (existsSync(heartbeatPath(proj))) {
-          const guard = JSON.parse(
-            readFileSync(guardPath(proj), "utf-8"),
-          ) as { count: number };
-          expect(guard.count).toBe(0);
+          const endedAtStatus = existsSync(tracePath(proj)) &&
+            readFileSync(tracePath(proj), "utf-8").includes(TURN_END_RECORD);
+          const guard = existsSync(guardPath(proj))
+            ? (JSON.parse(readFileSync(guardPath(proj), "utf-8")) as { count: number })
+            : undefined;
+          expect(endedAtStatus || guard !== undefined).toBe(true);
+          if (guard !== undefined) expect(guard.count).toBe(0);
         } else {
           // eslint-disable-next-line no-console
           console.log(
@@ -414,9 +434,10 @@ describe("t122 Stop hook end-to-end — real hook, real engine (sdk+cli)", () =>
         // the exact decision shape + the reason's contract in one pass.
         const parsed = JSON.parse(r.out) as { decision: string; reason: string };
         expect(parsed.decision).toBe("block");
-        // The reason names the pending stage and re-feeds the loop...
-        expect(parsed.reason).toContain(PENDING_STAGE);
-        expect(parsed.reason).toContain("aidlc-orchestrate");
+        // The reason is one plain line naming the pending stage by its name
+        // (the host shows it to the person; the skill holds the agent's steps)...
+        expect(parsed.reason).toBe("AI-DLC is carrying on with Feedback & Optimization.");
+        expect(parsed.reason).not.toContain(PENDING_STAGE);
         // ...and the hook's OWN framing uses no override-shaped verbs (the
         // security property SPIKE 1 pinned: the hook phrases continuation,
         // never override). A load-steering reason EMBEDS rule-file text
@@ -443,7 +464,7 @@ describe("t122 Stop hook end-to-end — real hook, real engine (sdk+cli)", () =>
         cleanupTestProject(proj);
       }
     },
-    HOOK_SPAWN_TIMEOUT_MS + 30_000,
+    TEST_TIMEOUT_MS,
   );
 
   // =========================================================================
@@ -465,17 +486,17 @@ describe("t122 Stop hook end-to-end — real hook, real engine (sdk+cli)", () =>
         cleanupTestProject(proj);
       }
     },
-    HOOK_SPAWN_TIMEOUT_MS + 30_000,
+    TEST_TIMEOUT_MS,
   );
 
   // =========================================================================
   // (6) RECURSION RELEASE against the REAL engine (light re-confirm; t121
   // owns the exhaustive matrix). Real PENDING engine + counter seeded AT the
-  // cap + stop_hook_active:true -> RELEASE with a drop record. A stuck loop
+  // cap + stop_hook_active:true -> RELEASE with a trace line. A stuck loop
   // never traps the session even when the directive is genuinely pending.
   // =========================================================================
   test(
-    "(real engine) the recursion guard releases a genuinely-pending stop at the cap: no block, exit 0, drop record written",
+    "(real engine) the recursion guard releases a genuinely-pending stop at the cap: no block, exit 0, trace line written",
     () => {
       const proj = setupIntegrationProject({
         withState: "state-final-stage.md",
@@ -494,14 +515,14 @@ describe("t122 Stop hook end-to-end — real hook, real engine (sdk+cli)", () =>
         // but the cap wins — decideBlock :231 returns false at count >= cap).
         expect(r.rc).toBe(0);
         expect(r.out).toBe("");
-        // The drop record documents the release (aidlc-continue-workflow.ts:364-371).
-        const drops = readFileSync(dropsPath(proj), "utf-8");
-        expect(drops).toContain(DROP_RECORD);
+        // The trace documents the release; it is not a failure, so no drop.
+        expect(readFileSync(tracePath(proj), "utf-8")).toContain(RELEASE_RECORD);
+        expect(existsSync(dropsPath(proj)) ? readFileSync(dropsPath(proj), "utf-8") : "").not.toContain(RELEASE_RECORD);
       } finally {
         cleanupTestProject(proj);
       }
     },
-    HOOK_SPAWN_TIMEOUT_MS + 30_000,
+    TEST_TIMEOUT_MS,
   );
 
   // =========================================================================
@@ -541,7 +562,7 @@ describe("t122 Stop hook end-to-end — real hook, real engine (sdk+cli)", () =>
         cleanupTestProject(proj);
       }
     },
-    HOOK_SPAWN_TIMEOUT_MS + 30_000,
+    TEST_TIMEOUT_MS,
   );
 
   // =========================================================================
@@ -584,7 +605,7 @@ describe("t122 Stop hook end-to-end — real hook, real engine (sdk+cli)", () =>
         cleanupTestProject(proj);
       }
     },
-    HOOK_SPAWN_TIMEOUT_MS + 30_000,
+    TEST_TIMEOUT_MS,
   );
 
   // =========================================================================
@@ -622,7 +643,7 @@ describe("t122 Stop hook end-to-end — real hook, real engine (sdk+cli)", () =>
           ],
           {
             encoding: "utf-8",
-            timeout: HOOK_SPAWN_TIMEOUT_MS,
+            timeout: remainingWorkMs(),
           },
         );
         expect(park.status).toBe(0);
@@ -650,7 +671,7 @@ describe("t122 Stop hook end-to-end — real hook, real engine (sdk+cli)", () =>
         cleanupTestProject(proj);
       }
     },
-    HOOK_SPAWN_TIMEOUT_MS + 30_000,
+    TEST_TIMEOUT_MS,
   );
 
   // =========================================================================
@@ -694,7 +715,7 @@ describe("t122 Stop hook end-to-end — real hook, real engine (sdk+cli)", () =>
           ],
           {
             encoding: "utf-8",
-            timeout: HOOK_SPAWN_TIMEOUT_MS,
+            timeout: remainingWorkMs(),
             env: {
               ...process.env,
               AIDLC_ALLOW_DIRECT_STATE_TRANSITIONS: "1",
@@ -724,7 +745,7 @@ describe("t122 Stop hook end-to-end — real hook, real engine (sdk+cli)", () =>
         cleanupTestProject(proj);
       }
     },
-    HOOK_SPAWN_TIMEOUT_MS + 30_000,
+    TEST_TIMEOUT_MS,
   );
 
   // =========================================================================
@@ -812,6 +833,6 @@ describe("t122 Stop hook end-to-end — real hook, real engine (sdk+cli)", () =>
         cleanupTestProject(proj);
       }
     },
-    HOOK_SPAWN_TIMEOUT_MS + 30_000,
+    TEST_TIMEOUT_MS,
   );
 });

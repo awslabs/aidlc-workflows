@@ -18,7 +18,8 @@
 // without touching the marker, so the consumed selection is still there when the
 // human's feedback arrives and the Request Changes report binds to it.
 
-import { afterAll, describe, expect, test } from "bun:test";
+import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS } from "../harness/test-budget.ts";
+import { setDefaultTimeout, afterAll, describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
 import {
   existsSync,
@@ -36,18 +37,20 @@ import {
   setupIntegrationProject,
 } from "../harness/fixtures.ts";
 
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
 resetAidlcEnv();
 
 const BUN = process.execPath;
 const SESSION = "01995000-0995-7000-8000-000000000329";
 const UNIT = "saved-search";
 const projects: string[] = [];
-// Removing every staged project can exceed bun's 5s hook default under load.
+// Retiring every staged project shares the fixture cleanup backstop.
 afterAll(() => {
   for (const project of projects) {
     cleanupTestProject(project);
   }
-}, 120_000);
+}, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 type Run = { code: number | null; stdout: string; stderr: string };
 
@@ -353,9 +356,11 @@ describe("t329 a guard-recovery ask holds the turn and keeps the human's selecti
     expect(marker?.unit).toBe(UNIT);
     expect(marker?.delivery).toBe("issued");
     expect(marker?.guard_recovery_response).toBeUndefined();
+    // The marker keeps the name the person was shown, so typing it picks it.
     expect(marker?.remedies).toEqual(
-      remedies.map(({ op, action }) => ({ op, action, interaction: "human-input" })),
+      remedies.map(({ op, label, action }) => ({ op, label, action, interaction: "human-input" })),
     );
+    expect(remedies.map((remedy) => remedy.label)).toEqual(["Confirm the summary again", "Request Changes"]);
 
     // The observer sees the same ask and publishes nothing.
     const before = readFileSync(p.markerPath, "utf-8");
@@ -363,7 +368,7 @@ describe("t329 a guard-recovery ask holds the turn and keeps the human's selecti
     expect(probed.kind).toBe("ask");
     expect(probed.ask_type).toBe("guard-recovery");
     expect(readFileSync(p.markerPath, "utf-8")).toBe(before);
-  }, 180000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("after the human picks the action-only remedy the Stop hook releases and a repeated next keeps the selection", () => {
     const p = project();
@@ -434,7 +439,7 @@ describe("t329 a guard-recovery ask holds the turn and keeps the human's selecti
       "anything the conductor made up",
     );
     const prematureDirective = directive(premature);
-    expect(prematureDirective.kind).toBe("error");
+    expect(prematureDirective.kind, JSON.stringify(prematureDirective)).toBe("print");
     expect(String(prematureDirective.message)).toContain("not revision feedback");
 
     // The human answers; the marker binds the feedback text.
@@ -463,7 +468,7 @@ describe("t329 a guard-recovery ask holds the turn and keeps the human's selecti
     expect(state).toMatch(/^- \[R\] functional-design/m);
     const stateAfterReject = p.stopHook(entries, false);
     expect(stateAfterReject.stdout.trim()).toBe("");
-  }, 240000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("a Request Changes choice cannot stand in for a separate nonblank rejection reason", () => {
     const p = project();
@@ -488,12 +493,12 @@ describe("t329 a guard-recovery ask holds the turn and keeps the human's selecti
       "Request Changes",
     ]);
     const rejection = directive(rejected);
-    expect(rejection.kind).toBe("error");
+    expect(rejection.kind, JSON.stringify(rejection)).toBe("print");
     expect(String(rejection.message)).toContain("guard-recovery choice is not revision feedback");
     expect(String(rejection.message)).toContain("What should change?");
     expect(String(rejection.message)).toContain("separate response");
     expect(readFileSync(statePath, "utf-8")).toBe(stateBeforeReport);
-  }, 240000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("a tolerant Request Changes selection binds later exact feedback", () => {
     const p = project();
@@ -516,7 +521,7 @@ describe("t329 a guard-recovery ask holds the turn and keeps the human's selecti
     expect(accepted.code, accepted.stderr).toBe(0);
     const state = readFileSync(join(seededRecordDir(p.dir), "aidlc-state.md"), "utf-8");
     expect(state).toMatch(/^- \[R\] functional-design/m);
-  }, 240000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("a different recovery choice cannot authorize a later rejection", () => {
     const p = project();
@@ -541,16 +546,17 @@ describe("t329 a guard-recovery ask holds the turn and keeps the human's selecti
     const refused = rejectedReport(p, "Request Changes", laterMessage);
     expect(refused.code, refused.stderr).toBe(0);
     const refusal = directive(refused);
-    expect(refusal.kind).toBe("error");
+    expect(refusal.kind, JSON.stringify(refusal)).toBe("print");
     expect(String(refusal.message)).toContain(
       "recovery-question choice was not Request Changes",
     );
+    // The state tool's refusal reaches the agent as plain text, never its JSON.
     expect(String(refusal.message)).toContain(reconfirm?.action as string);
     const state = readFileSync(join(seededRecordDir(p.dir), "aidlc-state.md"), "utf-8");
     expect(state).toBe(stateBeforeRefusal);
     expect(state).toMatch(/^- \[-\] functional-design/m);
     expect(state).not.toMatch(/^- \[R\] functional-design/m);
-  }, 240000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("a legacy consumed selection without its selected remedy cannot authorize rejection", () => {
     const p = project();
@@ -585,7 +591,7 @@ describe("t329 a guard-recovery ask holds the turn and keeps the human's selecti
     const refused = rejectedReport(p, "Request Changes", feedback);
     expect(refused.code, refused.stderr).toBe(0);
     const refusal = directive(refused);
-    expect(refusal.kind).toBe("error");
+    expect(refusal.kind, JSON.stringify(refusal)).toBe("print");
     expect(String(refusal.message)).toContain(
       "recovery-question choice was not Request Changes",
     );
@@ -593,7 +599,7 @@ describe("t329 a guard-recovery ask holds the turn and keeps the human's selecti
     expect(state).toBe(stateBeforeRefusal);
     expect(state).toMatch(/^- \[-\] functional-design/m);
     expect(state).not.toMatch(/^- \[R\] functional-design/m);
-  }, 240000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("the recorded selection is the human's words, whitespace-normalized", () => {
     const p = project();
@@ -606,10 +612,12 @@ describe("t329 a guard-recovery ask holds the turn and keeps the human's selecti
     const expected = createHash("sha256")
       .update(label.replace(/\s+/g, " ").trim(), "utf-8")
       .digest("hex");
+    // Exactly one remedy's label: the person's pick, which the agent cannot overrule.
     expect(marker?.guard_recovery_response).toEqual({
       status: "awaiting-feedback",
       selection_sha256: expected,
       selected_op: (ask.remedies as Array<Record<string, unknown>>)[0].op,
+      picked_by: "person",
     });
-  }, 180000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });

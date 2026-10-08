@@ -8,7 +8,8 @@
 //   1. The PURE lib helpers (imported in-process from the shipped dist tree):
 //      relativeCodekbDir / codekbDir compose the space-level per-repo dir, and
 //      codekbRepoName picks the deterministic repo NAME (0 recorded → basename,
-//      1 → that name, >1 → basename fallback).
+//      or the lone store a moved folder was written under; 1 → that name,
+//      >1 → basename fallback).
 //   2. The `codekb-path` UTILITY VERB (spawned as the real CLI surface): it prints
 //      exactly what relativeCodekbDir composes, honouring --repo and --json.
 //   3. The isCodekb RESOLVER BRANCH (observed on the run-stage directive the
@@ -29,7 +30,12 @@
 // recorded, codekbRepoName(proj) === basename(proj), so the resolved repo segment
 // is the temp dir's basename — captured per-emit, not hard-coded.
 
-import { afterAll, describe, expect, test } from "bun:test";
+import {
+  NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { afterAll, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -52,6 +58,8 @@ import {
   codekbRepoName,
   relativeCodekbDir,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+
+setDefaultTimeout(NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
 const BUN = process.execPath; // the bun running this test
 const REPO_ROOT = join(import.meta.dir, "..", "..");
@@ -144,6 +152,59 @@ describe("t182 codekb lib helpers — space-level per-repo placement", () => {
     rewriteIntentRepos(proj, ["repo-a", "repo-b"]);
     expect(codekbRepoName(proj, DEFAULT_SPACE)).toBe(basename(proj));
   });
+
+  // A moved, renamed or copied folder: the store was written under the folder's
+  // earlier name, and nothing in the space carries the current one.
+  test("codekbRepoName: a moved folder keeps the store it was written in", () => {
+    const proj = seedRecordedIntent();
+    seedStore(proj, "earlier-name");
+    expect(codekbRepoName(proj, DEFAULT_SPACE)).toBe("earlier-name");
+  });
+
+  test("codekbRepoName: a store under the current name wins over an older one", () => {
+    const proj = seedRecordedIntent();
+    seedStore(proj, "earlier-name");
+    seedStore(proj, basename(proj));
+    expect(codekbRepoName(proj, DEFAULT_SPACE)).toBe(basename(proj));
+  });
+
+  test("codekbRepoName: a store another intent recorded as its repo is not taken", () => {
+    const proj = seedRecordedIntent();
+    seedStore(proj, "svc");
+    seedStore(proj, "earlier-name");
+    appendIntentRow(proj, ["svc"]);
+    expect(codekbRepoName(proj, DEFAULT_SPACE)).toBe("earlier-name");
+  });
+
+  // Without the active intent's registry row, nothing says which stores other
+  // intents' repos own, so a lone store is not taken.
+  test("codekbRepoName: a missing or damaged registry keeps the current name", () => {
+    for (const registry of [null, "{not json\n", "[]\n"]) {
+      const proj = seedRecordedIntent();
+      seedStore(proj, "other-repo");
+      const regPath = join(proj, "aidlc", "spaces", DEFAULT_SPACE, "intents", "intents.json");
+      if (registry === null) rmSync(regPath);
+      else writeFileSync(regPath, registry, "utf-8");
+      expect(codekbRepoName(proj, DEFAULT_SPACE)).toBe(basename(proj));
+    }
+    // The active row is fine, but a later entry is not.
+    for (const bad of [null, "row", { slug: "other", repos: "svc" }]) {
+      const proj = seedRecordedIntent();
+      seedStore(proj, "other-repo");
+      const regPath = join(proj, "aidlc", "spaces", DEFAULT_SPACE, "intents", "intents.json");
+      const rows = JSON.parse(readFileSync(regPath, "utf-8")) as unknown[];
+      rows.push(bad);
+      writeFileSync(regPath, `${JSON.stringify(rows)}\n`, "utf-8");
+      expect(codekbRepoName(proj, DEFAULT_SPACE)).toBe(basename(proj));
+    }
+  });
+
+  test("codekbRepoName: two unclaimed stores are ambiguous and keep the current name", () => {
+    const proj = seedRecordedIntent();
+    seedStore(proj, "name-a");
+    seedStore(proj, "name-b");
+    expect(codekbRepoName(proj, DEFAULT_SPACE)).toBe(basename(proj));
+  });
 });
 
 // ============================================================================
@@ -154,6 +215,7 @@ describe("t182 codekb-path verb — prints the space-level per-repo dir", () => 
   test("codekb-path --repo <name> prints aidlc/spaces/<space>/codekb/<repo>/", () => {
     const proj = freshProject();
     const res = spawnSync(BUN, [UTILITY, "codekb-path", "--project-dir", proj, "--repo", "svc"], {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
       encoding: "utf-8",
       env: childEnv(),
     });
@@ -166,7 +228,7 @@ describe("t182 codekb-path verb — prints the space-level per-repo dir", () => 
     const res = spawnSync(
       BUN,
       [UTILITY, "codekb-path", "--project-dir", proj, "--repo", "svc", "--json"],
-      { encoding: "utf-8", env: childEnv() },
+      { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8", env: childEnv() },
     );
     expect(res.status).toBe(0);
     const parsed = JSON.parse(res.stdout.trim()) as {
@@ -182,6 +244,7 @@ describe("t182 codekb-path verb — prints the space-level per-repo dir", () => 
   test("codekb-path with NO --repo resolves codekbRepoName (0 repos → basename)", () => {
     const proj = freshProject();
     const res = spawnSync(BUN, [UTILITY, "codekb-path", "--project-dir", proj], {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
       encoding: "utf-8",
       env: childEnv(),
     });
@@ -277,6 +340,30 @@ describe("t182 isCodekb resolver — reverse-engineering artifacts land under sp
       ),
     ).toBe(false);
   });
+
+  // The folder was moved after Reverse Engineering wrote its store under the
+  // folder's earlier name: the next stage still reads that store, and
+  // `codekb-path` names it.
+  test("after a folder move, the next stage reads the store Reverse Engineering wrote", () => {
+    const proj = freshProject();
+    seedAidlcMemory(proj);
+    seedStateFile(proj, join(FIXTURES_DIR, "state-brownfield-feature.md"));
+    seedStore(proj, "shop-app");
+    const res = runOrchestrateNext(ORCH, proj, [], { env: childEnv() });
+    const dir = JSON.parse(res.stdout.trim()) as RunStageDirective;
+    expect(dir.kind).toBe("run-stage");
+    expect(dir.stage).toBe("requirements-analysis");
+    const store = `aidlc/spaces/${DEFAULT_SPACE}/codekb/shop-app/`;
+    expect(dir.consumes).toContain(`${store}architecture.md`);
+    expect(dir.consumes.some((path) => path.includes(`/codekb/${basename(proj)}/`))).toBe(false);
+    const path = spawnSync(BUN, [UTILITY, "codekb-path", "--project-dir", proj], {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+      encoding: "utf-8",
+      env: childEnv(),
+    });
+    expect(path.status).toBe(0);
+    expect(path.stdout.trim()).toBe(store);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -290,6 +377,21 @@ function rewriteIntentRepos(proj: string, repos: string[]): void {
   const rows = JSON.parse(readFileSync(regPath, "utf-8")) as Array<Record<string, unknown>>;
   rows[0].repos = repos;
   writeFileSync(regPath, `${JSON.stringify(rows, null, 2)}\n`, "utf-8");
+}
+
+// A second, inactive intent row that recorded its own repos.
+function appendIntentRow(proj: string, repos: string[]): void {
+  const regPath = join(proj, "aidlc", "spaces", DEFAULT_SPACE, "intents", "intents.json");
+  const rows = JSON.parse(readFileSync(regPath, "utf-8")) as Array<Record<string, unknown>>;
+  rows.push({ uuid: "other-uuid", slug: "other", dirName: "other", status: "in-flight", repos });
+  writeFileSync(regPath, `${JSON.stringify(rows, null, 2)}\n`, "utf-8");
+}
+
+// A code knowledge base store with one artifact in it.
+function seedStore(proj: string, repo: string): void {
+  const dir = join(proj, "aidlc", "spaces", DEFAULT_SPACE, "codekb", repo);
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, "architecture.md"), `# ${repo}\n`, "utf-8");
 }
 
 // ============================================================================
@@ -313,7 +415,7 @@ describe("t182 codekb repo name — project root inside a linked git worktree", 
   const added = spawnSync(
     "git",
     ["worktree", "add", "-q", linked, "-b", "feature-x"],
-    { cwd: repo, encoding: "utf-8" },
+    { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), cwd: repo, encoding: "utf-8" },
   );
 
   afterAll(() => cleanupWorktreeFixture(repo));
@@ -368,7 +470,7 @@ describe("t182 codekb repo name — project root below the git toplevel keeps ba
       ["config", "user.email", "t@x"],
       ["config", "user.name", "t"],
     ]) {
-      const r = spawnSync("git", args, { cwd: dir, encoding: "utf-8" });
+      const r = spawnSync("git", args, { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), cwd: dir, encoding: "utf-8" });
       if (r.status !== 0) throw new Error(`git ${args.join(" ")}: ${r.stderr?.trim()}`);
     }
   };

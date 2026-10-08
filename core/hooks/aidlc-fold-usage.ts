@@ -41,20 +41,27 @@ async function isLifecycleBoundaryToolCall(
   name: string,
   input: unknown,
 ): Promise<boolean> {
-  const [{ isEngineToolCall }, { isLifecycleBoundaryCommand }] =
+  const [{ isEngineToolCall, isShellToolName, shellCommandText }, { isLifecycleBoundaryCommand }] =
     await Promise.all([
       import("../tools/aidlc-lib.ts"),
       import("./aidlc-state-transition-guard.ts"),
     ]);
-  if (!/^(bash|shell|execute_bash)$/i.test(name)) {
+  if (!isShellToolName(name)) {
     return isEngineToolCall(name, input);
   }
-  if (input === null || typeof input !== "object") return false;
-  const command = (input as Record<string, unknown>).command;
-  return typeof command === "string" && isLifecycleBoundaryCommand(command);
+  const command = shellCommandText(input);
+  return command !== null && isLifecycleBoundaryCommand(command);
 }
 
+// Null-intent bindings a session records by staying out of a record or leaving
+// one. "none" (nothing chose a record yet) still folds, as before any workflow.
+const LEFT_WORKFLOW_SOURCES: ReadonlySet<string | undefined> = new Set([
+  "unjoined", "archive", "space-switch-none",
+]);
+
 export async function run(input: string): Promise<number> {
+  // Fast exit before the engine loads; a recorded bypass is honoured below by
+  // usageTrackingDisabled(), which resolves the project setting too.
   if (
     Object.hasOwn(process.env, "AIDLC_DISABLE_USAGE_TRACKING") &&
     process.env.AIDLC_DISABLE_USAGE_TRACKING === "1"
@@ -82,14 +89,18 @@ export async function run(input: string): Promise<number> {
   if (!transcriptPath) return 0;
   const [
     {
+      readActiveDirectiveMarker,
       resolveProjectDirFromHook,
       resolveWorkflowSelection,
       stateFilePathForSelection,
       validSessionId,
+      workflowParticipation,
       writeCurrentSessionId,
     },
     {
       foldTranscriptIntoLedger,
+      skipTranscriptUsage,
+      usageTrace,
       usageTrackingDisabled,
       writeCurrentTranscriptPath,
     },
@@ -97,6 +108,7 @@ export async function run(input: string): Promise<number> {
     import("../tools/aidlc-lib.ts"),
     import("../tools/aidlc-usage.ts"),
   ]);
+  usageTrace("fold-imports-loaded");
   if (usageTrackingDisabled()) return 0;
   sessionId = validSessionId(sessionId) ?? "";
   const projectDir = resolveProjectDirFromHook(import.meta.url);
@@ -110,9 +122,26 @@ export async function run(input: string): Promise<number> {
     const selection = resolveWorkflowSelection(projectDir, {
       sessionId: sessionId || undefined,
     });
+    // Usage in a conversation that has not joined this workflow is not its usage,
+    // and a session bound to no record because it stayed out or left carries no
+    // usage key. Its bytes are skipped, not held: a later join must not fold them.
+    if (
+      (selection.intent !== null && workflowParticipation(projectDir, selection) !== "participant") ||
+      (selection.intent === null && selection.binding !== null &&
+        LEFT_WORKFLOW_SOURCES.has(selection.binding.source))
+    ) {
+      usageTrace("fold-skip-begin");
+      skipTranscriptUsage(projectDir, transcriptPath);
+      usageTrace("fold-skip-end");
+      return 0;
+    }
     const statePath = stateFilePathForSelection(projectDir, selection);
     if (existsSync(statePath)) {
-      currentStage = currentStageSlug(readFileSync(statePath, "utf-8")) || null;
+      // Under unit-major Current Stage stays on the block's first stage while
+      // a later stage runs for a Unit; the active directive names that stage.
+      const stateContent = readFileSync(statePath, "utf-8");
+      currentStage = readActiveDirectiveMarker(projectDir, stateContent)?.stage ??
+        (currentStageSlug(stateContent) || null);
     }
   } catch {
     currentStage = null;
@@ -124,9 +153,11 @@ export async function run(input: string): Promise<number> {
   // closes completed subagent groups so lifecycle rollups include their final
   // calls; other PreToolUse events retain subagent holdback. PostToolUse is the
   // normal delayed-write fallback.
+  usageTrace("fold-begin", { mode: foldMode });
   foldTranscriptIntoLedger(projectDir, transcriptPath, currentStage, foldMode, {
     sessionId,
   });
+  usageTrace("fold-end");
   return 0;
 }
 

@@ -179,7 +179,10 @@ describe("t308 hook registration matchers select captured fixture tool names", (
       }
     }
 
-    expect(new Set(registrations.map((registration) => registration.file)).size).toBe(5);
+    // aidlc-guard-tool-call, aidlc-write-audit-log, aidlc-after-shell and
+    // aidlc-log-subagent: the five tool-call checks and the two after-shell
+    // hooks each share one registration (#2022).
+    expect(new Set(registrations.map((registration) => registration.file)).size).toBe(4);
     for (const registration of registrations) {
       expect(
         selectedPatternNames(registration.matcher, KIRO_IDE_OBSERVED_TOOLS),

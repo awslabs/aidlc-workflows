@@ -28,7 +28,12 @@
 //   per call would inflate the ledger with non-changes -- breaking the
 //   reconstructible-from-the-ledger invariant.
 
-import { afterEach, describe, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { afterEach, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
   existsSync,
@@ -58,6 +63,8 @@ import {
   setActiveIntentCursor,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
 const AIDLC_TOOLS = join(import.meta.dir, "..", "..", "dist", "claude", ".claude", "tools");
 const NOW = "2026-08-07T00:00:00Z";
 const SPACE = "default";
@@ -74,7 +81,7 @@ function projectWithIntents(...labels: string[]): string {
       "bun",
       [join(AIDLC_TOOLS, "aidlc-utility.ts"), "intent-create", "--label", label,
        "--project-dir", proj],
-      { encoding: "utf-8", env: CHILD_ENV },
+      { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8", env: CHILD_ENV },
     );
     expect(r.status, `intent-create ${label} failed: ${r.stderr}`).toBe(0);
   }
@@ -215,13 +222,13 @@ describe("t297 an unchanged re-onboard with --intent applies the scope, not just
     const first = spawnSync(
       "bun",
       [join(AIDLC_TOOLS, "aidlc-knowledge.ts"), "onboard", "--project-dir", p],
-      { encoding: "utf-8", env: CHILD_ENV },
+      { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8", env: CHILD_ENV },
     );
     expect(first.status, first.stderr).toBe(0);
     const second = spawnSync(
       "bun",
       [join(AIDLC_TOOLS, "aidlc-knowledge.ts"), "onboard", "--intent", "auth", "--project-dir", p],
-      { encoding: "utf-8", env: CHILD_ENV },
+      { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8", env: CHILD_ENV },
     );
     expect(second.status, second.stderr).toBe(0);
     expect(JSON.parse(second.stdout).indexed[0].status).toBe("already");
@@ -435,7 +442,7 @@ describe("t297 I09: a space-wide document survives intent creation", () => {
       "bun",
       [join(AIDLC_TOOLS, "aidlc-utility.ts"), "intent-create", "--label", "auth",
        "--project-dir", p],
-      { encoding: "utf-8", env: CHILD_ENV },
+      { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8", env: CHILD_ENV },
     );
     expect(r.status, r.stderr).toBe(0);
 
@@ -452,7 +459,7 @@ describe("t297 I09: a space-wide document survives intent creation", () => {
     const second = onboard(p, SPACE, undefined, NOW);
     expect(second.indexed.map((o) => o.status)).toEqual(["already"]);
     expect(readIndex(p, SPACE).documents.length).toBe(1);
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -504,7 +511,7 @@ describe("t297 an ORPHAN intent record (no registry row) refuses to scope a docu
     const r = spawnSync(
       "bun",
       [join(AIDLC_TOOLS, "aidlc-knowledge.ts"), "onboard", "--intent", "--project-dir", p],
-      { encoding: "utf-8", env: CHILD_ENV },
+      { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8", env: CHILD_ENV },
     );
     expect(r.status, `expected a refusal, got stdout: ${r.stdout}`).not.toBe(0);
     expect((r.stdout ?? "") + (r.stderr ?? "")).toMatch(/orphan/i);

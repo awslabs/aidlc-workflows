@@ -7,8 +7,13 @@
 // run-stage) is answered as a bare `next` would be: the current issued step,
 // never an error directive.
 
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
 import { createHash, randomUUID } from "node:crypto";
-import { afterAll, describe, expect, test } from "bun:test";
+import { afterAll, describe, expect, test, setDefaultTimeout } from "bun:test";
 import {
   closeSync,
   cpSync,
@@ -26,6 +31,8 @@ import {
   seededRecordDir,
   setupIntegrationProject,
 } from "../harness/fixtures.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const BUN = process.execPath;
 const RECEIPT_PATTERN = /^[A-Za-z0-9_-]{8}$/;
@@ -124,7 +131,7 @@ function project(
 // Removing every staged project can exceed bun's hook default under load.
 afterAll(() => {
   for (const proj of projects) cleanupTestProject(proj);
-}, 120_000);
+}, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 function command(
   installed: InstalledProject,
@@ -152,6 +159,7 @@ function invoke(
   env: Record<string, string> = {},
 ): { directive: Directive; stdout: string; stderr: string } {
   const proc = Bun.spawnSync(command(installed, verb, arg), {
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     cwd: installed.dir,
     stdout: "pipe",
     stderr: "pipe",
@@ -292,6 +300,58 @@ function makeCopilotOwned(installed: InstalledProject): void {
   );
 }
 
+// Stand in for the Copilot adapter's claim: a pending attempt owned by the
+// marker's session and bound to this exact command, as claimCopilotCommand
+// records it, then the engine run under that attempt id. Returns the directive
+// and the attempt as the engine left it for the adapter to settle.
+function invokeTracked(
+  installed: InstalledProject,
+  verb: "next" | "continue",
+  id: string,
+  receipt?: string,
+): { directive: Directive; stdout: string; attempt: Record<string, unknown> } {
+  const args = verb === "continue" ? [receipt ?? ""] : [];
+  const value = marker(installed);
+  const revision = Number(value.revision) + 1;
+  value.revision = revision;
+  value.needs_rehydrate = true;
+  value.active_attempt = {
+    id,
+    command_kind: verb,
+    command_sha256: createHash("sha256")
+      .update(JSON.stringify([verb, ...args]))
+      .digest("hex"),
+    issued_state_sha256: value.state_sha256,
+    session_id: value.owner_session,
+    owner_epoch: value.owner_epoch,
+    context_epoch: value.context_epoch,
+    claim_revision: revision,
+    status: "pending",
+    ...(verb === "continue" ? { cursor_input_sha256: receiptSha256(args[0]) } : {}),
+  };
+  writeFileSync(
+    markerPath(installed),
+    `${JSON.stringify(value, null, 2)}\n`,
+    "utf-8",
+  );
+  const proc = Bun.spawnSync(
+    [...command(installed, verb, receipt), "--aidlc-attempt-id", id],
+    {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+      cwd: installed.dir,
+      stdout: "pipe",
+      stderr: "pipe",
+    },
+  );
+  const stdout = proc.stdout.toString().trim();
+  expect(proc.exitCode, proc.stderr.toString()).toBe(0);
+  return {
+    directive: JSON.parse(stdout) as Directive,
+    stdout,
+    attempt: marker(installed).active_attempt as Record<string, unknown>,
+  };
+}
+
 describe("t283 engine-owned continuation cursor", () => {
   // Old property: one race winner, one "no longer current" error. New property:
   // one race winner (part 2); the loser is re-sent part 1, never an error.
@@ -361,7 +421,7 @@ describe("t283 engine-owned continuation cursor", () => {
       expect(marker(installed).needs_rehydrate, harness.name).toBe(false);
       assertMarkerMatchesDirective(installed, twice);
     }
-  }, 60000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   // Old property: exactly one winner, one stale error, marker advanced once. New
   // property: both racers receive the same part 2 (the loser reads the winner's
@@ -388,7 +448,7 @@ describe("t283 engine-owned continuation cursor", () => {
         receiptSha256(String(value.continue_token)),
       );
     }
-  }, 60000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   // Old property: one winner, one stale error, owner preserved. New property:
   // both racers receive the committed successor and the Copilot owner is
@@ -446,25 +506,71 @@ describe("t283 engine-owned continuation cursor", () => {
       expect(marker(installed), harness.name).toHaveProperty("steering_payload");
 
       // A consumed receipt is answered exactly as a bare `next` is, never as an
-      // error and never as the earlier part it once named. On every harness but
-      // Kiro IDE that is the issued run-stage, re-answered from the marker. Kiro
-      // IDE never re-answers from the marker (its legacy Plan Approval choices
-      // are rotated by publication), so there a bare `next` after run-stage
-      // re-transports the rules from part 1, and the replay follows it.
+      // error and never as the earlier part it once named. This run-stage came
+      // after rules parts and carries none of its rules, so a bare `next` cannot
+      // re-answer it (a new chat or a resume would run the stage without them):
+      // on every harness it re-transports the rules from part 1, and the replay
+      // follows it.
       for (const receipt of receipts) {
         const label = `${harness.name} ${receipt}`;
         const replay = invoke(installed, "continue", receipt);
         const again = invoke(installed, "next");
         expect(replay.directive.kind, label).not.toBe("error");
         expect(replay.stdout, label).toBe(again.stdout);
-        if (harness.name === "kiro-ide") {
-          expect(isRestart(replay.directive), label).toBe(true);
-        } else {
-          expect(replay.directive.kind, label).toBe("run-stage");
-        }
+        expect(isRestart(replay.directive), label).toBe(true);
       }
     }
-  }, 120000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  // Old property: under a tracked Copilot attempt a consumed receipt was
+  // refused with a stale-attempt error naming `next`, and the recovery `next`
+  // re-sent part one anyway. New property: it is answered exactly as a tracked
+  // `next` is, and the attempt it was claimed under binds that answer for the
+  // adapter to settle. A tracked `next` never re-answers from the marker, so
+  // both after run-stage and mid-delivery that answer is part one again.
+  test("a consumed receipt under a tracked Copilot attempt is answered exactly as a tracked next is", () => {
+    const harness = HARNESSES.find((entry) => entry.name === "copilot")!;
+    const installed = project(harness);
+    let directive = invoke(installed, "next").directive;
+    makeCopilotOwned(installed);
+    const receipts: string[] = [];
+    while (directive.kind === "load-steering") {
+      const receipt = directive.receipt ?? "";
+      receipts.push(receipt);
+      directive = invokeTracked(installed, "continue", `advance-${receipts.length}`, receipt).directive;
+      expect(directive.kind).not.toBe("error");
+      expect(receipts.length).toBeLessThan(100);
+    }
+    expect(directive.kind).toBe("run-stage");
+    expect(receipts.length).toBeGreaterThan(1);
+
+    const cases = [
+      { label: "after run-stage", receipt: receipts[receipts.length - 1] },
+      { label: "mid-delivery", receipt: receipts[0] },
+    ];
+    for (const [index, { label, receipt }] of cases.entries()) {
+      if (label === "mid-delivery") {
+        const advanced = invokeTracked(installed, "continue", "advance-again", receipts[0]);
+        expect(advanced.directive.part, label).toBe(2);
+      }
+      const replay = invokeTracked(installed, "continue", `replay-${index}`, receipt);
+      expect(replay.directive.kind, label).not.toBe("error");
+      expect(isRestart(replay.directive), label).toBe(true);
+      expect(replay.directive.receipt, label).toBe(receipts[0]);
+      expect(replay.attempt, label).toMatchObject({
+        id: `replay-${index}`,
+        command_kind: "continue",
+        status: "pending",
+        result_sha256: createHash("sha256").update(replay.stdout).digest("hex"),
+      });
+      assertMarkerMatchesDirective(installed, replay.directive);
+      const again = invokeTracked(installed, "next", `next-${index}`);
+      expect(replay.stdout, label).toBe(again.stdout);
+      expect(again.attempt, label).toMatchObject({
+        result_sha256: createHash("sha256").update(again.stdout).digest("hex"),
+      });
+    }
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   // Old property: after marker damage exactly one racer won and one got the
   // stale error. New property: both racers are answered identically and never
@@ -564,7 +670,7 @@ describe("t283 engine-owned continuation cursor", () => {
       }
       expect(value.continue_token, shape).toBe(results[0].directive.receipt);
     }
-  }, 60000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("fresh next and continue serialize in both lock orders", async () => {
     const harness = HARNESSES[0];
@@ -641,7 +747,7 @@ describe("t283 engine-owned continuation cursor", () => {
       expect(result.directive.part).toBe(2);
       assertMarkerMatchesDirective(installed, result.directive);
     }
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("fresh next emits no work directive when cursor reset publication contends", () => {
     // Include initial publication, then the unchanged production lock retry loop.
@@ -667,7 +773,12 @@ describe("t283 engine-owned continuation cursor", () => {
       }),
     );
 
-    const blocked = invoke(installed, "next").directive;
+    // This holder never releases, so exhaustion is certain. Give the unchanged
+    // retry loop an explicit contention budget instead of the production
+    // backstop, which is as long as this test's process ceiling.
+    const blocked = invoke(installed, "next", undefined, {
+      AIDLC_ACTIVE_DIRECTIVE_LOCK_TIMEOUT_MS: "1000",
+    }).directive;
 
     expect(blocked.kind).toBe("error");
     expect(blocked.message).toContain("no work directive was issued");
@@ -675,7 +786,7 @@ describe("t283 engine-owned continuation cursor", () => {
     expect(blocked.message).not.toContain("Retry `next`");
     expect(existsSync(markerPath(installed))).toBe(false);
     expect(existsSync(lockDir)).toBe(true);
-  }, 15_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("a repeated next answers from the issued directive without taking the coordination lock", () => {
     const installed = project(HARNESSES[0]);
@@ -760,6 +871,7 @@ describe("t283 engine-owned continuation cursor", () => {
       const failed = (() => {
         try {
           return Bun.spawnSync(command(installed, "continue", receipt), {
+            timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
             cwd: installed.dir,
             stdout: roFd,
             stderr: "pipe",
@@ -785,5 +897,5 @@ describe("t283 engine-owned continuation cursor", () => {
       expect(next.directive.kind).toBe("load-steering");
       expect(next.stdout).toBe(replay.stdout);
     }
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });

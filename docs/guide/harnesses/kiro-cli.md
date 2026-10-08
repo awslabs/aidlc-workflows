@@ -44,7 +44,9 @@ aidlc doctor
 The installer verifies the release metadata, executable, and all-harness runtime archive against the published SHA-256 checksums. The installed runtime does not require Bun, Node.js, or Git. Harness selection happens in `aidlc config`.
 
 On Windows, download `install.ps1` and run
-`& $installer`. For an air-gapped package, use
+`& $installer`. See [Windows installation](../18-install-and-lifecycle.md#windows-powershell)
+for account scope, automatic User PATH registration, and `-NoModifyPath`.
+For an air-gapped package, use
 `install.sh --from <release-directory> --offline` on Unix or
 `& $installer -From <release-directory> -Offline` on Windows.
 
@@ -55,7 +57,9 @@ Kiro from the project root:
 kiro-cli chat
 ```
 
-The native projection allows `aidlc engine *` engine commands. It also ships
+The native projection allows `aidlc engine *` engine commands and the exact
+read-only and turn-back-on commands (`aidlc doctor`, `aidlc config <section> --show --json`
+and the others listed under the session start below). It also ships
 `.kiro/settings/cli.json` with `chat.defaultAgent: "aidlc"`, so `/aidlc` is
 active without an agent flag. Run `/aidlc --doctor` in chat before the first
 workflow.
@@ -70,11 +74,7 @@ then set `RUNTIME_ROOT` to the extracted `runtime/` directory.
 mkdir -p your-project/.kiro your-project/aidlc
 cp -R "$RUNTIME_ROOT/kiro/.kiro/." your-project/.kiro/
 cp -R "$RUNTIME_ROOT/kiro/aidlc/." your-project/aidlc/    # the workspace shell (spaces/default/memory) — a sibling of .kiro/, not inside it
-cp "$RUNTIME_ROOT/kiro/AGENTS.md" your-project/AGENTS.md  # merge if you already have one
-# Existing .gitignore: preserve it and merge only the section beginning "# AI-DLC".
-if [ ! -e your-project/.gitignore ]; then
-  cp "$RUNTIME_ROOT/kiro/.gitignore" your-project/.gitignore
-fi
+cd your-project && bun .kiro/tools/aidlc.ts config --from "$RUNTIME_ROOT" --harness kiro
 ```
 
 The `aidlc/` directory is the workspace shell — it ships the pre-built
@@ -93,11 +93,9 @@ per-user cursors (`aidlc/active-space`, `aidlc/spaces/*/intents/active-intent`)
 and machine-local runtime (`aidlc/.aidlc-clone-id`, `runtime-graph.json`, sensor
 caches, `spaces/*/knowledge/.sources.local.json`) stay untracked, while the
 shared records — method memory, state, audit shards, artifacts — travel with
-git. The guarded command copies the complete starter file only when the project
-has no `.gitignore`. If one exists, preserve every project-owned rule and merge
-only the section from `# AI-DLC` through the end of the shipped file; do not
-copy its generic starter rules. The `## Git Integration` section of the
-installed `AGENTS.md` assumes the AI-DLC rules are in place before your first
+git. The last line, the copy's own setup, adds those lines and AI-DLC's part of
+`AGENTS.md` after everything already in your files, or creates the files when
+the project has none, so the AI-DLC rules are in place before your first
 workflow.
 
 Then start a session in your project:
@@ -114,16 +112,45 @@ have configured**; if you prefer your own default, remove that setting and use
 
 No shipped agent pins a model: a pinned ID resolves only when that
 model is enabled on the user's Kiro install, so the conductor and all 14
-personas inherit your session model (`/model`). The same `cli.json` also
-ships one CONDITIONAL per-model reasoning-effort default via
-`chat.modelDefaults`: `xhigh` for `claude-opus-4.8`, applied only when your
-session actually runs that model (the recommended setup) — inert otherwise.
-Kiro has no per-agent effort surface, so effort can only ride on the model
-this way. This file is read by the Kiro CLI only — the Kiro IDE ignores
-`cli.json` and applies its extension's per-model defaults instead. Override
-per session with `/effort <level>` in chat or `kiro-cli chat --effort
-<level>` (low|medium|high|xhigh|max) — a session flag and your user-level
-`~/.kiro/settings/cli.json` both take precedence over the workspace default.
+personas inherit your session model (`/model`).
+
+### Session model and effort
+
+Kiro CLI runs each AI-DLC session on one model and has no per-agent effort
+surface, so AI-DLC keeps the session's model and effort in your **personal**
+Kiro settings (`~/.kiro/settings/cli.json`, the file Kiro's own
+`/model set-current-as-default` writes), never in the project. Model lists
+differ per Kiro account, and a project model a teammate's account lacks fails
+every prompt they send. A project `chat.modelDefaults` would also replace your
+whole personal map inside the project, so the shipped `cli.json` carries none.
+
+First-run setup's step 2, "Session model", lists the models your Kiro account
+offers, in Kiro's order, with each model's credit multiplier and a `preview` or
+`internal` tag. Under Kiro auto (Kiro's own default, where Kiro picks the model
+for each task), AI-DLC recommends choosing a model, so your effort preset
+applies to it. The preset then sets one effort for the whole session:
+
+| Preset | Session effort |
+|--------|----------------|
+| `minimal` | `low` |
+| `balanced` | `medium` |
+| `thorough` | `xhigh` (extra-high) |
+
+A model without that level gets its next level down, and a model with no
+effort setting keeps only the model. `aidlc config models` offers the same
+choice later ("1 session model, 2 preset"), and
+`aidlc config models --session-model <id>` saves a model from your account's
+list without prompts. A saved model your account no longer offers fails every
+prompt, so setup asks for another instead of keeping it. `--dry-run` shows the
+personal Kiro settings change too and writes nothing. When Kiro refuses a write,
+AI-DLC says exactly what was saved and `config models` exits 5 (action needed).
+`aidlc doctor` checks the live setting: the model is still offered, the effort
+matches the preset, and no project file overrides it. Refreshing a project set
+up by an earlier release removes AI-DLC's old effort map (`claude-opus-4.8` at
+extra-high) from `.kiro/settings/cli.json` and says so; run
+`aidlc config models` to choose the session model.
+Override one session with `/effort <level>` in chat or `kiro-cli chat --effort
+<level>` (low|medium|high|xhigh|max). The Kiro IDE does not read `cli.json`.
 
 ## Refresh and version skew
 
@@ -137,9 +164,9 @@ aidlc config
 ```
 
 Config preserves user-owned content and reports local framework edits as
-conflicts. It refuses refresh while any workflow is active; complete the
-workflow first. Upgrade and rollback remain safe during a workflow because
-they do not modify the project.
+conflicts. A refresh while a workflow is open is done and says your open work
+carries on. Upgrade and rollback remain safe during a workflow because they do
+not modify the project.
 
 ## Usage
 
@@ -158,9 +185,32 @@ at that plain-text relay boundary; ordinary Unicode, paths, tabs, newlines, and
 literal escape-looking text remain unchanged.
 
 **Start the session from the project root.** Native installs pre-approve the
-installed `aidlc` command. Source/development copies pre-approve only
-project-relative `bun .kiro/tools/<tool>.ts` commands; absolute paths,
-`KIRO_PROJECT_DIR` expansion, and command chains remain gated.
+installed `aidlc engine ...` commands and, exactly as written, the same
+read-only and turn-back-on commands listed next, run as `aidlc ...`.
+Source/development copies pre-approve only
+AI-DLC's own workflow commands, run project-relative: the engine commands
+(`bun .kiro/tools/aidlc.ts engine ...`), the read-only `doctor`, `version`,
+`--version`, `--doctor` (doctor with or without `--verbose`), `status`,
+`--status`, `config --help`, `config --show` and
+`config <section> --show` with or without `--json`, and
+`config <section> --help`, turning a check back on with
+`config flags --clear-bypass <switch> --yes`, and the AI-DLC tool scripts
+(`bun .kiro/tools/aidlc-<tool>.ts`). Any other `config` change (turning a check
+off included), the commands that change
+the machine's AI-DLC install (`use`, `update`, `rollback`, `uninstall`,
+`system`) with the tool scripts behind them (`aidlc-doctor.ts`, `aidlc-init.ts`,
+`aidlc-lifecycle.ts`, `aidlc-machine-config.ts`), absolute paths,
+`KIRO_PROJECT_DIR` expansion, and a line that adds a command that is not
+pre-approved (a `cd` before it, or a pipe or `&&` into another command) still
+ask.
+
+**What still asks you.** The developer agent and the `aidlc` agent write
+project files without asking: any path inside the project whose top-level name
+does not start with a dot. Their writes into `.kiro/` (apart from the `aidlc` agent's own
+`.kiro/sensors/` files), `.git/`, or any other
+top-level dot entry, and anything outside the project, still ask. Your
+project's own test and build commands (`bun test`, `npm test`, `pytest`, and so
+on) still ask, so you see each one before it runs.
 
 **Sessions with no approver stall rather than prompt.** Anything outside the
 pre-approved set needs an interactive answer. Under `kiro-cli chat
@@ -170,6 +220,34 @@ answer `session/request_permission`; a client that ignores those requests looks
 exactly like a permission failure. `--trust-all-tools` bypasses both the allow
 and deny lists, including the recursive-`rm` and `git push` denials. Use it only
 inside a disposable sandbox where blanket shell access is acceptable.
+
+**The hooks run on Kiro CLI's v2 engine, including over ACP.** This
+distribution registers its hooks in `.kiro/agents/aidlc.json`. Kiro CLI runs
+that block on its v2 engine while the `aidlc` agent is active. `kiro-cli acp`
+picks the agent from `chat.defaultAgent`, the same way `kiro-cli chat` does.
+Kiro CLI's v3 engine does not run the file as AI-DLC ships it, so if a session
+starts on v3 (for example when a client starts `kiro-cli acp --agent-engine v3`)
+or switches to another agent, none of these hooks run. With no hooks, no
+`HUMAN_TURN` receipts are recorded, so every approval and confirmation is
+refused. No write events are recorded either, so reviews are refused.
+
+A prompt Kiro makes itself (for example the `[SYSTEM] Sub-agent synthesis:` message a newer
+kiro-cli sends after a sub-agent returns) is not counted as your turn: it is recorded as
+`HOST_TURN` and answers no question. Your own messages count whatever their words; Kiro's
+chat record says which is which, and anything unknown is yours.
+After the first workflow stage, `/aidlc --doctor` reports this as "Hooks have
+never executed". Before that, doctor warns that AI-DLC's hooks have not run in
+this project yet and names the same step. Restarting on the v3
+engine does not fix it. With another agent picked, type `/agent` and pick
+`aidlc`, then carry on in the same chat. On the 3.0 engine (Kiro prints
+`agent "aidlc" needs upgrading for this agent engine` under its replies), quit
+and start `kiro-cli chat --agent-engine v2 --agent aidlc` in this folder
+instead (an ACP client starts `kiro-cli acp --agent-engine v2`). To run Kiro
+CLI on its v3 engine, use the
+[Kiro IDE](kiro-ide.md) distribution instead; in an existing project,
+`aidlc config --harness kiro-ide` switches `.kiro/` to it in place and keeps
+`aidlc/`. See
+[Kiro CLI hooks not running](../15-troubleshooting.md#kiro-cli-hooks-not-running).
 
 ## What's different on Kiro
 
@@ -181,7 +259,7 @@ inside a disposable sandbox where blanket shell access is acceptable.
 | Construction swarm | Parallel `Task` floor, optional ultracode Workflow | Subagent fan-out only; `AIDLC_USE_SWARM=1` is announced as a no-op |
 | Session audit events | `SESSION_STARTED/RESUMED/ENDED`, `SESSION_COMPACTED` | `SESSION_STARTED` only (Kiro has no session-end / pre-compaction hooks) |
 | Forwarding-loop enforcement (Stop hook) | Interactive + headless | Interactive sessions only — `--no-interactive` runs do not honor the stop-hook block |
-| Permissions | `settings.json` allowlist | Source-generated projection: project-relative framework `bun .kiro/tools/<tool>.ts` calls and `date -u`; native and versioned release runtimes: `aidlc engine *`. Other shell commands prompt. |
+| Permissions | `settings.json` allowlist | Source-generated projection: AI-DLC's own project-relative workflow commands (engine, read-only dispatcher commands, AI-DLC tool scripts); native and versioned release runtimes: `aidlc engine *`. Other shell commands prompt. |
 | Welcome message | Rendered at session start from `settings.json` `companyAnnouncements` | None — Kiro has no welcome-render equivalent; the session-start hook injects resume context only |
 | MCP servers | Ships 5 (`.mcp.json`: `context7` + four AWS servers) | Ships the same 5 in `.kiro/settings/mcp.json`, all disabled by default; flip `"disabled": false` per server to enable it. Context7 is keyless on Kiro because Kiro sends configured HTTP header values verbatim instead of expanding environment placeholders. All 14 delegated personas opt in through `includeMcpJson: true` plus `@<server>` tool grants; the conductor gets none. |
 

@@ -9,7 +9,7 @@
 // Uses the native worktree/approval fixture pattern from t344; no live agent.
 
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import {
@@ -28,14 +28,21 @@ import {
   seedAidlcMemory, seedBoltDagBatches, seededStateFile, setupWorktreeFixture,
 } from "../harness/fixtures.ts";
 import { testGuardEnvironment } from "../harness/runner-profile.ts";
-import { NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS } from "../harness/test-budget.ts";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS,
+  NATIVE_PROCESS_CLEANUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingCleanupTimeoutMs,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
 
 setDefaultTimeout(NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 resetAidlcEnv();
 const projects: string[] = [];
 afterEach(() => {
   while (projects.length) cleanupWorktreeFixture(projects.pop()!);
-}, 30_000);
+});
 
 const STAGE = "code-generation";
 const UNIT = "alpha";
@@ -46,10 +53,16 @@ const ISOLATED_GIT_ENV: NodeJS.ProcessEnv = {
   ...process.env,
   GIT_CONFIG_GLOBAL: process.platform === "win32" ? "NUL" : "/dev/null",
   GIT_CONFIG_NOSYSTEM: "1",
+  // Replacing the runner's global config must keep its Windows long-path
+  // support, or deep fixture worktrees cannot be removed.
+  ...(process.platform === "win32"
+    ? { GIT_CONFIG_COUNT: "1", GIT_CONFIG_KEY_0: "core.longpaths", GIT_CONFIG_VALUE_0: "true" }
+    : {}),
 };
 
 function tool(pd: string, file: string, args: string[], input?: unknown, env: NodeJS.ProcessEnv = {}) {
   const result = Bun.spawnSync([process.execPath, join(AIDLC_SRC, "tools", file), ...args], {
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     cwd: pd, env: { ...ISOLATED_GIT_ENV, AIDLC_PROJECT_DIR: pd, CLAUDE_PROJECT_DIR: pd, ...env },
     stdout: "pipe", stderr: "pipe",
     ...(input === undefined ? {} : { stdin: Buffer.from(JSON.stringify(input)) }),
@@ -63,6 +76,7 @@ function succeeded(result: ReturnType<typeof tool>): void {
 
 function git(pd: string, args: string[]): string {
   const result = Bun.spawnSync(["git", ...args], {
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     cwd: pd, env: ISOLATED_GIT_ENV, stdout: "pipe", stderr: "pipe",
   });
   expect(result.exitCode, result.stderr.toString()).toBe(0);
@@ -230,9 +244,13 @@ function completeAndReject(pd: string): void {
 }
 
 function approveReopenedAttempt(pd: string): void {
-  const printed = tool(pd, "aidlc-testing-posture.ts", ["fingerprint", "--unit", UNIT, "--reapprove"]);
-  succeeded(printed);
   const questions = join(codeGenerationRecordDir(pd, UNIT), "code-generation-questions.md");
+  // The earlier attempt's approval stands in the file; blank it before the new fingerprint.
+  if (existsSync(questions)) {
+    writeFileSync(questions, readFileSync(questions, "utf-8").replace(/^\[Answer\]:.*$/gm, "[Answer]:"));
+  }
+  const printed = tool(pd, "aidlc-testing-posture.ts", ["fingerprint", "--unit", UNIT]);
+  succeeded(printed);
   writeFileSync(questions, [
     "## Plan Approval", ...printed.out.trim().split("\n"),
     "A. Approve Plan", "B. Request Changes", "[Answer]:", "",
@@ -315,7 +333,7 @@ function checkWorkerCommands(worker: string, unit: string, allowed: boolean): vo
   }
 }
 
-function checkWorkerWriteHook(worker: string, unit: string, allowed: boolean): void {
+function checkWorkerWriteHook(worker: string, unit: string, allowed: boolean, speaks = true): void {
   const source = join(worker, "src", `${unit}.ts`);
   const sourceBefore = readFileSync(source, "utf-8");
   const notices = () => readAuditShardEvents(worker).filter((row) => row.event === "GUARD_STOOD_ASIDE" &&
@@ -325,6 +343,7 @@ function checkWorkerWriteHook(worker: string, unit: string, allowed: boolean): v
   const noticesBefore = notices().length;
   const blocksBefore = blocks().length;
   const result = Bun.spawnSync([process.execPath, join(AIDLC_SRC, "hooks", "aidlc-plan-approval-guard.ts")], {
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     cwd: worker,
     env: {
       ...testGuardEnvironment(ISOLATED_GIT_ENV, "production"),
@@ -343,7 +362,9 @@ function checkWorkerWriteHook(worker: string, unit: string, allowed: boolean): v
   expect(notices()).toHaveLength(noticesBefore + (allowed ? 1 : 0));
   expect(blocks()).toHaveLength(blocksBefore + (allowed ? 0 : 1));
   if (allowed) {
-    expect(out).toContain("Continuing past the plan-approval check");
+    // Relaxed says it carried on in one line; off records the row and says nothing.
+    if (speaks) expect(out).toContain("Continuing past the plan-approval check");
+    else expect(out).not.toContain("Continuing past");
     expect(err).not.toContain('"ask_type":"guard-recovery"');
     const notice = notices().at(-1)!;
     expect(auditBlockField(notice.block, "Stage")).toBe(STAGE);
@@ -359,7 +380,10 @@ function checkWorkerWriteHook(worker: string, unit: string, allowed: boolean): v
 
 describe("swarm consumes lowered plan-approval allowance", () => {
   for (const fault of ["later-target", "source-during-publication"] as const) {
-    test.each(["relaxed", "off"] as const)(`a %s dispatch rolls back all new starts after ${fault} and revalidates its retry`, async (mode) => {
+    const outcome = fault === "later-target"
+      ? "rolls back all new starts after later-target and revalidates its retry"
+      : "goes ahead when a file is written while its starts are published";
+    test.each(["relaxed", "off"] as const)(`a %s dispatch ${outcome}`, async (mode) => {
       const pd = fixture(true);
       const originals = GROUP_UNITS.map((unit) => approvalSnapshot(pd, unit));
       const approvals = readAuditShardEvents(pd).filter((row) => row.event === "PLAN_APPROVAL_RECORDED");
@@ -385,6 +409,7 @@ describe("swarm consumes lowered plan-approval allowance", () => {
       };
       const command = [process.execPath, join(AIDLC_SRC, "hooks", "aidlc-plan-approval-guard.ts")];
       const processUnderTest = Bun.spawn(command, {
+        timeout: remainingOperationTimeoutMs(NATIVE_FIXTURE_SETUP_TIMEOUT_MS),
         cwd: pd,
         env: {
           ...env,
@@ -398,7 +423,7 @@ describe("swarm consumes lowered plan-approval allowance", () => {
       const instructionsPath = join(codeGenerationRecordDir(pd, "beta"), "unit-test-instructions.md");
       const instructions = readFileSync(instructionsPath, "utf-8");
       try {
-        const deadline = Date.now() + 15_000;
+        const deadline = Date.now() + remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS)!;
         while (!existsSync(`${barrier}.published`) && Date.now() < deadline) await Bun.sleep(5);
         expect(existsSync(`${barrier}.published`)).toBe(true);
         expect(readPlanApprovalReceipt(pd, originals[0].key)?.status).toBe("generation");
@@ -409,7 +434,26 @@ describe("swarm consumes lowered plan-approval allowance", () => {
         }
       } finally {
         writeFileSync(`${barrier}.release`, "release\n");
-        await processUnderTest.exited;
+        const cleanupTimer = setTimeout(
+          () => processUnderTest.kill("SIGKILL"),
+          remainingCleanupTimeoutMs(NATIVE_PROCESS_CLEANUP_TIMEOUT_MS),
+        );
+        try {
+          await processUnderTest.exited;
+        } finally {
+          clearTimeout(cleanupTimer);
+        }
+      }
+      if (fault === "source-during-publication") {
+        // With the check lowered, a file written during the start is the same
+        // accepted change as one written before it.
+        expect(processUnderTest.exitCode, await stderr).toBe(0);
+        for (const original of originals) {
+          expect(readPlanApprovalReceipt(pd, original.key)?.status).toBe("generation");
+        }
+        expect(readAuditShardEvents(pd).filter((row) => row.event === "PLAN_APPROVAL_RECORDED")).toEqual(approvals);
+        expect(readFileSync(statePath, "utf-8")).toBe(state);
+        return;
       }
       expect(processUnderTest.exitCode, await stderr).toBe(2);
       expect(await stdout).not.toContain("Continuing past");
@@ -424,6 +468,7 @@ describe("swarm consumes lowered plan-approval allowance", () => {
       const source = workspaceSourceFingerprint(pd);
       if (source === null) throw new Error("Retry source must be bindable");
       const retried = Bun.spawnSync(command, {
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
         cwd: pd, env, stdin: Buffer.from(JSON.stringify({ ...input, tool_input: { ...input.tool_input, prompt: brief() } })),
         stdout: "pipe", stderr: "pipe",
       });
@@ -460,6 +505,7 @@ describe("swarm consumes lowered plan-approval allowance", () => {
     expect(codeGenerationExecutionAllowed(pd, TARGET)).toBe(true);
     expect(codeGenerationExecutionAllowed(pd, { unit: "beta" })).toBe(false);
     const guarded = Bun.spawnSync([process.execPath, join(AIDLC_SRC, "hooks", "aidlc-plan-approval-guard.ts")], {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
       cwd: pd,
       env: {
         ...testGuardEnvironment(ISOLATED_GIT_ENV, "production"),
@@ -472,7 +518,7 @@ describe("swarm consumes lowered plan-approval allowance", () => {
       stdout: "pipe", stderr: "pipe",
     });
     expect(guarded.exitCode, guarded.stderr.toString()).toBe(2);
-    expect(guarded.stderr.toString()).toContain("CODE_GENERATION_EXECUTION_INELIGIBLE");
+    expect(guarded.stderr.toString()).toContain(" The plan-approval setting is unchanged.");
     for (const original of originals) {
       expect(readPlanApprovalReceipt(pd, original.key)).toEqual(original.receipt);
     }
@@ -609,7 +655,8 @@ describe("swarm consumes lowered plan-approval allowance", () => {
           });
         }
         const delegated = readPlanApprovalReceipt(child(pd), key)!;
-        expect(delegated.delegation).toMatchObject({ unit: UNIT, parentProjectDir: pd, worktreeDir: child(pd) });
+        // The receipt records the parent's realpath; the fixture path is portable.
+        expect(delegated.delegation).toMatchObject({ unit: UNIT, parentProjectDir: realpathSync(pd), worktreeDir: child(pd) });
         if (operation === "resume") {
           const resumedStarts = starts(pd).length;
           succeeded(prepare(pd, true));
@@ -656,7 +703,7 @@ describe("delegated continuation follows the parent approval and live fence", ()
       expect(parentReceipt).toEqual({ ...original.receipt, status: "generation" });
       expect(workerReceipt).toMatchObject({
         ...original.receipt, status: "generation",
-        delegation: { unit, parentProjectDir: pd, worktreeDir: worker },
+        delegation: { unit, parentProjectDir: realpathSync(pd), worktreeDir: worker },
       });
       expect(workerReceipt?.batch?.members.map((member) => member.unit)).toEqual(GROUP_UNITS);
       const workerApprovals = readAuditShardEvents(worker).filter((row) => row.event === "PLAN_APPROVAL_RECORDED");
@@ -695,7 +742,7 @@ describe("delegated continuation follows the parent approval and live fence", ()
     writeFileSync(parentState, setGuardPolicyLine(readFileSync(parentState, "utf-8"), `${mode} (set by you)`));
     publish(pd);
     revise(worker, true);
-    checkWorkerWriteHook(worker, UNIT, true);
+    checkWorkerWriteHook(worker, UNIT, true, mode !== "off");
     checkWorkerCommands(worker, UNIT, true);
     // The parent choice is effective without re-forking or rewriting child state.
     expect(readFileSync(workerState, "utf-8")).toBe(strictWorkerState);

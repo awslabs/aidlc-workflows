@@ -18,9 +18,14 @@
 //       surfaces and the 12a dispatch-record prose, so a wiring or prose sweep
 //       cannot silently drop the enforcement while the hook file survives.
 
-import { describe, expect, test } from "bun:test";
+import {
+  NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, utimesSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { hostname, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -32,7 +37,10 @@ import {
   type ReviewerDispatch,
 } from "../../dist/claude/.claude/hooks/aidlc-reviewer-scope.ts";
 import { stateDigest, writeActiveDirectiveMarker } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import { hookGroupMembers } from "../../core/tools/aidlc-command.ts";
 import { HARNESS_MATRIX } from "../harness/harness-matrix.ts";
+
+setDefaultTimeout(NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const AIDLC_SRC = join(REPO_ROOT, "dist", "claude", ".claude");
@@ -514,7 +522,7 @@ describe("t221 piped search options preserve the reviewer boundary", () => {
 // (b) Dispatch-record lifecycle - the SHIPPED hook as a subprocess.
 // ---------------------------------------------------------------------------
 
-// A scratch project: the shipped hook + the two lib/audit tools it imports,
+// A scratch project: the shipped hook, its shell parser, the tools it imports,
 // plus a bare workspace record root the dispatch record lands under (no
 // intent registry -> docsRoot resolves to aidlc/spaces/default/intents/).
 function scratchProject(): string {
@@ -522,6 +530,9 @@ function scratchProject(): string {
   mkdirSync(join(dir, ".claude", "hooks"), { recursive: true });
   mkdirSync(join(dir, ".claude", "tools"), { recursive: true });
   cpSync(join(AIDLC_SRC, "hooks", "aidlc-reviewer-scope.ts"), join(dir, ".claude", "hooks", "aidlc-reviewer-scope.ts"));
+  // The claimed-checkout branch reads a shell call's write targets with the
+  // shared parser that ships beside it.
+  cpSync(join(AIDLC_SRC, "hooks", "review-freeze-command.ts"), join(dir, ".claude", "hooks", "review-freeze-command.ts"));
   for (const t of [
     "aidlc-lib.ts",
     "aidlc-artifact-vocabulary.ts",
@@ -531,9 +542,11 @@ function scratchProject(): string {
     "aidlc-channel.ts",
     "aidlc-version.ts",
     "aidlc-runtime-paths.ts",
+    "aidlc-runtime-budget.ts",
     "aidlc-guard-fences.ts",
     "aidlc-guard-switch.ts",
     "aidlc-guard-operation.ts",
+    "aidlc-reply-reader.ts",
     "aidlc-audit.ts",
   ]) {
     cpSync(join(AIDLC_SRC, "tools", t), join(dir, ".claude", "tools", t));
@@ -661,13 +674,14 @@ function runHook(
   proj: string,
   payload: Record<string, unknown>,
   env: Record<string, string> = {},
-): { code: number; stderr: string } {
+): { code: number; stdout: string; stderr: string } {
   const r = spawnSync(BUN, [join(proj, ".claude", "hooks", "aidlc-reviewer-scope.ts")], {
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     input: JSON.stringify(payload),
     env: { ...process.env, CLAUDE_PROJECT_DIR: proj, ...env },
     encoding: "utf-8",
   });
-  return { code: r.status ?? -1, stderr: r.stderr ?? "" };
+  return { code: r.status ?? -1, stdout: r.stdout ?? "", stderr: r.stderr ?? "" };
 }
 
 const SIBLING_SWEEP = {
@@ -876,6 +890,10 @@ describe("t221 (b) dispatch-record lifecycle (shipped hook, subprocess)", () => 
       expect(audit.match(/\*\*Event\*\*: GUARD_STOOD_ASIDE\b/g)).toHaveLength(1);
       expect(audit).toContain("**Guard**: reviewer-scope");
       expect(audit).not.toContain("REVIEWER_SCOPE_BLOCKED");
+      // Guard Policy off records the pass and says nothing; the person's own
+      // switch under relaxed keeps its one line.
+      if (policy === "off") expect(result.stdout).not.toContain("Continuing past");
+      else expect(result.stdout).toContain("Continuing past the reviewer-scope check");
     } else {
       expect(result.stderr).toContain("This review cannot open");
       expect(audit).toContain("REVIEWER_SCOPE_BLOCKED");
@@ -930,6 +948,24 @@ describe("t221 (b) dispatch-record lifecycle (shipped hook, subprocess)", () => 
     expect(current.code).toBe(0);
   });
 
+  test("a claimed checkout lets reads and searches through, and its write refusal names where the change can be made", () => {
+    // A search in the person's own checkout was refused as a "cross-unit write",
+    // and the refusal named no way forward.
+    const proj = scratchProject();
+    seedUnitScope(proj);
+    for (const command of ["ls", "rg formatPrice", "find . -name '*.md'", "grep -rn formatPrice .", "cat construction/u05-API/design.md"]) {
+      const r = runHook(proj, { hook_event_name: "PreToolUse", tool_name: "Bash", tool_input: { command } });
+      expect(r.code, `${command}: ${r.stderr}`).toBe(0);
+    }
+    const write = { hook_event_name: "PreToolUse", tool_name: "Bash", tool_input: { command: "touch Construction/u05-API/result.md" } };
+    const refused = runHook(proj, write);
+    expect(refused.code).toBe(2);
+    expect(refused.stderr).toContain("make that change from the project's main checkout");
+    // The named step works: the main checkout carries no Unit stamp, and the write goes through there.
+    rmSync(join(proj, "aidlc", ".aidlc-unit-scope.json"));
+    expect(runHook(proj, write).code).toBe(0);
+  });
+
   test.each([
     ["relaxed policy", "- **Guard Policy**: relaxed (set by you)\n", {}],
     ["off policy", "- **Guard Policy**: off (set by you)\n", {}],
@@ -954,6 +990,7 @@ describe("t221 (b) dispatch-record lifecycle (shipped hook, subprocess)", () => 
     const proj = scratchProject();
     seedRecord(proj);
     const r = spawnSync(BUN, [join(proj, ".claude", "hooks", "aidlc-reviewer-scope.ts")], {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
       input: "not json",
       env: { ...process.env, CLAUDE_PROJECT_DIR: proj },
       encoding: "utf-8",
@@ -983,7 +1020,7 @@ describe("t221 (b) dispatch-record lifecycle (shipped hook, subprocess)", () => 
 // ---------------------------------------------------------------------------
 
 describe("t221 (c) harness registration and protocol prose", () => {
-  test("Claude settings.json wires the hook on PreToolUse with the file/search/shell matcher", () => {
+  test("Claude settings.json wires the hook inside the one PreToolUse guard group", () => {
     const harnesses = HARNESS_MATRIX.filter(
       (harness) => harness.capabilities.reviewerScopeRegistration === "claude-settings",
     );
@@ -993,15 +1030,25 @@ describe("t221 (c) harness registration and protocol prose", () => {
         hooks?: Record<string, Array<{ matcher?: string; hooks?: Array<{ command?: string }> }>>;
       };
       const groups = s.hooks?.PreToolUse ?? [];
+      // One process runs the PreToolUse checks (#2066): the read bound is a
+      // member of the guard group, and keeps the matcher its own row had.
       const group = groups.find((g) =>
         (g.hooks ?? []).some(
           (h) => h.command ===
-            `bun "$CLAUDE_PROJECT_DIR/${harness.manifest.harnessDir}/tools/aidlc.ts" engine hook reviewer-scope`,
+            `bun "$CLAUDE_PROJECT_DIR/${harness.manifest.harnessDir}/tools/aidlc.ts" engine hook guard-tool-call`,
         ),
       );
       expect(group, harness.name).toBeDefined();
-      expect(group?.matcher).toBe(
-        "Read|NotebookRead|Edit|MultiEdit|Write|NotebookEdit|LS|Glob|Grep|Bash",
+      expect(
+        groups.some((g) =>
+          (g.hooks ?? []).some((h) => h.command?.endsWith(" engine hook reviewer-scope"))
+        ),
+        harness.name,
+      ).toBe(false);
+      const member = (hookGroupMembers("guard-tool-call") ?? [])
+        .find((entry) => entry.hook === "reviewer-scope");
+      expect(member?.matcher, harness.name).toBe(
+        "^(?:Read|NotebookRead|Edit|MultiEdit|Write|NotebookEdit|LS|Glob|Grep|Bash)$",
       );
     }
   });
@@ -1040,11 +1087,13 @@ describe("t221 (c) harness registration and protocol prose", () => {
     }
   });
 
-  test("Kiro IDE ships NO reviewer-scope registration (documented gap: toolArgs is always empty)", () => {
-    // The IDE delivers hook context via USER_PROMPT with toolArgs always {}
-    // (docs/reference/kiro-ide-hook-payload.md): a preToolUse hook there can
-    // never see the attempted path or command, so there is nothing to match
-    // on. Per the porting guide, an unenforceable seam ships NO registration
+  test("Kiro IDE ships NO reviewer-scope registration (documented gap: tool inputs are not uniform)", () => {
+    // Tool inputs are not uniformly available across the IDE generations this
+    // harness supports (docs/reference/kiro-ide-hook-payload.md): 0.12 and the
+    // measured 1.x PostToolUse captures carry empty inputs, while later 1.x
+    // builds populate some PreToolUse inputs. A preToolUse hook cannot rely on
+    // seeing the attempted path or command on every supported build, so there
+    // is no stable target to match. Per the porting guide, an unenforceable seam ships NO registration
     // rather than a dead hook - the 12a prose bound governs on that harness.
     // This pins the deliberate absence so a future blanket-registration sweep
     // does not wire an inert (or worse, blindly blocking) entry.
@@ -1086,7 +1135,7 @@ describe("t221 (c) harness registration and protocol prose", () => {
     }
   });
 
-  test("Codex hooks.json wires the adapter's reviewer-scope target on PreToolUse", () => {
+  test("Codex hooks.json wires the reviewer-scope bound through the one matcher-free guard-tool-call group", () => {
     const harnesses = HARNESS_MATRIX.filter(
       (harness) => harness.capabilities.reviewerScopeRegistration === "codex-hooks",
     );
@@ -1094,16 +1143,22 @@ describe("t221 (c) harness registration and protocol prose", () => {
     for (const harness of harnesses) {
       const wiring = JSON.parse(
         readFileSync(join(harness.engineRoot, "hooks.json"), "utf-8"),
-      ) as { hooks: Record<string, Array<{ hooks: Array<{ command: string }> }>> };
+      ) as { hooks: Record<string, Array<{ matcher?: string; hooks: Array<{ command: string }> }>> };
       const pre = wiring.hooks.PreToolUse ?? [];
-      expect(
-        pre.some((g) =>
-          g.hooks.some(
-            (h) => h.command ===
-              `bun ${harness.manifest.harnessDir}/tools/aidlc.ts engine adapter codex reviewer-scope`,
-          ),
+      // One process runs the five PreToolUse checks (#2066); the adapter's
+      // reviewer-scope case is a member of that group, not its own handler.
+      const group = pre.filter((g) =>
+        g.hooks.some(
+          (h) => h.command ===
+            `bun ${harness.manifest.harnessDir}/tools/aidlc.ts engine adapter codex guard-tool-call`,
         ),
-      ).toBe(true);
+      );
+      expect(group, harness.name).toHaveLength(1);
+      expect(group[0]?.matcher, harness.name).toBeUndefined();
+      expect(
+        pre.some((g) => g.hooks.some((h) => h.command.endsWith(" adapter codex reviewer-scope"))),
+        harness.name,
+      ).toBe(false);
     }
   });
 
@@ -1136,7 +1191,7 @@ describe("t221 (c) harness registration and protocol prose", () => {
     }
   });
 
-  test("reviewer protocol module carries the dispatch-record write and delete", () => {
+  test("reviewer protocol module carries the dispatch-record write, and leaves the delete to the engine", () => {
     const body = readFileSync(
       join(
         AIDLC_SRC,
@@ -1154,8 +1209,11 @@ describe("t221 (c) harness registration and protocol prose", () => {
     expect(body).toMatch(/append its path to `exempt`/);
     expect(body).toContain("On a harness without reviewer-scope enforcement");
     expect(body).toContain("do not write the record");
-    // Step 3: the delete on verdict read.
-    expect(body).toMatch(/Read verdict.*delete `<record>\/\.aidlc-engine\/reviewer-dispatch\.json`/s);
+    // Step 3: the engine removes the record as it records the verdict
+    // (aidlc-log.ts review --verdict); the agent is never told to delete it,
+    // so no `rm` and no permission card follows a review.
+    expect(body).toMatch(/the engine removes it when the verdict is recorded at step 3; never delete it yourself/);
+    expect(body).not.toMatch(/delete `<record>\/\.aidlc-engine\/reviewer-dispatch\.json`/);
   });
 
   test("harnesses with reviewer-scope enforcement point at the shared module", () => {

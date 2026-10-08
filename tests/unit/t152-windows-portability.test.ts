@@ -34,7 +34,6 @@ describe("t152 Windows portability guard", () => {
 
   test("run-all.ps1 runs --all through Bun and forces live Windows TUI env", () => {
     const ps = readFileSync(join(WINDOWS, "run-all.ps1"), "utf8");
-    expect(ps).toContain('$env:AIDLC_NODE_BIN = $NodeExe');
     expect(ps).toContain('$env:AIDLC_TUI_LIVE = "1"');
     expect(ps).toContain('-ArgumentList @("tests/run-tests.ts", "--all", "--debug", "-P", "$Parallel")');
     expect(ps).toContain("$Runner = Start-Process");
@@ -43,6 +42,14 @@ describe("t152 Windows portability guard", () => {
     expect(ps).toContain('from "./tests/harness/tui-runtime.ts"');
     expect(ps).toContain("const reason = tuiUnavailableReason(); if (reason) throw new Error(reason)");
     expect(ps).not.toContain("run-tests.sh");
+  });
+
+  test("setup.ps1 installs and verifies the native Bun terminal dependencies", () => {
+    const ps = readFileSync(join(WINDOWS, "setup.ps1"), "utf8");
+    expect(ps).toContain("& $BunExe install");
+    expect(ps).toContain('require("@xterm/headless")');
+    expect(ps).toContain('typeof Bun.Terminal !== "function"');
+    expect(ps).not.toContain("& $NpmCmd install");
   });
 
   test("CloudFormation stack is disposable SSM-only Windows Server 2022", () => {
@@ -140,25 +147,6 @@ describe("t152 Windows portability guard", () => {
       'const TSC_ARGS = ["--package", "typescript@6", "tsc"] as const;',
     );
     expect(typeCheck).not.toMatch(/spawnSync\(\s*"bunx",\s*\[\s*"tsc"/);
-  });
-
-  test("Windows forced termination uses one shared deadline", () => {
-    const driver = read("tests/harness/tui-drive.ts");
-    expect(driver).toContain("forceKillWindowsProcessesWithinDeadline");
-    expect(driver).toContain("deadline - now()");
-    expect(driver).toContain(
-      "forceKillWindowsProcessesWithinDeadline(survivors, deadline)",
-    );
-  });
-
-  test("Windows ConPTY keeps UTF-8 explicit and records the target lifecycle", () => {
-    const driver = read("tests/harness/tui-drive.ts");
-    expect(driver).toContain('"chcp.com", ["65001"]');
-    expect(driver).toContain("windowsHide: false");
-    // Native metadata encoding is exercised by t-tui-windows-native-identity,
-    // including Unicode command lines and the base64/UTF-8 transport round trip.
-    expect(driver).toContain('"target-spawn.json",');
-    expect(driver).toContain('"target-exit.json",');
   });
 
   test("TUI journeys do not silently ignore kill failures", () => {

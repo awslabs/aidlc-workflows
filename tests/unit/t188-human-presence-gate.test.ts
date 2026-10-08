@@ -1,4 +1,4 @@
-// covers: cli:aidlc-state(approve,gate-start), cli:aidlc-orchestrate(report), cli:aidlc-log(answer), audit:SUMMARY_CONFIRMATION_RECORDED, function:handleApprove, function:handleGateStart, function:handleAnswer, function:pendingSummaryDecision, function:humanActedSinceGate, function:humanActedSinceLastAnswer, function:hasOpenGate, function:isAutonomousMode, function:humanPresenceGuardDisabled, audit:GUARD_STOOD_ASIDE, function:humanTurnMintAllowed, function:unattendedHumanPresenceHint, function:checkSummaryConfirmationEvidence, function:readAuditShardEvents, function:SUMMARY_CONFIRMATION_HASH_SCOPE, function:summaryConfirmationGuardDisabled, file:hooks/aidlc-record-human-turn.ts
+// covers: function:ANSWER_SOURCE_ON_INSTRUCTION, cli:aidlc-state(approve,gate-start), cli:aidlc-orchestrate(report), cli:aidlc-log(answer), audit:SUMMARY_CONFIRMATION_RECORDED, function:handleApprove, function:handleGateStart, function:handleAnswer, function:pendingSummaryDecision, function:humanActedSinceGate, function:humanTurnState, function:humanActedSinceLastAnswer, function:hasOpenGate, function:isAutonomousMode, function:humanPresenceGuardDisabled, audit:GUARD_STOOD_ASIDE, function:humanTurnMintAllowed, function:unattendedHumanPresenceHint, function:checkSummaryConfirmationEvidence, function:readAuditShardEvents, function:SUMMARY_CONFIRMATION_HASH_SCOPE, function:summaryConfirmationGuardDisabled, file:hooks/aidlc-record-human-turn.ts
 //
 // t188 - human-presence approval gate (ledger-event design).
 //
@@ -42,11 +42,17 @@
 //   aidlc-log.ts handleAnswer (the interview-path twin),
 //   aidlc-audit.ts append (records the HUMAN_TURN event the mint hook emits).
 
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import {
+  NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { afterEach, beforeEach, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { dirname, join, relative } from "node:path";
 import {
   AIDLC_SRC,
+  REPO_ROOT,
   cleanupTestProject,
   createTestProject,
   resetAidlcEnv,
@@ -55,7 +61,7 @@ import {
   seededStateFile,
   seedStateFile,
 } from "../harness/fixtures.ts";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { type Dirent, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import {
   checkSummaryConfirmationEvidence,
   findStageBySlug,
@@ -65,8 +71,12 @@ import {
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 
+setDefaultTimeout(NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
+
 const BUN = process.execPath;
 const STATE = join(AIDLC_SRC, "tools", "aidlc-state.ts");
+const KIRO_IDE_STATE = join(REPO_ROOT, "dist", "kiro-ide", ".kiro", "tools", "aidlc-state.ts");
+const KIRO_CLI_STATE = join(REPO_ROOT, "dist", "kiro", ".kiro", "tools", "aidlc-state.ts");
 const ORCHESTRATE = join(AIDLC_SRC, "tools", "aidlc-orchestrate.ts");
 const LOG = join(AIDLC_SRC, "tools", "aidlc-log.ts");
 const MINT_HOOK = join(AIDLC_SRC, "tools", "aidlc.ts");
@@ -79,14 +89,21 @@ function guarded(
   proj: string,
   args: string[],
   unattended = false,
+  state = STATE,
+  host: NodeJS.ProcessEnv = {},
 ): { rc: number; out: string } {
   const env = { ...process.env };
+  // The host the agent's shell is in is the case's own, never the runner's.
+  delete env.VSCODE_IPC_HOOK;
+  delete env.VSCODE_PID;
+  Object.assign(env, host);
   env.AIDLC_SKIP_ARTIFACT_GUARD = "1";
   env.AIDLC_ALLOW_DIRECT_STATE_TRANSITIONS = "1";
   delete env.AIDLC_SKIP_HUMAN_PRESENCE_GUARD;
   if (unattended) env.AIDLC_UNATTENDED = "1";
   else delete env.AIDLC_UNATTENDED;
-  const r = spawnSync(BUN, [STATE, ...args, "--project-dir", proj], {
+  const r = spawnSync(BUN, [state, ...args, "--project-dir", proj], {
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     encoding: "utf-8",
     env,
   });
@@ -105,6 +122,7 @@ function guardedLog(
   if (unattended) env.AIDLC_UNATTENDED = "1";
   else delete env.AIDLC_UNATTENDED;
   const r = spawnSync(BUN, [LOG, ...args, "--project-dir", proj], {
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     encoding: "utf-8",
     env,
   });
@@ -113,14 +131,16 @@ function guardedLog(
 
 // Drive the public report surface with the same guard posture. NOTE the
 // contract difference from `guarded`: when aidlc-state.ts refuses the
-// transition, orchestrate relays the refusal as an error DIRECTIVE
-// ({"kind":"error",...}) on stdout and exits 0 — only a malformed directive
-// exits non-zero. Refusal assertions must read the directive, not the rc.
+// transition, orchestrate relays the refusal as a DIRECTIVE on stdout and exits
+// 0 (a decision the person has not made is the agent's next step, a `print`;
+// anything else an `error`). Only a malformed directive exits non-zero, so
+// refusal assertions must read the directive, not the rc.
 function guardedReport(proj: string, args: string[]): { rc: number; out: string } {
   const env = { ...process.env };
   env.AIDLC_SKIP_ARTIFACT_GUARD = "1";
   delete env.AIDLC_SKIP_HUMAN_PRESENCE_GUARD;
   const r = spawnSync(BUN, [ORCHESTRATE, "report", ...args, "--project-dir", proj], {
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     encoding: "utf-8",
     env,
   });
@@ -132,6 +152,29 @@ function guardedReport(proj: string, args: string[]): { rc: number; out: string 
 // active-intent shard the gate later reads, in real ledger order.
 function recordHumanTurn(proj: string): void {
   appendAuditEntry("HUMAN_TURN", {}, proj);
+}
+
+// Leave a hook heartbeat where hook liveness reads it, as the post-shell hook
+// does after every shell command in a workflow.
+function writeHeartbeat(proj: string, timestampMs: number): void {
+  const health = join(seededRecordDir(proj), ".aidlc-engine", "hooks-health");
+  mkdirSync(health, { recursive: true });
+  writeFileSync(
+    join(health, "rebuild-stage-graph.last"),
+    new Date(timestampMs).toISOString().replace(/\.\d{3}Z$/, "Z"),
+    "utf-8",
+  );
+}
+
+// Stamp the human-turn marker, as the prompt hook does on each prompt it handles.
+function stampPrompt(proj: string, timestampMs: number): void {
+  const engine = join(seededRecordDir(proj), ".aidlc-engine");
+  mkdirSync(engine, { recursive: true });
+  writeFileSync(
+    join(engine, "human-turn"),
+    `${new Date(timestampMs).toISOString().replace(/\.\d{3}Z$/, "Z")}\n`,
+    "utf-8",
+  );
 }
 
 function field(proj: string, name: string): string {
@@ -235,6 +278,156 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
     expect(field(proj, "Current Stage")).toBe(slug);
   });
 
+  // A refusal for a reply that was not recorded never asks the person to answer
+  // again. Claude's tools (its shipped hookActivation) give the agent's own
+  // step and the one line to show; the Kiro IDE tree's give the words to relay
+  // with the step doctor names for the person's own tool: Kiro IDE's alone
+  // inside Kiro IDE, Kiro CLI's and an ACP client's elsewhere, and nothing
+  // about how AI-DLC works.
+  test("A2: Claude's refusal gives its own step, the Kiro IDE tree's gives the person's own tool's step, and neither asks again", () => {
+    const slug = field(proj, "Current Stage"); // feasibility
+    guarded(proj, ["checkbox", `${slug}=in-progress`]);
+    guarded(proj, ["gate-start", slug]);
+    const claude = guarded(proj, ["approve", slug, "--user-input", "Approve"]);
+    expect(claude.rc).not.toBe(0);
+    expect(claude.out).toContain("do not ask them to answer again");
+    expect(claude.out).toContain(
+      "Choose Yes when Claude Code asks to change this project's settings, then answer the question below.",
+    );
+    expect(claude.out).not.toContain("reply again");
+    expect(claude.out).not.toContain("Reload Window");
+    const refusalIn = (host: NodeJS.ProcessEnv): string => {
+      const r = guarded(proj, ["approve", slug, "--user-input", "Approve"], false, KIRO_IDE_STATE, host);
+      expect(r.rc).not.toBe(0);
+      const refusal = JSON.parse(r.out).error as string;
+      expect(refusal).toContain(
+        "If the person already replied, that reply was not recorded. Do not ask them to answer again.",
+      );
+      expect(refusal).not.toContain("hooks");
+      expect(refusal).not.toContain("agent picker");
+      expect(refusal).not.toContain("clientCapabilities");
+      return refusal;
+    };
+    const ideStep =
+      'Tell them exactly this, with nothing about why: "Your answer was not recorded, so you don\'t need to answer again. In Kiro IDE, trust this folder: choose Trust Folder & Continue when Kiro asks whether you trust it, or select Manage on the Restricted Mode banner, then Trust. Then run Developer: Reload Window from the Command Palette (Ctrl+Shift+P, or Cmd+Shift+P on macOS), and say carry on."';
+    for (const host of [{ VSCODE_IPC_HOOK: "/tmp/vscode-ipc.sock" }, { VSCODE_PID: "4242" }]) {
+      const inIde = refusalIn(host);
+      expect(inIde).toContain(ideStep);
+      expect(inIde).not.toContain("Kiro CLI");
+      expect(inIde).not.toContain("ACP");
+    }
+    // Kiro CLI v3 and an ACP client on this tree set neither.
+    const elsewhere = refusalIn({});
+    expect(elsewhere).toContain(
+      'Tell them exactly this, with nothing about why, then only the line below for the tool they are in: "Your answer was not recorded, so you don\'t need to answer again." In Kiro CLI, quit Kiro and start `kiro-cli` again in this folder. If you drive Kiro from an ACP client, the Kiro IDE guide names what that client must send.',
+    );
+    expect(elsewhere).not.toContain("Reload Window");
+    expect(eventCount(proj, "GATE_APPROVED")).toBe(0);
+    expect(field(proj, "Current Stage")).toBe(slug);
+  });
+
+  // The kiro tree's hooks run only with its aidlc agent on Kiro CLI's v2
+  // engine. The agent tells the two causes apart by Kiro's own line under its
+  // replies, and shows the one step for the person.
+  test("A3: on Kiro CLI the refusal gives the agent and engine lines, and asks for nothing again", () => {
+    const slug = field(proj, "Current Stage"); // feasibility
+    guarded(proj, ["checkbox", `${slug}=in-progress`]);
+    guarded(proj, ["gate-start", slug]);
+    const r = guarded(proj, ["approve", slug, "--user-input", "Approve"], false, KIRO_CLI_STATE);
+    expect(r.rc).not.toBe(0);
+    const refusal = JSON.parse(r.out).error as string;
+    expect(refusal).toContain("no new human reply");
+    expect(refusal).toContain("do not ask them to answer again");
+    expect(refusal).toContain('agent "aidlc" needs upgrading for this agent engine, using "default"');
+    expect(refusal).toContain('"Type /agent and pick aidlc, then carry on."');
+    expect(refusal).toContain(
+      '"Quit Kiro and start it again in this folder with: kiro-cli chat --agent-engine v2 --agent aidlc, ' +
+        'then type /aidlc to carry on."',
+    );
+    expect(refusal).not.toContain("reply again");
+    expect(refusal).not.toContain("ACP");
+    expect(refusal).not.toContain("Reload Window");
+    expect(eventCount(proj, "GATE_APPROVED")).toBe(0);
+    expect(field(proj, "Current Stage")).toBe(slug);
+  });
+
+  // With fresh hook activity the hooks run, so the refusal never sends the
+  // person after a setting that is already right: an earlier turn was spent,
+  // the prompt hook stamped its marker, and another hook left a heartbeat
+  // seconds ago. It says what happened to a reply they sent and where to look,
+  // and still never asks them to answer again. (Kiro CLI's line names its agent
+  // picker for a reply typed to another agent: that is not the hooks-off step.)
+  test("A4: with fresh hook activity the refusal gives no hooks-off step", () => {
+    const first = field(proj, "Current Stage"); // feasibility
+    guarded(proj, ["checkbox", `${first}=in-progress`]);
+    recordHumanTurn(proj);
+    guarded(proj, ["gate-start", first]);
+    expect(guarded(proj, ["approve", first, "--user-input", "Approve"]).rc).toBe(0);
+    const slug = field(proj, "Current Stage");
+    guarded(proj, ["checkbox", `${slug}=in-progress`]);
+    guarded(proj, ["gate-start", slug]);
+    stampPrompt(proj, Date.now());
+    writeHeartbeat(proj, Date.now());
+    for (const [state, steps] of [
+      [KIRO_CLI_STATE, "If the person already replied, that reply was not recorded for this question."],
+      [KIRO_IDE_STATE, "If the person already replied, that reply was not recorded. Do not ask them to answer again."],
+    ] as const) {
+      const r = guarded(proj, ["approve", slug, "--user-input", "Approve"], false, state);
+      expect(r.rc).not.toBe(0);
+      const refusal = JSON.parse(r.out).error as string;
+      expect(refusal).toContain(steps);
+      expect(refusal).not.toContain("Type /agent and pick aidlc, then carry on.");
+      expect(refusal).not.toContain("answer again;");
+    }
+    expect(eventCount(proj, "GATE_APPROVED")).toBe(1);
+    expect(field(proj, "Current Stage")).toBe(slug);
+  });
+
+  // A live Kiro CLI run turned "doctor shows whether AI-DLC's hooks run here"
+  // into talk of hooks, then offered to switch human presence off machine-wide.
+  // The refusal gives the person's step in fixed words, and the agent never
+  // offers to turn a check off for them. In Kiro CLI, with its hooks running, a
+  // reply goes unrecorded when it was typed to another agent (a live run), so
+  // the step is to pick aidlc and give it once more, or, when Kiro says the
+  // agent needs upgrading for its 3.0 engine, to start again on v2.
+  test("A5: a reply that was not recorded gets only the person's step, never hooks or a check to turn off", () => {
+    const first = field(proj, "Current Stage"); // feasibility
+    guarded(proj, ["checkbox", `${first}=in-progress`]);
+    recordHumanTurn(proj);
+    guarded(proj, ["gate-start", first]);
+    expect(guarded(proj, ["approve", first, "--user-input", "Approve"]).rc).toBe(0);
+    const slug = field(proj, "Current Stage");
+    guarded(proj, ["checkbox", `${slug}=in-progress`]);
+    guarded(proj, ["gate-start", slug]);
+    stampPrompt(proj, Date.now());
+    writeHeartbeat(proj, Date.now());
+    for (const [state, line] of [
+      [STATE, `"Your answer didn't reach AI-DLC. Please give it once more. If it happens again, type /aidlc --doctor."`],
+      [KIRO_CLI_STATE, `"Your answer didn't reach AI-DLC. Type /agent and pick aidlc, then give it once more."`],
+      [KIRO_IDE_STATE, `"Your answer was not recorded, so you don't need to answer again.`],
+    ] as const) {
+      const r = guarded(proj, ["approve", slug, "--user-input", "Approve"], false, state);
+      expect(r.rc).not.toBe(0);
+      const refusal = JSON.parse(r.out).error as string;
+      expect(refusal).toContain(line);
+      expect(refusal).toContain("Never offer to turn a check off for them.");
+      expect(refusal).not.toMatch(/hook/i);
+      expect(refusal).not.toContain("AIDLC_SKIP");
+      // On Kiro CLI's 3.0 engine with the agent not upgraded, picking aidlc
+      // again never brings the shipped hooks back, even after an earlier v2
+      // session left a heartbeat (AIDA #2042 F1): Kiro's own upgrade line
+      // tells the agent to give the v2 restart instead.
+      if (state === KIRO_CLI_STATE) {
+        expect(refusal).toContain('If Kiro\'s own line under your replies says `agent "aidlc" needs upgrading');
+        expect(refusal).toContain(
+          '"Your answer didn\'t reach AI-DLC. Quit Kiro and start it again in this folder with: ' +
+            'kiro-cli chat --agent-engine v2 --agent aidlc, then give it once more."',
+        );
+      }
+    }
+    expect(eventCount(proj, "GATE_APPROVED")).toBe(1);
+  });
+
   // --- Scenario B: LEGIT (human turn after gate-open) ------------------------
   //
   // The realistic flow: the human types (HUMAN_TURN), then the agent opens the
@@ -269,89 +462,180 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
     expect(eventCount(proj, "GATE_APPROVED")).toBe(1);
     expect(
       readAuditShardEvents(proj).find((row) => row.event === "GATE_APPROVED")?.block,
-    ).toContain("**User Input**: Approve (Recommended)");
+    ).toContain("**User Input**: Approve\n");
     expect(field(proj, "Current Stage")).not.toBe(slug);
   });
 
+  // The agent reports the approval it read from the person's reply; the
+  // receipt names Accept as-is only once the gate offers it.
   test.each([2, 3])(
     "decorated Accept as-is respects the revision limit at count %i",
     (revisionCount) => {
       const slug = field(proj, "Current Stage");
-      const reply = "Accept as-is (Recommended)";
       expect(guarded(proj, ["set", `Revision Count=${revisionCount}`]).rc).toBe(0);
       guarded(proj, ["checkbox", `${slug}=in-progress`]);
       guarded(proj, ["gate-start", slug]);
       recordHumanTurn(proj);
-      const before = readFileSync(seededStateFile(proj), "utf-8");
-
-      if (revisionCount < 3) {
-        const direct = guarded(proj, ["approve", slug, "--user-input", reply]);
-        expect(direct.rc, direct.out).not.toBe(0);
-        const refusal = JSON.parse(direct.out);
-        expect(refusal.error).toContain("did not match one of the offered choices");
-        expect(refusal.error).toContain(`the reply ${JSON.stringify(reply)}`);
-      }
-
-      const report = guardedReport(proj, [
-        "--stage",
-        slug,
-        "--result",
-        "approved",
-        "--user-input",
-        reply,
-      ]);
+      const report = guardedReport(proj, ["--stage", slug, "--result", "approved", "--user-input", "Accept as-is (Recommended)"]);
       expect(report.rc, report.out).toBe(0);
-      if (revisionCount < 3) {
-        const directive = JSON.parse(report.out);
-        expect(directive.kind).toBe("error");
-        expect(directive.message).toContain("did not match an offered choice");
-        expect(directive.message).toContain(`received reply ${JSON.stringify(reply)}`);
-        expect(eventCount(proj, "GATE_APPROVED")).toBe(0);
-        expect(readFileSync(seededStateFile(proj), "utf-8")).toBe(before);
-      } else {
-        expect(report.out).toContain('"kind":"done"');
-        expect(eventCount(proj, "GATE_APPROVED")).toBe(1);
-        expect(
-          readAuditShardEvents(proj).find((row) => row.event === "GATE_APPROVED")?.block,
-        ).toContain(`**User Input**: ${reply}`);
-        expect(field(proj, "Current Stage")).not.toBe(slug);
-      }
+      expect(report.out).toContain('"kind":"done"');
+      expect(eventCount(proj, "GATE_APPROVED")).toBe(1);
+      expect(readAuditShardEvents(proj).find((row) => row.event === "GATE_APPROVED")?.block)
+        .toContain(revisionCount >= 3 ? "**User Input**: Accept as-is\n" : "**User Input**: Approve\n");
+      expect(field(proj, "Current Stage")).not.toBe(slug);
     },
   );
 
-  test.each(["(Recommended)", "Approve (Recommended) extra", undefined])(
-    "state and report refuse an unoffered approval reply: %s",
+  test.each(["(Recommended)", "Approve (Recommended) extra"])(
+    "the agent's reported approval records as Approve, whatever it passes: %s",
     (reply) => {
       const slug = field(proj, "Current Stage");
       guarded(proj, ["checkbox", `${slug}=in-progress`]);
       guarded(proj, ["gate-start", slug]);
       recordHumanTurn(proj);
-      const before = readFileSync(seededStateFile(proj), "utf-8");
-      const inputArgs = reply === undefined ? [] : ["--user-input", reply];
-      const displayedReply = JSON.stringify(reply ?? "(empty)");
-
-      const direct = guarded(proj, ["approve", slug, ...inputArgs]);
-      expect(direct.rc, direct.out).not.toBe(0);
-      const refusal = JSON.parse(direct.out);
-      expect(refusal.error).toContain("did not match one of the offered choices");
-      expect(refusal.error).toContain(`the reply ${displayedReply}`);
-
-      const report = guardedReport(proj, [
-        "--stage",
-        slug,
-        "--result",
-        "approved",
-        ...inputArgs,
-      ]);
-      expect(report.rc, report.out).toBe(0);
-      const directive = JSON.parse(report.out);
-      expect(directive.kind).toBe("error");
-      expect(directive.message).toContain("did not match an offered choice");
-      expect(directive.message).toContain(`received reply ${displayedReply}`);
-      expect(eventCount(proj, "GATE_APPROVED")).toBe(0);
-      expect(readFileSync(seededStateFile(proj), "utf-8")).toBe(before);
+      const direct = guarded(proj, ["approve", slug, "--user-input", reply]);
+      expect(direct.rc, direct.out).toBe(0);
+      expect(eventCount(proj, "GATE_APPROVED")).toBe(1);
+      expect(readAuditShardEvents(proj).find((row) => row.event === "GATE_APPROVED")?.block)
+        .toContain("**User Input**: Approve\n");
     },
   );
+
+  // A conductor that reports a gated stage complete before asking its approval
+  // question gets the question opened for the person, not an error; nothing is
+  // approved until they answer.
+  test.each(["completed", "complete", "done"])(
+    "report --result %s with no reply on an in-progress gated stage opens its approval question",
+    (result) => {
+      const slug = field(proj, "Current Stage");
+      guarded(proj, ["checkbox", `${slug}=in-progress`]);
+      const report = guardedReport(proj, ["--stage", slug, "--result", result]);
+      expect(report.rc, report.out).toBe(0);
+      const directive = JSON.parse(report.out);
+      expect(directive.kind, report.out).toBe("print");
+      expect(directive.message).toContain(`"${slug}" has not asked for approval yet`);
+      expect(directive.message).not.toContain("Recorded");
+      expect(directive.message).toContain("nothing is approved until they answer");
+      expect(eventCount(proj, "STAGE_AWAITING_APPROVAL")).toBe(1);
+      expect(eventCount(proj, "GATE_APPROVED")).toBe(0);
+      expect(readFileSync(seededStateFile(proj), "utf-8")).toContain(`- [?] ${slug}`);
+      expect(field(proj, "Current Stage")).toBe(slug);
+    },
+  );
+
+  // A stop is the person's to make. On a host whose hooks can miss a reply,
+  // a park under autonomous Construction is theirs even with no reply on
+  // record; on other hosts, and in an unattended run, the run keeps moving.
+  test("a park under autonomous Construction with no reply on record parks on a missed-reply host only", () => {
+    const sf = seededStateFile(proj);
+    writeFileSync(sf, readFileSync(sf, "utf-8").replace(
+      "## Runtime State", "## Runtime State\n- **Construction Autonomy Mode**: autonomous",
+    ), "utf-8");
+    appendAuditEntry("QUESTION_ANSWERED", { Stage: field(proj, "Current Stage"), Details: "an earlier answer" }, proj);
+    const claude = guarded(proj, ["park"]);
+    expect(claude.rc).not.toBe(0);
+    expect(claude.out).toContain("no reply from the person is on record");
+    expect(claude.out).not.toContain("unattended autonomous run");
+    expect(guarded(proj, ["park"], true, KIRO_CLI_STATE).rc).not.toBe(0);
+    expect(readFileSync(sf, "utf-8")).not.toContain("- **Parked**:");
+    const kiro = guarded(proj, ["park"], false, KIRO_CLI_STATE);
+    expect(kiro.rc, kiro.out).toBe(0);
+    expect(kiro.out).toContain("this host can miss one");
+    expect(readFileSync(sf, "utf-8")).toContain("- **Parked By**: person");
+  });
+
+  // An unattended run never parks itself, whatever the ledger holds, and an
+  // empty ledger is no reply from the person.
+  test("an autonomous park needs a recorded reply in an attended session", () => {
+    const sf = seededStateFile(proj);
+    writeFileSync(sf, readFileSync(sf, "utf-8").replace(
+      "## Runtime State", "## Runtime State\n- **Construction Autonomy Mode**: autonomous",
+    ), "utf-8");
+    // Empty ledger: no reply on record, so the run keeps moving.
+    const empty = guarded(proj, ["park"]);
+    expect(empty.rc, empty.out).not.toBe(0);
+    expect(empty.out).toContain("no reply from the person is on record");
+    // It names the step that lets a stop through when the person's word is
+    // not on record, and that step is accepted.
+    expect(empty.out).toContain("set-autonomy --mode gated");
+    // A reply on record, but the driver declared the run unattended.
+    recordHumanTurn(proj);
+    for (const tool of [STATE, KIRO_CLI_STATE]) {
+      expect(guarded(proj, ["park"], true, tool).rc).not.toBe(0);
+    }
+    expect(readFileSync(sf, "utf-8")).not.toContain("- **Parked**:");
+    // The same reply in an attended session is the person's stop.
+    const attended = guarded(proj, ["park"]);
+    expect(attended.rc, attended.out).toBe(0);
+    expect(readFileSync(sf, "utf-8")).toContain("- **Parked By**: person");
+  });
+
+  test("the step a refused autonomous park names is accepted, and the park then goes through", () => {
+    const sf = seededStateFile(proj);
+    writeFileSync(sf, readFileSync(sf, "utf-8").replace(
+      "## Runtime State", "## Runtime State\n- **Construction Autonomy Mode**: autonomous",
+    ), "utf-8");
+    expect(guarded(proj, ["park"]).rc).not.toBe(0);
+    const env = { ...process.env };
+    delete env.AIDLC_SKIP_HUMAN_PRESENCE_GUARD;
+    delete env.AIDLC_UNATTENDED;
+    const gated = spawnSync(BUN, [join(AIDLC_SRC, "tools", "aidlc-bolt.ts"), "set-autonomy", "--mode", "gated", "--project-dir", proj], {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+      encoding: "utf-8",
+      env,
+    });
+    expect(gated.status, `${gated.stdout}${gated.stderr}`).toBe(0);
+    const parked = guarded(proj, ["park"]);
+    expect(parked.rc, parked.out).toBe(0);
+    expect(readFileSync(sf, "utf-8")).toContain("- **Parked**:");
+  });
+
+  // One owner for every caller: with AIDLC_UNATTENDED=1 an autonomous run
+  // never parks itself, whatever the caller passes, so nobody is left to
+  // resume it.
+  test("an unattended autonomous run never parks through park, report --park, or the Plan Approval answer's park", () => {
+    const sf = seededStateFile(proj);
+    writeFileSync(sf, readFileSync(sf, "utf-8").replace(
+      "## Runtime State", "## Runtime State\n- **Construction Autonomy Mode**: autonomous",
+    ), "utf-8");
+    recordHumanTurn(proj);
+    // 1. `state park`.
+    const park = guarded(proj, ["park"], true);
+    expect(park.rc).not.toBe(0);
+    expect(park.out).toContain("AIDLC_UNATTENDED=1 is set");
+    // 2. `orchestrate report --park` at a gate the person answered.
+    const slug = field(proj, "Current Stage");
+    guarded(proj, ["checkbox", `${slug}=in-progress`]);
+    guarded(proj, ["gate-start", slug]);
+    recordHumanTurn(proj);
+    const env: NodeJS.ProcessEnv = { ...process.env, AIDLC_SKIP_ARTIFACT_GUARD: "1", AIDLC_UNATTENDED: "1" };
+    delete env.AIDLC_SKIP_HUMAN_PRESENCE_GUARD;
+    const report = spawnSync(BUN, [
+      ORCHESTRATE, "report", "--stage", slug, "--result", "approved", "--user-input", "Approve", "--park",
+      "--project-dir", proj,
+    ], { env, encoding: "utf-8", timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS) });
+    expect(`${report.stdout}`).not.toContain('"kind":"parked"');
+    expect(readFileSync(sf, "utf-8")).not.toContain("- **Parked**:");
+    // 3. The Plan Approval answer's park passes attended: true; the owner still refuses.
+    const inProcess = spawnSync(BUN, ["-e", `
+      const { parkWorkflow } = await import(${JSON.stringify(STATE)});
+      try { parkWorkflow(${JSON.stringify(proj)}, { attended: true }); console.log("parked"); }
+      catch (e) { console.log("refused: " + (e instanceof Error ? e.message : String(e))); }
+    `], { env, encoding: "utf-8", timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS) });
+    expect(`${inProcess.stdout}${inProcess.stderr}`).not.toContain("parked\n");
+    expect(readFileSync(sf, "utf-8")).not.toContain("- **Parked**:");
+  });
+
+  test("an approval that names no choice records nothing, even after the person replied", () => {
+    const slug = field(proj, "Current Stage");
+    guarded(proj, ["checkbox", `${slug}=in-progress`]);
+    guarded(proj, ["gate-start", slug]);
+    recordHumanTurn(proj);
+    const direct = guarded(proj, ["approve", slug]);
+    expect(direct.rc).not.toBe(0);
+    expect(direct.out).toContain("no choice was passed");
+    expect(eventCount(proj, "GATE_APPROVED")).toBe(0);
+  });
 
   // --- Scenario H: persisted per-work switches cannot lower the key holder ---
   test("H: a persisted human-presence Guards Off entry is ignored", () => {
@@ -369,7 +653,8 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
     const r = guarded(proj, ["approve", slug, "--user-input", "Approve"]);
     expect(r.rc, r.out).not.toBe(0);
     expect(eventCount(proj, "GATE_APPROVED")).toBe(0);
-    expect(r.out).toContain("This needs a fresh human turn");
+    expect(r.out).toContain("If the person already replied, that reply was not recorded");
+    expect(r.out).toContain("do not ask them to answer again");
     expect(r.out).not.toContain("guard.human-presence");
     expect(r.out).not.toContain("Continuing past the human-presence check");
     expect(eventCount(proj, "GUARD_STOOD_ASIDE")).toBe(rowsBefore);
@@ -381,10 +666,10 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
     const r = spawnSync(BUN, [
       join(AIDLC_SRC, "tools", "aidlc-utility.ts"),
       "config-change", "--guard.human-presence", "off", "--project-dir", proj,
-    ], { encoding: "utf-8", env: process.env });
+    ], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8", env: process.env });
     expect(r.status, r.stderr).toBe(1);
     expect(JSON.parse(r.stderr)).toEqual({
-      error: "guard.human-presence has no per-work switch: human presence is the key holder, and only the machine-wide AIDLC_SKIP_HUMAN_PRESENCE_GUARD=1 lowers it.",
+      error: "Human presence cannot be switched off: it is how AIDLC knows an approval or an answer came from a real person, so reply in the chat yourself. For a supervised session where nobody can reply, launch the CLI with AIDLC_SKIP_HUMAN_PRESENCE_GUARD=1 set.",
     });
     expect(readFileSync(seededStateFile(proj), "utf-8")).toBe(beforeState);
     expect(eventCount(proj, "GUARD_DISABLED")).toBe(0);
@@ -409,7 +694,7 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
     const r = spawnSync(
       BUN,
       [STATE, "approve", slug, "--user-input", "Approve", "--project-dir", proj],
-      { encoding: "utf-8", env },
+      { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8", env },
     );
     const out = `${r.stdout ?? ""}${r.stderr ?? ""}`;
     expect(r.status, out).toBe(0);
@@ -469,6 +754,78 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
     expect(eventCount(proj, "GATE_APPROVED")).toBe(2);
   });
 
+  // --- Scenario C3: one question for several late stage approvals -----------
+  //
+  // Unit-major with Unit checkpoints off: the gate's question named several
+  // stages, so the person's one reply approves each of them. A stage the
+  // question did not name still needs its own reply: Scenario C holds for it.
+  test("C3: one HUMAN_TURN approves the stages its gate listed, and only those", () => {
+    const sep = "\u2014"; // the state file's checkbox separator
+    writeFileSync(seededStateFile(proj), `# AI-DLC State Tracking
+
+## Project Information
+- **Project**: combined late approval
+- **Project Type**: Greenfield
+- **Scope**: feature
+- **State Version**: 8
+
+## Runtime State
+- **Revision Count**: 0
+- **Construction Iteration**: unit-major
+- **Construction Checkpoints**: disabled
+- **Review Override**: none
+
+## Stage Progress
+
+### CONSTRUCTION PHASE
+- [-] functional-design ${sep} EXECUTE
+- [ ] nfr-requirements ${sep} EXECUTE
+- [ ] nfr-design ${sep} EXECUTE
+- [S] infrastructure-design ${sep} EXECUTE
+- [S] code-generation ${sep} EXECUTE
+- [ ] build-and-test ${sep} EXECUTE
+
+## Current Status
+- **Lifecycle Phase**: CONSTRUCTION
+- **Current Stage**: functional-design
+- **Status**: Running
+`);
+    // Reviews are off for this work (Review Override: none): the case is about
+    // the person's turn only.
+    const run = (args: string[]) => {
+      const env: NodeJS.ProcessEnv = { ...process.env, AIDLC_SKIP_ARTIFACT_GUARD: "1" };
+      env.AIDLC_ALLOW_DIRECT_STATE_TRANSITIONS = "1";
+      delete env.AIDLC_SKIP_HUMAN_PRESENCE_GUARD;
+      delete env.AIDLC_UNATTENDED;
+      const r = spawnSync(BUN, [STATE, ...args, "--project-dir", proj], {
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+        encoding: "utf-8",
+        env,
+      });
+      return { rc: r.status ?? -1, out: `${r.stdout ?? ""}${r.stderr ?? ""}` };
+    };
+    const listed = ["functional-design", "nfr-requirements", "nfr-design"];
+    expect(run(["gate-start", "functional-design", "--approves-together", listed.join(",")]).rc).toBe(0);
+    recordHumanTurn(proj);
+    expect(run(["approve", "functional-design", "--user-input", "Approve"]).rc).toBe(0);
+    for (const slug of listed.slice(1)) {
+      expect(field(proj, "Current Stage")).toBe(slug);
+      expect(run(["gate-start", slug]).rc).toBe(0);
+      const r = run(["approve", slug, "--user-input", "Approve"]);
+      expect(r.rc, r.out).toBe(0);
+    }
+    expect(eventCount(proj, "GATE_APPROVED")).toBe(3);
+
+    // build-and-test was not in the question: the same turn cannot approve it.
+    expect(field(proj, "Current Stage")).toBe("build-and-test");
+    run(["checkbox", "build-and-test=in-progress"]);
+    run(["gate-start", "build-and-test"]);
+    const unlisted = run(["approve", "build-and-test", "--user-input", "Approve"]);
+    expect(unlisted.rc).not.toBe(0);
+    expect(unlisted.out).toContain("no new human reply");
+    expect(eventCount(proj, "GATE_APPROVED")).toBe(3);
+  });
+
   // --- Scenario D: AUTONOMY carve-out is Construction-only -------------------
   test("D: a Construction autonomy field does NOT waive an Ideation gate", () => {
     const slug = field(proj, "Current Stage");
@@ -513,6 +870,27 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
   // Spawned as a PROCESS (not the exported run()) because the env read is the
   // contract under test, and the flag is set by a parent for the whole child.
   describe("unattended prompt submit (AIDLC_UNATTENDED)", () => {
+    // Find the human-turn hook's heartbeat anywhere under the project, so the
+    // assertion does not couple to the exact record the cursor resolves to.
+    function recordHumanTurnHeartbeatExists(p: string): boolean {
+      const stack = [p];
+      while (stack.length > 0) {
+        const dir = stack.pop() as string;
+        let entries: Dirent[];
+        try {
+          entries = readdirSync(dir, { withFileTypes: true });
+        } catch {
+          continue;
+        }
+        for (const e of entries) {
+          const full = join(dir, e.name);
+          if (e.isDirectory()) stack.push(full);
+          else if (e.name === "record-human-turn.last" && existsSync(full)) return true;
+        }
+      }
+      return false;
+    }
+
     function fireMintHook(p: string, unattended: boolean): number {
       writeSessionPidEntry(p, process.pid, "01995000-0188-7000-8000-000000000001");
       const env = { ...process.env };
@@ -523,6 +901,7 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
       if (unattended) env.AIDLC_UNATTENDED = "1";
       else delete env.AIDLC_UNATTENDED;
       const r = spawnSync(BUN, [MINT_HOOK, "engine", "hook", "record-human-turn"], {
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
         encoding: "utf-8",
         env,
         input: JSON.stringify({
@@ -540,6 +919,9 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
       // leaves the ledger's presence count untouched.
       expect(fireMintHook(proj, true)).toBe(0);
       expect(eventCount(proj, "HUMAN_TURN")).toBe(before);
+      // ...but the hook still leaves its heartbeat: a hook that ran and
+      // withheld its mint is not one that never ran.
+      expect(recordHumanTurnHeartbeatExists(proj)).toBe(true);
 
       // The flag is the ONLY difference — the same hook, same project, still
       // mints for a person. This is what keeps the test from passing for the
@@ -723,7 +1105,7 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
         "**Checkpoint**: Consolidated Summary Confirmation",
       );
       expect(audit).toContain("**Questions SHA-256**:");
-      expect(audit).toContain("**Hash Scope**: confirmed-content-v1");
+      expect(audit).toContain("**Hash Scope**: confirmed-content-v2");
     });
 
     test("summary confirmation refuses a same-second cross-shard human turn", () => {
@@ -851,7 +1233,7 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
         "Looks correct",
       ]);
       expect(result.rc).not.toBe(0);
-      expect(result.out).toContain("that turn was already used by another decision");
+      expect(result.out).toContain("no human reply has arrived since their last answer");
       expect(eventCount(proj, "SUMMARY_CONFIRMATION_RECORDED")).toBe(0);
     });
 
@@ -976,16 +1358,258 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
       expect(eventCount(proj, "QUESTION_ANSWERED")).toBe(0);
     });
 
-    test("COMMITS with a HUMAN_TURN, then a second answer this turn REFUSES", () => {
+    // From a live Kiro IDE run: the person answered five practice questions in
+    // one reply, the first answer recorded, and the rest were refused. One reply
+    // answers every question open when it arrived, each as its own answer; a
+    // question asked after it waits for the next reply.
+    test("one reply answers every question open when it arrived; a question asked after it waits", () => {
+      const slug = field(proj, "Current Stage");
+      for (const question of ["Way of working?", "Walking skeleton?", "How much testing?"]) {
+        expect(guardedLog(proj, ["decision", "--stage", slug, "--decision", question, "--options", "A,B"]).rc).toBe(0);
+      }
+      recordHumanTurn(proj);
+      for (const reply of ["A", "B", "A, with CI"]) {
+        const r = guardedLog(proj, ["answer", "--stage", slug, "--details", reply]);
+        expect(r.rc, r.out).toBe(0);
+      }
+      expect(eventCount(proj, "QUESTION_ANSWERED")).toBe(3);
+      expect(guardedLog(proj, ["decision", "--stage", slug, "--decision", "Deploy anywhere?", "--options", "A,B"]).rc).toBe(0);
+      const late = guardedLog(proj, ["answer", "--stage", slug, "--details", "A"]);
+      expect(late.rc).not.toBe(0);
+      expect(late.out).toContain("no new human reply has arrived for the question");
+      expect(eventCount(proj, "QUESTION_ANSWERED")).toBe(3);
+    });
+
+    // From block-sweep probes: the person answered three questions in one
+    // Claude Code question box, the agent logged the batch's question after
+    // the reply and then one answer per question, and the second and third were
+    // refused, so the person was told their answer never arrived and typed it
+    // again. A question box answers the questions it showed: each pick it
+    // carried backs one answer, however the agent ordered its records.
+    function boxReply(answers: string[]): void {
+      recordHumanTurn(proj);
+      for (const [index, reply] of answers.entries()) {
+        appendAuditEntry("QUESTION_REPLIED", { Question: `Q${index + 1}?`, Reply: reply }, proj);
+      }
+    }
+
+    test("one question box reply backs one answer per pick, though the batch was logged after it; one more waits", () => {
+      const slug = field(proj, "Current Stage");
+      boxReply(["In the API handler", "A toast", "Yes, to Untitled"]);
+      expect(guardedLog(proj, ["decision", "--stage", slug, "--decision", "Q1-Q3", "--options", "A,B"]).rc).toBe(0);
+      for (const reply of ["Q1: In the API handler", "Q2: A toast", "Q3: Yes, to Untitled"]) {
+        const r = guardedLog(proj, ["answer", "--stage", slug, "--details", reply]);
+        expect(r.rc, r.out).toBe(0);
+      }
+      expect(eventCount(proj, "QUESTION_ANSWERED")).toBe(3);
+      // The box carried three picks: a fourth answer has no pick behind it.
+      const fourth = guardedLog(proj, ["answer", "--stage", slug, "--details", "Q4: anything"]);
+      expect(fourth.rc).not.toBe(0);
+      expect(eventCount(proj, "QUESTION_ANSWERED")).toBe(3);
+    });
+
+    // #2012 F2 (AIDA back-audit): a menu of several questions answered once must
+    // not come back. `log answers` reads an exchange: the questions logged since
+    // the previous answers, closed by the answers logged after them, in the
+    // engine's own row order and with no reading of words. Both menu shapes the
+    // protocol allows land here: N questions then one combined answer, and one
+    // batch question then one answer per pick.
+    function logAnswers(slug: string): { answered: Array<{ question: string; answer: string; answeredAt: string }>; open: Array<{ question: string }>; ambiguous: unknown[] } {
+      const r = guardedLog(proj, ["answers", "--stage", slug]);
+      expect(r.rc, r.out).toBe(0);
+      return JSON.parse(r.out);
+    }
+
+    test("one combined answer closes every question the menu logged before it (#2012 F2)", () => {
       const slug = field(proj, "Current Stage");
       recordHumanTurn(proj);
+      for (const question of ["Where does the check live?", "Which notice?", "Rename to Untitled?"]) {
+        expect(guardedLog(proj, ["decision", "--stage", slug, "--decision", question, "--options", "A,B"]).rc).toBe(0);
+      }
+      const r = guardedLog(proj, ["answer", "--stage", slug, "--details", "Q1: In the API handler; Q2: A toast; Q3: Yes"]);
+      expect(r.rc, r.out).toBe(0);
+      const answers = logAnswers(slug);
+      expect(answers.answered.map((pair) => pair.question))
+        .toEqual(["Where does the check live?", "Which notice?", "Rename to Untitled?"]);
+      expect(answers.answered.every((pair) => pair.answer === "Q1: In the API handler; Q2: A toast; Q3: Yes")).toBe(true);
+      expect(answers.open).toEqual([]);
+      expect(answers.ambiguous).toEqual([]);
+    });
+
+    test("one batch question answered pick by pick is one answered question, not two orphans (#2012 F2)", () => {
+      const slug = field(proj, "Current Stage");
+      boxReply(["In the API handler", "A toast", "Yes, to Untitled"]);
+      expect(guardedLog(proj, ["decision", "--stage", slug, "--decision", "Q1-Q3", "--options", "A,B"]).rc).toBe(0);
+      for (const reply of ["Q1: In the API handler", "Q2: A toast", "Q3: Yes, to Untitled"]) {
+        expect(guardedLog(proj, ["answer", "--stage", slug, "--details", reply]).rc).toBe(0);
+      }
+      const answers = logAnswers(slug);
+      expect(answers.answered).toHaveLength(1);
+      expect(answers.answered[0].question).toBe("Q1-Q3");
+      expect(answers.answered[0].answer).toBe("Q1: In the API handler; Q2: A toast; Q3: Yes, to Untitled");
+      expect(answers.open).toEqual([]);
+      expect(answers.ambiguous).toEqual([]);
+    });
+
+    test("two exchanges in a row pair separately, and a question logged after the reply waits", () => {
+      const slug = field(proj, "Current Stage");
+      const row = (event: string, fields: Record<string, string>) => appendAuditEntry(event, { Stage: slug, ...fields }, proj);
+      row("DECISION_RECORDED", { Decision: "Q1", Options: "A, B" });
+      row("QUESTION_ANSWERED", { Details: "a" });
+      row("DECISION_RECORDED", { Decision: "Q2", Options: "A, B" });
+      row("QUESTION_ANSWERED", { Details: "b" });
+      row("DECISION_RECORDED", { Decision: "Q3", Options: "A, B" });
+      const answers = logAnswers(slug);
+      expect(answers.answered.map((pair) => [pair.question, pair.answer])).toEqual([["Q1", "a"], ["Q2", "b"]]);
+      expect(answers.open.map((question) => question.question)).toEqual(["Q3"]);
+      expect(answers.ambiguous).toEqual([]);
+    });
+
+    test("an orphan answer stays ambiguous, scopes pair apart, and a cancelled box leaves its question open", () => {
+      const slug = field(proj, "Current Stage");
+      const row = (event: string, fields: Record<string, string>) => appendAuditEntry(event, { Stage: slug, ...fields }, proj);
+      row("QUESTION_ANSWERED", { Details: "nothing was asked" });
+      row("DECISION_RECORDED", { Decision: "Q1", Options: "A, B" });
+      row("QUESTION_ANSWERED", { Details: "a" });
+      row("DECISION_RECORDED", { Decision: "U1?", Options: "A, B", Unit: "u1" });
+      row("DECISION_RECORDED", { Decision: "Q2", Options: "A, B" });
+      row("QUESTION_ANSWERED", { Details: "u", Unit: "u1" });
+      row("QUESTION_ANSWERED", { Details: "b" });
+      row("DECISION_RECORDED", { Decision: "Qx", Options: "A, B" });
+      row("QUESTION_ANSWERED", { Details: "Cancelled" });
+      const answers = logAnswers(slug);
+      // Scopes pair independently; their order in `answered` is not promised.
+      expect(answers.answered.map((pair) => [pair.question, pair.answer]).sort())
+        .toEqual([["Q1", "a"], ["Q2", "b"], ["U1?", "u"]]);
+      expect(answers.open.map((question) => question.question)).toEqual(["Qx"]);
+      expect(answers.ambiguous).toHaveLength(1);
+      expect((answers.ambiguous[0] as { answer: string; candidates: string[] }).answer).toBe("nothing was asked");
+      expect((answers.ambiguous[0] as { candidates: string[] }).candidates).toEqual([]);
+    });
+
+    test("a question box reply backs its answers when each question is logged after it, one at a time", () => {
+      const slug = field(proj, "Current Stage");
+      boxReply(["In the API handler", "A toast"]);
+      for (const [question, reply] of [["Q1?", "In the API handler"], ["Q2?", "A toast"]]) {
+        expect(guardedLog(proj, ["decision", "--stage", slug, "--decision", question, "--options", "A,B"]).rc).toBe(0);
+        const r = guardedLog(proj, ["answer", "--stage", slug, "--details", reply]);
+        expect(r.rc, r.out).toBe(0);
+      }
+      expect(eventCount(proj, "QUESTION_ANSWERED")).toBe(2);
+    });
+
+    test("with no HUMAN_TURN on record, an attended answer still asks for a reply", () => {
+      const slug = field(proj, "Current Stage");
+      expect(guardedLog(proj, ["decision", "--stage", slug, "--decision", "Choose", "--options", "A,B"]).rc).toBe(0);
       const r = guardedLog(proj, ["answer", "--stage", slug, "--details", "my answer"]);
-      expect(r.rc).toBe(0);
+      expect(r.rc).not.toBe(0);
+      expect(r.out).toContain("no new human reply has arrived for the question");
+      expect(r.out).not.toContain("already recorded as an answer");
+      expect(eventCount(proj, "QUESTION_ANSWERED")).toBe(0);
+    });
+
+    test("a reply an approval used keeps the no-reply refusal", () => {
+      const slug = field(proj, "Current Stage");
+      recordHumanTurn(proj);
+      // An approval, not an answer, used the reply: "already recorded as an answer" would be false.
+      appendAuditEntry("GATE_APPROVED", { Stage: slug, "User Input": "Approve" }, proj);
+      const r = guardedLog(proj, ["answer", "--stage", slug, "--details", "my answer"]);
+      expect(r.rc).not.toBe(0);
+      expect(r.out).toContain("no new human reply has arrived for the question");
+      expect(r.out).not.toContain("already recorded as an answer");
+      expect(eventCount(proj, "QUESTION_ANSWERED")).toBe(0);
+    });
+
+    test("a question logged after an answered reply keeps the no-reply refusal", () => {
+      const slug = field(proj, "Current Stage");
+      recordHumanTurn(proj);
+      expect(guardedLog(proj, ["answer", "--stage", slug, "--details", "first answer"]).rc).toBe(0);
+      // A new question is shown; its reply never reached the hooks, so no turn follows it.
+      expect(guardedLog(proj, ["decision", "--stage", slug, "--decision", "Next question", "--options", "A,B"]).rc).toBe(0);
+      const r = guardedLog(proj, ["answer", "--stage", slug, "--details", "second answer"]);
+      expect(r.rc).not.toBe(0);
+      expect(r.out).toContain("no new human reply has arrived for the question");
+      expect(r.out).not.toContain("already recorded as an answer");
       expect(eventCount(proj, "QUESTION_ANSWERED")).toBe(1);
-      // The QUESTION_ANSWERED is the new boundary: a second answer with no fresh
-      // HUMAN_TURN refuses (one answer per human turn).
-      const r2 = guardedLog(proj, ["answer", "--stage", slug, "--details", "second answer"]);
-      expect(r2.rc).not.toBe(0);
+    });
+
+    // From a live Windows run: the person answered a four-question menu, and only
+    // then did the agent log the menu's questions, with all four answers in one
+    // entry. The one reply is recorded once and nothing is left open, so they are
+    // never asked again.
+    test("a menu answered before its questions were logged, with one combined answer, is recorded once", () => {
+      const slug = field(proj, "Current Stage");
+      recordHumanTurn(proj);
+      expect(guardedLog(proj, ["decision", "--stage", slug, "--decision", "Q1-Q4", "--options", "A,B,C"]).rc).toBe(0);
+      const r = guardedLog(proj, [
+        "answer", "--stage", slug, "--details",
+        "Q1: A Silent no-op; Q2: A Trim only inside addTodo; Q3: A Targeted only; Q4: A renderHook",
+      ]);
+      expect(r.rc, r.out).toBe(0);
+      expect(eventCount(proj, "QUESTION_ANSWERED")).toBe(1);
+      const answers = JSON.parse(guardedLog(proj, ["answers", "--stage", slug]).out);
+      expect(answers.answered).toHaveLength(1);
+      expect(answers.open).toEqual([]);
+    });
+
+    test("the stage protocol logs a menu's questions first and puts one reply's answers in one log answer", () => {
+      const protocol = readFileSync(join(REPO_ROOT, "core", "aidlc-common", "protocols", "stage-protocol.md"), "utf-8");
+      expect(protocol).toContain(
+        "Log every question a menu shows before you show the menu, and put all of one reply's answers in a " +
+          "single `log answer` (`--details 'Q1: <choice>; Q2: <choice>'`), even when the reply came before the log.",
+      );
+      expect(protocol).toContain(
+        "If they already replied, log the question now, then put all of that reply's answers in a single " +
+          "`log answer`: a second `log answer` for one reply is refused.",
+      );
+    });
+
+    // "Choose the recommended answers", said before the questions came: the
+    // agent's choice is recorded as the agent's, with the words that handed it
+    // over, never as the person's own answer.
+    test("an answer the person left to the agent is recorded as the agent's, in their words", () => {
+      const slug = field(proj, "Current Stage");
+      recordHumanTurn(proj);
+      expect(guardedLog(proj, ["answer", "--stage", slug, "--details", "first answer"]).rc).toBe(0);
+      expect(guardedLog(proj, ["decision", "--stage", slug, "--decision", "Q1-Q5", "--options", "A,B"]).rc).toBe(0);
+      // Without their words it is still theirs to answer.
+      expect(guardedLog(proj, ["answer", "--stage", slug, "--details", "Q1: A"]).rc).not.toBe(0);
+      const r = guardedLog(proj, [
+        "answer", "--stage", slug, "--details", "Q1: A; Q2: B", "--on-instruction", "choose the  recommended answers",
+      ]);
+      expect(r.rc, r.out).toBe(0);
+      const audit = readAllAuditShards(proj);
+      expect(audit).toContain("**Answer Source**: chosen by the agent as the person asked");
+      expect(audit).toContain("**Instruction**: choose the recommended answers");
+      expect(eventCount(proj, "QUESTION_ANSWERED")).toBe(2);
+    });
+
+    test("with nothing the person said, blank words, a checkpoint, or an unattended run, it stays theirs", () => {
+      const slug = field(proj, "Current Stage");
+      const unsaid = guardedLog(proj, ["answer", "--stage", slug, "--details", "A", "--on-instruction", "up to you"]);
+      expect(unsaid.rc).not.toBe(0);
+      expect(unsaid.out).toContain("Nothing the person said in this piece of work is on record");
+      recordHumanTurn(proj);
+      const blank = guardedLog(proj, ["answer", "--stage", slug, "--details", "A", "--on-instruction", "  "]);
+      expect(blank.out).toContain("--on-instruction needs the person's own words");
+      const checkpoint = guardedLog(proj, [
+        "answer", "--stage", slug, "--checkpoint", "summary-confirmation", "--details", "Looks correct",
+        "--on-instruction", "up to you",
+      ]);
+      expect(checkpoint.out).toContain("--checkpoint summary-confirmation is theirs to answer");
+      const unattended = guardedLog(proj, ["answer", "--stage", slug, "--details", "A", "--on-instruction", "up to you"], true);
+      expect(unattended.out).toContain("--on-instruction needs a person in the session");
+      expect(eventCount(proj, "QUESTION_ANSWERED")).toBe(0);
+    });
+
+    test("an unattended second answer keeps the AIDLC_UNATTENDED explanation", () => {
+      const slug = field(proj, "Current Stage");
+      recordHumanTurn(proj);
+      expect(guardedLog(proj, ["answer", "--stage", slug, "--details", "my answer"]).rc).toBe(0);
+      const r = guardedLog(proj, ["answer", "--stage", slug, "--details", "second answer"], true);
+      expect(r.rc).not.toBe(0);
+      expect(r.out).toContain("Unset AIDLC_UNATTENDED");
+      expect(r.out).not.toContain("already recorded as an answer");
       expect(eventCount(proj, "QUESTION_ANSWERED")).toBe(1);
     });
 
@@ -1021,11 +1645,37 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
       expect(eventCount(proj, "GATE_APPROVED")).toBe(1);
       expect(
         readAuditShardEvents(proj).find((row) => row.event === "GATE_APPROVED")?.block,
-      ).toContain(`**User Input**: ${reply}`);
+      ).toContain("**User Input**: Approve\n");
       expect(field(proj, "Current Stage")).not.toBe(slug);
     });
 
-    test("a paraphrased approval is a no-op and report refuses it", () => {
+    for (const event of ["GATE_APPROVED", "GATE_REJECTED"]) {
+      for (const [label, checkpoint, fingerprint, pending] of [
+        ["another kind", "construction-unit", "current", true],
+        ["older evidence", "walking-skeleton", "previous", true],
+        ["the asked checkpoint", "walking-skeleton", "current", false],
+      ] as const) {
+        test(`${event} for ${label} preserves the gate-time answer route`, () => {
+          const slug = field(proj, "Current Stage");
+          guarded(proj, ["checkbox", `${slug}=in-progress`]);
+          guarded(proj, ["gate-start", slug]);
+          appendAuditEntry("DECISION_RECORDED", {
+            Stage: slug, Checkpoint: "Construction Unit Approval",
+            Unit: "alpha", Kind: "skeleton", Fingerprint: "current",
+          }, proj);
+          appendAuditEntry(event, {
+            Stage: slug, Checkpoint: checkpoint, Unit: "alpha", Fingerprint: fingerprint,
+          }, proj);
+          recordHumanTurn(proj);
+          const answer = guardedLog(proj, ["answer", "--stage", slug, "--details", "Approve"]);
+          expect(answer.rc, answer.out).toBe(0);
+          expect(eventCount(proj, "QUESTION_ANSWERED")).toBe(pending ? 1 : 0);
+          expect(answer.out.includes('"skipped":"QUESTION_ANSWERED"')).toBe(!pending);
+        });
+      }
+    }
+
+    test("a paraphrased answer is a no-op, and the agent's reported approval records as Approve", () => {
       const slug = field(proj, "Current Stage");
       guarded(proj, ["checkbox", `${slug}=in-progress`]);
       guarded(proj, ["gate-start", slug]);
@@ -1051,9 +1701,8 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
         "The user approved",
       ]);
       expect(approve.rc).toBe(0);
-      expect(approve.out).toContain('"kind":"error"');
-      expect(approve.out).toContain("did not match an offered choice");
-      expect(eventCount(proj, "GATE_APPROVED")).toBe(0);
+      expect(approve.out).toContain('"kind":"done"');
+      expect(eventCount(proj, "GATE_APPROVED")).toBe(1);
     });
 
     test("an interview answer still cannot authorize a later same-turn approval", () => {
@@ -1081,43 +1730,49 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
         "fabricated approval",
       ]);
       expect(approve.rc).toBe(0);
-      expect(approve.out).toContain('"kind":"error"');
-      expect(approve.out).toContain("did not match an offered choice");
+      expect(approve.out).toContain('"kind":"print"');
+      // The turn was spent on the interview answer: no reply is behind this approval.
+      expect(approve.out).toContain("no new human reply");
       expect(eventCount(proj, "GATE_APPROVED")).toBe(0);
     });
 
-    test("a redundant gate answer with NO human turn refuses (fabricated approve chain breaks at the answer)", () => {
-      const slug = field(proj, "Current Stage");
-      guarded(proj, ["checkbox", `${slug}=in-progress`]);
-      guarded(proj, ["gate-start", slug]);
+    // "can you fix it?" is from a live run where the agent passed the person's
+    // question about a setting as their approval; presence alone refuses it.
+    test.each(["Approve (Recommended)", "can you fix it?"])(
+      "a redundant gate answer with NO human turn refuses (fabricated approve chain breaks at the answer): %s",
+      (reply) => {
+        const slug = field(proj, "Current Stage");
+        guarded(proj, ["checkbox", `${slug}=in-progress`]);
+        guarded(proj, ["gate-start", slug]);
 
-      const answer = guardedLog(proj, [
-        "answer",
-        "--stage",
-        slug,
-        "--details",
-        "Approve (Recommended)",
-      ]);
-      expect(answer.rc).not.toBe(0);
-      expect(answer.out).toContain("Cannot record this approval choice");
-      expect(eventCount(proj, "QUESTION_ANSWERED")).toBe(0);
+        const answer = guardedLog(proj, [
+          "answer",
+          "--stage",
+          slug,
+          "--details",
+          reply,
+        ]);
+        expect(answer.rc).not.toBe(0);
+        expect(answer.out).toContain("Cannot record this approval choice");
+        expect(eventCount(proj, "QUESTION_ANSWERED")).toBe(0);
 
-      const approve = guardedReport(proj, [
-        "--stage",
-        slug,
-        "--result",
-        "approved",
-        "--user-input",
-        "Approve (Recommended)",
-      ]);
-      expect(approve.rc).toBe(0);
-      expect(approve.out).toContain('"kind":"error"');
-      expect(approve.out).toContain("no new human reply has been received");
-      expect(eventCount(proj, "GATE_APPROVED")).toBe(0);
-      expect(readFileSync(seededStateFile(proj), "utf-8")).toContain(
-        `- [?] ${slug}`,
-      );
-    });
+        const approve = guardedReport(proj, [
+          "--stage",
+          slug,
+          "--result",
+          "approved",
+          "--user-input",
+          reply,
+        ]);
+        expect(approve.rc).toBe(0);
+        expect(approve.out).toContain('"kind":"print"');
+        expect(approve.out).toContain("no new human reply has been received");
+        expect(eventCount(proj, "GATE_APPROVED")).toBe(0);
+        expect(readFileSync(seededStateFile(proj), "utf-8")).toContain(
+          `- [?] ${slug}`,
+        );
+      },
+    );
 
     test("rejection with NO human turn refuses without mutating state", () => {
       const slug = field(proj, "Current Stage");
@@ -1135,7 +1790,7 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
         "tighten the schema",
       ]);
       expect(reject.rc).toBe(0);
-      expect(reject.out).toContain('"kind":"error"');
+      expect(reject.out).toContain('"kind":"print"');
       expect(reject.out).toContain("Cannot request changes");
       expect(eventCount(proj, "GATE_REJECTED")).toBe(0);
       expect(field(proj, "Revision Count")).toBe("0");
@@ -1176,7 +1831,7 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
         "tighten the schema again",
       ]);
       expect(second.rc).toBe(0);
-      expect(second.out).toContain('"kind":"error"');
+      expect(second.out).toContain('"kind":"print"');
       expect(second.out).toContain("Cannot request changes");
       expect(eventCount(proj, "GATE_REJECTED")).toBe(1);
     });
@@ -1251,5 +1906,188 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
         "**Details**: Reject option B, use A",
       );
     });
+  });
+});
+
+// One message can approve and ask for more ("approve, and turn plan approval
+// off"), or say stop while the run approves on its own. The approval given in
+// that message, and the run's own approvals, leave the rest of it standing;
+// any other decision after it uses it up, and an approval or an answer still
+// needs a reply of its own.
+describe("t188: what the person's message asks for outlives the approval given in it", () => {
+  beforeEach(() => {
+    resetAidlcEnv();
+    proj = createTestProject();
+    seedStateFile(proj, MID_IDEATION); // Current Stage: feasibility
+  });
+
+  afterEach(() => cleanupTestProject(proj));
+
+  function setter(args: string[]): { rc: number; out: string } {
+    const env: NodeJS.ProcessEnv = { ...process.env, AIDLC_DISABLE_PLAN_APPROVAL_GUARD: "0" };
+    delete env.AIDLC_SKIP_HUMAN_PRESENCE_GUARD;
+    delete env.AIDLC_UNATTENDED;
+    const r = spawnSync(BUN, [join(AIDLC_SRC, "tools", "aidlc-utility.ts"), ...args, "--project-dir", proj], {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+      encoding: "utf-8",
+      env,
+    });
+    return { rc: r.status ?? -1, out: `${r.stdout ?? ""}${r.stderr ?? ""}` };
+  }
+
+  function openGate(): string {
+    const slug = field(proj, "Current Stage");
+    guarded(proj, ["checkbox", `${slug}=in-progress`]);
+    guarded(proj, ["gate-start", slug]);
+    return slug;
+  }
+
+  const planApproval = () => /- \*\*Plan Approval\*\*: (\S+)/.exec(readFileSync(seededStateFile(proj), "utf-8"))?.[1];
+
+  function autonomy(mode: "autonomous" | "gated"): { rc: number; out: string } {
+    const env: NodeJS.ProcessEnv = { ...process.env };
+    delete env.AIDLC_SKIP_HUMAN_PRESENCE_GUARD;
+    delete env.AIDLC_UNATTENDED;
+    const r = spawnSync(BUN, [join(AIDLC_SRC, "tools", "aidlc-bolt.ts"), "set-autonomy", "--mode", mode, "--project-dir", proj], {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+      encoding: "utf-8",
+      env,
+    });
+    return { rc: r.status ?? -1, out: `${r.stdout ?? ""}${r.stderr ?? ""}` };
+  }
+
+  const autonomyMode = () =>
+    /- \*\*Construction Autonomy Mode\*\*: (\S+)/.exec(readFileSync(seededStateFile(proj), "utf-8"))?.[1];
+
+  test("approve, and run Construction on its own: both halves of the one message are carried out", () => {
+    const slug = openGate();
+    recordHumanTurn(proj);
+    const approved = guarded(proj, ["approve", slug, "--user-input", "Approve"]);
+    expect(approved.rc, approved.out).toBe(0);
+    const grant = autonomy("autonomous");
+    expect(grant.rc, grant.out).toBe(0);
+    expect(autonomyMode()).toBe("autonomous");
+  });
+
+  test("approve the plan, and run Construction on its own: the plan answer leaves the grant standing", () => {
+    recordHumanTurn(proj);
+    appendAuditEntry("PLAN_APPROVAL_RECORDED", { Stage: "code-generation", Details: "Approve Plan", "Asked By": "engine" }, proj);
+    const grant = autonomy("autonomous");
+    expect(grant.rc, grant.out).toBe(0);
+    expect(autonomyMode()).toBe("autonomous");
+  });
+
+  test("the grant after an approval from an earlier message, or a second grant, waits for the person to say it again", () => {
+    const slug = openGate();
+    recordHumanTurn(proj);
+    expect(guarded(proj, ["approve", slug, "--user-input", "Approve"]).rc).toBe(0);
+    const next = field(proj, "Current Stage");
+    expect(guardedLog(proj, ["decision", "--stage", next, "--decision", "Which name?", "--options", "A,B"]).rc).toBe(0);
+    recordHumanTurn(proj);
+    expect(guardedLog(proj, ["answer", "--stage", next, "--details", "A"]).rc).toBe(0);
+    const refused = autonomy("autonomous");
+    expect(refused.rc).not.toBe(0);
+    expect(refused.out).toContain("no reply from the person is on record");
+    expect(autonomyMode()).not.toBe("autonomous");
+    // The step the refusal names: they choose it, and the grant runs once.
+    recordHumanTurn(proj);
+    expect(autonomy("autonomous").rc).toBe(0);
+    expect(autonomy("gated").rc).toBe(0);
+    expect(autonomy("autonomous").rc).not.toBe(0);
+    expect(autonomyMode()).toBe("gated");
+  });
+
+  test("approve, and turn plan approval off: both halves of the one message are carried out", () => {
+    const slug = openGate();
+    recordHumanTurn(proj);
+    const approved = guarded(proj, ["approve", slug, "--user-input", "Approve"]);
+    expect(approved.rc, approved.out).toBe(0);
+    const off = setter(["config-change", "--plan-approval", "off"]);
+    expect(off.rc, off.out).toBe(0);
+    expect(off.out).toContain("Each code plan is now built without asking you first.");
+    expect(planApproval()).toBe("off");
+  });
+
+  test("approve the plan, and turn plan approval off: one plan answer for several Units counts once", () => {
+    recordHumanTurn(proj);
+    for (const unit of ["core", "extra"]) {
+      appendAuditEntry("PLAN_APPROVAL_RECORDED", { Stage: "code-generation", Details: "Approve Plan", "Asked By": "engine", Unit: unit }, proj);
+    }
+    const off = setter(["config-change", "--plan-approval", "off"]);
+    expect(off.rc, off.out).toBe(0);
+    expect(planApproval()).toBe("off");
+  });
+
+  test("the same request after an approval from an earlier message waits for the person to say it again", () => {
+    const slug = openGate();
+    recordHumanTurn(proj);
+    expect(guarded(proj, ["approve", slug, "--user-input", "Approve"]).rc).toBe(0);
+    // Their next message answered a question: it is spent, and the approval was not from it.
+    const next = field(proj, "Current Stage");
+    expect(guardedLog(proj, ["decision", "--stage", next, "--decision", "Which name?", "--options", "A,B"]).rc).toBe(0);
+    recordHumanTurn(proj);
+    expect(guardedLog(proj, ["answer", "--stage", next, "--details", "A"]).rc).toBe(0);
+    const refused = setter(["config-change", "--plan-approval", "off"]);
+    expect(refused.rc).not.toBe(0);
+    expect(refused.out).toContain("No reply from the person has arrived since the last decision");
+    expect(planApproval()).not.toBe("off");
+    // The step the refusal names: they ask, and the setter runs.
+    recordHumanTurn(proj);
+    const off = setter(["config-change", "--plan-approval", "off"]);
+    expect(off.rc, off.out).toBe(0);
+  });
+
+  test("an approval after a message that was only a command to AIDLC came from the reply before it, so the command carries nothing more", () => {
+    const slug = openGate();
+    recordHumanTurn(proj);
+    appendAuditEntry("HUMAN_TURN", { Reply: "command" }, proj);
+    expect(guarded(proj, ["approve", slug, "--user-input", "Approve"]).rc).toBe(0);
+    const refused = setter(["config-change", "--plan-approval", "off"]);
+    expect(refused.rc).not.toBe(0);
+    expect(planApproval()).not.toBe("off");
+  });
+
+  test("the approval itself still needs a reply of its own: one message never approves two gates", () => {
+    const slug = openGate();
+    recordHumanTurn(proj);
+    expect(guarded(proj, ["approve", slug, "--user-input", "Approve"]).rc).toBe(0);
+    const second = openGate();
+    expect(second).not.toBe(slug);
+    expect(guarded(proj, ["approve", second, "--user-input", "Approve"]).rc).not.toBe(0);
+    expect(eventCount(proj, "GATE_APPROVED")).toBe(1);
+  });
+
+  test("a stop while the run approves on its own is theirs: the park goes through, and next says parked", () => {
+    setAutonomous(proj);
+    recordHumanTurn(proj);
+    const stage = field(proj, "Current Stage");
+    appendAuditEntry("GATE_APPROVED", { Stage: stage, Unit: "core", Checkpoint: "Construction Unit Approval", Autonomous: "true" }, proj);
+    appendAuditEntry("GATE_APPROVED", { Stage: stage }, proj);
+    const parked = guarded(proj, ["park"]);
+    expect(parked.rc, parked.out).toBe(0);
+    expect(readFileSync(seededStateFile(proj), "utf-8")).toContain("- **Parked By**: person");
+    const next = spawnSync(BUN, [ORCHESTRATE, "next", "--project-dir", proj], {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+      encoding: "utf-8",
+    });
+    expect(JSON.parse(next.stdout).kind, `${next.stdout}${next.stderr}`).toBe("parked");
+  });
+
+  test("a stop the autonomy grant or an answer used up waits for the person to say it again", () => {
+    setAutonomous(proj);
+    recordHumanTurn(proj);
+    appendAuditEntry("AUTONOMY_MODE_SET", { Mode: "autonomous" }, proj);
+    appendAuditEntry("GATE_APPROVED", { Stage: field(proj, "Current Stage"), Autonomous: "true" }, proj);
+    const granted = guarded(proj, ["park"]);
+    expect(granted.rc).not.toBe(0);
+    expect(granted.out).toContain("no reply from the person is on record");
+    recordHumanTurn(proj);
+    appendAuditEntry("QUESTION_ANSWERED", { Stage: field(proj, "Current Stage"), Details: "chosen by the agent" }, proj);
+    expect(guarded(proj, ["park"]).rc).not.toBe(0);
+    expect(readFileSync(seededStateFile(proj), "utf-8")).not.toContain("- **Parked**:");
+    // The step it names: when the person asks to stop, park then.
+    recordHumanTurn(proj);
+    const parked = guarded(proj, ["park"]);
+    expect(parked.rc, parked.out).toBe(0);
   });
 });

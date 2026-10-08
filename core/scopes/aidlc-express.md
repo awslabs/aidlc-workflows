@@ -8,10 +8,12 @@ description: "Lightest run: requirements to deploy, no design pass, no reviewers
 skeleton: off
 runner: true
 review_cap: none
-guard_policy: relaxed
+guard_policy: off
 sensors: off
 learnings: off
 summary_confirmation: off
+plan_approval: off
+collaborators: off
 ---
 
 # express scope
@@ -20,11 +22,16 @@ summary_confirmation: off
 straight line from requirements to code, test, and deploy without a design
 pass or reviewer dispatch.
 
-Guard Policy defaults to relaxed: changed inputs are recorded and announced rather than reopening approval; plan approval and review freeze are lowered for undirected work.
+Guard Policy defaults to off: changed inputs are recorded and announced rather than reopening approval; plan approval, review freeze, state transition, and reviewer read scope are lowered for undirected work. Human presence stays up.
 
 Sensors, learnings, and summary confirmation are off too; override them per intent
 with `/aidlc --sensors on|off`, `/aidlc --learnings on|off`, or
 `/aidlc --summary-confirmation on|off`.
+
+Plan approval is off as well: once the code plan is written you see one line
+naming it, code generation starts, and the line asks whether you want to look at
+the plan first. You can also ask to see a plan before it is built, or to be
+asked about every plan.
 
 ## Why these stages, why skip those
 

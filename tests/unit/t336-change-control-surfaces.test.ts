@@ -8,7 +8,12 @@
 // flag and member for one release, and
 // `change_notices` is a legal universal directive field.
 
-import { afterEach, describe, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { afterEach, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -20,6 +25,8 @@ import {
   createTestProject,
   seedAidlcMemory,
 } from "../harness/fixtures.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const BUN = process.execPath;
 const GRAPH_TOOL = join(AIDLC_SRC, "tools", "aidlc-graph.ts");
@@ -42,7 +49,7 @@ function runValidateGrid(proj: string, proposal: unknown, extra: string[] = []) 
   const result = spawnSync(
     BUN,
     [GRAPH_TOOL, "validate-grid", "--proposal", proposalPath, ...extra, "--project-dir", proj],
-    { encoding: "utf-8", env: { ...process.env, CLAUDE_PROJECT_DIR: proj } },
+    { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8", env: { ...process.env, CLAUDE_PROJECT_DIR: proj } },
   );
   return { rc: result.status ?? -1, stdout: result.stdout ?? "", stderr: result.stderr ?? "" };
 }
@@ -155,7 +162,7 @@ describe("t336 (1) validate-grid checks the proposal's Guard Policy value", () =
       const refused = runValidateGrid(proj, { stages: featureGrid(), guardPolicy: value });
       expect(refused.rc, value).toBe(1);
       expect(validation(refused.stdout).errors).toContain(
-        `Guard Policy is set to strict in ${memory} (section: Guard Policy), so it cannot be changed from chat. Edit that line to change it for everyone on this repo.`,
+        `Your team set Guard Policy to strict in ${memory} (section: Guard Policy), so it stays strict for everyone on this repo. Changing that line there changes it.`,
       );
     }
     const allowed = runValidateGrid(proj, { stages: featureGrid(), guardPolicy: "strict" });
@@ -169,7 +176,7 @@ describe("t336 (1) validate-grid checks the proposal's Guard Policy value", () =
     const refused = runValidateGrid(proj, { stages: featureGrid() }, ["--guard-policy", "relaxed"]);
     expect(refused.rc).toBe(1);
     expect(validation(refused.stdout).errors).toContain(
-      `Guard Policy is set to strict in ${memory} (section: Change Control), so it cannot be changed from chat. Edit that line to change it for everyone on this repo.`,
+      `Your team set Guard Policy to strict in ${memory} (section: Change Control), so it stays strict for everyone on this repo. Changing that line there changes it.`,
     );
   });
 });

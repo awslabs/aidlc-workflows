@@ -36,7 +36,12 @@
 // for the CLI exit-code rows (cli). Fixture graphs ride the AIDLC_STAGE_GRAPH
 // env seam exactly like t124/t103.
 
-import { afterEach, describe, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { afterEach, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -46,6 +51,8 @@ import {
   validateScope,
 } from "../../dist/claude/.claude/tools/aidlc-graph.ts";
 import { AIDLC_SRC } from "../harness/fixtures.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const BUN = process.execPath;
 const GRAPH_TOOL = join(AIDLC_SRC, "tools", "aidlc-graph.ts");
@@ -127,7 +134,7 @@ function runValidateGrid(
   const res = spawnSync(
     BUN,
     [GRAPH_TOOL, "validate-grid", "--proposal", proposalPath, ...extra],
-    { encoding: "utf-8", env: { ...process.env, ...env } },
+    { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8", env: { ...process.env, ...env } },
   );
   return { rc: res.status ?? -1, out: `${res.stdout ?? ""}${res.stderr ?? ""}` };
 }

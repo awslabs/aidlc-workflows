@@ -50,10 +50,11 @@
 // redirections and operands of common mutation commands; read-only shell calls
 // do not produce targets and remain untouched.
 
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync } from "node:fs";
 import { appendAuditEntryUnlocked } from "../tools/aidlc-audit.ts";
 import {
+  hookOutsideGate,
+  enterHookWorkflow,
   acquireAuditLock,
   auditFilePath,
   type ClaudeCodeHookInput,
@@ -62,14 +63,16 @@ import {
   decideFence,
   errorMessage,
   evaluateGuardRefusal,
+  guardStandAsideSpeaks,
   guardStoodAsideLine,
   recordGuardStoodAside,
   freshReviewReceipts,
   getField,
   guardAttemptState,
-  guardRefusalOutput,
+  guardRefusalHookNote,
   humanAuthorityState,
   hooksHealthDir,
+  writeHookStatusFile,
   intentRepos,
   isClaudeCodeHookInput,
   isoTimestamp,
@@ -175,18 +178,22 @@ export function judgeFreeze(
 // the quote-at-gate route for suggestions, and names the state-correct route
 // that legitimately reopens a real defect.
 export const REVIEW_FREEZE_FALLBACK_GUIDANCE =
-  "Ask the human what should change, then record their Request Changes " +
-  "decision before editing the document; that unlocks it for revision and a " +
-  "fresh review.";
+  "Record the person's Request Changes decision, with what they said should " +
+  "change (ask only if they have not said), before editing the document; that " +
+  "unlocks it for revision and a fresh review.";
 
+// The way out names the Unit whose document was refused, never the Unit the
+// walk happens to be on: redoing another Unit's step throws its work away and
+// leaves this document frozen.
 export function reviewFreezeRecoveryGuidance(
   projectDir: string,
   stateContent: string,
   stageSlug: string,
   guidanceReader: typeof recoveryGuidance = recoveryGuidance,
+  options: Parameters<typeof recoveryGuidance>[3] = {},
 ): string {
   try {
-    return guidanceReader(projectDir, stateContent, stageSlug);
+    return guidanceReader(projectDir, stateContent, stageSlug, options);
   } catch {
     return REVIEW_FREEZE_FALLBACK_GUIDANCE;
   }
@@ -208,19 +215,33 @@ export function blockReason(
 // --- Main ---------------------------------------------------------------------
 
 export async function run(input: string): Promise<number> {
-  // Deterministic off-switch: enforcement disabled entirely.
-  if (resolveProjectFlag("AIDLC_DISABLE_REVIEW_FREEZE_HOOK") === "1") return 0;
-
   const projectDir = resolveProjectDirFromHook(import.meta.url);
-
+  let payloadSession: unknown;
   try {
-    const healthDir = hooksHealthDir(projectDir);
-    mkdirSync(healthDir, { recursive: true });
-    writeFileSync(join(healthDir, `${HOOK_NAME}.last`), isoTimestamp(), "utf-8");
+    payloadSession = (JSON.parse(input) as { session_id?: unknown }).session_id;
   } catch {
-    // Heartbeat failure is non-fatal - never let it affect the decision.
+    // Missing/malformed payload: resolve without a payload session.
   }
+  // A conversation that has not joined the selected workflow is not held to its review freeze.
+  const workflow = enterHookWorkflow(projectDir, payloadSession);
+  try {
+    if (hookOutsideGate(workflow)) return 0;
+    // The heartbeat says the host ran this hook, so it comes before the off
+    // switch: the freeze switched off never looks like a host running no hooks.
+    try {
+      writeHookStatusFile(hooksHealthDir(projectDir), `${HOOK_NAME}.last`, isoTimestamp());
+    } catch {
+      // Heartbeat failure is non-fatal - never let it affect the decision.
+    }
+    // Deterministic off-switch: enforcement disabled entirely.
+    if (resolveProjectFlag("AIDLC_DISABLE_REVIEW_FREEZE_HOOK") === "1") return 0;
+    return await checkFreeze(input, projectDir);
+  } finally {
+    workflow.restore();
+  }
+}
 
+async function checkFreeze(input: string, projectDir: string): Promise<number> {
   let parsed: ClaudeCodeHookInput;
   try {
     const raw: unknown = JSON.parse(input);
@@ -232,7 +253,8 @@ export async function run(input: string): Promise<number> {
 
   const toolName = parsed.tool_name ?? "";
   const cwd = typeof parsed.cwd === "string" ? parsed.cwd : projectDir;
-  const targets = writeTargets(toolName, parsed.tool_input, cwd);
+  // Set by the adapter that ran the tool, outside the agent's input.
+  const targets = writeTargets(toolName, parsed.tool_input, cwd, parsed.aidlc_shell === "powershell" ? "powershell" : "posix");
   if (targets.length === 0) return 0;
 
   // No audit ledger means no receipts to protect - the common non-AIDLC case,
@@ -311,7 +333,9 @@ export async function run(input: string): Promise<number> {
     }
     if (gate?.decision === "stand-aside") {
       const detail = verdict.target ?? "";
-      writeGuardStoodAside(guardStoodAsideLine("review-freeze", gate.source, detail));
+      if (guardStandAsideSpeaks(gate)) {
+        writeGuardStoodAside(guardStoodAsideLine("review-freeze", gate.source, detail));
+      }
       recordGuardStoodAside(projectDir, {
         fence: "review-freeze",
         authority: gate.authority,
@@ -325,7 +349,7 @@ export async function run(input: string): Promise<number> {
 
   // Audit the refusal so the run's record shows when the freeze bit.
   // Best-effort: an audit failure never changes the block decision. The lock
-  // acquisition is TIME-BOUNDED well below the standard 5s budget (5 x 50ms):
+  // acquisition deliberately keeps a short reporting budget (5 x 50ms):
   // the block decision is already made, and a lock-starved fan-out must not
   // stretch a fast refuse into a laggy one - a dropped advisory row is
   // preferable to a slow block.
@@ -403,13 +427,16 @@ export async function run(input: string): Promise<number> {
   });
   const guidance =
     evaluated.remedies.find((remedy) => remedy.executableNow)?.action ??
-    reviewFreezeRecoveryGuidance(projectDir, stateContent, stage.slug);
+    reviewFreezeRecoveryGuidance(projectDir, stateContent, stage.slug, recoveryGuidance, {
+      ...(verdict.unit ? { unit: verdict.unit } : {}),
+      ...(teamGate ? { teamGate } : {}),
+    });
   const refusal = {
     ...evaluated,
     userMessage: blockReason(verdict, guidance),
   };
   process.stderr.write(
-    `${guardRefusalOutput(projectDir, refusal, snapshot.attempt, snapshot.resources)}\n`,
+    `${guardRefusalHookNote(projectDir, refusal, snapshot.attempt, snapshot.resources)}\n`,
   );
   return 2; // harness PreToolUse reject contract: exit 2 + stderr blocks
 }

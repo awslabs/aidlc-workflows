@@ -1,7 +1,11 @@
 // covers: subcommand:aidlc-utility:select-plugins, audit:PLUGIN_SELECTION_CHANGED, function:pluginsEnabled,
 // function:compileStageGraph, function:mergeComposedScopes
 
-import { deterministicCaseTimeoutMs } from "../harness/test-budget.ts";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_RUNTIME_CASE_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
 import { afterAll, beforeAll, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
@@ -17,6 +21,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { REPO_ROOT } from "../harness/fixtures.ts";
 import { readAllAuditShards } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import {
   AIDLC_MEMORY_SRC,
@@ -30,8 +35,8 @@ import {
 } from "../harness/plugin-kit.ts";
 
 const BUN = process.execPath;
-const TIMEOUT_MS = 60_000;
-setDefaultTimeout(Math.max(TIMEOUT_MS, deterministicCaseTimeoutMs()));
+const TIMEOUT_MS = NATIVE_FIXTURE_SETUP_TIMEOUT_MS;
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 const PLUGIN = "test-pro";
 const STAGE_TABLE_BEGIN =
   "<!-- BEGIN: compiled stage graph via `bun .claude/tools/aidlc.ts engine gen stage-table` - do NOT hand-edit -->";
@@ -49,7 +54,7 @@ function composeTestPro(project: string, pluginBuilt: string): void {
   const compose = spawnSync(BUN, [join(pluginBuilt, "hooks", "compose.ts")], {
     cwd: project,
     encoding: "utf-8",
-    timeout: TIMEOUT_MS - 5_000,
+    timeout: remainingOperationTimeoutMs(NATIVE_RUNTIME_CASE_TIMEOUT_MS),
     env: {
       ...process.env,
       CLAUDE_PLUGIN_ROOT: pluginBuilt,
@@ -77,6 +82,7 @@ interface GraphStage {
   enabled?: false;
   produces?: string[];
   sensors?: string[];
+  plugin?: string;
 }
 function graph(project: string): GraphStage[] {
   return JSON.parse(readFileSync(graphPath(project), "utf-8"));
@@ -90,7 +96,7 @@ function runUtility(project: string, args: string[], env: NodeJS.ProcessEnv = {}
   return spawnSync(BUN, [join(project, ".claude", "tools", "aidlc-utility.ts"), ...args], {
     cwd: project,
     encoding: "utf-8",
-    timeout: TIMEOUT_MS - 5_000,
+    timeout: remainingOperationTimeoutMs(NATIVE_RUNTIME_CASE_TIMEOUT_MS),
     env: {
       ...process.env,
       CLAUDE_PROJECT_DIR: project,
@@ -328,6 +334,40 @@ describe("t224 plugin selection - install chooses visible plugin surfaces", () =
     expect(result.stderr).toContain("test-pro");
   });
 
+  test("a composed plugin that owns no stage or scope can be selected, and disabling it strips its sensors (#1590)", () => {
+    const proj = join(tmp, "contribution-only");
+    composePluginFixture({ plugin: PLUGIN, harness: "claude", projectDir: proj, pluginBuilt });
+    const claude = join(proj, ".claude");
+    for (const phase of readdirSync(join(claude, "aidlc-common", "stages"))) {
+      for (const file of readdirSync(join(claude, "aidlc-common", "stages", phase))) {
+        if (file.startsWith(`${PLUGIN}-`)) rmSync(join(claude, "aidlc-common", "stages", phase, file));
+      }
+    }
+    for (const file of readdirSync(join(claude, "scopes"))) {
+      if (file.startsWith(`${PLUGIN}-`)) rmSync(join(claude, "scopes", file));
+    }
+    const compile = spawnSync(BUN, [join(claude, "tools", "aidlc-graph.ts"), "compile"], {
+      cwd: proj,
+      encoding: "utf-8",
+      timeout: remainingOperationTimeoutMs(NATIVE_RUNTIME_CASE_TIMEOUT_MS),
+      env: { ...process.env, CLAUDE_PROJECT_DIR: proj, AIDLC_HARNESS_DIR: ".claude" },
+    });
+    expect(compile.status, compile.stderr).toBe(0);
+    const buildSensors = () => graph(proj).find((s) => s.slug === "build-and-test")?.sensors ?? [];
+    expect(graph(proj).some((s) => s.plugin === PLUGIN)).toBe(false);
+    expect(buildSensors()).toContain("coverage-threshold");
+
+    const both = runUtility(proj, ["select-plugins", `aidlc,${PLUGIN}`]);
+    expect(both.status, both.stderr).toBe(0);
+    expect(buildSensors()).toContain("coverage-threshold");
+
+    const core = runUtility(proj, ["select-plugins", "aidlc"]);
+    expect(core.status, core.stderr).toBe(0);
+    expect(core.stdout).toContain(`Stripped merged contributions of disabled plugin(s): ${PLUGIN}`);
+    expect(buildSensors()).not.toContain("coverage-threshold");
+    expect(buildSensors()).not.toContain("requirement-coverage");
+  });
+
   // Disabling a plugin an ACTIVE workflow depends on would strand it: the
   // state file's scope out-ranks --scope, so every later /aidlc hard-errors
   // with no in-band recovery. select-plugins must refuse, and doctor must
@@ -384,7 +424,17 @@ describe("t224 plugin selection - install chooses visible plugin surfaces", () =
     // quote-free substrings.
     expect(result.stderr).toContain("test-pro-validation");
     expect(result.stderr).toContain("owned by plugin");
-    expect(result.stderr).toContain("Complete or park the workflow(s) first");
+    // It names the step that works: a parked workflow still blocks the change
+    // (it needs its plugin to resume), an archived one does not.
+    expect(result.stderr).toContain("Complete or archive the workflow(s) first");
+    expect(result.stderr).toContain("intent archive");
+    const archived = runUtility(proj, ["intent", "archive", "strand-probe-deadbeef", "--reason", "turning its plugin off"]);
+    expect(archived.status, archived.stderr).toBe(0);
+    const deselected = runUtility(proj, ["select-plugins", "aidlc"]);
+    expect(deselected.status, deselected.stderr).toBe(0);
+    expect(runUtility(proj, ["select-plugins", "aidlc", PLUGIN]).status).toBe(0);
+    const unarchived = runUtility(proj, ["intent", "unarchive", "strand-probe-deadbeef"]);
+    expect(unarchived.status, unarchived.stderr).toBe(0);
 
     // A completed workflow no longer blocks the same change.
     const state = join(intentDir, "aidlc-state.md");
@@ -407,6 +457,39 @@ describe("t224 plugin selection - install chooses visible plugin surfaces", () =
     expect(result.status).not.toBe(0);
     expect(result.stderr).toContain("pending stage");
     expect(result.stderr).toContain("test-pro-integration");
+  });
+
+  // config project is the person's own choice, so it is done while work is
+  // open; the line says which work stops until the plugin is on again.
+  test("config project turning off a plugin open work needs is done and says which work stops", () => {
+    const proj = join(tmp, "strand-config-project");
+    composePluginFixture({
+      plugin: PLUGIN,
+      harness: "claude",
+      projectDir: proj,
+      pluginBuilt,
+    });
+    const config = (...args: string[]) => spawnSync(BUN, [join(proj, ".claude", "tools", "aidlc.ts"), "config", ...args], {
+      cwd: proj,
+      encoding: "utf-8",
+      timeout: remainingOperationTimeoutMs(NATIVE_RUNTIME_CASE_TIMEOUT_MS),
+      env: { ...process.env, CLAUDE_PROJECT_DIR: proj, AIDLC_HARNESS_DIR: ".claude" },
+    });
+    // The composed fixture was copied with no config run, so nothing records
+    // its files yet; one forced refresh from the same release records them, as
+    // an install would.
+    const recorded = config("--from", join(REPO_ROOT, "dist", "claude"), "--force", "--yes");
+    expect(recorded.status, `${recorded.stdout}${recorded.stderr}`).toBe(0);
+    seedActiveWorkflow(proj, "test-pro-validation");
+    const result = config("project", "--plugins", "aidlc", "--yes");
+    expect(result.status, `${result.stdout}${result.stderr}`).toBe(0);
+    expect(result.stdout).toContain(
+      "default/strand-probe-deadbeef needs the test-pro plugin, which is now off, so it continues once it is on again.",
+    );
+    expect(result.stdout).not.toContain("carries on");
+    // Nothing was recorded before, so --reset (every plugin on) is the undo.
+    expect(result.stdout).toContain("config project --reset --yes");
+    expect(JSON.parse(readFileSync(harnessPath(proj), "utf-8")).plugins).toEqual(["aidlc"]);
   });
 
   test("doctor flags a selection that already strands an active workflow", () => {

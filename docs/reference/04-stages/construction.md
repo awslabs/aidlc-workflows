@@ -44,7 +44,8 @@ They complete one Unit's applicable design and source-producing stages before
 the next. Preserve an explicit stage-major choice. Design-only and no-Unit
 workflows retain their existing stage flow; team-owned work uses `unit_gate`.
 Existing workflows without the checkpoint setting keep the legacy first-stage
-review and late per-stage gate cascade.
+review; their late stage approvals, like those of work with checkpoints off, come
+as one question.
 
 For eligible checkpoint work with skeleton-on, the first DAG Unit is the
 smallest working integrated slice. It completes its applicable stages, including
@@ -59,9 +60,9 @@ project scan. Before presenting the command, write it to
 `<record>/verification-command.txt` with the harness's file-write tool
 (Write/edit), never a shell `echo` or heredoc. Repo-derived command text must never
 be interpolated into a shell line, where substitutions could execute before
-approval. Use the invoking SessionStart session ID: both `log decision` and
-`log answer` require
-`--checkpoint verification-command --command-file verification-command.txt --session "<session ID>"`.
+approval. Both `log decision` and `log answer` take
+`--checkpoint verification-command --command-file verification-command.txt` and
+find the session they run in.
 Copy the complete canonical command exactly from the `command` field in the
 `decision` tool's JSON output into the verification-command question's code span;
 never abbreviate it. Choose a delimiter that preserves any command backticks.
@@ -69,7 +70,7 @@ The human can also open `<record>/verification-command.txt`. The canonical
 command is a nonblank single line of at most 1024 characters. Control characters
 and display-spoofing characters (Unicode format characters, including zero-width
 and bidi controls, line/paragraph separators, and no-break space U+00A0) are refused.
-The human's exact **Approve** / **Request Changes** reply in that session binds
+The human's **Approve** / **Request Changes** reply in that session binds
 the answer to the pending command. Only **Approve** authorizes the receipt;
 an unrelated reply, **Request Changes**, or a reply from another session does not.
 Never write `--details "Approve"` unless the human chose it; only then run
@@ -104,6 +105,14 @@ After the per-unit work:
 
 **Route checkpoints before bodies.** A `construction_checkpoint` directive
 verifies and approves existing Unit work; it does not rerun Code Generation.
+When it carries `rereview`, the Unit's code or documents changed since their review: run that
+request at once, without asking, then verify and ask the one approval question.
+Only Guard Policy `strict` re-checks: under `relaxed` and `off` there is no
+`rereview`, a change to the Unit's code or documents is accepted with one line,
+and the Unit's approval stands. The same holds with reviews off: the line comes
+from the next checkpoint's `verify` or the Construction stage's own check, or,
+for a change made between the approval question and the person's answer, from
+their `approve`.
 With `command_authorized: false`, ask the verification-command question before
 any `verify`, complete the human decision/answer/setter flow, then call `next`.
 Show "Verified with `<full command>` (exit 0)" in the approval question;
@@ -112,15 +121,17 @@ A `swarm_checkpoint` handles a completed batch before later batch work. After
 verification, approval, or rejection, call `next`, never approve the whole stage for one Unit or batch.
 Only after `verify` reports `verified: true` and the current checkpoint has
 `ready: true`, open the human Unit/skeleton approval question with
-`aidlc engine bolt checkpoint --action ask --unit "<unit>" --kind <unit|skeleton> --session "<session ID>"`;
+`aidlc engine bolt checkpoint --action ask --unit "<unit>" --kind <unit|skeleton>`;
 `ask` refuses an unready or unverified checkpoint. For a human batch question,
 only after status reports `ready: true`, run
-`aidlc engine bolt swarm-checkpoint --action ask --batch <N> --units "<Units>" --session "<session ID>"`.
+`aidlc engine bolt swarm-checkpoint --action ask --batch <N> --units "<Units>"`.
 Then present **Approve** / **Request Changes** and wait. The human's exact reply
-in that session, to this checkpoint question, authorizes the matching action;
-an unrelated reply, another session's reply, or a reply to a different question
-does not. Pass that same `--session` on approval/rejection and never pass
-`--user-input` the human did not choose. Consent is one-shot and bound to the
+to this checkpoint question authorizes the matching action, in that chat or a
+new one: with no question of its own, a new chat's reply is kept for the
+checkpoint question another chat asked, while it is the newest question asked
+and still open. An unrelated reply, the agent's own words, or a reply to a
+different question does not. These commands find their own session; never pass `--user-input`
+the human did not choose. Consent is one-shot and bound to the
 current checkpoint fingerprint, verification proof ID, and authorized command
 digest (batch questions bind the fingerprint and per-Unit `Command SHA-256` set).
 Re-running `verify` or swarm `finalize` withdraws every open checkpoint question
@@ -151,7 +162,9 @@ before the Unit can be approved. `GATE_APPROVED` binds `Verification Command SHA
 to the proof's digest.
 The verifier records a tool-owned `CHECKPOINT_VERIFICATION_RECORDED` receipt
 alongside the proof file, and approval requires that receipt; a hand-written
-proof file cannot verify a Unit.
+proof file cannot verify a Unit. On a checkout with no proof file at all (a
+fresh clone, another machine), that receipt stands in for the proof of a Unit
+already approved whose evidence is unchanged, so nothing runs again.
 
 Code Generation's Plan Approval remains a human stop before generation for every
 Unit. Grouped Plan Approval may present the exact live swarm Unit set together,
@@ -202,10 +215,13 @@ the conductor does not read `runtime-graph.json` or derive sibling paths.
 Code Generation (3.5, `workspace_requires: true`) is NEVER wave-eligible:
 concurrent builders would collide writing into the shared workspace (the
 swarm path's per-unit worktrees exist for exactly this isolation), and its
-initial Step 3 Plan Approval is a mandatory hard stop in every execution mode that
-cannot fold into a builder's return message. The stop is the conductor's:
-under a `relaxed` or `off` Guard Policy the plan-approval fence stands aside
-for undirected work and records `GUARD_STOOD_ASIDE` instead of refusing.
+initial Plan Approval, while `plan_approval` is on, is a mandatory stop in every
+execution mode: the engine's question to the person cannot fold into a builder's
+return message. With `plan_approval` off (express and poc by default) the engine
+builds the plan as written after one line naming it and records
+`PLAN_APPROVAL_SKIPPED`. Under a `relaxed` or `off` Guard Policy the plan
+re-approval fence stands aside for undirected work and records
+`GUARD_STOOD_ASIDE` instead of refusing.
 After approval, content edits for the same target and attempt follow the
 effective-fence rule in Code Generation below; a lowered fence permits
 continuation without another Plan Approval stop.
@@ -242,6 +258,15 @@ adopt or re-create the intent before Construction. See
 for naming and the provenance checks that let pre-upgrade legacy Bolts finish
 without creating new Bolts in the old shape. Cleanup refuses a branch checked
 out at another worktree path and preserves that owner's branch and refs.
+
+A submodule the main checkout has initialized is set up in each new Bolt
+worktree too, at the commit the base records, cloned from the main checkout's
+own copy (no network or credentials). An uninitialized submodule stays an empty
+directory. Landing keeps the worktree, and names the submodule, when its copy
+there has uncommitted changes or a commit the main checkout's copy lacks. The
+committed-source check reads an initialized submodule the way the live source
+walk does, its commit plus its files, so a clean checkout with a submodule
+matches its own `HEAD`.
 
 Before initial protected prepare, all Units undergo a read-only preflight of
 current approval or permitted postapproval continuation, plus committed,
@@ -354,7 +379,9 @@ feasibility input.
    - Business rules, constraints, and validation logic
    - Data flow and transformations
    - Integration points with other units or external systems
-   - Error handling and edge cases
+   - Error handling and edge cases (at Standard and Comprehensive depth, swept
+     per component against the product agent's `corner-checklist.md`; corners
+     the requirements already settled carry forward)
    - Frontend components (component hierarchy, props/state, interaction flows,
      form validation)
    - Business scenarios (end-to-end user journeys, happy/unhappy paths,
@@ -779,7 +806,7 @@ present only when multiple units share resources.
 | support_agents    | (none -- focused implementation)                                                                  |
 | mode              | subagent (Task tool subagent_type: aidlc-developer-agent)                                               |
 | Inputs            | ALL prior design artifacts for this unit                                                          |
-| Outputs           | application code (workspace root) + `<record>/construction/{unit-name}/code-generation/` -- code-generation-plan.md, code-generation-questions.md, unit-test-instructions.md, code-summary.md, traceability.json, plus engine-required companion source-manifest.json |
+| Outputs           | application code (workspace root) + `<record>/construction/{unit-name}/code-generation/` -- code-generation-plan.md, code-generation-questions.md, unit-test-instructions.md, code-summary.md, traceability.json, plus engine-required companion source-manifest.json (Unit work only) |
 
 ### Purpose
 
@@ -790,13 +817,26 @@ the execution plan. Code is written to the workspace root, never to
 
 ### Critical Rules
 
-- Application code goes to workspace root, NEVER to `<record>/`
+- Application code goes to workspace root, NEVER to `<record>/`. The
+  developer's one change there is ticking each step's box in the plan as it
+  finishes that step
 - Brownfield: modify files in-place. NEVER create duplicates like
   `ClassName_modified.java`
 - Add `data-testid` attributes to interactive UI elements for test automation
-- Before review, write the engine-required companion `source-manifest.json`
-  listing every application-source path this unit created, modified, or deleted,
-  including files written by shell commands, scaffolding, or generators
+- Work in this order: plan (Step 2), Step 3 (the person's Plan Approval; with
+  plan approval off, only its one-line notice), generation (Step 4), the Step 5
+  files, then the review (when the directive lists the `reviewer` protocol
+  module) and completion (Step 6). The review checks the finished work: the
+  reviewer never runs before the Step 5 files exist. When the directive
+  already carries `plan_approval.status: "approved"` (a resumed or continued
+  build), the plan and test instructions on disk are the approved ones: skip
+  Steps 2 and 3 and build them as they are. Never rewrite an approved plan or
+  its test instructions; change them only when the person asks
+- For a Unit (`directive.unit` present), write the engine-required companion
+  `source-manifest.json` in Step 5, before the review, listing every
+  application-source path this unit created, modified, or deleted, including
+  files written by shell commands, scaffolding, or generators. Zero-Unit work
+  writes no `source-manifest.json`
 - Measurable quality targets from NFR Requirements, NFR Design, and the Testing
   Contract coverage floor are inputs, not suggestions. NEVER relax, lower, or
   disable a defined target, including threshold settings in test or build
@@ -890,39 +930,54 @@ This stage has a **two-part structure**: planning followed by generation.
    A bare project-wide command such as `npm test` is not acceptable because
    Build and Test executes every unit's commands.
 
-   Present the unit test instruction summary together with the plan summary.
+   The plan opens with a short `## Summary` (Builds, Touches, Tests lines) that
+   the engine shows the person when it asks for approval.
 
-3. **Plan Approval** -- Request approval for both
-   `code-generation-plan.md`, its Testing Contract, and
-   `unit-test-instructions.md`. When reapproval is required, reset the prior
-   `[Answer]:` to blank first. After both files are final, run
-   `aidlc-testing-posture.ts fingerprint --unit <unit>` for a unit directive or
-   `aidlc-testing-posture.ts fingerprint --stage-level` for zero-Unit
-   stage-level work. Then
-   create or reset `code-generation-questions.md` in the resolved record
-   directory with BOTH tags the command prints (`[Approval Fingerprint]` and
-   `[Planned Source]`), a **Plan Approval** question,
-   and blank `[Answer]:`; render it as a structured question and stop the turn:
-   - "Approve Plan" -- proceed to code generation
-   - "Request Changes" -- revise the plan
+3. **Plan Approval** -- the engine asks. When both files are written, the
+   conductor runs `next`. A ready plan (non-empty plan and instructions, a
+   valid and current Testing Contract, a readable workspace source) makes
+   `next` return a `plan-approval` ask instead of the build: the question, each
+   target's summary and plan path, and **Approve Plan**, **Request Changes**,
+   and **I'll edit the files**. The engine writes `code-generation-questions.md`
+   (the question, both tags, and a blank `[Answer]:`) and records the question
+   in the protected runtime directory; the conductor shows it and ends the turn.
+   The human-turn hook keeps the person's reply, from any chat on this piece of
+   work; the conductor reads it and records their choice with `answer
+   --checkpoint plan-approval`, which takes the fingerprint of the files as they
+   are then and writes the answer, the receipt, and the `PLAN_APPROVAL_RECORDED`
+   row with the person's words. The person may instead write their answer on the
+   questions file's own `[Answer]:` line, as that file invites, and say so: the
+   engine never overwrites an answer they wrote there while the same question
+   stands, and on an exact "done" it reads that line and records an answer that
+   is one of the choices, the same way it records an exact pick typed in chat,
+   naming the file in one line for the conductor. When the person says it in
+   their own words instead ("I put my answer in the file"), the conductor reads
+   the line and records the choice they made. The
+   next `next` returns the run-stage with `plan_approval.status: "approved"`
+   (build), `revise` (with the person's words), `repair` (a Testing Contract an
+   edit broke), or `plan` (finish the files). In edit mode the person changes the
+   files or writes their answer in the questions file and says done, and the
+   conductor reads what they wrote and records their choice; the guard refuses
+   the conductor's writes to those files meanwhile. A plan that is not
+   ready is never asked about: `next` names the repair instead.
 
-   Fill the tag only after the human responds. A request for changes is
-   recorded, both files are revised as needed, the contract/fingerprint are
-   regenerated, and the Plan Approval tag is reset before re-prompting. A
-   postapproval plan, instruction, or Testing Contract edit for the same target
-   and attempt reopens approval when the effective plan-approval fence is on
-   (`strict` by default or explicit `guard.plan-approval on`). If lowered by
-   `relaxed`, `off`, or `guard.plan-approval off`, continue with the updated
-   content without resetting the answer or re-fingerprinting the approval.
-   Preserve the original evidence; the edited content was not thereby approved.
-   Testing Posture, scope, strategy, or project type changes follow that same
-   rule: refresh the current contract and instructions as needed, and continue
-   without reapproval if the fence remains lowered for the same intent, target,
-   and attempt. A different intent or target, a new attempt, or missing actual
-   initial approval still requires its own approval. Workspace-source changes follow
-   the applicable source-drift policy. Re-running `next`, or a reissued
-   directive for the same target and attempt, never reopens it. A forwarding-loop
-   continuation is never approval.
+   A postapproval plan, instruction, or Testing Contract edit for the same
+   target and attempt asks again under Guard Policy `strict`. Under `relaxed` or
+   `off` the build continues with the updated content. Preserve the original evidence; the edited content was not
+   thereby approved. Testing Posture, scope, strategy, or project type changes
+   follow that same rule. Other code moving after approval never asks again on
+   any Guard Policy: the build continues with one `change_notices` line naming
+   the files. A different intent or target, a new attempt, or missing actual
+   initial approval still requires its own approval. After a rejected gate (the
+   Code Generation completion gate, a Unit checkpoint, or a swarm batch
+   checkpoint), while the plan is still the one approved before, `next` first
+   returns `revise` with the person's words from that gate, so the question
+   that follows shows the revised plan. Re-running `next`, or a
+   reissued directive for the same target and attempt, never reopens it, and
+   neither does whatever the engine said in between: a chat that compacted, a
+   piece of work parked and resumed, or a guard-recovery question. `next` reads
+   the approval for the plans its routed directive builds, not for the
+   directive it replaces. A forwarding-loop continuation is never approval.
 
    `testing-posture verify` reports `execution_allowed: true` with exit 0 when
    continuation is permitted, even if `ok: false` says the current content is
@@ -958,9 +1013,19 @@ This stage has a **two-part structure**: planning followed by generation.
 
 #### PART 2 -- Generation (Steps 4-7)
 
-4. **Generate Code** -- Before delegating, display to the user:
-   "Generating code for [N] plan steps. This may take several minutes
-   depending on project complexity. I'll show a summary when complete."
+4. **Generate Code** -- The directive's `narration` is the user's line for
+   this build, said once before delegating. The engine counts the plan from
+   the plan file, once for both lines:
+   "Generating unit-2's code for 9 plan steps. This may take several minutes
+   depending on project complexity. I'll show a summary when complete." at
+   the start, and where an interrupted build picks up ("Picking up unit-2's
+   code at step 5 of 9 (1-4 done)."; with the code written and no step marked,
+   "Picking up unit-2's code: the plan marks none of its 9 steps done, checking
+   what is built."). When the plan groups its tasks under
+   "Step N" headings, both lines count the tasks and name the heading
+   ("Generating unit-2's code for the 19 tasks in 4 plan steps ...", "Picking
+   up unit-2's code at task 7 of 19, in Step 3 (tasks 1-6 done)."). The agent
+   never counts the steps itself.
 
    Delegate to Task tool with the aidlc-developer-agent subagent
    (subagent_type="aidlc-developer-agent").
@@ -987,10 +1052,32 @@ This stage has a **two-part structure**: planning followed by generation.
      excludes the appendix, so it is not work to execute; with its fence on,
      the dispatch guard refuses a handoff that quotes it. After permitted
      postapproval edits, use the current brief without calling the edits approved
+   - When a build of the same plan was interrupted, that output also
+     carries a `## Progress before the interruption` section after its marker
+     lines: the steps the plan file ticks (or, with none ticked, the steps
+     whose named files changed since the build started), each file a done step
+     names in a code span that is not in the project (a bare file name counts
+     when a file of that name is anywhere in it), stated as a fact for the
+     worker to judge, and the step to continue at. When neither the ticks nor
+     the named files say what is done, it says the build wrote code and the plan
+     marks none of its steps, and asks for each finished step to be ticked.
+     It appears only when the
+     build already started on the plan and instructions as they are now (the
+     receipt for this target, stage attempt, and approved content is at
+     `generation`, and the content on disk is the approved content or, when
+     the fence was lowered for a plan edited after its approval, the edited
+     content generation start kept on that receipt); a Redo, a rejected gate,
+     a new approval, or a plan edited after the build started starts the steps
+     fresh. When a build starts
+     under a new approval, the engine sets the plan file's task markers back to
+     `[ ]` (nothing else in the file changes, and the fingerprint is the same),
+     so ticks from before never count. A swarm batch keeps its own
+     continuation rule. The section is a hint, never evidence for a gate,
+     review, or receipt, and ticks stay outside the fingerprint
    - Project workspace details (languages, frameworks, conventions from
      aidlc-state.md)
    - Instructions to execute each plan step sequentially and mark checkboxes
-     as completed
+     as completed, starting where that progress section says when present
    - The Testing Contract in the current brief is authoritative. The subagent
      does not independently re-resolve memory; it executes that contract's TDD, BDD, ATDD,
      test-after, or custom/mixed profile exactly.
@@ -1014,8 +1101,8 @@ This stage has a **two-part structure**: planning followed by generation.
    - Test coverage summary
    - Any deviations from the plan
 
-   Also create
-   `<record>/construction/{unit-name}/code-generation/source-manifest.json`.
+   For a Unit (`directive.unit` present), also create
+   `<record>/construction/<directive.unit>/code-generation/source-manifest.json`.
    This is a strict version-1 JSON companion file, not a declared `produces[]`
    artifact. It records `stage: "code-generation"`, the exact unit name, and a
    `writes` array containing every application-source path the unit created,
@@ -1030,8 +1117,23 @@ This stage has a **two-part structure**: planning followed by generation.
    changed stage-source paths outside all fresh reviewed manifests block
    completion.
 
-6. **Prepare Completion** -- Verify the unit's code and summary artifacts.
-   Do not edit state; report the gate outcome through `aidlc-orchestrate.ts`.
+   A zero-Unit directive (`directive.unit` absent) writes no
+   `source-manifest.json` and creates no Unit directory for one: the engine
+   reads the manifest only for a Unit, and a zero-Unit review binds the whole
+   workspace source instead. Its Step 5 files are
+   `<record>/construction/code-generation/code-summary.md` and
+   `<record>/construction/code-generation/traceability.json`.
+
+6. **Review, then Prepare Completion** -- When the directive lists the
+   `reviewer` protocol module, the architecture reviewer checks the finished
+   work first (plan, test instructions, code summary, traceability, and, for a
+   Unit, the source paths `source-manifest.json` claims), per section 12a of
+   `stage-protocol-reviewer.md`. The review is recorded against
+   `code-generation-plan`, the stage's `review_artifact`; that names where the
+   review is filed, not a review of the plan before it is built. For a Unit the
+   engine refuses the review request until the Step 5 files exist. Then verify
+   the unit's code and summary artifacts. Do not edit state; report the gate
+   outcome through `aidlc-orchestrate.ts`.
 
 7. **Completion** -- Present completion message and approval gate.
 
@@ -1044,7 +1146,7 @@ This stage has a **two-part structure**: planning followed by generation.
 | unit-test-instructions.md | Per-unit setup, scoped run commands, coverage, mocks, and test data |
 | code-summary.md           | Files created/modified, decisions, test coverage, plan deviations   |
 | traceability.json         | Structured coverage of assigned upstream IDs by code/test targets   |
-| source-manifest.json      | Engine-required strict companion attribution index; deliberately not in `produces[]` |
+| source-manifest.json      | Engine-required strict companion attribution index, Unit work only; deliberately not in `produces[]` |
 | (application code)        | All source code, tests, and config written to workspace root        |
 
 ### Approval Gate
@@ -1069,7 +1171,7 @@ Strictly 2-option: Approve / Request Changes.
 - **Mandatory test file inclusion**: Test files MUST be part of the code
   generation plan. Stage 3.6 (Build and Test) verifies and extends tests but
   does not create them from scratch.
-- **Source-manifest enforcement**: `source-manifest.json` is engine-validated,
+- **Source-manifest enforcement** (Unit work only): `source-manifest.json` is engine-validated,
   not a Markdown `required-sections` target. Its strict schema and
   `Unit Source Fingerprint` bind every exact/directory source claim; the engine
   refuses the terminal review when it is absent or invalid and refuses stage
@@ -1116,7 +1218,12 @@ with the aidlc-devsecops-agent providing security testing expertise.
   `nfr-design/` directory
 - Every current `## Testing Contract` in the stage-level or per-unit
   `code-generation-plan.md`, including postapproval edits permitted by a lowered
-  plan-approval fence; those edits are not described as human-approved
+  plan re-approval fence and plans built with plan approval off; neither is
+  described as human-approved. A CI obligation (the contract's "Run the selected
+  tests in CI before merge." line, or a memory note's "CI execution before
+  merge") is a target only when the plan runs CI Pipeline (`ci-pipeline` listed
+  as `EXECUTE` and not `[S]` in `aidlc-state.md`); otherwise it is recorded
+  `N/A` with that reason and is never a failure
 
 ### Steps
 
@@ -1159,7 +1266,9 @@ with the aidlc-devsecops-agent providing security testing expertise.
    - A Target Verification Matrix with Target ID, Source, Expected, Actual,
      Evidence, Owning Stage, and Verdict
    - Applicable targets begin `Pending`; `N/A` is valid only when the
-     source-complete inventory found no applicable measurable target
+     source-complete inventory found no applicable measurable target, or for a
+     target the plan makes inapplicable (the CI obligation of a plan that runs
+     no CI Pipeline)
    - Readiness assessment (build-ready, test-ready, deployment-ready)
    - Known limitations or outstanding items
 
@@ -1218,8 +1327,9 @@ with the aidlc-devsecops-agent providing security testing expertise.
        feasible path out of scope on an impact-unestimated effort assumption.
     3. **Autonomous bounded loop-back** -- if `Construction Autonomy Mode:
        autonomous`, an impact-estimated fix exists, and fewer than 3 entries exist under
-       `## Loop-Back Log`: record the diagnosis + impact-estimated fix, jump
-       back to code-generation via the engine, and replay forward through its
+       `## Loop-Back Log`: record the diagnosis + impact-estimated fix, reopen
+       code-generation via the engine for the Unit(s) the fix names (every Unit
+       only when the cause spans them all), and replay forward through its
        settlement-aware route per the construction protocol module
        (`aidlc-common/protocols/stage-protocol-construction.md`),
        "Build-and-Test failure loop-back". The failed run's gate is not
@@ -1232,24 +1342,26 @@ with the aidlc-devsecops-agent providing security testing expertise.
        Accept failure / Abort) when a candidate fix exists, or the no-fix
        2-option variant (Accept failure / Abort) when rung 2 found none.
 
-    **Loop-back replay routing:** If Code Generation never used unit lifecycle
-    receipts, preserved artifacts can take the all-covered `gate: true` fast
-    path; apply the planned fix and deterministic Modify/Keep decisions before
-    that gate. Once any lifecycle row exists, receipt mode is sticky and the
+    **Loop-back replay routing:** If Construction checkpoints are off and Code
+    Generation never used unit lifecycle receipts, preserved artifacts can take
+    the all-covered `gate: true` fast path; apply the planned fix and
+    deterministic Modify/Keep decisions before that gate. With checkpoints on
+    (receipts are required from the first Unit), or once any lifecycle row
+    exists, receipt mode is sticky and the
     jump re-emits per-Unit work: re-mint `unit start` / `unit complete`, apply
     Modify to targeted Units and Keep to the rest, and run the declared reviewer
     per Unit. Both paths MUST record a fresh current-attempt
-    `REVIEW_COMPLETED` for every applicable Unit before the settle/approval
-    gate because `STAGE_JUMPED` invalidates all earlier reviews. Under
+    `REVIEW_COMPLETED` for every reopened Unit before the settle/approval
+    gate because the reopen invalidates those Units' earlier reviews; Units the
+    fix does not name keep their work and approvals. Under
     unit-major the swarm never fires; replay follows the serial per-Unit walk.
     A revised Code Generation plan still requires fresh human Plan Approval.
 
     The replay repairs the Code Generation plan under a NEW stage attempt, so the
-    prior approval no longer applies. Record the delta in the Loop-Back Log, then
-    reset the Plan Approval `[Answer]:`, regenerate the fingerprint, and run the
-    full decision/human-turn/answer receipt sequence again before any fix
-    generation. The gated "Retry with fix" choice authorizes the jump; it is not
-    approval of the revised plan.
+    prior approval no longer applies. Record the delta in the Loop-Back Log and
+    write the repaired plan; `next` then asks the person for Plan Approval again
+    before any fix generation. The gated "Retry with fix" choice authorizes the
+    jump; it is not approval of the revised plan.
 
     **Swarm cheap path:** A jump creates a new exact stage-attempt `Run floor`
     boundary token, so stale convergence rows cannot count. Park/discard stale

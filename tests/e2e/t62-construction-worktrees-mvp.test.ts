@@ -81,7 +81,8 @@
 // accumulation). The scope-grid reads need no project. All temp dirs cleaned
 // in afterAll; nothing under tests/fixtures/** is written.
 
-import { afterAll, describe, expect, test } from "bun:test";
+import { NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS, NATIVE_FIXTURE_SETUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "../harness/test-budget.ts";
+import { afterAll, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -96,6 +97,8 @@ import {
 // through the shipped merge helper (default-resolves the active intent, falls
 // back to flat aidlc-docs for a not-yet-created project).
 import { readAllAuditShards } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+
+setDefaultTimeout(NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
 const BUN = process.execPath; // the bun running this test
 const BOLT = join(AIDLC_SRC, "tools", "aidlc-bolt.ts");
@@ -117,7 +120,7 @@ interface CliResult {
 
 /** Spawn `bun <tool.ts> <args...>`. */
 function run(tool: string, args: string[]): CliResult {
-  const res = spawnSync(BUN, [tool, ...args], { encoding: "utf-8" });
+  const res = spawnSync(BUN, [tool, ...args], { timeout: remainingOperationTimeoutMs(NATIVE_FIXTURE_SETUP_TIMEOUT_MS), encoding: "utf-8" });
   const stdout = res.stdout ?? "";
   return {
     status: res.status ?? -1,
@@ -256,7 +259,7 @@ describe("t62 construction-worktrees mvp (migrated from t62-construction-worktre
     expect(auditField(f, "MERGE_DISPATCH_INVOKED", "Practices section excerpt")).toBe(
       "scope=mvp",
     );
-  }, 30_000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   // --- Test 4 (.sh test 4): MERGE_DISPATCH_FALLBACK observability path [cli] ---
   test("4: dispatch-event FALLBACK observability path works for mvp", () => {
@@ -290,7 +293,7 @@ describe("t62 construction-worktrees mvp (migrated from t62-construction-worktre
     );
     // Windows fixture creation and the dispatch CLI exceeded the default case
     // deadline; retain every event, envelope and audit-field assertion.
-  }, process.platform === "win32" ? 60_000 : undefined);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   // --- Test 5 (.sh test 5): v7 state has the v0.4.0 fields for mvp [cli] ---
   test("5: v7 state (init --scope mvp) carries Worktree Path + Bolt Refs", () => {

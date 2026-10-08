@@ -29,7 +29,8 @@
 // level, NOT inside test() — so the 5s per-test default only ever wraps the cheap
 // assertions, never the multi-second setup chain.
 
-import { afterAll, describe, expect, test } from "bun:test";
+import { NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS } from "../harness/test-budget.ts";
+import { setDefaultTimeout, afterAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { appendFileSync, chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
@@ -38,6 +39,7 @@ import {
   AIDLC_SRC, cleanupTestProject, createTestProject,
   fixtureIntentId8,
 } from "../harness/fixtures.ts";
+import { approveSuppliedCheckCommand, approveVerificationCommand } from "../harness/verification-command.ts";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import {
   boltName,
@@ -59,6 +61,8 @@ import {
   resolveCodeGenerationAuthority,
   resolveTestingPosture,
 } from "../../dist/claude/.claude/tools/aidlc-testing-posture.ts";
+
+setDefaultTimeout(NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
 const BUN = process.execPath;
 const UTIL = join(AIDLC_SRC, "tools", "aidlc-utility.ts");
@@ -210,6 +214,7 @@ function runWorktree(proj: string, ...args: string[]): RunResult {
 
 /** Spawn aidlc-swarm `prepare` from the WORKSPACE root (the conductor's cwd). */
 function runSwarm(proj: string, ...args: string[]): RunResult {
+  approveSuppliedCheckCommand(proj, args);
   const r = spawnSync(BUN, [SWARM_TOOL, ...args, "--project-dir", proj], { encoding: "utf-8", cwd: proj });
   return { status: r.status ?? -1, out: `${r.stdout ?? ""}${r.stderr ?? ""}`, stdout: r.stdout ?? "" };
 }
@@ -502,6 +507,7 @@ function uncommittedSiblingRootSourceScenario(
     "repo-a",
   );
   if (created.status !== 0) throw new Error(created.out);
+  approveVerificationCommand(proj, "true");
   seedOneUnitDag(proj, unit);
   approvePlan(proj, unit);
   const prepared = runSwarm(

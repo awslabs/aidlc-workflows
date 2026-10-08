@@ -55,7 +55,14 @@ import { homedir } from "node:os";
 import { dirname, isAbsolute, join, posix, resolve, win32 } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { engineDirFor } from "../tools/aidlc-lib.ts";
+import {
+  decideFence,
+  engineDirFor,
+  enterHookWorkflow,
+  promptMovesSelection,
+  takeSessionSelectionNotice,
+} from "../tools/aidlc-lib.ts";
+import { aidlcInvocation, knownActiveSpace } from "../tools/aidlc-runtime-paths.ts";
 
 const HOOKS_DIR = dirname(fileURLToPath(import.meta.url));
 
@@ -94,7 +101,9 @@ export async function run(
         process.stdout.write(`${JSON.stringify({
           permission: "deny",
           agent_message:
-            "AIDLC guard input was malformed; the operation was denied because its safety checks could not run.",
+            "AIDLC could not read this tool call's hook input, so its safety checks could not run and the call " +
+            "was stopped. Retry it once; if it is stopped again, tell the person to quit Cursor fully and open " +
+            "this folder again, since Cursor sends this input itself.",
         })}\n`);
       }
       return 0;
@@ -294,6 +303,39 @@ export async function run(
     }
   }
 
+  // Cursor flags a background agent only on lifecycle payloads (sessionStart,
+  // beforeSubmitPrompt, sessionEnd). Remember the flag per conversation so the
+  // agent's stop, which carries no flag, stays out of the foreground workflow.
+  function backgroundFile(): string | null {
+    const conversation = cursor.conversation_id ?? sessionId;
+    return conversation
+      ? join(LEDGER_DIR, `background-${digest(conversation)}.marker`)
+      : null;
+  }
+
+  function rememberBackground(): void {
+    const path = backgroundFile();
+    if (!path || typeof cursor.is_background_agent !== "boolean") return;
+    try {
+      if (cursor.is_background_agent) touchMarker(path);
+      else removeLedger(path);
+    } catch {
+      // best-effort: an unrecorded background agent's stop gets the
+      // foreground nudge, which is the behavior without this record
+    }
+  }
+
+  function isBackground(): boolean {
+    if (typeof cursor.is_background_agent === "boolean") return cursor.is_background_agent;
+    const path = backgroundFile();
+    if (!path) return false;
+    try {
+      return statSync(path).isFile();
+    } catch {
+      return false;
+    }
+  }
+
   function isKnownMain(conversation: string): boolean {
     try {
       const path = mainFile(conversation);
@@ -338,11 +380,11 @@ export async function run(
       return activeReviewerDispatchCache;
     }
     try {
+      // The same active space the engine reads.
       const spacePointer = join(projectDir, "aidlc", "active-space");
-      const rawSpace = existsSync(spacePointer)
-        ? readFileSync(spacePointer, "utf-8").trim()
+      const space = existsSync(spacePointer)
+        ? knownActiveSpace(join(projectDir, "aidlc"), readFileSync(spacePointer, "utf-8"))
         : "default";
-      const space = /^[a-z0-9][a-z0-9._-]*$/.test(rawSpace) ? rawSpace : "default";
       const intentsDir = join(projectDir, "aidlc", "spaces", space, "intents");
       const activePointer = join(intentsDir, "active-intent");
       const activeIntent = readFileSync(activePointer, "utf-8").trim();
@@ -375,6 +417,7 @@ export async function run(
         JSON.stringify({
           hook_event_name: "SubagentStop",
           agent_type: prior.agent,
+          ...(sessionId ? { session_id: sessionId } : {}),
         }),
       );
       retireSpawn(prior);
@@ -530,6 +573,27 @@ export async function run(
   function attributed(): string {
     attributedAgent ??= activeSubagent();
     return attributedAgent;
+  }
+
+  // A delegate's identity serves two checks: the reviewer read scope and the
+  // state-transition check. When both stand aside for this work, as Guard
+  // Policy off makes them, the identity checks below protect nothing, so a
+  // delegate runs its builds, tests and searches as the main chat does and
+  // Cursor's own approval applies. Read once per call, through the same
+  // decision the core checks make.
+  let delegateChecksStandAsideCache: boolean | undefined;
+  function delegateChecksStandAside(): boolean {
+    if (delegateChecksStandAsideCache !== undefined) return delegateChecksStandAsideCache;
+    const workflow = enterHookWorkflow(projectDir, sessionId);
+    try {
+      delegateChecksStandAsideCache = (["reviewer-scope", "state-transition"] as const)
+        .every((fence) => decideFence(projectDir, fence).decision === "stand-aside");
+    } catch {
+      delegateChecksStandAsideCache = false;
+    } finally {
+      workflow.restore();
+    }
+    return delegateChecksStandAsideCache;
   }
 
   let effectiveCwdCache: string | undefined;
@@ -2788,8 +2852,10 @@ export async function run(
     const reason =
       r.code === 2
         ? r.stderr.trim() || "blocked by AIDLC guard hook"
-        : `AIDLC guard ${file} failed with exit ${r.code}; ` +
-          "the operation was denied because its safety checks could not complete.";
+        : `AIDLC guard ${file} failed with exit ${r.code}, so its safety checks could not complete and the ` +
+          "call was stopped. Retry it once; if it is stopped again, tell the person to run " +
+          `\`${aidlcInvocation()} config --harness cursor\` in a terminal, which puts AI-DLC's Cursor files ` +
+          "back, then try again.";
     process.stdout.write(`${JSON.stringify({ permission: "deny", agent_message: reason })}\n`);
     return true;
   }
@@ -2807,6 +2873,24 @@ export async function run(
       // sessionStart never fires for a Task subagent's conversation
       // (live-verified) — this conversation is a top-level one.
       registerMain();
+      rememberBackground();
+      if (isBackground()) {
+        // A background agent is a side worker: it gets a hands-off note
+        // instead of the workflow context that would tell it to resume.
+        process.stdout.write(`${JSON.stringify({
+          additional_context:
+            "AIDLC: this is a Cursor background agent. The AI-DLC workflow in this " +
+            "project is driven from the user's foreground chat. Do not run /aidlc " +
+            "or AIDLC workflow commands, and do not edit files under aidlc/ or " +
+            "AIDLC's own files under .cursor/ (its hooks, tools, skills, agents, " +
+            "and aidlc rules); other Cursor configuration such as .cursor/mcp.json " +
+            "is fine to change. Reading any of them and running " +
+            "`bun .cursor/tools/aidlc.ts status` are fine. If asked to do AIDLC " +
+            "work, tell the user to do it from the foreground chat. Do your task " +
+            "and report back.",
+        })}\n`);
+        return 0;
+      }
       const fwd = JSON.stringify({
         hook_event_name: "SessionStart",
         source: cursor.source ?? "startup",
@@ -2827,6 +2911,7 @@ export async function run(
     }
 
     case "session-end": {
+      const background = isBackground();
       // Cursor does not deliver Task postToolUse on its real CLI lifecycle.
       // Retire every still-live Task for this parent through the canonical
       // SubagentStop hook before ending the session, explicitly qualifying the
@@ -2843,6 +2928,7 @@ export async function run(
               last_assistant_message:
                 "inferred: Cursor emitted sessionEnd without Task postToolUse; " +
                 "the live Task record was retired.",
+              ...(sessionId ? { session_id: sessionId } : {}),
             }),
           );
           retireSpawn(record);
@@ -2858,12 +2944,17 @@ export async function run(
               last_assistant_message:
                 "inferred: Cursor emitted sessionEnd after the primary Task ledger was lost; " +
                 "the independent delegation witness was retired.",
+              ...(sessionId ? { session_id: sessionId } : {}),
             }),
           );
           retireSpawn(record);
         }
         removeLedger(mainFile(cursor.conversation_id));
       }
+      const ended = backgroundFile();
+      if (ended) removeLedger(ended);
+      // A background agent never opened a workflow session.
+      if (background) return 0;
       const fwd = JSON.stringify({
         hook_event_name: "SessionEnd",
         reason: cursor.reason ?? "other",
@@ -2877,25 +2968,20 @@ export async function run(
       // beforeSubmitPrompt fires only for top-level conversations
       // (live-verified) — register this one as a main either way.
       registerMain();
+      // Hosts without sessionStart still flag the agent here.
+      rememberBackground();
       // A Cursor background agent submits prompts with no human present; its
       // turn must not mint HUMAN_TURN (the approval gates' presence evidence).
-      if (cursor.is_background_agent === true) return 0;
-      // A real human acted this turn.
-      runCore(
-        "aidlc-record-human-turn.ts",
-        JSON.stringify({
-          hook_event_name: "UserPromptSubmit",
-          ...(sessionId ? { session_id: sessionId } : {}),
-          prompt: cursor.prompt ?? cursor.user_message ?? "",
-        }),
-      );
+      if (isBackground()) return 0;
+      const prompt = cursor.prompt ?? cursor.user_message ?? "";
       // Cursor's sessionStart fires only for a new conversation and carries no
       // startup/resume discriminator. Probe the core resume-rebind logic here,
-      // where the same session_id is available. beforeSubmitPrompt cannot
-      // inject context, so block this one submission through its documented
-      // user_message channel when the active intent drifted.
+      // where the same session_id is available, BEFORE the turn is recorded,
+      // so the turn lands on this chat's own work. The person's prompt always
+      // goes through: beforeSubmitPrompt cannot add context, so the probe
+      // leaves its one line for this conversation's next directive instead.
       if (sessionId) {
-        const r = runCore(
+        runCore(
           "aidlc-session-start.ts",
           JSON.stringify({
             hook_event_name: "SessionStart",
@@ -2904,23 +2990,19 @@ export async function run(
             rebind_check: true,
           }),
         );
-        try {
-          const parsed = JSON.parse(r.stdout) as { additionalContext?: string };
-          const offer = parsed.additionalContext
-            ?.split(/\r?\n/)
-            .find((line) => line.startsWith("INTENT REBIND OFFER:"));
-          if (offer) {
-            process.stdout.write(`${JSON.stringify({
-              continue: false,
-              user_message:
-                `${offer} Submit the named /aidlc switch command to return, ` +
-                "or resubmit your prompt to continue with the active intent.",
-            })}\n`);
-          }
-        } catch {
-          // no rebind offer — submission continues normally
-        }
+        // A typed switch or create moves this chat itself, so a line about its
+        // old selection, from this probe or an earlier prompt's, is dropped.
+        if (promptMovesSelection(prompt)) takeSessionSelectionNotice(projectDir, sessionId);
       }
+      // A real human acted this turn.
+      runCore(
+        "aidlc-record-human-turn.ts",
+        JSON.stringify({
+          hook_event_name: "UserPromptSubmit",
+          ...(sessionId ? { session_id: sessionId } : {}),
+          prompt,
+        }),
+      );
       return 0;
     }
 
@@ -2953,12 +3035,14 @@ export async function run(
         if (
           typeof sub === "string" &&
           sub.length > 0 &&
-          !recordSpawn(sub)
+          !recordSpawn(sub) &&
+          !delegateChecksStandAside()
         ) {
           process.stdout.write(`${JSON.stringify({
             permission: "deny",
             agent_message:
-              "AIDLC could not establish protected delegated-agent attribution, so the Task was not started.",
+              "AI-DLC could not start this specialist. Start it again; if it is stopped again, tell the person " +
+              `to run \`${aidlcInvocation()} doctor\` in a terminal, which names what is broken.`,
           })}\n`);
           return 0;
         }
@@ -2971,7 +3055,8 @@ export async function run(
         agent &&
         toolName === "Bash" &&
         typeof command === "string" &&
-        await shellInvokesDynamicEvaluation(command, effectiveCwd())
+        await shellInvokesDynamicEvaluation(command, effectiveCwd()) &&
+        !delegateChecksStandAside()
       ) {
         process.stdout.write(`${JSON.stringify({
           permission: "deny",
@@ -2983,7 +3068,7 @@ export async function run(
         })}\n`);
         return 0;
       }
-      if (agent && await touchesProtectedReviewerState()) {
+      if (agent && await touchesProtectedReviewerState() && !delegateChecksStandAside()) {
         process.stdout.write(`${JSON.stringify({
           permission: "deny",
           agent_message:
@@ -2991,7 +3076,7 @@ export async function run(
         })}\n`);
         return 0;
       }
-      if (agent === AMBIGUOUS_REVIEWER) {
+      if (agent === AMBIGUOUS_REVIEWER && !delegateChecksStandAside()) {
         process.stdout.write(`${JSON.stringify({
           permission: "deny",
           agent_message:
@@ -3052,6 +3137,7 @@ export async function run(
         const fwd = JSON.stringify({
           hook_event_name: "SubagentStop",
           ...(typeof sub === "string" && sub.length > 0 ? { agent_type: sub } : {}),
+          ...(sessionId ? { session_id: sessionId } : {}),
         });
         runCore("aidlc-log-subagent.ts", fwd);
         clearSpawn();
@@ -3074,12 +3160,19 @@ export async function run(
     }
 
     case "validate-state": {
-      // preCompact: the core hook reads no stdin fields — self-contained.
-      runCore("aidlc-validate-state.ts", rawInput);
+      // preCompact: the core hook resolves the workflow from the session id,
+      // which Cursor may send only as conversation_id.
+      runCore("aidlc-validate-state.ts", JSON.stringify({
+        hook_event_name: "PreCompact",
+        ...(sessionId ? { session_id: sessionId } : {}),
+      }));
       return 0;
     }
 
     case "stop": {
+      // A background agent's stop never enters the forwarding loop: the nudge
+      // would tell it to run `next` and reset the foreground's steering.
+      if (isBackground()) return 0;
       // Cursor's stop hook CANNOT block (no decision channel). The core stop
       // hook's {"decision":"block","reason"} converts to a followup_message —
       // the forwarding-loop nudge is ADVISORY on this harness (the opencode

@@ -37,3 +37,19 @@ export function guardFenceFromConfigKey(key: string): SwitchableGuardFence | nul
   const fence = key.slice(GUARD_FENCE_CONFIG_PREFIX.length);
   return isSwitchableGuardFence(fence) ? fence : null;
 }
+
+// What a setting does for the person, in a few plain words, said the first
+// time a line names it: the person may not know what each one means.
+export const CHECK_GLOSS: Record<SwitchableGuardFence, string> = {
+  "plan-approval": "you approve each code plan before it is built",
+  "review-freeze": "a document stays as it was reviewed until you ask for changes",
+  "state-transition": "only AI-DLC's own steps move the work from stage to stage",
+  "reviewer-scope": "reviewers read only the work they review",
+};
+export const GUARD_POLICY_GLOSS: Record<"strict" | "relaxed" | "off", string> = {
+  strict: "AI-DLC asks you again when something you approved changes",
+  relaxed: "AI-DLC carries on with a note when something you approved changes",
+  off: "AI-DLC carries on with a note and skips some of its own checks",
+};
+export const SCOPE_GLOSS = "the set of stages this work runs";
+export const CHECKPOINT_GLOSS = "a stop after each Unit for you to check and approve it";

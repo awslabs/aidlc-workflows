@@ -90,27 +90,35 @@
 // Opus/Bedrock until the deterministic run-stage directive. Generous per-test
 // timeout so a hung SDK stream fails LOUD.
 
-import { liveCaseTimeoutMs } from "../harness/test-budget.ts";
-import { describe, expect, test } from "bun:test";
+import { liveCaseTimeoutMs, LIVE_LONG_OPERATION_TIMEOUT_MS, remainingOperationTimeoutMs, fileCleanupReserveMs } from "../harness/test-budget.ts";
+import { beforeEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { assertAuditEvent } from "../harness/assert.ts";
 import {
   cleanupTestProject,
   setupIntegrationProject,
 } from "../harness/fixtures.ts";
-import { auditFilePathFor, driveAidlc } from "../harness/sdk-drive.ts";
+import { driveAidlc, readAuditText } from "../harness/sdk-drive.ts";
 
 // ---------------------------------------------------------------------------
-// Work allowance follows AIDLC_TEST_TIMEOUT (seconds). Existing per-turn
-// limits are preserved; the shared profile adds fixture, startup and teardown
-// reserves before Bun's case ceiling.
-const TIMEOUT_S = Number.parseInt(process.env.AIDLC_TEST_TIMEOUT ?? "600", 10);
-const LIVE_WORK_TIMEOUT_MS = (Number.isFinite(TIMEOUT_S) ? TIMEOUT_S : 600) * 1000;
-const DRIVE_TIMEOUT_MS = Math.max(120_000, LIVE_WORK_TIMEOUT_MS - 15_000);
+// AIDLC_TEST_TIMEOUT bounds the entire case, including setup and cleanup.
+const TIMEOUT_S = Number(process.env.AIDLC_TEST_TIMEOUT);
 // Preserve the existing work allowance and reserve fixture/startup/cleanup separately.
-const TEST_TIMEOUT_MS = liveCaseTimeoutMs(Math.max(LIVE_WORK_TIMEOUT_MS, DRIVE_TIMEOUT_MS));
+const TEST_TIMEOUT_MS = Number.isSafeInteger(TIMEOUT_S) && TIMEOUT_S > 0
+  ? TIMEOUT_S * 1000
+  : liveCaseTimeoutMs(LIVE_LONG_OPERATION_TIMEOUT_MS);
+let caseDeadlineMs: number;
+beforeEach(() => { caseDeadlineMs = Date.now() + TEST_TIMEOUT_MS; });
+function remainingWorkMs(): number {
+  return remainingOperationTimeoutMs(TEST_TIMEOUT_MS, {
+    deadlineMs: caseDeadlineMs,
+    reserveMs: fileCleanupReserveMs(TEST_TIMEOUT_MS),
+    phase: "E2E live work",
+  })!;
+}
+
 
 // Known-answer stage slugs from the SHIPPED scope-mapping.json "bugfix" entry.
 // The Ideation phase is ENTIRELY SKIP for bugfix; the 3 init stages EXECUTE;
@@ -149,7 +157,7 @@ function seedBugfixState(proj: string): void {
   const res = spawnSync(
     process.execPath,
     [utility, "intent-create", "--scope", "bugfix", "--project-dir", proj],
-    { cwd: proj, encoding: "utf8" },
+    { timeout: remainingWorkMs(), cwd: proj, encoding: "utf8" },
   );
   expect(res.status).toBe(0);
   expect(`${res.stdout}\n${res.stderr}`).toContain("State initialized");
@@ -203,10 +211,8 @@ function ideationFiles(proj: string): string[] {
  *  Stage line in the SAME block so a non-STAGE_STARTED Stage field can't leak
  *  in. Returns the slugs in file order. */
 function stageStartedStages(proj: string): string[] {
-  const p = auditFilePathFor(proj);
-  if (!existsSync(p)) return [];
-  const text = readFileSync(p, "utf8");
-  const blocks = text.split(/\n---\n/);
+  // Every shard: the audit folder can hold more than one file.
+  const blocks = readAuditText(proj).split(/\n---\n/);
   const slugs: string[] = [];
   for (const block of blocks) {
     if (!/^\*\*Event\*\*:\s*STAGE_STARTED\s*$/m.test(block)) continue;
@@ -228,7 +234,7 @@ describe("t53 /aidlc bugfix scope routing (sdk)", () => {
 
         const r = await driveAidlc("/aidlc bugfix", {
           projectDir: proj,
-          timeoutMs: DRIVE_TIMEOUT_MS,
+          timeoutMs: remainingWorkMs(),
           stopAfterToolResult: {
             toolName: "Bash",
             // The run-stage directive, not the load-steering part that now

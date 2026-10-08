@@ -19,7 +19,7 @@ import {
   runOrchestrateNext,
   setupIntegrationProject,
 } from "../harness/fixtures.ts";
-import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS } from "../harness/test-budget.ts";
+import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "../harness/test-budget.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 const BUN = process.execPath;
@@ -55,7 +55,7 @@ function project(): string {
 }
 
 function utility(p: string, args: string[]) {
-  return spawnSync(BUN, [UTILITY, ...args, "--project-dir", p], {
+  return spawnSync(BUN, [UTILITY, ...args, "--project-dir", p], { timeout: remainingOperationTimeoutMs(NATIVE_FIXTURE_SETUP_TIMEOUT_MS),
     encoding: "utf-8",
   });
 }
@@ -111,7 +111,7 @@ function report(p: string, args: string[]): Directive {
   const result = spawnSync(
     BUN,
     [ORCHESTRATE, "report", ...args, "--project-dir", p],
-    { encoding: "utf-8", env: engineEnv() },
+    { timeout: remainingOperationTimeoutMs(NATIVE_FIXTURE_SETUP_TIMEOUT_MS), encoding: "utf-8", env: engineEnv() },
   );
   expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
   return JSON.parse(result.stdout.trim()) as Directive;

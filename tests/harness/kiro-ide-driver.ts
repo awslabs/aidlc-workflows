@@ -33,7 +33,16 @@ import { Database } from "bun:sqlite";
 import { appendFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { platform, tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, sep } from "node:path";
-import { remainingOperationTimeoutMs, TestBudgetExhaustedError } from "./test-budget.ts";
+import {
+  remainingCleanupTimeoutMs,
+  LIVE_STARTUP_TIMEOUT_MS,
+  LIVE_COMMAND_TIMEOUT_MS,
+  LIVE_CLEANUP_TIMEOUT_MS,
+  NATIVE_PROCESS_TERMINATE_TIMEOUT_MS,
+  NATIVE_PROCESS_CLEANUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+  TestBudgetExhaustedError,
+} from "./test-budget.ts";
 
 // Visible command text has both legacy script and public dispatcher spellings.
 // Keep these non-global so repeated assertions do not share RegExp state.
@@ -285,7 +294,7 @@ export class CdpTarget {
   }
 
   connect(): Promise<void> {
-    const timeoutMs = remainingOperationTimeoutMs(undefined, {
+    const timeoutMs = remainingOperationTimeoutMs(LIVE_STARTUP_TIMEOUT_MS, {
       deadlineMs: this.deadlineMs, phase: "IDE CDP connect",
     });
     return new Promise((resolve, reject) => {
@@ -345,7 +354,7 @@ export class CdpTarget {
 
   /** JSON-RPC send with an auto-incrementing id and a per-call reject timeout
    *  (cdp.mjs:56-68: the spike used a fixed 20_000ms). */
-  send(method: string, params: Record<string, unknown> = {}, timeoutMs = 20_000): Promise<unknown> {
+  send(method: string, params: Record<string, unknown> = {}, timeoutMs = LIVE_COMMAND_TIMEOUT_MS): Promise<unknown> {
     const allocation = remainingOperationTimeoutMs(timeoutMs, {
       deadlineMs: this.deadlineMs, phase: "IDE CDP request",
     });
@@ -657,14 +666,14 @@ function closeKiroIdeBrowser(
   });
 }
 
-function terminateKiroIdeChild(child: ChildProcess): void {
+function terminateKiroIdeChild(child: ChildProcess, timeoutMs = NATIVE_PROCESS_TERMINATE_TIMEOUT_MS): void {
   // Never act on a remembered PID once the authoritative child has exited.
   if (child.exitCode !== null || child.signalCode !== null || child.pid === undefined) return;
   if (platform() === "win32") {
     const result = spawnSync(
       "taskkill",
       ["/PID", String(child.pid), "/T", "/F"],
-      { stdio: "ignore", windowsHide: true, timeout: 10_000 },
+      { stdio: "ignore", windowsHide: true, timeout: remainingCleanupTimeoutMs(timeoutMs) },
     );
     if (result.error) throw result.error;
     if (result.status !== 0) throw new Error(`taskkill failed for owned Kiro PID ${child.pid}`);
@@ -683,7 +692,7 @@ export async function launchKiroIde(
   runtime: Partial<KiroIdeLaunchRuntime> = {},
 ): Promise<KiroIdeHandle> {
   const env = runtime.env ?? process.env;
-  remainingOperationTimeoutMs(opts.startupTimeoutMs ?? 60_000, { env, phase: "IDE startup" });
+  const startupDeadlineMs = Date.now() + remainingOperationTimeoutMs(opts.startupTimeoutMs === 0 ? LIVE_STARTUP_TIMEOUT_MS : opts.startupTimeoutMs ?? LIVE_STARTUP_TIMEOUT_MS, { env, phase: "IDE startup" })!;
   const launchStarted = performance.now();
   const windows = (runtime.platform ?? platform()) === "win32";
   const inheritedGroup = env.AIDLC_TEST_WORKER_PROCESS_GROUP === "1";
@@ -712,7 +721,7 @@ export async function launchKiroIde(
   const spawnChild: KiroIdeLaunchRuntime["spawn"] = runtime.spawn ?? spawn;
   try {
     // Profile copying consumes the parent allocation before the child is started.
-    remainingOperationTimeoutMs(opts.startupTimeoutMs ?? 60_000, { env, phase: "IDE startup" });
+    remainingOperationTimeoutMs(opts.startupTimeoutMs ?? LIVE_STARTUP_TIMEOUT_MS, { env, deadlineMs: startupDeadlineMs, phase: "IDE startup" });
     child = spawnChild(opts.bin ?? KIRO_IDE_BIN, [
       opts.workspace,
       "--remote-debugging-port=0",
@@ -807,14 +816,14 @@ export async function launchKiroIde(
     cleanupPromise = (async () => {
       trace("cleanup-start", { closed, exited });
       if (!closed) {
-        const timeoutMs = opts.shutdownTimeoutMs ?? 10_000;
+        const timeoutMs = remainingCleanupTimeoutMs(opts.shutdownTimeoutMs ?? LIVE_CLEANUP_TIMEOUT_MS, { env });
+        const deadline = Date.now() + timeoutMs;
         if ((windows || inheritedGroup) && !runtime.terminate) {
-          const deadline = Date.now() + timeoutMs;
           // Keep fallback observation inside the original shutdown budget.
-          const closeDeadline = deadline - Math.min(1_000, Math.floor(timeoutMs / 10));
+          const closeDeadline = deadline - Math.floor(timeoutMs / 10);
           try {
             if (liveChild()) {
-              if (browserWebSocketUrl) await closeKiroIdeBrowser(browserWebSocketUrl, Math.min(3_000, Math.max(1, closeDeadline - Date.now())), childClosed, trace);
+              if (browserWebSocketUrl) await closeKiroIdeBrowser(browserWebSocketUrl, Math.max(1, closeDeadline - Date.now()), childClosed, trace);
               else killDirectChild("startup"); // Startup failed before an endpoint was reported.
             }
             await waitClosed(Math.max(1, closeDeadline - Date.now()));
@@ -834,14 +843,17 @@ export async function launchKiroIde(
           }
         } else {
           try {
-            if (liveChild()) (runtime.terminate ?? terminateKiroIdeChild)(child);
+            if (liveChild()) {
+              if (runtime.terminate) runtime.terminate(child);
+              else terminateKiroIdeChild(child, Math.max(1, deadline - Date.now()));
+            }
           } catch (error) {
             throw new Error(`Kiro termination failed; profile retained at ${profileDir}`, { cause: error });
           }
-          await waitClosed(timeoutMs);
+          await waitClosed(Math.max(1, deadline - Date.now()));
         }
       }
-      removeSeedDir(profileDir, 20, 250, env);
+      removeSeedDir(profileDir, undefined, 250, env);
       trace("cleanup-complete", { closed, exited });
     })();
     try {
@@ -872,7 +884,7 @@ export async function launchKiroIde(
       const timer = setTimeout(
         () => fail(new Error("Kiro timed out reporting its OS-assigned CDP endpoint")),
         opts.startupTimeoutMs === 0 ? 0 :
-          remainingOperationTimeoutMs(opts.startupTimeoutMs ?? 60_000, { env, phase: "IDE startup" }),
+          remainingOperationTimeoutMs(opts.startupTimeoutMs ?? LIVE_STARTUP_TIMEOUT_MS, { env, deadlineMs: startupDeadlineMs, phase: "IDE startup" }),
       );
       child.once("error", fail);
       child.once("exit", onExit);
@@ -943,7 +955,7 @@ export async function withKiroIdeCleanup<T>(
 
 /** Poll GET /json/version until the CDP endpoint answers (drive-unblocked.mjs:48-56
  *  - this is already a proper poll in the spike; kept verbatim in shape). */
-export async function waitForCdp(port: number, timeoutMs = 60_000): Promise<boolean> {
+export async function waitForCdp(port: number, timeoutMs = LIVE_STARTUP_TIMEOUT_MS): Promise<boolean> {
   const allocation = remainingOperationTimeoutMs(timeoutMs, { phase: "IDE CDP readiness" });
   const end = Date.now() + (timeoutMs === 0 ? 0 : allocation ?? timeoutMs);
   while (Date.now() < end) {
@@ -966,7 +978,7 @@ export async function waitForCdp(port: number, timeoutMs = 60_000): Promise<bool
 /** GET /json/list - every page/iframe target with a webSocketDebuggerUrl
  *  (cdp.mjs:8-11). */
 export async function listTargets(port: number, deadlineMs?: number): Promise<CdpTargetInfo[]> {
-  const timeoutMs = remainingOperationTimeoutMs(undefined, { deadlineMs, phase: "IDE target discovery" });
+  const timeoutMs = remainingOperationTimeoutMs(LIVE_STARTUP_TIMEOUT_MS, { deadlineMs, phase: "IDE target discovery" });
   try {
     const r = await fetch(`http://127.0.0.1:${port}/json/list`, {
       signal: timeoutMs === undefined ? undefined : AbortSignal.timeout(timeoutMs),
@@ -1044,7 +1056,7 @@ const FIND_CHAT_INPUT_EXPR = `(() => {
 
 /** Poll all contexts for the chat-input placeholder before driving keystrokes.
  *  Replaces the spike's fixed settle sleeps (drive-unblocked.mjs:57-58,119). */
-export async function waitForChatInput(port: number, timeoutMs = 60_000): Promise<boolean> {
+export async function waitForChatInput(port: number, timeoutMs = LIVE_STARTUP_TIMEOUT_MS): Promise<boolean> {
   const allocation = remainingOperationTimeoutMs(timeoutMs, { phase: "IDE chat readiness" });
   const end = Date.now() + (timeoutMs === 0 ? 0 : allocation ?? timeoutMs);
   try {
@@ -1206,7 +1218,7 @@ export interface KiroIdeChatSurfaceAdapter {
  * behavior deterministic in tests without launching Electron. */
 export async function settleKiroIdeChatSurface(
   adapter: KiroIdeChatSurfaceAdapter,
-  timeoutMs = 15_000,
+  timeoutMs = LIVE_STARTUP_TIMEOUT_MS,
   pollMs = 250,
 ): Promise<KiroIdeChatPreparation> {
   const remaining = remainingOperationTimeoutMs(timeoutMs, { phase: "IDE chat surface" });
@@ -1252,7 +1264,7 @@ export async function settleKiroIdeChatSurface(
  * and clear hit tests over the chat iframe. */
 export function prepareKiroIdeChat(
   port: number,
-  timeoutMs = 15_000,
+  timeoutMs = LIVE_STARTUP_TIMEOUT_MS,
 ): Promise<KiroIdeChatPreparation> {
   return settleKiroIdeChatSurface(
     {
@@ -1756,11 +1768,14 @@ export async function watchMarkers(
   onPoll?: () => Promise<void>,
   intervalMs = 1500,
 ): Promise<boolean> {
-  const end = Date.now() + budgetMs;
+  const allocation = remainingOperationTimeoutMs(Math.max(1, budgetMs), { phase: "IDE marker watch" })!;
+  const end = Date.now() + Math.min(budgetMs, allocation);
   while (Date.now() < end) {
     if (onPoll) await onPoll();
     if (predicate()) return true;
-    await sleep(intervalMs);
+    const remaining = end - Date.now();
+    if (remaining <= 0) break;
+    await sleep(Math.min(intervalMs, remaining));
   }
   return predicate();
 }
@@ -1789,7 +1804,7 @@ export async function teardown(handle: KiroIdeHandle): Promise<void> {
  *  retries with short waits; anything else (or exhaustion) still throws. */
 export function removeSeedDir(
   path: string,
-  attempts = 20,
+  attempts: number | undefined = undefined,
   waitMs = 250,
   env: NodeJS.ProcessEnv = process.env,
 ): void {
@@ -1797,6 +1812,7 @@ export function removeSeedDir(
     process.stderr.write(`[kiro-ide-driver] AIDLC_KEEP_TEMP=1 - preserved ${path}\n`);
     return;
   }
+  const deadline = Date.now() + remainingCleanupTimeoutMs(NATIVE_PROCESS_CLEANUP_TIMEOUT_MS, { env });
   for (let attempt = 1; ; attempt++) {
     try {
       rmSync(path, { recursive: true, force: true });
@@ -1804,8 +1820,8 @@ export function removeSeedDir(
     } catch (error) {
       const code = (error as NodeJS.ErrnoException).code;
       const retryable = code === "EBUSY" || code === "EPERM" || code === "ENOTEMPTY";
-      if (!retryable || attempt >= attempts) throw error;
-      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, waitMs);
+      if (!retryable || (attempts !== undefined && attempt >= attempts) || Date.now() >= deadline) throw error;
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, Math.min(waitMs, Math.max(0, deadline - Date.now())));
     }
   }
 }

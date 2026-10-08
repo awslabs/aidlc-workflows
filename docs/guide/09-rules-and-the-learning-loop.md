@@ -70,7 +70,7 @@ Before each approval gate, the framework runs the learning gate (the protocol ca
 1. **Your agent's diary, surfaced verbatim.** A deterministic tool reads `memory.md` and emits each non-blank line under the four headings as a candidate, with its source heading attached. No paraphrase, no "interesting" filtering — the lines are shown as written.
 2. **A free-text channel that always asks "Anything to add for next time?"** You type the observation and pick which of the four headings it belongs under. That heading pick is the only classification asked of you.
 
-You tick the candidates you want to keep. If `memory.md` was empty for the stage, no one asks you to attest to whether the diary was kept — the framework records that quietly and moves on.
+You tick the candidates you want to keep, or **Keep none of these**, the first choice, to keep none. If `memory.md` was empty for the stage, no one asks you to attest to whether the diary was kept — the framework records that quietly and moves on.
 
 ### Where a kept learning goes
 
@@ -135,7 +135,7 @@ Rules are prose the agent reads. Sensors are deterministic checks that run autom
 
 ### How sensors fire
 
-When an agent writes or edits an output file during a stage, a PostToolUse hook checks which sensors apply to that stage and runs each matching one. Matching is by file shape — a code-quality sensor declares it analyses `**/*.{ts,js}`, so it only fires on TypeScript and JavaScript writes; a document-shape sensor that fires on any stage output omits the filter. You don't invoke sensors by hand during a workflow; they ride along on every Write and Edit.
+When an agent writes or edits an output file during a stage, a PostToolUse hook checks which sensors apply to that stage and runs each matching one. Matching is by file shape: a code-quality sensor declares it analyses `**/*.{ts,js}`, so it only fires on TypeScript and JavaScript writes; a document-shape sensor that fires on any stage output omits the filter. Gate-fired sensors, the first three in the table below, run instead when the stage reaches its approval gate, once for each of the stage's declared output files their filter accepts. When the gate is one the tool approves on its own under Construction autonomy, only blocking sensors run there: advisory findings would have no one to read them. You don't invoke sensors by hand during a workflow; they ride along on the stage's writes and its gate.
 
 A sensor result is **advisory** in this release. A failing sensor produces an audit row and a detail file pointing at exactly what's missing, but it does not block the stage's approval gate or stop your workflow. You see the signal; you decide what to do with it.
 
@@ -150,8 +150,8 @@ Six sensors ship with the framework:
 | Sensor | Fires on | Checks |
 |--------|----------|--------|
 | `claim-sources` | Intent Capture record-dir outputs | Every claim has a visible source tag; registered description, workflow scope, and memory text match authoritative inputs; retained assumptions exactly match explicit confirmation |
-| `required-sections` | Any record-dir markdown output | The output contains the required H2 headings (a generic content-shape check) |
-| `upstream-coverage` | Any record-dir markdown output | The stage's deliverables (evaluated as a set) reference each upstream artifact the stage declares it consumes, by slug, wikilink, or the producing stage's directory path |
+| `required-sections` | Any record-dir markdown output, plus reverse-engineering's `codekb/` files | The output contains the required H2 headings (a generic content-shape check). Timestamp run records such as `practices-discovery-timestamp.md` always pass |
+| `upstream-coverage` | Any record-dir markdown output, plus reverse-engineering's `codekb/` files | The stage's deliverables (evaluated as a set) reference each upstream artifact the stage declares it consumes, by slug, wikilink, or the producing stage's directory path |
 | `traceability` | `traceability.json` stage artifacts | Stable upstream IDs are declared and covered, statuses and targets are valid, and deterministic downstream targets exist |
 | `linter` | `.ts` / `.js` code outputs | Wraps your configured linter (ESLint by default) |
 | `type-check` | `.ts` / `.tsx` code outputs | Wraps your configured type-checker (`tsc` by default) |

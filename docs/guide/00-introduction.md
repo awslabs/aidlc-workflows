@@ -36,7 +36,7 @@ The engine owns the routing (which stage is next, which scope, when to stop); th
 
 This guide is for anyone **using** AI-DLC to build software:
 
-- **New users** — Start with [Getting Started](01-getting-started.md), [Workflow Profiles](workflow-profiles.md), [Your First Workflow](02-your-first-workflow.md), and [Spaces and Intents](03-spaces-and-intents.md)
+- **New users** — Start with [Getting Started](01-getting-started.md), then the [guided Onboarding walkthrough](onboarding.md), [Workflow Profiles](workflow-profiles.md), [Your First Workflow](02-your-first-workflow.md), and [Spaces and Intents](03-spaces-and-intents.md)
 - **Regular users** — Reference [CLI Commands](12-cli-commands.md), [Scopes, Depth, and Test Strategy](05-scopes-and-depth.md), and [Troubleshooting](15-troubleshooting.md)
 - **Team leads** — See [Knowledge](08-knowledge.md) and [Rules and the Learning Loop](09-rules-and-the-learning-loop.md) for customizing AI-DLC to your team's standards
 
@@ -52,15 +52,17 @@ To reshape *how* AI-DLC behaves — add a stage or an agent, define a scope, aut
 | Scopes | 11 (enterprise through express, plus workshop) + auto-detect |
 | Depth levels | 3 (Minimal, Standard, Comprehensive) |
 | Test strategy levels | 3 (Minimal, Standard, Comprehensive) |
-| Audit event types | 105 |
+| Audit event types | 117 |
 
 ## Guide Map
 
 | Chapter | What You'll Learn |
 |---------|------------------|
 | [Getting Started](01-getting-started.md) | Prerequisites, installation, first health check |
+| [Onboarding: A Guided First Week](onboarding.md) | The mental model plus a five-run path for first-time teams |
 | [Workflow Profiles](workflow-profiles.md) | Classic, Express, and the other workflow choices explained |
 | [Your First Workflow](02-your-first-workflow.md) | Annotated walkthrough of a complete run |
+| [Writing a Vision Document](writing-inputs/vision-document-guide.md) and [a Technical Environment Document](writing-inputs/technical-environment-guide.md) | The two notes to write before a bigger piece of work or a workshop |
 | [Spaces and Intents](03-spaces-and-intents.md) | The workspace layout: running many pieces of work across spaces and intents |
 | [Phases and Stages](04-phases-and-stages.md) | The 5 phases and 33 stages explained |
 | [Scopes, Depth, and Test Strategy](05-scopes-and-depth.md) | How to choose and override scope/depth/test strategy |

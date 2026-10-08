@@ -38,7 +38,7 @@ Use these in order of preference for AI-DLC:
 2. **Structured questioning** -- Ask targeted questions using the completeness checklist below
 3. **Scenario walkthrough** -- Walk through key user journeys step by step
 4. **Constraint identification** -- Ask "What must NOT happen?" and "What are the limits?"
-5. **Edge case probing** -- For each requirement, ask "What happens when [unusual condition]?"
+5. **Edge case probing** -- For each requirement, ask "What happens when [unusual condition]?" At Standard and Comprehensive depth, use `corner-checklist.md` for the list of unusual conditions to sweep, component by component
 
 ## Acceptance Criteria Pattern
 

@@ -17,7 +17,7 @@ output_schema:
   scanned_files: string[]
   questions_file: string
   findings_count: integer
-timeout_seconds: 5
+timeout_seconds: 300
 ---
 
 # claim-sources sensor
@@ -38,17 +38,56 @@ For each deliverable, the sensor verifies:
   rule under the cited H2
 - question tags resolve to visible filled answers in the sibling
   `intent-capture-questions.md`
-- when the initial description contains `<document>`, deliverables cannot use
-  `[desc]`; request and document claims require confirmed `[Q<n>]`
+- when the initial description carries a pasted document (any `<document>` or
+  `</document>` marker), deliverables cannot use `[desc]`; request and document
+  claims require confirmed `[Q<n>]`
 - `[scope]` grounds claims only in a workflow-selected Initial Scope Signal
 - `[assumption]` appears only in the assumptions section
 - retained assumptions exactly match entries under an
   `## Assumption Confirmation` answered exactly `A. Accept assumptions`
 
-The sensor excludes scaffolding, fenced code, HTML comments, and any legacy
-reviewer-added `## Review` content still embedded in an artifact. It validates citation shape and resolution only; the
-stage's adversarial reviewer judges whether the cited source actually supports
-the claim.
+Contract headings (`Sources`, `Q<n>`, `Assumption Confirmation`,
+`Assumptions & Open Questions`, `Initial Scope Signal`) are recognised by this
+sensor with or without a leading decoration: a run of fully-qualified emoji,
+optionally joined by U+200D, followed by whitespace, so `## ℹ️ Sources` names
+the `Sources` section. A bare text-presentation symbol such as `©`, `™` or `▶`
+is not decoration. Findings quote the heading as written. Two headings keep
+exact matching because decoration must never widen what passes: `## Review`,
+whose content the sensor skips, and the H2 a `[memory:<id>]` source cites,
+which names the memory file's exact heading. The Consolidated Summary
+Confirmation digest reads its `Q<n>` and `Assumption Confirmation` headings
+through the same rule, before and after its checkpoint.
+
+The sensor reads block structure and link reference definitions through the
+built-in `Bun.markdown` CommonMark/GFM parser. Where that parser accepts a link
+reference destination CommonMark rejects (an unbalanced parenthesis or one
+nested more than 32 deep, `<` inside angle brackets, an ASCII control
+character, a backslash before anything but ASCII punctuation, or text after the
+destination that cannot open a title), the line stays claim text, because a
+conforming renderer shows it. It excludes scaffolding, fenced code, code spans
+(at the parser's exact columns), HTML comments, and any legacy reviewer-added
+`## Review` content still embedded in an artifact.
+Indented code remains inspected as claim text by sensor policy, and a nonblank
+line the parser cannot place is read as its own claim.
+Paragraph continuations stay
+in the same claim block; a new list item starts a new block. Each GFM table data
+row is a separate claim, while its header and delimiter are scaffolding.
+It validates citation shape and resolution only; the stage's adversarial
+reviewer judges whether the cited source actually supports the claim.
+
+Every HTML block (CommonMark kinds 1 to 7) supplies the text it renders, as raw
+HTML text rather than Markdown headings, definitions, links, or code. Comments,
+processing instructions, declarations, CDATA, and hidden elements (`script`,
+`style`, `pre`, `template`, `code`, a `hidden` or `aria-hidden` attribute, or a
+`display:none` or `visibility:hidden` style, quoted or not) render nothing, so a
+block made only of them is not a claim; text after a comment or closing tag on
+the block's last line is visible and is a claim. Fence, comment, and
+code-span syntax inside those blocks cannot change their Markdown extent:
+backticks are literal, while actual HTML comments and hidden elements or
+attributes still cannot ground a claim. A visible literal `[Q1]` in a `div`
+can ground its claim; `[Q1]: /url` in that block never defines a Markdown link.
+Raw HTML content cannot open a control section or supply an answer tag in the
+questions file.
 
 Under a deliverable's `## Sources`, the exact single-line declaration
 ``- [scope] Workflow-selected scope: `<scope>`.`` is metadata only when its
@@ -60,19 +99,19 @@ other source tags still receive the normal checks. A `Sources` heading never
 exempts an entire section or makes unsupported content valid.
 
 A tag counts when the rendered document shows it as literal text. Bracket pairs
-resolve as Markdown links only against a link reference definition the document
-carries, so adjacent tags such as `[Q1][Q2]` remain two visible tags, while
-`[Q1]` in a document that also defines `[Q1]: <url>` is a link and grounds
-nothing. A definition requires a non-empty CommonMark label, a well-formed
-destination, and a correctly separated optional title, inside a block quote or
-list item as well as at the top level. A definition cannot interrupt a paragraph,
-so a definition-shaped line written directly under prose or a list item's text
-is that paragraph's visible continuation. An ordered list not starting at `1.`
-cannot interrupt a paragraph either. Multiline destinations still resolve
-references across the whole document. A line that merely looks like a
-definition, such as `[note]: some prose`, is the visible sentence it renders as
-and is inspected like any other claim; neither an inline title nor a different
-container can hide the following line as title continuation.
+resolve as Markdown links only against a definition parsed from the original
+document, including definitions nested in containers and multiline definitions.
+Thus `[Q1][Q2]` remains two visible tags when neither reference resolves, while
+`[Q1]` in Markdown prose with a matching `[Q1]: /url` definition is a link and
+grounds nothing. Definition-shaped lines that the parser identifies as prose
+remain claim text: a definition cannot interrupt a paragraph, and a nested
+ordered list not starting at `1` cannot interrupt it either.
+
+Accepted assumptions use the same parser-backed claim blocks within
+`## Assumption Confirmation`. Only list-item entries carrying `[assumption]`
+count; the two fixed option lines and `[Answer]:` are scaffolding. Wrapped or
+lazy-continuation text belongs to the whole entry, so a shorter confirmation
+cannot accept a longer retained assumption.
 
 Where this reading cannot afford full CommonMark, the divergence must land as a
 false failure and never as a false pass: the sensor may ask for a citation the

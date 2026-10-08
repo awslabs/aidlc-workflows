@@ -153,7 +153,10 @@ describe("t154 codekb promotion — RE outputs land at aidlc/spaces/<active-spac
     expect(body).toMatch(
       /--compare <record>\/inception\/reverse-engineering\/scope-draft-<repo>\.md/,
     );
-    expect(body).toContain("scope drafts are temporary and MUST NOT remain");
+    // The compare removes the draft; the stage never deletes it by hand.
+    const flat = body.replace(/\s+/g, " ");
+    expect(flat).toContain("The compare removes that repo's `scope-draft-<repo>.md` once it has read it");
+    expect(flat).toContain("scope drafts are temporary and never stay in the intent record");
     expect(body).not.toContain("reverse-engineering/scope-draft.md");
   });
 

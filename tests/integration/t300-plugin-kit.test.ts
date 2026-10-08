@@ -1,6 +1,12 @@
 // covers: file:scripts/package.ts (plugin build), file:tests/harness/plugin-kit.ts
 
-import { deterministicCaseTimeoutMs } from "../harness/test-budget.ts";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  LIVE_COMMAND_TIMEOUT_MS,
+  liveCaseTimeoutMs,
+  remainingOperationTimeoutMs,
+  NATIVE_STARTUP_TIMEOUT_MS,
+} from "../harness/test-budget.ts";
 import { afterAll, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
@@ -24,8 +30,7 @@ import {
 } from "../harness/plugin-kit.ts";
 import type { DriveResult } from "../harness/sdk-drive.ts";
 
-const TIMEOUT_MS = 60_000;
-setDefaultTimeout(Math.max(TIMEOUT_MS, deterministicCaseTimeoutMs()));
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const TEST_PRO_ROOT = join(REPO_ROOT, "plugins", "test-pro");
@@ -73,7 +78,7 @@ describe("t300 reusable plugin test kit", () => {
     expect(graphSlugs(opencode.projectDir, ".aidlc")).toContain(
       "test-pro-integration",
     );
-  }, 60_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("validates good content and reports synthesized plugin findings", () => {
     expect(validatePluginContent(TEST_PRO_ROOT)).toEqual([]);
@@ -212,7 +217,7 @@ describe("t300 reusable plugin test kit", () => {
       cwd: fixture.projectDir,
       env: { ...process.env, ...pluginEnv },
       encoding: "utf-8",
-      timeout: TIMEOUT_MS,
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     });
     expect(sync.status, sync.stderr || sync.stdout).toBe(0);
     expect(JSON.parse(sync.stdout)).toMatchObject({
@@ -226,7 +231,7 @@ describe("t300 reusable plugin test kit", () => {
       "/aidlc plugin list --json",
       {
         claude: {
-          timeoutMs: 300_000,
+          timeoutMs: remainingOperationTimeoutMs(LIVE_COMMAND_TIMEOUT_MS),
           persistSession: true,
           env: pluginEnv,
         },
@@ -269,5 +274,5 @@ describe("t300 reusable plugin test kit", () => {
     expect(graphSlugs(fixture.projectDir, ".claude")).toContain("test-pro-integration");
     expect(result.askedQuestions).toEqual([]);
     expect(result.stateFile).toBeUndefined();
-  }, 360_000);
+  }, liveCaseTimeoutMs(LIVE_COMMAND_TIMEOUT_MS));
 });

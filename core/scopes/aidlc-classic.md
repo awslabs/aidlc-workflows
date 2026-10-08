@@ -5,10 +5,12 @@ keywords: []
 description: "V1-style ceremony through Inception and Construction - the implicit default"
 skeleton: off
 review_cap: advisory
-guard_policy: relaxed
+guard_policy: off
 sensors: on
 learnings: on
 summary_confirmation: off
+plan_approval: on
+collaborators: off
 ---
 
 # classic scope
@@ -17,22 +19,25 @@ summary_confirmation: off
 `AWS_AIDLC_DEFAULT_SCOPE` names one - and restores v1-style ceremony through
 Inception and Construction, with one human approval per stage. Ideation is
 skipped and Operation remains a placeholder. Stage-declared execution modes
-and support agents are unchanged.
+are unchanged; collaborators are off, so each stage runs with its lead agent
+only (`/aidlc --collaborators on` brings the support agents in).
 
-Guard Policy defaults to relaxed: changed inputs are recorded and announced in one line, and plan approval and review freeze are lowered for undirected work.
+Guard Policy defaults to off: changed inputs are recorded and announced in one line, and plan approval, review freeze, state transition, and reviewer read scope are lowered for undirected work. Human presence stays up.
 
 Reviews are advisory: one pass per stage whose findings reach the human at
 the approval gate, with no refute-and-repair loop; explicit autonomy keeps the
 single pre-merge review. Walking-skeleton ceremony and summary confirmation
-are off. Sensors run and the learnings ritual runs. Under relaxed, Plan Approval
-and review freeze stand aside for undirected work and record a `GUARD_STOOD_ASIDE`
-row each time; the approval question is still asked by the conductor.
-Human-turn authority, audit, and the reviewer-scope fence remain in force.
+are off. Sensors run and the learnings ritual runs. Under off, Plan Approval,
+review freeze, state transition, and reviewer read scope stand aside for
+undirected work and record a `GUARD_STOOD_ASIDE` row each time; the approval
+question is still asked by the conductor. Human-turn authority and audit remain
+in force.
 
 Override ceremonies per intent with `/aidlc --sensors on|off`,
-`/aidlc --learnings on|off`, and `/aidlc --summary-confirmation on|off`.
-The global kill switches `AIDLC_DISABLE_SENSORS=1`,
-`AIDLC_DISABLE_LEARNINGS=1`, and `AIDLC_DISABLE_SUMMARY_CONFIRMATION=1`
+`/aidlc --learnings on|off`, `/aidlc --summary-confirmation on|off`, and
+`/aidlc --collaborators on|off`. The global kill switches
+`AIDLC_DISABLE_SENSORS=1`, `AIDLC_DISABLE_LEARNINGS=1`,
+`AIDLC_DISABLE_SUMMARY_CONFIRMATION=1`, and `AIDLC_DISABLE_COLLABORATORS=1`
 force their ceremony off even when the intent says on; they can also be
 recorded with `aidlc config flags --bypass <NAME>`.
 

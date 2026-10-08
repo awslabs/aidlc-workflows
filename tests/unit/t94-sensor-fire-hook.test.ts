@@ -80,12 +80,18 @@
 // ordered slice for the spawn case, and the ISO-timestamp assertions read the
 // real bytes on disk against the same YYYY-MM-DDThh:mm:ssZ shape the .sh grepped.
 
-import { afterAll, describe, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { afterAll, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
   existsSync,
   mkdirSync,
   readFileSync,
+  rmSync,
   writeFileSync,
 } from "node:fs";
 import { hostname, tmpdir } from "node:os";
@@ -99,6 +105,8 @@ import {
   seededStateFile,
 } from "../harness/fixtures.ts";
 import { setField, stateDigest } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const BUN = process.execPath; // the bun running this test
 const HOOK = join(AIDLC_SRC, "hooks", "aidlc-run-sensors.ts");
@@ -272,6 +280,7 @@ function runHook(
     tool_input: { file_path: filePath },
   });
   const res = spawnSync(BUN, [HOOK], {
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     input: json,
     encoding: "utf-8",
     env: {
@@ -307,6 +316,7 @@ describe("t94 aidlc-run-sensors hook — guards + early exits (migrated from t94
     // so the hook's stdin.text() yields "" -> JSON.parse throws -> exit 0. We
     // pass empty input explicitly to match the </dev/null contract.
     const res = spawnSync(BUN, [HOOK], {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
       input: "",
       encoding: "utf-8",
       env: {
@@ -324,6 +334,7 @@ describe("t94 aidlc-run-sensors hook — guards + early exits (migrated from t94
   test("malformed JSON stdin exits 0 with no spawn [.sh case 2]", () => {
     const proj = makeProjectActive();
     const res = spawnSync(BUN, [HOOK], {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
       input: "this is not json",
       encoding: "utf-8",
       env: {
@@ -479,6 +490,29 @@ describe("t94 aidlc-run-sensors hook — guards + early exits (migrated from t94
     }
   });
 
+  test("a valid active-directive marker's Unit reaches the dispatcher beside its stage", () => {
+    const proj = makeProjectActive();
+    const state = readFileSync(seededStateFile(proj), "utf-8");
+    const markerPath = join(seededRecordDir(proj), ".aidlc-engine/active-directive.json");
+    mkdirSync(dirname(markerPath), { recursive: true });
+    const filePath = join(proj, "aidlc-docs", "inception", "requirements-analysis", "intent.md");
+    const argvFor = (marker: Record<string, unknown>): string[] => {
+      writeFileSync(markerPath, JSON.stringify({ version: 1, state_sha256: stateDigest(state), ...marker }));
+      rmSync(spawnLogPath(proj), { force: true });
+      expect(runHook(proj, filePath, writeDispatchGraph(proj)).status).toBe(0);
+      return (JSON.parse(readFileSync(spawnLogPath(proj), "utf-8").split("\n")[0]) as string[]).slice(2);
+    };
+    // Under unit-major the directive names the Unit whose work the output
+    // belongs to; the rows the dispatcher writes carry it.
+    expect(argvFor({ stage: "requirements-analysis", unit: "alpha" })).toEqual([
+      "fire", "write-sensor", "--stage", "requirements-analysis", "--output-path", filePath, "--unit", "alpha",
+    ]);
+    // No Unit named: the dispatch is as before.
+    expect(argvFor({ stage: "requirements-analysis" })).toEqual([
+      "fire", "write-sensor", "--stage", "requirements-analysis", "--output-path", filePath,
+    ]);
+  });
+
   test("recursion guard retains the older flat sensor location [.sh case 4]", () => {
     const proj = makeProjectActive();
     const filePath = join(
@@ -532,6 +566,7 @@ describe("t94 aidlc-run-sensors hook — guards + early exits (migrated from t94
     // tool_input with no file_path: the hook's `?? ""` yields "" -> exit 0 (:74).
     const json = JSON.stringify({ tool_name: "Write", tool_input: {} });
     const res = spawnSync(BUN, [HOOK], {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
       input: json,
       encoding: "utf-8",
       env: {

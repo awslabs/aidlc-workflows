@@ -50,7 +50,8 @@
 //   .sh (7) fragment-merge fails after audit-merge     -> "7: soft-gap — fragment-merge fails after audit-merge => AUDIT_MERGED + BOLT_FAILED(fragment-merge-failed)"
 //   .sh (8) determinism: re-compile byte-equivalent    -> "8: determinism (L11) — re-compile after BOLT_FAILED + recovery is byte-equivalent"
 
-import { afterAll, describe, expect, test } from "bun:test";
+import { NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS } from "../harness/test-budget.ts";
+import { setDefaultTimeout, afterAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
@@ -75,6 +76,8 @@ import {
   FIXTURES_DIR,
 } from "../harness/fixtures.ts";
 import { auditLockDir, worktreePath } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+
+setDefaultTimeout(NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
 // The per-intent record dir the inline git project seeds (was flat aidlc-docs/).
 function recordDir(proj: string): string {
@@ -287,7 +290,7 @@ function countEvent(proj: string, event: string): number {
     .filter((l) => l.includes(`**Event**: ${event}`)).length;
 }
 
-const TEST_TIMEOUT = 120_000; // real git + multiple bun spawns per case
+const TEST_TIMEOUT = NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS; // real git + multiple bun spawns per case
 
 describe("t49 Bolt fork/merge runtime-graph + failure modes (migrated from t49-bolt-sensor-failures.sh, plan 8)", () => {
   // ===========================================================================
@@ -427,7 +430,9 @@ describe("t49 Bolt fork/merge runtime-graph + failure modes (migrated from t49-b
   // Plants the lock DIRECTORY whose path auditLockDir() computes so the first
   // lock-needing tool (state-merge) fails. AIDLC_AUDIT_LOCK_RETRIES only controls
   // aidlc-audit merge, which is later in the chain; it cannot shorten state-merge's
-  // default lock budget. fragment-merge must not run and its file must survive.
+  // default lock budget. AIDLC_AUDIT_LOCK_TIMEOUT_MS supplies a short explicit
+  // acquisition baseline through the actual CLI and its sibling processes.
+  // fragment-merge must not run and its file must survive.
   // ===========================================================================
   test("6: lock-acquire failure — complete --merge errors before fragment-merge; fragment file survives", () => {
     const proj = makeProj();
@@ -449,12 +454,18 @@ describe("t49 Bolt fork/merge runtime-graph + failure modes (migrated from t49-b
     // the reaper steals it (the reaper's whole point), letting the merge succeed
     // and defeating this lock-acquire-failure case.
     const nowMs = Math.floor(performance.timeOrigin + performance.now());
-    writeFileSync(join(lockDir, "owner.json"), JSON.stringify({ pid: process.pid, startedAtMs: nowMs }), "utf-8");
+    const owner = JSON.stringify({ pid: process.pid, startedAtMs: nowMs });
+    writeFileSync(join(lockDir, "owner.json"), owner, "utf-8");
 
     let comp: Run;
     const started = performance.now();
     try {
-      comp = boltComplete(proj, "solo");
+      comp = boltComplete(proj, "solo", {
+        AIDLC_AUDIT_LOCK_TIMEOUT_MS: "100",
+        AIDLC_AUDIT_LOCK_RETRIES: "1",
+        AIDLC_AUDIT_LOCK_RETRY_MS: "100",
+      });
+      expect(readFileSync(join(lockDir, "owner.json"), "utf-8")).toBe(owner);
     } finally {
       rmSync(lockDir, { recursive: true, force: true });
     }
@@ -507,7 +518,7 @@ describe("t49 Bolt fork/merge runtime-graph + failure modes (migrated from t49-b
     } finally {
       rmSync(lockDir, { recursive: true, force: true });
     }
-  }, 15_000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   // ===========================================================================
   // Case 7 — Fragment-merge fails after audit-merge succeeds (soft-gap closure).

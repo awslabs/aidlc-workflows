@@ -92,7 +92,10 @@ loads context in a fixed six-step order, and your Tier 2 files come in at steps
 6. Prior stage artifacts — outputs the current stage declares it consumes
 
 Steps 4 and 5 only fire if the directories exist and contain files, which is
-why a project with no team knowledge simply skips them. Because the load
+why a project with no team knowledge simply skips them. On inline stages and
+for a mob stage's lead, the agent reads your Tier 2 files right after its
+persona and before the Tier 1 methodology, and when the list of files is too
+long, Tier 1 files are left out before yours. Because the load
 happens at every stage start, editing a file takes effect on the next `/aidlc`
 run with no cache to clear and no restart. Removing a file is just as direct —
 delete it, and subsequent runs stop seeing it. There is no registry to keep in

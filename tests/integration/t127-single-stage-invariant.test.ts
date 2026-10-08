@@ -49,7 +49,7 @@
 //   .sh 12 (refused report commits no STAGE_COMPLETED)  -> test "12: refused report --single commits no STAGE_COMPLETED"
 //   .sh 13 (next --single no --stage errors)            -> test "13: next --single with no --stage errors"
 //   .sh 14 (next --single rejects init stage)           -> test "14: next --single rejects an initialization stage"
-//   .sh 15 (next --single rejects SKIP-for-scope stage) -> test "15: next --single rejects a SKIP-for-scope stage"
+//   .sh 15 (next --single on a SKIP-for-scope stage)     -> test "15: next --single runs a SKIP-for-scope stage and says it is not in the plan"
 //   .sh 16 (next --single --phase mutually exclusive)   -> test "16: next --single --phase errors"
 //
 // §6-E note: tests 11/13/14/15/16 are the tool-enforced REFUSALS — each
@@ -59,7 +59,8 @@
 // state file back, proving the pointer is unmoved — not merely absent of a
 // move directive.
 
-import { afterEach, describe, expect, test } from "bun:test";
+import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS } from "../harness/test-budget.ts";
+import { setDefaultTimeout, afterEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
@@ -82,6 +83,8 @@ import {
   summaryConfirmationContentHash,
   stateDigest,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const BUN = process.execPath; // the bun running this test
 const TOOL = join(AIDLC_SRC, "tools", "aidlc-orchestrate.ts");
@@ -245,6 +248,8 @@ describe("t127 --single pointer invariant (migrated from t127-single-stage-invar
       "--project-dir", proj,
     ]);
     expect(r.out).toContain('"kind":"done"');
+    // The isolated run is over; its done never says the main workflow goes on.
+    expect(r.out).not.toContain("workflow_continues");
   });
 
   test("7: report --single leaves the main Current Stage untouched [.sh 7]", () => {
@@ -600,7 +605,7 @@ describe("t127 --single pointer invariant (migrated from t127-single-stage-invar
       proj,
     ]);
     expect(result.out).toContain('"kind":"done"');
-  }, 15_000); // Decision/answer, three write hooks, and completion took 6.5s on macOS CI.
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   describe("isolated NFR review with a parent plan that skips Units Generation", () => {
     const stage = "nfr-requirements";
@@ -700,7 +705,7 @@ describe("t127 --single pointer invariant (migrated from t127-single-stage-invar
         expect(report.out).toContain('"kind":"done"');
         expect(readFileSync(statePath, "utf-8")).toBe(parentState);
       },
-      10_000, // Real next/log/write-hook/review/report chain: 5.9s on Windows CI.
+      NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
     );
 
     test.each([
@@ -730,7 +735,7 @@ describe("t127 --single pointer invariant (migrated from t127-single-stage-invar
       const review = requestReview(proj);
       expect(review.status, review.out).toBe(0);
       expect(review.out).toContain('"emitted":"REVIEW_REQUESTED"');
-    }, 10_000); // prepare() plus the guarded review exceeded 5s on Windows CI.
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
   });
 
   test("12f: isolated hash recovery stays on the --single workflow", () => {
@@ -815,12 +820,13 @@ describe("t127 --single pointer invariant (migrated from t127-single-stage-invar
   });
 
   // =========================================================================
-  // Test 15: a SKIP-for-scope stage cannot run via --single.
-  // `user-stories` is SKIP for bugfix; --single relays the verbatim skip
-  // wording. Use a NO-STATE project so the explicit --scope bugfix resolves
-  // (an active workflow's state Scope would win the precedence ladder).
+  // Test 15: a SKIP-for-scope stage runs via --single when asked for.
+  // `user-stories` is SKIP for bugfix. An isolated run never touches the plan
+  // or the cursor, so it runs, with one change notice saying it is not part
+  // of the plan. Use a NO-STATE project so the explicit --scope bugfix
+  // resolves (an active workflow's state Scope would win the precedence ladder).
   // =========================================================================
-  test("15: next --single rejects a SKIP-for-scope stage with the verbatim skip wording [.sh 15]", () => {
+  test("15: next --single runs a SKIP-for-scope stage and says it is not in the plan [.sh 15]", () => {
     const proj = freshProject();
     // No-state project: createTestProject already leaves aidlc-docs/ empty, so
     // there is no aidlc-state.md (the .sh did `rm -f` defensively — here it
@@ -829,10 +835,20 @@ describe("t127 --single pointer invariant (migrated from t127-single-stage-invar
       "next", "--stage", "user-stories", "--single", "--scope", "bugfix",
       "--project-dir", proj,
     ]);
-    // The verbatim wording is `Stage "..." is skipped for scope "bugfix".`; in
-    // JSON stdout the quotes are backslash-escaped, so match the quote-free
-    // substring (same as the .sh).
-    expect(r.out).toContain("is skipped for scope");
+    const directive = JSON.parse(r.out.split("\n").find((line) => line.startsWith("{")) ?? "{}") as {
+      kind?: string;
+      stage?: string;
+      single?: boolean;
+      change_notices?: string[];
+    };
+    expect(directive.kind, r.out).toBe("run-stage");
+    expect(directive.stage).toBe("user-stories");
+    expect(directive.single).toBe(true);
+    expect(directive.change_notices).toContain(
+      "\"user-stories\" is not part of the bugfix plan. It runs on its own because you asked for it; " +
+        "the plan and your workflow stay as they are.",
+    );
+    expect(r.out).not.toContain("is skipped for scope");
   });
 
   // =========================================================================

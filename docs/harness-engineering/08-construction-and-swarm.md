@@ -66,8 +66,8 @@ Before presenting the command, write it to
 (Write/edit), never a shell `echo` or heredoc. Repo-derived command text must never
 be interpolated into a shell line, where substitutions could run before approval.
 Use `--command-file verification-command.txt` for `log decision`,
-`log answer`, and `state set-construction-verification-command`; use the invoking
-SessionStart session ID for both log calls via `--session "<session ID>"`. Copy the
+`log answer`, and `state set-construction-verification-command`; both log calls
+find their own session, so pass no `--session` and never look one up. Copy the
 complete canonical command exactly from the `command` field in the `decision`
 tool's JSON output into the verification-command question's code span; never
 abbreviate it. Choose a delimiter that preserves any command backticks. The human
@@ -75,7 +75,7 @@ can also open `<record>/verification-command.txt`. The canonical command is a
 nonblank single line of at most 1024 characters. Control characters and
 display-spoofing characters (Unicode format characters, including zero-width and
 bidi controls, line/paragraph separators, and no-break space U+00A0) are refused.
-Record the human's exact **Approve** / **Request Changes** reply in that session;
+Record the human's **Approve** / **Request Changes** reply in that session;
 only **Approve** authorizes the receipt, not an unrelated reply, **Request Changes**,
 or a reply from another session. Never write `--details "Approve"` unless the human chose it.
 
@@ -103,8 +103,9 @@ To choose swarm execution, explicitly select stage-major and then
 `Construction Execution: swarm`. Guided (`gated`) and automatic (`autonomous`)
 batch completion are both supported; granting autonomy does not change order or
 execution. Unit-major remains serial and refuses a contradictory swarm setting.
-Legacy workflows without the new fields retain their existing first-stage/late
-cascade and autonomy-based swarm routing. Team-owned work keeps `unit_gate` and
+Legacy workflows without the new fields retain their existing first-stage review
+and autonomy-based swarm routing; under unit-major their late stage approvals are
+one question. Team-owned work keeps `unit_gate` and
 its own per-stage or unit-end approval rhythm.
 
 You shape the recommendation through the rule layers from
@@ -130,9 +131,12 @@ autonomy grant or a silent switch to swarm execution.
 ## Checkpoint and approval evidence
 
 When `run-stage` carries `construction_checkpoint`, the Unit body and reviews
-have already run. Route it before body/reviewer/gate logic. With
-`command_authorized: false`, ask the verification-command question and complete
-the human decision/answer/setter flow before any `verify`, then re-run `next`.
+have already run; a `rereview` field names the one re-check of code or
+documents changed since their review, run first without asking (under Guard
+Policy `strict` only; under `relaxed` and `off` the change is accepted and the
+approval stands). Route it before body/reviewer/gate logic. With `command_authorized: false`, ask the verification-command question
+and complete the human decision/answer/setter flow before any `verify`, then
+re-run `next`.
 Otherwise run `bolt checkpoint --action verify --unit <unit> --kind <unit|skeleton>`;
 it executes the recorded, human-authorized command, not text selected at verify
 time. Approve only current verified evidence and show "Verified with
@@ -142,15 +146,17 @@ always needs the human; ordinary Units follow `human_required`.
 `swarm_checkpoint` similarly routes a completed batch before the next batch.
 Only after `verify` reports `verified: true` and the current checkpoint has
 `ready: true`, open the human Unit/skeleton approval question with
-`aidlc engine bolt checkpoint --action ask --unit "<unit>" --kind <unit|skeleton> --session "<session ID>"`;
+`aidlc engine bolt checkpoint --action ask --unit "<unit>" --kind <unit|skeleton>`;
 `ask` refuses an unready or unverified checkpoint. For a human batch question,
 only after status reports `ready: true`, run
-`aidlc engine bolt swarm-checkpoint --action ask --batch <N> --units "<Units>" --session "<session ID>"`.
+`aidlc engine bolt swarm-checkpoint --action ask --batch <N> --units "<Units>"`.
 Then present **Approve** / **Request Changes** and wait. The human's exact reply
-in that session, to this checkpoint question, authorizes the matching action;
-an unrelated reply, another session's reply, or a reply to a different question
-does not. Pass that same `--session` on approval/rejection and never pass
-`--user-input` the human did not choose. Consent is one-shot and bound to the
+to this checkpoint question authorizes the matching action, in that chat or a
+new one: with no question of its own, a new chat's reply is kept for the
+checkpoint question another chat asked, while it is the newest question asked
+and still open. An unrelated reply, the agent's own words, or a reply to a
+different question does not. These commands find their own session; never pass `--user-input`
+the human did not choose. Consent is one-shot and bound to the
 current checkpoint fingerprint, verification proof ID, and authorized command
 digest (batch questions bind the fingerprint and per-Unit `Command SHA-256` set).
 Re-running `verify` or swarm `finalize` withdraws every open checkpoint question
@@ -169,7 +175,9 @@ command as the display label, alongside output byte counts and digests rather
 than raw output. Earlier proof versions require re-verification with the authorized command.
 The verifier records a tool-owned `CHECKPOINT_VERIFICATION_RECORDED` receipt
 alongside the proof file, and approval requires that receipt; a hand-written
-proof file cannot verify a Unit.
+proof file cannot verify a Unit. On a checkout with no proof file at all (a
+fresh clone, another machine), that receipt stands in for the proof of a Unit
+already approved whose evidence is unchanged, so nothing runs again.
 
 A final stage directive carrying `construction_policy.completion_only: true`
 and `human_completion_required: false` only reconciles recorded approvals: skip
@@ -179,13 +187,12 @@ named review/receipt repair, consulting the human as needed, never invented
 verification or an unverified checkpoint approval question.
 
 Plan Approval remains individually bound even when its presentation is grouped.
-The `log decision`/`answer --checkpoint plan-approval --batch-file <JSON>
---session <ID>` flow binds exactly the live swarm Unit set and current
-plan/questions fingerprints with unchanged source. One actual **Approve Plans**
-answer produces individual receipts. Legacy mediation and unsupported harnesses
-fall back to the single-Unit flow. See the
-[CLI reference](../guide/12-cli-commands.md#grouped-code-generation-plan-approval)
-for the manifest and commands.
+When several Units' plans are ready together, `next` asks about them in one
+engine question, and the agent records the person's choice per Unit (`log answer
+--checkpoint plan-approval --units`), each approval bound to that Unit's own
+plan: "approve all" approves every Unit, and a change naming one Unit sends only
+that Unit back. See the
+[CLI reference](../guide/12-cli-commands.md#grouped-code-generation-plan-approval).
 
 After a partial landing, `next` names the remaining Units and valid prepared
 workers retain the original group's approval and worktrees. Verify their parent
@@ -232,8 +239,8 @@ declaring `for_each: unit-of-work` in its frontmatter:
 For human team ownership, delivery planning can combine
 `Construction Iteration: unit-major` with `Unit Ownership: team`. The engine
 then derives `## Unit Progress` from the same DAG/artifact/receipt evidence and
-uses either per-stage or unit-end Unit gates instead of the legacy late
-unit-major cascade. This team-owned path retains its own policy; solo ownership
+uses either per-stage or unit-end Unit gates instead of the solo path's one late
+approval. This team-owned path retains its own policy; solo ownership
 uses the checkpoint-enabled or legacy path selected by its recorded state.
 
 | Stage | Runs |
@@ -316,7 +323,9 @@ Two surfaces carry the signal:
   thing that lets a Unit's work merge.
 - **A protected spec file.** The referee can anti-tamper compare a designated
   `--test-file` against its forked-git baseline, so a worker cannot quietly weaken
-  the test that defines "done" to make a red check go green. You ensure the spec
+  the test that defines "done" to make a red check go green. Under a relaxed or
+  off Guard Policy a changed protected file is reported in `change_notices`
+  instead of failing the Unit. You ensure the spec
   that encodes the acceptance criteria exists and is the file pointed at.
 
 Your harness contribution is making both real and meaningful. A check that always

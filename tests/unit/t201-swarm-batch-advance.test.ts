@@ -40,7 +40,12 @@
 // never the skeleton gate for feature scope, so no stance is strictly needed, but
 // recording it keeps the state realistic. All temp dirs are cleaned in afterEach.
 
-import { afterEach, describe, expect, test } from "bun:test";
+import {
+  NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { afterEach, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { appendFileSync, chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -56,6 +61,8 @@ import {
   seededAuditShard,
   seededStateFile,
 } from "../harness/fixtures.ts";
+
+setDefaultTimeout(NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
 resetAidlcEnv();
 
@@ -270,7 +277,7 @@ function runRawDirective(proj: string, args: string[]): Directive {
   const r = spawnSync(
     BUN,
     [ORCH, ...args, "--project-dir", proj],
-    { encoding: "utf-8", env },
+    { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8", env },
   );
   if ((r.status ?? -1) !== 0) {
     throw new Error(`raw directive failed: ${r.stdout ?? ""}${r.stderr ?? ""}`);
@@ -291,7 +298,7 @@ function runReport(
     "approved",
     "--project-dir",
     proj,
-  ], { encoding: "utf-8", env: { ...process.env, ...extraEnv } });
+  ], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8", env: { ...process.env, ...extraEnv } });
   try {
     return JSON.parse((r.stdout ?? "").trim()) as Directive;
   } catch {
@@ -312,7 +319,7 @@ describe("t201 autonomous swarm advances through every Bolt batch (issue headlin
     expect(d.stage).toBe("code-generation");
     expect(d.reviewer).toBe("aidlc-architecture-reviewer-agent");
     expect(d.reviewer_max_iterations).toBe(2);
-  }, 30000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("1b: an advisory swarm directive exposes the single-pass cap", () => {
     const proj = seedProject();
@@ -330,7 +337,7 @@ describe("t201 autonomous swarm advances through every Bolt batch (issue headlin
     expect(d.kind).toBe("invoke-swarm");
     expect(d.review_class).toBe("advisory");
     expect(d.reviewer_max_iterations).toBe(1);
-  }, 30000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   // 2: batch 1 complete, batch 2 incomplete -> invoke-swarm emits batch 2 ONLY.
   // This is the bug's core: the old engine re-emitted batch 1 forever; the fix
@@ -342,7 +349,7 @@ describe("t201 autonomous swarm advances through every Bolt batch (issue headlin
     const d = runNext(proj);
     expect(d.kind).toBe("invoke-swarm");
     expect(d.units).toEqual(["api"]);
-  }, 30000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   // 3: every batch converged -> NO invoke-swarm. The engine emits the stage's
   // settle directive: a run-stage on the LAST unit carrying the stage's real gate
@@ -364,7 +371,7 @@ describe("t201 autonomous swarm advances through every Bolt batch (issue headlin
     expect(d.review_artifact).toBeUndefined();
     expect(d.review_class).toBeUndefined();
     expect(d.reviewer_max_iterations).toBeUndefined();
-  }, 30000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("3b: settled shape survives the load-steering continue round trip", () => {
     const proj = seedProject();
@@ -404,7 +411,7 @@ describe("t201 autonomous swarm advances through every Bolt batch (issue headlin
     expect(directive.reviewer_max_iterations).toBeUndefined();
     expect(directive.protocol_modules).toEqual(["construction", "swarm", "learnings"]);
     expect(directive.swarm_settled).toBe(true);
-  }, 30000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   // 4: a batch with a PARTIAL pass -> the engine re-fans only that batch's
   // still-owed units. A batch [a, b] with only `a` converged re-emits [b]; a
@@ -416,7 +423,7 @@ describe("t201 autonomous swarm advances through every Bolt batch (issue headlin
     const d = runNext(proj);
     expect(d.kind).toBe("invoke-swarm");
     expect(d.units).toEqual(["b"]);
-  }, 30000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("4b: settled autonomous swarm trusts finalize-time per-unit reviews", () => {
     const proj = seedProject();
@@ -431,7 +438,7 @@ describe("t201 autonomous swarm advances through every Bolt batch (issue headlin
       AIDLC_SKIP_SOURCE_FRESHNESS: "1",
     });
     expect(accepted.kind).toBe("done");
-  }, 30000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("4c: modern convergence without SWARM_SOURCE_MERGED does not advance", () => {
     const proj = seedProject();
@@ -442,7 +449,7 @@ describe("t201 autonomous swarm advances through every Bolt batch (issue headlin
     const d = runNext(proj);
     expect(d.kind).toBe("invoke-swarm");
     expect(d.units).toEqual(["auth"]);
-  }, 30000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("4d: incomplete modern and malformed bypass rows fail closed", () => {
     for (const malformedSource of ["fingerprint-only", "bad-bypass"] as const) {
@@ -453,7 +460,7 @@ describe("t201 autonomous swarm advances through every Bolt batch (issue headlin
       expect(d.kind).toBe("invoke-swarm");
       expect(d.units).toEqual(["auth"]);
     }
-  }, 30000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("4e: an older legacy or bypass row cannot override newer bound convergence", () => {
     for (const older of ["legacy", "bypass"] as const) {
@@ -472,7 +479,7 @@ describe("t201 autonomous swarm advances through every Bolt batch (issue headlin
       expect(d.kind).toBe("invoke-swarm");
       expect(d.units).toEqual(["auth"]);
     }
-  }, 30000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test.skipIf(process.platform === "win32")(
     "4f: an unreadable newest shard fails routing closed",
@@ -509,7 +516,7 @@ describe("t201 autonomous swarm advances through every Bolt batch (issue headlin
         chmodSync(newest, 0o600);
       }
     },
-    30000,
+    NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS,
   );
 });
 
@@ -531,7 +538,7 @@ describe("t201 converged-set freshness floor (stage re-run replay guard)", () =>
     const d = runNext(proj);
     expect(d.kind).toBe("invoke-swarm");
     expect(d.units).toEqual(["auth"]);
-  }, 30000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   // 6: rows AFTER the floor, stamped with the CURRENT attempt's floor, are the
   // current run's coverage - the normal flow. Also proves earlier-batch rows
@@ -545,7 +552,7 @@ describe("t201 converged-set freshness floor (stage re-run replay guard)", () =>
     const d = runNext(proj);
     expect(d.kind).toBe("invoke-swarm");
     expect(d.units).toEqual(["api"]);
-  }, 30000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   // 7: a --single stage-runner's STAGE_STARTED carries the synthetic
   // `Workflow: single-stage:<slug>` tag and must NOT move the floor - it
@@ -560,7 +567,7 @@ describe("t201 converged-set freshness floor (stage re-run replay guard)", () =>
     // every batch converged -> settle directive, not a re-fan.
     expect(d.kind).toBe("run-stage");
     expect(d.gate).toBe(true);
-  }, 30000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   // 8: a STAGE_STARTED for a DIFFERENT slug is not this stage's floor.
   test("8: another stage's STAGE_STARTED does not move the floor", () => {
@@ -571,7 +578,7 @@ describe("t201 converged-set freshness floor (stage re-run replay guard)", () =>
     const d = runNext(proj);
     expect(d.kind).toBe("run-stage");
     expect(d.gate).toBe(true);
-  }, 30000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   // 9: no qualifying STAGE_STARTED at all -> the exact sentinel binds rows to
   // that fixture/recovery attempt.
@@ -582,7 +589,7 @@ describe("t201 converged-set freshness floor (stage re-run replay guard)", () =>
     const d = runNext(proj);
     expect(d.kind).toBe("run-stage");
     expect(d.gate).toBe(true);
-  }, 30000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 });
 
 describe("t201 converged-row attempt identity (Stage + Run floor stamp)", () => {
@@ -604,7 +611,7 @@ describe("t201 converged-row attempt identity (Stage + Run floor stamp)", () => 
     const d = runNext(proj);
     expect(d.kind).toBe("invoke-swarm");
     expect(d.units).toEqual(["auth"]);
-  }, 30000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("10b: a same-second row carrying the prior attempt ordinal is rejected", () => {
     const proj = seedProject();
@@ -618,7 +625,7 @@ describe("t201 converged-row attempt identity (Stage + Run floor stamp)", () => 
     const d = runNext(proj);
     expect(d.kind).toBe("invoke-swarm");
     expect(d.units).toEqual(["auth"]);
-  }, 30000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("10c: cross-shard same-second boundaries do not revive stale convergence", () => {
     const proj = seedProject();
@@ -666,7 +673,7 @@ describe("t201 converged-row attempt identity (Stage + Run floor stamp)", () => 
     const d = runNext(proj);
     expect(d.kind).toBe("invoke-swarm");
     expect(d.units).toEqual(["auth"]);
-  }, 30000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   // 11: rows naming ANOTHER stage never count, even when this stage uses the
   // no-boundary sentinel.
@@ -677,7 +684,7 @@ describe("t201 converged-row attempt identity (Stage + Run floor stamp)", () => 
     const d = runNext(proj);
     expect(d.kind).toBe("invoke-swarm");
     expect(d.units).toEqual(["auth"]);
-  }, 30000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   // 12: pre-2.5.0 rows without the stamp fail CLOSED - the affected units
   // re-fan (finalize's re-verify makes the re-run safe), never silently count.
@@ -689,5 +696,5 @@ describe("t201 converged-row attempt identity (Stage + Run floor stamp)", () => 
     const d = runNext(proj);
     expect(d.kind).toBe("invoke-swarm");
     expect(d.units).toEqual(["auth"]);
-  }, 30000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 });

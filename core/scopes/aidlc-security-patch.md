@@ -8,11 +8,14 @@ keywords:
   - patch
 description: CVE response
 skeleton: off
+existing_code: true
 runner: true
-guard_policy: strict
+guard_policy: off
 sensors: on
 learnings: on
 summary_confirmation: on
+plan_approval: on
+collaborators: off
 ---
 
 # security-patch scope
@@ -24,7 +27,7 @@ patch must do (requirements-analysis), capture the security constraint
 ship through the deployment stages so the patch actually reaches
 production.
 
-Guard Policy defaults to strict: a patch whose inputs move after approval is approved again before it ships, and no fences are lowered.
+Guard Policy defaults to off: a patch whose inputs move after approval is recorded and announced rather than approved again; plan approval, review freeze, state transition, and reviewer read scope are lowered for undirected work. Human presence stays up.
 
 ## Why these stages, why skip those
 

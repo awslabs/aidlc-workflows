@@ -1,7 +1,12 @@
 // covers: subcommand:aidlc-orchestrate:next
 // The installed native dispatcher must keep the remedy reachable when the
 // durable stage has advanced but the preceding directive has not.
-import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { afterAll, beforeAll, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
   appendFileSync,
@@ -12,6 +17,7 @@ import {
   readFileSync,
   readdirSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { dirname, join, resolve } from "node:path";
@@ -37,6 +43,8 @@ import {
 } from "../harness/fixtures.ts";
 import { testGuardEnvironment } from "../harness/runner-profile.ts";
 
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
 const scratchRoot = process.env.AIDLC_NATIVE_RECOVERY_SCRATCH ??
   (process.platform === "win32"
     ? join(process.env.SystemRoot || "C:\\Windows", "Temp")
@@ -56,9 +64,12 @@ beforeAll(() => {
   const result = spawnSync(process.execPath, [
     "build", join(runtimeRoot, "claude", ".claude", "tools", "aidlc.ts"),
     "--compile", "--outfile", binary,
-  ], { encoding: "utf-8", timeout: 120_000 });
+  ], { encoding: "utf-8", timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS) });
   expect(result.status, result.stdout + result.stderr).toBe(0);
-}, 120_000);
+  // A compiled engine runs only the hooks and adapters packaged beside it, so
+  // lay the runtime out the way an install does.
+  symlinkSync(runtimeRoot, join(dirname(binary), "runtime"), "junction");
+}, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 afterAll(() => {
   if (scratch && !process.env.AIDLC_NATIVE_RECOVERY_KEEP) {
@@ -93,8 +104,9 @@ function fixture(policy: "relaxed" | "strict" | "off" = "relaxed"): string {
     // The retired "Change Control" field name is deliberate: the engine still
     // reads it as the Guard Policy alias for one release, and this fixture is
     // where that alias stays exercised.
+    // poc ships with plan approval off; these cases are about asking, so it is on.
     .replace("- **Change Control**: strict (from scope feature)",
-      `- **Change Control**: ${policy} (from scope poc)`)
+      `- **Change Control**: ${policy} (from scope poc)\n- **Plan Approval**: on (set by you)`)
     .replace(
     /^- \*\*Current Stage\*\*:.*$/m,
     "- **Current Stage**: requirements-analysis",
@@ -130,7 +142,7 @@ function fixture(policy: "relaxed" | "strict" | "off" = "relaxed"): string {
     ["-c", "user.name=Test", "-c", "user.email=test@example.com", "add", "-A"],
     ["-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-qm", "fixture"],
   ]) {
-    const result = spawnSync("git", args, { cwd: project, encoding: "utf-8" });
+    const result = spawnSync("git", args, { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), cwd: project, encoding: "utf-8" });
     expect(result.status, result.stderr).toBe(0);
   }
   return project;
@@ -141,7 +153,7 @@ function run(project: string, args: string[], payload?: object, legacy = false) 
     cwd: project,
     input: payload && !legacy ? JSON.stringify(payload) : "",
     encoding: "utf-8",
-    timeout: 30_000,
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     env: {
       ...testGuardEnvironment(process.env, "production"),
       AIDLC_UNATTENDED: "0",
@@ -250,12 +262,16 @@ function writePlanArtifacts(project: string): string {
   return questions;
 }
 
+// `config get guard.plan-approval` names the Plan Approval switch; the check on
+// a plan edited after approval shows in status as "plan re-approval".
 function assertFence(project: string, policy: "strict" | "relaxed" | "off") {
-  const setting = run(project, ["engine", "config", "get", "guard.plan-approval"]);
-  expect(setting.code, setting.stderr).toBe(0);
-  expect(setting.stdout.trim()).toBe(policy === "strict"
-    ? "on (default)"
-    : `off (guard policy ${policy} (from scope poc))`);
+  const status = run(project, ["--status"]);
+  expect(status.code, status.stderr).toBe(0);
+  // The policy that lowers the check is on its own line; status names only
+  // checks someone switched off, so plan re-approval is never listed here.
+  expect(status.stdout).toMatch(new RegExp(`^Guard Policy:\\s+${policy} \\(from scope poc\\)$`, "m"));
+  const checksOff = /^Checks off:\s+(.*)$/m.exec(status.stdout)?.[1] ?? "";
+  expect(checksOff).not.toContain("plan re-approval");
 }
 
 describe("native Kiro IDE recovery from a stale upstream directive", () => {
@@ -267,29 +283,30 @@ describe("native Kiro IDE recovery from a stale upstream directive", () => {
       assertFence(project, policy);
       const blocked = sourceWriteOf(project);
       expect(blocked.code, blocked.stderr).toBe(2);
-      expect(JSON.parse(blocked.stderr).code).toBe("CODE_GENERATION_EXECUTION_INELIGIBLE");
+      expect(blocked.stderr).toContain(" The plan-approval setting is unchanged.");
       expect(blocked.stderr).toContain(reason);
       expect(blocked.stdout).toBe("");
       assertFence(project, policy);
       expect(stoodAsideRows(project)).toBe(0);
       expect(auditRows(project)).not.toContain("**Event**: PLAN_APPROVAL_RECORDED");
     };
-    assertBlocked("code-generation-plan.md is missing or empty");
+    assertBlocked("code-generation-plan.md is missing or empty.");
     writePlanArtifacts(project);
-    assertBlocked("Plan Approval");
-  }, 120_000);
+    assertBlocked("the plan is not approved yet; run next to ask the person to approve it.");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("under a strict policy the same flow keeps source writes refused until the plan is approved", () => {
     const project = fixture("strict");
     publishAuthority(project);
     // Nothing has lowered the fence (no policy word, no per-run switch), so the
-    // ordering invariant holds: the write is refused, the refusal names the one
-    // switch that would lower it, and no stand-aside is recorded.
+    // ordering invariant holds: the write is refused and no stand-aside is
+    // recorded. No plan was approved yet, and a lowered fence never supplies a
+    // first approval, so the refusal names no switch.
     const blocked = sourceWriteOf(project);
     expect(blocked.code, blocked.stdout).toBe(2);
-    expect(blocked.stderr).toContain(LOWER_FENCE_SWITCH);
+    expect(blocked.stderr).not.toContain(LOWER_FENCE_SWITCH);
     expect(stoodAsideRows(project)).toBe(0);
-  }, 120_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("an argument-less shell invokes native recovery and republishes authority", () => {
     const project = fixture();
@@ -300,7 +317,7 @@ describe("native Kiro IDE recovery from a stale upstream directive", () => {
     expect(recovered.code, recovered.stderr).toBe(2);
     expect(recovered.stderr).toContain("recovery issued a fresh directive");
     assertPublished(project);
-  }, 120_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test.each(["strict", "relaxed", "off"] as const)("native recovery under %s admits generation only after the human response", (policy) => {
     const project = fixture(policy);
@@ -340,9 +357,11 @@ describe("native Kiro IDE recovery from a stale upstream directive", () => {
     const beforeApproval = sourceWrite();
     expect(beforeApproval.code, beforeApproval.stdout).toBe(2);
     if (policy === "strict") {
-      expect(beforeApproval.stderr).toContain(LOWER_FENCE_SWITCH);
+      // Before the first approval the switch would not help (the relaxed arm
+      // below shows the lowered fence still refuses), so it is not offered.
+      expect(beforeApproval.stderr).not.toContain(LOWER_FENCE_SWITCH);
     } else {
-      expect(JSON.parse(beforeApproval.stderr).code).toBe("CODE_GENERATION_EXECUTION_INELIGIBLE");
+      expect(beforeApproval.stderr).toContain(" The plan-approval setting is unchanged.");
     }
     assertFence(project, policy);
     expect(stoodAsideRows(project)).toBe(0);
@@ -371,17 +390,19 @@ describe("native Kiro IDE recovery from a stale upstream directive", () => {
       "\nAlso handle repeated punctuation.\n");
     const continuation = sourceWrite();
     expect(continuation.code, continuation.stderr).toBe(policy === "strict" ? 2 : 0);
-    if (policy !== "strict") {
+    if (policy === "relaxed") {
       expect(continuation.stdout).toContain(
-        `Continuing past the plan-approval check because it is off for this piece of work (guard policy ${policy} (from scope poc))`,
+        "Continuing past the plan-approval check because it is off for this piece of work (guard policy relaxed (from scope poc))",
       );
+    } else if (policy === "off") {
+      expect(continuation.stdout).not.toContain("Continuing past");
     }
     expect(stoodAsideRows(project)).toBe(policy === "strict" ? 0 : 1);
     expect(readFileSync(questions, "utf-8")).toBe(approvedQuestions);
     expect(readAuditShardEvents(project)
       .filter((entry) => entry.event === "PLAN_APPROVAL_RECORDED")).toEqual(approvalRows);
     assertFence(project, policy);
-  }, 120_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("a recorded recovery choice clears an interrupted native planning write", () => {
     const project = fixture();
@@ -407,5 +428,5 @@ describe("native Kiro IDE recovery from a stale upstream directive", () => {
     expect(auditRows(project)).not.toContain("PLAN_APPROVAL_RECORDED");
     const planning = legacy("plan-approval-guard", { toolName: "fs_write", toolArgs: {} });
     expect(planning.code, planning.stderr).toBe(0);
-  }, 120_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });

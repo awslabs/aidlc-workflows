@@ -94,10 +94,13 @@
 // drift sweep with no `.sh` ancestor, in the same grepHits + carve-out idiom as
 // checks 6/7. The suite now has 8 test() cases.
 
-import { describe, expect, test } from "bun:test";
+import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS } from "../harness/test-budget.ts";
+import { setDefaultTimeout, describe, expect, test } from "bun:test";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { REPO_ROOT } from "../harness/fixtures.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 // import.meta.dir is tests/integration/; TESTS_DIR is its parent (tests/).
 const TESTS_DIR = join(import.meta.dir, "..");
@@ -457,7 +460,7 @@ describe("t55 — test-suite metadata drift (migrated from t55-test-suite-drift.
     }
 
     expect(pathDrift).toEqual([]);
-  }, 30_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("6b: references to the DocumentKB skill require its authored source directory", () => {
     const roots = [

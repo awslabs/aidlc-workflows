@@ -2,26 +2,23 @@ import { readFileSync } from "node:fs";
 import { basename } from "node:path";
 import { claudeDependenciesOf, codeView } from "../gen-coverage-registry.ts";
 import type { E2eResource, E2eTask } from "./e2e-scheduler.ts";
+import { readSummaryRows } from "./test-sharding.ts";
 
 export interface PlannedE2eTask extends E2eTask {
   requiresClaude: boolean;
   tui: boolean;
   liveGates: string[];
+  productionGuards?: boolean;
 }
 
 /** Historical runner summaries are scheduling hints, never a test selection list. */
 export function readE2eTimings(text: string): Record<string, number> {
   const weights: Record<string, number> = {};
-  for (const line of text.split(/\r?\n/)) {
-    const match = /^\s*(\S+)\s+(?:PASS|FAIL|SKIP)\s+\d+\s+\d+\s+(\S+)s\s*$/.exec(line);
-    if (!match) continue;
-    const seconds = Number(match[2]);
+  for (const { name, seconds, duration } of readSummaryRows(text)) {
     if (!Number.isFinite(seconds) || seconds < 0) {
-      throw new Error(`--e2e-timings has an invalid duration for ${match[1]}: ${match[2]}`);
+      throw new Error(`--e2e-timings has an invalid duration for ${name}: ${duration}`);
     }
-    if (Number.isFinite(seconds) && seconds > 0) {
-      weights[`${match[1]}.test.ts`] = seconds;
-    }
+    if (seconds > 0) weights[`${name}.test.ts`] = seconds;
   }
   if (Object.keys(weights).length === 0) {
     throw new Error("--e2e-timings requires a runner summary containing positive per-file durations");
@@ -64,6 +61,7 @@ export function planE2eFile(
     // initialization is not yet verified; keep other harness lanes available.
     ...(platform === "win32" && codex ? { serialGroup: "windows-codex" } : {}),
     requiresClaude,
+    ...(/\bprocess\.env\.AIDLC_TEST_GUARD_PROFILE\s*===\s*"production"/.test(code) ? { productionGuards: true } : {}),
     tui,
     liveGates: [...new Set(code.match(/\bAIDLC_[A-Z_]+_LIVE\b/g) ?? [])].sort(),
   };

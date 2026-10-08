@@ -2,27 +2,22 @@
 //
 // t-tui-preflight.serial.test.ts — the portable TUI CAPABILITY GATE (§6.2).
 //
-// The runner includes this prerequisite before selected TUI journeys. Legacy
-// Windows ownership/CIM coverage lives in integration/t-tui-node-pty-compat.test.ts.
-// This case proves the terminal rendering SUBSTRATE actually
+// The runner includes this prerequisite before selected TUI journeys. This case
+// proves the terminal rendering SUBSTRATE actually
 // WORKS, with the t19 discipline of distinguishing ABSENT (skip-with-reason)
 // from PRESENT-BUT-BROKEN (fail loud). It spends NO tokens and never touches
 // claude — it drives a known-answer target that fragments a UTF-8 + ANSI payload
 // byte by byte and asserts the captured grid carries every intended glyph.
 //
 // Why a probe, not a bare `command -v` (§6.2): presence != working.
-//   - On Windows `node -e "require('node-pty')"` SUCCEEDS even when the driver
-//     is run under bun — and that bun `_socket.write` wedge (microsoft/node-pty
-//     #748) is exactly the misdiagnosis that cost the spike days. So we drive a
-//     real round-trip, not a resolvability check.
+//   - A runtime can be installed while its PTY is unable to complete input and
+//     capture. We drive a real round-trip, not a resolvability check.
 //   - tmux can be installed yet `capture-pane` returns nothing useful; an
 //     `@xterm/headless` import can resolve yet fail to reconstruct a grid. A
 //     `command -v` sees none of this.
 //
-// SPAWN, not import (D-TUI-7): this `.test.ts` runs under bun, so it must never
-// load node-pty in-process (the #748 in-process wedge). It SPAWNS tui-drive.ts
-// as a subprocess using the selected runtime; the legacy backend pins Node. Same
-// spawn-not-import pattern t17/t27 use for the CLI tools.
+// The test spawns tui-drive.ts as a subprocess using the selected runtime, the
+// same spawn-not-import pattern t17/t27 use for the CLI tools.
 //
 // The `covers:` header above claims the tui-drive instrument-calibration unit
 // this preflight doubles as (§6.2/§7) — a harness-instrument claim, the same
@@ -37,27 +32,45 @@
 // guarantee weaker than the claim" rule they stay DEFERRED-tui (honestly listed),
 // until a test asserts a specific branch's painted output.
 
-import { describe, expect, test } from "bun:test";
+import { liveCaseTimeoutMs, LIVE_LONG_OPERATION_TIMEOUT_MS, remainingOperationTimeoutMs, remainingCleanupTimeoutMs, fileCleanupReserveMs, NATIVE_TERMINAL_CLEANUP_TIMEOUT_MS } from "../harness/test-budget.ts";
+import { beforeEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { mkdtempSync } from "node:fs";
-import * as os from "node:os";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { resolveWinNode } from "../harness/tui-drive.ts";
 import { resolveTuiRuntime, tuiUnavailableReason } from "../harness/tui-runtime.ts";
 import { cleanupTuiProjectAfterKill } from "../harness/tui-fixtures.ts";
 
+const TIMEOUT_S = Number(process.env.AIDLC_TEST_TIMEOUT);
+const TEST_TIMEOUT_MS = Number.isSafeInteger(TIMEOUT_S) && TIMEOUT_S > 0
+  ? TIMEOUT_S * 1000
+  : liveCaseTimeoutMs(LIVE_LONG_OPERATION_TIMEOUT_MS);
+let caseDeadlineMs: number;
+beforeEach(() => { caseDeadlineMs = Date.now() + TEST_TIMEOUT_MS; });
+function remainingWorkMs(): number {
+  return remainingOperationTimeoutMs(TEST_TIMEOUT_MS, {
+    deadlineMs: caseDeadlineMs,
+    reserveMs: fileCleanupReserveMs(TEST_TIMEOUT_MS),
+    phase: "E2E terminal work",
+  })!;
+}
+function remainingCleanupMs(): number {
+  return remainingCleanupTimeoutMs(NATIVE_TERMINAL_CLEANUP_TIMEOUT_MS, {
+    deadlineMs: caseDeadlineMs,
+    phase: "E2E terminal cleanup",
+  });
+}
+
+
 const DRIVER = join(import.meta.dir, "..", "harness", "tui-drive.ts");
-const IS_WIN = os.platform() === "win32";
 const RUNTIME = resolveTuiRuntime(DRIVER);
-const WIN_NODE = IS_WIN && RUNTIME.backend === "node-pty" ? resolveWinNode() : null;
 
 // The known-answer target — no claude, no tokens. It writes every byte
 // separately so Windows must preserve UTF-8 across the exact fragmented-output
 // boundary that previously produced CP437 mojibake. On Windows it also refuses
 // to emit the sentinel unless the real child received TERM=xterm-256color; this
-// catches node-pty's Windows-only failure to propagate its `name` option into
-// the environment. SGR wraps the line to prove xterm/tmux still parse ANSI while
+// catches a Windows PTY failure to propagate TERM into the environment. SGR
+// wraps the line to prove xterm/tmux still parse ANSI while
 // plain capture returns stable text.
 const SENTINEL = "AIDLC_TUI_PREFLIGHT_OK";
 const GLYPH_SENTINEL =
@@ -75,13 +88,11 @@ const TARGET_SCRIPT = [
   "  offset++;",
   "  if (offset === bytes.length) clearInterval(timer);",
   "}, 2);",
-  "setTimeout(() => process.exit(0), 10000);",
+  // The owner retires this target after inspecting the grid. A natural exit
+  // must not erase the terminal before a loaded runner can capture it.
+  "setInterval(() => {}, 1000);",
 ].join("");
-const TARGET_CMD: string[] = [
-  RUNTIME.backend === "node-pty" ? (WIN_NODE ?? "node") : process.execPath,
-  "-e",
-  TARGET_SCRIPT,
-];
+const TARGET_CMD: string[] = [process.execPath, "-e", TARGET_SCRIPT];
 
 interface Run {
   rc: number;
@@ -91,7 +102,7 @@ interface Run {
 
 function drive(args: string[]): Run {
   const res = spawnSync(RUNTIME.bin, [...RUNTIME.prefix, ...args], {
-    encoding: "utf-8", env: process.env, timeout: 30_000,
+    timeout: args[0] === "kill" ? remainingCleanupMs() : remainingWorkMs(), encoding: "utf-8", env: process.env,
   });
   return { rc: res.status ?? -1, stdout: res.stdout ?? "", stderr: res.stderr ?? "" };
 }
@@ -136,8 +147,8 @@ describe("t-tui-preflight (terminal substrate capability gate)", () => {
 
         // 2) wait for the sentinel to paint on the reconstructed grid. A timeout
         // here is the BROKEN signal: the substrate resolved (we are past the
-        // ABSENT skip) but capture returned nothing useful — e.g. node-pty present
-        // but wedged under bun (#748), or tmux capture-pane returning empty.
+        // ABSENT skip) but capture returned nothing useful, for example tmux
+        // capture-pane returning empty.
         const waited = drive([
           "wait",
           "--session",
@@ -145,7 +156,7 @@ describe("t-tui-preflight (terminal substrate capability gate)", () => {
           "--pattern",
           SENTINEL,
           "--timeout-ms",
-          "15000",
+          String(remainingWorkMs()),
           "--stable-ms",
           "300",
         ]);
@@ -190,6 +201,6 @@ describe("t-tui-preflight (terminal substrate capability gate)", () => {
       }
       if (runError !== undefined) throw runError;
     },
-    20_000,
+    TEST_TIMEOUT_MS,
   );
 });

@@ -24,7 +24,12 @@ import {
   seededRecordDir, seededStateFile, setupIntegrationProject,
 } from "../harness/fixtures.ts";
 
-import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS, NATIVE_PROCESS_CLEANUP_TIMEOUT_MS } from "../harness/test-budget.ts";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_PROCESS_CLEANUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
 
 // Every case builds approved Git fixtures and runs multiple real CLI commands.
 // Use one buffered fixture profile instead of shorter per-case overrides.
@@ -39,13 +44,14 @@ afterEach(() => {
 }, NATIVE_PROCESS_CLEANUP_TIMEOUT_MS);
 
 function git(pd: string, args: string[]): string {
-  const result = Bun.spawnSync(["git", ...args], { cwd: pd, stdout: "pipe", stderr: "pipe" });
+  const result = Bun.spawnSync(["git", ...args], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), cwd: pd, stdout: "pipe", stderr: "pipe" });
   expect(result.exitCode, result.stderr.toString()).toBe(0);
   return result.stdout.toString().trim();
 }
 
 function tool(pd: string, path: string, args: string[], input?: unknown) {
   const result = Bun.spawnSync([process.execPath, join(AIDLC_SRC, path), ...args], {
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     cwd: pd, env: { ...process.env, CLAUDE_PROJECT_DIR: pd, AIDLC_PROJECT_DIR: pd },
     stdout: "pipe", stderr: "pipe",
     ...(input === undefined ? {} : { stdin: Buffer.from(JSON.stringify(input)) }),
@@ -284,6 +290,7 @@ describe("t340 grouped Plan Approval lifecycle and guard composition", () => {
       const result = Bun.spawnSync([
         process.execPath, join(pd, ".claude/tools/aidlc.ts"), "engine", "swarm", ...args, "--project-dir", pd,
       ], {
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
         cwd: pd, env: { ...process.env, CLAUDE_PROJECT_DIR: pd, AIDLC_PROJECT_DIR: pd },
         stdout: "pipe", stderr: "pipe",
       });
@@ -413,7 +420,7 @@ describe("t340 grouped Plan Approval lifecycle and guard composition", () => {
       }
     }
     expect(gates(pd)).toBe(0); // PreToolUse never grants checkpoint authority.
-    expect(() => approveSwarmCheckpoint(pd, 1, UNITS)).toThrow("exact");
+    expect(() => approveSwarmCheckpoint(pd, 1, UNITS)).toThrow("requires the person's reply to this question");
     expect(tool(pd, "tools/aidlc-bolt.ts", ["swarm-checkpoint", "--action", "ask", "--batch", "1", "--units", UNITS.join(","), "--session", SESSION]).code).toBe(0);
     const human = tool(pd, "tools/aidlc.ts", ["engine", "hook", "record-human-turn"], {
       hook_event_name: "UserPromptSubmit", session_id: SESSION, prompt: "Approve",
@@ -516,14 +523,13 @@ describe("t340 grouped Plan Approval lifecycle and guard composition", () => {
     },
   );
 
-  test.each(["plan", "source", "attempt", "workflow", "dag", "set"] as const)(
+  test.each(["plan", "attempt", "workflow", "dag", "set"] as const)(
     "%s changes still invalidate the protected group", (kind) => {
       const pd = fixture();
       if (kind === "plan") {
         const file = join(codeGenerationRecordDir(pd, "alpha"), "code-generation-plan.md");
         writeFileSync(file, readFileSync(file, "utf-8").replace("- [ ] Implement", "- [ ] Implement additional behavior"));
       }
-      if (kind === "source") writeFileSync(join(pd, "src", "alpha.ts"), "export const alpha = 9;\n");
       if (kind === "attempt") appendAuditEntry("STAGE_STARTED", { Stage: STAGE, Unit: "alpha" }, pd);
       if (kind === "workflow") appendAuditEntry("WORKFLOW_STARTED", { Scope: "feature", Reason: "new workflow" }, pd);
       if (kind === "dag") seedBoltDagBatches(pd, [["alpha"], ["beta"]]);
@@ -531,6 +537,14 @@ describe("t340 grouped Plan Approval lifecycle and guard composition", () => {
       expect(evaluateCodeGenerationApproval(pd, { unit: "beta" }).ok).toBe(false);
     },
   );
+
+  // Approval is about the plans. Other code moving afterwards (another Unit
+  // landing, a pull) leaves every Unit in the group approved.
+  test("a source change alone leaves the protected group approved", () => {
+    const pd = fixture();
+    writeFileSync(join(pd, "src", "alpha.ts"), "export const alpha = 9;\n");
+    for (const unit of UNITS) expect(evaluateCodeGenerationApproval(pd, { unit }).ok).toBe(true);
+  });
 
   test("legacy convergence rows cannot grant a native checkpoint approval", () => {
     const pd = fixture();

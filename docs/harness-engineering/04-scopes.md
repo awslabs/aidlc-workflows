@@ -35,26 +35,32 @@ The scope frontmatter fields are:
 | `name` | Yes | The scope name. Core files use `aidlc-<name>.md`; plugin scope files use a stem equal to `name`. |
 | `depth` | Yes | The default detail level — `Minimal`, `Standard`, or `Comprehensive`. |
 | `testStrategy` | No | Overrides test volume independent of depth. Defaults to matching `depth`. |
-| `review_cap` | No | Maximum review class under this scope: `adversarial`, `advisory`, or `none`. Absence means no scope-level lowering. A cap can lower but never raise a stage's `review_class`; autonomous swarm reviews retain the stage's declared class. |
+| `review_cap` | No | Maximum review class under this scope: `adversarial`, `advisory`, or `none`. Absence means no scope-level lowering. A cap can lower but never raise a stage's `review_class`; a per-work `--review` level replaces the cap for that piece of work; autonomous swarm reviews retain the stage's declared class. |
 | `keywords` | No | Natural-language triggers for `/aidlc <freeform text>` auto-detection. Flat string lists may use block (`- item`) or flow (`[item, item]`) form; an empty list opts out. |
 | `description` | No | The one-liner rendered in `/aidlc --help`. (The compiled scope-table in SKILL.md shows only Scope / Depth / TestStrategy / EXECUTE / Total, leaving the description out.) |
 | `skeleton` | No | `on` opts the scope into the walking-skeleton ceremony when practices are scope-dependent; `off` or absence opts out. |
+| `existing_code` | No | `true` marks a scope that changes code that already exists, so a new project's custom plan runs on another scope when one fits; `false` or absence means the scope suits new work too. Any other value is rejected. |
 | `runner` | No | `true` includes the scope in the default generated scope-runner set. |
 | `freeform_default` | No | `true` nominates this scope as the selection-aware fallback when the preferred core default (`classic`) is not enabled. |
-| `guard_policy` | No | The scope's Guard Policy default, `strict`, `relaxed`, or `off`: how far the guards stand aside for work on this scope. It decides what happens when an input changes after a human approved or confirmed something (strict reopens the approval; relaxed and off record the change once, tell the human in one line, and continue) and which authority fences hold (strict lowers none; relaxed lowers `plan-approval` and `review-freeze`; off lowers those two plus `state-transition` and `reviewer-scope`; `human-presence` is never lowered by the word). Absence means strict. The shipped defaults are strict on `enterprise`, `security-patch`, and `infra`, relaxed on the other eight; no shipped scope declares off. A memory layer's `## Guard Policy` section (`Mode: strict`) wins over every scope default and every per-intent flip; see [Guard Policy](../guide/13-customization.md#guard-policy). `change_control` is the retired spelling, read for one release; a file naming both keys with different values is rejected. |
+| `guard_policy` | No | The scope's Guard Policy default, `strict`, `relaxed`, or `off`: how far the guards stand aside for work on this scope. It decides what happens when an input changes after a human approved or confirmed something (strict reopens the approval; relaxed and off record the change once, tell the human in one line, and continue; workspace source that moved after a plan was approved is recorded and continued under every value) and which authority fences hold (strict lowers none; relaxed lowers `plan-approval` and `review-freeze`; off lowers those two plus `state-transition` and `reviewer-scope`; `human-presence` is never lowered by the word). Absence means off, so a plugin or composed scope that wants strict declares it. The shipped defaults are strict on `enterprise` and off on the rest. A memory layer's `## Guard Policy` section (`Mode: strict`) wins over every scope default and every per-intent flip, and its `Mode: relaxed` or `Mode: off` replaces a scope default; see [Guard Policy](../guide/13-customization.md#guard-policy). `change_control` is the retired spelling, read for one release; a file naming both keys with different values is rejected. |
 | `sensors` | No | `on` or `off`; controls sensor execution and sensor gate checks. Absence means on. Per-intent override: `/aidlc --sensors on\|off`; global kill switch: `AIDLC_DISABLE_SENSORS=1`. |
 | `learnings` | No | `on` or `off`; controls the stage learnings read/write ritual. Absence means on. Per-intent override: `/aidlc --learnings on\|off`; global kill switch: `AIDLC_DISABLE_LEARNINGS=1`. |
 | `summary_confirmation` | No | `on` or `off`; controls the separate pre-output summary confirmation, not stage approval. Absence means on. Per-intent override: `/aidlc --summary-confirmation on\|off`; global kill switch: `AIDLC_DISABLE_SUMMARY_CONFIRMATION=1`. This scope scalar is distinct from a stage's `required` / `if-present` declaration. |
+| `plan_approval` | No | `on` or `off`; whether the person is asked to approve each code plan before Code Generation builds it. `off` builds the plan as written after one line naming it and records `PLAN_APPROVAL_SKIPPED`; the line asks the person whether they want to look at the plan first. Absence means on. The shipped defaults are off on `express` and `poc` and on elsewhere. Per-intent override: `/aidlc --plan-approval on\|off`, where only the person turns it off; global kill switch: `AIDLC_DISABLE_PLAN_APPROVAL_GUARD=1`. A memory `## Guard Policy` section holding `Mode: strict` keeps it on over this key, and the kill switch wins over that lock; see [Plan approval](../guide/13-customization.md#plan-approval). |
+| `collaborators` | No | `on` or `off`; whether a stage runs with its support agents (collaborators) or lead-only. `off` makes the engine hand every stage an empty effective `support_agents`, so on every topology the lead runs alone — no mutually-blind subagent spokes, no mob round, and a pipeline's lead becomes its sole and final link (it authors the artifacts the chain would otherwise split). The stage's authored `support_agents` list is untouched, so flipping back on re-enables the full ensemble. The reviewer mechanism is independent and unaffected. Absence means on. The shipped defaults are on on `enterprise` and off on the other ten, so a first run is lean and a team re-enables collaborators deliberately. Per-intent override: `/aidlc --collaborators on\|off`; global kill switch: `AIDLC_DISABLE_COLLABORATORS=1`. |
 
 The loader rejects duplicate scope `name` values across files and names both
 files in the error. Invalid ceremony values are rejected with the file, key,
 and the two allowed values. Resolution is kill switch (`1`) → valid intent
-line → scope default → on. Every shipped scope declares all three ceremony keys
-explicitly rather than leaning on the default: classic declares sensors and
-learnings on and summary confirmation off, express declares all three off, and
-the other nine declare all three on. Classic's gated flow also caps reviews to
-one advisory pass and disables walking-skeleton ceremony, while explicit autonomy
-keeps the single pre-merge review.
+line → scope default → on. Every shipped scope declares all five ceremony keys
+explicitly rather than leaning on the default: classic declares sensors,
+learnings, and plan approval on and summary confirmation off, bugfix declares
+sensors and plan approval on and learnings and summary confirmation off,
+express declares all four of those off, poc declares plan approval off and the
+other three on, and the other seven declare those four on; `collaborators` is
+on only on `enterprise` and off on every other scope. Classic's gated flow also
+caps reviews to one advisory pass and disables walking-skeleton ceremony, while
+explicit autonomy keeps the single pre-merge review.
 
 Express turns sensors, learnings, and summary confirmation off; override them
 per intent with [`/aidlc --sensors on|off`](../guide/12-cli-commands.md#aidlc-sensors-learnings-summary-confirmation-ceremony-controls),
@@ -85,6 +91,16 @@ runs as a regular Bolt. Absence defaults to off, so composed/runtime-approved
 scopes and plugin scopes do not conjure a skeleton Bolt unless they opt in
 explicitly.
 
+### Scopes for existing code
+
+The optional `existing_code: true` field marks a scope that changes code that
+already exists (`bugfix`, `refactor`, and `security-patch` ship with it). A
+plan the composer tailors for a new project does not run on such a scope when
+a scope meant for new work fits, so new work is not recorded as a fix; and
+creating work on one in a folder that scans as a new project, which drops its
+Reverse Engineering, prints a note that the scope usually targets existing code. Absence means the scope suits new
+work too.
+
 ### Guard Policy default
 
 The optional `guard_policy:` field is the value a new intent on this scope
@@ -108,11 +124,13 @@ deserves. It is not the only control: a human can lower one of the four switchab
 fences for one piece of work with `/aidlc config set guard.<fence> off`, which
 writes the `Guards Off` state line and one `GUARD_DISABLED` audit row. Setting
 `on` can raise a policy-lowered fence, writing `Guards On` and `GUARD_RESTORED`.
+Setting the Guard Policy word clears the line that goes against it: `off` clears `Guards On`, `strict` clears `Guards Off`, and `relaxed` clears neither.
 Human presence is the key holder and has no per-work switch; only
 `AIDLC_SKIP_HUMAN_PRESENCE_GUARD=1` lowers it. Environment kill switches remain
-the machine-wide override. Do not author a scope at `off` to spare people a fence
-they meet occasionally; the per-work switch exists for that, and the next piece
-of work starts from its own scope default.
+the machine-wide override. Declare `off` in a scope only when every piece of work
+on it should run with those four fences lowered, as every shipped scope except
+`enterprise` does. To spare people a fence they meet only occasionally, use the per-work switch
+instead; the next piece of work starts from its own scope default.
 
 `change_control:` is the retired spelling of this key. It is read for one release
 and never written; a scope file that names both keys with the same value is
@@ -130,7 +148,7 @@ scopes:
 
 A stage that names a scope is `EXECUTE` under it; absence is `SKIP`. Packaging *transposes* every stage's `scopes:` list into the compiled EXECUTE/SKIP grid at `<harness-dir>/tools/data/scope-grid.json`. The grid is an ignored generated projection that the runtime reads; you never hand-edit or commit it. The 3 initialization stages name every scope (they always run).
 
-That transpose is the mechanism for *authored* scopes, which is what this chapter is about. A scope produced at runtime by `/aidlc compose` has no stage declaring it, so it cannot be transposed: its durable definition lives in the user's own tree at `aidlc/scopes/<name>.md` and compile projects it into the harness grid. You do not author those, and they are not part of this workflow — see [Where a composed scope is stored](../guide/05-scopes-and-depth.md#where-a-composed-scope-is-stored).
+That transpose is the mechanism for *authored* scopes, which is what this chapter is about. A scope saved at runtime from a composed plan (`scope save`) has no stage declaring it, so it cannot be transposed: its durable definition lives in the user's own tree at `aidlc/scopes/<name>.md` and compile projects it into the harness grid. You do not author those, and they are not part of this workflow; see [Where a saved scope is stored](../guide/05-scopes-and-depth.md#where-a-saved-scope-is-stored). A composed plan the person does not save writes no scope at all: it runs on a stock scope with its own stage changes recorded in that piece of work's state.
 
 The one judgment call worth understanding is the relationship between `depth` and `testStrategy`. Depth controls how much detail each stage's artifacts carry; test strategy controls how many tests get generated. They're independent on purpose. Most shipped scopes leave `testStrategy` off so it inherits from `depth` — `classic` is Standard/Standard and `express` is Minimal/Minimal. `workshop` demonstrates the explicit split with Standard depth and Minimal testing. If your scope wants a split, declare both. For what each level means, see [The 3 Depth Levels](../guide/05-scopes-and-depth.md#the-3-depth-levels) and [The 3 Test Strategy Levels](../guide/05-scopes-and-depth.md#the-3-test-strategy-levels) in the User Guide.
 
@@ -154,7 +172,7 @@ Suppose your team wants a `hotfix` scope — leaner than `bugfix`, for the urgen
 
 ### Steps
 
-1. **Drop `core/scopes/aidlc-hotfix.md`.** Copy `aidlc-bugfix.md` (the closest existing scope) and edit the frontmatter: set `name: hotfix`, pick `depth`, add `keywords` if you want freeform auto-detection (`[hotfix, urgent]`), a `description` for the help text, `skeleton: on|off` for the scope-dependent Construction ceremony default, `freeform_default: true` only if this is the selected install's unique fallback nomination, `testStrategy` only if it should diverge from `depth`, and `review_cap` only if the scope should lower stage reviews. Write a short prose body explaining the intent.
+1. **Drop `core/scopes/aidlc-hotfix.md`.** Copy `aidlc-bugfix.md` (the closest existing scope) and edit the frontmatter: set `name: hotfix`, pick `depth`, add `keywords` if you want freeform auto-detection (`[hotfix, urgent]`), a `description` for the help text, `skeleton: on|off` for the scope-dependent Construction ceremony default, keep `existing_code: true` from `aidlc-bugfix.md`, since a hotfix changes code that already exists, `freeform_default: true` only if this is the selected install's unique fallback nomination, `testStrategy` only if it should diverge from `depth`, and `review_cap` only if the scope should lower stage reviews. Write a short prose body explaining the intent.
    Set `sensors`, `learnings`, and `summary_confirmation` to `off` only for ceremonies the scope should omit; absent keys stay on. Intent overrides and global kill switches use the table above.
 
 2. **Tag the stages that should run under `hotfix`.** In each stage you want `EXECUTE` (under `core/aidlc-common/stages/<phase>/`), add `hotfix` to its frontmatter `scopes:` list. A stage you don't tag is `SKIP` for the scope. The 3 initialization stages must include it (they always run).
@@ -193,7 +211,7 @@ Tuning is a smaller edit, but it lands on the stage, not the scope. Two changes 
 
 - **Flip a stage in or out.** Add or remove the scope name from a stage's `scopes:` list. This is how you'd, say, add `mvp` to `observability-setup`'s `scopes:` because your team always wires monitoring even for a first cut. One tag, then regenerate with `bun scripts/package.ts` and run `--doctor`.
 - **Change a default depth, test strategy, or review ceiling.** Adjust `depth`, add/remove `testStrategy`, or add/remove `review_cap` in the scope's `core/scopes/aidlc-<name>.md` frontmatter. The first two recalibrate artifact and test volume; `review_cap` lowers stage review classes to `adversarial`, `advisory`, or `none` without ever raising them. Because each scope carries its own defaults, the change applies to every workflow that selects the scope. Per-run `--depth`, `--test-strategy`, and `--review` can lower the corresponding behavior further.
-- **Change a ceremony default.** Set `sensors`, `learnings`, or `summary_confirmation` to `on` or `off` in the scope file. Existing intent lines retain their choice; a scope change refreshes scope-sourced lines but preserves per-intent overrides. No ceremony switch removes stage approval, Plan Approval, human-turn authority, audit, or team write protection.
+- **Change a ceremony default.** Set `sensors`, `learnings`, `summary_confirmation`, `plan_approval`, or `collaborators` to `on` or `off` in the scope file. Existing intent lines retain their choice; a scope change refreshes scope-sourced lines but preserves per-intent overrides. Apart from `plan_approval: off`, which builds each code plan without asking, and `collaborators: off`, which runs every stage lead-only, no ceremony switch removes stage approval, human-turn authority, audit, team write protection, or the reviewer.
 
 Either way, the regenerate-and-doctor pair from step 3 above applies. The edit is small; the verification is the same.
 

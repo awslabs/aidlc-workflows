@@ -1,4 +1,4 @@
-// covers: function:readRegularFileNoFollowOrThrow function:writeBufferAtomic function:validSpaceFlag function:assertNoSymlinkInChainOrThrow function:SPACE_NAME_REGEX
+// covers: function:readRegularFileNoFollowOrThrow function:writeBufferAtomic function:validSpaceFlag function:assertNoSymlinkInChainOrThrow
 //
 // t286 - the shared read/write boundary primitives DocumentKB indexing is built
 // on. All four arrive in this slice: three ported from the unmerged #660 line
@@ -43,7 +43,12 @@
 //     symlinked file inside an already-trusted dir -- that was #660's actual
 //     regression.
 
-import { afterEach, describe, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { afterEach, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { execFileSync } from "node:child_process";
 import {
   chmodSync,
@@ -67,6 +72,8 @@ import {
   validSpaceFlag,
   writeBufferAtomic,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 let dir: string | undefined;
 
@@ -125,7 +132,7 @@ describe("t286 readRegularFileNoFollowOrThrow - TYPE: only a regular file", () =
     const d = scratch();
     const fifo = join(d, "pipe");
     try {
-      execFileSync("mkfifo", [fifo]);
+      execFileSync("mkfifo", [fifo], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS) });
     } catch {
       return; // mkfifo unavailable on this platform; the other kinds still cover TYPE
     }
@@ -137,7 +144,7 @@ describe("t286 readRegularFileNoFollowOrThrow - TYPE: only a regular file", () =
     expect(() => readRegularFileNoFollowOrThrow(fifo, "source")).toThrow(
       /not a regular file \(a FIFO \/ named pipe\)/,
     );
-  }, 5000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("refuses a directory", () => {
     const d = scratch();

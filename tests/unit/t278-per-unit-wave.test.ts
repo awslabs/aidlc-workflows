@@ -9,15 +9,22 @@
 // keeps a batch active until every applicable unit has fresh review evidence,
 // and transports the optional wave through the existing steering boundary.
 
-import { afterEach, describe, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { afterEach, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
   appendFileSync,
   copyFileSync,
+  cpSync,
   existsSync,
   mkdirSync,
   readFileSync,
   readdirSync,
+  rmSync,
   symlinkSync,
   writeFileSync,
 } from "node:fs";
@@ -29,6 +36,7 @@ import {
   findStageBySlug,
   freshReviewReceipts,
   latestMainWorkflowStageRunFloorForProject,
+  markHumanTurn,
   readAllAuditShards,
   splitKiroCommandArgs,
   teamUnitGateStatus,
@@ -42,6 +50,7 @@ import {
   createTestProject,
   DEFAULT_RECORD_DIR,
   DEFAULT_SPACE,
+  REPO_ROOT,
   runOrchestrateNext,
   seedAidlcMemory,
   seedBoltDag,
@@ -49,6 +58,8 @@ import {
   seededStateFile,
 } from "../harness/fixtures.ts";
 import { HARNESS_MATRIX } from "../harness/harness-matrix.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const BUN = process.execPath;
 const ORCH = join(AIDLC_SRC, "tools", "aidlc-orchestrate.ts");
@@ -260,7 +271,7 @@ function review(
   const requested = spawnSync(
     BUN,
     [...args, "--project-dir", proj],
-    { encoding: "utf-8", env },
+    { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8", env },
   );
   if ((requested.status ?? -1) !== 0) {
     throw new Error(`review request failed: ${requested.stdout}${requested.stderr}`);
@@ -273,7 +284,7 @@ function review(
   const completed = spawnSync(
     BUN,
     [...args, "--verdict", verdict, "--project-dir", proj],
-    { encoding: "utf-8", env },
+    { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8", env },
   );
   if ((completed.status ?? -1) !== 0) {
     throw new Error(
@@ -307,6 +318,7 @@ function reviewRequestResult(proj: string, unit: string, iteration = 1) {
       proj,
     ],
     {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
       encoding: "utf-8",
       env: {
         ...process.env,
@@ -335,6 +347,7 @@ function freezeWrite(
     env.AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD = "1";
   }
   const result = spawnSync(BUN, [FREEZE], {
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     input: JSON.stringify({
       hook_event_name: "PreToolUse",
       tool_name: "Write",
@@ -395,7 +408,7 @@ function confirmUnitSummary(proj: string, unit: string): void {
       "--project-dir",
       proj,
     ],
-    { encoding: "utf-8", env },
+    { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8", env },
   );
   if ((decision.status ?? -1) !== 0) {
     throw new Error(`summary decision failed: ${decision.stdout}${decision.stderr}`);
@@ -420,7 +433,7 @@ function confirmUnitSummary(proj: string, unit: string): void {
       "--project-dir",
       proj,
     ],
-    { encoding: "utf-8", env },
+    { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8", env },
   );
   if ((answer.status ?? -1) !== 0) {
     throw new Error(`summary answer failed: ${answer.stdout}${answer.stderr}`);
@@ -464,6 +477,7 @@ function completeWave(proj: string, unit: string): void {
       proj,
     ],
     {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
       encoding: "utf-8",
       env: {
         ...process.env,
@@ -481,6 +495,7 @@ function stateCommand(proj: string, args: string[]) {
     BUN,
     [STATE, ...args, "--project-dir", proj],
     {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
       encoding: "utf-8",
       env: {
         ...process.env,
@@ -511,10 +526,11 @@ function approveIteration(proj: string, stage: string, value: "stage-major" | "u
         ? ["--decision", `Change Construction Iteration to ${value}?`, "--options", "Approve,Request Changes"]
         : ["--details", "Approve"]),
       "--project-dir", proj,
-    ], { encoding: "utf-8", env });
+    ], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8", env });
     expect(result.status, `${result.stdout}${result.stderr}`).toBe(0);
     if (action === "decision") {
       const human = spawnSync(BUN, [join(AIDLC_SRC, "tools", "aidlc.ts"), "engine", "hook", "record-human-turn"], {
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
         encoding: "utf-8", cwd: proj, env,
         input: JSON.stringify({
           hook_event_name: "UserPromptSubmit", session_id: session, prompt: "Approve",
@@ -581,7 +597,7 @@ function reportRejected(proj: string, feedback: string) {
       "--project-dir",
       proj,
     ],
-    { encoding: "utf-8", env },
+    { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8", env },
   );
   return {
     status: result.status ?? -1,
@@ -693,7 +709,7 @@ describe("t278 engine-emitted wave contract", () => {
     expect(directive.context_warnings?.join("\n")).toContain(
       "aidlc-aws-platform-agent/broken.md",
     );
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("downstream consumes omit artifacts pruned by the producer for this unit kind", () => {
     const proj = project("nfr-design");
@@ -727,7 +743,7 @@ describe("t278 engine-emitted wave contract", () => {
       `${RP}/construction/contract/nfr-design/security-design.md`,
       `${RP}/construction/contract/nfr-design/traceability.json`,
     ]);
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("wave membership comes from the healed authored DAG, never the stale cache", () => {
     const proj = project();
@@ -750,7 +766,7 @@ describe("t278 engine-emitted wave contract", () => {
       "alpha",
     ]);
     expect(result.stderr).toContain("bolt_dag is missing or stale");
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("dependent batches wait for fresh terminal receipts, including NOT-READY at cap", () => {
     const proj = project();
@@ -829,7 +845,7 @@ describe("t278 engine-emitted wave contract", () => {
     expect(settled.unit).toBe("beta");
     expect(settled.gate).toBe(true);
     expect(settled.wave).toBeUndefined();
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("a post-review artifact change reopens only its owning earlier batch", () => {
     const proj = project();
@@ -877,7 +893,38 @@ describe("t278 engine-emitted wave contract", () => {
     });
     completeWave(proj, "alpha");
     expect(next(proj).directive.gate).toBe(true);
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  // Under Guard Policy relaxed and off the same change is accepted: the review
+  // stands, so the completion does too, and the stage's gate opens instead of
+  // the entry being handed back.
+  for (const policy of ["relaxed (set by you)", "off (set by you)"]) {
+    test(`Guard Policy ${policy.split(" ")[0]}: a post-review artifact change keeps the wave settled`, () => {
+      const proj = project();
+      writeFileSync(seededStateFile(proj), readFileSync(seededStateFile(proj), "utf-8")
+        .replace("- **Change Control**: strict (from scope feature)", `- **Guard Policy**: ${policy}`));
+      seedBoltDag(proj, ["alpha", "beta"], [["alpha"], ["beta"]]);
+      cover(proj, "alpha", "functional-design", REQUIRED_FD);
+      cover(proj, "beta", "functional-design", REQUIRED_FD);
+      review(proj, "alpha");
+      review(proj, "beta");
+      completeWave(proj, "alpha");
+      completeWave(proj, "beta");
+      expect(next(proj).directive.gate).toBe(true);
+      writeFileSync(join(seededRecordDir(proj), "construction", "alpha", "functional-design", "functional-spec.md"),
+        "# changed after review\n");
+      const after = next(proj).directive;
+      expect(after.wave, JSON.stringify(after)).toBeUndefined();
+      expect(after.gate).toBe(true);
+      // The gate opens and says the change once.
+      const opened = spawnSync(BUN, [ORCH, "report", "--stage", "functional-design", "--result", "awaiting-approval", "--project-dir", proj], {
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8",
+        env: { ...process.env, AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD: "1" },
+      });
+      expect(opened.status, `${opened.stdout}${opened.stderr}`).toBe(0);
+      expect(`${opened.stdout}`).toContain("The alpha Unit's Functional Design documents changed after they were reviewed; carrying on.");
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+  }
 
   test("a second stale wave receipt escalates instead of re-emitting recovery", () => {
     const proj = project();
@@ -928,7 +975,69 @@ describe("t278 engine-emitted wave contract", () => {
       reason_codes: ["REVIEW_RECOVERY_SPENT"],
       unit: "alpha",
     });
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  // A hook refused the agent's write mid-revision and left its own way on
+  // (finish the revision) for `next` to hand on. The agent stopped instead.
+  // The Stop hook's probe sees that same own-work ask and hands the work back:
+  // the person is neither left with a quiet agent nor asked to decide about
+  // work the agent never tried.
+  test("an own-work ask a hook refusal left: the Stop hook hands it back, on Claude Code and Codex", () => {
+    const proj = project("functional-design", "stage-major", undefined, undefined, "team");
+    seedBoltDag(proj, ["alpha"]);
+    cover(proj, "alpha", "functional-design", REQUIRED_FD);
+    for (const event of ["GATE_REJECTED", "STAGE_REVISING"]) {
+      appendAuditEntry(event, {
+        Stage: "functional-design", Unit: "alpha", "Gate Scope": "per-stage", "Gate Stages": "functional-design",
+        ...(event === "GATE_REJECTED" ? { Feedback: "revise alpha" } : {}),
+      }, proj);
+    }
+    review(proj, "alpha");
+    const artifact = join(seededRecordDir(proj), "construction", "alpha", "functional-design", "functional-spec.md");
+    const env: NodeJS.ProcessEnv = { ...process.env, AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD: "1" };
+    delete env.AWS_AIDLC_DEFAULT_SCOPE;
+    delete env.AIDLC_STOP_HOOK_PROBE;
+    markHumanTurn(proj);
+    expect(freezeWrite(proj, artifact).status).toBe(2);
+    // What a probe of `next` sees is the own-work ask the refusal left.
+    const probed = runOrchestrateNext(ORCH, proj, [], { env: { ...env, AIDLC_STOP_HOOK_PROBE: "1" } });
+    expect(probed.directive, probed.out).toMatchObject({ kind: "ask", ask_type: "guard-recovery", agent_work: true });
+    // The hook's probe runs the project's own tree.
+    for (const tree of ["claude", "codex"] as const) {
+      const dir = tree === "claude" ? ".claude" : ".codex";
+      if (!existsSync(join(proj, dir))) cpSync(join(REPO_ROOT, "dist", tree, dir), join(proj, dir), { recursive: true });
+    }
+    let stops = 0;
+    const stop = (tree: "claude" | "codex") => spawnSync(BUN, tree === "claude"
+      ? [join(AIDLC_SRC, "tools", "aidlc.ts"), "engine", "hook", "continue-workflow"]
+      : [join(proj, ".codex", "hooks", "aidlc-codex-adapter.ts"), "continue-workflow"], {
+      cwd: proj,
+      input: JSON.stringify({
+        hook_event_name: "Stop", stop_hook_active: false, session_id: "t278-agent-work", cwd: proj, turn_id: `t${++stops}`,
+      }),
+      encoding: "utf-8",
+      env: { ...env, CLAUDE_PROJECT_DIR: tree === "claude" ? proj : undefined, CODEX_THREAD_ID: undefined, CODEX_SESSION_ID: undefined },
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+    });
+    const traces = () => {
+      const traceDir = join(seededRecordDir(proj), ".aidlc-engine", "hooks-health");
+      return existsSync(traceDir)
+        ? readdirSync(traceDir).map((name) => `${name}:\n${readFileSync(join(traceDir, name), "utf-8")}`).join("\n")
+        : "(no hooks-health dir)";
+    };
+    for (const tree of ["claude", "codex"] as const) {
+      // Each tree is one agent's stop: the hook's no-progress block count is
+      // per project, so the second tree starts it afresh.
+      rmSync(join(seededRecordDir(proj), ".aidlc-engine", "stop-hook", "block-count.json"), { force: true });
+      const handedBack = stop(tree);
+      expect(handedBack.stdout, `${tree}: ${handedBack.stderr}\n${traces()}`).toContain('"decision":"block"');
+      expect(handedBack.stdout).toContain("AI-DLC is carrying on with Functional Design for alpha.");
+    }
+    // Handed back, the agent's own `next` is that same own-work ask.
+    const asked = JSON.stringify(runOrchestrateNext(ORCH, proj, [], { env }).directive);
+    expect(asked).toContain('"agent_work":true');
+    expect(asked).toContain("--result revised");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("team revising Units route freeze and spent-review refusals to redo", () => {
     const proj = project(
@@ -977,9 +1086,18 @@ describe("t278 engine-emitted wave contract", () => {
     expect(frozen.status, frozen.out).toBe(2);
     expect(frozen.out).toContain("Finish the current revision");
     expect(frozen.out).toContain("--result revised");
-    expect(frozen.out).toContain("/aidlc --stage functional-design");
     expect(frozen.out).not.toContain("Request Changes");
     expect(frozen.out).not.toContain("--result rejected");
+    // What the refusal left is what the next `next` hands on: finishing the
+    // revision is the agent's own work, so the person is not asked to choose it
+    // over starting the stage again; they judge at the approval it reopens.
+    const asked = JSON.stringify(next(proj).directive);
+    expect(asked).toContain('"ask_type":"guard-recovery"');
+    expect(asked).toContain('"agent_work":true');
+    expect(asked).toContain("--result revised");
+    expect(asked).not.toContain("/aidlc --stage functional-design");
+    expect(asked).not.toContain("Request Changes");
+    expect(asked).not.toContain("--result rejected");
 
     writeFileSync(artifact, "# changed before recovery\n");
     review(proj, "alpha", "READY", 2);
@@ -991,7 +1109,7 @@ describe("t278 engine-emitted wave contract", () => {
     expect(spent.out).not.toContain("--result revised");
     expect(spent.out).not.toContain("Request Changes");
     expect(spent.out).not.toContain("--result rejected");
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("unit-end finish-revision reopens the final gate stage", () => {
     const proj = project(
@@ -1096,6 +1214,7 @@ describe("t278 engine-emitted wave contract", () => {
     symlinkSync(AIDLC_SRC, join(proj, ".claude"), "dir");
     const argv = splitKiroCommandArgs(command!);
     const revised = spawnSync(argv[0], argv.slice(1), {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
       cwd: proj,
       encoding: "utf-8",
       env: {
@@ -1126,7 +1245,7 @@ describe("t278 engine-emitted wave contract", () => {
     expect(audit).toContain("**Event**: STAGE_AWAITING_APPROVAL");
     expect(audit).toContain("**Stage**: nfr-requirements");
     expect(audit).not.toContain("**Event**: STAGE_JUMPED");
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("a Unit freeze streak ignores sibling summary progress", () => {
     const proj = project();
@@ -1151,7 +1270,7 @@ describe("t278 engine-emitted wave contract", () => {
     const second = freezeWrite(proj, alphaArtifact, true);
     expect(second.status, second.out).toBe(2);
     expect(guardRefusalCount(proj)).toBe(2);
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("an autonomous inline wave cannot reset spent recovery without a human turn", () => {
     const proj = project(
@@ -1187,7 +1306,7 @@ describe("t278 engine-emitted wave contract", () => {
       "Request Changes: restart review after the invalidating write",
     );
     expect(rejected.status).toBe(0);
-    expect(rejected.out).toContain('"kind":"error"');
+    expect(rejected.out).toContain('"kind":"print"');
     expect(rejected.out).toContain("Cannot request changes");
     expect(rejected.out).toContain(
       "recovery review has already been used",
@@ -1221,7 +1340,7 @@ describe("t278 engine-emitted wave contract", () => {
     expect(restarted.status).toBe(0);
     expect(restarted.out).toContain('"emitted":"REVIEW_REQUESTED"');
     expect(restarted.out).not.toContain('"recovery"');
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("fully settled siblings are omitted from a repeated same-batch wave", () => {
     const proj = project();
@@ -1233,7 +1352,7 @@ describe("t278 engine-emitted wave contract", () => {
     const wave = next(proj).directive.wave;
     expect(wave?.batch_index).toBe(0);
     expect(wave?.entries.map((entry) => entry.unit)).toEqual(["beta"]);
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("large independent batches emit deterministic same-batch prefixes below the transport cap", () => {
     const proj = project();
@@ -1274,7 +1393,7 @@ describe("t278 engine-emitted wave contract", () => {
       );
       expect(existsSync(memory)).toBe(emitted.has(unit.name));
     }
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("an unmatched paired review request is re-emitted as retry-required", () => {
     const proj = project();
@@ -1288,7 +1407,7 @@ describe("t278 engine-emitted wave contract", () => {
       review_iteration: 1,
       completion_required: true,
     });
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("effective advisory and none review classes settle with their declared contracts", () => {
     const advisory = project("functional-design", "stage-major", "advisory");
@@ -1311,7 +1430,7 @@ describe("t278 engine-emitted wave contract", () => {
     });
     completeWave(none, "alpha");
     expect(next(none).directive.gate).toBe(true);
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("wave completion fans Unit memory into the parent diary before settlement", () => {
     const proj = project();
@@ -1349,7 +1468,7 @@ describe("t278 engine-emitted wave contract", () => {
     );
     expect(parentMemory.match(/aidlc-wave-memory:alpha:/g)?.length).toBe(1);
     expect(next(proj).directive.gate).toBe(true);
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("wave completion keeps absent diaries absent when learnings is off", () => {
     const proj = project("functional-design", "stage-major", "none");
@@ -1380,7 +1499,7 @@ describe("t278 engine-emitted wave contract", () => {
     expect(auditEventCount(proj, "UNIT_COMPLETED")).toBe(1);
     expect(existsSync(parentMemory)).toBe(false);
     expect(existsSync(unitMemory)).toBe(false);
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test.each([
     ["before the first receipt", false],
@@ -1436,7 +1555,7 @@ describe("t278 engine-emitted wave contract", () => {
       }
       expect(next(proj).directive.gate).toBe(true);
     },
-    30000,
+    NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
   );
 
   test.each([
@@ -1514,7 +1633,7 @@ describe("t278 engine-emitted wave contract", () => {
       expect(settled.gate).toBe(true);
       expect(settled.wave).toBeUndefined();
     },
-    30000,
+    NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
   );
 
   test("a wave on another stage does not block pausing or resuming a serial checkpoint", () => {
@@ -1569,7 +1688,7 @@ describe("t278 engine-emitted wave contract", () => {
       });
       expect(next(proj).directive.wave).toEqual(routed.wave);
     }
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("unit-major design and non-autonomous code-generation remain serial", () => {
     const unitMajor = project("functional-design", "unit-major");
@@ -1582,7 +1701,7 @@ describe("t278 engine-emitted wave contract", () => {
     expect(directive.stage).toBe("code-generation");
     expect(directive.unit).toBe("alpha");
     expect(directive.wave).toBeUndefined();
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });
 
 function expectWaveProse(body: string): void {
