@@ -142,6 +142,15 @@ describe("t326 pinned team Unit merge", () => {
     );
   }, 180000);
 
+  // The review read CRLF as LF, so the committed copies pin, gate and land
+  // check it against must be read the same way.
+  test("stage documents committed with CRLF line endings pin, gate and land", () => {
+    const { seed, remote } = makeSeed();
+    prepareCandidate(remote, "alpha", "crlf-team", { crlf: true });
+    expect(gateAndLand(seed, "alpha").pinnedOid).toHaveLength(40);
+    expect(readAllAuditShards(seed).match(/\*\*Event\*\*: UNIT_MERGED/g) ?? []).toHaveLength(1);
+  });
+
   test("moved refs require re-pin", () => {
     const { seed, remote } = makeSeed();
     const first = prepareCandidate(remote, "alpha", "move-team");

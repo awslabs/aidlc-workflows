@@ -439,6 +439,9 @@ export function prepareCandidate(
     sourceText?: string;
     sharedText?: string;
     wave?: boolean;
+    /** The stage documents are written and committed with CRLF line endings
+     *  (core.autocrlf off and an editor that writes CRLF). */
+    crlf?: boolean;
   } = {},
 ): {
   checkout: string;
@@ -447,6 +450,7 @@ export function prepareCandidate(
   auditShard: string;
 } {
   const checkout = clone(remote, label);
+  if (options.crlf) git(checkout, ["config", "core.autocrlf", "false"]);
   const claim = runMergeTool(UNIT, ["claim", unit, "--team", label], checkout);
   expect(claim.status, claim.out).toBe(0);
   const claimPayload = JSON.parse(claim.stdout);
@@ -495,9 +499,10 @@ export function prepareCandidate(
     );
     mkdirSync(dir, { recursive: true });
     for (const name of stage.produces ?? []) {
+      const body = `# ${name}\n\ncandidate ${unit}\n`;
       writeFileSync(
         join(dir, artifactFilename(name)),
-        `# ${name}\n\ncandidate ${unit}\n`,
+        options.crlf ? body.replaceAll("\n", "\r\n") : body,
       );
     }
   }

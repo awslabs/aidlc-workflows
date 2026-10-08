@@ -26,6 +26,7 @@ import {
   candidateReviewCoverageProjection,
   clearClaimGeneration,
   clearUnitScopeStamp,
+  committedTextBytes,
   ensureCloneId,
   errorMessage,
   extractMarkdownSection,
@@ -1038,8 +1039,9 @@ function candidateReviewFingerprint(
     if (!gitPathExistsAt(projectDir, oid, path)) {
       return [logicalPath, "missing"];
     }
+    // CRLF text reads as LF, as the review's fingerprint read it.
     const digest = createHash("sha256")
-      .update(gitTextAt(projectDir, oid, path))
+      .update(committedTextBytes(Buffer.from(gitTextAt(projectDir, oid, path), "utf-8")))
       .digest("hex");
     return [logicalPath, `sha256:${digest}`];
   });
