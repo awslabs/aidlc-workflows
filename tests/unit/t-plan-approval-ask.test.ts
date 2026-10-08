@@ -327,6 +327,30 @@ describe("the engine asks for Plan Approval", () => {
     expect(lockStep).not.toContain("guard.plan-approval off");
   });
 
+  // The question says what already changed in the workspace since Code
+  // Generation started (an agent that ran ahead of the plan, or the person's
+  // own edits), so they approve with that in front of them. No refusal, no
+  // new question: one line under the summary, in the chat and in the record.
+  test("the plan question names source that already changed before approval", () => {
+    const proj = project();
+    const baseline = writeBaselineSourceSnapshot(proj, "code-generation", workspaceSourceListing(proj)!);
+    appendAuditEntry("STAGE_STARTED", { Stage: "code-generation", "Source Baseline": baseline }, proj);
+    // Writing the plan changes no source: the summary is the plan's alone.
+    const asked = askFor(proj);
+    expect(asked.plan_approval.targets?.[0].summary).toEqual([
+      "Builds: slugify for titles", "Touches: src/slugify.ts", "Tests: 3 unit tests",
+    ]);
+    expect(questions(proj)).not.toContain("Already changed before you approved");
+    writeFileSync(join(proj, "src", "extra.ts"), "export const extra = 1;\n", "utf-8");
+    const one = next(proj);
+    expect(one.kind, JSON.stringify(one)).toBe("ask");
+    expect(one.plan_approval.targets?.[0].summary.at(-1)).toBe("Already changed before you approved: src/extra.ts.");
+    expect(questions(proj)).toContain("- Already changed before you approved: src/extra.ts.");
+    writeFileSync(join(proj, "src", "more.ts"), "export const more = 1;\n", "utf-8");
+    expect(next(proj).plan_approval.targets?.[0].summary.at(-1))
+      .toBe("Already changed before you approved (2 files): src/extra.ts, src/more.ts.");
+  });
+
   test("a stage without a plan is planned first; a ready plan is asked for with its summary", () => {
     const proj = project();
     const planning = next(proj);

@@ -30,6 +30,7 @@ import {
   changeControlSourceLabel,
   claimAttemptFields,
   collectStalePlanApprovalReceipts,
+  currentStageSourceBaseline,
   errorMessage,
   fenceSwitchSentence,
   getField,
@@ -46,6 +47,8 @@ import {
   readAuditShardEvents,
   readPlanApprovalRuntimeRecord,
   removePlanApprovalRuntimeRecord,
+  renderChangedPaths,
+  sourceListingChangedPaths,
   stalePlanApprovalReceiptsForTarget,
   stateFilePath,
   steeringPayloadAuthenticAt,
@@ -57,6 +60,7 @@ import {
   withActiveDirectiveLock,
   withAuditLock,
   workspaceSourceFailureSuffix,
+  workspaceSourceListing,
   workspaceSourceState,
   writeFileAtomic,
   writePlanApprovalReceipt,
@@ -431,16 +435,46 @@ export function planSummaryLines(plan: string, instructions: string): string[] {
   return fallback;
 }
 
-function targetView(projectDir: string, unit: string | null): PlanApprovalAskTargetView {
+// `changed` is the line naming source that already changed since Code
+// Generation started (changedBeforeApprovalLine), shown under the summary when
+// the question is asked or its record rewritten; null says nothing.
+function targetView(projectDir: string, unit: string | null, changed: string | null = null): PlanApprovalAskTargetView {
   const dir = codeGenerationRecordDir(projectDir, unit);
   const rel = (name: string) => toPosix(relative(projectDir, join(dir, name)));
+  const summary = planSummaryLines(readText(join(dir, PLAN_FILE)), readText(join(dir, INSTRUCTIONS_FILE)));
   return {
     unit,
     plan_path: rel(PLAN_FILE),
     instructions_path: rel(INSTRUCTIONS_FILE),
     questions_path: rel(QUESTIONS_FILE),
-    summary: planSummaryLines(readText(join(dir, PLAN_FILE)), readText(join(dir, INSTRUCTIONS_FILE))),
+    summary: changed === null ? summary : [...summary, changed],
   };
+}
+
+/**
+ * What already changed in the workspace source since Code Generation started
+ * (the stage's Source Baseline), said in the question so the person approves
+ * with that in front of them: an agent that ran ahead of the plan, or their own
+ * edits. Nothing is said when either side cannot be read, or nothing changed.
+ */
+function changedBeforeApprovalLine(projectDir: string): string | null {
+  try {
+    const state = readFileSync(stateFilePath(projectDir), "utf-8");
+    const baseline = currentStageSourceBaseline(
+      projectDir, STAGE,
+      getField(state, "Construction Iteration")?.trim() === "unit-major" ||
+        getField(state, "Construction Checkpoints") === "enabled",
+    );
+    const current = workspaceSourceListing(projectDir);
+    if (baseline.state !== "ready" || current === null) return null;
+    const changed = sourceListingChangedPaths(baseline.listing, current);
+    if (changed.length === 0) return null;
+    return changed.length === 1
+      ? `Already changed before you approved: ${renderChangedPaths(changed)}.`
+      : `Already changed before you approved (${changed.length} files): ${renderChangedPaths(changed)}.`;
+  } catch {
+    return null;
+  }
 }
 
 // A word in a plan that names a file or folder: it has a "/" or a file
@@ -820,6 +854,7 @@ function planApprovalAskDirective(
   options: { question: string; editing: boolean; note?: string },
 ): PlanApprovalAskDirective {
   const grouped = units.length > 1;
+  const changed = changedBeforeApprovalLine(projectDir);
   return {
     kind: "ask",
     ask_type: "plan-approval",
@@ -828,7 +863,7 @@ function planApprovalAskDirective(
     question: options.question,
     ...(units.length === 1 && units[0] !== null ? { unit: units[0] } : {}),
     plan_approval: {
-      targets: units.map((unit) => targetView(projectDir, unit)),
+      targets: units.map((unit) => targetView(projectDir, unit, changed)),
       choices: [...(grouped ? GROUPED_PLAN_APPROVAL_CHOICES : PLAN_APPROVAL_CHOICES)],
       editing: options.editing,
       ...(options.note ? { note: options.note } : {}),
@@ -1139,7 +1174,7 @@ function approveTarget(
   const planAsFound = readText(planPath);
   let plan = planAsFound;
   const instructions = readText(join(dir, INSTRUCTIONS_FILE));
-  const view = targetView(projectDir, unit);
+  const view = targetView(projectDir, unit, changedBeforeApprovalLine(projectDir));
   // Only the person's own editing turn makes a repair theirs. Anything else is
   // the engine's or the agent's own doing, and a question that calls it their
   // edit describes work they never did.
@@ -1291,7 +1326,7 @@ function requestChangesFor(
   const approval = evaluateCodeGenerationApproval(projectDir, { unit });
   const dir = codeGenerationRecordDir(projectDir, unit);
   const questionsPath = join(dir, QUESTIONS_FILE);
-  const view = targetView(projectDir, unit);
+  const view = targetView(projectDir, unit, changedBeforeApprovalLine(projectDir));
   const asked = record.targets.find((target) => target.unit === unit);
   const existing = readText(questionsPath);
   const fingerprintLine = /^\[Approval Fingerprint\]:[ \t]*(\S+)/m.exec(existing)?.[1] ?? asked?.fingerprint ?? "";
