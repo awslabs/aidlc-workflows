@@ -211,6 +211,24 @@ describe("t-kiro-hooks-off: a hook the person switched off in Kiro is named, nev
     }
   });
 
+  // AIDA's re-review of #2232: the summary choice refuses for a reply not given
+  // yet (`missedReply: false`); with the reply hook off that refusal said the
+  // reply was lost and asked for it again. A reply not given yet is not lost.
+  test("a reply not given yet is not a lost one: with the reply hook off, that refusal says nothing about Agent Hooks", () => {
+    const harness = process.env.AIDLC_HARNESS_DIR;
+    process.env.AIDLC_HARNESS_DIR = ".kiro";
+    try {
+      switchOff(REPLY);
+      const notYet = unattendedHumanPresenceHint(proj, { missedReply: false });
+      expect(notYet).not.toMatch(/not recorded|Agent Hooks|answer again|once more/);
+      // The same switch still names the panel for a reply the hook could have missed.
+      expect(unattendedHumanPresenceHint(proj)).toContain("switched off under Agent Hooks in Kiro");
+    } finally {
+      if (harness === undefined) delete process.env.AIDLC_HARNESS_DIR;
+      else process.env.AIDLC_HARNESS_DIR = harness;
+    }
+  });
+
   test("the said mark follows the file time, and the reply hook is told apart", () => {
     switchOff(GUARD, new Date("2026-10-06T23:09:18.000Z"));
     expect(kiroHooksOffNotices(proj)).toHaveLength(1);

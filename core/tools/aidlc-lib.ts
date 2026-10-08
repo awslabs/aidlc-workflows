@@ -29569,8 +29569,9 @@ export function unattendedHumanPresenceHint(projectDir?: string, options: { miss
   // recorded is then that switch, not a folder Kiro has yet to trust and not a
   // record whose hooks never ran (the other hooks still beat), so this comes
   // before the hooks-off step and the person is sent to the panel, never to the
-  // trust step.
-  if (kiroReplyHookSwitchedOff(resolveProjectDir(projectDir), harnessDir())) {
+  // trust step. A caller refusing for a reply not given yet (the summary choice
+  // the person has not made) is not a lost reply: it hears nothing here either.
+  if (options.missedReply !== false && kiroReplyHookSwitchedOff(resolveProjectDir(projectDir), harnessDir())) {
     return " If the person already replied, that reply was not recorded because AI-DLC's hook that records your " +
       "replies is switched off in Kiro's Agent Hooks. Do not ask them to answer again. Tell them exactly this, with " +
       "nothing about why: \"Your answer was not recorded: AI-DLC's hook that records your replies " +
