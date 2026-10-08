@@ -628,6 +628,35 @@ describe("Kiro IDE: the chat holds the steering file it captured when it started
     expect(await kiroIdePrompt(proj, kiroChat())).not.toContain("Your repo tracks");
   });
 
+  // That ask runs `git ls-files` in the person's repository, and `ls-files`
+  // runs a hook fsmonitor as soon as the index needs a refresh. A session start
+  // has no business running a program named in a repository's config, so the
+  // call says no to it, as every git command AI-DLC runs for its own
+  // bookkeeping does.
+  test("the tracking ask never runs the repository's fsmonitor program", async () => {
+    const proj = copiedProject("kiro-ide");
+    const git = (...args: string[]) => spawnSync("git", args, { cwd: proj, encoding: "utf-8" });
+    expect(git("init", "-q").status).toBe(0);
+    expect(git("add", "--", ".kiro/steering/aidlc-active-memory.md").status).toBe(0);
+    // The staged file and the file on disk differ, which is the state a refresh
+    // asks a monitor about.
+    writeFileSync(join(proj, ...STEERING), "---\ninclusion: always\n---\n\nedited since it was staged\n", "utf-8");
+    const monitorDir = mkdtempSync(join(realpathSync(tmpdir()), "aidlc-t-rules-fsmonitor-"));
+    projects.push(monitorDir);
+    const monitor = join(monitorDir, "fsmonitor.sh");
+    const ran = `${monitor}.ran`;
+    writeFileSync(monitor, `#!/bin/sh\necho "ran with: $*" >> '${ran}'\n`, { mode: 0o755 });
+    expect(git("config", "core.fsmonitor", monitor).status).toBe(0);
+    const asked = await kiroIdePrompt(proj, kiroChat());
+    expect(git("config", "--unset", "core.fsmonitor").status).toBe(0);
+    // The ask is still made, so the call that would reach the monitor ran.
+    expect(asked).toContain("Your repo tracks .kiro/steering/aidlc-active-memory.md");
+    expect(
+      existsSync(ran) ? readFileSync(ran, "utf-8") : "",
+      "a session start ran the repository's fsmonitor program",
+    ).toBe("");
+  });
+
   test("config writes the project's memory text into the file and refreshes over the engine's copy", () => {
     const release = join(REPO_ROOT, "dist-release", "kiro-ide");
     const dir = mkdtempSync(join(realpathSync(tmpdir()), "aidlc-t-rules-kiro-ide-"));
