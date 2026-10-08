@@ -26,6 +26,7 @@ import {
   type ArchiveEntry,
 } from "../../core/tools/aidlc-archive.ts";
 import {
+  copyChannelOmits,
   projectionFiles,
   walkFiles,
 } from "../../core/tools/aidlc-distribution.ts";
@@ -42,6 +43,7 @@ import {
   type ReleaseManifest,
 } from "../../core/tools/aidlc-release.ts";
 import { AIDLC_VERSION } from "../../core/tools/aidlc-version.ts";
+import { LIVE_COMMAND_TIMEOUT_MS, NATIVE_COMPILE_TIMEOUT_MS, remainingOperationTimeoutMs } from "./test-budget.ts";
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const WINDOWS_STUB_PLACEHOLDER = "AIDLC_RELEASE_FIXTURE_VERSION_PLACEHOLDER_0123456789";
@@ -72,7 +74,7 @@ function cachedWindowsStub(): { path: string; offsets: number[] } {
   mkdirSync(cacheRoot, { recursive: true });
 
   if (!existsSync(binaryPath)) {
-    const deadline = Date.now() + 180_000;
+    const deadline = Date.now() + remainingOperationTimeoutMs(NATIVE_COMPILE_TIMEOUT_MS, { phase: "release stub cache" })!;
     let lock: number | undefined;
     while (lock === undefined) {
       try {
@@ -94,7 +96,7 @@ function cachedWindowsStub(): { path: string; offsets: number[] } {
           const built = spawnSync(
             process.execPath,
             ["build", "--compile", sourcePath, "--outfile", temporaryBinary],
-            { encoding: "utf-8", timeout: 180_000 },
+            { encoding: "utf-8", timeout: remainingOperationTimeoutMs(NATIVE_COMPILE_TIMEOUT_MS, { deadlineMs: deadline, phase: "release stub compile" }) },
           );
           if (built.status !== 0) {
             throw new Error(
@@ -260,7 +262,9 @@ export function writeReleaseFixture(options: ReleaseFixtureOptions): ReleaseFixt
           stampPath,
           `${JSON.stringify({ ...stamp, frameworkVersion: version }, null, 2)}\n`,
         );
-        item.entries.push(...archiveEntries(item.root).map((entry) => ({
+        // As the real release: the copy runtime leaves out editor-owned files.
+        const omitted = item.entries === copyRuntimeEntries ? copyChannelOmits(descriptor) : new Set<string>();
+        item.entries.push(...archiveEntries(item.root).filter((entry) => !omitted.has(entry.path)).map((entry) => ({
           ...entry,
           path: `runtime/${distribution}/${entry.path}`,
         })));
@@ -482,7 +486,7 @@ export async function checkLiveReleaseContract(
   const clean = baseUrl.replace(/\/+$/, "");
   const fetchMetadata = async (name: string): Promise<string> => {
     const response = await fetch(`${clean}/latest/download/${name}`, {
-      signal: AbortSignal.timeout(15_000),
+      signal: AbortSignal.timeout(remainingOperationTimeoutMs(LIVE_COMMAND_TIMEOUT_MS, { phase: "release metadata" })!),
     });
     if (!response.ok) throw new Error(`${name} returned HTTP ${response.status}`);
     if (!acceptedReleaseContentType(response.headers.get("content-type"))) {

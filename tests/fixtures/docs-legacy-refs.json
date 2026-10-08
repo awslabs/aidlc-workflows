@@ -24,7 +24,7 @@
     },
     {
       "file": "docs/guide/harnesses/kiro-ide.md",
-      "text": "- `.kiro/steering/aidlc-active-memory.md` \u2014 always-included IDE steering whose",
+      "text": "- `.kiro/steering/aidlc-active-memory.md`: always-included steering that carries",
       "why": "documents Kiro IDE's native always-included steering file"
     },
     {
@@ -44,17 +44,17 @@
     },
     {
       "file": "docs/reference/07-sensor-system.md",
-      "text": "matches: \"**/{aidlc-docs,intents}/**\"                  # optional capability filter",
+      "text": "matches: \"**/{aidlc-docs,intents,codekb}/**\"           # optional capability filter",
       "why": "sensor manifest frontmatter example (the shipped glob)"
     },
     {
       "file": "docs/reference/07-sensor-system.md",
-      "text": "| `aidlc-required-sections.md` | `**/{aidlc-docs,intents}/**` |",
+      "text": "| `aidlc-required-sections.md` | `**/{aidlc-docs,intents,codekb}/**` |",
       "why": "shipped required-sections sensor matches-glob value"
     },
     {
       "file": "docs/reference/07-sensor-system.md",
-      "text": "| `aidlc-upstream-coverage.md` | `**/{aidlc-docs,intents}/**` |",
+      "text": "| `aidlc-upstream-coverage.md` | `**/{aidlc-docs,intents,codekb}/**` |",
       "why": "shipped upstream-coverage sensor matches-glob value"
     },
     {

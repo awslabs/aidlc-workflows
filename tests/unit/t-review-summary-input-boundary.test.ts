@@ -53,7 +53,9 @@ describe("summary input and reviewed output have separate authority", () => {
   test("confirmation replay preserves a trailing comment without excluding its content", () => {
     const body = `${confirmed.trimEnd()} <!-- keep this review context -->\n`;
     const fingerprint = summaryInputReviewFingerprint(body);
-    expect(summaryInputReviewFingerprint(body.replace("Looks correct", ""))).toBe(fingerprint);
+    // With no answer, CommonMark parses [Answer]: <…> as a link reference
+    // definition (spaces are allowed inside <…>), not a visible answer line.
+    expect(summaryInputReviewFingerprint(body.replace("Looks correct", ""))).not.toBe(fingerprint);
     expect(summaryInputReviewFingerprint(body.replace("Looks correct", "Request changes"))).toBe(fingerprint);
     expect(summaryInputReviewFingerprint(body.replace("keep this review context", "different context")))
       .not.toBe(fingerprint);

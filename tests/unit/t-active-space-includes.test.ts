@@ -1,4 +1,4 @@
-// covers: function:repointHarnessIncludes
+// covers: function:repointHarnessIncludes, function:addRootBlocks, function:kiroIdeSteering
 //
 // t-active-space-includes — the harness-native rule includes FOLLOW the
 // active-space cursor (gap #1, the (A) ambient channel).
@@ -26,18 +26,23 @@
 //   4. A cursorless call resolves `default` (activeSpace fallback).
 //   5. Round-trip default → teamB → default restores the original bytes.
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { spawnSync } from "node:child_process";
 import {
   cpSync,
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readdirSync,
   readFileSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { repointHarnessIncludes } from "../../core/tools/aidlc-includes.ts";
+import { basename, join } from "node:path";
+import { NATIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "../harness/test-budget.ts";
+import { sha256Bytes, unionBlocks } from "../../core/tools/aidlc-distribution.ts";
+import { addRootBlocks, kiroIdeSteering, repointHarnessIncludes } from "../../core/tools/aidlc-includes.ts";
 
 const REPO_ROOT = join(import.meta.dir, "..", "..");
 const distSurface = (h: string, ...parts: string[]): string =>
@@ -201,16 +206,17 @@ describe("t-active-space-includes: Kiro agents/*.json resources glob", () => {
       originals.set(name, config);
       writeFileSync(join(root, ".kiro", "agents", `${name}.json`), raw);
     }
-    writeFileSync(join(root, "aidlc", "active-space"), "teamB\n");
+    mkdirSync(join(root, "aidlc", "spaces", "team-b", "memory"), { recursive: true });
+    writeFileSync(join(root, "aidlc", "active-space"), "team-b\n");
     repointHarnessIncludes(root);
     for (const [name, original] of originals) {
       const after = JSON.parse(readFileSync(join(root, ".kiro", "agents", `${name}.json`), "utf8"));
       expect(after).toEqual({
         ...original,
         resources: original.resources.map(entry => entry === "file://aidlc/spaces/default/memory/**/*.md"
-          ? "file://aidlc/spaces/teamB/memory/**/*.md" : entry),
+          ? "file://aidlc/spaces/team-b/memory/**/*.md" : entry),
       });
-      expect(after.resources).toContain("file://aidlc/spaces/teamB/memory/**/*.md");
+      expect(after.resources).toContain("file://aidlc/spaces/team-b/memory/**/*.md");
       expect(after.resources).not.toContain("file://aidlc/spaces/default/memory/**/*.md");
     }
   });
@@ -226,58 +232,66 @@ describe("t-active-space-includes: Kiro agents/*.json resources glob", () => {
   });
 });
 
-describe("t-active-space-includes: Kiro IDE steering follows the active space", () => {
+describe("t-active-space-includes: Kiro IDE steering carries the active space's memory text", () => {
+  // Kiro IDE does not expand `#[[file:]]` references in steering (1.2.4), so the
+  // always-included file holds the memory files' text itself (#2023).
   beforeEach(() => {
     process.env.AIDLC_HARNESS_DIR = ".kiro";
+    process.env.AIDLC_HARNESS_NAME = "kiro-ide";
   });
 
-  test("re-points all live memory references in the always-included IDE steering file", () => {
+  function setup(): { root: string; steeringPath: string } {
     const root = freshRoot();
     seedSpaces(root);
     const steeringDir = join(root, ".kiro", "steering");
     mkdirSync(steeringDir, { recursive: true });
     const steeringPath = join(steeringDir, "aidlc-active-memory.md");
-    cpSync(
-      distSurface(
-        "kiro-ide",
-        ".kiro",
-        "steering",
-        "aidlc-active-memory.md",
-      ),
-      steeringPath,
-    );
+    cpSync(distSurface("kiro-ide", ".kiro", "steering", "aidlc-active-memory.md"), steeringPath);
+    return { root, steeringPath };
+  }
+
+  test("writes the requested space's memory text into the always-included steering file", () => {
+    const { root, steeringPath } = setup();
     const written = portablePaths(repointHarnessIncludes(root, "teamB"));
     expect(written).toEqual([".kiro/steering/aidlc-active-memory.md"]);
 
     const after = readFileSync(steeringPath, "utf-8");
-    expect(after).toContain("inclusion: always");
-    expect(after).toContain(
-      "#[[file:aidlc/spaces/teamB/memory/org.md]]",
-    );
-    expect(after).toContain(
-      "#[[file:aidlc/spaces/teamB/memory/phases/operation.md]]",
-    );
+    expect(after).toMatch(/^---\ninclusion: always\n---\n/);
+    expect(after).toContain('<memory-file path="aidlc/spaces/teamB/memory/org.md">\n# org teamB\n</memory-file>');
     expect(after).not.toContain("aidlc/spaces/default/memory/");
+    expect(after).not.toContain("#[[file:");
   });
 
-  test("re-pointing the IDE steering file to default is a no-op", () => {
-    const root = freshRoot();
-    seedSpaces(root);
-    const steeringDir = join(root, ".kiro", "steering");
-    mkdirSync(steeringDir, { recursive: true });
-    const steeringPath = join(steeringDir, "aidlc-active-memory.md");
-    cpSync(
-      distSurface(
-        "kiro-ide",
-        ".kiro",
-        "steering",
-        "aidlc-active-memory.md",
-      ),
-      steeringPath,
-    );
+  test("writing it again for the same space is a no-op", () => {
+    const { root, steeringPath } = setup();
+    expect(portablePaths(repointHarnessIncludes(root, "default"))).toEqual([".kiro/steering/aidlc-active-memory.md"]);
     const before = readFileSync(steeringPath, "utf-8");
     expect(repointHarnessIncludes(root, "default")).toEqual([]);
     expect(readFileSync(steeringPath, "utf-8")).toBe(before);
+  });
+
+  test("a memory with no file to inline gets the authored reference form, byte for byte", () => {
+    const root = freshRoot();
+    expect(kiroIdeSteering(root, "default")).toEqual({
+      text: readFileSync(join(REPO_ROOT, "harness", "kiro-ide", "steering", "aidlc-active-memory.md"), "utf-8"),
+      inlined: [],
+    });
+  });
+
+  test("the shipped file is what the engine writes for the shipped memory", () => {
+    const shipped = kiroIdeSteering(distSurface("kiro-ide"), "default");
+    expect(readFileSync(distSurface("kiro-ide", ".kiro", "steering", "aidlc-active-memory.md"), "utf-8")).toBe(shipped.text);
+    expect(shipped.inlined).toContain("aidlc/spaces/default/memory/team.md");
+  });
+
+  test("a steering folder that leads out of the project is not written through", () => {
+    const root = freshRoot();
+    seedSpaces(root);
+    const outside = freshRoot();
+    mkdirSync(join(root, ".kiro"), { recursive: true });
+    symlinkSync(outside, join(root, ".kiro", "steering"), process.platform === "win32" ? "junction" : "dir");
+    expect(repointHarnessIncludes(root, "default")).toEqual([]);
+    expect(readdirSync(outside)).toEqual([]);
   });
 });
 
@@ -600,5 +614,163 @@ describe("t-active-space-includes: Cursor rules + persona bodies", () => {
     rmSync(join(root, ".cursor", "rules"), { recursive: true });
     const written = portablePaths(repointHarnessIncludes(root, "teamB"));
     expect(written).toEqual([".cursor/agents/aidlc-architect-agent.md"]);
+  });
+});
+
+// A copy runtime leaves the team's .gitignore and AGENTS.md out and ships
+// AI-DLC's part of each in the harness folder (root-blocks). Where config never
+// ran, the engine adds that part after the team's content, once.
+describe("t-active-space-includes: AI-DLC's part of the team's root files", () => {
+  const blocks = join(distSurface("copilot", ".aidlc"), "tools", "data", "root-blocks");
+  const gitignorePart = (): string =>
+    `# BEGIN AI-DLC:gitignore\n${readFileSync(join(blocks, "gitignore"), "utf-8").trim()}\n# END AI-DLC:gitignore\n`;
+  const agentsPart = (): string =>
+    `<!-- BEGIN AI-DLC:agents -->\n${readFileSync(join(blocks, "agents"), "utf-8").trim()}\n<!-- END AI-DLC:agents -->\n`;
+  function copiedProject(): string {
+    const root = freshRoot();
+    cpSync(distSurface("copilot", ".aidlc"), join(root, ".aidlc"), { recursive: true });
+    return root;
+  }
+
+  test("keeps the team's .gitignore and AGENTS.md byte for byte and adds AI-DLC's part once", () => {
+    const root = copiedProject();
+    writeFileSync(join(root, ".gitignore"), "node_modules\n.env.local\n");
+    writeFileSync(join(root, "AGENTS.md"), "# Shop\n\nOur own notes for agents.\n");
+    expect(addRootBlocks(root).sort()).toEqual([".gitignore", "AGENTS.md"]);
+    expect(readFileSync(join(root, ".gitignore"), "utf-8")).toBe(`node_modules\n.env.local\n\n${gitignorePart()}`);
+    expect(readFileSync(join(root, "AGENTS.md"), "utf-8")).toBe(`# Shop\n\nOur own notes for agents.\n\n${agentsPart()}`);
+    // A second session changes nothing.
+    expect(addRootBlocks(root)).toEqual([]);
+    expect(readFileSync(join(root, ".gitignore"), "utf-8")).toBe(`node_modules\n.env.local\n\n${gitignorePart()}`);
+  });
+
+  test("a project without the files gets only AI-DLC's part", () => {
+    const root = copiedProject();
+    addRootBlocks(root);
+    expect(readFileSync(join(root, ".gitignore"), "utf-8")).toBe(gitignorePart());
+    expect(readFileSync(join(root, "AGENTS.md"), "utf-8")).toBe(agentsPart());
+  });
+
+  test("an earlier release's unchanged copy keeps its template lines as the team's own", () => {
+    const root = copiedProject();
+    const template = [
+      "# Logs", "logs", "*.log", "npm-debug.log*", "yarn-debug.log*", "yarn-error.log*",
+      "pnpm-debug.log*", "lerna-debug.log*", "", "node_modules", "dist", "dist-ssr", "*.local", "",
+      "# Editor directories and files", ".vscode/*", "!.vscode/extensions.json", ".idea", ".DS_Store",
+      "*.suo", "*.ntvs*", "*.njsproj", "*.sln", "*.sw?",
+    ].join("\n");
+    const earlier = `${template}\n\n${readFileSync(join(blocks, "gitignore"), "utf-8")}`;
+    // The release that shipped it lists it among the files it recognises.
+    const descriptorPath = join(root, ".aidlc", "tools", "data", "aidlc-projection.json");
+    const descriptor = JSON.parse(readFileSync(descriptorPath, "utf-8"));
+    descriptor.rootIntegrations.find((integration: { path: string }) => integration.path === ".gitignore")
+      .legacySignatures.wholeFileHashes.push(sha256Bytes(earlier));
+    writeFileSync(descriptorPath, `${JSON.stringify(descriptor)}\n`);
+    writeFileSync(join(root, ".gitignore"), earlier);
+    expect(addRootBlocks(root)).toContain(".gitignore");
+    expect(readFileSync(join(root, ".gitignore"), "utf-8")).toBe(`${template}\n\n${gitignorePart()}`);
+  });
+
+  // Earlier parts had notes above each group of entries, and two harnesses'
+  // parts were combined under a heading per harness. A part with exactly the
+  // shipped entries is AI-DLC's own whatever its notes, so it becomes the
+  // plain part: one comment line, then every harness's entries.
+  test("an earlier part with notes, alone or combined, becomes the plain part", () => {
+    const root = copiedProject();
+    cpSync(distSurface("kiro", ".kiro"), join(root, ".kiro"), { recursive: true });
+    const kiroBlock = readFileSync(join(distSurface("kiro", ".kiro"), "tools", "data", "root-blocks", "gitignore"), "utf-8");
+    const plain = unionBlocks([
+      { distribution: "copilot", text: readFileSync(join(blocks, "gitignore"), "utf-8") },
+      { distribution: "kiro", text: kiroBlock },
+    ]);
+    const entries = plain.split("\n").filter((line) => !line.startsWith("#"));
+    const earlier = [
+      "# AI-DLC, the committed and ignored split.",
+      "# Per-user cursors are ignored.",
+      ...entries.slice(0, 3),
+      "#",
+      "# Machine-local runtime is ignored.",
+      ...entries.slice(3, -2),
+      "",
+      "# kiro harness",
+      ...entries.slice(-2),
+    ].join("\n");
+    writeFileSync(join(root, ".gitignore"), `node_modules\n\n# BEGIN AI-DLC:gitignore\n${earlier}\n# END AI-DLC:gitignore\n`);
+    expect(addRootBlocks(root)).toContain(".gitignore");
+    const written = readFileSync(join(root, ".gitignore"), "utf-8");
+    expect(written).toBe(`node_modules\n\n# BEGIN AI-DLC:gitignore\n${plain}\n# END AI-DLC:gitignore\n`);
+    expect(written).toContain("aidlc/.aidlc-turn-counter");
+    expect(written.split("\n").filter((line) => line.startsWith("#") && !/^# (BEGIN|END) AI-DLC:/.test(line)))
+      .toEqual(["# AI-DLC: local working files"]);
+  });
+
+  test("a part the team changed, and a project config manages, are left as they are", () => {
+    const changed = copiedProject();
+    const edited = gitignorePart().replace("# END AI-DLC:gitignore", "our-own-line\n# END AI-DLC:gitignore");
+    writeFileSync(join(changed, ".gitignore"), edited);
+    writeFileSync(join(changed, "AGENTS.md"), "# Shop\n");
+    expect(addRootBlocks(changed)).toEqual(["AGENTS.md"]);
+    expect(readFileSync(join(changed, ".gitignore"), "utf-8")).toBe(edited);
+
+    const configured = copiedProject();
+    writeFileSync(join(configured, ".aidlc", "tools", "data", "aidlc-manifest.json"), "{}\n");
+    writeFileSync(join(configured, ".gitignore"), "node_modules\n");
+    expect(addRootBlocks(configured)).toEqual([]);
+    expect(readFileSync(join(configured, ".gitignore"), "utf-8")).toBe("node_modules\n");
+    expect(readdirSync(configured)).not.toContain("AGENTS.md");
+  });
+
+  test("files the Cursor installer manages are left to it", () => {
+    const root = copiedProject();
+    const installed = "node_modules\n\n# BEGIN AIDLC CURSOR\naidlc/active-space\n# END AIDLC CURSOR\n";
+    writeFileSync(join(root, ".gitignore"), installed);
+    writeFileSync(join(root, "AGENTS.md"), "<!-- BEGIN AIDLC CURSOR -->\n# AI-DLC\n<!-- END AIDLC CURSOR -->\n");
+    expect(addRootBlocks(root)).toEqual([]);
+    expect(readFileSync(join(root, ".gitignore"), "utf-8")).toBe(installed);
+  });
+
+  test("nothing outside the project is read or written, whatever the harness folder declares", () => {
+    const root = copiedProject();
+    const outside = freshRoot();
+    const descriptorPath = join(root, ".aidlc", "tools", "data", "aidlc-projection.json");
+    const descriptor = JSON.parse(readFileSync(descriptorPath, "utf-8"));
+    const escaping = `../${basename(outside)}/escaped`;
+    descriptor.rootIntegrations.push(
+      { path: escaping, policy: "managed-block", marker: "escape" },
+      { path: "linked/AGENTS.md", policy: "managed-block", marker: "linked" },
+      { path: "notes.md", policy: "managed-block", marker: "../../../outside" },
+    );
+    writeFileSync(descriptorPath, `${JSON.stringify(descriptor)}\n`);
+    for (const marker of ["escape", "linked"]) {
+      writeFileSync(join(root, ".aidlc", "tools", "data", "root-blocks", marker), "export EVIL=1\n");
+    }
+    symlinkSync(outside, join(root, "linked"), "dir");
+    // The team's AGENTS.md is a link to a file outside: it is not written through.
+    writeFileSync(join(outside, "AGENTS.md"), "# elsewhere\n");
+    symlinkSync(join(outside, "AGENTS.md"), join(root, "AGENTS.md"));
+    expect(addRootBlocks(root)).toEqual([".gitignore"]);
+    expect(existsSync(join(outside, "escaped"))).toBe(false);
+    expect(readdirSync(outside).sort()).toEqual(["AGENTS.md"]);
+    expect(readFileSync(join(outside, "AGENTS.md"), "utf-8")).toBe("# elsewhere\n");
+    expect(existsSync(join(root, "notes.md"))).toBe(false);
+  });
+
+  test("a part written at session start names the person's active space", () => {
+    const root = copiedProject();
+    mkdirSync(join(root, "aidlc", "spaces", "team-b", "memory", "phases"), { recursive: true });
+    writeFileSync(join(root, "aidlc", "spaces", "team-b", "memory", "org.md"), "# org team-b\n");
+    writeFileSync(join(root, "aidlc", "active-space"), "team-b\n");
+    const started = spawnSync(process.execPath, [join(root, ".aidlc", "hooks", "aidlc-session-start.ts")], {
+      cwd: root,
+      input: "{}",
+      encoding: "utf-8",
+      env: { ...process.env, AIDLC_HARNESS_DIR: ".aidlc", AIDLC_HARNESS_NAME: "copilot" },
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+    });
+    expect(started.status, `${started.stdout}${started.stderr}`).toBe(0);
+    const agents = readFileSync(join(root, "AGENTS.md"), "utf-8");
+    expect(agents).toContain("<!-- BEGIN AI-DLC:agents -->");
+    expect(agents).toContain("@aidlc/spaces/team-b/memory/org.md");
+    expect(agents).not.toContain("@aidlc/spaces/default/memory/");
   });
 });

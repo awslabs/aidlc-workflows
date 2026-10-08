@@ -1,4 +1,4 @@
-// covers: hook:aidlc-review-freeze, hook:review-freeze-command, function:freshReviewReceipts, function:producesArtifactFile, function:producesArtifactUnit, audit:REVIEW_FREEZE_BLOCKED
+// covers: hook:aidlc-review-freeze, file:hooks/aidlc-kiro-adapter.ts, hook:review-freeze-command, function:freshReviewReceipts, function:producesArtifactFile, function:producesArtifactUnit, audit:REVIEW_FREEZE_BLOCKED, function:guardRefusalHookNote, function:pendingGuardRecoveryAsk
 //
 // t264 - the deterministic PreToolUse enforcement of the §12a terminal-receipt
 // ordering (the receipt-invalidation loop's hook half; the prose half is
@@ -20,11 +20,18 @@
 //   (c) registration pins per harness: Claude settings.json (third entry in
 //       the shared PreToolUse group), Codex emit wiring + adapter target,
 //       Kiro CLI conductor fs_write registration, opencode plugin call, and
-//       the deliberate Kiro IDE absence.
+//       the Kiro IDE PreToolUse registration;
+//   (d) the Kiro IDE adapter route over the same ledger: each Kiro write and
+//       shell tool reaches the shared hook and a block comes back as exit 2.
 //
 // Mechanism = mixed: (a) is in-process import; (b) spawns the real hook and
 // real CLI tools at the process boundary; (c) is text/JSON invariants.
 
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
 import {
   afterAll,
   describe,
@@ -32,15 +39,17 @@ import {
   setDefaultTimeout,
   test,
 } from "bun:test";
+import { hookGroupMembers } from "../../core/tools/aidlc-command.ts";
 import { spawnSync } from "node:child_process";
 import {
+  cpSync,
   existsSync,
   mkdirSync,
   readdirSync,
   readFileSync,
   writeFileSync,
 } from "node:fs";
-import { dirname, join, relative, resolve } from "node:path";
+import { basename, dirname, join, relative, relative as relativePath, resolve } from "node:path";
 import {
   blockReason,
   judgeFreeze,
@@ -52,6 +61,7 @@ import {
   writeTargets,
 } from "../../dist/claude/.claude/hooks/aidlc-review-freeze.ts";
 import { readAllAuditShards } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import { KIRO_HOOK_GROUPS } from "../../harness/kiro-ide/hooks/aidlc-kiro-tool-names.ts";
 import {
   cleanupTestProject,
   createTestProject,
@@ -68,7 +78,7 @@ const HOOK = join(DIST_CLAUDE, "hooks", "aidlc-review-freeze.ts");
 const LOG_TOOL = join(DIST_CLAUDE, "tools", "aidlc-log.ts");
 const STATE_TOOL = join(DIST_CLAUDE, "tools", "aidlc-state.ts");
 
-setDefaultTimeout(30_000);
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const tempDirs: string[] = [];
 afterAll(() => {
@@ -492,6 +502,283 @@ describe("t264 (a) judgeFreeze decision table", () => {
     ).toEqual([]);
     expect(bashTargets("cat /a/b.md")).toEqual([]);
   });
+
+  test("writeTargets: content cmdlets bind their path, never a value passed by name (#1639)", () => {
+    const read = (shell: "posix" | "powershell") => (command: string): string[] =>
+      writeTargets("Bash", { command }, "/p", shell)
+        .map((path) => path.replaceAll("\\", "/").replace(/^[A-Za-z]:/, ""));
+    const powerShell = read("powershell");
+    const posix = read("posix");
+    for (const command of [
+      "Set-Content -Path notes.md -Value x",
+      "Set-Content -Value x notes.md",
+      "Set-Content -Path:notes.md -Value:x",
+      "Set-Content -Path: notes.md -Value x",
+      "Set-Content -Pat notes.md -Val x",
+      "'x' | Add-Content -Encoding utf8 notes.md",
+      "'x' | Out-File notes.md -Encoding utf8",
+      "'x' | Tee-Object notes.md",
+      "'x' | Tee-Object -FilePath notes.md",
+    ]) {
+      expect(powerShell(command), command).toEqual(["/p/notes.md"]);
+      // The POSIX reading has lost the quotes that tell a value from a
+      // parameter, so it counts every value as well as the path.
+      expect(posix(command), command).toContain("/p/notes.md");
+    }
+    expect(posix("Set-Content -Path notes.md -Value x")).toEqual(["/p/notes.md", "/p/x"]);
+    // Tee-Object -Variable writes no file; with a path named it would fail.
+    for (const command of [
+      "Tee-Object -InputObject aidlc/a.md -Variable snapshot",
+      "Get-Content aidlc/a.md | Tee-Object -Variable snapshot",
+    ]) {
+      expect(posix(command), command).toEqual([]);
+      expect(powerShell(command), command).toEqual([]);
+    }
+    // Dequoted, '-Variable' reads as -Variable; PowerShell would take it as
+    // the path and refuse the extra value, so nothing is written.
+    expect(posix("'x' | Tee-Object '-Variable' aidlc/a.md")).toEqual([]);
+    expect(posix("'x' | Tee-Object -Variable '-FilePath' aidlc/a.md")).toContain("/p/aidlc/a.md");
+    // A dequoted '-Variable' that was another parameter's value hides nothing.
+    for (const command of [
+      "'x' | Tee-Object -InputObject '-Variable' aidlc/a.md",
+      "Tee-Object aidlc/a.md -InputObject '-Variable'",
+      "'x' | Tee-Object -OutVariable '-Variable' aidlc/a.md",
+      "'x' | Tee-Object -Append: '-Variable' aidlc/a.md",
+    ]) {
+      expect(posix(command), command).toContain("/p/aidlc/a.md");
+      expect(powerShell(command), command).toContain("/p/aidlc/a.md");
+    }
+    expect(posix("'x' | Tee-Object -OutVariable -- -Variable:aidlc/a.md")).toContain("/p/aidlc/a.md");
+    // Dequoted, '-Variable:x' may be a quoted path on a drive named -Variable.
+    expect(posix("'x' | Tee-Object '-Variable:aidlc/a.md'")).toContain("/p/aidlc/a.md");
+    // A parameter-looking word left without a value may be a quoted path.
+    expect(posix("'x' | Tee-Object '-Variable'")).toContain("/p/-Variable");
+    // With the quotes known, a bound -Variable writes no file.
+    expect(powerShell("'x' | Tee-Object -Variable v aidlc/a.md")).toEqual([]);
+    expect(powerShell("New-Item -Path aidlc -Name a.md -ItemType File")).toEqual(["/p/aidlc/a.md"]);
+    expect(posix("New-Item -Path: aidlc -Name a.md")).toContain("/p/aidlc/a.md");
+    // After --, a word that looks like a parameter is a value as written.
+    expect(posix("Set-Content -- -Value:notes.md")).toContain("/p/-Value:notes.md");
+    expect(powerShell("Set-Content -- -Value:notes.md")).toContain("/p/-Value:notes.md");
+    // A -- the reading gave to a parameter as its value still ends them.
+    expect(posix("'x' | Set-Content -ErrorAction -- -Value:notes.md")).toContain("/p/-Value:notes.md");
+    // Every positional value counts: a word read apart from how PowerShell
+    // binds it must not move a path into the Value slot.
+    for (const command of [
+      "Set-Content x aidlc/a.md",
+      "Set-Content a, aidlc/a.md x",
+      "Set-Content a ,aidlc/a.md x",
+      "'x' | Set-Content notes.md, aidlc/a.md",
+      "'x' | Add-Content -Path notes.md, aidlc/a.md",
+      "'x' | Set-Content -- aidlc/a.md",
+      "'x' | Out-File -- aidlc/a.md",
+      "Set-Content -- -Value aidlc/a.md",
+      "'x' | Set-Content –Path aidlc/a.md",
+      "'x' | Out-File —FilePath aidlc/a.md",
+      "Set-Content -Value '-Value' aidlc/a.md",
+      "Set-Content '-Value' -Path:aidlc/a.md",
+      "Set-Content -Value:'' aidlc/a.md",
+      "\"x\" | Out-File -OutBuffer:\"\" aidlc/a.md",
+      // A parameter name ends at ( { . or [.
+      "Set-Content -Path(\"aidlc/a.md\") x",
+      "Set-Content -Path./aidlc/a.md x",
+    ]) {
+      expect(powerShell(command), command).toContain("/p/aidlc/a.md");
+      expect(posix(command), command).toContain("/p/aidlc/a.md");
+    }
+    // A string in a group is that string.
+    expect(powerShell("Set-Content -Path ('aidlc\\a.md') x")).toContain("/p/aidlc/a.md");
+    // PowerShell runs neither as a write; the POSIX reading still counts them.
+    for (const command of ["Set-Content -Path=aidlc/a.md x", "Out-File --FilePath:aidlc/a.md"]) {
+      expect(posix(command), command).toContain("/p/aidlc/a.md");
+    }
+    // A parameter the reader does not know may be a switch: every value counts.
+    expect(powerShell("Set-Content -Bogus q notes.md x")).toEqual(
+      expect.arrayContaining(["/p/notes.md", "/p/q", "/p/x"]),
+    );
+    // -Pa could be -Path or -PassThru.
+    expect(powerShell("Set-Content -Pa notes.md x")).toEqual(
+      expect.arrayContaining(["/p/notes.md", "/p/x"]),
+    );
+  });
+
+  test("writeTargets: a PowerShell location change moves the reading the way PowerShell does", () => {
+    const targets = (command: string): string[] =>
+      writeTargets("Bash", { command }, "/p", "powershell")
+        .map((path) => path.replaceAll("\\", "/").replace(/^[A-Za-z]:/, ""));
+    for (const command of [
+      "Set-Location .kiro\\hooks; Set-Content y.json x",
+      "cd .kiro\\hooks; Set-Content y.json x",
+      "sl -Path .kiro\\hooks; Set-Content y.json x",
+      "Set-Location -LiteralPath '.kiro\\hooks'; Set-Content y.json x",
+      "Push-Location .kiro; Set-Content hooks\\y.json x",
+      "pushd .kiro; 'x' | Tee-Object hooks\\y.json",
+      "Write-Output (Set-Location .kiro\\hooks); Set-Content y.json x",
+    ]) {
+      expect(targets(command), command).toContain("/p/.kiro/hooks/y.json");
+    }
+    // A positional directory moves the reading once.
+    expect(targets("Set-Location .kiro; Set-Content -Path y.json -Value x").sort()).toEqual(["/p/.kiro/y.json", "/p/y.json"]);
+    // The reading from the call's cwd stays; history and stack names add nothing.
+    expect(targets("Set-Location -; Set-Content -Path y.json -Value x")).toEqual(["/p/y.json"]);
+    expect(targets("Set-Location +; Set-Content -Path y.json -Value x")).toEqual(["/p/y.json"]);
+    expect(targets("Push-Location -StackName s; Set-Content -Path y.json -Value x")).toEqual(["/p/y.json"]);
+    expect(writeTargets("Bash", { command: "pushd +; echo x > y" }, "/p")
+      .map((path) => path.replaceAll("\\", "/").replace(/^[A-Za-z]:/, ""))).toEqual(["/p/y"]);
+    // ~, $HOME and ${HOME} take a backslash and any case, as PowerShell reads
+    // them: from HOME, and on Windows from the user profile instead.
+    const saved = { HOME: process.env.HOME, USERPROFILE: process.env.USERPROFILE, T264_HOME: process.env.T264_HOME };
+    try {
+      process.env.HOME = "/ph";
+      process.env.USERPROFILE = "/pu";
+      const [profile, other] = process.platform === "win32" ? ["/pu", "/ph"] : ["/ph", "/pu"];
+      for (const command of [
+        "Set-Content -Path ~\\r\\x -Value v",
+        "Set-Content -Path $HOME\\r\\x -Value v",
+        "Set-Content -Path $home\\r\\x -Value v",
+        "Set-Content -Path $" + "{Home}\\r\\x -Value v",
+        "Set-Location ~\\r; Set-Content -Path x -Value v",
+      ]) {
+        expect(targets(command), command).toContain(`${profile}/r/x`);
+        expect(targets(command), command).not.toContain(`${other}/r/x`);
+      }
+      expect(targets("Set-Location; Set-Content -Path x -Value v")).toContain(`${profile}/x`);
+      // No $env: variable is read from the hook's environment: its value never
+      // enters a target (and so never a refusal), and a command can reassign it.
+      process.env.T264_HOME = "/sentinel-t264";
+      for (const command of [
+        "Set-Content -Path $env:T264_HOME\\r\\x -Value v",
+        "Set-Content -Path $" + "{env:T264_HOME}\\r\\x -Value v",
+        "Set-Content -Path $env:HOME\\r\\x -Value v",
+        "Set-Location $env:T264_HOME; Set-Content -Path x -Value v",
+      ]) {
+        expect(targets(command).some((path) => path.includes("sentinel") || path.startsWith("/ph/")), command).toBe(false);
+      }
+    } finally {
+      for (const [key, value] of Object.entries(saved)) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    }
+    // POSIX: bash's cd takes +1 as a directory; pushd's +1 and pushd -n stay put.
+    const posix = (command: string): string[] =>
+      writeTargets("Bash", { command }, "/p").map((path) => path.replaceAll("\\", "/").replace(/^[A-Za-z]:/, ""));
+    expect(posix("cd +1 && echo x > y")).toContain("/p/+1/y");
+    expect(posix("pushd +1 && echo x > y")).toEqual(["/p/y"]);
+    expect(posix("pushd -n d && echo x > y")).toEqual(["/p/y"]);
+    expect(posix("pushd -n -- d && echo x > y")).toEqual(["/p/y"]);
+    // The POSIX reading of the same line drops the backslashes.
+    expect(writeTargets("Bash", { command: "cd .kiro\\hooks; echo x > y.json" }, "/p")
+      .map((path) => path.replaceAll("\\", "/").replace(/^[A-Za-z]:/, ""))).not.toContain("/p/.kiro/hooks/y.json");
+  });
+
+  test("writeTargets: a PowerShell command is read as PowerShell (#1639)", () => {
+    const targets = (command: string): string[] =>
+      writeTargets("Bash", { command }, "/p", "powershell")
+        .map((path) => path.replaceAll("\\", "/").replace(/^[A-Za-z]:/, ""));
+    // Backslashes are separators, not escapes, quoted or not.
+    for (const command of [
+      "Set-Content aidlc\\docs\\a.md x",
+      "Set-Content 'aidlc\\docs\\a.md' x",
+      "Set-Content \"aidlc\\docs\\a.md\" x",
+      "echo x > aidlc\\docs\\a.md",
+      "echo x>aidlc\\docs\\a.md",
+      "'x' | Tee-Object aidlc\\docs\\a.md",
+      "'x' | Out-File -FilePath aidlc\\docs\\a.md -Append",
+      "Set-Content ‘aidlc\\docs\\a.md’ x",
+      "Set-Content –Path aidlc\\docs\\a.md –Value x",
+      "Set-Content `\n  aidlc\\docs\\a.md x",
+      "Set-Content `\r\n  aidlc\\docs\\a.md x",
+      "sc aidlc\\docs\\a.md x",
+      "rm -r -fo aidlc\\docs\\a.md",
+      "cp -Path scratch.md -Destination aidlc\\docs\\a.md",
+      "git status; Set-Content aidlc\\docs\\a.md x",
+      "Write-Output (Set-Content aidlc\\docs\\a.md x)",
+      "\"$(Set-Content aidlc\\docs\\a.md x)\"",
+      "Get-ChildItem | ForEach-Object { Remove-Item aidlc\\docs\\a.md }",
+    ]) {
+      expect(targets(command), command).toContain("/p/aidlc/docs/a.md");
+    }
+    expect(targets("Set-Content aidlc\\a.md,aidlc\\b.md -Value x")).toEqual([
+      "/p/aidlc/a.md",
+      "/p/aidlc/b.md",
+    ]);
+    expect(targets("Set-Content 'a,b.md' -Value x")).toEqual(["/p/a,b.md"]);
+    expect(targets("Remove-Item -Path:aidlc\\a.md,aidlc\\b.md")).toEqual([
+      "/p/aidlc/a.md",
+      "/p/aidlc/b.md",
+    ]);
+    expect(targets("Set-Content 'it''s.md' -Value x")).toEqual(["/p/it's.md"]);
+    for (const command of [
+      "Set-Content a, aidlc\\a.md x",
+      "'x' | Set-Content -- aidlc\\a.md",
+      "'x' | Out-File -- aidlc\\a.md",
+    ]) {
+      expect(targets(command), command).toContain("/p/aidlc/a.md");
+    }
+    // A cmdlet that takes its path from the pipeline may write anywhere.
+    expect(targets("Get-ChildItem aidlc | Remove-Item -Recurse")).toEqual(["/p"]);
+    for (const command of [
+      // An escaped dash is a value, not a parameter.
+      "Set-Content -Value `-Encoding aidlc\\a.md",
+      "Set-Content -Value -`Encoding aidlc\\a.md",
+      // An escaped --% does not stop parsing.
+      "Write-Output `--% ; Remove-Item aidlc\\a.md",
+      // The command on the right of an assignment runs.
+      "$null = New-Item -ItemType File aidlc\\a.md",
+      "$r = Remove-Item aidlc\\a.md",
+      "$x.y=Remove-Item aidlc\\a.md",
+      "$" + "{x}=Remove-Item aidlc\\a.md",
+      "$a[0] =Remove-Item aidlc\\a.md",
+      "$a = $b = Remove-Item aidlc\\a.md",
+      "$x ??= Remove-Item aidlc\\a.md",
+      "$a=$b=Remove-Item aidlc\\a.md",
+      "[string]$x=Remove-Item aidlc\\a.md",
+      // A [ that does not close a type name is an ordinary character.
+      "echo [; Set-Content aidlc\\a.md x",
+      // $pwd is $PWD.
+      "Set-Content $pwd\\aidlc\\a.md x",
+    ]) {
+      expect(targets(command), command).toContain("/p/aidlc/a.md");
+    }
+    // An array continues past the blanks around its commas.
+    for (const command of [
+      "New-Item -Path scratch, aidlc -Name a.md -ItemType File",
+      "New-Item -Path scratch ,aidlc -Name a.md -ItemType File",
+      "New-Item -Path scratch,`\n  aidlc -Name a.md -ItemType File",
+      "New-Item -Path scratch,\n  aidlc -Name a.md -ItemType File",
+    ]) {
+      expect(targets(command), command).toEqual(["/p/scratch/a.md", "/p/aidlc/a.md"]);
+    }
+    // A pipeline path is replaced only by a path named in full.
+    expect(targets("Get-Item aidlc\\a.md | Remove-Item -ErrorAction Stop")).toContain("/p");
+    expect(targets("Get-ChildItem aidlc | Move-Item -Destination elsewhere")).toContain("/p");
+    // Copy-Item reads what is piped to it; only its destination is written.
+    expect(targets("Get-ChildItem aidlc | Copy-Item -Destination elsewhere")).toEqual(["/p/elsewhere"]);
+    // A destination it cannot read leaves the pipeline's working directory.
+    expect(targets("Get-ChildItem aidlc | Copy-Item -Destination $d")).toEqual(["/p"]);
+    expect(targets("Get-ChildItem aidlc | Copy-Item -Dest:elsewhere")).toContain("/p");
+    // A redirect target is a file name, whatever it looks like.
+    expect(targets("echo hi > -notes.md")).toEqual(["/p/-notes.md"]);
+    expect(targets("Write-Output a, b")).toEqual([]);
+    expect(targets("$a = 1")).toEqual([]);
+    // A newline after | continues the pipeline; a ; ends it.
+    expect(targets("Get-ChildItem aidlc |\n  Remove-Item -Recurse")).toEqual(["/p"]);
+    expect(targets("Get-ChildItem aidlc |\r\n  Remove-Item -Recurse")).toEqual(["/p"]);
+    expect(targets("Get-ChildItem aidlc |\n  # all of it\n  Remove-Item -Recurse")).toEqual(["/p"]);
+    expect(targets("Get-ChildItem aidlc |; Remove-Item -Recurse")).toEqual([]);
+    expect(targets("Get-Item aidlc\\a.md | Set-Content -Value x")).toEqual(["/p"]);
+    // Discarded output, merged streams, comments and values write nothing.
+    expect(targets("'x' > $null")).toEqual([]);
+    expect(targets("Write-Output x 2>&1")).toEqual([]);
+    expect(targets("Write-Output x # > aidlc\\docs\\a.md")).toEqual([]);
+    expect(targets("& 'C:\\tools\\aidlc.cmd' engine next")).toEqual([]);
+    expect(targets("Get-Content aidlc\\docs\\a.md | Select-String x")).toEqual([]);
+    // The POSIX reading of the same commands drops the backslashes.
+    expect(writeTargets("Bash", { command: "Set-Content aidlc\\docs\\a.md x" }, "/p")
+      .map((path) => path.replaceAll("\\", "/").replace(/^[A-Za-z]:/, "")))
+      .toEqual(["/p/aidlcdocsa.md", "/p/x"]);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -526,7 +813,7 @@ function openGate(p: string): void {
   const r = spawnSync(
     BUN,
     [STATE_TOOL, "gate-start", "requirements-analysis", "--project-dir", p],
-    { encoding: "utf-8", env },
+    { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8", env },
   );
   if ((r.status ?? -1) !== 0) throw new Error(`gate-start failed: ${r.stdout}${r.stderr}`);
 }
@@ -563,7 +850,7 @@ function recordReview(p: string, verdict: "READY" | "NOT-READY"): void {
     ...process.env,
     AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD: "1",
   };
-  const requested = spawnSync(BUN, args, { encoding: "utf-8", env });
+  const requested = spawnSync(BUN, args, { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8", env });
   if ((requested.status ?? -1) !== 0) {
     throw new Error(`review request failed: ${requested.stdout}${requested.stderr}`);
   }
@@ -577,6 +864,7 @@ function recordReview(p: string, verdict: "READY" | "NOT-READY"): void {
     "utf-8",
   );
   const completed = spawnSync(BUN, [...args, "--verdict", verdict], {
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     encoding: "utf-8",
     env,
   });
@@ -597,7 +885,7 @@ function reject(p: string): void {
   const r = spawnSync(
     BUN,
     [STATE_TOOL, "reject", "requirements-analysis", "--feedback", "change it", "--project-dir", p],
-    { encoding: "utf-8", env },
+    { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8", env },
   );
   if ((r.status ?? -1) !== 0) throw new Error(`reject failed: ${r.stdout}${r.stderr}`);
 }
@@ -608,6 +896,7 @@ function runHook(
   env: Record<string, string> = {},
 ): { code: number; stderr: string } {
   const r = spawnSync(BUN, [HOOK], {
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     input: JSON.stringify(payload),
     env: { ...process.env, CLAUDE_PROJECT_DIR: p, ...env },
     encoding: "utf-8",
@@ -642,7 +931,7 @@ describe("t264 (b) shipped-hook lifecycle over a real ledger", () => {
       "If this is a reviewer suggestion, quote it at the gate",
     );
     expect(blocked.stderr).toContain(
-      'Ask "What should change?" for stage "requirements-analysis"',
+      'When the person already said what should change for stage "requirements-analysis"',
     );
     expect(blocked.stderr).toContain("their exact text unchanged");
     expect(readAllAuditShards(p)).toContain("**Event**: REVIEW_FREEZE_BLOCKED");
@@ -658,6 +947,7 @@ describe("t264 (b) shipped-hook lifecycle over a real ledger", () => {
       BUN,
       [STATE_TOOL, "revise", "requirements-analysis", "--project-dir", p],
       {
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
         encoding: "utf-8",
         env: {
           ...process.env,
@@ -767,6 +1057,7 @@ describe("t264 (b) shipped-hook lifecycle over a real ledger", () => {
     recordReview(p, "READY");
     openGate(p);
     const r = spawnSync(BUN, [HOOK], {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
       input: "not json",
       env: { ...process.env, CLAUDE_PROJECT_DIR: p },
       encoding: "utf-8",
@@ -794,7 +1085,7 @@ describe("t264 (b) shipped-hook lifecycle over a real ledger", () => {
     const approve = spawnSync(
       BUN,
       [STATE_TOOL, "approve", "requirements-analysis", "--user-input", "Approve", "--project-dir", p],
-      { encoding: "utf-8", env },
+      { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8", env },
     );
     expect(approve.status ?? -1).toBe(0);
     // Stage now [x]: its produces paths are permanent record, not frozen.
@@ -815,21 +1106,35 @@ describe("t264 (c) harness registration", () => {
       const s = JSON.parse(readFileSync(join(root, "settings.json"), "utf-8")) as {
         hooks?: Record<string, Array<{ matcher?: string; hooks?: Array<{ command?: string }> }>>;
       };
+      // One process runs the PreToolUse checks (#2066): the freeze is a member
+      // of the guard group, with the matcher its own row had.
       const group = (s.hooks?.PreToolUse ?? []).find((g) =>
-        (g.hooks ?? []).some((h) => (h.command ?? "").includes("hook review-freeze")),
+        (g.hooks ?? []).some((h) => (h.command ?? "").includes("hook guard-tool-call")),
       );
       expect(group, root).toBeDefined();
-      // Shares the state-transition-guard/reviewer-scope matcher group, so the
-      // hook can inspect both file writes and mutation-capable shell commands.
-      expect(group?.matcher).toContain("Write");
-      expect(group?.matcher).toContain("Edit");
-      expect(group?.matcher).toContain("Bash");
+      expect(
+        (s.hooks?.PreToolUse ?? []).some((g) =>
+          (g.hooks ?? []).some((h) => (h.command ?? "").includes("hook review-freeze"))
+        ),
+        root,
+      ).toBe(false);
+      // The group row reaches both file writes and mutation-capable shell
+      // commands, and so does the member's own matcher inside it.
+      const member = (hookGroupMembers("guard-tool-call") ?? [])
+        .find((entry) => entry.hook === "review-freeze");
+      for (const tool of ["Write", "Edit", "Bash"]) {
+        expect(group?.matcher, `${root} ${tool}`).toContain(tool);
+        expect(new RegExp(member?.matcher ?? "$^").test(tool), `${root} ${tool}`).toBe(true);
+      }
     }
   });
 
-  test("Codex hooks.json carries the adapter target; the adapter has the case", () => {
+  test("Codex hooks.json runs the freeze inside the guard-tool-call group; the adapter has the case", () => {
     const hooksJson = readFileSync(join(REPO_ROOT, "dist", "codex", ".codex", "hooks.json"), "utf-8");
-    expect(hooksJson).toContain("adapter codex review-freeze");
+    // One PreToolUse process runs the five checks (#2066): the freeze is a
+    // member of guard-tool-call, not a handler of its own.
+    expect(hooksJson).toContain("adapter codex guard-tool-call");
+    expect(hooksJson).not.toContain("adapter codex review-freeze");
     const adapter = readFileSync(
       join(REPO_ROOT, "harness", "codex", "hooks", "aidlc-codex-adapter.ts"),
       "utf-8",
@@ -905,24 +1210,295 @@ describe("t264 (c) harness registration", () => {
     expect(adapter).toContain('input: claudeShaped("PreToolUse", reviewerToolName)');
   });
 
-  test("Kiro IDE ships the hook body but NO registration (prose-only harness)", () => {
-    // The body lands via the whole-dir hooks copy; no .kiro.hook wiring file
-    // consumes it (PreToolUse tool inputs are not uniformly available there).
+  test("Kiro IDE runs review-freeze as its own member of the guard card", () => {
+    // Kiro shows a card per hook run, so the freeze runs inside the one
+    // PreToolUse card (#2022) as a target of its own beside plan-approval-guard,
+    // not a branch of it; the card runs every member even after one refuses.
+    for (const root of [
+      join(REPO_ROOT, "harness", "kiro-ide", "hooks"),
+      join(REPO_ROOT, "dist", "kiro-ide", ".kiro", "hooks"),
+    ]) {
+      const manifest = JSON.parse(readFileSync(join(root, "aidlc-guard-tool-call.json"), "utf-8")) as {
+        hooks: Array<{ trigger: string; matcher?: string; action: { command: string } }>;
+      };
+      expect(manifest.hooks).toHaveLength(1);
+      expect(manifest.hooks[0].trigger).toBe("PreToolUse");
+      expect(manifest.hooks[0].action.command).toEndWith(" engine adapter kiro-ide guard-tool-call");
+    }
+    // It runs for the write and shell tools the adapter forwards (t218 pins
+    // that the two sets agree), not for reads.
+    const member = KIRO_HOOK_GROUPS["guard-tool-call"].find((m) => m.target === "review-freeze");
+    const matcher = new RegExp(member?.matcher ?? "^$");
+    expect(matcher.test("fs_write") && matcher.test("execute_bash")).toBe(true);
+    expect(matcher.test("read_file")).toBe(false);
     expect(existsSync(join(REPO_ROOT, "dist", "kiro-ide", ".kiro", "hooks", "aidlc-review-freeze.ts"))).toBe(true);
-    expect(
-      existsSync(join(REPO_ROOT, "harness", "kiro-ide", "hooks", "aidlc-review-freeze.kiro.hook")),
-    ).toBe(false);
-    const ideConductor = readFileSync(
-      join(REPO_ROOT, "harness", "kiro-ide", "agents", "aidlc.md"),
+    const adapter = readFileSync(
+      join(REPO_ROOT, "harness", "kiro-ide", "hooks", "aidlc-kiro-adapter.ts"),
       "utf-8",
     );
-    expect(ideConductor).not.toContain("review-freeze");
-    for (const name of readdirSync(join(REPO_ROOT, "harness", "kiro-ide", "agents"))) {
-      if (!name.endsWith("-agent.md")) continue;
-      expect(
-        readFileSync(join(REPO_ROOT, "harness", "kiro-ide", "agents", name), "utf-8"),
-        name,
-      ).not.toContain("review-freeze");
-    }
+    expect(adapter).toContain('case "review-freeze":');
   });
 });
+
+// ---------------------------------------------------------------------------
+// (d) The Kiro IDE adapter route
+// ---------------------------------------------------------------------------
+
+const KIRO_IDE_TREE = join(REPO_ROOT, "dist", "kiro-ide", ".kiro");
+
+function runKiroIde(
+  p: string,
+  target: string,
+  payload: Record<string, unknown>,
+  envOverrides: NodeJS.ProcessEnv = {},
+): { code: number; stderr: string } {
+  const env: NodeJS.ProcessEnv = {
+    ...process.env,
+    CLAUDE_PROJECT_DIR: p,
+    AIDLC_COMPILED_EXECUTABLE: "",
+    ...envOverrides,
+  };
+  delete env.USER_PROMPT;
+  const r = spawnSync(BUN, [join(p, ".kiro", "hooks", "aidlc-kiro-adapter.ts"), target], {
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+    input: JSON.stringify({ hook_event_name: "PreToolUse", cwd: p, session_id: "sess_t264-ide", ...payload }),
+    env,
+    encoding: "utf-8",
+  });
+  return { code: r.status ?? -1, stderr: r.stderr ?? "" };
+}
+
+describe("t264 (d) Kiro IDE adapter route", () => {
+  test("Kiro write and shell tools reach the freeze; reads and other paths do not", () => {
+    const p = projBeforeGate();
+    cpSync(KIRO_IDE_TREE, join(p, ".kiro"), { recursive: true });
+    const file = raArtifact(p);
+    const write = { tool_name: "fs_write", tool_input: { path: file, text: "# Changed\n" } };
+    expect(runKiroIde(p, "review-freeze", write).code).toBe(0);
+    recordReview(p, "READY");
+    openGate(p);
+    for (const call of [
+      write,
+      { tool_name: "str_replace", tool_input: { path: file, oldStr: "# Requirements", newStr: "# Changed" } },
+      { tool_name: "fs_append", tool_input: { path: file, text: "more\n" } },
+      { tool_name: "delete_file", tool_input: { explanation: "remove it", targetFile: file } },
+      { tool_name: "execute_bash", tool_input: { command: `echo changed > '${file}'` } },
+    ]) {
+      const r = runKiroIde(p, "review-freeze", call);
+      expect(r.code, call.tool_name).toBe(2);
+      expect(r.stderr, call.tool_name).toContain("review-freeze");
+    }
+    // A relative redirect resolves from the shell call's own cwd.
+    const relative = runKiroIde(p, "review-freeze", {
+      tool_name: "execute_bash",
+      tool_input: { command: "echo changed > requirements.md", cwd: dirname(file) },
+    });
+    expect(relative.code).toBe(2);
+    expect(relative.stderr).toContain("review-freeze");
+    // So does one after a literal cd or pushd, from wherever that leaves the shell.
+    const reviewedDir = relativePath(p, dirname(file));
+    for (const command of [
+      `cd '${reviewedDir}' && echo changed > requirements.md`,
+      `pushd '${dirname(reviewedDir)}' && echo changed > '${basename(dirname(file))}/requirements.md'`,
+    ]) {
+      const r = runKiroIde(p, "review-freeze", { tool_name: "execute_bash", tool_input: { command, cwd: p } });
+      expect(r.code, command).toBe(2);
+      expect(r.stderr, command).toContain("review-freeze");
+    }
+    // An execute_pwsh command reaches the freeze marked as PowerShell, so a
+    // backslash path (in Tee-Object too) and Set-Location read the way PowerShell runs them.
+    const backslashed = reviewedDir.replaceAll("/", "\\");
+    for (const command of [
+      `Set-Content ${backslashed}\\requirements.md changed`,
+      `'changed' | Tee-Object ${backslashed}\\requirements.md`,
+      `Set-Location ${backslashed}; Set-Content requirements.md changed`,
+      `Push-Location -Path ${backslashed}; sc requirements.md changed`,
+    ]) {
+      const r = runKiroIde(p, "review-freeze", { tool_name: "execute_pwsh", tool_input: { command, cwd: p } });
+      expect(r.code, command).toBe(2);
+      expect(r.stderr, command).toContain("review-freeze");
+    }
+    expect(runKiroIde(p, "review-freeze", {
+      tool_name: "execute_pwsh",
+      tool_input: { command: `Set-Location ${backslashed}; Set-Content notes.md x`, cwd: p },
+    }).code).toBe(0);
+    // A home-relative backslash path, with the project as PowerShell's home.
+    const home = { HOME: p, USERPROFILE: p };
+    for (const command of [
+      `Set-Content $HOME\\${backslashed}\\requirements.md changed`,
+      `Set-Content ~\\${backslashed}\\requirements.md changed`,
+    ]) {
+      const r = runKiroIde(p, "review-freeze", { tool_name: "execute_pwsh", tool_input: { command, cwd: p } }, home);
+      expect(r.code, command).toBe(2);
+      expect(r.stderr, command).toContain("review-freeze");
+    }
+    expect(runKiroIde(p, "review-freeze", { tool_name: "read_file", tool_input: { path: file } }).code).toBe(0);
+    expect(runKiroIde(p, "review-freeze", {
+      tool_name: "fs_write",
+      tool_input: { path: join(dirname(file), "notes.md"), text: "x" },
+    }).code).toBe(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// (d) The refusal names `next`, and the next `next` asks the recovery question
+// ---------------------------------------------------------------------------
+//
+// The refusal used to end with the recovery question as a JSON line, which
+// the person read under the tool's hook error. The hook now says what was
+// refused and names `next`; the question waits in the refusal record and the
+// next `next` asks it once, unless it no longer stands (the stage was approved
+// or sent back, the check was lowered) or another question is already open.
+
+const ORCH_TOOL = join(DIST_CLAUDE, "tools", "aidlc-orchestrate.ts");
+
+function nextDirective(p: string, env: Record<string, string> = {}): Record<string, unknown> {
+  const r = spawnSync(BUN, [ORCH_TOOL, "next", "--project-dir", p], {
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+    encoding: "utf-8",
+    env: { ...process.env, ...env },
+  });
+  const line = (r.stdout ?? "").trim().split("\n").at(-1) ?? "";
+  try {
+    return JSON.parse(line) as Record<string, unknown>;
+  } catch {
+    throw new Error(`next printed no directive: ${r.status}\n${r.stdout}\n${r.stderr}`);
+  }
+}
+
+function approveStage(p: string): void {
+  const r = spawnSync(
+    BUN,
+    [STATE_TOOL, "approve", "requirements-analysis", "--project-dir", p],
+    {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+      encoding: "utf-8",
+      env: {
+        ...process.env,
+        AIDLC_ALLOW_DIRECT_STATE_TRANSITIONS: "1",
+        AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "1",
+        AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD: "1",
+      },
+    },
+  );
+  if ((r.status ?? -1) !== 0) throw new Error(`approve failed: ${r.stdout}${r.stderr}`);
+}
+
+function refusalRecords(p: string): string[] {
+  const dir = join(seededRecordDir(p), ".aidlc-engine", "guard-refusals");
+  if (!existsSync(dir)) return [];
+  return readdirSync(dir).sort().map((name) => readFileSync(join(dir, name), "utf-8"));
+}
+
+function refusedWrite(p: string): string {
+  const refused = runHook(p, writePayload(raArtifact(p)));
+  expect(refused.code).toBe(2);
+  return refused.stderr;
+}
+
+describe("t264 (d) the refusal names next; next asks the recovery question", () => {
+  test("the refusal says what was refused and the step to take, with no JSON line", () => {
+    const p = projBeforeGate();
+    recordReview(p, "READY");
+    const stderr = refusedWrite(p);
+    expect(stderr).toContain("its latest review is final");
+    expect(stderr.split("\n").filter((line) => line.trim().startsWith("{"))).toEqual([]);
+    expect(stderr).not.toContain('"ask_type"');
+    expect(stderr.trim()).toMatch(/ Next: `[^`\n]*orchestrate[^`\n]* next`\.$/);
+  });
+
+  test("the next `next` asks the recovery question, once", () => {
+    const p = projBeforeGate();
+    recordReview(p, "READY");
+    refusedWrite(p);
+    const asked = nextDirective(p);
+    expect(asked).toMatchObject({
+      kind: "ask",
+      ask_type: "guard-recovery",
+      stage: "requirements-analysis",
+      reason_codes: ["REVIEW_FREEZE_ACTIVE"],
+    });
+    expect((asked.remedies as { op: string }[]).map((remedy) => remedy.op)).toEqual([
+      "request-changes",
+      "lower-fence",
+    ]);
+    expect(nextDirective(p)).toMatchObject({ kind: "run-stage", stage: "requirements-analysis" });
+  });
+
+  // A live run picked Request Changes on this question after saying what should
+  // change, and was asked "What should change?" again: a published question binds
+  // only words given after it. Asked as the hook used to print it, the pick is
+  // carried out with the person's own words.
+  test("the question is not published, so the person's own words carry their Request Changes", () => {
+    const p = projBeforeGate();
+    recordReview(p, "READY");
+    refusedWrite(p);
+    expect(nextDirective(p)).toMatchObject({ kind: "ask", ask_type: "guard-recovery" });
+    const answered = spawnSync(
+      BUN,
+      [LOG_TOOL, "answer", "--stage", "requirements-analysis", "--checkpoint", "guard-recovery",
+        "--details", "request-changes", "--project-dir", p],
+      { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8", env: process.env },
+    );
+    expect(answered.status, `${answered.stdout}${answered.stderr}`).toBe(0);
+    expect(JSON.parse(answered.stdout.trim().split("\n").at(-1) ?? "{}")).toMatchObject({ recorded: null });
+  });
+
+  test("a Stop-hook probe reads the question without taking it", () => {
+    const p = projBeforeGate();
+    recordReview(p, "READY");
+    refusedWrite(p);
+    const before = refusalRecords(p);
+    expect(nextDirective(p, { AIDLC_STOP_HOOK_PROBE: "1" })).toMatchObject({
+      kind: "ask",
+      ask_type: "guard-recovery",
+    });
+    expect(refusalRecords(p)).toEqual(before);
+    expect(nextDirective(p)).toMatchObject({ kind: "ask", ask_type: "guard-recovery" });
+  });
+
+  test("an open gate's question comes first, and approving the stage retires the recovery question", () => {
+    const p = projBeforeGate();
+    recordReview(p, "READY");
+    refusedWrite(p);
+    openGate(p);
+    expect(nextDirective(p).ask_type).not.toBe("guard-recovery");
+    approveStage(p);
+    const after = nextDirective(p);
+    expect(after.ask_type).not.toBe("guard-recovery");
+    expect(after.stage).not.toBe("requirements-analysis");
+  });
+
+  test("sending the stage back retires the recovery question", () => {
+    const p = projBeforeGate();
+    recordReview(p, "READY");
+    openGate(p);
+    refusedWrite(p);
+    reject(p);
+    expect(nextDirective(p).ask_type).not.toBe("guard-recovery");
+  });
+
+  test("a lowered review-freeze check retires the recovery question", () => {
+    const p = projBeforeGate();
+    recordReview(p, "READY");
+    refusedWrite(p);
+    expect(
+      nextDirective(p, { AIDLC_DISABLE_REVIEW_FREEZE_HOOK: "1" }).ask_type,
+    ).not.toBe("guard-recovery");
+  });
+
+  test("every conductor runs the step a hook refusal names", () => {
+    const missing: string[] = [];
+    for (const harness of ["claude", "kiro", "kiro-ide", "codex", "cursor", "opencode", "copilot"]) {
+      const rel = join("harness", harness, "skills", "aidlc", "SKILL.md");
+      const body = readFileSync(join(REPO_ROOT, rel), "utf-8");
+      if (!body.includes(HOOK_REFUSAL_NEXT_RULE)) missing.push(rel);
+    }
+    expect(missing).toEqual([]);
+  });
+});
+
+const HOOK_REFUSAL_NEXT_RULE =
+  "A hook refusal that ends with `Next:` and a command names your next step: run that command and act on " +
+  "the directive it returns (after a refused write, the recovery question to put to the person); never retry " +
+  "the refused call.";

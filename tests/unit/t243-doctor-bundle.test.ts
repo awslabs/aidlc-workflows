@@ -41,7 +41,12 @@
 // the shipped .claude tree so the shipped stage graph is present and the custom
 // slug is genuinely NOT a core slug.
 
-import { afterEach, describe, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { afterEach, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { homedir } from "node:os";
 import {
@@ -77,6 +82,9 @@ import type {
   GraphStageLite,
 } from "../../dist/claude/.claude/tools/aidlc-doctor-bundle.ts";
 import { classifyTerminalCommand } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import { aidlcToolInvocation } from "../../dist/claude/.claude/tools/aidlc-runtime-paths.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const BUN = process.execPath; // the bun running this test
 const UTIL = join(AIDLC_SRC, "tools", "aidlc-utility.ts");
@@ -169,12 +177,12 @@ interface ExportRun {
 }
 
 /** Spawn `doctor --export` and locate the produced report dir + archive. */
-function runExport(proj: string): ExportRun {
+function runExport(proj: string, tool: string = UTIL): ExportRun {
   const outDir = join(proj, "out");
   const res = spawnSync(
     BUN,
-    [UTIL, "doctor", "--export", "--project-dir", proj, "--output", outDir],
-    { encoding: "utf-8", env: { ...process.env } },
+    [tool, "doctor", "--export", "--project-dir", proj, "--output", outDir],
+    { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8", env: { ...process.env } },
   );
   let bundleDir: string | null = null;
   let archivePath: string | null = null;
@@ -228,7 +236,7 @@ describe("t243 doctor --export diagnostic exporter (#575)", () => {
 
     // (b) The packaged .tar.gz is clean too (extract every member to stdout).
     if (archivePath) {
-      const extracted = spawnSync("tar", ["-xzOf", archivePath], { encoding: "utf-8" });
+      const extracted = spawnSync("tar", ["-xzOf", archivePath], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" });
       expect(extracted.status).toBe(0);
       for (const c of canaries) {
         expect(extracted.stdout, `${c} leaked into the archive`).not.toContain(c);
@@ -236,7 +244,7 @@ describe("t243 doctor --export diagnostic exporter (#575)", () => {
     } else {
       expect(out).toContain("Archiving is unavailable on this system.");
     }
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("2: report dir contains report.md, report.json, manifest.json, evidence/normalized.json", () => {
     const proj = freshProject();
@@ -248,7 +256,7 @@ describe("t243 doctor --export diagnostic exporter (#575)", () => {
     expect(rel).toContain("report.json");
     expect(rel).toContain("manifest.json");
     expect(rel).toContain("evidence/normalized.json");
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("2b: normalized evidence includes safe space-level DocumentKB fields", () => {
     const proj = freshProject();
@@ -276,7 +284,7 @@ describe("t243 doctor --export diagnostic exporter (#575)", () => {
       Digest: "abc123",
     });
     expect(event.Source).toBeUndefined();
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("2c: normalized evidence reads Kiro turn markers from the project aidlc dir", () => {
     const proj = freshProject();
@@ -301,7 +309,69 @@ describe("t243 doctor --export diagnostic exporter (#575)", () => {
     );
     expect(normalized.markers.turnCounter).toBe("7");
     expect(normalized.markers.readonlyLatch).toBe(true);
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("2d: normalized evidence reads legacy hook health until the current directory exists", () => {
+    const proj = freshProject();
+    seedCanaryIntent(proj);
+    const record = join(proj, "aidlc", "spaces", "default", "intents", INTENT_SLUG);
+    const legacyHealth = join(record, ".aidlc-hooks-health");
+    mkdirSync(legacyHealth, { recursive: true });
+    writeFileSync(
+      join(legacyHealth, "write-audit-log.last"),
+      "2026-05-19T11:00:00Z\n",
+      "utf-8",
+    );
+
+    const legacyRun = runExport(proj);
+    expect(legacyRun.bundleDir).not.toBeNull();
+    const legacyNormalized = JSON.parse(
+      readFileSync(join(legacyRun.bundleDir!, "evidence", "normalized.json"), "utf-8"),
+    );
+    expect(legacyNormalized.hooks.heartbeats).toHaveLength(1);
+    expect(legacyNormalized.hooks.heartbeats[0]).toMatchObject({
+      hook: "write-audit-log",
+      timestampRaw: "2026-05-19T11:00:00Z",
+    });
+    expect(typeof legacyNormalized.hooks.heartbeats[0].ageMs).toBe("number");
+
+    const currentProj = freshProject();
+    seedCanaryIntent(currentProj);
+    const currentRecord = join(
+      currentProj,
+      "aidlc",
+      "spaces",
+      "default",
+      "intents",
+      INTENT_SLUG,
+    );
+    const currentLegacyHealth = join(currentRecord, ".aidlc-hooks-health");
+    mkdirSync(currentLegacyHealth, { recursive: true });
+    writeFileSync(
+      join(currentLegacyHealth, "write-audit-log.last"),
+      "2026-05-19T11:00:00Z\n",
+      "utf-8",
+    );
+    const currentHealth = join(currentRecord, ".aidlc-engine", "hooks-health");
+    mkdirSync(currentHealth, { recursive: true });
+    writeFileSync(
+      join(currentHealth, "session-start.last"),
+      "2026-05-19T12:00:00Z\n",
+      "utf-8",
+    );
+
+    const currentRun = runExport(currentProj);
+    expect(currentRun.bundleDir).not.toBeNull();
+    const currentNormalized = JSON.parse(
+      readFileSync(join(currentRun.bundleDir!, "evidence", "normalized.json"), "utf-8"),
+    );
+    expect(currentNormalized.hooks.heartbeats).toHaveLength(1);
+    expect(currentNormalized.hooks.heartbeats[0]).toMatchObject({
+      hook: "session-start",
+      timestampRaw: "2026-05-19T12:00:00Z",
+    });
+    expect(typeof currentNormalized.hooks.heartbeats[0].ageMs).toBe("number");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("3: report.json exposes findings + timeline.stages and the gate-unresolved error", () => {
     const proj = freshProject();
@@ -314,7 +384,23 @@ describe("t243 doctor --export diagnostic exporter (#575)", () => {
     const gate = report.findings.find((f: { id: string }) => f.id === "gate-unresolved");
     expect(gate).toBeDefined();
     expect(gate.severity).toBe("error");
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  // The remedy names the command this install's person types: $aidlc on Codex.
+  test("3b: the gate remedy names the install's own entry command", () => {
+    for (const [tool, entry] of [
+      [UTIL, "/aidlc"],
+      [join(REPO_ROOT, "dist", "codex", ".codex", "tools", "aidlc-utility.ts"), "$aidlc"],
+    ] as const) {
+      const proj = freshProject();
+      seedCanaryIntent(proj);
+      const { bundleDir, out } = runExport(proj, tool);
+      expect(bundleDir, out).not.toBeNull();
+      const report = JSON.parse(readFileSync(join(bundleDir!, "report.json"), "utf-8"));
+      const gate = report.findings.find((f: { id: string }) => f.id === "gate-unresolved");
+      expect(gate.remedy).toContain(`Resolve it with \`${entry}\``);
+    }
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("4: manifest.json carries real sha256 checksums, versions, hashed intent id, excluded + files", () => {
     const proj = freshProject();
@@ -334,7 +420,7 @@ describe("t243 doctor --export diagnostic exporter (#575)", () => {
       expect(f.sha256).toMatch(/^[0-9a-f]{64}$/); // real hash, never <redacted-hex>
       expect(f.sha256).not.toBe("<redacted-hex>");
     }
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("5: redactString scrubs home, project dir, AWS key, and password= assignment", () => {
     const ctx = newRedactionContext("/tmp/my-secret-proj");
@@ -508,6 +594,22 @@ describe("t243 doctor --export diagnostic exporter (#575)", () => {
     expect(runDiagnosis(torn).some((f) => f.id === "state-audit-drift")).toBe(true);
   });
 
+  test("13b: Rule 3 (drift) accepts a completed workflow the person archived", () => {
+    const completed = (stateContent: string) =>
+      runDiagnosis(diagInput({
+        stateContent,
+        timeline: {
+          stages: [],
+          workflowStartedRaw: "2026-01-10T00:00:00Z",
+          workflowStatus: "Archived",
+          workflowCompleted: true,
+          notes: [],
+        },
+      })).some((f) => f.id === "state-audit-drift");
+    expect(completed("- **Status**: Archived\n- **Archived From**: Completed\n")).toBe(false);
+    expect(completed("- **Status**: Archived\n- **Archived From**: Running\n")).toBe(true);
+  });
+
   test("14: reconstructTimeline sets workflowCompleted from the latest run only (Arden r2 #2)", () => {
     const audit = [
       "## started 1",
@@ -564,7 +666,7 @@ describe("t243 doctor --export diagnostic exporter (#575)", () => {
     const normalized = readFileSync(join(bundleDir!, "evidence", "normalized.json"), "utf-8");
     expect(normalized, "custom lead_agent leaked into normalized.json").not.toContain(CUSTOM_LEAD);
     expect(normalized).toContain(`<id:${shortHash(CUSTOM_LEAD)}>`);
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("8: ROUTING — the engine carries `--export --output <dir>` into the named doctor command (Arden #1)", () => {
     const outDir = "/tmp/aidlc-export-routing-x";
@@ -573,7 +675,7 @@ describe("t243 doctor --export diagnostic exporter (#575)", () => {
     const withExport = spawnSync(
       BUN,
       [ORCH, "next", "--doctor", "--export", "--output", outDir],
-      { encoding: "utf-8", env: { ...process.env } },
+      { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8", env: { ...process.env } },
     );
     expect(withExport.status).toBe(0);
     const dir = JSON.parse((withExport.stdout ?? "").trim());
@@ -583,6 +685,7 @@ describe("t243 doctor --export diagnostic exporter (#575)", () => {
     expect(dir.message).toContain(outDir);
 
     const verbose = spawnSync(BUN, [ORCH, "next", "--doctor", "--verbose"], {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
       encoding: "utf-8",
       env: { ...process.env },
     });
@@ -593,6 +696,7 @@ describe("t243 doctor --export diagnostic exporter (#575)", () => {
 
     // A plain `--doctor` (no export) names the doctor command WITHOUT --export.
     const plain = spawnSync(BUN, [ORCH, "next", "--doctor"], {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
       encoding: "utf-8",
       env: { ...process.env },
     });
@@ -658,7 +762,7 @@ describe("t243 doctor --export diagnostic exporter (#575)", () => {
     }
     // (b) The archive is clean too.
     if (archivePath) {
-      const extracted = spawnSync("tar", ["-xzOf", archivePath], { encoding: "utf-8" });
+      const extracted = spawnSync("tar", ["-xzOf", archivePath], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" });
       expect(extracted.status).toBe(0);
       expect(extracted.stdout, `${SYMLINK_SECRET} leaked into the archive`).not.toContain(
         SYMLINK_SECRET,
@@ -666,7 +770,7 @@ describe("t243 doctor --export diagnostic exporter (#575)", () => {
     } else {
       expect(out).toContain("Archiving is unavailable on this system.");
     }
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("11: CUSTOM-IDENTIFIER CANARY — a non-core stage slug is hashed, never emitted raw (Arden #2)", () => {
     const proj = freshProject();
@@ -720,7 +824,7 @@ describe("t243 doctor --export diagnostic exporter (#575)", () => {
     // `<id:<8-hex>>` token appears where the raw slug would have been.
     const expectedId = `<id:${shortHash(CUSTOM_SLUG)}>`;
     expect(reportJson).toContain(expectedId);
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("16: repeated stage attempts pair chronologically — a jumped-back stage reads incomplete (Arden r2 #8)", () => {
     // aidlc-jump re-emits STAGE_STARTED after a completion. The CURRENT attempt
@@ -754,6 +858,25 @@ describe("t243 doctor --export diagnostic exporter (#575)", () => {
     expect(a!.startedRaw).toBe("2026-01-05T00:00:00Z");
   });
 
+  test("16b: a stage skipped while its gate was open has no unresolved gate", () => {
+    const audit = [
+      "## awaiting",
+      "**Timestamp**: 2026-01-01T00:00:00Z",
+      "**Event**: STAGE_AWAITING_APPROVAL",
+      "**Stage**: alpha",
+      "",
+      "## skipped by a scope change",
+      "**Timestamp**: 2026-01-01T01:00:00Z",
+      "**Event**: STAGE_SKIPPED",
+      "**Stage**: alpha",
+      "",
+    ].join("\n");
+    const alpha = reconstructTimeline(audit, "- [S] alpha \u2014 SKIP\n").stages.find((s) => s.slug === "alpha");
+    expect(alpha?.gate).toBe("none");
+    const open = reconstructTimeline(audit.split("## skipped")[0], "").stages.find((s) => s.slug === "alpha");
+    expect(open?.gate).toBe("unresolved");
+  });
+
   test("17: a truncated report.json stays valid JSON (Arden r2 #10)", () => {
     // Force a per-file truncation by seeding a huge audit trail, then assert the
     // machine-readable artifacts still parse (a byte slice would not).
@@ -785,19 +908,19 @@ describe("t243 doctor --export diagnostic exporter (#575)", () => {
     // At least one was actually truncated (placeholder carries the marker).
     const manifest = JSON.parse(readFileSync(join(bundleDir!, "manifest.json"), "utf-8"));
     expect(manifest.files.some((f: { truncated: boolean }) => f.truncated)).toBe(true);
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("18: a bare --output (no path) errors instead of creating a dir named 'true' (Arden r2 #12)", () => {
     const proj = freshProject();
     const res = spawnSync(
       BUN,
       [UTIL, "doctor", "--export", "--project-dir", proj, "--output"],
-      { encoding: "utf-8", env: { ...process.env } },
+      { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8", env: { ...process.env } },
     );
     const combined = `${res.stdout ?? ""}${res.stderr ?? ""}`;
     // The export path reports the error and does not silently create ./true.
     expect(combined).toMatch(/--output requires a directory path/);
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("18b: structured modes reject export without appending human prose", () => {
     const proj = freshProject();
@@ -814,7 +937,7 @@ describe("t243 doctor --export diagnostic exporter (#575)", () => {
         "--output",
         outDir,
       ],
-      { encoding: "utf-8", env: { ...process.env } },
+      { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8", env: { ...process.env } },
     );
     expect(res.status).toBe(2);
     expect(res.stderr).toBe("");
@@ -826,7 +949,7 @@ describe("t243 doctor --export diagnostic exporter (#575)", () => {
       message: "--export cannot be combined with --json or --quiet",
     }));
     expect(existsSync(outDir)).toBe(false);
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("18c: explicit export output must stay inside the selected project", () => {
     const proj = freshProject();
@@ -843,14 +966,14 @@ describe("t243 doctor --export diagnostic exporter (#575)", () => {
         "--output",
         outDir,
       ],
-      { encoding: "utf-8", env: { ...process.env } },
+      { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8", env: { ...process.env } },
     );
     expect(res.status).toBe(2);
     expect(`${res.stdout ?? ""}${res.stderr ?? ""}`).toContain(
       "--output must stay inside the selected project directory",
     );
     expect(existsSync(outDir)).toBe(false);
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   // ---- Arden round-3 regressions -------------------------------------------
 
@@ -881,7 +1004,7 @@ describe("t243 doctor --export diagnostic exporter (#575)", () => {
     expect(run.bundleDir, "analysis crashed on a malformed graph — no bundle produced").not.toBeNull();
     // And the malformed graph did not corrupt the report: it still parses.
     expect(() => JSON.parse(readFileSync(join(run.bundleDir!, "report.json"), "utf-8"))).not.toThrow();
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("20: withinProjectRoot boundary uses the platform separator (Arden r3 #3)", () => {
     // The POSIX-observable half of the Windows fix: the containment check must
@@ -900,7 +1023,7 @@ describe("t243 doctor --export diagnostic exporter (#575)", () => {
     const reportJson = JSON.parse(readFileSync(join(run.bundleDir!, "report.json"), "utf-8"));
     // State was actually read (non-empty timeline), proving containment admitted it.
     expect(reportJson.timeline.stages.length).toBeGreaterThan(0);
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("21: redaction catches JSON-escaped and punctuation secrets (Arden r3 #4)", () => {
     const ctx = newRedactionContext("/tmp/proj");
@@ -935,7 +1058,194 @@ describe("t243 doctor --export diagnostic exporter (#575)", () => {
     expect(withWf.some((f) => f.id === "runtime-graph-missing")).toBe(true);
   });
 
-  test("24: repeated-stage timeline renders chronologically with no negative gap (Arden r3 #8)", () => {
+  test("23b: both runtime-graph remedies name the compiler that writes the file", () => {
+    // aidlc-graph.ts compiles stage-graph.json + scope-grid.json and never
+    // writes runtime-graph.json; aidlc-runtime.ts does. A remedy naming the
+    // former is a no-op for the finding that printed it.
+    const missing = runDiagnosis(
+      diagInput({ runtimeGraphExists: false, stateContent: "- **Status**: In-Progress\n" }),
+    ).find((f) => f.id === "runtime-graph-missing");
+    const stale = runDiagnosis(
+      diagInput({ runtimeGraphMtimeMs: 1, authoredInputsNewestMtimeMs: 2 }),
+    ).find((f) => f.id === "runtime-graph-stale");
+    for (const finding of [missing, stale]) {
+      expect(finding).toBeDefined();
+      expect(finding?.remedy, "remedy names the runtime compiler")
+        .toContain(`${aidlcToolInvocation("runtime")} compile`);
+      expect(finding?.remedy, "remedy must not send the user to the stage-graph compiler")
+        .not.toContain(aidlcToolInvocation("graph"));
+      // What the person reads names their next step, not AI-DLC's hook names.
+      expect(finding?.remedy).toContain("AI-DLC's hooks are not running here: doctor's hooks check says what to do.");
+      for (const internal of ["rebuild-stage-graph", "harness", "heartbeat"]) {
+        expect(finding?.remedy).not.toContain(internal);
+      }
+    }
+  });
+
+  describe("stage-level state/audit drift (#1190)", () => {
+    const ev = (event: string, stage: string, ts: string, workflow?: string) =>
+      `## x\n**Timestamp**: ${ts}\n**Event**: ${event}\n**Stage**: ${stage}` +
+      (workflow ? `\n**Workflow**: ${workflow}` : "");
+    const state = (lines: string, current = "alpha") =>
+      `- **Current Stage**: ${current}\n- **Status**: Running\n\n## Stage Progress\n${lines}`;
+    const drift = (over: Partial<DiagnosisInput>) =>
+      runDiagnosis(diagInput(over)).filter((f) => f.id === "stage-state-audit-drift");
+
+    test("24: a stage the ledger completed while its checkbox is unchecked is reported", () => {
+      const audit = [
+        ev("WORKFLOW_STARTED", "alpha", "2026-01-01T00:00:00Z"),
+        ev("STAGE_STARTED", "alpha", "2026-01-01T01:00:00Z"),
+        ev("STAGE_COMPLETED", "alpha", "2026-01-01T02:00:00Z"),
+      ].join("\n\n");
+      const found = drift({ audit, stateContent: state("- [ ] alpha — EXECUTE\n") });
+      expect(found).toHaveLength(1);
+      expect(found[0].evidence).toMatchObject({ completedButPending: ["alpha"] });
+    });
+
+    test("25: the #1190 shape (started, never completed, checkbox still unchecked)", () => {
+      const audit = [
+        ev("WORKFLOW_STARTED", "alpha", "2026-01-01T00:00:00Z"),
+        ev("STAGE_STARTED", "build-and-test", "2026-01-01T01:00:00Z"),
+      ].join("\n\n");
+      const found = drift({
+        audit,
+        stateContent: state("- [ ] build-and-test — EXECUTE\n", "build-and-test"),
+      });
+      expect(found).toHaveLength(1);
+      expect(found[0].evidence).toMatchObject({ startedButPending: ["build-and-test"] });
+    });
+
+    test("26: a backward jump is not drift, since it resets downstream checkboxes on purpose", () => {
+      // aidlc-jump resets every stage from the target onward to pending and
+      // emits STAGE_JUMPED; the earlier STAGE_COMPLETED rows stay in the buffer.
+      const audit = [
+        ev("WORKFLOW_STARTED", "alpha", "2026-01-01T00:00:00Z"),
+        ev("STAGE_STARTED", "beta", "2026-01-01T01:00:00Z"),
+        ev("STAGE_COMPLETED", "beta", "2026-01-01T02:00:00Z"),
+        ev("STAGE_JUMPED", "alpha", "2026-01-01T03:00:00Z"),
+        ev("STAGE_STARTED", "alpha", "2026-01-01T03:00:01Z"),
+      ].join("\n\n");
+      expect(
+        drift({ audit, stateContent: state("- [-] alpha — EXECUTE\n- [ ] beta — EXECUTE\n") }),
+      ).toEqual([]);
+    });
+
+    test("27: an isolated single-stage run is not drift, since it never touches the main checkbox", () => {
+      const audit = [
+        ev("WORKFLOW_STARTED", "alpha", "2026-01-01T00:00:00Z"),
+        ev("STAGE_STARTED", "beta", "2026-01-01T01:00:00Z", "single-stage:beta"),
+        ev("STAGE_COMPLETED", "beta", "2026-01-01T02:00:00Z", "single-stage:beta"),
+      ].join("\n\n");
+      expect(
+        drift({ audit, stateContent: state("- [-] alpha — EXECUTE\n- [ ] beta — EXECUTE\n") }),
+      ).toEqual([]);
+    });
+
+    test("28: a repeated slug resolves first-wins, the way setCheckbox flips it", () => {
+      const audit = [
+        ev("WORKFLOW_STARTED", "alpha", "2026-01-01T00:00:00Z"),
+        ev("STAGE_STARTED", "alpha", "2026-01-01T01:00:00Z"),
+        ev("STAGE_COMPLETED", "alpha", "2026-01-01T02:00:00Z"),
+      ].join("\n\n");
+      // Per-unit blocks repeat the slug; the FIRST is the one the engine flips.
+      const stateContent = state(
+        "Per unit: one\n- [x] alpha — EXECUTE\nPer unit: two\n- [ ] alpha — EXECUTE\n",
+      );
+      expect(drift({ audit, stateContent })).toEqual([]);
+    });
+
+    test("29: Current Stage pointing at an unchecked stage is reported without any ledger", () => {
+      const found = runDiagnosis(
+        diagInput({ stateContent: state("- [ ] alpha — EXECUTE\n") }),
+      ).filter((f) => f.id === "current-stage-not-started");
+      expect(found).toHaveLength(1);
+      expect(found[0].summary).toContain("alpha");
+    });
+
+    test("30: a started stage that left pending is not reported", () => {
+      const audit = [
+        ev("WORKFLOW_STARTED", "alpha", "2026-01-01T00:00:00Z"),
+        ev("STAGE_STARTED", "alpha", "2026-01-01T01:00:00Z"),
+      ].join("\n\n");
+      const clean = runDiagnosis(
+        diagInput({ audit, stateContent: state("- [-] alpha — EXECUTE\n") }),
+      ).filter((f) => f.id === "stage-state-audit-drift" || f.id === "current-stage-not-started");
+      expect(clean).toEqual([]);
+    });
+
+    const DASH = "\u2014";
+    const both = (over: Partial<DiagnosisInput>) =>
+      runDiagnosis(diagInput(over)).filter(
+        (f) => f.id === "stage-state-audit-drift" || f.id === "current-stage-not-started",
+      );
+
+    test("31: the #1190 shape reads as one warning that names the exact line to change", () => {
+      const audit = [
+        ev("WORKFLOW_STARTED", "alpha", "2026-01-01T00:00:00Z"),
+        ev("STAGE_STARTED", "build-and-test", "2026-01-01T01:00:00Z"),
+      ].join("\n\n");
+      const found = both({
+        audit,
+        stateContent: state(`- [ ] build-and-test ${DASH} EXECUTE\n`, "build-and-test"),
+      });
+      expect(found.map((f) => f.id)).toEqual(["stage-state-audit-drift"]);
+      expect(found[0].summary).toBe(
+        "aidlc-state.md shows build-and-test as not started, but the audit log shows it started.",
+      );
+      expect(found[0].remedy).toContain("change `- [ ] build-and-test` to `- [-] build-and-test`");
+    });
+
+    test("32: a stage the audit completed is fixed to [x], not [-]", () => {
+      const audit = [
+        ev("WORKFLOW_STARTED", "alpha", "2026-01-01T00:00:00Z"),
+        ev("STAGE_STARTED", "alpha", "2026-01-01T01:00:00Z"),
+        ev("STAGE_COMPLETED", "alpha", "2026-01-01T02:00:00Z"),
+      ].join("\n\n");
+      const [found] = drift({ audit, stateContent: state(`- [ ] alpha ${DASH} EXECUTE\n`, "beta") });
+      expect(found.summary).toContain("the audit log shows it completed");
+      expect(found.remedy).toContain("change `- [ ] alpha` to `- [x] alpha`");
+    });
+
+    test("33: a team Unit projection checkbox is not compared; a whole-stage checkbox still is", () => {
+      // refresh-unit-progress rewrites a per-unit Construction checkbox to [ ]
+      // until some unit checkpoints, so under team ownership it is not a record.
+      const audit = [
+        ev("WORKFLOW_STARTED", "alpha", "2026-01-01T00:00:00Z"),
+        ev("STAGE_STARTED", "functional-design", "2026-01-01T01:00:00Z"),
+        ev("STAGE_STARTED", "build-and-test", "2026-01-01T02:00:00Z"),
+      ].join("\n\n");
+      const lines =
+        `- [ ] functional-design ${DASH} EXECUTE\n- [ ] build-and-test ${DASH} EXECUTE\n`;
+      const team = both({
+        audit,
+        stateContent: `- **Unit Ownership**: team\n${state(lines, "functional-design")}`,
+      });
+      expect(team.map((f) => f.id)).toEqual(["stage-state-audit-drift"]);
+      expect(team[0].evidence).toMatchObject({ startedButPending: ["build-and-test"] });
+
+      const solo = both({ audit, stateContent: state(lines, "functional-design") });
+      expect(solo.map((f) => f.id)).toEqual(["stage-state-audit-drift"]);
+      expect(solo[0].evidence).toMatchObject({
+        startedButPending: ["functional-design", "build-and-test"],
+      });
+    });
+
+    test("34: the timeline gate reads a repeated slug first-wins, like the drift rule", () => {
+      // The first line is the one setCheckbox flips; a last-wins map read this
+      // open gate as "none" off the second, untouched block.
+      const audit = [
+        ev("WORKFLOW_STARTED", "alpha", "2026-01-01T00:00:00Z"),
+        ev("STAGE_STARTED", "alpha", "2026-01-01T01:00:00Z"),
+      ].join("\n\n");
+      const stateContent = state(
+        `Per unit: one\n- [?] alpha ${DASH} EXECUTE\nPer unit: two\n- [ ] alpha ${DASH} EXECUTE\n`,
+      );
+      const alpha = reconstructTimeline(audit, stateContent).stages.find((s) => s.slug === "alpha");
+      expect(alpha?.gate).toBe("unresolved");
+    });
+  });
+
+  test("35: repeated-stage timeline renders chronologically with no negative gap (Arden r3 #8)", () => {
     // alpha (day1) -> beta (day1) -> alpha jumped back (day5). The day-5 alpha
     // attempt must render AFTER beta, and beta's gap must be non-negative.
     const audit = [
@@ -955,7 +1265,7 @@ describe("t243 doctor --export diagnostic exporter (#575)", () => {
     }
   });
 
-  test("25: mergeFindings lifts a failing legacy env check into the exported set (Arden r3 #1)", () => {
+  test("36: mergeFindings lifts a failing legacy env check into the exported set (Arden r3 #1)", () => {
     const legacy = [adaptLegacyResult({ pass: false, label: "bun on PATH", fix: "install bun" })];
     const diagnosis = runDiagnosis(diagInput({}));
     const merged = mergeFindings(legacy, diagnosis);
@@ -964,7 +1274,7 @@ describe("t243 doctor --export diagnostic exporter (#575)", () => {
     expect(envFinding).toBeDefined();
   });
 
-  test("26: a secret ending an allowlisted field value keeps normalized.json valid (Arden r4 #2)", () => {
+  test("37: a secret ending an allowlisted field value keeps normalized.json valid (Arden r4 #2)", () => {
     // The redaction previously ate the JSON string's closing quote when a
     // secret-like token ended a field value, corrupting normalized.json. JSON
     // files now redact-then-serialize, so the artifact must still parse AND the
@@ -988,5 +1298,5 @@ describe("t243 doctor --export diagnostic exporter (#575)", () => {
     expect(() => JSON.parse(reportRaw), "report.json no longer parses").not.toThrow();
     // And the secret is actually gone, not merely syntactically intact.
     expect(normalizedRaw).not.toContain("abcdef123456");
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });

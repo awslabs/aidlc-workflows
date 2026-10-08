@@ -3,9 +3,9 @@
 // t-tui-kiro-bugfix-scope.serial.test.ts — the Kiro twin of
 // t-tui-t50-bugfix-scope: drive the BUGFIX-scope workflow through a REAL
 // keystroke-driven `kiro-cli chat` on the shipped dist/kiro tree, answering
-// the known Q1-Q4 guide batch with explicit per-question numbers, confirming
-// the consolidated summary, and answering the mandatory learnings prompt before
-// each separate approval prompt. It then TERMINATES on the
+// the known Q1-Q4 guide batch with explicit per-question numbers and then
+// each approval prompt; bugfix asks no learnings question and shows no
+// consolidated summary to confirm. It then TERMINATES on the
 // on-disk Completed counter crossing the post-init milestone — the same
 // milestone the Claude twin (and its .sh ancestor) pinned: init=3 + >=2
 // Inception stages = Completed >= 5.
@@ -26,7 +26,8 @@
 // COST: the long Kiro journey (the Claude twin budgets 2400s). Gated behind
 // AIDLC_KIRO_TUI_LIVE=1 with skip-reasons; POSIX only (no Windows kiro-cli path).
 
-import { describe, expect, test } from "bun:test";
+import { liveCaseTimeoutMs, LIVE_LONG_OPERATION_TIMEOUT_MS, remainingOperationTimeoutMs, remainingCleanupTimeoutMs, fileCleanupReserveMs, NATIVE_TERMINAL_CLEANUP_TIMEOUT_MS, NATIVE_STARTUP_TIMEOUT_MS } from "../harness/test-budget.ts";
+import { beforeEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -36,20 +37,43 @@ import {
   cleanupTuiProjectAfterKill,
   createKiroNumberedProseAnswerState,
   KIRO_SRC,
-  markdownH2Section,
   nextKiroNumberedProseAnswer,
   setupTuiProject,
 } from "../harness/tui-fixtures.ts";
 import { resolveTuiRuntime, tuiUnavailableReason } from "../harness/tui-runtime.ts";
 
+function completedStartupProbe<T extends { error?: Error }>(result: T): T {
+  if ((result.error as NodeJS.ErrnoException | undefined)?.code === "ETIMEDOUT") throw result.error;
+  return result;
+}
+
 const DRIVER = join(import.meta.dir, "..", "harness", "tui-drive.ts");
 const { bin: DRIVE_BIN, prefix: DRIVE_PREFIX } = resolveTuiRuntime(DRIVER);
 
-const TIMEOUT_S = Number.parseInt(process.env.AIDLC_TEST_TIMEOUT ?? "2400", 10);
-const TEST_TIMEOUT_MS = (Number.isFinite(TIMEOUT_S) ? TIMEOUT_S : 2400) * 1000;
+const TIMEOUT_S = Number(process.env.AIDLC_TEST_TIMEOUT);
+const TEST_TIMEOUT_MS = Number.isSafeInteger(TIMEOUT_S) && TIMEOUT_S > 0
+  ? TIMEOUT_S * 1000
+  : liveCaseTimeoutMs(LIVE_LONG_OPERATION_TIMEOUT_MS);
+let caseDeadlineMs: number;
+beforeEach(() => { caseDeadlineMs = Date.now() + TEST_TIMEOUT_MS; });
+function remainingWorkMs(): number {
+  return remainingOperationTimeoutMs(TEST_TIMEOUT_MS, {
+    deadlineMs: caseDeadlineMs,
+    reserveMs: fileCleanupReserveMs(TEST_TIMEOUT_MS),
+    phase: "E2E live work",
+  })!;
+}
+function remainingCleanupMs(): number {
+  return remainingCleanupTimeoutMs(NATIVE_TERMINAL_CLEANUP_TIMEOUT_MS, {
+    deadlineMs: caseDeadlineMs,
+    phase: "E2E terminal cleanup",
+  });
+}
+
+
 
 function drive(args: string[]): { rc: number; stdout: string } {
-  const res = spawnSync(DRIVE_BIN, [...DRIVE_PREFIX, ...args], { encoding: "utf-8" });
+  const res = spawnSync(DRIVE_BIN, [...DRIVE_PREFIX, ...args], { timeout: args[0] === "kill" ? remainingCleanupMs() : remainingWorkMs(), encoding: "utf-8" });
   return { rc: res.status ?? -1, stdout: res.stdout ?? "" };
 }
 function waitFor(session: string, pattern: string, timeoutMs: number, stableMs: number): boolean {
@@ -79,10 +103,10 @@ function skipReason(): string | null {
   }
   const runtimeReason = tuiUnavailableReason();
   if (runtimeReason) return runtimeReason;
-  if (spawnSync("kiro-cli", ["--version"], { encoding: "utf-8" }).status !== 0) {
+  if (completedStartupProbe(spawnSync("kiro-cli", ["--version"], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" })).status !== 0) {
     return "kiro-cli not found";
   }
-  if (spawnSync("kiro-cli", ["whoami"], { encoding: "utf-8" }).status !== 0) {
+  if (completedStartupProbe(spawnSync("kiro-cli", ["whoami"], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" })).status !== 0) {
     return "kiro-cli not authenticated (run `kiro-cli login`)";
   }
   if (!existsSync(KIRO_SRC)) return `distributable missing: ${KIRO_SRC}`;
@@ -128,11 +152,12 @@ describe("t-tui-kiro-bugfix-scope (brownfield bugfix journey, numbered-prose gat
             "--trust-all-tools",
           ]).rc,
         ).toBe(0);
-        if (waitFor(session, "Yes, I accept", 30000, 400)) {
+        expect(waitFor(session, `Yes, I accept|${IDLE_PATTERN}`, remainingWorkMs(), 400)).toBe(true);
+        if (drive(["capture", "--session", session]).stdout.includes("Yes, I accept")) {
           drive(["send", "--session", session, "--keys", "Down", "--no-enter"]);
           drive(["send", "--session", session, "--keys", "Enter", "--no-enter"]);
         }
-        expect(waitFor(session, IDLE_PATTERN, 60000, 600)).toBe(true);
+        expect(waitFor(session, IDLE_PATTERN, remainingWorkMs(), 600)).toBe(true);
 
         send(
           session,
@@ -141,12 +166,13 @@ describe("t-tui-kiro-bugfix-scope (brownfield bugfix journey, numbered-prose gat
 
         // Gate loop: idle => answer the next menu/batch => re-check disk, until
         // Completed >= 5 (init 3 + >=2 Inception).
-        const deadline = Date.now() + Math.max(120000, TEST_TIMEOUT_MS - 120000);
+        const deadline = Date.now() + remainingWorkMs();
         let answers = 0;
-        const answerState = createKiroNumberedProseAnswerState();
+        // bugfix turns learnings off, so approvals come with no learning response.
+        const answerState = createKiroNumberedProseAnswerState({ learnings: false });
         while (Date.now() < deadline) {
           if (completedCount(sandbox) >= 5) break;
-          if (!waitFor(session, IDLE_PATTERN, 300000, 1500)) continue;
+          if (!waitFor(session, IDLE_PATTERN, remainingWorkMs(), 1500)) continue;
           if (completedCount(sandbox) >= 5) break;
           const screen = drive(["capture", "--session", session]).stdout;
           const answer = nextKiroNumberedProseAnswer(screen, answerState);
@@ -155,24 +181,13 @@ describe("t-tui-kiro-bugfix-scope (brownfield bugfix journey, numbered-prose gat
               `Kiro stopped at an unrecognized bugfix prompt:\n${screen.slice(-4000)}`,
             );
           }
-          if (answer === "Looks correct") {
-            expect(
-              existsSync(
-                join(
-                  recordDirFor(sandbox),
-                  "inception",
-                  "requirements-analysis",
-                  "requirements.md",
-                ),
-              ),
-            ).toBe(false);
-          }
           send(session, answer);
           answers += 1;
         }
         expect(answers).toBeGreaterThan(0);
-        expect(answerState.confirmedSummaries.size).toBeGreaterThanOrEqual(1);
-        expect(answerState.learningsAnswered).toBeGreaterThanOrEqual(2);
+        // bugfix turns learnings and summary confirmation off.
+        expect(answerState.confirmedSummaries.size).toBe(0);
+        expect(answerState.learningsAnswered).toBe(0);
         expect(answerState.approvalsAnswered).toBeGreaterThanOrEqual(2);
         expect(completedCount(sandbox)).toBeGreaterThanOrEqual(5);
 
@@ -184,11 +199,7 @@ describe("t-tui-kiro-bugfix-scope (brownfield bugfix journey, numbered-prose gat
         );
         expect(existsSync(questionsPath)).toBe(true);
         const questions = readFileSync(questionsPath, "utf-8");
-        const confirmation = markdownH2Section(
-          questions,
-          "Consolidated Summary Confirmation",
-        );
-        expect(confirmation).toMatch(/^\[Answer\]: Looks correct\s*$/m);
+        expect(questions).not.toContain("Consolidated Summary Confirmation");
 
         // State surface — the Claude twin's assertion shapes (t50:309-330):
         // loose scope/brownfield matches (live init writes vary the field

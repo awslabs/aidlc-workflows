@@ -41,12 +41,62 @@ export const RECORDABLE_PROJECT_BYPASSES = [
 export type RecordableProjectBypass =
   (typeof RECORDABLE_PROJECT_BYPASSES)[number];
 
+// The recorded switches that take a check away from the person, in the words
+// the person hears while one is off. Usage tracking, sensors and learnings take
+// no decision from them, so they stay quiet.
+export const PERSON_CHECK_SWITCH_LABELS: Readonly<
+  Partial<Record<RecordableProjectBypass, string>>
+> = {
+  AIDLC_DISABLE_PLAN_APPROVAL_GUARD: "plan approval check",
+  AIDLC_DISABLE_REVIEW_FREEZE_HOOK: "review freeze check",
+  AIDLC_DISABLE_REVIEWER_SCOPE_HOOK: "reviewer read scope check",
+  AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "human presence check",
+  AIDLC_DISABLE_SUMMARY_CONFIRMATION: "summary confirmation",
+  AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD: "summary confirmation check",
+  AIDLC_SKIP_ARTIFACT_GUARD: "stage output check",
+  AIDLC_SKIP_REVISION_BACKSTOP: "revision backstop",
+  AIDLC_DISABLE_ENSEMBLE_EVIDENCE: "pipeline handoff check",
+};
+
+export const PERSON_CHECK_SWITCHES = RECORDABLE_PROJECT_BYPASSES.filter(
+  (name) => PERSON_CHECK_SWITCH_LABELS[name] !== undefined,
+);
+
+// What each setting does for the person, in a few plain words. A line that names
+// one says what it is for, because the name alone tells someone who has not met
+// it nothing. Keyed by the words the person reads (the labels above, the check
+// names `checkLabel` builds, and Guard Policy), so one map words every line.
+const PERSON_SETTING_PURPOSES: Readonly<Record<string, string>> = {
+  "plan approval check": "it shows you the plan before any code is written",
+  "plan approval": "it shows you the plan before any code is written",
+  "review freeze check": "it stops edits to work you already approved",
+  "state transition check": "it keeps the engine, not an agent, moving the work along",
+  "reviewer read scope check": "it keeps a reviewer reading only the part it was asked about",
+  "human presence check": "it needs a real reply from you behind every approval",
+  "summary confirmation": "it reads your words back to you before the work goes on",
+  "summary confirmation check": "it reads your words back to you before the work goes on",
+  "stage output check": "a stage must have written its files before it finishes",
+  "revision backstop": "it records a change you made at a gate that nobody wrote down",
+  "pipeline handoff check": "each agent's handoff is recorded before a pipeline stage finishes",
+  "Guard Policy": "it sets how many checks run",
+};
+
+/**
+ * ` (what it does)` to follow a setting's name in a line the person reads, or
+ * "" when the name is not one this map words, so the line simply names it.
+ */
+export function settingPurpose(label: string): string {
+  const purpose = PERSON_SETTING_PURPOSES[label];
+  return purpose === undefined ? "" : ` (${purpose})`;
+}
+
 export type ProjectFlagsRecord = {
   schemaVersion: 1;
   defaultScope?: string;
   swarm?: boolean;
   hookDebug?: boolean;
   sensorTimeoutMs?: number;
+  questionRetentionDays?: number;
   bypasses?: RecordableProjectBypass[];
 };
 
@@ -98,6 +148,7 @@ const PROJECT_FLAG_KEYS = new Set([
   "swarm",
   "hookDebug",
   "sensorTimeoutMs",
+  "questionRetentionDays",
   "bypasses",
 ]);
 const MODEL_KEYS = new Set(["schemaVersion", "preset", "groups", "agents", "profiles"]);
@@ -177,6 +228,16 @@ export function normalizeProjectFlagsRecord(
       throw new Error(`${where}.sensorTimeoutMs must be a positive integer`);
     }
     out.sensorTimeoutMs = value.sensorTimeoutMs;
+  }
+  if (value.questionRetentionDays !== undefined) {
+    if (
+      typeof value.questionRetentionDays !== "number" ||
+      !Number.isInteger(value.questionRetentionDays) ||
+      value.questionRetentionDays <= 0
+    ) {
+      throw new Error(`${where}.questionRetentionDays must be a positive integer`);
+    }
+    out.questionRetentionDays = value.questionRetentionDays;
   }
   if (value.bypasses !== undefined) {
     if (
@@ -459,6 +520,27 @@ export function readSettingsTarget(
   return readCached(settingsPathForTarget(projectDir, target), layerForTarget(target));
 }
 
+/**
+ * The settings file nearest the project that records a bypass (this clone,
+ * then the project, then the machine): where it is turned back on. An
+ * unreadable file records nothing.
+ */
+export function bypassRecordedIn(
+  projectDir: string,
+  name: string,
+): { target: SettingsTarget; path: string } | null {
+  for (const target of ["local", "project", "global"] as const) {
+    try {
+      if ((readSettingsTarget(projectDir, target)?.flags?.bypasses ?? []).includes(name as RecordableProjectBypass)) {
+        return { target, path: settingsPathForTarget(projectDir, target) };
+      }
+    } catch {
+      // An unreadable file names no switch.
+    }
+  }
+  return null;
+}
+
 function mergeLeafValues(
   target: Record<string, unknown>,
   source: Record<string, unknown>,
@@ -495,6 +577,19 @@ function resolveWithLayers(
   ] as const) {
     if (value) mergeLeafValues(merged, value, layer, sources);
   }
+  // A bypass is on while any layer records it: a nearer file adds switches and
+  // never silently turns back on a check another file switched off. Each name's
+  // source is the nearest file that records it.
+  const bypasses = new Set<string>();
+  for (const [layer, file] of [["machine", machine], ["project", project], ["local", local]] as const) {
+    for (const name of file?.flags?.bypasses ?? []) {
+      bypasses.add(name);
+      sources[`flags.bypasses.${name}`] = layer;
+    }
+  }
+  if (bypasses.size > 0) {
+    (merged.flags as Record<string, unknown>).bypasses = [...bypasses];
+  }
   const normalized = normalizeAidlcSettings(
     merged,
     "machine",
@@ -529,6 +624,7 @@ export function resolveAidlcSettingsWithOverride(
   projectDir: string,
   target: SettingsTarget,
   override: AidlcSettingsFile | null,
+  others: ReadonlyArray<{ target: SettingsTarget; next: AidlcSettingsFile | null }> = [],
 ): ResolvedAidlcSettings {
   const paths = {
     machine: machineSettingsPath(),
@@ -541,6 +637,7 @@ export function resolveAidlcSettingsWithOverride(
     local: readCached(paths.local, "local"),
   };
   values[layerForTarget(target)] = override;
+  for (const other of others) values[layerForTarget(other.target)] = other.next;
   return resolveWithLayers(values.machine, values.project, values.local, {
     machine: { path: paths.machine, present: values.machine !== null },
     project: { path: paths.project, present: values.project !== null },
@@ -734,6 +831,7 @@ export const AIDLC_SETTINGS_SCHEMA = {
         swarm: { type: "boolean" },
         hookDebug: { type: "boolean" },
         sensorTimeoutMs: { type: "integer", minimum: 1 },
+        questionRetentionDays: { type: "integer", minimum: 1 },
         bypasses: {
           type: "array",
           uniqueItems: true,

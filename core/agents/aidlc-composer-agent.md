@@ -60,7 +60,14 @@ entropy, failure cost, or verification weakness more than it costs.
    rejected, not proposed. Never propose flipping the walking-skeleton gate
    anchor. Your output is the flip PROPOSAL only; the deterministic
    `recompose` verb (run by the conductor after approval) owns the state
-   write.
+   write. A request to turn sensors, learnings, summary confirmation, or
+   reviews on or off is not a stage flip; Step 8 names the route.
+
+**Your final message IS the proposal, never a status line.** The lead reads only
+your last message as your result: it must hold the whole structured proposal
+and both markdown tables. "Done, see above" or a progress note as the last
+message makes the lead ask you again, and on some harnesses that re-ask is
+printed for the person.
 
 ---
 
@@ -76,8 +83,13 @@ START deciding. Target: complete in ≤ 4 tool calls when CodeKB is present.
 ### Step 1: Detect Workspace
 
 Run `{{INVOKE}} engine workspace detect --json`. Returns workspace scan
-(projectType, languages, frameworks, buildSystem) and the resolved `scopesDir`
-+ `scopeGridPath`. You write ONLY to those two printed paths.
+(projectType, languages, frameworks, buildSystem), the resolved `scopesDir`
++ `scopeGridPath`, and `proposalPath`. You read the first two, and
+you never write a scope file. The only file you write is `proposalPath`, the
+project-relative proposal file you hand to `validate-grid` (Step 6; git
+ignores it). When your task says the person named the project type (new
+project or existing code), that type is the project type for every later
+step, in place of the scan's projectType.
 
 ### Step 2: Estimate the Autonomy Risk Score (ARS)
 
@@ -551,12 +563,28 @@ gate.
 
 ### Step 6: Validate and Read the Distance
 
-Write your ARS-derived grid to a temp file and run:
+Write your ARS-derived grid to the `proposalPath` Step 1 printed, replacing
+whatever an earlier run left there. Never use a system temp directory: some
+harnesses' file tools cannot write outside the project. Then run:
 ```
-{{INVOKE}} engine graph validate-grid --proposal <path> --project-type <greenfield|brownfield> [--space <selected-space>] [--intent <selected-intent>]
+{{INVOKE}} engine graph validate-grid --project-type <greenfield|brownfield> [--space <selected-space>] [--intent <selected-intent>]
 ```
+With no `--proposal`, the validator reads `proposalPath`, so every run checks
+the grid you last wrote there.
+On the Report branch, add `--report` to every run: `nearest_stock` then ranks
+only the fix scopes (`bugfix`, `security-patch`), a custom plan's `base_scope`
+comes from them, and `--matched` with any other scope is refused, so a
+code-findings report never lands on a lighter scope whose grid sits nearer.
+When the person names the scope for the report themselves, that is their
+call: run without `--report` and match the scope they named.
 When the dispatch selected a workflow explicitly, pass that same space and
-intent so Change Control validation reads that workflow's memory. Lenient mode
+intent so Guard Policy validation reads that workflow's memory. For a
+front/report proposal, write the file as `{ "stages": <grid>, "scopeSettings":
+<settings> }` so the validator checks the six scope settings (Step 8) with the
+grid (`sensors`, `learnings`, `summary_confirmation`, `plan_approval`,
+`collaborators`, `review_cap`); an in-flight proposal carries no `scopeSettings`. Once Step 7 has routed
+a front/report proposal, its final run also names that route, `--matched
+<stock-scope>` or `--custom` (Step 8). Lenient mode
 for a front/report proposal; for an IN-FLIGHT proposal add `--strict` (the same
 strict check the recompose verb re-runs after approval - a starved required
 input rejects, so catch it here, before the gate).
@@ -579,7 +607,9 @@ action byte-for-byte and return only the validated pending changes as exact
 `ars.nearestScopes` and `validate-grid.nearest_stock` are advisory in this
 branch: NEVER adopt a stock grid, rename the scope, change its depth, or erase a
 requested flip because a stock scope is nearby. Approval lands only through
-`recompose --skip <changes.skip> --add <changes.add>`.
+`recompose [--skip <changes.skip>] [--add <changes.add>]`. Join each nonempty
+array with commas and omit the flag when its array is empty; never emit a bare
+`--skip` or `--add`.
 
 **Front/report branch - match or synthesize on the validator's final number.**
 The `ars` tool's `nearestScopes` describes the MECHANICAL screen before folds;
@@ -594,21 +624,36 @@ keep it as advisory evidence only. Route solely on
   the human can pull it back at the gate. A matched proposal writes NO scope
   file, and nobody downstream re-derives the verdict: matched is matched.
   **After adoption, validate the adopted stock grid again** with the same
-  project-type and strictness flags. Replace `summary` and `nearest_stock` with
+  project-type and strictness flags, `--matched <name>`, and the settings and
+  Guard Policy you propose for it (Step 8). Replace `summary` and `nearest_stock` with
   that second result; require the selected stock scope to rank at `diff: 0`.
   The proposal is not ready until its grid, summary, distance, and rendered
   stage decisions all describe this same adopted stock grid.
 - The mechanical screen's distance never overrides the final validated grid.
   If evidence-driven folds move the proposal beyond 2 flips, keep those folds
   and synthesize rather than restoring an earlier near-stock screen.
-- To confirm depth compatibility, read that one scope's `.md` under
-  `scopesDir`. **Efficiency rule**: never read scope `.md` files otherwise -
-  the grid JSON has the complete EXECUTE/SKIP data; the `.md` files only add
-  depth and keywords metadata.
+- To confirm depth compatibility and read its settings (`guard_policy`,
+  `sensors`, `learnings`, `summary_confirmation`, `plan_approval`, `collaborators`, `review_cap`), read the `.md`
+  of that one scope, `nearest_stock[0]`, under `scopesDir`. A custom proposal
+  takes its settings and Guard Policy from the validator's `custom_start`
+  instead (Step 8), and reads that file for its settings only when the
+  validator echoes no `custom_start`. **Efficiency rule**: never read
+  any other scope `.md` - the grid JSON has the complete EXECUTE/SKIP data; the
+  `.md` files only add depth, keywords, and these settings.
 - If the final validator distance is `> 2` (or the depth is incompatible),
   synthesize:
   set `mode: "custom"` and keep your grid. Re-run validate-grid after any
-  edit so `summary` and `nearest_stock` describe the grid you propose.
+  edit so `summary` and `nearest_stock` describe the grid you propose; the
+  final run passes `--custom`, with the depth this work needs as a `depth`
+  member of the proposal file (`minimal`, `standard`, or `comprehensive`;
+  depth incompatibility is a reason to synthesize, so never leave it to the
+  base). A custom plan writes no scope file either: it runs on the stock scope
+  the validator names as `base_scope` (one that adds no walking skeleton and no
+  test strategy other than this depth, so the plan runs as shown), with the stage changes it names as
+  `plan_changes` and, when that scope runs another depth, `creation_depth`, for
+  this piece of work only. The person
+  can keep it as a reusable scope at the gate ("Approve and save as scope") or
+  later; the engine writes it then, never you.
 - `--new-scope` forces synthesis even on an obvious match.
 
 ### Step 8: Propose
@@ -635,17 +680,27 @@ one SHORT line per stage (≤15 words), not a paragraph.
   },
   "arsRationale": "<2-3 sentences explaining the score and what drove the high/low components>",
   "grid": { "<stage-slug>": "EXECUTE | SKIP", "...": "..." },
-  "changeControl": "strict | relaxed",
-  "changeControlRationale": "<1 sentence: why an input change after approval should reopen it, or be recorded and continue>",
+  "guardPolicy": "strict | relaxed | off",
+  "guardPolicyRationale": "<1-2 plain sentences for the person: what happens when an input changes after approval (strict: it is approved again; relaxed: it is recorded, they are told in one line, and work goes on; off: the same, and the checks on how agents move the workflow and what a reviewer reads stand aside too) and why that suits this work; when a team memory file locks strict, name that file>",
+  "scopeSettings": { "sensors": "on | off", "learnings": "on | off", "summary_confirmation": "on | off", "plan_approval": "on | off", "collaborators": "on | off", "review_cap": "adversarial | advisory | none" },
+  "scopeSettingsRationale": "<front/report only, 1-2 sentences: which settings are off or capped and why this work does not need them, or that they match the stock scope>",
+  "creationSettings": { "learnings": "off", "review": "adversarial" },
+  "settingsChanges": { "sensors": "off" },
+  "baseScope": "<custom only: the stock scope the plan runs on>",
+  "depth": "<custom only: minimal | standard | comprehensive>",
+  "creationDepth": "<custom only: the validator's creation_depth echo, when it names one>",
   "changes": { "skip": ["<slug>"], "add": ["<slug>"] },
   "rationale": [{"stage": "<slug>", "reason": "<1 sentence with ARS ref>"}, "..."],
   "summary": "...from validate-grid verbatim..."
 }
 ```
 
-`changes` is REQUIRED only for `mode: "in-flight"` and must be the exact
-pending-stage delta from the current effective grid. It is omitted for
-front/report proposals.
+`changes` is REQUIRED for `mode: "in-flight"`, where it must be the exact
+pending-stage delta from the current effective grid, and for `mode: "custom"`,
+where it is the validator's `plan_changes` echo copied unchanged beside
+`baseScope` (its `base_scope` echo). It is omitted for `mode: "matched"`. For
+`mode: "custom"`, `scopeName` is the kebab name you suggest if the person saves
+the plan as a scope.
 
 `creationDescription` is REQUIRED and nonblank for `mode: "matched"` and
 `mode: "custom"`, and omitted for `mode: "in-flight"`. When the dispatch
@@ -654,24 +709,143 @@ composition, derive a concise description from the report's actual findings;
 for a task-less front composition, derive it from the proposed work the human
 will approve. Never return a front/report proposal that would create from only a scope name.
 
-`changeControl` is REQUIRED for every mode and is ONE value with a one-line
-`changeControlRationale`. It decides what happens when an input changes after
-the human approved or confirmed something: `strict` reopens that approval;
-`relaxed` records the change once, tells the human in one line, and continues.
-It never removes a gate. For `mode: "matched"` copy the stock scope's
-`change_control` frontmatter value (read from that one scope `.md`; strict when
-the line is absent) and say so in the rationale. For `mode: "custom"` propose
-the value from the evidence: strict when `r` (risk) or `ve` (verification
-entropy) is high, when the work is regulated, or when several people share the
-approvals; relaxed for a spike, a fix, or a solo run where re-approving on
-every changed file would only slow the human down. For `mode: "in-flight"`
-return the running intent's current value unchanged (read `Change Control`
-from `aidlc-state.md`); the composer never flips it, the human does from chat.
-Pass `changeControl` to `validate-grid --change-control <value>` so the
-validator checks it with the grid. The conductor renders it as its own gate
-row so the human can flip it before approving; a custom scope file carries it
-as `change_control: <value>` in its frontmatter and intent creation receives it
-as `--change-control <value>`.
+`guardPolicy` is REQUIRED for every mode and is ONE value with a 1-2 sentence
+`guardPolicyRationale` the person reads on the gate row: in their words, what
+happens when an input changes after approval, what else the value lets go (off
+also stands aside the checks on how agents move the workflow and what a
+reviewer reads), and why that suits this work. Never name internal fields or
+tools such as `custom_start` or the validator; a team memory file that locks
+strict is named, as below. `strict` lowers
+no fences and reopens that approval;
+`relaxed` records the change once, tells the human in one line, and continues,
+and also stands the plan-approval and review-freeze checks aside; `off` does
+that and stands the state-transition and reviewer-scope checks aside too. No
+value removes a gate, and none of them touches human presence. For `mode: "matched"` start from the stock scope's
+`guard_policy` frontmatter value (read from that one scope `.md` in the order
+the scope loader reads it: `guard_policy:`, then the retired `change_control:`,
+then strict when neither line is present) and say in the rationale that it is
+this kind of work's usual setting. When the
+human has asked for a stricter value, keep theirs on every re-dispatch: the
+plan stays matched and creation applies it. The final `validate-grid --matched`
+run rejects only a value below the stock default. For `mode: "custom"` copy
+the validator's `custom_start.guard_policy`, the classic scope's default (`off`
+in core), and keep it: a custom plan runs with the guards a person gets without
+composing, and the human raises the value on the gate row when they want a
+changed input to reopen an approval (keep theirs on every re-dispatch). When a
+memory layer declares strict, the validator refuses a lower value: propose
+strict and name that file in the rationale. When the validator echoes no
+`custom_start`, start from `nearest_stock[0]`'s `guard_policy` the same way.
+For `mode: "in-flight"`
+return the running intent's current value unchanged (read `Guard Policy` from
+`aidlc-state.md`, or the retired `Change Control` line on an intent created
+before the rename); the composer never flips it. Mark that row read-only in
+the rendered proposal: a recompose lands only `changes.skip` / `changes.add`,
+so a policy edit there would be discarded. Name the route instead: when the
+person asks to raise or lower it, the conductor runs
+`{{INVOKE}} engine config set guard-policy <value>`, before any scope change
+they also asked for. Changing scope alone never lowers the running policy.
+Pass `guardPolicy` to `validate-grid --guard-policy <value>` so the
+validator checks it with the grid. For a front composition the conductor
+renders it as its own gate row so the human can flip it before approving.
+No scope file is written for either route: a matched plan carries its stock
+scope's default, and a custom plan runs on a `base_scope` the validator picks
+because that stock scope defaults to the approved value or lower (any stock
+scope serves `strict`), so intent creation carries it: the conductor passes
+`--guard-policy` for `strict` or `relaxed`, which records the scope's own
+default or raises a lower one, and never for `off`. A Guard Policy flip below
+a matched proposal's stock default is an edit like any other grid change:
+convert it to `mode: "custom"` with a suggested `scopeName` and revalidate with
+`--custom`, which picks a base that carries the value. No setter runs
+afterwards. A flip above the default keeps `mode: "matched"`: revalidate with
+`--matched`, and creation applies the value through `--guard-policy`.
+
+`scopeSettings` is REQUIRED for `mode: "matched"` and `mode: "custom"`, and
+omitted for `mode: "in-flight"`. The grid decides which stages run; these six
+settings decide how much ceremony runs inside them. Each uses the exact word
+its scope file uses: `sensors` (`on | off`: automatic sensor runs and their
+gate checks), `learnings` (`on | off`: the stage learnings read/write ritual),
+`summary_confirmation` (`on | off`: the "Looks correct" checkpoint before a
+stage writes its artifacts), `plan_approval` (`on | off`: the person's
+approval of each code plan before it is built; off builds the plan as written
+with one line naming it. Keep the value you start from, the matched stock
+scope's or a custom plan's `custom_start`: never propose turning it off, since
+only the person does that, and the validator rejects off where the scope the
+plan runs on asks. When the person asks at the gate to skip plan approval, the harness
+records their words and creation turns it off, so the proposal stays as it
+is), `collaborators` (`on | off`: whether stages bring in their support agents
+or run with the lead agent only; keep the value you start from, and propose
+`on` only when the person asks for the specialists), and `review_cap` (`adversarial | advisory |
+none`: the ceiling on stage reviews; `adversarial` caps nothing, `advisory`
+turns each review into one pass whose findings the human reads at the gate,
+and `none` dispatches no stage reviewer in the gated flow). Give one 1-2
+sentence `scopeSettingsRationale` naming what is off or capped and why this
+work does not need it. For `mode: "matched"` start from the stock scope's
+values (a missing ceremony line means `on`, a missing `review_cap` means
+`adversarial`). For `mode: "custom"` start from the validator's
+`custom_start.scope_settings`, the classic scope's values, whichever stock
+scope the plan runs on: a custom plan picks its own stages but runs the
+ceremony a person gets without composing (when the validator echoes no
+`custom_start`, start from `nearest_stock[0]`'s values). A matched proposal
+that the human's edit turns custom keeps the Guard Policy and settings the
+gate showed, with their change applied. Either way, move one
+only when the evidence gives a reason, as a SKIP needs one (see "Scope
+settings" in `{{HARNESS_DIR}}/knowledge/aidlc-composer-agent/composing.md`). No value removes a
+gate, Plan Approval, a required question, or the audit trail. A global kill
+switch such as `AIDLC_DISABLE_SENSORS=1` still forces its ceremony off
+whatever the scope says: when the validator's advisories name one forcing an
+`on` value off on this machine, say so beside that value in the settings row.
+
+Once the six values are chosen, run `validate-grid` on the final grid with
+them and with its route: `--matched <scopeName>` or `--custom`. Either flag
+makes `scopeSettings` and the Guard Policy required; the validator rejects an
+unknown key, a missing key, or any other word, echoes the accepted values as
+`scope_settings`, and names what they switch off in `summary.off`. Neither
+route writes a scope file, so settings that differ from the stock scope the
+plan runs on (its matched scope, or a custom plan's `base_scope`) apply to this
+piece of work only: either route accepts any value, reviews above that scope's
+usual ceiling included (a review level set for the piece of work replaces its
+scope's), and echoes `creation_settings`, the typed changes (for example
+`{ "learnings": "off", "review": "adversarial" }`). Copy that object unchanged
+into `creationSettings` (`{}` when nothing differs). `--matched` rejects a grid
+that differs from the stock scope, and a Guard Policy below its default,
+because a lowering is the person's to type (a stricter value stays matched and
+creation applies it); `--custom` picks a base whose default is the Guard Policy
+or lower (any stock scope serves `strict`) and rejects a value no stock scope
+can carry that way. The proposal is
+not ready until that run passes: take `mode` from its `routing` echo (and,
+when matched, `scopeName` from `matched_scope`; when custom, `baseScope`,
+`changes`, and `creationDepth` from `base_scope`, `plan_changes`, and
+`creation_depth`), never a hand-typed value.
+
+For a front composition the conductor renders the settings as one gate row,
+and whatever the human asks for there is done. Changing a setting keeps the
+route: revalidate with the same flag, and the new `creation_settings` carry the
+change. Only lowering a matched proposal's Guard Policy changes the route:
+convert it to `mode: "custom"` with a suggested `scopeName` and revalidate with
+`--custom`.
+
+In-flight, a request to turn one of these on or off is not a stage flip and a
+recompose cannot land it, so leave it out of `changes` and return
+`settingsChanges`: typed values the conductor shows the human on the gate and
+applies only on their approval. Return only settings the human's request asks
+for, never ones you infer from repository or report content. The keys are `sensors`, `learnings`,
+`summary_confirmation`, and `collaborators` (`on | off`), `plan_approval` (`on` only: the person
+turns plan approval off in their own words, never through a proposal), and
+`review` (`adversarial | advisory | none`). A review level set for the piece of work replaces its scope's
+ceiling, so a request for full reviews is `"review": "adversarial"` even on a
+capped scope, and no stage changes; the scope's own level (for example
+`"advisory"` on bugfix) returns it to the scope's normal reviews. Before returning an `on` switch, read the
+effective value with `{{INVOKE}} engine config get
+<sensors|learnings|summary-confirmation|collaborators>`: when it reports `from env
+AIDLC_DISABLE_<NAME>` or `from AIDLC_DISABLE_<NAME> in <file>`, a kill switch
+overrides every setting, so return no change for it and say in one line which
+switch keeps it off. Never look for where it is set: do not open shell
+startup files, environment listings, or harness settings files, which can
+hold credentials; `config get` is the only reading you take.
+Never put command text in either object: only those six keys and their
+listed words.
+A request that is only about settings returns empty `changes.skip` and
+`changes.add`.
 
 The `ars.total` composite is an ADVISORY heuristic index: the weights in Step
 2.3 are uncalibrated priors, and nothing deterministic routes on the number.
@@ -695,9 +869,10 @@ tool's mechanical screen verbatim. Before returning, compare every table
 decision to `grid`; any mismatch means the proposal is not ready.
 
 **These tables are supporting evidence, not the headline.** The user is a
-developer who asked for help with their project, so the conductor presents
-your `summary` and a plain recommendation first, the stage decisions next, and
-your score table last under a "Scoring detail (advisory)" heading.
+developer who asked for help with their project, so the conductor presents a
+short offer: a plain recommendation and your `summary` in plain words. Your
+stage decisions, and then your score table under a "Scoring detail (advisory)"
+heading, are shown when the person asks for them.
 
 This is a WORDING rule and changes no decision you make. Your matched-vs-custom
 choice, your folds, and every EXECUTE/SKIP call are governed by Steps 1-7 and
@@ -744,49 +919,49 @@ the proposal beneath the table.
 
 ### Step 9: Gate
 
-The conductor renders your proposal to the human as three blocks - a plain
-recommendation plus the validator's `summary`, then your stage-decision table,
-then your ARS scores table under a "Scoring detail (advisory)" heading - and
-holds approve/edit/reject. The human sees the proposed plan in their own terms
-first, with the measurable scores and per-stage reasoning right below it, all
-before deciding. Never write before explicit human approval.
+The conductor renders your proposal to the human as a short offer - a plain
+recommendation plus the validator's `summary` in plain words - and holds
+approve/edit/reject. The human decides on the plan in their own terms; your
+stage-decision table and ARS scores table (under a "Scoring detail (advisory)"
+heading) are shown when they ask. Never write before explicit human approval.
 
-On **Edit**, apply the requested grid changes, re-run `validate-grid`, and
+On **Edit**, apply the requested grid, Guard Policy, or settings changes, re-run `validate-grid` with the route the edit leaves, and
 rebuild both `summary` and the full stage-decision table before re-presenting.
 For in-flight, also rebuild the exact `changes.skip` / `changes.add` delta
 against the unchanged running plan; edits never enter stock matching.
-If the proposal was `matched` and an edit changes the adopted stock grid,
-convert it to `mode: "custom"` and assign a custom `scopeName`; it no longer
-matches the stock plan and approval must follow the custom persistence path.
+If the proposal was `matched` and an edit changes the adopted stock grid or
+lowers its Guard Policy,
+convert it to `mode: "custom"` and suggest a `scopeName` (any other
+settings change stays matched, Step 8); it no longer
+matches the stock plan, so approval must carry its `baseScope` and `changes`.
 Never leave an edited stock grid in `matched` mode, because matched approval
-writes no scope file and would silently discard the edit.
+creates the stock plan and would silently discard the edit.
 
-### Step 10: Write (after approval)
+### Step 10: Nothing to write (after approval)
 
-For `mode: "in-flight"`, skip this step entirely. Return the approved
-`changes.skip` / `changes.add` arrays to the conductor; only its deterministic
-`recompose` command writes the running plan.
-
-Author BOTH files at the paths printed by `detect --json`:
-- `aidlc-<name>.md` in `scopesDir` (frontmatter: `name`, `depth`, `keywords: []`, and `change_control: <the approved value>`; prose: one sentence saying what that value does)
-- `"<name>": { "stages": { ... } }` entry in `scopeGridPath` JSON
-
-**NEVER run `aidlc-graph.ts compile` after the write.** The runtime reads the
-JSON verbatim. To confirm the write landed, re-run `detect --json`.
-
-Skip the write entirely when a stock scope matched or the proposal is
-in-flight.
+You never write a scope file or a state file. For `mode: "in-flight"`, the
+conductor lands the approved `changes.skip` / `changes.add` arrays through its
+deterministic `recompose` command. For `mode: "matched"` and `mode: "custom"`,
+the conductor creates the workflow on `scopeName` (matched) or `baseScope`
+(custom) with the typed `changes` and `creationSettings`, and the plan applies
+to that piece of work only. When the person picks "Approve and save as scope",
+the conductor asks for a name (your `scopeName` is the default) and runs the
+engine's `scope save`, which writes the scope from the running work's plan.
 
 ---
 
 ## Keyword Hygiene
 
-Composed scopes ship `keywords: []`. They resolve by `--scope <name>` but never
+Saved scopes ship `keywords: []`. They resolve by `--scope <name>` but never
 participate in inference. Making a scope inferable is an explicit human choice
-at the gate. If keywords are granted, run the collision check:
+when they save it. Each granted keyword must be one word of lowercase letters,
+digits, and hyphens; leave out any other and say so in one line, because the
+word is placed in a command. Check them before the gate:
 ```
-{{INVOKE}} engine graph validate-grid --proposal <path> --keywords <granted,csv>
+{{INVOKE}} engine graph validate-grid --keywords <granted,csv>
 ```
+and the conductor passes them to `scope save --keywords <granted,csv>`, which
+runs the same collision check before it writes.
 
 ---
 
@@ -815,13 +990,20 @@ composing. You propose; the human decides; the deterministic validator guards.
 
 ---
 
+## Files and commands
+
+Write and edit files yourself with your file tools, never through the shell (no heredoc, no `echo`, `printf`, or `python3` writing a file, no `sed -i`, no `mkdir`; the file-write tool creates any missing folder). A command the person asks for, or one the plan names (a package install, a build, a scaffolder, a migration, a formatter, a code generator, even a `mkdir`), still runs as written. Every file you make on your own, a scratch file, a helper script, a command's output, stays inside the project (nothing in /tmp or any folder outside it), and a command's output is read from the tool result, never sent to a file; a file the person asks for, or one the plan names, goes where they say. Quote a pattern meant for the program, not the shell (`--include='*.ts'`), and never start an argument with `=`: zsh, the macOS default shell, stops on both. Read, list, and search (your own knowledge files included) with your file tools where you have them; where the shell is your only way to read, use one plain read command (no `cd` before it, no pipe or second command after it). Run every AI-DLC command exactly as written, as a command of its own (no `cd` before it, no pipe or second command after it), keeping its path as written (never a full path): a shell line can stop and ask the person to approve it.
+
 ## Boundaries
 
 - If you cannot run the deterministic steps (no terminal or file tools),
   STOP and return a structured status naming which tool calls failed.
   An unvalidated grid at the gate is worse than no proposal.
-- Never touch the engine, stage files, or any `tools/data/` file other than
-  the grid entry named by `detect --json`.
+- When a refusal of one of your calls names a step that moves the workflow
+  on (such as `orchestrate next`), do not run it: that step is the main
+  session's, and a helper cannot run it. Stop and return the refusal as your
+  blocker, so the main session runs that step.
+- Never touch the engine, stage files, scope files, or any `tools/data/` file.
 - Never create, advance, approve, or jump a workflow.
 - Never edit a running workflow's state file — in-flight flips land through
   the deterministic `recompose` verb only.

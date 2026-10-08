@@ -47,6 +47,10 @@
             },
             {
               "classname": "native Bun terminal driver commands",
+              "name": "an answered menu that repaints slowly or partially is not answered again"
+            },
+            {
+              "classname": "native Bun terminal driver commands",
               "name": "an unfinished client cannot delay daemon retirement or produce a premature wait-dead"
             },
             {
@@ -92,6 +96,38 @@
             {
               "classname": "native launch namespace security",
               "name": "daemon refuses a replaced session before PTY/supervisor creation"
+            },
+            {
+              "classname": "native record publication races",
+              "name": "a reader retries atomic publications and returns only a fully validated record"
+            },
+            {
+              "classname": "native record publication races",
+              "name": "continuous replacement is bounded and closes every discarded descriptor"
+            },
+            {
+              "classname": "native record publication races",
+              "name": "a retry cannot adopt a replaced session directory"
+            },
+            {
+              "classname": "native record publication races",
+              "name": "a retry cannot adopt a replaced parent directory"
+            },
+            {
+              "classname": "native record publication races",
+              "name": "a replacement still needs the pinned directory identity in its content"
+            },
+            {
+              "classname": "native record publication races",
+              "name": "open failures propagate immediately without retrying or consuming record content"
+            },
+            {
+              "classname": "native IPC probe completion",
+              "name": "peer EOF settles a pending write for oversized rejection"
+            },
+            {
+              "classname": "native IPC probe completion",
+              "name": "peer EOF settles a pending write for incomplete reply"
             }
           ]
         },
@@ -275,7 +311,7 @@
             },
             {
               "classname": "native TUI fixture cleanup guard",
-              "name": "the third root overrides native scanning while the custom legacy root still works"
+              "name": "an explicit root overrides native session scanning"
             },
             {
               "classname": "native TUI fixture cleanup guard",
@@ -292,7 +328,27 @@
             },
             {
               "classname": "native private namespace",
+              "name": "a private root replay in phase exited cannot execute the prior command"
+            },
+            {
+              "classname": "native private namespace",
+              "name": "a private root replay in phase starting cannot execute the prior command"
+            },
+            {
+              "classname": "native private namespace",
+              "name": "an explicit root below a group-writable non-sticky ancestor is rejected before spawn"
+            },
+            {
+              "classname": "native private namespace",
               "name": "unsafe roots and records are rejected, never chmod-repaired"
+            },
+            {
+              "classname": "native private namespace",
+              "name": "the ancestor check relaxes only ownership, and only under the opt-in"
+            },
+            {
+              "classname": "native private namespace",
+              "name": "e2e setup names the ownership opt-in, which then admits a sandbox-owned /"
             }
           ]
         },
@@ -306,6 +362,10 @@
             {
               "classname": "native private namespace",
               "name": "a junction/symlink root is rejected without modifying its target"
+            },
+            {
+              "classname": "native private namespace",
+              "name": "an explicit root keys a session by root and name, not by the caller's home"
             },
             {
               "classname": "native private namespace",
@@ -371,15 +431,15 @@
           "cases": [
             {
               "classname": "Darwin native process identity",
+              "name": "an absent PID reads as absence; required identities and other errors fail closed"
+            },
+            {
+              "classname": "Darwin native process identity",
               "name": "incomplete and mismatched native identities fail instead of claiming process absence"
             },
             {
               "classname": "Darwin native process identity",
-              "name": "start-time identities retain both 64-bit fields and distinguish PID reuse"
-            },
-            {
-              "classname": "Darwin native process identity",
-              "name": "system enumeration excludes EPERM while required identities and other errors fail closed"
+              "name": "start-time identities retain both fields and distinguish PID reuse"
             },
             {
               "classname": "Linux native process identity",
@@ -529,10 +589,6 @@
           "path": "tests/unit/t-tui-runtime.test.ts",
           "cases": [
             {
-              "classname": "native driver Node handoff",
-              "name": "a Node override fails after one handoff; a real Bun override executes the command"
-            },
-            {
               "classname": "TUI backend selection",
               "name": "auto uses native Bun on Linux/Windows/macOS and tmux elsewhere"
             },
@@ -558,11 +614,7 @@
             },
             {
               "classname": "TUI driver runtime resolution",
-              "name": "explicit legacy Windows selection uses its Node override and type stripping"
-            },
-            {
-              "classname": "TUI driver runtime resolution",
-              "name": "legacy Windows resolution finds an off-PATH Program Files Node installation"
+              "name": "expired work budgets do not prevent runtime selection for cleanup"
             },
             {
               "classname": "TUI driver runtime resolution",
@@ -579,14 +631,6 @@
             {
               "classname": "TUI substrate prerequisites",
               "name": "changing runtime overrides and probe environments takes effect in the same process"
-            },
-            {
-              "classname": "TUI substrate prerequisites",
-              "name": "legacy node-pty prerequisites use Node with type stripping and report load failures"
-            },
-            {
-              "classname": "TUI substrate prerequisites",
-              "name": "missing Node is a capability reason, including an absent Windows fallback"
             },
             {
               "classname": "TUI substrate prerequisites",
@@ -609,6 +653,14 @@
         {
           "path": "tests/unit/t-tui-screen.test.ts",
           "cases": [
+            {
+              "classname": "menus a Windows repaint left rule cells in",
+              "name": "a row that is only a rule is still no menu"
+            },
+            {
+              "classname": "menus a Windows repaint left rule cells in",
+              "name": "read as the menu they show"
+            },
             {
               "classname": "native TUI bounds and lifetime",
               "name": "dispose is idempotent and settles a queued snapshot even during a pending write"
@@ -850,6 +902,10 @@
             },
             {
               "classname": "native Bun terminal driver commands",
+              "name": "an answered menu that repaints slowly or partially is not answered again"
+            },
+            {
+              "classname": "native Bun terminal driver commands",
               "name": "an unfinished client cannot delay daemon retirement or produce a premature wait-dead"
             },
             {
@@ -895,6 +951,38 @@
             {
               "classname": "native launch namespace security",
               "name": "daemon refuses a replaced session before PTY/supervisor creation"
+            },
+            {
+              "classname": "native record publication races",
+              "name": "a reader retries atomic publications and returns only a fully validated record"
+            },
+            {
+              "classname": "native record publication races",
+              "name": "continuous replacement is bounded and closes every discarded descriptor"
+            },
+            {
+              "classname": "native record publication races",
+              "name": "a retry cannot adopt a replaced session directory"
+            },
+            {
+              "classname": "native record publication races",
+              "name": "a retry cannot adopt a replaced parent directory"
+            },
+            {
+              "classname": "native record publication races",
+              "name": "a replacement still needs the pinned directory identity in its content"
+            },
+            {
+              "classname": "native record publication races",
+              "name": "open failures propagate immediately without retrying or consuming record content"
+            },
+            {
+              "classname": "native IPC probe completion",
+              "name": "peer EOF settles a pending write for oversized rejection"
+            },
+            {
+              "classname": "native IPC probe completion",
+              "name": "peer EOF settles a pending write for incomplete reply"
             }
           ]
         },
@@ -1070,7 +1158,7 @@
             },
             {
               "classname": "native TUI fixture cleanup guard",
-              "name": "the third root overrides native scanning while the custom legacy root still works"
+              "name": "an explicit root overrides native session scanning"
             },
             {
               "classname": "native TUI fixture cleanup guard",
@@ -1105,6 +1193,10 @@
             {
               "classname": "native private namespace",
               "name": "a junction/symlink root is rejected without modifying its target"
+            },
+            {
+              "classname": "native private namespace",
+              "name": "an explicit root keys a session by root and name, not by the caller's home"
             },
             {
               "classname": "native private namespace",
@@ -1170,15 +1262,15 @@
           "cases": [
             {
               "classname": "Darwin native process identity",
+              "name": "an absent PID reads as absence; required identities and other errors fail closed"
+            },
+            {
+              "classname": "Darwin native process identity",
               "name": "incomplete and mismatched native identities fail instead of claiming process absence"
             },
             {
               "classname": "Darwin native process identity",
-              "name": "start-time identities retain both 64-bit fields and distinguish PID reuse"
-            },
-            {
-              "classname": "Darwin native process identity",
-              "name": "system enumeration excludes EPERM while required identities and other errors fail closed"
+              "name": "start-time identities retain both fields and distinguish PID reuse"
             },
             {
               "classname": "Linux native process identity",
@@ -1336,10 +1428,6 @@
           "path": "tests/unit/t-tui-runtime.test.ts",
           "cases": [
             {
-              "classname": "native driver Node handoff",
-              "name": "a Node override fails after one handoff; a real Bun override executes the command"
-            },
-            {
               "classname": "TUI backend selection",
               "name": "auto uses native Bun on Linux/Windows/macOS and tmux elsewhere"
             },
@@ -1365,11 +1453,7 @@
             },
             {
               "classname": "TUI driver runtime resolution",
-              "name": "explicit legacy Windows selection uses its Node override and type stripping"
-            },
-            {
-              "classname": "TUI driver runtime resolution",
-              "name": "legacy Windows resolution finds an off-PATH Program Files Node installation"
+              "name": "expired work budgets do not prevent runtime selection for cleanup"
             },
             {
               "classname": "TUI driver runtime resolution",
@@ -1386,14 +1470,6 @@
             {
               "classname": "TUI substrate prerequisites",
               "name": "changing runtime overrides and probe environments takes effect in the same process"
-            },
-            {
-              "classname": "TUI substrate prerequisites",
-              "name": "legacy node-pty prerequisites use Node with type stripping and report load failures"
-            },
-            {
-              "classname": "TUI substrate prerequisites",
-              "name": "missing Node is a capability reason, including an absent Windows fallback"
             },
             {
               "classname": "TUI substrate prerequisites",
@@ -1416,6 +1492,14 @@
         {
           "path": "tests/unit/t-tui-screen.test.ts",
           "cases": [
+            {
+              "classname": "menus a Windows repaint left rule cells in",
+              "name": "a row that is only a rule is still no menu"
+            },
+            {
+              "classname": "menus a Windows repaint left rule cells in",
+              "name": "read as the menu they show"
+            },
             {
               "classname": "native TUI bounds and lifetime",
               "name": "dispose is idempotent and settles a queued snapshot even during a pending write"
@@ -1678,6 +1762,10 @@
             },
             {
               "classname": "native Bun terminal driver commands",
+              "name": "an answered menu that repaints slowly or partially is not answered again"
+            },
+            {
+              "classname": "native Bun terminal driver commands",
               "name": "an unfinished client cannot delay daemon retirement or produce a premature wait-dead"
             },
             {
@@ -1723,6 +1811,38 @@
             {
               "classname": "native launch namespace security",
               "name": "daemon refuses a replaced session before PTY/supervisor creation"
+            },
+            {
+              "classname": "native record publication races",
+              "name": "a reader retries atomic publications and returns only a fully validated record"
+            },
+            {
+              "classname": "native record publication races",
+              "name": "continuous replacement is bounded and closes every discarded descriptor"
+            },
+            {
+              "classname": "native record publication races",
+              "name": "a retry cannot adopt a replaced session directory"
+            },
+            {
+              "classname": "native record publication races",
+              "name": "a retry cannot adopt a replaced parent directory"
+            },
+            {
+              "classname": "native record publication races",
+              "name": "a replacement still needs the pinned directory identity in its content"
+            },
+            {
+              "classname": "native record publication races",
+              "name": "open failures propagate immediately without retrying or consuming record content"
+            },
+            {
+              "classname": "native IPC probe completion",
+              "name": "peer EOF settles a pending write for oversized rejection"
+            },
+            {
+              "classname": "native IPC probe completion",
+              "name": "peer EOF settles a pending write for incomplete reply"
             }
           ]
         },
@@ -1760,6 +1880,10 @@
             {
               "classname": "Darwin native supervision fixtures",
               "name": "stop bounds cleanup of TERM-resistant detached descendants to eight seconds"
+            },
+            {
+              "classname": "Darwin native supervision fixtures",
+              "name": "the process-table identity matches proc_pidinfo for this process and reads any user's process"
             },
             {
               "classname": "Darwin native supervision fixtures",
@@ -1906,7 +2030,7 @@
             },
             {
               "classname": "native TUI fixture cleanup guard",
-              "name": "the third root overrides native scanning while the custom legacy root still works"
+              "name": "an explicit root overrides native session scanning"
             },
             {
               "classname": "native TUI fixture cleanup guard",
@@ -1923,7 +2047,27 @@
             },
             {
               "classname": "native private namespace",
+              "name": "a private root replay in phase exited cannot execute the prior command"
+            },
+            {
+              "classname": "native private namespace",
+              "name": "a private root replay in phase starting cannot execute the prior command"
+            },
+            {
+              "classname": "native private namespace",
+              "name": "an explicit root below a group-writable non-sticky ancestor is rejected before spawn"
+            },
+            {
+              "classname": "native private namespace",
               "name": "unsafe roots and records are rejected, never chmod-repaired"
+            },
+            {
+              "classname": "native private namespace",
+              "name": "the ancestor check relaxes only ownership, and only under the opt-in"
+            },
+            {
+              "classname": "native private namespace",
+              "name": "e2e setup names the ownership opt-in, which then admits a sandbox-owned /"
             }
           ]
         },
@@ -1937,6 +2081,10 @@
             {
               "classname": "native private namespace",
               "name": "a junction/symlink root is rejected without modifying its target"
+            },
+            {
+              "classname": "native private namespace",
+              "name": "an explicit root keys a session by root and name, not by the caller's home"
             },
             {
               "classname": "native private namespace",
@@ -2002,15 +2150,15 @@
           "cases": [
             {
               "classname": "Darwin native process identity",
+              "name": "an absent PID reads as absence; required identities and other errors fail closed"
+            },
+            {
+              "classname": "Darwin native process identity",
               "name": "incomplete and mismatched native identities fail instead of claiming process absence"
             },
             {
               "classname": "Darwin native process identity",
-              "name": "start-time identities retain both 64-bit fields and distinguish PID reuse"
-            },
-            {
-              "classname": "Darwin native process identity",
-              "name": "system enumeration excludes EPERM while required identities and other errors fail closed"
+              "name": "start-time identities retain both fields and distinguish PID reuse"
             },
             {
               "classname": "Linux native process identity",
@@ -2147,10 +2295,6 @@
           "path": "tests/unit/t-tui-runtime.test.ts",
           "cases": [
             {
-              "classname": "native driver Node handoff",
-              "name": "a Node override fails after one handoff; a real Bun override executes the command"
-            },
-            {
               "classname": "TUI backend selection",
               "name": "auto uses native Bun on Linux/Windows/macOS and tmux elsewhere"
             },
@@ -2176,11 +2320,7 @@
             },
             {
               "classname": "TUI driver runtime resolution",
-              "name": "explicit legacy Windows selection uses its Node override and type stripping"
-            },
-            {
-              "classname": "TUI driver runtime resolution",
-              "name": "legacy Windows resolution finds an off-PATH Program Files Node installation"
+              "name": "expired work budgets do not prevent runtime selection for cleanup"
             },
             {
               "classname": "TUI driver runtime resolution",
@@ -2197,14 +2337,6 @@
             {
               "classname": "TUI substrate prerequisites",
               "name": "changing runtime overrides and probe environments takes effect in the same process"
-            },
-            {
-              "classname": "TUI substrate prerequisites",
-              "name": "legacy node-pty prerequisites use Node with type stripping and report load failures"
-            },
-            {
-              "classname": "TUI substrate prerequisites",
-              "name": "missing Node is a capability reason, including an absent Windows fallback"
             },
             {
               "classname": "TUI substrate prerequisites",
@@ -2227,6 +2359,14 @@
         {
           "path": "tests/unit/t-tui-screen.test.ts",
           "cases": [
+            {
+              "classname": "menus a Windows repaint left rule cells in",
+              "name": "a row that is only a rule is still no menu"
+            },
+            {
+              "classname": "menus a Windows repaint left rule cells in",
+              "name": "read as the menu they show"
+            },
             {
               "classname": "native TUI bounds and lifetime",
               "name": "dispose is idempotent and settles a queued snapshot even during a pending write"
@@ -2465,43 +2605,6 @@
             {
               "classname": "tui-drive tmux backend runs on a private socket (developer-session safety)",
               "name": "physical wait/startup omit wrap joining while public capture keeps it"
-            }
-          ]
-        }
-      ],
-      "gates": {
-        "AIDLC_CLAUDE_SDK_LIVE": "0",
-        "AIDLC_TUI_LIVE": "0",
-        "AIDLC_KIRO_ACP_LIVE": "0",
-        "AIDLC_KIRO_TUI_LIVE": "0",
-        "AIDLC_CODEX_EXEC_LIVE": "0",
-        "AIDLC_COPILOT_EXEC_LIVE": "0",
-        "AIDLC_CURSOR_RUN_LIVE": "0",
-        "AIDLC_KIRO_IDE_LIVE": "0",
-        "AIDLC_OPENCODE_RUN_LIVE": "0"
-      }
-    },
-    {
-      "id": "windows-node-pty",
-      "platform": "win32",
-      "architecture": "x64",
-      "backend": "node-pty",
-      "files": [
-        {
-          "path": "tests/e2e/t-tui-preflight.serial.test.ts",
-          "cases": [
-            {
-              "classname": "t-tui-preflight (terminal substrate capability gate)",
-              "name": "substrate preserves exact fragmented Unicode and ANSI grid rendering"
-            }
-          ]
-        },
-        {
-          "path": "tests/integration/t-tui-node-pty-compat.test.ts",
-          "cases": [
-            {
-              "classname": "t-tui-preflight (terminal substrate capability gate)",
-              "name": "Windows until-file paths detect early, preserve post-write work, and reap on teardown"
             }
           ]
         }

@@ -33,6 +33,16 @@ import { Database } from "bun:sqlite";
 import { appendFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { platform, tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, sep } from "node:path";
+import {
+  remainingCleanupTimeoutMs,
+  LIVE_STARTUP_TIMEOUT_MS,
+  LIVE_COMMAND_TIMEOUT_MS,
+  LIVE_CLEANUP_TIMEOUT_MS,
+  NATIVE_PROCESS_TERMINATE_TIMEOUT_MS,
+  NATIVE_PROCESS_CLEANUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+  TestBudgetExhaustedError,
+} from "./test-budget.ts";
 
 // Visible command text has both legacy script and public dispatcher spellings.
 // Keep these non-global so repeated assertions do not share RegExp state.
@@ -41,14 +51,61 @@ export const KIRO_REPORT_COMMAND_TEXT =
 export const KIRO_INTENT_JSON_COMMAND_TEXT =
   /\baidlc(?:-utility\.ts["']?\s+intent|\.ts["']?\s+engine\s+intent(?:\s+list)?)\s+--json(?=\s|$|["'`])/i;
 
+/**
+ * The macOS executable inside Kiro.app, newest naming FIRST.
+ *
+ * Kiro renamed it from the stock Electron name to `Kiro` (1.1.14 declares
+ * CFBundleExecutable = Kiro). The old single-path default silently stopped
+ * resolving, and because every Kiro IDE gate treats a missing binary as a SKIP
+ * REASON, the whole live journey skipped while the file still reported PASS.
+ * That is the failure mode the test policy warns about: a skip is an unmet gate,
+ * not coverage. Probing both names keeps the gate honest across Kiro versions,
+ * and `kiroIdeMissingBinaryReason` below reports every path tried so the next
+ * rename says so out loud instead of disappearing.
+ */
+const MACOS_KIRO_IDE_BINS = [
+  "/Applications/Kiro.app/Contents/MacOS/Kiro",
+  "/Applications/Kiro.app/Contents/MacOS/Electron",
+] as const;
+
+function windowsKiroIdeBin(): string {
+  return join(process.env.LOCALAPPDATA ?? "", "Programs", "Kiro", "Kiro.exe");
+}
+
+/** Every path the default would accept on this platform, in preference order. */
+export function kiroIdeBinCandidates(): readonly string[] {
+  return platform() === "win32" ? [windowsKiroIdeBin()] : MACOS_KIRO_IDE_BINS;
+}
+
 /** Default launch binary; override via AIDLC_KIRO_IDE_BIN (mirrors AIDLC_CODEX_BIN). */
-const DEFAULT_KIRO_IDE_BIN =
-  platform() === "win32"
-    ? join(process.env.LOCALAPPDATA ?? "", "Programs", "Kiro", "Kiro.exe")
-    : "/Applications/Kiro.app/Contents/MacOS/Electron";
-export const KIRO_IDE_BIN = process.env.AIDLC_KIRO_IDE_BIN ?? DEFAULT_KIRO_IDE_BIN;
+function defaultKiroIdeBin(): string {
+  const candidates = kiroIdeBinCandidates();
+  return candidates.find((candidate) => existsSync(candidate)) ?? candidates[0];
+}
+
+export const KIRO_IDE_BIN = process.env.AIDLC_KIRO_IDE_BIN ?? defaultKiroIdeBin();
+
+/** The skip sentence for a missing binary, naming every path that was tried. */
+export function kiroIdeMissingBinaryReason(bin: string = KIRO_IDE_BIN): string {
+  const tried = process.env.AIDLC_KIRO_IDE_BIN
+    ? `AIDLC_KIRO_IDE_BIN=${bin}`
+    : kiroIdeBinCandidates().join(" or ");
+  return (
+    `Kiro IDE binary not found (tried ${tried}); install Kiro or point ` +
+    "AIDLC_KIRO_IDE_BIN at its executable"
+  );
+}
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
+
+function cdpTimeoutError(fallback: Error, deadlineMs?: number): Error {
+  try {
+    remainingOperationTimeoutMs(undefined, { deadlineMs, phase: "IDE CDP" });
+  } catch (error) {
+    return error as Error;
+  }
+  return fallback;
+}
 
 // ---------------------------------------------------------------------------
 // Raw CDP target (the substrate, ported from cdp.mjs:13-107).
@@ -230,18 +287,37 @@ export class CdpTarget {
   contexts: ExecContext[] = [];
   private handlers = new Map<string, (params: unknown) => void>();
 
-  constructor(private readonly wsUrl: string) {}
+  constructor(private readonly wsUrl: string, private readonly deadlineMs?: number) {}
 
   on(method: string, fn: (params: unknown) => void): void {
     this.handlers.set(method, fn);
   }
 
   connect(): Promise<void> {
+    const timeoutMs = remainingOperationTimeoutMs(LIVE_STARTUP_TIMEOUT_MS, {
+      deadlineMs: this.deadlineMs, phase: "IDE CDP connect",
+    });
     return new Promise((resolve, reject) => {
-      this.ws = new WebSocket(this.wsUrl);
-      this.ws.onopen = () => resolve();
-      this.ws.onerror = (e: unknown) =>
+      const timer = timeoutMs === undefined ? undefined : setTimeout(() => {
+        reject(cdpTimeoutError(new Error("IDE CDP connect budget expired"), this.deadlineMs));
+        const socket = this.ws as (WebSocket & { terminate?: () => void }) | null;
+        try {
+          if (typeof socket?.terminate === "function") socket.terminate();
+          else socket?.close();
+        } catch { /* already closed */ }
+      }, timeoutMs);
+      try {
+        this.ws = new WebSocket(this.wsUrl);
+      } catch (error) {
+        clearTimeout(timer);
+        reject(error);
+        return;
+      }
+      this.ws.onopen = () => { clearTimeout(timer); resolve(); };
+      this.ws.onerror = (e: unknown) => {
+        clearTimeout(timer);
         reject(new Error(`ws error: ${(e as { message?: string })?.message ?? "unknown"}`));
+      };
       this.ws.onmessage = (ev: MessageEvent) => {
         let msg: {
           id?: number;
@@ -278,17 +354,30 @@ export class CdpTarget {
 
   /** JSON-RPC send with an auto-incrementing id and a per-call reject timeout
    *  (cdp.mjs:56-68: the spike used a fixed 20_000ms). */
-  send(method: string, params: Record<string, unknown> = {}, timeoutMs = 20_000): Promise<unknown> {
+  send(method: string, params: Record<string, unknown> = {}, timeoutMs = LIVE_COMMAND_TIMEOUT_MS): Promise<unknown> {
+    const allocation = remainingOperationTimeoutMs(timeoutMs, {
+      deadlineMs: this.deadlineMs, phase: "IDE CDP request",
+    });
+    if (allocation === undefined) throw new Error("Invalid test budget: CDP requests require a positive timeout");
     const id = ++this.nextId;
     return new Promise((resolve, reject) => {
-      this.pending.set(id, { resolve, reject });
-      this.ws?.send(JSON.stringify({ id, method, params }));
-      setTimeout(() => {
+      const timer = setTimeout(() => {
         if (this.pending.has(id)) {
           this.pending.delete(id);
-          reject(new Error(`CDP timeout: ${method}`));
+          reject(cdpTimeoutError(new Error(`CDP timeout: ${method}`), this.deadlineMs));
         }
-      }, timeoutMs);
+      }, allocation);
+      this.pending.set(id, {
+        resolve: (value) => { clearTimeout(timer); resolve(value); },
+        reject: (error) => { clearTimeout(timer); reject(error); },
+      });
+      try {
+        this.ws?.send(JSON.stringify({ id, method, params }));
+      } catch (error) {
+        clearTimeout(timer);
+        this.pending.delete(id);
+        reject(error);
+      }
     });
   }
 
@@ -310,8 +399,12 @@ export class CdpTarget {
    *  frame (including nested OOPIF webviews) arrive into this.contexts
    *  (cdp.mjs:83-87). */
   async enableContexts(waitMs = 1500): Promise<ExecContext[]> {
-    await this.send("Runtime.enable").catch(() => {});
-    await sleep(waitMs);
+    await this.send("Runtime.enable").catch((error) => {
+      if (error instanceof TestBudgetExhaustedError) throw error;
+    });
+    if (waitMs !== 0) await sleep(remainingOperationTimeoutMs(waitMs, {
+      deadlineMs: this.deadlineMs, phase: "IDE context discovery",
+    })!);
     return this.contexts;
   }
 
@@ -390,6 +483,21 @@ const SEED_SETTINGS = {
   // directly), and the core handleApprove ledger check is covered deterministically by
   // the t188 unit test. Trusting the command is what lets the block hook RUN at all.
   "kiroAgent.trustedCommands": ["*"],
+  // ISOLATION, and load-bearing for whether this journey finishes at all. A
+  // fresh user-data-dir does NOT isolate the agent's tool surface: Kiro still
+  // reads the developer's global ~/.kiro/settings/mcp.json, so the launched
+  // instance inherited every MCP server on the machine. On this one that was 7
+  // servers and 131 tools, and Kiro itself renders a warning saying that many
+  // tools degrade agent tool selection. The journey then spent 36 minutes
+  // making no progress. Disabling MCP for the generated seed makes the run
+  // depend on the engine and the hooks under test, not on whatever servers a
+  // developer happens to have configured.
+  "kiroAgent.configureMCP": "Disabled",
+  // Autopilot so the agent executes its own steps instead of waiting on a
+  // per-action confirmation the driver would have to chase. This test asserts
+  // the ENGINE refuses a fabricated approval; it must not also be a test of
+  // whether someone clicks through Kiro's autonomy prompts.
+  "kiroAgent.agentAutonomy": "Autopilot",
 } as const;
 
 /** Build a minimal Kiro IDE user-data-dir under `dir` that skips first-run onboarding,
@@ -558,14 +666,14 @@ function closeKiroIdeBrowser(
   });
 }
 
-function terminateKiroIdeChild(child: ChildProcess): void {
+function terminateKiroIdeChild(child: ChildProcess, timeoutMs = NATIVE_PROCESS_TERMINATE_TIMEOUT_MS): void {
   // Never act on a remembered PID once the authoritative child has exited.
   if (child.exitCode !== null || child.signalCode !== null || child.pid === undefined) return;
   if (platform() === "win32") {
     const result = spawnSync(
       "taskkill",
       ["/PID", String(child.pid), "/T", "/F"],
-      { stdio: "ignore", windowsHide: true, timeout: 10_000 },
+      { stdio: "ignore", windowsHide: true, timeout: remainingCleanupTimeoutMs(timeoutMs) },
     );
     if (result.error) throw result.error;
     if (result.status !== 0) throw new Error(`taskkill failed for owned Kiro PID ${child.pid}`);
@@ -584,6 +692,7 @@ export async function launchKiroIde(
   runtime: Partial<KiroIdeLaunchRuntime> = {},
 ): Promise<KiroIdeHandle> {
   const env = runtime.env ?? process.env;
+  const startupDeadlineMs = Date.now() + remainingOperationTimeoutMs(opts.startupTimeoutMs === 0 ? LIVE_STARTUP_TIMEOUT_MS : opts.startupTimeoutMs ?? LIVE_STARTUP_TIMEOUT_MS, { env, phase: "IDE startup" })!;
   const launchStarted = performance.now();
   const windows = (runtime.platform ?? platform()) === "win32";
   const inheritedGroup = env.AIDLC_TEST_WORKER_PROCESS_GROUP === "1";
@@ -611,6 +720,8 @@ export async function launchKiroIde(
   let child: ChildProcess;
   const spawnChild: KiroIdeLaunchRuntime["spawn"] = runtime.spawn ?? spawn;
   try {
+    // Profile copying consumes the parent allocation before the child is started.
+    remainingOperationTimeoutMs(opts.startupTimeoutMs ?? LIVE_STARTUP_TIMEOUT_MS, { env, deadlineMs: startupDeadlineMs, phase: "IDE startup" });
     child = spawnChild(opts.bin ?? KIRO_IDE_BIN, [
       opts.workspace,
       "--remote-debugging-port=0",
@@ -705,14 +816,14 @@ export async function launchKiroIde(
     cleanupPromise = (async () => {
       trace("cleanup-start", { closed, exited });
       if (!closed) {
-        const timeoutMs = opts.shutdownTimeoutMs ?? 10_000;
+        const timeoutMs = remainingCleanupTimeoutMs(opts.shutdownTimeoutMs ?? LIVE_CLEANUP_TIMEOUT_MS, { env });
+        const deadline = Date.now() + timeoutMs;
         if ((windows || inheritedGroup) && !runtime.terminate) {
-          const deadline = Date.now() + timeoutMs;
           // Keep fallback observation inside the original shutdown budget.
-          const closeDeadline = deadline - Math.min(1_000, Math.floor(timeoutMs / 10));
+          const closeDeadline = deadline - Math.floor(timeoutMs / 10);
           try {
             if (liveChild()) {
-              if (browserWebSocketUrl) await closeKiroIdeBrowser(browserWebSocketUrl, Math.min(3_000, Math.max(1, closeDeadline - Date.now())), childClosed, trace);
+              if (browserWebSocketUrl) await closeKiroIdeBrowser(browserWebSocketUrl, Math.max(1, closeDeadline - Date.now()), childClosed, trace);
               else killDirectChild("startup"); // Startup failed before an endpoint was reported.
             }
             await waitClosed(Math.max(1, closeDeadline - Date.now()));
@@ -732,14 +843,17 @@ export async function launchKiroIde(
           }
         } else {
           try {
-            if (liveChild()) (runtime.terminate ?? terminateKiroIdeChild)(child);
+            if (liveChild()) {
+              if (runtime.terminate) runtime.terminate(child);
+              else terminateKiroIdeChild(child, Math.max(1, deadline - Date.now()));
+            }
           } catch (error) {
             throw new Error(`Kiro termination failed; profile retained at ${profileDir}`, { cause: error });
           }
-          await waitClosed(timeoutMs);
+          await waitClosed(Math.max(1, deadline - Date.now()));
         }
       }
-      removeSeedDir(profileDir, 20, 250, env);
+      removeSeedDir(profileDir, undefined, 250, env);
       trace("cleanup-complete", { closed, exited });
     })();
     try {
@@ -769,7 +883,8 @@ export async function launchKiroIde(
       const onExit = () => fail(new Error("Kiro exited before reporting its CDP endpoint"));
       const timer = setTimeout(
         () => fail(new Error("Kiro timed out reporting its OS-assigned CDP endpoint")),
-        opts.startupTimeoutMs ?? 60_000,
+        opts.startupTimeoutMs === 0 ? 0 :
+          remainingOperationTimeoutMs(opts.startupTimeoutMs ?? LIVE_STARTUP_TIMEOUT_MS, { env, deadlineMs: startupDeadlineMs, phase: "IDE startup" }),
       );
       child.once("error", fail);
       child.once("exit", onExit);
@@ -840,25 +955,41 @@ export async function withKiroIdeCleanup<T>(
 
 /** Poll GET /json/version until the CDP endpoint answers (drive-unblocked.mjs:48-56
  *  - this is already a proper poll in the spike; kept verbatim in shape). */
-export async function waitForCdp(port: number, timeoutMs = 60_000): Promise<boolean> {
-  const end = Date.now() + timeoutMs;
+export async function waitForCdp(port: number, timeoutMs = LIVE_STARTUP_TIMEOUT_MS): Promise<boolean> {
+  const allocation = remainingOperationTimeoutMs(timeoutMs, { phase: "IDE CDP readiness" });
+  const end = Date.now() + (timeoutMs === 0 ? 0 : allocation ?? timeoutMs);
   while (Date.now() < end) {
+    const allocation = remainingOperationTimeoutMs(Math.max(1, end - Date.now()), { phase: "IDE CDP readiness" })!;
     try {
-      const r = await fetch(`http://127.0.0.1:${port}/json/version`);
+      const r = await fetch(`http://127.0.0.1:${port}/json/version`, { signal: AbortSignal.timeout(allocation) });
       if (r.ok) return true;
     } catch {
+      remainingOperationTimeoutMs(undefined, { phase: "IDE CDP readiness" });
       /* not up yet */
     }
-    await sleep(400);
+    const remaining = end - Date.now();
+    if (remaining <= 0) break;
+    await sleep(remainingOperationTimeoutMs(Math.min(400, remaining), { phase: "IDE CDP readiness" })!);
   }
+  remainingOperationTimeoutMs(undefined, { phase: "IDE CDP readiness" });
   return false;
 }
 
 /** GET /json/list - every page/iframe target with a webSocketDebuggerUrl
  *  (cdp.mjs:8-11). */
-export async function listTargets(port: number): Promise<CdpTargetInfo[]> {
-  const r = await fetch(`http://127.0.0.1:${port}/json/list`);
-  return (await r.json()) as CdpTargetInfo[];
+export async function listTargets(port: number, deadlineMs?: number): Promise<CdpTargetInfo[]> {
+  const timeoutMs = remainingOperationTimeoutMs(LIVE_STARTUP_TIMEOUT_MS, { deadlineMs, phase: "IDE target discovery" });
+  try {
+    const r = await fetch(`http://127.0.0.1:${port}/json/list`, {
+      signal: timeoutMs === undefined ? undefined : AbortSignal.timeout(timeoutMs),
+    });
+    return (await r.json()) as CdpTargetInfo[];
+  } catch (error) {
+    if (error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError")) {
+      throw cdpTimeoutError(error, deadlineMs);
+    }
+    throw error;
+  }
 }
 
 /** Open a CdpTarget on the top-level page target - the keyboard/screenshot channel
@@ -925,37 +1056,52 @@ const FIND_CHAT_INPUT_EXPR = `(() => {
 
 /** Poll all contexts for the chat-input placeholder before driving keystrokes.
  *  Replaces the spike's fixed settle sleeps (drive-unblocked.mjs:57-58,119). */
-export async function waitForChatInput(port: number, timeoutMs = 60_000): Promise<boolean> {
-  const end = Date.now() + timeoutMs;
-  while (Date.now() < end) {
-    const targets = await listTargets(port);
-    for (const tgt of targets) {
-      if (!tgt.webSocketDebuggerUrl || (tgt.type !== "page" && tgt.type !== "iframe")) continue;
-      const t = new CdpTarget(tgt.webSocketDebuggerUrl);
-      try {
-        await t.connect();
-        // 1500ms (not the spike's 500ms): the deeply-nested OOPIF chat webview's
-        // executionContextCreated arrives late on a loaded box - a 500ms budget raced
-        // past it and missed the input on a first pass (live probe finding).
-        const contexts = await t.enableContexts(1500);
-        for (const c of contexts) {
-          try {
-            if (await t.evaluateInContext<boolean>(c.id, FIND_CHAT_INPUT_EXPR)) {
-              t.close();
-              return true;
+export async function waitForChatInput(port: number, timeoutMs = LIVE_STARTUP_TIMEOUT_MS): Promise<boolean> {
+  const allocation = remainingOperationTimeoutMs(timeoutMs, { phase: "IDE chat readiness" });
+  const end = Date.now() + (timeoutMs === 0 ? 0 : allocation ?? timeoutMs);
+  try {
+    while (Date.now() < end) {
+      const targets = await listTargets(port, end);
+      for (const tgt of targets) {
+        if (!tgt.webSocketDebuggerUrl || (tgt.type !== "page" && tgt.type !== "iframe")) continue;
+        const t = new CdpTarget(tgt.webSocketDebuggerUrl, end);
+        try {
+          await t.connect();
+          // 1500ms (not the spike's 500ms): the deeply-nested OOPIF chat webview's
+          // executionContextCreated arrives late on a loaded box - a 500ms budget raced
+          // past it and missed the input on a first pass (live probe finding).
+          const contexts = await t.enableContexts(1500);
+          for (const c of contexts) {
+            try {
+              if (await t.evaluateInContext<boolean>(c.id, FIND_CHAT_INPUT_EXPR)) {
+                t.close();
+                return true;
+              }
+            } catch (error) {
+              if (error instanceof TestBudgetExhaustedError) throw error;
+              /* context gone */
             }
-          } catch {
-            /* context gone */
           }
+        } catch (error) {
+          if (error instanceof TestBudgetExhaustedError) throw error;
+          /* target gone */
+        } finally {
+          t.close();
         }
-      } catch {
-        /* target gone */
-      } finally {
-        t.close();
       }
+      const remaining = end - Date.now();
+      if (remaining <= 0) break;
+      await sleep(remainingOperationTimeoutMs(Math.min(800, remaining), { phase: "IDE chat readiness" })!);
     }
-    await sleep(800);
+  } catch (error) {
+    if (!(error instanceof TestBudgetExhaustedError)) throw error;
+    // The readiness deadline has always returned false. Recheck the file alone
+    // first: if both deadlines expire together, shared-budget failure must win.
+    remainingOperationTimeoutMs(undefined, { phase: "IDE chat readiness" });
+    if (Date.now() < end) throw error;
+    return false;
   }
+  remainingOperationTimeoutMs(undefined, { phase: "IDE chat readiness" });
   return false;
 }
 
@@ -1072,10 +1218,12 @@ export interface KiroIdeChatSurfaceAdapter {
  * behavior deterministic in tests without launching Electron. */
 export async function settleKiroIdeChatSurface(
   adapter: KiroIdeChatSurfaceAdapter,
-  timeoutMs = 15_000,
+  timeoutMs = LIVE_STARTUP_TIMEOUT_MS,
   pollMs = 250,
 ): Promise<KiroIdeChatPreparation> {
-  const deadline = adapter.now() + timeoutMs;
+  const remaining = remainingOperationTimeoutMs(timeoutMs, { phase: "IDE chat surface" });
+  const allocation = timeoutMs === 0 ? 0 : remaining ?? timeoutMs;
+  const deadline = adapter.now() + allocation;
   let dismissed: string | null = null;
   let surface: KiroIdeChatSurfaceState = {
     chatFrameCount: 0,
@@ -1084,6 +1232,7 @@ export async function settleKiroIdeChatSurface(
   };
 
   for (;;) {
+    remainingOperationTimeoutMs(undefined, { phase: "IDE chat surface" });
     surface = await adapter.inspect();
     if (chatSurfaceIsReady(surface)) return { dismissed, surface };
 
@@ -1115,7 +1264,7 @@ export async function settleKiroIdeChatSurface(
  * and clear hit tests over the chat iframe. */
 export function prepareKiroIdeChat(
   port: number,
-  timeoutMs = 15_000,
+  timeoutMs = LIVE_STARTUP_TIMEOUT_MS,
 ): Promise<KiroIdeChatPreparation> {
   return settleKiroIdeChatSurface(
     {
@@ -1183,11 +1332,13 @@ export async function readChatText(port: number): Promise<string> {
             t.close();
             return r;
           }
-        } catch {
+        } catch (error) {
+          if (error instanceof TestBudgetExhaustedError) throw error;
           /* context gone */
         }
       }
-    } catch {
+    } catch (error) {
+      if (error instanceof TestBudgetExhaustedError) throw error;
       /* target gone */
     } finally {
       t.close();
@@ -1218,11 +1369,13 @@ async function focusChatEditor(port: number): Promise<boolean> {
       for (const context of await t.enableContexts(600)) {
         try {
           if (await t.evaluateInContext<boolean>(context.id, FOCUS_CHAT_EDITOR_EXPR)) return true;
-        } catch {
+        } catch (error) {
+          if (error instanceof TestBudgetExhaustedError) throw error;
           /* context gone */
         }
       }
-    } catch {
+    } catch (error) {
+      if (error instanceof TestBudgetExhaustedError) throw error;
       /* target gone */
     } finally {
       t.close();
@@ -1390,11 +1543,13 @@ export async function clickByText(port: number, texts: string[]): Promise<string
             t.close();
             return r;
           }
-        } catch {
+        } catch (error) {
+          if (error instanceof TestBudgetExhaustedError) throw error;
           /* context gone */
         }
       }
-    } catch {
+    } catch (error) {
+      if (error instanceof TestBudgetExhaustedError) throw error;
       /* target gone */
     } finally {
       t.close();
@@ -1473,11 +1628,13 @@ export async function snapshotChatDom(port: number): Promise<KiroIdeDomSnapshot[
               ...view,
             });
           }
-        } catch {
+        } catch (error) {
+          if (error instanceof TestBudgetExhaustedError) throw error;
           /* context gone */
         }
       }
-    } catch {
+    } catch (error) {
+      if (error instanceof TestBudgetExhaustedError) throw error;
       /* target gone */
     } finally {
       t.close();
@@ -1556,11 +1713,13 @@ export async function snapshotNumberedLists(
               ...list,
             });
           }
-        } catch {
+        } catch (error) {
+          if (error instanceof TestBudgetExhaustedError) throw error;
           /* context gone */
         }
       }
-    } catch {
+    } catch (error) {
+      if (error instanceof TestBudgetExhaustedError) throw error;
       /* target gone */
     } finally {
       t.close();
@@ -1609,11 +1768,14 @@ export async function watchMarkers(
   onPoll?: () => Promise<void>,
   intervalMs = 1500,
 ): Promise<boolean> {
-  const end = Date.now() + budgetMs;
+  const allocation = remainingOperationTimeoutMs(Math.max(1, budgetMs), { phase: "IDE marker watch" })!;
+  const end = Date.now() + Math.min(budgetMs, allocation);
   while (Date.now() < end) {
     if (onPoll) await onPoll();
     if (predicate()) return true;
-    await sleep(intervalMs);
+    const remaining = end - Date.now();
+    if (remaining <= 0) break;
+    await sleep(Math.min(intervalMs, remaining));
   }
   return predicate();
 }
@@ -1642,7 +1804,7 @@ export async function teardown(handle: KiroIdeHandle): Promise<void> {
  *  retries with short waits; anything else (or exhaustion) still throws. */
 export function removeSeedDir(
   path: string,
-  attempts = 20,
+  attempts: number | undefined = undefined,
   waitMs = 250,
   env: NodeJS.ProcessEnv = process.env,
 ): void {
@@ -1650,6 +1812,7 @@ export function removeSeedDir(
     process.stderr.write(`[kiro-ide-driver] AIDLC_KEEP_TEMP=1 - preserved ${path}\n`);
     return;
   }
+  const deadline = Date.now() + remainingCleanupTimeoutMs(NATIVE_PROCESS_CLEANUP_TIMEOUT_MS, { env });
   for (let attempt = 1; ; attempt++) {
     try {
       rmSync(path, { recursive: true, force: true });
@@ -1657,8 +1820,8 @@ export function removeSeedDir(
     } catch (error) {
       const code = (error as NodeJS.ErrnoException).code;
       const retryable = code === "EBUSY" || code === "EPERM" || code === "ENOTEMPTY";
-      if (!retryable || attempt >= attempts) throw error;
-      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, waitMs);
+      if (!retryable || (attempts !== undefined && attempt >= attempts) || Date.now() >= deadline) throw error;
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, Math.min(waitMs, Math.max(0, deadline - Date.now())));
     }
   }
 }

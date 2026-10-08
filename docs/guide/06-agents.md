@@ -85,7 +85,7 @@ flowchart TD
 
 ## The 11 Domain Agents
 
-> **Customizing what a shipped agent knows?** Do not edit the 14 shipped agent files at `.claude/agents/*.md` — they're framework files and get overwritten on upgrade. Add your company standards to the space-level `aidlc/knowledge/<agent-name>/` instead. See [Knowledge](08-knowledge.md) for the full workflow. Teams that want a *new* agent can drop a file at `.claude/agents/<slug>.md` with the required frontmatter — that file is user-owned. See [Contributing: Adding an Agent](../reference/11-contributing.md#adding-an-agent).
+> **Customizing what a shipped agent knows?** Do not edit the 14 shipped agent files at `.claude/agents/*.md` — they're framework files and get overwritten on upgrade. Add your company standards to the space-level `aidlc/knowledge/<agent-name>/` instead. See [Knowledge](08-knowledge.md) for the full workflow. Teams that want a *new* agent can drop a file at `.claude/agents/<slug>.md` with the required frontmatter — that file is user-owned. See [Contributing: Adding an Agent](../reference/11-contributing.md#adding-an-agent). Your harness's own subagents can live in the same directory: a file with none of AI-DLC's persona keys (`display_name`, `examples`, `tier`, `plugin`) and no `aidlc-` prefix is left to the harness, and `aidlc doctor --verbose` lists it as an advisory.
 
 Each agent below has a **deep-dive page** — its full responsibilities, the stages it leads and supports, and the knowledge it loads. The [agent deep-dive index](agents/README.md) lists all 11; the per-agent links are inline under each heading.
 
@@ -123,7 +123,7 @@ The aidlc-delivery-agent acts as the engineering manager. It assesses team capac
 
 **Domain:** Domain design, domain modelling, NFRs, component decomposition
 
-The aidlc-architect-agent is the central design authority. It has the broadest stage involvement (10 stages across 3 phases) and carries the `judgment` tier — alongside seven other high-judgment agents (product, design, developer, quality, devsecops, compliance, aws-platform). With no recorded model policy, judgment agents inherit your session's model and effort. Delivery, pipeline-deploy, and operations carry the `templated` tier because their output is dominantly planning, CI/CD YAML, and runbook scaffolding; their shipped baseline also inherits. The reviewer tier uses Sonnet at medium effort on Claude Code; on Codex and opencode it inherits the session model and applies medium reasoning effort. The wizard-default `balanced` preset is an explicit effort override for all three groups, setting each to medium without changing models. Kiro CLI/IDE, Cursor, and Copilot cannot express those group effort dials. See [Model Policy](18-install-and-lifecycle.md#model-policy).
+The aidlc-architect-agent is the central design authority. It has the broadest stage involvement (10 stages across 3 phases) and carries the `judgment` tier, alongside seven other high-judgment agents (product, design, developer, quality, devsecops, compliance, aws-platform). With no recorded model policy, judgment agents inherit your session's model and effort. Delivery, pipeline-deploy, and operations carry the `templated` tier because their output is dominantly planning, CI/CD YAML, and runbook scaffolding; their shipped baseline also inherits. The reviewer tier uses Sonnet at medium effort on Claude Code; on Codex and opencode it inherits the session model and applies medium reasoning effort. The wizard-default `balanced` preset is an explicit effort override for all three groups, setting each to medium without changing models. On Kiro CLI it sets one effort for the whole session; Kiro IDE, Cursor, and Copilot cannot express those group effort dials, so the wizard records no preset there. See [Model Policy](18-install-and-lifecycle.md#model-policy).
 
 - **Leads:** feasibility, domain-design, units-generation, contract-design, functional-design, nfr-requirements, nfr-design
 - **Supports:** intent-capture, reverse-engineering (synthesis), delivery-planning
@@ -263,7 +263,7 @@ challenge it, representing the customer (or the review board) at the gate.
 
 ## The Composer Agent
 
-One more agent sits outside both groups: `aidlc-composer-agent`, the adaptive-workflows composer. The conductor dispatches it on a compose request (`/aidlc compose`, a compose offer on a cold start, `--report`, or `--new-scope`). It estimates the task's implementation entropy (five components: intent ambiguity, structural uncertainty, verification entropy, risk, unresolved assumptions - grounded in CodeKB MCP analysis when configured, the workspace scan otherwise), proposes the minimum viable EXECUTE/SKIP grid with the score breakdown and a per-stage rationale, and - only after your approval at the gate - authors the composed scope (front/report) or proposes pending-stage flips the deterministic `recompose` verb applies (in-flight). Its persona justifies both presence and absence against the entropy profile: every EXECUTE names the component it reduces, every SKIP names what already covers it, and cutting the spine (core, verification, the load-bearing discovery stage) is treated as the dangerous failure. See [Scopes and Depth - The Adaptive Composer](05-scopes-and-depth.md#the-adaptive-composer).
+One more agent sits outside both groups: `aidlc-composer-agent`, the adaptive-workflows composer. The conductor dispatches it on a compose request (`/aidlc compose`, a compose offer on a cold start, `--report`, or `--new-scope`). It estimates the task's implementation entropy (five components: intent ambiguity, structural uncertainty, verification entropy, risk, unresolved assumptions - grounded in CodeKB MCP analysis when configured, the workspace scan otherwise), proposes the minimum viable EXECUTE/SKIP grid with the score breakdown and a per-stage rationale, and - only after your approval at the gate - the plan is created for that piece of work (front/report; the composer writes no scope file, and the engine saves the plan as a scope only if you ask) or its pending-stage flips are applied by the deterministic `recompose` verb (in-flight). Its persona justifies both presence and absence against the entropy profile: every EXECUTE names the component it reduces, every SKIP names what already covers it, and cutting the spine (core, verification, the load-bearing discovery stage) is treated as the dangerous failure. See [Scopes and Depth - The Adaptive Composer](05-scopes-and-depth.md#the-adaptive-composer).
 
 A reviewer fires only when a stage declares a `reviewer:` field. Today the product
 lead reviews `rough-mockups`, `refined-mockups`, `requirements-analysis`, and
@@ -276,15 +276,19 @@ learnings ritual and approval gate, the conductor invokes the named reviewer as 
 **separate sub-agent**. The reviewer reads the stage definition, the Q&A, and the
 artifacts (never the builder's `memory.md` or plan — it forms independent
 judgment), then writes its review (a verdict of **READY** or **NOT-READY** plus
-a findings table) to the review file the conductor names. The reviewer never
+a report of what changed: prior findings it re-checked and new findings) to the
+review file the conductor names. The engine keeps the findings list: it assigns
+the IDs, keeps your decisions exactly as you made them, and never lets a
+reviewer write one. The reviewer never
 edits the artifact it reviews; the engine records the review as a framework-owned
-record under the intent's `.aidlc-engine/reviews/` directory, writes a readable copy of
-the review for people at `<stage dir>/reviews/review-NN.md` beside the reviewed
+record under the intent's `.aidlc-engine/reviews/` directory, writes a readable copy
+with the full findings list as of that review for people at
+`<stage dir>/reviews/review-NN.md` beside the reviewed
 artifact, and refuses a verdict whose artifacts changed. How the verdict is handled depends on the stage's review class:
 
 - **Advisory** (the human-gated ideation/inception prose stages): one normal-flow
-  review pass, whatever the verdict. The findings are quoted verbatim at the
-  approval gate, ranked by severity, as decision support — you triage them, and a
+  review pass, whatever the verdict. The engine's findings list is shown at the
+  approval gate as decision support: you triage it, and a
   Request Changes at the gate is how a finding becomes a revision. If a later
   output write invalidates the terminal receipt, one bounded recovery request
   runs at the next ordinal.
@@ -302,8 +306,12 @@ canonical READY / NOT-READY line (a capped, crashed, or cut-off reviewer) - the
 conductor re-dispatches that same review once, and a second incomplete attempt
 is recorded as NOT-READY with the finding "review did not complete within its
 turn budget", so a silent cutoff becomes a visible finding at the gate instead
-of a missing verdict. Every request opens a fresh review slot, so a stale
-pre-revision review can never be misread as covering new work. Reviews recorded
+of a missing verdict. That result is no reviewer's: you are told the review did
+not finish, and your approval records it that way. If you stop a review
+yourself and say what you want, the conductor does not retry it on its own: it
+checks the next step first and does what you asked. Every request opens a
+fresh review slot, so a stale pre-revision review can never be misread as
+covering new work. Reviews recorded
 by earlier releases as a `## Review` section inside the artifact stay readable
 at the gate until the next review replaces them.
 

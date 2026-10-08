@@ -9,7 +9,12 @@
 // `disableAllHooks: true` is present, follow Claude Code's layer precedence so
 // a higher-precedence `false` suppresses a lower `true`, and pass otherwise.
 
-import { describe, expect, test, afterEach } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { describe, expect, test, afterEach, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -20,6 +25,8 @@ import {
   setupIntegrationProject,
 } from "../harness/fixtures.ts";
 import { resolveManagedSettingsCandidates } from "../../core/tools/aidlc-utility.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const BUN = process.execPath;
 const UTIL = join(AIDLC_SRC, "tools", "aidlc-utility.ts");
@@ -71,6 +78,7 @@ function runDoctor(
   userHome = join(proj, ".test-user-home"),
 ): { status: number; out: string } {
   const res = spawnSync(BUN, [UTIL, "doctor", "--verbose", "--project-dir", proj], {
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     encoding: "utf-8",
     env: {
       ...process.env,
@@ -98,8 +106,10 @@ describe("t324 doctor disableAllHooks gate", () => {
     const { status, out } = runDoctor(proj);
     expect(out).toMatch(/Hooks DISABLED/);
     expect(out).toMatch(/\.claude\/settings\.json/);
-    // The remedy explains the engine is hook-driven, not a cosmetic warning.
-    expect(out).toMatch(/hook-driven/);
+    // The remedy is the person's one step, which works in the same chat.
+    expect(out).toContain(
+      'Set "disableAllHooks": false in this project\'s .claude/settings.local.json; it works in the same chat.',
+    );
     expect(status).not.toBe(0);
   });
 
@@ -167,9 +177,9 @@ describe("t324 doctor disableAllHooks gate", () => {
     expect(out).toMatch(/enterprise managed settings/);
     expect(status).not.toBe(0);
     // The remedy must NOT tell the user to override a managed policy from a
-    // local layer — managed settings is the highest-precedence layer.
-    expect(out).not.toMatch(/set it to false in a higher-precedence layer/);
-    expect(out).toMatch(/IT policy must remove it/);
+    // local layer: managed settings is the highest-precedence layer.
+    expect(out).not.toMatch(/settings\.local\.json; it works in the same chat/);
+    expect(out).toMatch(/Ask your Claude Code administrator to allow project hooks/);
   });
 
   test("managed settings is highest precedence: managed:false SUPPRESSES a project settings.json:true", () => {

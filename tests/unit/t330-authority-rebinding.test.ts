@@ -480,7 +480,7 @@ describe("t330 (2) the state digest the active directive binds to", () => {
     ["without section separators", STATE.replace(/\n\n/g, "\n")],
   ]) {
     test(`Unit lifecycle mirror insertion and removal preserve authority ${layout}`, () => {
-      const fields = ["Active Unit", "Unit State", "Unit Pause Reason", "Unit Next Action"];
+      const fields = ["Active Unit", "Unit Stage", "Unit State", "Unit Pause Reason", "Unit Next Action"];
       const idle = fields.reduce((state, field) => removeField(state, field), initial);
       const digest = stateDigest(idle);
       let state = idle;
@@ -491,6 +491,7 @@ describe("t330 (2) the state digest the active directive binds to", () => {
       // Repeated lifecycles accumulate separator lines in the serialized state.
       for (let cycle = 0; cycle < 2; cycle++) {
         mirror("Active Unit", "alpha");
+        mirror("Unit Stage", "code-generation");
         mirror("Unit State", "in-progress");
         mirror("Unit State", "paused");
         mirror("Unit Pause Reason", "session ending");
@@ -589,6 +590,29 @@ describe("t330 (2) the state digest the active directive binds to", () => {
     // Section headings survive, so removing a whole section is still a change.
     expect(projected).toContain("## Unit Progress");
     expect(stateDigest(STATE.replace("## Unit Progress\n", ""))).not.toBe(baseline);
+  });
+
+  test("a retired Guard Policy field rename preserves authority but value, source, and conflicts remain bound", () => {
+    const retired = STATE.replace(
+      "- **Scope**: feature",
+      "- **Scope**: feature\n- **Change Control**: relaxed (from scope feature)",
+    );
+    const current = retired.replace(
+      "- **Change Control**: relaxed (from scope feature)",
+      "- **Guard Policy**: relaxed (from scope feature)",
+    );
+    expect(stateDigest(current)).toBe(stateDigest(retired));
+    expect(stateDigest(current.replace(
+      "Guard Policy**: relaxed (from scope feature)",
+      "Guard Policy**: off (from scope feature)",
+    ))).not.toBe(stateDigest(retired));
+    expect(stateDigest(current.replace(
+      "Guard Policy**: relaxed (from scope feature)",
+      "Guard Policy**: relaxed (set by you)",
+    ))).not.toBe(stateDigest(retired));
+    expect(stateDigest(`${current}\n- **Change Control**: off (set by you)`)).not.toBe(
+      stateDigest(retired),
+    );
   });
 
   test("an empty state file projects to an empty string", () => {

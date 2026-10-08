@@ -1,13 +1,22 @@
 // covers: file:scripts/build-binaries.ts, tool:aidlc, subcommand:aidlc-utility:version, hook:aidlc-review-freeze
 // covers: subcommand:aidlc-utility:plugin-sync
 // covers: subcommand:aidlc-utility:doctor
+// covers: subcommand:aidlc-orchestrate:next, subcommand:aidlc-utility:config-change,
+// subcommand:aidlc-utility:config-get, subcommand:aidlc-utility:config-list
 //
 // Native-only unit coverage for the release binary builder. The cross-target
 // matrix, including Bun's Windows .exe append behavior, is intentionally left
 // to release CI because those artifacts are host/toolchain dependent and much
 // more expensive than the local native gate.
 
-import { afterEach, describe, expect, test } from "bun:test";
+import {
+  NATIVE_COMPILE_TIMEOUT_MS,
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { afterEach, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
   cpSync,
@@ -35,6 +44,13 @@ import {
 import { isCompiledExecutable } from "../../core/tools/aidlc-runtime-paths.ts";
 import { VERSION_ID_PATTERN } from "../../core/tools/aidlc-channel.ts";
 import { AIDLC_VERSION } from "../../dist/claude/.claude/tools/aidlc-version.ts";
+import {
+  createTestProject,
+  seedStateFile,
+  seededStateFile,
+} from "../harness/fixtures.ts";
+
+setDefaultTimeout(NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const BUN = process.execPath;
@@ -126,7 +142,7 @@ function runBuild(outDir: string, extraEnv: NodeJS.ProcessEnv = {}): RunResult {
     cwd: REPO_ROOT,
     encoding: "utf-8",
     env,
-    timeout: 300_000,
+    timeout: remainingOperationTimeoutMs(NATIVE_FIXTURE_SETUP_TIMEOUT_MS),
   });
   // Preserve gate details before fixture cleanup, including a failing native
   // build. Keep the expected-failure entry's report separate from the real one.
@@ -153,6 +169,14 @@ function nativeResult(doc: BuildResults): TargetResult {
   const native = doc.results.find((result) => result.name === "native");
   expect(native).toBeDefined();
   return native as TargetResult;
+}
+
+function retainVerifiedNativeLayout(artifact: string): void {
+  // The runner owns this copy's lifetime, beyond per-file fixture cleanup.
+  const compiledDir = process.env.AIDLC_TEST_COMPILED_DIR;
+  if (!compiledDir) return;
+  cpSync(dirname(artifact), compiledDir, { recursive: true });
+  expect(existsSync(join(compiledDir, process.platform === "win32" ? "aidlc.exe" : "aidlc"))).toBe(true);
 }
 
 function gate(result: TargetResult, name: string): GateResult {
@@ -306,6 +330,10 @@ describe("t238 build-binaries release builder", () => {
       "adapter-cursor-validate-state",
       "adapter-copilot-validate-state",
       "adapter-copilot-2.8.0-project-validate-state",
+      "native-hook-ignores-project-copy",
+      "native-adapter-ignores-project-copy",
+      "native-hook-rejects-escaped-distribution",
+      "native-statusline-uses-project-copy",
       "routed-project-dir",
       "bun-compiled-parity",
       "final-layout-config-dry-run",
@@ -340,7 +368,7 @@ describe("t238 build-binaries release builder", () => {
     const rerun = spawnSync(native.artifact, ["version"], {
       cwd: tempDirectory("rerun"),
       encoding: "utf-8",
-      timeout: 30_000,
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     });
     expect(rerun.status).toBe(0);
     expect(stampedVersion(rerun.stdout ?? "")).toBe(AIDLC_VERSION);
@@ -361,7 +389,7 @@ describe("t238 build-binaries release builder", () => {
           AIDLC_CLAUDE_PLUGIN_REGISTRY: registry,
           AIDLC_CLAUDE_SETTINGS: settings,
         },
-        timeout: 30_000,
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
       });
       expect(pluginSync.status).toBe(0);
       expect(pluginSync.stdout ?? "").toBe("plugin sync complete: 0 plugin(s)\n");
@@ -371,11 +399,90 @@ describe("t238 build-binaries release builder", () => {
       rmSync(pluginFixture, { recursive: true, force: true });
     }
 
+    // Reuse this build to exercise orchestrate's compiled sibling dispatch.
+    // Empty PATH means neither a Bun fallback nor a global aidlc can satisfy it.
+    // Each initial next response must already contain the real config result.
+    const configProject = createTestProject();
+    tempDirs.push(configProject);
+    cpSync(
+      join(dirname(native.artifact), "runtime", "claude", ".claude"),
+      join(configProject, ".claude"),
+      { recursive: true },
+    );
+    seedStateFile(configProject, "state-brownfield-feature.md");
+    const configState = seededStateFile(configProject);
+    const beforeConfig = readFileSync(configState, "utf-8");
+    expect(beforeConfig).toContain("- **Depth**: Standard");
+    const workflowRows = (state: string): string[] | null =>
+      state.match(/^(- \*\*(?:Current Stage|In Progress|Lifecycle Phase|Status)\*\*:.*|- \[[^\]]\].*)$/gm);
+    let stateAfterSet = beforeConfig;
+    for (const [args, output] of [
+      [["set", "depth", "minimal"], "Depth changed: Standard -> Minimal"],
+      [["get", "depth"], "\n\nMinimal"],
+      [["list", "--json"], '"depth":"Minimal"'],
+    ] as const) {
+      const configured = spawnSync(native.artifact, [
+        "engine", "orchestrate", "next", "config", ...args,
+        "--project-dir", configProject,
+      ], {
+        cwd: configProject,
+        encoding: "utf-8",
+        timeout: 30_000,
+        env: {
+          ...process.env,
+          PATH: "",
+          AIDLC_PROJECT_DIR: configProject,
+          CLAUDE_PROJECT_DIR: configProject,
+          AIDLC_HARNESS_DIR: ".claude",
+          AIDLC_HARNESS_NAME: "claude",
+          AIDLC_INSTALL_ROOT: join(root, "typed-config-install"),
+          AIDLC_STOP_HOOK_PROBE: "0",
+          AIDLC_ROUTE_CHECK: "0",
+        },
+      });
+      const captured = `${configured.stdout ?? ""}${configured.stderr ?? ""}`;
+      expect(configured.error, captured).toBeUndefined();
+      expect(configured.status, captured).toBe(0);
+      const directive = JSON.parse(configured.stdout ?? "") as { kind: string; message: string };
+      expect(directive.kind, captured).toBe("print");
+      expect(directive.message).toContain(output);
+      const afterConfig = readFileSync(configState, "utf-8");
+      expect(afterConfig).toContain("- **Depth**: Minimal");
+      expect(workflowRows(afterConfig)).toEqual(workflowRows(beforeConfig));
+      if (args[0] === "set") stateAfterSet = afterConfig;
+      else expect(afterConfig).toBe(stateAfterSet);
+    }
+
+    // A repository's own `.env` and `bunfig.toml` stay the repository's: the
+    // engine neither loads the one into its environment nor runs the other's
+    // preload, whatever folder a command runs in. A shell-set value still wins
+    // (the `--show` source then reads `env`), so this probes the file only.
+    const preloadMarker = join(configProject, "preload-ran");
+    writeFileSync(join(configProject, ".env"), "AWS_AIDLC_DEFAULT_SCOPE=workshop\n");
+    writeFileSync(
+      join(configProject, "preload.ts"),
+      `require("node:fs").writeFileSync(${JSON.stringify(preloadMarker)}, "");\n`,
+    );
+    writeFileSync(join(configProject, "bunfig.toml"), 'preload = ["./preload.ts"]\n');
+    const inClone = spawnSync(native.artifact, ["config", "flags", "--show", "--json"], {
+      cwd: configProject,
+      encoding: "utf-8",
+      timeout: 30_000,
+      env: { ...process.env, AIDLC_INSTALL_ROOT: join(root, "typed-config-install") },
+    });
+    const cloneCaptured = `${inClone.stdout ?? ""}${inClone.stderr ?? ""}`;
+    expect(inClone.error, cloneCaptured).toBeUndefined();
+    expect(inClone.status, cloneCaptured).toBe(0);
+    const shown = JSON.parse(inClone.stdout ?? "") as { data: { sources: Record<string, string> } };
+    expect(shown.data.sources.AWS_AIDLC_DEFAULT_SCOPE, cloneCaptured).toBe("shipped default");
+    expect(existsSync(preloadMarker), "the repository's bunfig preload ran inside the engine").toBe(false);
+    for (const name of [".env", "preload.ts", "bunfig.toml"]) rmSync(join(configProject, name), { force: true });
+
     const doctor = spawnSync(native.artifact, ["doctor"], {
       cwd: tempDirectory("rerun"),
       encoding: "utf-8",
       env: { ...process.env, PATH: "", AIDLC_INSTALL_ROOT: join(root, "doctor-install") },
-      timeout: 30_000,
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     });
     expect(doctor.status === 0 || doctor.status === 1).toBe(true);
     expect(doctor.stdout ?? "").toContain("AI-DLC doctor");
@@ -383,10 +490,45 @@ describe("t238 build-binaries release builder", () => {
       /Cannot find module|\/\$bunfs\/|uv_spawn ['"]bun['"]/,
     );
 
+    const pluginDoctorProject = createTestProject();
+    tempDirs.push(pluginDoctorProject);
+    cpSync(
+      join(dirname(native.artifact), "runtime", "claude", ".claude"),
+      join(pluginDoctorProject, ".claude"),
+      { recursive: true },
+    );
+    writeFileSync(
+      join(pluginDoctorProject, ".claude", "scopes", "doctor-probe-scope.md"),
+      [
+        "---",
+        "name: doctor-probe-scope",
+        "plugin: doctor-probe",
+        "depth: Standard",
+        "description: Doctor probe plugin scope",
+        "keywords:",
+        "  - doctor-probe-scope",
+        "---",
+        "",
+      ].join("\n"),
+    );
+    writeFileSync(
+      join(pluginDoctorProject, ".claude", "tools", "doctor-probe-doctor.ts"),
+      'process.stdout.write(JSON.stringify({checks:[{pass:true,label:"native plugin check ran"}]}));\n',
+    );
+    const pluginDoctor = spawnSync(native.artifact, ["doctor", "--verbose", "--project-dir", pluginDoctorProject], {
+      cwd: pluginDoctorProject,
+      encoding: "utf-8",
+      env: { ...process.env, PATH: "", AIDLC_INSTALL_ROOT: join(root, "plugin-doctor-install") },
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+    });
+    const pluginDoctorOutput = `${pluginDoctor.stdout ?? ""}${pluginDoctor.stderr ?? ""}`;
+    expect(pluginDoctorOutput).toContain("ok    Plugin check (doctor-probe): native plugin check ran");
+    expect(pluginDoctorOutput).not.toContain("returned exit code 2");
+
     const utility = spawnSync(BUN, [UTILITY_TS, "version"], {
       cwd: tempDirectory("rerun"),
       encoding: "utf-8",
-      timeout: 30_000,
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     });
     expect(utility.status).toBe(0);
     expect(stampedVersion(utility.stdout ?? "")).toBe(AIDLC_VERSION);
@@ -400,7 +542,7 @@ describe("t238 build-binaries release builder", () => {
     ], {
       cwd: REPO_ROOT,
       encoding: "utf-8",
-      timeout: 180_000,
+      timeout: remainingOperationTimeoutMs(NATIVE_COMPILE_TIMEOUT_MS),
       env: { ...process.env, SOURCE_DATE_EPOCH: "1784246400" },
     });
     expect(packaged.status, `${packaged.stdout ?? ""}${packaged.stderr ?? ""}`).toBe(0);
@@ -484,6 +626,97 @@ describe("t238 build-binaries release builder", () => {
       expect(copySettingsText).not.toContain('"command": "aidlc engine');
       expect(nativeSettings.statusLine.command).toBe("aidlc engine statusline");
       expect(nativeSettingsText).not.toContain('"command": "bun ');
+      // A copy-channel user copies runtime/<harness>/ over the project, so the
+      // copy runtime carries no file the team's editor owns. Config merges the
+      // VS Code setting from the native runtime instead.
+      expect(existsSync(join(copyRoot, "runtime", "copilot", ".vscode"))).toBe(false);
+      expect(existsSync(join(nativeRoot, "runtime", "copilot", ".vscode", "settings.json"))).toBe(true);
+      // Nor the team's memory files or the person's chosen space, so a copy
+      // upgrade keeps the practices the team affirmed and the space they chose.
+      // The native runtime still ships them: config creates them only when absent.
+      const kept = [
+        join("aidlc", "spaces", "default", "memory", "team.md"),
+        join("aidlc", "spaces", "default", "memory", "project.md"),
+        join("aidlc", "active-space"),
+      ];
+      // A copy starts with no MCP servers; the shipped list rides in the
+      // harness folder. The native runtime ships the file for config.
+      expect(existsSync(join(copyRoot, "runtime", "claude", ".mcp.json"))).toBe(false);
+      expect(existsSync(join(copyRoot, "runtime", "claude", ".claude", "tools", "data", "root-blocks", ".mcp.json"))).toBe(true);
+      expect(existsSync(join(nativeRoot, "runtime", "claude", ".mcp.json"))).toBe(true);
+      for (const distribution of ["claude", "copilot"]) {
+        for (const path of kept) {
+          expect(existsSync(join(copyRoot, "runtime", distribution, path)), `${distribution}/${path}`).toBe(false);
+          expect(existsSync(join(nativeRoot, "runtime", distribution, path)), `${distribution}/${path}`).toBe(true);
+        }
+        expect(existsSync(join(copyRoot, "runtime", distribution, "aidlc", "spaces", "default", "memory", "org.md"))).toBe(true);
+      }
+      // Nor the team's .gitignore or AGENTS.md: AI-DLC's part of each ships in
+      // the harness folder, and config or the engine adds it to the team's file.
+      for (const [distribution, harnessDir, markers] of [
+        ["claude", ".claude", ["gitignore"]],
+        ["copilot", ".aidlc", ["gitignore", "agents"]],
+      ] as const) {
+        for (const path of [".gitignore", "AGENTS.md"]) {
+          expect(existsSync(join(copyRoot, "runtime", distribution, path)), `${distribution}/${path}`).toBe(false);
+        }
+        for (const marker of markers) {
+          const block = join("tools", "data", "root-blocks", marker);
+          expect(existsSync(join(copyRoot, "runtime", distribution, harnessDir, block)), `${distribution}/${block}`).toBe(true);
+        }
+        expect(existsSync(join(nativeRoot, "runtime", distribution, ".gitignore"))).toBe(true);
+      }
+      const upgraded = join(runtimeChannels, "upgraded-project");
+      const teamFiles = new Map([
+        [kept[0], "# Team practices\n\n- Affirmed: trunk-based development\n"],
+        [kept[1], "# Project rules\n\n- Learned: run the linter before review\n"],
+        [kept[2], "payments\n"],
+        [".gitignore", "node_modules\n.env\nsecrets/\n"],
+        ["AGENTS.md", "# Shop\n\nOur own notes for agents.\n"],
+        [".mcp.json", '{\n  "mcpServers": {\n    "ours": { "command": "our-server" }\n  }\n}\n'],
+      ]);
+      for (const [path, body] of teamFiles) {
+        mkdirSync(dirname(join(upgraded, path)), { recursive: true });
+        writeFileSync(join(upgraded, path), body);
+      }
+      cpSync(join(copyRoot, "runtime", "claude"), upgraded, { recursive: true });
+      cpSync(join(copyRoot, "runtime", "copilot"), upgraded, { recursive: true });
+      for (const [path, body] of teamFiles) {
+        expect(readFileSync(join(upgraded, path), "utf-8"), path).toBe(body);
+      }
+      // The team's secrets file stays ignored, so `git add -A` never picks it up.
+      writeFileSync(join(upgraded, ".env"), "API_KEY=team-secret\n");
+      expect(spawnSync("git", ["init", "-q"], { cwd: upgraded }).status).toBe(0);
+      expect(spawnSync("git", ["check-ignore", "-q", ".env"], { cwd: upgraded }).status).toBe(0);
+
+      // A Kiro project that later takes the Claude copy keeps Kiro's per-machine
+      // files ignored: the copy leaves .gitignore alone, and the next session
+      // start adds Claude's lines beside Kiro's.
+      const kiroThenClaude = join(runtimeChannels, "kiro-then-claude");
+      mkdirSync(kiroThenClaude);
+      writeFileSync(join(kiroThenClaude, ".gitignore"), "node_modules\n");
+      const sessionStart = (harnessDir: string): void => {
+        const started = spawnSync(BUN, [join(kiroThenClaude, harnessDir, "hooks", "aidlc-session-start.ts")], {
+          cwd: kiroThenClaude,
+          input: "{}",
+          encoding: "utf-8",
+          env: { ...process.env, CLAUDE_PROJECT_DIR: kiroThenClaude },
+          timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+        });
+        expect(started.status, `${harnessDir}: ${started.stdout}${started.stderr}`).toBe(0);
+      };
+      cpSync(join(copyRoot, "runtime", "kiro"), kiroThenClaude, { recursive: true });
+      sessionStart(".kiro");
+      const kiroIgnore = readFileSync(join(kiroThenClaude, ".gitignore"), "utf-8");
+      expect(kiroIgnore).toContain("aidlc/.aidlc-turn-counter");
+      cpSync(join(copyRoot, "runtime", "claude"), kiroThenClaude, { recursive: true });
+      expect(readFileSync(join(kiroThenClaude, ".gitignore"), "utf-8")).toBe(kiroIgnore);
+      sessionStart(".claude");
+      expect(readFileSync(join(kiroThenClaude, ".gitignore"), "utf-8")).toStartWith("node_modules\n");
+      expect(spawnSync("git", ["init", "-q"], { cwd: kiroThenClaude }).status).toBe(0);
+      for (const path of ["aidlc/.aidlc-turn-counter", "aidlc/.aidlc-readonly-latch", ".claude/settings.local.json"]) {
+        expect(spawnSync("git", ["check-ignore", "-q", path], { cwd: kiroThenClaude }).status, path).toBe(0);
+      }
 
       const manualProject = join(runtimeChannels, "manual-project");
       cpSync(join(copyRoot, "runtime", "claude"), manualProject, { recursive: true });
@@ -499,7 +732,7 @@ describe("t238 build-binaries release builder", () => {
           CLAUDE_PROJECT_DIR: manualProject,
           PATH: "",
         },
-        timeout: 30_000,
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
       });
       expect(
         manualStatusline.status,
@@ -551,7 +784,7 @@ describe("t238 build-binaries release builder", () => {
       ], {
         cwd: project,
         encoding: "utf-8",
-        timeout: 60_000,
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
         env,
       });
       expect(escapedProfile.status).toBe(4);
@@ -570,7 +803,7 @@ describe("t238 build-binaries release builder", () => {
       ], {
         cwd: project,
         encoding: "utf-8",
-        timeout: 60_000,
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
         env: {
           ...env,
           AIDLC_INSTALL_ROOT: invalidRoot,
@@ -588,13 +821,16 @@ describe("t238 build-binaries release builder", () => {
       ], {
         cwd: project,
         encoding: "utf-8",
-        timeout: 60_000,
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
         env,
       });
       expect(obsoleteHarness.status).toBe(2);
 
       // The remaining checks exercise install.sh, Homebrew, and POSIX profiles.
-      if (process.platform === "win32") return;
+      if (process.platform === "win32") {
+        retainVerifiedNativeLayout(native.artifact);
+        return;
+      }
 
       const managerRoot = join(installFixture, "manager");
       const managerBin = join(managerRoot, "Cellar", "aidlc", "1.0.0", "bin");
@@ -622,7 +858,7 @@ describe("t238 build-binaries release builder", () => {
       ], {
         cwd: project,
         encoding: "utf-8",
-        timeout: 60_000,
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
         env: managerEnv,
       });
       expect(managerOwned.status).toBe(4);
@@ -642,7 +878,7 @@ describe("t238 build-binaries release builder", () => {
       ], {
         cwd: project,
         encoding: "utf-8",
-        timeout: 60_000,
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
         env,
       });
       expect(install.status, `${install.stdout ?? ""}${install.stderr ?? ""}`).toBe(0);
@@ -667,7 +903,7 @@ describe("t238 build-binaries release builder", () => {
       ], {
         cwd: project,
         encoding: "utf-8",
-        timeout: 60_000,
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
         env,
       });
       expect(
@@ -688,7 +924,7 @@ describe("t238 build-binaries release builder", () => {
       ], {
         cwd: project,
         encoding: "utf-8",
-        timeout: 60_000,
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
         env,
       });
       expect(
@@ -717,7 +953,7 @@ describe("t238 build-binaries release builder", () => {
       ], {
         cwd: project,
         encoding: "utf-8",
-        timeout: 60_000,
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
         env,
       });
       expect(config.status, `${config.stdout ?? ""}${config.stderr ?? ""}`).toBe(0);
@@ -731,7 +967,7 @@ describe("t238 build-binaries release builder", () => {
       ], {
         cwd: project,
         encoding: "utf-8",
-        timeout: 60_000,
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
         env,
       });
       expect(
@@ -754,7 +990,7 @@ describe("t238 build-binaries release builder", () => {
       ], {
         cwd: project,
         encoding: "utf-8",
-        timeout: 60_000,
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
         env,
       });
       expect(quietDoctor.status, `${quietDoctor.stdout ?? ""}${quietDoctor.stderr ?? ""}`).toBe(0);
@@ -763,11 +999,9 @@ describe("t238 build-binaries release builder", () => {
     } finally {
       rmSync(installFixture, { recursive: true, force: true });
     }
-    // Publish only a fully verified native layout. The runner owns this copy's
-    // lifetime; afterEach and per-file TMPDIR cleanup still remove our fixtures.
-    const compiledDir = process.env.AIDLC_TEST_COMPILED_DIR;
-    if (compiledDir) cpSync(dirname(native.artifact), compiledDir, { recursive: true });
-  }, 300_000);
+    // Publish only after every applicable native-layout check has passed.
+    retainVerifiedNativeLayout(native.artifact);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("package-release emits one asset when native and the explicit host target match", () => {
     const root = mkdtempSync(join(tmpdir(), "aidlc-t238-release-dedupe-"));
@@ -795,7 +1029,7 @@ describe("t238 build-binaries release builder", () => {
         {
           cwd: REPO_ROOT,
           encoding: "utf-8",
-          timeout: 180_000,
+          timeout: remainingOperationTimeoutMs(NATIVE_COMPILE_TIMEOUT_MS),
           env: { ...process.env, SOURCE_DATE_EPOCH: "1784246400" },
         },
       );
@@ -833,7 +1067,7 @@ describe("t238 build-binaries release builder", () => {
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
-  }, 180_000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("fake entry with wrong version proves the mandatory version gate can fail", () => {
     const root = mkdtempSync(join(tmpdir(), "aidlc-t238-"));
@@ -893,5 +1127,5 @@ describe("t238 build-binaries release builder", () => {
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
-  }, 300_000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 });

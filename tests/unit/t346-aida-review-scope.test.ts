@@ -1,6 +1,11 @@
-import { describe, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { describe, expect, test, setDefaultTimeout } from "bun:test";
 import { execFileSync } from "node:child_process";
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -28,6 +33,8 @@ import {
   type StructuredReview,
 } from "../../.github/scripts/ai-pr-review.ts";
 import { REPO_ROOT } from "../harness/fixtures.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const BASE = "b".repeat(40);
 const HEAD = "a".repeat(40);
@@ -88,7 +95,7 @@ const INCREMENTAL: ReviewScope = { mode: "incremental", since: SINCE, reason: `l
 const FULL: ReviewScope = { mode: "full", since: null, reason: "first review of this pull request", files: [] };
 
 function git(cwd: string, ...args: string[]): string {
-  return execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@example.com", "-c", "commit.gpgsign=false", ...args], { cwd, encoding: "utf8" }).trim();
+  return execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@example.com", "-c", "commit.gpgsign=false", ...args], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), cwd, encoding: "utf8" }).trim();
 }
 
 // A small repository: base → since (first reviewed head) → head, plus a
@@ -96,6 +103,9 @@ function git(cwd: string, ...args: string[]): string {
 function repository(): { root: string; base: string; since: string; head: string; rewritten: string } {
   const root = mkdtempSync(join(tmpdir(), "aida-scope-repo-"));
   git(root, "init", "-q", "-b", "main");
+  // Pin tree modes through the index on every OS. Windows chmod cannot set
+  // executable bits, and fixture checkouts must ignore host filesystem modes.
+  git(root, "config", "core.filemode", "false");
   mkdirSync(join(root, "core"), { recursive: true });
   mkdirSync(join(root, "docs"), { recursive: true });
   const write = (name: string, lines: string[]) => writeFileSync(join(root, name), `${lines.join("\n")}\n`);
@@ -107,6 +117,7 @@ function repository(): { root: string; base: string; since: string; head: string
   write("core/hunky.ts", numbered(5, "hunky"));
   write("docs/readme.md", ["intro"]);
   git(root, "add", "-A");
+  git(root, "update-index", "--chmod=-x", "core/hunky.ts");
   git(root, "commit", "-q", "-m", "base");
   const base = git(root, "rev-parse", "HEAD");
 
@@ -147,10 +158,12 @@ function repository(): { root: string; base: string; since: string; head: string
   renamed[4] = "renamed 5 changed at head";
   write("core/renamed-dst.ts", renamed);
   git(root, "rm", "-q", "core/chain-b.ts");
-  chmodSync(join(root, "core", "hunky.ts"), 0o755);
   git(root, "add", "-A");
+  git(root, "update-index", "--chmod=+x", "core/hunky.ts");
   git(root, "commit", "-q", "-m", "head");
   const head = git(root, "rev-parse", "HEAD");
+  expect(git(root, "ls-tree", since, "core/hunky.ts")).toContain("100644 blob");
+  expect(git(root, "ls-tree", head, "core/hunky.ts")).toContain("100755 blob");
 
   // A force-push: the same content on a branch that does not descend from `since`.
   git(root, "checkout", "-q", "-b", "rewritten", base);
@@ -302,7 +315,8 @@ describe("t346 AIDA incremental review scope", () => {
     const sole = parseStructuredReview(review([{ priority: "P1", category: "correctness", evidence: [diffLine(42)] }], { readiness: 5, risk: 1 }, CHANGE), BASE, HEAD, MANIFEST, METADATA, INCREMENTAL);
     expect(sole.findings).toEqual([]);
     expect(sole.decision.action).toBe("merge");
-    expect(sole.decision.rationale).toContain("Re-derived: 1 finding outside the incremental review scope was deferred and no blocking finding remains.");
+    // One explanation, built from the judge's raw rationale: no stacked parser-override text.
+    expect(sole.decision.rationale).toBe("Re-derived: 1 finding outside the incremental review scope was deferred and no blocking finding remains. Judge's note, superseded by finding severity: The finding must be corrected.");
     expect(renderReview(sole, CONTEXT_ID).event).toBe("COMMENT");
     // Scores never decide: with nothing left to report the action is the maintainer's merge decision
     // even at low readiness and high risk, and the scores stay visible to inform it.

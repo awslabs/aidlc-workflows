@@ -1,6 +1,96 @@
-import { type Dirent, existsSync, readFileSync, readdirSync } from "node:fs";
-import { basename, dirname, isAbsolute, join, resolve } from "node:path";
+import { type Dirent, existsSync, lstatSync, readFileSync, readdirSync, statSync } from "node:fs";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
+
+// The environment the engine runs in, settled before anything else in this
+// module or any module that imports it (the dispatcher, aidlc-lib and every
+// adapter import this module first, so every entry evaluates this block before
+// its own body). Bun loads the `.env` files of the folder a process runs in into
+// process.env, and AI-DLC's hooks and tools run in the person's project. A
+// repository the person clones could therefore set any name the engine reads: a
+// check of theirs switched off, records pointed at another folder, a tool run
+// from a directory of the repository's choosing. The installed engine is built
+// with that autoload off, so nothing in its environment came from a file and
+// nothing is dropped there. A Bun-run tree cannot carry a build flag, so here
+// every AI-DLC or host-tool name a `.env` file in the working directory assigns
+// is removed again before any read; a child Bun process loads the files again
+// and runs this again on its first import.
+//
+// Bun never overrides a name the shell already set, and once a file names a
+// variable there is no telling the two apart. So the drop is narrow: the
+// engine's own namespace and the host tools' names that steer where it reads,
+// writes or runs. The person's application names (an AWS profile, a database
+// URL, whatever their tests need) stay as the shell had them, so a command the
+// engine runs for them sees the same environment their terminal does. Two
+// declarations only a host makes are kept even when the file names them: the
+// unattended driver's flag (dropping it would let a driver's turns pass for a
+// person's) and the dispatcher's internal tokens to its own children.
+//
+// ponytail: an AI-DLC name set in both the shell and the repository's .env is
+// dropped too (a lost setting, never a loosened guard); the environment is the
+// documented place for those names, a project .env is not.
+export const BUN_DOTENV_FILES = [
+  ".env",
+  ".env.local",
+  ".env.development",
+  ".env.development.local",
+  ".env.production",
+  ".env.production.local",
+  ".env.test",
+  ".env.test.local",
+];
+
+const DOTENV_ASSIGNMENT = /^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=/gm;
+// Names the engine reads as its own, or that the host tools use to tell it
+// where the project, the person's settings, a plugin or a git configuration is.
+const DOTENV_GUARDED = /^(?:AIDLC_|AWS_AIDLC_|CLAUDE_|KIRO_|CODEX_|CURSOR_|COPILOT_|XDG_|GIT_CONFIG)/i;
+// Declarations only the host makes: kept even when a file names them.
+const DOTENV_HOST_ONLY = /^AIDLC_(?:UNATTENDED$|INTERNAL_)/i;
+
+/** Whether Bun loaded the folder's dotenv files into this process at all. */
+export function dotenvLoaded(): boolean {
+  return !isCompiledExecutable() && !process.execArgv.includes("--no-env-file");
+}
+
+/** Every name the folder's Bun dotenv files assign, in file order, duplicates included. */
+export function dotenvAssignedNames(dir = process.cwd()): string[] {
+  const names: string[] = [];
+  for (const file of BUN_DOTENV_FILES) {
+    let text: string;
+    try {
+      text = readFileSync(join(dir, file), "utf-8");
+    } catch {
+      continue;
+    }
+    for (const match of text.matchAll(DOTENV_ASSIGNMENT)) names.push(match[1]);
+  }
+  return names;
+}
+
+/** Whether a dotenv file in the folder assigns the name, in any casing (Windows reads names case-insensitively). */
+export function setByDotenvFile(name: string, dir = process.cwd()): boolean {
+  const wanted = name.toUpperCase();
+  return dotenvAssignedNames(dir).some((assigned) => assigned.toUpperCase() === wanted);
+}
+
+/**
+ * Remove from `env` every AI-DLC or host-tool name the folder's dotenv files
+ * assign, host-only declarations excepted; returns what was dropped. Nothing is
+ * dropped when Bun loaded no file (`loaded` false): then everything present
+ * came from the host.
+ */
+export function dropDotenvNames(env: NodeJS.ProcessEnv = process.env, dir = process.cwd(), loaded = dotenvLoaded()): string[] {
+  if (!loaded) return [];
+  const dropped: string[] = [];
+  for (const name of dotenvAssignedNames(dir)) {
+    if (!DOTENV_GUARDED.test(name) || DOTENV_HOST_ONLY.test(name) || !(name in env)) continue;
+    delete env[name];
+    dropped.push(name);
+  }
+  return dropped;
+}
+
+dropDotenvNames();
 
 const MODULE_TOOLS_DIR = dirname(fileURLToPath(import.meta.url));
 const MODULE_HARNESS_ROOT = join(MODULE_TOOLS_DIR, "..");
@@ -157,10 +247,42 @@ export function aidlcEngineCommand(
     : [process.execPath, sourceToolPath ?? resolveHarnessPath(["tools", `aidlc-${route}.ts`]), ...args];
 }
 
+// Control characters (line breaks, terminal escapes) in something we print.
+export function hasControlCharacters(value: string): boolean {
+  // biome-ignore lint/suspicious/noControlCharactersInRegex: detecting them is the point
+  return /[\u0000-\u001f\u007f]/.test(value);
+}
+
+// One argument of a command we print for someone to run: bare when it cannot
+// expand, else single-quoted so no shell substitutes into it. It stays one
+// line of plain text: a control character is shown as "?", never emitted.
+export function quoteCommandArgument(
+  value: string,
+  shell: "posix" | "powershell" = process.platform === "win32" ? "powershell" : "posix",
+): string {
+  // biome-ignore lint/suspicious/noControlCharactersInRegex: replacing them is the point
+  value = value.replace(/[\u0000-\u001f\u007f]/g, "?");
+  if (/^[A-Za-z0-9_./:@%+=,-]+$/.test(value)) return value;
+  return shell === "powershell"
+    ? `'${value.replaceAll("'", "''")}'`
+    : `'${value.replaceAll("'", "'\"'\"'")}'`;
+}
+
 export function aidlcInvocation(): string {
   if (isCompiledExecutable()) return "aidlc";
   if (!PROJECTED_INVOKE.startsWith("{{")) return PROJECTED_INVOKE;
   return `bun ${runtimeHarnessDir()}/tools/aidlc.ts`;
+}
+
+// The Bun dispatcher of the projected tree this module runs from: the tool a
+// copy-channel command ran. Null in the source tree, where the project's own
+// tree stands in for a projection.
+export function projectedDispatcher(): string | null {
+  return PROJECTED_INVOKE.startsWith("{{") ? null : join(MODULE_TOOLS_DIR, "aidlc.ts");
+}
+
+export function entrySkillInvocation(): string {
+  return runtimeHarnessDir() === ".codex" ? "$aidlc" : "/aidlc";
 }
 
 export function aidlcDispatcherInvocation(route: string): string {
@@ -230,6 +352,70 @@ function readHarnessName(root: string): string | null {
   }
 }
 
+/**
+ * The two Kiro tree layouts. `agent-v1` is the Kiro CLI agent-JSON layout (JSON
+ * agents carrying their hooks); `kas` is the one Kiro IDE 1.x and Kiro CLI v3 run
+ * (Markdown agents, standalone `.kiro/hooks/*.json`). A row name says which
+ * distribution shipped a tree, not its layout, so code that depends on the
+ * layout asks for it here.
+ */
+export type KiroLayout = "agent-v1" | "kas";
+
+/** The layout a harness.json record declares, or the one its row name implied before the field existed. */
+export function kiroLayoutOf(record: unknown): KiroLayout | null {
+  if (!record || typeof record !== "object") return null;
+  const { kiroLayout, name, distribution } = record as Record<string, unknown>;
+  if (kiroLayout === "agent-v1" || kiroLayout === "kas") return kiroLayout;
+  const row = typeof name === "string" ? name : distribution;
+  if (row === "kiro-ide") return "kas";
+  if (row === "kiro") return "agent-v1";
+  return null;
+}
+
+/**
+ * The layout of the `.kiro` tree at `harnessRoot`: its harness.json first, then
+ * the conductor file it ships. With both conductors present the Markdown one
+ * wins, since the agent-v1 JSON is what a move to the KAS layout leaves behind.
+ * Null when the tree is neither.
+ */
+export function kiroTreeLayout(harnessRoot: string): KiroLayout | null {
+  try {
+    const layout = kiroLayoutOf(
+      JSON.parse(readFileSync(join(harnessRoot, "tools", "data", "harness.json"), "utf-8")),
+    );
+    if (layout) return layout;
+  } catch {
+    // A tree without readable metadata still has its conductor file.
+  }
+  if (existsSync(join(harnessRoot, "agents", "aidlc.md"))) return "kas";
+  if (existsSync(join(harnessRoot, "agents", "aidlc.json"))) return "agent-v1";
+  return null;
+}
+
+/**
+ * The harness dir for this process, or null when the working directory cannot
+ * be read (a command started from a directory the user cannot list or enter).
+ * Null means "not discoverable here", never a default harness: a command that
+ * needs one still resolves it later and reports the error then. Other
+ * discovery errors are rethrown.
+ *
+ * Codex sets CODEX_SESSION_ID in every shell command its model runs, so in a
+ * project that also holds another tool's install, a command Codex runs reads
+ * the Codex install instead of the first one found.
+ */
+export function discoverableRuntimeHarnessDir(projectDir = runtimeProjectDir()): string | null {
+  try {
+    if (!process.env.AIDLC_HARNESS_DIR?.trim() && process.env.CODEX_SESSION_ID?.trim()) {
+      const codex = discoverProjectHarnesses(projectDir).find((item) => item.distribution === "codex");
+      if (codex) return codex.harnessDir;
+    }
+    return runtimeHarnessDir(projectDir);
+  } catch (error) {
+    if (["EACCES", "EPERM"].includes((error as NodeJS.ErrnoException).code ?? "")) return null;
+    throw error;
+  }
+}
+
 export function runtimeHarnessName(
   projectDir = runtimeProjectDir(),
   harnessDir = runtimeHarnessDir(projectDir),
@@ -254,6 +440,14 @@ export function runtimeHarnessName(
   if (harnessDir === ".kiro") return "kiro";
   if (harnessDir === ".cursor") return "cursor";
   return "claude";
+}
+
+// The tools that hide a Stop-hook block's reason from the person: Kiro CLI
+// shows none of it, opencode hands it to the agent as a hidden synthetic part,
+// and Kiro IDE (whose tree Kiro CLI v3 also runs) drops Stop output. There the
+// agent says the carrying-on line itself.
+export function hidesStopNote(harnessName: string): boolean {
+  return harnessName === "kiro" || harnessName === "kiro-ide" || harnessName === "opencode";
 }
 
 function distributionFor(harnessDir: string, projectDir = runtimeProjectDir()): string {
@@ -295,6 +489,155 @@ export function packagedDistributionRoot(
   return join(dirname(process.execPath), "runtime", distribution);
 }
 
+/**
+ * The running release's own copy of a project harness's tools/data/harness.json,
+ * or null. A native engine reads the project's file, which an older release may
+ * have written and which stays so until the next `aidlc config`; the runtime it
+ * ships beside itself holds the same harness as this release writes it. The harness is the one the project's file names. A Bun engine reads its
+ * own tree already and ships no such copy. Any failure reads as no copy.
+ */
+export function releasedHarnessData(projectHarnessData: string): Record<string, unknown> | null {
+  if (!isCompiledExecutable()) return null;
+  try {
+    const declared = JSON.parse(readFileSync(projectHarnessData, "utf-8")) as Record<string, unknown>;
+    const { name, harnessDir } = declared;
+    if (
+      typeof name !== "string" || !/^[a-z0-9][a-z0-9-]*$/.test(name) ||
+      typeof harnessDir !== "string" || !/^\.[a-z0-9][a-z0-9._-]*$/i.test(harnessDir)
+    ) {
+      return null;
+    }
+    const released = join(packagedDistributionRoot(harnessDir, name), harnessDir, "tools", "data", "harness.json");
+    if (resolve(released) === resolve(projectHarnessData)) return null;
+    const copy = JSON.parse(readFileSync(released, "utf-8")) as unknown;
+    if (copy === null || typeof copy !== "object" || Array.isArray(copy)) return null;
+    const data = copy as Record<string, unknown>;
+    return data.name === name && data.harnessDir === harnessDir ? data : null;
+  } catch {
+    return null;
+  }
+}
+
+/** The largest directive a host shows whole as one shell result, and that host. */
+export interface DirectiveLimit {
+  bytes: number;
+  host: string;
+}
+
+// The host's name as the person knows it, by harness id. A harness.json is
+// project-editable, so its own productName never reaches the model: the id
+// only selects one of these fixed names.
+const HOST_LABELS: Readonly<Record<string, string>> = {
+  claude: "Claude Code",
+  codex: "Codex CLI",
+  copilot: "GitHub Copilot",
+  cursor: "Cursor",
+  kiro: "Kiro CLI",
+  "kiro-ide": "Kiro IDE",
+  opencode: "opencode",
+};
+
+// A limit is a positive whole number; anything else declares none.
+function declaredLimit(data: Record<string, unknown>): DirectiveLimit | null {
+  const bytes = data.directiveMaxBytes;
+  if (!Number.isSafeInteger(bytes) || (bytes as number) <= 0) return null;
+  const host = typeof data.name === "string" && Object.hasOwn(HOST_LABELS, data.name)
+    ? HOST_LABELS[data.name]
+    : "this assistant";
+  return { bytes: bytes as number, host };
+}
+
+function harnessDataLimit(harnessData: string): DirectiveLimit | null {
+  let own: DirectiveLimit | null = null;
+  try {
+    own = declaredLimit(JSON.parse(readFileSync(harnessData, "utf-8")) as Record<string, unknown>);
+  } catch {
+    // An unreadable file declares nothing of its own.
+  }
+  // The running release's copy is the host's ceiling as this release knows it.
+  // A project value can only tighten it, so a release that lowers a host's
+  // budget reaches projects configured earlier, and no project value raises it.
+  const released = releasedHarnessData(harnessData);
+  const shipped = released ? declaredLimit(released) : null;
+  if (own === null) return shipped;
+  return shipped !== null && shipped.bytes < own.bytes ? shipped : own;
+}
+
+/**
+ * The smallest directive limit declared by the engine's own harness data or by
+ * any harness installed in the project, or null when none declares one. With
+ * several harnesses in one project, the engine cannot tell which host prints its
+ * result (Claude's `.claude` is found before Copilot's `.aidlc`), so the
+ * smallest wins. Each harness's value is the smaller of its project file's and
+ * its release copy's, or whichever of the two declares one.
+ */
+export function directiveLimitFor(harnessData: string[], projectDir?: string): DirectiveLimit | null {
+  const files = [...harnessData];
+  if (projectDir !== undefined) {
+    try {
+      for (const harness of discoverProjectHarnesses(projectDir)) {
+        files.push(join(harness.root, "tools", "data", "harness.json"));
+      }
+    } catch {
+      // An unreadable project keeps the engine's own value.
+    }
+  }
+  let smallest: DirectiveLimit | null = null;
+  for (const file of new Set(files.map((path) => resolve(path)))) {
+    const limit = harnessDataLimit(file);
+    if (limit && (smallest === null || limit.bytes < smallest.bytes)) smallest = limit;
+  }
+  return smallest;
+}
+
+// AI-DLC writes its own files only into real folders: a write through a link
+// lands wherever the link points, which can be outside this project. The
+// first folder (or file) on the way from the project to `target`, `target`
+// included, that is a link, relative to the project, or null. A target that is
+// not inside the project is not this check's to judge.
+export function linkOnTheWay(projectDir: string, target: string): string | null {
+  const rel = relative(projectDir, target);
+  if (rel === "" || rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute(rel)) return null;
+  let path = projectDir;
+  for (const part of rel.split(/[\\/]/).filter(Boolean)) {
+    path = join(path, part);
+    try {
+      if (lstatSync(path).isSymbolicLink()) return relative(projectDir, path);
+    } catch {
+      return null;
+    }
+  }
+  return null;
+}
+
+// The folder names AI-DLC itself gives its tree. The line shows a path only
+// as far as it is made of these, so no name a repository chose reaches the
+// reader: a link deeper down is named by the AI-DLC folder that holds it.
+const AIDLC_FOLDER_NAMES = new Set([
+  ".aidlc", ".agents", ".claude", ".codex", ".cursor", ".github", ".kiro", ".opencode",
+  "agents", "aidlc", "aidlc-common", "command", "data", "hooks", "knowledge", "plugin",
+  "rules", "scopes", "sensors", "settings", "skills", "spaces", "stages", "steering", "tools",
+]);
+
+export class LinkedFolderError extends Error {
+  constructor(readonly folder: string) {
+    const parts = folder.split(/[\\/]/);
+    const known = parts.findIndex((part) => !AIDLC_FOLDER_NAMES.has(part));
+    super(
+      known === -1
+        ? `${folder} is a link, so AI-DLC changed nothing there. ` +
+          "Replace the link with a real folder or file, then run this again."
+        : `${known === 0 ? "This project" : parts.slice(0, known).join(sep)} holds a link, so AI-DLC changed nothing there. ` +
+          "Replace the link with a real folder or file, then run this again.",
+    );
+  }
+}
+
+export function refuseLinkOnTheWay(projectDir: string, target: string): void {
+  const link = linkOnTheWay(projectDir, target);
+  if (link !== null) throw new LinkedFolderError(link);
+}
+
 export function resolveHarnessRoot(location: HarnessLocation = {}): string {
   const projectDir = location.projectDir ?? runtimeProjectDir();
   const harnessDir = location.harnessDir ?? runtimeHarnessDir(projectDir);
@@ -308,11 +651,11 @@ export function resolveHarnessRoot(location: HarnessLocation = {}): string {
   // Mutation is project-owned. Explicit/module/packaged roots are read
   // fallbacks only and must never become a write target.
   if (location.mutable) {
-    if (location.projectDir !== undefined || explicitRuntimeProjectDir()) {
-      return projectRoot;
-    }
-    const moduleRoot = moduleHarnessRoot(harnessDir);
-    return moduleRoot ?? projectRoot;
+    const root = location.projectDir !== undefined || explicitRuntimeProjectDir()
+      ? projectRoot
+      : moduleHarnessRoot(harnessDir) ?? projectRoot;
+    refuseLinkOnTheWay(projectDir, root);
+    return root;
   }
 
   const explicit = explicitHarnessRoot(harnessDir, distribution);
@@ -331,7 +674,9 @@ export function resolveHarnessPath(
   segments: readonly string[],
   location: HarnessLocation = {},
 ): string {
-  return join(resolveHarnessRoot(location), ...segments);
+  const path = join(resolveHarnessRoot(location), ...segments);
+  if (location.mutable) refuseLinkOnTheWay(location.projectDir ?? runtimeProjectDir(), path);
+  return path;
 }
 
 export function resolveSkillsPath(
@@ -351,13 +696,14 @@ export function resolveSkillsPath(
     harnessDir,
     distribution,
   }));
-  if (distribution === "copilot") {
-    return join(distributionRoot, ".github", "skills", ...segments);
-  }
-  if (distribution === "codex" && !existsSync(harnessSkills)) {
-    return join(distributionRoot, ".agents", "skills", ...segments);
-  }
-  return harnessSkills;
+  const shared = distribution === "copilot"
+    ? join(distributionRoot, ".github", "skills", ...segments)
+    : distribution === "codex" && !existsSync(harnessSkills)
+    ? join(distributionRoot, ".agents", "skills", ...segments)
+    : null;
+  if (shared === null) return harnessSkills;
+  if (location.mutable) refuseLinkOnTheWay(projectDir, shared);
+  return shared;
 }
 
 export function resolveDistributionPath(
@@ -378,4 +724,21 @@ export function resolveDistributionPath(
     ),
     ...segments,
   );
+}
+
+// A space name: one plain path segment, a lowercase letter, then lowercase
+// letters, digits and hyphens (the shape `space create` gives a name).
+export const SPACE_NAME_REGEX = /^[a-z][a-z0-9-]*$/;
+
+// The space the active-space cursor names: its text, when that is a space name
+// whose folder exists under <workspace>/spaces/; anything else is the default
+// space.
+export function knownActiveSpace(workspaceRootDir: string, cursorText: string | null | undefined): string {
+  const name = (cursorText ?? "").trim();
+  if (!SPACE_NAME_REGEX.test(name)) return "default";
+  try {
+    return statSync(join(workspaceRootDir, "spaces", name)).isDirectory() ? name : "default";
+  } catch {
+    return "default";
+  }
 }

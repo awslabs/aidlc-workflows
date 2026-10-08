@@ -17,8 +17,8 @@ The aidlc-quality-agent leads two stages — one in Construction and one in Oper
 
 | Stage | Phase | Contribution |
 |-------|-------|-------------|
-| 2.2 Practices Discovery | Inception | Mutually blind testing-posture spoke; writes its own contribution file |
-| 2.4 User Stories | Inception | Testability and acceptance-criteria voice in the mob; writes its own contribution file |
+| 2.2 Practices Discovery | Inception | Mutually blind testing-posture spoke when collaborators are on; writes its own contribution file |
+| 2.4 User Stories | Inception | Testability and acceptance-criteria voice in the mob when collaborators are on; writes its own contribution file |
 | 3.2 NFR Requirements | Construction | Defines testable quality attribute scenarios |
 
 ## What to Expect

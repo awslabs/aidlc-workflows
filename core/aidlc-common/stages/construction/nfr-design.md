@@ -136,7 +136,8 @@ Generate the following in `<record>/construction/{unit-name}/nfr-design/`:
 
 Create `<record>/construction/{unit-name}/nfr-design/traceability.json`.
 Enumerate every `NFRx.y` from this Unit's NFR requirements and map it to the
-concrete design solution:
+concrete design solution (if NFR Requirements did not run, enumerate every
+`NFRn` in `requirements.md` instead):
 
 ```json
 {

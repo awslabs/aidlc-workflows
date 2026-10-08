@@ -7,7 +7,10 @@
 // "unavailable", never a crash and never a fall back to stable; switching back
 // to stable converges on the newest stable even though it sorts lower; and
 // previews prune harder than stable releases.
-import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+} from "../harness/test-budget.ts";
+import { afterAll, beforeAll, describe, expect, test, setDefaultTimeout } from "bun:test";
 import {
   existsSync,
   mkdirSync,
@@ -22,14 +25,20 @@ import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { PREVIEW_CHANNEL, STABLE_CHANNEL } from "../../core/tools/aidlc-channel.ts";
-import { resolvePinnedDispatch } from "../../core/tools/aidlc-lifecycle.ts";
+import { humanLifecycleNarration, resolvePinnedDispatch } from "../../core/tools/aidlc-lifecycle.ts";
+import { updateCheck } from "../../core/tools/aidlc-doctor.ts";
+import { channelPath, updateCachePath } from "../../core/tools/aidlc-machine-config.ts";
+import { cachedUpdateState } from "../../core/tools/aidlc-update.ts";
 import { AIDLC_VERSION } from "../../core/tools/aidlc-version.ts";
+import { refreshUpdateState } from "../../core/tools/aidlc-update.ts";
 import {
   type FixtureRelease,
   type ReleaseServerFault,
   serveReleaseFixture,
   writeReleaseFixture,
 } from "../harness/release-fixture.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const REPO_ROOT = join(fileURLToPath(new URL("../..", import.meta.url)));
 const DISPATCHER = join(REPO_ROOT, "core", "tools", "aidlc.ts");
@@ -127,6 +136,58 @@ function retained(machine: string): string[] {
 }
 
 describe("t331 preview release channel", () => {
+  test("preview discovery and metadata share one cumulative refresh deadline", async () => {
+    const release = fixture(PREVIEW_2);
+    const { machine, env } = machineEnv();
+    const requests: string[] = [];
+    const server = Bun.serve({
+      port: 0,
+      async fetch(request) {
+        const path = new URL(request.url).pathname;
+        requests.push(path);
+        if (path === "/api/releases") {
+          await Bun.sleep(1200);
+          return Response.json([{ tag_name: `v${PREVIEW_2}`, draft: false, prerelease: true }]);
+        }
+        if (path.endsWith("/version.json")) {
+          await Bun.sleep(1200);
+          return new Response(Bun.file(join(release, "version.json")), {
+            headers: { "content-type": "application/json" },
+          });
+        }
+        if (path.endsWith("/checksums.txt")) {
+          return new Response(Bun.file(join(release, "checksums.txt")), {
+            headers: { "content-type": "text/plain" },
+          });
+        }
+        return new Response("missing", { status: 404 });
+      },
+    });
+    const saved = Object.fromEntries(Object.keys(env).map((key) => [key, process.env[key]]));
+    Object.assign(process.env, env);
+    try {
+      const baseUrl = `http://127.0.0.1:${server.port}`;
+      const started = performance.now();
+      const result = await refreshUpdateState(2000, {
+        channel: PREVIEW_CHANNEL,
+        baseUrl,
+        apiUrl: `${baseUrl}/api/releases`,
+        offline: false,
+      });
+      const elapsed = performance.now() - started;
+      expect(result.state).toBe("unavailable");
+      expect(elapsed).toBeLessThan(2500);
+      expect(requests).toEqual(["/api/releases", `/download/v${PREVIEW_2}/version.json`]);
+      expect(existsSync(join(machine, "update-check.json"))).toBe(false);
+    } finally {
+      server.stop(true);
+      for (const [key, value] of Object.entries(saved)) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    }
+  });
+
   test("config --channel persists the machine channel beside the update cache and pins", async () => {
     const { machine, project, env } = machineEnv();
     const shown = await run(DISPATCHER, ["config", "--channel", "--json"], project, env);
@@ -156,11 +217,21 @@ describe("t331 preview release channel", () => {
     expect(back.status, back.stdout + back.stderr).toBe(0);
     expect(readFileSync(join(machine, "channel"), "utf-8")).toBe(`${STABLE_CHANNEL}\n`);
 
+    // A damaged version pointer is doctor's to report: the channel is saved,
+    // and config says so.
+    mkdirSync(join(machine, "active-version"));
+    const damaged = await run(DISPATCHER, ["config", "--channel", PREVIEW_CHANNEL], project, env);
+    expect(damaged.status, damaged.stdout + damaged.stderr).toBe(0);
+    expect(damaged.stdout).toContain(`release channel set to ${PREVIEW_CHANNEL}`);
+    expect(readFileSync(join(machine, "channel"), "utf-8")).toBe(`${PREVIEW_CHANNEL}\n`);
+    rmSync(join(machine, "active-version"), { recursive: true, force: true });
+    writeFileSync(join(machine, "channel"), `${STABLE_CHANNEL}\n`);
+
     writeFileSync(join(machine, "channel"), "beta\n");
     const malformed = await run(LIFECYCLE, ["update", "--check", "--json"], project, env);
     expect(malformed.status).toBe(4);
     expect(malformed.stdout).toContain("must contain one release channel");
-  }, 60_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("update --check follows the channel, ignores drafts and stable, and treats API failure as unavailable", async () => {
     const release = fixture(PREVIEW_2);
@@ -230,7 +301,7 @@ describe("t331 preview release channel", () => {
     const both = await run(DISPATCHER, ["update", "--channel", PREVIEW_CHANNEL, "--version", PREVIEW_2], project, env);
     expect(both.status).toBe(2);
     expect(both.stdout + both.stderr).toContain("--channel cannot be combined with --version");
-  }, 120_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("update installs the newest preview, then switching back converges on the lower stable id", async () => {
     if (process.platform === "win32") return;
@@ -264,9 +335,27 @@ describe("t331 preview release channel", () => {
     expect(noop.status, noop.stdout + noop.stderr).toBe(0);
     expect(noop.stdout).toContain(`You're on the latest ${PREVIEW_CHANNEL} version of aidlc (${PREVIEW_2}).`);
 
-    // Back to stable: a lower id, reported as a channel switch.
-    expect((await run(DISPATCHER, ["config", "--channel", STABLE_CHANNEL], project, env)).status).toBe(0);
-    const switched = await run(LIFECYCLE, ["update", "--release-base-url", stable.baseUrl], project, env);
+    // Back to stable is a lower id. A plain update never installs a release
+    // older than the one running: it changes nothing and names both ways on.
+    const followStable = await run(DISPATCHER, ["config", "--channel", STABLE_CHANNEL], project, env);
+    expect(followStable.status).toBe(0);
+    // From a newer preview, config names the step that goes back now.
+    expect(followStable.stdout).toContain(
+      `release channel set to ${STABLE_CHANNEL}; aidlc update moves to a ${STABLE_CHANNEL} release once one is newer ` +
+        `than ${PREVIEW_2}; to go to the newest ${STABLE_CHANNEL} release now, run aidlc update --channel ${STABLE_CHANNEL}`,
+    );
+    const plainBack = await run(LIFECYCLE, ["update", "--release-base-url", stable.baseUrl], project, env);
+    expect(plainBack.status, plainBack.stdout + plainBack.stderr).toBe(0);
+    expect(plainBack.stdout).toContain(
+      `You're on ${PREVIEW_2}, newer than the latest ${STABLE_CHANNEL} ${AIDLC_VERSION}, so there's nothing to update. ` +
+        `To go back to ${STABLE_CHANNEL} ${AIDLC_VERSION}: aidlc update --channel ${STABLE_CHANNEL}. ` +
+        `To keep getting previews: aidlc config --channel ${PREVIEW_CHANNEL}.`,
+    );
+    expect(readFileSync(join(machine, "active-version"), "utf-8").trim()).toBe(PREVIEW_2);
+    // Asked by name, it goes back, reported as a channel switch.
+    const switched = await run(LIFECYCLE, [
+      "update", "--channel", STABLE_CHANNEL, "--release-base-url", stable.baseUrl,
+    ], project, env);
     expect(switched.status, switched.stdout + switched.stderr).toBe(0);
     expect(switched.stdout).toContain(`Checking for releases ... ${PREVIEW_2} -> ${AIDLC_VERSION}`);
     expect(switched.stdout).toContain(
@@ -292,7 +381,116 @@ describe("t331 preview release channel", () => {
     expect(JSON.parse(json.stdout).message).toContain(
       `updated ${AIDLC_VERSION} -> ${PREVIEW_2} (switched channel ${STABLE_CHANNEL} -> ${PREVIEW_CHANNEL})`,
     );
-  }, 240_000);
+    // `--channel` lasts one run: the machine still follows stable, and the
+    // update says so, with both ways on.
+    expect(JSON.parse(json.stdout).data.follows).toBe(STABLE_CHANNEL);
+    expect((await run(LIFECYCLE, ["use", AIDLC_VERSION], project, env)).status).toBe(0);
+    const oneRun = await run(LIFECYCLE, [
+      "update", "--channel", PREVIEW_CHANNEL,
+      "--release-base-url", preview.baseUrl, "--release-api-url", preview.apiUrl,
+    ], project, env);
+    expect(oneRun.status, oneRun.stdout + oneRun.stderr).toBe(0);
+    expect(oneRun.stdout).toContain(
+      `This machine follows ${STABLE_CHANNEL} releases. To go back to ${STABLE_CHANNEL}: aidlc update --channel ` +
+        `${STABLE_CHANNEL}. To keep getting previews: aidlc config --channel ${PREVIEW_CHANNEL}.`,
+    );
+    expect(oneRun.stdout).not.toContain("Switched release channel");
+    const followed = await run(DISPATCHER, ["config", "--channel"], project, env);
+    expect(followed.stdout).toContain(`release channel: ${STABLE_CHANNEL}`);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  // With the machine's channel marker unreadable, the update cannot say which
+  // channel the machine follows, so it says nothing about a switch.
+  test("an update that cannot read the machine's channel claims no channel switch", () => {
+    const narrated = humanLifecycleNarration("update", ["update", "--channel", PREVIEW_CHANNEL], AIDLC_VERSION, {
+      ok: true,
+      code: 0,
+      status: "ok",
+      message: "",
+      data: {
+        version: PREVIEW_2,
+        channel: PREVIEW_CHANNEL,
+        channelSwitch: { from: STABLE_CHANNEL, to: PREVIEW_CHANNEL },
+        followsUnknown: true,
+      },
+    } as never) ?? "";
+    expect(narrated).toContain(`Updated aidlc from ${AIDLC_VERSION} to ${PREVIEW_2}.`);
+    expect(narrated).not.toContain("Switched release channel");
+    expect(narrated).not.toContain("This machine follows");
+  });
+
+  // The same narration on every system, Windows included: a one-run move to
+  // the other channel says which channel the machine follows, never a switch.
+  test("a one-run move to the other channel says the machine still follows its own", () => {
+    const narrated = humanLifecycleNarration("update", ["update", "--channel", PREVIEW_CHANNEL], AIDLC_VERSION, {
+      ok: true,
+      code: 0,
+      status: "ok",
+      message: "",
+      data: {
+        version: PREVIEW_2,
+        channel: PREVIEW_CHANNEL,
+        channelSwitch: { from: STABLE_CHANNEL, to: PREVIEW_CHANNEL },
+        follows: STABLE_CHANNEL,
+      },
+    } as never) ?? "";
+    expect(narrated).toContain(`This machine follows ${STABLE_CHANNEL} releases.`);
+    expect(narrated).toContain(`Updated aidlc from ${AIDLC_VERSION} to ${PREVIEW_2}.`);
+    expect(narrated).not.toContain("Switched release channel");
+  });
+
+  // An update goes to the channel the machine follows, which can be older
+  // than a preview it runs, so doctor names both ways and lets the person pick.
+  test("doctor's fix for a binary of the other channel names going to that channel and keeping this one", () => {
+    const check = updateCheck({
+      state: "behind",
+      currentVersion: PREVIEW_2,
+      channel: STABLE_CHANNEL,
+      latestVersion: AIDLC_VERSION,
+      message: "",
+    });
+    expect(check.fix).toContain(`update\` to go to the newest ${STABLE_CHANNEL} release, or \``);
+    expect(check.fix).toContain(`config --channel ${PREVIEW_CHANNEL}\` to keep ${PREVIEW_CHANNEL} releases`);
+    const same = updateCheck({
+      state: "behind",
+      currentVersion: AIDLC_VERSION,
+      channel: STABLE_CHANNEL,
+      latestVersion: "99.0.0",
+      message: "",
+    });
+    expect(same.fix).toMatch(/^run `.*update`$/);
+  });
+
+  // A plain update never installs an older release, so a binary newer than the
+  // newest release the machine follows is current: doctor passes it and names
+  // both ways on instead of telling the person to update.
+  test("a binary newer than the newest release of the channel the machine follows is current, with both ways on", () => {
+    const { machine } = machineEnv();
+    const saved = process.env.AIDLC_INSTALL_ROOT;
+    process.env.AIDLC_INSTALL_ROOT = machine;
+    try {
+      const older = "2.9.1-preview.20260920.1";
+      writeFileSync(channelPath(), `${PREVIEW_CHANNEL}\n`);
+      writeFileSync(updateCachePath(), `${JSON.stringify({
+        schemaVersion: 1,
+        checkedAt: new Date().toISOString(),
+        latestVersion: older,
+        releaseDate: "2026-09-20",
+        channel: PREVIEW_CHANNEL,
+      })}\n`);
+      const state = cachedUpdateState();
+      expect(state.state).toBe("current");
+      expect(state.message).toBe(
+        `You're on ${AIDLC_VERSION}, newer than the latest ${PREVIEW_CHANNEL} ${older}. ` +
+          `To go back to ${PREVIEW_CHANNEL} ${older}: aidlc update --channel ${PREVIEW_CHANNEL}. ` +
+          `To keep getting ${STABLE_CHANNEL} releases: aidlc config --channel ${STABLE_CHANNEL}.`,
+      );
+      expect(updateCheck(state).pass).toBe(true);
+    } finally {
+      if (saved === undefined) delete process.env.AIDLC_INSTALL_ROOT;
+      else process.env.AIDLC_INSTALL_ROOT = saved;
+    }
+  });
 
   test("previews keep the newest two on top of the active, rollback, in-use, and pinned protection", async () => {
     if (process.platform === "win32") return;
@@ -328,7 +526,7 @@ describe("t331 preview release channel", () => {
     expect(message).toContain(`${PREVIEW_2} (recent ${PREVIEW_CHANNEL})`);
     expect(message).toContain(`${PREVIEW_3} (active, recent ${PREVIEW_CHANNEL})`);
     expect(retained(machine)).toEqual([PREVIEW_1, PREVIEW_2, PREVIEW_3].sort());
-  }, 240_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("use and config --pin accept preview ids and project pins keep overriding the channel", async () => {
     if (process.platform === "win32") return;
@@ -367,5 +565,5 @@ describe("t331 preview release channel", () => {
     const malformed = await run(INIT, ["config", "--pin", "2.7.2-rc.1", "--project-dir", project], project, env);
     expect(malformed.status).toBe(2);
     expect(malformed.stdout + malformed.stderr).toContain("invalid version");
-  }, 240_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });

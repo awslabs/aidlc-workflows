@@ -27,7 +27,7 @@ const SUBJECTS = [
 ] as const;
 
 const PROJECT_DIR_RE = /\$CLAUDE_PROJECT_DIR/g;
-const EXPECTED_PERMISSION_GLOB = "Bash(bun .claude/tools/*)";
+const EXPECTED_PERMISSION_GLOB = "Bash(bun .claude/tools/aidlc.ts engine *)";
 
 interface Settings {
   permissions?: { allow?: unknown };

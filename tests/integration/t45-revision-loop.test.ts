@@ -56,6 +56,7 @@
 // end. Each transition's exit code is also asserted 0 (the .sh leaned on
 // `set -e` to abort the run on any non-zero; here we assert it explicitly).
 
+import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS } from "../harness/test-budget.ts";
 import {
   afterAll,
   beforeAll,
@@ -83,7 +84,7 @@ import {
 
 const BUN = process.execPath; // the bun running this test
 const UTIL = join(AIDLC_SRC, "tools", "aidlc-utility.ts");
-setDefaultTimeout(30_000);
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const STATE = join(AIDLC_SRC, "tools", "aidlc-state.ts");
 const LOG = join(AIDLC_SRC, "tools", "aidlc-log.ts");
@@ -278,7 +279,8 @@ beforeAll(() => {
   state(["revise", SLUG]);
   state(["approve", SLUG, "--user-input", "accept as-is"]);
   snap.cbFinal = checkboxMarker(readState());
-});
+  // Four native CLI review/revision cycles share the fixture backstop.
+}, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 afterAll(() => {
   cleanupTestProject(proj);

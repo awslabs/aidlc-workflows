@@ -1,7 +1,7 @@
 # Question Rendering — opencode harness annex
 
 This file defines how THIS harness renders the structured questions that
-`aidlc-common/protocols/stage-protocol.md` § "Structured questions" requires.
+`{{HARNESS_DIR}}/aidlc-common/protocols/stage-protocol.md` section "Structured questions" requires.
 The protocol and stage files are harness-neutral: they say *present a
 structured question* and carry a fenced ` ```question ` spec block. This annex
 is the one place that binds that contract to a concrete mechanism.
@@ -30,7 +30,9 @@ body.
 This applies to **every** structured-question site, including but not limited to:
 
 - approval gates (every stage completion);
-- the questions interaction-mode choice (Guide me / I'll edit the file / Chat);
+- the questions interaction-mode choice (Guide me / I'll edit the file / Chat),
+  when `directive.answer_mode.ask` is true (otherwise print its one-line
+  `notice` and use `answer_mode.mode`; stage-protocol.md §3 Step 2);
 - the ladder prompt (autonomy mode after the walking skeleton);
 - halt-and-ask on Bolt failure (Retry / Skip / Abort);
 - consolidated-summary confirmation before artifact generation;
@@ -81,9 +83,13 @@ it explicitly, such as Requirements Analysis), the stage protocol requires a
 separate confirmation before any stage artifact is generated. Append or update
 `## Consolidated Summary Confirmation` in the questions file with the summary,
 the prompt, both options without A/B file-letter prefixes, and a blank
-`[Answer]:` tag, then render this numbered question in chat:
+`[Answer]:` tag, then render this numbered question in chat, with the summary
+bullets right above it in the same message, so the person reads what they
+confirm:
 
 ```
+- <each answer, as a summary bullet>
+
 **Confirm** — Does this all look correct before I generate the artifact?
 
 1. **Looks correct** — Generate the artifact from these answers
@@ -101,8 +107,9 @@ Then map the response back to the exact option label, persist `[Answer]: Looks
 correct` or `[Answer]: Request changes`, and run the matching checkpoint-specific `aidlc-log.ts answer`
 command. Strip any source letter, numbered-prose index, punctuation, and option
 description before writing. `[Answer]: A. Looks correct`, `[Answer]: 1. Looks correct`,
-and a self-selected answer are invalid. On Request changes, ask
-**"What should change?"** and END THE TURN again; do not update any answer
+and a self-selected answer are invalid. On Request changes, when their reply
+already says what should change, those words are the feedback; otherwise ask
+**"What should change?"** and END THE TURN again, and do not update any answer
 until that feedback arrives. Then record the feedback, update the affected
 answers, reset this tag to blank, and present the consolidated summary again.
 Do not generate the artifact until the file contains the human's explicit
@@ -112,8 +119,10 @@ checkpoint with the later reviewer, learnings, or approval steps.
 Rules:
 
 - **Approval gate `[next stage]`**: on an approval question, render the
-  `Continue to [next stage]` placeholder from the run-stage directive's
-  `next_stage` field verbatim (e.g. `Continue to NFR Requirements`); render
+  `Continue to [next stage]` placeholder from the `next_stage` field verbatim
+  (e.g. `Continue to NFR Requirements`): the one on the reply that opened the
+  gate (`report --result awaiting-approval` or `revised`), which includes any
+  plan change made during the stage, else the run-stage directive's. Render
   `Complete workflow` when `next_stage` is null. Never guess the next stage.
 - **Bold the header**, then the prompt, then the numbered options in spec
   order. When a question has a recommended option, list it FIRST and append
@@ -128,11 +137,14 @@ Rules:
 - **multiSelect: true** → say "Reply with all numbers that apply (e.g. 1, 3)."
 - **Answer capture**: map the user's number back to the exact option `label`
   and record that label verbatim (protocol: never summarize User Input). A
-  free-text reply that clearly matches an option counts as that option;
-  anything else is an "Other" answer — treat it per the protocol (discuss,
-  then re-ask for a final pick).
+  free-text reply that clearly matches an option counts as that option. A
+  reply in their own words that answers the question is their answer: record
+  it as the "Other" answer, in their words. Only a reply that asks about the
+  question or wants to talk it through is discussed first; then take what they
+  settle on.
 - **Batching**: no harness limit on options per question, but keep batches
   readable — at most ~4 questions per message, and for 5+ options prefer one
   message per question. The questions FILE remains the authoritative record.
+  A message with several questions labels them Q1, Q2, and so on, and ends with: "Reply with each question's number and the number of your choice (for example Q1: 2, Q2: 1), or just tell me." Never give an example answer with letters.
 - **No emergent options**: render exactly the spec's options (+ Other). The
   NO EMERGENT BEHAVIOR rule applies to the rendering, not just the spec.

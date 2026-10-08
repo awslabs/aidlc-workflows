@@ -37,6 +37,7 @@
 // the sibling primitives already own (Bolt Refs, Worktree Path) — this is
 // the t48 emitter-pairing rule.
 
+import { LONG_SUBPROCESS_TIMEOUT_MS, EXTENDED_SUBPROCESS_TIMEOUT_MS } from "./aidlc-runtime-budget.ts";
 import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -50,9 +51,13 @@ import {
   claimAttemptFields,
   getField,
   holdsAuditLock,
-  humanActedSinceGate,
+  commandTurnHint,
   humanPresenceGuardDisabled,
+  keepActiveDirectiveOverAutonomyWrite,
+  personSpokeSinceGate,
   readAuditShardEvents,
+  recordHookDrop,
+  unattendedHumanPresenceHint,
   auditBlockField,
   isTeamUnitOwnership,
   isWalkingSkeletonUnitOnMain,
@@ -75,8 +80,9 @@ import {
   VERIFICATION_COMMAND_RECOVERY,
   type BoltIdentity,
   legacyParkedRefPrefix,
+  resolveInvokingSessionId,
 } from "./aidlc-lib.js";
-import { compiledExecutable } from "./aidlc-runtime-paths.ts";
+import { compiledExecutable, entrySkillInvocation } from "./aidlc-runtime-paths.ts";
 import { type EngineInvocation, renderEngineInvocation } from "./aidlc-guard-operation.ts";
 import {
   askConstructionCheckpoint,
@@ -171,8 +177,8 @@ function splitBooleanFlags(args: string[]): { booleans: Set<string>; rest: strin
 
 // Spawn a sibling tool (same project-dir) and return {ok, stdout, stderr}.
 // Used by --worktree / --merge / --discard branches to delegate to
-// state-fork / audit-fork / worktree-discard subcommands. Default 30s timeout
-// matches the merge-dispatch budget; discard gets 5 minutes to snapshot source.
+// state-fork / audit-fork / worktree-discard subcommands. Compound operations
+// use the shared long backstop; discard also snapshots the source tree.
 // On timeout, signal === "SIGTERM" distinguishes it from an exit-code failure.
 function spawnSibling(
   pd: string,
@@ -208,7 +214,9 @@ function spawnSibling(
   const result = spawnSync(command[0], command.slice(1), {
     encoding: "utf-8",
     cwd: pd,
-    timeout: toolName === "aidlc-worktree.ts" && subargs[0] === "discard" ? 300_000 : 30_000,
+    timeout: toolName === "aidlc-worktree.ts" && subargs[0] === "discard"
+      ? EXTENDED_SUBPROCESS_TIMEOUT_MS
+      : LONG_SUBPROCESS_TIMEOUT_MS,
   });
   return {
     ok: result.status === 0,
@@ -440,7 +448,7 @@ function handleStart(args: string[]): void {
   if (stateContent && getField(stateContent, "Status") === "Archived") {
     error(
       "Cannot start a Bolt for an Archived workflow. Bring it back first with " +
-        "`/aidlc intent unarchive <name>`.",
+        `\`${entrySkillInvocation()} intent unarchive <name>\`.`,
     );
   }
   const teamOwnership = isTeamUnitOwnership(stateContent);
@@ -642,7 +650,7 @@ function handleComplete(args: string[]): void {
   if (stateContent && getField(stateContent, "Status") === "Archived") {
     error(
       "Cannot complete a Bolt for an Archived workflow. Bring it back first with " +
-        "`/aidlc intent unarchive <name>`.",
+        `\`${entrySkillInvocation()} intent unarchive <name>\`.`,
     );
   }
   const teamOwnership = isTeamUnitOwnership(stateContent);
@@ -1217,23 +1225,25 @@ function handleSetAutonomy(args: string[]): void {
     if (getField(content, "Status") === "Archived") {
       error(
         "Cannot change autonomy for an Archived workflow. Bring it back first with " +
-          "`/aidlc intent unarchive <name>`.",
+          `\`${entrySkillInvocation()} intent unarchive <name>\`.`,
       );
     }
     // Human-presence guard on ESCALATION only. Switching to autonomous is the
     // human's ladder-prompt grant and consumes that turn through the emitted
     // AUTONOMY_MODE_SET row. De-escalation restores gates without presence.
+    // The approval given in the same message ("approve the plan, and run on
+    // its own from here") leaves the rest of it standing, as for the switches.
     if (
       flags.mode === "autonomous" &&
       !humanPresenceGuardDisabled() &&
-      !humanActedSinceGate(pd)
+      !personSpokeSinceGate(pd, { replies: true, outlivesApproval: true })
     ) {
       error(
-        "Refusing to switch Construction to autonomous: a real human has not acted since the last " +
-          "gate resolution, and autonomous mode is granted only by the human's ladder-prompt answer " +
-          "(it waives every later gate, so the grant itself needs a fresh human turn). Ask the human " +
-          "to confirm autonomous mode in a typed message, then retry. Do not log the ladder choice " +
-          "via aidlc-log answer; the choice is recorded by set-autonomy itself.",
+        "Refusing to switch Construction to autonomous: no reply from the person is on record since " +
+          "the last gate resolution, and autonomous mode is granted only by their answer to the ladder " +
+          "prompt (it waives every later gate, so the grant itself needs their reply). Run it after " +
+          "they choose it. Do not log the ladder choice via aidlc-log answer; the choice is recorded " +
+          `by set-autonomy itself.${commandTurnHint(pd)}${unattendedHumanPresenceHint(pd)}`,
       );
     }
 
@@ -1269,6 +1279,13 @@ function handleSetAutonomy(args: string[]): void {
       error(`Audit emission failed: ${errorMessage(e)}`);
     }
     writeStateFile(pd, updated);
+    // The step already issued stays the open step: the plan question is still
+    // the person's to answer, and the build of a plan they approved goes on.
+    try {
+      keepActiveDirectiveOverAutonomyWrite(pd, content, updated);
+    } catch (e) {
+      recordHookDrop(pd, "active-directive", errorMessage(e));
+    }
   });
 
   console.log(
@@ -1282,8 +1299,32 @@ function handleSetAutonomy(args: string[]): void {
 
 // --- CLI entry point ---
 
+// The session a checkpoint question and its answer belong to. The tool finds
+// the session it runs in, the same way the engine does; `--session` is only an
+// override, so an agent never has to look its own session up. When two
+// sessions claim this process, the resolver's own refusal names the way out.
+// The person's approval or rejection needs it as much as the ask does: with no
+// session to find, the agent retries the same action with the one it asked
+// in, and the reply the person already gave is never asked for again.
+function checkpointSession(pd: string, flagged: string | undefined, required: boolean): string {
+  const session = flagged?.trim() || resolveInvokingSessionId(pd) || "";
+  if (required && !session) {
+    error(
+      "Could not tell which session this is. Run the command again with " +
+        "--session set to the Runtime Session shown in this session's AI-DLC context.",
+    );
+  }
+  return session;
+}
+
 function handleCheckpoint(args: string[]): void {
-  const flags = parseFlags(args);
+  // The person said to approve the Unit as it is over a review that did not
+  // finish; verify reads it, and the engine checks their words are on record.
+  const overUnfinishedReview = args.includes("--over-unfinished-review");
+  const flags = parseFlags(args.filter((arg) => arg !== "--over-unfinished-review"));
+  if (overUnfinishedReview && flags.action !== "verify") {
+    error("checkpoint --over-unfinished-review goes with --action verify.");
+  }
   if (flags["check-cmd"] !== undefined) {
     error("checkpoint no longer accepts --check-cmd. " + VERIFICATION_COMMAND_RECOVERY + " Run checkpoint --action verify without --check-cmd.");
   }
@@ -1300,21 +1341,21 @@ function handleCheckpoint(args: string[]): void {
       result = resolveConstructionCheckpoint(pd, flags.unit, checkpointKind);
       break;
     case "ask":
-      result = askConstructionCheckpoint(pd, flags.unit, checkpointKind, flags.session?.trim() ?? "");
+      result = askConstructionCheckpoint(pd, flags.unit, checkpointKind, checkpointSession(pd, flags.session, true));
       break;
     case "verify":
       result = verifyConstructionCheckpoint(
-        pd, flags.unit, checkpointKind,
+        pd, flags.unit, checkpointKind, { overUnfinishedReview },
       );
       break;
     case "approve":
       result = approveConstructionCheckpoint(
-        pd, flags.unit, checkpointKind, flags["user-input"], flags.session?.trim(),
+        pd, flags.unit, checkpointKind, flags["user-input"], checkpointSession(pd, flags.session, flags["user-input"] !== undefined),
       );
       break;
     case "reject":
       result = rejectConstructionCheckpoint(
-        pd, flags.unit, checkpointKind, flags["user-input"] ?? "", flags.reason ?? "", flags.session?.trim(),
+        pd, flags.unit, checkpointKind, flags["user-input"] ?? "", flags.reason ?? "", checkpointSession(pd, flags.session, true),
       );
       break;
     default:
@@ -1337,13 +1378,15 @@ function handleSwarmCheckpoint(args: string[]): void {
       result = resolveSwarmCheckpoint(pd, batch, units);
       break;
     case "ask":
-      result = askSwarmCheckpoint(pd, batch, units, flags.session?.trim() ?? "");
+      result = askSwarmCheckpoint(pd, batch, units, checkpointSession(pd, flags.session, true));
       break;
     case "approve":
-      result = approveSwarmCheckpoint(pd, batch, units, flags["user-input"], flags.session?.trim());
+      result = approveSwarmCheckpoint(
+        pd, batch, units, flags["user-input"], checkpointSession(pd, flags.session, flags["user-input"] !== undefined),
+      );
       break;
     case "reject":
-      result = rejectSwarmCheckpoint(pd, batch, units, flags["user-input"] ?? "", flags.reason ?? "", flags.session?.trim());
+      result = rejectSwarmCheckpoint(pd, batch, units, flags["user-input"] ?? "", flags.reason ?? "", checkpointSession(pd, flags.session, true));
       break;
     default:
       error("swarm-checkpoint --action must be status, ask, approve or reject");

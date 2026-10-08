@@ -1,8 +1,8 @@
 # Getting Started
 
 This guide takes you from installation to a verified first workflow. The native
-installer includes every supported harness runtime and does not require Bun or
-Node.js.
+installer sets up everything AI-DLC needs; you do not need to install Bun or
+Node.js. Bun is needed only for the manual-copy path below.
 
 ## Quick Start
 
@@ -20,16 +20,26 @@ Windows PowerShell:
 irm https://github.com/awslabs/aidlc-workflows/releases/latest/download/install.ps1 | iex
 ```
 
-The installer adds the native `aidlc` command and every harness runtime. If a
-new shell cannot find `aidlc`, apply the PATH instruction printed by the
-installer.
+The installer sets up everything AI-DLC needs: the native `aidlc` command and
+every harness runtime. You do not need to install Bun or Node.js; a native
+install runs its hooks and commands through `aidlc` and does not call `bun`. On
+Windows, it installs for the current account, registers the bin directory in
+persistent User PATH, and updates the current PowerShell process. Run it from a
+normal PowerShell window; one opened with "Run as administrator" gets a warning
+and a prompt, since installing as administrator is less safe. If another session cannot find `aidlc`, open a new terminal.
+Use [`-NoModifyPath`](18-install-and-lifecycle.md#windows-powershell) to skip
+both PATH changes and invoke the printed direct command instead. On macOS,
+Linux, or WSL, apply the installer's PATH instruction if `aidlc` is not found.
 
-If you cannot install a native executable or prefer to manage the project files
-manually, install [Bun](https://bun.sh/), download
-`aidlc-copy-runtime-X.Y.Z.tar.gz` from the
-[release](https://github.com/awslabs/aidlc-workflows/releases/latest), and copy
-the complete `runtime/<harness>/` directory into the project. The manual-copy
-path does not require the native `aidlc` command.
+Prefer to manage the project files yourself, or cannot install a native
+executable? The manual-copy path is the one place Bun is needed: install
+[Bun](https://bun.sh/), download `aidlc-copy-runtime-X.Y.Z.tar.gz` from the
+[release](https://github.com/awslabs/aidlc-workflows/releases/latest), copy
+the complete `runtime/<harness>/` directory into the project, and run its own
+setup once, as [Copy Channel](18-install-and-lifecycle.md#copy-channel) shows.
+A copy never replaces your `.gitignore` or `AGENTS.md`; AI-DLC adds its own
+lines to them. The manual-copy path does not require the native `aidlc`
+command.
 
 ### 2. Configure a project
 
@@ -47,7 +57,7 @@ Replace `claude` with the harness you use:
 | --- | --- | --- | --- |
 | Claude Code | `claude` | `claude` | `/aidlc` |
 | Kiro CLI | `kiro` | `kiro-cli chat` | `/aidlc` |
-| Kiro IDE | `kiro-ide` | Open the project | `/aidlc` |
+| Kiro IDE | `kiro-ide` | Open the project, then choose **aidlc** in the chat panel's agent picker | `/aidlc` |
 | Codex CLI | `codex` | `codex` | `$aidlc` |
 | Cursor | `cursor` | Open Cursor or run `agent` | `/aidlc` |
 | opencode | `opencode` | `opencode` | `/aidlc` |
@@ -56,6 +66,13 @@ Replace `claude` with the harness you use:
 A bare `aidlc config` starts the interactive setup when a terminal is
 available. It detects installed harnesses, provider state, runtime needs, and
 trust actions before writing anything.
+
+If you use Kiro IDE's own terminal in a project folder you have not trusted
+yet, Kiro first asks whether you trust it. AI-DLC's hooks run only in a trusted
+folder, and trusting lets the folder's `.kiro` hooks run commands on your
+machine. So choose **Trust Folder & Continue** only for your own project or one
+you have checked; otherwise choose **Cancel** and review the folder first (see
+[First run](harnesses/kiro-ide.md#first-run)).
 
 ### 3. Start the first workflow
 
@@ -92,7 +109,7 @@ still apply.
 | --- | --- | --- |
 | Claude Code | Configure a supported provider; AI-DLC preserves the current selection | [Claude setup below](#aws-bedrock-setup) |
 | Kiro CLI >= 2.6 | Sign in with `kiro-cli login` | [Kiro CLI](harnesses/kiro-cli.md) |
-| Kiro IDE | Sign in and open the configured project | [Kiro IDE](harnesses/kiro-ide.md) |
+| Kiro IDE >= 1.1.70 (or Kiro CLI >= 2.24.1) | Sign in and open the configured project | [Kiro IDE](harnesses/kiro-ide.md) |
 | Codex CLI >= 0.145.0 | Use a Git repository and approve project hook trust | [Codex CLI](harnesses/codex-cli.md) |
 | Cursor | Sign in to the IDE or CLI | [Cursor](harnesses/cursor.md) |
 | opencode >= 1.17 | Configure the session provider globally | [opencode](harnesses/opencode.md) |
@@ -149,7 +166,9 @@ Claude projects can install the shipped MCP defaults during config:
 aidlc config --harness claude --mcp defaults
 ```
 
-Use `--mcp none` to omit them. The default set is:
+Use `--mcp none` to omit them. A copy-channel install starts without them; run
+`bun .claude/tools/aidlc.ts config project --harness claude --mcp defaults --yes` to add them.
+The default set is:
 
 | Server | Provides | Credentials |
 | --- | --- | --- |
@@ -181,13 +200,18 @@ After config, complete any action named in its output:
 
 | Harness | Typical action |
 | --- | --- |
-| Claude Code | Approve project hooks through `/hooks`, then restart Claude Code |
+| Claude Code | If Claude Code is already open in this folder, exit it and start it again |
 | Kiro CLI | Start `kiro-cli chat`; the project selects the AI-DLC agent |
-| Kiro IDE | Open the configured project |
+| Kiro IDE | Open the configured project, then choose **aidlc** in the chat panel's agent picker |
 | Codex CLI | Approve the hook trust prompt or apply the generated trust seed |
 | Cursor | Open the configured project or run `agent` |
 | opencode | Start `opencode` in the project |
 | GitHub Copilot | Trust the project folder |
+
+In Kiro IDE, the **aidlc** agent appears in the agent picker only after you
+trust the folder and reload the window: if the Restricted Mode banner shows,
+select **Manage** on it, then **Trust**, and run **Developer: Reload Window**
+(see [First run](harnesses/kiro-ide.md#first-run)).
 
 Run `aidlc doctor` after completing the action. It reports runtime, project,
 provider, hook, trust, and workflow-state problems with a remediation command.
@@ -195,7 +219,7 @@ provider, hook, trust, and workflow-state problems with a remediation command.
 ## Updating
 
 `aidlc update` updates the machine runtime. It does not rewrite configured
-projects. Refresh each project between workflows:
+projects. Refresh each project; open work carries on:
 
 ```bash
 aidlc update
@@ -204,9 +228,9 @@ aidlc doctor
 aidlc config
 ```
 
-Config preserves project-owned content and refuses to refresh while a workflow
-is active. Projects using plugins should run `/aidlc plugin sync` after an
-engine refresh.
+Config preserves project-owned content, and a refresh while a workflow is open
+is done and says whether that work carries on. Projects using plugins should run
+`/aidlc plugin sync` after an engine refresh.
 
 For version selection, project pins, offline installation, mirrors, custom CAs,
 release authentication, automation, and uninstall, see
@@ -242,6 +266,7 @@ belong in the matching [harness guide](harnesses/README.md).
 
 ## Next Steps
 
+- [Onboarding: A Guided First Week](onboarding.md) - the mental model and a guided five-run path for first-time teams
 - [Workflow Profiles](workflow-profiles.md) - choose the right workflow
 - [Your First Workflow](02-your-first-workflow.md) - follow a complete run
 - [Spaces and Intents](03-spaces-and-intents.md) - understand project state

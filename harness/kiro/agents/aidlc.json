@@ -2,7 +2,7 @@
   "$schema": "https://raw.githubusercontent.com/aws/amazon-q-developer-cli/refs/heads/main/schemas/agent-v1.json",
   "name": "aidlc",
   "description": "AI-DLC conductor agent \u2014 run /aidlc to start or resume a workflow",
-  "prompt": "You are a software development assistant in a project that uses AI-DLC (AI-Driven Development Life Cycle). When the user invokes /aidlc (or asks to start, resume, or manage an AI-DLC workflow), follow the aidlc skill exactly \u2014 it defines the forwarding loop and the engine that owns all routing. CRITICAL forwarding rules, which override any instinct to make progress yourself: (1) The engine binary aidlc-orchestrate.ts is the ONLY authority on the next move \u2014 run it, do EXACTLY what its single directive says, then report; never re-derive routing. (2) Your VERY FIRST action: append everything the user typed after /aidlc to the first `next` call unchanged \u2014 `/aidlc --phase ideation` MUST become `next --phase ideation`, never a bare `next`; dropping --phase/--stage sends the workflow to the wrong stage and is a bug. (3) When a directive is a print whose message names a command to run (e.g. aidlc-jump.ts execute ...), run THAT EXACT command as your immediate next tool call \u2014 do NOT run `next` again or read more files until it has run. Skipping the named command silently breaks the workflow. Outside of AI-DLC workflows, assist normally.",
+  "prompt": "You are a software development assistant in a project that uses AI-DLC (AI-Driven Development Life Cycle). When the user invokes /aidlc (or asks to start, resume, or manage an AI-DLC workflow), follow the aidlc skill exactly: it defines the forwarding loop and the engine that owns all routing. Always, from the first message: (1) before your first AI-DLC command, read all of .kiro/skills/aidlc/SKILL.md with your file tool in parts of at most 40 lines, from the first line to the last (Kiro shows a long skill or file only in part), unless you already read all of it in this chat; (2) say the lines AI-DLC gives you for the person (its warnings, notices and questions) to them word for word; (3) a question AI-DLC puts to the person is theirs to answer, never yours, while a step AI-DLC hands you (a command to run, a label to choose) is yours to do without asking them; (4) never guess who changed a file, and never call a person's change stray or a mistake. Kiro's `/` menu can turn the person's `/aidlc` into one of AI-DLC's own specialists (`/aidlc-architect-agent`, `/aidlc-developer-agent` and the other `/aidlc-...-agent` names), which a person never starts: when their whole message is one of those, treat it as `/aidlc` with nothing after it, and say nothing about it. CRITICAL forwarding rules, which override any instinct to make progress yourself: (1) The engine binary aidlc-orchestrate.ts is the ONLY authority on the next move: run it, do EXACTLY what its single directive says, then report; never re-derive routing. (2) Your VERY FIRST action: append everything the user typed after /aidlc to the first `next` call unchanged: `/aidlc --phase ideation` MUST become `next --phase ideation`, never a bare `next`; dropping --phase/--stage sends the workflow to the wrong stage and is a bug. (3) When a directive is a print whose message names a command to run (e.g. aidlc-jump.ts execute ...), run THAT EXACT command as your immediate next tool call; do NOT run `next` again or read more files until it has run. Skipping the named command silently breaks the workflow. Outside of AI-DLC workflows, assist normally.",
   "tools": [
     "fs_read",
     "fs_write",
@@ -19,8 +19,7 @@
   "toolsSettings": {
     "execute_bash": {
       "allowedCommands": [
-        "bun (run )?[\"']?\\.kiro/tools/[A-Za-z0-9._-]+\\.ts[\"']?( .*)?",
-        "date -u( .*)?"
+        "bun (run )?[\"']?\\.kiro/tools/[A-Za-z0-9._-]+\\.ts[\"']?( .*)?"
       ],
       "deniedCommands": [
         "([^\\s]*/)?rm( [^\\s]+)* -[A-Za-z]*[rR][A-Za-z]*( .*)?",
@@ -32,7 +31,9 @@
       "allowedPaths": [
         "aidlc/spaces/**",
         ".kiro/sensors/**",
-        "aidlc/.aidlc-compose-pending"
+        "aidlc/.aidlc-compose-pending",
+        "[!.]*",
+        "[!.]*/**"
       ]
     },
     "subagent": {
@@ -63,81 +64,84 @@
   "hooks": {
     "agentSpawn": [
       {
-        "command": "{{INVOKE}} engine adapter kiro session-start"
+        "command": "{{INVOKE}} engine adapter kiro session-start",
+        "timeout_ms": 1800000
       }
     ],
     "userPromptSubmit": [
       {
         "command": "{{INVOKE}} engine adapter kiro verb-intercept",
-        "timeout_ms": 30000
+        "timeout_ms": 1800000
       }
     ],
     "preToolUse": [
       {
         "matcher": "execute_bash",
         "command": "{{INVOKE}} engine adapter kiro state-transition-guard",
-        "timeout_ms": 15000
+        "timeout_ms": 1800000
       },
       {
         "matcher": "execute_bash",
         "command": "{{INVOKE}} engine adapter kiro guard-tool-call",
-        "timeout_ms": 15000
+        "timeout_ms": 1800000
       },
       {
         "matcher": "fs_write",
         "command": "{{INVOKE}} engine adapter kiro review-freeze",
-        "timeout_ms": 15000
+        "timeout_ms": 1800000
       },
       {
         "matcher": "execute_bash",
         "command": "{{INVOKE}} engine adapter kiro review-freeze",
-        "timeout_ms": 15000
+        "timeout_ms": 1800000
       },
       {
         "matcher": "subagent",
         "command": "{{INVOKE}} engine adapter kiro deliver-stage-rules",
-        "timeout_ms": 15000
+        "timeout_ms": 1800000
       },
       {
         "matcher": "subagent",
         "command": "{{INVOKE}} engine adapter kiro plan-approval-guard",
-        "timeout_ms": 15000
+        "timeout_ms": 1800000
       },
       {
         "matcher": "fs_write",
         "command": "{{INVOKE}} engine adapter kiro plan-approval-guard",
-        "timeout_ms": 15000
+        "timeout_ms": 1800000
       },
       {
         "matcher": "execute_bash",
         "command": "{{INVOKE}} engine adapter kiro plan-approval-guard",
-        "timeout_ms": 15000
+        "timeout_ms": 1800000
       }
     ],
     "postToolUse": [
       {
         "matcher": "fs_write",
         "command": "{{INVOKE}} engine adapter kiro audit-and-sensors",
-        "timeout_ms": 120000
+        "timeout_ms": 3600000
       },
       {
         "matcher": "execute_bash",
         "command": "{{INVOKE}} engine adapter kiro rebuild-stage-graph",
-        "timeout_ms": 45000
+        "timeout_ms": 1800000
       },
       {
         "matcher": "todo_list",
-        "command": "{{INVOKE}} engine adapter kiro sync-workflow-state"
+        "command": "{{INVOKE}} engine adapter kiro sync-workflow-state",
+        "timeout_ms": 1800000
       },
       {
         "matcher": "subagent",
-        "command": "{{INVOKE}} engine adapter kiro log-subagent"
+        "command": "{{INVOKE}} engine adapter kiro log-subagent",
+        "timeout_ms": 1800000
       }
     ],
     "stop": [
       {
         "command": "{{INVOKE}} engine adapter kiro continue-workflow",
-        "timeout_ms": 30000
+        "timeout_ms": 3600000
       }
     ]
   }

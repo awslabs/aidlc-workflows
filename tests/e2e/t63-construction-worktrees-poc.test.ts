@@ -39,7 +39,8 @@
 //   .sh assertion 4 PRACTICES_SECTION_EMPTY emit             -> "PRACTICES_SECTION_EMPTY advisory fires on the poc fallback path [.sh 4]"
 //   .sh assertion 5 v7 state has Worktree Path + Bolt Refs   -> "init writes a v7 state with the v0.4.0 Worktree Path + Bolt Refs fields [.sh 5]"
 
-import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS, NATIVE_FIXTURE_SETUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "../harness/test-budget.ts";
+import { afterAll, beforeAll, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
@@ -50,6 +51,8 @@ import { AIDLC_SRC, setupIntegrationProject } from "../harness/fixtures.ts";
 // through the shipped merge helper (default-resolves the active intent, falls
 // back to flat aidlc-docs for a not-yet-created project).
 import { readAllAuditShards } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+
+setDefaultTimeout(NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
 const BUN = process.execPath; // the bun running this test
 const BOLT = join(AIDLC_SRC, "tools", "aidlc-bolt.ts");
@@ -76,7 +79,7 @@ beforeAll(() => {
   const r = spawnSync(
     BUN,
     [UTILITY, "intent-create", "--project-dir", PROJ, "--force", "--scope", "poc"],
-    { encoding: "utf-8" },
+    { timeout: remainingOperationTimeoutMs(NATIVE_FIXTURE_SETUP_TIMEOUT_MS), encoding: "utf-8" },
   );
   if (r.status !== 0) {
     throw new Error(
@@ -136,7 +139,7 @@ describe("t63 construction-worktrees poc (migrated from t63-construction-worktre
         "--project-dir",
         PROJ,
       ],
-      { encoding: "utf-8" },
+      { timeout: remainingOperationTimeoutMs(NATIVE_FIXTURE_SETUP_TIMEOUT_MS), encoding: "utf-8" },
     );
     // The .sh discarded stdout/stderr and grepped audit.md; we additionally
     // pin a clean exit (the emit-only contract: no state mutation, no spawn).
@@ -173,7 +176,7 @@ describe("t63 construction-worktrees poc (migrated from t63-construction-worktre
         "--project-dir",
         PROJ,
       ],
-      { encoding: "utf-8" },
+      { timeout: remainingOperationTimeoutMs(NATIVE_FIXTURE_SETUP_TIMEOUT_MS), encoding: "utf-8" },
     );
     expect(r.status).toBe(0);
     // The non-golden emit MUST actually fire — the advisory row lands in

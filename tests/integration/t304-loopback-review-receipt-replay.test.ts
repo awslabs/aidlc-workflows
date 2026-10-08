@@ -5,7 +5,8 @@
 // prior attempt's reviews. The real approval seam must refuse until every
 // applicable unit has a fresh current-attempt REVIEW_COMPLETED.
 
-import { afterEach, describe, expect, test } from "bun:test";
+import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS } from "../harness/test-budget.ts";
+import { setDefaultTimeout, afterEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
   mkdirSync,
@@ -25,6 +26,8 @@ import {
   seededRecordDir,
   seededStateFile,
 } from "../harness/fixtures.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const BUN = process.execPath;
 const ORCHESTRATE = join(AIDLC_SRC, "tools", "aidlc-orchestrate.ts");
@@ -312,5 +315,5 @@ describe("t304 loop-back refreshes per-unit Code Generation reviews", () => {
     expect(readFileSync(seededStateFile(project), "utf-8")).toContain(
       "- **Current Stage**: build-and-test",
     );
-  }, 60_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });

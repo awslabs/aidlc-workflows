@@ -46,7 +46,12 @@
 //    offending manifest path; test 3 also asserts exit 0 AND the two-write
 //    bind appended the sensor id to the seeded stage's frontmatter.)
 
-import { afterEach, describe, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { afterEach, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
   existsSync,
@@ -59,6 +64,8 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { AIDLC_SRC, toPortablePath } from "../harness/fixtures.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const BUN = process.execPath; // the bun running this test
 const TOOL = join(AIDLC_SRC, "tools", "aidlc-learnings.ts");
@@ -188,7 +195,7 @@ function runPersist(root: string): PersistResult {
       "--project-dir",
       root,
     ],
-    { encoding: "utf-8", env },
+    { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8", env },
   );
   return {
     status: res.status ?? -1,
@@ -222,7 +229,7 @@ describe("t112 aidlc-learnings persist — framework-distribution guard (migrate
       "refusing to scaffold a sensor manifest under the framework distribution",
     );
     expect(r.out).toContain(join("dist", "claude", ".claude", "sensors", "aidlc-bad.md"));
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("refusal leaves no aidlc-bad.md scaffolded under the framework tree [.sh test 2]", () => {
     const fwroot = join(mkTempRoot(), "fw", "dist", "claude");
@@ -232,7 +239,7 @@ describe("t112 aidlc-learnings persist — framework-distribution guard (migrate
     // no manifest scaffolded despite the refusal.
     expect(r.status).toBe(1);
     expect(existsSync(join(fwroot, ".claude", "sensors", "aidlc-bad.md"))).toBe(false);
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   // ===========================================================================
   // Case 3 — ordinary PROJECT path (no dist/claude tail). Must PASS the guard,
@@ -267,5 +274,5 @@ describe("t112 aidlc-learnings persist — framework-distribution guard (migrate
       "utf-8",
     );
     expect(stageFile).toMatch(/^[ \t]+-[ \t]+bad\s*$/m);
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });

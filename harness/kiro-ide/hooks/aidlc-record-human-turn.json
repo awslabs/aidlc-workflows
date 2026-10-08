@@ -4,8 +4,9 @@
     {
       "name": "aidlc-record-human-turn",
       "trigger": "UserPromptSubmit",
-      "description": "Notes that a real person typed something this turn, which is what lets approval gates tell a human response from the assistant continuing on its own.",
-      "action": { "type": "command", "command": "{{INVOKE}} engine adapter kiro-ide record-human-turn" }
+      "description": "Notes that a real person typed something this turn, which is what lets approval gates tell a human response from the assistant continuing on its own, then runs an AI-DLC command you typed, such as /aidlc --status, before the assistant answers.",
+      "action": { "type": "command", "command": "{{INVOKE}} engine adapter kiro-ide person-message" },
+      "timeout": 1800
     }
   ]
 }

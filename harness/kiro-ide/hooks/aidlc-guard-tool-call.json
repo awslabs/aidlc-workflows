@@ -1,0 +1,13 @@
+{
+  "version": "v1",
+  "hooks": [
+    {
+      "name": "aidlc-guard-tool-call",
+      "trigger": "PreToolUse",
+      "matcher": "^(?!(?:read|fs_read|read_file|read_files|read_code|list_directory|file_search|glob|grep_search|grep|web_fetch|web_search|disclose_context|thinking|todo_list|report_progress|subagent_response)$)",
+      "description": "Before the assistant changes a file, runs a command or hands work to another agent: records what its last change or command did, holds it while an approval waits for your answer, keeps the build to the plan you approved, and protects reviewed work and AI-DLC's own records. Reading files is never held.",
+      "action": { "type": "command", "command": "{{INVOKE}} engine adapter kiro-ide guard-tool-call" },
+      "timeout": 1800
+    }
+  ]
+}

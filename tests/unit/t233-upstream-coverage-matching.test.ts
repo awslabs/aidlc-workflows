@@ -46,12 +46,19 @@
 // Mechanism: cli (spawnSync of the bun script). No LLM, no tokens -
 // byte-reproducible.
 
-import { afterAll, describe, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { afterAll, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { AIDLC_SRC } from "../harness/fixtures.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const BUN = process.execPath; // the bun running this test
 const SENSOR = join(AIDLC_SRC, "tools", "aidlc-sensor-upstream-coverage.ts");
@@ -97,7 +104,7 @@ function run(
 		consumes,
 	];
 	if (deliverables !== undefined) args.push("--deliverables", deliverables);
-	const res = spawnSync(BUN, args, { encoding: "utf-8" });
+	const res = spawnSync(BUN, args, { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" });
 	expect(res.status).toBe(0);
 	return JSON.parse(res.stdout) as SensorResult;
 }

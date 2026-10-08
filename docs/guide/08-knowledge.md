@@ -50,18 +50,20 @@ Ships with the framework. Contains shared principles and per-agent methodology r
 
 ```
 .claude/knowledge/
-├── aidlc-shared/                       # Loaded by every agent
-│   ├── ai-dlc-principles.md        # Core methodology principles
-│   ├── audit-format.md             # 102-event audit taxonomy
-│   ├── brownfield.md               # Brownfield safeguards and reverse-engineering guidance
-│   ├── knowledge-readme-template.md # Optional README template a team can copy into Tier 2
-│   ├── state-template.md           # State file contract
-│   └── verification.md             # Phase boundary verification rules
-├── aidlc-architect-agent/                 # Loaded when aidlc-architect-agent is active
-├── aidlc-developer-agent/                 # Loaded when aidlc-developer-agent is active
-├── aidlc-product-agent/                   # Loaded when aidlc-product-agent is active
-└── ...                              # One directory per agent
++-- aidlc-shared/                       # Methodology loaded by every agent, plus format references
+|   +-- ai-dlc-principles.md        # Core methodology principles
+|   +-- audit-format.md             # 117-event audit taxonomy
+|   +-- brownfield.md               # Brownfield safeguards and reverse-engineering guidance
+|   +-- knowledge-readme-template.md # Optional README template a team can copy into Tier 2
+|   +-- state-template.md           # State file contract
+|   `-- verification.md             # Phase boundary verification rules
++-- aidlc-architect-agent/                 # Loaded when aidlc-architect-agent is active
++-- aidlc-developer-agent/                 # Loaded when aidlc-developer-agent is active
++-- aidlc-product-agent/                   # Loaded when aidlc-product-agent is active
+`-- ...                              # One directory per agent
 ```
+
+The format references in `aidlc-shared/` (the audit taxonomy and the state, memory, worktree and README templates) are not loaded with the agent. The step that needs one names it, and the agent reads it then.
 
 > **Do NOT edit Tier 1 files to inject your team's knowledge.** `.claude/knowledge/` and `.claude/agents/*.md` are framework files — they are overwritten on every upgrade, and your changes will disappear. If you want to add company standards, architectural preferences, or domain context, add them to **Tier 2** (below). If you want to constrain agent behavior, add a **rule** (see [Rules and the Learning Loop](09-rules-and-the-learning-loop.md)).
 
@@ -104,6 +106,17 @@ The ownership split is deliberate:
 | `aidlc/spaces/<space>/knowledge/documentkb/` | AI-DLC | Derived index, metadata, and extracted text |
 
 Use `/aidlc knowledge onboard [path]` to add one document or sweep the folder.
+You can name a file or folder anywhere in your project: one that is not already
+under `documents/` is copied in for you, keeping its name and a folder's layout,
+and the result says where the copy is. From then on the knowledge base reads
+that copy, so edit it under `documents/` and run `sync` to pick changes up.
+Inside a folder you name, files git ignores are left where they are and the
+line says how many (name one of them directly and it is added, since you asked
+for it by name). A folder holding more documents than the batch cap, or a
+document over the per-document cap, is refused before anything is copied, so
+nothing is left behind to duplicate. A path outside the project is refused, and
+the folder is created if it is missing, so a sweep of an empty space adds
+nothing and says nothing is there.
 Use `sync` after files are added, edited, moved, or deleted; `list` shows every
 catalog row and state, and `show <id>` returns one citable record plus current
 extracted text when available. The `/aidlc-knowledge` skill guides the same
@@ -370,6 +383,7 @@ sequenceDiagram
 - Steps 1-5 load from files on disk
 - Step 6 is context added by the orchestrator at runtime based on the current stage's declared inputs
 - Steps 4-5 only load if the directories exist and contain files
+- On inline stages and for a mob stage's lead, the agent reads your team's knowledge (steps 4-5) right after its persona and before the shipped methodology (steps 2-3)
 - [Rules](09-rules-and-the-learning-loop.md) are behavioral constraints, not reference material — the resolved chain loads first and every applicable rule reaches the agent
 
 ---

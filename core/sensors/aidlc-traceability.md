@@ -19,7 +19,7 @@ output_schema:
   invalid_targets: string[]
   findings_count: integer
   reason: string
-timeout_seconds: 5
+timeout_seconds: 300
 ---
 
 # traceability sensor

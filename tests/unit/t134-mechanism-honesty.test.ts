@@ -1,16 +1,22 @@
 // covers: harness-instrument:mechanism-honesty
 //
 // MR8 meta-test for the all-TS runner cutover. It ties three views together:
-// the committed coverage registry, the live body-derived mechanism scan, and
-// the runner's Claude skip-set helper.
+// the coverage registry built fresh, the body-derived mechanism scan, and the
+// runner's Claude skip-set helper.
 
-import { describe, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import {
   buildRegistry,
   claudeDependenciesOf,
+  mechanismRank,
   mechanismsOf,
   type ClaudeDependency,
   type Mechanism,
@@ -18,81 +24,35 @@ import {
 import { discoverClaudeRequiredTests } from "../harness/claude-gate.ts";
 import { REPO_ROOT } from "../harness/fixtures.ts";
 
-interface RegistryClaim {
-  file: string;
-  mechanism: Mechanism;
-}
-
-interface RegistryUnit {
-  coveredBy: RegistryClaim[];
-}
-
-interface CoverageRegistry {
-  units: RegistryUnit[];
-}
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const TESTS_DIR = join(REPO_ROOT, "tests");
-const REGISTRY = join(TESTS_DIR, ".coverage-registry.json");
 const RUNNER = join(TESTS_DIR, "run-tests.sh");
 const NATIVE_RUNNER = join(TESTS_DIR, "run-tests.ts");
 const CLAUDE_GATE = join(TESTS_DIR, "harness", "claude-gate.ts");
-
-function committedMechanismsByFile(): Map<string, Set<Mechanism>> {
-  const registry = JSON.parse(
-    readFileSync(REGISTRY, "utf-8"),
-  ) as CoverageRegistry;
-  const out = new Map<string, Set<Mechanism>>();
-  for (const unit of registry.units) {
-    for (const claim of unit.coveredBy) {
-      const set = out.get(claim.file) ?? new Set<Mechanism>();
-      set.add(claim.mechanism);
-      out.set(claim.file, set);
-    }
-  }
-  return out;
-}
 
 function sortedFiles(rows: { file: string }[]): string[] {
   return rows.map((r) => r.file).sort();
 }
 
 describe("t134 mechanism honesty and runner Claude gate", () => {
-  test("committed registry mechanism matches live mechanismsOf() representative", () => {
-    const committed = committedMechanismsByFile();
-    const live = new Map<string, Set<Mechanism>>();
+  test("the registry records each claim at the strongest mechanism its body drives", () => {
+    const drift: string[] = [];
     for (const row of buildRegistry().rows) {
       for (const claim of row.coveredBy) {
-        const set = live.get(claim.file) ?? new Set<Mechanism>();
-        set.add(claim.mechanism);
-        live.set(claim.file, set);
+        if (!claim.file.endsWith(".test.ts")) continue;
+        const derived = mechanismsOf(basename(claim.file), readFileSync(join(REPO_ROOT, claim.file), "utf-8"));
+        const strongest = derived.reduce((best, m) => (mechanismRank(m) >= mechanismRank(best) ? m : best));
+        if (claim.mechanism !== strongest) drift.push(`${claim.file}: registry=${claim.mechanism} body=${derived.join(",")}`);
       }
     }
-
-    const drift: string[] = [];
-    for (const [file, liveMechanisms] of live) {
-      const recorded = committed.get(file);
-      if (!recorded) {
-        drift.push(`${file}: missing from committed registry`);
-        continue;
-      }
-      const liveList = [...liveMechanisms].sort();
-      const recordedList = [...recorded].sort();
-      if (recordedList.join(",") !== liveList.join(",")) {
-        drift.push(
-          `${file}: registry=${recordedList.join(",")} live=${liveList.join(",")}`,
-        );
-      }
-    }
-    for (const file of committed.keys()) {
-      if (!live.has(file)) drift.push(`${file}: committed but not discovered live`);
-    }
-
-    expect(drift).toEqual([]);
+    expect([...new Set(drift)]).toEqual([]);
   });
 
   test("runner Claude skip-set helper matches the registry-derived live-driver set", () => {
     const expected = sortedFiles(discoverClaudeRequiredTests());
     const result = spawnSync(process.execPath, [CLAUDE_GATE, "--json"], {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
       cwd: REPO_ROOT,
       encoding: "utf-8",
     });

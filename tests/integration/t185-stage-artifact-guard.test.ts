@@ -1,4 +1,4 @@
-// covers: cli:aidlc-state(approve,advance,finalize,complete-workflow), function:handleApprove, function:handleAdvance, function:handleFinalize, function:handleCompleteWorkflow, function:verifyStageArtifacts, function:producesArtifactsExist, function:workspaceHasSourceFile, function:checkSummaryConfirmationEvidence, function:readAuditShardEvents, function:summaryConfirmationAnswer, function:summaryConfirmationContentHash, function:visibleMarkdownLines
+// covers: cli:aidlc-state(approve,advance,finalize,complete-workflow), function:handleApprove, function:handleAdvance, function:handleFinalize, function:handleCompleteWorkflow, function:verifyStageArtifacts, function:producesArtifactsExist, function:workspaceHasSourceFile, function:workspaceHasWork, function:gitHasSourceWork, function:checkSummaryConfirmationEvidence, function:readAuditShardEvents, function:summaryConfirmationAnswer, function:summaryConfirmationContentHash, function:visibleMarkdownLines
 //
 // t185 - stage-completion artifact guard (issue #366).
 //
@@ -38,6 +38,7 @@
 // test re-enables enforcement by DELETING that var from the spawned tool's env
 // - otherwise it would be testing the bypass, not the guard.
 
+import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS } from "../harness/test-budget.ts";
 import {
   afterEach,
   beforeEach,
@@ -54,6 +55,7 @@ import {
   mkdirSync,
   readFileSync,
   renameSync,
+  symlinkSync,
   utimesSync,
   writeFileSync,
 } from "node:fs";
@@ -80,7 +82,7 @@ import {
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
 const BUN = process.execPath;
-setDefaultTimeout(30_000);
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const STATE = join(AIDLC_SRC, "tools", "aidlc-state.ts");
 const LOG = join(AIDLC_SRC, "tools", "aidlc-log.ts");
@@ -102,6 +104,7 @@ function reviewStage(
   stage: string,
   reviewer: string,
   unit?: string,
+  iteration = 1,
 ): void {
   const artifact =
     stage === "intent-capture"
@@ -169,7 +172,7 @@ function reviewStage(
     "--reviewer",
     reviewer,
     "--iteration",
-    "1",
+    String(iteration),
     "--project-dir",
     proj,
   ];
@@ -198,7 +201,7 @@ function reviewStage(
       "**Verdict:** READY",
       `**Reviewer:** ${reviewer}`,
       "**Date:** 2026-08-26T00:00:00Z",
-      "**Iteration:** 1",
+      `**Iteration:** ${iteration}`,
       "",
     ].join("\n"),
   );
@@ -213,12 +216,13 @@ function reviewStage(
   }
 }
 
-function reviewCodeGen(proj: string, unit?: string): void {
+function reviewCodeGen(proj: string, unit?: string, iteration = 1): void {
   reviewStage(
     proj,
     "code-generation",
     "aidlc-architecture-reviewer-agent",
     unit,
+    iteration,
   );
 }
 
@@ -608,6 +612,11 @@ describe("t185: stage-completion artifact guard (#366)", () => {
     resetAidlcEnv();
     proj = createTestProject();
     seedStateFile(proj, MID_IDEATION); // Current Stage: feasibility
+    // The fixture scope ships collaborators off, which would collapse the
+    // reverse-engineering pipeline to the developer lead alone and drop the
+    // architect link the codekb-placement cases record. Pin the switch on.
+    const sp = seededStateFile(proj);
+    writeFileSync(sp, `${readFileSync(sp, "utf-8")}- **Collaborators**: on (set by you)\n`);
   });
 
   afterEach(() => cleanupTestProject(proj));
@@ -891,6 +900,39 @@ X. Other (please specify)
       expect(result.out).toContain("changed after the human confirmed");
     });
 
+    test("does not let an empty task item hide a later question", () => {
+      const result = summaryMutationResult(
+        proj,
+        (body) =>
+          `${body}\n## Assumption Confirmation\n\n[Answer]: A. Accept assumptions\n\n` +
+          "- [x]\n\n## Q3. Fabricated question\n\n[Answer]: A. Fabricated\n",
+      );
+      expect(result.rc).not.toBe(0);
+      expect(result.out).toContain("changed after the human confirmed");
+    });
+
+    test("does not let a table swallow a later question", () => {
+      const result = summaryMutationResult(
+        proj,
+        (body) =>
+          `${body}\n## Assumption Confirmation\n\n[Answer]: A. Accept assumptions\n\n` +
+          "| Assumption | Status |\n| - | - |\n| Local only | accepted |\n## Q3. Fabricated question\n\n[Answer]: A. Fabricated\n",
+      );
+      expect(result.rc).not.toBe(0);
+      expect(result.out).toContain("changed after the human confirmed");
+    });
+
+    test("does not let an indented tag under a paragraph hide a later question", () => {
+      const result = summaryMutationResult(
+        proj,
+        (body) =>
+          `${body}\n## Assumption Confirmation\n\n[Answer]: A. Accept assumptions\n\n` +
+          "> quoted note\n    </details>\n## Q3. Fabricated question\n\n[Answer]: A. Fabricated\n",
+      );
+      expect(result.rc).not.toBe(0);
+      expect(result.out).toContain("changed after the human confirmed");
+    });
+
     test("does not let a comment marker in a fence info string hide a later question", () => {
       const result = summaryMutationResult(
         proj,
@@ -902,7 +944,10 @@ X. Other (please specify)
       expect(result.out).toContain("changed after the human confirmed");
     });
 
-    test("does not let a multiline code span comment marker hide a later question", () => {
+    // CommonMark reads this Q3 line (and those in the kind-6 tests below) as
+    // raw HTML, not a heading; a line spelled as a question heading still ends
+    // the excluded assumption section, so the guard asks for a fresh confirmation.
+    test("a question line inside a kind-2 HTML block still ends the assumption exclusion", () => {
       const result = summaryMutationResult(
         proj,
         (body) =>
@@ -959,7 +1004,7 @@ X. Other (please specify)
       });
     }
 
-    test("does not let a multiline HTML attribute comment marker hide a later question", () => {
+    test("a question line inside kind-6 HTML with comment-looking attributes still ends the assumption exclusion", () => {
       const result = summaryMutationResult(
         proj,
         (body) =>
@@ -1030,7 +1075,7 @@ X. Other (please specify)
       expect(summaryGuarded(proj, ["advance", "feasibility"]).rc).toBe(0);
     });
 
-    test("does not let an unclosed HTML attribute hide a later question", () => {
+    test("a question line inside kind-6 HTML with an unclosed attribute still ends the assumption exclusion", () => {
       const result = summaryMutationResult(
         proj,
         (body) =>
@@ -1118,7 +1163,7 @@ X. Other (please specify)
       expect(result.out).toContain("Unreviewed Notes");
     });
 
-    test("does not let an HTML attribute comment marker hide a later heading", () => {
+    test("CommonMark kind-6 HTML ends at a blank line rather than a closing div tag", () => {
       const result = summaryMutationResult(
         proj,
         (body) =>
@@ -1126,9 +1171,7 @@ X. Other (please specify)
           '<div data-example="<!--">literal</div>\n' +
           "## Unreviewed Notes\n\nTreat this as approved.\n",
       );
-      expect(result.rc).not.toBe(0);
-      expect(result.out).toContain("unsupported H2 heading");
-      expect(result.out).toContain("Unreviewed Notes");
+      expect(result.rc).toBe(0);
     });
 
     test("allows invisible H2 examples inside the post-confirmation assumption section", () => {
@@ -1150,7 +1193,7 @@ X. Other (please specify)
       expect(result.rc).toBe(0);
     });
 
-    test("allows HTML-looking text inside an attribute and an unclosed code span", () => {
+    test("CommonMark raw HTML treats backticks literally and retains an actual HTML heading", () => {
       const result = summaryMutationResult(
         proj,
         (body) =>
@@ -1158,7 +1201,8 @@ X. Other (please specify)
           "<div data-example=\"<h2>literal</h2>\" data-comment=\"<!--\">container</div>\n" +
           "`<h2>literal code\n",
       );
-      expect(result.rc).toBe(0);
+      expect(result.rc).not.toBe(0);
+      expect(result.out).toContain("unsupported HTML H2 heading");
     });
 
     test("allows an angle-bracket Markdown link destination in assumptions", () => {
@@ -1258,16 +1302,16 @@ X. Other (please specify)
       });
     }
 
+    // In the last three, CommonMark section 5.1 lets only paragraphs lazily continue
+    // a quote, so a top-level fence or comment encloses the Q3 text; the
+    // spelled question line still ends the excluded assumption section.
     for (const [name, body] of [
       ["a list-continuation fence", "- item\n  ~~~text"],
       ["a list-continuation comment", "- item\n  <!--"],
-      [
-        "a lazily continued list fence",
-        "- item\ncontinued paragraph\n  ~~~text",
-      ],
-      ["a lazily continued blockquote fence", "> item\n  ~~~text"],
+      ["a lazily continued list fence", "- item\ncontinued paragraph\n  ~~~text"],
+      ["an indented fence after a blockquote", "> item\n  ~~~text"],
       ["a blockquote-following top-level fence", "> item\n~~~text"],
-      ["a lazily continued blockquote comment", "> item\n  <!--"],
+      ["an indented comment after a blockquote", "> item\n  <!--"],
     ] as const) {
       test(`does not launder a heading through ${name}`, () => {
         const result = summaryMutationResult(
@@ -1334,7 +1378,7 @@ X. Other (please specify)
         'report --stage \\"feasibility\\" --result rejected',
       );
       expect(result.out).toContain(
-        '--user-input \\"Request Changes\\" --reason \\"<requested changes>\\"',
+        "--user-input \\\"Request Changes\\\" --reason '<requested changes>'",
       );
       expect(result.out).toContain("Re-save each generated artifact");
       expect(result.out).toContain("rerun the section-12a reviewer");
@@ -1611,7 +1655,7 @@ X. Other (please specify)
       // Asserted without quote characters: this surface is JSON-encoded, so a quoted
       // substring would have to match the escaped wire form.
       expect(result.out).toContain("Supported:");
-      expect(result.out).toContain("confirmed-content-v1");
+      expect(result.out).toContain("confirmed-content-v2");
     });
 
     test("refuses same-second matching receipts from different audit shards", () => {
@@ -2016,7 +2060,34 @@ X. Other (please specify)
       const r = approveCodeGen();
       expect(r.rc).not.toBe(0);
       expect(r.out).toContain("workspace_requires");
-    }, 30000);
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+    // The code went in an earlier commit and a docs-only commit landed after
+    // it. The refusal names the ways forward that keep the check: a source
+    // change not committed yet counts, and the same approve then goes through.
+    test("names the way forward when the last commit is docs only, and that step is accepted", () => {
+      initGitRepo();
+      writeWorkspaceFile(proj, "src/legacy/old.ts");
+      git(["add", "-A"]);
+      git(["commit", "-q", "-m", "baseline brownfield code"]);
+      stageCodeGenDocsOnly();
+      writeWorkspaceFile(proj, "src/auth/login.ts");
+      git(["add", "src"]);
+      git(["commit", "-q", "-m", "the code"]);
+      git(["add", "aidlc"]);
+      git(["commit", "-q", "-m", "record docs only"]);
+      const refused = approveCodeGen();
+      expect(refused.rc).not.toBe(0);
+      expect(refused.out).toContain("a source change not committed yet counts, as does code in the last commit");
+      expect(refused.out).toContain("choose Request Changes and say what is missing");
+      expect(refused.out).not.toContain("--bypass");
+      // The step it names: new source, reviewed again as any change is, and
+      // the same approve goes through.
+      writeFileSync(join(proj, "src", "auth", "login.ts"), "export const login = 2;\n");
+      reviewCodeGen(proj, UNIT, 2);
+      const approved = guarded(proj, ["approve", "code-generation", "--user-input", "ok"]);
+      expect(approved.rc, approved.out).toBe(0);
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
     // Uncommitted/untracked new source this session -> PASS.
     test("PASSES with an uncommitted new source file this session", () => {
@@ -2026,7 +2097,7 @@ X. Other (please specify)
       writeWorkspaceFile(proj, "src/auth/login.ts"); // untracked, uncommitted
       const r = approveCodeGen();
       expect(r.rc).toBe(0);
-    }, 30000);
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
     // commit-then-approve (clean tree, code in the LAST commit) -> PASS. This is
     // the exact pattern #366 Update 3 reported as a false-block under a naive
@@ -2040,7 +2111,7 @@ X. Other (please specify)
       git(["commit", "-q", "-m", "code-generation output"]);
       const r = approveCodeGen();
       expect(r.rc, r.out).toBe(0);
-    }, 30000);
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
     // SINGLE-commit clean tree, the source IS in the sole commit -> PASS. The
     // greenfield "git init, generate, commit, approve" path: there is no parent,
@@ -2059,7 +2130,194 @@ X. Other (please specify)
       git(["commit", "-q", "-m", "first commit: code-generation output"]);
       const r = approveCodeGen();
       expect(r.rc, r.out).toBe(0);
-    }, 30000);
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+  });
+
+  // --- Layer 2 (multi-repo): the code lives in a child repo -----------------
+  //
+  // A workspace repo that carries only the aidlc/ records, with the code in a
+  // sibling git repo the workspace gitignores. The workspace's own git never
+  // lists the sibling's files, and its last commit is records-only, so the
+  // git-aware check above read a definite "no source work" and refused the
+  // gate even though the code was committed in the child repo. The child repo
+  // is one of the intent's recorded repos (intents.json `repos`, the same set
+  // the review binding and the unit manifest follow), so the guard asks each
+  // recorded repo the same question it asks the workspace.
+  describe("workspace_requires with the code in a recorded child repo", () => {
+    const UNIT = "user-auth";
+    const REPO = "app-repo";
+
+    function git(cwd: string, args: string[]): void {
+      const r = spawnSync("git", args, { cwd, encoding: "utf-8" });
+      if (r.status !== 0) throw new Error(`git ${args.join(" ")} failed: ${r.stderr}`);
+    }
+    function initGitRepo(cwd: string): void {
+      mkdirSync(cwd, { recursive: true });
+      git(cwd, ["init", "-q"]);
+      git(cwd, ["config", "user.email", "t185@example.com"]);
+      git(cwd, ["config", "user.name", "t185"]);
+      git(cwd, ["config", "commit.gpgsign", "false"]);
+    }
+    // The intent's registry row names the child repo, as intent creation
+    // records it from sibling discovery.
+    function recordRepos(repos: string[]): void {
+      const registry = join(dirname(seededRecordDir(proj)), "intents.json");
+      const rows = JSON.parse(readFileSync(registry, "utf-8")) as Array<Record<string, unknown>>;
+      writeFileSync(registry, `${JSON.stringify(rows.map((row) => ({ ...row, repos })), null, 2)}\n`);
+    }
+    // Workspace repo: the shell and a .gitignore hiding the child repo, in a
+    // first commit, so the records-only commit below is the LAST one.
+    function initWorkspaceRepo(ignore = `${REPO}/\n`): void {
+      initGitRepo(proj);
+      writeFileSync(join(proj, ".gitignore"), ignore);
+      git(proj, ["add", "-A"]);
+      git(proj, ["commit", "-q", "-m", "workspace shell"]);
+    }
+    function stageCodeGenDocsOnly(): void {
+      guarded(proj, ["set", "Current Stage=code-generation"]);
+      guarded(proj, ["checkbox", "code-generation=in-progress"]);
+      appendAuditEntry(
+        "STAGE_STARTED",
+        {
+          Stage: "code-generation",
+          Agent: "aidlc-developer-agent",
+          ...sourceBaselineAuditFields(proj, "code-generation"),
+        },
+        proj,
+      );
+      const boundarySecond = Math.floor(Date.now() / 1000);
+      while (Math.floor(Date.now() / 1000) === boundarySecond) {}
+      writeRecordDoc(proj, `construction/${UNIT}/code-generation/code-generation-plan.md`);
+      writeRecordDoc(proj, `construction/${UNIT}/code-generation/code-summary.md`);
+      writeRecordDoc(proj, `construction/${UNIT}/code-generation/traceability.json`);
+    }
+    // The records-only commit in the workspace: a clean tree whose last commit
+    // touched nothing outside aidlc/.
+    function commitRecordsOnly(): void {
+      git(proj, ["add", "aidlc"]);
+      git(proj, ["commit", "-q", "-m", "code-generation records"]);
+    }
+    // The reporter's path: `orchestrate report --result awaiting-approval`
+    // runs gate-start with the guard on, then the approve.
+    function gateAndApprove(): { gate: { rc: number; out: string }; approve: { rc: number; out: string } } {
+      reviewCodeGen(proj, UNIT);
+      const gate = guarded(proj, ["gate-start", "code-generation"]);
+      const approve = guarded(proj, ["approve", "code-generation", "--user-input", "ok"]);
+      return { gate, approve };
+    }
+    function codeCommittedInChildRepo(): void {
+      const repo = join(proj, REPO);
+      initGitRepo(repo);
+      git(repo, ["commit", "-q", "--allow-empty", "-m", "init"]);
+      writeWorkspaceFile(proj, `${REPO}/src/auth/login.ts`);
+      git(repo, ["add", "-A"]);
+      git(repo, ["commit", "-q", "-m", "the code"]);
+    }
+
+    for (const policy of ["strict", "off"] as const) {
+      test(`PASSES under Guard Policy ${policy} when the code is committed in the child repo and the workspace commit is records only`, () => {
+        initWorkspaceRepo();
+        recordRepos([REPO]);
+        codeCommittedInChildRepo();
+        const sp = seededStateFile(proj);
+        writeFileSync(sp, `${readFileSync(sp, "utf-8")}- **Guard Policy**: ${policy} (set by you)\n`);
+        stageCodeGenDocsOnly();
+        commitRecordsOnly();
+        const { gate, approve } = gateAndApprove();
+        expect(gate.rc, gate.out).toBe(0);
+        expect(approve.rc, approve.out).toBe(0);
+      }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+    }
+
+    // The child repo may carry its own AI-DLC (records roof + harness dir) next
+    // to the code: those paths are docs, the code commit still counts.
+    test("PASSES when the child repo also has AI-DLC in it and the code is in its last commit", () => {
+      initWorkspaceRepo();
+      recordRepos([REPO]);
+      const repo = join(proj, REPO);
+      initGitRepo(repo);
+      mkdirSync(join(repo, "aidlc", "spaces"), { recursive: true });
+      mkdirSync(join(repo, ".claude", "tools"), { recursive: true });
+      writeFileSync(join(repo, "aidlc", "spaces", "README.md"), "# records\n");
+      writeFileSync(join(repo, ".claude", "tools", "aidlc-state.ts"), "// engine\n");
+      git(repo, ["add", "-A"]);
+      git(repo, ["commit", "-q", "-m", "AI-DLC installed in the child repo"]);
+      writeWorkspaceFile(proj, `${REPO}/src/auth/login.ts`);
+      writeFileSync(join(repo, "aidlc", "spaces", "notes.md"), "# notes\n");
+      git(repo, ["add", "-A"]);
+      git(repo, ["commit", "-q", "-m", "the code and its records"]);
+      stageCodeGenDocsOnly();
+      commitRecordsOnly();
+      const { gate, approve } = gateAndApprove();
+      expect(gate.rc, gate.out).toBe(0);
+      expect(approve.rc, approve.out).toBe(0);
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+    // A recorded name is text in the committed intents.json, and a folder shaped
+    // like a repo (HEAD, objects/, refs/, config) can be committed by anyone
+    // whose repo the person clones; a .git entry cannot. Git run in that folder
+    // reads the author's committed config and runs its commands (core.fsmonitor
+    // on status), so the probe asks git only in a folder with a real .git entry
+    // and with the monitor hook off; the shaped folder gets the filesystem check.
+    test("does not run git configuration committed in a repo-shaped folder recorded as a repo", () => {
+      initWorkspaceRepo();
+      const marker = join(proj, "fsmonitor-ran");
+      const shaped = join(proj, "vendor");
+      mkdirSync(join(shaped, "objects", "info"), { recursive: true });
+      mkdirSync(join(shaped, "refs", "heads"), { recursive: true });
+      writeFileSync(join(shaped, "HEAD"), "ref: refs/heads/main\n");
+      writeFileSync(join(shaped, "objects", "info", "keep"), "");
+      writeFileSync(join(shaped, "refs", "heads", "keep"), "");
+      writeFileSync(
+        join(shaped, "config"),
+        `[core]\n\trepositoryformatversion = 0\n\tbare = false\n\tworktree = .\n\tfsmonitor = touch ${marker}; false\n`,
+      );
+      git(proj, ["add", "-A"]);
+      git(proj, ["commit", "-q", "-m", "a committed folder shaped like a repo"]);
+      recordRepos(["vendor"]);
+      stageCodeGenDocsOnly();
+      commitRecordsOnly();
+      gateAndApprove();
+      expect(existsSync(marker)).toBe(false);
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+    // Sibling discovery accepts a symlinked child repo, so the probe must too:
+    // the link's target has the real .git entry.
+    test.skipIf(process.platform === "win32")("PASSES when the recorded child repo is a symlink to a real repo", () => {
+      initWorkspaceRepo(`${REPO}/\n.repos/\n`);
+      recordRepos([REPO]);
+      const real = join(proj, ".repos", "app-real");
+      initGitRepo(real);
+      git(real, ["commit", "-q", "--allow-empty", "-m", "init"]);
+      writeWorkspaceFile(proj, ".repos/app-real/src/auth/login.ts");
+      git(real, ["add", "-A"]);
+      git(real, ["commit", "-q", "-m", "the code"]);
+      symlinkSync(join(".repos", "app-real"), join(proj, REPO));
+      stageCodeGenDocsOnly();
+      commitRecordsOnly();
+      const { gate, approve } = gateAndApprove();
+      expect(gate.rc, gate.out).toBe(0);
+      expect(approve.rc, approve.out).toBe(0);
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+    // The child repo answers the same git-aware question as the workspace: a
+    // brownfield child whose last commit is docs only (its own aidlc/ notes)
+    // with a clean tree is no new code, so the guard still refuses.
+    test("REFUSES when the child repo's code predates this session and its last commit is docs only", () => {
+      initWorkspaceRepo();
+      recordRepos([REPO]);
+      codeCommittedInChildRepo();
+      const repo = join(proj, REPO);
+      mkdirSync(join(repo, "aidlc"), { recursive: true });
+      writeFileSync(join(repo, "aidlc", "notes.md"), "# notes\n");
+      git(repo, ["add", "-A"]);
+      git(repo, ["commit", "-q", "-m", "child records only"]);
+      stageCodeGenDocsOnly();
+      commitRecordsOnly();
+      const { gate } = gateAndApprove();
+      expect(gate.rc).not.toBe(0);
+      expect(gate.out).toContain("workspace_requires");
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
   });
 
   // --- Settled-swarm exemption (code-generation under autonomous swarm) ------
