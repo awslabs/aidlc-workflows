@@ -124,3 +124,32 @@ describe("t-kiro-skill-read-in-parts: every file the skill sends the agent to fi
     for (const prompt of [ide, cli]) expect(prompt).toContain(PROMPT_MODULE_STEP);
   });
 });
+
+// The generated knowledge preflight in every delegated agent file tells a
+// helper to load its knowledge files; on Kiro those reads are cut at 30,000
+// characters too, so the Kiro trees' preflight carries the same read-in-parts
+// clause (the reporter's helpers in #2196 read theirs once).
+const PREFLIGHT_MARKER = "<!-- aidlc-delegated-knowledge-preflight -->";
+const PREFLIGHT_KIRO_CLAUSE = "Kiro shows only part of a long file: read each one with your file tool in parts of at most 200 lines (offset and limit), from the first line to the last; a read that comes back cut short is not all of it.";
+
+describe("t-kiro-skill-read-in-parts: the generated preflight tells a Kiro helper to read its knowledge in parts", () => {
+  for (const [tool, rel] of SKILLS) {
+    const agents = join(REPO, rel.split("/.kiro/")[0], ".kiro", "agents");
+    test(`${tool}: every delegated agent file carries the clause after the preflight marker`, () => {
+      const files = readdirSync(agents).filter((name) => /^aidlc-.*-agent\.md$/.test(name));
+      expect(files.length).toBe(14);
+      for (const name of files) {
+        const file = join(agents, name);
+        const text = readFileSync(file, "utf-8");
+        expect(text, relative(REPO, file)).toContain(PREFLIGHT_MARKER);
+        expect(text, relative(REPO, file)).toContain(PREFLIGHT_KIRO_CLAUSE);
+      }
+    });
+  }
+
+  test("a Claude agent file keeps the plain preflight: Claude shows the whole file", () => {
+    const text = readFileSync(join(REPO, "dist", "claude", ".claude", "agents", "aidlc-developer-agent.md"), "utf-8");
+    expect(text).toContain(PREFLIGHT_MARKER);
+    expect(text).not.toContain("parts of at most 200 lines");
+  });
+});
