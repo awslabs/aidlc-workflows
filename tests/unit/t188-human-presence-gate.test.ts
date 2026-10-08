@@ -70,6 +70,7 @@ import {
   writeSessionPidEntry,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
+import { saveMessage } from "../../dist/claude/.claude/tools/aidlc-message-store.ts";
 
 setDefaultTimeout(NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
@@ -1914,6 +1915,140 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
 // that message, and the run's own approvals, leave the rest of it standing;
 // any other decision after it uses it up, and an approval or an answer still
 // needs a reply of its own.
+// Audit-loop-report C3 variant B: the agent logs a question AFTER the person
+// already replied, and the reply reads as spent for the answers that follow
+// (`usedOnlyByAnswers` wants every DECISION_RECORDED provably before the latest
+// turn), so the agent is told to wait for a reply that already arrived and asks
+// the person to type it again. Under "LLM maps, tool proves" the agent names the
+// message that answered (`--message <id>`); the engine proves the record exists,
+// is this chat's and is not spent by an approval, and reads no words.
+describe("t188: a late-logged question takes the message that answered it", () => {
+  const CHAT = "01995000-7a11-7000-8000-0000000000e1";
+  const OTHER_CHAT = "01995000-7a11-7000-8000-0000000000e2";
+  beforeEach(() => {
+    resetAidlcEnv();
+    proj = createTestProject();
+    seedStateFile(proj, MID_IDEATION);
+  });
+  afterEach(() => cleanupTestProject(proj));
+
+  // The person typed `words` (`secondsAgo` earlier): the hook's record and the turn row naming it.
+  function reply(words: string, session: string = CHAT, secondsAgo = 0): string {
+    const stored = saveMessage(proj, {
+      session, at: new Date(Date.now() - secondsAgo * 1000).toISOString().replace(/\.\d{3}Z$/, "Z"), source: "prompt", text: words, picker: null,
+      words, settings: [], route: { scope: null, newIntent: false, skip: [], add: [], projectType: null }, applied: [],
+    });
+    appendAuditEntry("HUMAN_TURN", { Session: session, "Message Id": stored.id }, proj);
+    return stored.id;
+  }
+  function log(args: string[], env: NodeJS.ProcessEnv = {}): { rc: number; out: string } {
+    const merged: NodeJS.ProcessEnv = { ...process.env, AIDLC_SKIP_ARTIFACT_GUARD: "1", ...env };
+    delete merged.AIDLC_SKIP_HUMAN_PRESENCE_GUARD;
+    delete merged.AIDLC_UNATTENDED;
+    const r = spawnSync(BUN, [LOG, ...args, "--project-dir", proj], {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8", env: merged,
+    });
+    return { rc: r.status ?? -1, out: `${r.stdout ?? ""}${r.stderr ?? ""}` };
+  }
+  const inChat = { AIDLC_SESSION_OVERRIDE: CHAT, AIDLC_SESSION_OVERRIDE_SOURCE: "payload" };
+  function rows(event: string) {
+    return readAuditShardEvents(proj).filter((row) => row.event === event);
+  }
+  function fieldOf(row: { block: string }, name: string): string | null {
+    return row.block.match(new RegExp(`^\\*\\*${name}\\*\\*: (.*)$`, "m"))?.[1] ?? null;
+  }
+
+  test("two answers naming the message that arrived before the question was logged are both recorded", () => {
+    const slug = field(proj, "Current Stage");
+    const id = reply("Q1: in the API handler. Q2: a toast.");
+    expect(log(["decision", "--stage", slug, "--decision", "Q1 and Q2", "--options", "A,B"], inChat).rc).toBe(0);
+    const first = log(["answer", "--stage", slug, "--details", "Q1: in the API handler", "--message", id], inChat);
+    expect(first.rc, first.out).toBe(0);
+    const second = log(["answer", "--stage", slug, "--details", "Q2: a toast", "--message", id], inChat);
+    expect(second.rc, second.out).toBe(0);
+    const answered = rows("QUESTION_ANSWERED");
+    expect(answered).toHaveLength(2);
+    expect(answered.map((row) => fieldOf(row, "Message Id"))).toEqual([id, id]);
+    expect(fieldOf(answered[1], "Person Reply")).toBe("Q1: in the API handler. Q2: a toast.");
+  });
+
+  test("a question logged with the message hands it to its answers", () => {
+    const slug = field(proj, "Current Stage");
+    const id = reply("yes to both");
+    const logged = log(["decision", "--stage", slug, "--decision", "Both?", "--options", "A,B", "--message", id], inChat);
+    expect(logged.rc, logged.out).toBe(0);
+    expect(fieldOf(rows("DECISION_RECORDED").at(-1)!, "Message Id")).toBe(id);
+    for (const details of ["first: yes", "second: yes"]) {
+      const r = log(["answer", "--stage", slug, "--details", details], inChat);
+      expect(r.rc, r.out).toBe(0);
+    }
+    expect(rows("QUESTION_ANSWERED").map((row) => fieldOf(row, "Message Id"))).toEqual([id, id]);
+    const pairs = JSON.parse(log(["answers", "--stage", slug], inChat).out) as { answered: Array<{ messageId?: string }> };
+    expect(pairs.answered.map((pair) => pair.messageId)).toEqual([id]);
+  });
+
+  test("a message spent by an approval, an unknown id, or another chat's message is refused to the agent, naming the step", () => {
+    const slug = field(proj, "Current Stage");
+    // Typed a minute ago; the approval it gave is on record after it, so it is spent.
+    const spent = reply("approve", CHAT, 60);
+    appendAuditEntry("GATE_APPROVED", { Stage: slug, "User Input": "Approve" }, proj);
+    expect(log(["decision", "--stage", slug, "--decision", "After the approval?", "--options", "A,B"], inChat).rc).toBe(0);
+    const stale = log(["answer", "--stage", slug, "--details", "A", "--message", spent], inChat);
+    expect(stale.rc).not.toBe(0);
+    expect(stale.out).toContain(`message ${spent}`);
+    expect(stale.out).toContain("approval");
+    const unknown = log(["answer", "--stage", slug, "--details", "A", "--message", "0badc0de"], inChat);
+    expect(unknown.rc).not.toBe(0);
+    expect(unknown.out).toContain("no message record");
+    const elsewhere = reply("A", OTHER_CHAT);
+    const foreign = log(["answer", "--stage", slug, "--details", "A", "--message", elsewhere], inChat);
+    expect(foreign.rc).not.toBe(0);
+    expect(foreign.out).toContain("another chat");
+    expect(rows("QUESTION_ANSWERED")).toHaveLength(0);
+  });
+
+  test("with no chat the engine can name, one chat's records since the last decision are enough; two chats are not", () => {
+    const slug = field(proj, "Current Stage");
+    const id = reply("A then B");
+    expect(log(["decision", "--stage", slug, "--decision", "Q?", "--options", "A,B"]).rc).toBe(0);
+    const one = log(["answer", "--stage", slug, "--details", "A", "--message", id]);
+    expect(one.rc, one.out).toBe(0);
+    reply("something else", OTHER_CHAT);
+    const two = log(["answer", "--stage", slug, "--details", "B", "--message", id]);
+    expect(two.rc).not.toBe(0);
+    expect(two.out).toContain("which chat");
+  });
+
+  test("the hint names the message that arrived before the question was logged, and the person is not asked again", () => {
+    const slug = field(proj, "Current Stage");
+    const id = reply("Q1: here. Q2: there.");
+    expect(log(["decision", "--stage", slug, "--decision", "Q1 and Q2", "--options", "A,B"], inChat).rc).toBe(0);
+    expect(log(["answer", "--stage", slug, "--details", "Q1: here"], inChat).rc).toBe(0);
+    const refused = log(["answer", "--stage", slug, "--details", "Q2: there"], inChat);
+    expect(refused.rc).not.toBe(0);
+    expect(refused.out).toContain(`--message ${id}`);
+    expect(refused.out).toContain("do not ask them again");
+    expect(refused.out).not.toContain("Wait for the human to type an answer");
+  });
+
+  test("with no message before the question, or only a spent one, today's hint stands and names no id", () => {
+    const slug = field(proj, "Current Stage");
+    expect(log(["decision", "--stage", slug, "--decision", "Q?", "--options", "A,B"], inChat).rc).toBe(0);
+    const nothing = log(["answer", "--stage", slug, "--details", "A"], inChat);
+    expect(nothing.rc).not.toBe(0);
+    expect(nothing.out).toContain("Wait for the human to type an answer");
+    expect(nothing.out).not.toContain("--message");
+    // A message the person sent before the last approval is spent, so it is not offered either.
+    reply("approve", CHAT, 60);
+    appendAuditEntry("GATE_APPROVED", { Stage: slug, "User Input": "Approve" }, proj);
+    expect(log(["decision", "--stage", slug, "--decision", "And now?", "--options", "A,B"], inChat).rc).toBe(0);
+    const spent = log(["answer", "--stage", slug, "--details", "A"], inChat);
+    expect(spent.rc).not.toBe(0);
+    expect(spent.out).toContain("Wait for the human to type an answer");
+    expect(spent.out).not.toContain("--message");
+  });
+});
+
 describe("t188: what the person's message asks for outlives the approval given in it", () => {
   beforeEach(() => {
     resetAidlcEnv();
