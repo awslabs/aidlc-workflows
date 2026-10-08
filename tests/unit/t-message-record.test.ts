@@ -267,6 +267,23 @@ describe("the human-turn hook keeps one record of each message", () => {
     expect(existsSync(messagesDir(proj))).toBe(false);
   });
 
+  // A prompt the host made for the agent (t-host-turns-not-the-persons.test.ts)
+  // is nobody's words: no record, no HUMAN_TURN, one advisory HOST_TURN row.
+  // Claude Code's payload carries its transcript path; with no row for the
+  // prompt, the whole notice is the host's.
+  test("a prompt the host made writes no record", () => {
+    const proj = withWork();
+    run(proj, [DISPATCHER, "engine", "hook", "record-human-turn"], JSON.stringify({
+      hook_event_name: "UserPromptSubmit", session_id: SESSION, cwd: proj, prompt_id: "b7nfvh2bk",
+      transcript_path: join(proj, `${SESSION}.jsonl`),
+      prompt: "<task-notification>\n<task-id>b7nfvh2bk</task-id>\n<status>completed</status>\n</task-notification>",
+    }));
+    expect(existsSync(messagesDir(proj))).toBe(false);
+    const events = readAuditShardEvents(proj).map((row) => row.event);
+    expect(events.filter((event) => event === "HUMAN_TURN")).toEqual([]);
+    expect(events.filter((event) => event === "HOST_TURN")).toEqual(["HOST_TURN"]);
+  });
+
   test("kiro-ide: a prompt the host left empty is a prompt whose words are unknown, not a picker reply", () => {
     const proj = withWork();
     say(proj, "", "kiro-ide");
