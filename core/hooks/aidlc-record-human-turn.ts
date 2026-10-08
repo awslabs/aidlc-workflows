@@ -3,7 +3,8 @@
 // On every real human prompt, append a HUMAN_TURN event to the active intent's
 // audit shard (the state machine's own append-only ledger). The approval /
 // interview gate (handleApprove / handleAnswer) refuses unless a HUMAN_TURN was
-// recorded since the last gate resolution. The hook records presence and order;
+// recorded since the last gate resolution (and, at a stage gate, after the gate
+// was shown). The hook records presence and order;
 // it does not authenticate who launched the dispatcher.
 //
 // Presence remains the gate signal; the prompt payload also answers the single

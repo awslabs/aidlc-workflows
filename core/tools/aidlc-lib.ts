@@ -11305,15 +11305,19 @@ export function ensureCloneId(projectDir: string): string {
 // append order. The prior resolution is the freshness boundary - this is the
 // consume-once semantics expressed as event order instead of a flag.
 //
-// Why the boundary is the prior RESOLUTION, not this gate's STAGE_AWAITING_APPROVAL
-// (the live Kiro IDE spike, 2026-06-30, caught this): in the real flow ONE human
-// prompt drives the agent to BOTH open the gate AND approve it, so the human turn
-// PRECEDES this gate-open. A "human turn after gate-open" rule false-refuses every
-// legitimate approval. But a human turn after the prior gate's resolution still
-// proves a fresh human acted this turn, while a fabricated cascade (gate2 approved
-// right after gate1 committed, no new human turn) has its only human turn BEFORE
-// the gate1 GATE_APPROVED -> refused. Stale (human turn long ago, then a fabricated
-// approve) likewise has the last resolution after the human turn -> refused.
+// Two bounds. The prior RESOLUTION is the freshness bound: a human turn after
+// the last gate approval, rejection or answered question proves a fresh human
+// acted since the last decision, so a fabricated cascade (gate2 approved right
+// after gate1 committed, no new human turn) and a stale approval (human turn
+// long ago, then a fabricated approve) are both refused. For a stage gate the
+// gate's own presentation is the second bound (personRepliedSincePresentation,
+// used by approve and reject): the reply must come after the stage's
+// STAGE_AWAITING_APPROVAL row, since a turn sent before the question was put
+// (an answer to the stage's own questions) is no reply to it. An earlier
+// version kept the presentation out of the rule because one prompt once drove
+// the agent to both open and approve a gate (a Kiro IDE spike, 2026-06-30); the
+// protocol now presents the gate and ends the turn. A gate the engine backfills
+// for a reported approval (Recovered: true) is exempt from the second bound.
 //
 // Ordering is CHRONOLOGICAL (Timestamp, then per-shard position as the SAME-SHARD
 // tiebreak): shards are per-clone files enumerated in FILENAME order (a second
@@ -26898,12 +26902,23 @@ export function clearGateWords(projectDir: string): void {
 // Where a stage's gate words may begin in `content` (an audit shard): its
 // latest presentation, or the latest answer to another question after it. Null
 // when the latest lifecycle row for the stage (and Unit) is not a presentation:
-// a gate already answered, a stage restarted, or a gate never presented (the
-// direct Active to Revising path).
-function gatePresentationStart(content: string, gate: { stage: string; unit?: string }): number | null {
+// a gate already answered, a stage restarted, a gate never presented (the
+// direct Active to Revising path), or a row the engine backfilled (Recovered:
+// true), which is written after the person's reply by design. With
+// `firstShowing`, a gate re-entered after a revision begins where the person
+// first saw it in this attempt: their correction of a misread Request Changes
+// came after that showing, and the re-entry row shows them nothing new.
+function gatePresentationStart(
+  content: string,
+  gate: { stage: string; unit?: string },
+  options: { firstShowing?: boolean } = {},
+): number | null {
   const separator = /\r?\n---\r?\n/g;
   let start = 0;
   let from: number | null = null;
+  // The showing this attempt began with, and whether a revision has run since.
+  let shown: number | null = null;
+  let revised = false;
   for (;;) {
     const match = separator.exec(content);
     const block = content.slice(start, match ? match.index : content.length).replace(/\r\n/g, "\n");
@@ -26913,7 +26928,19 @@ function gatePresentationStart(content: string, gate: { stage: string; unit?: st
       auditBlockField(block, "Stage") === gate.stage &&
       (gate.unit === undefined || auditBlockField(block, "Unit") === gate.unit)
     ) {
-      from = event === "STAGE_AWAITING_APPROVAL" ? start : null;
+      if (event === "STAGE_AWAITING_APPROVAL" && auditBlockField(block, "Recovered") !== "true") {
+        from = options.firstShowing === true && revised && shown !== null ? shown : start;
+        // A gate first shown by a re-entry (the stage was rejected mid-run) is
+        // this attempt's showing too.
+        if (!revised || shown === null) shown = start;
+      } else {
+        from = null;
+        if (event === "STAGE_REVISING") revised = true;
+        else if (event !== "GATE_REJECTED") {
+          shown = null;
+          revised = false;
+        }
+      }
     } else if (event !== null && from !== null && GATE_WORDS_ANSWERED_BY.has(event)) {
       from = start;
     }
@@ -27018,10 +27045,13 @@ export function gateWordsSinceUnitReview(
 // on this clone's record after its latest presentation (and after any other
 // question's answer since). A turn sent before the question was put to them is
 // no reply to it. Null when the stage is not waiting on that question (never
-// put to them, or already answered), and when the record cannot be read.
+// put to them, or already answered), and when the record cannot be read. With
+// `firstShowing` (approve), a re-entered gate counts from the showing the person
+// first saw in this attempt (gatePresentationStart).
 export function personRepliedSincePresentation(
   projectDir: string,
   gate: { stage: string; unit?: string },
+  options: { firstShowing?: boolean } = {},
 ): boolean | null {
   let content: string;
   try {
@@ -27029,7 +27059,7 @@ export function personRepliedSincePresentation(
   } catch {
     return null;
   }
-  const from = gatePresentationStart(content, gate);
+  const from = gatePresentationStart(content, gate, options);
   if (from === null) return null;
   return auditShardBlocks(content.slice(from))
     .some((block) => isReplyTurn({ event: auditBlockField(block, "Event") ?? "", block }));
