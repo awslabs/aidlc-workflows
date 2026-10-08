@@ -3663,6 +3663,11 @@ export interface ParsedFlags {
    * rather than running a stage while they believe a check went off.
    */
   unreadSetting?: string;
+  /**
+   * The line was only `--session <id>`: this chat's session, which the agent
+   * passed on from SessionStart, and none of the person's words.
+   */
+  agentSessionOnly?: boolean;
   retiredFlags?: string[];
   retiredOnly?: boolean;
 }
@@ -4044,6 +4049,13 @@ export function parseNextFlags(argv: string[]): ParsedFlags {
       i++;
     } else if (a === "--rhythm") {
       flags.parseError = "--rhythm requires <per-stage|unit-end>.";
+    } else if (a === "--session" && intentWords.length === 0 && i + 1 < args.length && !args[i + 1].startsWith("--")) {
+      // This chat's session id, which SessionStart gives the agent for Plan
+      // Approval's --session; `next` finds its session on its own. Read as task
+      // text it named the work "--session sess_...". After a word of the
+      // person's it is one of their words.
+      if (args.length === 2) flags.agentSessionOnly = true;
+      i++;
     } else if (a === "--init" || a === "--force") {
       // RETIRED flags; see the named "Branch 3 — the legacy `--init` flag —
       // retired in P4" note in routeNext. Record and consume them so they never
@@ -8286,6 +8298,18 @@ function routeNext(args: string[], projectDir: string | undefined): void {
   // just typed `/aidlc <scope>` to type exactly that — circular now that a
   // named scope creates).
   if (!stateContent) {
+    // The agent passed this chat's session in place of the person's request.
+    // They may well have described their work, so the error below would ask
+    // them for it again: the agent runs `next` once more with their words.
+    if (flags.agentSessionOnly) {
+      const orchestrate = aidlcToolInvocation("orchestrate");
+      emit(printDirective(
+        "`next` takes the person's request, not `--session`, so nothing ran. Run " +
+          `\`${orchestrate} next "<what the person typed after ${entrySkillInvocation()}, word for word>"\` now and ` +
+          `follow what it returns; if they typed nothing after it, run \`${orchestrate} next\`.`,
+      ));
+      return;
+    }
     // Work in progress here with none selected (a teammate's fresh clone, or a
     // conversation that has not joined the record it found) is put to the
     // person by name, never answered as if there were none.

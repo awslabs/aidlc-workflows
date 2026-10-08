@@ -320,7 +320,8 @@ if (!existsSync(stateFile)) {
     process.stdout.write(hookContextLine(
       "SessionStart",
       `AIDLC Runtime Session: ${sessionId}\n` +
-        "Use this exact value for any Plan Approval --session argument in this conversation." +
+        "Use this exact value for any Plan Approval --session argument in this conversation. It goes only on a " +
+        "command that asks for --session, never on next." +
         rejoin +
         (rebindCheckOnly ? "" : switchOffContext(projectDir)) +
         (trackedSteeringAsk ? `\n${trackedSteeringAsk}` : ""),

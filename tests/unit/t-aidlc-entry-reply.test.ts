@@ -54,9 +54,11 @@ describe("words typed after /aidlc are a reply unless the dispatcher reads a com
       expect(nextArgsAreOnlyWords([...lead, flag, "standard"]), `${flag} standard`).toBe(false);
       if (lead.length === 0) {
         // Among the person's own words a utility flag is one of their words
-        // ("add a --version flag ..."), so the message stays their reply.
+        // ("add a --version flag ..."), so the message stays their reply. So is
+        // --session, which `next` reads only ahead of their words (the agent's
+        // copy of this chat's session id).
         expect(nextArgsAreOnlyWords(["approve", "it", flag, "off"]), `approve it ${flag} off`).toBe(
-          READ_ONLY_FLAGS.has(flag),
+          READ_ONLY_FLAGS.has(flag) || flag === "--session",
         );
       }
     }
