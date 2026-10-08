@@ -42,6 +42,7 @@ import {
   constructionCheckpointsApply,
   isNonAnswer,
   latestMainWorkflowStageRunFloorForProject,
+  latestPersonTurn,
   loadStageGraph,
   maximalAttemptEvents,
   personMayApproveOverUnfinishedReview,
@@ -161,9 +162,11 @@ export interface ConstructionCheckpoint {
     /** The person chose Redo for this approved Unit's work, so it is asked about as new work. */
     redone?: true;
   } | null;
-  /** The stages whose unfinished review the person let this Unit go on
-   *  without ("approve it as it is"), and the one approval question. */
-  review_not_finished?: { stages: string[]; question: string };
+  /** The stages whose review did not finish. With `approved_in_words`, the
+   *  person's "approve it as it is" let this Unit go on without them, and is
+   *  its approval: nothing more is asked. Otherwise (a review that ended in
+   *  the NOT-READY fallback) `question` is the one approval question. */
+  review_not_finished?: { stages: string[]; question?: string; approved_in_words?: true };
   /** From verify: the one line for each change to this Unit's reviewed work
    *  its Guard Policy accepted, said before the person is asked. */
   change_notices?: string[];
@@ -1095,7 +1098,9 @@ function snapshot(
       verification_command: shared.verificationCommand?.label ?? null,
       command_authorized: shared.verificationCommand !== null,
       ...(unfinishedStages.length > 0 ? {
-        review_not_finished: { stages: unfinishedStages, question: `Approve ${unit}? Its ${reviewsNamed(unfinishedStages)} did not finish.` },
+        review_not_finished: notFinished.length > 0
+          ? { stages: unfinishedStages, approved_in_words: true as const }
+          : { stages: unfinishedStages, question: `Approve ${unit}? Its ${reviewsNamed(unfinishedStages)} did not finish.` },
       } : {}),
       run_floor: floors[stages.at(-1)!] ?? "unstarted#0",
       run_floors: floors, proof_path: `${root}/${proofPath}`, verification: proof ?? restored,
@@ -1452,8 +1457,13 @@ export function approveConstructionCheckpoint(
       throw new Error(`Verify the current Construction checkpoint before approval: a matching CHECKPOINT_VERIFICATION_RECORDED receipt and passing proof are required. Run ${aidlcToolInvocation("bolt")} checkpoint --unit "${unit}" --kind ${kind} --action verify.`);
     }
     const humanRequired = current.result.human_required || reply !== undefined;
+    // The person's "approve it as it is", which the verification took, is the
+    // approval; nothing more is asked of them.
+    const inWords = current.result.review_not_finished?.approved_in_words === true;
     let words: string | undefined;
-    if (humanRequired) {
+    if (humanRequired && inWords) {
+      words = latestPersonTurn(projectDir)?.words ?? undefined;
+    } else if (humanRequired) {
       requireProtectedResponse(projectDir, session, {
         kind: "checkpoint-approval", targetDigest: protectedTargetDigest(approvalTarget(current)), choice: "Approve",
       });

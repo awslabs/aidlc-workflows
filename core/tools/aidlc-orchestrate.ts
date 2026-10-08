@@ -8985,8 +8985,8 @@ function applyConstructionCheckpointShape(
   ) {
     directive.protocol_modules.push("learnings");
   }
-  // After the person's "approve it as it is", the one question they get is
-  // the approval itself.
+  // After the person's "approve it as it is", or with a review that did not
+  // finish, no learnings question comes before the approval.
   if (checkpoint.review_not_finished) {
     directive.protocol_modules = directive.protocol_modules.filter((module) => module !== "learnings");
   }

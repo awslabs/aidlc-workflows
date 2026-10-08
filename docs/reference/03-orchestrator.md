@@ -562,9 +562,10 @@ when the current review is that re-check. A `rereview` with `unfinished`
 (`no-verdict` or `not-ready`) names the request that finishes the Unit's own
 review instead; after the person's "approve it as it is" (`verify
 --over-unfinished-review`, any Guard Policy but a team-locked `strict`), `review_not_finished`
-(`{stages, question}`) carries the one approval question. It also carries the
-stages whose review ended in the reviewer module's NOT-READY fallback (no
-reviewer gave that verdict), under every Guard Policy, with readiness unchanged. A `rereview` with
+(`{stages, approved_in_words}`) says their words are the approval, so `approve`
+runs with no question. For stages whose review ended in the reviewer module's
+NOT-READY fallback (no reviewer gave that verdict) it carries `{stages, question}`,
+the one approval question, under every Guard Policy, with readiness unchanged. A `rereview` with
 `first` is the first request of a Unit review never asked for in this run of the
 Unit's work (a jump back or a reopen starts a new run), at the pass `log review`
 expects, under any Guard Policy. `verification_command` is the full canonical recorded command,

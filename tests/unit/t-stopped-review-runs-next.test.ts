@@ -212,7 +212,7 @@ type Directive = {
   construction_checkpoint?: {
     unit: string; ready: boolean; verified: boolean;
     rereview?: { command: string; unfinished?: string };
-    review_not_finished?: { stages: string[]; question: string };
+    review_not_finished?: { stages: string[]; question?: string; approved_in_words?: true };
   };
 };
 
@@ -311,16 +311,15 @@ describe("(a) the person writes while a review has no verdict: the agent hears t
     expect(says(p, "looks good")).not.toContain(NOTE);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-  test("no note on the person's reply to the question asked over the unfinished review", () => {
+  test("no note once their words approved the Unit over the unfinished review", () => {
     const p = fixture("off");
     build(p, "alpha");
     review(p, "alpha");
     expect(says(p, AS_IT_IS)).toContain(NOTE);
     const verified = checkpoint(p, "alpha", "verify", ["--over-unfinished-review"]);
     expect(verified.json?.verified, verified.out).toBe(true);
-    expect(checkpoint(p, "alpha", "ask").status).toBe(0);
-    expect(says(p, "yes")).not.toContain(NOTE);
-    const approved = checkpoint(p, "alpha", "approve", ["--user-input", "yes"]);
+    // Their words are the approval: no question, no second yes.
+    const approved = checkpoint(p, "alpha", "approve");
     expect(approved.json?.approved, approved.out).toBe(true);
     // Approved over it, the review that never finished asks for nothing more.
     expect(says(p, "carry on")).not.toContain(NOTE);
@@ -481,9 +480,7 @@ describe("a verdict that comes in after the person approved the Unit as it is", 
     says(p, AS_IT_IS);
     const verified = checkpoint(p, "alpha", "verify", ["--over-unfinished-review"]);
     expect(verified.json?.verified, verified.out).toBe(true);
-    expect(checkpoint(p, "alpha", "ask").status).toBe(0);
-    says(p, "yes");
-    const approved = checkpoint(p, "alpha", "approve", ["--user-input", "yes"]);
+    const approved = checkpoint(p, "alpha", "approve");
     expect(approved.json?.approved, approved.out).toBe(true);
     expect(approved.json?.change_notices).toEqual([NOTICE]);
     return String(requested.json?.reviewFile);
