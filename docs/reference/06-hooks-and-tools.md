@@ -1683,7 +1683,10 @@ plan the question does not ask about (or one already answered), shell writes to
 them, and the files the plans name are refused until the engine routes work again. A file-tool write of a
 person's answer text in the record's `.aidlc-engine/answer-text/` folder passes
 in every Plan Approval state, so `log answer --details-file` can carry text a
-shell would act on.
+shell would act on. So does a file-tool write of the stage's own learnings diary
+(`<record>/construction/code-generation/memory.md`, exactly, reached through no
+link): the agent appends to it while it plans, for every Unit, and the diary
+lives in the stage's folder, not the Unit's.
 
 **While the engine's recovery question is open.** When a published
 guard-recovery ask is the active directive and the person has picked a remedy,

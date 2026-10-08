@@ -3677,6 +3677,54 @@ describe("t265b hook lifecycle", () => {
 // scratch file (only validate-grid reads it) passes whatever the Plan Approval
 // state, and writing it never starts generation. Everything else is judged as
 // before, including the OS temp file the composer used to write.
+// The stage's learnings diary (`<record>/construction/code-generation/memory.md`)
+// is appended to while the agent plans, for every Unit; it lives in the stage's
+// folder, not the Unit's, so a per-Unit plan wait used to refuse it and the
+// diary was skipped in silence. A file-tool write of exactly that file passes in
+// every Plan Approval state; the zero-Unit plan beside it still waits.
+describe("t265b the stage diary during a per-Unit plan wait", () => {
+  for (const policy of ["strict (set by you)", "off (from scope poc)"]) {
+    test(`a write to the stage diary passes while a Unit's plan waits (Guard Policy ${policy})`, () => {
+      const states: Array<[string, (proj: string) => void]> = [
+        ["no plan yet", (proj) => seedUnit(proj, "todo-core")],
+        ["plan written", (proj) => seedUnit(proj, "todo-core", { plan: true, answer: null })],
+        ["question open", (proj) => {
+          seedUnit(proj, "todo-core", { plan: true, answer: null });
+          const state = readFileSync(join(proj, RECORD_REL, "aidlc-state.md"), "utf-8");
+          writeActiveDirectiveMarker(proj, {
+            kind: "ask", ask_type: "plan-approval", stage: "code-generation", unit: "todo-core",
+            state_sha256: stateDigest(state),
+          });
+        }],
+      ];
+      for (const [state, seed] of states) {
+        const proj = scratchProject();
+        try {
+          seedState(proj);
+          const statePath = join(proj, RECORD_REL, "aidlc-state.md");
+          writeFileSync(statePath, readFileSync(statePath, "utf-8")
+            .replace("- **Scope**: poc\n", `- **Scope**: poc\n- **Guard Policy**: ${policy}\n`), "utf-8");
+          seed(proj);
+          const stageDir = join(proj, RECORD_REL, "construction", "code-generation");
+          const diary = runHook(proj, WRITE(join(stageDir, "memory.md")));
+          expect(diary.code, `${state}\n${diary.stderr}`).toBe(0);
+          expect(diary.stderr, state).toBe("");
+          // The zero-Unit plan beside the diary is not the diary.
+          expect(runHook(proj, WRITE(join(stageDir, "code-generation-plan.md"))).code, state).toBe(2);
+          // A link at the diary's path is not the diary either.
+          mkdirSync(stageDir, { recursive: true });
+          mkdirSync(join(proj, "src"), { recursive: true });
+          writeFileSync(join(proj, "src", "index.ts"), "export const a = 1;\n", "utf-8");
+          symlinkSync(join(proj, "src", "index.ts"), join(stageDir, "memory.md"), "file");
+          expect(runHook(proj, WRITE(join(stageDir, "memory.md"))).code, `${state}: link`).toBe(2);
+        } finally {
+          rmSync(proj, { recursive: true, force: true });
+        }
+      }
+    });
+  }
+});
+
 describe("t265b the composer's grid proposal during Code Generation", () => {
   const PROPOSAL = "aidlc/spaces/default/intents/.aidlc-engine/composer-proposal.json";
 
