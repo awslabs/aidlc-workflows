@@ -44,6 +44,7 @@ const DISPATCH = join(AIDLC_SRC, "tools", "aidlc.ts");
 const LOG = join(AIDLC_SRC, "tools", "aidlc-log.ts");
 const SESSION = "t-approve-needs-reply-to-question";
 const WAITS = "no new human reply has been received for this approval question";
+const SHOW_IT = "Show the gate and end your turn; their next reply answers it.";
 // The checkbox separator the state file uses.
 const SEP = "\u2014";
 
@@ -89,6 +90,83 @@ function slugOf(proj: string): string {
   return /- \*\*Current Stage\*\*: (\S+)/.exec(readFileSync(seededStateFile(proj), "utf-8"))![1];
 }
 
+// A team-owned Unit at Functional Design, built and reviewed READY: its
+// artifacts, its step's receipts, and its review with the findings given (a
+// table row each, status New), as the Unit gate requires before it opens.
+function teamProject(findings: string[] = []): string {
+  const team = createTestProject();
+  seedAidlcMemory(team);
+  writeFileSync(seededStateFile(team), `# AI-DLC State Tracking
+
+## Project Information
+- **Project**: approval needs a reply test
+- **Project Type**: Greenfield
+- **Scope**: feature
+- **State Version**: 8
+- **Skeleton Stance**: on
+
+## Runtime State
+- **Revision Count**: 0
+- **Construction Iteration**: unit-major
+- **Unit Ownership**: team
+
+## Scope Configuration
+- **Stages to Execute**: all
+- **Stages to Skip**: none
+- **Depth**: Standard
+- **Test Strategy**: Standard
+
+## Stage Progress
+
+### CONSTRUCTION PHASE
+- [-] functional-design ${SEP} EXECUTE
+- [ ] nfr-requirements ${SEP} EXECUTE
+- [ ] nfr-design ${SEP} EXECUTE
+- [ ] infrastructure-design ${SEP} EXECUTE
+- [ ] code-generation ${SEP} EXECUTE
+- [ ] build-and-test ${SEP} EXECUTE
+
+## Current Status
+- **Lifecycle Phase**: CONSTRUCTION
+- **Current Stage**: functional-design
+- **Status**: Running
+`);
+  seedBoltDag(team, ["alpha", "beta"]);
+  // The Unit's Functional Design artifacts, as the stage frontmatter lists them.
+  const dir = join(seededRecordDir(team), "construction", "alpha", "functional-design");
+  mkdirSync(dir, { recursive: true });
+  for (const name of ["entities", "rules", "functional-spec", "frontend-components", "traceability"]) {
+    writeFileSync(join(dir, artifactFilename(name)), `# ${name} for alpha\n`);
+  }
+  // The Unit's step on this stage, started and completed in this attempt.
+  const floor = latestMainWorkflowStageRunFloorForProject(team, "functional-design", true, "alpha");
+  for (const event of ["UNIT_STARTED", "UNIT_COMPLETED"]) {
+    appendAuditEntry(event, { Stage: "functional-design", Unit: "alpha", "Run floor": floor }, team);
+  }
+  // Its review, requested and returned READY, as the Unit gate requires.
+  const reviewer = "aidlc-architecture-reviewer-agent";
+  const review = [LOG, "review", "--stage", "functional-design", "--reviewer", reviewer, "--unit", "alpha",
+    "--iteration", "1", "--project-dir", team];
+  const opts = { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" as const,
+    env: { ...process.env, AIDLC_DISABLE_PLAN_APPROVAL_GUARD: "1" } };
+  const requested = spawnSync(BUN, review, opts);
+  expect(requested.status, `${requested.stdout}${requested.stderr}`).toBe(0);
+  const table = findings.length === 0 ? "No blocking findings.\n" : [
+    "| ID | Severity | Location | Finding | Required action | Status |",
+    "|---|---|---|---|---|---|",
+    ...findings.map((id) => `| ${id} | Major | functional-spec.md > section | Unit concern | Fix the Unit | New |`),
+    "",
+  ].join("\n");
+  appendFileSync(join(dir, artifactFilename("functional-spec")),
+    `\n## Review\n\n**Verdict:** READY\n**Reviewer:** ${reviewer}\n**Iteration:** 1\n\n### Findings\n\n${table}`);
+  const verdict = spawnSync(BUN, [...review, "--verdict", "READY"], opts);
+  expect(verdict.status, `${verdict.stdout}${verdict.stderr}`).toBe(0);
+  return team;
+}
+
+// The guard switches a team Unit gate still needs off in a bare fixture.
+const TEAM_FIXTURE = { AIDLC_SKIP_REVIEWER_GATE_GUARD: "1", AIDLC_SKIP_SOURCE_FRESHNESS: "1" };
+
 let proj: string;
 
 describe("t-approve-needs-reply-to-question: only the person's reply to the approval question records an approval", () => {
@@ -104,6 +182,7 @@ describe("t-approve-needs-reply-to-question: only the person's reply to the appr
   function expectWaits(out: string, slug: string) {
     expect(out).toContain('"kind":"print"');
     expect(out).toContain(WAITS);
+    expect(out).toContain(SHOW_IT);
     expect(rows(proj, "GATE_APPROVED")).toEqual([]);
     expect(readFileSync(seededStateFile(proj), "utf-8")).toContain(`- [?] ${slug}`);
   }
@@ -156,82 +235,50 @@ describe("t-approve-needs-reply-to-question: only the person's reply to the appr
   });
 
   test("a team Unit gate is bound at its own Unit's row", () => {
-    const team = createTestProject();
+    const team = teamProject();
     try {
-      seedAidlcMemory(team);
-      writeFileSync(seededStateFile(team), `# AI-DLC State Tracking
-
-## Project Information
-- **Project**: approval needs a reply test
-- **Project Type**: Greenfield
-- **Scope**: feature
-- **State Version**: 8
-- **Skeleton Stance**: on
-
-## Runtime State
-- **Revision Count**: 0
-- **Construction Iteration**: unit-major
-- **Unit Ownership**: team
-
-## Scope Configuration
-- **Stages to Execute**: all
-- **Stages to Skip**: none
-- **Depth**: Standard
-- **Test Strategy**: Standard
-
-## Stage Progress
-
-### CONSTRUCTION PHASE
-- [-] functional-design ${SEP} EXECUTE
-- [ ] nfr-requirements ${SEP} EXECUTE
-- [ ] nfr-design ${SEP} EXECUTE
-- [ ] infrastructure-design ${SEP} EXECUTE
-- [ ] code-generation ${SEP} EXECUTE
-- [ ] build-and-test ${SEP} EXECUTE
-
-## Current Status
-- **Lifecycle Phase**: CONSTRUCTION
-- **Current Stage**: functional-design
-- **Status**: Running
-`);
-      seedBoltDag(team, ["alpha", "beta"]);
-      // The Unit's Functional Design artifacts, as the stage frontmatter lists them.
-      const dir = join(seededRecordDir(team), "construction", "alpha", "functional-design");
-      mkdirSync(dir, { recursive: true });
-      for (const name of ["entities", "rules", "functional-spec", "frontend-components", "traceability"]) {
-        writeFileSync(join(dir, artifactFilename(name)), `# ${name} for alpha\n`);
-      }
-      // The Unit's step on this stage, started and completed in this attempt.
-      const floor = latestMainWorkflowStageRunFloorForProject(team, "functional-design", true, "alpha");
-      for (const event of ["UNIT_STARTED", "UNIT_COMPLETED"]) {
-        appendAuditEntry(event, { Stage: "functional-design", Unit: "alpha", "Run floor": floor }, team);
-      }
-      // Its review, requested and returned READY, as the Unit gate requires.
-      const reviewer = "aidlc-architecture-reviewer-agent";
-      const review = [LOG, "review", "--stage", "functional-design", "--reviewer", reviewer, "--unit", "alpha",
-        "--iteration", "1", "--project-dir", team];
-      const opts = { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" as const,
-        env: { ...process.env, AIDLC_DISABLE_PLAN_APPROVAL_GUARD: "1" } };
-      const requested = spawnSync(BUN, review, opts);
-      expect(requested.status, `${requested.stdout}${requested.stderr}`).toBe(0);
-      appendFileSync(join(dir, artifactFilename("functional-spec")),
-        `\n## Review\n\n**Verdict:** READY\n**Reviewer:** ${reviewer}\n**Iteration:** 1\n\n### Findings\n\nNo blocking findings.\n`);
-      const verdict = spawnSync(BUN, [...review, "--verdict", "READY"], opts);
-      expect(verdict.status, `${verdict.stdout}${verdict.stderr}`).toBe(0);
-      const fixture = { AIDLC_SKIP_REVIEWER_GATE_GUARD: "1", AIDLC_SKIP_SOURCE_FRESHNESS: "1" };
       person(team, "alpha is fine by me");
-      const opened = state(team, ["gate-start", "functional-design", "--unit", "alpha"], fixture);
+      const opened = state(team, ["gate-start", "functional-design", "--unit", "alpha"], TEAM_FIXTURE);
       expect(opened.rc, opened.out).toBe(0);
-      const early = state(team, ["approve", "functional-design", "--unit", "alpha", "--user-input", "Approve"], fixture);
+      const early = state(team, ["approve", "functional-design", "--unit", "alpha", "--user-input", "Approve"], TEAM_FIXTURE);
       expect(early.rc).not.toBe(0);
       expect(early.out).toContain(WAITS);
+      expect(early.out).toContain(SHOW_IT);
       expect(rows(team, "GATE_APPROVED")).toEqual([]);
       person(team, "Approve");
-      const approved = state(team, ["approve", "functional-design", "--unit", "alpha", "--user-input", "Approve"], fixture);
+      const approved = state(team, ["approve", "functional-design", "--unit", "alpha", "--user-input", "Approve"], TEAM_FIXTURE);
       expect(approved.rc, approved.out).toBe(0);
       const recorded = rows(team, "GATE_APPROVED");
       expect(recorded.length).toBe(1);
       expect(recorded[0].block).toContain("**Unit**: alpha");
+    } finally {
+      cleanupTestProject(team);
+    }
+  });
+
+  // A live run (Kiro IDE): the person's opening line was passed as the choice
+  // and the gate approved one second after it opened, the review's findings
+  // marked Accepted risk, the review never shown. Findings are accepted only
+  // on the approval row, so the words from before the gate accept nothing.
+  test("the person's words from before the gate, passed as the choice, approve nothing and accept no finding; their reply after it does both", () => {
+    const team = teamProject(["R-01"]);
+    try {
+      person(team, "please finish functional design");
+      const opened = state(team, ["gate-start", "functional-design", "--unit", "alpha"], TEAM_FIXTURE);
+      expect(opened.rc, opened.out).toBe(0);
+      const early = state(team, ["approve", "functional-design", "--unit", "alpha", "--user-input", "please finish functional design"], TEAM_FIXTURE);
+      expect(early.rc).not.toBe(0);
+      expect(early.out).toContain(SHOW_IT);
+      expect(rows(team, "GATE_APPROVED")).toEqual([]);
+      expect(readAuditShardEvents(team).some((row) => row.block.includes("Accepted risk"))).toBe(false);
+      person(team, "Approve");
+      const approved = state(team, ["approve", "functional-design", "--unit", "alpha", "--user-input", "Approve"], TEAM_FIXTURE);
+      expect(approved.rc, approved.out).toBe(0);
+      const recorded = rows(team, "GATE_APPROVED");
+      expect(recorded.length).toBe(1);
+      expect(recorded[0].block).toContain("**Review Finding Dispositions**");
+      expect(recorded[0].block).toContain("Accepted risk");
+      expect(recorded[0].block).toContain("R-01");
     } finally {
       cleanupTestProject(team);
     }

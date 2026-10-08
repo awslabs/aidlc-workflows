@@ -361,8 +361,8 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
   test("A4: with fresh hook activity the refusal gives no hooks-off step", () => {
     const first = field(proj, "Current Stage"); // feasibility
     guarded(proj, ["checkbox", `${first}=in-progress`]);
-    recordHumanTurn(proj);
     guarded(proj, ["gate-start", first]);
+    recordHumanTurn(proj);
     expect(guarded(proj, ["approve", first, "--user-input", "Approve"]).rc).toBe(0);
     const slug = field(proj, "Current Stage");
     guarded(proj, ["checkbox", `${slug}=in-progress`]);
@@ -394,8 +394,8 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
   test("A5: a reply that was not recorded gets only the person's step, never hooks or a check to turn off", () => {
     const first = field(proj, "Current Stage"); // feasibility
     guarded(proj, ["checkbox", `${first}=in-progress`]);
-    recordHumanTurn(proj);
     guarded(proj, ["gate-start", first]);
+    recordHumanTurn(proj);
     expect(guarded(proj, ["approve", first, "--user-input", "Approve"]).rc).toBe(0);
     const slug = field(proj, "Current Stage");
     guarded(proj, ["checkbox", `${slug}=in-progress`]);
@@ -431,14 +431,15 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
 
   // --- Scenario B: LEGIT (human turn after gate-open) ------------------------
   //
-  // The realistic flow: the human types (HUMAN_TURN), then the agent opens the
-  // gate and approves it. A HUMAN_TURN exists after the last resolution (none
-  // yet) -> approve COMMITS, exactly one GATE_APPROVED.
+  // The realistic flow: the agent opens the gate and shows it, the person
+  // replies (HUMAN_TURN), the agent approves. A HUMAN_TURN exists after the
+  // last resolution (none yet) and after the gate was shown -> approve COMMITS,
+  // exactly one GATE_APPROVED.
   test("B: approve COMMITS when a HUMAN_TURN was recorded this turn", () => {
     const slug = field(proj, "Current Stage"); // feasibility
     guarded(proj, ["checkbox", `${slug}=in-progress`]);
-    recordHumanTurn(proj); // the human typed a prompt
-    guarded(proj, ["gate-start", slug]); // agent opens the gate (same turn)
+    guarded(proj, ["gate-start", slug]); // agent opens and shows the gate
+    recordHumanTurn(proj); // the human replied
     const r = guarded(proj, ["approve", slug, "--user-input", "Approve"]);
     expect(r.rc, r.out).toBe(0);
     expect(eventCount(proj, "GATE_APPROVED")).toBe(1);
@@ -451,8 +452,8 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
   test("B2: approve COMMITS when the reply carries the (Recommended) decorator", () => {
     const slug = field(proj, "Current Stage");
     guarded(proj, ["checkbox", `${slug}=in-progress`]);
-    recordHumanTurn(proj);
     guarded(proj, ["gate-start", slug]);
+    recordHumanTurn(proj);
     const r = guarded(proj, [
       "approve",
       slug,
@@ -715,8 +716,8 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
   test("C: a single HUMAN_TURN approves ONE gate; a second gate this turn REFUSES", () => {
     const slug1 = field(proj, "Current Stage"); // feasibility
     guarded(proj, ["checkbox", `${slug1}=in-progress`]);
-    recordHumanTurn(proj);
     guarded(proj, ["gate-start", slug1]);
+    recordHumanTurn(proj);
 
     // First gate this turn: commits.
     const r1 = guarded(proj, ["approve", slug1, "--user-input", "Approve"]);
@@ -742,8 +743,8 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
   test("C2: a fresh HUMAN_TURN after the first commit approves the second gate", () => {
     const slug1 = field(proj, "Current Stage");
     guarded(proj, ["checkbox", `${slug1}=in-progress`]);
-    recordHumanTurn(proj);
     guarded(proj, ["gate-start", slug1]);
+    recordHumanTurn(proj);
     expect(guarded(proj, ["approve", slug1, "--user-input", "Approve"]).rc).toBe(0);
 
     const slug2 = field(proj, "Current Stage");
@@ -960,8 +961,8 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
   test("E: a HUMAN_TURN already spent on a prior gate is STALE -> REFUSE", () => {
     const slug1 = field(proj, "Current Stage");
     guarded(proj, ["checkbox", `${slug1}=in-progress`]);
-    recordHumanTurn(proj);
     guarded(proj, ["gate-start", slug1]);
+    recordHumanTurn(proj);
     expect(guarded(proj, ["approve", slug1, "--user-input", "Approve"]).rc).toBe(0); // spends the turn
 
     // New gate, NO fresh HUMAN_TURN - the prior GATE_APPROVED is after the only turn.
