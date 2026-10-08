@@ -3,21 +3,28 @@
 // person clones could therefore set any name the engine reads: a check of
 // theirs switched off, records pointed at another folder, a tool run from a
 // directory of the repository's choosing. The installed engine is built with
-// that autoload off; a Bun-run tree cannot carry a build flag, so this module
-// runs first instead. `aidlc-runtime-paths.ts` imports it, and every entry
-// evaluates that module before its own body, so every name a `.env` file in
-// the working directory assigns is removed from process.env again before any
-// read. Bun never overrides a name the shell already set, so only a name the
-// shell did not set can come from the file. PATH is kept regardless: a
-// repository line assigning it must not take the engine's executables away. A
-// child Bun process loads the files again and runs this again on its first
-// import.
+// that autoload off, so nothing in its environment came from a file. A Bun-run
+// tree cannot carry a build flag, so this module runs first instead:
+// `aidlc-runtime-paths.ts` imports it, every entry evaluates that module before
+// its own body, and every AI-DLC or host-tool name a `.env` file in the working
+// directory assigns is removed from process.env again before any read. A child
+// Bun process loads the files again and runs this again on its first import.
 //
-// ponytail: a name set in both the shell and the repository's .env is dropped
-// too (fail closed for a guard, a lost setting otherwise); compare the process
-// value with the file's literal and keep a differing one if someone hits it.
+// Bun never overrides a name the shell already set, and once a file names a
+// variable there is no telling the two apart. So the drop is narrow: the
+// engine's own namespace and the host tools' names that steer where it reads,
+// writes or runs. The person's application names (an AWS profile, a database
+// URL, whatever their tests need) stay as the shell had them, so a command the
+// engine runs for them sees the same environment their terminal does. Two
+// declarations only a host makes are kept even when the file names them: the
+// unattended driver's flag (dropping it would let a driver's turns pass for a
+// person's) and the dispatcher's internal tokens to its own children.
+//
+// ponytail: an AI-DLC name set in both the shell and the repository's .env is
+// dropped too (a lost setting, never a loosened guard); the environment is the
+// documented place for those names, a project .env is not.
 import { readFileSync } from "node:fs";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 
 export const BUN_DOTENV_FILES = [
   ".env",
@@ -31,6 +38,23 @@ export const BUN_DOTENV_FILES = [
 ];
 
 const ASSIGNMENT = /^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=/gm;
+// Names the engine reads as its own, or that the host tools use to tell it
+// where the project, the person's settings, a plugin or a git configuration is.
+const GUARDED = /^(?:AIDLC_|AWS_AIDLC_|CLAUDE_|KIRO_|CODEX_|CURSOR_|COPILOT_|XDG_|GIT_CONFIG)/i;
+// Declarations only the host makes: kept even when a file names them.
+const HOST_ONLY = /^AIDLC_(?:UNATTENDED$|INTERNAL_)/i;
+
+// Same test as isCompiledExecutable in aidlc-runtime-paths.ts, which imports
+// this module and so cannot be imported back.
+function compiledHere(): boolean {
+  const executable = basename(process.execPath.replace(/\\/g, "/")).toLowerCase();
+  return /\/(?:\$bunfs|%7ebun|~bun)\//i.test(import.meta.url.replace(/\\/g, "/")) || !executable.startsWith("bun");
+}
+
+/** Whether Bun loaded the folder's dotenv files into this process at all. */
+export function dotenvLoaded(): boolean {
+  return !compiledHere() && !process.execArgv.includes("--no-env-file");
+}
 
 /** Every name the folder's Bun dotenv files assign, in file order, duplicates included. */
 export function dotenvAssignedNames(dir = process.cwd()): string[] {
@@ -53,11 +77,17 @@ export function setByDotenvFile(name: string, dir = process.cwd()): boolean {
   return dotenvAssignedNames(dir).some((assigned) => assigned.toUpperCase() === wanted);
 }
 
-/** Remove every name the folder's dotenv files assign from `env`, PATH excepted; returns what was dropped. */
-export function dropDotenvNames(env: NodeJS.ProcessEnv = process.env, dir = process.cwd()): string[] {
+/**
+ * Remove from `env` every AI-DLC or host-tool name the folder's dotenv files
+ * assign, host-only declarations excepted; returns what was dropped. Nothing is
+ * dropped when Bun loaded no file (`loaded` false): then everything present
+ * came from the host.
+ */
+export function dropDotenvNames(env: NodeJS.ProcessEnv = process.env, dir = process.cwd(), loaded = dotenvLoaded()): string[] {
+  if (!loaded) return [];
   const dropped: string[] = [];
   for (const name of dotenvAssignedNames(dir)) {
-    if (name.toUpperCase() === "PATH" || !(name in env)) continue;
+    if (!GUARDED.test(name) || HOST_ONLY.test(name) || !(name in env)) continue;
     delete env[name];
     dropped.push(name);
   }
