@@ -5,7 +5,7 @@
 // settings only (its scope is "application"), so the switch covers every
 // project on the computer: AI-DLC turns it off only when the person says yes,
 // and keeps their answer once per machine so no project asks again.
-import { existsSync, mkdirSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { insertJsoncSetting, jsoncRootMembers, jsoncSettingValue, replaceJsoncSetting } from "./aidlc-distribution.ts";
@@ -31,8 +31,9 @@ export type KiroIdeWorkflows = {
   readable: boolean;
 };
 
-// A value a project's .env file sets is not Kiro's: Bun loads .env, so a
-// repository could otherwise point these at a file of its choosing.
+// A value a project's .env file sets is not the person's: Bun loads .env, so a
+// repository could otherwise point AI-DLC at a settings file of its choosing or
+// hide the question. Every name this file reads goes through here.
 function hostValue(env: NodeJS.ProcessEnv, name: string): string | undefined {
   const value = env[name]?.trim();
   return value && !setByDotenvFile(name) ? value : undefined;
@@ -57,17 +58,17 @@ export function kiroIdeUserSettingsPath(
 ): string | null {
   const seam = hostValue(env, "AIDLC_TEST_KIRO_IDE_SETTINGS");
   if (seam) return seam;
-  if (env.AIDLC_TEST_NAME !== undefined || env.AIDLC_TEST_CONFIG_DETECTION_JSON !== undefined) return null;
+  if (hostValue(env, "AIDLC_TEST_NAME") || hostValue(env, "AIDLC_TEST_CONFIG_DETECTION_JSON")) return null;
   const cache = hostValue(env, "VSCODE_CODE_CACHE_PATH");
   if (cache && basename(dirname(cache)) === "CachedData") {
     return join(dirname(dirname(cache)), "User", "settings.json");
   }
-  const home = env.HOME?.trim() || env.USERPROFILE?.trim() || homedir();
+  const home = hostValue(env, "HOME") ?? hostValue(env, "USERPROFILE") ?? homedir();
   const appData = platform === "win32"
-    ? env.APPDATA?.trim() || join(home, "AppData", "Roaming")
+    ? hostValue(env, "APPDATA") ?? join(home, "AppData", "Roaming")
     : platform === "darwin"
     ? join(home, "Library", "Application Support")
-    : env.XDG_CONFIG_HOME?.trim() || join(home, ".config");
+    : hostValue(env, "XDG_CONFIG_HOME") ?? join(home, ".config");
   return join(appData, "Kiro", "User", "settings.json");
 }
 
@@ -104,7 +105,9 @@ export function setKiroIdeWorkflows(
     : replaceJsoncSetting(text, KIRO_WORKFLOWS_SETTING, value);
   if (next === null) throw new Error(unreadableSettingsMessage(settingsPath, enabled));
   mkdirSync(dirname(settingsPath), { recursive: true });
-  writeFileAtomic(settingsPath, next);
+  // A settings file linked from elsewhere (a dotfiles folder, say) stays a link:
+  // the write goes to the file it points to.
+  writeFileAtomic(existsSync(settingsPath) ? realpathSync(settingsPath) : settingsPath, next);
   return { settingsPath, changed: true };
 }
 

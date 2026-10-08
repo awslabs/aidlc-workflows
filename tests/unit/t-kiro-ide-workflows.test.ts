@@ -7,7 +7,7 @@
 import { afterAll, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { randomUUID } from "node:crypto";
 import { spawnSync } from "node:child_process";
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { cleanupTestProject, createTestProject, REPO_ROOT } from "../harness/fixtures.ts";
@@ -163,6 +163,18 @@ describe("Kiro IDE's user settings file", () => {
     expect(readFileSync(broken.settingsPath, "utf-8")).toBe("{ not json");
   });
 
+  test.skipIf(process.platform === "win32")("a settings file linked from elsewhere (a dotfiles folder) stays a link; the file it points to changes", () => {
+    const m = machine();
+    const dotfiles = join(m.root, "dotfiles", "kiro-settings.json");
+    mkdirSync(join(m.root, "dotfiles"), { recursive: true });
+    writeFileSync(dotfiles, ON_WITH_COMMENTS);
+    mkdirSync(join(m.root, "Kiro", "User"), { recursive: true });
+    symlinkSync(dotfiles, m.settingsPath);
+    expect(setKiroIdeWorkflows(false, m.env)).toEqual({ settingsPath: m.settingsPath, changed: true });
+    expect(lstatSync(m.settingsPath).isSymbolicLink()).toBe(true);
+    expect(readFileSync(dotfiles, "utf-8")).toBe(ON_WITH_COMMENTS.replace(`"${KEY}": true`, `"${KEY}": false`));
+  });
+
   test("the person's answer is kept once per machine", () => {
     const m = machine();
     withEnv(m.env, () => {
@@ -171,6 +183,71 @@ describe("Kiro IDE's user settings file", () => {
       expect(readKiroWorkflowsAnswer()).toBe("on");
       expect(readFileSync(join(m.env.AIDLC_INSTALL_ROOT, "kiro-ide-workflows"), "utf-8")).toBe("on\n");
     });
+  });
+});
+
+// Bun loads the .env files of the folder it runs in, as it does for
+// `bun .kiro/tools/aidlc.ts` in a cloned repository. These run a child Bun in
+// such a folder with only the person's own environment.
+describe("a project's .env file", () => {
+  const MODULE = join(REPO_ROOT, "core", "tools", "aidlc-kiro-ide-workflows.ts");
+  const CHILD = `import * as w from ${JSON.stringify(MODULE)};
+const path = w.kiroIdeUserSettingsPath();
+const due = w.kiroWorkflowsQuestionDue();
+const ask = w.kiroIdeWorkflowsAsk("aidlc");
+const set = path === null ? null : w.setKiroIdeWorkflows(false).settingsPath;
+console.log(JSON.stringify({ path, due, ask, set }));`;
+
+  // Kiro's default settings file for this platform under the person's home.
+  function ownSettings(home: string): string {
+    const base = process.platform === "win32"
+      ? join(home, "AppData", "Roaming")
+      : process.platform === "darwin"
+      ? join(home, "Library", "Application Support")
+      : join(home, ".config");
+    return join(base, "Kiro", "User", "settings.json");
+  }
+
+  function inProject(dotenv: (project: string) => string, settingsFor: (home: string) => string, extra: (home: string) => Record<string, string> = () => ({})) {
+    const home = temp("aidlc-kiro-workflows-home-");
+    const project = temp("aidlc-kiro-workflows-dotenv-");
+    writeFileSync(join(project, ".env"), dotenv(project));
+    const settings = settingsFor(home);
+    mkdirSync(join(settings, ".."), { recursive: true });
+    writeFileSync(settings, ON_WITH_COMMENTS);
+    const result = spawnSync(process.execPath, ["-e", CHILD], {
+      cwd: project,
+      encoding: "utf-8",
+      env: {
+        PATH: "",
+        HOME: home,
+        USERPROFILE: home,
+        APPDATA: join(home, "AppData", "Roaming"),
+        AIDLC_INSTALL_ROOT: join(home, "aidlc"),
+        ...(process.env.SystemRoot ? { SystemRoot: process.env.SystemRoot } : {}),
+        ...extra(home),
+      },
+    });
+    expect(result.status, result.stderr).toBe(0);
+    const seen = JSON.parse(result.stdout.trim()) as { path: string | null; due: boolean; ask: string; set: string | null };
+    return { home, project, settings, seen };
+  }
+
+  test("cannot point AI-DLC at a settings file of its choosing", () => {
+    const run = inProject((project) => `XDG_CONFIG_HOME=${join(project, "repo-config")}\nAPPDATA=${join(project, "repo-config")}\n`, ownSettings);
+    expect(run.seen).toMatchObject({ path: run.settings, due: true, set: run.settings });
+    expect(readFileSync(run.settings, "utf-8")).toBe(ON_WITH_COMMENTS.replace(`"${KEY}": true`, `"${KEY}": false`));
+    expect(existsSync(join(run.project, "repo-config"))).toBe(false);
+  });
+
+  test("cannot hide the question in a terminal or in a Kiro IDE chat", () => {
+    const dotenv = () => "AIDLC_TEST_NAME=x\nAIDLC_TEST_CONFIG_DETECTION_JSON={}\n";
+    const terminal = inProject(dotenv, ownSettings);
+    expect(terminal.seen).toMatchObject({ path: terminal.settings, due: true, set: terminal.settings });
+    const userData = (home: string) => join(home, "ud", "User", "settings.json");
+    const chat = inProject(dotenv, userData, (home) => ({ VSCODE_CODE_CACHE_PATH: join(home, "ud", "CachedData", "abc") }));
+    expect(chat.seen).toMatchObject({ path: chat.settings, due: true, set: chat.settings });
+    expect(chat.seen.ask).toContain("Do you want me to turn Workflows off?");
   });
 });
 
