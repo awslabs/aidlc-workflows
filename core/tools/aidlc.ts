@@ -2715,11 +2715,16 @@ async function runSensorScriptFile(
  * leaves it, and a path already under `documents/` all reach the verb
  * unchanged: the first two are refused there as before, and the last is
  * indexed where it lies. The returned args carry the copy's path and what to
- * say about it.
+ * say about it. A document over the per-document cap, or a folder over a batch
+ * cap, is refused here instead: the refusal is said and nothing is copied, so
+ * the verb's own after-the-fact refusal no longer leaves copies behind.
  */
 // The knowledge verbs' flags that take a value, so the path is found as the
 // one token that is neither a flag nor a flag's value.
-const KNOWLEDGE_VALUE_FLAGS = new Set(["--space", "--to", "--text-file", "--source-revision", "--project-dir"]);
+const KNOWLEDGE_VALUE_FLAGS = new Set([
+  "--space", "--to", "--text-file", "--source-revision", "--project-dir",
+  "--copied-from", "--copied-ignored", "--copied-left-out",
+]);
 
 function knowledgePositionalAt(args: readonly string[]): number {
   for (let index = 1; index < args.length; index++) {
@@ -2733,7 +2738,7 @@ function knowledgePositionalAt(args: readonly string[]): number {
   return -1;
 }
 
-async function withNamedDocumentCopied(args: string[]): Promise<string[]> {
+async function withNamedDocumentCopied(args: string[]): Promise<string[] | { refusal: string }> {
   if (args[0] !== "onboard") return args;
   const at = knowledgePositionalAt(args);
   try {
@@ -2756,9 +2761,17 @@ async function withNamedDocumentCopied(args: string[]): Promise<string[]> {
     const documents = kb.documentsDir(projectDir, space);
     if (existsSync(documents) && inside(realpathSync(documents))) return args;
     const copied = utility.copyNamedDocumentIntoKnowledge(projectDir, kb, space, absolute);
+    // Over a cap: the person hears why in their own terms, and nothing was
+    // copied, so a retry adds no second folder.
+    if ("refusal" in copied) return copied;
     const next = [...args];
     next[at] = copied.target;
-    return [...next, "--copied-from", given, "--copied-ignored", copied.gitIgnored];
+    return [
+      ...next,
+      "--copied-from", given,
+      "--copied-ignored", copied.gitIgnored,
+      ...(copied.leftOut > 0 ? ["--copied-left-out", String(copied.leftOut)] : []),
+    ];
   } catch {
     // Nothing copied and nothing said: the verb runs on what it was given and
     // reports its own refusal.
@@ -2770,7 +2783,12 @@ async function execute(action: Action): Promise<number> {
   const isCompiled = isCompiledExecutable();
   if (action.type === "delegate") {
     if (action.tool === TOOLS.knowledge) {
-      action = { ...action, args: await withNamedDocumentCopied(action.args) };
+      const prepared = await withNamedDocumentCopied(action.args);
+      if (!Array.isArray(prepared)) {
+        text(2, `${prepared.refusal}\n`);
+        return 1;
+      }
+      action = { ...action, args: prepared };
     }
     // Tool modules are imported lazily in compiled mode to keep dev-mode startup
     // fast and to avoid loading every tool for help/version calls.

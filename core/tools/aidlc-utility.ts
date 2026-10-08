@@ -9568,7 +9568,9 @@ function documentInputGitIgnored(projectRoot: string, relPath: string): "yes" | 
  * copy rule below, and a folder keeps its relative layout under a folder of
  * its own name. Only regular files are copied, through the knowledge walk's
  * own rules, so a symlink inside the named folder is passed over rather than
- * followed.
+ * followed, and a file inside it that git ignores is left where it is. A
+ * document over the per-document cap, or a folder over a batch cap, is refused
+ * before anything is copied rather than after.
  *
  * The caller decides WHETHER to copy: a path already inside `documents/` is
  * indexed where it is, and a path outside the project is refused by the
@@ -9582,12 +9584,84 @@ export function ensureKnowledgeDocumentsFolder(
   kb: typeof import("./aidlc-knowledge.ts"),
   space: string,
 ): string {
+  // Trusted BEFORE anything is created, as the document-input path does at its
+  // own space resolution: in a cloned repo whose `knowledge` is a symlink, a
+  // create-then-check order makes the folder in the link's target, outside the
+  // project, before the refusal. Checked again after the create, in case the
+  // chain changed under us.
+  kb.assertKnowledgeRootTrusted(projectDir, space);
   const documentsAbs = kb.documentsDir(projectDir, space);
   mkdirSync(documentsAbs, { recursive: true });
-  // The folder is new or the person's; either way the knowledge root must still
-  // be theirs, checked after the create exactly as the document-input path does.
   kb.assertKnowledgeRootTrusted(projectDir, space);
   return realpathSync(documentsAbs);
+}
+
+/**
+ * The paths among `absPaths` that git ignores, in one `check-ignore` call.
+ * Empty when git cannot say (not a repository, or the command failed): the
+ * named path's own ignore state is what the person is told about, and a check
+ * that could not run never silently drops a document.
+ */
+function gitIgnoredAmong(projectRoot: string, absPaths: string[]): Set<string> {
+  if (absPaths.length === 0 || !insideGitRepository(projectRoot)) return new Set();
+  const checked = spawnSync(
+    "git",
+    [...GIT_PLATFORM_ARGS, "-C", projectRoot, "check-ignore", "-z", "--stdin"],
+    {
+      env: gitEnvironment(process.env),
+      input: absPaths.join("\0"),
+      encoding: "utf-8",
+      timeout: DEFAULT_SUBPROCESS_TIMEOUT_MS,
+    },
+  );
+  // Status 0 means some of them are ignored, 1 means none are; anything else
+  // is git failing to answer.
+  if (checked.error !== undefined || checked.signal !== null || checked.status !== 0) return new Set();
+  return new Set(
+    (checked.stdout ?? "").split("\0").filter((line) => line !== "").map((line) => resolve(projectRoot, line)),
+  );
+}
+
+/**
+ * Why the engine will not copy what the person named: a single document over
+ * the per-document cap, or a folder over a batch cap. Checked BEFORE the copy,
+ * because the verb's own refusal comes after one, which used to leave the
+ * copies behind for a retry to duplicate. Null when the copy can go ahead.
+ */
+function knowledgeCopyCapRefusal(
+  projectDir: string,
+  shown: string,
+  entries: Array<{ file: string; size: number }>,
+  kb: typeof import("./aidlc-knowledge.ts"),
+): string | null {
+  const smaller = "Name a subfolder, or one document at a time.";
+  const big = entries.find((entry) => entry.size > kb.EXTRACT_INPUT_BYTE_CAP);
+  if (big !== undefined) {
+    return `${toPosix(relative(projectDir, big.file))} is ${big.size} bytes, over the ` +
+      `${kb.EXTRACT_INPUT_BYTE_CAP}-byte per-document cap; nothing was copied. Split it or reduce it ` +
+      "below the cap, then name it again.";
+  }
+  if (entries.length > kb.EXTRACT_BATCH_DOC_CAP) {
+    return `${shown} holds ${entries.length} documents, over the ${kb.EXTRACT_BATCH_DOC_CAP}-document ` +
+      `batch cap; nothing was copied or indexed. ${smaller}`;
+  }
+  const bytes = entries.reduce((total, entry) => total + entry.size, 0);
+  if (bytes > kb.EXTRACT_BATCH_BYTE_CAP) {
+    return `${shown} holds ${entries.length} documents of ${bytes} bytes, over the ` +
+      `${kb.EXTRACT_BATCH_BYTE_CAP}-byte batch cap; nothing was copied or indexed. ${smaller}`;
+  }
+  return null;
+}
+
+/** What the command layer copied in for the person, for the line it says. */
+export interface KnowledgeDocumentCopy {
+  target: string;
+  /** Documents copied, which is what the verb then indexes. */
+  files: number;
+  /** Whether git ignores the path they named. */
+  gitIgnored: "yes" | "no" | "unknown";
+  /** Files inside a named folder that git ignores, left where they are. */
+  leftOut: number;
 }
 
 export function copyNamedDocumentIntoKnowledge(
@@ -9595,13 +9669,36 @@ export function copyNamedDocumentIntoKnowledge(
   kb: typeof import("./aidlc-knowledge.ts"),
   space: string,
   absPath: string,
-): { target: string; files: number; gitIgnored: "yes" | "no" | "unknown" } {
+): KnowledgeDocumentCopy | { refusal: string } {
   const documentsReal = ensureKnowledgeDocumentsFolder(projectDir, kb, space);
-  const gitIgnored = documentInputGitIgnored(projectDir, toPosix(relative(projectDir, absPath)));
+  const shown = toPosix(relative(projectDir, absPath));
+  const gitIgnored = documentInputGitIgnored(projectDir, shown);
   const real = realpathSync(absPath);
-  if (!statSync(real).isDirectory()) {
+  const named = statSync(real);
+  if (!named.isDirectory()) {
+    const refusal = knowledgeCopyCapRefusal(projectDir, shown, [{ file: real, size: named.size }], kb);
+    if (refusal !== null) return { refusal };
     const { target } = copyIntoDocuments(kb, documentsReal, basename(real), readFileSync(real));
-    return { target, files: 1, gitIgnored };
+    return { target, files: 1, gitIgnored, leftOut: 0 };
+  }
+  const found: Array<{ file: string; size: number }> = [];
+  for (const file of kb.walkDocuments(real)) {
+    try {
+      found.push({ file, size: statSync(file).size });
+    } catch { /* vanished mid-walk; it is not copied and not counted */ }
+  }
+  // A file inside the folder that git ignores stays where it is: the person
+  // named the folder, not that file, and copying it in would commit what they
+  // keep out of git. A folder that is itself ignored is copied whole, because
+  // that one they did name, and the line tells them the copy is not ignored.
+  const ignoredInside = gitIgnored === "no"
+    ? gitIgnoredAmong(projectDir, found.map((entry) => entry.file))
+    : new Set<string>();
+  const copyable = found.filter((entry) => !ignoredInside.has(entry.file));
+  const refusal = knowledgeCopyCapRefusal(projectDir, shown, copyable, kb);
+  if (refusal !== null) return { refusal };
+  if (copyable.length === 0) {
+    throw new Error(`${shown} holds no documents to add`);
   }
   // A folder of its own name, never merged into one already there: the copy is
   // this folder as it is now, not a blend of two.
@@ -9613,17 +9710,12 @@ export function copyNamedDocumentIntoKnowledge(
     }
     root = join(documentsReal, `${base}-${n}`);
   }
-  let files = 0;
-  for (const file of kb.walkDocuments(real)) {
-    const target = join(root, relative(real, file));
+  for (const entry of copyable) {
+    const target = join(root, relative(real, entry.file));
     mkdirSync(dirname(target), { recursive: true });
-    writeFileSync(target, readFileSync(file), { flag: "wx" });
-    files++;
+    writeFileSync(target, readFileSync(entry.file), { flag: "wx" });
   }
-  if (files === 0) {
-    throw new Error(`${toPosix(relative(projectDir, absPath))} holds no documents to add`);
-  }
-  return { target: root, files, gitIgnored };
+  return { target: root, files: copyable.length, gitIgnored, leftOut: found.length - copyable.length };
 }
 
 // Why an onboarded document came back with no text, in the person's terms.

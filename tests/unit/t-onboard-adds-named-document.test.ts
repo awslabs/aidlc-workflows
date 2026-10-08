@@ -1,5 +1,6 @@
 // covers: function:withNamedDocumentCopied, function:knowledgePositionalAt,
 // function:copyNamedDocumentIntoKnowledge, function:ensureKnowledgeDocumentsFolder,
+// function:gitIgnoredAmong, function:knowledgeCopyCapRefusal,
 // function:onboardCopyNote, subcommand:aidlc-knowledge:onboard
 //
 // A person says "start with vision.md" and the document is added. Before this,
@@ -44,6 +45,15 @@ afterEach(() => {
 function project(): string {
   const proj = createTestProject();
   created.push(proj);
+  return proj;
+}
+
+/** The same project, under git, with the ignore rules the case needs. */
+function gitProject(ignore: string): string {
+  const proj = project();
+  const init = spawnSync("git", ["init", "-q"], { cwd: proj, encoding: "utf-8" });
+  expect(init.status, `${init.stdout ?? ""}${init.stderr ?? ""}`).toBe(0);
+  writeFileSync(join(proj, ".gitignore"), ignore, "utf-8");
   return proj;
 }
 
@@ -94,7 +104,10 @@ describe("the document a person names is added, wherever it is in their project"
     expect(indexedPaths(result.json)).toEqual([`${SOURCE}/vision.md`]);
     const note = String(result.json.onboard_note);
     expect(note).toContain(`Copied vision.md into AI-DLC's documents as ${destination} and added it.`);
-    expect(note).toContain("Later changes to your own vision.md are not in the knowledge base until you add it again.");
+    // Never "add it again": a second add copies the original beside the first,
+    // which would leave two live rows for one document.
+    expect(note).toContain("The knowledge base reads that copy from now on, not your own vision.md.");
+    expect(note).not.toContain("again");
     // The destination is named once, and their own file is untouched.
     expect(note.split(destination)).toHaveLength(2);
     expect(existsSync(join(proj, "vision.md"))).toBe(true);
@@ -168,5 +181,83 @@ describe("the document a person names is added, wherever it is in their project"
     expect(result.status, result.out).not.toBe(0);
     expect(result.out).toContain("is outside");
     expect(existsSync(join(proj, DOCUMENTS, "linked.md"))).toBe(false);
+  });
+
+  test("a file inside a named folder that git ignores is left where it is, and the line says so", () => {
+    const proj = gitProject("credentials.yaml\n");
+    mkdirSync(join(proj, "specs"), { recursive: true });
+    writeFileSync(join(proj, "specs", "overview.md"), "# Overview\n", "utf-8");
+    writeFileSync(join(proj, "specs", "credentials.yaml"), "token: sh-hh\n", "utf-8");
+    const result = onboard(proj, ["specs"]);
+    expect(result.status, result.out).toBe(0);
+    expect(readFileSync(join(proj, DOCUMENTS, "specs", "overview.md"), "utf-8")).toBe("# Overview\n");
+    // The whole point: what they keep out of git is not copied into a folder
+    // that is committed.
+    expect(existsSync(join(proj, DOCUMENTS, "specs", "credentials.yaml"))).toBe(false);
+    expect(indexedPaths(result.json)).toEqual([`${SOURCE}/specs/overview.md`]);
+    expect(String(result.json.onboard_note)).toContain(
+      "1 file inside it is kept out of git, so it was not copied; name one directly to add it.",
+    );
+  });
+
+  test("a git-ignored file the person names directly is still added, and the line says the copy is not ignored", () => {
+    const proj = gitProject("notes.md\n");
+    writeFileSync(join(proj, "notes.md"), "# Notes\n", "utf-8");
+    const result = onboard(proj, ["notes.md"]);
+    expect(result.status, result.out).toBe(0);
+    expect(readFileSync(join(proj, DOCUMENTS, "notes.md"), "utf-8")).toBe("# Notes\n");
+    expect(indexedPaths(result.json)).toEqual([`${SOURCE}/notes.md`]);
+    const note = String(result.json.onboard_note);
+    expect(note).toContain("Your notes.md is kept out of git, but this copy is not");
+    expect(note).not.toContain("not copied");
+  });
+
+  test("a folder git ignores is copied whole when the person names it", () => {
+    const proj = gitProject("private/\n");
+    mkdirSync(join(proj, "private"), { recursive: true });
+    writeFileSync(join(proj, "private", "a.md"), "# A\n", "utf-8");
+    writeFileSync(join(proj, "private", "b.md"), "# B\n", "utf-8");
+    const result = onboard(proj, ["private"]);
+    expect(result.status, result.out).toBe(0);
+    expect(indexedPaths(result.json).sort()).toEqual([`${SOURCE}/private/a.md`, `${SOURCE}/private/b.md`]);
+    const note = String(result.json.onboard_note);
+    expect(note).toContain("Your private is kept out of git, but this copy is not");
+    expect(note).not.toContain("not copied");
+  });
+
+  test("the documents folder is never created outside the project, whatever the knowledge root points at", () => {
+    const proj = project();
+    const outside = project();
+    mkdirSync(join(proj, "aidlc", "spaces", SPACE), { recursive: true });
+    symlinkSync(outside, join(proj, "aidlc", "spaces", SPACE, "knowledge"));
+    writeFileSync(join(proj, "vision.md"), "# Vision\n", "utf-8");
+    const result = onboard(proj, ["vision.md"]);
+    expect(result.status, result.out).not.toBe(0);
+    // Nothing is created through the link, and nothing is copied through it.
+    expect(existsSync(join(outside, "documents"))).toBe(false);
+  });
+
+  test("a folder with more documents than the batch cap copies nothing and says how many it holds", () => {
+    const proj = project();
+    mkdirSync(join(proj, "specs"), { recursive: true });
+    for (let n = 1; n <= 21; n++) writeFileSync(join(proj, "specs", `s${n}.md`), `# ${n}\n`, "utf-8");
+    const result = onboard(proj, ["specs"]);
+    expect(result.status, result.out).not.toBe(0);
+    expect(result.out).toContain("specs holds 21 documents, over the 20-document batch cap");
+    expect(result.out).toContain("nothing was copied or indexed");
+    // Nothing left behind, so naming it again cannot make a second folder.
+    expect(existsSync(join(proj, DOCUMENTS, "specs"))).toBe(false);
+    expect(existsSync(join(proj, DOCUMENTS, "specs-2"))).toBe(false);
+  });
+
+  test("a document over the per-document cap is refused before it is copied", () => {
+    const proj = project();
+    // One byte over the cap the verb itself refuses at, so the copy is what is
+    // being tested, not the indexing.
+    writeFileSync(join(proj, "huge.md"), Buffer.alloc(32 * 1024 * 1024 + 1, 0x61));
+    const result = onboard(proj, ["huge.md"]);
+    expect(result.status, result.out).not.toBe(0);
+    expect(result.out).toContain("over the 33554432-byte per-document cap; nothing was copied");
+    expect(existsSync(join(proj, DOCUMENTS, "huge.md"))).toBe(false);
   });
 });

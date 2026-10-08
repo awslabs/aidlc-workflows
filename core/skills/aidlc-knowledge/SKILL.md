@@ -140,9 +140,13 @@ A relative path resolves from the PROJECT ROOT, not from `knowledge/`; an
 absolute path works too. A path anywhere in the project is added: one inside
 `documents/` is indexed where it lies, and one outside it is copied in first,
 keeping its own name (a folder keeps its layout). The result then carries an
-`onboard_note`: say that line to the person, because it names where the copy
-is and that their own file is not followed afterwards. A path outside the
-project is refused. Run `onboard` through the route above, not the tool file
+`onboard_note`: say that line to the person, because it names where the copy is,
+that the knowledge base reads the copy from here on, and how many files inside a
+named folder were left out because git ignores them. Do not tell them to add the
+document again after editing their original: that copies it a second time. A
+path outside the project is refused, as is a folder over the batch cap or a
+document over the per-document cap, which are refused before anything is copied
+(the refusal says how many documents the folder holds). Run `onboard` through the route above, not the tool file
 directly: the copy happens at the command layer, so the tool on its own still
 refuses a path outside `documents/`.
 

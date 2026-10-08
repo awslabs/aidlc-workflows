@@ -2175,9 +2175,14 @@ export const UNTRUSTED_TAGS_NOTICE =
  */
 /**
  * What to say when the document the person named was copied in for them: what
- * was copied, where it is now (once), that their own copy is not followed
- * afterwards, and, when their original is git-ignored, that this copy is not.
+ * was copied, where it is now (once), how many files inside a named folder were
+ * left out because git ignores them, that the knowledge base reads the copy
+ * from here on, and, when their original is git-ignored, that this copy is not.
  * Null when nothing was copied. Plain words: no record paths, no flags.
+ *
+ * It does NOT say to add the document again after editing the original: a
+ * second add copies the original beside the first (`vision-2.md`, or a new
+ * folder), which would leave two live rows for one document.
  */
 export function onboardCopyNote(
   projectDir: string,
@@ -2185,18 +2190,24 @@ export function onboardCopyNote(
   target: string | undefined,
   gitIgnored: string | undefined,
   indexed: number,
+  leftOut = 0,
 ): string | null {
   if (copiedFrom === undefined || target === undefined) return null;
   const name = basename(copiedFrom);
   const where = toPosix(relative(projectDir, target));
   const what = indexed === 1 ? "it" : `${indexed} documents`;
-  const theirs = indexed === 1 ? `your own ${name}` : `your own copies`;
+  const theirs = indexed === 1 ? `your own ${name}` : "your own copies";
+  const skipped = leftOut > 0
+    ? ` ${leftOut} ${leftOut === 1 ? "file" : "files"} inside it ${leftOut === 1 ? "is" : "are"} kept out of ` +
+      `git, so ${leftOut === 1 ? "it was" : "they were"} not copied; name one directly to add it.`
+    : "";
   const ignored = gitIgnored === "yes" || gitIgnored === "unknown"
     ? ` Your ${name} is ${gitIgnored === "yes" ? "" : "likely "}kept out of git, but this copy is not, ` +
       "so it will be committed unless you keep it out there too."
     : "";
-  return `Copied ${name} into AI-DLC's documents as ${where} and added ${what}. ` +
-    `Later changes to ${theirs} are not in the knowledge base until you add ${indexed === 1 ? "it" : "them"} again.` +
+  return `Copied ${name} into AI-DLC's documents as ${where} and added ${what}.` +
+    skipped +
+    ` The knowledge base reads that copy from now on, not ${theirs}.` +
     ignored;
 }
 
@@ -4167,7 +4178,7 @@ function parseFlags(
       allowInactive = true;
     } else if (
       a === "--to" || a === "--text-file" || a === "--source-revision" || a === "--tags" ||
-      a === "--copied-from" || a === "--copied-ignored"
+      a === "--copied-from" || a === "--copied-ignored" || a === "--copied-left-out"
     ) {
       if (!allowedValueFlags.has(a)) throw new Error(`Unknown flag: ${a}`);
       if (values[a] !== undefined) throw new Error(`${a} may be specified only once`);
@@ -4199,12 +4210,12 @@ export function main(argv: string[]): void {
   try {
     switch (subcommand) {
       case "onboard": {
-        // `--copied-from` and `--copied-ignored` are set by the dispatcher when
-        // it copied a document the person named from elsewhere in the project
-        // (withNamedDocumentCopied in aidlc.ts). They say what happened; the
-        // indexing below is the same either way.
+        // `--copied-from`, `--copied-ignored` and `--copied-left-out` are set
+        // by the dispatcher when it copied a document the person named from
+        // elsewhere in the project (withNamedDocumentCopied in aidlc.ts). They
+        // say what happened; the indexing below is the same either way.
         const { space: spaceFlag, intent, allowInactive, positional, values } =
-          parseFlags(args.slice(1), ["--copied-from", "--copied-ignored"]);
+          parseFlags(args.slice(1), ["--copied-from", "--copied-ignored", "--copied-left-out"]);
         const pd = resolveProjectDir(projectDir);
         const space = resolveSpaceFlag(spaceFlag, pd);
         assertKnowledgeRootTrusted(pd, space);
@@ -4223,6 +4234,7 @@ export function main(argv: string[]): void {
           positional[0],
           values["--copied-ignored"],
           result.indexed.length,
+          Number(values["--copied-left-out"] ?? 0),
         );
         emitJson({
           ...(note === null ? {} : { onboard_note: note }),
