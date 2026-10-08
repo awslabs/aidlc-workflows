@@ -477,9 +477,20 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
       // then acts on, never as words for the person to say. A live run had the
       // agent end with "If you want it off for the whole project instead, say
       // so and I'll set it there", which is the old "say X to get Y" shape.
-      "then ask one plain question offering the wider place (this project when it applied to this piece of work, " +
-        "this machine when it applied to this project), for example \"Do you want me to set it off for the whole " +
-        "project instead?\", and set it there yourself when they say yes",
+      // Only where there is a wider place: the Guard Policy is for a piece of
+      // work only, and a check whose table row says `none` has no switch for
+      // the project or the machine, so asking there would offer what the agent
+      // cannot do.
+      "then, when the check has a wider place in the table, ask one plain question offering it (this project when " +
+        "it applied to this piece of work, this machine when it applied to this project), for example \"Do you want " +
+        "me to set it off for the whole project instead?\", and set it there yourself when they say yes",
+      "A check whose wider place is `none`, and the Guard Policy, which is for a piece of work only, have nowhere " +
+        "wider to go: name where it applied and ask nothing.",
+      // The two work-only cases the question must skip, beside a check that has
+      // a wider place.
+      "Guard Policy is set for a piece of work only; with none open, say so in one line.",
+      "| state transition | `guard.state-transition` | none |",
+      "| review freeze | `guard.review-freeze` | `AIDLC_DISABLE_REVIEW_FREEZE_HOOK` |",
     ];
     // The wording this replaced, in any shipped prose.
     const WIDEN_SAY = "say in one sentence how to widen it";
