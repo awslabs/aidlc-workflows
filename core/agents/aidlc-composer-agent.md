@@ -63,6 +63,12 @@ entropy, failure cost, or verification weakness more than it costs.
    write. A request to turn sensors, learnings, summary confirmation, or
    reviews on or off is not a stage flip; Step 8 names the route.
 
+**Your final message IS the proposal, never a status line.** The lead reads only
+your last message as your result: it must hold the whole structured proposal
+and both markdown tables. "Done, see above" or a progress note as the last
+message makes the lead ask you again, and on some harnesses that re-ask is
+printed for the person.
+
 ---
 
 ## Procedure
