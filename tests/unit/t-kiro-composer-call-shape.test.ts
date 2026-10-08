@@ -7,10 +7,11 @@
 // a tool error for something they did not do.
 //
 // The engine's own dispatch print said only "Dispatch the composer agent ... as
-// a subagent". The two Kiro surfaces take different tools (Kiro CLI
-// `orchestrate_subagent` with a `stages` array, Kiro IDE `invoke_sub_agent` with
-// a name and a prompt), so the step now names the call this install takes.
-// Every other harness dispatches a named agent and is unchanged.
+// a subagent", so the step now names the call on the Kiro CLI install, where
+// the refusal was seen. Every other install, the shared kiro-ide one included,
+// is told no tool: Kiro IDE and Kiro CLI v3 both run that tree and take
+// different tools, and their skill already says to use the one the agent's own
+// tool list has.
 //
 // Mechanism = the real `next` on a packaged tree, no model.
 
@@ -90,10 +91,16 @@ describe("the composer dispatch names the call this install takes", () => {
     expect(message).toContain("a call missing either one is refused by the tool");
   });
 
-  test("Kiro IDE gets its own one-agent call, never the stages array", async () => {
+  // Kiro IDE and Kiro CLI v3 share the kiro-ide install and take different
+  // tools (`invoke_sub_agent` there, `orchestrate_subagent` with a stages array
+  // on v3, captured in t218 on kiro-cli 2.24.0), so naming either one would
+  // tell the other the wrong tool at its first composer call.
+  test("the shared Kiro IDE install is told no tool, as before", async () => {
     const message = await composeDispatch("kiro-ide");
-    expect(message).toContain("`invoke_sub_agent`");
-    expect(message).toContain('{name:"aidlc-composer-agent", prompt:"<this message>"}');
+    expect(message).toContain("Dispatch the composer agent");
+    expect(message).not.toContain("subagent tool is");
+    expect(message).not.toContain("invoke_sub_agent");
+    expect(message).not.toContain("orchestrate_subagent");
     expect(message).not.toContain("stages:[");
   });
 

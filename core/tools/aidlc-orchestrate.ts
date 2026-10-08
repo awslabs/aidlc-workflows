@@ -4547,14 +4547,17 @@ function pastedDocumentNote(raw: string): string {
 }
 
 // How this install calls a subagent, where the tool takes a shape of its own.
-// The two Kiro surfaces take different tools, and Kiro CLI refuses a call that
-// leaves out either `task` or `stages`: the person then reads "The tool input
-// does not match the tool schema: missing field `stages`" (five live runs), or
-// "missing field `task`" (one of two live runs with the first wording of this
-// step), for something they did not do. So the step names the tool as Kiro
-// names it (`subagent` on 2.23.1) and both fields it needs, not just the agent.
-// Every other harness dispatches a named agent with free-form input and gets no
-// sentence.
+// Kiro CLI (the `kiro` install) refuses a call that leaves out either `task` or
+// `stages`: the person then reads "The tool input does not match the tool
+// schema: missing field `stages`" (five live runs), or "missing field `task`"
+// (one of two live runs with the first wording of this step), for something
+// they did not do. So the step names the tool as Kiro names it (`subagent` on
+// 2.23.1) and both fields it needs, not just the agent. Every other install,
+// the shared kiro-ide one included, dispatches a named agent with free-form
+// input and gets no sentence: Kiro IDE and Kiro CLI v3 both run that tree and
+// take different tools, so naming either tool would tell the other the wrong
+// one, and their skill already says to use the one the agent's own tool list
+// has.
 function subagentCallShape(agent: string): string | null {
   let harness: string;
   try {
@@ -4568,10 +4571,6 @@ function subagentCallShape(agent: string): string | null {
       `{mode:"blocking", task:"<this message>", stages:[{name:"compose", role:"${agent}", ` +
       'prompt_template:"<this message>"}]}. It needs both `task` and `stages`, each filled: a call missing ' +
       "either one is refused by the tool.";
-  }
-  if (harness === "kiro-ide") {
-    return "On this install the subagent tool is `invoke_sub_agent`: call it as " +
-      `{name:"${agent}", prompt:"<this message>"}, one call for this one agent.`;
   }
   return null;
 }
