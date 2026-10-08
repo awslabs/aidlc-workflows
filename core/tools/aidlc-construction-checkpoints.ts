@@ -1509,6 +1509,8 @@ export function approveConstructionCheckpoint(
     const inWords = current.result.review_not_finished?.approved_in_words === true;
     let words: string | undefined;
     if (humanRequired && inWords) {
+      // Already approved from their words: an approve run again records nothing more.
+      if (current.result.approved) return current.result;
       words = latestPersonTurn(projectDir)?.words ?? undefined;
     } else if (humanRequired) {
       requireProtectedResponse(projectDir, session, {

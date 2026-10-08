@@ -240,6 +240,22 @@ describe("t-checkpoint-reply-before-ask: the person answers before the Unit's qu
     }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
   }
 
+  // "approve it as it is" over a review that has not finished: the verify
+  // takes their words, and an approve run again records nothing more.
+  test("an approve run again after \"approve it as it is\" writes no second approval", () => {
+    const p = fixture("off");
+    requestReview(p);
+    says(p, "approve it as it is");
+    const verified = checkpoint(p, "verify", ["--over-unfinished-review"]);
+    expect(verified.json?.verified, verified.out).toBe(true);
+    for (let run = 0; run < 2; run++) {
+      const approved = checkpoint(p, "approve");
+      expect(approved.status, approved.out).toBe(0);
+      expect(approved.json?.approved).toBe(true);
+    }
+    expect(unitGates(p, "GATE_APPROVED")).toHaveLength(1);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
   test("words typed before the review was asked for are not taken", () => {
     const p = fixture("off");
     says(p, "make the title bold");
