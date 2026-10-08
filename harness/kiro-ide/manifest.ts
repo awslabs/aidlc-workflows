@@ -290,14 +290,12 @@ const manifest: HarnessManifest = {
     { src: "settings/cli.json", dst: "settings/cli.json" },
     { src: "hooks/aidlc-kiro-adapter.ts", dst: "hooks/aidlc-kiro-adapter.ts" },
     { src: "hooks/aidlc-kiro-tool-names.ts", dst: "hooks/aidlc-kiro-tool-names.ts" },
-    { src: "hooks/aidlc-write-audit-log.json", dst: "hooks/aidlc-write-audit-log.json" },
+    // Kiro IDE shows a card for every hook run, so one registration runs the two
+    // hooks for each message and another the five tool-call checks (#2022). What
+    // ran after a write or a command is done by the next card (catch-up).
     { src: "hooks/aidlc-record-human-turn.json", dst: "hooks/aidlc-record-human-turn.json" },
-    { src: "hooks/aidlc-terminal-command.json", dst: "hooks/aidlc-terminal-command.json" },
-    // Kiro IDE shows a card for every hook run, so one registration runs the
-    // five tool-call checks and another the two hooks after a shell command (#2022).
     { src: "hooks/aidlc-guard-tool-call.json", dst: "hooks/aidlc-guard-tool-call.json" },
     { src: "hooks/aidlc-log-subagent.json", dst: "hooks/aidlc-log-subagent.json" },
-    { src: "hooks/aidlc-after-shell.json", dst: "hooks/aidlc-after-shell.json" },
     // No session-end registration: Kiro's Stop trigger fires at the end of every
     // assistant turn (not at conversation close) on both surfaces, so a
     // registration would append a spurious SESSION_ENDED between prompts.

@@ -677,21 +677,23 @@ describe("t218 Kiro IDE hook adapter (USER_PROMPT env context)", () => {
   });
 
   for (const tool of ["execute_bash", "execute_pwsh", "shell"]) {
-    // Both audit-tail hooks run in the one after-shell card (#2022).
-    test(`registered PostToolUse hooks dispatch audit-tail updates for ${tool}`, () => {
+    // Both audit-tail hooks run after a shell call, at the start of the next
+    // card (catch-up); the guard card that lets the call through notes it.
+    test(`a ${tool} call the guard card lets through brings the audit-tail updates at the next card`, () => {
       const dir = scratchProject(true);
       try {
         const registration = JSON.parse(
-          readFileSync(join(dir, ".kiro", "hooks", "aidlc-after-shell.json"), "utf-8"),
+          readFileSync(join(dir, ".kiro", "hooks", "aidlc-guard-tool-call.json"), "utf-8"),
         ) as { hooks: Array<{ trigger: string; matcher: string }> };
-        const hook = registration.hooks.find((candidate) =>
-          candidate.trigger === "PostToolUse" &&
-          new RegExp(`^(?:${candidate.matcher})$`).test(tool)
-        );
-        expect(hook, `after-shell must receive ${tool} events`).toBeDefined();
-        expect(new RegExp(`^(?:${hook?.matcher})$`).test("fs_write")).toBe(false);
+        expect(registration.hooks[0].trigger).toBe("PreToolUse");
+        expect(new RegExp(registration.hooks[0].matcher).test(tool), `the guard card must see ${tool}`).toBe(true);
+        expect(existsSync(join(dir, ".kiro", "hooks", "aidlc-after-shell.json"))).toBe(false);
         appendStageStarted(dir, "user-stories", "2026-06-30T10:00:00.000Z");
-        const result = runIdeStdin(dir, "after-shell", ctx1x(tool, "Output:\nok\n\nExit Code: 0"));
+        const call = (tool_name: string, tool_input: Record<string, unknown>) =>
+          JSON.stringify({ hook_event_name: "PreToolUse", cwd: dir, session_id: "sess_t218", tool_name, tool_input });
+        const shell = runIdeStdin(dir, "guard-tool-call", call(tool, { command: "echo ok", cwd: dir }));
+        expect(shell.code, shell.stderr).toBe(0);
+        const result = runIdeStdin(dir, "guard-tool-call", call("fs_write", { path: join(dir, "README.md"), text: "x" }));
         expect(result.code, result.stderr).toBe(0);
         expect(readFileSync(seededStateFile(dir), "utf-8")).toMatch(
           /\*\*Current Stage\*\*:\s*user-stories/,
@@ -3210,9 +3212,11 @@ describe("t218 Kiro IDE plan-approval enforcement", () => {
         hooks?: Array<{ trigger?: string; action?: { command?: string } }>;
       };
       expect(registration.hooks?.[0]?.trigger).toBe("UserPromptSubmit");
+      // The one message card runs record-human-turn (KIRO_HOOK_GROUPS).
       expect(registration.hooks?.[0]?.action?.command).toContain(
-        "engine adapter kiro-ide record-human-turn",
+        "engine adapter kiro-ide person-message",
       );
+      expect(KIRO_HOOK_GROUPS["person-message"].map((member) => member.target)).toContain("record-human-turn");
       initGitWorkspace(dir);
       seedCodeGenerationDirective(dir);
       const choices = seedLegacyDirectiveChoices(dir);

@@ -189,7 +189,7 @@ describe("t-kiro-ide-catch-up: what Kiro ran after a write or a command runs in 
     expect(existsSync(pending) ? readdirSync(pending) : []).toEqual([]);
   });
 
-  test("a command's after-work runs at the next card: the graph rebuild, then the stage sync, for the chat", () => {
+  test("a command's after-work runs at the next card: the graph rebuild for the chat, then the stage sync", () => {
     const { dir, capture } = project();
     expect(guard(dir, "execute_pwsh", { command: "npm test", cwd: dir }).code).toBe(0);
     expect(recorded(capture)).toEqual([]);
@@ -197,7 +197,8 @@ describe("t-kiro-ide-catch-up: what Kiro ran after a write or a command runs in 
     expect(next.code, next.stderr).toBe(0);
     const ran = recorded(capture);
     expect(ran.map((r) => r.hook)).toEqual(["rebuild-stage-graph", "sync-workflow-state"]);
-    for (const r of ran) expect(r.input.session_id).toBe(SESSION);
+    // The rebuild gets the command's chat, as the after-command card gave it.
+    expect(ran[0].input.session_id).toBe(SESSION);
     // Once: the next card has nothing left to do for that command.
     expect(guard(dir, "execute_pwsh", { command: "node --version", cwd: dir }).code).toBe(0);
     expect(recorded(capture).filter((r) => r.hook === "rebuild-stage-graph")).toHaveLength(1);

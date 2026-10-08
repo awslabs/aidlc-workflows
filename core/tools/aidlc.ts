@@ -2547,6 +2547,8 @@ async function runAdapter(action: Extract<Action, { type: "adapter" }>): Promise
       action.target === "verb-intercept" ||
       action.target === "terminal-command-guard" ||
       action.target === "guard-tool-call" ||
+      action.target === "person-message" ||
+      action.target === "catch-up" ||
       action.target === "after-shell"
     ) {
       // Mirror the adapter entry point's dual-generation channel contract.
