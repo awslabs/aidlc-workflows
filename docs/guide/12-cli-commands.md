@@ -1753,6 +1753,9 @@ left a choice to the agent). The same file named from the project folder, or by
 its full path, is read too. The engine reads only that folder, through no link,
 up to 64 KiB, and removes the file once read.
 
+A plain `log answer` needs a reply the person sent after the question was logged
+(or a question box pick of their latest reply still unspent); a reply sent
+before it is no answer to it, and the refusal names the way on.
 `log decision --message <id>` and `log answer --message <id>` name the person's
 message that answered a question the agent logged after the reply arrived. The
 engine proves the record exists, came through this chat, and is not spent by a

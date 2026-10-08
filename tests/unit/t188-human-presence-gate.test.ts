@@ -157,6 +157,17 @@ function recordHumanTurn(proj: string): void {
   appendAuditEntry("HUMAN_TURN", {}, proj);
 }
 
+// Record a typed reply as the hook does: the message record with the person's
+// words, and the HUMAN_TURN row naming it. Returns the message id.
+function recordTypedReply(proj: string, words: string): string {
+  const stored = saveMessage(proj, {
+    session: null, at: new Date().toISOString().replace(/\.\d{3}Z$/, "Z"), source: "prompt", text: words, picker: null,
+    words, settings: [], route: { scope: null, newIntent: false, skip: [], add: [], projectType: null }, applied: [],
+  });
+  appendAuditEntry("HUMAN_TURN", { "Message Id": stored.id }, proj);
+  return stored.id;
+}
+
 // Leave a hook heartbeat where hook liveness reads it, as the post-shell hook
 // does after every shell command in a workflow.
 function writeHeartbeat(proj: string, timestampMs: number): void {
@@ -1454,11 +1465,14 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
       return JSON.parse(r.out);
     }
 
-    test("one combined answer closes every question the menu logged before it (#2012 F2)", () => {
+    // The reply came before the questions were logged, so each question is logged
+    // naming the message that answered it (the protocol's rule for a late log),
+    // and the one answer inherits it.
+    test("one combined answer closes every question the menu logged before it, each logged with the message that answered (#2012 F2)", () => {
       const slug = field(proj, "Current Stage");
-      recordHumanTurn(proj);
+      const id = recordTypedReply(proj, "Q1: In the API handler; Q2: A toast; Q3: Yes");
       for (const question of ["Where does the check live?", "Which notice?", "Rename to Untitled?"]) {
-        expect(guardedLog(proj, ["decision", "--stage", slug, "--decision", question, "--options", "A,B"]).rc).toBe(0);
+        expect(guardedLog(proj, ["decision", "--stage", slug, "--decision", question, "--options", "A,B", "--message", id]).rc).toBe(0);
       }
       const r = guardedLog(proj, ["answer", "--stage", slug, "--details", "Q1: In the API handler; Q2: A toast; Q3: Yes"]);
       expect(r.rc, r.out).toBe(0);
@@ -1569,16 +1583,18 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
 
     // From a live Windows run: the person answered a four-question menu, and only
     // then did the agent log the menu's questions, with all four answers in one
-    // entry. The one reply is recorded once and nothing is left open, so they are
-    // never asked again.
-    test("a menu answered before its questions were logged, with one combined answer, is recorded once", () => {
+    // entry. The reply came before the question was logged, so the answer names
+    // the message that carried it (the refusal names the id); the one reply is
+    // recorded once and nothing is left open, so they are never asked again.
+    test("a menu answered before its questions were logged, with one combined answer naming the message, is recorded once", () => {
       const slug = field(proj, "Current Stage");
-      recordHumanTurn(proj);
+      const id = recordTypedReply(proj, "A for all four");
       expect(guardedLog(proj, ["decision", "--stage", slug, "--decision", "Q1-Q4", "--options", "A,B,C"]).rc).toBe(0);
-      const r = guardedLog(proj, [
-        "answer", "--stage", slug, "--details",
-        "Q1: A Silent no-op; Q2: A Trim only inside addTodo; Q3: A Targeted only; Q4: A renderHook",
-      ]);
+      const details = "Q1: A Silent no-op; Q2: A Trim only inside addTodo; Q3: A Targeted only; Q4: A renderHook";
+      const plain = guardedLog(proj, ["answer", "--stage", slug, "--details", details]);
+      expect(plain.rc).not.toBe(0);
+      expect(plain.out).toContain(`--message ${id}`);
+      const r = guardedLog(proj, ["answer", "--stage", slug, "--details", details, "--message", id]);
       expect(r.rc, r.out).toBe(0);
       expect(eventCount(proj, "QUESTION_ANSWERED")).toBe(1);
       const answers = JSON.parse(guardedLog(proj, ["answers", "--stage", slug]).out);
@@ -1593,8 +1609,9 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
           "single `log answer` (`--details 'Q1: <choice>; Q2: <choice>'`), even when the reply came before the log.",
       );
       expect(protocol).toContain(
-        "If they already replied, log the question now, then put all of that reply's answers in a single " +
-          "`log answer`: a second `log answer` for one reply is refused.",
+        "If they already replied, log the question now naming their message (`--message <id>`; a refused answer " +
+          "names the id), then put all of that reply's answers in a single `log answer`: an answer that names no " +
+          "message is refused when their reply came before the question was logged.",
       );
     });
 
@@ -2056,12 +2073,13 @@ describe("t188: a late-logged question takes the message that answered it", () =
     const slug = field(proj, "Current Stage");
     const id = reply("Q1: here. Q2: there.");
     expect(log(["decision", "--stage", slug, "--decision", "Q1 and Q2", "--options", "A,B"], inChat).rc).toBe(0);
-    expect(log(["answer", "--stage", slug, "--details", "Q1: here"], inChat).rc).toBe(0);
-    const refused = log(["answer", "--stage", slug, "--details", "Q2: there"], inChat);
+    const refused = log(["answer", "--stage", slug, "--details", "Q1: here"], inChat);
     expect(refused.rc).not.toBe(0);
     expect(refused.out).toContain(`--message ${id}`);
     expect(refused.out).toContain("do not ask them again");
     expect(refused.out).not.toContain("Wait for the human to type an answer");
+    const named = log(["answer", "--stage", slug, "--details", "Q1: here", "--message", id], inChat);
+    expect(named.rc, named.out).toBe(0);
   });
 
   // AIDA 5450894846 on #2150: the sessionless hint listed other chats' messages; a
@@ -2073,9 +2091,9 @@ describe("t188: a late-logged question takes the message that answered it", () =
     reply("A from one chat");
     reply("A from another", OTHER_CHAT);
     expect(log(["decision", "--stage", slug, "--decision", "Q?", "--options", "A,B"]).rc).toBe(0);
-    expect(log(["answer", "--stage", slug, "--details", "A"]).rc).toBe(0);
-    const refused = log(["answer", "--stage", slug, "--details", "B"]);
+    const refused = log(["answer", "--stage", slug, "--details", "A"]);
     expect(refused.rc).not.toBe(0);
+    expect(refused.out).toContain("came before this question was logged");
     expect(refused.out).not.toContain("--message");
   });
 
@@ -2122,6 +2140,73 @@ describe("t188: a late-logged question takes the message that answered it", () =
     expect(spent.rc).not.toBe(0);
     expect(spent.out).toContain("Wait for the human to type an answer");
     expect(spent.out).not.toContain("--message");
+  });
+
+  // The answer-path counterpart of the approval bound: a reply the person sent
+  // before the question was logged is no reply to it. In a live run the agent
+  // recorded "Nothing to add" on a learnings question it logged nine minutes
+  // after the person's last message, with their words beside it; the same move
+  // at the next stage was refused, so the outcome hung on whether an earlier
+  // answer had already used the turn.
+  describe("an answer needs a reply that came after its question", () => {
+    test("a plain answer on a reply older than its question is refused, naming the message and --on-instruction", () => {
+      const slug = field(proj, "Current Stage");
+      const id = reply("done. Moving forward - don't ask me any questions.", CHAT, 30);
+      expect(log(["decision", "--stage", slug, "--decision", "Anything to add for next time?"], inChat).rc).toBe(0);
+      const refused = log(["answer", "--stage", slug, "--details", "Nothing to add"], inChat);
+      expect(refused.rc).not.toBe(0);
+      expect(refused.out).toContain("the person's last reply came before this question was logged, so it does not answer it");
+      expect(refused.out).toContain(`--message ${id}`);
+      expect(refused.out).toContain("--on-instruction");
+      expect(refused.out).toContain("show the question and end your turn");
+      expect(rows("QUESTION_ANSWERED")).toHaveLength(0);
+      // The same move at the next question gets the same answer.
+      expect(log(["decision", "--stage", slug, "--decision", "And for the next stage?"], inChat).rc).toBe(0);
+      const again = log(["answer", "--stage", slug, "--details", "Nothing to add"], inChat);
+      expect(again.rc).not.toBe(0);
+      expect(again.out).toContain("came before this question was logged");
+      expect(rows("QUESTION_ANSWERED")).toHaveLength(0);
+    });
+
+    test("a reply after the question records as before", () => {
+      const slug = field(proj, "Current Stage");
+      expect(log(["decision", "--stage", slug, "--decision", "Anything to add for next time?"], inChat).rc).toBe(0);
+      reply("Nothing to add, thanks");
+      const recorded = log(["answer", "--stage", slug, "--details", "Nothing to add"], inChat);
+      expect(recorded.rc, recorded.out).toBe(0);
+      const answered = rows("QUESTION_ANSWERED");
+      expect(answered).toHaveLength(1);
+      expect(fieldOf(answered[0], "Answer Source")).toBeNull();
+    });
+
+    test("the message named, or the choice the person left to the agent, records on a reply older than the question", () => {
+      const slug = field(proj, "Current Stage");
+      const id = reply("Q1: in the API handler. Use the recommended answers for the rest.", CHAT, 30);
+      expect(log(["decision", "--stage", slug, "--decision", "Q1 and Q2"], inChat).rc).toBe(0);
+      const named = log(["answer", "--stage", slug, "--details", "Q1: in the API handler", "--message", id], inChat);
+      expect(named.rc, named.out).toBe(0);
+      const left = log(["answer", "--stage", slug, "--details", "Q2: a toast", "--on-instruction", "Use the recommended answers for the rest."], inChat);
+      expect(left.rc, left.out).toBe(0);
+      const answered = rows("QUESTION_ANSWERED");
+      expect(answered).toHaveLength(2);
+      expect(fieldOf(answered[0], "Message Id")).toBe(id);
+      expect(fieldOf(answered[1], "Answer Source")).toBe("chosen by the agent as the person asked");
+    });
+
+    test("a question box reply answers the questions it showed, though the agent logs them after it", () => {
+      const slug = field(proj, "Current Stage");
+      recordHumanTurn(proj);
+      appendAuditEntry("QUESTION_REPLIED", { Question: "Q1?", Reply: "In the API handler" }, proj);
+      appendAuditEntry("QUESTION_REPLIED", { Question: "Q2?", Reply: "A toast" }, proj);
+      expect(log(["decision", "--stage", slug, "--decision", "Q1 and Q2", "--options", "A,B"]).rc).toBe(0);
+      expect(log(["answer", "--stage", slug, "--details", "In the API handler"]).rc).toBe(0);
+      expect(log(["answer", "--stage", slug, "--details", "A toast"]).rc).toBe(0);
+      // The two picks are spent; a third question logged now waits for a reply.
+      expect(log(["decision", "--stage", slug, "--decision", "Q3?", "--options", "A,B"]).rc).toBe(0);
+      const third = log(["answer", "--stage", slug, "--details", "A"]);
+      expect(third.rc).not.toBe(0);
+      expect(rows("QUESTION_ANSWERED")).toHaveLength(2);
+    });
   });
 });
 

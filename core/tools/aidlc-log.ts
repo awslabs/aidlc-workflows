@@ -1045,6 +1045,28 @@ function messagesBeforeQuestion(pd: string, stage: string, unit: string | undefi
   });
 }
 
+// Whether the person's reply answers the latest question of this scope: a reply
+// turn provably after the question's row (same shard by position, another shard
+// by a later second), or a question box pick of their latest reply still
+// unspent (a box answers the questions it showed, whenever the agent logs them).
+// A reply sent before the question was logged is no reply to it: the agent
+// names that message (--message) when it does answer, or records the choice the
+// person left to it (--on-instruction). No question in scope asks nothing here.
+function replyAnswersQuestion(pd: string, stage: string, unit: string | undefined): boolean {
+  const rows = readAuditShardEvents(pd);
+  const question = decisionRowsInScope(rows, stage, unit).at(-1);
+  if (question === undefined) return true;
+  const after = (row: AuditShardEvent, than: AuditShardEvent): boolean =>
+    row.shardIndex === than.shardIndex ? row.pos > than.pos : row.timestamp > than.timestamp;
+  const replies = rows.filter((row) => isReplyTurn(row));
+  if (replies.some((row) => after(row, question))) return true;
+  const turn = replies.reduce<AuditShardEvent | null>((latest, row) => latest === null || after(row, latest) ? row : latest, null);
+  if (turn === null) return false;
+  const picks = rows.filter((row) => row.event === "QUESTION_REPLIED" && row.shardIndex === turn.shardIndex && row.pos > turn.pos).length;
+  const answers = rows.filter((row) => row.event === "QUESTION_ANSWERED" && after(row, turn)).length;
+  return answers < picks;
+}
+
 function lateQuestionHint(candidates: StoredMessage[]): string {
   const shown = candidates.map((message) => {
     const words = (message.words ?? message.text).replace(/\s+/g, " ").trim();
@@ -2487,6 +2509,19 @@ function handleAnswer(args: string[]): void {
       // scoped test off-switch
     } else if (named !== null) {
       // The proved message is the person's reply to this question.
+    } else if (humanActedSinceLastAnswer(pd) && !replyAnswersQuestion(pd, flags.stage, flags.unit)) {
+      // A reply is on record since the last decision, but it came before this
+      // question was logged, so it is no answer to it (an answer recorded on it
+      // would carry words the person never gave to this question). The agent
+      // names the message when it does answer, records the choice the person
+      // left to it as theirs to leave, or shows the question and waits.
+      const late = messagesBeforeQuestion(pd, flags.stage, flags.unit);
+      error(
+        "Cannot record this answer: the person's last reply came before this question was logged, so it does " +
+          "not answer it." + (late.length > 0 ? ` ${lateQuestionHint(late)}` : "") +
+          " If they left the choice to you in their own words, record it with --on-instruction '<their words>'. " +
+          "Otherwise show the question and end your turn; their next reply answers it.",
+      );
     } else if (
       !humanActedSinceLastAnswer(pd) &&
       !(humanTurnMintAllowed() && humanTurnState(pd, { replies: true }) === "answered")
