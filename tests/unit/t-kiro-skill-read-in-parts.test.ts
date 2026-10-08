@@ -14,6 +14,10 @@ const PREVIEW = 500;
 const PART_LINES = 40;
 const PART_MAX_CHARS = 28_000;
 const READ_STEP = "read `.kiro/skills/aidlc/SKILL.md` with your file tool in parts of at most 40 lines (offset and limit), from the first line to the last";
+// Live on Kiro IDE 1.2.37 the Default agent read the file once, got its first
+// 121 lines with Kiro's note to go on from line 122, and never did: the step
+// spoke only of loading the skill and let one cut read count as all of it.
+const CUT_SHORT = "a read that comes back cut short is not all of it";
 const PROMPT_STEP = "read all of .kiro/skills/aidlc/SKILL.md with your file tool in parts of at most 40 lines, from the first line to the last (Kiro shows a long skill or file only in part), unless you already read all of it in this chat";
 
 // What Kiro loads as the skill: the text after the front matter.
@@ -41,6 +45,9 @@ describe("t-kiro-skill-read-in-parts: the skill reaches the agent past Kiro's cu
     test(`${tool}: the first and the last ${PREVIEW} characters Kiro shows carry the step`, () => {
       expect(body.slice(0, PREVIEW)).toContain(READ_STEP);
       expect(body.slice(-PREVIEW)).toContain(READ_STEP);
+      expect(body.slice(0, PREVIEW)).toContain(CUT_SHORT);
+      expect(body.slice(-PREVIEW)).toContain(CUT_SHORT);
+      expect(body).not.toContain("loading this skill shows only its start and its end");
     });
 
     test(`${tool}: every ${PART_LINES}-line part fits in one Kiro result`, () => {
