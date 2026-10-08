@@ -2227,7 +2227,9 @@ reply and record their choice or to wait.
 `restore --unit <unit>` (or `--stage-level`) writes back the plan, test
 instructions and questions file the person approved in this stage attempt (the
 engine keeps a copy beside the approval receipt) and prints "Back to the plan you
-approved."; the conductor runs it when the person says to go back to the plan
+approved." (once the build has started, "Back to the plan you approved. I am
+building it again from that plan.", because the `next` after it builds from that
+plan); the conductor runs it when the person says to go back to the plan
 they approved. It refuses unless a turn of the person's, since their last
 decision, is on record. While a plan they approved has changed, words typed in
 any chat or after the entry command make `next` name this restore for each plan

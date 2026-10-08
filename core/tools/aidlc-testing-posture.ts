@@ -1715,17 +1715,22 @@ function approvedCopyForAttempt(
  * it offers to go back to that plan; once the build has started it says the
  * build is going ahead and offers to build the approved plan instead. With
  * `planAsked`, the plan question follows the line.
+ *
+ * `afterBuild: false` keeps only the before-the-build line. The lowered
+ * plan-approval fence's own account uses it: there the person is owed the
+ * stand-aside line, and a fence that is off asks nothing new.
  */
 export function approvedPlanChangeLine(
   projectDir: string,
   target: CodeGenerationTarget,
   issued?: CodeGenerationIssuance,
   planAsked = false,
+  afterBuild = true,
 ): string | null {
   try {
     const authority = resolveCodeGenerationAuthority(projectDir, target, issued);
     const approved = approvedCopyForAttempt(projectDir, authority);
-    if (approved === null) return null;
+    if (approved === null || (approved.built && !afterBuild)) return null;
     return approvedPlanChangeText(
       approved.copy,
       readFileSync(join(authority.stageDir, "code-generation-plan.md"), "utf-8"),
@@ -1764,7 +1769,7 @@ export function restoreApprovedPlan(projectDir: string, target: CodeGenerationTa
   }
   // Once the build has started the code on disk came from the plan being
   // replaced, so going back means building that step again. The line says so,
-  // and the undo reading names the step that does it.
+  // and the `next` after this restore issues that build.
   const built = receipt.status === "generation";
   withActiveDirectiveLock(projectDir, () => {
     for (const [name, content] of [
@@ -2949,8 +2954,15 @@ function recordCodeGenerationContinuation(
   operation: string,
 ): string[] {
   const detail = `${operation} for ${continuation.authority.targetId} using current content; the earlier approval is unchanged`;
-  // An approved plan that changed before the build is named for the person.
-  const changed = approvedPlanChangeLine(projectDir, { unit: continuation.authority.unit });
+  // An approved plan that changed before the build is named for the person, in
+  // place of the stand-aside line below. Only before the build: this is the
+  // lowered fence's own account, where the person is owed that line and a fence
+  // that is off asks nothing new. Once the build has started, the change and
+  // the offer to build the approved plan instead reach them through the
+  // directive's own change notice, not through the fence's account.
+  const changed = approvedPlanChangeLine(
+    projectDir, { unit: continuation.authority.unit }, undefined, false, /* afterBuild */ false,
+  );
   const recorded = recordGuardStoodAside(projectDir, {
     fence: "plan-approval",
     authority: continuation.fence.authority,

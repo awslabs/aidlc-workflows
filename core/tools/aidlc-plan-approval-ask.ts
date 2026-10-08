@@ -736,9 +736,9 @@ export function routeCodeGenerationPlanApproval(projectDir: string, directive: D
   // must re-read).
   const states = units.map((unit) => targetState(projectDir, unit, intentId, record, directive, planApprovalOff));
   if (states.every((state) => state.kind === "approved")) {
-    // Under a lowered Guard Policy an approved plan that changed before the
-    // build still builds; the person hears what changed and is asked whether
-    // to go back.
+    // Under a lowered Guard Policy an approved plan that changed still builds;
+    // the person hears what changed and is asked whether to go back to it, or,
+    // once the build has started, whether to build it instead.
     const approved = withPlanState(directive, { status: "approved" });
     const changed = units.flatMap((unit) => approvedPlanChangeLine(projectDir, { unit }, directive) ?? []);
     if (changed.length > 0) approved.change_notices = [...(approved.change_notices ?? []), ...changed];

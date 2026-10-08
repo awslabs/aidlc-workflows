@@ -2820,8 +2820,8 @@ function withdrawRoutedWords(projectDir: string, question: StoredQuestion): void
 // back to it: their words, in any chat and in any wording, may say yes. The
 // conductor reads that first; the restore itself needs their word on record.
 // Once the build has started, going back means building that step again from
-// the approved plan, so the reading names that step beside the restore. Empty
-// when no plan they approved changed.
+// the approved plan: the reading names the restore, and the `next` after it
+// issues that build. Empty when no plan they approved changed.
 function approvedPlanUndoReading(projectDir: string, stateContent: string): string {
   const marker = readActiveDirectiveMarker(projectDir, stateContent);
   if (marker?.version !== 2 || marker.stage !== "code-generation") return "";
