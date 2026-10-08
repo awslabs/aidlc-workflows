@@ -67,10 +67,15 @@ const copyShellDeny = new Map<string, string[]>(
 // does not rest on how a Kiro build splits a command. A bare PowerShell
 // grouping is the terminal guard's (aidlcCodeArgumentHazard in the Kiro IDE
 // adapter).
-// Ask beats every allow, so a command holding one asks the person whatever it
-// starts with. The conductor (agents/aidlc.md) carries the same list; t148
-// checks every agent.
-const SHELL_FORM_ASKS = RISKY_SHELL_FORMS.map((form) => `*${form}*`);
+// An AI-DLC command holding one asks the person: the allow above names one
+// command, and such a form would stretch it to another. The asks start with
+// the same AI-DLC prefix as the persona deny (riskyFormDenyLines), so the
+// person's own commands (a build, a test, a probe, with their redirects and
+// chains) meet no AI-DLC rule: Kiro's own rules and their Always allow decide
+// them (#2199). The conductor (agents/aidlc.md) carries the same list; t148
+// checks every agent; the native release spells the prefix `aidlc`
+// (rewriteKiroNativeAllowlists in scripts/package.ts).
+const SHELL_FORM_ASKS = RISKY_SHELL_FORMS.map((form) => `bun .kiro/tools/aidlc*${form}*`);
 
 // A persona's own tools and permissions are enforced only when the conductor
 // dispatches through invoke_sub_agent (IDE) or orchestrate_subagent (CLI); the
