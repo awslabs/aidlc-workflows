@@ -5058,9 +5058,17 @@ export async function collectDoctorReport(
     stageOrGateEvents.length > 0 &&
     !auditShardEvents.some((event) => event.event === "HUMAN_TURN")
   ) {
+    // Steps and approvals happened, yet no message of the person's is on
+    // record (no HUMAN_TURN row): their replies are not being recorded, and
+    // the next approval will be refused. A warning the summary counts, with
+    // this harness's own step as the fix (every harness's hooks record the
+    // person's messages, so a workflow with none is never healthy).
+    const count = stageOrGateEvents.length;
     results.push({
-      pass: true,
-      label: `Human-turn receipts: 0 HUMAN_TURN rows across ${stageOrGateEvents.length} stage/gate event(s) (advisory) - receipts are not being minted, so presence-gated checkpoints will refuse`,
+      pass: false,
+      severity: "warn",
+      label: `Your replies are not being recorded: ${count} ${count === 1 ? "step or approval" : "steps or approvals"} so far and no message of yours on record`,
+      fix: hookExecutionRecovery,
     });
   }
 

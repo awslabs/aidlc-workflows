@@ -155,18 +155,28 @@ export function releaseApiUrl(baseUrl: string, explicit?: string): string {
   return `https://api.github.com/repos/${match[1]}/${match[2]}/releases`;
 }
 
-// When output is captured, only the release asset itself gets a line: the
-// metadata files read to verify it (version.json, checksums, the attestation,
-// a .sha256 sidecar) would each add one more.
-function progress(url: string, complete: boolean, metadata: boolean): void {
-  if (process.env.AIDLC_ROUTE_OUTPUT_MODE !== "human") return;
+// Only the release asset itself keeps a line: the metadata files read to
+// verify it (version.json, checksums, the attestation, a .sha256 sidecar) would
+// each add one more. In a terminal they show a transient "Downloading ..." that
+// is cleared when the file is in; when output is captured they print nothing.
+// Returns the bytes to write to stderr, or null for no output.
+export function progressLine(
+  url: string,
+  complete: boolean,
+  metadata: boolean,
+  tty: boolean,
+): string | null {
   const name = basename(new URL(url).pathname) || "release asset";
   const message = complete ? `Downloaded ${name}` : `Downloading ${name}...`;
-  if (process.stderr.isTTY) {
-    process.stderr.write(`\r${message.slice(0, PROGRESS_WIDTH).padEnd(PROGRESS_WIDTH)}${complete ? "\n" : ""}`);
-  } else if (complete && !metadata) {
-    process.stderr.write(`${message}\n`);
-  }
+  if (!tty) return complete && !metadata ? `${message}\n` : null;
+  if (complete && metadata) return `\r${"".padEnd(PROGRESS_WIDTH)}\r`;
+  return `\r${message.slice(0, PROGRESS_WIDTH).padEnd(PROGRESS_WIDTH)}${complete ? "\n" : ""}`;
+}
+
+function progress(url: string, complete: boolean, metadata: boolean): void {
+  if (process.env.AIDLC_ROUTE_OUTPUT_MODE !== "human") return;
+  const line = progressLine(url, complete, metadata, Boolean(process.stderr.isTTY));
+  if (line !== null) process.stderr.write(line);
 }
 
 function assertMetadataSize(path: string, name: string): void {

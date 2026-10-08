@@ -1413,10 +1413,12 @@ describe("t304 copied projection configuration", () => {
       encoding: "utf-8",
     });
     expect(git.status, git.stderr ?? "").toBe(0);
-    const doctor = runCopied(project, ["doctor"], { env });
+    const doctor = runCopied(project, ["doctor", "--verbose"], { env });
     expect(doctor.status).toBe(0);
+    // A machine that never checked for updates is not a warning; the passing
+    // row names the check in the copy channel's own spelling.
     expect(doctor.stdout).toContain(
-      "fix: run `bun .claude/tools/aidlc.ts update --check`",
+      "Update: not checked yet (run `bun .claude/tools/aidlc.ts update --check` to check)",
     );
     // The generic fix never quotes the doctor command itself (#1411).
     expect(doctor.stdout).toContain(

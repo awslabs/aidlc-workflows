@@ -343,9 +343,12 @@ describe("t319 doctor detects hooks blocked before their first heartbeat", () =>
     expect(output(run)).toContain("ask your Claude Code administrator to allow project hooks");
     expect(output(run)).not.toContain("Run /hooks");
     expect(output(run)).not.toContain("AIDLC_SKIP_");
+    // Replies not being recorded is a warning the summary counts, with the
+    // harness's own step as its fix, not a passing "advisory" row.
     expect(output(run)).toMatch(
-      /ok {4}Human-turn receipts: 0 HUMAN_TURN rows across \d+ stage\/gate event\(s\) \(advisory\)/,
+      /warn {2}Your replies are not being recorded: [1-9]\d* steps? or approvals? so far and no message of yours on record/,
     );
+    expect(output(run)).not.toContain("Human-turn receipts");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   // A record created before heartbeats moved under .aidlc-engine/ keeps them at
