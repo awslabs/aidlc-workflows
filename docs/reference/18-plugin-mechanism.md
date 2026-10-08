@@ -508,11 +508,15 @@ A plugin may also enrich a **core** persona through
 `contributions/agents/<agent>.md` (§6): prose fragments only, spliced into
 `<harness>/agents/<agent>.md` at `in:<H2>`, `after-preflight` or `end-of-body`,
 recorded in the contribution sidecar under the agent slug and stripped on
-disable exactly like stage fragments. The Markdown persona is what every
-harness ships and what the engine roster and Claude's native dispatch read;
-the harness-native twins some emitters transpose at build time (Codex agent
-TOMLs, OpenCode and Copilot agent files) do not receive compose-time
-fragments.
+disable exactly like stage fragments. The same fragments reach every file a
+harness dispatches the persona from, so the instruction reaches the agent on
+every harness: the Markdown persona (the engine roster, and the native agent
+on Claude Code, Cursor and Kiro IDE; Kiro CLI's agent JSON loads its prompt
+from it), plus the harness-native twin the packager builds from it: the Codex
+agent TOML's `developer_instructions` string (the fragment text escaped for
+TOML) and the OpenCode `.opencode/agents/` and Copilot `.github/agents/`
+native agents. Doctor checks each of these files, a refresh replays the
+fragments into each, and disable and prune strip them from each.
 
 On Kiro CLI, Codex, and OpenCode, a Markdown persona in the engine roster is
 available only for `mode: inline`. Native dispatch also requires a per-harness

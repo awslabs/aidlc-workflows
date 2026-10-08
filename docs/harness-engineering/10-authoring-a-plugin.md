@@ -277,10 +277,10 @@ fragments:
 ```
 
 Fragments splice, record into the sidecar and strip on disable exactly like
-stage fragments. They reach the Markdown persona every harness ships — the
-engine roster and Claude's native dispatch read it — but not the harness-native
-twins some emitters transpose at build time (Codex agent TOMLs, OpenCode and
-Copilot agent files).
+stage fragments. They reach the agent on every harness: compose writes them
+into the Markdown persona and into the native agent file a harness builds
+from it (the Codex agent TOML, the OpenCode and Copilot native agents), and
+Kiro CLI's agent JSON loads its prompt from the Markdown persona.
 
 ### Engine upgrade lifecycle
 

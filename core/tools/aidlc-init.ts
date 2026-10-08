@@ -143,7 +143,7 @@ import {
   withAuditLock,
   writeFileAtomic,
 } from "./aidlc-lib.ts";
-import { cutPluginFragment } from "./aidlc-plugin.ts";
+import { cutPluginFragment, editTomlInstructions, personaTwinRels } from "./aidlc-plugin.ts";
 import { regenerateRunnerSurfaces } from "./aidlc-runner-gen.ts";
 import { KIRO_IDE_STEERING, kiroIdeSteering, repointedIncludeText } from "./aidlc-includes.ts";
 import {
@@ -6314,7 +6314,12 @@ function prepareRefreshSource(
   const personaRoot = join(currentHarness, "agents");
   if (pathPresent(personaRoot) && lstatSync(personaRoot).isDirectory()) {
     for (const file of readdirSync(personaRoot).filter((name) => name.endsWith(".md"))) {
-      composedTargets.push({ rel: `${descriptor.harnessDir}/agents/${file}`, slug: file.slice(0, -3) });
+      const slug = file.slice(0, -3);
+      composedTargets.push({ rel: `${descriptor.harnessDir}/agents/${file}`, slug });
+      // The persona's native twins carry the same fragments.
+      for (const rel of personaTwinRels(descriptor.distribution, descriptor.harnessDir, slug)) {
+        composedTargets.push({ rel, slug });
+      }
     }
   }
   for (const { rel, slug } of composedTargets) {
@@ -6346,7 +6351,14 @@ function prepareRefreshSource(
       ),
     );
     fresh = mergeRequiredSections(fresh, record);
-    fresh = mergePluginFragments(fresh, fragments);
+    if (rel.endsWith(".toml")) {
+      // A Codex twin: its fragments live inside the developer_instructions string.
+      const merged = editTomlInstructions(fresh, (body) => mergePluginFragments(body, fragments));
+      if (merged === null) throw new Error(`cannot reapply plugin fragments: ${rel} has no developer_instructions string`);
+      fresh = merged;
+    } else {
+      fresh = mergePluginFragments(fresh, fragments);
+    }
     writeFileSync(stagedPath, fresh);
     if (prior) regenerated.add(rel);
   }

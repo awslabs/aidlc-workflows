@@ -1726,6 +1726,57 @@ function findAgentFile(slug: string): string | null {
   return existsSync(p) ? p : null;
 }
 
+// The harness-native twins of a core persona: the files a harness's own
+// dispatch reads instead of the Markdown persona, built from it at package
+// time (the Codex agent TOML, the opencode and Copilot native agents). They
+// take the same fragments, so a plugin's instruction reaches the agent on
+// every harness. Kiro CLI's agent JSON loads its prompt from the Markdown
+// persona, and the other harnesses dispatch from it directly.
+function personaTwinFiles(slug: string): Array<{ path: string; toml: boolean }> {
+  const twin = HARNESS_LEAF === ".codex"
+    ? { path: join(HARNESS_DIR, "agents", `${slug}.toml`), toml: true }
+    : HARNESS_LEAF === ".aidlc"
+      ? { path: join(nativeAgentsDir(), `${slug}.md`), toml: false }
+      : null;
+  return twin && existsSync(twin.path) ? [twin] : [];
+}
+
+// A Codex twin holds the persona in one TOML multi-line basic string
+// (developer_instructions). Fragment work runs on that string's text, so every
+// anchor resolves inside it; null when the file has no such string.
+function editTomlInstructions(content: string, edit: (body: string) => string): string | null {
+  const open = /^developer_instructions = """\n/m.exec(content);
+  if (!open) return null;
+  const start = open.index + open[0].length;
+  const end = content.indexOf('"""', start);
+  if (end === -1 || content[end - 1] !== "\n") return null;
+  const body = edit(content.slice(start, end));
+  return content.slice(0, start) + (body.endsWith("\n") ? body : `${body}\n`) + content.slice(end);
+}
+
+// Fragment prose inside that string: a backslash or a run of three quotes
+// would change or end it, so both are escaped (TOML reads them back as written).
+function tomlBasicText(prose: string): string {
+  return prose.replace(/\\/g, "\\\\").replace(/"""/g, '\\"\\"\\"');
+}
+
+// Cut one sentinel-marked block together with the separator spliceFragment
+// inserted with it, and nothing else, so the file's own bytes survive: a block
+// owns the blank line to the block after it, else the one from the block
+// before it, else its two surrounding newlines. The same rule as
+// cutPluginFragment in aidlc-plugin.ts, which disable and prune use.
+function cutFragmentBlock(content: string, start: number, end: number): string {
+  if (content.startsWith("\n\n<!-- plugin:", end)) return content.slice(0, start) + content.slice(end + 2);
+  const before = content.slice(0, start);
+  const previousClose = before.lastIndexOf("<!-- /plugin:");
+  if (previousClose !== -1 && /^<!-- \/plugin:[^\n]* -->\n\n$/.test(before.slice(previousClose))) {
+    return content.slice(0, start - 2) + content.slice(end);
+  }
+  const from = content[start - 1] === "\n" ? start - 1 : start;
+  const to = content[end] === "\n" ? end + 1 : end;
+  return content.slice(0, from) + content.slice(to);
+}
+
 // Read half: a single frontmatter split (LF/CRLF tolerant) shared by every read
 // in this file — after the three-file fold there is one parser here, not two, so
 // a robustness fix lands once (review #8). Contribution frontmatter is a distinct
@@ -1915,7 +1966,14 @@ interface FragmentRecord { anchor: string; order: number; hash: string; }
 // its correct (order, plugin) slot among peer plugin blocks at the same anchor —
 // so plugins composing in separate hook runs still interleave by (order, plugin),
 // never by hook-firing order. Never relies on "the next heading" to bound a block.
-function spliceFragment(content: string, f: Fragment, target: string): string {
+function spliceFragment(
+  content: string,
+  f: Fragment,
+  target: string,
+  // How the prose is written into this file (a Codex twin escapes it); the
+  // hash is always over the prose itself, so every file carries one marker.
+  encode: (prose: string) => string = (prose) => prose,
+): string {
   const hash = hashProse(f.prose);
   const pE = escapeRegExp(f.plugin), aE = escapeRegExp(f.anchor);
   // The close marker carries the SAME content hash as the open, so the block's
@@ -1924,7 +1982,7 @@ function spliceFragment(content: string, f: Fragment, target: string): string {
   // upgrade re-splice (round-5 — the old hashless close matched the first
   // occurrence, so prose containing the marker corrupted the block).
   const closeOf = (h: string) => `<!-- /plugin:${f.plugin}:${f.anchor}:${f.order}:${h} -->`;
-  const block = `<!-- plugin:${f.plugin}:${f.anchor}:${f.order}:${hash} -->\n${f.prose}\n${closeOf(hash)}`;
+  const block = `<!-- plugin:${f.plugin}:${f.anchor}:${f.order}:${hash} -->\n${encode(f.prose)}\n${closeOf(hash)}`;
 
   // Present already? Skip on hash match; replace the whole block on hash change.
   const mine = content.match(new RegExp(`<!-- plugin:${pE}:${aE}:${f.order}:([0-9a-f]+) -->`));
@@ -2558,6 +2616,7 @@ try {
       // file replace the first, winner decided by readdir order). Aligned with
       // the "collision is an error" doc claim.
       const ordered = [...frags].sort((a, b) => a.order - b.order || a.plugin.localeCompare(b.plugin));
+      const spliced: Fragment[] = [];
       for (const f of ordered) {
         const key = `${target}:${f.plugin}:${f.anchor}:${f.order}`;
         if (seenFragKeys.has(key)) { recordDrop(`contribution to ${target}: duplicate fragment ${f.plugin}:${f.anchor}:${f.order} (same plugin/anchor/order, possibly across files); dropped`); continue; }
@@ -2569,12 +2628,31 @@ try {
         const openIdx = stageContent.indexOf(open);
         if (openIdx !== -1 && stageContent.indexOf(close, openIdx + open.length) !== -1) {
           recordFragment(target, fragment);
+          spliced.push(f);
         }
       }
 
       if (stageContent !== before) { // compare-before-write (review #11)
         writeComposeFile(stageFile, stageContent);
         changed = true;
+      }
+      // The persona's native twins take the fragments that landed in it, in the same order.
+      if (isAgentContribution) {
+        for (const twin of personaTwinFiles(target)) {
+          const label = `${target} (${relative(PROJECT_DIR, twin.path).replace(/\\/g, "/")})`;
+          const current = readFileSync(twin.path, "utf-8").replace(/\r\n/g, "\n");
+          const spliceAll = (text: string): string =>
+            spliced.reduce((acc, f) => spliceFragment(acc, f, label, twin.toml ? tomlBasicText : undefined), text);
+          const next = twin.toml ? editTomlInstructions(current, spliceAll) : spliceAll(current);
+          if (next === null) {
+            recordDrop(`contribution to ${label}: the file has no developer_instructions string, so its fragments were not added there`);
+            continue;
+          }
+          if (next !== current) {
+            writeComposeFile(twin.path, next);
+            changed = true;
+          }
+        }
       }
     }
   }
@@ -2591,9 +2669,35 @@ try {
         Number.isSafeInteger(f.order) && typeof f.hash === "string" &&
         !seenFragKeys.has(`${target}:${PLUGIN_NAME}:${f.anchor}:${f.order}`));
       if (stale.length === 0) continue;
-      // The sidecar is project data: a key that is not a plain stage slug is
-      // not resolved to a path.
-      const stageFile = /^[a-z0-9][a-z0-9-]*$/.test(target) ? findStageFile(target) : null;
+      // The sidecar is project data: a key that is not a plain stage or agent
+      // slug is not resolved to a path.
+      const plainSlug = /^[a-z0-9][a-z0-9-]*$/.test(target);
+      const stageFile = plainSlug ? findStageFile(target) : null;
+      const personaFile = plainSlug && !stageFile ? findAgentFile(target) : null;
+      if (personaFile) {
+        // A persona and its native twins lose exactly the block compose added,
+        // so each reads as a first compose of this version writes it.
+        const files = [{ path: personaFile, toml: false }, ...personaTwinFiles(target)];
+        for (const file of files) {
+          const current = readFileSync(file.path, "utf-8").replace(/\r\n/g, "\n");
+          const cutStale = (text: string): string => {
+            let content = text;
+            for (const f of stale) {
+              const open = `<!-- plugin:${PLUGIN_NAME}:${f.anchor}:${f.order}:${f.hash} -->`;
+              const close = `<!-- /plugin:${PLUGIN_NAME}:${f.anchor}:${f.order}:${f.hash} -->`;
+              const start = content.indexOf(open);
+              const end = start === -1 ? -1 : content.indexOf(close, start + open.length);
+              if (start !== -1 && end !== -1) content = cutFragmentBlock(content, start, end + close.length);
+            }
+            return content;
+          };
+          const next = file.toml ? editTomlInstructions(current, cutStale) ?? current : cutStale(current);
+          if (next !== current) {
+            writeComposeFile(file.path, next);
+            changed = true;
+          }
+        }
+      }
       if (stageFile) {
         let content = readFileSync(stageFile, "utf-8").replace(/\r\n/g, "\n");
         const before = content;

@@ -2037,6 +2037,139 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
     ]);
   });
 
+  // Every file a harness's own dispatch reads a core persona's instructions
+  // from: the Markdown persona, plus the native twin the harness builds from it
+  // (the Codex agent TOML's developer_instructions, the opencode and Copilot
+  // native agents). Kiro CLI's agent JSON loads its prompt from the Markdown
+  // persona, so its instructions are that file's.
+  function personaInstructionSurfaces(
+    harness: ShippedHarnessName,
+    projectDir: string,
+    agent: string,
+  ): Array<{ rel: string; instructions: () => string }> {
+    const leaf = harnessByName(harness).manifest.harnessDir;
+    const markdown = (rel: string) => ({ rel, instructions: () => readFileSync(join(projectDir, rel), "utf-8") });
+    const surfaces = [markdown(`${leaf}/agents/${agent}.md`)];
+    if (harness === "codex") {
+      const rel = `${leaf}/agents/${agent}.toml`;
+      surfaces.push({
+        rel,
+        instructions: () => {
+          const parsed = Bun.TOML.parse(readFileSync(join(projectDir, rel), "utf-8")) as { developer_instructions?: unknown };
+          return String(parsed.developer_instructions ?? "");
+        },
+      });
+    }
+    if (harness === "opencode") surfaces.push(markdown(`.opencode/agents/${agent}.md`));
+    if (harness === "copilot") surfaces.push(markdown(`.github/agents/${agent}.md`));
+    if (harness === "kiro") {
+      const rel = `${leaf}/agents/${agent}.json`;
+      surfaces.push({
+        rel,
+        instructions: () => {
+          const prompt = String((JSON.parse(readFileSync(join(projectDir, rel), "utf-8")) as { prompt?: unknown }).prompt ?? "");
+          const file = prompt.match(/^file:\/\/(.+)$/)?.[1];
+          return file ? readFileSync(join(projectDir, leaf, "agents", file), "utf-8") : prompt;
+        },
+      });
+    }
+    return surfaces;
+  }
+
+  function harnessToolEnv(harness: ShippedHarnessName, projectDir: string): NodeJS.ProcessEnv {
+    return {
+      ...process.env,
+      CLAUDE_PROJECT_DIR: projectDir,
+      AIDLC_PROJECT_DIR: projectDir,
+      AIDLC_HARNESS_DIR: harnessByName(harness).manifest.harnessDir,
+      AIDLC_HARNESS_NAME: harness,
+    };
+  }
+
+  function composedSurfaceRow(harness: ShippedHarnessName, projectDir: string): string {
+    const leaf = harnessByName(harness).manifest.harnessDir;
+    const doctor = spawnSync(BUN, [join(projectDir, leaf, "tools", "aidlc-utility.ts"), "doctor", "--verbose"], {
+      cwd: projectDir, encoding: "utf-8", timeout: remainingOperationTimeoutMs(NATIVE_RUNTIME_CASE_TIMEOUT_MS),
+      env: harnessToolEnv(harness, projectDir),
+    });
+    const output = `${doctor.stdout}${doctor.stderr}`;
+    const at = output.indexOf("Composed plugin surface");
+    expect(at, `${harness}: doctor prints the composed surface row\n${output}`).toBeGreaterThan(-1);
+    return output.slice(at, output.indexOf("\n", output.indexOf("\n", at) + 1));
+  }
+
+  test("a persona fragment reaches the agent's instructions on every harness and strips back to the shipped bytes", () => {
+    for (const harness of HARNESS_MATRIX) {
+      const name = harness.name;
+      const shipped = new Map<string, Buffer>();
+      let surfaces: ReturnType<typeof personaInstructionSurfaces> = [];
+      const projectDir = composePluginFixture({
+        plugin: PLUGIN,
+        harness: name,
+        projectDir: join(tmp, `persona-reach-${name}`),
+        pluginBuilt: pluginBuilds.get(name)!,
+        beforeCompose: (fixture) => {
+          surfaces = personaInstructionSurfaces(name, fixture.projectDir, "aidlc-quality-agent");
+          for (const surface of surfaces) shipped.set(surface.rel, readFileSync(join(fixture.projectDir, surface.rel)));
+        },
+      }).projectDir;
+      for (const surface of surfaces) {
+        const instructions = surface.instructions();
+        expect(instructions, `${name}: ${surface.rel}`).toContain("**test-pro coverage read-out (mandatory):**");
+        expect(instructions, `${name}: ${surface.rel}`).toContain("**Works with (test-pro)**: test-pro-metrics-agent");
+      }
+      expect(composedSurfaceRow(name, projectDir), name).toContain("all enabled plugin stages and recorded contributions are present");
+
+      const disable = spawnSync(
+        BUN,
+        [join(projectDir, harness.manifest.harnessDir, "tools", "aidlc-utility.ts"), "select-plugins", "aidlc"],
+        { cwd: projectDir, encoding: "utf-8", timeout: remainingOperationTimeoutMs(NATIVE_RUNTIME_CASE_TIMEOUT_MS), env: harnessToolEnv(name, projectDir) },
+      );
+      expect(disable.status, `${name}: ${disable.stdout}${disable.stderr}`).toBe(0);
+      for (const surface of surfaces) {
+        expect(
+          readFileSync(join(projectDir, surface.rel)).equals(shipped.get(surface.rel)!),
+          `${name}: ${surface.rel} is back to its shipped bytes`,
+        ).toBe(true);
+      }
+    }
+  });
+
+  test("doctor names a native persona twin that lost its fragment", () => {
+    for (const name of ["codex", "opencode", "copilot"] as const) {
+      const projectDir = composePluginFixture({
+        plugin: PLUGIN,
+        harness: name,
+        projectDir: join(tmp, `persona-twin-doctor-${name}`),
+        pluginBuilt: pluginBuilds.get(name)!,
+      }).projectDir;
+      const twin = personaInstructionSurfaces(name, projectDir, "aidlc-quality-agent")[1];
+      const path = join(projectDir, twin.rel);
+      const composed = readFileSync(path, "utf-8");
+      const open = composed.indexOf("<!-- plugin:test-pro:after-preflight:90:");
+      const closeMarker = "<!-- /plugin:test-pro:after-preflight:90:";
+      const close = composed.indexOf(" -->", composed.indexOf(closeMarker, open)) + " -->".length;
+      expect(open, `${name}: the twin carries the fragment`).toBeGreaterThan(-1);
+      writeFileSync(path, composed.slice(0, open) + composed.slice(close));
+      const row = composedSurfaceRow(name, projectDir);
+      expect(row, name).toContain("test-pro: agent aidlc-quality-agent");
+      expect(row, name).toContain(twin.rel);
+      expect(row, name).toContain("fragments=[after-preflight@90");
+    }
+  });
+
+  test("doctor reads a CRLF persona as the text compose wrote", () => {
+    const projectDir = composePluginFixture({
+      plugin: PLUGIN,
+      harness: "claude",
+      projectDir: join(tmp, "persona-crlf-doctor"),
+      pluginBuilt: pluginBuilds.get("claude")!,
+    }).projectDir;
+    const persona = join(projectDir, ".claude", "agents", "aidlc-quality-agent.md");
+    writeFileSync(persona, readFileSync(persona, "utf-8").replace(/\r?\n/g, "\r\n"));
+    expect(composedSurfaceRow("claude", projectDir)).toContain("all enabled plugin stages and recorded contributions are present");
+  });
+
   test("agent contributions anchor after the preflight, refuse adds, and strip on disable", () => {
     const scope = [
       "---", "name: syn-persona", "plugin: syn-persona",
@@ -2297,7 +2430,7 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
     proj: string,
     name: string,
     files: Record<string, string>,
-    harnessLeaf: ".claude" | ".kiro" = ".claude",
+    harnessLeaf: ".claude" | ".kiro" | ".codex" = ".claude",
   ): string {
     const root = join(proj, `_plugin-${name}`);
     for (const [rel, body] of Object.entries(files)) {
@@ -2400,6 +2533,51 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
     });
     expect(readFileSync(stagePath, "utf-8")).not.toContain(`plugin:${name}:`);
     expect(existsSync(sidecarPath)).toBe(false);
+  });
+
+  test("a persona fragment the plugin moved leaves the persona and its Codex twin exactly", () => {
+    const name = "syn-persona-move";
+    const personaFiles = (anchor: string, order: number): Record<string, string> => ({
+      "scopes/syn-persona-move.md": [
+        "---", "name: syn-persona-move", "plugin: syn-persona-move", "depth: Standard", "keywords:", "  - synthetic",
+        "description: synthetic scope carrying the plugin identity", "skeleton: off", "---", "", "# syn-persona-move", "",
+      ].join("\n"),
+      "contributions/agents/aidlc-quality-agent.md": [
+        "---", "target: aidlc-quality-agent", "plugin: syn-persona-move",
+        "fragments:", `  - anchor: ${anchor}`, `    order: ${order}`,
+        "---", "", `## fragment: ${anchor}`, "", "MOVED-PERSONA-PROSE: read the snapshot first.", "",
+      ].join("\n"),
+    });
+    const { proj } = composeSynthetic(name, personaFiles("after-preflight", 100), ".codex");
+    const personaPath = join(proj, ".codex", "agents", "aidlc-quality-agent.md");
+    const twinPath = join(proj, ".codex", "agents", "aidlc-quality-agent.toml");
+    const sidecarPath = join(proj, ".codex", "tools", "data", `plugin-contrib-${name}.json`);
+    const twinInstructions = () =>
+      String((Bun.TOML.parse(readFileSync(twinPath, "utf-8")) as { developer_instructions?: unknown }).developer_instructions);
+    expect(readFileSync(personaPath, "utf-8")).toContain(`<!-- plugin:${name}:after-preflight:100:`);
+    expect(twinInstructions()).toContain(`<!-- plugin:${name}:after-preflight:100:`);
+
+    // v2 moves the fragment to the end of the body: one block in each file,
+    // and each file reads exactly as a first compose of v2 writes it.
+    recomposeSynthetic(proj, name, personaFiles("end-of-body", 100), ".codex");
+    const { proj: fresh } = composeSynthetic(name, personaFiles("end-of-body", 100), ".codex");
+    for (const rel of [join(".codex", "agents", "aidlc-quality-agent.md"), join(".codex", "agents", "aidlc-quality-agent.toml")]) {
+      const moved = readFileSync(join(proj, rel), "utf-8");
+      expect(moved, rel).not.toContain(`plugin:${name}:after-preflight:`);
+      expect((moved.match(/MOVED-PERSONA-PROSE/g) ?? []).length, rel).toBe(1);
+      expect(moved, rel).toBe(readFileSync(join(fresh, rel), "utf-8"));
+    }
+    expect(twinInstructions()).toContain("MOVED-PERSONA-PROSE");
+    expect(
+      (JSON.parse(readFileSync(sidecarPath, "utf-8"))["aidlc-quality-agent"]?.fragments ?? [])
+        .map((f: { anchor: string }) => f.anchor),
+    ).toEqual(["end-of-body"]);
+
+    // v3 ships no persona contribution: both files are back to the shipped bytes.
+    rmSync(join(proj, `_plugin-${name}`, "contributions", "agents", "aidlc-quality-agent.md"));
+    recomposeSynthetic(proj, name, {}, ".codex");
+    expect(readFileSync(personaPath, "utf-8")).toBe(readFileSync(join(CODEX_DIST, "agents", "aidlc-quality-agent.md"), "utf-8"));
+    expect(readFileSync(twinPath, "utf-8")).toBe(readFileSync(join(CODEX_DIST, "agents", "aidlc-quality-agent.toml"), "utf-8"));
   });
 
   // The hook route: `aidlc engine plugin sync` (the project's aidlc-plugin.ts)

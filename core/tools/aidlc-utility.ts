@@ -407,7 +407,9 @@ import { AIDLC_VERSION } from "./aidlc-version.ts";
 import {
   copyProjectSurfaces,
   cutPluginFragment,
+  personaTwinRels,
   projectDiffPlan,
+  tomlFragmentText,
 } from "./aidlc-plugin.ts";
 import { executePlan } from "./aidlc-transaction.ts";
 import {
@@ -423,6 +425,7 @@ import {
   resolveSkillsPath,
   runtimeHarnessDir,
   runtimeHarnessName,
+  runtimeProjectDir,
 } from "./aidlc-runtime-paths.ts";
 import { HARNESS_PRODUCT_NAMES } from "./aidlc-model-policy.ts";
 import { copyRuntimeUrl } from "./aidlc-release.ts";
@@ -1093,6 +1096,9 @@ function missingRecordedContributions(
   content: string,
   plugin: string,
   record: StageContribRecord,
+  // How a fragment's text reads back from this file (a Codex persona twin
+  // holds it escaped inside a TOML string).
+  fragmentText: (raw: string) => string = (raw) => raw,
 ): string[] {
   const missing: string[] = [];
   for (const field of ["produces", "sensors", "scopes", "required_sections"] as const) {
@@ -1156,7 +1162,7 @@ function missingRecordedContributions(
       if (closeIdx === -1) return [id];
       const wrapped = content.slice(bodyStart, closeIdx);
       if (!wrapped.startsWith("\n") || !wrapped.endsWith("\n")) return [id];
-      return fragmentProseHash(wrapped.slice(1, -1)) === fragment.hash ? [] : [id];
+      return fragmentProseHash(fragmentText(wrapped.slice(1, -1))) === fragment.hash ? [] : [id];
     });
     if (absent.length > 0) missing.push(`fragments=[${absent.join(", ")}]`);
   }
@@ -1314,16 +1320,23 @@ function stripDisabledPluginContributions(
       }
     }
     // Persona contributions are prose-only, so their strip needs no sidecar
-    // record: the fragment sentinels carry the plugin name.
+    // record: the fragment sentinels carry the plugin name. The persona's
+    // native twins carry the same fragments.
     const personasDir = resolveHarnessPath(["agents"], { mutable: true });
     if (existsSync(personasDir)) {
+      const projectDir = runtimeProjectDir();
+      const harness = runtimeHarnessName(projectDir, harnessDir());
       for (const f of readdirSync(personasDir).filter((name) => name.endsWith(".md")).sort()) {
-        const path = join(personasDir, f);
-        const before = readFileSync(path, "utf-8");
-        const content = removePluginFragments(before, plugin);
-        if (content !== before) {
-          writeFileSync(path, content, "utf-8");
-          pluginTouched = true;
+        const twins = personaTwinRels(harness, harnessDir(), f.replace(/\.md$/, ""))
+          .map((rel) => join(projectDir, rel))
+          .filter((path) => existsSync(path) && lstatSync(path).isFile());
+        for (const path of [join(personasDir, f), ...twins]) {
+          const before = readFileSync(path, "utf-8");
+          const content = removePluginFragments(before, plugin);
+          if (content !== before) {
+            writeFileSync(path, content, "utf-8");
+            pluginTouched = true;
+          }
         }
       }
     }
@@ -4664,18 +4677,42 @@ export async function collectDoctorReport(
     const missingPluginStages: string[] = [];
     const stageSources = new Map<
       string,
-      { path: string; content: string; parsed: Record<string, unknown>; kind: "stage" | "agent" }
+      {
+        path: string;
+        content: string;
+        parsed: Record<string, unknown>;
+        kind: "stage" | "agent";
+        twins?: Array<{ path: string; content: string; toml: boolean }>;
+      }
     >();
     const stagesRoot = resolveHarnessPath(["aidlc-common", "stages"]);
     // Persona contributions (prose fragments into <harness>/agents/*.md) are
-    // verified from the same sidecar records, keyed by the agent slug. A
-    // persona has no structural fields, so its parsed view is empty.
+    // verified from the same sidecar records, keyed by the agent slug, in the
+    // persona and in each native twin compose keeps in step with it. A
+    // persona has no structural fields, so its parsed view is empty. CRLF
+    // reads as LF, as for stage sources below.
     const personasRoot = resolveHarnessPath(["agents"]);
     if (existsSync(personasRoot)) {
+      const harness = runtimeHarnessName(projectDir, harnessDir());
       for (const f of readdirSync(personasRoot).filter((name) => name.endsWith(".md")).sort()) {
         const path = join(personasRoot, f);
+        const slug = f.replace(/\.md$/, "");
         try {
-          stageSources.set(f.replace(/\.md$/, ""), { path, content: readFileSync(path, "utf-8"), parsed: {}, kind: "agent" });
+          const twins = personaTwinRels(harness, harnessDir(), slug).flatMap((rel) => {
+            const twinPath = join(projectDir, rel);
+            try {
+              return [{ path: twinPath, content: readFileSync(twinPath, "utf-8").replace(/\r\n/g, "\n"), toml: rel.endsWith(".toml") }];
+            } catch {
+              return [];
+            }
+          });
+          stageSources.set(slug, {
+            path,
+            content: readFileSync(path, "utf-8").replace(/\r\n/g, "\n"),
+            parsed: {},
+            kind: "agent",
+            twins,
+          });
         } catch {
           // An unreadable persona surfaces through the agent roster checks.
         }
@@ -4784,6 +4821,18 @@ export async function collectDoctorReport(
             missingComposition.push(
               `${plugin}: ${source.kind} ${target} (${source.path}) missing ${missing.join("; ")}`,
             );
+          }
+          for (const twin of source.twins ?? []) {
+            const twinMissing = missingRecordedContributions(
+              {},
+              twin.content,
+              plugin,
+              { fragments: (record as StageContribRecord).fragments },
+              twin.toml ? tomlFragmentText : undefined,
+            );
+            if (twinMissing.length > 0) {
+              missingComposition.push(`${plugin}: agent ${target} (${twin.path}) missing ${twinMissing.join("; ")}`);
+            }
           }
         }
       }

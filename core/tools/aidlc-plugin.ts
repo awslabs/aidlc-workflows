@@ -31,6 +31,7 @@ import {
   resolveHarnessPath,
   resolveSkillsPath,
   runtimeHarnessDir,
+  runtimeHarnessName,
 } from "./aidlc-runtime-paths.ts";
 import {
   executePlan,
@@ -1167,6 +1168,37 @@ export function cutPluginFragment(content: string, start: number, end: number): 
   return content.slice(0, from) + content.slice(to);
 }
 
+// The harness-native twins compose keeps in step with a core persona, as
+// project-relative paths: the files a harness's own dispatch reads instead of
+// the Markdown persona (the Codex agent TOML, the opencode and Copilot native
+// agents). Kiro CLI's agent JSON loads its prompt from the Markdown persona,
+// and the other harnesses dispatch from it directly.
+export function personaTwinRels(harness: string, harnessDir: string, slug: string): string[] {
+  if (harness === "codex") return [`${harnessDir}/agents/${slug}.toml`];
+  if (harness === "opencode") return [`.opencode/agents/${slug}.md`];
+  if (harness === "copilot") return [`.github/agents/${slug}.md`];
+  return [];
+}
+
+// A Codex twin holds the persona in one TOML multi-line basic string
+// (developer_instructions). Fragment work runs on that string's text, so every
+// anchor resolves inside it; null when the file has no such string.
+export function editTomlInstructions(content: string, edit: (body: string) => string): string | null {
+  const open = /^developer_instructions = """\n/m.exec(content);
+  if (!open) return null;
+  const start = open.index + open[0].length;
+  const end = content.indexOf('"""', start);
+  if (end === -1 || content[end - 1] !== "\n") return null;
+  const body = edit(content.slice(start, end));
+  return content.slice(0, start) + (body.endsWith("\n") ? body : `${body}\n`) + content.slice(end);
+}
+
+// Fragment text inside that string as TOML reads it: compose escapes a
+// backslash and a run of three quotes there.
+export function tomlFragmentText(raw: string): string {
+  return raw.replace(/\\(["\\])/g, "$1");
+}
+
 function removeFragments(content: string, key: string, path: string): string {
   const escaped = key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const opening = new RegExp(`<!-- plugin:${escaped}:.+?:\\d+:[0-9a-f]+ -->`, "g");
@@ -1235,6 +1267,17 @@ function pruneContributions(stagedProject: string, harnessDir: string, key: stri
     }
     after = removeFragments(after, key, path);
     if (after !== before) writeFileSync(path, after);
+  }
+  // A persona's native twins carry the same fragments.
+  const harness = runtimeHarnessName(stagedProject, harnessDir);
+  for (const persona of regularFiles(personasRoot).filter((value) => value.endsWith(".md"))) {
+    for (const rel of personaTwinRels(harness, harnessDir, basename(persona, ".md"))) {
+      const twin = join(stagedProject, rel);
+      if (!existsSync(twin) || !lstatSync(twin).isFile()) continue;
+      const before = readFileSync(twin, "utf-8");
+      const after = removeFragments(before, key, twin);
+      if (after !== before) writeFileSync(twin, after);
+    }
   }
   rmSync(sidecar, { force: true });
 }
