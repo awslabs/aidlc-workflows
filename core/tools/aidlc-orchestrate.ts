@@ -4547,12 +4547,14 @@ function pastedDocumentNote(raw: string): string {
 }
 
 // How this install calls a subagent, where the tool takes a shape of its own.
-// The two Kiro surfaces take different tools, and on Kiro CLI a call without
-// its `stages` array is refused by the tool: the person then reads "The tool
-// input does not match the tool schema: missing field `stages`" for something
-// they did not do (five live runs). So the step names the call, not just the
-// agent. Every other harness dispatches a named agent with free-form input and
-// gets no sentence.
+// The two Kiro surfaces take different tools, and Kiro CLI refuses a call that
+// leaves out either `task` or `stages`: the person then reads "The tool input
+// does not match the tool schema: missing field `stages`" (five live runs), or
+// "missing field `task`" (one of two live runs with the first wording of this
+// step), for something they did not do. So the step names the tool as Kiro
+// names it (`subagent` on 2.23.1) and both fields it needs, not just the agent.
+// Every other harness dispatches a named agent with free-form input and gets no
+// sentence.
 function subagentCallShape(agent: string): string | null {
   let harness: string;
   try {
@@ -4562,9 +4564,10 @@ function subagentCallShape(agent: string): string | null {
     return null;
   }
   if (harness === "kiro") {
-    return "On this install the subagent tool is `orchestrate_subagent`: call it as " +
+    return "On this install the subagent tool is `subagent`: call it as " +
       `{mode:"blocking", task:"<this message>", stages:[{name:"compose", role:"${agent}", ` +
-      'prompt_template:"<this message>"}]}, because a call with no `stages` array is refused by the tool.';
+      'prompt_template:"<this message>"}]}. It needs both `task` and `stages`, each filled: a call missing ' +
+      "either one is refused by the tool.";
   }
   if (harness === "kiro-ide") {
     return "On this install the subagent tool is `invoke_sub_agent`: call it as " +

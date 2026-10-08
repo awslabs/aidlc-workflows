@@ -74,13 +74,20 @@ async function composeDispatch(harness: string): Promise<string> {
 }
 
 describe("the composer dispatch names the call this install takes", () => {
-  test("Kiro CLI gets the orchestrate_subagent shape, with its stages array", async () => {
+  // Live on Kiro CLI 2.23.1, two runs of the compose offer: one was clean and one
+  // still failed its first call on screen, now "missing field `task`" (the agent
+  // sent mode and stages and left task out). And Kiro names the tool `subagent`
+  // there, not `orchestrate_subagent`. So the step names the tool as Kiro names
+  // it and says both fields are needed, not just the one that was missing first.
+  test("Kiro CLI gets the subagent call, and both required fields", async () => {
     const message = await composeDispatch("kiro");
-    expect(message).toContain("`orchestrate_subagent`");
+    expect(message).toContain("the subagent tool is `subagent`");
+    expect(message).not.toContain("`orchestrate_subagent`");
     expect(message).toContain(
       '{mode:"blocking", task:"<this message>", stages:[{name:"compose", role:"aidlc-composer-agent", prompt_template:"<this message>"}]}',
     );
-    expect(message).toContain("a call with no `stages` array is refused by the tool");
+    expect(message).toContain("needs both `task` and `stages`, each filled");
+    expect(message).toContain("a call missing either one is refused by the tool");
   });
 
   test("Kiro IDE gets its own one-agent call, never the stages array", async () => {
@@ -93,7 +100,7 @@ describe("the composer dispatch names the call this install takes", () => {
   test("a harness that dispatches a named agent is unchanged", async () => {
     const message = await composeDispatch("claude");
     expect(message).toContain("Dispatch the composer agent");
-    expect(message).not.toContain("orchestrate_subagent");
+    expect(message).not.toContain("subagent tool is");
     expect(message).not.toContain("stages:[");
   });
 });
