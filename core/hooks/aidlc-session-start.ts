@@ -569,7 +569,7 @@ try {
   // An unreadable install keeps the default step.
 }
 const sayTheLine = hidesTheNote
-  ? ". This tool does not show that line to the person, so if you carry on with the work, first say it to them once, on its own line, and nothing else about it."
+  ? ". This tool does not show that line to the person. If you had just asked them a question, record it and end your turn saying nothing; otherwise, if you carry on with the work, first say it to them once, on its own line, and nothing else about it."
   : ", and say nothing about it.";
 
 const context = `AIDLC WORKFLOW ACTIVE

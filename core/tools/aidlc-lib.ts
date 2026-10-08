@@ -11601,12 +11601,18 @@ function maskQuotedDecisionExamples(text: string): string {
     .replace(/(^|[\s([{:])'[^'\n]+'(?=$|[\s)\]},.;:!?])/gm, mask);
 }
 
-// A decision or answer text that attributes the person's confirmation to the
-// Stop hook, or to an implied consent ("user implicitly confirmed by hook
-// trigger"): nobody's decision. One regex for the question text (`log
-// decision`) and the reply text (`log answer`).
+// A text that credits the Stop hook with the person's confirmation ("user
+// implicitly confirmed by hook trigger", "approval from the stop hook"):
+// nobody's decision. Only the hook is named here, because this regex joins the
+// shared check that also reads the person's own replies, change requests and
+// approvals: their words about the consent rules of their app ("orders are
+// implicitly confirmed after 48 hours", "tacit approval") are theirs to record.
 const IMPLIED_CONFIRMATION_RE =
-  /\b(?:implicit(?:ly)?|implied|tacit(?:ly)?|assumed)\s+(?:confirm(?:ed|ation|s)?|approv(?:ed|al)|consent(?:ed)?)\b|\bconfirm(?:ed|ation)\s+by\s+(?:the\s+)?(?:stop[\s-]+)?(?:hook|trigger)\b|\bby\s+(?:the\s+)?(?:stop[\s-]+)?hook[\s-]+trigger\b/i;
+  /\b(?:confirm(?:ed|ation|s)?|approv(?:ed|al)|consent(?:ed)?)\s+(?:by|from)\s+(?:the\s+)?(?:stop[\s-]+)?hook\b|\bby\s+(?:the\s+)?(?:stop[\s-]+)?hook[\s-]+trigger\b/i;
+// The agent's question text (`log decision`) has no person's words in it, so
+// there the claim that the person implicitly agreed is refused too.
+const PERSON_IMPLIED_RE =
+  /\b(?:user|person|human)\s+(?:implicit(?:ly)?|tacit(?:ly)?)\s+(?:confirm(?:ed|s)?|approv(?:ed|es)?|consent(?:ed|s)?|agree[sd]?)\b/i;
 
 export function selfAttributedDecisionMarker(
   text: string | undefined | null,
@@ -11702,7 +11708,8 @@ export function selfAttributedDecisionMarker(
 // masked as above, so a question that mentions the phrase is still a question.
 export function impliedConfirmationMarker(text: string | undefined | null): SelfAttributionMarker | null {
   const original = text ?? "";
-  const match = IMPLIED_CONFIRMATION_RE.exec(maskQuotedDecisionExamples(original));
+  const candidate = maskQuotedDecisionExamples(original);
+  const match = IMPLIED_CONFIRMATION_RE.exec(candidate) ?? PERSON_IMPLIED_RE.exec(candidate);
   return match?.index === undefined
     ? null
     : { category: "implied-confirmation", phrase: original.slice(match.index, match.index + match[0].length) };
