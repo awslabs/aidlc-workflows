@@ -1,7 +1,7 @@
 import { DEFAULT_SUBPROCESS_TIMEOUT_MS } from "./aidlc-runtime-budget.ts";
 import { spawnSync } from "node:child_process";
 import { createHash, createHmac, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
-import { accessSync, chmodSync, closeSync, constants as fsConstants, cpSync, type Dirent, existsSync, fstatSync, linkSync, lstatSync, mkdirSync, openSync, opendirSync, readdirSync, readFileSync, readlinkSync, readSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, unlinkSync, writeFileSync, writeSync } from "node:fs";
+import { accessSync, chmodSync, closeSync, constants as fsConstants, cpSync, type Dirent, existsSync, fstatSync, linkSync, lstatSync, mkdirSync, openSync, opendirSync, readdirSync, readFileSync, readlinkSync, readSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, unlinkSync, utimesSync, writeFileSync, writeSync } from "node:fs";
 import { homedir, hostname, tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve as resolvePath, sep, win32 } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -26596,6 +26596,32 @@ export function markEngineTouch(projectDir: string, intent?: string, space?: str
   if (isReadOnlyEngineProbe()) return;
   if (!workflowIsCreated(projectDir, intent, space)) return;
   touchTurnMarker(projectDir, "engine-touch", intent, space);
+}
+
+// The engine mark for the work an intent or space switch selects. Written only
+// when the record has none (work made before the markers shipped, or a fresh
+// clone: .aidlc-engine/ is not committed), and dated just before the record's
+// last human turn when it has one. So the switch itself never reads as the
+// engine's unfinished turn: a self-switch on marked work (a new chat's first
+// `/aidlc intent <the work in hand>`, or the resume offer's Yes) ends its turn
+// as it always did, a plain question on the selected work ends its turn too,
+// and work the engine hands out later refreshes the mark as always.
+export function markSelectedWork(projectDir: string, intent?: string, space?: string): void {
+  try {
+    if (turnMarkerStat(projectDir, "engine-touch", intent, space)?.isFile()) return;
+  } catch {
+    return; // a link on the way reads as no mark, and nothing is written through it
+  }
+  markEngineTouch(projectDir, intent, space);
+  try {
+    const human = turnMarkerStat(projectDir, "human-turn", intent, space);
+    if (!human?.isFile()) return;
+    const mark = recordFileTargetOrThrow(docsRoot(projectDir, intent, space), join(ENGINE_DIR, "engine-touch"));
+    const before = new Date(human.mtimeMs - 1000);
+    utimesSync(mark, before, before);
+  } catch {
+    // Advisory: the mark's own time stands.
+  }
 }
 
 // The transcript-free reading of "the ending turn was conversational": the last

@@ -353,6 +353,7 @@ import {
   recordSessionIntentSwitch,
   clearSessionIntentHandoff,
   markEngineTouch,
+  markSelectedWork,
   LONE_INTENT_PREFIX,
   recordIntentKey,
   writeSessionIntentUuid,
@@ -8698,12 +8699,14 @@ function handleIntent(
     );
   }
   setActiveIntentCursor(projectDir, match.dirName, space);
-  // The selected work gets the engine mark new work gets from `intent create`.
-  // Without it, on the hosts that read turn markers instead of a transcript, a
-  // record made before the markers shipped (or freshly cloned: .aidlc-engine/ is
-  // not committed) reads every later plain question as the engine's unfinished
-  // turn, and the Stop hook starts the work's first stage unasked.
-  markEngineTouch(projectDir, match.dirName, space);
+  // The selected work gets the engine mark new work gets from `intent create`,
+  // when it has none yet. Without it, on the hosts that read turn markers
+  // instead of a transcript, a record made before the markers shipped (or
+  // freshly cloned: .aidlc-engine/ is not committed) reads every later plain
+  // question as the engine's unfinished turn, and the Stop hook starts the
+  // work's first stage unasked. A mark the record already has is left alone, so
+  // a self-switch ends its turn as before (see markSelectedWork).
+  markSelectedWork(projectDir, match.dirName, space);
   // Re-stamp the LIVE conversation's session→intent record to the switched-to
   // intent. WHY: the resume-rebind stamp (session-start hook) is keyed by
   // session_id, which this tool never sees; only the hook does. Without this, a
@@ -9079,9 +9082,10 @@ function handleSpace(projectDir: string, positional: string[], flags: Record<str
   const selection = resolveWorkflowSelection(projectDir);
   setActiveSpaceCursor(projectDir, target);
   // The work the space selects (its cursor's record, or its lone record) gets
-  // the engine mark, as an intent switch leaves it; see handleIntent.
+  // the engine mark when it has none, as an intent switch leaves it; see
+  // handleIntent.
   const selected = activeIntent(projectDir, target);
-  if (selected !== null) markEngineTouch(projectDir, selected, target);
+  if (selected !== null) markSelectedWork(projectDir, selected, target);
   const sessionId = selection.sessionId ?? readCurrentSessionId(projectDir);
   const priorUuid = sessionId ? readSessionIntentUuid(projectDir, sessionId) : null;
   let spaceHasNoIntent = false;
