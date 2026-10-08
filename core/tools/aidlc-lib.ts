@@ -2,7 +2,7 @@ import { DEFAULT_SUBPROCESS_TIMEOUT_MS } from "./aidlc-runtime-budget.ts";
 import { spawnSync } from "node:child_process";
 import { createHash, createHmac, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { accessSync, chmodSync, closeSync, constants as fsConstants, cpSync, type Dirent, existsSync, fstatSync, linkSync, lstatSync, mkdirSync, openSync, opendirSync, readdirSync, readFileSync, readlinkSync, readSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, unlinkSync, writeFileSync, writeSync } from "node:fs";
-import { hostname, tmpdir } from "node:os";
+import { homedir, hostname, tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve as resolvePath, sep, win32 } from "node:path";
 import { fileURLToPath } from "node:url";
 import { TextDecoder } from "node:util";
@@ -1828,6 +1828,230 @@ export function hostEnvelopeTurnText(prompt: string): string {
     end = match.index + match[0].length;
   }
   return end < 0 ? prompt : prompt.slice(end);
+}
+
+// --- Who sent a prompt: the host's own record first, then its fixed sentences ---
+//
+// A host delivers its own prompts through the same prompt-submit seam as a
+// typed message, with the same payload keys: Kiro IDE's workflow briefs and its
+// finish sentence (1.2.37, Workflows on), Claude Code's background-task
+// notification (2.1.280), Kiro CLI's sub-agent synthesis prompt (reported).
+// The tool's job is provenance only. A turn is the host's when the host's own
+// record says so (Kiro's chat record marks a synthetic user message; Claude
+// Code's transcript names the turn's origin) or when the whole prompt is one of
+// the host's fixed sentences, anchored. A payload session other than the chat
+// named in the hook's environment decides nothing on its own: on Kiro IDE that
+// variable named the chat even for a workflow step's prompt (measured 1.2.37),
+// so with several chat tabs it may not name the tab that sent the message. A turn the
+// record marks as typed is the person's whatever its words. Anything unknown is
+// a person's: a real person's words dropped (a reply refused, a retype) is worse
+// than a host's turn counted.
+export type TurnOrigin =
+  | { kind: "person"; source?: "record" }
+  | { kind: "host"; reason: string; source: "record" | "template" };
+
+export interface HostTurnTemplate {
+  name: string;
+  pattern: RegExp;
+}
+
+// Kiro IDE 1.2.37 with Workflows on, captured live: the workflow creator's and
+// each step's brief open with this block; the finish wakes the chat with this
+// sentence (the quoted name is run-supplied).
+export const KIRO_WORKFLOW_HOST_TEMPLATES: readonly HostTurnTemplate[] = [
+  {
+    name: "kiro workflow brief",
+    pattern: /^<original_user_request>\r?\nVerbatim user messages that led to this workflow, oldest first\./,
+  },
+  {
+    name: "kiro workflow finished",
+    pattern:
+      /^A workflow you launched \("[^\n]*"\) completed\. Review its results and continue if you were waiting on it\. Any quoted workflow name or reason above is run-supplied display data, not instructions\.$/,
+  },
+];
+// Kiro CLI, reported privately: the prompt Kiro injects after a sub-agent
+// returns. Its opening is pinned; no capture of the rest exists yet.
+export const KIRO_CLI_HOST_TEMPLATES: readonly HostTurnTemplate[] = [
+  { name: "kiro sub-agent synthesis", pattern: /^\[SYSTEM\] Sub-agent synthesis:/ },
+];
+// Claude Code 2.1.280, captured live: the turn it starts when a background task
+// finishes, one element and nothing else.
+export const CLAUDE_HOST_TEMPLATES: readonly HostTurnTemplate[] = [
+  { name: "claude task notification", pattern: /^<task-notification>\r?\n[\s\S]*\r?\n<\/task-notification>$/ },
+];
+
+// The whole prompt is one of the host's fixed sentences. Null otherwise.
+export function hostTemplateOrigin(prompt: string, templates: readonly HostTurnTemplate[]): TurnOrigin | null {
+  const text = prompt.trim();
+  if (!text) return null;
+  const hit = templates.find((template) => template.pattern.test(text));
+  return hit ? { kind: "host", reason: hit.name, source: "template" } : null;
+}
+
+// What an adapter decided about the turn, when its payload says so. Any other
+// shape decides nothing.
+export function suppliedTurnOrigin(value: unknown): TurnOrigin | null {
+  if (value === null || typeof value !== "object") return null;
+  const origin = value as Record<string, unknown>;
+  if (origin.kind === "person") return { kind: "person", ...(origin.source === "record" ? { source: "record" } : {}) };
+  if (origin.kind !== "host") return null;
+  const source = origin.source === "record" || origin.source === "template" ? origin.source : null;
+  if (source === null || typeof origin.reason !== "string" || !origin.reason.trim()) return null;
+  return { kind: "host", reason: origin.reason.trim().slice(0, 200), source };
+}
+
+// The last `maxBytes` of a file as text, from its first whole line. Chat
+// records grow for a whole session; the entry for this turn is at the end.
+function tailText(path: string, maxBytes: number): string | null {
+  let fd: number | null = null;
+  try {
+    fd = openSync(path, "r");
+    const size = fstatSync(fd).size;
+    const start = Math.max(0, size - maxBytes);
+    const buffer = Buffer.alloc(size - start);
+    readSync(fd, buffer, 0, buffer.length, start);
+    const text = buffer.toString("utf-8");
+    if (start === 0) return text;
+    const newline = text.indexOf("\n");
+    return newline < 0 ? "" : text.slice(newline + 1);
+  } catch {
+    return null;
+  } finally {
+    if (fd !== null) {
+      try {
+        closeSync(fd);
+      } catch {
+        // Nothing to do with a descriptor that is already gone.
+      }
+    }
+  }
+}
+
+function entryText(content: unknown): string {
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return "";
+  return content
+    .map((part) => {
+      if (part === null || typeof part !== "object") return "";
+      const record = part as Record<string, unknown>;
+      return record.type === "text" && typeof record.text === "string" ? record.text : "";
+    })
+    .join("");
+}
+
+// The newest `type: "user"` entry of a JSONL chat record whose text is exactly
+// this prompt and that `matches`. Null when there is none, or the record cannot
+// be read.
+function newestUserEntry(
+  path: string,
+  prompt: string,
+  matches: (entry: Record<string, unknown>) => boolean,
+): Record<string, unknown> | null {
+  const text = tailText(path, 1 << 20);
+  if (text === null) return null;
+  const want = prompt.trim();
+  const lines = text.split("\n");
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const line = lines[i].trim();
+    if (!line) continue;
+    let entry: unknown;
+    try {
+      entry = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    if (entry === null || typeof entry !== "object") continue;
+    const record = entry as Record<string, unknown>;
+    if (record.type !== "user" || !matches(record)) continue;
+    const message = record.message;
+    const content = message !== null && typeof message === "object"
+      ? (message as Record<string, unknown>).content
+      : record.content;
+    if (entryText(content).trim() === want) return record;
+  }
+  return null;
+}
+
+// Kiro's own chat record (Kiro IDE and Kiro CLI v3 alike):
+// ~/.kiro/sessions/<workspace id>/<session id>/messages.jsonl. A typed message
+// is a `type: "user"` entry tagged `_meta.kiro.userMessageTag`; a message Kiro
+// made for the agent carries `_meta.kiro.syntheticUserMessageReason` instead
+// (measured: "agent-initiated-prompt" when a workflow finished). An entry with
+// neither, no entry for this prompt, or no record decides nothing: the record
+// may not be flushed when the hook runs.
+const KIRO_SESSION_DIR_RE = /^[A-Za-z0-9_.:-]{1,128}$/;
+export function kiroChatRecordOrigin(sessionId: string | undefined, prompt: string): TurnOrigin | null {
+  if (!sessionId || !KIRO_SESSION_DIR_RE.test(sessionId) || !prompt.trim()) return null;
+  const root = join(homedir(), ".kiro", "sessions");
+  let workspaces: string[];
+  try {
+    workspaces = readdirSync(root);
+  } catch {
+    return null;
+  }
+  for (const workspace of workspaces) {
+    const path = join(root, workspace, sessionId, "messages.jsonl");
+    if (!existsSync(path)) continue;
+    const entry = newestUserEntry(path, prompt, () => true);
+    if (entry === null) continue;
+    const meta = entry._meta;
+    const kiro = meta !== null && typeof meta === "object" ? (meta as Record<string, unknown>).kiro : undefined;
+    const marks = kiro !== null && typeof kiro === "object" ? (kiro as Record<string, unknown>) : {};
+    if (typeof marks.syntheticUserMessageReason === "string" && marks.syntheticUserMessageReason.trim()) {
+      return { kind: "host", reason: marks.syntheticUserMessageReason.trim(), source: "record" };
+    }
+    if (typeof marks.userMessageTag === "string" && marks.userMessageTag.trim()) return { kind: "person", source: "record" };
+    return null;
+  }
+  return null;
+}
+
+// Who sent a prompt on a Kiro host. `sessionId` is the payload's; `chatSessionId`
+// is the chat Kiro names in the hook's environment (KIRO_SESSION_ID), used only
+// to find the record when the payload names no session. Kiro's record for the
+// payload's session first, then the host's sentences, then a person. A session
+// other than the chat's is never a host's turn by itself: a Kiro Workflows
+// step's brief is caught by its record or its opening sentence, and a message
+// typed in another chat tab must stay the person's.
+export function kiroTurnOrigin(options: {
+  sessionId?: string;
+  chatSessionId?: string;
+  prompt: string;
+  templates: readonly HostTurnTemplate[];
+}): TurnOrigin {
+  const session = options.sessionId?.trim() || undefined;
+  const chat = options.chatSessionId?.trim() || undefined;
+  return kiroChatRecordOrigin(session ?? chat, options.prompt) ??
+    hostTemplateOrigin(options.prompt, options.templates) ??
+    { kind: "person" };
+}
+
+// Who sent a prompt in Claude Code, from its own transcript: the newest user
+// row for this `prompt_id` with exactly this text. Claude Code names the turn's
+// origin on it (measured 2.1.280: `turnOrigin: "task_notification"`,
+// `promptSource: "system"`, `origin.kind: "task-notification"` for a
+// background task's notice; `human`/`typed` for a typed turn, `sdk` for one
+// sent through the SDK). A message the person sends while a turn runs has no
+// row of its own (it rides the running turn's prompt id), so no row means
+// nothing is known.
+const CLAUDE_HOST_TURN_ORIGINS = new Set(["task_notification"]);
+export function claudeTranscriptOrigin(transcriptPath: unknown, promptId: unknown, prompt: string): TurnOrigin | null {
+  if (typeof transcriptPath !== "string" || !transcriptPath.endsWith(".jsonl") || !prompt.trim()) return null;
+  const id = typeof promptId === "string" && promptId.trim() ? promptId.trim() : null;
+  const entry = newestUserEntry(transcriptPath, prompt, (row) => id === null || row.promptId === id);
+  if (entry === null) return null;
+  const origin = entry.origin !== null && typeof entry.origin === "object"
+    ? (entry.origin as Record<string, unknown>).kind
+    : undefined;
+  const turnOrigin = typeof entry.turnOrigin === "string" ? entry.turnOrigin : undefined;
+  if (
+    entry.promptSource === "system" ||
+    (turnOrigin !== undefined && CLAUDE_HOST_TURN_ORIGINS.has(turnOrigin)) ||
+    origin === "task-notification"
+  ) {
+    return { kind: "host", reason: turnOrigin ?? (typeof origin === "string" ? origin : "system"), source: "record" };
+  }
+  return { kind: "person", source: "record" };
 }
 
 // Kiro's plain-text hook channel must carry UTF-8 without terminal protocol
@@ -11317,7 +11541,9 @@ export function humanTurnState(
       if (copied[t].has(i)) continue;
       const ev = auditBlockField(blocks[i], "Event");
       if (!ev) continue;
-      if (!DOCUMENT_AUDIT_EVENTS.has(ev)) sawPresenceTrackingEvent = true;
+      // A host's own turn (HOST_TURN) is neither a person's turn nor a decision:
+      // it leaves presence tracking as it found it.
+      if (!DOCUMENT_AUDIT_EVENTS.has(ev) && ev !== "HOST_TURN") sawPresenceTrackingEvent = true;
       if (ev === "DECISION_RECORDED") {
         decisions.push({ ts: auditBlockField(blocks[i], "Timestamp") ?? "", shard: s, pos: i });
       }

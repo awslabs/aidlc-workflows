@@ -103,7 +103,8 @@ const AUDIT_MD = join(AIDLC_SRC, "knowledge", "aidlc-shared", "audit-format.md")
 // takes it to 114. REQUEST_ROUTED (words the person sent to other work leave the
 // question the work in progress has open) takes it to 115. INTENT_REPOS_CHANGED (a sibling repo added to
 // or removed from a piece of work by the person) takes it to 116.
-const CANONICAL_COUNT = 116;
+// HOST_TURN (a prompt the host made for the agent, never a person's turn) takes it to 117.
+const CANONICAL_COUNT = 117;
 
 /** Slice the lines of `text` BETWEEN the first line matching `start` and the
  *  next line matching `end` (inclusive of both), reproducing `sed -n

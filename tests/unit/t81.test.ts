@@ -303,7 +303,8 @@ describe("t81 aidlc-state practices-event — bolt-plan-marker-conflict override
     // QUESTION_REPLIED (what a question box carried back) = 114;
     // REQUEST_ROUTED (a request the routing question sent to new work) = 115.
     // INTENT_REPOS_CHANGED (a sibling repo added to or removed from a piece of
-    // work by the person, until Units Generation is approved) = 116.
+    // work by the person, until Units Generation is approved) = 116;
+    // HOST_TURN (a prompt the host made, never a human turn) = 117.
     const auditSrc = readFileSync(
       join(REPO_ROOT, "dist", "claude", ".claude", "tools", "aidlc-audit.ts"),
       "utf-8",
@@ -311,7 +312,7 @@ describe("t81 aidlc-state practices-event — bolt-plan-marker-conflict override
     const block = auditSrc.match(/const VALID_EVENT_TYPES = new Set\(\[([\s\S]*?)\]\)/);
     expect(block).not.toBeNull();
     const count = (block ? block[1].match(/"[A-Z0-9_]+"/g) : null)?.length ?? -1;
-    expect(count).toBe(116);
+    expect(count).toBe(117);
   });
 
   // --- Test 4: milestone 8 write-failure path coexists (different Reason value) ---

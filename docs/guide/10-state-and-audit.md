@@ -111,7 +111,7 @@ means. The write guard is a guardrail, not a security boundary. See
 [Audit Trail Rules](../reference/04-stage-protocol.md#audit-trail-rules) for
 the owning commands and the read-only query contract.
 
-### 116-event taxonomy
+### 117-event taxonomy
 
 Events are organized into 25 categories:
 
@@ -120,7 +120,7 @@ Events are organized into 25 categories:
 | **Workflow Lifecycle** | 7 | `WORKFLOW_STARTED`, `WORKFLOW_COMPLETED`, `WORKFLOW_PARKED`, `WORKFLOW_UNPARKED`, `WORKFLOW_ARCHIVED`, `WORKFLOW_UNARCHIVED`, `INTENT_REPOS_CHANGED` |
 | **Phase Lifecycle** | 4 | `PHASE_STARTED`, `PHASE_COMPLETED`, `PHASE_VERIFIED`, `PHASE_SKIPPED` |
 | **Stage Lifecycle** | 6 | `STAGE_STARTED`, `STAGE_AWAITING_APPROVAL`, `STAGE_REVISING`, `STAGE_COMPLETED`, `STAGE_SKIPPED`, `STAGE_JUMPED` |
-| **Session** | 5 | `SESSION_STARTED`, `SESSION_RESUMED`, `SESSION_COMPACTED`, `SESSION_ENDED`, `HUMAN_TURN` (hook-emitted) |
+| **Session** | 6 | `SESSION_STARTED`, `SESSION_RESUMED`, `SESSION_COMPACTED`, `SESSION_ENDED`, `HUMAN_TURN` (hook-emitted), `HOST_TURN` (hook-emitted, advisory: a prompt the host made for the agent, never a person's turn) |
 | **Initialization** | 3 | `WORKSPACE_SCAFFOLDED`, `WORKSPACE_SCANNED`, `WORKSPACE_INITIALISED` |
 | **Navigation** | 9 | `SCOPE_CHANGED`, `SCOPE_DETECTED`, `DEPTH_CHANGED`, `TEST_STRATEGY_CHANGED`, `REVIEW_CLASS_CHANGED`, `RECOMPOSED`, `WORKSPACE_RECLASSIFIED`, `SCOPE_SAVED`, `PLUGIN_SELECTION_CHANGED` |
 | **Guard Policy** | 5 | `GUARD_POLICY_SET`, `CHANGE_CONTROL_SET` (retired name, still read), `CHANGE_ACCEPTED`, `GUARD_RESTORED`, `GUARD_STOOD_ASIDE` |

@@ -59,6 +59,8 @@ import {
   hookDebug,
   hostEnvelopeTurnText,
   humanPresenceGuardDisabled,
+  KIRO_CLI_HOST_TEMPLATES,
+  kiroTurnOrigin,
   isAidlcAgentFile,
   isAutonomousMode,
   leadingOrchestratorVerb,
@@ -493,10 +495,20 @@ if (target === "verb-intercept") {
     // typed switch (`/aidlc --guard-policy off`) is read as typed. Its lines
     // (what the switch did) lead whatever this seam writes: plain stdout is
     // Kiro's only context channel here.
+    // Who sent the turn (kiroTurnOrigin): a message Kiro's own chat record
+    // marks as its own, or Kiro's sub-agent synthesis sentence, is the host's
+    // (a session other than the chat's decides nothing by itself), and the core hook records it as HOST_TURN with nothing of the
+    // person's on it. Anything unknown is the person's.
     const recorded = runCore("aidlc-record-human-turn.ts", {
       hook_event_name: "UserPromptSubmit",
       ...(kiro.session_id ? { session_id: kiro.session_id } : {}),
       prompt: invocation.typed,
+      origin: kiroTurnOrigin({
+        sessionId: kiro.session_id,
+        chatSessionId: process.env.KIRO_SESSION_ID,
+        prompt: invocation.typed,
+        templates: KIRO_CLI_HOST_TEMPLATES,
+      }),
     });
     preface = hookContextText(recorded.stdout);
   } catch { /* presence best-effort - record-human-turn never blocks the turn */ }

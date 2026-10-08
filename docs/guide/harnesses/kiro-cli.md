@@ -230,6 +230,11 @@ starts on v3 (for example when a client starts `kiro-cli acp --agent-engine v3`)
 or switches to another agent, none of these hooks run. With no hooks, no
 `HUMAN_TURN` receipts are recorded, so every approval and confirmation is
 refused. No write events are recorded either, so reviews are refused.
+
+A prompt Kiro makes itself (for example the `[SYSTEM] Sub-agent synthesis:` message a newer
+kiro-cli sends after a sub-agent returns) is not counted as your turn: it is recorded as
+`HOST_TURN` and answers no question. Your own messages count whatever their words; Kiro's
+chat record says which is which, and anything unknown is yours.
 After the first workflow stage, `/aidlc --doctor` reports this as "Hooks have
 never executed". Before that, doctor warns that AI-DLC's hooks have not run in
 this project yet and names the same step. Restarting on the v3
