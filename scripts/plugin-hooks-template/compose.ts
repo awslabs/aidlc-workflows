@@ -592,6 +592,10 @@ const ownedRecordPath = join(HARNESS_DIR, "tools", "data", `plugin-owned-${PLUGI
 const committedText: (bytes: Buffer) => Buffer =
   typeof lockLib.committedTextBytes === "function" ? lockLib.committedTextBytes : (bytes) => bytes;
 const sha256Of = (bytes: Buffer): string => `sha256:${createHash("sha256").update(committedText(bytes)).digest("hex")}`;
+// A record written before the rule holds the raw-bytes digest of a CRLF file;
+// identical bytes are no change either, so that record proves the file too.
+const recordedDigestMatches = (bytes: Buffer, recorded: string): boolean =>
+  recorded === sha256Of(bytes) || recorded === `sha256:${createHash("sha256").update(bytes).digest("hex")}`;
 const projectRelPosix = (path: string): string => relative(PROJECT_DIR, path).replace(/\\/g, "/");
 let _priorOwned: Map<string, string> | null = null;
 function priorOwned(): Map<string, string> {
@@ -1676,7 +1680,7 @@ function copyTreeNoClobber(
         recordDrop(`${kind} "${rel}" collides with an existing file this plugin has no record of installing (core, another plugin, an older copy of this plugin, or a local edit); not overwritten - if it is this plugin's older copy, remove it and re-run compose; if it is core's or another plugin's, rename yours to a plugin-namespaced path`);
         continue;
       }
-      if (recorded !== sha256Of(installed)) {
+      if (!recordedDigestMatches(installed, recorded)) {
         recordDrop(`${kind} "${rel}" was changed after this plugin installed it; not overwritten - to take the plugin's current copy, move your change elsewhere, remove the file, and re-run compose`);
         continue;
       }

@@ -34,6 +34,7 @@ import { delimiter, dirname, join, posix, resolve, win32 } from "node:path";
 import {
   acquireAuditLock,
   auditLockDir,
+  committedTextBytes,
   releaseAuditLock,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import {
@@ -2273,6 +2274,30 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
     const surfaceRow = `${doctor.stdout}${doctor.stderr}`.split("\n").find((l) => l.includes("Composed plugin surface"));
     expect(surfaceRow).toBeDefined();
     expect(surfaceRow!.trimStart().startsWith("fail")).toBe(false);
+  });
+
+  // A record written before the committed-text rule holds the raw-bytes digest
+  // of a CRLF file. Identical bytes are no change, so compose still takes the
+  // plugin's newer copy and writes the record over the committed text.
+  test("a record written over raw CRLF bytes still proves the plugin's own copy to compose", () => {
+    const name = "syn-rawrecord";
+    const { proj } = composeSynthetic(name, upgradeFiles(name, "v1", "after-step:8"));
+    expect(checkOutWithCrlf(proj)).toBeGreaterThan(0);
+    const recordPath = join(proj, ".claude", "tools", "data", `plugin-owned-${name}.json`);
+    type Record = { files: Array<{ path: string; sha256: string }> };
+    const digest = (rel: string, read: (bytes: Buffer) => Buffer) =>
+      `sha256:${createHash("sha256").update(read(readFileSync(join(proj, rel)))).digest("hex")}`;
+    const record = JSON.parse(readFileSync(recordPath, "utf-8")) as Record;
+    writeFileSync(
+      recordPath,
+      `${JSON.stringify({ ...record, files: record.files.map((file) => ({ ...file, sha256: digest(file.path, (bytes) => bytes) })) }, null, 2)}\n`,
+    );
+
+    const drops = recomposeSynthetic(proj, name, upgradeFiles(name, "v2", "after-step:8"));
+    expect(drops).not.toContain("not overwritten");
+    expect(readFileSync(join(proj, ".claude", "tools", "aidlc-sensor-syn-upgrade-check.ts"), "utf-8")).toContain("sensor v2");
+    const rewritten = JSON.parse(readFileSync(recordPath, "utf-8")) as Record;
+    for (const file of rewritten.files) expect(file.sha256).toBe(digest(file.path, committedTextBytes));
   });
 
   // A plugin built with an AI-DLC from before the plugin file record carries a

@@ -834,6 +834,17 @@ function sha256File(path: string): string {
   return `sha256:${createHash("sha256").update(committedTextBytes(readFileSync(path))).digest("hex")}`;
 }
 
+// Does a recorded digest still name this file? A record written before the
+// committed-text rule holds the raw-bytes digest of a CRLF file (a plugin root
+// that is itself a CRLF clone); identical bytes are no change either, so that
+// record proves the file too. The next record is written over the committed
+// text.
+function recordedDigestMatches(path: string, recorded: string): boolean {
+  const bytes = readFileSync(path);
+  const digest = (data: Buffer): string => `sha256:${createHash("sha256").update(data).digest("hex")}`;
+  return digest(committedTextBytes(bytes)) === recorded || digest(bytes) === recorded;
+}
+
 function pluginPrimitiveTargets(
   plugin: InstalledPlugin,
   projectDir: string,
@@ -894,9 +905,9 @@ function writeCompositionRecords(
       if (
         !existsSync(target) ||
         !lstatSync(target).isFile() ||
-        sha256File(target) !== file.sha256
+        !recordedDigestMatches(target, file.sha256)
       ) continue;
-      files.set(file.path, { path: file.path, sha256: file.sha256 });
+      files.set(file.path, { path: file.path, sha256: sha256File(target) });
       claimedPaths.add(file.path);
     }
   } else {
@@ -1220,7 +1231,7 @@ function pruneOwnedPlugin(
   for (const file of ownership.files) {
     const target = assertOwnedPath(stagedProject, file.path);
     if (!existsSync(target)) continue;
-    if (!lstatSync(target).isFile() || sha256File(target) !== file.sha256) {
+    if (!lstatSync(target).isFile() || !recordedDigestMatches(target, file.sha256)) {
       throw new Error(
         `cannot prune ${key}: owned path changed since composition: ${file.path}. To keep your ` +
           `change, move that file somewhere else, then run \`${aidlcInvocation()} engine plugin sync ` +
@@ -1250,7 +1261,7 @@ function replaceOwnedPluginPrimitives(
     const target = assertOwnedPath(stagedProject, file.path);
     ownedPaths.add(file.path);
     if (!existsSync(target)) continue;
-    if (!lstatSync(target).isFile() || sha256File(target) !== file.sha256) {
+    if (!lstatSync(target).isFile() || !recordedDigestMatches(target, file.sha256)) {
       throw new Error(
         `cannot sync ${key}: owned path changed since composition: ${file.path}. To keep your ` +
           `change, move that file somewhere else, then run \`${aidlcInvocation()} engine plugin sync\` ` +
