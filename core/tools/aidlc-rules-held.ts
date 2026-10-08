@@ -75,7 +75,16 @@ export const RULES_HELD_NOTE =
 // agent (live on Kiro CLI, an agent that held the edited file still repeated
 // what it did under the old rule). `full` is the last full-text delivery, the
 // only proof Codex has; a session start or a compaction forgets it.
-type DeliveryRecord = { v: 2; last: string; full?: { bundle: string; at: string } };
+// `persona` is the conductor persona this chat was handed (its sha256): the
+// engine sends it again to any chat that does not hold it, so a person who
+// carries on in a new chat, or whose chat compacted, still has an agent that
+// works by it. Forgotten with `full`, by the same session start and compaction.
+type DeliveryRecord = {
+  v: 2;
+  last: string;
+  full?: { bundle: string; at: string };
+  persona?: { sha256: string; at: string };
+};
 
 function readDelivery(projectDir: string, sid: string): DeliveryRecord | null {
   const record = readJson<DeliveryRecord>(deliveryRecordPath(projectDir, sid));
@@ -96,7 +105,7 @@ function forgetFullDelivery(projectDir: string, sid: string): void {
   const record = readDelivery(projectDir, sid);
   if (record === null) {
     removeQuietly(deliveryRecordPath(projectDir, sid));
-  } else if (record.full !== undefined) {
+  } else if (record.full !== undefined || record.persona !== undefined) {
     writeDelivery(projectDir, sid, { v: 2, last: record.last });
   }
 }
@@ -351,6 +360,7 @@ export function noteRulesDelivered(
   sessionId: string | undefined,
   bundle: string,
   held: boolean,
+  personaSha256?: string | null,
 ): void {
   const sid = validSessionId(sessionId);
   if (sid === null) return;
@@ -359,7 +369,40 @@ export function noteRulesDelivered(
   const previous = readDelivery(projectDir, sid);
   // Milliseconds, so a compaction in the same second as the delivery is never read as before it.
   const full = held ? previous?.full : { bundle, at: new Date().toISOString() };
-  writeDelivery(projectDir, sid, { v: 2, last: bundle, ...(full ? { full } : {}) });
+  const persona = personaSha256
+    ? { sha256: personaSha256, at: new Date().toISOString() }
+    : previous?.persona;
+  writeDelivery(projectDir, sid, {
+    v: 2,
+    last: bundle,
+    ...(full ? { full } : {}),
+    ...(persona ? { persona } : {}),
+  });
+}
+
+/**
+ * True when this chat should be handed the conductor persona whose text hashes
+ * to `personaSha256`: the host's command names its chat, and that chat has not
+ * been handed this persona (a new chat on work under way, or one that
+ * compacted). False where the host's commands do not name their chat (Copilot,
+ * Cursor): there the engine keeps its one delivery per workflow, because the
+ * persona travels on its own directive part and every extra delivery is one
+ * more tool call the person sees. Also false on any unreadable record, so a
+ * missing signal never turns into a delivery on every step.
+ */
+export function chatNeedsPersona(
+  projectDir: string,
+  sessionId: string | undefined,
+  personaSha256: string,
+): boolean {
+  try {
+    const sid = validSessionId(sessionId);
+    if (sid === null) return false;
+    if (!hostRunsThisChat(runtimeHarnessName(projectDir), sid)) return false;
+    return readDelivery(projectDir, sid)?.persona?.sha256 !== personaSha256;
+  } catch {
+    return false;
+  }
 }
 
 type RuleEntry = { path: string; text: string };

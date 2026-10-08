@@ -496,7 +496,7 @@ import {
   rulesContentEntries,
   type RuleContent,
 } from "./aidlc-steering.ts";
-import { chatHoldsRules, noteRulesDelivered, RULES_HELD_NOTE } from "./aidlc-rules-held.ts";
+import { chatHoldsRules, chatNeedsPersona, noteRulesDelivered, RULES_HELD_NOTE } from "./aidlc-rules-held.ts";
 import { refreshKiroIdeSteering } from "./aidlc-includes.ts";
 
 // Read the workflow state file if it exists, else null. The engine's `next` is
@@ -1317,6 +1317,7 @@ function writePrepared(prepared: PreparedEmission): void {
       engineSessionId,
       preparedRulesDelivery.bundle,
       preparedRulesDelivery.held,
+      preparedRulesDelivery.persona,
     );
     // Kiro IDE: a chat that starts after the memory files changed captures
     // their new text (a no-op when the steering file already holds it).
@@ -5073,7 +5074,9 @@ let preparedTransportIdentity: { bundle: string; directiveSha256: string } | nul
 // The rule bundle this invocation prepared, and whether the chat already held
 // it, so writing a run-stage that carried the text can record it (Codex, see
 // aidlc-rules-held.ts).
-let preparedRulesDelivery: { projectDir: string; space: string; bundle: string; held: boolean } | null = null;
+let preparedRulesDelivery:
+  | { projectDir: string; space: string; bundle: string; held: boolean; persona: string | null }
+  | null = null;
 
 // "First run-stage of the workflow" — the deterministic signal D-E delivery
 // keys on. The engine is stateless per call, so it cannot track a "session";
@@ -5087,13 +5090,12 @@ let preparedRulesDelivery: { projectDir: string; space: string; bundle: string; 
 // in-flight workflow; a resume that lands back on the very first stage correctly
 // re-delivers, which is harmless (the persona is idempotent in-context).
 //
-// HONEST LIMITATION: because the engine has no session memory, "first" means
-// "first of the workflow's substantive stages", not "first call this session".
-// In a long single session the persona is delivered once (at workflow open) and
-// the conductor carries it; a fresh session resuming mid-workflow relies on the
-// persona persisting in the prior context OR on the Stop-hook/loop re-priming —
-// it is NOT re-baked mid-workflow. This is the SPIKE-6 contract (deliver on the
-// opening directive); documented here so the boundary is visible, not faked.
+// "First" here means "first of the workflow's substantive stages". It is no
+// longer the only time the persona rides: a chat that did not get it (a new
+// chat on work under way, or one that compacted) is handed it on its own first
+// run-stage, from the per-chat record in aidlc-rules-held.ts. Hosts whose
+// commands do not name their chat (Copilot, Cursor) still get this one
+// delivery only, so the extra directive part never repeats there.
 function isFirstRunStageOfWorkflow(
   stateContent: string | null,
   node: GraphStage,
@@ -6085,9 +6087,16 @@ function buildRunStageDirective(
   // always the conductor's first of that run regardless of state - attached
   // HERE (not by the caller after build) so the final run-stage is complete.
   const firstOfWorkflow = isFirstRunStageOfWorkflow(stateContent, node);
-  if (forcePersona || firstOfWorkflow) {
-    const persona = readConductorPersona();
-    if (persona !== null) directive.conductor_persona = persona;
+  const persona = readConductorPersona();
+  // The chat this command runs in may be a new one on work already under way,
+  // or one that compacted away what it was handed: a host whose commands name
+  // their chat says so, and the persona rides again (aidlc-rules-held.ts).
+  if (
+    persona !== null &&
+    (forcePersona || firstOfWorkflow ||
+      chatNeedsPersona(engineProjectDir, engineSessionId, sha256(persona)))
+  ) {
+    directive.conductor_persona = persona;
   }
   // The spoken line for entering this stage. Attached here, where the scope and
   // first-of-workflow facts are in hand; emit() drops it again on a per-unit
@@ -6706,7 +6715,13 @@ function transportRunStage(
     directive.rules_held_note = RULES_HELD_NOTE;
   }
   const content = held ? [] : loaded.content;
-  preparedRulesDelivery = { projectDir: route.codekbCtx.projectDir, space: route.codekbCtx.space, bundle, held };
+  preparedRulesDelivery = {
+    projectDir: route.codekbCtx.projectDir,
+    space: route.codekbCtx.space,
+    bundle,
+    held,
+    persona: directive.conductor_persona === undefined ? null : sha256(directive.conductor_persona),
+  };
   const directiveHash = sha256(JSON.stringify(directive));
   const persona = personaSentAhead(directive);
   if (persona !== null) delete directive.conductor_persona;

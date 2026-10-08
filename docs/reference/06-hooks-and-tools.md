@@ -1019,7 +1019,11 @@ the run-stage: one extra `continue`, for every stage and, in Construction, for
 every stage of every Unit. Each part's rule text gets what the budget leaves
 after the part's own fields and the directive's notices and advisory.
 
-The workflow's first run-stage also carries the conductor persona (about 9 KB).
+The first run-stage a chat sees for this workflow also carries the conductor
+persona (about 10 KB): the workflow's opening stage, and then any chat that was
+not handed it (a new chat on work under way, or one that compacted away what it
+held). On Copilot and Cursor, whose commands do not name their chat, only the
+workflow's opening run-stage carries it.
 When that run-stage would not fit the budget even without its rules, which a
 long knowledge roster can cause, the persona travels alone on the delivery's
 first part (`conductor_persona` on `load-steering`) and the run-stage follows

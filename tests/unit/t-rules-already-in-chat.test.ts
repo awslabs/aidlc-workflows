@@ -461,9 +461,14 @@ describe("Codex: this thread was given the bundle and nothing since could have d
       // The model asked for a small output budget: Codex kept each rule's ends.
       const cut = await next(proj, "codex", env, { ...rollout, cut: true });
       expect(sentInFull(cut)).toBe(true);
-      expect(cut.results.length > 1, `parts when grown=${grown}`).toBe(grown);
       // The thread holds only part of the text: all of it again, and again.
-      expect(sentInFull(await next(proj, "codex", env, { ...rollout, cut: true }))).toBe(true);
+      const again = await next(proj, "codex", env, { ...rollout, cut: true });
+      expect(sentInFull(again)).toBe(true);
+      // The chat's first step also carried the conductor persona, so the rules
+      // travelled in parts beside it whatever their size. From the second step
+      // on, the shape is the rules' own: inline while they fit, in parts once
+      // the team's memory grows.
+      expect(again.results.length > 1, `parts when grown=${grown}`).toBe(grown);
       expect(sentInFull(await next(proj, "codex", env, rollout))).toBe(true);
       // A whole copy is in the rollout now.
       expect(pointerOnly(await next(proj, "codex", env, rollout))).toBe(true);
