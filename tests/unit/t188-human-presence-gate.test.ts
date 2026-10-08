@@ -96,6 +96,7 @@ function guarded(
   // The host the agent's shell is in is the case's own, never the runner's.
   delete env.VSCODE_IPC_HOOK;
   delete env.VSCODE_PID;
+  delete env.TERM_PROGRAM;
   Object.assign(env, host);
   env.AIDLC_SKIP_ARTIFACT_GUARD = "1";
   env.AIDLC_ALLOW_DIRECT_STATE_TRANSITIONS = "1";
@@ -310,7 +311,10 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
     };
     const ideStep =
       'Tell them exactly this, with nothing about why: "Your answer was not recorded, so you don\'t need to answer again. In Kiro IDE, trust this folder: choose Trust Folder & Continue when Kiro asks whether you trust it, or select Manage on the Restricted Mode banner, then Trust. Then run Developer: Reload Window from the Command Palette (Ctrl+Shift+P, or Cmd+Shift+P on macOS), and say carry on."';
-    for (const host of [{ VSCODE_IPC_HOOK: "/tmp/vscode-ipc.sock" }, { VSCODE_PID: "4242" }]) {
+    // The agent's own commands in Kiro IDE carry TERM_PROGRAM=kiro and neither VSCODE_ variable: only Kiro IDE's
+    // hooks get those (measured live on Kiro IDE 1.2.37, #2167), and this refusal comes from the agent's command.
+    const agentShell = { TERM_PROGRAM: "kiro", KIRO_SESSION_ID: "sess_test", VSCODE_GIT_ASKPASS_NODE: "C:\\Kiro\\Kiro.exe" };
+    for (const host of [{ VSCODE_IPC_HOOK: "/tmp/vscode-ipc.sock" }, { VSCODE_PID: "4242" }, agentShell, { TERM_PROGRAM: "Kiro" }]) {
       const inIde = refusalIn(host);
       expect(inIde).toContain(ideStep);
       expect(inIde).not.toContain("Kiro CLI");
@@ -318,6 +322,8 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
     }
     // Kiro CLI v3 and an ACP client on this tree set neither.
     const elsewhere = refusalIn({});
+    // Another editor's terminal is not Kiro IDE.
+    expect(refusalIn({ TERM_PROGRAM: "vscode" })).toBe(elsewhere);
     expect(elsewhere).toContain(
       'Tell them exactly this, with nothing about why, then only the line below for the tool they are in: "Your answer was not recorded, so you don\'t need to answer again." In Kiro CLI, quit Kiro and start `kiro-cli` again in this folder. If you drive Kiro from an ACP client, the Kiro IDE guide names what that client must send.',
     );
