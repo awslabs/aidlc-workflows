@@ -13,6 +13,8 @@ reviewer_max_iterations: 2
 review_class: advisory
 produces:
   - requirements
+  - release-registry
+  - brownfield-intents
   - requirements-analysis-questions
 consumes:
   - artifact: intent-statement
@@ -49,7 +51,7 @@ scopes:
   - workshop
   - express
 inputs: RE artifacts (if brownfield), authoritative project description (project-description utility)
-outputs: requirements.md, requirements-analysis-questions.md (under this stage's record dir, engine-resolved)
+outputs: requirements.md (first-release scope), release-registry.md (the table of releases, optional — only when more than one release is proposed), brownfield-intents.md (per-release blurbs for future intents, optional — only when more than one release is proposed), requirements-analysis-questions.md (all under this stage's record dir, engine-resolved)
 ---
 
 # Requirements Analysis
@@ -222,16 +224,77 @@ confirmation `[Answer]:` to blank, and repeat this step. Do NOT create
 `requirements.md` until the confirmation entry contains the user's explicit
 `Looks correct` answer and the receipt command succeeds.
 
-### Step 10: Generate Requirements
+### Step 10: Propose the Release Cut (Minimal Lovable Product)
 
-Create `<record>/inception/requirements-analysis/requirements.md` containing:
-- **Intent analysis** — What the user is trying to achieve (goals, not just features)
-- **Functional requirements** — Organized by feature area or domain. Give every requirement a stable `FR{n}` ID (for example `FR1`) and every sub-requirement an `FR{n}.{m}` ID (for example `FR1.2`).
-- **Non-functional requirements** — Performance, security, scalability, reliability, and observability targets. Give every requirement a stable `NFR{n}` ID (for example `NFR3`).
-- **Constraints** — Technical, business, and organizational constraints
-- **Assumptions** — Documented assumptions with rationale
-- **Out of scope** — Explicitly excluded items
-- **Open questions** — Any remaining uncertainties for later stages
+Before writing any artifact, decide what belongs in the first release and what
+is deferred. This is the single scope decision this stage owns, and it is a
+product-judgement call made with the person at the gate — not a mechanical cut.
+
+**Vocabulary.** The *Minimal Lovable Product* (MLP) is the smallest coherent
+slice that demonstrates value to a user — not the smallest technical slice. It
+may touch several components, span multiple future Units, and include items
+from across the elicited requirements; its test is whether a user would find
+the slice useful on its own and whether shipping it would teach the team
+something real about the product.
+
+Based on everything learned in Steps 1–9, draft a proposed release plan:
+
+1. **R1 — Minimal Lovable Product.** The subset of elicited functional and
+   non-functional requirements that is minimum-but-complete to demo value.
+2. **R2, R3, …** — Everything else the elicitation covered, grouped into
+   coherent future releases. Each future release has a short, human-readable
+   name and a one-paragraph description that would let a future human seed a
+   fresh `/aidlc` intent for it in six months without re-reading this one.
+
+If the elicited scope is small enough that no cut is needed, propose a single
+release (R1 only) and skip the future-release artifacts entirely.
+
+Ask the person this question at the existing stage gate pattern (structured
+question, `[Answer]:` tag format, two options):
+
+> **Minimal Lovable Product.** The smallest coherent slice that demonstrates
+> value to a user — may be spread across many requirements, but the absolute
+> minimum needed to show the product does its job. Here is what I propose for
+> R1, with the rest held as `Intent Drafted` releases for later `/aidlc` runs:
+>
+> <show the proposed R1 one-liner + R2/R3 names and one-liners>
+>
+> Approve the release cut as proposed, or request changes to the split?
+
+Record the choice via the usual decision/answer receipts. On Request Changes,
+revise the cut and re-ask. On Approve, proceed to Step 11.
+
+**One sentence to the person at this gate:** the Unit count the chosen R1
+implies becomes visible at Units Generation. If the implied Unit count is
+larger than classic can carry comfortably, the person can return here and
+tighten R1 — this is the small-batch loop the scope is tuned for.
+
+### Step 11: Generate Requirements Artifacts
+
+Create up to three artifacts in
+`<record>/inception/requirements-analysis/`. The first is always written.
+The latter two are written only when more than one release was approved in
+Step 10.
+
+**`requirements.md` — the R1 scope.** This is the only file downstream stages
+consume. It carries the committed-to-build requirements and nothing about
+future releases. Content:
+
+- **Intent analysis** — What the user is trying to achieve for R1 (goals, not
+  just features).
+- **Functional requirements** — Organized by feature area or domain. Give
+  every requirement a stable `FR{n}` ID (for example `FR1`) and every
+  sub-requirement an `FR{n}.{m}` ID (for example `FR1.2`). Include only R1
+  requirements.
+- **Non-functional requirements** — Performance, security, scalability,
+  reliability, and observability targets for R1. Give every requirement a
+  stable `NFR{n}` ID (for example `NFR3`).
+- **Constraints** — Technical, business, and organizational constraints.
+- **Assumptions** — Documented assumptions with rationale.
+- **Out of scope** — Explicitly excluded items. When future releases exist,
+  this section states "deferred to R2, R3 — see `release-registry.md` and
+  `brownfield-intents.md`"; do not restate the deferred requirements here.
+- **Open questions** — Any remaining uncertainties for later R1 stages.
 
 These IDs are permanent traceability keys. Downstream stages must preserve
 them exactly rather than renumbering or replacing them with prose references.
@@ -242,16 +305,60 @@ review request. A newly generated `requirements.md` must not contain a
 Finish the primary requirements content before requesting its review; do not
 change it after a terminal review receipt to remove a placeholder.
 
-### Step 11: Completion Handoff
+**`release-registry.md` — the releases table.** Write only when more than one
+release was approved. The table has three columns — `Release`, `Description`,
+`Status` — with one row per release. For this intent, R1's row carries status
+`Requirement Detailed` (its full requirements are in `requirements.md`); every
+future release carries status `Intent Drafted` (only a blurb exists, under
+`brownfield-intents.md`). The two statuses are the complete vocabulary;
+`classic` does not maintain any product-level cross-intent view, so there is
+no transition from `Intent Drafted` to anything else inside this intent.
+
+```markdown
+## Releases
+
+| Release | Description | Status |
+|---------|-------------|--------|
+| R1 | <one-line description of this intent's committed scope> | Requirement Detailed |
+| R2 | <one-line description of the next release> | Intent Drafted |
+| R3 | <one-line description of the release after> | Intent Drafted |
+```
+
+**`brownfield-intents.md` — per-release blurbs for future intents.** Write
+only when more than one release was approved. One `## R{n} — <name>` section
+per future release. Each section must carry enough detail that a future human
+can start a fresh `/aidlc` intent six months later and seed it from this
+blurb alone — without re-reading `requirements.md` and without the engine
+knowing anything about release continuity. Blurb quality is what makes the
+hand-back work; a vague one-liner produces a weaker next intent. Recommended
+shape per section:
+
+- **Why this release** — the user value it delivers.
+- **In scope** — the key capabilities, in prose.
+- **Out of scope for now** — anything that was elicited for this release but
+  intentionally pushed further.
+- **Open questions** — what the future intent will need to decide that this
+  intent did not.
+- **Dependencies on R1 (or earlier releases)** — what must be true in the
+  shipped codebase before this release makes sense.
+
+The engine does not read `brownfield-intents.md`. It is a human-to-human
+hand-off: when the person decides to build R2, they open this file, read the
+R2 section, and start a fresh `/aidlc` run as a plain brownfield intent — the
+R1 code is shipped, Reverse Engineering kicks in naturally, and R2's own
+Requirements Analysis re-elicits whatever is still right in light of what R1
+actually became.
+
+### Step 12: Completion Handoff
 
 Hand completion to `stage-protocol.md` via
 `{{INVOKE}} engine orchestrate report --stage requirements-analysis --result <outcome>`.
 That `report` call owns every lifecycle transition and advancement; never perform one in prose, and never narrate this bookkeeping to the user.
 
-### Step 12: Present Completion & Request Approval
+### Step 13: Present Completion & Request Approval
 
 Use stage-protocol.md completion template with completion emoji: :mag:
-- Summary of requirements produced
+- Summary of R1 requirements produced, the chosen release cut, and the future-release blurbs recorded (when any). When only one release was approved, state that `release-registry.md` and `brownfield-intents.md` were intentionally not written.
 - Review path: `<record>/inception/requirements-analysis/`
 IF User Stories is set to SKIP in the execution state:
 ```question

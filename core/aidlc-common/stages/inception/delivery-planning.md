@@ -42,7 +42,6 @@ scopes:
   - enterprise
   - feature
   - mvp
-  - classic
   - workshop
 inputs: All Inception artifacts (requirements, stories, mockups, architecture, units)
 outputs: bolt-plan.md, team-allocation.md, risk-and-sequencing-rationale.md, external-dependency-map.md, delivery-planning-questions.md (under this stage's record dir, engine-resolved)

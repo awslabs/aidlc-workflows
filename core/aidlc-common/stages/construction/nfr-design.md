@@ -66,6 +66,24 @@ outputs: "performance-design.md, security-design.md, scalability-design.md, reli
 
 # NFR Design
 
+## Merged-mode note
+
+When `nfr-requirements` is SKIP in scope (today: `classic`), this stage is the
+only NFR pass per Unit — it elicits non-functional requirements inline during
+its question phase and then designs the solutions in one dispatch and one
+advisory review. Classic deliberately uses this merged shape to halve the NFR
+dispatch and review cost per Unit; `feature` / `enterprise` keep the two
+stages separate when the finer requirements-vs-design separation is wanted.
+
+In merged mode the stage writes informational requirements files
+(`performance-requirements.md`, `security-requirements.md`,
+`scalability-requirements.md`, `reliability-requirements.md`,
+`observability-requirements.md`, `tech-stack-decisions.md`) alongside the
+declared design artifacts, under the same per-Unit record directory. Those
+requirements files are not formal `produces` outputs (the engine's artifact
+guard does not require them), but they carry the elicited targets and keep
+the audit trail legible.
+
 ## Constraints
 
 This is a design stage — artifacts describe architectural patterns, strategies, and decisions, not implementation-ready code. Complete implementations (middleware, interceptors, retry libraries, encryption routines) belong in code-generation. Limit code to short illustrative snippets (pseudocode or interface-level, ≤15 lines) that clarify a design decision.
@@ -90,19 +108,38 @@ Execute all steps sequentially as written.
 
 ### Step 1: Read Prior Artifacts
 
-Read NFR requirements from `<record>/construction/{unit-name}/nfr-requirements/`. Read functional design artifacts from `<record>/construction/{unit-name}/functional-design/` (if they exist). Read the inter-unit contracts from `<record>/inception/contract-design/contract-summary.md` (if produced) — the integration mechanism and failure behaviour at each boundary drive the resilience and scalability patterns designed here. Read the domain-design component catalogue from `<record>/inception/domain-design/components.md` (if exists) for architectural context; when the scope skipped those design stages, derive the architectural context from the NFR requirements and, on brownfield, the code knowledge base — never invent the content of a missing artifact.
+Read NFR requirements from `<record>/construction/{unit-name}/nfr-requirements/` **when `nfr-requirements` ran in scope**. When it did not run (merged-mode scopes such as `classic`), this directory does not exist and the requirements are not yet elicited — Step 2 below handles the elicitation inline. Read functional design artifacts from `<record>/construction/{unit-name}/functional-design/` (if they exist). Read the inter-unit contracts from `<record>/inception/contract-design/contract-summary.md` (if produced) — the integration mechanism and failure behaviour at each boundary drive the resilience and scalability patterns designed here. Read the domain-design component catalogue from `<record>/inception/domain-design/components.md` (if exists) for architectural context; when the scope skipped those design stages, derive the architectural context from the available inputs and, on brownfield, the code knowledge base — never invent the content of a missing artifact.
 
-### Step 2: Generate Design Questions
+### Step 2: Generate Questions
 
 Create a questions file at `<record>/construction/{unit-name}/nfr-design/nfr-design-questions.md` with context-appropriate questions using [Answer]: tags.
 
-Focus areas:
+**Standalone mode (`nfr-requirements` ran).** Questions focus on design only:
+
 - Resilience patterns (circuit breakers, bulkheads, fallback strategies)
 - Scalability patterns (horizontal vs vertical, data partitioning, caching tiers)
 - Performance optimization (latency budgets, throughput targets, resource pooling)
 - Security approach (defense in depth, zero trust, encryption standards)
 - Observability approach (metrics and SLI/SLO targets, structured logging, tracing depth, alerting philosophy, dashboard needs)
 - Logical component boundaries (service isolation, failure domains, blast radius)
+
+**Merged mode (`nfr-requirements` is SKIP in scope).** The questions span both
+requirements (what to target) and design (how to achieve it) in one pass, so
+include quantifiable requirement questions alongside the design ones:
+
+- **Performance requirements**: response time targets, throughput, latency budgets, resource constraints
+- **Security requirements**: authentication and authorization needs, data classification, compliance obligations
+- **Scalability requirements**: load projections, scaling triggers, capacity planning
+- **Reliability requirements**: availability targets (SLA/SLO), fault tolerance, backup/recovery expectations
+- **Observability requirements**: monitoring, logging, tracing, and alerting needs
+- **Technology stack**: selections and rationale where not yet decided
+- All the design focus areas listed under Standalone mode above
+
+In merged mode, assign a stable `NFR{n}.{m}` ID to every detailed requirement
+you elicit (inheriting from the inception `NFR{n}` IDs in
+`<record>/inception/requirements-analysis/requirements.md`). Design decisions
+reference those IDs, so the one-pass elicitation preserves the same
+traceability keys as the two-stage path.
 
 ### Step 3: Collect and Analyze Answers
 
@@ -127,6 +164,8 @@ Design concrete solutions for each NFR category:
 
 Generate the following in `<record>/construction/{unit-name}/nfr-design/`:
 
+**Design artifacts (always written — these are the stage's declared outputs):**
+
 - **performance-design.md**: Caching architecture, optimization strategies, resource pooling, async patterns, performance budgets
 - **security-design.md**: Authentication/authorization architecture, encryption design, input validation strategy, security headers, compliance controls
 - **scalability-design.md**: Scaling architecture, load distribution, data partitioning strategy, capacity thresholds, auto-scaling rules
@@ -134,10 +173,31 @@ Generate the following in `<record>/construction/{unit-name}/nfr-design/`:
 - **observability-design.md**: Metrics collection architecture, structured logging design, distributed tracing strategy, alerting rules and escalation, dashboard specifications, SLI/SLO definitions, correlation ID propagation
 - **logical-components.md**: Logical infrastructure component inventory — service boundaries, failure domains, blast radius mapping, component isolation strategy, shared resource identification. Bridges NFR design decisions with Infrastructure Design by providing a component-level view of where NFR patterns apply.
 
+**Requirements artifacts (merged mode only — informational, not declared `produces`):**
+
+In merged mode (`nfr-requirements` SKIP in scope), also write the elicited
+requirements alongside the design artifacts, in the same directory. These
+files carry the targets the designs reference and keep the audit trail
+legible; they are informational, so the engine's artifact guard does not
+require their presence:
+
+- **performance-requirements.md**: Response time targets, throughput requirements, latency budgets, resource constraints, benchmarks
+- **security-requirements.md**: Authentication requirements, authorization model, data protection, compliance, threat considerations
+- **scalability-requirements.md**: Load projections, scaling triggers, capacity planning, data growth, concurrency targets
+- **reliability-requirements.md**: Availability targets (SLA/SLO), fault tolerance requirements, backup/recovery, graceful degradation
+- **observability-requirements.md**: Monitoring requirements, logging standards, distributed tracing needs, alerting thresholds, dashboard requirements, SLI/SLO definitions
+- **tech-stack-decisions.md**: Technology selections and rationale — languages, frameworks, databases, infrastructure tools, and justification for each choice
+
+Every detailed requirement carries its `NFR{n}.{m}` ID (inherited from the
+inception `NFR{n}` IDs in `requirements.md`). Design artifacts reference
+those IDs.
+
 Create `<record>/construction/{unit-name}/nfr-design/traceability.json`.
-Enumerate every `NFRx.y` from this Unit's NFR requirements and map it to the
-concrete design solution (if NFR Requirements did not run, enumerate every
-`NFRn` in `requirements.md` instead):
+In standalone mode, enumerate every `NFRx.y` from this Unit's NFR
+requirements and map it to the concrete design solution. In merged mode,
+enumerate every inception `NFR{n}` applicable to this Unit and target the
+derived `NFRx.y` IDs together with their design solutions. `N/A` requires a
+justification:
 
 ```json
 {

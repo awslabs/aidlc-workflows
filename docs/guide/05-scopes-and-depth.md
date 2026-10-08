@@ -82,12 +82,12 @@ Core ships 11 named scopes. Each scope defines a stage set, a default depth leve
 
 ### classic
 
-**Use when:** You want v1-style ceremony: Inception and Construction, with one human approval per stage. Conditional stages adapt to the project at runtime; Operation remains a placeholder. Stage-declared execution modes and support agents are unchanged.
+**Use when:** You want v1-style ceremony: Inception and Construction, with one human approval per stage. Conditional stages adapt to the project at runtime; Operation remains a placeholder. Stage-declared execution modes and support agents are unchanged. Classic is tuned for small-batch, token-conserving delivery: it commits only to a first release (R1) via a release-scoped `requirements.md`, drops the `delivery-planning` capstone, and runs `nfr-design` in merged mode (one dispatch per Unit that elicits NFR requirements inline and designs their solutions in one advisory review).
 
-- **Stages:** 18 of 33
+- **Stages:** 16 of 33
 - **Default depth:** Standard
 - **Default test strategy:** Standard
-- **Skips:** All Ideation stages (1.1-1.7), CI Pipeline (3.7), and all Operation stages (4.1-4.7)
+- **Skips:** All Ideation stages (1.1-1.7), Delivery Planning (2.9), NFR Requirements (3.2), CI Pipeline (3.7), and all Operation stages (4.1-4.7)
 - **Keywords:** None; selected explicitly or used as the implicit default
 - **Ceremony:** Walking skeleton and summary confirmation off. Sensors run and the learnings ritual runs. Reviews are advisory (one pass per stage, findings at the approval gate); explicit autonomy keeps the single pre-merge review.
 
@@ -153,7 +153,7 @@ Authoritative data lives in the `.claude/scopes/aidlc-<name>.md` files (scope id
 | `refactor` | 10 / 33 | Minimal | Minimal | Clean up and deploy existing code |
 | `infra` | 13 / 33 | Standard | Standard | Infrastructure change |
 | `security-patch` | 10 / 33 | Minimal | Minimal | CVE response |
-| `classic` | 18 / 33 | Standard | Standard | V1-style Inception + Construction — the implicit default |
+| `classic` | 16 / 33 | Standard | Standard | V1-style Inception + Construction, small-batch tuned — the implicit default |
 | `workshop` | 26 / 33 | Standard | Minimal | Facilitated lifecycle with teaching-oriented tests |
 | `express` | 10 / 33 | Minimal | Minimal | Requirements to conditional deploy, no design or reviewers |
 | (auto-detect) | Varies | Varies | Varies | AI determines from freeform intent |
@@ -189,9 +189,9 @@ The routing table above gives the counts; this matrix shows exactly **which** st
 | 2.6 | Domain Design | ✓ | ✓ | ✓ |  |  |  |  |  | ✓ | ✓ |  |
 | 2.7 | Units Generation | ✓ | ✓ | ✓ |  |  |  |  |  | ✓ | ✓ |  |
 | 2.8 | Contract Design | ✓ | ✓ | ✓ |  |  |  |  |  | ✓ | ✓ |  |
-| 2.9 | Delivery Planning | ✓ | ✓ | ✓ |  |  |  |  |  | ✓ | ✓ |  |
+| 2.9 | Delivery Planning | ✓ | ✓ | ✓ |  |  |  |  |  |  | ✓ |  |
 | 3.1 | Functional Design | ✓ | ✓ | ✓ |  |  | ✓ |  |  | ✓ | ✓ |  |
-| 3.2 | NFR Requirements | ✓ | ✓ | ✓ |  |  |  | ✓ | ✓ | ✓ | ✓ |  |
+| 3.2 | NFR Requirements | ✓ | ✓ | ✓ |  |  |  | ✓ | ✓ |  | ✓ |  |
 | 3.3 | NFR Design | ✓ | ✓ | ✓ |  |  |  | ✓ |  | ✓ | ✓ |  |
 | 3.4 | Infrastructure Design | ✓ | ✓ | ✓ |  |  |  | ✓ |  | ✓ | ✓ |  |
 | 3.5 | Code Generation | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |  | ✓ | ✓ | ✓ | ✓ |
@@ -204,7 +204,7 @@ The routing table above gives the counts; this matrix shows exactly **which** st
 | 4.5 | Incident Response | ✓ | ✓ |  |  |  |  |  |  |  | ✓ |  |
 | 4.6 | Performance Validation | ✓ | ✓ |  |  |  |  |  |  |  | ✓ |  |
 | 4.7 | Feedback & Optimization | ✓ | ✓ |  |  |  |  |  |  |  | ✓ |  |
-| | **Total stages** | **33** | **33** | **23** | **8** | **9** | **10** | **13** | **10** | **18** | **26** | **10** |
+| | **Total stages** | **33** | **33** | **23** | **8** | **9** | **10** | **13** | **10** | **16** | **26** | **10** |
 <!-- END scope-stage-matrix -->
 
 A ✓ marks static scope membership — it means the stage is included in the scope's plan, not that it will unconditionally execute. CONDITIONAL stages may be skipped at runtime when their condition does not hold (for example, Reverse Engineering only runs for brownfield projects), and pending stages can be reshaped through an approved composer proposal (see [the composer](#the-adaptive-composer)). Composed (custom) scopes are not listed here — their grids live in `scope-grid.json` alongside the stock ones.

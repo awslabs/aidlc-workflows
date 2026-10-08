@@ -79,7 +79,7 @@ describe the full roster.
 | refactor         | 2.1 (always -- understand current code), 2.3 (minimal)         |
 | infra            | 2.2, 2.3 (infra requirements)                                  |
 | security-patch   | 2.1 (find vulnerability context), 2.3 (minimal)                 |
-| classic          | 2.1--2.9                                                       |
+| classic          | 2.1--2.8 (skips 2.9 Delivery Planning)                         |
 | workshop         | 2.1--2.9                                                       |
 | express          | 2.1 (if brownfield), 2.3                                      |
 
