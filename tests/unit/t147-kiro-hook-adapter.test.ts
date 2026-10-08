@@ -2789,52 +2789,100 @@ describe("t147 Kiro CLI reads what the person typed from the expanded skill body
   // ("add a Q&A page" runs "A page" as a command), and the launcher's helper
   // then reads the arguments the Windows way (CommandLineToArgvW). The chain
   // here is the installer's launcher shape (aidlc.cmd, the helper's argument
-  // path) with an argv-echoing script in place of aidlc.exe; every word the
-  // hook read must come out of it as typed.
-  test.skipIf(process.platform !== "win32")("the forwarded call survives the aidlc.cmd hop: cmd.exe metacharacters and double quotes reach the engine as typed", () => {
-    const dir = scratchProject(true);
-    try {
-      const chain = join(dir, "launcher");
-      mkdirSync(chain, { recursive: true });
-      const echo = join(chain, "echo.ts");
-      writeFileSync(echo, "console.log(JSON.stringify(process.argv.slice(2)));\n");
-      const helper = join(chain, "aidlc-shim.ps1");
-      writeFileSync(helper, [
-        "$ErrorActionPreference = 'Stop'",
-        "function Format-NativeArgument([string]$value) {",
-        "  $quote = $value.Length -eq 0",
-        "  $out = ''",
-        "  $slashes = 0",
-        "  foreach ($c in $value.ToCharArray()) {",
-        "    if ([char]::IsWhiteSpace($c)) { $quote = $true }",
-        "    if ($c -eq [char]'\\') { $slashes++; continue }",
-        "    if ($c -eq [char]'\"') { $out += ('\\' * ($slashes * 2 + 1)) + '\"' } else { $out += ('\\' * $slashes) + $c }",
-        "    $slashes = 0",
-        "  }",
-        "  if ($quote) { return '\"' + $out + ('\\' * ($slashes * 2)) + '\"' }",
-        "  return $out + ('\\' * $slashes)",
-        "}",
-        `$executable = '${process.execPath.replaceAll("'", "''")}'`,
-        `$env:AIDLC_SHIM_ARGS = '${echo.replaceAll("'", "''")} ' + (@(foreach ($argument in $args) { Format-NativeArgument $argument }) -join ' ')`,
-        "& $executable --% %AIDLC_SHIM_ARGS%",
-        "exit $LASTEXITCODE",
-        "",
-      ].join("\r\n"));
-      const launcher = join(chain, "aidlc.cmd");
-      writeFileSync(launcher, `@echo off\r\npowershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "${helper.replaceAll("%", "%%")}" %*\r\nexit /b %ERRORLEVEL%\r\n`);
-      const said = String.raw`add a Q&A page, pipe a|b, less a<b, more a>b, caret a^b, say "hi" to it's & co, the error \"boom\", open "can't open C:\temp\x"`;
+  // path) with an argv-echoing script in place of aidlc.exe; whatever the hook
+  // forwards is run through it, the PowerShell way the agent runs it.
+  const launcherChain = (dir: string) => {
+    const chain = join(dir, "launcher");
+    mkdirSync(chain, { recursive: true });
+    const echo = join(chain, "echo.ts");
+    writeFileSync(echo, "console.log(JSON.stringify(process.argv.slice(2)));\n");
+    const helper = join(chain, "aidlc-shim.ps1");
+    writeFileSync(helper, [
+      "$ErrorActionPreference = 'Stop'",
+      "function Format-NativeArgument([string]$value) {",
+      "  $quote = $value.Length -eq 0",
+      "  $out = ''",
+      "  $slashes = 0",
+      "  foreach ($c in $value.ToCharArray()) {",
+      "    if ([char]::IsWhiteSpace($c)) { $quote = $true }",
+      "    if ($c -eq [char]'\\') { $slashes++; continue }",
+      "    if ($c -eq [char]'\"') { $out += ('\\' * ($slashes * 2 + 1)) + '\"' } else { $out += ('\\' * $slashes) + $c }",
+      "    $slashes = 0",
+      "  }",
+      "  if ($quote) { return '\"' + $out + ('\\' * ($slashes * 2)) + '\"' }",
+      "  return $out + ('\\' * $slashes)",
+      "}",
+      `$executable = '${process.execPath.replaceAll("'", "''")}'`,
+      `$env:AIDLC_SHIM_ARGS = '${echo.replaceAll("'", "''")} ' + (@(foreach ($argument in $args) { Format-NativeArgument $argument }) -join ' ')`,
+      "& $executable --% %AIDLC_SHIM_ARGS%",
+      "exit $LASTEXITCODE",
+      "",
+    ].join("\r\n"));
+    const launcher = join(chain, "aidlc.cmd");
+    writeFileSync(launcher, `@echo off\r\npowershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "${helper.replaceAll("%", "%%")}" %*\r\nexit /b %ERRORLEVEL%\r\n`);
+    const forward = (said: string) => {
       const r = runAdapter(dir, "verb-intercept", { cwd: dir, session_id: session, prompt: expanded(said) }, [], env);
       expect(r.code, r.stderr).toBe(0);
       const forwarded = /engine orchestrate next (.*)\n/.exec(r.stdout)?.[1] ?? "";
-      const words = JSON.parse(readFileSync(join(dir, "aidlc", ".aidlc-forwarding-latch"), "utf8")).args as string[];
-      expect(words).toContain("Q&A");
-      const hop = spawnSync(
+      const latch = JSON.parse(readFileSync(join(dir, "aidlc", ".aidlc-forwarding-latch"), "utf8")).args as string[];
+      expect(forwarded.length).toBeGreaterThan(0);
+      return { forwarded, latch };
+    };
+    const hop = (forwarded: string) => {
+      const run = spawnSync(
         "powershell",
         ["-NoProfile", "-NonInteractive", "-Command", `& '${launcher.replaceAll("'", "''")}' engine orchestrate next ${forwarded}`],
         { encoding: "utf-8" },
       );
-      const received = hop.stdout.trim().split(/\r?\n/).pop() ?? "[]";
-      expect(JSON.parse(received), hop.stdout + hop.stderr).toEqual(["engine", "orchestrate", "next", ...words]);
+      const lines = run.stdout.trim().split(/\r?\n/);
+      // One line, the echoed argv: a second command cmd.exe ran would print another, or an error.
+      expect(lines, run.stdout + run.stderr).toHaveLength(1);
+      expect(run.stderr).not.toContain("is not recognized");
+      return JSON.parse(lines[0]) as string[];
+    };
+    return { forward, hop };
+  };
+
+  test.skipIf(process.platform !== "win32")("the forwarded call survives the aidlc.cmd hop: cmd.exe metacharacters reach the engine as typed", () => {
+    const dir = scratchProject(true);
+    try {
+      const { forward, hop } = launcherChain(dir);
+      const said = String.raw`add a Q&A page, pipe a|b, less a<b, more a>b, caret a^b, say "hi" to it's & co, open "can't open C:\temp\x"`;
+      const { forwarded, latch } = forward(said);
+      expect(latch).toContain("Q&A");
+      expect(forwarded).not.toContain("--request-file");
+      expect(hop(forwarded)).toEqual(["engine", "orchestrate", "next", ...latch]);
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+
+  // A word holding a double quote of its own cannot cross cmd.exe as written
+  // (cmd.exe flips its quote state at every double quote, so an & inside such
+  // a word would run a second command): the hook writes the person's words to
+  // the request file the engine reads with no shell on the way and forwards
+  // the flags with --request-file. Every word arrives exactly, nothing in them
+  // runs, a later plain prompt forwards its words on the line again, and a
+  // later quoted prompt replaces the file with its own words.
+  test.skipIf(process.platform !== "win32")("a word holding a double quote goes through the request file, so nothing in it runs and every word arrives", () => {
+    const dir = scratchProject(true);
+    try {
+      const { forward, hop } = launcherChain(dir);
+      const requestFile = "aidlc/.aidlc-request-text/request.txt";
+      const said = String.raw`--scope feature rename it to 'the "Terms & Conditions" link' and 'a 27" monitor & TV' and '"&echo PWNED&"' and '"&whoami&"' and '"plain"'`;
+      const { forwarded, latch } = forward(said);
+      expect(latch).toEqual(["--scope", "feature", "--request-file", requestFile]);
+      expect(forwarded).toBe(`--scope feature --request-file ${requestFile}`);
+      expect(readFileSync(join(dir, requestFile), "utf8")).toBe(
+        String.raw`rename it to the "Terms & Conditions" link and a 27" monitor & TV and "&echo PWNED&" and "&whoami&" and "plain"` + "\n",
+      );
+      expect(hop(forwarded)).toEqual(["engine", "orchestrate", "next", ...latch]);
+      // The file is this prompt's; a plain prompt after it carries its words on the line.
+      const plain = forward("fix the login page");
+      expect(plain.forwarded).toBe("fix the login page");
+      expect(plain.latch).toEqual(["fix", "the", "login", "page"]);
+      // A later quoted prompt writes its own words; the earlier ones are gone.
+      const again = forward(String.raw`say '"again"' please`);
+      expect(again.latch).toEqual(["--request-file", requestFile]);
+      expect(readFileSync(join(dir, requestFile), "utf8")).toBe('say "again" please\n');
     } finally { rmSync(dir, { recursive: true, force: true }); }
   });
 
