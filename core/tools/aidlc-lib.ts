@@ -21924,6 +21924,22 @@ function stableFileSha256(path: string): string | null {
 // closed.
 const SOURCE_FILE_READ_ATTEMPTS = 3;
 
+/**
+ * Test-only stand-ins for another process writing while the walk reads, set by
+ * a test running in this process and never read from the environment: a file
+ * to remove right before its directory entry is examined, one to remove right
+ * before its read, and one to grow during each of its first `count` reads.
+ */
+interface SourceWalkTestHooks {
+  vanishBeforeStat?: string;
+  vanishBeforeRead?: string;
+  unstableReads?: { path: string; count: number };
+}
+let sourceWalkTestHooks: SourceWalkTestHooks | null = null;
+export function _setSourceWalkTestHooksForTests(hooks: SourceWalkTestHooks | null): void {
+  sourceWalkTestHooks = hooks;
+}
+
 interface FilesystemSourceIdentity {
   /** The walk met a .NET output directory (see SOURCE_FINGERPRINT_DOTNET_OUTPUT_NAMES). */
   dotnetOutputSeen: boolean;
@@ -22909,12 +22925,14 @@ function filesystemSourceIdentity(
     sourceExtension.test(name) ||
     sourceBasename.test(name) ||
     hasShebang(path, size);
-  // Test seams standing in for another process writing while the walk reads:
-  // the named file is removed right before its read, or grown during each of
-  // its first n reads.
-  const vanishBeforeRead = process.env.AIDLC_TEST_SOURCE_VANISH_BEFORE_READ;
-  const unstableSeam = /^(.+):([1-9][0-9]*)$/.exec(process.env.AIDLC_TEST_SOURCE_UNSTABLE_READS ?? "");
-  let unstableReadsLeft = unstableSeam === null ? 0 : Number(unstableSeam[2]);
+  // Test hooks standing in for another process writing while the walk reads
+  // (set in-process by a test, never read from the environment): the named
+  // file is removed right before its entry is examined or before its read, or
+  // grown during each of its first n reads.
+  const hooks = sourceWalkTestHooks;
+  const vanishBeforeRead = hooks?.vanishBeforeRead;
+  const unstableSeam = hooks?.unstableReads ?? null;
+  let unstableReadsLeft = unstableSeam?.count ?? 0;
   // True (recorded), false (the walk fails), or "vanished": the file was gone
   // when read, so it is left out as the next walk would leave it.
   const recordFile = (
@@ -22963,7 +22981,7 @@ function filesystemSourceIdentity(
         // Already gone: the seam only ever removes the file once.
       }
     }
-    const afterStat = unstableSeam !== null && unstableSeam[1] === rel
+    const afterStat = unstableSeam !== null && unstableSeam.path === rel
       ? () => {
         if (unstableReadsLeft > 0) {
           unstableReadsLeft -= 1;
@@ -23213,10 +23231,20 @@ function filesystemSourceIdentity(
         const childRegisteredOnly =
           registeredOnly || conditionalBoundary;
         const child = join(dir, entry.name);
+        if (hooks?.vanishBeforeStat === childRel) {
+          try {
+            unlinkSync(child);
+          } catch {
+            // Already gone: the hook only ever removes the file once.
+          }
+        }
         let stat: ReturnType<typeof lstatSync>;
         try {
           stat = lstatSync(child);
         } catch (error) {
+          // Gone since the directory listed it (an editor's temporary file,
+          // say): left out, as the next walk would leave it.
+          if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
           return noteSourceFailure(
             false,
             "unreadable",
