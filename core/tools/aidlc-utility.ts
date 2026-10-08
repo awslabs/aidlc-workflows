@@ -132,6 +132,7 @@ import {
   localUnitClaimOverviewForIntent,
   main as unitMain,
 } from "./aidlc-unit.ts";
+import { unitProgress } from "./aidlc-unit-walk-view.ts";
 import {
   isBindableIntentRecordName,
   isSafeIntentRecordName,
@@ -2052,7 +2053,14 @@ To get started:
     const done = phaseCheckboxes.filter(
       (c) => c.state === "completed"
     ).length;
-    phaseProgress += `  ${(phaseLabels[p] || p).padEnd(16)} ${bar} ${done}/${phaseCheckboxes.length}\n`;
+    // Working one Unit at a time, the stage boxes tick only when the last Unit
+    // finishes a stage, so while a Unit is open the count is of Units: the one
+    // the person is on, of those planned (the status line counts the same way).
+    const units = p === "construction"
+      ? unitProgress(dirname(sp), getField(content, "Construction Iteration") ?? "")
+      : null;
+    const count = units ? `Unit ${units.current} of ${units.total}` : `${done}/${phaseCheckboxes.length}`;
+    phaseProgress += `  ${(phaseLabels[p] || p).padEnd(16)} ${bar} ${count}\n`;
   }
 
   // Only a change the person can act on: a stage whose inputs moved since it
@@ -2108,9 +2116,18 @@ To get started:
   // Solo unit-major Construction keeps Current Stage on the first per-unit
   // stage while each Unit works through the later ones, so the active Unit's
   // own step is named too, once its recorded values check out (#1411).
-  const stepUnit = getField(content, "Active Unit")?.trim() ?? "";
-  const stepStage = findStageBySlug(getField(content, "Unit Stage")?.trim() ?? "");
+  const fieldUnit = getField(content, "Active Unit")?.trim() ?? "";
+  const fieldStage = findStageBySlug(getField(content, "Unit Stage")?.trim() ?? "");
   const currentNode = findStageBySlug(currentStage);
+  // Between a Unit's steps (it just completed one, or waits at its checkpoint)
+  // those fields are gone, so the step the engine last handed out for this
+  // record names it instead; a step issued for another state is not it.
+  const marker = fieldStage === undefined && !flags.intent && !flags.space
+    ? readActiveDirectiveMarker(projectDir, content)
+    : null;
+  const markerUnit = marker?.delivery !== "superseded" && typeof marker?.unit === "string" ? marker.unit : "";
+  const stepStage = fieldStage ?? (markerUnit ? findStageBySlug(marker?.stage ?? "") : undefined);
+  const stepUnit = fieldStage ? fieldUnit : markerUnit;
   const currentStep =
     UNIT_NAME_REGEX.test(stepUnit) && stepStage && isPerUnitStage(stepStage) && stepStage.slug !== currentStage &&
     currentNode !== undefined && isPerUnitStage(currentNode)

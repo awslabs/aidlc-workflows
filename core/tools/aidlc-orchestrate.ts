@@ -3469,6 +3469,18 @@ function stillParkedLine(): string {
   return "Your work is still paused. Do you want to pick it back up now?";
 }
 
+// Where the work picks up, said with a setting the person typed, so the agent
+// has nothing to guess from Current Stage (under a Unit-by-Unit walk it stays
+// on the block's first stage while a Unit works through the later ones; a live
+// run read "we'll pick up at Functional Design" at Unit 2's Code Generation).
+function withWorkPicksUpLine<T extends Directive>(directive: T, pd: string, scope: string, stateContent: string): T {
+  const current = (getField(stateContent, "Current Stage") ?? "").trim();
+  const beat = scope ? unitMajorWorkBeat(pd, scope, stateContent, current) : null;
+  const name = beat ? `${beat.stage.name} for ${beat.unit}` : nodeForSlug(current)?.name ?? "";
+  if (name) (directive as { narration?: string }).narration = `The work picks up at ${name}.`;
+  return directive;
+}
+
 // For the agent, after the still-paused line: what a yes to it runs.
 function resumeOnYes(): string {
   return ` If they say yes, run \`${aidlcToolInvocation("orchestrate")} next --resume\`.`;
@@ -8093,7 +8105,10 @@ function routeNext(args: string[], projectDir: string | undefined): void {
     if (modifiers.length > 0 && !describedWork) {
       const command = configSetCommand(modifiers);
       emit(planChanges ? planChangeDirective(planChanges, command, plan, planApprovalAskIsOpen(pd), stillParked) : keptWhilePlanWaits(
-        turnEndingPrint(`Run \`${command}\` to update the configuration, then ${verbatimThenStop}`),
+        withWorkPicksUpLine(
+          turnEndingPrint(`Run \`${command}\` to update the configuration, then ${verbatimThenStop}`),
+          pd, currentStateScope, stateContent,
+        ),
         planApprovalAskIsOpen(pd),
       ));
       return;
@@ -8106,9 +8121,12 @@ function routeNext(args: string[], projectDir: string | undefined): void {
     // and no stage work starts from it.
     if (!describedWork && !flags.resume && typedSettingModifiers(flags).length > 0) {
       emit(keptWhilePlanWaits(
-        turnEndingPrint(stillParked === null
-          ? "The setting the person typed is already applied: say the line it printed, then stop."
-          : `The setting the person typed is already applied: say the line it printed followed by "${stillParked}", then stop.${resumeOnYes()}`),
+        withWorkPicksUpLine(
+          turnEndingPrint(stillParked === null
+            ? "The setting the person typed is already applied: say the line it printed, then stop."
+            : `The setting the person typed is already applied: say the line it printed followed by "${stillParked}", then stop.${resumeOnYes()}`),
+          pd, currentStateScope, stateContent,
+        ),
         planApprovalAskIsOpen(pd),
       ));
       return;
