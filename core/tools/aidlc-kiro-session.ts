@@ -29,7 +29,7 @@ import { appendFileSync, mkdtempSync, readdirSync, readFileSync, rmSync } from "
 import { homedir, tmpdir } from "node:os";
 import { basename, delimiter, isAbsolute, join } from "node:path";
 import { resolveExecutableOnPath } from "./aidlc-config-diagnostics.ts";
-import { setByDotenvFile } from "./aidlc-dotenv.ts";
+import { setByDotenvFile } from "./aidlc-runtime-paths.ts";
 import type { KiroEffort } from "./aidlc-tiers.ts";
 
 export type KiroPreset = "minimal" | "balanced" | "thorough";
@@ -90,7 +90,7 @@ function isSeamWriteLog(path: string): boolean {
 
 // Bun loads the .env files of the folder it runs in, so a seam those files set
 // is ignored: only a variable the test runner set reaches the seam, never one a
-// project ships to forge Kiro's answers. aidlc-dotenv.ts drops such names from
+// project ships to forge Kiro's answers. aidlc-runtime-paths.ts drops such names from
 // process.env before any read; these checks stay as a second, per-name answer.
 export { setByDotenvFile };
 

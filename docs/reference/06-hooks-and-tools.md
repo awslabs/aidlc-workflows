@@ -443,8 +443,7 @@ or the `cwd` supplied in the JSON payload. Native release settings use
 `aidlc engine hook <name>` and `aidlc engine statusline`, without Bun.
 Either way the hook's environment is the host tool's, never the project's `.env` files: the
 compiled engine is built with Bun's dotenv and bunfig autoload off, and a Bun-run tree
-runs `core/tools/aidlc-dotenv.ts` first (imported by `aidlc-runtime-paths.ts`, which every
-entry evaluates before its own body) to drop the AI-DLC and host-tool names those files
+evaluates `aidlc-runtime-paths.ts` first (every entry imports it before its own body) to drop the AI-DLC and host-tool names those files
 assigned (`AIDLC_*`, `AWS_AIDLC_*`, the `CLAUDE_*`, `KIRO_*`, `CODEX_*`, `CURSOR_*`,
 `COPILOT_*`, `XDG_*` and `GIT_CONFIG*` names), in the dispatcher and in each tool it spawns.
 The person's own application names stay as the shell had them, and so do the two

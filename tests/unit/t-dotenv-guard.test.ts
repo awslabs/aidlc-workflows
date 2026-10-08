@@ -1,4 +1,4 @@
-// covers: file:core/tools/aidlc-dotenv.ts, function:dropDotenvNames, function:dotenvAssignedNames, function:setByDotenvFile, tool:aidlc
+// covers: file:core/tools/aidlc-runtime-paths.ts, function:dropDotenvNames, function:dotenvLoaded, function:dotenvAssignedNames, function:setByDotenvFile, tool:aidlc
 //
 // Bun loads a project's `.env` files into the environment of every Bun process
 // started in that folder, hooks and tools included. A repository the person
@@ -14,7 +14,7 @@ import {
   dotenvAssignedNames,
   dropDotenvNames,
   setByDotenvFile,
-} from "../../core/tools/aidlc-dotenv.ts";
+} from "../../core/tools/aidlc-runtime-paths.ts";
 import { createTestProject, REPO_ROOT } from "../harness/fixtures.ts";
 
 const BUN = process.execPath;
