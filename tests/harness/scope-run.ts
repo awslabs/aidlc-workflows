@@ -208,6 +208,13 @@ export function commandWords(line: string): string[] {
   return words;
 }
 
+// The budget for one engine command or hook the host runs. Most take about a
+// second, but a `next` that settles several per-Unit stage approvals at once
+// starts about 1,400 git and bun processes: 25 s on a Linux box, and more than
+// 300 s on a macOS runner running 8 scope-run files at once (Release run
+// 37736592127), which the old per-command cap read as a hang.
+const SCOPE_RUN_COMMAND_TIMEOUT_MS = 3 * NATIVE_STARTUP_TIMEOUT_MS;
+
 export class ScopeHost {
   readonly calls: CallRecord[] = [];
   readonly trace: string[] = [];
@@ -232,7 +239,7 @@ export class ScopeHost {
       env: this.env,
       encoding: "utf-8",
       input: stdin ?? "",
-      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS, { phase: "scope run" }),
+      timeout: remainingOperationTimeoutMs(SCOPE_RUN_COMMAND_TIMEOUT_MS, { phase: "scope run" }),
     });
     const result = { status: res.status ?? -1, stdout: res.stdout ?? "", stderr: res.stderr ?? "" };
     this.calls.push({ what, ms: Date.now() - started, status: result.status });
