@@ -14,15 +14,28 @@
 // here fails open: it can only ever change a sentence.
 // This file imports nothing from aidlc-lib.ts: the refusal text there reads
 // the reply hook through it, and a cycle would be the price.
-import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 
 /** The reply hook, as both Kiro IDE (`.json`) and Kiro CLI (`.kiro.hook`) name it. */
 export const KIRO_REPLY_HOOK = "aidlc-record-human-turn";
 
+// The hook files AI-DLC itself writes, and the only ones read here: Kiro IDE's
+// five registrations (harness/kiro-ide/manifest.ts) and Kiro CLI's two
+// `.kiro.hook` files (harness/kiro/). Another file under hooks/ is the
+// project's own, whatever its name.
+export const KIRO_HOOK_FILES: readonly string[] = [
+  "aidlc-continue-workflow.json",
+  "aidlc-guard-tool-call.json",
+  "aidlc-log-subagent.json",
+  `${KIRO_REPLY_HOOK}.json`,
+  "aidlc-session-start.json",
+  "aidlc-plan-approval-guard.kiro.hook",
+  `${KIRO_REPLY_HOOK}.kiro.hook`,
+];
+
 // What each AI-DLC hook does for the person, and what stops while it is off,
-// in the words the lines use. A hook file this table does not name is still
-// reported, by its name alone.
+// in the words the lines use; one entry per name in KIRO_HOOK_FILES.
 const KIRO_HOOK_PROTECTS: Record<string, { what: string; off: string }> = {
   "aidlc-guard-tool-call": {
     what: "check on the assistant's file changes, commands and helpers",
@@ -85,26 +98,20 @@ function switchedOff(text: string): boolean {
 }
 
 /**
- * Every AI-DLC hook under `<harnessDir>/hooks/` that Kiro has switched off,
- * by file name. Nothing on another harness, or in a project with no Kiro hooks
- * directory. An unreadable file is not off.
+ * Every hook file of AI-DLC's own under `<harnessDir>/hooks/` that Kiro has
+ * switched off. Nothing on another harness, or in a project with no Kiro hooks
+ * directory. A file that is absent or unreadable is not off.
  */
 export function kiroHooksSwitchedOff(projectDir: string, harnessDir = ".kiro"): KiroHookOff[] {
   const dir = join(projectDir, harnessDir, "hooks");
-  let names: string[];
-  try {
-    if (!existsSync(dir)) return [];
-    names = readdirSync(dir).filter((name) => /^aidlc-.*\.(?:json|kiro\.hook)$/.test(name)).sort();
-  } catch {
-    return [];
-  }
+  if (!existsSync(dir)) return [];
   const off: KiroHookOff[] = [];
-  for (const fileName of names) {
+  for (const fileName of KIRO_HOOK_FILES) {
     const path = join(dir, fileName);
     try {
-      if (!switchedOff(readFileSync(path, "utf-8"))) continue;
+      if (!existsSync(path) || !switchedOff(readFileSync(path, "utf-8"))) continue;
       const name = hookName(fileName);
-      const protects = KIRO_HOOK_PROTECTS[name] ?? { what: `hook ${name}`, off: "what it checks is not checked" };
+      const protects = KIRO_HOOK_PROTECTS[name];
       off.push({
         name,
         file: `${harnessDir}/hooks/${fileName}`,

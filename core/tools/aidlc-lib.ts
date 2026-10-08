@@ -29565,6 +29565,18 @@ export function unattendedHumanPresenceHint(projectDir?: string, options: { miss
       "mode, then submit a new human response.";
   }
   if (personAtOwnTerminal(projectDir)) return ` ${OWN_TERMINAL_PRESENCE_STEP}`;
+  // Kiro's Agent Hooks panel can switch the reply hook off (#2203): a reply not
+  // recorded is then that switch, not a folder Kiro has yet to trust and not a
+  // record whose hooks never ran (the other hooks still beat), so this comes
+  // before the hooks-off step and the person is sent to the panel, never to the
+  // trust step.
+  if (kiroReplyHookSwitchedOff(resolveProjectDir(projectDir), harnessDir())) {
+    return " If the person already replied, that reply was not recorded because AI-DLC's hook that records your " +
+      "replies is switched off in Kiro's Agent Hooks. Do not ask them to answer again. Tell them exactly this, with " +
+      "nothing about why: \"Your answer was not recorded: AI-DLC's hook that records your replies " +
+      "(aidlc-record-human-turn) is switched off under Agent Hooks in Kiro. Turn it back on, then give your answer " +
+      `once more." ${NO_CHECK_OFF_OFFER}`;
+  }
   // Nothing on record tells a reply not sent yet from one the prompt hook
   // failed to record, so every such refusal also says what happened to a reply
   // the person did send. A host that runs no hooks until the person acts names
@@ -29582,16 +29594,6 @@ export function unattendedHumanPresenceHint(projectDir?: string, options: { miss
   }
   // The caller refuses for a reply not given yet, not for one the hooks missed.
   if (options.missedReply === false) return "";
-  // Kiro's Agent Hooks panel can switch the reply hook off (#2203): a reply not
-  // recorded is then that switch, not a folder Kiro has yet to trust, so the
-  // person is sent to the panel, never to the trust step.
-  if (kiroReplyHookSwitchedOff(resolveProjectDir(projectDir), harnessDir())) {
-    return " If the person already replied, that reply was not recorded because AI-DLC's hook that records your " +
-      "replies is switched off in Kiro's Agent Hooks. Do not ask them to answer again. Tell them exactly this, with " +
-      "nothing about why: \"Your answer was not recorded: AI-DLC's hook that records your replies " +
-      "(aidlc-record-human-turn) is switched off under Agent Hooks in Kiro. Turn it back on, then give your answer " +
-      `once more." ${NO_CHECK_OFF_OFFER}`;
-  }
   // The prompt hook runs here and nothing moved since it last did: the person
   // has not answered yet (the agent asked in this same turn), so the one step
   // is to end the turn, and the person hears nothing. Only a reply the hooks

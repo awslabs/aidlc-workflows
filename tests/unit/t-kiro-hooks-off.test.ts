@@ -29,7 +29,10 @@ import {
   kiroReplyHookSwitchedOff,
   markKiroHooksOffSaid,
 } from "../../core/tools/aidlc-kiro-hooks-off.ts";
-import { unattendedHumanPresenceHint } from "../../core/tools/aidlc-lib.ts";
+// The packaged Kiro IDE library: its harness data carries Kiro's own hooks-off
+// agent step, which the reply-hook line must come before.
+import { unattendedHumanPresenceHint } from "../../dist/kiro-ide/.kiro/tools/aidlc-lib.ts";
+import { appendAuditEntry } from "../../dist/kiro-ide/.kiro/tools/aidlc-audit.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
@@ -179,6 +182,29 @@ describe("t-kiro-hooks-off: a hook the person switched off in Kiro is named, nev
       expect(hint).not.toMatch(/Trust Folder|Reload Window|Restricted Mode/);
       switchOn(REPLY);
       expect(unattendedHumanPresenceHint(proj)).not.toContain("Agent Hooks");
+    } finally {
+      if (harness === undefined) delete process.env.AIDLC_HARNESS_DIR;
+      else process.env.AIDLC_HARNESS_DIR = harness;
+    }
+  });
+
+  // AIDA F3 on #2232: with a gate open and no heartbeat at all, the hint used to
+  // reach the hooks-never-ran step (trust the folder, reload) before looking at
+  // the reply hook, and that step does not turn the hook back on.
+  test("with a gate open and no heartbeat, the switched-off reply hook is named before the hooks-off step", () => {
+    const harness = process.env.AIDLC_HARNESS_DIR;
+    process.env.AIDLC_HARNESS_DIR = ".kiro";
+    try {
+      seedStateFile(proj, "state-mid-ideation.md");
+      appendAuditEntry("STAGE_AWAITING_APPROVAL", { Stage: "feasibility" }, proj);
+      const hooksOff = unattendedHumanPresenceHint(proj);
+      expect(hooksOff).toContain("Kiro is not running AI-DLC's hooks in this folder");
+      expect(hooksOff).not.toContain("Agent Hooks");
+      switchOff(REPLY);
+      const hint = unattendedHumanPresenceHint(proj);
+      expect(hint).toContain("switched off under Agent Hooks in Kiro");
+      expect(hint).not.toContain("Kiro is not running AI-DLC's hooks");
+      expect(hint).not.toMatch(/Trust Folder|Reload Window|Restricted Mode/);
     } finally {
       if (harness === undefined) delete process.env.AIDLC_HARNESS_DIR;
       else process.env.AIDLC_HARNESS_DIR = harness;
