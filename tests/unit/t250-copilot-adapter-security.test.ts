@@ -443,6 +443,11 @@ const PROMPTED_PROSE_FAMILIES = new Set([
   "engine worktree discard", "engine worktree merge", "engine worktree purge", "engine swarm finalize",
   "unit land", "engine intent archive", "engine recompose", "engine bolt set-autonomy",
   "engine state set-construction-checkpoints", "unit claim", "engine gen runners", "engine config set",
+  // The knowledge skill names the engine route for `onboard`, because the copy
+  // of a document the person named happens at the command layer. Onboarding
+  // runs the extractor the harness names, which is code AI-DLC does not ship,
+  // so it keeps the click (27c pins the same decision for the command itself).
+  "engine knowledge onboard",
 ]);
 const SHELL_GUARDS = [
   "aidlc-state-transition-guard.ts",
