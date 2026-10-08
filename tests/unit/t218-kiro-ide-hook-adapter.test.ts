@@ -6891,6 +6891,77 @@ describe("t218 execute_pwsh aidlc values that cmd.exe would split", () => {
 // RISKY_SHELL_FORMS), so terminal-command-guard refuses a lone one before the
 // command runs, on every shell tool. A delegated call carries no agent
 // identity, and the check reads none, so a persona's call is held the same way.
+// An agent once sent every AI-DLC reply to a .tmp file in the project root and
+// read it back (#2167): 27 files, each step paid for twice. Measured live on Kiro
+// IDE 1.2.37: the command result holds the whole reply (20,000-character steps
+// came back whole in Command Prompt and in PowerShell), so the guard stops the
+// capture before it runs and the agent runs the same command on its own. The
+// person sees nothing new. A reader pipe, a stderr redirect and any other
+// program's redirect pass.
+describe("t218 terminal-command-guard stops an AI-DLC command whose reply goes to a file", () => {
+  const REFUSAL =
+    "AIDLC stopped this command before it ran: it sends AI-DLC's reply to a file. Run the same AI-DLC command " +
+    "again on its own, with nothing after it that writes to a file, and read the reply from the command's " +
+    "result: it comes back whole.\n";
+  const guard = (dir: string, tool: string, command: string) =>
+    runIdeStdin(dir, "terminal-command-guard", JSON.stringify({
+      session_id: "sess_capture_conductor",
+      hook_event_name: "PreToolUse",
+      cwd: dir,
+      tool_name: tool,
+      tool_input: { command, cwd: dir, run_in_background: false, timeout: null },
+    }));
+
+  test("a redirect or a file-writing pipe after an AI-DLC command, on every Kiro shell tool", () => {
+    const dir = scratchProject(false);
+    try {
+      for (const tool of ["execute_pwsh", "execute_bash", "shell"]) {
+        for (const command of [
+          "aidlc engine orchestrate next > output.tmp",
+          "aidlc engine orchestrate report --stage delivery-planning --result awaiting-approval >> dp-gate.tmp",
+          "aidlc engine log review --stage domain-design --reviewer aidlc-architecture-reviewer-agent 1> dd-review-req.tmp",
+          "aidlc engine orchestrate next *> all.tmp",
+          "aidlc engine orchestrate next | Out-File -Encoding utf8 next.tmp",
+          "aidlc engine orchestrate next | Set-Content next.tmp",
+          "aidlc engine orchestrate next | tee next.tmp",
+          "bun .kiro/tools/aidlc.ts engine orchestrate next > next.tmp",
+          "C:\\Users\\dev\\AppData\\Local\\aidlc\\bin\\aidlc.cmd engine orchestrate next >next.tmp",
+          "cd C:\\work\\app && aidlc engine orchestrate next > next.tmp",
+          "aidlc engine orchestrate next > next.tmp; Get-Content next.tmp",
+        ]) {
+          const r = guard(dir, tool, command);
+          expect(r.code, `${tool} ${JSON.stringify(command)}`).toBe(2);
+          expect(r.stderr).toBe(REFUSAL);
+        }
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("the bare command, a reader pipe, a stderr redirect, a quoted > and other programs pass", () => {
+    const dir = scratchProject(false);
+    try {
+      for (const tool of ["execute_pwsh", "execute_bash", "shell"]) {
+        for (const command of [
+          "aidlc engine orchestrate next",
+          "aidlc engine orchestrate next 2>&1",
+          "aidlc engine orchestrate next 2>$null",
+          "aidlc engine orchestrate next | ConvertFrom-Json",
+          "aidlc engine log decision --stage x --decision 'keep a > b as written'",
+          "npm test > test.log",
+          "echo done > notes.txt",
+        ]) {
+          const r = guard(dir, tool, command);
+          expect(r.stderr, `${tool} ${JSON.stringify(command)}`).not.toContain("sends AI-DLC's reply to a file");
+        }
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
 describe("t218 terminal-command-guard holds a command with a lone carriage return on every agent", () => {
   const REFUSAL =
     "AIDLC stopped this command before it ran. It holds a carriage return: put the whole command on one line and run it again.\n";
