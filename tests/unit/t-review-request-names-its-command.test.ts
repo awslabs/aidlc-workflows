@@ -74,7 +74,8 @@ function expectRequestSteps(action: string, command: string): void {
   expect(action).toContain(`run \`${command}\``);
   // The reviewer runs as its own agent (seen live: "have the reviewer review it"
   // was read as the conductor writing the review in the reviewer's name).
-  expect(action).toContain("run the reviewer named in it as its own subagent (never review it yourself)");
+  expect(action).toContain("dispatch the reviewer named in it as a subagent and have it write the `reviewFile`");
+  expect(action).toContain("never write it yourself and never stand in for it");
   expect(action).toContain("stage-protocol-reviewer.md");
   expect(action).toContain("`reviewFile`");
   expect(action).toContain("`recordVerdict`");

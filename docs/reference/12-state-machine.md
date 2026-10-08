@@ -1485,9 +1485,9 @@ an executable `external-work` remedy, the ask is the conductor's own work
 (`agent_work: true`, only those remedies, never published): it carries out the
 first that applies without asking, and the turn does not end on it (the Stop
 hook hands the work back if the conductor stops). A `request-review` names its exact
-request command, then the reviewer, run as its own subagent, writing only to the
-`reviewFile` it returns, and the `recordVerdict` it returns, as `record-verdict` names its
-own command, so a conductor with no reviewer protocol in the chat can still take it.
+request command, then the reviewer dispatched as a subagent to write the `reviewFile` it
+returns (never the conductor itself), and the `recordVerdict` it returns, as `record-verdict`
+names its own command, so a conductor with no reviewer protocol in the chat can still take it.
 When the same refusal comes back, or there
 is none, the person is asked with the other executable remedies only. The
 conductor offers them by label and description, waits for the human's
