@@ -493,6 +493,7 @@ function scratchProject(): string {
     "aidlc-reply-reader.ts",
     "aidlc-audit.ts",
     "aidlc-log.ts",
+    "aidlc-message-store.ts",
     "aidlc-review-brief.ts",
     "aidlc-construction-checkpoints.ts",
     "aidlc-testing-posture.ts",
