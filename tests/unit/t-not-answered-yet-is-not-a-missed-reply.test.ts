@@ -15,7 +15,7 @@ import {
 } from "../harness/test-budget.ts";
 import { afterEach, beforeEach, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   AIDLC_SRC,
@@ -23,6 +23,7 @@ import {
   createTestProject,
   REPO_ROOT,
   resetAidlcEnv,
+  seededAuditDir,
   seededRecordDir,
   seededStateFile,
   seedStateFile,
@@ -138,6 +139,27 @@ describe("t-not-answered-yet: a gate the person has not answered yet is not a mi
     const refused = run(STATE, proj, ["approve", slug, "--user-input", "Approve"]);
     expect(refused.rc).not.toBe(0);
     expect(refused.out).toContain("AI-DLC's hooks are not running here");
+    expect(refused.out).not.toContain(NOT_ANSWERED);
+  });
+
+  // The prompt hook stopped after the gate opened (a launch whose hook command
+  // fails, a Kiro IDE window back in Restricted Mode): the heartbeat and the gate
+  // row are both old and close together, and no refusal writes a stage or gate
+  // event, so only the clock can tell. The missed-reply line comes back within
+  // minutes instead of "not answered yet" turn after turn.
+  test("a heartbeat that is old by the clock keeps the missed-reply line, though the gate row followed it closely", () => {
+    const slug = nextGateJustOpened(proj);
+    const minutesAgo = (n: number) => new Date(Date.now() - n * 60 * 1000).toISOString().replace(/\.\d{3}Z$/, "Z");
+    promptHookBeat(proj, Date.now() - 40 * 60 * 1000);
+    // Every row of the record, the gate row included, was written two minutes after that heartbeat.
+    const auditDir = seededAuditDir(proj);
+    for (const name of readdirSync(auditDir).filter((n) => n.endsWith(".md"))) {
+      const shard = join(auditDir, name);
+      writeFileSync(shard, readFileSync(shard, "utf-8").replace(/\*\*Timestamp\*\*: \S+/g, `**Timestamp**: ${minutesAgo(38)}`));
+    }
+    const refused = run(STATE, proj, ["approve", slug, "--user-input", "Approve"]);
+    expect(refused.rc).not.toBe(0);
+    expect(refused.out).toContain("If the person already replied, that reply was not recorded for this question.");
     expect(refused.out).not.toContain(NOT_ANSWERED);
   });
 
