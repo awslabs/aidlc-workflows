@@ -6091,8 +6091,11 @@ function buildRunStageDirective(
   // The chat this command runs in may be a new one on work already under way,
   // or one that compacted away what it was handed: a host whose commands name
   // their chat says so, and the persona rides again (aidlc-rules-held.ts).
+  // A read-only consultation (the Stop hook's own `next`) hands the agent
+  // nothing and cannot record a delivery, so it never carries the persona: it
+  // answers with the step the agent's own call already got.
   if (
-    persona !== null &&
+    persona !== null && !isReadOnlyEngineProbe() &&
     (forcePersona || firstOfWorkflow ||
       chatNeedsPersona(codekbCtx?.projectDir ?? engineProjectDir, engineSessionId, sha256(persona)))
   ) {
