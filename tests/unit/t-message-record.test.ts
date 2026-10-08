@@ -26,6 +26,7 @@ import {
   seededStateFile,
 } from "../harness/fixtures.ts";
 import { testGuardEnvironment } from "../harness/runner-profile.ts";
+import { readMessage } from "../../dist/claude/.claude/tools/aidlc-message-store.ts";
 import {
   auditBlockField,
   readAuditShardEvents,
@@ -47,7 +48,7 @@ interface StoredMessage {
   at: string;
   source: "prompt" | "picker" | "terminal";
   text: string;
-  picker: Array<{ question: string; reply: string }> | null;
+  picker: Array<{ question: string; reply: string | null }> | null;
   words: string | null;
   settings: Array<{ key: string; value: string }>;
   route: { scope: string | null; newIntent: boolean; skip: string[]; add: string[]; projectType: string | null };
@@ -140,6 +141,16 @@ function pick(proj: string, harness: "claude" | "codex", question: string, optio
     tool_input: { questions: [{ id: "q1", question, options }] },
     tool_response: JSON.stringify({ answers: { q1: { answers: [choice] } } }),
   }), { ...UNSET, CODEX_THREAD_ID: undefined, CODEX_SESSION_ID: undefined });
+}
+
+// The person submits a Claude Code box of several questions; `answers` holds the
+// picks they made (a question left blank has no entry).
+function pickMany(proj: string, questions: string[], answers: Record<string, string>): void {
+  run(proj, [DISPATCHER, "engine", "hook", "record-human-turn"], JSON.stringify({
+    hook_event_name: "PostToolUse", tool_name: "AskUserQuestion", session_id: SESSION, cwd: proj,
+    tool_input: { questions: questions.map((question) => ({ question, options: [{ label: "A" }, { label: "B" }] })) },
+    tool_response: { answers },
+  }));
 }
 
 function messagesDir(proj: string): string {
@@ -256,6 +267,23 @@ describe("the human-turn hook keeps one record of each message", () => {
     expect(existsSync(messagesDir(proj))).toBe(false);
   });
 
+  // A prompt the host made for the agent (t-host-turns-not-the-persons.test.ts)
+  // is nobody's words: no record, no HUMAN_TURN, one advisory HOST_TURN row.
+  // Claude Code's payload carries its transcript path; with no row for the
+  // prompt, the whole notice is the host's.
+  test("a prompt the host made writes no record", () => {
+    const proj = withWork();
+    run(proj, [DISPATCHER, "engine", "hook", "record-human-turn"], JSON.stringify({
+      hook_event_name: "UserPromptSubmit", session_id: SESSION, cwd: proj, prompt_id: "b7nfvh2bk",
+      transcript_path: join(proj, `${SESSION}.jsonl`),
+      prompt: "<task-notification>\n<task-id>b7nfvh2bk</task-id>\n<status>completed</status>\n</task-notification>",
+    }));
+    expect(existsSync(messagesDir(proj))).toBe(false);
+    const events = readAuditShardEvents(proj).map((row) => row.event);
+    expect(events.filter((event) => event === "HUMAN_TURN")).toEqual([]);
+    expect(events.filter((event) => event === "HOST_TURN")).toEqual(["HOST_TURN"]);
+  });
+
   test("kiro-ide: a prompt the host left empty is a prompt whose words are unknown, not a picker reply", () => {
     const proj = withWork();
     say(proj, "", "kiro-ide");
@@ -302,14 +330,79 @@ describe("the human-turn hook keeps one record of each message", () => {
     expect(auditBlockField(turns[0].block, "Message Id")).toBeNull();
   });
 
-  test("a long prompt is kept to 8000 characters and says it was cut; the words are not shortened", () => {
+  // AIDA F5 on #2107: `words` came from the full prompt while `text` was cut, so a
+  // pasted document of some 64,000 characters wrote a record the reader refused.
+  // Every stored string is cut, and the record reads back.
+  test("a long prompt is kept to 8000 characters and says it was cut; the words are cut with it, and the record reads back", () => {
     const proj = withWork();
-    const spec = `/aidlc ${"spec line. ".repeat(900)}`.trim();
-    expect(spec.length).toBeGreaterThan(8000);
+    const spec = `/aidlc ${"spec line. ".repeat(7000)}`.trim();
+    expect(spec.length).toBeGreaterThan(70000);
     say(proj, spec);
     const [record] = records(proj);
     expect(record.text).toHaveLength(8000);
     expect(record.cut).toBe(true);
-    expect(record.words).toBe(spec.slice("/aidlc ".length).trim());
+    expect(record.words).toBe(spec.slice("/aidlc ".length).trim().slice(0, 8000));
+    expect(readMessage(proj, record.id)?.id).toBe(record.id);
+  });
+
+  test("a prompt of three-byte characters at the cap still reads back", () => {
+    const proj = withWork();
+    say(proj, "\u5b57".repeat(9000));
+    const [record] = records(proj);
+    expect(record.text).toHaveLength(8000);
+    expect(record.words).toHaveLength(8000);
+    expect(readMessage(proj, record.id)?.id).toBe(record.id);
+  });
+
+  // AIDA 5450894846 on #2150: the QUESTION_REPLIED rows carried the cut strings; only the stored record is cut.
+  test("a question box's QUESTION_REPLIED rows keep the full question and pick; only the record is cut", () => {
+    const proj = withWork();
+    const question = `Which one? ${"context ".repeat(3000)}`;
+    pick(proj, "claude", question, ["A", "B"], "A");
+    const replied = readAuditShardEvents(proj).filter((row) => row.event === "QUESTION_REPLIED");
+    expect(replied).toHaveLength(1);
+    // The audit writer keeps a field to its visible text: no trailing space.
+    expect(auditBlockField(replied[0].block, "Question")).toBe(question.trimEnd());
+    expect(records(proj)[0].picker?.[0]?.question).toHaveLength(2000);
+  });
+
+  test("a question box with a very long question keeps 2000 characters of it and reads back", () => {
+    const proj = withWork();
+    const question = `Which one? ${"context ".repeat(3000)}`;
+    pick(proj, "claude", question, ["A", "B"], "A");
+    const [record] = records(proj);
+    expect(record.picker?.[0]?.question).toHaveLength(2000);
+    expect(record.picker?.[0]?.reply).toBe("A");
+    expect(record.cut).toBe(true);
+    expect(readMessage(proj, record.id)?.id).toBe(record.id);
+  });
+
+  // AIDA F8 on #2107: a question the box asked and the person left blank had no
+  // entry, so "asked and left blank" read the same as "never asked".
+  test("a box of two questions submitted with one blank keeps one entry per question, the blank one null", () => {
+    const proj = withWork();
+    pickMany(proj, ["Keep which notes?", "Anything to add?"], { "Keep which notes?": "Keep none" });
+    const [record] = records(proj);
+    expect(record.source).toBe("picker");
+    expect(record.picker).toEqual([
+      { question: "Keep which notes?", reply: "Keep none" },
+      { question: "Anything to add?", reply: null },
+    ]);
+    expect(record.words).toBe("Keep none");
+  });
+
+  test("a box of four questions all answered keeps four entries in the order shown", () => {
+    const proj = withWork();
+    const questions = ["Problem?", "Success?", "Owners?", "Leave out?"];
+    pickMany(proj, questions, { "Leave out?": "D", "Problem?": "A", "Success?": "B", "Owners?": "C" });
+    const [record] = records(proj);
+    expect(record.picker?.map((entry) => entry.question)).toEqual(questions);
+    expect(record.picker?.map((entry) => entry.reply)).toEqual(["A", "B", "C", "D"]);
+  });
+
+  test("a box that came back with nothing picked writes no record", () => {
+    const proj = withWork();
+    pickMany(proj, ["Keep which notes?", "Anything to add?"], {});
+    expect(records(proj)).toEqual([]);
   });
 });

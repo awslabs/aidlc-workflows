@@ -1411,6 +1411,12 @@ describe("t244 management lifecycle", () => {
     expect(updated.stdout).toContain(
       `Updated aidlc from ${AIDLC_VERSION} to ${NEXT_VERSION}.`,
     );
+    // The next step is the one that is true: a refresh runs beside open work,
+    // so nobody waits for a workflow to end.
+    expect(updated.stdout).toContain(
+      "Project files were not changed. Run 'aidlc config --yes' in each project to refresh them. Open work carries on.",
+    );
+    expect(updated.stdout).not.toContain("between workflows");
     expect(updated.stdout).toContain(`Pruned unprotected releases: ${REMOVABLE_VERSION}.`);
     expect(run(LIFECYCLE, [
       "versions", "install", REMOVABLE_VERSION, "--from", removableRelease,

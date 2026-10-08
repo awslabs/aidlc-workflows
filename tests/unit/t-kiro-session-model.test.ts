@@ -147,17 +147,18 @@ describe("Kiro session model rules", () => {
     expect(setByDotenvFile("AIDLC_TEST_KIRO_SESSION_JSON", dir)).toBe(false);
   });
 
-  test("a seam set in a project's .env file is ignored", () => {
+  test("a seam set in a project's .env file never reaches the process, and the seam is ignored", () => {
     const dir = temp("kiro-session-dotenv-");
     writeFileSync(join(dir, ".env"), `AIDLC_TEST_KIRO_SESSION_JSON=${JSON.stringify({ models: MODELS, current: {} })}\n`);
     const module = join(import.meta.dir, "..", "..", "core", "tools", "aidlc-kiro-session.ts");
-    // Bun loads the folder's .env, as it does for `bun .kiro/tools/aidlc.ts` in a project.
+    // Bun loads the folder's .env, as it does for `bun .kiro/tools/aidlc.ts` in a project;
+    // aidlc-runtime-paths.ts drops the name again before any other module body runs.
     const result = spawnSync(process.execPath, [
       "-e",
       `import { kiroCliPath } from ${JSON.stringify(module)}; console.log(String(process.env.AIDLC_TEST_KIRO_SESSION_JSON !== undefined), String(kiroCliPath()));`,
     ], { cwd: dir, encoding: "utf-8", env: { PATH: "", HOME: dir } });
     expect(result.status, result.stderr).toBe(0);
-    expect(result.stdout.trim()).toBe("true null");
+    expect(result.stdout.trim()).toBe("false null");
   });
 
   test("a KIRO_HOME set in a project's .env file is dropped; the person's own is kept", () => {

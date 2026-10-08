@@ -59,13 +59,13 @@ const EXPECTED_V2_REGISTRATIONS: Array<{
   adapterTarget: string;
 }> = [
   { file: "aidlc-session-start.json", trigger: "SessionStart", matcher: null, adapterTarget: "session-start" },
-  { file: "aidlc-record-human-turn.json", trigger: "UserPromptSubmit", matcher: null, adapterTarget: "record-human-turn" },
-  { file: "aidlc-terminal-command.json", trigger: "UserPromptSubmit", matcher: null, adapterTarget: "verb-intercept" },
-  // Kiro IDE shows a card for every hook run (#2022), so the five tool-call
-  // checks share one registration and the two after-shell hooks another.
+  // Kiro IDE shows a card for every hook run (#2022): one card for each
+  // message (the turn record, then a typed AI-DLC command), one before each
+  // write, command or hand-off (the five tool-call checks, after it finishes
+  // what the last write or command left to do), and none after a write or a
+  // command.
+  { file: "aidlc-record-human-turn.json", trigger: "UserPromptSubmit", matcher: null, adapterTarget: "person-message" },
   { file: "aidlc-guard-tool-call.json", trigger: "PreToolUse", matcher: KIRO_HOOK_MATCHERS.notReadPreToolUse, adapterTarget: "guard-tool-call" },
-  { file: "aidlc-write-audit-log.json", trigger: "PostToolUse", matcher: KIRO_HOOK_MATCHERS.auditedWrite, adapterTarget: "audit-and-sensors" },
-  { file: "aidlc-after-shell.json", trigger: "PostToolUse", matcher: KIRO_HOOK_MATCHERS.shellPostToolUse, adapterTarget: "after-shell" },
   { file: "aidlc-log-subagent.json", trigger: "PostToolUse", matcher: KIRO_HOOK_MATCHERS.delegateCompletion, adapterTarget: "log-subagent" },
   { file: "aidlc-continue-workflow.json", trigger: "Stop", matcher: null, adapterTarget: "continue-workflow" },
 ];
@@ -85,6 +85,10 @@ const RETIRED_HOOK_BASENAMES = [
   "terminal-command-guard",
   "rebuild-stage-graph",
   "sync-workflow-state",
+  // Folded into the next card that runs anyway, and into the message card.
+  "after-shell",
+  "write-audit-log",
+  "terminal-command",
 ];
 
 function parseHookJson(dir: string, file: string): HookFile {
@@ -123,12 +127,12 @@ describe("t245 Kiro IDE hook registrations (v2 schema contract)", () => {
         });
       }
 
-      // The matcher is deliberately BROAD; the `subagent_response` exclusion is
-      // the ADAPTER's job (pinned by t218 N5b), because the direct and
-      // dispatcher entry points bypass this matcher entirely. Narrowing the
-      // regex here — e.g. requiring a trailing `-agent` — would silently drop
-      // completions from fork-added delegates whose names differ. This test
-      // pins the broad reach; it must NOT be "hardened" into an exclusion.
+      // The matcher is deliberately BROAD: narrowing it, e.g. requiring a
+      // trailing `-agent`, would silently drop completions from fork-added
+      // delegates whose names differ. It leaves out only `subagent_response`,
+      // the empty completion shell the adapter drops anyway (t218 N5b keeps
+      // that drop for the direct and dispatcher entry points), so a helper's
+      // return shows no card.
       test("log-subagent matcher reaches every observed delegate completion name", () => {
         const parsed = parseHookJson(tree.dir, "aidlc-log-subagent.json");
         const matcher = new RegExp(parsed.hooks[0].matcher ?? "");
@@ -141,7 +145,8 @@ describe("t245 Kiro IDE hook registrations (v2 schema contract)", () => {
         // A fork-added delegate that does not follow the aidlc-*-agent naming
         // must still reach the adapter.
         expect(matcher.test("subagent_my-custom-reviewer")).toBe(true);
-        // Unrelated tools must not.
+        // The helper's empty return shell and unrelated tools must not.
+        expect(matcher.test("subagent_response")).toBe(false);
         expect(matcher.test("fs_write")).toBe(false);
         expect(matcher.test("execute_bash")).toBe(false);
       });
@@ -155,7 +160,7 @@ describe("t245 Kiro IDE hook registrations (v2 schema contract)", () => {
         for (const name of [
           "read", "fs_read", "read_file", "read_files", "read_code", "list_directory", "file_search", "glob",
           "grep_search", "grep", "web_fetch", "web_search", "disclose_context", "thinking", "todo_list",
-          "report_progress",
+          "report_progress", "subagent_response",
         ]) {
           expect(isPlanApprovalSafeReadTool(name), name).toBe(true);
           expect(matcher.test(name), name).toBe(false);
@@ -163,7 +168,7 @@ describe("t245 Kiro IDE hook registrations (v2 schema contract)", () => {
         for (const name of [
           "fs_write", "str_replace", "fs_append", "write", "create_file", "delete_file", "apply_patch", "edit_file",
           "execute_bash", "execute_pwsh", "shell", "invoke_sub_agent", "orchestrate_subagent",
-          "subagent_aidlc-developer-agent", "subagent_response", "memory", "user_input",
+          "subagent_aidlc-developer-agent", "subagent_responses", "memory", "user_input",
           "mcp_some_server_tool", "read_file_and_write", "some_future_tool", "",
         ]) {
           expect(matcher.test(name), name).toBe(true);
@@ -308,8 +313,9 @@ describe("t245 Kiro IDE hook registrations (v2 schema contract)", () => {
 // Each check that now shares a registration keeps the tools its own
 // registration selected, in the order Kiro ran those files (file-name order).
 describe("t245 one card runs the checks that had their own cards", () => {
-  test("the guard card runs the five tool-call checks in their old order with their old matchers", () => {
+  test("the guard card finishes the last call's work, then runs the five tool-call checks in their old order with their old matchers", () => {
     expect(KIRO_HOOK_GROUPS["guard-tool-call"]).toEqual([
+      { target: "catch-up", matcher: KIRO_HOOK_MATCHERS.notReadPreToolUse },
       { target: "enforce-approval-gate", matcher: KIRO_HOOK_MATCHERS.notReadPreToolUse },
       { target: "plan-approval-guard", matcher: KIRO_HOOK_MATCHERS.notReadPreToolUse },
       { target: "review-freeze", matcher: KIRO_HOOK_MATCHERS.writeOrShellPreToolUse },
@@ -318,6 +324,15 @@ describe("t245 one card runs the checks that had their own cards", () => {
     ]);
   });
 
+  test("the message card finishes the last call's work, records the turn, then runs a typed AI-DLC command", () => {
+    expect(KIRO_HOOK_GROUPS["person-message"]).toEqual([
+      { target: "catch-up", matcher: "" },
+      { target: "record-human-turn", matcher: "" },
+      { target: "verb-intercept", matcher: "" },
+    ]);
+  });
+
+  // A project whose hook files predate this still registers aidlc-after-shell.
   test("the after-shell card runs the rebuild, then the sync, for the old shell matcher", () => {
     expect(KIRO_HOOK_GROUPS["after-shell"]).toEqual([
       { target: "rebuild-stage-graph", matcher: KIRO_HOOK_MATCHERS.shellPostToolUse },
@@ -328,7 +343,6 @@ describe("t245 one card runs the checks that had their own cards", () => {
   test("each card's matcher reaches every tool one of its checks acts on", () => {
     for (const [file, group] of [
       ["aidlc-guard-tool-call.json", "guard-tool-call"],
-      ["aidlc-after-shell.json", "after-shell"],
     ] as const) {
       const registration = new RegExp(parseHookJson(AUTHORED_HOOKS, file).hooks[0].matcher ?? "");
       for (const name of [

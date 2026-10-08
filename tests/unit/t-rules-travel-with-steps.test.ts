@@ -298,7 +298,7 @@ describe("t-rules-travel-with-steps: the Kiro agent prompts", () => {
   const cli = (JSON.parse(readFileSync(join(REPO, "dist", "kiro", ".kiro", "agents", "aidlc.json"), "utf-8")) as { prompt: string }).prompt;
   for (const [tool, prompt] of [["Kiro IDE", ide], ["Kiro CLI", cli]] as const) {
     test(`${tool}: the must-follow list holds without the skill`, () => {
-      expect(prompt).toContain("read .kiro/skills/aidlc/SKILL.md unless the aidlc skill is already in this chat");
+      expect(prompt).toContain("read all of .kiro/skills/aidlc/SKILL.md with your file tool in parts of at most 40 lines, from the first line to the last (Kiro shows a long skill or file only in part), unless you already read all of it in this chat");
       expect(prompt).toContain("say the lines AI-DLC gives you for the person (its warnings, notices and questions) to them word for word");
       expect(prompt).toContain("a question AI-DLC puts to the person is theirs to answer, never yours");
       // Live: "never answer one yourself" alone made the agent ask the person for the work's folder label.

@@ -22,6 +22,7 @@ This chapter covers common issues and their solutions, organized by symptom.
 | Cursor: approvals are never recorded | If the project is not in a git repository, run `git init` in it, then fully restart Cursor and trust the folder (see [Cursor project outside a git repository](#cursor-project-outside-a-git-repository)) |
 | Kiro IDE: `deny fs_read matching ".kiro/"` | Run `/aidlc --doctor`; remove the `.kiro/` rule from the ignore file it names (see [Kiro IDE Read Denials](#kiro-ide-read-denials)) |
 | Kiro IDE: AI-DLC's reviews and helpers do not run, the chat shows **Approval needed in agent-aidlc-...** panels, or `/aidlc` is handed to a Kiro workflow | Kiro's Workflows feature is on. Ask the agent to turn it off, or run `aidlc config trust --kiro-workflows off --yes`, then **Developer: Reload Window** (see [Kiro's Workflows feature](harnesses/kiro-ide.md#kiros-workflows-feature-stops-ai-dlcs-reviews-and-helpers)) |
+| Kiro IDE on Windows: your words reach AI-DLC split or with their quotes, or every command shows exit code -1 | Kiro's terminal is Command Prompt. Ask the agent to set it to PowerShell, or run `aidlc config trust --kiro-terminal powershell --yes`, then restart Kiro (see [Command Prompt as Kiro's terminal](harnesses/kiro-ide.md#command-prompt-as-kiros-terminal-on-windows)) |
 | Kiro IDE: the agent cites "my memory" and suggests bypassing a check or running a hook by hand | Ignore it and delete that Kiro memory (see [Kiro memories carry old AI-DLC advice](harnesses/kiro-ide.md#kiro-memories-carry-old-ai-dlc-advice)) |
 | State file corrupted | Run `/aidlc --doctor`, compare against state template |
 | Stuck at approval gate | Type your response; use `/aidlc --stage <target>` to jump past it |
@@ -204,9 +205,11 @@ sufficient.
 Kiro IDE runs a folder's hooks only after you allow it to run commands in that
 folder and then reload the window. Until you allow it, every command the agent
 runs comes back with no output and exit code -1, so no AI-DLC message can show;
-the agent gives you the step itself. Before your first chat message in the
-project, doctor warns "AIDLC hooks have not run in this project yet"; that is
-expected.
+the agent gives you the step itself. If you trusted the folder after Kiro opened
+it, commands run but the hooks still do not until the reload: AI-DLC then stops
+before any work and the agent shows you the same step. Before your first chat
+message in the project, doctor warns "AIDLC hooks have not run in this project
+yet"; that is expected.
 
 Trust only a folder whose contents you know (your own project, or one you have
 checked), because trusting lets the folder's `.kiro` hooks run commands on your

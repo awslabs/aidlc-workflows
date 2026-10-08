@@ -41,6 +41,7 @@ import {
 } from "../../core/tools/aidlc-archive.ts";
 import {
   _installedSourcesForTests,
+  _requiresEdgeHoldsForTests,
   _switchRefreshStepsForTests,
 } from "../../core/tools/aidlc-init.ts";
 import { compiledExecutable, quoteCommandArgument } from "../../core/tools/aidlc-runtime-paths.ts";
@@ -3076,6 +3077,53 @@ describe("t243 project initialization", () => {
     }
   });
 
+  test("refresh replays a recorded requires_stage edge only where it still holds", () => {
+    const harness = join(temp("aidlc-t243-edge-"), ".claude");
+    const stage = (phase: string, slug: string) => {
+      mkdirSync(join(harness, "aidlc-common", "stages", phase), { recursive: true });
+      writeFileSync(join(harness, "aidlc-common", "stages", phase, `${slug}.md`), `---\nslug: ${slug}\n---\n`);
+    };
+    stage("inception", "requirements-analysis");
+    stage("construction", "nfr-requirements");
+    stage("construction", "build-and-test");
+    mkdirSync(join(harness, "tools", "data"), { recursive: true });
+    const graphPath = join(harness, "tools", "data", "stage-graph.json");
+    writeFileSync(graphPath, JSON.stringify([
+      { slug: "requirements-analysis", number: "2.3" },
+      { slug: "nfr-requirements", number: "3.2" },
+      { slug: "build-and-test", number: "3.6" },
+    ]));
+    // Earlier phase, and lower number in the same phase: hold.
+    expect(_requiresEdgeHoldsForTests(harness, "build-and-test", "requirements-analysis")).toBe(true);
+    expect(_requiresEdgeHoldsForTests(harness, "build-and-test", "nfr-requirements")).toBe(true);
+    // Later in the same phase, a removed dependency, a self-edge: dropped.
+    expect(_requiresEdgeHoldsForTests(harness, "nfr-requirements", "build-and-test")).toBe(false);
+    expect(_requiresEdgeHoldsForTests(harness, "build-and-test", "gone-stage")).toBe(false);
+    expect(_requiresEdgeHoldsForTests(harness, "build-and-test", "build-and-test")).toBe(false);
+    // A pinned row keeps its number when its stage moves phase directory, so
+    // the full number decides: 4.7 in inception still compiles after 3.6.
+    stage("inception", "feedback-optimization");
+    // A plugin stage carried over from the project has no row in the staged
+    // graph: it seeds past its phase max, after every pinned stage there.
+    stage("construction", "plugin-construction-stage");
+    stage("inception", "plugin-inception-stage");
+    writeFileSync(graphPath, JSON.stringify([
+      { slug: "requirements-analysis", number: "2.3" },
+      { slug: "nfr-requirements", number: "3.2" },
+      { slug: "build-and-test", number: "3.6" },
+      { slug: "feedback-optimization", number: "4.7" },
+    ]));
+    expect(_requiresEdgeHoldsForTests(harness, "build-and-test", "feedback-optimization")).toBe(false);
+    expect(_requiresEdgeHoldsForTests(harness, "build-and-test", "plugin-construction-stage")).toBe(false);
+    expect(_requiresEdgeHoldsForTests(harness, "build-and-test", "plugin-inception-stage")).toBe(true);
+    expect(_requiresEdgeHoldsForTests(harness, "plugin-construction-stage", "build-and-test")).toBe(true);
+    // Without a readable graph a same-phase edge cannot be verified, a
+    // cross-phase one still can.
+    writeFileSync(graphPath, "not json");
+    expect(_requiresEdgeHoldsForTests(harness, "build-and-test", "nfr-requirements")).toBe(false);
+    expect(_requiresEdgeHoldsForTests(harness, "build-and-test", "requirements-analysis")).toBe(true);
+  });
+
   test("fresh init, dry-run, refresh preservation, conflict, and force use one projection", () => {
     const project = temp("aidlc-t240-project-");
     mkdirSync(join(project, ".git"));
@@ -3446,7 +3494,14 @@ describe("t243 project initialization", () => {
       const git = (...args: string[]) => {
         const result = spawnSync("git", [
           "-C", project, "-c", "user.email=t243@example.com", "-c", "user.name=t243",
-          "-c", "commit.gpgsign=false", "-c", "core.autocrlf=false", ...args,
+          "-c", "commit.gpgsign=false", "-c", "core.autocrlf=false",
+          // This case watches what a refresh runs, so the case's own commands
+          // say no to the monitor and cannot be taken for it, and no to
+          // automatic maintenance: a commit otherwise hands work to a
+          // background git that outlives it and lands inside the window below,
+          // and `gc`, `maintenance run` and `repack -d` all run the program.
+          "-c", "core.fsmonitor=false", "-c", "gc.auto=0", "-c", "maintenance.auto=false",
+          ...args,
         ], { encoding: "utf-8" });
         expect(result.status, result.stderr).toBe(0);
       };
@@ -3504,11 +3559,26 @@ describe("t243 project initialization", () => {
       retire([solo]);
       const monitor = join(temp("aidlc-t243-fsmonitor-"), "fsmonitor.sh");
       const ran = `${monitor}.ran`;
-      writeFileSync(monitor, `#!/bin/sh\necho ran >> '${ran}'\n`, { mode: 0o755 });
+      // The program writes down who ran it, parents and all, so a failure here
+      // names the process instead of only saying that something did. `ps` reads
+      // the same on Linux and macOS; git calls the program with a protocol
+      // version and a token.
+      writeFileSync(
+        monitor,
+        `#!/bin/sh\n{ echo "ran with: $*"; pid=$PPID; depth=0;` +
+          ` while [ "$pid" != "1" ] && [ "$depth" -lt 6 ]; do` +
+          ` echo "  $pid: $(ps -o command= -p "$pid" 2>/dev/null)";` +
+          ` pid=$(ps -o ppid= -p "$pid" 2>/dev/null | tr -d " ");` +
+          ` [ -z "$pid" ] && break; depth=$((depth + 1)); done; } >> '${ran}' 2>&1\n`,
+        { mode: 0o755 },
+      );
       git("config", "core.fsmonitor", monitor);
       const monitored = refresh(project);
       git("config", "--unset", "core.fsmonitor");
-      expect(existsSync(ran)).toBe(false);
+      expect(
+        existsSync(ran) ? readFileSync(ran, "utf-8") : "",
+        "a refresh ran the repository's fsmonitor program; the lines name what ran it",
+      ).toBe("");
       expect(monitored.stdout).toContain(
         `Removed 1 file that is no longer part of AI-DLC ${AIDLC_VERSION}:\n  ${solo}\nTo get it back, run \`git restore ${solo}\`.\n`,
       );
@@ -3531,6 +3601,71 @@ describe("t243 project initialization", () => {
       expect(quoted.stdout).toContain(`no longer part of AI-DLC ${AIDLC_VERSION}:\n  ${quoteCommandArgument(crafted)}\n`);
       expect(quoted.stdout).not.toContain("git restore");
     }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+    // The case above checks the behaviour on this machine's git. This one holds
+    // the rule that produces it, because which commands consult the monitor is
+    // the git version's business: `ls-files` runs it once the index carries the
+    // monitor's own extension, and a call site added without the setting would
+    // pass here and run a stranger's program on a newer git. A refresh reads a
+    // repository to word its own lines, so every command it runs says no.
+    test.skipIf(process.platform === "win32")(
+      "every git command a refresh runs turns the repository's fsmonitor off",
+      () => {
+        const project = temp("aidlc-t243-fsmonitor-rule-");
+        const git = (...args: string[]) => {
+          const result = spawnSync("git", [
+            "-C", project, "-c", "user.email=t243@example.com", "-c", "user.name=t243",
+            "-c", "commit.gpgsign=false", "-c", "core.autocrlf=false", ...args,
+          ], { encoding: "utf-8" });
+          expect(result.status, result.stderr).toBe(0);
+        };
+        git("init", "-q");
+        const installed = run(INIT, [
+          "config", "--project-dir", project, "--from", CLAUDE_RELEASE, "--harness", "claude",
+        ], project);
+        expect(installed.status, installed.stdout + installed.stderr).toBe(0);
+        // A file the release no longer ships, so the refresh also runs the
+        // tracked-files check that words the way back, and a rule of the
+        // project's own that hides a committed record, so the ignore check
+        // matches and the refresh asks for the repository root to word the
+        // warning. Between them the refresh makes every git call it has.
+        const retired = ".claude/hooks/aidlc-retired-rule.ts";
+        const body = `Shipped by an earlier release: ${retired}\n`;
+        put(project, retired, body);
+        const manifest = manifestOf(project);
+        manifest.files[retired] = sha256Bytes(body);
+        writeFileSync(join(project, manifestRel), `${JSON.stringify(manifest, null, 2)}\n`);
+        writeFileSync(join(project, ".gitignore"), "**/memory/**\n", "utf-8");
+        git("add", "-A");
+        git("commit", "-q", "-m", "a retired file and a rule that hides a record");
+
+        // A `git` ahead of the real one on PATH records what the refresh runs.
+        const recorder = temp("aidlc-t243-gitrecorder-");
+        const calls = join(recorder, "calls");
+        const realGit = Bun.which("git") ?? "/usr/bin/git";
+        writeFileSync(
+          join(recorder, "git"),
+          `#!/bin/sh\n{ printf 'CALL\\n'; for a in "$@"; do printf '%s\\n' "$a"; done; } >> '${calls}'\nexec '${realGit}' "$@"\n`,
+          { mode: 0o755 },
+        );
+        const refreshed = run(
+          INIT,
+          ["config", "--project-dir", project, "--from", CLAUDE_RELEASE],
+          project,
+          { PATH: `${recorder}${delimiter}${process.env.PATH ?? ""}` },
+        );
+        expect(refreshed.status, refreshed.stdout + refreshed.stderr).toBe(0);
+        const ran: string[][] = [];
+        for (const word of readFileSync(calls, "utf-8").split("\n").slice(0, -1)) {
+          if (word === "CALL") ran.push([]);
+          else ran[ran.length - 1]?.push(word);
+        }
+        // The ignore check, the repository root, and the tracked-files check.
+        expect(ran.length, ran.map((call) => `git ${call.join(" ")}`).join("\n")).toBeGreaterThanOrEqual(3);
+        for (const call of ran) expect(call, `git ${call.join(" ")}`).toContain("core.fsmonitor=false");
+      },
+      NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+    );
 
     test("project files an older refresh recorded are kept and dropped from the record", () => {
       const project = installedProject();
@@ -5212,6 +5347,84 @@ describe("t243 project initialization", () => {
     expect(refreshedAgain.status, refreshedAgain.stdout + refreshedAgain.stderr).toBe(0);
     expect(readFileSync(stagePath, "utf-8")).toContain("  - artifact: test-pro-refresh-input\n    required: false\n");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("refresh hands a core-adopted or refused requires_stage edge back out of plugin provenance", () => {
+    const project = temp("aidlc-t240-edge-refresh-");
+    mkdirSync(join(project, ".git"));
+    const first = run(INIT, [
+      "config",
+      "--project-dir",
+      project,
+      "--from",
+      CLAUDE_RELEASE,
+      "--harness",
+      "claude",
+    ], project);
+    expect(first.status, first.stdout + first.stderr).toBe(0);
+
+    // Three recorded edges on build-and-test (3.6): nfr-requirements (3.2),
+    // which the newer runtime declares itself; nfr-design (3.3), which stays
+    // test-pro's; and syn-gone-stage, which the newer runtime does not ship and
+    // is a second plugin's only record.
+    const rel = join(".claude", "aidlc-common", "stages", "construction", "build-and-test.md");
+    const stagePath = join(project, rel);
+    const edgesOf = (raw: string) => raw.match(/^requires_stage:\n((?: {2}- .+\n)*)/m)?.[1] ?? "";
+    writeFileSync(stagePath, readFileSync(stagePath, "utf-8").replace(
+      /^(requires_stage:\n(?: {2}- .+\n)*)/m,
+      "$1  - nfr-requirements\n  - nfr-design\n  - syn-gone-stage\n",
+    ));
+    const sidecarPath = join(project, ".claude", "tools", "data", "plugin-contrib-test-pro.json");
+    writeFileSync(sidecarPath, `${JSON.stringify({
+      "build-and-test": { requires_stage: ["nfr-requirements", "nfr-design"] },
+    }, null, 2)}\n`);
+    const emptiedSidecarPath = join(project, ".claude", "tools", "data", "plugin-contrib-syn-edge-only.json");
+    writeFileSync(emptiedSidecarPath, `${JSON.stringify({
+      "build-and-test": { requires_stage: ["syn-gone-stage"] },
+    }, null, 2)}\n`);
+
+    const newer = temp("aidlc-t240-edge-newer-projection-");
+    cpSync(CLAUDE_RELEASE, newer, { recursive: true });
+    const newerStage = join(newer, rel);
+    writeFileSync(newerStage, readFileSync(newerStage, "utf-8").replace(
+      /^(requires_stage:\n(?: {2}- .+\n)*)/m,
+      "$1  - nfr-requirements\n",
+    ));
+    const refreshed = run(INIT, [
+      "config",
+      "--project-dir",
+      project,
+      "--from",
+      newer,
+    ], project);
+    expect(refreshed.status, refreshed.stdout + refreshed.stderr).toBe(0);
+    const edges = edgesOf(readFileSync(stagePath, "utf-8"));
+    expect(edges.match(/- nfr-requirements\n/g)?.length).toBe(1);
+    expect(edges).toContain("- nfr-design\n");
+    expect(edges).not.toContain("syn-gone-stage");
+    // Only the edge the plugin still owns stays recorded: a later disable
+    // must not strip core's nfr-requirements edge.
+    const sidecar = JSON.parse(readFileSync(sidecarPath, "utf-8"));
+    expect(sidecar["build-and-test"]?.requires_stage).toEqual(["nfr-design"]);
+    // A sidecar left with no record is removed, not installed as `{}`.
+    expect(existsSync(emptiedSidecarPath)).toBe(false);
+    const graph = JSON.parse(
+      readFileSync(join(project, ".claude", "tools", "data", "stage-graph.json"), "utf-8"),
+    ) as Array<{ slug: string; requires_stage?: string[] }>;
+    expect(graph.find((row) => row.slug === "build-and-test")?.requires_stage)
+      .toEqual(expect.arrayContaining(["nfr-requirements", "nfr-design"]));
+
+    const refreshedAgain = run(INIT, [
+      "config",
+      "--project-dir",
+      project,
+      "--from",
+      newer,
+    ], project);
+    expect(refreshedAgain.status, refreshedAgain.stdout + refreshedAgain.stderr).toBe(0);
+    const edgesAgain = edgesOf(readFileSync(stagePath, "utf-8"));
+    expect(edgesAgain.match(/- nfr-requirements\n/g)?.length).toBe(1);
+    expect(edgesAgain).toContain("- nfr-design\n");
+  }, 60_000);
 
   test("refresh keeps a composed persona's own bytes, before and after its plugin is disabled", () => {
     const project = temp("aidlc-t240-persona-refresh-");
@@ -8189,6 +8402,7 @@ describe("t243 projection channel", () => {
           "sha256:7d1b6554a2de2b97b8e14f96ec99d218722d18c100de166cb1a5831bb2c11bfc",
           "sha256:cdfb9d50a7899b4c5a2aa3128d49a2f50c12ee9d3aba13dbe42ff92ad7a2f22e",
           "sha256:3979d69468a5997423ef8fe3b7d9f9bc948ddf34524ca39e1c10112a6a80f835",
+          "sha256:2a818c7c6a39421df576d70829d4d2c960809df3d60b32ca1a0659965c56433a",
         ],
       },
     };

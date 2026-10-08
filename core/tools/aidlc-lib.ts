@@ -1,7 +1,7 @@
 import { DEFAULT_SUBPROCESS_TIMEOUT_MS } from "./aidlc-runtime-budget.ts";
 import { spawnSync } from "node:child_process";
 import { createHash, createHmac, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
-import { accessSync, chmodSync, closeSync, constants as fsConstants, cpSync, type Dirent, existsSync, fstatSync, linkSync, lstatSync, mkdirSync, openSync, opendirSync, readdirSync, readFileSync, readlinkSync, readSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, unlinkSync, writeFileSync, writeSync } from "node:fs";
+import { accessSync, chmodSync, closeSync, constants as fsConstants, cpSync, type Dirent, existsSync, fstatSync, linkSync, lstatSync, mkdirSync, openSync, opendirSync, readdirSync, readFileSync, readlinkSync, readSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, unlinkSync, utimesSync, writeFileSync, writeSync } from "node:fs";
 import { homedir, hostname, tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve as resolvePath, sep, win32 } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -158,6 +158,12 @@ export interface StageEntry {
   consumes?: Array<{ artifact: string; required: boolean; conditional_on?: string }>;
   requires_stage?: string[];
   scopes?: string[];
+  // Composer screening prior authored on the stage (the frontmatter twin of one
+  // tools/data/ars-priors.json entry, for stages that file does not name -
+  // plugin stages). Compiled verbatim; `aidlc-graph ars` reads it when the
+  // priors file has no entry for the slug. aidlc-stage-schema.ts owns the
+  // narrow enum types; this shape is the trust-boundary view of the JSON.
+  ars?: { targets: string[]; cost: number | null; role?: string; project_types?: string[] };
   inputs?: string;
   outputs?: string;
   for_each?: string;
@@ -379,13 +385,29 @@ export interface DocumentExtractorSpec {
   timeoutMs?: number;
 }
 
-// A host-specific missed-reply line from harness.json, kept only when well formed.
-function missedReplyInHost(value: unknown): { missedReplyInHost?: { env: string[]; text: string } } {
+// A host-specific line from harness.json, kept only when well formed.
+function hostLine<K extends "missedReplyInHost" | "agentStepInHost">(
+  key: K,
+  value: unknown,
+): Partial<Record<K, { env: string[]; text: string }>> {
   const host = value as { env?: unknown; text?: unknown } | null | undefined;
   return Array.isArray(host?.env) && host.env.length > 0 &&
       host.env.every((name) => typeof name === "string" && name !== "") && typeof host.text === "string"
-    ? { missedReplyInHost: { env: [...host.env as string[]], text: host.text } }
+    ? { [key]: { env: [...host.env as string[]], text: host.text } } as Partial<Record<K, { env: string[]; text: string }>>
     : {};
+}
+
+// Whether the agent's shell is in the host a harness's `{ env }` names: `NAME`
+// matches when set, `NAME=value` when it holds that value (TERM_PROGRAM=kiro).
+// A `NAME=value` variable holding another value rules the host out: Kiro CLI in
+// VS Code's terminal has TERM_PROGRAM=vscode beside VS Code's own VSCODE_PID.
+function inHostShell(env: readonly string[] | undefined): boolean {
+  const entries = (env ?? []).map((entry) => {
+    const [name, value] = entry.split("=", 2);
+    return { value: value?.toLowerCase(), actual: process.env[name]?.trim().toLowerCase() };
+  });
+  if (entries.some(({ value, actual }) => value !== undefined && actual && actual !== value)) return false;
+  return entries.some(({ value, actual }) => value === undefined ? Boolean(actual) : actual === value);
 }
 
 /** A harness's advice for a host that runs no project hooks until the person acts (trust, reload, engine). */
@@ -397,6 +419,7 @@ export interface HookActivation {
   notRunYet?: string;
   notRunInWorkflow?: string;
   agentStep?: string;
+  agentStepInHost?: { env: string[]; text: string };
   agentStepEdits?: string;
 }
 
@@ -572,13 +595,14 @@ function readShippedHarnessData(): ShippedHarnessData {
         ? {
           recovery: activation.recovery,
           ...(typeof activation.missedReply === "string" ? { missedReply: activation.missedReply } : {}),
-          ...(missedReplyInHost(activation.missedReplyInHost)),
+          ...(hostLine("missedReplyInHost", activation.missedReplyInHost)),
           ...(activation.missesReplies === true ? { missesReplies: true as const } : {}),
           ...(typeof activation.notRunYet === "string" ? { notRunYet: activation.notRunYet } : {}),
           ...(typeof activation.notRunInWorkflow === "string"
             ? { notRunInWorkflow: activation.notRunInWorkflow }
             : {}),
           ...(typeof activation.agentStep === "string" ? { agentStep: activation.agentStep } : {}),
+          ...(typeof activation.agentStep === "string" ? hostLine("agentStepInHost", activation.agentStepInHost) : {}),
           ...(typeof activation.agentStepEdits === "string" ? { agentStepEdits: activation.agentStepEdits } : {}),
         }
         : null;
@@ -7439,9 +7463,10 @@ export function registerIntentRecord(
 // bound its session leaves none to pick up.
 export function leaveCreationReceipt(recordDir: string, uuid: string): void {
   try {
-    const receiptDir = engineDirFor(recordDir);
-    mkdirSync(receiptDir, { recursive: true });
-    writeFileSync(join(receiptDir, CREATION_RECEIPT_FILE), `${uuid}\n`, { encoding: "utf-8", flag: "wx" });
+    const relativePath = `${ENGINE_DIR}/${CREATION_RECEIPT_FILE}`;
+    // One receipt per creation, never replaced; never written through a link.
+    if (existsSync(recordFileTargetOrThrow(recordDir, relativePath))) return;
+    writeRecordFileNoFollow(recordDir, relativePath, `${uuid}\n`);
   } catch {
     // Best-effort: without a receipt the observed creation stays unproven.
   }
@@ -8888,7 +8913,14 @@ function transactActiveDirectiveTarget<T>(
     process.off("exit", pendingRelease.handler);
     ACTIVE_DIRECTIVE_EXIT_HANDLERS.delete(target.markerPath);
   }
+  // The marker and its lock live under the record's engine folder; neither is
+  // created or written through a link planted there.
+  const recordRoot = dirname(target.statePath);
+  mkdirSync(recordRoot, { recursive: true });
+  assertRecordPathNoFollow(recordRoot, target.markerPath);
+  assertRecordPathNoFollow(recordRoot, target.lockDir);
   mkdirSync(dirname(target.markerPath), { recursive: true });
+  assertRecordPathNoFollow(recordRoot, target.markerPath);
   const receipt = acquireActiveDirectiveLock(target.lockDir);
   if (!receipt) throw new ActiveDirectiveLockContendedError();
   ACTIVE_DIRECTIVE_TRANSACTIONS.add(target.markerPath);
@@ -11305,15 +11337,19 @@ export function ensureCloneId(projectDir: string): string {
 // append order. The prior resolution is the freshness boundary - this is the
 // consume-once semantics expressed as event order instead of a flag.
 //
-// Why the boundary is the prior RESOLUTION, not this gate's STAGE_AWAITING_APPROVAL
-// (the live Kiro IDE spike, 2026-06-30, caught this): in the real flow ONE human
-// prompt drives the agent to BOTH open the gate AND approve it, so the human turn
-// PRECEDES this gate-open. A "human turn after gate-open" rule false-refuses every
-// legitimate approval. But a human turn after the prior gate's resolution still
-// proves a fresh human acted this turn, while a fabricated cascade (gate2 approved
-// right after gate1 committed, no new human turn) has its only human turn BEFORE
-// the gate1 GATE_APPROVED -> refused. Stale (human turn long ago, then a fabricated
-// approve) likewise has the last resolution after the human turn -> refused.
+// Two bounds. The prior RESOLUTION is the freshness bound: a human turn after
+// the last gate approval, rejection or answered question proves a fresh human
+// acted since the last decision, so a fabricated cascade (gate2 approved right
+// after gate1 committed, no new human turn) and a stale approval (human turn
+// long ago, then a fabricated approve) are both refused. For a stage gate the
+// gate's own presentation is the second bound (personRepliedSincePresentation,
+// used by approve and reject): the reply must come after the stage's
+// STAGE_AWAITING_APPROVAL row, since a turn sent before the question was put
+// (an answer to the stage's own questions) is no reply to it. An earlier
+// version kept the presentation out of the rule because one prompt once drove
+// the agent to both open and approve a gate (a Kiro IDE spike, 2026-06-30); the
+// protocol now presents the gate and ends the turn. A gate the engine backfills
+// for a reported approval (Recovered: true) is exempt from the second bound.
 //
 // Ordering is CHRONOLOGICAL (Timestamp, then per-shard position as the SAME-SHARD
 // tiebreak): shards are per-clone files enumerated in FILENAME order (a second
@@ -12284,12 +12320,17 @@ const ANSWER_TEXT_MAX_BYTES = 64 * 1024;
 export function readAnswerTextFile(projectDir: string, file: string): string {
   const root = recordDir(projectDir);
   if (!root) throw new Error("An answer text file needs an active piece of work.");
-  const relativePath = file.replaceAll("\\", "/");
-  const parts = relativePath.split("/");
-  if (
-    isAbsolute(file) || parts.some((part) => part === ".." || part === ".") ||
-    !relativePath.startsWith(`${ANSWER_TEXT_DIR}/`) || relativePath.length === ANSWER_TEXT_DIR.length + 1
-  ) {
+  const inFolder = (name: string): boolean =>
+    !name.split("/").some((part) => part === ".." || part === ".") &&
+    name.startsWith(`${ANSWER_TEXT_DIR}/`) && name.length > ANSWER_TEXT_DIR.length + 1;
+  const given = file.replaceAll("\\", "/");
+  // Named from the project folder or in full, it is the same file (#2167):
+  // read it under its name in the record, which still has to be in the folder.
+  const fromRecord = relative(root, resolvePath(projectDir, given)).replaceAll("\\", "/");
+  const relativePath = !isAbsolute(file) && inFolder(given)
+    ? given
+    : !isAbsolute(fromRecord) && inFolder(fromRecord) ? fromRecord : null;
+  if (relativePath === null) {
     throw new Error(
       `An answer text file must be inside ${ANSWER_TEXT_DIR}/ in the work's record, named relative to the record ` +
         `(for example ${ANSWER_TEXT_DIR}/answer.txt).`,
@@ -13008,6 +13049,33 @@ export function writeRecordFileNoFollow(
   assertNoSymlinkInChainOrThrow(anchorReal, relativePath);
   writeBufferAtomic(target, typeof data === "string" ? Buffer.from(data, "utf-8") : data);
   return target;
+}
+
+/**
+ * Write a record under the intent's engine folder (`.aidlc-engine/<name>`,
+ * `name` in posix form) through no symlink: a link planted at the folder, at a
+ * folder under it, or at the file refuses the write. The record root is created
+ * when missing (as the hooks-health writer does); nothing beneath it is
+ * followed.
+ */
+export function writeEngineFileNoFollow(
+  projectDir: string,
+  name: string,
+  data: string | Buffer,
+  intent?: string,
+  space?: string,
+): string {
+  const recordRoot = docsRoot(projectDir, intent, space);
+  mkdirSync(recordRoot, { recursive: true });
+  return writeRecordFileNoFollow(recordRoot, `${ENGINE_DIR}/${name}`, data);
+}
+
+/**
+ * Refuse a path under a record that is reached through a symlink. `recordRoot`
+ * must exist; `path` is absolute and lies under it.
+ */
+function assertRecordPathNoFollow(recordRoot: string, path: string): void {
+  assertNoSymlinkInChainOrThrow(realpathSync(recordRoot), toPosix(relative(recordRoot, path)));
 }
 
 /** Remove a framework-owned record file under `recordRoot`, never through a symlink. */
@@ -22157,14 +22225,26 @@ function isAidlcSensorCachePath(path: string): boolean {
 // A source file's sha256 with its line endings read as LF (committedTextBytes),
 // so a checkout that turns them is no change, and the raw bytes' digest when
 // that differs. The file is read a chunk at a time, never whole; only one with
-// a CR is read a second time, for its text form.
-function stableFileShas(path: string): { sha: string; raw?: string } | null {
+// a CR is read a second time, for its text form. "vanished" when the file is
+// gone by the time it is opened (the directory listed it a moment earlier);
+// null when it could not be read, or changed under the read. `afterStat` is a
+// test seam that runs once the file's size and times are taken.
+function stableFileShas(
+  path: string,
+  afterStat?: () => void,
+): { sha: string; raw?: string } | "vanished" | null {
   let fd: number | undefined;
   try {
-    fd = openSync(path, "r");
+    try {
+      fd = openSync(path, "r");
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return "vanished";
+      throw error;
+    }
     const opened = fd;
     const before = fstatSync(opened);
     if (!before.isFile()) return null;
+    afterStat?.();
     const buffer = Buffer.allocUnsafe(64 * 1024);
     let position = 0;
     const chunks = function* (): Generator<Buffer> {
@@ -22208,7 +22288,30 @@ function stableFileShas(path: string): { sha: string; raw?: string } | null {
 }
 
 function stableFileSha256(path: string): string | null {
-  return stableFileShas(path)?.sha ?? null;
+  const shas = stableFileShas(path);
+  return shas === null || shas === "vanished" ? null : shas.sha;
+}
+
+// How many times a file whose size or times move under the read is read again
+// before it counts as unreadable: a build or an indexer writing it at that
+// instant finishes within a read or two; one that never settles still fails
+// closed.
+const SOURCE_FILE_READ_ATTEMPTS = 3;
+
+/**
+ * Test-only stand-ins for another process writing while the walk reads, set by
+ * a test running in this process and never read from the environment: a file
+ * to remove right before its directory entry is examined, one to remove right
+ * before its read, and one to grow during each of its first `count` reads.
+ */
+interface SourceWalkTestHooks {
+  vanishBeforeStat?: string;
+  vanishBeforeRead?: string;
+  unstableReads?: { path: string; count: number };
+}
+let sourceWalkTestHooks: SourceWalkTestHooks | null = null;
+export function _setSourceWalkTestHooksForTests(hooks: SourceWalkTestHooks | null): void {
+  sourceWalkTestHooks = hooks;
 }
 
 interface FilesystemSourceIdentity {
@@ -23207,6 +23310,16 @@ function filesystemSourceIdentity(
     sourceExtension.test(name) ||
     sourceBasename.test(name) ||
     hasShebang(path, size);
+  // Test hooks standing in for another process writing while the walk reads
+  // (set in-process by a test, never read from the environment): the named
+  // file is removed right before its entry is examined or before its read, or
+  // grown during each of its first n reads.
+  const hooks = sourceWalkTestHooks;
+  const vanishBeforeRead = hooks?.vanishBeforeRead;
+  const unstableSeam = hooks?.unstableReads ?? null;
+  let unstableReadsLeft = unstableSeam?.count ?? 0;
+  // True (recorded), false (the walk fails), or "vanished": the file was gone
+  // when read, so it is left out as the next walk would leave it.
   const recordFile = (
     path: string,
     rel: string,
@@ -23214,7 +23327,7 @@ function filesystemSourceIdentity(
     executable: boolean,
     sourceOnly: boolean,
     listingPath = rel,
-  ): boolean => {
+  ): boolean | "vanished" => {
     totalFiles += 1;
     totalBytes += size;
     if (totalFiles > maxFiles) {
@@ -23246,7 +23359,32 @@ function filesystemSourceIdentity(
         );
       }
     }
-    const shas = stableFileShas(path);
+    if (vanishBeforeRead === rel) {
+      try {
+        unlinkSync(path);
+      } catch {
+        // Already gone: the seam only ever removes the file once.
+      }
+    }
+    const afterStat = unstableSeam !== null && unstableSeam.path === rel
+      ? () => {
+        if (unstableReadsLeft > 0) {
+          unstableReadsLeft -= 1;
+          writeFileSync(path, "x", { flag: "a" });
+        }
+      }
+      : undefined;
+    // A file still being written moves under the read; read it again a few
+    // times before it counts as unreadable.
+    let shas: ReturnType<typeof stableFileShas> = null;
+    for (let attempt = 0; attempt < SOURCE_FILE_READ_ATTEMPTS && shas === null; attempt++) {
+      shas = stableFileShas(path, afterStat);
+    }
+    if (shas === "vanished") {
+      totalFiles -= 1;
+      totalBytes -= size;
+      return "vanished";
+    }
     if (shas === null) {
       return noteSourceFailure(false, "unreadable", "the file could not be hashed", rel);
     }
@@ -23488,10 +23626,20 @@ function filesystemSourceIdentity(
         const childRegisteredOnly =
           registeredOnly || conditionalBoundary || registryExcluded;
         const child = join(dir, entry.name);
+        if (hooks?.vanishBeforeStat === childRel) {
+          try {
+            unlinkSync(child);
+          } catch {
+            // Already gone: the hook only ever removes the file once.
+          }
+        }
         let stat: ReturnType<typeof lstatSync>;
         try {
           stat = lstatSync(child);
         } catch (error) {
+          // Gone since the directory listed it (an editor's temporary file,
+          // say): left out, as the next walk would leave it.
+          if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
           return noteSourceFailure(
             false,
             "unreadable",
@@ -23585,14 +23733,14 @@ function filesystemSourceIdentity(
               : `${childListingRel}@target`;
             if (
               recordIdentity &&
-              !recordFile(
+              recordFile(
                 target,
                 `${childRel}@target`,
                 targetStat.size,
                 (targetStat.mode & 0o111) !== 0,
                 sourceOnly,
                 targetListingRel,
-              )
+              ) === false
             ) {
               return false;
             }
@@ -23720,18 +23868,19 @@ function filesystemSourceIdentity(
           if (snapshotEligible) {
             includedRegularPaths.add(childSnapshotRel);
           }
-          if (
-            recordIdentity &&
-            !recordFile(
+          if (recordIdentity) {
+            const recorded = recordFile(
               child,
               childRel,
               stat.size,
               (stat.mode & 0o111) !== 0,
               sourceOnly,
               childListingRel,
-            )
-          ) {
-            return false;
+            );
+            if (recorded === false) return false;
+            // Gone since the directory listed it: nothing to record, and the
+            // snapshot must not try to add it.
+            if (recorded === "vanished") continue;
           }
           if (
             snapshotEligible &&
@@ -25333,9 +25482,14 @@ function sourceSnapshotReadPath(
   return existsSync(legacy) ? legacy : path;
 }
 
-function writeSourceSnapshot(path: string, serialized: string): string {
+// `path` lies under `recordRoot` (the engine folder's copy, or the committed
+// evidence beside a Unit's manifest); it is never written through a link.
+function writeSourceSnapshot(recordRoot: string, path: string, serialized: string): string {
   const hash = sourceListingSha256(serialized);
+  mkdirSync(recordRoot, { recursive: true });
+  assertRecordPathNoFollow(recordRoot, path);
   mkdirSync(dirname(path), { recursive: true });
+  assertRecordPathNoFollow(recordRoot, path);
   if (existsSync(path)) {
     const existing = readFileSync(path);
     if (existing.equals(Buffer.from(serialized, "utf-8"))) return `sha256:${hash}`;
@@ -25356,10 +25510,11 @@ export function writeBaselineSourceSnapshot(
   space?: string,
 ): string {
   const dir = sourceSnapshotDir(projectDir, stageSlug, intent, space);
-  if (dir === null) throw new Error("Cannot write source baseline without a valid active record and stage slug");
+  const record = recordDir(projectDir, intent, space);
+  if (dir === null || record === null) throw new Error("Cannot write source baseline without a valid active record and stage slug");
   const serialized = serializeSourceListing(listing);
   const hash = sourceListingSha256(serialized);
-  return writeSourceSnapshot(join(dir, `baseline-${hash.slice(0, 12)}.tsv`), serialized);
+  return writeSourceSnapshot(record, join(dir, `baseline-${hash.slice(0, 12)}.tsv`), serialized);
 }
 
 /** Build the modern source-baseline audit field for any workflow/stage boundary. */
@@ -25457,10 +25612,11 @@ export function writeUnitSourceSnapshot(
   // this file; a bare clone/CI checkout can resolve per-path reviewed OIDs
   // (aidlc-attest.ts) without the machine-local .aidlc-engine/source-review/ copy.
   writeSourceSnapshot(
+    record,
     reviewedSourceEvidencePath(record, unit, stageSlug, hash.slice(0, 12)),
     serialized,
   );
-  return writeSourceSnapshot(join(dir, `unit-${unit}-${hash.slice(0, 12)}.tsv`), serialized);
+  return writeSourceSnapshot(record, join(dir, `unit-${unit}-${hash.slice(0, 12)}.tsv`), serialized);
 }
 
 function readSourceSnapshot(path: string, fingerprint: string): string | null {
@@ -25530,11 +25686,12 @@ export function writeWorkspaceSourceSnapshot(
   state: WorkspaceSourceState,
 ): boolean {
   const path = workspaceSourceSnapshotPath(projectDir, stageSlug, state.fingerprint);
-  if (path === null) return false;
+  const record = recordDir(projectDir);
+  if (path === null || record === null) return false;
   const serialized =
     `${WORKSPACE_SNAPSHOT_HEADER}\t${state.fingerprint}\t-\n${serializeSourceListing(state.listing)}`;
   try {
-    writeSourceSnapshot(path, serialized);
+    writeSourceSnapshot(record, path, serialized);
     return true;
   } catch {
     return false;
@@ -26111,7 +26268,9 @@ export function hooksOffAgentStep(projectDir?: string, next?: string): string | 
       `this line and end your turn: "${edits} in this project is a link, so it was left as it is. Make it a plain ` +
       `file in this project, then send your next message."`;
   }
-  return `${HOOKS_OFF_AGENT_RULES} ${fillHookActivationText(activation.agentStep, projectDir, next)}`;
+  // An agent given each tool's line showed the wrong one (#2167), so the engine picks it.
+  const step = inHostShell(activation.agentStepInHost?.env) ? activation.agentStepInHost!.text : activation.agentStep;
+  return `${HOOKS_OFF_AGENT_RULES} ${fillHookActivationText(step, projectDir, next)}`;
 }
 
 /**
@@ -26565,15 +26724,20 @@ export function turnEndIsOpen(projectDir: string, intent?: string, space?: strin
 }
 
 // Record that the workflow engine was ADVANCED (not merely probed). Called from
-// orchestrate's `next` / `report` / `park` and `intent create`. A no-op in three
-// cases: when STOP_HOOK_PROBE_ENV is set (the Stop hook's own probe — see above),
-// for read-only utility routing (excluded at the call site), and before creation.
+// orchestrate's `next` / `report` / `park`, from `intent create` for the work it
+// creates, and from the intent and space switches for the work they select (a
+// record with no mark, made before the markers shipped or freshly cloned, would
+// otherwise read every later plain question as the engine's unfinished turn on
+// the transcript-free hosts). A no-op in three cases: when STOP_HOOK_PROBE_ENV
+// is set (the Stop hook's own probe, see above), for read-only utility routing
+// (excluded at the call site), and before creation.
 //
 // KNOWN COVERAGE GAP — the marker sees LESS than the transcript predicate does.
 // isEngineToolCall (below) counts as engagement any non-read-only aidlc-jump /
 // aidlc-bolt / aidlc-swarm invocation and the mutating aidlc-state verbs
 // (approve, advance, skip, set, …). NONE of those tools touch this marker: the
-// only writers are orchestrate's three subcommands and intent create. So on a transcript-free
+// only writers are orchestrate's three subcommands, intent create and the two
+// switches. So on a transcript-free
 // harness a conductor that runs, say, `aidlc-jump` — mutating the stage pointer
 // and emitting audit — and then ends its turn without consulting the engine
 // reads as CONVERSATIONAL here, while the same turn BLOCKS on Claude/Codex where
@@ -26591,6 +26755,32 @@ export function markEngineTouch(projectDir: string, intent?: string, space?: str
   if (isReadOnlyEngineProbe()) return;
   if (!workflowIsCreated(projectDir, intent, space)) return;
   touchTurnMarker(projectDir, "engine-touch", intent, space);
+}
+
+// The engine mark for the work an intent or space switch selects. Written only
+// when the record has none (work made before the markers shipped, or a fresh
+// clone: .aidlc-engine/ is not committed), and dated just before the record's
+// last human turn when it has one. So the switch itself never reads as the
+// engine's unfinished turn: a self-switch on marked work (a new chat's first
+// `/aidlc intent <the work in hand>`, or the resume offer's Yes) ends its turn
+// as it always did, a plain question on the selected work ends its turn too,
+// and work the engine hands out later refreshes the mark as always.
+export function markSelectedWork(projectDir: string, intent?: string, space?: string): void {
+  try {
+    if (turnMarkerStat(projectDir, "engine-touch", intent, space)?.isFile()) return;
+  } catch {
+    return; // a link on the way reads as no mark, and nothing is written through it
+  }
+  markEngineTouch(projectDir, intent, space);
+  try {
+    const human = turnMarkerStat(projectDir, "human-turn", intent, space);
+    if (!human?.isFile()) return;
+    const mark = recordFileTargetOrThrow(docsRoot(projectDir, intent, space), join(ENGINE_DIR, "engine-touch"));
+    const before = new Date(human.mtimeMs - 1000);
+    utimesSync(mark, before, before);
+  } catch {
+    // Advisory: the mark's own time stands.
+  }
 }
 
 // The transcript-free reading of "the ending turn was conversational": the last
@@ -26781,12 +26971,23 @@ export function clearGateWords(projectDir: string): void {
 // Where a stage's gate words may begin in `content` (an audit shard): its
 // latest presentation, or the latest answer to another question after it. Null
 // when the latest lifecycle row for the stage (and Unit) is not a presentation:
-// a gate already answered, a stage restarted, or a gate never presented (the
-// direct Active to Revising path).
-function gatePresentationStart(content: string, gate: { stage: string; unit?: string }): number | null {
+// a gate already answered, a stage restarted, a gate never presented (the
+// direct Active to Revising path), or a row the engine backfilled (Recovered:
+// true), which is written after the person's reply by design. With
+// `firstShowing`, a gate re-entered after a revision begins where the person
+// first saw it in this attempt: their correction of a misread Request Changes
+// came after that showing, and the re-entry row shows them nothing new.
+function gatePresentationStart(
+  content: string,
+  gate: { stage: string; unit?: string },
+  options: { firstShowing?: boolean } = {},
+): number | null {
   const separator = /\r?\n---\r?\n/g;
   let start = 0;
   let from: number | null = null;
+  // The showing this attempt began with, and whether a revision has run since.
+  let shown: number | null = null;
+  let revised = false;
   for (;;) {
     const match = separator.exec(content);
     const block = content.slice(start, match ? match.index : content.length).replace(/\r\n/g, "\n");
@@ -26796,7 +26997,19 @@ function gatePresentationStart(content: string, gate: { stage: string; unit?: st
       auditBlockField(block, "Stage") === gate.stage &&
       (gate.unit === undefined || auditBlockField(block, "Unit") === gate.unit)
     ) {
-      from = event === "STAGE_AWAITING_APPROVAL" ? start : null;
+      if (event === "STAGE_AWAITING_APPROVAL" && auditBlockField(block, "Recovered") !== "true") {
+        from = options.firstShowing === true && revised && shown !== null ? shown : start;
+        // A gate first shown by a re-entry (the stage was rejected mid-run) is
+        // this attempt's showing too.
+        if (!revised || shown === null) shown = start;
+      } else {
+        from = null;
+        if (event === "STAGE_REVISING") revised = true;
+        else if (event !== "GATE_REJECTED") {
+          shown = null;
+          revised = false;
+        }
+      }
     } else if (event !== null && from !== null && GATE_WORDS_ANSWERED_BY.has(event)) {
       from = start;
     }
@@ -26834,14 +27047,80 @@ export function gateWordsSincePresentation(
   return words.length > 0 ? words : null;
 }
 
+// The messages this chat's person typed while a Unit's review ran, before its
+// checkpoint question was asked: after the Unit's newest review request at one
+// of `stages` (and after the answer to any question asked before it), up to the
+// first question asked since (the learnings question, say), whose reply is its
+// own. In order, leaving out non-answers. Null when this clone's record has no
+// review request for the Unit, a question asked since is still unanswered,
+// nothing was typed then, or a message typed since was not kept.
+export function gateWordsSinceUnitReview(
+  projectDir: string,
+  session: string,
+  unit: string,
+  stages: readonly string[],
+): string[] | null {
+  const record = readGateWords(projectDir, session);
+  if (record === null || record.messages.length === 0) return null;
+  const shardPath = auditFilePath(projectDir);
+  if (projectRelativePath(projectDir, shardPath) !== record.shard) return null;
+  let content: string;
+  try {
+    content = readAppendOnlyFileNoFollowOrThrow(shardPath, "audit shard").toString("utf-8");
+  } catch {
+    return null;
+  }
+  const separator = /\r?\n---\r?\n/g;
+  let start = 0;
+  let from: number | null = null;
+  let until: number | null = null;
+  let open = false;
+  for (;;) {
+    const match = separator.exec(content);
+    const block = content.slice(start, match ? match.index : content.length).replace(/\r\n/g, "\n");
+    const event = auditBlockField(block, "Event");
+    const asks = event === "DECISION_RECORDED" || event === "STAGE_AWAITING_APPROVAL" || event === "QUESTION_UNANSWERED";
+    const answers = event !== null && !asks && (GATE_WORDS_ANSWERED_BY.has(event) || GATE_WORDS_SPENT_BY.has(event));
+    if (
+      event === "REVIEW_REQUESTED" && auditBlockField(block, "Unit") === unit &&
+      stages.includes(auditBlockField(block, "Stage") ?? "")
+    ) {
+      from = start;
+      until = null;
+      open = false;
+    } else if (from !== null && asks) {
+      until ??= start;
+      open = true;
+    } else if (from !== null && answers) {
+      // Before any question here, an answer is to one asked before the review:
+      // what was typed until then was its reply.
+      if (until === null) from = start;
+      open = false;
+    }
+    if (match === null) break;
+    start = match.index + match[0].length;
+  }
+  if (from === null || open) return null;
+  const floor = Buffer.byteLength(content.slice(0, from), "utf-8");
+  const ceiling = until === null ? Number.POSITIVE_INFINITY : Buffer.byteLength(content.slice(0, until), "utf-8");
+  if (record.dropped > floor) return null;
+  const words = record.messages
+    .filter((message) => message.offset > floor && message.offset <= ceiling && !isNonAnswer(message.text))
+    .map((message) => message.text);
+  return words.length > 0 ? words : null;
+}
+
 // Whether the person replied to the stage's approval question: a reply turn is
 // on this clone's record after its latest presentation (and after any other
 // question's answer since). A turn sent before the question was put to them is
 // no reply to it. Null when the stage is not waiting on that question (never
-// put to them, or already answered), and when the record cannot be read.
+// put to them, or already answered), and when the record cannot be read. With
+// `firstShowing` (approve), a re-entered gate counts from the showing the person
+// first saw in this attempt (gatePresentationStart).
 export function personRepliedSincePresentation(
   projectDir: string,
   gate: { stage: string; unit?: string },
+  options: { firstShowing?: boolean } = {},
 ): boolean | null {
   let content: string;
   try {
@@ -26849,7 +27128,7 @@ export function personRepliedSincePresentation(
   } catch {
     return null;
   }
-  const from = gatePresentationStart(content, gate);
+  const from = gatePresentationStart(content, gate, options);
   if (from === null) return null;
   return auditShardBlocks(content.slice(from))
     .some((block) => isReplyTurn({ event: auditBlockField(block, "Event") ?? "", block }));
@@ -29195,6 +29474,35 @@ function hooksNeverRanHere(projectDir?: string): boolean {
   }
 }
 
+// The prompt hook ran for this workflow just now: the heartbeat it leaves on
+// every prompt it handles is recent by the clock (within the staleness slack,
+// and not from the future) and the work has not moved on since (the newest
+// stage or gate event is within the same slack of it). A refusal for want of a
+// reply then means the person has not answered yet, not a reply the hooks
+// missed. The clock matters: refusals write no stage or gate event, so hooks
+// that stop after a gate opens (a launch whose hook command fails, a Kiro IDE
+// window back in Restricted Mode) would otherwise read as "not answered yet"
+// turn after turn; by the clock the missed-reply step is back within minutes.
+export function promptHookRanRecently(projectDir?: string): boolean {
+  try {
+    const project = resolveProjectDir(projectDir);
+    const path = join(hooksHealthReadDir(project), "record-human-turn.last");
+    if (!existsSync(path)) return false;
+    const beat = Date.parse(readFileSync(path, "utf-8").trim());
+    if (!Number.isFinite(beat)) return false;
+    const age = Date.now() - beat;
+    if (age < 0 || age > HOOK_HEARTBEAT_STALE_SLACK_MS) return false;
+    const newest = hookLiveness(project).newestStageOrGateEvent;
+    return newest === null || newest.timestampMs - beat <= HOOK_HEARTBEAT_STALE_SLACK_MS;
+  } catch {
+    return false;
+  }
+}
+
+// Said in place of the missed-reply line while the prompt hook runs: the gate
+// or question was put to the person, and they have not answered it yet.
+export const NOT_ANSWERED_YET_STEP = "The person has not answered yet: end your turn; their next reply answers it.";
+
 // Said to the agent after every missed-reply step: the person turns a check off, never the agent's offer.
 const NO_CHECK_OFF_OFFER = "Never offer to turn a check off for them.";
 
@@ -29223,10 +29531,15 @@ export function unattendedHumanPresenceHint(projectDir?: string, options: { miss
   }
   // The caller refuses for a reply not given yet, not for one the hooks missed.
   if (options.missedReply === false) return "";
+  // The prompt hook runs here and nothing moved since it last did: the person
+  // has not answered yet (the agent asked in this same turn), so the one step
+  // is to end the turn, and the person hears nothing. Only a reply the hooks
+  // could have missed (no heartbeat, or one the workflow left far behind) gets
+  // the missed-reply line.
+  if (promptHookRanRecently(projectDir)) return ` ${NOT_ANSWERED_YET_STEP}`;
   const activation = hookActivation();
   const host = activation?.missedReplyInHost;
-  const inHost = host?.env.some((name) => Boolean(process.env[name]?.trim())) === true;
-  const missedReply = (inHost ? host?.text : activation?.missedReply) ??
+  const missedReply = (inHostShell(host?.env) ? host?.text : activation?.missedReply) ??
     "If the person already replied, that reply was not recorded for this question. Tell them exactly this, " +
       "with nothing about why: \"Your answer didn't reach AI-DLC. Please give it once more. If it happens again, " +
       `type ${entrySkillInvocation()} --doctor."`;
@@ -29522,7 +29835,11 @@ export interface GuardAttemptState {
   };
   nextReview?: {
     iteration: number;
+    // That pass's exact request, as recordVerdict is for a verdict.
+    request?: string;
   };
+  // The exact request for the next permitted review when none is in flight.
+  requestReview?: string;
   summaryCoverage: "current" | "stale" | "missing";
   reviewCoverage: "current" | "stale" | "missing";
   sourceCoverage: "current" | "stale" | "missing" | "unbindable";
@@ -30096,6 +30413,20 @@ function guardStageName(stage: string): string {
 // work): a new op cannot compile without an entry.
 const GUARD_REMEDY_WORDING_BY_OP: Record<GuardRemedyOp, GuardRemedyWording> = GUARD_REMEDY_WORDING;
 
+// A review request way on, spelled out for the conductor: the exact request,
+// then the dispatch and the verdict it returns. With no reviewer protocol in
+// the chat, a bare "request the review" left the agent guessing (seen live on
+// Kiro IDE: it ran the reviewer with no request, so no review was recorded),
+// and "have the reviewer review it" was read as writing the review in the
+// reviewer's name. The words match the review request's own step.
+function reviewRequestAction(lead: string, request: string | undefined): string {
+  if (request === undefined) return `${lead}.`;
+  return `${lead}: run \`${request}\`, then dispatch the reviewer named in it as a subagent and have it write ` +
+    "the `reviewFile` that command returns: that file is the reviewer's, so never write it yourself and never " +
+    `stand in for it (\`${harnessDir()}/aidlc-common/protocols/stage-protocol-reviewer.md\` step 1 says what to ` +
+    "pass it). When its verdict is back, record it with the `recordVerdict` command the request returns.";
+}
+
 // Pure: reads nothing from disk. The same input always yields the same refusal,
 // which is what lets the enforcing tool and the router agree.
 export function evaluateGuardRefusal(
@@ -30204,9 +30535,11 @@ export function evaluateGuardRefusal(
     if (input.attempt.nextReview) {
       remedies.push({
         op: "request-review",
-        action:
+        action: reviewRequestAction(
           `Request review iteration ${input.attempt.nextReview.iteration} ` +
-          "against the current artifact and source bytes.",
+            "against the current artifact and source bytes",
+          input.attempt.nextReview.request,
+        ),
         requiresHuman: false,
         executableNow: input.attempt.summaryCoverage === "current" && openForWork,
       });
@@ -30288,7 +30621,10 @@ export function evaluateGuardRefusal(
     ) {
       remedies.push({
         op: "request-review",
-        action: "Request the next permitted review for the current attempt.",
+        action: reviewRequestAction(
+          "Request the next permitted review for the current attempt",
+          input.attempt.requestReview,
+        ),
         requiresHuman: false,
         executableNow: input.attempt.summaryCoverage === "current" && openForWork,
       });
@@ -30525,11 +30861,21 @@ export function guardAttemptState(
       }),
     },
   });
+  // The exact request for a pass, named in the way on that asks for it.
+  const requestAt = (iteration: number) => renderReviewRequestCommand({
+    projectDir,
+    stage: stage.slug,
+    reviewer: stage.reviewer as string,
+    ...(unit ? { unit } : {}),
+    ...(options.single ? { single: true } : {}),
+    iteration,
+  });
+  const nextReviewAt = (iteration: number) => ({ nextReview: { iteration, request: requestAt(iteration) } });
   // A pending request that can never finish (its outputs or source changed
   // before a verdict) is requested again at the same pass, once per attempt.
   const pendingReviewFor = (iteration: number) =>
     pendingStatus?.iteration === iteration && pendingStatus.replaceable
-      ? { nextReview: { iteration } }
+      ? nextReviewAt(iteration)
       : pendingReviewAt(iteration);
   const budget = options.reviewBudget ?? null;
   const attempt: GuardAttemptState = {
@@ -30549,12 +30895,14 @@ export function guardAttemptState(
     ...(pending?.state === "repair-required"
       ? { repairReview: { iteration: pending.iteration } }
       : pending?.state === "outstanding"
-        ? { nextReview: { iteration: pending.iteration } }
+        ? nextReviewAt(pending.iteration)
         : pending
           ? pendingReviewFor(pending.iteration)
           : pendingIterations.length > 0
             ? pendingReviewFor(pendingIterations[0])
             : {}),
+    // The pass the review log expects next (its request count plus one).
+    ...(accounting === null || !stage.reviewer ? {} : { requestReview: requestAt(accounting.requestCount + 1) }),
     summaryCoverage: options.summaryCoverage ?? "current",
     reviewCoverage:
       unitVerdict !== null
@@ -30862,10 +31210,10 @@ export function recordGuardRefusal(
           ),
         }
       : record;
-    mkdirSync(dirname(path), { recursive: true });
-    writeFileSync(path, `${JSON.stringify(left, null, 2)}\n`, "utf-8");
+    writeEngineFileNoFollow(projectDir, toPosix(relative(engineDir(projectDir), path)), `${JSON.stringify(left, null, 2)}\n`);
   } catch {
     // Persistence failure under-counts repetitions; it never relaxes a guard.
+    // A link planted in the engine folder is one such failure.
   }
   return streak;
 }
@@ -31052,7 +31400,7 @@ export function pendingGuardRecoveryAsk(
   for (const { path, record } of cleared) {
     const { pendingAsk: _ask, pendingApproval: _approval, ...rest } = record;
     try {
-      writeFileSync(path, `${JSON.stringify(rest, null, 2)}\n`, "utf-8");
+      writeEngineFileNoFollow(projectDir, toPosix(relative(engineDir(projectDir), path)), `${JSON.stringify(rest, null, 2)}\n`);
     } catch {
       // A question that cannot be cleared may be asked again; it never relaxes a guard.
     }
@@ -36381,6 +36729,7 @@ export function parseStageFrontmatter(
     if (key === CONSUMES_KEY) continue;
     if (key === WHEN_KEY) continue;
     if (key === "produces_kinds") continue; // parsed below; the scalar loop would stamp it ""
+    if (key === "ars") continue; // nested map parsed below (arsField)
     if (ARRAY_KEYS.has(key)) continue;
     // optional_produces and required_sections are presence-gated array fields
     // parsed below; skip them here so the scalar loop does not stamp them with
@@ -36476,6 +36825,16 @@ export function parseStageFrontmatter(
       const inline = fm.match(/^when:\s*\{\s*([a-z][a-z0-9-]*)\s*:\s*([^}]+?)\s*\}\s*$/m);
       obj.when = inline ? { [inline[1]]: inline[2].trim() } : scalarField(fm, WHEN_KEY);
     }
+  }
+
+  // `ars` — nested map of composer screening priors (targets/cost, optional
+  // role/project_types): the frontmatter twin of one ars-priors.json stage
+  // entry, authored on stages the shipped file does not name (plugin stages).
+  // Assembled in canonical child order so parse → emit → parse round-trips
+  // byte-for-byte; a non-map value is kept raw so the validator rejects the
+  // shape loudly. Only assigned when the key was discovered.
+  if (topLevelKeys.has("ars")) {
+    obj.ars = arsField(fm);
   }
 
   return obj;
@@ -36728,6 +37087,7 @@ export function emitStageFrontmatter(obj: Record<string, unknown>): string {
     "requires_stage",
     "sensors",
     "scopes",
+    "ars",
     "inputs",
     "outputs",
   ] as const;
@@ -36749,6 +37109,23 @@ export function emitStageFrontmatter(obj: Record<string, unknown>): string {
       for (const [name, kinds] of entries) {
         if (!Array.isArray(kinds)) continue;
         lines.push(`  ${name}: [${(kinds as unknown[]).map((k) => String(k)).join(", ")}]`);
+      }
+    } else if (key === "ars") {
+      // The composer screening prior: a nested map whose lists are inline.
+      // Children are emitted in the order arsField assembled them (canonical:
+      // targets, cost, role, project_types) so parse, emit, parse round-trips.
+      if (!isPlainObject(v)) continue;
+      lines.push("ars:");
+      for (const [child, value] of Object.entries(v)) {
+        if (Array.isArray(value)) {
+          lines.push(`  ${child}: [${(value as unknown[]).map((x) => String(x)).join(", ")}]`);
+        } else if (value === null) {
+          lines.push(`  ${child}: null`);
+        } else if (typeof value === "number") {
+          lines.push(`  ${child}: ${value}`);
+        } else {
+          lines.push(`  ${child}: ${emitScalar(String(value))}`);
+        }
       }
     } else if (key === "consumes") {
       if (!Array.isArray(v)) continue;
@@ -36799,6 +37176,102 @@ export function emitStageFrontmatter(obj: Record<string, unknown>): string {
 
   lines.push("---");
   return `${lines.join("\n")}\n`;
+}
+
+// Drops a trailing YAML comment from a scalar value: a `#` that starts the
+// value or follows whitespace, outside quotes.
+function stripYamlComment(value: string): string {
+  let quote: string | null = null;
+  for (let i = 0; i < value.length; i++) {
+    const c = value[i];
+    if (quote !== null) {
+      if (c === quote) quote = null;
+    } else if (c === '"' || c === "'") {
+      quote = c;
+    } else if (c === "#" && (i === 0 || /\s/.test(value[i - 1]))) {
+      return value.slice(0, i).trimEnd();
+    }
+  }
+  return value;
+}
+
+// Nested-map parser for the `ars:` frontmatter block - the stage-side twin of
+// one tools/data/ars-priors.json entry:
+//
+//   ars:
+//     targets: [ve, csu]
+//     cost: 4
+//     role: structural            # optional
+//     project_types: [brownfield] # optional
+//
+// The block runs until the next top-level key: blank lines and comment lines
+// inside it are skipped, and a trailing `# comment` is stripped from a value,
+// so no declared child is lost. `targets` and `project_types` are INLINE lists
+// only (mirrors mapOfListsField's strictness); `cost` is a number or the
+// literal `null`; `role` is a bare or quoted scalar. A value that does not fit
+// is kept as the raw string (a block list leaves its key empty) and an unknown
+// child key is kept under its own name, so the schema validator
+// (aidlc-stage-schema.ts) rejects each with a field-level message instead of
+// the parser dropping it. Known keys are assembled in canonical order
+// (targets, cost, role, project_types) regardless of authored order so
+// emitStageFrontmatter round-trips the block byte-identically. A bare
+// `ars: <scalar>` with no indented block returns that scalar for the same
+// reject-loudly reason.
+function arsField(fm: string): unknown {
+  const lines = fm.split(/\r?\n/);
+  const start = lines.findIndex((line) => /^ars:[ \t]*$/.test(line));
+  if (start < 0) return scalarField(fm, "ars");
+  // A Map, not an object literal: a child named like an inherited property
+  // (`constructor`, `__proto__`) must stay a key the validator can name.
+  const raw = new Map<string, string>();
+  let lastKey: string | null = null;
+  for (const line of lines.slice(start + 1)) {
+    if (line.trim() === "" || /^\s*#/.test(line)) continue;
+    if (!/^[ \t]/.test(line)) break;
+    const entry = line.match(/^\s+([a-z_][a-z0-9_]*)\s*:\s*(.*?)\s*$/);
+    if (entry) {
+      lastKey = entry[1];
+      raw.set(lastKey, stripYamlComment(entry[2]));
+    } else if (lastKey === null || raw.get(lastKey) !== "") {
+      // Only a deeper line under a key with no inline value (a block list) is
+      // tolerated: that key stays empty and the validator rejects its shape.
+      throw new Error(`Malformed ars entry in frontmatter: ${line.trim()}`);
+    }
+  }
+  if (raw.size === 0) return scalarField(fm, "ars");
+  // A malformed list (an empty item, a nested or unbalanced bracket) must not
+  // read as a shorter or empty one: it stays raw and the validator rejects
+  // it. One trailing comma is allowed, as in YAML flow sequences.
+  const inlineList = (v: string): unknown => {
+    if (!v.startsWith("[") || !v.endsWith("]")) return v;
+    const segments = v.slice(1, -1).split(",").map((item) => item.trim());
+    if (segments.at(-1) === "") segments.pop();
+    const items = parseInlineDepsList(v);
+    return segments.every((item) => item !== "") && items.length === segments.length ? items : v;
+  };
+  const unquote = (v: string): string => {
+    const q = v.match(/^"(.*)"$/) ?? v.match(/^'(.*)'$/);
+    return q ? q[1] : v;
+  };
+  const out: Record<string, unknown> = {};
+  const targets = raw.get("targets");
+  if (targets !== undefined) out.targets = inlineList(targets);
+  const cost = raw.get("cost");
+  if (cost !== undefined) {
+    out.cost = cost === "null" || cost === "~" ? null : /^-?\d+(\.\d+)?$/.test(cost) ? Number(cost) : cost;
+  }
+  const role = raw.get("role");
+  if (role !== undefined) out.role = unquote(role);
+  const projectTypes = raw.get("project_types");
+  if (projectTypes !== undefined) out.project_types = inlineList(projectTypes);
+  // Unknown children keep their own names, as own properties (defineProperty,
+  // so `__proto__` does not rewire the prototype), for the validator to name.
+  for (const [k, v] of raw) {
+    if (!Object.hasOwn(out, k)) {
+      Object.defineProperty(out, k, { value: v, enumerable: true, writable: true, configurable: true });
+    }
+  }
+  return out;
 }
 
 // Map-of-lists parser for the produces_kinds: frontmatter block. Matches an

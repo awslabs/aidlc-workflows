@@ -157,6 +157,27 @@ when:
 
 See [Scopes](04-scopes.md) for scope membership and the `when:` predicate.
 
+Give the stage a **composer prior** with `ars:` so `/aidlc compose` can screen
+it mechanically. The shipped `tools/data/ars-priors.json` names only core
+stages; without this block your stage shows up in `aidlc-graph ars` output as a
+`no-prior` row the composer can only decide by judgment:
+
+```yaml
+ars:
+  targets: [ve, r]   # the ARS components the stage reduces: iae | csu | ve | r | ua
+  cost: 4            # 1 (trivial) .. 5 (heavy); null = never numerically screened
+```
+
+Two optional keys complete the entry. `role:` changes how the stage is
+screened: `initialization` and `core` always run, `structural` defaults to SKIP
+and is left to judgment at the gate, and `phase-gate` runs only when other work
+in its phase runs. `project_types: [brownfield]` mirrors a `condition:` that
+restricts the stage to one kind of project. The schema
+validates the block like a priors-file entry and compile copies it onto the
+graph node. A shipped priors entry always wins, so the block only matters on
+your own stages. See [Stage Definition](../reference/15-stage-definition.md)
+§ `ars`.
+
 ## 3. Modify an existing core stage (a contribution)
 
 This is the contribution seam — additively change a core stage **without editing
@@ -208,9 +229,19 @@ marks what the compose hook merges today vs. designed-but-deferred (mirrors doc 
   from a name prefix. Use it to route existing core stages under your
   plugin's scope — e.g. a methodology plugin whose scope carries its own
   discovery stages plus core Inception onward.
-- `adds.requires_stage` — ⏳ **deferred**: a contribution may declare it, but
-  compose records it to the drops log rather than merging (it is not yet a
-  DAG edge). Don't rely on it to gate behavior yet.
+- `adds.requires_stage` — ✅ set-unions ordering edges into the target's
+  `requires_stage`. The dependency must already be installed and must
+  compile before the target: a lower stage number (a pinned stage keeps its
+  number even if it moved phase), or an earlier phase for a stage not yet
+  numbered. Use it for the edge the stage-definition guide asks for — "I consume
+  X, which stage Y produces → require Y" — or for cross-phase ordering. A
+  stage your plugin adds seeds past its phase max, so a core stage cannot be
+  made to require it within the same phase (that is RFC #1100); such an
+  entry, an unknown slug, a self-edge, or an edge that would close a cycle
+  among your new stages is dropped-with-log, never merged.
+  Merged edges are re-checked on every compose and runtime upgrade: one that
+  no longer holds is removed, and one the new core declares itself becomes
+  core's; both leave your plugin's contribution record.
 - `fragments` — ✅ prose blocks spliced into the stage body. Each fragment's prose
   is the `## fragment: <anchor>` block in the contribution file.
 

@@ -501,7 +501,12 @@ prompt. On Kiro IDE it also reads Kiro's Workflows switch
 sub-agent tool from chats; `core/tools/aidlc-kiro-ide-workflows.ts` changes that
 one JSONC key on the person's answer (`--kiro-workflows`, setup, `config --yes`,
 or the once-per-machine chat ask from session start) and keeps the answer in the
-install root's `kiro-ide-workflows` marker.
+install root's `kiro-ide-workflows` marker. On Windows it also reads Kiro's
+default terminal profile (`terminal.integrated.defaultProfile.windows`): in
+Command Prompt the agent's AI-DLC commands split the person's words and every
+command reports exit code -1, so `core/tools/aidlc-kiro-ide-terminal.ts` sets
+it to PowerShell on the same kinds of answer (`--kiro-terminal powershell`) and
+keeps it in the `kiro-ide-terminal` marker.
 
 Every successful non-dry-run config transaction then runs a cheap post-apply
 sweep against the installed bytes. The runtime leg resolves only the binary

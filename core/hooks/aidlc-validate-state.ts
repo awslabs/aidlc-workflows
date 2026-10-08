@@ -6,7 +6,7 @@
 //
 // Also writes <record>/.aidlc-engine/recovery.md as a breadcrumb for the orchestrator
 // to detect compaction-related state corruption on the next turn.
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { appendAuditEntry } from "../tools/aidlc-audit.ts";
 import {
   hookStandsOutside,
@@ -19,10 +19,10 @@ import {
   invalidateActiveDirectiveContext,
   isoTimestamp,
   recordHookDrop,
-  recoveryFilePath,
   resolveProjectDirFromHook,
   stateFilePath,
   validSessionId,
+  writeEngineFileNoFollow,
 } from "../tools/aidlc-lib.ts";
 import { clearRulesDelivered } from "../tools/aidlc-rules-held.ts";
 
@@ -82,15 +82,20 @@ const stateStatus = missing.length > 0
   ? `INVALID — missing sections: ${missing.join(", ")}`
   : "valid (all required sections present)";
 
-// Write recovery breadcrumb so the orchestrator can detect compaction-related state corruption
+// Write recovery breadcrumb so the orchestrator can detect compaction-related state corruption.
+// It lives under the record's engine folder and is never written through a link planted
+// there; a breadcrumb that cannot be kept never fails the compaction.
 const currentStage = getField(content, "Current Stage") ?? "";
 const timestamp = isoTimestamp();
-const recoveryFile = recoveryFilePath(projectDir);
-writeFileSync(
-  recoveryFile,
-  `# AIDLC Recovery Breadcrumb\n**Last validated**: ${timestamp}\n**Current stage**: ${currentStage}\n**State file**: ${stateStatus}\n`,
-  "utf-8"
-);
+try {
+  writeEngineFileNoFollow(
+    projectDir,
+    "recovery.md",
+    `# AIDLC Recovery Breadcrumb\n**Last validated**: ${timestamp}\n**Current stage**: ${currentStage}\n**State file**: ${stateStatus}\n`,
+  );
+} catch {
+  // Best-effort: the heartbeat above and the audit row below still tell the story.
+}
 
 // Emit SESSION_COMPACTED if an audit file exists for this workflow.
 const auditFile = auditFilePath(projectDir);

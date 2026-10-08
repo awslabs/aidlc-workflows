@@ -36,6 +36,7 @@ import { appendAuditEntry } from "../tools/aidlc-audit.ts";
 import { stageGraphDrift } from "../tools/aidlc-graph.ts";
 import { addRootBlocks, repointHarnessIncludes, trackedKiroIdeSteeringAsk } from "../tools/aidlc-includes.ts";
 import { kiroIdeWorkflowsAsk } from "../tools/aidlc-kiro-ide-workflows.ts";
+import { kiroIdeTerminalAsk } from "../tools/aidlc-kiro-ide-terminal.ts";
 import {
   isBindableIntentRecordName,
   isSafeIntentRecordName,
@@ -289,6 +290,11 @@ if (sessionId && !rebindCheckOnly) {
   } catch {
     // Asked at a later start.
   }
+  try {
+    if (runtimeHarnessName(projectDir) === "kiro-ide") asks.push(kiroIdeTerminalAsk(aidlcInvocation()));
+  } catch {
+    // Asked at a later start.
+  }
   trackedSteeringAsk = asks.filter(Boolean).join("\n");
 }
 
@@ -330,7 +336,8 @@ if (!existsSync(stateFile)) {
     process.stdout.write(hookContextLine(
       "SessionStart",
       `AIDLC Runtime Session: ${sessionId}\n` +
-        "Use this exact value for any Plan Approval --session argument in this conversation." +
+        "Use this exact value for any Plan Approval --session argument in this conversation. It goes only on a " +
+        "command that asks for --session, never on next." +
         rejoin +
         (rebindCheckOnly ? "" : switchOffContext(projectDir)) +
         (trackedSteeringAsk ? `\n${trackedSteeringAsk}` : ""),

@@ -2391,7 +2391,20 @@ function targetRunsOnHost(target: TargetConfig): boolean {
 function buildTarget(target: TargetConfig): TargetResult {
   removeStaleArtifacts(target);
 
-  const args = ["build", ENTRY, "--compile", "--outfile", target.artifact];
+  // A standalone executable loads the `.env` files of the folder it runs in and runs
+  // the preload of a `bunfig.toml` found there unless told not to. The engine runs
+  // in the person's project, so a repository they clone could otherwise set any
+  // name the engine reads, or run its own code inside it. Its environment is the
+  // host tool's; the project's files stay the project's.
+  const args = [
+    "build",
+    ENTRY,
+    "--compile",
+    "--no-compile-autoload-dotenv",
+    "--no-compile-autoload-bunfig",
+    "--outfile",
+    target.artifact,
+  ];
   if (target.bunTarget) args.push(`--target=${target.bunTarget}`);
 
   const start = performance.now();

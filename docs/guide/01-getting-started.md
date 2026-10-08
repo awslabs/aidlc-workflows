@@ -219,7 +219,7 @@ provider, hook, trust, and workflow-state problems with a remediation command.
 ## Updating
 
 `aidlc update` updates the machine runtime. It does not rewrite configured
-projects. Refresh each project between workflows:
+projects. Refresh each project; open work carries on:
 
 ```bash
 aidlc update

@@ -167,7 +167,10 @@ question naming both. It is set only for solo work at the first pending block
 stage with at least two stages left; checkpoint-enabled, stage-major, team-owned
 and autonomous gates keep their own flow. Opening that gate records the list on
 `STAGE_AWAITING_APPROVAL` as `Approves Together`, and the reply's `next_stage` is
-the stage after the last listed one. `report --result approved` then approves
+the stage after the last listed one; the same row records that stage's slug as `Next
+Stage`, from the same computation, beside `Brief Digest`, `Sensor State` and `Open
+Decisions` (what the gate asked the person to decide, #2098); `GATE_APPROVED` carries `Brief Digest` (the brief the
+person decided on) and `Decisions Accepted Open`. `report --result approved` then approves
 each listed stage in order: the first `GATE_APPROVED` carries `Approves
 Together`, each later one `Approved Together With: <first stage>` plus the same
 `User Input` and person's words. Every stage still passes its own artifact,
@@ -509,7 +512,9 @@ path beneath it still wins (it is bound, its excluded siblings are not).
 Registered paths are content-bound regardless of encoding and are included in
 the canonical listing and autonomous swarm Source Commit. Absolute, traversing,
 framework, sensor-cache, and dependency/cache paths are rejected. Missing
-registered repositories contribute an explicit marker; unreadable, unstable,
+registered repositories contribute an explicit marker. A file that disappears
+while the walk runs is left out, as the next walk would leave it, and a file
+still being written is read again a few times; past that, unreadable, unstable,
 over-budget, or malformed boundaries remain `unbindable` and fail closed under
 Guard Policy strict. Under relaxed or off, source that cannot be bound or read
 now, a Unit's reviewed-source snapshot or written review missing on this
@@ -926,7 +931,7 @@ and do not enforce that scope comparison.
 | `SESSION_RESUMED` | `hooks/aidlc-session-start.ts` | `source=resume` |
 | `SESSION_COMPACTED` | `hooks/aidlc-validate-state.ts` | Emitted at PreCompact (not at next SessionStart) to avoid duplication |
 | `SESSION_ENDED` | `hooks/aidlc-session-end.ts` | Includes `Reason` field from Claude Code |
-| `HUMAN_TURN` | `hooks/aidlc-record-human-turn.ts` (+ per-harness prompt-submit adapters) | One per observed prompt-submit or answered-widget seam unless the driver declares `AIDLC_UNATTENDED=1`; the approval/interview gate requires one since the last gate resolution. A turn that was only a command to AIDLC (an AIDLC command (`/aidlc ...`, `/aidlc-<runner> ...`, `$aidlc ...` with a flag, scope, verb or noun that `next` reads; words alone after `/aidlc` or `$aidlc`, such as `/aidlc approve the code plan`, are a reply kept without the entry, and so is other text that starts with a slash), a typed switch, or the break-glass phrase) carries `Reply: command`, and a question about a switch ("skip plan approval?") carries `Reply: question`, which also lowers no check: it is presence for what the command asks for, but a decision on an open question (a stage gate, an answer, a Plan Approval correction, a recovery ask) does not count it as a reply, and the refusal tells the conductor to carry out the command and leave the question open. This is presence/freshness evidence, not an authenticated transcript or proof that later caller-supplied decision text was authored by the human. The row's optional `Message Id:` names the message record the hook wrote for the turn (`aidlc/.aidlc-sessions/messages/<id>.json`: the words as delivered and the typed settings); rows without it are read as before. |
+| `HUMAN_TURN` | `hooks/aidlc-record-human-turn.ts` (+ per-harness prompt-submit adapters) | One per observed prompt-submit or answered-widget seam unless the driver declares `AIDLC_UNATTENDED=1`; the approval/interview gate requires one since the last gate resolution, and a stage gate one sent after the gate was shown. A turn that was only a command to AIDLC (an AIDLC command (`/aidlc ...`, `/aidlc-<runner> ...`, `$aidlc ...` with a flag, scope, verb or noun that `next` reads; words alone after `/aidlc` or `$aidlc`, such as `/aidlc approve the code plan`, are a reply kept without the entry, and so is other text that starts with a slash), a typed switch, or the break-glass phrase) carries `Reply: command`, and a question about a switch ("skip plan approval?") carries `Reply: question`, which also lowers no check: it is presence for what the command asks for, but a decision on an open question (a stage gate, an answer, a Plan Approval correction, a recovery ask) does not count it as a reply, and the refusal tells the conductor to carry out the command and leave the question open. This is presence/freshness evidence, not an authenticated transcript or proof that later caller-supplied decision text was authored by the human. The row's optional `Message Id:` names the message record the hook wrote for the turn (`aidlc/.aidlc-sessions/messages/<id>.json`: the words as delivered and the typed settings); rows without it are read as before. |
 | `HOST_TURN` | `hooks/aidlc-record-human-turn.ts` (the Kiro CLI and Kiro IDE adapters decide for their hosts) | Advisory, never a human turn: a prompt the host made for the agent (a Kiro Workflows brief or finish notice, a Kiro sub-agent synthesis prompt, a Claude Code background-task notification) reached the prompt-submit seam and was not counted as the person's turn. Told apart by the host's own record or by the whole host sentence; anything unknown is a person's turn. Fields: optional Session, `Origin: host`, Reason, Source (`record`, `template`); never the prompt text, and no message record is written for it. `HUMAN_TURN` rows carry `Origin: person` and `Source: typed` or `picker` |
 | `SUBAGENT_COMPLETED` | `hooks/aidlc-log-subagent.ts` | Records subagent completion via SubagentStop hook |
 | `SUBAGENT_PROMPT_UNMATCHED` | `tools/aidlc-audit.ts` | Advisory, never a human turn: the Copilot adapter's `record-human-turn` saw a prompt within seconds of a subagent start in the same chat that matched no recorded subagent brief. The prompt is not counted as the person's turn (`Counted: no`); the Reason says whether no brief matched or the brief record could not be read |
@@ -1484,7 +1489,11 @@ words (`GUARD_REMEDY_WORDING` in `aidlc-lib.ts`). The first time a refusal has
 an executable `external-work` remedy, the ask is the conductor's own work
 (`agent_work: true`, only those remedies, never published): it carries out the
 first that applies without asking, and the turn does not end on it (the Stop
-hook hands the work back if the conductor stops). When the same refusal comes back, or there
+hook hands the work back if the conductor stops). A `request-review` names its exact
+request command, then the reviewer dispatched as a subagent to write the `reviewFile` it
+returns (never the conductor itself), and the `recordVerdict` it returns, as `record-verdict`
+names its own command, so a conductor with no reviewer protocol in the chat can still take it.
+When the same refusal comes back, or there
 is none, the person is asked with the other executable remedies only. The
 conductor offers them by label and description, waits for the human's
 selection, and follows the selected interaction:

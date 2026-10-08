@@ -51,9 +51,14 @@ recognized later from `toolArgs.command` on the matching preToolUse event. Raw
 `/aidlc ...` text remains accepted for newer Kiro generations that expose it
 directly, but is not the 0.12 compatibility claim.
 
-`VSCODE_IPC_HOOK` / `VSCODE_PID` are also present in the IDE (absent on the
-CLI). Legacy Plan Approval hashes those measured host-instance values into its
-runtime session identity, so two IDE windows in one workspace do not share
+`VSCODE_IPC_HOOK` / `VSCODE_PID` are also present in the IDE's hook processes
+(absent on the CLI). The agent's own shell commands carry neither: they carry
+`TERM_PROGRAM=kiro` and `KIRO_SESSION_ID` (measured on Kiro IDE 1.2.37, #2167),
+which is how the engine's "answer was not recorded" line and its hooks-off
+step know they are in Kiro IDE; another `TERM_PROGRAM` (Kiro CLI in VS Code's
+terminal is `vscode`) rules Kiro IDE out even beside VS Code's own
+`VSCODE_PID`. Legacy Plan Approval hashes those measured host-instance values
+into its runtime session identity, so two IDE windows in one workspace do not share
 challenge/response files. Other adapter routing still keys off the payload
 channels above.
 
@@ -143,9 +148,32 @@ the gate check refuses the call, and the command would otherwise still act.
 Its matcher leaves out only the reads in the adapter's tool-name table, which
 cannot answer an approval or change the workspace; a name the table does not
 know, such as Kiro's own background `memory` tool, still reaches the checks.
-The two hooks after a shell command run the same way as one,
-`aidlc-after-shell`. On 1.1.14 the PreToolUse `fs_write` input is
-`{path, text}`, and the shell input matches the 1.0.242 row above.
+On 1.1.14 the PreToolUse `fs_write` input is `{path, text}`, and the shell
+input matches the 1.0.242 row above.
+
+### After a write or a command: done by the next card
+
+Kiro IDE 1.2.37 passes a hook's stdout to the agent only for `SessionStart` and
+`UserPromptSubmit` at exit 0, and its stderr only when a `PreToolUse`,
+`UserPromptSubmit` or `PreTaskExec` hook exits 2 (its hook executor's exit-code
+table); nothing a `PostToolUse` hook prints reaches the agent or the person. So
+the work AI-DLC did after a write (the audit row and the sensors) and after a
+command (the two audit-tail hooks below) has no card of its own. When
+`aidlc-guard-tool-call` lets a call through, it notes it under
+`aidlc/.aidlc-sessions/kiro-ide-pending/`: for an audited write, the target file
+as it was (size, time, content hash); for a command, the command and the record
+folders in every space. The next card that runs anyway (the next guard, the
+person's next message, or the turn's end) does that work first, in `catch-up`:
+a write whose file changed goes to `write-audit-log` and `run-sensors` with the
+same input the after-write card gave them, and the write's own `session_id`; a
+write whose file is unchanged waits for a later card while another call starts
+(it may still be writing) and is dropped at a message or the turn's end; a command
+runs `aidlc-after-shell`'s two hooks behind the same front gate, with a record
+folder that appeared while it ran handed to the rebuild as
+`Intent created: <record> (space: <space>)`. Each noted call is claimed by
+renaming its file, so two chats' cards never do it twice. A project whose hook
+files still register `aidlc-write-audit-log` or `aidlc-after-shell` keeps those
+cards doing the work, and the guard notes nothing for them.
 
 ## Consequences for each hook
 
@@ -174,9 +202,10 @@ The two hooks after a shell command run the same way as one,
   against resurrecting a finished workflow). Both audit-tail hooks match
   `execute_bash`, Windows `execute_pwsh`, and the `shell` alias — the
   IDE surfaces no task event the sync could parse.
-- **front gate for the two audit-tail hooks**: they run after every shell
-  command, as the `aidlc-after-shell` card, so the dispatcher's
-  `engine adapter kiro-ide` route looks first,
+- **front gate for the two audit-tail hooks**: they run once for every shell
+  command, in the next card's `catch-up` (or, in a project whose hook files are
+  older, as the `aidlc-after-shell` card), so `catch-up` and the dispatcher's
+  `engine adapter kiro-ide` route look first,
   without loading the engine (`core/tools/aidlc-hook-front-gate.ts`). When
   either hook finds nothing to do from a record's files it leaves
   `<hook>.noop` in that record's `.aidlc-engine/hooks-health/`. The gate skips
@@ -191,8 +220,9 @@ The two hooks after a shell command run the same way as one,
 - **log-subagent** — payload-dependent. IDE 0.12 sent `invoke_sub_agent`; 1.x
   (1.0.89-1.0.138) sent `subagent_<agent>` instead, each preceded by an empty
   `subagent_response` shell (`"Response recorded."`). The registration matcher
-  is therefore broad (`^(subagent_.+|invoke_sub_agent)$`) so every delegate name
-  reaches the adapter, and the adapter drops `subagent_response` — that shell
+  is therefore broad (`^(?!subagent_response$)(subagent_.+|invoke_sub_agent|orchestrate_subagent)$`)
+  so every delegate name reaches the adapter while the empty shell gets no card,
+  and the adapter drops `subagent_response` on every other entry point: that shell
   carries prose but no identity, so forwarding it would fabricate a
   `SUBAGENT_COMPLETED` row with `Agent Type: unknown`. Identity prefers the
   structured 1.x `subagent_<agent>` tool name (#543) — it is platform-provided,
@@ -241,8 +271,11 @@ The two hooks after a shell command run the same way as one,
   target-bound `[Approval Fingerprint]`, records the live workspace source as
   `[Planned Source]` (the legacy channel cannot run the fingerprint command, so
   the adapter owns both tags; `unbindable` when the workspace has no source
-  fingerprint), and invokes the reserved decision or answer tool itself. Kiro
-  discards PostToolUse stdout, so a successful write hook remains silent; when
+  fingerprint), and invokes the reserved decision or answer tool itself. A
+  write of the stage's learnings diary, the composer's proposal, or a person's
+  answer text (the record files the shared guard admits while the plan waits)
+  is not a planning write: the adapter clears its write window and records no
+  violation. Kiro discards PostToolUse stdout, so a successful write hook remains silent; when
   the decision or answer step is refused, the hook exits 2 with the refusal on
   stderr instead of dropping it, because the write window stays latched until
   the human recovers. Workspace source is checked against the recorded

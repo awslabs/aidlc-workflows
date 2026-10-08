@@ -22,8 +22,11 @@ export function committedRecordIgnoreConflicts(projectDir: string): string[] {
   try {
     const proc = Bun.spawnSync({
       cmd: [
-        // -z needs --stdin; the probe paths go in NUL-terminated.
-        "git", "-C", projectDir, "check-ignore", "-v", "-z", "--stdin", "--no-index",
+        // -z needs --stdin; the probe paths go in NUL-terminated. A repository's
+        // fsmonitor program is never run just to word a warning, so every git
+        // command here says no to it, whatever this git version consults it for.
+        "git", "-c", "core.fsmonitor=false", "-C", projectDir,
+        "check-ignore", "-v", "-z", "--stdin", "--no-index",
       ],
       stdin: Buffer.from(PROBE_PATHS.map((path) => `${path}\0`).join("")),
       stdout: "pipe",
@@ -58,7 +61,7 @@ export function committedRecordIgnoreConflicts(projectDir: string): string[] {
   }
   let gitRoot = projectRoot;
   const root = Bun.spawnSync({
-    cmd: ["git", "-C", projectDir, "rev-parse", "--show-toplevel"],
+    cmd: ["git", "-c", "core.fsmonitor=false", "-C", projectDir, "rev-parse", "--show-toplevel"],
     stdout: "pipe",
     stderr: "pipe",
   });

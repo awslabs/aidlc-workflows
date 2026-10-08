@@ -62,6 +62,7 @@ import {
   flagsDoctorCheck,
   frameworkFilesDoctorCheck,
   kiroIdeWorkflowsDoctorCheck,
+  kiroIdeTerminalDoctorCheck,
   providerDoctorCheck,
   settingsDoctorChecks,
   vscodeRequestCapDoctorCheck,
@@ -603,6 +604,8 @@ export async function main(argv: string[]): Promise<void> {
   checks.push(...await kiroSessionDoctorChecks(projectDir));
   const kiroWorkflows = kiroIdeWorkflowsDoctorCheck(projectDir, harnessDir());
   if (kiroWorkflows) checks.push(kiroWorkflows);
+  const kiroTerminal = kiroIdeTerminalDoctorCheck(projectDir, harnessDir());
+  if (kiroTerminal) checks.push(kiroTerminal);
   checks.push(flagsDoctorCheck(projectDir, harnessDir(), switchesOffLines(projectDir, process.env, "command")));
   checks.push(providerDoctorCheck(projectDir, harnessDir()));
   checks.push(workspaceSiblingDoctorCheck(projectDir, harnessDir()));

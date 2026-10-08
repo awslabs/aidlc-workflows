@@ -473,7 +473,27 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
         "Policy is already `off`, say in one line that it is already off and change nothing.",
       "say the line the command prints, word for word, in your reply in that same turn, before any question, " +
         "picker or next step",
+      // Arden, 2026-10-08: widening is offered as a plain question the agent
+      // then acts on, never as words for the person to say. A live run had the
+      // agent end with "If you want it off for the whole project instead, say
+      // so and I'll set it there", which is the old "say X to get Y" shape.
+      // Only where there is a wider place: the Guard Policy is for a piece of
+      // work only, and a check whose table row says `none` has no switch for
+      // the project or the machine, so asking there would offer what the agent
+      // cannot do.
+      "then, when the check has a wider place in the table, ask one plain question offering it (this project when " +
+        "it applied to this piece of work, this machine when it applied to this project), for example \"Do you want " +
+        "me to set it off for the whole project instead?\", and set it there yourself when they say yes",
+      "A check whose wider place is `none`, and the Guard Policy, which is for a piece of work only, have nowhere " +
+        "wider to go: name where it applied and ask nothing.",
+      // The two work-only cases the question must skip, beside a check that has
+      // a wider place.
+      "Guard Policy is set for a piece of work only; with none open, say so in one line.",
+      "| state transition | `guard.state-transition` | none |",
+      "| review freeze | `guard.review-freeze` | `AIDLC_DISABLE_REVIEW_FREEZE_HOOK` |",
     ];
+    // The wording this replaced, in any shipped prose.
+    const WIDEN_SAY = "say in one sentence how to widen it";
     const prose = [
       ...skills,
       "core/templates/onboarding-harness.md",
@@ -506,6 +526,11 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
       "`{{INVOKE}} engine config set <key> <on|off>`",
     ]) {
       if (!onboarding.includes(tok)) problems.push(`core/templates/onboarding-harness.md  missing: ${tok}`);
+    }
+    for (const rel of prose) {
+      if (readFileSync(join(REPO_ROOT, rel), "utf-8").includes(WIDEN_SAY)) {
+        problems.push(`${rel}  still carries: ${WIDEN_SAY}`);
+      }
     }
     for (const rel of skills) {
       const body = readFileSync(join(REPO_ROOT, rel), "utf-8");
@@ -982,6 +1007,25 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
     expect(body).not.toMatch(
       /bun "<worktree>\/\.[^/]+\/tools\/aidlc-log\.ts"/,
     );
+  });
+
+  // A live Claude Code run: the collapsed tool-call titles the person reads were
+  // "Continue loading the stage rules", "Ask the workflow for the next step",
+  // "Render prior review findings for the reviewer brief", "Close the reviewer
+  // read-scope window". Claude Code is the only shipped tool whose shell tool
+  // takes a one-line title the person sees, so the sentence lives in its skill.
+  test("the Claude skill says a tool call's title is in the person's words", () => {
+    // In this tool's own section, not the shared narration block the other
+    // cases hold byte-identical: only Claude Code's shell tool takes a title.
+    const body = readFileSync(join(REPO_ROOT, "harness/claude/skills/aidlc/SKILL.md"), "utf-8");
+    expect(body).toContain(
+      "**Tool-call titles (Claude Code).** The one-line title you give a tool call is read by the person: say what " +
+        "the call does for their project (\"Checking what this step needs\", \"Saving your answers\", \"Starting " +
+        "the design review\"), never a field, a directive, a step's id, or a word from this skill.",
+    );
+    for (const rel of skills.filter((r) => r !== "harness/claude/skills/aidlc/SKILL.md")) {
+      expect(readFileSync(join(REPO_ROOT, rel), "utf-8"), rel).not.toContain("**Tool-call titles");
+    }
   });
 
   test("every harness Stage Graph table matches the canonical generated table", () => {

@@ -1223,6 +1223,7 @@ function pruneContributions(stagedProject: string, harnessDir: string, key: stri
     // Compose records consumed artifacts as objects; the shape must match the
     // compose hook's output or the strip matches nothing. See issue #1247.
     consumes?: Array<string | { artifact: string; required: boolean; conditional_on?: string }>;
+    requires_stage?: string[];
     required_sections?: string[];
     required_sections_created?: boolean;
   }> = {};
@@ -1256,6 +1257,7 @@ function pruneContributions(stagedProject: string, harnessDir: string, key: stri
           new Set(record.consumes.map((entry) => typeof entry === "string" ? entry : entry.artifact)),
         );
       }
+      if (record.requires_stage?.length) after = removeListValues(after, "requires_stage", new Set(record.requires_stage), false);
       if (record.required_sections?.length) {
         after = removeListValues(
           after,

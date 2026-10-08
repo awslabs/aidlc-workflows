@@ -216,6 +216,7 @@ import {
   answerModeStageStartedFields,
   keepPlanApprovalAskOverStateWrite,
   recordHookDrop,
+  engineDir,
 } from "./aidlc-lib.js";
 import { memoryDirFor } from "./aidlc-graph.ts";
 import { inspectRequiredArtifactInstances } from "./aidlc-artifact-resolution.ts";
@@ -5920,6 +5921,172 @@ export function guardPreflight(
   }
 }
 
+// What the gate asked the person to decide (#2098), recorded on the gate-open
+// row so the record alone answers "what did they approve, and on what evidence":
+// the stage Approve continues to, the digest of the review brief the agent
+// rendered for this gate, the latest result of every applicable check per
+// declared artifact, and the decisions the artifacts left to the person.
+// Record-only: nothing here can stop a gate; whatever cannot be read says so.
+type GateStage = NonNullable<ReturnType<typeof findStageBySlug>>;
+
+function gateAskFields(
+  pd: string,
+  stage: GateStage,
+  content: string,
+  unit: string | undefined,
+  listedTogether: readonly string[],
+): Record<string, string> {
+  const fields: Record<string, string> = {};
+  try {
+    const next = nextInScopeStage(listedTogether.at(-1) ?? stage.slug, getField(content, "Scope") ?? "", content);
+    fields["Next Stage"] = next ? next.slug : "none";
+  } catch {
+    fields["Next Stage"] = "none";
+  }
+  try {
+    const digest = latestGateBriefDigest(pd, stage, unit);
+    fields["Brief Digest"] = digest === null ? "none" : `sha256:${digest}`;
+  } catch {
+    fields["Brief Digest"] = "none";
+  }
+  try {
+    fields["Sensor State"] = sensorStateAtGate(pd, stage);
+  } catch {
+    fields["Sensor State"] = "none";
+  }
+  try {
+    Object.assign(fields, openDecisionsFields(pd, stage));
+  } catch {
+    fields["Open Decisions"] = "0";
+  }
+  return fields;
+}
+
+// Where the review-brief CLI keeps the renderings it printed for this gate.
+export function gateBriefsDir(pd: string, stage: { slug: string; for_each?: string }, unit: string | undefined): string {
+  const scope = stage.for_each === "unit-of-work" && unit !== undefined ? join("units", unit) : "stage";
+  return join(engineDir(pd), "reviews", stage.slug, scope, "briefs");
+}
+
+function latestGateBriefDigest(pd: string, stage: GateStage, unit: string | undefined): string | null {
+  const latest = join(gateBriefsDir(pd, stage, unit), "latest.json");
+  if (!existsSync(latest)) return null;
+  const parsed = JSON.parse(readFileSync(latest, "utf-8")) as { digest?: unknown };
+  return typeof parsed.digest === "string" && /^[0-9a-f]{64}$/.test(parsed.digest) ? parsed.digest : null;
+}
+
+// The latest terminal result of every applicable sensor for every declared
+// artifact on disk: `id@path=passed|failed(<n>) [detail: <path>]|not-run`,
+// failures first, at most 20 entries spelled out. Nothing is re-fired here.
+function sensorStateAtGate(pd: string, stage: GateStage): string {
+  // Spelled out here, not at module level: this file runs its command before
+  // later module-level declarations are initialized.
+  const SENSOR_STATE_MAX_ENTRIES = 20;
+  const sensors = stage.sensors_applicable ?? [];
+  const paths = existingDeclaredArtifactPaths(pd, stage);
+  if (sensors.length === 0 || paths.length === 0) return "none";
+  const latest = new Map<string, { kind: "passed" | "failed"; ts: string; pos: number; findings: string; detail: string | null }>();
+  for (const row of readAuditShardEvents(pd)) {
+    if (row.event !== "SENSOR_PASSED" && row.event !== "SENSOR_FAILED") continue;
+    if (auditBlockField(row.block, "Stage slug") !== stage.slug) continue;
+    const id = auditBlockField(row.block, "Sensor ID");
+    const output = auditBlockField(row.block, "Output path");
+    if (id === null || output === null) continue;
+    const key = `${id}@${output}`;
+    const seen = latest.get(key);
+    if (seen && (seen.ts > row.timestamp || (seen.ts === row.timestamp && seen.pos > row.pos))) continue;
+    latest.set(key, {
+      kind: row.event === "SENSOR_PASSED" ? "passed" : "failed",
+      ts: row.timestamp,
+      pos: row.pos,
+      findings: auditBlockField(row.block, "Findings count") ?? "?",
+      detail: auditBlockField(row.block, "Detail path"),
+    });
+  }
+  const failed: string[] = [];
+  const rest: string[] = [];
+  for (const sensor of sensors) {
+    for (const path of paths) {
+      if (!gateSensorMatchesOutput(sensor, path)) continue;
+      const rel = relative(pd, path).split(sep).join("/");
+      const result = latest.get(`${sensor.id}@${rel}`);
+      if (result === undefined) rest.push(`${sensor.id}@${rel}=not-run`);
+      else if (result.kind === "passed") rest.push(`${sensor.id}@${rel}=passed`);
+      else failed.push(`${sensor.id}@${rel}=failed(${result.findings})${result.detail ? ` [detail: ${result.detail}]` : ""}`);
+    }
+  }
+  const entries = [...failed, ...rest];
+  if (entries.length === 0) return "none";
+  const shown = entries.slice(0, SENSOR_STATE_MAX_ENTRIES);
+  const more = entries.length - shown.length;
+  return `${shown.join("; ")}${more > 0 ? `; +${more} more` : ""}`;
+}
+
+// A stage artifact may list the decisions only the person can make in a fenced
+// `aidlc-decisions` block (yaml: `decisions:` then `- id: <id>` items, with
+// `decision:`, `owner:` and `blocking:` beside each). The gate records the ids;
+// Approve records them as accepted open. A block the engine cannot read is
+// recorded as such and stops nothing: the block is optional.
+function openDecisionsFields(pd: string, stage: GateStage): Record<string, string> {
+  const DECISIONS_FENCE = /```aidlc-decisions[^\n]*\n([\s\S]*?)```/g;
+  const ids: string[] = [];
+  const unreadable: string[] = [];
+  for (const path of existingDeclaredArtifactPaths(pd, stage)) {
+    const text = readFileSync(path, "utf-8");
+    for (const match of text.matchAll(DECISIONS_FENCE)) {
+      const parsed = parseDecisionsBlock(match[1]);
+      if (parsed === null) unreadable.push(basename(path));
+      else ids.push(...parsed);
+    }
+  }
+  if (unreadable.length > 0) return { "Open Decisions": `unreadable (${[...new Set(unreadable)].join(", ")})` };
+  const unique = [...new Set(ids)];
+  return unique.length === 0
+    ? { "Open Decisions": "0" }
+    : { "Open Decisions": String(unique.length), Decisions: unique.join(", ") };
+}
+
+function parseDecisionsBlock(body: string): string[] | null {
+  const lines = body.split(/\r?\n/).map((line) => line.replace(/\s+$/, "")).filter((line) => line.trim() !== "");
+  if (lines.length === 0 || lines[0].trim() !== "decisions:") return null;
+  const ids: string[] = [];
+  for (const line of lines.slice(1)) {
+    const item = /^\s*-\s+id:\s*(\S+)\s*$/.exec(line);
+    if (item) {
+      ids.push(item[1]);
+      continue;
+    }
+    if (!/^\s+(decision|owner|blocking):\s*\S/.test(line)) return null;
+  }
+  return ids.length === 0 ? null : ids;
+}
+
+// The brief the person decided on: the agent renders it after the gate row is
+// written (the protocol's order), so the gate-open row usually says none and the
+// approval row carries the digest of the rendering kept at decision time.
+function briefDigestField(pd: string, stage: GateStage, unit: string | undefined): Record<string, string> {
+  try {
+    const digest = latestGateBriefDigest(pd, stage, unit);
+    return { "Brief Digest": digest === null ? "none" : `sha256:${digest}` };
+  } catch {
+    return { "Brief Digest": "none" };
+  }
+}
+
+// Approve continues with every open decision accepted as it stands: the ids the
+// gate-open row listed, carried onto the approval row.
+function decisionsAcceptedOpenField(pd: string, slug: string, unit: string | undefined): Record<string, string> {
+  try {
+    const open = readAuditShardEvents(pd).filter((row) =>
+      row.event === "STAGE_AWAITING_APPROVAL" && auditBlockField(row.block, "Stage") === slug &&
+      (unit === undefined || auditBlockField(row.block, "Unit") === unit)).at(-1);
+    const decisions = open === undefined ? null : auditBlockField(open.block, "Decisions");
+    return decisions === null ? {} : { "Decisions Accepted Open": decisions };
+  } catch {
+    return {};
+  }
+}
+
 function teamGateFields(
   stage: NonNullable<ReturnType<typeof findStageBySlug>>,
   context: TeamGateContext,
@@ -6056,6 +6223,7 @@ function handleGateStart(args: string[]): void {
         ...teamGateFields(stage, teamGate),
         ...(artifacts ? { Artifacts: artifacts } : {}),
         ...(recovered ? { Recovered: "true" } : {}),
+        ...gateAskFields(pd, stage, content, teamGate.unit, []),
       });
     } catch (e) {
       error(`Audit emission failed: ${errorMessage(e)}`);
@@ -6083,6 +6251,7 @@ function handleGateStart(args: string[]): void {
         const fields: Record<string, string> = {
           Stage: slug,
           Revalidated: "true",
+          ...gateAskFields(pd, stage, content, undefined, []),
         };
         addBlockingSensorOverrideFields(
           fields,
@@ -6111,7 +6280,11 @@ function handleGateStart(args: string[]): void {
   content = setField(content, "Last Updated", timestamp);
 
   try {
-    const fields: Record<string, string> = { Stage: slug, ...approvesTogetherFields(together) };
+    const fields: Record<string, string> = {
+      Stage: slug,
+      ...approvesTogetherFields(together),
+      ...gateAskFields(pd, stage, content, undefined, together),
+    };
     if (artifacts) fields.Artifacts = artifacts;
     if (recovered) fields.Recovered = "true";
     addBlockingSensorOverrideFields(
@@ -6217,17 +6390,35 @@ function verifyApprovalDecision(
     // Their exact pick names which approval it is.
     approvalInput = pick ?? stageGateApproval(approvalInput, revisionCount >= 3);
   }
-  if (
-    !autonomousDecision &&
-    !humanPresenceGuardDisabled() &&
-    together === null &&
-    !humanRepliedSinceGate(pd)
-  ) {
-    refuseForAgent(
-      `Cannot approve "${stage.slug}" because no new human reply has been received for ` +
-        "this approval question. Wait for the human to type their choice, then retry the " +
-        `approval.${commandTurnHint(pd)}${unattendedHumanPresenceHint(pd)}`,
+  // Once the approval question is put to the person, only their reply to it
+  // approves: a turn they sent before it (an answer to the stage's own
+  // questions, a remark while it ran) is no reply to it, as for reject below.
+  // A gate re-entered after a revision counts from the showing they first saw
+  // (their correction of a misread Request Changes came after it), and a gate
+  // the engine backfilled for their reported approval has no presentation row
+  // (gatePresentationStart): both keep the reply-since-the-last-decision rule
+  // that the rejection or the backfill already applied.
+  if (!autonomousDecision && !humanPresenceGuardDisabled() && together === null) {
+    const repliedSinceDecision = humanRepliedSinceGate(pd);
+    const repliedSinceShown = personRepliedSincePresentation(
+      pd, { stage: stage.slug, ...(unit !== undefined ? { unit } : {}) }, { firstShowing: true },
     );
+    if (repliedSinceDecision && repliedSinceShown === false) {
+      // A reply exists, but from before the gate was shown: the step is to
+      // show the gate, not to ask for anything new; their next word answers it.
+      refuseForAgent(
+        `Cannot approve "${stage.slug}" because no new human reply has been received for ` +
+          "this approval question: the person's last reply came before the gate was shown, so " +
+          "it does not answer it. Show the gate and end your turn; their next reply answers it.",
+      );
+    }
+    if (!repliedSinceDecision) {
+      refuseForAgent(
+        `Cannot approve "${stage.slug}" because no new human reply has been received for ` +
+          "this approval question. Wait for the human to type their choice, then retry the " +
+          `approval.${commandTurnHint(pd)}${unattendedHumanPresenceHint(pd)}`,
+      );
+    }
   }
   // The conductor reports the choice the person made; a report that names none
   // records nothing. They have replied by now (checked above), so the step is
@@ -6369,6 +6560,8 @@ function handleApprove(args: string[]): void {
         ...teamGateFields(stage, teamGate),
         ...(approvalInput ? { "User Input": approvalInput } : {}),
         ...personsWordsFields(pd, slug, teamGate.unit),
+        ...briefDigestField(pd, stage, teamGate.unit),
+        ...decisionsAcceptedOpenField(pd, slug, teamGate.unit),
         ...(reviewFindingDispositions
           ? {
               [REVIEW_FINDING_DISPOSITIONS_FIELD]:
@@ -6483,6 +6676,7 @@ function handleApprove(args: string[]): void {
         Stage: slug,
         Recovered: "true",
         Details: "Re-entering gate after backfilled revision",
+        ...gateAskFields(pd, stage, content, undefined, []),
       });
     } catch (e) {
       error(`Audit emission failed: ${errorMessage(e)}`);
@@ -6553,6 +6747,7 @@ function handleApprove(args: string[]): void {
         reviewFindingDispositions;
     }
     if (personCall?.overUnfinishedReview) gateFields.Review = "not finished";
+    Object.assign(gateFields, briefDigestField(pd, stage, undefined), decisionsAcceptedOpenField(pd, slug, undefined));
     emitAudit(pd, "GATE_APPROVED", gateFields);
 
     emitAudit(pd, "STAGE_COMPLETED", {
@@ -7041,6 +7236,7 @@ function handleRevise(args: string[]): void {
       emitAudit(pd, "STAGE_AWAITING_APPROVAL", {
         ...teamGateFields(stage, teamGate),
         Details: "Re-entering unit gate after revision",
+        ...gateAskFields(pd, stage, content, teamGate.unit, []),
       });
     } catch (e) {
       error(`Audit emission failed: ${errorMessage(e)}`);
@@ -7069,6 +7265,7 @@ function handleRevise(args: string[]): void {
       Stage: slug,
       Details: "Re-entering gate after revision",
       ...approvesTogetherFields(together),
+      ...gateAskFields(pd, stage, content, undefined, together),
     };
     addBlockingSensorOverrideFields(
       fields,

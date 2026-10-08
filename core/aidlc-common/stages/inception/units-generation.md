@@ -162,7 +162,7 @@ That `report` call owns every lifecycle transition and advancement; never perfor
 Use stage-protocol.md completion template with completion emoji: :wrench:
 - Summary of units defined (with each unit's kind), dependencies mapped, stories assigned
 - Review path: `<record>/inception/units-generation/`
-- Structured approval question with options: Approve (continue to Construction phase) / Request Changes
+- Structured approval question with options: Approve (Continue to `<directive.next_stage>`, the stage the engine names) / Request Changes
 
 ## Sensors
 

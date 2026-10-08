@@ -77,6 +77,10 @@ selected scope or lifecycle state. A message that is only a document, with no
 words outside it, is taken as "Build what the pasted document describes.", and
 the plan question that follows says so.
 
+You can also add a document yourself at any time with
+`/aidlc knowledge onboard <path>`, naming a file or folder anywhere in your
+project; one outside the knowledge folder is copied in and the line says where.
+
 A PDF or Word file works the same way: name it, for example
 `/aidlc Build what ./brief.pdf describes`. The workflow copies it into
 `aidlc/spaces/<space>/knowledge/documents/`, adds it to the
