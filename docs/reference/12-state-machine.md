@@ -504,7 +504,9 @@ or extensionless source, can be declared in root `.aidlc-source-paths.json`:
 Registered paths are content-bound regardless of encoding and are included in
 the canonical listing and autonomous swarm Source Commit. Absolute, traversing,
 framework, sensor-cache, and dependency/cache paths are rejected. Missing
-registered repositories contribute an explicit marker; unreadable, unstable,
+registered repositories contribute an explicit marker. A file that disappears
+while the walk runs is left out, as the next walk would leave it, and a file
+still being written is read again a few times; past that, unreadable, unstable,
 over-budget, or malformed boundaries remain `unbindable` and fail closed under
 Guard Policy strict. Under relaxed or off, source that cannot be bound or read
 now, a Unit's reviewed-source snapshot or written review missing on this

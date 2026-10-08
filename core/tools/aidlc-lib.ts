@@ -21851,14 +21851,26 @@ function isAidlcSensorCachePath(path: string): boolean {
 // A source file's sha256 with its line endings read as LF (committedTextBytes),
 // so a checkout that turns them is no change, and the raw bytes' digest when
 // that differs. The file is read a chunk at a time, never whole; only one with
-// a CR is read a second time, for its text form.
-function stableFileShas(path: string): { sha: string; raw?: string } | null {
+// a CR is read a second time, for its text form. "vanished" when the file is
+// gone by the time it is opened (the directory listed it a moment earlier);
+// null when it could not be read, or changed under the read. `afterStat` is a
+// test seam that runs once the file's size and times are taken.
+function stableFileShas(
+  path: string,
+  afterStat?: () => void,
+): { sha: string; raw?: string } | "vanished" | null {
   let fd: number | undefined;
   try {
-    fd = openSync(path, "r");
+    try {
+      fd = openSync(path, "r");
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return "vanished";
+      throw error;
+    }
     const opened = fd;
     const before = fstatSync(opened);
     if (!before.isFile()) return null;
+    afterStat?.();
     const buffer = Buffer.allocUnsafe(64 * 1024);
     let position = 0;
     const chunks = function* (): Generator<Buffer> {
@@ -21902,8 +21914,15 @@ function stableFileShas(path: string): { sha: string; raw?: string } | null {
 }
 
 function stableFileSha256(path: string): string | null {
-  return stableFileShas(path)?.sha ?? null;
+  const shas = stableFileShas(path);
+  return shas === null || shas === "vanished" ? null : shas.sha;
 }
+
+// How many times a file whose size or times move under the read is read again
+// before it counts as unreadable: a build or an indexer writing it at that
+// instant finishes within a read or two; one that never settles still fails
+// closed.
+const SOURCE_FILE_READ_ATTEMPTS = 3;
 
 interface FilesystemSourceIdentity {
   /** The walk met a .NET output directory (see SOURCE_FINGERPRINT_DOTNET_OUTPUT_NAMES). */
@@ -22890,6 +22909,14 @@ function filesystemSourceIdentity(
     sourceExtension.test(name) ||
     sourceBasename.test(name) ||
     hasShebang(path, size);
+  // Test seams standing in for another process writing while the walk reads:
+  // the named file is removed right before its read, or grown during each of
+  // its first n reads.
+  const vanishBeforeRead = process.env.AIDLC_TEST_SOURCE_VANISH_BEFORE_READ;
+  const unstableSeam = /^(.+):([1-9][0-9]*)$/.exec(process.env.AIDLC_TEST_SOURCE_UNSTABLE_READS ?? "");
+  let unstableReadsLeft = unstableSeam === null ? 0 : Number(unstableSeam[2]);
+  // True (recorded), false (the walk fails), or "vanished": the file was gone
+  // when read, so it is left out as the next walk would leave it.
   const recordFile = (
     path: string,
     rel: string,
@@ -22897,7 +22924,7 @@ function filesystemSourceIdentity(
     executable: boolean,
     sourceOnly: boolean,
     listingPath = rel,
-  ): boolean => {
+  ): boolean | "vanished" => {
     totalFiles += 1;
     totalBytes += size;
     if (totalFiles > maxFiles) {
@@ -22929,7 +22956,32 @@ function filesystemSourceIdentity(
         );
       }
     }
-    const shas = stableFileShas(path);
+    if (vanishBeforeRead === rel) {
+      try {
+        unlinkSync(path);
+      } catch {
+        // Already gone: the seam only ever removes the file once.
+      }
+    }
+    const afterStat = unstableSeam !== null && unstableSeam[1] === rel
+      ? () => {
+        if (unstableReadsLeft > 0) {
+          unstableReadsLeft -= 1;
+          writeFileSync(path, "x", { flag: "a" });
+        }
+      }
+      : undefined;
+    // A file still being written moves under the read; read it again a few
+    // times before it counts as unreadable.
+    let shas: ReturnType<typeof stableFileShas> = null;
+    for (let attempt = 0; attempt < SOURCE_FILE_READ_ATTEMPTS && shas === null; attempt++) {
+      shas = stableFileShas(path, afterStat);
+    }
+    if (shas === "vanished") {
+      totalFiles -= 1;
+      totalBytes -= size;
+      return "vanished";
+    }
     if (shas === null) {
       return noteSourceFailure(false, "unreadable", "the file could not be hashed", rel);
     }
@@ -23258,14 +23310,14 @@ function filesystemSourceIdentity(
               : `${childListingRel}@target`;
             if (
               recordIdentity &&
-              !recordFile(
+              recordFile(
                 target,
                 `${childRel}@target`,
                 targetStat.size,
                 (targetStat.mode & 0o111) !== 0,
                 sourceOnly,
                 targetListingRel,
-              )
+              ) === false
             ) {
               return false;
             }
@@ -23393,18 +23445,19 @@ function filesystemSourceIdentity(
           if (snapshotEligible) {
             includedRegularPaths.add(childSnapshotRel);
           }
-          if (
-            recordIdentity &&
-            !recordFile(
+          if (recordIdentity) {
+            const recorded = recordFile(
               child,
               childRel,
               stat.size,
               (stat.mode & 0o111) !== 0,
               sourceOnly,
               childListingRel,
-            )
-          ) {
-            return false;
+            );
+            if (recorded === false) return false;
+            // Gone since the directory listed it: nothing to record, and the
+            // snapshot must not try to add it.
+            if (recorded === "vanished") continue;
           }
           if (
             snapshotEligible &&
