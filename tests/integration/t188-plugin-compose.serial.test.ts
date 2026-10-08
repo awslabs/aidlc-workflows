@@ -2153,7 +2153,8 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
       writeFileSync(path, composed.slice(0, open) + composed.slice(close));
       const row = composedSurfaceRow(name, projectDir);
       expect(row, name).toContain("test-pro: agent aidlc-quality-agent");
-      expect(row, name).toContain(twin.rel);
+      // Doctor names the twin by its native path (backslashes on Windows).
+      expect(row.replaceAll("\\", "/"), name).toContain(twin.rel);
       expect(row, name).toContain("fragments=[after-preflight@90");
     }
   });
