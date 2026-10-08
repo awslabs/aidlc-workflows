@@ -375,51 +375,64 @@ function windowsArgv(arg: string): string {
   const trailing = /\\*$/.exec(arg)?.[0] ?? "";
   return `"${arg}${trailing}"`;
 }
-// On Windows a word holding a double quote cannot cross cmd.exe as written: the
-// hook writes the person's words itself to the request file the engine reads
-// with no shell on the way, and forwards `next <flags> --request-file <path>`.
-// The flags stay on the line because the engine reads the file as words only,
-// never as flags; which tokens are flags, and which flag takes the next token
-// as its value, is the engine's own reading (parseNextFlags), asked per token.
-// A verb (park, team-board) or compose keeps its own form.
+// On Windows a word holding a double quote cannot cross cmd.exe as written
+// (cmd.exe flips its quote state at every double quote, escaped or not, so an
+// & | < > ^ inside such a word would run a second command): the hook writes the
+// person's words itself to the request file the engine reads with no shell on
+// the way, and forwards `next <flags> --request-file <path>`. The rule this
+// keeps: no forwarded token holding a double quote ever reaches the cmd.exe
+// line. The flags stay on the line because the engine reads the file as words
+// only, never as flags; which tokens are flags, and which flag takes the next
+// token as its value, is the engine's own reading (parseNextFlags), asked per
+// token, and a token holding a double quote is always a word. compose keeps
+// its verb on the line, the engine reads the file as its task text; another
+// verb (park, team-board), or a reading the hook cannot make, sends every
+// token as words: nothing runs, and at worst the engine shows a flag back as
+// words. A file that cannot be written still leaves the words off the line;
+// the engine then asks for the request again.
 const REQUEST_FILE = "aidlc/.aidlc-request-text/request.txt";
 async function requestFileForwarding(
   args: readonly string[],
   cwd: string,
 ): Promise<{ args: string[]; forwarded: string } | null> {
-  if (
-    process.platform !== "win32" ||
-    !args.some((arg) => arg.includes('"')) ||
-    args[0] === "compose" ||
-    leadingOrchestratorVerb(args) !== null
-  ) {
-    return null;
+  if (process.platform !== "win32" || !args.some((arg) => arg.includes('"'))) return null;
+  let flags: string[] = [];
+  let words: string[] = [...args];
+  if (args[0] === "compose") {
+    flags = ["compose"];
+    words = args.slice(1);
+  } else if (leadingOrchestratorVerb(args) === null) {
+    try {
+      const { parseNextFlags } = await import("../tools/aidlc-orchestrate.ts");
+      flags = [];
+      words = [];
+      for (let i = 0; i < args.length; i++) {
+        const token = args[i];
+        if (!token.startsWith("-") || token.includes('"')) {
+          words.push(token);
+          continue;
+        }
+        flags.push(token);
+        const value = args[i + 1];
+        if (
+          value !== undefined && !value.startsWith("-") && !value.includes('"') &&
+          parseNextFlags([token, value]).intent !== value
+        ) {
+          flags.push(value);
+          i++;
+        }
+      }
+    } catch {
+      flags = [];
+      words = [...args];
+    }
   }
   try {
-    const { parseNextFlags } = await import("../tools/aidlc-orchestrate.ts");
-    const flags: string[] = [];
-    const words: string[] = [];
-    for (let i = 0; i < args.length; i++) {
-      const token = args[i];
-      if (!token.startsWith("-")) {
-        words.push(token);
-        continue;
-      }
-      flags.push(token);
-      const value = args[i + 1];
-      if (value !== undefined && !value.startsWith("-") && parseNextFlags([token, value]).intent !== value) {
-        flags.push(value);
-        i++;
-      }
-    }
-    if (words.length === 0 || flags.some((flag) => flag.includes('"'))) return null;
     mkdirSync(join(cwd, "aidlc", ".aidlc-request-text"), { recursive: true });
     writeFileSync(join(cwd, REQUEST_FILE), `${words.join(" ")}\n`, "utf-8");
-    const argv = [...flags, "--request-file", REQUEST_FILE];
-    return { args: argv, forwarded: forwardedArgs(argv.join(" "), argv) };
-  } catch {
-    return null; // the single-quoted form stands; the guard still holds the call to the latch
-  }
+  } catch { /* the engine reports the unread file; the words still stay off the line */ }
+  const argv = [...flags, "--request-file", REQUEST_FILE];
+  return { args: argv, forwarded: forwardedArgs(argv.join(" "), argv) };
 }
 function forwardedArgs(raw: string, args: string[]): string {
   if (
