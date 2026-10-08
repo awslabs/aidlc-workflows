@@ -26565,15 +26565,20 @@ export function turnEndIsOpen(projectDir: string, intent?: string, space?: strin
 }
 
 // Record that the workflow engine was ADVANCED (not merely probed). Called from
-// orchestrate's `next` / `report` / `park` and `intent create`. A no-op in three
-// cases: when STOP_HOOK_PROBE_ENV is set (the Stop hook's own probe — see above),
-// for read-only utility routing (excluded at the call site), and before creation.
+// orchestrate's `next` / `report` / `park`, from `intent create` for the work it
+// creates, and from the intent and space switches for the work they select (a
+// record with no mark, made before the markers shipped or freshly cloned, would
+// otherwise read every later plain question as the engine's unfinished turn on
+// the transcript-free hosts). A no-op in three cases: when STOP_HOOK_PROBE_ENV
+// is set (the Stop hook's own probe, see above), for read-only utility routing
+// (excluded at the call site), and before creation.
 //
 // KNOWN COVERAGE GAP — the marker sees LESS than the transcript predicate does.
 // isEngineToolCall (below) counts as engagement any non-read-only aidlc-jump /
 // aidlc-bolt / aidlc-swarm invocation and the mutating aidlc-state verbs
 // (approve, advance, skip, set, …). NONE of those tools touch this marker: the
-// only writers are orchestrate's three subcommands and intent create. So on a transcript-free
+// only writers are orchestrate's three subcommands, intent create and the two
+// switches. So on a transcript-free
 // harness a conductor that runs, say, `aidlc-jump` — mutating the stage pointer
 // and emitting audit — and then ends its turn without consulting the engine
 // reads as CONVERSATIONAL here, while the same turn BLOCKS on Claude/Codex where
