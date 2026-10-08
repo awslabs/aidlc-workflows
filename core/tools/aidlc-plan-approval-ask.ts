@@ -30,7 +30,6 @@ import {
   changeControlSourceLabel,
   claimAttemptFields,
   collectStalePlanApprovalReceipts,
-  currentStageSourceBaseline,
   errorMessage,
   fenceSwitchSentence,
   getField,
@@ -45,7 +44,11 @@ import {
   planApprovalRuntimeFile,
   readActiveDirectiveMarker,
   readAuditShardEvents,
+  readBaselineSourceSnapshot,
+  readPlanApprovalReceipt,
   readPlanApprovalRuntimeRecord,
+  readWorkspaceSourceSnapshot,
+  recordedSourceListingUnderCurrentBoundary,
   removePlanApprovalRuntimeRecord,
   renderChangedPaths,
   sourceListingChangedPaths,
@@ -60,7 +63,6 @@ import {
   withActiveDirectiveLock,
   withAuditLock,
   workspaceSourceFailureSuffix,
-  workspaceSourceListing,
   workspaceSourceState,
   writeFileAtomic,
   writePlanApprovalReceipt,
@@ -68,6 +70,7 @@ import {
   writeWorkspaceSourceSnapshot,
   type ActiveDirectiveMarker,
   type PlanApprovalRuntimeReceipt,
+  type WorkspaceSourceListing,
 } from "./aidlc-lib.ts";
 import { CHECK_GLOSS } from "./aidlc-guard-fences.ts";
 import {
@@ -452,22 +455,57 @@ function targetView(projectDir: string, unit: string | null, changed: string | n
 }
 
 /**
- * What already changed in the workspace source since Code Generation started
- * (the stage's Source Baseline), said in the question so the person approves
- * with that in front of them: an agent that ran ahead of the plan, or their own
- * edits. Nothing is said when either side cannot be read, or nothing changed.
+ * What already changed in the workspace source that no approved plan accounts
+ * for, said in the question so the person approves with that in front of them:
+ * an agent that ran ahead of the plan, or their own edits. Measured from the
+ * later of this stage's own start (its STAGE_STARTED Source Baseline) and the
+ * previous plan approval in this stage (the workspace snapshot kept at each
+ * approval), so a later Unit's question does not repeat what the person saw
+ * when they approved the earlier one, and a unit-major run's first question
+ * does not reach back into earlier stages. The files the plans approved since
+ * that start name are their own build, not something that ran ahead. Nothing
+ * is said when the start is not on record or cannot be read, or nothing changed.
  */
 function changedBeforeApprovalLine(projectDir: string): string | null {
   try {
-    const state = readFileSync(stateFilePath(projectDir), "utf-8");
-    const baseline = currentStageSourceBaseline(
-      projectDir, STAGE,
-      getField(state, "Construction Iteration")?.trim() === "unit-major" ||
-        getField(state, "Construction Checkpoints") === "enabled",
-    );
-    const current = workspaceSourceListing(projectDir);
-    if (baseline.state !== "ready" || current === null) return null;
-    const changed = sourceListingChangedPaths(baseline.listing, current);
+    const current = workspaceSourceState(projectDir);
+    if (current === null) return null;
+    const rows = readAuditShardEvents(projectDir)
+      .filter((row) =>
+        auditBlockField(row.block, "Stage") === STAGE &&
+        (row.event === "STAGE_STARTED" || row.event === "PLAN_APPROVAL_RECORDED" || row.event === "PLAN_APPROVAL_SKIPPED"))
+      .sort((a, b) => {
+        if (a.timestamp !== b.timestamp) return a.timestamp < b.timestamp ? -1 : 1;
+        if (a.shardIndex !== b.shardIndex) return a.shardIndex - b.shardIndex;
+        return a.pos - b.pos;
+      });
+    const last = rows.at(-1);
+    if (last === undefined) return null;
+    let start: WorkspaceSourceListing | null = null;
+    if (last.event === "STAGE_STARTED") {
+      const baseline = auditBlockField(last.block, "Source Baseline");
+      start = baseline === null ? null : readBaselineSourceSnapshot(projectDir, STAGE, baseline);
+    } else {
+      const targetId = auditBlockField(last.block, "Plan Target");
+      const runFloor = auditBlockField(last.block, "Run floor");
+      const fingerprint = auditBlockField(last.block, "Approval Fingerprint");
+      const receipt = targetId !== null && runFloor !== null && fingerprint !== null
+        ? readPlanApprovalReceipt(projectDir, { targetId, runFloor, fingerprint })
+        : null;
+      const recorded = receipt === null ? null : readWorkspaceSourceSnapshot(projectDir, STAGE, receipt.plannedSourceSha256);
+      start = recorded === null ? null : recordedSourceListingUnderCurrentBoundary(recorded, current.listing);
+    }
+    if (start === null) return null;
+    // The plans approved since this stage started: what they name is their build.
+    const approved: Array<string | null> = [];
+    for (let index = rows.length - 1; index >= 0 && rows[index].event !== "STAGE_STARTED"; index--) {
+      approved.push(auditBlockField(rows[index].block, "Unit"));
+    }
+    const named = approved.length === 0 ? [] : plansNamedPaths(projectDir, approved).map((path) => path.replace(/\/+$/, ""));
+    const theirBuild = (path: string): boolean =>
+      named.some((entry) =>
+        path === entry || path.startsWith(`${entry}/`) || (!entry.includes("/") && path.split("/").at(-1) === entry));
+    const changed = sourceListingChangedPaths(start, current.listing).filter((path) => !theirBuild(path));
     if (changed.length === 0) return null;
     return changed.length === 1
       ? `Already changed before you approved: ${renderChangedPaths(changed)}.`
