@@ -2566,6 +2566,16 @@ describe("t304 engine-owned report replay and compatibility", () => {
       valid: false,
       reason: expect.stringContaining("exactly one Iteration line"),
     });
+    // Two whole Review sections (the second demoted to `###` in a review file)
+    // are two reviews: the record reads the first section's findings only, so
+    // the second's would be lost. Refused by name even when every line repeats.
+    const second =
+      "### Review\n\n**Verdict:** READY\n**Reviewer:** aidlc-product-lead-agent\n**Iteration:** 1\n\n### Findings\n\n" +
+      "**New findings**\n\n| Severity | Location | Finding | Required action |\n|---|---|---|---|\n| Major | a.md | lost | fix |\n";
+    expect(validateReviewAppendix(Buffer.from(head + second, "utf-8"), expected)).toMatchObject({
+      valid: false,
+      reason: "the review has two Review sections; keep one and write it whole",
+    });
   });
 
   test("You upgrade mid-workflow: a list seeds from an older release's records, keeping IDs and decisions without asking again", () => {

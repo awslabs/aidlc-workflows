@@ -2550,12 +2550,11 @@ describe("t271 review iteration ceiling", () => {
     // must open with the heading). In a review file a plain `#` or `##` line
     // is recorded as `###` and the check decides on those bytes, so a review
     // that is whole apart from those lines records with none left. A section
-    // repeated word for word is one of those: made `###`, its ownership lines
-    // repeat the first section's exactly, and a line repeated word for word is
-    // one line.
+    // repeated whole is not one of those: made `###`, it is a second Review
+    // section, refused by name (the record would read the first one's findings
+    // only).
     const demotedInAReviewFile = new Set<string>([
       "semantic bytes before heading",
-      "duplicate review section",
       "later H1 section",
       "indented later H1 section",
       "inline code cannot open a fake HTML comment",
@@ -2585,6 +2584,9 @@ describe("t271 review iteration ceiling", () => {
           writeFileSync(draft, scenario.suffix, "utf-8");
           if (scenario.name === "semantic bytes before heading") {
             expectedError = "no later rendered H1 or H2 heading";
+          }
+          if (scenario.name === "duplicate review section") {
+            expectedError = "the review has two Review sections; keep one and write it whole";
           }
         } else {
           appendFileSync(artifact, scenario.suffix, "utf-8");

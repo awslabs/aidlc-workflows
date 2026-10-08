@@ -16154,9 +16154,21 @@ export function validateReviewAppendix(
     };
   }
 
-  // A line repeated word for word is one line: a reviewer asked to "end with
-  // the verdict line" writes it at the top and at the end. Two different
-  // values are still two lines, and refused.
+  // Two Review sections (the second one demoted to `###` in a review file) are
+  // two reviews: the record reads the first section's findings only, so the
+  // second's would be lost. Refused by name, whatever their lines say. The
+  // opening heading, when the text starts with it, was cut before rendering and
+  // counts as the first; a review file that opens with prose keeps its one
+  // heading in the rendered text, which is still one section.
+  if (authority.reviewSections + (opening ? 1 : 0) >= 2) {
+    return {
+      valid: false,
+      reason: "the review has two Review sections; keep one and write it whole",
+    };
+  }
+  // Inside the one section a line repeated word for word is one line: a
+  // reviewer asked to "end with the verdict line" writes it at the top and at
+  // the end. Two different values are still two lines, and refused.
   const distinct = (values: string[]): string[] => [...new Set(values)];
   const verdicts = distinct(authority.verdicts);
   const reviewers = distinct(authority.reviewers);
@@ -16202,6 +16214,8 @@ export function validateReviewAppendix(
 type RenderedReviewAuthority = {
   markdownH1H2: boolean;
   htmlH1H2: boolean;
+  /** Headings reading "Review" after the opening one: a second Review section. */
+  reviewSections: number;
   verdicts: string[];
   reviewers: string[];
   iterations: string[];
@@ -16248,11 +16262,16 @@ function renderReviewMarkdownAuthority(
   if (typeof Bun.markdown?.render !== "function") return null;
   let markdownH1H2 = false;
   let htmlH1H2 = false;
+  let reviewSections = 0;
   let rendered: string;
   try {
     rendered = Bun.markdown.render(section, {
-      heading: (_children, { level }) => {
+      heading: (children, { level }) => {
         if (level <= 2) markdownH1H2 = true;
+        // A review file's own `## Review` written twice is recorded as `###`
+        // the second time, so a heading at any level that reads "Review" is a
+        // second section, whose findings the record would never read.
+        if (children.replaceAll(REVIEW_MARK_OPEN, "").replaceAll(REVIEW_MARK_CLOSE, "").trim().toLowerCase() === "review") reviewSections++;
         return `${REVIEW_NON_AUTHORITY}\n`;
       },
       html: (children) => {
@@ -16285,6 +16304,7 @@ function renderReviewMarkdownAuthority(
   return {
     markdownH1H2,
     htmlH1H2,
+    reviewSections,
     verdicts: renderedReviewFields(rendered, "Verdict"),
     reviewers: renderedReviewFields(rendered, "Reviewer"),
     iterations: renderedReviewFields(rendered, "Iteration"),
