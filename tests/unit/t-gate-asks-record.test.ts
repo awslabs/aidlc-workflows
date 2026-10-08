@@ -17,7 +17,7 @@ import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, relative } from "node:path";
+import { join, relative, sep } from "node:path";
 import {
   AIDLC_SRC,
   REPO_ROOT,
@@ -88,6 +88,13 @@ function writeArtifact(name: string, body: string): string {
   const path = join(stageDir(), `${name}.md`);
   writeFileSync(path, body);
   return path;
+}
+
+// The dispatcher records an artifact's Output path project-relative with
+// forward slashes on every OS (relativizePath); the row the gate reads is keyed
+// the same way, so the fixture rows spell it so too.
+function outputPath(absolute: string): string {
+  return relative(proj, absolute).split(sep).join("/");
 }
 
 function sensorRow(event: "SENSOR_PASSED" | "SENSOR_FAILED", fireId: string, outputRel: string, findings = 1): void {
@@ -200,7 +207,7 @@ describe("t-gate-asks-record: the gate row says what the person was asked to dec
   });
 
   test("the row lists the latest result of every applicable check per declared artifact, failures first, with the detail path", () => {
-    const rel = relative(proj, join(seededRecordDir(proj), "ideation", STAGE, "feasibility-assessment.md"));
+    const rel = outputPath(join(seededRecordDir(proj), "ideation", STAGE, "feasibility-assessment.md"));
     writeArtifact("feasibility-assessment", "# Feasibility Assessment\n\nContent.\n");
     writeArtifact("constraint-register", "# Constraint Register\n\nContent.\n");
     sensorRow("SENSOR_PASSED", "aaaa0001", rel);
@@ -212,7 +219,7 @@ describe("t-gate-asks-record: the gate row says what the person was asked to dec
   });
 
   test("the latest terminal result of a check wins: a pass after a failure reads as passed", () => {
-    const rel = relative(proj, join(seededRecordDir(proj), "ideation", STAGE, "feasibility-assessment.md"));
+    const rel = outputPath(join(seededRecordDir(proj), "ideation", STAGE, "feasibility-assessment.md"));
     writeArtifact("feasibility-assessment", "# Feasibility Assessment\n\nContent.\n");
     sensorRow("SENSOR_FAILED", "aaaa0002", rel, 3);
     sensorRow("SENSOR_PASSED", "aaaa0003", rel);
