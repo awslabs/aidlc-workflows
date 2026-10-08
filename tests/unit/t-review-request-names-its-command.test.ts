@@ -44,7 +44,7 @@ const STATE = [
   "# AI-DLC State Tracking",
   "",
   "## Stage Progress",
-  "- [-] functional-design — EXECUTE",
+  "- [-] functional-design \u2014 EXECUTE",
   "",
 ].join("\n");
 
