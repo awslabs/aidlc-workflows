@@ -122,6 +122,11 @@ function readStoredMessage(projectDir: string, id: string): StoredMessage | null
 }
 
 /** The message behind `id`; null when it is missing, unreadable, or not a record of ours. */
+/** Whether any message of the person's is on record for this project (the store keeps a day). */
+export function hasStoredMessages(projectDir: string): boolean {
+  return recordIds(projectDir).length > 0;
+}
+
 export function readMessage(projectDir: string, id: string): StoredMessage | null {
   return readStoredMessage(projectDir, id);
 }

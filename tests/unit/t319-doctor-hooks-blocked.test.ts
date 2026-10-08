@@ -18,6 +18,7 @@ import {
 } from "node:fs";
 import { dirname, join } from "node:path";
 import { readAuditShardEvents } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import { saveMessage } from "../../dist/claude/.claude/tools/aidlc-message-store.ts";
 import {
   REPO_ROOT,
   cleanupTestProject,
@@ -349,6 +350,30 @@ describe("t319 doctor detects hooks blocked before their first heartbeat", () =>
       /warn {2}Your replies are not being recorded: [1-9]\d* steps? or approvals? so far and no message of yours on record/,
     );
     expect(output(run)).not.toContain("Human-turn receipts");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  // A brand-new piece of work: the opening message arrives before the work
+  // exists, so the hook saves it in the message store and writes no HUMAN_TURN
+  // row, and the initialization stages log their rows in the same turn. That
+  // is not "replies not recorded": a stored message of the person's means the
+  // hook did record them. With no stored message at all, the warning stands.
+  test("a fresh workflow whose opening message is on record is not told its replies are unrecorded", () => {
+    const project = projectWithWorkflowProgress();
+    writeHeartbeat(project, new Date().toISOString());
+    saveMessage(project, {
+      session: "fresh-session", at: new Date().toISOString(), source: "prompt",
+      text: "/aidlc build a small tool", picker: null, words: "build a small tool", settings: [],
+      route: { scope: null, newIntent: false, skip: [], add: [], projectType: null }, applied: [],
+    });
+    const run = runUtility(project, ["doctor", "--verbose"]);
+    expect(output(run)).not.toContain("Your replies are not being recorded");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("a workflow with stage rows, no human turn and no stored message still warns", () => {
+    const project = projectWithWorkflowProgress();
+    writeHeartbeat(project, new Date().toISOString());
+    const run = runUtility(project, ["doctor", "--verbose"]);
+    expect(output(run)).toMatch(/warn {2}Your replies are not being recorded: [1-9]\d* steps? or approvals? so far/);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   // A record created before heartbeats moved under .aidlc-engine/ keeps them at

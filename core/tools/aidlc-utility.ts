@@ -1,4 +1,5 @@
 import { DEFAULT_SUBPROCESS_TIMEOUT_MS, LONG_SUBPROCESS_TIMEOUT_MS } from "./aidlc-runtime-budget.ts";
+import { hasStoredMessages } from "./aidlc-message-store.ts";
 import { createHash, randomUUID } from "node:crypto";
 import {
   constants as fsConstants,
@@ -5056,13 +5057,17 @@ export async function collectDoctorReport(
 
   if (
     stageOrGateEvents.length > 0 &&
-    !auditShardEvents.some((event) => event.event === "HUMAN_TURN")
+    !auditShardEvents.some((event) => event.event === "HUMAN_TURN") &&
+    !hasStoredMessages(projectDir)
   ) {
     // Steps and approvals happened, yet no message of the person's is on
-    // record (no HUMAN_TURN row): their replies are not being recorded, and
-    // the next approval will be refused. A warning the summary counts, with
-    // this harness's own step as the fix (every harness's hooks record the
-    // person's messages, so a workflow with none is never healthy).
+    // record: no HUMAN_TURN row, and nothing in the message store either (the
+    // hook saves the message a piece of work is started with before the work
+    // exists, so a brand-new workflow is not this case). Their replies are not
+    // being recorded, and the next approval will be refused. A warning the
+    // summary counts, with this harness's own step as the fix (every
+    // harness's hooks record the person's messages, so a workflow with none
+    // is never healthy).
     const count = stageOrGateEvents.length;
     results.push({
       pass: false,
