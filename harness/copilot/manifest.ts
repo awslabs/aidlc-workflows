@@ -169,6 +169,9 @@ const manifest: HarnessManifest = {
           "sha256:7d1b6554a2de2b97b8e14f96ec99d218722d18c100de166cb1a5831bb2c11bfc",
           // The variant whose title asked to be replaced with the project's name (#2058).
           "sha256:cdfb9d50a7899b4c5a2aa3128d49a2f50c12ee9d3aba13dbe42ff92ad7a2f22e",
+          // The variant shipped before the checks paragraph offered the wider place as a
+          // plain question, so an install that still carries it stays recognizable.
+          "sha256:3979d69468a5997423ef8fe3b7d9f9bc948ddf34524ca39e1c10112a6a80f835",
         ],
       },
     },
