@@ -29474,10 +29474,15 @@ function hooksNeverRanHere(projectDir?: string): boolean {
   }
 }
 
-// The prompt hook ran for this workflow and the work has not moved on since:
-// the heartbeat it leaves on every prompt it handles is within the staleness
-// slack of the newest stage or gate event. A refusal for want of a reply then
-// means the person has not answered yet, not a reply the hooks missed.
+// The prompt hook ran for this workflow just now: the heartbeat it leaves on
+// every prompt it handles is recent by the clock (within the staleness slack,
+// and not from the future) and the work has not moved on since (the newest
+// stage or gate event is within the same slack of it). A refusal for want of a
+// reply then means the person has not answered yet, not a reply the hooks
+// missed. The clock matters: refusals write no stage or gate event, so hooks
+// that stop after a gate opens (a launch whose hook command fails, a Kiro IDE
+// window back in Restricted Mode) would otherwise read as "not answered yet"
+// turn after turn; by the clock the missed-reply step is back within minutes.
 export function promptHookRanRecently(projectDir?: string): boolean {
   try {
     const project = resolveProjectDir(projectDir);
@@ -29485,6 +29490,8 @@ export function promptHookRanRecently(projectDir?: string): boolean {
     if (!existsSync(path)) return false;
     const beat = Date.parse(readFileSync(path, "utf-8").trim());
     if (!Number.isFinite(beat)) return false;
+    const age = Date.now() - beat;
+    if (age < 0 || age > HOOK_HEARTBEAT_STALE_SLACK_MS) return false;
     const newest = hookLiveness(project).newestStageOrGateEvent;
     return newest === null || newest.timestampMs - beat <= HOOK_HEARTBEAT_STALE_SLACK_MS;
   } catch {
