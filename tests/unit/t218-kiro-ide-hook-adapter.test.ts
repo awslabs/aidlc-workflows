@@ -54,6 +54,10 @@ import {
   readPlanApprovalViolation,
   workspaceSourceState,
   writeSessionIntentUuid,
+  ANSWER_TEXT_DIR,
+  composerProposalPath,
+  docsRoot,
+  memoryFilePath,
 } from "../../core/tools/aidlc-lib.ts";
 import {
   approvalFingerprint,
@@ -3329,6 +3333,47 @@ describe("t218 Kiro IDE plan-approval enforcement", () => {
       expect(readAudit(dir)).not.toContain(
         "**Event**: PLAN_APPROVAL_RECORDED",
       );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  // A record write the shared guard admits while a Unit's plan waits (the
+  // stage's learnings diary, the composer's proposal, a person's answer text)
+  // reaches PostToolUse with no arguments on Kiro IDE, so the adapter judges it
+  // from the result prose alone. None of them is a planning authority file: the
+  // write poisons nothing, and the person's approval builds.
+  test.each([
+    ["the stage learnings diary", (dir: string) => memoryFilePath(dir, "construction", "code-generation")],
+    ["the composer's proposal", (dir: string) => composerProposalPath(dir)],
+    ["a person's answer text", (dir: string) => join(docsRoot(dir), ANSWER_TEXT_DIR, "answer.md")],
+  ])("a write of %s during a Unit's plan wait does not poison Approve Plan", (_label, target) => {
+    const dir = scratchProject(true);
+    try {
+      initGitWorkspace(dir);
+      seedCodeGenerationDirective(dir, "u1");
+      const choices = seedLegacyDirectiveChoices(dir, {}, "u1");
+      expect(runIde(dir, "session-start", null).code).toBe(0);
+      const questions = seedStageLevelPlanApproval(dir, { unit: "u1" });
+      const file = target(dir);
+      mkdirSync(dirname(file), { recursive: true });
+      // PreToolUse names the path: the shared guard admits the write.
+      const admitted = runIde(dir, "plan-approval-guard", JSON.stringify({ toolName: "fs_write", toolArgs: { path: file } }));
+      expect(admitted.code, admitted.stderr).toBe(0);
+      writeFileSync(file, "- 2026-10-08: the first entry\n", "utf-8");
+      // PostToolUse carries no arguments; the path is the result prose.
+      expect(runIde(dir, "audit-and-sensors", ctx("fs_write", `Created the ${relative(dir, file)} file.`)).code).toBe(0);
+      expect(readPlanApprovalViolation(dir)).toBeNull();
+      // The person approves the plan.
+      expect(runIde(dir, "audit-and-sensors", ctx("fs_write", `Created the ${relative(dir, questions)} file.`)).code).toBe(0);
+      expect(runIde(dir, "record-human-turn", JSON.stringify({ prompt: choices.approve })).code).toBe(0);
+      writeFileSync(questions, readFileSync(questions, "utf-8").replace("[Answer]:", "[Answer]: Approve Plan"));
+      const approved = runIde(dir, "audit-and-sensors", ctx("fs_write", `Created the ${relative(dir, questions)} file.`));
+      expect(approved.code, approved.stderr).toBe(0);
+      expect(evaluateCodeGenerationApproval(dir, { unit: "u1" })).toMatchObject({ ok: true });
+      // The first build write runs.
+      const build = runIde(dir, "plan-approval-guard", JSON.stringify({ toolName: "fs_write", toolArgs: { path: join(dir, "src", "built.ts") } }));
+      expect(build.code, build.stderr).toBe(0);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

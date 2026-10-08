@@ -145,6 +145,11 @@ import {
   UNBINDABLE_FINGERPRINT,
   workspaceSourceState,
   writeWorkspaceSourceSnapshot,
+  ANSWER_TEXT_DIR,
+  composerProposalPath,
+  docsRoot,
+  memoryFilePath,
+  normalizeDriveLetter,
 } from "../tools/aidlc-lib.ts";
 import {
   approvalFingerprint,
@@ -536,6 +541,24 @@ function latestPlanApprovalAnswer(questions: string): string | null {
   return answers.length === 0 ? null : answers[answers.length - 1];
 }
 
+// The record files the shared plan-approval guard admits in every Plan
+// Approval state, by the identity it uses: the Code Generation stage's
+// learnings diary, the composer's proposal, and a file in the answer-text
+// folder. None is a planning authority file.
+function isGuardAdmittedRecordWrite(projectDir: string, normalizedPath: string): boolean {
+  try {
+    const path = normalizeDriveLetter(normalizedPath);
+    const same = (candidate: string) => path === normalizeDriveLetter(resolve(candidate));
+    if (same(memoryFilePath(projectDir, "construction", "code-generation")) || same(composerProposalPath(projectDir))) {
+      return true;
+    }
+    const inside = relative(normalizeDriveLetter(resolve(join(docsRoot(projectDir), ANSWER_TEXT_DIR))), path);
+    return inside !== "" && !inside.startsWith("..") && !isAbsolute(inside);
+  } catch {
+    return false;
+  }
+}
+
 function processLegacyPlanApprovalWrite(
   projectDir: string,
   filePath: string,
@@ -561,6 +584,12 @@ function processLegacyPlanApprovalWrite(
     state.approved ||
     (codeGenerationExecutionAllowed(projectDir, state.target) && everyUnitContinuesFromApproval(projectDir))
   ) return null;
+  // A record write the guard admitted while the plan waits ends its own window
+  // and poisons nothing: the person's approval still builds.
+  if (isGuardAdmittedRecordWrite(projectDir, normalizedPath)) {
+    clearPlanApprovalLegacyWindow(projectDir, sessionId);
+    return null;
+  }
   const authority = resolveCodeGenerationAuthority(projectDir, state.target);
   const planPath = join(authority.stageDir, "code-generation-plan.md");
   const instructionsPath = join(authority.stageDir, "unit-test-instructions.md");

@@ -239,8 +239,11 @@ The two hooks after a shell command run the same way as one,
   target-bound `[Approval Fingerprint]`, records the live workspace source as
   `[Planned Source]` (the legacy channel cannot run the fingerprint command, so
   the adapter owns both tags; `unbindable` when the workspace has no source
-  fingerprint), and invokes the reserved decision or answer tool itself. Kiro
-  discards PostToolUse stdout, so a successful write hook remains silent; when
+  fingerprint), and invokes the reserved decision or answer tool itself. A
+  write of the stage's learnings diary, the composer's proposal, or a person's
+  answer text (the record files the shared guard admits while the plan waits)
+  is not a planning write: the adapter clears its write window and records no
+  violation. Kiro discards PostToolUse stdout, so a successful write hook remains silent; when
   the decision or answer step is refused, the hook exits 2 with the refusal on
   stderr instead of dropping it, because the write window stays latched until
   the human recovers. Workspace source is checked against the recorded
