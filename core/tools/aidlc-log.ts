@@ -10,6 +10,7 @@ import { createHash, randomBytes } from "node:crypto";
 import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync } from "node:fs";
 import { dirname, isAbsolute, join, posix, relative, resolve, sep } from "node:path";
 import { appendAuditEntry, appendAuditEntryUnlocked } from "./aidlc-audit.ts";
+import { isMessageId, listMessages, readMessage, type StoredMessage } from "./aidlc-message-store.ts";
 import {
   humanRepliedSinceGate,
   NoGuardRecoveryAskError,
@@ -419,6 +420,7 @@ const LOG_INTERACTION_OPTIONS = [
   "--checkpoint",
   "--session",
   "--questions-file",
+  "--message",
   "--batch-file",
   "--command",
   "--command-file",
@@ -877,6 +879,138 @@ function demoteReviewHeadings(body: Buffer): { bytes: Buffer; changed: string[] 
 //   --questions-file <path> [--unit <unit>] [--single]]
 //
 // Fires BEFORE AskUserQuestion, recording what options will be shown.
+// Rows that spend the person's messages: a decision of another kind than an
+// answer. One message backs at most one approval plus any answers (round 2 of
+// the input-record design), so answers never spend it.
+const MESSAGE_SPENDING_EVENTS: ReadonlySet<string> = new Set([
+  "GATE_APPROVED",
+  "GATE_REJECTED",
+  "PLAN_APPROVAL_RECORDED",
+  "SUMMARY_CONFIRMATION_RECORDED",
+  "VERIFICATION_COMMAND_RECORDED",
+  "CONSTRUCTION_POLICY_RECORDED",
+  "QUESTION_UNANSWERED",
+]);
+
+function latestSpendingTimestamp(rows: AuditShardEvent[]): string | null {
+  let latest: string | null = null;
+  for (const row of rows) {
+    if (MESSAGE_SPENDING_EVENTS.has(row.event) && (latest === null || row.timestamp > latest)) latest = row.timestamp;
+  }
+  return latest;
+}
+
+// The chat this command serves, when the engine can tell (the hook's override,
+// Codex's thread id, the process ancestry); null when it cannot.
+function invokingChat(pd: string): string | null {
+  try {
+    return resolveInvokingSessionId(pd);
+  } catch {
+    return null;
+  }
+}
+
+// LLM maps, tool proves: the agent names the message that answered a question
+// it logged after the reply arrived; the engine proves the record exists, came
+// through this chat and is not spent by a later decision, and reads no words.
+// A same-second tie with a spending row favours the message: one message can
+// give an approval and the answers beside it.
+function proveMessage(pd: string, id: string, what: "answer" | "decision"): { message: StoredMessage } | { refusal: string } {
+  const message = isMessageId(id) ? readMessage(pd, id) : null;
+  if (message === null) {
+    return {
+      refusal: `Cannot record this ${what}: no message record ${id} exists in this project. Name the id of the ` +
+        "person's message that answered (a refused answer names it), or wait for their reply.",
+    };
+  }
+  const spentAt = latestSpendingTimestamp(readAuditShardEvents(pd));
+  if (spentAt !== null && message.at < spentAt) {
+    return {
+      refusal: `Cannot record this ${what}: message ${id} arrived before the last approval or decision (${spentAt}), ` +
+        "so it is spent. Only a message the person sent after it can answer this question.",
+    };
+  }
+  const chat = invokingChat(pd);
+  const chatOf = (m: StoredMessage): string => m.session ?? "terminal";
+  if (chat !== null) {
+    if (message.session !== chat) {
+      return {
+        refusal: `Cannot record this ${what}: message ${id} came through another chat, not this one. ` +
+          "Name a message the person sent in this chat.",
+      };
+    }
+    return { message };
+  }
+  const chats = new Set(
+    listMessages(pd).filter((m) => spentAt === null || m.at >= spentAt).map(chatOf),
+  );
+  if (chats.size > 1) {
+    return {
+      refusal: `Cannot record this ${what}: the engine cannot tell which chat this command serves, and more than ` +
+        "one chat has sent messages since the last decision. Run it from the chat that asked, or wait for the " +
+        "person's reply there.",
+    };
+  }
+  if (chats.size === 1 && !chats.has(chatOf(message))) {
+    return {
+      refusal: `Cannot record this ${what}: message ${id} came through another chat, not the one that has spoken ` +
+        "since the last decision.",
+    };
+  }
+  return { message };
+}
+
+function decisionRowsInScope(rows: AuditShardEvent[], stage: string, unit: string | undefined): AuditShardEvent[] {
+  return rows.filter((row) =>
+    row.event === "DECISION_RECORDED" && auditBlockField(row.block, "Stage") === stage &&
+    (unit === undefined || auditBlockField(row.block, "Unit") === unit));
+}
+
+// The message the latest question of this scope was logged with, for the
+// answers that follow it.
+function latestDecisionMessageId(pd: string, stage: string, unit: string | undefined): string | null {
+  const question = decisionRowsInScope(readAuditShardEvents(pd), stage, unit).at(-1);
+  return question === undefined ? null : auditBlockField(question.block, "Message Id");
+}
+
+// The person's messages that arrived before the latest question of this scope
+// was logged: the turn row naming the message orders it against the question
+// row; a message with no turn row yet (new work's first message) by time.
+function messagesBeforeQuestion(pd: string, stage: string, unit: string | undefined): StoredMessage[] {
+  const rows = readAuditShardEvents(pd);
+  const question = decisionRowsInScope(rows, stage, unit).at(-1);
+  if (question === undefined) return [];
+  const spentAt = latestSpendingTimestamp(rows);
+  const chat = invokingChat(pd);
+  const turnOf = new Map<string, AuditShardEvent>();
+  for (const row of rows) {
+    if (row.event !== "HUMAN_TURN") continue;
+    const id = auditBlockField(row.block, "Message Id");
+    if (id !== null) turnOf.set(id, row);
+  }
+  const before = (row: AuditShardEvent): boolean =>
+    row.shardIndex === question.shardIndex ? row.pos < question.pos : row.timestamp < question.timestamp;
+  return listMessages(pd).filter((message) => {
+    if (chat !== null && message.session !== chat) return false;
+    if (spentAt !== null && message.at < spentAt) return false;
+    const turn = turnOf.get(message.id);
+    return turn === undefined ? message.at < question.timestamp : before(turn);
+  });
+}
+
+function lateQuestionHint(candidates: StoredMessage[]): string {
+  const shown = candidates.map((message) => {
+    const words = (message.words ?? message.text).replace(/\s+/g, " ").trim();
+    return `${message.id} "${words.length > 40 ? `${words.slice(0, 40)}...` : words}"`;
+  });
+  if (candidates.length === 1) {
+    return `The person's message arrived before this question was logged: ${shown[0]}. If it answers the question, ` +
+      `record the answer with --message ${candidates[0].id}; do not ask them again.`;
+  }
+  return `The person's messages arrived before this question was logged: ${shown.join(", ")}. If one answers the ` +
+    "question, record the answer with --message <id>, the id of the message it answers; do not ask them again.";
+}
+
 function handleDecision(args: string[]): void {
   const { flags } = parseFlags(args);
   if (!flags.stage) error("Missing --stage <slug>");
@@ -1010,6 +1144,13 @@ function handleDecision(args: string[]): void {
     Object.assign(fields, claimAttemptFields(pd, flags.unit));
   }
   if (flags.single === "true") fields.Workflow = `single-stage:${flags.stage}`;
+  // A question logged after the person already replied names the message that
+  // answered it; its answers inherit the id.
+  if (flags.message !== undefined) {
+    const proof = proveMessage(pd, flags.message, "decision");
+    if ("refusal" in proof) error(proof.refusal);
+    fields["Message Id"] = proof.message.id;
+  }
 
   let protectedQuestion: ProtectedQuestion | null = null;
   try {
@@ -1127,7 +1268,7 @@ function handleAnswers(args: string[]): void {
   ));
   const unanswered = new Set<AuditShardEvent>();
   const uncertain = new Set<AuditShardEvent>();
-  const answered: Array<ReturnType<typeof questionView> & { answer: string; answeredAt: string }> = [];
+  const answered: Array<ReturnType<typeof questionView> & { answer: string; answeredAt: string; messageId?: string }> = [];
   const ambiguous: Array<ReturnType<typeof interactionScope> & {
     answer: string; answeredAt: string; candidates: string[];
   }> = [];
@@ -1180,7 +1321,11 @@ function handleAnswers(args: string[]): void {
           if (nonAnswer) {
             unanswered.add(question);
           } else {
-            const entry = { ...questionView(question), answer, answeredAt: result.answer.timestamp };
+            const messageId = auditBlockField(result.answer.block, "Message Id") ?? auditBlockField(question.block, "Message Id");
+            const entry = {
+              ...questionView(question), answer, answeredAt: result.answer.timestamp,
+              ...(messageId === null ? {} : { messageId }),
+            };
             answered.push(entry);
             entries.push(entry);
           }
@@ -2255,9 +2400,30 @@ function handleAnswer(args: string[]): void {
       return;
     }
 
+    // The message that answered: named by the agent, or inherited from the
+    // question it was logged with (a question logged after the reply arrived).
+    // An explicit id that fails its proof refuses; an inherited one falls back
+    // to the presence test below.
+    let named: StoredMessage | null = null;
+    if (instruction === undefined && !autonomousDecision) {
+      if (flags.message !== undefined) {
+        const proof = proveMessage(pd, flags.message, "answer");
+        if ("refusal" in proof) error(proof.refusal);
+        named = proof.message;
+      } else {
+        const inherited = latestDecisionMessageId(pd, flags.stage, flags.unit);
+        if (inherited !== null) {
+          const proof = proveMessage(pd, inherited, "answer");
+          if ("message" in proof) named = proof.message;
+        }
+      }
+    }
     // The person's own words go on the record beside the choice the agent read
     // in them, as they do at a gate and for the engine's own questions.
-    if (instruction === undefined && !autonomousDecision) {
+    if (named !== null) {
+      fields["Message Id"] = named.id;
+      if (named.words && !isNonAnswer(named.words)) fields["Person Reply"] = named.words;
+    } else if (instruction === undefined && !autonomousDecision) {
       const words = latestPersonTurn(pd)?.words;
       if (words && !isNonAnswer(words)) fields["Person Reply"] = words;
     }
@@ -2272,17 +2438,25 @@ function handleAnswer(args: string[]): void {
       // autonomous Construction: no human presence required
     } else if (humanPresenceGuardDisabled()) {
       // scoped test off-switch
+    } else if (named !== null) {
+      // The proved message is the person's reply to this question.
     } else if (
       !humanActedSinceLastAnswer(pd) &&
       !(humanTurnMintAllowed() && humanTurnState(pd, { replies: true }) === "answered")
     ) {
       // One reply answers every question that was open when it arrived, each
       // as its own answer ("answered": only answers used it, and nothing was
-      // asked since). A question asked after it waits for the next reply.
+      // asked since). A question asked after it waits for the next reply,
+      // unless the person's message that answered it arrived before it was
+      // logged: then the agent names that message instead of asking again.
+      const late = messagesBeforeQuestion(pd, flags.stage, flags.unit);
       error(
-        "Cannot record this answer because no new human reply has arrived for the question. "
-          + "Wait for the human to type an answer, then try again."
-          + commandTurnHint(pd) + unattendedHumanPresenceHint(pd),
+        (late.length > 0
+          ? `Cannot record this answer: the question was logged after the person's reply. ${lateQuestionHint(late)}`
+          : "Cannot record this answer because no new human reply has arrived for the question. "
+            + "Wait for the human to type an answer, then try again."
+            + commandTurnHint(pd))
+          + unattendedHumanPresenceHint(pd),
       );
     }
     // Where the person replied in a picker, an answer none of their picks

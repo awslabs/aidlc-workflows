@@ -1751,6 +1751,13 @@ a file instead of the command line: the agent writes it to
 .aidlc-engine/answer-text/answer.txt` (`--on-instruction-file` for the words that
 left a choice to the agent). The engine reads only that folder, through no link,
 up to 64 KiB, and removes the file once read.
+
+`log decision --message <id>` and `log answer --message <id>` name the person's
+message that answered a question the agent logged after the reply arrived. The
+engine proves the record exists, came through this chat, and is not spent by a
+later approval or decision, and reads none of its words; the answer is recorded
+and the person is not asked again. A refused answer names the id when such a
+message exists. The id is engine-to-agent text and is never shown to the person.
 See [Hooks and Tools](../reference/06-hooks-and-tools.md#read-only-audit-commands) for pairing rules, ordering, and filters.
 
 ### `aidlc engine bolt set-autonomy` - change Construction approvals

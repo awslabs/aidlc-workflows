@@ -125,7 +125,7 @@ import {
   openPlanApprovalQuestion,
 } from "../tools/aidlc-plan-approval-ask.ts";
 import { aidlcEntryWords, isAidlcCommandPrompt } from "../tools/aidlc-reply-reader.ts";
-import { MESSAGE_TEXT_MAX_CHARS, saveMessage, type StoredMessage } from "../tools/aidlc-message-store.ts";
+import { MESSAGE_PICKER_MAX_CHARS, MESSAGE_TEXT_MAX_CHARS, saveMessage, type StoredMessage } from "../tools/aidlc-message-store.ts";
 
 // "/aidlc approve the code plan" is the person's reply: the engine reads the
 // words after the entry as nothing but words. Any flag, scope, verb or noun
@@ -382,7 +382,16 @@ function pickedGateLabel(text: string, picker: PlanApprovalPickerQuestion | unde
 // reply by its question; Codex keys it by the question's id, with a list of
 // picks (its adapter passes the box's reply as picker_reply). Nothing here
 // reads meaning into the reply.
-function pickerReplies(input: string): Array<{ question: string; reply: string }> {
+// What the box carried back: one entry per question it asked, in the order shown, `reply` null where the person left
+// a question blank (AIDA F8 on #2107: an entry only for answered questions read "asked and left blank" as "never
+// asked"). A pick for a question the box did not list follows them. Strings are cut to the store's limit.
+function pickerReplies(input: string): { entries: Array<{ question: string; reply: string | null }>; cut: boolean } {
+  let cut = false;
+  const kept = (value: string): string => {
+    if (value.length <= MESSAGE_PICKER_MAX_CHARS) return value;
+    cut = true;
+    return value.slice(0, MESSAGE_PICKER_MAX_CHARS);
+  };
   try {
     const payload = JSON.parse(input) as {
       tool_input?: unknown; toolInput?: unknown; tool_response?: unknown; toolResponse?: unknown; picker_reply?: unknown;
@@ -390,32 +399,42 @@ function pickerReplies(input: string): Array<{ question: string; reply: string }
     let response = payload.picker_reply ?? payload.tool_response ?? payload.toolResponse;
     if (typeof response === "string") response = JSON.parse(response);
     const answers = response !== null && typeof response === "object" ? (response as Record<string, unknown>).answers : null;
-    if (answers === null || typeof answers !== "object" || Array.isArray(answers)) return [];
+    if (answers === null || typeof answers !== "object" || Array.isArray(answers)) return { entries: [], cut };
+    const picks = answers as Record<string, unknown>;
+    const replyOf = (value: unknown): string | null => {
+      const chosen = value !== null && typeof value === "object" && !Array.isArray(value)
+        ? (value as Record<string, unknown>).answers
+        : value;
+      const reply = (Array.isArray(chosen) ? chosen : [chosen])
+        .filter((pick): pick is string => typeof pick === "string" && pick.trim() !== "")
+        .join(", ");
+      return reply === "" ? null : kept(reply);
+    };
     const toolInput = payload.tool_input ?? payload.toolInput;
     const asked = toolInput !== null && typeof toolInput === "object" &&
         Array.isArray((toolInput as Record<string, unknown>).questions)
       ? (toolInput as { questions: unknown[] }).questions
       : [];
-    const shown = (key: string): string => {
-      for (const entry of asked) {
-        const question = entry !== null && typeof entry === "object" ? entry as Record<string, unknown> : {};
-        if (question.id === key && typeof question.question === "string") return question.question;
-      }
-      return key;
-    };
-    const replies: Array<{ question: string; reply: string }> = [];
-    for (const [key, value] of Object.entries(answers)) {
-      const picks = value !== null && typeof value === "object" && !Array.isArray(value)
-        ? (value as Record<string, unknown>).answers
-        : value;
-      const reply = (Array.isArray(picks) ? picks : [picks])
-        .filter((pick): pick is string => typeof pick === "string" && pick.trim() !== "")
-        .join(", ");
-      if (reply !== "") replies.push({ question: shown(key), reply });
+    const entries: Array<{ question: string; reply: string | null }> = [];
+    const used = new Set<string>();
+    for (const entry of asked) {
+      const question = entry !== null && typeof entry === "object" ? entry as Record<string, unknown> : {};
+      if (typeof question.question !== "string") continue;
+      // Claude Code keys answers by the question text, Codex by the question id.
+      const key = typeof question.id === "string" && question.id in picks
+        ? question.id
+        : question.question in picks ? question.question : null;
+      if (key !== null) used.add(key);
+      entries.push({ question: kept(question.question), reply: key === null ? null : replyOf(picks[key]) });
     }
-    return replies;
+    for (const [key, value] of Object.entries(picks)) {
+      if (used.has(key)) continue;
+      const reply = replyOf(value);
+      if (reply !== null) entries.push({ question: kept(key), reply });
+    }
+    return { entries, cut };
   } catch {
-    return [];
+    return { entries: [], cut };
   }
 }
 
@@ -696,14 +715,21 @@ try {
         ? (typedPrompt ? await messageParse(typedPrompt) : noWords)
         : { ...noWords, words: humanResponseText.trim() || null };
       const full = promptSubmitted ? typedPrompt : humanResponseText;
+      // Every stored string is cut (AIDA F5 on #2107: uncut words once put a record past the reader's cap).
+      const picker = promptSubmitted ? null : pickerReplies(input);
+      const words = parsed.words !== null && parsed.words.length > MESSAGE_TEXT_MAX_CHARS
+        ? parsed.words.slice(0, MESSAGE_TEXT_MAX_CHARS)
+        : parsed.words;
+      const cut = full.length > MESSAGE_TEXT_MAX_CHARS || words !== parsed.words || picker?.cut === true;
       messageId = saveMessage(projectDir, {
         session: sessionId || null,
         at: isoTimestamp(),
         source: promptSubmitted ? "prompt" : "picker",
         text: full.slice(0, MESSAGE_TEXT_MAX_CHARS),
-        ...(full.length > MESSAGE_TEXT_MAX_CHARS ? { cut: true as const } : {}),
-        picker: promptSubmitted ? null : pickerReplies(input),
+        ...(cut ? { cut: true as const } : {}),
+        picker: picker === null ? null : picker.entries,
         ...parsed,
+        words,
         applied,
       }).id;
     } catch {
@@ -825,7 +851,8 @@ try {
           // after the turn's words, which are kept at the shard's size just
           // after its row.
           if (pickerQuestion !== undefined && !notAReply) {
-            for (const { question, reply } of pickerReplies(input)) {
+            for (const { question, reply } of pickerReplies(input).entries) {
+              if (reply === null) continue; // a question left blank carried no pick
               appendAuditEntryUnlocked("QUESTION_REPLIED", {
                 ...(sessionId ? { Session: sessionId } : {}),
                 Question: question,

@@ -44,8 +44,11 @@ export interface StoredMessage {
   source: "prompt" | "picker" | "terminal";
   /** As the host delivered it, cut at MESSAGE_TEXT_MAX_CHARS (`cut` says so). An empty text is a prompt whose words the host did not pass on. */
   text: string;
-  /** What a question box carried back, one entry per question it asked, verbatim. */
-  picker: Array<{ question: string; reply: string }> | null;
+  /**
+   * What a question box carried back: one entry per question it asked, in the order shown, `reply` null where the
+   * person left a question blank. A pick the box reported for a question it did not list follows them.
+   */
+  picker: Array<{ question: string; reply: string | null }> | null;
   /** The person's own words: the text after the entry word and after any flags. Null for a command with no words. */
   words: string | null;
   /** The settings typed as flags, as the config setter names them ("depth" "minimal", "guard.review-freeze" "off"). */
@@ -57,9 +60,13 @@ export interface StoredMessage {
 }
 
 export const MESSAGE_TEXT_MAX_CHARS = 8000;
+/** A question box's question or reply is kept to this many characters. */
+export const MESSAGE_PICKER_MAX_CHARS = 2000;
 export const MESSAGE_MAX_RECORDS = 200;
 const MESSAGE_ID = /^[0-9a-f]{8}$/;
-const MESSAGE_MAX_BYTES = 64 * 1024;
+// A ceiling against a corrupt or foreign file, not a size the hook can reach: every string it stores is cut
+// (MESSAGE_TEXT_MAX_CHARS for the text and the words, MESSAGE_PICKER_MAX_CHARS per box entry).
+const MESSAGE_MAX_BYTES = 256 * 1024;
 const MESSAGE_RETENTION_MS = 24 * 60 * 60 * 1000;
 
 export function isMessageId(id: string): boolean {
@@ -82,6 +89,13 @@ function isPairList(value: unknown, first: string, second: string): boolean {
     typeof (entry as Record<string, unknown>)[second] === "string");
 }
 
+function isPickerList(value: unknown): boolean {
+  return Array.isArray(value) && value.every((entry) =>
+    entry !== null && typeof entry === "object" &&
+    typeof (entry as Record<string, unknown>).question === "string" &&
+    ((entry as Record<string, unknown>).reply === null || typeof (entry as Record<string, unknown>).reply === "string"));
+}
+
 function parseMessage(id: string, raw: unknown): StoredMessage | null {
   const message = raw as Partial<StoredMessage> | null;
   const route = message?.route as Partial<MessageRoute> | undefined;
@@ -91,7 +105,7 @@ function parseMessage(id: string, raw: unknown): StoredMessage | null {
     typeof message.at === "string" && !Number.isNaN(Date.parse(message.at)) &&
     (message.source === "prompt" || message.source === "picker" || message.source === "terminal") &&
     typeof message.text === "string" &&
-    (message.picker === null || isPairList(message.picker, "question", "reply")) &&
+    (message.picker === null || isPickerList(message.picker)) &&
     (message.words === null || typeof message.words === "string") &&
     isPairList(message.settings, "key", "value") &&
     route !== undefined && route !== null &&
@@ -154,13 +168,27 @@ export function mintMessageId(
   }
 }
 
+/** Every readable record of this project, oldest first (ties by id). */
+export function listMessages(projectDir: string): StoredMessage[] {
+  const messages: StoredMessage[] = [];
+  for (const id of recordIds(projectDir)) {
+    const message = readStoredMessage(projectDir, id);
+    if (message !== null) messages.push(message);
+  }
+  return messages.sort((a, b) => (a.at < b.at ? -1 : a.at > b.at ? 1 : a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+}
+
 /**
  * Store one message and return it with a fresh id. Older records are pruned
  * after the write, so a store failure never costs the message just received.
  */
 export function saveMessage(projectDir: string, message: Omit<StoredMessage, "id">): StoredMessage {
   const stored: StoredMessage = { ...message, id: mintMessageId(projectDir) };
-  writeRecordFileNoFollow(projectDir, messageRel(projectDir, stored.id), `${JSON.stringify(stored)}\n`);
+  const serialized = `${JSON.stringify(stored)}\n`;
+  if (Buffer.byteLength(serialized, "utf-8") > MESSAGE_MAX_BYTES) {
+    throw new Error("message record over the size the reader accepts");
+  }
+  writeRecordFileNoFollow(projectDir, messageRel(projectDir, stored.id), serialized);
   pruneExpiredMessages(projectDir);
   return stored;
 }
