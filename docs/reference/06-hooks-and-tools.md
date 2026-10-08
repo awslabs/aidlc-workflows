@@ -2275,12 +2275,16 @@ under the approval-content projection, and the current instructions byte for
 byte. A continuation uses `Current plan` and `Current unit-test instructions`
 headings, emits a stand-aside notice, and never labels edited content
 `Approved`. When the build already started under the approval that is current
-now (its receipt is at `generation`) and the plan file has ticked steps (or,
-with none ticked, steps whose named files changed since the build started), the
+now (its receipt is at `generation`) and anything in the project changed since
+it started, the
 brief adds a `## Progress before the interruption` section between the marker
-lines and the approved plan: the done steps, each file they name in a code span
+lines and the approved plan: the done steps (the ones the plan file ticks, or,
+with none ticked, the ones whose named files changed since the build started),
+each file they name in a code span
 that is not in the project (a fact; the worker decides whether that step is
-redone), and the step to continue at. It
+redone), and the step to continue at. When neither the ticks nor the named files
+say what is done, the section says the build wrote code and the plan marks none
+of its steps, and asks for each finished step to be ticked. It
 is a hint for the worker, never evidence; a continuation, a swarm batch, or a
 new approval gets no such section. When a build starts under a new approval
 (generation start moves its receipt from `approved` to `generation`), the engine

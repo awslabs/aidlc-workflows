@@ -86,7 +86,10 @@ way (a model or provider error, the editor closed), the next run of the same
 plan picks up at the first unticked step, and you see one line such as
 "Picking up unit-2's code at step 5 of 9 (1-4 done)." When nothing is ticked but
 the files the first steps name were written, it picks up after them instead
-("(1-4 wrote their files)"). The developer checks the files each done step
+("(1-4 wrote their files)"). When the code is written and nothing says which
+steps are done, you see "Picking up unit-2's code: the plan marks none of its 9
+steps done, checking what is built.", and the developer ticks the steps it
+finished. The developer checks the files each done step
 names and redoes a step only when a file it should have made is not there.
 Redo, Request Changes, and approving the plan again start its steps fresh: the
 plan's ticks are cleared when the new build starts, and only the ticks it makes

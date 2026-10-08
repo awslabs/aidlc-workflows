@@ -261,6 +261,8 @@ import {
   personSpokeSinceGate,
   planApprovalAskIsOpen,
   recordDir,
+  renderReviewRequestCommand,
+  type FreshReviewReceipts,
   engineDir,
   isPlainObject,
   parseCeremonySetting,
@@ -9515,18 +9517,20 @@ function nextUncoveredUnit(
   return { unit: uncovered[0], uncovered };
 }
 
-// The step a Unit still owes when its work for this stage is done: every
-// required file is on disk and a fresh final review of them is recorded in this
-// attempt (READY, or NOT-READY once its review turns are spent, which goes to
-// the person as it is), but its completion receipt was never written (receipt mode settles a
-// Unit only on UNIT_COMPLETED). Handing back the stage body, or "run next",
-// only loops, so the step names the receipt's exact commands. The fresh review
-// is the evidence the files are this attempt's: a reopened or redone Unit's
-// earlier files never carry one. With reviews off (#2021) the evidence is that
-// this is the stage's first attempt for the Unit: nothing has moved its floor
-// since the workflow (or the stage) began, so no earlier attempt left files.
-// Null whenever anything but the receipt is left, or a wave owns the stage's
-// completions.
+// The step a Unit still owes when its work for this stage is on disk: every
+// required file is there, but one of the records that settles the Unit is not.
+// Either the review (never asked for, waiting for its verdict, or asking for
+// repairs) or, with the review recorded, the completion receipt (receipt mode
+// settles a Unit only on UNIT_COMPLETED). Handing back the stage body, or "run
+// next", only loops: the files get built again and nothing says which record is
+// missing, which is what sent live runs round the same Unit step with no reason
+// given. So the step names the exact commands instead. A fresh final review
+// (READY, or NOT-READY once its review turns are spent, which goes to the
+// person as it is) is the evidence the files are this attempt's; without one,
+// as with reviews off (#2021), the evidence is that this is the stage's first
+// attempt for the Unit: nothing has moved its floor since the workflow (or the
+// stage) began, so no earlier attempt left files. Null whenever anything but
+// those records is left, or a wave owns the stage's completions.
 function unitReceiptOnlyStep(
   projectDir: string,
   node: GraphStage,
@@ -9556,13 +9560,59 @@ function unitReceiptOnlyStep(
   } else {
     const review = freshReviewReceipts(projectDir, stateContent, node, { reviewClass });
     // Only final verdicts are kept, the same evidence `unit complete` accepts.
-    if (!review.unitVerdicts.has(unit)) return null;
+    if (!review.unitVerdicts.has(unit)) {
+      // The Unit's files are written and its review is what the stage still
+      // lacks. Handing the stage body back builds them again and says nothing
+      // about either, so the step names the review this attempt is waiting
+      // for. A review whose receipt went stale has its own recovery path and
+      // keeps it; a later attempt's files are not evidence of work done, as
+      // with reviews off.
+      if (review.unitStale.has(unit) || review.unitStaleProgress.has(unit)) return null;
+      if (!unitFirstStageAttempt(projectDir, node.slug, unit, stateContent)) return null;
+      return unitReviewStep(projectDir, node, unit, review);
+    }
   }
   const command = (action: string): string =>
     `\`${renderEngineInvocation({ route: "state", args: ["unit", action, "--stage", node.slug, "--unit", unit] })}\``;
   const steps = own ? command("complete") : `${command("start")}, then ${command("complete")}`;
   const done = reviewClass === "none" ? "written" : "written and reviewed";
   return `Unit "${unit}"'s ${node.name} work is ${done}, but its completion is not recorded: run ${steps}.`;
+}
+
+// The review a Unit's stage is still waiting for, as the step that gets it:
+// the first request when none was asked for in this attempt, the verdict when
+// one is waiting, and the next pass when the reviewer asked for repairs. The
+// same step the Construction checkpoint names when it is the checkpoint that
+// is not ready, said here for a stage whose Unit is otherwise done.
+function unitReviewStep(
+  projectDir: string,
+  node: GraphStage,
+  unit: string,
+  review: FreshReviewReceipts,
+): string {
+  const reviewer = node.reviewer as string;
+  const request = (iteration: number, retryPending = false): string =>
+    `\`${renderReviewRequestCommand({
+      projectDir,
+      stage: node.slug,
+      reviewer,
+      unit,
+      iteration,
+      ...(retryPending ? { retryPending: true } : {}),
+    })}\``;
+  const work = `Unit "${unit}"'s ${node.name} work is written`;
+  const pending = review.unitPending.get(unit);
+  if (pending === undefined) {
+    const iteration = (review.unitIterations.get(unit) ?? 0) + 1;
+    return `${work}, but its review was never asked for: request it with ${request(iteration)}, ` +
+      "then record the verdict.";
+  }
+  if (pending.state === "repair-required" && pending.didNotFinish !== true) {
+    return `${work} and its review asked for repairs: make them, then request pass ` +
+      `${pending.iteration + 1} with ${request(pending.iteration + 1)} and record the verdict.`;
+  }
+  return `${work} and its review is waiting for a verdict: record the verdict for pass ` +
+    `${pending.iteration}, or ask the reviewer again with ${request(pending.iteration, true)}.`;
 }
 
 // True when the Unit's receipts for this stage are read against the first

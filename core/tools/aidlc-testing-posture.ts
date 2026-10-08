@@ -1769,7 +1769,12 @@ export function restoreApprovedPlan(projectDir: string, target: CodeGenerationTa
 // A worker that built steps without ticking them leaves no ticks. Then the
 // files the steps name are the record: the unbroken run of steps from step 1
 // whose named files all changed since the build started is where the build got
-// to, and it picks up at the first step that breaks that run.
+// to, and it picks up at the first step that breaks that run. When that run is
+// empty, because no step names a file the engine can check or the first one's
+// files did not change, the brief and the line say what is still certain: the
+// build wrote code, the plan marks none of its steps, and the finished ones are
+// the worker's to tick. Saying nothing re-emitted the starting line as if the
+// build had not run, which left the agent with no step to take.
 //
 // "Started on the plan as it is now" is the receipt the questions file names,
 // at status `generation`, when the plan and instructions on disk are the
@@ -1811,8 +1816,11 @@ export interface CodeGenerationResume {
   steps: PlanStep[];
   /** 1-based numbers of the steps done: ticked, or (with none ticked) whose named files were written. */
   ticked: number[];
-  /** How the done steps are known: the plan file's ticks, or the files the steps name. */
-  from: "ticks" | "files";
+  /** How the done steps are known: the plan file's ticks, or the files the steps
+   *  name. With `unmarked` neither says: the build wrote code, the plan ticks
+   *  nothing, and no step names a file the engine can check, so which steps are
+   *  done is the worker's to mark and `ticked` is empty. */
+  from: "ticks" | "files" | "unmarked";
   /** Done steps naming files that are not in the project: a fact for the worker to judge. */
   missing: Array<{ step: number; paths: string[] }>;
   /** The first step not done, or null when every step is done. */
@@ -1926,11 +1934,23 @@ export function codeGenerationResume(
     let next: number | null = steps.findIndex((step) => !step.ticked) + 1 || null;
     let from: CodeGenerationResume["from"] = "ticks";
     if (ticked.length === 0) {
-      const written = stepsWithWrittenFiles(projectDir, receipt.certifiedSourceSha256, steps);
-      if (written === 0) return null;
-      ticked = Array.from({ length: written }, (_, index) => index + 1);
-      next = written < steps.length ? written + 1 : null;
-      from = "files";
+      const run = stepsWithWrittenFiles(projectDir, receipt.certifiedSourceSha256, steps);
+      // Nothing changed since the build started: it has not got anywhere, so
+      // there is nothing to pick up and the build starts as it always did.
+      if (!run.changed) return null;
+      if (run.written === 0) {
+        // The build wrote code and nothing says which steps are done: no tick,
+        // and no step naming a file the engine can check (or the first step's
+        // files did not change). Which steps are done is the worker's to mark,
+        // so the engine says only that none is marked.
+        if (steps.length === 0) return null;
+        next = 1;
+        from = "unmarked";
+      } else {
+        ticked = Array.from({ length: run.written }, (_, index) => index + 1);
+        next = run.written < steps.length ? run.written + 1 : null;
+        from = "files";
+      }
     }
     // A multi-repo intent's plan may name paths inside a repository, and a step
     // may name one of this stage's own record files. A bare file name (no
@@ -1966,16 +1986,23 @@ function buildContentFingerprint(plan: string, instructions: string, authority: 
 /**
  * With no step ticked: the unbroken run of steps from step 1 whose named files
  * all changed since the build started (the source its receipt certified at
- * generation start), or 0 when none did or the start's file listing was not
- * kept. The run stops at the first step that names no file or whose files did
- * not all change: a later step naming a file an earlier one touched
- * (package.json, a README) says nothing about the steps between. A bare file
- * name matches a changed file of that name in any folder.
+ * generation start), and whether anything changed since then at all. The run
+ * stops at the first step that names no file or whose files did not all change:
+ * a later step naming a file an earlier one touched (package.json, a README)
+ * says nothing about the steps between. `written` is 0 when that run is empty,
+ * which a plan naming no checkable file always gives; `changed` is false when
+ * nothing changed or the start's file listing was not kept, so the build has not
+ * got anywhere to pick up. A bare file name matches a changed file of that name
+ * in any folder.
  */
-function stepsWithWrittenFiles(projectDir: string, startedSource: string, steps: PlanStep[]): number {
+function stepsWithWrittenFiles(
+  projectDir: string,
+  startedSource: string,
+  steps: PlanStep[],
+): { written: number; changed: boolean } {
   const current = workspaceSourceState(projectDir);
   const changed = workspaceSourceChangedPaths(projectDir, CODE_GENERATION_STAGE, startedSource, current);
-  if (changed === null || changed.length === 0) return 0;
+  if (changed === null || changed.length === 0) return { written: 0, changed: false };
   const names = new Set(changed.map((path) => basename(path)));
   const wrote = (path: string): boolean => path.endsWith("/")
     ? changed.some((file) => file.startsWith(path) || file.includes(`/${path}`))
@@ -1984,7 +2011,7 @@ function stepsWithWrittenFiles(projectDir: string, startedSource: string, steps:
       : names.has(path);
   let written = 0;
   while (written < steps.length && steps[written].paths.length > 0 && steps[written].paths.every(wrote)) written++;
-  return written;
+  return { written, changed: true };
 }
 
 /**
@@ -2064,6 +2091,18 @@ function progressSection(resume: CodeGenerationResume): string {
   const total = resume.steps.length;
   const lines = ["", "## Progress before the interruption", ""];
   const unticked = "the approved plan below shows none ticked, because ticks are not part of the approval";
+  // The build wrote code and marked nothing: no step is claimed done, so there
+  // is no file to check for one and no step to continue at that the engine can
+  // name. The worker reads the plan against the project and marks what it did.
+  if (resume.from === "unmarked") {
+    lines.push(
+      `This plan's build already wrote code, and the plan file ticks none of its ${total} steps (${unticked}). ` +
+        "Check each step against the files in the project, tick the box of each one that is done, " +
+        "and carry on from the first that is not.",
+      "",
+    );
+    return `${lines.join("\n")}\n`;
+  }
   if (resume.from === "files") {
     lines.push(
       `This plan's build stopped part way. The plan file ticks none of its ${total} steps, but the files ` +
@@ -2130,6 +2169,9 @@ export function codeGenerationResumeNarration(
   // heading the next one sits under, so every number matches the plan file.
   const grouped = stepHeadings(resume.steps) !== null;
   const item = grouped ? "task" : "step";
+  if (resume.from === "unmarked") {
+    return `Picking up ${whose}: the plan marks none of its ${total} ${item}s done, checking what is built.`;
+  }
   if (resume.next === null) {
     return `Picking up ${whose}: all ${total} ${item}s ${written ? "wrote their files, checking them" : "are done, checking their files"}.`;
   }

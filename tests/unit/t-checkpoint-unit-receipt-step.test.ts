@@ -1,4 +1,4 @@
-// covers: function:unitReceiptOnlyStep, subcommand:aidlc-orchestrate:next, subcommand:aidlc-state:unit, audit:UNIT_COMPLETED
+// covers: function:unitReceiptOnlyStep, function:unitReviewStep, subcommand:aidlc-orchestrate:next, subcommand:aidlc-state:unit, audit:UNIT_COMPLETED
 //
 // Issue #2021: a new solo workflow (Construction Checkpoints on, unit-major,
 // autonomous) where the agent writes a Unit's files but never runs the Unit's
@@ -189,6 +189,33 @@ describe("t-checkpoint-unit-receipt-step: a checkpoint-enabled Unit done without
   test("files and a READY review: next names start then complete, and the Unit moves on", () => {
     project(null);
     bodyWithoutReceipts(true);
+    followStep(next(proj), [START, COMPLETE]);
+  });
+
+  test("files and no review: next names the review step, not the stage again", () => {
+    // From live runs: the Unit's files were written and its review was never
+    // recorded, so every `next` handed back the same Unit step ("Now working
+    // on <unit>: the <stage> pass.") with nothing about the files or the
+    // review. The step names the review the stage is waiting for.
+    project(null);
+    const first = next(proj);
+    expect(first.kind, nexts.join("\n")).toBe("run-stage");
+    expect(first.stage).toBe(SLUG);
+    writeUnitArtifacts(proj, FIRST);
+    const step = next(proj);
+    expect(step.kind, nexts.join("\n")).toBe("print");
+    const message = String(step.message);
+    expect(message).toContain(
+      `Unit "${FIRST}"'s Functional Design work is written, but its review was never asked for: request it with`,
+    );
+    expect(message).toContain(
+      `review --stage ${SLUG} --reviewer ${findStageBySlug(SLUG)!.reviewer} --unit ${FIRST} --iteration 1`,
+    );
+    expect(message).toContain("then record the verdict.");
+    // Every later `next` names the same step: no loop back to the stage body.
+    expect(next(proj)).toEqual(step);
+    // With the review recorded, the receipt step follows and the Unit moves on.
+    reviewThroughLog(proj, FIRST);
     followStep(next(proj), [START, COMPLETE]);
   });
 

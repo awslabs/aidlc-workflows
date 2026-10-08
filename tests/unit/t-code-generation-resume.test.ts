@@ -389,6 +389,40 @@ describe("an interrupted build picks up at the first unticked step", () => {
     expect(next(proj).narration ?? "").not.toContain(PICK_UP);
   });
 
+  test("code written and no step ticked: the build says so and asks for the finished steps to be ticked", () => {
+    // From a live run: the plan was approved, the code and tests were written,
+    // and no step was ticked. The engine checks only files a step names in a
+    // code span that reads as a path, so a plan whose steps name none left
+    // nothing to count: `next` re-emitted the same start line as if the build
+    // had not run, and nothing named a step to take.
+    const proj = project();
+    const steps = Array.from({ length: 9 }, (_, index) => `Step ${index + 1}: wire up storage part ${index + 1}`);
+    startedBuildOf(proj, steps);
+    mkdirSync(join(proj, "src", "storage"), { recursive: true });
+    for (const part of [1, 2, 3]) {
+      writeFileSync(join(proj, "src", "storage", `part${part}.ts`), `export const part${part} = ${part};\n`, "utf-8");
+    }
+    const resumed = next(proj);
+    expect(resumed.kind).toBe("run-stage");
+    expect(resumed.narration).toBe(`Picking up ${UNIT}'s code: the plan marks none of its 9 steps done, checking what is built.`);
+    // The same again: the line does not go back to the starting line.
+    expect(next(proj).narration).toBe(resumed.narration);
+    const section = brief(proj);
+    expect(section).toContain("## Progress before the interruption");
+    expect(section).toContain(
+      "This plan's build already wrote code, and the plan file ticks none of its 9 steps " +
+        "(the approved plan below shows none ticked, because ticks are not part of the approval). " +
+        "Check each step against the files in the project, tick the box of each one that is done, " +
+        "and carry on from the first that is not.",
+    );
+    // Nothing claims a step is done, so no step's files are reported missing.
+    expect(section).not.toContain("not in the project");
+    expect(section).not.toContain("Continue at step");
+    // Once the worker ticks what it finished, the ordinary pick-up takes over.
+    tickOnly(proj, 1, 2, 3);
+    expect(next(proj).narration).toBe(`Picking up ${UNIT}'s code at step 4 of 9 (1-3 done).`);
+  });
+
   test("with Plan Approval off, an interrupted build picks up the same way", () => {
     // express and poc build without asking: the engine records the build as
     // started without approval, and a resume still counts its ticks.

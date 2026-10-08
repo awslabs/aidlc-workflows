@@ -415,7 +415,10 @@ Include in the delegation prompt:
   ticks or, with none ticked, the ones whose named files changed since the build
   started), any file a done step names that is not in the project (the step may
   say not to add it: redo the step only if it should have made that file), and
-  the step to continue at
+  the step to continue at. When neither says what is done (no tick, and no step
+  naming a file the engine can check), that section says the build wrote code
+  and the plan marks none of its steps: check each step against the project,
+  tick the box of each one that is done, and carry on from the first that is not
 - Project workspace details (languages, frameworks, conventions from aidlc-state.md)
 - Instructions to execute each plan step sequentially and mark checkboxes as
   completed, starting where that progress section says when the output has one.

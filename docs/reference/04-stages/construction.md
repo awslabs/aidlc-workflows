@@ -1019,7 +1019,9 @@ This stage has a **two-part structure**: planning followed by generation.
    "Generating unit-2's code for 9 plan steps. This may take several minutes
    depending on project complexity. I'll show a summary when complete." at
    the start, and where an interrupted build picks up ("Picking up unit-2's
-   code at step 5 of 9 (1-4 done)."). When the plan groups its tasks under
+   code at step 5 of 9 (1-4 done)."; with the code written and no step marked,
+   "Picking up unit-2's code: the plan marks none of its 9 steps done, checking
+   what is built."). When the plan groups its tasks under
    "Step N" headings, both lines count the tasks and name the heading
    ("Generating unit-2's code for the 19 tasks in 4 plan steps ...", "Picking
    up unit-2's code at task 7 of 19, in Step 3 (tasks 1-6 done)."). The agent
@@ -1056,7 +1058,10 @@ This stage has a **two-part structure**: planning followed by generation.
      whose named files changed since the build started), each file a done step
      names in a code span that is not in the project (a bare file name counts
      when a file of that name is anywhere in it), stated as a fact for the
-     worker to judge, and the step to continue at. It appears only when the
+     worker to judge, and the step to continue at. When neither the ticks nor
+     the named files say what is done, it says the build wrote code and the plan
+     marks none of its steps, and asks for each finished step to be ticked.
+     It appears only when the
      build already started on the plan and instructions as they are now (the
      receipt for this target, stage attempt, and approved content is at
      `generation`, and the content on disk is the approved content or, when
