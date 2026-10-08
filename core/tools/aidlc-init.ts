@@ -216,6 +216,7 @@ import {
   sessionModelsDetail,
   sessionSetsAgentModels,
   type AgentTiers,
+  type ModelAgentPolicy,
   type ModelEffort,
   type ModelGroup,
   type ModelHarness,
@@ -1006,6 +1007,7 @@ function modelPolicyHelp(): string {
     "  --reviewing-effort <low|medium|high|xhigh|max>",
     "  --writing-up-effort <low|medium|high|xhigh|max>",
     "  --agent <name> [--effort <value>] [--model <raw-id>]  (one or both)",
+    "  --agent <name> --effort default | --model default   remove that agent's own setting, so the preset or group applies again",
     "  --reset",
     "",
     heading("KIRO CLI", out),
@@ -1291,18 +1293,22 @@ function applyModelsFlags(
   }
   if (agent && !effort && !model) throw new Error("--agent requires --effort <value> or --model <raw-id>");
   if (!agent && (effort || model)) throw new Error("--effort and --model require --agent <name>");
-  if (effort && !isModelEffort(effort)) {
-    throw new Error(`--effort must be one of ${MODEL_EFFORTS.join(", ")}`);
+  if (effort && effort !== "default" && !isModelEffort(effort)) {
+    throw new Error(`--effort must be one of ${MODEL_EFFORTS.join(", ")}, or default to remove the agent's own effort`);
   }
   // A model alone leaves the agent's effort where it was, and an effort alone
-  // its model.
+  // its model. `default` removes that one setting of the agent's, so the
+  // preset or group applies to it again: the per-key way back from a change.
   if (agent && (effort || model)) {
     next.agents ??= {};
-    next.agents[agent] = {
-      ...(next.agents[agent] ?? {}),
-      ...(effort ? { effort: effort as ModelEffort } : {}),
-      ...(model ? { model } : {}),
-    };
+    const own: ModelAgentPolicy = { ...(next.agents[agent] ?? {}) };
+    if (effort === "default") delete own.effort;
+    else if (effort) own.effort = effort as ModelEffort;
+    if (model === "default") delete own.model;
+    else if (model) own.model = model;
+    if (Object.keys(own).length === 0) delete next.agents[agent];
+    else next.agents[agent] = own;
+    if (Object.keys(next.agents).length === 0) delete next.agents;
   }
   return modelPolicyIsEmpty(next) ? null : normalizeModelPolicy(next);
 }
@@ -10350,6 +10356,15 @@ const SHOWN_MODEL_ID = /^[A-Za-z0-9][A-Za-z0-9._:/@[\]+-]{0,199}$/;
  * Every setting a settings file records apart from bypasses, keyed by where it
  * lives. `args` is empty when no one command sets the value back by itself.
  */
+/** The `--agent <name> --effort default` (or `--model default --harness <h>`) that removes one agent key, from its leaf id. */
+function agentDefaultArgs(id: string): string[] | null {
+  const effort = /^models\.agents\.([^.]+)\.effort$/.exec(id);
+  if (effort) return ["--agent", effort[1], "--effort", "default"];
+  const model = /^models\.agents\.([^.]+)\.model\.([^.]+)$/.exec(id);
+  if (model) return ["--agent", model[1], "--model", "default", "--harness", model[2]];
+  return null;
+}
+
 function settingLeaves(file: AidlcSettingsFile | null): Map<string, SettingLeaf> {
   const leaves = new Map<string, SettingLeaf>();
   const flags = file?.flags;
@@ -10463,10 +10478,14 @@ function settingsChangeLines(
       if (ids.length === 0) continue;
       // --reset removes the whole section, so it is the undo only when the
       // file had none of it before (saved profiles included) and, for flags,
-      // it would not also clear a bypass.
+      // it would not also clear a bypass. Never for one agent's key: run later,
+      // it would take every model setting recorded since; `default` removes
+      // that one key instead.
       const before = change.previous?.[section];
       const sectionWasEmpty = !before || Object.keys(before).every((key) => key === "schemaVersion");
-      const resetUndoes = sectionWasEmpty && (section === "models" || after.size === 0);
+      const agentKey = (id: string) => id.startsWith("models.agents.");
+      const resetUndoes = sectionWasEmpty &&
+        (section === "models" ? !ids.some(agentKey) : after.size === 0);
       if (resetUndoes) {
         lines.push(
           `Recorded ${ids.map((id) => shownValue(`${now.get(id)?.label} ${now.get(id)?.shown}`)).join(", ")} in ${file}. To undo: ${
@@ -10479,16 +10498,24 @@ function settingsChangeLines(
         const old = was.get(id);
         const fresh = now.get(id);
         const label = old?.label ?? fresh?.label ?? id;
+        // A new key of one agent's: `default` puts it back to the preset or group.
+        const agentDefault = !old && agentKey(id) ? agentDefaultArgs(id) : null;
         const undo = old && old.args.length > 0
           ? printableArgs(old.args) ? ` To undo: ${command(section, old.args, change.target)}` : ` ${UNPRINTABLE_UNDO}`
           : old && old.shown !== old.value
           ? ` ${UNPRINTABLE_UNDO}`
           : old
           ? ""
+          : agentDefault
+          ? ` To undo: ${command(section, agentDefault, change.target)}`
           : id === "flags.questionRetentionDays"
           ? ` To undo: ${command(section, ["--question-retention-days", "unlimited"], change.target)}`
           : " It was not set there before.";
-        lines.push(shownValue(`${label}: ${old?.shown ?? "not set"} -> ${fresh?.shown ?? "not set"} in ${file}.${undo}`));
+        // The file's first model setting keeps the "Recorded" shape the
+        // section-wide undo used, with the per-key command.
+        lines.push(shownValue(agentDefault && sectionWasEmpty
+          ? `Recorded ${label} ${fresh?.shown ?? ""} in ${file}.${undo}`
+          : `${label}: ${old?.shown ?? "not set"} -> ${fresh?.shown ?? "not set"} in ${file}.${undo}`));
       }
     }
   }

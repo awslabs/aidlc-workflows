@@ -602,7 +602,8 @@ model, without Opus:
   works while a workflow is open too: config rewrites the developer agent's
   file, and the harness uses it the next time it starts the agent (Claude Code
   does so at the agent's next start; a step already running keeps what it
-  started with). The command prints the one that puts it back.
+  started with). The command prints the one that puts it back (for one
+  agent's setting, `--effort default`, which removes only that setting).
 - **Change model or effort between stages, in a new chat.** See
   [Changing Model Mid-Workflow](11-session-management.md#changing-model-mid-workflow).
 

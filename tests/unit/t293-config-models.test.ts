@@ -917,7 +917,9 @@ describe("t293 config models CLI", () => {
       "config", "models", "--project-dir", profiled, "--project", "--agent", "developer", "--effort", "high", "--yes",
     ], profiled, runtimeEnv());
     expect(first.status, first.stdout + first.stderr).toBe(0);
-    expect(first.stdout).toContain("developer effort: not set -> high in aidlc.settings.json. It was not set there before.");
+    // One agent's new key has its own way back: `default` removes just that key.
+    expect(first.stdout).toContain("developer effort: not set -> high in aidlc.settings.json. To undo: ");
+    expect(first.stdout).toContain("config models --agent developer --effort default --project --yes");
     expect(first.stdout).not.toContain("--reset");
     // A saved profile is named too, new or replaced; no one command puts an
     // earlier one back, so a replaced one has no undo of its own.
@@ -973,6 +975,42 @@ describe("t293 config models CLI", () => {
     const named = run([...request, "--harness", "claude"], project, runtimeEnv());
     expect(named.status, named.stdout + named.stderr).toBe(0);
     expect(named.stdout).toContain("developer effort: not set -> high in aidlc.settings.json.");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("one agent's setting has a per-key undo: `default` removes it, and --reset is never the undo for an agent key", () => {
+    const project = install("claude");
+    const models = (...args: string[]) => run(["config", "models", "--project-dir", project, "--project", ...args, "--yes"], project, runtimeEnv());
+    const agents = () => (projectSettings(project).models as { agents?: Record<string, { effort?: string; model?: Record<string, string> }> } | undefined)?.agents;
+    // The file's first model setting: the undo removes that one key, not the section.
+    const first = models("--agent", "developer", "--effort", "high");
+    expect(first.status, first.stdout + first.stderr).toBe(0);
+    expect(first.stdout).toContain("Recorded developer effort high in aidlc.settings.json. To undo: ");
+    expect(first.stdout).toContain("config models --agent developer --effort default --project --yes");
+    expect(first.stdout).not.toContain("--reset");
+    // A second agent beside it gets its own per-key undo too.
+    const second = models("--agent", "architect", "--effort", "low");
+    expect(second.status, second.stdout + second.stderr).toBe(0);
+    expect(second.stdout).toContain("architect effort: not set -> low in aidlc.settings.json. To undo: ");
+    expect(second.stdout).toContain("config models --agent architect --effort default --project --yes");
+    expect(second.stdout).not.toContain("It was not set there before.");
+    // Running the first undo removes only the developer's effort.
+    const undone = models("--agent", "developer", "--effort", "default");
+    expect(undone.status, undone.stdout + undone.stderr).toBe(0);
+    expect(undone.stdout).toContain("developer effort: high -> not set in aidlc.settings.json. To undo: ");
+    expect(undone.stdout).toContain("config models --agent developer --effort high --project --yes");
+    expect(agents()?.developer?.effort).toBeUndefined();
+    expect(agents()?.architect?.effort).toBe("low");
+    // A model has the same way back; the agent's effort stays.
+    expect(models("--agent", "architect", "--model", "provider/raw-id").status).toBe(0);
+    expect(agents()?.architect?.model?.claude).toBe("provider/raw-id");
+    const modelGone = models("--agent", "architect", "--model", "default");
+    expect(modelGone.status, modelGone.stdout + modelGone.stderr).toBe(0);
+    expect(agents()?.architect?.model?.claude).toBeUndefined();
+    expect(agents()?.architect?.effort).toBe("low");
+    // `default` with nothing of the agent's recorded changes nothing and says so.
+    const nothing = models("--agent", "developer", "--effort", "default");
+    expect(nothing.status, nothing.stdout + nothing.stderr).toBe(0);
+    expect(nothing.stdout).toContain("model policy unchanged");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("on Copilot a model change while a workflow runs is recorded without claiming the agents use it", () => {
