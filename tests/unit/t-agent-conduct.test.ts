@@ -65,6 +65,19 @@ describe("t-agent-conduct", () => {
   // wrote a "lesson" into Copilot's memory tool outside the project (W4-VC), and on Kiro IDE
   // every pipe, `;`, `echo` or `Select-String` the agent adds to an AI-DLC command is one
   // more approval card for the person (kiro-ide-win F4).
+  // The conductor persona (conductor.md, which carries the rule) is baked into the FIRST
+  // run-stage of a workflow only, so a lead that resumes work in a new chat never gets it;
+  // the skill is what the lead always has, so the one sentence about where files go rides
+  // in every skill's "run the engine" paragraph too.
+  test("every skill tells the lead that its files stay inside the project", () => {
+    for (const harness of ["claude", "codex", "copilot", "cursor", "kiro-ide", "kiro", "opencode"]) {
+      const skill = readFileSync(join(REPO_ROOT, "harness", harness, "skills", "aidlc", "SKILL.md"), "utf-8");
+      expect(skill, harness).toMatch(
+        /Run the engine binary directly via [^.]*\. Every file you make stays inside the project \(nothing in \/tmp or any folder outside it\), and a command's output is read from the tool result, never sent to a file\./,
+      );
+    }
+  });
+
   test("the Copilot and Kiro IDE skills carry their own conduct sentence", () => {
     const copilot = readFileSync(join(REPO_ROOT, "harness", "copilot", "skills", "aidlc", "SKILL.md"), "utf-8");
     expect(copilot).toContain("never into Copilot's memory tool");
