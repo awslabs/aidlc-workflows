@@ -6129,6 +6129,34 @@ describe("t218 one card runs the checks that had their own cards (#2022)", () =>
 });
 
 describe("t218 enforce-approval-gate refusal names doctor's trust step", () => {
+  // The prompt hook ran for this work (its heartbeat is fresh) and the gate the
+  // agent just opened has no reply yet: the floor says to end the turn and
+  // nothing about a missed reply, so the person is never sent to trust and
+  // reload a window for an answer they have not given.
+  test("with the prompt hook's heartbeat fresh, the floor says the person has not answered yet and names no trust step", () => {
+    const dir = scratchProject(true);
+    try {
+      const statePath = seededStateFile(dir);
+      writeFileSync(
+        statePath,
+        readFileSync(statePath, "utf-8").replace("- [-] requirements-analysis", "- [?] requirements-analysis"),
+      );
+      appendStageStarted(dir, "requirements-analysis", "2026-01-01T00:00:00Z");
+      const health = join(seededRecordDir(dir), ".aidlc-engine", "hooks-health");
+      mkdirSync(health, { recursive: true });
+      writeFileSync(join(health, "record-human-turn.last"), `${new Date().toISOString().replace(/\.\d{3}Z$/, "Z")}\n`);
+      const r = runIde(dir, "enforce-approval-gate", null, { AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "0" });
+      expect(r.code, r.stderr).toBe(2);
+      expect(r.stderr).toContain("An approval is waiting for the person's answer, so nothing runs until they give it: end the turn.");
+      expect(r.stderr).toContain("The person has not answered yet: end your turn; their next reply answers it.");
+      for (const words of ["not recorded", "trust this folder", "Reload Window", "doctor", "hook"]) {
+        expect(r.stderr).not.toContain(words);
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test("an open gate with no human turn blocks and names the step doctor names", () => {
     const dir = scratchProject(true);
     try {
