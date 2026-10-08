@@ -36,7 +36,9 @@ afterEach(() => {
   }
 });
 
-const isRoot = typeof process.getuid === "function" && process.getuid() === 0;
+// Permission-based unreadability only reproduces for a non-root user on a
+// POSIX host: root reads through mode 0, and Windows has no mode 0 at all.
+const cannotDenyRead = (typeof process.getuid === "function" && process.getuid() === 0) || process.platform === "win32";
 
 function sourceProject(): string {
   const project = createTestProject();
@@ -93,7 +95,7 @@ describe("t-source-walk-vanished-file: a file that disappears or moves during th
     expect(lastWorkspaceSourceFailure()).toMatchObject({ code: "unreadable", path: "src/flaky.dart" });
   });
 
-  test.skipIf(isRoot)("a file the walk may not read still fails closed as unreadable", () => {
+  test.skipIf(cannotDenyRead)("a file the walk may not read still fails closed as unreadable", () => {
     const project = sourceProject();
     const locked = join(project, "src", "locked.dart");
     writeFileSync(locked, "int locked() => 1;\n");
