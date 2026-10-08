@@ -17,6 +17,11 @@ describe("the Codex composer dispatch waits once", () => {
   test("the authored Codex composer annex tells the lead to wait once, never poll", () => {
     const body = readFileSync(join(REPO_ROOT, "harness", "codex", "skills", "aidlc", "composer.md"), "utf-8");
     expect(body).toMatch(WAIT_ONCE);
+    // A second wait only while the composer still runs; a composer that ended
+    // on a status line gets one message, then the person is told. No loop.
+    expect(body).toMatch(/If the wait timed out and the composer is still running, wait again/);
+    expect(body).toMatch(/if the composer finished without the proposal, send it one message asking for the proposal, and if that fails too, tell the person/);
+    expect(body).not.toMatch(/wait again only when it returns without the proposal/);
     expect(body).toMatch(/never poll in short waits/);
   });
 
