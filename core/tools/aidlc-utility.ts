@@ -412,6 +412,7 @@ import {
   personaTwinRels,
   projectDiffPlan,
   tomlFragmentText,
+  withFileLineEndings,
 } from "./aidlc-plugin.ts";
 import { executePlan } from "./aidlc-transaction.ts";
 import {
@@ -1295,28 +1296,31 @@ function stripDisabledPluginContributions(
       for (const f of readdirSync(dir).filter((name) => name.endsWith(".md")).sort()) {
         const path = join(dir, f);
         const before = readFileSync(path, "utf-8");
-        let content = before;
-        const record = manifest[f.replace(/\.md$/, "")];
-        if (record) {
-          if (record.produces?.length) content = removeListValues(content, "produces", new Set(record.produces), false);
-          if (record.sensors?.length) content = removeListValues(content, "sensors", new Set(record.sensors), false);
-          if (record.scopes?.length) content = removeListValues(content, "scopes", new Set(record.scopes), false);
-          if (record.requires_stage?.length) content = removeListValues(content, "requires_stage", new Set(record.requires_stage), false);
-          if (record.consumes?.length) {
-            const artifacts = record.consumes.flatMap((entry) =>
-              typeof entry === "string"
-                ? [entry]
-                : entry && typeof entry.artifact === "string"
-                  ? [entry.artifact]
-                  : []
-            );
-            content = removeConsumesEntries(content, new Set(artifacts));
+        // A CRLF checkout strips as the LF text compose wrote, in its own line endings.
+        const content = withFileLineEndings(before, (text) => {
+          let content = text;
+          const record = manifest[f.replace(/\.md$/, "")];
+          if (record) {
+            if (record.produces?.length) content = removeListValues(content, "produces", new Set(record.produces), false);
+            if (record.sensors?.length) content = removeListValues(content, "sensors", new Set(record.sensors), false);
+            if (record.scopes?.length) content = removeListValues(content, "scopes", new Set(record.scopes), false);
+            if (record.requires_stage?.length) content = removeListValues(content, "requires_stage", new Set(record.requires_stage), false);
+            if (record.consumes?.length) {
+              const artifacts = record.consumes.flatMap((entry) =>
+                typeof entry === "string"
+                  ? [entry]
+                  : entry && typeof entry.artifact === "string"
+                    ? [entry.artifact]
+                    : []
+              );
+              content = removeConsumesEntries(content, new Set(artifacts));
+            }
+            if (record.required_sections?.length) {
+              content = removeListValues(content, "required_sections", new Set(record.required_sections), record.required_sections_created === true);
+            }
           }
-          if (record.required_sections?.length) {
-            content = removeListValues(content, "required_sections", new Set(record.required_sections), record.required_sections_created === true);
-          }
-        }
-        content = removePluginFragments(content, plugin);
+          return removePluginFragments(content, plugin);
+        });
         if (content !== before) {
           writeFileSync(path, content, "utf-8");
           pluginTouched = true;
@@ -1336,7 +1340,7 @@ function stripDisabledPluginContributions(
           .filter((path) => existsSync(path) && lstatSync(path).isFile());
         for (const path of [join(personasDir, f), ...twins]) {
           const before = readFileSync(path, "utf-8");
-          const content = removePluginFragments(before, plugin);
+          const content = withFileLineEndings(before, (text) => removePluginFragments(text, plugin));
           if (content !== before) {
             writeFileSync(path, content, "utf-8");
             pluginTouched = true;
@@ -4702,7 +4706,9 @@ export async function collectDoctorReport(
         content: string;
         parsed: Record<string, unknown>;
         kind: "stage" | "agent";
-        twins?: Array<{ path: string; content: string; toml: boolean }>;
+        // A twin the harness should have but that is gone or unreadable keeps
+        // its entry with null content, so doctor names it.
+        twins?: Array<{ path: string; rel: string; content: string | null; toml: boolean }>;
       }
     >();
     const stagesRoot = resolveHarnessPath(["aidlc-common", "stages"]);
@@ -4718,13 +4724,15 @@ export async function collectDoctorReport(
         const path = join(personasRoot, f);
         const slug = f.replace(/\.md$/, "");
         try {
-          const twins = personaTwinRels(harness, harnessDir(), slug).flatMap((rel) => {
+          const twins = personaTwinRels(harness, harnessDir(), slug).map((rel) => {
             const twinPath = join(projectDir, rel);
+            let content: string | null = null;
             try {
-              return [{ path: twinPath, content: readFileSync(twinPath, "utf-8").replace(/\r\n/g, "\n"), toml: rel.endsWith(".toml") }];
+              content = readFileSync(twinPath, "utf-8").replace(/\r\n/g, "\n");
             } catch {
-              return [];
+              // Gone or unreadable: reported below when a fragment is recorded for it.
             }
+            return { path: twinPath, rel, content, toml: rel.endsWith(".toml") };
           });
           stageSources.set(slug, {
             path,
@@ -4843,6 +4851,12 @@ export async function collectDoctorReport(
             );
           }
           for (const twin of source.twins ?? []) {
+            if (twin.content === null) {
+              missingComposition.push(
+                `${plugin}: agent ${target} file ${twin.path} is missing; ${projectedFileRepair(runtimeHarnessName(projectDir, harnessDir()), twin.rel)}`,
+              );
+              continue;
+            }
             const twinMissing = missingRecordedContributions(
               {},
               twin.content,

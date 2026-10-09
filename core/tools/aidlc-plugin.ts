@@ -1199,6 +1199,16 @@ export function tomlFragmentText(raw: string): string {
   return raw.replace(/\\(["\\])/g, "$1");
 }
 
+// Runs a strip on the text as compose wrote it (LF) and hands it back in the
+// file's own line endings. A Windows checkout (Git's core.autocrlf) turns a
+// composed file to CRLF; stripping it as LF keeps that file's bytes, with no
+// stray carriage return, so a later refresh still recognises it. A file that
+// mixes line endings is stripped as it is.
+export function withFileLineEndings(content: string, edit: (lf: string) => string): string {
+  if (!content.includes("\r\n") || /(^|[^\r])\n/.test(content)) return edit(content);
+  return edit(content.replace(/\r\n/g, "\n")).replace(/\n/g, "\r\n");
+}
+
 function removeFragments(content: string, key: string, path: string): string {
   const escaped = key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const opening = new RegExp(`<!-- plugin:${escaped}:.+?:\\d+:[0-9a-f]+ -->`, "g");
@@ -1246,28 +1256,30 @@ function pruneContributions(stagedProject: string, harnessDir: string, key: stri
     .filter((value) => value.endsWith(".md"));
   for (const path of composedFiles) {
     const before = readFileSync(path, "utf-8");
-    let after = before;
-    const record = records[basename(path, ".md")];
-    if (record) {
-      if (record.produces?.length) after = removeListValues(after, "produces", new Set(record.produces), false);
-      if (record.sensors?.length) after = removeListValues(after, "sensors", new Set(record.sensors), false);
-      if (record.consumes?.length) {
-        after = removeConsumes(
-          after,
-          new Set(record.consumes.map((entry) => typeof entry === "string" ? entry : entry.artifact)),
-        );
+    const after = withFileLineEndings(before, (text) => {
+      let after = text;
+      const record = records[basename(path, ".md")];
+      if (record) {
+        if (record.produces?.length) after = removeListValues(after, "produces", new Set(record.produces), false);
+        if (record.sensors?.length) after = removeListValues(after, "sensors", new Set(record.sensors), false);
+        if (record.consumes?.length) {
+          after = removeConsumes(
+            after,
+            new Set(record.consumes.map((entry) => typeof entry === "string" ? entry : entry.artifact)),
+          );
+        }
+        if (record.requires_stage?.length) after = removeListValues(after, "requires_stage", new Set(record.requires_stage), false);
+        if (record.required_sections?.length) {
+          after = removeListValues(
+            after,
+            "required_sections",
+            new Set(record.required_sections),
+            record.required_sections_created === true,
+          );
+        }
       }
-      if (record.requires_stage?.length) after = removeListValues(after, "requires_stage", new Set(record.requires_stage), false);
-      if (record.required_sections?.length) {
-        after = removeListValues(
-          after,
-          "required_sections",
-          new Set(record.required_sections),
-          record.required_sections_created === true,
-        );
-      }
-    }
-    after = removeFragments(after, key, path);
+      return removeFragments(after, key, path);
+    });
     if (after !== before) writeFileSync(path, after);
   }
   // A persona's native twins carry the same fragments.
@@ -1277,7 +1289,7 @@ function pruneContributions(stagedProject: string, harnessDir: string, key: stri
       const twin = join(stagedProject, rel);
       if (!existsSync(twin) || !lstatSync(twin).isFile()) continue;
       const before = readFileSync(twin, "utf-8");
-      const after = removeFragments(before, key, twin);
+      const after = withFileLineEndings(before, (text) => removeFragments(text, key, twin));
       if (after !== before) writeFileSync(twin, after);
     }
   }

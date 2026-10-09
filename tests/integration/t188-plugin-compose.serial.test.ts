@@ -2693,6 +2693,64 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
     expect(composedSurfaceRow("claude", projectDir)).toContain("all enabled plugin stages and recorded contributions are present");
   });
 
+  test("disabling the plugin on a CRLF checkout strips it to the same text, in CRLF", () => {
+    // A Windows checkout (Git's core.autocrlf) turns the composed files to
+    // CRLF. Disabling the plugin must leave the same text an LF checkout
+    // strips to, in the file's own line endings: no stray carriage return,
+    // so the next engine refresh still recognises the file.
+    const files = [
+      join(".codex", "agents", "aidlc-quality-agent.md"),
+      join(".codex", "agents", "aidlc-quality-agent.toml"),
+      join(".codex", "aidlc-common", "stages", "construction", "build-and-test.md"),
+    ];
+    const disabled = (crlf: boolean): Map<string, string> => {
+      const projectDir = composePluginFixture({
+        plugin: PLUGIN,
+        harness: "codex",
+        projectDir: join(tmp, `crlf-disable-${crlf ? "crlf" : "lf"}`),
+        pluginBuilt: pluginBuilds.get("codex")!,
+      }).projectDir;
+      if (crlf) {
+        for (const rel of files) {
+          const path = join(projectDir, rel);
+          writeFileSync(path, readFileSync(path, "utf-8").replace(/\r?\n/g, "\r\n"));
+        }
+      }
+      const disable = spawnSync(BUN, [join(projectDir, ".codex", "tools", "aidlc-utility.ts"), "select-plugins", "aidlc"], {
+        cwd: projectDir, encoding: "utf-8", timeout: remainingOperationTimeoutMs(NATIVE_RUNTIME_CASE_TIMEOUT_MS),
+        env: harnessToolEnv("codex", projectDir),
+      });
+      expect(disable.status, disable.stdout + disable.stderr).toBe(0);
+      return new Map(files.map((rel) => [rel, readFileSync(join(projectDir, rel), "utf-8")]));
+    };
+    const lf = disabled(false);
+    const crlf = disabled(true);
+    for (const rel of files) {
+      const text = crlf.get(rel)!;
+      expect(text, rel).not.toContain("<!-- plugin:test-pro:");
+      expect(/\r(?!\n)/.test(text), `${rel} has a stray carriage return`).toBe(false);
+      expect(text, rel).toBe(lf.get(rel)!.replace(/\n/g, "\r\n"));
+    }
+    // The persona and its twin are back to their shipped bytes, in CRLF.
+    for (const rel of files.slice(0, 2)) {
+      expect(crlf.get(rel), rel).toBe(readFileSync(join(CODEX_DIST, "..", rel), "utf-8").replace(/\n/g, "\r\n"));
+    }
+  });
+
+  test("doctor names a native persona twin that is gone", () => {
+    const projectDir = composePluginFixture({
+      plugin: PLUGIN,
+      harness: "codex",
+      projectDir: join(tmp, "persona-twin-gone"),
+      pluginBuilt: pluginBuilds.get("codex")!,
+    }).projectDir;
+    rmSync(join(projectDir, ".codex", "agents", "aidlc-quality-agent.toml"));
+    const row = composedSurfaceRow("codex", projectDir);
+    expect(row).not.toContain("all enabled plugin stages and recorded contributions are present");
+    expect(row.replaceAll("\\", "/")).toContain(".codex/agents/aidlc-quality-agent.toml");
+    expect(row).toContain("is missing");
+  });
+
   test("agent contributions anchor after the preflight, refuse adds, and strip on disable", () => {
     const scope = [
       "---", "name: syn-persona", "plugin: syn-persona",
