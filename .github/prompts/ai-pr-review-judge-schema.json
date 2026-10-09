@@ -278,7 +278,7 @@
           "type": "string",
           "minLength": 1,
           "maxLength": 1500,
-          "description": "Who meets it, on which normal-run path (one sentence), and why this priority fits."
+          "description": "For a P0 or P1: the REPRO, LOSS and BLAME lines from the shared contract, three short sentences. For a P2 or P3: who meets it and why the priority fits."
         },
         "requiredCorrection": {
           "type": "string",

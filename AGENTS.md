@@ -5,48 +5,86 @@ Development Life Cycle) methodology that ships to many CLI harnesses — today
 Claude Code, Kiro CLI, Kiro IDE, Codex CLI, Cursor, opencode, and GitHub Copilot, and any capable CLI you port it to — from
 a single hand-authored source.
 
-## Tenets: the human drives the engine
+## What AI-DLC is
+
+AI-DLC is a software factory for spec-driven design: the person drives it, and
+it delivers their project, from the idea to the spec and plan, the code and the
+deployment. The harness the person drives it from (Claude Code, Kiro CLI, Kiro
+IDE, Codex, Cursor, opencode, Copilot) is the building the factory runs in. It
+is the same factory in every building and on every platform (Linux, macOS,
+Windows, native or WSL), so a normal run means any of them; judge a finding and
+design a fix with all of them in mind.
+
+Ideation transforms the person's intent into a more clearly defined idea;
+Inception turns the idea into a spec and a plan; Construction builds the code
+that implements the idea and the spec; Operation deploys it and verifies it
+(Initialization is the setup before them).
+
+Scopes are the production lines, stages are the stations on a line, and agents
+are the workers at each station. Each station takes what the one before it
+produced, and an approved output is the work order for what follows. It is not
+a waterfall: the person can go back to any station, change what it produced and
+iterate from there, as many times as they like.
+
+Workers make the calls their station needs and bring the knowledge the person
+may not have, like a good colleague; the person makes the judgement calls and
+keeps the wheel, reading a dashboard that says in plain words what happened,
+what to decide and how to undo it. Guards are there to keep the workers on
+track, on the spec and plan the person last approved; they serve the person,
+not the engine, and never stand between the person and what the person asks
+for.
+
+## The factory works with what the person brings
+
+The factory and the project it delivers are the person's, and they bring their
+own materials and tools to it: the building they drive from, the project as it
+is, and the way they have set their tools up. The factory uses all of it as it
+is, the way the person's own hands would. A worker who rewires the building or
+swaps the owner's tools so their own station feels safer is not keeping on
+track; they are taking the wheel.
+
+## The four tenets, in this order; the first wins any conflict
 
 **The human drives the engine. Tools for determinism. LLM for knowledge. Human for judgement.**
 
-Every design, change, review finding, and question in this repository follows
-these four tenets, in this order. The first wins any conflict: no tool
-determinism, guard, or security concern overrides what the person explicitly
-asked for in their own project.
+User experience comes first: every design, change, review finding and question
+in this repository is judged by what a person sees and does in a normal run.
 
-- **The human drives the engine.** AI-DLC is a tool the person runs on their
-  own machine, in a project they chose, with their own coding agent, to drive
-  their own work. When they ask for something, the engine does it and says in
-  one line what happened. Their machine, shell and environment, git setup and
-  hooks, editor and host-tool settings, installed plugins, the project's files,
-  and their own words are theirs: AI-DLC works with them as they are and never
-  overrides or second-guesses them for its own safety. AI-DLC owns its engine,
-  its record of the work, what it tells the agent, and what it ships, and it
-  answers for those.
-- **Tools for determinism.** The engine and hooks do what must be exact and
-  repeatable: record that a message arrived through the person's own prompt, in
-  order, and not from the agent or a helper (an observed interaction, not proof
-  of identity); keep the person's words as the host delivers them; record state
-  and the audit trail; mark steps; keep files; and own every chain, token,
-  receipt, and part count. Control state lives in the tools, not in the agent's
-  memory.
-- **LLM for knowledge.** The agent does what needs understanding: reading what
-  the person meant from their own words in context, answering their questions,
-  applying their instructions, and making the calls that knowledge settles, such
-  as how to build what was approved. A directive names the next exact step, and
-  the agent runs a command the engine issued exactly as given; it never invents,
-  rebuilds, interprets, or holds onto a token beyond that directive, and never
-  decides flow by how a sentence of prose ends.
-- **Human for judgement.** Where a decision needs judgement, the person makes
-  it: what to build, whether the work is right, what to trade off, and when to
-  stop. Nothing that knowledge or the tools can settle is put to the person, so
-  their attention goes only where they alone can decide.
-
-Think of AI-DLC as a software factory the person runs. Scopes are the production
-lines, stages are the stations on a line, and agents are the workers at each
-station. Workers make the calls their station needs; the person makes the
-judgement calls. Guards protect the person from workers doing the wrong thing;
-they never stand between the person and what the person asks for.
+- **The human drives the engine.** The person keeps the wheel: they drive the
+  engine, and the engine runs the factory. The factory's dashboard shows them
+  what they need to decide, in one line, in their tool's words and never in
+  engine internals: what happened, where the work stands against what they
+  approved, how to undo it, and any real risk or skipped step (a warning said
+  once, never a gate). Their words are read for what they meant, so a phrasing
+  no word-check knows never refuses or re-asks them. The engine asks once when
+  only they can decide, never asks again what they already answered, never
+  refuses their explicit request (approve, change, skip, jump, stop, switch a
+  check), and never overrides their setup; it refuses only harm that cannot be
+  undone and that they did not ask for.
+- **Tools for determinism.** The agent should not have to carry the
+  bookkeeping: which station is next, what the person approved (which version,
+  and when), and what has already run. That part is mechanical, and a tool or
+  hook does it the same way every time, so the agent's instructions stay short
+  and about the work. A tool owns exact structure (a flag, a stage name, an
+  option number, a record) and records that a message came through the person's
+  own prompt, keeping their words whole (an observed interaction, not proof of
+  identity); the tool itself never reads meaning or language.
+- **LLM for knowledge.** The worker at each station brings knowledge the person
+  may not have: coding, design, testing, the tools, the method, this project's
+  code. It makes the calls that knowledge settles, such as how to build what
+  the approved spec and plan say. When a choice is the person's (what the idea
+  is, what the spec should say, a trade-off in the plan), it asks the way a
+  good colleague would, assuming no technical knowledge: the options in plain
+  words, what each means for them, and its recommendation, so anyone can decide
+  and someone who knows more can weigh in. Reading the person's words for what
+  they meant (an intent statement, the parameters a /aidlc request calls for,
+  which open question a reply answers) is part of that knowledge, and the agent
+  hands the tool exact, structured arguments.
+- **Human for judgement.** The person decides what to build (the idea and the
+  spec), whether it is right (each gate), what to trade off and when to stop;
+  nothing tools or knowledge can settle is put to them. A tool never makes the
+  call of what the person meant or wants; when meaning is really unclear, the
+  agent asks once, in plain words.
 
 The engine exists to enforce the will of the human, never to overrule it. When
 the person explicitly asks for something, the flow does it and says in one line
@@ -76,16 +114,15 @@ contract in `docs/reference/06-hooks-and-tools.md`, "Plan-Approval Guard
 Hook"), and the flow never loops on it and never asks the person to approve
 again what that mechanism says still holds.
 
-**What guards are for.** Guards keep an honest agent on the person's path when
-it runs ahead, skips a step, or misreads (no build before the plan is approved,
-no decision recorded that the person did not make, no lost words). They are not
-a jail for an agent that deliberately works around them: the host tool's own
-permission prompts, the plan question, and the person watching are that layer.
-The person asking for something is never a bypass. AI-DLC's own engine must
-never leak the person's secrets, run a command nobody asked for, write or delete
-outside the project, or change the install or the person's settings unasked;
-that is AI-DLC answering for its own code, not defending against the person's
-setup or the project they chose to work in.
+**What guards are for.** Guards keep the workers on track, on the spec and plan
+the person last approved, when a worker runs ahead, skips a step or misreads.
+They serve the person, not the engine, and never stand between the person and
+what the person asks for; a worker that deliberately works around them is a
+matter for the building's own doors (the host tool's permission prompts), the
+plan question and the person watching, not for another guard. The factory
+answers for its own machines: it never leaks a secret, runs a command nobody
+ordered, writes outside the project, or changes the install or the person's
+settings unasked.
 
 **One owner per rule.** Every invariant (approval, transition, presence, the
 plan fingerprint) has one owner and one shared check. Enforcing that check at

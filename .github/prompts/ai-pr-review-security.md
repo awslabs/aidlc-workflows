@@ -30,9 +30,9 @@ path, and the resulting capability.
 
 ## The product
 
-Paths: `core/`, `harness/`, `plugins/`. Here AI-DLC runs on the person's own
-machine, in their own project, driven by their own agent, and a normal run has
-no attacker. Report only a path where AI-DLC's own code, in a normal run, does
+Paths: `core/`, `harness/`, `plugins/`. Here the factory delivers the person's
+project, driven by their own agent, wherever it runs, and a normal run has no
+attacker. Report only a path where the factory itself, in a normal run, does
 one of these without the person asking:
 
 - leaks a secret or credential: prints it, hands it to the agent, writes it
@@ -45,14 +45,14 @@ one of these without the person asking:
 - takes the project's own files (an app `.env`, a `bunfig.toml`, a package
   script) as AI-DLC's own configuration or code.
 
-Do not report the out-of-scope cases in the shared contract. Never propose
-overriding the person's setup (for example `-c core.fsmonitor=false`, an empty
-`core.hooksPath`, a scrubbed environment) as a correction: AI-DLC calls git and
-other tools the way the person's own shell would. For every candidate, name the
-normal-run path in one sentence: who starts it, on which harness, and what the
-person loses. If you cannot, discard it. A product candidate whose real outcome
-is a lost word, a re-ask, a misleading line, or a wrong record belongs to the
-user-experience or workflow lenses; name it in one line as a pointer instead.
+Do not report the out-of-scope cases in the shared contract. Never propose a
+correction that changes or works around what the person brought (their git
+setup, hooks, environment or host settings): the factory uses them as they
+are, the way the person's own hands would. For every candidate, write the
+REPRO, LOSS and BLAME lines from the shared contract. If you cannot, discard
+it. A product candidate whose real loss is a lost word, a re-ask, a misleading
+line or a wrong record belongs to the user-experience or workflow lenses; name
+it in one line as a pointer instead.
 
 ## Both
 
