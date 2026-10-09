@@ -1304,6 +1304,12 @@ describe("t293 config models CLI", () => {
     expect(saved.status, saved.stdout + saved.stderr).toBe(0);
     expect(saved.stdout).toContain("  model    claude-sonnet-4.6");
     expect(kiroWrites(seam.writes)).toEqual([["settings", "chat.defaultModel", "claude-sonnet-4.6"]]);
+    // The way out names --session-model: this row's interactive menu is the preset one.
+    const unknown = run([
+      "config", "models", "--project-dir", project, "--session-model", "claude-gone-1",
+    ], project, { ...runtimeEnv(), ...seam.env });
+    expect(unknown.status, unknown.stdout + unknown.stderr).toBe(2);
+    expect(unknown.stdout + unknown.stderr).toContain("config models --session-model <id>");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("a Kiro CLI agent setting leaves the person's session effort alone", () => {

@@ -54,7 +54,7 @@ export type KiroSessionWrite = { model?: string; effort?: { model: string; effor
 export const KIRO_EFFORT_ORDER: readonly KiroEffort[] = ["low", "medium", "high", "xhigh", "max"];
 
 // One effort for the whole interactive Kiro CLI session, conductor included
-// (a --no-interactive run starts at the model's default). minimal stays
+// (a --no-interactive run does not apply it). minimal stays
 // distinct from balanced on purpose.
 export const KIRO_PRESET_EFFORT: Readonly<Record<KiroPreset, KiroEffort>> = Object.freeze({
   minimal: "low",

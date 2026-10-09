@@ -8381,7 +8381,7 @@ function askKiroSessionModel(kiro: FirstRunKiroSession, preset: KiroPreset | nul
 }
 
 // The preset step's wording on Kiro CLI: one effort for the whole interactive
-// session (a --no-interactive run starts at the model's default).
+// session (a --no-interactive run does not apply the saved effort).
 // Setup runs on a project with no preset yet; `config models` keeps the
 // recorded one (removing it is `--reset`).
 function writeKiroPresetRows(model: string | null, context: "setup" | "models" = "setup"): void {
@@ -10100,7 +10100,7 @@ function kiroModelsPlan(input: {
       return {
         error: usage(
           `${input.setModel} is not offered on your Kiro account`,
-          configCommand("models"),
+          kiroSessionModelsCommand(input.distribution),
         ),
       };
     }
@@ -10180,6 +10180,7 @@ function kiroSessionData(result: KiroSessionResult): Record<string, unknown> {
 async function emitKiroSessionResult(
   result: KiroSessionResult,
   options: ReturnType<typeof globalOptions>,
+  modelsCommand = configCommand("models"),
 ): Promise<void> {
   if (options.mode === "human") writeKiroSessionLines(result.lines);
   emitResult(
@@ -10194,7 +10195,7 @@ async function emitKiroSessionResult(
             ? `Kiro saved the session model ${result.saved.model} but not its effort`
             : "the Kiro session model was not saved",
           EXIT.actionNeeded,
-          configCommand("models"),
+          modelsCommand,
         ),
         status: "action-needed",
         data: kiroSessionData(result),
@@ -11661,6 +11662,7 @@ export async function main(
             dryRun: argv.includes("--dry-run"),
           }),
           options,
+          preparedModels.kiroOnly.modelsCommand,
         );
         return;
       }
