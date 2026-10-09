@@ -1711,6 +1711,96 @@ function copilotAdapterGate(artifact: string): GateResult {
   }
 }
 
+// The Devin adapter delegates every core hook through AIDLC_COMPILED_EXECUTABLE.
+// The compiled dispatcher only accepts `engine hook <name>` — the old
+// `[executable, "hook", <name>]` argv exited 2 "unknown command 'hook'", which
+// blocked every guard with a misleading reason and silently no-op'd every
+// advisory hook (no heartbeat, no workflow context). These two gates pin the
+// advisory route (heartbeat proves the core hook ran) and the guard route
+// (stderr must carry the guard's verdict, not the dispatcher's error).
+function devinAdapterGate(artifact: string): GateResult {
+  const project = mkdtempSync(join(tmpdir(), "aidlc-binary-devin-"));
+  try {
+    cpSync(join(REPO_ROOT, "dist-release", "devin", ".devin"), join(project, ".devin"), {
+      recursive: true,
+    });
+    const input = JSON.stringify({
+      hook_event_name: "PostCompaction",
+      cwd: project,
+      session_id: `binary-gate-${Date.now()}`,
+    });
+    const result = run(artifact, ["engine", "adapter", "devin", "validate-state"], {
+      cwd: project,
+      env: { ...process.env, PATH: "" },
+      input,
+      timeoutMs: DEFAULT_SUBPROCESS_TIMEOUT_MS,
+    });
+    const output = `${result.stdout}\n${result.stderr}`;
+    const heartbeat = join(
+      project,
+      "aidlc",
+      "spaces",
+      "default",
+      "intents",
+      ".aidlc-engine",
+      "hooks-health",
+      "validate-state.last",
+    );
+    return commandGate(
+      "adapter-devin-validate-state",
+      result,
+      result.status === 0 &&
+        existsSync(heartbeat) &&
+        !/not available|Cannot find module|\/\$bunfs\/|unknown command/.test(output),
+      {
+        expected: "Devin adapter invokes validate-state through the compiled dispatcher",
+        actual: existsSync(heartbeat) ? "heartbeat written" : result.stderr.trim(),
+      },
+    );
+  } finally {
+    rmSync(project, { recursive: true, force: true });
+  }
+}
+
+function devinStateTransitionGuardGate(artifact: string): GateResult {
+  const project = mkdtempSync(join(tmpdir(), "aidlc-binary-devin-guard-"));
+  try {
+    cpSync(join(REPO_ROOT, "dist-release", "devin", ".devin"), join(project, ".devin"), {
+      recursive: true,
+    });
+    const input = JSON.stringify({
+      hook_event_name: "PreToolUse",
+      cwd: project,
+      session_id: `binary-gate-${Date.now()}`,
+      tool_name: "exec",
+      tool_input: {
+        command: "bun .devin/tools/aidlc-state.ts reject feasibility",
+      },
+    });
+    const result = run(artifact, ["engine", "adapter", "devin", "state-transition-guard"], {
+      cwd: project,
+      env: { ...process.env, PATH: "" },
+      input,
+      timeoutMs: DEFAULT_SUBPROCESS_TIMEOUT_MS,
+    });
+    const output = `${result.stdout}\n${result.stderr}`;
+    return commandGate(
+      "adapter-devin-state-transition-guard",
+      result,
+      result.status === 2 &&
+        result.stderr.includes("Stage status cannot be changed") &&
+        !runtimeCrash(output) &&
+        !output.includes("does not export run(input)"),
+      {
+        expected: "compiled Devin adapter blocks a direct state transition with the guard's reason",
+        actual: result.stderr.trim() || `exit ${result.status}`,
+      },
+    );
+  } finally {
+    rmSync(project, { recursive: true, force: true });
+  }
+}
+
 // A Copilot project configured by 2.8.0 keeps both artefacts that release wrote
 // and `aidlc update` cannot touch: the wiring spelling `engine hook
 // copilot-adapter <target>` and the 2.8.0 adapter. The compiled dispatcher maps
@@ -2524,6 +2614,8 @@ function buildTarget(target: TargetConfig): TargetResult {
     result.gates.push(planApprovalAdapterGate(actual.artifact, "kiro"));
     result.gates.push(cursorAdapterGate(actual.artifact));
     result.gates.push(copilotAdapterGate(actual.artifact));
+    result.gates.push(devinAdapterGate(actual.artifact));
+    result.gates.push(devinStateTransitionGuardGate(actual.artifact));
     result.gates.push(copilotLegacyProjectGate(actual.artifact));
     result.gates.push(projectCopyIgnoredGate(
       actual.artifact,

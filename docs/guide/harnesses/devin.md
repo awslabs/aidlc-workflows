@@ -214,7 +214,17 @@ fully restart Devin CLI, then rerun doctor (if evidence is still missing,
 check `.devin/hooks.v1.json`, the hook runtime, and `.devin` write
 permissions). A
 valid marker is historical execution evidence only; it does not verify current
-hook approval. The marker path is ignored by the shipped `.gitignore`;
+hook approval. When the marker carries the Devin session id that produced it
+(newer adapters record `sessionId` beside `lastRun`), doctor also compares it
+with the audit trail: if a newer human turn was recorded under a different
+session with no fresher marker, hooks may have stopped dispatching and doctor
+warns (non-failing) to fully restart Devin CLI and check the dispatch row.
+A separate `Devin hook dispatch` row is a side-effect-free probe — it never
+runs a hook — that replays every core-hook command the adapter can emit in
+compiled mode through the dispatcher's grammar and the installed hook files,
+so a broken adapter↔dispatcher contract (blocked guards, silently skipped
+advisory hooks) fails even before any SessionStart evidence exists; when it
+fails, refresh the install with `aidlc config` or upgrade AI-DLC. The marker path is ignored by the shipped `.gitignore`;
 existing installs must update the adapter and doctor together, merge the new
 ignore entry, and fully restart Devin CLI to generate evidence. The MCP check
 verifies registry presence, not live MCP availability; disabled servers do not

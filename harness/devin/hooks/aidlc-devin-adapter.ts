@@ -399,10 +399,42 @@ function explicitHumanSelectionText(toolResponse: unknown): string {
 
 // --- Core-hook subprocess plumbing ------------------------------------------
 
-function runCore(hookFile: string, input: string): { stdout: string; code: number } {
+// Every core hook file this adapter can spawn, in one list. Doctor's "Devin
+// hook dispatch" probe iterates the same list the call sites use, and the
+// CoreHookFile param type makes a new call site that forgets to list its file
+// fail typecheck.
+export const CORE_HOOK_FILES = [
+  "aidlc-session-start.ts",
+  "aidlc-session-end.ts",
+  "aidlc-record-human-turn.ts",
+  "aidlc-state-transition-guard.ts",
+  "aidlc-reviewer-scope.ts",
+  "aidlc-review-freeze.ts",
+  "aidlc-plan-approval-guard.ts",
+  "aidlc-deliver-stage-rules.ts",
+  "aidlc-fold-usage.ts",
+  "aidlc-write-audit-log.ts",
+  "aidlc-run-sensors.ts",
+  "aidlc-sync-workflow-state.ts",
+  "aidlc-log-subagent.ts",
+  "aidlc-rebuild-stage-graph.ts",
+  "aidlc-validate-state.ts",
+  "aidlc-continue-workflow.ts",
+] as const;
+export type CoreHookFile = (typeof CORE_HOOK_FILES)[number];
+
+// One argv builder for both spawn variants so the two call shapes cannot
+// drift. The compiled dispatcher only accepts the `engine hook <name>` verb —
+// a bare `hook <name>` exits 2 "unknown command 'hook'", which blocks every
+// guard with a misleading reason and silently no-ops every advisory hook.
+// Exported for doctor's dispatch probe: callers pass a stand-in executable so
+// no hook is spawned to learn which argv each hook file would emit.
+export function coreCommand(
+  hookFile: CoreHookFile,
+  executable = process.env.AIDLC_COMPILED_EXECUTABLE,
+): { command: string[]; authorityToken: string } {
   // Reuse the exact bun binary running this adapter; the child must not depend on
   // PATH containing bun (the hook environment often lacks the bun install dir).
-  const executable = process.env.AIDLC_COMPILED_EXECUTABLE;
   const hook = hookFile.replace(/^aidlc-|\.ts$/g, "");
   // record-human-turn is the authority-minting hook: it refuses to run as a
   // bare script and only activates through the dispatcher's internal route
@@ -420,6 +452,11 @@ function runCore(hookFile: string, input: string): { stdout: string; code: numbe
           join(HOOKS_DIR, hookFile),
         ]
       : [process.execPath, join(HOOKS_DIR, hookFile)];
+  return { command, authorityToken };
+}
+
+function runCore(hookFile: CoreHookFile, input: string): { stdout: string; code: number } {
+  const { command, authorityToken } = coreCommand(hookFile);
   const r = Bun.spawnSync(command, {
     stdin: Buffer.from(input, "utf-8"),
     stdout: "pipe",
@@ -437,24 +474,10 @@ function runCore(hookFile: string, input: string): { stdout: string; code: numbe
 // channel (exit 2 + the reason on stderr) must survive the pipe, unlike the
 // advisory hooks above.
 function runCoreWithStderr(
-  hookFile: string,
+  hookFile: CoreHookFile,
   input: string,
 ): { stdout: string; stderr: string; code: number } {
-  const executable = process.env.AIDLC_COMPILED_EXECUTABLE;
-  const hook = hookFile.replace(/^aidlc-|\.ts$/g, "");
-  const authorityToken = hook === "record-human-turn" ? randomUUID() : "";
-  const command = executable
-    ? authorityToken
-      ? [executable, "--internal-aidlc-record-human-turn", join(HOOKS_DIR, hookFile)]
-      : [executable, "engine", "hook", hook]
-    : authorityToken
-      ? [
-          process.execPath,
-          join(HOOKS_DIR, "..", "tools", "aidlc.ts"),
-          "--internal-aidlc-record-human-turn",
-          join(HOOKS_DIR, hookFile),
-        ]
-      : [process.execPath, join(HOOKS_DIR, hookFile)];
+  const { command, authorityToken } = coreCommand(hookFile);
   const r = Bun.spawnSync(command, {
     stdin: Buffer.from(input, "utf-8"),
     stdout: "pipe",
@@ -934,7 +957,15 @@ export async function run(
           mkdirSync(join(projectDir, ".devin"), { recursive: true });
           writeFileSync(
             join(projectDir, ".devin", ".aidlc-session-start.local.json"),
-            `${JSON.stringify({ lastRun: new Date().toISOString() })}\n`,
+            `${JSON.stringify({
+              lastRun: new Date().toISOString(),
+              // Link the evidence to the Devin session that produced it: doctor
+              // warns when a newer session records turns with no fresher
+              // marker (hooks stopped dispatching between sessions).
+              ...(typeof devin.session_id === "string" && devin.session_id
+                ? { sessionId: devin.session_id }
+                : {}),
+            })}\n`,
             "utf-8",
           );
         } catch {

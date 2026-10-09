@@ -1138,6 +1138,69 @@ describe("t294 trust diagnostics", () => {
     }
   });
 
+  test("Devin native trust reads Exec(aidlc engine) from config.json and hook commands from hooks.v1.json", async () => {
+    const project = temp("aidlc-t294-trust-devin-");
+    cpSync(join(DIST_RELEASE, "devin"), project, { recursive: true });
+    const harnessRoot = join(project, ".devin");
+    const machine = temp("aidlc-t294-trust-devin-machine-");
+    const overrides = {
+      AIDLC_HARNESS_DIR: ".devin",
+      AIDLC_HARNESS_NAME: "devin",
+      AIDLC_RUNTIME_HARNESS_ROOT: harnessRoot,
+      AIDLC_RUNTIME_ROOT: DIST_RELEASE,
+      AIDLC_INSTALL_ROOT: machine,
+      AIDLC_BIN_DIR: join(machine, "bin"),
+      AIDLC_OFFLINE: "1",
+      ...hookPathEnv(),
+    };
+    const previous = new Map(Object.keys(overrides).map((key) => [key, process.env[key]]));
+    // Select the compiled-install doctor row without compiling a fixture
+    // binary, same seam as the codex/kiro trust cases above.
+    const compiled = spyOn(runtimePaths, "isCompiledExecutable").mockReturnValue(true);
+    const nativeTrust = async () => {
+      const report = await collectDoctorReport(project);
+      const rows = report.checks.filter((check) => check.label.startsWith("Native command trust"));
+      expect(rows).toHaveLength(1);
+      return rows[0];
+    };
+    const configPath = join(harnessRoot, "config.json");
+    const shippedConfig = readFileSync(configPath, "utf-8");
+    expect(shippedConfig).toContain('"Exec(aidlc engine)"');
+    expect(readFileSync(join(harnessRoot, "hooks.v1.json"), "utf-8"))
+      .toContain("aidlc engine adapter devin");
+    try {
+      Object.assign(process.env, overrides);
+      const shipped = await nativeTrust();
+      expect(shipped.pass, shipped.label).toBe(true);
+
+      // Dropping the Exec grant leaves the hook commands but loses permission.
+      writeFileSync(
+        configPath,
+        shippedConfig.replace('"Exec(aidlc engine)"', '"Exec(aidlc-other)"'),
+      );
+      const missing = await nativeTrust();
+      expect(missing.pass, missing.label).toBe(false);
+      expect(missing.label).toContain("native hooks present");
+      expect(missing.label).toContain("native permission/trust missing");
+
+      // Devin Exec(...) matching is a prefix test, so the shipped exact
+      // `Exec(aidlc engine)` is what counts; a `*` spelling must not stand in.
+      writeFileSync(
+        configPath,
+        shippedConfig.replace('"Exec(aidlc engine)"', '"Exec(aidlc engine *)"'),
+      );
+      const globbed = await nativeTrust();
+      expect(globbed.pass, globbed.label).toBe(false);
+      expect(globbed.label).toContain("native permission/trust missing");
+    } finally {
+      compiled.mockRestore();
+      for (const [key, value] of previous) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    }
+  });
+
   test("Codex detects complete and missing user trust without changing the seed", () => {
     const project = temp("aidlc-t294-trust-codex-");
     cpSync(join(DIST, "codex"), project, { recursive: true });

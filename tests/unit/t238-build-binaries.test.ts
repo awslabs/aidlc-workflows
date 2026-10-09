@@ -332,6 +332,8 @@ describe("t238 build-binaries release builder", () => {
       "adapter-codex-validate-state",
       "adapter-cursor-validate-state",
       "adapter-copilot-validate-state",
+      "adapter-devin-validate-state",
+      "adapter-devin-state-transition-guard",
       "adapter-copilot-2.8.0-project-validate-state",
       "native-hook-ignores-project-copy",
       "native-adapter-ignores-project-copy",

@@ -186,6 +186,21 @@ function withCwd(payload: Record<string, unknown>, dir: string): Record<string, 
   return { ...payload, cwd: dir };
 }
 
+/** A POSIX stub that stands in for the compiled binary: setting
+ *  AIDLC_COMPILED_EXECUTABLE to it takes the adapter's compiled argv branch
+ *  ([executable, "engine", "hook", <name>]) while re-entering the packaged
+ *  dispatcher, so tests exercise the same argv the real binary emits without
+ *  a binary build. Windows cannot exec the shebang — callers skip there. */
+function writeCompiledStub(dir: string): string {
+  const stub = join(dir, "aidlc-native-stub");
+  writeFileSync(
+    stub,
+    `#!/bin/sh\nexec bun ${JSON.stringify(join(dir, ".devin", "tools", "aidlc.ts"))} "$@"\n`,
+    { mode: 0o755 },
+  );
+  return stub;
+}
+
 /** Remap a captured Devin payload's aidlc-docs file_path (which points under a
  *  placeholder `/tmp/devin-test/proj/aidlc/spaces/default/intents/test-abc12345/`
  *  prefix) to the scratch project's actual record dir, so the core
@@ -298,8 +313,16 @@ describe("t332 devin adapter — stdin shim normalizes Devin payloads to core ho
         };
         expect(out.hookSpecificOutput?.additionalContext ?? "").not.toContain("AIDLC WORKFLOW ACTIVE");
       }
-      const marker = JSON.parse(readFileSync(markerPath(dir), "utf-8")) as { lastRun?: unknown };
+      const marker = JSON.parse(readFileSync(markerPath(dir), "utf-8")) as {
+        lastRun?: unknown;
+        sessionId?: unknown;
+      };
       expectCanonicalIsoBounded(marker.lastRun, before, after);
+      // The payload's Devin session id links this evidence to the session that
+      // produced it, letting doctor detect a newer session with no SessionStart.
+      expect(marker.sessionId).toBe(
+        (FIXTURES.sessionStart as Record<string, unknown>).session_id,
+      );
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -313,9 +336,15 @@ describe("t332 devin adapter — stdin shim normalizes Devin payloads to core ho
       const r = runAdapter(dir, "session-start", withCwd(FIXTURES.sessionStart as Record<string, unknown>, dir));
       const after = new Date().toISOString();
       expect(r.code).toBe(0);
-      const marker = JSON.parse(readFileSync(markerPath(dir), "utf-8")) as { lastRun?: unknown };
+      const marker = JSON.parse(readFileSync(markerPath(dir), "utf-8")) as {
+        lastRun?: unknown;
+        sessionId?: unknown;
+      };
       expect(marker.lastRun).not.toBe("2020-01-01T00:00:00.000Z");
       expectCanonicalIsoBounded(marker.lastRun, before, after);
+      expect(marker.sessionId).toBe(
+        (FIXTURES.sessionStart as Record<string, unknown>).session_id,
+      );
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -1261,6 +1290,37 @@ describe("t332 devin adapter — stdin shim normalizes Devin payloads to core ho
     }
   });
 
+  test.skipIf(process.platform === "win32")(
+    "15a: compiled executable delegation runs validate-state through the engine route",
+    () => {
+      const dir = scratchProject(true);
+      try {
+        // AIDLC_COMPILED_EXECUTABLE takes the compiled argv branch
+        // ([executable, "engine", "hook", <name>]). Point it at a POSIX stub
+        // that re-enters the packaged dispatcher so this exercises the same
+        // argv the real binary emits without a binary build. Regression
+        // guard: the compiled dispatcher rejects a bare `hook` verb (exit 2
+        // "unknown command 'hook'") — under the old argv the child wrote no
+        // heartbeat and the advisory hook silently no-op'd.
+        const stub = writeCompiledStub(dir);
+        const r = runAdapter(
+          dir,
+          "validate-state",
+          withCwd(FIXTURES.postCompaction as Record<string, unknown>, dir),
+          { AIDLC_COMPILED_EXECUTABLE: stub },
+        );
+        expect(r.code, r.stderr).toBe(0);
+        expect(
+          existsSync(
+            join(seededRecordDir(dir), ".aidlc-engine", "hooks-health", "validate-state.last"),
+          ),
+        ).toBe(true);
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    },
+  );
+
   // --- malformed stdin: fail-open exit 0 on every target ---
 
   test("16: malformed stdin fails open (exit 0, no output) on every advisory target", () => {
@@ -1342,6 +1402,38 @@ describe("t332 devin adapter — stdin shim normalizes Devin payloads to core ho
       rmSync(dir, { recursive: true, force: true });
     }
   });
+
+  test.skipIf(process.platform === "win32")(
+    "17d: compiled executable delegation keeps the guard's block reason (stderr channel)",
+    () => {
+      // Same forbidden transition as 17a, but through the compiled argv
+      // branch (runCoreWithStderr → [executable, "engine", "hook",
+      // state-transition-guard]). The old `[executable, "hook", …]` argv
+      // also exited 2 — but with the dispatcher's "unknown command 'hook'"
+      // on stderr, masking the guard's real reason. This pins that the
+      // stderr reaching Devin is the guard's verdict, not a dispatch error.
+      const dir = scratchProject(false);
+      try {
+        const stub = writeCompiledStub(dir);
+        const payload = {
+          hook_event_name: "PreToolUse",
+          cwd: dir,
+          tool_name: "exec",
+          tool_input: {
+            command: "bun .devin/tools/aidlc-state.ts reject feasibility",
+          },
+        };
+        const r = runAdapter(dir, "state-transition-guard", payload, {
+          AIDLC_COMPILED_EXECUTABLE: stub,
+        });
+        expect(r.code).toBe(2);
+        expect(r.stderr).toContain("Stage status cannot be changed");
+        expect(r.stderr).not.toContain("unknown command");
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    },
+  );
 
   // --- plan-approval-guard: Facet B — workdir lifted into cwd ---
 

@@ -30,7 +30,9 @@
 //       contributor's Devin install, and the separate Devin host
 //       availability / Devin Desktop installation rows are pinned by label
 //       only because found/missing is machine-dependent (tests 9 and 9d;
-//       missing/Desktop branches stay in t334).
+//       missing/Desktop branches stay in t334), plus the side-effect-free
+//       Devin hook dispatch probe (9e) and the session-linked SessionStart
+//       staleness warning (9f).
 //   (10) SKILL.md freshness: no leftover tokens, triggers in frontmatter,
 //        "Harness notes (Devin CLI)" section present.
 //
@@ -52,7 +54,14 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, join, relative, sep } from "node:path";
-import { REPO_ROOT } from "../harness/fixtures.ts";
+import {
+  DEFAULT_RECORD_DIR,
+  DEFAULT_SPACE,
+  REPO_ROOT,
+  intentsDirOf,
+  seededAuditDir,
+  seededRecordDir,
+} from "../harness/fixtures.ts";
 import { trustedCommand } from "../../core/tools/aidlc-command.ts";
 import { HARNESS_HONESTY } from "../../core/tools/aidlc-model-policy.ts";
 import {
@@ -598,6 +607,54 @@ describe("t331 dist/devin packaging parity + shell shape", () => {
     }
   });
 
+  test("9e: doctor's Devin hook dispatch probe resolves the shipped adapter's 16 core-hook commands and fails on the old argv", () => {
+    const root = mkdtempSync(join(tmpdir(), "t331-devin-dispatch-"));
+    try {
+      const project = join(root, "project");
+      cpSync(DEVIN_ROOT, project, { recursive: true });
+      const shimPath = devinShim(join(root, "bin"), DEVIN_MIN_VERSION_STRING);
+      const env = { ...process.env, AIDLC_HARNESS_DIR: ".devin", PATH: shimPath };
+      // A valid marker keeps the execution-evidence row green so the dispatch
+      // row is the deciding signal in each run below.
+      writeFileSync(
+        join(project, ".devin", ".aidlc-session-start.local.json"),
+        JSON.stringify({ lastRun: "2026-09-22T00:00:00.000Z" }),
+      );
+      const runDoctor = () => {
+        const r = spawnSync(
+          "bun",
+          [join(project, ".devin", "tools", "aidlc-utility.ts"), "doctor", "--verbose", "--project-dir", project],
+          { cwd: project, encoding: "utf-8", env },
+        );
+        return { status: r.status, output: `${r.stdout}${r.stderr}` };
+      };
+      let { status, output } = runDoctor();
+      expect(status, output).toBe(0);
+      expect(output).toContain(
+        "Devin hook dispatch: all 16 core-hook commands the adapter emits resolve to installed hooks",
+      );
+
+      // Regress the adapter copy the probe resolves (the one in the project's
+      // own .devin/hooks/): dropping the `engine` route noun is exactly the
+      // argv bug this row exists to catch — the dispatcher then answers
+      // `unknown command 'hook'` for every core hook.
+      const adapterPath = join(project, ".devin", "hooks", "aidlc-devin-adapter.ts");
+      const adapterSource = readFileSync(adapterPath, "utf-8");
+      expect(adapterSource).toContain('"engine", "hook", hook');
+      writeFileSync(
+        adapterPath,
+        adapterSource.replace('"engine", "hook", hook', '"hook", hook'),
+      );
+      ({ status, output } = runDoctor());
+      expect(status, output).toBe(1);
+      expect(output).toContain("Devin hook dispatch is broken:");
+      expect(output).toContain("aidlc hook");
+      expect(output).toContain("unknown command");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   test("9d: the Devin CLI version row is decided by a PATH shim, not the machine", () => {
     const root = mkdtempSync(join(tmpdir(), "t331-devin-clirow-"));
     try {
@@ -651,6 +708,116 @@ describe("t331 dist/devin packaging parity + shell shape", () => {
       // would only be hermetic on machines without Devin Desktop — a machine
       // dependence. t334 covers all four host-matrix cases with injected
       // discovery.
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("9f: doctor warns when a newer Devin session records turns with no fresh SessionStart evidence", () => {
+    const root = mkdtempSync(join(tmpdir(), "t331-devin-stale-marker-"));
+    try {
+      const project = join(root, "project");
+      cpSync(DEVIN_ROOT, project, { recursive: true });
+      const shimPath = devinShim(join(root, "bin"), DEVIN_MIN_VERSION_STRING);
+      const env = { ...process.env, AIDLC_HARNESS_DIR: ".devin", PATH: shimPath };
+      // Seed the per-intent workspace shell so the audit shard the doctor
+      // scans resolves (same shape as tests/harness/fixtures.ts
+      // seedWorkspaceShell — a dir only counts as a record once it holds
+      // aidlc-state.md).
+      const intentsDir = intentsDirOf(project, DEFAULT_SPACE);
+      mkdirSync(join(project, "aidlc", "spaces", DEFAULT_SPACE, "memory"), { recursive: true });
+      mkdirSync(seededRecordDir(project), { recursive: true });
+      mkdirSync(seededAuditDir(project), { recursive: true });
+      writeFileSync(
+        join(seededRecordDir(project), "aidlc-state.md"),
+        readFileSync(join(REPO_ROOT, "tests", "fixtures", "state-brownfield-feature.md"), "utf-8"),
+      );
+      // A heartbeat keeps the hook-liveness row green: the seeded state shows
+      // a workflow in flight, and without a .last stamp doctor would fail
+      // "Hooks have never executed … progressed N stages" — unrelated noise
+      // for the row under test.
+      const healthDir = join(seededRecordDir(project), ".aidlc-engine", "hooks-health");
+      mkdirSync(healthDir, { recursive: true });
+      writeFileSync(join(healthDir, "validate-state.last"), "2026-09-24T00:00:00.000Z\n");
+      writeFileSync(join(project, "aidlc", "active-space"), `${DEFAULT_SPACE}\n`, "utf-8");
+      writeFileSync(join(intentsDir, "active-intent"), `${DEFAULT_RECORD_DIR}\n`, "utf-8");
+      writeFileSync(
+        join(intentsDir, "intents.json"),
+        `${JSON.stringify(
+          [{ uuid: "00000000-0000-7000-8000-000000000001", slug: "fixture", status: "in-flight" }],
+          null,
+          2,
+        )}\n`,
+        "utf-8",
+      );
+      const markerPath = join(project, ".devin", ".aidlc-session-start.local.json");
+      const writeHumanTurn = (session: string, timestamp: string) => {
+        writeFileSync(
+          join(seededAuditDir(project), "test-shard.md"),
+          `# AI-DLC Audit Log\n\n## Human Turn\n**Timestamp**: ${timestamp}\n**Event**: HUMAN_TURN\n**Session**: ${session}\n\n---\n`,
+          "utf-8",
+        );
+      };
+      const runDoctor = () => {
+        const r = spawnSync(
+          "bun",
+          [join(project, ".devin", "tools", "aidlc-utility.ts"), "doctor", "--verbose", "--project-dir", project],
+          { cwd: project, encoding: "utf-8", env },
+        );
+        return { status: r.status, output: `${r.stdout}${r.stderr}` };
+      };
+
+      // (1) Marker session A at T0; a DIFFERENT session B records a human turn
+      // at T1 > T0 → hooks stopped dispatching between sessions: warn row.
+      writeFileSync(
+        markerPath,
+        JSON.stringify({ lastRun: "2026-09-22T00:00:00.000Z", sessionId: "session-a" }),
+      );
+      writeHumanTurn("session-b", "2026-09-23T00:00:00.000Z");
+      let { status, output } = runDoctor();
+      expect(output).toContain(
+        "SessionStart last ran 2026-09-22T00:00:00.000Z (session session-a), but session session-b recorded a human turn at 2026-09-23T00:00:00.000Z with no SessionStart evidence; hooks may not be dispatching",
+      );
+      expect(output).not.toContain("current hook approval is not verified");
+      // A warn row does not fail doctor on its own.
+      expect(status, output).toBe(0);
+
+      // (2) Same session records the turn → the marker still describes the
+      // live session; the historical-evidence pass row returns.
+      writeHumanTurn("session-a", "2026-09-23T00:00:00.000Z");
+      ({ status, output } = runDoctor());
+      expect(status, output).toBe(0);
+      expect(output).toContain("Devin hook execution evidence: SessionStart last ran");
+      expect(output).toContain("current hook approval is not verified");
+      expect(output).not.toContain("hooks may not be dispatching");
+
+      // (3) A marker in the older format (no sessionId) cannot link sessions —
+      // keep the historical-evidence pass row even with a newer turn.
+      writeFileSync(markerPath, JSON.stringify({ lastRun: "2026-09-22T00:00:00.000Z" }));
+      writeHumanTurn("session-b", "2026-09-23T00:00:00.000Z");
+      ({ status, output } = runDoctor());
+      expect(status, output).toBe(0);
+      expect(output).toContain("Devin hook execution evidence: SessionStart last ran");
+      expect(output).toContain("current hook approval is not verified");
+      expect(output).not.toContain("hooks may not be dispatching");
+
+      // (4) Same-second truncation is NOT newer: audit timestamps are
+      // second-precision (…:00Z) while the marker carries milliseconds
+      // (…:00.500Z), so a raw string compare mis-orders them. The staleness
+      // check must compare parsed instants — this turn sits 500ms BEFORE the
+      // marker, so the pass row stays.
+      writeFileSync(
+        markerPath,
+        JSON.stringify({ lastRun: "2026-09-22T09:41:00.500Z", sessionId: "session-a" }),
+      );
+      writeHumanTurn("session-b", "2026-09-22T09:41:00Z");
+      ({ status, output } = runDoctor());
+      expect(status, output).toBe(0);
+      expect(output).toContain(
+        "Devin hook execution evidence: SessionStart last ran 2026-09-22T09:41:00.500Z",
+      );
+      expect(output).toContain("current hook approval is not verified");
+      expect(output).not.toContain("hooks may not be dispatching");
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
