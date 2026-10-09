@@ -220,6 +220,7 @@ import {
   gridCostSummary,
   type PlanChanges,
   planWithChanges,
+  unmetProducerInPlan,
   splitSlugList,
   hasAnyUnitClaimRefs,
   harnessDirectiveLimit,
@@ -4495,6 +4496,7 @@ function createPrintDirective(
     directive.narration +=
       " The folder has no code yet, so I'm starting this as a new project without Reverse Engineering. If the work is on existing code, tell me.";
   }
+  for (const line of unmetPlanInputLines(scope, flags.planChanges)) directive.narration += ` ${line}`;
   if (routedGuardPolicyNote) directive.narration += ` ${routedGuardPolicyNote}`;
   // Beside other work the chat still holds that work's conversation: the
   // person can start this one in a clean chat instead, said once, never as a stop.
@@ -4534,6 +4536,15 @@ function newProjectDropsReverseEngineering(
   const runs = plannedStages?.["reverse-engineering"] === "EXECUTE" ||
     loadScopeMapping()[scope]?.stages["reverse-engineering"] === "EXECUTE";
   return runs && detectedProjectType(projectDir) === "greenfield";
+}
+
+function unmetPlanInputLines(scope: string, planChanges?: PlanChanges): string[] {
+  const planned = planChanges ? planWithChanges(scope, planChanges) : null;
+  const stages = planned && planned.errors.length === 0 ? planned.stages : loadScopeMapping()[scope]?.stages;
+  if (!stages) return [];
+  return unmetProducerInPlan(loadGraph(), stages).map(({ stage, artifact }) =>
+    `${stageLabel(nodeForSlug(stage), stage) ?? stage} will run without ${artifact}, because nothing in this plan builds it.`
+  );
 }
 
 // How a routing question names the work already in progress.

@@ -101,6 +101,7 @@ import {
   scalarField,
   type ScopeDefinition,
   scopeGuardPolicyDefault,
+  scopeGridStages,
   scopeSettingsOffList,
   type StageEntry,
   stageEnabledBySelection,
@@ -190,7 +191,6 @@ export interface GraphStage extends StageEntry {
   // stage-graph.json. The engine's produces filter reads it to prune the
   // per-unit construction matrix; an unlisted artifact applies to all kinds.
   produces_kinds?: Record<string, string[]>;
-  when?: { "producer-in-plan"?: string };
   consumes: Consume[];
   requires_stage: string[];
   // sensors is the stage-side pull import — a list of sensor manifest
@@ -1634,7 +1634,6 @@ export function resolvePlanForScope(
  *  consumes. Without projectType, conditional consumes are checked as
  *  if they fire; advisories for scope-skipped producers still surface.
  *
- *  Future home of the reserved `when:` predicate evaluation —
  *  contributors extend opts rather than adding a new function. */
 export function validateScope(
   scope: string,
@@ -2159,43 +2158,9 @@ export function transposeScopeGrid(
   if (allowedScopes !== undefined) {
     for (const name of allowedScopes) scopeNames.add(name);
   }
-  const producersOf = new Map<string, string[]>();
-  for (const s of stages) {
-    for (const artifact of [...(s.produces ?? []), ...(s.optional_produces ?? [])]) {
-      const owners = producersOf.get(artifact);
-      if (owners === undefined) producersOf.set(artifact, [s.slug]);
-      else owners.push(s.slug);
-    }
-  }
-  const applyPredicates = (stagesMap: Record<string, "EXECUTE" | "SKIP">): void => {
-    for (let pass = 0; pass < stages.length; pass++) {
-      let demoted = false;
-      for (const s of stages) {
-        const needs = s.when?.["producer-in-plan"];
-        if (needs === undefined || stagesMap[s.slug] !== "EXECUTE") continue;
-        const satisfied = (producersOf.get(needs) ?? []).some(
-          (slug) => stagesMap[slug] === "EXECUTE",
-        );
-        if (!satisfied) {
-          stagesMap[s.slug] = "SKIP";
-          demoted = true;
-        }
-      }
-      if (!demoted) return;
-    }
-  };
-
   const grid: ScopeGrid = {};
   for (const scope of [...scopeNames].sort()) {
-    const stagesMap: Record<string, "EXECUTE" | "SKIP"> = {};
-    for (const s of stages) {
-      stagesMap[s.slug] =
-        s.phase === "initialization" || (s.scopes ?? []).includes(scope)
-          ? "EXECUTE"
-          : "SKIP";
-    }
-    applyPredicates(stagesMap);
-    grid[scope] = { stages: stagesMap };
+    grid[scope] = { stages: scopeGridStages(stages, scope) };
   }
   return grid;
 }

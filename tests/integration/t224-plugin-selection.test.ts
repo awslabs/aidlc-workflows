@@ -714,4 +714,25 @@ describe("t224 plugin selection - install chooses visible plugin surfaces", () =
     expect(directive.kind).toBe("run-stage");
     expect(directive.stage).toBe(firstExecute);
   });
+
+  test("a plan without the regression suite's producer keeps the full suite and says what it runs without", () => {
+    const proj = composePluginFixture({
+      plugin: PLUGIN,
+      harness: "claude",
+      projectDir: join(tmp, "when-producer-in-plan"),
+      pluginBuilt,
+    }).projectDir;
+    expect(grid(proj)["test-pro-validation"].stages["build-and-test"]).toBe("SKIP");
+    expect(grid(proj)["test-pro-validation"].stages["test-pro-full-suite"]).toBe("EXECUTE");
+    const missingLine =
+      "test-pro-full-suite will run without test-pro-regression-suite, because nothing in this plan builds it.";
+
+    const validation = runOrchestrate(proj, ["--scope", "test-pro-validation", "probe the suite"]);
+    expect(validation.status, validation.stderr).toBe(0);
+    expect(JSON.parse(validation.stdout.trim()).narration).toContain(missingLine);
+
+    const enterprise = runOrchestrate(proj, ["--scope", "enterprise", "probe the suite"]);
+    expect(enterprise.status, enterprise.stderr).toBe(0);
+    expect(JSON.parse(enterprise.stdout.trim()).narration).not.toContain("will run without");
+  });
 });

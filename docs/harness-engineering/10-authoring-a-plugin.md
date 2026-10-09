@@ -140,20 +140,21 @@ never renumbers core, and you claim no range (which is why two uncoordinated
 plugins can never collide on numbers).
 
 Gate a stage onto a scope with `scopes:` (it is SKIP everywhere else), and
-optionally declare a `when:` predicate. `test-pro-full-suite` is *intended* to run
-only when its upstream producer is on the plan:
+optionally declare a `when:` predicate naming an input it needs from another
+stage. `test-pro-full-suite` takes its regression suite from `build-and-test`:
 
 ```yaml
 scopes:
   - enterprise
+  - test-pro-validation
 when:
   producer-in-plan: test-pro-regression-suite
 ```
 
-> **`when:` is parsed but not yet evaluated.** The schema validates the predicate
-> and the parser reads it, but no engine consumer acts on it today — a stage
-> carrying `when:` is EXECUTE under its declared `scopes:` unconditionally. Author
-> it for forward-compatibility, but gate real behavior on `scopes:` for now.
+> **`when:` never drops a stage.** The stage stays on every plan its `scopes:`
+> put it on. When the plan has no stage that produces the named artifact
+> (`produces` or `optional_produces`), the person is told at workflow start that
+> the stage will run without it, because nothing in the plan builds it.
 
 See [Scopes](04-scopes.md) for scope membership and the `when:` predicate.
 
