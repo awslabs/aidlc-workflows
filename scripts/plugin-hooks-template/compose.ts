@@ -91,9 +91,14 @@ const KIRO_KAS_LAYOUT = (() => {
 const IS_COPILOT = HARNESS_NAME === "copilot";
 const IS_OPENCODE = HARNESS_NAME === "opencode";
 const STAGES_DIR = join(HARNESS_DIR, "aidlc-common", "stages");
+// The harness's skill-discovery root: Copilot's .github/skills, Codex's
+// .agents/skills (it ships no <harnessDir>/skills; same rule as the engine's
+// resolveSkillsPath), else <harnessDir>/skills.
 const SKILLS_DIR = IS_COPILOT
   ? join(PROJECT_DIR, ".github", "skills")
-  : join(HARNESS_DIR, "skills");
+  : HARNESS_NAME === "codex" && !existsSync(join(HARNESS_DIR, "skills"))
+    ? join(PROJECT_DIR, ".agents", "skills")
+    : join(HARNESS_DIR, "skills");
 const PHASES = ["initialization", "ideation", "inception", "construction", "operation"];
 const NATIVE_RUNTIME = Boolean(process.env.AIDLC_COMPILED_EXECUTABLE?.trim());
 const SCOPE_TABLE_END = "<!-- END: compiled scope grid -->";
@@ -2833,7 +2838,7 @@ try {
   const pluginShipsScopes = existsSync(join(PLUGIN_ROOT, "scopes"));
   if (recompiled || missingPluginStageRunner) {
     if (!skillsDirExists) {
-      recordDrop(`runner regeneration skipped: ${HARNESS_LEAF}/skills not present in this install`, "advisory");
+      recordDrop(`runner regeneration skipped: ${relative(PROJECT_DIR, SKILLS_DIR).replaceAll("\\", "/")} not present in this install`, "advisory");
     } else {
       const runnerEnv = installedToolEnv();
       const runRunnerGen = (args: string[], label: string): boolean => {

@@ -807,8 +807,10 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
   // not a conflict on any harness. Copilot keeps its skills and agents outside
   // the harness folder (.github/), where the composed scope row in SKILL.md and
   // the plugin's runners used to read as local edits (exit 4, "locally modified
-  // or unowned"); Claude Code and opencode passed the same check.
-  test.each(["claude", "opencode", "copilot"] as const)(
+  // or unowned"); Claude Code and opencode passed the same check. Codex keeps
+  // its skills in .agents/, where compose writes the plugin's runners and their
+  // explicit-only guard files.
+  test.each(["claude", "opencode", "copilot", "codex"] as const)(
     "a same-release refresh after composing a scope-adding plugin plans no conflict (%s)",
     (harness) => {
       const release = join(REPO_ROOT, "dist-release", harness);
@@ -837,7 +839,11 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
         copyInstall: false,
       });
       expect(compose.composeStatus).toBe(0);
-      const skillsRoot = harness === "copilot" ? join(project, ".github", "skills") : join(project, harnessByName(harness).manifest.harnessDir, "skills");
+      const skillsRoot = harness === "copilot"
+        ? join(project, ".github", "skills")
+        : harness === "codex"
+          ? join(project, ".agents", "skills")
+          : join(project, harnessByName(harness).manifest.harnessDir, "skills");
       const skill = readFileSync(join(skillsRoot, "aidlc", "SKILL.md"), "utf-8");
       expect(skill).toContain("test-pro-validation");
       expect(existsSync(join(skillsRoot, "test-pro-validation", "SKILL.md"))).toBe(true);
@@ -1147,6 +1153,34 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
     expect(readFileSync(scopeRunner, "utf-8")).toContain("name: test-pro-validation");
     expect(readFileSync(join(project, ".claude", "skills", "aidlc-code-generation", "SKILL.md"), "utf-8"))
       .toBe(coreRunnerBefore);
+  });
+
+  // Codex discovers skills at <project>/.agents/skills/ and ships no .codex/skills/.
+  // Compose writes the plugin's stage and scope runners there, each with the
+  // agents/openai.yaml guard the shipped runners carry, so a plugin runner is
+  // explicit-only on Codex like every other generated runner.
+  test("Codex compose writes plugin runners to .agents/skills with the explicit-only guard", () => {
+    const composed = composePluginFixture({
+      plugin: PLUGIN,
+      harness: "codex",
+      projectDir: mkdtempSync(join(tmp, "codex-compose-")),
+      pluginBuilt: pluginBuilds.get("codex")!,
+    });
+    expect(composed.composeStatus).toBe(0);
+    expect(composed.dropLogs).not.toContain("runner regeneration skipped");
+    const skills = join(composed.projectDir, ".agents", "skills");
+    for (const runner of ["test-pro-integration", "test-pro-full-suite", "test-pro-validation"]) {
+      expect(existsSync(join(skills, runner, "SKILL.md")), runner).toBe(true);
+      expect(readFileSync(join(skills, runner, "agents", "openai.yaml"), "utf-8"), runner)
+        .toContain("allow_implicit_invocation: false");
+    }
+    expect(readFileSync(join(skills, "test-pro-integration", "SKILL.md"), "utf-8")).toContain("from the test-pro plugin");
+    expect(readFileSync(join(skills, "test-pro-validation", "SKILL.md"), "utf-8")).toContain("name: test-pro-validation");
+    expect(existsSync(join(composed.projectDir, ".codex", "skills"))).toBe(false);
+    // The orchestrator stays implicitly invocable; the core runner bytes are untouched.
+    expect(existsSync(join(skills, "aidlc", "agents", "openai.yaml"))).toBe(false);
+    expect(readFileSync(join(skills, "aidlc-code-generation", "SKILL.md"), "utf-8"))
+      .toBe(readFileSync(join(REPO_ROOT, "dist", "codex", ".agents", "skills", "aidlc-code-generation", "SKILL.md"), "utf-8"));
   });
 
   test("compose does not auto-enable a plugin excluded by an existing selection", () => {
