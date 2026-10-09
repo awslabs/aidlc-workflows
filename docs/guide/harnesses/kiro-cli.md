@@ -7,6 +7,14 @@
 > IDE-targeted distribution is documented separately in
 > [Running AI-DLC on Kiro IDE](kiro-ide.md).
 
+> [!IMPORTANT]
+> This page covers the legacy `kiro` row, which pins no Kiro engine. On Kiro
+> CLI 2.24.1 or later, use the `kiro-ide` row instead: it pins Kiro's v3
+> engine and runs in Kiro CLI as well as Kiro IDE, and the interactive
+> `aidlc config` ranks it ahead of this row. In an existing `kiro` project,
+> `aidlc config --harness kiro-ide` switches `.kiro/` to it in place and keeps
+> `aidlc/`.
+
 One of the framework's harnesses: the Kiro runtime runs the same AI-DLC
 methodology on [Kiro CLI](https://kiro.dev/docs/cli/). One deterministic core
 — the tools, 33 stage files, protocols, knowledge, sensors, scopes, and rules
