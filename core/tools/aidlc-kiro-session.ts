@@ -730,6 +730,12 @@ export async function kiroSessionDoctorFindings(input: {
         pass: true,
         label: `Session model: ${model} at ${KIRO_EFFORT_LABEL[actual]} effort (${input.preset}), from your personal Kiro settings`,
       });
+    } else if (actual && levels !== null && !levels.includes(actual)) {
+      findings.push({
+        pass: false,
+        label: `Session model: ${model} runs at ${KIRO_EFFORT_LABEL[actual]} effort, which ${model} does not offer`,
+        fix: `run \`${input.modelsCommand} --session-model ${model}\`, or choose an effort in Kiro with /effort`,
+      });
     } else if (actual) {
       // An effort saved in the person's own settings is theirs, set inside Kiro
       // or kept by setup: doctor names the preset's level, it does not ask to fix it.

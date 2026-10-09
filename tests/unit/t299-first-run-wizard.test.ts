@@ -829,10 +829,21 @@ describe("t299 first-run setup wizard", () => {
     expect(result.status, result.stdout + result.stderr).toBe(0);
     expect(result.stdout).not.toContain("Model [");
     expect(result.stdout).toMatch(
-      /Kiro CLI session model: Kiro auto, kept\. Kiro IDE uses its own model picker; run `[^`]+config models` to choose one for Kiro CLI\./,
+      /Kiro CLI session model: Kiro auto, kept\. Kiro IDE uses its own model picker; run `[^`]+config models --session-model <id>` to choose one for Kiro CLI\./,
     );
     expect(kiroWrites(seam.writes)).toEqual([]);
     expect(existsSync(join(result.project, ".kiro", "steering"))).toBe(true);
+
+    // A retired Kiro CLI model is not asked about there either.
+    const retired = kiroSeam({ "chat.defaultModel": "claude-retired-1" });
+    const named = runWizard("\n", {
+      harnesses: { claude: { found: false } },
+      env: { TERM_PROGRAM: "kiro", ...retired.env },
+    });
+    expect(named.status, named.stdout + named.stderr).toBe(0);
+    expect(named.stdout).not.toContain("Model [");
+    expect(named.stdout).not.toContain("Kiro CLI session model:");
+    expect(kiroWrites(retired.writes)).toEqual([]);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("Kiro IDE's row elsewhere asks for Kiro CLI's model with Enter keeping Kiro auto, and saves no effort", () => {

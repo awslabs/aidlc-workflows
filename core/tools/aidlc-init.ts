@@ -8066,13 +8066,13 @@ async function applyFirstRunKiroSession(choices: FirstRunChoices): Promise<KiroS
     preset: distribution !== "kiro" || choices.preset === "unchanged" ? null : choices.preset,
     fetchLevels: true,
     ...(kiro.fillEffortOnly ? { fillEffortOnly: true } : {}),
-    modelsCommand: configCommand("models"),
+    modelsCommand: kiroSessionModelsCommand(distribution),
     doctorCommand: `${aidlcInvocation()} doctor`,
   });
   if (kiro.unasked && result.model === null) {
     result.lines.push(
       `Kiro CLI session model: Kiro auto, kept. Kiro IDE uses its own model picker; run \`${
-        configCommand("models")
+        kiroSessionModelsCommand(distribution)
       }\` to choose one for Kiro CLI.`,
     );
   }
@@ -8141,7 +8141,7 @@ function renderFirstRunEnding(
           section: "models" as const,
           id: "kiro-session-unsaved",
           message: (kiro.lines.at(-1) ?? "Kiro did not save your session model.").replace(/ Run `[^`]+` to try again\.$/, ""),
-          command: configCommand("models"),
+          command: kiroSessionModelsCommand(choices.candidate.stamp.distribution),
         }]
       : []),
   ];
@@ -8210,6 +8210,13 @@ function kiroSessionRow(distribution: string): boolean {
   return distribution === "kiro" || distribution === "kiro-ide";
 }
 
+// The command that chooses the session model later. `config models` asks for it
+// on Kiro CLI's row; on Kiro IDE's row its menu is the preset one, so the
+// session model is named with --session-model.
+function kiroSessionModelsCommand(distribution: string): string {
+  return configCommand(distribution === "kiro-ide" ? "models --session-model <id>" : "models");
+}
+
 function kiroSessionFor(distribution: string): FirstRunKiroSession | null {
   if (!kiroSessionRow(distribution)) return null;
   const cli = kiroCliPath();
@@ -8267,7 +8274,7 @@ function chooseKiroSessionModel(
       `Could not fetch your Kiro models (offline or Kiro did not answer), so ${
         current ?? "Kiro auto"
       } stays for now.${current || modelOnly ? "" : ` ${kiroAutoRecommendation(preset)}`} Run \`${
-        configCommand("models")
+        kiroSessionModelsCommand(modelOnly ? "kiro-ide" : "kiro")
       }\` later to choose one.`,
     );
     process.stdout.write("\n");
@@ -8370,7 +8377,7 @@ function askKiroSessionModel(kiro: FirstRunKiroSession, preset: KiroPreset | nul
       return;
     }
   }
-  kiro.setModel = chooseKiroSessionModel(kiro, preset);
+  kiro.setModel = chooseKiroSessionModel(kiro, preset, undefined, modelOnly);
 }
 
 // The preset step's wording on Kiro CLI: one effort for the whole interactive
@@ -8871,17 +8878,18 @@ async function runFirstRunWizard(projectDir: string): Promise<boolean> {
         );
       }
     }
-    // Kiro IDE's row saves only Kiro CLI's model. A retired one is asked for
-    // again; Kiro auto is asked with Enter keeping it, and not asked at all in
-    // Kiro IDE's own terminal, where the person is setting up Kiro IDE.
+    // Kiro IDE's row saves only Kiro CLI's model. In Kiro IDE's own terminal,
+    // where the person is setting up Kiro IDE, nothing is asked and Kiro's
+    // model list is not fetched. Elsewhere a retired model is asked for again,
+    // and Kiro auto is asked with Enter keeping it.
     if (candidate.stamp.distribution === "kiro-ide") {
       choices.kiro = kiroSessionFor(candidate.stamp.distribution);
       const current = choices.kiro?.session.model ?? null;
-      if (choices.kiro && current && kiroModelRetired(choices.kiro)) {
+      if (choices.kiro && inEditor) {
+        choices.kiro.unasked = true;
+      } else if (choices.kiro && current && kiroModelRetired(choices.kiro)) {
         process.stdout.write("\n");
         choices.kiro.setModel = chooseKiroSessionModel(choices.kiro, null, kiroRetiredIntro(current));
-      } else if (choices.kiro && !current && inEditor) {
-        choices.kiro.unasked = true;
       } else if (choices.kiro && !current) {
         process.stdout.write("\n");
         choices.kiro.setModel = chooseKiroSessionModel(choices.kiro, null, kiroIdeRowAutoIntro(), true);
@@ -10068,7 +10076,7 @@ function kiroModelsPlan(input: {
     }
     return {
       plan: null,
-      ...(input.preset
+      ...(input.preset && input.distribution === "kiro"
         ? {
           note: `Kiro CLI settings could not be read, so the ${input.preset} preset's session effort was not saved. Run \`${
             configCommand("models")
@@ -10102,10 +10110,11 @@ function kiroModelsPlan(input: {
       cli: kiro.cli,
       session: kiro.session,
       ...(input.setModel ? { setModel: input.setModel } : {}),
-      preset: input.preset,
+      // Kiro IDE's row saves only the model: its preset changes nothing in Kiro IDE.
+      preset: input.distribution === "kiro" ? input.preset : null,
       fetchLevels: input.fetchLevels,
       keepExistingEffort: input.keepExistingEffort,
-      modelsCommand: configCommand("models"),
+      modelsCommand: kiroSessionModelsCommand(input.distribution),
       doctorCommand: `${aidlcInvocation()} doctor`,
     },
   };
@@ -10357,7 +10366,7 @@ function prepareModelsSection(
     const planned = kiroModelsPlan({
       distribution: selected.distribution,
       setModel: sessionModel,
-      preset: kiroCli ? currentKiroPreset : null,
+      preset: currentKiroPreset,
       fetchLevels: true,
       keepExistingEffort: false,
     });
@@ -10424,7 +10433,7 @@ function prepareModelsSection(
       const planned = kiroModelsPlan({
         distribution: selected.distribution,
         ...(sessionModel !== undefined ? { setModel: sessionModel } : {}),
-        preset: kiroCli ? currentKiroPreset : null,
+        preset: currentKiroPreset,
         fetchLevels: fetchKiroLevels,
         keepExistingEffort: true,
       });
@@ -10446,7 +10455,7 @@ function prepareModelsSection(
   let kiroPlan: KiroSessionPlan | undefined;
   let kiroNote: string | undefined;
   if (kiroSessionRequest) {
-    const nextKiroPreset = kiroCli && isKiroPreset(next?.preset) ? next.preset : null;
+    const nextKiroPreset = isKiroPreset(next?.preset) ? next.preset : null;
     const planned = kiroModelsPlan({
       distribution: selected.distribution,
       ...(sessionModel !== undefined ? { setModel: sessionModel } : {}),

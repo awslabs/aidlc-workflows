@@ -492,6 +492,20 @@ describe("doctor", () => {
       pass: true,
       label: "Session model: claude-opus-5 at high effort, from your personal Kiro settings; the balanced preset asks for medium (`aidlc config models --session-model claude-opus-5` applies it)",
     }]);
+    // An effort the model does not offer is named, whoever saved it.
+    const unoffered = seamEnv({
+      models: MODELS,
+      current: {
+        "chat.defaultModel": "claude-sonnet-4.6",
+        "chat.modelDefaults": { "claude-sonnet-4.6": { output_config: { effort: "xhigh" } } },
+      },
+      levels: LEVELS,
+    });
+    expect(await findings(unoffered, project({}))).toEqual([{
+      pass: false,
+      label: "Session model: claude-sonnet-4.6 runs at extra-high effort, which claude-sonnet-4.6 does not offer",
+      fix: "run `aidlc config models --session-model claude-sonnet-4.6`, or choose an effort in Kiro with /effort",
+    }]);
     // No effort saved at all is still named: the session runs at Kiro's own.
     const unset = seamEnv({ models: MODELS, current: { "chat.defaultModel": "claude-opus-5" }, levels: LEVELS });
     expect(await findings(unset, project({}))).toEqual([{
