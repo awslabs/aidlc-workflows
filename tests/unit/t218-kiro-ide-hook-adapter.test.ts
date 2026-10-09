@@ -7264,6 +7264,33 @@ describe("t218 a shell call on a turn whose terminal command already ran is refu
     }
   });
 
+  test("a terminal command sent through the person-message card holds the turn", () => {
+    const dir = scratchProject(true);
+    try {
+      const card = runIdeStdin(dir, "person-message", JSON.stringify({
+        session_id: "sess_bare_a",
+        hook_event_name: "UserPromptSubmit",
+        cwd: dir,
+        prompt: "/aidlc --help",
+      }));
+      expect(card.code, card.stderr).toBe(0);
+      const r = shell(dir, "aidlc next", "sess_bare_a");
+      expect(r.code, r.stderr).toBe(2);
+      expect(r.stderr).toBe(`${SAME_TURN}\n`);
+      // The person's next message through the same card opens a new turn.
+      const next = runIdeStdin(dir, "person-message", JSON.stringify({
+        session_id: "sess_bare_a",
+        hook_event_name: "UserPromptSubmit",
+        cwd: dir,
+        prompt: "carry on with the work",
+      }));
+      expect(next.code, next.stderr).toBe(0);
+      expect(shell(dir, "ls", "sess_bare_a").code).toBe(0);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test("the refusal quotes nothing the terminal command carried", () => {
     const dir = scratchProject(true);
     try {
