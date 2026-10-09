@@ -34,6 +34,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { parse } from "smol-toml";
 import {
   absorbReviewerKnowledge,
   reviewerAgentSet,
@@ -368,17 +369,23 @@ function runDispatchHook(
   };
 }
 
+// The persona text the harness actually loads. A Codex persona is the
+// `developer_instructions` string of its TOML role file, read through the
+// parser (the emitter escapes backslashes and quote runs in the raw bytes);
+// every other harness loads the Markdown file as it is.
 function reviewerExecutionSurface(
   harness: (typeof HARNESS_MATRIX)[number],
   reviewer: (typeof REVIEWER_AGENTS)[number],
 ): string {
   if (harness.name === "codex") {
-    return join(harness.engineRoot, "agents", `${reviewer}.toml`);
+    const toml = readFileSync(join(harness.engineRoot, "agents", `${reviewer}.toml`), "utf-8");
+    const parsed = parse(toml) as { developer_instructions?: string };
+    return parsed.developer_instructions ?? "";
   }
   if (harness.name === "opencode") {
-    return join(harness.distRoot, ".opencode", "agents", `${reviewer}.md`);
+    return readFileSync(join(harness.distRoot, ".opencode", "agents", `${reviewer}.md`), "utf-8");
   }
-  return join(harness.engineRoot, "agents", `${reviewer}.md`);
+  return readFileSync(join(harness.engineRoot, "agents", `${reviewer}.md`), "utf-8");
 }
 
 describe("t248 deterministic steering delivery", () => {
@@ -2145,8 +2152,7 @@ describe("t248 reviewer knowledge absorption", () => {
           "reviewing.md",
         );
         const source = readFileSync(sourcePath, "utf-8").trim();
-        const surfacePath = reviewerExecutionSurface(harness, reviewer);
-        const surface = readFileSync(surfacePath, "utf-8");
+        const surface = reviewerExecutionSurface(harness, reviewer);
 
         expect(surface).toContain(
           `Absorbed at build time from knowledge/${reviewer}/reviewing.md`,
