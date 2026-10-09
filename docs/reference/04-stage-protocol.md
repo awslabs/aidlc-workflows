@@ -686,11 +686,21 @@ dynamic per workflow position.
 1. Dispatch the named harness agent; its config loads the persona and
    knowledge (reviewer checklists are absorbed into the reviewer agents'
    bodies at build time).
-2. Paste the accumulated `load-steering` rule bundle into every agent brief
-   verbatim. On harnesses whose agent definitions declare native preload of
-   the full active-space memory tree (Kiro CLI `resources`), deliver the rule
-   bundle through that preload instead of pasting it; every other harness
-   retains the verbatim-paste contract. Every brief still carries
+2. The stage's rule bundle is the rule text the engine delivered:
+   `run-stage.rules_content`, or the accumulated `load-steering` parts when
+   the bundle did not fit beside it. Paste that rule bundle into every agent
+   brief verbatim. On harnesses whose agent definitions declare native preload
+   of the full active-space memory tree (Kiro CLI `resources`), deliver the
+   rule bundle through that preload instead of pasting it; every other harness
+   retains the verbatim-paste contract. When `run-stage` carries `rules_held`
+   instead of `rules_content`, the chat already holds the bundle and the
+   directive does not repeat it: paste nothing for the rules and name
+   `directive.stage_file` in the brief, because every harness that sends
+   `rules_held` gives them to its registered agents itself (on Claude Code,
+   Codex and opencode the rule-delivery hook appends the exact bundle of the
+   stage that path names; Kiro CLI preloads it through `resources`; on Kiro
+   IDE, and Kiro CLI v3 running the same tree, the always-included
+   active-memory steering carries its text). Every brief still carries
    `directive.ceremony`, `directive.protocol_modules`, and the diary discipline
    verbatim. An unloadable required rule blocks dispatch with repair guidance.
    Artifact references stay exact paths; never copy persona or knowledge prose
