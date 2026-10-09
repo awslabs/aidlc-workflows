@@ -12,27 +12,18 @@
 // from the engine's next step (once per change), and in place of the
 // missed-reply step when the reply hook is the one that is off. Every read
 // here fails open: it can only ever change a sentence.
-// This file imports nothing from aidlc-lib.ts: the refusal text there reads
-// the reply hook through it, and a cycle would be the price.
-import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+// The reading (which files, Kiro's key, the file time) lives in aidlc-lib.ts,
+// which the hooks are copied beside with its known siblings; this file holds
+// the words and imports the reader, and the library never imports this file.
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
+import {
+  KIRO_REPLY_HOOK,
+  type KiroHookSwitch,
+  kiroHooksSwitchedOff as readKiroHooksSwitchedOff,
+} from "./aidlc-lib.ts";
 
-/** The reply hook, as both Kiro IDE (`.json`) and Kiro CLI (`.kiro.hook`) name it. */
-export const KIRO_REPLY_HOOK = "aidlc-record-human-turn";
-
-// The hook files AI-DLC itself writes, and the only ones read here: Kiro IDE's
-// five registrations (harness/kiro-ide/manifest.ts) and Kiro CLI's two
-// `.kiro.hook` files (harness/kiro/). Another file under hooks/ is the
-// project's own, whatever its name.
-export const KIRO_HOOK_FILES: readonly string[] = [
-  "aidlc-continue-workflow.json",
-  "aidlc-guard-tool-call.json",
-  "aidlc-log-subagent.json",
-  `${KIRO_REPLY_HOOK}.json`,
-  "aidlc-session-start.json",
-  "aidlc-plan-approval-guard.kiro.hook",
-  `${KIRO_REPLY_HOOK}.kiro.hook`,
-];
+export { KIRO_HOOK_FILES, KIRO_REPLY_HOOK, kiroReplyHookSwitchedOff } from "./aidlc-lib.ts";
 
 // What each AI-DLC hook does for the person, and what stops while it is off,
 // in the words the lines use; one entry per name in KIRO_HOOK_FILES.
@@ -63,66 +54,17 @@ const KIRO_HOOK_PROTECTS: Record<string, { what: string; off: string }> = {
   },
 };
 
-export type KiroHookOff = {
-  /** The hook's name as Kiro's Agent Hooks panel shows it. */
-  name: string;
-  /** The hook file, project-relative with forward slashes. */
-  file: string;
-  /** When the file was last written: the switch, as near as the record gets. */
-  since: string;
-  what: string;
-  off: string;
-};
+export type KiroHookOff = KiroHookSwitch & { what: string; off: string };
 
 export const KIRO_HOOKS_OFF_STEP = "To turn it back on, enable it under Agent Hooks in Kiro.";
 
-function hookName(fileName: string): string {
-  return fileName.replace(/\.kiro\.hook$/, "").replace(/\.json$/, "");
-}
-
-// Kiro's `enabled` lives on the file's root (`.kiro.hook`) or on an entry of
-// its `hooks` array (Kiro IDE's v1 schema); either one false is off. A file
-// an editor saved with a byte order mark is read the same.
-function switchedOff(text: string): boolean {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(text.replace(/^\uFEFF/, ""));
-  } catch {
-    return false;
-  }
-  if (parsed === null || typeof parsed !== "object") return false;
-  const root = parsed as { enabled?: unknown; hooks?: unknown };
-  if (root.enabled === false) return true;
-  return Array.isArray(root.hooks) &&
-    root.hooks.some((hook) => hook !== null && typeof hook === "object" && (hook as { enabled?: unknown }).enabled === false);
-}
-
 /**
  * Every hook file of AI-DLC's own under `<harnessDir>/hooks/` that Kiro has
- * switched off. Nothing on another harness, or in a project with no Kiro hooks
- * directory. A file that is absent or unreadable is not off.
+ * switched off, with what each one does for the person. Nothing on another
+ * harness, or in a project with no Kiro hooks directory.
  */
 export function kiroHooksSwitchedOff(projectDir: string, harnessDir = ".kiro"): KiroHookOff[] {
-  const dir = join(projectDir, harnessDir, "hooks");
-  if (!existsSync(dir)) return [];
-  const off: KiroHookOff[] = [];
-  for (const fileName of KIRO_HOOK_FILES) {
-    const path = join(dir, fileName);
-    try {
-      if (!existsSync(path) || !switchedOff(readFileSync(path, "utf-8"))) continue;
-      const name = hookName(fileName);
-      const protects = KIRO_HOOK_PROTECTS[name];
-      off.push({
-        name,
-        file: `${harnessDir}/hooks/${fileName}`,
-        since: statSync(path).mtime.toISOString(),
-        ...protects,
-      });
-    } catch {
-      // Fails open: a file that cannot be read says nothing.
-    }
-  }
-  return off;
+  return readKiroHooksSwitchedOff(projectDir, harnessDir).map((hook) => ({ ...hook, ...KIRO_HOOK_PROTECTS[hook.name] }));
 }
 
 // The time as the person would say it: today's clock time, else the date too.
@@ -153,11 +95,6 @@ export function kiroHooksOffDoctorChecks(
     label: `AI-DLC hook ${hook.name} is switched off in Kiro's Agent Hooks: ${hook.off} while it is off`,
     fix: "turn it back on under Agent Hooks in Kiro",
   }));
-}
-
-/** True when the reply hook is the one switched off: a reply not recorded is then this, not a trust problem. */
-export function kiroReplyHookSwitchedOff(projectDir: string, harnessDir = ".kiro"): boolean {
-  return kiroHooksSwitchedOff(projectDir, harnessDir).some((hook) => hook.name === KIRO_REPLY_HOOK);
 }
 
 // The engine's next step says each switch-off once: the said mark keeps, per
