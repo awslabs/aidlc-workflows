@@ -1079,7 +1079,10 @@ describe("t331 dist/devin packaging parity + shell shape", () => {
         const coreBody = core
           .slice(coreMatch[0].length)
           .replaceAll("{{HARNESS_DIR}}", ".devin")
-          .replaceAll("{{INVOKE}}", invoke);
+          .replaceAll("{{INVOKE}}", invoke)
+          // package.ts rewrites the persona memory path to the
+          // engine-maintained copy, as for cursor/opencode/copilot.
+          .replaceAll("aidlc/spaces/<active-space>/memory/", "aidlc/active-memory/");
         expect(body.trimEnd()).toBe(coreBody.trimEnd());
       }
     }

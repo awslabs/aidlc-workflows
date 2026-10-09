@@ -205,6 +205,7 @@ const manifest: HarnessManifest = {
     { src: "rules-aidlc.md", dst: "rules/aidlc.md" },
     { src: "skills/aidlc/SKILL.md", dst: "skills/aidlc/SKILL.md" },
     { src: "skills/aidlc/question-rendering.md", dst: "skills/aidlc/question-rendering.md" },
+    { src: "skills/aidlc/composer.md", dst: "skills/aidlc/composer.md" },
     // Project-root install files (beside .devin/, not inside it). A user copies
     // `dist/devin/` wholesale, so these ship at the dist root. Authored here
     // (not core/) because they are Devin-specific: the .gitignore names

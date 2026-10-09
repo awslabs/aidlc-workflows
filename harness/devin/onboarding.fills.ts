@@ -23,7 +23,16 @@ const fills: OnboardingFills = {
 
 # AI-DLC on Devin CLI
 
-This project uses AI-DLC (AI-Driven Development Life Cycle), running on the **Devin CLI harness**. The workspace shell ships in \`.devin/\`; describe what you want to build and it sets up the workflow for you. Run \`/aidlc\` with a scope or description to begin; use \`/aidlc --doctor\`, \`/aidlc --version\`, and \`/aidlc --help\` for setup checks, version, and commands. \`/aidlc compose "<task>"\` proposes a plan behind an approve/edit/reject gate.`,
+This project uses AI-DLC (AI-Driven Development Life Cycle), running on the **Devin CLI harness**. The workspace shell ships in \`.devin/\`; describe what you want to build and it sets up the workflow for you. Run \`/aidlc\` with a scope or description to begin; use \`/aidlc --doctor\`, \`/aidlc --version\`, and \`/aidlc --help\` for setup checks, version, and commands. \`/aidlc compose "<task>"\` proposes a plan behind an approve/edit/reject gate.
+
+Show AI-DLC's questions and choices with their meaning unchanged, in the
+person's language; Plan Approval's choice labels stay exactly as AI-DLC gives
+them. When it has you wait for the person's answer or stop, say
+so in your own words. Do not name, link, or quote SKILL.md or any other AI-DLC
+instruction file on your own, and do not tell them a skill or rule requires
+it: they started AI-DLC to be asked. When they ask about one, answer them. The
+work's own files, such as a plan to approve, and a file AI-DLC asks the person
+to change, such as where a setting is locked, are still named by path.`,
 
     prereq_bullets: `- **Runtime**: Framework commands run through \`aidlc\`; keep that command and its runtime available.
 - **Model & environment (user-level)**: Model, environment, and effort settings are user-level on Devin — do NOT put them in the project config. Set your model in \`~/.config/devin/config.json\` (or \`%APPDATA%\\devin\\config.json\` on Windows). Full setup is in \`docs/guide/01-getting-started.md\` § "Devin CLI Setup".

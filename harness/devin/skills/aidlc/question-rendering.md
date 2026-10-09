@@ -16,7 +16,28 @@ and the applicable method sections below.
 Read and follow [Question Format]({{HARNESS_DIR}}/aidlc-common/protocols/stage-protocol.md#3-question-format),
 **Step 3a**, including its application to Steps 3b/3c, and the
 [Conversation event logging checklist]({{HARNESS_DIR}}/aidlc-common/protocols/stage-protocol.md#mandatory-conversation-event-logging-checklist).
-Apply the native mapping below to its normative confirmation spec.
+Apply the native mapping below to its normative confirmation spec. The
+question's own text starts with the summary bullets, so the person reads what
+they confirm in the picker itself; the recorded decision stays the last line
+alone:
+
+```
+ask_user_question({
+  questions: [{
+    question: "- <each answer, as a summary bullet>\n\nDoes this all look correct before I generate the artifact?",
+    header: "Confirm",
+    multi_select: false,
+    options: [
+      { label: "Looks correct", description: "Generate the artifact from these answers" },
+      { label: "Request changes", description: "Revise one or more answers before generation" }
+    ]
+  }]
+})
+```
+
+On Request changes, when their reply already says what should change, those
+words are the feedback; otherwise ask **"What should change?"** and END THE
+TURN, and do not update any answer until that feedback arrives.
 
 ## Mechanism
 

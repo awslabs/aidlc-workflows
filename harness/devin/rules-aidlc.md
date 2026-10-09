@@ -25,7 +25,11 @@ trigger: always_on
   chain). `/aidlc space <name>` selects the active space by writing
   `aidlc/active-space`; the stage resolver follows that cursor directly to
   `aidlc/spaces/<active-space>/memory/`. The `default` space is the shipped
-  seed. Edit the METHOD at aidlc/spaces/<active-space>/memory/*, never here.
+  seed. For reading, the same content is also at `aidlc/active-memory/` — the
+  engine's git-ignored copy of the ACTIVE space's memory, refreshed at session
+  start, on a space switch, and with each step whose rules it sends, so that
+  fixed path is always current. Edit the METHOD at
+  aidlc/spaces/<active-space>/memory/*, never here and never in the copy.
 -->
 
 # AI-DLC method
@@ -36,6 +40,8 @@ This project uses AI-DLC. The standing practice files live at
 `aidlc/spaces/default/memory/`): `org.md`, `team.md`, `project.md`, and
 `phases/<phase>.md` for ideation, inception, construction, operation. They are
 the single hand-editable source of truth. The engine's rule resolver loads them
-at runtime when a stage runs — this file is a pointer, not a copy. Run `/aidlc`
+at runtime when a stage runs — this file is a pointer, not a copy. The same
+method text is always readable at `aidlc/active-memory/`, the engine's
+git-ignored copy that follows the active space. Run `/aidlc`
 to start or resume a workflow; `/aidlc --status` for the current position;
 `/aidlc --doctor` to validate the setup.

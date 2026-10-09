@@ -375,12 +375,12 @@ function transform(
     s = substituteToken(s, harnessDir, invoke);
     s = applyRulesRename(s, harnessDir, rulesRename);
     if (harness) s = projectTierFrontmatter(s, srcPath, harness);
-    // Cursor, opencode, and Copilot persona bodies read the method by path:
-    // the engine's git-ignored copy of the active space's memory
+    // Cursor, opencode, Copilot, and Devin persona bodies read the method by
+    // path: the engine's git-ignored copy of the active space's memory
     // (aidlc-includes.ts ACTIVE_MEMORY_DIR), the same path on every install.
     const posixPath = srcPath.split(sep).join("/");
     if (
-      (harness === "cursor" || harness === "opencode" || harness === "copilot") &&
+      (harness === "cursor" || harness === "opencode" || harness === "copilot" || harness === "devin") &&
       posixPath.includes("/agents/") &&
       posixPath.endsWith("-agent.md")
     ) {

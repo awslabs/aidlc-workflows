@@ -1251,7 +1251,7 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
           "{{INVOKE}} engine log decision", "{{INVOKE}} engine log answer",
           '--checkpoint summary-confirmation --questions-file "<questions-path>"',
           '`--unit "<directive.unit>"`', "`--single`", "a self-selected answer",
-          "record and later human turn", "same `--unit` / `--single` identity",
+          "no reply of theirs since their last answer", "same `--unit` / `--single` identity",
           '**"What should change?"**', "END THE TURN", "Do not revise anything until",
           "reset the confirmation entry to a blank `[Answer]:`", "re-present the summary",
           "receipt command succeeds", "before re-saving artifacts or requesting review",
