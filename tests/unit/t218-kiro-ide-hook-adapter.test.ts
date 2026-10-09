@@ -1365,7 +1365,7 @@ describe("t218 Kiro IDE hook adapter (USER_PROMPT env context)", () => {
       submitGuardSwitchTurn(dir, session, "");
       const before = snapshotGuardSwitchState(join(dir, "aidlc"));
       for (const command of [
-        "bun .kiro/tools/aidlc-orchestrate.ts next --guard-policy strict build the service",
+        "bun .kiro/tools/aidlc-orchestrate.ts next --guard-policy strict --request-file aidlc/.aidlc-request-text/request.txt",
         "bun .kiro/tools/aidlc-utility.ts config-change --guard-policy strict",
         "bun .kiro/tools/aidlc.ts engine config set guard.plan-approval on",
         "bun .kiro/tools/aidlc-utility.ts config-change --summary-confirmation on",
@@ -1374,7 +1374,7 @@ describe("t218 Kiro IDE hook adapter (USER_PROMPT env context)", () => {
         // A new piece of work's own settings, and `next` carrying them, stay free.
         "bun .kiro/tools/aidlc-utility.ts intent-create sample --summary-confirmation off",
         "bun .kiro/tools/aidlc.ts engine intent create sample --summary-confirmation off",
-        "bun .kiro/tools/aidlc-orchestrate.ts next --summary-confirmation off build the service",
+        "bun .kiro/tools/aidlc-orchestrate.ts next --summary-confirmation off --request-file aidlc/.aidlc-request-text/request.txt",
       ]) {
         const result = preGuardSwitchCommand(dir, session, command);
         expect(result.code, result.stderr).toBe(0);
@@ -6903,57 +6903,65 @@ describe("t218 execute_pwsh aidlc values that cmd.exe would split", () => {
   // Windows PowerShell 5.1 drops a double quote inside an argument it hands a
   // native program (`next 'add a "Save" button'` reached the engine as `add a
   // Save button`, Kiro IDE 1.2.37), and through aidlc.cmd cmd.exe replaces a
-  // %NAME% pair and ends the command at a line break. A request that would not
-  // arrive as written goes through the request file the engine reads with no
-  // shell on the way; the refusal names that step and never asks for other
-  // words, and is a fixed sentence that never repeats the request.
+  // %NAME% pair and ends the command at a line break. So on execute_pwsh every
+  // request goes through the request file the engine reads with no shell on the
+  // way; the refusal names that step and never asks for other words, and is a
+  // fixed sentence that never repeats the request.
   const REQUEST_FILE_REFUSAL =
-    "AIDLC stopped this command before it ran: this command line may not carry the request after next to " +
-    "AI-DLC exactly as written. Write the words of the person's request exactly as they typed them, without " +
-    "its flags, plan name or compose verb, with your file tool to aidlc/.aidlc-request-text/request.txt in this " +
-    "project, and run the same command with --request-file aidlc/.aidlc-request-text/request.txt in place of " +
-    "those words (and any -- before them), keeping the flags, plan name and compose verb on the line. AI-DLC " +
-    "reads the file and removes it.\n";
+    "AIDLC stopped this command before it ran: on PowerShell the request after next goes through a file, so " +
+    "the command line never changes it. Write the words of the person's request exactly as they typed them, " +
+    "without its flags, plan name or compose verb, with your file tool to aidlc/.aidlc-request-text/request.txt in " +
+    "this project, and run the same command with --request-file aidlc/.aidlc-request-text/request.txt in place of " +
+    "those words (and any -- before them), keeping the flags, plan name and compose verb on the line. AI-DLC reads " +
+    "the file and removes it.\n";
   const next = "aidlc engine orchestrate next";
 
-  test("sends a request the command line would not carry as written to the request file", () => {
+  test("sends every request on an execute_pwsh command line to the request file", () => {
     const refused: Array<[label: string, command: string]> = [
       ["inner double quotes (K6)", `${next} 'add a "Save" button to the settings form'`],
       ["a %NAME% pair (K6)", `${next} 'save the app settings under %APPDATA%\\todo-app'`],
-      ["inner double quotes escaped with a backslash", `${next} 'add a \\"Save\\" button'`],
-      ["inner double quotes doubled in a double-quoted string", `${next} "add a ""Save"" button"`],
-      ["unquoted words with a quoted one", `${next} add a "Save" button`],
-      ["a word with a quoted part", `${next} 'add a' Save"d"`],
+      ["a plain request", `${next} 'build the service'`],
+      ["& inside a spaced request (K6)", `${next} 'add a Q&A page'`],
+      ["a lone percent sign", `${next} 'cut load time by 50%'`],
+      ["an apostrophe (#2080)", `${next} 'it''s the owner''s list'`],
       ["a line break inside the request (#1899)", `${next} 'add a page\nthat lists todos'`],
-      ["a CRLF line break inside the request", `${next} 'add a page\r\nthat lists todos'`],
-      ["a backslash ending a spaced request", `${next} 'keep files under C:\\data\\'`],
-      ["a one-word request cmd.exe would split", `${next} R&D`],
-      ["inner quotes around & (K6)", `${next} 'add a "R&D" page'`],
-      ["an apostrophe and inner quotes (#2080)", `${next} 'it''s the "Save" button'`],
-      ["after -- with a scope flag", `${next} --scope bugfix -- 'fix the "Save" button'`],
-      ["after a plan name", `${next} bugfix 'fix the "Save" button'`],
+      ["a request wrapped in double quotes", `${next} "add a Save button"`],
+      ["unquoted words", `${next} add a "Save" button`],
+      ["unquoted words before a PowerShell pipe", `${next} foo|bar`],
+      ["a plan name and a request", `${next} bugfix 'fix the login'`],
+      ["a flag and its value, then a request", `${next} --depth minimal "add a button"`],
+      // A flag value PowerShell fills in may be one the engine accepts, so the request stays on the line.
+      ["a flag value PowerShell resolves, then a request", `${next} --depth $depth 'add a "Save" button'`],
+      [
+        "the copy channel with a resolved flag value and a request from a variable",
+        "bun .kiro/tools/aidlc.ts engine orchestrate next --depth $d --single $req",
+      ],
+      // Any word PowerShell fills in keeps a line from counting as refused, even beside a typed mistake.
+      ["a typed mistake beside a request from a variable", "bun .kiro/tools/aidlc.ts engine orchestrate next --depth bogus $req"],
+      ["after --", `${next} --scope bugfix -- 'fix the "Save" button'`],
       ["after compose", `${next} compose 'drop the "Save" step'`],
-      ["after --new-intent", `${next} --new-intent 'add a "Save" button'`],
-      ["a request that starts with a dash", `${next} '- add a "Save" button'`],
-      ["a flag-shaped word inside the request", `${next} add a -"verbose" option`],
-      ["a later word spelled like the plan name", `${next} bugfix fix the "bugfix" label`],
+      ["after --project-type", `${next} --project-type brownfield 'add the hover tooltip'`],
+      ["after the entry word", `${next} /aidlc bugfix "fix login"`],
+      ["a request that starts with a dash", `${next} '- add a button'`],
       ["through the call operator and aidlc.cmd", `& aidlc.cmd engine orchestrate next 'use %APPDATA% here'`],
       ["inside a grouping", `$r = (${next} 'add a "Save" button')`],
-      ["aidlc.exe", `aidlc.exe engine orchestrate next 'add a "Save" button'`],
-      ["the copy channel's dispatcher", `bun .kiro/tools/aidlc.ts engine orchestrate next 'add a "Save" button'`],
-      ["the copy channel's orchestrator", `bun .kiro/tools/aidlc-orchestrate.ts next 'add a "Save" button'`],
-      // Which call runs `next` is the dispatcher's reading of the whole line.
+      ["aidlc.exe", `aidlc.exe engine orchestrate next 'add a button'`],
       ["the dispatcher's compose shortcut", `aidlc compose 'drop the "Save" step'`],
       ["the dispatcher's --scope shortcut", `aidlc --scope bugfix 'fix the "Save" button'`],
+      ["a global flag first", `aidlc --json engine orchestrate next "add a button"`],
       ["a --project-dir PowerShell resolves", `aidlc --project-dir $PWD engine orchestrate next 'add a "Save" button'`],
       ["a --project-dir after orchestrate", `aidlc engine orchestrate --project-dir C:\\p next 'add a "Save" button'`],
       ["a redirect before the subcommand", `aidlc 2>&1 engine orchestrate next 'add a "Save" button'`],
-      ["a redirect before the orchestrator's subcommand", `bun .kiro/tools/aidlc-orchestrate.ts 2>&1 next 'add a "Save" button'`],
-      ["a !NAME! pair through aidlc.cmd", `${next} 'greet !USERNAME! on login'`],
+      ["the copy channel's dispatcher", `bun .kiro/tools/aidlc.ts engine orchestrate next 'add a button'`],
+      ["the copy channel's orchestrator", `bun .kiro/tools/aidlc-orchestrate.ts next 'add a button'`],
       [
         "the copy channel's orchestrator after --project-dir",
-        `bun .kiro/tools/aidlc-orchestrate.ts --project-dir . next 'add a "Save" button'`,
+        `bun .kiro/tools/aidlc-orchestrate.ts --project-dir . next 'add a button'`,
       ],
+      ["a redirect before the orchestrator's subcommand", `bun .kiro/tools/aidlc-orchestrate.ts 2>&1 next 'add a button'`],
+      // A line this check cannot read to the end may hold the request after that point.
+      ["aidlc.exe with the --% stop-parsing token", `aidlc.exe engine orchestrate next --% add a "Save" button`],
+      ["the copy channel with --%", `bun .kiro/tools/aidlc-orchestrate.ts next --% add a "Save" button`],
     ];
     const dir = scratchProject(false);
     try {
@@ -6968,41 +6976,62 @@ describe("t218 execute_pwsh aidlc values that cmd.exe would split", () => {
     }
   });
 
-  test("lets a request through that the command line carries as written, and the request file itself", () => {
+  // The refusal is a step, not a stop: the skill tells the agent to carry it
+  // out in the same turn, and the step works. Its file write passes the guard
+  // card, and the same command with the file flag runs.
+  test("a request-file or answer-file refusal is carried out in the same turn, and the retry runs", () => {
+    const skill = readFileSync(join(KIRO_IDE_TREE, "skills", "aidlc", "SKILL.md"), "utf-8");
+    expect(skill).toContain(
+      "A hook refusal that names the request file (`--request-file`) or an answer file (`--details-file`, " +
+        "`--on-instruction-file`) is carried out at once, in the same turn: write the person's exact words with your " +
+        "file tool where it says (for a request, without its flags, plan name or `compose`, which stay on the line) and " +
+        "run the same command with that flag in place of their words",
+    );
+    const dir = scratchProject(false);
+    try {
+      const refused = pwshCommand(dir, `${next} --scope bugfix 'fix the "Save" button'`);
+      expect(refused.code).toBe(2);
+      expect(refused.stderr).toBe(REQUEST_FILE_REFUSAL);
+      const file = join(dir, "aidlc", ".aidlc-request-text", "request.txt");
+      const write = runIde(dir, "plan-approval-guard", JSON.stringify({ toolName: "fs_write", toolArgs: { path: file } }));
+      expect(write.code, write.stderr).toBe(0);
+      mkdirSync(dirname(file), { recursive: true });
+      writeFileSync(file, 'fix the "Save" button\n', "utf-8");
+      const retry = pwshCommand(dir, `${next} --scope bugfix --request-file aidlc/.aidlc-request-text/request.txt`);
+      expect(retry.code, retry.stderr).toBe(0);
+      expect(retry.stderr).toBe("");
+      const answerRefused = pwshCommand(dir, "aidlc engine log answer --stage x --details 'keep it under %APPDATA%'");
+      expect(answerRefused.code).toBe(2);
+      expect(answerRefused.stderr).toContain(DETAILS_FILE_STEP);
+      const answerRetry = pwshCommand(dir, "aidlc engine log answer --stage x --details-file .aidlc-engine/answer-text/answer.txt");
+      expect(answerRetry.code, answerRetry.stderr).toBe(0);
+      expect(answerRetry.stderr).toBe("");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("lets through a next with no request on the line, and the request file itself", () => {
     const allowed: Array<[label: string, command: string, tool?: string]> = [
-      ["& inside a spaced request (K6)", `${next} 'add a Q&A page'`],
-      ["| and < inside a spaced request (K6)", `${next} 'add a page that shows a|b and a<b'`],
-      ["a lone percent sign", `${next} 'cut load time by 50%'`],
-      ["two percentages", `${next} 'between 10% and 20%'`],
-      ["an apostrophe (#2080)", `${next} 'it''s the owner''s list'`],
-      ["a backtick (#1899)", `${next} 'rename \`todo\` to task'`],
-      ["a request wrapped in double quotes", `${next} "add a Save button"`],
-      ["a plan name and a request", `${next} bugfix 'fix the login'`],
-      ["a quoted flag value", `${next} --scope "bugfix" 'fix the login'`],
-      ["a quoted project folder", `${next} --project-dir "C:\\work\\my app" add a login page`],
-      // A flag and its value are not the request, wherever they sit.
-      ["a double-quoted request after a flag and its value", `${next} --depth minimal "add a button"`],
-      ["a double-quoted request before a flag and its value", `${next} "add a button" --depth minimal`],
-      ["a double-quoted request after --session", `${next} --session sess_1 "add a button"`],
-      ["a double-quoted request before --scope", `${next} "fix it" --scope bugfix`],
-      ["a double-quoted request after compose", `${next} compose "drop the review step"`],
-      ["a double-quoted request after a plan name and a colon", `${next} classic: "build a notes app"`],
-      ["a double-quoted request after the entry word", `${next} /aidlc bugfix "fix login"`],
-      ["a double-quoted request after a global flag", `aidlc --json engine orchestrate next "add a button"`],
+      ["bare next", next],
+      ["the request file", `${next} --request-file aidlc/.aidlc-request-text/request.txt`],
+      ["the request file with flags", `${next} --scope bugfix --request-file aidlc/.aidlc-request-text/request.txt`],
+      ["the request file after a global flag", `aidlc --json engine orchestrate next --request-file aidlc/.aidlc-request-text/request.txt`],
+      // The engine refuses a --request-file with no file itself, with its own step.
+      ["--request-file with no file", `${next} --request-file --phase ideation`],
+      ["another orchestrator verb", "aidlc engine orchestrate report --stage requirements-analysis --result approved --user-input 'Approve'"],
+      ["compose with the request file", `${next} compose --request-file aidlc/.aidlc-request-text/request.txt`],
+      ["compose with an engine-issued request id", `${next} compose --request abcd1234`],
+      ["flags only", `${next} --skip market-research`],
+      ["a project type only", `${next} --project-type brownfield`],
+      ["a flag and its value only", `${next} --depth minimal`],
+      ["a flag value PowerShell resolves only", `${next} --depth $depth`],
       // A renamed flag's notice is the engine's to print when the command runs, not the hook's.
-      ["a double-quoted request after a renamed flag", `${next} --change-control off "fix login"`],
+      ["a renamed flag", `${next} --change-control off --request-file aidlc/.aidlc-request-text/request.txt`],
       // The engine answers these without starting work, so there is no request to keep.
       ["words after --help", `${next} --help 'what does "compose" do'`],
       ["words after a flag the engine refuses", `${next} --depth bogus 'add a "Save" button'`],
-      ["exclamation marks that make no pair", `${next} 'wow! a new page!'`],
-      ["a backslash inside the request", `${next} 'keep files under C:\\data\\todo'`],
-      ["the request file", `${next} --request-file aidlc/.aidlc-request-text/request.txt`],
-      ["the request file with flags", `${next} --scope bugfix --request-file aidlc/.aidlc-request-text/request.txt`],
-      ["compose with the request file", `${next} compose --request-file aidlc/.aidlc-request-text/request.txt`],
-      ["bare next", next],
-      // No cmd.exe on the way: a %NAME% pair reaches the engine as written.
-      ["a %NAME% pair through aidlc.exe", `aidlc.exe engine orchestrate next 'use %APPDATA% here'`],
-      ["a %NAME% pair through the copy channel", `bun .kiro/tools/aidlc.ts engine orchestrate next 'use %APPDATA% here'`],
+      ["a redirect and a reader pipe", `${next} 2>$null | Select-Object -First 1`],
       ["a POSIX shell", `${next} 'add a "Save" button'`, "execute_bash"],
       ["another program", `Write-Output 'aidlc engine orchestrate next "Save"'`],
     ];

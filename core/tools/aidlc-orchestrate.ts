@@ -3887,11 +3887,8 @@ function unreadSettingOnly(words: readonly string[]): string | null {
   return tokens[0] ?? null;
 }
 
-// `sources`, when given, receives the index in `argv` of each word the
-// request (`intent`) is made of, in order; it stays empty when there is none.
-export function parseNextFlags(argv: string[], sources?: number[]): ParsedFlags {
+export function parseNextFlags(argv: string[]): ParsedFlags {
   const args = withoutEntryWord(argv);
-  const entryWords = argv.length - args.length;
   // A SOLE bare `help` / `-h` token is a help REQUEST, not intent text. Without
   // this, the token falls into intentWords and the freeform funnel offers to
   // create an intent literally named "help" (fresh workspace) or silently
@@ -3982,7 +3979,6 @@ export function parseNextFlags(argv: string[], sources?: number[]): ParsedFlags 
     const a = args[i];
     if (literalIntent) {
       intentWords.push(a);
-      sources?.push(i + entryWords);
       continue;
     }
     if (a === "--") {
@@ -4243,7 +4239,6 @@ export function parseNextFlags(argv: string[], sources?: number[]): ParsedFlags 
       // the standard `--` delimiter when a task must contain a token that is
       // otherwise a recognized AIDLC flag (for example `compose -- --scope`).
       intentWords.push(a);
-      sources?.push(i + entryWords);
     }
   }
   // A leading valid scope token is positional scope syntax, even when a
@@ -4272,15 +4267,11 @@ export function parseNextFlags(argv: string[], sources?: number[]): ParsedFlags 
     const colonNamed = intentWords[0].replace(ENTRY_WORD_PREFIX, "").match(/^([A-Za-z][\w-]*):(?:\s+([\s\S]*))?$/);
     if (validScopes().has(intentWords[0])) {
       flags.positionalScope = intentWords.shift();
-      sources?.shift();
     } else if (colonNamed && validScopes().has(colonNamed[1].toLowerCase())) {
       flags.positionalScope = colonNamed[1].toLowerCase();
       const rest = (colonNamed[2] ?? "").trim();
       if (rest) intentWords[0] = rest;
-      else {
-        intentWords.shift();
-        sources?.shift();
-      }
+      else intentWords.shift();
     }
   }
   // Words the person marked as theirs stand as they are: after the literal
@@ -4294,7 +4285,6 @@ export function parseNextFlags(argv: string[], sources?: number[]): ParsedFlags 
   } else if (unreadSetting !== null) {
     flags.unreadSetting = unreadSetting;
   }
-  if (flags.intent === undefined) sources?.splice(0);
   if (!flags.claim && (flags.claimTeam || flags.claimRhythm)) {
     flags.parseError = "--team and --rhythm require --claim <unit>.";
   }
@@ -16021,23 +16011,30 @@ function nextArgsWithRequestFile(
   };
 }
 
-// Which of `next`'s arguments (the words after `next`, as the shell passed
-// them) are the person's request: the words parseNextFlags makes the request
-// of, after main() has taken its --project-dir and --aidlc-attempt-id pairs
-// (engineArguments) and the request file has taken --request-file and its value. A hook that
-// keeps the request off a command line asks this instead of reading the flags
-// itself.
-export function nextRequestWordIndexes(args: readonly string[]): number[] {
-  const { kept } = engineArguments(args);
-  // As nextArgsWithRequestFile reads it: the first --request-file and its value.
-  const file = kept.findIndex((at) => args[at] === "--request-file");
-  if (file >= 0) kept.splice(file, 2);
-  const sources: number[] = [];
-  const flags = parseNextFlags(kept.map((at) => args[at]), sources);
-  // A line the engine refuses, or one it answers without starting work (help,
-  // status, a verb), makes no request.
-  if (flags.intent === undefined || flags.parseError !== undefined || flags.readOnly !== undefined) return [];
-  return sources.map((at) => kept[at]);
+// What aidlc-orchestrate.ts run with these arguments does with `next`:
+// "none" when it does not run `next`, "carries" when the person's request is
+// on the command line, else "clear". The request is the words parseNextFlags
+// reads as the request after main() takes its --project-dir and
+// --aidlc-attempt-id pairs (engineArguments). A line that names a request
+// file carries none (nextArgsWithRequestFile reads the request from it, or
+// refuses the line), and neither does a line the engine refuses or answers
+// without starting work (help, status, a verb). `filledIn` holds the indexes
+// in `argv` of words a shell fills in only when the command runs: a value the
+// engine rejects may be one of them (`--depth $depth`), so a line holding one
+// after `next` still carries the request it reads. A hook that keeps the request off a
+// command line asks this instead of reading the flags itself.
+export function nextCallRequest(
+  argv: readonly string[],
+  filledIn: ReadonlySet<number> = new Set(),
+): "none" | "clear" | "carries" {
+  const { kept } = engineArguments(argv);
+  if (argv[kept[0]] !== "next") return "none";
+  const rest = kept.slice(1);
+  const args = rest.map((at) => argv[at]);
+  if (args.includes("--request-file")) return "clear";
+  const flags = parseNextFlags(args);
+  if (flags.intent === undefined || flags.readOnly !== undefined) return "clear";
+  return flags.parseError === undefined || rest.some((at) => filledIn.has(at)) ? "carries" : "clear";
 }
 
 // --- CLI entry point ---

@@ -396,28 +396,31 @@ cards doing the work, and the guard notes nothing for them.
   a value holding a space wrapped in double quotes with its own double quotes
   left bare, so the next reader drops them (`next 'add a "Save" button'`
   reached the engine as `add a Save button`, measured on Kiro IDE 1.2.37), and
-  a backslash at the end of such a value escapes the closing quote; through
-  `aidlc.cmd`, cmd.exe also replaces a `%NAME%` pair, ends the command at a
-  line break, and acts on `&`, `|`, `<`, `>` and `^` in a word PowerShell left
-  unquoted. Before the cmd.exe check below, `terminal-command-guard` refuses an
-  `execute_pwsh` `next` call (native `aidlc`, `aidlc.cmd` or `aidlc.exe`, or the
-  copy channel's `aidlc.ts` or `aidlc-orchestrate.ts` run by bun) whose request
-  may not arrive as written: any double quote in a request argument, and any in
-  a request of several arguments; on `aidlc.cmd` also a `%NAME%` or `!NAME!` pair,
-  a line break, or one of those characters in a word with no space. Which words are
-  the request is the engine's own reading (`resolveAction`, `parseNextFlags`),
-  so a flag's value and a leading plan name are not. The fixed reason asks the
-  agent to write the request's words, exactly as typed and without its flags,
-  plan name or compose verb, with its file tool to
-  `aidlc/.aidlc-request-text/request.txt` and run the same command with
-  `--request-file` in its place; that write passes the shared Plan Approval
+  through `aidlc.cmd` cmd.exe also replaces a `%NAME%` pair, ends the command at
+  a line break, and acts on `&`, `|`, `<`, `>` and `^`. So on `execute_pwsh`
+  every request goes through the request file: `terminal-command-guard`
+  refuses an AI-DLC call that runs `next` with request words on the command
+  line (native `aidlc`, `aidlc.cmd` or `aidlc.exe`, the dispatcher's shortcuts
+  such as `aidlc compose`, or the copy channel's `aidlc.ts` or
+  `aidlc-orchestrate.ts` run by bun). Which call runs `next` is the
+  dispatcher's reading (`resolveAction`) and whether it carries a request is
+  the engine's (`nextCallRequest`), so a line of flags, `--request-file`,
+  `--help` or one the engine refuses passes. A word after `next` that
+  PowerShell fills in only when the command runs (`--depth $depth`) may be one
+  the engine accepts, so a line holding one is not counted as refused and its
+  request is. Through `aidlc` or `aidlc.cmd`, a value PowerShell builds from
+  code or into free text is refused first, by the checks below. The fixed reason asks the agent to write
+  the request's words, exactly as typed and without its flags, plan name or
+  compose verb, with its file tool to `aidlc/.aidlc-request-text/request.txt`
+  and run the same command with `--request-file` in its place; the skill has
+  it do that in the same turn, and the write passes the shared Plan Approval
   guard in every state, as an answer-text file does.
 - **cmd.exe metacharacters**: native Windows `aidlc` is `aidlc.cmd`, so cmd.exe
   reads the command line Windows PowerShell 5.1 builds for it: a value holding
   a space is wrapped in double quotes with its own double quotes left as they
   are, and cmd.exe acts on `&`, `|`, `<`, `>` and `^` outside its quotes. So
   `--details 'Use "R & D" team'`, or the same with `\"`, runs `D" team"` as a
-  separate command. Before anything else, `terminal-command-guard` refuses
+  separate command. Before the command runs, `terminal-command-guard` refuses
   (exit 2 with the reason on stderr) an `execute_pwsh` call of `aidlc` or
   `aidlc.cmd` in which one of those characters would reach cmd.exe outside its
   quotes, or in which a value holds a `%NAME%` pair (cmd.exe replaces it with
