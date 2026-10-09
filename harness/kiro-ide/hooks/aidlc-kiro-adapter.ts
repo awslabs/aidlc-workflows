@@ -157,10 +157,13 @@ import {
   workspaceSourceState,
   writeWorkspaceSourceSnapshot,
   ANSWER_TEXT_DIR,
+  inRequestTextDir,
+  REQUEST_TEXT_DIR,
   composerProposalPath,
   docsRoot,
   memoryFilePath,
   normalizeDriveLetter,
+  noteGuardPolicyRename,
 } from "../tools/aidlc-lib.ts";
 import {
   approvalFingerprint,
@@ -177,7 +180,8 @@ import {
 import { normalizeRetiredGuardPolicyField } from "../tools/aidlc-guard-switch.ts";
 import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import { aidlcEngineCommand, aidlcInvocation } from "../tools/aidlc-runtime-paths.ts";
-import { terminalDispatcherArgv } from "../tools/aidlc.ts";
+import { resolveAction, terminalDispatcherArgv } from "../tools/aidlc.ts";
+import { LAUNCHER_GLOBAL_FLAGS } from "../tools/aidlc-command.ts";
 import { kiroIdeTurnOpen, noteKiroIdeTurn } from "../tools/aidlc-rules-held.ts";
 import {
   canonicalWriteTool,
@@ -560,13 +564,17 @@ function latestPlanApprovalAnswer(questions: string): string | null {
 
 // The record files the shared plan-approval guard admits in every Plan
 // Approval state, by the identity it uses: the Code Generation stage's
-// learnings diary, the composer's proposal, and a file in the answer-text
-// folder. None is a planning authority file.
+// learnings diary, the composer's proposal, a file in the answer-text folder,
+// and a person's request for `next --request-file`. None is a planning
+// authority file.
 function isGuardAdmittedRecordWrite(projectDir: string, normalizedPath: string): boolean {
   try {
     const path = normalizeDriveLetter(normalizedPath);
     const same = (candidate: string) => path === normalizeDriveLetter(resolve(candidate));
-    if (same(memoryFilePath(projectDir, "construction", "code-generation")) || same(composerProposalPath(projectDir))) {
+    if (
+      same(memoryFilePath(projectDir, "construction", "code-generation")) || same(composerProposalPath(projectDir)) ||
+      inRequestTextDir(projectDir, path)
+    ) {
       return true;
     }
     const inside = relative(normalizeDriveLetter(resolve(join(docsRoot(projectDir), ANSWER_TEXT_DIR))), path);
@@ -1072,7 +1080,7 @@ const FREE_TEXT_FLAGS: ReadonlySet<string> = new Set([
 
 type CmdHazard =
   | { kind: "metacharacter"; flag: string | null; char: string }
-  | { kind: "variable"; flag: string | null }
+  | { kind: "variable"; flag: string | null; logAnswer: boolean }
   | { kind: "expression"; flag: string | null; request: boolean }
   | { kind: "unchecked" };
 
@@ -1104,6 +1112,10 @@ function cmdMetacharacterHazard(command: string): CmdHazard | null {
     const found = aidlcCommandArgs(words);
     if (found === null) continue;
     const args = found.filter((word) => !word.redirect);
+    // `log answer` reads a person's answer from a file as well (--details-file,
+    // --on-instruction-file); the route is the dispatcher's reading of the line.
+    const route = resolveAction(args.map((word, at) => word.opaque ? `\u0001opaque-${at}\u0001` : word.value));
+    const logAnswer = route.type === "delegate" && route.tool === "aidlc-log.ts" && route.args[0] === "answer";
     for (let index = 0; index < args.length; index++) {
       const word = args[index];
       if (!word.opaque) continue;
@@ -1112,7 +1124,7 @@ function cmdMetacharacterHazard(command: string): CmdHazard | null {
       // An opaque word's own text (not a grouping's) still counts: cmd.exe
       // expands a %NAME% pair in it whatever PowerShell resolves, and a
       // metacharacter in it may land outside cmd.exe's quotes.
-      if (CMD_VARIABLE_PAIR.test(word.value)) return { kind: "variable", flag: valueFlag(args, index) };
+      if (CMD_VARIABLE_PAIR.test(word.value)) return { kind: "variable", flag: valueFlag(args, index), logAnswer };
       if (/[&|<>^]/.test(word.value)) return { kind: "expression", flag: valueFlag(args, index), request: false };
     }
     let line = "";
@@ -1132,7 +1144,7 @@ function cmdMetacharacterHazard(command: string): CmdHazard | null {
       }
     }
     const variable = CMD_VARIABLE_PAIR.exec(line);
-    if (variable !== null) return { kind: "variable", flag: valueFlag(args, owners[variable.index]) };
+    if (variable !== null) return { kind: "variable", flag: valueFlag(args, owners[variable.index]), logAnswer };
   }
   if (reading.unreadable.some((words) => aidlcCommandArgs(words) !== null)) return { kind: "unchecked" };
   return null;
@@ -1247,11 +1259,19 @@ function cmdMetacharacterRefusal(hazard: CmdHazard): string {
     );
   }
   if (hazard.kind === "variable") {
+    // A person's answer has a way past every shell, so its words stay as they
+    // are: an answer-text file `log answer` reads, one per value.
+    const file = hazard.flag === "--details" ? "answer.txt" : "on-instruction.txt";
+    const step = hazard.logAnswer && (hazard.flag === "--details" || hazard.flag === "--on-instruction")
+      ? "Write the person's answer, exactly as they gave it, with your file tool to " +
+        `<record>/.aidlc-engine/answer-text/${file} and run the same command with ` +
+        `${hazard.flag}-file .aidlc-engine/answer-text/${file} in place of ${hazard.flag} and its value.\n`
+      : "Write it without the surrounding percent signs (for example APPDATA instead " +
+        "of %APPDATA%), then run the command again.\n";
     return (
       `AIDLC stopped this command before it ran. ${subject} holds a %NAME% pair, which cmd.exe ` +
       "(the aidlc command runs through aidlc.cmd) would replace with that environment variable's value " +
-      "before AI-DLC sees it. Write it without the surrounding percent signs (for example APPDATA instead " +
-      "of %APPDATA%), then run the command again.\n"
+      `before AI-DLC sees it. ${step}`
     );
   }
   return (
@@ -1261,6 +1281,131 @@ function cmdMetacharacterRefusal(hazard: CmdHazard): string {
     "quotes as single quotes (for example --details 'Use ''R & D'' team'), or leave the character out of " +
     "a label you wrote, then run the command again.\n"
   );
+}
+
+// --- The person's request after `next` in an execute_pwsh command ---
+//
+// Windows PowerShell 5.1 hands a native program an argument that holds a space
+// wrapped in double quotes, with its own double quotes left bare, so the next
+// reader drops them: `next 'add a "Save" button'` reaches the engine as `add a
+// Save button` (measured on Kiro IDE 1.2.37), and a backslash at the end of
+// such an argument escapes the closing quote. Through aidlc.cmd, cmd.exe also
+// replaces a %NAME% pair, ends the command at a line break, and acts on & | <
+// > ^ in a word PowerShell left unquoted. The engine reads the request from a
+// file instead (`next --request-file`, aidlc-orchestrate.ts), so a request
+// that may not arrive as written goes there, and the person's words are
+// never the thing to change. Which words are the request is the engine's own
+// reading: the dispatcher's route (resolveAction) and `next`'s flags
+// (parseNextFlags). A quote is judged conservatively: any double quote in a
+// request argument, and any in a request of several arguments, where the quotes
+// PowerShell read as delimiters may have been the person's.
+const REQUEST_FILE = `${REQUEST_TEXT_DIR}/request.txt`;
+const REQUEST_FILE_REFUSAL =
+  "AIDLC stopped this command before it ran: this command line may not carry the request after next to " +
+  "AI-DLC exactly as written. Write the words of the person's request exactly as they typed them, without " +
+  `its flags, plan name or compose verb, with your file tool to ${REQUEST_FILE} in this project, and run the ` +
+  `same command with --request-file ${REQUEST_FILE} in place of those words (and any -- before them), keeping ` +
+  "the flags, plan name and compose verb on the line. AI-DLC reads the file and removes it.\n";
+
+// The words `next` reads in an AI-DLC call that runs it, and whether the call
+// runs through aidlc.cmd: the native `aidlc` (or `aidlc.cmd`), `aidlc.exe`,
+// and the copy channel's dispatcher or orchestrator file run by bun. Which
+// call runs `next` is the dispatcher's own reading of the whole line
+// (resolveAction), so `aidlc compose ...` and `aidlc --scope ...` count; a word
+// PowerShell resolves stands in as a placeholder, and the words are the ones
+// the dispatcher hands on, minus its own --project-dir and global flags. Null
+// for any other statement.
+function nextCallWords(statement: PowerShellWord[]): { args: PowerShellWord[]; launcher: boolean } | null {
+  // A redirection is PowerShell's, never a word the program reads.
+  const words = statement.filter((word) => !word.redirect);
+  const start = words.length > 2 && words[0].source.startsWith("$") && words[1].source === "=" ? 2 : 0;
+  const program = words[start];
+  if (program === undefined || program.opaque) return null;
+  const native = /(?:^|[\\/])aidlc(\.cmd|\.exe)?$/i.exec(program.value);
+  let args: PowerShellWord[];
+  if (native !== null) {
+    args = words.slice(start + 1);
+  } else {
+    const copy = copyChannelCommandArgs(words);
+    if (copy === null) return null;
+    const script = words[words.length - copy.length - 1];
+    if (/aidlc-orchestrate\.ts$/i.test(script.value)) {
+      // The engine takes --project-dir and --aidlc-attempt-id, with their values, before its subcommand.
+      let at = 0;
+      while (!copy[at]?.opaque && (copy[at]?.value === "--project-dir" || copy[at]?.value === "--aidlc-attempt-id")) at += 2;
+      return copy[at]?.value === "next" && !copy[at].opaque ? { args: copy.slice(at + 1), launcher: false } : null;
+    }
+    if (!/[\\/]aidlc\.ts$/i.test(script.value)) return null;
+    args = copy;
+  }
+  const values = args.map((word, at) => word.opaque ? `\u0001opaque-${at}\u0001` : word.value);
+  const action = resolveAction(values);
+  if (action.type !== "delegate" || action.tool !== "aidlc-orchestrate.ts" || action.args[0] !== "next") return null;
+  // The dispatcher's own words, which it takes before it hands the rest on.
+  const dispatcherOwn = (list: readonly string[]): number[] => {
+    const kept: number[] = [];
+    for (let i = 0; i < list.length; i++) {
+      if (list[i] === "--") {
+        for (let rest = i; rest < list.length; rest++) kept.push(rest);
+        break;
+      }
+      if (list[i] === "--project-dir" && i + 1 < list.length) {
+        i++;
+        continue;
+      }
+      if (!LAUNCHER_GLOBAL_FLAGS.has(list[i])) kept.push(i);
+    }
+    return kept;
+  };
+  const handed = action.args.slice(1);
+  const handedKept = dispatcherOwn(handed).map((at) => handed[at]);
+  const typed = dispatcherOwn(values);
+  const tail = typed.slice(typed.length - handedKept.length);
+  if (tail.length !== handedKept.length || tail.some((at, i) => values[at] !== handedKept[i])) return null;
+  return { args: tail.map((at) => args[at]), launcher: native !== null && native[1]?.toLowerCase() !== ".exe" };
+}
+
+// Whether one word of the request would not reach the engine as written.
+function requestWordLost(word: PowerShellWord, severalWords: boolean, launcher: boolean): boolean {
+  const value = word.value;
+  if (value.includes('"')) return true;
+  if (word.source.includes('"') && (severalWords || !/^"[^"]*"$/.test(word.source))) return true;
+  if (/[ \t]/.test(value) && value.endsWith("\\")) return true;
+  if (!launcher) return false;
+  // cmd.exe also replaces a !NAME! pair where delayed expansion is on.
+  return CMD_VARIABLE_PAIR.test(value) || /![^!\s]+!/.test(value) || /[\r\n]/.test(value) ||
+    (!/[ \t]/.test(value) && /[&|<>^]/.test(value));
+}
+
+// Whether an execute_pwsh command holds an AI-DLC `next` call whose request
+// (the words after its flags, after `--`, or after `compose`) would not reach
+// the engine as written. Which words are the request is the engine's reading
+// (nextRequestWordIndexes); when it cannot be loaded, the check stands aside.
+async function requestNeedsFile(command: string): Promise<boolean> {
+  for (const words of powerShellStatements(command).statements) {
+    const call = nextCallWords(words);
+    if (call === null) continue;
+    const args = call.args;
+    // A word PowerShell resolves is the expression checks' (cmdMetacharacterHazard, aidlcCodeArgumentHazard).
+    const plain = args.flatMap((word, at) => !word.opaque && word.value !== "--" ? [at] : []);
+    const quotedAmongSeveral = plain.length > 1 && plain.some((at) => args[at].source.includes('"'));
+    if (!quotedAmongSeveral && !plain.some((at) => requestWordLost(args[at], false, call.launcher))) continue;
+    let request: number[];
+    try {
+      const { nextRequestWordIndexes } = await import("../tools/aidlc-orchestrate.ts");
+      // A notice the parse would print (a renamed flag) is the engine's to say when the command runs.
+      noteGuardPolicyRename(() => {});
+      request = nextRequestWordIndexes(args.map((word, at) => word.opaque ? `\u0001opaque-${at}\u0001` : word.value))
+        .filter((at) => !args[at].opaque);
+    } catch {
+      // Without the engine's reading nothing here can tell the request from a
+      // flag's value, and the engine that would read the file cannot run
+      // either, so this check stands aside; the checks below still run.
+      continue;
+    }
+    if (request.some((at) => requestWordLost(args[at], request.length > 1, call.launcher))) return true;
+  }
+  return false;
 }
 
 // --- PowerShell code in an AI-DLC command's arguments ---
@@ -2327,7 +2472,12 @@ if (target === "terminal-command-guard") {
     return 2;
   }
   // Before anything below runs a command: this call would not reach the
-  // engine as written (see cmdMetacharacterHazard).
+  // engine as written. The person's request goes through the request file
+  // (see requestNeedsFile); any other value is cmdMetacharacterHazard's.
+  if (isKiroPowerShellTool(tool) && await requestNeedsFile(rawCommand)) {
+    process.stderr.write(REQUEST_FILE_REFUSAL);
+    return 2;
+  }
   const cmdHazard = isKiroPowerShellTool(tool) ? cmdMetacharacterHazard(rawCommand) : null;
   if (cmdHazard !== null) {
     process.stderr.write(cmdMetacharacterRefusal(cmdHazard));

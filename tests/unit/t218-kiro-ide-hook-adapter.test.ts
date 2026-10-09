@@ -3344,7 +3344,8 @@ describe("t218 Kiro IDE plan-approval enforcement", () => {
   });
 
   // A record write the shared guard admits while a Unit's plan waits (the
-  // stage's learnings diary, the composer's proposal, a person's answer text)
+  // stage's learnings diary, the composer's proposal, a person's answer or
+  // request text)
   // reaches PostToolUse with no arguments on Kiro IDE, so the adapter judges it
   // from the result prose alone. None of them is a planning authority file: the
   // write poisons nothing, and the person's approval builds.
@@ -3352,6 +3353,7 @@ describe("t218 Kiro IDE plan-approval enforcement", () => {
     ["the stage learnings diary", (dir: string) => memoryFilePath(dir, "construction", "code-generation")],
     ["the composer's proposal", (dir: string) => composerProposalPath(dir)],
     ["a person's answer text", (dir: string) => join(docsRoot(dir), ANSWER_TEXT_DIR, "answer.md")],
+    ["a person's request text", (dir: string) => join(dir, "aidlc", ".aidlc-request-text", "request.txt")],
   ])("a write of %s during a Unit's plan wait does not poison Approve Plan", (_label, target) => {
     const dir = scratchProject(true);
     try {
@@ -6581,6 +6583,13 @@ describe("t218 execute_pwsh aidlc values that cmd.exe would split", () => {
     `${effects[char]} instead of passing it as text. Write that value's inner double ` +
     "quotes as single quotes (for example --details 'Use ''R & D'' team'), or leave the character out of " +
     "a label you wrote, then run the command again.\n";
+  // A person's answer is never changed to fit cmd.exe: it goes through the answer-text file.
+  const DETAILS_FILE_STEP =
+    "Write the person's answer, exactly as they gave it, with your file tool to " +
+    "<record>/.aidlc-engine/answer-text/answer.txt and run the same command with " +
+    "--details-file .aidlc-engine/answer-text/answer.txt in place of --details and its value.\n";
+  const ON_INSTRUCTION_FILE_STEP = DETAILS_FILE_STEP.replaceAll("--details", "--on-instruction")
+    .replaceAll("answer.txt", "on-instruction.txt");
   const UNCHECKED =
     "AIDLC stopped this command before it ran. Its aidlc arguments could not be checked for characters " +
     "cmd.exe would act on (the aidlc command runs through aidlc.cmd). Run it again without the --% " +
@@ -6671,13 +6680,16 @@ describe("t218 execute_pwsh aidlc values that cmd.exe would split", () => {
   // even inside its quotes, so the engine would record something else, or a
   // secret. The refusal says "a %NAME% pair" and never the name itself.
   test("refuses a %NAME% pair cmd.exe would replace, quoted or not, without naming it", () => {
-    const variableRefusal = (subject: string): string =>
+    // `log answer` reads a person's answer from a file; any other value is
+    // text the agent writes, which leaves the pair out.
+    const DROP_PERCENT_STEP =
+      "Write it without the surrounding percent signs (for example APPDATA instead of %APPDATA%), then run the command again.\n";
+    const variableRefusal = (subject: string, step: string): string =>
       `AIDLC stopped this command before it ran. ${subject} holds a %NAME% pair, which cmd.exe ` +
       "(the aidlc command runs through aidlc.cmd) would replace with that environment variable's value " +
-      "before AI-DLC sees it. Write it without the surrounding percent signs (for example APPDATA instead " +
-      "of %APPDATA%), then run the command again.\n";
+      `before AI-DLC sees it. ${step}`;
     const details = "The --details value";
-    const cases: Array<[label: string, command: string, subject: string]> = [
+    const cases: Array<[label: string, command: string, subject: string, step?: string]> = [
       ["a variable in a quoted value", `${answer} 'use %APPDATA% for config'`, details],
       ["a variable that could hold a secret", `${answer} '%AIDLC_TEST_SENTINEL%'`, details],
       ["a name with a space", `${answer} 'a %b c% d'`, details],
@@ -6688,15 +6700,38 @@ describe("t218 execute_pwsh aidlc values that cmd.exe would split", () => {
         "aidlc engine log answer --stage x `\r\n  --details '%AIDLC_TEST_SENTINEL%'",
         details,
       ],
-      ["a value no flag names", "aidlc '%AIDLC_TEST_SENTINEL%'", "A value"],
+      ["a value no flag names", "aidlc '%AIDLC_TEST_SENTINEL%'", "A value", DROP_PERCENT_STEP],
+      [
+        "a person's --on-instruction words",
+        "aidlc engine log answer --stage x --on-instruction 'keep it in %AIDLC_TEST_SENTINEL%'",
+        "The --on-instruction value",
+        ON_INSTRUCTION_FILE_STEP,
+      ],
+      [
+        "--details after a --project-dir",
+        "aidlc --project-dir C:\\p engine log answer --stage x --details 'keep %AIDLC_TEST_SENTINEL%'",
+        details,
+      ],
+      [
+        "--details of a command that reads no file for it",
+        "aidlc engine log decision --stage x --decision 'pick one' --details 'see %AIDLC_TEST_SENTINEL%'",
+        details,
+        DROP_PERCENT_STEP,
+      ],
+      [
+        "an agent's own --reason",
+        "aidlc engine orchestrate report --stage x --result rejected --reason 'see %AIDLC_TEST_SENTINEL%'",
+        "The --reason value",
+        DROP_PERCENT_STEP,
+      ],
     ];
     const dir = scratchProject(false);
     try {
-      for (const [label, command, subject] of cases) {
+      for (const [label, command, subject, step = DETAILS_FILE_STEP] of cases) {
         const r = pwshCommand(dir, command);
         expect(r.code, label).toBe(2);
         expect(r.stdout, label).toBe("");
-        expect(r.stderr, label).toBe(variableRefusal(subject));
+        expect(r.stderr, label).toBe(variableRefusal(subject, step));
         expect(r.stderr, label).not.toContain("AIDLC_TEST_SENTINEL");
       }
     } finally {
@@ -6766,8 +6801,7 @@ describe("t218 execute_pwsh aidlc values that cmd.exe would split", () => {
         "$r = $(aidlc engine log answer --stage s --questions-file x.md --details 'use %AIDLC_TEST_SENTINEL% here')",
         "AIDLC stopped this command before it ran. The --details value holds a %NAME% pair, which cmd.exe " +
           "(the aidlc command runs through aidlc.cmd) would replace with that environment variable's value " +
-          "before AI-DLC sees it. Write it without the surrounding percent signs (for example APPDATA instead " +
-          "of %APPDATA%), then run the command again.\n",
+          `before AI-DLC sees it. ${DETAILS_FILE_STEP}`,
       ],
       [
         "a split value two groupings deep",
@@ -6859,6 +6893,124 @@ describe("t218 execute_pwsh aidlc values that cmd.exe would split", () => {
       for (const [label, command] of passes) {
         const r = pwshCommand(dir, command, label === "a POSIX shell" ? "execute_bash" : "execute_pwsh");
         expect(r.code, label).toBe(0);
+        expect(r.stderr, label).toBe("");
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  // Windows PowerShell 5.1 drops a double quote inside an argument it hands a
+  // native program (`next 'add a "Save" button'` reached the engine as `add a
+  // Save button`, Kiro IDE 1.2.37), and through aidlc.cmd cmd.exe replaces a
+  // %NAME% pair and ends the command at a line break. A request that would not
+  // arrive as written goes through the request file the engine reads with no
+  // shell on the way; the refusal names that step and never asks for other
+  // words, and is a fixed sentence that never repeats the request.
+  const REQUEST_FILE_REFUSAL =
+    "AIDLC stopped this command before it ran: this command line may not carry the request after next to " +
+    "AI-DLC exactly as written. Write the words of the person's request exactly as they typed them, without " +
+    "its flags, plan name or compose verb, with your file tool to aidlc/.aidlc-request-text/request.txt in this " +
+    "project, and run the same command with --request-file aidlc/.aidlc-request-text/request.txt in place of " +
+    "those words (and any -- before them), keeping the flags, plan name and compose verb on the line. AI-DLC " +
+    "reads the file and removes it.\n";
+  const next = "aidlc engine orchestrate next";
+
+  test("sends a request the command line would not carry as written to the request file", () => {
+    const refused: Array<[label: string, command: string]> = [
+      ["inner double quotes (K6)", `${next} 'add a "Save" button to the settings form'`],
+      ["a %NAME% pair (K6)", `${next} 'save the app settings under %APPDATA%\\todo-app'`],
+      ["inner double quotes escaped with a backslash", `${next} 'add a \\"Save\\" button'`],
+      ["inner double quotes doubled in a double-quoted string", `${next} "add a ""Save"" button"`],
+      ["unquoted words with a quoted one", `${next} add a "Save" button`],
+      ["a word with a quoted part", `${next} 'add a' Save"d"`],
+      ["a line break inside the request (#1899)", `${next} 'add a page\nthat lists todos'`],
+      ["a CRLF line break inside the request", `${next} 'add a page\r\nthat lists todos'`],
+      ["a backslash ending a spaced request", `${next} 'keep files under C:\\data\\'`],
+      ["a one-word request cmd.exe would split", `${next} R&D`],
+      ["inner quotes around & (K6)", `${next} 'add a "R&D" page'`],
+      ["an apostrophe and inner quotes (#2080)", `${next} 'it''s the "Save" button'`],
+      ["after -- with a scope flag", `${next} --scope bugfix -- 'fix the "Save" button'`],
+      ["after a plan name", `${next} bugfix 'fix the "Save" button'`],
+      ["after compose", `${next} compose 'drop the "Save" step'`],
+      ["after --new-intent", `${next} --new-intent 'add a "Save" button'`],
+      ["a request that starts with a dash", `${next} '- add a "Save" button'`],
+      ["a flag-shaped word inside the request", `${next} add a -"verbose" option`],
+      ["a later word spelled like the plan name", `${next} bugfix fix the "bugfix" label`],
+      ["through the call operator and aidlc.cmd", `& aidlc.cmd engine orchestrate next 'use %APPDATA% here'`],
+      ["inside a grouping", `$r = (${next} 'add a "Save" button')`],
+      ["aidlc.exe", `aidlc.exe engine orchestrate next 'add a "Save" button'`],
+      ["the copy channel's dispatcher", `bun .kiro/tools/aidlc.ts engine orchestrate next 'add a "Save" button'`],
+      ["the copy channel's orchestrator", `bun .kiro/tools/aidlc-orchestrate.ts next 'add a "Save" button'`],
+      // Which call runs `next` is the dispatcher's reading of the whole line.
+      ["the dispatcher's compose shortcut", `aidlc compose 'drop the "Save" step'`],
+      ["the dispatcher's --scope shortcut", `aidlc --scope bugfix 'fix the "Save" button'`],
+      ["a --project-dir PowerShell resolves", `aidlc --project-dir $PWD engine orchestrate next 'add a "Save" button'`],
+      ["a --project-dir after orchestrate", `aidlc engine orchestrate --project-dir C:\\p next 'add a "Save" button'`],
+      ["a redirect before the subcommand", `aidlc 2>&1 engine orchestrate next 'add a "Save" button'`],
+      ["a redirect before the orchestrator's subcommand", `bun .kiro/tools/aidlc-orchestrate.ts 2>&1 next 'add a "Save" button'`],
+      ["a !NAME! pair through aidlc.cmd", `${next} 'greet !USERNAME! on login'`],
+      [
+        "the copy channel's orchestrator after --project-dir",
+        `bun .kiro/tools/aidlc-orchestrate.ts --project-dir . next 'add a "Save" button'`,
+      ],
+    ];
+    const dir = scratchProject(false);
+    try {
+      for (const [label, command] of refused) {
+        const r = pwshCommand(dir, command);
+        expect(r.code, label).toBe(2);
+        expect(r.stdout, label).toBe("");
+        expect(r.stderr, label).toBe(REQUEST_FILE_REFUSAL);
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("lets a request through that the command line carries as written, and the request file itself", () => {
+    const allowed: Array<[label: string, command: string, tool?: string]> = [
+      ["& inside a spaced request (K6)", `${next} 'add a Q&A page'`],
+      ["| and < inside a spaced request (K6)", `${next} 'add a page that shows a|b and a<b'`],
+      ["a lone percent sign", `${next} 'cut load time by 50%'`],
+      ["two percentages", `${next} 'between 10% and 20%'`],
+      ["an apostrophe (#2080)", `${next} 'it''s the owner''s list'`],
+      ["a backtick (#1899)", `${next} 'rename \`todo\` to task'`],
+      ["a request wrapped in double quotes", `${next} "add a Save button"`],
+      ["a plan name and a request", `${next} bugfix 'fix the login'`],
+      ["a quoted flag value", `${next} --scope "bugfix" 'fix the login'`],
+      ["a quoted project folder", `${next} --project-dir "C:\\work\\my app" add a login page`],
+      // A flag and its value are not the request, wherever they sit.
+      ["a double-quoted request after a flag and its value", `${next} --depth minimal "add a button"`],
+      ["a double-quoted request before a flag and its value", `${next} "add a button" --depth minimal`],
+      ["a double-quoted request after --session", `${next} --session sess_1 "add a button"`],
+      ["a double-quoted request before --scope", `${next} "fix it" --scope bugfix`],
+      ["a double-quoted request after compose", `${next} compose "drop the review step"`],
+      ["a double-quoted request after a plan name and a colon", `${next} classic: "build a notes app"`],
+      ["a double-quoted request after the entry word", `${next} /aidlc bugfix "fix login"`],
+      ["a double-quoted request after a global flag", `aidlc --json engine orchestrate next "add a button"`],
+      // A renamed flag's notice is the engine's to print when the command runs, not the hook's.
+      ["a double-quoted request after a renamed flag", `${next} --change-control off "fix login"`],
+      // The engine answers these without starting work, so there is no request to keep.
+      ["words after --help", `${next} --help 'what does "compose" do'`],
+      ["words after a flag the engine refuses", `${next} --depth bogus 'add a "Save" button'`],
+      ["exclamation marks that make no pair", `${next} 'wow! a new page!'`],
+      ["a backslash inside the request", `${next} 'keep files under C:\\data\\todo'`],
+      ["the request file", `${next} --request-file aidlc/.aidlc-request-text/request.txt`],
+      ["the request file with flags", `${next} --scope bugfix --request-file aidlc/.aidlc-request-text/request.txt`],
+      ["compose with the request file", `${next} compose --request-file aidlc/.aidlc-request-text/request.txt`],
+      ["bare next", next],
+      // No cmd.exe on the way: a %NAME% pair reaches the engine as written.
+      ["a %NAME% pair through aidlc.exe", `aidlc.exe engine orchestrate next 'use %APPDATA% here'`],
+      ["a %NAME% pair through the copy channel", `bun .kiro/tools/aidlc.ts engine orchestrate next 'use %APPDATA% here'`],
+      ["a POSIX shell", `${next} 'add a "Save" button'`, "execute_bash"],
+      ["another program", `Write-Output 'aidlc engine orchestrate next "Save"'`],
+    ];
+    const dir = scratchProject(false);
+    try {
+      for (const [label, command, tool] of allowed) {
+        const r = pwshCommand(dir, command, tool);
+        expect(r.code, `${label}\n${r.stderr}`).toBe(0);
         expect(r.stderr, label).toBe("");
       }
     } finally {
@@ -7213,6 +7365,8 @@ describe("t218 a shell call on a turn whose terminal command already ran is refu
         // return, and a value cmd.exe would split.
         ["execute_bash", "ls\rpwd"],
         ["execute_pwsh", "aidlc.cmd engine orchestrate next --request \"a&b\""],
+        // A request the command line would not carry: held too, never sent to the request file.
+        ["execute_pwsh", "aidlc engine orchestrate next 'add a \"Save\" button to the settings form'"],
       ];
       for (const [tool, command] of [...BARE_SPELLINGS, ...own]) {
         // Twice: a refusal does not start a turn of its own.

@@ -1705,7 +1705,9 @@ plan the question does not ask about (or one already answered), shell writes to
 them, and the files the plans name are refused until the engine routes work again. A file-tool write of a
 person's answer text in the record's `.aidlc-engine/answer-text/` folder passes
 in every Plan Approval state, so `log answer --details-file` can carry text a
-shell would act on. So does a file-tool write of the stage's own learnings diary
+shell would act on, and so does one of a person's request directly inside the
+project's `aidlc/.aidlc-request-text/` folder (a plain file reached through no
+link), for `next --request-file`. So does a file-tool write of the stage's own learnings diary
 (`<record>/construction/code-generation/memory.md`, exactly, reached through no
 link): the agent appends to it while it plans, for every Unit, and the diary
 lives in the stage's folder, not the Unit's.

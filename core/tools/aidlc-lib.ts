@@ -12282,6 +12282,18 @@ export function readVerificationCommandFile(projectDir: string, file: string): V
 export const ANSWER_TEXT_DIR = ".aidlc-engine/answer-text";
 const ANSWER_TEXT_MAX_BYTES = 64 * 1024;
 
+/** The project folder where the agent writes a person's request for `next
+ *  --request-file`, so the words reach AI-DLC with no shell on the way. */
+export const REQUEST_TEXT_DIR = "aidlc/.aidlc-request-text";
+
+/** Whether `target` names a file directly inside REQUEST_TEXT_DIR, the only
+ *  place `next --request-file` reads; the reader checks links itself. */
+export function inRequestTextDir(projectDir: string, target: string): boolean {
+  const folder = normalizeDriveLetter(resolvePath(projectDir, REQUEST_TEXT_DIR));
+  const path = normalizeDriveLetter(resolvePath(projectDir, target));
+  return dirname(path) === folder;
+}
+
 /**
  * Read one answer text file the agent wrote, then remove it. The path is
  * record-relative and must name a plain file inside ANSWER_TEXT_DIR, reached

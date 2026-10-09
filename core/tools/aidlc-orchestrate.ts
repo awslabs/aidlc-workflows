@@ -184,6 +184,7 @@ import {
   readRegularFileNoFollowOrThrow,
   recordFileTargetOrThrow,
   removeRecordFileNoFollow,
+  REQUEST_TEXT_DIR,
   evaluateGuardRefusal,
   filterProducesByKind,
   firstInScopeStageOfPhase,
@@ -3886,8 +3887,11 @@ function unreadSettingOnly(words: readonly string[]): string | null {
   return tokens[0] ?? null;
 }
 
-export function parseNextFlags(argv: string[]): ParsedFlags {
+// `sources`, when given, receives the index in `argv` of each word the
+// request (`intent`) is made of, in order; it stays empty when there is none.
+export function parseNextFlags(argv: string[], sources?: number[]): ParsedFlags {
   const args = withoutEntryWord(argv);
+  const entryWords = argv.length - args.length;
   // A SOLE bare `help` / `-h` token is a help REQUEST, not intent text. Without
   // this, the token falls into intentWords and the freeform funnel offers to
   // create an intent literally named "help" (fresh workspace) or silently
@@ -3978,6 +3982,7 @@ export function parseNextFlags(argv: string[]): ParsedFlags {
     const a = args[i];
     if (literalIntent) {
       intentWords.push(a);
+      sources?.push(i + entryWords);
       continue;
     }
     if (a === "--") {
@@ -4238,6 +4243,7 @@ export function parseNextFlags(argv: string[]): ParsedFlags {
       // the standard `--` delimiter when a task must contain a token that is
       // otherwise a recognized AIDLC flag (for example `compose -- --scope`).
       intentWords.push(a);
+      sources?.push(i + entryWords);
     }
   }
   // A leading valid scope token is positional scope syntax, even when a
@@ -4266,11 +4272,15 @@ export function parseNextFlags(argv: string[]): ParsedFlags {
     const colonNamed = intentWords[0].replace(ENTRY_WORD_PREFIX, "").match(/^([A-Za-z][\w-]*):(?:\s+([\s\S]*))?$/);
     if (validScopes().has(intentWords[0])) {
       flags.positionalScope = intentWords.shift();
+      sources?.shift();
     } else if (colonNamed && validScopes().has(colonNamed[1].toLowerCase())) {
       flags.positionalScope = colonNamed[1].toLowerCase();
       const rest = (colonNamed[2] ?? "").trim();
       if (rest) intentWords[0] = rest;
-      else intentWords.shift();
+      else {
+        intentWords.shift();
+        sources?.shift();
+      }
     }
   }
   // Words the person marked as theirs stand as they are: after the literal
@@ -4284,6 +4294,7 @@ export function parseNextFlags(argv: string[]): ParsedFlags {
   } else if (unreadSetting !== null) {
     flags.unreadSetting = unreadSetting;
   }
+  if (flags.intent === undefined) sources?.splice(0);
   if (!flags.claim && (flags.claimTeam || flags.claimRhythm)) {
     flags.parseError = "--team and --rhythm require --claim <unit>.";
   }
@@ -15950,11 +15961,10 @@ function engineWorkflowSelection(projectDir: string): WorkflowSelection {
   }
 }
 
-// The folder where the agent writes a person's request for `next
-// --request-file`, so the words reach AI-DLC with no shell on the way: on
+// REQUEST_TEXT_DIR is the folder where the agent writes a person's request for
+// `next --request-file`, so the words reach AI-DLC with no shell on the way: on
 // Windows, cmd.exe ends a command at a line break and replaces a %NAME% pair
 // even inside quotes, and the aidlc launcher is read by cmd.exe again.
-const REQUEST_TEXT_DIR = "aidlc/.aidlc-request-text";
 const REQUEST_TEXT_MAX_BYTES = 64 * 1024;
 
 // The file's words take the flag's place as one argument after `--`, so none
@@ -16011,21 +16021,45 @@ function nextArgsWithRequestFile(
   };
 }
 
+// Which of `next`'s arguments (the words after `next`, as the shell passed
+// them) are the person's request: the words parseNextFlags makes the request
+// of, after main() has taken its --project-dir and --aidlc-attempt-id pairs
+// (engineArguments) and the request file has taken --request-file and its value. A hook that
+// keeps the request off a command line asks this instead of reading the flags
+// itself.
+export function nextRequestWordIndexes(args: readonly string[]): number[] {
+  const { kept } = engineArguments(args);
+  // As nextArgsWithRequestFile reads it: the first --request-file and its value.
+  const file = kept.findIndex((at) => args[at] === "--request-file");
+  if (file >= 0) kept.splice(file, 2);
+  const sources: number[] = [];
+  const flags = parseNextFlags(kept.map((at) => args[at]), sources);
+  // A line the engine refuses, or one it answers without starting work (help,
+  // status, a verb), makes no request.
+  if (flags.intent === undefined || flags.parseError !== undefined || flags.readOnly !== undefined) return [];
+  return sources.map((at) => kept[at]);
+}
+
 // --- CLI entry point ---
 
-export function main(argv: string[]): void {
-  const rawArgs = argv;
-
-  // Extract --project-dir (mirrors aidlc-jump.ts / aidlc-state.ts).
+// The arguments main() keeps, by index, and the --project-dir and
+// --aidlc-attempt-id values it takes out of them first (before any `--`;
+// mirrors aidlc-jump.ts / aidlc-state.ts).
+function engineArguments(rawArgs: readonly string[]): {
+  kept: number[];
+  projectDir: string | undefined;
+  attemptId: string | undefined;
+  conflictingAttemptId: boolean;
+} {
   let projectDir: string | undefined;
   let attemptId: string | undefined;
   let conflictingAttemptId = false;
-  const filteredArgs: string[] = [];
+  const kept: number[] = [];
   let literalArgs = false;
   for (let i = 0; i < rawArgs.length; i++) {
     if (rawArgs[i] === "--") {
       literalArgs = true;
-      filteredArgs.push(rawArgs[i]);
+      kept.push(i);
     } else if (!literalArgs && rawArgs[i] === "--project-dir" && i + 1 < rawArgs.length) {
       projectDir = rawArgs[i + 1];
       i++;
@@ -16037,9 +16071,16 @@ export function main(argv: string[]): void {
       }
       i++;
     } else {
-      filteredArgs.push(rawArgs[i]);
+      kept.push(i);
     }
   }
+  return { kept, projectDir, attemptId, conflictingAttemptId };
+}
+
+export function main(argv: string[]): void {
+  const rawArgs = argv;
+  const { kept, projectDir, attemptId, conflictingAttemptId } = engineArguments(rawArgs);
+  const filteredArgs = kept.map((at) => rawArgs[at]);
 
   const subcommand = filteredArgs[0];
   let subArgs = filteredArgs.slice(1);

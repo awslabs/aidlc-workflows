@@ -392,6 +392,26 @@ cards doing the work, and the guard notes nothing for them.
   these per-chat ones: the engine could tell one chat's latch from another's
   only through process ancestry, and the chats of one Kiro IDE window share a
   process.
+- **The request after `next`**: Windows PowerShell 5.1 hands a native program
+  a value holding a space wrapped in double quotes with its own double quotes
+  left bare, so the next reader drops them (`next 'add a "Save" button'`
+  reached the engine as `add a Save button`, measured on Kiro IDE 1.2.37), and
+  a backslash at the end of such a value escapes the closing quote; through
+  `aidlc.cmd`, cmd.exe also replaces a `%NAME%` pair, ends the command at a
+  line break, and acts on `&`, `|`, `<`, `>` and `^` in a word PowerShell left
+  unquoted. Before the cmd.exe check below, `terminal-command-guard` refuses an
+  `execute_pwsh` `next` call (native `aidlc`, `aidlc.cmd` or `aidlc.exe`, or the
+  copy channel's `aidlc.ts` or `aidlc-orchestrate.ts` run by bun) whose request
+  may not arrive as written: any double quote in a request argument, and any in
+  a request of several arguments; on `aidlc.cmd` also a `%NAME%` or `!NAME!` pair,
+  a line break, or one of those characters in a word with no space. Which words are
+  the request is the engine's own reading (`resolveAction`, `parseNextFlags`),
+  so a flag's value and a leading plan name are not. The fixed reason asks the
+  agent to write the request's words, exactly as typed and without its flags,
+  plan name or compose verb, with its file tool to
+  `aidlc/.aidlc-request-text/request.txt` and run the same command with
+  `--request-file` in its place; that write passes the shared Plan Approval
+  guard in every state, as an answer-text file does.
 - **cmd.exe metacharacters**: native Windows `aidlc` is `aidlc.cmd`, so cmd.exe
   reads the command line Windows PowerShell 5.1 builds for it: a value holding
   a space is wrapped in double quotes with its own double quotes left as they
@@ -405,7 +425,9 @@ cards doing the work, and the guard notes nothing for them.
   and so does a pair whose name would start or end with a space, such as the
   one in `10% and 20%`). The reason is a fixed sentence that names the flag
   whose value is at fault (or "A value") and the character or "a %NAME% pair",
-  and never repeats the value, so text in a value cannot add lines to it. It
+  and never repeats the value, so text in a value cannot add lines to it. For
+  a pair in the `--details` or `--on-instruction` value of `log answer` it names
+  `--details-file` or `--on-instruction-file` instead of changing the words. It
   simulates PowerShell 5.1's argument passing (an empty argument dropped, a
   value with a space or tab wrapped in double quotes) and cmd.exe's quote
   toggling, reading past a `#` comment and a closed `<# ... #>` block comment,

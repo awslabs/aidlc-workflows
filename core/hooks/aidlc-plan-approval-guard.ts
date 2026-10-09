@@ -74,6 +74,8 @@ import {
   composerProposalPath,
   docsRoot,
   ANSWER_TEXT_DIR,
+  inRequestTextDir,
+  REQUEST_TEXT_DIR,
   errorMessage,
   getField,
   GUARD_RECOVERY_ASK_TYPE,
@@ -1116,6 +1118,23 @@ function isAnswerTextTarget(projectDir: string, target: string): boolean {
   try {
     const record = docsRoot(projectDir);
     if (!record || !isTrustedRecordTarget(projectDir, target, join(record, ANSWER_TEXT_DIR))) return false;
+    const existing = lstatSync(resolve(target), { throwIfNoEntry: false });
+    return existing === undefined || (existing.isFile() && existing.nlink === 1);
+  } catch {
+    return false;
+  }
+}
+
+// The folder where the agent writes a person's request for `next
+// --request-file` (REQUEST_TEXT_DIR): a plain file directly inside it, reached
+// through no link. Writing it changes nothing and builds nothing; the engine
+// reads it as the request and removes it.
+function isRequestTextTarget(projectDir: string, target: string): boolean {
+  try {
+    if (
+      !inRequestTextDir(projectDir, target) ||
+      !isTrustedRecordTarget(projectDir, target, join(projectDir, REQUEST_TEXT_DIR))
+    ) return false;
     const existing = lstatSync(resolve(target), { throwIfNoEntry: false });
     return existing === undefined || (existing.isFile() && existing.nlink === 1);
   } catch {
@@ -2546,12 +2565,15 @@ async function evaluate(
       return 0;
     }
     // A file-tool write of a person's answer text, for the log to read with no
-    // shell on the way, passes in every Plan Approval state too.
+    // shell on the way, passes in every Plan Approval state too, and so does
+    // one of a person's request, for `next --request-file`.
     if (
       WRITE_TOOLS.has(toolName) &&
       !mutation.opaqueShell &&
       mutation.targets.length > 0 &&
-      mutation.targets.every((candidate) => isAnswerTextTarget(projectDir, candidate))
+      mutation.targets.every((candidate) =>
+        isAnswerTextTarget(projectDir, candidate) || isRequestTextTarget(projectDir, candidate)
+      )
     ) {
       return 0;
     }
