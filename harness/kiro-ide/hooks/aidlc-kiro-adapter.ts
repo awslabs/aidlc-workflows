@@ -3234,9 +3234,12 @@ function buildForward(): Forward {
         // as one dispatch carrying every developer stage's prompt: a plan marker
         // on any stage then makes the whole pipeline a guarded dispatch, rather
         // than the first stage's prompt deciding for the rest.
+        // A named reviewer dispatch arrives as a Task too, as the developer's
+        // does: the core guard judges only the developer's and records a
+        // reviewer brief that already carries its verdict.
         const forwarded = developers.length > 1
           ? { ...developers[0], prompt: developers.map((t) => t.prompt).join("\n") }
-          : developers[0] ?? (generic ? targets[0] : undefined);
+          : developers[0] ?? (generic || targets.length === 1 ? targets[0] : undefined);
         if (forwarded) {
           return { hook: "aidlc-plan-approval-guard.ts", input: taskInput(forwarded) };
         }

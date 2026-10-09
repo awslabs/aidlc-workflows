@@ -94,6 +94,7 @@ import {
   seedBoltDag,
   seededRecordDir,
   seededStateFile,
+  WORKER_BRIEF_SECTIONS_FIXTURE,
 } from "../harness/fixtures.ts";
 import { writeActiveDirectiveMarker } from "../../core/tools/aidlc-lib.ts";
 import {
@@ -3957,7 +3958,7 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     const dir = rulesProject();
     seedUnapprovedCodeGeneration(dir);
     const brief = (contract: string) =>
-      `AIDLC-STAGE: code-generation\nAIDLC-TESTING-CONTRACT: ${contract}\nBuild the approved plan.`;
+      `AIDLC-STAGE: code-generation\nAIDLC-TESTING-CONTRACT: ${contract}${WORKER_BRIEF_SECTIONS_FIXTURE}Build the approved plan.`;
     for (const launcher of LAUNCHERS) {
       const refused = launch(dir, launcher, "aidlc-developer-agent", brief(`sha256:${"a".repeat(64)}`));
       expect(refused.code, refused.stderr).toBe(0);

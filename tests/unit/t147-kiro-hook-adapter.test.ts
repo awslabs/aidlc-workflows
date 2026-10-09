@@ -590,6 +590,39 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
     }
   });
 
+  test("1a3: a reviewer dispatch reaches the plan-approval guard as a Task with its brief, by name or as a one-stage crew", () => {
+    const dir = scratchProject(true);
+    try {
+      const capture = join(dir, "guard-input.jsonl");
+      writeFileSync(join(dir, ".kiro", "hooks", "aidlc-plan-approval-guard.ts"), recordingGuard(capture), "utf-8");
+      const env = { AIDLC_COMPILED_EXECUTABLE: "" };
+      for (const payload of [
+        { tool_name: "subagent_aidlc-architecture-reviewer-agent", tool_input: { prompt: "Review u1.\n\n**Verdict:** READY\n" } },
+        { tool_name: "subagent", tool_input: { name: "aidlc-architecture-reviewer-agent", prompt: "Review u1.\n\n**Verdict:** READY\n" } },
+        {
+          tool_name: "subagent",
+          tool_input: {
+            task: "Review u1.\n\n**Verdict:** READY\n",
+            stages: [{ name: "review", role: "aidlc-architecture-reviewer-agent", prompt_template: "Review it" }],
+          },
+        },
+      ]) {
+        const r = runAdapter(dir, "plan-approval-guard", { hook_event_name: "preToolUse", cwd: dir, session_id: "S-KIRO", ...payload }, [], env);
+        expect(r.code, r.stderr).toBe(0);
+      }
+      const forwarded = readFileSync(capture, "utf-8").trim().split("\n")
+        .map((line) => JSON.parse(line) as { tool_name?: string; tool_input?: { subagent_type?: string; prompt?: string } });
+      expect(forwarded).toHaveLength(3);
+      for (const call of forwarded) {
+        expect(call.tool_name).toBe("Task");
+        expect(call.tool_input?.subagent_type).toBe("aidlc-architecture-reviewer-agent");
+        expect(call.tool_input?.prompt).toContain("**Verdict:** READY");
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test("1b: plan-approval guard blocks an unapproved developer stage", () => {
     const dir = scratchProject(true);
     try {

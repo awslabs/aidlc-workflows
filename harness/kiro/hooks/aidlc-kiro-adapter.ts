@@ -973,12 +973,19 @@ if (target === "plan-approval-guard") {
   const ti = kiro.tool_input ?? {};
   const canonical = canonicalTool(tool, ti);
   let payload: Record<string, unknown>;
-  if (dispatch?.agents.includes("aidlc-developer-agent")) {
+  if (dispatch !== null && dispatch.agents.length > 0) {
+    // Every named dispatch goes to the core guard, which judges only the
+    // developer's and records a reviewer brief that already carries its
+    // verdict. A crew with the developer is the developer's dispatch; a crew of
+    // several others names no one agent.
+    const agent = dispatch.agents.includes("aidlc-developer-agent")
+      ? "aidlc-developer-agent"
+      : dispatch.agents.length === 1 ? dispatch.agents[0] : "";
     payload = {
       hook_event_name: "PreToolUse",
       tool_name: "Task",
       tool_input: {
-        subagent_type: "aidlc-developer-agent",
+        subagent_type: agent,
         prompt: dispatch.prompt,
       },
     };
