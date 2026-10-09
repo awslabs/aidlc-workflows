@@ -182,7 +182,7 @@ If a Task tool call fails (timeout, error, or returns truncated/incomplete outpu
 
 ---
 
-### Devin
+### Devin CLI
 
 **Pipeline receipt rule:** after every pipeline `run_subagent` return, run `bun {{HARNESS_DIR}}/tools/aidlc-log.ts link --stage "<directive.stage>" --link "<agent>"` before the next dispatch; add `--repo "<repo>"` for multi-repo chains, add `--single` when `directive.single === true`, and resume from `directive.pipeline.completed`.
 

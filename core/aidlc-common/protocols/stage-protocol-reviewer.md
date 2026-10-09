@@ -524,3 +524,9 @@ If `directive.reviewer` is present, invoke the reviewer as a sub-agent (via the 
 ### GitHub Copilot
 
 If `directive.reviewer` is present, invoke the reviewer as a sub-agent (delegate to the reviewer custom agent - the `.github/agents/` roster is exposed as callable agents).
+
+---
+
+### Devin CLI
+
+If `directive.reviewer` is present, invoke the reviewer as a sub-agent: one foreground `run_subagent` call (`is_background: false` or omitted) with `profile: "<the agent named in directive.reviewer>"`. The harness auto-discovers `{{HARNESS_DIR}}/agents/*.md` as custom subagent profiles, so the persona loads automatically; do not inject it in the prompt. Always pass the slug as `profile`: the adapter's reviewer-scope hook matches on `tool_input.profile`, not the prompt. Dispatch it only after every pending background result has been read via `read_subagent`.

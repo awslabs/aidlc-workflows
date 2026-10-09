@@ -21,6 +21,7 @@ export const BINDING_HEADINGS: Readonly<Record<string, string>> = {
   cursor: "Cursor",
   opencode: "opencode",
   copilot: "GitHub Copilot",
+  devin: "Devin CLI",
 };
 
 const TOOL_NAMES: ReadonlySet<string> = new Set(Object.values(BINDING_HEADINGS));

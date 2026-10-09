@@ -8,7 +8,7 @@
 // silently drop the `profile`-field mechanic, the `is_background` split,
 // or the model-resolution note.
 //
-// WHY THIS EXISTS: Devin shipped as the eighth harness WITHOUT a `### Devin`
+// WHY THIS EXISTS: Devin shipped as the eighth harness WITHOUT a `### Devin CLI`
 // binding section in `core/aidlc-common/protocols/stage-protocol-ensemble.md`.
 // The conductor had no Devin-specific topology guidance and could fall back
 // to inline execution, skipping the `deliver-stage-rules` and `log-subagent`
@@ -50,7 +50,7 @@ const HARNESS_DISPLAY_NAMES: Record<ShippedHarnessName, string> = {
   codex: "Codex CLI",
   copilot: "GitHub Copilot",
   cursor: "Cursor",
-  devin: "Devin",
+  devin: "Devin CLI",
   kiro: "Kiro CLI",
   "kiro-ide": "Kiro IDE",
   opencode: "opencode",
@@ -79,7 +79,7 @@ function sectionBody(protocol: string, displayName: string): string {
     -1,
   );
   // A binding section ends at the next `---` separator (or end of file for
-  // the last section). The `### GitHub Copilot` and `### Devin` sections are
+  // the last section). The `### GitHub Copilot` and `### Devin CLI` sections are
   // the last two; Devin is the file's final section.
   const nextSep = protocol.indexOf("\n---", start + heading.length);
   const end = nextSep === -1 ? protocol.length : nextSep;
@@ -115,7 +115,7 @@ describe("t333 ensemble protocol harness-binding parity", () => {
   });
 
   test("the Devin binding names run_subagent, the profile field, the is_background split, and the default subagent model", () => {
-    const body = sectionBody(protocol, "Devin");
+    const body = sectionBody(protocol, "Devin CLI");
     // The dispatch verb — the whole point of the binding.
     expect(body).toContain("run_subagent");
     // The three Devin-specific invariants.
