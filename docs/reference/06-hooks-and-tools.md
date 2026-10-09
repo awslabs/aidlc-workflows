@@ -366,15 +366,17 @@ identical to its brief is not counted, and the person replies again.
 
 Codex starts every handler that matches an event at once. Before a shell
 command, `.codex/hooks.json` registers one matcher-free PreToolUse group,
-`guard-tool-call`, and the adapter runs its five members in that one process, in
-order: bind-bash-session (the session rewrite), then the state-transition,
-reviewer-scope, review-freeze and plan-approval guards, each as the same case it
-ran as its own handler, and each guard's core hook runs inside that process too
-(imported from beside the adapter and called, never spawned as a second engine).
-Every member runs even after one refuses; the call is refused when any member
-refuses, with each refusal once on stderr and nothing on stdout, and when every
-member lets it through the output is bind-bash-session's rewrite. A member that
-fails on its own refuses nothing. The PostToolUse `rebuild-stage-graph` target
+`guard-tool-call`, and the adapter runs its four members in that one process, in
+order: the state-transition, reviewer-scope, review-freeze and plan-approval
+guards, each as the same case it ran as its own handler, and each guard's core
+hook runs inside that process too (imported from beside the adapter and called,
+never spawned as a second engine). Every member runs even after one refuses; the
+call is refused when any member refuses, with each refusal once on stderr and
+nothing on stdout, and when every member lets it through nothing is printed: the
+command runs with the words the agent wrote (Codex gives it the session as
+`CODEX_THREAD_ID`, which the tools read), so the shipped
+`.codex/rules/default.rules` prefixes match it. A member that fails on its own
+refuses nothing. The PostToolUse `rebuild-stage-graph` target
 runs its core hook the same way. Five handlers that each spawned a child engine
 cost nine engine loads per shell command, which on a small machine running
 Codex's six sub-agent threads reached gigabytes and ended runs mid-stage

@@ -37,10 +37,6 @@
 //   - session-start: the core hook prints
 //     {"additionalContext": "..."}; Codex expects the hookSpecificOutput
 //     wrapper (verified live, findings E1) — the shim re-wraps.
-//   - bind-bash-session: POSIX Bash input is rewritten through
-//     hookSpecificOutput.updatedInput so every command inherits the validated
-//     payload session without process inspection, until a tool has seen
-//     Codex give a command that session as CODEX_THREAD_ID.
 //   - continue-workflow: {"decision":"block","reason"} passes through VERBATIM — the
 //     contract is identical on Codex (stop_hook_active included).
 //   - everything else: advisory; stdout ignored, exit 0.
@@ -51,11 +47,14 @@
 //                  rebuild-stage-graph | validate-state | log-subagent | continue-workflow |
 //                  record-human-turn | state-transition-guard | reviewer-scope |
 //                  review-freeze | deliver-stage-rules | plan-approval-guard |
-//                  bind-bash-session | guard-tool-call
-// guard-tool-call is the one PreToolUse registration: it runs bind-bash-session
-// and the four guards in this process, and those guards run their core hook in
-// this process too (runCoreHere), so a shell call costs one engine load, not
-// nine (#2066).
+//                  guard-tool-call
+// guard-tool-call is the one PreToolUse registration: it runs the four guards
+// in this process, and those guards run their core hook in this process too
+// (runCoreHere), so a shell call costs one engine load, not nine (#2066). No
+// member rewrites the command: Codex gives every command it runs the session
+// as CODEX_THREAD_ID (0.145.0 and later) and the tools read it from there, so
+// the words the agent wrote are what runs and what the shipped
+// rules/default.rules prefixes match.
 
 import { createHash, randomUUID } from "node:crypto";
 import {
@@ -74,7 +73,6 @@ import {
   emptyPickerResult,
   isNonAnswer,
   sessionsDir,
-  codexThreadSessionPath,
   stateFilePath,
   validSessionId,
 } from "../tools/aidlc-lib.ts";
@@ -490,15 +488,6 @@ function allowUpdatedInput(coreStdout: string): string {
   return coreStdout;
 }
 
-function wrapUpdatedInput(updatedInput: Record<string, unknown>): string {
-  return allowUpdatedInput(`${JSON.stringify({
-    hookSpecificOutput: {
-      hookEventName: "PreToolUse",
-      updatedInput,
-    },
-  })}\n`);
-}
-
 // --- D-4: SESSION_ENDED reconcile-at-next-start ------------------------------
 
 const heartbeatFile = join(sessionsDir(projectDir), "codex-session.json");
@@ -555,40 +544,6 @@ function patchedFiles(command: string): Array<{ path: string; tool: "Write" | "E
 // --- Targets ------------------------------------------------------------------
 
 switch (target) {
-  case "bind-bash-session": {
-    const command =
-      typeof codex.tool_input?.command === "string"
-        ? codex.tool_input.command
-        : "";
-    // Codex gives the command this session as CODEX_THREAD_ID (0.160 and
-    // later); once a tool has seen it there, the command keeps the words the
-    // agent wrote.
-    const threadNoted = (() => {
-      const path = payloadSessionId ? codexThreadSessionPath(projectDir, payloadSessionId) : null;
-      return path !== null && existsSync(path);
-    })();
-    if (
-      process.platform === "win32" ||
-      codex.tool_name !== "Bash" ||
-      !payloadSessionId ||
-      !command ||
-      threadNoted
-    ) {
-      persistResponse("", 0);
-      return 0;
-    }
-    const prefix =
-      `export AIDLC_SESSION_OVERRIDE='${payloadSessionId}' ` +
-      "AIDLC_SESSION_OVERRIDE_SOURCE='payload'; ";
-    const wrapped = wrapUpdatedInput({
-      ...codex.tool_input,
-      command: command.startsWith(prefix) ? command : `${prefix}${command}`,
-    });
-    persistResponse(wrapped, 0);
-    process.stdout.write(wrapped);
-    return 0;
-  }
-
   case "session-start": {
     reconcilePriorSession();
     // Forward session_id so the core hook's per-session→intent stamp (on
@@ -891,17 +846,16 @@ switch (target) {
   }
 
   case "guard-tool-call": {
-    // The one PreToolUse registration: the five checks a shell call used to
-    // start as five handlers run here in order, in this process. Every member
+    // The one PreToolUse registration: the four checks a shell call used to
+    // start as four handlers run here in order, in this process. Every member
     // runs even after one refuses, as Codex ran every handler; the call is
     // refused when any member refuses, with each refusal once on stderr and
-    // nothing on stdout. When every member lets the call through, the output
-    // is bind-bash-session's rewrite, the one member that speaks on allow. A
-    // member that fails on its own (its own case answers that 0; a thrown
-    // error lands here as code 1) refuses nothing, as its crashed process did
-    // not. The group persists its own answer for the duplicate delivery.
+    // nothing on stdout. When every member lets the call through nothing is
+    // printed and the command runs as the agent wrote it. A member that fails
+    // on its own (its own case answers that 0; a thrown error lands here as
+    // code 1) refuses nothing, as its crashed process did not. The group
+    // persists its own answer for the duplicate delivery.
     const members = [
-      "bind-bash-session",
       "state-transition-guard",
       "reviewer-scope",
       "review-freeze",

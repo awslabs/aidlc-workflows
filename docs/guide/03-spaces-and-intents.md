@@ -255,15 +255,16 @@ teammate, and `aidlc config` refreshes them like any other shipped file. An
 install whose includes an earlier release's switch pointed at another space
 is brought to the shipped files by the next refresh, with no conflict.
 
-On POSIX, the Codex adapter pins the validated hook payload session into every
-core-hook child and Bash command, so macOS sandbox denial of `ps` does not weaken
-Codex workflow selection. Codex 0.160 and later also give every command the
-session as `CODEX_THREAD_ID` (but not the hooks), so once an AI-DLC tool has
-seen it there, that session's later commands are left as written and the tools
-read the id from there. On Windows x64 and arm64, native process handles,
+The Codex adapter pins the validated hook payload session into every core-hook
+child, and Codex gives every command it runs the session as `CODEX_THREAD_ID`
+(0.145.0 and later, the minimum AI-DLC supports; the hooks do not receive it),
+so the tools read the id from there and every command keeps the words the agent
+wrote: macOS sandbox denial of `ps` does not weaken Codex workflow selection, and
+the shipped `.codex/rules/default.rules` prefixes match what the agent runs. On
+Windows x64 and arm64, native process handles,
 creation times, and parent PIDs identify the owning session within the same
 50 ms / 64-ancestor budget. Reused PID generations and unverified ancestry do not
-select a session; the POSIX command rewrite remains unavailable on Windows.
+select a session.
 Shared-process harnesses still cannot distinguish chats that use one process,
 including Kiro IDE multi-chat and multi-session opencode. Children of payload-bearing hooks follow
 the payload session; tools without that parent still fall back to the shared

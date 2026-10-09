@@ -39,13 +39,13 @@ import {
 const HOOK_WIRING: Array<{ event: string; matcher?: string; target: string }> = [
   { event: "SessionStart", target: "session-start" },
   { event: "UserPromptSubmit", target: "record-human-turn" },
-  // One matcher-free group runs the five PreToolUse checks in one process:
-  // bind-bash-session (POSIX commands receive the validated payload session
-  // directly, so sandboxed macOS does not depend on `ps` ancestry for workflow
-  // isolation), then the state-transition, reviewer-scope, review-freeze and
-  // plan-approval guards. Codex starts every matching handler at once, and
-  // each guard's child engine doubled it, so five rows cost nine engine loads
-  // per shell call (#2066). No matcher: each member self-filters on tool_name
+  // One matcher-free group runs the four PreToolUse checks in one process: the
+  // state-transition, reviewer-scope, review-freeze and plan-approval guards.
+  // Codex starts every matching handler at once, and each guard's child engine
+  // doubled it, so five rows cost nine engine loads per shell call (#2066).
+  // Nothing rewrites the command: Codex gives every command it runs the session
+  // as CODEX_THREAD_ID (0.145.0 and later), and the tools read it from there, so
+  // the shipped rules/default.rules prefixes match the words the agent wrote. No matcher: each member self-filters on tool_name
   // (Bash, apply_patch, and spawn_agent naming the developer agent; Codex read
   // access rides the shell tool anyway), so a renamed Codex tool cannot
   // silently drop a guard, and the group beats in the record before each

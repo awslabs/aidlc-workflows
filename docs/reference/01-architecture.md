@@ -881,7 +881,7 @@ Lookup failure, an ambiguous parent edge, or exhaustion of the existing
 50 ms / 64-ancestor budget yields no ancestry session; null barriers and the
 negative cache retain their existing behavior. Linux and macOS lookups are unchanged.
 
-The POSIX command rewrite does not apply on Windows. Multiple Kiro IDE chats
+Multiple Kiro IDE chats
 and opencode sessions can still share one process; process ancestry cannot
 distinguish those conversations. Spawned tools with unavailable or ambiguous
 ancestry use shared-cursor behavior unless a payload-bearing hook or the harness

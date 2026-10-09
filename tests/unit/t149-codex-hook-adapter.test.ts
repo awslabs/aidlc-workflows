@@ -786,7 +786,7 @@ describe("t149 Codex subagent prompts are not the person's turn", () => {
 });
 
 describe("t149 Codex hook adapter (live-captured payload fixtures)", () => {
-  test("0: Bash commands inherit the validated payload session", () => {
+  test("0: a Bash command keeps its own words, and the chat's session still routes the person's turn", () => {
     const dir = scratchProject(true);
     try {
       writeSessionBinding(
@@ -802,8 +802,13 @@ describe("t149 Codex hook adapter (live-captured payload fixtures)", () => {
         readFileSync(seededStateFile(dir), "utf-8"),
       );
       setActiveIntentCursor(dir, other.dirName, DEFAULT_SPACE);
+      // Codex gives the command this session as CODEX_THREAD_ID and the tools
+      // read it there (case 0c), so the registered PreToolUse group has nothing
+      // to write into the command: a rewrite would start it with `export` and
+      // the shipped rules/default.rules prefixes (`git worktree`, `bun
+      // .codex/tools/`) would never match it, so every git write escalated.
       const command = "bun .codex/tools/aidlc-orchestrate.ts next";
-      const r = runAdapter(dir, "bind-bash-session", {
+      const r = runAdapter(dir, "guard-tool-call", {
         hook_event_name: "PreToolUse",
         session_id: "codex-command-session",
         cwd: dir,
@@ -811,28 +816,8 @@ describe("t149 Codex hook adapter (live-captured payload fixtures)", () => {
         tool_input: { command },
       });
       expect(r.code, r.stderr).toBe(0);
-      if (process.platform === "win32") {
-        // The adapter leaves Windows shell input unchanged; POSIX export syntax
-        // is emitted only on POSIX. Session-bound audit routing is checked below
-        // on both platforms.
-        expect(r.stdout).toBe("");
-        expect(r.stderr).toBe("");
-      } else {
-        const output = JSON.parse(r.stdout) as {
-          hookSpecificOutput?: {
-            hookEventName?: string;
-            permissionDecision?: string;
-            updatedInput?: { command?: string };
-          };
-        };
-        expect(output.hookSpecificOutput?.hookEventName).toBe("PreToolUse");
-        expect(output.hookSpecificOutput?.permissionDecision).toBe("allow");
-        expect(output.hookSpecificOutput?.updatedInput?.command).toBe(
-          "export AIDLC_SESSION_OVERRIDE='codex-command-session' " +
-            "AIDLC_SESSION_OVERRIDE_SOURCE='payload'; " +
-            command,
-        );
-      }
+      expect(r.stdout).toBe("");
+      expect(r.stderr).toBe("");
 
       const humanTurn = runAdapter(dir, "record-human-turn", {
         hook_event_name: "UserPromptSubmit",
@@ -847,62 +832,6 @@ describe("t149 Codex hook adapter (live-captured payload fixtures)", () => {
       expect(readRecordAudit(dir, other.dirName)).not.toContain(
         "**Event**: HUMAN_TURN",
       );
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
-  });
-
-  // Codex 0.160 gives every command it runs CODEX_THREAD_ID, the same id its hooks
-  // carry, but not the hooks themselves. Once a tool has seen the id in its
-  // command, the command needs no `export AIDLC_SESSION_OVERRIDE=...` prefix,
-  // which Codex showed on every "Ran" line (a live run).
-  test("0b: once a tool saw Codex give the session, later commands keep their own words", () => {
-    const dir = scratchProject(true);
-    try {
-      const command = "bun .codex/tools/aidlc-orchestrate.ts next";
-      const payload = {
-        hook_event_name: "PreToolUse",
-        session_id: "codex-command-session",
-        cwd: dir,
-        tool_name: "Bash",
-        tool_input: { command },
-      };
-      const runTool = (thread: string) =>
-        spawnSync("bun", [join(dir, ".codex", "tools", "aidlc-orchestrate.ts"), "next"], {
-          cwd: dir,
-          encoding: "utf-8",
-          env: {
-            ...process.env,
-            AIDLC_SESSION_OVERRIDE: "codex-command-session",
-            AIDLC_SESSION_OVERRIDE_SOURCE: "payload",
-            CLAUDE_PROJECT_DIR: undefined,
-            CODEX_SESSION_ID: undefined,
-            CODEX_THREAD_ID: thread,
-          } as NodeJS.ProcessEnv,
-          timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
-        });
-      // Each call is its own tool call: the adapter replays a repeated delivery.
-      const first = runAdapter(dir, "bind-bash-session", { ...payload, tool_use_id: "call-first" });
-      expect(first.code, first.stderr).toBe(0);
-      if (process.platform !== "win32") {
-        expect(first.stdout).toContain("export AIDLC_SESSION_OVERRIDE='codex-command-session'");
-        // A tool whose command carries another thread's id notes nothing.
-        runTool("codex-other-thread");
-        const still = runAdapter(dir, "bind-bash-session", { ...payload, tool_use_id: "call-other" });
-        expect(still.stdout).toContain("export AIDLC_SESSION_OVERRIDE='codex-command-session'");
-      }
-      // The tool sees Codex give its command this session.
-      runTool("codex-command-session");
-      const later = runAdapter(dir, "bind-bash-session", { ...payload, tool_use_id: "call-later" });
-      expect(later.code, later.stderr).toBe(0);
-      expect(later.stdout).toBe("");
-      // Another session in the same project still gets the prefix.
-      if (process.platform !== "win32") {
-        const other = runAdapter(dir, "bind-bash-session", {
-          ...payload, session_id: "codex-second-session", tool_use_id: "call-second",
-        });
-        expect(other.stdout).toContain("export AIDLC_SESSION_OVERRIDE='codex-second-session'");
-      }
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -1977,22 +1906,14 @@ function shellCall(dir: string, command: string, extra: Record<string, unknown> 
   };
 }
 
-describe("t149 Codex guard-tool-call runs the five PreToolUse checks in one process", () => {
-  test("1: an ordinary shell command passes, with bind-bash-session's rewrite as the one output", () => {
+describe("t149 Codex guard-tool-call runs the four PreToolUse checks in one process", () => {
+  test("1: an ordinary shell command passes with nothing printed, its words as the agent wrote them", () => {
     const dir = scratchProject(true);
     try {
       const r = runAdapter(dir, "guard-tool-call", shellCall(dir, "ls"));
       expect(r.code, r.stderr).toBe(0);
       expect(r.stderr).toBe("");
-      if (process.platform !== "win32") {
-        const out = JSON.parse(r.stdout) as {
-          hookSpecificOutput?: { permissionDecision?: string; updatedInput?: { command?: string } };
-        };
-        expect(out.hookSpecificOutput?.permissionDecision).toBe("allow");
-        expect(out.hookSpecificOutput?.updatedInput?.command).toBe(
-          "export AIDLC_SESSION_OVERRIDE='codex-command-session' AIDLC_SESSION_OVERRIDE_SOURCE='payload'; ls",
-        );
-      }
+      expect(r.stdout).toBe("");
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
