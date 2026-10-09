@@ -5,9 +5,9 @@
 // or the person, so a conductor said "every requirement traced" and asked for
 // approval while the traceability check reported 68 gaps (#2201). When a gate
 // opens, or is shown again, the engine's reply now carries one sentence per
-// check that still fails on a declared output in its `narration`, beside what
-// the stage produced, which the agent says to the person with the approval
-// question. The change lines stay what changed (the guard matrix counts them).
+// check that still fails on a declared output in its `narration`, on its own
+// line after what the stage produced (which stays whole), and the agent says it
+// to the person with the approval question. The change lines stay what changed (the guard matrix counts them).
 // Nothing is refused and nothing is re-fired: a check that passed later, or
 // never ran, says nothing. The gate-open audit row's `Sensor State` is unchanged.
 

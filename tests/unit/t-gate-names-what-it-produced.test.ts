@@ -64,6 +64,9 @@ function next(proj: string, args: string[] = []) {
 }
 
 const FOLDER = /, in aidlc\/spaces\/default\/intents\/[^/]+\/inception\/requirements-analysis\/\.$/;
+// The produced sentence is the narration's first line; a check that still fails
+// on an output follows on its own line (t-gate-names-failed-checks pins those).
+const produced = (narration: string | undefined): string => String(narration ?? "").split("\n")[0];
 
 describe("t-gate-names-what-it-produced: the gate line names what the stage produced", () => {
   test("the awaiting-approval reply lists the files, with the questions file's count", () => {
@@ -77,7 +80,7 @@ describe("t-gate-names-what-it-produced: the gate line names what the stage prod
       "Requirements Analysis is ready for your review. It produced requirements.md and " +
         "requirements-analysis-questions.md (3 questions, 2 answered), in ",
     );
-    expect(reply.narration).toMatch(FOLDER);
+    expect(produced(reply.narration)).toMatch(FOLDER);
   });
 
   test("every question answered reads as all answered, and a file the stage did not write is left out", () => {
@@ -93,7 +96,7 @@ describe("t-gate-names-what-it-produced: the gate line names what the stage prod
     const proj = project({});
     const reply = report(proj, ["--result", "awaiting-approval"]);
     expect(reply.narration).toStartWith("Requirements Analysis is ready for your review. Its output goes in ");
-    expect(reply.narration).toMatch(/inception\/requirements-analysis\/\.$/);
+    expect(produced(reply.narration)).toMatch(/inception\/requirements-analysis\/\.$/);
   });
 
   // A brownfield workspace with two sibling repos: Reverse Engineering writes
@@ -130,7 +133,7 @@ describe("t-gate-names-what-it-produced: the gate line names what the stage prod
     expect(line).toContain("repo-a/architecture.md");
     expect(line).toContain("repo-b/architecture.md");
     expect(line).not.toContain(" architecture.md, architecture.md");
-    expect(line).toMatch(/, in aidlc\/spaces\/default\/codekb\/\.$/);
+    expect(produced(line)).toMatch(/, in aidlc\/spaces\/default\/codekb\/\.$/);
   });
 
   test("a second next at the open gate says the same line, and words at the gate get an answer-first step", () => {

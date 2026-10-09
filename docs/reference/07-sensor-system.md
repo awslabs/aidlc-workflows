@@ -241,7 +241,7 @@ before matching against the manifest `id`.
 
 `advisory` outcomes produce their audit rows but do not block the stage gate.
 When the gate opens or is shown again, the orchestrator's reply carries, in
-its `narration` beside what the stage produced, one sentence per check whose
+its `narration` on a line after what the stage produced, one sentence per check whose
 latest result on a declared output is a failure (`failedCheckNotices` in
 `aidlc-state.ts`, at most three sentences and a count), so the agent says it to
 the person with the approval question. The change lines stay what changed. A

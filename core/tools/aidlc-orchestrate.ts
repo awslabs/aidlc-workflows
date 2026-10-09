@@ -9107,9 +9107,10 @@ function applyGateOnlyShape(
     const scope = getField(stateContent, "Scope")?.trim() ?? "";
     const unitFolders = isPerUnit(gateNode) && !usesStageLevelPerUnitArtifacts(scope, stateContent);
     const line = producedLine(gateNode, directive.unit ?? null, unitFolders, projectDir);
-    // A check that still fails on a declared output is said with the gate,
-    // beside what the stage produced: the narration is the person's line.
-    const narration = [line, ...failedCheckNotices(projectDir, gateNode, directive.unit ?? null)].filter(Boolean).join(" ");
+    // A check that still fails on a declared output is said with the gate, on
+    // its own line after what the stage produced: the narration is the
+    // person's line, and the produced sentence stays whole.
+    const narration = [line, failedCheckNotices(projectDir, gateNode, directive.unit ?? null).join(" ")].filter(Boolean).join("\n");
     if (narration) directive.narration = narration;
   }
   directive.protocol_modules = (directive.protocol_modules ?? []).filter(
@@ -15079,9 +15080,10 @@ function handleReport(args: string[], projectDir: string | undefined): void {
         const unitFolders = isPerUnit(node) && !usesStageLevelPerUnitArtifacts(scope, gateState);
         const line = producedLine(node, unit, unitFolders, pd);
         // A check that still fails on a declared output is said with the gate,
-        // beside what the stage produced: the narration is the person's line,
-        // and the change lines stay what changed.
-        const narration = [line, ...failedCheckNotices(pd, node, unit)].filter(Boolean).join(" ");
+        // on its own line after what the stage produced: the narration is the
+        // person's line (the produced sentence stays whole), and the change
+        // lines stay what changed.
+        const narration = [line, failedCheckNotices(pd, node, unit).join(" ")].filter(Boolean).join("\n");
         if (narration) gateReply.narration = narration;
       }
     }
