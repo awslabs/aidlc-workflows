@@ -165,6 +165,8 @@ const FLAT_CONFIG_FILES = [
 	"eslint.config.mjs",
 	"eslint.config.cjs",
 	"eslint.config.ts",
+	"eslint.config.mts",
+	"eslint.config.cts",
 ];
 const LEGACY_CONFIG_FILES = [
 	".eslintrc.js",
@@ -175,16 +177,30 @@ const LEGACY_CONFIG_FILES = [
 	".eslintrc",
 ];
 
-// A flat config at cwd or any ancestor governs the files under it (a monorepo
-// keeps one at its root while the sensor's project root is the package's own
-// package.json), so a pre-9 install hoisted beside it must not run and drop
-// those rules: look up to the filesystem root, not only at cwd.
-function flatConfigAbove(cwd: string): boolean {
+// The nearest config governs the files under it (a monorepo keeps one at its
+// root while the sensor's project root is the package's own package.json), so
+// a pre-9 install hoisted beside a flat one must not run and drop its rules.
+// Look no higher than the directory holding the install, where Node's lookup
+// finds it (the link's directory, not pnpm's resolved .pnpm path): a stray
+// config above the project, in $HOME say, does not govern it.
+function installDirAtOrAbove(cwd: string): string {
+	let dir = resolve(cwd);
+	for (;;) {
+		if (existsSync(join(dir, "node_modules", "eslint", "package.json"))) return dir;
+		const parent = dirname(dir);
+		if (parent === dir) return resolve(cwd);
+		dir = parent;
+	}
+}
+
+function nearestConfigIsFlat(cwd: string): boolean {
+	const top = installDirAtOrAbove(cwd);
 	let dir = resolve(cwd);
 	for (;;) {
 		if (FLAT_CONFIG_FILES.some((name) => existsSync(join(dir, name)))) return true;
+		if (LEGACY_CONFIG_FILES.some((name) => existsSync(join(dir, name)))) return false;
 		const parent = dirname(dir);
-		if (parent === dir) return false;
+		if (dir === top || parent === dir) return false;
 		dir = parent;
 	}
 }
@@ -195,7 +211,7 @@ export function localEslintPath(cwd: string): string | null {
 		const manifest = JSON.parse(readFileSync(manifestPath, "utf-8"));
 		if (manifest.name !== "eslint" || typeof manifest.version !== "string") return null;
 		const major = Number(manifest.version.split(".")[0]);
-		if (major < 9 && flatConfigAbove(cwd)) return null;
+		if (major < 9 && nearestConfigIsFlat(cwd)) return null;
 		const cli = join(dirname(manifestPath), "bin", "eslint.js");
 		return existsSync(cli) ? cli : null;
 	} catch {
