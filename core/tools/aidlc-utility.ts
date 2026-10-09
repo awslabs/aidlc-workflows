@@ -138,6 +138,7 @@ import {
   isSafeIntentRecordName,
   activeIntent,
   addPendingPersonLines,
+  kiroHookFileSwitchedOff,
   markPersonLinesHeard,
   staleStageLine,
   activeWorkflowDescriptions,
@@ -408,7 +409,11 @@ import {
 import { AIDLC_VERSION } from "./aidlc-version.ts";
 import {
   copyProjectSurfaces,
+  cutPluginFragment,
+  personaTwinRels,
   projectDiffPlan,
+  tomlFragmentText,
+  withFileLineEndings,
 } from "./aidlc-plugin.ts";
 import { executePlan } from "./aidlc-transaction.ts";
 import {
@@ -424,6 +429,7 @@ import {
   resolveSkillsPath,
   runtimeHarnessDir,
   runtimeHarnessName,
+  runtimeProjectDir,
 } from "./aidlc-runtime-paths.ts";
 import { HARNESS_PRODUCT_NAMES } from "./aidlc-model-policy.ts";
 import { copyRuntimeUrl } from "./aidlc-release.ts";
@@ -1095,6 +1101,9 @@ function missingRecordedContributions(
   content: string,
   plugin: string,
   record: StageContribRecord,
+  // How a fragment's text reads back from this file (a Codex persona twin
+  // holds it escaped inside a TOML string).
+  fragmentText: (raw: string) => string = (raw) => raw,
 ): string[] {
   const missing: string[] = [];
   for (const field of ["produces", "sensors", "scopes", "requires_stage", "required_sections"] as const) {
@@ -1158,7 +1167,7 @@ function missingRecordedContributions(
       if (closeIdx === -1) return [id];
       const wrapped = content.slice(bodyStart, closeIdx);
       if (!wrapped.startsWith("\n") || !wrapped.endsWith("\n")) return [id];
-      return fragmentProseHash(wrapped.slice(1, -1)) === fragment.hash ? [] : [id];
+      return fragmentProseHash(fragmentText(wrapped.slice(1, -1))) === fragment.hash ? [] : [id];
     });
     if (absent.length > 0) missing.push(`fragments=[${absent.join(", ")}]`);
   }
@@ -1254,8 +1263,7 @@ function removePluginFragments(content: string, plugin: string): string {
     const close = `<!-- /${match[0].slice(5)}`;
     const closeIdx = out.indexOf(close, match.index);
     if (closeIdx === -1) break; // unpaired marker: leave as-is (doctor territory)
-    const end = closeIdx + close.length;
-    out = `${out.slice(0, match.index)}${out.slice(end)}`.replace(/\n{3,}/g, "\n\n");
+    out = cutPluginFragment(out, match.index, closeIdx + close.length);
     openRe.lastIndex = 0;
     match = openRe.exec(out);
   }
@@ -1289,31 +1297,55 @@ function stripDisabledPluginContributions(
       for (const f of readdirSync(dir).filter((name) => name.endsWith(".md")).sort()) {
         const path = join(dir, f);
         const before = readFileSync(path, "utf-8");
-        let content = before;
-        const record = manifest[f.replace(/\.md$/, "")];
-        if (record) {
-          if (record.produces?.length) content = removeListValues(content, "produces", new Set(record.produces), false);
-          if (record.sensors?.length) content = removeListValues(content, "sensors", new Set(record.sensors), false);
-          if (record.scopes?.length) content = removeListValues(content, "scopes", new Set(record.scopes), false);
-          if (record.requires_stage?.length) content = removeListValues(content, "requires_stage", new Set(record.requires_stage), false);
-          if (record.consumes?.length) {
-            const artifacts = record.consumes.flatMap((entry) =>
-              typeof entry === "string"
-                ? [entry]
-                : entry && typeof entry.artifact === "string"
-                  ? [entry.artifact]
-                  : []
-            );
-            content = removeConsumesEntries(content, new Set(artifacts));
+        // A CRLF checkout strips as the LF text compose wrote, in its own line endings.
+        const content = withFileLineEndings(before, (text) => {
+          let content = text;
+          const record = manifest[f.replace(/\.md$/, "")];
+          if (record) {
+            if (record.produces?.length) content = removeListValues(content, "produces", new Set(record.produces), false);
+            if (record.sensors?.length) content = removeListValues(content, "sensors", new Set(record.sensors), false);
+            if (record.scopes?.length) content = removeListValues(content, "scopes", new Set(record.scopes), false);
+            if (record.requires_stage?.length) content = removeListValues(content, "requires_stage", new Set(record.requires_stage), false);
+            if (record.consumes?.length) {
+              const artifacts = record.consumes.flatMap((entry) =>
+                typeof entry === "string"
+                  ? [entry]
+                  : entry && typeof entry.artifact === "string"
+                    ? [entry.artifact]
+                    : []
+              );
+              content = removeConsumesEntries(content, new Set(artifacts));
+            }
+            if (record.required_sections?.length) {
+              content = removeListValues(content, "required_sections", new Set(record.required_sections), record.required_sections_created === true);
+            }
           }
-          if (record.required_sections?.length) {
-            content = removeListValues(content, "required_sections", new Set(record.required_sections), record.required_sections_created === true);
-          }
-        }
-        content = removePluginFragments(content, plugin);
+          return removePluginFragments(content, plugin);
+        });
         if (content !== before) {
           writeFileSync(path, content, "utf-8");
           pluginTouched = true;
+        }
+      }
+    }
+    // Persona contributions are prose-only, so their strip needs no sidecar
+    // record: the fragment sentinels carry the plugin name. The persona's
+    // native twins carry the same fragments.
+    const personasDir = resolveHarnessPath(["agents"], { mutable: true });
+    if (existsSync(personasDir)) {
+      const projectDir = runtimeProjectDir();
+      const harness = runtimeHarnessName(projectDir, harnessDir());
+      for (const f of readdirSync(personasDir).filter((name) => name.endsWith(".md")).sort()) {
+        const twins = personaTwinRels(harness, harnessDir(), f.replace(/\.md$/, ""))
+          .map((rel) => join(projectDir, rel))
+          .filter((path) => existsSync(path) && lstatSync(path).isFile());
+        for (const path of [join(personasDir, f), ...twins]) {
+          const before = readFileSync(path, "utf-8");
+          const content = withFileLineEndings(before, (text) => removePluginFragments(text, plugin));
+          if (content !== before) {
+            writeFileSync(path, content, "utf-8");
+            pluginTouched = true;
+          }
         }
       }
     }
@@ -3522,11 +3554,23 @@ const ADVISORY_KIRO_HOOKS: Record<string, string> = {
   "aidlc-after-shell": "the current stage and the plan of remaining stages are not kept in step after a terminal command",
 };
 
-export function kiroDisabledHookChecks(projectDir: string, harness: string): DoctorCheck[] {
+export type KiroDisabledHook = {
+  /** The hook's name, as the Agent Hooks panel and its file show it. */
+  name: string;
+  /** The hook file, harness-relative with forward slashes. */
+  file: string;
+  /** What is no longer protected while a flow-altering hook is off; null for the rest. */
+  protects: string | null;
+};
+
+// Every AI-DLC hook file under `<harness>/hooks/` that Kiro has switched off,
+// in file order. The install manifest says which hook files are AI-DLC's;
+// without one, the aidlc- prefix does. Kiro's `enabled` key is read by the
+// library's one parse (aidlc-lib.ts), which doctor's rows below and the
+// engine's once-per-change notice (aidlc-kiro-hooks-off.ts) share.
+export function kiroDisabledHooks(projectDir: string, harness: string): KiroDisabledHook[] {
   const hooksDir = join(projectDir, harness, "hooks");
   if (!existsSync(hooksDir)) return [];
-  // The install manifest says which hook files are AI-DLC's; without one, the
-  // aidlc- prefix does.
   let owned: Set<string> | null = null;
   try {
     const manifest = JSON.parse(readFileSync(join(projectDir, harness, "tools", "data", "aidlc-manifest.json"), "utf-8")) as { files?: Record<string, string> };
@@ -3535,30 +3579,35 @@ export function kiroDisabledHookChecks(projectDir: string, harness: string): Doc
   } catch {
     // no readable manifest
   }
-  const rows: DoctorCheck[] = [];
-  const advisory: string[] = [];
+  const off: KiroDisabledHook[] = [];
   for (const file of readdirSync(hooksDir).sort()) {
     if (!/^aidlc-.*\.json$/.test(file) || (owned !== null && !owned.has(file))) continue;
-    let parsed: { enabled?: unknown; hooks?: unknown };
+    let text: string;
     try {
-      parsed = JSON.parse(readFileSync(join(hooksDir, file), "utf-8"));
+      text = readFileSync(join(hooksDir, file), "utf-8");
     } catch {
       continue;
     }
-    if (parsed === null || typeof parsed !== "object") continue;
-    const name = file.replace(/\.json$/, "");
-    const entries = Array.isArray(parsed.hooks) ? parsed.hooks as Array<{ enabled?: unknown }> : [];
     // Classified by the AI-DLC file, not its editable name field.
-    if (parsed.enabled !== false && !entries.some((entry) => entry?.enabled === false)) continue;
-    const protects = FLOW_ALTERING_KIRO_HOOKS[name];
-    if (!protects) {
-      advisory.push(name);
+    if (!kiroHookFileSwitchedOff(text)) continue;
+    const name = file.replace(/\.json$/, "");
+    off.push({ name, file: `${harness}/hooks/${file}`, protects: FLOW_ALTERING_KIRO_HOOKS[name] ?? null });
+  }
+  return off;
+}
+
+export function kiroDisabledHookChecks(projectDir: string, harness: string): DoctorCheck[] {
+  const rows: DoctorCheck[] = [];
+  const advisory: string[] = [];
+  for (const hook of kiroDisabledHooks(projectDir, harness)) {
+    if (hook.protects === null) {
+      advisory.push(hook.name);
       continue;
     }
     rows.push({
       pass: false,
-      label: `AI-DLC hook ${name} is switched off in Kiro's Agent Hooks: ${protects}`,
-      fix: `turn ${name} back on under Kiro's Agent Hooks, or set "enabled": true in ${harness}/hooks/${file}`,
+      label: `AI-DLC hook ${hook.name} is switched off in Kiro's Agent Hooks: ${hook.protects}`,
+      fix: `turn ${hook.name} back on under Kiro's Agent Hooks, or set "enabled": true in ${hook.file}`,
     });
   }
   if (advisory.length > 0) {
@@ -4745,9 +4794,51 @@ export async function collectDoctorReport(
     const missingPluginStages: string[] = [];
     const stageSources = new Map<
       string,
-      { path: string; content: string; parsed: Record<string, unknown> }
+      {
+        path: string;
+        content: string;
+        parsed: Record<string, unknown>;
+        kind: "stage" | "agent";
+        // A twin the harness should have but that is gone or unreadable keeps
+        // its entry with null content, so doctor names it.
+        twins?: Array<{ path: string; rel: string; content: string | null; toml: boolean }>;
+      }
     >();
     const stagesRoot = resolveHarnessPath(["aidlc-common", "stages"]);
+    // Persona contributions (prose fragments into <harness>/agents/*.md) are
+    // verified from the same sidecar records, keyed by the agent slug, in the
+    // persona and in each native twin compose keeps in step with it. A
+    // persona has no structural fields, so its parsed view is empty. CRLF
+    // reads as LF, as for stage sources below.
+    const personasRoot = resolveHarnessPath(["agents"]);
+    if (existsSync(personasRoot)) {
+      const harness = runtimeHarnessName(projectDir, harnessDir());
+      for (const f of readdirSync(personasRoot).filter((name) => name.endsWith(".md")).sort()) {
+        const path = join(personasRoot, f);
+        const slug = f.replace(/\.md$/, "");
+        try {
+          const twins = personaTwinRels(harness, harnessDir(), slug).map((rel) => {
+            const twinPath = join(projectDir, rel);
+            let content: string | null = null;
+            try {
+              content = readFileSync(twinPath, "utf-8").replace(/\r\n/g, "\n");
+            } catch {
+              // Gone or unreadable: reported below when a fragment is recorded for it.
+            }
+            return { path: twinPath, rel, content, toml: rel.endsWith(".toml") };
+          });
+          stageSources.set(slug, {
+            path,
+            content: readFileSync(path, "utf-8").replace(/\r\n/g, "\n"),
+            parsed: {},
+            kind: "agent",
+            twins,
+          });
+        } catch {
+          // An unreadable persona surfaces through the agent roster checks.
+        }
+      }
+    }
     for (const phase of PHASES) {
       const dir = join(stagesRoot, phase);
       if (!existsSync(dir)) continue;
@@ -4761,7 +4852,7 @@ export async function collectDoctorReport(
           const slug = typeof parsed.slug === "string" ? parsed.slug : f.replace(/\.md$/, "");
           const plugin = typeof parsed.plugin === "string" ? parsed.plugin : undefined;
           const stagePhase = typeof parsed.phase === "string" ? parsed.phase : phase;
-          stageSources.set(slug, { path, content, parsed });
+          stageSources.set(slug, { path, content, parsed, kind: "stage" });
           if (
             expectedEnabledBySelection({ plugin, phase: stagePhase }) &&
             !graphSlugs.has(slug)
@@ -4849,8 +4940,26 @@ export async function collectDoctorReport(
           );
           if (missing.length > 0) {
             missingComposition.push(
-              `${plugin}: stage ${target} (${source.path}) missing ${missing.join("; ")}`,
+              `${plugin}: ${source.kind} ${target} (${source.path}) missing ${missing.join("; ")}`,
             );
+          }
+          for (const twin of source.twins ?? []) {
+            if (twin.content === null) {
+              missingComposition.push(
+                `${plugin}: agent ${target} file ${twin.path} is missing; ${projectedFileRepair(runtimeHarnessName(projectDir, harnessDir()), twin.rel)}`,
+              );
+              continue;
+            }
+            const twinMissing = missingRecordedContributions(
+              {},
+              twin.content,
+              plugin,
+              { fragments: (record as StageContribRecord).fragments },
+              twin.toml ? tomlFragmentText : undefined,
+            );
+            if (twinMissing.length > 0) {
+              missingComposition.push(`${plugin}: agent ${target} (${twin.path}) missing ${twinMissing.join("; ")}`);
+            }
           }
         }
       }

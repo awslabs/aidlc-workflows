@@ -307,8 +307,12 @@ function parseAgentMd(raw: string): { fm: Record<string, string>; body: string }
   return { fm, body: raw.slice(m[0].length) };
 }
 
+// A multi-line basic string: a backslash is an escape character, so every
+// backslash in the text is doubled first (a bare `\|` in a Markdown table
+// note made Codex refuse the whole agent file as malformed TOML), then a
+// run of three quotes is escaped so it cannot close the string early.
 function tomlMultiline(s: string): string {
-  return `"""\n${s.replace(/"""/g, '\\"\\"\\"')}\n"""`;
+  return `"""\n${s.replace(/\\/g, "\\\\").replace(/"""/g, '\\"\\"\\"')}\n"""`;
 }
 
 // ---------------------------------------------------------------------------

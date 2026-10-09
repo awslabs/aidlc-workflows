@@ -500,6 +500,7 @@ import {
 import { inspectStageValidity, stageLabel, staleStageNote } from "./aidlc-validity.ts";
 import { VALID_DEPTHS, VALID_TEST_STRATEGIES } from "./aidlc-guard-switch.ts";
 import { markSwitchOffNoticesSaid, switchOffNotices } from "./aidlc-recorded-switches.ts";
+import { kiroHooksOffNotices, markKiroHooksOffSaid } from "./aidlc-kiro-hooks-off.ts";
 import {
   readRuleBundle,
   rulesContentEntries,
@@ -641,6 +642,12 @@ function stageValidityUnchecked(): string {
 function switchOffNoticesOnce(projectDir: string): string[] {
   activeSwitchOffNotices ??= switchOffNotices(projectDir);
   return activeSwitchOffNotices;
+}
+
+let activeKiroHooksOffNotices: string[] | null = null;
+function kiroHooksOffNoticesOnce(projectDir: string): string[] {
+  activeKiroHooksOffNotices ??= kiroHooksOffNotices(projectDir, harnessDir());
+  return activeKiroHooksOffNotices;
 }
 
 function projectStageValidityAdvisory(
@@ -1016,6 +1023,11 @@ function prepareEmission(directive: Directive): PreparedEmission {
   const switchOff = engineProjectDir ? switchOffNoticesOnce(engineProjectDir) : [];
   if (switchOff.length > 0) {
     directive = withChangeNotices(directive, [...switchOff, ...(directive.change_notices ?? [])]);
+  }
+  // A hook the person switched off in Kiro's Agent Hooks is said once per change, like a switch.
+  const hooksOff = engineProjectDir ? kiroHooksOffNoticesOnce(engineProjectDir) : [];
+  if (hooksOff.length > 0) {
+    directive = withChangeNotices(directive, [...hooksOff, ...(directive.change_notices ?? [])]);
   }
   // The lines the reports of gates this `next` settled itself printed. A line
   // said more than once (a report can add the hook health line this step
@@ -1417,6 +1429,13 @@ function writePrepared(prepared: PreparedEmission): void {
   ) {
     markSwitchOffNoticesSaid(engineProjectDir);
     activeSwitchOffNotices = [];
+  }
+  if (
+    engineProjectDir && activeKiroHooksOffNotices !== null &&
+    kind !== "load-steering" && !isReadOnlyEngineProbe()
+  ) {
+    markKiroHooksOffSaid(engineProjectDir, harnessDir());
+    activeKiroHooksOffNotices = [];
   }
 }
 

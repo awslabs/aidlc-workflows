@@ -5338,6 +5338,160 @@ describe("t243 project initialization", () => {
     expect(edgesAgain).toContain("- nfr-design\n");
   }, 60_000);
 
+  test("refresh keeps a composed persona's own bytes, before and after its plugin is disabled", () => {
+    const project = temp("aidlc-t240-persona-refresh-");
+    mkdirSync(join(project, ".git"));
+    const refresh = () => run(INIT, ["config", "--project-dir", project, "--from", CLAUDE_RELEASE], project);
+    const first = run(INIT, [
+      "config",
+      "--project-dir",
+      project,
+      "--from",
+      CLAUDE_RELEASE,
+      "--harness",
+      "claude",
+    ], project);
+    expect(first.status, first.stdout + first.stderr).toBe(0);
+    const personaPath = join(project, ".claude", "agents", "aidlc-quality-agent.md");
+    const installed = readFileSync(personaPath, "utf-8");
+
+    // Compose two persona fragments with the bundled compose hook.
+    const plugin = temp("aidlc-t240-persona-plugin-");
+    const built = join(REPO_ROOT, "dist", "plugins", "test-pro", "claude");
+    cpSync(join(built, ".claude-plugin"), join(plugin, ".claude-plugin"), { recursive: true });
+    cpSync(join(built, "hooks"), join(plugin, "hooks"), { recursive: true });
+    const manifestPath = join(plugin, ".claude-plugin", "plugin.json");
+    writeFileSync(manifestPath, JSON.stringify({ ...JSON.parse(readFileSync(manifestPath, "utf-8")), name: "aidlc-syn-persona" }));
+    mkdirSync(join(plugin, "scopes"), { recursive: true });
+    writeFileSync(join(plugin, "scopes", "syn-persona.md"), [
+      "---", "name: syn-persona", "plugin: syn-persona", "depth: Standard", "keywords:", "  - synthetic",
+      "description: synthetic scope carrying the plugin identity", "skeleton: off", "---", "", "# syn-persona", "",
+    ].join("\n"));
+    mkdirSync(join(plugin, "contributions", "agents"), { recursive: true });
+    writeFileSync(join(plugin, "contributions", "agents", "aidlc-quality-agent.md"), [
+      "---", "target: aidlc-quality-agent", "plugin: syn-persona",
+      "fragments:", "  - anchor: after-preflight", "    order: 100", "  - anchor: after-preflight", "    order: 110",
+      "  - anchor: in:Collaboration", "    order: 100",
+      "---", "", "## fragment: after-preflight", "", "**Synthetic anchor:** read the snapshot first.", "",
+      "## fragment: after-preflight", "", "**Synthetic second anchor:** name the snapshot.", "",
+      "## fragment: in:Collaboration", "", "- **Works with (syn)**: a synthetic helper", "",
+    ].join("\n"));
+    const compose = spawnSync(BUN, [join(plugin, "hooks", "compose.ts")], {
+      cwd: project,
+      encoding: "utf-8",
+      timeout: 60_000,
+      env: { ...process.env, CLAUDE_PLUGIN_ROOT: plugin, CLAUDE_PROJECT_DIR: project, AIDLC_HARNESS_DIR: ".claude" },
+    });
+    expect(compose.status, compose.stderr).toBe(0);
+    const composed = readFileSync(personaPath, "utf-8");
+    expect(composed.indexOf("**Synthetic anchor:**")).toBeLessThan(composed.indexOf("**Synthetic second anchor:**"));
+
+    // A same-release refresh recognises the composed persona and re-applies
+    // its fragments exactly as compose placed them, same-anchor order included.
+    const refreshed = refresh();
+    expect(refreshed.status, refreshed.stdout + refreshed.stderr).toBe(0);
+    expect(readFileSync(personaPath, "utf-8")).toBe(composed);
+
+    // Disabling the plugin restores the persona's own bytes, so the next
+    // refresh still recognises it.
+    const disable = run(join(project, ".claude", "tools", "aidlc-utility.ts"), ["select-plugins", "aidlc"], project, {
+      CLAUDE_PROJECT_DIR: project,
+      AIDLC_HARNESS_DIR: ".claude",
+    });
+    expect(disable.status, disable.stdout + disable.stderr).toBe(0);
+    expect(readFileSync(personaPath, "utf-8")).toBe(installed);
+    const afterDisable = refresh();
+    expect(afterDisable.status, afterDisable.stdout + afterDisable.stderr).toBe(0);
+  }, 60_000);
+
+  // The persona's native twin (the file the harness's own dispatch reads) takes
+  // the same fragments, and a refresh replays them there too.
+  for (const twinCase of [
+    { harness: "codex", leaf: ".codex", release: CODEX_RELEASE, manifest: ".codex-plugin", twin: ".codex/agents/aidlc-quality-agent.toml" },
+    { harness: "opencode", leaf: ".aidlc", release: OPENCODE_RELEASE, manifest: ".opencode-plugin", twin: ".opencode/agents/aidlc-quality-agent.md" },
+    { harness: "copilot", leaf: ".aidlc", release: COPILOT_RELEASE, manifest: ".plugin", twin: ".github/agents/aidlc-quality-agent.md" },
+  ] as const) {
+    test(`refresh replays persona fragments into the ${twinCase.harness} native twin and keeps its own bytes`, () => {
+      const project = temp(`aidlc-t240-twin-refresh-${twinCase.harness}-`);
+      mkdirSync(join(project, ".git"));
+      const refresh = () => run(INIT, ["config", "--project-dir", project, "--from", twinCase.release], project);
+      const first = run(INIT, [
+        "config", "--project-dir", project, "--from", twinCase.release, "--harness", twinCase.harness,
+      ], project);
+      expect(first.status, first.stdout + first.stderr).toBe(0);
+      const personaPath = join(project, twinCase.leaf, "agents", "aidlc-quality-agent.md");
+      const twinPath = join(project, twinCase.twin);
+      const installedPersona = readFileSync(personaPath, "utf-8");
+      const installedTwin = readFileSync(twinPath, "utf-8");
+
+      const plugin = temp(`aidlc-t240-twin-plugin-${twinCase.harness}-`);
+      const built = join(REPO_ROOT, "dist", "plugins", "test-pro", twinCase.harness);
+      cpSync(join(built, twinCase.manifest), join(plugin, twinCase.manifest), { recursive: true });
+      cpSync(join(built, "hooks"), join(plugin, "hooks"), { recursive: true });
+      const manifestPath = join(plugin, twinCase.manifest, "plugin.json");
+      writeFileSync(manifestPath, JSON.stringify({ ...JSON.parse(readFileSync(manifestPath, "utf-8")), name: "aidlc-syn-twin" }));
+      mkdirSync(join(plugin, "scopes"), { recursive: true });
+      writeFileSync(join(plugin, "scopes", "syn-twin.md"), [
+        "---", "name: syn-twin", "plugin: syn-twin", "depth: Standard", "keywords:", "  - synthetic",
+        "description: synthetic scope carrying the plugin identity", "skeleton: off", "---", "", "# syn-twin", "",
+      ].join("\n"));
+      mkdirSync(join(plugin, "contributions", "agents"), { recursive: true });
+      writeFileSync(join(plugin, "contributions", "agents", "aidlc-quality-agent.md"), [
+        "---", "target: aidlc-quality-agent", "plugin: syn-twin",
+        "fragments:", "  - anchor: after-preflight", "    order: 100", "  - anchor: end-of-body", "    order: 100",
+        "---", "", "## fragment: after-preflight", "", "**Synthetic twin anchor:** read the \"\"\"snapshot\"\"\" at C:\\snapshots first.", "",
+        "## fragment: end-of-body", "", "Synthetic twin closing note.", "",
+      ].join("\n"));
+      const compose = spawnSync(BUN, [join(plugin, "hooks", "compose.ts")], {
+        cwd: project,
+        encoding: "utf-8",
+        timeout: 60_000,
+        env: {
+          ...process.env,
+          CLAUDE_PLUGIN_ROOT: plugin,
+          PLUGIN_ROOT: plugin,
+          CLAUDE_PROJECT_DIR: project,
+          AIDLC_PROJECT_DIR: project,
+          AIDLC_HARNESS_DIR: twinCase.leaf,
+          AIDLC_HARNESS_NAME: twinCase.harness,
+        },
+      });
+      expect(compose.status, compose.stderr).toBe(0);
+      const composedTwin = readFileSync(twinPath, "utf-8");
+      const twinInstructions = twinPath.endsWith(".toml")
+        ? String((Bun.TOML.parse(composedTwin) as { developer_instructions?: unknown }).developer_instructions)
+        : composedTwin;
+      // The fragment reads back exactly as authored, quotes and backslash included.
+      expect(twinInstructions).toContain("**Synthetic twin anchor:** read the \"\"\"snapshot\"\"\" at C:\\snapshots first.");
+      expect(twinInstructions).toContain("Synthetic twin closing note.");
+      const toolEnv = {
+        CLAUDE_PROJECT_DIR: project,
+        AIDLC_PROJECT_DIR: project,
+        AIDLC_HARNESS_DIR: twinCase.leaf,
+        AIDLC_HARNESS_NAME: twinCase.harness,
+      };
+      // Doctor finds every recorded fragment in the persona and in its twin.
+      const doctor = run(join(project, twinCase.leaf, "tools", "aidlc-utility.ts"), ["doctor", "--verbose"], project, toolEnv);
+      const surfaceRow = `${doctor.stdout}${doctor.stderr}`.split("\n").find((line) => line.includes("Composed plugin surface"));
+      expect(surfaceRow, doctor.stdout + doctor.stderr).toContain("all enabled plugin stages and recorded contributions are present");
+
+      // A same-release refresh recognises the composed twin and replays its
+      // fragments exactly as compose placed them.
+      const refreshed = refresh();
+      expect(refreshed.status, refreshed.stdout + refreshed.stderr).toBe(0);
+      expect(readFileSync(twinPath, "utf-8")).toBe(composedTwin);
+
+      // Disabling the plugin restores both files to their installed bytes, so
+      // the next refresh still recognises them.
+      const disable = run(join(project, twinCase.leaf, "tools", "aidlc-utility.ts"), ["select-plugins", "aidlc"], project, toolEnv);
+      expect(disable.status, disable.stdout + disable.stderr).toBe(0);
+      expect(readFileSync(personaPath, "utf-8")).toBe(installedPersona);
+      expect(readFileSync(twinPath, "utf-8")).toBe(installedTwin);
+      const afterDisable = refresh();
+      expect(afterDisable.status, afterDisable.stdout + afterDisable.stderr).toBe(0);
+    }, 90_000);
+  }
+
   test("refresh planning never mutates generated runners on dry-run or conflict", () => {
     const project = temp("aidlc-t240-refresh-isolation-");
     mkdirSync(join(project, ".git"));

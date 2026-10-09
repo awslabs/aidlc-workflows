@@ -91,9 +91,14 @@ const KIRO_KAS_LAYOUT = (() => {
 const IS_COPILOT = HARNESS_NAME === "copilot";
 const IS_OPENCODE = HARNESS_NAME === "opencode";
 const STAGES_DIR = join(HARNESS_DIR, "aidlc-common", "stages");
+// The harness's skill-discovery root: Copilot's .github/skills, Codex's
+// .agents/skills (it ships no <harnessDir>/skills; same rule as the engine's
+// resolveSkillsPath), else <harnessDir>/skills.
 const SKILLS_DIR = IS_COPILOT
   ? join(PROJECT_DIR, ".github", "skills")
-  : join(HARNESS_DIR, "skills");
+  : HARNESS_NAME === "codex" && !existsSync(join(HARNESS_DIR, "skills"))
+    ? join(PROJECT_DIR, ".agents", "skills")
+    : join(HARNESS_DIR, "skills");
 const PHASES = ["initialization", "ideation", "inception", "construction", "operation"];
 const NATIVE_RUNTIME = Boolean(process.env.AIDLC_COMPILED_EXECUTABLE?.trim());
 const SCOPE_TABLE_END = "<!-- END: compiled scope grid -->";
@@ -1723,6 +1728,64 @@ function findStageFile(slug: string): string | null {
   return null;
 }
 
+// Personas are a flat directory; a contribution under contributions/agents/
+// targets one by its slug (the file stem, which equals the frontmatter name).
+function findAgentFile(slug: string): string | null {
+  const p = join(HARNESS_DIR, "agents", `${slug}.md`);
+  return existsSync(p) ? p : null;
+}
+
+// The harness-native twins of a core persona: the files a harness's own
+// dispatch reads instead of the Markdown persona, built from it at package
+// time (the Codex agent TOML, the opencode and Copilot native agents). They
+// take the same fragments, so a plugin's instruction reaches the agent on
+// every harness. Kiro CLI's agent JSON loads its prompt from the Markdown
+// persona, and the other harnesses dispatch from it directly.
+function personaTwinFiles(slug: string): Array<{ path: string; toml: boolean }> {
+  const twin = HARNESS_LEAF === ".codex"
+    ? { path: join(HARNESS_DIR, "agents", `${slug}.toml`), toml: true }
+    : HARNESS_LEAF === ".aidlc"
+      ? { path: join(nativeAgentsDir(), `${slug}.md`), toml: false }
+      : null;
+  return twin && existsSync(twin.path) ? [twin] : [];
+}
+
+// A Codex twin holds the persona in one TOML multi-line basic string
+// (developer_instructions). Fragment work runs on that string's text, so every
+// anchor resolves inside it; null when the file has no such string.
+function editTomlInstructions(content: string, edit: (body: string) => string): string | null {
+  const open = /^developer_instructions = """\n/m.exec(content);
+  if (!open) return null;
+  const start = open.index + open[0].length;
+  const end = content.indexOf('"""', start);
+  if (end === -1 || content[end - 1] !== "\n") return null;
+  const body = edit(content.slice(start, end));
+  return content.slice(0, start) + (body.endsWith("\n") ? body : `${body}\n`) + content.slice(end);
+}
+
+// Fragment prose inside that string: a backslash or a run of three quotes
+// would change or end it, so both are escaped (TOML reads them back as written).
+function tomlBasicText(prose: string): string {
+  return prose.replace(/\\/g, "\\\\").replace(/"""/g, '\\"\\"\\"');
+}
+
+// Cut one sentinel-marked block together with the separator spliceFragment
+// inserted with it, and nothing else, so the file's own bytes survive: a block
+// owns the blank line to the block after it, else the one from the block
+// before it, else its two surrounding newlines. The same rule as
+// cutPluginFragment in aidlc-plugin.ts, which disable and prune use.
+function cutFragmentBlock(content: string, start: number, end: number): string {
+  if (content.startsWith("\n\n<!-- plugin:", end)) return content.slice(0, start) + content.slice(end + 2);
+  const before = content.slice(0, start);
+  const previousClose = before.lastIndexOf("<!-- /plugin:");
+  if (previousClose !== -1 && /^<!-- \/plugin:[^\n]* -->\n\n$/.test(before.slice(previousClose))) {
+    return content.slice(0, start - 2) + content.slice(end);
+  }
+  const from = content[start - 1] === "\n" ? start - 1 : start;
+  const to = content[end] === "\n" ? end + 1 : end;
+  return content.slice(0, from) + content.slice(to);
+}
+
 // Read half: a single frontmatter split (LF/CRLF tolerant) shared by every read
 // in this file — after the three-file fold there is one parser here, not two, so
 // a robustness fix lands once (review #8). Contribution frontmatter is a distinct
@@ -1927,6 +1990,20 @@ function locateAnchor(content: string, anchor: string, target: string): number {
     const next = content.slice(from).search(/^## /m);
     return next === -1 ? content.length : from + next;
   }
+  if (anchor === "after-preflight") {
+    // Personas: right after the delegated-knowledge preflight the packager
+    // injects at build time — its marker line and the one paragraph below it.
+    const m = content.match(/^<!-- aidlc-delegated-knowledge-preflight -->\n[^\n]*\n/m);
+    if (!m) { recordDrop(`contribution to ${target}: anchor "after-preflight" — no delegated-knowledge preflight block found (the target must be a persona); prose dropped`); return -1; }
+    return m.index! + m[0].length;
+  }
+  if (anchor === "end-of-body") {
+    // The end of the authored body. Reviewer personas end with knowledge the
+    // packager absorbs at build time; the fragment lands before that section
+    // so the absorbed text stays last.
+    const absorbed = content.indexOf("\n---\n\n<!-- Absorbed at build time");
+    return absorbed === -1 ? content.length : absorbed;
+  }
   recordDrop(`contribution to ${target}: unknown anchor "${anchor}"`);
   return -1;
 }
@@ -1951,7 +2028,14 @@ interface FragmentRecord { anchor: string; order: number; hash: string; }
 // its correct (order, plugin) slot among peer plugin blocks at the same anchor —
 // so plugins composing in separate hook runs still interleave by (order, plugin),
 // never by hook-firing order. Never relies on "the next heading" to bound a block.
-function spliceFragment(content: string, f: Fragment, target: string): string {
+function spliceFragment(
+  content: string,
+  f: Fragment,
+  target: string,
+  // How the prose is written into this file (a Codex twin escapes it); the
+  // hash is always over the prose itself, so every file carries one marker.
+  encode: (prose: string) => string = (prose) => prose,
+): string {
   const hash = hashProse(f.prose);
   const pE = escapeRegExp(f.plugin), aE = escapeRegExp(f.anchor);
   // The close marker carries the SAME content hash as the open, so the block's
@@ -1960,7 +2044,7 @@ function spliceFragment(content: string, f: Fragment, target: string): string {
   // upgrade re-splice (round-5 — the old hashless close matched the first
   // occurrence, so prose containing the marker corrupted the block).
   const closeOf = (h: string) => `<!-- /plugin:${f.plugin}:${f.anchor}:${f.order}:${h} -->`;
-  const block = `<!-- plugin:${f.plugin}:${f.anchor}:${f.order}:${hash} -->\n${f.prose}\n${closeOf(hash)}`;
+  const block = `<!-- plugin:${f.plugin}:${f.anchor}:${f.order}:${hash} -->\n${encode(f.prose)}\n${closeOf(hash)}`;
 
   // Present already? Skip on hash match; replace the whole block on hash change.
   const mine = content.match(new RegExp(`<!-- plugin:${pE}:${aE}:${f.order}:([0-9a-f]+) -->`));
@@ -2428,11 +2512,37 @@ try {
       retireContrib(target, "requires_stage", retired);
     }
   }
+  // The core persona roster the plugin validator checks targets against,
+  // shipped with the installed engine; null on an engine that predates it or
+  // a damaged install.
+  const coreAgentRoster = (() => {
+    try {
+      const { agents } = JSON.parse(readFileSync(join(HARNESS_DIR, "tools", "data", "plugin-authoring-context.json"), "utf-8")) as { agents?: unknown };
+      return Array.isArray(agents) && agents.every((agent) => typeof agent === "string") ? new Set<string>(agents) : null;
+    } catch {
+      return null;
+    }
+  })();
+  // Compose reads contributions/<phase-or-agents>/<file>.md, one level deep:
+  // a file placed higher or a directory nested lower is reported, not skipped
+  // silently.
+  const isDirectory = (path: string): boolean => {
+    try { return statSync(path).isDirectory(); } catch { return false; }
+  };
   for (const phase of contribPhases) {
     const phaseDir = join(contribRoot, phase);
+    if (!isDirectory(phaseDir)) {
+      if (phase.endsWith(".md")) recordDrop(`contribution file "contributions/${phase}" sits outside a phase or agents directory and was not read; move it to contributions/<phase>/ or contributions/agents/`);
+      continue;
+    }
     let files: string[];
     try { files = readdirSync(phaseDir); } catch { continue; }
     for (const file of files) {
+      // A directory is never read, whatever its name (a "x.md" directory too).
+      if (isDirectory(join(phaseDir, file))) {
+        recordDrop(`contribution directory "contributions/${phase}/${file}/" is nested too deep and was not read; move its files up to contributions/${phase}/`);
+        continue;
+      }
       if (!file.endsWith(".md")) continue;
       // Normalize CRLF once so every downstream block/list regex is newline-safe;
       // strip a leading UTF-8 BOM and any leading blank lines so the `^---`
@@ -2447,6 +2557,11 @@ try {
       // contribution — log it (a present-but-unknown target is already logged
       // below; a missing one was a silent bare continue).
       if (!target) { recordDrop(`contribution "${file}" has no parseable frontmatter target: — skipped (check for a BOM, a leading blank line, or a missing target: key)`); continue; }
+      // The target is interpolated into a path under the harness dir, so it
+      // must be a bare slug: no separators, no traversal. A contribution can
+      // only ever reach <harness>/aidlc-common/stages/<phase>/<slug>.md or
+      // <harness>/agents/<slug>.md.
+      if (!/^[a-z0-9][a-z0-9-]*$/.test(target)) { recordDrop(`contribution "${file}" has an invalid target "${target}" (a stage or agent slug: lowercase letters, digits and dashes); skipped`); continue; }
       const plugin = frontmatterScalar(content, "plugin") ?? "";
       // `bundle:` was the pre-rename ownership key. It is dead, not aliased —
       // drop-log with the fix named so a stale plugin tree fails visibly
@@ -2465,11 +2580,35 @@ try {
         );
         continue;
       }
-      const stageFile = findStageFile(target);
-      if (!stageFile) { recordDrop(`contribution "${file}" targets missing stage "${target}"`); continue; }
+      // A contribution under contributions/agents/ targets a core persona
+      // (<harness>/agents/<slug>.md) instead of a stage. Personas take prose
+      // fragments only: their frontmatter is identity and tier, so the
+      // structural adds.* surfaces have no meaning there and are ignored
+      // with an advisory drop rather than merged into the wrong shape.
+      const isAgentContribution = phase === "agents";
+      const stageFile = isAgentContribution ? findAgentFile(target) : findStageFile(target);
+      if (!stageFile) { recordDrop(`contribution "${file}" targets missing ${isAgentContribution ? "agent" : "stage"} "${target}"`); continue; }
+      // Only a core persona takes contributions, checked against the same
+      // roster as the validator. Without it, fail closed: an engine that
+      // predates the roster also predates persona strip, refresh and doctor.
+      if (isAgentContribution) {
+        if (!coreAgentRoster) {
+          recordDrop(`contribution "${file}" targets agent "${target}", but the installed engine ships no core agent roster (tools/data/plugin-authoring-context.json); upgrade the engine, then re-run compose; skipped`);
+          continue;
+        }
+        if (!coreAgentRoster.has(target)) {
+          recordDrop(`contribution "${file}" targets agent "${target}", which is not a core persona (it is not in the core agent roster); skipped`);
+          continue;
+        }
+      }
 
       // structural: adds.produces / adds.sensors / adds.consumes
-      const addsBlock = fm.match(/^adds:\n([\s\S]*?)(?=^\S|$(?![\s\S]))/m)?.[1] ?? "";
+      const declaredAdds = fm.match(/^adds:\n([\s\S]*?)(?=^\S|$(?![\s\S]))/m)?.[1] ?? "";
+      // Any adds: key on a persona is reported, adds: [] included, as the validator does.
+      if (isAgentContribution && /^adds:/m.test(fm)) {
+        recordDrop(`contribution to ${target}: agent contributions carry prose fragments only; adds.* has no meaning on a persona and was ignored`, "advisory");
+      }
+      const addsBlock = isAgentContribution ? "" : declaredAdds;
       // Drop-log a parse shortfall, mirroring the consumes parser: the block
       // regex stops at the first non-4-space entry, so a mis-indented line
       // silently truncated the list (entries after it vanished with no log).
@@ -2668,6 +2807,7 @@ try {
       // file replace the first, winner decided by readdir order). Aligned with
       // the "collision is an error" doc claim.
       const ordered = [...frags].sort((a, b) => a.order - b.order || a.plugin.localeCompare(b.plugin));
+      const spliced: Fragment[] = [];
       for (const f of ordered) {
         const key = `${target}:${f.plugin}:${f.anchor}:${f.order}`;
         if (seenFragKeys.has(key)) { recordDrop(`contribution to ${target}: duplicate fragment ${f.plugin}:${f.anchor}:${f.order} (same plugin/anchor/order, possibly across files); dropped`); continue; }
@@ -2679,12 +2819,31 @@ try {
         const openIdx = stageContent.indexOf(open);
         if (openIdx !== -1 && stageContent.indexOf(close, openIdx + open.length) !== -1) {
           recordFragment(target, fragment);
+          spliced.push(f);
         }
       }
 
       if (stageContent !== before) { // compare-before-write (review #11)
         writeComposeFile(stageFile, stageContent);
         changed = true;
+      }
+      // The persona's native twins take the fragments that landed in it, in the same order.
+      if (isAgentContribution) {
+        for (const twin of personaTwinFiles(target)) {
+          const label = `${target} (${relative(PROJECT_DIR, twin.path).replace(/\\/g, "/")})`;
+          const current = readFileSync(twin.path, "utf-8").replace(/\r\n/g, "\n");
+          const spliceAll = (text: string): string =>
+            spliced.reduce((acc, f) => spliceFragment(acc, f, label, twin.toml ? tomlBasicText : undefined), text);
+          const next = twin.toml ? editTomlInstructions(current, spliceAll) : spliceAll(current);
+          if (next === null) {
+            recordDrop(`contribution to ${label}: the file has no developer_instructions string, so its fragments were not added there`);
+            continue;
+          }
+          if (next !== current) {
+            writeComposeFile(twin.path, next);
+            changed = true;
+          }
+        }
       }
     }
   }
@@ -2701,9 +2860,35 @@ try {
         Number.isSafeInteger(f.order) && typeof f.hash === "string" &&
         !seenFragKeys.has(`${target}:${PLUGIN_NAME}:${f.anchor}:${f.order}`));
       if (stale.length === 0) continue;
-      // The sidecar is project data: a key that is not a plain stage slug is
-      // not resolved to a path.
-      const stageFile = /^[a-z0-9][a-z0-9-]*$/.test(target) ? findStageFile(target) : null;
+      // The sidecar is project data: a key that is not a plain stage or agent
+      // slug is not resolved to a path.
+      const plainSlug = /^[a-z0-9][a-z0-9-]*$/.test(target);
+      const stageFile = plainSlug ? findStageFile(target) : null;
+      const personaFile = plainSlug && !stageFile ? findAgentFile(target) : null;
+      if (personaFile) {
+        // A persona and its native twins lose exactly the block compose added,
+        // so each reads as a first compose of this version writes it.
+        const files = [{ path: personaFile, toml: false }, ...personaTwinFiles(target)];
+        for (const file of files) {
+          const current = readFileSync(file.path, "utf-8").replace(/\r\n/g, "\n");
+          const cutStale = (text: string): string => {
+            let content = text;
+            for (const f of stale) {
+              const open = `<!-- plugin:${PLUGIN_NAME}:${f.anchor}:${f.order}:${f.hash} -->`;
+              const close = `<!-- /plugin:${PLUGIN_NAME}:${f.anchor}:${f.order}:${f.hash} -->`;
+              const start = content.indexOf(open);
+              const end = start === -1 ? -1 : content.indexOf(close, start + open.length);
+              if (start !== -1 && end !== -1) content = cutFragmentBlock(content, start, end + close.length);
+            }
+            return content;
+          };
+          const next = file.toml ? editTomlInstructions(current, cutStale) ?? current : cutStale(current);
+          if (next !== current) {
+            writeComposeFile(file.path, next);
+            changed = true;
+          }
+        }
+      }
       if (stageFile) {
         let content = readFileSync(stageFile, "utf-8").replace(/\r\n/g, "\n");
         const before = content;
@@ -2833,7 +3018,7 @@ try {
   const pluginShipsScopes = existsSync(join(PLUGIN_ROOT, "scopes"));
   if (recompiled || missingPluginStageRunner) {
     if (!skillsDirExists) {
-      recordDrop(`runner regeneration skipped: ${HARNESS_LEAF}/skills not present in this install`, "advisory");
+      recordDrop(`runner regeneration skipped: ${relative(PROJECT_DIR, SKILLS_DIR).replaceAll("\\", "/")} not present in this install`, "advisory");
     } else {
       const runnerEnv = installedToolEnv();
       const runRunnerGen = (args: string[], label: string): boolean => {

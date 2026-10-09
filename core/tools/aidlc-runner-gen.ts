@@ -80,6 +80,7 @@ import {
   refuseLinkOnTheWay,
   resolveHarnessPath,
   resolveSkillsPath,
+  runtimeHarnessName,
   runtimeProjectDir,
 } from "./aidlc-runtime-paths.ts";
 
@@ -518,12 +519,24 @@ function defaultSkillsDir(mutable = false): string {
   return resolveSkillsPath([], { mutable });
 }
 
+// Codex has no frontmatter key for an explicit-only skill; its guard is an
+// `agents/openai.yaml` beside SKILL.md (the same bytes harness/codex/emit.ts
+// ships with every core runner), so a runner generated here is explicit-only
+// too, as `disable-model-invocation: true` makes it on the other harnesses.
+const CODEX_IMPLICIT_GUARD = "policy:\n  allow_implicit_invocation: false\n";
+
 // A runner folder (or its SKILL.md) that is a link is left alone, like the
 // skills folder itself.
 function writeRunner(path: string, body: string): void {
   refuseLinkOnTheWay(runtimeProjectDir(), path);
   mkdirSync(dirname(path), { recursive: true });
   writeFileSync(path, body, "utf-8");
+  if (runtimeHarnessName() === "codex") {
+    const guard = join(dirname(path), "agents", "openai.yaml");
+    refuseLinkOnTheWay(runtimeProjectDir(), guard);
+    mkdirSync(dirname(guard), { recursive: true });
+    writeFileSync(guard, CODEX_IMPLICIT_GUARD, "utf-8");
+  }
 }
 
 function scopeNamesInWrittenGrid(): ReadonlySet<string> {

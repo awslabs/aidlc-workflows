@@ -31,6 +31,7 @@ import {
   resolveHarnessPath,
   resolveSkillsPath,
   runtimeHarnessDir,
+  runtimeHarnessName,
 } from "./aidlc-runtime-paths.ts";
 import {
   executePlan,
@@ -1149,6 +1150,65 @@ function removeConsumes(content: string, artifacts: ReadonlySet<string>): string
   return content.replace(block, kept.length > 0 ? `consumes:\n${kept.join("")}` : "consumes: []\n");
 }
 
+// Cuts the sentinel-marked fragment block at [start, end) together with the
+// separator compose inserted with it, and nothing else, so the file's own
+// whitespace survives. Compose wraps the blocks at one insertion point in a
+// newline on each side and joins them with a blank line: a block owns the
+// blank line to the block after it, else the one from the block before it,
+// else its two surrounding newlines.
+export function cutPluginFragment(content: string, start: number, end: number): string {
+  if (content.startsWith("\n\n<!-- plugin:", end)) return content.slice(0, start) + content.slice(end + 2);
+  const before = content.slice(0, start);
+  const previousClose = before.lastIndexOf("<!-- /plugin:");
+  if (previousClose !== -1 && /^<!-- \/plugin:[^\n]* -->\n\n$/.test(before.slice(previousClose))) {
+    return content.slice(0, start - 2) + content.slice(end);
+  }
+  const from = content[start - 1] === "\n" ? start - 1 : start;
+  const to = content[end] === "\n" ? end + 1 : end;
+  return content.slice(0, from) + content.slice(to);
+}
+
+// The harness-native twins compose keeps in step with a core persona, as
+// project-relative paths: the files a harness's own dispatch reads instead of
+// the Markdown persona (the Codex agent TOML, the opencode and Copilot native
+// agents). Kiro CLI's agent JSON loads its prompt from the Markdown persona,
+// and the other harnesses dispatch from it directly.
+export function personaTwinRels(harness: string, harnessDir: string, slug: string): string[] {
+  if (harness === "codex") return [`${harnessDir}/agents/${slug}.toml`];
+  if (harness === "opencode") return [`.opencode/agents/${slug}.md`];
+  if (harness === "copilot") return [`.github/agents/${slug}.md`];
+  return [];
+}
+
+// A Codex twin holds the persona in one TOML multi-line basic string
+// (developer_instructions). Fragment work runs on that string's text, so every
+// anchor resolves inside it; null when the file has no such string.
+export function editTomlInstructions(content: string, edit: (body: string) => string): string | null {
+  const open = /^developer_instructions = """\n/m.exec(content);
+  if (!open) return null;
+  const start = open.index + open[0].length;
+  const end = content.indexOf('"""', start);
+  if (end === -1 || content[end - 1] !== "\n") return null;
+  const body = edit(content.slice(start, end));
+  return content.slice(0, start) + (body.endsWith("\n") ? body : `${body}\n`) + content.slice(end);
+}
+
+// Fragment text inside that string as TOML reads it: compose escapes a
+// backslash and a run of three quotes there.
+export function tomlFragmentText(raw: string): string {
+  return raw.replace(/\\(["\\])/g, "$1");
+}
+
+// Runs a strip on the text as compose wrote it (LF) and hands it back in the
+// file's own line endings. A Windows checkout (Git's core.autocrlf) turns a
+// composed file to CRLF; stripping it as LF keeps that file's bytes, with no
+// stray carriage return, so a later refresh still recognises it. A file that
+// mixes line endings is stripped as it is.
+export function withFileLineEndings(content: string, edit: (lf: string) => string): string {
+  if (!content.includes("\r\n") || /(^|[^\r])\n/.test(content)) return edit(content);
+  return edit(content.replace(/\r\n/g, "\n")).replace(/\n/g, "\r\n");
+}
+
 function removeFragments(content: string, key: string, path: string): string {
   const escaped = key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const opening = new RegExp(`<!-- plugin:${escaped}:.+?:\\d+:[0-9a-f]+ -->`, "g");
@@ -1158,8 +1218,7 @@ function removeFragments(content: string, key: string, path: string): string {
     const closing = `<!-- /${match[0].slice(5)}`;
     const end = output.indexOf(closing, match.index);
     if (end === -1) throw new Error(`${path}: unpaired plugin fragment for ${key}`);
-    output = `${output.slice(0, match.index)}${output.slice(end + closing.length)}`
-      .replace(/\n{3,}/g, "\n\n");
+    output = cutPluginFragment(output, match.index, end + closing.length);
     opening.lastIndex = 0;
     match = opening.exec(output);
   }
@@ -1189,11 +1248,16 @@ function pruneContributions(stagedProject: string, harnessDir: string, key: stri
       throw new Error(`${sidecar}: ownership sidecar is invalid: ${errorMessage(error)}`);
     }
   }
+  // Stage sources and personas both carry composed content: structural adds
+  // and fragments on stages, fragments only on personas.
   const stagesRoot = join(stagedProject, harnessDir, "aidlc-common", "stages");
-  if (existsSync(stagesRoot)) {
-    for (const path of regularFiles(stagesRoot).filter((value) => value.endsWith(".md"))) {
-      const before = readFileSync(path, "utf-8");
-      let after = before;
+  const personasRoot = join(stagedProject, harnessDir, "agents");
+  const composedFiles = [...regularFiles(stagesRoot), ...regularFiles(personasRoot)]
+    .filter((value) => value.endsWith(".md"));
+  for (const path of composedFiles) {
+    const before = readFileSync(path, "utf-8");
+    const after = withFileLineEndings(before, (text) => {
+      let after = text;
       const record = records[basename(path, ".md")];
       if (record) {
         if (record.produces?.length) after = removeListValues(after, "produces", new Set(record.produces), false);
@@ -1214,8 +1278,19 @@ function pruneContributions(stagedProject: string, harnessDir: string, key: stri
           );
         }
       }
-      after = removeFragments(after, key, path);
-      if (after !== before) writeFileSync(path, after);
+      return removeFragments(after, key, path);
+    });
+    if (after !== before) writeFileSync(path, after);
+  }
+  // A persona's native twins carry the same fragments.
+  const harness = runtimeHarnessName(stagedProject, harnessDir);
+  for (const persona of regularFiles(personasRoot).filter((value) => value.endsWith(".md"))) {
+    for (const rel of personaTwinRels(harness, harnessDir, basename(persona, ".md"))) {
+      const twin = join(stagedProject, rel);
+      if (!existsSync(twin) || !lstatSync(twin).isFile()) continue;
+      const before = readFileSync(twin, "utf-8");
+      const after = withFileLineEndings(before, (text) => removeFragments(text, key, twin));
+      if (after !== before) writeFileSync(twin, after);
     }
   }
   rmSync(sidecar, { force: true });
