@@ -168,10 +168,6 @@ export const RESERVED_KEYS: Readonly<Record<string, string>> = {
 };
 
 // Allowed predicate keys for the stage `when:` map (plugin mechanism, Layer 4).
-// Today only `producer-in-plan`. `when` is an active (shape-validated)
-// structured predicate that no engine pass evaluates yet (see the Activation
-// note in docs/reference/18-plugin-mechanism.md). Adding a predicate is one
-// entry here + one case in that pass when it lands.
 export const WHEN_PREDICATE_KEYS = ["producer-in-plan"] as const;
 
 // Composer screening prior a stage may carry in its own frontmatter (`ars:`).
