@@ -1012,6 +1012,7 @@ function buildTree(
     });
   }
   expandCursorToolAllows(treeRoot, m);
+  expandDevinToolAllows(treeRoot, m);
   expandClaudeToolAllows(treeRoot, m);
   expandKiroToolAllows(treeRoot, m);
   expandKiroIdeConductorAllows(treeRoot, m, invoke);
@@ -1144,12 +1145,17 @@ function rewriteDevinNativePermissions(outRoot: string, m: HarnessManifest): voi
       `[devin] config.json read_config_from drifts from DEVIN_IMPORT_EXPECTED: ${JSON.stringify(value.read_config_from)}`,
     );
   }
+  // The copy channel's AI-DLC command entries (the tool rewrite above has
+  // already turned their `bun <dir>/tools/aidlc…` spellings into `aidlc …`)
+  // give way to the one trusted prefix and the exact read-only and
+  // turn-back-on commands, run as the installed aidlc command.
   value.permissions!.allow = [
     ...allow.filter((entry) =>
-      entry !== `Exec(bun ${m.harnessDir}/tools/*)` &&
-      entry !== `Exec(bun run ${m.harnessDir}/tools/*)`
+      typeof entry !== "string" ||
+      !(entry.startsWith("Exec(bun ") || entry.startsWith("Exec(bun)") || entry.startsWith("Exec(aidlc "))
     ),
     `Exec(${trustedCommand()})`,
+    ...nativeDispatcherCommands().map((command) => `Exec(${command})`),
   ];
   writeFileSync(configPath, `${JSON.stringify(value, null, 2)}\n`);
 }
@@ -1281,6 +1287,47 @@ function expandCursorToolAllows(treeRoot: string, m: HarnessManifest): void {
   writeFileSync(cliPath, `${JSON.stringify(value, null, 2)}\n`);
 }
 
+// Devin's authored config.json names AI-DLC's tool scripts with two globs,
+// one per spelling agents use (`bun <dir>/tools/*` and `bun run
+// <dir>/tools/*`). The projection lists, in each glob's place, the
+// dispatcher's engine namespace, each dispatcher command a copy channel
+// pre-approves exactly as AI-DLC runs it (copyChannelDispatcherCommands),
+// and each tool script it pre-approves (copyChannelToolScripts). Devin's
+// `Exec(...)` is a whole-word PREFIX match (`Exec(git)` matches `git status`
+// but not `gitk`), so a script entry covers the bare script and any
+// arguments but never a longer file name, and a dispatcher-command entry
+// also covers trailing arguments. That is acceptable because config refuses
+// `--show`/`--check` combined with a mutation. Both trees get it; the native
+// rewrite then drops every bun entry.
+function expandDevinToolAllows(treeRoot: string, m: HarnessManifest): void {
+  if (m.name !== "devin") return;
+  const configPath = join(treeRoot, "config.json");
+  const value = JSON.parse(readFileSync(configPath, "utf-8")) as { permissions?: { allow?: unknown } };
+  const allow = value.permissions?.allow;
+  if (!Array.isArray(allow)) {
+    throw new Error("[devin] config.json has no permissions.allow list to expand");
+  }
+  let expanded: unknown[] = allow;
+  for (const spelling of ["bun ", "bun run "]) {
+    const glob = `Exec(${spelling}${m.harnessDir}/tools/*)`;
+    if (!expanded.includes(glob)) {
+      throw new Error(`[devin] config.json has no ${glob} entry to expand`);
+    }
+    const tool = (script: string) => `Exec(${spelling}${m.harnessDir}/tools/${script}`;
+    expanded = expanded.flatMap((entry) =>
+      entry === glob
+        ? [
+          `${tool("aidlc.ts")} engine)`,
+          ...copyChannelDispatcherCommands().map((command) => `${tool("aidlc.ts")} ${command})`),
+          ...copyChannelToolScripts().map((script) => `${tool(script)})`),
+        ]
+        : [entry]
+    );
+  }
+  value.permissions!.allow = expanded;
+  writeFileSync(configPath, `${JSON.stringify(value, null, 2)}\n`);
+}
+
 function rewriteCursorNativePermissions(outRoot: string, m: HarnessManifest): void {
   if (m.tierFlavor !== "cursor") return;
   const cliPath = join(outRoot, m.harnessDir, "cli.json");
@@ -1323,8 +1370,8 @@ function rewriteNativeOnboarding(value: string, exactReads = false): string {
     )
     .replace(/^- \*\*Permissions\*\*:.*$/gm, nativePermissionsLine(exactReads))
     .replace(
-      "Framework shell grants cover `bun .devin/tools/*`, `bun run .devin/tools/*`, and `date -u`.",
-      `Framework shell grants cover the installed \`${trustedCommand()}\` command prefix and \`date -u\`.`,
+      "Framework shell grants cover the `aidlc.ts engine` prefix, the dispatcher's listed read-only commands, and each approved `.devin/tools/` script, in both `bun` and `bun run` spellings, plus `date -u`.",
+      `Framework shell grants cover the installed \`${trustedCommand()}\` command prefix, its listed read-only commands, and \`date -u\`.`,
     )
     .replace(
       /TypeScript, run via bun/g,

@@ -63,6 +63,11 @@ import {
   seededRecordDir,
 } from "../harness/fixtures.ts";
 import { trustedCommand } from "../../core/tools/aidlc-command.ts";
+import {
+  copyChannelDispatcherCommands,
+  copyChannelToolScripts,
+  machineReachingTools,
+} from "../../core/tools/aidlc.ts";
 import { HARNESS_HONESTY } from "../../core/tools/aidlc-model-policy.ts";
 import {
   DEVIN_IMPORT_EXPECTED,
@@ -234,13 +239,34 @@ describe("t331 dist/devin packaging parity + shell shape", () => {
       "Exec(bun .devin/tools/*)", "Exec(bun run .devin/tools/*)",
       "Exec(date -u)", "run_subagent", "ask_user_question", "web_search", "webfetch",
     ];
+    // The copy projection expands each authored glob into the engine prefix,
+    // the dispatcher's listed read-only commands, and every non-machine-
+    // reaching tool script — in both bun spellings.
+    const expandedGrants = (spelling: string) => [
+      `Exec(${spelling}.devin/tools/aidlc.ts engine)`,
+      ...copyChannelDispatcherCommands().map(
+        (command) => `Exec(${spelling}.devin/tools/aidlc.ts ${command})`,
+      ),
+      ...copyChannelToolScripts().map(
+        (script) => `Exec(${spelling}.devin/tools/${script})`,
+      ),
+    ];
+    const copyAllow = [
+      "Read(**)", "edit", "write", "grep", "glob",
+      ...expandedGrants("bun "),
+      ...expandedGrants("bun run "),
+      "Exec(date -u)", "run_subagent", "ask_user_question", "web_search", "webfetch",
+    ];
+    // The native projection drops every Exec(bun …) entry and runs the same
+    // commands through the installed aidlc command.
     const nativeAllow = [
       ...allow.filter((entry) => !entry.startsWith("Exec(bun ")),
       `Exec(${trustedCommand()})`,
+      ...copyChannelDispatcherCommands().map((command) => `Exec(aidlc ${command})`),
     ];
     for (const [path, expectedAllow] of [
       [join(REPO_ROOT, "harness", "devin", "config.json"), allow],
-      [join(ENGINE, "config.json"), allow],
+      [join(ENGINE, "config.json"), copyAllow],
       [join(REPO_ROOT, "dist-release", "devin", ".devin", "config.json"), nativeAllow],
     ] as const) {
       const config = JSON.parse(readFileSync(path, "utf-8")) as {
@@ -266,6 +292,35 @@ describe("t331 dist/devin packaging parity + shell shape", () => {
         expect(key in config, `${path}: config.json must not carry top-level "${key}"`).toBe(false);
       }
     }
+  });
+
+  test("4b: the copy tree grants no tools glob and no machine-reaching tool; the native tree grants only the aidlc command", () => {
+    const copy = JSON.parse(readFileSync(join(ENGINE, "config.json"), "utf-8")) as {
+      permissions: { allow: string[] };
+    };
+    const copyAllow = copy.permissions.allow;
+    // No wildcard over the tools directory survives the expansion.
+    expect(copyAllow.some((entry) => entry.includes("/tools/*")), "copy /tools/* glob").toBe(false);
+    // A machine-reaching tool is never pre-approved: running one shows the
+    // host's own prompt.
+    for (const tool of machineReachingTools()) {
+      for (const spelling of ["bun ", "bun run "]) {
+        expect(
+          copyAllow.includes(`Exec(${spelling}.devin/tools/${tool})`),
+          `copy grants machine-reaching ${tool}`,
+        ).toBe(false);
+      }
+    }
+    const native = JSON.parse(
+      readFileSync(join(REPO_ROOT, "dist-release", "devin", ".devin", "config.json"), "utf-8"),
+    ) as { permissions: { allow: string[] } };
+    const nativeAllow = native.permissions.allow;
+    expect(
+      nativeAllow.filter((entry) => entry.startsWith("Exec(bun")),
+      "native Exec(bun …) entries",
+    ).toEqual([]);
+    expect(nativeAllow).toContain(`Exec(${trustedCommand()})`);
+    expect(nativeAllow).toContain("Exec(aidlc doctor)");
   });
 
   test("5: mcp_config.json shape — 5 servers, context7 HTTP, 4 AWS via uvx", () => {
@@ -435,8 +490,11 @@ describe("t331 dist/devin packaging parity + shell shape", () => {
       expect(agents).not.toContain("all MCP tools");
       expect(agents).not.toContain("Review the broad `mcp__*` permission grant");
       expect(agents).toContain(root === DEVIN_ROOT
-        ? "`bun .devin/tools/*`"
+        ? "`aidlc.ts engine`"
         : `\`${trustedCommand()}\``);
+      // The tools-dir glob is retired in both channels: the copy channel
+      // expands it into per-script and per-command entries.
+      expect(agents).not.toContain("bun .devin/tools/*");
     }
   });
 

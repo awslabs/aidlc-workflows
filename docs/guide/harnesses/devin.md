@@ -148,10 +148,12 @@ runners are explicit-only: `/aidlc-domain-design`, `/aidlc-bugfix`, etc.
 - **Hook wiring** — `.devin/hooks.v1.json` is the hooks object itself, without a `hooks` wrapper. Seven lifecycle kinds route through the adapter. `fold-usage` has no registration because a supported Claude-style transcript usage source was not established for Devin; do not infer complete token/cost accounting from generic reporting commands.
 - **Permissions** — `.devin/config.json` pre-approves reads, edits, writes,
   search, subagent dispatch, structured questions, web search, and web fetch.
-  Copy installs pre-approve `bun .devin/tools/*`, `bun run .devin/tools/*`, and
-  `date -u`; native installs pre-approve the installed `aidlc engine` command
-  prefix and `date -u`. General Bun, Git, Node, npm, npx, and uvx commands are
-  not blanket-pre-approved. Personal overrides live in
+  Copy installs pre-approve the `aidlc.ts engine` prefix, the dispatcher's
+  listed read-only commands, and each approved `.devin/tools/` script in both
+  `bun` and `bun run` spellings, plus `date -u`; native installs pre-approve
+  the installed `aidlc engine` command prefix, its listed read-only commands,
+  and `date -u`. General Bun, Git, Node, npm, npx,
+  and uvx commands are not blanket-pre-approved. Personal overrides live in
   `.devin/config.local.json` and `.devin/mcp_config.local.json` (both
   gitignored).
 

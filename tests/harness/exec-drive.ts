@@ -339,8 +339,9 @@ export function setupDevinProject(): DevinProject {
 // of cursor's --trust). --permission-mode dangerous is the analogue of
 // copilot's --allow-all-tools: print mode cannot show an approval prompt, so
 // any call outside the project's Exec allow rules auto-rejects — and the model
-// does not always phrase the engine call in the allowed `bun .devin/tools/*`
-// shape (live-verified on 3000.11.1: `auto` and `smart` both reject some
+// does not always phrase the engine call in the allowed
+// `bun .devin/tools/aidlc.ts engine` shape (live-verified on 3000.11.1:
+// `auto` and `smart` both reject some
 // exploratory exec calls, which flakes the journey). The read-only contract
 // is still asserted below (status must not scaffold aidlc/spaces/**/intents).
 export function runDevin(
