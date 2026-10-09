@@ -798,6 +798,10 @@ describe("a parallel batch's writes judged from the parent", () => {
     return { code: result.exitCode, out: result.stdout.toString(), err: result.stderr.toString() };
   }
   const write = (pd: string, path: string) => parentHook(pd, "Write", { file_path: path, content: "// written by the test\n" });
+  // A path inside a shell command, spelled the way an agent in Git Bash spells it (forward slashes;
+  // an unquoted backslash path is what bash itself would mangle, and the guard reads it as bash does).
+  const sh = (path: string) => path.replaceAll("\\", "/");
+  const win32 = process.platform === "win32";
   const blocked = (pd: string) => readAuditShardEvents(pd).filter((row) => row.event === "PLAN_APPROVAL_BLOCKED").length;
   const stoodAside = (pd: string) => readAuditShardEvents(pd).filter((row) =>
     row.event === "GUARD_STOOD_ASIDE" && auditBlockField(row.block, "Guard") === "plan-approval").length;
@@ -817,9 +821,17 @@ describe("a parallel batch's writes judged from the parent", () => {
       expect(result.code, `${target}\n${result.out}\n${result.err}`).toBe(0);
       expect(result.out).toBe("");
     }
-    const shell = parentHook(pd, "Bash", { command: `echo "export const ${UNIT} = 2;" > ${join(worker, "src", `${UNIT}.ts`)}` });
+    const shell = parentHook(pd, "Bash", { command: `echo "export const ${UNIT} = 2;" > ${sh(join(worker, "src", `${UNIT}.ts`))}` });
     expect(shell.code, `${shell.out}\n${shell.err}`).toBe(0);
-    expect(blocked(pd)).toBe(before);
+    if (win32) {
+      // A quoted Windows path reaches bash intact and is the worktree's file; unquoted, bash would
+      // drop its backslashes and write a file into the current directory, the main checkout.
+      const quoted = parentHook(pd, "Bash", { command: `echo "x" > "${join(worker, "src", `${UNIT}.ts`)}"` });
+      expect(quoted.code, `${quoted.out}\n${quoted.err}`).toBe(0);
+      const mangled = parentHook(pd, "Bash", { command: `echo "x" > ${join(worker, "src", `${UNIT}.ts`)}` });
+      expect(mangled.code, `${mangled.out}\n${mangled.err}`).toBe(2);
+    }
+    expect(blocked(pd)).toBe(before + (win32 ? 1 : 0));
     // The hook decides only; nothing was written for it.
     expect(readFileSync(join(worker, "src", `${UNIT}.ts`), "utf-8")).toBe(`export const ${UNIT} = 1;\n`);
 
@@ -827,7 +839,7 @@ describe("a parallel batch's writes judged from the parent", () => {
     const main = write(pd, join(pd, "src", `${UNIT}.ts`));
     expect(main.code, `${main.out}\n${main.err}`).toBe(2);
     expect(main.err).toContain(REFUSAL);
-    expect(blocked(pd)).toBe(before + 1);
+    expect(blocked(pd)).toBe(before + (win32 ? 2 : 1));
 
     // A folder under .aidlc/worktrees that prepare did not create carries no approval.
     const stray = join(pd, ".aidlc", "worktrees", "bolt-stray");
@@ -835,7 +847,7 @@ describe("a parallel batch's writes judged from the parent", () => {
     const strayWrite = write(pd, join(stray, "src", `${UNIT}.ts`));
     expect(strayWrite.code, `${strayWrite.out}\n${strayWrite.err}`).toBe(2);
     expect(strayWrite.err).toContain(REFUSAL);
-    expect(blocked(pd)).toBe(before + 2);
+    expect(blocked(pd)).toBe(before + (win32 ? 3 : 2));
   });
 
   test("each listed Unit's worker writes in its own worktree and in no other", () => {
@@ -852,7 +864,7 @@ describe("a parallel batch's writes judged from the parent", () => {
     expect(cross.code, `${cross.out}\n${cross.err}`).toBe(0);
     // One write that names both worktrees is not one Unit's work.
     const both = parentHook(pd, "Bash", {
-      command: `echo x > ${join(child(pd, "alpha"), "src", "alpha.ts")} && echo y > ${join(child(pd, "beta"), "src", "beta.ts")}`,
+      command: `echo x > ${sh(join(child(pd, "alpha"), "src", "alpha.ts"))} && echo y > ${sh(join(child(pd, "beta"), "src", "beta.ts"))}`,
     });
     expect(both.code, `${both.out}\n${both.err}`).toBe(2);
   });
@@ -901,9 +913,9 @@ describe("a parallel batch's writes judged from the parent", () => {
     // every other point of Code Generation.
     for (const command of [
       "printf '%s\\n' settings; ls aidlc.settings*.json",
-      `cat ${join(pd, "src", `${UNIT}.ts`)} 2>&1 | head -60`,
-      `git -C ${pd} status --short && git -C ${pd} log --oneline -3`,
-      `cd ${join(pd, "src")} && ls`,
+      `cat ${sh(join(pd, "src", `${UNIT}.ts`))} 2>&1 | head -60`,
+      `git -C ${sh(pd)} status --short && git -C ${sh(pd)} log --oneline -3`,
+      `cd ${sh(join(pd, "src"))} && ls`,
     ]) {
       const probe = parentHook(pd, "Bash", { command });
       expect(probe.code, `${command}\n${probe.out}\n${probe.err}`).toBe(0);
@@ -911,17 +923,20 @@ describe("a parallel batch's writes judged from the parent", () => {
     expect(blocked(pd)).toBe(before);
     // Anything that writes in the main checkout, whose writes cannot be seen (inline code),
     // or that runs an AI-DLC tool in a spelling the guard does not admit, still waits.
-    for (const command of [
-      `ls ${pd} > ${join(pd, "listing.txt")}`,
-      `cat ${join(pd, "src", `${UNIT}.ts`)} | tee ${join(pd, "copy.ts")}`,
+    const refusedProbes = [
+      `ls ${sh(pd)} > ${sh(join(pd, "listing.txt"))}`,
+      `cat ${sh(join(pd, "src", `${UNIT}.ts`))} | tee ${sh(join(pd, "copy.ts"))}`,
       "node -e 'console.log(1)'",
-      `bun ${join(AIDLC_SRC, "tools", "aidlc-swarm.ts")} --help 2>&1 | head -60`,
-    ]) {
+      `bun ${sh(join(AIDLC_SRC, "tools", "aidlc-swarm.ts"))} --help 2>&1 | head -60`,
+      // A Windows-spelled tool path reaches bash only when quoted, and is then AI-DLC's own tool run.
+      ...(win32 ? [`bun "${join(AIDLC_SRC, "tools", "aidlc-swarm.ts")}" --help 2>&1 | head -60`] : []),
+    ];
+    for (const command of refusedProbes) {
       const refused = parentHook(pd, "Bash", { command });
       expect(refused.code, `${command}\n${refused.out}\n${refused.err}`).toBe(2);
       expect(refused.err).toContain(REFUSAL);
     }
-    expect(blocked(pd)).toBe(before + 4);
+    expect(blocked(pd)).toBe(before + refusedProbes.length);
   });
 
   test("the review request and verdict commands pass when they name a listed Unit's prepared worktree", () => {
@@ -937,7 +952,7 @@ describe("a parallel batch's writes judged from the parent", () => {
     const before = blocked(pd);
     const review = (entry: string, unit: string, dir: string, verdict = "") =>
       `${entry} --stage code-generation --unit ${unit} --reviewer aidlc-architecture-reviewer-agent --iteration 1` +
-      `${verdict ? ` --verdict ${verdict}` : ""} --project-dir "${dir}"`;
+      `${verdict ? ` --verdict ${verdict}` : ""} --project-dir "${sh(dir)}"`;
     for (const entry of [
       "aidlc engine log review", "bun .claude/tools/aidlc.ts engine log review", "bun .claude/tools/aidlc-log.ts review",
     ]) {
