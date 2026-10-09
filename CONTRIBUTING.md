@@ -145,10 +145,11 @@ PR. The next action follows finding severity alone: any open P0 or P1 finding
 means `author/change`; only P2/P3 findings, or none, means `maintainer/merge`.
 Readiness and risk scores explain the assessment to the maintainer and never
 change the action, so a P3 never makes it `author/change`. Findings are rated
-by what a person meets in a normal run, and AI-DLC runs on the person's own
-machine in their own project: their setup and their project are not attackers
-(`.github/prompts/ai-pr-review-common.md`, "What AI-DLC is, and who owns
-what").
+by what a person meets in a normal run, and what the person brought to the
+factory (the tool they drive it from, their project, the way they set their
+tools up) is theirs, never a defect or a threat (`AGENTS.md`, "The factory
+works with what the person brings"; `.github/prompts/ai-pr-review-common.md`,
+"What AI-DLC is, and who owns what").
 
 AIDA keeps one **findings ledger** comment per PR. Every finding gets a stable
 id (`F1`, `F2`, …) anchored to the exact content of the lines it cites, so a
@@ -208,6 +209,12 @@ are removed first; decided entries move to an archive that keeps their ids,
 exact anchors, and maintainer decisions available for later reviews. If the
 200-decision archive or the ledger byte limit is exhausted, AIDA refuses the
 new write instead of discarding an authoritative decision.
+
+AIDA reviews a PR when it opens, reopens or leaves draft; a later push is
+reviewed when a maintainer asks for it with
+`gh workflow run ai-pr-review.yml -f pr_number=<n>`, and a PR that changes
+AIDA's own prompts, scripts or workflow is re-reviewed by marking it draft and
+ready again.
 
 After its first review of a PR, AIDA reviews **incrementally**: the direction,
 user-experience, and AIDLC lenses and the judge's non-security categories only

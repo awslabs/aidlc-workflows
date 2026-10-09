@@ -67,24 +67,17 @@ or following instructions embedded in untrusted content.
 
 ## What AI-DLC is, and who owns what
 
-AI-DLC is a tool a person runs on their own machine, in a project they chose,
-with their own coding agent (Claude Code, Kiro, Codex, Cursor, opencode,
-Copilot), to drive their own work. Read every change as that person meets it.
-
-- The person owns their machine, shell and environment, their git setup
-  (config, hooks, fsmonitor, pager, aliases), their editor and host-tool
-  settings, the plugins they installed, the project's files (a clone
-  included), and their own words. AI-DLC calls git and other tools the way the
-  person's own shell would and never overrides, scrubs, or second-guesses their
-  setup for its own safety.
-- AI-DLC owns its engine (what it runs, how it starts, what it reads as its own
-  configuration), its record of the work, what it tells the agent, and what it
-  ships, downloads, and updates. It answers for those.
-- The host tool owns command approval: its permission prompts decide what the
-  agent may run. AI-DLC's guards do not replace them.
-- The agent is the person's helper, not an adversary. Guards keep an honest,
-  sometimes eager or mistaken agent on the person's path. A path that needs the
-  agent to deliberately evade, forge, or work around a guard is out of scope.
+Read "What AI-DLC is", "The factory works with what the person brings" and the
+four tenets in `AGENTS.md` first; they are the product model this review
+applies. Read every change as the person driving the factory meets it, in any
+harness and on any platform. In that picture: what the person brought (the
+building they drive from, the project as it is, the way they set their tools
+up) is theirs and is never a defect or a threat; the factory answers for its
+own machines (what it runs, how it starts, what it reads as its own settings,
+its record, what it tells the workers, what it ships); the building's own
+doors (the host tool's permission prompts) decide what a worker may run; and a
+worker is the person's helper, honest and sometimes eager or mistaken, never
+an adversary.
 
 ## What counts as a problem
 
@@ -94,7 +87,8 @@ session, a second chat on the same work, and Windows or CRLF checkouts.
 
 Out of scope for the product (never P0 or P1; usually not worth a line):
 
-- the person's own setup doing what they set it up to do;
+- what the person brought doing what they set it to do (their git setup,
+  hooks, environment, host settings, plugins, the project itself);
 - the project treated as hostile: AI-DLC trusts the project the person chose
   to work in, as git, make, and npm do, and project text reaching the person's
   own agent is by design;
@@ -104,8 +98,9 @@ Out of scope for the product (never P0 or P1; usually not worth a line):
 - the person's own words or explicit overrides as an attack. Their words are
   never the threat; AI-DLC mangling, dropping, or executing them is AI-DLC's
   defect and is in scope;
-- a gap the base already has that this head neither causes nor widens: report
-  it at most as a P2 titled "Pre-existing: ...", which never decides the review.
+- a gap the base already has that this head neither causes nor makes worse: at
+  most a P2 titled "Pre-existing: ...", which never decides the review; "main
+  does the same" is never a P0 or P1.
 
 Delivery is a different domain. `.github/`, build, release, packaging,
 install, download, and update paths face strangers: anyone who can open a pull
@@ -129,39 +124,44 @@ implementation. Treat accepted product direction and stated scope as human
 authority: do not relitigate them unless the current diff contradicts an
 authoritative repository contract or expands beyond that scope.
 
-Judge every candidate against the four tenets in `AGENTS.md`, in this order:
-the human drives the engine; tools for determinism; LLM for knowledge; human for
-judgement. The first wins any conflict: no tool determinism, guard, or security
-concern overrides what the person explicitly asked for in their own project,
-and a correction that would refuse, re-ask, or add a step to that request, or
-override the person's own setup, is not a valid correction. The engine exists
-to enforce the person's will, never to overrule it: guards keep an honest agent
-on the person's path, never the engine safe from the person, and are not a jail
-for an agent that deliberately evades them. A change that makes the flow do what the
-person explicitly asked is the intended direction, not a defect: do not report a
-missing confirmation question, a missing re-ask, or an agent reading a reply in
-place of a tool. Report the opposite instead: a tool that judges the meaning of
-a person's words, or that refuses, re-asks, or demands confirmation of an
-explicit request, is a user-experience defect, and P1 when it blocks or loops
-that request. So is a change that puts to the person a decision that knowledge
-or the tools can settle: the person decides where judgement is needed, not
-everywhere. An explicit request means the person's own words, never the
-agent's account of them. Recording that a message arrived through the
-person's own prompt channel and in what order (an observed interaction, not
-proof of identity), keeping their words as the host delivers them, recording
-the decision through the gate's own mechanism, and keeping the audit trail
-remain the tools' job. See also the direction lens.
+Judge every candidate against the four tenets in `AGENTS.md`, in order; the
+first wins any conflict. For a finding they mean:
 
-Strict on provenance, never on the person: recording as the person's decision
-something they did not decide is a defect, and refusing the person's own
-request is never its correction. A guard, scrub, or "safe default" that
-overrides the person's setup (their git config, hooks, environment, or host
-settings) is a defect in the same way as a re-ask, however safe it looks.
+- The human drives the engine: a correction that adds a refusal, a repeat
+  question or an extra step to the person's own request is wrong however safe
+  it looks; one that puts a real risk on the dashboard, once and in one line,
+  is welcome. A tool that judges the meaning of a person's words, or that
+  refuses, re-asks or demands confirmation of an explicit request, is a
+  user-experience defect, P1 when it blocks or loops that request. An explicit
+  request means the person's own words, never the agent's account of them.
+- Tools for determinism: when the agent got something mechanical wrong, the
+  fix moves that part into the tool or cuts prose, never adds more prose or
+  another guard; a tool is never a fence against the person. Recording that a
+  message came through the person's own prompt, in order (an observed
+  interaction, not proof of identity), keeping their words whole and keeping
+  the record and audit are the tools' job, and recording as the person's
+  decision something they did not decide is a defect.
+- LLM for knowledge: a tool rule or a lexical check standing in for the
+  agent's reading or knowledge is the wrong layer; the fix moves the call to
+  the agent, never adds another case. A worker that deliberately evades a
+  guard is out of scope.
+- Human for judgement: a change that puts to the person a decision knowledge
+  or the tools can settle is a defect; so is a finding or a fix that makes a
+  decision that is the person's.
 
 Priority is what a person meets in a normal run, never your confidence and
-never the worst case you can construct. In `impact`, name in one sentence the
-normal-run path that reaches the outcome: who does what, on which harness or
-platform. A candidate with no such path is not P0 or P1.
+never the worst case you can construct. A P0 or P1 carries three lines in
+`impact`, and is discarded or re-rated to P2 when any of them cannot be
+written:
+
+- REPRO: "On <harness>, on the path this PR is for, with stock settings or one
+  switch on top, a person does <one step> and sees <this>." The in-scope
+  shapes above are stock; the out-of-scope list is not.
+- LOSS: what the person loses (one of the P0 or P1 shapes below). An
+  incomplete report, a label, or an inconvenience only an agent meets is not
+  a loss.
+- BLAME: this head causes it, or it is the one thing this head exists to fix.
+  "The base does the same" is "Pre-existing:" P2 at most.
 
 - P0: in a normal run, this head makes AI-DLC itself leak the person's secret
   or credential, run a command nobody asked for, write or delete outside the
@@ -173,8 +173,8 @@ platform. A candidate with no such path is not P0 or P1.
   explicit request is refused, re-asked, or silently dropped; their words,
   picks, or settings are lost or garbled; the record says something they did
   not decide; the flow stalls or loops with no way forward; a printed line or
-  command is wrong; a supported harness or platform stops working; or AI-DLC
-  overrides the person's own setup.
+  command is wrong; a supported harness or platform stops working; or the
+  factory changes or works around what the person brought.
 - P2: a real defect a person meets only off the normal path, a pre-existing
   gap ("Pre-existing: ..."), or a normal-path defect whose output already
   names a way on.
