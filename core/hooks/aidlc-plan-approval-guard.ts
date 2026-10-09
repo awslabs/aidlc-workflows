@@ -910,24 +910,32 @@ function isRepliedPlanFileTarget(projectDir: string, target: string, editable: s
 // request's own review file (the Review File of a REVIEW_REQUESTED with no
 // REVIEW_COMPLETED for its request id yet) and, while one is open, the reviewer
 // dispatch record beside it. Nothing is open when the trail cannot be read.
-// With `units`, only requests for those Units count (a swarm batch's reviews).
+// With `units` (a swarm batch's listed Units), only requests for those Units
+// count, and the batch's own requests are read where the swarm protocol logs
+// them: `log review ... --project-dir <worktree>` writes the row in that
+// Unit's prepared worktree audit, with the review file inside the worktree's
+// record. The dispatch record is the parent's either way.
 function openReviewRequestFiles(projectDir: string, units: readonly string[] | null = null): string[] {
   try {
-    const record = docsRoot(projectDir);
     const open = new Map<string, string>();
-    for (const row of readAuditShardEvents(projectDir)) {
-      const id = auditBlockField(row.block, "Request Id");
-      if (id === null) continue;
-      if (row.event === "REVIEW_COMPLETED") open.delete(id);
-      if (row.event !== "REVIEW_REQUESTED") continue;
-      if (units !== null && !units.includes(auditBlockField(row.block, "Unit") ?? "")) continue;
-      // Audit rows are project text: only a slot inside the record's reviews
-      // folder, as `log review` writes it, counts.
-      const file = auditBlockField(row.block, "Review File");
-      const slot = file === null ? null : resolve(record, file);
-      const reviews = resolve(record, REVIEW_RECORDS_DIR);
-      if (slot !== null && !isAbsolute(file as string) && slot.startsWith(`${reviews}${sep}`)) open.set(id, slot);
-    }
+    const collect = (dir: string): void => {
+      const record = docsRoot(dir);
+      for (const row of readAuditShardEvents(dir)) {
+        const id = auditBlockField(row.block, "Request Id");
+        if (id === null) continue;
+        if (row.event === "REVIEW_COMPLETED") open.delete(id);
+        if (row.event !== "REVIEW_REQUESTED") continue;
+        if (units !== null && !units.includes(auditBlockField(row.block, "Unit") ?? "")) continue;
+        // Audit rows are project text: only a slot inside the record's reviews
+        // folder, as `log review` writes it, counts.
+        const file = auditBlockField(row.block, "Review File");
+        const slot = file === null ? null : resolve(record, file);
+        const reviews = resolve(record, REVIEW_RECORDS_DIR);
+        if (slot !== null && !isAbsolute(file as string) && slot.startsWith(`${reviews}${sep}`)) open.set(id, slot);
+      }
+    };
+    collect(projectDir);
+    if (units !== null) for (const { dir } of preparedWorktrees(projectDir, units)) collect(dir);
     return open.size === 0 ? [] : [...open.values(), resolve(reviewerDispatchPath(projectDir))];
   } catch {
     return [];
@@ -949,14 +957,31 @@ function isOpenReviewTarget(projectDir: string, target: string, files: string[])
   }
 }
 
+// The listed Unit `prepare` bound a Bolt worktree to: `folder` is a folder
+// directly under `.aidlc/worktrees/`, reached through no symlink, whose own
+// delegated approval (written by `prepare`) lets that Unit build. The judgement
+// is the one the worker's own hook makes inside the worktree, so a lowered
+// fence counts here exactly as it counts there, and a plan changed since
+// approval refuses here as it does there. Null for any other folder, or one
+// bound to no listed Unit.
+function worktreeBoundUnit(projectDir: string, folder: string, units: readonly string[]): string | null {
+  try {
+    const projectLexical = resolve(projectDir);
+    const root = resolve(worktreesDir(projectDir));
+    const folderAbs = resolve(folder);
+    const inside = relative(root, folderAbs);
+    if (inside === "" || inside.startsWith("..") || isAbsolute(inside) || /[\\/]/.test(inside)) return null;
+    assertNoSymlinkInChainOrThrow(realpathSync(projectLexical), relative(projectLexical, folderAbs));
+    if (!lstatSync(folderAbs, { throwIfNoEntry: false })?.isDirectory()) return null;
+    return units.find((unit) => codeGenerationExecutionAllowed(folderAbs, { unit })) ?? null;
+  } catch {
+    return null;
+  }
+}
+
 // The one prepared Bolt worktree every target lies in, named as the listed
-// Unit the engine bound it to: a folder directly under `.aidlc/worktrees/`,
-// reached through no symlink, whose own delegated approval (written by
-// `prepare`) lets that Unit build. The judgement is the one the worker's own
-// hook makes inside the worktree, so a lowered fence counts here exactly as it
-// counts there, and a plan changed since approval refuses here as it does
-// there. Null when a target lies elsewhere, when two worktrees are named, or
-// when the folder is one `prepare` did not bind to a listed Unit.
+// Unit the engine bound it to (worktreeBoundUnit). Null when a target lies
+// elsewhere, names the folder itself, or when two worktrees are named.
 function preparedBoltWorktreeUnit(projectDir: string, targets: string[], units: readonly string[]): string | null {
   try {
     const projectLexical = resolve(projectDir);
@@ -972,12 +997,89 @@ function preparedBoltWorktreeUnit(projectDir: string, targets: string[], units: 
       worktree = folder;
       assertNoSymlinkInChainOrThrow(projectReal, relative(projectLexical, targetAbs));
     }
-    if (worktree === null) return null;
-    const bound = worktree;
-    return units.find((unit) => codeGenerationExecutionAllowed(bound, { unit })) ?? null;
+    return worktree === null ? null : worktreeBoundUnit(projectDir, worktree, units);
   } catch {
     return null;
   }
+}
+
+// Every prepared Bolt worktree under `.aidlc/worktrees/` bound to a listed Unit.
+function preparedWorktrees(projectDir: string, units: readonly string[]): Array<{ unit: string; dir: string }> {
+  try {
+    const root = resolve(worktreesDir(projectDir));
+    const found: Array<{ unit: string; dir: string }> = [];
+    for (const entry of readdirSync(root, { withFileTypes: true })) {
+      if (!entry.isDirectory()) continue;
+      const dir = join(root, entry.name);
+      const unit = worktreeBoundUnit(projectDir, dir, units);
+      if (unit !== null) found.push({ unit, dir });
+    }
+    return found;
+  } catch {
+    return [];
+  }
+}
+
+// The swarm protocol's review request and verdict, `engine log review ...
+// --unit <unit> --project-dir <worktree>`, as the one literal AI-DLC command
+// of a shell: the native `aidlc`, or the installed `aidlc.ts` / `aidlc-log.ts`
+// under this project's tools folder (a real file, no symlink), with no
+// wrapper, assignment or second command. The Unit and the project directory
+// the command names, for the caller to check against the batch; null for any
+// other command. Mirrors swarmCommandUnits.
+function reviewCommandTarget(
+  projectDir: string,
+  cwd: string,
+  command: string,
+  invocations: Array<{
+    name: string; args: string[]; executable?: string; launchers?: string[];
+    dataDriven?: boolean; executableResolutionChanged?: boolean; ambiguous?: boolean;
+  }>,
+): { unit: string; projectDir: string } | null {
+  if (invocations.length !== 1 ||
+    !/^\s*(?:aidlc(?:\.exe)?|bun(?:\.exe)?)\s/i.test(command)) return null;
+  const invocation = invocations[0];
+  if (invocation.ambiguous || invocation.dataDriven || invocation.executableResolutionChanged ||
+    invocation.launchers?.length) return null;
+  const executable = (invocation.executable ?? invocation.name).toLowerCase();
+  let args = invocation.args;
+  if (executable === "bun" || executable === "bun.exe") {
+    const scriptIndex = args[0] === "run" ? 1 : 0;
+    const script = args[scriptIndex];
+    if (!script || script.startsWith("-")) return null;
+    const entry = resolve(cwd, script);
+    const stem = basename(entry);
+    if ((stem !== "aidlc.ts" && stem !== "aidlc-log.ts") ||
+      dirname(entry) !== resolve(projectDir, harnessDir(), "tools")) return null;
+    try {
+      assertNoSymlinkInChainOrThrow(realpathSync(projectDir), relative(resolve(projectDir), entry));
+      if (!lstatSync(entry).isFile() || lstatSync(entry).isSymbolicLink()) return null;
+    } catch {
+      return null;
+    }
+    args = stem === "aidlc.ts" ? args.slice(scriptIndex + 1) : ["engine", "log", ...args.slice(scriptIndex + 1)];
+  } else if (executable !== "aidlc" && executable !== "aidlc.exe") {
+    return null;
+  }
+  if (args[0] !== "engine" || args[1] !== "log" || args[2] !== "review") return null;
+  const flags = new Map<string, string>();
+  for (let index = 3; index < args.length; index++) {
+    const arg = args[index];
+    if (!arg.startsWith("--")) return null;
+    const equal = arg.indexOf("=");
+    const key = equal < 0 ? arg : arg.slice(0, equal);
+    if (key === "--retry-pending") {
+      flags.set(key, "true");
+      continue;
+    }
+    const value = equal >= 0 ? arg.slice(equal + 1) : args[++index];
+    if (value === undefined || value.startsWith("--") || flags.has(key)) return null;
+    flags.set(key, value);
+  }
+  const unit = flags.get("--unit");
+  const dir = flags.get("--project-dir");
+  if (!unit || !dir || unit.includes(",")) return null;
+  return { unit, projectDir: resolve(cwd, dir) };
 }
 
 // The composer's grid proposal (composerProposalPath) is engine scratch that
@@ -1053,6 +1155,8 @@ interface MutationIntent {
   opaqueShell: boolean;
   shellCommand: string | null;
   swarmUnits?: string[];
+  /** The swarm protocol's review request or verdict, with the Unit and project directory it names. */
+  reviewLog?: { unit: string; projectDir: string };
   /** The command runs AI-DLC itself, or may (a dynamic command naming it). */
   runsAidlc?: boolean;
   /** False when the lexer could not read the whole command: a variable or
@@ -2099,6 +2203,7 @@ async function mutationIntent(
   let opaqueShell = false;
   let shellCommand: string | null = null;
   let swarmUnits: string[] | null = null;
+  let reviewLog: { unit: string; projectDir: string } | null = null;
   let runsAidlc = false;
   let readable = true;
   if (toolName === "Bash") {
@@ -2148,6 +2253,7 @@ async function mutationIntent(
       );
     if (!dynamic && targets.length === 0) {
       swarmUnits = swarmCommandUnits(projectDir, cwd, analysed, invocations);
+      reviewLog = reviewCommandTarget(projectDir, cwd, analysed, invocations);
     }
     runsAidlc = invocations.some((invocation) =>
       normalizedCommandName(invocation.name).replace(/\.(?:cmd|ps1)$/, "") === "aidlc" ||
@@ -2182,6 +2288,7 @@ async function mutationIntent(
     opaqueShell,
     shellCommand,
     ...(swarmUnits ? { swarmUnits } : {}),
+    ...(reviewLog ? { reviewLog } : {}),
     ...(runsAidlc ? { runsAidlc } : {}),
     ...(readable ? {} : { readable }),
   };
@@ -2575,12 +2682,20 @@ async function evaluate(
         // A swarm batch plans in the main workspace, one record directory per
         // listed Unit, before any worktree exists; each Unit's code is written
         // by its worker inside the worktree `prepare` created and bound to it,
-        // judged as the worker's own hook judges it; and the reviewer writes
-        // its open request's own file. The worker and the reviewer are
-        // subagents of this session, so this hook, with the parent as its
-        // project, is the one that sees their writes. Everything else in the
-        // main checkout waits until the batch lands.
+        // judged as the worker's own hook judges it; its review is requested
+        // and recorded against that worktree, and the reviewer writes its open
+        // request's own file while the parent holds the dispatch record. The
+        // worker and the reviewer are subagents of this session, so this hook,
+        // with the parent as its project, is the one that sees their writes.
+        // Everything else in the main checkout waits until the batch lands.
         const listed = activeDirective.units ?? [];
+        // The batch's review request and verdict are logged against the Unit's
+        // worktree (an opaque command to the lexer): admitted when the Unit is
+        // listed and the directory is the worktree `prepare` bound to it.
+        if (
+          mutation.reviewLog && listed.includes(mutation.reviewLog.unit) &&
+          worktreeBoundUnit(projectDir, mutation.reviewLog.projectDir, [mutation.reviewLog.unit]) !== null
+        ) return 0;
         if (!mutation.opaqueShell && mutation.targets.length > 0) {
           if (mutation.targets.every((candidate) => listed.some((unit) =>
             isTrustedRecordTarget(projectDir, candidate, resolve(codeGenerationRecordDir(projectDir, unit)))))) return 0;

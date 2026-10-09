@@ -9,13 +9,13 @@
 // Uses the native worktree/approval fixture pattern from t344; no live agent.
 
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
-import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import {
   activeIntentUuid, artifactFilename, auditBlockField, boltSlugForUnit, findStageBySlug, getField,
   latestMainWorkflowStageRunFloorForProject, readAuditShardEvents,
-  readPlanApprovalReceipt, recordDir, REVIEW_RECORDS_DIR, setGuardPolicyLine, setGuardsOffLine, setGuardsOnLine,
+  readPlanApprovalReceipt, recordDir, REVIEW_RECORDS_DIR, reviewerDispatchPath, setGuardPolicyLine, setGuardsOffLine, setGuardsOnLine,
   stateDigest, workspaceSourceFingerprint,
   workspaceSourceListing, worktreePath, writeActiveDirectiveMarker, writeBaselineSourceSnapshot,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
@@ -922,6 +922,76 @@ describe("a parallel batch's writes judged from the parent", () => {
       expect(refused.err).toContain(REFUSAL);
     }
     expect(blocked(pd)).toBe(before + 4);
+  });
+
+  test("the review request and verdict commands pass when they name a listed Unit's prepared worktree", () => {
+    const pd = fixture();
+    succeeded(prepare(pd));
+    publish(pd);
+    const worker = child(pd);
+    // The installed spellings resolve the entry point under the project's own tools folder.
+    mkdirSync(join(pd, ".claude", "tools"), { recursive: true });
+    for (const name of ["aidlc.ts", "aidlc-log.ts"]) {
+      copyFileSync(join(AIDLC_SRC, "tools", name), join(pd, ".claude", "tools", name));
+    }
+    const before = blocked(pd);
+    const review = (entry: string, unit: string, dir: string, verdict = "") =>
+      `${entry} --stage code-generation --unit ${unit} --reviewer aidlc-architecture-reviewer-agent --iteration 1` +
+      `${verdict ? ` --verdict ${verdict}` : ""} --project-dir "${dir}"`;
+    for (const entry of [
+      "aidlc engine log review", "bun .claude/tools/aidlc.ts engine log review", "bun .claude/tools/aidlc-log.ts review",
+    ]) {
+      for (const verdict of ["", "READY"]) {
+        const command = review(entry, UNIT, worker, verdict);
+        const result = parentHook(pd, "Bash", { command });
+        expect(result.code, `${command}\n${result.out}\n${result.err}`).toBe(0);
+        expect(result.out).toBe("");
+      }
+    }
+    expect(blocked(pd)).toBe(before);
+    // The same route against the parent, an unlisted Unit, a folder prepare did not bind, or behind a pipe: refused.
+    mkdirSync(join(pd, ".aidlc", "worktrees", "bolt-stray"), { recursive: true });
+    for (const command of [
+      review("aidlc engine log review", UNIT, pd),
+      review("aidlc engine log review", "later", worker),
+      review("aidlc engine log review", UNIT, join(pd, ".aidlc", "worktrees", "bolt-stray")),
+      `${review("aidlc engine log review", UNIT, worker)} 2>&1 | head -5`,
+    ]) {
+      const refused = parentHook(pd, "Bash", { command });
+      expect(refused.code, `${command}\n${refused.out}\n${refused.err}`).toBe(2);
+      expect(refused.err).toContain(REFUSAL);
+    }
+    expect(blocked(pd)).toBe(before + 4);
+  });
+
+  test("the parent's reviewer dispatch record passes while a listed Unit's worktree holds the open request", () => {
+    const pd = fixture();
+    succeeded(prepare(pd));
+    publish(pd);
+    const worker = child(pd);
+    const slot = `${REVIEW_RECORDS_DIR}/code-generation/units/${UNIT}/1234567890abcdef/1.cccc0000cccc0000.review.md`;
+    const before = blocked(pd);
+    // Nothing open yet: the dispatch record waits.
+    const early = write(pd, reviewerDispatchPath(pd));
+    expect(early.code, `${early.out}\n${early.err}`).toBe(2);
+    // The protocol's request is logged against the worktree, so its row lives in the worktree's audit.
+    appendAuditEntry("REVIEW_REQUESTED", {
+      Stage: STAGE, Unit: UNIT, Reviewer: "aidlc-architecture-reviewer-agent", Iteration: "1",
+      "Request Id": "review:cccc0000cccc0000", "Review File": slot,
+    }, worker);
+    const dispatch = write(pd, reviewerDispatchPath(pd));
+    expect(dispatch.code, `${dispatch.out}\n${dispatch.err}`).toBe(0);
+    const verdictFile = write(pd, join(recordDir(worker)!, slot));
+    expect(verdictFile.code, `${verdictFile.out}\n${verdictFile.err}`).toBe(0);
+    expect(blocked(pd)).toBe(before + 1);
+    // The verdict is recorded in the same audit: the dispatch record is closed again.
+    appendAuditEntry("REVIEW_COMPLETED", {
+      Stage: STAGE, Unit: UNIT, Reviewer: "aidlc-architecture-reviewer-agent", Iteration: "1",
+      "Request Id": "review:cccc0000cccc0000", Verdict: "READY",
+    }, worker);
+    const closed = write(pd, reviewerDispatchPath(pd));
+    expect(closed.code, `${closed.out}\n${closed.err}`).toBe(2);
+    expect(blocked(pd)).toBe(before + 2);
   });
 
   test.each(["relaxed", "off"] as const)("a %s fence stands aside for a main-checkout write and the worker's changed plan", (mode) => {
