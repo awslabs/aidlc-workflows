@@ -71,6 +71,7 @@ const env = {
   CURSOR_PROJECT_DIR: projectRoot,
   CLAUDE_PLUGIN_ROOT: pluginRoot,
   PLUGIN_ROOT: pluginRoot,
+  DEVIN_PLUGIN_ROOT: pluginRoot,
 };
 const aidlc = Bun.which("aidlc");
 let installedSyncSucceeded = false;

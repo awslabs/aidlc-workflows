@@ -66,7 +66,7 @@ export type InvalidInstalledPlugin = {
 
 export type PluginInventory = {
   capability: InventoryCapability;
-  harness: "claude" | "codex" | "kiro" | "cursor" | "copilot" | "opencode";
+  harness: "claude" | "codex" | "kiro" | "cursor" | "copilot" | "opencode" | "devin";
   source?: string;
   installed: InstalledPlugin[];
   invalid: InvalidInstalledPlugin[];
@@ -191,6 +191,7 @@ function hostManifestDirectory(harness: PluginInventory["harness"]): string {
   if (harness === "kiro") return ".kiro-plugin";
   if (harness === "cursor") return ".cursor-plugin";
   if (harness === "copilot") return ".plugin";
+  if (harness === "devin") return ".devin-plugin";
   return ".opencode-plugin";
 }
 
@@ -248,7 +249,8 @@ function currentRoots(): string[] {
     process.env.CLAUDE_PLUGIN_ROOT,
     process.env.PLUGIN_ROOT,
     process.env.AIDLC_PLUGIN_ROOT,
-  ].map((value) => value?.trim() ?? "").filter(Boolean).map(absolute))];
+    process.env.DEVIN_PLUGIN_ROOT,
+  ].map((value) => value?.trim() ?? "").filter(Boolean).map((value) => resolve(value)))];
 }
 
 function harnessKind(harnessDir = runtimeHarnessDir()): PluginInventory["harness"] {
@@ -260,13 +262,15 @@ function harnessKind(harnessDir = runtimeHarnessDir()): PluginInventory["harness
     declared === "kiro-ide" ||
     declared === "cursor" ||
     declared === "copilot" ||
-    declared === "opencode"
+    declared === "opencode" ||
+    declared === "devin"
   ) {
     return declared === "kiro-ide" ? "kiro" : declared;
   }
   if (harnessDir === ".codex") return "codex";
   if (harnessDir === ".kiro") return "kiro";
   if (harnessDir === ".cursor") return "cursor";
+  if (harnessDir === ".devin") return "devin";
   return "claude";
 }
 
@@ -902,6 +906,7 @@ function composeEnvironment(
     AIDLC_PLUGIN_ROOT: plugin.root,
     CLAUDE_PLUGIN_ROOT: plugin.root,
     PLUGIN_ROOT: plugin.root,
+    DEVIN_PLUGIN_ROOT: plugin.root,
   };
 }
 
@@ -925,6 +930,7 @@ async function runComposer(
       "AIDLC_PLUGIN_ROOT",
       "CLAUDE_PLUGIN_ROOT",
       "PLUGIN_ROOT",
+      "DEVIN_PLUGIN_ROOT",
       "AIDLC_COMPILED_EXECUTABLE",
     ] as const;
     const previous = Object.fromEntries(keys.map((key) => [key, process.env[key]]));

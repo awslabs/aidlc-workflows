@@ -10,7 +10,7 @@
 //
 // Runs on SessionStart (Claude/Codex/Cursor/Kiro IDE) or explicitly on Kiro CLI. Harness-agnostic:
 //   PLUGIN_ROOT   ← CLAUDE_PLUGIN_ROOT | PLUGIN_ROOT | AIDLC_PLUGIN_ROOT |
-//                   this file's parent plugin directory
+//                   DEVIN_PLUGIN_ROOT | this file's parent plugin directory
 //   PROJECT_DIR   ← CLAUDE_PROJECT_DIR | AIDLC_PROJECT_DIR | PWD  (Codex unsets the first)
 //   HARNESS_LEAF  ← AIDLC_HARNESS_DIR  (".claude" default)
 //
@@ -38,6 +38,7 @@ const PLUGIN_ROOT =
   process.env.CLAUDE_PLUGIN_ROOT ||
   process.env.PLUGIN_ROOT ||
   process.env.AIDLC_PLUGIN_ROOT ||
+  process.env.DEVIN_PLUGIN_ROOT ||
   dirname(dirname(fileURLToPath(import.meta.url)));
 const PROJECT_DIR = resolve(
   process.env.CLAUDE_PROJECT_DIR ||
@@ -151,6 +152,7 @@ function pluginNameFromRoot(): string {
     ".cursor-plugin",
     ".plugin",
     ".kiro-plugin",
+    ".devin-plugin",
   ]) {
     try {
       const m = JSON.parse(readFileSync(join(PLUGIN_ROOT, md, "plugin.json"), "utf-8"));

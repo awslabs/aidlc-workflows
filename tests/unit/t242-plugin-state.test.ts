@@ -64,7 +64,7 @@ function surfaceSnapshot(root: string): Record<string, string> {
 }
 
 function pluginRoot(
-  harness: "claude" | "codex" | "kiro" = "claude",
+  harness: "claude" | "codex" | "kiro" | "devin" = "claude",
   version = "0.1.0",
 ): string {
   const root = temp("aidlc-plugin-fixture-");
@@ -72,6 +72,8 @@ function pluginRoot(
     ? ".claude-plugin"
     : harness === "codex"
     ? ".codex-plugin"
+    : harness === "devin"
+    ? ".devin-plugin"
     : ".kiro-plugin";
   mkdirSync(join(root, manifestDir), { recursive: true });
   mkdirSync(join(root, "stages", "construction"), { recursive: true });
@@ -406,6 +408,62 @@ describe("t242 fixture-proved host inventories", () => {
       capability: "current-root-only",
       installed: [],
     }));
+  });
+
+  test("Devin reads its native .devin-plugin manifest as current-root-only", () => {
+    const root = pluginRoot("devin");
+    process.env.AIDLC_PLUGIN_ROOT = root;
+    delete process.env.AIDLC_HARNESS_NAME;
+    const discovered = discoverPluginInventory(".devin");
+    expect(discovered).toEqual(expect.objectContaining({
+      capability: "current-root-only",
+      harness: "devin",
+      invalid: [],
+    }));
+    expect(discovered.installed).toHaveLength(1);
+    expect(
+      discovered.installed[0].manifestPath.endsWith(
+        join(".devin-plugin", "plugin.json"),
+      ),
+    ).toBe(true);
+
+    process.env.AIDLC_HARNESS_NAME = "devin";
+    const declared = discoverPluginInventory(".claude");
+    expect(declared).toEqual(expect.objectContaining({
+      capability: "current-root-only",
+      harness: "devin",
+      invalid: [],
+    }));
+    expect(declared.installed).toHaveLength(1);
+  });
+
+  test("Devin discovers its plugin from DEVIN_PLUGIN_ROOT alone", () => {
+    const root = pluginRoot("devin");
+    delete process.env.CLAUDE_PLUGIN_ROOT;
+    delete process.env.PLUGIN_ROOT;
+    delete process.env.AIDLC_PLUGIN_ROOT;
+    process.env.DEVIN_PLUGIN_ROOT = root;
+    process.env.AIDLC_HARNESS_NAME = "devin";
+    const discovered = discoverPluginInventory(".devin");
+    expect(discovered).toEqual(expect.objectContaining({
+      capability: "current-root-only",
+      harness: "devin",
+      invalid: [],
+    }));
+    expect(discovered.installed).toHaveLength(1);
+    expect(discovered.installed[0].root).toBe(root);
+  });
+
+  test("Devin's CLAUDE_PLUGIN_ROOT and DEVIN_PLUGIN_ROOT aliases for one root count once", () => {
+    const root = pluginRoot("devin");
+    delete process.env.PLUGIN_ROOT;
+    delete process.env.AIDLC_PLUGIN_ROOT;
+    process.env.CLAUDE_PLUGIN_ROOT = root;
+    process.env.DEVIN_PLUGIN_ROOT = `${root}/`;
+    process.env.AIDLC_HARNESS_NAME = "devin";
+    const discovered = discoverPluginInventory(".devin");
+    expect(discovered.installed).toHaveLength(1);
+    expect(discovered.invalid).toEqual([]);
   });
 
   test("duplicate installed identities are invalid and name every manifest", () => {

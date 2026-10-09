@@ -1486,9 +1486,11 @@ function pluginRootCandidatesFromEnv(): string[] {
     process.env.CLAUDE_PLUGIN_ROOT,
     process.env.PLUGIN_ROOT,
     process.env.AIDLC_PLUGIN_ROOT,
+    process.env.DEVIN_PLUGIN_ROOT,
   ]
     .map((value) => value?.trim() ?? "")
-    .filter((value) => value.length > 0);
+    .filter((value) => value.length > 0)
+    .map((value) => resolve(value));
   return [...new Set(roots)];
 }
 
@@ -1538,6 +1540,7 @@ async function handlePluginSync(projectDir: string): Promise<void> {
       AIDLC_PLUGIN_ROOT: item.root,
       CLAUDE_PLUGIN_ROOT: item.root,
       PLUGIN_ROOT: item.root,
+      DEVIN_PLUGIN_ROOT: item.root,
     };
     if (isCompiledExecutable()) {
       const envKeys = [
@@ -1547,6 +1550,7 @@ async function handlePluginSync(projectDir: string): Promise<void> {
         "AIDLC_PLUGIN_ROOT",
         "CLAUDE_PLUGIN_ROOT",
         "PLUGIN_ROOT",
+        "DEVIN_PLUGIN_ROOT",
         "AIDLC_COMPILED_EXECUTABLE",
       ] as const;
       const previous = Object.fromEntries(envKeys.map((key) => [key, process.env[key]]));

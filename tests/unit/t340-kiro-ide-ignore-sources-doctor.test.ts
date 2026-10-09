@@ -627,7 +627,7 @@ describe("t340 Kiro IDE ignore sources doctor", () => {
     cpSync(join(repo, "dist", "kiro-ide"), project, { recursive: true });
     cpSync(join(repo, "dist", "plugins", "test-pro", "kiro-ide"), project, { recursive: true });
     const composeEnv: NodeJS.ProcessEnv = { ...process.env, PATH: "" };
-    for (const name of ["AIDLC_HARNESS_DIR", "AIDLC_HARNESS_NAME", "AIDLC_PLUGIN_ROOT", "AIDLC_PROJECT_DIR", "CLAUDE_PLUGIN_ROOT", "CLAUDE_PROJECT_DIR", "PLUGIN_ROOT"]) {
+    for (const name of ["AIDLC_HARNESS_DIR", "AIDLC_HARNESS_NAME", "AIDLC_PLUGIN_ROOT", "AIDLC_PROJECT_DIR", "CLAUDE_PLUGIN_ROOT", "CLAUDE_PROJECT_DIR", "PLUGIN_ROOT", "DEVIN_PLUGIN_ROOT"]) {
       delete composeEnv[name];
     }
     const compose = spawnSync(process.execPath, ["./hooks/aidlc-plugin-compose.ts", ".kiro", "kiro-ide"], {
