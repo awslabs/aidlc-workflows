@@ -1,0 +1,55 @@
+== Case A — dispatcher grammar ==
+Fixture: /tmp/aidlc-inv/p-a (git init + cp -r <home>/sources/aidlc-workflows/dist-release/devin/. — release tree)
+cwd for all runs: /tmp/aidlc-inv/p-a
+Payload (VS, piped on stdin):
+  {"hook_event_name":"PostCompaction","cwd":"/tmp/aidlc-inv/p-a","session_id":"inv-1"}
+Base env: env -u CLAUDE_PROJECT_DIR -u AIDLC_PROJECT_DIR -u AIDLC_HARNESS_DIR -u AIDLC_HARNESS_NAME DEVIN_PROJECT_DIR=/tmp/aidlc-inv/p-a
+BIN=/tmp/aidlc-inv/binaries/native/aidlc
+Heartbeat path checked: /tmp/aidlc-inv/p-a/aidlc/spaces/default/intents/.aidlc-engine/hooks-health/ (deleted between runs)
+
+== A1 ==
+command: <base env> AIDLC_HARNESS_NAME=devin AIDLC_COMPILED_EXECUTABLE=$BIN $BIN hook validate-state
+exit: 2
+stdout: (empty)
+stderr:
+  error: unknown command 'hook'
+
+  usage: aidlc <command> [flags]
+  For the full list, run 'aidlc --help'.
+heartbeat: hooks-health dir does not exist — none written
+
+== A2 ==
+command: <base env> AIDLC_HARNESS_NAME=devin AIDLC_COMPILED_EXECUTABLE=$BIN $BIN engine hook validate-state
+exit: 0
+stdout: (empty)
+stderr: (empty)
+heartbeat: validate-state.last written (dir contained exactly that one file)
+
+== A3 ==
+command: <base env> AIDLC_HARNESS_NAME=copilot AIDLC_COMPILED_EXECUTABLE=$BIN $BIN hook validate-state
+exit: 1
+stdout: (empty)
+stderr:
+  aidlc engine hook validate-state: not available in this install
+heartbeat: none
+note: the legacy canonicalizer DID rewrite `hook` → `engine hook` (the error
+echoes the rewritten argv), but the engine route then refused — the copilot
+hook route is not available in a devin-shaped install.
+
+== A4 ==
+command: <base env> $BIN hook validate-state   (no AIDLC_* vars set)
+exit: 2
+stdout: (empty)
+stderr:
+  error: unknown command 'hook'
+
+  usage: aidlc <command> [flags]
+  For the full list, run 'aidlc --help'.
+heartbeat: none
+
+== summary ==
+| case | exit | stderr | heartbeat |
+| A1   | 2    | unknown command 'hook' | none |
+| A2   | 0    | (empty)                | validate-state.last |
+| A3   | 1    | engine hook validate-state: not available in this install | none |
+| A4   | 2    | unknown command 'hook' | none |

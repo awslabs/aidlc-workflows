@@ -1,0 +1,49 @@
+== Step 0 — build ==
+
+$ cd <home>/sources/aidlc-workflows && bun scripts/package.ts
+exit: 0
+tail of stdout:
+  [devin] regenerated dist/devin/.devin
+  [devin] regenerated dist-release/devin/.devin
+  [plugin:test-pro] emitted dist/plugins/test-pro/devin/
+  (all 8 harnesses + test-pro plugin regenerated; full list: claude, codex, copilot, cursor, devin, kiro, kiro-ide, opencode, both dist/ and dist-release/)
+
+$ AIDLC_BUILD_OUT_DIR=/tmp/aidlc-inv/binaries bun scripts/build-binaries.ts
+exit: 0
+stdout:
+  native	ok	2.142s	98420864 bytes	/tmp/aidlc-inv/binaries/native/aidlc
+  wrote /tmp/aidlc-inv/binaries/build-results-native.json
+
+== build-results-native.json summary ==
+- expectedVersion: 2.10.0; bunVersion: 1.3.14
+- packageCheck (`bun scripts/package.ts --check`): status 0 — "package --check: deterministic across two independent build(s) for claude, codex, copilot, cursor, devin, kiro, kiro-ide, opencode."
+- failures: []  (empty)
+- gates: 58 total, all ok=true
+- Devin-related gates (all ok):
+    runtime-devin            ok — complete devin distribution staged
+    harness-probe-devin      ok — devin adapter/hook probe
+- verification.status: VERIFIED, mode: full-runtime
+- full results file preserved at /tmp/aidlc-inv/binaries/build-results-native.json
+
+== runtime hooks check ==
+BIN is a file, so BIN/../runtime does not resolve; the real path is
+/tmp/aidlc-inv/binaries/native/runtime/devin/.devin/hooks/ — contents:
+  aidlc-continue-workflow.ts      aidlc-rebuild-stage-graph.ts
+  aidlc-deliver-stage-rules.ts    aidlc-record-human-turn.ts
+  aidlc-devin-adapter.ts          aidlc-review-freeze.ts
+  aidlc-fold-usage.ts             aidlc-reviewer-scope.ts
+  aidlc-log-subagent.ts           aidlc-run-sensors.ts
+  aidlc-plan-approval-guard.ts    aidlc-session-end.ts
+  aidlc-session-start.ts          aidlc-state-transition-guard.ts
+  aidlc-statusline.ts             aidlc-sync-workflow-state.ts
+  aidlc-validate-state.ts         aidlc-write-audit-log.ts
+  (+ review-freeze-command.ts, runtime-integrity.ts)
+All 16 required aidlc-<name>.ts hooks + aidlc-devin-adapter.ts present.
+
+== fixture hooks.v1.json check (dist-release/devin → p-*) ==
+$ grep -o '"aidlc engine adapter devin [^"]*"' p-a/.devin/hooks.v1.json | sort -u
+All 14 hook entries read "aidlc engine adapter devin <target>":
+  audit-and-sensors, continue-workflow, deliver-stage-rules, log-subagent,
+  plan-approval-guard, rebuild-stage-graph, record-human-turn, review-freeze,
+  reviewer-scope, session-end, session-start, state-transition-guard,
+  sync-workflow-state, validate-state

@@ -1,6 +1,6 @@
 # Hook events, payload translation, and output contracts
 
-**Finding:** DEVIN-06. **Status:** Implemented transport with explicit payload and enforcement gaps. **Source baseline:** `6e208f7b`. **Fact-checked:** 2026-09-12.
+**Finding:** DEVIN-06. **Status:** Implemented transport with explicit payload and enforcement gaps; compiled-binary core-hook dispatch fixed and regression-gated (2026-10-09). **Source baseline:** `6e208f7b`; compiled-dispatch section at `dafdaa99` plus the change set that landed with it. **Fact-checked:** 2026-09-12; compiled-dispatch section 2026-10-09.
 
 ## Why this was needed
 
@@ -16,7 +16,24 @@ The name map includes exec→Bash, write→Write, edit→Edit, run_subagent→Ta
 
 Guard branches preserve the core's exit 2 and stderr on a block. Stage-rule delivery forwards stdout; Stop forwards decision JSON and its exit code. Session-start context wrapping is different from a block response. Malformed JSON returns 0 even on guard targets; unknown adapter targets also return 0. Document this fail-open behavior instead of claiming universal fail-closed enforcement.
 
-Project selection is DEVIN_PROJECT_DIR, then compatibility payload cwd, then process.cwd(). Children receive the selected root in AIDLC_PROJECT_DIR, CLAUDE_PROJECT_DIR, and DEVIN_PROJECT_DIR. Valid payload session IDs set AIDLC_SESSION_OVERRIDE. Copy children reuse process.execPath; native children use the compiled route when configured.
+Project selection is DEVIN_PROJECT_DIR, then compatibility payload cwd, then process.cwd(). Children receive the selected root in AIDLC_PROJECT_DIR, CLAUDE_PROJECT_DIR, and DEVIN_PROJECT_DIR. Valid payload session IDs set AIDLC_SESSION_OVERRIDE. Copy children reuse process.execPath; native children use the compiled route when configured (next section).
+
+### Compiled-binary core-hook dispatch
+
+In a native install, Devin runs `aidlc engine adapter devin <target>` (the packager rewrites every hooks.v1.json entry to that form). The compiled `runAdapter` imports the adapter packaged inside the binary and pins `AIDLC_HARNESS_NAME=devin`, `AIDLC_HARNESS_DIR=.devin`, and `AIDLC_COMPILED_EXECUTABLE=<execPath>`. With `AIDLC_COMPILED_EXECUTABLE` set, the adapter starts each core hook as `[executable, "engine", "hook", <name>]`. `record-human-turn` is the exception: it uses the authority route `[executable, "--internal-aidlc-record-human-turn", <hook path>]` with a per-spawn token. Without that variable (source and copy-channel installs) it runs `[process.execPath, <hook path>]` and never reaches the dispatcher's grammar.
+
+One exported `coreCommand(hookFile, executable = process.env.AIDLC_COMPILED_EXECUTABLE)` builds that argv for both `runCore` (stderr ignored) and `runCoreWithStderr` (the guards' block channel). Every file the adapter can spawn is listed once in the exported `CORE_HOOK_FILES` (16 files). The `CoreHookFile` parameter type makes a call site that is not in the list fail typecheck. Doctor's side-effect-free dispatch probe iterates the same list (DEVIN-13).
+
+**Defect history (unreleased).** `e0d5e454` (the initial Devin harness, 2026-09-22) copied the Codex adapter, which already used `engine hook` (since `12b8d6e0`), but wrote `[executable, "hook", <name>]` at both argv sites. The compiled dispatcher accepts a bare `hook` only for the legacy 2.8.0 Copilot adapter: `canonicalizeLegacyCopilotHookArgv` requires `AIDLC_HARNESS_NAME=copilot`. Every other caller gets exit 2 `error: unknown command 'hook'`. `248500a8` (2026-09-26) corrected the argv. Neither commit was in a tag or `upstream/main` when this was investigated, so no released binary shipped the defect. Impact reproduced against a freshly built native binary (2026-10-08, `evidence/devin-e2e-run/compiled-hook-dispatch-run/`, cases A and C):
+
+| Hook group | Behavior under the old argv |
+| --- | --- |
+| PreToolUse guards (state-transition, plan-approval, review-freeze, reviewer-scope, deliver-stage-rules) | The dispatcher's exit 2 is the adapter's block code, so every guarded tool call was blocked, including `ls`. A real violation showed the dispatcher error instead of `Stage status cannot be changed`. Fail-closed, but the workflow was unusable and the error misleading |
+| Advisory (session-start, validate-state, write-audit-log + run-sensors, fold-usage, rebuild-stage-graph, session-end, sync-workflow-state, log-subagent) | Exit 0 and no output: the adapter discards the child's exit code. No workflow context, heartbeat, SessionStart marker, or audit row |
+| Stop / continue-workflow | Exit 2 with empty stderr (`runCore` spawns with `stderr: "ignore"` and forwards the code): a Stop block with no reason |
+| record-human-turn | Unaffected (internal route) |
+
+The Codex, Cursor, Copilot, Kiro, and Kiro IDE adapters were checked at the same time: every compiled argv site uses `"engine", "hook"`. Only Devin was affected.
 
 fold-usage remains an adapter target but is not registered. Captures did not provide Claude-format transcript_path, so invoking the Claude usage-folding hook did not supply a supported Devin usage source. The statusline hook is also unwired. Do not promise complete token/cost collection simply because generic reporting commands exist.
 
@@ -35,12 +52,16 @@ The configured events reach multiple adapter targets and shared hook bodies. His
 | Writes and patch envelopes | All supported affected paths are checked/audited; malformed and unsupported forms are classified explicitly | t332 audit tests; deeper per-guard patch coverage must be inspected |
 | Host adds or renames tools/events | Review registrations AND adapter branches, not only the name map | t331 wiring tests plus fresh captured payloads |
 | Malformed input | Current adapter returns 0; do not report it as protected denial | t332 tests 16 and 16a |
+| Compiled core-hook argv | With `AIDLC_COMPILED_EXECUTABLE` set, advisory hooks run (heartbeat written) and a guard block carries the guard's reason, not a dispatcher error | t332 `15a`/`17d` (POSIX stub re-entering the packaged dispatcher; both fail when the bare-`hook` argv is restored); build gates `adapter-devin-validate-state` and `adapter-devin-state-transition-guard` in `scripts/build-binaries.ts`, asserted by t238 against a real host binary; doctor's `Devin hook dispatch` row (t331 `9e`). Not covered on Windows (the stub is POSIX; the tests skip there) |
+| Adapter→dispatcher failures stay invisible to the host | A dispatcher error on an advisory hook is still exit 0 with no signal, and a failed Stop child still blocks with empty stderr | Open residual: the adapter does not record a hook drop when a core spawn fails. The doctor probe and build gates catch the known argv class, not every runtime spawn failure |
 
 ## Superseded approaches and history
 
 `172cfd55` established the shim; `801507ad` removed inert usage registrations and tightened matchers; `0d7f63f9` retained live payload captures. Do not copy Codex-specific replay/session workarounds without Devin evidence.
 
-Retired claims: all payloads are isomorphic except tool names; all mapped tools are handled everywhere; every configured hook enforces its intended invariant; registered usage collection means measured Devin usage.
+`e0d5e454` introduced the bare-`hook` compiled argv; `248500a8` changed it to `engine hook`; the follow-up change set extracted `coreCommand`/`CORE_HOOK_FILES` and added the t332, build-gate, and doctor coverage above. The investigation's resume plan also proposed recording a hook drop on core-spawn failure. That was deliberately not taken in this round and stays open in the table above.
+
+Retired claims: all payloads are isomorphic except tool names; all mapped tools are handled everywhere; every configured hook enforces its intended invariant; registered usage collection means measured Devin usage; adapter tests run under `bun` without `AIDLC_COMPILED_EXECUTABLE` prove the native path (they never take the compiled branch).
 
 ## Sources
 
@@ -50,6 +71,8 @@ Retired claims: all payloads are isomorphic except tool names; all mapped tools 
 - `tests/fixtures/devin-hook-payloads/payloads.json`
 - `tests/unit/t331-devin-packaging.test.ts`
 - `tests/unit/t332-devin-adapter.test.ts`
+- `core/tools/aidlc.ts` — `runAdapter`, `resolveAction`, `canonicalizeLegacyCopilotHookArgv`
+- `scripts/build-binaries.ts` — `devinAdapterGate`, `devinStateTransitionGuardGate`; `tests/unit/t238-build-binaries.test.ts`
 - https://docs.devin.ai/cli/extensibility/hooks/overview
 - https://docs.devin.ai/cli/extensibility/hooks/lifecycle-hooks
 

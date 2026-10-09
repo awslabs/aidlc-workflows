@@ -1,6 +1,6 @@
 # Version baseline, binary discovery, and diagnostic evidence
 
-**Finding:** DEVIN-13. **Status:** Implemented checks; not a full compatibility certification. **Source baseline:** `79cf8498`. **Fact-checked:** 2026-09-22 (doctor rows, install layouts, and test hermeticity re-verified during the PR #996 Item 7 work).
+**Finding:** DEVIN-13. **Status:** Implemented checks; not a full compatibility certification. **Source baseline:** `79cf8498`; hook-dispatch, session-linked evidence, and native-trust rows at `dafdaa99` plus the change set that landed with them. **Fact-checked:** 2026-09-22 (doctor rows, install layouts, and test hermeticity re-verified during the PR #996 Item 7 work); 2026-10-09 (compiled-dispatch doctor rows).
 
 ## Why this was needed
 
@@ -18,11 +18,22 @@ Desktop discovery checks the actual editor application — `%LOCALAPPDATA%\Progr
 
 Observed install layouts (2026-09-22): the Windows candidates were corrected against a real install — the Desktop-bundled CLI lives at `%LOCALAPPDATA%\Programs\Devin\resources\app\extensions\windsurf\devin\bin\devin.exe` (`devin 3000.10.31` observed) and the standalone Windows CLI at `%LOCALAPPDATA%\devin\cli\bin\devin.exe` (`devin 3000.4.25` observed); the previously probed `%LOCALAPPDATA%\Devin\devin.exe` and `%ProgramFiles%\Devin\devin.exe` do not exist there. The macOS `.app` candidate is the structurally matching Electron path (plausible, not verified on a macOS install). The Linux paths `~/.local/share/Devin/` and `/opt/Devin/` were guessed candidates at that date (unverified); current candidates come from the official `devin-desktop` package layout. Docs only say the CLI is "bundled with Devin Desktop" and can be added to PATH via an admin-enabled Command Palette action; no path is documented (`enterprise/team-settings.mdx`, `enterprise/windsurf-auth.mdx`).
 
-After a successful core SessionStart hook and an actual SessionStart payload, the adapter writes .devin/.aidlc-session-start.local.json with only lastRun. The marker is gitignored and never pre-seeded in the distribution. Failed marker writes warn but do not suppress context output.
+After a successful core SessionStart hook and an actual SessionStart payload, the adapter writes .devin/.aidlc-session-start.local.json with `lastRun`. Since 2026-10-09 it also writes `sessionId` when the payload carries a `session_id`. The marker is gitignored and never pre-seeded in the distribution. Failed marker writes warn but do not suppress context output.
 
-Doctor requires a canonical timestamp in that marker; missing, unreadable, or malformed evidence fails. It does not create evidence, impose an expiry threshold, query current hook approval, or resist manual fabrication. A valid marker passes only the historical execution-evidence check. `/hooks` is documented as listing loaded hooks and their sources; operational approve-if-prompted/full-restart guidance is not an approval-state API. Observed 2026-09-23: `/hooks` is a CLI-only command — Desktop's Devin Local session returns "Unknown command"; the Desktop-native equivalent is the **Open customizations** surface (new-tab menu or session context menu), which lists loaded rules, skills, hooks, MCP servers, and plugins.
+Doctor requires a canonical timestamp in that marker; missing, unreadable, or malformed evidence fails. It does not create evidence, impose a time-based expiry, query current hook approval, or resist manual fabrication. A valid marker passes only the historical execution-evidence check, with one exception: the session-linked staleness warning. When the marker has a `sessionId` and the newest `Session`-tagged `HUMAN_TURN` audit row belongs to a different session and is strictly later than `lastRun`, the row becomes a non-failing warning (`… recorded a human turn at … with no SessionStart evidence; hooks may not be dispatching`). Timestamps are compared as parsed instants: audit rows are second-precision and the marker is millisecond-precision, so a plain string comparison would order them wrong. The link uses `HUMAN_TURN` because record-human-turn runs on the dispatcher's internal route and kept recording while every other core hook failed (DEVIN-06). Heartbeat age was rejected as the signal, because a normal long session always has heartbeats newer than its SessionStart. Markers without `sessionId` (written before this change) and projects with no session-tagged turn keep the plain historical pass. `/hooks` is documented as listing loaded hooks and their sources; operational approve-if-prompted/full-restart guidance is not an approval-state API. Observed 2026-09-23: `/hooks` is a CLI-only command — Desktop's Devin Local session returns "Unknown command"; the Desktop-native equivalent is the **Open customizations** surface (new-tab menu or session context menu), which lists loaded rules, skills, hooks, MCP servers, and plugins.
+
+The `Devin hook dispatch` row, emitted just before the evidence row, is the functional check the evidence row cannot be. It imports the adapter the install would run (`resolveHookPath("aidlc-devin-adapter.ts", "devin", projectDir)`). For each of its `CORE_HOOK_FILES`, it builds the compiled-mode argv with `coreCommand(file, "aidlc")` and resolves it through the dispatcher's own `resolveAction(argv, true)`. The row requires `type: "hook"` with the expected name and the hook file beside the adapter. For `record-human-turn` it instead requires the internal route naming an existing file. No hook executes, so the probe writes no heartbeats or audit rows that would fake liveness evidence. Outcomes: pass (`all 16 core-hook commands … resolve`); fail naming the first broken command, e.g. `` `aidlc hook validate-state` → error: unknown command 'hook' ``; or fail when the adapter cannot be loaded. The no-marker fix text now says to fix a failing dispatch row first, because the old text sent a dispatch failure to hook approval.
 
 For existing installations, update adapter and doctor together, preserve local policy, merge the ignore entry, and restart to collect actual SessionStart evidence. Do not fabricate the marker or infer approval from workspace trust.
+
+### Why doctor missed the compiled-dispatch defect
+
+Recorded from `evidence/devin-e2e-run/compiled-hook-dispatch-run/` (2026-10-08, native binary built from `dafdaa99`, `devin 3000.11.3` on PATH, no live Devin session). Before the rows above existed:
+
+- **No row ran or resolved a hook.** The only functional signals were the SessionStart marker and the hooks-health heartbeats, and both are written only when a core hook succeeds.
+- **D1, fresh install:** the evidence row failed (`no valid SessionStart marker`), but its fix pointed at hook approval, so the dispatch failure would have been misdiagnosed.
+- **D3, stale marker:** after one good SessionStart, old-argv SessionStart, validate-state, and guard runs left `lastRun` and `validate-state.last` unchanged, and the evidence row stayed `ok`. A project last used from source and then switched to the binary looks healthy on that row.
+- **The overall doctor exit was 1 in D1–D3,** but for unrelated reasons. The fixtures were release-tree copies, not `aidlc config` installs, so `Installed runtime` and `Command pointer` failed. `Native command trust` also failed with `native hooks missing, native permission/trust missing` on a correctly configured `.devin/`, a separate doctor gap (DEVIN-04). "Doctor green" in the original report therefore means the SessionStart evidence row, not the exit code.
 
 ## Evidence and limits
 
@@ -40,6 +51,8 @@ The opt-in status test covers only no-workflow status and absence of workflow sc
 | Fresh/invalid execution marker | Doctor fails without creating evidence; packaging contains no marker | t331 doctor/ignore tests |
 | Valid SessionStart | Successful target writes/refreshes canonical timestamp; failed core or wrong event does not | t332 SessionStart cases |
 | Current approval or revocation | Do not infer from historical lastRun; inspect actual host behavior | Live verification gap; no supported approval-state API established |
+| Adapter↔dispatcher contract | The dispatch row passes on the shipped tree and fails, naming the command, when the adapter the doctor resolves emits a bare `hook`; it never runs a hook | t331 `9e`. Live-binary coverage of the same contract comes from the t238 build gates (DEVIN-06) |
+| Session-linked staleness | A newer `HUMAN_TURN` under another session warns; same session, a same-second truncated timestamp, or a marker without `sessionId` keeps the pass row | t331 `9f` (four sub-cases); t332 `2`/`2a` assert `sessionId` in the marker. Live gap: no attended Devin session has produced the warning |
 
 ## Open questions — platform verification pending a later execution
 
@@ -54,14 +67,16 @@ The opt-in status test covers only no-workflow status and absence of workflow sc
 
 `801507ad` introduced the version/discovery helper. `5e3fcfce` unified and raised the floor. `a51bf1eb` replaced the unconditional fresh-install hook reminder with historical execution evidence. `6e208f7b` repaired the diagnostics test's literal-type inference.
 
-Retired: multiple independent floors; the selected baseline proves a specific vendor bug was fixed; a discovered Desktop binary proves Desktop hooks work; doctor green means current hook approval; historical pre-existing typecheck failures remain current after their fix. Ordinary feature/docs work now follows upstream's release-preparation-only metadata policy, not the old per-fix version-bump recipes.
+The 2026-10-09 change set added the `Devin hook dispatch` row, the `sessionId` marker field and session-linked warning, and the Devin native-trust branch (DEVIN-04). Its resume plan proposed a heartbeat-age staleness rule; the session-id link replaced it for the reason given above.
+
+Retired: multiple independent floors; the selected baseline proves a specific vendor bug was fixed; a discovered Desktop binary proves Desktop hooks work; doctor green means current hook approval; a passing SessionStart evidence row means hooks are currently dispatching; historical pre-existing typecheck failures remain current after their fix. Ordinary feature/docs work now follows upstream's release-preparation-only metadata policy, not the old per-fix version-bump recipes.
 
 ## Sources
 
 - `core/tools/aidlc-devin-version.ts`
 - `core/tools/aidlc-config-diagnostics.ts` — HARNESS_CLI, probeHarnessCli
-- `core/tools/aidlc-utility.ts` — Devin diagnostics
-- `harness/devin/hooks/aidlc-devin-adapter.ts` — session-start
+- `core/tools/aidlc-utility.ts` — Devin diagnostics, `devinHookDispatchProbe`
+- `harness/devin/hooks/aidlc-devin-adapter.ts` — session-start, `coreCommand`, `CORE_HOOK_FILES`
 - `harness/devin/dot-gitignore`
 - `tests/unit/t334-devin-version.test.ts`
 - `tests/unit/t294-config-diagnostics.test.ts`

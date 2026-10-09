@@ -12,6 +12,8 @@ The shipped project config has permissions.allow and an explicit read_config_fro
 
 Copy permissions allow file/search/delegation/question/web operations plus `bun .devin/tools/*`, `bun run .devin/tools/*`, and `date -u`. The native projection replaces the two source-tool shell grants with the installed trusted aidlc engine prefix. General Bun, Git, Node, package-manager, and MCP tool execution is not blanket-pre-approved.
 
+The native projection's grant is the exact entry `Exec(aidlc engine)`, with no `*`, because Devin's `Exec(...)` is a prefix match. Doctor's shared `Native command trust` row only gained a Devin branch on 2026-10-09. Before that, it read `settings.json`, `hooks.json`, and JSON under `agents/` and `hooks/`, none of which holds Devin's grants or hook commands. On a correctly configured native `.devin/` it reported `native hooks missing, native permission/trust missing` (observed in all three doctor captures in `evidence/devin-e2e-run/compiled-hook-dispatch-run/`). It now also reads `.devin/config.json` (the `permissions.allow` grants) and `.devin/hooks.v1.json` (the `aidlc engine adapter devin <target>` commands). It passes only when the exact `Exec(aidlc engine)` entry is present and no Bun-shaped framework entry remains; an `Exec(aidlc engine *)` spelling does not count. The row runs only in native execution mode and checks the project files, not effective host policy. `trustFilesForHarness` (the `config` trust listing) was deliberately left without Devin entries in this change.
+
 No deny list ships. An operation missing from this allowlist is not necessarily denied: effective permission mode, local/session grants, organization rules, and OS controls still apply. Removing former denies did not turn workflow hooks into a replacement security policy.
 
 Devin documents hooks as collected from configured sources, not replaced by higher-priority hooks. Compatibility imports can therefore matter when another harness is installed. All documented import sources are now explicitly decided in the shipped config, and a 2026-09-21 live probe proved the result on every installed build — before this change the shipped three-key block leaked Copilot skills and OpenCode/Zed MCP servers:
@@ -45,6 +47,7 @@ t331 asserts copy/native allow-only configuration and the absence of blanket MCP
 | Case | Expected contract | Evidence or gap |
 | --- | --- | --- |
 | Copy versus native permissions | Only runtime-appropriate framework shell prefixes are pre-approved | t331 config and onboarding tests; package.ts native rewrite |
+| Native-trust doctor row on Devin | Shipped native tree passes; removing the `Exec(aidlc engine)` grant or replacing it with `Exec(aidlc engine *)` reports `native permission/trust missing` while hooks stay `present` | t294 "Devin native trust reads Exec(aidlc engine) from config.json and hook commands from hooks.v1.json" |
 | Coexisting harnesses | Compatibility imports are isolated (skills/MCP): no sibling harness's skills or MCP servers load under the shipped config | Verified live by `t-exec-devin-config-imports` (gated); hook-source/audit duplication surface remains NOT RUN |
 | Existing local policy | Updates preserve deliberate user/team overrides and secrets remain uncommitted | Shared installation policy plus manual effective-config review |
 | Background permissions | Denied tools are reported as blocked work, not treated as completed work | Devin documented background behavior; live verification gap |
@@ -60,6 +63,8 @@ Retired claim: absent from allow means unconditionally blocked. Neither an allow
 - `harness/devin/config.json`
 - `harness/devin/dot-gitignore`
 - `scripts/package.ts` — rewriteDevinNativePermissions
+- `core/tools/aidlc-utility.ts` — `Native command trust` row (Devin branch)
+- `tests/unit/t294-config-diagnostics.test.ts` — Devin native-trust case
 - `tests/unit/t331-devin-packaging.test.ts` — config and permission tests
 - https://docs.devin.ai/cli/reference/configuration/global-vs-local
 - https://docs.devin.ai/cli/reference/configuration/read-config-from (bundled `read-config-from.mdx:53-85` sources, `:89-132` disabling, `:138-154` options and defaults; `config-file.mdx:355-365` lists only three keys — the dedicated page is the complete one)

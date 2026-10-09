@@ -1,0 +1,29 @@
+== 09 — repro.sh verification run ==
+command: cd <home>/sources/aidlc-workflows && bash evidence/devin-e2e-run/compiled-hook-dispatch-run/repro.sh /tmp/aidlc-inv-repro
+exit: 0 (ran twice, identical table and PASS both times)
+note: second invocation (this capture) re-ran on top of the first repro OUT dir
+      (mkfixture wipes each fixture dir before reuse)
+
+== step 0: package + build binaries (OUT=/tmp/aidlc-inv-repro) ==
+package.ts exit: 0
+build-binaries.ts exit: 0
+== case A ==
+== case B ==
+== case C ==
+== case D ==
+
+== results table ==
+case                               | exit             | heartbeat  | marker
+----------------------------------|------------------|------------|---------------------
+A1 devin bare hook                 | 2                | no         | -
+A2 devin engine hook               | 0                | yes        | -
+A3 copilot bare hook               | 1                | no         | -
+A4 no-env bare hook                | 2                | no         | -
+B fixed chain (7 runs)             | 0/0/0/2/0/0/0    | yes        | yes
+C-old adapter (7 runs)             | 0/0/2/2/2/2/2    | no         | no
+C-new adapter (7 runs)             | 0/0/0/2/0/0/0    | yes        | yes
+D1 doctor fresh P                  | 1                | -          | -
+D2 doctor after fixed chain        | 1                | -          | -
+D3 doctor stale marker             | 1                | -          | lastRun unchanged: yes
+
+RESULT: PASS (20 checks passed, 0 failed)
