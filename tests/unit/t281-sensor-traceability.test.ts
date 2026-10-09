@@ -318,6 +318,75 @@ describe("t281 upstream and target verification", () => {
     expect(out.result.gaps).toContain("US1.2");
   });
 
+  // The stage guidance names each Unit's construction directory `u{n}-{description}`,
+  // while the edge block names the Unit without that prefix (the engine names
+  // construction/<unit>/ after the edge block). `U5`, `u5-identity-kyc` and
+  // `identity-kyc` are one Unit to the sensor: by ID, by directory, or by name.
+  test("U5, u5-identity-kyc and identity-kyc name the same Unit", () => {
+    const proj = project();
+    write(proj, "inception/requirements-analysis/requirements.md", "# Requirements\n\n- FR1 Identity\n- NFR1 Security\n");
+    write(proj, "inception/user-stories/stories.md", [
+      "# Stories",
+      "",
+      "## US1.1 Verify identity",
+      "- AC1.1.1 accepts a passport",
+      "",
+      "## US1.2 Open an account",
+      "- AC1.2.1 creates the account",
+    ].join("\n"));
+    write(proj, "inception/units-generation/unit-of-work.md", [
+      "# Units",
+      "",
+      "| Unit ID | Directory | Kind |",
+      "|---|---|---|",
+      "| U5 | u5-identity-kyc | service |",
+      "| U6 | u6-accounts | service |",
+    ].join("\n"));
+    write(proj, "inception/units-generation/unit-of-work-dependency.md", [
+      "# Dependencies",
+      "",
+      "```yaml",
+      "units:",
+      "  - name: identity-kyc",
+      "    kind: service",
+      "    depends_on: []",
+      "  - name: accounts",
+      "    kind: service",
+      "    depends_on: [identity-kyc]",
+      "```",
+    ].join("\n"));
+    write(proj, "inception/units-generation/unit-of-work-story-map.md", [
+      "# Story Map",
+      "",
+      "| Story | Unit ID | Directory |",
+      "|---|---|---|",
+      "| US1.1 | U5 | u5-identity-kyc |",
+      "| US1.2 | U6 | u6-accounts |",
+    ].join("\n"));
+    const file = trace(proj, "inception/units-generation/traceability.json", {
+      stage: "units-generation",
+      upstream_ids: ["US1.1", "US1.2"],
+      coverage: [
+        { id: "US1.1", status: "OK", target: "U5" },
+        { id: "US1.2", status: "OK", target: "u6-accounts" },
+      ],
+    });
+    const units = run(proj, "units-generation", file);
+    expect(units.result.invalid_targets).toEqual([]);
+    expect(units.result.gaps).toEqual([]);
+    expect(units.result.pass, units.result.reason).toBe(true);
+
+    write(proj, "construction/identity-kyc/functional-design/rules.md", "# Rules\n\n- BR1.1 Passport must be valid\n");
+    const design = trace(proj, "construction/identity-kyc/functional-design/traceability.json", {
+      stage: "functional-design",
+      unit: "identity-kyc",
+      upstream_ids: ["AC1.1.1"],
+      coverage: [{ id: "AC1.1.1", status: "OK", target: "BR1.1" }],
+    });
+    const out = run(proj, "functional-design", design);
+    expect(out.result.pass, out.result.reason).toBe(true);
+  });
+
   // When a scope skips user-stories the source ids fall back from US to FR
   // (stage prose: "otherwise enumerate every FR"), and the story map rows carry
   // FR ids. The assignment parse has to follow the same fallback, or every FR

@@ -140,7 +140,6 @@ export function setupCodexProject(opts: { workspaceWrite?: boolean } = {}): Code
       ``,
       `[shell_environment_policy]`,
       `exclude = ["AWS_*", "AIDLC_BROKER_*", "ANTHROPIC_*", "KIRO_API_KEY", "CURSOR_API_KEY", "GITHUB_TOKEN", "GH_TOKEN", "ACTIONS_*"]`,
-      `set = { AIDLC_RULES_DIR = ".codex/aidlc-rules" }`,
       ``,
       `[projects.${JSON.stringify(proj)}]`,
       `trust_level = "trusted"`,

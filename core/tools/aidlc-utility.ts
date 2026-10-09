@@ -101,7 +101,7 @@ import {
   validateGrid,
   validateScope,
 } from "./aidlc-graph.ts";
-import { addRootBlocks, repointHarnessIncludes } from "./aidlc-includes.ts";
+import { ACTIVE_MEMORY_DIR, activeMemoryCopyDrift, addRootBlocks, refreshActiveMemory } from "./aidlc-includes.ts";
 import {
   codexHookTrustHash,
   hookGroupMemberNames,
@@ -1020,6 +1020,7 @@ interface StageContribRecord {
   sensors?: string[];
   consumes?: Array<string | ConsumeContribRecord>;
   scopes?: string[];
+  requires_stage?: string[];
   required_sections?: string[];
   required_sections_created?: boolean;
   fragments?: Array<{ anchor: string; order: number; hash: string }>;
@@ -1096,7 +1097,7 @@ function missingRecordedContributions(
   record: StageContribRecord,
 ): string[] {
   const missing: string[] = [];
-  for (const field of ["produces", "sensors", "scopes", "required_sections"] as const) {
+  for (const field of ["produces", "sensors", "scopes", "requires_stage", "required_sections"] as const) {
     const recorded = record[field];
     if (!Array.isArray(recorded) || recorded.length === 0) continue;
     const present = new Set(
@@ -1167,7 +1168,7 @@ function missingRecordedContributions(
 function contributionRecordError(value: unknown): string | undefined {
   if (!isPlainObject(value)) return "expected an object";
   let hasContribution = false;
-  for (const field of ["produces", "sensors", "scopes", "required_sections"] as const) {
+  for (const field of ["produces", "sensors", "scopes", "requires_stage", "required_sections"] as const) {
     if (!(field in value)) continue;
     if (!Array.isArray(value[field])) return `${field} must be an array`;
     if (value[field].some((entry) => typeof entry !== "string" || entry.length === 0)) {
@@ -1294,6 +1295,7 @@ function stripDisabledPluginContributions(
           if (record.produces?.length) content = removeListValues(content, "produces", new Set(record.produces), false);
           if (record.sensors?.length) content = removeListValues(content, "sensors", new Set(record.sensors), false);
           if (record.scopes?.length) content = removeListValues(content, "scopes", new Set(record.scopes), false);
+          if (record.requires_stage?.length) content = removeListValues(content, "requires_stage", new Set(record.requires_stage), false);
           if (record.consumes?.length) {
             const artifacts = record.consumes.flatMap((entry) =>
               typeof entry === "string"
@@ -3496,6 +3498,80 @@ export function kiroIdeIgnoreSourceChecks(
     : [{ pass: true, label: `${KIRO_IGNORE_PREFIX} none hide ${harness}/ (${sources.length} file(s) checked)` }];
 }
 
+// What stops working when the person switches an AI-DLC hook off in Kiro's
+// Agent Hooks. Legacy names stay while config has not yet removed their files.
+const FLOW_ALTERING_KIRO_HOOKS: Record<string, string> = {
+  "aidlc-guard-tool-call": "approvals, the approved plan, reviewed work and AI-DLC's records are not protected",
+  "aidlc-record-human-turn": "your replies are not recorded, so approval gates cannot tell your answer from the assistant's, and /aidlc commands typed in chat are not run directly",
+  "aidlc-continue-workflow": "a workflow with work left is not kept moving when the assistant stops (on Kiro CLI v3; Kiro IDE only records it)",
+  "aidlc-enforce-approval-gate": "the assistant is not held while an approval waits for your answer",
+  "aidlc-plan-approval-guard": "the build is not kept to the plan you approved",
+  "aidlc-terminal-command-guard": "commands are not checked before they run",
+  "aidlc-state-transition-guard": "workflow state can change without the engine",
+  "aidlc-review-freeze": "reviewed work is not protected",
+};
+
+// The rest record or keep files current; what each one's loss costs.
+const ADVISORY_KIRO_HOOKS: Record<string, string> = {
+  "aidlc-session-start": "your first prompt starts the session instead",
+  "aidlc-log-subagent": "a specialist agent's finished part is not recorded",
+  "aidlc-terminal-command": "/aidlc utility commands typed in chat go to the assistant instead of running directly",
+  "aidlc-write-audit-log": "files you create or update are not recorded or checked",
+  "aidlc-sync-workflow-state": "the Current Stage in aidlc-state.md can fall behind",
+  "aidlc-rebuild-stage-graph": "the plan of remaining stages is not rebuilt after the workflow moves",
+  "aidlc-after-shell": "the current stage and the plan of remaining stages are not kept in step after a terminal command",
+};
+
+export function kiroDisabledHookChecks(projectDir: string, harness: string): DoctorCheck[] {
+  const hooksDir = join(projectDir, harness, "hooks");
+  if (!existsSync(hooksDir)) return [];
+  // The install manifest says which hook files are AI-DLC's; without one, the
+  // aidlc- prefix does.
+  let owned: Set<string> | null = null;
+  try {
+    const manifest = JSON.parse(readFileSync(join(projectDir, harness, "tools", "data", "aidlc-manifest.json"), "utf-8")) as { files?: Record<string, string> };
+    const prefix = `${harness}/hooks/`;
+    owned = new Set(Object.keys(manifest?.files ?? {}).filter((f) => f.startsWith(prefix)).map((f) => f.slice(prefix.length)));
+  } catch {
+    // no readable manifest
+  }
+  const rows: DoctorCheck[] = [];
+  const advisory: string[] = [];
+  for (const file of readdirSync(hooksDir).sort()) {
+    if (!/^aidlc-.*\.json$/.test(file) || (owned !== null && !owned.has(file))) continue;
+    let parsed: { enabled?: unknown; hooks?: unknown };
+    try {
+      parsed = JSON.parse(readFileSync(join(hooksDir, file), "utf-8"));
+    } catch {
+      continue;
+    }
+    if (parsed === null || typeof parsed !== "object") continue;
+    const name = file.replace(/\.json$/, "");
+    const entries = Array.isArray(parsed.hooks) ? parsed.hooks as Array<{ enabled?: unknown }> : [];
+    // Classified by the AI-DLC file, not its editable name field.
+    if (parsed.enabled !== false && !entries.some((entry) => entry?.enabled === false)) continue;
+    const protects = FLOW_ALTERING_KIRO_HOOKS[name];
+    if (!protects) {
+      advisory.push(name);
+      continue;
+    }
+    rows.push({
+      pass: false,
+      label: `AI-DLC hook ${name} is switched off in Kiro's Agent Hooks: ${protects}`,
+      fix: `turn ${name} back on under Kiro's Agent Hooks, or set "enabled": true in ${harness}/hooks/${file}`,
+    });
+  }
+  if (advisory.length > 0) {
+    rows.push({
+      pass: true,
+      severity: "warn",
+      label: `AI-DLC hooks switched off in Kiro's Agent Hooks: ${advisory.map((name) => `${name} (${ADVISORY_KIRO_HOOKS[name] ?? "it no longer runs"})`).join("; ")}`,
+      fix: `turn them back on under Kiro's Agent Hooks, or set "enabled": true in their ${harness}/hooks/ files`,
+    });
+  }
+  return rows;
+}
+
 // A heartbeat names no launch, so only a recent one speaks for this one: in a
 // working session the hook for the prompt that asked for the doctor fired
 // moments ago. An older heartbeat may be another launch (yesterday's terminal,
@@ -4425,6 +4501,7 @@ export async function collectDoctorReport(
       label: "agents/aidlc.{json,md} present (conductor wiring)",
       fix: `${projectedFileRepair("kiro", ".kiro/agents/aidlc.json")} (Kiro CLI) or ${projectedFileRepair("kiro-ide", ".kiro/agents/aidlc.md")} (Kiro IDE)`,
     });
+    results.push(...kiroDisabledHookChecks(projectDir, harness));
     if (hasJsonAgent) {
       const cliSettingsPath = join(projectDir, harness, "settings", "cli.json");
       results.push({
@@ -4873,6 +4950,31 @@ export async function collectDoctorReport(
       }\` in the project root to recreate the harness tree and workspace shell`;
     })(),
   });
+
+  // 5b. The copy every harness include reads (aidlc/active-memory/)
+  // holds the active space's memory files. It is brought up to date here, as
+  // every session start does, so a difference left after that is a file the
+  // engine cannot write there.
+  {
+    const space = activeSpace(projectDir);
+    try {
+      refreshActiveMemory(projectDir, space);
+    } catch {
+      // The row below says what is behind.
+    }
+    const drift = activeMemoryCopyDrift(projectDir, space);
+    results.push(drift.length === 0
+      ? {
+        pass: true,
+        label: `active space method copy current (${ACTIVE_MEMORY_DIR}/ holds aidlc/spaces/${space}/memory/)`,
+      }
+      : {
+        pass: false,
+        severity: "warn",
+        label: `active space method copy is behind aidlc/spaces/${space}/memory/ (${drift.join(", ")}); your chats read that copy`,
+        fix: `make ${ACTIVE_MEMORY_DIR}/ writable in the project root (it is AI-DLC's git-ignored copy; remove what is there if it is not a plain folder of files), then run /aidlc or \`${aidlcInvocation()} engine space switch ${space}\``,
+      });
+  }
 
   // 5a. Naming consistency for agent/scope files. Duplicate declared names are
   // loader corruption and fail through loadAgents()/validScopes(); stem/name
@@ -7575,14 +7677,11 @@ function ensureWorkspaceDirs(
     }
   }
   // A copy that config never ran in gets AI-DLC's part of .gitignore and
-  // AGENTS.md, after the team's own content. Before the includes are aligned,
-  // so a part written here points at the active space too.
+  // AGENTS.md, after the team's own content.
   addRootBlocks(projectDir);
-  // Align the harness-native includes with the active space at bootstrap (first
-  // /aidlc). A no-op when they already point there (the common default-cursor
-  // case) — so this never dirties a single-team committed tree; it self-heals a
-  // tree whose cursor and includes drifted out of sync.
-  repointHarnessIncludes(projectDir, activeSpace(projectDir));
+  // The copy the harness includes read holds the active space's memory files
+  // at bootstrap (first /aidlc). A no-op when it already does.
+  refreshActiveMemory(projectDir);
 }
 
 function waitAtIntentCreateChangeControlSnapshotBarrier(): void {
@@ -9053,13 +9152,11 @@ function handleIntentRepos(
 
 // `/aidlc space` (list) · `/aidlc space <name>` (switch the active-space
 // cursor). Switching a space does TWO per-user writes: move the gitignored
-// active-space cursor, then SURGICALLY repoint the harness-native rule includes
-// in place so the next turn loads the switched space's method (the ambient
-// channel — Claude @-stub / Kiro resources glob / Codex AIDLC_RULES_DIR). Both
-// are per-user: the cursor is gitignored, and the include re-point is a no-op at
-// `default` (so a single-team user never dirties the committed tree). Switching
-// to a non-existent space errors (use space-create). --json on the bare list
-// emits the structured shape.
+// active-space cursor, then write the switched space's memory files into the
+// gitignored copy every harness include reads (aidlc-includes.ts), so the next
+// turn loads that space's method. No tracked file changes. Switching to a
+// non-existent space errors (use space-create). --json on the bare list emits
+// the structured shape.
 function handleSpace(projectDir: string, positional: string[], flags: Record<string, string>): void {
   const asJson = flags.json === "true";
   const verbOrTarget = positional[1];
@@ -9149,16 +9246,12 @@ function handleSpace(projectDir: string, positional: string[], flags: Record<str
     else if (loneIntent) recordSessionIntentSwitch(projectDir, sessionId, priorUuid, `${LONE_INTENT_PREFIX}${loneIntent}`);
     else if (spaceHasNoIntent) clearSessionIntentHandoff(projectDir, sessionId);
   }
-  // Re-point the harness-native includes at the switched space so the NEXT turn
-  // loads its method into ambient context (the cursor alone only moves AIDLC's
-  // own resolver; the CLI-native include is the ambient channel). Surgical
-  // in-place rewrite of the pointer segment only — preserves all engine wiring.
-  const repointed = repointHarnessIncludes(projectDir, target);
+  // The copy the harness includes read gets the switched space's memory files,
+  // so the NEXT turn loads its method into ambient context (the cursor alone
+  // only moves AIDLC's own resolver).
+  refreshActiveMemory(projectDir, target);
   // The person's words for the move, as the intent switch says it.
   process.stdout.write(`Now working in space \`${target}\`.\n`);
-  if (repointed.length > 0) {
-    process.stdout.write(`  repointed ${repointed.length} harness include(s) -> ${target}\n`);
-  }
 }
 
 // `aidlc-utility.ts codekb-path [--repo <name>] [--json]` — read-only. Prints the
@@ -9231,7 +9324,7 @@ const DOCUMENT_INPUT_EXTENSIONS = new Set([
 // on its path: keys, environment files, and anything that says it holds a
 // secret. An exact path the person typed is read as they gave it; only a
 // lookup is held to this.
-function documentInputLooksSecret(name: string): boolean {
+export function documentInputLooksSecret(name: string): boolean {
   return name.startsWith(".env") || name.endsWith(".env") || name.endsWith(".pem") ||
     name.endsWith(".key") || name.endsWith(".p12") || name.endsWith(".pfx") ||
     name.startsWith("id_") || /secret|credential|password|passwd|token|\.netrc|\.npmrc|\.pypirc|kubeconfig/.test(name);

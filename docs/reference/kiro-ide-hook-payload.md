@@ -54,9 +54,11 @@ directly, but is not the 0.12 compatibility claim.
 `VSCODE_IPC_HOOK` / `VSCODE_PID` are also present in the IDE's hook processes
 (absent on the CLI). The agent's own shell commands carry neither: they carry
 `TERM_PROGRAM=kiro` and `KIRO_SESSION_ID` (measured on Kiro IDE 1.2.37, #2167),
-which is how the engine's "answer was not recorded" line knows it is in Kiro
-IDE. Legacy Plan Approval hashes those measured host-instance values into its
-runtime session identity, so two IDE windows in one workspace do not share
+which is how the engine's "answer was not recorded" line and its hooks-off
+step know they are in Kiro IDE; another `TERM_PROGRAM` (Kiro CLI in VS Code's
+terminal is `vscode`) rules Kiro IDE out even beside VS Code's own
+`VSCODE_PID`. Legacy Plan Approval hashes those measured host-instance values
+into its runtime session identity, so two IDE windows in one workspace do not share
 challenge/response files. Other adapter routing still keys off the payload
 channels above.
 

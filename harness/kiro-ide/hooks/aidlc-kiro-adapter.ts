@@ -128,6 +128,8 @@ import {
   hookDebug,
   hookExecutionRecoveryText,
   humanPresenceGuardDisabled,
+  NOT_ANSWERED_YET_STEP,
+  promptHookRanRecently,
   isAutonomousMode,
   isSwitchableGuardFence,
   listIntentDirs,
@@ -1136,6 +1138,92 @@ function cmdMetacharacterHazard(command: string): CmdHazard | null {
   return null;
 }
 
+// An AI-DLC engine command whose reply goes to a file: `> out.tmp`, `>>`, `1>`, `*>`,
+// or a pipe into Out-File, Set-Content, Add-Content, Tee-Object or tee. One agent
+// sent every reply of a whole run to .tmp files in the project root and read
+// them back (#2167). Measured live on Kiro IDE 1.2.37, the command result holds
+// the whole reply in Command Prompt and in PowerShell, so the file only leaves
+// copies behind and pays for each step twice. Read with both quote kinds as
+// quotes on every shell, so a > inside a value never counts; a stderr redirect,
+// a discarded stream and a reader pipe pass.
+const FILE_WRITER = /^(?:out-file|set-content|add-content|tee-object|tee)(?:\.exe)?$/i;
+const DISCARD = /^(?:\$null|nul|\/dev\/null)$/i;
+
+function topLevelParts(text: string, separators: RegExp): string[] {
+  const parts: string[] = [];
+  let quote: string | null = null;
+  let start = 0;
+  for (let at = 0; at < text.length; at++) {
+    const c = text[at];
+    if (quote !== null) {
+      if (c === quote) quote = null;
+      continue;
+    }
+    if (c === '"' || c === "'") {
+      quote = c;
+      continue;
+    }
+    const found = separators.exec(text.slice(at));
+    if (found !== null && found.index === 0) {
+      parts.push(text.slice(start, at));
+      at += found[0].length - 1;
+      start = at + 1;
+    }
+  }
+  parts.push(text.slice(start));
+  return parts;
+}
+
+// The engine's own commands, whose replies are the steps: `aidlc engine ...`
+// (bare, .cmd or .exe, by path or not), the dispatcher file run by bun with
+// engine as its first argument, and an engine tool file run by bun directly. A
+// plain `aidlc version` or `aidlc doctor` printed to a file is the person's
+// business and passes.
+function isEngineCommand(segment: string): boolean {
+  const words = segment.trim().replace(/^[&.]\s+/, "").split(/\s+/).map((word) => word.replace(/^["']|["']$/g, ""));
+  const [program = "", first = "", second = ""] = words;
+  if (/(?:^|[\\/])aidlc(?:\.cmd|\.exe)?$/i.test(program)) return first.toLowerCase() === "engine";
+  if (!/(?:^|[\\/])bun(?:\.exe)?$/i.test(program)) return false;
+  const tool = /(?:^|[\\/])\.kiro[\\/]tools[\\/](aidlc[a-z-]*)\.ts$/i.exec(first)?.[1]?.toLowerCase();
+  if (tool === undefined) return false;
+  return tool === "aidlc" ? second.toLowerCase() === "engine" : true;
+}
+
+function stdoutToFile(segment: string): boolean {
+  let quote: string | null = null;
+  for (let at = 0; at < segment.length; at++) {
+    const c = segment[at];
+    if (quote !== null) {
+      if (c === quote) quote = null;
+      continue;
+    }
+    if (c === '"' || c === "'") {
+      quote = c;
+      continue;
+    }
+    if (c !== ">") continue;
+    const before = segment[at - 1];
+    // 2> is the error stream; 1> and *> carry the reply.
+    if (before !== undefined && /[0-9]/.test(before) && before !== "1") continue;
+    let rest = segment.slice(at + 1);
+    if (rest.startsWith(">")) rest = rest.slice(1);
+    if (rest.startsWith("&")) continue;
+    const target = rest.trim().split(/\s+/)[0]?.replace(/^["']|["']$/g, "") ?? "";
+    if (target !== "" && !DISCARD.test(target)) return true;
+  }
+  return false;
+}
+
+function engineReplyToFile(command: string): boolean {
+  for (const statement of topLevelParts(command, /^(?:&&|\|\||;|\r?\n|&(?!>))/)) {
+    const pipeline = topLevelParts(statement, /^\|/);
+    if (!isEngineCommand(pipeline[0] ?? "")) continue;
+    if (stdoutToFile(pipeline[0])) return true;
+    if (pipeline.slice(1).some((part) => FILE_WRITER.test(part.trim().split(/\s+/)[0] ?? ""))) return true;
+  }
+  return false;
+}
+
 // A fixed template: only a plain flag name and one of & | < > ^ are filled
 // in, never the value, so text in the value cannot add lines to the reason.
 function cmdMetacharacterRefusal(hazard: CmdHazard): string {
@@ -2093,6 +2181,16 @@ if (target === "terminal-command-guard") {
     );
     return 2;
   }
+  // The agent's own transport, on any shell: the reply comes back whole in the
+  // command's result (see engineReplyToFile), so it runs the command on its own.
+  if (engineReplyToFile(rawCommand)) {
+    process.stderr.write(
+      "AIDLC stopped this command before it ran: it sends AI-DLC's reply to a file. Run the same AI-DLC command " +
+        "again on its own, with nothing after it that writes to a file, and read the reply from the command's " +
+        "result: it comes back whole.\n",
+    );
+    return 2;
+  }
   // Before anything below runs a command: this call would not reach the
   // engine as written (see cmdMetacharacterHazard).
   const cmdHazard = isKiroPowerShellTool(tool) ? cmdMetacharacterHazard(rawCommand) : null;
@@ -2207,10 +2305,18 @@ function unrecordedAnswerRelay(projectDir: string): string {
 
 if (target === "enforce-approval-gate") {
   if (approvalGateAwaitsHuman()) {
+    // The prompt hook ran for this work and nothing moved since (its heartbeat
+    // is fresh): the person has not answered the gate yet, so the one step is
+    // to end the turn, and the person hears nothing. Only when that heartbeat
+    // is missing or far behind could a reply have gone unrecorded, and the
+    // relay says what happened and the tool's own step.
+    const pd = process.cwd();
     process.stderr.write(
       "An approval is waiting for the person's answer, so nothing runs until they give it: end the turn. " +
-        `If they already answered, that answer was not recorded. ${unrecordedAnswerRelay(process.cwd())} ` +
-        "If that does not fix it, `/aidlc --doctor` shows what else to fix.\n",
+        (promptHookRanRecently(pd)
+          ? `${NOT_ANSWERED_YET_STEP}\n`
+          : `If they already answered, that answer was not recorded. ${unrecordedAnswerRelay(pd)} ` +
+            "If that does not fix it, `/aidlc --doctor` shows what else to fix.\n"),
     );
     return 2; // Kiro reject contract: exit 2 + stderr BLOCKS the tool call.
   }

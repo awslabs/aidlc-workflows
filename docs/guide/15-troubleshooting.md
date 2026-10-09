@@ -22,9 +22,11 @@ This chapter covers common issues and their solutions, organized by symptom.
 | Cursor: approvals are never recorded | If the project is not in a git repository, run `git init` in it, then fully restart Cursor and trust the folder (see [Cursor project outside a git repository](#cursor-project-outside-a-git-repository)) |
 | Kiro IDE: `deny fs_read matching ".kiro/"` | Run `/aidlc --doctor`; remove the `.kiro/` rule from the ignore file it names (see [Kiro IDE Read Denials](#kiro-ide-read-denials)) |
 | Kiro IDE: AI-DLC's reviews and helpers do not run, the chat shows **Approval needed in agent-aidlc-...** panels, or `/aidlc` is handed to a Kiro workflow | Kiro's Workflows feature is on. Ask the agent to turn it off, or run `aidlc config trust --kiro-workflows off --yes`, then **Developer: Reload Window** (see [Kiro's Workflows feature](harnesses/kiro-ide.md#kiros-workflows-feature-stops-ai-dlcs-reviews-and-helpers)) |
+| Kiro IDE on Windows: your words reach AI-DLC split or with their quotes, or every command shows exit code -1 | Kiro's terminal is Command Prompt. Ask the agent to set it to PowerShell, or run `aidlc config trust --kiro-terminal powershell --yes`, then restart Kiro (see [Command Prompt as Kiro's terminal](harnesses/kiro-ide.md#command-prompt-as-kiros-terminal-on-windows)) |
 | Kiro IDE: the agent cites "my memory" and suggests bypassing a check or running a hook by hand | Ignore it and delete that Kiro memory (see [Kiro memories carry old AI-DLC advice](harnesses/kiro-ide.md#kiro-memories-carry-old-ai-dlc-advice)) |
 | State file corrupted | Run `/aidlc --doctor`, compare against state template |
 | Stuck at approval gate | Type your response; use `/aidlc --stage <target>` to jump past it |
+| Kiro IDE: a build, test or probe command the agent ran shows `Exit Code: -1` while AI-DLC's own commands work | Kiro did not run it: it is waiting for you to allow it, or you declined it. Choose **Allow** (or **Always allow**) on Kiro's prompt, or tell the agent how to go on |
 | Kiro IDE: your reply to an approval question is not seen, or commands come back with exit code -1 | Choose **Trust Folder & Continue** when Kiro asks whether you trust this folder (or select **Manage**, then **Trust**, on the Restricted Mode banner), then run **Developer: Reload Window** from the Command Palette and say carry on; if your next message is still not recorded, `/aidlc --doctor` shows why. In Kiro CLI, quit and start `kiro-cli` again in the folder (see [Kiro IDE hooks not running](#kiro-ide-hooks-not-running)) |
 | Kiro CLI (or a Kiro ACP client): every approval says no human reply has arrived, and restarting does not help | The engine does not match the distribution: `kiro` needs Kiro CLI's v2 engine, `kiro-ide` needs v3 (see [Kiro CLI hooks not running](#kiro-cli-hooks-not-running)) |
 | Context compacted mid-session | Run `/aidlc` to resume from checkpoint |
@@ -204,9 +206,11 @@ sufficient.
 Kiro IDE runs a folder's hooks only after you allow it to run commands in that
 folder and then reload the window. Until you allow it, every command the agent
 runs comes back with no output and exit code -1, so no AI-DLC message can show;
-the agent gives you the step itself. Before your first chat message in the
-project, doctor warns "AIDLC hooks have not run in this project yet"; that is
-expected.
+the agent gives you the step itself. If you trusted the folder after Kiro opened
+it, commands run but the hooks still do not until the reload: AI-DLC then stops
+before any work and the agent shows you the same step. Before your first chat
+message in the project, doctor warns "AIDLC hooks have not run in this project
+yet"; that is expected.
 
 Trust only a folder whose contents you know (your own project, or one you have
 checked), because trusting lets the folder's `.kiro` hooks run commands on your
@@ -355,6 +359,10 @@ Claude Code honours `"disableAllHooks": true` in any settings layer: enterprise 
 - If **AI-DLC was set up while Claude Code was already open in this folder**, that session never loaded its hooks (on a native install they call `aidlc`, which the open session cannot find yet): exit Claude Code and start it again in this folder, then type `/aidlc`. Your first request is kept and carries on.
 
 The check reads the on-disk managed-settings **file** (`/etc/claude-code/managed-settings.json` on Linux, `/Library/Application Support/ClaudeCode/managed-settings.json` on macOS, `%ProgramFiles%\ClaudeCode\managed-settings.json` on current Windows — `%PROGRAMDATA%\ClaudeCode\` is a legacy secondary) plus alphabetical JSON files in the sibling `managed-settings.d/` directory. It does **not** inspect other managed channels Claude Code supports (MDM, Windows registry, or a remote/server-managed source), so a passing row means the resolved value is not `true` in any settings file the check could read, not a guarantee those channels are clean. If your managed file lives at a non-standard path, point the check at it with `AIDLC_MANAGED_SETTINGS_PATH=/path/to/managed-settings.json`; fragments beside that file are included.
+
+### A Kiro hook switched off under Agent Hooks
+
+Kiro lets you switch any project hook off in its Agent Hooks panel, and then writes `"enabled": false` into that hook's file in `.kiro/hooks/`. The hook stops running with no other sign. `/aidlc --doctor` reads that flag on every AI-DLC hook file. When `aidlc-guard-tool-call` is off, approvals, the approved plan, reviewed work and AI-DLC's records are not protected; when `aidlc-record-human-turn` is off, your replies are not recorded, so an approval waits for an answer it cannot see, and `/aidlc` commands typed in chat are not run directly. Either one fails a row naming the hook, and so does `aidlc-continue-workflow`, which keeps a workflow moving where Kiro lets a Stop hook block (Kiro CLI v3; Kiro IDE only records it). Any other AI-DLC hook switched off is a warning that says what is lost. Turn the hook back on under Kiro's Agent Hooks, or set `"enabled": true` in the file doctor names.
 
 ---
 

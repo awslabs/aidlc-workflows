@@ -1301,7 +1301,6 @@ describe("t345 complete nightly coverage", () => {
       expect(config.model_providers).toMatchObject({ "amazon-bedrock": { base_url: "http://127.0.0.1:1234/openai/v1" } });
       expect(config.shell_environment_policy).toEqual({
         exclude: ["AWS_*", "AIDLC_BROKER_*", "ANTHROPIC_*", "KIRO_API_KEY", "CURSOR_API_KEY", "GITHUB_TOKEN", "GH_TOKEN", "ACTIONS_*"],
-        set: { AIDLC_RULES_DIR: ".codex/aidlc-rules" },
       });
     } finally {
       if (previous === undefined) delete process.env.AIDLC_BROKER_URL;

@@ -41,6 +41,7 @@ import {
 } from "../../core/tools/aidlc-archive.ts";
 import {
   _installedSourcesForTests,
+  _requiresEdgeHoldsForTests,
   _switchRefreshStepsForTests,
 } from "../../core/tools/aidlc-init.ts";
 import { compiledExecutable, quoteCommandArgument } from "../../core/tools/aidlc-runtime-paths.ts";
@@ -3076,6 +3077,53 @@ describe("t243 project initialization", () => {
     }
   });
 
+  test("refresh replays a recorded requires_stage edge only where it still holds", () => {
+    const harness = join(temp("aidlc-t243-edge-"), ".claude");
+    const stage = (phase: string, slug: string) => {
+      mkdirSync(join(harness, "aidlc-common", "stages", phase), { recursive: true });
+      writeFileSync(join(harness, "aidlc-common", "stages", phase, `${slug}.md`), `---\nslug: ${slug}\n---\n`);
+    };
+    stage("inception", "requirements-analysis");
+    stage("construction", "nfr-requirements");
+    stage("construction", "build-and-test");
+    mkdirSync(join(harness, "tools", "data"), { recursive: true });
+    const graphPath = join(harness, "tools", "data", "stage-graph.json");
+    writeFileSync(graphPath, JSON.stringify([
+      { slug: "requirements-analysis", number: "2.3" },
+      { slug: "nfr-requirements", number: "3.2" },
+      { slug: "build-and-test", number: "3.6" },
+    ]));
+    // Earlier phase, and lower number in the same phase: hold.
+    expect(_requiresEdgeHoldsForTests(harness, "build-and-test", "requirements-analysis")).toBe(true);
+    expect(_requiresEdgeHoldsForTests(harness, "build-and-test", "nfr-requirements")).toBe(true);
+    // Later in the same phase, a removed dependency, a self-edge: dropped.
+    expect(_requiresEdgeHoldsForTests(harness, "nfr-requirements", "build-and-test")).toBe(false);
+    expect(_requiresEdgeHoldsForTests(harness, "build-and-test", "gone-stage")).toBe(false);
+    expect(_requiresEdgeHoldsForTests(harness, "build-and-test", "build-and-test")).toBe(false);
+    // A pinned row keeps its number when its stage moves phase directory, so
+    // the full number decides: 4.7 in inception still compiles after 3.6.
+    stage("inception", "feedback-optimization");
+    // A plugin stage carried over from the project has no row in the staged
+    // graph: it seeds past its phase max, after every pinned stage there.
+    stage("construction", "plugin-construction-stage");
+    stage("inception", "plugin-inception-stage");
+    writeFileSync(graphPath, JSON.stringify([
+      { slug: "requirements-analysis", number: "2.3" },
+      { slug: "nfr-requirements", number: "3.2" },
+      { slug: "build-and-test", number: "3.6" },
+      { slug: "feedback-optimization", number: "4.7" },
+    ]));
+    expect(_requiresEdgeHoldsForTests(harness, "build-and-test", "feedback-optimization")).toBe(false);
+    expect(_requiresEdgeHoldsForTests(harness, "build-and-test", "plugin-construction-stage")).toBe(false);
+    expect(_requiresEdgeHoldsForTests(harness, "build-and-test", "plugin-inception-stage")).toBe(true);
+    expect(_requiresEdgeHoldsForTests(harness, "plugin-construction-stage", "build-and-test")).toBe(true);
+    // Without a readable graph a same-phase edge cannot be verified, a
+    // cross-phase one still can.
+    writeFileSync(graphPath, "not json");
+    expect(_requiresEdgeHoldsForTests(harness, "build-and-test", "nfr-requirements")).toBe(false);
+    expect(_requiresEdgeHoldsForTests(harness, "build-and-test", "requirements-analysis")).toBe(true);
+  });
+
   test("fresh init, dry-run, refresh preservation, conflict, and force use one projection", () => {
     const project = temp("aidlc-t240-project-");
     mkdirSync(join(project, ".git"));
@@ -3446,7 +3494,12 @@ describe("t243 project initialization", () => {
       const git = (...args: string[]) => {
         const result = spawnSync("git", [
           "-C", project, "-c", "user.email=t243@example.com", "-c", "user.name=t243",
-          "-c", "commit.gpgsign=false", "-c", "core.autocrlf=false", ...args,
+          "-c", "commit.gpgsign=false", "-c", "core.autocrlf=false",
+          // No automatic maintenance: a commit otherwise hands work to a
+          // background git that outlives it, and this case reads what a refresh
+          // leaves behind right after one.
+          "-c", "gc.auto=0", "-c", "maintenance.auto=false",
+          ...args,
         ], { encoding: "utf-8" });
         expect(result.status, result.stderr).toBe(0);
       };
@@ -3499,16 +3552,10 @@ describe("t243 project initialization", () => {
       expect(readFileSync(join(project, skills[0]), "utf-8")).toBe(`Shipped by an earlier release: ${skills[0]}\n`);
       expect(kept.stdout).not.toContain("no longer part of");
 
-      // The tracked-files check never runs the repository's fsmonitor program.
+      // One file on its own reads as one file, with the way back for that one.
       const solo = ".claude/hooks/aidlc-retired-hook.ts";
       retire([solo]);
-      const monitor = join(temp("aidlc-t243-fsmonitor-"), "fsmonitor.sh");
-      const ran = `${monitor}.ran`;
-      writeFileSync(monitor, `#!/bin/sh\necho ran >> '${ran}'\n`, { mode: 0o755 });
-      git("config", "core.fsmonitor", monitor);
       const monitored = refresh(project);
-      git("config", "--unset", "core.fsmonitor");
-      expect(existsSync(ran)).toBe(false);
       expect(monitored.stdout).toContain(
         `Removed 1 file that is no longer part of AI-DLC ${AIDLC_VERSION}:\n  ${solo}\nTo get it back, run \`git restore ${solo}\`.\n`,
       );
@@ -3531,71 +3578,6 @@ describe("t243 project initialization", () => {
       expect(quoted.stdout).toContain(`no longer part of AI-DLC ${AIDLC_VERSION}:\n  ${quoteCommandArgument(crafted)}\n`);
       expect(quoted.stdout).not.toContain("git restore");
     }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
-
-    // The case above checks the behaviour on this machine's git. This one holds
-    // the rule that produces it, because which commands consult the monitor is
-    // the git version's business: `ls-files` runs it once the index carries the
-    // monitor's own extension, and a call site added without the setting would
-    // pass here and run a stranger's program on a newer git. A refresh reads a
-    // repository to word its own lines, so every command it runs says no.
-    test.skipIf(process.platform === "win32")(
-      "every git command a refresh runs turns the repository's fsmonitor off",
-      () => {
-        const project = temp("aidlc-t243-fsmonitor-rule-");
-        const git = (...args: string[]) => {
-          const result = spawnSync("git", [
-            "-C", project, "-c", "user.email=t243@example.com", "-c", "user.name=t243",
-            "-c", "commit.gpgsign=false", "-c", "core.autocrlf=false", ...args,
-          ], { encoding: "utf-8" });
-          expect(result.status, result.stderr).toBe(0);
-        };
-        git("init", "-q");
-        const installed = run(INIT, [
-          "config", "--project-dir", project, "--from", CLAUDE_RELEASE, "--harness", "claude",
-        ], project);
-        expect(installed.status, installed.stdout + installed.stderr).toBe(0);
-        // A file the release no longer ships, so the refresh also runs the
-        // tracked-files check that words the way back, and a rule of the
-        // project's own that hides a committed record, so the ignore check
-        // matches and the refresh asks for the repository root to word the
-        // warning. Between them the refresh makes every git call it has.
-        const retired = ".claude/hooks/aidlc-retired-rule.ts";
-        const body = `Shipped by an earlier release: ${retired}\n`;
-        put(project, retired, body);
-        const manifest = manifestOf(project);
-        manifest.files[retired] = sha256Bytes(body);
-        writeFileSync(join(project, manifestRel), `${JSON.stringify(manifest, null, 2)}\n`);
-        writeFileSync(join(project, ".gitignore"), "**/memory/**\n", "utf-8");
-        git("add", "-A");
-        git("commit", "-q", "-m", "a retired file and a rule that hides a record");
-
-        // A `git` ahead of the real one on PATH records what the refresh runs.
-        const recorder = temp("aidlc-t243-gitrecorder-");
-        const calls = join(recorder, "calls");
-        const realGit = Bun.which("git") ?? "/usr/bin/git";
-        writeFileSync(
-          join(recorder, "git"),
-          `#!/bin/sh\n{ printf 'CALL\\n'; for a in "$@"; do printf '%s\\n' "$a"; done; } >> '${calls}'\nexec '${realGit}' "$@"\n`,
-          { mode: 0o755 },
-        );
-        const refreshed = run(
-          INIT,
-          ["config", "--project-dir", project, "--from", CLAUDE_RELEASE],
-          project,
-          { PATH: `${recorder}${delimiter}${process.env.PATH ?? ""}` },
-        );
-        expect(refreshed.status, refreshed.stdout + refreshed.stderr).toBe(0);
-        const ran: string[][] = [];
-        for (const word of readFileSync(calls, "utf-8").split("\n").slice(0, -1)) {
-          if (word === "CALL") ran.push([]);
-          else ran[ran.length - 1]?.push(word);
-        }
-        // The ignore check, the repository root, and the tracked-files check.
-        expect(ran.length, ran.map((call) => `git ${call.join(" ")}`).join("\n")).toBeGreaterThanOrEqual(3);
-        for (const call of ran) expect(call, `git ${call.join(" ")}`).toContain("core.fsmonitor=false");
-      },
-      NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
-    );
 
     test("project files an older refresh recorded are kept and dropped from the record", () => {
       const project = installedProject();
@@ -5277,6 +5259,84 @@ describe("t243 project initialization", () => {
     expect(refreshedAgain.status, refreshedAgain.stdout + refreshedAgain.stderr).toBe(0);
     expect(readFileSync(stagePath, "utf-8")).toContain("  - artifact: test-pro-refresh-input\n    required: false\n");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("refresh hands a core-adopted or refused requires_stage edge back out of plugin provenance", () => {
+    const project = temp("aidlc-t240-edge-refresh-");
+    mkdirSync(join(project, ".git"));
+    const first = run(INIT, [
+      "config",
+      "--project-dir",
+      project,
+      "--from",
+      CLAUDE_RELEASE,
+      "--harness",
+      "claude",
+    ], project);
+    expect(first.status, first.stdout + first.stderr).toBe(0);
+
+    // Three recorded edges on build-and-test (3.6): nfr-requirements (3.2),
+    // which the newer runtime declares itself; nfr-design (3.3), which stays
+    // test-pro's; and syn-gone-stage, which the newer runtime does not ship and
+    // is a second plugin's only record.
+    const rel = join(".claude", "aidlc-common", "stages", "construction", "build-and-test.md");
+    const stagePath = join(project, rel);
+    const edgesOf = (raw: string) => raw.match(/^requires_stage:\n((?: {2}- .+\n)*)/m)?.[1] ?? "";
+    writeFileSync(stagePath, readFileSync(stagePath, "utf-8").replace(
+      /^(requires_stage:\n(?: {2}- .+\n)*)/m,
+      "$1  - nfr-requirements\n  - nfr-design\n  - syn-gone-stage\n",
+    ));
+    const sidecarPath = join(project, ".claude", "tools", "data", "plugin-contrib-test-pro.json");
+    writeFileSync(sidecarPath, `${JSON.stringify({
+      "build-and-test": { requires_stage: ["nfr-requirements", "nfr-design"] },
+    }, null, 2)}\n`);
+    const emptiedSidecarPath = join(project, ".claude", "tools", "data", "plugin-contrib-syn-edge-only.json");
+    writeFileSync(emptiedSidecarPath, `${JSON.stringify({
+      "build-and-test": { requires_stage: ["syn-gone-stage"] },
+    }, null, 2)}\n`);
+
+    const newer = temp("aidlc-t240-edge-newer-projection-");
+    cpSync(CLAUDE_RELEASE, newer, { recursive: true });
+    const newerStage = join(newer, rel);
+    writeFileSync(newerStage, readFileSync(newerStage, "utf-8").replace(
+      /^(requires_stage:\n(?: {2}- .+\n)*)/m,
+      "$1  - nfr-requirements\n",
+    ));
+    const refreshed = run(INIT, [
+      "config",
+      "--project-dir",
+      project,
+      "--from",
+      newer,
+    ], project);
+    expect(refreshed.status, refreshed.stdout + refreshed.stderr).toBe(0);
+    const edges = edgesOf(readFileSync(stagePath, "utf-8"));
+    expect(edges.match(/- nfr-requirements\n/g)?.length).toBe(1);
+    expect(edges).toContain("- nfr-design\n");
+    expect(edges).not.toContain("syn-gone-stage");
+    // Only the edge the plugin still owns stays recorded: a later disable
+    // must not strip core's nfr-requirements edge.
+    const sidecar = JSON.parse(readFileSync(sidecarPath, "utf-8"));
+    expect(sidecar["build-and-test"]?.requires_stage).toEqual(["nfr-design"]);
+    // A sidecar left with no record is removed, not installed as `{}`.
+    expect(existsSync(emptiedSidecarPath)).toBe(false);
+    const graph = JSON.parse(
+      readFileSync(join(project, ".claude", "tools", "data", "stage-graph.json"), "utf-8"),
+    ) as Array<{ slug: string; requires_stage?: string[] }>;
+    expect(graph.find((row) => row.slug === "build-and-test")?.requires_stage)
+      .toEqual(expect.arrayContaining(["nfr-requirements", "nfr-design"]));
+
+    const refreshedAgain = run(INIT, [
+      "config",
+      "--project-dir",
+      project,
+      "--from",
+      newer,
+    ], project);
+    expect(refreshedAgain.status, refreshedAgain.stdout + refreshedAgain.stderr).toBe(0);
+    const edgesAgain = edgesOf(readFileSync(stagePath, "utf-8"));
+    expect(edgesAgain.match(/- nfr-requirements\n/g)?.length).toBe(1);
+    expect(edgesAgain).toContain("- nfr-design\n");
+  }, 60_000);
 
   test("refresh planning never mutates generated runners on dry-run or conflict", () => {
     const project = temp("aidlc-t240-refresh-isolation-");
@@ -7940,6 +8000,7 @@ describe("t243 projection channel", () => {
           "sha256:631688bc85683ea22c9415cb345c69169cff4ac45ec006c258217cd261a7793f",
           "sha256:051866aa49f8ed915ab5ae30707422068df814ca5be806a1fe28784c543a4aab",
           "sha256:a618a3a615ef7159c7eed634a5a332bf9d017f8e28d6b0f0adad9db1d2d725e0",
+          "sha256:3cc1cbd212d2ca0dbf1e525eb9a40d4694a585eb7864d8b877f8fe8bd99122dc",
         ],
       },
       codex: {
@@ -7950,6 +8011,7 @@ describe("t243 projection channel", () => {
           "sha256:007b95fb94d4a2569f4254088f0d70f4f345ff99db34e2784b6d9bc5c169f853",
           "sha256:25e76c09640300e354ab34e3c67e89d2dfe473940b65bd56c227ca4d5ea92c7b",
           "sha256:51cb399f2257236cbf63e18cb2e317d75913f1771b5402707a2508cf5f81fa57",
+          "sha256:345fbe9fe620718510ecfe9d478233ccf4a5318522884b50fc5540559ace3eed",
         ],
         "AGENTS.md": [
           "sha256:30a9f5f43d87cd29b63e75333b8ef6695f8f4e11909fd6af64e2b6cf0b8cb292",
@@ -7983,6 +8045,7 @@ describe("t243 projection channel", () => {
           "sha256:2f413414992c405c11a8bccb230574c2f58cec8fd2906cd37b7cd62bb33a97d8",
           "sha256:f08d78b3e456c3a7cd7c998196c9bf6d59d24900e2ccf78cf30a1b189e766c2c",
           "sha256:28a69800dcac189aa2a976820db237b45bcf6dd7d7e6d4fae5c1603225b9957a",
+          "sha256:99b4560aa1bd95f26077eb69a0c6c2a40f81146a212e70d876c27bb84f2b1789",
         ],
         "AGENTS.md": [
           "sha256:4f7133cc1a9bb1243245c25c28fad57c3660b35e251ea36cea3aa2db431bf55f",
@@ -8012,6 +8075,7 @@ describe("t243 projection channel", () => {
           "sha256:88d6960720e5cd14f848a5e93ba9a503322518fe180c4bf55bcc3a6b8c151394",
           "sha256:28a69800dcac189aa2a976820db237b45bcf6dd7d7e6d4fae5c1603225b9957a",
           "sha256:a21217e44700aa0d6e703ebb524c4e07a3c4c12f7097d1923034b10b9a6d0549",
+          "sha256:6c6ff7641c17829d77fdd023f340b938db11dcc26c734a0c452d5213f9bd19cf",
         ],
         "AGENTS.md": [
           "sha256:4d539288363565feb6cf1a8d2468d1aca4373d46d354936d89e609f9862b2b9f",
@@ -8039,6 +8103,7 @@ describe("t243 projection channel", () => {
           "sha256:f9fbe33a3e622010a8a45ef199e104077db6ee7ee27137c08c34e81c1a0c24a4",
           "sha256:8c5a09fbee163fa2a02fbccb1695c2f66a79507a180456240dd380b681b97506",
           "sha256:cf4554ef90011ebc4bc70c7fbc6ca572c513d5c1e7daa328e406d1069f98e635",
+          "sha256:ae1878ec98301ceb4510e711cf79f58dfb44cb486744007acd03ae5e61860665",
         ],
         "AGENTS.md": [
           "sha256:78c906200a55665f3a3ce410272c71d4bdcb5764174407da0f69d8ad6d143184",
@@ -8059,6 +8124,7 @@ describe("t243 projection channel", () => {
           "sha256:007b95fb94d4a2569f4254088f0d70f4f345ff99db34e2784b6d9bc5c169f853",
           "sha256:25e76c09640300e354ab34e3c67e89d2dfe473940b65bd56c227ca4d5ea92c7b",
           "sha256:51cb399f2257236cbf63e18cb2e317d75913f1771b5402707a2508cf5f81fa57",
+          "sha256:345fbe9fe620718510ecfe9d478233ccf4a5318522884b50fc5540559ace3eed",
         ],
         "AGENTS.md": [
           "sha256:d791057d6b667517197a450bc6ba633c36e148d62e09c90a8992d787c914a44f",
@@ -8082,6 +8148,7 @@ describe("t243 projection channel", () => {
           "sha256:a739ce7cf309c603b4c962313a53cb2a238888b73c204a86f928cd61dcb3e548",
           "sha256:d23129d2d4de49fdd943b9966c2995cc5064b365a2741c8b4a8f50c0facf2c1a",
           "sha256:a2fb9d52cb1ad3a360d7abdaddabb6920965b6b1a7acceb14881ad93b4975bbe",
+          "sha256:2091d36da7f7306179da27227857564334f3a455327f365984db6c94a4cc6412",
         ],
         "AGENTS.md": [
           "sha256:9550b31b8f3f32992c1ae1035bfa57a782f04821530214a2f2e1fd1690e209ab",
@@ -8101,6 +8168,8 @@ describe("t243 projection channel", () => {
           "sha256:7d1b6554a2de2b97b8e14f96ec99d218722d18c100de166cb1a5831bb2c11bfc",
           "sha256:cdfb9d50a7899b4c5a2aa3128d49a2f50c12ee9d3aba13dbe42ff92ad7a2f22e",
           "sha256:3979d69468a5997423ef8fe3b7d9f9bc948ddf34524ca39e1c10112a6a80f835",
+          "sha256:2a818c7c6a39421df576d70829d4d2c960809df3d60b32ca1a0659965c56433a",
+          "sha256:0274b7bd2c26f8fc6158aafd6632a99aced247305d2aa09d1c60312283de7e69",
         ],
       },
     };

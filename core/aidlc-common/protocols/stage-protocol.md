@@ -781,7 +781,7 @@ hook, including learning prompts that do not add a blank tag to the stage
 questions file. Once `decision` succeeds, render that question and END THE TURN.
 If you showed the question before recording it, the person already has it: end
 the turn without showing it again.
-If they already replied, log the question now, then put all of that reply's answers in a single `log answer`: a second `log answer` for one reply is refused.
+If they already replied, log the question now naming their message (`--message <id>`; a refused answer names the id), then put all of that reply's answers in a single `log answer`: an answer that names no message is refused when their reply came before the question was logged.
 Never interpret hook feedback, a continuation reminder, or silence as its
 answer; only the human's next interaction may be followed by `answer`.
 

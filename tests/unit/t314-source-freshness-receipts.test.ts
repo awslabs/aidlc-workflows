@@ -5362,7 +5362,7 @@ process.stdin.on("end", () => server.stop(true));
       .toBe("reviewed target\n");
   }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
-  test("mutable checkout filters are refused before target mutation or source-merge authority", () => {
+  test("a configured checkout filter does not refuse the landing", () => {
     const proj = makeFixture();
     const external = mkdtempSync(join(tmpdir(), "aidlc-t314-smudge-merge-"));
     extraDirs.push(external);
@@ -5419,11 +5419,6 @@ process.stdin.on("end", () => server.stop(true));
       ["-C", proj, "rev-parse", "HEAD"],
       { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" },
     ).stdout.trim();
-    const beforeStatus = spawnSync(
-      "git",
-      ["-C", proj, "status", "--porcelain=v1"],
-      { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" },
-    ).stdout;
     const merge = spawnSync(
       BUN,
       [
@@ -5441,11 +5436,11 @@ process.stdin.on("end", () => server.stop(true));
       { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), cwd: proj, encoding: "utf-8" },
     );
     const output = `${merge.stdout}${merge.stderr}`;
-    expect(merge.status).not.toBe(0);
-    expect(output).toContain("repository checkout-filter configuration is present");
-    expect(output).toContain("filter.mutable.smudge");
+    // The filter is the person's own git: the landing is never refused for it.
+    expect(merge.status, output).toBe(0);
+    expect(output).not.toContain("checkout-filter configuration");
     expect(output).not.toContain("[merge-succeeded:");
-    expect(readAllAuditShards(proj)).not.toContain(
+    expect(readAllAuditShards(proj)).toContain(
       "**Event**: SWARM_SOURCE_MERGED",
     );
     const afterHead = spawnSync(
@@ -5453,15 +5448,9 @@ process.stdin.on("end", () => server.stop(true));
       ["-C", proj, "rev-parse", "HEAD"],
       { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" },
     ).stdout.trim();
-    const afterStatus = spawnSync(
-      "git",
-      ["-C", proj, "status", "--porcelain=v1"],
-      { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" },
-    ).stdout;
-    expect(afterHead).toBe(beforeHead);
-    expect(afterStatus).toBe(beforeStatus);
-    expect(existsSync(join(proj, "smudged.ts"))).toBe(false);
-    expect(existsSync(wt)).toBe(true);
+    expect(afterHead).not.toBe(beforeHead);
+    expect(existsSync(join(proj, "smudged.ts"))).toBe(true);
+    expect(existsSync(wt)).toBe(false);
   }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("finalize merges a claimed unit whose worktree source is unchanged since its terminal review", () => {

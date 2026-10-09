@@ -6,6 +6,7 @@
 // (the §12a reviewer step). Orchestrator-callable; state tool doesn't own these
 // because they fire per-question / per-review, not per state transition.
 
+import { reviewRequestNote } from "./aidlc-directive.ts";
 import { createHash, randomBytes } from "node:crypto";
 import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync } from "node:fs";
 import { dirname, isAbsolute, join, posix, relative, resolve, sep } from "node:path";
@@ -908,6 +909,8 @@ const MESSAGE_SPENDING_EVENTS: ReadonlySet<string> = new Set([
   "VERIFICATION_COMMAND_RECORDED",
   "CONSTRUCTION_POLICY_RECORDED",
   "QUESTION_UNANSWERED",
+  // A routing answer sends the words before it to the work they named.
+  "REQUEST_ROUTED",
 ]);
 
 function latestSpendingTimestamp(rows: AuditShardEvent[]): string | null {
@@ -933,6 +936,24 @@ function invokingChat(pd: string): string | null {
 // through this chat and is not spent by a later decision, and reads no words.
 // A same-second tie with a spending row favours the message: one message can
 // give an approval and the answers beside it.
+// A message that can answer a question: it carries the person's words, and its
+// turn was not only a command to AIDLC or a question about a switch (the marks
+// the presence check reads on the HUMAN_TURN row).
+function messageIsReply(rows: AuditShardEvent[], message: StoredMessage): boolean {
+  if (message.words === null) return false;
+  for (const row of rows) {
+    if (row.event !== "HUMAN_TURN" || auditBlockField(row.block, "Message Id") !== message.id) continue;
+    const mark = auditBlockField(row.block, "Reply");
+    if (mark === "command" || mark === "question") return false;
+  }
+  return true;
+}
+
+// The chats that have sent messages since the last spending row.
+function chatsSince(pd: string, spentAt: string | null): Set<string> {
+  return new Set(listMessages(pd).filter((m) => spentAt === null || m.at >= spentAt).map((m) => m.session ?? "terminal"));
+}
+
 function proveMessage(pd: string, id: string, what: "answer" | "decision"): { message: StoredMessage } | { refusal: string } {
   const message = isMessageId(id) ? readMessage(pd, id) : null;
   if (message === null) {
@@ -941,7 +962,14 @@ function proveMessage(pd: string, id: string, what: "answer" | "decision"): { me
         "person's message that answered (a refused answer names it), or wait for their reply.",
     };
   }
-  const spentAt = latestSpendingTimestamp(readAuditShardEvents(pd));
+  const rows = readAuditShardEvents(pd);
+  if (!messageIsReply(rows, message)) {
+    return {
+      refusal: `Cannot record this ${what}: message ${id} carried no words of the person's own (a command to AIDLC, ` +
+        "or a message with no words), so it answers nothing. Name a message that carries their reply.",
+    };
+  }
+  const spentAt = latestSpendingTimestamp(rows);
   if (spentAt !== null && message.at < spentAt) {
     return {
       refusal: `Cannot record this ${what}: message ${id} arrived before the last approval or decision (${spentAt}), ` +
@@ -959,9 +987,7 @@ function proveMessage(pd: string, id: string, what: "answer" | "decision"): { me
     }
     return { message };
   }
-  const chats = new Set(
-    listMessages(pd).filter((m) => spentAt === null || m.at >= spentAt).map(chatOf),
-  );
+  const chats = chatsSince(pd, spentAt);
   if (chats.size > 1) {
     return {
       refusal: `Cannot record this ${what}: the engine cannot tell which chat this command serves, and more than ` +
@@ -1000,6 +1026,8 @@ function messagesBeforeQuestion(pd: string, stage: string, unit: string | undefi
   if (question === undefined) return [];
   const spentAt = latestSpendingTimestamp(rows);
   const chat = invokingChat(pd);
+  // With no chat the engine can name, the hint follows the proof's one-chat rule.
+  if (chat === null && chatsSince(pd, spentAt).size > 1) return [];
   const turnOf = new Map<string, AuditShardEvent>();
   for (const row of rows) {
     if (row.event !== "HUMAN_TURN") continue;
@@ -1011,9 +1039,32 @@ function messagesBeforeQuestion(pd: string, stage: string, unit: string | undefi
   return listMessages(pd).filter((message) => {
     if (chat !== null && message.session !== chat) return false;
     if (spentAt !== null && message.at < spentAt) return false;
+    if (!messageIsReply(rows, message)) return false;
     const turn = turnOf.get(message.id);
     return turn === undefined ? message.at < question.timestamp : before(turn);
   });
+}
+
+// Whether the person's reply answers the latest question of this scope: a reply
+// turn provably after the question's row (same shard by position, another shard
+// by a later second), or a question box pick of their latest reply still
+// unspent (a box answers the questions it showed, whenever the agent logs them).
+// A reply sent before the question was logged is no reply to it: the agent
+// names that message (--message) when it does answer, or records the choice the
+// person left to it (--on-instruction). No question in scope asks nothing here.
+function replyAnswersQuestion(pd: string, stage: string, unit: string | undefined): boolean {
+  const rows = readAuditShardEvents(pd);
+  const question = decisionRowsInScope(rows, stage, unit).at(-1);
+  if (question === undefined) return true;
+  const after = (row: AuditShardEvent, than: AuditShardEvent): boolean =>
+    row.shardIndex === than.shardIndex ? row.pos > than.pos : row.timestamp > than.timestamp;
+  const replies = rows.filter((row) => isReplyTurn(row));
+  if (replies.some((row) => after(row, question))) return true;
+  const turn = replies.reduce<AuditShardEvent | null>((latest, row) => latest === null || after(row, latest) ? row : latest, null);
+  if (turn === null) return false;
+  const picks = rows.filter((row) => row.event === "QUESTION_REPLIED" && row.shardIndex === turn.shardIndex && row.pos > turn.pos).length;
+  const answers = rows.filter((row) => row.event === "QUESTION_ANSWERED" && after(row, turn)).length;
+  return answers < picks;
 }
 
 function lateQuestionHint(candidates: StoredMessage[]): string {
@@ -2458,6 +2509,19 @@ function handleAnswer(args: string[]): void {
       // scoped test off-switch
     } else if (named !== null) {
       // The proved message is the person's reply to this question.
+    } else if (humanActedSinceLastAnswer(pd) && !replyAnswersQuestion(pd, flags.stage, flags.unit)) {
+      // A reply is on record since the last decision, but it came before this
+      // question was logged, so it is no answer to it (an answer recorded on it
+      // would carry words the person never gave to this question). The agent
+      // names the message when it does answer, records the choice the person
+      // left to it as theirs to leave, or shows the question and waits.
+      const late = messagesBeforeQuestion(pd, flags.stage, flags.unit);
+      error(
+        "Cannot record this answer: the person's last reply came before this question was logged, so it does " +
+          "not answer it." + (late.length > 0 ? ` ${lateQuestionHint(late)}` : "") +
+          " If they left the choice to you in their own words, record it with --on-instruction '<their words>'. " +
+          "Otherwise show the question and end your turn; their next reply answers it.",
+      );
     } else if (
       !humanActedSinceLastAnswer(pd) &&
       !(humanTurnMintAllowed() && humanTurnState(pd, { replies: true }) === "answered")
@@ -3824,6 +3888,7 @@ function handleReview(args: string[]): void {
     console.log(JSON.stringify({
       emitted: "REVIEW_REQUESTED",
       stage: flags.stage,
+      agent_note: reviewRequestNote(flags.reviewer, reviewFile ?? "the review file this request opened", recordVerdict),
       ...(retried ? { retry: "pending-request" } : {}),
       ...(upgraded ? { upgrade: "legacy-request" } : {}),
       ...(recovery ? { recovery } : {}),
@@ -3837,7 +3902,10 @@ function handleReview(args: string[]): void {
   }
 
   if (retryPending) {
-    error("--retry-pending cannot be combined with --verdict.");
+    error(
+      "--retry-pending cannot be combined with --verdict. Run the request with --retry-pending first " +
+        "(no --verdict), dispatch the reviewer again, then record its verdict with --verdict.",
+    );
   }
   if (!flags.iteration || !/^[1-9][0-9]*$/.test(flags.iteration)) {
     error("Recording a review verdict requires --iteration <positive integer>.");
@@ -4034,11 +4102,20 @@ function handleReview(args: string[]): void {
         verdict === "NOT-READY";
       const embeddedLegacy = body === null && !incompleteFallback && appendedAfterRequest;
       if (body === null && !incompleteFallback && !embeddedLegacy) {
+        // After a retry the slot was reopened, so a review written before the
+        // retry is not there any more: the step is a fresh dispatch, not a
+        // search for the earlier file.
         refuseReview(
-          `Cannot record review for "${flags.stage}": no review was written for ` +
-            `iteration ${iteration}. The reviewer writes its review to ` +
-            `${readFrom.draftRelative}; a retried ` +
-            "incomplete attempt records --verdict NOT-READY without a review.",
+          pendingRequest.retried
+            ? `Cannot record review for "${flags.stage}": no review was written for ` +
+              `iteration ${iteration} since the request was retried. The retry reopened the review ` +
+              `slot, so dispatch the reviewer to write ${readFrom.draftRelative} again, then record ` +
+              "the verdict; a retried attempt that ends with no review records --verdict NOT-READY " +
+              "without one."
+            : `Cannot record review for "${flags.stage}": no review was written for ` +
+              `iteration ${iteration}. The reviewer writes its review to ` +
+              `${readFrom.draftRelative}; a retried ` +
+              "incomplete attempt records --verdict NOT-READY without a review.",
         );
       }
       let reviewBytes = body ?? snapshot.appendix;

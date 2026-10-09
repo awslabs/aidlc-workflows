@@ -394,9 +394,10 @@ Units Generation and runs the change again.
 ### `/aidlc space [name]` — List or switch spaces
 
 Bare `/aidlc space` lists spaces; add `--json` for structured output.
-`/aidlc space <name>` switches the per-user active-space cursor and re-points
-the harness-native method include to that space. It never creates a space or
-advances an intent.
+`/aidlc space <name>` switches the per-user active-space cursor and writes that
+space's method files into `aidlc/active-memory/`, the git-ignored copy
+the harness-native method include reads. No tracked file changes. It never
+creates a space or advances an intent.
 
 ### `/aidlc space-create <name>` — Create a space
 
@@ -747,8 +748,10 @@ When a workflow has issues, `--doctor` also prints a **Workflow diagnosis** sect
 | Hook presence | Every framework hook wired by `settings.json` exists in `.claude/hooks/`; a wired-but-missing hook fails loudly. A valid custom non-AI-DLC `statusLine` intentionally leaves `aidlc-statusline.ts` unwired and is exempt. Sourcing the expected roster from `settings.json` means adding a hook there auto-checks it |
 | Hooks enabled (Claude Code) | `disableAllHooks: true` is not the resolved value across Claude Code's settings layers (enterprise managed file plus alphabetical `managed-settings.d/` fragments → `.claude/settings.local.json` → `.claude/settings.json` → `~/.claude/settings.json`, highest-precedence definition wins). A resolved `true` silently skips every present hook, so it fails loudly and names the layer |
 | Project structure | `.claude/settings.json` exists (file presence only, no content validation) |
+| Kiro hooks switched off | On the Kiro harness: every AI-DLC hook file in `.kiro/hooks/` (`aidlc-*.json`) that carries `"enabled": false`, which Kiro writes when you switch a hook off under Agent Hooks. The guard hook (`aidlc-guard-tool-call`), the reply recorder (`aidlc-record-human-turn`) and the older guard files a project may still hold fail, each naming what is no longer protected; any other AI-DLC hook switched off is one warning. The fix is to turn the hook back on under Kiro's Agent Hooks |
 | Kiro IDE ignore sources | On the Kiro harness with the IDE conductor (`.kiro/agents/aidlc.md`): evaluates git's global excludes file (in a git repo), `~/.kiro/settings/kiroignore`, the project `.gitignore`, and `.kiroignore` independently against the reads the engine sends the agent to make through `fs_read`: for every stage `harness.json` selects in the compiled graph, the stage file and the persona and knowledge the conductor holds inline (the engine's own roster at Standard and Minimal depth, within the directive's 8 KiB `inline_context_paths` cap), plus `stage-protocol.md` and its `stage-protocol-<name>.md` modules and the files beside each skill's `SKILL.md`. Contributor-only protocol files such as `stage-definition.md` are not loaded, so they are not counted. Plugins count however they were composed. `SKILL.md` files, the IDE conductor agent (`agents/aidlc.md`), `aidlc-common/conductor.md`, and `tools/`, `sensors/`, `hooks/`, `scopes/`, and `steering/` are loaded by the IDE or the engine, not through `fs_read`, and are not counted. A rule that hides only some of them is reported with a count and the framework folders it touches. Global-source rules that hide `.kiro/` fail, naming the source and line, because the IDE's `fs_read` guard then denies every stage, agent, and protocol read. Workspace-source matches warn: they apply only when `kiroAgent.agentIgnoreFiles` names the file (the default includes `.gitignore`; `[]` disables workspace sources), and doctor cannot read that IDE setting. A source doctor cannot evaluate (for example, `git` is not on PATH, which in a git repository also hides a custom `core.excludesFile`, or git refuses a repository that exists on disk) warns as `not evaluated` rather than passing. Rows name sources by fixed names such as `~/.config/git/ignore` and `.gitignore`, never by path, rule text, or git error text. A `!.kiro/` in another file does not undo a deny |
 | Workspace shell | `.claude/` + `aidlc/spaces/default/memory/` are present (the shipped shell) |
+| Active space method copy | `aidlc/active-memory/` (the git-ignored copy every harness include reads) holds the active space's `memory/` files; the check writes it first, as every session start does, so a difference left is a file that cannot be written there (warn) |
 | VS Code agent request cap | Copilot only: `.vscode/settings.json` sets `chat.agent.maxRequests` to 100 or more. Unset (VS Code's default of 50), lower, not a number (a number in quotes included), or unreadable warns, because VS Code then stops a long stage to ask "Continue to iterate?" and the chat waits until someone answers. The fix names the line to write in the file |
 | Submodules | If a `.gitmodules` is present, reports how many submodule paths are declared and how many are uninitialized, naming `git submodule update --init --recursive` when any are (advisory - never fails) |
 | Env scope | `AWS_AIDLC_DEFAULT_SCOPE` (if set) names a valid scope |
@@ -1463,10 +1466,13 @@ agent (Copilot in VS Code, Kiro IDE, Cursor) is not your terminal: there the
 refusal reads "To turn the review-freeze check off, ask for it in your Kiro
 chat.", naming your tool. This command controls the three switchable fences,
 including any the policy word leaves up. A switchable fence's main-session
-refusal names the command; a human-presence refusal names no switch and says
-what happened to a reply the person already sent: on a harness that runs hooks
-only after the person acts, the steps that turn them on; elsewhere, one line
-for the person: "Your answer didn't reach AI-DLC. Please give it once more. If
+refusal names the command; a human-presence refusal names no switch. While the
+prompt hook is running for this work (its heartbeat is fresh), it says the
+person has not answered yet and the agent ends its turn, with nothing for the
+person to hear. Otherwise it says what happened to a reply the person already
+sent: on a harness that runs hooks only after the person acts, the steps that
+turn them on; elsewhere, one line for the person: "Your answer didn't reach
+AI-DLC. Please give it once more. If
 it happens again, type /aidlc --doctor." In Kiro CLI, where a reply typed to
 another agent picked in `/agent` is never recorded, that line is "Your answer
 didn't reach AI-DLC. Type /agent and pick aidlc, then give it once more." When
@@ -1753,6 +1759,9 @@ left a choice to the agent). The same file named from the project folder, or by
 its full path, is read too. The engine reads only that folder, through no link,
 up to 64 KiB, and removes the file once read.
 
+A plain `log answer` needs a reply the person sent after the question was logged
+(or a question box pick of their latest reply still unspent); a reply sent
+before it is no answer to it, and the refusal names the way on.
 `log decision --message <id>` and `log answer --message <id>` name the person's
 message that answered a question the agent logged after the reply arrived. The
 engine proves the record exists, came through this chat, and is not spent by a
@@ -2657,7 +2666,7 @@ A name is lowercase letters, digits, and single hyphens, starting with a letter,
 
 ### `aidlc-graph ars` - deterministic ARS scoring
 
-`bun .claude/tools/aidlc-graph.ts ars --iae <s> --csu <s> --ve <s> --r <s> --ua <s> [--completed <csv>] [--project-type <t>]` computes the adaptive composer's Autonomy Risk Score arithmetic: the weighted composite with its band label, the LOW/MED/HIGH component bands, the per-stage expected-value screen against the shipped cost priors, the nearest stock scopes by grid diff count, and the two gate tables pre-rendered as markdown. Every constant - weights, band boundaries, stage cost priors, EV thresholds - is read from `tools/data/ars-priors.json`, so the same five scores always render the same numbers; the composer scores the components from evidence and copies this output instead of doing the multiplication. `--completed` (comma-separated slugs) keeps stages that already ran EXECUTE in the derived grid; `--project-type brownfield|greenfield` screens out stages whose compiled `condition:` restricts them to the other kind of project (today Reverse Engineering, brownfield-only). The JSON result lands on stdout; exit 1 on an out-of-range score, an unknown stage slug, or a priors-schema violation - never a silent fallback. The composite is an ADVISORY index for the human at the gate: nothing deterministic routes on it.
+`bun .claude/tools/aidlc-graph.ts ars --iae <s> --csu <s> --ve <s> --r <s> --ua <s> [--completed <csv>] [--project-type <t>]` computes the adaptive composer's Autonomy Risk Score arithmetic: the weighted composite with its band label, the LOW/MED/HIGH component bands, the per-stage expected-value screen against the shipped cost priors, the nearest stock scopes by grid diff count, and the two gate tables pre-rendered as markdown. Every constant - weights, band boundaries, stage cost priors, EV thresholds - is read from `tools/data/ars-priors.json`, so the same five scores always render the same numbers; the composer scores the components from evidence and copies this output instead of doing the multiplication. A plugin stage, which the file does not name, is screened from its own `ars:` frontmatter block (the file wins when both exist) or lands as a `no-prior` row; each row's `priorSource` says which (`shipped`, `stage` or `null`). `--completed` (comma-separated slugs) keeps stages that already ran EXECUTE in the derived grid; `--project-type brownfield|greenfield` screens out stages whose compiled `condition:` restricts them to the other kind of project (today Reverse Engineering, brownfield-only). The JSON result lands on stdout; exit 1 on an out-of-range score, an unknown stage slug, or a priors-schema violation - never a silent fallback. The composite is an ADVISORY index for the human at the gate: nothing deterministic routes on it.
 
 ```bash
 bun .claude/tools/aidlc-graph.ts ars --iae 0.55 --csu 0.75 --ve 0.65 --r 0.50 --ua 0.55

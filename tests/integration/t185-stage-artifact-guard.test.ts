@@ -2256,9 +2256,9 @@ X. Other (please specify)
     // A recorded name is text in the committed intents.json, and a folder shaped
     // like a repo (HEAD, objects/, refs/, config) can be committed by anyone
     // whose repo the person clones; a .git entry cannot. Git run in that folder
-    // reads the author's committed config and runs its commands (core.fsmonitor
-    // on status), so the probe asks git only in a folder with a real .git entry
-    // and with the monitor hook off; the shaped folder gets the filesystem check.
+    // reads the author's committed config and runs its commands, so the probe
+    // asks git only in a folder with a real .git entry; the shaped folder gets
+    // the filesystem check instead, and no git runs in it at all.
     test("does not run git configuration committed in a repo-shaped folder recorded as a repo", () => {
       initWorkspaceRepo();
       const marker = join(proj, "fsmonitor-ran");

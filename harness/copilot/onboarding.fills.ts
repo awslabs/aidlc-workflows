@@ -47,16 +47,17 @@ The Copilot-specific guide (install, what differs, verification) is \`docs/guide
     sections_after_resumption: `## Method include (do not remove)
 
 Copilot expands \`@\`-imports in this file (live-verified on the CLI); these lines pull the
-active space's method layers into ambient context (the native include —
-\`/aidlc space <name>\` re-points them in place):
+active space's method layers into ambient context (the native include: they read
+AI-DLC's git-ignored copy of the active space's \`aidlc/spaces/<space>/memory/\`,
+which the engine refreshes at session start and on \`/aidlc space <name>\`):
 
-@aidlc/spaces/default/memory/org.md
-@aidlc/spaces/default/memory/team.md
-@aidlc/spaces/default/memory/project.md
-@aidlc/spaces/default/memory/phases/ideation.md
-@aidlc/spaces/default/memory/phases/inception.md
-@aidlc/spaces/default/memory/phases/construction.md
-@aidlc/spaces/default/memory/phases/operation.md
+@aidlc/active-memory/org.md
+@aidlc/active-memory/team.md
+@aidlc/active-memory/project.md
+@aidlc/active-memory/phases/ideation.md
+@aidlc/active-memory/phases/inception.md
+@aidlc/active-memory/phases/construction.md
+@aidlc/active-memory/phases/operation.md
 `,
   },
 };

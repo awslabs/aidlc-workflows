@@ -760,8 +760,9 @@ actions can still be completed with `--mark-done`.
 ### Trust Diagnostics
 
 `aidlc config trust` reads and verifies host-native trust. It never regenerates
-trust seeds, permission rules, or IDE settings; its one write outside the
-project is Kiro IDE's Workflows switch, and only when you ask for it.
+trust seeds, permission rules, or IDE settings; its only writes outside the
+project are Kiro IDE's Workflows switch and Kiro IDE's default terminal on
+Windows, and only when you ask for them.
 
 ```bash
 aidlc config trust --show
@@ -769,6 +770,7 @@ aidlc config trust --check
 aidlc config trust --acknowledge --yes
 aidlc config trust --reset --yes
 aidlc config trust --kiro-workflows off --yes   # Kiro IDE; or: on
+aidlc config trust --kiro-terminal powershell --yes   # Kiro IDE on Windows
 ```
 
 For Kiro IDE, `--show` and `--check` also read Kiro's Workflows switch
@@ -779,6 +781,15 @@ the file. While Workflows is on and you have not answered on this computer,
 setup asks once and `aidlc config --yes` turns it off; your answer is kept in
 `kiro-ide-workflows` in the AI-DLC install folder, so no other project asks
 again. See [Kiro's Workflows feature](harnesses/kiro-ide.md#kiros-workflows-feature-stops-ai-dlcs-reviews-and-helpers).
+
+On Windows, Kiro IDE runs its agent's commands in your default terminal profile
+(`terminal.integrated.defaultProfile.windows` in Kiro's user settings). While
+it is Command Prompt and you have not answered on this computer, setup asks
+once whether to set it to PowerShell, `aidlc config --yes` sets it, and
+`--kiro-terminal powershell` sets it on its own; each changes that one key and
+keeps every other byte of the file, and your answer is kept in
+`kiro-ide-terminal` in the AI-DLC install folder. See
+[Command Prompt as Kiro's terminal](harnesses/kiro-ide.md#command-prompt-as-kiros-terminal-on-windows).
 
 For Codex, the check requires the complete project-specific trust seed entry
 set in `$CODEX_HOME/config.toml`. The two supported remedies are one TUI
@@ -1091,7 +1102,8 @@ tables (such as `[agents.<role>]` or `[mcp_servers.<name>]`), comments, order,
 and spelling. An AI-DLC value nobody changed takes the release's value; a value
 you changed stays yours, with a note when a release ships a different one
 (delete the key and refresh to take it); a deleted AI-DLC key comes back, with
-a note. The active space's `AIDLC_RULES_DIR` stays as it is. A project that
+a note. An `AIDLC_RULES_DIR` line an earlier release shipped is removed, at
+whichever space a switch left it, unless you added your own keys to its table. A project that
 already has its own `.codex/config.toml` keeps it on first install, and AI-DLC
 adds its settings. A file the refresh cannot merge safely (it does not parse,
 or uses one of AI-DLC's table names for something else, such as an array of

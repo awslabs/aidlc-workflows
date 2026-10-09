@@ -2427,6 +2427,9 @@ function handleUnit(args: string[]): void {
 
     const open = unitOpenCheckpoints(pd, slug);
     const checkpoint = open[0] ?? null;
+    // The person picked recording this receipt on the gate's recovery ask.
+    const completionPicked = action === "complete" && !checkpoint &&
+      guardRecoveryAskSelected(pd, content, slug, unit, "record-unit-completion");
     let pauseReason = reason;
     let pauseNextAction = nextAction;
 
@@ -2487,10 +2490,7 @@ function handleUnit(args: string[]): void {
         return;
       }
       requireEngineRoutedUnit(routed, slug, unit);
-    } else if (
-      action === "complete" && !checkpoint &&
-      guardRecoveryAskSelected(pd, content, slug, unit, "record-unit-completion")
-    ) {
+    } else if (completionPicked) {
       // The gate refused this Unit for a missing UNIT_COMPLETED receipt and the
       // person picked recording it on the open recovery ask: the Unit's work was
       // done without the start receipt, so its completion is recorded from the
@@ -2540,6 +2540,45 @@ function handleUnit(args: string[]): void {
         error(
           `Refusing to resume unit "${unit}" for "${slug}": it is not the paused unit` +
             `${shown ? ` (active: "${shown.unit}", ${shown.state})` : " (no unit is active)"}.`,
+        );
+      }
+    }
+
+    // The receipt also waits for the Unit's review: a request that is open with
+    // no verdict means a reviewer's finding is still owed, and a receipt over it
+    // hands the walk on with that finding lost (a refused NOT-READY was followed
+    // by a completion this way). Only "open and no verdict at all" refuses here;
+    // a verdict the record could not verify, a stale receipt and every other
+    // freshness, fingerprint or digest question are the gate's, and off under
+    // Guard Policy off. The person's words win where the checkpoint lets their
+    // approval go over the review (personMayApproveOverUnfinishedReview: not
+    // under a strict the team locked in memory): once they have spoken since
+    // the last question (their "approve it as it is", which the Unit's
+    // checkpoint takes with --over-unfinished-review and which needs this
+    // receipt first), or picked recording the receipt on a recovery ask, the
+    // receipt records and the review stays owed at the gate.
+    if (action === "complete" && !waveMode && !completionPicked) {
+      const owed = openUnitReview(pd, content, stage, unit);
+      const theirsMayWin = owed !== null && personMayApproveOverUnfinishedReview(pd, content);
+      if (owed !== null && !(theirsMayWin && personSpokeSinceGate(pd, { requests: true }))) {
+        const request =
+          `${aidlcToolInvocation("log")} review --stage ${slug} --reviewer ${owed.reviewer} ` +
+          `--unit ${unit} --iteration ${owed.iteration}`;
+        const theirs = theirsMayWin
+          ? " If the person said to go on without this review, run this completion again: their words let it " +
+            "record, and their approval (the Unit checkpoint's `verify --over-unfinished-review`, or the stage gate) " +
+            "goes over the review."
+          : " Finish it first, without asking the person: your team set Guard Policy to strict for everyone on " +
+            "this repo, so their words do not go over this review.";
+        error(
+          owed.requestAgain
+            ? `Refusing to complete unit "${unit}" for "${slug}": its review (iteration ${owed.iteration}) was ` +
+              `requested before its outputs changed, so request it again with \`${request}\` and record the ` +
+              "verdict with the same command plus `--verdict <READY|NOT-READY>`." + theirs
+            : `Refusing to complete unit "${unit}" for "${slug}": its review (iteration ${owed.iteration}) is ` +
+              `still waiting for a verdict. Record it with \`${request} --verdict <READY|NOT-READY>\`; if the ` +
+              "reviewer gave none, rerun that command with `--retry-pending` instead and dispatch the reviewer " +
+              "again." + theirs,
         );
       }
     }
@@ -3014,6 +3053,42 @@ function handleCount(args: string[]): void {
 
 function artifactGuardDisabled(pd: string): boolean {
   return resolveProjectFlag("AIDLC_SKIP_ARTIFACT_GUARD", process.env, pd) === "1";
+}
+
+// The Unit's review request that is open with no verdict in this attempt, or
+// null. A request whose outputs changed since it was made is requested again
+// at its own pass (requestAgain); a current one takes its verdict or a retry.
+// A verdict the record could not verify is a verdict (the gate's retry owns
+// it), and a recovery request is the stale-receipt machinery, which a Guard
+// Policy that accepts changes turns off.
+function openUnitReview(
+  pd: string,
+  content: string,
+  stage: Parameters<typeof freshReviewReceipts>[2],
+  unit: string,
+): { reviewer: string; iteration: number; requestAgain: boolean } | null {
+  if (!stage.reviewer) return null;
+  const reviewClass = resolveReviewClass(
+    stage.review_class ?? "adversarial",
+    getField(content, "Scope") ?? "",
+    content,
+  );
+  if (reviewClass === "none") return null;
+  const receipts = freshReviewReceipts(pd, content, stage, { reviewClass });
+  const pending = receipts.unitPending.get(unit);
+  if (
+    pending === undefined ||
+    receipts.awaitingVerdict?.has(unit) !== true ||
+    pending.verificationFailed === true ||
+    (pending.recovery && guardPolicyAcceptsChanges(pd, content))
+  ) {
+    return null;
+  }
+  return {
+    reviewer: stage.reviewer,
+    iteration: pending.iteration,
+    requestAgain: pending.state === "outstanding",
+  };
 }
 
 // Mirrors both aidlc-orchestrate.ts isAutonomousSwarmCandidate and the
@@ -3901,12 +3976,12 @@ function isNonDocPath(p: string): boolean {
 }
 
 // Run git in the workspace, fail-safe: returns null on any spawn/exec problem so
-// callers fall back to the filesystem check rather than trapping. A probe reads
-// state and never needs the filesystem monitor hook, so the one git setting
-// that runs a configured program on `status` is off for it.
+// callers fall back to the filesystem check rather than trapping. The person's
+// own git settings apply: this is their machine and their project, and git here
+// behaves as it does in their terminal.
 function git(pd: string, args: string[]): string | null {
   try {
-    const r = spawnSync("git", ["-c", "core.fsmonitor=false", ...args], {
+    const r = spawnSync("git", args, {
       cwd: pd,
       encoding: "utf-8",
       timeout: DEFAULT_SUBPROCESS_TIMEOUT_MS,
@@ -6390,17 +6465,35 @@ function verifyApprovalDecision(
     // Their exact pick names which approval it is.
     approvalInput = pick ?? stageGateApproval(approvalInput, revisionCount >= 3);
   }
-  if (
-    !autonomousDecision &&
-    !humanPresenceGuardDisabled() &&
-    together === null &&
-    !humanRepliedSinceGate(pd)
-  ) {
-    refuseForAgent(
-      `Cannot approve "${stage.slug}" because no new human reply has been received for ` +
-        "this approval question. Wait for the human to type their choice, then retry the " +
-        `approval.${commandTurnHint(pd)}${unattendedHumanPresenceHint(pd)}`,
+  // Once the approval question is put to the person, only their reply to it
+  // approves: a turn they sent before it (an answer to the stage's own
+  // questions, a remark while it ran) is no reply to it, as for reject below.
+  // A gate re-entered after a revision counts from the showing they first saw
+  // (their correction of a misread Request Changes came after it), and a gate
+  // the engine backfilled for their reported approval has no presentation row
+  // (gatePresentationStart): both keep the reply-since-the-last-decision rule
+  // that the rejection or the backfill already applied.
+  if (!autonomousDecision && !humanPresenceGuardDisabled() && together === null) {
+    const repliedSinceDecision = humanRepliedSinceGate(pd);
+    const repliedSinceShown = personRepliedSincePresentation(
+      pd, { stage: stage.slug, ...(unit !== undefined ? { unit } : {}) }, { firstShowing: true },
     );
+    if (repliedSinceDecision && repliedSinceShown === false) {
+      // A reply exists, but from before the gate was shown: the step is to
+      // show the gate, not to ask for anything new; their next word answers it.
+      refuseForAgent(
+        `Cannot approve "${stage.slug}" because no new human reply has been received for ` +
+          "this approval question: the person's last reply came before the gate was shown, so " +
+          "it does not answer it. Show the gate and end your turn; their next reply answers it.",
+      );
+    }
+    if (!repliedSinceDecision) {
+      refuseForAgent(
+        `Cannot approve "${stage.slug}" because no new human reply has been received for ` +
+          "this approval question. Wait for the human to type their choice, then retry the " +
+          `approval.${commandTurnHint(pd)}${unattendedHumanPresenceHint(pd)}`,
+      );
+    }
   }
   // The conductor reports the choice the person made; a report that names none
   // records nothing. They have replied by now (checked above), so the step is

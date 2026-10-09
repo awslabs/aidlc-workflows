@@ -117,7 +117,6 @@ test.each(profileCases)("the generated Codex home uses $name and trusts the exac
     });
     expect(config.shell_environment_policy).toEqual({
       exclude: ["AWS_*", "AIDLC_BROKER_*", "ANTHROPIC_*", "KIRO_API_KEY", "CURSOR_API_KEY", "GITHUB_TOKEN", "GH_TOKEN", "ACTIONS_*"],
-      set: { AIDLC_RULES_DIR: ".codex/aidlc-rules" },
     });
     if (process.platform === "win32") expect(config.windows).toEqual({ sandbox: "elevated" });
     else expect(config.windows).toBeUndefined();

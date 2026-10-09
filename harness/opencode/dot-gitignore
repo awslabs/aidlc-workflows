@@ -11,6 +11,7 @@ aidlc/.aidlc-claim-registry.json
 aidlc/.aidlc-unit-releases/
 aidlc/.aidlc-unit-merges/
 aidlc/.aidlc-active-space-*.tmp
+aidlc/active-memory/
 aidlc/.aidlc-sessions/
 aidlc/spaces/*/intents/.aidlc-*
 **/aidlc/spaces/*/intents/**/.aidlc-engine/

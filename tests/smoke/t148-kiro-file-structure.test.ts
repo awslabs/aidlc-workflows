@@ -131,7 +131,8 @@ describe("t148 dist/kiro file structure", () => {
     // The AIDLC method relocated OUT of the harness dir (the old .kiro/steering/
     // rule layers) to the workspace root under aidlc/spaces/default/memory/ — one
     // hand-editable source of truth, identical on every harness, read by Kiro via
-    // the agent JSON `resources` globs (file://aidlc/spaces/default/memory/**/*.md).
+    // the agent JSON `resources` globs of the engine's git-ignored copy of the
+    // active space (file://aidlc/active-memory/**/*.md).
     // It sits beside .kiro/, so resolve from KIRO, not K.
     const mem = (...parts: string[]) =>
       join(KIRO, "aidlc", "spaces", "default", "memory", ...parts);
@@ -750,6 +751,18 @@ describe("t148 dist/kiro file structure", () => {
     { tree: "dist", invoke: "bun .kiro/tools/aidlc.ts" },
     { tree: "dist-release", invoke: "aidlc" },
   ];
+  // A project's own commands as a build or a probe writes them, redirects and
+  // chains included (#2199): no AI-DLC rule matches them, so Kiro's own rules
+  // and the person's Always allow decide them. Only an AI-DLC command asks on
+  // a form that could stretch its allow to another command.
+  const PROJECT_COMMANDS = [
+    "pnpm build 2>&1",
+    "npm test -- --watch=false > /dev/null",
+    "(docker info >/dev/null 2>&1 && echo DOCKER_AVAILABLE) || echo DOCKER_UNAVAILABLE",
+    "echo $HOME",
+    "git log --oneline -3 | cat",
+    "cat README.md",
+  ];
   // A command that would run, expand, or redirect more than the allowed one,
   // on POSIX shells and PowerShell, after each allowed prefix.
   const SHELL_FORM_TAILS = [
@@ -868,6 +881,15 @@ describe("t148 dist/kiro file structure", () => {
       ]) {
         expect(kiroShellEffect(fm, command), `${tree} conductor: ${command}`).toBe("ask");
       }
+      for (const command of PROJECT_COMMANDS) {
+        expect(kiroShellEffect(fm, command), `${tree} conductor: ${command}`).toBe("none");
+      }
+      // An AI-DLC command that expands or redirects still asks; one that joins
+      // another command is judged part by part (above) and never runs as allowed.
+      for (const tail of ["> out.txt", "$(id)", "2>&1"]) {
+        expect(kiroShellEffect(fm, `${invoke} engine orchestrate next ${tail}`), `${tree} conductor: ${tail}`).toBe("ask");
+      }
+      expect(kiroShellEffect(fm, `${invoke} engine orchestrate next && echo x`), `${tree} conductor: && echo x`).not.toBe("allow");
       const prefixes = [`${invoke} engine log decision --stage s --decision`, `${invoke} engine now`];
       if (tree === "dist") prefixes.push("bun .kiro/tools/aidlc-utility.ts codekb-path --repo");
       for (const prefix of prefixes) {
@@ -921,6 +943,9 @@ describe("t148 dist/kiro file structure", () => {
           for (const tail of ["$HOME", "`id`", "x > out.txt", "x < in.txt", "x & y", "@(1)", "@{a=1}", "x\ny", "x\r\ny"]) {
             expect(kiroShellEffect(fm, `${command} ${tail}`), `${tree} ${persona}: ${command} ${tail}`).toBe("deny");
           }
+        }
+        for (const command of PROJECT_COMMANDS) {
+          expect(kiroShellEffect(fm, command), `${tree} ${persona}: ${command}`).toBe("none");
         }
       }
     }

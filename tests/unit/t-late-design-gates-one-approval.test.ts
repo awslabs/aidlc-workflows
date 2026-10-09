@@ -314,8 +314,9 @@ function runReport(proj: string, args: string[]): Directive {
   }
 }
 
-// The agent puts a question to the person (log decision); with `answered`, the
-// person's latest reply answers it (log answer).
+// The agent puts a question to the person (log decision, before showing it, as
+// the protocol has it); with `answered`, the person then replies and that reply
+// answers it (log answer). An answer needs a reply sent after its question.
 function logQuestion(proj: string, stage: string, answered: boolean): void {
   const opts = { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" as const, env: engineEnv() };
   const asked = spawnSync(BUN, [
@@ -324,6 +325,7 @@ function logQuestion(proj: string, stage: string, answered: boolean): void {
   ], opts);
   if ((asked.status ?? -1) !== 0) throw new Error(`log decision failed: ${asked.stdout ?? ""}${asked.stderr ?? ""}`);
   if (!answered) return;
+  personReplies(proj);
   const answer = spawnSync(BUN, [LOG, "answer", "--stage", stage, "--details", "Purchase", "--project-dir", proj], opts);
   if ((answer.status ?? -1) !== 0) throw new Error(`log answer failed: ${answer.stdout ?? ""}${answer.stderr ?? ""}`);
 }
@@ -431,7 +433,6 @@ describe("t-late-design-gates-one-approval: one question for the late stage appr
   test("8: a reply used by another question, or a question put since, approves nothing from the list", () => {
     // The person's reply answered a different question before the gate opened.
     const before = seedBuiltProject({ checkpoints: "disabled" });
-    personReplies(before);
     logQuestion(before, "functional-design", true);
     openFirstGate(before);
     const refused = runReport(before, ["--stage", "functional-design", "--result", "approved", "--user-input", "Approve"]);

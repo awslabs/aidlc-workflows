@@ -200,8 +200,9 @@ utility shortcuts are `/aidlc-status`, `/aidlc-jump --stage <slug>` (or
   matching phase file only when relevant (live-verified on cursor-agent: a
   phase-framed prompt loads exactly the matching phase rule, an unrelated
   prompt loads none). The `sessionStart` hook separately
-  injects live workflow context. `/aidlc space <name>` re-points all five rule
-  files in place.
+  injects live workflow context. All five rule files read
+  `aidlc/active-memory/`, the engine's git-ignored copy of the active
+  space's method; `/aidlc space <name>` rewrites the copy, never the rules.
 - **Construction swarm runs as task-tool fan-out only** (`AIDLC_USE_SWARM=1` is
   a loud no-op - no Workflow tool exists).
 - **No statusline / welcome message** - use `/aidlc-status` (or

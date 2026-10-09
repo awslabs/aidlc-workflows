@@ -2097,8 +2097,10 @@ describe("t299 first-run guidance helpers", () => {
       const copilot = harness === "copilot";
       expect(Object.hasOwn(shipped, "hookActivation"), harness).toBe(harness !== "cursor");
       // The agent's own step needs a hook on its shell command that beats in
-      // the record before the engine runs; Kiro IDE's does not.
-      expect(Object.hasOwn(shipped.hookActivation ?? {}, "agentStep"), harness).toBe(harness !== "cursor" && !kiroIde);
+      // the record before the engine runs (Kiro IDE's guard does, #2167). Only
+      // Kiro IDE, whose tree also runs in Kiro CLI, gives its own host a line.
+      expect(Object.hasOwn(shipped.hookActivation ?? {}, "agentStep"), harness).toBe(harness !== "cursor");
+      expect(Object.hasOwn(shipped.hookActivation ?? {}, "agentStepInHost"), harness).toBe(kiroIde);
       // notRunYet needs a heartbeat on the first chat message: the human-turn
       // hook leaves one, and the Kiro IDE and Copilot adapters too.
       expect(Object.hasOwn(shipped.hookActivation ?? {}, "notRunYet"), harness).toBe(harness !== "cursor");

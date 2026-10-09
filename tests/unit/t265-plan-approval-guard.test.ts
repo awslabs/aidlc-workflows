@@ -492,6 +492,8 @@ function scratchProject(): string {
     "aidlc-guard-operation.ts",
     "aidlc-reply-reader.ts",
     "aidlc-audit.ts",
+    // aidlc-log.ts imports the note builders from here.
+    "aidlc-directive.ts",
     "aidlc-log.ts",
     "aidlc-message-store.ts",
     "aidlc-review-brief.ts",

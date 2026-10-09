@@ -58,6 +58,9 @@ const manifest: HarnessManifest = {
           "sha256:f9fbe33a3e622010a8a45ef199e104077db6ee7ee27137c08c34e81c1a0c24a4",
           // The variant shipped with notes above each group of lines.
           "sha256:8c5a09fbee163fa2a02fbccb1695c2f66a79507a180456240dd380b681b97506",
+          // The variant shipped before the block ignored aidlc/active-memory/ (the
+          // engine's copy of the active space's method).
+          "sha256:cf4554ef90011ebc4bc70c7fbc6ca572c513d5c1e7daa328e406d1069f98e635",
         ],
       },
     },

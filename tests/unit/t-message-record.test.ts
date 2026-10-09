@@ -354,6 +354,18 @@ describe("the human-turn hook keeps one record of each message", () => {
     expect(readMessage(proj, record.id)?.id).toBe(record.id);
   });
 
+  // AIDA 5450894846 on #2150: the QUESTION_REPLIED rows carried the cut strings; only the stored record is cut.
+  test("a question box's QUESTION_REPLIED rows keep the full question and pick; only the record is cut", () => {
+    const proj = withWork();
+    const question = `Which one? ${"context ".repeat(3000)}`;
+    pick(proj, "claude", question, ["A", "B"], "A");
+    const replied = readAuditShardEvents(proj).filter((row) => row.event === "QUESTION_REPLIED");
+    expect(replied).toHaveLength(1);
+    // The audit writer keeps a field to its visible text: no trailing space.
+    expect(auditBlockField(replied[0].block, "Question")).toBe(question.trimEnd());
+    expect(records(proj)[0].picker?.[0]?.question).toHaveLength(2000);
+  });
+
   test("a question box with a very long question keeps 2000 characters of it and reads back", () => {
     const proj = withWork();
     const question = `Which one? ${"context ".repeat(3000)}`;
