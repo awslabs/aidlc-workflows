@@ -1031,6 +1031,29 @@ describe("t299 first-run setup wizard", () => {
     expect(existsSync(join(unsupported.project, ".kiro", "agents", "aidlc.json"))).toBe(true);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
+  // A supported Kiro CLI is detected by both Kiro rows. Enter takes the
+  // kiro-ide row, whose settings/cli.json pins the v3 engine; the kiro row
+  // stays one number away. Injected detection runs on every platform.
+  test("a Kiro CLI both Kiro rows detect defaults to the row that pins the v3 engine", () => {
+    const result = runWizard("\n\n", {
+      harnesses: {
+        claude: { found: false },
+        kiro: { found: true, version: "kiro-cli 2.28.0" },
+        "kiro-ide": { found: true, version: "kiro-cli 2.28.0" },
+      },
+    });
+    expect(result.status, result.stdout + result.stderr).toBe(0);
+    expect(result.stdout).toContain("Choose the harness for this project first.");
+    expect(result.stdout).toContain(`Kiro CLI${" ".repeat(8)}(detected)\n`);
+    expect(result.stdout).toContain(`Kiro IDE${" ".repeat(8)}(detected, default)\n`);
+    expect(result.stdout).toContain("Using Kiro IDE.");
+    const kiroDir = join(result.project, ".kiro");
+    expect(existsSync(join(kiroDir, "agents", "aidlc.md"))).toBe(true);
+    expect(existsSync(join(kiroDir, "agents", "aidlc.json"))).toBe(false);
+    const cli = JSON.parse(readFileSync(join(kiroDir, "settings", "cli.json"), "utf-8"));
+    expect(cli["chat.agentEngine"]).toBe("v3");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
   test("Kiro IDE's terminal selects Kiro IDE and ends with trust, reload, and agent steps", () => {
     const result = runWizard("\n", {
       harnesses: { claude: { found: false } },
