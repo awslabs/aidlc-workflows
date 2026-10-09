@@ -1244,8 +1244,9 @@ export async function install(targetDir: string): Promise<void> {
           ? pluginRuntime.stages.get(basename(rel, ".md"))
           : undefined;
       if (targetBytes && pluginStage) {
-        // Rebuild from the active-space-adjusted core content, not the raw
-        // distribution bytes, so a persona keeps its repointed memory paths.
+        // Rebuild from the content this install writes (managedContent), not
+        // the raw distribution bytes, so the rebuilt file is what the install
+        // would write and its receipt comparison holds.
         const rebuilt = rebuildPluginComposedStage(
           desired,
           targetBytes,

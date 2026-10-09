@@ -648,17 +648,19 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
     expect(readFileSync(pluginModifiedStage, "utf-8")).toBe(stagesBeforeRepeat);
     expect(readFileSync(retainedEdgeStage, "utf-8")).toContain("- test-pro-integration\n");
 
-    // In a non-default space the composed persona is rebuilt from the
-    // space-adjusted core content: the reinstall keeps its repointed memory
-    // paths and its fragment instead of colliding.
+    // In a non-default space the composed persona reinstalls with its
+    // fragment instead of colliding. A space switch leaves the persona as it
+    // is: it reads the method from the fixed aidlc/active-memory/ copy.
     const utilityEnv = { ...process.env, AIDLC_PROJECT_DIR: cursorProject, AIDLC_HARNESS_DIR: ".cursor", AIDLC_HARNESS_NAME: "cursor" };
     const utility = join(cursorProject, ".cursor", "tools", "aidlc-utility.ts");
+    const composedPersona = join(cursorProject, ".cursor", "agents", "aidlc-quality-agent.md");
+    const personaBeforeSwitch = readFileSync(composedPersona, "utf-8");
     for (const args of [["space", "create", "engineering"], ["space", "switch", "engineering"]]) {
       const step = spawnSync(BUN, [utility, ...args], { cwd: cursorProject, encoding: "utf-8", timeout: TIMEOUT_MS - 5_000, env: utilityEnv });
       expect(step.status, step.stderr).toBe(0);
     }
-    const composedPersona = join(cursorProject, ".cursor", "agents", "aidlc-quality-agent.md");
-    expect(readFileSync(composedPersona, "utf-8")).toContain("aidlc/spaces/engineering/memory/");
+    expect(readFileSync(composedPersona, "utf-8")).toBe(personaBeforeSwitch);
+    expect(personaBeforeSwitch).toContain("aidlc/active-memory/");
     const spaceReinstall = spawnSync(
       BUN,
       [join(upgradedDist, "install.ts"), cursorProject],
@@ -666,8 +668,8 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
     );
     expect(spaceReinstall.status, spaceReinstall.stderr).toBe(0);
     const personaAfter = readFileSync(composedPersona, "utf-8");
-    expect(personaAfter).toContain("aidlc/spaces/engineering/memory/");
-    expect(personaAfter).not.toContain("aidlc/spaces/default/memory/");
+    expect(personaAfter).toContain("aidlc/active-memory/");
+    expect(personaAfter).not.toContain("aidlc/spaces/engineering/memory/");
     expect(personaAfter).toContain("<!-- plugin:test-pro:after-preflight:90:");
   });
 
