@@ -1740,6 +1740,17 @@ function holdsThisTurn(latch: TerminalLatch | null, recordedTurn: number): latch
   return latch !== null && recordedTurn > 0 && latch.turn === recordedTurn && (ide.sessionId?.trim() ?? "") !== "";
 }
 
+// Who sent this UserPromptSubmit (kiroTurnOrigin), one reading for every hook
+// that the person's message runs.
+function messageOrigin(): ReturnType<typeof kiroTurnOrigin> {
+  return kiroTurnOrigin({
+    sessionId: ide.sessionId?.trim(),
+    chatSessionId: process.env.KIRO_SESSION_ID,
+    prompt: ide.userPrompt ?? "",
+    templates: KIRO_WORKFLOW_HOST_TEMPLATES,
+  });
+}
+
 // Whether a shell call is one the terminal-command refusal answers with the
 // command's output: the terminal command typed again, a lowering setter, or a
 // call naming a tool file.
@@ -2096,6 +2107,16 @@ function terminalRefusal(result: TerminalResult): string {
   );
 }
 
+// Why a lowering setter is refused on a build that does not provide the
+// person's message, with the way out.
+function loweringRefusal(refused: NonNullable<ReturnType<typeof loweringGuardInvocation>>): string {
+  return refused === "summary"
+    ? `Summary confirmation cannot be turned off for the active piece of work in this Kiro IDE session because this version does not provide the submitted message. ${summaryConfirmationWayOut()}\n`
+    : refused === "plan"
+    ? `Plan approval cannot be turned off for the active piece of work in this Kiro IDE session because this version does not provide the submitted message. ${planApprovalWayOut()}\n`
+    : "Guard settings cannot be lowered for the active piece of work in this Kiro IDE session because this version does not provide the submitted message. Update Kiro IDE or start a new piece of work from a scope whose default already uses the lower setting. You can still select strict or turn a fence on.\n";
+}
+
 // The terminal command's output already went to the agent to relay, so this
 // names the step and does not hand it over a second time. It quotes nothing
 // the command carried: its arguments can hold text from the repository.
@@ -2209,6 +2230,10 @@ if (target === CATCH_UP) {
 if (target === "verb-intercept") {
   // Before a doctor request below runs, so it sees this message.
   recordPreWorkflowHeartbeat(projectDir, "terminal-command");
+  // A prompt Kiro made is no turn of the person's (record-human-turn): it moves
+  // no turn on, so a turn a terminal command holds stays held, and it is no
+  // terminal command.
+  if (messageOrigin().kind === "host") return 0;
   const sessionId = terminalSessionId();
   const turn = bumpTurn(sessionId);
   recordPromptEmpty(sessionId, turn);
@@ -2253,16 +2278,20 @@ if (target === "terminal-command-guard") {
   // builds at run time. No reading of the command decides which call is
   // harmless, so none runs, and this comes before the checks below that would
   // ask for a fixed call. The terminal command typed again gets the refusal
-  // that hands its output over once more; a lowering setter keeps its own
-  // refusal below, which names the way out. Only the chat the payload names is
+  // that hands its output over once more; a lowering setter on a build that
+  // hides the message keeps its own refusal, which names the way out. Only the
+  // chat the payload names is
   // judged; with no session in it, this stays out. (The engine's own guard for
   // this, Branch 0, reads only the agent-v1 project-wide latch; the engine
   // could tell this chat's latch from another's only by process ancestry,
   // which one IDE window shares.)
+  const refused = invocation !== null ? loweringGuardFlags(invocation.args, false) : lowering;
   const held = readTerminalLatch(sessionId);
-  if (!lowering && refusesShellThisTurn(held, recordedTurn, getsTerminalRefusal(invocation, lowering, rawCommand))) {
+  if (holdsThisTurn(held, recordedTurn) && refused !== null && promptWasEmpty(sessionId, recordedTurn)) {
+    process.stderr.write(loweringRefusal(refused));
     return 2;
   }
+  if (refusesShellThisTurn(held, recordedTurn, getsTerminalRefusal(invocation, lowering, rawCommand))) return 2;
   // A lone carriage return, on any shell and any agent (a delegated call
   // carries no agent identity, and this reads none). The agents' rules cannot
   // name one (delegate-shell-deny.ts RISKY_SHELL_FORMS); a carriage return
@@ -2297,13 +2326,8 @@ if (target === "terminal-command-guard") {
     return 2;
   }
   const turn = recordedTurn || bumpTurn(sessionId);
-  const refused = invocation !== null ? loweringGuardFlags(invocation.args, false) : lowering;
   if (promptWasEmpty(sessionId, turn) && refused !== null) {
-    process.stderr.write(refused === "summary"
-      ? `Summary confirmation cannot be turned off for the active piece of work in this Kiro IDE session because this version does not provide the submitted message. ${summaryConfirmationWayOut()}\n`
-      : refused === "plan"
-      ? `Plan approval cannot be turned off for the active piece of work in this Kiro IDE session because this version does not provide the submitted message. ${planApprovalWayOut()}\n`
-      : "Guard settings cannot be lowered for the active piece of work in this Kiro IDE session because this version does not provide the submitted message. Update Kiro IDE or start a new piece of work from a scope whose default already uses the lower setting. You can still select strict or turn a fence on.\n");
+    process.stderr.write(loweringRefusal(refused));
     return 2;
   }
   // A count started again above leaves no latch that matches it.
@@ -2708,12 +2732,7 @@ function buildForward(): Forward {
       // remembered as the chat, opens no turn, and the core hook records it as
       // HOST_TURN with nothing of the person's on it. Anything unknown is the
       // person's.
-      const origin = kiroTurnOrigin({
-        sessionId: eventSessionId,
-        chatSessionId: process.env.KIRO_SESSION_ID,
-        prompt: ide.userPrompt ?? "",
-        templates: KIRO_WORKFLOW_HOST_TEMPLATES,
-      });
+      const origin = messageOrigin();
       if (origin.kind === "host") {
         return {
           hook: "aidlc-record-human-turn.ts",

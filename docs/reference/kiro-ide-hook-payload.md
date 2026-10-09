@@ -364,13 +364,15 @@ cards doing the work, and the guard notes nothing for them.
   reply sent to a file, a value cmd.exe would split, PowerShell code in an
   argument), so the agent is not told
   to run the call again: the terminal command typed again, or a call naming a
-  tool file, gets the fallback's refusal with its output instead, also when it
-  carries such a character; a lowering setter keeps its own refusal, which names
-  the way out. It covers the dispatcher or the native `aidlc` with any
+  tool file, or a lowering setter, gets the fallback's refusal with its output
+  instead, also when it carries such a character; on a build that hides the
+  person's message a lowering setter gets its own refusal, which names the way
+  out. It covers the dispatcher or the native `aidlc` with any
   arguments, for any project, a name the shell builds at run time, and a call
   that names no AIDLC at all. No reading of the command decides which call is
   harmless. Tools that are not a shell are not this check's. A turn moves on only with the
-  person's message (`UserPromptSubmit`): an agent run Kiro starts without one
+  person's message (`UserPromptSubmit`; a prompt Kiro made itself, recorded as
+  `HOST_TURN`, moves no turn on): an agent run Kiro starts without one
   keeps the turn, and the person's next message releases it. The same-turn
   shell check judges only the chat the payload's `session_id` names, against a
   turn that chat has recorded: with no session in the payload, another chat's
