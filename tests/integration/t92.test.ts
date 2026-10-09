@@ -60,6 +60,7 @@ import {
   mkdtempSync,
   readdirSync,
   readFileSync,
+  realpathSync,
   rmSync,
   symlinkSync,
   writeFileSync,
@@ -863,6 +864,46 @@ describe("t92 local ESLint resolution", () => {
     mkdirSync(pkg, { recursive: true });
     writeFileSync(join(pkg, "package.json"), '{"name":"app","private":true}\n');
     expect(localEslintPath(pkg)).toBeNull();
+  });
+
+  test.each(["eslint.config.mts", "eslint.config.cts"])("a TypeScript flat config (%s) beside eslint 8 keeps the pinned fallback", (config) => {
+    const { proj } = localEslintProject("8.57.1", config);
+    expect(localEslintPath(proj)).toBeNull();
+  });
+
+  // A stray flat config above the project (in $HOME, say) governs nothing in
+  // it: the search stops at the directory holding the install.
+  test("a flat config above the directory holding the install does not override the project's .eslintrc", () => {
+    const outer = realpathSync(mkdtempSync(join(tmpdir(), "aidlc-t92-stray-flat-")));
+    tempDirs.push(outer);
+    writeFileSync(join(outer, "eslint.config.js"), "export default [];\n");
+    const proj = join(outer, "proj");
+    const pkg = join(proj, "node_modules", "eslint");
+    mkdirSync(join(pkg, "bin"), { recursive: true });
+    writeFileSync(join(proj, "package.json"), '{"private":true}\n');
+    writeFileSync(join(pkg, "package.json"), JSON.stringify({ name: "eslint", version: "8.57.1" }));
+    writeFileSync(join(proj, ".eslintrc.cjs"), "module.exports = {};\n");
+    const cli = join(pkg, "bin", "eslint.js");
+    writeFileSync(cli, "// resolver fixture; never executed\n");
+    expect(localEslintPath(proj)).toBe(cli);
+  });
+
+  // pnpm links node_modules/eslint into node_modules/.pnpm/…; the bound is the
+  // link's directory, not the resolved store path, so a stray config above
+  // the project still does not count.
+  test("a pnpm-linked eslint 8 keeps that bound", () => {
+    const outer = realpathSync(mkdtempSync(join(tmpdir(), "aidlc-t92-pnpm-")));
+    tempDirs.push(outer);
+    writeFileSync(join(outer, "eslint.config.js"), "export default [];\n");
+    const proj = join(outer, "proj");
+    const store = join(proj, "node_modules", ".pnpm", "eslint@8.57.1", "node_modules", "eslint");
+    mkdirSync(join(store, "bin"), { recursive: true });
+    writeFileSync(join(proj, "package.json"), '{"private":true}\n');
+    writeFileSync(join(store, "package.json"), JSON.stringify({ name: "eslint", version: "8.57.1" }));
+    writeFileSync(join(store, "bin", "eslint.js"), "// resolver fixture; never executed\n");
+    symlinkSync(store, join(proj, "node_modules", "eslint"), process.platform === "win32" ? "junction" : "dir");
+    writeFileSync(join(proj, ".eslintrc.cjs"), "module.exports = {};\n");
+    expect(localEslintPath(proj)).toBe(join(store, "bin", "eslint.js"));
   });
 
   test("eslint 8 with .eslintrc: the sensor runs the project's install and reports its finding", () => {
