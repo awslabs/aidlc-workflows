@@ -1,4 +1,4 @@
-// covers: function:transposeScopeGrid, function:canonicalScopeGridJson, function:compileStageGraph, function:subgraphForScope, subcommand:aidlc-graph:compile
+// covers: function:transposeScopeGrid, function:canonicalScopeGridJson, function:compileStageGraph, function:subgraphForScope, function:unmetProducerInPlan, function:scopeGridStages, subcommand:aidlc-graph:compile
 //
 // t124 — scope-shape transpose: per-stage `scopes:` frontmatter -> the
 // compiled EXECUTE/SKIP grid (scope-grid.json). Migrated from
@@ -77,6 +77,7 @@ import {
   subgraphForScope,
   transposeScopeGrid,
 } from "../../dist/claude/.claude/tools/aidlc-graph.ts";
+import { unmetProducerInPlan } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
@@ -177,75 +178,45 @@ describe("transposeScopeGrid() — pure transpose (in-process)", () => {
   });
 
   const withPredicate = [
-    { slug: "maker", number: "1.1", scopes: ["full"], produces: ["widget"] },
+    { slug: "maker", number: "1.1", phase: "construction", scopes: ["full"], produces: ["widget"] },
     {
       slug: "user",
       number: "1.2",
+      phase: "operation",
       scopes: ["full", "lean"],
       produces: [],
       when: { "producer-in-plan": "widget" },
     },
   ] as unknown as Parameters<typeof transposeScopeGrid>[0];
 
-  test("a predicate whose producer is in the same scope stays EXECUTE", () => {
-    expect(transposeScopeGrid(withPredicate).full.stages).toEqual({
-      maker: "EXECUTE",
-      user: "EXECUTE",
-    });
-  });
-
-  test("a predicate whose producer is absent from the scope demotes to SKIP", () => {
+  test("a stage whose producer-in-plan input is missing stays on the plan", () => {
     expect(transposeScopeGrid(withPredicate).lean.stages).toEqual({
       maker: "SKIP",
-      user: "SKIP",
-    });
-  });
-
-  test("demotion cascades to a stage whose own producer was just demoted", () => {
-    const chained = [
-      {
-        slug: "second",
-        number: "1.1",
-        scopes: ["full", "lean"],
-        produces: [],
-        when: { "producer-in-plan": "report" },
-      },
-      {
-        slug: "user",
-        number: "1.2",
-        scopes: ["full", "lean"],
-        produces: ["report"],
-        when: { "producer-in-plan": "widget" },
-      },
-      { slug: "maker", number: "1.3", scopes: ["full"], produces: ["widget"] },
-    ] as unknown as Parameters<typeof transposeScopeGrid>[0];
-    expect(transposeScopeGrid(chained).lean.stages).toEqual({
-      maker: "SKIP",
-      user: "SKIP",
-      second: "SKIP",
-    });
-    expect(transposeScopeGrid(chained).full.stages).toEqual({
-      maker: "EXECUTE",
       user: "EXECUTE",
-      second: "EXECUTE",
     });
   });
 
-  test("an optional_produces producer satisfies the predicate", () => {
+  test("the missing input is named for the stage only where its producer is off the plan", () => {
+    const grid = transposeScopeGrid(withPredicate);
+    expect(unmetProducerInPlan(withPredicate, grid.lean.stages)).toEqual([
+      { stage: "user", artifact: "widget" },
+    ]);
+    expect(unmetProducerInPlan(withPredicate, grid.full.stages)).toEqual([]);
+  });
+
+  test("an optional_produces producer on the plan satisfies the input", () => {
     const optional = [
-      { slug: "maker", number: "1.1", scopes: ["full"], produces: [], optional_produces: ["widget"] },
-      {
-        slug: "user",
-        number: "1.2",
-        scopes: ["full"],
-        produces: [],
-        when: { "producer-in-plan": "widget" },
-      },
+      { slug: "maker", number: "1.1", phase: "construction", scopes: ["full"], optional_produces: ["widget"] },
+      { slug: "user", number: "1.2", phase: "operation", scopes: ["full"], when: { "producer-in-plan": "widget" } },
     ] as unknown as Parameters<typeof transposeScopeGrid>[0];
-    expect(transposeScopeGrid(optional).full.stages).toEqual({
-      maker: "EXECUTE",
-      user: "EXECUTE",
-    });
+    expect(unmetProducerInPlan(optional, transposeScopeGrid(optional).full.stages)).toEqual([]);
+  });
+
+  test("a producer the person skipped from the plan leaves the input missing", () => {
+    expect(unmetProducerInPlan(withPredicate, { maker: "SKIP", user: "EXECUTE" })).toEqual([
+      { stage: "user", artifact: "widget" },
+    ]);
+    expect(unmetProducerInPlan(withPredicate, { maker: "EXECUTE", user: "SKIP" })).toEqual([]);
   });
 });
 
