@@ -7315,10 +7315,15 @@ describe("t218 a shell call on a turn whose terminal command already ran is refu
       expect(notice("sess_bare_a").code).toBe(0);
       expect(notice("sess_step").code).toBe(0);
       expect(shell(dir, "aidlc next", "sess_bare_a").code).toBe(2);
-      // A marker left open past its age, or one that holds no time, is a
-      // closed turn: the notice after it is not held.
+      // A marker left open past its age, one ahead of the clock (the clock went
+      // back), or one that holds no time is a closed turn: the notice after it
+      // is not held.
       const marker = join(dir, "aidlc", ".aidlc-sessions", "sess_bare_a.turn-open");
-      for (const left of [`${new Date(Date.now() - 5 * 60 * 60 * 1000).toISOString()}\n`, "not a time\n"]) {
+      for (const left of [
+        `${new Date(Date.now() - 5 * 60 * 60 * 1000).toISOString()}\n`,
+        `${new Date(Date.now() + 60 * 60 * 1000).toISOString()}\n`,
+        "not a time\n",
+      ]) {
         writeFileSync(marker, left, "utf-8");
         expect(notice("sess_bare_a").code).toBe(0);
         expect(shell(dir, "aidlc next", "sess_bare_a").code, JSON.stringify(left)).toBe(0);

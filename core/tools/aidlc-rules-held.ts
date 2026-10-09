@@ -333,9 +333,10 @@ function hostRunsThisChat(harness: string, sessionId: string): boolean {
 /**
  * Kiro IDE: a prompt opens its chat's turn, and the turn's Stop closes it.
  */
-// Whether a turn-open marker still counts: it holds a readable time no older
-// than OPEN_TURN_MAX_MS. One that cannot be read, holds no time or is older is
-// a closed turn.
+// Whether a turn-open marker still counts: it holds a readable time, not later
+// than now and no older than OPEN_TURN_MAX_MS. One that cannot be read, holds
+// no time, lies ahead of the clock (the clock went back) or is older is a
+// closed turn.
 function openTurnMarkerCounts(path: string, now: number): boolean {
   let at = NaN;
   try {
@@ -343,7 +344,7 @@ function openTurnMarkerCounts(path: string, now: number): boolean {
   } catch {
     // A marker that cannot be read counts as an old one.
   }
-  return Number.isFinite(at) && now - at <= OPEN_TURN_MAX_MS;
+  return Number.isFinite(at) && at <= now && now - at <= OPEN_TURN_MAX_MS;
 }
 
 /** Whether a Kiro IDE chat has a turn open: the person's message opened it, no Stop has closed it, and it is not stale. */
