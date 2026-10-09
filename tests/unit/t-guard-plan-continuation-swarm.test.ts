@@ -24,6 +24,7 @@ import {
   evaluateCodeGenerationApproval, parseTestingContract, renderTestingContract,
   resolveCodeGenerationAuthority, resolveTestingPosture, resolveTestingPostureFromSections,
 } from "../../dist/claude/.claude/tools/aidlc-testing-posture.ts";
+import { publishPlanApprovalSkip } from "../../dist/claude/.claude/tools/aidlc-plan-approval-ask.ts";
 import {
   AIDLC_SRC, cleanupWorktreeFixture, fixtureIntentId8, resetAidlcEnv,
   seedAidlcMemory, seedBoltDagBatches, seededStateFile, setupWorktreeFixture,
@@ -113,7 +114,7 @@ function human(pd: string, session: string, prompt: string): void {
   }));
 }
 
-function fixture(grouped = false): string {
+function fixture(grouped = false, approve = true): string {
   const pd = setupWorktreeFixture();
   const units = grouped ? GROUP_UNITS : [UNIT];
   projects.push(pd);
@@ -206,6 +207,7 @@ function fixture(grouped = false): string {
   }
   git(pd, ["add", "-A"]);
   git(pd, ["commit", "-qm", "swarm continuation fixture"]);
+  if (!approve) return pd;
   const session = "swarm-continuation-plan";
   appendAuditEntry("SESSION_STARTED", { Session: session, Source: "swarm continuation fixture" }, pd);
   const choice = grouped ? "Approve Plans" : "Approve Plan";
@@ -1087,5 +1089,41 @@ describe("prepare reads the answer the engine recorded", () => {
     for (const line of ["B. Request Changes", "Approve", ""]) {
       expect(evidence(line), line).toThrow("Plan Approval questions file must contain exactly [Answer]: Approve Plan");
     }
+  });
+});
+
+// With plan approval off the engine builds the plan without asking and keeps its
+// own record of that (the questions file reads "Plan approval off", the receipt
+// is marked skipped). A parallel batch forks its workers from that record the
+// way generation start reads it; nobody is asked for a label the person never gave.
+describe("prepare with plan approval off", () => {
+  test("the engine's own plan-approval-off record forks the worker and starts the Bolt", () => {
+    const pd = fixture(false, false);
+    const statePath = seededStateFile(pd);
+    writeFileSync(statePath, readFileSync(statePath, "utf-8").replace(
+      "- **Guard Policy**: strict (set by you)\n",
+      "- **Guard Policy**: strict (set by you)\n- **Plan Approval**: off (set by you)\n",
+    ));
+    publish(pd);
+    // The engine's switch, as `next` runs it when it issues the batch: the record it leaves is the one prepare reads.
+    const directive = { kind: "invoke-swarm", stage: STAGE, units: [UNIT] } as unknown as Parameters<typeof publishPlanApprovalSkip>[1];
+    expect(publishPlanApprovalSkip(pd, directive)).toBe(true);
+    const questions = readFileSync(join(codeGenerationRecordDir(pd, UNIT), "code-generation-questions.md"), "utf-8");
+    expect(questions).toContain("[Answer]: Plan approval off");
+    const approval = evaluateCodeGenerationApproval(pd, TARGET);
+    expect(approval.ok, approval.reason).toBe(true);
+    expect(approval.skipped).toBe(true);
+    expect(readAuditShardEvents(pd).filter((row) => row.event === "PLAN_APPROVAL_SKIPPED")).toHaveLength(1);
+
+    const prepared = prepare(pd);
+    expect(prepared.code, `${prepared.out}\n${prepared.err}`).toBe(0);
+    expect(`${prepared.out}\n${prepared.err}`).not.toContain("must contain exactly [Answer]");
+    const worker = child(pd);
+    expect(existsSync(join(worker, "src", `${UNIT}.ts`))).toBe(true);
+    expect(starts(pd)).toHaveLength(1);
+    // The worker builds from the delegated record, and nobody was asked anything.
+    expect(codeGenerationExecutionAllowed(worker, TARGET)).toBe(true);
+    expect(readAuditShardEvents(pd).filter((row) => row.event === "PLAN_APPROVAL_RECORDED")).toHaveLength(0);
+    expect(readFileSync(join(codeGenerationRecordDir(pd, UNIT), "code-generation-questions.md"), "utf-8")).toBe(questions);
   });
 });

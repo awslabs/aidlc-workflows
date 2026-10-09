@@ -4381,33 +4381,36 @@ function approvalWorktreeProvenance(parentDir: string, childDir: string, unit: s
   return { parent, child, repo, intentUuid, hash: hashObject(creation.block) };
 }
 
+// The parent's approval a Unit forks from, read the way generation start reads
+// it (prepareCodeGenerationStart, the one owner of that judgement): the
+// person's current approval, the engine's own plan-approval-off record (the
+// questions file reads "Plan approval off" and the receipt is marked skipped;
+// that is the engine's record, not a label the person wrote, so the file is
+// not re-read for one here), or a lowered fence's continuation of an earlier
+// approval. What the owner refuses, the fork refuses with the owner's reason.
 function parentWorktreeApproval(parentDir: string, unit: string) {
-  const approval = evaluateCodeGenerationApproval(parentDir, { unit });
-  const continuation = approval.ok ? null : codeGenerationContinuation(parentDir, { unit });
-  if (continuation && !continuation.receipt.delegation && !continuation.receipt.override) {
-    const { authority, artifacts, receipt } = continuation;
-    const evidence: PlanApprovalQuestionEvidence = {
-      authority,
-      fingerprint: receipt.fingerprint,
-      questionsPath: artifacts.questionsPath,
-      questionsRelativePath: receipt.questionsFile,
-      questionsSha256: createHash("sha256").update(artifacts.questions, "utf-8").digest("hex"),
-      promptSha256: receipt.promptSha256,
-      plannedSourceSha256: questionsFilePlannedSource(artifacts.questions) ?? UNBINDABLE_FINGERPRINT,
-      changeNotices: [],
-    };
-    return { evidence, receipt, continuing: true };
+  let started: ReturnType<typeof prepareCodeGenerationStart>;
+  try {
+    started = prepareCodeGenerationStart(parentDir, { unit });
+  } catch (error) {
+    throw new Error(`Parent Plan Approval is not current: ${errorMessage(error)}`);
   }
-  const evidence = codeGenerationPlanApprovalQuestionEvidence(
-    parentDir, { unit }, join(codeGenerationRecordDir(parentDir, unit), "code-generation-questions.md"),
-    "Approve Plan", { breakGlass: true },
-  );
-  const receipt = readPlanApprovalReceipt(parentDir, runtimeIdentity(evidence));
-  if (!receipt || receipt.delegation || receipt.override) {
+  const { authority, receipt, continuation } = started;
+  if (receipt.delegation || receipt.override) {
     throw new Error("Worktree execution requires an ordinary protected parent Plan Approval; chained delegation and overrides cannot certify its source.");
   }
-  if (!approval.ok) throw new Error(`Parent Plan Approval is not current: ${approval.reason}`);
-  return { evidence, receipt, continuing: false };
+  const artifacts = continuation?.artifacts ?? codeGenerationApprovalArtifacts(parentDir, authority);
+  const evidence: PlanApprovalQuestionEvidence = {
+    authority,
+    fingerprint: receipt.fingerprint,
+    questionsPath: artifacts.questionsPath,
+    questionsRelativePath: receipt.questionsFile,
+    questionsSha256: createHash("sha256").update(artifacts.questions, "utf-8").digest("hex"),
+    promptSha256: receipt.promptSha256,
+    plannedSourceSha256: questionsFilePlannedSource(artifacts.questions) ?? UNBINDABLE_FINGERPRINT,
+    changeNotices: [],
+  };
+  return { evidence, receipt, continuing: continuation !== null };
 }
 
 /**
