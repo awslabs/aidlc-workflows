@@ -7650,8 +7650,8 @@ function detectedCandidateChoices(
   const kiro = detected.findIndex((candidate) => candidate.stamp.distribution === "kiro");
   const kiroIde = detected.findIndex((candidate) => candidate.stamp.distribution === "kiro-ide");
   if (kiro !== -1 && kiroIde > kiro) {
-    const [shared] = detected.splice(kiroIde, 1);
-    detected.splice(kiro, 0, shared);
+    const [preferred] = detected.splice(kiroIde, 1);
+    detected.splice(kiro, 0, preferred);
   }
   // In the terminal of a harness's own editor, that harness leads: it is
   // chosen outright when no other harness CLI is found, and is the default

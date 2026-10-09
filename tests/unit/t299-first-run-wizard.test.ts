@@ -1064,11 +1064,14 @@ describe("t299 first-run setup wizard", () => {
     });
     expect(withClaude.status, withClaude.stdout + withClaude.stderr).toBe(0);
     expect(withClaude.stdout).toContain(`    1. Claude Code     (detected, default)\n`);
+    expect(withClaude.stdout).toContain(`    5. Kiro CLI${" ".repeat(8)}(detected)\n`);
+    expect(withClaude.stdout).toContain(`    6. Kiro IDE${" ".repeat(8)}(detected)\n`);
     expect(withClaude.stdout).toContain("Using Claude Code.");
     expect(existsSync(join(withClaude.project, ".kiro"))).toBe(false);
 
     const legacy = runWizard("5\n\n", { harnesses: { claude: { found: false }, ...bothKiro } });
     expect(legacy.status, legacy.stdout + legacy.stderr).toBe(0);
+    expect(legacy.stdout).toContain(`    6. Kiro IDE${" ".repeat(8)}(detected, default)\n`);
     expect(legacy.stdout).toContain("Using Kiro CLI.");
     expect(existsSync(join(legacy.project, ".kiro", "agents", "aidlc.json"))).toBe(true);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);

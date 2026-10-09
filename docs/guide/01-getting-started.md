@@ -68,7 +68,8 @@ available. It detects installed harnesses, provider state, runtime needs, and
 trust actions before writing anything.
 
 On Kiro CLI 2.24.1 or later, use `kiro-ide`, which pins Kiro's v3 engine;
-`kiro` is the legacy row (see [Kiro CLI](harnesses/kiro-cli.md)).
+`kiro` is the legacy row ([Kiro CLI](harnesses/kiro-cli.md) says how an
+existing `kiro` project switches).
 
 If you use Kiro IDE's own terminal in a project folder you have not trusted
 yet, Kiro first asks whether you trust it. AI-DLC's hooks run only in a trusted
