@@ -2302,6 +2302,51 @@ function releasePreparationRegistration(pd: string, unit: string): void {
   });
 }
 
+// The worktree of a Unit prepared in the current attempt, or null. It exists,
+// its metadata names this unit, batch, stage, attempt and repository (the
+// fields resume compares), and the attempt's own SWARM_STARTED named the unit.
+// A failed fork (no start row), another attempt's leftover and a discarded
+// worker are not retained; they take the ordinary path, which refuses as before.
+function retainedSwarmWorktree(
+  pd: string, batch: string, unit: string, identity: BoltIdentity, attempt: SwarmAttemptStamp, repoName: string | null,
+): string | null {
+  const worktree = identity.dir;
+  const metaPath = join(worktree, ".aidlc", "worktree-meta.json");
+  if (!existsSync(worktree) || !existsSync(metaPath)) return null;
+  let meta: Record<string, unknown>;
+  try {
+    assertNoSymlinkInChainOrThrow(realpathSync(worktree), relative(worktree, metaPath));
+    meta = JSON.parse(readRegularFileNoFollowOrThrow(metaPath, "prepared worktree metadata").toString("utf-8"));
+  } catch {
+    return null;
+  }
+  if (meta.version !== 1 || meta.boltSlug !== identity.slug || meta.swarmUnit !== unit || meta.swarmBatch !== batch ||
+    meta.swarmStage !== attempt.stage || meta.swarmFloor !== attempt.floor || meta.repoSelector !== repoName) return null;
+  const prepared = preparedSwarmAttempt(pd, batch, unit, identity);
+  return prepared !== null && prepared.stage === attempt.stage && prepared.floor === attempt.floor ? worktree : null;
+}
+
+// A claimed Unit whose records already merged back in this attempt: its slug has
+// left Bolt Refs and the attempt's BOLT_STARTED is followed by BOLT_COMPLETED,
+// STATE_MERGED, AUDIT_MERGED and its own SWARM_UNIT_CONVERGED row. A finalize
+// run again after the Unit's landing failed reports it as it stands.
+function alreadyMergedBack(pd: string, batch: string, unit: string, slug: string, attempt: SwarmAttemptStamp | undefined): boolean {
+  if (!attempt) return false;
+  if (parseRefsList(getField(readStateFile(pd), "Bolt Refs") ?? "").includes(slug)) return false;
+  const rows = readAuditShardEvents(pd);
+  const started = latestResumeRow(rows.filter((row) =>
+    row.event === "BOLT_STARTED" && auditBlockField(row.block, "Bolt slug") === slug));
+  if (!started) return false;
+  const followed = (event: string, field: string, value: string): boolean => rows.some((row) =>
+    row.event === event && auditBlockField(row.block, field) === value && attemptEventDefinitelyBefore(started, row));
+  return followed("BOLT_COMPLETED", "Bolt slug", slug) && followed("STATE_MERGED", "Bolt slug", slug) &&
+    followed("AUDIT_MERGED", "Bolt slug", slug) &&
+    rows.some((row) => row.event === "SWARM_UNIT_CONVERGED" &&
+      auditBlockField(row.block, "Unit name") === unit && auditBlockField(row.block, "Batch number") === batch &&
+      auditBlockField(row.block, "Stage") === attempt.stage && auditBlockField(row.block, "Run floor") === attempt.floor &&
+      attemptEventDefinitelyBefore(started, row));
+}
+
 function resolveSwarmSelection(projectDir: string, flags: Record<string, string>): WorkflowSelection {
   const ambient = resolveWorkflowSelection(projectDir);
   if (flags.intent === undefined && flags.space === undefined) return ambient;
@@ -2426,6 +2471,20 @@ function handlePrepare(rest: string[]): void {
       identityErrors.set(unit, error.message);
     }
   }
+  // A Unit already prepared in this attempt keeps its worktree. The person's
+  // Retry after a failed landing, or a session that comes back, runs this
+  // command again; the Unit's fork, Bolt start and approval transfer already
+  // happened, so nothing is re-forked and the parent's moved source (a staged
+  // landing, a peer that landed first) is no reason to ask for the plan again.
+  // A changed plan still fails the approval check above; a checkpoint revision,
+  // a discard and --resume-existing keep their own paths.
+  const retained = new Map<string, string>();
+  if (!resumeExisting) {
+    for (const [unit, identity] of identities) {
+      const worktree = retainedSwarmWorktree(projectDir, flags.batch, unit, identity, attempt, repoName);
+      if (worktree !== null) retained.set(unit, worktree);
+    }
+  }
   if (resumeExisting) {
     if (!selected.intent || relativeRecordDir(projectDir, selected.intent, selected.space) !== relativeRecordDir(projectDir)) {
       fail("--resume-existing must target the active intent and space");
@@ -2469,7 +2528,7 @@ function handlePrepare(rest: string[]): void {
       // Validate the entire batch before the first fork or generation receipt.
       // An approved dirty parent is not a reproducible worktree base.
       for (const unit of units) {
-        if (identityErrors.has(unit)) continue;
+        if (identityErrors.has(unit) || retained.has(unit)) continue;
         if (!resumes.has(unit) || resumes.get(unit)!.recreate) {
           const resume = resumes.get(unit) ?? discardedPreparations.get(unit);
           validateCodeGenerationForkApproval(
@@ -2485,7 +2544,7 @@ function handlePrepare(rest: string[]): void {
   if (requiresExecutionAllowance) {
     try {
       for (const unit of units) {
-        if (identityErrors.has(unit)) continue;
+        if (identityErrors.has(unit) || retained.has(unit)) continue;
         swarmChangeNotices.push(...beginCodeGeneration(projectDir, { unit }));
       }
     } catch (error) {
@@ -2509,6 +2568,7 @@ function handlePrepare(rest: string[]): void {
     ok: boolean;
     worktree_path?: string;
     resumed?: boolean;
+    retained?: boolean;
     revision?: string;
     archive_path?: string;
     error?: string;
@@ -2526,6 +2586,11 @@ function handlePrepare(rest: string[]): void {
       continue;
     }
     const identity = identities.get(unit)!;
+    const kept = retained.get(unit);
+    if (kept !== undefined) {
+      prepared.push({ unit, ok: true, worktree_path: kept, retained: true });
+      continue;
+    }
     const resume = resumes.get(unit);
     const discarded = resume ?? discardedPreparations.get(unit);
     if (resume && !resume.recreate) {
@@ -2697,7 +2762,9 @@ function handlePrepare(rest: string[]): void {
   // before creation would let a failed re-prepare in a later stage attempt
   // relabel an old preserved worktree with the current attempt, allowing stale
   // data to pass finalize's exact-attempt check.
-  const readyUnits = prepared.filter((unit) => unit.ok && !resumes.get(unit.unit)?.alreadyResumed).map((unit) => unit.unit);
+  const readyUnits = prepared
+    .filter((unit) => unit.ok && !unit.retained && !resumes.get(unit.unit)?.alreadyResumed)
+    .map((unit) => unit.unit);
   if (readyUnits.length > 0) {
     emitSwarmStarted(
       projectDir,
@@ -3015,8 +3082,16 @@ function handleFinalize(rest: string[]): void {
   // the lock was ever held; complete --merge reaches the add/add-conflict abort
   // pinned at the composed surface by the worktree-merge tests.
   const mergeFailures: { unit: string; detail: string }[] = [];
+  // A Unit whose records merged back earlier in this attempt (finalize run again
+  // after its landing failed) is reported converged as it stands: nothing merges
+  // twice and no second convergence row is written.
+  const mergedBefore = new Set<string>();
   for (const unit of [...genuine].sort()) {
     const boltSlug = swarmBoltSlug(unit);
+    if (alreadyMergedBack(projectDir, batch, unit, boltSlug, preparedAttempts.get(unit))) {
+      mergedBefore.add(unit);
+      continue;
+    }
     const recordSnapshot = recordSnapshots.get(unit);
     const recordMergeError = recordSnapshot
       ? mergeReviewedRecordSnapshot(projectDir, unit, recordSnapshot)
@@ -3048,7 +3123,7 @@ function handleFinalize(rest: string[]): void {
   const mergeFailed = new Set(mergeFailures.map((f) => f.unit));
   for (const r of results) {
     if (r.status === "converged") {
-      if (!mergeFailed.has(r.unit)) {
+      if (!mergeFailed.has(r.unit) && !mergedBefore.has(r.unit)) {
         const attempt = preparedAttempts.get(r.unit);
         if (attempt) {
           emitUnitConverged(

@@ -1029,12 +1029,12 @@ function handleReleaseMerge(args: string[]): void {
 // Resolve the per-Bolt forked state file path for `slug`. Returns null when
 // the worktree directory or state file is absent (a missing forked state
 // file is treated as "not held" — the caller proceeds without refusal).
-function forkedStateFilePath(
+function forkedState(
   pd: string,
   slug: string,
   intent?: string,
   space?: string,
-): string | null {
+): { worktree: string; statePath: string } | null {
   const selection = resolveWorkflowSelection(pd, { intent, space });
   const identity = resolveBoltIdentity(pd, slug, selection);
   const wtPath = identity.dir;
@@ -1043,7 +1043,11 @@ function forkedStateFilePath(
   const recordPrefix = relativeRecordDir(pd, intent, space);
   const wtStatePath = worktreeStateFilePath(wtPath, recordPrefix);
   if (!existsSync(wtStatePath)) return null;
-  return wtStatePath;
+  return { worktree: wtPath, statePath: wtStatePath };
+}
+
+function forkedStateFilePath(pd: string, slug: string, intent?: string, space?: string): string | null {
+  return forkedState(pd, slug, intent, space)?.statePath ?? null;
 }
 
 function isMergeHeld(pd: string, slug: string, intent?: string, space?: string): boolean {
@@ -1055,20 +1059,26 @@ function isMergeHeld(pd: string, slug: string, intent?: string, space?: string):
 }
 
 function setMergeHeld(pd: string, slug: string, held: boolean, intent?: string, space?: string): void {
-  const path = forkedStateFilePath(pd, slug, intent, space);
-  if (!path) {
+  const forked = forkedState(pd, slug, intent, space);
+  if (!forked) {
     error(
       `No per-Bolt forked state file for slug "${slug}" — was \`aidlc-bolt start --worktree --slug ${slug}\` run?`
     );
   }
-  const content = readFileSync(path, "utf-8");
-  const updated = setOrInsertField(
-    content,
-    "## Project Information",
-    "Merge-Held",
-    held ? "true" : "false",
-  );
-  writeFileSync(path, updated, "utf-8");
+  const content = readFileSync(forked.statePath, "utf-8");
+  const value = held ? "true" : "false";
+  // Nothing to change (a release on a Bolt that was never held): the forked
+  // state and the worker's issued step stay exactly as they are.
+  if ((getField(content, "Merge-Held") ?? "false") === value) return;
+  const updated = setOrInsertField(content, "## Project Information", "Merge-Held", value);
+  writeFileSync(forked.statePath, updated, "utf-8");
+  // The hold is coordination state, not a new step: the worker's issued
+  // directive stays current, so its approval checks keep passing after finalize.
+  try {
+    keepActiveDirectiveOverAutonomyWrite(forked.worktree, content, updated);
+  } catch (e) {
+    recordHookDrop(forked.worktree, "active-directive", errorMessage(e));
+  }
 }
 
 // --- Subcommand: dispatch-event ---
