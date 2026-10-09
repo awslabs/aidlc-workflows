@@ -374,17 +374,16 @@ function transform(
     s = substituteToken(s, harnessDir, invoke);
     s = applyRulesRename(s, harnessDir, rulesRename);
     if (harness) s = projectTierFrontmatter(s, srcPath, harness);
-    // Cursor, opencode, and Copilot persona bodies are mutable active-space
-    // pointers. Ship their memory references on the default seed so the first
-    // startup's repointHarnessIncludes(project, "default") is byte-identical;
-    // later space switches still rewrite the same concrete segment in place.
+    // Cursor, opencode, and Copilot persona bodies read the method by path:
+    // the engine's git-ignored copy of the active space's memory
+    // (aidlc-includes.ts ACTIVE_MEMORY_DIR), the same path on every install.
     const posixPath = srcPath.split(sep).join("/");
     if (
       (harness === "cursor" || harness === "opencode" || harness === "copilot") &&
       posixPath.includes("/agents/") &&
       posixPath.endsWith("-agent.md")
     ) {
-      s = s.replaceAll("aidlc/spaces/<active-space>/memory/", "aidlc/spaces/default/memory/");
+      s = s.replaceAll("aidlc/spaces/<active-space>/memory/", "aidlc/active-memory/");
     }
     return Buffer.from(s, "utf-8");
   }
@@ -1065,11 +1064,14 @@ function rewriteKiroNativeAllowlists(outRoot: string, m: HarnessManifest): void 
       // `bun <dir>/tools/aidlc.ts engine *` on a persona, which the tool
       // rewrite above turned into `aidlc engine engine *`) is that same
       // prefix, so the pair collapses to one entry. A persona's ask lines get
-      // the same doubled prefix and lose it the same way.
+      // the same doubled prefix and lose it the same way. The asks on a risky
+      // shell form after an AI-DLC command (`bun <dir>/tools/aidlc*<form>*`)
+      // take the native command name as their prefix, as the persona deny does.
       const value = readFileSync(file, "utf-8");
       const trusted = `- "${trustedCommand("*")}"`;
       const rewritten = value
         .replaceAll(`- "bun ${m.harnessDir}/tools/aidlc-*"`, trusted)
+        .replaceAll(`- "bun ${m.harnessDir}/tools/aidlc*`, `- "aidlc*`)
         .replaceAll(`- "${trustedCommand("engine ")}`, `- "${trustedCommand("")} `)
         .replaceAll(`${trusted}\n        ${trusted}`, trusted);
       if (rewritten !== value) writeFileSync(file, rewritten);

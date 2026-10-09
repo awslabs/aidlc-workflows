@@ -101,7 +101,7 @@ Based on the approved plan, generate 4 artifacts in `<record>/inception/units-ge
 
 **unit-of-work.md:**
 - Unit definitions (name, description, boundaries)
-- A stable short ID `U{n}` for every Unit and its construction directory name `u{n}-{description}`. Include both in a table (`Unit ID` and `Directory`) so downstream tools can join story-map IDs to filesystem paths.
+- A stable short ID `U{n}` for every Unit and its directory. The directory is the Unit's name from the edge block below: the engine writes the Unit's construction artifacts under `construction/<unit-name>/`, so name each Unit `u{n}-{description}` and the ID reads off its directory. Include both in a table (`Unit ID` and `Directory`) so downstream tools can join story-map IDs to filesystem paths.
 - Unit responsibilities (what each unit owns and delivers)
 - Deployment model per unit (standalone, shared, embedded)
 - Relative complexity estimate per unit (S/M/L/XL)

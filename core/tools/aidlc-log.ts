@@ -3867,7 +3867,10 @@ function handleReview(args: string[]): void {
   }
 
   if (retryPending) {
-    error("--retry-pending cannot be combined with --verdict.");
+    error(
+      "--retry-pending cannot be combined with --verdict. Run the request with --retry-pending first " +
+        "(no --verdict), dispatch the reviewer again, then record its verdict with --verdict.",
+    );
   }
   if (!flags.iteration || !/^[1-9][0-9]*$/.test(flags.iteration)) {
     error("Recording a review verdict requires --iteration <positive integer>.");
@@ -4064,11 +4067,20 @@ function handleReview(args: string[]): void {
         verdict === "NOT-READY";
       const embeddedLegacy = body === null && !incompleteFallback && appendedAfterRequest;
       if (body === null && !incompleteFallback && !embeddedLegacy) {
+        // After a retry the slot was reopened, so a review written before the
+        // retry is not there any more: the step is a fresh dispatch, not a
+        // search for the earlier file.
         refuseReview(
-          `Cannot record review for "${flags.stage}": no review was written for ` +
-            `iteration ${iteration}. The reviewer writes its review to ` +
-            `${readFrom.draftRelative}; a retried ` +
-            "incomplete attempt records --verdict NOT-READY without a review.",
+          pendingRequest.retried
+            ? `Cannot record review for "${flags.stage}": no review was written for ` +
+              `iteration ${iteration} since the request was retried. The retry reopened the review ` +
+              `slot, so dispatch the reviewer to write ${readFrom.draftRelative} again, then record ` +
+              "the verdict; a retried attempt that ends with no review records --verdict NOT-READY " +
+              "without one."
+            : `Cannot record review for "${flags.stage}": no review was written for ` +
+              `iteration ${iteration}. The reviewer writes its review to ` +
+              `${readFrom.draftRelative}; a retried ` +
+              "incomplete attempt records --verdict NOT-READY without a review.",
         );
       }
       let reviewBytes = body ?? snapshot.appendix;

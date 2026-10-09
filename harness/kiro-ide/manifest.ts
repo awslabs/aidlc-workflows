@@ -67,10 +67,15 @@ const copyShellDeny = new Map<string, string[]>(
 // does not rest on how a Kiro build splits a command. A bare PowerShell
 // grouping is the terminal guard's (aidlcCodeArgumentHazard in the Kiro IDE
 // adapter).
-// Ask beats every allow, so a command holding one asks the person whatever it
-// starts with. The conductor (agents/aidlc.md) carries the same list; t148
-// checks every agent.
-const SHELL_FORM_ASKS = RISKY_SHELL_FORMS.map((form) => `*${form}*`);
+// An AI-DLC command holding one asks the person: the allow above names one
+// command, and such a form would stretch it to another. The asks start with
+// the same AI-DLC prefix as the persona deny (riskyFormDenyLines), so the
+// person's own commands (a build, a test, a probe, with their redirects and
+// chains) meet no AI-DLC rule: Kiro's own rules and their Always allow decide
+// them (#2199). The conductor (agents/aidlc.md) carries the same list; t148
+// checks every agent; the native release spells the prefix `aidlc`
+// (rewriteKiroNativeAllowlists in scripts/package.ts).
+const SHELL_FORM_ASKS = RISKY_SHELL_FORMS.map((form) => `bun .kiro/tools/aidlc*${form}*`);
 
 // A persona's own tools and permissions are enforced only when the conductor
 // dispatches through invoke_sub_agent (IDE) or orchestrate_subagent (CLI); the
@@ -257,6 +262,9 @@ const manifest: HarnessManifest = {
           "sha256:88d6960720e5cd14f848a5e93ba9a503322518fe180c4bf55bcc3a6b8c151394",
           // The variant shipped before AI-DLC wrote the memory text into the steering file.
           "sha256:28a69800dcac189aa2a976820db237b45bcf6dd7d7e6d4fae5c1603225b9957a",
+          // The variant shipped before the block ignored aidlc/active-memory/ (the
+          // engine's copy of the active space's method).
+          "sha256:a21217e44700aa0d6e703ebb524c4e07a3c4c12f7097d1923034b10b9a6d0549",
         ],
       },
     },

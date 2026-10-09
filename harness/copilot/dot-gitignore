@@ -1,6 +1,7 @@
 # AI-DLC: local working files
 aidlc/active-space
 aidlc/.aidlc-active-space-*.tmp
+aidlc/active-memory/
 aidlc/spaces/*/intents/active-intent
 aidlc/.aidlc-clone-id
 aidlc.settings.local.json

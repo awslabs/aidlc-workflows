@@ -802,17 +802,90 @@ describe("t92 Group C: FAILED real round-trip per sensor", () => {
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });
 
+// Fake ESLint 8 CLI: records its argv beside itself and answers the sensor's
+// three calls (version probe, config probe, lint) the way ESLint 8 does on a
+// project whose .eslintrc names a rule it cannot load.
+const FAKE_ESLINT_8_CLI = [
+  'const fs = require("node:fs");',
+  'const path = require("node:path");',
+  "const args = process.argv.slice(2);",
+  'fs.appendFileSync(path.join(__dirname, "calls.log"), JSON.stringify(args) + "\\n");',
+  'if (args[0] === "--version") { process.stdout.write("v8.57.1\\n"); process.exit(0); }',
+  'if (args[0] === "--print-config") { process.stdout.write("{}\\n"); process.exit(0); }',
+  "process.stdout.write(JSON.stringify([{ filePath: args[args.length - 1], errorCount: 1, warningCount: 0, messages: [",
+  '  { ruleId: null, severity: 2, message: "Definition for rule \'no-float-money\' was not found.", line: 1, column: 1 },',
+  '] }]) + "\\n");',
+  "process.exit(1);",
+  "",
+].join("\n");
+
 describe("t92 local ESLint resolution", () => {
-  test.each(["10.11.0", "9.39.5"])("accepts only the pinned major from local eslint %s", (version) => {
+  // A project that installed its own ESLint chose that version and its config
+  // together, so the sensor runs that install whatever its major; the pinned
+  // bunx fallback is for projects with none. One exception keeps the case the
+  // pin was added for: a flat eslint.config.* beside an ESLint older than 9
+  // goes to the pin, which can read it.
+  function localEslintProject(version: string, configFile: string): { proj: string; cli: string } {
     const proj = mkdtempSync(join(tmpdir(), "aidlc-t92-local-eslint-"));
     tempDirs.push(proj);
     const pkg = join(proj, "node_modules", "eslint");
     mkdirSync(join(pkg, "bin"), { recursive: true });
     writeFileSync(join(proj, "package.json"), '{"private":true}\n');
     writeFileSync(join(pkg, "package.json"), JSON.stringify({ name: "eslint", version }));
+    writeFileSync(join(proj, configFile), "module.exports = {};\n");
     const cli = join(pkg, "bin", "eslint.js");
     writeFileSync(cli, "// resolver fixture; never executed\n");
-    expect(localEslintPath(proj)).toBe(version.startsWith("10.") ? cli : null);
+    return { proj, cli };
+  }
+
+  test.each(["10.11.0", "9.39.5", "8.57.1"])("the project's own eslint %s runs with its .eslintrc", (version) => {
+    const { proj, cli } = localEslintProject(version, ".eslintrc.cjs");
+    expect(localEslintPath(proj)).toBe(cli);
+  });
+
+  test.each(["10.11.0", "9.39.5"])("the project's own eslint %s runs with its flat config", (version) => {
+    const { proj, cli } = localEslintProject(version, "eslint.config.js");
+    expect(localEslintPath(proj)).toBe(cli);
+  });
+
+  test("a flat config beside eslint 8 keeps the pinned fallback", () => {
+    const { proj } = localEslintProject("8.57.1", "eslint.config.js");
+    expect(localEslintPath(proj)).toBeNull();
+  });
+
+  // A monorepo hoists ESLint to the root and keeps one flat config there; the
+  // sensor's project root is the nearest package.json, the package's own. The
+  // ancestor's flat config still governs that package, so a pre-9 hoisted
+  // install takes the pin here too, or its rules would be dropped.
+  test("a flat config above a nested package beside hoisted eslint 8 keeps the pinned fallback", () => {
+    const { proj } = localEslintProject("8.57.1", "eslint.config.js");
+    const pkg = join(proj, "packages", "app");
+    mkdirSync(pkg, { recursive: true });
+    writeFileSync(join(pkg, "package.json"), '{"name":"app","private":true}\n');
+    expect(localEslintPath(pkg)).toBeNull();
+  });
+
+  test("eslint 8 with .eslintrc: the sensor runs the project's install and reports its finding", () => {
+    const { proj, cli } = localEslintProject("8.57.1", ".eslintrc.cjs");
+    writeFileSync(cli, FAKE_ESLINT_8_CLI);
+    mkdirSync(join(proj, "src"));
+    const file = join(proj, "src", "sample.ts");
+    writeFileSync(file, "export const price = 0.1 + 0.2;\n");
+    const res = spawnSync(
+      BUN,
+      [join(TOOLS_DIR, "aidlc-sensor-linter.ts"), "--stage", "code-generation", "--file-path", file],
+      { encoding: "utf-8", cwd: proj, timeout: remainingOperationTimeoutMs(NATIVE_FIXTURE_SETUP_TIMEOUT_MS) },
+    );
+    expect(res.status, `${res.stdout}${res.stderr}`).toBe(0);
+    const verdict = JSON.parse(res.stdout);
+    expect(verdict.pass).toBe(false);
+    expect(verdict.errorCount).toBe(1);
+    expect(verdict.violations[0].message).toContain("no-float-money");
+    const calls = readFileSync(join(dirname(cli), "calls.log"), "utf-8")
+      .trim()
+      .split("\n")
+      .map((line) => (JSON.parse(line) as string[])[0]);
+    expect(calls).toEqual(["--version", "--print-config", "--format"]);
   });
 });
 

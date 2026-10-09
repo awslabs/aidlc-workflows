@@ -128,6 +128,8 @@ import {
   hookDebug,
   hookExecutionRecoveryText,
   humanPresenceGuardDisabled,
+  NOT_ANSWERED_YET_STEP,
+  promptHookRanRecently,
   isAutonomousMode,
   isSwitchableGuardFence,
   listIntentDirs,
@@ -2303,10 +2305,18 @@ function unrecordedAnswerRelay(projectDir: string): string {
 
 if (target === "enforce-approval-gate") {
   if (approvalGateAwaitsHuman()) {
+    // The prompt hook ran for this work and nothing moved since (its heartbeat
+    // is fresh): the person has not answered the gate yet, so the one step is
+    // to end the turn, and the person hears nothing. Only when that heartbeat
+    // is missing or far behind could a reply have gone unrecorded, and the
+    // relay says what happened and the tool's own step.
+    const pd = process.cwd();
     process.stderr.write(
       "An approval is waiting for the person's answer, so nothing runs until they give it: end the turn. " +
-        `If they already answered, that answer was not recorded. ${unrecordedAnswerRelay(process.cwd())} ` +
-        "If that does not fix it, `/aidlc --doctor` shows what else to fix.\n",
+        (promptHookRanRecently(pd)
+          ? `${NOT_ANSWERED_YET_STEP}\n`
+          : `If they already answered, that answer was not recorded. ${unrecordedAnswerRelay(pd)} ` +
+            "If that does not fix it, `/aidlc --doctor` shows what else to fix.\n"),
     );
     return 2; // Kiro reject contract: exit 2 + stderr BLOCKS the tool call.
   }

@@ -2339,6 +2339,29 @@ describe("t271 review iteration ceiling", () => {
     expect(record.findings).toEqual([]);
   });
 
+  test("a verdict line repeated word for word records: a reviewer told to end with the verdict line writes it twice", () => {
+    const proj = seedProject("feature");
+    writeReviewedArtifact(proj, "requirements-analysis", "reviewed requirements\n");
+    const request = [
+      "--stage", "requirements-analysis",
+      "--reviewer", "aidlc-product-lead-agent",
+      "--iteration", "1",
+    ];
+    const requested = runReview(proj, request);
+    expect(requested.status, requested.stderr).toBe(0);
+    const { reviewFile } = JSON.parse(requested.stdout) as { reviewFile: string };
+    const draft = join(proj, reviewFile);
+    mkdirSync(dirname(draft), { recursive: true });
+    writeFileSync(
+      draft,
+      `${reviewAppendix("aidlc-product-lead-agent", 1, "READY").trimStart()}\n**Verdict:** READY\n`,
+      "utf-8",
+    );
+    const recorded = runReview(proj, [...request, "--verdict", "READY"], { AIDLC_TEST_NO_REVIEW_FILE: "1" });
+    expect(recorded.status, recorded.stderr).toBe(0);
+    expect(auditBlocks(proj, "REVIEW_COMPLETED")).toHaveLength(1);
+  });
+
   test("only one owned canonical Review section may occupy the appended suffix", () => {
     const cases = [
       {
@@ -2526,7 +2549,10 @@ describe("t271 review iteration ceiling", () => {
     // a later H2) and as the deprecated appended section (where the section
     // must open with the heading). In a review file a plain `#` or `##` line
     // is recorded as `###` and the check decides on those bytes, so a review
-    // that is whole apart from those lines records with none left.
+    // that is whole apart from those lines records with none left. A section
+    // repeated whole is not one of those: made `###`, it is a second Review
+    // section, refused by name (the record would read the first one's findings
+    // only).
     const demotedInAReviewFile = new Set<string>([
       "semantic bytes before heading",
       "later H1 section",
@@ -2560,8 +2586,7 @@ describe("t271 review iteration ceiling", () => {
             expectedError = "no later rendered H1 or H2 heading";
           }
           if (scenario.name === "duplicate review section") {
-            // Made `###`, the second section's ownership lines are duplicates.
-            expectedError = "exactly one canonical verdict line";
+            expectedError = "the review has two Review sections; keep one and write it whole";
           }
         } else {
           appendFileSync(artifact, scenario.suffix, "utf-8");

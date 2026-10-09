@@ -889,12 +889,16 @@ function toolsTestPayloadPrecheck(): CopyPrecheck {
   };
 }
 
+// A plugin persona reads the method from the engine's copy of the active
+// space's memory (aidlc/active-memory/, the same fixed path on every install),
+// as the shipped personas do.
 function projectOpencodeAgentMemory(raw: string): string {
   return raw
-    .replaceAll(".aidlc/rules/aidlc-org.md", "aidlc/spaces/default/memory/org.md")
-    .replaceAll(".aidlc/rules/aidlc-team.md", "aidlc/spaces/default/memory/team.md")
-    .replaceAll(".aidlc/rules/aidlc-project.md", "aidlc/spaces/default/memory/project.md")
-    .replaceAll(".aidlc/rules/", "aidlc/spaces/default/memory/");
+    .replaceAll(".aidlc/rules/aidlc-org.md", "aidlc/active-memory/org.md")
+    .replaceAll(".aidlc/rules/aidlc-team.md", "aidlc/active-memory/team.md")
+    .replaceAll(".aidlc/rules/aidlc-project.md", "aidlc/active-memory/project.md")
+    .replaceAll(".aidlc/rules/", "aidlc/active-memory/")
+    .replaceAll("aidlc/spaces/<active-space>/memory/", "aidlc/active-memory/");
 }
 
 function projectCursorNativeAgent({ file, content }: CopyContext): string {

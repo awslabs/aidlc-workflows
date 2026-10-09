@@ -238,11 +238,20 @@ releases need human approval. After approval, the job downloads the attested
 candidate, rechecks the tag and checksums, and creates the GitHub Release:
 
 ```bash
+bun scripts/release-notes.ts \
+  --tag "$RELEASE_TAG" \
+  --changelog "$PWD/CHANGELOG.md" \
+  --out "$RUNNER_TEMP/release-notes.md"
 gh release create "$RELEASE_TAG" build/release/* \
   --verify-tag \
   --title "AI-DLC ${RELEASE_TAG#v}" \
-  --generate-notes
+  --notes-file "$RUNNER_TEMP/release-notes.md"
 ```
+
+The body is this version's `CHANGELOG.md` entry, read after the recheck above so
+it can only come from the authorized commit, and a missing or empty entry fails
+the job before it creates the release. GitHub's own generated notes are not
+used: their "What's Changed" list names every contributing account by handle.
 
 The job then compares the local asset names with the asset names returned by
 the GitHub Release API. A missing or extra upload fails the workflow.

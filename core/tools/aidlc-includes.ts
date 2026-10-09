@@ -1,49 +1,32 @@
-// aidlc-includes.ts — the harness-native rule-include re-pointer.
+// aidlc-includes.ts: what each harness reads the AI-DLC method from.
 //
 // The AIDLC method (the layered practice files org/team/project + phase rules)
 // lives ONCE at the workspace root under aidlc/spaces/<space>/memory/. Each
-// harness reads it via its OWN native include, evaluated by the CLI *before*
-// AIDLC's engine runs:
-//   • Claude — an @-import stub at <harness>/rules/aidlc.md naming each method file.
-//   • Kiro CLI — a `resources` glob in each agents/*.json.
-//   • Kiro IDE: an always-included steering file holding the memory text
+// harness pulls it into ambient context through its OWN native include,
+// evaluated by the CLI *before* AIDLC's engine runs:
+//   - Claude: an @-import stub at <harness>/rules/aidlc.md naming each method file.
+//   - Kiro CLI: a `resources` glob in each agents/*.json.
+//   - Kiro IDE: an always-included steering file holding the memory text
 //     (Kiro IDE does not expand file references in steering; see
 //     kiroIdeSteering below).
-//   • Codex — the AIDLC_RULES_DIR env var in config.toml.
-//   • opencode — the `instructions` glob in the project-root opencode.json.
-//   • Cursor — standing + phase read pointers in <harness>/rules/*.mdc.
+//   - opencode: the `instructions` glob in the project-root opencode.json.
+//   - Cursor: standing + phase read pointers in <harness>/rules/*.mdc.
+//   - Copilot: @-import lines in AI-DLC's part of the root AGENTS.md.
+//   - Codex has no include: the engine hands each step its rules.
 //
-// These surfaces stay COMMITTED (each carries load-bearing engine wiring beyond
-// the include — Kiro's agent JSON holds the conductor prompt + hook block,
-// Codex's config.toml holds model/provider/sandbox config — so they cannot be
-// gitignored+generated without a fresh-clone chicken-and-egg). They ship pointed
-// at the `default` space. `repointHarnessIncludes(projectDir, space)` does a
-// SURGICAL in-place rewrite of ONLY the `aidlc/spaces/<X>/memory` pointer
-// segment, leaving every other byte untouched. The one exception is Kiro IDE's
-// steering file, which carries no wiring: it is gitignored and written whole
-// from the memory files.
-//
-// It runs at two moments: bootstrap (first `/aidlc` / --doctor / SessionStart —
-// idempotent no-op when the pointer already matches the active space) and on a
-// `/aidlc space <name>` switch (rewrites the pointer to the new space). At the
-// `default` space the rewrite is a byte-identical no-op, so a single-team user's
-// committed tree never dirties — only a multi-space switch produces a local
-// (uncommitted, per-user) modification, driven by the gitignored `active-space`
-// cursor.
-//
-// Why rewrite-in-place and not a symlink: a spike proved Kiro's resources glob
-// will not walk a symlinked root (plain `find` doesn't follow symlinks) and
-// Windows cannot portably create links — both DEAD. Plain file writes are the
-// only Windows-safe, Kiro-walkable mechanism. The CLI re-reads the rewritten
-// file on the next turn (spike-verified live on Claude + Kiro).
-//
-// This is the ONLY runtime writer of these surfaces. Best-effort per surface:
-// a surface whose source can't be read/parsed is skipped, never corrupted — and
-// since the includes are committed, a failed rewrite leaves the prior (valid)
-// pointer in place, recoverable by re-running.
+// Every include names ONE fixed, git-ignored location, aidlc/active-memory/
+// (ACTIVE_MEMORY_DIR): a copy of the active space's memory files that the
+// engine refreshes (refreshActiveMemory) at session start, on a space switch or
+// space create, when a specialist is dispatched, and with each step whose rules
+// it sends in full. So a space switch changes no tracked file: the committed
+// includes are the same for every teammate, and each person's copy follows
+// their own gitignored active-space cursor. (Why a copy and not a link: Windows
+// cannot portably create links, and Kiro's resources glob does not walk a
+// linked root.) The engine's own resolver reads aidlc/spaces/<space>/memory/
+// directly and never needs the copy.
 
 import { spawnSync } from "node:child_process";
-import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { basename, dirname, join, relative, sep } from "node:path";
 import {
   assertProjectionPathHasNoSymlinks,
@@ -58,7 +41,7 @@ import {
   rootIntegrationTarget,
   unionBlocks,
 } from "./aidlc-distribution.ts";
-import { activeSpace, harnessDir, sessionsDir, writeFileAtomic } from "./aidlc-lib.ts";
+import { activeSpace, sessionsDir, writeFileAtomic } from "./aidlc-lib.ts";
 import { discoverProjectHarnesses, runtimeHarnessName } from "./aidlc-runtime-paths.ts";
 
 /** Workspace-relative POSIX memory path for a space: `aidlc/spaces/<space>/memory`.
@@ -66,53 +49,6 @@ import { discoverProjectHarnesses, runtimeHarnessName } from "./aidlc-runtime-pa
  *  every OS. */
 function spaceMemoryRel(space: string): string {
   return `aidlc/spaces/${space}/memory`;
-}
-
-// A prior-space memory path inside a Claude @-line: `@<dots>/aidlc/spaces/<X>/memory/<file>`.
-// Captures the leading `@` + any relative `../` prefix (group 1) and the file
-// sub-path under memory/ (group 2) so only the `spaces/<X>` segment is swapped.
-const CLAUDE_AT_LINE = /^(@(?:\.\.\/)*)aidlc\/spaces\/[^/]+\/memory\/(.+)$/;
-
-/** Rewrite every method @-import line in a Claude stub to the given space,
- *  preserving the relative prefix, the named file, the comment header, and all
- *  non-@ lines verbatim. Returns null when nothing changed (already on `space`).*/
-function repointClaudeStub(raw: string, space: string): string | null {
-  const rel = spaceMemoryRel(space);
-  let changed = false;
-  const out = raw
-    .split("\n")
-    .map((line) => {
-      const m = line.match(CLAUDE_AT_LINE);
-      if (!m) return line;
-      const next = `${m[1]}${rel}/${m[2]}`;
-      if (next !== line) changed = true;
-      return next;
-    })
-    .join("\n");
-  return changed ? out : null;
-}
-
-/** Rewrite the memory glob in a Kiro agent JSON's `resources` array to the given
- *  space, preserving every other entry (skill://…, file://AGENTS.md) and every
- *  other field. Parse→edit→re-serialize (NOT string replace) so the round-trip
- *  is structural. Returns null when there is no memory glob or it already matches.
- */
-function repointKiroAgentResources(raw: string, space: string): string | null {
-  const json = JSON.parse(raw) as { resources?: unknown };
-  if (!Array.isArray(json.resources)) return null;
-  const target = `file://${spaceMemoryRel(space)}/**/*.md`;
-  let changed = false;
-  const rewritten = json.resources.map((r) => {
-    if (typeof r === "string" && /^file:\/\/aidlc\/spaces\/[^/]+\/memory\/\*\*\/\*\.md$/.test(r)) {
-      if (r !== target) changed = true;
-      return target;
-    }
-    return r;
-  });
-  if (!changed) return null;
-  json.resources = rewritten;
-  // Two-space indent + trailing newline matches the authored agent JSON shape.
-  return `${JSON.stringify(json, null, 2)}\n`;
 }
 
 // --- Kiro IDE: the memory text in the always-included steering file ----------
@@ -187,28 +123,43 @@ function kiroIdeReferenceSteering(space: string): string {
   ].join("\n");
 }
 
-/** The steering file Kiro IDE should hold for `space`, and the memory files
- *  (project-relative) whose exact text it carries. `inlined` is empty when the
- *  text cannot be inlined (a file that is not UTF-8, or a memory too large). */
-export function kiroIdeSteering(projectDir: string, space: string): { text: string; inlined: string[] } {
+/** The memory files of `space` as inline blocks (`<memory-file path="...">`),
+ *  with the project-relative path of each; null when the text cannot be put in
+ *  a chat (a file that is not UTF-8, a memory too large, or no file at all).
+ *  `only` limits it to those files (by their path under memory/). */
+export function inlineMemoryFiles(
+  projectDir: string,
+  space: string,
+  only?: readonly string[],
+): { parts: string[]; inlined: string[]; bytes: number } | null {
   const rel = spaceMemoryRel(space);
   const memoryDir = join(projectDir, ...rel.split("/"));
   const parts: string[] = [];
   const inlined: string[] = [];
   let bytes = 0;
-  for (const file of memoryLayerFiles(memoryDir)) {
+  for (const file of memoryLayerFiles(memoryDir).filter((name) => only === undefined || only.includes(name))) {
     let text: string;
     try {
       text = new TextDecoder("utf-8", { fatal: true }).decode(readFileSync(join(memoryDir, file)));
     } catch {
-      return { text: kiroIdeReferenceSteering(space), inlined: [] };
+      return null;
     }
     bytes += Buffer.byteLength(text, "utf-8");
-    if (bytes > KIRO_IDE_INLINE_MAX_BYTES) return { text: kiroIdeReferenceSteering(space), inlined: [] };
+    if (bytes > KIRO_IDE_INLINE_MAX_BYTES) return null;
     parts.push(`<memory-file path="${rel}/${file}">\n${text}${text.endsWith("\n") ? "" : "\n"}</memory-file>\n`);
     inlined.push(`${rel}/${file}`);
   }
-  if (inlined.length === 0) return { text: kiroIdeReferenceSteering(space), inlined: [] };
+  return inlined.length === 0 ? null : { parts, inlined, bytes };
+}
+
+/** The steering file Kiro IDE should hold for `space`, and the memory files
+ *  (project-relative) whose exact text it carries. `inlined` is empty when the
+ *  text cannot be inlined (a file that is not UTF-8, or a memory too large). */
+export function kiroIdeSteering(projectDir: string, space: string): { text: string; inlined: string[] } {
+  const rel = spaceMemoryRel(space);
+  const inline = inlineMemoryFiles(projectDir, space);
+  if (inline === null) return { text: kiroIdeReferenceSteering(space), inlined: [] };
+  const { parts, inlined } = inline;
   return {
     text: [
       ...KIRO_IDE_STEERING_HEAD,
@@ -262,11 +213,7 @@ export function trackedKiroIdeSteeringAsk(projectDir: string): string {
   if (!kiroIdeTree(projectDir)) return "";
   const marker = join(sessionsDir(projectDir), TRACKED_STEERING_ASKED);
   if (existsSync(marker)) return "";
-  // A repository's fsmonitor program is never run just to word this ask, the
-  // same rule every git command AI-DLC runs for its own bookkeeping follows.
-  const listed = spawnSync("git", [
-    "-c", "core.fsmonitor=false", "ls-files", "--error-unmatch", "--", KIRO_IDE_STEERING,
-  ], {
+  const listed = spawnSync("git", ["ls-files", "--error-unmatch", "--", KIRO_IDE_STEERING], {
     cwd: projectDir,
     stdio: "ignore",
     timeout: 5000,
@@ -289,293 +236,92 @@ export function trackedKiroIdeSteeringAsk(projectDir: string): string {
     "On no, leave it. Do not ask again.";
 }
 
-/** Rewrite live memory references in Kiro IDE's always-included steering file. */
-function repointKiroSteeringReferences(raw: string, space: string): string | null {
-  const target = spaceMemoryRel(space);
-  const next = raw.replace(
-    /(#\[\[file:)aidlc\/spaces\/[^/]+\/memory\//g,
-    `$1${target}/`,
-  );
-  return next === raw ? null : next;
+// --- The copy every harness include reads ------------------------------------
+
+/** Where the harness includes read the active space's method from: a copy of
+ *  `aidlc/spaces/<space>/memory/`, git-ignored and refreshed by the engine. */
+export const ACTIVE_MEMORY_DIR = "aidlc/active-memory";
+
+function activeMemoryCopyDir(projectDir: string): string {
+  return join(projectDir, ...ACTIVE_MEMORY_DIR.split("/"));
 }
 
-/** Rewrite the AIDLC_RULES_DIR value in a Codex config.toml to the given space's
- *  memory dir, preserving the rest of the file verbatim. Returns null when the
- *  line is absent or already correct. */
-function repointCodexConfig(raw: string, space: string): string | null {
-  const target = spaceMemoryRel(space);
-  const re = /(AIDLC_RULES_DIR\s*=\s*")aidlc\/spaces\/[^"]*\/memory(")/;
-  if (!re.test(raw)) return null;
-  const next = raw.replace(re, `$1${target}$2`);
-  return next === raw ? null : next;
+function spaceMemoryDir(projectDir: string, space: string): string {
+  return join(projectDir, ...spaceMemoryRel(space).split("/"));
 }
 
-/** Rewrite the method glob in an opencode.json/jsonc `instructions` array to
- *  the given space, preserving comments, trailing commas, and every byte
- *  outside the one matching string. Returns null when there is no method glob
- *  or it already matches. */
-function repointOpencodeInstructions(raw: string, space: string): string | null {
-  const target = `${spaceMemoryRel(space)}/**/*.md`;
-  const next = raw.replace(
-    /(")aidlc\/spaces\/[^/"]+\/memory\/\*\*\/\*\.md(")/g,
-    `$1${target}$2`,
-  );
-  return next === raw ? null : next;
+/** The first line of every copied file: the file to edit, so an edit made in
+ *  the copy (by a person, or an agent that found it through an include path) is
+ *  never lost without notice; the next refresh replaces the copy. */
+export function activeMemoryCopyHeader(space: string, rel: string): string {
+  return `<!-- AI-DLC keeps this copy in step with ${spaceMemoryRel(space)}/${rel}. Edit that file; this copy is replaced. -->\n`;
 }
 
-/** Rewrite active-space memory paths in an opencode persona body. */
-function repointOpencodeAgentMemory(raw: string, space: string): string | null {
-  // <space>-style documentation placeholders are never space names.
-  const next = raw.replace(
-    /aidlc\/spaces\/(?!<)[^/]+\/memory\//g,
-    `${spaceMemoryRel(space)}/`,
-  );
-  return next === raw ? null : next;
-}
-
-/** Surgically repoint a single committed include file to `space` using `rewrite`,
- *  writing atomically only when the content changes. Records the workspace-
- *  relative path in `written`. Absent / unreadable / malformed → skipped (the
- *  committed prior pointer stays valid). */
-function repointFile(
-  absPath: string,
-  relPath: string,
-  raw: string,
-  space: string,
-  rewrite: (raw: string, space: string) => string | null,
-  written: string[],
-): void {
-  let next: string | null;
+// A file's text, or null when it is not UTF-8 (then it is not copied).
+function utf8Text(path: string): string | null {
   try {
-    next = rewrite(raw, space);
-  } catch {
-    return; // malformed source → leave it untouched, never corrupt
-  }
-  if (next !== null) {
-    writeFileAtomic(absPath, next);
-    written.push(relPath);
-  }
-}
-
-/** An include file's text as repointHarnessIncludes writes it for `space`, by
- *  its workspace-relative path, or null when the path is not an include it
- *  rewrites or nothing changes. A config refresh writes AI-DLC's updated
- *  files this way, so a space switch survives it. */
-export function repointedIncludeText(rel: string, text: string, space: string): string | null {
-  const path = rel.replaceAll("\\", "/");
-  const rewrite = path === ".claude/rules/aidlc.md" || path === "AGENTS.md"
-    ? repointClaudeStub
-    : /^\.kiro\/agents\/[^/]+\.json$/.test(path)
-    ? repointKiroAgentResources
-    : /^\.cursor\/(?:rules\/[^/]+\.mdc|agents\/[^/]+\.md)$/.test(path) ||
-        /^(?:\.aidlc|\.opencode|\.github)\/agents\/[^/]+\.md$/.test(path)
-    ? repointOpencodeAgentMemory
-    : path === "opencode.json" || path === "opencode.jsonc"
-    ? repointOpencodeInstructions
-    : null;
-  if (!rewrite) return null;
-  try {
-    return rewrite(text, space);
+    return new TextDecoder("utf-8", { fatal: true }).decode(readFileSync(path));
   } catch {
     return null;
   }
 }
 
-/** Surgically repoint the active harness's native rule include(s) at the given
- *  space's method tree (`aidlc/spaces/<space>/memory/`). Idempotent — a no-op
- *  when the surfaces already point at `space` (so a `default`-cursor single-team
- *  user never dirties the committed tree). Touches ONLY the surfaces of the
- *  harness resolved from `harnessDir()`.
- *
- *  Returns the workspace-relative paths it actually rewrote (for --doctor /
- *  audit / tests). Pass an explicit `space` to bypass the cursor; omitted → the
- *  active-space cursor (`activeSpace(projectDir)`, cursorless → `default`). */
-export function repointHarnessIncludes(projectDir: string, space?: string): string[] {
+// What the copy of a memory file holds: the header line, then the file.
+function copiedText(projectDir: string, space: string, rel: string): string | null {
+  const text = utf8Text(join(spaceMemoryDir(projectDir, space), rel));
+  return text === null ? null : `${activeMemoryCopyHeader(space, rel)}${text}`;
+}
+
+/** The copy's files that are not the memory files of `space` now, by their path
+ *  under memory/: missing or different ones (the header line included), and ones
+ *  the space no longer has. Empty when the copy is current. */
+export function activeMemoryCopyDrift(projectDir: string, space: string): string[] {
+  const source = spaceMemoryDir(projectDir, space);
+  const copy = activeMemoryCopyDir(projectDir);
+  const wanted = memoryLayerFiles(source).filter((rel) => utf8Text(join(source, rel)) !== null);
+  return [
+    ...wanted.filter((rel) => utf8Text(join(copy, rel)) !== copiedText(projectDir, space, rel)),
+    ...memoryLayerFiles(copy).filter((rel) => !wanted.includes(rel)),
+  ];
+}
+
+/** Write the memory files of `space` into the copy, file by file, and remove
+ *  copied files the space no longer has. Returns whether anything changed.
+ *  Best effort: a file that cannot be copied leaves the chat to the rules the
+ *  engine sends with each step, and never a write through a link. */
+export function refreshActiveMemoryCopy(projectDir: string, space: string): boolean {
+  const drift = activeMemoryCopyDrift(projectDir, space);
+  if (drift.length === 0) return false;
+  const copy = activeMemoryCopyDir(projectDir);
+  let changed = false;
+  for (const rel of drift) {
+    const target = join(copy, rel);
+    try {
+      assertProjectionPathHasNoSymlinks(projectDir, `${ACTIVE_MEMORY_DIR}/${rel}`);
+      const text = copiedText(projectDir, space, rel);
+      if (text === null) {
+        rmSync(target, { force: true });
+      } else {
+        mkdirSync(dirname(target), { recursive: true });
+        writeFileAtomic(target, text);
+      }
+      changed = true;
+    } catch {
+      // This file stays as it was.
+    }
+  }
+  return changed;
+}
+
+/** Bring what the harnesses read for `space` up to date: the memory copy, and
+ *  on the Kiro IDE tree the steering file that carries the memory text.
+ *  Returns the workspace-relative paths written. `space` omitted means the
+ *  active-space cursor (cursorless: `default`). */
+export function refreshActiveMemory(projectDir: string, space?: string): string[] {
   const sp = space ?? activeSpace(projectDir);
-  const harness = harnessDir(); // ".claude" | ".kiro" | ".codex" | open-set
-  const harnessRoot = join(projectDir, harness);
   const written: string[] = [];
-
-  if (harness === ".claude") {
-    const stubPath = join(harnessRoot, "rules", "aidlc.md");
-    if (existsSync(stubPath)) {
-      const raw = readSafe(stubPath);
-      if (raw !== null) {
-        repointFile(stubPath, join(harness, "rules", "aidlc.md"), raw, sp, repointClaudeStub, written);
-      }
-    }
-    return written;
-  }
-
-  if (harness === ".cursor") {
-    // Cursor — every .cursor/rules/*.mdc method pointer lists plain paths
-    // (Cursor rules have no @-import expansion); rewrite the space segment in
-    // each one. The persona files in .cursor/agents/ carry active-space memory
-    // paths in their bodies exactly like opencode's.
-    const rulesDir = join(harnessRoot, "rules");
-    if (existsSync(rulesDir)) {
-      for (const name of readdirSync(rulesDir).sort()) {
-        if (!name.endsWith(".mdc")) continue;
-        const p = join(rulesDir, name);
-        const raw = readSafe(p);
-        if (raw === null) continue;
-        repointFile(
-          p,
-          join(harness, "rules", name),
-          raw,
-          sp,
-          repointOpencodeAgentMemory,
-          written,
-        );
-      }
-    }
-    const agentsDir = join(harnessRoot, "agents");
-    if (existsSync(agentsDir)) {
-      for (const name of readdirSync(agentsDir).sort()) {
-        if (!name.endsWith(".md")) continue;
-        const p = join(agentsDir, name);
-        const raw = readSafe(p);
-        if (raw === null) continue;
-        repointFile(
-          p,
-          join(harness, "agents", name),
-          raw,
-          sp,
-          repointOpencodeAgentMemory,
-          written,
-        );
-      }
-    }
-    return written;
-  }
-
-  if (harness === ".kiro") {
-    // Kiro CLI compatibility surface: rewrite each agents/*.json memory glob.
-    const agentsDir = join(harnessRoot, "agents");
-    if (existsSync(agentsDir)) {
-      for (const name of readdirSync(agentsDir).sort()) {
-        if (!name.endsWith(".json")) continue;
-        const p = join(agentsDir, name);
-        const raw = readSafe(p);
-        if (raw === null) continue;
-        repointFile(p, join(harness, "agents", name), raw, sp, repointKiroAgentResources, written);
-      }
-    }
-    // Kiro IDE binding surface: workspace steering is inherited by delegated
-    // agents, and it carries the active memory text itself (see
-    // kiroIdeSteering above).
-    if (refreshKiroIdeSteering(projectDir, sp)) {
-      written.push(join(harness, "steering", "aidlc-active-memory.md"));
-      return written;
-    }
-    const steeringPath = join(
-      harnessRoot,
-      "steering",
-      "aidlc-active-memory.md",
-    );
-    if (!kiroIdeTree(projectDir) && existsSync(steeringPath)) {
-      const raw = readSafe(steeringPath);
-      if (raw !== null) {
-        repointFile(
-          steeringPath,
-          join(harness, "steering", "aidlc-active-memory.md"),
-          raw,
-          sp,
-          repointKiroSteeringReferences,
-          written,
-        );
-      }
-    }
-    return written;
-  }
-
-  if (harness === ".codex") {
-    const configPath = join(harnessRoot, "config.toml");
-    if (existsSync(configPath)) {
-      const raw = readSafe(configPath);
-      if (raw !== null) {
-        repointFile(configPath, join(harness, "config.toml"), raw, sp, repointCodexConfig, written);
-      }
-    }
-    return written;
-  }
-
-  if (harness === ".aidlc") {
-    // Two harnesses ship the .aidlc runtime dir; both include surfaces are
-    // probed (each rewriter no-ops when its surface carries no method
-    // pointer, so the branches compose without a flavor probe).
-    // Copilot: the project-root AGENTS.md's @-import lines are the method
-    // include (both Copilot surfaces expand @-imports; live-verified).
-    const agentsMdPath = join(projectDir, "AGENTS.md");
-    if (existsSync(agentsMdPath)) {
-      const raw = readSafe(agentsMdPath);
-      if (raw !== null) {
-        repointFile(agentsMdPath, "AGENTS.md", raw, sp, repointClaudeStub, written);
-      }
-    }
-    // opencode: the project-root opencode.json/jsonc `instructions` glob.
-    const jsonPath = join(projectDir, "opencode.json");
-    const jsoncPath = join(projectDir, "opencode.jsonc");
-    for (const [configPath, relPath] of [
-      [jsonPath, "opencode.json"],
-      [jsoncPath, "opencode.jsonc"],
-    ] as const) {
-      if (!existsSync(configPath)) continue;
-      const raw = readSafe(configPath);
-      if (raw !== null) {
-        repointFile(
-          configPath,
-          relPath,
-          raw,
-          sp,
-          repointOpencodeInstructions,
-          written,
-        );
-      }
-    }
-    // Inline and native persona bodies carry explicit method paths for
-    // on-demand reads. Keep every surface aligned with the active-space
-    // cursor: the inline twins (.aidlc/agents), opencode's native subagents
-    // (.opencode/agents), and Copilot's native custom agents
-    // (.github/agents — the copies dispatched delegations actually load).
-    for (const relDir of [
-      join(".aidlc", "agents"),
-      join(".opencode", "agents"),
-      join(".github", "agents"),
-    ]) {
-      const agentsDir = join(projectDir, relDir);
-      if (!existsSync(agentsDir)) continue;
-      // .github/ is SHARED with user content on the Copilot harness, so touch
-      // only aidlc-named core personas or plugin-owned personas there. The
-      // AIDLC-owned engine/native dirs may contain plugin agents whose names
-      // intentionally lack the aidlc prefix.
-      const sharedGithubDir = relDir === join(".github", "agents");
-      for (const name of readdirSync(agentsDir).sort()) {
-        if (!name.endsWith(".md")) continue;
-        const p = join(agentsDir, name);
-        const raw = readSafe(p);
-        if (raw === null) continue;
-        if (
-          sharedGithubDir &&
-          !name.startsWith("aidlc-") &&
-          !/^plugin:\s*[a-z][a-z0-9-]*\s*$/m.test(raw)
-        ) {
-          continue;
-        }
-        repointFile(
-          p,
-          join(relDir, name),
-          raw,
-          sp,
-          repointOpencodeAgentMemory,
-          written,
-        );
-      }
-    }
-    return written;
-  }
-
-  // Unknown / future harness with no native include known here — nothing to do.
+  if (refreshActiveMemoryCopy(projectDir, sp)) written.push(ACTIVE_MEMORY_DIR);
+  if (refreshKiroIdeSteering(projectDir, sp)) written.push(KIRO_IDE_STEERING);
   return written;
 }
 

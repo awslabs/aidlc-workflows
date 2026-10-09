@@ -296,6 +296,20 @@ describe("what the agent reads", () => {
     );
   });
 
+  // A live run (#2199): a helper's build and probe commands came back -1 after the person declined
+  // them, or while Kiro's prompt to allow them waited for hours; the agent read it as a hung command
+  // and the skill's one -1 rule sent it to the trust step.
+  test("a -1 on a project command after AI-DLC's own commands ran is a declined or unanswered approval, not an untrusted folder", () => {
+    const skill = readFileSync(join(REPO_ROOT, "dist", "kiro-ide", ".kiro", "skills", "aidlc", "SKILL.md"), "utf-8");
+    expect(skill).toContain(
+      "After AI-DLC's own commands have run in this chat, a -1 on one of the project's commands (a build, a test, a probe) " +
+        "means Kiro did not run that command: the person declined it, or has not answered Kiro's prompt to allow it yet. " +
+        "It is not a timeout and not this folder's trust: do not retry it and do not give the trust step below; tell the " +
+        "person, in one line, that Kiro did not run the command and that they can allow it in Kiro or tell you how to go on, " +
+        "then end your turn.",
+    );
+  });
+
   test("both Kiro agent prompts say never to send an AI-DLC command's reply to a file", () => {
     const ide = readFileSync(join(REPO_ROOT, "dist", "kiro-ide", ".kiro", "agents", "aidlc.md"), "utf-8");
     const cli = (JSON.parse(readFileSync(join(REPO_ROOT, "dist", "kiro", ".kiro", "agents", "aidlc.json"), "utf-8")) as { prompt: string }).prompt;

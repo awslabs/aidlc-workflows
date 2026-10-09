@@ -11,7 +11,7 @@
 // must beat the legacy fixed-name marker while shared cursors remain write-through.
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { cpSync, existsSync, readFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   activeIntent,
@@ -172,7 +172,14 @@ describe("t311 session binding writers", () => {
     writeSessionBinding(proj, "space-session-b", "team-b", team.dirName, "switch");
     setActiveSpaceCursor(proj, "team-b");
     cpSync(AIDLC_SRC, join(proj, ".claude"), { recursive: true });
+    // The stub names the engine's copy of the active space's memory and never
+    // changes; the copy follows the session that started last.
     const stub = join(proj, ".claude", "rules", "aidlc.md");
+    const copyOrg = join(proj, "aidlc", "active-memory", "org.md");
+    for (const [space, text] of [["default", "# default org\n"], ["team-b", "# team-b org\n"]]) {
+      mkdirSync(join(proj, "aidlc", "spaces", space, "memory"), { recursive: true });
+      writeFileSync(join(proj, "aidlc", "spaces", space, "memory", "org.md"), text);
+    }
 
     expect(fireSessionStart("space-session-a")).toBe(0);
     expect(resolveWorkflowSelection(proj, { sessionId: "space-session-a" })).toMatchObject({
@@ -182,7 +189,11 @@ describe("t311 session binding writers", () => {
     expect(readAllAuditShards(proj, first.dirName, "default")).toContain(
       "**Event**: SESSION_STARTED",
     );
-    expect(readFileSync(stub, "utf-8")).toContain("aidlc/spaces/default/memory/");
+    expect(readFileSync(stub, "utf-8")).toContain("aidlc/active-memory/");
+    expect(readFileSync(stub, "utf-8")).not.toContain("aidlc/spaces/default/memory/org.md");
+    expect(readFileSync(copyOrg, "utf-8")).toBe(
+      "<!-- AI-DLC keeps this copy in step with aidlc/spaces/default/memory/org.md. Edit that file; this copy is replaced. -->\n# default org\n",
+    );
 
     expect(fireSessionStart("space-session-b")).toBe(0);
     expect(resolveWorkflowSelection(proj, { sessionId: "space-session-b" })).toMatchObject({
@@ -192,7 +203,10 @@ describe("t311 session binding writers", () => {
     expect(readAllAuditShards(proj, team.dirName, "team-b")).toContain(
       "**Event**: SESSION_STARTED",
     );
-    expect(readFileSync(stub, "utf-8")).toContain("aidlc/spaces/team-b/memory/");
+    expect(readFileSync(stub, "utf-8")).toContain("aidlc/active-memory/");
+    expect(readFileSync(copyOrg, "utf-8")).toBe(
+      "<!-- AI-DLC keeps this copy in step with aidlc/spaces/team-b/memory/org.md. Edit that file; this copy is replaced. -->\n# team-b org\n",
+    );
   });
 
   test("intent switch rebinds the nearest ancestry session, not current-session", () => {

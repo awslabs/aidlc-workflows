@@ -114,7 +114,7 @@ import {
   seededRecordDir,
   seededStateFile,
 } from "../harness/fixtures.ts";
-import { writeSessionPidEntry, stateDigest,
+import { writeSessionPidEntry, stateDigest, writeActiveDirectiveMarker,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
@@ -201,6 +201,19 @@ function seedActiveDirectiveMarker(proj: string, stage: string, unit?: string): 
       state_sha256: stateDigest(state),
     })}\n`,
   );
+}
+
+/** The marker the agent's own delivery leaves (a version-2 marker carries its kind): a rules part, or the run-stage. */
+function seedIssuedMarker(proj: string, stage: string, kind: "load-steering" | "run-stage", part?: { part: number; parts: number }): void {
+  const state = readFileSync(seededStateFile(proj), "utf-8");
+  writeActiveDirectiveMarker(proj, { kind, stage, state_sha256: stateDigest(state), ...(part ?? {}) });
+}
+
+/** The same mock engine under the Kiro layout (.kiro/tools), beside the Claude one. */
+function addKiroLayout(proj: string): Record<string, string> {
+  mkdirSync(join(proj, ".kiro", "tools"), { recursive: true });
+  writeFileSync(join(proj, ".kiro", "tools", "aidlc-orchestrate.ts"), MOCK_ENGINE, "utf-8");
+  return { AIDLC_HARNESS_DIR: ".kiro" };
 }
 
 const COPILOT_SESSION = "t121-copilot-owner";
@@ -416,6 +429,7 @@ if (kind === "done") {
     parts,
     receipt: continueToken,
     next: "bun .claude/tools/aidlc-orchestrate.ts continue " + continueToken,
+    ...(process.env.MOCK_OFFER_AUTONOMY === "1" ? { offer_autonomy: true } : {}),
     rules_content: [
       {
         path: "aidlc/spaces/default/memory/org.md",
@@ -2337,6 +2351,103 @@ describe("t121 aidlc-continue-workflow hook — forwarding-loop enforcement (mig
     expect(chosen.out).toContain('"decision":"block"');
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
+  test("(f3) the autonomy offer on a rules part ends the turn once the agent reached the run-stage, on the Claude and Kiro layouts", () => {
+    // The hook's own `next` probe gets the first rules part back, not the
+    // run-stage (the Kiro layout and a chat-owned marker never get the retained
+    // step), so a host that delivers the rules in parts saw no offer and pushed
+    // the agent on while it waited for the person's choice. The part now
+    // carries the offer, and the agent's own active-directive marker says
+    // whether it got to the step that asks: a marker at the run-stage lets the
+    // turn end; a marker at a rules part, or none, is a delivery still under
+    // way, so a quit after an earlier part is pending work as before.
+    for (const layout of ["claude", "kiro"] as const) {
+      const proj = makeProject();
+      const env = layout === "kiro" ? addKiroLayout(proj) : {};
+      seedActive(proj, "functional-design");
+      // Cap 8: two blocked probes on one state would otherwise reach the
+      // interactive no-progress cap (2) and be released by design.
+      const probe = (extra: Record<string, string>) =>
+        runHook(proj, '{"stop_hook_active":false}', "load-steering", "8", "", "functional-design", "", false, { ...env, ...extra });
+
+      // No marker yet: the offer alone is not the question.
+      expect(probe({ MOCK_OFFER_AUTONOMY: "1" }).out, `${layout}: no marker`).toContain('"decision":"block"');
+      // The agent holds part 1 of 3 and quit: still pending work.
+      seedIssuedMarker(proj, "functional-design", "load-steering", { part: 1, parts: 3 });
+      expect(probe({ MOCK_OFFER_AUTONOMY: "1" }).out, `${layout}: after part 1`).toContain('"decision":"block"');
+      // The agent reached the run-stage and asked: the turn ends.
+      seedIssuedMarker(proj, "functional-design", "run-stage");
+      const offered = probe({ MOCK_OFFER_AUTONOMY: "1" });
+      expect(offered.rc, offered.diagnostic).toBe(0);
+      expect(offered.out, `${layout}: at the run-stage`).toBe("");
+      const trace = readFileSync(join(seededRecordDir(proj), ".aidlc-engine/hooks-health", "continue-workflow.trace"), "utf-8");
+      expect(trace).toContain("autonomy-question carve-out");
+      // A rules part with no offer is pending work whatever the marker says.
+      expect(probe({}).out, `${layout}: no offer`).toContain('"decision":"block"');
+    }
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("(f) under AIDLC_UNATTENDED=1 an autonomous run keeps its conversational guard: nobody is present", () => {
+    // A driver's prompt reads as a person's, so the evidence that lets an
+    // attended run's chat turn end must not release an unattended one.
+    const transcript = makeProject();
+    seedInProgressWithQuestions(transcript, { autonomy: "autonomous" });
+    const tp = seedTranscript(transcript, { format: "claude", engineCall: false });
+    const r = runHook(
+      transcript,
+      JSON.stringify({ stop_hook_active: false, transcript_path: tp }),
+      "run-stage", "", "", "requirements-analysis", "", false,
+      { AIDLC_UNATTENDED: "1" },
+    );
+    expect((JSON.parse(r.out) as { decision?: string }).decision).toBe("block");
+
+    const markers = makeProject();
+    seedInProgressWithQuestions(markers, { autonomy: "autonomous" });
+    seedTurnMarkers(markers, { humanNewer: true });
+    const m = runHook(markers, '{"stop_hook_active":false}', "run-stage", "", "", "requirements-analysis", "", false, { AIDLC_UNATTENDED: "1" });
+    expect((JSON.parse(m.out) as { decision?: string }).decision).toBe("block");
+    // An attended interactive run under the same flag is let go by the ordinary
+    // conversational reading, as before this PR.
+    const interactive = makeProject();
+    seedInProgressWithQuestions(interactive);
+    seedTurnMarkers(interactive, { humanNewer: true });
+    const i = runHook(interactive, '{"stop_hook_active":false}', "run-stage", "", "", "requirements-analysis", "", false, { AIDLC_UNATTENDED: "1" });
+    expect(i.out).toBe("");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("(f2) under autonomous Construction an open checkpoint question (the verification command) allows the stop; a plain question does not", () => {
+    // The verification command stays the person's under autonomy (the
+    // construction module: "Wait for the human even under autonomous
+    // completion"). The conductor logs it as a checkpoint decision; nothing else
+    // marks the wait, and the hook pushed the agent on until the person's reply
+    // cancelled that turn.
+    const theirs = makeProject();
+    seedInProgressWithQuestions(theirs, { slug: "code-generation", phase: "construction", autonomy: "autonomous" });
+    seedInteractionAudit(theirs, [
+      { event: "STAGE_STARTED", stage: "code-generation" },
+      {
+        event: "DECISION_RECORDED",
+        stage: "code-generation",
+        fields: { Checkpoint: "Construction Verification Command", Decision: "Use this command to verify each completed Unit?" },
+      },
+    ]);
+    const waits = runHook(theirs, '{"stop_hook_active":false}', "run-stage", "", "", "code-generation");
+    expect(waits.rc, waits.diagnostic).toBe(0);
+    expect(waits.out).toBe("");
+    const trace = readFileSync(join(seededRecordDir(theirs), ".aidlc-engine/hooks-health", "continue-workflow.trace"), "utf-8");
+    expect(trace).toContain("pending-decision carve-out");
+
+    // A plain question under autonomy is one the agent records itself, so the
+    // loop stays alive for it.
+    const agents = makeProject();
+    seedInProgressWithQuestions(agents, { slug: "code-generation", phase: "construction", autonomy: "autonomous" });
+    seedInteractionAudit(agents, [
+      { event: "STAGE_STARTED", stage: "code-generation" },
+      { event: "DECISION_RECORDED", stage: "code-generation", fields: { Decision: "Anything to add for next time?" } },
+    ]);
+    const nudged = runHook(agents, '{"stop_hook_active":false}', "run-stage", "", "", "code-generation");
+    expect((JSON.parse(nudged.out) as { decision?: string }).decision).toBe("block");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
   test("(f2) solo unit-major keeps Current Stage authority and the legacy trace message", () => {
     const proj = makeProject();
     seedInProgressWithQuestions(proj, {
@@ -3049,10 +3160,13 @@ describe("t121 aidlc-continue-workflow hook — forwarding-loop enforcement (mig
     expect((JSON.parse(r.out) as { decision?: string }).decision).toBe("block");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-  test("(f) AUTONOMY GUARD - a chat transcript under Construction Autonomy Mode=autonomous still BLOCKS (carve-out disabled)", () => {
+  test("(f) a chat transcript under Construction Autonomy Mode=autonomous is let go: the person who wrote is present", () => {
     const proj = makeProject();
-    // Autonomous Construction: there is no human chatting to release, so the
-    // conversational carve-out is suppressed and the loop stays alive.
+    // Autonomous Construction: the person answered mid-run ("/aidlc --doctor",
+    // "should I commit?") and the agent replied with no engine call. They are
+    // present, so there is no unattended loop to protect; pushing the agent on
+    // would cancel their next message (an unattended run's turns all touch the
+    // engine, so this evidence never releases one).
     seedInProgressWithQuestions(proj, { autonomy: "autonomous" });
     const tp = seedTranscript(proj, { format: "claude", engineCall: false });
     const r = runHook(
@@ -3060,8 +3174,16 @@ describe("t121 aidlc-continue-workflow hook — forwarding-loop enforcement (mig
       JSON.stringify({ stop_hook_active: false, transcript_path: tp }),
       "run-stage",
     );
-    expect(r.rc).toBe(0);
-    expect((JSON.parse(r.out) as { decision?: string }).decision).toBe("block");
+    expect(r.rc, r.diagnostic).toBe(0);
+    expect(r.out).toBe("");
+    // The same run with the engine engaged in the responding turn is still nudged.
+    const engaged = seedTranscript(proj, { format: "claude", engineCall: true });
+    const nudged = runHook(
+      proj,
+      JSON.stringify({ stop_hook_active: false, transcript_path: engaged }),
+      "run-stage",
+    );
+    expect((JSON.parse(nudged.out) as { decision?: string }).decision).toBe("block");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("(f) AUTONOMY cap is 8 - autonomous workflow does NOT release at the interactive cap (2)", () => {
@@ -3192,15 +3314,21 @@ describe("t121 aidlc-continue-workflow hook — forwarding-loop enforcement (mig
     expect((JSON.parse(r.out) as { decision?: string }).decision).toBe("block");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-  test("(f2) MARKERS AUTONOMY GUARD - conversational-shaped markers under autonomous Construction still BLOCK", () => {
+  test("(f2) conversational-shaped markers under autonomous Construction are let go: a person who writes mid-run is present", () => {
     const proj = makeProject();
-    // No human is chatting in an unattended run, so the carve-out must stay
-    // suppressed on the marker path exactly as it is on the transcript path.
+    // The marker path reads the same as the transcript path: the person's turn
+    // is newer than the engine's last step, so they wrote and the agent answered
+    // without the engine. The hook's own continuation is a host turn and never
+    // moves the human-turn marker, so an unattended run is never released here.
     seedInProgressWithQuestions(proj, { autonomy: "autonomous" });
     seedTurnMarkers(proj, { humanNewer: true });
     const r = runHook(proj, '{"stop_hook_active":false}', "run-stage");
-    expect(r.rc).toBe(0);
-    expect((JSON.parse(r.out) as { decision?: string }).decision).toBe("block");
+    expect(r.rc, r.diagnostic).toBe(0);
+    expect(r.out).toBe("");
+    // The engine's step newer than the person's turn is the unattended shape: nudged.
+    seedTurnMarkers(proj, { humanNewer: false });
+    const nudged = runHook(proj, '{"stop_hook_active":false}', "run-stage");
+    expect((JSON.parse(nudged.out) as { decision?: string }).decision).toBe("block");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("(f2) TRANSCRIPT WINS - a delivered transcript is authoritative even when the markers disagree", () => {
@@ -4428,7 +4556,7 @@ describe("t121 aidlc-continue-workflow hook — forwarding-loop enforcement (mig
     }
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-  test("(j) supplied conversational evidence is consume-once, autonomy-guarded, and bounded in the marker transaction", () => {
+  test("(j) supplied conversational evidence is consume-once, lets an autonomous run's person go too, and is bounded in the marker transaction", () => {
     const chat = makeProject();
     seedActive(chat);
     seedCopilotDirective(chat);
@@ -4450,6 +4578,8 @@ describe("t121 aidlc-continue-workflow hook — forwarding-loop enforcement (mig
     });
     expect((JSON.parse(runCopilotStop(inverse).out) as { decision?: string }).decision).toBe("block");
 
+    // Under autonomous Construction the person's newer turn reads the same: they
+    // are present, so the turn ends (consume-once as above: the second stop blocks).
     const autonomous = makeProject();
     seedInProgressWithQuestions(autonomous, { autonomy: "autonomous" });
     seedCopilotDirective(autonomous);
@@ -4458,6 +4588,7 @@ describe("t121 aidlc-continue-workflow hook — forwarding-loop enforcement (mig
       marker.human_sequence = 2;
       marker.engine_sequence = 1;
     });
+    expect(runCopilotStop(autonomous, "8").out).toBe("");
     expect((JSON.parse(runCopilotStop(autonomous, "8").out) as { decision?: string }).decision).toBe("block");
 
     const bounded = makeProject();

@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSy
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { IntentRegistryEntry } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
-import { exactCodexUtilityArgv, expectCliSuccess, expectCreatedIntent, expectSpaceInclude } from "../harness/codex-workspace-evidence.ts";
+import { copyHeader, exactCodexUtilityArgv, expectCliSuccess, expectCreatedIntent, expectSpaceInclude } from "../harness/codex-workspace-evidence.ts";
 
 // Full Suite 35849463712, job 107144118072, exec-codex-workspace-6.log.
 // The completed command's JSON output was empty, although the root tool result
@@ -83,9 +83,14 @@ function fixture() {
   };
   const dir = join(intents, created.dirName!);
   mkdirSync(join(dir, "audit"), { recursive: true });
-  mkdirSync(join(root, ".codex"));
-  const config = join(root, ".codex", "config.toml");
-  writeFileSync(config, '[shell_environment_policy.set]\nAIDLC_RULES_DIR = "aidlc/spaces/teamb/memory"\n');
+  // The engine's copy of the active space's memory, as the switch writes it.
+  mkdirSync(join(root, "aidlc", "spaces", "teamb", "memory"), { recursive: true });
+  mkdirSync(join(root, "aidlc", "spaces", "default", "memory"), { recursive: true });
+  mkdirSync(join(root, "aidlc", "active-memory"), { recursive: true });
+  writeFileSync(join(root, "aidlc", "spaces", "teamb", "memory", "org.md"), "# teamb\n");
+  writeFileSync(join(root, "aidlc", "spaces", "default", "memory", "org.md"), "# default\n");
+  const config = join(root, "aidlc", "active-memory", "org.md");
+  writeFileSync(config, `${copyHeader("teamb", "org.md")}# teamb\n`);
   writeFileSync(join(root, "aidlc", "active-space"), "teamb\n");
   writeFileSync(join(intents, "active-intent"), `${created.dirName}\n`);
   const registry = join(intents, "intents.json");
@@ -150,8 +155,8 @@ const brokenState: [string, (f: Fixture) => void][] = [
   ["wrong project", f => editState(f, "teamB onboarding flow", "unrelated work")],
   ["wrong scope", f => editState(f, "**Scope**: poc", "**Scope**: feature")],
   ["wrong handoff status", f => editState(f, "**Status**: Running", "**Status**: Pending")],
-  ["stale native include", f => writeFileSync(f.config,
-    '[shell_environment_policy.set]\nAIDLC_RULES_DIR = "aidlc/spaces/default/memory"\n')],
+  ["stale native include", f => writeFileSync(f.config, `${copyHeader("teamb", "org.md")}# default\n`)],
+  ["copy without its first line", f => writeFileSync(f.config, "# teamb\n")],
   ["wrong active space", f => writeFileSync(join(f.root, "aidlc", "active-space"), "default\n")],
   ["missing active intent", f => rmSync(join(f.intents, "active-intent"))],
   ["wrong active intent", f => writeFileSync(join(f.intents, "active-intent"), "260922-prior-work\n")],
@@ -219,7 +224,7 @@ test("space switching requires both cursor and native include even when JSON out
     expectSpaceInclude(f.root, "teamb"));
   check();
   const config = readFileSync(f.config, "utf-8");
-  writeFileSync(f.config, config.replace("teamb", "default"));
+  writeFileSync(f.config, `${copyHeader("teamb", "org.md")}# default\n`);
   expect(check).toThrow();
   writeFileSync(f.config, config);
   writeFileSync(join(f.root, "aidlc", "active-space"), "default\n");

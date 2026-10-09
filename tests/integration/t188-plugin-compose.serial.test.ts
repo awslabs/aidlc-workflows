@@ -875,6 +875,59 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
     expect(compose.stderr).toContain("AIDLC_PROJECT_DIR");
   });
 
+  // A project installed with `config`, then composed: a same-release refresh is
+  // not a conflict on any harness. Copilot keeps its skills and agents outside
+  // the harness folder (.github/), where the composed scope row in SKILL.md and
+  // the plugin's runners used to read as local edits (exit 4, "locally modified
+  // or unowned"); Claude Code and opencode passed the same check.
+  test.each(["claude", "opencode", "copilot"] as const)(
+    "a same-release refresh after composing a scope-adding plugin plans no conflict (%s)",
+    (harness) => {
+      const release = join(REPO_ROOT, "dist-release", harness);
+      const project = mkdtempSync(join(tmp, `${harness}-refresh-after-compose-`));
+      mkdirSync(join(project, ".git"));
+      const machine = mkdtempSync(join(tmp, `${harness}-machine-`));
+      const env = {
+        ...process.env,
+        AIDLC_INSTALL_ROOT: join(machine, "share"),
+        AIDLC_BIN_DIR: join(machine, "bin"),
+        AIDLC_RUNTIME_ROOT: join(REPO_ROOT, "dist-release"),
+      };
+      const config = (...extra: string[]) =>
+        spawnSync(BUN, [
+          join(REPO_ROOT, "core", "tools", "aidlc-init.ts"),
+          "config", "--project-dir", project, "--from", release, "--harness", harness, "--mcp", "none", ...extra,
+        ], { cwd: project, encoding: "utf-8", env, timeout: remainingOperationTimeoutMs(NATIVE_FIXTURE_SETUP_TIMEOUT_MS) });
+      const installed = config("--yes");
+      expect(installed.status, `${installed.stdout}${installed.stderr}`).toBe(0);
+
+      const compose = composePluginFixture({
+        plugin: PLUGIN,
+        harness,
+        projectDir: project,
+        pluginBuilt: pluginBuilds.get(harness)!,
+        copyInstall: false,
+      });
+      expect(compose.composeStatus).toBe(0);
+      const skillsRoot = harness === "copilot" ? join(project, ".github", "skills") : join(project, harnessByName(harness).manifest.harnessDir, "skills");
+      const skill = readFileSync(join(skillsRoot, "aidlc", "SKILL.md"), "utf-8");
+      expect(skill).toContain("test-pro-validation");
+      expect(existsSync(join(skillsRoot, "test-pro-validation", "SKILL.md"))).toBe(true);
+
+      const planned = config("--yes", "--dry-run", "--json");
+      const parsed = JSON.parse(planned.stdout.slice(planned.stdout.indexOf("{"))) as {
+        data?: { actions?: Array<{ path: string; action: string; detail?: string }> };
+      };
+      const conflicts = (parsed.data?.actions ?? []).filter((item) => item.action === "conflict");
+      expect(conflicts, `${planned.stdout}${planned.stderr}`.slice(0, 2000)).toEqual([]);
+      const refreshed = config("--yes");
+      expect(refreshed.status, `${refreshed.stdout}${refreshed.stderr}`).toBe(0);
+      // The composed row and the plugin's runner survive the refresh.
+      expect(readFileSync(join(skillsRoot, "aidlc", "SKILL.md"), "utf-8")).toContain("test-pro-validation");
+      expect(existsSync(join(skillsRoot, "test-pro-validation", "SKILL.md"))).toBe(true);
+    },
+  );
+
   test("OpenCode compose emits plugin agents to both inline and native rosters", () => {
     const pluginOpenCode = pluginBuilds.get("opencode")!;
     const opencodeProject = composePluginFixture({
@@ -894,7 +947,7 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
     expect(body).not.toMatch(/^disallowedTools:/m);
     expect(body).not.toMatch(/^model: sonnet$/m);
     expect(body).not.toContain(".aidlc/rules/");
-    expect(body).toContain("aidlc/spaces/default/memory/");
+    expect(body).toContain("aidlc/active-memory/");
   });
 
   test("Copilot compose and selection use .github agent and skill surfaces", () => {
@@ -925,7 +978,7 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
     const body = readFileSync(native, "utf-8");
     expect(body).toMatch(/^tools: \["read", "edit", "search", "execute", "web", "todo"\]$/m);
     expect(body).not.toMatch(/^(model|tier|effort|disallowedTools):/m);
-    expect(body).toContain("aidlc/spaces/default/memory/");
+    expect(body).toContain("aidlc/active-memory/");
 
     const unsafePlugin = join(tmp, "plugin", "copilot-missing-disallowed-tools");
     cpSync(pluginCopilot, unsafePlugin, { recursive: true });

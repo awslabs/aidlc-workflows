@@ -225,14 +225,10 @@ function runAdapter(
   const adapterProjectDir = options.adapterProjectDir ?? projectDir;
   const env: Record<string, string | undefined> = {
     ...process.env,
-    // Hermetic git evaluation: the adapter's shell evaluator consults the
-    // REAL pager environment and global git config when classifying `git`
-    // commands, so a developer host with PAGER=less or a global core.pager
-    // (e.g. delta) flips the safe-git allow cases to deny. Point the global
-    // scope at an absent file and drop pager variables; command-text
-    // assignments inside individual test payloads are unaffected.
-    PAGER: undefined,
-    GIT_PAGER: undefined,
+    // The adapter reads the global git config when it resolves a persisted
+    // alias, so the global scope points at an absent file and a developer's own
+    // aliases stay out of the classification. A developer's pager needs no
+    // hiding any more: the adapter no longer reads one.
     GIT_CONFIG_GLOBAL: join(projectDir, ".absent-global-gitconfig"),
     GIT_CONFIG_SYSTEM: join(projectDir, ".absent-system-gitconfig"),
     AIDLC_PROJECT_DIR: projectDir,
@@ -2363,6 +2359,9 @@ if (import.meta.main) {
       `& ('Remove' + '-Item') -Force ('${dispatch.slice(0, -"-dispatch.json".length)}' + '-dispatch.json')`,
       "& ('Remove-Item'.ToString()) ordinary",
       "PWN='!echo harmless | sh' git --config-env=alias.pwn=PWN pwn",
+      // A program the agent itself hands to git, by flag or through a variable:
+      // the person's own monitor setting is allowed, this is not theirs.
+      `MON=${externalGitProgram} git --config-env=core.fsmonitor=MON status --short`,
       `GIT_CONFIG_GLOBAL=${join(proj, "scratch", "gitconfig")} git pwn`,
       `git --exec-path=${externalGitDir} externalpwn`,
       `GIT_EXEC_PATH=${externalGitDir} git externalpwn`,
@@ -2373,13 +2372,12 @@ if (import.meta.main) {
       `git bisect run ${externalGitProgram}`,
       `git submodule foreach ${externalGitProgram}`,
       `git -c core.fsmonitor=${externalGitProgram} status --short`,
-      `GIT_PAGER=${externalGitProgram} git status --short`,
       "git --no-pager branch -- --list",
       "git --no-pager tag -- --list",
       `git -c diff.external=${externalGitProgram} --no-pager diff --cached -- scratch/ordinary --no-ext-diff --no-textconv --ignore-submodules=all`,
       `git -c diff.external=${externalGitProgram} --no-pager diff --cached --no-ext-diff --ext-diff --no-textconv --ignore-submodules=all scratch/ordinary`,
       `git --no-pager diff --cached --no-ext-diff --no-textconv --textconv --ignore-submodules=all scratch/ordinary`,
-      "git --no-pager --paginate branch --list",
+
       "git config alias.pwn '!echo harmless | sh'",
       "git config --global alias.pwn '!echo harmless | sh'",
     ];
@@ -2426,6 +2424,14 @@ if (import.meta.main) {
       "GIT_PAGER=cat git status --short",
       "git -c core.fsmonitor=false status --short",
       "git rev-parse --is-inside-work-tree",
+      // The person's own pager and monitor settings are theirs: a helper's git
+      // reads a repository with them, as it does in their terminal.
+      `GIT_PAGER=${externalGitProgram} git status --short`,
+      `PAGER=${externalGitProgram} git status --short`,
+      "git --no-pager --paginate branch --list",
+      "git branch --list",
+      "git tag --list",
+      "git diff --cached --no-ext-diff --no-textconv --ignore-submodules=all",
     ]) {
       const safe = runAdapter(
         proj,
@@ -2458,34 +2464,15 @@ if (import.meta.main) {
     const safeGitDir = join(safeAlternateRepo, ".git").replaceAll("\\", "/");
     const safeWorkTree = safeAlternateRepo.replaceAll("\\", "/");
     for (const command of [
-      `GIT_DIR=${unsafeGitDir} GIT_WORK_TREE=${unsafeWorkTree} git status --ignore-submodules=all`,
-      `env GIT_DIR=${unsafeGitDir} GIT_WORK_TREE=${unsafeWorkTree} git status --ignore-submodules=all`,
-      `GIT_COMMON_DIR=${unsafeGitDir} git status --ignore-submodules=all`,
-    ]) {
-      const unsafeRepository = runAdapter(
-        proj,
-        "guards",
-        payload("preToolUseShell", proj, {
-          conversation_id: "reviewer-unsafe-alternate-repository-conversation",
-          session_id: "reviewer-unsafe-alternate-repository-conversation",
-          tool_input: { command },
-        }),
-      );
-      const unsafeRepositoryOut = JSON.parse(unsafeRepository.stdout) as {
-        permission?: string;
-        agent_message?: string;
-      };
-      expect(unsafeRepositoryOut.permission, command).toBe("deny");
-      expect(unsafeRepositoryOut.agent_message ?? "", command).toContain(
-        "dynamic command evaluation",
-      );
-    }
-
-    for (const command of [
       `GIT_DIR=${safeGitDir} GIT_WORK_TREE=${safeWorkTree} git status --ignore-submodules=all`,
       `env GIT_DIR=${safeGitDir} GIT_WORK_TREE=${safeWorkTree} git status --ignore-submodules=all`,
       `GIT_COMMON_DIR=${safeGitDir} git status --ignore-submodules=all`,
       `GIT_NAMESPACE=review git status --ignore-submodules=all`,
+      // The same three against the repository whose own config names a monitor
+      // program: that setting is the person's, so a helper reads it as git does.
+      `GIT_DIR=${unsafeGitDir} GIT_WORK_TREE=${unsafeWorkTree} git status --ignore-submodules=all`,
+      `env GIT_DIR=${unsafeGitDir} GIT_WORK_TREE=${unsafeWorkTree} git status --ignore-submodules=all`,
+      `GIT_COMMON_DIR=${unsafeGitDir} git status --ignore-submodules=all`,
     ]) {
       const safeRepository = runAdapter(
         proj,
@@ -2574,41 +2561,24 @@ if (import.meta.main) {
     ).toBe(0);
     writeFileSync(join(proj, "README.md"), "# Safe pathspec fixture\n");
 
-    for (const command of [
+    for (const safeAlternateChildCommand of [
+      `GIT_DIR=${safeGitDir} GIT_WORK_TREE=${safeWorkTree} git status --ignore-submodules=all`,
+      // Walking into the submodule is allowed too: its own config names a
+      // monitor program, and that is the person's setting to make.
       `GIT_DIR=${safeGitDir} GIT_WORK_TREE=${safeWorkTree} git status --ignore-submodules=none`,
       `env GIT_DIR=${safeGitDir} GIT_WORK_TREE=${safeWorkTree} git status --ignore-submodules=none`,
     ]) {
-      const unsafeAlternateChild = runAdapter(
+      const safeAlternateChild = runAdapter(
         proj,
         "guards",
         payload("preToolUseShell", proj, {
-          conversation_id: "reviewer-unsafe-alternate-submodule-conversation",
-          session_id: "reviewer-unsafe-alternate-submodule-conversation",
-          tool_input: { command },
+          conversation_id: "reviewer-safe-alternate-submodule-conversation",
+          session_id: "reviewer-safe-alternate-submodule-conversation",
+          tool_input: { command: safeAlternateChildCommand },
         }),
       );
-      const unsafeAlternateChildOut = JSON.parse(unsafeAlternateChild.stdout) as {
-        permission?: string;
-        agent_message?: string;
-      };
-      expect(unsafeAlternateChildOut.permission, command).toBe("deny");
-      expect(unsafeAlternateChildOut.agent_message ?? "", command).toContain(
-        "dynamic command evaluation",
-      );
+      expectAllowJson(safeAlternateChild, safeAlternateChildCommand);
     }
-
-    const safeAlternateChildCommand =
-      `GIT_DIR=${safeGitDir} GIT_WORK_TREE=${safeWorkTree} git status --ignore-submodules=all`;
-    const safeAlternateChild = runAdapter(
-      proj,
-      "guards",
-      payload("preToolUseShell", proj, {
-        conversation_id: "reviewer-safe-alternate-submodule-conversation",
-        session_id: "reviewer-safe-alternate-submodule-conversation",
-        tool_input: { command: safeAlternateChildCommand },
-      }),
-    );
-    expectAllowJson(safeAlternateChild, safeAlternateChildCommand);
 
     const shellAlias = spawnSync(
       "git",
@@ -2729,31 +2699,12 @@ if (import.meta.main) {
     const unsafeIndexValue = unsafeAlternateIndex.replaceAll("\\", "/");
     const safeIndexValue = safeAlternateIndex.replaceAll("\\", "/");
     for (const command of [
-      `GIT_INDEX_FILE=${unsafeIndexValue} git status --ignore-submodules=none`,
-      `env GIT_INDEX_FILE=${unsafeIndexValue} git status --ignore-submodules=none`,
-    ]) {
-      const unsafeIndexStatus = runAdapter(
-        proj,
-        "guards",
-        payload("preToolUseShell", proj, {
-          conversation_id: "reviewer-unsafe-alternate-index-conversation",
-          session_id: "reviewer-unsafe-alternate-index-conversation",
-          tool_input: { command },
-        }),
-      );
-      const unsafeIndexOut = JSON.parse(unsafeIndexStatus.stdout) as {
-        permission?: string;
-        agent_message?: string;
-      };
-      expect(unsafeIndexOut.permission, command).toBe("deny");
-      expect(unsafeIndexOut.agent_message ?? "", command).toContain(
-        "dynamic command evaluation",
-      );
-    }
-
-    for (const command of [
       `GIT_INDEX_FILE=${safeIndexValue} git status --ignore-submodules=none`,
       `env GIT_INDEX_FILE=${safeIndexValue} git status --ignore-submodules=none`,
+      // The index that lists the submodule carrying a monitor program reads the
+      // same way: the setting inside it is the person's.
+      `GIT_INDEX_FILE=${unsafeIndexValue} git status --ignore-submodules=none`,
+      `env GIT_INDEX_FILE=${unsafeIndexValue} git status --ignore-submodules=none`,
     ]) {
       const safeIndexStatus = runAdapter(
         proj,
@@ -3233,12 +3184,9 @@ if (import.meta.main) {
         tool_input: { command: recursiveStatusCommand },
       }),
     );
-    const recursiveStatusOut = JSON.parse(recursiveStatus.stdout) as {
-      permission?: string;
-      agent_message?: string;
-    };
-    expect(recursiveStatusOut.permission).toBe("deny");
-    expect(recursiveStatusOut.agent_message ?? "").toContain("dynamic command evaluation");
+    // The submodule's own config names a monitor program, which is the person's
+    // setting to make, so a status that walks into it reads like any other.
+    expectAllowJson(recursiveStatus, recursiveStatusCommand);
 
     const safeRestrictedStatus = "git status --short -- README.md";
     const safeRestrictedResult = runAdapter(
@@ -3269,70 +3217,45 @@ if (import.meta.main) {
       expectAllowJson(safePositionalStatus, command);
     }
 
-    const unsafeRestrictedStatus =
-      `git status --short -- ${submodulePath}`;
-    const unsafeRestrictedResult = runAdapter(
+    // A pathspec that names the submodule reads it with the monitor its own
+    // config sets, which is the person's setting, so this is allowed too.
+    const restrictedToSubmodule = `git status --short -- ${submodulePath}`;
+    const restrictedToSubmoduleResult = runAdapter(
       proj,
       "guards",
       payload("preToolUseShell", proj, {
-        conversation_id: "reviewer-unsafe-restricted-status-conversation",
-        session_id: "reviewer-unsafe-restricted-status-conversation",
-        tool_input: { command: unsafeRestrictedStatus },
+        conversation_id: "reviewer-restricted-submodule-status-conversation",
+        session_id: "reviewer-restricted-submodule-status-conversation",
+        tool_input: { command: restrictedToSubmodule },
       }),
     );
-    const unsafeRestrictedOut = JSON.parse(unsafeRestrictedResult.stdout) as {
-      permission?: string;
-      agent_message?: string;
-    };
-    expect(unsafeRestrictedOut.permission).toBe("deny");
-    expect(unsafeRestrictedOut.agent_message ?? "").toContain(
-      "dynamic command evaluation",
-    );
+    expectAllowJson(restrictedToSubmoduleResult, restrictedToSubmodule);
 
+    // The same holds when the submodule is named as a bare path, from the
+    // project or from a folder inside it.
     for (const command of [
       `git status --short ${submodulePath}`,
       "git -C scratch status status-submodule",
     ]) {
-      const unsafePositionalStatus = runAdapter(
+      const positionalSubmoduleStatus = runAdapter(
         proj,
         "guards",
         payload("preToolUseShell", proj, {
-          conversation_id: "reviewer-unsafe-positional-status-conversation",
-          session_id: "reviewer-unsafe-positional-status-conversation",
+          conversation_id: "reviewer-positional-submodule-status-conversation",
+          session_id: "reviewer-positional-submodule-status-conversation",
           tool_input: { command },
         }),
       );
-      const unsafePositionalOut = JSON.parse(unsafePositionalStatus.stdout) as {
-        permission?: string;
-        agent_message?: string;
-      };
-      expect(unsafePositionalOut.permission, command).toBe("deny");
-      expect(unsafePositionalOut.agent_message ?? "", command).toContain(
-        "dynamic command evaluation",
-      );
+      expectAllowJson(positionalSubmoduleStatus, command);
     }
 
     writeFileSync(join(proj, "scratch", "ordinary.txt"), "safe\n");
-    const nestedCwdStatus = "git -C scratch status -- status-submodule";
-    const nestedCwdResult = runAdapter(
-      proj,
-      "guards",
-      payload("preToolUseShell", proj, {
-        conversation_id: "reviewer-nested-cwd-status-conversation",
-        session_id: "reviewer-nested-cwd-status-conversation",
-        tool_input: { command: nestedCwdStatus },
-      }),
-    );
-    const nestedCwdOut = JSON.parse(nestedCwdResult.stdout) as {
-      permission?: string;
-      agent_message?: string;
-    };
-    expect(nestedCwdOut.permission).toBe("deny");
-    expect(nestedCwdOut.agent_message ?? "").toContain("dynamic command evaluation");
-
     for (const command of [
       "git -C scratch status -- ordinary.txt",
       "git -C scratch status -- ':(top)README.md'",
+      // Reaching the submodule from a folder inside the project, where its own
+      // config sets the monitor, is the person's setting again.
+      "git -C scratch status -- status-submodule",
     ]) {
       const safeNestedCwd = runAdapter(
         proj,
@@ -3359,14 +3282,8 @@ if (import.meta.main) {
         },
       }),
     );
-    const workingDirectoryOut = JSON.parse(workingDirectoryResult.stdout) as {
-      permission?: string;
-      agent_message?: string;
-    };
-    expect(workingDirectoryOut.permission).toBe("deny");
-    expect(workingDirectoryOut.agent_message ?? "").toContain(
-      "dynamic command evaluation",
-    );
+    // And through the payload's own working directory, for the same reason.
+    expectAllowJson(workingDirectoryResult, workingDirectoryStatus);
 
     const safeWorkingDirectoryStatus = "git status -- ordinary.txt";
     const safeWorkingDirectoryResult = runAdapter(
@@ -3394,12 +3311,8 @@ if (import.meta.main) {
         tool_input: { command: conflictingStatusCommand },
       }),
     );
-    const conflictingStatusOut = JSON.parse(conflictingStatus.stdout) as {
-      permission?: string;
-      agent_message?: string;
-    };
-    expect(conflictingStatusOut.permission).toBe("deny");
-    expect(conflictingStatusOut.agent_message ?? "").toContain("dynamic command evaluation");
+    // The last --ignore-submodules wins, so this walks into the submodule: allowed, like the shapes above.
+    expectAllowJson(conflictingStatus, conflictingStatusCommand);
 
     const disguisedStatusCommand =
       "git status --short -- scratch --ignore-submodules=all";
@@ -3412,12 +3325,8 @@ if (import.meta.main) {
         tool_input: { command: disguisedStatusCommand },
       }),
     );
-    const disguisedStatusOut = JSON.parse(disguisedStatus.stdout) as {
-      permission?: string;
-      agent_message?: string;
-    };
-    expect(disguisedStatusOut.permission).toBe("deny");
-    expect(disguisedStatusOut.agent_message ?? "").toContain("dynamic command evaluation");
+    // The flag after -- is a pathspec, so the submodule is read: allowed for the same reason.
+    expectAllowJson(disguisedStatus, disguisedStatusCommand);
 
     const ignoredSubmoduleStatus =
       "git status --short --ignore-submodules=all";
@@ -3457,12 +3366,8 @@ if (import.meta.main) {
         tool_input: { command: manifestlessStatus },
       }),
     );
-    const manifestlessOut = JSON.parse(manifestlessResult.stdout) as {
-      permission?: string;
-      agent_message?: string;
-    };
-    expect(manifestlessOut.permission).toBe("deny");
-    expect(manifestlessOut.agent_message ?? "").toContain("dynamic command evaluation");
+    // A gitlink with no .gitmodules entry is read the same way.
+    expectAllowJson(manifestlessResult, manifestlessStatus);
 
     expect(
       spawnSync("git", ["update-index", "--force-remove", submodulePath], {
@@ -4083,21 +3988,20 @@ if (import.meta.main) {
     activateReviewer(proj);
     const unsafe = join(proj, "scratch", "unsafe-git-cwd");
     mkdirSync(unsafe, { recursive: true });
+    expect(spawnSync("git", ["init"], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), cwd: proj }).status).toBe(0);
     expect(spawnSync("git", ["init"], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), cwd: unsafe }).status).toBe(0);
-    const helper = join(
-      proj,
-      "scratch",
-      process.platform === "win32" ? "fsmonitor-helper.cmd" : "fsmonitor-helper",
-    );
-    writeFileSync(
-      helper,
-      process.platform === "win32"
-        ? "@echo off\r\nexit /b 0\r\n"
-        : "#!/bin/sh\nexit 0\n",
-    );
-    if (process.platform !== "win32") chmodSync(helper, 0o755);
+    // The same alias name resolves two ways: in the project it is a plain
+    // inspection, and in the folder a compound command moves to it runs a
+    // shell. Which of the two the adapter reads is the whole point of the case.
+    // (It read a monitor program here before; that setting is the person's.)
     expect(
-      spawnSync("git", ["config", "core.fsmonitor", helper], {
+      spawnSync("git", ["config", "alias.inspect", "status --short"], {
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+        cwd: proj,
+      }).status,
+    ).toBe(0);
+    expect(
+      spawnSync("git", ["config", "alias.inspect", "!echo harmless | sh"], {
         timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
         cwd: unsafe,
       }).status,
@@ -4107,15 +4011,15 @@ if (import.meta.main) {
     const denied =
       process.platform === "win32"
         ? [
-            `cd /d ${JSON.stringify(relativeUnsafe)} && git status --short`,
-            `Set-Location ${JSON.stringify(relativeUnsafe)}; git status --short`,
-            `if (Test-Path ${JSON.stringify(relativeUnsafe)}) { Set-Location ${JSON.stringify(relativeUnsafe)} }; git status --short`,
+            `cd /d ${JSON.stringify(relativeUnsafe)} && git inspect`,
+            `Set-Location ${JSON.stringify(relativeUnsafe)}; git inspect`,
+            `if (Test-Path ${JSON.stringify(relativeUnsafe)}) { Set-Location ${JSON.stringify(relativeUnsafe)} }; git inspect`,
           ]
         : [
-            `cd ${JSON.stringify(relativeUnsafe)}; git status --short`,
-            `cd ${JSON.stringify(relativeUnsafe)} && git status --short`,
-            `builtin cd ${JSON.stringify(relativeUnsafe)}; git status --short`,
-            `if true; then cd ${JSON.stringify(relativeUnsafe)}; fi; git status --short`,
+            `cd ${JSON.stringify(relativeUnsafe)}; git inspect`,
+            `cd ${JSON.stringify(relativeUnsafe)} && git inspect`,
+            `builtin cd ${JSON.stringify(relativeUnsafe)}; git inspect`,
+            `if true; then cd ${JSON.stringify(relativeUnsafe)}; fi; git inspect`,
           ];
     for (const command of denied) {
       const result = runAdapter(
@@ -4140,14 +4044,14 @@ if (import.meta.main) {
     const allowed =
       process.platform === "win32"
         ? [
-            "cd /d no-such-dir && git status --short",
-            "cd /d no-such-dir || git status --short",
+            "cd /d no-such-dir && git inspect",
+            "cd /d no-such-dir || git inspect",
           ]
         : [
-            "cd no-such-dir && git status --short",
-            "cd no-such-dir || git status --short",
-            `cd ${JSON.stringify(relativeUnsafe)} | git status --short`,
-            `(cd ${JSON.stringify(relativeUnsafe)}); git status --short`,
+            "cd no-such-dir && git inspect",
+            "cd no-such-dir || git inspect",
+            `cd ${JSON.stringify(relativeUnsafe)} | git inspect`,
+            `(cd ${JSON.stringify(relativeUnsafe)}); git inspect`,
           ];
     for (const command of allowed) {
       const result = runAdapter(

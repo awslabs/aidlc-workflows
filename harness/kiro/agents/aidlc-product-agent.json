@@ -39,7 +39,7 @@
     "file://.kiro/agents/aidlc-product-agent.md",
     "file://.kiro/knowledge/aidlc-product-agent/*.md",
     "file://.kiro/knowledge/aidlc-shared/*.md",
-    "file://aidlc/spaces/default/memory/**/*.md"
+    "file://aidlc/active-memory/**/*.md"
   ],
   "hooks": {
     "preToolUse": [

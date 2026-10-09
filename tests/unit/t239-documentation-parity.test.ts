@@ -403,8 +403,8 @@ describe("documentation parity derives current behavior from authored implementa
       "#[[file:aidlc/spaces/default/memory/org.md]]",
     );
     const includesSource = read("core", "tools", "aidlc-includes.ts");
-    expect(includesSource).toContain('if (harness === ".kiro")');
-    expect(includesSource).toContain("repointKiroSteeringReferences");
+    expect(includesSource).toContain("export function refreshKiroIdeSteering");
+    expect(includesSource).toContain("export function refreshActiveMemory");
   });
 
   test("documented agent roster matches agent files and reviewer frontmatter", () => {

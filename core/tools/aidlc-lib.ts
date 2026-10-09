@@ -14259,8 +14259,20 @@ export function hasPendingDecision(
   unit?: string,
   workflowAttempt = false,
 ): boolean {
+  return openPendingDecision(projectDir, stage, afterEvent, unit, workflowAttempt) !== null;
+}
+
+// The open DECISION_RECORDED block itself (null when none is open), so a reader
+// can tell a checkpoint question (its `Checkpoint` field) from a plain one.
+export function openPendingDecision(
+  projectDir: string,
+  stage: string,
+  afterEvent?: string,
+  unit?: string,
+  workflowAttempt = false,
+): string | null {
   if (!workflowAttempt) {
-    return openDecisionBlock(projectDir, stage, afterEvent) !== null;
+    return openDecisionBlock(projectDir, stage, afterEvent);
   }
 
   const relevant = new Set([
@@ -14281,7 +14293,7 @@ export function hasPendingDecision(
       if (a.shardIndex !== b.shardIndex) return a.shardIndex - b.shardIndex;
       return a.pos - b.pos;
     });
-  if (events.length === 0) return false;
+  if (events.length === 0) return null;
   const lastAtTimestamp = new Map<string, number>();
   const shardsAtTimestamp = new Map<string, Set<string>>();
   for (let i = 0; i < events.length; i++) {
@@ -14310,7 +14322,7 @@ export function hasPendingDecision(
         event.stage === stage &&
         !event.workflow?.startsWith("single-stage:"),
     );
-    if (boundary === -1) return false;
+    if (boundary === -1) return null;
     start = afterBoundary(boundary);
   }
 
@@ -14345,7 +14357,7 @@ export function hasPendingDecision(
     }
     groupStart = groupEnd;
   }
-  return open !== null;
+  return open;
 }
 
 // This clone's audit shard filename: `<host>-<clone-id>.md`, both parts from the
@@ -16154,30 +16166,40 @@ export function validateReviewAppendix(
     };
   }
 
-  if (
-    authority.verdicts.length !== 1 ||
-    authority.verdicts[0] !== expected.verdict
-  ) {
+  // Two Review sections (the second one demoted to `###` in a review file) are
+  // two reviews: the record reads the first section's findings only, so the
+  // second's would be lost. Refused by name, whatever their lines say. The
+  // opening heading, when the text starts with it, was cut before rendering and
+  // counts as the first; a review file that opens with prose keeps its one
+  // heading in the rendered text, which is still one section.
+  if (authority.reviewSections + (opening ? 1 : 0) >= 2) {
+    return {
+      valid: false,
+      reason: "the review has two Review sections; keep one and write it whole",
+    };
+  }
+  // Inside the one section a line repeated word for word is one line: a
+  // reviewer asked to "end with the verdict line" writes it at the top and at
+  // the end. Two different values are still two lines, and refused.
+  const distinct = (values: string[]): string[] => [...new Set(values)];
+  const verdicts = distinct(authority.verdicts);
+  const reviewers = distinct(authority.reviewers);
+  const iterations = distinct(authority.iterations);
+  if (verdicts.length !== 1 || verdicts[0] !== expected.verdict) {
     return {
       valid: false,
       reason:
         "the reviewer appendix must contain exactly one canonical verdict line matching --verdict",
     };
   }
-  if (
-    authority.reviewers.length !== 1 ||
-    authority.reviewers[0] !== expected.reviewer
-  ) {
+  if (reviewers.length !== 1 || reviewers[0] !== expected.reviewer) {
     return {
       valid: false,
       reason:
         "the reviewer appendix must contain exactly one Reviewer line matching the requested reviewer",
     };
   }
-  if (
-    authority.iterations.length !== 1 ||
-    authority.iterations[0] !== String(expected.iteration)
-  ) {
+  if (iterations.length !== 1 || iterations[0] !== String(expected.iteration)) {
     return {
       valid: false,
       reason:
@@ -16204,6 +16226,8 @@ export function validateReviewAppendix(
 type RenderedReviewAuthority = {
   markdownH1H2: boolean;
   htmlH1H2: boolean;
+  /** Headings reading "Review" after the opening one: a second Review section. */
+  reviewSections: number;
   verdicts: string[];
   reviewers: string[];
   iterations: string[];
@@ -16250,11 +16274,16 @@ function renderReviewMarkdownAuthority(
   if (typeof Bun.markdown?.render !== "function") return null;
   let markdownH1H2 = false;
   let htmlH1H2 = false;
+  let reviewSections = 0;
   let rendered: string;
   try {
     rendered = Bun.markdown.render(section, {
-      heading: (_children, { level }) => {
+      heading: (children, { level }) => {
         if (level <= 2) markdownH1H2 = true;
+        // A review file's own `## Review` written twice is recorded as `###`
+        // the second time, so a heading at any level that reads "Review" is a
+        // second section, whose findings the record would never read.
+        if (children.replaceAll(REVIEW_MARK_OPEN, "").replaceAll(REVIEW_MARK_CLOSE, "").trim().toLowerCase() === "review") reviewSections++;
         return `${REVIEW_NON_AUTHORITY}\n`;
       },
       html: (children) => {
@@ -16287,6 +16316,7 @@ function renderReviewMarkdownAuthority(
   return {
     markdownH1H2,
     htmlH1H2,
+    reviewSections,
     verdicts: renderedReviewFields(rendered, "Verdict"),
     reviewers: renderedReviewFields(rendered, "Reviewer"),
     iterations: renderedReviewFields(rendered, "Iteration"),
@@ -16788,6 +16818,21 @@ export interface ReviewerFindingsReport {
 export const REVIEW_FINDINGS_REPORT_RETRY_MESSAGE =
   "the findings report could not be read. Write the whole review again with the required Prior findings and New findings tables";
 
+// The same sentence with the fault named (the rule, the row and the cell), so
+// the reviewer fixes that cell on the retry instead of repeating the mistake
+// and spending the one retry on it. The opening is the generic message's.
+export function findingsReportUnreadableMessage(fault: string): string {
+  return `the findings report could not be read: ${fault}. Write the whole review again with the required Prior findings and New findings tables`;
+}
+
+function findingsReportUnreadable(fault: string): Error {
+  return new Error(findingsReportUnreadableMessage(fault));
+}
+
+function markdownRow(cells: readonly string[]): string {
+  return `| ${cells.join(" | ")} |`;
+}
+
 function reportTable(
   lines: string[],
   heading: string,
@@ -16798,7 +16843,7 @@ function reportTable(
     line.trim().toLowerCase() === `**${heading.toLowerCase()}**`
   );
   if (headingIndex === -1) {
-    throw new Error(REVIEW_FINDINGS_REPORT_RETRY_MESSAGE);
+    throw findingsReportUnreadable(`the ${heading} heading (**${heading}**) is missing`);
   }
   let tableStart = headingIndex + 1;
   while (tableStart < lines.length && lines[tableStart].trim() === "") tableStart++;
@@ -16807,7 +16852,10 @@ function reportTable(
     !lines[tableStart].trim().startsWith("|") ||
     !lines[tableStart + 1].trim().startsWith("|")
   ) {
-    throw new Error(REVIEW_FINDINGS_REPORT_RETRY_MESSAGE);
+    throw findingsReportUnreadable(
+      `no table follows the ${heading} heading; write its header row ${markdownRow(requiredHeaders)} ` +
+        `and the separator row ${markdownRow(requiredHeaders.map(() => "---"))}`,
+    );
   }
   const headers = splitMarkdownRow(lines[tableStart]);
   const allowed = new Set([...requiredHeaders, ...optionalHeaders]);
@@ -16815,14 +16863,19 @@ function reportTable(
     requiredHeaders.some((header) => !headers.includes(header)) ||
     headers.some((header) => !allowed.has(header))
   ) {
-    throw new Error(REVIEW_FINDINGS_REPORT_RETRY_MESSAGE);
+    throw findingsReportUnreadable(
+      `the ${heading} table header is ${markdownRow(headers)}; it must be ${markdownRow(requiredHeaders)}` +
+        (optionalHeaders.length > 0 ? ` (an extra ${optionalHeaders.join(" or ")} column is allowed)` : ""),
+    );
   }
   const separator = splitMarkdownRow(lines[tableStart + 1]);
   if (
     separator.length !== headers.length ||
     separator.some((cell) => !/^:?-{3,}:?$/.test(cell))
   ) {
-    throw new Error(REVIEW_FINDINGS_REPORT_RETRY_MESSAGE);
+    throw findingsReportUnreadable(
+      `the ${heading} table separator row must have one |---| cell per column (${headers.length})`,
+    );
   }
   const rows: string[][] = [];
   for (let i = tableStart + 2; i < lines.length; i++) {
@@ -16832,7 +16885,10 @@ function reportTable(
     // row were not there.
     if (cells.every((cell) => cell.trim() === "")) continue;
     if (cells.length > headers.length) {
-      throw new Error(REVIEW_FINDINGS_REPORT_RETRY_MESSAGE);
+      throw findingsReportUnreadable(
+        `${heading} row ${rows.length + 1} has ${cells.length} cells for ${headers.length} columns; ` +
+          "escape | inside a cell as \\| (also inside a code span)",
+      );
     }
     rows.push([
       ...cells,
@@ -16860,7 +16916,7 @@ export function parseReviewerFindingsReport(
   );
   if (!hasPrior && !hasNew) return null;
   if (!hasNew) {
-    throw new Error(REVIEW_FINDINGS_REPORT_RETRY_MESSAGE);
+    throw findingsReportUnreadable("the New findings heading (**New findings**) is missing");
   }
   const priorTable = hasPrior
     ? reportTable(
@@ -16881,7 +16937,7 @@ export function parseReviewerFindingsReport(
   const newIndex = new Map(
     newTable.headers.map((header, index) => [header, index]),
   );
-  const prior = priorTable.rows.map((cells): ReviewerPriorFindingReport => {
+  const prior = priorTable.rows.map((cells, index): ReviewerPriorFindingReport => {
     const value = (header: string): string =>
       cells[priorIndex.get(header) ?? -1]?.trim() ?? "";
     const now = value("Now").toLowerCase();
@@ -16892,11 +16948,15 @@ export function parseReviewerFindingsReport(
       now !== "open" &&
       now !== "unresolved"
     ) {
-      throw new Error(REVIEW_FINDINGS_REPORT_RETRY_MESSAGE);
+      throw findingsReportUnreadable(
+        `Prior findings row ${index + 1} has Now "${value("Now")}"; write Fixed or Still applies`,
+      );
     }
     const id = value("ID");
     if (!/^R-[0-9]+$/.test(id)) {
-      throw new Error(REVIEW_FINDINGS_REPORT_RETRY_MESSAGE);
+      throw findingsReportUnreadable(
+        `Prior findings row ${index + 1} has ID "${id}"; use the engine's R-<n> id from the review context`,
+      );
     }
     return {
       id,
@@ -16908,7 +16968,7 @@ export function parseReviewerFindingsReport(
     };
   });
   const newFindings = newTable.rows.map(
-    (cells): ReviewerNewFindingReport => {
+    (cells, index): ReviewerNewFindingReport => {
       const value = (header: string): string =>
         cells[newIndex.get(header) ?? -1]?.trim() ?? "";
       // A placeholder row (blank or dash cells, or "No findings") is refused:
@@ -16919,7 +16979,9 @@ export function parseReviewerFindingsReport(
         ) ||
         value("Finding").toLowerCase() === "no findings"
       ) {
-        throw new Error(REVIEW_FINDINGS_REPORT_RETRY_MESSAGE);
+        throw findingsReportUnreadable(
+          `New findings row ${index + 1} is a placeholder; leave the table empty when there is nothing new`,
+        );
       }
       return {
         ...(newIndex.has("ID") && value("ID").length > 0

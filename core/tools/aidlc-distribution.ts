@@ -853,10 +853,12 @@ export function sha256FileMatching(path: string, known: readonly (string | undef
   return sha256Matching(readFileSync(path), known);
 }
 
-// A space switch points the tool's include files at that space's memory
-// (aidlc-includes.ts repointHarnessIncludes); every release ships them at the
-// default space. The text with each active-space memory path set to `space`,
-// never a `<space>` or `${...}` placeholder.
+// Earlier releases' space switch pointed the tool's include files at that
+// space's memory, and every release shipped them at the default space (the
+// includes now read the engine's copy, aidlc-includes.ts ACTIVE_MEMORY_DIR, so
+// such a file is one a refresh brings up to date). The text with each
+// active-space memory path set to `space`, never a `<space>` or `${...}`
+// placeholder.
 export function withSpace(text: string, space: string): string {
   return text.replace(/aidlc\/spaces\/(?![<$])[^/"\s]+\/memory(?=[/"])/g, `aidlc/spaces/${space}/memory`);
 }
@@ -1276,8 +1278,10 @@ function removeJsoncEntry(text: string, entries: Array<{ start: number; valueEnd
   return `${text.slice(0, entry.start)}${text.slice(entry.end)}`;
 }
 
-// `/aidlc space <name>` points the method glob at the chosen space, so any
-// space's glob fills AI-DLC's one method entry.
+// Earlier releases' `/aidlc space <name>` pointed the method glob at the chosen
+// space, so any space's glob fills that one method entry of theirs; the glob
+// this release ships (the engine's copy, aidlc-includes.ts ACTIVE_MEMORY_DIR)
+// is an entry of its own, so a refresh adds it and retires the recorded one.
 const METHOD_INSTRUCTION = /^aidlc\/spaces\/[^/"]+\/memory\/\*\*\/\*\.md$/;
 const METHOD_SLOT = "aidlc/spaces/*/memory/**/*.md";
 
@@ -1330,7 +1334,8 @@ function entryAddress(id: string): { path: string[]; item?: string } | null {
 // Entries only AI-DLC writes: they name its own folders or commands.
 function aidlcOwnEntry(entry: Pick<JsonEntry, "path" | "item">): boolean {
   return [...entry.path, ...(entry.item === undefined ? [] : [entry.item])].some((part) =>
-    part.includes(".aidlc/") || part.startsWith("aidlc/spaces/") || part.startsWith("aidlc ")
+    part.includes(".aidlc/") || part.startsWith("aidlc/spaces/") || part.startsWith("aidlc/active-memory/") ||
+    part.startsWith("aidlc ")
   );
 }
 

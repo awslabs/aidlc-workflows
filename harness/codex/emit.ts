@@ -138,18 +138,13 @@ sandbox_mode = "workspace-write"
 # session, start Codex with -c features.default_mode_request_user_input=false.
 suppress_unstable_features_warning = true
 
-# The AIDLC method (the markdown rule layers: org/team/project + phases/) now
-# lives at the workspace root under aidlc/spaces/<space>/memory/ — the single
+# The AIDLC method (the markdown rule layers: org/team/project + phases/) lives
+# at the workspace root under aidlc/spaces/<space>/memory/, the single
 # hand-editable source of truth, identical on every harness (NOT a per-harness
-# copy under .codex/). The AIDLC_RULES_DIR seam below ships pointed at the
-# always-present default space; /aidlc space <name> re-points it IN PLACE so
-# the next session's resolver follows the active space (a byte-identical no-op at
-# default). Codex also auto-merges the root AGENTS.md and the orchestrator
-# injects an @aidlc/spaces/<space>/memory/... prompt mention to pull specific
-# method files into context on demand. (.codex/rules/ remains Codex's native
-# Starlark permission-rules dir — D-10 — distinct from the AIDLC method.)
-[shell_environment_policy]
-set = { AIDLC_RULES_DIR = "aidlc/spaces/default/memory" }
+# copy under .codex/). Codex has no ambient include for it: the engine reads the
+# active space's files and hands each step its rules. Codex also auto-merges
+# the root AGENTS.md. (.codex/rules/ remains Codex's native Starlark
+# permission-rules dir, D-10, distinct from the AIDLC method.)
 
 [sandbox_workspace_write]
 network_access = true

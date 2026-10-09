@@ -85,6 +85,9 @@ const manifest: HarnessManifest = {
           "sha256:631688bc85683ea22c9415cb345c69169cff4ac45ec006c258217cd261a7793f",
           // The variant shipped with notes above each group of lines.
           "sha256:051866aa49f8ed915ab5ae30707422068df814ca5be806a1fe28784c543a4aab",
+          // The variant shipped before the block ignored aidlc/active-memory/ (the
+          // engine's copy of the active space's method).
+          "sha256:a618a3a615ef7159c7eed634a5a332bf9d017f8e28d6b0f0adad9db1d2d725e0",
         ],
       },
     },
@@ -143,10 +146,11 @@ const manifest: HarnessManifest = {
     { src: "skills/aidlc/SKILL.md", dst: "skills/aidlc/SKILL.md" },
     { src: "skills/aidlc/question-rendering.md", dst: "skills/aidlc/question-rendering.md" },
     { src: "skills/aidlc/composer.md", dst: "skills/aidlc/composer.md" },
-    // The AIDLC method @-import stub: .claude/rules/aidlc.md pulls the relocated
-    // method (aidlc/spaces/default/memory/*) into Claude's ambient context by
-    // reference (explicit @-imports, no copy). The rules/ dir is no longer a
-    // core projection — this stub is the only file in it.
+    // The AIDLC method @-import stub: .claude/rules/aidlc.md pulls the method
+    // into Claude's ambient context by reference (explicit @-imports of the
+    // engine's git-ignored copy of the active space's memory,
+    // aidlc/active-memory/*). The rules/ dir is no longer a core
+    // projection; this stub is the only file in it.
     { src: "rules-aidlc.md", dst: "rules/aidlc.md" },
     { src: "settings.json", dst: "settings.json" },
     { src: "settings.local.json.example", dst: "settings.local.json.example" },

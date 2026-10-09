@@ -1102,7 +1102,8 @@ tables (such as `[agents.<role>]` or `[mcp_servers.<name>]`), comments, order,
 and spelling. An AI-DLC value nobody changed takes the release's value; a value
 you changed stays yours, with a note when a release ships a different one
 (delete the key and refresh to take it); a deleted AI-DLC key comes back, with
-a note. The active space's `AIDLC_RULES_DIR` stays as it is. A project that
+a note. An `AIDLC_RULES_DIR` line an earlier release shipped is removed, at
+whichever space a switch left it, unless you added your own keys to its table. A project that
 already has its own `.codex/config.toml` keeps it on first install, and AI-DLC
 adds its settings. A file the refresh cannot merge safely (it does not parse,
 or uses one of AI-DLC's table names for something else, such as an array of

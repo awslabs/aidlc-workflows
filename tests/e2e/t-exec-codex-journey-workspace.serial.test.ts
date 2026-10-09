@@ -140,7 +140,6 @@ function setupCodexJourney(): WorkspaceJourney {
       ``,
       `[shell_environment_policy]`,
       `exclude = ["AWS_*", "AIDLC_BROKER_*", "ANTHROPIC_*", "KIRO_API_KEY", "CURSOR_API_KEY", "GITHUB_TOKEN", "GH_TOKEN", "ACTIONS_*"]`,
-      `set = { AIDLC_RULES_DIR = ".codex/aidlc-rules" }`,
       ``,
       // Space switches repoint the project's native memory include. Like the
       // front-compose fixture, grant only this project's protected .codex dir;

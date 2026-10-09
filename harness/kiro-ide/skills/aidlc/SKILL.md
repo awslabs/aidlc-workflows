@@ -16,7 +16,7 @@ description: >
 
 # AI-DLC Orchestrator (Kiro harness — Kiro IDE and Kiro CLI)
 
-**Read all of this file before any AI-DLC command.** Kiro shows only part of a long file, whether it comes as this skill or from a file read, and a read that comes back cut short is not all of it. So read `{{HARNESS_DIR}}/skills/aidlc/SKILL.md` with your file tool in parts of at most 40 lines (offset and limit), from the first line to the last, unless you already read every line of it in this chat.
+**Read all of this file before any AI-DLC command.** Kiro shows only part of a long file, whether it comes as this skill or from a file read, and a read that comes back cut short is not all of it. So read `{{HARNESS_DIR}}/skills/aidlc/SKILL.md` with your file tool in parts of at most 40 lines (offset and limit), from the first line to the last, unless you already read every line of it in this chat. Every other AI-DLC file you read (a protocol module, a stage file) is cut the same way: read it in parts of at most 200 lines, to its last line, before acting on it.
 
 ## Welcome
 
@@ -53,7 +53,7 @@ The person is in charge of their work, and AIDLC enforces their will. Read what 
 
 This is the orchestrator's whole control structure. Run it from the moment `/aidlc` is invoked.
 
-**When a command comes back with no output and exit code -1**, Kiro has not been allowed to run commands in this folder yet. (When Kiro says your shell is cmd, every command reports exit code -1, so there go by what it printed.) Do not retry, and do not suggest reinstalling or starting Kiro another way. Give the person this line and end your turn: "In Kiro IDE, trust this folder: choose Trust Folder & Continue when Kiro asks whether you trust it, or select Manage on the Restricted Mode banner, then Trust. Then run Developer: Reload Window from the Command Palette (Ctrl+Shift+P, or Cmd+Shift+P on macOS), and say carry on." When they say carry on, run your command again.
+**When a command comes back with no output and exit code -1**, Kiro has not been allowed to run commands in this folder yet. (When Kiro says your shell is cmd, every command reports exit code -1, so there go by what it printed.) After AI-DLC's own commands have run in this chat, a -1 on one of the project's commands (a build, a test, a probe) means Kiro did not run that command: the person declined it, or has not answered Kiro's prompt to allow it yet. It is not a timeout and not this folder's trust: do not retry it and do not give the trust step below; tell the person, in one line, that Kiro did not run the command and that they can allow it in Kiro or tell you how to go on, then end your turn. Otherwise do not retry, and do not suggest reinstalling or starting Kiro another way. Give the person this line and end your turn: "In Kiro IDE, trust this folder: choose Trust Folder & Continue when Kiro asks whether you trust it, or select Manage on the Restricted Mode banner, then Trust. Then run Developer: Reload Window from the Command Palette (Ctrl+Shift+P, or Cmd+Shift+P on macOS), and say carry on." When they say carry on, run your command again.
 
 ```
 Loop:
@@ -250,7 +250,7 @@ The engine names which stage to run; you read and execute that stage from its `s
 
 When `directive.ceremony.summary_confirmation === "off"`, generate directly from the stage answers with no consolidated-summary checkpoint or receipt. When `directive.ceremony.sensors === "off"`, `sensors_applicable` is empty and no sensor correction or rerun instructions apply. These switches never waive ordinary artifact verification, required decisions, Plan Approval, or the stage approval gate.
 
-Before running a stage body, read every module named in `directive.protocol_modules`; skip a module already loaded earlier in the session. The prose triggers above are the fallback when the hint field is absent.
+Before running a stage body, read every module named in `directive.protocol_modules`, and the stage file, with your file tool in parts of at most 200 lines (offset and limit), from the first line to the last. Kiro shows only part of a long file, and a read that comes back cut short is not all of it: never act on a module or stage file until its last part has come back. Read every other AI-DLC file you are sent to (an agent file, a knowledge file) the same way. Skip a module already read to its last line earlier in the session. The prose triggers above are the fallback when the hint field is absent.
 
 ### New work while an intent is active — offer a second intent
 

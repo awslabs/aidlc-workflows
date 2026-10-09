@@ -78,7 +78,7 @@ listed for a copied project below, ship inside the permissions of the conductor
 (`.kiro/agents/aidlc.md`); every agent it hands work to is denied those
 commands. Some commands are
 held back from it: `aidlc engine config set *` changes a setting of your piece
-of work, `aidlc engine adapter *` is the entry the IDE's own hooks run, and a
+of work, `aidlc engine adapter *` is the entry the IDE's own hooks run, and an AI-DLC
 command holding `$`, a backtick, `>`, `<`, `&`, `@(`, `@{`, or a line break can
 run, expand, or redirect more than the one command. When an agent runs one of these, Kiro IDE
 asks you first. Earlier releases also merged it into
@@ -154,8 +154,8 @@ commands (`doctor` and `--doctor`, with or without `--verbose`, `version`,
 (`config flags --clear-bypass <switch> --yes`) with no card. A native install
 runs the same commands, as `aidlc ...`, with no card too. Any other
 `config` change (bare `config`, the guided setup, included), the commands that change the machine's AI-DLC install (`use`,
-`update`, `rollback`, `uninstall`, `system`), and a command holding `$`, a
-backtick, `>`, `<`, `&`, `@(`, `@{`, or a line break show Kiro's card first.
+`update`, `rollback`, `uninstall`, `system`), and an AI-DLC command holding `$`,
+a backtick, `>`, `<`, `&`, `@(`, `@{`, or a line break show Kiro's card first.
 
 The versioned runtime uses the native `aidlc` command. Framework developers who
 need the Bun-shaped source projection can clone the repository, run
@@ -302,7 +302,11 @@ of a workflow. It does not change which AI-DLC checkpoints stop for you.
 - **Autopilot** (switch on): file changes go through without the card. Select
   **View changes** in the chat to see what changed.
 - In both modes, Kiro asks you to **Allow** any command that the `aidlc` agent
-  does not already allow, such as your project's test command. It also asks
+  does not already allow, such as your project's test command. Your own
+  commands meet no AI-DLC rule, so once you choose **Always allow** for one,
+  Kiro remembers it, redirects and chains included. AI-DLC's own commands ask
+  when one holds a redirect, a chain or a substitution (`>`, `&&`, `$(...)`),
+  so an allowed AI-DLC command cannot be stretched into another. Kiro also asks
   before the two AI-DLC commands held back on purpose (see
   [Native channel](#native-channel-recommended)).
 
