@@ -14957,6 +14957,49 @@ export function resolveBoltIdentity(
   return newBoltIdentity(projectDir, intentId8, slug);
 }
 
+/**
+ * The metadata of a swarm Unit's worktree when `projectDir` is one
+ * (`<parent>/.aidlc/worktrees/<bolt>`, named by its own
+ * `.aidlc/worktree-meta.json`, which swarm prepare wrote for a worker), else
+ * null. A structural read only: it names the place the engine made for a
+ * worker and grants nothing, so the creation authority delegatedWorktreeIntent
+ * demands (and single-repo swarms lack) is not needed to know where a worker
+ * runs. A claimed Unit's worktree (a person's) carries no swarmUnit and is null.
+ */
+export function swarmWorkerWorktreeMeta(projectDir: string): {
+  parent: string; intentRecord: string; boltSlug: string; swarmUnit: string;
+} | null {
+  const metaPath = join(projectDir, ".aidlc", "worktree-meta.json");
+  if (!existsSync(metaPath)) return null;
+  let meta: {
+    version?: unknown; intentRecord?: unknown; boltSlug?: unknown; intentId8?: unknown; swarmUnit?: unknown;
+  };
+  try {
+    meta = JSON.parse(readFileSync(metaPath, "utf-8"));
+  } catch {
+    return null;
+  }
+  if (
+    meta.version !== 1 || typeof meta.intentRecord !== "string" || typeof meta.boltSlug !== "string" ||
+    typeof meta.swarmUnit !== "string" ||
+    !/^aidlc\/spaces\/[a-z][a-z0-9-]*\/intents\/[^/]+$/.test(meta.intentRecord) || /\/\.\.?$/.test(meta.intentRecord)
+  ) {
+    return null;
+  }
+  let child: string;
+  try {
+    child = realpathSync(projectDir);
+  } catch {
+    return null;
+  }
+  const parent = dirname(dirname(dirname(child)));
+  const expected = typeof meta.intentId8 === "string"
+    ? worktreePath(parent, meta.intentId8, meta.boltSlug)
+    : legacyWorktreePath(parent, meta.boltSlug);
+  if (!existsSync(expected) || realpathSync(expected) !== child) return null;
+  return { parent, intentRecord: meta.intentRecord, boltSlug: meta.boltSlug, swarmUnit: meta.swarmUnit };
+}
+
 export function readWorktreeMetaIntentRecord(worktreeDir: string): string | null | undefined {
   try {
     const meta: unknown = JSON.parse(

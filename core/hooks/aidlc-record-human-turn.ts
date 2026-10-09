@@ -99,6 +99,7 @@ import {
   stateFilePath,
   stripRecommendedDecorator,
   suppliedTurnOrigin,
+  swarmWorkerWorktreeMeta,
   type TurnOrigin,
   validSessionId,
   withAuditLock,
@@ -638,6 +639,15 @@ try {
       "AIDLC Guard Policy: the typed switch was not applied because AIDLC_UNATTENDED=1 withholds human authority on this driver; run it from an attended session.",
     );
   }
+  // A swarm worker's worktree is the copy the engine made for a worker, and a
+  // prompt that arrives there (a `codex exec` worker's brief, on Codex its own
+  // session) is the conductor's, never a person's turn. No authority row lands
+  // in that record (finalize merges it back, and the merge refuses every
+  // authority row), no words are kept, no switch is applied, and nothing is
+  // said about it: there is no person there to read a line. The heartbeat and
+  // the conversational marker still land, as under AIDLC_UNATTENDED=1.
+  const workerWorktree = swarmWorkerWorktreeMeta(projectDir) !== null;
+  const personHere = mintAllowed && !workerWorktree;
   // A turn the host made (its notice or brief, not the person's words): none of
   // the person's authority rides on it. No turn, no kept words, no reply, no
   // switch, no conversational marker. The record keeps that it happened and why,
@@ -670,7 +680,7 @@ try {
   // other first-use fence switch says to create it and type the switch again.
   const switchAnswer = typedPrompt ? planAnswerAfterSwitch(projectDir, typedPrompt) : null;
   let applied: string[] = [];
-  if (mintAllowed && sessionId && typedPrompt) {
+  if (personHere && sessionId && typedPrompt) {
     try {
       // A switch typed before a plan choice keeps the plan question open over
       // its state write, so the choice after it is still its answer.
@@ -710,7 +720,7 @@ try {
   // is a prompt whose words are unknown, not a picker reply. Fail-open: a
   // store failure never blocks the turn, and the row below still records it.
   let messageId: string | null = null;
-  if (mintAllowed && !pickerUnanswered && (promptSubmitted || pickerQuestion !== undefined)) {
+  if (personHere && !pickerUnanswered && (promptSubmitted || pickerQuestion !== undefined)) {
     try {
       const noWords: Pick<StoredMessage, "words" | "settings" | "route"> = {
         words: null, settings: [], route: { scope: null, newIntent: false, skip: [], add: [], projectType: null },
@@ -753,8 +763,10 @@ try {
     if (pickerUnanswered) {
       // No turn and no answer: the row spends any earlier turn, so a remark
       // typed before the box never carries an answer the person did not give.
+      // (An authority row, so none in a swarm worker's worktree.)
       try {
         withAuditLock(projectDir, () => {
+          if (workerWorktree) return;
           appendAuditEntryUnlocked("QUESTION_UNANSWERED", sessionId ? { Session: sessionId } : {}, projectDir);
         });
       } catch {
@@ -765,7 +777,7 @@ try {
       })}\n`);
       return 0;
     }
-    if (mintAllowed) {
+    if (personHere) {
       // A typed guard switch or break-glass request is an instruction to the
       // framework, not an answer to the pending Plan Approval question; a
       // question about a switch ("skip plan approval?") is for the agent.
@@ -902,7 +914,7 @@ try {
       }
     }
     // After the turn is kept, so the note never stands in its way.
-    if (mintAllowed && promptSubmitted && typedPrompt.trim().length > 0) {
+    if (personHere && promptSubmitted && typedPrompt.trim().length > 0) {
       const note = stoppedReviewNote(projectDir);
       if (note !== null) notes.push(note);
     }

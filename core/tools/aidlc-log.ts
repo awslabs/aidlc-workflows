@@ -61,8 +61,7 @@ import {
   summaryAuthorizationTargetOrThrow,
   writeRecordFileNoFollow,
   reviewerDispatchPath,
-  legacyWorktreePath,
-  worktreePath,
+  swarmWorkerWorktreeMeta,
   engineDirFor,
   writeSummaryAuthorization,
   emitError,
@@ -2955,33 +2954,14 @@ function derivedRecordFinding(
 }
 
 /**
- * The main workspace's intent record when `projectDir` is a swarm Unit's
- * worktree (`<parent>/.aidlc/worktrees/<bolt>`, named by its own
- * `.aidlc/worktree-meta.json`), else null. A structural read only: the verdict
- * tidies a record the conductor wrote, it grants nothing, so the creation
- * authority delegatedWorktreeIntent demands (and single-repo swarms lack) is not
- * needed here.
+ * The main workspace's intent record when `projectDir` is this Unit's swarm
+ * worktree (swarmWorkerWorktreeMeta), else null. The verdict tidies a record
+ * the conductor wrote; the read grants nothing.
  */
 function swarmWorktreeParentRecord(projectDir: string, unit: string | undefined): string | null {
-  const metaPath = join(projectDir, ".aidlc", "worktree-meta.json");
-  if (!existsSync(metaPath)) return null;
-  const meta = JSON.parse(readFileSync(metaPath, "utf-8")) as {
-    version?: unknown; intentRecord?: unknown; boltSlug?: unknown; intentId8?: unknown; swarmUnit?: unknown;
-  };
-  if (
-    meta.version !== 1 || typeof meta.intentRecord !== "string" || typeof meta.boltSlug !== "string" ||
-    typeof meta.swarmUnit !== "string" || meta.swarmUnit !== unit ||
-    !/^aidlc\/spaces\/[a-z][a-z0-9-]*\/intents\/[^/]+$/.test(meta.intentRecord) || /\/\.\.?$/.test(meta.intentRecord)
-  ) {
-    return null;
-  }
-  const child = realpathSync(projectDir);
-  const parent = dirname(dirname(dirname(child)));
-  const expected = typeof meta.intentId8 === "string"
-    ? worktreePath(parent, meta.intentId8, meta.boltSlug)
-    : legacyWorktreePath(parent, meta.boltSlug);
-  if (!existsSync(expected) || realpathSync(expected) !== child) return null;
-  return join(parent, meta.intentRecord);
+  const meta = swarmWorkerWorktreeMeta(projectDir);
+  if (meta === null || meta.swarmUnit !== unit) return null;
+  return join(meta.parent, meta.intentRecord);
 }
 
 /**
