@@ -20,7 +20,7 @@ import {
   workspaceSourceListing, worktreePath, writeActiveDirectiveMarker, writeBaselineSourceSnapshot,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import {
-  approvalFingerprint, codeGenerationExecutionAllowed, codeGenerationRecordDir,
+  approvalFingerprint, codeGenerationExecutionAllowed, codeGenerationPlanApprovalQuestionEvidence, codeGenerationRecordDir,
   evaluateCodeGenerationApproval, parseTestingContract, renderTestingContract,
   resolveCodeGenerationAuthority, resolveTestingPosture, resolveTestingPostureFromSections,
 } from "../../dist/claude/.claude/tools/aidlc-testing-posture.ts";
@@ -1069,5 +1069,23 @@ describe("prepare reads the answer the engine recorded", () => {
     expect(prepared.err).not.toContain("must contain exactly [Answer]");
     expect(existsSync(join(child(pd), "src", `${UNIT}.ts`))).toBe(true);
     expect(starts(pd)).toHaveLength(1);
+  });
+
+  test("the reader takes the label however the letter or quotes were written, and still refuses another answer", () => {
+    const pd = fixture();
+    const questions = join(codeGenerationRecordDir(pd, UNIT), "code-generation-questions.md");
+    const recorded = readFileSync(questions, "utf-8");
+    const evidence = (line: string, expected: "Approve Plan" | "Request Changes" = "Approve Plan") => {
+      writeFileSync(questions, recorded.replace("[Answer]: Approve Plan", `[Answer]: ${line}`));
+      return () => codeGenerationPlanApprovalQuestionEvidence(pd, TARGET, questions, expected, { breakGlass: true });
+    };
+    // The shared approval reader is case-insensitive about the letter; this reader agrees with it.
+    for (const line of ["A. Approve Plan", "a. Approve Plan", "A) Approve Plan", "\"Approve Plan\"", "approve plan"]) {
+      expect(evidence(line), line).not.toThrow();
+    }
+    expect(evidence("B. Request Changes", "Request Changes")).not.toThrow();
+    for (const line of ["B. Request Changes", "Approve", ""]) {
+      expect(evidence(line), line).toThrow("Plan Approval questions file must contain exactly [Answer]: Approve Plan");
+    }
   });
 });

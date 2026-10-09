@@ -543,12 +543,14 @@ const APPROVE_PLAN_RE = /^(?:(?:[A-Z][.)][ \t]*)?["']?Approve Plan["']?|Plan app
 
 /**
  * The label on a recorded `[Answer]:` line: the option letter the engine's own
- * recorder writes ("A. Approve Plan") or a picker echoes ("B) Request Changes"),
- * and quotes around the label, are not the answer. Every reader compares the
- * label, so the engine's recorded line and a hand-written one read the same.
+ * recorder writes ("A. Approve Plan") or a picker echoes ("B) Request Changes",
+ * "a. Approve Plan": APPROVE_PLAN_RE reads the letter in either case, so this
+ * does too), and quotes around the label, are not the answer. Every reader
+ * compares the label, so the engine's recorded line and a hand-written one
+ * read the same.
  */
 export function planApprovalAnswerLabel(answer: string): string {
-  return answer.trim().replace(/^[A-Z][.)][ \t]*/, "").replace(/^["']|["']$/g, "").trim();
+  return answer.trim().replace(/^[A-Za-z][.)][ \t]*/, "").replace(/^["']|["']$/g, "").trim();
 }
 const QUESTION_PREFIX_RE =
   /^(?:(?:q(?:uestion)?[ \t]*)?\d+[ \t]*[:.)-][ \t]*)/i;
