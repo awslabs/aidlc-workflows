@@ -98,9 +98,8 @@ keeps the provider and model already selected by the user. `aidlc config
 providers` can apply Amazon Bedrock settings on supported project surfaces or
 record manual setup for other harnesses. Kiro CLI and Kiro IDE need no provider
 answer because model access comes with Kiro. On Kiro CLI 2.24.1 or later, use
-`kiro-ide`: it pins Kiro's v3 engine, and the interactive setup ranks it ahead
-of the legacy `kiro` row, which pins no engine and stays for older Kiro CLI
-versions and existing projects. The methodology itself is
+`kiro-ide`, which pins Kiro's v3 engine; `kiro` is the legacy row (see
+[Kiro CLI](docs/guide/harnesses/kiro-cli.md)). The methodology itself is
 provider-independent.
 
 ## Recommended Model

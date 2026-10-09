@@ -67,10 +67,8 @@ A bare `aidlc config` starts the interactive setup when a terminal is
 available. It detects installed harnesses, provider state, runtime needs, and
 trust actions before writing anything.
 
-On Kiro CLI 2.24.1 or later, use `kiro-ide`: it pins Kiro's v3 engine, and the
-interactive setup ranks it ahead of the legacy `kiro` row, which pins no engine
-and stays for older Kiro CLI versions and existing projects. In an existing
-`kiro` project, `aidlc config --harness kiro-ide` switches `.kiro/` in place.
+On Kiro CLI 2.24.1 or later, use `kiro-ide`, which pins Kiro's v3 engine;
+`kiro` is the legacy row (see [Kiro CLI](harnesses/kiro-cli.md)).
 
 If you use Kiro IDE's own terminal in a project folder you have not trusted
 yet, Kiro first asks whether you trust it. AI-DLC's hooks run only in a trusted

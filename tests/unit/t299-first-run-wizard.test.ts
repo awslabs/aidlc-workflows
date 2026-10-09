@@ -1044,8 +1044,8 @@ describe("t299 first-run setup wizard", () => {
     });
     expect(result.status, result.stdout + result.stderr).toBe(0);
     expect(result.stdout).toContain("Choose the harness for this project first.");
-    expect(result.stdout).toContain(`Kiro CLI${" ".repeat(8)}(detected)\n`);
-    expect(result.stdout).toContain(`Kiro IDE${" ".repeat(8)}(detected, default)\n`);
+    expect(result.stdout).toContain(`    5. Kiro CLI${" ".repeat(8)}(detected)\n`);
+    expect(result.stdout).toContain(`    6. Kiro IDE${" ".repeat(8)}(detected, default)\n`);
     expect(result.stdout).toContain("Using Kiro IDE.");
     const kiroDir = join(result.project, ".kiro");
     expect(existsSync(join(kiroDir, "agents", "aidlc.md"))).toBe(true);
