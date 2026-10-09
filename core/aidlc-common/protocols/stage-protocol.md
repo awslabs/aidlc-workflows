@@ -1298,7 +1298,8 @@ beside what the stage produced: say it to the person with the approval
 question, never claim coverage a
 check reports against (every requirement traced, every section present), and
 when they ask for changes, correct from that detail file and run the check
-again.
+again. A Unit's own gate names that Unit's outputs only; with Sensors off,
+nothing is said about checks.
 
 `required-sections` applies to markdown outputs. Unless a stage declares a
 more specific contract, it enforces the registry default of at least two H2

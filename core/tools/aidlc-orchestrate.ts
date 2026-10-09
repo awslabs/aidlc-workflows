@@ -9109,7 +9109,7 @@ function applyGateOnlyShape(
     const line = producedLine(gateNode, directive.unit ?? null, unitFolders, projectDir);
     // A check that still fails on a declared output is said with the gate,
     // beside what the stage produced: the narration is the person's line.
-    const narration = [line, ...failedCheckNotices(projectDir, gateNode)].filter(Boolean).join(" ");
+    const narration = [line, ...failedCheckNotices(projectDir, gateNode, directive.unit ?? null)].filter(Boolean).join(" ");
     if (narration) directive.narration = narration;
   }
   directive.protocol_modules = (directive.protocol_modules ?? []).filter(
@@ -14830,7 +14830,7 @@ function handleReport(args: string[], projectDir: string | undefined): void {
       // A check that still fails on a declared output is said with the gate,
       // as the person's line beside the question, never as a change line.
       if (unitReply.kind === "print" && (flags.result === "awaiting-approval" || flags.result === "revised")) {
-        const checks = failedCheckNotices(pd, node);
+        const checks = failedCheckNotices(pd, node, unit);
         if (checks.length > 0) unitReply.narration = checks.join(" ");
       }
       emit(withChangeNotices(unitReply, changeNotices));
@@ -15081,7 +15081,7 @@ function handleReport(args: string[], projectDir: string | undefined): void {
         // A check that still fails on a declared output is said with the gate,
         // beside what the stage produced: the narration is the person's line,
         // and the change lines stay what changed.
-        const narration = [line, ...failedCheckNotices(pd, node)].filter(Boolean).join(" ");
+        const narration = [line, ...failedCheckNotices(pd, node, unit)].filter(Boolean).join(" ");
         if (narration) gateReply.narration = narration;
       }
     }

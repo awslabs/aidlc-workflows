@@ -18,18 +18,21 @@ import {
 } from "../harness/test-budget.ts";
 import { afterEach, beforeEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, relative, sep } from "node:path";
 import {
   AIDLC_SRC,
   cleanupTestProject,
   createTestProject,
   resetAidlcEnv,
+  runOrchestrateNext,
   seedAidlcMemory,
+  seedBoltDag,
   seededRecordDir,
+  seededStateFile,
   seedStateFile,
 } from "../harness/fixtures.ts";
-import { auditBlockField, readAuditShardEvents } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import { artifactFilename, auditBlockField, readAuditShardEvents } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
@@ -42,16 +45,22 @@ const DETAIL = (fireId: string) => `.aidlc-engine/sensors/${fireId}.json`;
 
 let proj: string;
 
-function run(tool: string, args: string[], extra: Record<string, string> = {}): { rc: number; out: string } {
+function envFor(extra: Record<string, string> = {}): Record<string, string | undefined> {
   const env: Record<string, string | undefined> = { ...process.env };
   env.AIDLC_SKIP_ARTIFACT_GUARD = "1";
   env.AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD = "1";
   env.AIDLC_ALLOW_DIRECT_STATE_TRANSITIONS = "1";
-  // The lines read the checks the audit holds; no sensor runs during the test.
+  // No sensor runs during the test: the lines read the checks the audit holds.
+  // (The lines do not read this switch; the person's and the scope's do count.)
   env.AIDLC_DISABLE_SENSORS = "1";
   delete env.AIDLC_SKIP_HUMAN_PRESENCE_GUARD;
   delete env.AIDLC_UNATTENDED;
   Object.assign(env, extra);
+  return env;
+}
+
+function run(tool: string, args: string[], extra: Record<string, string> = {}): { rc: number; out: string } {
+  const env = envFor(extra);
   const r = spawnSync(BUN, [tool, ...args, "--project-dir", proj], {
     timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     encoding: "utf-8",
@@ -88,6 +97,7 @@ function sensorRow(
   outputRel: string,
   findings = 1,
   sensorId = "required-sections",
+  note?: string,
 ): void {
   appendAuditEntry(event, {
     "Fire id": fireId,
@@ -95,7 +105,7 @@ function sensorRow(
     "Stage slug": STAGE,
     "Output path": outputRel,
     ...(event === "SENSOR_PASSED"
-      ? { "Duration ms": "12" }
+      ? { "Duration ms": "12", ...(note ? { Note: note } : {}) }
       : { "Detail path": DETAIL(fireId), "Findings count": String(findings) }),
   }, proj);
 }
@@ -174,5 +184,155 @@ describe("t-gate-names-failed-checks: a check that still fails is said with the 
     const narration = String(openGate().narration ?? "");
     expect(narration.match(/The [a-z-]+ check reports \d+ findings? in [a-z-]+\.md \(details: /g) ?? []).toHaveLength(3);
     expect(narration).toContain("1 more check reports findings on this stage's outputs.");
+  });
+
+  test("with Sensors switched off, the gate says nothing about the checks; the record keeps them", () => {
+    const statePath = seededStateFile(proj);
+    writeFileSync(
+      statePath,
+      readFileSync(statePath, "utf-8").replace("- **Scope**: feature\n", "- **Scope**: feature\n- **Sensors**: off (set by you)\n"),
+    );
+    const rel = outputPath(writeArtifact("feasibility-assessment"));
+    sensorRow("SENSOR_FAILED", "aaaa0002", rel, 3);
+    const opened = openGate();
+    expect(String(opened.narration ?? "")).not.toContain("check reports");
+    expect(opened.change_notices).toBeUndefined();
+    // The gate row still records what the checks said: only the person's line is silent.
+    const row = readAuditShardEvents(proj).filter((r) => r.event === "STAGE_AWAITING_APPROVAL").at(-1);
+    expect(auditBlockField(row!.block, "Sensor State") ?? "").toContain(`required-sections@${rel}=failed(3)`);
+    const shown = shownAgain();
+    expect(shown.gate_only, JSON.stringify(shown)).toBe(true);
+    expect(String(shown.narration ?? "")).not.toContain("check reports");
+  });
+
+  test("a pass that carries a note evaluated nothing: the failure before it is still said", () => {
+    const rel = outputPath(writeArtifact("feasibility-assessment"));
+    sensorRow("SENSOR_FAILED", "aaaa0002", rel, 3);
+    sensorRow("SENSOR_PASSED", "aaaa0003", rel, 1, "required-sections", "tool-unavailable");
+    const opened = openGate();
+    expect(opened.narration).toContain(
+      `The required-sections check reports 3 findings in feasibility-assessment.md (details: ${DETAIL("aaaa0002")}).`,
+    );
+    sensorRow("SENSOR_PASSED", "aaaa0004", rel);
+    const again = shownAgain();
+    expect(again.gate_only, JSON.stringify(again)).toBe(true);
+    expect(String(again.narration ?? "")).not.toContain("check reports");
+  });
+});
+
+// A team's Unit gate speaks for that Unit's outputs: two Units at the same
+// per-unit stage, each with a check failing on its own functional-spec, and
+// alpha's gate names alpha's only (the team progress-gates test's fixture shape).
+describe("t-gate-names-failed-checks: a team's Unit gate names that Unit's outputs only", () => {
+  const UNIT_STAGE = "functional-design";
+  const UNIT_PRODUCES = ["entities", "rules", "functional-spec", "frontend-components", "traceability"];
+  const TEAM_STATE = `# AI-DLC State Tracking
+
+## Project Information
+- **Project**: team unit gate test
+- **Project Type**: Greenfield
+- **Scope**: feature
+- **State Version**: 8
+- **Skeleton Stance**: on
+
+## Runtime State
+- **Revision Count**: 0
+- **Construction Iteration**: unit-major
+- **Unit Ownership**: team
+- **Unit Gate Rhythm**: per-stage
+- **Review Override**: none
+
+## Scope Configuration
+- **Stages to Execute**: all
+- **Stages to Skip**: none
+- **Depth**: Standard
+- **Test Strategy**: Standard
+
+## Stage Progress
+
+### CONSTRUCTION PHASE
+- [-] functional-design \u2014 EXECUTE
+- [ ] nfr-requirements \u2014 EXECUTE
+- [ ] nfr-design \u2014 EXECUTE
+- [ ] infrastructure-design \u2014 EXECUTE
+- [ ] code-generation \u2014 EXECUTE
+- [ ] build-and-test \u2014 EXECUTE
+
+## Current Status
+- **Lifecycle Phase**: CONSTRUCTION
+- **Current Stage**: functional-design
+- **Status**: Running
+- **Last Updated**: 2026-08-20T00:00:00Z
+`;
+  const TEAM_ENV = { AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "1" };
+
+  function unitArtifact(unit: string, name: string): string {
+    const dir = join(seededRecordDir(proj), "construction", unit, UNIT_STAGE);
+    mkdirSync(dir, { recursive: true });
+    const path = join(dir, artifactFilename(name));
+    writeFileSync(path, `# ${name} for ${unit}\n`);
+    return path;
+  }
+
+  function unitFailure(fireId: string, unit: string, outputRel: string, findings: number): void {
+    appendAuditEntry("SENSOR_FAILED", {
+      "Fire id": fireId,
+      "Sensor ID": "required-sections",
+      "Stage slug": UNIT_STAGE,
+      Unit: unit,
+      "Output path": outputRel,
+      "Detail path": DETAIL(fireId),
+      "Findings count": String(findings),
+    }, proj);
+  }
+
+  beforeEach(() => {
+    resetAidlcEnv();
+    proj = createTestProject();
+    seedAidlcMemory(proj);
+    writeFileSync(seededStateFile(proj), TEAM_STATE);
+    seedBoltDag(proj, ["alpha", "beta"]);
+  });
+  afterEach(() => cleanupTestProject(proj));
+
+  test("alpha's gate names alpha's failing check, not beta's, when opened and when shown again", () => {
+    // The walk opens alpha's stage run; its body is started, written (a check
+    // fails on its functional-spec) and completed, as a team member's would be.
+    // The walk's first step delivers the rules in parts before the stage run.
+    const opened = runOrchestrateNext(ORCHESTRATE, proj, [], { env: envFor(TEAM_ENV) });
+    const first = (opened.directive ?? {}) as Record<string, unknown>;
+    expect(first.kind, JSON.stringify(opened)).toBe("run-stage");
+    expect(first.unit, JSON.stringify(first)).toBe("alpha");
+    const started = run(STATE, ["unit", "start", "--stage", UNIT_STAGE, "--unit", "alpha"], TEAM_ENV);
+    expect(started.rc, started.out).toBe(0);
+    const specs: Record<string, string> = {};
+    for (const name of UNIT_PRODUCES) {
+      const path = unitArtifact("alpha", name);
+      if (name === "functional-spec") specs.alpha = outputPath(path);
+    }
+    unitFailure("aaaa0011", "alpha", specs.alpha, 2);
+    const completed = run(STATE, ["unit", "complete", "--stage", UNIT_STAGE, "--unit", "alpha"], TEAM_ENV);
+    expect(completed.rc, completed.out).toBe(0);
+    // Beta's outputs, written by another member, with a check failing on them too.
+    for (const name of UNIT_PRODUCES) {
+      const path = unitArtifact("beta", name);
+      if (name === "functional-spec") specs.beta = outputPath(path);
+    }
+    unitFailure("aaaa0012", "beta", specs.beta, 5);
+    const gate = reply(ORCHESTRATE, ["report", "--stage", UNIT_STAGE, "--unit", "alpha", "--result", "awaiting-approval"], TEAM_ENV);
+    expect(gate.kind, JSON.stringify(gate)).toBe("print");
+    const narration = String(gate.narration ?? "");
+    expect(narration).toContain(
+      `The required-sections check reports 2 findings in functional-spec.md (details: ${DETAIL("aaaa0011")}).`,
+    );
+    expect(narration).not.toContain("5 findings");
+    expect(gate.change_notices).toBeUndefined();
+    // The gate shown again is alpha's, and says nothing of beta's checks. (A
+    // per-unit beat's narration is the engine's own short line, or silence at
+    // a gate, so the check line is heard when the Unit's gate opens.)
+    const again = runOrchestrateNext(ORCHESTRATE, proj, [], { env: envFor(TEAM_ENV) });
+    const shown = (again.directive ?? {}) as Record<string, unknown>;
+    expect(shown.unit, JSON.stringify(again)).toBe("alpha");
+    expect(String(shown.narration ?? "")).not.toContain("5 findings");
   });
 });

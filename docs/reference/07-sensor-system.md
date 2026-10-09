@@ -244,7 +244,10 @@ When the gate opens or is shown again, the orchestrator's reply carries, in
 its `narration` beside what the stage produced, one sentence per check whose
 latest result on a declared output is a failure (`failedCheckNotices` in
 `aidlc-state.ts`, at most three sentences and a count), so the agent says it to
-the person with the approval question. The change lines stay what changed.
+the person with the approval question. The change lines stay what changed. A
+pass recorded with a note (tool unavailable, script error) evaluated nothing and
+does not clear an earlier failure; a Unit's own gate names that Unit's outputs
+only; with Sensors off nothing is said.
 A `blocking` gate binding proceeds only on a verified pass. Reported findings,
 dispatcher exit/spawn/timeout failures, malformed or mismatched verdicts,
 `SENSOR_BUDGET_OVERRIDE`, and `SENSOR_PASSED` rows carrying `tool-unavailable`
