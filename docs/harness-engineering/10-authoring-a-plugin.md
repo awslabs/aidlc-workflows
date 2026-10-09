@@ -157,12 +157,35 @@ when:
 
 See [Scopes](04-scopes.md) for scope membership and the `when:` predicate.
 
+Give the stage a **composer prior** with `ars:` so `/aidlc compose` can screen
+it mechanically. The shipped `tools/data/ars-priors.json` names only core
+stages; without this block your stage shows up in `aidlc-graph ars` output as a
+`no-prior` row the composer can only decide by judgment:
+
+```yaml
+ars:
+  targets: [ve, r]   # the ARS components the stage reduces: iae | csu | ve | r | ua
+  cost: 4            # 1 (trivial) .. 5 (heavy); null = never numerically screened
+```
+
+Two optional keys complete the entry. `role:` changes how the stage is
+screened: `initialization` and `core` always run, `structural` defaults to SKIP
+and is left to judgment at the gate, and `phase-gate` runs only when other work
+in its phase runs. `project_types: [brownfield]` mirrors a `condition:` that
+restricts the stage to one kind of project. The schema
+validates the block like a priors-file entry and compile copies it onto the
+graph node. A shipped priors entry always wins, so the block only matters on
+your own stages. See [Stage Definition](../reference/15-stage-definition.md)
+§ `ars`.
+
 ## 3. Modify an existing core stage (a contribution)
 
 This is the contribution seam — additively change a core stage **without editing
 it**. A contribution lives at
-`<plugin>/contributions/<phase>/<slug>.md`. Here is `test-pro`'s contribution to
-`nfr-requirements`:
+`<plugin>/contributions/<phase>/<slug>.md`, exactly one directory below
+`contributions/`: a file placed higher or nested deeper is never read, so the
+validator reports it and compose drop-logs it. Here is `test-pro`'s contribution
+to `nfr-requirements`:
 
 ```markdown
 ---
@@ -206,9 +229,19 @@ marks what the compose hook merges today vs. designed-but-deferred (mirrors doc 
   from a name prefix. Use it to route existing core stages under your
   plugin's scope — e.g. a methodology plugin whose scope carries its own
   discovery stages plus core Inception onward.
-- `adds.requires_stage` — ⏳ **deferred**: a contribution may declare it, but
-  compose records it to the drops log rather than merging (it is not yet a
-  DAG edge). Don't rely on it to gate behavior yet.
+- `adds.requires_stage` — ✅ set-unions ordering edges into the target's
+  `requires_stage`. The dependency must already be installed and must
+  compile before the target: a lower stage number (a pinned stage keeps its
+  number even if it moved phase), or an earlier phase for a stage not yet
+  numbered. Use it for the edge the stage-definition guide asks for — "I consume
+  X, which stage Y produces → require Y" — or for cross-phase ordering. A
+  stage your plugin adds seeds past its phase max, so a core stage cannot be
+  made to require it within the same phase (that is RFC #1100); such an
+  entry, an unknown slug, a self-edge, or an edge that would close a cycle
+  among your new stages is dropped-with-log, never merged.
+  Merged edges are re-checked on every compose and runtime upgrade: one that
+  no longer holds is removed, and one the new core declares itself becomes
+  core's; both leave your plugin's contribution record.
 - `fragments` — ✅ prose blocks spliced into the stage body. Each fragment's prose
   is the `## fragment: <anchor>` block in the contribution file.
 
@@ -220,6 +253,8 @@ marks what the compose hook merges today vs. designed-but-deferred (mirrors doc 
 | `before-step:<n>`  | immediately before `### Step <n>`                                  | ✅ |
 | `end-of-steps`     | at the end of the `## Steps` block                                 | ✅ |
 | `in:<Compartment>` | at the end of the named `## <Compartment>` block (e.g. `in:Sensors`) | ✅ |
+| `after-preflight`  | personas only: right after the delegated-knowledge preflight block   | ✅ |
+| `end-of-body`      | at the end of the authored body (before absorbed reviewer knowledge) | ✅ |
 | `after-questions`  | after the questions-generating step                                | ⏳ not implemented — `locateAnchor` has no case; drops "unknown anchor". Use `after-step:<n>`. |
 
 Fragments are ordered deterministically by `(order, plugin)`. A same
@@ -245,6 +280,39 @@ body after an engine reinstall. Two authoring rules follow from that:
   Only PR-branch installs are affected — recompose from a clean base, or delete
   the old block by hand, once.
 
+### Contribute to a core persona
+
+A contribution under `contributions/agents/<agent>.md` targets a core persona
+instead of a stage — `target:` is the agent slug (the file stem of
+`<harness>/agents/<agent>.md`). Only the personas in the engine's core agent
+roster qualify: any other one, such as a persona a plugin ships, is refused by
+the validator and dropped-with-log by compose. Personas take **prose fragments
+only**: their frontmatter is identity and tier, so an `adds:` block is refused
+with an advisory drop. The anchors are `in:<H2>` (`in:Collaboration` for a new
+collaboration bullet), `after-preflight` (right after the delegated-knowledge
+preflight the packager injects, the place for a mandatory instruction every
+dispatched worker must see) and `end-of-body`.
+
+```yaml
+---
+target: aidlc-quality-agent
+plugin: test-pro
+fragments:
+  - anchor: in:Collaboration
+    order: 100
+---
+
+## fragment: in:Collaboration
+
+- **Works with (test-pro)**: test-pro-metrics-agent (…)
+```
+
+Fragments splice, record into the sidecar and strip on disable exactly like
+stage fragments. They reach the agent on every harness: compose writes them
+into the Markdown persona and into the native agent file a harness builds
+from it (the Codex agent TOML, the OpenCode and Copilot native agents), and
+Kiro CLI's agent JSON loads its prompt from the Markdown persona.
+
 ### Engine upgrade lifecycle
 
 An engine reinstall copies the stock `dist/<harness>/` graph and core stage
@@ -263,6 +331,24 @@ changed. Consume records preserve and verify `artifact`, `required`, and optiona
 invalid sidecar cannot be reconstructed safely from an already-composed stage:
 refresh the stock engine, remove that sidecar, then run `plugin sync`.
 
+### Plugin upgrade lifecycle
+
+Re-composing a newer version of your plugin (a new session on a host with the
+compose hook, `aidlc engine plugin sync`, or `bun <plugin-root>/hooks/compose.ts`)
+takes your newer stages, scopes, agents, knowledge, sensors, and tools wherever
+the installed copy is still the one your plugin installed. Compose proves that
+with `tools/data/plugin-owned-<key>.json`, the same hash-proven record
+`plugin sync` writes. A copy the person changed stays as it is; the drops log
+(shown by `/aidlc --doctor`) names the file and the step: move the change
+elsewhere, remove the file, re-run compose. A project composed before that record
+existed (compose.ts run by hand on 2.10.0 or earlier) reports each differing file
+the same way; identical files are recorded on the first run of the current
+compose, so later upgrades need nothing. A prose fragment your new version no
+longer ships at its old `(anchor, order)` is removed together with its sidecar
+record, so a moved fragment appears once. Structural additions (`adds.*`) your
+new version no longer declares are not removed by compose alone; `plugin sync`
+strips them before it re-composes.
+
 ## 4. Packaging the other primitives
 
 `test-pro` ships stages, contributions, sensors, a support agent, a scope, and
@@ -275,11 +361,13 @@ projection remains deferred (doc 18 §9 Status).
   `agents/test-pro-metrics-agent.md` has `name: test-pro-metrics-agent`). It is
   discovered automatically after compose, and your plugin's stages may name it
   as `lead_agent`/`support_agents`. A same-path collision with different content
-  is not overwritten; compose records a drop log. OpenCode composition also
+  is not overwritten (compose records a drop log), unless the installed file is
+  your plugin's own earlier copy, unchanged since compose installed it: a
+  re-compose takes your newer copy. OpenCode composition also
   creates the native `.opencode/agents/` subagent twin and denies nested
   `task` delegation. See
   [Adding an Agent](03-adding-an-agent.md).
-  On Kiro CLI, a natively dispatched plugin roster worker's hand-authored agent-v1 JSON must also include `file://aidlc/spaces/<active-space>/memory/**/*.md` in its `resources` array, resolving to at least one existing Markdown file, because plugin workers receive the same active-stage rules as core workers.
+  On Kiro CLI, a natively dispatched plugin roster worker's hand-authored agent-v1 JSON must also include `file://aidlc/active-memory/**/*.md` (the engine's copy of the active space's memory, the same path on every install) in its `resources` array, resolving to at least one existing Markdown file, because plugin workers receive the same active-stage rules as core workers.
 - **Sensors.** Ship the manifest `sensors/aidlc-<id>.md` **and** its script under
   `tools/` (both — a manifest alone is discoverable but its script must live in
   `tools/` to run). The `aidlc-<id>.md` name at the top of `sensors/` is a hard
@@ -323,9 +411,9 @@ runs only while the plugin is enabled. It receives `AIDLC_PROJECT_DIR`,
 without other stdout:
 
 Doctor discovery derives installed plugin identities from owned stage and scope
-metadata. A plugin must therefore own at least one stage or scope for its doctor
-script to be discoverable; a tools-, sensors-, or knowledge-only plugin is not
-enough on its own.
+metadata and from the composition sidecars under `tools/data/`. A plugin whose
+compose merged contributions (sensors, produces, overlays) is discoverable even
+when it owns no stage or scope.
 
 ```typescript
 import { existsSync } from "node:fs";
@@ -392,8 +480,10 @@ there, writes `plugin-compose-<key>.json` and hash-proven
 `plugin-owned-<key>.json`, then commits the staged diff through the shared
 transaction engine. A fault restores all files, modes, stamps, and ownership
 records. `--prune-missing` is intentionally stricter: it requires a proved full
-host inventory, explicit confirmation (`--yes` in automation), and unchanged
-owned hashes; local or unowned bytes are refused.
+host inventory, `--yes` in automation, and unchanged owned hashes; local or
+unowned bytes are refused. At a terminal it asks nothing: it names the plugins
+it prunes and how to get them back (reinstall in the host, then sync), then
+prunes.
 
 ### Project selection
 

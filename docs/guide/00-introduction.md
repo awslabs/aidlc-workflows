@@ -52,7 +52,7 @@ To reshape *how* AI-DLC behaves — add a stage or an agent, define a scope, aut
 | Scopes | 11 (enterprise through express, plus workshop) + auto-detect |
 | Depth levels | 3 (Minimal, Standard, Comprehensive) |
 | Test strategy levels | 3 (Minimal, Standard, Comprehensive) |
-| Audit event types | 107 |
+| Audit event types | 117 |
 
 ## Guide Map
 
@@ -62,6 +62,7 @@ To reshape *how* AI-DLC behaves — add a stage or an agent, define a scope, aut
 | [Onboarding: A Guided First Week](onboarding.md) | The mental model plus a five-run path for first-time teams |
 | [Workflow Profiles](workflow-profiles.md) | Classic, Express, and the other workflow choices explained |
 | [Your First Workflow](02-your-first-workflow.md) | Annotated walkthrough of a complete run |
+| [Writing a Vision Document](writing-inputs/vision-document-guide.md) and [a Technical Environment Document](writing-inputs/technical-environment-guide.md) | The two notes to write before a bigger piece of work or a workshop |
 | [Spaces and Intents](03-spaces-and-intents.md) | The workspace layout: running many pieces of work across spaces and intents |
 | [Phases and Stages](04-phases-and-stages.md) | The 5 phases and 33 stages explained |
 | [Scopes, Depth, and Test Strategy](05-scopes-and-depth.md) | How to choose and override scope/depth/test strategy |

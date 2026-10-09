@@ -139,13 +139,15 @@ node. Authoring direction is locality-of-reference — open a stage file
 and you see exactly which checks fire when the stage runs.
 
 ```yaml
-# dist/claude/.claude/aidlc-common/stages/construction/code-generation.md
+# dist/claude/.claude/aidlc-common/stages/construction/ci-pipeline.md
 ---
-slug: code-generation
+slug: ci-pipeline
 phase: construction
 # ...
 requires_stage: [...]
 sensors:
+  - required-sections
+  - upstream-coverage
   - linter
   - type-check
 inputs: ...
@@ -184,7 +186,7 @@ fires for the in-flight workflow (BGP-stability property — see
 | `build-and-test` | `[required-sections, upstream-coverage, type-check]` (linter intentionally omitted — build runs canonical lint) |
 | `ci-pipeline` | `[required-sections, upstream-coverage, linter, type-check]` |
 | 4 per-Unit construction-design stages (`functional-design`, `infrastructure-design`, `nfr-design`, `nfr-requirements`) | `[required-sections, upstream-coverage, linter, type-check, traceability]` |
-| `code-generation` | `[linter, type-check, traceability]` |
+| `code-generation` | `[required-sections, traceability]` (`linter` and `type-check` not imported: they ran on every file write and nothing read their results) |
 
 Forks customise stages by editing the stage's `sensors:` list directly
 — the binding lives next to the thing being customised. A manifest is a
@@ -215,7 +217,9 @@ For `fire_on: write`, `matches` is the fire filter: the hook compares the path
 being written against the glob and an entry without a glob never fires. For
 `fire_on: gate`, `gate-start` and `revise` enumerate every existing declared
 deliverable, skip paths outside each sensor's `matches` capability, and dispatch
-only matching paths; an omitted glob accepts every deliverable. All six shipped
+only matching paths; an omitted glob accepts every deliverable. A gate the engine
+approves itself under Construction autonomy dispatches only blocking sensors
+(advisory evidence has no reader there). All six shipped
 manifests declare a glob. The compile resolver copies it into
 `sensors_applicable[]`.
 
@@ -236,6 +240,14 @@ before matching against the manifest `id`.
 ## `default_severity`
 
 `advisory` outcomes produce their audit rows but do not block the stage gate.
+When the gate opens or is shown again, the orchestrator's reply carries, in
+its `narration` on a line after what the stage produced, one sentence per check whose
+latest result on a declared output is a failure (`failedCheckNotices` in
+`aidlc-state.ts`, at most three sentences and a count), so the agent says it to
+the person with the approval question. The change lines stay what changed. A
+pass recorded with a note (tool unavailable, script error) evaluated nothing and
+does not clear an earlier failure; a Unit's own gate names that Unit's outputs
+only; with Sensors off nothing is said.
 A `blocking` gate binding proceeds only on a verified pass. Reported findings,
 dispatcher exit/spawn/timeout failures, malformed or mismatched verdicts,
 `SENSOR_BUDGET_OVERRIDE`, and `SENSOR_PASSED` rows carrying `tool-unavailable`
@@ -262,7 +274,9 @@ dispatch remains advisory.
 `write` is the default and preserves incremental PostToolUse feedback. `gate`
 fires once per existing declared deliverable immediately before `gate-start`
 opens the first gate, before `revise` re-enters the gate after revision work,
-and before the approve-time revision backstop performs recovered re-entry.
+and before the approve-time revision backstop performs recovered re-entry. When
+no person will answer the gate (the engine approves it itself under Construction
+autonomy), only blocking sensors fire: advisory evidence has no reader there.
 Dispatch happens outside the state transaction because `aidlc-sensor.ts fire`
 takes the audit lock around both its `SENSOR_FIRED` and terminal rows.
 Blocking dispatch fingerprints every matching artifact before evaluation,

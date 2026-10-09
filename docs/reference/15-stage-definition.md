@@ -135,13 +135,16 @@ stage's question flow:
 
 The receipt is not inferred from markdown alone. `aidlc-log.ts` records the
 reserved `SUMMARY_CONFIRMATION_RECORDED` event after a matching prompt record
-and a later human turn, binding it to the questions-file digest and its recorded
+and a reply of the person's since their last answer (before or after that
+record), with their words as `Person Reply`, binding it to the questions-file digest and its recorded
 `Hash Scope`. New receipts use `confirmed-content-v2`: the unchanged raw-content
 SHA-256 algorithm normalizes CRLF/lone CR to LF, retains sections in file order,
 and trims trailing whitespace once from the resulting content. All visible
 Q<n> and feedback sections remain bound; one post-summary
 `Assumption Confirmation` section is excluded, up to any line spelled as a
-top-level `## Q<n>` or feedback heading. Comments, code, HTML, and a
+top-level `## Q<n>` or feedback heading. A `Q<n>` or
+`Assumption Confirmation` heading counts with or without a leading emoji
+decoration, by the claim-sources sensor's rule. Comments, code, HTML, and a
 leading BOM in retained content still affect the digest. Heading and answer
 recognition now uses the built-in `Bun.markdown` parser through `markdownBlocks`
 and `visibleMarkdownLines`; raw HTML block content is never a heading, answer,
@@ -211,6 +214,14 @@ How "source work" is detected depends on the workspace:
 - **Non-git workspace** (or any git error) - the guard falls back to a shell-free
   filesystem-existence check: at least one file must exist outside the `aidlc/`
   workspace tree and the harness dirs.
+- **Multi-repo workspace** - the code may live in one of the intent's recorded
+  repos (the `repos` of its registry row) rather than the workspace repo, for
+  example a gitignored child repo with or without AI-DLC in it. The guard asks
+  each recorded repo the same question it asks the workspace, so a brownfield
+  child repo with no new code does not pass either. Git is asked only in a
+  folder with a real `.git` entry (a clone, submodule or init the person made);
+  a committed folder merely shaped like a repo gets the filesystem check, so
+  its committed git config never runs.
 
 Today only `code-generation` declares it. Its per-unit reviews additionally
 require `<record>/construction/<unit>/code-generation/source-manifest.json`:
@@ -221,7 +232,8 @@ baseline, and refuses changed paths outside the fresh claims union. Directory
 claims cover later additions; in a main multi-repo workspace every entry names
 its recorded repo, while a Bolt's manifest is relative to its one selected repo.
 Missing pre-upgrade fields fail open only as documented migration evidence;
-present-but-unbindable or destroyed modern evidence fails closed. A team that
+present-but-unbindable or destroyed modern evidence fails closed under Guard
+Policy strict; under relaxed or off it is recorded once and the work continues. A team that
 adds its own code- or config-emitting stage (a contract generator, an IaC
 executor) should set `workspace_requires: true` so the workspace guard applies.
 Bypass it for CI with `AIDLC_SKIP_ARTIFACT_GUARD=1`; that switch also bypasses
@@ -476,7 +488,7 @@ loop above — the default when a `reviewer` is declared without a class) or
 `advisory` (one normal-flow pass whose findings the human approval gate shows
 from the engine-owned findings list, no repair loop; the effective iteration budget is 1). A later
 write that invalidates its terminal receipt permits one bounded recovery request
-at the next ordinal. The shipped split:
+at the next ordinal, and a review the person asks for is never refused. The shipped split:
 the 7 human-gated ideation/inception prose stages declare `advisory`; the 5
 Construction design/build stages default `adversarial`. `none` is deliberately
 not a stage value — a stage that wants no review deletes its `reviewer:` line;
@@ -493,9 +505,10 @@ inside a Bolt the reviewer is the only pre-merge verification, so the declared
 class always applies there. Like the cap, `review_class` requires a `reviewer`
 (schema error `review_class requires a reviewer`).
 
-Scope frontmatter also accepts four ceremony switches, each `on` | `off`
-(absent means on): `sensors`, `learnings`, `summary_confirmation`, and
-`plan_approval`.
+Scope frontmatter also accepts five ceremony switches, each `on` | `off`
+(absent means on, except `collaborators`, which ships on only on `enterprise`):
+`sensors`, `learnings`, `summary_confirmation`, `plan_approval`, and
+`collaborators` (off runs every stage lead-only; the reviewer is unaffected).
 The last is distinct from a stage's `summary_confirmation: required | if-present`:
 the scope/intent policy decides whether that checkpoint applies at all.
 `/aidlc --sensors on|off`, `/aidlc --learnings on|off`,
@@ -504,10 +517,53 @@ override an intent's scope default (only the person turns plan approval off).
 `AIDLC_DISABLE_SENSORS=1`, `AIDLC_DISABLE_LEARNINGS=1`,
 `AIDLC_DISABLE_SUMMARY_CONFIRMATION=1`, and `AIDLC_DISABLE_PLAN_APPROVAL_GUARD=1`
 force the respective ceremony off. Classic enables sensors, learnings, and plan
-approval and disables summary confirmation; express and poc disable plan
-approval. Apart from plan approval off, which builds each code plan without
-asking, stage approvals, human-turn authority, audit, and team write protection
-remain in force.
+approval and disables summary confirmation; bugfix disables learnings and
+summary confirmation; express and poc disable plan approval. Apart from plan
+approval off, which builds each code plan without asking, stage approvals,
+human-turn authority, audit, and team write protection remain in force.
+
+### `ars`
+
+Optional. The stage's **composer screening prior** — the same four facts as
+one entry of `tools/data/ars-priors.json`, written in the stage's own
+frontmatter:
+
+```yaml
+ars:
+  targets: [ve, r]            # ARS components the stage reduces: iae | csu | ve | r | ua
+  cost: 4                     # 1 (trivial) .. 5 (heavy); null = never numerically screened
+  role: structural            # optional: initialization | core | phase-gate | structural
+  project_types: [brownfield] # optional: mirror a condition: that restricts the project kind
+```
+
+Lists are inline (`[a, b]`). The block runs until the next top-level key, so
+blank lines and `#` comments inside it, including trailing ones, are allowed.
+
+Why it exists: `aidlc-graph ars` (see [CLI commands](../guide/12-cli-commands.md))
+screens each stage EXECUTE/SKIP from a cost prior and the components it
+targets. The shipped priors name core stages only and a plugin cannot edit
+that file, so a plugin stage used to land as a `no-prior` row the composer
+could only decide by judgment. The schema validates the block like a
+priors-file entry, `aidlc-graph compile` copies it onto the node, and the `ars`
+subcommand screens it exactly like a file entry: `role: core` always executes,
+`structural` and a `null` cost are left to judgment at the gate,
+`project_types` screens the stage out on the other project kind, and a
+`--completed` stage outranks everything.
+
+Three rules keep the screen predictable:
+
+- **The priors file wins.** When a slug has both a file entry and an `ars:`
+  block, the file entry is used, so core screening never changes under a
+  stage-side edit. Core stages declare no `ars:`.
+- **An empty `targets` never executes mechanically.** `targets: []` with a
+  numeric cost is legal, but without a `role` nothing can clear the threshold:
+  the row is SKIP, with a reason that says so.
+- **A cost must have a threshold.** `cost` stays on the composer persona's
+  `1..5` scale, and `aidlc-graph ars` exits 1 naming the stage when the value
+  has no `evThresholds` entry in the priors file it loaded.
+
+Each screen row's `priorSource` (`shipped`, `stage` or `null`) says where its
+prior came from.
 
 ---
 

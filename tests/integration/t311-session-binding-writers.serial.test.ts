@@ -11,7 +11,7 @@
 // must beat the legacy fixed-name marker while shared cursors remain write-through.
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { cpSync, existsSync, readFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   activeIntent,
@@ -168,11 +168,18 @@ describe("t311 session binding writers", () => {
   test("two spaces select bound workflows while shared delivered rules follow the last start", () => {
     const first = createIntent(proj, "first", "default", "feature");
     const team = createIntent(proj, "team-work", "team-b", "feature");
-    writeSessionBinding(proj, "space-session-a", "default", first.dirName);
-    writeSessionBinding(proj, "space-session-b", "team-b", team.dirName);
+    writeSessionBinding(proj, "space-session-a", "default", first.dirName, "switch");
+    writeSessionBinding(proj, "space-session-b", "team-b", team.dirName, "switch");
     setActiveSpaceCursor(proj, "team-b");
     cpSync(AIDLC_SRC, join(proj, ".claude"), { recursive: true });
+    // The stub names the engine's copy of the active space's memory and never
+    // changes; the copy follows the session that started last.
     const stub = join(proj, ".claude", "rules", "aidlc.md");
+    const copyOrg = join(proj, "aidlc", "active-memory", "org.md");
+    for (const [space, text] of [["default", "# default org\n"], ["team-b", "# team-b org\n"]]) {
+      mkdirSync(join(proj, "aidlc", "spaces", space, "memory"), { recursive: true });
+      writeFileSync(join(proj, "aidlc", "spaces", space, "memory", "org.md"), text);
+    }
 
     expect(fireSessionStart("space-session-a")).toBe(0);
     expect(resolveWorkflowSelection(proj, { sessionId: "space-session-a" })).toMatchObject({
@@ -182,7 +189,11 @@ describe("t311 session binding writers", () => {
     expect(readAllAuditShards(proj, first.dirName, "default")).toContain(
       "**Event**: SESSION_STARTED",
     );
-    expect(readFileSync(stub, "utf-8")).toContain("aidlc/spaces/default/memory/");
+    expect(readFileSync(stub, "utf-8")).toContain("aidlc/active-memory/");
+    expect(readFileSync(stub, "utf-8")).not.toContain("aidlc/spaces/default/memory/org.md");
+    expect(readFileSync(copyOrg, "utf-8")).toBe(
+      "<!-- AI-DLC keeps this copy in step with aidlc/spaces/default/memory/org.md. Edit that file; this copy is replaced. -->\n# default org\n",
+    );
 
     expect(fireSessionStart("space-session-b")).toBe(0);
     expect(resolveWorkflowSelection(proj, { sessionId: "space-session-b" })).toMatchObject({
@@ -192,15 +203,18 @@ describe("t311 session binding writers", () => {
     expect(readAllAuditShards(proj, team.dirName, "team-b")).toContain(
       "**Event**: SESSION_STARTED",
     );
-    expect(readFileSync(stub, "utf-8")).toContain("aidlc/spaces/team-b/memory/");
+    expect(readFileSync(stub, "utf-8")).toContain("aidlc/active-memory/");
+    expect(readFileSync(copyOrg, "utf-8")).toBe(
+      "<!-- AI-DLC keeps this copy in step with aidlc/spaces/team-b/memory/org.md. Edit that file; this copy is replaced. -->\n# team-b org\n",
+    );
   });
 
   test("intent switch rebinds the nearest ancestry session, not current-session", () => {
     const first = createIntent(proj, "first", "default", "feature");
     const second = createIntent(proj, "second", "default", "feature");
     setActiveIntentCursor(proj, first.dirName, "default");
-    writeSessionBinding(proj, "session-a", "default", first.dirName);
-    writeSessionBinding(proj, "session-b", "default", first.dirName);
+    writeSessionBinding(proj, "session-a", "default", first.dirName, "switch");
+    writeSessionBinding(proj, "session-b", "default", first.dirName, "switch");
     writeSessionPidEntry(proj, process.pid, "session-a");
     writeCurrentSessionId(proj, "session-b");
 
@@ -217,8 +231,8 @@ describe("t311 session binding writers", () => {
     const team = createIntent(proj, "team-work", "team-b", "feature");
     setActiveSpaceCursor(proj, "default");
     setActiveIntentCursor(proj, first.dirName, "default");
-    writeSessionBinding(proj, "session-a", "default", first.dirName);
-    writeSessionBinding(proj, "session-b", "default", first.dirName);
+    writeSessionBinding(proj, "session-a", "default", first.dirName, "switch");
+    writeSessionBinding(proj, "session-b", "default", first.dirName, "switch");
     writeSessionPidEntry(proj, process.pid, "session-a");
     writeCurrentSessionId(proj, "session-b");
 
@@ -252,7 +266,7 @@ describe("t311 session binding writers", () => {
 
   test("space create preserves the current session binding", () => {
     const first = createIntent(proj, "first", "default", "feature");
-    writeSessionBinding(proj, "session-a", "default", first.dirName);
+    writeSessionBinding(proj, "session-a", "default", first.dirName, "switch");
     writeSessionPidEntry(proj, process.pid, "session-a");
 
     const result = util(["space", "create", "team-new"]);
@@ -266,7 +280,7 @@ describe("t311 session binding writers", () => {
   test("PostToolUse moves binding, usage attribution, and handoff to the created intent", () => {
     const first = createIntent(proj, "first", "default", "feature");
     const created = createIntent(proj, "post-tool", "default", "feature");
-    writeSessionBinding(proj, "exact-session", "default", first.dirName);
+    writeSessionBinding(proj, "exact-session", "default", first.dirName, "switch");
     writeSessionIntentUuid(proj, "exact-session", first.uuid);
     const result = Bun.spawnSync({
       cmd: [BUN, REBUILD],
@@ -293,7 +307,7 @@ describe("t311 session binding writers", () => {
 
   test("space switch to an empty space clears prior intent attribution", () => {
     const first = createIntent(proj, "first", "default", "feature");
-    writeSessionBinding(proj, "empty-space-session", "default", first.dirName);
+    writeSessionBinding(proj, "empty-space-session", "default", first.dirName, "switch");
     writeSessionIntentUuid(proj, "empty-space-session", first.uuid);
     writeSessionPidEntry(proj, process.pid, "empty-space-session");
     expect(util(["space", "create", "team-empty"]).status).toBe(0);

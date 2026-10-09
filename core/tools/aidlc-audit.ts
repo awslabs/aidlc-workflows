@@ -20,13 +20,16 @@ import {
   assertNoSymlinkInChainOrThrow,
   auditFilePath,
   auditBlockField,
+  auditShardHostSegment,
   readActiveAuditShardEvents,
   UNTRUSTED_AUDIT_NOTICE,
   sortAttemptEvents,
   attemptEventIsCrossShardTied,
   BoltIdentityError,
   claimAttemptFields,
+  cloneIdFileContent,
   cloneIdPath,
+  entrySkillInvocation,
   errorMessage,
   hasUnsafeSingleLineCharacter,
   isoTimestamp,
@@ -73,6 +76,7 @@ const VALID_EVENT_TYPES = new Set([
   "WORKFLOW_UNPARKED",
   "WORKFLOW_ARCHIVED",
   "WORKFLOW_UNARCHIVED",
+  "INTENT_REPOS_CHANGED",
   // Session events (hook-owned)
   "SESSION_STARTED",
   "SESSION_RESUMED",
@@ -82,6 +86,10 @@ const VALID_EVENT_TYPES = new Set([
   // approval/interview gate requires a HUMAN_TURN appended AFTER the last gate
   // resolution (in ledger order) before it commits.
   "HUMAN_TURN",
+  // Hook-owned, advisory, never a human turn: a prompt the host made for the
+  // agent (a workflow notice, a background task's notice, a brief) reached
+  // the prompt-submit seam and was not counted as the person's turn.
+  "HOST_TURN",
   // Initialization events (fire IN ADDITION TO STAGE_COMPLETED)
   "WORKSPACE_SCAFFOLDED",
   "WORKSPACE_SCANNED",
@@ -91,6 +99,13 @@ const VALID_EVENT_TYPES = new Set([
   "GATE_APPROVED",
   "GATE_REJECTED",
   "QUESTION_ANSWERED",
+  // Hook-owned: a question box closed with no answer (Codex's runs out).
+  "QUESTION_UNANSWERED",
+  // Hook-owned: what a question box carried back, question by question.
+  "QUESTION_REPLIED",
+  // Engine-owned: the person sent their words to separate new work or a
+  // reshape, so they answer no question the work in progress has open.
+  "REQUEST_ROUTED",
   "SUMMARY_CONFIRMATION_RECORDED",
   "VERIFICATION_COMMAND_RECORDED",
   "CONSTRUCTION_POLICY_RECORDED",
@@ -120,16 +135,22 @@ const VALID_EVENT_TYPES = new Set([
   // evidence checked AT the receipt, never the transition itself); UNIT_PAUSED
   // carries Reason + Next Action so a resumed session lands on the exact
   // checkpoint. The autonomous swarm path keeps its own SWARM_UNIT_* ledger.
+  // UNIT_SKIPPED is the unit-major conditional skip of one (stage, Unit),
+  // emitted only through `aidlc-orchestrate.ts report --result skipped --unit`.
   "UNIT_STARTED",
   "UNIT_PAUSED",
   "UNIT_RESUMED",
   "UNIT_COMPLETED",
+  "UNIT_SKIPPED",
   // Artifact events (hook-emitted)
   "ARTIFACT_CREATED",
   "ARTIFACT_UPDATED",
   "ARTIFACT_REUSED",
   // Subagent (hook-emitted)
   "SUBAGENT_COMPLETED",
+  // Advisory, never a HUMAN_TURN: a Copilot prompt arrived right after a
+  // subagent started in that chat and matched no recorded subagent brief.
+  "SUBAGENT_PROMPT_UNMATCHED",
   // Reviewer read-scope enforcement (hook-emitted): a per-unit reviewer's
   // tool call was refused for reaching into sibling units' construction/ paths.
   "REVIEWER_SCOPE_BLOCKED",
@@ -185,6 +206,10 @@ const VALID_EVENT_TYPES = new Set([
   // Adaptive composer: an in-flight plan re-shape (pending-stage suffix flips
   // via the recompose verb). Emitted by aidlc-utility.ts handleRecompose.
   "RECOMPOSED",
+  // The person said the work is a new project or existing code: the folder
+  // rescanned and the type recorded as theirs. Emitted by aidlc-utility.ts
+  // handleReclassify.
+  "WORKSPACE_RECLASSIFIED",
   // A piece of work's plan kept as a reusable scope. Emitted by
   // aidlc-utility.ts handleScopeSave.
   "SCOPE_SAVED",
@@ -193,6 +218,10 @@ const VALID_EVENT_TYPES = new Set([
   // Error/Recovery
   "ERROR_LOGGED",
   "RECOVERY_COMPLETED",
+  // The Copilot adapter could not find or trust its coordination record for an
+  // AI-DLC command, so it let the command reach the engine, which answers from
+  // disk, instead of refusing it. Advisory; it never carries the command text.
+  "COORDINATION_STOOD_ASIDE",
   // Construction Bolt execution
   "BOLT_STARTED",
   "BOLT_COMPLETED",
@@ -200,6 +229,7 @@ const VALID_EVENT_TYPES = new Set([
   "AUTONOMY_MODE_SET",
   "UNIT_OWNERSHIP_SET",
   "UNIT_GATE_RHYTHM_SET",
+  "CONSTRUCTION_POLICY_SET",
   "UNIT_MERGED",
   // Worktree lifecycle:
   //   WORKTREE_* emitted by aidlc-worktree.ts
@@ -268,11 +298,13 @@ const EVENT_HEADINGS: Record<string, string> = {
   WORKFLOW_UNPARKED: "Workflow Unparked",
   WORKFLOW_ARCHIVED: "Workflow Archived",
   WORKFLOW_UNARCHIVED: "Workflow Unarchived",
+  INTENT_REPOS_CHANGED: "Intent Repos Changed",
   SESSION_STARTED: "Session Start",
   SESSION_RESUMED: "Session Resume",
   SESSION_COMPACTED: "Session Compacted",
   SESSION_ENDED: "Session End",
   HUMAN_TURN: "Human Turn",
+  HOST_TURN: "Host Turn",
   WORKSPACE_SCAFFOLDED: "Workspace Scaffolded",
   WORKSPACE_SCANNED: "Workspace Scanned",
   WORKSPACE_INITIALISED: "Workspace Initialised",
@@ -280,6 +312,9 @@ const EVENT_HEADINGS: Record<string, string> = {
   GATE_APPROVED: "Gate Approved",
   GATE_REJECTED: "Gate Rejected",
   QUESTION_ANSWERED: "Question Answered",
+  QUESTION_UNANSWERED: "Question Unanswered",
+  QUESTION_REPLIED: "Question Replied",
+  REQUEST_ROUTED: "Request Routed",
   SUMMARY_CONFIRMATION_RECORDED: "Summary Confirmation Recorded",
   VERIFICATION_COMMAND_RECORDED: "Verification Command Recorded",
   CONSTRUCTION_POLICY_RECORDED: "Construction Policy Recorded",
@@ -294,10 +329,12 @@ const EVENT_HEADINGS: Record<string, string> = {
   UNIT_PAUSED: "Unit Paused",
   UNIT_RESUMED: "Unit Resumed",
   UNIT_COMPLETED: "Unit Completed",
+  UNIT_SKIPPED: "Unit Skipped",
   ARTIFACT_CREATED: "Artifact Created",
   ARTIFACT_UPDATED: "Artifact Updated",
   ARTIFACT_REUSED: "Artifact Reused",
   SUBAGENT_COMPLETED: "Subagent Completed",
+  SUBAGENT_PROMPT_UNMATCHED: "Subagent Prompt Unmatched",
   REVIEWER_SCOPE_BLOCKED: "Reviewer Scope Blocked",
   REVIEW_FREEZE_BLOCKED: "Review Freeze Blocked",
   PLAN_APPROVAL_BLOCKED: "Plan Approval Blocked",
@@ -319,15 +356,18 @@ const EVENT_HEADINGS: Record<string, string> = {
   GUARD_STOOD_ASIDE: "Guard Stood Aside",
   CEREMONY_SET: "Ceremony Set",
   RECOMPOSED: "Plan Recomposed",
+  WORKSPACE_RECLASSIFIED: "Workspace Reclassified",
   SCOPE_SAVED: "Scope Saved",
   ERROR_LOGGED: "Error Logged",
   RECOVERY_COMPLETED: "Recovery Completed",
+  COORDINATION_STOOD_ASIDE: "Coordination Stood Aside",
   BOLT_STARTED: "Bolt Started",
   BOLT_COMPLETED: "Bolt Completed",
   BOLT_FAILED: "Bolt Failed",
   AUTONOMY_MODE_SET: "Autonomy Mode Set",
   UNIT_OWNERSHIP_SET: "Unit Ownership Set",
   UNIT_GATE_RHYTHM_SET: "Unit Gate Rhythm Set",
+  CONSTRUCTION_POLICY_SET: "Construction Policy Set",
   UNIT_MERGED: "Unit Merged",
   WORKTREE_CREATED: "Worktree Created",
   WORKTREE_MERGED: "Worktree Merged",
@@ -374,6 +414,15 @@ function jsonError(message: string): never {
 
 const CLI_RESERVED_EVENT_TYPES = new Set([
   "HUMAN_TURN",
+  // Hook-owned like HUMAN_TURN: only the hook that saw the host's prompt may
+  // say a turn was the host's.
+  "HOST_TURN",
+  // Hook-owned like HUMAN_TURN: it spends a person's turn, so only the hook
+  // that saw the empty question box may write it.
+  "QUESTION_UNANSWERED",
+  // Hook-owned too: it is the person's own reply, so only the hook that saw
+  // the question box may write it.
+  "QUESTION_REPLIED",
   "SUMMARY_CONFIRMATION_RECORDED",
   "VERIFICATION_COMMAND_RECORDED",
   "CONSTRUCTION_POLICY_RECORDED",
@@ -438,6 +487,10 @@ export interface AuditEntryInput {
 export const CLI_PROTECTED_EVENT_TYPES = new Set([
   "STAGE_COMPLETED",
   "HUMAN_TURN",
+  "HOST_TURN",
+  "QUESTION_UNANSWERED",
+  "QUESTION_REPLIED",
+  "REQUEST_ROUTED",
   "GATE_APPROVED",
   "GATE_REJECTED",
   "QUESTION_ANSWERED",
@@ -454,14 +507,19 @@ export const CLI_PROTECTED_EVENT_TYPES = new Set([
   "AUTONOMY_MODE_SET",
   "UNIT_OWNERSHIP_SET",
   "UNIT_GATE_RHYTHM_SET",
+  // The applied Construction policy decides which stage starts are attempt
+  // boundaries for Unit receipts, so only its typed setters may record it.
+  "CONSTRUCTION_POLICY_SET",
   // Unit lifecycle receipts: routing trusts UNIT_COMPLETED as the completion
   // signal (unitSettled) and UNIT_PAUSED as the hard-stop checkpoint, and the
   // owning verb verifies artifacts before committing — a CLI-forged receipt
-  // would skip that verification. Owned by `aidlc-state.ts unit`.
+  // would skip that verification. Owned by `aidlc-state.ts unit`; the
+  // UNIT_SKIPPED settle receipt is owned by the engine's skip transition.
   "UNIT_STARTED",
   "UNIT_PAUSED",
   "UNIT_RESUMED",
   "UNIT_COMPLETED",
+  "UNIT_SKIPPED",
   "UNIT_MERGED",
   // DocumentKB provenance: the knowledge tool emits these through the library
   // inside its catalog transaction. A CLI-forged DOCUMENT_INDEXED whose
@@ -471,6 +529,22 @@ export const CLI_PROTECTED_EVENT_TYPES = new Set([
   "DOCUMENT_INDEXED",
   "DOCUMENT_UPDATED",
   "DOCUMENT_REMOVED",
+  // Bolt, fork and worktree lifecycle: reviewAttemptWindow opens, completes
+  // and merges an attempt from BOLT_STARTED / BOLT_COMPLETED / AUDIT_MERGED,
+  // audit-merge reads AUDIT_FORKED and an existing AUDIT_MERGED, and the
+  // worktree frontier reads WORKTREE_*. Their owning tools (aidlc-bolt,
+  // aidlc-audit, aidlc-state, aidlc-worktree) emit them through the library, so
+  // a CLI-appended row would claim a merge or a fork that never ran.
+  "BOLT_STARTED",
+  "BOLT_COMPLETED",
+  "BOLT_FAILED",
+  "AUDIT_FORKED",
+  "AUDIT_MERGED",
+  "STATE_FORKED",
+  "STATE_MERGED",
+  "WORKTREE_CREATED",
+  "WORKTREE_MERGED",
+  "WORKTREE_DISCARDED",
   // Commit-provenance anchors: `aidlc-attest.ts anchor` derives attribution
   // from receipts + evidence and deduplicates on (Commit, Repo). A CLI-forged
   // row would suppress the genuine derived anchor the same way a forged
@@ -511,6 +585,9 @@ export const CLI_PROTECTED_EVENT_TYPES = new Set([
 const MERGE_PROTECTED_EVENT_TYPES = new Set([
   // Human authority (GATE_RESOLUTION_EVENTS + presence + autonomy).
   "HUMAN_TURN",
+  "QUESTION_UNANSWERED",
+  "QUESTION_REPLIED",
+  "REQUEST_ROUTED",
   "GATE_APPROVED",
   "GATE_REJECTED",
   "QUESTION_ANSWERED",
@@ -524,11 +601,13 @@ const MERGE_PROTECTED_EVENT_TYPES = new Set([
   "AUTONOMY_MODE_SET",
   "UNIT_OWNERSHIP_SET",
   "UNIT_GATE_RHYTHM_SET",
+  "CONSTRUCTION_POLICY_SET",
   // Routing-trusted unit lifecycle receipts.
   "UNIT_STARTED",
   "UNIT_PAUSED",
   "UNIT_RESUMED",
   "UNIT_COMPLETED",
+  "UNIT_SKIPPED",
   // Referee/conductor bookkeeping, emitted against main only.
   "AUDIT_FORKED",
   "AUDIT_MERGED",
@@ -676,6 +755,61 @@ export function appendAuditEntry(
     return appendAuditEntryUnlocked(eventType, fields, projectDir, intent, space);
   } finally {
     releaseAuditLock(projectDir, intent, space);
+  }
+}
+
+// The Copilot adapter's advisory row (#1411). VS Code delivers a runSubagent
+// brief as a prompt right after the subagent starts; the adapter matches it to
+// the brief recorded at launch and never counts it as the person's turn. A
+// prompt that arrives within seconds of a subagent start in the same chat and
+// matches no record lands here, so a change in the text the host sends is
+// noticed. Such a prompt is almost certainly that subagent's brief, so it is
+// never counted as the person's turn (Counted: no); the Reason says whether
+// the record was read and matched nothing, or could not be read at all. The
+// prompt text is never written.
+export function appendSubagentPromptUnmatched(
+  projectDir: string,
+  row: { session: string; agent: string; recordRead: boolean },
+): void {
+  appendAuditEntry("SUBAGENT_PROMPT_UNMATCHED", {
+    ...(row.session ? { Session: row.session } : {}),
+    Agent: row.agent || "unknown",
+    Counted: "no",
+    Reason: row.recordRead
+      ? "no recorded subagent brief matched this prompt right after a subagent started, so it was not counted as the person's turn"
+      : "the subagent brief record could not be read right after a subagent started, so this prompt was not counted as the person's turn",
+  }, projectDir);
+}
+
+// The Copilot adapter's coordination check stood aside (#1411). When the claim
+// ledger cannot find or trust its own record for an AI-DLC command (no record
+// for this project and intent, a record it cannot read, or a workflow state that
+// moved since the record was written), refusing only sends the agent back to a
+// fresh `next`, which re-issues the same step. The adapter lets the command
+// through instead, and the engine answers from its own view of disk. This row is
+// the trace of that pass. It is written only into a shard that already exists,
+// takes the audit lock with a tight bound (a busy lock skips the row rather
+// than hold the person's command), and never throws: a missing trace must not
+// block the command either. The command text and receipt are never written.
+export function appendCoordinationStoodAside(
+  projectDir: string,
+  row: { session: string; command: string; reason: string },
+): boolean {
+  try {
+    if (!existsSync(auditFilePath(projectDir))) return false;
+    if (!acquireAuditLock(projectDir, 2, 25)) return false;
+    try {
+      appendAuditEntryUnlocked("COORDINATION_STOOD_ASIDE", {
+        ...(row.session ? { Session: row.session } : {}),
+        Command: row.command,
+        Reason: row.reason,
+      }, projectDir);
+    } finally {
+      releaseAuditLock(projectDir);
+    }
+    return true;
+  } catch {
+    return false;
   }
 }
 
@@ -1032,9 +1166,15 @@ function handleAppendRaw(
   );
   const safeHeading = redactProjectDirPrefix(heading, projectDir);
   for (const raw of expandedBody.split(/\r\n?|\n|\u2028|\u2029/)) {
-    const line = raw.startsWith("- ") ? raw.slice(2) : raw;
+    // The same optional bullet the field readers accept (exactAuditField).
+    const line = raw.replace(/^-[ \t]*/, "");
     if (!line.startsWith("**Event**:")) continue;
     const value = line.slice("**Event**:".length).trim();
+    // An empty label reads nothing on its own line; refuse it rather than
+    // leave a reader to find the value on the next one.
+    if (value === "") {
+      jsonError("append-raw refuses a body with an empty **Event**: line; put the value on the same line.");
+    }
     if (VALID_EVENT_TYPES.has(value)) {
       jsonError(
         `append-raw refuses a body carrying **Event**: ${value} — that line would register as a ` +
@@ -1159,7 +1299,7 @@ function validateMergeDelta(delta: string): void {
 function exactAuditField(block: string, name: string): string | null {
   const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const matches = [...block.matchAll(
-    new RegExp(`^(?:-\\s*)?\\*\\*${escaped}\\*\\*:\\s*(.*)$`, "gm"),
+    new RegExp(`^(?:-[ \\t]*)?\\*\\*${escaped}\\*\\*:[ \\t]*(.*)$`, "gm"),
   )];
   return matches.length === 1 ? matches[0][1].trim() : null;
 }
@@ -1308,7 +1448,7 @@ function handleAuditFork(args: string[], projectDir: string): void {
 
   // Pre-emit guards (fail clean before any audit side-effect).
   if (!existsSync(mainAuditPath)) {
-    jsonError(`main audit not found at ${mainAuditPath}; start a workflow first (describe what to build, e.g. /aidlc "build the auth service")`);
+    jsonError(`main audit not found at ${mainAuditPath}; start a workflow first (describe what to build, e.g. ${entrySkillInvocation()} "build the auth service")`);
   }
   if (!existsSync(wtPath)) {
     jsonError(
@@ -1351,7 +1491,10 @@ function handleAuditFork(args: string[], projectDir: string): void {
             ? fsConstants.O_NOFOLLOW
             : 0;
         const bytes = Buffer.from(
-          `${randomUUID().replace(/-/g, "").slice(0, 12)}\n`,
+          cloneIdFileContent(
+            randomUUID().replace(/-/g, "").slice(0, 12),
+            auditShardHostSegment(),
+          ),
         );
         let cloneFd: number | undefined;
         try {
@@ -1586,7 +1729,7 @@ function handleAuditMerge(args: string[], projectDir: string): void {
     jsonError(`worktree audit not found at ${wtAuditPath}; nothing to merge`);
   }
   if (!existsSync(mainAuditPath)) {
-    jsonError(`main audit not found at ${mainAuditPath}; start a workflow first (describe what to build, e.g. /aidlc "build the auth service")`);
+    jsonError(`main audit not found at ${mainAuditPath}; start a workflow first (describe what to build, e.g. ${entrySkillInvocation()} "build the auth service")`);
   }
 
   const wtSnapshot = readAuditSnapshot(projectDir, wtAuditPath);

@@ -10,7 +10,7 @@
 // Mechanism = none: pure in-process reads of the shipped dist agent JSONs plus
 // RegExp evaluation. No spawn, no LLM.
 //
-// The shipped allowlist grants ONLY project-relative `.kiro/tools/<file>.ts`
+// The shipped allowlist grants ONLY AI-DLC's own project-relative `.kiro/tools/`
 // invocations. Absolute paths are excluded because a path only has to be SHAPED
 // like a tool path, not be trustworthy: a grant for any `/.../.kiro/tools/*.ts`
 // pre-approves running a file from a world-writable directory (verified live:
@@ -39,12 +39,36 @@
 
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname, join, posix } from "node:path";
 import { fileURLToPath } from "node:url";
+import { RECORDABLE_PROJECT_BYPASSES } from "../../core/tools/aidlc-settings.ts";
+import { CONFIG_SECTIONS } from "../../core/tools/aidlc-command.ts";
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 
 const HARNESSES = ["kiro"] as const;
+
+// Every read form agents were seen running for "show my settings", "what
+// version", "is my setup healthy" and "what is my status", pinned on their own
+// so the list cannot lose one.
+const SEEN_READ_FORMS = [
+  "--status",
+  "--version",
+  "version",
+  "config --help",
+  "doctor",
+  "--doctor",
+  "doctor --verbose",
+  "--doctor --verbose",
+  "config --show",
+  "config --show --json",
+  ...CONFIG_SECTIONS.flatMap((section) => [
+    `config ${section} --show`,
+    `config ${section} --show --json`,
+    `config ${section} --help`,
+  ]),
+];
+
 
 const PERSONAS = [
   "aidlc-architect-agent.json",
@@ -201,10 +225,19 @@ const MUST_ALLOW = [
   "bun .kiro/tools/aidlc-utility.ts status",
   "bun .kiro/tools/aidlc-state.ts get",
   'bun .kiro/tools/aidlc-log.ts decision --text "safe words"',
-  "bun run .kiro/tools/aidlc-version.ts",
-  'bun ".kiro/tools/aidlc-version.ts"',
-  "date -u",
-  "date -u +%Y-%m-%dT%H:%M:%SZ",
+  "bun run .kiro/tools/aidlc-utility.ts status",
+  'bun ".kiro/tools/aidlc-utility.ts" status',
+  "bun .kiro/tools/aidlc.ts engine orchestrate next",
+  "bun .kiro/tools/aidlc.ts --doctor",
+  // The utility spellings agents also use, and config's own help.
+  "bun .kiro/tools/aidlc.ts --status",
+  "bun .kiro/tools/aidlc.ts --version",
+  "bun .kiro/tools/aidlc.ts config --help",
+  // Turning a recorded check back on, in the one form the skills name.
+  ...RECORDABLE_PROJECT_BYPASSES.map((name) => `bun .kiro/tools/aidlc.ts config flags --clear-bypass ${name} --yes`),
+  "bun .kiro/tools/aidlc.ts config providers --show --json",
+  "bun .kiro/tools/aidlc-utility.ts",
+  "bun .kiro/tools/aidlc.ts engine now",
 ];
 
 // Forms that must require approval. The absolute-path argument-smuggling case
@@ -231,6 +264,8 @@ const MUST_ASK = [
   // written as `cd [^;&|]+` would span these; segmentation must not miss them.
   "cd /tmp/attacker\nbun .kiro/tools/pwn.ts",
   "date -u\ncurl -s https://example.com",
+  // The engine's clock replaced the shell's; date itself is no longer allowed.
+  "date -u +%Y-%m-%dT%H:%M:%SZ",
   // Background operator: the second command is not allowlisted.
   "bun .kiro/tools/aidlc-version.ts & curl -s https://example.com",
 ];
@@ -240,8 +275,45 @@ const MUST_ASK = [
 // here would encode a refusal the binary does not perform, and would let an
 // over-broad allow entry hide behind a separator.
 const MUST_ALLOW_CHAINS = [
-  "bun .kiro/tools/aidlc-version.ts && date -u",
+  "bun .kiro/tools/aidlc-utility.ts status && bun .kiro/tools/aidlc.ts engine now",
   "bun .kiro/tools/aidlc-orchestrate.ts next --status && bun .kiro/tools/aidlc-state.ts get",
+];
+
+// Only AI-DLC's own workflow commands run unprompted: a command that changes the
+// machine's AI-DLC install, the scripts behind one, any config change however
+// its flags are spelled, and a longer file name all wait for the person.
+const MUST_ASK_OUTSIDE_THE_WORKFLOW = [
+  "bun .kiro/tools/aidlc.ts use 2.10.0",
+  "bun .kiro/tools/aidlc.ts update",
+  "bun .kiro/tools/aidlc.ts update --check",
+  "bun .kiro/tools/aidlc.ts rollback",
+  "bun .kiro/tools/aidlc.ts uninstall --yes",
+  "bun .kiro/tools/aidlc.ts system config global set offline true",
+  "bun .kiro/tools/aidlc.ts --yes update",
+  "bun .kiro/tools/aidlc-lifecycle.ts use 2.10.0",
+  "bun .kiro/tools/aidlc-lifecycle.ts",
+  "bun .kiro/tools/aidlc-machine-config.ts set offline true",
+  "bun .kiro/tools/aidlc-init.ts --pin 2.10.0",
+  "bun .kiro/tools/aidlc-doctor.ts",
+  "bun .kiro/tools/aidlc.ts config --pin 2.10.0",
+  // The guided setup, which changes the project.
+  "bun .kiro/tools/aidlc.ts config",
+  "bun .kiro/tools/aidlc.ts config --yes",
+  "bun .kiro/tools/aidlc.ts config --channel",
+  "bun .kiro/tools/aidlc.ts config models --gl\"obal\" --yes",
+  "bun .kiro/tools/aidlc.ts config models --deciding-effort high --project --yes",
+  "bun .kiro/tools/aidlc.ts config models --show --json --global",
+  // Turning a check off, and a form that changes something else as well.
+  "bun .kiro/tools/aidlc.ts config flags --bypass AIDLC_DISABLE_REVIEW_FREEZE_HOOK --local --yes",
+  "bun .kiro/tools/aidlc.ts config flags --bypass AIDLC_DISABLE_REVIEW_FREEZE_HOOK --yes",
+  "bun .kiro/tools/aidlc.ts config flags --clear-bypass AIDLC_DISABLE_REVIEW_FREEZE_HOOK --bypass AIDLC_DISABLE_SENSORS --yes",
+  "bun .kiro/tools/aidlc.ts config flags --bypass AIDLC_DISABLE_SENSORS --clear-bypass AIDLC_DISABLE_REVIEW_FREEZE_HOOK --yes",
+  "bun .kiro/tools/aidlc.ts config flags --clear-bypass AIDLC_DISABLE_REVIEW_FREEZE_HOOK --yes --bypass AIDLC_DISABLE_SENSORS",
+  "bun .kiro/tools/aidlc.ts config flags --clear-bypass AIDLC_DISABLE_REVIEW_FREEZE_HOOK --yes --question-retention-days 1",
+  "bun .kiro/tools/aidlc.ts config flags --clear-bypass AIDLC_DISABLE_REVIEW_FREEZE_HOOK --yes --global",
+  "bun .kiro/tools/aidlc.ts config flags --clear-bypass AIDLC_NOT_A_SWITCH --yes",
+  "bun .kiro/tools/aidlc-log.tsx",
+  "bun .kiro/tools/aidlc-log.ts.bak run",
 ];
 
 // Destructive forms must be denied outright, not merely sent to an approver.
@@ -258,6 +330,102 @@ const MUST_DENY = [
   "rm -r -f /tmp/target",
   "/bin/rm -rf /tmp/target",
   "rm --recursive --force /tmp/target",
+];
+
+// Engine commands from one Kiro CLI bugfix run, first as the engine printed
+// them, then as the agent ran them with another command added. Only the added
+// command made Kiro ask (re-checked live on 2.23.1: the printed form ran, a
+// `| tee` tail asked), which is why the Kiro skill says to run every AI-DLC
+// command as printed.
+const AS_PRINTED = [
+  "bun .kiro/tools/aidlc-orchestrate.ts next",
+  "bun .kiro/tools/aidlc-review-brief.ts context --stage code-generation",
+  "bun .kiro/tools/aidlc-review-brief.ts review --stage code-generation --why first",
+  "bun .kiro/tools/aidlc.ts engine orchestrate report --stage code-generation --result awaiting-approval",
+];
+
+const WITH_A_COMMAND_ADDED = [
+  "bun .kiro/tools/aidlc-review-brief.ts context --stage code-generation | head -40",
+  'bun .kiro/tools/aidlc-orchestrate.ts next | python3 -c "import sys,json; print(json.load(sys.stdin)[0])"',
+  'bun .kiro/tools/aidlc-review-brief.ts review --stage code-generation --why first && echo "GATE-OPEN"',
+  "cd web && bun .kiro/tools/aidlc-orchestrate.ts next",
+];
+
+// The project's own test and build commands run project code and differ per
+// project, so they keep asking the person.
+const PROJECT_COMMANDS = ["bun test src/filter.test.ts", "bun test", "bunx tsc --noEmit", "npm test"];
+
+// Kiro's `fs_write` outcome for one path, as observed live on 2.23.1 with a
+// hook-free agent allowing `[!.]*` and `[!.]*/**`: a path is taken relative to
+// the project root (an absolute path inside the project matched), anything
+// that resolves outside the project asked (`/tmp/...`, `../...`, `~/...`), and
+// inside it a dot below the top level was fine (`src/.env-probe` was written),
+// while `.kiro/...` asked. A blanket `fs_write` in `allowedTools` allows every
+// path. A blocking preToolUse hook still refused an allowed write, so the
+// plan-approval guard keeps its say.
+function writeVerdict(agent: { allowedTools?: string[]; allowedPaths: string[] }, path: string): "allow" | "ask" {
+  if (agent.allowedTools?.includes("fs_write")) return "allow";
+  const root = "/project";
+  const abs = path.startsWith("~") ? `/home/person${path.slice(1)}` : posix.resolve(root, path);
+  const rel = posix.relative(root, abs);
+  if (rel === "" || rel.startsWith("..") || posix.isAbsolute(rel)) return "ask";
+  return agent.allowedPaths.some((glob) => globRegExp(glob).test(rel)) ? "allow" : "ask";
+}
+
+/** The glob subset the shipped paths use: `*` and `**` match any run of
+ *  characters, `/` included, and `[!x]` is a negated class. Whether Kiro's `*`
+ *  crosses `/` does not change a verdict here: the shipped `[!.]*` and
+ *  `[!.]*` + `/**` pair allows the same paths either way. */
+function globRegExp(glob: string): RegExp {
+  let out = "";
+  for (let i = 0; i < glob.length; i++) {
+    const ch = glob[i];
+    if (ch === "*") {
+      while (glob[i + 1] === "*") i++;
+      out += ".*";
+    } else if (ch === "[") {
+      const close = glob.indexOf("]", i);
+      out += `[${glob.slice(i + 1, close).replace(/^!/, "^")}]`;
+      i = close;
+    } else {
+      out += ch.replace(/[.+?^${}()|\\]/g, "\\$&");
+    }
+  }
+  return new RegExp(`^${out}$`, "s");
+}
+
+function writeSettings(harness: string, agentFile: string): { allowedTools?: string[]; allowedPaths: string[] } {
+  const doc = JSON.parse(readFileSync(join(REPO_ROOT, "dist", harness, ".kiro", "agents", agentFile), "utf-8")) as {
+    allowedTools?: string[];
+    toolsSettings?: { fs_write?: { allowedPaths?: string[] } };
+  };
+  return { allowedTools: doc.allowedTools, allowedPaths: doc.toolsSettings?.fs_write?.allowedPaths ?? [] };
+}
+
+// The two agents that write project code: the developer and the conductor
+// (inline builds).
+const CODE_WRITERS = ["aidlc.json", "aidlc-developer-agent.json"];
+
+const WRITE_ALLOW = [
+  "web/src/filter.ts",
+  "web/src/filter.test.ts",
+  "README.md",
+  "/project/web/src/filter.ts",
+  "aidlc/spaces/default/intents/fix/plan.md",
+];
+
+const WRITE_ASK = [
+  ".kiro/agents/aidlc.json",
+  ".kiro/tools/aidlc-orchestrate.ts",
+  ".git/config",
+  ".github/workflows/ci.yml",
+  ".env",
+  ".gitignore",
+  "/tmp/outside.txt",
+  "/etc/hosts",
+  "../outside.txt",
+  "web/../../outside.txt",
+  "~/outside.txt",
 ];
 
 describe("t252 Kiro execute_bash allowlist semantics", () => {
@@ -325,6 +493,15 @@ describe("t252 Kiro execute_bash allowlist semantics", () => {
       }
     });
 
+    test(`${harness}: anything outside AI-DLC's own workflow commands waits for the person`, () => {
+      for (const agent of agents) {
+        const eb = execBash(harness, agent);
+        for (const cmd of MUST_ASK_OUTSIDE_THE_WORKFLOW) {
+          expect(evaluate(eb, cmd), `${harness}/${agent}: should ask for \`${cmd}\``).toBe("ask");
+        }
+      }
+    });
+
     test(`${harness}: traversal and out-of-scope commands require approval`, () => {
       for (const agent of agents) {
         const eb = execBash(harness, agent);
@@ -363,5 +540,126 @@ describe("t252 Kiro execute_bash allowlist semantics", () => {
         expect(execBash(harness, agent), agent).toEqual(conductor);
       }
     });
+
+    test(`${harness}: AI-DLC commands run as printed, and only an added command asks`, () => {
+      for (const agent of agents) {
+        const eb = execBash(harness, agent);
+        for (const cmd of AS_PRINTED) {
+          expect(evaluate(eb, cmd), `${harness}/${agent}: should allow \`${cmd}\``).toBe("allow");
+        }
+        for (const cmd of [...WITH_A_COMMAND_ADDED, ...PROJECT_COMMANDS]) {
+          expect(evaluate(eb, cmd), `${harness}/${agent}: should ask for \`${cmd}\``).toBe("ask");
+        }
+      }
+      const skill = readFileSync(join(REPO_ROOT, "dist", harness, ".kiro", "skills", "aidlc", "SKILL.md"), "utf-8");
+      expect(skill).toContain("Run every AI-DLC command exactly as printed, as a command of its own");
+      // Both install channels tell the person which project writes need no click.
+      for (const tree of ["dist", "dist-release"]) {
+        const onboarding = readFileSync(join(REPO_ROOT, tree, harness, ".kiro", "steering", "aidlc-onboarding.md"), "utf-8");
+        expect(onboarding, tree).toContain("- **Project writes**: apart from those commands");
+        expect(onboarding, tree).toContain("`.kiro/sensors/`");
+      }
+    });
+
+    test(`${harness}: the developer and the conductor write project files, not dot entries or outside paths`, () => {
+      for (const agent of CODE_WRITERS) {
+        const settings = writeSettings(harness, agent);
+        for (const path of WRITE_ALLOW) {
+          expect(writeVerdict(settings, path), `${harness}/${agent}: should allow writing ${path}`).toBe("allow");
+        }
+        for (const path of WRITE_ASK) {
+          expect(writeVerdict(settings, path), `${harness}/${agent}: should ask before writing ${path}`).toBe("ask");
+        }
+      }
+      // The conductor's own sensor files under `.kiro/` stay pre-approved for it alone.
+      expect(writeVerdict(writeSettings(harness, "aidlc.json"), ".kiro/sensors/aidlc-linter.md")).toBe("allow");
+      expect(writeVerdict(writeSettings(harness, "aidlc-developer-agent.json"), ".kiro/sensors/aidlc-linter.md")).toBe("ask");
+      // The other personas still write only their own AI-DLC files.
+      const architect = writeSettings(harness, "aidlc-architect-agent.json");
+      expect(writeVerdict(architect, "web/src/filter.ts")).toBe("ask");
+      expect(writeVerdict(architect, "aidlc/spaces/default/intents/fix/plan.md")).toBe("allow");
+    });
   }
+});
+
+// The native release runs AI-DLC through the installed `aidlc` command. Every
+// agent that runs AI-DLC's engine commands also runs, exactly as written, the
+// same read-only and turn-back-on commands as the copy channel; any change
+// still waits for the person.
+describe("t252 Kiro native release allowlist", () => {
+  function nativeBash(agentFile: string): ExecuteBash {
+    const p = join(REPO_ROOT, "dist-release", "kiro", ".kiro", "agents", agentFile);
+    const doc = JSON.parse(readFileSync(p, "utf-8")) as { toolsSettings?: Record<string, ExecuteBash> };
+    const eb = doc.toolsSettings?.execute_bash;
+    if (!eb) throw new Error(`dist-release/kiro/${agentFile}: no execute_bash settings`);
+    return eb;
+  }
+  const agents = ["aidlc.json", ...PERSONAS];
+  const check = "AIDLC_DISABLE_REVIEW_FREEZE_HOOK";
+
+  test("every read form agents run works unprompted on both channels", () => {
+    for (const agent of agents) {
+      for (const form of SEEN_READ_FORMS) {
+        expect(evaluate(execBash("kiro", agent), `bun .kiro/tools/aidlc.ts ${form}`), `${agent}: ${form}`).toBe("allow");
+        expect(evaluate(nativeBash(agent), `aidlc ${form}`), `${agent}: ${form}`).toBe("allow");
+      }
+      for (const form of ["config", "config --yes", "--config", "config models --show --global"]) {
+        expect(evaluate(execBash("kiro", agent), `bun .kiro/tools/aidlc.ts ${form}`), `${agent}: ${form}`).not.toBe("allow");
+        expect(evaluate(nativeBash(agent), `aidlc ${form}`), `${agent}: ${form}`).not.toBe("allow");
+      }
+    }
+  });
+
+  test("reading a setting, doctor, status, version and turning a check back on run unprompted", () => {
+    for (const agent of agents) {
+      const eb = nativeBash(agent);
+      for (const p of [...(eb.allowedCommands ?? []), ...(eb.deniedCommands ?? [])]) {
+        expect(compile(p), `${agent}: inert pattern ${p}`).not.toBeNull();
+      }
+      for (const command of [
+        "aidlc engine orchestrate next",
+        "aidlc doctor",
+        "aidlc --doctor",
+        "aidlc status",
+        "aidlc --status",
+        "aidlc version",
+        "aidlc --version",
+        "aidlc config --help",
+        "aidlc config models --show --json",
+        "aidlc config flags --help",
+        ...RECORDABLE_PROJECT_BYPASSES.map((name) => `aidlc config flags --clear-bypass ${name} --yes`),
+      ]) {
+        expect(evaluate(eb, command), `${agent}: should allow \`${command}\``).toBe("allow");
+      }
+    }
+  });
+
+  test("the guided setup, any config change, turning a check off and the machine commands still ask", () => {
+    for (const agent of agents) {
+      const eb = nativeBash(agent);
+      for (const command of [
+        "aidlc config",
+        "aidlc config --yes",
+        "aidlc --config",
+        "aidlc config --pin 2.10.0",
+        "aidlc config --channel preview",
+        "aidlc config models --show --json --global",
+        "aidlc config models --deciding-effort high --project --yes",
+        `aidlc config flags --bypass ${check} --local --yes`,
+        `aidlc config flags --bypass ${check} --yes`,
+        `aidlc config flags --clear-bypass ${check} --bypass AIDLC_DISABLE_SENSORS --yes`,
+        `aidlc config flags --clear-bypass ${check} --yes --bypass AIDLC_DISABLE_SENSORS`,
+        `aidlc config flags --clear-bypass ${check} --yes --global`,
+        "aidlc config flags --clear-bypass AIDLC_NOT_A_SWITCH --yes",
+        "aidlc doctor --fix",
+        "aidlc doctor && aidlc update",
+        "aidlc update",
+        "aidlc use 2.10.0",
+        "aidlc uninstall --yes",
+        "aidlc system config global set offline true",
+      ]) {
+        expect(evaluate(eb, command), `${agent}: should ask for \`${command}\``).not.toBe("allow");
+      }
+    }
+  });
 });

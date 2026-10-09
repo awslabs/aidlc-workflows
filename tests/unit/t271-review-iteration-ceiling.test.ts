@@ -1,4 +1,4 @@
-// covers: function:isAutonomousSwarmStage, function:reviewArtifactSnapshot,
+// covers: function:isAutonomousSwarmStage, function:reviewArtifactSnapshot, function:renderReviewRequestCommand,
 // function:validateReviewAppendix, function:reviewCompletionMatchesRequest,
 // function:reviewRequestBindingFromBlock, function:reviewAppendedAfterRequest,
 // function:reviewRequestArtifactsCurrent, function:reviewRequestBindingIsModern,
@@ -49,7 +49,7 @@ import {
   unlinkSync,
   writeFileSync,
 } from "node:fs";
-import { dirname, join, relative } from "node:path";
+import { basename, dirname, join, relative } from "node:path";
 import {
   cleanupTestProject,
   createTestProject,
@@ -65,6 +65,8 @@ import {
   auditBlockField,
   boltSlugForUnit,
   freshReviewReceipts,
+  guardAttemptState,
+  reviewRequestReplaces,
   latestReviewRecordRefs,
   mergeReviewRecordsFromDelta,
   REVIEW_RECORD_MAX_BYTES,
@@ -360,6 +362,16 @@ function auditBlocks(proj: string, event: string): string[] {
     .filter((block) => auditBlockField(block, "Event") === event);
 }
 
+// A request row as a release before per-request review files wrote it: the
+// same row without its Review File field.
+function asRecordedBeforeOwnReviewFiles(proj: string): void {
+  const dir = seededAuditDir(proj);
+  for (const name of readdirSync(dir).filter((file) => file.endsWith(".md"))) {
+    const path = join(dir, name);
+    writeFileSync(path, readFileSync(path, "utf-8").replace(/^\*\*Review File\*\*: .*\r?\n/gm, ""));
+  }
+}
+
 function reviewAppendix(
   reviewer: string,
   iteration: number,
@@ -436,13 +448,23 @@ describe("t271 review iteration ceiling", () => {
 
   test("advisory stage: iteration 1 passes, iteration 2 refused with terminal guidance", () => {
     const proj = seedProject("feature"); // requirements-analysis declares advisory
-    const ok = runReview(proj, [
+    const first = [
       "--stage", "requirements-analysis",
       "--reviewer", "aidlc-product-lead-agent",
       "--iteration", "1",
-    ]);
+    ];
+    const ok = runReview(proj, first);
     expect(ok.status).toBe(0);
     expect(ok.stdout).toContain("REVIEW_REQUESTED");
+    // The request opens an empty slot whose folder already exists, so the
+    // reviewer writes one file and makes no folder.
+    const slot = (JSON.parse(ok.stdout.trim().split("\n").at(-1) ?? "{}") as { reviewFile?: string }).reviewFile;
+    expect(typeof slot).toBe("string");
+    expect(existsSync(dirname(join(proj, slot as string)))).toBe(true);
+    expect(existsSync(join(proj, slot as string))).toBe(false);
+    // The pass is spent once its review returns (a pending one is still
+    // waiting, which has its own refusal below).
+    expect(runReview(proj, [...first, "--verdict", "READY"]).status).toBe(0);
 
     const over = runReview(proj, [
       "--stage", "requirements-analysis",
@@ -673,13 +695,15 @@ describe("t271 review iteration ceiling", () => {
     // Spend the one pass the cap allows FIRST. Without it the attempt's next
     // ordinal is still 1, so asking for 2 is a wrong ordinal rather than an
     // exhausted budget - and this case is about the cap, not about arithmetic.
-    expect(
-      runReview(proj, [
-        "--stage", "code-generation",
-        "--reviewer", "aidlc-architecture-reviewer-agent",
-        "--iteration", "1",
-      ]).status,
-    ).toBe(0);
+    // The pass is spent once its review returns; a pending one is still waiting.
+    const first = [
+      "--stage", "code-generation",
+      "--reviewer", "aidlc-architecture-reviewer-agent",
+      "--iteration", "1",
+    ];
+    expect(runReview(proj, first).status).toBe(0);
+    const returned = runReview(proj, [...first, "--verdict", "NOT-READY"]);
+    expect(returned.status, returned.stderr).toBe(0);
     const over = runReview(proj, [
       "--stage", "code-generation",
       "--reviewer", "aidlc-architecture-reviewer-agent",
@@ -778,14 +802,16 @@ describe("t271 review iteration ceiling", () => {
     // The Bolt boundary opens a fresh attempt, so the pass above no longer counts
     // against this one. Spend this attempt's single pass before asking for a
     // second, or the refusal would be about the ordinal rather than the cap.
-    expect(
-      runReview(proj, [
-        "--stage", "functional-design",
-        "--reviewer", "aidlc-architecture-reviewer-agent",
-        "--unit", "unit-alpha",
-        "--iteration", "1",
-      ]).status,
-    ).toBe(0);
+    // The pass is spent once its review returns; a pending one is still waiting.
+    const spent = [
+      "--stage", "functional-design",
+      "--reviewer", "aidlc-architecture-reviewer-agent",
+      "--unit", "unit-alpha",
+      "--iteration", "1",
+    ];
+    expect(runReview(proj, spent).status).toBe(0);
+    const returned = runReview(proj, [...spent, "--verdict", "NOT-READY"]);
+    expect(returned.status, returned.stderr).toBe(0);
     const over = runReview(proj, [
       "--stage", "functional-design",
       "--reviewer", "aidlc-architecture-reviewer-agent",
@@ -879,12 +905,16 @@ describe("t271 review iteration ceiling", () => {
     writeFileSync(graphPath, `${JSON.stringify(graph, null, 2)}\n`);
     const env = { AIDLC_STAGE_GRAPH: graphPath };
 
-    expect(runReview(proj, [
+    const single = [
       "--stage", "code-generation",
       "--reviewer", "aidlc-architecture-reviewer-agent",
       "--unit", "unit-alpha",
       "--iteration", "1",
-    ], env).status).toBe(0);
+    ];
+    expect(runReview(proj, single, env).status).toBe(0);
+    // The pass is spent once its review returns; a pending one is still waiting.
+    const returned = runReview(proj, [...single, "--verdict", "NOT-READY"], env);
+    expect(returned.status, returned.stderr).toBe(0);
     const refused = runReview(proj, [
       "--stage", "code-generation",
       "--reviewer", "aidlc-architecture-reviewer-agent",
@@ -1080,9 +1110,11 @@ describe("t271 review iteration ceiling", () => {
       reviewFile: string;
     };
     expect(requestOutput.requestId).toMatch(/^review:[0-9a-f]{32}$/);
+    // The request's own slot, named by its id.
     expect(requestOutput.reviewFile).toMatch(
-      /\/\.aidlc-engine\/reviews\/requirements-analysis\/stage\/[0-9a-f]{16}\/1\.review\.md$/,
+      /\/\.aidlc-engine\/reviews\/requirements-analysis\/stage\/[0-9a-f]{16}\/1\.[0-9a-f]{32}\.review\.md$/,
     );
+    expect(requestOutput.reviewFile).toContain(`/1.${requestOutput.requestId.slice("review:".length)}.review.md`);
     const requested = auditBlocks(proj, "REVIEW_REQUESTED")[0];
     const requestFingerprint = auditBlockField(
       requested,
@@ -1159,6 +1191,126 @@ describe("t271 review iteration ceiling", () => {
     );
     expect(stale.stageVerdict).toBeNull();
     expect(stale.stageStale).toBe(true);
+  });
+
+  // A live Copilot run: the reviewer wrote a whole READY review with one
+  // `## What I verified` heading, the logger refused it, and the conductor ran
+  // the reviewer again (16 more minutes). Such a review now records as
+  // written, with only that heading line made `###`.
+  const r1Review = (verdictLine = "**Verdict:** READY", heading = "## What I verified") => [
+    "**Reviewer:** aidlc-product-lead-agent",
+    "",
+    verdictLine,
+    "",
+    "**Iteration:** 1",
+    "",
+    "Advisory review of the stage.",
+    "",
+    heading,
+    "",
+    "- **Reported defect is fixed.** The end comparison now keeps the last day.",
+    "",
+    "### Findings",
+    "",
+    "**Prior findings**",
+    "",
+    "| ID | Now | Severity | Note |",
+    "|---|---|---|---|",
+    "",
+    "**New findings**",
+    "",
+    "| Severity | Location | Finding | Required action |",
+    "|---|---|---|---|",
+    "",
+  ].join("\n");
+  const requestHeadingReview = () => {
+    const proj = seedProject("feature");
+    writeReviewedArtifact(proj, "requirements-analysis", "reviewed requirements\n");
+    const request = [
+      "--stage", "requirements-analysis",
+      "--reviewer", "aidlc-product-lead-agent",
+      "--iteration", "1",
+    ];
+    const requested = runReview(proj, request);
+    expect(requested.status, requested.stderr).toBe(0);
+    const { reviewFile } = JSON.parse(requested.stdout) as { reviewFile: string };
+    mkdirSync(dirname(join(proj, reviewFile)), { recursive: true });
+    const record = (review: string) => {
+      writeFileSync(join(proj, reviewFile), review, "utf-8");
+      return runReview(proj, [...request, "--verdict", "READY"], { AIDLC_TEST_NO_REVIEW_FILE: "1" });
+    };
+    return { proj, record };
+  };
+
+  test("a whole review with a ## heading records the first time, with only that heading made ###", () => {
+    const { proj, record } = requestHeadingReview();
+    const recorded = record(r1Review());
+    expect(recorded.status, recorded.stderr).toBe(0);
+    const completed = auditBlocks(proj, "REVIEW_COMPLETED");
+    expect(completed).toHaveLength(1);
+    expect(auditBlockField(completed[0], "Verdict")).toBe("READY");
+    // One request and no retry: the reviewer ran once.
+    expect(auditBlocks(proj, "REVIEW_REQUESTED")).toHaveLength(1);
+    const { reviewRecord } = JSON.parse(recorded.stdout) as { reviewRecord: string };
+    const body = (JSON.parse(readFileSync(join(seededRecordDir(proj), reviewRecord), "utf-8")) as ReviewRecord).body;
+    expect(body).toBe(r1Review("**Verdict:** READY", "### What I verified"));
+    // The audit row says the reviewer's heading was changed, and which.
+    expect(auditBlockField(completed[0], "Review Headings Made Level 3")).toBe("line 9: ## What I verified");
+  });
+
+  test("only the heading markers change: a byte order mark, line endings and an opening ## Review are kept", () => {
+    const { proj, record } = requestHeadingReview();
+    const original = "\uFEFF## Review\r\n\r\n" + r1Review().replaceAll("\n", "\r\n").replace("Advisory", "# Advisory notes\r\n\r\nAdvisory");
+    const recorded = record(original);
+    expect(recorded.status, recorded.stderr).toBe(0);
+    const { reviewRecord } = JSON.parse(recorded.stdout) as { reviewRecord: string };
+    const body = (JSON.parse(readFileSync(join(seededRecordDir(proj), reviewRecord), "utf-8")) as ReviewRecord).body;
+    expect(body).toBe(
+      original.replace("\r\n# Advisory notes", "\r\n### Advisory notes").replace("## What I verified", "### What I verified"),
+    );
+    expect(body.startsWith("\uFEFF## Review\r\n")).toBe(true);
+    const completed = auditBlocks(proj, "REVIEW_COMPLETED");
+    expect(auditBlockField(completed[0], "Review Headings Made Level 3")).toBe(
+      "line 9: # Advisory notes; line 13: ## What I verified",
+    );
+  });
+
+  test("a ## heading right after a table is made ### too", () => {
+    const { proj, record } = requestHeadingReview();
+    // Straight after the last table row, with no blank line between.
+    const review = `${r1Review()}## Notes after the table\n\nMore notes.\n`;
+    const recorded = record(review);
+    expect(recorded.status, recorded.stderr).toBe(0);
+    const { reviewRecord } = JSON.parse(recorded.stdout) as { reviewRecord: string };
+    const body = (JSON.parse(readFileSync(join(seededRecordDir(proj), reviewRecord), "utf-8")) as ReviewRecord).body;
+    expect(body).toBe(
+      review.replace("## What I verified", "### What I verified").replace("\n## Notes after", "\n### Notes after"),
+    );
+    expect(auditBlockField(auditBlocks(proj, "REVIEW_COMPLETED")[0], "Review Headings Made Level 3")).toBe(
+      "line 9: ## What I verified; line 24: ## Notes after the table",
+    );
+  });
+
+  test("a heading never hides another defect, and heading forms that cannot be made ### still refuse", () => {
+    const { proj, record } = requestHeadingReview();
+    // A wrong verdict is named as such, not as a heading problem.
+    const wrongVerdict = record(r1Review("**Verdict:** NOT-READY"));
+    expect(wrongVerdict.status).not.toBe(0);
+    expect(wrongVerdict.stderr).toContain("exactly one canonical verdict line matching --verdict");
+    for (const heading of [
+      "What I verified\n---------------",
+      "> ## What I verified",
+      "<h2>What I verified</h2>",
+    ]) {
+      const refused = record(r1Review("**Verdict:** READY", heading));
+      expect(refused.status, heading).not.toBe(0);
+      expect(refused.stderr, heading).toMatch(/no (later )?rendered (HTML )?H1 or H2 heading/);
+    }
+    // A heading-shaped line in code is not a heading and is kept as written.
+    const fenced = record(r1Review("**Verdict:** READY", "```\n## What I verified\n```"));
+    expect(fenced.status, fenced.stderr).toBe(0);
+    expect(auditBlocks(proj, "REVIEW_COMPLETED")).toHaveLength(1);
+    expect(auditBlocks(proj, "REVIEW_REQUESTED")).toHaveLength(1);
   });
 
   test("a changed or missing named review record cannot authorize approval", () => {
@@ -1547,6 +1699,413 @@ describe("t271 review iteration ceiling", () => {
     expect(auditBlocks(proj, "REVIEW_COMPLETED")).toHaveLength(0);
   });
 
+  test("a pending review is still waiting for its verdict, not out of passes", () => {
+    const proj = seedProject("feature");
+    const request = [
+      "--stage", "requirements-analysis",
+      "--reviewer", "aidlc-product-lead-agent",
+    ];
+    expect(runReview(proj, [...request, "--iteration", "1"]).status).toBe(0);
+    const next = runReview(proj, [...request, "--iteration", "2"]);
+    expect(next.status).not.toBe(0);
+    expect(next.stderr).toContain("iteration 1 is still waiting for a verdict");
+    expect(next.stderr).not.toContain("include the findings in the approval summary");
+    expect(auditBlocks(proj, "REVIEW_REQUESTED")).toHaveLength(1);
+  });
+
+  test("a review interrupted before its verdict, whose outputs then changed, is requested again at the same pass", () => {
+    // An interrupt: the reviewer was cut off, the outputs were rewritten, and the
+    // one pass was spent on a request that could never finish.
+    const proj = seedProject("bugfix");
+    const artifact = writeReviewedArtifact(proj, "requirements-analysis", "reviewed requirements\n");
+    const request = [
+      "--stage", "requirements-analysis",
+      "--reviewer", "aidlc-product-lead-agent",
+    ];
+    const first = runReview(proj, [...request, "--iteration", "1"]);
+    expect(first.status, first.stderr).toBe(0);
+    const { requestId } = JSON.parse(first.stdout) as { requestId: string };
+    writeFileSync(artifact, "requirements rewritten after the request\n", "utf-8");
+
+    // Neither the retry nor the next pass number leaves the conductor stuck:
+    // both name the one request that works.
+    const retry = runReview(proj, [...request, "--iteration", "1", "--retry-pending"]);
+    expect(retry.status).not.toBe(0);
+    expect(retry.stderr).toContain("cannot rebaseline changed content");
+    expect(retry.stderr).toContain("request it again instead");
+    // The command names the project the request belongs to, so it also works
+    // when the review runs against a Bolt worktree from the main workspace.
+    expect(retry.stderr).toMatch(/--iteration 1 --project-dir \S/);
+    expect(retry.stderr).toContain(basename(proj));
+    const second = runReview(proj, [...request, "--iteration", "2"]);
+    expect(second.status).not.toBe(0);
+    expect(second.stderr).toContain("is requested again as iteration 1");
+    expect(second.stderr).toMatch(/--iteration 1 --project-dir \S/);
+    expect(auditBlocks(proj, "REVIEW_REQUESTED")).toHaveLength(1);
+
+    // The gate's recovery offers that same request.
+    const state = readFileSync(seededStateFile(proj), "utf-8");
+    const stage = resolveStage("requirements-analysis");
+    if (!stage) throw new Error("requirements-analysis not in the stage graph");
+    const before = guardAttemptState(proj, state, stage).attempt;
+    expect(before.nextReview?.iteration).toBe(1);
+    expect(before.nextReview?.request).toMatch(/ review --stage requirements-analysis --reviewer \S+ --iteration 1 --project-dir \S/);
+    expect(before.pendingReview).toBeUndefined();
+
+    const again = runReview(proj, [...request, "--iteration", "1"]);
+    expect(again.status, again.stderr).toBe(0);
+    const reply = JSON.parse(again.stdout) as { requestId: string; replaces?: string };
+    expect(reply.replaces).toBe(requestId);
+    expect(reply.requestId).not.toBe(requestId);
+    const requests = auditBlocks(proj, "REVIEW_REQUESTED");
+    expect(requests).toHaveLength(2);
+    expect(auditBlockField(requests[1], "Iteration")).toBe("1");
+    expect(auditBlockField(requests[1], "Replaces Request Id")).toBe(requestId);
+    expect(auditBlockField(requests[1], "Artifact Fingerprint")).not.toBe(
+      auditBlockField(requests[0], "Artifact Fingerprint"),
+    );
+
+    // Its review records, and it took the pass rather than adding one.
+    const verdict = runReview(proj, [...request, "--iteration", "1", "--verdict", "READY"]);
+    expect(verdict.status, verdict.stderr).toBe(0);
+    const over = runReview(proj, [...request, "--iteration", "2"]);
+    expect(over.status).not.toBe(0);
+    expect(over.stderr).toContain("allows 1 review pass");
+  });
+
+  test("an interrupted per-unit review whose outputs changed reads as the same pass to request again", () => {
+    // Wave entries, gate refusals and the guard recovery all read this one
+    // projection, so none of them sends the conductor to a retry that cannot work.
+    const proj = seedProject("bugfix");
+    const dagDir = join(seededRecordDir(proj), "inception", "units-generation");
+    mkdirSync(dagDir, { recursive: true });
+    writeFileSync(
+      join(dagDir, "unit-of-work-dependency.md"),
+      "```yaml\nunits:\n  - name: unit-alpha\n    depends_on: []\n```\n",
+      "utf-8",
+    );
+    const request = [
+      "--stage", "functional-design",
+      "--reviewer", "aidlc-architecture-reviewer-agent",
+      "--unit", "unit-alpha",
+      "--iteration", "1",
+    ];
+    const first = runReview(proj, request);
+    expect(first.status, first.stderr).toBe(0);
+    const stage = resolveStage("functional-design");
+    if (!stage) throw new Error("functional-design missing from stage graph");
+    const read = () =>
+      freshReviewReceipts(proj, readFileSync(seededStateFile(proj), "utf-8"), stage, {
+        reviewClass: "advisory",
+      }).unitPending.get("unit-alpha");
+    expect(read()).toMatchObject({ state: "retry-required", iteration: 1 });
+    writeReviewedArtifact(proj, "functional-design", "spec rewritten after the request\n", "unit-alpha");
+    expect(read()).toMatchObject({ state: "outstanding", iteration: 1 });
+
+    const again = runReview(proj, request);
+    expect(again.status, again.stderr).toBe(0);
+    expect(again.stdout).toContain('"replaces"');
+    // The replacement is pending like any request; interrupted in turn, it is
+    // requested again at the same pass.
+    expect(read()).toMatchObject({ state: "retry-required", iteration: 1 });
+    writeReviewedArtifact(proj, "functional-design", "spec rewritten twice\n", "unit-alpha");
+    expect(read()).toMatchObject({ state: "outstanding", iteration: 1 });
+    const third = runReview(proj, request);
+    expect(third.status, third.stderr).toBe(0);
+    expect(third.stdout).toContain('"replaces"');
+    expect(read()).toMatchObject({ state: "retry-required", iteration: 1 });
+    const verdict = runReview(proj, [...request, "--verdict", "READY"]);
+    expect(verdict.status, verdict.stderr).toBe(0);
+    expect(read()).toBeUndefined();
+  });
+
+  test("a source walk that cannot be read never turns an interrupted review into a new request", () => {
+    const proj = seedProject("feature");
+    writeReviewedArtifact(proj, "code-generation", "reviewed implementation plan\n", "unit-alpha");
+    const base = [
+      "--stage", "code-generation",
+      "--reviewer", "aidlc-architecture-reviewer-agent",
+      "--unit", "unit-alpha",
+    ];
+    expect(runReview(proj, [...base, "--iteration", "1"]).status).toBe(0);
+    // The reviewer is cut off and the plan changes before its verdict.
+    writeReviewedArtifact(proj, "code-generation", "changed implementation plan\n", "unit-alpha");
+    const stage = resolveStage("code-generation");
+    if (!stage) throw new Error("code-generation missing from stage graph");
+    const read = (options: { sourceState?: null } = {}) =>
+      freshReviewReceipts(proj, readFileSync(seededStateFile(proj), "utf-8"), stage, {
+        reviewClass: "adversarial",
+        ...options,
+      }).unitPending.get("unit-alpha");
+    expect(read()).toMatchObject({ state: "outstanding", iteration: 1 });
+    // Without a readable source walk nothing proves the source changed, so the
+    // request keeps waiting instead of being replaced.
+    expect(read({ sourceState: null })).toMatchObject({ state: "retry-required", iteration: 1 });
+  });
+
+  test("replacing the recovery review keeps it the attempt's one recovery", () => {
+    const proj = seedProject("feature");
+    writeReviewedArtifact(proj, "requirements-analysis", "reviewed requirements\n");
+    const base = [
+      "--stage", "requirements-analysis",
+      "--reviewer", "aidlc-product-lead-agent",
+    ];
+    expect(runReview(proj, [...base, "--iteration", "1"]).status).toBe(0);
+    expect(runReview(proj, [...base, "--iteration", "1", "--verdict", "READY"]).status).toBe(0);
+    writeReviewedArtifact(proj, "requirements-analysis", "changed requirements\n");
+    const recovery = runReview(proj, [...base, "--iteration", "2"]);
+    expect(recovery.status, recovery.stderr).toBe(0);
+    expect(recovery.stdout).toContain('"recovery":"stale-receipt"');
+
+    // The recovery reviewer is cut off and the outputs change again.
+    writeReviewedArtifact(proj, "requirements-analysis", "changed during the recovery review\n");
+    const again = runReview(proj, [...base, "--iteration", "2"]);
+    expect(again.status, again.stderr).toBe(0);
+    expect(again.stdout).toContain('"recovery":"stale-receipt"');
+    const requests = auditBlocks(proj, "REVIEW_REQUESTED");
+    expect(requests).toHaveLength(3);
+    expect(auditBlockField(requests[2], "Replaces Request Id")).toBe(
+      auditBlockField(requests[1], "Request Id"),
+    );
+    expect(auditBlockField(requests[2], "Recovery")).toBe("stale-receipt");
+    expect(auditBlockField(requests[2], "Recovery Cause")).toBe(
+      auditBlockField(requests[1], "Recovery Cause"),
+    );
+
+    const verdict = runReview(proj, [...base, "--iteration", "2", "--verdict", "NOT-READY"]);
+    expect(verdict.status, verdict.stderr).toBe(0);
+    writeReviewedArtifact(proj, "requirements-analysis", "changed once more\n");
+    const spent = runReview(proj, [...base, "--iteration", "3"]);
+    expect(spent.status).not.toBe(0);
+    expect(spent.stderr).toContain("one recovery review was already used");
+  });
+
+  test("a row replaces the pending request only when it names that request", () => {
+    const binding = { requestId: "review:" + "a".repeat(32) } as unknown as Parameters<
+      typeof reviewRequestReplaces
+    >[1] extends infer P ? P extends { binding: infer B } ? B : never : never;
+    const pending = { binding };
+    const row = (named: string) => `**Event**: REVIEW_REQUESTED\n**Replaces Request Id**: ${named}\n`;
+    expect(reviewRequestReplaces(row("review:" + "a".repeat(32)), pending)).toBe(true);
+    expect(reviewRequestReplaces(row("review:" + "b".repeat(32)), pending)).toBe(false);
+    expect(reviewRequestReplaces(row("none"), pending)).toBe(false);
+    expect(reviewRequestReplaces(row("review:" + "a".repeat(32)), undefined)).toBe(false);
+    expect(reviewRequestReplaces("**Event**: REVIEW_REQUESTED\n", pending)).toBe(false);
+    const legacy = { binding: { requestId: null } as unknown as typeof binding };
+    expect(reviewRequestReplaces(row("none"), legacy)).toBe(true);
+  });
+
+  test("a late review of the replaced request cannot complete the replacement", () => {
+    const proj = seedProject("bugfix");
+    const artifact = writeReviewedArtifact(proj, "requirements-analysis", "reviewed requirements\n");
+    const request = [
+      "--stage", "requirements-analysis",
+      "--reviewer", "aidlc-product-lead-agent",
+      "--iteration", "1",
+    ];
+    const first = runReview(proj, request);
+    expect(first.status, first.stderr).toBe(0);
+    const firstSlot = (JSON.parse(first.stdout) as { reviewFile: string }).reviewFile;
+    writeFileSync(artifact, "requirements rewritten after the request\n", "utf-8");
+    const again = runReview(proj, request);
+    expect(again.status, again.stderr).toBe(0);
+    const secondSlot = (JSON.parse(again.stdout) as { reviewFile: string }).reviewFile;
+    expect(secondSlot).not.toBe(firstSlot);
+
+    // The first reviewer, cut off earlier, writes its review of the old bytes late.
+    const late = join(proj, firstSlot);
+    mkdirSync(dirname(late), { recursive: true });
+    writeFileSync(late, reviewAppendix("aidlc-product-lead-agent", 1, "READY").trimStart(), "utf-8");
+    const stale = runReview(proj, [...request, "--verdict", "READY"], { AIDLC_TEST_NO_REVIEW_FILE: "1" });
+    expect(stale.status).not.toBe(0);
+    expect(stale.stderr).toContain("no review was written for iteration 1");
+    expect(stale.stderr).toContain(secondSlot);
+    // Named explicitly, the replaced request's file is still not this request's.
+    const named = runReview(
+      proj,
+      [...request, "--verdict", "READY", "--review-file", firstSlot],
+      { AIDLC_TEST_NO_REVIEW_FILE: "1" },
+    );
+    expect(named.status).not.toBe(0);
+    expect(named.stderr).toContain("is not the review file for iteration 1");
+    expect(named.stderr).toContain(secondSlot);
+    // Nor does a copy of it elsewhere in the record, or (where file names keep
+    // their case) a case variant of the replacement's own file name.
+    const copied = join(seededRecordDir(proj), "copied-review.md");
+    writeFileSync(copied, readFileSync(late));
+    const variant = secondSlot.replace(/[0-9a-f]{32}/, (hex) => hex.toUpperCase());
+    const caseSensitive = !existsSync(join(proj, firstSlot.toUpperCase()));
+    if (caseSensitive) writeFileSync(join(proj, variant), readFileSync(late));
+    for (const candidate of caseSensitive ? [toPosix(relative(proj, copied)), variant] : [toPosix(relative(proj, copied))]) {
+      const other = runReview(
+        proj,
+        [...request, "--verdict", "READY", "--review-file", candidate],
+        { AIDLC_TEST_NO_REVIEW_FILE: "1" },
+      );
+      expect(other.status, candidate).not.toBe(0);
+      expect(other.stderr, candidate).toContain("is not the review file for iteration 1");
+    }
+    if (caseSensitive) unlinkSync(join(proj, variant));
+    // The pass's shared file, where a release before per-request files had its
+    // reviewer write, is never read for a replacement.
+    const shared = join(proj, dirname(secondSlot), "1.review.md");
+    writeFileSync(shared, readFileSync(late));
+    const viaShared = runReview(proj, [...request, "--verdict", "READY"], { AIDLC_TEST_NO_REVIEW_FILE: "1" });
+    expect(viaShared.status).not.toBe(0);
+    expect(viaShared.stderr).toContain("no review was written for iteration 1");
+    unlinkSync(shared);
+    expect(auditBlocks(proj, "REVIEW_COMPLETED")).toHaveLength(0);
+
+    // The replacement's own review records.
+    const recorded = runReview(proj, [...request, "--verdict", "READY"]);
+    expect(recorded.status, recorded.stderr).toBe(0);
+  });
+
+  test("a review requested before an update finds its review in the pass's shared file", () => {
+    const proj = seedProject("bugfix");
+    writeReviewedArtifact(proj, "requirements-analysis", "reviewed requirements\n");
+    const request = [
+      "--stage", "requirements-analysis",
+      "--reviewer", "aidlc-product-lead-agent",
+      "--iteration", "1",
+    ];
+    const requested = runReview(proj, request);
+    expect(requested.status, requested.stderr).toBe(0);
+    const { reviewFile } = JSON.parse(requested.stdout) as { reviewFile: string };
+    expect(auditBlockField(auditBlocks(proj, "REVIEW_REQUESTED")[0], "Review File")).toBe(
+      toPosix(relative(seededRecordDir(proj), join(proj, reviewFile))),
+    );
+    asRecordedBeforeOwnReviewFiles(proj);
+    const shared = join(proj, dirname(reviewFile), "1.review.md");
+    mkdirSync(dirname(shared), { recursive: true });
+    // Such a request is reviewed in the shared file only: a review in the
+    // per-request file it never named, or any other file, is not its review.
+    writeFileSync(join(proj, reviewFile), reviewAppendix("aidlc-product-lead-agent", 1, "READY").trimStart(), "utf-8");
+    const decoy = runReview(proj, [...request, "--verdict", "READY"], { AIDLC_TEST_NO_REVIEW_FILE: "1" });
+    expect(decoy.status).not.toBe(0);
+    expect(decoy.stderr).toContain("no review was written for iteration 1");
+    expect(decoy.stderr).toContain(toPosix(relative(proj, shared)));
+    for (const named of [reviewFile, toPosix(relative(proj, join(seededRecordDir(proj), "inside-review.md")))]) {
+      writeFileSync(join(proj, named), reviewAppendix("aidlc-product-lead-agent", 1, "READY").trimStart(), "utf-8");
+      const other = runReview(proj, [...request, "--verdict", "READY", "--review-file", named], { AIDLC_TEST_NO_REVIEW_FILE: "1" });
+      expect(other.status, named).not.toBe(0);
+      expect(other.stderr, named).toContain("is not the review file for iteration 1");
+    }
+    expect(auditBlocks(proj, "REVIEW_COMPLETED")).toHaveLength(0);
+    // The reviewer, dispatched by the earlier release, wrote the shared file.
+    writeFileSync(shared, reviewAppendix("aidlc-product-lead-agent", 1, "READY").trimStart(), "utf-8");
+    const recorded = runReview(proj, [...request, "--verdict", "READY"], { AIDLC_TEST_NO_REVIEW_FILE: "1" });
+    expect(recorded.status, recorded.stderr).toBe(0);
+    expect(auditBlocks(proj, "REVIEW_COMPLETED")).toHaveLength(1);
+    expect(existsSync(shared)).toBe(false);
+  });
+
+  test("a retried review requested before an update finds its review in the pass's shared file", () => {
+    const proj = seedProject("bugfix");
+    writeReviewedArtifact(proj, "requirements-analysis", "reviewed requirements\n");
+    const request = [
+      "--stage", "requirements-analysis",
+      "--reviewer", "aidlc-product-lead-agent",
+      "--iteration", "1",
+    ];
+    expect(runReview(proj, request).status).toBe(0);
+    const retried = runReview(proj, [...request, "--retry-pending"]);
+    expect(retried.status, retried.stderr).toBe(0);
+    const { reviewFile } = JSON.parse(retried.stdout) as { reviewFile: string };
+    asRecordedBeforeOwnReviewFiles(proj);
+    const shared = join(proj, dirname(reviewFile), "1.review.md");
+    mkdirSync(dirname(shared), { recursive: true });
+    writeFileSync(shared, reviewAppendix("aidlc-product-lead-agent", 1, "READY").trimStart(), "utf-8");
+    const recorded = runReview(proj, [...request, "--verdict", "READY"], { AIDLC_TEST_NO_REVIEW_FILE: "1" });
+    expect(recorded.status, recorded.stderr).toBe(0);
+  });
+
+  test("a shared file left in the pass never completes a request that names its own review file", () => {
+    const proj = seedProject("bugfix");
+    writeReviewedArtifact(proj, "requirements-analysis", "reviewed requirements\n");
+    const request = [
+      "--stage", "requirements-analysis",
+      "--reviewer", "aidlc-product-lead-agent",
+      "--iteration", "1",
+    ];
+    for (const extra of [[], ["--retry-pending"]]) {
+      const requested = runReview(proj, [...request, ...extra]);
+      expect(requested.status, requested.stderr).toBe(0);
+      const { reviewFile } = JSON.parse(requested.stdout) as { reviewFile: string };
+      const shared = join(proj, dirname(reviewFile), "1.review.md");
+      mkdirSync(dirname(shared), { recursive: true });
+      writeFileSync(shared, reviewAppendix("aidlc-product-lead-agent", 1, "READY").trimStart(), "utf-8");
+      const refused = runReview(proj, [...request, "--verdict", "READY"], { AIDLC_TEST_NO_REVIEW_FILE: "1" });
+      expect(refused.status, extra.join(" ")).not.toBe(0);
+      expect(refused.stderr, extra.join(" ")).toContain("no review was written for iteration 1");
+      expect(refused.stderr).toContain(reviewFile);
+    }
+    expect(auditBlocks(proj, "REVIEW_COMPLETED")).toHaveLength(0);
+  });
+
+  test("a verdict after the outputs changed asks for the same pass again, never a restore", () => {
+    const proj = seedProject("bugfix");
+    const artifact = writeReviewedArtifact(proj, "requirements-analysis", "reviewed requirements\n");
+    const request = [
+      "--stage", "requirements-analysis",
+      "--reviewer", "aidlc-product-lead-agent",
+      "--iteration", "1",
+    ];
+    expect(runReview(proj, request).status).toBe(0);
+    writeFileSync(artifact, "requirements rewritten after the request\n", "utf-8");
+    const verdict = runReview(proj, [...request, "--verdict", "READY"]);
+    expect(verdict.status).not.toBe(0);
+    expect(verdict.stderr).toContain("Request it again so the reviewer reviews what is there now");
+    expect(verdict.stderr).not.toContain("Restore the bytes");
+    const command = /`([^`]*review[^`]*--iteration 1[^`]*)`/.exec(verdict.stderr)?.[1];
+    expect(command, verdict.stderr).toBeDefined();
+    expect(command).toContain("--stage requirements-analysis");
+    // The named command is the same-pass request, and its review records.
+    const again = runReview(proj, request);
+    expect(again.status, again.stderr).toBe(0);
+    expect(auditBlockField(auditBlocks(proj, "REVIEW_REQUESTED")[1], "Iteration")).toBe("1");
+    expect(readFileSync(artifact, "utf-8")).toBe("requirements rewritten after the request\n");
+    const recorded = runReview(proj, [...request, "--verdict", "READY"]);
+    expect(recorded.status, recorded.stderr).toBe(0);
+  });
+
+  test("a review interrupted twice is requested again at the same pass each time", () => {
+    const proj = seedProject("bugfix");
+    const artifact = writeReviewedArtifact(proj, "requirements-analysis", "reviewed requirements\n");
+    const request = [
+      "--stage", "requirements-analysis",
+      "--reviewer", "aidlc-product-lead-agent",
+      "--iteration", "1",
+    ];
+    const stage = resolveStage("requirements-analysis");
+    if (!stage) throw new Error("requirements-analysis not in the stage graph");
+    const attempt = () =>
+      guardAttemptState(proj, readFileSync(seededStateFile(proj), "utf-8"), stage).attempt;
+    expect(runReview(proj, request).status).toBe(0);
+    writeFileSync(artifact, "first rewrite\n", "utf-8");
+    expect(runReview(proj, request).status).toBe(0);
+    // The replacement is cut off too, and the outputs change again.
+    writeFileSync(artifact, "second rewrite\n", "utf-8");
+    expect(attempt().nextReview?.iteration).toBe(1);
+    const retry = runReview(proj, [...request, "--retry-pending"]);
+    expect(retry.status).not.toBe(0);
+    expect(retry.stderr).toContain("request it again instead");
+
+    const third = runReview(proj, request);
+    expect(third.status, third.stderr).toBe(0);
+    const requests = auditBlocks(proj, "REVIEW_REQUESTED");
+    expect(requests).toHaveLength(3);
+    expect(auditBlockField(requests[2], "Replaces Request Id")).toBe(
+      auditBlockField(requests[1], "Request Id"),
+    );
+    expect(auditBlockField(requests[2], "Iteration")).toBe("1");
+    const verdict = runReview(proj, [...request, "--verdict", "READY"]);
+    expect(verdict.status, verdict.stderr).toBe(0);
+    const over = runReview(proj, [...request.slice(0, -1), "2"]);
+    expect(over.status).not.toBe(0);
+    expect(over.stderr).toContain("allows 1 review pass");
+  });
+
   test("an incomplete review retries once, and the retry reopens the review slot", () => {
     const proj = seedProject("feature");
     const original = "reviewed requirements\n";
@@ -1699,9 +2258,17 @@ describe("t271 review iteration ceiling", () => {
       expect(refused.status, name).not.toBe(0);
       expect(refused.stderr, name).toContain("outside the active intent record");
     }
-    // Inside the record, an explicit plain file records.
+    // Inside the record, a file that is not this request's own review file is
+    // refused too: a request with an id is reviewed in its own file only.
     const inside = join(seededRecordDir(proj), "inside-review.md");
     writeFileSync(inside, readFileSync(elsewhere), "utf-8");
+    const notOwn = runReview(
+      proj,
+      [...request, "--verdict", "READY", "--review-file", toPosix(relative(proj, inside))],
+      { AIDLC_TEST_NO_REVIEW_FILE: "1" },
+    );
+    expect(notOwn.status).not.toBe(0);
+    expect(notOwn.stderr).toContain("is not the review file for iteration 1");
     expect(auditBlocks(proj, "REVIEW_COMPLETED")).toHaveLength(0);
     // A symlinked container for the slot is refused too.
     const attemptDir = dirname(draft);
@@ -1717,7 +2284,8 @@ describe("t271 review iteration ceiling", () => {
     unlinkSync(attemptDir);
     renameSync(detached, attemptDir);
     expect(auditBlocks(proj, "REVIEW_COMPLETED")).toHaveLength(0);
-    // The plain file named explicitly, inside the project, records normally.
+    // The request's own review file, named explicitly, records normally.
+    writeFileSync(draft, readFileSync(elsewhere), "utf-8");
     const completed = runReview(
       proj,
       [
@@ -1725,7 +2293,7 @@ describe("t271 review iteration ceiling", () => {
         "--verdict",
         "READY",
         "--review-file",
-        toPosix(relative(proj, inside)),
+        reviewFile,
       ],
       { AIDLC_TEST_NO_REVIEW_FILE: "1" },
     );
@@ -1769,6 +2337,29 @@ describe("t271 review iteration ceiling", () => {
     ) as ReviewRecord;
     expect(record.body).toBe("");
     expect(record.findings).toEqual([]);
+  });
+
+  test("a verdict line repeated word for word records: a reviewer told to end with the verdict line writes it twice", () => {
+    const proj = seedProject("feature");
+    writeReviewedArtifact(proj, "requirements-analysis", "reviewed requirements\n");
+    const request = [
+      "--stage", "requirements-analysis",
+      "--reviewer", "aidlc-product-lead-agent",
+      "--iteration", "1",
+    ];
+    const requested = runReview(proj, request);
+    expect(requested.status, requested.stderr).toBe(0);
+    const { reviewFile } = JSON.parse(requested.stdout) as { reviewFile: string };
+    const draft = join(proj, reviewFile);
+    mkdirSync(dirname(draft), { recursive: true });
+    writeFileSync(
+      draft,
+      `${reviewAppendix("aidlc-product-lead-agent", 1, "READY").trimStart()}\n**Verdict:** READY\n`,
+      "utf-8",
+    );
+    const recorded = runReview(proj, [...request, "--verdict", "READY"], { AIDLC_TEST_NO_REVIEW_FILE: "1" });
+    expect(recorded.status, recorded.stderr).toBe(0);
+    expect(auditBlocks(proj, "REVIEW_COMPLETED")).toHaveLength(1);
   });
 
   test("only one owned canonical Review section may occupy the appended suffix", () => {
@@ -1956,7 +2547,20 @@ describe("t271 review iteration ceiling", () => {
     // Every case is run twice: as the review file (the record path, where the
     // whole file is the section and prose before the heading makes the heading
     // a later H2) and as the deprecated appended section (where the section
-    // must open with the heading).
+    // must open with the heading). In a review file a plain `#` or `##` line
+    // is recorded as `###` and the check decides on those bytes, so a review
+    // that is whole apart from those lines records with none left. A section
+    // repeated whole is not one of those: made `###`, it is a second Review
+    // section, refused by name (the record would read the first one's findings
+    // only).
+    const demotedInAReviewFile = new Set<string>([
+      "semantic bytes before heading",
+      "later H1 section",
+      "indented later H1 section",
+      "inline code cannot open a fake HTML comment",
+      "list continuation code cannot open a fake HTML comment",
+      "blockquote continuation code cannot open a fake HTML comment",
+    ]);
     for (const scenario of cases) {
       for (const path of ["record", "embedded"] as const) {
         const proj = seedProject("feature");
@@ -1981,6 +2585,9 @@ describe("t271 review iteration ceiling", () => {
           if (scenario.name === "semantic bytes before heading") {
             expectedError = "no later rendered H1 or H2 heading";
           }
+          if (scenario.name === "duplicate review section") {
+            expectedError = "the review has two Review sections; keep one and write it whole";
+          }
         } else {
           appendFileSync(artifact, scenario.suffix, "utf-8");
           if (
@@ -1997,6 +2604,21 @@ describe("t271 review iteration ceiling", () => {
         const completed = runReview(proj, [...request, "--verdict", "READY"], {
           AIDLC_TEST_NO_REVIEW_FILE: "1",
         });
+        if (path === "record" && demotedInAReviewFile.has(scenario.name)) {
+          expect(completed.status, `${scenario.name} (${path}): ${completed.stderr}`).toBe(0);
+          expect(auditBlocks(proj, "REVIEW_COMPLETED"), `${scenario.name} (${path})`).toHaveLength(1);
+          const { reviewRecord } = JSON.parse(completed.stdout) as { reviewRecord: string };
+          const body = (JSON.parse(
+            readFileSync(join(seededRecordDir(proj), reviewRecord), "utf-8"),
+          ) as ReviewRecord).body;
+          expect(
+            body.split("\n").filter((line) =>
+              /^ {0,3}#{1,2}(?=[ \t]|$)/.test(line) && !/^## Review[ \t]*$/.test(line)
+            ),
+            `${scenario.name} (${path})`,
+          ).toEqual([]);
+          continue;
+        }
         expect(completed.status, `${scenario.name} (${path})`).not.toBe(0);
         expect(completed.stderr, `${scenario.name} (${path})`).toContain(expectedError);
         expect(

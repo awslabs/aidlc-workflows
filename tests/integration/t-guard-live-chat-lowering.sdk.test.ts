@@ -2,8 +2,9 @@
 // subcommand:aidlc-utility:intent-create, subcommand:aidlc-utility:config-change,
 // subcommand:aidlc-utility:status, scope:enterprise
 //
-// Live customer journey: only a typed switch lowers production guards. The
-// shipped UserPromptSubmit hook, not a fixture or direct tool call, records it.
+// Live customer journey: the person lowers production guards by typing a
+// switch, which the shipped UserPromptSubmit hook applies, or by asking in
+// plain words, which the agent carries out as the person's request.
 // SPENDS TOKENS. Requires AIDLC_CLAUDE_SDK_LIVE=1 and --production-guards.
 // Like t-guard-recovery-production, the fixture profile skips rather than
 // restoring disabled guards. The runner explains an explicitly selected skip:
@@ -15,7 +16,7 @@ import {
   auditBlockField,
   readAuditShardEvents,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
-import { assertResultOk, assertToolResultContains } from "../harness/assert.ts";
+import { assertToolResultContains } from "../harness/assert.ts";
 import { cleanupTestProject, setupIntegrationProject } from "../harness/fixtures.ts";
 import {
   type DriveOptions,
@@ -43,8 +44,8 @@ const GUARD_SWITCHES = [
   "AIDLC_UNATTENDED",
 ] as const;
 
-// The five drive caps total 11 minutes; leave teardown room below 12 minutes.
-const TEST_TIMEOUT_MS = 700_000;
+// The six drive caps total 13 minutes; leave teardown room below 14 minutes.
+const TEST_TIMEOUT_MS = 820_000;
 const INIT_STATE_SUMMARY = "State initialized:";
 const RELAXED_LINE = "- **Guard Policy**: relaxed (set by you)";
 
@@ -53,7 +54,7 @@ describe.skipIf(
     process.env.AIDLC_NO_LLM === "1" ||
     !Bun.which("claude"),
 )("production guards: lowering from a live Claude chat", () => {
-  productionTest("typed switches lower the active intent's guards; plain words do not", async () => {
+  productionTest("typed switches and plain words both lower the active intent's guards, as the person's", async () => {
     // Do not sanitize these: a fixture bypass must fail this production proof.
     for (const key of GUARD_SWITCHES) {
       expect(process.env[key], `${key} disables the production contract`).not.toBe("1");
@@ -107,11 +108,13 @@ describe.skipIf(
       expect(guardEvents("GUARD_POLICY_SET")).toHaveLength(0);
       expect(guardEvents("GUARD_DISABLED")).toHaveLength(0);
 
-      // A flags-only invocation resumes the workflow after applying the switch.
-      // Stop at its deterministic acknowledgement, before unrelated stage work.
+      // The hook applies a typed switch when the prompt arrives, so `next` only
+      // ends the turn for the agent to say the hook's line. Stop at that
+      // deterministic step, before any stage work.
+      const APPLIED = "The setting the person typed is already applied";
       const relaxed = await drive("/aidlc --guard-policy relaxed", 240_000, {
         toolName: "Bash",
-        resultIncludes: "Guard Policy",
+        resultIncludes: APPLIED,
       });
       expect(stateLines()).toContain(RELAXED_LINE);
       expect(guardEvents("GUARD_POLICY_SET")).toHaveLength(1);
@@ -120,25 +123,11 @@ describe.skipIf(
       );
       expect(policyRows).toHaveLength(1);
       expect(auditBlockField(policyRows[0].block, "Source")).toBe("you");
-      assertToolResultContains(relaxed, "Bash", "Guard Policy");
-
-      const beforePlainPolicy = guardEvents("GUARD_POLICY_SET").length;
-      const beforePlainDisabled = guardEvents("GUARD_DISABLED").length;
-      const plain = await drive(
-        "please stop asking me to re-approve when files change, turn the guards off",
-        150_000,
-      );
-      expect(stateLines()).toContain(RELAXED_LINE);
-      expect(guardEvents("GUARD_POLICY_SET")).toHaveLength(beforePlainPolicy);
-      expect(guardEvents("GUARD_DISABLED")).toHaveLength(beforePlainDisabled);
-      assertResultOk(plain);
-      // Deliberately assert the final answer: the customer must be told the
-      // exact command to type. Do not pin the model's surrounding explanation.
-      expect(plain.resultEvent?.result).toContain("/aidlc --guard-policy off");
+      assertToolResultContains(relaxed, "Bash", APPLIED);
 
       const disabled = await drive("/aidlc config set guard.state-transition off", 90_000, {
         toolName: "Bash",
-        resultIncludes: "Fence state-transition",
+        resultIncludes: "The state transition check",
       });
       expect(stateLines()).toContain(RELAXED_LINE);
       expect(stateLines()).toContain("- **Guards Off**: state-transition (set by you)");
@@ -150,18 +139,46 @@ describe.skipIf(
       expect(disabledRows).toHaveLength(1);
       expect(auditBlockField(disabledRows[0].block, "Guard")).toBe("state-transition");
       expect(auditBlockField(disabledRows[0].block, "Source")).toBe("you");
-      assertToolResultContains(disabled, "Bash", "Fence state-transition");
+      assertToolResultContains(disabled, "Bash", "The state transition check");
 
       const status = await drive("/aidlc --status", 60_000, {
         toolName: "Bash",
-        resultIncludes: "Fences:",
+        resultIncludes: "Checks off:",
       });
       assertToolResultContains(status, "Bash", "Guard Policy");
-      assertToolResultContains(status, "Bash", "Fences:");
+      assertToolResultContains(status, "Bash", "Checks off:");
       const statusOutput = status.toolResults.find(
-        (result) => result.toolName === "Bash" && result.resultText.includes("Fences:"),
+        (result) => result.toolName === "Bash" && result.resultText.includes("Checks off:"),
       );
-      expect(statusOutput?.resultText).toMatch(/^Fences:.*\bstate-transition off\b/m);
+      expect(statusOutput?.resultText).toMatch(/^Checks off:.*\bstate-transition\b/m);
+
+      // "Stop asking me to re-approve when files change" is Guard Policy
+      // relaxed, not one check: already relaxed here, so the setter says so,
+      // and the review freeze check stays on.
+      const one = await drive("stop asking me to re-approve when files change", 120_000, {
+        toolName: "Bash",
+        resultIncludes: "Guard Policy is already relaxed",
+      });
+      assertToolResultContains(one, "Bash", "Guard Policy is already relaxed");
+      expect(stateLines()).toContain(RELAXED_LINE);
+      expect(stateLines()).toContain("- **Guards Off**: state-transition (set by you)");
+      expect(guardEvents("GUARD_POLICY_SET")).toHaveLength(1);
+
+      // Plain words are the person's request too: the agent runs the setter for
+      // them, the change is set by you with their words, and one line says how
+      // to put it back. No exact typing. The guards as a whole off is Guard
+      // Policy off, even beside words that alone would mean relaxed.
+      const asked = "please stop asking me to re-approve when files change, turn the guards off";
+      const plain = await drive(asked, 150_000, {
+        toolName: "Bash",
+        resultIncludes: "Guard Policy (it sets how many checks run) is off for this piece of work",
+      });
+      assertToolResultContains(plain, "Bash", `Guard Policy (it sets how many checks run) is off for this piece of work, because you said: "${asked}".`);
+      expect(stateLines()).toContain("- **Guard Policy**: off (set by you)");
+      const plainRows = readAuditShardEvents(projectDir).filter((entry) => entry.event === "GUARD_POLICY_SET");
+      expect(plainRows).toHaveLength(2);
+      expect(auditBlockField(plainRows[1].block, "Source")).toBe("you");
+      expect(auditBlockField(plainRows[1].block, "Person Reply")).toBe(asked);
     } finally {
       cleanupTestProject(projectDir);
     }

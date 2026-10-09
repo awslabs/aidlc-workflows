@@ -9,7 +9,7 @@
     },
     {
       "file": "docs/reference/14-claude-features.md",
-      "text": "This implementation reads behavioral rules from the active space memory layer at `aidlc/spaces/<active-space>/memory/`, pulled into Claude's context via the `.claude/rules/aidlc.md` @-import stub. One file per layer of the inheritance chain:",
+      "text": "This implementation reads behavioral rules from the active space memory layer at `aidlc/spaces/<active-space>/memory/`, pulled into Claude's context via the `.claude/rules/aidlc.md` @-import stub, which imports the engine's git-ignored copy of those files at `aidlc/active-memory/` (written at session start and on a space switch, so a switch changes no tracked file). One file per layer of the inheritance chain:",
       "why": "names the .claude/rules/aidlc.md @-import stub (the native include, correct)"
     },
     {
@@ -24,7 +24,7 @@
     },
     {
       "file": "docs/guide/harnesses/kiro-ide.md",
-      "text": "- `.kiro/steering/aidlc-active-memory.md` \u2014 always-included IDE steering whose",
+      "text": "- `.kiro/steering/aidlc-active-memory.md`: always-included steering that carries",
       "why": "documents Kiro IDE's native always-included steering file"
     },
     {

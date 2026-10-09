@@ -111,6 +111,29 @@ function replaceInFile(
 }
 
 describe("t247 claim-sources sensor", () => {
+  test("a record in another space is checked against that space's method, whatever the pointer says", () => {
+    const dir = mkdtempSync(join(tmpdir(), "aidlc-t247-space-"));
+    tempDirs.push(dir);
+    const record = join(dir, "aidlc", "spaces", "team-b", "intents", "260101-echo");
+    cpSync(FIXTURE, record, { recursive: true });
+    const memoryDir = join(dir, "aidlc", "spaces", "team-b", "memory");
+    mkdirSync(memoryDir, { recursive: true });
+    writeFileSync(join(memoryDir, "project.md"), "# Project-Level Rules\n\n## Forbidden\n\n- Do not add network access.\n");
+    writeFileSync(join(dir, "aidlc", "active-space"), "ghost\n");
+    writeFileSync(
+      join(record, "aidlc-state.md"),
+      `# AI-DLC State Tracking\n\n## Project Information\n- **Project**: Build a local CLI that echoes supplied text.\n- **Scope**: poc\n\n## Workspace State\n- **Project Root**: ${dir}\n`,
+    );
+    const questions = join(record, "intent-capture-questions.md");
+    writeFileSync(
+      questions,
+      readFileSync(questions, "utf-8").replace("aidlc/spaces/default/memory/", "aidlc/spaces/team-b/memory/"),
+    );
+    const result = run(record);
+    expect(result.findings).toEqual([]);
+    expect(result.pass).toBe(true);
+  });
+
   test("marked TUI fixture authority reaches the public query and rejects a stale source register", () => {
     const description = "Build a simple React todo app";
     const root = setupTuiProject({
@@ -2045,5 +2068,108 @@ describe("t247 claim-sources sensor", () => {
     const result = run(dir);
     expect(result.pass).toBe(true);
     expect(result.findings).toEqual([]);
+  });
+
+  describe("decorated contract headings (issue #1385)", () => {
+    const decorated: Array<[string, string, string, string]> = [
+      ["questions Sources register", "intent-capture-questions.md", "## Sources", "## ℹ️ Sources"],
+      ["question heading", "intent-capture-questions.md", "## Q1.", "## ❓ Q1."],
+      ["deliverable assumptions section", "intent-statement.md", "## Assumptions & Open Questions", "## 📌 Assumptions & Open Questions"],
+      ["Initial Scope Signal", "intent-statement.md", "## Initial Scope Signal", "## 🎯 Initial Scope Signal"],
+      ["joined emoji run", "intent-capture-questions.md", "## Sources", "## ℹ️💡 Sources"],
+      ["ZWJ-joined pair from the issue", "intent-capture-questions.md", "## Sources", "## ℹ️\u200D💡 Sources"],
+      ["skin-tone modifier", "intent-capture-questions.md", "## Sources", "## 👍🏽 Sources"],
+      ["ZWJ sequence", "intent-capture-questions.md", "## Sources", "## 👩‍💻 Sources"],
+      ["keycap", "intent-capture-questions.md", "## Q1.", "## 1️⃣ Q1."],
+      ["flag", "intent-capture-questions.md", "## Sources", "## 🇻🇳 Sources"],
+      ["closing ATX run with decoration", "intent-capture-questions.md", "## Sources", "## ℹ️ Sources ##"],
+    ];
+    for (const [name, file, heading, replacement] of decorated) {
+      test(`${name}: ${replacement} names the contract section`, () => {
+        const dir = makeStageDir();
+        replaceInFile(dir, file, heading, replacement);
+        const result = run(dir);
+        expect(result.findings).toEqual([]);
+        expect(result.pass).toBe(true);
+      });
+    }
+
+    test("a decorated Assumption Confirmation accepts the retained assumption", () => {
+      const dir = makeStageDir();
+      replaceInFile(dir, "stakeholder-map.md", "None.", "- A procurement reviewer may be needed. [assumption]");
+      const questionsPath = join(dir, "intent-capture-questions.md");
+      writeFileSync(
+        questionsPath,
+        `${readFileSync(questionsPath, "utf-8")}\n\n## ✅ Assumption Confirmation\n\n- A procurement reviewer may be needed. [assumption]\n\nA. Accept assumptions\nB. Convert to follow-up questions\n\n[Answer]: A. Accept assumptions\n`,
+        "utf-8",
+      );
+      const result = run(dir);
+      expect(result.findings).toEqual([]);
+      expect(result.pass).toBe(true);
+    });
+
+    test("findings quote the heading as written", () => {
+      const dir = makeStageDir();
+      replaceInFile(dir, "intent-statement.md", "## Initial Scope Signal", "## 🎯 Initial Scope Signal");
+      replaceInFile(dir, "intent-statement.md", "- User-confirmed product boundary: proof of concept. [Q8]", "- An untagged boundary claim.");
+      const result = run(dir);
+      expect(result.pass).toBe(false);
+      expect(result.findings).toContain("intent-statement.md ## 🎯 Initial Scope Signal: claim block has no source tag");
+    });
+
+    const notDecoration: Array<[string, string, string]> = [
+      ["copyright sign", "## Sources", "## © Sources"],
+      ["trademark sign", "## Sources", "## ™ Sources"],
+      ["playback symbol", "## Sources", "## ▶ Sources"],
+      ["text-form information sign", "## Sources", "## ℹ Sources"],
+    ];
+    for (const [name, heading, replacement] of notDecoration) {
+      test(`${name}: ${replacement} is not the Sources register`, () => {
+        const dir = makeStageDir();
+        replaceInFile(dir, "intent-capture-questions.md", heading, replacement);
+        const result = run(dir);
+        expect(result.pass).toBe(false);
+        expect(result.findings).toContain("questions file is missing ## Sources");
+      });
+    }
+
+    test("an emoji with no separating whitespace is not decoration", () => {
+      const dir = makeStageDir();
+      replaceInFile(dir, "intent-capture-questions.md", "## Q1.", "## ❓Q1.");
+      const result = run(dir);
+      expect(result.pass).toBe(false);
+      expect(result.findings).toContain("intent-statement.md ## Problem Statement: [Q1] has no filled answer");
+    });
+
+    test("an undecorated and a decorated Sources heading are duplicates", () => {
+      const dir = makeStageDir();
+      const questionsPath = join(dir, "intent-capture-questions.md");
+      writeFileSync(questionsPath, `${readFileSync(questionsPath, "utf-8")}\n\n## ℹ️ Sources\n`, "utf-8");
+      const result = run(dir);
+      expect(result.pass).toBe(false);
+      expect(result.findings).toContain("questions file has duplicate ## Sources sections");
+    });
+
+    test("a decorated Review heading is not exempt from claim checks", () => {
+      const dir = makeStageDir();
+      replaceInFile(dir, "intent-statement.md", "## Review", "## 👀 Review");
+      const result = run(dir);
+      expect(result.pass).toBe(false);
+      expect(result.findings).toContain("intent-statement.md ## 👀 Review: claim block has no source tag");
+    });
+
+    test("a memory citation still resolves only against the exact H2", () => {
+      const dir = makeStageDir();
+      const memoryPath = join(dir, "aidlc", "spaces", "default", "memory", "project.md");
+      writeFileSync(memoryPath, readFileSync(memoryPath, "utf-8").replace("## Forbidden", "## 🔒 Forbidden"), "utf-8");
+      const loose = run(dir);
+      expect(loose.pass).toBe(false);
+      expect(loose.findings).toContain("[memory:M1] memory source must contain exactly one ## Forbidden heading");
+
+      replaceInFile(dir, "intent-capture-questions.md", "project.md#Forbidden", "project.md#🔒 Forbidden");
+      const exact = run(dir);
+      expect(exact.findings).toEqual([]);
+      expect(exact.pass).toBe(true);
+    });
   });
 });

@@ -59,6 +59,9 @@ function childEnv(project: string, scope?: string): NodeJS.ProcessEnv {
     AIDLC_HARNESS_DIR: ".claude",
     // Do not inherit a machine-level defaultScope or ceremony policy.
     AIDLC_INSTALL_ROOT: join(project, ".machine"),
+    // No chat runs here, so no hook leaves a heartbeat; these runs are about
+    // the scope, not about hooks that never ran.
+    AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "1",
   });
   if (scope !== undefined) env.AWS_AIDLC_DEFAULT_SCOPE = scope;
   return env;
@@ -106,11 +109,14 @@ describe("t340 shared implicit scope resolution", () => {
     const project = emptyProject("feature");
     const env = childEnv(project);
     // Ideation runs in feature but is skipped by classic, making the route
-    // sensitive to the recorded default rather than merely accepting any scope.
-    expect(intentCapture(project, env)).toMatchObject({
+    // sensitive to the recorded default rather than merely accepting any scope:
+    // a scope that skips the stage still runs it, with a notice naming that scope.
+    const directive = intentCapture(project, env);
+    expect(directive).toMatchObject({
       kind: "run-stage",
       stage: "intent-capture",
     });
+    expect(directive?.change_notices ?? []).toEqual([]);
     expect(createIntent(project, env).split("\n")).toContain("- **Scope**: feature");
   });
 
@@ -118,8 +124,8 @@ describe("t340 shared implicit scope resolution", () => {
     const project = emptyProject("feature");
     const env = childEnv(project, "classic");
     const directive = intentCapture(project, env);
-    expect(directive?.kind).toBe("error");
-    expect(directive?.message).toContain('is skipped for scope "classic"');
+    expect(directive?.kind).toBe("run-stage");
+    expect(String(directive?.change_notices)).toContain('"intent-capture" is not part of the classic plan.');
     expect(createIntent(project, env).split("\n")).toContain("- **Scope**: classic");
   });
 
@@ -127,8 +133,8 @@ describe("t340 shared implicit scope resolution", () => {
     const project = emptyProject();
     const env = childEnv(project);
     const directive = intentCapture(project, env);
-    expect(directive?.kind).toBe("error");
-    expect(directive?.message).toContain('is skipped for scope "classic"');
+    expect(directive?.kind).toBe("run-stage");
+    expect(String(directive?.change_notices)).toContain('"intent-capture" is not part of the classic plan.');
     expect(createIntent(project, env).split("\n")).toContain("- **Scope**: classic");
   });
 

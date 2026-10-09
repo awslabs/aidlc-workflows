@@ -91,18 +91,40 @@ jobs:
 
   full_suite:
     needs: [validate, gate]
+    runs-on: ubuntu-latest
+    continue-on-error: true
     permissions:
       contents: read
-      id-token: write
-    uses: ./.github/workflows/full-suite.yml
-    # The live jobs' ai-pr-review environment secret resolves empty in a called
-    # run unless the caller passes secrets.
-    secrets: inherit
-    with:
-      ref: ${{ needs.validate.outputs.sha }}
+      actions: write
+    outputs:
+      result: ${{ steps.suite.outputs.result }}
+      run_id: ${{ steps.suite.outputs.run_id }}
+    steps:
+      # A separate run preserves Full Suite's failure without failing the preview.
+      - name: Run and report Full Suite
+        id: suite
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_SHA: ${{ needs.validate.outputs.sha }}
+        run: |
+          set -euo pipefail
+          echo 'result=failure' >>"$GITHUB_OUTPUT"
+          run_id="$(gh api --method POST \
+            -H 'X-GitHub-Api-Version: 2026-03-10' \
+            "repos/$GITHUB_REPOSITORY/actions/workflows/full-suite.yml/dispatches" \
+            -f ref=main -f "inputs[ref]=$SOURCE_SHA" --jq '.workflow_run_id')"
+          [[ "$run_id" =~ ^[1-9][0-9]*$ ]]
+          echo "run_id=$run_id" >>"$GITHUB_OUTPUT"
+          gh run watch "$run_id" --repo "$GITHUB_REPOSITORY" --interval 60 --exit-status || true
+          result="$(gh run view "$run_id" --repo "$GITHUB_REPOSITORY" --json conclusion --jq '.conclusion')"
+          if [ "$result" = success ]; then
+            echo 'result=success' >>"$GITHUB_OUTPUT"
+          else
+            echo "::warning::Full Suite run $run_id concluded $result; preview publication remains allowed"
+          fi
 
   # A failing Full Suite does not block the build. This job reports it; the
-  # preview notes carry the report and release-result keeps the run red.
+  # preview notes carry the report without failing the preview workflow.
   test:
     name: Release tests
     if: ${{ !cancelled() && needs.validate.result == 'success' }}
@@ -114,7 +136,7 @@ jobs:
     steps:
       - name: Require a finished Full Suite
         env:
-          FULL_SUITE_RESULT: ${{ needs.full_suite.result }}
+          FULL_SUITE_RESULT: ${{ needs.full_suite.outputs.result || 'failure' }}
         run: |
           case "$FULL_SUITE_RESULT" in
             success | failure) ;;
@@ -128,23 +150,29 @@ jobs:
           bun-version: 1.4.2
       # Missing evidence narrows the report instead of blocking the build.
       - name: Download Full Suite evidence
+        if: ${{ needs.full_suite.outputs.run_id != '' }}
         continue-on-error: true
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           pattern: full-suite-*
           path: ${{ runner.temp }}/full-suite-evidence
+          github-token: ${{ github.token }}
+          run-id: ${{ needs.full_suite.outputs.run_id }}
       - name: List Full Suite jobs
+        if: ${{ needs.full_suite.outputs.run_id != '' }}
         env:
           GH_TOKEN: ${{ github.token }}
+          FULL_SUITE_RUN_ID: ${{ needs.full_suite.outputs.run_id }}
         run: |
-          gh api --paginate --slurp "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/jobs?filter=latest&per_page=100" \
+          gh api --paginate --slurp "repos/$GITHUB_REPOSITORY/actions/runs/$FULL_SUITE_RUN_ID/jobs?filter=latest&per_page=100" \
             >"$RUNNER_TEMP/full-suite-jobs.json" || {
             echo "::warning::Could not list the Full Suite jobs; the test report omits them"
             rm -f "$RUNNER_TEMP/full-suite-jobs.json"
           }
       - name: Report Full Suite results
         env:
-          FULL_SUITE_RESULT: ${{ needs.full_suite.result }}
+          FULL_SUITE_RESULT: ${{ needs.full_suite.outputs.result || 'failure' }}
+          FULL_SUITE_RUN_ID: ${{ needs.full_suite.outputs.run_id }}
           SOURCE_SHA: ${{ needs.validate.outputs.sha }}
         run: |
           set -euo pipefail
@@ -370,7 +398,7 @@ jobs:
             exit 0
           }
           if (
-            ($Remaining.Count -ne 9 -and $Remaining.Count -ne 13) -or
+            ($Remaining.Count -ne 11 -and $Remaining.Count -ne 15) -or
             $Remaining[0] -ne 'attestation' -or
             $Remaining[1] -ne 'verify' -or
             [IO.Path]::GetFileName($subject) -ne 'checksums.txt' -or
@@ -382,12 +410,14 @@ jobs:
             $Remaining[6] -ne $env:AIDLC_TEST_GH_REPOSITORY -or
             $Remaining[7] -ne '--signer-workflow' -or
             $Remaining[8] -ne $env:AIDLC_TEST_GH_WORKFLOW -or
+            $Remaining[9] -ne '--hostname' -or
+            $Remaining[10] -ne 'github.com' -or
             (
-              $Remaining.Count -eq 13 -and (
-                $Remaining[9] -ne '--source-ref' -or
-                $Remaining[10] -ne $env:AIDLC_TEST_GH_SOURCE_REF -or
-                $Remaining[11] -ne '--source-digest' -or
-                $Remaining[12] -ne $env:AIDLC_TEST_GH_SOURCE_DIGEST
+              $Remaining.Count -eq 15 -and (
+                $Remaining[11] -ne '--source-ref' -or
+                $Remaining[12] -ne $env:AIDLC_TEST_GH_SOURCE_REF -or
+                $Remaining[13] -ne '--source-digest' -or
+                $Remaining[14] -ne $env:AIDLC_TEST_GH_SOURCE_DIGEST
               )
             ) -or
             (Get-FileHash -Algorithm SHA256 -LiteralPath $subject).Hash.ToLowerInvariant() -ne
@@ -421,8 +451,8 @@ jobs:
           }
           $verificationPasses = Get-Content -LiteralPath $env:AIDLC_TEST_GH_MARKER
           if (
-            $verificationPasses -notcontains 'verified-9' -or
-            $verificationPasses -notcontains 'verified-13'
+            $verificationPasses -notcontains 'verified-11' -or
+            $verificationPasses -notcontains 'verified-15'
           ) {
             throw 'offline installer did not bind the trusted source digest'
           }
@@ -462,6 +492,11 @@ jobs:
             }
             & $command config --project-dir $project --harness $harness --mcp none --quiet
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            # Setup tells a Cursor project outside git to run `git init`; doctor fails it until then.
+            if ($harness -eq 'cursor') {
+              git init --quiet $project
+              if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            }
             & $command doctor --project-dir $project --quiet
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           }
@@ -542,7 +577,7 @@ jobs:
               '--source-digest string'
             exit 0
           fi
-          { [ "$#" -eq 9 ] || [ "$#" -eq 11 ] || [ "$#" -eq 13 ]; } || exit 2
+          { [ "$#" -eq 11 ] || [ "$#" -eq 13 ] || [ "$#" -eq 15 ]; } || exit 2
           [ "$1" = attestation ] || exit 2
           [ "$2" = verify ] || exit 2
           case "$3" in /*/checksums.txt) ;; *) exit 2 ;; esac
@@ -554,13 +589,15 @@ jobs:
           [ "$7" = "$AIDLC_TEST_GH_REPOSITORY" ] || exit 2
           [ "$8" = --signer-workflow ] || exit 2
           [ "$9" = "$AIDLC_TEST_GH_WORKFLOW" ] || exit 2
-          if [ "$#" -ge 11 ]; then
-            [ "${10}" = --source-ref ] || exit 2
-            [ "${11}" = "$AIDLC_TEST_GH_SOURCE_REF" ] || exit 2
+          [ "${10}" = --hostname ] || exit 2
+          [ "${11}" = github.com ] || exit 2
+          if [ "$#" -ge 13 ]; then
+            [ "${12}" = --source-ref ] || exit 2
+            [ "${13}" = "$AIDLC_TEST_GH_SOURCE_REF" ] || exit 2
           fi
-          if [ "$#" -eq 13 ]; then
-            [ "${12}" = --source-digest ] || exit 2
-            [ "${13}" = "$AIDLC_TEST_GH_SOURCE_DIGEST" ] || exit 2
+          if [ "$#" -eq 15 ]; then
+            [ "${14}" = --source-digest ] || exit 2
+            [ "${15}" = "$AIDLC_TEST_GH_SOURCE_DIGEST" ] || exit 2
           fi
           if command -v sha256sum >/dev/null 2>&1; then
             actual="$(sha256sum "$3" | awk '{print $1}')"
@@ -587,9 +624,9 @@ jobs:
             AIDLC_TEST_GH_CHECKSUM_SHA="$checksums_sha" \
             sh "$release/install.sh" --from "$release" --offline --quiet
           test -s "$gh_marker"
-          grep -qx 'verified-9' "$gh_marker"
           grep -qx 'verified-11' "$gh_marker"
           grep -qx 'verified-13' "$gh_marker"
+          grep -qx 'verified-15' "$gh_marker"
           command="$AIDLC_BIN_DIR/aidlc"
           env PATH="/usr/bin:/bin" "$command" version
           export COPILOT_HOME="$RUNNER_TEMP/aidlc-copilot-home"
@@ -601,9 +638,62 @@ jobs:
             fi
             env PATH="/usr/bin:/bin" "$command" config \
               --project-dir "$project" --harness "$harness" --mcp none --quiet
+            # Setup tells a Cursor project outside git to run `git init`; doctor fails it until then.
+            if [ "$harness" = cursor ]; then
+              git init --quiet "$project"
+            fi
             env PATH="/usr/bin:/bin" "$command" doctor \
               --project-dir "$project" --quiet
           done
+
+  # A person on the last stable release types `aidlc update`, gets this build,
+  # and their hooks, project refresh and doctor still work. A failure turns the
+  # run red and opens the preview notes with a warning; the preview still
+  # publishes (release.yml holds a stable release back on it).
+  update-from-previous:
+    needs: [validate, stage-release]
+    if: ${{ !cancelled() && needs.validate.result == 'success' && needs.stage-release.result == 'success' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-latest, macos-15, windows-latest]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ needs.validate.outputs.sha }}
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: 1.4.2
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: release-candidate
+          path: build/release
+      # The token stays in this step: the releases under test never see it.
+      - name: Find the last stable release
+        id: previous
+        shell: bash
+        env:
+          CANDIDATE_TAG: ${{ needs.validate.outputs.tag }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          previous="$(gh release list --repo "$GITHUB_REPOSITORY" --exclude-drafts --exclude-pre-releases \
+            --limit 20 --json tagName --jq '[.[].tagName | select(. != env.CANDIDATE_TAG)] | .[0] // empty')"
+          test -n "$previous"
+          echo "tag=$previous" >>"$GITHUB_OUTPUT"
+      - name: Update from the last release
+        shell: bash
+        env:
+          PREVIOUS_TAG: ${{ steps.previous.outputs.tag }}
+        run: |
+          set -euo pipefail
+          printf 'aidlc-lifecycle-provenance-fixture\n' >build/release/aidlc-release.intoto.jsonl
+          bun scripts/ci-update-from-previous.ts --previous "$PREVIOUS_TAG" --candidate build/release
 
   publish:
     needs: [validate, musl-smoke, windows-lifecycle, unix-lifecycle]
@@ -668,7 +758,7 @@ jobs:
           if-no-files-found: error
 
   release:
-    needs: [validate, full_suite, publish]
+    needs: [validate, full_suite, publish, update-from-previous]
     if: ${{ !cancelled() && needs.validate.result == 'success' && needs.publish.result == 'success' }}
     runs-on: ubuntu-latest
     environment: preview
@@ -701,17 +791,19 @@ jobs:
           test "$(git rev-parse HEAD)" = "$AUTHORIZED_SHA"
           test "$RELEASE_TAG" = "v$(jq -r .version build/release/version.json)"
           (cd build/release && sha256sum -c checksums.txt)
-      # A preview built from a failing Full Suite warns first and ends with the
-      # report, trimmed so the whole body stays within GitHub's release limit.
+      # A preview built from a failing Full Suite or update check warns first and
+      # ends with the report, trimmed so the whole body stays within GitHub's
+      # release limit.
       - name: Stage preview notes
         env:
-          FULL_SUITE_RESULT: ${{ needs.full_suite.result }}
+          FULL_SUITE_RESULT: ${{ needs.full_suite.outputs.result || 'failure' }}
           PREVIEW_PLAN: ${{ needs.validate.outputs.preview_plan }}
+          UPDATE_RESULT: ${{ needs.update-from-previous.result }}
         run: |
           set -euo pipefail
           plan="$RUNNER_TEMP/aidlc-preview-plan.json"
           printf '%s\n' "$PREVIEW_PLAN" >"$plan"
-          if [ "$FULL_SUITE_RESULT" != success ]; then
+          if [ "$FULL_SUITE_RESULT" != success ] || [ "$UPDATE_RESULT" != success ]; then
             bun scripts/ci-preview-test-report.ts --stage-notes "$plan" \
               "$RUNNER_TEMP/preview-test-report/preview-test-report.md"
           fi
@@ -768,18 +860,3 @@ jobs:
             exit 0
           fi
           test "$RELEASE_RESULT" = success
-      # Publication does not wait for tests, but a failing suite keeps the run red.
-      - name: Require a passing Full Suite
-        if: ${{ !cancelled() }}
-        env:
-          FULL_SUITE_RESULT: ${{ needs.full_suite.result }}
-          TEST_RESULT: ${{ needs.test.result }}
-        run: |
-          if [ "$FULL_SUITE_RESULT" != success ]; then
-            if [ "$TEST_RESULT" = success ]; then
-              echo "::error::Full Suite failed; the Release tests job summary has the failure report"
-            else
-              echo "::error::Full Suite failed and Release tests produced no failure report; see that job's log"
-            fi
-            exit 1
-          fi

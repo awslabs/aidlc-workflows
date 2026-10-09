@@ -558,8 +558,9 @@ describe("t205: approve-time gate-revision backstop", () => {
     guarded(proj, ["checkbox", `${slug}=in-progress`]);
     setAutonomous(proj);
     guarded(proj, ["gate-start", slug]);
-    recordHumanTurn(proj);
+    recordHumanTurn(proj); // changes asked for
     fireArtifact(proj, feasibilityArtifact(proj, PRIMARY_ARTIFACT));
+    recordHumanTurn(proj); // approved in a later turn
     const r = guarded(proj, ["approve", slug, "--user-input", "approved"]);
     expect(r.rc).toBe(0);
     expect(field(proj, "Revision Count")).toBe("1");
@@ -578,6 +579,28 @@ describe("t205: approve-time gate-revision backstop", () => {
     recordHumanTurn(proj);
     const r = guardedNoBackstop(proj, ["approve", slug, "--user-input", "approved"]);
     expect(r.rc).toBe(0);
+    expect(field(proj, "Revision Count")).toBe("0");
+    expect(eventCount(proj, "GATE_REJECTED")).toBe(0);
+    expect(eventCount(proj, "GATE_APPROVED")).toBe(1);
+  });
+
+  // --- Scenario 7b: Guard Policy off (or relaxed): an edit at the open gate is
+  // a change the person's Approve accepts, never a Request Changes they did not
+  // give. No backfill; the approval commits as given.
+  test("7b: under Guard Policy off the person's Approve stands with no backfilled rejection", () => {
+    const statePath = seededStateFile(proj);
+    writeFileSync(statePath, readFileSync(statePath, "utf-8").replace(
+      "- **Change Control**: strict (from scope feature)",
+      "- **Guard Policy**: off (from scope feature)",
+    ));
+    const slug = field(proj, "Current Stage");
+    guarded(proj, ["checkbox", `${slug}=in-progress`]);
+    guarded(proj, ["gate-start", slug]);
+    recordHumanTurn(proj);
+    fireArtifact(proj, feasibilityArtifact(proj, PRIMARY_ARTIFACT));
+    recordHumanTurn(proj);
+    const r = guarded(proj, ["approve", slug, "--user-input", "change the title and approve"]);
+    expect(r.rc, r.out).toBe(0);
     expect(field(proj, "Revision Count")).toBe("0");
     expect(eventCount(proj, "GATE_REJECTED")).toBe(0);
     expect(eventCount(proj, "GATE_APPROVED")).toBe(1);
@@ -721,6 +744,8 @@ describe("t205: approve-time gate-revision backstop", () => {
     cleanupTestProject(proj);
     proj = createTestProject();
     seedStateFile(proj, "state-brownfield-init-done.md");
+    // Pin collaborators on (fixture scope ships them off) so reverse-engineering keeps its architect pipeline link.
+    writeFileSync(seededStateFile(proj), readFileSync(seededStateFile(proj), "utf-8").replace(/^- \*\*Scope\*\*: .*/m, "- **Scope**: enterprise"));
     rewriteIntentRepos(proj, ["repo-a", "repo-b"]);
     const slug = field(proj, "Current Stage");
     expect(slug).toBe("reverse-engineering");
@@ -781,6 +806,8 @@ describe("t205: approve-time gate-revision backstop", () => {
     cleanupTestProject(proj);
     proj = createTestProject();
     seedStateFile(proj, "state-brownfield-init-done.md");
+    // Pin collaborators on (fixture scope ships them off) so reverse-engineering keeps its architect pipeline link.
+    writeFileSync(seededStateFile(proj), readFileSync(seededStateFile(proj), "utf-8").replace(/^- \*\*Scope\*\*: .*/m, "- **Scope**: enterprise"));
     rewriteIntentRepos(proj, ["repo-a"]);
     const slug = field(proj, "Current Stage");
     expect(slug).toBe("reverse-engineering");
@@ -808,5 +835,65 @@ describe("t205: approve-time gate-revision backstop", () => {
     expect(eventCount(proj, "STAGE_REVISING")).toBe(0);
     expect(eventCount(proj, "GATE_APPROVED")).toBe(1);
     expect(eventCount(proj, "ARTIFACT_UPDATED")).toBeGreaterThanOrEqual(1);
+  });
+
+  // --- Scenario 14: the person approves, and the agent notes the approval in
+  // one of the stage's own outputs before reporting it. The only post-gate
+  // human turn IS the approving turn, so the write after it carries out the
+  // approval: no rejection is recorded in the person's name.
+  test("14: a write after the person's approving turn is not a revision", () => {
+    const slug = field(proj, "Current Stage");
+    guarded(proj, ["checkbox", `${slug}=in-progress`]);
+    guarded(proj, ["gate-start", slug]); // anchor
+    recordHumanTurn(proj); // the person approves
+    fireArtifact(proj, feasibilityArtifact(proj, "raid-log")); // the agent notes it
+    const r = guarded(proj, ["approve", slug, "--user-input", "Approve"]);
+    expect(r.rc, r.out).toBe(0);
+    expect(field(proj, "Revision Count")).toBe("0");
+    expect(eventCount(proj, "GATE_REJECTED")).toBe(0);
+    expect(eventCount(proj, "STAGE_REVISING")).toBe(0);
+    expect(eventCount(proj, "GATE_APPROVED")).toBe(1);
+    expect(stateContent(proj)).toContain(`- [x] ${slug}`);
+  });
+
+  // --- Scenario 14b: the same approval when the conductor never opened the
+  // gate (stage-start anchor, report's recovered gate row right before approve).
+  test("14b: with no organic gate-start, a write after the approving turn is not a revision", () => {
+    const slug = field(proj, "Current Stage");
+    guarded(proj, ["checkbox", `${slug}=in-progress`]);
+    recordStageStarted(proj, slug);
+    fireArtifact(proj, feasibilityArtifact(proj, PRIMARY_ARTIFACT)); // production
+    recordHumanTurn(proj); // the person approves
+    fireArtifact(proj, feasibilityArtifact(proj, "raid-log")); // the agent notes it
+    const gs = guarded(proj, ["gate-start", slug, "--recovered"]);
+    expect(gs.rc, gs.out).toBe(0);
+    const r = guarded(proj, ["approve", slug, "--user-input", "Approve"]);
+    expect(r.rc, r.out).toBe(0);
+    expect(field(proj, "Revision Count")).toBe("0");
+    expect(eventCount(proj, "GATE_REJECTED")).toBe(0);
+    expect(eventCount(proj, "STAGE_REVISING")).toBe(0);
+    expect(eventCount(proj, "GATE_APPROVED")).toBe(1);
+  });
+
+  // --- Scenario 14c: a real unrecorded revision (changes asked for, revised,
+  // approved in a later turn) is still reconciled once, and a note written
+  // after the approving turn adds nothing.
+  test("14c: a revision before the approving turn still backfills once", () => {
+    const slug = field(proj, "Current Stage");
+    guarded(proj, ["checkbox", `${slug}=in-progress`]);
+    guarded(proj, ["gate-start", slug]);
+    recordHumanTurn(proj); // the person asks for changes
+    fireArtifact(proj, feasibilityArtifact(proj, PRIMARY_ARTIFACT)); // revised
+    recordHumanTurn(proj); // the person approves
+    fireArtifact(proj, feasibilityArtifact(proj, "raid-log")); // the agent notes it
+    const r = guarded(proj, ["approve", slug, "--user-input", "Approve"]);
+    expect(r.rc, r.out).toBe(0);
+    expect(field(proj, "Revision Count")).toBe("1");
+    const blocks = auditBlocks(proj);
+    const rejected = blocks.filter((b) => b.event === "GATE_REJECTED" && b.stage === slug);
+    expect(rejected.length).toBe(1);
+    expect(rejected[0].recovered).toBe(true);
+    expect(eventCount(proj, "STAGE_REVISING")).toBe(1);
+    expect(eventCount(proj, "GATE_APPROVED")).toBe(1);
   });
 });

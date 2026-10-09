@@ -1,7 +1,6 @@
 import { expect } from "bun:test";
 import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
-import { parse as parseToml } from "smol-toml";
 import {
   auditBlockField, getField, type IntentRegistryEntry, listIntents,
   readAuditShardEvents, readIntentRegistry,
@@ -23,7 +22,7 @@ const UNQUOTED_WORD = /^[A-Za-z0-9_./:=@,+%-]+$/;
  * nothing to attribute the route to. */
 export function exactCodexUtilityArgv(command: string): string[] | null {
   const wrapped = /^(?:(?:\/(?:usr\/)?bin\/)?(?:ba|z)?sh -l?c|"[A-Za-z]:(?:\\\\[^"\\]+)*\\\\pwsh\.exe" (?:-NoProfile )?-Command) (?:'([^']*)'|"((?:[^"\\$`]|\\")*)")$/.exec(command);
-  const text = wrapped ? (wrapped[1] ?? wrapped[2].replaceAll('\\"', '"')) : command;
+  const text = (wrapped ? (wrapped[1] ?? wrapped[2].replaceAll('\\"', '"')) : command);
   if (/[\0\r\n]/.test(text)) return null;
   const words: string[] = [];
   for (let i = 0; i < text.length;) {
@@ -104,10 +103,14 @@ export function expectCliSuccess<T>(
 
 export function expectSpaceInclude(root: string, space: string): void {
   expect(readFileSync(join(root, "aidlc", "active-space"), "utf-8").trim()).toBe(space);
-  const config = parseToml(readFileSync(join(root, ".codex", "config.toml"), "utf-8")) as {
-    shell_environment_policy?: { set?: { AIDLC_RULES_DIR?: string } };
-  };
-  expect(config.shell_environment_policy?.set?.AIDLC_RULES_DIR).toBe(`aidlc/spaces/${space}/memory`);
+  // The engine's copy every harness include reads holds this space's memory
+  // files, each behind one line that names the file to edit.
+  expect(readFileSync(join(root, "aidlc", "active-memory", "org.md"), "utf-8"))
+    .toBe(`${copyHeader(space, "org.md")}${readFileSync(join(root, "aidlc", "spaces", space, "memory", "org.md"), "utf-8")}`);
+}
+
+export function copyHeader(space: string, rel: string): string {
+  return `<!-- AI-DLC keeps this copy in step with aidlc/spaces/${space}/memory/${rel}. Edit that file; this copy is replaced. -->\n`;
 }
 
 /** Session hooks may append audit rows; count creation events, not shard bytes. */

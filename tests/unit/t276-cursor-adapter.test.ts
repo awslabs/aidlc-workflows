@@ -42,6 +42,7 @@ import {
   cpSync,
   existsSync,
   mkdirSync,
+  mkdtempSync,
   readdirSync,
   readFileSync,
   rmSync,
@@ -50,7 +51,9 @@ import {
   utimesSync,
   writeFileSync,
 } from "node:fs";
+import { tmpdir } from "node:os";
 import { basename, dirname, join, relative, sep, win32 } from "node:path";
+import { resolveAction } from "../../dist/cursor/.cursor/tools/aidlc.ts";
 import {
   auditBlockField,
   createIntent,
@@ -101,6 +104,25 @@ function setCurrentStage(project: string, stage: string): void {
       `- **Current Stage**: ${stage}`,
     ),
   );
+}
+
+/**
+ * The home `~user` names, as a shell and the adapter read it: the account's
+ * /etc/passwd entry, else HOME. The two differ when HOME is an isolated test
+ * home.
+ */
+function accountHome(user: string | undefined): string | undefined {
+  if (user && process.platform !== "win32") {
+    try {
+      const row = readFileSync("/etc/passwd", "utf-8").split(/\r?\n/)
+        .find((line) => line.split(":", 1)[0] === user);
+      const home = row?.split(":")[5];
+      if (home?.startsWith("/")) return home;
+    } catch {
+      // No account data: a shell falls back to HOME for the current user.
+    }
+  }
+  return process.env.HOME;
 }
 
 /** A workspace-shell project with the shipped .cursor engine installed. */
@@ -203,20 +225,14 @@ function runAdapter(
   const adapterProjectDir = options.adapterProjectDir ?? projectDir;
   const env: Record<string, string | undefined> = {
     ...process.env,
-    // Hermetic git evaluation: the adapter's shell evaluator consults the
-    // REAL pager environment and global git config when classifying `git`
-    // commands, so a developer host with PAGER=less or a global core.pager
-    // (e.g. delta) flips the safe-git allow cases to deny. Point the global
-    // scope at an absent file and pin pager variables to cat; command-text
-    // assignments inside individual test payloads are unaffected. The
-    // adapter's gitStatusUsesExternalCommand treats a non-cat PAGER as
-    // "pager enabled" and denies `git status` under delegated-agent attribution.
+    // The adapter reads the global git config when it resolves a persisted
+    // alias, so the global scope points at an absent file and a developer's own
+    // aliases stay out of the classification. A developer's pager needs no
+    // hiding any more: the adapter no longer reads one.
     GIT_CONFIG_GLOBAL: join(projectDir, ".absent-global-gitconfig"),
     GIT_CONFIG_SYSTEM: join(projectDir, ".absent-system-gitconfig"),
     AIDLC_PROJECT_DIR: projectDir,
     AIDLC_HARNESS_DIR: ".cursor",
-    PAGER: "cat",
-    GIT_PAGER: "cat",
     ...options.env,
   };
   for (const [key, value] of Object.entries(env)) {
@@ -260,6 +276,30 @@ function registerTaskParent(projectDir: string): void {
       session_id: conversation,
     }),
   );
+}
+
+/** A chat stamped by an earlier version: its stamp stays, its binding goes. */
+function unbind(projectDir: string): void {
+  const sessions = join(projectDir, "aidlc", ".aidlc-sessions");
+  for (const name of readdirSync(sessions)) {
+    if (name.endsWith(".binding.json")) rmSync(join(sessions, name));
+  }
+}
+
+function turns(projectDir: string, intent: string): number {
+  return readAllAuditShards(projectDir, intent, "default").split("**Event**: HUMAN_TURN").length - 1;
+}
+
+/** The rebind lines the fixture chat's next `next` carries. */
+function rebindLines(projectDir: string): string[] {
+  const session = (JSON.parse(payload("beforeSubmitPrompt", projectDir)) as { conversation_id: string }).conversation_id;
+  const r = spawnSync("bun", [join(projectDir, ".cursor", "tools", "aidlc-orchestrate.ts"), "next", "--project-dir", projectDir], {
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+    encoding: "utf-8",
+    env: { ...process.env, AIDLC_PROJECT_DIR: projectDir, AIDLC_HARNESS_DIR: ".cursor", AIDLC_SESSION_OVERRIDE: session },
+  });
+  return ((JSON.parse(r.stdout) as { change_notices?: string[] }).change_notices ?? [])
+    .filter((line) => line.startsWith("Another chat selected"));
 }
 
 /** Replace the core stop hook with a probe that always asks to continue. */
@@ -460,6 +500,37 @@ describe("t276 cursor adapter payload conversion", () => {
     expectAllowJson(r);
   });
 
+  // A sibling-only swarm worktree whose delegated metadata does not validate
+  // names no workflow. Reads stay open so the checkout can be inspected, a
+  // mutation is refused by Plan Approval's fail-closed authority check rather
+  // than by a guard that failed, and the engine says which file to repair.
+  test.each([
+    ["malformed", { version: 2, repoSelector: "repo", swarmUnit: "widget", intentRecord: "aidlc/spaces/default/intents/x" }],
+    ["stale", {
+      version: 1, repoSelector: "repo", swarmUnit: "widget", boltSlug: "widget",
+      intentRecord: "aidlc/spaces/default/intents/2026-01-01-gone",
+    }],
+  ] as const)("4c: %s delegated worktree metadata allows a read, refuses a write, and names the repair", (_kind, meta) => {
+    const proj = installedProject();
+    mkdirSync(join(proj, ".aidlc"), { recursive: true });
+    writeFileSync(join(proj, ".aidlc", "worktree-meta.json"), JSON.stringify(meta));
+    expectAllowJson(runAdapter(proj, "guards", payload("preToolUseWrite", proj, {
+      tool_name: "Read", tool_input: { file_path: join(proj, "AGENTS.md") },
+    })), "read");
+    const write = runAdapter(proj, "guards", payload("preToolUseWrite", proj));
+    expect(write.code).toBe(0);
+    const denied = JSON.parse(write.stdout) as { permission?: string; agent_message?: string };
+    expect(denied.permission).toBe("deny");
+    expect(denied.agent_message ?? "").toContain("Plan Approval authority evaluation failed closed");
+    const next = spawnSync("bun", [join(proj, ".cursor", "tools", "aidlc-orchestrate.ts"), "next", "--project-dir", proj], {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+      encoding: "utf-8",
+      env: { ...process.env, AIDLC_PROJECT_DIR: proj, AIDLC_HARNESS_DIR: ".cursor" },
+    });
+    expect(next.status).toBe(1);
+    expect(`${next.stdout}${next.stderr}`).toContain("Repair this checkout's .aidlc/worktree-meta.json");
+  });
+
   test("4b: dispatcher adapter and legacy hook routes both emit failClosed allow JSON", () => {
     const proj = installedProject();
     seedStateFile(proj, "state-construction.md");
@@ -490,6 +561,39 @@ describe("t276 cursor adapter payload conversion", () => {
       expect(r.stderr, route.join(" ")).toBe("");
       expect(r.stdout, route.join(" ")).toBe('{"permission":"allow"}\n');
     }
+  });
+
+  test("5b: an active-space pointer naming no space reads as the default space, as in the engine", () => {
+    const proj = installedProject();
+    seedStateFile(proj, "state-construction.md");
+    const record = seededRecordDir(proj);
+    clearLedger(proj);
+    writeFileSync(join(proj, "aidlc", "active-space"), "ghost\n");
+    mkdirSync(join(record, "construction", "unit-b"), { recursive: true });
+    mkdirSync(dirname(join(record, ".aidlc-engine/reviewer-dispatch.json")), { recursive: true });
+    writeFileSync(
+      join(record, ".aidlc-engine/reviewer-dispatch.json"),
+      JSON.stringify({
+        reviewer: "aidlc-architecture-reviewer-agent",
+        stage: "functional-design",
+        unit: "unit-a",
+        exempt: [],
+      }),
+    );
+    registerTaskParent(proj);
+    expectAllowJson(runAdapter(proj, "guards", payload("preToolUseTask", proj)));
+    expect(runAdapter(proj, "audit-and-sensors", payload("postToolUseTask", proj)).code).toBe(0);
+    expect(ledgerFilesFor(proj)).toHaveLength(0);
+    // With the ledger cleared, the dispatch record in the default space still
+    // scopes an unknown conversation's reads.
+    const sibling = runAdapter(
+      proj,
+      "guards",
+      payload("preToolUseSubagentRead", proj, {
+        tool_input: { file_path: join(record, "construction", "unit-b", "design.md") },
+      }),
+    );
+    expect(JSON.parse(sibling.stdout).permission).toBe("deny");
   });
 
   test("5: Task attribution binds unknown conversations only; registered mains are never conflated", () => {
@@ -639,7 +743,7 @@ describe("t276 cursor adapter payload conversion", () => {
     expect(readFileSync(ledger, "utf-8")).toBe(before);
   });
 
-  test("8: beforeSubmitPrompt rebind falls back from session_id to conversation_id", () => {
+  test("8: beforeSubmitPrompt never blocks the prompt; the next step says once where this chat's work is", () => {
     const proj = installedProject();
     const a = createIntent(proj, "intent-a", "default", "feature");
     const b = createIntent(proj, "intent-b", "default", "feature");
@@ -653,31 +757,151 @@ describe("t276 cursor adapter payload conversion", () => {
     expect(started.code).toBe(0);
     setActiveIntentCursor(proj, b.dirName, "default");
 
-    const warned = runAdapter(
+    // Another chat moved the selection. The person's prompt still goes
+    // through (no block, nothing to retype), and it is their turn.
+    const sent = runAdapter(
       proj,
       "mint",
       payload("beforeSubmitPrompt", proj, { session_id: undefined }),
     );
-    expect(warned.code).toBe(0);
-    const out = JSON.parse(warned.stdout) as { continue?: boolean; user_message?: string };
-    expect(out.continue).toBe(false);
-    expect(out.user_message ?? "").toContain("INTENT REBIND OFFER");
-    expect(out.user_message ?? "").toContain("intent-a");
-    expect(out.user_message ?? "").toContain("intent-b");
-    expect(out.user_message ?? "").toContain("/aidlc intent intent-a");
-
-    // The blocked warning is consumed: resubmitting continues on the bound
-    // intent A instead of deadlocking on the same beforeSubmitPrompt response.
-    const next = runAdapter(
-      proj,
-      "mint",
-      payload("beforeSubmitPrompt", proj, { session_id: undefined }),
-    );
-    expect(next.code).toBe(0);
-    expect(next.stdout.trim()).toBe("");
+    expect(sent.code).toBe(0);
+    expect(sent.stdout.trim()).toBe("");
     const shard = readAllAuditShards(proj, a.dirName, "default");
     expect(shard).toContain("HUMAN_TURN");
     expect(shard).not.toContain("SESSION_RESUMED");
+
+    // The chat's next step carries one plain line naming both pieces of work
+    // and the switch command (falls back from session_id to conversation_id).
+    const session = (JSON.parse(payload("beforeSubmitPrompt", proj)) as { conversation_id: string }).conversation_id;
+    const next = () => {
+      const r = spawnSync("bun", [join(proj, ".cursor", "tools", "aidlc-orchestrate.ts"), "next", "--project-dir", proj], {
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+        encoding: "utf-8",
+        env: { ...process.env, AIDLC_PROJECT_DIR: proj, AIDLC_HARNESS_DIR: ".cursor", AIDLC_SESSION_OVERRIDE: session },
+      });
+      return ((JSON.parse(r.stdout) as { change_notices?: string[] }).change_notices ?? [])
+        .filter((line) => line.startsWith("Another chat selected"));
+    };
+    const first = next();
+    expect(first).toHaveLength(1);
+    expect(first[0]).toContain("intent-a");
+    expect(first[0]).toContain("intent-b");
+    expect(first[0]).toContain(`/aidlc intent ${a.dirName}`);
+    expect(first[0]).toContain("this chat stays on");
+    expect(first[0]).not.toContain("INTENT REBIND OFFER");
+    // Said once: the following step and a further prompt for the same move
+    // carry no second copy.
+    expect(next()).toHaveLength(0);
+    const again = runAdapter(
+      proj,
+      "mint",
+      payload("beforeSubmitPrompt", proj, { session_id: undefined }),
+    );
+    expect(again.stdout.trim()).toBe("");
+    expect(next()).toHaveLength(0);
+  });
+
+  // A chat an earlier version stamped but never bound keeps its own work, so
+  // the person's turn is recorded there, and the line says so.
+  test("8b: a stamped, unbound chat keeps its own work and its turn after another chat moved the selection", () => {
+    const proj = installedProject();
+    const a = createIntent(proj, "intent-a", "default", "feature");
+    const b = createIntent(proj, "intent-b", "default", "feature");
+    setActiveIntentCursor(proj, a.dirName, "default");
+    expect(runAdapter(proj, "session-start", payload("sessionStart", proj, { session_id: undefined })).code).toBe(0);
+    const sessions = join(proj, "aidlc", ".aidlc-sessions");
+    for (const name of readdirSync(sessions)) {
+      if (name.endsWith(".binding.json")) rmSync(join(sessions, name));
+    }
+    setActiveIntentCursor(proj, b.dirName, "default");
+    const turns = (dir: string) =>
+      readAllAuditShards(proj, dir, "default").split("**Event**: HUMAN_TURN").length - 1;
+    const [onA, onB] = [turns(a.dirName), turns(b.dirName)];
+    const sent = runAdapter(proj, "mint", payload("beforeSubmitPrompt", proj, { session_id: undefined }));
+    expect(sent.stdout.trim()).toBe("");
+    expect(turns(a.dirName)).toBe(onA + 1);
+    expect(turns(b.dirName)).toBe(onB);
+    const session = (JSON.parse(payload("beforeSubmitPrompt", proj)) as { conversation_id: string }).conversation_id;
+    const r = spawnSync("bun", [join(proj, ".cursor", "tools", "aidlc-orchestrate.ts"), "next", "--project-dir", proj], {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+      encoding: "utf-8",
+      env: { ...process.env, AIDLC_PROJECT_DIR: proj, AIDLC_HARNESS_DIR: ".cursor", AIDLC_SESSION_OVERRIDE: session },
+    });
+    const lines = ((JSON.parse(r.stdout) as { change_notices?: string[] }).change_notices ?? [])
+      .filter((line) => line.startsWith("Another chat selected"));
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toContain("this chat stays on");
+    expect(lines[0]).toContain("intent-a");
+  });
+
+  // The person typed the switch themselves: no line about the old selection,
+  // and the turn lands on this chat's own work, never on the other chat's.
+  test("8c: a typed switch from a stamped, unbound chat carries no rebind line and gives the other work no turn", () => {
+    const proj = installedProject();
+    const a = createIntent(proj, "intent-a", "default", "feature");
+    const b = createIntent(proj, "intent-b", "default", "feature");
+    setActiveIntentCursor(proj, a.dirName, "default");
+    expect(runAdapter(proj, "session-start", payload("sessionStart", proj, { session_id: undefined })).code).toBe(0);
+    unbind(proj);
+    setActiveIntentCursor(proj, b.dirName, "default");
+    const [onA, onB] = [turns(proj, a.dirName), turns(proj, b.dirName)];
+    const sent = runAdapter(
+      proj,
+      "mint",
+      payload("beforeSubmitPrompt", proj, { session_id: undefined, prompt: `/aidlc intent ${b.dirName}` }),
+    );
+    expect(sent.stdout.trim()).toBe("");
+    expect(turns(proj, a.dirName)).toBe(onA + 1);
+    expect(turns(proj, b.dirName)).toBe(onB);
+    expect(rebindLines(proj)).toHaveLength(0);
+  });
+
+  // A line an earlier prompt left, before the agent ran anything, is dropped
+  // when the person then types a switch.
+  test("8d: a typed switch drops a rebind line an earlier prompt left", () => {
+    const proj = installedProject();
+    const a = createIntent(proj, "intent-a", "default", "feature");
+    const b = createIntent(proj, "intent-b", "default", "feature");
+    setActiveIntentCursor(proj, a.dirName, "default");
+    expect(runAdapter(proj, "session-start", payload("sessionStart", proj, { session_id: undefined })).code).toBe(0);
+    setActiveIntentCursor(proj, b.dirName, "default");
+    expect(runAdapter(proj, "mint", payload("beforeSubmitPrompt", proj, { session_id: undefined })).stdout.trim()).toBe("");
+    const sent = runAdapter(
+      proj,
+      "mint",
+      payload("beforeSubmitPrompt", proj, { session_id: undefined, prompt: `/aidlc intent ${b.dirName}` }),
+    );
+    expect(sent.stdout.trim()).toBe("");
+    expect(rebindLines(proj)).toHaveLength(0);
+  });
+
+  // Asked in plain words, the agent runs the switch: the line about the old
+  // selection is no longer true, so the next step does not say it.
+  test("8e: a switch the agent runs after the person's prompt drops the rebind line", () => {
+    const proj = installedProject();
+    const a = createIntent(proj, "intent-a", "default", "feature");
+    const b = createIntent(proj, "intent-b", "default", "feature");
+    setActiveIntentCursor(proj, a.dirName, "default");
+    expect(runAdapter(proj, "session-start", payload("sessionStart", proj, { session_id: undefined })).code).toBe(0);
+    setActiveIntentCursor(proj, b.dirName, "default");
+    const sent = runAdapter(
+      proj,
+      "mint",
+      payload("beforeSubmitPrompt", proj, { session_id: undefined, prompt: "switch this chat to the other work too" }),
+    );
+    expect(sent.stdout.trim()).toBe("");
+    const session = (JSON.parse(payload("beforeSubmitPrompt", proj)) as { conversation_id: string }).conversation_id;
+    const switched = spawnSync(
+      "bun",
+      [join(proj, ".cursor", "tools", "aidlc-utility.ts"), "intent", b.dirName, "--project-dir", proj],
+      {
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+        encoding: "utf-8",
+        env: { ...process.env, AIDLC_PROJECT_DIR: proj, AIDLC_HARNESS_DIR: ".cursor", AIDLC_SESSION_OVERRIDE: session },
+      },
+    );
+    expect(switched.status, switched.stderr).toBe(0);
+    expect(rebindLines(proj)).toHaveLength(0);
   });
 
   test("9: beforeSubmitPrompt is silent when the session's intent is unchanged", () => {
@@ -951,7 +1175,14 @@ describe("t276 cursor adapter payload conversion", () => {
       const r = runAdapter(proj, target, "{not json");
       expect(r.code).toBe(0);
       if (target === "guards") {
-        expect(JSON.parse(r.stdout).permission).toBe("deny");
+        const denied = JSON.parse(r.stdout) as { permission?: string; agent_message?: string };
+        expect(denied.permission).toBe("deny");
+        // The refusal names the way out for the person, not only the failure.
+        // Cursor sends this input itself and doctor cannot see it, so the step
+        // is a retry, then a full restart of Cursor.
+        expect(denied.agent_message ?? "").toContain("Retry it once");
+        expect(denied.agent_message ?? "").toContain("quit Cursor fully and open this folder again");
+        expect(denied.agent_message ?? "").not.toContain("doctor");
       } else {
         expect(r.stdout.trim(), `${target}: advisory malformed input`).toBe("");
       }
@@ -1353,6 +1584,11 @@ describe("t276 cursor adapter payload conversion", () => {
     const out = JSON.parse(r.stdout) as { permission?: string; agent_message?: string };
     expect(out.permission).toBe("deny");
     expect(out.agent_message ?? "").toContain("aidlc-reviewer-scope.ts failed");
+    // It names the step that puts the files back, and that command is a real route.
+    expect(out.agent_message ?? "").toContain("config --harness cursor");
+    expect(out.agent_message ?? "").not.toContain("doctor");
+    const action = resolveAction(["config", "--harness", "cursor"]);
+    expect(action.type).not.toBe("error");
   });
 
   test("22b: an unavailable shared freeze parser denies before the guard chain", () => {
@@ -2125,6 +2361,9 @@ if (import.meta.main) {
       `& ('Remove' + '-Item') -Force ('${dispatch.slice(0, -"-dispatch.json".length)}' + '-dispatch.json')`,
       "& ('Remove-Item'.ToString()) ordinary",
       "PWN='!echo harmless | sh' git --config-env=alias.pwn=PWN pwn",
+      // A program the agent itself hands to git, by flag or through a variable:
+      // the person's own monitor setting is allowed, this is not theirs.
+      `MON=${externalGitProgram} git --config-env=core.fsmonitor=MON status --short`,
       `GIT_CONFIG_GLOBAL=${join(proj, "scratch", "gitconfig")} git pwn`,
       `git --exec-path=${externalGitDir} externalpwn`,
       `GIT_EXEC_PATH=${externalGitDir} git externalpwn`,
@@ -2135,13 +2374,12 @@ if (import.meta.main) {
       `git bisect run ${externalGitProgram}`,
       `git submodule foreach ${externalGitProgram}`,
       `git -c core.fsmonitor=${externalGitProgram} status --short`,
-      `GIT_PAGER=${externalGitProgram} git status --short`,
       "git --no-pager branch -- --list",
       "git --no-pager tag -- --list",
       `git -c diff.external=${externalGitProgram} --no-pager diff --cached -- scratch/ordinary --no-ext-diff --no-textconv --ignore-submodules=all`,
       `git -c diff.external=${externalGitProgram} --no-pager diff --cached --no-ext-diff --ext-diff --no-textconv --ignore-submodules=all scratch/ordinary`,
       `git --no-pager diff --cached --no-ext-diff --no-textconv --textconv --ignore-submodules=all scratch/ordinary`,
-      "git --no-pager --paginate branch --list",
+
       "git config alias.pwn '!echo harmless | sh'",
       "git config --global alias.pwn '!echo harmless | sh'",
     ];
@@ -2188,6 +2426,14 @@ if (import.meta.main) {
       "GIT_PAGER=cat git status --short",
       "git -c core.fsmonitor=false status --short",
       "git rev-parse --is-inside-work-tree",
+      // The person's own pager and monitor settings are theirs: a helper's git
+      // reads a repository with them, as it does in their terminal.
+      `GIT_PAGER=${externalGitProgram} git status --short`,
+      `PAGER=${externalGitProgram} git status --short`,
+      "git --no-pager --paginate branch --list",
+      "git branch --list",
+      "git tag --list",
+      "git diff --cached --no-ext-diff --no-textconv --ignore-submodules=all",
     ]) {
       const safe = runAdapter(
         proj,
@@ -2220,34 +2466,15 @@ if (import.meta.main) {
     const safeGitDir = join(safeAlternateRepo, ".git").replaceAll("\\", "/");
     const safeWorkTree = safeAlternateRepo.replaceAll("\\", "/");
     for (const command of [
-      `GIT_DIR=${unsafeGitDir} GIT_WORK_TREE=${unsafeWorkTree} git status --ignore-submodules=all`,
-      `env GIT_DIR=${unsafeGitDir} GIT_WORK_TREE=${unsafeWorkTree} git status --ignore-submodules=all`,
-      `GIT_COMMON_DIR=${unsafeGitDir} git status --ignore-submodules=all`,
-    ]) {
-      const unsafeRepository = runAdapter(
-        proj,
-        "guards",
-        payload("preToolUseShell", proj, {
-          conversation_id: "reviewer-unsafe-alternate-repository-conversation",
-          session_id: "reviewer-unsafe-alternate-repository-conversation",
-          tool_input: { command },
-        }),
-      );
-      const unsafeRepositoryOut = JSON.parse(unsafeRepository.stdout) as {
-        permission?: string;
-        agent_message?: string;
-      };
-      expect(unsafeRepositoryOut.permission, command).toBe("deny");
-      expect(unsafeRepositoryOut.agent_message ?? "", command).toContain(
-        "dynamic command evaluation",
-      );
-    }
-
-    for (const command of [
       `GIT_DIR=${safeGitDir} GIT_WORK_TREE=${safeWorkTree} git status --ignore-submodules=all`,
       `env GIT_DIR=${safeGitDir} GIT_WORK_TREE=${safeWorkTree} git status --ignore-submodules=all`,
       `GIT_COMMON_DIR=${safeGitDir} git status --ignore-submodules=all`,
       `GIT_NAMESPACE=review git status --ignore-submodules=all`,
+      // The same three against the repository whose own config names a monitor
+      // program: that setting is the person's, so a helper reads it as git does.
+      `GIT_DIR=${unsafeGitDir} GIT_WORK_TREE=${unsafeWorkTree} git status --ignore-submodules=all`,
+      `env GIT_DIR=${unsafeGitDir} GIT_WORK_TREE=${unsafeWorkTree} git status --ignore-submodules=all`,
+      `GIT_COMMON_DIR=${unsafeGitDir} git status --ignore-submodules=all`,
     ]) {
       const safeRepository = runAdapter(
         proj,
@@ -2336,41 +2563,24 @@ if (import.meta.main) {
     ).toBe(0);
     writeFileSync(join(proj, "README.md"), "# Safe pathspec fixture\n");
 
-    for (const command of [
+    for (const safeAlternateChildCommand of [
+      `GIT_DIR=${safeGitDir} GIT_WORK_TREE=${safeWorkTree} git status --ignore-submodules=all`,
+      // Walking into the submodule is allowed too: its own config names a
+      // monitor program, and that is the person's setting to make.
       `GIT_DIR=${safeGitDir} GIT_WORK_TREE=${safeWorkTree} git status --ignore-submodules=none`,
       `env GIT_DIR=${safeGitDir} GIT_WORK_TREE=${safeWorkTree} git status --ignore-submodules=none`,
     ]) {
-      const unsafeAlternateChild = runAdapter(
+      const safeAlternateChild = runAdapter(
         proj,
         "guards",
         payload("preToolUseShell", proj, {
-          conversation_id: "reviewer-unsafe-alternate-submodule-conversation",
-          session_id: "reviewer-unsafe-alternate-submodule-conversation",
-          tool_input: { command },
+          conversation_id: "reviewer-safe-alternate-submodule-conversation",
+          session_id: "reviewer-safe-alternate-submodule-conversation",
+          tool_input: { command: safeAlternateChildCommand },
         }),
       );
-      const unsafeAlternateChildOut = JSON.parse(unsafeAlternateChild.stdout) as {
-        permission?: string;
-        agent_message?: string;
-      };
-      expect(unsafeAlternateChildOut.permission, command).toBe("deny");
-      expect(unsafeAlternateChildOut.agent_message ?? "", command).toContain(
-        "dynamic command evaluation",
-      );
+      expectAllowJson(safeAlternateChild, safeAlternateChildCommand);
     }
-
-    const safeAlternateChildCommand =
-      `GIT_DIR=${safeGitDir} GIT_WORK_TREE=${safeWorkTree} git status --ignore-submodules=all`;
-    const safeAlternateChild = runAdapter(
-      proj,
-      "guards",
-      payload("preToolUseShell", proj, {
-        conversation_id: "reviewer-safe-alternate-submodule-conversation",
-        session_id: "reviewer-safe-alternate-submodule-conversation",
-        tool_input: { command: safeAlternateChildCommand },
-      }),
-    );
-    expectAllowJson(safeAlternateChild, safeAlternateChildCommand);
 
     const shellAlias = spawnSync(
       "git",
@@ -2491,31 +2701,12 @@ if (import.meta.main) {
     const unsafeIndexValue = unsafeAlternateIndex.replaceAll("\\", "/");
     const safeIndexValue = safeAlternateIndex.replaceAll("\\", "/");
     for (const command of [
-      `GIT_INDEX_FILE=${unsafeIndexValue} git status --ignore-submodules=none`,
-      `env GIT_INDEX_FILE=${unsafeIndexValue} git status --ignore-submodules=none`,
-    ]) {
-      const unsafeIndexStatus = runAdapter(
-        proj,
-        "guards",
-        payload("preToolUseShell", proj, {
-          conversation_id: "reviewer-unsafe-alternate-index-conversation",
-          session_id: "reviewer-unsafe-alternate-index-conversation",
-          tool_input: { command },
-        }),
-      );
-      const unsafeIndexOut = JSON.parse(unsafeIndexStatus.stdout) as {
-        permission?: string;
-        agent_message?: string;
-      };
-      expect(unsafeIndexOut.permission, command).toBe("deny");
-      expect(unsafeIndexOut.agent_message ?? "", command).toContain(
-        "dynamic command evaluation",
-      );
-    }
-
-    for (const command of [
       `GIT_INDEX_FILE=${safeIndexValue} git status --ignore-submodules=none`,
       `env GIT_INDEX_FILE=${safeIndexValue} git status --ignore-submodules=none`,
+      // The index that lists the submodule carrying a monitor program reads the
+      // same way: the setting inside it is the person's.
+      `GIT_INDEX_FILE=${unsafeIndexValue} git status --ignore-submodules=none`,
+      `env GIT_INDEX_FILE=${unsafeIndexValue} git status --ignore-submodules=none`,
     ]) {
       const safeIndexStatus = runAdapter(
         proj,
@@ -2995,12 +3186,9 @@ if (import.meta.main) {
         tool_input: { command: recursiveStatusCommand },
       }),
     );
-    const recursiveStatusOut = JSON.parse(recursiveStatus.stdout) as {
-      permission?: string;
-      agent_message?: string;
-    };
-    expect(recursiveStatusOut.permission).toBe("deny");
-    expect(recursiveStatusOut.agent_message ?? "").toContain("dynamic command evaluation");
+    // The submodule's own config names a monitor program, which is the person's
+    // setting to make, so a status that walks into it reads like any other.
+    expectAllowJson(recursiveStatus, recursiveStatusCommand);
 
     const safeRestrictedStatus = "git status --short -- README.md";
     const safeRestrictedResult = runAdapter(
@@ -3031,70 +3219,45 @@ if (import.meta.main) {
       expectAllowJson(safePositionalStatus, command);
     }
 
-    const unsafeRestrictedStatus =
-      `git status --short -- ${submodulePath}`;
-    const unsafeRestrictedResult = runAdapter(
+    // A pathspec that names the submodule reads it with the monitor its own
+    // config sets, which is the person's setting, so this is allowed too.
+    const restrictedToSubmodule = `git status --short -- ${submodulePath}`;
+    const restrictedToSubmoduleResult = runAdapter(
       proj,
       "guards",
       payload("preToolUseShell", proj, {
-        conversation_id: "reviewer-unsafe-restricted-status-conversation",
-        session_id: "reviewer-unsafe-restricted-status-conversation",
-        tool_input: { command: unsafeRestrictedStatus },
+        conversation_id: "reviewer-restricted-submodule-status-conversation",
+        session_id: "reviewer-restricted-submodule-status-conversation",
+        tool_input: { command: restrictedToSubmodule },
       }),
     );
-    const unsafeRestrictedOut = JSON.parse(unsafeRestrictedResult.stdout) as {
-      permission?: string;
-      agent_message?: string;
-    };
-    expect(unsafeRestrictedOut.permission).toBe("deny");
-    expect(unsafeRestrictedOut.agent_message ?? "").toContain(
-      "dynamic command evaluation",
-    );
+    expectAllowJson(restrictedToSubmoduleResult, restrictedToSubmodule);
 
+    // The same holds when the submodule is named as a bare path, from the
+    // project or from a folder inside it.
     for (const command of [
       `git status --short ${submodulePath}`,
       "git -C scratch status status-submodule",
     ]) {
-      const unsafePositionalStatus = runAdapter(
+      const positionalSubmoduleStatus = runAdapter(
         proj,
         "guards",
         payload("preToolUseShell", proj, {
-          conversation_id: "reviewer-unsafe-positional-status-conversation",
-          session_id: "reviewer-unsafe-positional-status-conversation",
+          conversation_id: "reviewer-positional-submodule-status-conversation",
+          session_id: "reviewer-positional-submodule-status-conversation",
           tool_input: { command },
         }),
       );
-      const unsafePositionalOut = JSON.parse(unsafePositionalStatus.stdout) as {
-        permission?: string;
-        agent_message?: string;
-      };
-      expect(unsafePositionalOut.permission, command).toBe("deny");
-      expect(unsafePositionalOut.agent_message ?? "", command).toContain(
-        "dynamic command evaluation",
-      );
+      expectAllowJson(positionalSubmoduleStatus, command);
     }
 
     writeFileSync(join(proj, "scratch", "ordinary.txt"), "safe\n");
-    const nestedCwdStatus = "git -C scratch status -- status-submodule";
-    const nestedCwdResult = runAdapter(
-      proj,
-      "guards",
-      payload("preToolUseShell", proj, {
-        conversation_id: "reviewer-nested-cwd-status-conversation",
-        session_id: "reviewer-nested-cwd-status-conversation",
-        tool_input: { command: nestedCwdStatus },
-      }),
-    );
-    const nestedCwdOut = JSON.parse(nestedCwdResult.stdout) as {
-      permission?: string;
-      agent_message?: string;
-    };
-    expect(nestedCwdOut.permission).toBe("deny");
-    expect(nestedCwdOut.agent_message ?? "").toContain("dynamic command evaluation");
-
     for (const command of [
       "git -C scratch status -- ordinary.txt",
       "git -C scratch status -- ':(top)README.md'",
+      // Reaching the submodule from a folder inside the project, where its own
+      // config sets the monitor, is the person's setting again.
+      "git -C scratch status -- status-submodule",
     ]) {
       const safeNestedCwd = runAdapter(
         proj,
@@ -3121,14 +3284,8 @@ if (import.meta.main) {
         },
       }),
     );
-    const workingDirectoryOut = JSON.parse(workingDirectoryResult.stdout) as {
-      permission?: string;
-      agent_message?: string;
-    };
-    expect(workingDirectoryOut.permission).toBe("deny");
-    expect(workingDirectoryOut.agent_message ?? "").toContain(
-      "dynamic command evaluation",
-    );
+    // And through the payload's own working directory, for the same reason.
+    expectAllowJson(workingDirectoryResult, workingDirectoryStatus);
 
     const safeWorkingDirectoryStatus = "git status -- ordinary.txt";
     const safeWorkingDirectoryResult = runAdapter(
@@ -3156,12 +3313,8 @@ if (import.meta.main) {
         tool_input: { command: conflictingStatusCommand },
       }),
     );
-    const conflictingStatusOut = JSON.parse(conflictingStatus.stdout) as {
-      permission?: string;
-      agent_message?: string;
-    };
-    expect(conflictingStatusOut.permission).toBe("deny");
-    expect(conflictingStatusOut.agent_message ?? "").toContain("dynamic command evaluation");
+    // The last --ignore-submodules wins, so this walks into the submodule: allowed, like the shapes above.
+    expectAllowJson(conflictingStatus, conflictingStatusCommand);
 
     const disguisedStatusCommand =
       "git status --short -- scratch --ignore-submodules=all";
@@ -3174,12 +3327,8 @@ if (import.meta.main) {
         tool_input: { command: disguisedStatusCommand },
       }),
     );
-    const disguisedStatusOut = JSON.parse(disguisedStatus.stdout) as {
-      permission?: string;
-      agent_message?: string;
-    };
-    expect(disguisedStatusOut.permission).toBe("deny");
-    expect(disguisedStatusOut.agent_message ?? "").toContain("dynamic command evaluation");
+    // The flag after -- is a pathspec, so the submodule is read: allowed for the same reason.
+    expectAllowJson(disguisedStatus, disguisedStatusCommand);
 
     const ignoredSubmoduleStatus =
       "git status --short --ignore-submodules=all";
@@ -3219,12 +3368,8 @@ if (import.meta.main) {
         tool_input: { command: manifestlessStatus },
       }),
     );
-    const manifestlessOut = JSON.parse(manifestlessResult.stdout) as {
-      permission?: string;
-      agent_message?: string;
-    };
-    expect(manifestlessOut.permission).toBe("deny");
-    expect(manifestlessOut.agent_message ?? "").toContain("dynamic command evaluation");
+    // A gitlink with no .gitmodules entry is read the same way.
+    expectAllowJson(manifestlessResult, manifestlessStatus);
 
     expect(
       spawnSync("git", ["update-index", "--force-remove", submodulePath], {
@@ -3575,7 +3720,7 @@ if (import.meta.main) {
       expectAllowJson(safeOld, safeOldCommand);
 
       const username = process.env.USER ?? process.env.LOGNAME;
-      const actualHome = process.env.HOME;
+      const actualHome = accountHome(username);
       expect(username).toBeTruthy();
       expect(actualHome).toBeTruthy();
       const namedAlias = join(
@@ -3615,6 +3760,22 @@ if (import.meta.main) {
       );
       expectAllowJson(safeNamedRemoval, namedSafe);
     }
+  });
+
+  // A tab or harness can run the suite with HOME set to an isolated home, which
+  // is not where `~user` points; case 33 must hold there too.
+  test("the home-alias case holds when HOME is not the account's home", () => {
+    if (process.platform === "win32") return;
+    const isolatedHome = mkdtempSync(join(tmpdir(), "aidlc-t276-home-"));
+    scratch.push(isolatedHome);
+    const run = spawnSync(process.execPath, [
+      "test", join(import.meta.dir, basename(import.meta.path)), "-t", "33: POSIX and PowerShell home aliases",
+    ], {
+      cwd: REPO_ROOT, encoding: "utf-8", timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+      env: { ...process.env, HOME: isolatedHome },
+    });
+    expect(run.status, `${run.stdout}${run.stderr}`).toBe(0);
+    expect(`${run.stdout}${run.stderr}`).toContain("1 pass");
   });
 
   test("34: shell-internal directory changes rebase later path operands", () => {
@@ -3829,21 +3990,20 @@ if (import.meta.main) {
     activateReviewer(proj);
     const unsafe = join(proj, "scratch", "unsafe-git-cwd");
     mkdirSync(unsafe, { recursive: true });
+    expect(spawnSync("git", ["init"], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), cwd: proj }).status).toBe(0);
     expect(spawnSync("git", ["init"], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), cwd: unsafe }).status).toBe(0);
-    const helper = join(
-      proj,
-      "scratch",
-      process.platform === "win32" ? "fsmonitor-helper.cmd" : "fsmonitor-helper",
-    );
-    writeFileSync(
-      helper,
-      process.platform === "win32"
-        ? "@echo off\r\nexit /b 0\r\n"
-        : "#!/bin/sh\nexit 0\n",
-    );
-    if (process.platform !== "win32") chmodSync(helper, 0o755);
+    // The same alias name resolves two ways: in the project it is a plain
+    // inspection, and in the folder a compound command moves to it runs a
+    // shell. Which of the two the adapter reads is the whole point of the case.
+    // (It read a monitor program here before; that setting is the person's.)
     expect(
-      spawnSync("git", ["config", "core.fsmonitor", helper], {
+      spawnSync("git", ["config", "alias.inspect", "status --short"], {
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+        cwd: proj,
+      }).status,
+    ).toBe(0);
+    expect(
+      spawnSync("git", ["config", "alias.inspect", "!echo harmless | sh"], {
         timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
         cwd: unsafe,
       }).status,
@@ -3853,15 +4013,15 @@ if (import.meta.main) {
     const denied =
       process.platform === "win32"
         ? [
-            `cd /d ${JSON.stringify(relativeUnsafe)} && git status --short`,
-            `Set-Location ${JSON.stringify(relativeUnsafe)}; git status --short`,
-            `if (Test-Path ${JSON.stringify(relativeUnsafe)}) { Set-Location ${JSON.stringify(relativeUnsafe)} }; git status --short`,
+            `cd /d ${JSON.stringify(relativeUnsafe)} && git inspect`,
+            `Set-Location ${JSON.stringify(relativeUnsafe)}; git inspect`,
+            `if (Test-Path ${JSON.stringify(relativeUnsafe)}) { Set-Location ${JSON.stringify(relativeUnsafe)} }; git inspect`,
           ]
         : [
-            `cd ${JSON.stringify(relativeUnsafe)}; git status --short`,
-            `cd ${JSON.stringify(relativeUnsafe)} && git status --short`,
-            `builtin cd ${JSON.stringify(relativeUnsafe)}; git status --short`,
-            `if true; then cd ${JSON.stringify(relativeUnsafe)}; fi; git status --short`,
+            `cd ${JSON.stringify(relativeUnsafe)}; git inspect`,
+            `cd ${JSON.stringify(relativeUnsafe)} && git inspect`,
+            `builtin cd ${JSON.stringify(relativeUnsafe)}; git inspect`,
+            `if true; then cd ${JSON.stringify(relativeUnsafe)}; fi; git inspect`,
           ];
     for (const command of denied) {
       const result = runAdapter(
@@ -3886,14 +4046,14 @@ if (import.meta.main) {
     const allowed =
       process.platform === "win32"
         ? [
-            "cd /d no-such-dir && git status --short",
-            "cd /d no-such-dir || git status --short",
+            "cd /d no-such-dir && git inspect",
+            "cd /d no-such-dir || git inspect",
           ]
         : [
-            "cd no-such-dir && git status --short",
-            "cd no-such-dir || git status --short",
-            `cd ${JSON.stringify(relativeUnsafe)} | git status --short`,
-            `(cd ${JSON.stringify(relativeUnsafe)}); git status --short`,
+            "cd no-such-dir && git inspect",
+            "cd no-such-dir || git inspect",
+            `cd ${JSON.stringify(relativeUnsafe)} | git inspect`,
+            `(cd ${JSON.stringify(relativeUnsafe)}); git inspect`,
           ];
     for (const command of allowed) {
       const result = runAdapter(
@@ -4260,5 +4420,74 @@ if (import.meta.main) {
     expect(nestedOut.agent_message ?? "").toContain(
       "nested delegation is not allowed",
     );
+  });
+
+  test("38: with Guard Policy off a delegate runs its builds and tests, and its Task starts", () => {
+    // Under Guard Policy off the reviewer read scope and the state-transition
+    // check stand aside, and the delegate identity checks serve only those two.
+    // A developer delegate's `npm test` or `bun test` was refused all the same.
+    const proj = installedProject();
+    seedStateFile(proj, "state-construction.md");
+    const statePath = join(seededRecordDir(proj), "aidlc-state.md");
+    const withPolicy = (line: string) => writeFileSync(
+      statePath,
+      readFileSync(statePath, "utf-8")
+        .replace(/^- \*\*(?:Guard Policy|Change Control)\*\*:.*\n/gm, "")
+        .replace(/^(- \*\*Scope\*\*:.*)$/m, `$1\n- **Guard Policy**: ${line}`),
+    );
+    withPolicy("off (from scope classic)");
+    // A design stage: no code plan is waiting, so the plan check has nothing to hold.
+    setCurrentStage(proj, "functional-design");
+    clearLedger(proj);
+    registerTaskParent(proj);
+    const spawn = runAdapter(
+      proj,
+      "guards",
+      payload("preToolUseTask", proj, {
+        tool_input: {
+          description: "Developer probe",
+          prompt: "Implement the unit.",
+          subagent_type: "aidlc-developer-agent",
+        },
+      }),
+    );
+    expectAllowJson(spawn);
+    const delegateShell = (command: string) => JSON.parse(runAdapter(
+      proj,
+      "guards",
+      payload("preToolUseShell", proj, {
+        conversation_id: "developer-under-guard-policy-off",
+        session_id: "developer-under-guard-policy-off",
+        tool_input: { command },
+      }),
+    ).stdout) as { permission?: string; agent_message?: string };
+    for (const command of ["bun test", "node --test", "npm test", "grep -rn formatPrice ."]) {
+      const out = delegateShell(command);
+      expect(out.permission, `${command}: ${out.agent_message ?? ""}`).toBe("allow");
+    }
+    // A Task whose record cannot be written still starts: nothing reads the record.
+    const unrecordedTask = () => JSON.parse(runAdapter(
+      proj,
+      "guards",
+      payload("preToolUseTask", proj, {
+        tool_use_id: "",
+        generation_id: "",
+        tool_input: { description: "Developer probe", prompt: "Implement the unit.", subagent_type: "aidlc-developer-agent" },
+      }),
+    ).stdout) as { permission?: string; agent_message?: string };
+    expect(unrecordedTask().permission).toBe("allow");
+    // Under strict the identity checks hold, and each refusal names the step that works.
+    withPolicy("strict (set by you)");
+    const held = delegateShell("bun test");
+    expect(held.permission).toBe("deny");
+    expect(held.agent_message ?? "").toContain("have the parent conversation run executable probes");
+    const heldTask = unrecordedTask();
+    expect(heldTask.permission).toBe("deny");
+    expect(heldTask.agent_message ?? "").toContain("Start it again");
+    expect(heldTask.agent_message ?? "").toContain("doctor");
+    // The named step: the same Task with its ids starts.
+    expect(JSON.parse(runAdapter(proj, "guards", payload("preToolUseTask", proj, {
+      tool_input: { description: "Developer probe", prompt: "Implement the unit.", subagent_type: "aidlc-developer-agent" },
+    })).stdout).permission).toBe("allow");
   });
 });

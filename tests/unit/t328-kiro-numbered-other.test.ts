@@ -26,6 +26,14 @@ const CORE_PROTOCOL = readFileSync(
   "utf-8",
 );
 
+// Every annex that renders questions as numbered prose.
+const NUMBERED_ANNEXES = [
+  ...ANNEXES,
+  "harness/opencode/skills/aidlc/question-rendering.md",
+  "harness/cursor/skills/aidlc/question-rendering.md",
+  "harness/copilot/skills/aidlc/question-rendering.md",
+] as const;
+
 function readAnnex(rel: string): string {
   return readFileSync(join(REPO_ROOT, rel), "utf-8");
 }
@@ -113,11 +121,9 @@ describe("t328 Kiro numbered Other rendering contract", () => {
   });
 
   test("summary and approval Other escape behavior agrees across core and Kiro skills", () => {
-    expect(CORE_PROTOCOL).toContain(
-      "A harness-supplied\n**Other** escape is an offered UI choice",
-    );
-    expect(CORE_PROTOCOL).toContain(
-      "An explicit **Other** selection follows the §1 Other-escape rule",
+    expect(CORE_PROTOCOL).toMatch(/A harness-supplied\s+\*\*Other\*\* escape is an offered UI choice/);
+    expect(CORE_PROTOCOL).toMatch(
+      /An \*\*Other\*\* selection with no words of their own follows the Other-escape/,
     );
     for (const rel of KIRO_SKILLS) {
       const body = readAnnex(rel);
@@ -214,5 +220,28 @@ describe("t328 Kiro IDE launch-binary resolution (a skip is an unmet gate)", () 
       if (previous === undefined) delete process.env.AIDLC_KIRO_IDE_BIN;
       else process.env.AIDLC_KIRO_IDE_BIN = previous;
     }
+  });
+});
+
+// A Kiro CLI run asked four numbered questions and offered the example answer
+// "1A, 2C, 3A, 4A", in letters its options did not have.
+describe("t328 a batch of numbered questions asks for numbers", () => {
+  // A live Kiro CLI run never opened its annex and still asked for letters,
+  // so the rule sits in the protocol every stage loads.
+  test("the stage protocol's Guide me rule asks for numbers on a numbered list, never file letters", () => {
+    expect(CORE_PROTOCOL).toContain(
+      "Where the tool shows questions as a numbered list, number every option and never ask for a file letter: " +
+        "a batch ends with \"Reply with each question's number and the number of your choice (for example Q1: 2, Q2: 1), or just tell me.\" " +
+        "and a single question with \"Reply with a number (or just tell me).\"",
+    );
+  });
+
+  test.each([...NUMBERED_ANNEXES])("%s gives the batch reply hint in numbers, never letters", (rel: string) => {
+    const body = readAnnex(rel);
+    expect(body).toContain(
+      "A message with several questions labels them Q1, Q2, and so on, and ends with: " +
+        "\"Reply with each question's number and the number of your choice (for example Q1: 2, Q2: 1), or just tell me.\" " +
+        "Never give an example answer with letters.",
+    );
   });
 });

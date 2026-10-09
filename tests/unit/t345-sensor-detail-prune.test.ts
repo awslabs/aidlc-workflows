@@ -54,6 +54,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pruneSupersededDetailFiles } from "../../core/tools/aidlc-sensor.ts";
+import { readAllAuditShards } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import {
 	AIDLC_SRC,
 	cleanupTestProject,
@@ -247,8 +248,9 @@ interface Fire {
 const projects: string[] = [];
 
 function setupProject(): {
+	proj: string;
 	outputDir: string;
-	fire: (outputPath: string, env?: Record<string, string>) => Fire;
+	fire: (outputPath: string, env?: Record<string, string>, extraArgs?: string[]) => Fire;
 } {
 	const proj = createTestProject();
 	projects.push(proj);
@@ -274,7 +276,7 @@ function setupProject(): {
 	mkdirSync(outputDir, { recursive: true });
 	const detailDir = join(record, ".aidlc-engine", "sensors", STAGE);
 
-	const fire = (outputPath: string, env: Record<string, string> = {}): Fire => {
+	const fire = (outputPath: string, env: Record<string, string> = {}, extraArgs: string[] = []): Fire => {
 		const res = spawnSync(
 			"bun",
 			[
@@ -285,6 +287,7 @@ function setupProject(): {
 				STAGE,
 				"--output-path",
 				outputPath,
+				...extraArgs,
 			],
 			{
 				encoding: "utf-8",
@@ -310,7 +313,7 @@ function setupProject(): {
 		return { result: verdict.result, note: verdict.note, detailFiles };
 	};
 
-	return { outputDir, fire };
+	return { proj, outputDir, fire };
 }
 
 describe("t345 the dispatcher clears a superseded detail file on a passing fire", () => {
@@ -351,6 +354,24 @@ describe("t345 the dispatcher clears a superseded detail file on a passing fire"
 		expect(passed.result).toBe("passed");
 		// The failing output was not re-evaluated, so its report is still live.
 		expect(passed.detailFiles).toEqual(failed.detailFiles);
+	});
+
+	test("a Unit named on the fire is on its SENSOR_FIRED row and its terminal row", () => {
+		const { proj, outputDir, fire } = setupProject();
+		const outputPath = join(outputDir, "requirements.md");
+		writeFileSync(outputPath, THREE_H2, "utf-8");
+		expect(fire(outputPath, {}, ["--unit", "alpha"]).result).toBe("passed");
+		expect(fire(outputPath).result).toBe("passed");
+		const rows = readAllAuditShards(proj).split(/\n---\n/);
+		const fired = rows.filter((row) => row.includes("**Event**: SENSOR_FIRED"));
+		const passed = rows.filter((row) => row.includes("**Event**: SENSOR_PASSED"));
+		expect(fired).toHaveLength(2);
+		expect(passed).toHaveLength(2);
+		// The fire that named the Unit carries it on both rows; the one that did not is as before.
+		expect(fired[0]).toContain("**Unit**: alpha");
+		expect(passed[0]).toContain("**Unit**: alpha");
+		expect(fired[1]).not.toContain("**Unit**:");
+		expect(passed[1]).not.toContain("**Unit**:");
 	});
 
 	test("a noted pass that evaluated nothing keeps the earlier report", () => {

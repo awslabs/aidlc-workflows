@@ -231,14 +231,14 @@ function git(cwd: string, args: string[]): void {
 function runnerFixture(mode: "success" | "timeout" | "cancel" | "capture", witness: string): string {
   const fixture = join(scratch(), "runner");
   const copied = [
-    "tests/run-tests.ts", "tests/gen-coverage-registry.ts", "tests/harness/claude-gate.ts",
+    "tests/run-tests.ts", "tests/gen-coverage-registry.ts", "scripts/package-sources.ts", "tests/harness/claude-gate.ts",
     "tests/harness/runner-profile.ts",
     "tests/harness/test-budget.ts",
-    "tests/lib/bun-junit-to-meta.ts", "tests/lib/test-sharding.ts",
+    "tests/lib/bun-junit-to-meta.ts", "tests/lib/file-retry.ts", "tests/lib/test-sharding.ts",
     "tests/lib/e2e-plan.ts", "tests/lib/e2e-scheduler.ts", "tests/lib/e2e-workers.ts", "tests/lib/e2e-process.ts",
     "tests/lib/e2e-deferred-cleanup.ts",
     "tests/harness/tui-runtime.ts", "tests/harness/tui-drive.ts", "tests/harness/sdk-drive.ts",
-    "tests/harness/sdk-process-containment.ts", "tests/harness/windows-folder-holders.ts",
+    "tests/harness/person-turns.ts", "tests/harness/sdk-process-containment.ts", "tests/harness/windows-folder-holders.ts",
     // Started by path at runtime, so the import walk cannot see it.
     "tests/harness/sdk-contained-bootstrap.ts",
     "tests/harness/tui-time-budget.ts",
@@ -246,6 +246,8 @@ function runnerFixture(mode: "success" | "timeout" | "cancel" | "capture", witne
     "tests/harness/tui-process-identity.ts", "tests/harness/tui-screen.ts",
     "tests/harness/tui-record-file.ts",
     "tests/harness/tui-windows-private-file.ts",
+    // sdk-drive.ts reads CI's pinned Bedrock models from the broker.
+    "scripts/ci-credential-broker.ts", "core/tools/aidlc-runtime-budget.ts",
   ];
   for (const path of copied) {
     mkdirSync(dirname(join(fixture, path)), { recursive: true });

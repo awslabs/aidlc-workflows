@@ -53,6 +53,7 @@ interface Expected {
   execute: number;
   skip: number;
   gates: number;
+  shown: number;
   perUnitStages: number;
 }
 
@@ -74,7 +75,8 @@ function derive(stages: Record<string, "EXECUTE" | "SKIP">): Expected {
       perUnitStages++;
     }
   }
-  return { total, execute, skip: total - execute, gates, perUnitStages };
+  // The stages a run shows the person: every EXECUTE stage after Initialization.
+  return { total, execute, skip: total - execute, gates, shown: gates, perUnitStages };
 }
 
 describe("t213 scopeCostSummary matches an independent grid+graph derivation", () => {
@@ -122,14 +124,38 @@ describe("t213 helper agrees with renderScopeTable's EXECUTE / Total cell", () =
 });
 
 describe("t213 validateGrid threads the same summary the helper computes", () => {
-  test("validateGrid(feature grid).summary equals scopeCostSummary('feature')", () => {
+  test("validateGrid(feature grid).summary equals scopeCostSummary('feature') counts", () => {
     const r = validateGrid({ ...GRID.feature.stages });
-    expect(r.summary).toEqual(scopeCostSummary("feature") ?? undefined);
+    const scoped = scopeCostSummary("feature");
+    expect(scoped).not.toBeNull();
+    // A bare grid carries no settings, so it names nothing off; feature's own
+    // settings turn collaborators off.
+    expect(r.summary).toEqual({ ...(scoped as NonNullable<typeof scoped>), off: [] });
+    expect(scoped?.off).toEqual(["collaborators"]);
   });
 
-  test("validateGrid(bugfix grid).summary equals scopeCostSummary('bugfix')", () => {
+  test("validateGrid(bugfix grid).summary equals scopeCostSummary('bugfix') counts", () => {
     const r = validateGrid({ ...GRID.bugfix.stages });
-    expect(r.summary).toEqual(scopeCostSummary("bugfix") ?? undefined);
+    const scoped = scopeCostSummary("bugfix");
+    expect(scoped).not.toBeNull();
+    // A bare grid carries no settings, so it names nothing off; bugfix's own
+    // settings turn learnings and summary confirmation off.
+    expect(r.summary).toEqual({ ...(scoped as NonNullable<typeof scoped>), off: [] });
+    expect(scoped?.off).toEqual(["learnings ritual", "summary confirmation", "collaborators"]);
+  });
+});
+
+describe("t213 a greenfield plan counts what creation runs", () => {
+  // Creation skips Reverse Engineering on a new project, so the stage and
+  // question counts the plan offer relays are the ones creation then prints.
+  test("validateGrid(poc grid, greenfield).summary counts no Reverse Engineering", () => {
+    const grid = { ...GRID.poc.stages };
+    expect(grid["reverse-engineering"]).toBe("EXECUTE");
+    const created = gridCostSummary({ ...grid, "reverse-engineering": "SKIP" });
+    expect(validateGrid(grid, { projectType: "greenfield" }).summary).toEqual(created);
+    // Existing code, or no type named, still runs it.
+    expect(validateGrid(grid, { projectType: "brownfield" }).summary).toEqual(gridCostSummary(grid));
+    expect(validateGrid(grid).summary).toEqual(gridCostSummary(grid));
   });
 });
 
@@ -144,6 +170,7 @@ describe("t213 edge cases", () => {
       execute: 0,
       skip: 0,
       gates: 0,
+      shown: 0,
       perUnitStages: 0,
       off: [],
     });
@@ -153,17 +180,17 @@ describe("t213 edge cases", () => {
 describe("t213 scope policy cost clauses", () => {
   test("effective ceremony labels respect supplied policy without changing scope defaults", () => {
     expect(ceremonyOffList("classic", {
-      sensors: "on", learnings: "on", summary_confirmation: "on", plan_approval: "on",
+      sensors: "on", learnings: "on", summary_confirmation: "on", plan_approval: "on", collaborators: "on",
     })).toEqual([]);
     expect(ceremonyOffList("express", {
-      sensors: "on", learnings: "on", summary_confirmation: "on", plan_approval: "on",
+      sensors: "on", learnings: "on", summary_confirmation: "on", plan_approval: "on", collaborators: "on",
     })).toEqual(["reviewers"]);
     expect(ceremonyOffList("feature", {
-      sensors: "off", learnings: "on", summary_confirmation: "off", plan_approval: "on",
+      sensors: "off", learnings: "on", summary_confirmation: "off", plan_approval: "on", collaborators: "on",
     })).toEqual(["sensors", "summary confirmation"]);
-    expect(scopeCostSummary("classic")?.off).toEqual(["summary confirmation"]);
+    expect(scopeCostSummary("classic")?.off).toEqual(["summary confirmation", "collaborators"]);
     const disabled = ceremonyOffList("classic", {
-      sensors: "off", learnings: "off", summary_confirmation: "off", plan_approval: "on",
+      sensors: "off", learnings: "off", summary_confirmation: "off", plan_approval: "on", collaborators: "on",
     });
     expect(disabled).toEqual(["sensors", "learnings ritual", "summary confirmation"]);
     expect(ceremonyOffClause({ ...scopeCostSummary("classic")!, off: disabled })).toBe(
@@ -175,17 +202,18 @@ describe("t213 scope policy cost clauses", () => {
     const summary = scopeCostSummary("classic")!;
     expect(summary.gates).toBeGreaterThan(0);
     expect(ceremonyOffClause(summary)).toBe(
-      "; no summary confirmation",
+      "; no summary confirmation; lead agent only",
     );
   });
 
   // Express is the lightest run and now says so in its own frontmatter: it is
-  // the one scope that declares all three ceremonies off, so its clause names
-  // every one of them. Feature keeps all three on and omits nothing.
-  test("express omits reviewers and all four ceremonies, while feature omits none", () => {
+  // the one scope that declares every ceremony off, so its clause names every
+  // one of them. Feature keeps the first four on but, like every scope except
+  // enterprise, ships collaborators off, so its clause names that alone.
+  test("express omits reviewers and all five ceremonies, while feature omits only collaborators", () => {
     expect(ceremonyOffClause(scopeCostSummary("express")!)).toBe(
-      "; no reviewers, sensors, learnings ritual, summary confirmation, or plan approval",
+      "; no reviewers, sensors, learnings ritual, summary confirmation, or plan approval; lead agent only",
     );
-    expect(ceremonyOffClause(scopeCostSummary("feature")!)).toBe("");
+    expect(ceremonyOffClause(scopeCostSummary("feature")!)).toBe("; lead agent only");
   });
 });

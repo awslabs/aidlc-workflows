@@ -19,10 +19,12 @@ import { spawnSync } from "node:child_process";
 import {
   appendFileSync,
   copyFileSync,
+  cpSync,
   existsSync,
   mkdirSync,
   readFileSync,
   readdirSync,
+  rmSync,
   symlinkSync,
   writeFileSync,
 } from "node:fs";
@@ -34,6 +36,7 @@ import {
   findStageBySlug,
   freshReviewReceipts,
   latestMainWorkflowStageRunFloorForProject,
+  markHumanTurn,
   readAllAuditShards,
   splitKiroCommandArgs,
   teamUnitGateStatus,
@@ -47,6 +50,7 @@ import {
   createTestProject,
   DEFAULT_RECORD_DIR,
   DEFAULT_SPACE,
+  REPO_ROOT,
   runOrchestrateNext,
   seedAidlcMemory,
   seedBoltDag,
@@ -891,6 +895,37 @@ describe("t278 engine-emitted wave contract", () => {
     expect(next(proj).directive.gate).toBe(true);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
+  // Under Guard Policy relaxed and off the same change is accepted: the review
+  // stands, so the completion does too, and the stage's gate opens instead of
+  // the entry being handed back.
+  for (const policy of ["relaxed (set by you)", "off (set by you)"]) {
+    test(`Guard Policy ${policy.split(" ")[0]}: a post-review artifact change keeps the wave settled`, () => {
+      const proj = project();
+      writeFileSync(seededStateFile(proj), readFileSync(seededStateFile(proj), "utf-8")
+        .replace("- **Change Control**: strict (from scope feature)", `- **Guard Policy**: ${policy}`));
+      seedBoltDag(proj, ["alpha", "beta"], [["alpha"], ["beta"]]);
+      cover(proj, "alpha", "functional-design", REQUIRED_FD);
+      cover(proj, "beta", "functional-design", REQUIRED_FD);
+      review(proj, "alpha");
+      review(proj, "beta");
+      completeWave(proj, "alpha");
+      completeWave(proj, "beta");
+      expect(next(proj).directive.gate).toBe(true);
+      writeFileSync(join(seededRecordDir(proj), "construction", "alpha", "functional-design", "functional-spec.md"),
+        "# changed after review\n");
+      const after = next(proj).directive;
+      expect(after.wave, JSON.stringify(after)).toBeUndefined();
+      expect(after.gate).toBe(true);
+      // The gate opens and says the change once.
+      const opened = spawnSync(BUN, [ORCH, "report", "--stage", "functional-design", "--result", "awaiting-approval", "--project-dir", proj], {
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8",
+        env: { ...process.env, AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD: "1" },
+      });
+      expect(opened.status, `${opened.stdout}${opened.stderr}`).toBe(0);
+      expect(`${opened.stdout}`).toContain("The alpha Unit's Functional Design documents changed after they were reviewed; carrying on.");
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+  }
+
   test("a second stale wave receipt escalates instead of re-emitting recovery", () => {
     const proj = project();
     seedBoltDag(proj, ["alpha"]);
@@ -942,6 +977,68 @@ describe("t278 engine-emitted wave contract", () => {
     });
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
+  // A hook refused the agent's write mid-revision and left its own way on
+  // (finish the revision) for `next` to hand on. The agent stopped instead.
+  // The Stop hook's probe sees that same own-work ask and hands the work back:
+  // the person is neither left with a quiet agent nor asked to decide about
+  // work the agent never tried.
+  test("an own-work ask a hook refusal left: the Stop hook hands it back, on Claude Code and Codex", () => {
+    const proj = project("functional-design", "stage-major", undefined, undefined, "team");
+    seedBoltDag(proj, ["alpha"]);
+    cover(proj, "alpha", "functional-design", REQUIRED_FD);
+    for (const event of ["GATE_REJECTED", "STAGE_REVISING"]) {
+      appendAuditEntry(event, {
+        Stage: "functional-design", Unit: "alpha", "Gate Scope": "per-stage", "Gate Stages": "functional-design",
+        ...(event === "GATE_REJECTED" ? { Feedback: "revise alpha" } : {}),
+      }, proj);
+    }
+    review(proj, "alpha");
+    const artifact = join(seededRecordDir(proj), "construction", "alpha", "functional-design", "functional-spec.md");
+    const env: NodeJS.ProcessEnv = { ...process.env, AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD: "1" };
+    delete env.AWS_AIDLC_DEFAULT_SCOPE;
+    delete env.AIDLC_STOP_HOOK_PROBE;
+    markHumanTurn(proj);
+    expect(freezeWrite(proj, artifact).status).toBe(2);
+    // What a probe of `next` sees is the own-work ask the refusal left.
+    const probed = runOrchestrateNext(ORCH, proj, [], { env: { ...env, AIDLC_STOP_HOOK_PROBE: "1" } });
+    expect(probed.directive, probed.out).toMatchObject({ kind: "ask", ask_type: "guard-recovery", agent_work: true });
+    // The hook's probe runs the project's own tree.
+    for (const tree of ["claude", "codex"] as const) {
+      const dir = tree === "claude" ? ".claude" : ".codex";
+      if (!existsSync(join(proj, dir))) cpSync(join(REPO_ROOT, "dist", tree, dir), join(proj, dir), { recursive: true });
+    }
+    let stops = 0;
+    const stop = (tree: "claude" | "codex") => spawnSync(BUN, tree === "claude"
+      ? [join(AIDLC_SRC, "tools", "aidlc.ts"), "engine", "hook", "continue-workflow"]
+      : [join(proj, ".codex", "hooks", "aidlc-codex-adapter.ts"), "continue-workflow"], {
+      cwd: proj,
+      input: JSON.stringify({
+        hook_event_name: "Stop", stop_hook_active: false, session_id: "t278-agent-work", cwd: proj, turn_id: `t${++stops}`,
+      }),
+      encoding: "utf-8",
+      env: { ...env, CLAUDE_PROJECT_DIR: tree === "claude" ? proj : undefined, CODEX_THREAD_ID: undefined, CODEX_SESSION_ID: undefined },
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+    });
+    const traces = () => {
+      const traceDir = join(seededRecordDir(proj), ".aidlc-engine", "hooks-health");
+      return existsSync(traceDir)
+        ? readdirSync(traceDir).map((name) => `${name}:\n${readFileSync(join(traceDir, name), "utf-8")}`).join("\n")
+        : "(no hooks-health dir)";
+    };
+    for (const tree of ["claude", "codex"] as const) {
+      // Each tree is one agent's stop: the hook's no-progress block count is
+      // per project, so the second tree starts it afresh.
+      rmSync(join(seededRecordDir(proj), ".aidlc-engine", "stop-hook", "block-count.json"), { force: true });
+      const handedBack = stop(tree);
+      expect(handedBack.stdout, `${tree}: ${handedBack.stderr}\n${traces()}`).toContain('"decision":"block"');
+      expect(handedBack.stdout).toContain("AI-DLC is carrying on with Functional Design for alpha.");
+    }
+    // Handed back, the agent's own `next` is that same own-work ask.
+    const asked = JSON.stringify(runOrchestrateNext(ORCH, proj, [], { env }).directive);
+    expect(asked).toContain('"agent_work":true');
+    expect(asked).toContain("--result revised");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
   test("team revising Units route freeze and spent-review refusals to redo", () => {
     const proj = project(
       "functional-design",
@@ -989,9 +1086,18 @@ describe("t278 engine-emitted wave contract", () => {
     expect(frozen.status, frozen.out).toBe(2);
     expect(frozen.out).toContain("Finish the current revision");
     expect(frozen.out).toContain("--result revised");
-    expect(frozen.out).toContain("/aidlc --stage functional-design");
     expect(frozen.out).not.toContain("Request Changes");
     expect(frozen.out).not.toContain("--result rejected");
+    // What the refusal left is what the next `next` hands on: finishing the
+    // revision is the agent's own work, so the person is not asked to choose it
+    // over starting the stage again; they judge at the approval it reopens.
+    const asked = JSON.stringify(next(proj).directive);
+    expect(asked).toContain('"ask_type":"guard-recovery"');
+    expect(asked).toContain('"agent_work":true');
+    expect(asked).toContain("--result revised");
+    expect(asked).not.toContain("/aidlc --stage functional-design");
+    expect(asked).not.toContain("Request Changes");
+    expect(asked).not.toContain("--result rejected");
 
     writeFileSync(artifact, "# changed before recovery\n");
     review(proj, "alpha", "READY", 2);
@@ -1200,7 +1306,7 @@ describe("t278 engine-emitted wave contract", () => {
       "Request Changes: restart review after the invalidating write",
     );
     expect(rejected.status).toBe(0);
-    expect(rejected.out).toContain('"kind":"error"');
+    expect(rejected.out).toContain('"kind":"print"');
     expect(rejected.out).toContain("Cannot request changes");
     expect(rejected.out).toContain(
       "recovery review has already been used",

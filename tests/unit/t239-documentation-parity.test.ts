@@ -4,6 +4,8 @@ import { basename, join } from "node:path";
 import codexOnboardingFills from "../../harness/codex/onboarding.fills.ts";
 import { renderOnboarding } from "../../scripts/onboarding.ts";
 import { type Tier, TIER_PROJECTIONS, TIERS } from "../../core/tools/aidlc-tiers.ts";
+import { parseStageFrontmatter } from "../../core/tools/aidlc-lib.ts";
+import { validateStageFrontmatter } from "../../core/tools/aidlc-stage-schema.ts";
 
 const ROOT = join(import.meta.dir, "..", "..");
 const at = (...parts: string[]): string => join(ROOT, ...parts);
@@ -235,7 +237,7 @@ describe("documentation parity derives current behavior from authored implementa
   });
 
   test("event count and user-guide taxonomy match VALID_EVENT_TYPES", () => {
-    expect(eventTypes.length).toBe(107);
+    expect(eventTypes.length).toBe(117);
 
     const guide = read("docs", "guide", "10-state-and-audit.md");
     const guideTaxonomy = sliceBetween(
@@ -403,8 +405,8 @@ describe("documentation parity derives current behavior from authored implementa
       "#[[file:aidlc/spaces/default/memory/org.md]]",
     );
     const includesSource = read("core", "tools", "aidlc-includes.ts");
-    expect(includesSource).toContain('if (harness === ".kiro")');
-    expect(includesSource).toContain("repointKiroSteeringReferences");
+    expect(includesSource).toContain("export function refreshKiroIdeSteering");
+    expect(includesSource).toContain("export function refreshActiveMemory");
   });
 
   test("documented agent roster matches agent files and reviewer frontmatter", () => {
@@ -589,6 +591,32 @@ describe("documentation parity derives current behavior from authored implementa
         frontmatterScalar(scopeFile, "testStrategy") ?? depth,
       );
     }
+  });
+
+  test("no copy says the Construction checkpoint re-check holds under every Guard Policy", () => {
+    // It runs under strict only; relaxed and off accept the change with one line.
+    const stale = /exception holds under every (?:Guard Policy|value)/;
+    const copies = [...filesBelow(at("docs"), ".md"), ...filesBelow(at("core", "aidlc-common", "protocols"), ".md")]
+      .filter((file) => stale.test(readFileSync(file, "utf8").replace(/\s+/g, " ")));
+    expect(copies).toEqual([]);
+  });
+
+  test("a review the person asks for is recorded under every Guard Policy, and no copy reads as needing strict", () => {
+    const reviewer = readFileSync(at("core", "aidlc-common", "protocols", "stage-protocol-reviewer.md"), "utf8")
+      .replace(/\s+/g, " ");
+    expect(reviewer).toContain(
+      "**A review the person asks for.** When the person asks for a review of a stage, or of a Unit they already " +
+        "approved, record it through AI-DLC the first time they ask, under every Guard Policy",
+    );
+    expect(reviewer).toContain("Never write a review file by hand, and never offer to change the Guard Policy to get a review.");
+    expect(reviewer).toContain(
+      "the engine asks for no recovery review on its own (a review the person asks for still runs, as above)",
+    );
+    // A live agent read this pairing as "no recorded review under relaxed or off".
+    const stale = /the receipt stays valid and no recovery review is requested/;
+    const copies = [...filesBelow(at("docs"), ".md"), ...filesBelow(at("core", "aidlc-common"), ".md")]
+      .filter((file) => stale.test(readFileSync(file, "utf8").replace(/\s+/g, " ")));
+    expect(copies).toEqual([]);
   });
 
   test("documented Guard Policy defaults match every core scope's frontmatter", () => {
@@ -900,6 +928,24 @@ describe("documentation parity derives current behavior from authored implementa
     }
   });
 
+  test("documented ars: examples are valid stage frontmatter as written", () => {
+    // Authors copy these blocks into a stage: each must parse whole, comments
+    // included, keep every documented child, and validate.
+    const stage = (block: string): string =>
+      `---\nslug: syn-example\nphase: construction\nexecution: ALWAYS\ncondition: x\nlead_agent: aidlc-quality-agent\nmode: inline\n${block}inputs: a\noutputs: b\n---\n`;
+    for (const doc of ["docs/reference/15-stage-definition.md", "docs/harness-engineering/10-authoring-a-plugin.md"]) {
+      const blocks = [...read(doc).matchAll(/```yaml\n(ars:\n[\s\S]*?)```/g)].map((match) => match[1]);
+      expect(blocks.length, doc).toBeGreaterThan(0);
+      for (const block of blocks) {
+        const parsed = parseStageFrontmatter(stage(block)) as { ars?: Record<string, unknown> };
+        const result = validateStageFrontmatter(parsed);
+        expect(result.valid ? [] : result.errors, `${doc}:\n${block}`).toEqual([]);
+        const documented = [...block.matchAll(/^ {2}([a-z_]+):/gm)].map((match) => match[1]);
+        expect(Object.keys(parsed.ars ?? {}).sort(), doc).toEqual([...new Set(documented)].sort());
+      }
+    }
+  });
+
   test("documented agent stage-involvement matrix matches stage frontmatter", () => {
     const lead = new Map<string, number>();
     const support = new Map<string, number>();
@@ -977,5 +1023,88 @@ describe("documentation parity derives current behavior from authored implementa
       ),
       `the guide must name a broadest agent with ${broadestTotal} stages`,
     ).toBe(true);
+  });
+
+  test("facilitator guide quotes current scope sizes, depth defaults, and doctor rows", () => {
+    const guide = read("docs", "guide", "facilitator-guide.md");
+    const flat = normalized(guide);
+    const stageCount = (scope: string): string => {
+      const stages = scopeGrid[scope]?.stages;
+      if (!stages) throw new Error(`missing compiled grid entry for ${scope}`);
+      const values = Object.values(stages);
+      return `${values.filter((value) => value === "EXECUTE").length} / ${values.length}`;
+    };
+
+    const rows = [...guide.matchAll(/^\| [^|]+ \| `\/aidlc ([a-z][a-z-]+) [^`]*` \| (\d+ \/ \d+) \|$/gm)];
+    expect(rows.length, "the side-task table lists at least one scope").toBeGreaterThan(0);
+    for (const [, scope, count] of rows) expect(count, `${scope} stage count`).toBe(stageCount(scope));
+    // The guide reads the replies row as a warning; that holds only while
+    // doctor prints it as one.
+    expect(read("core", "tools", "aidlc-utility.ts")).toMatch(
+      /severity: "warn",\s*label: `Your replies are not being recorded: /,
+    );
+    expect(flat).toContain(`\`feature\` runs every stage (${stageCount("feature")})`);
+    const [classicRan, classicTotal] = stageCount("classic").split(" / ");
+    expect(flat).toContain(`\`classic\`, the default, runs ${classicRan} of ${classicTotal} stages`);
+    expect(flat).toContain(`It is a ${stageCount("workshop").split(" / ")[0]}-stage run`);
+
+    const depthNames = (start: string, end: string): string[] =>
+      [...sliceBetween(flat, start, end).matchAll(/`([a-z][a-z-]+)`/g)].map((match) => match[1]);
+    const depthOf = (scope: string): string | null =>
+      frontmatterScalar(read("core", "scopes", `aidlc-${scope}.md`), "depth");
+    const minimal = depthNames("<the work>`.", "already default to `Minimal`");
+    const standard = depthNames("already default to `Minimal`.", "default to `Standard`");
+    expect(minimal.length).toBeGreaterThan(0);
+    expect(standard.length).toBeGreaterThan(0);
+    for (const scope of minimal) expect(depthOf(scope), `${scope} depth`).toBe("Minimal");
+    for (const scope of standard) expect(depthOf(scope), `${scope} depth`).toBe("Standard");
+
+    const protocol = read("core", "aidlc-common", "protocols", "stage-protocol.md");
+    expect(protocol).toContain("| Minimal | ~2-4 per stage |");
+    expect(protocol).toContain("| Standard | ~5-8 per stage |");
+    expect(flat).toContain("it aims for about 2 to 4");
+    expect(flat).toContain("a stage aims for about 5 to 8 questions");
+
+    // Every doctor, setup-check, and refusal phrase the guide quotes is one the
+    // tools still print.
+    const printed = [
+      read("core", "tools", "aidlc-utility.ts"),
+      read("core", "tools", "aidlc-doctor.ts"),
+      read("core", "tools", "aidlc-init.ts"),
+      read("core", "tools", "aidlc-model-policy.ts"),
+      read("core", "tools", "aidlc-config-diagnostics.ts"),
+      read("core", "tools", "aidlc-plugin.ts"),
+      read("core", "tools", "aidlc-state.ts"),
+      read("core", "hooks", "aidlc-plan-approval-guard.ts"),
+    ].join("\n");
+    for (const phrase of [
+      "Setup check - ",
+      "hook PATH ready",
+      "on this shell's PATH only",
+      "every agent uses your ",
+      "session's model and effort",
+      "Runtime hook PATH",
+      "Hooks last fired: ",
+      "Hooks have never executed although this workflow has progressed",
+      "Hook heartbeat data",
+      "Your replies are not being recorded: ",
+      "Plan Approval authority is ambiguous or stale",
+      "cannot select one approval target",
+      "Select Construction Execution: serial",
+      "AIDLC_DISABLE_PLAN_APPROVAL_GUARD",
+    ]) {
+      expect(flat, `guide quotes ${phrase}`).toContain(phrase.trim());
+      expect(printed, `tools print ${phrase}`).toContain(phrase);
+    }
+
+    // The claims these pages used to make are gone. Doctor no longer warns
+    // about plugins on a host that keeps no plugin list.
+    expect(flat).not.toContain("Plugins: 1 need attention");
+    expect(flat).not.toContain("run sync through the host SessionStart adapter");
+    const onboarding = read("docs", "guide", "onboarding.md");
+    expect(onboarding).not.toContain("never trapped");
+    expect(onboarding).not.toContain("None is a bug");
+    expect(read("docs", "reference", "06-hooks-and-tools.md")).not.toContain("can never trap the session");
+    expect(read("docs", "guide", "harnesses", "copilot.md")).not.toContain("the doctor pins the floor");
   });
 });

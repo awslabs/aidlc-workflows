@@ -356,9 +356,11 @@ describe("t329 a guard-recovery ask holds the turn and keeps the human's selecti
     expect(marker?.unit).toBe(UNIT);
     expect(marker?.delivery).toBe("issued");
     expect(marker?.guard_recovery_response).toBeUndefined();
+    // The marker keeps the name the person was shown, so typing it picks it.
     expect(marker?.remedies).toEqual(
-      remedies.map(({ op, action }) => ({ op, action, interaction: "human-input" })),
+      remedies.map(({ op, label, action }) => ({ op, label, action, interaction: "human-input" })),
     );
+    expect(remedies.map((remedy) => remedy.label)).toEqual(["Confirm the summary again", "Request Changes"]);
 
     // The observer sees the same ask and publishes nothing.
     const before = readFileSync(p.markerPath, "utf-8");
@@ -437,7 +439,7 @@ describe("t329 a guard-recovery ask holds the turn and keeps the human's selecti
       "anything the conductor made up",
     );
     const prematureDirective = directive(premature);
-    expect(prematureDirective.kind).toBe("error");
+    expect(prematureDirective.kind, JSON.stringify(prematureDirective)).toBe("print");
     expect(String(prematureDirective.message)).toContain("not revision feedback");
 
     // The human answers; the marker binds the feedback text.
@@ -491,7 +493,7 @@ describe("t329 a guard-recovery ask holds the turn and keeps the human's selecti
       "Request Changes",
     ]);
     const rejection = directive(rejected);
-    expect(rejection.kind).toBe("error");
+    expect(rejection.kind, JSON.stringify(rejection)).toBe("print");
     expect(String(rejection.message)).toContain("guard-recovery choice is not revision feedback");
     expect(String(rejection.message)).toContain("What should change?");
     expect(String(rejection.message)).toContain("separate response");
@@ -544,10 +546,11 @@ describe("t329 a guard-recovery ask holds the turn and keeps the human's selecti
     const refused = rejectedReport(p, "Request Changes", laterMessage);
     expect(refused.code, refused.stderr).toBe(0);
     const refusal = directive(refused);
-    expect(refusal.kind).toBe("error");
+    expect(refusal.kind, JSON.stringify(refusal)).toBe("print");
     expect(String(refusal.message)).toContain(
       "recovery-question choice was not Request Changes",
     );
+    // The state tool's refusal reaches the agent as plain text, never its JSON.
     expect(String(refusal.message)).toContain(reconfirm?.action as string);
     const state = readFileSync(join(seededRecordDir(p.dir), "aidlc-state.md"), "utf-8");
     expect(state).toBe(stateBeforeRefusal);
@@ -588,7 +591,7 @@ describe("t329 a guard-recovery ask holds the turn and keeps the human's selecti
     const refused = rejectedReport(p, "Request Changes", feedback);
     expect(refused.code, refused.stderr).toBe(0);
     const refusal = directive(refused);
-    expect(refusal.kind).toBe("error");
+    expect(refusal.kind, JSON.stringify(refusal)).toBe("print");
     expect(String(refusal.message)).toContain(
       "recovery-question choice was not Request Changes",
     );
@@ -609,10 +612,12 @@ describe("t329 a guard-recovery ask holds the turn and keeps the human's selecti
     const expected = createHash("sha256")
       .update(label.replace(/\s+/g, " ").trim(), "utf-8")
       .digest("hex");
+    // Exactly one remedy's label: the person's pick, which the agent cannot overrule.
     expect(marker?.guard_recovery_response).toEqual({
       status: "awaiting-feedback",
       selection_sha256: expected,
       selected_op: (ask.remedies as Array<Record<string, unknown>>)[0].op,
+      picked_by: "person",
     });
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });

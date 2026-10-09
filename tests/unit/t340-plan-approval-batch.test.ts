@@ -144,7 +144,7 @@ function answers(f: Fixture, choice = "Approve Plan"): void {
 
 function receiptFiles(project: string): string[] {
   const dir = join(sessionsDir(project), "plan-approval");
-  return existsSync(dir) ? readdirSync(dir).filter((file) => /^receipt-.*\.json$/.test(file)) : [];
+  return existsSync(dir) ? readdirSync(dir).filter((file) => /^receipt-.*\.json$/.test(file)).sort() : [];
 }
 
 function approve(f: Fixture): void {
@@ -177,7 +177,8 @@ describe("t340 exact reviewed Code Generation batch approval", () => {
     const outside = join(f.project, "outside-batches");
     mkdirSync(outside);
     writeFileSync(join(outside, "manifest.json"), readFileSync(f.file));
-    symlinkSync(outside, join(seededRecordDir(f.project), "redirected-batches"));
+    symlinkSync(outside, join(seededRecordDir(f.project), "redirected-batches"),
+      process.platform === "win32" ? "junction" : "dir");
     for (const action of ["decision", "answer"] as const) {
       const result = log(f, action, ["--batch-file", "redirected-batches/manifest.json"]);
       expect(result.code).not.toBe(0);
@@ -245,7 +246,7 @@ describe("t340 exact reviewed Code Generation batch approval", () => {
     answers(f);
     const answer = log(f, "answer");
     expect(answer.code).not.toBe(0);
-    expect(answer.stderr).toContain("actual offered choice");
+    expect(answer.stderr).toContain("requires the person's reply to this prompt, in this session");
     expect(receiptFiles(f.project)).toHaveLength(0);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 

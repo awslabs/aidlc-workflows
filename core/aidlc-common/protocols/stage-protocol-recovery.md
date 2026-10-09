@@ -49,15 +49,32 @@ If `aidlc-state.md` exists, read it to determine:
 - What the current/next stage is
 - Whether artifacts from prior stages exist
 
-Offer to resume from the last incomplete stage.
+Continue from the last incomplete stage: a bare `/aidlc` and `/aidlc --resume`
+both carry on, with no resume menu. The first step you show after picking the
+work back up carries the pick-up line in its `narration` ("Picking up where we
+left off, at ... If you'd rather redo it, go back to another stage, or start
+fresh, just say so."): say it as written, at the start of that message
+(at an approval gate too, right before its question), and add no line of your
+own about picking up.
+
+Redo, a jump, or a fresh start happens only when the person asks for one. Read
+which one they mean from their words and report it with
+`{{INVOKE}} engine orchestrate report --result resumed --choice <redo|jump|fresh>`,
+adding `--target <stage slug>` for the stage they named (and `--unit <unit>` or
+`--every-unit` when they named a Unit or said every Unit), then follow the print
+it returns. At an approval gate such a request is not the gate's answer: report
+it this way, never as Request Changes.
 
 **Build-and-Test failure loop-back, logged-but-not-jumped detection**: if
 `<record>/construction/build-and-test/test-results.md` contains a
 `## Loop-Back Log` whose latest entry has a planned fix but the audit shows
-no matching `STAGE_JUMPED` (Target: code-generation) after it, the session
+no matching `STAGE_JUMPED` (Target: code-generation) after it, and no
+unit-tagged `GATE_REJECTED` (Stage: code-generation) for a unit the fix names, the session
 died between logging and jumping — re-execute the jump per the construction
 protocol module (`aidlc-common/protocols/stage-protocol-construction.md`),
-"Build-and-Test failure loop-back", rather than re-diagnosing. On any resume,
+"Build-and-Test failure loop-back", rather than re-diagnosing. When the fix
+names several units and only some have that row after it, reopen the others
+the same way before going on. On any resume,
 the loop-back count is the ledger's entry count, never zero. If the matching
 jump already exists, resume the settlement-aware re-entry instead:
 receipt-mode continues from the first unsettled unit, artifact-only mode
@@ -178,7 +195,7 @@ If a stage references prior artifacts that do not exist on disk:
 3. If the producer IS on the scope path, check if it is marked complete in state
 4. If marked complete but artifacts missing:
    - Tell the user: "[X] is recorded as finished, but the files it should have produced are not on disk."
-   - Offer two options: re-run the stage, or provide the artifacts manually
+   - Offer two options, the option you recommend first, its label ending in "(Recommended)" and its description saying why: re-run the stage, or provide the artifacts (for example, restore them from the last commit when it still has them, which is the one to recommend then)
 5. If not marked complete, simply run the stage normally
 
 ### Error Severity Levels

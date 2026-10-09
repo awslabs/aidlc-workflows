@@ -55,7 +55,14 @@ import { homedir } from "node:os";
 import { dirname, isAbsolute, join, posix, resolve, win32 } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { engineDirFor } from "../tools/aidlc-lib.ts";
+import {
+  decideFence,
+  engineDirFor,
+  enterHookWorkflow,
+  promptMovesSelection,
+  takeSessionSelectionNotice,
+} from "../tools/aidlc-lib.ts";
+import { aidlcInvocation, knownActiveSpace } from "../tools/aidlc-runtime-paths.ts";
 
 const HOOKS_DIR = dirname(fileURLToPath(import.meta.url));
 
@@ -94,7 +101,9 @@ export async function run(
         process.stdout.write(`${JSON.stringify({
           permission: "deny",
           agent_message:
-            "AIDLC guard input was malformed; the operation was denied because its safety checks could not run.",
+            "AIDLC could not read this tool call's hook input, so its safety checks could not run and the call " +
+            "was stopped. Retry it once; if it is stopped again, tell the person to quit Cursor fully and open " +
+            "this folder again, since Cursor sends this input itself.",
         })}\n`);
       }
       return 0;
@@ -371,11 +380,11 @@ export async function run(
       return activeReviewerDispatchCache;
     }
     try {
+      // The same active space the engine reads.
       const spacePointer = join(projectDir, "aidlc", "active-space");
-      const rawSpace = existsSync(spacePointer)
-        ? readFileSync(spacePointer, "utf-8").trim()
+      const space = existsSync(spacePointer)
+        ? knownActiveSpace(join(projectDir, "aidlc"), readFileSync(spacePointer, "utf-8"))
         : "default";
-      const space = /^[a-z0-9][a-z0-9._-]*$/.test(rawSpace) ? rawSpace : "default";
       const intentsDir = join(projectDir, "aidlc", "spaces", space, "intents");
       const activePointer = join(intentsDir, "active-intent");
       const activeIntent = readFileSync(activePointer, "utf-8").trim();
@@ -564,6 +573,27 @@ export async function run(
   function attributed(): string {
     attributedAgent ??= activeSubagent();
     return attributedAgent;
+  }
+
+  // A delegate's identity serves two checks: the reviewer read scope and the
+  // state-transition check. When both stand aside for this work, as Guard
+  // Policy off makes them, the identity checks below protect nothing, so a
+  // delegate runs its builds, tests and searches as the main chat does and
+  // Cursor's own approval applies. Read once per call, through the same
+  // decision the core checks make.
+  let delegateChecksStandAsideCache: boolean | undefined;
+  function delegateChecksStandAside(): boolean {
+    if (delegateChecksStandAsideCache !== undefined) return delegateChecksStandAsideCache;
+    const workflow = enterHookWorkflow(projectDir, sessionId);
+    try {
+      delegateChecksStandAsideCache = (["reviewer-scope", "state-transition"] as const)
+        .every((fence) => decideFence(projectDir, fence).decision === "stand-aside");
+    } catch {
+      delegateChecksStandAsideCache = false;
+    } finally {
+      workflow.restore();
+    }
+    return delegateChecksStandAsideCache;
   }
 
   let effectiveCwdCache: string | undefined;
@@ -2039,203 +2069,36 @@ export async function run(
     return { disposition: "unsafe", command: alias };
   }
 
-  function gitPagerMode(
-    prefix: readonly string[],
-    env: Record<string, string | undefined>,
-  ): "default" | "disabled" | "enabled" {
-    const pager = (env.GIT_PAGER ?? env.PAGER ?? "").trim();
-    let mode: "default" | "disabled" | "enabled" =
-      pager.length === 0
-        ? "default"
-        : /^(?:cat|false)$/i.test(pager)
-          ? "disabled"
-          : "enabled";
-    for (const arg of prefix) {
-      if (arg === "--no-pager" || arg === "-P") mode = "disabled";
-      else if (arg === "--paginate" || arg === "-p") mode = "enabled";
-    }
-    return mode;
-  }
-
-  function gitStatusUsesExternalCommand(
-    args: readonly string[],
-    env: Record<string, string | undefined>,
-    cwd: string,
-  ): boolean {
+  // The person's own git settings apply to a helper's `git status`, exactly as
+  // they do in their terminal: a pager they configured, or a file-system
+  // monitor they set up to make a large repository fast, is theirs to choose
+  // and AI-DLC reads a repository here, it does not decide how their git runs.
+  // What stays denied is a program the AGENT names in the command AI-DLC lets
+  // through: `-c core.fsmonitor=<program>` (and the `--config-env` form, whose
+  // value arrives through a variable) makes git run that program, which is the
+  // delegated agent reaching for an interpreter by another route.
+  function gitStatusUsesExternalCommand(args: readonly string[]): boolean {
     const invocation = gitInvocation(args);
     const prefix = invocation.prefix.filter((arg) => arg !== "--");
-    const pagerMode = gitPagerMode(prefix, env);
-    if (pagerMode === "enabled") return true;
-    const commandArgs = args.slice(invocation.subcommandIndex + 1);
-    const boundary = commandArgs.indexOf("--");
-    const optionArgs = boundary === -1 ? commandArgs : commandArgs.slice(0, boundary);
-    const positionalPathspecs = (): string[] => {
-      for (let i = 0; i < commandArgs.length; i++) {
-        const arg = commandArgs[i];
-        if (!arg.startsWith("-") || arg === "-") {
-          const pathspecs = commandArgs.slice(i);
-          return pathspecs.some((pathspec) => pathspec.startsWith("-"))
-            ? []
-            : pathspecs;
-        }
-        if (
-          /^-[vsbz]+$/.test(arg) ||
-          /^-u(?:all|normal|no)?$/.test(arg) ||
-          /^-M(?:\d+%?)?$/.test(arg) ||
-          /^--(?:no-)?(?:verbose|short|branch|show-stash|ahead-behind|porcelain|long|null|untracked-files|ignored|ignore-submodules|column)(?:=.*)?$/.test(
-            arg,
-          ) ||
-          arg === "--renames" ||
-          arg === "--no-renames" ||
-          /^--find-renames(?:=.*)?$/.test(arg)
-        ) {
-          continue;
-        }
-        return [];
+    for (let index = 0; index < prefix.length; index++) {
+      const arg = prefix[index];
+      const inline = (flag: string): string | undefined =>
+        arg === flag ? prefix[index + 1] : arg.startsWith(`${flag}=`) ? arg.slice(flag.length + 1) : undefined;
+      const configured = inline("-c");
+      if (configured !== undefined) {
+        const equals = configured.indexOf("=");
+        const key = (equals === -1 ? configured : configured.slice(0, equals)).toLowerCase();
+        if (key !== "core.fsmonitor") continue;
+        // `-c core.fsmonitor` with no value reads as true, and true or false
+        // names no program.
+        const value = equals === -1 ? "true" : configured.slice(equals + 1).trim();
+        if (!/^(?:true|false)$/i.test(value)) return true;
+        continue;
       }
-      return [];
-    };
-    const pathspecs =
-      boundary === -1 ? positionalPathspecs() : commandArgs.slice(boundary + 1);
-    const configuredCommand = (key: string, safeValues: RegExp): boolean => {
-      const result = Bun.spawnSync(
-        ["git", ...prefix, "config", "--get-all", key],
-        {
-          cwd,
-          env,
-          stdout: "pipe",
-          stderr: "ignore",
-        },
-      );
-      if (result.exitCode === 1) return false;
-      if (result.exitCode !== 0) return true;
-      return (result.stdout?.toString() ?? "")
-        .split(/\r?\n/)
-        .filter(Boolean)
-        .some((value) => !safeValues.test(value.trim()));
-    };
-    if (configuredCommand("core.fsmonitor", /^(?:true|false)$/i)) return true;
-    if (
-      pagerMode !== "disabled" &&
-      (configuredCommand("core.pager", /^(?:cat|false)$/i) ||
-        configuredCommand("pager.status", /^(?:cat|false)$/i))
-    ) return true;
-    let submoduleMode: string | undefined;
-    for (const arg of optionArgs) {
-      if (arg === "--ignore-submodules") submoduleMode = "all";
-      else if (arg.startsWith("--ignore-submodules=")) {
-        submoduleMode = arg.slice("--ignore-submodules=".length).toLowerCase();
-      }
-    }
-    if (submoduleMode === "all") return false;
-
-    const rootResult = Bun.spawnSync(
-      ["git", ...prefix, "rev-parse", "--show-toplevel"],
-      {
-        cwd,
-        env,
-        stdout: "pipe",
-        stderr: "ignore",
-      },
-    );
-    if (rootResult.exitCode !== 0) return false;
-    const root = rootResult.stdout?.toString().trim();
-    if (!root) return true;
-    const visited = new Set<string>();
-    const childEnv: Record<string, string | undefined> = { ...env };
-    for (const name of [
-      "GIT_ALTERNATE_OBJECT_DIRECTORIES",
-      "GIT_OBJECT_DIRECTORY",
-      "GIT_DIR",
-      "GIT_WORK_TREE",
-      "GIT_IMPLICIT_WORK_TREE",
-      "GIT_GRAFT_FILE",
-      "GIT_INDEX_FILE",
-      "GIT_NAMESPACE",
-      "GIT_PREFIX",
-      "GIT_INTERNAL_SUPER_PREFIX",
-      "GIT_QUARANTINE_PATH",
-      "GIT_REPLACE_REF_BASE",
-      "GIT_SHALLOW_FILE",
-      "GIT_COMMON_DIR",
-    ]) {
-      deleteEnvironmentName(childEnv, name);
-    }
-    const indexedGitlinks = (
-      repository: string,
-      repositoryEnv: Record<string, string | undefined>,
-      repositoryPathspecs: readonly string[] = [],
-      useRootInvocation = false,
-    ): string[] | null => {
-      const command = useRootInvocation
-        ? ["git", ...prefix, "ls-files", "--stage", "--full-name", "-z"]
-        : ["git", "-C", repository, "ls-files", "--stage", "--full-name", "-z"];
-      const result = Bun.spawnSync(
-        [
-          ...command,
-          ...(repositoryPathspecs.length > 0 ? ["--", ...repositoryPathspecs] : []),
-        ],
-        {
-          ...(useRootInvocation ? { cwd } : {}),
-          env: repositoryEnv,
-          stdout: "pipe",
-          stderr: "ignore",
-        },
-      );
-      if (result.exitCode !== 0) return null;
-      const paths: string[] = [];
-      for (const record of (result.stdout?.toString() ?? "").split("\0")) {
-        if (!record) continue;
-        const tab = record.indexOf("\t");
-        if (tab === -1 || !record.slice(0, tab).startsWith("160000 ")) continue;
-        const path = record.slice(tab + 1);
-        if (path) paths.push(path);
-      }
-      return paths;
-    };
-    const unsafeSubmodule = (repository: string, depth: number): boolean => {
-      if (depth > 16 || visited.size >= 64) return true;
-      let identity: string;
-      try {
-        identity = realpathSync.native(repository);
-      } catch {
+      const fromVariable = inline("--config-env");
+      if (fromVariable !== undefined && fromVariable.split("=")[0]?.toLowerCase() === "core.fsmonitor") {
         return true;
       }
-      if (visited.has(identity)) return false;
-      visited.add(identity);
-      const fsmonitor = Bun.spawnSync(
-        ["git", "-C", repository, "config", "--get-all", "core.fsmonitor"],
-        {
-          env: childEnv,
-          stdout: "pipe",
-          stderr: "ignore",
-        },
-      );
-      if (fsmonitor.exitCode !== 0 && fsmonitor.exitCode !== 1) return true;
-      if (
-        fsmonitor.exitCode === 0 &&
-        (fsmonitor.stdout?.toString() ?? "")
-          .split(/\r?\n/)
-          .filter(Boolean)
-          .some((value) => !/^(?:true|false)$/i.test(value.trim()))
-      ) {
-        return true;
-      }
-      const gitlinks = indexedGitlinks(repository, childEnv);
-      if (gitlinks === null) return true;
-      for (const path of gitlinks) {
-        const submodule = resolve(repository, path);
-        if (!existsSync(join(submodule, ".git"))) continue;
-        if (unsafeSubmodule(submodule, depth + 1)) return true;
-      }
-      return false;
-    };
-    const gitlinks = indexedGitlinks(root, env, pathspecs, true);
-    if (gitlinks === null) return true;
-    for (const path of gitlinks) {
-      const submodule = resolve(root, path);
-      if (!existsSync(join(submodule, ".git"))) continue;
-      if (unsafeSubmodule(submodule, 1)) return true;
     }
     return false;
   }
@@ -2281,15 +2144,11 @@ export async function run(
     const commandArgs = args.slice(invocation.subcommandIndex + 1);
     const boundary = commandArgs.indexOf("--");
     const optionArgs = boundary === -1 ? commandArgs : commandArgs.slice(0, boundary);
-    const pagerDisabled = gitPagerMode(invocation.prefix, env) === "disabled";
     if (folded === "branch") {
-      return !(pagerDisabled && optionArgs.includes("--list"));
+      return !optionArgs.includes("--list");
     }
     if (folded === "tag") {
-      return !(
-        pagerDisabled &&
-        (optionArgs.includes("--list") || optionArgs.includes("-l"))
-      );
+      return !(optionArgs.includes("--list") || optionArgs.includes("-l"));
     }
     if (folded === "diff") {
       let cached = false;
@@ -2309,7 +2168,6 @@ export async function run(
         }
       }
       return !(
-        pagerDisabled &&
         cached &&
         externalDiff === false &&
         textconv === false &&
@@ -2332,7 +2190,7 @@ export async function run(
       "version",
     ]);
     if (!safeBuiltins.has(folded)) return true;
-    return folded === "status" && gitStatusUsesExternalCommand(args, env, cwd);
+    return folded === "status" && gitStatusUsesExternalCommand(args);
   }
 
   function gitInvocationUsesDynamicEvaluation(
@@ -2822,8 +2680,10 @@ export async function run(
     const reason =
       r.code === 2
         ? r.stderr.trim() || "blocked by AIDLC guard hook"
-        : `AIDLC guard ${file} failed with exit ${r.code}; ` +
-          "the operation was denied because its safety checks could not complete.";
+        : `AIDLC guard ${file} failed with exit ${r.code}, so its safety checks could not complete and the ` +
+          "call was stopped. Retry it once; if it is stopped again, tell the person to run " +
+          `\`${aidlcInvocation()} config --harness cursor\` in a terminal, which puts AI-DLC's Cursor files ` +
+          "back, then try again.";
     process.stdout.write(`${JSON.stringify({ permission: "deny", agent_message: reason })}\n`);
     return true;
   }
@@ -2941,22 +2801,15 @@ export async function run(
       // A Cursor background agent submits prompts with no human present; its
       // turn must not mint HUMAN_TURN (the approval gates' presence evidence).
       if (isBackground()) return 0;
-      // A real human acted this turn.
-      runCore(
-        "aidlc-record-human-turn.ts",
-        JSON.stringify({
-          hook_event_name: "UserPromptSubmit",
-          ...(sessionId ? { session_id: sessionId } : {}),
-          prompt: cursor.prompt ?? cursor.user_message ?? "",
-        }),
-      );
+      const prompt = cursor.prompt ?? cursor.user_message ?? "";
       // Cursor's sessionStart fires only for a new conversation and carries no
       // startup/resume discriminator. Probe the core resume-rebind logic here,
-      // where the same session_id is available. beforeSubmitPrompt cannot
-      // inject context, so block this one submission through its documented
-      // user_message channel when the active intent drifted.
+      // where the same session_id is available, BEFORE the turn is recorded,
+      // so the turn lands on this chat's own work. The person's prompt always
+      // goes through: beforeSubmitPrompt cannot add context, so the probe
+      // leaves its one line for this conversation's next directive instead.
       if (sessionId) {
-        const r = runCore(
+        runCore(
           "aidlc-session-start.ts",
           JSON.stringify({
             hook_event_name: "SessionStart",
@@ -2965,23 +2818,19 @@ export async function run(
             rebind_check: true,
           }),
         );
-        try {
-          const parsed = JSON.parse(r.stdout) as { additionalContext?: string };
-          const offer = parsed.additionalContext
-            ?.split(/\r?\n/)
-            .find((line) => line.startsWith("INTENT REBIND OFFER:"));
-          if (offer) {
-            process.stdout.write(`${JSON.stringify({
-              continue: false,
-              user_message:
-                `${offer} Submit the named /aidlc switch command to return, ` +
-                "or resubmit your prompt to continue with the active intent.",
-            })}\n`);
-          }
-        } catch {
-          // no rebind offer — submission continues normally
-        }
+        // A typed switch or create moves this chat itself, so a line about its
+        // old selection, from this probe or an earlier prompt's, is dropped.
+        if (promptMovesSelection(prompt)) takeSessionSelectionNotice(projectDir, sessionId);
       }
+      // A real human acted this turn.
+      runCore(
+        "aidlc-record-human-turn.ts",
+        JSON.stringify({
+          hook_event_name: "UserPromptSubmit",
+          ...(sessionId ? { session_id: sessionId } : {}),
+          prompt,
+        }),
+      );
       return 0;
     }
 
@@ -3014,12 +2863,14 @@ export async function run(
         if (
           typeof sub === "string" &&
           sub.length > 0 &&
-          !recordSpawn(sub)
+          !recordSpawn(sub) &&
+          !delegateChecksStandAside()
         ) {
           process.stdout.write(`${JSON.stringify({
             permission: "deny",
             agent_message:
-              "AIDLC could not establish protected delegated-agent attribution, so the Task was not started.",
+              "AI-DLC could not start this specialist. Start it again; if it is stopped again, tell the person " +
+              `to run \`${aidlcInvocation()} doctor\` in a terminal, which names what is broken.`,
           })}\n`);
           return 0;
         }
@@ -3032,7 +2883,8 @@ export async function run(
         agent &&
         toolName === "Bash" &&
         typeof command === "string" &&
-        await shellInvokesDynamicEvaluation(command, effectiveCwd())
+        await shellInvokesDynamicEvaluation(command, effectiveCwd()) &&
+        !delegateChecksStandAside()
       ) {
         process.stdout.write(`${JSON.stringify({
           permission: "deny",
@@ -3044,7 +2896,7 @@ export async function run(
         })}\n`);
         return 0;
       }
-      if (agent && await touchesProtectedReviewerState()) {
+      if (agent && await touchesProtectedReviewerState() && !delegateChecksStandAside()) {
         process.stdout.write(`${JSON.stringify({
           permission: "deny",
           agent_message:
@@ -3052,7 +2904,7 @@ export async function run(
         })}\n`);
         return 0;
       }
-      if (agent === AMBIGUOUS_REVIEWER) {
+      if (agent === AMBIGUOUS_REVIEWER && !delegateChecksStandAside()) {
         process.stdout.write(`${JSON.stringify({
           permission: "deny",
           agent_message:
@@ -3136,8 +2988,12 @@ export async function run(
     }
 
     case "validate-state": {
-      // preCompact: the core hook reads no stdin fields — self-contained.
-      runCore("aidlc-validate-state.ts", rawInput);
+      // preCompact: the core hook resolves the workflow from the session id,
+      // which Cursor may send only as conversation_id.
+      runCore("aidlc-validate-state.ts", JSON.stringify({
+        hook_event_name: "PreCompact",
+        ...(sessionId ? { session_id: sessionId } : {}),
+      }));
       return 0;
     }
 

@@ -59,6 +59,7 @@ nav = [
       "guide/15-troubleshooting.md",
       "guide/16-worked-examples.md",
       "guide/workshop-mode.md",
+      "guide/facilitator-guide.md",
       "guide/glossary.md",
     ] },
   ] },

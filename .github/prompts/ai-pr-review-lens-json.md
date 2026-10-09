@@ -13,8 +13,8 @@ GitHub verdict. Return one JSON object matching the provided schema:
       "title": "concise title",
       "evidence": [{"source": "DIFF", "path": "path/to/file", "line": 42, "side": "RIGHT"}],
       "problem": "concrete condition -> execution or workflow path -> observable failure",
-      "impact": "affected user or contract and why this priority fits",
-      "requiredCorrection": "exact behavior and authoritative surfaces to reconcile"
+      "impact": "who meets it on which normal-run path, and why this priority fits",
+      "requiredCorrection": "the smallest change that keeps the person in charge"
     }
   ]
 }

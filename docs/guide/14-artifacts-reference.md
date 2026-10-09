@@ -34,9 +34,11 @@ aidlc/spaces/<space>/intents/<YYMMDD>-<label>/   # one record dir per intent
     hooks-health/                  # Hook heartbeats and drop counters
     plan.json                      # Derived scope plan
     recovery.md                    # Compaction recovery breadcrumb
+    state-writes.json              # Recent state writes, for doctor
     stop-hook/                     # No-progress guard counters
     human-turn                     # Last human prompt marker
     engine-touch                   # Last engine advance marker
+    turn-end                       # Last step that ended the turn, until the person replies
     reviewer-dispatch.json         # Active per-unit reviewer scope
     document-input-path            # Document input handoff
     active-directive.json           # Transient execution cursor
@@ -104,7 +106,13 @@ aidlc/spaces/<space>/intents/<YYMMDD>-<label>/   # one record dir per intent
 (`architecture.md`, `code-structure.md`, `technology-stack.md`, …) land one
 level up, in the space-level per-repo CodeKB —
 `aidlc/spaces/<space>/codekb/<repo>/` — one store per repo rather than a copy
-per intent. On each applicable brownfield intent, the stage checks the store's
+per intent. When the project folder is itself the repo, `<repo>` starts as the
+folder's name (the main checkout's name in a linked git worktree) and stays with
+the store: a moved, renamed or copied project folder keeps reading the same
+store. The exception is a space holding two or more stores that no intent
+records as its repo: there the current folder name is used, and the next step
+can warn that completed stage results have drifted. On each applicable
+brownfield intent, the stage checks the store's
 recorded scope and working-tree fingerprint first. A verified-current store
 whose coverage fits the intent may be reused by human choice; otherwise a full
 rescan replaces those nine files, while a focused scan merges the newly
@@ -281,6 +289,7 @@ cursors and machine-local derived state are ignored.
 | `verification/` phase check results | `aidlc/.aidlc-clone-id` (names this clone's shard; must stay machine-local) |
 | Space-level `aidlc/knowledge/` team knowledge files | `aidlc/.aidlc-sessions/` (per-session UUID stamps, workflow bindings, PID ancestry map) |
 | Per-stage `memory.md` diaries; space `memory/` layer | `.aidlc-engine/hooks-health/`, `.aidlc-engine/sensors/` (heartbeats, advisory findings) |
+| | `aidlc/active-memory/` (the engine's copy of the active space's `memory/` that every harness include reads; written at session start and on a space switch, so a switch changes no tracked file; each copied file starts with a comment naming the file to edit, and an edit made in the copy is replaced at the next refresh) |
 
 ---
 

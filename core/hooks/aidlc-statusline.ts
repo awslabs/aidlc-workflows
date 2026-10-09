@@ -9,6 +9,8 @@ import {
   statSync,
 } from "node:fs";
 import { createRequire } from "node:module";
+import { knownActiveSpace } from "../tools/aidlc-runtime-paths.ts";
+import { unitProgress } from "../tools/aidlc-unit-walk-view.ts";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -90,11 +92,10 @@ function workspaceRoot(projectDir: string): string {
 
 function activeSpace(projectDir: string): string {
   try {
-    const value = readFileSync(
-      join(workspaceRoot(projectDir), "active-space"),
-      "utf-8",
-    ).trim();
-    if (value) return value;
+    return knownActiveSpace(
+      workspaceRoot(projectDir),
+      readFileSync(join(workspaceRoot(projectDir), "active-space"), "utf-8"),
+    );
   } catch {
     // The default space is valid on a fresh shell.
   }
@@ -164,7 +165,9 @@ function activeIntent(
 // readSessionBinding / resolveWorkflowSelection / stateFilePathForSelection:
 // a per-session binding (written by the session hooks) pins the displayed
 // space/intent; anything malformed or stale degrades to the shared cursors.
-type StatuslineSelection = { space: string; intent: string | null };
+// `hidden` marks a bound session that shows no workflow. It is distinct from
+// `intent: null` alone, which also names the space-root workflow.
+type StatuslineSelection = { space: string; intent: string | null; hidden?: true };
 
 function validSessionId(sessionId: string | undefined): string | null {
   const raw = sessionId ?? "";
@@ -174,6 +177,18 @@ function validSessionId(sessionId: string | undefined): string | null {
     .slice(0, 180);
   if (!safe || safe === "." || safe === "..") return null;
   return safe === raw ? raw : null;
+}
+
+// Mirrors isBindableIntentRecordName: the record names a binding can carry.
+function isBindableIntentRecordName(value: unknown): value is string {
+  if (typeof value !== "string" || value.length === 0 || value !== value.trim()) return false;
+  if (value === "." || value === ".." || value.includes("/")) return false;
+  if (process.platform === "win32" && value.includes("\\")) return false;
+  // No control character: C0, DEL, or C1.
+  return [...value].every((ch) => {
+    const code = ch.codePointAt(0) ?? 0;
+    return code >= 0x20 && code !== 0x7f && (code < 0x80 || code > 0x9f);
+  });
 }
 
 function readSessionBinding(
@@ -198,11 +213,7 @@ function readSessionBinding(
     if (typeof space !== "string" || !/^[a-z][a-z0-9-]*$/.test(space)) {
       return null;
     }
-    if (
-      intent !== null &&
-      (typeof intent !== "string" ||
-        !/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(intent))
-    ) {
+    if (intent !== null && !isBindableIntentRecordName(intent)) {
       return null;
     }
     if (typeof record.boundAt !== "string" || record.boundAt.length === 0) {
@@ -214,10 +225,16 @@ function readSessionBinding(
     ) {
       return null;
     }
+    // An archived bound record is not displayed, and neither is whatever the
+    // shared cursor names or the space root holds: this session is bound, so it
+    // shows no workflow. The same holds once archiving rebinds it to no record.
     if (intent !== null && intentIsArchived(projectDir, space, intent)) {
-      return null;
+      return { space, intent: null, hidden: true };
     }
-    return { space, intent: intent as string | null };
+    if (intent === null && record.source === "archive") {
+      return { space, intent: null, hidden: true };
+    }
+    return { space, intent };
   } catch {
     return null;
   }
@@ -237,6 +254,7 @@ function stateFilePathForSelection(
   projectDir: string,
   selection: StatuslineSelection,
 ): string {
+  if (selection.hidden) return "";
   const root = selection.intent === null
     ? intentsDir(projectDir, selection.space)
     : join(intentsDir(projectDir, selection.space), selection.intent);
@@ -430,6 +448,32 @@ function agentDisplayMap(projectDir: string): Record<string, string> {
     orchestrator: "Orchestrator",
     ...loadAgentDisplayMap(projectDir),
   };
+}
+
+// The step the person is on. Working one Unit at a time, Current Stage stays
+// on the block's first stage while the person is at a later step of a Unit:
+// that step is the Unit Stage field, or else the one the engine last put to
+// them, from its active-directive file when nothing has written the state
+// since (the lib's digest check is too heavy for this hot path).
+function shownStep(stateFile: string, state: string, stage: string): { stage: string; unit: string } {
+  const slug = /^[a-z0-9][a-z0-9-]*$/;
+  const unitStage = extractField(state, "Unit Stage");
+  if (slug.test(unitStage)) return { stage: unitStage, unit: "" };
+  try {
+    const path = join(dirname(stateFile), ".aidlc-engine", "active-directive.json");
+    if (statSync(path).mtimeMs < statSync(stateFile).mtimeMs) return { stage, unit: "" };
+    const marker = JSON.parse(readFileSync(path, "utf-8")) as { stage?: unknown; unit?: unknown; delivery?: unknown };
+    if (typeof marker.stage !== "string" || !slug.test(marker.stage) || marker.delivery === "superseded") {
+      return { stage, unit: "" };
+    }
+    // The file is writable, so only a real Unit name reaches the line.
+    const unit = typeof marker.unit === "string" && marker.unit.length <= 64 && /^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(marker.unit)
+      ? marker.unit
+      : "";
+    return { stage: marker.stage, unit };
+  } catch {
+    return { stage, unit: "" };
+  }
 }
 
 function extractField(text: string, label: string): string {
@@ -650,8 +694,12 @@ async function main(stdinText: string): Promise<void> {
   const statusMatch = state.match(/^-\s*\*\*Status\*\*:\s*(.+)$/m);
   const status = statusMatch ? statusMatch[1].replace(/\r$/, "").trim() : "";
 
-  const stageDisplay = STAGE_DISPLAY[stage] ?? stage;
-  const agentDisplay = agentDisplayMap(projectDir)[agent] ?? agent;
+  const shown = shownStep(stateFile, state, stage);
+  const stageDisplay = shown.stage === ""
+    ? ""
+    : `${STAGE_DISPLAY[shown.stage] ?? shown.stage}${shown.unit ? ` for ${shown.unit}` : ""}`;
+  // Active Agent follows Current Stage, so it is not shown beside another step.
+  const agentDisplay = shown.stage === stage ? agentDisplayMap(projectDir)[agent] ?? agent : "";
   const { done, total } = phaseProgress(state, phase);
   const bar = total > 0 ? progressBar(done, total) : "";
   const phaseProg = total > 0 ? `${done}/${total}` : "";
@@ -674,8 +722,15 @@ async function main(stdinText: string): Promise<void> {
   }
 
   let output = `[AIDLC] ${prefix}${phase}`;
-  if (bar) output += ` ${bar}`;
-  if (phaseProg) output += ` ${phaseProg}`;
+  const units = phase === "CONSTRUCTION"
+    ? unitProgress(dirname(stateFile), extractField(state, "Construction Iteration"))
+    : null;
+  if (units) {
+    output += ` Unit ${units.current} of ${units.total}`;
+  } else {
+    if (bar) output += ` ${bar}`;
+    if (phaseProg) output += ` ${phaseProg}`;
+  }
   if (stageDisplay) output += ` > ${stageDisplay}`;
   if (agentDisplay) output += ` -- ${agentDisplay}`;
 

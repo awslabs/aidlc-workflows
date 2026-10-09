@@ -33,7 +33,7 @@ type HarnessCapabilities = {
   };
   memoryInclude:
     | "claude-import"
-    | "codex-env"
+    | "codex-engine"
     | "copilot-agents-md"
     | "cursor-rule"
     | "devin-rules"
@@ -84,7 +84,7 @@ const HARNESS_CAPABILITIES = {
       manifestDir: ".codex-plugin",
       wiringFile: "hooks/hooks.json",
     },
-    memoryInclude: "codex-env",
+    memoryInclude: "codex-engine",
     kiroAgentJson: false,
     ideAgentTools: false,
     reviewerScopeRegistration: "codex-hooks",
@@ -97,7 +97,7 @@ const HARNESS_CAPABILITIES = {
       dist: "AGENTS.md",
       harnessDist: "AGENTS.md",
     },
-    rootFiles: [".gitignore", "AGENTS.md"],
+    rootFiles: [".gitignore", ".vscode/settings.json", "AGENTS.md"],
     skillsRoot: ".github/skills",
     plugin: {
       kind: "store",
@@ -310,7 +310,7 @@ function validateManifest(
     (capabilities.memoryInclude === "claude-import" ||
       capabilities.memoryInclude === "devin-rules") !==
       manifest.harnessFiles.some((file) => file.dst === "rules/aidlc.md") ||
-    (capabilities.memoryInclude === "codex-env") !==
+    (capabilities.memoryInclude === "codex-engine") !==
       (manifest.orchestratorSkillPath === ".agents/skills/aidlc/SKILL.md") ||
     (capabilities.memoryInclude === "opencode-instructions") !==
       manifest.harnessFiles.some((file) => file.dst === "opencode.json") ||

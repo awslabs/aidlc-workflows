@@ -5,7 +5,7 @@ structured, verifiable software-delivery workflows. One harness-neutral core
 runs natively in Claude Code, Kiro CLI, Kiro IDE, Codex CLI, Cursor, opencode,
 GitHub Copilot, and Devin CLI.
 
-![version](https://img.shields.io/badge/version-2.10.0-blue)
+![version](https://img.shields.io/badge/version-2.11.0-blue)
 ![license](https://img.shields.io/badge/license-MIT--0-green)
 
 The Quick Start below installs the latest stable AI-DLC release.
@@ -26,8 +26,10 @@ Windows PowerShell:
 irm https://github.com/awslabs/aidlc-workflows/releases/latest/download/install.ps1 | iex
 ```
 
-The installer adds the native `aidlc` command and every harness runtime. Bun
-and Node.js are not required. On Windows, it installs for the current account
+The installer sets up everything AI-DLC needs: the native `aidlc` command and
+every harness runtime. You do not need to install Bun or Node.js; a native
+install runs its hooks and commands through `aidlc` and does not call `bun`.
+On Windows, it installs for the current account
 and automatically registers the bin directory in User PATH. Run it from a normal
 PowerShell window; one opened with "Run as administrator" gets a warning and a
 prompt, since installing as administrator is less safe. Open a new terminal
@@ -37,9 +39,9 @@ current-process PATH changes, use
 Windows uninstall removes only the User PATH entry recorded as installer-owned.
 On macOS, Linux, or WSL, follow the installer's PATH instruction if needed.
 
-Cannot install a native executable, or prefer to manage the project files
-manually? Install [Bun](https://bun.sh/), download
-`aidlc-copy-runtime-X.Y.Z.tar.gz` from the
+Prefer to manage the project files yourself, or cannot install a native
+executable? The manual-copy path is the one place Bun is needed: install
+[Bun](https://bun.sh/), download `aidlc-copy-runtime-X.Y.Z.tar.gz` from the
 [release](https://github.com/awslabs/aidlc-workflows/releases/latest), and copy
 the complete `runtime/<harness>/` directory into your project. This path does
 not require the native `aidlc` command.
@@ -85,7 +87,7 @@ guide in the table below. The complete walkthrough is in
 | --- | --- | --- | --- | --- |
 | Claude Code | `aidlc config --harness claude` | `claude` | `/aidlc` | [Getting Started](docs/guide/01-getting-started.md) |
 | Kiro CLI >= 2.6 | `aidlc config --harness kiro` | `kiro-cli chat` | `/aidlc` | [Kiro CLI](docs/guide/harnesses/kiro-cli.md) |
-| Kiro IDE 1.x / Kiro CLI v3 | `aidlc config --harness kiro-ide` | Open the project in Kiro IDE and choose **aidlc** in the chat panel's agent picker, or run `kiro-cli` | `/aidlc` | [Kiro IDE](docs/guide/harnesses/kiro-ide.md) |
+| Kiro IDE >= 1.1.70 / Kiro CLI >= 2.24.1 (v3) | `aidlc config --harness kiro-ide` | Open the project in Kiro IDE and choose **aidlc** in the chat panel's agent picker, or run `kiro-cli` | `/aidlc` | [Kiro IDE](docs/guide/harnesses/kiro-ide.md) |
 | Codex CLI >= 0.145.0 | `aidlc config --harness codex` | `codex` | `$aidlc` | [Codex CLI](docs/guide/harnesses/codex-cli.md) |
 | Cursor | `aidlc config --harness cursor` | Open Cursor or run `agent` | `/aidlc` | [Cursor](docs/guide/harnesses/cursor.md) |
 | opencode >= 1.17 | `aidlc config --harness opencode` | `opencode` | `/aidlc` | [opencode](docs/guide/harnesses/opencode.md) |
@@ -102,7 +104,9 @@ provider-independent.
 ## Recommended Model
 
 AI-DLC works best with capable reasoning models. The current recommended model
-is Claude Opus 4.8.
+is Claude Opus 4.8. If Opus is not available to you, or you are not sure where
+to set the model and effort on your harness, see
+[Choosing a Model and Effort](docs/guide/18-install-and-lifecycle.md#choosing-a-model-and-effort).
 
 ## Why AI-DLC
 
@@ -115,7 +119,7 @@ audited lifecycle:
 - 11 workflow profiles for features, bug fixes, infrastructure, security,
   proofs of concept, enterprise delivery, and other common work
 - Human approval gates and source-bound review evidence
-- 107-event audit trail plus persistent state, team knowledge, and learned rules
+- 117-event audit trail plus persistent state, team knowledge, and learned rules
 - The same deterministic engine across every supported harness
 
 Start with [Workflow Profiles](docs/guide/workflow-profiles.md) to compare
@@ -142,7 +146,7 @@ for the architecture and methodology.
 ## Repository Layout
 
 - `core/` - hand-authored, harness-neutral methodology and engine
-- `core/tools/` - 82 aidlc-*.ts engine and authoring tools
+- `core/tools/` - 94 aidlc-*.ts engine and authoring tools
 - `harness/<name>/` - thin, harness-specific manifests and integrations
 - `plugins/<name>/` - optional AIDLC plugins
 - `scripts/` - packaging, binary, installer, and release tooling

@@ -44,7 +44,12 @@ import {
 } from "../harness/test-budget.ts";
 import { afterAll, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { copyFileSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import {
+  createIntent,
+  setActiveIntentCursor,
+  writeSessionBinding,
+} from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { join } from "node:path";
 import {
   cleanupTestProject,
@@ -866,6 +871,40 @@ describe("t11 aidlc-statusline hook (migrated from t11-hook-statusline.sh, plan 
   });
 
   // --- .sh Test 40: COMPLETE status renders full bar from phase-local checkbox state ---
+  test("50: a session bound to a record outside the slug shape keeps showing it after the cursor moves", () => {
+    const p = proj();
+    const bound = createIntent(p, "bound-work", "default", "feature");
+    const other = createIntent(p, "other-work", "default", "feature");
+    const intents = join(p, "aidlc", "spaces", "default", "intents");
+    const named = "customer work";
+    renameSync(join(intents, bound.dirName), join(intents, named));
+    const registry = join(intents, "intents.json");
+    writeFileSync(registry, readFileSync(registry, "utf-8").replaceAll(`"${bound.dirName}"`, JSON.stringify(named)));
+    copyFileSync(STATE_CONSTRUCTION, join(intents, named, "aidlc-state.md"));
+    copyFileSync(MID_IDEATION, join(intents, other.dirName, "aidlc-state.md"));
+    writeSessionBinding(p, "S-STATUS", "default", named, "switch");
+    setActiveIntentCursor(p, other.dirName, "default");
+    const out = runHook(JSON.stringify({ workspace: { project_dir: p }, session_id: "S-STATUS" })).out;
+    expect(out).toContain("CONSTRUCTION");
+    expect(out).not.toContain("IDEATION");
+  });
+
+  test("51: a session bound to an archived record shows no workflow, not the cursor's", () => {
+    const p = proj();
+    const archived = createIntent(p, "archived-work", "default", "feature");
+    const other = createIntent(p, "other-work", "default", "feature");
+    const intents = join(p, "aidlc", "spaces", "default", "intents");
+    const archivedState = readFileSync(STATE_CONSTRUCTION, "utf-8").replace(/^- \*\*Status\*\*:.*$/m, "- **Status**: Archived");
+    expect(archivedState).toContain("- **Status**: Archived");
+    writeFileSync(join(intents, archived.dirName, "aidlc-state.md"), archivedState);
+    copyFileSync(MID_IDEATION, join(intents, other.dirName, "aidlc-state.md"));
+    writeSessionBinding(p, "S-ARCHIVED", "default", archived.dirName, "switch");
+    setActiveIntentCursor(p, other.dirName, "default");
+    const out = runHook(JSON.stringify({ workspace: { project_dir: p }, session_id: "S-ARCHIVED" })).out;
+    expect(out).not.toContain("IDEATION");
+    expect(out).not.toContain("CONSTRUCTION");
+  });
+
   test("40: completed fixture renders full bar", () => {
     const p = proj();
     seedStateFile(p, STATE_COMPLETED);

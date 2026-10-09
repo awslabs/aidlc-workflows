@@ -45,6 +45,7 @@ import {
   readUnitSourceManifest,
   readUnitSourceSnapshot,
   recordDir,
+  recordedSourceListingUnderCurrentBoundary,
   reviewRecordDigest,
   type ReviewRecord,
   sourceClaimCovers,
@@ -72,6 +73,7 @@ import {
   seedStateFile,
   setupWorktreeFixture,
 } from "../harness/fixtures.ts";
+import { approveSuppliedCheckCommand } from "../harness/verification-command.ts";
 
 setDefaultTimeout(NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
@@ -1201,6 +1203,7 @@ function runSwarm(
   project: string,
   args: string[],
 ): { rc: number; out: string } {
+  approveSuppliedCheckCommand(project, args);
   const result = spawnSync(
     process.execPath,
     [SWARM, "--project-dir", project, ...args],
@@ -1289,6 +1292,39 @@ describe("t305 real receipt and guard flows", () => {
     expect(bypass.rc).toBe(1);
     expect(bypass.out).toContain("has no valid source manifest");
     expect(readAllAuditShards(project)).not.toContain("**Event**: REVIEW_REQUESTED");
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
+
+  // A Next.js dynamic route folder is a literal path: the claim is recorded,
+  // covers the file under it, and not a sibling folder a character class would
+  // have matched.
+  test("a bracketed route folder is a literal claim: recorded, covering its file and not a sibling", () => {
+    const { project, record } = runtimeFixture();
+    for (const dir of ["src/app/items/[itemId]", "src/app/items/i"]) {
+      mkdirSync(join(project, dir), { recursive: true });
+      writeFileSync(join(project, dir, "page.tsx"), `export default function Page() { return null; } // ${dir}\n`);
+    }
+    git(project, ["add", "-A"]);
+    git(project, ["commit", "-qm", "routes"]);
+    const { request } = review(project, record, "alpha", [{ path: "src/app/items/[itemId]/" }]);
+    expect(request.rc, request.out).toBe(0);
+    const row = readAllAuditShards(project).split("\n---\n").find((block) =>
+      auditBlockField(block, "Event") === "REVIEW_REQUESTED" && auditBlockField(block, "Unit") === "alpha");
+    const fingerprint = row === undefined ? null : auditBlockField(row, "Unit Source Fingerprint");
+    expect(fingerprint).not.toBeNull();
+    const snapshot = readUnitSourceSnapshot(project, "code-generation", "alpha", fingerprint ?? "");
+    expect(snapshot).not.toBeNull();
+    expect([...(snapshot?.listing.keys() ?? [])]).toEqual(["\0src/app/items/[itemId]/page.tsx"]);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
+
+  test("REVIEW_REQUESTED with a manifest naming an unrecorded repo offers to add the repo, not to rewrite the manifest", () => {
+    const { project, record } = runtimeFixture();
+    writeManifest(record, "alpha", [{ repo: "app-b", path: "src/" }]);
+    const refused = cli(LOG, ["review", "--stage", "code-generation", "--reviewer", REVIEWER, "--unit", "alpha", "--iteration", "1"], project);
+    expect(refused.rc).toBe(1);
+    const error = (JSON.parse(refused.out) as { error: string }).error;
+    expect(error).toContain('names repo "app-b", which this piece of work does not record');
+    expect(error).toContain("intent add-repo app-b");
+    expect(error).not.toContain("Write the manifest listing every application-source path");
   }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("REVIEW_COMPLETED and retry-pending refuse source edited after dispatch", () => {
@@ -1427,6 +1463,24 @@ describe("t305 real receipt and guard flows", () => {
     const state=readFileSync(join(fail.record,"aidlc-state.md"),"utf-8"); const receipts=freshReviewReceipts(fail.project,state,{slug:"code-generation",phase:"construction",for_each:"unit-of-work",reviewer:REVIEWER,review_artifact:"code-generation-plan",reviewer_max_iterations:2,workspace_requires:true,produces:["code-generation-plan","unit-test-instructions","code-summary","traceability"]}); expect([...receipts.unitStale].sort()).toEqual(["alpha","beta"]);
   }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
+  test("4b a shared path holding exactly a newer review's bytes is that Unit's own reviewed build", () => {
+    const stage = {slug:"code-generation",phase:"construction",for_each:"unit-of-work",reviewer:REVIEWER,review_artifact:"code-generation-plan",reviewer_max_iterations:2,workspace_requires:true,produces:["code-generation-plan","unit-test-instructions","code-summary","traceability"]};
+    const { project, record } = runtimeFixture(); writeFileSync(join(project, "shared.ts"), "export const s=1\n");
+    review(project, record, "alpha", [{ path: "shared.ts" }]); writeFileSync(join(project, "shared.ts"), "export const s=2\n"); review(project, record, "beta", [{ path: "shared.ts" }]);
+    const state = readFileSync(join(record, "aidlc-state.md"), "utf-8");
+    // alpha's shared path moved only to what beta's review recorded; beta's own bytes never moved.
+    const built = freshReviewReceipts(project, state, stage);
+    expect([...built.unitSourceAttributed]).toEqual(["alpha"]);
+    expect([...built.unitSourceMoved.keys()]).toEqual([]);
+    // An edit after beta's review matches no review, so nothing is attributed:
+    // both Units' reviewed code moved, and each owes its next review pass.
+    writeFileSync(join(project, "shared.ts"), "export const s=3\n");
+    const edited = freshReviewReceipts(project, state, stage);
+    expect([...edited.unitSourceAttributed]).toEqual([]);
+    expect([...edited.unitSourceMoved.keys()].sort()).toEqual(["alpha", "beta"]);
+    expect(edited.unitSourceMoved.get("alpha")).toEqual({ nextIteration: 2, recoverySpent: false });
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
+
   test("5 unclaimed add refuses; claim+recovery and revert both clear", () => {
     const claimed = runtimeFixture(); review(claimed.project, claimed.record, "alpha", [{ path: "app.ts" }]); review(claimed.project, claimed.record, "beta", []);
     writeFileSync(join(claimed.project, "extra.ts"), "export const x=1\n"); review(claimed.project, claimed.record, "beta", []);
@@ -1434,6 +1488,34 @@ describe("t305 real receipt and guard flows", () => {
     review(claimed.project, claimed.record, "alpha", [{ path: "app.ts" }, { path: "extra.ts" }]); expect(approve(claimed.project).rc).toBe(0);
     const reverted = runtimeFixture(); review(reverted.project, reverted.record, "alpha", [{ path: "app.ts" }]); review(reverted.project, reverted.record, "beta", []);
     writeFileSync(join(reverted.project, "extra.ts"), "export const x=1\n"); review(reverted.project, reverted.record, "beta", []); expect(approve(reverted.project).rc).toBe(1); rmSync(join(reverted.project, "extra.ts")); expect(approve(reverted.project).rc).toBe(0);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
+
+  test("a setting recorded during the stage is not unclaimed source", () => {
+    const { project, record } = runtimeFixture();
+    review(project, record, "alpha", [{ path: "app.ts" }]); review(project, record, "beta", []);
+    const before = workspaceSourceState(project)?.fingerprint;
+    // A person records a kill switch mid-stage, locally and for the team: AI-DLC's
+    // own settings at the workspace root, like the aidlc/ shell beside them.
+    writeFileSync(join(project, "aidlc.settings.local.json"), `${JSON.stringify({ schemaVersion: 1, flags: { schemaVersion: 1, bypasses: ["AIDLC_DISABLE_SENSORS"] } })}\n`);
+    writeFileSync(join(project, "aidlc.settings.json"), `${JSON.stringify({ schemaVersion: 1, flags: { schemaVersion: 1, swarm: true } })}\n`);
+    expect(workspaceSourceState(project)?.fingerprint).toBe(before);
+    const current = workspaceSourceListing(project);
+    expect(current?.has("\0aidlc.settings.json")).toBe(false);
+    // Evidence recorded before they left the boundary still compares.
+    const appEntry = current?.get("\0app.ts");
+    expect(appEntry).toBeDefined();
+    const recorded = new Map(current ?? []);
+    recorded.set("\0aidlc.settings.json", appEntry as string);
+    recorded.set("\0aidlc.settings.local.json", appEntry as string);
+    expect([...recordedSourceListingUnderCurrentBoundary(recorded, current ?? new Map()).keys()].sort())
+      .toEqual([...(current?.keys() ?? [])].sort());
+    expect(approve(project).rc).toBe(0);
+    // The same name anywhere else is the team's file.
+    const nested = runtimeFixture();
+    const nestedBefore = workspaceSourceState(nested.project)?.fingerprint;
+    mkdirSync(join(nested.project, "pkg"), { recursive: true });
+    writeFileSync(join(nested.project, "pkg", "aidlc.settings.json"), "{}\n");
+    expect(workspaceSourceState(nested.project)?.fingerprint).not.toBe(nestedBefore);
   }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("rejection never launders an unclaimed path into the next attempt baseline", () => {
@@ -1465,7 +1547,7 @@ describe("t305 real receipt and guard flows", () => {
     const syntheticSecond=Math.floor(Date.now()/1000); while(Math.floor(Date.now()/1000)===syntheticSecond){}
     review(late.project,late.record,"alpha",[{path:"app.ts"}]); review(late.project,late.record,"beta",[]); const lateState=readFileSync(state,"utf-8"); const lateReceipts=freshReviewReceipts(late.project,lateState,{slug:"code-generation",phase:"construction",for_each:"unit-of-work",reviewer:REVIEWER,review_artifact:"code-generation-plan",reviewer_max_iterations:2,workspace_requires:true,produces:["code-generation-plan","unit-test-instructions","code-summary","traceability"]}); expect(lateReceipts.sourceBaseline.state).toBe("ready"); if (lateReceipts.sourceBaseline.state === "ready") expect(lateReceipts.sourceBaseline.listing.has("\0late.ts")).toBe(false); expect(approve(late.project).out).toContain("late.ts");
     const destroyed=runtimeFixture(); review(destroyed.project,destroyed.record,"alpha",[{path:"app.ts"}]); review(destroyed.project,destroyed.record,"beta",[]);
-    const audit=readAllAuditShards(destroyed.project); const hash=/\*\*Source Baseline\*\*: sha256:([0-9a-f]{64})/.exec(audit)![1]; rmSync(join(destroyed.record,".aidlc-engine/source-review","code-generation",`baseline-${hash.slice(0,12)}.tsv`)); expect(approve(destroyed.project).out).toContain("baseline snapshot is missing");
+    const audit=readAllAuditShards(destroyed.project); const hash=/\*\*Source Baseline\*\*: sha256:([0-9a-f]{64})/.exec(audit)![1]; rmSync(join(destroyed.record,".aidlc-engine/source-review","code-generation",`baseline-${hash.slice(0,12)}.tsv`)); expect(approve(destroyed.project).out).toContain("the record of what this stage started from is missing");
   }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("7 manifest tamper and 8 claimed deletion make only the owning unit stale", () => {
@@ -1517,7 +1599,7 @@ describe("t305 real receipt and guard flows", () => {
     const refused = approve(modern.project);
     expect(refused.rc).toBe(1);
     expect(refused.out).toContain(
-      "inconsistent with other modern source-binding evidence",
+      "the record of what this stage started from is missing or does not match",
     );
 
     const legacy = runtimeFixture();
@@ -2460,102 +2542,83 @@ describe("t305 healthy settled-swarm source completion", () => {
     }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
   }
 
-  for (const driverCase of [
-    { attributeName: "evil", configName: "evil", unit: "driver-guard-evil" },
-    { attributeName: "set", configName: "set", unit: "driver-guard-set" },
-    { attributeName: "unset", configName: "unset", unit: "driver-guard-unset" },
-    {
-      attributeName: "unspecified",
-      configName: "unspecified",
-      unit: "driver-guard-unspecified",
-    },
-    {
-      attributeName: "evil",
-      configName: "my driver",
-      unit: "driver-guard-spaced",
-    },
-  ]) {
-    test(`configured merge driver ${JSON.stringify(driverCase.configName)} is refused before main mutation`, () => {
+  function driverFixture(): { project: string; marker: string } {
     const project = swarmFixture((root) => {
       writeFileSync(join(root, "driver-target.ts"), "export const base = true;\n");
-      writeFileSync(
-        join(root, ".gitattributes"),
-        `driver-target.ts merge=${driverCase.attributeName}\n`,
-      );
+      writeFileSync(join(root, ".gitattributes"), "driver-target.ts merge=evil\n");
     });
     const driverDir = mkdtempSync(join(tmpdir(), "aidlc-merge-driver-"));
     dirs.push(driverDir);
-    const driver = join(driverDir, "evil-merge.sh");
+    const driver = join(driverDir, "evil-merge.sh").replaceAll("\\", "/");
     const marker = join(driverDir, "evil-driver-ran");
     writeFileSync(
       driver,
-      `#!/bin/sh\ntouch ${JSON.stringify(marker)}\nprintf '%s\\n' 'export const BACKDOOR = true;' > "$1"\n`,
+      `#!/bin/sh\ntouch ${JSON.stringify(marker.replaceAll("\\", "/"))}\nprintf '%s\\n' 'export const BACKDOOR = true;' > "$1"\n`,
     );
     chmodSync(driver, 0o755);
-    git(project, [
-      "config",
-      `merge.${driverCase.configName}.driver`,
-      `${driver} %A %O %B`,
-    ]);
-    const unit = driverCase.unit;
+    git(project, ["config", "merge.evil.driver", `${driver} %A %O %B`]);
+    return { project, marker };
+  }
+
+  function convergeDriverUnit(project: string, unit: string): string {
     seedBoltDag(project, [unit]);
-    const prepared = runSwarm(project, [
-      "prepare",
-      "--batch",
-      "1",
-      "--units",
-      unit,
-      "--base",
-      "main",
-    ]);
+    const prepared = runSwarm(project, ["prepare", "--batch", "1", "--units", unit, "--base", "main"]);
     expect(prepared.rc, prepared.out).toBe(0);
     const wt = worktreePath(project, fixtureIntentId8(project), unit);
-    writeFileSync(
-      join(wt, "driver-target.ts"),
-      "export const reviewed = true;\n",
-    );
-    const reviewed = review(
-      wt,
-      seededRecordDir(wt),
-      unit,
-      [{ path: "driver-target.ts" }],
-    );
+    writeFileSync(join(wt, "driver-target.ts"), "export const reviewed = true;\n");
+    const reviewed = review(wt, seededRecordDir(wt), unit, [{ path: "driver-target.ts" }]);
     expect(reviewed.verdict.rc, reviewed.verdict.out).toBe(0);
     const finalized = runSwarm(project, [
-      "finalize",
-      "--batch",
-      "1",
-      "--units",
-      unit,
-      "--claimed",
-      unit,
-      "--check-cmd",
-      `"${process.execPath}" -e "require('fs').accessSync('driver-target.ts')"`,
+      "finalize", "--batch", "1", "--units", unit, "--claimed", unit,
+      "--check-cmd", `"${process.execPath}" -e "require('fs').accessSync('driver-target.ts')"`,
     ]);
     expect(finalized.rc, finalized.out).toBe(0);
-    const before = spawnSync(
-      "git",
-      ["-C", project, "rev-parse", "HEAD"],
-      { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" },
-    ).stdout.trim();
-    const merged = mergeSwarmUnit(project, unit);
-    expect(merged.rc).toBe(1);
-    expect(merged.out).toContain(
-      `merge.${driverCase.configName}.driver`,
-    );
-    expect(merged.out).toContain("remove the merge.<name>.driver configuration");
-    expect(merged.out).toContain("AIDLC_SKIP_SOURCE_FRESHNESS=1");
-    expect(merged.out).not.toContain("[merge-succeeded:");
-    expect(existsSync(marker)).toBe(false);
-    expect(
-      spawnSync("git", ["-C", project, "rev-parse", "HEAD"], {
-        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
-        encoding: "utf-8",
-      }).stdout.trim(),
-    ).toBe(before);
-    expect(existsSync(wt)).toBe(true);
-    }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
+    return wt;
   }
+
+  test("a configured merge driver is the person's own git and does not refuse the landing", () => {
+    const { project, marker } = driverFixture();
+    const unit = "driver-configured";
+    const wt = convergeDriverUnit(project, unit);
+    const merged = mergeSwarmUnit(project, unit);
+    expect(merged.rc, merged.out).toBe(0);
+    expect(merged.out).not.toContain("refusing to merge");
+    // Only the Unit changed the file, so git never calls the driver.
+    expect(existsSync(marker)).toBe(false);
+    expect(readFileSync(join(project, "driver-target.ts"), "utf-8").replace(/\r\n/g, "\n"))
+      .toBe("export const reviewed = true;\n");
+    expect(existsSync(wt)).toBe(false);
+    const shards = readAllAuditShards(project);
+    expect(shards).toContain("**Event**: SWARM_SOURCE_MERGED");
+    expect(shards).not.toContain("**Driver merges**:");
+    expect(shards).not.toContain("**Landed changes**:");
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
+
+  test("a merge driver that git runs lands its result, said once and recorded", () => {
+    const { project, marker } = driverFixture();
+    // The person kept a change to the same file during the build: a real three-way merge.
+    const stateFile = seededStateFile(project);
+    writeFileSync(stateFile, readFileSync(stateFile, "utf-8").replace(
+      "- **Change Control**: strict (from scope feature)",
+      "- **Guard Policy**: relaxed (from scope feature)",
+    ));
+    const unit = "driver-runs";
+    const wt = convergeDriverUnit(project, unit);
+    writeFileSync(join(project, "driver-target.ts"), "export const base = 2;\n");
+    git(project, ["add", "--", "driver-target.ts"]);
+    git(project, ["commit", "-qm", "main moved"]);
+    const merged = mergeSwarmUnit(project, unit);
+    expect(merged.rc, merged.out).toBe(0);
+    expect(existsSync(marker)).toBe(true);
+    expect(readFileSync(join(project, "driver-target.ts"), "utf-8").replace(/\r\n/g, "\n"))
+      .toBe("export const BACKDOOR = true;\n");
+    expect(merged.out).toContain(`Your merge driver evil merged 1 file while landing Unit ${unit}: driver-target.ts`);
+    expect(existsSync(wt)).toBe(false);
+    const shards = readAllAuditShards(project);
+    expect(shards).toContain("**Event**: SWARM_SOURCE_MERGED");
+    expect(shards).toContain("**Driver merges**: driver-target.ts");
+    expect(shards).not.toContain("**Landed changes**:");
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 });
 
 describe("t305 post-merge source authority failure", () => {
@@ -2936,7 +2999,7 @@ describe("t305 post-merge source authority failure", () => {
     expect(existsSync(join(project, "unreviewed.ts"))).toBe(false);
   }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
-  test("a post-merge hook cannot stage unrelated source into aggregate authority", () => {
+  test("a post-merge hook that stages an unrelated file lands it, said once and recorded", () => {
     const project = swarmFixture();
     const unit = "merge-interleave";
     seedBoltDag(project, [unit]);
@@ -3006,14 +3069,17 @@ describe("t305 post-merge source authority failure", () => {
     expect(merged.status, output).toBe(0);
     expect(output).not.toContain("[merge-succeeded:");
     expect(existsSync(join(project, source))).toBe(true);
-    expect(existsSync(join(project, "merge-interleaved.ts"))).toBe(false);
-    expect(existsSync(wt)).toBe(false);
-    expect(readAllAuditShards(project)).toContain(
-      "**Event**: SWARM_SOURCE_MERGED",
+    expect(existsSync(join(project, "merge-interleaved.ts"))).toBe(true);
+    expect(output).toContain(
+      `Your git hooks or filters changed 1 file while landing Unit ${unit}: merge-interleaved.ts`,
     );
+    expect(existsSync(wt)).toBe(false);
+    const shards = readAllAuditShards(project);
+    expect(shards).toContain("**Event**: SWARM_SOURCE_MERGED");
+    expect(shards).toContain("**Landed changes**: merge-interleaved.ts");
   }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
-  test("a post-merge hook cannot replace the reviewed source path", () => {
+  test("a post-merge hook that changes the reviewed source path lands its bytes, said once and recorded", () => {
     const project = swarmFixture();
     const unit = "merge-interleave-same-path";
     seedBoltDag(project, [unit]);
@@ -3082,16 +3148,19 @@ describe("t305 post-merge source authority failure", () => {
     const output = `${merged.stdout ?? ""}${merged.stderr ?? ""}`;
     expect(merged.status, output).toBe(0);
     expect(output).not.toContain("[merge-succeeded:");
-    expect(readFileSync(join(project, source), "utf-8")).toBe(
-      "export const reviewed = true;\n",
+    expect(readFileSync(join(project, source), "utf-8").replace(/\r\n/g, "\n")).toBe(
+      "export const reviewed = true;\nexport const tampered = true;\n",
+    );
+    expect(output).toContain(
+      `Your git hooks or filters changed 1 file while landing Unit ${unit}: ${source}`,
     );
     expect(existsSync(wt)).toBe(false);
-    expect(readAllAuditShards(project)).toContain(
-      "**Event**: SWARM_SOURCE_MERGED",
-    );
+    const shards = readAllAuditShards(project);
+    expect(shards).toContain("**Event**: SWARM_SOURCE_MERGED");
+    expect(shards).toContain(`**Landed changes**: ${source}`);
   }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
-  test("a post-commit hook cannot create a second source commit", () => {
+  test("a post-commit hook's own commit lands and is recorded", () => {
     const project = swarmFixture();
     const unit = "merge-second-commit";
     seedBoltDag(project, [unit]);
@@ -3163,11 +3232,20 @@ describe("t305 post-merge source authority failure", () => {
     const output = `${merged.stdout ?? ""}${merged.stderr ?? ""}`;
     expect(merged.status, output).toBe(0);
     expect(output).not.toContain("[merge-succeeded:");
-    expect(existsSync(join(project, "hook-commit.ts"))).toBe(false);
-    expect(existsSync(wt)).toBe(false);
-    expect(readAllAuditShards(project)).toContain(
-      "**Event**: SWARM_SOURCE_MERGED",
+    expect(existsSync(join(project, "hook-commit.ts"))).toBe(true);
+    expect(output).toContain(
+      `Your git hooks or filters changed 1 file while landing Unit ${unit}: hook-commit.ts`,
     );
+    expect(existsSync(wt)).toBe(false);
+    const landedHead = spawnSync(
+      "git",
+      ["-C", project, "rev-parse", "HEAD"],
+      { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" },
+    ).stdout.trim();
+    const shards = readAllAuditShards(project);
+    expect(shards).toContain("**Event**: SWARM_SOURCE_MERGED");
+    expect(shards).toContain("**Landed changes**: hook-commit.ts");
+    expect(shards).toContain(`**Merge commit**: ${landedHead}`);
   }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("an audit append failure after source merge is tagged, non-retryable, and preserves recovery state", () => {
@@ -3257,10 +3335,272 @@ describe("t305 post-merge source authority failure", () => {
   }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 });
 
+describe("t305 landing runs the person's git", () => {
+  function landing(
+    project: string,
+    unit: string,
+    options: { strategy?: string; message?: string } = {},
+  ): { rc: number; stdout: string; stderr: string; out: string } {
+    const result = spawnSync(
+      process.execPath,
+      [
+        WORKTREE, "merge", "--slug", unit, "--target", "main",
+        "--strategy", options.strategy ?? "squash", "--project-dir", project,
+        ...(options.message === undefined ? [] : ["--message", options.message]),
+      ],
+      { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), cwd: project, encoding: "utf-8" },
+    );
+    const stdout = result.stdout ?? "";
+    const stderr = result.stderr ?? "";
+    return { rc: result.status ?? -1, stdout, stderr, out: `${stdout}${stderr}` };
+  }
+
+  function converge(project: string, unit: string, source: string, content: string): string {
+    seedBoltDag(project, [unit]);
+    const prepared = runSwarm(project, ["prepare", "--batch", "1", "--units", unit, "--base", "main"]);
+    expect(prepared.rc, prepared.out).toBe(0);
+    const wt = worktreePath(project, fixtureIntentId8(project), unit);
+    writeFileSync(join(wt, source), content);
+    const reviewed = review(wt, seededRecordDir(wt), unit, [{ path: source }]);
+    expect(reviewed.verdict.rc, reviewed.verdict.out).toBe(0);
+    const finalized = runSwarm(project, [
+      "finalize", "--batch", "1", "--units", unit, "--claimed", unit,
+      "--check-cmd", `"${process.execPath}" -e "require('fs').accessSync('${source}')"`,
+    ]);
+    expect(finalized.rc, finalized.out).toBe(0);
+    return wt;
+  }
+
+  function hook(project: string, name: string, body: string[]): void {
+    const path = join(project, ".git", "hooks", name);
+    writeFileSync(path, ["#!/bin/sh", ...body, ""].join("\n"));
+    chmodSync(path, 0o755);
+  }
+
+  function gitOut(project: string, args: string[]): string {
+    return spawnSync("git", ["-C", project, ...args], {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+      encoding: "utf-8",
+    }).stdout.trim();
+  }
+
+  function text(path: string): string {
+    return readFileSync(path, "utf-8").replace(/\r\n/g, "\n");
+  }
+
+  test("a pre-commit hook that reformats the Unit's file lands with the hook's result, said once and recorded", () => {
+    const project = swarmFixture();
+    const unit = "hook-format";
+    const source = `${unit}.ts`;
+    const wt = converge(project, unit, source, "export const reviewed = true\n");
+    hook(project, "pre-commit", [
+      `printf '%s\\n' 'export const reviewed = true;' > ${source}`,
+      `git add -- ${source}`,
+    ]);
+    const merged = landing(project, unit);
+    expect(merged.rc, merged.out).toBe(0);
+    expect(text(join(project, source))).toBe("export const reviewed = true;\n");
+    expect(merged.out).toContain(`Your pre-commit hook changed 1 file while landing Unit ${unit}: ${source}`);
+    expect(JSON.parse(merged.stdout).notices).toEqual([
+      `Your pre-commit hook changed 1 file while landing Unit ${unit}: ${source}.`,
+    ]);
+    expect(existsSync(wt)).toBe(false);
+    const shards = readAllAuditShards(project);
+    expect(shards).toContain("**Event**: SWARM_SOURCE_MERGED");
+    expect(shards).toContain(`**Landed changes**: ${source}`);
+    expect(shards).toContain(`**Merge commit**: ${gitOut(project, ["rev-parse", "HEAD"])}`);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
+
+  test("a pre-commit hook that refuses leaves the landing staged and says why; the same merge finishes it after the fix", () => {
+    const project = swarmFixture();
+    const unit = "hook-refuse";
+    const source = `${unit}.ts`;
+    const wt = converge(project, unit, source, "export const reviewed = true;\nconsole.log('debug');\n");
+    hook(project, "pre-commit", [
+      `if git diff --cached -- ${source} | grep -q 'console.log'; then`,
+      `  echo "lint: ${source} has a console.log" >&2`,
+      "  exit 1",
+      "fi",
+    ]);
+    const before = gitOut(project, ["rev-parse", "HEAD"]);
+    const refused = landing(project, unit);
+    expect(refused.rc, refused.out).toBe(1);
+    const result = JSON.parse(refused.stdout);
+    expect(result.status).toBe("commit-refused");
+    expect(result.output).toContain(`lint: ${source} has a console.log`);
+    expect(result.staged).toEqual([source]);
+    expect(result.detail).toContain(`refused the landing of Unit ${unit}`);
+    expect(result.next).toContain("run this same merge again");
+    expect(result.next).toContain("git reset --merge");
+    expect(refused.out).not.toContain("[merge-succeeded:");
+    expect(gitOut(project, ["rev-parse", "HEAD"])).toBe(before);
+    expect(existsSync(join(project, ".git", "SQUASH_MSG"))).toBe(true);
+    expect(gitOut(project, ["diff", "--cached", "--name-only"])).toBe(source);
+    expect(existsSync(wt)).toBe(true);
+    expect(readAllAuditShards(project)).not.toContain("**Event**: SWARM_SOURCE_MERGED");
+
+    // The fix goes into the staged landing, and the same merge finishes it.
+    writeFileSync(join(project, source), "export const reviewed = true;\n");
+    git(project, ["add", "--", source]);
+    const landed = landing(project, unit);
+    expect(landed.rc, landed.out).toBe(0);
+    const head = gitOut(project, ["rev-parse", "HEAD"]);
+    expect(head).not.toBe(before);
+    expect(gitOut(project, ["rev-parse", `${head}^`])).toBe(before);
+    expect(existsSync(join(project, ".git", "SQUASH_MSG"))).toBe(false);
+    expect(text(join(project, source))).toBe("export const reviewed = true;\n");
+    expect(existsSync(wt)).toBe(false);
+    expect(landed.out).toContain(`Landed Unit ${unit} with 1 file changed since your hook refused it: ${source}`);
+    const shards = readAllAuditShards(project);
+    expect(shards).toContain("**Event**: SWARM_SOURCE_MERGED");
+    expect(shards).toContain(`**Landed changes**: ${source}`);
+    expect(shards).toContain(`**Merge commit**: ${head}`);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
+
+  test("a commit-msg hook that rejects the message says why, and --message lands it", () => {
+    const project = swarmFixture();
+    const unit = "hook-message";
+    const source = `${unit}.ts`;
+    const wt = converge(project, unit, source, "export const reviewed = true;\n");
+    hook(project, "commit-msg", [
+      'if ! grep -q "^\\[ok\\]" "$1"; then',
+      '  echo "commit-msg: start the message with [ok]" >&2',
+      "  exit 1",
+      "fi",
+    ]);
+    const refused = landing(project, unit);
+    expect(refused.rc, refused.out).toBe(1);
+    const result = JSON.parse(refused.stdout);
+    expect(result.status).toBe("commit-refused");
+    expect(result.output).toContain("commit-msg: start the message with [ok]");
+    expect(result.next).toContain("--message");
+    expect(existsSync(wt)).toBe(true);
+    const landed = landing(project, unit, { message: `[ok] Bolt ${unit}` });
+    expect(landed.rc, landed.out).toBe(0);
+    expect(gitOut(project, ["log", "-1", "--format=%s"])).toBe(`[ok] Bolt ${unit}`);
+    expect(landed.out).not.toContain("while landing Unit");
+    expect(landed.out).not.toContain("since your hook refused");
+    expect(existsSync(wt)).toBe(false);
+    const shards = readAllAuditShards(project);
+    expect(shards).toContain("**Event**: SWARM_SOURCE_MERGED");
+    expect(shards).not.toContain("**Landed changes**:");
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
+
+  test("with --strategy merge a refused commit resumes through MERGE_HEAD", () => {
+    const project = swarmFixture();
+    const unit = "hook-merge-strategy";
+    const source = `${unit}.ts`;
+    const wt = converge(project, unit, source, "export const reviewed = true;\nconsole.log('debug');\n");
+    hook(project, "pre-commit", [
+      `if git diff --cached -- ${source} | grep -q 'console.log'; then`,
+      `  echo "lint: ${source} has a console.log" >&2`,
+      "  exit 1",
+      "fi",
+    ]);
+    const before = gitOut(project, ["rev-parse", "HEAD"]);
+    const refused = landing(project, unit, { strategy: "merge" });
+    expect(refused.rc, refused.out).toBe(1);
+    expect(JSON.parse(refused.stdout).status).toBe("commit-refused");
+    expect(existsSync(join(project, ".git", "MERGE_HEAD"))).toBe(true);
+    expect(gitOut(project, ["rev-parse", "HEAD"])).toBe(before);
+    writeFileSync(join(project, source), "export const reviewed = true;\n");
+    git(project, ["add", "--", source]);
+    const landed = landing(project, unit, { strategy: "merge" });
+    expect(landed.rc, landed.out).toBe(0);
+    const head = gitOut(project, ["rev-parse", "HEAD"]);
+    expect(gitOut(project, ["rev-parse", `${head}^1`])).toBe(before);
+    expect(gitOut(project, ["rev-parse", "--verify", `${head}^2`])).toMatch(/^[0-9a-f]{40,64}$/);
+    expect(existsSync(join(project, ".git", "MERGE_HEAD"))).toBe(false);
+    expect(landed.out).toContain(`Landed Unit ${unit} with 1 file changed since your hook refused it: ${source}`);
+    expect(existsSync(wt)).toBe(false);
+    expect(readAllAuditShards(project)).toContain(`**Landed changes**: ${source}`);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
+
+  test("a post-commit hook that leaves files behind in the checkout lands them and records them", () => {
+    const project = swarmFixture();
+    const unit = "hook-leftovers";
+    const source = `${unit}.ts`;
+    const wt = converge(project, unit, source, "export const reviewed = true;\n");
+    // Neither change is committed: one new file, one edit to the Unit's own file.
+    hook(project, "post-commit", [
+      "printf '%s\\n' 'generated by the hook' > hook-note.txt",
+      `printf '%s\\n' '// touched by the hook' >> ${source}`,
+    ]);
+    const merged = landing(project, unit);
+    expect(merged.rc, merged.out).toBe(0);
+    expect(existsSync(join(project, "hook-note.txt"))).toBe(true);
+    expect(gitOut(project, ["status", "--porcelain=v1"])).toContain("hook-note.txt");
+    expect(merged.out).toContain(
+      `Your git hooks or filters changed 2 files while landing Unit ${unit}: ${source}, hook-note.txt`,
+    );
+    expect(existsSync(wt)).toBe(false);
+    const shards = readAllAuditShards(project);
+    expect(shards).toContain("**Event**: SWARM_SOURCE_MERGED");
+    expect(shards).toContain(`**Landed changes**: ${source}, hook-note.txt`);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
+
+  test("Git LFS filters configured on the repository do not refuse the landing", () => {
+    const project = swarmFixture((root) => {
+      writeFileSync(join(root, ".gitattributes"), "*.bin filter=lfs\n");
+    });
+    const external = mkdtempSync(join(tmpdir(), "aidlc-lfs-standin-"));
+    dirs.push(external);
+    const passthrough = join(external, "passthrough.mjs");
+    writeFileSync(passthrough, "process.stdin.pipe(process.stdout);\n");
+    // The keys `git lfs install` writes, pointed at a stand-in so no LFS binary is needed.
+    const command = `"${process.execPath}" "${passthrough}"`;
+    git(project, ["config", "filter.lfs.clean", command]);
+    git(project, ["config", "filter.lfs.smudge", command]);
+    git(project, ["config", "filter.lfs.required", "true"]);
+    const unit = "lfs-unit";
+    const wt = converge(project, unit, "model.bin", "model bytes\n");
+    const merged = landing(project, unit);
+    expect(merged.rc, merged.out).toBe(0);
+    expect(merged.out).not.toContain("refusing to merge");
+    expect(merged.out).not.toContain("while landing Unit");
+    expect(text(join(project, "model.bin"))).toBe("model bytes\n");
+    expect(existsSync(wt)).toBe(false);
+    const shards = readAllAuditShards(project);
+    expect(shards).toContain("**Event**: SWARM_SOURCE_MERGED");
+    expect(shards).not.toContain("**Landed changes**:");
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
+
+  test("a smudge filter whose bytes differ from the reviewed worktree is recorded, not refused", () => {
+    const project = swarmFixture((root) => {
+      writeFileSync(join(root, ".gitattributes"), "smudged.ts filter=mutable\n");
+    });
+    const external = mkdtempSync(join(tmpdir(), "aidlc-smudge-"));
+    dirs.push(external);
+    const script = join(external, "smudge.mjs");
+    const payload = join(external, "payload.txt");
+    writeFileSync(script, [
+      'import { readFileSync } from "node:fs";',
+      "process.stdin.resume();",
+      "process.stdin.on('end', () => {",
+      "  process.stdout.write(readFileSync(process.argv.at(-1)));",
+      "});",
+      "",
+    ].join("\n"));
+    writeFileSync(payload, "UNREVIEWED\n");
+    git(project, ["config", "filter.mutable.smudge", `"${process.execPath}" "${script}" "${payload}"`]);
+    const unit = "smudge-unit";
+    const wt = converge(project, unit, "smudged.ts", "REVIEWED\n");
+    const merged = landing(project, unit);
+    expect(merged.rc, merged.out).toBe(0);
+    expect(text(join(project, "smudged.ts"))).toBe("UNREVIEWED\n");
+    expect(merged.out).toContain(`Your git hooks or filters changed 1 file while landing Unit ${unit}: smudged.ts`);
+    expect(existsSync(wt)).toBe(false);
+    const shards = readAllAuditShards(project);
+    expect(shards).toContain("**Event**: SWARM_SOURCE_MERGED");
+    expect(shards).toContain("**Landed changes**: smudged.ts");
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
+});
+
+
 describe("t305 stage and protocol source-attribution requirements", () => {
   test("pins schema, Bolt-relative paths, review freeze, and workspace_requires semantics", () => {
     const stage=readFileSync(STAGE,"utf-8"); const reviewer=readFileSync(join(PROTOCOL,"stage-protocol-reviewer.md"),"utf-8"); const construction=readFileSync(join(PROTOCOL,"stage-protocol-construction.md"),"utf-8"); const definition=readFileSync(join(PROTOCOL,"stage-definition.md"),"utf-8"); const swarm=readFileSync(join(PROTOCOL,"stage-protocol-swarm.md"),"utf-8");
-    expect(stage).toContain('"version": 1'); expect(stage).toContain("created, modified, or deleted"); expect(stage).toContain("trailing `/` directory claim"); expect(stage).toContain("MUST omit `repo`"); expect(stage).toContain("unclaimed changed paths\nblock stage completion"); expect(stage).toContain("engine-validated against its strict schema");
+    expect(stage).toContain('"version": 1'); expect(stage).toContain("created, modified, or deleted"); expect(stage).toContain("trailing `/` directory claim"); expect(stage).toContain("MUST omit `repo`"); expect(stage).toContain("unclaimed changed paths block stage completion; under relaxed or off they are\nkept"); expect(stage).toContain("engine-validated against its strict schema");
     expect(reviewer).toContain("differentially at those paths"); expect(reviewer).toContain("source-manifest.json"); expect(reviewer).toContain("claimed source paths");
     expect(construction).toContain("before the in-Bolt review"); expect(construction).toContain("worktree-relative and omit `repo`"); expect(definition).toContain("source-manifest.json"); expect(definition).toContain("stage-entry source baseline");
     expect(swarm).toContain("Post-finalize source landing"); expect(swarm).toContain("cleanup-only reconciliation"); expect(swarm).toContain("SWARM_SOURCE_MERGED");

@@ -105,10 +105,11 @@ identity; `dirName` records the human-readable record-dir name verbatim.
 
 The row's `status` is the intent's lifecycle: `in-flight` from creation,
 `complete` once the last in-scope gate closes, or `archived` when you retire
-work you will not finish (`/aidlc intent archive <name>`). Archiving never
-deletes anything — the record dir and audit trail stay put, the default listing
-just stops showing the row (`/aidlc intent list --all` still does), and
-`/aidlc intent unarchive <name>` puts it back in flight.
+work you will not finish or hide work you finished (`/aidlc intent archive
+<name>`). Archiving never deletes anything: the record dir, audit trail, and
+any Bolt worktrees stay put, the default listing just stops showing the row
+(`/aidlc intent list --all` still does), and `/aidlc intent unarchive <name>`
+puts it back the way it was, in flight or complete.
 
 You never create an intent with a special command. The first time you describe
 work, the engine **auto-creates** an intent for you:
@@ -131,20 +132,44 @@ you just describe the new work:
 /aidlc Fix the timeout on the export endpoint
 ```
 
-When an intent is already active, AI-DLC recognizes that this is *new, unrelated*
-work rather than a continuation of the current feature, and **offers** to start a
-second intent alongside the first:
+When an intent is already active, AI-DLC recognizes that this may be *new,
+unrelated* work rather than a continuation of the current feature, and **asks**
+before starting a second intent alongside the first:
 
 ```
-▸ This looks like new work, separate from "inventory-api". Start a second intent?
-  (1) Yes — start a second intent (scope: bugfix)
-  (2) No — this continues the inventory-api work
+Work is already in progress on: "inventory-api". You said: "Fix the timeout on
+the export endpoint". What should I do?
+1. Part of the active work: continue the current workflow
+2. Separate new piece of work: set it up alongside the current one as "bugfix" work
+3. Reshape the active work: change how the remaining plan is shaped
 ```
 
-- Choose **Yes** and AI-DLC creates a second intent (here, a `bugfix`), switches to
-  it, and begins its first stage. Your inventory-api intent is untouched — its
-  record dir, state, and progress are all preserved exactly where you left them.
-- Choose **No** and AI-DLC treats your message as part of the active intent.
+- Choose **2** and AI-DLC creates a second intent (here, a `bugfix`). Your
+  inventory-api intent is untouched: its record dir, state, and progress are all
+  preserved exactly where you left them.
+- Choose **1** and AI-DLC treats your message as part of the active intent.
+- Choose **3** and AI-DLC works out how to reshape the active intent's
+  remaining plan with you.
+
+Saying only that the work should go on (`/aidlc carry on`, "continue", "keep
+going", "go on" or "resume", with or without "please") asks nothing: AI-DLC
+carries on with the active work. With work in the project but none selected
+yet, it asks which piece to pick up.
+
+Settings you type with the new work go with the work you choose.
+`/aidlc --depth minimal --learnings off Fix the timeout on the export endpoint`
+asks the same question: choose **2** and the new intent starts with that depth
+and learnings off; choose **1** or **3** and they apply to the active intent
+(for **3**, before its plan is reshaped). A Guard Policy you lower this way,
+and any other setting typed in the same message, applies to the active intent
+as you send the message; the new intent starts at the default Guard Policy, and
+AI-DLC says so when it creates it. Naming the plan first
+(`/aidlc bugfix Fix the timeout`) asks the same question, proposing that plan.
+So does a scope that differs from the active intent's, typed with a
+description (`/aidlc --scope express "add a health endpoint"`), with new work
+first: choose **1** and the description starts new express work, the active
+intent kept as it is, or **2** and the active intent changes to express. A
+scope with no description changes the active intent's scope without asking.
 
 AI-DLC never creates a second intent without asking. If a prompt is genuinely a
 follow-up to the current work — answering a gate, correcting a requirement — it
@@ -177,12 +202,28 @@ Each live session keeps a machine-local binding at
 session's space and intent, so another terminal or IDE window can move the shared
 cursors without silently moving this session's workflow.
 
+A binding also records how its intent was chosen. Finding a record is not the same
+as joining it: in a fresh clone, where a teammate's intent record is committed but
+your `active-intent` cursor is not, the lone record resolves but no session has
+joined it. The first `/aidlc` asks which intent to work on, and AI-DLC's hooks leave
+that record alone until the session runs `/aidlc intent <slug>` (or creates its own
+intent). A session bound by an earlier version keeps working its intent when your
+cursor names the same record; otherwise it is offered a rebind to that intent. A
+session an earlier version stamped but never bound follows its stamp when it
+resumes, so a chat left open across an upgrade continues its own intent.
+A plain `git worktree` created without AI-DLC's worktree command has no local
+evidence either, so it also selects its intent with `/aidlc intent <slug>`. A Unit
+claimed on this machine counts for that Unit's intent; the Unit participant marker
+is checkout-wide and names no intent, so it does not count as joining a
+particular record.
+
 Session identity follows one order:
 
 1. The host session id delivered to a hook.
 2. A valid `AIDLC_SESSION_OVERRIDE` inherited from the harness process.
-3. The nearest live PID ancestry entry.
-4. No session identity.
+3. On Codex, the `CODEX_THREAD_ID` Codex gives every command it runs.
+4. The nearest live PID ancestry entry.
+5. No session identity.
 
 Once identity is known, an explicit space or intent selector wins, followed by
 that session's binding, then the shared `active-space` and `active-intent`
@@ -201,19 +242,29 @@ The cursors remain write-through compatibility state. Older or unsupported
 environments with no binding therefore behave exactly as before.
 
 Session bindings isolate workflow selection across spaces, but the
-harness-native method include is still one mutable checkout-wide surface.
-SessionStart and the space switch verb re-point that surface to the selected
-space, so two simultaneous sessions in different spaces can overwrite which
-space's ambient rules the harness delivers next. This increment supports
-concurrent intents within one space; concurrent multi-space ambient method
-delivery remains future work.
+harness-native method include is still one checkout-wide surface: every
+include reads one git-ignored copy of the active space's memory files,
+`aidlc/active-memory/`, which SessionStart and the space switch verb
+write for the selected space. So two simultaneous sessions in different spaces
+can overwrite which space's ambient rules the harness delivers next. This
+increment supports concurrent intents within one space; concurrent
+multi-space ambient method delivery remains future work.
 
-On POSIX, the Codex adapter pins the validated hook payload session into every
-core-hook child and Bash command, so macOS sandbox denial of `ps` does not weaken
-Codex workflow selection. On Windows x64 and arm64, native process handles,
+A space switch changes no tracked file: the includes are the same for every
+teammate, and `aidlc config` refreshes them like any other shipped file. An
+install whose includes an earlier release's switch pointed at another space
+is brought to the shipped files by the next refresh, with no conflict.
+
+The Codex adapter pins the validated hook payload session into every core-hook
+child, and Codex gives every command it runs the session as `CODEX_THREAD_ID`
+(0.145.0 and later, the minimum AI-DLC supports; the hooks do not receive it),
+so the tools read the id from there and every command keeps the words the agent
+wrote: macOS sandbox denial of `ps` does not weaken Codex workflow selection, and
+the shipped `.codex/rules/default.rules` prefixes match what the agent runs. On
+Windows x64 and arm64, native process handles,
 creation times, and parent PIDs identify the owning session within the same
 50 ms / 64-ancestor budget. Reused PID generations and unverified ancestry do not
-select a session; the POSIX command rewrite remains unavailable on Windows.
+select a session.
 Shared-process harnesses still cannot distinguish chats that use one process,
 including Kiro IDE multi-chat and multi-session opencode. Children of payload-bearing hooks follow
 the payload session; tools without that parent still fall back to the shared
@@ -264,15 +315,18 @@ When you switch spaces, two things follow the cursor automatically:
 
 1. **AI-DLC's own resolvers** — the next intent you start, and the practices and
    knowledge agents load, all come from the space you switched into.
-2. **The rules your harness loads into context** — switching re-points your
-   harness's native rule include (Claude's `@`-import, Kiro CLI resources or IDE steering,
-   Codex's rules dir) at the new space's `memory/`, so the next turn works under
-   that team's method.
+2. **The rules your harness loads into context**: switching writes the new
+   space's `memory/` files into `aidlc/active-memory/`, the git-ignored
+   copy your harness's native rule include reads (Claude's `@`-import, Kiro CLI
+   resources, Cursor rules, opencode's instructions, Copilot's `AGENTS.md`;
+   Kiro IDE's steering file carries the text itself, and on Codex the engine
+   hands each step its rules), so the next turn works under that team's method.
 
-At `default` this re-pointing is a no-op, which is why a single-team workspace
-never churns its committed files. The include is checkout-global rather than
-session-local, so simultaneous sessions in different spaces can race on ambient
-method delivery even though their workflow record selection stays bound.
+No tracked file changes, so a switch never churns the committed tree and
+teammates who pull never pick up your space. The copy is checkout-global
+rather than session-local, so simultaneous sessions in different spaces can
+race on ambient method delivery even though their workflow record selection
+stays bound.
 
 ### Knowing which space you're in
 

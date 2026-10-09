@@ -7,7 +7,7 @@ import {
 } from "../harness/test-budget.ts";
 import { afterEach, beforeAll, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   AIDLC_SRC,
@@ -15,6 +15,7 @@ import {
   createOrchestrationTestProject,
   resetAidlcEnv,
   seededRecordDir,
+  seededStateFile,
   seedStateFile,
 } from "../harness/fixtures.ts";
 
@@ -88,6 +89,12 @@ describe("t341 orchestrate wait", () => {
 
   test("collaborators: names every missing contribution, then settles once the identity markers exist", () => {
     project = activeIntentProject();
+    // The fixture scope ships collaborators off; this case exercises the
+    // populated-roster wait, so pin the switch on for this run.
+    appendFileSync(
+      seededStateFile(project),
+      "- **Collaborators**: on (set by you)\n",
+    );
     const waiting = wait([
       "--stage", "practices-discovery", "--for", "collaborators", "--timeout", "1",
     ]);

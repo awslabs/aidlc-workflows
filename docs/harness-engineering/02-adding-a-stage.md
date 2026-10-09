@@ -220,7 +220,7 @@ so it is typeable as `/aidlc-<slug>` (e.g. `/aidlc-domain-design`). These are
 per runnable compiled stage slug, so the set of runners can never drift from the
 set of stages by hand. (The three bootstrap initialization stages get no per-stage
 runner — they have no standalone `--single` meaning; the whole init phase is the
-`/aidlc-init` command instead, packaging the engine's intent-create move.) After adding (or removing)
+`/aidlc-init` command instead: with `--scope` it packages the engine's intent-create move, and with only a description it asks the engine for new work, which shows the plan offer first.) After adding (or removing)
 a stage, regenerate the runners:
 
 ```bash
@@ -235,7 +235,7 @@ A runner carries **no `hooks:` block** — the deterministic spine (audit, senso
 runtime-graph compile, state validation) is project-wide in `settings.json`, so
 every runner inherits it for free; there is nothing per-runner to replicate. And a
 runner does **not** load the conductor persona by hand: the engine delivers it,
-baked into the first `run-stage` directive. The runner body just states what it
+baked into the `run-stage` directive it hands the chat. The runner body just states what it
 does and the one command it drives.
 
 If you delete all the runner skills, every stage still runs via

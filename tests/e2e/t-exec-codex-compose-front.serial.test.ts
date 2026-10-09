@@ -26,8 +26,13 @@
 //            the intent record, aidlc-state.md, WORKFLOW_STARTED audited, and
 //            the created intent's scope resolving through the on-disk
 //            registry. A composed plan writes no scope file: a CUSTOM plan runs
-//            a stock scope with a `Plan: custom, based on <scope>` line, and
+//            a stock scope with a `Plan: <name>` line (the name the gate showed), and
 //            `.codex/scopes/` keeps its stock files.
+//
+// The task is the one the sibling compose-front journeys use (t192, t-tui,
+// t-acp-kiro): no stock grid fits it and it asks for a custom plan, so a stock
+// match is a live failure signal. A task a stock scope fits lets the composer
+// match it, which is correct and leaves no Plan line to assert.
 //
 // Under workspace-write codex carves the project-root `.codex/` out of the
 // writable root (same read-only-by-design treatment as `.git/`), which is why
@@ -40,8 +45,8 @@
 // cwd as beat 1 (both use the project dir).
 //
 // LIVE GATE: requires AIDLC_CODEX_EXEC_LIVE=1 + a codex >= 0.145.0 binary
-// (AIDLC_CODEX_BIN or PATH) + AWS creds for the Bedrock profile in
-// AIDLC_CODEX_AWS_PROFILE (default "codex"). Skips cleanly otherwise.
+// (AIDLC_CODEX_BIN or PATH). Bedrock uses the AWS default credential chain;
+// AIDLC_CODEX_AWS_PROFILE selects a named profile when needed.
 
 import { liveCaseTimeoutMs, LIVE_LONG_OPERATION_TIMEOUT_MS, NATIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs, NATIVE_FIXTURE_SETUP_TIMEOUT_MS } from "../harness/test-budget.ts";
 import { describe, expect, test } from "bun:test";
@@ -60,9 +65,9 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { getField } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
-import { codexBedrockEndpointConfig, codexHeadlessArgs, codexWindowsSandboxConfig } from "../harness/exec-drive.ts";
+import { codexBedrockConfig, codexHeadlessArgs, codexWindowsSandboxConfig } from "../harness/exec-drive.ts";
 import { REPO_ROOT } from "../harness/fixtures.ts";
-import { codexExecDiagnostic, codexExecTimeout, recordCodexExec, withCodexFixture } from "../harness/codex-test-lifecycle.ts";
+import { codexExecDiagnostic, codexExecTimeout, codexPersonTurn, recordCodexExec, withCodexFixture } from "../harness/codex-test-lifecycle.ts";
 import { gateText, turnEvidence, type CodexTurn } from "../harness/codex-turn-evidence.ts";
 
 function completedStartupProbe<T extends { error?: Error }>(result: T): T {
@@ -86,10 +91,11 @@ const STOCK_SCOPES = new Set([
   "express",
 ]);
 
+const TASK =
+  "harden the deployment pipeline and add observability for our existing service - no new features, compose a custom plan for exactly this";
+
 const CODEX_DIST = join(REPO_ROOT, "dist", "codex");
 const CODEX_BIN = process.env.AIDLC_CODEX_BIN ?? "codex";
-const AWS_PROFILE = process.env.AIDLC_CODEX_AWS_PROFILE ?? "codex";
-const AWS_REGION = process.env.AIDLC_CODEX_AWS_REGION ?? "us-east-2";
 
 const TIMEOUT_S = Number(process.env.AIDLC_TEST_TIMEOUT);
 // Up to three live turns back to back (the approve beat alone ran ~9 min in
@@ -151,14 +157,10 @@ function setupCodexProject(): { proj: string; home: string; root: string } {
       // makes it a shell-policy key instead of selecting the sandbox mode.
       `sandbox_mode = "workspace-write"`,
       ``,
-      ...codexBedrockEndpointConfig(),
-      `[model_providers.amazon-bedrock.aws]`,
-      `profile = ${JSON.stringify(AWS_PROFILE)}`,
-      `region = ${JSON.stringify(AWS_REGION)}`,
+      ...codexBedrockConfig(),
       ``,
       `[shell_environment_policy]`,
       `exclude = ["AWS_*", "AIDLC_BROKER_*", "ANTHROPIC_*", "KIRO_API_KEY", "CURSOR_API_KEY", "GITHUB_TOKEN", "GH_TOKEN", "ACTIONS_*"]`,
-      `set = { AIDLC_RULES_DIR = ".codex/aidlc-rules" }`,
       ``,
       // Under workspace-write, codex carves the project-root `.codex/` out of
       // the writable workspace root (the same read-only-by-design treatment it
@@ -196,6 +198,7 @@ function codexTurn(
 ): CodexTurn {
   const argv = opts.resume ? ["exec", "resume", "--last", "--json", prompt] : ["exec", "--json", prompt];
   const commandArgs = codexHeadlessArgs(...argv);
+  const turn = codexPersonTurn(proj, prompt);
   const r = spawnSync(CODEX_BIN, commandArgs, {
     cwd: proj,
     encoding: "utf-8",
@@ -204,7 +207,7 @@ function codexTurn(
     timeout: codexExecTimeout(TEST_TIMEOUT_MS),
   });
   const result = { rc: r.status ?? -1, stdout: r.stdout ?? "", stderr: r.stderr ?? "", signal: r.signal, error: r.error?.message };
-  recordCodexExec("compose-front", proj, [CODEX_BIN, ...commandArgs], result);
+  recordCodexExec("compose-front", proj, [CODEX_BIN, ...commandArgs], result, turn);
   return { ...result, ...(result.rc === 0 ? turnEvidence(result.stdout) : { agentMessages: [] }) };
 }
 
@@ -242,7 +245,7 @@ describe("t-exec-codex-compose-front - interactive compose over exec + exec resu
         const b1 = codexTurn(
           proj,
           home,
-          'Use the $aidlc skill to run: /aidlc compose "add a rate limiter middleware to an existing Express API"',
+          `Use the $aidlc skill to run: /aidlc compose "${TASK}"`,
         );
         expect(b1.rc, codexExecDiagnostic(b1)).toBe(0);
         const b1Session = b1.sessionId;
@@ -306,7 +309,8 @@ describe("t-exec-codex-compose-front - interactive compose over exec + exec resu
         );
         expect(Object.keys(grid)).toContain(scope);
         expect(scopeFiles(proj).filter((s) => !STOCK_SCOPES.has(s))).toEqual([]);
-        expect(state).toContain(`- **Plan**: custom, based on ${scope}`);
+        // The plan is named as the gate showed it, never after the scope it runs on.
+        expect(state).toMatch(/^- \*\*Plan\*\*: (?:[a-z0-9][a-z0-9-]*|tailored plan)$/m);
       }, deadlineMs);
     },
     TEST_TIMEOUT_MS,

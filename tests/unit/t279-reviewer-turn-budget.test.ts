@@ -259,11 +259,10 @@ describe("t279 reviewer turn budget is stated on every surface", () => {
     ]) {
       const body = readFileSync(path, "utf-8");
       const labelled = `${path}\n${body}`;
-      // t221's ordering (read verdict AFTER deleting the dispatch record)
-      // still holds around the record write.
-      expect(labelled).toMatch(
-        /Read verdict.*delete `<record>\/\.aidlc-engine\/reviewer-dispatch\.json`.*validates it/s,
-      );
+      // The verdict step records the receipt and validates the review; the
+      // dispatch record is the engine's to remove (t221), not a step here.
+      expect(labelled).toMatch(/Read verdict.*record the terminal receipt.*validates it/s);
+      expect(labelled).not.toMatch(/delete `<record>\/\.aidlc-engine\/reviewer-dispatch\.json`/);
       expect(labelled).toContain(
         "writes the review record `<record>/.aidlc-engine/reviews/<stage>/stage/<attempt>/<iteration>.json` (or the Unit path under `units/<unit>/`)",
       );

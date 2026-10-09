@@ -31,8 +31,10 @@ before you author anything:
   omitted.
 - **`fire_on: gate` runs once per deliverable.** Immediately before
   `gate-start` opens its state transaction, the state tool fires each gate-bound
-  sensor once for every existing declared deliverable path. The dispatch stays
-  outside the transaction because the sensor dispatcher takes the audit lock.
+  sensor once for every existing declared deliverable path; a gate the engine
+  approves itself under Construction autonomy fires only blocking sensors, since
+  advisory evidence has no reader there. The dispatch stays outside the
+  transaction because the sensor dispatcher takes the audit lock.
 - **Severity controls gate enforcement.** `advisory` outcomes are recorded and
   the gate still opens. A `blocking` binding requires a verified pass: findings,
   unavailable tools, script/dispatcher errors, malformed verdicts, and timeouts
@@ -87,14 +89,15 @@ the framework deliberately removed it. A stage decides what fires on its
 outputs by naming the sensor in its own frontmatter:
 
 ```yaml
-# core/aidlc-common/stages/construction/code-generation.md
+# core/aidlc-common/stages/construction/ci-pipeline.md
 ---
-slug: code-generation
+slug: ci-pipeline
 phase: construction
 sensors:
+  - required-sections
+  - upstream-coverage
   - linter
   - type-check
-  - traceability
 ---
 ```
 

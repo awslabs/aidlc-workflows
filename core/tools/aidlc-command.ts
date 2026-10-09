@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { readSync } from "node:fs";
 import {
   colorEnabled,
@@ -37,9 +38,98 @@ export function trustedCommand(suffix = ""): string {
   return suffix ? `${TRUSTED_COMMAND_PREFIX} ${suffix}` : TRUSTED_COMMAND_PREFIX;
 }
 
+// The hash Codex records in [hooks.state] when a person trusts one hook. The
+// identity is {event_name: <snake>, matcher: <the group's, when it has one>,
+// hooks: [{async: false, command, timeout: <seconds>, type: "command"}]} as
+// sorted compact JSON, then sha256 (checked against the hashes Codex 0.160.0
+// wrote after "Trust all"). The shipped trust seed and the doctor both hash
+// through here, so they count what Codex trusts.
+export function codexHookTrustHash(
+  eventName: string,
+  command: string,
+  timeout: number,
+  matcher?: string,
+): string {
+  const identity = {
+    event_name: eventName,
+    ...(matcher === undefined ? {} : { matcher }),
+    hooks: [{ async: false, command, timeout, type: "command" }],
+  };
+  const sortKeys = (value: unknown): unknown => {
+    if (Array.isArray(value)) return value.map(sortKeys);
+    if (value !== null && typeof value === "object") {
+      const record = value as Record<string, unknown>;
+      return Object.fromEntries(Object.keys(record).sort().map((key) => [key, sortKeys(record[key])]));
+    }
+    return value;
+  };
+  return `sha256:${createHash("sha256").update(JSON.stringify(sortKeys(identity)), "utf-8").digest("hex")}`;
+}
+
+// The Cursor CLI permission for the trusted prefix. Cursor reads only the
+// first token as a Shell entry's command base, and the rest after a colon as
+// an argument glob, so `Shell(aidlc engine *)` would name no command at all.
+export function cursorTrustedShell(): string {
+  const [command, ...rest] = TRUSTED_COMMAND_TOKENS;
+  return `Shell(${command}:${[...rest, "*"].join(" ")})`;
+}
+
 // Lightweight dispatcher grammar. aidlc-lib.ts retains the same public
 // workspace helpers for methodology callers; keeping this copy in the existing
 // command module avoids loading the full methodology graph at CLI startup.
+// --- Hook groups: one process for the checks before a tool call -------------
+//
+// A host that registers several hooks for one event starts each as its own
+// process, and each one loads the whole engine before its self-filter decides
+// there is nothing to do. On Claude Code a shell call started four guard
+// processes that way, and on a small machine with several helpers in flight
+// those loads reached gigabytes and ended runs mid-stage (#2066). So the
+// settings.json rows for the four checks are ONE row calling
+// `engine hook guard-tool-call`, and the dispatcher runs these members in its
+// own process. Each member keeps the matcher its own row had, as a regular
+// expression over the tool name, so a tool reaches exactly the checks it
+// reached before: reads and searches go to the three that read, while only a
+// write, a shell command or a dispatch reaches the plan-approval guard. The
+// group is a registration, not a check: it decides nothing itself.
+//
+// The doctor reads this table too (aidlc-utility.ts), to check that every
+// member's hook file ships and to treat drift on the row as flow-altering, so
+// the row and the files it stands for cannot drift apart.
+export const PRE_TOOL_USE_GROUP_TARGET = "guard-tool-call";
+
+export interface HookGroupMember {
+  /** The hook's name, as `engine hook <name>` and `aidlc-<name>.ts`. */
+  readonly hook: string;
+  /** The tools this member runs for: the matcher its own row had. */
+  readonly matcher: string;
+}
+
+const READ_WRITE_OR_SHELL =
+  "^(?:Read|NotebookRead|Edit|MultiEdit|Write|NotebookEdit|LS|Glob|Grep|Bash)$";
+const WRITE_SHELL_OR_DISPATCH =
+  "^(?:Edit|MultiEdit|Write|NotebookEdit|Bash|Task|Agent)$";
+
+const HOOK_GROUPS: Readonly<Record<string, ReadonlyArray<HookGroupMember>>> = {
+  [PRE_TOOL_USE_GROUP_TARGET]: [
+    { hook: "state-transition-guard", matcher: READ_WRITE_OR_SHELL },
+    { hook: "reviewer-scope", matcher: READ_WRITE_OR_SHELL },
+    { hook: "review-freeze", matcher: READ_WRITE_OR_SHELL },
+    { hook: "plan-approval-guard", matcher: WRITE_SHELL_OR_DISPATCH },
+  ],
+};
+
+/** The hooks this registration runs, in order, or null when it is not a group. */
+export function hookGroupMembers(
+  target: string,
+): ReadonlyArray<HookGroupMember> | null {
+  return Object.hasOwn(HOOK_GROUPS, target) ? HOOK_GROUPS[target] : null;
+}
+
+/** The hook names every group stands for, for a reader that checks files. */
+export function hookGroupMemberNames(target: string): string[] {
+  return (hookGroupMembers(target) ?? []).map((member) => member.hook);
+}
+
 export const PINNED_TOP_LEVEL_ROUTES = [
   "next",
   "continue",
@@ -57,8 +147,13 @@ export const PINNED_TOP_LEVEL_ROUTES = [
 
 export const PINNED_SYSTEM_GROUPS = ["workspace-sync"] as const;
 
+// The sections `aidlc config <section>` takes (aidlc-init.ts reads them).
+export const CONFIG_SECTIONS = ["models", "runtime", "providers", "trust", "flags", "project"] as const;
+
 const LAUNCHER_FLAG_VALUES = new Set(["--project-dir"]);
-const LAUNCHER_GLOBAL_FLAGS = new Set([
+// The dispatcher's global flags: `aidlc` drops them wherever they appear
+// before `--`, then routes what remains.
+export const LAUNCHER_GLOBAL_FLAGS: ReadonlySet<string> = new Set([
   "--json",
   "--quiet",
   "--no-color",
@@ -100,6 +195,8 @@ const DISPATCHER_INTENT_VERBS = new Set([
   "create",
   "archive",
   "unarchive",
+  "add-repo",
+  "remove-repo",
 ]);
 const DISPATCHER_SPACE_VERBS = new Set(["list", "switch", "create"]);
 const DISPATCHER_RESERVED_FUTURE = new Set([
@@ -109,11 +206,12 @@ const DISPATCHER_RESERVED_FUTURE = new Set([
 ]);
 
 type DispatcherIntentLifecycleVerb = "archive" | "unarchive";
+type DispatcherIntentRepoVerb = "add-repo" | "remove-repo";
 
 export type DispatcherWorkspaceCommand =
   | { kind: "list"; noun: DispatcherWorkspaceNoun; json: boolean; all?: true }
   | {
-      kind: DispatcherIntentLifecycleVerb;
+      kind: DispatcherIntentLifecycleVerb | DispatcherIntentRepoVerb;
       noun: "intent";
       name: string;
       rest: string[];
@@ -136,7 +234,7 @@ export type DispatcherWorkspaceCommand =
 
 function missingDispatcherWorkspaceName(
   noun: DispatcherWorkspaceNoun,
-  verb: "switch" | "create" | "space-create" | DispatcherIntentLifecycleVerb,
+  verb: "switch" | "create" | "space-create" | DispatcherIntentLifecycleVerb | DispatcherIntentRepoVerb,
 ): DispatcherWorkspaceCommand {
   const usage = verb === "space-create"
     ? "space-create <name>"
@@ -158,6 +256,12 @@ function isDispatcherIntentLifecycleVerb(
   token: string | undefined,
 ): token is DispatcherIntentLifecycleVerb {
   return token === "archive" || token === "unarchive";
+}
+
+function isDispatcherIntentRepoVerb(
+  token: string | undefined,
+): token is DispatcherIntentRepoVerb {
+  return token === "add-repo" || token === "remove-repo";
 }
 
 // `intent list [--json] [--all]` / `space list [--json]`: the flags may appear
@@ -217,7 +321,7 @@ export function parseDispatcherWorkspaceCommand(
     if (verbOrName === "create") {
       return { kind: "create-intent", noun, rest: tokens.slice(2) };
     }
-    if (isDispatcherIntentLifecycleVerb(verbOrName)) {
+    if (isDispatcherIntentLifecycleVerb(verbOrName) || isDispatcherIntentRepoVerb(verbOrName)) {
       const name = tokens[2];
       return name === undefined || name.startsWith("--")
         ? missingDispatcherWorkspaceName(noun, verbOrName)
@@ -260,7 +364,9 @@ export function dispatcherWorkspaceUtilityArgv(
     }
     case "archive":
     case "unarchive":
-      // Lifecycle verbs forward verbatim, trailing flags included:
+    case "add-repo":
+    case "remove-repo":
+      // Lifecycle and repo verbs forward verbatim, trailing flags included:
       // `intent archive <name> --reason <text>`.
       return [command.noun, command.kind, command.name, ...command.rest];
     case "switch":
@@ -523,9 +629,14 @@ export function success(message: string, data?: unknown): CommandResult {
 // indistinguishable from a cancelled prompt. This reader returns `""` for an
 // empty line and `null` only when the input is closed (EOF), so callers can
 // treat Enter as "accept the default" and EOF as "cancel". It reads one byte at
-// a time so nothing past the newline is consumed from the input.
-export function readTerminalLine(label: string, fd = 0): string | null {
-  process.stdout.write(`${label} `);
+// a time so nothing past the newline is consumed from the input. A command
+// whose stdout carries its JSON result asks on stderr.
+export function readTerminalLine(
+  label: string,
+  fd = 0,
+  out: { write(text: string): unknown } = process.stdout,
+): string | null {
+  out.write(`${label} `);
   const bytes: number[] = [];
   const byte = Buffer.alloc(1);
   let sawNewline = false;

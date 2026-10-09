@@ -340,10 +340,11 @@ describe("t266 conversation-language rule layer", () => {
   // stops projecting the memory glob. Check the delivered artifact itself in
   // both cases rather than its mere presence.
   test("c2: every harness ships a surface that delivers active memory to delegated agents", () => {
-    // The glob Kiro agent configs must preload. Exact string, not a substring:
-    // `r.includes("memory")` would accept `file://docs/memory-notes.md` and any
-    // other path that merely has the word in it.
-    const MEMORY_GLOB = "file://aidlc/spaces/default/memory/**/*.md";
+    // The glob Kiro agent configs must preload: the engine's copy of the active
+    // space's memory (aidlc-includes.ts ACTIVE_MEMORY_DIR). Exact string, not a
+    // substring: `r.includes("memory")` would accept `file://docs/memory-notes.md`
+    // and any other path that merely has the word in it.
+    const MEMORY_GLOB = "file://aidlc/active-memory/**/*.md";
     const authoredHook = readFileSync(
       join(REPO_ROOT, "core", "hooks", "aidlc-deliver-stage-rules.ts"),
       "utf-8",
@@ -374,13 +375,13 @@ describe("t266 conversation-language rule layer", () => {
           `${harness.name}/${file} preloads the active-space memory tree`,
         ).toContain(MEMORY_GLOB);
       }
-      // A glob is only a promise; resolve it against the shipped workspace shell
-      // and confirm it actually reaches the org.md that carries the rules.
-      const globbed = MEMORY_GLOB.replace(/^file:\/\//, "").replace("**/*.md", "org.md");
+      // A glob is only a promise; the copy it reads is written from the shipped
+      // workspace shell's default space, so confirm that org.md carries the rules.
+      const globbed = "aidlc/spaces/default/memory/org.md";
       const preloaded = join(harness.distRoot, globbed);
       expect(
         existsSync(preloaded),
-        `${harness.name}'s memory glob resolves to a real org.md (${globbed})`,
+        `${harness.name}'s memory glob is written from a real org.md (${globbed})`,
       ).toBe(true);
       const preloadedBody = readFileSync(preloaded, "utf-8");
       for (const label of RULE_LABELS) {
@@ -404,6 +405,9 @@ describe("t266 conversation-language rule layer", () => {
   // obligation it never sees is an obligation it cannot honour.
   test("c3: every harness's conductor-facing memory include reaches the rules", () => {
     const MEMORY_DIR = "aidlc/spaces/default/memory";
+    // The git-ignored copy of the active space's memory every include reads
+    // (aidlc-includes.ts ACTIVE_MEMORY_DIR).
+    const COPY_DIR = "aidlc/active-memory";
     const seen = new Set<string>();
 
     for (const harness of HARNESS_MATRIX) {
@@ -425,35 +429,38 @@ describe("t266 conversation-language rule layer", () => {
           // Claude @-imports resolve relative to the importing file; from
           // .claude/rules/ the workspace root is ../../.
           surface = join(harness.engineRoot, "rules", "aidlc.md");
-          required = `@../../${MEMORY_DIR}/org.md`;
+          required = `@../../${COPY_DIR}/org.md`;
           break;
-        case "codex-env":
-          surface = join(harness.engineRoot, "config.toml");
-          required = `AIDLC_RULES_DIR = "${MEMORY_DIR}"`;
+        case "codex-engine":
+          // Codex has no ambient include: the engine hands each step the rules
+          // the compiled graph names, read from the active space.
+          surface = join(harness.engineRoot, "tools", "data", "stage-graph.json");
+          required = `"${MEMORY_DIR}/org.md"`;
           break;
         case "copilot-agents-md":
           surface = join(harness.distRoot, "AGENTS.md");
-          required = `@${MEMORY_DIR}/org.md`;
+          required = `@${COPY_DIR}/org.md`;
           break;
         case "cursor-rule":
           surface = join(harness.engineRoot, "rules", "aidlc.mdc");
-          required = `- ${MEMORY_DIR}/org.md`;
+          required = `- ${COPY_DIR}/org.md`;
           break;
         case "kiro-steering":
-          // The IDE's real surface: an always-included steering file whose
-          // #[[file:...]] references pull the live memory tree in verbatim.
+          // The IDE's real surface: an always-included steering file that
+          // carries the memory text itself (Kiro IDE does not expand
+          // #[[file:...]] references in steering).
           surface = join(harness.engineRoot, "steering", "aidlc-active-memory.md");
-          required = `#[[file:${MEMORY_DIR}/org.md]]`;
+          required = `<memory-file path="${MEMORY_DIR}/org.md">`;
           break;
         case "kiro-resources":
           // Kiro CLI: the conductor is itself an agent config, so its own
           // resources list is the include. Named explicitly, not any config.
           surface = join(harness.engineRoot, "agents", "aidlc.json");
-          required = `file://${MEMORY_DIR}/**/*.md`;
+          required = `file://${COPY_DIR}/**/*.md`;
           break;
         case "opencode-instructions":
           surface = join(harness.distRoot, "opencode.json");
-          required = `${MEMORY_DIR}/**/*.md`;
+          required = `${COPY_DIR}/**/*.md`;
           break;
         case "devin-rules":
           surface = join(harness.engineRoot, "rules", "aidlc.md");
@@ -479,6 +486,9 @@ describe("t266 conversation-language rule layer", () => {
           /^---\n(?:.*\n)*?inclusion:\s*always\n(?:.*\n)*?---/.test(body),
           `${harness.name}'s steering file declares inclusion: always`,
         ).toBe(true);
+        for (const label of RULE_LABELS) {
+          expect(body.includes(label), `${harness.name}'s steering file carries ${label}`).toBe(true);
+        }
       }
       if (include === "cursor-rule") {
         expect(

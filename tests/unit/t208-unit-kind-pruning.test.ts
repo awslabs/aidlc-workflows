@@ -529,8 +529,9 @@ describe("t208 engine unit-kind pruning", () => {
       ["--stage", "functional-design", "--result", "approved"],
       true,
     );
-    expect(d.kind).toBe("error");
-    expect(d.message).toContain("unit list cannot be resolved");
+    // It stops on the agent's repair step for the block, not a degraded review.
+    expect(d.kind).toBe("print");
+    expect(d.message).toContain("unit-of-work-dependency.md cannot be read");
     expect(d.message).toContain("malformed");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 

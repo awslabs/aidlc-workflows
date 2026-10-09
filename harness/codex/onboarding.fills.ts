@@ -22,10 +22,19 @@ to list intents, \`$aidlc --doctor\` to validate setup, and
 "<task>"\` to get a plan tailored to that task
 (up front, from a scan report via \`--report <path>\`, or mid-workflow to
 re-shape the pending stages - every proposal stops at an approve/edit/reject
-gate).`,
+gate).
+
+Show AI-DLC's questions and choices with their meaning unchanged, in the
+person's language; Plan Approval's choice labels stay exactly as AI-DLC gives
+them. When it has you wait for the person's answer or stop, say
+so in your own words. Do not name, link, or quote SKILL.md or any other AI-DLC
+instruction file on your own, and do not tell them a skill or rule requires
+it: they started AI-DLC to be asked. When they ask about one, answer them. The
+work's own files, such as a plan to approve, and a file AI-DLC asks the person
+to change, such as where a setting is locked, are still named by path.`,
 
     prereq_bullets: `- **Codex CLI >= 0.145.0**: earlier releases defer compact-source SessionStart after a mid-turn auto-compaction, so one model continuation can run without the restored workflow mission. Releases before 0.139.0 also lack reliable subagent role attribution and hyphenated agent-TOML resolution. \`$aidlc --doctor\` advises on the pin. Check with \`codex --version\`.
-- **bun**: Required for CLI tools and hook scripts (state management, audit logging, jump orchestration). Install via \`curl -fsSL https://bun.sh/install | bash\`. On Windows: \`npm install -g bun\` or \`powershell -c "irm bun.sh/install.ps1 | iex"\`. \`bun\` must be on your PATH for the non-interactive shells the harness spawns — these source \`~/.zshenv\` (zsh) or \`~/.bashrc\` (bash), NOT \`~/.zshrc\`.
+- **bun**: Required for CLI tools and hook scripts (state management, audit logging, jump orchestration). Install via \`curl -fsSL https://bun.sh/install | bash\`. On Windows: \`npm install -g bun\` or \`powershell -c "irm bun.sh/install.ps1 | iex"\`. Its hooks run with the PATH of the terminal you start \`codex\` from, so \`bun --version\` working there is enough. If Codex runs inside an IDE opened from the dock or a desktop icon and its hooks do not run, run \`bun .codex/tools/aidlc.ts doctor\` in such a terminal: its Runtime hook PATH row names the directory to add and where, so dock launches work after a restart. Until then, open the IDE from that terminal.
 - **Model provider**: The shipped \`.codex/config.toml\` does not select a provider or model. Codex keeps the provider, authentication, model, context window, and reasoning effort from your user-level configuration. Agent roles inherit that model; balanced reviewers retain only their medium reasoning-effort cap. Run \`$aidlc config providers\` to record the project choice and see any manual provider action.
 - **MCP servers (optional)**: Codex reads MCP server definitions from \`[mcp_servers.<name>]\` tables in \`config.toml\` (project \`.codex/config.toml\` or \`~/.codex/config.toml\`). The shipped config declares none — add the servers you need there. Credentials flow through your environment; a server you have no credentials for is simply unavailable and never blocks a workflow.`,
 
@@ -45,7 +54,7 @@ This is the same AI-DLC core that ships to every harness, rendered onto Codex CL
 - **Git under the sandbox**: \`workspace-write\` keeps \`.git\` read-only in-sandbox; interactive sessions auto-escalate and \`.codex/rules/default.rules\` pre-allows \`git worktree\`/\`commit\`/\`add\`. Headless runs need \`writable_roots\` (template in the shipped \`config.toml\`).
 - **Swarm floor** is \`codex exec\`-per-unit workers; \`AIDLC_USE_SWARM=1\` has no Workflow tool here and loud-degrades (\`SWARM_DEGRADED\`).
 - **Session lifecycle**: Codex has no SessionEnd event (an unclosed session is reconciled as an inferred \`SESSION_ENDED\` at the next start); after compaction, Codex emits SessionStart with \`source=compact\`, which re-injects the workflow mission before the first post-compaction continuation (the reason Codex >= 0.145.0 is required).
-- **The AIDLC method** (the layered practice files \`org.md\`, \`team.md\`, \`project.md\`, and the per-phase \`phases/<phase>.md\`) lives once at the workspace root under \`aidlc/spaces/<active-space>/memory/\` — the single hand-editable source of truth, identical on every harness, NOT a per-harness copy. Codex auto-merges the root \`AGENTS.md\` and the orchestrator injects the active-space memory paths into context on demand; AI-DLC's own stage resolver reads the same tree directly (via the \`AIDLC_RULES_DIR\` seam in the shipped \`config.toml\`). Edit the method there, never under \`.codex/\`. (\`.codex/rules/default.rules\` remains Codex's native Starlark permission-rules file — distinct from the AIDLC method, and the two must not collide.)
+- **The AIDLC method** (the layered practice files \`org.md\`, \`team.md\`, \`project.md\`, and the per-phase \`phases/<phase>.md\`) lives once at the workspace root under \`aidlc/spaces/<active-space>/memory/\`, the single hand-editable source of truth, identical on every harness, NOT a per-harness copy. Codex has no ambient include for it: the engine reads the active space's files and hands each step its rules, and Codex auto-merges the root \`AGENTS.md\`. Edit the method there, never under \`.codex/\`. (\`.codex/rules/default.rules\` remains Codex's native Starlark permission-rules file, distinct from the AIDLC method, and the two must not collide.)
 
 The Codex-specific guide (prerequisites, trust pre-seed, provider config, the git-repo requirement) is \`docs/guide/harnesses/codex-cli.md\`.
 `,

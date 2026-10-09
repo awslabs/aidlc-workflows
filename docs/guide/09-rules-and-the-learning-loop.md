@@ -8,7 +8,7 @@ This chapter is the user-facing tour. It covers where rules live, how the five l
 
 ## Rules at a glance
 
-Rules live as Markdown files in the active space memory layer at `aidlc/spaces/<active-space>/memory/` — a single hand-editable set at the workspace root, read by every harness via its native include (Claude `@`-import stub, Kiro CLI resources or IDE steering, Codex `AIDLC_RULES_DIR`, opencode `instructions` glob, Copilot `AGENTS.md` `@`-imports). Each file is named for its scope:
+Rules live as Markdown files in the active space memory layer at `aidlc/spaces/<active-space>/memory/`, a single hand-editable set at the workspace root, read by every harness via its native include (Claude `@`-import stub, Kiro CLI resources or IDE steering, the engine's per-step rules delivery on Codex, opencode `instructions` glob, Copilot `AGENTS.md` `@`-imports). Each file is named for its scope:
 
 ```
 aidlc/spaces/<active-space>/memory/
@@ -70,7 +70,7 @@ Before each approval gate, the framework runs the learning gate (the protocol ca
 1. **Your agent's diary, surfaced verbatim.** A deterministic tool reads `memory.md` and emits each non-blank line under the four headings as a candidate, with its source heading attached. No paraphrase, no "interesting" filtering — the lines are shown as written.
 2. **A free-text channel that always asks "Anything to add for next time?"** You type the observation and pick which of the four headings it belongs under. That heading pick is the only classification asked of you.
 
-You tick the candidates you want to keep. If `memory.md` was empty for the stage, no one asks you to attest to whether the diary was kept — the framework records that quietly and moves on.
+You tick the candidates you want to keep, or **Keep none of these**, the first choice, to keep none. If `memory.md` was empty for the stage, no one asks you to attest to whether the diary was kept — the framework records that quietly and moves on.
 
 ### Where a kept learning goes
 
@@ -135,9 +135,9 @@ Rules are prose the agent reads. Sensors are deterministic checks that run autom
 
 ### How sensors fire
 
-When an agent writes or edits an output file during a stage, a PostToolUse hook checks which sensors apply to that stage and runs each matching one. Matching is by file shape — a code-quality sensor declares it analyses `**/*.{ts,js}`, so it only fires on TypeScript and JavaScript writes; a document-shape sensor that fires on any stage output omits the filter. Gate-fired sensors, the first three in the table below, run instead when the stage reaches its approval gate, once for each of the stage's declared output files their filter accepts. You don't invoke sensors by hand during a workflow; they ride along on the stage's writes and its gate.
+When an agent writes or edits an output file during a stage, a PostToolUse hook checks which sensors apply to that stage and runs each matching one. Matching is by file shape: a code-quality sensor declares it analyses `**/*.{ts,js}`, so it only fires on TypeScript and JavaScript writes; a document-shape sensor that fires on any stage output omits the filter. Gate-fired sensors, the first three in the table below, run instead when the stage reaches its approval gate, once for each of the stage's declared output files their filter accepts. When the gate is one the tool approves on its own under Construction autonomy, only blocking sensors run there: advisory findings would have no one to read them. You don't invoke sensors by hand during a workflow; they ride along on the stage's writes and its gate.
 
-A sensor result is **advisory** in this release. A failing sensor produces an audit row and a detail file pointing at exactly what's missing, but it does not block the stage's approval gate or stop your workflow. You see the signal; you decide what to do with it.
+A sensor result is **advisory** in this release. A failing sensor produces an audit row and a detail file pointing at exactly what's missing, but it does not block the stage's approval gate or stop your workflow. When the gate opens, the agent tells you which checks still report findings on the stage's outputs, and where the details are, so you decide with that in view. With Sensors switched off, nothing is said about checks.
 
 ### What you see in the audit log
 

@@ -1,5 +1,6 @@
 // covers: hook:aidlc-continue-workflow, hook:aidlc-rebuild-stage-graph
 // covers: function:parseLiteralShellInvocation, function:isRetiredOnlyNextArgv
+// covers: function:isShellToolName, function:shellCommandText
 //
 // Pins the both-shape detector contract for the stop hook and runtime-compile
 // hook. The legacy tool-file shape is a permanent input: plugin manifests and
@@ -19,7 +20,9 @@ import {
   isEngineEngagementSegment,
   isEngineToolCall,
   KNOWN_HARNESS_DIRS,
+  isShellToolName,
   parseLiteralShellInvocation,
+  shellCommandText,
 } from "../../core/tools/aidlc-lib.ts";
 
 type RuntimeCompileDecision = "reject" | "fire" | "pass";
@@ -871,6 +874,25 @@ describe("detector corpus", () => {
     ).toBe("fire");
   });
 
+  test("a shell call reads the same under every shell tool name and command field", () => {
+    // Codex 0.160 records its shell call as exec_command with the command
+    // under `cmd`; other Codex models use shell_command, older Codex shell or
+    // local_shell_call, Kiro execute_bash, Claude Code Bash.
+    const next = "bun .codex/tools/aidlc.ts engine orchestrate next";
+    for (const name of ["Bash", "bash", "shell", "execute_bash", "local_shell_call", "shell_command", "exec_command"]) {
+      expect(isShellToolName(name), name).toBe(true);
+      expect(isEngineToolCall(name, { command: next }), `${name} command`).toBe(true);
+      expect(isEngineToolCall(name, { cmd: next, max_output_tokens: 12000 }), `${name} cmd`).toBe(true);
+      expect(isEngineToolCall(name, { cmd: `${next} --status` }), `${name} read-only`).toBe(false);
+    }
+    expect(shellCommandText({ command: "ls", cmd: next })).toBe("ls");
+    expect(shellCommandText({ cmd: next })).toBe(next);
+    expect(shellCommandText({ command: ["bash", "-lc", next] })).toBeNull();
+    // A tool that is not a shell is judged by its name, never by a command field.
+    expect(isShellToolName("apply_patch")).toBe(false);
+    expect(isEngineToolCall("apply_patch", { cmd: next })).toBe(false);
+  });
+
   test("new top-level park is intentional engagement", () => {
     // Intended delta: new-shape `aidlc engine orchestrate park` mutates workflow state.
     expect(d1("aidlc engine orchestrate park")).toBe(true);
@@ -948,6 +970,9 @@ describe("detector corpus", () => {
       expect(d1(`${entry} next --config trust extra`)).toBe(false);
       expect(d1(`${entry} next --scope feature --config`)).toBe(false);
       expect(d1(`${entry} next --config project --stage intent-capture`)).toBe(false);
+      expect(d1(`${entry} next --depth extreme`)).toBe(false);
+      expect(d1(`${entry} next --review loud`)).toBe(false);
+      expect(d1(`${entry} next --depth extreme build auth`)).toBe(true);
       expect(d1(`${entry} next help me build auth`)).toBe(true);
       expect(d1(`${entry} next plugin list`)).toBe(true);
       expect(d1(`${entry} next plugin sync --status`)).toBe(true);
@@ -1023,7 +1048,8 @@ describe("detector corpus", () => {
       `aidlc report --result approved; ${terminal}`,
       `${terminal} & aidlc next`,
       "aidlc next space $(aidlc next)",
-      "aidlc next --depth invalid",
+      // A depth next refuses is terminal (see the read-only next argv test).
+      "aidlc next --depth invalid build auth",
     ]) {
       expect(d1(command), command).toBe(true);
     }
@@ -1195,6 +1221,39 @@ describe("detector corpus", () => {
       JSON.stringify({ ...directive, unexpected: "field" }),
       JSON.stringify({ ...directive, message: directive.message.replace("depth standard`", "depth standard --project-dir ;`") }),
       `{"kind":"run-stage",${output.slice(1)}`,
+    ]) {
+      expect(isEngineToolCall("Bash", { command }, invalid), invalid).toBe(true);
+    }
+  });
+
+  test("a scope change needs its exact authoritative dispatch output", () => {
+    const command = "bun .claude/tools/aidlc.ts engine orchestrate next --scope mvp";
+    const directive = {
+      kind: "print",
+      message: "Run `bun .claude/tools/aidlc.ts engine scope change --scope mvp` to change scope, then print its output verbatim and stop.",
+    };
+    const output = JSON.stringify(directive);
+    expect(d1(command)).toBe(true);
+    expect(isEngineToolCall("Bash", { command }, output)).toBe(false);
+    // Settings typed with it ride on the same command.
+    const withDepth = JSON.stringify({
+      ...directive,
+      message: directive.message.replace("--scope mvp`", "--scope mvp --depth minimal`"),
+    });
+    expect(isEngineToolCall("Bash", { command: `${command} --depth Minimal` }, withDepth)).toBe(false);
+    for (const other of [
+      "aidlc next --scope poc",
+      "aidlc next --scope mvp --depth minimal",
+      "aidlc next --scope mvp --stage intent-capture",
+      "aidlc next --scope mvp --new-intent",
+      `${command} && aidlc report --result approved`,
+    ]) {
+      expect(isEngineToolCall("Bash", { command: other }, output), other).toBe(true);
+    }
+    for (const invalid of [
+      JSON.stringify({ ...directive, message: directive.message.replace("to change scope", "to update the configuration") }),
+      JSON.stringify({ ...directive, message: directive.message.replace("--scope mvp`", "--scope poc`") }),
+      JSON.stringify({ kind: "print", message: "Run `bun .claude/tools/aidlc.ts engine config set depth standard` to update the configuration, then print its output verbatim and stop." }),
     ]) {
       expect(isEngineToolCall("Bash", { command }, invalid), invalid).toBe(true);
     }

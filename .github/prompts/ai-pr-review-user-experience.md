@@ -26,7 +26,7 @@ Review the complete before/after interaction:
   documented where users encounter it, and compatible with existing scripts.
 - Workflow shape and interruption. Identify added questions, approvals, gates,
   retries, mandatory stages, repeated work, or state transitions that make a
-  previously valid path slower, confusing, or impossible.
+  previously valid path slower, confusing, or impossible, even for safety.
 - Agent and token cost. Trace new model calls, support-agent dispatches, review
   rounds, context loading, duplicated artifact reads, and loops. Report a change
   that predictably consumes materially more time or tokens without a documented

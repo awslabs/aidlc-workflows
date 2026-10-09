@@ -49,10 +49,6 @@ const TRUST_SUFFIXES = [
   "user_prompt_submit:0:0",
   "pre_tool_use:0:0",
   "pre_tool_use:1:0",
-  "pre_tool_use:2:0",
-  "pre_tool_use:3:0",
-  "pre_tool_use:4:0",
-  "pre_tool_use:5:0",
   "post_tool_use:0:0",
   "post_tool_use:1:0",
   "post_tool_use:2:0",
@@ -255,11 +251,28 @@ describe("t150 dist/codex packaging determinism + trust", () => {
     expect(r.status).toBe(1);
   });
 
+  test("3b: the session skills name the commands a Codex user types, and leave paths alone", () => {
+    const skills = join(REPO_ROOT, "dist", "codex", ".agents", "skills");
+    const read = (skill: string) => readFileSync(join(skills, skill, "SKILL.md"), "utf-8");
+    expect(read("aidlc-session-cost")).toContain("Run $aidlc to\nbegin, then re-run $aidlc-session-cost.");
+    expect(read("aidlc-replay")).toContain("start a workflow with $aidlc before running\n$aidlc-replay.");
+    expect(read("aidlc-replay")).toContain("`$aidlc-outcomes-pack`");
+    expect(read("aidlc-outcomes-pack")).toContain("Run $aidlc to completion first.");
+    for (const skill of ["aidlc-session-cost", "aidlc-replay", "aidlc-outcomes-pack"]) {
+      expect(read(skill), skill).not.toMatch(/(^|[\s(`"])\/aidlc(?![a-z0-9-]*\.[a-z])/m);
+    }
+    // Paths keep their slash, and the Claude tree keeps its slash commands.
+    expect(read("aidlc-replay")).toContain("`<record>/aidlc-state.md`");
+    expect(read("aidlc-replay")).toContain("bun .codex/tools/aidlc.ts engine runtime summary");
+    expect(readFileSync(join(CLAUDE_SRC, "skills", "aidlc-replay", "SKILL.md"), "utf-8")).toContain("/aidlc-replay.");
+  });
+
   test("4: method relocated to workspace-root aidlc/spaces/default/memory/; native rules/ is Starlark-only", () => {
     // The AIDLC method ("memory") no longer ships under .codex/aidlc-rules/ (the
     // old D-10 rename target). It relocated OUT of the harness dir to the
     // workspace root — one hand-editable copy, neutral filenames, identical
-    // across harnesses. Reached via AGENTS.md auto-merge + AIDLC_RULES_DIR.
+    // across harnesses. Reached through the engine's rules delivery (Codex has
+    // no ambient include and config.toml ships no AIDLC_RULES_DIR seam).
     const memoryDir = join(REPO_ROOT, "dist", "codex", "aidlc", "spaces", "default", "memory");
     const memoryTop = readdirSync(memoryDir);
     expect(memoryTop).toContain("org.md");
@@ -276,10 +289,10 @@ describe("t150 dist/codex packaging determinism + trust", () => {
       'prefix_rule(pattern = ["bun", ".codex/tools/"], decision = "allow")',
     );
     expect(defaultRules).not.toContain('prefix_rule(pattern = ["aidlc"]');
-    // The resolver seam re-points at the relocated method (relative to the
-    // workspace root, where codex runs), NOT the old .codex/aidlc-rules.
+    // No resolver seam: the engine reads the active space directly.
     const config = readFileSync(join(CODEX_DST, "config.toml"), "utf-8");
-    expect(config).toContain('AIDLC_RULES_DIR = "aidlc/spaces/default/memory"');
+    expect(config).not.toContain("AIDLC_RULES_DIR");
+    expect(config).not.toContain("[shell_environment_policy]");
     expect(config).toContain("[agents]\nmax_depth = 1");
     // The compiled graph's rule display paths are harness-neutral now.
     const graph = readFileSync(join(CODEX_DST, "tools", "data", "stage-graph.json"), "utf-8");
@@ -296,7 +309,13 @@ describe("t150 dist/codex packaging determinism + trust", () => {
       const config = Bun.TOML.parse(raw) as {
         developer_instructions?: string;
         shell_environment_policy?: { set?: Record<string, string> };
+        suppress_unstable_features_warning?: boolean;
+        features?: { default_mode_request_user_input?: boolean };
       };
+      // The gate picker is a Codex under-development feature AI-DLC turns on,
+      // so the start-up warning about it is turned off in the same file.
+      expect(config.features?.default_mode_request_user_input).toBe(true);
+      expect(config.suppress_unstable_features_warning).toBe(true);
       const onboarding = readFileSync(join(root, "onboarding.md"), "utf-8");
       expect(typeof config.developer_instructions).toBe("string");
       // Bun 1.3.14 incorrectly preserves the opening newline of a TOML literal string.
@@ -305,11 +324,15 @@ describe("t150 dist/codex packaging determinism + trust", () => {
       const standardConfig = parse(raw) as typeof config;
       expect(standardConfig.developer_instructions).toBe(onboarding);
       expect(config.developer_instructions).toContain("# AI-DLC on Codex CLI");
+      // AI-DLC's questions keep its words; the agent's own words are for the rest.
+      expect(config.developer_instructions).toContain("Show AI-DLC's questions and choices with their meaning unchanged, in the\nperson's language;");
+      expect(config.developer_instructions).toContain("are still named by path.");
+      expect(config.developer_instructions).toContain("When they ask about one, answer them.");
+      expect(config.developer_instructions).toContain("Plan Approval's choice labels stay exactly as AI-DLC gives\nthem.");
+      expect(config.developer_instructions).not.toContain("say it in your own words");
       expect(config.developer_instructions).toContain(".agents/skills/");
-      expect(config.shell_environment_policy).toMatchObject({
-        set: { AIDLC_RULES_DIR: "aidlc/spaces/default/memory" },
-      });
-      expect(raw).toContain('set = { AIDLC_RULES_DIR = "aidlc/spaces/default/memory" }');
+      expect(config.shell_environment_policy).toBeUndefined();
+      expect(raw).not.toContain("AIDLC_RULES_DIR");
       if (channel === "dist-release") {
         expect(config.developer_instructions).toContain("- **Runtime**:");
         expect(config.developer_instructions).not.toMatch(/\bbun\b/);
@@ -331,10 +354,13 @@ describe("t150 dist/codex packaging determinism + trust", () => {
       wiring.hooks.PostToolUse.find((group) => group.matcher === "request_user_input")
         ?.hooks[0]?.command,
     ).toBe("bun .codex/tools/aidlc.ts engine adapter codex record-human-turn");
-    expect(
-      wiring.hooks.PreToolUse.find((group) => group.matcher === "Bash")
-        ?.hooks[0]?.command,
-    ).toBe("bun .codex/tools/aidlc.ts engine adapter codex bind-bash-session");
+    // One matcher-free PreToolUse group runs the five checks in one process
+    // (#2066); deliver-stage-rules keeps its spawn_agent row.
+    expect(wiring.hooks.PreToolUse.map((group) => group.matcher)).toEqual([undefined, "spawn_agent"]);
+    expect(wiring.hooks.PreToolUse[0]?.hooks[0]?.command).toBe(
+      "bun .codex/tools/aidlc.ts engine adapter codex guard-tool-call",
+    );
+    expect(wiring.hooks.PreToolUse[0]?.hooks).toHaveLength(1);
     // Every registration routes through the single authored adapter.
     for (const groups of Object.values(wiring.hooks)) {
       for (const g of groups) {
@@ -392,6 +418,18 @@ describe("t150 dist/codex packaging determinism + trust", () => {
     expect(shippedBody).toContain(
       'session_start:0:0"]\ntrusted_hash = "sha256:58956c1f8f0b66e96c0f4d02e26946e79979e0f30599e8dc06a512ebecf03843"',
     );
+    // Codex hashes a group's matcher too. This is the hash Codex 0.160.0
+    // itself wrote for the Bash-matched PostToolUse hook after "Trust all": a
+    // seed without the matcher left every matched hook untrusted, and they
+    // never ran. (The Bash-matched PreToolUse row it was pinned beside became
+    // the matcher-free guard-tool-call group, #2066; its hash is the recipe's,
+    // pinned below.)
+    expect(shippedBody).toContain(
+      'post_tool_use:3:0"]\ntrusted_hash = "sha256:5f9a79604c580af77ffe63c58e0b76871e229f051df824b8add818dfbd44c388"',
+    );
+    expect(shippedBody).toContain(
+      'pre_tool_use:0:0"]\ntrusted_hash = "sha256:b1ea78813660ef5ca5039c39fa0c7c6b0a67d9cf1f88cdb3a73f789eab1884ae"',
+    );
   });
 
   test("7: default trust paths round-trip Unix and Windows path characters exactly", () => {
@@ -440,7 +478,7 @@ describe("t150 dist/codex packaging determinism + trust", () => {
     const project = "/tmp/project path that must not replace the hook path";
     const hooksJson = String.raw`D:\custom hooks\hook "set"\hooks.json`;
     const emitTrustEntries = trustEntries();
-    const expected = emitTrustEntries(project, hooksJson);
+    const expected = emitTrustEntries(project, hooksJson, ".codex", "codex", SOURCE_INVOKE);
     const direct = parseTrustDocument(expected);
     expect(Object.keys(direct.hooks.state)).toEqual(expectedTrustKeys(hooksJson));
 
@@ -582,9 +620,10 @@ describe("t150 dist/codex packaging determinism + trust", () => {
           exists = false;
         }
         expect(exists).toBe(false);
-        // The orchestrator ships its question-rendering annex beside SKILL.md.
+        // The orchestrator ships its question-rendering and composer annexes beside SKILL.md.
         expect(readdirSync(join(skillsDir, d)).sort()).toEqual([
           "SKILL.md",
+          "composer.md",
           "question-rendering.md",
         ]);
       } else {
@@ -614,6 +653,13 @@ describe("t150 dist/codex packaging determinism + trust", () => {
     expect(entries.length).toBe(groupCount);
     expect(entries).toEqual(expectedTrustKeys("/tmp/example-proj/.codex/hooks.json"));
     expect(r.stdout).not.toContain("<PROJECT_DIR>");
+    // It trusts the hooks the copied dist/codex runs (`bun .codex/tools/aidlc.ts
+    // ...`): the shipped seed's entries for this project, hash for hash. Native
+    // `aidlc ...` hashes here left every hook in a copied project untrusted.
+    const seed = readFileSync(join(CODEX_DST, "trust-seed.toml"), "utf-8");
+    expect(r.stdout.trimEnd()).toBe(
+      seed.slice(seed.indexOf("[hooks.state")).replaceAll("<PROJECT_DIR>", "/tmp/example-proj").trimEnd(),
+    );
   });
 
   test.each(["0.144.9", "0.145.0"])("13: doctor enforces the compact-session reload floor for Codex %s", (version) => {
@@ -640,9 +686,7 @@ describe("t150 dist/codex packaging determinism + trust", () => {
       // A text match also accepts sandbox_mode inside shell_environment_policy,
       // where it does not select the sandbox. Check the generated TOML structure.
       expect(config.sandbox_mode, configPath).toBe("workspace-write");
-      expect(config.shell_environment_policy, configPath).toEqual({
-        set: { AIDLC_RULES_DIR: "aidlc/spaces/default/memory" },
-      });
+      expect(config.shell_environment_policy, configPath).toBeUndefined();
       // Keep the existing network policy and absence of extra grants/approval
       // overrides while correcting only the sandbox setting's table placement.
       expect(config.sandbox_workspace_write, configPath).toEqual({

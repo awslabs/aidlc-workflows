@@ -43,7 +43,7 @@ jobs:
           test "$GITHUB_SHA" = "$tag_sha"
           test "$(git rev-parse HEAD^{commit})" = "$tag_sha"
           if ! git merge-base --is-ancestor "$tag_sha" "$main_sha"; then
-            echo "::error::$RELEASE_TAG points at $tag_sha, which is not on main. Stable publication requires a passing release-purpose Full Suite, which only tests commits already on main; tag a commit on main."
+            echo "::error::$RELEASE_TAG points at $tag_sha, which is not on main. Stable publication requires a tagged commit on main and a passing Full Suite for that exact commit."
             exit 1
           fi
           version="$(awk -F'"' '/^export const AIDLC_VERSION = "/ { print $2 }' core/tools/aidlc-version.ts)"
@@ -365,7 +365,7 @@ jobs:
             exit 0
           }
           if (
-            ($Remaining.Count -ne 9 -and $Remaining.Count -ne 13) -or
+            ($Remaining.Count -ne 11 -and $Remaining.Count -ne 15) -or
             $Remaining[0] -ne 'attestation' -or
             $Remaining[1] -ne 'verify' -or
             [IO.Path]::GetFileName($subject) -ne 'checksums.txt' -or
@@ -377,12 +377,14 @@ jobs:
             $Remaining[6] -ne $env:AIDLC_TEST_GH_REPOSITORY -or
             $Remaining[7] -ne '--signer-workflow' -or
             $Remaining[8] -ne $env:AIDLC_TEST_GH_WORKFLOW -or
+            $Remaining[9] -ne '--hostname' -or
+            $Remaining[10] -ne 'github.com' -or
             (
-              $Remaining.Count -eq 13 -and (
-                $Remaining[9] -ne '--source-ref' -or
-                $Remaining[10] -ne $env:AIDLC_TEST_GH_SOURCE_REF -or
-                $Remaining[11] -ne '--source-digest' -or
-                $Remaining[12] -ne $env:AIDLC_TEST_GH_SOURCE_DIGEST
+              $Remaining.Count -eq 15 -and (
+                $Remaining[11] -ne '--source-ref' -or
+                $Remaining[12] -ne $env:AIDLC_TEST_GH_SOURCE_REF -or
+                $Remaining[13] -ne '--source-digest' -or
+                $Remaining[14] -ne $env:AIDLC_TEST_GH_SOURCE_DIGEST
               )
             ) -or
             (Get-FileHash -Algorithm SHA256 -LiteralPath $subject).Hash.ToLowerInvariant() -ne
@@ -416,8 +418,8 @@ jobs:
           }
           $verificationPasses = Get-Content -LiteralPath $env:AIDLC_TEST_GH_MARKER
           if (
-            $verificationPasses -notcontains 'verified-9' -or
-            $verificationPasses -notcontains 'verified-13'
+            $verificationPasses -notcontains 'verified-11' -or
+            $verificationPasses -notcontains 'verified-15'
           ) {
             throw 'offline installer did not bind the trusted source digest'
           }
@@ -457,6 +459,11 @@ jobs:
             }
             & $command config --project-dir $project --harness $harness --mcp none --quiet
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            # Setup tells a Cursor project outside git to run `git init`; doctor fails it until then.
+            if ($harness -eq 'cursor') {
+              git init --quiet $project
+              if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            }
             & $command doctor --project-dir $project --quiet
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           }
@@ -532,7 +539,7 @@ jobs:
               '--source-digest string'
             exit 0
           fi
-          { [ "$#" -eq 9 ] || [ "$#" -eq 11 ] || [ "$#" -eq 13 ]; } || exit 2
+          { [ "$#" -eq 11 ] || [ "$#" -eq 13 ] || [ "$#" -eq 15 ]; } || exit 2
           [ "$1" = attestation ] || exit 2
           [ "$2" = verify ] || exit 2
           case "$3" in /*/checksums.txt) ;; *) exit 2 ;; esac
@@ -544,13 +551,15 @@ jobs:
           [ "$7" = "$AIDLC_TEST_GH_REPOSITORY" ] || exit 2
           [ "$8" = --signer-workflow ] || exit 2
           [ "$9" = "$AIDLC_TEST_GH_WORKFLOW" ] || exit 2
-          if [ "$#" -ge 11 ]; then
-            [ "${10}" = --source-ref ] || exit 2
-            [ "${11}" = "$AIDLC_TEST_GH_SOURCE_REF" ] || exit 2
+          [ "${10}" = --hostname ] || exit 2
+          [ "${11}" = github.com ] || exit 2
+          if [ "$#" -ge 13 ]; then
+            [ "${12}" = --source-ref ] || exit 2
+            [ "${13}" = "$AIDLC_TEST_GH_SOURCE_REF" ] || exit 2
           fi
-          if [ "$#" -eq 13 ]; then
-            [ "${12}" = --source-digest ] || exit 2
-            [ "${13}" = "$AIDLC_TEST_GH_SOURCE_DIGEST" ] || exit 2
+          if [ "$#" -eq 15 ]; then
+            [ "${14}" = --source-digest ] || exit 2
+            [ "${15}" = "$AIDLC_TEST_GH_SOURCE_DIGEST" ] || exit 2
           fi
           if command -v sha256sum >/dev/null 2>&1; then
             actual="$(sha256sum "$3" | awk '{print $1}')"
@@ -577,9 +586,9 @@ jobs:
             AIDLC_TEST_GH_CHECKSUM_SHA="$checksums_sha" \
             sh "$release/install.sh" --from "$release" --offline --quiet
           test -s "$gh_marker"
-          grep -qx 'verified-9' "$gh_marker"
           grep -qx 'verified-11' "$gh_marker"
           grep -qx 'verified-13' "$gh_marker"
+          grep -qx 'verified-15' "$gh_marker"
           command="$AIDLC_BIN_DIR/aidlc"
           env PATH="/usr/bin:/bin" "$command" version
           export COPILOT_HOME="$RUNNER_TEMP/aidlc-copilot-home"
@@ -591,15 +600,67 @@ jobs:
             fi
             env PATH="/usr/bin:/bin" "$command" config \
               --project-dir "$project" --harness "$harness" --mcp none --quiet
+            # Setup tells a Cursor project outside git to run `git init`; doctor fails it until then.
+            if [ "$harness" = cursor ]; then
+              git init --quiet "$project"
+            fi
             env PATH="/usr/bin:/bin" "$command" doctor \
               --project-dir "$project" --quiet
           done
 
+  # A person on the last stable release types `aidlc update`, gets this
+  # release, and their hooks, project refresh and doctor still work. A failure
+  # holds publication back, like the lifecycle checks (preview-release.yml
+  # reports it and still publishes).
+  update-from-previous:
+    needs: [validate, stage-release]
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-latest, macos-15, windows-latest]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ needs.validate.outputs.sha }}
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: 1.4.2
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: release-candidate
+          path: build/release
+      # The token stays in this step: the releases under test never see it.
+      - name: Find the last stable release
+        id: previous
+        shell: bash
+        env:
+          CANDIDATE_TAG: ${{ needs.validate.outputs.tag }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          previous="$(gh release list --repo "$GITHUB_REPOSITORY" --exclude-drafts --exclude-pre-releases \
+            --limit 20 --json tagName --jq '[.[].tagName | select(. != env.CANDIDATE_TAG)] | .[0] // empty')"
+          test -n "$previous"
+          echo "tag=$previous" >>"$GITHUB_OUTPUT"
+      - name: Update from the last release
+        shell: bash
+        env:
+          PREVIOUS_TAG: ${{ steps.previous.outputs.tag }}
+        run: |
+          set -euo pipefail
+          printf 'aidlc-lifecycle-provenance-fixture\n' >build/release/aidlc-release.intoto.jsonl
+          bun scripts/ci-update-from-previous.ts --previous "$PREVIOUS_TAG" --candidate build/release
+
   publish:
-    needs: [validate, musl-smoke, windows-lifecycle, unix-lifecycle, full_suite_gate]
+    needs: [validate, musl-smoke, windows-lifecycle, unix-lifecycle, update-from-previous, full_suite_gate]
     # Implicit success() also covers ancestors, and full_suite is skipped when
     # evidence is reused, so require each direct need explicitly.
-    if: ${{ !cancelled() && needs.validate.result == 'success' && needs.musl-smoke.result == 'success' && needs.windows-lifecycle.result == 'success' && needs.unix-lifecycle.result == 'success' && needs.full_suite_gate.result == 'success' }}
+    if: ${{ !cancelled() && needs.validate.result == 'success' && needs.musl-smoke.result == 'success' && needs.windows-lifecycle.result == 'success' && needs.unix-lifecycle.result == 'success' && needs.update-from-previous.result == 'success' && needs.full_suite_gate.result == 'success' }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -672,6 +733,9 @@ jobs:
         with:
           fetch-depth: 0
           ref: ${{ needs.validate.outputs.sha }}
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: 1.4.2
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: attested-release
@@ -689,6 +753,20 @@ jobs:
           test "$FULL_SUITE_SHA" = "$AUTHORIZED_SHA"
           test "$RELEASE_TAG" = "v$(jq -r .version build/release/version.json)"
           (cd build/release && sha256sum -c checksums.txt)
+      # The body is this version's CHANGELOG entry, written after the recheck
+      # above so it can only come from the commit this release was authorized
+      # for. GitHub's generated notes are not used: their "What's Changed" list
+      # names every contributing account by handle.
+      - name: Build release notes from CHANGELOG.md
+        env:
+          RELEASE_TAG: ${{ needs.validate.outputs.tag }}
+        run: |
+          set -euo pipefail
+          bun scripts/release-notes.ts \
+            --tag "$RELEASE_TAG" \
+            --changelog "$PWD/CHANGELOG.md" \
+            --out "$RUNNER_TEMP/release-notes.md"
+          test -s "$RUNNER_TEMP/release-notes.md"
       - name: Create GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -698,7 +776,7 @@ jobs:
           gh release create "$RELEASE_TAG" build/release/* \
             --verify-tag \
             --title "AI-DLC ${RELEASE_TAG#v}" \
-            --generate-notes
+            --notes-file "$RUNNER_TEMP/release-notes.md"
       - name: Verify uploaded asset inventory
         env:
           GH_TOKEN: ${{ github.token }}

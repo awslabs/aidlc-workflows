@@ -8,7 +8,7 @@ import {
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { VERSION_ID } from "./aidlc-channel.ts";
-import { renderCompletion, type Shell } from "./aidlc-completions.ts";
+import { isGeneratedCompletion, renderCompletion, type Shell } from "./aidlc-completions.ts";
 import { sha256File } from "./aidlc-distribution.ts";
 import {
   binRoot,
@@ -16,6 +16,8 @@ import {
   commandPath,
   installRoot,
   versionsRoot,
+  windowsPosixCommandPath,
+  windowsPosixLauncherBodyIsOwned,
 } from "./aidlc-install-paths.ts";
 import { transactionState } from "./aidlc-transaction.ts";
 
@@ -42,6 +44,20 @@ function existsWithoutFollowing(path: string): boolean {
 
 function hasControlCharacter(value: string): boolean {
   return Array.from(value).some((char) => char.charCodeAt(0) < 32 || char.charCodeAt(0) === 127);
+}
+
+// True only when the extensionless Git Bash launcher at `path` is a forwarder
+// this installer renders (current OR a historical body). A foreign file, or a
+// directory of the same name (readFileSync throws EISDIR), is NOT owned ->
+// preserved on uninstall. Ownership is decided by the shared
+// windowsPosixLauncherBodyIsOwned predicate, so install and uninstall can never
+// disagree about which bodies are ours.
+function posixLauncherOwnedByInstaller(path: string): boolean {
+  try {
+    return windowsPosixLauncherBodyIsOwned(readFileSync(path, "utf-8"));
+  } catch {
+    return false;
+  }
 }
 
 export function assertSafeUninstallRoot(candidate = installRoot()): void {
@@ -79,6 +95,50 @@ function noLinks(path: string, root: string): boolean {
     if (index < parts.length) cursor = join(cursor, parts[index]);
   }
   return true;
+}
+
+const SMALL_FILE_BYTES = 1024 * 1024;
+
+function smallRegularFile(path: string): Buffer | null {
+  if (!existsWithoutFollowing(path)) return null;
+  const stat = lstatSync(path);
+  return stat.isFile() && stat.size <= SMALL_FILE_BYTES ? readFileSync(path) : null;
+}
+
+// The hash a completion file must still have to be removed: its own bytes when
+// they are an untouched AI-DLC render (any release's), else this release's.
+function completionExpected(path: string, shell: Shell, root: string): string {
+  const own = `sha256:${createHash("sha256").update(renderCompletion(shell)).digest("hex")}`;
+  try {
+    const bytes = noLinks(path, root) ? smallRegularFile(path) : null;
+    if (!bytes) return own;
+    const text = bytes.toString("utf-8");
+    return Buffer.from(text, "utf-8").equals(bytes) && isGeneratedCompletion(shell, text)
+      ? `sha256:${createHash("sha256").update(bytes).digest("hex")}`
+      : own;
+  } catch {
+    return own;
+  }
+}
+
+// A release plugin folder carries the marker its build wrote, naming the
+// plugin and harness of the folder it sits in.
+const RELEASE_PLUGIN_MARKER = ".aidlc-plugin-projection.json";
+const RELEASE_NAME = /^[a-z][a-z0-9-]*$/;
+
+function realDirectory(path: string): boolean {
+  return existsWithoutFollowing(path) && lstatSync(path).isDirectory();
+}
+
+function releasePluginFolder(tree: string, plugin: string, harness: string): boolean {
+  try {
+    const bytes = smallRegularFile(join(tree, RELEASE_PLUGIN_MARKER));
+    const marker = bytes && JSON.parse(bytes.toString("utf-8")) as Record<string, unknown> | null;
+    return !!marker && typeof marker === "object" && marker.schema === 1 &&
+      marker.producer === "aidlc-plugin-build" && marker.plugin === plugin && marker.harness === harness;
+  } catch {
+    return false;
+  }
 }
 
 type Inventory = {
@@ -192,6 +252,32 @@ export function buildUninstallPlan(purge: boolean): UninstallPlan {
     }
   };
 
+  // A version installed before full file inventories existed records only its
+  // runtime. The plugin folders its release unpacked beside it carry that
+  // release's marker, so they go with the version; anything else stays.
+  const addReleasePluginFolders = (version: string): void => {
+    const plugins = join(version, "plugins");
+    if (!noLinks(plugins, root) || !realDirectory(plugins)) return;
+    const addTree = (directory: string): void => {
+      for (const name of readdirSync(directory)) {
+        const path = join(directory, name);
+        const stat = lstatSync(path);
+        if (stat.isDirectory()) addTree(path);
+        else if (stat.isFile()) addFile(path);
+      }
+    };
+    for (const plugin of readdirSync(plugins)) {
+      const pluginRoot = join(plugins, plugin);
+      if (!RELEASE_NAME.test(plugin) || !realDirectory(pluginRoot)) continue;
+      for (const harness of readdirSync(pluginRoot)) {
+        const tree = join(pluginRoot, harness);
+        if (RELEASE_NAME.test(harness) && realDirectory(tree) && releasePluginFolder(tree, plugin, harness)) {
+          addTree(tree);
+        }
+      }
+    }
+  };
+
   const versions = resolve(versionsRoot());
   if (existsWithoutFollowing(versions)) {
     if (!noLinks(versions, root) || !lstatSync(versions).isDirectory()) {
@@ -251,6 +337,7 @@ export function buildUninstallPlan(purge: boolean): UninstallPlan {
             executableHash === `sha256:${asset.sha256}`
           );
           if (binary) addFile(executablePath, `sha256:${binary.sha256}`);
+          addReleasePluginFolders(version);
         }
         addFile(inventory.path, inventory.expected);
         addFile(manifestPath, manifestExpected);
@@ -261,14 +348,14 @@ export function buildUninstallPlan(purge: boolean): UninstallPlan {
 
   const known = [
     "active-version", "active-executable", "rollback-version", "aidlc-shim.ps1", "windows-path.json",
-    ...(purge ? ["aidlc.settings.json", "update-check.json", "pins.json", "default-harness", "channel"] : []),
+    ...(purge ? ["aidlc.settings.json", "update-check.json", "pins.json", "default-harness", "channel", "kiro-ide-workflows", "kiro-ide-terminal"] : []),
   ];
   for (const name of known) addFile(join(root, ...name.split("/")));
   for (const [shell, name] of Object.entries({
     bash: "aidlc.bash", zsh: "_aidlc", fish: "aidlc.fish", powershell: "aidlc.ps1",
   })) {
-    const expected = `sha256:${createHash("sha256").update(renderCompletion(shell as Shell)).digest("hex")}`;
-    addFile(join(root, "completions", name), expected);
+    const path = join(root, "completions", name);
+    addFile(path, completionExpected(path, shell as Shell, root));
   }
   if (existsWithoutFollowing(command)) {
     const stat = lstatSync(command);
@@ -283,6 +370,35 @@ export function buildUninstallPlan(purge: boolean): UninstallPlan {
       preserved.add(command);
     }
   }
+  // The extensionless Git Bash launcher on Windows lives beside aidlc.cmd in
+  // bin/. It is an ordinary file (not part of the launch chain), so removing
+  // it needs no special ordering. Only plan it for removal when it is
+  // installer-owned (content matches the forwarder we render); a foreign or
+  // user-authored bin/aidlc, or a directory of that name, is left in
+  // `preserved` rather than silently deleted. Without listing it here the
+  // owned file would be swept into `preserved` by the bin-directory scan below
+  // and left behind on uninstall.
+  //
+  // bin/ can sit OUTSIDE installRoot() when AIDLC_BIN_DIR is set, so ownership
+  // is checked against binRoot() (the launcher's own parent) exactly like the
+  // aidlc.cmd block above — addFile()'s noLinks(_, installRoot) gate would
+  // wrongly route an out-of-tree launcher to `preserved`. We insert into
+  // `files` directly and only `addParents` when the file is within installRoot.
+  const posixCommand = windowsPosixCommandPath();
+  if (posixCommand !== null && existsWithoutFollowing(posixCommand)) {
+    const resolved = resolve(posixCommand);
+    const stat = lstatSync(resolved);
+    if (
+      noLinks(dirname(resolved), resolve(binRoot())) &&
+      stat.isFile() &&
+      posixLauncherOwnedByInstaller(resolved)
+    ) {
+      files.set(resolved, transactionState(resolved));
+      if (within(resolved, root)) addParents(resolved);
+    } else {
+      preserved.add(resolved);
+    }
+  }
   for (const folder of ["completions", "reservations", "bin"]) {
     const path = join(root, folder);
     if (existsWithoutFollowing(path) && noLinks(path, root) && lstatSync(path).isDirectory()) {
@@ -294,7 +410,7 @@ export function buildUninstallPlan(purge: boolean): UninstallPlan {
     }
   }
   directories.add(root);
-  const keptSettings = new Set(["aidlc.settings.json", "update-check.json", "pins.json", "default-harness", "channel"]);
+  const keptSettings = new Set(["aidlc.settings.json", "update-check.json", "pins.json", "default-harness", "channel", "kiro-ide-workflows", "kiro-ide-terminal"]);
   for (const directory of directories) {
     if (within(directory, versions)) continue;
     if (!noLinks(directory, root)) {

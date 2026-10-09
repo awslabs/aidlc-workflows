@@ -63,9 +63,11 @@ Before submitting a PR, verify:
 `main` is not production: each PR push runs contract checks, Linux smoke, unit
 shards, integration tests, and production-guard checks; the merge queue reruns
 them on the merge commit and adds the focused macOS/Windows/arm64 platform checks.
-`deterministic-tests.yml` supplies the shared test definition; nightly
-`full-suite.yml` runs it across Linux, macOS and Windows alongside required live
-coverage. Preview runs contract checks and Full Suite without repeating the PR
+`deterministic-tests.yml` supplies the shared test definition. The nightly
+`full-suite.yml` runs the scope runs and the guard matrix through it on Linux,
+macOS and Windows, alongside required live coverage; a manual
+`full_verification` Full Suite runs every deterministic tier through it on all
+three. Preview runs contract checks and Full Suite without repeating the PR
 test matrix. Stable publication through `release.yml` requires a passing Full
 Suite for the tagged commit, reusing a preview's result or running the suite,
 and validates the tag source and its newly built artifacts.
@@ -134,14 +136,19 @@ PRs produced by AI coding agents are welcome and follow the same process. Start 
 5. Use clear commit messages following [conventional commits](https://www.conventionalcommits.org/) (e.g., `feat:`, `fix:`, `docs:`)
 6. Submit the PR and respond to feedback
 
-AIDA's PR review ends with an advisory next decision. `author/change` means the
-author should address the reported gaps. `maintainer/merge` means the review
-found no blocking issue and considers the PR ready for a maintainer's merge
-decision; AIDA does not approve or merge the PR. The next action follows
-finding severity alone: any open P0 or P1 finding means `author/change`; only
-P2/P3 findings, or none, means `maintainer/merge`. Readiness and risk scores
-explain the assessment to the maintainer and never change the action, so a P3
-can never block a PR.
+AIDA's PR review is advisory: it posts a comment and `aida:*` labels, never a
+request for changes, so it never blocks a merge. It ends with an advisory next
+decision. `author/change` means the author should address the reported gaps.
+`maintainer/merge` means the review found no P0 or P1 finding and considers the
+PR ready for a maintainer's merge decision; AIDA does not approve or merge the
+PR. The next action follows finding severity alone: any open P0 or P1 finding
+means `author/change`; only P2/P3 findings, or none, means `maintainer/merge`.
+Readiness and risk scores explain the assessment to the maintainer and never
+change the action, so a P3 never makes it `author/change`. Findings are rated
+by what a person meets in a normal run, and AI-DLC runs on the person's own
+machine in their own project: their setup and their project are not attackers
+(`.github/prompts/ai-pr-review-common.md`, "What AI-DLC is, and who owns
+what").
 
 AIDA keeps one **findings ledger** comment per PR. Every finding gets a stable
 id (`F1`, `F2`, …) anchored to the exact content of the lines it cites, so a
@@ -162,9 +169,9 @@ lines of the comment, one per line, and a line may name several findings:
 
 - `accept` — the named maintainer owns this risk; the finding stays visible
   under *Accepted risks* in every later review and no longer affects the next
-  action. P0 and P1 findings can be accepted but not rejected.
+  action.
 - `reject` — not a defect; AIDA stops reporting it while the cited code is
-  unchanged.
+  unchanged. Any finding can be rejected, a P0 or P1 included.
 - `reopen` — reverse an accept or reject. A resolved finding cannot be
   reopened; a review re-establishes it if it still applies.
 - `status` — re-render the ledger.
@@ -172,26 +179,27 @@ lines of the comment, one per line, and a line may name several findings:
   changed since the last review (see below).
 
 A comment is applied all-or-nothing: if one line is invalid (an unknown
-command, a missing reason, a reason over 500 characters, a rejected P0/P1),
+command, a missing reason, a reason over 500 characters),
 nothing is applied and AIDA replies naming the line. The workflow verifies the commenter's
 permission through GitHub's collaborators API before applying anything and
 reacts 👍 (applied), 👎 (no write access), or 😕 (usage error, with a reply).
 After a command changes the ledger, AIDA re-derives the decision for the
 reviewed head from persisted state under the same rule the review uses (only
 open P0/P1 findings decide; readiness and risk stay informational) and
-refreshes the managed labels. When that
-decision is `maintainer/merge`, it dismisses its own `CHANGES_REQUESTED`
-review so the head can proceed without an artificial commit; when a `reopen`
-turns it back into `author/change`, it posts a blocking review for the head.
+refreshes the managed labels. AIDA never posts a blocking review; it dismisses
+any `CHANGES_REQUESTED` review it left on the head from before it became
+advisory.
 The check of the original review run is not rewritten. Review and command
 workflows share one non-cancelling per-PR execution group, so opposing verdict
 mutations are serialized. On every later review the judge must dispose of each open ledger entry:
 *still-open* (restating it under the same id, whatever the new wording or
 lines) or *resolved* (the head corrected it). A restatement never opens a new
-id for a defect an open entry already names. An open P0/P1 the judge leaves
+id for a defect an open entry already names, and it carries the judge's
+current rating: an entry the judge re-rates lower drops to that priority. An
+open P0/P1 the judge leaves
 undisposed while at least one of its cited lines is provably unchanged is
 *retained*: it stays in the review and keeps the next action with the author
-until the code changes, the judge disposes of it, or a maintainer accepts it. It is also retained when a current,
+until the code changes, the judge disposes of it, or a maintainer accepts or rejects it. It is also retained when a current,
 evaluable anchor has an unknown result. A finding resolves when all current,
 evaluable anchors are gone; legacy-only identity anchors do not keep it open.
 

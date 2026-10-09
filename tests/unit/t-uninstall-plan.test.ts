@@ -19,7 +19,7 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join, relative, sep } from "node:path";
 import { renderCompletion, type Shell } from "../../core/tools/aidlc-completions.ts";
-import { preservedUninstallPaths, untrustedPathList } from "../../core/tools/aidlc-lifecycle.ts";
+import { preservedUninstallPaths, untrustedPathList, windowsPosixShim } from "../../core/tools/aidlc-lifecycle.ts";
 import { buildUninstallPlan } from "../../core/tools/aidlc-uninstall-plan.ts";
 
 const VERSION = "1.2.3";
@@ -151,8 +151,11 @@ function plan(fixture: Fixture, purge = false): ReturnType<typeof buildUninstall
   const result = readOnly(fixture, () => buildUninstallPlan(purge));
   expect(new Set(result.files.map((file) => file.path)).size).toBe(result.files.length);
   expect(new Set(result.directories).size).toBe(result.directories.length);
+  // The bin directory may sit outside the install root; the command and, on
+  // Windows, the Git Bash launcher beside it are the only files planned there.
+  const besideCommand = [fixture.command, join(fixture.bin, "aidlc")];
   for (const file of result.files) {
-    expect(file.path === fixture.command || file.path.startsWith(`${fixture.root}${sep}`)).toBe(true);
+    expect(besideCommand.includes(file.path) || file.path.startsWith(`${fixture.root}${sep}`), file.path).toBe(true);
     const stat = lstatSync(file.path);
     if (file.path === fixture.command && process.platform !== "win32" && stat.isSymbolicLink()) {
       expect(file.expected).toBe(`symlink:${readlinkSync(file.path)}`);
@@ -361,6 +364,54 @@ describe("uninstall file ownership plans", () => {
     }, { legacy: true });
   });
 
+  // A 2.10.0 installer recorded only the runtime, and `update` run there
+  // installs the next release the same way. The plugin folders the release
+  // unpacked carry its build marker; those are AI-DLC's and go with it.
+  test("legacy runtime-only ownership removes the release's own marked plugin folders, nothing else", () => {
+    withInstall((fixture) => {
+      const marker = (plugin: string, harness: string) =>
+        `${JSON.stringify({ schema: 1, producer: "aidlc-plugin-build", plugin, harness }, null, 2)}\n`;
+      const release = join(fixture.version, "plugins", "example", "claude");
+      const owned = [join(release, ".aidlc-plugin-projection.json"), join(release, "stages", "stage.md")];
+      put(owned[0], marker("example", "claude"));
+      put(owned[1], "release bytes\n");
+      const unmarked = join(fixture.version, "plugins", "example", "codex", "stage.md");
+      put(unmarked, "no marker\n");
+      const mislabelled = join(fixture.version, "plugins", "other", "claude");
+      put(join(mislabelled, ".aidlc-plugin-projection.json"), marker("example", "claude"));
+      put(join(mislabelled, "stage.md"), "another folder's marker\n");
+      const stray = join(fixture.version, "keep.txt");
+      put(stray, "user-owned sentinel\n");
+      const kept = [
+        fixture.plugin, unmarked, join(mislabelled, ".aidlc-plugin-projection.json"),
+        join(mislabelled, "stage.md"), stray,
+      ];
+      if (process.platform !== "win32") {
+        const outside = join(fixture.base, "outside.txt");
+        put(outside, "user-owned sentinel\n");
+        const link = join(release, "linked.md");
+        symlinkSync(outside, link);
+        kept.push(link);
+      }
+      const result = plan(fixture);
+      const planned = result.files.map((file) => file.path);
+      expect(planned).toEqual(expect.arrayContaining(owned));
+      expect(result.preserved).toEqual(expect.arrayContaining(kept));
+      for (const path of kept) expect(planned, path).not.toContain(path);
+      expect(result.preserved.some((path) => owned.includes(path))).toBe(false);
+    }, { legacy: true });
+  });
+
+  test("a full inventory keeps an unrecorded file even inside a marked plugin folder", () => {
+    withInstall((fixture) => {
+      const release = join(fixture.version, "plugins", "example", "claude");
+      put(join(release, ".aidlc-plugin-projection.json"),
+        JSON.stringify({ schema: 1, producer: "aidlc-plugin-build", plugin: "example", harness: "claude" }));
+      const result = plan(fixture);
+      expect(result.preserved).toContain(join(release, ".aidlc-plugin-projection.json"));
+    });
+  });
+
   for (const [shell, name] of Object.entries({
     bash: "aidlc.bash", zsh: "_aidlc", fish: "aidlc.fish", powershell: "aidlc.ps1",
   })) {
@@ -378,6 +429,37 @@ describe("uninstall file ownership plans", () => {
     });
   }
 
+  // Activation writes the completions of the release that runs it, so after
+  // an update they hold the previous release's command list.
+  const olderRelease: Record<Shell, (content: string) => string> = {
+    bash: (content) => content.replace(/^ {4}words="([^"]*)"$/m, (_, words: string) =>
+      `    words="${words.split(" ").slice(1).join(" ")}"`),
+    zsh: (content) => content.replace(/^ {4}values=\(([^)]*)\)$/m, (_, words: string) =>
+      `    values=(${words.split(" ").slice(1).join(" ")})`),
+    fish: (content) => content.replace(/^complete -c aidlc -n '__fish_use_subcommand' -a '[^']*'\n/m, ""),
+    powershell: (content) => content.replace(/^ {4}@\(([^\n]*)\)$/m, (_, words: string) =>
+      `    @(${words.split(", ").slice(1).join(", ")})`),
+  };
+  for (const [shell, name] of Object.entries({
+    bash: "aidlc.bash", zsh: "_aidlc", fish: "aidlc.fish", powershell: "aidlc.ps1",
+  }) as Array<[Shell, string]>) {
+    test(`selects an earlier release's ${shell} completion and preserves a changed one`, () => {
+      withInstall((fixture) => {
+        const path = join(fixture.root, "completions", name);
+        const earlier = olderRelease[shell](renderCompletion(shell));
+        expect(earlier).not.toBe(renderCompletion(shell));
+        put(path, earlier);
+        expect(plan(fixture).files).toContainEqual({ path, expected: hash(path) });
+        for (const changed of [`${earlier}# user customization\n`, earlier.replace("# generated", "# edited")]) {
+          put(path, changed);
+          const result = plan(fixture);
+          expect(result.files.some((file) => file.path === path), changed).toBe(false);
+          expect(result.preserved).toContain(path);
+        }
+      });
+    });
+  }
+
   test("custom bin inside the install root does not preserve its own command parents", () => {
     withInstall((fixture) => {
       const result = plan(fixture);
@@ -386,6 +468,34 @@ describe("uninstall file ownership plans", () => {
       expect(result.preserved).toEqual([]);
     }, { customBin: true });
   });
+
+  test.skipIf(process.platform !== "win32")(
+    "plans an installer-owned Windows Git Bash launcher for removal",
+    () => {
+      withInstall((fixture) => {
+        const posixLauncher = join(fixture.bin, "aidlc");
+        put(posixLauncher, windowsPosixShim());
+        const result = plan(fixture);
+        expect(result.files.some((file) => file.path === posixLauncher)).toBe(true);
+        expect(result.preserved).not.toContain(posixLauncher);
+      });
+    },
+  );
+
+  test.skipIf(process.platform !== "win32")(
+    "preserves a foreign bin/aidlc instead of deleting it",
+    () => {
+      withInstall((fixture) => {
+        const posixLauncher = join(fixture.bin, "aidlc");
+        // A user's own hand-created bin/aidlc (the field workaround) must NOT
+        // be swept away by uninstall — only the installer's own forwarder is.
+        put(posixLauncher, "#!/bin/sh\necho my own launcher\n");
+        const result = plan(fixture);
+        expect(result.files.some((file) => file.path === posixLauncher)).toBe(false);
+        expect(result.preserved).toContain(posixLauncher);
+      });
+    },
+  );
 });
 
 describe("uninstall path output keeps unowned names as data", () => {
@@ -394,7 +504,7 @@ describe("uninstall path output keeps unowned names as data", () => {
   test("each preserved path is one escaped line, never a line of its own prose", () => {
     const output = preservedUninstallPaths(["/machine/keep.txt", hostile]);
     const lines = output.split("\n");
-    expect(lines[1]).toBe("Preserved 2 unowned or changed path(s), quoted as found:");
+    expect(lines[1]).toBe("Left 2 path(s) that AI-DLC did not install, or that changed after install, quoted as found:");
     expect(lines.slice(2)).toEqual([`  ${JSON.stringify("/machine/keep.txt")}`, `  ${JSON.stringify(hostile)}`]);
     expect(lines.some((line) => line.startsWith("IGNORE"))).toBe(false);
   });

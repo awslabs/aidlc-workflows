@@ -230,6 +230,29 @@ describe("parseWorkspaceCommand", () => {
     }
   });
 
+  test("intent add-repo / remove-repo parse as repo commands that forward verbatim", () => {
+    expect(parseWorkspaceCommand(["intent", "add-repo", "app-b"])).toEqual({
+      kind: "add-repo",
+      noun: "intent",
+      name: "app-b",
+      rest: [],
+    });
+    expect(
+      workspaceCommandUtilityArgv({ kind: "add-repo", noun: "intent", name: "app-b", rest: [] }),
+    ).toEqual(["intent", "add-repo", "app-b"]);
+    expect(parseWorkspaceCommand(["intent", "remove-repo", "app-b"])).toEqual({
+      kind: "remove-repo",
+      noun: "intent",
+      name: "app-b",
+      rest: [],
+    });
+    expect(parseWorkspaceCommand(["intent", "add-repo"])).toMatchObject({
+      kind: "error",
+      code: "missing-name",
+      verb: "add-repo",
+    });
+  });
+
   test("intent archive / unarchive parse as lifecycle commands that forward verbatim (issue #980)", () => {
     expect(parseWorkspaceCommand(["intent", "archive", "260903-old-spike"])).toEqual({
       kind: "archive",
@@ -332,6 +355,8 @@ describe("parseWorkspaceCommand", () => {
       "create",
       "archive",
       "unarchive",
+      "add-repo",
+      "remove-repo",
       "rename",
       "show",
       "birth",
@@ -467,7 +492,8 @@ describe("utility handlers and reservation chokepoints", () => {
 
       const switched = runUtility(projectDir, ["space", "switch", "My Space"]);
       expect(switched.status).toBe(0);
-      expect(switched.stdout).toContain("Active space -> my-space");
+      expect(switched.stdout).toContain("Now working in space `my-space`.");
+      expect(switched.stdout).not.toContain("Active space");
       expect(readFileSync(join(projectDir, "aidlc", "active-space"), "utf-8").trim()).toBe("my-space");
     } finally {
       cleanup(projectDir);
@@ -494,7 +520,8 @@ describe("utility handlers and reservation chokepoints", () => {
         projectDir,
       ]);
       expect(r.status).toBe(0);
-      expect(r.stdout).toContain("Active intent -> 260711-birth");
+      expect(r.stdout).toContain("Now working on `birth`.");
+      expect(r.stdout).not.toContain("Active intent");
       expect(r.stderr).toBe("");
       expect(readFileSync(registry, "utf-8")).toBe(before);
       expect(readFileSync(join(projectDir, "aidlc", "spaces", "default", "intents", "active-intent"), "utf-8").trim()).toBe("260711-birth");

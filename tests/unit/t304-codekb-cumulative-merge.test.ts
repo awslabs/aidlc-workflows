@@ -29,6 +29,8 @@ import {
   DEFAULT_SPACE,
   REPO_ROOT,
   resetAidlcEnv,
+  seededStateFile,
+  seedStateFile,
 } from "../harness/fixtures.ts";
 import {
   codekbScopeFingerprint,
@@ -241,6 +243,30 @@ describe("t304 cumulative CodeKB stage contract", () => {
     expect(ARTIFACTS).toContain("Never write a cumulative merge directly");
     expect(ARTIFACTS).toContain("Publish only through `codekb-publish`");
   });
+
+  test("the scope block's template says how the tools read it, so no agent reads their source", () => {
+    const facts = ARTIFACTS.replace(/\s+/g, " ");
+    expect(facts).toContain("How the tools read this block (everything you need to fill it):");
+    expect(facts).toContain(
+      "`{{INVOKE}} engine workspace codekb-scope-diff --repo <repo> --mint --paths <analyzed.paths, comma-separated>`",
+    );
+    expect(facts).toContain("`shallow.paths` is a record for people; no tool hashes or compares it.");
+    expect(facts).toContain("write the intent's `slug` from `intents.json`");
+    expect(facts).toContain("It does not read the Run Record.");
+    expect(facts).toContain("A list with nothing in it is written `paths: []`.");
+    expect(facts).toContain("AI-DLC ships no Mermaid validator, so there is none to look for");
+    expect(facts).toContain(
+      "`{{INVOKE}} engine workspace codekb-scope-diff --repo <repo> --check <that file>`",
+    );
+    expect(STAGE.replace(/\s+/g, " ")).toContain(
+      "{{INVOKE}} engine workspace codekb-scope-diff --repo <repo> --check <record>/.aidlc-engine/codekb-stage-<repo>/reverse-engineering-timestamp.md",
+    );
+    // Outside git the fingerprint stays unknown, so the check is not a loop.
+    expect(STAGE.replace(/\s+/g, " ")).toContain(
+      "an unknown fingerprint (outside git) is left for publication to check",
+    );
+    expect(facts).not.toContain("output of the mint command in stage Step 3");
+  });
 });
 
 describe("t304 source and store generation interleavings", () => {
@@ -269,6 +295,37 @@ describe("t304 source and store generation interleavings", () => {
     expect(JSON.parse(snapshotResult.stdout).store).toStartWith(
       "aidlc/spaces/team-b/codekb/",
     );
+  });
+
+  // The snapshot cannot fingerprint a path that is not there, or a tree
+  // holding something that is not a file or folder. Each refusal names the
+  // --paths step, and that step goes through.
+  test("a snapshot it cannot fingerprint names the --paths step, and that step is accepted", () => {
+    const project = freshProject();
+    mkdirSync(join(project, "src", "payments"), { recursive: true });
+    writeFileSync(join(project, "src", "payments", "charge.ts"), "export const charge = 1;\n");
+    const typo = runUtility(project, ["codekb-snapshot", "--paths", "src/paymnts", "--json"]);
+    expect(typo.status).not.toBe(0);
+    expect(`${typo.stdout}${typo.stderr}`).toContain(
+      "src/paymnts is not in the repository: run it again with --paths naming paths that exist.",
+    );
+    expect(snapshot(project, ["src/payments"]).paths).toEqual(["src/payments"]);
+  });
+
+  test.skipIf(process.platform === "win32")("outside git, a named pipe under the paths names leaving it out, and that is accepted", () => {
+    const project = createTestProject();
+    tempDirs.push(project);
+    mkdirSync(join(project, "src", "payments"), { recursive: true });
+    mkdirSync(join(project, "src", "run"), { recursive: true });
+    writeFileSync(join(project, "src", "payments", "charge.ts"), "export const charge = 1;\n");
+    expect(spawnSync("mkfifo", [join(project, "src", "run", "dev.pipe")]).status).toBe(0);
+    const refused = runUtility(project, ["codekb-snapshot", "--paths", "src", "--json"]);
+    expect(refused.status).not.toBe(0);
+    expect(`${refused.stdout}${refused.stderr}`).toContain(
+      "is not a regular file or folder (a socket or named pipe) or cannot be read: run it again " +
+        "with --paths naming only the folders that hold source, leaving that one out.",
+    );
+    expect(snapshot(project, ["src/payments"]).source_fingerprint).toStartWith("tree:");
   });
 
   test("a snapshot recovers an interrupted directory swap before reading generations", () => {
@@ -353,6 +410,31 @@ describe("t304 source and store generation interleavings", () => {
     expect(`${refused.stdout}\n${refused.stderr}`).toContain("symlink");
     expect(readFileSync(sentinel, "utf-8")).toBe("outside\n");
     expect(existsSync(externalTransaction)).toBe(true);
+  });
+
+  test("under Guard Policy off, code that moved while it was scanned is published with one line", () => {
+    const project = freshProject();
+    seedStateFile(project, "state-mid-inception.md");
+    const statePath = seededStateFile(project);
+    writeFileSync(statePath, readFileSync(statePath, "utf-8").replace(
+      "- **Change Control**: strict (from scope bugfix)",
+      "- **Guard Policy**: off (from scope bugfix)",
+    ));
+    const payments = join(project, "src", "payments");
+    mkdirSync(payments, { recursive: true });
+    const paymentFile = join(payments, "gateway.ts");
+    writeFileSync(paymentFile, "export const payment = 1;\n");
+    const sourcePaths = ["src/payments/"];
+    const baseline = snapshot(project, sourcePaths);
+    writeFileSync(paymentFile, "export const payment = 2;\n");
+    const candidate = join(project, "moved-candidate");
+    writeCandidate(candidate, "PAYMENTS AS SCANNED", "payments", sourcePaths, ["payments"], currentFingerprint(project, sourcePaths));
+    const published = publish(project, candidate, sourcePaths, baseline);
+    expect(published.status, published.stderr).toBe(0);
+    expect(JSON.parse(published.stdout).change_notices).toEqual([
+      "The code changed while it was being scanned, so I saved the scan as it was. Do you want me to scan it again?",
+    ]);
+    expect(readFileSync(join(storeDir(project), "architecture.md"), "utf-8")).toContain("PAYMENTS AS SCANNED");
   });
 
   test("source mutation after the snapshot refuses stale prose with a newly minted fingerprint", () => {

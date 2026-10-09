@@ -1107,9 +1107,11 @@ describe("t328 (5) the per-Unit walk", () => {
     expect(
       afterComplete.kind === "run-stage" && afterComplete.unit === unit,
     ).toBe(false);
+    // The Stop line never sends the agent back to the Unit step it finished.
     const stoppedAfterComplete = p.stopHook();
+    expect(stoppedAfterComplete.stdout).not.toContain(`Code Generation for ${unit}`);
     expect(stoppedAfterComplete.stdout).not.toContain(
-      "exact delivered AIDLC run-stage",
+      "Otherwise carry on with that stage's steps",
     );
   });
 

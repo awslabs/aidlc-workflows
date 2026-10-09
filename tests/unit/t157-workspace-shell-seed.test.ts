@@ -57,6 +57,7 @@ import {
   readFileSync,
   readdirSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -134,13 +135,13 @@ describe("t157 seeded workspace shell + re-rooted .gitignore (SEED)", () => {
     for (const harness of HARNESS_MATRIX) {
       if (harness.capabilities.memoryInclude === "claude-import") {
         const stub = readFileSync(join(harness.engineRoot, "rules", "aidlc.md"), "utf-8");
-        expect(stub).toContain("@../../aidlc/spaces/default/memory/org.md");
+        expect(stub).toContain("@../../aidlc/active-memory/org.md");
       } else if (harness.capabilities.memoryInclude === "kiro-resources") {
         const agent = JSON.parse(
           readFileSync(join(harness.engineRoot, "agents", "aidlc.json"), "utf-8"),
         ) as { resources: string[] };
         expect(agent.resources, harness.name).toContain(
-          "file://aidlc/spaces/default/memory/**/*.md",
+          "file://aidlc/active-memory/**/*.md",
         );
       } else if (harness.capabilities.memoryInclude === "kiro-steering") {
         const steering = readFileSync(
@@ -149,24 +150,25 @@ describe("t157 seeded workspace shell + re-rooted .gitignore (SEED)", () => {
         );
         expect(steering).toMatch(/^---\ninclusion: always\n---/);
         expect(steering).toContain(
-          "#[[file:aidlc/spaces/default/memory/org.md]]",
+          '<memory-file path="aidlc/spaces/default/memory/org.md">',
         );
-      } else if (harness.capabilities.memoryInclude === "codex-env") {
+      } else if (harness.capabilities.memoryInclude === "codex-engine") {
+        // Codex has no ambient include: the engine hands each step its rules.
         const config = readFileSync(join(harness.engineRoot, "config.toml"), "utf-8");
-        expect(config).toContain('AIDLC_RULES_DIR = "aidlc/spaces/default/memory"');
+        expect(config).not.toContain("AIDLC_RULES_DIR");
         expect(existsSync(harness.onboardingDist)).toBe(true);
       } else if (harness.capabilities.memoryInclude === "copilot-agents-md") {
         // Copilot: the project-root AGENTS.md's @-import lines are the
         // native include (both Copilot surfaces expand @-imports).
         const agentsMd = readFileSync(harness.onboardingDist, "utf-8");
-        expect(agentsMd, harness.name).toContain("@aidlc/spaces/default/memory/org.md");
+        expect(agentsMd, harness.name).toContain("@aidlc/active-memory/org.md");
       } else if (harness.capabilities.memoryInclude === "cursor-rule") {
         // Cursor: the alwaysApply rule lists the method files as plain paths
         // (no @-import expansion on Cursor); the sessionStart hook injects the
         // live workflow context. AGENTS.md is the auto-read rules file.
         const rule = readFileSync(join(harness.engineRoot, "rules", "aidlc.mdc"), "utf-8");
         expect(rule).toContain("alwaysApply: true");
-        expect(rule).toContain("aidlc/spaces/default/memory/org.md");
+        expect(rule).toContain("aidlc/active-memory/org.md");
         expect(existsSync(harness.onboardingDist)).toBe(true);
       } else if (harness.capabilities.memoryInclude === "devin-rules") {
         // Devin: .devin/rules/aidlc.md is auto-loaded by Devin CLI (no
@@ -182,7 +184,7 @@ describe("t157 seeded workspace shell + re-rooted .gitignore (SEED)", () => {
           readFileSync(join(harness.distRoot, "opencode.json"), "utf-8"),
         ) as { instructions: string[] };
         expect(config.instructions, harness.name).toContain(
-          "aidlc/spaces/default/memory/**/*.md",
+          "aidlc/active-memory/**/*.md",
         );
         expect(existsSync(harness.onboardingDist)).toBe(true);
       }
@@ -247,8 +249,12 @@ describe("t157 seeded workspace shell + re-rooted .gitignore (SEED)", () => {
         .map((entry) => entry.name)
         .sort();
       expect(actualRootFiles, `${harness.name}: project-root regular files`).toEqual(
-        [...harness.capabilities.rootFiles].sort(),
+        harness.capabilities.rootFiles.filter((file) => !file.includes("/")).sort(),
       );
+      // A root file in a project folder (Copilot's .vscode/settings.json).
+      for (const nested of harness.capabilities.rootFiles.filter((file) => file.includes("/"))) {
+        expect(statSync(join(harness.distRoot, nested)).isFile(), `${harness.name}: ${nested}`).toBe(true);
+      }
     }
   });
 
@@ -257,6 +263,10 @@ describe("t157 seeded workspace shell + re-rooted .gitignore (SEED)", () => {
     for (const h of HARNESSES) {
       const gi = readFileSync(gitignore(h), "utf-8");
       const lines = gi.split("\n").map((l) => l.trim());
+      // The team's file shows AI-DLC's part under one plain line naming it.
+      expect(lines.filter((l) => l.startsWith("#")), `${h}: one comment line`).toEqual([
+        "# AI-DLC: local working files",
+      ]);
       // The two session cursors (re-rooted under aidlc/).
       expect(lines, `${h}: ignores aidlc/active-space`).toContain("aidlc/active-space");
       expect(lines, `${h}: ignores active-space create staging`).toContain(
@@ -316,8 +326,7 @@ describe("t157 seeded workspace shell + re-rooted .gitignore (SEED)", () => {
     for (const h of HARNESSES) {
       const gi = readFileSync(gitignore(h), "utf-8");
       const lines = gi.split("\n").map((l) => l.trim());
-      // The shard path must NOT have an ACTIVE ignore rule (a bare leaf line);
-      // it may only appear inside a comment documenting the committed set.
+      // The shard path must NOT have an ACTIVE ignore rule (a bare leaf line).
       const isIgnoreRule = (l: string): boolean => l.length > 0 && !l.startsWith("#");
       const ignoresAuditShards = lines.some(
         (l) => isIgnoreRule(l) && /audit\/.*\.md$/.test(l),
@@ -349,24 +358,32 @@ describe("t157 seeded workspace shell + re-rooted .gitignore (SEED)", () => {
     }
   });
 
-  // === (c) the re-rooted .gitignore — the committed-truth COMMENT is present =
-  test("10: the gitignore documents the committed set (memory/codekb/registry/state/audit/artifacts)", () => {
-    // The committed paths carry no ignore rule, so they are documented in a
-    // comment for the human reader — assert that record is present + complete so
-    // a future edit can't silently drop a committed family into the ignore set.
+  // === (c) the re-rooted .gitignore: the committed set stays committed ====
+  test("10: the committed set (memory/codekb/registry/state/audit/artifacts) is never ignored", () => {
+    // The committed paths carry no ignore rule; git itself checks them, so a
+    // future edit can't silently drop a committed family into the ignore set.
+    const record = "aidlc/spaces/default/intents/20260101-feature";
+    const committed = [
+      "aidlc/spaces/default/memory/team.md",
+      "aidlc/spaces/default/codekb/app/architecture.md",
+      "aidlc/spaces/default/intents/intents.json",
+      `${record}/aidlc-state.md`,
+      `${record}/audit/host-clone.md`,
+      `${record}/inception/requirements-analysis/requirements.md`,
+    ];
     for (const h of HARNESSES) {
-      const gi = readFileSync(gitignore(h), "utf-8");
-      for (const token of [
-        "memory/**",
-        "codekb/**",
-        "intents.json",
-        "aidlc-state.md",
-        "audit/*.md",
-      ]) {
-        expect(gi, `${h}: gitignore documents committed ${token}`).toContain(token);
-      }
-      // The merge=union prohibition is stated in the gitignore prose too.
-      expect(gi, `${h}: gitignore states the no-merge=union rationale`).toContain("merge=union");
+      const repo = mkdtempSync(join(tmpdir(), `aidlc-t157-committed-${h}-`));
+      tempDirs.push(repo);
+      expect(spawnSync("git", ["init", "-q"], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), cwd: repo }).status, `${h}: git init`).toBe(0);
+      writeFileSync(join(repo, ".gitignore"), readFileSync(gitignore(h), "utf-8"), "utf-8");
+      const checked = spawnSync("git", ["check-ignore", "--no-index", ...committed], {
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+        cwd: repo,
+        encoding: "utf-8",
+      });
+      // Exit 1 with no output: git ignores none of them.
+      expect(checked.stdout, `${h}: committed paths that are ignored`).toBe("");
+      expect(checked.status, `${h}: git check-ignore`).toBe(1);
     }
   });
 });

@@ -2,11 +2,17 @@ import { createHash } from "node:crypto";
 import { existsSync, readFileSync, statSync } from "node:fs";
 import {
   auditBlockField,
+  committedTextBytes,
+  currentFingerprintForm,
   getField,
   parseCheckboxes,
   readAllAuditShards,
+  rememberRawFingerprint,
+  staleStageLine,
 } from "./aidlc-lib.js";
 import { loadGraph } from "./aidlc-graph.ts";
+import { SLUG_RE as STAGE_SLUG_RE } from "./aidlc-stage-schema.ts";
+import { artifactFilename } from "./aidlc-artifact-vocabulary.ts";
 import {
   resolveArtifactInstances,
   type ArtifactResolutionOptions,
@@ -56,6 +62,8 @@ export interface StageValidityIssue {
   direct: boolean;
   reasons: string[];
   roots: string[];
+  /** Every reason is an edit to one of the stage's own documents, still there. */
+  edited?: true;
 }
 
 export interface StageValidityInspection {
@@ -160,6 +168,8 @@ function graphContractFingerprint(stage: StageValidityNode): string {
 interface InstanceFingerprint {
   instance: ArtifactInstance;
   sha256: string;
+  /** The raw bytes' digest, when line endings made it differ. */
+  rawSha256?: string;
   present: boolean;
 }
 
@@ -172,9 +182,13 @@ function fingerprintInstance(instance: ArtifactInstance): InstanceFingerprint {
     if (!statSync(path).isFile()) {
       return { instance, sha256: "not-a-file", present: false };
     }
+    // A line ending is no change: text is read with CRLF and lone CR as LF.
+    const bytes = readFileSync(path);
+    const text = committedTextBytes(bytes);
     return {
       instance,
-      sha256: `sha256:${sha256(readFileSync(path))}`,
+      sha256: `sha256:${sha256(text)}`,
+      ...(text !== bytes ? { rawSha256: `sha256:${sha256(bytes)}` } : {}),
       present: true,
     };
   } catch (error) {
@@ -239,6 +253,16 @@ function aggregateArtifactBasis(
     sha256: digest,
     present,
   }));
+  const contentHash = `sha256:${sha256(canonicalJson(content))}`;
+  // As it was recorded before line endings were read as LF.
+  if (fingerprints.some((fingerprint) => fingerprint.rawSha256 !== undefined)) {
+    const raw = fingerprints.map(({ instance, sha256: digest, rawSha256, present }) => ({
+      path: instance.relativePath,
+      sha256: rawSha256 ?? digest,
+      present,
+    }));
+    rememberRawFingerprint(`sha256:${sha256(canonicalJson(raw))}`, contentHash);
+  }
 
   return {
     artifact,
@@ -247,7 +271,7 @@ function aggregateArtifactBasis(
     instanceCount: fingerprints.length,
     presentCount: fingerprints.filter((item) => item.present).length,
     structureHash: `sha256:${sha256(canonicalJson(structure))}`,
-    contentHash: `sha256:${sha256(canonicalJson(content))}`,
+    contentHash,
   };
 }
 
@@ -292,6 +316,16 @@ function projectTypeFrom(
 ): "brownfield" | "greenfield" | null {
   const raw = getField(stateContent, "Project Type")?.toLowerCase();
   return raw === "brownfield" || raw === "greenfield" ? raw : null;
+}
+
+// A project-type change (the person said the work is existing code, or a new
+// project) makes a finished stage stale only when its work follows the type:
+// its inputs change with it (a conditional consume), or it builds (the
+// Construction testing plan and in-place rule follow it). Every other finished
+// stage stays valid, so the advisory names a stage worth redoing.
+function workDependsOnProjectType(stage: StageValidityNode): boolean {
+  return stage.phase === "construction" ||
+    (stage.consumes ?? []).some((consume) => consume.conditional_on !== undefined);
 }
 
 function consumeIsApplicable(
@@ -572,6 +606,40 @@ function artifactBasisChanges(
   return changes;
 }
 
+// The input and output changes that are only an edit to a document that is
+// still there: same producer, same instances, same presence, other content. A
+// change named by both such an edit and another kind of change stays out.
+function contentOnlyChanges(before: StageValidationBasis, after: StageValidationBasis): Set<string> {
+  const only = new Set<string>();
+  const other = new Set<string>();
+  for (const [label, left, right] of [
+    ["input", before.inputs, after.inputs],
+    ["output", before.outputs, after.outputs],
+  ] as const) {
+    const previous = new Map(left.map((item) => [artifactBasisKey(item), item]));
+    const current = new Map(right.map((item) => [artifactBasisKey(item), item]));
+    for (const key of new Set([...previous.keys(), ...current.keys()])) {
+      const was = previous.get(key);
+      const now = current.get(key);
+      if (canonicalJson(was) === canonicalJson(now)) continue;
+      const change = `${label}:${(now ?? was)!.artifact}`;
+      if (was && now && canonicalJson({ ...was, contentHash: "" }) === canonicalJson({ ...now, contentHash: "" })) {
+        only.add(change);
+      } else {
+        other.add(change);
+      }
+    }
+  }
+  for (const change of other) only.delete(change);
+  return only;
+}
+
+function basisInCurrentForm(basis: StageValidationBasis): StageValidationBasis {
+  const current = (items: ArtifactBasis[]): ArtifactBasis[] =>
+    items.map((item) => ({ ...item, contentHash: currentFingerprintForm(item.contentHash) ?? item.contentHash }));
+  return { ...basis, inputs: current(basis.inputs), outputs: current(basis.outputs) };
+}
+
 export function diffStageValidationBasis(
   before: StageValidationBasis,
   after: StageValidationBasis,
@@ -702,6 +770,52 @@ export function propagateStageInvalidation(
  * tree, then propagate drift through observed stage-level dependencies.
  * The function is read-only with respect to workflow state.
  */
+/**
+ * A stage as the person hears it named: a shipped stage by its own name, and a
+ * plugin's stage by its slug, the name the person types to go there (its
+ * display name is the plugin's own text). A slug of any other shape is not
+ * named. The engine's advisory and status both name stages this way.
+ */
+export function stageLabel(stage: { slug: string; name: string; plugin?: string } | undefined, slug: string): string | null {
+  if (stage !== undefined && stage.plugin === undefined) return stage.name;
+  const typed = stage?.slug ?? slug;
+  return STAGE_SLUG_RE.test(typed) ? typed : null;
+}
+
+/**
+ * What the person hears about a finished stage that is behind, and the one way
+ * to act on it. When the project type changed to existing code after the stage
+ * ran, the code arriving is the reason it gives; otherwise an input changed.
+ * The engine's advisory and status both say it this way.
+ */
+export function staleStageNote(
+  name: string, issue: Pick<StageValidityIssue, "reasons" | "edited">, stateContent: string,
+): string {
+  if (issue.reasons.includes("project-type") && projectTypeFrom(stateContent) === "brownfield") {
+    return codeArrivedStageLine(name);
+  }
+  // Only the stage's own documents were edited after it finished: the change
+  // stands, and the redo goes over the stage again with it.
+  return issue.edited && issue.reasons.length > 0
+    ? ownDocumentChangedLine(name, issue.reasons.map((reason) => artifactFilename(reason.slice("output:".length))))
+    : staleStageLine(name);
+}
+
+// A finished stage's own documents changed: the work carries on with them, and
+// the person answers in their own words whether to redo the stage instead.
+export function ownDocumentChangedLine(name: string, files: readonly string[]): string {
+  const several = files.length > 1;
+  const listed = several ? `${files.slice(0, -1).join(", ")} and ${files.at(-1)}` : files[0];
+  return `${listed} changed after ${name} finished. I'm carrying on with ${several ? "them as they are" : "it as it is"}. ` +
+    `Do you want me to redo ${name} with your ${several ? "changes" : "change"} instead?`;
+}
+
+// A finished stage that ran before the project's code was there, and the redo.
+export function codeArrivedStageLine(name: string): string {
+  return `${name} ran before the code was here. I'm carrying on with it as it is. ` +
+    `Do you want me to redo ${name} with the code?`;
+}
+
 export function inspectStageValidity(
   projectDir: string,
   stateContent: string,
@@ -712,6 +826,8 @@ export function inspectStageValidity(
       stage: StageValidityNode,
       stages: readonly StageValidityNode[],
     ) => StageValidationBasis;
+    /** A change to a document's content alone is not raised (Guard Policy relaxed or off). */
+    acceptContentChanges?: boolean;
   } = {},
 ): StageValidityInspection {
   const stages = options.stages ?? loadGraph();
@@ -724,6 +840,7 @@ export function inspectStageValidity(
   const audit = options.audit ?? readAllAuditShards(projectDir);
   const receipts = completionReceiptsFromAudit(audit);
   const directReasons = new Map<string, string[]>();
+  const edits = new Map<string, Set<string>>();
   const warnings: string[] = [];
   const unavailable = new Set<string>();
 
@@ -743,8 +860,15 @@ export function inspectStageValidity(
       );
       continue;
     }
-    const changes = diffStageValidationBasis(previous, current);
+    // Content recorded over raw line endings reads as the same content now.
+    const recorded = basisInCurrentForm(previous);
+    const edited = contentOnlyChanges(recorded, current);
+    const contentOnly = options.acceptContentChanges === true ? edited : new Set<string>();
+    const changes = diffStageValidationBasis(recorded, current).filter(
+      (change) => (change !== "project-type" || workDependsOnProjectType(stage)) && !contentOnly.has(change),
+    );
     if (changes.length > 0) directReasons.set(slug, changes);
+    edits.set(slug, edited);
   }
 
   const issues = propagateStageInvalidation(
@@ -752,7 +876,9 @@ export function inspectStageValidity(
     completedSlugs,
     directReasons,
     receipts.latestKnown,
-  );
+  ).map((issue) => issue.direct && issue.reasons.every((reason) =>
+    reason.startsWith("output:") && edits.get(issue.stage)?.has(reason))
+    ? { ...issue, edited: true as const } : issue);
   const untracked = stages
     .filter(
       (stage) =>

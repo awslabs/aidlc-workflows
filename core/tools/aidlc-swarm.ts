@@ -34,8 +34,8 @@
 //       Both paths require current Plan Approval or a protected continuation
 //       under a lowered plan-approval fence before dispatch.
 //   check <unit> [--check-cmd <cmd>] [--test-file <path>]
-//       Stateless single-unit verdict: the authorized Construction Verification
-//       Command under checkpoints; a required --check-cmd under legacy autonomy
+//       Single-unit verdict: the authorized Construction Verification Command,
+//       with or without checkpoints (a supplied --check-cmd must match it)
 //       (exit 0 = green,
 //       the AUTHORITATIVE signal — a worker's own success claim is never trusted)
 //       plus an anti-tamper compare of the protected file against its forked-git
@@ -94,14 +94,18 @@ import {
   auditBlockField,
   auditShardDir,
   authorizedVerificationCommand,
+  unitPlainName,
   withdrawProtectedQuestions,
-  constructionCheckpointsApply,
   boltSlugForUnit,
   BoltIdentityError,
   filterProducesByKind,
   filteredRawIndexEntries,
   findAllEvents,
   getField,
+  guardPolicyAcceptsChanges,
+  recordAcceptedChanges,
+  renderChangedPaths,
+  type AcceptedChange,
   isRegularFile,
   latestMainWorkflowStageRunFloor,
   latestMainWorkflowStageRunFloorForProject,
@@ -158,6 +162,8 @@ import {
   type AuditShardEvent,
   type BoltIdentity,
   type WorkflowSelection,
+  committedTextSha256,
+  currentFingerprintForm,
 } from "./aidlc-lib.ts";
 import { compiledExecutable } from "./aidlc-runtime-paths.ts";
 import {
@@ -195,6 +201,8 @@ interface UnitResult {
   reason?: FailureReason;
   detail?: string;
   tampered?: boolean;
+  /** Lines for the person: a change kept under relaxed or off. */
+  change_notices?: string[];
 }
 
 interface SourceBinding {
@@ -207,6 +215,10 @@ interface ReceiptCheck {
   artifactFingerprint?: string;
   sourceFingerprint?: string;
   unitSourceFingerprint?: string;
+  /** Changes kept under a relaxed or off Guard Policy, recorded once at finalize. */
+  accepted?: AcceptedChange[];
+  /** The Unit's manifest changed after its review and the review was kept. */
+  manifestKept?: boolean;
 }
 
 interface ReviewedRecordSnapshotEntry {
@@ -272,7 +284,7 @@ function runTool(toolFile: string, args: string[], projectDir: string): ToolRun 
 // all three.
 //
 // Shell interpretation is intentional only after command authorization has been
-// resolved from the parent intent. Legacy autonomy retains its supplied command.
+// resolved from the parent intent.
 function checkConverged(cwd: string, checkCmd: string): boolean {
   const shell =
     process.platform !== "win32" && existsSync("/bin/bash")
@@ -287,14 +299,14 @@ function checkConverged(cwd: string, checkCmd: string): boolean {
   return result.status === 0;
 }
 
+// Every check runs the Construction Verification Command the person approved
+// for this workflow, with or without Construction checkpoints; the person is
+// asked once, through the consent procedure the refusal names.
 function swarmCheckCommand(projectDir: string, supplied: string | undefined, action: string): { command: string; sha256?: string } {
-  // Legacy stateless checks can run without a workflow. An existing unreadable
-  // state must still fail closed rather than silently selecting legacy policy.
-  const state = existsSync(stateFilePath(projectDir)) ? readStateFile(projectDir) : "";
-  if (!constructionCheckpointsApply(state)) {
-    if (!supplied) fail(`${action} requires --check-cmd <shell command; exit 0 = converged>`);
-    return { command: supplied };
+  if (!existsSync(stateFilePath(projectDir))) {
+    fail(`${action} needs an active workflow: it runs only the Construction Verification Command the person approved for it.`);
   }
+  const state = readStateFile(projectDir);
   const authorization = authorizedVerificationCommand(projectDir, state);
   if (!authorization) {
     fail(`${action} requires an authorized Construction Verification Command. ${VERIFICATION_COMMAND_RECOVERY}`);
@@ -332,6 +344,8 @@ interface Verdict {
   converged: boolean;
   tampered: boolean;
   confineError?: string;
+  /** Under relaxed or off a changed protected test file is said, not refused. */
+  tamperNotice?: string;
 }
 
 function requiresCodeGenerationApproval(state: string): boolean {
@@ -375,6 +389,7 @@ function verdictFor(
   const converged = checkConverged(wt, checkCmd);
   let tampered = false;
   let confineError: string | undefined;
+  let tamperNotice: string | undefined;
   if (testFile) {
     // Confine the path inside the unit's worktree — a `../` escape would point
     // the guard at a file the worker never touched and silently DISABLE it, so
@@ -385,9 +400,13 @@ function verdictFor(
       confineError = `--test-file resolves outside the unit worktree: ${testFile}`;
     } else {
       tampered = fileTampered(wt, testFile);
+      if (tampered && guardPolicyAcceptsChanges(projectDir)) {
+        tampered = false;
+        tamperNotice = `Unit ${unit} changed its protected test file ${renderChangedPaths([testFile])}; its check passed with that change.`;
+      }
     }
   }
-  return { exists: true, converged, tampered, confineError };
+  return { exists: true, converged, tampered, confineError, ...(tamperNotice ? { tamperNotice } : {}) };
 }
 
 interface ReviewerRequirement {
@@ -562,6 +581,11 @@ function reviewerReceiptError(
   }
 
   const definition = resolveStage(stage);
+  const accepted: AcceptedChange[] = [];
+  let manifestKept = false;
+  // Under relaxed or off, what changed after a real review is kept and said
+  // once; under strict the Unit goes back for a fresh review.
+  const acceptsChanges = guardPolicyAcceptsChanges(projectDir);
   const recordedArtifactFp = auditBlockField(latestTerminal.block, "Artifact Fingerprint");
   const currentArtifactFp = definition
     ? reviewArtifactFingerprint(wt, definition, unit, {
@@ -571,8 +595,7 @@ function reviewerReceiptError(
   if (
     recordedArtifactFp === null ||
     !/^sha256:[0-9a-f]{64}$/.test(recordedArtifactFp) ||
-    currentArtifactFp === null ||
-    recordedArtifactFp !== currentArtifactFp
+    currentArtifactFp === null
   ) {
     return {
       error:
@@ -580,17 +603,38 @@ function reviewerReceiptError(
         `unit "${unit}", reviewer "${reviewer}" with a current artifact fingerprint exists after this Bolt started`,
     };
   }
+  const documents = `${definition?.name ?? stage} documents`;
+  // A receipt taken over raw line endings binds what it reviewed in its current form.
+  let artifactFingerprint = currentFingerprintForm(recordedArtifactFp) ?? recordedArtifactFp;
+  if (artifactFingerprint !== currentArtifactFp) {
+    if (!acceptsChanges) {
+      return {
+        error:
+          `claimed converged but unit "${unit}"'s ${documents} changed after its review; ` +
+          `re-invoke the reviewer against the current documents and record a fresh verdict before finalizing`,
+      };
+    }
+    accepted.push({
+      checkpoint: "review-receipt", stage, unit, changed: null,
+      recorded: recordedArtifactFp, current: currentArtifactFp,
+      notice: `The ${unitPlainName(unit)} Unit's ${documents} changed after it was reviewed. Kept them.`,
+    });
+    artifactFingerprint = currentArtifactFp;
+  }
+  const keptOnly = (): ReceiptCheck => ({
+    error: null, artifactFingerprint, ...(accepted.length > 0 ? { accepted } : {}),
+  });
 
   if (!definition?.workspace_requires) {
-    return { error: null, artifactFingerprint: recordedArtifactFp };
+    return keptOnly();
   }
   const recordedSourceFp = auditBlockField(latestTerminal.block, "Source Fingerprint");
   if (process.env.AIDLC_SKIP_SOURCE_FRESHNESS === "1") {
-    return { error: null, artifactFingerprint: recordedArtifactFp };
+    return keptOnly();
   }
   if (recordedSourceFp === null) {
     if (baseCommit === null) {
-      return { error: null, artifactFingerprint: recordedArtifactFp };
+      return keptOnly();
     }
     return {
       error:
@@ -599,10 +643,12 @@ function reviewerReceiptError(
     };
   }
   const currentSourceFp = worktreeSourceFingerprint(wt);
+  const sourceChanged = recordedSourceFp !== UNBINDABLE_FINGERPRINT && currentSourceFp !== null &&
+    !sameWorkspaceSource(recordedSourceFp, currentSourceFp);
   if (
     recordedSourceFp === UNBINDABLE_FINGERPRINT ||
     currentSourceFp === null ||
-    !sameWorkspaceSource(recordedSourceFp, currentSourceFp)
+    (sourceChanged && !acceptsChanges)
   ) {
     return {
       error:
@@ -612,16 +658,23 @@ function reviewerReceiptError(
         `verdict before finalizing`,
     };
   }
+  // The kept code is what finalize binds and lands.
+  let sourceFingerprint = recordedSourceFp;
+  if (sourceChanged) {
+    accepted.push({
+      checkpoint: "review-receipt", stage, unit, changed: null,
+      recorded: recordedSourceFp, current: currentSourceFp,
+      notice: `The ${unitPlainName(unit)} Unit's code changed after it was reviewed. Kept the change.`,
+    });
+    sourceFingerprint = currentSourceFp;
+  }
 
   // Pre-upgrade worktrees have no attested base commit and retain migration
   // fail-open behavior. Modern worktrees must validate the exact unit binding
   // that the reviewer saw before trusting its claims for footprint coverage.
   let unitSourceFingerprint: string | undefined;
   if (baseCommit !== null) {
-    const recordedUnitFp = auditBlockField(
-      latestTerminal.block,
-      "Unit Source Fingerprint",
-    );
+    const recordedUnitFp = auditBlockField(latestTerminal.block, "Unit Source Fingerprint");
     const bindingBypass =
       auditBlockField(latestTerminal.block, "Unit Source Binding Bypass") ===
       "true";
@@ -637,10 +690,22 @@ function reviewerReceiptError(
       worktreeRelative: true,
     });
     const snapshot = readUnitSourceSnapshot(wt, stage, unit, recordedUnitFp);
+    // Under relaxed or off the review stands when the Unit's manifest changed
+    // after it or its review copy is not on this machine; the change is kept.
     if (
+      acceptsChanges && manifest.ok &&
+      (snapshot === null || currentFingerprintForm(snapshot.manifestSha256) !== manifest.rawBytesSha256)
+    ) {
+      manifestKept = true;
+      accepted.push({
+        checkpoint: "review-receipt", stage, unit, changed: null,
+        recorded: snapshot?.manifestSha256 ?? recordedUnitFp, current: manifest.rawBytesSha256,
+        notice: `The ${unitPlainName(unit)} Unit's list of files changed after it was reviewed. Kept the review.`,
+      });
+    } else if (
       !manifest.ok ||
       snapshot === null ||
-      snapshot.manifestSha256 !== manifest.rawBytesSha256
+      currentFingerprintForm(snapshot.manifestSha256) !== manifest.rawBytesSha256
     ) {
       return {
         error:
@@ -721,7 +786,15 @@ function reviewerReceiptError(
       }
       const outsideClaims = [...outside]
         .filter((path) => !sourceClaimCovers(`\0${path}`, reviewedClaims));
-      if (outsideClaims.length > 0) {
+      if (outsideClaims.length > 0 && acceptsChanges) {
+        // Under relaxed or off the files stay and merge; they are named once.
+        accepted.push({
+          checkpoint: "review-receipt", stage, unit, changed: outsideClaims.sort(),
+          recorded: recordedUnitFp,
+          current: `sha256:${createHash("sha256").update(outsideClaims.join("\n")).digest("hex")}`,
+          notice: `The ${unitPlainName(unit)} Unit also changed ${renderChangedPaths(outsideClaims)} outside its planned files. Kept them.`,
+        });
+      } else if (outsideClaims.length > 0) {
         const rendered = outsideClaims.slice(0, 10).join(", ") +
           (outsideClaims.length > 10 ? ` … and ${outsideClaims.length - 10} more` : "");
         return {
@@ -737,9 +810,11 @@ function reviewerReceiptError(
   }
   return {
     error: null,
-    artifactFingerprint: recordedArtifactFp,
-    sourceFingerprint: recordedSourceFp,
+    artifactFingerprint,
+    sourceFingerprint,
     unitSourceFingerprint,
+    ...(accepted.length > 0 ? { accepted } : {}),
+    ...(manifestKept ? { manifestKept } : {}),
   };
 }
 
@@ -801,10 +876,11 @@ function captureReviewedRecordSnapshot(
       unit,
       receipt.unitSourceFingerprint,
     );
+    // A manifest change kept at the receipt check lands as it is now, beside
+    // the evidence of what was reviewed.
     if (
       !manifest.ok ||
-      snapshot === null ||
-      snapshot.manifestSha256 !== manifest.rawBytesSha256
+      (!receipt.manifestKept && (snapshot === null || currentFingerprintForm(snapshot.manifestSha256) !== manifest.rawBytesSha256))
     ) {
       return {
         error:
@@ -832,10 +908,7 @@ function captureReviewedRecordSnapshot(
     } catch {
       return { error: `cannot capture reviewed source evidence for unit "${unit}"` };
     }
-    if (
-      createHash("sha256").update(manifestBytes).digest("hex") !==
-        manifest.rawBytesSha256
-    ) {
+    if (committedTextSha256(manifestBytes) !== manifest.rawBytesSha256) {
       return {
         error:
           `reviewed source evidence changed while finalizing unit "${unit}"; ` +
@@ -880,10 +953,17 @@ function captureReviewedRecordSnapshot(
         // retain these exact, receipt-bound bytes in .aidlc-engine/source-review.
         // Promote them into the transferred snapshot so an in-flight swarm can
         // finish after upgrading without weakening the new provenance record.
+        if (snapshot === null) {
+          return { error: `cannot capture reviewed source evidence for unit "${unit}"` };
+        }
         evidenceBytes = Buffer.from(snapshot.serialized, "utf-8");
       }
     }
-    if (createHash("sha256").update(evidenceBytes).digest("hex") !== hex) {
+    // A checkout with CRLF line endings holds the same evidence.
+    if (
+      createHash("sha256").update(evidenceBytes).digest("hex") !== hex &&
+      committedTextSha256(evidenceBytes) !== hex
+    ) {
       return {
         error:
           `reviewed source evidence changed while finalizing unit "${unit}"; ` +
@@ -2694,6 +2774,7 @@ function handleCheck(rest: string[]): void {
     reason: verdict.tampered ? "error" : null,
   };
   if (verdict.tampered) out.detail = "protected test file was modified";
+  if (verdict.tamperNotice) out.change_notices = [verdict.tamperNotice];
   console.log(JSON.stringify(out));
   // Exit 0 ONLY for a genuine convergence — the seam the ultracode script and
   // the conductor gate on (a worker's self-claim is never read).
@@ -2892,7 +2973,11 @@ function handleFinalize(rest: string[]): void {
             recordSnapshots.set(unit, captured.snapshot);
             genuine.push(unit);
             preparedAttempts.set(unit, preparedAttempt);
-            results.push({ unit, status: "converged" });
+            const notices = [
+              ...(verdict.tamperNotice ? [verdict.tamperNotice] : []),
+              ...recordAcceptedChanges(projectDir, receipt.accepted ?? []),
+            ];
+            results.push({ unit, status: "converged", ...(notices.length > 0 ? { change_notices: notices } : {}) });
           }
         }
       } else {

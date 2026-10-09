@@ -18,6 +18,7 @@ import {
 } from "node:fs";
 import { dirname, join } from "node:path";
 import { readAuditShardEvents } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import { saveMessage } from "../../dist/claude/.claude/tools/aidlc-message-store.ts";
 import {
   REPO_ROOT,
   cleanupTestProject,
@@ -80,24 +81,37 @@ function output(run: ReturnType<typeof runUtility>): string {
   return `${run.stdout ?? ""}${run.stderr ?? ""}`;
 }
 
-// The fixture runs the Claude tools tree; giving its shipped harness data Kiro
-// IDE's hookActivation block makes the doctor read it as a Kiro IDE install.
-function asKiroIde(project: string): Record<string, string> {
-  const kiroIde = JSON.parse(readFileSync(
-    join(REPO_ROOT, "dist", "kiro-ide", ".kiro", "tools", "data", "harness.json"),
+// The fixture runs the Claude tools tree; giving its shipped harness data a
+// Kiro tree's hookActivation block makes the doctor read it as that install.
+function asShippedKiro(project: string, harness: "kiro" | "kiro-ide"): Record<string, string> {
+  const kiro = JSON.parse(readFileSync(
+    join(REPO_ROOT, "dist", harness, ".kiro", "tools", "data", "harness.json"),
     "utf-8",
   )) as { hookActivation?: unknown };
-  expect(kiroIde.hookActivation).toBeDefined();
+  expect(kiro.hookActivation).toBeDefined();
   const path = join(project, ".claude", "tools", "data", "harness.json");
   const shipped = JSON.parse(readFileSync(path, "utf-8")) as Record<string, unknown>;
   writeFileSync(
     path,
-    `${JSON.stringify({ ...shipped, hookActivation: kiroIde.hookActivation }, null, 2)}\n`,
+    `${JSON.stringify({ ...shipped, hookActivation: kiro.hookActivation }, null, 2)}\n`,
   );
-  return { AIDLC_HARNESS_NAME: "kiro-ide" };
+  return { AIDLC_HARNESS_NAME: harness };
 }
 
-const KIRO_IDE_ADVICE = ["Reload Window", "Restricted Mode", "agent picker", "Kiro IDE"];
+// The fixture runs Claude's tools tree, whose shipped harness data declares its
+// own hook advice; taking it out shows what a harness without any gets.
+function withoutHookAdvice(project: string): string {
+  const path = join(project, ".claude", "tools", "data", "harness.json");
+  const { hookActivation: _shipped, ...rest } = JSON.parse(readFileSync(path, "utf-8")) as Record<string, unknown>;
+  writeFileSync(path, `${JSON.stringify(rest, null, 2)}\n`);
+  return project;
+}
+
+function asKiroIde(project: string): Record<string, string> {
+  return asShippedKiro(project, "kiro-ide");
+}
+
+const KIRO_IDE_ADVICE = ["Trust Folder & Continue", "Kiro IDE", "Reload Window", "agent picker"];
 
 function writeManagedSettings(
   project: string,
@@ -158,25 +172,35 @@ function isoSecond(timestampMs: number): string {
 
 describe("t319 doctor detects hooks blocked before their first heartbeat", () => {
   test("zero heartbeats with no workflow progress keeps the fresh-install advisory", () => {
-    const run = runUtility(freshProject(), ["doctor", "--verbose"]);
+    const run = runUtility(withoutHookAdvice(freshProject()), ["doctor", "--verbose"]);
     expect(output(run)).toContain(
       "ok    Hook heartbeats: not yet fired (first workflow stage will populate)",
     );
   });
 
-  // Kiro IDE runs no hooks in an untrusted or unreloaded window. Its adapter
-  // leaves a heartbeat on every chat message before the first workflow, so
-  // none yet gets the harness's trust and reload steps.
-  test("Kiro IDE with no heartbeat warns that the hooks have not run, with the trust and reload steps", () => {
+  // Kiro IDE runs no hooks in a folder it has not been allowed to run
+  // commands in. Its adapter leaves a heartbeat on every chat message before
+  // the first workflow, so none yet gets the trust step, in Kiro's words.
+  test("Kiro IDE with no heartbeat warns that the hooks have not run, with the trust step", () => {
     const project = freshProject();
     const run = runUtility(project, ["doctor", "--verbose"], asKiroIde(project));
     const text = output(run);
     expect(text).toContain("warn  AIDLC hooks have not run in this project yet");
     expect(text).toContain(
-      "fix: This is expected before your first chat message here. If you already sent one, Kiro IDE is not running AIDLC hooks in this window: trust the folder if the Restricted Mode banner shows at the top of the window (select Manage, then Trust), run \"Developer: Reload Window\" from the Command Palette",
+      "fix: This is expected before your first chat message here. If you already sent one, trust this folder in Kiro IDE: choose Trust Folder & Continue when Kiro asks whether you trust it, or select Manage on the Restricted Mode banner, then Trust. Then run Developer: Reload Window from the Command Palette (Ctrl+Shift+P, or Cmd+Shift+P on macOS), send a message and run doctor again.",
     );
-    expect(text).toContain("choose the aidlc agent in the chat panel's agent picker, then send a message.");
+    expect(text).not.toContain("agent picker");
     expect(text).not.toContain("Hook heartbeats: not yet fired");
+  });
+
+  // Claude Code's human-turn hook leaves a heartbeat on every message, so with
+  // none yet doctor says it is expected before the first chat, and the step.
+  test("Claude Code with no heartbeat warns that the hooks have not run, with its settings step", () => {
+    const text = output(runUtility(freshProject(), ["doctor", "--verbose"]));
+    expect(text).toContain("warn  AIDLC hooks have not run in this project yet");
+    expect(text).toContain(
+      'fix: This is expected before your first Claude Code chat in this folder. If you already started one, set "disableAllHooks": false',
+    );
   });
 
   test("Kiro IDE with a chat message's heartbeat reports the hooks as fired", () => {
@@ -191,7 +215,7 @@ describe("t319 doctor detects hooks blocked before their first heartbeat", () =>
     expect(output(run)).not.toContain("AIDLC hooks have not run in this project yet");
   });
 
-  test("Kiro IDE after workflow progress fails with the Kiro reload steps", () => {
+  test("Kiro IDE after workflow progress fails with the trust step", () => {
     const project = projectWithWorkflowProgress();
 
     const run = runUtility(project, ["doctor", "--verbose"], asKiroIde(project));
@@ -200,17 +224,27 @@ describe("t319 doctor detects hooks blocked before their first heartbeat", () =>
       /fail {2}Hooks have never executed although this workflow has progressed [1-9]\d* stages?/,
     );
     expect(output(run)).toContain(
-      "In Kiro IDE, trust the folder if the Restricted Mode banner shows at the top of the window (select Manage, then Trust), run \"Developer: Reload Window\"",
+      "In Kiro IDE, trust this folder: choose Trust Folder & Continue when Kiro asks whether you trust it, or select Manage on the Restricted Mode banner, then Trust. Then run Developer: Reload Window from the Command Palette (Ctrl+Shift+P, or Cmd+Shift+P on macOS), and say carry on.",
     );
-    expect(output(run)).toContain("In Kiro CLI, exit and start `kiro-cli` again in this folder.");
+    // Trust takes effect after the reload; the agent picker does not stop the hooks.
+    expect(output(run)).not.toContain("agent picker");
+    expect(output(run)).toContain("In Kiro CLI, quit Kiro and start `kiro-cli` again in this folder.");
+    // What an ACP client must send is in the Kiro IDE guide, not in this line,
+    // and the line says what to do, not how AI-DLC works.
+    expect(output(run)).toContain(
+      "If you drive Kiro from an ACP client, the Kiro IDE guide names what that client must send.",
+    );
+    expect(output(run)).not.toContain("for AI-DLC's hooks to run");
+    expect(output(run)).not.toContain("clientCapabilities");
     expect(output(run)).not.toContain("AIDLC hooks have not run in this project yet");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-  // Only a harness that ships hookActivation gets the not-run-yet warning or
-  // Kiro IDE's steps; every other harness keeps the fresh-install advisory.
+  // Only shipped hookActivation advice with a notRunYet turns "no heartbeat
+  // yet" into a warning. These runs take the hook advice out of the fixture's
+  // harness data, so every harness name keeps the fresh-install advisory.
   for (const harness of ["claude", "kiro", "codex", "cursor", "opencode", "copilot"]) {
     test(`${harness} before any heartbeat keeps the fresh-install advisory with no Kiro IDE advice`, () => {
-      const run = runUtility(freshProject(), ["doctor", "--verbose"], {
+      const run = runUtility(withoutHookAdvice(freshProject()), ["doctor", "--verbose"], {
         AIDLC_HARNESS_NAME: harness,
       });
       const text = output(run);
@@ -222,15 +256,64 @@ describe("t319 doctor detects hooks blocked before their first heartbeat", () =>
     });
   }
 
-  test("Kiro CLI after workflow progress fails with the generic restart advice", () => {
+  // #1487: Kiro CLI's engines read disjoint registrations. The kiro tree's
+  // hooks live in the agent JSON, which only the v2 engine runs, so the
+  // generic "fully restart the harness" advice could never work on v3. The
+  // shipped kiro hookActivation names v2 and its ACP flag instead.
+  test("Kiro CLI after workflow progress names the engine its hooks need", () => {
     const project = projectWithWorkflowProgress();
 
-    const run = runUtility(project, ["doctor", "--verbose"], { AIDLC_HARNESS_NAME: "kiro" });
+    const run = runUtility(project, ["doctor", "--verbose"], asShippedKiro(project, "kiro"));
+    const text = output(run);
+    expect(run.status).toBe(1);
+    expect(text).toMatch(/fail {2}Hooks have never executed although this workflow has progressed/);
+    expect(text).toContain("In Kiro CLI, type /agent and pick aidlc, then carry on.");
+    expect(text).toContain(
+      "quit Kiro and start it again in this folder with: kiro-cli chat --agent-engine v2 --agent aidlc",
+    );
+    expect(text).toContain("from an ACP client, start `kiro-cli acp --agent-engine v2`");
+    expect(text).not.toContain("fully restart the harness");
+    for (const advice of KIRO_IDE_ADVICE) expect(text).not.toContain(advice);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  // A health dir with no heartbeat after a stage started is the same "hooks
+  // never ran" state, so it carries the harness's recovery too, not Claude's
+  // settings.json.
+  test("Kiro CLI with a heartbeat-free health dir after a stage started names the engine", () => {
+    const project = projectWithWorkflowProgress();
+    const health = activeHealthDir(project);
+    mkdirSync(health, { recursive: true });
+    writeFileSync(join(health, "hook-debug.log"), "debug only\n", "utf-8");
+
+    const run = runUtility(project, ["doctor", "--verbose"], asShippedKiro(project, "kiro"));
+    const text = output(run);
+    expect(run.status).toBe(1);
+    expect(text).toContain("fail  Hook heartbeat data");
+    expect(text).toContain(
+      "health dir exists and the ledger shows STAGE_STARTED, but no hook has ever fired: In Kiro CLI, type /agent and pick aidlc, then carry on.",
+    );
+    expect(text).not.toContain("verify hooks are registered in settings.json");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  // Kiro CLI's prompt adapter runs the human-turn hook on every message, which
+  // leaves a heartbeat before the first workflow too, so none yet is a warning
+  // with the agent and engine steps.
+  test("Kiro CLI with no heartbeat before progress warns with its agent and engine steps", () => {
+    const project = freshProject();
+    const text = output(runUtility(project, ["doctor", "--verbose"], asShippedKiro(project, "kiro")));
+    expect(text).toContain("warn  AIDLC hooks have not run in this project yet");
+    expect(text).toContain("If you already started one, type /agent and pick aidlc;");
+  });
+
+  test("a harness with no hookActivation keeps the generic restart advice after progress", () => {
+    const project = withoutHookAdvice(projectWithWorkflowProgress());
+
+    const run = runUtility(project, ["doctor", "--verbose"], { AIDLC_HARNESS_NAME: "cursor" });
     expect(run.status).toBe(1);
     expect(output(run)).toContain(
       "verify this harness's hook registration or trust configuration, then fully restart the harness",
     );
-    for (const advice of KIRO_IDE_ADVICE) expect(output(run)).not.toContain(advice);
+    expect(output(run)).not.toContain("kiro-cli");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("AIDLC_HOOK_DEBUG-only health data does not create a false failure", () => {
@@ -239,13 +322,15 @@ describe("t319 doctor detects hooks blocked before their first heartbeat", () =>
     mkdirSync(health, { recursive: true });
     writeFileSync(join(health, "hook-debug.log"), "debug only\n", "utf-8");
 
-    const run = runUtility(project, ["doctor", "--verbose"]);
+    const run = runUtility(withoutHookAdvice(project), ["doctor", "--verbose"]);
     expect(output(run)).toContain(
       "ok    Hook heartbeats: not yet fired (first workflow stage will populate)",
     );
   });
 
-  test("zero heartbeats after workflow progress fails and warns about hook approval restart", () => {
+  // The step that worked live: one setting in the project's own local file,
+  // which works in the same chat. No restart, no /hooks, no switch-off.
+  test("zero heartbeats after workflow progress fails with Claude Code's settings step", () => {
     const project = projectWithWorkflowProgress();
 
     const run = runUtility(project, ["doctor", "--verbose"]);
@@ -253,16 +338,42 @@ describe("t319 doctor detects hooks blocked before their first heartbeat", () =>
     expect(output(run)).toMatch(
       /fail {2}Hooks have never executed although this workflow has progressed [1-9]\d* stages?/,
     );
-    expect(output(run)).toContain("1. Run /hooks to check hook approval and policy state.");
-    expect(output(run)).toContain("approval does not take effect until a full restart");
     expect(output(run)).toContain(
-      "only your Claude Code administrator can lift allowManagedHooksOnly in managed-settings.json",
+      'Set "disableAllHooks": false in this project\'s .claude/settings.local.json; it works in the same chat.',
     );
-    expect(output(run)).toContain("AIDLC_SKIP_HUMAN_PRESENCE_GUARD=1");
-    expect(output(run)).toContain("AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD=1");
+    expect(output(run)).toContain("ask your Claude Code administrator to allow project hooks");
+    expect(output(run)).not.toContain("Run /hooks");
+    expect(output(run)).not.toContain("AIDLC_SKIP_");
+    // Replies not being recorded is a warning the summary counts, with the
+    // harness's own step as its fix, not a passing "advisory" row.
     expect(output(run)).toMatch(
-      /ok {4}Human-turn receipts: 0 HUMAN_TURN rows across \d+ stage\/gate event\(s\) \(advisory\)/,
+      /warn {2}Your replies are not being recorded: [1-9]\d* steps? or approvals? so far and no message of yours on record/,
     );
+    expect(output(run)).not.toContain("Human-turn receipts");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  // A brand-new piece of work: the opening message arrives before the work
+  // exists, so the hook saves it in the message store and writes no HUMAN_TURN
+  // row, and the initialization stages log their rows in the same turn. That
+  // is not "replies not recorded": a stored message of the person's means the
+  // hook did record them. With no stored message at all, the warning stands.
+  test("a fresh workflow whose opening message is on record is not told its replies are unrecorded", () => {
+    const project = projectWithWorkflowProgress();
+    writeHeartbeat(project, new Date().toISOString());
+    saveMessage(project, {
+      session: "fresh-session", at: new Date().toISOString(), source: "prompt",
+      text: "/aidlc build a small tool", picker: null, words: "build a small tool", settings: [],
+      route: { scope: null, newIntent: false, skip: [], add: [], projectType: null }, applied: [],
+    });
+    const run = runUtility(project, ["doctor", "--verbose"]);
+    expect(output(run)).not.toContain("Your replies are not being recorded");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("a workflow with stage rows, no human turn and no stored message still warns", () => {
+    const project = projectWithWorkflowProgress();
+    writeHeartbeat(project, new Date().toISOString());
+    const run = runUtility(project, ["doctor", "--verbose"]);
+    expect(output(run)).toMatch(/warn {2}Your replies are not being recorded: [1-9]\d* steps? or approvals? so far/);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   // A record created before heartbeats moved under .aidlc-engine/ keeps them at
@@ -302,7 +413,7 @@ describe("t319 doctor detects hooks blocked before their first heartbeat", () =>
     expect(output(afterMove)).not.toContain("Hooks have never executed");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-  test("allowManagedHooksOnly=true fails with the administrator and bypass guidance", () => {
+  test("allowManagedHooksOnly=true fails with the administrator step and no switch-off", () => {
     const project = freshProject();
     writeManagedSettings(project, { allowManagedHooksOnly: true });
 
@@ -312,10 +423,9 @@ describe("t319 doctor detects hooks blocked before their first heartbeat", () =>
       "fail  Claude managed hook policy: allowManagedHooksOnly=true",
     );
     expect(output(run)).toContain(
-      "only the Claude Code administrator can lift it in managed-settings.json",
+      "Your organization's Claude Code settings block this project's hooks. Ask your Claude Code administrator to allow project hooks.",
     );
-    expect(output(run)).toContain("AIDLC_SKIP_HUMAN_PRESENCE_GUARD=1");
-    expect(output(run)).toContain("AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD=1");
+    expect(output(run)).not.toContain("AIDLC_SKIP_");
   });
 
   test("managed settings fragments merge alphabetically and a later false clears the finding", () => {
@@ -389,9 +499,8 @@ describe("t319 doctor detects hooks blocked before their first heartbeat", () =>
     const run = runUtility(project, ["doctor", "--verbose"]);
     expect(run.status).toBe(1);
     expect(output(run)).toContain(`fail  Hooks last fired ${heartbeat}, but the workflow last advanced `);
-    expect(output(run)).toContain("1. Run /hooks to check hook approval and policy state.");
-    expect(output(run)).toContain("AIDLC_SKIP_HUMAN_PRESENCE_GUARD=1");
-    expect(output(run)).toContain("AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD=1");
+    expect(output(run)).toContain('Set "disableAllHooks": false in this project\'s .claude/settings.local.json');
+    expect(output(run)).not.toContain("AIDLC_SKIP_");
   });
 
   test("four-minute heartbeat lag stays within the same-turn slack", () => {

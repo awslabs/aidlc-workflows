@@ -151,8 +151,8 @@ export interface ReviewFindingInput {
 
 export interface ReconcileResult<T extends ReviewFindingInput> {
   ledger: Ledger;
-  // `priority` on a kept entry is the ledger's effective priority: a restatement
-  // never lowers an open finding's priority.
+  // `priority` on a kept entry is the ledger's effective priority: the judge's
+  // current rating of the restatement, which may lower or raise the entry.
   kept: Array<T & { ledgerId: string }>;
   restatedAccepted: Array<T & { ledgerId: string }>;
   suppressed: Array<T & { ledgerId: string; decision: LedgerDecision }>;
@@ -164,7 +164,7 @@ export interface ReconcileResult<T extends ReviewFindingInput> {
   // Open entries the judge neither restated nor disposed of.
   undisposedIds: string[];
   // Blocking entries the judge declared resolved while their cited code and
-  // files are unchanged: kept open and retained until a maintainer accepts.
+  // files are unchanged: kept open and retained until a maintainer accepts or rejects it.
   unverifiedResolutionIds: string[];
 }
 
@@ -343,9 +343,6 @@ export function validateLedger(value: unknown): Ledger {
     if (entry.decision !== undefined) finding.decision = validateDecision(entry.decision, `${label}.decision`);
     if ((finding.status === "accepted" || finding.status === "rejected") && !finding.decision) {
       throw new Error(`${label} ${finding.status} requires a decision`);
-    }
-    if (finding.status === "rejected" && isBlocking(finding.priority)) {
-      throw new Error(`${label} is ${finding.priority}: blocking findings cannot be rejected`);
     }
     if (archived && finding.status !== "accepted" && finding.status !== "rejected") {
       throw new Error(`${label} must be an accepted or rejected decision`);
@@ -546,7 +543,7 @@ export function renderLedgerComment(input: Ledger, migrated = false): string {
     "",
     "Maintainer commands (repository write access) — put them on the first lines of a comment, one per line, several ids per line allowed:",
     "`/aida accept F# [F#…] <reason>` · `/aida reject F# [F#…] <reason>` · `/aida reopen F# [F#…]` · `/aida status` · `/aida full` (next review covers the whole head)",
-    "P0 and P1 findings can be accepted (visible, risk owned by the maintainer) but not rejected. A comment is applied all-or-nothing.",
+    "Any finding can be accepted (a real risk the maintainer chooses to carry) or rejected (not a defect). A comment is applied all-or-nothing.",
     "Do not edit this comment: AIDA verifies its digest and refuses to run on an edited ledger. To start over, delete it.",
     "",
     "<details><summary>ledger.json</summary>",
@@ -768,9 +765,6 @@ export function applyCommands(
         event("reopened", { id });
         continue;
       }
-      if (command.kind === "reject" && isBlocking(finding.priority)) {
-        throw new Error(`${where}${id} is ${finding.priority}: blocking findings can be accepted (risk owned by you), not rejected`);
-      }
       if (finding.status === "resolved") throw new Error(`${where}${id} is already resolved`);
       const decision: LedgerDecision = { by: actor.login, at: actor.at, reason: command.reason ?? "" };
       if (actor.commentId !== undefined) decision.commentId = actor.commentId;
@@ -930,14 +924,13 @@ export function reconcileLedger<T extends ReviewFindingInput>(
     matchedIds.add(match.id);
     match.lastSeen = { head, at };
     upgradeAnchors(match.anchors, finding.anchors);
-    push("seen", match.id);
-    // A restatement never lowers an open finding's priority: the ledger keeps the
-    // higher one (and its title). Only changed code or a maintainer decision
-    // retires a blocker.
-    if (rank(finding.priority) <= rank(match.priority)) {
-      match.priority = finding.priority;
-      match.title = finding.title;
-    }
+    // A restatement carries the judge's current rating: every review re-rates
+    // each survivor by what a person meets in a normal run, so a lower priority
+    // lowers the entry (noted on its seen event) and a higher one raises it.
+    const previous = match.priority;
+    push("seen", match.id, rank(finding.priority) > rank(previous) ? { reason: `re-rated ${previous} to ${finding.priority}` } : {});
+    match.priority = finding.priority;
+    match.title = finding.title;
     result.kept.push({ ...finding, priority: match.priority, ledgerId: match.id });
     keptOrder.push(order.get(finding) ?? Number.MAX_SAFE_INTEGER);
   }

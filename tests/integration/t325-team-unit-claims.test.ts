@@ -5,6 +5,7 @@ import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
   appendFileSync,
+  chmodSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -12,7 +13,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import {
   worktreePath,
   activeIntentUuid,
@@ -297,6 +298,36 @@ function localRuntimeSnapshot(projectDir: string): Record<string, string | null>
 }
 
 describe("t325 atomic team Unit claims", () => {
+  const removableStages = [
+    "nfr-requirements", "nfr-design", "infrastructure-design",
+    "deployment-pipeline", "environment-provisioning", "observability-setup",
+    "incident-response", "performance-validation", "deployment-execution",
+    "feedback-optimization",
+  ].join(",");
+  // #1401: the person's plan change goes through whatever another clone
+  // holds, and no network read can stop it.
+  test("a plan change goes through while another clone holds a claim published after this clone was made", () => {
+    const { remote } = makeSeed();
+    const planner = clone(remote, "planner");
+    const owner = clone(remote, "owner");
+    const claimed = run(UNIT, ["claim", "alpha", "--team", "owner"], owner);
+    expect(claimed.status, claimed.out).toBe(0);
+    const changed = run(UTILITY, ["recompose", "--skip", removableStages], planner);
+    expect(changed.status, changed.out).toBe(0);
+    expect(readFileSync(seededStateFile(planner), "utf8")).toContain("- [ ] nfr-requirements \u2014 SKIP");
+    // Nothing was fetched to decide it.
+    expect(git(planner, ["for-each-ref", "--format=%(refname)", "refs/remotes/origin/claim/"]))
+      .toBe("");
+  });
+  test("a plan change goes through when the remote cannot be reached", () => {
+    const { remote } = makeSeed();
+    const planner = clone(remote, "offline-planner");
+    git(planner, ["remote", "set-url", "origin", join(planner, "missing-remote")]);
+    const changed = run(UTILITY, ["recompose", "--skip", removableStages], planner);
+    expect(changed.status, changed.out).toBe(0);
+    expect(changed.out).not.toContain("claim registry");
+    expect(readFileSync(seededStateFile(planner), "utf8")).toContain("- [ ] nfr-requirements \u2014 SKIP");
+  });
   test("a fresh clone can adopt the checked-out live claim and publish", () => {
     const { remote } = makeSeed();
     const owner = clone(remote, "adopt-owner");
@@ -1132,8 +1163,11 @@ describe("t325 atomic team Unit claims", () => {
     );
     expect(reclaimed.status, reclaimed.out).toBe(0);
     writeFileSync(join(partial, "partial-candidate.txt"), "candidate\n");
-    git(partial, ["add", "partial-candidate.txt"]);
+    // Reclaim also updates the tracked workflow state; publish requires both
+    // that state and the candidate to be committed.
+    git(partial, ["add", "-A"]);
     git(partial, ["commit", "-m", "partial candidate"]);
+    expect(git(partial, ["status", "--short"])).toBe("");
     const published = run(
       UNIT,
       ["publish", "alpha"],
@@ -1247,6 +1281,9 @@ describe("t325 atomic team Unit claims", () => {
     const parked = run(ORCH, ["park"], checkout);
     expect(parked.status, parked.out).toBe(0);
     expect(JSON.parse(parked.stdout).kind).toBe("parked");
+    // The person is told which Unit is parked, never an empty stage name.
+    expect(JSON.parse(parked.stdout).reason).toContain('Unit "alpha" is parked in this checkout');
+    expect(parked.stdout).not.toContain('parked at \\"\\"');
     expect(readFileSync(seededStateFile(checkout), "utf-8")).toBe(stateBefore);
     expect(exists(join(checkout, "aidlc", ".aidlc-unit-parked"))).toBe(true);
     rmSync(join(checkout, "aidlc", ".aidlc-unit-parked"), { force: true });
@@ -1266,7 +1303,7 @@ describe("t325 atomic team Unit claims", () => {
   test("no-remote sibling worktree claim uses the shared local ref namespace", () => {
     const { seed } = makeSeed();
     git(seed, ["remote", "remove", "origin"]);
-    const sibling = join(dirname(seed), `${seed.split("/").at(-1)}-unit-wt`);
+    const sibling = join(dirname(seed), `${basename(seed)}-unit-wt`);
     git(seed, ["worktree", "add", sibling, "-b", "unit-work", "main"]);
     tempDirs.push(sibling);
     const claim = run(
@@ -1365,6 +1402,8 @@ describe("t325 atomic team Unit claims", () => {
       "utf-8",
     );
     expect(worktreeCloneId).not.toBe(mainCloneId);
+    // Minted with its host recorded, like every clone identity.
+    expect(worktreeCloneId).toMatch(/^[a-z0-9]{12}\n[a-z0-9][a-z0-9-]*\n$/);
     const retriedFork = run(AUDIT, ["audit-fork", "--slug", "alpha"], checkout);
     expect(retriedFork.status, retriedFork.out).toBe(0);
     expect(
@@ -1468,6 +1507,127 @@ describe("t325 atomic team Unit claims", () => {
     const merge = run(AUDIT, ["audit-merge", "--slug", "alpha"], checkout);
     expect(merge.status, merge.out).toBe(0);
     expect(readAllAuditShards(checkout)).toContain("direct audit delta");
+  });
+
+  // #2116: the integration branch the team wrote down under Way of Working is
+  // the one claims use, whatever it is called; a name that cannot be used is
+  // named with its file instead of being silently replaced by org.md's `main`.
+  test("team mode uses the integration branch named under Way of Working and names the file when the name cannot be used", () => {
+    const { seed, remote } = makeSeed();
+    // Gitflow shape: `dev` holds the intent; `main` carries only releases.
+    git(seed, ["push", "origin", "main:dev"]);
+    git(seed, ["checkout", "-q", "--orphan", "releases"]);
+    git(seed, ["rm", "-r", "-q", "--cached", "."]);
+    writeFileSync(join(seed, "README.md"), "# releases only\n");
+    git(seed, ["add", "README.md"]);
+    git(seed, ["commit", "-q", "-m", "release only"]);
+    git(seed, ["push", "-q", "--force", "origin", "releases:main"]);
+    const gitflow = clone(remote, "gitflow");
+    git(gitflow, ["switch", "-q", "dev"]);
+    const teamMd = join(gitflow, "aidlc", "spaces", "default", "memory", "team.md");
+    const wayOfWorking = (branch: string) =>
+      writeFileSync(
+        teamMd,
+        readFileSync(teamMd, "utf-8").replace(
+          "## Way of Working\n",
+          "## Way of Working\n\nWe use gitflow. Integration tests live in `tests/integration`.\n" +
+            "Integration branch: `" + branch + "`.\n",
+        ),
+      );
+    wayOfWorking("dev");
+    git(gitflow, ["commit", "-q", "-am", "team: integration branch dev"]);
+    git(gitflow, ["push", "-q", "origin", "dev"]);
+
+    const status = run(UNIT, ["status"], gitflow);
+    expect(status.status, status.out).toBe(0);
+    expect([...JSON.parse(status.stdout).claimable].sort()).toEqual(["alpha", "gamma"]);
+    const claimed = run(UNIT, ["claim", "alpha", "--team", "gitflow"], gitflow);
+    expect(claimed.status, claimed.out).toBe(0);
+    expect(JSON.parse(claimed.stdout).integration_ref).toBe("refs/remotes/origin/dev");
+
+    const original = readFileSync(teamMd, "utf-8");
+    writeFileSync(teamMd, original.replace("`dev`", "`bad..name`"));
+    const invalid = run(UNIT, ["status"], gitflow);
+    expect(invalid.status).not.toBe(0);
+    expect(invalid.out).toContain("bad..name");
+    expect(invalid.out).toContain("memory/team.md");
+    expect(invalid.out).toContain("not a valid git branch name");
+
+    writeFileSync(teamMd, original.replace("`dev`", "`integration`"));
+    const absent = run(UNIT, ["status"], gitflow);
+    expect(absent.status).not.toBe(0);
+    expect(absent.out).toContain('branch \\"integration\\"');
+    expect(absent.out).toContain("memory/team.md");
+    expect(absent.out).toContain("could not be fetched from origin");
+  });
+
+  // #2117: a claim is the claimant's own commit, so a remote that only takes
+  // the pusher's own committer email accepts it; a push the remote refuses is
+  // reported with the remote's reason, never as a lost race.
+  test("claim commits carry the claimant's git identity and a refused push is reported with the remote's reason", () => {
+    const { seed, remote } = makeSeed();
+    // The forge rule: the committer email must be one of the pusher's own.
+    const hook = join(remote, "hooks", "pre-receive");
+    writeFileSync(
+      hook,
+      [
+        "#!/bin/sh",
+        "while read old new ref; do",
+        '  for c in $(git rev-list "$new" --not --all); do',
+        '    email=$(git log -1 --format=%ce "$c")',
+        '    case "$email" in',
+        "      *@example.test) ;;",
+        "      *) echo \"GL-HOOK-ERR: You cannot push commits for '$email'. You can only push commits if the committer email is one of your own verified emails.\" >&2; exit 1 ;;",
+        "    esac",
+        "  done",
+        "done",
+        "exit 0",
+        "",
+      ].join("\n"),
+    );
+    chmodSync(hook, 0o755);
+
+    const alice = clone(remote, "alice");
+    const claimed = run(UNIT, ["claim", "alpha", "--team", "alice"], alice);
+    expect(claimed.status, claimed.out).toBe(0);
+    const stamp = JSON.parse(claimed.stdout) as { claim_ref: string };
+    expect(git(remote, ["log", "-1", "--format=%an <%ae> %cn <%ce>", stamp.claim_ref])).toBe(
+      "alice <alice@example.test> alice <alice@example.test>",
+    );
+    const released = run(UNIT, ["release", "alpha"], seed);
+    expect(released.status, released.out).toBe(0);
+    expect(git(remote, ["log", "-1", "--format=%ce", stamp.claim_ref])).toBe("seed@example.test");
+
+    const outsider = clone(remote, "outsider");
+    git(outsider, ["config", "user.email", "outsider@example.org"]);
+    const refused = run(UNIT, ["claim", "gamma", "--team", "outsider"], outsider);
+    expect(refused.status).not.toBe(0);
+    expect(refused.out).toContain('Unit \\"gamma\\" claim was rejected by origin: ');
+    expect(refused.out).toContain("You cannot push commits for 'outsider@example.org'");
+    expect(refused.out).not.toContain("compare-and-swap");
+    expect(exists(join(outsider, "aidlc", ".aidlc-unit-scope.json"))).toBe(false);
+    const second = clone(remote, "second");
+    const accepted = run(UNIT, ["claim", "gamma", "--team", "second"], second);
+    expect(accepted.status, accepted.out).toBe(0);
+
+    const nameless = clone(remote, "nameless");
+    git(nameless, ["config", "--unset", "user.name"]);
+    git(nameless, ["config", "--unset", "user.email"]);
+    git(nameless, ["config", "user.useConfigOnly", "true"]);
+    const unknown = run(UNIT, ["claim", "alpha", "--team", "nameless"], nameless, {
+      GIT_CONFIG_GLOBAL: join(nameless, "no-global-gitconfig"),
+      GIT_CONFIG_NOSYSTEM: "1",
+    });
+    expect(unknown.status).not.toBe(0);
+    expect(unknown.out).toContain("Git has no name and email for your commits yet.");
+    expect(unknown.out).toContain("git config --global user.email");
+    expect(unknown.out).not.toContain("Please tell me who you are");
+
+    // The person's signing setting applies to these commits too.
+    git(seed, ["config", "commit.gpgsign", "true"]);
+    git(seed, ["config", "gpg.format", "ssh"]);
+    git(seed, ["config", "user.signingkey", "no-such-signing-key"]);
+    expect(run(UNIT, ["release", "gamma"], seed).status).not.toBe(0);
   });
 });
 

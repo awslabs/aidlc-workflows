@@ -31,11 +31,18 @@ whose stdin never closes). When that variable is empty, it reads stdin for the
 2s; a positive `AIDLC_IDE_STDIN_TIMEOUT_MS` value overrides the ceiling in
 milliseconds for diagnostics and deterministic latency tests. Both field
 spellings are accepted. Acquisition is gated to the payload-dependent targets,
-including `plan-approval-guard`, the two terminal-command targets, plus
-`session-start` and `continue-workflow` for their modern `session_id`, and
-`record-human-turn` for the exact approval response. Every other target
-(including the per-tool-call approval floor) touches neither channel and keeps
-its zero-latency path.
+including `plan-approval-guard`, `review-freeze`, `state-transition-guard`, the per-tool-call approval floor
+(`enforce-approval-gate`, which on 1.x reads the invoking chat's `session_id` so
+that concurrent chats are held by their own gates), the two terminal-command
+targets, plus `session-start` and `continue-workflow` for their modern
+`session_id`, and `record-human-turn` for the exact approval response. Every
+other target touches neither channel and keeps its zero-latency path. The
+approval floor runs on every `PreToolUse`; on 1.x its payload arrives and the
+channel closes with the call, so the normal path does not wait, and only a
+channel that never closes holds it until the ceiling. A 0.12 payload carries no
+`session_id`, so the floor uses the identity derived from the IDE host
+instance: every chat in that host shares it and is judged by the gates of the
+workflow it is bound to.
 
 The legacy environment variable name does not imply raw user text: the measured
 0.12 contract is camelCase JSON. A promptSubmit payload without a `prompt`
@@ -44,9 +51,14 @@ recognized later from `toolArgs.command` on the matching preToolUse event. Raw
 `/aidlc ...` text remains accepted for newer Kiro generations that expose it
 directly, but is not the 0.12 compatibility claim.
 
-`VSCODE_IPC_HOOK` / `VSCODE_PID` are also present in the IDE (absent on the
-CLI). Legacy Plan Approval hashes those measured host-instance values into its
-runtime session identity, so two IDE windows in one workspace do not share
+`VSCODE_IPC_HOOK` / `VSCODE_PID` are also present in the IDE's hook processes
+(absent on the CLI). The agent's own shell commands carry neither: they carry
+`TERM_PROGRAM=kiro` and `KIRO_SESSION_ID` (measured on Kiro IDE 1.2.37, #2167),
+which is how the engine's "answer was not recorded" line and its hooks-off
+step know they are in Kiro IDE; another `TERM_PROGRAM` (Kiro CLI in VS Code's
+terminal is `vscode`) rules Kiro IDE out even beside VS Code's own
+`VSCODE_PID`. Legacy Plan Approval hashes those measured host-instance values
+into its runtime session identity, so two IDE windows in one workspace do not share
 challenge/response files. Other adapter routing still keys off the payload
 channels above.
 
@@ -58,6 +70,7 @@ Result prose is identical on both channels (`toolResult` on 0.12,
 | Event | tool name | tool inputs | result prose | recoverable? |
 |-------|-----------|-------------|--------------|--------------|
 | UserPromptSubmit (1.0.242) | n/a | `{prompt:""}` | n/a | prompt: no; session id: yes |
+| UserPromptSubmit (1.2.37, Workflows on) | n/a | `{cwd, hook_event_name, prompt, session_id}` for the person's message AND for Kiro's own: the workflow creator's `<original_user_request>` brief (chat session_id), each step's brief (the step's own session_id; env `KIRO_SESSION_ID` stays the chat's), the `A workflow you launched (...) completed. ...` finish notice (chat session_id; Kiro's record marks it `syntheticUserMessageReason: agent-initiated-prompt`) | n/a | who sent it: from the record or the sentence (see below) |
 | PreToolUse (shell, 1.0.242) | `execute_pwsh` | `{command,cwd,run_in_background,timeout}` | n/a | command: yes |
 | PostToolUse (write) — create | `fs_write` | `{}` (empty) | `Created the <PATH> file.` | path: from the result prose only |
 | PostToolUse (write) — edit | `str_replace` | `{}` (empty) | `Replaced text in <PATH>` | path: from the result prose only |
@@ -65,7 +78,8 @@ Result prose is identical on both channels (`toolResult` on 0.12,
 | PostToolUse (shell) | `execute_bash` | `{}` (empty) | `Output:\n<stdout>\n\nExit Code: 0` | command: **not** recoverable (only stdout) |
 
 When UserPromptSubmit carries a typed fence or Guard Policy switch, the adapter forwards it to the core human-turn hook, which applies it at prompt time under the payload session and returns an `AIDLC Guard Policy:` note; shell setters are not run inside the adapter.
-On empty-prompt builds such as IDE 1.0.242, the per-turn `prompt-empty` marker makes the adapter refuse lowering shell commands (exit 2 with stderr), including environment-prefixed invocations and summary confirmation `off`, and `verb-intercept` emits a once-per-session capability note explaining that active work cannot be lowered on that build and directing the person to update to a prompt-capable IDE or start new work from a lower-default scope; for summary confirmation both also name the person's project-wide terminal command `<invoke> config flags --bypass AIDLC_DISABLE_SUMMARY_CONFIRMATION --local --yes` (`--clear-bypass` undoes it) for once every piece of work is complete. Raising to `strict` or turning a fence or summary confirmation `on` remains available.
+A prompt Kiro made is not the person's turn: a message Kiro's own chat record (`~/.kiro/sessions/<workspace>/<session>/messages.jsonl`, the payload's session) marks with `_meta.kiro.syntheticUserMessageReason`, or one of the two workflow sentences whole and anchored (a Workflows step's brief opens with one), is forwarded with `origin: {kind: "host"}`: the core hook records `HOST_TURN` and nothing of the person's, and the adapter starts no session, remembers no chat and opens no turn for it; once the chat's turn has closed, it ends a terminal command's same-turn hold (see below). A message the record tags `_meta.kiro.userMessageTag` is the person's whatever its words, and so is anything unknown, including a payload `session_id` other than the chat's `KIRO_SESSION_ID` on its own (that variable named the chat even for a step's prompt, so it may not name the tab a message came from).
+On empty-prompt builds such as IDE 1.0.242, the per-turn `prompt-empty` marker makes the adapter refuse lowering shell commands (exit 2 with stderr), including environment-prefixed invocations and summary confirmation `off`, and `verb-intercept` emits a once-per-session capability note explaining that active work cannot be lowered on that build and directing the person to update to a prompt-capable IDE or start new work from a lower-default scope; for summary confirmation and for plan approval both also name the person's project-wide terminal command `<invoke> config flags --bypass AIDLC_DISABLE_SUMMARY_CONFIRMATION --local --yes` or `--bypass AIDLC_DISABLE_PLAN_APPROVAL_GUARD` (`--clear-bypass` undoes it), which also works while the work runs. Raising to `strict` or turning a fence or summary confirmation `on` remains available.
 Before forwarding an empty prompt, the adapter renames a sole retired
 `Change Control: relaxed|off` line to `Guard Policy` automatically without
 changing its value or source label and without a policy audit row. It prints
@@ -121,12 +135,45 @@ route that refuses a tool call does, and a forwarded core hook's stderr is
 relayed when it exits 2; stdout from a PreToolUse hook never reaches the model.
 Several PreToolUse hooks run one after another in file-name order, every one
 runs even after an earlier one blocks, and a block from a hook between two
-others still delivers its reason. So `aidlc-terminal-command-guard`, which
-runs after `aidlc-enforce-approval-gate`, runs no terminal command while that
-hook's approval gate is waiting for the person: the gate hook refuses the call,
-and the command would otherwise still act. A hook with no matcher also sees Kiro's own background
-`memory` tool calls. On 1.1.14 the PreToolUse `fs_write` input is
-`{path, text}`, and the shell input matches the 1.0.242 row above.
+others still delivers its reason. Kiro IDE shows one "Run Command Hook" card
+for every hook run, so AI-DLC registers its five tool-call checks as one hook,
+`aidlc-guard-tool-call`, which runs them as Kiro ran the separate hooks: in the
+same order (`enforce-approval-gate`, `plan-approval-guard`, `review-freeze`,
+`state-transition-guard`, `terminal-command-guard`), each for the tools its
+own registration selected, every one even after an earlier one refuses. The
+call is refused when any check refuses, with each refusal's text once and
+nothing from a check that let it through (#2022). So `terminal-command-guard`
+runs no terminal command while the approval gate is waiting for the person:
+the gate check refuses the call, and the command would otherwise still act.
+Its matcher leaves out only the reads in the adapter's tool-name table, which
+cannot answer an approval or change the workspace; a name the table does not
+know, such as Kiro's own background `memory` tool, still reaches the checks.
+On 1.1.14 the PreToolUse `fs_write` input is `{path, text}`, and the shell
+input matches the 1.0.242 row above.
+
+### After a write or a command: done by the next card
+
+Kiro IDE 1.2.37 passes a hook's stdout to the agent only for `SessionStart` and
+`UserPromptSubmit` at exit 0, and its stderr only when a `PreToolUse`,
+`UserPromptSubmit` or `PreTaskExec` hook exits 2 (its hook executor's exit-code
+table); nothing a `PostToolUse` hook prints reaches the agent or the person. So
+the work AI-DLC did after a write (the audit row and the sensors) and after a
+command (the two audit-tail hooks below) has no card of its own. When
+`aidlc-guard-tool-call` lets a call through, it notes it under
+`aidlc/.aidlc-sessions/kiro-ide-pending/`: for an audited write, the target file
+as it was (size, time, content hash); for a command, the command and the record
+folders in every space. The next card that runs anyway (the next guard, the
+person's next message, or the turn's end) does that work first, in `catch-up`:
+a write whose file changed goes to `write-audit-log` and `run-sensors` with the
+same input the after-write card gave them, and the write's own `session_id`; a
+write whose file is unchanged waits for a later card while another call starts
+(it may still be writing) and is dropped at a message or the turn's end; a command
+runs `aidlc-after-shell`'s two hooks behind the same front gate, with a record
+folder that appeared while it ran handed to the rebuild as
+`Intent created: <record> (space: <space>)`. Each noted call is claimed by
+renaming its file, so two chats' cards never do it twice. A project whose hook
+files still register `aidlc-write-audit-log` or `aidlc-after-shell` keeps those
+cards doing the work, and the guard notes nothing for them.
 
 ## Consequences for each hook
 
@@ -155,20 +202,68 @@ and the command would otherwise still act. A hook with no matcher also sees Kiro
   against resurrecting a finished workflow). Both audit-tail hooks match
   `execute_bash`, Windows `execute_pwsh`, and the `shell` alias — the
   IDE surfaces no task event the sync could parse.
+- **front gate for the two audit-tail hooks**: they run once for every shell
+  command, in the next card's `catch-up` (or, in a project whose hook files are
+  older, as the `aidlc-after-shell` card), so `catch-up` and the dispatcher's
+  `engine adapter kiro-ide` route look first,
+  without loading the engine (`core/tools/aidlc-hook-front-gate.ts`). When
+  either hook finds nothing to do from a record's files it leaves
+  `<hook>.noop` in that record's `.aidlc-engine/hooks-health/`. The gate skips
+  the hook only when every record in every space carries that mark at least
+  5 s newer than everything the hook reads there (audit shards and the state
+  file, plus `runtime-graph.json` for the rebuild), and a skipped rebuild
+  rewrites its existing `rebuild-stage-graph.last` heartbeat as the full hook
+  would. A link, the flat layout from before spaces, hook debugging, a timestamp
+  ahead of the clock, or a change within the margin runs the full hook. The
+  card is skipped only when both hooks are. The guards, writes, prompts and
+  every other target always run in full.
 - **log-subagent** — payload-dependent. IDE 0.12 sent `invoke_sub_agent`; 1.x
   (1.0.89-1.0.138) sent `subagent_<agent>` instead, each preceded by an empty
   `subagent_response` shell (`"Response recorded."`). The registration matcher
-  is therefore broad (`^(subagent_.+|invoke_sub_agent)$`) so every delegate name
-  reaches the adapter, and the adapter drops `subagent_response` — that shell
+  is therefore broad (`^(?!subagent_response$)(subagent_.+|invoke_sub_agent|orchestrate_subagent)$`)
+  so every delegate name reaches the adapter while the empty shell gets no card,
+  and the adapter drops `subagent_response` on every other entry point: that shell
   carries prose but no identity, so forwarding it would fabricate a
   `SUBAGENT_COMPLETED` row with `Agent Type: unknown`. Identity prefers the
   structured 1.x `subagent_<agent>` tool name (#543) — it is platform-provided,
   so agent-authored result prose cannot misattribute the audit row — and falls
   back to the `**Reviewer:**` / `**Agent:**` result marker from #459, which is
   the only identity signal on the 0.12 `invoke_sub_agent` shape.
+- **review-freeze / state-transition-guard**: each runs in the
+  `aidlc-guard-tool-call` card with its own matcher, which names exactly the write and shell tools the adapter
+  forwards (`write`, `fs_write`, `create_file`, `str_replace`, `fs_append`,
+  `delete_file`, `apply_patch`, `edit_file`, `execute_bash`, `execute_pwsh`,
+  `shell`), so a read, a search or a `memory` call reaches neither check. No
+  payload of `create_file`, `apply_patch` or `edit_file` is captured: each is
+  checked by the path fields the adapter reads, and one with none (a patch
+  whose paths are only in its text) is refused as described below. A write tool the adapter recognizes is forwarded
+  as Write (`fs_write`, `text` as `content`; the kiro-cli 2.6.1 `write`,
+  `content` as is) or Edit (`fs_append`, `text` as
+  `new_string`; `str_replace`, `oldStr`/`newStr` as `old_string`/`new_string`;
+  `delete_file`, `targetFile` as the path), a shell tool as Bash judged from
+  the call's own `cwd` (and from every directory a literal `cd` or `pushd` in
+  the command leaves it in; `execute_pwsh` marked `aidlc_shell: "powershell"`,
+  so both read it as PowerShell), and the payload `session_id` rides along; every other
+  tool is not forwarded. Kiro
+  runs project PreToolUse hooks on a delegated agent's own calls too, with the
+  conductor's `session_id` and no agent identity, and honours exit 2 there
+  (measured on IDE 1.2.4 over `invoke_sub_agent` with `fs_write`), so both
+  guards judge a delegate's call as the conductor's. Every PreToolUse payload
+  of the supported builds (Kiro IDE 1.1.70, Kiro CLI 2.24.1 and later) names
+  its tool and fills its input, so a call neither guard can read (no payload,
+  malformed fields, no tool name, a write tool with no path field the adapter reads, a
+  shell tool with no command) is refused with exit 2 before either runs,
+  whatever the workflow, Guard Policy or `AIDLC_DISABLE_REVIEW_FREEZE_HOOK`;
+  the refusal names those builds and says to update an older Kiro. A legacy
+  argument-less payload is one such call. A readable command that writes
+  nothing is still forwarded.
 - **plan-approval-guard** — populated PreToolUse arguments are forwarded to the
-  shared target-aware guard. Kiro IDE 0.12 identifies the tool but supplies an
-  empty argument object, so the adapter uses a mediated planned-source protocol:
+  shared target-aware guard, a shell call judged from its own `cwd` as above. Kiro IDE 0.12 identifies the tool but supplies an
+  empty argument object, so the adapter uses a mediated planned-source protocol
+  (this guard's own handling: on this row the review-freeze and
+  state-transition registrations above refuse such a call, so the planning
+  write it admits does not run, and a write window it opened stays a recovery
+  latch as described below):
   only the measured `fs_write` and `str_replace` tools remain available while
   planning; shell, append, delete, patch, aliases, and custom mutation tools stop
   before approval. After a canonical plan write the adapter injects the current
@@ -176,8 +271,11 @@ and the command would otherwise still act. A hook with no matcher also sees Kiro
   target-bound `[Approval Fingerprint]`, records the live workspace source as
   `[Planned Source]` (the legacy channel cannot run the fingerprint command, so
   the adapter owns both tags; `unbindable` when the workspace has no source
-  fingerprint), and invokes the reserved decision or answer tool itself. Kiro
-  discards PostToolUse stdout, so a successful write hook remains silent; when
+  fingerprint), and invokes the reserved decision or answer tool itself. A
+  write of the stage's learnings diary, the composer's proposal, or a person's
+  answer text (the record files the shared guard admits while the plan waits)
+  is not a planning write: the adapter clears its write window and records no
+  violation. Kiro discards PostToolUse stdout, so a successful write hook remains silent; when
   the decision or answer step is refused, the hook exits 2 with the refusal on
   stderr instead of dropping it, because the write window stays latched until
   the human recovers. Workspace source is checked against the recorded
@@ -253,10 +351,92 @@ and the command would otherwise still act. A hook with no matcher also sees Kiro
   session identity use the host-derived identity or the retained session, with
   an explicit legacy bucket when neither is available. The 0.12 camelCase
   fallback reads the command from `toolArgs.command`.
+- **A shell call after a terminal command**: in the same turn, the fallback
+  above also refuses a terminal command typed again through the shell, a
+  lowering guard setting, and a call naming the tool files `aidlc-orchestrate.ts`,
+  `aidlc-utility.ts` or `aidlc-knowledge.ts`. Once a terminal command has run for a
+  chat's turn, the agent is told to relay its output and stop, and
+  `terminal-command-guard` also refuses that chat's every other shell call in
+  that turn, also one whose tool input cannot be read, with exit 2 and one fixed
+  line on stderr that says to relay the output and end the turn and quotes
+  nothing the command carried. For a chat the payload names, this is decided
+  before the refusals that ask for a fixed call (a lone carriage return, an AI-DLC
+  reply sent to a file, a value cmd.exe would split, PowerShell code in an
+  argument), so the agent is not told
+  to run the call again: the terminal command typed again, or a call naming a
+  tool file, or a lowering setter, gets the fallback's refusal with its output
+  instead, also when it carries such a character; on a build that hides the
+  person's message a lowering setter gets its own refusal, which names the way
+  out. It covers the dispatcher or the native `aidlc` with any
+  arguments, for any project, a name the shell builds at run time, and a call
+  that names no AIDLC at all. No reading of the command decides which call is
+  harmless. Tools that are not a shell are not this check's. A turn moves on only with the
+  person's message (`UserPromptSubmit`; a prompt Kiro made itself, recorded as
+  `HOST_TURN`, moves no turn on, but once the run the terminal command held has
+  ended with its Stop, such a prompt for the chat starts a run of its own and
+  ends the hold; while that run is open, or for a workflow step's own session,
+  the hold stays): an agent run Kiro starts without one
+  keeps the turn, and the person's next message releases it. The same-turn
+  shell check judges only the chat the payload's `session_id` names, against a
+  turn that chat has recorded: with no session in the payload, another chat's
+  latch, or a later turn it refuses nothing. The turn count is read only as a
+  whole number, and whenever it has to start again (missing or unreadable) the
+  latch beside it is dropped; when the latch cannot be removed, the new count
+  starts past its turn. A count that cannot be written takes the latch with
+  it, so that turn's terminal command leaves no latch and its shell calls run.
+  Only when the count cannot be written and the latch cannot be removed does
+  the latch keep matching, until one of them can be changed again or the
+  person opens a new chat. The terminal-command refusal still follows the
+  host's or the retained session when a payload names none. The engine's own
+  guard for this (Branch 0) reads only the agent-v1 project-wide latch, not
+  these per-chat ones: the engine could tell one chat's latch from another's
+  only through process ancestry, and the chats of one Kiro IDE window share a
+  process.
+- **cmd.exe metacharacters**: native Windows `aidlc` is `aidlc.cmd`, so cmd.exe
+  reads the command line Windows PowerShell 5.1 builds for it: a value holding
+  a space is wrapped in double quotes with its own double quotes left as they
+  are, and cmd.exe acts on `&`, `|`, `<`, `>` and `^` outside its quotes. So
+  `--details 'Use "R & D" team'`, or the same with `\"`, runs `D" team"` as a
+  separate command. Before anything else, `terminal-command-guard` refuses
+  (exit 2 with the reason on stderr) an `execute_pwsh` call of `aidlc` or
+  `aidlc.cmd` in which one of those characters would reach cmd.exe outside its
+  quotes, or in which a value holds a `%NAME%` pair (cmd.exe replaces it with
+  that environment variable's value, even inside its quotes; a lone `%` passes,
+  and so does a pair whose name would start or end with a space, such as the
+  one in `10% and 20%`). The reason is a fixed sentence that names the flag
+  whose value is at fault (or "A value") and the character or "a %NAME% pair",
+  and never repeats the value, so text in a value cannot add lines to it. It
+  simulates PowerShell 5.1's argument passing (an empty argument dropped, a
+  value with a space or tab wrapped in double quotes) and cmd.exe's quote
+  toggling, reading past a `#` comment and a closed `<# ... #>` block comment,
+  and joining a line that ends in a backtick continuation (CRLF, LF or CR) to
+  the next. Statements inside `(...)`, `$(...)`, `@(...)`, `@{...}` and
+  `{...}` groupings are read too, nested or not, so an `aidlc` call such as
+  `(aidlc engine orchestrate next 2>$null | Select-Object -Last 1)` is
+  checked like any other; a `$(...)` inside a double-quoted string is not.
+  Redirects (`2>$null`, `*>$null`, `>$null`, `2>&1`, `> file`) are never
+  `aidlc` values. A person's words that PowerShell resolves before
+  `aidlc.cmd` runs are refused as well, because the check cannot see what
+  reaches cmd.exe. That is the value of `--details`, `--decision`,
+  `--rationale`, `--reason`, `--user-input`, `--feedback`, `--override` or
+  `--arguments`, or the request after `next`, given as a variable such as `$x`
+  or `$env:X`, an expression such as `$(...)`, or a double-quoted string
+  holding `$` or a backtick. The reason says the value comes from a
+  PowerShell variable or expression and asks for the value itself in single
+  quotes. A variable for any other flag or for a positional token, such as
+  the receipt in `continue $obj.receipt`, passes, unless its own text holds a
+  metacharacter or a `%NAME%` pair; so does a variable in any other command.
+  A statement it cannot
+  read to the end (one using the `--%` stop-parsing token, or one holding an
+  unterminated quote or block comment) is refused when its program is `aidlc`
+  or `aidlc.cmd`, bare, by path, or after `&` or `.`, as far as the words
+  before that point show; a statement running any other program passes, even
+  when it mentions aidlc as data. `bun .kiro/tools/...` calls and other
+  programs are not checked.
 - **stop** — reads the modern Stop event's `session_id` and prefers it over the
   workspace-global SessionStart marker, so concurrent chats consume only their
-  own post-create handoff receipts. Legacy agentStop and broken modern channels
-  fall back to the retained identity.
+  own post-create and post-switch handoff receipts. Legacy agentStop and broken
+  modern channels fall back to the retained identity.
 - **record-human-turn** — reads the modern `session_id` and answer payload, or
   the legacy `USER_PROMPT`; it can submit an exact directive-issued choice but
   never reveals, rotates, or transfers another chat's protected capability.

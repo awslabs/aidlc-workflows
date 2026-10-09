@@ -187,7 +187,14 @@ describe("t311 committed reviewed-source evidence", () => {
     expect(reason("a\\b.ts")).toContain("POSIX '/' separators");
     expect(reason("/absolute.ts")).toContain("must be relative");
     expect(reason("C:/windows.ts")).toContain("must be relative");
-    expect(reason("*.ts")).toContain("glob");
+    // A Next.js or SvelteKit route folder is a literal path: brackets and
+    // braces are plain characters in a file name on every platform.
+    expect(normalizeManifestSourcePath("src/app/items/[itemId]/")).toEqual({ path: "src/app/items/[itemId]/", prefix: true });
+    expect(normalizeManifestSourcePath("src/app/[...slug]/page.tsx")).toEqual({ path: "src/app/[...slug]/page.tsx", prefix: false });
+    expect(normalizeManifestSourcePath("src/app/[[...slug]]/page.tsx")).toEqual({ path: "src/app/[[...slug]]/page.tsx", prefix: false });
+    expect(normalizeManifestSourcePath("src/{a}/b.ts")).toEqual({ path: "src/{a}/b.ts", prefix: false });
+    expect(reason("*.ts")).toContain("literally");
+    expect(reason("src/a?.ts")).toContain("literally");
     expect(reason("src/../escape.ts")).toContain("'..' segments");
     expect(reason(".")).toContain("below the repository root");
     expect(reason("./")).toContain("below the repository root");

@@ -106,10 +106,11 @@ interface DoctorResult {
 }
 
 /** Spawn `bun aidlc-utility.ts doctor --project-dir <p>`. Mirrors `bun "$UTIL" doctor --project-dir "$PROJ" 2>&1`. */
-function doctor(p: string): DoctorResult {
+function doctor(p: string, env: NodeJS.ProcessEnv = process.env): DoctorResult {
   const res = spawnSync(BUN, [UTIL, "doctor", "--verbose", "--project-dir", p], {
     timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     encoding: "utf-8",
+    env,
   });
   return {
     status: res.status ?? -1,
@@ -191,6 +192,26 @@ describe("t84 aidlc-utility doctor — Check 2 stale branches (migrated from t84
     // the not-a-git-repo informational pass arm (aidlc-utility.ts:689-691).
     const r = doctor(p);
     expect(r.out).toContain("Stale branches: 0 observed (not a git repo)");
+  });
+
+  // --- Test 1b: git not installed -> the same informational pass, in plain words ---
+  // A machine with no git (a fresh Windows laptop, a container) has no branches
+  // to go stale, and nothing before Construction needs git. The spawn throws
+  // ENOENT instead of exiting non-zero, so this is its own arm: a passing row,
+  // never "check failed" with the raw spawn error, and doctor does not fail
+  // the project for it.
+  test("1b: stale-branch check passes in plain words when git is not installed", () => {
+    const p = proj();
+    const noGit = join(p, "no-git-on-path");
+    mkdirSync(noGit);
+    const env: NodeJS.ProcessEnv = {};
+    for (const [key, value] of Object.entries(process.env)) {
+      if (key.toUpperCase() !== "PATH") env[key] = value;
+    }
+    env.PATH = noGit;
+    const r = doctor(p, env);
+    expect(r.out).toContain("Stale branches: 0 observed (git is not installed)");
+    expect(r.out).not.toContain("Stale branches: check failed");
   });
 
   // --- Test 2: clean git repo, zero bolt-* branches -> passes ---

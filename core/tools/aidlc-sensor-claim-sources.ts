@@ -1,5 +1,6 @@
 import { existsSync, readFileSync } from "node:fs";
-import { basename, dirname, join, relative, resolve, sep } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { headingKey } from "./aidlc-artifact-vocabulary.ts";
 import {
 	authoritativeProjectDescription,
 	errorMessage,
@@ -9,6 +10,7 @@ import {
 	readProjectDescriptionAuthority,
 	visibleMarkdownLines,
 } from "./aidlc-lib.ts";
+import { knownActiveSpace } from "./aidlc-runtime-paths.ts";
 
 interface Flags {
 	stage?: string;
@@ -27,6 +29,7 @@ interface Result {
 
 interface ClaimBlock {
 	section: string;
+	sectionKey: string;
 	text: string;
 	// The text with its parser-located code spans blanked, for source tags.
 	tagText: string;
@@ -102,14 +105,21 @@ function h2Heading(line: string): string | null {
 	return match[1].replace(/[ \t]+#+[ \t]*$/, "").trim();
 }
 
-function sectionsNamed(lines: string[], heading: string): string[][] {
+function sectionsNamed(
+	lines: string[],
+	heading: string,
+	match: "contract" | "exact" = "contract",
+): string[][] {
 	const sections: string[][] = [];
 	let current: string[] | null = null;
 	for (const line of lines) {
 		const h2 = h2Heading(line);
 		if (h2 !== null) {
 			if (current !== null) sections.push(current);
-			current = h2 === heading ? [] : null;
+			const named = match === "exact"
+				? h2 === heading
+				: headingKey(h2) === headingKey(heading);
+			current = named ? [] : null;
 			continue;
 		}
 		if (current !== null) current.push(line);
@@ -151,21 +161,23 @@ function projectRootFor(recordRoot: string, stateBody: string): string {
 	return configured ? resolve(configured) : "";
 }
 
+// A record under aidlc/spaces/<space>/ is checked against its own space's
+// method; only a record outside that tree falls back to the active space.
 function activeSpaceFor(projectRoot: string, recordRoot: string): string {
+	const spacesRoot = join(projectRoot, "aidlc", "spaces");
+	const rel = relative(spacesRoot, recordRoot);
+	if (!rel.startsWith("..") && !isAbsolute(rel)) {
+		const first = rel.split(sep)[0];
+		if (first && first !== ".") return first;
+	}
+
 	const cursorPath = join(projectRoot, "aidlc", "active-space");
 	if (existsSync(cursorPath)) {
 		try {
-			return readFileSync(cursorPath, "utf-8").trim();
+			return knownActiveSpace(join(projectRoot, "aidlc"), readFileSync(cursorPath, "utf-8"));
 		} catch {
 			return "";
 		}
-	}
-
-	const spacesRoot = join(projectRoot, "aidlc", "spaces");
-	const rel = relative(spacesRoot, recordRoot);
-	if (!rel.startsWith("..") && !rel.startsWith(sep)) {
-		const first = rel.split(sep)[0];
-		if (first && first !== ".") return first;
 	}
 	return "";
 }
@@ -205,12 +217,7 @@ function loadRecordAuthority(stageDir: string): RecordAuthority {
 		);
 	}
 	const description = authoritativeProjectDescription(rawProjectDescription);
-	if (description.error) {
-		findings.push(`cannot verify source register: ${description.error}`);
-	}
-	const projectDescription = description.error
-		? ""
-		: description.description;
+	const projectDescription = description.description;
 	const scope = stateField(stateBody, "Scope");
 	const projectRoot = projectRootFor(recordRoot, stateBody);
 	const activeSpace = projectRoot
@@ -314,6 +321,7 @@ function memoryRuleMatches(
 	const sections = sectionsNamed(
 		visibleMarkdownLines(memoryBody, { preserveIndentedCode: true }),
 		heading,
+		"exact",
 	);
 	if (sections.length !== 1) {
 		findings.push(
@@ -443,7 +451,7 @@ function parseSourceUniverse(
 	const seenQuestions = new Set<string>();
 	for (let index = 0; index < lines.length; index++) {
 		const heading = h2Heading(lines[index]);
-		const question = heading ? /^Q(\d+)\b/.exec(heading) : null;
+		const question = heading ? /^Q(\d+)\b/.exec(headingKey(heading)) : null;
 		if (!question) continue;
 		const id = `Q${question[1]}`;
 		if (seenQuestions.has(id)) {
@@ -478,9 +486,10 @@ function parseSourceUniverse(
 	const assumptionAnswer = assumptionAnswers[0] ?? "";
 	// Parse the original document before projecting its confirmation entries:
 	// a definition or lazy continuation keeps the same meaning on both sides.
-	const confirmationStart = lines.findIndex(
-		(line) => h2Heading(line) === "Assumption Confirmation",
-	) + 1;
+	const confirmationStart = lines.findIndex((line) => {
+		const heading = h2Heading(line);
+		return heading !== null && headingKey(heading) === "Assumption Confirmation";
+	}) + 1;
 	const parsed = claimBlocks(body, {
 		start: confirmationStart,
 		end: confirmationStart + confirmation.length,
@@ -549,11 +558,13 @@ function claimBlocks(
 		// claim, nor is such a line the renderer left unplaced.
 		const rendersText = (!rawHtml && pendingLine?.kind !== "unknown") || visibleHtmlText(text, true).trim() !== "";
 		if (text && pendingLine && rendersText) {
+			const sectionKey = headingKey(section);
 			blocks.push({
 				section,
+				sectionKey,
 				text,
 				tagText: pendingTags.join("\n").trimEnd(),
-				inAssumptions: section === ASSUMPTIONS_HEADING,
+				inAssumptions: sectionKey === ASSUMPTIONS_HEADING,
 				listItem: pendingLine.containers.some((container) => container.kind === "listItem"),
 				rawHtml,
 			});
@@ -590,7 +601,7 @@ function claimBlocks(
 			const heading = h2Heading(text);
 			if (heading !== null) {
 				section = heading;
-				if (section === ASSUMPTIONS_HEADING) hasAssumptionsSection = true;
+				if (headingKey(section) === ASSUMPTIONS_HEADING) hasAssumptionsSection = true;
 			}
 			continue;
 		}
@@ -923,7 +934,7 @@ function inspectDeliverable(
 		// grounded by that source. Match the whole canonical block and require
 		// a visible literal label so extra prose or a Markdown link cannot hide.
 		if (
-			block.section === "Sources" &&
+			block.sectionKey === "Sources" &&
 			universe.registered.has("scope") &&
 			block.text === universe.canonicalScopeDeclaration &&
 			tags.length === 1 && tags[0] === "scope"
@@ -974,7 +985,7 @@ function inspectDeliverable(
 				findings.push(`${location}: [${tag}] is not registered in ## Sources`);
 			}
 			if (tag === "scope") {
-				if (block.section !== "Initial Scope Signal") {
+				if (block.sectionKey !== "Initial Scope Signal") {
 					findings.push(
 						`${location}: [scope] is valid only in ## Initial Scope Signal`,
 					);

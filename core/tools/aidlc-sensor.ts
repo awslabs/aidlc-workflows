@@ -5,7 +5,8 @@
 //   describe <id>                 — print manifest fields for one sensor.
 //   fire <id> --stage <slug>      — invoke a sensor against a stage output;
 //        --output-path <path>       emits SENSOR_FIRED then a paired terminal
-//                                   row (PASSED | FAILED | BUDGET_OVERRIDE).
+//        [--unit <name>]            row (PASSED | FAILED | BUDGET_OVERRIDE);
+//                                   the Unit, when named, is on every row.
 //
 // The dispatcher is a thin routing surface (Q4/Q5 of the locked plan):
 //   1. Validate inputs + resolve graph + generate Fire id (no audit lock held).
@@ -73,6 +74,7 @@ import {
 	resolveProjectDir,
 	sensorsDir,
 	usesStageLevelPerUnitArtifacts,
+	validateUnitName,
 	withAuditLock,
 } from "./aidlc-lib.ts";
 import {
@@ -157,6 +159,7 @@ type FireOutcome =
 interface FireContext {
 	sensor: SensorFile;
 	stageSlug: string;
+	unit: string | null;
 	outputPath: string;
 	fireId: string;
 	detailPath: string;
@@ -510,6 +513,12 @@ function handleFire(args: string[]): void {
 		dispatchError("fire requires --output-path <path>");
 
 	const stageSlug = flags.stage;
+	// The Unit whose work the output belongs to, when the caller knows it: under
+	// unit-major Construction the rows are read per Unit.
+	const unit = flags.unit ?? null;
+	if (unit !== null && validateUnitName(unit) !== null) {
+		dispatchError(`fire --unit expects a Unit name, got "${unit}"`);
+	}
 	// Resolve outputPath to absolute upfront so the per-sensor script and the
 	// dispatcher both see the same path regardless of cwd. The dispatcher
 	// itself runs from the user's cwd; the per-sensor script runs with
@@ -665,6 +674,7 @@ function handleFire(args: string[]): void {
 	const ctx: FireContext = {
 		sensor,
 		stageSlug,
+		unit,
 		outputPath,
 		fireId,
 		detailPath,
@@ -681,6 +691,7 @@ function handleFire(args: string[]): void {
 				"Fire id": fireId,
 				"Sensor ID": id,
 				"Stage slug": stageSlug,
+				...(unit ? { Unit: unit } : {}),
 				"Output path": relativizePath(outputPath, projectDir),
 			},
 			projectDir,
@@ -1078,12 +1089,13 @@ function emitTerminal(
 	outcome: FireOutcome,
 	projectDir: string,
 ): void {
-	const { sensor, stageSlug, outputPath, fireId, detailPath } = ctx;
+	const { sensor, stageSlug, unit, outputPath, fireId, detailPath } = ctx;
 	const id = sensor.id;
 	const baseFields: Record<string, string> = {
 		"Fire id": fireId,
 		"Sensor ID": id,
 		"Stage slug": stageSlug,
+		...(unit ? { Unit: unit } : {}),
 		"Output path": relativizePath(outputPath, projectDir),
 	};
 
@@ -1187,6 +1199,7 @@ Subcommands:
   describe <id>                     Print manifest fields
   fire <id> --stage <slug>          Fire a sensor against an output;
        --output-path <path>           emits SENSOR_FIRED + paired terminal row
+       [--unit <name>]                (the Unit, when named, is on both rows)
 
   --help, -h                        Show this message`);
 }

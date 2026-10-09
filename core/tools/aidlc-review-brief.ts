@@ -4,16 +4,20 @@
 // live on the tool-owned GATE_APPROVED / GATE_REJECTED audit rows and are folded
 // into rendered briefs and future reviewer dispatch context at read time.
 
+import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
-import { relative, resolve, sep } from "node:path";
+import { join, relative, resolve, sep } from "node:path";
 import {
   type AuditShardEvent,
   attemptEventAfterFrontier,
+  ENGINE_DIR,
   attemptEventDefinitelyBefore,
   auditBlockField,
+  constructionCheckpointsApply,
   errorMessage,
   extractMarkdownSection,
   findStageBySlug,
+  isTeamUnitOwnership,
   isUnreadableFindingsTableFinding,
   pairedReviewCompletions,
   pairedReviewRecordForCompletion,
@@ -25,6 +29,7 @@ import {
   recordDir,
   reviewRecordDerivedFindings,
   resolveAuditProjectPath,
+  resolveBoltDag,
   resolveProjectDir,
   type ReviewArtifactEntry,
   reviewArtifactEntries,
@@ -36,13 +41,21 @@ import {
   type ReviewFingerprintStage,
   reviewFindingsSectionLines,
   REVIEW_FINDINGS_REPORT_RETRY_MESSAGE,
+  findingsReportUnreadableMessage,
   reviewRecordFindings,
   reviewSectionVerdict,
   sortAttemptEvents,
+  stateFilePath,
   maximalAttemptEvents,
   toPosix,
   unreadableFindingsTableFinding,
+  validateUnitName,
+  writeRecordFileNoFollow,
 } from "./aidlc-lib.js";
+import {
+  constructionCheckpointKind,
+  resolveConstructionCheckpoint,
+} from "./aidlc-construction-checkpoints.js";
 
 export { reviewFindingFingerprint, type ReviewFinding, type ReviewFindingStatus };
 
@@ -443,7 +456,7 @@ function applyReviewBody(
   artifact: string,
   unit: string | undefined,
   body: string,
-): { findings: ReviewFinding[]; malformed: boolean } {
+): { findings: ReviewFinding[]; malformed: boolean; priorMissing: boolean } {
   const report = parseReviewerFindingsReport(body);
   if (report !== null) {
     const duplicatePrior = new Set<string>();
@@ -467,7 +480,7 @@ function applyReviewBody(
       if (row.suppliedId && seenPrior.has(row.suppliedId)) malformed = true;
       next.push(reportNewFinding(next, artifact, unit, row));
     }
-    return { findings: next, malformed };
+    return { findings: next, malformed, priorMissing: report.priorMissing === true };
   }
 
   // Transition read of the six-column table: a row with a known ID is an
@@ -560,7 +573,7 @@ function applyReviewBody(
       ),
     );
   }
-  return { findings: next, malformed: malformed || prior.malformed };
+  return { findings: next, malformed: malformed || prior.malformed, priorMissing: false };
 }
 
 function parsedDispositions(block: string): ReviewFindingDisposition[] {
@@ -982,7 +995,7 @@ export function deriveReviewFindingsList(
     findingsText = undefined;
     if (pending.unreadableReason !== undefined) {
       if (!pending.allowMalformed) {
-        malformedReport = REVIEW_FINDINGS_REPORT_RETRY_MESSAGE;
+        malformedReport = findingsReportUnreadableMessage(pending.unreadableReason);
       } else {
         findings = withUnreadable(
           unreadableFindingsTableFinding(
@@ -995,6 +1008,11 @@ export function deriveReviewFindingsList(
       }
     } else {
       try {
+        // A first review (no review record and no findings yet in this list)
+        // has no prior findings to report, so a report that leaves out the
+        // empty Prior findings table reads the same. A later one must say
+        // what became of the open findings.
+        const firstReview = latestRef === undefined && findings.length === 0;
         const applied = applyReviewBody(
           findings,
           pending.artifact,
@@ -1002,17 +1020,28 @@ export function deriveReviewFindingsList(
           pending.body,
         );
         findings = applied.findings;
-        if (applied.malformed && !pending.allowMalformed) {
-          malformedReport = REVIEW_FINDINGS_REPORT_RETRY_MESSAGE;
+        if (!pending.allowMalformed && applied.priorMissing && !firstReview) {
+          malformedReport = findingsReportUnreadableMessage(
+            "the Prior findings table is missing, and this review has earlier findings to report on",
+          );
+        } else if (!pending.allowMalformed && applied.malformed) {
+          malformedReport = findingsReportUnreadableMessage(
+            "a Prior findings row names an ID the review context does not list, or repeats an ID",
+          );
         }
-      } catch {
+      } catch (e) {
+        // The parser names the fault (the rule, the row and the cell); anything
+        // else that threw keeps the generic sentence.
+        const named = e instanceof Error && e.message.startsWith("the findings report could not be read")
+          ? e.message
+          : REVIEW_FINDINGS_REPORT_RETRY_MESSAGE;
         if (!pending.allowMalformed) {
-          malformedReport = REVIEW_FINDINGS_REPORT_RETRY_MESSAGE;
+          malformedReport = named;
         } else {
           findings = withUnreadable(
             unreadableFindingsTableFinding(
               pending.artifact,
-              REVIEW_FINDINGS_REPORT_RETRY_MESSAGE,
+              named,
               unit,
             ),
           );
@@ -1292,17 +1321,26 @@ function parseFindingDispositionSpec(
   spec: string,
   flag: "--reject-finding" | "--reopen-finding",
 ): { artifact: string; id: string; reason: string } {
-  const match = /^(.*)#(R-[0-9]+)=(\S[\s\S]*)$/.exec(spec.trim());
+  const match = /^(?:(.*)#)?(R-[0-9]+)=(\S[\s\S]*)$/.exec(spec.trim());
   if (!match) {
     throw new Error(
-      `Invalid ${flag} ${JSON.stringify(spec)}. Expected <review-artifact>#R-NN=<human reason>.`,
+      `Invalid ${flag} ${JSON.stringify(spec)}. Expected <review-artifact>#R-NN=<human reason>; ` +
+        "the artifact may be its file name, or left out when one current finding carries the id.",
     );
   }
   return {
-    artifact: toPosix(match[1].trim()),
+    artifact: toPosix((match[1] ?? "").trim()),
     id: match[2],
     reason: match[3].trim(),
   };
+}
+
+// A selector names the finding the way it was said: the full path, a path
+// tail, the file name with or without .md, or no artifact at all.
+function selectorNamesArtifact(selector: string, artifact: string): boolean {
+  if (selector === "" || selector === artifact) return true;
+  const file = selector.endsWith(".md") ? selector : `${selector}.md`;
+  return artifact === file || artifact.endsWith(`/${file}`);
 }
 
 export function rejectedFindingDispositionField(
@@ -1329,43 +1367,32 @@ export function rejectedFindingDispositionField(
       (context) => context.findings.map((finding) => ({ context, finding })),
     );
   });
-  const dispositions: ReviewFindingDisposition[] = [];
-  const seen = new Set<string>();
-  const rejectedKeys = new Set(
-    specs.map((raw) =>
-      dispositionKey(
-        parseFindingDispositionSpec(raw, "--reject-finding"),
-      )
-    ),
-  );
-  for (const raw of reopenSpecs) {
-    const reopened = parseFindingDispositionSpec(raw, "--reopen-finding");
-    if (rejectedKeys.has(dispositionKey(reopened))) {
-      throw new Error(
-        `Finding ${reopened.artifact}#${reopened.id} cannot appear more than once across ` +
-          "--reject-finding and --reopen-finding. Keep only the intended decision.",
-      );
-    }
-  }
-  const addDisposition = (
+  // A selector is resolved to its finding before anything is compared or
+  // recorded, so the file name and the full path name the same finding once.
+  // One current finding matching is the one meant; two are named back.
+  const select = (
     raw: string,
     kind: "reject" | "reopen",
-  ): void => {
+  ): { spec: ReturnType<typeof parseFindingDispositionSpec>; selected: (typeof findings)[number] } => {
     const flag = kind === "reject"
       ? "--reject-finding"
       : "--reopen-finding";
     const spec = parseFindingDispositionSpec(raw, flag);
-    const key = dispositionKey(spec);
-    if (seen.has(key)) {
-      throw new Error(
-        `Finding ${spec.artifact}#${spec.id} cannot appear more than once across ` +
-          "--reject-finding and --reopen-finding. Keep only the intended decision.",
-      );
-    }
-    seen.add(key);
-    const selected = findings.find(({ finding }) =>
+    const asked = spec.artifact ? `${spec.artifact}#${spec.id}` : spec.id;
+    const exact = findings.find(({ finding }) =>
       finding.artifact === spec.artifact && finding.id === spec.id
     );
+    const matches = exact ? [exact] : findings.filter(({ finding }) =>
+      finding.id === spec.id && selectorNamesArtifact(spec.artifact, finding.artifact)
+    );
+    if (matches.length > 1) {
+      throw new Error(
+        `Cannot ${kind} ${asked}: it names ${matches.length} current review findings at this gate: ` +
+          `${matches.map(({ finding }) => `${finding.artifact}#${finding.id}`).sort().join(", ")}. ` +
+          "Pass the one that is meant.",
+      );
+    }
+    const selected = matches[0];
     if (!selected) {
       // Name the accepted selectors: a stem-vs-full-path mismatch is otherwise invisible.
       const available = findings
@@ -1377,7 +1404,7 @@ export function rejectedFindingDispositionField(
         .map(({ finding }) => `${finding.artifact}#${finding.id}`)
         .sort();
       throw new Error(
-        `Cannot ${kind} ${spec.artifact}#${spec.id}: it is not a current review finding for this gate. ` +
+        `Cannot ${kind} ${asked}: it is not a current review finding for this gate. ` +
           (available.length > 0
             ? `Current ${kind === "reject" ? "rejectable" : "reopenable"} findings: ${available.join(", ")}.`
             : findings.length > 0
@@ -1387,11 +1414,37 @@ export function rejectedFindingDispositionField(
               : "This gate has no current review findings."),
       );
     }
+    return { spec, selected };
+  };
+  const rejected = specs.map((raw) => select(raw, "reject"));
+  const reopened = reopenSpecs.map((raw) => select(raw, "reopen"));
+  const duplicate = (finding: { artifact: string; id: string }): never => {
+    throw new Error(
+      `Finding ${finding.artifact}#${finding.id} cannot appear more than once across ` +
+        "--reject-finding and --reopen-finding. Keep only the intended decision.",
+    );
+  };
+  const rejectedKeys = new Set(
+    rejected.map(({ selected }) => dispositionKey(selected.finding)),
+  );
+  for (const { selected } of reopened) {
+    if (rejectedKeys.has(dispositionKey(selected.finding))) duplicate(selected.finding);
+  }
+  const dispositions: ReviewFindingDisposition[] = [];
+  const seen = new Set<string>();
+  const addDisposition = (
+    { spec, selected }: ReturnType<typeof select>,
+    kind: "reject" | "reopen",
+  ): void => {
     const { context, finding } = selected;
+    const key = dispositionKey(finding);
+    if (seen.has(key)) duplicate(finding);
+    seen.add(key);
+    const named = `${finding.artifact}#${finding.id}`;
     if (kind === "reject" && finding.resolvedByReviewer) {
       throw new Error(
-        `Cannot reject ${spec.artifact}#${spec.id}: the reviewer marked it fixed. ` +
-          `If it is not fixed, pass --reopen-finding "${spec.artifact}#${spec.id}=<reason>" instead.`,
+        `Cannot reject ${named}: the reviewer marked it fixed. ` +
+          `If it is not fixed, pass --reopen-finding "${named}=<reason>" instead.`,
       );
     }
     if (
@@ -1400,12 +1453,12 @@ export function rejectedFindingDispositionField(
       finding.status !== "Unresolved"
     ) {
       throw new Error(
-        `Cannot reject ${spec.artifact}#${spec.id}: current status is ${finding.status}.`,
+        `Cannot reject ${named}: current status is ${finding.status}.`,
       );
     }
     if (kind === "reopen" && !finding.resolvedByReviewer) {
       throw new Error(
-        `Cannot reopen ${spec.artifact}#${spec.id}: only a Resolved (reviewer) finding can be reopened. ` +
+        `Cannot reopen ${named}: only a Resolved (reviewer) finding can be reopened. ` +
           "Choose a resolved reviewer finding or leave ordinary revision feedback.",
       );
     }
@@ -1422,11 +1475,11 @@ export function rejectedFindingDispositionField(
         : {}),
     });
   };
-  for (const raw of specs) {
-    addDisposition(raw, "reject");
+  for (const entry of rejected) {
+    addDisposition(entry, "reject");
   }
-  for (const raw of reopenSpecs) {
-    addDisposition(raw, "reopen");
+  for (const entry of reopened) {
+    addDisposition(entry, "reopen");
   }
   return serializeReviewFindingDispositions(dispositions);
 }
@@ -1449,9 +1502,27 @@ const PRIOR_FINDINGS_AS_DATA =
  * Render the complete engine list for a gate, or only open and settled
  * decision context for the next reviewer.
  */
+// Where a finding is, short enough for a table cell: the file name and the
+// section, not the whole path.
+const SHORT_CELL_MAX = 48;
+function shortCell(text: string): string {
+  return text.length > SHORT_CELL_MAX ? `${text.slice(0, SHORT_CELL_MAX - 3).trimEnd()}...` : text;
+}
+function whereText(location: string): string {
+  const [path, ...rest] = location.split(" > ");
+  const file = path.split("/").filter((part) => part.length > 0).at(-1) ?? path;
+  return [file, ...rest].join(" > ");
+}
+function shortWhere(location: string): string {
+  return shortCell(whereText(location));
+}
+
+// `gate` is what the person reads before they decide: a narrow table that stays
+// a table in a terminal, with each finding's full text on lines of its own.
+// `copy` is the readable review copy beside the record, with every column.
 export function renderFindingsContext(
   contexts: ReviewArtifactContext[],
-  audience: "gate" | "reviewer" = "gate",
+  audience: "gate" | "copy" | "reviewer" = "gate",
 ): string {
   if (contexts.length === 0) return "_No review findings were recorded._";
   const reviewer = audience === "reviewer";
@@ -1517,25 +1588,52 @@ export function renderFindingsContext(
       lines.push("");
       continue;
     }
-    lines.push(
-      "| ID | Severity | Location | Finding | Required action | Status |",
-      "|---|---|---|---|---|---|",
-    );
-    for (const finding of context.findings) {
-      const displayFinding = finding.relatedFindingId
+    const displayFinding = (finding: ReviewFinding): string =>
+      finding.relatedFindingId
         ? `${finding.finding} (worse than ${finding.relatedFindingId})`
         : finding.finding;
-      const displayStatus = finding.resolvedByReviewer
-        ? "Resolved (reviewer)"
-        : finding.status;
+    const displayStatus = (finding: ReviewFinding): string =>
+      finding.resolvedByReviewer ? "Resolved (reviewer)" : finding.status;
+    if (audience === "copy") {
       lines.push(
-        `| ${markdownCell(finding.id)} | ${markdownCell(finding.severity)} | ` +
-          `${markdownCell(finding.location)} | ${markdownCell(displayFinding)} | ` +
-          `${markdownCell(finding.requiredAction)} | ${markdownCell(displayStatus)} |`,
+        "| ID | Severity | Location | Finding | Required action | Status |",
+        "|---|---|---|---|---|---|",
       );
-    }
-    if (context.findings.length === 0) {
-      lines.push("| - | - | - | No findings | No action required | Resolved |");
+      for (const finding of context.findings) {
+        lines.push(
+          `| ${markdownCell(finding.id)} | ${markdownCell(finding.severity)} | ` +
+            `${markdownCell(finding.location)} | ${markdownCell(displayFinding(finding))} | ` +
+            `${markdownCell(finding.requiredAction)} | ${markdownCell(displayStatus(finding))} |`,
+        );
+      }
+      if (context.findings.length === 0) {
+        lines.push("| - | - | - | No findings | No action required | Resolved |");
+      }
+    } else {
+      lines.push("| ID | Severity | Where | Status |", "|---|---|---|---|");
+      for (const finding of context.findings) {
+        lines.push(
+          `| ${markdownCell(shortCell(finding.id))} | ${markdownCell(shortCell(finding.severity))} | ` +
+            `${markdownCell(shortWhere(finding.location))} | ${markdownCell(shortCell(displayStatus(finding)))} |`,
+        );
+      }
+      if (context.findings.length === 0) {
+        lines.push("| - | - | - | No findings |");
+      }
+      // A place or status too long for its cell (the person's own reason for
+      // a decision, say) is written out in full here, so nothing is cut.
+      for (const finding of context.findings) {
+        const where = whereText(finding.location);
+        const status = displayStatus(finding);
+        lines.push(
+          "",
+          `> ${finding.id} Finding: ${markdownCell(displayFinding(finding))}`,
+          ...(where.length > SHORT_CELL_MAX ? ["", `> ${finding.id} Where: ${markdownCell(where)}`] : []),
+          "",
+          `> ${finding.id} Required action: ${markdownCell(finding.requiredAction)}`,
+          ...(status.length > SHORT_CELL_MAX ? ["", `> ${finding.id} Status: ${markdownCell(status)}`] : []),
+        );
+      }
     }
     for (const finding of context.findings) {
       if (finding.reviewerNote) {
@@ -1591,7 +1689,7 @@ export function renderReadableReviewCopy(
     );
     if (nextHeading !== -1) after = bodyLines.slice(nextHeading);
   }
-  const rendered = renderFindingsContext([context]).split("\n");
+  const rendered = renderFindingsContext([context], "copy").split("\n");
   const artifactHeading = rendered.findIndex((line) =>
     line.startsWith("**Review artifact:**")
   );
@@ -1793,10 +1891,7 @@ export function reviewInvalidationDetails(
         projectDir,
         stage.slug,
         unit,
-        auditBlockField(
-          staleReview.block,
-          "Unit Source Fingerprint",
-        ),
+        auditBlockField(staleReview.block, "Unit Source Fingerprint"),
         auditBlockField(event.block, "Unit Source Fingerprint"),
       );
       for (const path of sourceChanges.paths) changedUpstream.add(path);
@@ -1922,6 +2017,9 @@ export function reviewInvalidationDetails(
 export function acceptedReviewChanges(
   projectDir: string,
   stageSlug: string,
+  // A Unit's own approval: only that Unit's changes. Each was already said once
+  // when it was kept, so another Unit's change is not said again here.
+  unit?: string,
 ): Array<{ notice: string; changed: string[] | null }> {
   const attemptView = reviewInvalidationAttemptView(
     readAuditShardEvents(projectDir),
@@ -1933,7 +2031,8 @@ export function acceptedReviewChanges(
       event.event !== "CHANGE_ACCEPTED" ||
       !attemptEventAfterFrontier(attemptView.floor, event) ||
       auditBlockField(event.block, "Stage") !== stageSlug ||
-      auditBlockField(event.block, "Checkpoint") !== "review-receipt"
+      auditBlockField(event.block, "Checkpoint") !== "review-receipt" ||
+      (unit !== undefined && auditBlockField(event.block, "Unit") !== unit)
     ) {
       continue;
     }
@@ -1949,6 +2048,24 @@ export function acceptedReviewChanges(
   return accepted;
 }
 
+// Whether the approval a per-Unit stage's brief comes before is the Unit's own:
+// its team gate, or its Construction checkpoint before the person approves it.
+// The stage's one final gate covers every Unit, so a Unit named there is only
+// the execution cursor. Unreadable state is that final gate.
+function unitOwnApproval(projectDir: string, unit: string): boolean {
+  try {
+    const state = readFileSync(stateFilePath(projectDir), "utf-8");
+    if (isTeamUnitOwnership(state)) return true;
+    if (!constructionCheckpointsApply(state)) return false;
+    const dag = resolveBoltDag(projectDir);
+    if (dag.state !== "ok" || !dag.units.includes(unit)) return false;
+    const kind = constructionCheckpointKind(state, unit, dag.units);
+    return !resolveConstructionCheckpoint(projectDir, unit, kind, state).approved;
+  } catch {
+    return false;
+  }
+}
+
 export function renderReviewBrief(
   projectDir: string,
   stage: ReviewFingerprintStage & { name: string },
@@ -1956,9 +2073,11 @@ export function renderReviewBrief(
   unit?: string,
   fallbackFinding?: string,
 ): string {
-  // Per-Unit review dispatches are isolated, but their final human approval is
-  // one stage-level gate. The last Unit is only the execution cursor.
-  const contextUnit = stage.for_each === "unit-of-work" ? undefined : unit;
+  // A Unit's own approval shows only that Unit's review; the stage's final gate
+  // shows every Unit's, the findings its approval accepts.
+  const contextUnit = stage.for_each === "unit-of-work" && !(unit && unitOwnApproval(projectDir, unit))
+    ? undefined
+    : unit;
   let contexts = readReviewArtifactContexts(projectDir, stage, contextUnit);
   if (fallbackFinding) {
     // The incomplete fallback re-checked nothing, so a list carried from
@@ -2044,7 +2163,9 @@ export function renderReviewBrief(
   // Change Control `relaxed` (the ledger's CHANGE_ACCEPTED rows for this stage
   // in the current attempt). The verdict above is the reviewer's; these lines
   // tell the human what moved since it was recorded.
-  for (const accepted of acceptedReviewChanges(projectDir, stage.slug)) {
+  // The final gate of a per-Unit stage omits --unit and says every Unit's change.
+  const changesFor = stage.for_each === "unit-of-work" ? unit : undefined;
+  for (const accepted of acceptedReviewChanges(projectDir, stage.slug, changesFor)) {
     lines.push(`**Reviewed content differs:** ${accepted.notice}`);
     if (accepted.changed !== null) {
       lines.push(
@@ -2083,7 +2204,12 @@ export function renderReviewBrief(
     renderFindingsContext(contexts),
     "",
     "**Decision options:**",
-    "- **Approve** - continue with the open findings accepted.",
+    // Approve says what it accepts: open findings only when there are some.
+    contexts.some((context) =>
+        context.findings.some((finding) => finding.status === "New" || finding.status === "Unresolved")
+      )
+      ? "- **Approve** - continue with the open findings accepted."
+      : "- **Approve** - continue; no findings are open.",
     "- **Request Changes** - return to the listed artifacts so the required actions can be addressed.",
   );
   return lines.join("\n");
@@ -2123,7 +2249,7 @@ export function renderSummaryConfirmationBrief(
     "**Why now:** All stage questions are answered; artifact generation will use this confirmed summary.",
     "**Decision options:**",
     "- **Looks correct** - record this confirmation and generate the named artifacts.",
-    `- **Request changes** - leave the artifacts ungenerated and return to \`${questions}\`.`,
+    "- **Request changes** - nothing is generated yet; say what to change in your answers, and they are updated first.",
   ].join("\n");
 }
 
@@ -2137,6 +2263,39 @@ function parseCliFlags(args: string[]): Record<string, string> {
     flags[flag.slice(2)] = args[++i];
   }
   return flags;
+}
+
+// The brief the agent shows at the gate, kept as printed beside the review
+// record (`<engine>/reviews/<stage>/stage|units/<unit>/briefs/<sha256>.md`,
+// `latest.json` naming the newest), so the gate-open row can record the digest
+// of what the person was shown and a reader can open exactly that text later.
+// Best effort: a keep failure never costs the brief its print.
+function keepGateBrief(
+  projectDir: string,
+  stage: { slug: string; for_each?: string },
+  unit: string | undefined,
+  why: ReviewBriefReason,
+  brief: string,
+): void {
+  try {
+    // A Unit name that is not one is never joined into a path, and both files
+    // are written under the record root through no link (a cloned repo can
+    // carry a planted link under the reviews tree), as the review record is.
+    if (unit !== undefined && validateUnitName(unit) !== null) return;
+    const root = recordDir(projectDir);
+    if (root === null) return;
+    const scope = stage.for_each === "unit-of-work" && unit !== undefined ? join("units", unit) : "stage";
+    const dir = join(ENGINE_DIR, "reviews", stage.slug, scope, "briefs");
+    const digest = createHash("sha256").update(brief).digest("hex");
+    writeRecordFileNoFollow(root, join(dir, `${digest}.md`), brief);
+    writeRecordFileNoFollow(
+      root,
+      join(dir, "latest.json"),
+      `${JSON.stringify({ digest, why, at: new Date().toISOString().replace(/\.\d{3}Z$/, "Z") })}\n`,
+    );
+  } catch {
+    // The print is the brief; the kept copy is the record's convenience.
+  }
 }
 
 export function main(argv: string[]): void {
@@ -2153,17 +2312,17 @@ export function main(argv: string[]): void {
     if (reason !== "first" && reason !== "revision" && reason !== "stale") {
       throw new Error("Review brief requires --why <first|revision|stale>.");
     }
-    process.stdout.write(
-      `${
-        renderReviewBrief(
-          projectDir,
-          stage,
-          reason,
-          flags.unit,
-          flags["fallback-finding"],
-        )
-      }\n`,
-    );
+    const brief = `${
+      renderReviewBrief(
+        projectDir,
+        stage,
+        reason,
+        flags.unit,
+        flags["fallback-finding"],
+      )
+    }\n`;
+    process.stdout.write(brief);
+    keepGateBrief(projectDir, stage, flags.unit, reason, brief);
     return;
   }
   if (command === "context") {

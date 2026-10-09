@@ -26,6 +26,7 @@ import {
   candidateReviewCoverageProjection,
   clearClaimGeneration,
   clearUnitScopeStamp,
+  committedTextBytes,
   ensureCloneId,
   errorMessage,
   extractMarkdownSection,
@@ -81,6 +82,7 @@ import {
 import {
   parseTestingContract,
   PLAN_APPROVAL_CHECKPOINT,
+  questionsFileApproved,
   recordedApprovalFingerprint,
   resolveTestingPosture,
 } from "./aidlc-testing-posture.ts";
@@ -181,37 +183,54 @@ function currentBranch(projectDir: string): string {
   return result.ok && result.stdout.trim() ? result.stdout.trim() : "main";
 }
 
-function affirmedIntegrationBranch(projectDir: string): string | null {
-  const memoryRoot = join(
-    projectDir,
-    "aidlc",
-    "spaces",
-    activeSpace(projectDir),
-    "memory",
-  );
+// A Way of Working line names the team's branch only when it says so: "the
+// integration branch", "the base branch", "the merge-target branch" or "the
+// merge target", with the name in backticks in the same sentence. A line such
+// as "Integration tests live in `tests/integration`" names no branch.
+const INTEGRATION_BRANCH_WORDS =
+  "(?:(?:base|integration|merge[ -]target) branch|merge target)";
+const INTEGRATION_BRANCH_AFTER_WORDS = new RegExp(
+  `\\b${INTEGRATION_BRANCH_WORDS}\\b[^\`\\n.;]*\`([^\`]+)\``,
+  "i",
+);
+const INTEGRATION_BRANCH_BEFORE_WORDS = new RegExp(
+  `\`([^\`]+)\`[^.;\\n]*\\b${INTEGRATION_BRANCH_WORDS}\\b`,
+  "i",
+);
+
+// The branch the team wrote down under "## Way of Working", narrowest layer
+// first. Whatever it is called, that branch is used; a name git cannot use as a
+// branch is refused with its file, never skipped for a broader layer's choice.
+function affirmedIntegrationBranch(
+  projectDir: string,
+): { branch: string; source: string } | null {
+  const space = activeSpace(projectDir);
   for (const name of ["project.md", "team.md", "org.md"]) {
+    const source = `aidlc/spaces/${space}/memory/${name}`;
+    let body: string;
     try {
-      const body = readFileSync(join(memoryRoot, name), "utf-8");
-      const section = extractMarkdownSection(body, "## Way of Working");
-      const explicit =
-        /\b(?:base|integration|merge target)(?: branch)?\b[^`\n]*`([^`]+)`/i.exec(section) ??
-        /`([^`]+)`[^.\n]*\b(?:base|integration|merge target)(?: branch)?\b/i.exec(section);
-      if (
-        explicit &&
-        /^(?:main|master|develop|release\/[A-Za-z0-9._/-]+)$/.test(explicit[1])
-      ) {
-        return explicit[1];
-      }
+      body = readFileSync(join(projectDir, ...source.split("/")), "utf-8");
     } catch {
-      // Try the next narrower/broader method layer.
+      continue;
     }
+    const section = extractMarkdownSection(body, "## Way of Working");
+    const explicit =
+      INTEGRATION_BRANCH_AFTER_WORDS.exec(section) ??
+      INTEGRATION_BRANCH_BEFORE_WORDS.exec(section);
+    if (!explicit) continue;
+    const branch = explicit[1].trim();
+    if (!git(projectDir, ["check-ref-format", "--branch", branch]).ok) {
+      fail(
+        `The integration branch "${branch}", named in ${source} under "Way of Working", ` +
+          "is not a valid git branch name. Correct it there and run the command again.",
+      );
+    }
+    return { branch, source };
   }
   return null;
 }
 
 function integrationBranch(projectDir: string, remote: string | null): string {
-  const affirmed = affirmedIntegrationBranch(projectDir);
-  if (affirmed) return affirmed;
   if (remote) {
     const cached = git(projectDir, ["symbolic-ref", "--short", `refs/remotes/${remote}/HEAD`]);
     if (cached.ok && cached.stdout.trim().startsWith(`${remote}/`)) {
@@ -244,14 +263,26 @@ function fetchIntegration(projectDir: string): {
   oid: string;
 } {
   const remote = repositoryRemote(projectDir);
-  const branch = integrationBranch(projectDir, remote);
+  const affirmed = affirmedIntegrationBranch(projectDir);
+  const branch = affirmed?.branch ?? integrationBranch(projectDir, remote);
+  const named = affirmed
+    ? `The integration branch "${affirmed.branch}", named in ${affirmed.source} under "Way of Working",`
+    : null;
   if (remote) {
     const fetched = git(projectDir, ["fetch", remote, branch]);
-    if (!fetched.ok) fail(`git fetch ${remote} ${branch} failed: ${fetched.stderr.trim()}`);
+    if (!fetched.ok) {
+      fail(
+        named
+          ? `${named} could not be fetched from ${remote}: ${fetched.stderr.trim().replace(/^fatal:\s*/i, "")}`
+          : `git fetch ${remote} ${branch} failed: ${fetched.stderr.trim()}`,
+      );
+    }
   }
   const ref = remote ? `refs/remotes/${remote}/${branch}` : `refs/heads/${branch}`;
   const oid = git(projectDir, ["rev-parse", "--verify", ref]);
-  if (!oid.ok) fail(`Integration ref ${ref} does not exist.`);
+  if (!oid.ok) {
+    fail(named ? `${named} does not exist in this repository.` : `Integration ref ${ref} does not exist.`);
+  }
   return { remote, branch, ref, oid: oid.stdout.trim() };
 }
 
@@ -411,6 +442,10 @@ function currentClaim(
   };
 }
 
+// git's own words when it has no author or committer identity to use.
+const NO_GIT_IDENTITY =
+  /identity unknown|Please tell me who you are|auto-detect email|no (?:email|name) was given/i;
+
 function createClaimCommit(
   projectDir: string,
   parentOid: string,
@@ -421,13 +456,11 @@ function createClaimCommit(
   const scratch = mkdtempSync(join(tmpdir(), "aidlc-unit-claim-"));
   const index = join(scratch, "index");
   try {
-    const env = {
-      GIT_INDEX_FILE: index,
-      GIT_AUTHOR_NAME: "AI-DLC Unit Claims",
-      GIT_AUTHOR_EMAIL: "aidlc-unit@local",
-      GIT_COMMITTER_NAME: "AI-DLC Unit Claims",
-      GIT_COMMITTER_EMAIL: "aidlc-unit@local",
-    };
+    // The claim is the person's own commit: their git name, email and signing
+    // settings apply as they do to any commit they make, so a remote that
+    // matches the committer to the pusher accepts it, and the claim history
+    // shows who claimed.
+    const env = { GIT_INDEX_FILE: index };
     const read = git(projectDir, ["read-tree", sourceTreeOid ?? parentOid], env);
     if (!read.ok) fail(`git read-tree failed: ${read.stderr.trim()}`);
     const blob = spawnSync("git", ["hash-object", "-w", "--stdin"], {
@@ -444,34 +477,69 @@ function createClaimCommit(
     if (!update.ok) fail(`git update-index failed: ${update.stderr.trim()}`);
     const tree = git(projectDir, ["write-tree"], env);
     if (!tree.ok) fail(`git write-tree failed: ${tree.stderr.trim()}`);
+    // commit-tree does not read commit.gpgsign on its own; porcelain commits do.
+    const signed =
+      git(projectDir, ["config", "--type=bool", "commit.gpgsign"]).stdout.trim() === "true";
     const commitArgs = [
       "commit-tree",
       tree.stdout.trim(),
       "-p",
       parentOid,
       ...(additionalParentOid ? ["-p", additionalParentOid] : []),
+      ...(signed ? ["-S"] : []),
       "-m",
       `aidlc unit ${payload.status}: ${payload.unit} generation ${payload.generation}`,
     ];
     const commit = git(projectDir, commitArgs, env);
-    if (!commit.ok) fail(`git commit-tree failed: ${commit.stderr.trim()}`);
+    if (!commit.ok) {
+      if (NO_GIT_IDENTITY.test(commit.stderr)) {
+        fail(
+          "Git has no name and email for your commits yet. Set them with " +
+            'git config --global user.name "Your Name" and git config --global user.email "you@example.com", ' +
+            "then run the command again.",
+        );
+      }
+      fail(`git commit-tree failed: ${commit.stderr.trim()}`);
+    }
     return commit.stdout.trim();
   } finally {
     rmSync(scratch, { recursive: true, force: true });
   }
 }
 
+// What the remote said when it refused a push: its own `remote:` lines, then
+// git's reason in parentheses; the whole stderr when it printed neither.
+function pushRefusal(stderr: string): string {
+  const lines = stderr.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  const remoteSaid = lines
+    .filter((line) => line.startsWith("remote:"))
+    .map((line) => line.slice("remote:".length).trim())
+    .filter(Boolean);
+  const reason = lines
+    .map((line) => /\[(?:remote )?rejected\][^(]*\(([^)]+)\)/.exec(line)?.[1])
+    .find(Boolean);
+  const parts = [...remoteSaid, ...(reason ? [`(${reason})`] : [])];
+  return (parts.length > 0 ? parts : lines).join(" ");
+}
+
+// The compare-and-swap: ok when the ref moved from expectedOid to commitOid.
+// A stale lease, or a ref the remote could not lock because another push got
+// there first, is another claimant winning; any other push failure is the
+// remote refusing the commit, and `refused` carries its reason for the person.
+const CLAIM_RACE_LOST = /stale info|failed to update ref|cannot lock ref/;
 function updateClaimRef(
   projectDir: string,
   remote: string | null,
   ref: string,
   commitOid: string,
   expectedOid: string | null,
-): boolean {
+): { ok: boolean; refused?: string } {
   if (remote) {
     const lease = `--force-with-lease=${ref}:${expectedOid ?? ""}`;
     const pushed = git(projectDir, ["push", remote, lease, `${commitOid}:${ref}`]);
-    return pushed.ok;
+    if (pushed.ok) return { ok: true };
+    if (CLAIM_RACE_LOST.test(pushed.stderr)) return { ok: false };
+    return { ok: false, refused: pushRefusal(pushed.stderr) };
   }
   const updated = git(projectDir, [
     "update-ref",
@@ -479,7 +547,7 @@ function updateClaimRef(
     commitOid,
     expectedOid ?? ZERO_OID,
   ]);
-  return updated.ok;
+  return { ok: updated.ok };
 }
 
 function activeIdentity(projectDir: string): {
@@ -574,9 +642,9 @@ function skeletonCompletedAtOid(projectDir: string, oid: string): boolean {
     const shown = git(projectDir, ["show", `${oid}:${path}`, "--"]);
     if (!shown.ok) continue;
     for (const block of shown.stdout.split(/\n---\n/)) {
-      const event = /^\*\*Event\*\*:\s*(.+)$/m.exec(block)?.[1]?.trim();
+      const event = /^\*\*Event\*\*:[ \t]*(.+)$/m.exec(block)?.[1]?.trim();
       const names =
-        /^\*\*Bolt names\*\*:\s*(.+)$/m.exec(block)?.[1]?.trim() ?? "";
+        /^\*\*Bolt names\*\*:[ \t]*(.+)$/m.exec(block)?.[1]?.trim() ?? "";
       if (!event) continue;
       events.push({
         event,
@@ -1038,8 +1106,9 @@ function candidateReviewFingerprint(
     if (!gitPathExistsAt(projectDir, oid, path)) {
       return [logicalPath, "missing"];
     }
+    // CRLF text reads as LF, as the review's fingerprint read it.
     const digest = createHash("sha256")
-      .update(gitTextAt(projectDir, oid, path))
+      .update(committedTextBytes(Buffer.from(gitTextAt(projectDir, oid, path), "utf-8")))
       .digest("hex");
     return [logicalPath, `sha256:${digest}`];
   });
@@ -1628,8 +1697,12 @@ function candidateEvidence(
       (approvalEvent.event === "PLAN_APPROVAL_SKIPPED"
         ? (auditBlockField(approvalEvent.block, "Source") ?? "").length > 0 &&
           /^\[Answer\]:\s*Plan approval off\s*$/m.test(questions)
+        // The person's answer is read by its label, as every other reader
+        // reads it (questionsFileApproved): the recorder's option letter, in
+        // either case, is not the answer. The bytes stay pinned to the
+        // approval by Questions SHA-256 above.
         : (auditBlockField(approvalEvent.block, "Session") ?? "").length > 0 &&
-          /^\[Answer\]:\s*A\.\s*Approve Plan\s*$/m.test(questions))
+          questionsFileApproved(questions))
     ) {
       planFingerprint = fingerprint;
     }
@@ -1738,7 +1811,11 @@ function publishUnit(args: string[], projectDir?: string): void {
     headTree,
     headOid,
   );
-  if (!updateClaimRef(pd, remote, stamp.claim_ref, commit, current.oid)) {
+  const pushed = updateClaimRef(pd, remote, stamp.claim_ref, commit, current.oid);
+  if (!pushed.ok) {
+    if (pushed.refused) {
+      fail(`Unit "${unit}" publication was rejected by ${remote}: ${pushed.refused}`);
+    }
     fail(`Unit "${unit}" publication compare-and-swap failed; refresh the claim and retry.`);
   }
   invalidateLiveClaimPayloadCache(pd, unit);
@@ -3443,14 +3520,15 @@ function claimUnit(args: string[], projectDir?: string): void {
   // Persist the intended claim before the CAS. A process killed after the push
   // can validate this nonce on retry and finish without creating a new attempt.
   writeUnitScopeStamp(pd, stamp);
-  if (!updateClaimRef(pd, integration.remote, ref, commit, current?.oid ?? null)) {
+  const pushed = updateClaimRef(pd, integration.remote, ref, commit, current?.oid ?? null);
+  if (!pushed.ok) {
     clearUnitScopeStamp(pd);
     const winner = currentClaim(pd, integration.remote, ref);
-    fail(
-      winner?.status === "claimed"
-        ? `Unit "${unit}" claim lost to "${winner.owner}".`
-        : `Unit "${unit}" claim compare-and-swap failed.`,
-    );
+    if (winner?.status === "claimed") fail(`Unit "${unit}" claim lost to "${winner.owner}".`);
+    if (pushed.refused) {
+      fail(`Unit "${unit}" claim was rejected by ${integration.remote}: ${pushed.refused}`);
+    }
+    fail(`Unit "${unit}" claim compare-and-swap failed.`);
   }
   invalidateLiveClaimPayloadCache(pd, unit);
   const winner = currentClaim(pd, integration.remote, ref);
@@ -3586,7 +3664,11 @@ function releaseUnit(args: string[], projectDir?: string): void {
     predecessor_oid: current.oid,
   };
   const commit = createClaimCommit(pd, current.oid, payload);
-  if (!updateClaimRef(pd, integration.remote, ref, commit, current.oid)) {
+  const pushed = updateClaimRef(pd, integration.remote, ref, commit, current.oid);
+  if (!pushed.ok) {
+    if (pushed.refused) {
+      fail(`Unit "${unit}" release was rejected by ${integration.remote}: ${pushed.refused}`);
+    }
     fail(`Unit "${unit}" release compare-and-swap failed.`);
   }
   invalidateLiveClaimPayloadCache(pd, unit);

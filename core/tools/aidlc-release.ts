@@ -91,7 +91,10 @@ function validateSelectedAsset(asset: ReleaseAsset, version: string): void {
 }
 
 export class ReleaseUnavailableError extends Error {
-  constructor(message: string) {
+  constructor(
+    message: string,
+    readonly code?: "preview-api-required" | "preview-unpublished",
+  ) {
     super(message);
     this.name = "ReleaseUnavailableError";
   }
@@ -146,20 +149,34 @@ export function releaseApiUrl(baseUrl: string, explicit?: string): string {
   if (parsed.protocol !== "https:" || parsed.hostname !== "github.com" || !match) {
     throw new ReleaseUnavailableError(
       `${PREVIEW_CHANNEL} releases cannot be listed for ${redact(baseUrl)}; pass --release-api-url or set AIDLC_RELEASE_API_URL`,
+      "preview-api-required",
     );
   }
   return `https://api.github.com/repos/${match[1]}/${match[2]}/releases`;
 }
 
-function progress(url: string, complete: boolean): void {
-  if (process.env.AIDLC_ROUTE_OUTPUT_MODE !== "human") return;
+// Only the release asset itself keeps a line: the metadata files read to
+// verify it (version.json, checksums, the attestation, a .sha256 sidecar) would
+// each add one more. In a terminal they show a transient "Downloading ..." that
+// is cleared when the file is in; when output is captured they print nothing.
+// Returns the bytes to write to stderr, or null for no output.
+export function progressLine(
+  url: string,
+  complete: boolean,
+  metadata: boolean,
+  tty: boolean,
+): string | null {
   const name = basename(new URL(url).pathname) || "release asset";
   const message = complete ? `Downloaded ${name}` : `Downloading ${name}...`;
-  if (process.stderr.isTTY) {
-    process.stderr.write(`\r${message.slice(0, PROGRESS_WIDTH).padEnd(PROGRESS_WIDTH)}${complete ? "\n" : ""}`);
-  } else if (complete) {
-    process.stderr.write(`${message}\n`);
-  }
+  if (!tty) return complete && !metadata ? `${message}\n` : null;
+  if (complete && metadata) return `\r${"".padEnd(PROGRESS_WIDTH)}\r`;
+  return `\r${message.slice(0, PROGRESS_WIDTH).padEnd(PROGRESS_WIDTH)}${complete ? "\n" : ""}`;
+}
+
+function progress(url: string, complete: boolean, metadata: boolean): void {
+  if (process.env.AIDLC_ROUTE_OUTPUT_MODE !== "human") return;
+  const line = progressLine(url, complete, metadata, Boolean(process.stderr.isTTY));
+  if (line !== null) process.stderr.write(line);
 }
 
 function assertMetadataSize(path: string, name: string): void {
@@ -254,6 +271,11 @@ export function verifyReleaseProvenance(
     trust.repository,
     "--signer-workflow",
     trust.workflow,
+    // Release attestations are issued on github.com. Without --hostname, gh
+    // uses its default host, which may be a GitHub Enterprise host that cannot
+    // verify them.
+    "--hostname",
+    "github.com",
     "--source-ref",
     manifest.sourceRef ?? `refs/tags/v${manifest.version}`,
     ...(manifest.sourceDigest
@@ -603,7 +625,9 @@ async function download(
   contentTypes: readonly string[] = [],
   reportedTimeoutMs = timeoutMs,
 ): Promise<void> {
-  progress(url, false);
+  // Every metadata file is fetched under the metadata size cap.
+  const metadata = maxBytes <= MAX_METADATA_BYTES;
+  progress(url, false, metadata);
   try {
     const { bytes } = await fetchBytes(url, {
       timeoutMs,
@@ -613,7 +637,7 @@ async function download(
       reportedTimeoutMs,
     });
     writeFileSync(path, bytes);
-    progress(url, true);
+    progress(url, true, metadata);
   } catch (error) {
     if (process.env.AIDLC_ROUTE_OUTPUT_MODE === "human" && process.stderr.isTTY) {
       process.stderr.write(`\r${"".padEnd(PROGRESS_WIDTH)}\r`);
@@ -687,6 +711,7 @@ export async function resolvePreviewVersion(options: {
   if (!newest) {
     throw new ReleaseUnavailableError(
       `no ${PREVIEW_CHANNEL} release is published at ${redact(listUrl)}`,
+      "preview-unpublished",
     );
   }
   return newest;
@@ -698,6 +723,7 @@ export async function fetchReleaseMetadata(options: {
   baseUrl?: string;
   caBundle?: string;
   metadataTimeoutMs?: number;
+  verifyProvenance?: boolean;
 } = {}): Promise<{
   directory: string;
   manifest: ReleaseManifest;
@@ -710,6 +736,10 @@ export async function fetchReleaseMetadata(options: {
   if (settings.offline) {
     throw new ReleaseUnavailableError("release metadata is unavailable while offline");
   }
+  // Version checks only need version.json checked against checksums.txt.
+  // gh attestation verify costs seconds and belongs to install paths;
+  // acquireRelease keeps provenance verification enabled by default.
+  const verifyProvenance = options.verifyProvenance ?? true;
   const version = options.version ? requireVersion(options.version) : undefined;
   const baseUrl = settings.baseUrl || defaultReleaseBaseUrl();
   const metadataTimeoutMs = options.metadataTimeoutMs ?? LONG_SUBPROCESS_TIMEOUT_MS;
@@ -734,22 +764,26 @@ export async function fetchReleaseMetadata(options: {
       ["text/plain", "application/octet-stream", "binary/octet-stream"],
       metadataTimeoutMs,
     );
-    await download(
-      releaseUrl(baseUrl, version, PROVENANCE_BUNDLE),
-      join(temporary, PROVENANCE_BUNDLE),
-      remainingTimeout(metadataDeadline, "release provenance"),
-      settings.caBundle,
-      MAX_METADATA_BYTES,
-      ["application/json", "application/octet-stream", "binary/octet-stream", "text/plain"],
-      metadataTimeoutMs,
-    );
+    if (verifyProvenance) {
+      await download(
+        releaseUrl(baseUrl, version, PROVENANCE_BUNDLE),
+        join(temporary, PROVENANCE_BUNDLE),
+        remainingTimeout(metadataDeadline, "release provenance"),
+        settings.caBundle,
+        MAX_METADATA_BYTES,
+        ["application/json", "application/octet-stream", "binary/octet-stream", "text/plain"],
+        metadataTimeoutMs,
+      );
+    }
     const manifest = readReleaseManifest(temporary);
-    verifyReleaseProvenance(temporary, {
-      ...manifest,
-      sourceDigest: undefined,
-    });
+    if (verifyProvenance) {
+      verifyReleaseProvenance(temporary, {
+        ...manifest,
+        sourceDigest: undefined,
+      });
+    }
     verifiedChecksums(temporary);
-    if (manifest.sourceDigest) verifyReleaseProvenance(temporary, manifest);
+    if (verifyProvenance && manifest.sourceDigest) verifyReleaseProvenance(temporary, manifest);
     if (version && manifest.version !== version) {
       throw new Error(`release endpoint returned ${manifest.version}, not requested ${version}`);
     }

@@ -455,21 +455,24 @@ describe("t215 bolt dag self-heal", () => {
     expect(r.stderr).toBe("");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-  test("4: cyclic dependency artifact with no graph emits a loud error", () => {
+  // A dependency artifact the engine cannot read stops the walk with the
+  // agent's step to repair it (the defect, then next), never an error for the
+  // person.
+  test("4: cyclic dependency artifact with no graph stops on the agent's repair step", () => {
     const proj = seedProject("functional-design");
     seedCyclicDependency(proj);
     const r = runNext(proj);
-    expect(r.directive.kind).toBe("error");
+    expect(r.directive.kind).toBe("print");
     expect(r.directive.message).toContain("unit-of-work-dependency.md");
     expect(r.directive.message).toContain("cyclic");
     expect(r.stderr).toBe("");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-  test("5: dangling dependency artifact with no graph emits a malformed error", () => {
+  test("5: dangling dependency artifact with no graph stops on a malformed repair step", () => {
     const proj = seedProject("functional-design");
     seedDanglingDependency(proj);
     const r = runNext(proj);
-    expect(r.directive.kind).toBe("error");
+    expect(r.directive.kind).toBe("print");
     expect(r.directive.message).toContain("unit-of-work-dependency.md");
     expect(r.directive.message).toContain("malformed");
     expect(r.directive.message).toContain("unknown unit");
@@ -481,7 +484,7 @@ describe("t215 bolt dag self-heal", () => {
     seedBoltDag(proj, ["gamma"]);
     seedDanglingDependency(proj);
     const r = runNext(proj);
-    expect(r.directive.kind).toBe("error");
+    expect(r.directive.kind).toBe("print");
     expect(r.directive.message).toContain("unit-of-work-dependency.md");
     expect(r.directive.message).toContain("malformed");
     expect(r.directive.message).toContain("unknown unit");
@@ -525,15 +528,14 @@ describe("t215 bolt dag self-heal", () => {
     logCapturedStderr(r.stderr);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-  test("8: approve guard reports a malformed dependency artifact as an error", () => {
+  test("8: approve guard names the repair of a malformed dependency artifact, then the same approval", () => {
     const proj = seedProject("functional-design");
     seedDanglingDependency(proj);
     const r = runReport(proj);
-    expect(r.directive.kind).toBe("error");
-    expect(r.directive.message).toContain("unit list cannot be resolved");
-    expect(r.directive.message).toContain("unit-of-work-dependency.md");
+    expect(r.directive.kind).toBe("print");
+    expect(r.directive.message).toContain("unit-of-work-dependency.md cannot be read");
     expect(r.directive.message).toContain("malformed");
-    expect(r.directive.message).toContain("before entering approval");
+    expect(r.directive.message).toContain("report --stage functional-design --result approved");
     expect(r.stderr).toBe("");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 

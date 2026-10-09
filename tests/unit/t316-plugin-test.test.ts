@@ -38,6 +38,7 @@ const SOURCE_PLUGIN = join(REPO_ROOT, "plugins", "test-pro");
 const CLAUDE_INSTALL = join(REPO_ROOT, "dist", "claude");
 const KIRO_INSTALL = join(REPO_ROOT, "dist", "kiro");
 const OPENCODE_INSTALL = join(REPO_ROOT, "dist", "opencode");
+const CODEX_INSTALL = join(REPO_ROOT, "dist", "codex");
 const scratch = mkdtempSync(join(tmpdir(), "aidlc-t316-"));
 const copiedTools = join(scratch, "runtime", "tools");
 const testTool = join(copiedTools, "aidlc-plugin-test.ts");
@@ -177,6 +178,40 @@ describe("t316 standalone plugin compose test", () => {
       ".claude/aidlc-common/stages/construction/test-pro-integration.md",
     );
     expect(json.idempotent).toBe(true);
+    expect(treeDigest(installRoot)).toBe(before);
+  }, COMPOSE_CASE_TIMEOUT_MS);
+
+  // Codex keeps its skills in .agents/skills/ with no .codex/skills/; compose
+  // must write the plugin's runners there instead of recording an advisory
+  // drop that fails every plugin on this harness.
+  test("test-pro composes cleanly in a disposable Codex candidate", () => {
+    const { pluginRoot, installRoot } = copyFixture("codex-clean", CODEX_INSTALL);
+    const before = treeDigest(installRoot);
+    const result = run([
+      pluginRoot,
+      "--install",
+      installRoot,
+      "--harness",
+      "codex",
+      "--json",
+    ]);
+    expect(result.status, result.stderr).toBe(0);
+    const json = JSON.parse(result.stdout) as {
+      valid: boolean;
+      harness: string;
+      drops: unknown[];
+      composedFiles: string[];
+      graph: { presentStages: string[]; presentScopes: string[] };
+      idempotent: boolean;
+    };
+    expect(json.valid).toBe(true);
+    expect(json.harness).toBe("codex");
+    expect(json.drops).toEqual([]);
+    expect(json.idempotent).toBe(true);
+    expect(json.graph.presentStages).toContain("test-pro-integration");
+    expect(json.graph.presentScopes).toContain("test-pro-validation");
+    expect(json.composedFiles).toContain(".agents/skills/test-pro-integration/SKILL.md");
+    expect(json.composedFiles).toContain(".agents/skills/test-pro-validation/SKILL.md");
     expect(treeDigest(installRoot)).toBe(before);
   }, COMPOSE_CASE_TIMEOUT_MS);
 
