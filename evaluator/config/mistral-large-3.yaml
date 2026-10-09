@@ -1,0 +1,5 @@
+# Mistral Large 3 (675B) — override executor model only; all other settings inherit from default.yaml
+# No global or cross-region inference profile available; region-specific only
+models:
+  executor:
+    model_id: "mistral.mistral-large-3-675b-instruct"
