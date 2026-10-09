@@ -348,8 +348,10 @@ wizard names it and offers three choices: recommended defaults, six-step
 customization, or exit with nothing written. Multiple detected harnesses get a
 numbered harness picker first; no detected harness gets the complete picker
 without a default. A Kiro CLI at 2.24.1 or later counts for both Kiro rows; the
-picker default is then Kiro IDE (`kiro-ide`), whose `.kiro/settings/cli.json`
-pins Kiro's v3 engine, unless a harness listed before Kiro is detected too.
+wizard then prefers Kiro IDE (`kiro-ide`), whose `.kiro/settings/cli.json` pins
+Kiro's v3 engine, to Kiro CLI (`kiro`). Other detected harnesses keep their
+order, a harness editor's own terminal still comes first, and the picker's list
+and numbers stay the same.
 
 Before any setup choices, the wizard probes the project filesystem using
 temporary files and directories, then removes them. It checks transaction

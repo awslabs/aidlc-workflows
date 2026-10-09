@@ -1054,6 +1054,25 @@ describe("t299 first-run setup wizard", () => {
     expect(cli["chat.agentEngine"]).toBe("v3");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
+  test("the Kiro row preference leaves an earlier harness the default and the kiro row one number away", () => {
+    const bothKiro = {
+      kiro: { found: true, version: "kiro-cli 2.28.0" },
+      "kiro-ide": { found: true, version: "kiro-cli 2.28.0" },
+    };
+    const withClaude = runWizard("\n\n", {
+      harnesses: { claude: { found: true, version: "claude 2.1.220" }, ...bothKiro },
+    });
+    expect(withClaude.status, withClaude.stdout + withClaude.stderr).toBe(0);
+    expect(withClaude.stdout).toContain(`    1. Claude Code     (detected, default)\n`);
+    expect(withClaude.stdout).toContain("Using Claude Code.");
+    expect(existsSync(join(withClaude.project, ".kiro"))).toBe(false);
+
+    const legacy = runWizard("5\n\n", { harnesses: { claude: { found: false }, ...bothKiro } });
+    expect(legacy.status, legacy.stdout + legacy.stderr).toBe(0);
+    expect(legacy.stdout).toContain("Using Kiro CLI.");
+    expect(existsSync(join(legacy.project, ".kiro", "agents", "aidlc.json"))).toBe(true);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
   test("Kiro IDE's terminal selects Kiro IDE and ends with trust, reload, and agent steps", () => {
     const result = runWizard("\n", {
       harnesses: { claude: { found: false } },

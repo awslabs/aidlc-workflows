@@ -11,8 +11,8 @@
 > This page covers the legacy `kiro` row, which pins no Kiro engine. On Kiro
 > CLI 2.24.1 or later, use the `kiro-ide` row instead: it pins Kiro's v3
 > engine and runs in Kiro CLI as well as Kiro IDE, and the interactive
-> `aidlc config` makes it the default when both rows are detected. This row
-> stays for Kiro CLI 2.6 to 2.24.0. In an existing `kiro` project,
+> `aidlc config` prefers it to this row when both are detected. This row is
+> meant for Kiro CLI 2.6 to 2.24.0. In an existing `kiro` project,
 > `aidlc config --harness kiro-ide` switches `.kiro/` to it in place and keeps
 > `aidlc/`.
 
