@@ -53,8 +53,9 @@ export type KiroSessionWrite = { model?: string; effort?: { model: string; effor
 
 export const KIRO_EFFORT_ORDER: readonly KiroEffort[] = ["low", "medium", "high", "xhigh", "max"];
 
-// One effort for the whole session, conductor included. minimal stays distinct
-// from balanced on purpose.
+// One effort for the whole interactive Kiro CLI session, conductor included
+// (a --no-interactive run starts at the model's default). minimal stays
+// distinct from balanced on purpose.
 export const KIRO_PRESET_EFFORT: Readonly<Record<KiroPreset, KiroEffort>> = Object.freeze({
   minimal: "low",
   balanced: "medium",
@@ -495,6 +496,9 @@ export type KiroSessionPlan = {
   // effort already saved for the model stays: it may be the right next level
   // down, which the preset's own level would overwrite.
   keepExistingEffort?: boolean;
+  // Recommended defaults only fill an effort the person has not saved for the
+  // model: one they saved is theirs and stays, whatever the preset.
+  fillEffortOnly?: boolean;
   // Report what would be saved and write nothing.
   dryRun?: boolean;
   modelsCommand: string;
@@ -552,12 +556,20 @@ async function applyPlan(
   const write: KiroSessionWrite = {};
   if (plan.setModel && plan.setModel !== plan.session.model) write.model = plan.setModel;
   let effort: KiroEffort | null = null;
-  if (plan.preset) {
+  const savedEffort = personalKiroEffort(plan.session, model);
+  if (plan.preset && plan.fillEffortOnly && savedEffort !== null) {
+    effort = savedEffort;
+    const wanted = KIRO_PRESET_EFFORT[plan.preset];
+    if (savedEffort !== wanted) {
+      lines.push(
+        `Kept your ${KIRO_EFFORT_LABEL[savedEffort]} effort for ${model}, from your personal Kiro settings. Run \`${plan.modelsCommand} --session-model ${model}\` to use the ${plan.preset} preset's ${KIRO_EFFORT_LABEL[wanted]} instead.`,
+      );
+    }
+  } else if (plan.preset) {
     const wanted = KIRO_PRESET_EFFORT[plan.preset];
     const levels = plan.fetchLevels ? await kiroEffortLevels(plan.cli, model, env) : null;
-    const saved = personalKiroEffort(plan.session, model);
-    effort = levels === null && plan.keepExistingEffort && saved !== null
-      ? saved
+    effort = levels === null && plan.keepExistingEffort && savedEffort !== null
+      ? savedEffort
       : nearestKiroEffort(wanted, levels);
     if (effort === null) {
       lines.push(
@@ -569,8 +581,8 @@ async function applyPlan(
           `${model} has no ${KIRO_EFFORT_LABEL[wanted]} effort, so AI-DLC uses its next level down: ${KIRO_EFFORT_LABEL[effort]}.`,
         );
       }
-      if (saved !== effort) write.effort = { model, effort };
-      if (levels === null && saved !== effort) {
+      if (savedEffort !== effort) write.effort = { model, effort };
+      if (levels === null && savedEffort !== effort) {
         lines.push(`\`${plan.doctorCommand}\` confirms ${model} offers ${KIRO_EFFORT_LABEL[effort]} effort.`);
       }
     }
@@ -713,25 +725,24 @@ export async function kiroSessionDoctorFindings(input: {
         pass: true,
         label: `Session model: ${model} (no effort setting), from your personal Kiro settings`,
       });
-    } else if (levels === null && actual !== null && !matched) {
-      findings.push({
-        pass: false,
-        label: `Session model: ${model} runs at ${KIRO_EFFORT_LABEL[actual]} effort; the ${input.preset} preset asks for ${
-          KIRO_EFFORT_LABEL[wanted]
-        }, and Kiro did not list ${model}'s effort levels, so doctor could not confirm ${KIRO_EFFORT_LABEL[actual]} is its nearest`,
-        fix: `run \`${input.modelsCommand} --session-model ${model}\` to set it again`,
-      });
     } else if (matched && actual) {
       findings.push({
         pass: true,
         label: `Session model: ${model} at ${KIRO_EFFORT_LABEL[actual]} effort (${input.preset}), from your personal Kiro settings`,
       });
+    } else if (actual) {
+      // An effort saved in the person's own settings is theirs, set inside Kiro
+      // or kept by setup: doctor names the preset's level, it does not ask to fix it.
+      findings.push({
+        pass: true,
+        label: `Session model: ${model} at ${KIRO_EFFORT_LABEL[actual]} effort, from your personal Kiro settings; the ${input.preset} preset asks for ${
+          KIRO_EFFORT_LABEL[expected]
+        } (\`${input.modelsCommand} --session-model ${model}\` applies it)`,
+      });
     } else {
       findings.push({
         pass: false,
-        label: `Session model: ${model} runs at ${
-          actual ? `${KIRO_EFFORT_LABEL[actual]} effort` : "Kiro's own effort"
-        }; the ${input.preset} preset asks for ${KIRO_EFFORT_LABEL[expected]}`,
+        label: `Session model: ${model} runs at Kiro's own effort; the ${input.preset} preset asks for ${KIRO_EFFORT_LABEL[expected]}`,
         fix: `run \`${input.modelsCommand} --session-model ${model}\``,
       });
     }

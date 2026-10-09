@@ -676,13 +676,13 @@ describe("t299 first-run setup wizard", () => {
     expect(readFileSync(join(result.project, ".gitignore"), "utf-8").startsWith("aidlc/\n")).toBe(true);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-  test("recommended defaults on Kiro CLI describe one effort for the whole session", () => {
+  test("recommended defaults on Kiro CLI describe one effort for the whole interactive session", () => {
     const result = runWizard("\n", {
       harnesses: { kiro: { found: true, version: "kiro-cli 1.0.0" } },
     });
     expect(result.status, result.stdout + result.stderr).toBe(0);
     expect(result.stdout).toContain(
-      "Records balanced (default): medium effort for the whole Kiro session, saved in your personal Kiro settings for every Kiro project.",
+      "Records balanced (default): medium effort for the whole interactive Kiro CLI session, saved in your personal Kiro settings for every Kiro project; an effort you already saved for your model stays.",
     );
     expect(result.stdout).not.toContain("medium project agent effort for deciding");
     expect(result.stdout).not.toContain("effort dials do not apply");
@@ -785,6 +785,83 @@ describe("t299 first-run setup wizard", () => {
     expect(kiroWrites(seam.writes)[0]).toEqual(["settings", "chat.defaultModel", "claude-opus-5"]);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
+  test("recommended defaults keep the effort the person saved for their Kiro model", () => {
+    const seam = kiroSeam({
+      "chat.defaultModel": "claude-opus-5",
+      "chat.modelDefaults": { "claude-opus-5": { output_config: { effort: "xhigh" } } },
+    });
+    const result = runWizard("\n", {
+      harnesses: { kiro: { found: true, version: "kiro-cli 1.0.0" } },
+      env: seam.env,
+    });
+    expect(result.status, result.stdout + result.stderr).toBe(0);
+    expect(result.stdout).not.toContain("Model [");
+    expect(result.stdout).toContain(
+      "Kept your extra-high effort for claude-opus-5, from your personal Kiro settings.",
+    );
+    expect(kiroWrites(seam.writes)).toEqual([]);
+    // The team's recorded preset is still the default one.
+    expect(JSON.parse(
+      readFileSync(join(result.project, "aidlc.settings.json"), "utf-8"),
+    ).models.preset).toBe("balanced");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("recommended defaults on Kiro auto save only the model when its effort is already saved", () => {
+    const seam = kiroSeam({ "chat.modelDefaults": { "claude-opus-5": { output_config: { effort: "xhigh" } } } });
+    const result = runWizard("\n\n", {
+      harnesses: { kiro: { found: true, version: "kiro-cli 1.0.0" } },
+      env: seam.env,
+    });
+    expect(result.status, result.stdout + result.stderr).toBe(0);
+    expect(result.stdout).toContain("Using claude-opus-5 (2.2x).");
+    expect(kiroWrites(seam.writes)).toEqual([["settings", "chat.defaultModel", "claude-opus-5"]]);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  // Kiro IDE's row: Kiro CLI runs on it too, so with kiro-cli found setup
+  // offers Kiro CLI's session model, the model only, and never recommends one
+  // over Kiro auto (Kiro IDE does not read that setting).
+  test("Kiro IDE's row in Kiro IDE's terminal leaves Kiro auto unasked and says where each host chooses", () => {
+    const seam = kiroSeam({});
+    const result = runWizard("\n", {
+      harnesses: { claude: { found: false } },
+      env: { TERM_PROGRAM: "kiro", ...seam.env },
+    });
+    expect(result.status, result.stdout + result.stderr).toBe(0);
+    expect(result.stdout).not.toContain("Model [");
+    expect(result.stdout).toMatch(
+      /Kiro CLI session model: Kiro auto, kept\. Kiro IDE uses its own model picker; run `[^`]+config models` to choose one for Kiro CLI\./,
+    );
+    expect(kiroWrites(seam.writes)).toEqual([]);
+    expect(existsSync(join(result.project, ".kiro", "steering"))).toBe(true);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("Kiro IDE's row elsewhere asks for Kiro CLI's model with Enter keeping Kiro auto, and saves no effort", () => {
+    const kept = kiroSeam({});
+    // Kiro IDE from the harness list, recommended defaults, Enter at the model list.
+    const keep = runWizard("6\n\n\n", {
+      harnesses: { claude: { found: false } },
+      env: kept.env,
+      probed: ["kiro", "kiro-ide"],
+    });
+    expect(keep.status, keep.stdout + keep.stderr).toBe(0);
+    expect(keep.stdout).toContain(
+      "You're on Kiro auto (Kiro's own default, where Kiro picks the model for each task). This is a Kiro CLI setting; Kiro IDE uses its own model picker. Choose the Kiro CLI session model (Enter keeps Kiro auto):",
+    );
+    expect(keep.stdout).not.toContain("(recommended)");
+    expect(keep.stdout).toMatch(/4\. keep Kiro auto\s+Kiro keeps picking the model {2}\(default\)/);
+    expect(keep.stdout).toContain("Model [4]:");
+    expect(kiroWrites(kept.writes)).toEqual([]);
+
+    const chosen = kiroSeam({});
+    const choose = runWizard("6\n\n2\n", {
+      harnesses: { claude: { found: false } },
+      env: chosen.env,
+      probed: ["kiro", "kiro-ide"],
+    });
+    expect(choose.status, choose.stdout + choose.stderr).toBe(0);
+    expect(kiroWrites(chosen.writes)).toEqual([["settings", "chat.defaultModel", "claude-opus-5"]]);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
   test("a write Kiro refuses is listed with what needs the person, not printed as saved", () => {
     const writes = join(temp("aidlc-t299-kiro-"), "writes.jsonl");
     const result = runWizard("\n", {
@@ -835,7 +912,7 @@ describe("t299 first-run setup wizard", () => {
     expect(result.stdout).toMatch(/1\. choose a model\s+list the models your Kiro account offers\s+\(recommended, default\)/);
     expect(result.stdout).toMatch(/2\. keep Kiro auto\s+Kiro keeps picking the model; the effort preset stays unset/);
     expect(result.stdout).toContain(
-      "On Kiro CLI the preset sets one effort for the whole session on claude-sonnet-4.6.",
+      "On Kiro CLI the preset sets one effort for the whole interactive session on claude-sonnet-4.6.",
     );
     expect(result.stdout).toMatch(/2\. Model\s+claude-sonnet-4\.6 \(1\.3x\), in your personal Kiro settings/);
     expect(result.stdout).toMatch(/3\. Preset\s+thorough \(extra-high effort\)/);

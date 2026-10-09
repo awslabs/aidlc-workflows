@@ -1291,7 +1291,33 @@ describe("t293 config models CLI", () => {
       "config", "models", "--project-dir", claude, "--session-model", "claude-sonnet-4.6",
     ], claude, { ...runtimeEnv(), ...seam.env });
     expect(refused.status).toBe(2);
-    expect(refused.stdout + refused.stderr).toContain("--session-model applies to Kiro CLI projects only");
+    expect(refused.stdout + refused.stderr).toContain("--session-model applies to Kiro projects only");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("Kiro IDE's row saves Kiro CLI's session model and no effort, whatever preset is recorded", () => {
+    const project = install("kiro-ide");
+    writeFileSync(projectSettingsPath(project), `${JSON.stringify({ schemaVersion: 1, models: { schemaVersion: 1, preset: "balanced" } })}\n`);
+    const seam = kiroSeam({});
+    const saved = run([
+      "config", "models", "--project-dir", project, "--session-model", "claude-sonnet-4.6",
+    ], project, { ...runtimeEnv(), ...seam.env });
+    expect(saved.status, saved.stdout + saved.stderr).toBe(0);
+    expect(saved.stdout).toContain("  model    claude-sonnet-4.6");
+    expect(kiroWrites(seam.writes)).toEqual([["settings", "chat.defaultModel", "claude-sonnet-4.6"]]);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("a Kiro CLI agent setting leaves the person's session effort alone", () => {
+    const project = install("kiro");
+    writeFileSync(projectSettingsPath(project), `${JSON.stringify({ schemaVersion: 1, models: { schemaVersion: 1, preset: "balanced" } })}\n`);
+    const seam = kiroSeam({ "chat.defaultModel": "claude-opus-5" });
+    // The first run changes the record, the second finds it unchanged: neither is a session request.
+    for (let pass = 0; pass < 2; pass++) {
+      const result = run([
+        "config", "models", "--project-dir", project, "--project", "--agent", "architect", "--model", "claude-opus-5", "--yes",
+      ], project, { ...runtimeEnv(), ...seam.env });
+      expect(result.status, result.stdout + result.stderr).toBe(0);
+    }
+    expect(kiroWrites(seam.writes)).toEqual([]);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("Kiro CLI --preset sets one session effort on the person's model, with no per-agent warnings", () => {

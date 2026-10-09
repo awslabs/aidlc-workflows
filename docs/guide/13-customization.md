@@ -58,7 +58,7 @@ Presets set effort only, never model IDs. Per-agent exceptions override group
 dials, which override shipped tier defaults. Kiro IDE, Cursor, and Copilot
 cannot express these group effort dials; a policy you record there anyway is
 kept and reported as unexpressed rather than written as inert keys. Kiro CLI runs each session
-on one model, so there a preset sets ONE effort for the whole session
+on one model, so there a preset sets ONE effort for the whole interactive session
 (`minimal` low, `balanced` medium, `thorough` extra-high), saved with the
 session model in your personal Kiro settings; see
 [Session model and effort](harnesses/kiro-cli.md#session-model-and-effort).
