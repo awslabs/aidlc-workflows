@@ -29568,6 +29568,46 @@ export const NOT_ANSWERED_YET_STEP = "The person has not answered yet: end your 
 // Said to the agent after every missed-reply step: the person turns a check off, never the agent's offer.
 const NO_CHECK_OFF_OFFER = "Never offer to turn a check off for them.";
 
+// --- Kiro hooks a person switched off (#2203) ---
+// Kiro IDE's Agent Hooks panel turns a project hook off by writing
+// `"enabled": false` into its file under `.kiro/hooks/`: on the file's root, or
+// on an entry of its `hooks` array in Kiro IDE's v1 schema. This is the one
+// reading of that key: doctor's rows (aidlc-utility.ts, kiroDisabledHookChecks)
+// and the engine's once-per-change notice build on it, and the refusal text
+// below reads the reply hook through it. It lives here because the hooks are
+// copied beside this library with its known siblings only, so a module this
+// library imported would be missing there and no hook would load. Every read
+// fails open: it can only ever change a sentence.
+
+/** The reply hook, as Kiro IDE's `.json` file names it. */
+export const KIRO_REPLY_HOOK = "aidlc-record-human-turn";
+
+// A file an editor saved with a byte order mark is read the same; a file that
+// does not parse, or parses to something other than an object, is not off.
+export function kiroHookFileSwitchedOff(text: string): boolean {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text.replace(/^\uFEFF/, ""));
+  } catch {
+    return false;
+  }
+  if (parsed === null || typeof parsed !== "object") return false;
+  const root = parsed as { enabled?: unknown; hooks?: unknown };
+  if (root.enabled === false) return true;
+  return Array.isArray(root.hooks) &&
+    root.hooks.some((hook) => hook !== null && typeof hook === "object" && (hook as { enabled?: unknown }).enabled === false);
+}
+
+/** True when the reply hook's file under `<harnessDir>/hooks/` is switched off: a reply not recorded is then this, not a trust problem. */
+export function kiroReplyHookSwitchedOff(projectDir: string, harnessDir = ".kiro"): boolean {
+  const path = join(projectDir, harnessDir, "hooks", `${KIRO_REPLY_HOOK}.json`);
+  try {
+    return existsSync(path) && kiroHookFileSwitchedOff(readFileSync(path, "utf-8"));
+  } catch {
+    return false;
+  }
+}
+
 export function unattendedHumanPresenceHint(projectDir?: string, options: { missedReply?: boolean } = {}): string {
   // Explain unattended submissions when relevant.
   if (!humanTurnMintAllowed()) {
@@ -29576,6 +29616,19 @@ export function unattendedHumanPresenceHint(projectDir?: string, options: { miss
       "mode, then submit a new human response.";
   }
   if (personAtOwnTerminal(projectDir)) return ` ${OWN_TERMINAL_PRESENCE_STEP}`;
+  // Kiro's Agent Hooks panel can switch the reply hook off (#2203): a reply not
+  // recorded is then that switch, not a folder Kiro has yet to trust and not a
+  // record whose hooks never ran (the other hooks still beat), so this comes
+  // before the hooks-off step and the person is sent to the panel, never to the
+  // trust step. A caller refusing for a reply not given yet (the summary choice
+  // the person has not made) is not a lost reply: it hears nothing here either.
+  if (options.missedReply !== false && kiroReplyHookSwitchedOff(resolveProjectDir(projectDir), harnessDir())) {
+    return " If the person already replied, that reply was not recorded because AI-DLC's hook that records your " +
+      "replies is switched off in Kiro's Agent Hooks. Do not ask them to answer again. Tell them exactly this, with " +
+      "nothing about why: \"Your answer was not recorded: AI-DLC's hook that records your replies " +
+      "(aidlc-record-human-turn) is switched off under Agent Hooks in Kiro. Turn it back on, then give your answer " +
+      `once more." ${NO_CHECK_OFF_OFFER}`;
+  }
   // Nothing on record tells a reply not sent yet from one the prompt hook
   // failed to record, so every such refusal also says what happened to a reply
   // the person did send. A host that runs no hooks until the person acts names

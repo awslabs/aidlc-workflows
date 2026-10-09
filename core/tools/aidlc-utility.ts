@@ -138,6 +138,7 @@ import {
   isSafeIntentRecordName,
   activeIntent,
   addPendingPersonLines,
+  kiroHookFileSwitchedOff,
   markPersonLinesHeard,
   staleStageLine,
   activeWorkflowDescriptions,
@@ -3522,11 +3523,23 @@ const ADVISORY_KIRO_HOOKS: Record<string, string> = {
   "aidlc-after-shell": "the current stage and the plan of remaining stages are not kept in step after a terminal command",
 };
 
-export function kiroDisabledHookChecks(projectDir: string, harness: string): DoctorCheck[] {
+export type KiroDisabledHook = {
+  /** The hook's name, as the Agent Hooks panel and its file show it. */
+  name: string;
+  /** The hook file, harness-relative with forward slashes. */
+  file: string;
+  /** What is no longer protected while a flow-altering hook is off; null for the rest. */
+  protects: string | null;
+};
+
+// Every AI-DLC hook file under `<harness>/hooks/` that Kiro has switched off,
+// in file order. The install manifest says which hook files are AI-DLC's;
+// without one, the aidlc- prefix does. Kiro's `enabled` key is read by the
+// library's one parse (aidlc-lib.ts), which doctor's rows below and the
+// engine's once-per-change notice (aidlc-kiro-hooks-off.ts) share.
+export function kiroDisabledHooks(projectDir: string, harness: string): KiroDisabledHook[] {
   const hooksDir = join(projectDir, harness, "hooks");
   if (!existsSync(hooksDir)) return [];
-  // The install manifest says which hook files are AI-DLC's; without one, the
-  // aidlc- prefix does.
   let owned: Set<string> | null = null;
   try {
     const manifest = JSON.parse(readFileSync(join(projectDir, harness, "tools", "data", "aidlc-manifest.json"), "utf-8")) as { files?: Record<string, string> };
@@ -3535,30 +3548,35 @@ export function kiroDisabledHookChecks(projectDir: string, harness: string): Doc
   } catch {
     // no readable manifest
   }
-  const rows: DoctorCheck[] = [];
-  const advisory: string[] = [];
+  const off: KiroDisabledHook[] = [];
   for (const file of readdirSync(hooksDir).sort()) {
     if (!/^aidlc-.*\.json$/.test(file) || (owned !== null && !owned.has(file))) continue;
-    let parsed: { enabled?: unknown; hooks?: unknown };
+    let text: string;
     try {
-      parsed = JSON.parse(readFileSync(join(hooksDir, file), "utf-8"));
+      text = readFileSync(join(hooksDir, file), "utf-8");
     } catch {
       continue;
     }
-    if (parsed === null || typeof parsed !== "object") continue;
-    const name = file.replace(/\.json$/, "");
-    const entries = Array.isArray(parsed.hooks) ? parsed.hooks as Array<{ enabled?: unknown }> : [];
     // Classified by the AI-DLC file, not its editable name field.
-    if (parsed.enabled !== false && !entries.some((entry) => entry?.enabled === false)) continue;
-    const protects = FLOW_ALTERING_KIRO_HOOKS[name];
-    if (!protects) {
-      advisory.push(name);
+    if (!kiroHookFileSwitchedOff(text)) continue;
+    const name = file.replace(/\.json$/, "");
+    off.push({ name, file: `${harness}/hooks/${file}`, protects: FLOW_ALTERING_KIRO_HOOKS[name] ?? null });
+  }
+  return off;
+}
+
+export function kiroDisabledHookChecks(projectDir: string, harness: string): DoctorCheck[] {
+  const rows: DoctorCheck[] = [];
+  const advisory: string[] = [];
+  for (const hook of kiroDisabledHooks(projectDir, harness)) {
+    if (hook.protects === null) {
+      advisory.push(hook.name);
       continue;
     }
     rows.push({
       pass: false,
-      label: `AI-DLC hook ${name} is switched off in Kiro's Agent Hooks: ${protects}`,
-      fix: `turn ${name} back on under Kiro's Agent Hooks, or set "enabled": true in ${harness}/hooks/${file}`,
+      label: `AI-DLC hook ${hook.name} is switched off in Kiro's Agent Hooks: ${hook.protects}`,
+      fix: `turn ${hook.name} back on under Kiro's Agent Hooks, or set "enabled": true in ${hook.file}`,
     });
   }
   if (advisory.length > 0) {
