@@ -442,6 +442,9 @@ export function prepareCandidate(
     /** The stage documents are written and committed with CRLF line endings
      *  (core.autocrlf off and an editor that writes CRLF). */
     crlf?: boolean;
+    /** The recorded Plan Approval answer line; the engine's recorder writes the
+     *  chosen option with its letter by default. */
+    answerLine?: string;
   } = {},
 ): {
   checkout: string;
@@ -539,7 +542,7 @@ export function prepareCandidate(
   const questions =
     "## Plan Approval\n" +
     `[Approval Fingerprint]: ${planFingerprint}\n` +
-    "[Answer]: A. Approve Plan\n";
+    `${options.answerLine ?? "[Answer]: A. Approve Plan"}\n`;
   writeFileSync(join(codeDir, "code-generation-plan.md"), plan);
   writeFileSync(join(codeDir, "unit-test-instructions.md"), instructions);
   writeFileSync(questionsFile, questions);

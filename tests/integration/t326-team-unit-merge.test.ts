@@ -151,6 +151,21 @@ describe("t326 pinned team Unit merge", () => {
     expect(readAllAuditShards(seed).match(/\*\*Event\*\*: UNIT_MERGED/g) ?? []).toHaveLength(1);
   });
 
+  // The engine's own approvals record the label the person chose, with or
+  // without an option letter, and every reader takes the label
+  // (planApprovalAnswerLabel, questionsFileApproved). The merge evidence read
+  // only the exact "A. Approve Plan" line, so a Unit whose plan the person had
+  // approved was held at the merge as if they had not.
+  test.each(["[Answer]: Approve Plan", "[Answer]: a. Approve Plan"])(
+    "an approved plan recorded as %s pins, gates and lands",
+    (answerLine) => {
+      const { seed, remote } = makeSeed();
+      prepareCandidate(remote, "alpha", "label-team", { answerLine });
+      expect(gateAndLand(seed, "alpha").pinnedOid).toHaveLength(40);
+      expect(readAllAuditShards(seed).match(/\*\*Event\*\*: UNIT_MERGED/g) ?? []).toHaveLength(1);
+    },
+  );
+
   test("moved refs require re-pin", () => {
     const { seed, remote } = makeSeed();
     const first = prepareCandidate(remote, "alpha", "move-team");

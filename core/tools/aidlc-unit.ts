@@ -82,6 +82,7 @@ import {
 import {
   parseTestingContract,
   PLAN_APPROVAL_CHECKPOINT,
+  questionsFileApproved,
   recordedApprovalFingerprint,
   resolveTestingPosture,
 } from "./aidlc-testing-posture.ts";
@@ -1695,8 +1696,12 @@ function candidateEvidence(
       (approvalEvent.event === "PLAN_APPROVAL_SKIPPED"
         ? (auditBlockField(approvalEvent.block, "Source") ?? "").length > 0 &&
           /^\[Answer\]:\s*Plan approval off\s*$/m.test(questions)
+        // The person's answer is read by its label, as every other reader
+        // reads it (questionsFileApproved): the recorder's option letter, in
+        // either case, is not the answer. The bytes stay pinned to the
+        // approval by Questions SHA-256 above.
         : (auditBlockField(approvalEvent.block, "Session") ?? "").length > 0 &&
-          /^\[Answer\]:\s*A\.\s*Approve Plan\s*$/m.test(questions))
+          questionsFileApproved(questions))
     ) {
       planFingerprint = fingerprint;
     }
