@@ -7303,7 +7303,7 @@ describe("t218 a shell call on a turn whose terminal command already ran is refu
         dir, "aidlc", ".aidlc-sessions", "kiro-terminal",
         createHash("sha256").update("sess_bare_a").digest("hex"), "turn",
       );
-      const countBefore = readFileSync(countPath, "utf-8");
+      let countBefore = readFileSync(countPath, "utf-8");
       const notice = (sessionId: string) => runIdeStdin(dir, "person-message", JSON.stringify({
         session_id: sessionId,
         hook_event_name: "UserPromptSubmit",
@@ -7315,6 +7315,25 @@ describe("t218 a shell call on a turn whose terminal command already ran is refu
       expect(notice("sess_bare_a").code).toBe(0);
       expect(notice("sess_step").code).toBe(0);
       expect(shell(dir, "aidlc next", "sess_bare_a").code).toBe(2);
+      // A marker left open past its age, or one that holds no time, is a
+      // closed turn: the notice after it is not held.
+      const marker = join(dir, "aidlc", ".aidlc-sessions", "sess_bare_a.turn-open");
+      for (const left of [`${new Date(Date.now() - 5 * 60 * 60 * 1000).toISOString()}\n`, "not a time\n"]) {
+        writeFileSync(marker, left, "utf-8");
+        expect(notice("sess_bare_a").code).toBe(0);
+        expect(shell(dir, "aidlc next", "sess_bare_a").code, JSON.stringify(left)).toBe(0);
+        // A fresh terminal command holds the turn again.
+        const again = runIdeStdin(dir, "person-message", JSON.stringify({
+          session_id: "sess_bare_a",
+          hook_event_name: "UserPromptSubmit",
+          cwd: dir,
+          prompt: "/aidlc --help",
+        }));
+        expect(again.code, again.stderr).toBe(0);
+        expect(shell(dir, "aidlc next", "sess_bare_a").code).toBe(2);
+      }
+      // A notice moves no turn on: the count is the person's messages.
+      countBefore = readFileSync(countPath, "utf-8");
       // After that run's Stop, the notice starts a run of its own: not held.
       const stop = runIdeStdin(dir, "continue-workflow", JSON.stringify({
         session_id: "sess_bare_a",
