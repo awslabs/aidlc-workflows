@@ -2148,6 +2148,28 @@ function gitPaths(repoCwd: string, args: string[]): Set<string> | null {
   return new Set(diff.stdout.split("\0").filter(Boolean));
 }
 
+// What the checkout reports as changed but not committed, by path. A post-commit
+// hook that writes a file or edits one without staging it changes the person's
+// checkout, so the record names it too.
+function statusPaths(repoCwd: string): Map<string, string> | null {
+  const status = runGit(
+    ["status", "--porcelain=v1", "-z", "--untracked-files=all"],
+    repoCwd,
+  );
+  if (!status.ok) return null;
+  const fields = status.stdout.split("\0");
+  const entries = new Map<string, string>();
+  for (let at = 0; at < fields.length; at++) {
+    const field = fields[at];
+    if (field.length < 4) continue;
+    const code = field.slice(0, 2);
+    entries.set(field.slice(3), code);
+    // A rename or copy emits its original path as the next field.
+    if (code.startsWith("R") || code.startsWith("C")) at++;
+  }
+  return entries;
+}
+
 // A landing this tool staged earlier that the person's hook refused: finish it
 // instead of staging it again. git's squash message names the squashed tip;
 // the merge strategy keeps it in MERGE_HEAD.
@@ -2238,6 +2260,7 @@ function landedDifferences(
   landedHead: string,
   stagedTree: string,
   landedListing: ReadonlyMap<string, string>,
+  statusBefore: ReadonlyMap<string, string> | null,
 ): LandedDifferences {
   const none: LandedDifferences = { changed: [], byPreCommit: false, drivers: new Map() };
   const shown = (path: string): string => (repo ? `${repo}/${path}` : path);
@@ -2256,9 +2279,26 @@ function landedDifferences(
       landedListing.get(`${repo ?? ""}\0${path}`),
     ))
     .sort();
+  // Anything the landing left uncommitted in the checkout: new since the merge
+  // started, or reported differently than it was. The person's own work in
+  // progress was already there, so it is not attributed to their hooks, and
+  // AI-DLC's own records are not application source.
+  const statusAfter = statusPaths(repoCwd);
+  const leftBehind: string[] = [];
+  if (statusBefore !== null && statusAfter !== null) {
+    for (const [path, code] of statusAfter) {
+      if (statusBefore.get(path) === code) continue;
+      if (workspaceSourcePathIsExcluded(repoCwd, path) === true) continue;
+      leftBehind.push(path);
+    }
+  }
+  const allChanged = [...new Set([...changedPaths, ...leftBehind])].sort();
   const parent = runGit(["rev-parse", `${landedHead}^`], repoCwd);
   const hookStaged = stagedTree ? gitPaths(repoCwd, [stagedTree, `${landedHead}^{tree}`]) : null;
-  const byPreCommit = changedPaths.length > 0 && parent.ok && parent.stdout.trim() === priorHead &&
+  // A pre-commit hook stages what it changes, so a landing that left something
+  // uncommitted is not one.
+  const byPreCommit = changedPaths.length > 0 && leftBehind.length === 0 &&
+    parent.ok && parent.stdout.trim() === priorHead &&
     hookStaged !== null && changedPaths.every((path) => hookStaged.has(path));
   const drivers = new Map<string, string[]>();
   if (merged.size > 0) {
@@ -2272,7 +2312,7 @@ function landedDifferences(
       drivers.set(driver, [...(drivers.get(driver) ?? []), shown(path)]);
     }
   }
-  return { changed: changedPaths.map(shown), byPreCommit, drivers };
+  return { changed: allChanged.map(shown), byPreCommit, drivers };
 }
 
 function countFiles(paths: readonly string[]): string {
@@ -2830,6 +2870,7 @@ function handleMerge(args: string[]): void {
   let commitSha = "";
   let stagedTree = "";
   const priorTargetHead = currentSha(repoCwd);
+  const statusBefore = statusPaths(repoCwd);
   const landingUnit = sourceRecord?.unit ?? convergedUnitName(pd, slug, flags.intent, flags.space);
   // conflictCwd records which checkout the conflicting state lives in:
   // squash/merge run in the target repo's main checkout (cwd = repoCwd), rebase
@@ -2967,6 +3008,7 @@ function handleMerge(args: string[]): void {
       commitSha,
       stagedTree,
       aggregateAfter.listing,
+      statusBefore,
     );
     if (landed.changed.length > 0) {
       landingNotices.push(
