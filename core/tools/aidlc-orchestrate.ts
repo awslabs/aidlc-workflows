@@ -389,6 +389,8 @@ import {
   extractMarkdownSection,
   validateUnitName,
   resolveStageAnswerMode,
+  editedReviewNotice,
+  findStageBySlug,
 } from "./aidlc-lib.ts";
 import { reviewRecoverySpentMessage } from "./aidlc-log.ts";
 import {
@@ -9233,6 +9235,14 @@ function applyConstructionCheckpointShape(
   };
   if (directive.construction_policy) {
     directive.construction_policy.human_completion_required = checkpoint.human_required;
+  }
+  // A review edited after the reviewer finished is said once, before the
+  // person is asked, in the line every other accepted change uses.
+  if (checkpoint.review_edited) {
+    const lines = checkpoint.review_edited.stages.map((slug) =>
+      editedReviewNotice(findStageBySlug(slug)?.name ?? slug, checkpoint.unit));
+    const noticed = directive as RunStageDirective & Pick<Directive, "change_notices">;
+    noticed.change_notices = [...new Set([...(noticed.change_notices ?? []), ...lines])];
   }
   // A re-check of changed code dispatches the reviewer; any other checkpoint
   // has had its reviews.

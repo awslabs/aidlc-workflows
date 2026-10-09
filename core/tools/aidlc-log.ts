@@ -121,14 +121,20 @@ import {
   readStateFile,
   readUnitSourceManifest,
   recordDir,
+  recordedReviewFileDigest,
+  editedReviewNotice,
+  REVIEW_EDITED_FIELD,
   recordFileTargetOrThrow,
   relativeRecordDir,
   recoveryGuidance,
   requestChangesResetIsExecutable,
+  openReviewRequests,
   reviewAppendedAfterRequest,
   reviewArtifactSnapshot,
   reviewAttemptId,
   reviewDraftRelativePath,
+  reviewerCompletionAfter,
+  reviewFileDigest,
   reviewRecordDigest,
   reviewRecordRelativePath,
   reviewRequestArtifactsCurrent,
@@ -4097,6 +4103,46 @@ function handleReview(args: string[]): void {
               `${readFrom.draftRelative}; a retried ` +
               "incomplete attempt records --verdict NOT-READY without a review.",
         );
+      }
+      // The review is the reviewer's: the bytes recorded now are compared with
+      // what it left when it finished, the digest the log-subagent hook put on
+      // its SUBAGENT_COMPLETED row. A file that changed since was written by
+      // someone else (a conductor rewriting a refused review, or editing the
+      // verdict). The verdict still records, as the file reads, and the row
+      // says the review was edited after the reviewer finished: under strict
+      // the gate tells the person in one line; under relaxed or off the change
+      // is accepted and said once here, like every other accepted change. No
+      // completion row since the request, or one without the digest, is no
+      // evidence, and the row carries nothing.
+      if (body !== null && requestBinding.requestId !== null) {
+        const events = readAuditShardEvents(pd, intent, space);
+        const request = openReviewRequests(events)
+          .find((open) => open.requestId === requestBinding.requestId);
+        const finished = request === undefined
+          ? null
+          : reviewerCompletionAfter(events, flags.reviewer, request.row);
+        const left = finished === null
+          ? null
+          : recordedReviewFileDigest(finished.block, readFrom.draftRelativeToRecord);
+        const now = reviewFileDigest(body);
+        if (left !== null && left !== now) {
+          fields[REVIEW_EDITED_FIELD] = "yes";
+          const notice = editedReviewNotice(node.name, flags.unit);
+          if (changesAccepted) {
+            governedChangeControl(pd, context.state, { intent, space });
+            verdictChangeNotices.push(...recordAcceptedChanges(pd, [{
+              checkpoint: "review-receipt",
+              stage: flags.stage,
+              unit: flags.unit ?? null,
+              changed: [readFrom.draftRelative],
+              recorded: left,
+              current: now,
+              notice,
+            }], { intent, space }));
+          } else {
+            verdictChangeNotices.push(notice);
+          }
+        }
       }
       let reviewBytes = body ?? snapshot.appendix;
       if (!incompleteFallback) {

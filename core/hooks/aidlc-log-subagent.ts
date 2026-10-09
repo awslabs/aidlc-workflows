@@ -4,6 +4,7 @@
 //
 // Receives JSON on stdin with subagent info. No-op unless a workflow is running.
 import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { appendAuditEntry } from "../tools/aidlc-audit.ts";
 import {
   workflowParticipation,
@@ -15,9 +16,15 @@ import {
   writeHookStatusFile,
   isClaudeCodeHookInput,
   isoTimestamp,
+  openReviewRequests,
+  readAuditShardEvents,
+  recordDir,
   recordHookDrop,
+  renderReviewFileDigests,
   resolveProjectDirFromHook,
   resolveWorkflowSelection,
+  REVIEW_FILE_DIGEST_FIELD,
+  reviewFileDigestOnDisk,
   stateFilePathForSelection,
   validSessionId,
 } from "../tools/aidlc-lib.ts";
@@ -98,6 +105,26 @@ export async function run(input: string): Promise<number> {
   };
   if (agentId) fields["Agent ID"] = agentId;
   if (agentMessage) fields.Message = agentMessage;
+  // What a reviewer left in the review file of every request still open for
+  // it, at the moment it finished. The review is the reviewer's: the verdict
+  // compares the bytes it records with this digest and refuses a file that
+  // changed since (aidlc-log.ts review --verdict), and the review-freeze hook
+  // refuses the write that would change it. Evidence only: a ledger or record
+  // that cannot be read leaves the row as it was.
+  try {
+    const record = recordDir(projectDir, intent, space);
+    if (record !== null) {
+      const digests = openReviewRequests(readAuditShardEvents(projectDir, intent, space))
+        .filter((request) => request.reviewer === agentType)
+        .map((request) => ({
+          reviewFile: request.reviewFile,
+          digest: reviewFileDigestOnDisk(join(record, ...request.reviewFile.split("/"))),
+        }));
+      if (digests.length > 0) fields[REVIEW_FILE_DIGEST_FIELD] = renderReviewFileDigests(digests);
+    }
+  } catch (e) {
+    recordHookDrop(projectDir, "log-subagent", `review file digest not recorded: ${errorMessage(e)}`, intent, space);
+  }
 
   try {
     appendAuditEntry("SUBAGENT_COMPLETED", fields, projectDir, intent, space);

@@ -63,6 +63,7 @@ import {
   type AcceptedChange,
   governedChangeControl,
   guardPolicyAcceptsChanges,
+  editedReviewNotice,
   recordAcceptedChanges,
   inertPath,
   resolveChangeControl,
@@ -3917,6 +3918,39 @@ function verifyGateOpeningGuards(
   if (!reviewerGateGuardDisabled()) {
     verifyReviewerPrecondition(pd, content, stage, "present-approval-gate", true, personCall);
   }
+  sayEditedReview(pd, content, stage);
+}
+
+// The gate tells the person, once and in one line, when the review it stands
+// on records a review edited after the reviewer finished (Review Edited After
+// Reviewer on the fresh terminal receipt). Strict only: relaxed and off said it
+// when the verdict was recorded, as an accepted change. The verdict and the
+// gate are unchanged: the person approves as today or has the reviewer run again.
+function sayEditedReview(
+  pd: string,
+  content: string,
+  stage: NonNullable<ReturnType<typeof findStageBySlug>>,
+  unit?: string,
+): void {
+  // A line, never a check: nothing here refuses, and a scan that cannot run
+  // says nothing (the reviewer precondition before it is the gate's check).
+  try {
+    if (!stage.reviewer || reviewerGateGuardDisabled() || guardPolicyAcceptsChanges(pd, content)) return;
+    const reviewClass = resolveReviewClass(stage.review_class ?? "adversarial", getField(content, "Scope") ?? "", content);
+    if (reviewClass === "none") return;
+    const receipts = freshReviewReceipts(pd, content, stage, { reviewClass });
+    const edited = receipts.editedVerdicts ?? new Set<string>();
+    // The stage gate speaks for every review it stands on: the stage's own, or
+    // one per Unit of a per-unit stage; a Unit gate speaks for its Unit only.
+    const scopes = unit === undefined
+      ? [...(receipts.stageVerdict !== null ? [""] : []), ...receipts.unitVerdicts.keys()]
+      : receipts.unitVerdicts.has(unit) ? [unit] : [];
+    const lines = scopes.filter((scope) => edited.has(scope))
+      .map((scope) => editedReviewNotice(stage.name, scope === "" ? undefined : scope));
+    if (lines.length > 0) console.log(JSON.stringify({ change_notices: lines }));
+  } catch {
+    // The line is for the person; a scan that cannot run leaves the gate as it was.
+  }
 }
 
 // True when any non-doc file exists in the workspace - a file outside the
@@ -5737,6 +5771,7 @@ function verifyReviewerPreconditionForUnit(
   const receipts = freshReviewReceipts(pd, content, stage, { reviewClass });
   observeChangeControl(pd, content, receipts);
   noteVerdictNotFinished(receipts, personCall, unit);
+  if (action === "present-approval-gate") sayEditedReview(pd, content, stage, unit);
   if (!receipts.unitVerdicts.has(unit) && !approvableUnfinishedReview(pd, content, receipts, personCall, unit)) {
     const message =
       `Refusing gate for unit "${unit}" of "${stage.slug}": no fresh ` +

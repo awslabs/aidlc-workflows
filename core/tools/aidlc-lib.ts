@@ -15270,6 +15270,10 @@ export interface FreshReviewReceipts {
    *  the NOT-READY fallback no reviewer gave (reviewCompletionDidNotFinish).
    *  Read only beside stageVerdict / unitVerdicts. */
   unfinishedVerdicts?: Set<string>;
+  /** Scopes ("" for the stage, else the Unit) whose fresh terminal verdict
+   *  records an edited review (reviewCompletionEdited). Read only beside
+   *  stageVerdict / unitVerdicts, for the one line the gate says. */
+  editedVerdicts?: Set<string>;
   /**
    * Units with a merge-confirmed Bolt attempt. A name-only attempt is
    * confirmed by its BOLT_COMPLETED row; a slug-backed (worktree) attempt is
@@ -17308,6 +17312,128 @@ export function isReviewRecordRelativePath(path: string): boolean {
 }
 
 /** Canonical bytes: fixed key order, two-space indent, one trailing newline. */
+// --- Who writes the review -----------------------------------------------------
+//
+// The review file a request opens is the reviewer's: the conductor dispatches
+// the reviewer and reads the verdict back, and never writes the file itself.
+// Prose said so and lost: in one run the conductor rewrote a refused review,
+// edited an open one, and recorded each as the reviewer's verdict. The ledger
+// carries what settles it. The log-subagent hook writes, on the reviewer's
+// SUBAGENT_COMPLETED row, the digest of every open review file that reviewer
+// may be writing (what it left when it finished); the verdict compares the
+// bytes it reads with that digest, and the review-freeze hook refuses a write
+// to an open review file by anyone who is not that reviewer (by identity where
+// the harness gives one; once the reviewer has finished where it does not).
+
+/** One review request the ledger still holds open: a REVIEW_REQUESTED row that
+ *  names its review file and has no REVIEW_COMPLETED for its request id. A
+ *  retry re-emits the request row with the same id and replaces the entry, so
+ *  `row` is the latest request row: the reviewer's run starts after it. */
+export interface OpenReviewRequest {
+  requestId: string;
+  reviewer: string;
+  stage: string;
+  unit: string | null;
+  /** The review file as the row names it: relative to the intent record, posix. */
+  reviewFile: string;
+  row: AuditShardEvent;
+}
+
+/**
+ * The review requests the ledger still holds open, in request order. Audit rows
+ * are project text: only a review file inside the record's reviews folder, as
+ * `log review` writes it, counts.
+ */
+export function openReviewRequests(events: ReadonlyArray<AuditShardEvent>): OpenReviewRequest[] {
+  const open = new Map<string, OpenReviewRequest>();
+  for (const row of sortAttemptEvents(events)) {
+    const requestId = auditBlockField(row.block, "Request Id");
+    if (requestId === null) continue;
+    if (row.event === "REVIEW_COMPLETED") {
+      open.delete(requestId);
+      continue;
+    }
+    if (row.event !== "REVIEW_REQUESTED") continue;
+    const reviewFile = auditBlockField(row.block, "Review File");
+    const reviewer = auditBlockField(row.block, "Reviewer");
+    const stage = auditBlockField(row.block, "Stage");
+    if (reviewFile === null || reviewer === null || stage === null) continue;
+    const file = toPosix(reviewFile);
+    if (!file.startsWith(`${REVIEW_RECORDS_DIR}/`) || file.split("/").includes("..")) continue;
+    open.set(requestId, {
+      requestId,
+      reviewer,
+      stage,
+      unit: auditBlockField(row.block, "Unit"),
+      reviewFile: file,
+      row,
+    });
+  }
+  return [...open.values()];
+}
+
+/**
+ * The latest SUBAGENT_COMPLETED of `reviewer` that definitely follows `after`
+ * (same shard: a later position; another shard: a later timestamp), or null
+ * when the reviewer has not finished since. A cross-shard tie reads as not
+ * after, so the callers fail open on it.
+ */
+export function reviewerCompletionAfter(
+  events: ReadonlyArray<AuditShardEvent>,
+  reviewer: string,
+  after: AuditShardEvent,
+): AuditShardEvent | null {
+  let latest: AuditShardEvent | null = null;
+  for (const row of sortAttemptEvents(events)) {
+    if (row.event !== "SUBAGENT_COMPLETED") continue;
+    if (auditBlockField(row.block, "Agent Type") !== reviewer) continue;
+    if (!attemptEventDefinitelyBefore(after, row)) continue;
+    latest = row;
+  }
+  return latest;
+}
+
+/** The SUBAGENT_COMPLETED field carrying `<review file>=<sha256 | absent>` per open request. */
+export const REVIEW_FILE_DIGEST_FIELD = "Review File Digest";
+/** The digest value of a review file the reviewer left unwritten. */
+export const REVIEW_FILE_ABSENT = "absent";
+
+export function reviewFileDigest(bytes: Uint8Array): string {
+  return createHash("sha256").update(bytes).digest("hex");
+}
+
+/** The digest of the review file on disk, read without following a link; a
+ *  missing file, or anything but a plain file, is `absent`. */
+export function reviewFileDigestOnDisk(path: string): string {
+  try {
+    if (!lstatSync(path).isFile()) return REVIEW_FILE_ABSENT;
+    return reviewFileDigest(readFileSync(path));
+  } catch {
+    return REVIEW_FILE_ABSENT;
+  }
+}
+
+/** Render the field value: review file paths carry neither `=` nor `;`
+ *  (REVIEW_RECORD_SEGMENT_RE), and a digest is hex or `absent`. */
+export function renderReviewFileDigests(
+  entries: ReadonlyArray<{ reviewFile: string; digest: string }>,
+): string {
+  return entries.map((entry) => `${entry.reviewFile}=${entry.digest}`).join("; ");
+}
+
+/** The digest a SUBAGENT_COMPLETED row recorded for `reviewFile`, or null when
+ *  the row carries none for it (an older row, or another reviewer's). */
+export function recordedReviewFileDigest(block: string, reviewFile: string): string | null {
+  const field = auditBlockField(block, REVIEW_FILE_DIGEST_FIELD);
+  if (field === null) return null;
+  for (const entry of field.split("; ")) {
+    const at = entry.lastIndexOf("=");
+    if (at <= 0) continue;
+    if (entry.slice(0, at) === reviewFile) return entry.slice(at + 1);
+  }
+  return null;
+}
+
 export function serializeReviewRecord(record: ReviewRecord): string {
   const ordered: ReviewRecord = {
     version: 1,
@@ -17600,6 +17726,25 @@ export function reviewCompletionDidNotFinish(projectDir: string, completionBlock
   if (marked !== null) return marked === "no";
   if (auditBlockField(completionBlock, "Verdict") !== "NOT-READY") return false;
   return pairedReviewRecordForCompletion(projectDir, completionBlock)?.body === "";
+}
+
+/** The REVIEW_COMPLETED field the logger writes, as `yes`, when the review
+ *  file's bytes were not what the reviewer left when it finished (its
+ *  SUBAGENT_COMPLETED row's `Review File Digest`): the verdict is recorded as
+ *  it reads, and as an edited review rather than the reviewer's. */
+export const REVIEW_EDITED_FIELD = "Review Edited After Reviewer";
+
+/** Whether a REVIEW_COMPLETED row records an edited review. Read for what the
+ *  person is told at the gate; it changes no readiness and no fingerprint. */
+export function reviewCompletionEdited(completionBlock: string): boolean {
+  return auditBlockField(completionBlock, REVIEW_EDITED_FIELD) === "yes";
+}
+
+/** The one line the person hears at the gate (strict) or with the verdict
+ *  (relaxed, off) when the review they are deciding on was edited after the
+ *  reviewer finished. */
+export function editedReviewNotice(stageName: string, unit?: string | null): string {
+  return `The review file for ${stageName}${unit ? ` (${unit})` : ""} was edited after the reviewer finished.`;
 }
 
 /**
@@ -19512,6 +19657,7 @@ export function freshReviewReceipts(
     unitPending: new Map(),
     awaitingVerdict: new Set(),
     unfinishedVerdicts: new Set(),
+    editedVerdicts: new Set(),
     mergedBoltUnits: new Set(),
     openBoltUnits: new Set(),
     acceptedChanges: [],
@@ -19615,8 +19761,10 @@ export function freshReviewReceipts(
   // an ambiguous matching path fails closed by clearing every unit receipt.
   const recordedRepos = new Set(intentRepos(projectDir));
   const unitVerdicts = new Map<string, ReviewVerdict>();
-  // Read beside the verdicts above: which of them no reviewer gave.
+  // Read beside the verdicts above: which of them no reviewer gave, and which
+  // record a review edited after the reviewer finished.
   const unfinishedVerdicts = new Set<string>();
+  const editedVerdicts = new Set<string>();
   const unitStale = new Set<string>();
   const unitStaleProgress = new Map<string, StaleReviewProgress>();
   const unitIterations = new Map<string, number>();
@@ -20044,6 +20192,8 @@ export function freshReviewReceipts(
     }
     if (didNotFinish) unfinishedVerdicts.add(unit ?? "");
     else unfinishedVerdicts.delete(unit ?? "");
+    if (reviewCompletionEdited(e.block)) editedVerdicts.add(unit ?? "");
+    else editedVerdicts.delete(unit ?? "");
     if (unit) {
       unitVerdicts.set(unit, terminalVerdict);
       unitStale.delete(unit);
@@ -20509,6 +20659,7 @@ export function freshReviewReceipts(
     unitPending,
     awaitingVerdict,
     unfinishedVerdicts,
+    editedVerdicts,
     mergedBoltUnits,
     openBoltUnits,
     acceptedChanges: [

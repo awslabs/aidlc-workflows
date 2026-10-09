@@ -22,6 +22,7 @@ import {
   claimAttemptFields,
   completionCarriesVerifiedReview,
   reviewCompletionDidNotFinish,
+  reviewCompletionEdited,
   reviewRecordNotHere,
   effectivePlanAction,
   eventMatchesClaimAttempt,
@@ -175,6 +176,10 @@ export interface ConstructionCheckpoint {
    *  its approval: nothing more is asked. Otherwise (a review that ended in
    *  the NOT-READY fallback) `question` is the one approval question. */
   review_not_finished?: { stages: string[]; question?: string; approved_in_words?: true };
+  /** The stages whose fresh review records a review file edited after the
+   *  reviewer finished (strict; relaxed and off said it with the verdict). The
+   *  checkpoint says so in one line before the person is asked. */
+  review_edited?: { stages: string[] };
   /** From verify: the one line for each change to this Unit's reviewed work
    *  its Guard Policy accepted, said before the person is asked. */
   change_notices?: string[];
@@ -711,6 +716,8 @@ function snapshot(
   // Stages whose review ended in the NOT-READY fallback no reviewer gave:
   // ready as before, and asked about and approved as not finished.
   const endedUnfinished: string[] = [];
+  // Stages whose fresh review was edited after the reviewer finished.
+  const editedReviews: string[] = [];
   let mayGoOn: boolean | null = null;
   const overAllowed = (): boolean => (mayGoOn ??= personMayApproveOverUnfinishedReview(projectDir, state));
   // The unfinished review `rereview` names is one the person may go on without.
@@ -982,6 +989,7 @@ function snapshot(
         }
       }
     }
+    if (review && reviewCompletionEdited(review.block) && !acceptsChanges()) editedReviews.push(slug);
     if (reviewClass === "none" || waived) {
       // No review re-checks this stage (or the person let the Unit go on
       // without it): a later change to the work the person approved, which
@@ -1135,6 +1143,7 @@ function snapshot(
           ? { stages: unfinishedStages, approved_in_words: true as const }
           : { stages: unfinishedStages, question: `Approve ${unit}? Its ${reviewsNamed(unfinishedStages)} did not finish.` },
       } : {}),
+      ...(editedReviews.length > 0 ? { review_edited: { stages: editedReviews } } : {}),
       run_floor: floors[stages.at(-1)!] ?? "unstarted#0",
       run_floors: floors, proof_path: `${root}/${proofPath}`, verification: proof ?? restored,
       rereview, rechecked,

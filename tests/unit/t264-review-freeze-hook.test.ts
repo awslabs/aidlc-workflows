@@ -1502,3 +1502,43 @@ const HOOK_REFUSAL_NEXT_RULE =
   "A hook refusal that ends with `Next:` and a command names your next step: run that command and act on " +
   "the directive it returns (after a refused write, the recovery question to put to the person); never retry " +
   "the refused call.";
+
+
+// ---------------------------------------------------------------------------
+// (e) The open review file is never held by the freeze
+// ---------------------------------------------------------------------------
+//
+// A write to an open request's review file goes through under every Guard
+// Policy, whoever writes it: the person's "do it anyway" is theirs to make.
+// Who wrote the bytes is settled on the record instead: the reviewer's
+// SUBAGENT_COMPLETED row carries the digest of what it left, and the verdict
+// records a changed file as an edited review (`Review Edited After Reviewer`),
+// which the gate says in one line. Pinned here so a refusal is not added back.
+
+describe("t264 (e) the open review file is never held by the freeze", () => {
+  test("a main-session write to the open request's review file passes after the reviewer finished, with no REVIEW_FREEZE_BLOCKED row", () => {
+    const p = projBeforeGate();
+    const request = spawnSync(
+      BUN,
+      [LOG_TOOL, "review", "--stage", "requirements-analysis", "--reviewer", "aidlc-product-lead-agent", "--iteration", "1", "--project-dir", p],
+      { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8", env: { ...process.env, AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD: "1" } },
+    );
+    if ((request.status ?? -1) !== 0) throw new Error(`review request failed: ${request.stdout}${request.stderr}`);
+    const { reviewFile } = JSON.parse(request.stdout ?? "{}") as { reviewFile: string };
+    const file = join(p, reviewFile);
+    mkdirSync(dirname(file), { recursive: true });
+    writeFileSync(file, "**Verdict:** READY\n**Reviewer:** aidlc-product-lead-agent\n**Iteration:** 1\n\n### Findings\n\nFixture review.\n", "utf-8");
+    const finished = spawnSync(BUN, [join(DIST_CLAUDE, "hooks", "aidlc-log-subagent.ts")], {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+      input: JSON.stringify({ hook_event_name: "SubagentStop", agent_type: "aidlc-product-lead-agent", agent_id: "r1" }),
+      env: { ...process.env, CLAUDE_PROJECT_DIR: p },
+      encoding: "utf-8",
+    });
+    if ((finished.status ?? -1) !== 0) throw new Error(`SubagentStop hook failed: ${finished.stderr}`);
+    // The conductor (no agent_type), the person's own hands: the write passes.
+    expect(runHook(p, writePayload(file)).code).toBe(0);
+    expect(runHook(p, { hook_event_name: "PreToolUse", tool_name: "Edit", tool_input: { file_path: file, old_string: "READY", new_string: "NOT-READY" } }).code).toBe(0);
+    expect(runHook(p, { hook_event_name: "PreToolUse", tool_name: "Bash", tool_input: { command: `printf 'x' > '${file}'` } }).code).toBe(0);
+    expect(readAllAuditShards(p)).not.toContain("**Event**: REVIEW_FREEZE_BLOCKED");
+  });
+});
