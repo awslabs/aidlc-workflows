@@ -78,7 +78,7 @@ Result prose is identical on both channels (`toolResult` on 0.12,
 | PostToolUse (shell) | `execute_bash` | `{}` (empty) | `Output:\n<stdout>\n\nExit Code: 0` | command: **not** recoverable (only stdout) |
 
 When UserPromptSubmit carries a typed fence or Guard Policy switch, the adapter forwards it to the core human-turn hook, which applies it at prompt time under the payload session and returns an `AIDLC Guard Policy:` note; shell setters are not run inside the adapter.
-A prompt Kiro made is not the person's turn: a message Kiro's own chat record (`~/.kiro/sessions/<workspace>/<session>/messages.jsonl`, the payload's session) marks with `_meta.kiro.syntheticUserMessageReason`, or one of the two workflow sentences whole and anchored (a Workflows step's brief opens with one), is forwarded with `origin: {kind: "host"}`: the core hook records `HOST_TURN` and nothing of the person's, and the adapter starts no session, remembers no chat and opens no turn for it. A message the record tags `_meta.kiro.userMessageTag` is the person's whatever its words, and so is anything unknown, including a payload `session_id` other than the chat's `KIRO_SESSION_ID` on its own (that variable named the chat even for a step's prompt, so it may not name the tab a message came from).
+A prompt Kiro made is not the person's turn: a message Kiro's own chat record (`~/.kiro/sessions/<workspace>/<session>/messages.jsonl`, the payload's session) marks with `_meta.kiro.syntheticUserMessageReason`, or one of the two workflow sentences whole and anchored (a Workflows step's brief opens with one), is forwarded with `origin: {kind: "host"}`: the core hook records `HOST_TURN` and nothing of the person's, and the adapter starts no session, remembers no chat and opens no turn for it; once the chat's turn has closed, it ends a terminal command's same-turn hold (see below). A message the record tags `_meta.kiro.userMessageTag` is the person's whatever its words, and so is anything unknown, including a payload `session_id` other than the chat's `KIRO_SESSION_ID` on its own (that variable named the chat even for a step's prompt, so it may not name the tab a message came from).
 On empty-prompt builds such as IDE 1.0.242, the per-turn `prompt-empty` marker makes the adapter refuse lowering shell commands (exit 2 with stderr), including environment-prefixed invocations and summary confirmation `off`, and `verb-intercept` emits a once-per-session capability note explaining that active work cannot be lowered on that build and directing the person to update to a prompt-capable IDE or start new work from a lower-default scope; for summary confirmation and for plan approval both also name the person's project-wide terminal command `<invoke> config flags --bypass AIDLC_DISABLE_SUMMARY_CONFIRMATION --local --yes` or `--bypass AIDLC_DISABLE_PLAN_APPROVAL_GUARD` (`--clear-bypass` undoes it), which also works while the work runs. Raising to `strict` or turning a fence or summary confirmation `on` remains available.
 Before forwarding an empty prompt, the adapter renames a sole retired
 `Change Control: relaxed|off` line to `Guard Policy` automatically without
@@ -372,7 +372,10 @@ cards doing the work, and the guard notes nothing for them.
   that names no AIDLC at all. No reading of the command decides which call is
   harmless. Tools that are not a shell are not this check's. A turn moves on only with the
   person's message (`UserPromptSubmit`; a prompt Kiro made itself, recorded as
-  `HOST_TURN`, moves no turn on): an agent run Kiro starts without one
+  `HOST_TURN`, moves no turn on, but once the run the terminal command held has
+  ended with its Stop, such a prompt for the chat starts a run of its own and
+  ends the hold; while that run is open, or for a workflow step's own session,
+  the hold stays): an agent run Kiro starts without one
   keeps the turn, and the person's next message releases it. The same-turn
   shell check judges only the chat the payload's `session_id` names, against a
   turn that chat has recorded: with no session in the payload, another chat's

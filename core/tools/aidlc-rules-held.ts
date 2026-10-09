@@ -333,6 +333,12 @@ function hostRunsThisChat(harness: string, sessionId: string): boolean {
 /**
  * Kiro IDE: a prompt opens its chat's turn, and the turn's Stop closes it.
  */
+/** Whether a Kiro IDE chat has a turn open: the person's message opened it and no Stop has closed it yet. */
+export function kiroIdeTurnOpen(projectDir: string, sessionId: string | undefined): boolean {
+  const sid = validSessionId(sessionId);
+  return sid !== null && existsSync(turnOpenPath(projectDir, sid));
+}
+
 export function noteKiroIdeTurn(projectDir: string, sessionId: string | undefined, open: boolean): void {
   const sid = validSessionId(sessionId);
   if (sid === null) return;

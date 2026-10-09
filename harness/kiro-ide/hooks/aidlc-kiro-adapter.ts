@@ -178,7 +178,7 @@ import { normalizeRetiredGuardPolicyField } from "../tools/aidlc-guard-switch.ts
 import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import { aidlcEngineCommand, aidlcInvocation } from "../tools/aidlc-runtime-paths.ts";
 import { terminalDispatcherArgv } from "../tools/aidlc.ts";
-import { noteKiroIdeTurn } from "../tools/aidlc-rules-held.ts";
+import { kiroIdeTurnOpen, noteKiroIdeTurn } from "../tools/aidlc-rules-held.ts";
 import {
   canonicalWriteTool,
   isAuditedWriteTool,
@@ -1895,6 +1895,16 @@ function readTurn(sessionId: string): number {
   }
 }
 
+// Ends this chat's terminal hold: its latch is removed. False when it stays.
+function endTerminalHold(sessionId: string): boolean {
+  try {
+    rmSync(terminalLatchPath(sessionId), { force: true });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 // The one place a turn count starts or moves on. Starting it again (the count
 // was missing or unreadable) also drops the latch left beside it: a latch from
 // before the count was lost cannot be shown to be this turn's. A latch that
@@ -1904,22 +1914,18 @@ function readTurn(sessionId: string): number {
 function bumpTurn(sessionId: string): number {
   const recorded = readTurn(sessionId);
   let start = recorded;
-  if (recorded === 0) {
-    try {
-      rmSync(terminalLatchPath(sessionId), { force: true });
-    } catch {
-      const latchTurn = readTerminalLatch(sessionId)?.turn;
-      start = usableTurn(latchTurn) ? latchTurn : 0;
-    }
+  if (recorded === 0 && !endTerminalHold(sessionId)) {
+    const latchTurn = readTerminalLatch(sessionId)?.turn;
+    start = usableTurn(latchTurn) ? latchTurn : 0;
   }
   const turn = start + 1;
   try {
     mkdirSync(terminalSessionDir(sessionId), { recursive: true });
     writeFileSync(turnCounterPath(sessionId), `${turn}\n`, "utf-8");
   } catch {
-    try {
-      rmSync(terminalLatchPath(sessionId), { force: true });
-    } catch { /* both files are held: nothing here can move the turn on */ }
+    // When the latch cannot go either, both files are held: nothing here can
+    // move the turn on.
+    endTerminalHold(sessionId);
     return 0;
   }
   return turn;
@@ -2230,10 +2236,17 @@ if (target === CATCH_UP) {
 if (target === "verb-intercept") {
   // Before a doctor request below runs, so it sees this message.
   recordPreWorkflowHeartbeat(projectDir, "terminal-command");
-  // A prompt Kiro made is no turn of the person's (record-human-turn): it moves
-  // no turn on, so a turn a terminal command holds stays held, and it is no
-  // terminal command.
-  if (messageOrigin().kind === "host") return 0;
+  // A prompt Kiro made is no turn of the person's (record-human-turn) and no
+  // terminal command, and it moves no turn on: the turn count counts the
+  // person's messages. It starts a run of its own, such as a finished workflow
+  // the person launched, so once the run the terminal command held has ended
+  // (its Stop closed the chat's turn), the hold ends too. While that run is
+  // still open, or for another chat's session, the hold stays.
+  if (messageOrigin().kind === "host") {
+    const chat = ide.sessionId?.trim() ?? "";
+    if (chat !== "" && !kiroIdeTurnOpen(projectDir, chat)) endTerminalHold(terminalSessionId());
+    return 0;
+  }
   const sessionId = terminalSessionId();
   const turn = bumpTurn(sessionId);
   recordPromptEmpty(sessionId, turn);
