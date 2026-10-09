@@ -57,6 +57,12 @@ const manifest: HarnessManifest = {
   name: "devin",
   productName: "Devin CLI",
   configNextStep: "start Devin CLI in this project, then run `/aidlc --doctor`",
+  // Devin CLI collects project hooks at session start and may prompt for
+  // approval; only a full restart re-collects them — /clear is not enough.
+  hookActivation: {
+    recovery:
+      "In Devin CLI, type /hooks and approve this project's AI-DLC hooks if prompted, then fully restart Devin CLI (/clear is not enough) and run doctor again.",
+  },
   harnessDir: ".devin",
   orchestratorSkillPath: ".devin/skills/aidlc/SKILL.md",
   tierFlavor: "devin",
