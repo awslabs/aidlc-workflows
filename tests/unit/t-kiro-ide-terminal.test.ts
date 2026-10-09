@@ -320,12 +320,15 @@ describe("what the agent reads", () => {
     expect(skill).toContain(
       "**When a command comes back with `Command timed out`**, run one short read-only command next (`bun --version` is one) " +
         "to see whether the terminal answers. Never run the timed-out command again to find out: its outcome is unknown, " +
-        "so check the state it was meant to change, or tell the person in one line.",
+        "so check the state it was meant to change, or tell the person in one line. The exception is AI-DLC's own `next`, " +
+        "which changes nothing: run it again.",
     );
     // The rerun is not offered, not even for a command that should be quick: a
-    // migration or a deploy may already have happened.
+    // migration or a deploy may already have happened. AI-DLC's own `next`
+    // changes nothing, so it is the one command run again.
     const paragraph = skill.split("\n").find((line) => line.startsWith("**When a command comes back with `Command timed out`**")) ?? "";
-    expect(paragraph).not.toMatch(/same command again|run it again|again and again|should finish in seconds/);
+    expect(paragraph).not.toMatch(/same command again|again and again|should finish in seconds/);
+    expect(paragraph).toContain("The exception is AI-DLC's own `next`, which changes nothing: run it again.");
     expect(skill).toContain(
       "Do not delete AI-DLC's lock files (`.aidlc-audit-*.lock*` in the temp folder) to fix a timeout: " +
         "they do not slow a command down. Remove one only when `/aidlc --doctor` names it.",
