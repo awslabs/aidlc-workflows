@@ -1,0 +1,106 @@
+diff --git a/core/tools/aidlc-plugin.ts b/core/tools/aidlc-plugin.ts
+index 205d8910..5647bbe8 100644
+--- a/core/tools/aidlc-plugin.ts
++++ b/core/tools/aidlc-plugin.ts
+@@ -66,7 +66,7 @@ export type InvalidInstalledPlugin = {
+ 
+ export type PluginInventory = {
+   capability: InventoryCapability;
+-  harness: "claude" | "codex" | "kiro" | "cursor" | "copilot" | "opencode";
++  harness: "claude" | "codex" | "kiro" | "cursor" | "copilot" | "opencode" | "devin";
+   source?: string;
+   installed: InstalledPlugin[];
+   invalid: InvalidInstalledPlugin[];
+@@ -191,6 +191,7 @@ function hostManifestDirectory(harness: PluginInventory["harness"]): string {
+   if (harness === "kiro") return ".kiro-plugin";
+   if (harness === "cursor") return ".cursor-plugin";
+   if (harness === "copilot") return ".plugin";
++  if (harness === "devin") return ".devin-plugin";
+   return ".opencode-plugin";
+ }
+ 
+@@ -260,13 +261,15 @@ function harnessKind(harnessDir = runtimeHarnessDir()): PluginInventory["harness
+     declared === "kiro-ide" ||
+     declared === "cursor" ||
+     declared === "copilot" ||
+-    declared === "opencode"
++    declared === "opencode" ||
++    declared === "devin"
+   ) {
+     return declared === "kiro-ide" ? "kiro" : declared;
+   }
+   if (harnessDir === ".codex") return "codex";
+   if (harnessDir === ".kiro") return "kiro";
+   if (harnessDir === ".cursor") return "cursor";
++  if (harnessDir === ".devin") return "devin";
+   return "claude";
+ }
+ 
+diff --git a/scripts/plugin-hooks-template/compose.ts b/scripts/plugin-hooks-template/compose.ts
+index ba7228e5..420a5331 100644
+--- a/scripts/plugin-hooks-template/compose.ts
++++ b/scripts/plugin-hooks-template/compose.ts
+@@ -151,6 +151,7 @@ function pluginNameFromRoot(): string {
+     ".cursor-plugin",
+     ".plugin",
+     ".kiro-plugin",
++    ".devin-plugin",
+   ]) {
+     try {
+       const m = JSON.parse(readFileSync(join(PLUGIN_ROOT, md, "plugin.json"), "utf-8"));
+diff --git a/tests/unit/t242-plugin-state.test.ts b/tests/unit/t242-plugin-state.test.ts
+index 5958736d..14af84b5 100644
+--- a/tests/unit/t242-plugin-state.test.ts
++++ b/tests/unit/t242-plugin-state.test.ts
+@@ -64,7 +64,7 @@ function surfaceSnapshot(root: string): Record<string, string> {
+ }
+ 
+ function pluginRoot(
+-  harness: "claude" | "codex" | "kiro" = "claude",
++  harness: "claude" | "codex" | "kiro" | "devin" = "claude",
+   version = "0.1.0",
+ ): string {
+   const root = temp("aidlc-plugin-fixture-");
+@@ -72,6 +72,8 @@ function pluginRoot(
+     ? ".claude-plugin"
+     : harness === "codex"
+     ? ".codex-plugin"
++    : harness === "devin"
++    ? ".devin-plugin"
+     : ".kiro-plugin";
+   mkdirSync(join(root, manifestDir), { recursive: true });
+   mkdirSync(join(root, "stages", "construction"), { recursive: true });
+@@ -408,6 +410,33 @@ describe("t242 fixture-proved host inventories", () => {
+     }));
+   });
+ 
++  test("Devin reads its native .devin-plugin manifest as current-root-only", () => {
++    const root = pluginRoot("devin");
++    process.env.AIDLC_PLUGIN_ROOT = root;
++    delete process.env.AIDLC_HARNESS_NAME;
++    const discovered = discoverPluginInventory(".devin");
++    expect(discovered).toEqual(expect.objectContaining({
++      capability: "current-root-only",
++      harness: "devin",
++      invalid: [],
++    }));
++    expect(discovered.installed).toHaveLength(1);
++    expect(
++      discovered.installed[0].manifestPath.endsWith(
++        join(".devin-plugin", "plugin.json"),
++      ),
++    ).toBe(true);
++
++    process.env.AIDLC_HARNESS_NAME = "devin";
++    const declared = discoverPluginInventory(".claude");
++    expect(declared).toEqual(expect.objectContaining({
++      capability: "current-root-only",
++      harness: "devin",
++      invalid: [],
++    }));
++    expect(declared.installed).toHaveLength(1);
++  });
++
+   test("duplicate installed identities are invalid and name every manifest", () => {
+     const rootA = pluginRoot();
+     const rootB = pluginRoot();

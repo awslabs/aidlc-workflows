@@ -1,0 +1,127 @@
+WARNING: claude CLI not found -- live integration/e2e tests may fail or skip
+AI-DLC Testing Harness
+======================
+Guard profile: fixture (synthetic guard skips and direct audit authority enabled)
+
+## Integration Tests (Claude CLI end-to-end)
+
+=== START t188-plugin-compose.serial.test.ts ===
+Test budget: {"caseDefaultMs":600000,"fileAllowanceMs":7200000,"fileDeadlineMs":1791566339935,"cleanupReserveMs":300000,"runDeadlineMs":null}
+bun test v1.3.14 (0d9b296a)
+
+tests/integration/t188-plugin-compose.serial.test.ts:
+(pass) t188 plugin compose — emit + compose the contribution seam > every harness projection carries its declared host manifest, wiring, and content [5.02ms]
+(pass) t188 plugin compose — emit + compose the contribution seam > Kiro IDE executes its generated compose wiring after a folder-drop [722.63ms]
+(pass) t188 plugin compose — emit + compose the contribution seam > Cursor projection uses Cursor's flat camelCase hook schema [0.22ms]
+(pass) t188 plugin compose — emit + compose the contribution seam > Cursor's cross-platform launcher resolves its plugin root from the hook path [1499.84ms]
+(pass) t188 plugin compose — emit + compose the contribution seam > Cursor launcher passes its plugin root through the installed aidlc branch [1411.09ms]
+(pass) t188 plugin compose — emit + compose the contribution seam > Cursor launcher refuses an ambiguous multi-root workspace [72.62ms]
+(pass) t188 plugin compose — emit + compose the contribution seam > OpenCode compose emits plugin agents to both inline and native rosters [635.14ms]
+(pass) t188 plugin compose — emit + compose the contribution seam > Copilot compose and selection use .github agent and skill surfaces [1896.06ms]
+(pass) t188 plugin compose — emit + compose the contribution seam > new plugin stages are in the compiled graph [1.07ms]
+(pass) t188 plugin compose — emit + compose the contribution seam > compose refreshes SKILL.md Stage Graph with plugin stages [0.24ms]
+(pass) t188 plugin compose — emit + compose the contribution seam > new plugin scopes, agents, and knowledge compose into the harness tree [0.07ms]
+(pass) t188 plugin compose — emit + compose the contribution seam > pre-sidecar plugin knowledge ownership is backfilled, retained, and excluded when deselected [1652.56ms]
+(pass) t188 plugin compose — emit + compose the contribution seam > compose regenerates plugin runner skills and preserves core runner bytes [0.21ms]
+(pass) t188 plugin compose — emit + compose the contribution seam > compose does not auto-enable a plugin excluded by an existing selection [668.08ms]
+(pass) t188 plugin compose — emit + compose the contribution seam > composed plugin stage bodies are not empty [0.27ms]
+(pass) t188 plugin compose — emit + compose the contribution seam > contribution merges produces into the target stage node [0.47ms]
+(pass) t188 plugin compose — emit + compose the contribution seam > contribution merges consumes into the target stage node [0.87ms]
+(pass) t188 plugin compose — emit + compose the contribution seam > contribution merges sensors into the target stage node [0.46ms]
+(pass) t188 plugin compose — emit + compose the contribution seam > contribution adds required_sections to the target stage source [0.20ms]
+(pass) t188 plugin compose — emit + compose the contribution seam > adds.scopes set-unions the plugin's own installed scope into the target stage [1188.50ms]
+(pass) t188 plugin compose — emit + compose the contribution seam > adds.scopes accepts quoted scope identity scalars [641.18ms]
+(pass) t188 plugin compose — emit + compose the contribution seam > new stages whose filename order contradicts their edges seed in flow order [645.74ms]
+(pass) t188 plugin compose — emit + compose the contribution seam > a requires_stage cycle rolls back copied stages so a corrected retry can land [754.13ms]
+(pass) t188 plugin compose — emit + compose the contribution seam > host manifest identity cannot be spoofed by plugin content [113.61ms]
+(pass) t188 plugin compose — emit + compose the contribution seam > a plugin cannot install a doctor script for a foreign plugin identity [116.52ms]
+(pass) t188 plugin compose — emit + compose the contribution seam > tool composition drops co-located tests and fixtures [536.33ms]
+(pass) t188 plugin compose — emit + compose the contribution seam > tool composition audits a stale installed payload absent from the corrected projection [654.29ms]
+(pass) t188 plugin compose — emit + compose the contribution seam > a clean compose on a second harness keeps the first harness's installed-payload advisory [781.94ms]
+(pass) t188 plugin compose — emit + compose the contribution seam > installed-tools audit never follows symlinks and cannot abort composition [592.41ms]
+(pass) t188 plugin compose — emit + compose the contribution seam > duplicate incoming scope identities are rejected within one plugin tree [805.62ms]
+(pass) t188 plugin compose — emit + compose the contribution seam > disable preserves quoted scope membership that predates the plugin [1285.35ms]
+(pass) t188 plugin compose — emit + compose the contribution seam > adds.scopes ownership is the installed file's plugin: field, not a name prefix [114.72ms]
+(pass) t188 plugin compose — emit + compose the contribution seam > adds.scopes naming a foreign or uninstalled scope is dropped-with-log, not merged [120.67ms]
+(pass) t188 plugin compose — emit + compose the contribution seam > concurrent plugin composes preserve every scope merge and sidecar [1373.92ms]
+(pass) t188 plugin compose — emit + compose the contribution seam > compose waits beyond the default lock budget instead of skipping the plugin [932.00ms]
+(pass) t188 plugin compose — emit + compose the contribution seam > intent-create and recompose wait beyond the default budget behind a live workspace holder [738.83ms]
+(pass) t188 plugin compose — emit + compose the contribution seam > relative project env keeps compose and graph on the same workspace lock [619.72ms]
+(pass) t188 plugin compose — emit + compose the contribution seam > select-plugins waits for compose and cannot leave a disabled scope orphaned [2011.02ms]
+(pass) t188 plugin compose — emit + compose the contribution seam > prose fragments are spliced into the target stage body [0.15ms]
+(pass) t188 plugin compose — emit + compose the contribution seam > successfully spliced fragments are recorded in the contribution sidecar [0.26ms]
+(pass) t188 plugin compose — emit + compose the contribution seam > fragments land in step order (8a before 8b before 8c) [0.06ms]
+(pass) t188 plugin compose — emit + compose the contribution seam > {{HARNESS_DIR}} is substituted in composed stage prose [0.03ms]
+(pass) t188 plugin compose — emit + compose the contribution seam > re-running compose does not duplicate fragments [91.56ms]
+(pass) t188 plugin compose — emit + compose the contribution seam > compose recompiles when the graph lost the plugin's stages [622.63ms]
+(pass) t188 plugin compose — emit + compose the contribution seam > old installed schema without plugin ownership key > skips plugin-owned stages scopes agents without a retry marker [801.09ms]
+(pass) t188 plugin compose — emit + compose the contribution seam > two plugins on the same harness get distinct retry markers [134.01ms]
+(pass) t188 plugin compose — emit + compose the contribution seam > drop records canonicalize native relative paths before exact comparisons [0.47ms]
+(pass) t188 plugin compose — emit + compose the contribution seam > Kiro rejects plugin-owned ensemble collaborators with a compose drop [835.89ms]
+(pass) t188 plugin compose — emit + compose the contribution seam > Kiro re-compose migrates only an exact same-plugin legacy persona [906.62ms]
+(pass) t188 plugin compose — emit + compose the contribution seam > Kiro rejects an agent JSON that is missing conductor trust registration [124.53ms]
+(pass) t188 plugin compose — emit + compose the contribution seam > Kiro IDE accepts only installed Markdown agents with complete dispatch grants [2642.27ms]
+(pass) t188 plugin compose — emit + compose the contribution seam > OpenCode rejects a dispatched stage whose agent lacks a native subagent file [121.54ms]
+(pass) t188 plugin compose — emit + compose the contribution seam > OpenCode drops a dispatched stage whose shipped agent name collides with an installed native agent [570.31ms]
+(pass) t188 plugin compose — emit + compose the contribution seam > a malformed plugin agent drops alone without aborting the rest of the compose [556.12ms]
+(pass) t188 plugin compose — emit + compose the contribution seam > OpenCode composes a dispatched stage whose collaborator ships with the plugin [566.11ms]
+(pass) t188 plugin compose — emit + compose the contribution seam > all harnesses reject reserved agent-team stages until a runtime consumer exists [398.05ms]
+(pass) t188 plugin compose — emit + compose the contribution seam > Kiro dispatch-safety still audits an already-composed reserved agent-team stage [558.25ms]
+(pass) t188 plugin compose — emit + compose the contribution seam > Kiro reports an already-composed stage that remains undispatchable [244.60ms]
+(pass) t188 plugin compose — emit + compose the contribution seam > Kiro rejects a lead-only plugin subagent and retains its inline persona [553.91ms]
+(pass) t188 plugin compose — emit + compose the contribution seam > Kiro keeps a plugin persona shared by a rejected mob and accepted inline stage [738.23ms]
+(pass) t188 plugin compose — emit + compose the contribution seam > Kiro rejects an inline stage whose plugin-owned REVIEWER has no dispatch surface [635.64ms]
+(pass) t188 plugin compose — emit + compose the contribution seam > Codex rejects a plugin-owned dispatched agent with a TOML remediation [232.40ms]
+(pass) t188 plugin compose — emit + compose the contribution seam > parser-unavailable fallback accepts only explicit inline reviewer-free stages [599.01ms]
+(pass) t188 plugin compose — emit + compose the contribution seam > unresolvable fragment anchor is dropped-with-log, not silent (R4-2) [149.81ms]
+(pass) t188 plugin compose — emit + compose the contribution seam > range-heading anchor resolves (### Step 4-8 → after-step:6) (R4-3) [559.55ms]
+(pass) t188 plugin compose — emit + compose the contribution seam > stage-slug collision is dropped-with-log, not a silent no-op (R4-4) [121.20ms]
+(pass) t188 plugin compose — emit + compose the contribution seam > scope, agent, and knowledge collisions are no-clobber and drop-logged [664.77ms]
+(pass) t188 plugin compose — emit + compose the contribution seam > agent frontmatter name collision is dropped before copy and install remains usable [318.20ms]
+(pass) t188 plugin compose — emit + compose the contribution seam > a ## fragment: line inside a code fence is NOT a delimiter (R5-C1) [561.60ms]
+(pass) t188 plugin compose — emit + compose the contribution seam > a body block with no matching frontmatter entry is dropped-with-log (R5-C5) [545.30ms]
+(pass) t188 plugin compose — emit + compose the contribution seam > a BOM-prefixed contribution is not silently skipped (R5-C4) [591.39ms]
+(pass) t188 plugin compose — emit + compose the contribution seam > close-marker-lookalike prose survives an upgrade re-splice (R5-C2) [1214.45ms]
+(pass) t188 plugin compose — emit + compose the contribution seam > a [degraded] hook drop produces a FAILING doctor row [348.29ms]
+(pass) t188 plugin compose — emit + compose the contribution seam > an [advisory] hook drop produces a PASSING (advisory) doctor row, not a failure [362.55ms]
+(pass) t188 plugin compose — emit + compose the contribution seam > compose self-clears its drops file on a clean run [558.27ms]
+(pass) t188 plugin compose — emit + compose the contribution seam > renamed bundle: key alone is skipped with the fix named [125.37ms]
+(pass) t188 plugin compose — emit + compose the contribution seam > renamed bundle: key beside plugin: is still skipped [136.57ms]
+(pass) t188 plugin compose — emit + compose the contribution seam > a bundle:-keyed plugin stage file is skipped at copy time and the install still compiles [229.36ms]
+(pass) t188 plugin compose — emit + compose the contribution seam > reviewer stages require an explicit review_artifact migration [696.60ms]
+(pass) t188 plugin compose — emit + compose the contribution seam > an aidlc--prefixed plugin name is refused at compose copy time (runner-path collision) [131.24ms]
+(pass) t188 plugin compose — emit + compose the contribution seam > packager refuses an aidlc--prefixed plugin name [84.32ms]
+(pass) t188 plugin compose — emit + compose the contribution seam > a frontmatter-only (empty-body) plugin stage file is skipped at copy time [117.98ms]
+(pass) t188 plugin compose — emit + compose the contribution seam > a clean plugin's compose does NOT erase another plugin's drops (R6-B1) [667.34ms]
+(pass) t188 plugin compose — emit + compose the contribution seam > a nested ```` fence does not mis-close on an inner ``` (R6-B2) [580.85ms]
+(pass) t188 plugin compose — emit + compose the contribution seam > a plugin containing ':' is refused with a log (R6-L4) [119.47ms]
+(pass) t188 plugin compose — emit + compose the contribution seam > plugin build refuses a non-empty dir that is not a prior projection [106.50ms]
+(pass) t188 plugin compose — emit + compose the contribution seam > plugin build refuses a FOREIGN .claude-plugin checkout (non-aidlc name) [111.49ms]
+(pass) t188 plugin compose — emit + compose the contribution seam > plugin build refuses a file outDir with a usage error (no ENOTDIR stack) [115.33ms]
+(pass) t188 plugin compose — emit + compose the contribution seam > plugin build refuses a symlink outDir — plain and trailing-slash [328.99ms]
+(pass) t188 plugin compose — emit + compose the contribution seam > plugin build refuses a broken symlink outDir (no raw EEXIST stack) [97.80ms]
+(pass) t188 plugin compose — emit + compose the contribution seam > plugin build DOES overwrite a genuine prior AIDLC projection (no --force) [218.72ms]
+(pass) t188 plugin compose — emit + compose the contribution seam > plugin build refuses a mismatched ownership marker and preserves content [207.99ms]
+(pass) t188 plugin compose — emit + compose the contribution seam > plugin build has no force bypass for output ownership [178.83ms]
+
+ 93 pass
+ 0 fail
+ 706 expect() calls
+Ran 93 tests across 1 file. [47.30s]
+--- PASS: t188-plugin-compose.serial.test.ts ---
+=== DONE t188-plugin-compose.serial.test.ts (PASS) ===
+
+==============================
+SUMMARY
+==============================
+Guard profile: fixture (synthetic guard skips and direct audit authority enabled)
+Test files: 1
+Failed files: 0
+Total assertions: 93
+Failed assertions: 0
+Coverage: COMPLETE
+Executed test cases: 93
+Skipped test cases: 0
+Skipped files: 0
+==============================
+RESULT: PASS

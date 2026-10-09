@@ -1,0 +1,37 @@
+WARNING: claude CLI not found -- live integration/e2e tests may fail or skip
+AI-DLC Testing Harness
+======================
+Guard profile: fixture (synthetic guard skips and direct audit authority enabled)
+
+## Integration Tests (Claude CLI end-to-end)
+
+=== START plugin.test.ts ===
+Test budget: {"caseDefaultMs":600000,"fileAllowanceMs":7199999,"fileDeadlineMs":1791566404427,"cleanupReserveMs":300000,"runDeadlineMs":null}
+bun test v1.3.14 (0d9b296a)
+
+plugins/test-pro/tests/plugin.test.ts:
+(pass) test-pro plugin own content validation > passes the reusable plugin content validator [17.25ms]
+(pass) test-pro plugin own content validation > ships stages and contributions [0.12ms]
+(pass) test-pro plugin — composed doctor check > doctor surfaces the plugin's reference checks after compose [382.03ms]
+
+ 3 pass
+ 0 fail
+ 5 expect() calls
+Ran 3 tests across 1 file. [1346.00ms]
+--- PASS: plugin.test.ts ---
+=== DONE plugin.test.ts (PASS) ===
+
+==============================
+SUMMARY
+==============================
+Guard profile: fixture (synthetic guard skips and direct audit authority enabled)
+Test files: 1
+Failed files: 0
+Total assertions: 3
+Failed assertions: 0
+Coverage: COMPLETE
+Executed test cases: 3
+Skipped test cases: 0
+Skipped files: 0
+==============================
+RESULT: PASS

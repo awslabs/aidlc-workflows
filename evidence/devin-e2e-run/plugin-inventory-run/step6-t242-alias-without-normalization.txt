@@ -1,0 +1,38 @@
+# Load-bearing check: in core/tools/aidlc-plugin.ts currentRoots(), the post-3cf198e2 line
+# ".map((value) => resolve(value))" was reverted to ".map(absolute)" so "root" and "root/" stay distinct.
+$ bun test tests/unit/t242-plugin-state.test.ts -t "aliases for one root"   (with the revert applied — expected FAIL)
+bun test v1.3.14 (0d9b296a)
+
+tests/unit/t242-plugin-state.test.ts:
+460 |     delete process.env.AIDLC_PLUGIN_ROOT;
+461 |     process.env.CLAUDE_PLUGIN_ROOT = root;
+462 |     process.env.DEVIN_PLUGIN_ROOT = `${root}/`;
+463 |     process.env.AIDLC_HARNESS_NAME = "devin";
+464 |     const discovered = discoverPluginInventory(".devin");
+465 |     expect(discovered.installed).toHaveLength(1);
+                                       ^
+error: expect(received).toHaveLength(expected)
+
+Expected length: 1
+Received length: 0
+
+      at <anonymous> (<home>/sources/aidlc-workflows/tests/unit/t242-plugin-state.test.ts:465:34)
+(fail) t242 fixture-proved host inventories > Devin's CLAUDE_PLUGIN_ROOT and DEVIN_PLUGIN_ROOT aliases for one root count once [156.70ms]
+
+ 0 pass
+ 29 filtered out
+ 1 fail
+ 1 expect() calls
+Ran 1 test across 1 file. [11.83s]
+================================================================================
+$ bun test tests/unit/t242-plugin-state.test.ts -t "aliases for one root"   (line restored — expected PASS)
+bun test v1.3.14 (0d9b296a)
+
+tests/unit/t242-plugin-state.test.ts:
+(pass) t242 fixture-proved host inventories > Devin's CLAUDE_PLUGIN_ROOT and DEVIN_PLUGIN_ROOT aliases for one root count once [35.16ms]
+
+ 1 pass
+ 29 filtered out
+ 0 fail
+ 2 expect() calls
+Ran 1 test across 1 file. [438.00ms]
