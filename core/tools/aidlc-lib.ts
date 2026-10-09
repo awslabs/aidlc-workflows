@@ -6043,6 +6043,42 @@ export function writeSessionBinding(
   }
 }
 
+// A Codex helper agent's thread, mapped to the chat that spawned it. Codex gives
+// a spawned agent's shell its own CODEX_THREAD_ID and marks that agent's hook
+// payloads with agent_id = that thread id under the root session_id, so the
+// adapter notes the pair the first time it sees it and the resolver reads the
+// root session for the helper's commands. Machine-local runtime state beside the
+// session bindings; a write failure leaves the helper resolving as before.
+function helperSessionPath(projectDir: string, threadId: string): string {
+  const recordPath = sessionRecordPath(projectDir, threadId);
+  return recordPath ? `${recordPath}.helper-of` : "";
+}
+
+export function noteHelperSession(projectDir: string, rootSessionId: string, agentId: string): void {
+  const root = validSessionId(rootSessionId);
+  const agent = validSessionId(agentId);
+  if (!root || !agent || root === agent) return;
+  const path = helperSessionPath(projectDir, agent);
+  if (!path) return;
+  try {
+    if (existsSync(path) && readFileSync(path, "utf-8").trim() === root) return;
+    mkdirSync(sessionsDir(projectDir), { recursive: true });
+    writeFileSync(path, `${root}\n`, "utf-8");
+  } catch {
+    /* per-user runtime state; best-effort */
+  }
+}
+
+export function helperSessionRoot(projectDir: string, threadId: string): string | null {
+  const path = helperSessionPath(projectDir, threadId);
+  if (!path) return null;
+  try {
+    return validSessionId(readFileSync(path, "utf-8").trim());
+  } catch {
+    return null;
+  }
+}
+
 function sessionRebindOfferPath(projectDir: string, sessionId: string): string {
   const recordPath = sessionRecordPath(projectDir, sessionId);
   return recordPath ? `${recordPath}.rebind-offer` : "";
@@ -6782,9 +6818,12 @@ export function resolveInvokingSessionId(projectDir: string): string | null {
   const overrideSession = validSessionId(process.env.AIDLC_SESSION_OVERRIDE);
   // Codex gives every command it runs CODEX_THREAD_ID, the session id its
   // hooks carry, so a Codex tool needs no override written into the command.
-  const codexSession = overrideSession === null && runtimeHarnessDir(projectDir) === ".codex"
+  // A spawned helper agent's shell carries the helper's own thread id; that
+  // thread resolves to the chat that spawned it (noteHelperSession).
+  const codexThread = overrideSession === null && runtimeHarnessDir(projectDir) === ".codex"
     ? validSessionId(process.env.CODEX_THREAD_ID)
     : null;
+  const codexSession = codexThread === null ? null : helperSessionRoot(projectDir, codexThread) ?? codexThread;
   const envSession = overrideSession ?? codexSession;
   // This refusal is a footgun guard against stale exported overrides, not a
   // security boundary. The SOURCE marker is an internal hookChildEnv contract.

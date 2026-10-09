@@ -72,6 +72,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import {
   emptyPickerResult,
   isNonAnswer,
+  noteHelperSession,
   sessionsDir,
   stateFilePath,
   validSessionId,
@@ -222,6 +223,12 @@ const payloadSessionId = validSessionId(codex.session_id);
 if (payloadSessionId) {
   process.env.AIDLC_SESSION_OVERRIDE = payloadSessionId;
   process.env.AIDLC_SESSION_OVERRIDE_SOURCE = "payload";
+  // A spawned agent's payloads carry agent_id = its own thread id, the one its
+  // shell gets as CODEX_THREAD_ID. Note the pair once, from the helper's first
+  // event (its brief), so an engine command the helper runs resolves to this
+  // chat and not to whatever the shared cursor names (aidlc-lib
+  // resolveInvokingSessionId reads it).
+  if (typeof codex.agent_id === "string") noteHelperSession(projectDir, payloadSessionId, codex.agent_id);
 }
 const projectEnv = {
   ...process.env,
