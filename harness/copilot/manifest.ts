@@ -106,6 +106,9 @@ const manifest: HarnessManifest = {
           "sha256:a739ce7cf309c603b4c962313a53cb2a238888b73c204a86f928cd61dcb3e548",
           // The variant shipped with notes above each group of lines.
           "sha256:d23129d2d4de49fdd943b9966c2995cc5064b365a2741c8b4a8f50c0facf2c1a",
+          // The variant shipped before the block ignored aidlc/active-memory/ (the
+          // engine's copy of the active space's method).
+          "sha256:a2fb9d52cb1ad3a360d7abdaddabb6920965b6b1a7acceb14881ad93b4975bbe",
         ],
       },
     },
@@ -169,6 +172,12 @@ const manifest: HarnessManifest = {
           "sha256:7d1b6554a2de2b97b8e14f96ec99d218722d18c100de166cb1a5831bb2c11bfc",
           // The variant whose title asked to be replaced with the project's name (#2058).
           "sha256:cdfb9d50a7899b4c5a2aa3128d49a2f50c12ee9d3aba13dbe42ff92ad7a2f22e",
+          // The variant shipped before the checks paragraph offered the wider place as a
+          // plain question, so an install that still carries it stays recognizable.
+          "sha256:3979d69468a5997423ef8fe3b7d9f9bc948ddf34524ca39e1c10112a6a80f835",
+          // The variant shipped before the method include read aidlc/active-memory/
+          // (the engine's copy of the active space's method).
+          "sha256:2a818c7c6a39421df576d70829d4d2c960809df3d60b32ca1a0659965c56433a",
         ],
       },
     },

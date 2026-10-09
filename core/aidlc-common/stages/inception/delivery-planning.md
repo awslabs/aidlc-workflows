@@ -198,8 +198,18 @@ existing human-authorized command. Otherwise propose a real project check from
 the project scan (`bun test`, `pytest`, `make check`, or the project's equivalent)
 alongside the iteration/execution settings. This intent-level command is reused
 at every Unit/batch checkpoint; it must check completed Units' working results
-and, with skeleton-on, demonstrate the integrated slice end to end. If no runnable
-check exists yet (greenfield), the human may defer selection; leave the field
+and, with skeleton-on, demonstrate the integrated slice end to end. It must run
+every test level the project's testing rules require (the Testing Contract that
+Code Generation renders from the memory's Testing Posture: unit, integration,
+end-to-end as applicable) and the coverage check. When a required level cannot
+run on this machine (no container runtime, no running service), say so in the
+question: add to the Approve option's description the tests the command will not
+run and why, for example "Runs typecheck and unit tests. Does not run the
+integration tests: they need Docker, which is not installed." Never pick a
+narrower command to avoid a missing runtime without saying so, and never answer
+the gap with "CI runs them" when the plan skips CI Pipeline or the repository has
+no CI configuration. If no runnable check
+exists yet (greenfield), the human may defer selection; leave the field
 unset and explain that the first checkpoint will ask before verification. Never
 invent a placeholder or treat deferral as approval.
 
@@ -294,7 +304,7 @@ not the field or enum names.
 
 Completion emoji: :calendar:
 Review path: `<record>/inception/delivery-planning/`
-Approval gate: Approve (proceed to Construction) / Request Changes.
+Approval gate: Approve (Continue to `<directive.next_stage>`, the stage the engine names) / Request Changes.
 
 ## Sensors
 

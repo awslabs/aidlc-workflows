@@ -161,7 +161,6 @@ function setupCodexProject(): { proj: string; home: string; root: string } {
       ``,
       `[shell_environment_policy]`,
       `exclude = ["AWS_*", "AIDLC_BROKER_*", "ANTHROPIC_*", "KIRO_API_KEY", "CURSOR_API_KEY", "GITHUB_TOKEN", "GH_TOKEN", "ACTIONS_*"]`,
-      `set = { AIDLC_RULES_DIR = ".codex/aidlc-rules" }`,
       ``,
       // Under workspace-write, codex carves the project-root `.codex/` out of
       // the writable workspace root (the same read-only-by-design treatment it

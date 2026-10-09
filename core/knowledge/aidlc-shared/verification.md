@@ -20,7 +20,7 @@ Every file uses stable IDs:
 | `NFR{n}` | Inception non-functional requirement | `NFR2` |
 | `US{n}.{m}` | User story | `US1.3` |
 | `AC{n}.{m}.{seq}` | Acceptance criterion | `AC1.3.2` |
-| `U{n}` / `u{n}-{description}` | Unit ID / construction directory | `U1`, `u1-auth` |
+| `U{n}` / `u{n}-{description}` | Unit ID / Unit name (its construction directory) | `U1`, `u1-auth` |
 | `BR{group}.{seq}` | Business rule | `BR1.1` |
 | `NFRx.y` | Detailed NFR requirement | `NFR2.1` |
 

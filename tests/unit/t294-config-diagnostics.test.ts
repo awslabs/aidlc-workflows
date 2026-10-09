@@ -58,7 +58,7 @@ import {
   type ConfigDiagnosticRecords,
   type ProvidersRecord,
 } from "../../core/tools/aidlc-config-diagnostics.ts";
-import { collectDoctorReport, firingHooksLastFired } from "../../core/tools/aidlc-utility.ts";
+import { collectDoctorReport, firingHooksLastFired, kiroDisabledHookChecks } from "../../core/tools/aidlc-utility.ts";
 import * as runtimePaths from "../../core/tools/aidlc-runtime-paths.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
@@ -2229,6 +2229,89 @@ describe("t294 trust diagnostics", () => {
       }),
     );
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("Kiro hooks switched off in Agent Hooks: guards and the reply recorder fail, the rest warn", () => {
+    const ide = temp("aidlc-t294-kiro-ide-hooks-off-");
+    cpSync(join(DIST, "kiro-ide"), ide, { recursive: true });
+    const hooks = join(ide, ".kiro", "hooks");
+    expect(kiroDisabledHookChecks(ide, ".kiro")).toEqual([]);
+    const switchOff = (file: string, where: "file" | "entry") => {
+      const parsed = JSON.parse(readFileSync(join(hooks, file), "utf-8"));
+      if (where === "file") parsed.enabled = false;
+      else parsed.hooks[0].enabled = false;
+      writeFileSync(join(hooks, file), JSON.stringify(parsed));
+    };
+    switchOff("aidlc-guard-tool-call.json", "file");
+    {
+      const renamed = JSON.parse(readFileSync(join(hooks, "aidlc-guard-tool-call.json"), "utf-8"));
+      renamed.hooks[0].name = "my-renamed-guard";
+      writeFileSync(join(hooks, "aidlc-guard-tool-call.json"), JSON.stringify(renamed));
+    }
+    switchOff("aidlc-record-human-turn.json", "entry");
+    switchOff("aidlc-session-start.json", "file");
+    switchOff("aidlc-log-subagent.json", "entry");
+    writeFileSync(join(hooks, "team-guard.json"), JSON.stringify({ enabled: false, hooks: [{ name: "team-guard" }] }));
+    expect(kiroDisabledHookChecks(ide, ".kiro")).toEqual([
+      {
+        pass: false,
+        label: "AI-DLC hook aidlc-guard-tool-call is switched off in Kiro's Agent Hooks: approvals, the approved plan, reviewed work and AI-DLC's records are not protected",
+        fix: 'turn aidlc-guard-tool-call back on under Kiro\'s Agent Hooks, or set "enabled": true in .kiro/hooks/aidlc-guard-tool-call.json',
+      },
+      {
+        pass: false,
+        label: "AI-DLC hook aidlc-record-human-turn is switched off in Kiro's Agent Hooks: your replies are not recorded, so approval gates cannot tell your answer from the assistant's, and /aidlc commands typed in chat are not run directly",
+        fix: 'turn aidlc-record-human-turn back on under Kiro\'s Agent Hooks, or set "enabled": true in .kiro/hooks/aidlc-record-human-turn.json',
+      },
+      {
+        pass: true,
+        severity: "warn",
+        label: "AI-DLC hooks switched off in Kiro's Agent Hooks: aidlc-log-subagent (a specialist agent's finished part is not recorded); aidlc-session-start (your first prompt starts the session instead)",
+        fix: 'turn them back on under Kiro\'s Agent Hooks, or set "enabled": true in their .kiro/hooks/ files',
+      },
+    ]);
+
+    // With an install manifest, an aidlc- file it does not list is the project's.
+    mkdirSync(join(ide, ".kiro", "tools", "data"), { recursive: true });
+    writeFileSync(join(ide, ".kiro", "tools", "data", "aidlc-manifest.json"), JSON.stringify({
+      files: { ".kiro/hooks/aidlc-guard-tool-call.json": "x", ".kiro/hooks/aidlc-record-human-turn.json": "x" },
+    }));
+    writeFileSync(join(hooks, "aidlc-team-extra.json"), JSON.stringify({ enabled: false, hooks: [{ name: "aidlc-team-extra" }] }));
+    expect(kiroDisabledHookChecks(ide, ".kiro").map((row) => row.label)).toEqual([
+      expect.stringContaining("aidlc-guard-tool-call is switched off"),
+      expect.stringContaining("aidlc-record-human-turn is switched off"),
+    ]);
+
+    // No Kiro engine runs the Kiro CLI tree's .kiro.hook files (#1487), so their
+    // flag protects nothing; a hook file that parses to a non-object is skipped.
+    const cli = temp("aidlc-t294-kiro-cli-hooks-off-");
+    cpSync(join(DIST, "kiro"), cli, { recursive: true });
+    const cliHook = join(cli, ".kiro", "hooks", "aidlc-plan-approval-guard.kiro.hook");
+    writeFileSync(cliHook, readFileSync(cliHook, "utf-8").replace('"enabled":true', '"enabled":false'));
+    writeFileSync(join(cli, ".kiro", "hooks", "aidlc-null.json"), "null");
+    expect(kiroDisabledHookChecks(cli, ".kiro")).toEqual([]);
+  });
+
+  test("doctor fails a Kiro IDE guard hook switched off in Agent Hooks", () => {
+    const project = install("kiro-ide");
+    const guard = join(project, ".kiro", "hooks", "aidlc-guard-tool-call.json");
+    writeFileSync(guard, JSON.stringify({ ...JSON.parse(readFileSync(guard, "utf-8")), enabled: false }));
+    const result = spawnSync(BUN, [
+      join(project, ".kiro", "tools", "aidlc.ts"),
+      "--doctor",
+      "--json",
+      "--offline",
+    ], {
+      cwd: project,
+      env: { ...process.env, ...runtimeEnv(), AIDLC_HARNESS_DIR: ".kiro", AIDLC_HARNESS_NAME: "kiro-ide" },
+      encoding: "utf-8",
+      timeout: 60_000,
+    });
+    if (result.error) throw result.error;
+    expect(JSON.parse(result.stdout).data.checks).toContainEqual(expect.objectContaining({
+      pass: false,
+      label: "AI-DLC hook aidlc-guard-tool-call is switched off in Kiro's Agent Hooks: approvals, the approved plan, reviewed work and AI-DLC's records are not protected",
+    }));
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });
 
 describe("t294 post-apply outstanding actions", () => {
@@ -3125,10 +3208,6 @@ describe("t294 config diagnostics CLI", () => {
       )
         .replace("# AI-DLC on Codex CLI", "# Team-owned Codex instructions")
         .replace(
-          'set = { AIDLC_RULES_DIR = "aidlc/spaces/default/memory" }',
-          'set = { AIDLC_RULES_DIR = "team/rules" }',
-        )
-        .replace(
           'sandbox_mode = "workspace-write"',
           'sandbox_mode = "read-only"',
         ),
@@ -3149,8 +3228,6 @@ describe("t294 config diagnostics CLI", () => {
     expect(parseToml(readFileSync(codexPath, "utf-8")).sandbox_mode).toBe("read-only");
     expect(readFileSync(codexPath, "utf-8"))
       .toContain("# Team-owned Codex instructions");
-    expect(readFileSync(codexPath, "utf-8"))
-      .toContain('AIDLC_RULES_DIR = "team/rules"');
     // The project's own values for AI-DLC's keys stay theirs on a refresh,
     // with or without --force; the release here ships the same values.
     const codexEdited = readFileSync(codexPath, "utf-8");
@@ -3172,8 +3249,6 @@ describe("t294 config diagnostics CLI", () => {
     expect(parseToml(readFileSync(codexPath, "utf-8")).sandbox_mode).toBe("read-only");
     expect(readFileSync(codexPath, "utf-8"))
       .toContain("# Team-owned Codex instructions");
-    expect(readFileSync(codexPath, "utf-8"))
-      .toContain('AIDLC_RULES_DIR = "team/rules"');
     expect(readFileSync(codexPath, "utf-8"))
       .toContain('model = "team-model"');
     expect(readFileSync(codexPath, "utf-8"))
@@ -3365,7 +3440,7 @@ describe("t294 config diagnostics CLI", () => {
     return source;
   }
 
-  const SHIPPED_SET_LINE = 'set = { AIDLC_RULES_DIR = "aidlc/spaces/default/memory" }';
+  const SHIPPED_INLINE_LINE = 'experimental_request_user_input = { enabled = true }';
 
   const SHIPPED_STATUS_LINE =
     'status_line = ["model-with-reasoning", "git-branch", "task-progress", "context-used"]';
@@ -3428,7 +3503,7 @@ describe("t294 config diagnostics CLI", () => {
       const configPath = join(project, ".codex", "config.toml");
       const shipped = readFileSync(configPath, "utf-8");
       const withoutTui = shipped.replace(/\[tui\][\s\S]*$/, "");
-      const firstTable = withoutTui.indexOf("[shell_environment_policy]");
+      const firstTable = withoutTui.indexOf("[sandbox_workspace_write]");
       const edited = withoutTui.slice(0, firstTable) + spelling + withoutTui.slice(firstTable);
       expect(() => parseToml(edited)).not.toThrow();
       writeFileSync(configPath, edited);
@@ -3455,7 +3530,7 @@ describe("t294 config diagnostics CLI", () => {
     const project = install("codex");
     const configPath = join(project, ".codex", "config.toml");
     const withoutTui = readFileSync(configPath, "utf-8").replace(/\[tui\][\s\S]*$/, "");
-    const firstTable = withoutTui.indexOf("[shell_environment_policy]");
+    const firstTable = withoutTui.indexOf("[sandbox_workspace_write]");
     writeFileSync(
       configPath,
       withoutTui.slice(0, firstTable) + spellings[0] + withoutTui.slice(firstTable),
@@ -3472,14 +3547,14 @@ describe("t294 config diagnostics CLI", () => {
   test("Codex refresh adds a release's new inline member beside the project's own", () => {
     const env = runtimeEnv();
     const release = codexRelease((text) => text.replace(
-      SHIPPED_SET_LINE,
-      'set = { AIDLC_RULES_DIR = "aidlc/spaces/default/memory", RELEASE_VAR = "new" }',
+      SHIPPED_INLINE_LINE,
+      'experimental_request_user_input = { enabled = true, release_var = "new" }',
     ));
     const project = install("codex");
     const configPath = join(project, ".codex", "config.toml");
     const edited = readFileSync(configPath, "utf-8").replace(
-      SHIPPED_SET_LINE,
-      'set = { AIDLC_RULES_DIR = "aidlc/spaces/default/memory", PROJECT_VAR = "must-stay" }',
+      SHIPPED_INLINE_LINE,
+      'experimental_request_user_input = { enabled = true, project_var = "must-stay" }',
     );
     writeFileSync(configPath, edited);
     const args = (dir: string) => [
@@ -3488,8 +3563,8 @@ describe("t294 config diagnostics CLI", () => {
     const refreshed = run(args(project), project, env);
     expect(refreshed.status, refreshed.stdout + refreshed.stderr).toBe(0);
     expect(readFileSync(configPath, "utf-8")).toBe(edited.replace(
-      'PROJECT_VAR = "must-stay" }',
-      'PROJECT_VAR = "must-stay", RELEASE_VAR = "new" }',
+      'project_var = "must-stay" }',
+      'project_var = "must-stay", release_var = "new" }',
     ));
 
     // Where the new key has no safe place beside the project's own dotted keys,
@@ -3497,8 +3572,8 @@ describe("t294 config diagnostics CLI", () => {
     const dotted = install("codex");
     const dottedPath = join(dotted, ".codex", "config.toml");
     const dottedEdited = readFileSync(dottedPath, "utf-8").replace(
-      SHIPPED_SET_LINE,
-      'set.AIDLC_RULES_DIR = "aidlc/spaces/default/memory"\nset.PROJECT_VAR = "must-stay"',
+      SHIPPED_INLINE_LINE,
+      'experimental_request_user_input.enabled = true\nexperimental_request_user_input.project_var = "must-stay"',
     );
     writeFileSync(dottedPath, dottedEdited);
     const written = run(["config", "--project-dir", dotted, "--yes"], dotted, env);
@@ -3552,24 +3627,54 @@ describe("t294 config diagnostics CLI", () => {
     expect(readFileSync(configPath, "utf-8")).toBe(edited);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-  test("Codex refresh keeps the team's active space and needs no --force", () => {
-    const project = install("codex");
+  test("Codex refresh removes the space pointer an earlier release shipped, at whichever space a switch left it", () => {
     const env = runtimeEnv();
-    const configPath = join(project, ".codex", "config.toml");
-    // What /aidlc space teamb writes at the next session start.
-    const onSpace = readFileSync(configPath, "utf-8").replace(
-      'AIDLC_RULES_DIR = "aidlc/spaces/default/memory"',
-      'AIDLC_RULES_DIR = "aidlc/spaces/teamb/memory"',
-    );
-    writeFileSync(configPath, onSpace);
-    const refreshed = run([
-      "config", "--project-dir", project, "--from", codexStatusRelease(RELEASE_STATUS),
-      "--harness", "codex", "--yes",
-    ], project, env);
-    expect(refreshed.status, refreshed.stdout + refreshed.stderr).toBe(0);
-    expect(refreshed.stdout).not.toContain("Note:");
-    expect(readFileSync(configPath, "utf-8"))
-      .toBe(onSpace.replace(SHIPPED_STATUS_VALUE, JSON.stringify(RELEASE_STATUS)));
+    // Earlier releases shipped `AIDLC_RULES_DIR` under [shell_environment_policy]
+    // and a space switch rewrote it in place; this release ships neither, and
+    // the engine reads the active space itself.
+    const shipped = (value: string) =>
+      `[shell_environment_policy]\nset = { AIDLC_RULES_DIR = "${value}" }\n\n[sandbox_workspace_write]`;
+    for (const [label, value, form] of [
+      ["the default space", "aidlc/spaces/default/memory", "inline"],
+      ["a switched space", "aidlc/spaces/teamb/memory", "inline"],
+      ["a switched space, dotted", "aidlc/spaces/teamb/memory", "dotted"],
+    ] as const) {
+      const project = install("codex");
+      const configPath = join(project, ".codex", "config.toml");
+      const clean = readFileSync(configPath, "utf-8");
+      const older = clean.replace(
+        "[sandbox_workspace_write]",
+        form === "inline"
+          ? shipped(value)
+          : `[shell_environment_policy]\nset.AIDLC_RULES_DIR = "${value}"\n\n[sandbox_workspace_write]`,
+      );
+      expect(older, label).not.toBe(clean);
+      writeFileSync(configPath, older);
+      const refreshed = run(["config", "--project-dir", project, "--yes"], project, env);
+      expect(refreshed.status, `${label}: ${refreshed.stdout}${refreshed.stderr}`).toBe(0);
+      expect(refreshed.stdout, label).not.toContain("Note:");
+      // The table and its one line go; the blank line that separated it stays.
+      expect(readFileSync(configPath, "utf-8").replace("\n\n\n[sandbox_workspace_write]", "\n\n[sandbox_workspace_write]"), label).toBe(clean);
+    }
+    // A table the project extended: only the pointer member goes, the project's
+    // own member and the table stay, whichever order they were written in.
+    for (const [members, left] of [
+      ['AIDLC_RULES_DIR = "aidlc/spaces/teamb/memory", PROJECT_VAR = "must-stay"', 'PROJECT_VAR = "must-stay"'],
+      ['PROJECT_VAR = "must-stay", AIDLC_RULES_DIR = "aidlc/spaces/teamb/memory"', 'PROJECT_VAR = "must-stay"'],
+      ['PROJECT_VAR = "must-stay", AIDLC_RULES_DIR = "aidlc/spaces/default/memory", OTHER = 1', 'PROJECT_VAR = "must-stay", OTHER = 1'],
+    ] as const) {
+      const extended = install("codex");
+      const extendedPath = join(extended, ".codex", "config.toml");
+      const before = readFileSync(extendedPath, "utf-8").replace(
+        "[sandbox_workspace_write]",
+        `[shell_environment_policy]\nset = { ${members} }\n\n[sandbox_workspace_write]`,
+      );
+      writeFileSync(extendedPath, before);
+      const refreshed = run(["config", "--project-dir", extended, "--yes"], extended, env);
+      expect(refreshed.status, `${members}: ${refreshed.stdout}${refreshed.stderr}`).toBe(0);
+      expect(refreshed.stdout, members).not.toContain("Note:");
+      expect(readFileSync(extendedPath, "utf-8"), members).toBe(before.replace(`set = { ${members} }`, `set = { ${left} }`));
+    }
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("first Codex install keeps a project's own config.toml and adds AI-DLC's settings", () => {
@@ -4871,7 +4976,6 @@ process.exit(0);
       features: hash,
       sandbox_mode: hash,
       sandbox_workspace_write: hash,
-      shell_environment_policy: hash,
       suppress_unstable_features_warning: hash,
       tool_output_token_limit: hash,
       tools: hash,
@@ -4880,7 +4984,6 @@ process.exit(0);
       'value:["sandbox_mode"]': hash,
       'value:["suppress_unstable_features_warning"]': hash,
       'value:["tool_output_token_limit"]': hash,
-      'value:["shell_environment_policy","set","AIDLC_RULES_DIR"]': hash,
       'value:["sandbox_workspace_write","network_access"]': hash,
       'value:["agents","max_depth"]': hash,
       'value:["tools","experimental_request_user_input","enabled"]': hash,

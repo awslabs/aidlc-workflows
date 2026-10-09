@@ -216,6 +216,7 @@ import {
   answerModeStageStartedFields,
   keepPlanApprovalAskOverStateWrite,
   recordHookDrop,
+  engineDir,
 } from "./aidlc-lib.js";
 import { memoryDirFor } from "./aidlc-graph.ts";
 import { inspectRequiredArtifactInstances } from "./aidlc-artifact-resolution.ts";
@@ -2426,6 +2427,9 @@ function handleUnit(args: string[]): void {
 
     const open = unitOpenCheckpoints(pd, slug);
     const checkpoint = open[0] ?? null;
+    // The person picked recording this receipt on the gate's recovery ask.
+    const completionPicked = action === "complete" && !checkpoint &&
+      guardRecoveryAskSelected(pd, content, slug, unit, "record-unit-completion");
     let pauseReason = reason;
     let pauseNextAction = nextAction;
 
@@ -2486,10 +2490,7 @@ function handleUnit(args: string[]): void {
         return;
       }
       requireEngineRoutedUnit(routed, slug, unit);
-    } else if (
-      action === "complete" && !checkpoint &&
-      guardRecoveryAskSelected(pd, content, slug, unit, "record-unit-completion")
-    ) {
+    } else if (completionPicked) {
       // The gate refused this Unit for a missing UNIT_COMPLETED receipt and the
       // person picked recording it on the open recovery ask: the Unit's work was
       // done without the start receipt, so its completion is recorded from the
@@ -2539,6 +2540,45 @@ function handleUnit(args: string[]): void {
         error(
           `Refusing to resume unit "${unit}" for "${slug}": it is not the paused unit` +
             `${shown ? ` (active: "${shown.unit}", ${shown.state})` : " (no unit is active)"}.`,
+        );
+      }
+    }
+
+    // The receipt also waits for the Unit's review: a request that is open with
+    // no verdict means a reviewer's finding is still owed, and a receipt over it
+    // hands the walk on with that finding lost (a refused NOT-READY was followed
+    // by a completion this way). Only "open and no verdict at all" refuses here;
+    // a verdict the record could not verify, a stale receipt and every other
+    // freshness, fingerprint or digest question are the gate's, and off under
+    // Guard Policy off. The person's words win where the checkpoint lets their
+    // approval go over the review (personMayApproveOverUnfinishedReview: not
+    // under a strict the team locked in memory): once they have spoken since
+    // the last question (their "approve it as it is", which the Unit's
+    // checkpoint takes with --over-unfinished-review and which needs this
+    // receipt first), or picked recording the receipt on a recovery ask, the
+    // receipt records and the review stays owed at the gate.
+    if (action === "complete" && !waveMode && !completionPicked) {
+      const owed = openUnitReview(pd, content, stage, unit);
+      const theirsMayWin = owed !== null && personMayApproveOverUnfinishedReview(pd, content);
+      if (owed !== null && !(theirsMayWin && personSpokeSinceGate(pd, { requests: true }))) {
+        const request =
+          `${aidlcToolInvocation("log")} review --stage ${slug} --reviewer ${owed.reviewer} ` +
+          `--unit ${unit} --iteration ${owed.iteration}`;
+        const theirs = theirsMayWin
+          ? " If the person said to go on without this review, run this completion again: their words let it " +
+            "record, and their approval (the Unit checkpoint's `verify --over-unfinished-review`, or the stage gate) " +
+            "goes over the review."
+          : " Finish it first, without asking the person: your team set Guard Policy to strict for everyone on " +
+            "this repo, so their words do not go over this review.";
+        error(
+          owed.requestAgain
+            ? `Refusing to complete unit "${unit}" for "${slug}": its review (iteration ${owed.iteration}) was ` +
+              `requested before its outputs changed, so request it again with \`${request}\` and record the ` +
+              "verdict with the same command plus `--verdict <READY|NOT-READY>`." + theirs
+            : `Refusing to complete unit "${unit}" for "${slug}": its review (iteration ${owed.iteration}) is ` +
+              `still waiting for a verdict. Record it with \`${request} --verdict <READY|NOT-READY>\`; if the ` +
+              "reviewer gave none, rerun that command with `--retry-pending` instead and dispatch the reviewer " +
+              "again." + theirs,
         );
       }
     }
@@ -3013,6 +3053,42 @@ function handleCount(args: string[]): void {
 
 function artifactGuardDisabled(pd: string): boolean {
   return resolveProjectFlag("AIDLC_SKIP_ARTIFACT_GUARD", process.env, pd) === "1";
+}
+
+// The Unit's review request that is open with no verdict in this attempt, or
+// null. A request whose outputs changed since it was made is requested again
+// at its own pass (requestAgain); a current one takes its verdict or a retry.
+// A verdict the record could not verify is a verdict (the gate's retry owns
+// it), and a recovery request is the stale-receipt machinery, which a Guard
+// Policy that accepts changes turns off.
+function openUnitReview(
+  pd: string,
+  content: string,
+  stage: Parameters<typeof freshReviewReceipts>[2],
+  unit: string,
+): { reviewer: string; iteration: number; requestAgain: boolean } | null {
+  if (!stage.reviewer) return null;
+  const reviewClass = resolveReviewClass(
+    stage.review_class ?? "adversarial",
+    getField(content, "Scope") ?? "",
+    content,
+  );
+  if (reviewClass === "none") return null;
+  const receipts = freshReviewReceipts(pd, content, stage, { reviewClass });
+  const pending = receipts.unitPending.get(unit);
+  if (
+    pending === undefined ||
+    receipts.awaitingVerdict?.has(unit) !== true ||
+    pending.verificationFailed === true ||
+    (pending.recovery && guardPolicyAcceptsChanges(pd, content))
+  ) {
+    return null;
+  }
+  return {
+    reviewer: stage.reviewer,
+    iteration: pending.iteration,
+    requestAgain: pending.state === "outstanding",
+  };
 }
 
 // Mirrors both aidlc-orchestrate.ts isAutonomousSwarmCandidate and the
@@ -3900,12 +3976,12 @@ function isNonDocPath(p: string): boolean {
 }
 
 // Run git in the workspace, fail-safe: returns null on any spawn/exec problem so
-// callers fall back to the filesystem check rather than trapping. A probe reads
-// state and never needs the filesystem monitor hook, so the one git setting
-// that runs a configured program on `status` is off for it.
+// callers fall back to the filesystem check rather than trapping. The person's
+// own git settings apply: this is their machine and their project, and git here
+// behaves as it does in their terminal.
 function git(pd: string, args: string[]): string | null {
   try {
-    const r = spawnSync("git", ["-c", "core.fsmonitor=false", ...args], {
+    const r = spawnSync("git", args, {
       cwd: pd,
       encoding: "utf-8",
       timeout: DEFAULT_SUBPROCESS_TIMEOUT_MS,
@@ -5920,6 +5996,242 @@ export function guardPreflight(
   }
 }
 
+// What the gate asked the person to decide (#2098), recorded on the gate-open
+// row so the record alone answers "what did they approve, and on what evidence":
+// the stage Approve continues to, the digest of the review brief the agent
+// rendered for this gate, the latest result of every applicable check per
+// declared artifact, and the decisions the artifacts left to the person.
+// Record-only: nothing here can stop a gate; whatever cannot be read says so.
+type GateStage = NonNullable<ReturnType<typeof findStageBySlug>>;
+
+function gateAskFields(
+  pd: string,
+  stage: GateStage,
+  content: string,
+  unit: string | undefined,
+  listedTogether: readonly string[],
+): Record<string, string> {
+  const fields: Record<string, string> = {};
+  try {
+    const next = nextInScopeStage(listedTogether.at(-1) ?? stage.slug, getField(content, "Scope") ?? "", content);
+    fields["Next Stage"] = next ? next.slug : "none";
+  } catch {
+    fields["Next Stage"] = "none";
+  }
+  try {
+    const digest = latestGateBriefDigest(pd, stage, unit);
+    fields["Brief Digest"] = digest === null ? "none" : `sha256:${digest}`;
+  } catch {
+    fields["Brief Digest"] = "none";
+  }
+  try {
+    fields["Sensor State"] = sensorStateAtGate(pd, stage);
+  } catch {
+    fields["Sensor State"] = "none";
+  }
+  try {
+    Object.assign(fields, openDecisionsFields(pd, stage));
+  } catch {
+    fields["Open Decisions"] = "0";
+  }
+  return fields;
+}
+
+// Where the review-brief CLI keeps the renderings it printed for this gate.
+export function gateBriefsDir(pd: string, stage: { slug: string; for_each?: string }, unit: string | undefined): string {
+  const scope = stage.for_each === "unit-of-work" && unit !== undefined ? join("units", unit) : "stage";
+  return join(engineDir(pd), "reviews", stage.slug, scope, "briefs");
+}
+
+function latestGateBriefDigest(pd: string, stage: GateStage, unit: string | undefined): string | null {
+  const latest = join(gateBriefsDir(pd, stage, unit), "latest.json");
+  if (!existsSync(latest)) return null;
+  const parsed = JSON.parse(readFileSync(latest, "utf-8")) as { digest?: unknown };
+  return typeof parsed.digest === "string" && /^[0-9a-f]{64}$/.test(parsed.digest) ? parsed.digest : null;
+}
+
+// The latest terminal result of every applicable sensor for every declared
+// artifact on disk, from the audit shards; nothing is re-fired here. A failure
+// keeps what the gate row and the spoken line need (the findings count and the
+// detail file); a pass or a check that never ran is its `id@path` key with its
+// state, in the order the gate row spells them.
+type LatestCheckResults = {
+  failed: Array<{ id: string; rel: string; findings: string; detail: string | null }>;
+  rest: string[];
+};
+function latestCheckResults(pd: string, stage: GateStage, unit: string | null = null): LatestCheckResults {
+  const results: LatestCheckResults = { failed: [], rest: [] };
+  const sensors = stage.sensors_applicable ?? [];
+  const paths = declaredOutputsForGate(pd, stage, unit);
+  if (sensors.length === 0 || paths.length === 0) return results;
+  const latest = new Map<string, { kind: "passed" | "failed"; ts: string; pos: number; findings: string; detail: string | null }>();
+  for (const row of readAuditShardEvents(pd)) {
+    if (row.event !== "SENSOR_PASSED" && row.event !== "SENSOR_FAILED") continue;
+    if (auditBlockField(row.block, "Stage slug") !== stage.slug) continue;
+    const id = auditBlockField(row.block, "Sensor ID");
+    const output = auditBlockField(row.block, "Output path");
+    if (id === null || output === null) continue;
+    const key = `${id}@${output}`;
+    const seen = latest.get(key);
+    if (seen && (seen.ts > row.timestamp || (seen.ts === row.timestamp && seen.pos > row.pos))) continue;
+    // A pass that carries a note (the tool was unavailable, the script failed)
+    // evaluated nothing: it does not clear the failure recorded before it.
+    if (row.event === "SENSOR_PASSED" && seen?.kind === "failed" && auditBlockField(row.block, "Note") !== null) continue;
+    latest.set(key, {
+      kind: row.event === "SENSOR_PASSED" ? "passed" : "failed",
+      ts: row.timestamp,
+      pos: row.pos,
+      findings: auditBlockField(row.block, "Findings count") ?? "?",
+      detail: auditBlockField(row.block, "Detail path"),
+    });
+  }
+  for (const sensor of sensors) {
+    for (const path of paths) {
+      if (!gateSensorMatchesOutput(sensor, path)) continue;
+      const rel = relative(pd, path).split(sep).join("/");
+      const result = latest.get(`${sensor.id}@${rel}`);
+      if (result === undefined) results.rest.push(`${sensor.id}@${rel}=not-run`);
+      else if (result.kind === "passed") results.rest.push(`${sensor.id}@${rel}=passed`);
+      else results.failed.push({ id: sensor.id, rel, findings: result.findings, detail: result.detail });
+    }
+  }
+  return results;
+}
+
+// The declared outputs a gate speaks for: every unit's at a stage gate, and one
+// Unit's at that Unit's own gate, so a team's Unit is not told about a sibling's.
+function declaredOutputsForGate(pd: string, stage: GateStage, unit: string | null): string[] {
+  const paths = existingDeclaredArtifactPaths(pd, stage);
+  if (unit === null || stage.for_each !== "unit-of-work") return paths;
+  const rec = recordDir(pd);
+  if (rec === null) return paths;
+  const stateContent = readStateFile(pd);
+  if (usesStageLevelPerUnitArtifacts(getField(stateContent, "Scope"), stateContent)) return paths;
+  let unitDir = join(rec, "construction", unit, stage.slug);
+  try {
+    unitDir = realpathSync(unitDir);
+  } catch {
+    return [];
+  }
+  return paths.filter((path) => pathIsWithin(unitDir, path));
+}
+
+// The gate-open row's field: `id@path=passed|failed(<n>) [detail: <path>]|not-run`,
+// failures first, at most 20 entries spelled out.
+function sensorStateAtGate(pd: string, stage: GateStage): string {
+  // Spelled out here, not at module level: this file runs its command before
+  // later module-level declarations are initialized.
+  const SENSOR_STATE_MAX_ENTRIES = 20;
+  const { failed, rest } = latestCheckResults(pd, stage);
+  const entries = [
+    ...failed.map((f) => `${f.id}@${f.rel}=failed(${f.findings})${f.detail ? ` [detail: ${f.detail}]` : ""}`),
+    ...rest,
+  ];
+  if (entries.length === 0) return "none";
+  const shown = entries.slice(0, SENSOR_STATE_MAX_ENTRIES);
+  const more = entries.length - shown.length;
+  return `${shown.join("; ")}${more > 0 ? `; +${more} more` : ""}`;
+}
+
+// What the person hears when a gate opens, or is shown again, while a check
+// still fails on a declared output (#2201): one line per failing check, in
+// plain words, with the detail file the agent corrects from (stage protocol
+// section 14), at most three lines and then a count. The orchestrator carries
+// them in the gate reply's `narration`, beside what the stage produced, which
+// every harness's agent says to the person with the approval question. Nothing
+// is re-fired; a check that passed later, or never ran, says nothing, and an
+// unreadable record says nothing about the checks. A team's Unit gate speaks
+// for that Unit's outputs only.
+export function failedCheckNotices(pd: string, stage: GateStage, unit: string | null = null): string[] {
+  const FAILED_CHECK_LINES = 3;
+  let failed: LatestCheckResults["failed"];
+  try {
+    // Sensors the person switched off, the scope leaves off, or the project
+    // recorded a bypass for say nothing: a check that will not run again is not
+    // held against the gate. The environment's switch is not read here (an
+    // empty environment, as plan approval reads its own switch): it stops
+    // checks from running in that process, not the record from being read.
+    const stateContent = readStateFile(pd);
+    if (resolveCeremony("sensors", getField(stateContent, "Scope"), stateContent, {}, pd).value === "off") return [];
+    failed = latestCheckResults(pd, stage, unit).failed;
+  } catch {
+    return [];
+  }
+  const lines = failed.slice(0, FAILED_CHECK_LINES).map(({ id, rel, findings, detail }) => {
+    const check = id.endsWith("check") ? id : `${id} check`;
+    const count = /^\d+$/.test(findings) ? `${findings} finding${findings === "1" ? "" : "s"}` : "findings";
+    return `The ${check} reports ${count} in ${basename(rel)}${detail ? ` (details: ${detail})` : ""}.`;
+  });
+  const more = failed.length - lines.length;
+  if (more > 0) lines.push(`${more} more check${more === 1 ? " reports" : "s report"} findings on this stage's outputs.`);
+  return lines;
+}
+
+// A stage artifact may list the decisions only the person can make in a fenced
+// `aidlc-decisions` block (yaml: `decisions:` then `- id: <id>` items, with
+// `decision:`, `owner:` and `blocking:` beside each). The gate records the ids;
+// Approve records them as accepted open. A block the engine cannot read is
+// recorded as such and stops nothing: the block is optional.
+function openDecisionsFields(pd: string, stage: GateStage): Record<string, string> {
+  const DECISIONS_FENCE = /```aidlc-decisions[^\n]*\n([\s\S]*?)```/g;
+  const ids: string[] = [];
+  const unreadable: string[] = [];
+  for (const path of existingDeclaredArtifactPaths(pd, stage)) {
+    const text = readFileSync(path, "utf-8");
+    for (const match of text.matchAll(DECISIONS_FENCE)) {
+      const parsed = parseDecisionsBlock(match[1]);
+      if (parsed === null) unreadable.push(basename(path));
+      else ids.push(...parsed);
+    }
+  }
+  if (unreadable.length > 0) return { "Open Decisions": `unreadable (${[...new Set(unreadable)].join(", ")})` };
+  const unique = [...new Set(ids)];
+  return unique.length === 0
+    ? { "Open Decisions": "0" }
+    : { "Open Decisions": String(unique.length), Decisions: unique.join(", ") };
+}
+
+function parseDecisionsBlock(body: string): string[] | null {
+  const lines = body.split(/\r?\n/).map((line) => line.replace(/\s+$/, "")).filter((line) => line.trim() !== "");
+  if (lines.length === 0 || lines[0].trim() !== "decisions:") return null;
+  const ids: string[] = [];
+  for (const line of lines.slice(1)) {
+    const item = /^\s*-\s+id:\s*(\S+)\s*$/.exec(line);
+    if (item) {
+      ids.push(item[1]);
+      continue;
+    }
+    if (!/^\s+(decision|owner|blocking):\s*\S/.test(line)) return null;
+  }
+  return ids.length === 0 ? null : ids;
+}
+
+// The brief the person decided on: the agent renders it after the gate row is
+// written (the protocol's order), so the gate-open row usually says none and the
+// approval row carries the digest of the rendering kept at decision time.
+function briefDigestField(pd: string, stage: GateStage, unit: string | undefined): Record<string, string> {
+  try {
+    const digest = latestGateBriefDigest(pd, stage, unit);
+    return { "Brief Digest": digest === null ? "none" : `sha256:${digest}` };
+  } catch {
+    return { "Brief Digest": "none" };
+  }
+}
+
+// Approve continues with every open decision accepted as it stands: the ids the
+// gate-open row listed, carried onto the approval row.
+function decisionsAcceptedOpenField(pd: string, slug: string, unit: string | undefined): Record<string, string> {
+  try {
+    const open = readAuditShardEvents(pd).filter((row) =>
+      row.event === "STAGE_AWAITING_APPROVAL" && auditBlockField(row.block, "Stage") === slug &&
+      (unit === undefined || auditBlockField(row.block, "Unit") === unit)).at(-1);
+    const decisions = open === undefined ? null : auditBlockField(open.block, "Decisions");
+    return decisions === null ? {} : { "Decisions Accepted Open": decisions };
+  } catch {
+    return {};
+  }
+}
+
 function teamGateFields(
   stage: NonNullable<ReturnType<typeof findStageBySlug>>,
   context: TeamGateContext,
@@ -6056,6 +6368,7 @@ function handleGateStart(args: string[]): void {
         ...teamGateFields(stage, teamGate),
         ...(artifacts ? { Artifacts: artifacts } : {}),
         ...(recovered ? { Recovered: "true" } : {}),
+        ...gateAskFields(pd, stage, content, teamGate.unit, []),
       });
     } catch (e) {
       error(`Audit emission failed: ${errorMessage(e)}`);
@@ -6083,6 +6396,7 @@ function handleGateStart(args: string[]): void {
         const fields: Record<string, string> = {
           Stage: slug,
           Revalidated: "true",
+          ...gateAskFields(pd, stage, content, undefined, []),
         };
         addBlockingSensorOverrideFields(
           fields,
@@ -6111,7 +6425,11 @@ function handleGateStart(args: string[]): void {
   content = setField(content, "Last Updated", timestamp);
 
   try {
-    const fields: Record<string, string> = { Stage: slug, ...approvesTogetherFields(together) };
+    const fields: Record<string, string> = {
+      Stage: slug,
+      ...approvesTogetherFields(together),
+      ...gateAskFields(pd, stage, content, undefined, together),
+    };
     if (artifacts) fields.Artifacts = artifacts;
     if (recovered) fields.Recovered = "true";
     addBlockingSensorOverrideFields(
@@ -6217,17 +6535,35 @@ function verifyApprovalDecision(
     // Their exact pick names which approval it is.
     approvalInput = pick ?? stageGateApproval(approvalInput, revisionCount >= 3);
   }
-  if (
-    !autonomousDecision &&
-    !humanPresenceGuardDisabled() &&
-    together === null &&
-    !humanRepliedSinceGate(pd)
-  ) {
-    refuseForAgent(
-      `Cannot approve "${stage.slug}" because no new human reply has been received for ` +
-        "this approval question. Wait for the human to type their choice, then retry the " +
-        `approval.${commandTurnHint(pd)}${unattendedHumanPresenceHint(pd)}`,
+  // Once the approval question is put to the person, only their reply to it
+  // approves: a turn they sent before it (an answer to the stage's own
+  // questions, a remark while it ran) is no reply to it, as for reject below.
+  // A gate re-entered after a revision counts from the showing they first saw
+  // (their correction of a misread Request Changes came after it), and a gate
+  // the engine backfilled for their reported approval has no presentation row
+  // (gatePresentationStart): both keep the reply-since-the-last-decision rule
+  // that the rejection or the backfill already applied.
+  if (!autonomousDecision && !humanPresenceGuardDisabled() && together === null) {
+    const repliedSinceDecision = humanRepliedSinceGate(pd);
+    const repliedSinceShown = personRepliedSincePresentation(
+      pd, { stage: stage.slug, ...(unit !== undefined ? { unit } : {}) }, { firstShowing: true },
     );
+    if (repliedSinceDecision && repliedSinceShown === false) {
+      // A reply exists, but from before the gate was shown: the step is to
+      // show the gate, not to ask for anything new; their next word answers it.
+      refuseForAgent(
+        `Cannot approve "${stage.slug}" because no new human reply has been received for ` +
+          "this approval question: the person's last reply came before the gate was shown, so " +
+          "it does not answer it. Show the gate and end your turn; their next reply answers it.",
+      );
+    }
+    if (!repliedSinceDecision) {
+      refuseForAgent(
+        `Cannot approve "${stage.slug}" because no new human reply has been received for ` +
+          "this approval question. Wait for the human to type their choice, then retry the " +
+          `approval.${commandTurnHint(pd)}${unattendedHumanPresenceHint(pd)}`,
+      );
+    }
   }
   // The conductor reports the choice the person made; a report that names none
   // records nothing. They have replied by now (checked above), so the step is
@@ -6369,6 +6705,8 @@ function handleApprove(args: string[]): void {
         ...teamGateFields(stage, teamGate),
         ...(approvalInput ? { "User Input": approvalInput } : {}),
         ...personsWordsFields(pd, slug, teamGate.unit),
+        ...briefDigestField(pd, stage, teamGate.unit),
+        ...decisionsAcceptedOpenField(pd, slug, teamGate.unit),
         ...(reviewFindingDispositions
           ? {
               [REVIEW_FINDING_DISPOSITIONS_FIELD]:
@@ -6483,6 +6821,7 @@ function handleApprove(args: string[]): void {
         Stage: slug,
         Recovered: "true",
         Details: "Re-entering gate after backfilled revision",
+        ...gateAskFields(pd, stage, content, undefined, []),
       });
     } catch (e) {
       error(`Audit emission failed: ${errorMessage(e)}`);
@@ -6553,6 +6892,7 @@ function handleApprove(args: string[]): void {
         reviewFindingDispositions;
     }
     if (personCall?.overUnfinishedReview) gateFields.Review = "not finished";
+    Object.assign(gateFields, briefDigestField(pd, stage, undefined), decisionsAcceptedOpenField(pd, slug, undefined));
     emitAudit(pd, "GATE_APPROVED", gateFields);
 
     emitAudit(pd, "STAGE_COMPLETED", {
@@ -7041,6 +7381,7 @@ function handleRevise(args: string[]): void {
       emitAudit(pd, "STAGE_AWAITING_APPROVAL", {
         ...teamGateFields(stage, teamGate),
         Details: "Re-entering unit gate after revision",
+        ...gateAskFields(pd, stage, content, teamGate.unit, []),
       });
     } catch (e) {
       error(`Audit emission failed: ${errorMessage(e)}`);
@@ -7069,6 +7410,7 @@ function handleRevise(args: string[]): void {
       Stage: slug,
       Details: "Re-entering gate after revision",
       ...approvesTogetherFields(together),
+      ...gateAskFields(pd, stage, content, undefined, together),
     };
     addBlockingSensorOverrideFields(
       fields,

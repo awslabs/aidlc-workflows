@@ -133,4 +133,6 @@ The release-preparation PR updates `core/tools/aidlc-version.ts` (the authored s
 
 Each release entry follows the shape: `## [N.N.N] - YYYY-MM-DD` heading, one-paragraph summary that includes any upgrade instruction, then a flat bullet list focused on what users actually invoke (commands, flags, errors they see, breaking changes for CI/scripts).
 
+That entry is the body of the stable GitHub Release: the release job writes it to a file and passes it with `--notes-file`, so what the entry says is what people read on the release page. GitHub's generated notes are not used, because their list names every contributing account by handle.
+
 If concurrent release-preparation branches choose the same version, the later one must rebase and select the next intended release version before merging. CHANGELOG version link references were removed in v0.6.9 because a distributed file should not embed a repository host; `t68` guards that none reappear.

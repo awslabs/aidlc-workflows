@@ -104,7 +104,7 @@ That `report` call owns every lifecycle transition and advancement; never perfor
 
 Completion emoji: :white_check_mark:
 Review path: `<record>/ideation/approval-handoff/`
-Approval gate: Approve (proceed to Inception) / Request Changes / Reject Initiative (end workflow).
+Approval gate: Approve (Continue to `<directive.next_stage>`, the stage the engine names) / Request Changes / Reject Initiative (end workflow).
 
 ## Sensors
 

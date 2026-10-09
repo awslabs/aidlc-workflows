@@ -8,7 +8,7 @@ This chapter is the user-facing tour. It covers where rules live, how the five l
 
 ## Rules at a glance
 
-Rules live as Markdown files in the active space memory layer at `aidlc/spaces/<active-space>/memory/` — a single hand-editable set at the workspace root, read by every harness via its native include (Claude `@`-import stub, Kiro CLI resources or IDE steering, Codex `AIDLC_RULES_DIR`, opencode `instructions` glob, Copilot `AGENTS.md` `@`-imports). Each file is named for its scope:
+Rules live as Markdown files in the active space memory layer at `aidlc/spaces/<active-space>/memory/`, a single hand-editable set at the workspace root, read by every harness via its native include (Claude `@`-import stub, Kiro CLI resources or IDE steering, the engine's per-step rules delivery on Codex, opencode `instructions` glob, Copilot `AGENTS.md` `@`-imports). Each file is named for its scope:
 
 ```
 aidlc/spaces/<active-space>/memory/
@@ -137,7 +137,7 @@ Rules are prose the agent reads. Sensors are deterministic checks that run autom
 
 When an agent writes or edits an output file during a stage, a PostToolUse hook checks which sensors apply to that stage and runs each matching one. Matching is by file shape: a code-quality sensor declares it analyses `**/*.{ts,js}`, so it only fires on TypeScript and JavaScript writes; a document-shape sensor that fires on any stage output omits the filter. Gate-fired sensors, the first three in the table below, run instead when the stage reaches its approval gate, once for each of the stage's declared output files their filter accepts. When the gate is one the tool approves on its own under Construction autonomy, only blocking sensors run there: advisory findings would have no one to read them. You don't invoke sensors by hand during a workflow; they ride along on the stage's writes and its gate.
 
-A sensor result is **advisory** in this release. A failing sensor produces an audit row and a detail file pointing at exactly what's missing, but it does not block the stage's approval gate or stop your workflow. You see the signal; you decide what to do with it.
+A sensor result is **advisory** in this release. A failing sensor produces an audit row and a detail file pointing at exactly what's missing, but it does not block the stage's approval gate or stop your workflow. When the gate opens, the agent tells you which checks still report findings on the stage's outputs, and where the details are, so you decide with that in view. With Sensors switched off, nothing is said about checks.
 
 ### What you see in the audit log
 

@@ -551,6 +551,39 @@ describe("t31 aidlc-log refuses a value that arrived split", () => {
       expect(r.out).not.toContain("is not the value of any flag");
     });
   }
+
+  // Command Prompt does not treat single quotes as quotes: `--details 'Chose
+  // Option A'` reaches the engine as `'Chose` and `Option A'` (#2167, where
+  // Kiro IDE ran its shell tool in Command Prompt). The quotes still on the
+  // pieces name the shell, so the agent is told the fix for it, not
+  // PowerShell's.
+  for (const [subcommand, textFlag] of [["answer", "--details"], ["decision", "--decision"]] as const) {
+    test(`s11: ${subcommand} split by Command Prompt says to use double quotes`, () => {
+      const p = proj();
+      const r = log([subcommand, "--stage", "feasibility", textFlag, "'Chose", "Option", "A'"], p);
+      expect(r.status).toBe(1);
+      const message = refusal(r);
+      expect(message).toContain(
+        `arrived as a separate argument after ${textFlag} "'Chose", so only "'Chose" would be recorded.`,
+      );
+      expect(message).toContain(
+        "The single quotes reached AI-DLC as part of the words, so this shell is Command Prompt, where single " +
+          "quotes do not hold words together. Run the command again with the value in double quotes, in the " +
+          `person's exact words (for example ${textFlag} "Chose Option A for auth").`,
+      );
+      expect(message).not.toContain("Windows PowerShell");
+      expect(message.includes("--details-file .aidlc-engine/answer-text/answer.txt")).toBe(subcommand === "answer");
+      expect(auditEventCount(readAllAuditShards(p), subcommand === "answer" ? "QUESTION_ANSWERED" : "DECISION_RECORDED")).toBe(0);
+    });
+  }
+
+  test("s12: a value that only starts with an apostrophe keeps the PowerShell advice", () => {
+    const p = proj();
+    const r = log(["answer", "--stage", "feasibility", "--details", "'tis", "the season"], p);
+    expect(r.status).toBe(1);
+    expect(refusal(r)).toContain(howToPass("--details", CHOSE));
+    expect(refusal(r)).not.toContain("Command Prompt");
+  });
 });
 
 // ============================================================

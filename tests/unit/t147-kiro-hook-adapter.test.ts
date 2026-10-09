@@ -1577,7 +1577,8 @@ if (args[0] === "engine" && args[1] === "orchestrate") {
     ["absent resources", "{}"],
     ["malformed JSON", "{not json"],
     ["missing worker file", null],
-    ["partial memory glob", JSON.stringify({ resources: ["file://aidlc/spaces/default/memory/org*.md"] })],
+    ["partial memory glob", JSON.stringify({ resources: ["file://aidlc/active-memory/org*.md"] })],
+    ["a glob for another space's files", JSON.stringify({ resources: ["file://aidlc/spaces/old-space/memory/**/*.md"] })],
   ])("native preload blocks %s and names the worker repair", (_name, config) => {
     const dir = scratchProject(false);
     try {
@@ -1598,9 +1599,9 @@ if (args[0] === "engine" && args[1] === "orchestrate") {
       expect(result.code, result.stderr).toBe(2);
       expect(result.stdout).toBe("");
       expect(result.stderr).toContain(workerFile);
-      expect(result.stderr).toContain("file://aidlc/spaces/default/memory/**/*.md");
-      // A space switch only repoints a glob that is there, so the step named
-      // is the one that puts the shipped file back, and that route is real.
+      expect(result.stderr).toContain("file://aidlc/active-memory/**/*.md");
+      // The shipped file reads the engine's copy of the active space, so the
+      // step named is the one that puts the shipped file back, and that route is real.
       expect(result.stderr).toContain("config --harness kiro` in a terminal to put AI-DLC's Kiro files back");
       expect(result.stderr).not.toContain("/aidlc space switch");
       expect(result.stderr).toContain("/aidlc --doctor");
@@ -1610,35 +1611,46 @@ if (args[0] === "engine" && args[1] === "orchestrate") {
     }
   });
 
-  test("native preload repoints a core worker left on another space, and starting it again goes through", () => {
+  test("native preload writes the active space's memory into the copy the workers read, and a worker file from before the copy goes through", () => {
     const dir = scratchProject(false);
     try {
       const workerFile = join(dir, ".kiro", "agents", "aidlc-product-agent.json");
-      writeFileSync(join(dir, "aidlc", "spaces", "default", "memory", "org.md"), "# Organization\n");
-      const oldMemory = join(dir, "aidlc", "spaces", "old-space", "memory");
-      mkdirSync(oldMemory, { recursive: true });
-      writeFileSync(join(oldMemory, "org.md"), "# Previous organization\n");
-      const shipped = JSON.parse(readFileSync(workerFile, "utf-8")) as { resources: string[] };
-      writeFileSync(workerFile, JSON.stringify({
-        ...shipped,
-        resources: shipped.resources.map((entry) =>
-          entry.replace("aidlc/spaces/default/memory/", "aidlc/spaces/old-space/memory/")
-        ),
-      }));
+      const memory = join(dir, "aidlc", "spaces", "default", "memory");
+      writeFileSync(join(memory, "org.md"), "# Organization\n\nKeep the mandated review.\n");
+      const copy = join(dir, "aidlc", "active-memory");
+      expect(existsSync(copy)).toBe(false);
       const payload = {
         cwd: dir,
         tool_name: "invoke_sub_agent",
         tool_input: { name: "aidlc-product-agent", prompt: "Inspect the project." },
       };
-      const stopped = runAdapter(dir, "deliver-stage-rules", payload);
-      expect(stopped.code, stopped.stderr).toBe(2);
-      expect(stopped.stderr).toBe(
-        "[aidlc] This specialist was set up for another space and is now set up for this one. Start it again.\n",
+      const shipped = runAdapter(dir, "deliver-stage-rules", payload);
+      expect(shipped.code, shipped.stderr).toBe(0);
+      expect(shipped.stderr).toBe("");
+      // The copy the shipped glob reads now holds this space's files, and the
+      // worker file itself was not touched.
+      // The copy is the file behind one line naming the file to edit.
+      expect(readFileSync(join(copy, "org.md"), "utf-8")).toBe(
+        "<!-- AI-DLC keeps this copy in step with aidlc/spaces/default/memory/org.md. Edit that file; this copy is replaced. -->\n" +
+          "# Organization\n\nKeep the mandated review.\n",
       );
-      expect(readFileSync(workerFile, "utf-8")).toContain("file://aidlc/spaces/default/memory/**/*.md");
-      const again = runAdapter(dir, "deliver-stage-rules", payload);
-      expect(again.code, again.stderr).toBe(0);
-      expect(again.stderr).toBe("");
+      expect(JSON.parse(readFileSync(workerFile, "utf-8")).resources).toContain("file://aidlc/active-memory/**/*.md");
+      // An edit reaches the copy at the next dispatch.
+      writeFileSync(join(memory, "org.md"), "# Organization\n\nEvery queue has a dead-letter alarm.\n");
+      expect(runAdapter(dir, "deliver-stage-rules", payload).code).toBe(0);
+      expect(readFileSync(join(copy, "org.md"), "utf-8")).toContain("dead-letter alarm");
+      // A worker file from before the copy names this space's files directly:
+      // the same text, so it goes through as it is.
+      const config = JSON.parse(readFileSync(workerFile, "utf-8")) as { resources: string[] };
+      writeFileSync(workerFile, JSON.stringify({
+        ...config,
+        resources: config.resources.map((entry) =>
+          entry.replace("aidlc/active-memory/", "aidlc/spaces/default/memory/")
+        ),
+      }));
+      const older = runAdapter(dir, "deliver-stage-rules", payload);
+      expect(older.code, older.stderr).toBe(0);
+      expect(older.stderr).toBe("");
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -1700,7 +1712,7 @@ if (args[0] === "engine" && args[1] === "orchestrate") {
     try {
       const workerFile = join(dir, ".kiro", "agents", "aidlc-product-agent.json");
       writeFileSync(workerFile, JSON.stringify({
-        resources: ["file://aidlc/spaces/default/memory/**/*.md"],
+        resources: ["file://aidlc/active-memory/**/*.md"],
       }));
       const memory = join(dir, "aidlc", "spaces", "default", "memory");
       // The scratch project seeds real memory rules; this case needs none.
@@ -1718,7 +1730,7 @@ if (args[0] === "engine" && args[1] === "orchestrate") {
       expect(result.code, result.stderr).toBe(2);
       expect(result.stdout).toBe("");
       expect(result.stderr).toContain(workerFile);
-      expect(result.stderr).toContain("file://aidlc/spaces/default/memory/**/*.md");
+      expect(result.stderr).toContain("file://aidlc/active-memory/**/*.md");
       expect(result.stderr).toContain("Put this space's method files back under aidlc/spaces/default/memory/");
       // One missing file at a time, never a checkout over the whole folder.
       expect(result.stderr).toContain("git checkout -- aidlc/spaces/default/memory/org.md` for a tracked file that is missing");
@@ -1824,11 +1836,11 @@ if (args[0] === "engine" && args[1] === "orchestrate") {
       expect(blocked.stderr).toContain(workerFile);
       expect(blocked.stderr).toContain("resources");
       expect(blocked.stderr).toContain("plugin's agent JSON");
-      expect(blocked.stderr).toContain("file://aidlc/spaces/default/memory/**/*.md");
+      expect(blocked.stderr).toContain("file://aidlc/active-memory/**/*.md");
       expect(blocked.stderr).not.toContain("/aidlc space switch");
       expect(blocked.stderr).not.toContain("/aidlc --doctor");
 
-      config.resources.push("file://aidlc/spaces/default/memory/**/*.md");
+      config.resources.push("file://aidlc/active-memory/**/*.md");
       writeFileSync(workerFile, JSON.stringify(config));
       const repaired = runAdapter(dir, "deliver-stage-rules", payload);
       expect(repaired.code, repaired.stderr).toBe(0);

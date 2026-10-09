@@ -135,7 +135,7 @@ describe("a team's opencode.json keeps what the team set", () => {
     expect(value.instructions).toEqual([
       "docs/team-rules.md",
       ".aidlc/onboarding.md",
-      "aidlc/spaces/default/memory/**/*.md",
+      "aidlc/active-memory/**/*.md",
     ]);
     expect(value.skills).toEqual({ paths: [".aidlc/skills"] });
     expect(value.permission.edit).toEqual({ "*": "allow", ".aidlc/tools/**": "ask", ".aidlc/hooks/**": "ask" });
@@ -211,7 +211,7 @@ describe("a refresh follows only AI-DLC's unchanged entries", () => {
     expect(value.instructions).toEqual([
       "docs/team-rules.md",
       ".aidlc/onboarding.md",
-      "aidlc/spaces/default/memory/**/*.md",
+      "aidlc/active-memory/**/*.md",
       ".aidlc/extra.md",
     ]);
     expect(value.permission.edit[".aidlc/tools/**"]).toBe("deny");
@@ -352,13 +352,23 @@ describe("doctor reads the team's opencode.json by AI-DLC's entries", () => {
 });
 
 describe("the entry merge", () => {
-  test("a method glob for another space fills AI-DLC's method entry", async () => {
-    const { mergeJsonEntries } = await import("../../core/tools/aidlc-distribution.ts");
+  test("an earlier release's method glob, at whichever space a switch left it, gives way to the copy glob", async () => {
+    const { jsonEntryHash, mergeJsonEntries } = await import("../../core/tools/aidlc-distribution.ts");
     const shipped = readFileSync(join(OPENCODE_RELEASE, "opencode.json"), "utf-8");
-    const current = '{\n  "instructions": ["aidlc/spaces/team/memory/**/*.md"]\n}\n';
-    const merged = mergeJsonEntries(current, shipped, { kind: "none" });
+    // That release recorded any space's glob as its one method entry.
+    const slot = "aidlc/spaces/*/memory/**/*.md";
+    const recorded = {
+      [JSON.stringify({ path: ["instructions"], item: ".aidlc/onboarding.md" })]: jsonEntryHash(".aidlc/onboarding.md"),
+      [JSON.stringify({ path: ["instructions"], item: slot })]: jsonEntryHash(slot),
+    };
+    const current = '{\n  "instructions": [".aidlc/onboarding.md", "aidlc/spaces/team/memory/**/*.md"]\n}\n';
+    const merged = mergeJsonEntries(current, shipped, { kind: "recorded", entries: recorded });
     if ("conflict" in merged) throw new Error(merged.conflict);
-    expect(parse(merged.text).instructions).toEqual(["aidlc/spaces/team/memory/**/*.md", ".aidlc/onboarding.md"]);
+    expect(parse(merged.text).instructions).toEqual([".aidlc/onboarding.md", "aidlc/active-memory/**/*.md"]);
+    // A space glob no record names is the project's own and stays beside the copy glob.
+    const own = mergeJsonEntries('{\n  "instructions": ["aidlc/spaces/team/memory/**/*.md"]\n}\n', shipped, { kind: "none" });
+    if ("conflict" in own) throw new Error(own.conflict);
+    expect(parse(own.text).instructions).toEqual(["aidlc/spaces/team/memory/**/*.md", ".aidlc/onboarding.md", "aidlc/active-memory/**/*.md"]);
   });
 
   test("a one-line file stays one line where it can", async () => {

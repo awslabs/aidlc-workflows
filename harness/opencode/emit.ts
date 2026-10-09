@@ -78,13 +78,16 @@ function emitSubagentMd(raw: string, srcPath: string, tierCap: EmitContext["tier
     .replace(/`maxTurns: (\d+)`/g, "`steps: $1`");
 }
 
+// A persona reads the method from the engine's copy of the active space's
+// memory (aidlc-includes.ts ACTIVE_MEMORY_DIR), the same fixed path on every
+// install, so a space switch rewrites no persona file.
 function projectActiveMemoryReferences(raw: string): string {
   return raw
-    .replaceAll("aidlc/spaces/<active-space>/memory/", "aidlc/spaces/default/memory/")
-    .replaceAll(".aidlc/rules/aidlc-org.md", "aidlc/spaces/default/memory/org.md")
-    .replaceAll(".aidlc/rules/aidlc-team.md", "aidlc/spaces/default/memory/team.md")
-    .replaceAll(".aidlc/rules/aidlc-project.md", "aidlc/spaces/default/memory/project.md")
-    .replaceAll(".aidlc/rules/", "aidlc/spaces/default/memory/");
+    .replaceAll("aidlc/spaces/<active-space>/memory/", "aidlc/active-memory/")
+    .replaceAll(".aidlc/rules/aidlc-org.md", "aidlc/active-memory/org.md")
+    .replaceAll(".aidlc/rules/aidlc-team.md", "aidlc/active-memory/team.md")
+    .replaceAll(".aidlc/rules/aidlc-project.md", "aidlc/active-memory/project.md")
+    .replaceAll(".aidlc/rules/", "aidlc/active-memory/");
 }
 
 function embedShippedEntrypoints(raw: string, distRoot: string): string {

@@ -257,18 +257,38 @@ which is absent from `merge_failures`. The merge recovers the creating
 repository from a unique durable source authority; its intent remains the
 selected workflow intent. Pass `--intent`/`--space` only when they name the
 session's active workflow; swarm refuses a mismatch before mutation or audit
-emission. The merge consumes the immutable `Source Commit`, disables ambient
-Git hooks, and emits
-`SWARM_SOURCE_MERGED`; modern convergence does not advance
-the batch until that row exists. A normal non-zero result before
-`[merge-succeeded:<sha>]` preserves the worktree: resolve the conflict or target
-checkout problem and retry the same merge, without rerunning `finalize`. If the
-message carries `[merge-succeeded:<sha>]` and `SWARM_SOURCE_MERGED` exists, the
-reviewed source is already authoritative and only cleanup failed; rerun the
-same merge, which performs cleanup-only reconciliation without reapplying
-source or duplicating authority. If the marker exists but
-`SWARM_SOURCE_MERGED` does not, do not retry the merge: preserve the worktree
-and follow the named stage-restart or explicit human-approved bypass remedy.
+emission. The merge consumes the immutable `Source Commit`, lands it with the
+person's own git (their hooks, filters and merge drivers run, as for any commit
+they make), and emits `SWARM_SOURCE_MERGED`; modern convergence does not
+advance the batch until that row exists.
+
+The person's git may change what lands. A hook that reformats files, a filter,
+or a merge driver is theirs: the landing keeps its result, the row records the
+reviewed commit, the landed commit and the files that differ (`Landed changes`,
+`Driver merges`), and the merge returns one line per difference in `notices`
+(for example "Your pre-commit hook changed 3 files while landing Unit
+auth-mfa: ..."). Say each line once and carry on; never refuse, undo or ask
+about it, under any Guard Policy. A hook that refuses the commit returns
+`status: "commit-refused"` with the hook's own `output`, the `staged` paths and
+a `next` step, and leaves the main checkout exactly as git left it, with the
+landing staged. Say in one line that the person's hook refused the landing of
+that Unit and why, in the `output` field's words. Fix what it named in the
+staged landing (edit the file and `git add` it in the main checkout, or pass
+`--message` for a commit-message rule) and run the same merge again: it
+finishes the staged landing and records the fix under `Landed changes`. If you
+cannot fix it, stop, leave the checkout as git left it, and say what `staged`
+lists.
+
+A normal non-zero result before `[merge-succeeded:<sha>]` preserves the
+worktree: resolve the conflict or target checkout problem and retry the same
+merge, without rerunning `finalize`. If the message carries
+`[merge-succeeded:<sha>]` and `SWARM_SOURCE_MERGED` exists, the reviewed source
+is already authoritative and only cleanup failed; rerun the same merge, which
+performs cleanup-only reconciliation without reapplying source or duplicating
+authority. If the marker exists but `SWARM_SOURCE_MERGED` does not (the record
+could not be written after the landing), do not retry the merge: preserve the
+worktree and follow the named stage-restart or explicit human-approved bypass
+remedy.
 
 Cleanup also refuses if the Bolt branch is checked out at a foreign worktree
 path, preserving its branch and retained/parked refs. Surface the owner path;

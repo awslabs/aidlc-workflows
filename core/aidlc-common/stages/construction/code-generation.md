@@ -450,6 +450,11 @@ documenting:
 - Files created/modified
 - Key implementation decisions
 - Test coverage summary
+- Tests written but not executed in this stage, each with the reason (for
+  example: integration suite not run, it needs a container runtime that is not
+  available here). A test left to CI is not executed when the plan skips CI
+  Pipeline or the repository has no CI configuration: record it here, never as
+  run
 - Any deviations from the plan
 
 For a Unit (`directive.unit` present), create
@@ -527,7 +532,7 @@ Present completion message and approval gate:
 # :computer: Code Generation Complete — {unit-name}
 ```
 
-Summary of code produced (files, tests, key decisions), then:
+Summary of code produced (files, tests, key decisions, and any tests written but not executed, with the reason), then:
 
 ```
 **Review:** `<code-generation-record>/`

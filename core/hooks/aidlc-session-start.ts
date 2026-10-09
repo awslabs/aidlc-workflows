@@ -34,8 +34,16 @@ import { existsSync, readFileSync } from "node:fs";
 import { runAnchor } from "../tools/aidlc-attest.ts";
 import { appendAuditEntry } from "../tools/aidlc-audit.ts";
 import { stageGraphDrift } from "../tools/aidlc-graph.ts";
-import { addRootBlocks, repointHarnessIncludes, trackedKiroIdeSteeringAsk } from "../tools/aidlc-includes.ts";
+import {
+  ACTIVE_MEMORY_DIR,
+  activeMemoryCopyDrift,
+  addRootBlocks,
+  inlineMemoryFiles,
+  refreshActiveMemory,
+  trackedKiroIdeSteeringAsk,
+} from "../tools/aidlc-includes.ts";
 import { kiroIdeWorkflowsAsk } from "../tools/aidlc-kiro-ide-workflows.ts";
+import { kiroIdeTerminalAsk } from "../tools/aidlc-kiro-ide-terminal.ts";
 import {
   isBindableIntentRecordName,
   isSafeIntentRecordName,
@@ -248,17 +256,51 @@ if (sessionId) {
   writeSessionBinding(projectDir, sessionId, selection.space, selection.intent, bindingSource());
 }
 
-// Atomically materialize a clone's missing gitignored cursor, then align the
-// harness-native includes before the no-workflow early exit. A copy that
-// config never ran in first gets AI-DLC's part of .gitignore and AGENTS.md,
-// after the team's own content, so a part written here is aligned too.
+// Atomically materialize a clone's missing gitignored cursor, then bring the
+// copy the harness includes read up to date with the session's space, before
+// the no-workflow early exit. A copy that config never ran in first gets
+// AI-DLC's part of .gitignore and AGENTS.md, after the team's own content.
 ensureActiveSpaceCursor(projectDir);
-// A file written here may be one the host already read for this chat.
+// A file written here may be one the host already read for this chat. Kiro
+// CLI and opencode read the copy again with every request, so a copy written
+// here reaches their next request as it is; every other host read its include
+// when the chat loaded.
 let includeRepointed = addRootBlocks(projectDir).length > 0;
+// The copied files that were behind before this start wrote them.
+let copyBehind: string[] = [];
 try {
-  if (repointHarnessIncludes(projectDir, selection.space).length > 0) includeRepointed = true;
+  copyBehind = activeMemoryCopyDrift(projectDir, selection.space);
+  const written = refreshActiveMemory(projectDir, selection.space);
+  if (!written.includes(ACTIVE_MEMORY_DIR)) copyBehind = [];
+  const rereadsCopy = ["kiro", "opencode"].includes(runtimeHarnessName(projectDir));
+  if (written.some((path) => path !== ACTIVE_MEMORY_DIR || !rereadsCopy)) includeRepointed = true;
 } catch {
-  // non-fatal — includes self-heal on the next /aidlc / switch / --doctor
+  // non-fatal: the copy is written again at the next /aidlc, switch or --doctor
+}
+
+// Claude Code and Copilot read their @-imports before this hook runs (measured
+// live on Claude Code 2.1.293: a fresh clone's first chat, and the chat after an
+// edit of a memory file, held the copy as it was before). When the copy was
+// written just now, this chat is told: with the text of the files written when
+// it fits in the hook's context (Claude Code keeps about 10 KB of it, measured:
+// 9 KB arrives whole and 15 KB is cut), else by name, to read before acting on
+// AI-DLC work. Nothing is added when the copy was current, and an AI-DLC step
+// carries its rules in full either way.
+const HANDOFF_MAX_BYTES = 8 * 1024;
+let memoryHandoff = "";
+if (copyBehind.length > 0) {
+  try {
+    if (["claude", "copilot"].includes(runtimeHarnessName(projectDir))) {
+      const written = `The method files this chat's instructions import (${ACTIVE_MEMORY_DIR}/) were written for space ` +
+        `\`${selection.space}\` just now, after the instructions were read`;
+      const inline = inlineMemoryFiles(projectDir, selection.space, copyBehind);
+      memoryHandoff = inline !== null && inline.bytes <= HANDOFF_MAX_BYTES
+        ? `\n\n${written}. This is their text now:\n\n${inline.parts.join("\n")}`
+        : `\n\n${written}: ${copyBehind.join(", ")}. Read them from that folder before acting on AI-DLC work or on a question about the team's practices.`;
+    }
+  } catch {
+    // The first step sends the rules in full.
+  }
 }
 
 // What the host loaded into this chat, so `next` can tell whether the chat
@@ -286,6 +328,11 @@ if (sessionId && !rebindCheckOnly) {
   }
   try {
     if (runtimeHarnessName(projectDir) === "kiro-ide") asks.push(kiroIdeWorkflowsAsk(aidlcInvocation()));
+  } catch {
+    // Asked at a later start.
+  }
+  try {
+    if (runtimeHarnessName(projectDir) === "kiro-ide") asks.push(kiroIdeTerminalAsk(aidlcInvocation()));
   } catch {
     // Asked at a later start.
   }
@@ -334,7 +381,8 @@ if (!existsSync(stateFile)) {
         "command that asks for --session, never on next." +
         rejoin +
         (rebindCheckOnly ? "" : switchOffContext(projectDir)) +
-        (trackedSteeringAsk ? `\n${trackedSteeringAsk}` : ""),
+        (trackedSteeringAsk ? `\n${trackedSteeringAsk}` : "") +
+        memoryHandoff,
     ));
   }
   return 0;
@@ -497,7 +545,7 @@ if (rebindCheckOnly) {
     } else if (liveUuid) {
       writeSessionIntentUuid(projectDir, sessionId, liveUuid);
     }
-    process.stdout.write(hookContextLine("SessionStart", `AIDLC Runtime Session: ${sessionId}\n${rebindOffer}`));
+    process.stdout.write(hookContextLine("SessionStart", `AIDLC Runtime Session: ${sessionId}\n${rebindOffer}${memoryHandoff}`));
   }
   return 0;
 }
@@ -601,7 +649,7 @@ FORWARDING-LOOP DISCIPLINE (non-negotiable — the engine owns ALL routing):
 - After the named command, obey the message's ending. If it says "then stop", print the command's output and END THE TURN: no \`next\`, \`report\`, or stage work. In particular, \`/aidlc space default\` and other terminal workspace navigation stop even when the destination has an unfinished intent. Selecting it does not request resuming it. Continue only when the directive explicitly says to continue.
 - If you end a turn while this work still needs you, AI-DLC answers with one line, "AI-DLC is carrying on with <stage>." It is from AI-DLC, not the person: never record it as their answer${sayTheLine} Follow the aidlc skill's "When AI-DLC carries on by itself" steps; in short: if you just asked the person a question you have not recorded, record it with \`log decision\` and end the turn without asking it again or saying anything else; if you were doing the work of a \`run-stage\` you still hold, finish its steps and run the \`report\` built from it (its stage, plus \`--unit\` in team-owned Unit work); otherwise \`continue\` with the rules receipt you hold, or run \`next\`, and follow the step it returns.${trackedSteeringAsk ? `\n\n${trackedSteeringAsk}` : ""}`;
 
-process.stdout.write(hookContextLine("SessionStart", context));
+process.stdout.write(hookContextLine("SessionStart", `${context}${memoryHandoff}`));
 return 0;
 }
 

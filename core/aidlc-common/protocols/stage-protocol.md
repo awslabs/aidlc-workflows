@@ -182,7 +182,7 @@ question MUST use unordered bullets, never numbered items.
 ### Critical Compliance Checklist (most commonly missed steps)
 Before and during EVERY stage, verify:
 1. [ ] **Use the engine for every lifecycle transition** — before the prompt, `aidlc-orchestrate.ts report --stage <slug> --result awaiting-approval`; after the response, report `approved` or `rejected`; after revision work, report `revised`. A blocking-sensor refusal is a separate logged non-gate decision: offer Fix findings / Override blocking sensors, and only retry with the override after the exact human-backed answer receipt exists. Autonomous mode never offers or accepts that override. When the active stage's own condition proves it does not apply, report `skipped --reason "<reason>"`. Never call lifecycle verbs on `aidlc-state.ts` directly. The engine emits the correct audit events and routes only on approval, completion, or a justified skip. Do NOT call `aidlc-audit.ts append` separately. (§2)
-2. [ ] **Log non-gate questions via `aidlc-log.ts`**: before presenting a structured question that is not an approval gate: `{{INVOKE}} engine log decision --stage <slug> --decision "<summary>" --options "<csv>"`. After response: `{{INVOKE}} engine log answer --stage <slug> --details '<exact choice>'`. Log every question a menu shows before you show the menu, and put all of one reply's answers in a single `log answer` (`--details 'Q1: <choice>; Q2: <choice>'`), even when the reply came before the log. Approval choices go only through `aidlc-orchestrate.ts report`. (§2, §3)
+2. [ ] **Log non-gate questions via `aidlc-log.ts`**: before presenting a structured question that is not an approval gate: `{{INVOKE}} engine log decision --stage <slug> --decision "<summary>" --options "<csv>"`. After response: `{{INVOKE}} engine log answer --stage <slug> --details '<exact choice>'`. Log every question a menu shows before you show the menu, and put all of one reply's answers in a single `log answer` (`--details 'Q1: <choice>; Q2: <choice>'`), even when the reply came before the log. When you log a question after the person already replied, name the message that answered it: `--message <id>` on the `log decision` or on each `log answer` (a refused answer names the id in its hint); the person is never asked to say it again. Approval choices go only through `aidlc-orchestrate.ts report`. (§2, §3)
 3. [ ] **Record the choice the person made**: read their reply and record their choice; the human-turn hook keeps their exact words with it. Never choose for them unless they leave the choice to you (§3, `--on-instruction`), and never paraphrase their words in an answer or note. (§1, §2, §3)
 4. [ ] **Task transitions + state sync** — Mark previous task `completed`, then `TaskUpdate({ ..., status: "in_progress", activeForm: "Running [Stage] [slug]" })`. The `[slug]` suffix triggers the PostToolUse hook that syncs the state file. Only when `TaskCreate`/`TaskUpdate`, or the plan or todo tool your skill maps them to, is in your tool list; otherwise skip task transitions silently. `aidlc-orchestrate.ts report --stage <slug> --result approved --user-input '<exact choice>'` auto-advances to the next in-scope stage (or completes the workflow on the final stage) — do NOT call `advance` separately after approval. (§4)
 5. [ ] **Stage ritual is ATOMIC** — once a stage starts, EVERY step in its protocol fires: questions → artifact → reviewer (if declared) → learnings (only when the directive lists the `learnings` protocol module) → gate. No step is skippable based on inferred user intent. "Skip to stage X" means skip INTERMEDIATE stages, NOT shortcut the TARGET stage's ritual. If a user jumps forward from a stage at its gate, the current stage's learnings ritual (§13) MUST fire before the jump executes only when the directive lists the `learnings` protocol module. EXCEPTION: the Build-and-Test failure loop-back in the construction protocol module (`aidlc-common/protocols/stage-protocol-construction.md`) jumps back from a deliberately in-flight failed stage; its §13 learnings ritual defers to the eventual passing run.
@@ -423,6 +423,14 @@ question.
 **Review:** `<record>/[path to artifacts]`
 ```
 Then present the structured approval question as defined above.
+
+A stage whose artifacts end with decisions only the person can make may list
+them in a fenced `aidlc-decisions` block in a declared artifact (yaml:
+`decisions:` then `- id: <id>` items with `decision:`, `owner:` and
+`blocking:` beside each). The engine records their ids on the gate-open row
+(`Open Decisions`, `Decisions`) and Approve records them as accepted open; a
+block it cannot read is recorded as `unreadable` and stops nothing. Nothing is
+asked of the person for it.
 
 ### Part 4: Progress update (mandatory — after user approves)
 After the user selects "Approve", say the progress line the approval's reply carries as its `narration`, word for word; never count stages yourself. When the reply carries none, say no progress line.
@@ -773,7 +781,7 @@ hook, including learning prompts that do not add a blank tag to the stage
 questions file. Once `decision` succeeds, render that question and END THE TURN.
 If you showed the question before recording it, the person already has it: end
 the turn without showing it again.
-If they already replied, log the question now, then put all of that reply's answers in a single `log answer`: a second `log answer` for one reply is refused.
+If they already replied, log the question now naming their message (`--message <id>`; a refused answer names the id), then put all of that reply's answers in a single `log answer`: an answer that names no message is refused when their reply came before the question was logged.
 Never interpret hook feedback, a continuation reminder, or silence as its
 answer; only the human's next interaction may be followed by `answer`.
 
@@ -1283,6 +1291,15 @@ cannot override a blocking sensor.
 Failed checks emit a `SENSOR_FAILED` audit row and write findings to
 `<record>/.aidlc-engine/sensors/<stage-slug>/<sensor>-<fire-id>.md`; use that detail
 file to correct the output and run the check again.
+
+When a gate opens, or is shown again, the engine's reply names each check that
+still fails on a declared output, with its detail file, in its `narration`
+on its own line after what the stage produced: say it to the person with the
+approval question, never claim coverage a
+check reports against (every requirement traced, every section present), and
+when they ask for changes, correct from that detail file and run the check
+again. A Unit's own gate names that Unit's outputs only; with Sensors off,
+nothing is said about checks.
 
 `required-sections` applies to markdown outputs. Unless a stage declares a
 more specific contract, it enforces the registry default of at least two H2

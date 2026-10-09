@@ -248,15 +248,46 @@ When the orchestrator dispatches aidlc-pipeline-deploy-agent for a worktree crea
   "strategy": "squash",
   "commit_sha": "<sha>",
   "audit_timestamp": "2026-05-18T12:34:56Z",
-  "notes": "<optional follow-up reminders>"
+  "notices": ["<one line per thing the person should hear, when there is one>"]
 }
 ```
+
+The landing runs with the person's own git: their hooks, filters and merge
+drivers run as for any commit they make. When what landed differs from the
+reviewed source (a formatter in a pre-commit hook, a smudge filter, a configured
+merge driver), the landing keeps that result, `notices` carries one line for the
+person ("Your pre-commit hook changed 3 files while landing Unit auth-mfa: ..."),
+and the `SWARM_SOURCE_MERGED` row records the files under `Landed changes` and
+`Driver merges` beside both commits. Say the line once; never refuse or undo it.
 
 If a merge error carries `[merge-succeeded:<sha>]` and says the
 `SWARM_SOURCE_MERGED` post-result audit row failed, the Git merge already
 landed but no aggregate source authority exists. Preserve the worktree and do
 not retry the same merge command. Restart the stage attempt, or use
 `AIDLC_SKIP_SOURCE_FRESHNESS=1` only after explicit human approval.
+
+### Merge response (the person's hook refused the commit)
+
+```json
+{
+  "status": "commit-refused",
+  "slug": "payments",
+  "worktree_path": "/Users/dev/project/.aidlc/worktrees/bolt-7c31e9a0_payments",
+  "target": "main",
+  "strategy": "squash",
+  "staged": ["src/foo.ts"],
+  "output": "lint: src/foo.ts has a console.log",
+  "detail": "`git commit` refused the landing of Unit payments in /Users/dev/project; the landing is still staged there.",
+  "next": "Fix what it named (edit and `git add` in /Users/dev/project, or pass --message for a commit-message rule), then run this same merge again: it finishes the staged landing. To drop the staged landing instead: `git reset --merge` in /Users/dev/project."
+}
+```
+
+The main checkout is left exactly as git left it, with the landing staged, and
+the worktree is preserved. Tell the person in one line that their hook refused
+the landing and why (the `output` field's words), fix what it named in the
+staged landing, and run the same merge again; it finishes the landing and
+records the fix under `Landed changes`. If it cannot be fixed, stop and say
+what `staged` lists.
 
 ### Merge response (conflict)
 

@@ -1411,6 +1411,12 @@ describe("t244 management lifecycle", () => {
     expect(updated.stdout).toContain(
       `Updated aidlc from ${AIDLC_VERSION} to ${NEXT_VERSION}.`,
     );
+    // The next step is the one that is true: a refresh runs beside open work,
+    // so nobody waits for a workflow to end.
+    expect(updated.stdout).toContain(
+      "Project files were not changed. Run 'aidlc config --yes' in each project to refresh them. Open work carries on.",
+    );
+    expect(updated.stdout).not.toContain("between workflows");
     expect(updated.stdout).toContain(`Pruned unprotected releases: ${REMOVABLE_VERSION}.`);
     expect(run(LIFECYCLE, [
       "versions", "install", REMOVABLE_VERSION, "--from", removableRelease,
@@ -3795,7 +3801,17 @@ describe("t244 Windows and completion release surfaces", () => {
     expect(release).toContain(`GH_TOKEN: \${{ github.token }}`);
     expect(release).toContain('gh release create "$RELEASE_TAG" build/release/*');
     expect(release).toContain("--verify-tag");
-    expect(release).toContain("--generate-notes");
+    // The body is this version's CHANGELOG entry, never GitHub's generated
+    // list, which names every contributing account by handle.
+    expect(release).toContain("name: Build release notes from CHANGELOG.md");
+    expect(release).toContain("bun scripts/release-notes.ts");
+    expect(release).toContain('--notes-file "$RUNNER_TEMP/release-notes.md"');
+    expect(release).not.toContain("--generate-notes");
+    // The notes are written after the source recheck, so the body can only come
+    // from the commit the release was authorized for.
+    expect(release.indexOf("name: Recheck release source"))
+      .toBeLessThan(release.indexOf("name: Build release notes from CHANGELOG.md"));
+    expect(release).toContain("oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6");
     expect(release).toContain("name: Verify uploaded asset inventory");
     expect(release).toContain('gh release view "$RELEASE_TAG" --json assets');
     expect(release).toContain('diff -u "$RUNNER_TEMP/local-assets.txt"');

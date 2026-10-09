@@ -2233,10 +2233,13 @@ describe("t115 the gate and a skip say what the plan does next", () => {
     const opened = orchestrate(["report", "--stage", "feasibility", "--result", "awaiting-approval"], p, noReview);
     expect(opened.status, opened.out).toBe(0);
     expect(lastDirective(opened.stdout)).toMatchObject({ kind: "print", next_stage: "Scope Definition" });
-    // Where the stage's output is, said with the gate.
-    expect(String(lastDirective(opened.stdout).narration)).toMatch(
+    // Where the stage's output is, said with the gate; a check that still fails
+    // on one of its outputs follows on its own line, so the sentence stays whole.
+    const [produced, ...checks] = String(lastDirective(opened.stdout).narration).split("\n");
+    expect(produced).toMatch(
       /^Feasibility[^.]* is ready for your review\. It produced .*feasibility-questions\.md.*, in aidlc\/spaces\/default\/intents\/[^/]+\/ideation\/feasibility\/\.$/,
     );
+    for (const line of checks) expect(line).toMatch(/^The [a-z-]+ check reports /);
 
     // Scope Definition is taken off the plan while Feasibility is still open.
     const q = feasibilityDone();
@@ -2270,7 +2273,7 @@ describe("t115 the gate and a skip say what the plan does next", () => {
       AIDLC_DISABLE_ENSEMBLE_EVIDENCE: "1",
     });
     expect(opened.status, opened.out).toBe(0);
-    expect(String(lastDirective(opened.stdout).narration)).toMatch(
+    expect(String(lastDirective(opened.stdout).narration).split("\n")[0]).toMatch(
       /^Reverse Engineering is ready for your review\. It produced .+, in aidlc\/spaces\/default\/codekb\/[^/]+\/\.$/,
     );
   });

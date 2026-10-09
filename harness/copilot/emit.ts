@@ -178,7 +178,7 @@ export default function emit(ctx: EmitContext): void {
           ),
         ).replaceAll(
           "aidlc/spaces/<active-space>/memory/",
-          "aidlc/spaces/default/memory/",
+          "aidlc/active-memory/",
         );
       },
     });

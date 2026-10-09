@@ -7,6 +7,15 @@ import {
   readKiroWorkflowsAnswer,
   type KiroWorkflowsAnswer,
 } from "./aidlc-kiro-ide-workflows.ts";
+import {
+  KIRO_TERMINAL_ISSUE_ID,
+  kiroTerminalApplies,
+  kiroTerminalFix,
+  kiroTerminalIssueMessage,
+  readKiroIdeTerminal,
+  readKiroTerminalAnswer,
+  type KiroTerminalAnswer,
+} from "./aidlc-kiro-ide-terminal.ts";
 import { spawnSync } from "node:child_process";
 import {
   accessSync,
@@ -249,6 +258,8 @@ export type TrustStatus = {
   issues: DiagnosticIssue[];
   /** Kiro IDE only: its Workflows switch and the person's answer on this machine. */
   kiroWorkflows?: { enabled: boolean; settingsPath: string; answer: KiroWorkflowsAnswer | null };
+  /** Kiro IDE on Windows only: whether its terminal is Command Prompt, and the person's answer on this machine. */
+  kiroTerminal?: { commandPrompt: boolean; profile: string | null; settingsPath: string; answer: KiroTerminalAnswer | null };
 };
 
 export type DiagnosticDoctorCheck = {
@@ -2740,10 +2751,32 @@ export function trustStatus(
       });
     }
   }
+  // Kiro IDE runs its agent's commands in the person's default terminal. In
+  // Command Prompt AI-DLC's commands split the person's words and every command
+  // reports exit code -1, so it is named until they answered once on this machine.
+  let kiroTerminal: TrustStatus["kiroTerminal"];
+  if (harness === "kiro-ide") {
+    const state = readKiroIdeTerminal(env);
+    kiroTerminal = {
+      commandPrompt: state.commandPrompt,
+      profile: state.profile,
+      settingsPath: state.settingsPath,
+      answer: readKiroTerminalAnswer(),
+    };
+    if (state.commandPrompt && kiroTerminal.answer === null) {
+      issues.push({
+        id: KIRO_TERMINAL_ISSUE_ID,
+        message: kiroTerminalIssueMessage(),
+        remediation: kiroTerminalFix(invocationForHarness(harnessDir)),
+        severity: "warn",
+      });
+    }
+  }
   return {
     files: trustFilesForHarness(projectDir, harnessDir, harness),
     issues,
     ...(kiroWorkflows ? { kiroWorkflows } : {}),
+    ...(kiroTerminal ? { kiroTerminal } : {}),
   };
 }
 
@@ -2830,6 +2863,14 @@ export function postApplyOutstandingActions(
           id: issue.id,
           message: issue.message,
           command: `${invoke} config trust --kiro-workflows off`,
+        };
+      }
+      if (issue.id === KIRO_TERMINAL_ISSUE_ID) {
+        return {
+          section: "trust" as const,
+          id: issue.id,
+          message: issue.message,
+          command: `${invoke} config trust --kiro-terminal powershell`,
         };
       }
       return step
@@ -3291,6 +3332,36 @@ export function kiroIdeWorkflowsDoctorCheck(
     severity: "warn",
     label: "Kiro Workflows is on, so AI-DLC's reviews and helpers do not run in your Kiro IDE chats",
     fix: kiroWorkflowsFix(invocationForHarness(selected.harnessDir)),
+  };
+}
+
+// Doctor reads Kiro IDE's default terminal like the trust section does, on
+// Windows only (the setting is Kiro's on Windows), and names the command the
+// agent runs when the person says yes.
+export function kiroIdeTerminalDoctorCheck(
+  projectDir: string,
+  harnessDirHint?: string,
+  env: NodeJS.ProcessEnv = process.env,
+  platform: NodeJS.Platform = process.platform,
+): DiagnosticDoctorCheck | null {
+  const selected = selectedHarness(projectDir, harnessDirHint);
+  if (selected?.harness !== "kiro-ide") return null;
+  if (!kiroTerminalApplies(env, platform)) return null;
+  const state = readKiroIdeTerminal(env, platform);
+  if (!state.readable) {
+    return {
+      pass: false,
+      severity: "warn",
+      label: `Kiro terminal: ${state.settingsPath} could not be read as JSONC`,
+      fix: "correct the file, or in Kiro run Terminal: Select Default Profile from the Command Palette and choose PowerShell",
+    };
+  }
+  if (!state.commandPrompt) return { pass: true, label: `Kiro terminal: ${state.profile ?? "PowerShell (Kiro's default)"}` };
+  return {
+    pass: false,
+    severity: "warn",
+    label: `Kiro terminal: ${kiroTerminalIssueMessage()}`,
+    fix: kiroTerminalFix(invocationForHarness(selected.harnessDir)),
   };
 }
 

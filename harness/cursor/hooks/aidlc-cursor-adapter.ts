@@ -2069,203 +2069,36 @@ export async function run(
     return { disposition: "unsafe", command: alias };
   }
 
-  function gitPagerMode(
-    prefix: readonly string[],
-    env: Record<string, string | undefined>,
-  ): "default" | "disabled" | "enabled" {
-    const pager = (env.GIT_PAGER ?? env.PAGER ?? "").trim();
-    let mode: "default" | "disabled" | "enabled" =
-      pager.length === 0
-        ? "default"
-        : /^(?:cat|false)$/i.test(pager)
-          ? "disabled"
-          : "enabled";
-    for (const arg of prefix) {
-      if (arg === "--no-pager" || arg === "-P") mode = "disabled";
-      else if (arg === "--paginate" || arg === "-p") mode = "enabled";
-    }
-    return mode;
-  }
-
-  function gitStatusUsesExternalCommand(
-    args: readonly string[],
-    env: Record<string, string | undefined>,
-    cwd: string,
-  ): boolean {
+  // The person's own git settings apply to a helper's `git status`, exactly as
+  // they do in their terminal: a pager they configured, or a file-system
+  // monitor they set up to make a large repository fast, is theirs to choose
+  // and AI-DLC reads a repository here, it does not decide how their git runs.
+  // What stays denied is a program the AGENT names in the command AI-DLC lets
+  // through: `-c core.fsmonitor=<program>` (and the `--config-env` form, whose
+  // value arrives through a variable) makes git run that program, which is the
+  // delegated agent reaching for an interpreter by another route.
+  function gitStatusUsesExternalCommand(args: readonly string[]): boolean {
     const invocation = gitInvocation(args);
     const prefix = invocation.prefix.filter((arg) => arg !== "--");
-    const pagerMode = gitPagerMode(prefix, env);
-    if (pagerMode === "enabled") return true;
-    const commandArgs = args.slice(invocation.subcommandIndex + 1);
-    const boundary = commandArgs.indexOf("--");
-    const optionArgs = boundary === -1 ? commandArgs : commandArgs.slice(0, boundary);
-    const positionalPathspecs = (): string[] => {
-      for (let i = 0; i < commandArgs.length; i++) {
-        const arg = commandArgs[i];
-        if (!arg.startsWith("-") || arg === "-") {
-          const pathspecs = commandArgs.slice(i);
-          return pathspecs.some((pathspec) => pathspec.startsWith("-"))
-            ? []
-            : pathspecs;
-        }
-        if (
-          /^-[vsbz]+$/.test(arg) ||
-          /^-u(?:all|normal|no)?$/.test(arg) ||
-          /^-M(?:\d+%?)?$/.test(arg) ||
-          /^--(?:no-)?(?:verbose|short|branch|show-stash|ahead-behind|porcelain|long|null|untracked-files|ignored|ignore-submodules|column)(?:=.*)?$/.test(
-            arg,
-          ) ||
-          arg === "--renames" ||
-          arg === "--no-renames" ||
-          /^--find-renames(?:=.*)?$/.test(arg)
-        ) {
-          continue;
-        }
-        return [];
+    for (let index = 0; index < prefix.length; index++) {
+      const arg = prefix[index];
+      const inline = (flag: string): string | undefined =>
+        arg === flag ? prefix[index + 1] : arg.startsWith(`${flag}=`) ? arg.slice(flag.length + 1) : undefined;
+      const configured = inline("-c");
+      if (configured !== undefined) {
+        const equals = configured.indexOf("=");
+        const key = (equals === -1 ? configured : configured.slice(0, equals)).toLowerCase();
+        if (key !== "core.fsmonitor") continue;
+        // `-c core.fsmonitor` with no value reads as true, and true or false
+        // names no program.
+        const value = equals === -1 ? "true" : configured.slice(equals + 1).trim();
+        if (!/^(?:true|false)$/i.test(value)) return true;
+        continue;
       }
-      return [];
-    };
-    const pathspecs =
-      boundary === -1 ? positionalPathspecs() : commandArgs.slice(boundary + 1);
-    const configuredCommand = (key: string, safeValues: RegExp): boolean => {
-      const result = Bun.spawnSync(
-        ["git", ...prefix, "config", "--get-all", key],
-        {
-          cwd,
-          env,
-          stdout: "pipe",
-          stderr: "ignore",
-        },
-      );
-      if (result.exitCode === 1) return false;
-      if (result.exitCode !== 0) return true;
-      return (result.stdout?.toString() ?? "")
-        .split(/\r?\n/)
-        .filter(Boolean)
-        .some((value) => !safeValues.test(value.trim()));
-    };
-    if (configuredCommand("core.fsmonitor", /^(?:true|false)$/i)) return true;
-    if (
-      pagerMode !== "disabled" &&
-      (configuredCommand("core.pager", /^(?:cat|false)$/i) ||
-        configuredCommand("pager.status", /^(?:cat|false)$/i))
-    ) return true;
-    let submoduleMode: string | undefined;
-    for (const arg of optionArgs) {
-      if (arg === "--ignore-submodules") submoduleMode = "all";
-      else if (arg.startsWith("--ignore-submodules=")) {
-        submoduleMode = arg.slice("--ignore-submodules=".length).toLowerCase();
-      }
-    }
-    if (submoduleMode === "all") return false;
-
-    const rootResult = Bun.spawnSync(
-      ["git", ...prefix, "rev-parse", "--show-toplevel"],
-      {
-        cwd,
-        env,
-        stdout: "pipe",
-        stderr: "ignore",
-      },
-    );
-    if (rootResult.exitCode !== 0) return false;
-    const root = rootResult.stdout?.toString().trim();
-    if (!root) return true;
-    const visited = new Set<string>();
-    const childEnv: Record<string, string | undefined> = { ...env };
-    for (const name of [
-      "GIT_ALTERNATE_OBJECT_DIRECTORIES",
-      "GIT_OBJECT_DIRECTORY",
-      "GIT_DIR",
-      "GIT_WORK_TREE",
-      "GIT_IMPLICIT_WORK_TREE",
-      "GIT_GRAFT_FILE",
-      "GIT_INDEX_FILE",
-      "GIT_NAMESPACE",
-      "GIT_PREFIX",
-      "GIT_INTERNAL_SUPER_PREFIX",
-      "GIT_QUARANTINE_PATH",
-      "GIT_REPLACE_REF_BASE",
-      "GIT_SHALLOW_FILE",
-      "GIT_COMMON_DIR",
-    ]) {
-      deleteEnvironmentName(childEnv, name);
-    }
-    const indexedGitlinks = (
-      repository: string,
-      repositoryEnv: Record<string, string | undefined>,
-      repositoryPathspecs: readonly string[] = [],
-      useRootInvocation = false,
-    ): string[] | null => {
-      const command = useRootInvocation
-        ? ["git", ...prefix, "ls-files", "--stage", "--full-name", "-z"]
-        : ["git", "-C", repository, "ls-files", "--stage", "--full-name", "-z"];
-      const result = Bun.spawnSync(
-        [
-          ...command,
-          ...(repositoryPathspecs.length > 0 ? ["--", ...repositoryPathspecs] : []),
-        ],
-        {
-          ...(useRootInvocation ? { cwd } : {}),
-          env: repositoryEnv,
-          stdout: "pipe",
-          stderr: "ignore",
-        },
-      );
-      if (result.exitCode !== 0) return null;
-      const paths: string[] = [];
-      for (const record of (result.stdout?.toString() ?? "").split("\0")) {
-        if (!record) continue;
-        const tab = record.indexOf("\t");
-        if (tab === -1 || !record.slice(0, tab).startsWith("160000 ")) continue;
-        const path = record.slice(tab + 1);
-        if (path) paths.push(path);
-      }
-      return paths;
-    };
-    const unsafeSubmodule = (repository: string, depth: number): boolean => {
-      if (depth > 16 || visited.size >= 64) return true;
-      let identity: string;
-      try {
-        identity = realpathSync.native(repository);
-      } catch {
+      const fromVariable = inline("--config-env");
+      if (fromVariable !== undefined && fromVariable.split("=")[0]?.toLowerCase() === "core.fsmonitor") {
         return true;
       }
-      if (visited.has(identity)) return false;
-      visited.add(identity);
-      const fsmonitor = Bun.spawnSync(
-        ["git", "-C", repository, "config", "--get-all", "core.fsmonitor"],
-        {
-          env: childEnv,
-          stdout: "pipe",
-          stderr: "ignore",
-        },
-      );
-      if (fsmonitor.exitCode !== 0 && fsmonitor.exitCode !== 1) return true;
-      if (
-        fsmonitor.exitCode === 0 &&
-        (fsmonitor.stdout?.toString() ?? "")
-          .split(/\r?\n/)
-          .filter(Boolean)
-          .some((value) => !/^(?:true|false)$/i.test(value.trim()))
-      ) {
-        return true;
-      }
-      const gitlinks = indexedGitlinks(repository, childEnv);
-      if (gitlinks === null) return true;
-      for (const path of gitlinks) {
-        const submodule = resolve(repository, path);
-        if (!existsSync(join(submodule, ".git"))) continue;
-        if (unsafeSubmodule(submodule, depth + 1)) return true;
-      }
-      return false;
-    };
-    const gitlinks = indexedGitlinks(root, env, pathspecs, true);
-    if (gitlinks === null) return true;
-    for (const path of gitlinks) {
-      const submodule = resolve(root, path);
-      if (!existsSync(join(submodule, ".git"))) continue;
-      if (unsafeSubmodule(submodule, 1)) return true;
     }
     return false;
   }
@@ -2311,15 +2144,11 @@ export async function run(
     const commandArgs = args.slice(invocation.subcommandIndex + 1);
     const boundary = commandArgs.indexOf("--");
     const optionArgs = boundary === -1 ? commandArgs : commandArgs.slice(0, boundary);
-    const pagerDisabled = gitPagerMode(invocation.prefix, env) === "disabled";
     if (folded === "branch") {
-      return !(pagerDisabled && optionArgs.includes("--list"));
+      return !optionArgs.includes("--list");
     }
     if (folded === "tag") {
-      return !(
-        pagerDisabled &&
-        (optionArgs.includes("--list") || optionArgs.includes("-l"))
-      );
+      return !(optionArgs.includes("--list") || optionArgs.includes("-l"));
     }
     if (folded === "diff") {
       let cached = false;
@@ -2339,7 +2168,6 @@ export async function run(
         }
       }
       return !(
-        pagerDisabled &&
         cached &&
         externalDiff === false &&
         textconv === false &&
@@ -2362,7 +2190,7 @@ export async function run(
       "version",
     ]);
     if (!safeBuiltins.has(folded)) return true;
-    return folded === "status" && gitStatusUsesExternalCommand(args, env, cwd);
+    return folded === "status" && gitStatusUsesExternalCommand(args);
   }
 
   function gitInvocationUsesDynamicEvaluation(

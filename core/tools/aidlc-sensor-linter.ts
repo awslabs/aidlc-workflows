@@ -151,18 +151,51 @@ function findProjectRoot(filePath: string): string | null {
 // the sensor quietly degrades every fire to a tool-unavailable PASS -
 // masking real lint findings. Pinning the major makes resolution
 // deterministic: bunx fetches/caches this spec and ignores PATH
-// shadowing. A version spec also bypasses local node_modules, so first resolve
-// a local install of the SAME major and run its absolute CLI path. It is already
-// provisioned and never needs the bunx download cache. Older local versions
-// still take the pinned fallback instead of silently missing flat configs.
+// shadowing. A version spec also bypasses local node_modules, so first
+// resolve the project's own install and run its absolute CLI path, whatever
+// its major: the project chose that version and its config together (an
+// ESLint 8 reads the .eslintrc.* it ships with; the pin cannot), and it is
+// already provisioned and never needs the bunx download cache. The one
+// exception keeps the case the pin was added for: a flat eslint.config.* at
+// the project root or above beside an install older than 9 takes the pin,
+// which can read it.
 const ESLINT_SPEC = "eslint@10";
+const FLAT_CONFIG_FILES = [
+	"eslint.config.js",
+	"eslint.config.mjs",
+	"eslint.config.cjs",
+	"eslint.config.ts",
+];
+const LEGACY_CONFIG_FILES = [
+	".eslintrc.js",
+	".eslintrc.cjs",
+	".eslintrc.json",
+	".eslintrc.yaml",
+	".eslintrc.yml",
+	".eslintrc",
+];
+
+// A flat config at cwd or any ancestor governs the files under it (a monorepo
+// keeps one at its root while the sensor's project root is the package's own
+// package.json), so a pre-9 install hoisted beside it must not run and drop
+// those rules: look up to the filesystem root, not only at cwd.
+function flatConfigAbove(cwd: string): boolean {
+	let dir = resolve(cwd);
+	for (;;) {
+		if (FLAT_CONFIG_FILES.some((name) => existsSync(join(dir, name)))) return true;
+		const parent = dirname(dir);
+		if (parent === dir) return false;
+		dir = parent;
+	}
+}
 
 export function localEslintPath(cwd: string): string | null {
 	try {
 		const manifestPath = createRequire(join(cwd, "package.json")).resolve("eslint/package.json");
 		const manifest = JSON.parse(readFileSync(manifestPath, "utf-8"));
-		if (manifest.name !== "eslint" || typeof manifest.version !== "string" ||
-			manifest.version.split(".")[0] !== ESLINT_SPEC.split("@")[1]) return null;
+		if (manifest.name !== "eslint" || typeof manifest.version !== "string") return null;
+		const major = Number(manifest.version.split(".")[0]);
+		if (major < 9 && flatConfigAbove(cwd)) return null;
 		const cli = join(dirname(manifestPath), "bin", "eslint.js");
 		return existsSync(cli) ? cli : null;
 	} catch {
@@ -254,19 +287,7 @@ function probeEslintConfig(filePath: string, cwd: string): void {
 // failure with no config at all. cwd is already the nearest package.json
 // ancestor by construction (see findProjectRoot).
 function configFilePresent(cwd: string): boolean {
-	const candidates = [
-		"eslint.config.js",
-		"eslint.config.mjs",
-		"eslint.config.cjs",
-		"eslint.config.ts",
-		".eslintrc.js",
-		".eslintrc.cjs",
-		".eslintrc.json",
-		".eslintrc.yaml",
-		".eslintrc.yml",
-		".eslintrc",
-	];
-	return candidates.some((name) => existsSync(`${cwd}/${name}`));
+	return [...FLAT_CONFIG_FILES, ...LEGACY_CONFIG_FILES].some((name) => existsSync(`${cwd}/${name}`));
 }
 
 // Pick the most diagnostic stderr line for the parse-error reason.

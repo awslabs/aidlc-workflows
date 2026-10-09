@@ -4,11 +4,13 @@
 // live on the tool-owned GATE_APPROVED / GATE_REJECTED audit rows and are folded
 // into rendered briefs and future reviewer dispatch context at read time.
 
+import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
-import { relative, resolve, sep } from "node:path";
+import { join, relative, resolve, sep } from "node:path";
 import {
   type AuditShardEvent,
   attemptEventAfterFrontier,
+  ENGINE_DIR,
   attemptEventDefinitelyBefore,
   auditBlockField,
   constructionCheckpointsApply,
@@ -39,6 +41,7 @@ import {
   type ReviewFingerprintStage,
   reviewFindingsSectionLines,
   REVIEW_FINDINGS_REPORT_RETRY_MESSAGE,
+  findingsReportUnreadableMessage,
   reviewRecordFindings,
   reviewSectionVerdict,
   sortAttemptEvents,
@@ -46,6 +49,8 @@ import {
   maximalAttemptEvents,
   toPosix,
   unreadableFindingsTableFinding,
+  validateUnitName,
+  writeRecordFileNoFollow,
 } from "./aidlc-lib.js";
 import {
   constructionCheckpointKind,
@@ -990,7 +995,7 @@ export function deriveReviewFindingsList(
     findingsText = undefined;
     if (pending.unreadableReason !== undefined) {
       if (!pending.allowMalformed) {
-        malformedReport = REVIEW_FINDINGS_REPORT_RETRY_MESSAGE;
+        malformedReport = findingsReportUnreadableMessage(pending.unreadableReason);
       } else {
         findings = withUnreadable(
           unreadableFindingsTableFinding(
@@ -1015,17 +1020,28 @@ export function deriveReviewFindingsList(
           pending.body,
         );
         findings = applied.findings;
-        if ((applied.malformed || (applied.priorMissing && !firstReview)) && !pending.allowMalformed) {
-          malformedReport = REVIEW_FINDINGS_REPORT_RETRY_MESSAGE;
+        if (!pending.allowMalformed && applied.priorMissing && !firstReview) {
+          malformedReport = findingsReportUnreadableMessage(
+            "the Prior findings table is missing, and this review has earlier findings to report on",
+          );
+        } else if (!pending.allowMalformed && applied.malformed) {
+          malformedReport = findingsReportUnreadableMessage(
+            "a Prior findings row names an ID the review context does not list, or repeats an ID",
+          );
         }
-      } catch {
+      } catch (e) {
+        // The parser names the fault (the rule, the row and the cell); anything
+        // else that threw keeps the generic sentence.
+        const named = e instanceof Error && e.message.startsWith("the findings report could not be read")
+          ? e.message
+          : REVIEW_FINDINGS_REPORT_RETRY_MESSAGE;
         if (!pending.allowMalformed) {
-          malformedReport = REVIEW_FINDINGS_REPORT_RETRY_MESSAGE;
+          malformedReport = named;
         } else {
           findings = withUnreadable(
             unreadableFindingsTableFinding(
               pending.artifact,
-              REVIEW_FINDINGS_REPORT_RETRY_MESSAGE,
+              named,
               unit,
             ),
           );
@@ -2249,6 +2265,39 @@ function parseCliFlags(args: string[]): Record<string, string> {
   return flags;
 }
 
+// The brief the agent shows at the gate, kept as printed beside the review
+// record (`<engine>/reviews/<stage>/stage|units/<unit>/briefs/<sha256>.md`,
+// `latest.json` naming the newest), so the gate-open row can record the digest
+// of what the person was shown and a reader can open exactly that text later.
+// Best effort: a keep failure never costs the brief its print.
+function keepGateBrief(
+  projectDir: string,
+  stage: { slug: string; for_each?: string },
+  unit: string | undefined,
+  why: ReviewBriefReason,
+  brief: string,
+): void {
+  try {
+    // A Unit name that is not one is never joined into a path, and both files
+    // are written under the record root through no link (a cloned repo can
+    // carry a planted link under the reviews tree), as the review record is.
+    if (unit !== undefined && validateUnitName(unit) !== null) return;
+    const root = recordDir(projectDir);
+    if (root === null) return;
+    const scope = stage.for_each === "unit-of-work" && unit !== undefined ? join("units", unit) : "stage";
+    const dir = join(ENGINE_DIR, "reviews", stage.slug, scope, "briefs");
+    const digest = createHash("sha256").update(brief).digest("hex");
+    writeRecordFileNoFollow(root, join(dir, `${digest}.md`), brief);
+    writeRecordFileNoFollow(
+      root,
+      join(dir, "latest.json"),
+      `${JSON.stringify({ digest, why, at: new Date().toISOString().replace(/\.\d{3}Z$/, "Z") })}\n`,
+    );
+  } catch {
+    // The print is the brief; the kept copy is the record's convenience.
+  }
+}
+
 export function main(argv: string[]): void {
   const command = argv[0];
   const flags = parseCliFlags(argv.slice(1));
@@ -2263,17 +2312,17 @@ export function main(argv: string[]): void {
     if (reason !== "first" && reason !== "revision" && reason !== "stale") {
       throw new Error("Review brief requires --why <first|revision|stale>.");
     }
-    process.stdout.write(
-      `${
-        renderReviewBrief(
-          projectDir,
-          stage,
-          reason,
-          flags.unit,
-          flags["fallback-finding"],
-        )
-      }\n`,
-    );
+    const brief = `${
+      renderReviewBrief(
+        projectDir,
+        stage,
+        reason,
+        flags.unit,
+        flags["fallback-finding"],
+      )
+    }\n`;
+    process.stdout.write(brief);
+    keepGateBrief(projectDir, stage, flags.unit, reason, brief);
     return;
   }
   if (command === "context") {

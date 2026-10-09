@@ -8,10 +8,11 @@
 // names) to ONE hand-editable source of truth at the workspace root —
 // aidlc/spaces/default/memory/ — with neutral filenames. Each harness reads it
 // by its OWN native include (no copy, no drift):
-//   - Claude  → .claude/rules/aidlc.md @-import stub → @../../aidlc/spaces/
-//               default/memory/<file> (explicit @-lines; Claude @-imports do
+//   - Claude  → .claude/rules/aidlc.md @-import stub → @../../aidlc/
+//               active-memory/<file>, the engine's git-ignored copy of
+//               the active space's memory (explicit @-lines; Claude @-imports do
 //               NOT glob — verified against code.claude.com/docs memory.md).
-//   - Kiro    → agent JSON resources glob file://aidlc/spaces/default/memory/**/*.md
+//   - Kiro    → agent JSON resources glob file://aidlc/active-memory/**/*.md
 //   - Codex   → AGENTS.md auto-merge + AIDLC_RULES_DIR seam + orchestrator
 //               @-mention (the static seam is asserted here; the LIVE @-mention
 //               probe lives in the gated e2e tests/e2e/
@@ -185,7 +186,7 @@ describe("t156 method relocation to aidlc/spaces/default/memory/ + per-harness i
       "phases/operation.md",
     ];
     for (const f of memFiles) {
-      expect(stub, `stub @-line for ${f}`).toContain(`@../../aidlc/spaces/default/memory/${f}`);
+      expect(stub, `stub @-line for ${f}`).toContain(`@../../aidlc/active-memory/${f}`);
     }
     // And CLAUDE.md imports the stub (top of the reference chain).
     const claudeMd = readFileSync(
@@ -226,8 +227,8 @@ describe("t156 method relocation to aidlc/spaces/default/memory/ + per-harness i
         if (!json.resources) continue;
         checkedAgents++;
         harnessChecked++;
-        expect(json.resources, `${harness.name}/${f} resources → relocated memory`).toContain(
-          "file://aidlc/spaces/default/memory/**/*.md",
+        expect(json.resources, `${harness.name}/${f} resources → the engine's copy of the active space's memory`).toContain(
+          "file://aidlc/active-memory/**/*.md",
         );
         // Only the always-on native onboarding may load from steering; method
         // globs must use relocated memory. Inspect resources, not write permissions.
@@ -264,20 +265,19 @@ describe("t156 method relocation to aidlc/spaces/default/memory/ + per-harness i
     expect(steering).not.toContain("#[[file:");
   });
 
-  test("8: Codex include is wired (AIDLC_RULES_DIR seam + AGENTS.md)", () => {
-    // This asserts the STATIC seam here (unit tier, zero tokens): the resolver
-    // env override re-points at the relocated tree, and the root AGENTS.md ships
-    // for auto-merge. The LIVE empirical probe — that `codex exec` actually
-    // resolves an @aidlc/spaces/default/memory/<file> mention and pulls its
-    // content into context — now lives in the gated e2e test
-    // tests/e2e/t-exec-codex-memory-include.serial.test.ts (verified green
-    // 2026-06-24, codex-cli 0.139.0 on Bedrock; the earlier spike's exit-124
-    // hang is resolved). So the seam is no longer doc-verified-only.
+  test("8: Codex ships no resolver seam; the engine hands each step its rules, and AGENTS.md ships", () => {
+    // Codex has no ambient include: the engine reads the active space's files
+    // (aidlc-steering.ts rulesContentEntries follows the active-space cursor
+    // when no AIDLC_RULES_DIR is set) and hands each step its rules. The root
+    // AGENTS.md ships for Codex's auto-merge. The LIVE probe of the rules
+    // reaching a `codex exec` run lives in the gated e2e test
+    // tests/e2e/t-exec-codex-memory-include.serial.test.ts.
     const config = readFileSync(
       join(REPO_ROOT, "dist", "codex", ".codex", "config.toml"),
       "utf-8",
     );
-    expect(config).toContain('AIDLC_RULES_DIR = "aidlc/spaces/default/memory"');
+    expect(config).not.toContain("AIDLC_RULES_DIR");
+    expect(config).not.toContain("[shell_environment_policy]");
     // .codex/aidlc-rules/ (the old per-harness copy) is gone.
     expect(existsSync(join(REPO_ROOT, "dist", "codex", ".codex", "aidlc-rules"))).toBe(false);
     // The root AGENTS.md (Codex's directory-merge surface) ships.

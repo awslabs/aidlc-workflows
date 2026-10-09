@@ -720,7 +720,7 @@ describe("bounded guard-remedy liveness", () => {
       ).toBe(false);
       expect(
         refusal.remedies.some((remedy) =>
-          remedy.action === "Request the next permitted review for the current attempt."
+          remedy.action.startsWith("Request the next permitted review for the current attempt")
         ),
       ).toBe(false);
     }
@@ -765,7 +765,7 @@ describe("bounded guard-remedy liveness", () => {
       ).toBe(false);
       expect(
         refusal.remedies.some((remedy) =>
-          remedy.action === "Request the next permitted review for the current attempt."
+          remedy.action.startsWith("Request the next permitted review for the current attempt")
         ),
       ).toBe(false);
     }
