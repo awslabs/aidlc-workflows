@@ -70,6 +70,7 @@ import {
   writeSessionPidEntry,
   writeActiveDirectiveMarker,
   stateDigest,
+  noteHelperSession,
 } from "../../core/tools/aidlc-lib.ts";
 import {
   DEFAULT_RECORD_DIR,
@@ -79,6 +80,7 @@ import {
   seededAuditDir,
   seededRecordDir,
   seededStateFile,
+  seedBoltDag,
 } from "../harness/fixtures.ts";
 import { envWithoutCommandOnPath } from "../harness/test-command-paths.ts";
 
@@ -1460,6 +1462,55 @@ describe("t149 Codex hook adapter (live-captured payload fixtures)", () => {
       rmSync(dir, { recursive: true, force: true });
     }
   });
+
+  // PID ancestry is the conflict precondition; don't report a false Green
+  // on hosts where native process inspection is unavailable.
+  const canReadProcessTree = spawnSync("ps", ["-p", String(process.pid), "-o", "ppid="], {
+    encoding: "utf8", timeout: NATIVE_STARTUP_TIMEOUT_MS,
+  }).status === 0;
+  for (const thread of ["current-codex-thread", "helper-codex-thread"]) {
+    test.skipIf(!canReadProcessTree)(`resolved Codex session survives child routes (${thread})`, () => {
+      const dir = scratchProject(true);
+      try {
+        seedBoltDag(dir, ["alpha"]);
+        writeSessionBinding(dir, "current-codex-thread", DEFAULT_SPACE, DEFAULT_RECORD_DIR, "switch");
+        if (thread === "helper-codex-thread") noteHelperSession(dir, "current-codex-thread", thread);
+        const other = createIntent(dir, "another-chat", DEFAULT_SPACE, "feature");
+        setActiveIntentCursor(dir, other.dirName, DEFAULT_SPACE);
+        writeSessionPidEntry(dir, process.pid, "previous-codex-thread");
+        const env = { ...process.env, CODEX_THREAD_ID: thread, AIDLC_SESSION_OVERRIDE: undefined, AIDLC_SESSION_OVERRIDE_SOURCE: undefined, CLAUDE_PROJECT_DIR: undefined };
+        const run = (args: string[], extra: NodeJS.ProcessEnv = {}) => spawnSync("bun", args, {
+          cwd: dir, encoding: "utf8", env: { ...env, ...extra },
+          timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+        });
+        const probe = run(["--eval", `import {resolveWorkflowSelection,resolveSessionIdFromAncestry} from ${JSON.stringify(join(dir, ".codex", "tools", "aidlc-lib.ts"))}; console.log(JSON.stringify({selection:resolveWorkflowSelection(${JSON.stringify(dir)}),ancestor:resolveSessionIdFromAncestry(${JSON.stringify(dir)})}));`]);
+        expect(probe.status, probe.stderr).toBe(0);
+        const identity = JSON.parse(probe.stdout);
+        expect(identity.ancestor).toBe("previous-codex-thread");
+        expect(identity.selection.sessionId).toBe("current-codex-thread");
+        expect(identity.selection.intent).toBe(DEFAULT_RECORD_DIR);
+        const state = join(dir, ".codex", "tools", "aidlc-state.ts");
+        for (const args of [["start"], ["complete", "--wave"]]) {
+          const result = run([state, "unit", ...args, "--stage", "functional-design", "--unit", "alpha", "--project-dir", dir]);
+          const text = `${result.stdout ?? ""}${result.stderr ?? ""}`;
+          expect(result.status).not.toBe(0); // A wrong route still refuses.
+          expect(text).not.toContain("Session override");
+          expect(text).toContain(args[0] === "start" ? "the engine currently routes" : "Refusing wave completion");
+          expect(readAudit(dir)).not.toContain("**Event**: UNIT_COMPLETED");
+        }
+        const stale = run([state, "unit", "start", "--stage", "functional-design", "--unit", "alpha", "--project-dir", dir], { AIDLC_SESSION_OVERRIDE: "unrelated-thread" });
+        expect(stale.status).not.toBe(0);
+        expect(`${stale.stdout}${stale.stderr}`).toContain("Session override");
+        // Exercise the inverse boundary: orchestrate -> state. The cursor is
+        // another chat's record, and only the resolved chat may be parked.
+        const parked = run([join(dir, ".codex", "tools", "aidlc-orchestrate.ts"), "park", "--project-dir", dir]);
+        expect(parked.status, parked.stderr).toBe(0);
+        expect(JSON.parse(parked.stdout).kind).toBe("parked");
+        expect(readAudit(dir)).toContain("**Event**: WORKFLOW_PARKED");
+        expect(readRecordAudit(dir, other.dirName)).not.toContain("**Event**: WORKFLOW_PARKED");
+      } finally { rmSync(dir, { recursive: true, force: true }); }
+    });
+  }
 
   test("11a: two compact starts with a state change between them render FRESH context (replay-cache exemption)", () => {
     // Codex SessionStart input has no turn_id: two DISTINCT compactions in one

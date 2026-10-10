@@ -313,6 +313,7 @@ import {
   resolveProjectDir,
   resolveProjectFlag,
   resolveWorkflowSelection,
+  hookChildEnv,
   delegatedWorktreeIntent,
   scopeCostSummary,
   singleStageAttemptIsOpen,
@@ -728,13 +729,9 @@ function engineRelativeRecordDir(projectDir: string): string | null {
 function engineChildEnv(
   extra: Record<string, string> = {},
 ): Record<string, string | undefined> {
-  return {
-    ...process.env,
-    ...extra,
-    ...(engineSessionId
-      ? { AIDLC_SESSION_OVERRIDE: engineSessionId }
-      : {}),
-  };
+  // The parent already resolved this conversation at the selection boundary.
+  // Carry that identity as a pair, including a helper thread's resolved root.
+  return hookChildEnv(engineProjectDir ?? "", engineSessionId, extra);
 }
 
 // The person's only in-session word that a host is skipping every hook: a

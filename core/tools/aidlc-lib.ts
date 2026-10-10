@@ -6745,7 +6745,8 @@ export function resolveSessionIdFromAncestry(projectDir: string): string | null 
   return resolved;
 }
 
-// Build a hook-spawned child's environment from authoritative payload identity.
+// Build a child environment from authoritative payload identity or a workflow
+// session already resolved at the parent command's selection boundary.
 // A valid payload always carries the private source marker, so the selection
 // chokepoint lets payload identity win without weakening bare env refusal. It
 // used to be set only when this process's ancestry walk named a different

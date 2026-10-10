@@ -387,6 +387,16 @@ still beat in the record before each engine command. Codex trusts hooks by
 their registration, so this change asks the person to trust the project's hooks
 once more on upgrade (see the Codex guide).
 
+When a command spawns another engine command, it carries the session already
+resolved by the parent's workflow-selection boundary through `hookChildEnv`.
+The session override and its source marker stay together; otherwise a Codex
+thread accepted by the parent can become a bare override in the child and
+conflict with an older session mapped to the host's persistent process.
+Helper threads retain their resolved root chat, and a conflicting bare override
+is still rejected before the parent spawns anything. This does not change any
+approval, artifact, or source fingerprint.
+
+
 Codex runs UserPromptSubmit for every input to a thread, including a
 subagent's: the brief `spawn_agent` sends and each follow-up the agent sends it
 arrive as `prompt` under the root `session_id`. A thread-spawned subagent's
