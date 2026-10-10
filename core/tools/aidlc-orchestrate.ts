@@ -280,6 +280,7 @@ import {
   PHASES,
   parseTeamBoardArgs,
   parseWorkspaceCommand,
+  isWorkspaceNoun,
   nextArgsCarryRequestWords,
   type NextLineReading,
   nextTokenKind,
@@ -3915,7 +3916,14 @@ export function parseNextFlags(argv: string[]): ParsedFlags {
   // record and for the print, and routeNext returns the one reading step.
   // An untaken flag keeps its own fields, set by the loop below.
   const reading = readNextLine(args);
-  if (reading.kind !== "exact" && reading.kind !== "words" && reading.kind !== "untaken-flag") {
+  // A workspace noun with a word that names no record of theirs already has its
+  // own step, which names that noun's verbs and the records there
+  // (unknownWorkspaceWordStep), so the command stays parsed and that step runs.
+  // The seams read the same reading and stand back from the line either way.
+  if (
+    reading.kind === "value" || reading.kind === "plan-word" ||
+    (reading.kind === "noun" && !isWorkspaceNoun(reading.noun))
+  ) {
     const said = args.join(" ").replace(ENTRY_WORD_PREFIX, "").trim();
     return { readingStep: reading, ...(said.length > 0 ? { intent: said } : {}) };
   }
@@ -14233,9 +14241,16 @@ function unknownWorkspaceWordStep(
   const names = command.explicit
     ? `\`${noun} switch ${name}\` names no ${noun}: none is named "${name}"`
     : `\`${noun} ${name}\` names no ${noun} verb, and no ${noun} is named "${name}"`;
+  // With a sentence of theirs after the name, the noun may be their own first
+  // word ("intent is to build a notes app"), so the way to keep every word of
+  // it is named too; a mistyped verb or name alone has no such reading.
+  const theirs = (command.words?.length ?? 0) > 0
+    ? ` If \`${noun}\` is their own first word and the line is a request, run ` +
+      `\`${aidlcToolInvocation("orchestrate")} next -- ${typed}\` instead, which keeps every word of theirs.`
+    : "";
   return `${names}, so nothing ran and nothing changed. The ${noun} verbs are: ${verbs}; run one as ` +
     `\`${aidlcDispatcherInvocation(noun)} <verb> ...\`. ${records} The person typed: "${typed}". Read what they meant ` +
-    "and run that command; if you cannot tell, ask them once in plain words.";
+    `and run that command; if you cannot tell, ask them once in plain words.${theirs}`;
 }
 
 // Complete the non-stage resume-choice round-trip by ROUTING the choice, not

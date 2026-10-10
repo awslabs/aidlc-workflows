@@ -1098,9 +1098,12 @@ export function isReadOnlyNextArgv(argv: readonly string[]): boolean {
   // that runs before any agent reads the line must stand back from it, which is
   // what readNextLine answers for both of us. Only an exact line is this
   // engine's own command.
-  if (readNextLine(args).kind !== "exact") return isRetiredOnlyNextArgv(args);
   if (isRetiredOnlyNextArgv(args)) return true;
+  // A modifier whose value this engine refuses is its own terminal refusal, and
+  // stays one when the refusal becomes a reading step: either way the turn
+  // carries no workflow work (Full Suite 36549553601).
   if (isRefusedModifierNextArgv(args)) return true;
+  if (readNextLine(args).kind !== "exact") return false;
   if (args.length === 1 && (args[0] === "help" || args[0] === "-h")) return true;
   const verb = leadingOrchestratorVerb(args);
   if (verb === "team-board") return true;
@@ -39267,10 +39270,12 @@ export function readNextLine(argv: readonly string[]): NextLineReading {
   if (head.length === 0) return mark + 1 < args.length ? { kind: "words" } : { kind: "exact" };
 
   // A leading noun owns its argv, and that noun's own parser says whether it can
-  // read the rest as its command. A noun followed by a word that is none of its
-  // verbs is the person's sentence (`intent is to build a notes app`), which
-  // this engine must not run as a command before the agent has read it.
-  const theirSentenceAfter = head.length > 1 && !head[1].startsWith("-");
+  // read the rest as its command. One word after the noun is a verb or a name,
+  // however it is spelt, so the engine's own refusal naming its verbs is the
+  // answer. Two or more words of theirs cannot be either, so the noun may be
+  // their own first word (`intent is to build a notes app`) and only the agent
+  // can tell; this engine must not run that as a command first.
+  const theirSentenceAfter = head.length > 2 && !head[1].startsWith("-");
   const plugin = parsePluginCommand(head);
   if (plugin.kind !== "not-plugin") {
     return plugin.kind === "error" && theirSentenceAfter ? { kind: "noun", noun: head[0] } : { kind: "exact" };
@@ -39339,8 +39344,17 @@ export function readNextLine(argv: readonly string[]): NextLineReading {
     // a plan, which is ambiguous with their own first word.
     const plan = words[0];
     const colon = plan.match(/^([A-Za-z][\w-]*):(?:\s+([\s\S]*))?$/);
-    if (colon && validScopes().has(colon[1].toLowerCase())) return { kind: "exact" };
-    if (validScopes().has(plan)) {
+    // The plan names come from the stage graph. A tree without it (a seam
+    // reading a line before the engine is installed, a bare checkout) reads
+    // their words as words, which is the reading that acts on nothing.
+    let plans: ReadonlySet<string>;
+    try {
+      plans = validScopes();
+    } catch {
+      return { kind: "words" };
+    }
+    if (colon && plans.has(colon[1].toLowerCase())) return { kind: "exact" };
+    if (plans.has(plan)) {
       return words.length === 1 && mark < 0 ? { kind: "exact" } : { kind: "plan-word", scope: plan };
     }
     return { kind: "words" };
