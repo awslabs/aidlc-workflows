@@ -171,7 +171,9 @@ import {
   bindCodeGenerationWorktreeApproval,
   codeGenerationDiscardedBase,
   codeGenerationExecutionAllowed,
+  codeGenerationRecordDir,
   evaluateCodeGenerationApproval,
+  questionsFileApprovalFingerprint,
   readCodeGenerationWorktreeSourceBaseline,
   validateCodeGenerationWorktreeApproval,
   validateCodeGenerationForkApproval,
@@ -1834,6 +1836,38 @@ function emitSwarmDegraded(pd: string, batch: string, requested: DriverName): vo
 // Each converged row carries the exact attempt stamp captured by prepare.
 // Finalize must never recompute this from current state: a late retry against a
 // preserved prior-attempt worktree would otherwise be mislabeled as current.
+// The authority a convergence row carries: the verification command and the
+// reviewed source it was verified at. A later finalize compares its fresh
+// values with the row on record through the same fields.
+function convergedRowFields(
+  batch: string,
+  unit: string,
+  attempt: SwarmAttemptStamp,
+  binding?: SourceBinding,
+  sourceFreshnessBypassed = false,
+  commandSha256?: string,
+): Record<string, string> {
+  return {
+    "Batch number": batch,
+    "Unit name": unit,
+    Stage: attempt.stage,
+    "Run floor": attempt.floor,
+    ...(commandSha256 ? { "Command SHA-256": commandSha256 } : {}),
+    ...(binding
+      ? {
+          "Source Fingerprint": binding.fingerprint,
+          "Source Commit": binding.commit,
+        }
+      : sourceFreshnessBypassed
+        ? { "Source Freshness Bypass": "true" }
+        : {}),
+  };
+}
+
+// The reviewed source is compared by content: each finalize binds the reviewed
+// tree under a fresh commit, so the commit differs while the source is the same.
+const CONVERGED_AUTHORITY_FIELDS = ["Command SHA-256", "Source Fingerprint", "Source Freshness Bypass"] as const;
+
 function emitUnitConverged(
   pd: string,
   batch: string,
@@ -1845,21 +1879,7 @@ function emitUnitConverged(
 ): void {
   appendAuditEntry(
     "SWARM_UNIT_CONVERGED",
-    {
-      "Batch number": batch,
-      "Unit name": unit,
-      Stage: attempt.stage,
-      "Run floor": attempt.floor,
-      ...(commandSha256 ? { "Command SHA-256": commandSha256 } : {}),
-      ...(binding
-        ? {
-            "Source Fingerprint": binding.fingerprint,
-            "Source Commit": binding.commit,
-          }
-        : sourceFreshnessBypassed
-          ? { "Source Freshness Bypass": "true" }
-          : {}),
-    },
+    convergedRowFields(batch, unit, attempt, binding, sourceFreshnessBypassed, commandSha256),
     pd
   );
 }
@@ -2302,6 +2322,61 @@ function releasePreparationRegistration(pd: string, unit: string): void {
   });
 }
 
+// The worktree of a Unit prepared in the current attempt, or null. It exists,
+// its metadata names this unit, batch, stage, attempt and repository (the
+// fields resume compares), and the attempt's own SWARM_STARTED named the unit.
+// A failed fork (no start row), another attempt's leftover and a discarded
+// worker are not retained; they take the ordinary path, which refuses as before.
+function retainedSwarmWorktree(
+  pd: string, batch: string, unit: string, identity: BoltIdentity, attempt: SwarmAttemptStamp, repoName: string | null,
+): string | null {
+  const worktree = identity.dir;
+  const metaPath = join(worktree, ".aidlc", "worktree-meta.json");
+  if (!existsSync(worktree) || !existsSync(metaPath)) return null;
+  let meta: Record<string, unknown>;
+  try {
+    assertNoSymlinkInChainOrThrow(realpathSync(worktree), relative(worktree, metaPath));
+    meta = JSON.parse(readRegularFileNoFollowOrThrow(metaPath, "prepared worktree metadata").toString("utf-8"));
+  } catch {
+    return null;
+  }
+  if (meta.version !== 1 || meta.boltSlug !== identity.slug || meta.swarmUnit !== unit || meta.swarmBatch !== batch ||
+    meta.swarmStage !== attempt.stage || meta.swarmFloor !== attempt.floor || meta.repoSelector !== repoName) return null;
+  const prepared = preparedSwarmAttempt(pd, batch, unit, identity);
+  return prepared !== null && prepared.stage === attempt.stage && prepared.floor === attempt.floor ? worktree : null;
+}
+
+// A claimed Unit whose records already merged back in this attempt: its slug has
+// left Bolt Refs and the attempt's BOLT_STARTED is followed by BOLT_COMPLETED,
+// STATE_MERGED, AUDIT_MERGED and its own SWARM_UNIT_CONVERGED row. Returns that
+// convergence row (the latest), or null. A finalize run again after the Unit's
+// landing failed reads it to tell a plain re-invocation from a retry whose
+// source or verification command moved.
+function mergedBackConvergence(
+  pd: string, batch: string, unit: string, slug: string, attempt: SwarmAttemptStamp | undefined,
+): AuditShardEvent | null {
+  if (!attempt) return null;
+  if (parseRefsList(getField(readStateFile(pd), "Bolt Refs") ?? "").includes(slug)) return null;
+  const rows = readAuditShardEvents(pd);
+  const started = latestResumeRow(rows.filter((row) =>
+    row.event === "BOLT_STARTED" && auditBlockField(row.block, "Bolt slug") === slug));
+  if (!started) return null;
+  const followed = (event: string, field: string, value: string): boolean => rows.some((row) =>
+    row.event === event && auditBlockField(row.block, field) === value && attemptEventDefinitelyBefore(started, row));
+  if (!followed("BOLT_COMPLETED", "Bolt slug", slug) || !followed("STATE_MERGED", "Bolt slug", slug) ||
+    !followed("AUDIT_MERGED", "Bolt slug", slug)) return null;
+  return latestResumeRow(rows.filter((row) => row.event === "SWARM_UNIT_CONVERGED" &&
+    auditBlockField(row.block, "Unit name") === unit && auditBlockField(row.block, "Batch number") === batch &&
+    auditBlockField(row.block, "Stage") === attempt.stage && auditBlockField(row.block, "Run floor") === attempt.floor &&
+    attemptEventDefinitelyBefore(started, row)));
+}
+
+// Whether a convergence row on record carries exactly the authority this
+// finalize verified: the same command digest and the same reviewed source.
+function convergenceRowCurrent(row: AuditShardEvent, fresh: Record<string, string>): boolean {
+  return CONVERGED_AUTHORITY_FIELDS.every((field) => (auditBlockField(row.block, field) ?? null) === (fresh[field] ?? null));
+}
+
 function resolveSwarmSelection(projectDir: string, flags: Record<string, string>): WorkflowSelection {
   const ambient = resolveWorkflowSelection(projectDir);
   if (flags.intent === undefined && flags.space === undefined) return ambient;
@@ -2426,6 +2501,20 @@ function handlePrepare(rest: string[]): void {
       identityErrors.set(unit, error.message);
     }
   }
+  // A Unit already prepared in this attempt keeps its worktree. The person's
+  // Retry after a failed landing, or a session that comes back, runs this
+  // command again; the Unit's fork, Bolt start and approval transfer already
+  // happened, so nothing is re-forked and the parent's moved source (a staged
+  // landing, a peer that landed first) is no reason to ask for the plan again.
+  // A changed plan still fails the approval check above; a checkpoint revision,
+  // a discard and --resume-existing keep their own paths.
+  const retained = new Map<string, string>();
+  if (!resumeExisting) {
+    for (const [unit, identity] of identities) {
+      const worktree = retainedSwarmWorktree(projectDir, flags.batch, unit, identity, attempt, repoName);
+      if (worktree !== null) retained.set(unit, worktree);
+    }
+  }
   if (resumeExisting) {
     if (!selected.intent || relativeRecordDir(projectDir, selected.intent, selected.space) !== relativeRecordDir(projectDir)) {
       fail("--resume-existing must target the active intent and space");
@@ -2469,7 +2558,7 @@ function handlePrepare(rest: string[]): void {
       // Validate the entire batch before the first fork or generation receipt.
       // An approved dirty parent is not a reproducible worktree base.
       for (const unit of units) {
-        if (identityErrors.has(unit)) continue;
+        if (identityErrors.has(unit) || retained.has(unit)) continue;
         if (!resumes.has(unit) || resumes.get(unit)!.recreate) {
           const resume = resumes.get(unit) ?? discardedPreparations.get(unit);
           validateCodeGenerationForkApproval(
@@ -2485,7 +2574,7 @@ function handlePrepare(rest: string[]): void {
   if (requiresExecutionAllowance) {
     try {
       for (const unit of units) {
-        if (identityErrors.has(unit)) continue;
+        if (identityErrors.has(unit) || retained.has(unit)) continue;
         swarmChangeNotices.push(...beginCodeGeneration(projectDir, { unit }));
       }
     } catch (error) {
@@ -2509,6 +2598,8 @@ function handlePrepare(rest: string[]): void {
     ok: boolean;
     worktree_path?: string;
     resumed?: boolean;
+    retained?: boolean;
+    approval_transferred?: boolean;
     revision?: string;
     archive_path?: string;
     error?: string;
@@ -2526,6 +2617,44 @@ function handlePrepare(rest: string[]): void {
       continue;
     }
     const identity = identities.get(unit)!;
+    const kept = retained.get(unit);
+    if (kept !== undefined) {
+      // A plan revised and approved again since the worktree was prepared is
+      // transferred to it, as the first prepare did, so the worker builds the
+      // plan the person approved last. An unchanged approval leaves the
+      // worktree exactly as it is.
+      let transferred = false;
+      if (requiresExecutionAllowance) {
+        const parentFingerprint = evaluateCodeGenerationApproval(projectDir, { unit }).approvalFingerprint;
+        const childQuestions = join(codeGenerationRecordDir(kept, unit), "code-generation-questions.md");
+        const childFingerprint = existsSync(childQuestions)
+          ? questionsFileApprovalFingerprint(readFileSync(childQuestions, "utf-8")) : null;
+        if (parentFingerprint && parentFingerprint !== childFingerprint) {
+          try {
+            // The new approval starts its own protected Code Generation, then
+            // reaches the worktree the way the first prepare transferred the old one.
+            swarmChangeNotices.push(...beginCodeGeneration(projectDir, { unit }));
+            bindCodeGenerationWorktreeApproval(projectDir, kept, unit);
+            transferred = true;
+          } catch (error) {
+            // Its work has moved away from the main code the new approval
+            // describes (a peer landed first, or main changed), so the new plan
+            // cannot be handed to this build in place. Nothing is changed; the
+            // person chooses between the work it holds and the plan they approved.
+            prepared.push({
+              unit, ok: false, worktree_path: kept, retained: true,
+              error: `Unit ${unit}: the plan approved again could not be handed to its existing build, ` +
+                `whose work no longer lines up with the main code (${error instanceof Error ? error.message : String(error)}). ` +
+                "The build and its work are kept. To build the new plan, set this Unit's current work aside (abort and discard it) " +
+                "and run prepare again; to keep the current work instead, land it as it is.",
+            });
+            continue;
+          }
+        }
+      }
+      prepared.push({ unit, ok: true, worktree_path: kept, retained: true, ...(transferred ? { approval_transferred: true } : {}) });
+      continue;
+    }
     const resume = resumes.get(unit);
     const discarded = resume ?? discardedPreparations.get(unit);
     if (resume && !resume.recreate) {
@@ -2697,7 +2826,9 @@ function handlePrepare(rest: string[]): void {
   // before creation would let a failed re-prepare in a later stage attempt
   // relabel an old preserved worktree with the current attempt, allowing stale
   // data to pass finalize's exact-attempt check.
-  const readyUnits = prepared.filter((unit) => unit.ok && !resumes.get(unit.unit)?.alreadyResumed).map((unit) => unit.unit);
+  const readyUnits = prepared
+    .filter((unit) => unit.ok && !unit.retained && !resumes.get(unit.unit)?.alreadyResumed)
+    .map((unit) => unit.unit);
   if (readyUnits.length > 0) {
     emitSwarmStarted(
       projectDir,
@@ -3015,9 +3146,32 @@ function handleFinalize(rest: string[]): void {
   // the lock was ever held; complete --merge reaches the add/add-conflict abort
   // pinned at the composed surface by the worktree-merge tests.
   const mergeFailures: { unit: string; detail: string }[] = [];
+  // A Unit whose records merged back earlier in this attempt (finalize run again
+  // after its landing failed) is reported converged as it stands: the Bolt's
+  // state and audit never merge twice. With the same command and reviewed
+  // source, no second convergence row is written. When the Retry's worker moved
+  // the source, or the person authorized another verification command, the
+  // re-reviewed record artifacts land again and a new convergence row carries
+  // the current authority, so the landing and the batch checkpoint read it.
+  const mergedBefore = new Set<string>();
   for (const unit of [...genuine].sort()) {
     const boltSlug = swarmBoltSlug(unit);
     const recordSnapshot = recordSnapshots.get(unit);
+    const mergedBack = mergedBackConvergence(projectDir, batch, unit, boltSlug, preparedAttempts.get(unit));
+    if (mergedBack !== null) {
+      const fresh = convergedRowFields(
+        batch, unit, preparedAttempts.get(unit)!, sourceBindings.get(unit), sourceFreshnessBypassed, check.sha256,
+      );
+      if (convergenceRowCurrent(mergedBack, fresh)) {
+        mergedBefore.add(unit);
+        continue;
+      }
+      const refreshError = recordSnapshot
+        ? mergeReviewedRecordSnapshot(projectDir, unit, recordSnapshot)
+        : `reviewed record snapshot is missing for unit "${unit}"`;
+      if (refreshError !== null) mergeFailures.push({ unit, detail: refreshError });
+      continue;
+    }
     const recordMergeError = recordSnapshot
       ? mergeReviewedRecordSnapshot(projectDir, unit, recordSnapshot)
       : `reviewed record snapshot is missing for unit "${unit}"`;
@@ -3048,7 +3202,7 @@ function handleFinalize(rest: string[]): void {
   const mergeFailed = new Set(mergeFailures.map((f) => f.unit));
   for (const r of results) {
     if (r.status === "converged") {
-      if (!mergeFailed.has(r.unit)) {
+      if (!mergeFailed.has(r.unit) && !mergedBefore.has(r.unit)) {
         const attempt = preparedAttempts.get(r.unit);
         if (attempt) {
           emitUnitConverged(
