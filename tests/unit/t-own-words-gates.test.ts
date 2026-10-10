@@ -19,13 +19,14 @@ import { NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS, NATIVE_STARTUP_TIMEOUT_MS, remai
 import { afterEach, beforeEach, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import {
   AIDLC_SRC,
   cleanupTestProject,
   createTestProject,
   FIXTURES_DIR,
   resetAidlcEnv,
+  seededAuditShard,
   seededRecordDir,
   seededStateFile,
   seedStateFile,
@@ -897,7 +898,23 @@ describe("when the engine cannot tell which chat answered", () => {
   afterEach(() => cleanupTestProject(proj));
 
   const keptMessageId = (): string | null =>
-    auditBlockField(events(proj, "HUMAN_TURN").at(-1)?.block ?? "", "Message Id");
+    auditBlockField(
+      events(proj, "HUMAN_TURN").filter((row) => auditBlockField(row.block, "Session") === SESSION).at(-1)?.block ?? "",
+      "Message Id",
+    );
+
+  // A teammate's committed shard, named so it sorts after this machine's, with
+  // its own earlier showing of this same gate and its own reply.
+  function teammateShard(): void {
+    const mine = seededAuditShard(proj);
+    writeFileSync(join(dirname(mine), `zz-teammate-${basename(mine)}`), [
+      "## STAGE_AWAITING_APPROVAL", "**Timestamp**: 2026-01-01T00:00:00Z",
+      "**Event**: STAGE_AWAITING_APPROVAL", `**Stage**: ${slug}`, "", "---", "",
+      "## HUMAN_TURN", "**Timestamp**: 2026-01-01T00:00:01Z", "**Event**: HUMAN_TURN",
+      "**Session**: 01995000-7a11-7000-8000-0000000000aa", "**Origin**: person",
+      "**Source**: typed", "**Message Id**: aaaaaaaa", "", "---", "",
+    ].join("\n"));
+  }
 
   const approves = (extra: Record<string, string> = {}) => run(
     ORCHESTRATE,
@@ -931,5 +948,16 @@ describe("when the engine cannot tell which chat answered", () => {
     const block = events(proj, "GATE_APPROVED").at(-1)?.block ?? "";
     expect(auditBlockField(block, "Person Reply")).toBeNull();
     expect(auditBlockField(block, "Message Id")).toBeNull();
+  });
+  // Shards are per clone and committed, and a concatenated read lists them in
+  // filename order, which is not causal order. A teammate's shard must not
+  // supply the pointer for an approval recorded here.
+  test("a teammate's shard sorting after this machine's does not supply the pointer", () => {
+    teammateShard();
+    const approved = approves({ AIDLC_SESSION_OVERRIDE: "" });
+    expect(approved.rc, approved.out).toBe(0);
+    const block = events(proj, "GATE_APPROVED").at(-1)?.block ?? "";
+    expect(auditBlockField(block, "Message Id")).not.toBe("aaaaaaaa");
+    expect(auditBlockField(block, "Message Id")).toBe(keptMessageId());
   });
 });

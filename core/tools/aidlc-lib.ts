@@ -27875,7 +27875,17 @@ export function personsGateMessagePointer(
   gate: { stage: string; unit?: string },
 ): string | null {
   try {
-    const rows = readAuditShardEvents(projectDir);
+    // This machine's own shard only, as the kept-words reader above does.
+    // Shards are per clone and committed, and a concatenated read lists them
+    // in filename order, which is not causal order (see AuditShardEvent): a
+    // teammate's shard can sort either side of ours and carry its own showing
+    // of this same gate. The showing this approval answers happened here and
+    // the hook kept their reply here, so one shard is both necessary and
+    // enough; a gate shown on another machine leaves no pointer rather than
+    // the wrong one.
+    const mine = projectRelativePath(projectDir, auditFilePath(projectDir));
+    const rows = readAuditShardEvents(projectDir)
+      .filter((row) => projectRelativePath(projectDir, row.shard) === mine);
     let shown = -1;
     rows.forEach((row, at) => {
       if (
