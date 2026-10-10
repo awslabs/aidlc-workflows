@@ -39355,10 +39355,16 @@ export function readNextLine(argv: readonly string[]): NextLineReading {
     }
     if (colon && plans.has(colon[1].toLowerCase())) return { kind: "exact" };
     if (plans.has(plan)) {
-      // The plan's name alone is the plan, and so is the plan's name with their
-      // words marked as theirs after it (`bugfix -- --enable`): the mark says
-      // which is which. Unmarked words after it are the ambiguous form.
-      return words.length === 1 ? { kind: "exact" } : { kind: "plan-word", scope: plan };
+      // Three ways a plan's name can lead, and only one is ambiguous.
+      // Its own argument with the rest of the request in one more (or none) is
+      // the deliberate naming the orchestrator skill asks the agent for
+      // (`next classic 'Build a notes app'`), and the mark says the same
+      // (`bugfix -- --enable`): the reading is already made, so the engine acts
+      // on it. Loose words after it, as a harness hands a raw line over
+      // (`bugfix Fix duplicate todos`, `classic car rental website`), is the
+      // person's own sentence opening with a word that is also a plan's name,
+      // and only the agent can tell which they meant.
+      return words.length <= 2 ? { kind: "exact" } : { kind: "plan-word", scope: plan };
     }
     return { kind: "words" };
   }

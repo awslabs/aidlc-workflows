@@ -412,10 +412,11 @@ describe("t114 scope precedence + validation", () => {
       freeTextComposed: "print Dispatch the composer agent",
       freeTextComposedInFlight: false,
       typedScope: "print intent create --scope bugfix",
-      // A plan's name at the start of their own sentence is ambiguous with
-      // their first word, so both readings go to the agent and nothing is
-      // created; a plan named by its flag still acts (typedScope above).
-      positionalScope: "print cannot tell which they meant",
+      // A plan's name in its own argument with the request in one more is the
+      // naming the orchestrator skill asks the agent for, so it still acts; a
+      // raw line of loose words after a plan word is the ambiguous form
+      // (t-three-ways-to-read-a-line).
+      positionalScope: "print intent create --scope bugfix",
     });
     expect(newWork("retired-lane")).toEqual(known);
   });
