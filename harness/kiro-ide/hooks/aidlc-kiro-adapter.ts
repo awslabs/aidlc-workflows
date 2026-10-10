@@ -178,7 +178,7 @@ import { normalizeRetiredGuardPolicyField } from "../tools/aidlc-guard-switch.ts
 import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import { aidlcEngineCommand, aidlcInvocation } from "../tools/aidlc-runtime-paths.ts";
 import { terminalDispatcherArgv } from "../tools/aidlc.ts";
-import { kiroIdeTurnOpen, noteKiroIdeTurn } from "../tools/aidlc-rules-held.ts";
+import { forgetRulesDelivered, kiroIdeTurnOpen, noteKiroIdeTurn } from "../tools/aidlc-rules-held.ts";
 import {
   canonicalWriteTool,
   isAuditedWriteTool,
@@ -1149,7 +1149,10 @@ function cmdMetacharacterHazard(command: string): CmdHazard | null {
 const FILE_WRITER = /^(?:out-file|set-content|add-content|tee-object|tee)(?:\.exe)?$/i;
 const DISCARD = /^(?:\$null|nul|\/dev\/null)$/i;
 
-function topLevelParts(text: string, separators: RegExp): string[] {
+// With `redirectAmpersand`, an & right after > (`2>&1`, `>&2`) is the redirect's
+// and not a statement break. Only the bookkeeping read below asks for it; the
+// file-redirect refusal keeps its answers exactly as they were.
+function topLevelParts(text: string, separators: RegExp, redirectAmpersand = false): string[] {
   const parts: string[] = [];
   let quote: string | null = null;
   let start = 0;
@@ -1165,6 +1168,7 @@ function topLevelParts(text: string, separators: RegExp): string[] {
     }
     const found = separators.exec(text.slice(at));
     if (found !== null && found.index === 0) {
+      if (redirectAmpersand && found[0] === "&" && text[at - 1] === ">") continue;
       parts.push(text.slice(start, at));
       at += found[0].length - 1;
       start = at + 1;
@@ -1189,7 +1193,10 @@ function isEngineCommand(segment: string): boolean {
   return tool === "aidlc" ? second.toLowerCase() === "engine" : true;
 }
 
-function stdoutToFile(segment: string): boolean {
+// Every target the segment's stdout is redirected to (`>`, `>>`, `1>`, `*>`),
+// unquoted; a > inside a quoted value is not one.
+function stdoutRedirectTargets(segment: string): string[] {
+  const targets: string[] = [];
   let quote: string | null = null;
   for (let at = 0; at < segment.length; at++) {
     const c = segment[at];
@@ -1209,9 +1216,13 @@ function stdoutToFile(segment: string): boolean {
     if (rest.startsWith(">")) rest = rest.slice(1);
     if (rest.startsWith("&")) continue;
     const target = rest.trim().split(/\s+/)[0]?.replace(/^["']|["']$/g, "") ?? "";
-    if (target !== "" && !DISCARD.test(target)) return true;
+    if (target !== "") targets.push(target);
   }
-  return false;
+  return targets;
+}
+
+function stdoutToFile(segment: string): boolean {
+  return stdoutRedirectTargets(segment).some((target) => !DISCARD.test(target));
 }
 
 function engineReplyToFile(command: string): boolean {
@@ -1220,6 +1231,43 @@ function engineReplyToFile(command: string): boolean {
     if (!isEngineCommand(pipeline[0] ?? "")) continue;
     if (stdoutToFile(pipeline[0])) return true;
     if (pipeline.slice(1).some((part) => FILE_WRITER.test(part.trim().split(/\s+/)[0] ?? ""))) return true;
+  }
+  return false;
+}
+
+// An AI-DLC step command, `orchestrate next` or `orchestrate continue`: its
+// reply is the step the agent acts on whole, and it carries the stage's rules.
+function isStepCommand(segment: string): boolean {
+  if (!isEngineCommand(segment)) return false;
+  const words = segment.trim().replace(/^[&.]\s+/, "").split(/\s+/).map((word) => word.replace(/^["']|["')]+$/g, ""));
+  const at = words.findIndex((word) => /^orchestrate$/i.test(word) || /aidlc-orchestrate\.ts$/i.test(word));
+  return at >= 0 && /^(?:next|continue)$/i.test(words[at + 1] ?? "");
+}
+
+// A step reply that left the tool result: a pipe into any program, a capture
+// (`out=$(...)`, a backtick, `$r = (...)`, `$x = aidlc ...`) or a discarded
+// stream. In a second run reported on #2167 the agent piped 70 of 117 steps
+// through a filter that dropped rules_content, and the engine, which records a
+// delivery as it prints the step, kept naming the rules as delivered to that
+// chat. Nothing is refused here: catch-up forgets what the chat's last step
+// named (aidlc-rules-held.ts forgetRulesDelivered), so its next step carries the
+// text again. Read by structure with the parser above, never by program name: a
+// | inside a quoted value never counts, a step inside quotes is not read, and a
+// redirect to a file never gets here (engineReplyToFile stops that command
+// before it runs). The reported commands put `2>&1` before the pipe, so this
+// read keeps the & of a redirect inside its statement; the refusal's read is
+// left as it is.
+function stepReplyLeftResult(command: string): boolean {
+  for (const statement of topLevelParts(command, /^(?:&&|\|\||;|\r?\n|&(?!>))/, true)) {
+    const pipeline = topLevelParts(statement, /^\|/);
+    const capture = /^\s*(\$?[A-Za-z_][A-Za-z0-9_]*\s*=\s*)?(\$\(|\(|`)?/.exec(pipeline[0] ?? "");
+    const segment = (pipeline[0] ?? "").slice(capture?.[0].length ?? 0);
+    if (!isStepCommand(segment)) continue;
+    const assigned = capture?.[1] !== undefined;
+    const substituted = capture?.[2] !== undefined && capture[2] !== "(";
+    const targets = stdoutRedirectTargets(segment);
+    const discarded = targets.length > 0 && targets.every((target) => DISCARD.test(target));
+    if (assigned || substituted || pipeline.length > 1 || discarded) return true;
   }
   return false;
 }
@@ -2189,6 +2237,10 @@ async function catchUpPendingCalls(card: "call" | "message" | "turn-end"): Promi
         claimed.done();
         continue;
       }
+      // A step reply the agent piped or captured away (stepReplyLeftResult) did
+      // not put its rules in front of it: forget what this chat's last step
+      // named, so its next step carries the text again (#2167).
+      if (stepReplyLeftResult(call.command)) forgetRulesDelivered(projectDir, call.session);
       const now = recordDirs(projectDir);
       const made = Object.entries(now).flatMap(([space, dirs]) =>
         dirs.filter((dir) => !(call.records[space] ?? []).includes(dir)).map((dir) => ({ space, dir })));
@@ -3234,9 +3286,12 @@ function buildForward(): Forward {
         // as one dispatch carrying every developer stage's prompt: a plan marker
         // on any stage then makes the whole pipeline a guarded dispatch, rather
         // than the first stage's prompt deciding for the rest.
+        // A named reviewer dispatch arrives as a Task too, as the developer's
+        // does: the core guard judges only the developer's and records a
+        // reviewer brief that already carries its verdict.
         const forwarded = developers.length > 1
           ? { ...developers[0], prompt: developers.map((t) => t.prompt).join("\n") }
-          : developers[0] ?? (generic ? targets[0] : undefined);
+          : developers[0] ?? (generic || targets.length === 1 ? targets[0] : undefined);
         if (forwarded) {
           return { hook: "aidlc-plan-approval-guard.ts", input: taskInput(forwarded) };
         }

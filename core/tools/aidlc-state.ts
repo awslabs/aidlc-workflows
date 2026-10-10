@@ -46,7 +46,7 @@ import {
   readVerificationCommandFile,
   withdrawProtectedQuestions,
   VERIFICATION_COMMAND_CHECKPOINT,
-  VERIFICATION_COMMAND_RECOVERY,
+  verificationCommandRecovery,
   constructionPolicyChangeAuthority,
   CONSTRUCTION_POLICY_RECOVERY,
   latestPersonTurn,
@@ -64,6 +64,7 @@ import {
   governedChangeControl,
   guardPolicyAcceptsChanges,
   editedReviewNotice,
+  dictatedReviewNotice,
   recordAcceptedChanges,
   inertPath,
   resolveChangeControl,
@@ -1141,7 +1142,7 @@ function handleSetConstructionVerificationCommand(args: string[]): void {
       ? command.command : command.command.replaceAll("$", "$$$$");
     const updated = setOrInsertField(content, "## Runtime State", VERIFICATION_COMMAND_CHECKPOINT, value);
     if (!authorizedVerificationCommand(pd, updated)) {
-      error("No current VERIFICATION_COMMAND_RECORDED with matching Command SHA-256 and User Input: Approve authorizes this command. " + VERIFICATION_COMMAND_RECOVERY);
+      error("No current VERIFICATION_COMMAND_RECORDED with matching Command SHA-256 and User Input: Approve authorizes this command. " + verificationCommandRecovery());
     }
     writeStateFile(pd, updated);
     // A new command checks the Units and batches still to be approved; the
@@ -3923,9 +3924,10 @@ function verifyGateOpeningGuards(
 
 // The gate tells the person, once and in one line, when the review it stands
 // on records a review edited after the reviewer finished (Review Edited After
-// Reviewer on the fresh terminal receipt). Strict only: relaxed and off said it
-// when the verdict was recorded, as an accepted change. The verdict and the
-// gate are unchanged: the person approves as today or has the reviewer run again.
+// Reviewer on the fresh terminal receipt) or a verdict the reviewer's dispatch
+// dictated (Review Verdict Dictated). Strict only: relaxed and off said it when
+// the verdict was recorded. The verdict and the gate are unchanged: the person
+// approves as today or has the reviewer run again.
 function sayEditedReview(
   pd: string,
   content: string,
@@ -3940,13 +3942,18 @@ function sayEditedReview(
     if (reviewClass === "none") return;
     const receipts = freshReviewReceipts(pd, content, stage, { reviewClass });
     const edited = receipts.editedVerdicts ?? new Set<string>();
+    const dictated = receipts.dictatedVerdicts ?? new Set<string>();
     // The stage gate speaks for every review it stands on: the stage's own, or
     // one per Unit of a per-unit stage; a Unit gate speaks for its Unit only.
     const scopes = unit === undefined
       ? [...(receipts.stageVerdict !== null ? [""] : []), ...receipts.unitVerdicts.keys()]
       : receipts.unitVerdicts.has(unit) ? [unit] : [];
-    const lines = scopes.filter((scope) => edited.has(scope))
-      .map((scope) => editedReviewNotice(stage.name, scope === "" ? undefined : scope));
+    const lines = [
+      ...scopes.filter((scope) => edited.has(scope))
+        .map((scope) => editedReviewNotice(stage.name, scope === "" ? undefined : scope)),
+      ...scopes.filter((scope) => dictated.has(scope))
+        .map((scope) => dictatedReviewNotice(stage.name, scope === "" ? undefined : scope)),
+    ];
     if (lines.length > 0) console.log(JSON.stringify({ change_notices: lines }));
   } catch {
     // The line is for the person; a scan that cannot run leaves the gate as it was.

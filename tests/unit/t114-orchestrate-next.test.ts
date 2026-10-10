@@ -1751,6 +1751,18 @@ describe("t114 retired flags are consumed, not description text", () => {
     expect(pendingDescription(proj, out)).toBe("document the retired --init");
   });
 
+  test.each([
+    [["document", "--choice", "in the CLI"], "document --choice in the CLI"],
+    [["--", "--choice", "Approve Plan"], "--choice Approve Plan"],
+    [["--", "--choice=Approve Plan"], "--choice=Approve Plan"],
+  ])("a literal --choice remains work the person requested: %j", (words, description) => {
+    proj = createOrchestrationTestProject();
+    seedStateFile(proj, MID_IDEATION);
+    const out = runNext(proj, ["--new-intent", "--scope", "poc", ...words]).out;
+    expect(out).toContain("intent create");
+    expect(pendingDescription(proj, out)).toBe(description);
+  });
+
   test("retired flags alone do not advance an active workflow", () => {
     proj = createOrchestrationTestProject();
     seedStateFile(proj, MID_IDEATION);

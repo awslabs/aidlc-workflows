@@ -25,6 +25,7 @@ import {
   type GuardRemedy,
   isPlainObject,
   type StageAnswerMode,
+  verificationCommandRecovery,
 } from "./aidlc-lib.ts";
 import {
   guardOperationMatchesCommand,
@@ -273,8 +274,8 @@ export interface RunStageDirective {
   // walking-skeleton gate, which the conductor resolves via report (the
   // classify round-trip — see GATE_UNRESOLVED above).
   gate: GateValue;
-  // Beside the unresolved gate, or a Unit's step with no gate of its own: the
-  // agent's next move in one sentence, so the step is taken with no skill loaded.
+  // Beside an unresolved gate, a verification command awaiting approval, or a
+  // Unit's step with no gate of its own: the agent's next move without a skill.
   gate_note?: string;
   // protocolNote(): the protocol files this step runs by, for a chat with no skill.
   protocol_note?: string;
@@ -1156,7 +1157,10 @@ export function withAgentNotes<T extends object>(
     notes.construction_policy_note = autonomyChoiceNote(boltInvocation);
   }
   if (d.kind === "run-stage") {
-    if (d.gate === GATE_UNRESOLVED) {
+    if ((d.construction_checkpoint as { command_authorized?: unknown } | undefined)?.command_authorized === false) {
+      const stateInvocation = invocation.replace(/aidlc-orchestrate\.ts$/, "aidlc-state.ts").replace(/ orchestrate$/, " state");
+      notes.gate_note = verificationCommandRecovery(typeof d.stage === "string" ? d.stage : undefined, logInvocation, stateInvocation);
+    } else if (d.gate === GATE_UNRESOLVED) {
       notes.gate_note = unresolvedGateNote(invocation);
     } else if (
       d.gate === false && typeof d.unit === "string" &&

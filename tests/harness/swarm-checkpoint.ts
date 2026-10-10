@@ -321,11 +321,11 @@ export function starts(pd: string, unit = "alpha") {
     auditBlockField(row.block, "Bolt slug") === boltSlugForUnit(unit));
 }
 
-export function reviewRevisedSource(pd: string, unit = "alpha"): void {
+export function reviewRevisedSource(pd: string, unit = "alpha", writes = [`src/${unit}.ts`]): void {
   const child = wt(pd, unit);
   const dir = codeGenerationRecordDir(child, unit);
   writeFileSync(join(dir, "source-manifest.json"), JSON.stringify({
-    stage: STAGE, unit, version: 1, writes: [{ path: `src/${unit}.ts` }],
+    stage: STAGE, unit, version: 1, writes: writes.map((path) => ({ path })),
   }));
   const planPath = join(dir, "code-generation-plan.md");
   writeFileSync(planPath, readFileSync(planPath, "utf-8").replace("- [ ] Implement", "- [x] Implement"));
