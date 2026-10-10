@@ -269,6 +269,49 @@ describe("t241 OpenCode adapter command boundary and transition filter", () => {
     }
   });
 
+  test("a child session's record forwards carry the owning session", async () => {
+    const root = freshProject();
+    const recorder = (capture: string) => [
+      'import { appendFileSync } from "node:fs";',
+      "export async function run(input: string): Promise<number> {",
+      `  appendFileSync(${JSON.stringify(capture)}, input + "\\n");`,
+      "  return 0;",
+      "}",
+    ].join("\n");
+    // Every forward a child's event makes: the task dispatch, a bash call's
+    // record writes, the subagent completion and the compaction.
+    const recorded = [
+      "aidlc-deliver-stage-rules.ts",
+      "aidlc-rebuild-stage-graph.ts",
+      "aidlc-write-audit-log.ts",
+      "aidlc-run-sensors.ts",
+      "aidlc-log-subagent.ts",
+      "aidlc-validate-state.ts",
+    ];
+    for (const hook of ["aidlc-plan-approval-guard.ts", "aidlc-review-freeze.ts", "aidlc-reviewer-scope.ts", "aidlc-state-transition-guard.ts"]) {
+      writeFileSync(join(root, ".aidlc", "hooks", hook), "export async function run(): Promise<number> { return 0; }\n");
+    }
+    for (const hook of recorded) writeFileSync(join(root, ".aidlc", "hooks", hook), recorder(join(root, `${hook}.jsonl`)));
+    const { client } = fakeClient({ "S-OC-child": "S-OC" });
+    const adapter = await createTestAdapter(client, root);
+    await adapter["tool.execute.before"](
+      { tool: "task", sessionID: "S-OC-child", callID: "t" },
+      { args: { subagent_type: "aidlc-developer-agent", prompt: "AIDLC-UNIT: todo-core" } },
+    );
+    await adapter["tool.execute.after"]({ tool: "bash", sessionID: "S-OC-child", callID: "b", args: { command: "echo hi" } });
+    await adapter["tool.execute.after"]({ tool: "task", sessionID: "S-OC-child", callID: "t", args: { subagent_type: "aidlc-developer-agent" } });
+    await adapter["experimental.session.compacting"]({ sessionID: "S-OC-child" });
+    for (const hook of recorded) {
+      const path = join(root, `${hook}.jsonl`);
+      if (!existsSync(path)) continue;
+      const sessions = readFileSync(path, "utf-8").trim().split("\n")
+        .map((line) => (JSON.parse(line) as { session_id?: unknown }).session_id);
+      expect({ hook, sessions: [...new Set(sessions)] }).toEqual({ hook, sessions: ["S-OC"] });
+    }
+    expect(existsSync(join(root, "aidlc-log-subagent.ts.jsonl"))).toBe(true);
+    expect(existsSync(join(root, "aidlc-validate-state.ts.jsonl"))).toBe(true);
+  });
+
   test("an owner lookup that fails refuses the call instead of guarding it under another session", async () => {
     const root = freshProject();
     const recorder = (capture: string) => [

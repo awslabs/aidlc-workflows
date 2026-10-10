@@ -49,6 +49,8 @@ import {
   hookOutsideGate,
   hookStandsOutside,
   enterHookWorkflow,
+  noteHelperSession,
+  validSessionId,
   activeSpace,
   agentsDir,
   classifyTerminalCommand,
@@ -295,6 +297,17 @@ const projectDirRaw =
 const projectDir = isAbsolute(projectDirRaw)
   ? projectDirRaw
   : resolve(process.cwd(), projectDirRaw);
+// Kiro names the chat in the hook's environment (KIRO_SESSION_ID) and the
+// payload names the session the event belongs to. A delegation (subagent) has
+// a session of its own, so when the two differ the pair is the fact the engine
+// cannot learn by itself: note it once, and every record the delegate's hooks
+// write lands on the chat that delegated. A helper picked with /agent holds the
+// chat's own id, so nothing is noted for it.
+{
+  const chat = validSessionId(process.env.KIRO_SESSION_ID?.trim());
+  const own = validSessionId(kiro.session_id?.trim());
+  if (chat && own && chat !== own) noteHelperSession(projectDir, chat, own);
+}
 const projectEnv = process.env.AIDLC_PROJECT_DIR
   ? {
       ...process.env,

@@ -106,6 +106,7 @@ import {
   recordHookDrop,
   recordPreWorkflowHeartbeat,
   resolveWorkflowSelection,
+  noteHelperSession,
   settleCopilotCommand,
   settleCopilotIntentBoundary,
   stateFilePath,
@@ -166,6 +167,11 @@ export async function run(
     ? projectDirRaw
     : resolve(process.cwd(), projectDirRaw);
   const sessionId = copilot.session_id ?? copilot.sessionId ?? "";
+  // The session the core hooks are told about. The CLI puts a per-call toolu_
+  // id where VS Code puts the chat's session: a per-call id is no chat, so the
+  // engine is told nothing and treats the call as it treats a command with no
+  // chat, instead of binding a new "chat" for every tool call.
+  const coreSessionId = sessionId.startsWith("toolu_") ? "" : sessionId;
   const projectEnv = {
     ...process.env,
     AIDLC_PROJECT_DIR: projectDir,
@@ -1695,7 +1701,7 @@ export async function run(
       const fwd = JSON.stringify({
         hook_event_name: "SessionStart",
         source: rawSource === "new" ? "startup" : rawSource,
-        ...(sessionId ? { session_id: sessionId } : {}),
+        ...(coreSessionId ? { session_id: coreSessionId } : {}),
       });
       const r = runCore("aidlc-session-start.ts", fwd);
       // The heartbeat doctor's "have not run in this project yet" warning
@@ -1747,7 +1753,7 @@ export async function run(
         "aidlc-record-human-turn.ts",
         JSON.stringify({
           hook_event_name: "UserPromptSubmit",
-          ...(sessionId ? { session_id: sessionId } : {}),
+          ...(coreSessionId ? { session_id: coreSessionId } : {}),
           prompt,
         }),
       );
@@ -1808,7 +1814,7 @@ export async function run(
             try {
               return JSON.stringify({ ...(JSON.parse(canonicalInput) as Record<string, unknown>), tool_name: "Agent", tool_input: coreInput });
             } catch {
-              return JSON.stringify({ hook_event_name: "PreToolUse", tool_name: "Agent", tool_input: coreInput, ...(sessionId ? { session_id: sessionId } : {}) });
+              return JSON.stringify({ hook_event_name: "PreToolUse", tool_name: "Agent", tool_input: coreInput, ...(coreSessionId ? { session_id: coreSessionId } : {}) });
             }
           })(),
         );
@@ -1842,7 +1848,7 @@ export async function run(
               ...dispatchInput,
               subagent_type: dispatchTarget,
             },
-            ...(sessionId ? { session_id: sessionId } : {}),
+            ...(coreSessionId ? { session_id: coreSessionId } : {}),
           }),
         );
         if (planApproval.code === 2) {
@@ -2073,7 +2079,7 @@ export async function run(
                 hook_event_name: "PreToolUse",
                 tool_name: call.toolName,
                 tool_input: call.toolInput,
-                ...(sessionId ? { session_id: sessionId } : {}),
+                ...(coreSessionId ? { session_id: coreSessionId } : {}),
               }),
             );
             if (planApproval.code === 2) {
@@ -2144,6 +2150,10 @@ export async function run(
           hostCorrelated,
           ts: Date.now(),
         };
+        // The subagent's id beside the chat's session is the one fact the engine
+        // cannot learn by itself: noted once, a payload or shell carrying the
+        // subagent's id resolves to the chat that started it.
+        if (hostCorrelated && coreSessionId) noteHelperSession(projectDir, coreSessionId, explicitSubagentId);
         const updated = updateLedger((entries) => {
           if (hostCorrelated) {
             const existing = entries.findIndex(
@@ -2197,7 +2207,7 @@ export async function run(
         "aidlc-log-subagent.ts",
         JSON.stringify({
           hook_event_name: "SubagentStop",
-          ...(sessionId ? { session_id: sessionId } : {}),
+          ...(coreSessionId ? { session_id: coreSessionId } : {}),
           agent_type: subagentName || "unknown",
           agent_id: subagentId,
         }),
@@ -2290,7 +2300,7 @@ export async function run(
       mkdirSync(dirname(heartbeatFile), { recursive: true });
       writeFileSync(
         heartbeatFile,
-        JSON.stringify({ session_id: sessionId || "unknown", ts: new Date().toISOString() }),
+        JSON.stringify({ session_id: coreSessionId || "unknown", ts: new Date().toISOString() }),
         "utf-8",
       );
     } catch {

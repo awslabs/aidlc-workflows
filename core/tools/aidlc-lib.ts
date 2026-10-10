@@ -45,6 +45,7 @@ import {
   type GuardFence,
   type SwitchableGuardFence,
   isSwitchableGuardFence,
+  guardFenceFromConfigKey,
 } from "./aidlc-guard-fences.ts";
 export {
   GUARD_FENCES,
@@ -6877,6 +6878,89 @@ export interface WorkflowSelectionOptions {
   sessionId?: string;
 }
 
+// THE ONE DOOR. Every id a host hands the engine (a hook payload's session_id,
+// the shell's own chat variable, a helper's thread id) passes here before any
+// chat or work record is read: the raw id maps to its root chat through the
+// helper-of fact the adapter wrote (the one fact the engine cannot know), that
+// chat's binding is read, and a chat with no binding is bound at first contact
+// by the rule a new chat follows at SessionStart: silently, to the work the
+// shared cursor names if this machine has joined it, else to no record. From
+// then on the chat stays on that work; the cursor moving later (another window
+// switched) does not move it. A process with no id at all (the person's own
+// terminal) never comes here and keeps following the cursor.
+export interface ResolvedChat {
+  chatId: string;
+  binding: SessionBinding | null;
+}
+
+// First contact settles a chat's work only when this process IS that chat: its
+// identity came from its own environment or process ancestry. A caller that
+// NAMES a session is asking about a chat, not acting as one: a hook reading its
+// payload, a command carrying --session, an engine child a hook handed its
+// identity to. Those resolve read-only, so a host-injected prompt (a Kiro IDE
+// workflow step's brief, a background notification) never gets work of its own
+// and never leaves a non-person actor sitting on the person's record.
+export function resolveChat(
+  projectDir: string,
+  rawId: string | null | undefined,
+  options: { bind?: boolean } = {},
+): ResolvedChat | null {
+  const id = validSessionId(rawId ?? undefined);
+  if (!id) return null;
+  const chatId = helperSessionRoot(projectDir, id) ?? id;
+  const existing = readSessionBinding(projectDir, chatId);
+  if (existing) return { chatId, binding: existing };
+  const bind = options.bind ?? false;
+  // Read-only: the chat keeps whatever the shared selection names, as before.
+  if (!bind) return { chatId, binding: null };
+  // A worker's own worktree already names the work it was prepared for, and
+  // that record governs every resolution there, so first contact binds nothing:
+  // the worktree is the identity, not this chat.
+  let delegated: ReturnType<typeof delegatedWorktreeIntent> = null;
+  try {
+    delegated = delegatedWorktreeIntent(projectDir);
+  } catch {
+    delegated = null;
+  }
+  if (delegated) {
+    return {
+      chatId,
+      binding: { space: delegated.space, intent: delegated.intent, boundAt: isoTimestamp(), source: "worktree" },
+    };
+  }
+  const space = activeSpace(projectDir);
+  const resolved: WorkflowSelection = { space, intent: activeIntent(projectDir, space), sessionId: chatId, binding: null };
+  const contact = classifyFirstContact(projectDir, resolved);
+  writeSessionBinding(projectDir, chatId, contact.selection.space, contact.selection.intent, contact.source);
+  // A record the binding cannot carry, or a write that failed, still answers
+  // what the chat is on for this process.
+  const binding = readSessionBinding(projectDir, chatId) ??
+    { space: contact.selection.space, intent: contact.selection.intent, boundAt: isoTimestamp(), source: contact.source };
+  return { chatId, binding };
+}
+
+// The rule a new chat follows when it first meets a workflow: resolving a record
+// is not joining it. Joined (participation by the cursor, this checkout's
+// worktree record or a Unit claim) keeps the record and names the evidence as
+// the binding's source; not joined binds to no record ("unjoined" when a record
+// was found, "none" when there was nothing). SessionStart adds its own stamp and
+// pre-existing-binding branches on top; resolveChat uses the rule as it is.
+export function classifyFirstContact(
+  projectDir: string,
+  resolved: WorkflowSelection,
+): { joined: boolean; selection: WorkflowSelection; source: SessionBindingSource } {
+  const joined = workflowParticipation(projectDir, resolved) === "participant";
+  const selection = joined ? resolved : { ...resolved, intent: null, binding: null };
+  if (!joined) return { joined, selection, source: resolved.intent === null ? "none" : "unjoined" };
+  if (readActiveIntentCursor(projectDir, selection.space) === selection.intent) return { joined, selection, source: "cursor" };
+  const unitScope = readUnitScopeStamp(projectDir);
+  const source: SessionBindingSource =
+    unitScope?.space === selection.space && unitScope.intent_uuid === intentUuidForSelection(projectDir, selection)
+      ? "unit-claim"
+      : "worktree";
+  return { joined, selection, source };
+}
+
 // The session of the conversation that invoked this process, when the caller
 // named none: the hook-injected override first, then the process ancestry.
 // Throws SessionResolutionConflictError when the two disagree and the override
@@ -6940,9 +7024,17 @@ export function resolveWorkflowSelection(
     }
     return { space: delegated.space, intent: delegated.intent, sessionId: null, binding: null };
   }
-  const sessionId =
-    validSessionId(options.sessionId) ?? resolveInvokingSessionId(projectDir);
-  const binding = sessionId ? readSessionBinding(projectDir, sessionId) : null;
+  const named = validSessionId(options.sessionId);
+  const rawSession = named ?? resolveInvokingSessionId(projectDir);
+  // Only this process's own identity settles a chat at first contact; a named
+  // session, or identity a hook handed us, is read-only.
+  const chat = rawSession
+    ? resolveChat(projectDir, rawSession, {
+        bind: named === null && process.env.AIDLC_SESSION_OVERRIDE_SOURCE !== "payload",
+      })
+    : null;
+  const sessionId = chat?.chatId ?? null;
+  const binding = chat?.binding ?? null;
   const space = options.space ?? binding?.space ?? activeSpace(projectDir);
   let intent: string | null;
   if (options.intent !== undefined) {
@@ -7027,23 +7119,30 @@ export function workflowParticipation(
   return "outsider";
 }
 
-// The workflow a hook acts on. A payload session that has a binding is pinned as
-// the session override while the hook runs, so the default path helpers resolve
-// the same record the hook classified (process ancestry or the shared cursor can
-// name another conversation). An id without a binding — a worker-scoped id — is
-// not pinned. Callers run `restore()` when the hook returns or throws.
+// The workflow a hook acts on. The payload id passes through resolveChat, so a
+// helper's own id names the chat that spawned it; that chat is pinned as the
+// session override while the hook runs, so the default path helpers resolve the
+// same record the hook classified (process ancestry or the shared cursor can
+// name another conversation). An id the engine cannot place, with no binding and
+// no chat an adapter named for it, is not pinned: a per-call or worker-scoped id
+// must not take the shared cursor's work while the caller's own ancestry names a
+// chat. A hook never settles a chat's work either: the event is the host's, not
+// the chat's own command. Callers run `restore()` when the hook returns or throws.
 export function enterHookWorkflow(
   projectDir: string,
   payloadSessionId: unknown,
 ): { selection: WorkflowSelection | null; participation: WorkflowParticipation; restore: () => void } {
-  const sessionId = typeof payloadSessionId === "string" ? validSessionId(payloadSessionId) : null;
+  const raw = typeof payloadSessionId === "string" ? validSessionId(payloadSessionId) : null;
+  const chat = raw === null ? null : resolveChat(projectDir, raw, { bind: false });
+  // Placed: this chat has a binding, or the id belongs to a chat an adapter named.
+  const placed = chat !== null && (chat.binding !== null || chat.chatId !== raw);
   let restore = () => {};
-  if (sessionId && readSessionBinding(projectDir, sessionId) !== null) {
+  if (chat && placed) {
     const previous = {
       AIDLC_SESSION_OVERRIDE: process.env.AIDLC_SESSION_OVERRIDE,
       AIDLC_SESSION_OVERRIDE_SOURCE: process.env.AIDLC_SESSION_OVERRIDE_SOURCE,
     };
-    process.env.AIDLC_SESSION_OVERRIDE = sessionId;
+    process.env.AIDLC_SESSION_OVERRIDE = chat.chatId;
     process.env.AIDLC_SESSION_OVERRIDE_SOURCE = "payload";
     restore = () => {
       for (const [key, value] of Object.entries(previous)) {
@@ -39007,6 +39106,121 @@ export function formatGuardPolicy(value: GuardPolicy, source: string): string {
 /** Retired alias of formatGuardPolicy. */
 export const formatChangeControl = formatGuardPolicy;
 
+/**
+ * What `next` does with the token after each flag it takes: `none` takes no
+ * value, `free` takes any word, `words` only the words listed. `needsFollowing`
+ * marks the four whose branch reads `a === "--x" && i + 1 < args.length`, so
+ * with nothing after them this engine does not take them at all.
+ */
+export interface NextFlagShape {
+  value: "none" | "free" | "words";
+  words?: readonly string[];
+  needsFollowing?: true;
+}
+
+// Written out rather than imported from aidlc-guard-switch.ts, which imports
+// this module: t-next-flag-table pins them equal to VALID_DEPTHS and
+// VALID_TEST_STRATEGIES there.
+const DEPTH_VALUES = ["minimal", "standard", "comprehensive"] as const;
+
+/**
+ * Every flag `next`'s flag loop takes, in one table.
+ *
+ * The loop in parseNextFlags reads it (nextTokenKind below) to decide whether a
+ * flag-shaped token is one this engine takes, so a flag missing from the table
+ * can never be taken and the two cannot drift. A harness seam that has to read
+ * a line before any agent sees it reads the same table, instead of mirroring
+ * the loop's branches by hand.
+ *
+ * Absent on purpose, because they are not the flag loop's: the read-only flags
+ * (READ_ONLY_FLAGS, taken earlier and only when the line carries no words of
+ * the person's own), `--doctor`'s own `--export`/`--output`/`--verbose`,
+ * `--config` and `--project-dir` (read before the loop), and `--pick` (a
+ * leading command). The ceremony flags and the per-check `--guard.<fence>`
+ * family come from their own tables, in nextFlagShape.
+ */
+export const NEXT_FLAGS: ReadonlyMap<string, NextFlagShape> = new Map<string, NextFlagShape>([
+  ["--resume", { value: "none" }],
+  ["--single", { value: "none" }],
+  ["--new-intent", { value: "none" }],
+  ["--new-scope", { value: "none" }],
+  ["--continue", { value: "none" }],
+  ["--change", { value: "none" }],
+  ["--every-unit", { value: "none" }],
+  // Retired, still taken so the token never becomes task text.
+  ["--init", { value: "none" }],
+  ["--force", { value: "none" }],
+  ["--scope", { value: "free", needsFollowing: true }],
+  ["--stage", { value: "free", needsFollowing: true }],
+  ["--phase", { value: "free", needsFollowing: true }],
+  ["--report", { value: "free", needsFollowing: true }],
+  // Valued: a missing or `--`-prefixed value is this engine's own refusal, with
+  // the flag named, not a token it does not take.
+  ["--request", { value: "free" }],
+  ["--record", { value: "free" }],
+  ["--unit", { value: "free" }],
+  ["--plan-name", { value: "free" }],
+  ["--skip", { value: "free" }],
+  ["--add", { value: "free" }],
+  ["--claim", { value: "free" }],
+  ["--release", { value: "free" }],
+  ["--team", { value: "free" }],
+  ["--rhythm", { value: "free" }],
+  ["--depth", { value: "words", words: DEPTH_VALUES }],
+  ["--test-strategy", { value: "words", words: DEPTH_VALUES }],
+  ["--review", { value: "words", words: ["adversarial", "advisory", "none"] }],
+  ["--guard-policy", { value: "words", words: GUARD_POLICY_VALUES }],
+  ["--change-control", { value: "words", words: GUARD_POLICY_VALUES }],
+  ["--project-type", { value: "words", words: ["greenfield", "brownfield"] }],
+]);
+
+/** The shape of a flag `next` takes, or null when it takes no such flag. */
+export function nextFlagShape(token: string): NextFlagShape | null {
+  const listed = NEXT_FLAGS.get(token);
+  if (listed !== undefined) return listed;
+  if (CEREMONY_KEYS.some((key) => CEREMONY_FLAGS[key] === token)) {
+    return { value: "words", words: CEREMONY_SETTINGS };
+  }
+  if (token.startsWith("--") && guardFenceFromConfigKey(token.slice(2)) !== null) {
+    return { value: "words", words: CEREMONY_SETTINGS };
+  }
+  return null;
+}
+
+/**
+ * Whether one argument is flags and their values and nothing else. One quoted
+ * argument can hold the whole request, as Kiro IDE's PowerShell hands it over,
+ * so a bare word inside it that is not a flag's value makes it the person's
+ * sentence: "--help flag for the reverser" is what they asked for, while
+ * "--choice=Approve Plan" is one flag and its value. Only the second kind is a
+ * token `next` can refuse to take without dropping a word of a request.
+ */
+export function argumentIsFlagShaped(arg: string): boolean {
+  const tokens = arg.split(/\s+/).filter((token) => token.length > 0);
+  if (tokens.length === 0) return false;
+  for (let index = 0; index < tokens.length; index++) {
+    if (!tokens[index].startsWith("--")) return false;
+    const next = tokens[index + 1];
+    if (next !== undefined && !next.startsWith("-")) index++;
+  }
+  return true;
+}
+
+/**
+ * Which of the three kinds one token on a `next` line is: a flag this engine
+ * takes, a flag-shaped token it does not take (the agent's own argument, a name
+ * the person misspelt, or a flag they are asking to have built), or a word of
+ * the person's own.
+ *
+ * `following` is the token after it, which is what settles the four flags this
+ * engine takes only when something follows them.
+ */
+export function nextTokenKind(token: string, following: string | undefined): "flag" | "untaken" | "words" {
+  const shape = nextFlagShape(token);
+  if (shape !== null && (shape.needsFollowing !== true || following !== undefined)) return "flag";
+  return argumentIsFlagShaped(token) ? "untaken" : "words";
+}
+
 // Scope-owned ceremonies: env kill switch, then intent, then scope, then on.
 export const CEREMONY_KEYS = ["sensors", "learnings", "summary_confirmation", "plan_approval", "collaborators"] as const;
 export type CeremonyKey = (typeof CEREMONY_KEYS)[number];
@@ -39034,6 +39248,7 @@ export const CEREMONY_FLAGS: Record<CeremonyKey, string> = {
   plan_approval: "--plan-approval",
   collaborators: "--collaborators",
 };
+
 export type CeremonyPolicy = Record<CeremonyKey, CeremonySetting>;
 export interface CeremonyResolution {
   key: CeremonyKey;

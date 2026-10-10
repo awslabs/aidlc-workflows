@@ -48,7 +48,6 @@ import {
   isBindableIntentRecordName,
   isSafeIntentRecordName,
   intentDisplayLabel,
-  readUnitScopeStamp,
   activeIntent,
   activeIntentUuid,
   activeSpace,
@@ -81,8 +80,7 @@ import {
   validSessionId,
   writeCurrentSessionId,
   writeSessionBinding,
-  workflowParticipation,
-  readActiveIntentCursor,
+  classifyFirstContact,
   listIntents,
   type SessionBindingSource,
   writeSessionIntentUuid,
@@ -224,8 +222,10 @@ const resolved = stampedTarget
 // a joined session is stamped, and a chat left open across an upgrade carries
 // only that stamp. A record name the binding cannot carry does not join.
 const joinsByStamp = stampedTarget !== null && isBindableIntentRecordName(stampedTarget.dirName);
-const joined =
-  joinsByStamp || (!stampedTarget && workflowParticipation(projectDir, resolved) === "participant");
+// The rule a new chat follows (classifyFirstContact) lives in the library, where
+// resolveChat applies it to a chat the engine first meets in a command.
+const contact = stampedTarget ? null : classifyFirstContact(projectDir, resolved);
+const joined = joinsByStamp || (contact?.joined ?? false);
 const selection = joined ? resolved : { ...resolved, intent: null, binding: null };
 // The record a previously bound conversation can rejoin explicitly.
 const rejoinRecord =
@@ -242,11 +242,7 @@ function bindingSource(): SessionBindingSource | undefined {
   if (preExistingBinding?.space === selection.space && preExistingBinding.intent === selection.intent) {
     return preExistingBinding.source;
   }
-  if (readActiveIntentCursor(projectDir, selection.space) === selection.intent) return "cursor";
-  const unitScope = readUnitScopeStamp(projectDir);
-  return unitScope?.space === selection.space && unitScope.intent_uuid === intentUuidForSelection(projectDir, selection)
-    ? "unit-claim"
-    : "worktree";
+  return contact?.source;
 }
 
 // Persist the selection before any early return. A cold session must retain
