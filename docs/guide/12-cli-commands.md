@@ -169,7 +169,7 @@ Start a new workflow with one of the enabled scopes. Core ships 11 named scopes;
 /aidlc express
 ```
 
-**Behavior:** The framework recognizes the scope keyword, asks what you want to build, then runs the Initialization phase and begins the first domain stage. If a workflow is already active, a scope keyword on its own carries on with that work, and one followed by a description asks whether the description is new work. See [Workflow Profiles](workflow-profiles.md) for a practical comparison of all 11 choices.
+**Behavior:** The framework recognizes the scope keyword, asks what you want to build, then runs the Initialization phase and begins the first domain stage. If a workflow is already active, a scope keyword on its own carries on with that work, and one followed by a description asks whether the description is new work. A keyword that is also the first word of what you are describing (`/aidlc classic car rental website`) is read, not assumed: the assistant works out which you meant and may ask you once, so the word is never spent on a plan you did not choose. A colon says it is the plan and nothing else does (`/aidlc bugfix: Fix duplicate todos`), and `--scope` says the same (`/aidlc --scope bugfix Fix duplicate todos`). See [Workflow Profiles](workflow-profiles.md) for a practical comparison of all 11 choices.
 
 **Example:**
 

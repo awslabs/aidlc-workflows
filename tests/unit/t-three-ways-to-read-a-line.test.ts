@@ -16,7 +16,7 @@
 // website" lost its first word; a leading noun with their sentence after it was
 // run as a workspace or plugin command, so "intent is to build a notes app"
 // switched records; and a value a flag's table does not hold ended the turn.
-import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS, NATIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "../harness/test-budget.ts";
+import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";

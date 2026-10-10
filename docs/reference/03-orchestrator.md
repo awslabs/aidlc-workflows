@@ -103,6 +103,42 @@ owner still requires the person's reply. Two things mark a token as the person's
 and keep it whole: the `--` delimiter, and one quoted argument that holds a whole
 request (`--help flag for the reverser`).
 
+Three ways to read the line, decided once. `readNextLine` (`aidlc-lib.ts`) answers
+which, and every seam that runs before an agent sees the line reads the same
+answer (`classifyTerminalCommand` and `isReadOnlyNextArgv`, which the Kiro CLI
+verb intercept and pre-dispatch, the Kiro IDE terminal seam and the Copilot
+claim gate all consult), so nothing acts off-band on a line the engine would
+hand to the agent. **Exact**: every token read under the grammar, with any free
+words marked as theirs (the `--` delimiter, or a plan named with a colon); it
+acts as it always has. **Words**: nothing on the line was read, so it is a
+request. **A reading step** otherwise: the `print` above, with no `narration`,
+naming each reading as a command to run, and nothing created, switched, jumped,
+dropped or refused before the agent has read it. Four lines reach it besides an
+untaken token:
+
+- a flag `next` does take, with a value its own table does not hold
+  (`--plan-approval off.`, `--depth banana`): the print names the words that
+  table holds, so the person's `off` is one re-run away instead of a refused
+  turn;
+- a leading `plugin` or `knowledge` noun with two or more words of theirs after
+  it (`plugin is confusing`). One word after a noun is a verb or a name, however
+  it is spelt, and keeps that noun's own refusal naming its verbs;
+- the person's own sentence opening with a word that is also a plan's name, in
+  either form a harness hands it over: as tokens (`bugfix Fix duplicate todos`)
+  or as one argument (`classic car rental website`). A plan named in its own
+  argument with the request in one more (`next classic 'Build a notes app'`,
+  which is what the orchestrator skill asks the conductor for), a plan named
+  with a colon, and a two-word line (the plan and a one-word description) are
+  readings already made, and act;
+- a reply typed while the engine's own plan question is open and nothing has
+  been started from it: the print names that question's own commands, so "yes"
+  after the offer answers it instead of becoming work called "yes". Words behind
+  the `--` delimiter are already marked as a request and never come back here.
+
+A workspace noun with a word that names no record keeps its own step, which
+lists that noun's verbs and the records there; with a sentence of theirs after
+the name it also names the way to keep every word of it.
+
 In a solo unit-major walk, a Unit's work, its summary confirmation and its checkpoint (the learnings question and the checkpoint approval) run ahead of Current Stage and log their questions under the stage `next` directs (a checkpoint under the block's last stage). Prose then reads that stage's open question by the Stop hook's same rule, so an answer typed in a new chat, after the one that asked ended, reaches the question it answers instead of the new-work routing ask. Once a Unit's approval was asked, its checkpoint step no longer lists `learnings`, so a new chat that runs the step again goes straight to the approval question.
 
 ### `/aidlc compose` -- The Adaptive Composer
