@@ -73,7 +73,7 @@ Retired claims: all payloads are isomorphic except tool names; all mapped tools 
 - `tests/unit/t332-devin-adapter.test.ts`
 - `core/tools/aidlc.ts` — `runAdapter`, `resolveAction`, `canonicalizeLegacyCopilotHookArgv`
 - `scripts/build-binaries.ts` — `devinAdapterGate`, `devinStateTransitionGuardGate`; `tests/unit/t238-build-binaries.test.ts`
-- https://docs.devin.ai/cli/extensibility/hooks/overview
-- https://docs.devin.ai/cli/extensibility/hooks/lifecycle-hooks
+- <https://docs.devin.ai/cli/extensibility/hooks/overview>
+- <https://docs.devin.ai/cli/extensibility/hooks/lifecycle-hooks>
 
 [Back to findings index](index.md)

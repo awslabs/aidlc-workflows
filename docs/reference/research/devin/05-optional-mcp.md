@@ -68,6 +68,6 @@ t331 covers server shape, disabled defaults, copy/native packaging, Kiro parity,
 - `harness/devin/manifest.ts`
 - `core/tools/aidlc-utility.ts` — Devin registry check
 - `tests/unit/t331-devin-packaging.test.ts` — MCP tests
-- https://docs.devin.ai/cli/extensibility/mcp/configuration
+- <https://docs.devin.ai/cli/extensibility/mcp/configuration>
 
 [Back to findings index](index.md)

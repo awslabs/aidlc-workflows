@@ -4,9 +4,9 @@
 
 **Prepared:** 2026-09-22
 
-**PR:** https://github.com/awslabs/aidlc-workflows/pull/996
+**PR:** <https://github.com/awslabs/aidlc-workflows/pull/996>
 
-**Review:** https://github.com/awslabs/aidlc-workflows/pull/996#pullrequestreview-5226026258
+**Review:** <https://github.com/awslabs/aidlc-workflows/pull/996#pullrequestreview-5226026258>
 
 **Item:** 8 — validate the branch after rebasing onto current `main`
 

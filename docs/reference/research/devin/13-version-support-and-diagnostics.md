@@ -86,6 +86,6 @@ Retired: multiple independent floors; the selected baseline proves a specific ve
 - `tests/unit/t332-devin-adapter.test.ts`
 - `tests/e2e/t-exec-devin-status.serial.test.ts`
 - `AGENTS.md` — Release Metadata Policy
-- https://docs.devin.ai/cli/extensibility/hooks/overview
+- <https://docs.devin.ai/cli/extensibility/hooks/overview>
 
 [Back to findings index](index.md)

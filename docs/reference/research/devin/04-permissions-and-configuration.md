@@ -66,8 +66,8 @@ Retired claim: absent from allow means unconditionally blocked. Neither an allow
 - `core/tools/aidlc-utility.ts` — `Native command trust` row (Devin branch)
 - `tests/unit/t294-config-diagnostics.test.ts` — Devin native-trust case
 - `tests/unit/t331-devin-packaging.test.ts` — config and permission tests
-- https://docs.devin.ai/cli/reference/configuration/global-vs-local
-- https://docs.devin.ai/cli/reference/configuration/read-config-from (bundled `read-config-from.mdx:53-85` sources, `:89-132` disabling, `:138-154` options and defaults; `config-file.mdx:355-365` lists only three keys — the dedicated page is the complete one)
-- https://docs.devin.ai/cli/reference/permissions
+- <https://docs.devin.ai/cli/reference/configuration/global-vs-local>
+- <https://docs.devin.ai/cli/reference/configuration/read-config-from> (bundled `read-config-from.mdx:53-85` sources, `:89-132` disabling, `:138-154` options and defaults; `config-file.mdx:355-365` lists only three keys — the dedicated page is the complete one)
+- <https://docs.devin.ai/cli/reference/permissions>
 
 [Back to findings index](index.md)

@@ -48,6 +48,6 @@ Superseded: inherit-by-omission means parent-model inheritance; unsupported Clau
 - `core/tools/aidlc-lib.ts` — parseAgentFrontmatter
 - `core/tools/aidlc-utility.ts` — Devin model advisory
 - `tests/unit/t331-devin-packaging.test.ts`
-- https://docs.devin.ai/cli/subagents
+- <https://docs.devin.ai/cli/subagents>
 
 [Back to findings index](index.md)

@@ -53,7 +53,7 @@ Retired explanations: all rule files automatically activate regardless of trigge
 - `core/templates/onboarding-harness.md`
 - `core/tools/aidlc-runner-gen.ts`
 - `tests/unit/t331-devin-packaging.test.ts` — tests 6, 7b–7d, 14–18
-- https://docs.devin.ai/cli/extensibility/skills/creating-skills
-- https://docs.devin.ai/cli/extensibility/rules
+- <https://docs.devin.ai/cli/extensibility/skills/creating-skills>
+- <https://docs.devin.ai/cli/extensibility/rules>
 
 [Back to findings index](index.md)

@@ -74,7 +74,7 @@ Retired guidance: checking out `v2`, assuming dist exists in a fresh clone, comm
 - `tests/unit/t243-install-mechanism.test.ts`
 - `tests/unit/t315-plugin-build.test.ts`
 - `tests/integration/t188-plugin-compose.serial.test.ts`
-- https://docs.devin.ai/cli/extensibility/plugins/overview
+- <https://docs.devin.ai/cli/extensibility/plugins/overview>
 - Devin 3000.11.3 bundled docs (via the `devin-cli` skill): `changelog/stable.mdx:195,209` (v3000.5.20 — `CLAUDE_PLUGIN_ROOT` on hook commands, `DEVIN_PLUGIN_ROOT` on plugin-contributed hooks), `extensibility/plugins/overview.mdx:111` (`PLUGIN_ROOT` for stdio MCP servers only), `extensibility/hooks/overview.mdx:130` (`DEVIN_PROJECT_DIR`)
 
 [Back to findings index](index.md)
