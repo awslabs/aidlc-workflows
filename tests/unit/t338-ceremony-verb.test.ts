@@ -56,7 +56,11 @@ afterEach(() => {
 function run(tool: string, args: string[], proj: string, env: NodeJS.ProcessEnv = {}) {
   const result = Bun.spawnSync({
     timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
-    cmd: [process.execPath, tool, ...args, "--project-dir", proj],
+    // On a `next` line this engine's own option rides ahead of the person's
+    // words, which is where every caller of it puts it.
+    cmd: [process.execPath, tool, ...(args[0] === "next"
+      ? ["next", "--project-dir", proj, ...args.slice(1)]
+      : [...args, "--project-dir", proj])],
     cwd: proj,
     env: {
       ...process.env,

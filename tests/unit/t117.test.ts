@@ -159,7 +159,12 @@ function run(
   if (!("AWS_AIDLC_DEFAULT_SCOPE" in env)) {
     delete childEnv.AWS_AIDLC_DEFAULT_SCOPE;
   }
-  const res = spawnSync(BUN, [tool, ...args, "--project-dir", p], {
+  // On a `next` line this engine's own option rides ahead of the person's
+  // words, which is where every caller of it puts it.
+  const argv = args[0] === "next"
+    ? ["next", "--project-dir", p, ...args.slice(1)]
+    : [...args, "--project-dir", p];
+  const res = spawnSync(BUN, [tool, ...argv], {
     timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     encoding: "utf-8",
     env: childEnv,

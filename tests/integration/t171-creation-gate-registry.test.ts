@@ -80,7 +80,12 @@ function runToolArgv(tool: string, argv: string[]): Run {
   return { status: r.exitCode, stdout, out: `${stdout}${r.stderr.toString()}` };
 }
 function runTool(tool: string, args: string[], p = proj): Run {
-  return runToolArgv(tool, [...args, "--project-dir", p]);
+  // This engine's own option rides ahead of the person's words on a `next`
+  // line, which is where every caller of it puts it.
+  const argv = args[0] === "next"
+    ? ["next", "--project-dir", p, ...args.slice(1)]
+    : [...args, "--project-dir", p];
+  return runToolArgv(tool, argv);
 }
 function util(args: string[], p = proj): Run {
   return runTool(UTIL, args, p);

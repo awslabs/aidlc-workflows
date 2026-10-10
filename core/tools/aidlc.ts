@@ -2137,15 +2137,60 @@ export function resolveAction(
   compiled = isCompiledExecutable(),
 ): Action {
   const first = resolveActionFrom(rawArgv, compiled, Number.POSITIVE_INFINITY);
-  // A delegate's argv is the only place a request of the person's rides, and
-  // their words begin after the route and the verb. When one of our own flags
+  const words = first.words;
+  // What is wrong with one of our own options is the person's to act on only
+  // where our options are read. Among their own words that token is their word,
+  // and the line still carries the request they typed.
+  if (first.grammar !== undefined && (words === undefined || first.grammar.at < words)) {
+    return { type: "error", code: 2, message: first.grammar.message };
+  }
+  // Their words begin after the route and the verb. When one of our own flags
   // sat among them, read the line again and leave that one alone.
-  if (first.action.type !== "delegate" || first.route === undefined) return first.action;
-  const words = theirWordsBegin(rawArgv, first.route);
-  if (words === undefined || first.ourFlagsFrom === undefined || first.ourFlagsFrom < words) {
+  if (words === undefined) return first.action;
+  if (first.ourFlagsFrom === undefined || first.ourFlagsFrom < words) {
     return first.action;
   }
   return resolveActionFrom(rawArgv, compiled, words).action;
+}
+
+/**
+ * Where our own options stop being ours on this line: the index their words
+ * begin at, or infinity when the line carries none. The same boundary
+ * resolveAction reads, so one answer serves both.
+ */
+function ourFlagLimit(
+  rawArgv: string[],
+  compiled = isCompiledExecutable(),
+): number {
+  return resolveActionFrom(rawArgv, compiled, Number.POSITIVE_INFINITY).words ??
+    Number.POSITIVE_INFINITY;
+}
+
+/**
+ * A request of the person's own rides on one route: `next`, the orchestrator's,
+ * where everything after its verb is a word of theirs. The rest of the grammar
+ * is this engine's own words in a fixed shape (`intent switch <name>`), and
+ * those commands refuse an extra word rather than hand it on, so our options
+ * stay ours there wherever they sit.
+ *
+ * A `next` line that is one of the workspace commands, whole, is one of those
+ * too, by the rule the whole engine reads it with: a leading `intent` or
+ * `space` with that command's own shape after it is its argv, while the same
+ * word opening a sentence is theirs (aidlc-lib.ts, parseNextFlags and the
+ * harness seams). A line that leads with the noun but does not have the shape
+ * is left to the engine to read, with every word of theirs still on it.
+ */
+function theirWordsOn(
+  rawArgv: readonly string[],
+  route: number | undefined,
+  routeArgs: readonly string[] | undefined,
+): number | undefined {
+  if (route === undefined || routeArgs === undefined) return undefined;
+  const [verb, ...rest] = routeArgs;
+  if (verb !== "next") return undefined;
+  const workspace = parseDispatcherWorkspaceCommand(rest).kind;
+  if (workspace !== "not-workspace" && workspace !== "error") return undefined;
+  return theirWordsBegin(rawArgv, route);
 }
 
 interface ResolvedWithRoute {
@@ -2154,6 +2199,12 @@ interface ResolvedWithRoute {
   route?: number;
   /** The lowest index in `argv` where one of our own flags was taken. */
   ourFlagsFrom?: number;
+  /** The first thing wrong with our --project-dir grammar, and where. */
+  grammar?: { at: number; message: string };
+  /** A delegate's argv as the route produced it, before anything of ours. */
+  routeArgs?: readonly string[];
+  /** Where the person's own words begin in `argv`, when the line carries them. */
+  words?: number;
 }
 
 /**
@@ -2171,6 +2222,7 @@ function resolveActionFrom(
   let projectDir: string | undefined;
   let literalArgs = false;
   let ourFlagsFrom = Number.POSITIVE_INFINITY;
+  let grammar: { at: number; message: string } | undefined;
   for (let i = 0; i < argv.length; i++) {
     if (argv[i] === "--") {
       literalArgs = true;
@@ -2187,46 +2239,47 @@ function resolveActionFrom(
       continue;
     }
     if (!literalArgs && i < limit && argv[i].startsWith("--project-dir=")) {
-      return {
-        action: {
-          type: "error",
-          code: 2,
-          message: "aidlc: --project-dir takes a separate path value; use --project-dir <path>\n",
-        },
+      grammar ??= {
+        at: i,
+        message: "aidlc: --project-dir takes a separate path value; use --project-dir <path>\n",
       };
+      clean.push(argv[i]);
+      continue;
     }
     if (literalArgs || i >= limit || argv[i] !== "--project-dir") {
       clean.push(argv[i]);
       continue;
     }
-    ourFlagsFrom = Math.min(ourFlagsFrom, i);
-    const value = argv[++i];
+    const value = argv[i + 1];
+    // Nothing is refused from inside this loop: resolveAction holds the
+    // boundary, and only there is it known whether the flag was ours at all.
     if (!value || value.startsWith("--")) {
-      return {
-        action: {
-          type: "error",
-          code: 2,
-          message: "aidlc: --project-dir requires a path value\n",
-        },
-      };
+      grammar ??= { at: i, message: "aidlc: --project-dir requires a path value\n" };
+      clean.push(argv[i]);
+      continue;
     }
     if (projectDir !== undefined) {
-      return {
-        action: {
-          type: "error",
-          code: 2,
-          message: "aidlc: --project-dir may be specified only once\n",
-        },
-      };
+      grammar ??= { at: i, message: "aidlc: --project-dir may be specified only once\n" };
+      clean.push(argv[i]);
+      continue;
     }
+    ourFlagsFrom = Math.min(ourFlagsFrom, i);
+    i++;
     projectDir = value;
   }
 
   const action = resolveActionWithoutGlobalFlags(clean);
   // What the resolver read as the route: the clean tokens it did not hand to the
   // delegate. The boundary for our own flags comes from this, never from a list
-  // of words kept here.
-  const route = action.type === "delegate" ? clean.length - action.args.length : undefined;
+  // of words kept here. A route word that stands for two (`compose` for
+  // `next compose`) hands back more than it read, and one route word is the
+  // least it read, so never below zero.
+  const route = action.type === "delegate"
+    ? Math.max(0, clean.length - action.args.length)
+    : undefined;
+  // Read before anything of ours is put back on the line below.
+  const routeArgs = action.type === "delegate" ? [...action.args] : undefined;
+  const words = theirWordsOn(argv, route, routeArgs);
   if (action.type === "version" && globalFlags.includes("--json")) {
     action.json = true;
   }
@@ -2236,8 +2289,15 @@ function resolveActionFrom(
       : resolve(process.cwd(), projectDir);
     if (action.type === "delegate") {
       const delimiter = action.args.indexOf("--");
+      // Right after `next`, never after their sentence: the delegate reads its
+      // own option only ahead of the person's words, so one appended behind
+      // them would not be read at all, and no word of theirs is ever read as
+      // its value. Every authored caller builds the line this way too
+      // (aidlc-state.ts, aidlc-continue-workflow.ts, the Kiro IDE adapter).
       if (delimiter >= 0) action.args.splice(delimiter, 0, "--project-dir", absoluteProjectDir);
-      else action.args.push("--project-dir", absoluteProjectDir);
+      else if (action.args[0] === "next") {
+        action.args.splice(1, 0, "--project-dir", absoluteProjectDir);
+      } else action.args.push("--project-dir", absoluteProjectDir);
     } else if (action.type === "hook") {
       action.projectDir = absoluteProjectDir;
       action.path = resolveHookPath(`aidlc-${action.name}.ts`, undefined, absoluteProjectDir);
@@ -2257,7 +2317,7 @@ function resolveActionFrom(
     // project. Pin the host's project: its project environment, else the
     // directory it launched the command in. The statusline and the adapters
     // resolve a project from their host first and hand it to what they run.
-    action.projectDir = dispatcherProjectDirFrom(argv);
+    action.projectDir = dispatcherProjectDirFrom(argv, limit);
   }
   if (action.type === "delegate") {
     const delimiter = action.args.indexOf("--");
@@ -2266,7 +2326,7 @@ function resolveActionFrom(
     // so when the caller gave none the resolved directory is pinned ahead of
     // the delimiter. The literal text stays byte-for-byte intact.
     if (delimiter >= 0 && !projectDir) {
-      action.args.splice(delimiter, 0, "--project-dir", dispatcherProjectDirFrom(argv));
+      action.args.splice(delimiter, 0, "--project-dir", dispatcherProjectDirFrom(argv, limit));
     }
     if (delimiter >= 0) action.args.splice(action.args.indexOf("--"), 0, ...globalFlags);
     else action.args.push(...globalFlags);
@@ -2275,6 +2335,9 @@ function resolveActionFrom(
     action,
     ...(route === undefined ? {} : { route }),
     ...(Number.isFinite(ourFlagsFrom) ? { ourFlagsFrom } : {}),
+    ...(grammar === undefined ? {} : { grammar }),
+    ...(routeArgs === undefined ? {} : { routeArgs }),
+    ...(words === undefined ? {} : { words }),
   };
 }
 // TRANSLATION_LOGIC_END
@@ -2288,7 +2351,7 @@ function bunExecutable(): string {
 }
 
 function delegatedProjectDir(args: readonly string[]): string | undefined {
-  return projectDirFlag(args).value;
+  return projectDirFlag(args.slice(0, ourFlagLimit([...args]))).value;
 }
 
 function runDelegateDev(tool: string, args: string[]): number {
@@ -3173,8 +3236,20 @@ function routePinPolicy(argv: readonly string[]): PinPolicy {
   return route?.pinPolicy ?? "active";
 }
 
-function dispatcherProjectDirFrom(argv: readonly string[]): string {
-  const explicit = projectDirFlag(argv).value;
+/**
+ * `limit`: how far along the line our own options are read, for a caller that
+ * already knows it. Resolving the line computes it, so a caller inside that
+ * resolution must pass its own limit and never ask for it again.
+ */
+function dispatcherProjectDirFrom(
+  argv: readonly string[],
+  limit = ourFlagLimit([...argv]),
+): string {
+  // Only where our own options are read. A token of the person's own that looks
+  // like this one is a word of their request, never a folder to work in: every
+  // reader of the line takes the same slice, so none of them can answer them
+  // about an option they did not use.
+  const explicit = projectDirFlag(argv.slice(0, limit)).value;
   const value = explicit || process.env.AIDLC_PROJECT_DIR ||
     process.env.CLAUDE_PROJECT_DIR || process.env.KIRO_PROJECT_DIR;
   return value
@@ -3624,7 +3699,7 @@ export async function main(rawArgv: string[]): Promise<void> {
     process.on("exit", (code) => hookTrace("exit", { code }));
   }
   configureColor(argv);
-  const projectDirOption = projectDirFlag(argv);
+  const projectDirOption = projectDirFlag(argv.slice(0, ourFlagLimit(argv)));
   if (projectDirOption.error) {
     process.exitCode = renderDispatcherFailure(argv, 2, projectDirOption.error);
     return;

@@ -434,12 +434,11 @@ interactive wizard.
 | `--no-color` | Disable color output |
 
 `--project-dir`, `--json`, `--quiet`, `--no-color`, `--yes`, `--offline` and
-`--verbose` are the launcher's own while it is still reading the command: before
-it, inside it, and straight after it. Once a word of your own request has
-followed the command (`/aidlc add a --project-dir flag to the CLI`), every token
-from there on is part of the request, so a word of yours that happens to look
-like one of these stays exactly where you typed it and reaches the workflow
-whole.
+`--verbose` are AI-DLC's own options: put them with the command you are running,
+as `aidlc config --project-dir /work/shop` or `aidlc doctor --json`. A word of
+your own that happens to look like one of them is still your word, so
+`/aidlc add a --project-dir flag to the CLI` asks for that work with every word
+you typed kept.
 
 ### Model Policy
 
