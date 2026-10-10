@@ -902,9 +902,13 @@ describe("t333 (4) config-change, the slash flag, and the status line", () => {
     const off = lastDirective(run(ORCHESTRATE, ["next", "--guard-policy", "off"], proj).stdout);
     expect(off.kind).toBe("print");
     expect(off.message).toContain("engine config set guard-policy off");
+    // A value this engine's own table does not hold is a reading step naming the
+    // words it does: the person meant one of them, and the agent re-runs it
+    // (t-three-ways-to-read-a-line). A missing value stays its own refusal.
     const bad = lastDirective(run(ORCHESTRATE, ["next", "--guard-policy", "maybe"], proj).stdout);
-    expect(bad.kind).toBe("error");
-    expect(bad.message).toContain('--guard-policy requires <strict|relaxed|off>; received "maybe".');
+    expect(bad.kind).toBe("print");
+    expect(bad.message).toContain("takes `--guard-policy` with strict|relaxed|off");
+    expect(bad.message).toContain("does not take `maybe`");
     const bare = lastDirective(run(ORCHESTRATE, ["next", "--guard-policy"], proj).stdout);
     expect(bare.kind).toBe("error");
     expect(bare.message).toContain("--guard-policy requires <strict|relaxed|off>.");
