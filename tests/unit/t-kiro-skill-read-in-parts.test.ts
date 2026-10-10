@@ -18,7 +18,7 @@ const READ_STEP = "read `.kiro/skills/aidlc/SKILL.md` with your file tool in par
 // 121 lines with Kiro's note to go on from line 122, and never did: the step
 // spoke only of loading the skill and let one cut read count as all of it.
 const CUT_SHORT = "a read that comes back cut short is not all of it";
-const PROMPT_STEP = "read all of .kiro/skills/aidlc/SKILL.md with your file tool in parts of at most 40 lines, from the first line to the last (Kiro shows a long skill or file only in part), unless you already read all of it in this chat";
+const PROMPT_STEP = "read all of .kiro/skills/aidlc/SKILL.md with your file tool in parts of at most 40 lines, from the first line to the last (Kiro shows a long skill or file only in part), unless all of it is already in this chat";
 
 // What Kiro loads as the skill: the text after the front matter.
 function skillBody(text: string): string {
@@ -48,6 +48,17 @@ describe("t-kiro-skill-read-in-parts: the skill reaches the agent past Kiro's cu
       expect(body.slice(0, PREVIEW)).toContain(CUT_SHORT);
       expect(body.slice(-PREVIEW)).toContain(CUT_SHORT);
       expect(body).not.toContain("loading this skill shows only its start and its end");
+    });
+
+    test(`${tool}: the exception counts a skill that is already in the chat, however it got there`, () => {
+      // kiro-cli's v2 engine expands /aidlc into the whole skill body as the user message, and the
+      // agent then re-read a file it already held, 4 to 10 reads a turn, telling the person so
+      // (53 of 73 live turns, 2026-10-10). The exception reads "already in this chat", which a
+      // message that carried the whole skill satisfies; where Kiro cuts the skill load, the read stays.
+      expect(body).toContain("unless every line of it is already in this chat");
+      expect(body).toContain("If every line of this file is not already in this chat, do it now");
+      expect(body).not.toContain("unless you already read");
+      expect(body).not.toContain("If you have not read every line");
     });
 
     test(`${tool}: every ${PART_LINES}-line part fits in one Kiro result`, () => {
