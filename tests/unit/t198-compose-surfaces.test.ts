@@ -183,8 +183,10 @@ describe("t198 cold-start compose surfaces -> composer dispatch", () => {
     for (const [args, description] of [
       [["compose", "--", "--scope", "migration"], "--scope migration"],
       [["compose", "--", "--project-dir", "/tmp/not-a-project"], "--project-dir /tmp/not-a-project"],
-      [["--new-scope", "--enable SSO"], "--enable SSO"],
-      [["bugfix", "--enable"], "--enable"],
+      // The engine takes no `--enable`, and what the person meant by it is the
+      // agent's to read, so the delimiter is what keeps it theirs at creation.
+      [["--new-scope", "--", "--enable SSO"], "--enable SSO"],
+      [["bugfix", "--", "--enable"], "--enable"],
       [["bugfix", "Fix", "duplicate", "todo", "persistence"], "Fix duplicate todo persistence"],
       [["--scope", "feature", "feature", "flags", "for", "billing"], "feature flags for billing"],
       [["bugfix", "Fix", "duplicate", "todo", "--scope", "mvp"], "bugfix Fix duplicate todo"],
@@ -502,15 +504,20 @@ describe("t198 Branch 8: inference confirm + compose offer", () => {
     expect(state).toContain("- **Plan Approval**: on (set by a command)");
   });
 
-  test("a typed plan approval off is never re-issued by the offer's commands", () => {
+  // The person typed plan approval off with the work they were describing, so
+  // it belongs to the work they pick: every answer the offer names carries it,
+  // and creation takes it from the command (t-flags-next-does-not-take holds
+  // the whole path). Before this it rode only as `on`, and an `off` reached the
+  // new work through the human-turn hook's grant alone.
+  test("a typed plan approval off rides every answer the offer names", () => {
     proj = createTestProject();
     removeWorkspaceRecord(proj);
     const ask = directiveOf(runNext(proj, ["--plan-approval", "off", "Fix the login crash when the session expires"]).out);
     expect(ask.ask_type).toBe("scope-confirm");
-    expect(String(ask.confirm_command)).not.toContain("--plan-approval");
-    expect(String(ask.compose_command)).not.toContain("--plan-approval");
+    expect(String(ask.confirm_command)).toContain("--plan-approval off");
+    expect(String(ask.compose_command)).toContain("--plan-approval off");
     for (const entry of ask.scope_commands as Array<{ scope: string; command: string }>) {
-      expect(entry.command, entry.scope).not.toContain("--plan-approval");
+      expect(entry.command, entry.scope).toContain("--plan-approval off");
     }
   });
 

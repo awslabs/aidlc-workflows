@@ -9,7 +9,6 @@ import { TextDecoder } from "node:util";
 import { inflateSync } from "node:zlib";
 import { dlopen, FFIType, type Pointer } from "bun:ffi";
 import {
-  aidlcDispatcherInvocation,
   aidlcInvocation,
   aidlcToolInvocation,
   entrySkillInvocation,
@@ -1749,7 +1748,10 @@ function terminalCommandFromWorkspaceCommand(
 // matching rules are byte-for-byte the engine's parseNextFlags terminal branches
 // (read-only flag anywhere; workspace verb only at index 0) so the seam and the
 // engine can never disagree about what is terminal.
-export function classifyTerminalCommand(argv: string[], projectDir?: string): TerminalCommand | null {
+// `projectDir` lets a switch be judged against the records there, and
+// `sessionId` names the chat whose selection decides the space (a hook knows
+// its payload's chat; the invoking session is used otherwise).
+export function classifyTerminalCommand(argv: string[], projectDir?: string, sessionId?: string): TerminalCommand | null {
   const args = withoutEntryWord(argv);
   // A SOLE bare `help` / `-h` token is a help REQUEST (terminal, read-only);
   // mirrors parseNextFlags in the engine. Without this the token reads as
@@ -1786,7 +1788,14 @@ export function classifyTerminalCommand(argv: string[], projectDir?: string): Te
     // the shape alone is classified, as the engine's parser does.
     if (workspaceCommand.kind === "switch") {
       if (workspaceCommand.words !== undefined) return null;
-      if (projectDir !== undefined && !workspaceRecordExists(projectDir, workspaceCommand.noun, workspaceCommand.name)) {
+      if (
+        projectDir !== undefined &&
+        !workspaceRecordExists(projectDir, workspaceCommand.noun, workspaceCommand.name, sessionId) &&
+        // A slug several records share stays with the seam: the utility
+        // answers in the chat's own space, naming the record dirs, as it did
+        // before the record check existed.
+        ambiguousWorkspaceRecordDirs(projectDir, workspaceCommand.noun, workspaceCommand.name, sessionId).length < 2
+      ) {
         return null;
       }
     }
@@ -4291,24 +4300,55 @@ export function listIntents(
 function workspaceRecordList(
   projectDir: string,
   noun: WorkspaceNoun,
+  sessionId?: string,
 ): Array<{ name: string; dirName: string | null }> {
   try {
     if (noun === "space") return listSpaces(projectDir).map((space) => ({ name: space.name, dirName: null }));
-    const space = resolveWorkflowSelection(projectDir).space;
+    // The chat's own selection when the caller knows the chat (a hook with the
+    // payload's session); otherwise the invoking session, as the utility
+    // resolves it when the agent runs the switch.
+    const space = resolveWorkflowSelection(projectDir, sessionId ? { sessionId } : {}).space;
     return listIntents(projectDir, space).map((intent) => ({ name: intent.slug, dirName: intent.dirName }));
   } catch {
     return [];
   }
 }
 
-// Whether a name after `intent` or `space` is exactly a record the switch
-// would select: an intent by slug or record dir; a space by name, or by the
+// Whether a name after `intent` or `space` is exactly the record the switch
+// would select, as the utility selects it: an intent by its record dir, or by
+// a slug exactly one record on disk carries (two records with one slug are
+// ambiguous there, so neither is "the" record); a space by name, or by the
 // slug the utility stores it under (`space "My Space"` selects my-space). Any
 // other word is the agent's to read (Branch 1b).
-export function workspaceRecordExists(projectDir: string, noun: WorkspaceNoun, name: string): boolean {
-  const slug = noun === "space" ? slugify(name) : name;
-  return workspaceRecordList(projectDir, noun).some((record) =>
-    record.name === name || record.name === slug || record.dirName === name);
+export function workspaceRecordExists(
+  projectDir: string,
+  noun: WorkspaceNoun,
+  name: string,
+  sessionId?: string,
+): boolean {
+  const records = workspaceRecordList(projectDir, noun, sessionId);
+  if (noun === "space") {
+    const slug = slugify(name);
+    return records.some((record) => record.name === name || record.name === slug);
+  }
+  if (records.some((record) => record.dirName === name)) return true;
+  return records.filter((record) => record.name === name && record.dirName !== null).length === 1;
+}
+
+// The record dirs that share one slug in the selected space, when more than
+// one does: the utility refuses that slug as ambiguous, so the agent is handed
+// the dirs to pick from, or to ask with. Spaces have no such case.
+export function ambiguousWorkspaceRecordDirs(
+  projectDir: string,
+  noun: WorkspaceNoun,
+  name: string,
+  sessionId?: string,
+): string[] {
+  if (noun !== "intent") return [];
+  const dirs = workspaceRecordList(projectDir, noun, sessionId)
+    .filter((record) => record.name === name && record.dirName !== null)
+    .map((record) => record.dirName as string);
+  return dirs.length > 1 ? dirs : [];
 }
 
 // The most recent record names for the noun, newest first, capped, with how
@@ -39863,7 +39903,6 @@ export function parseTypedGuardSwitches(prompt: string): GuardSwitch[] {
 
 export function guardSwitchRefusal(
   wanted: GuardSwitch,
-  context: "config" | "intent-create",
   // The person only asked about the switch since the last decision.
   asked = false,
   projectDir?: string,
@@ -39886,22 +39925,6 @@ export function guardSwitchRefusal(
   // works there is named in place of the chat's.
   const ownTerminal = humanTurnMintAllowed() && personAtOwnTerminal(projectDir);
   const hint = humanTurnMintAllowed() && !ownTerminal ? "" : unattendedHumanPresenceHint(projectDir);
-  // Before the work exists, the person's own words at the compose gate or
-  // scope confirmation are what turn a check off for it. Otherwise the agent
-  // creates the work and then runs the setter itself for what they asked.
-  if (context === "intent-create") {
-    if (wanted.key === "plan-approval") {
-      const setter = renderGuardOperation({ kind: "lower-fence", fence: "plan-approval" }, { harnessDir: harnessDir() });
-      return `Turning plan approval off lets code generation start without the person approving the plan, so it is their call. Create the piece of work without it; when they ask for it in their own words, run \`${setter}\` yourself and say in one line that it is off for this piece of work.${hint}`;
-    }
-    if (wanted.key === "guard-policy") {
-      // The source install runs the utility directly, as the lower-fence setter does.
-      const setter = aidlcInvocation().startsWith("bun ")
-        ? `${aidlcToolInvocation("utility")} config-change --guard-policy ${wanted.value}`
-        : aidlcDispatcherInvocation(`config set guard-policy ${wanted.value}`);
-      return `Creating this intent with Guard Policy ${wanted.value} would lower fences, which is the person's call. Create it, then, when they ask for it in their own words, run \`${setter}\` yourself and say in one line what changed. A scope default applies without asking.${hint}`;
-    }
-  }
   // Lowering a check is the person's call: the setter carries it out when a
   // person has spoken since the last decision, so this refusal means no reply
   // from them has arrived (or an unattended driver is running).
