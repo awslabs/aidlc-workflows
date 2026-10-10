@@ -221,7 +221,13 @@ Session identity follows one order:
 
 1. The host session id delivered to a hook.
 2. A valid `AIDLC_SESSION_OVERRIDE` inherited from the harness process.
-3. On Codex, the `CODEX_THREAD_ID` Codex gives every command it runs.
+3. The chat the host names in the agent's own shell: Codex's `CODEX_THREAD_ID`,
+   Claude Code's `CLAUDE_CODE_SESSION_ID` while the process its `CLAUDE_PID`
+   names is alive, or Kiro CLI's `KIRO_SESSION_ID`. A shell kept open after its
+   chat ended still carries the variable, which is why Claude Code's id is read
+   only while that chat's process is alive; a dead or absent pid leaves it
+   unread. Kiro CLI puts no pid in the shell, so its id stands on its own, as
+   Codex's does. Other harnesses name no chat there.
 4. The nearest live PID ancestry entry.
 5. No session identity.
 
