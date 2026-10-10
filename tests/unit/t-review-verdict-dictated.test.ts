@@ -1,6 +1,6 @@
 // covers: function:handleReview, function:validateReviewAppendix, function:latestReviewerRowAfter,
-// function:reviewCompletionDictated, function:dictatedReviewNotice,
-// subcommand:aidlc-state:gate-start, audit:REVIEW_COMPLETED
+// function:reviewCompletionDictated, function:dictatedReviewNotice, function:handleAuditMerge,
+// subcommand:aidlc-state:gate-start, audit:REVIEW_COMPLETED, audit:REVIEW_VERDICT_DICTATED
 //
 // The reviewer says, in one fixed line of its review file, whether the brief it
 // was given told it what verdict to write or to prefer: `**Verdict Dictated:**
@@ -20,12 +20,13 @@
 
 import {
   NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS,
   NATIVE_STARTUP_TIMEOUT_MS,
   remainingOperationTimeoutMs,
 } from "../harness/test-budget.ts";
 import { afterAll, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import {
   type AuditShardEvent,
@@ -35,18 +36,24 @@ import {
   GUARD_POLICY_FIELD,
   latestReviewerRowAfter,
   readAllAuditShards,
+  readAuditShardEvents,
   REVIEW_DICTATED_FIELD,
   reviewCompletionDictated,
   reviewerCompletionAfter,
   setGuardPolicyLine,
   validateReviewAppendix,
+  worktreePath,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import {
   cleanupTestProject,
   createTestProject,
+  DEFAULT_RECORD_DIR,
+  DEFAULT_SPACE,
   FIXTURES_DIR,
+  fixtureIntentId8,
   REPO_ROOT,
   seedAidlcMemory,
+  seedAuditFile,
   seededRecordDir,
   seededStateFile,
   seedStateFile,
@@ -282,4 +289,49 @@ describe("the pure helpers", () => {
     expect(dictatedReviewNotice("Functional Design", "u2-note-tags"))
       .toBe("The reviewer for Functional Design (u2-note-tags) was told what to conclude before it looked.");
   });
+});
+
+// REVIEW_VERDICT_DICTATED is no longer written, but it stays registered: an
+// audit a person already has may hold a row an earlier release's guard wrote,
+// and the Bolt worktree audit merge refuses a delta with an event it does not
+// know. The row still reads like any other and still merges back.
+describe("a row an earlier release wrote still reads and merges", () => {
+  const BOLT = join(DIST_CLAUDE, "tools", "aidlc-bolt.ts");
+  const bolt = (p: string, args: string[]): { status: number; out: string } => {
+    const r = spawnSync(BUN, [BOLT, ...args, "--project-dir", p], {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+      encoding: "utf-8",
+    });
+    return { status: r.status ?? -1, out: `${r.stdout ?? ""}${r.stderr ?? ""}` };
+  };
+
+  test("a Bolt worktree audit delta carrying REVIEW_VERDICT_DICTATED merges into the main audit and reads back", () => {
+    const p = createTestProject();
+    tempDirs.push(p);
+    seedStateFile(p, join(FIXTURES_DIR, "state-construction.md"));
+    seedAuditFile(p);
+    const slug = "vd1";
+    const wt = worktreePath(p, fixtureIntentId8(p), slug);
+    mkdirSync(wt, { recursive: true });
+    const started = bolt(p, ["start", "--name", "BoltVd1", "--batch", "1", "--worktree", "--slug", slug]);
+    expect(started.status, started.out).toBe(0);
+    // The forked shard inside the worktree mirror, where that release's guard appended its row.
+    const auditDir = join(wt, "aidlc", "spaces", DEFAULT_SPACE, "intents", DEFAULT_RECORD_DIR, "audit");
+    const shard = readdirSync(auditDir).map((name) => join(auditDir, name))
+      .find((file) => readFileSync(file, "utf-8").includes("**Event**: AUDIT_FORKED"));
+    expect(shard).toBeDefined();
+    appendFileSync(
+      shard as string,
+      "\n## Review Verdict Dictated\n**Timestamp**: 2026-10-10T00:00:00Z\n**Event**: REVIEW_VERDICT_DICTATED\n" +
+        `**Agent Type**: ${REVIEWER}\n**Verdict**: READY\n**Tool**: Task\n**Request Id**: review:${"a".repeat(32)}\n\n---\n`,
+      "utf-8",
+    );
+    const merged = bolt(p, ["complete", "--name", "BoltVd1", "--batch", "1", "--merge", "--slug", slug]);
+    expect(merged.status, merged.out).toBe(0);
+    expect(merged.out).not.toContain("unknown event");
+    const rows = blocks(p, "REVIEW_VERDICT_DICTATED");
+    expect(rows).toHaveLength(1);
+    expect(auditBlockField(rows[0], "Verdict")).toBe("READY");
+    expect(readAuditShardEvents(p).some((event) => event.event === "REVIEW_VERDICT_DICTATED")).toBe(true);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 });
