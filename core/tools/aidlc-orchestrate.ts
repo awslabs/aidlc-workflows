@@ -281,6 +281,7 @@ import {
   parseTeamBoardArgs,
   parseWorkspaceCommand,
   nextArgsCarryRequestWords,
+  nextTokenKind,
   READ_ONLY_FLAGS,
   readKiroIdeLegacyPlanApprovalHost,
   readAllAuditShards,
@@ -3876,25 +3877,6 @@ type ConfigSection = (typeof CONFIG_SECTIONS)[number];
 // the front of the description; either way the work is never named after it.
 const ENTRY_WORD_PREFIX = /^[/$]aidlc\s+/i;
 
-/**
- * Whether one argument is flags and their values and nothing else. One quoted
- * argument can hold the whole request, as Kiro IDE's PowerShell hands it over,
- * so a bare word inside it that is not a flag's value makes it the person's
- * sentence: "--help flag for the reverser" is what they asked for, while
- * "--choice=Approve Plan" is one flag and its value. Only the second kind is a
- * token `next` can refuse to take without dropping a word of a request.
- */
-function argumentIsFlagShaped(arg: string): boolean {
-  const tokens = arg.split(/\s+/).filter((token) => token.length > 0);
-  if (tokens.length === 0) return false;
-  for (let index = 0; index < tokens.length; index++) {
-    if (!tokens[index].startsWith("--")) return false;
-    const next = tokens[index + 1];
-    if (next !== undefined && !next.startsWith("-")) index++;
-  }
-  return true;
-}
-
 export function parseNextFlags(argv: string[]): ParsedFlags {
   const args = withoutEntryWord(argv);
   // A SOLE bare `help` / `-h` token is a help REQUEST, not intent text. Without
@@ -4041,7 +4023,34 @@ export function parseNextFlags(argv: string[]): ParsedFlags {
       flags.compose = true;
       continue;
     }
-    if (a === "--resume") {
+    // One rule for every flag-shaped token this engine does not take, wherever
+    // it sits on the line: an argument the agent sent to the wrong command
+    // (`--details`), a name the person misspelt (`--plan-aprroval off` at the
+    // end of their sentence, which means a setting), or a flag they are asking
+    // to have built (`add a --verbose flag`, which means their words). Which
+    // one it is is the person's meaning, and only the agent can read that, so
+    // `next` takes nothing from the line and routeNext says what it could not
+    // take; the agent has their own line in the chat and comes back with `--`
+    // before their words, or with the flag this engine does take. Read as task
+    // text instead, a misspelt setting became part of the work's name while
+    // the check they asked to drop stayed on, and nothing said so.
+    // Which tokens this engine takes is NEXT_FLAGS in aidlc-lib.ts, read here
+    // through nextTokenKind, so a flag missing from that table can never be
+    // taken by the branches below and a harness seam reading a line before any
+    // agent sees it gets the same answer. After the `--` delimiter nothing
+    // reaches here (the loop keeps it as theirs), and one quoted argument
+    // holding a sentence is not flag-shaped, so `--help flag for the reverser`
+    // is still what they asked for.
+    if (nextTokenKind(a, args[i + 1]) === "untaken") {
+      flags.untakenFlag ??= a;
+      wordTokens.push(a);
+      const value = args[i + 1];
+      if (value !== undefined && !value.startsWith("--")) {
+        flags.untakenFlagValue ??= value;
+        wordTokens.push(value);
+        i++;
+      }
+    } else if (a === "--resume") {
       flags.resume = true;
     } else if (a === "--single") {
       flags.single = true;
@@ -4243,29 +4252,6 @@ export function parseNextFlags(argv: string[]): ParsedFlags {
       // the token spells it via the `--` delimiter.
       flags.retiredFlags ??= [];
       flags.retiredFlags.push(a);
-    } else if (argumentIsFlagShaped(a)) {
-      // One rule for every flag-shaped token this engine does not take, wherever
-      // it sits on the line: an argument the agent sent to the wrong command
-      // (`--details`), a name the person misspelt (`--plan-aprroval off` at the
-      // end of their sentence, which means a setting), or a flag they are asking
-      // to have built (`add a --verbose flag`, which means their words). Which
-      // one it is is the person's meaning, and only the agent can read that, so
-      // `next` takes nothing from the line and routeNext says what it could not
-      // take; the agent has their own line in the chat and comes back with `--`
-      // before their words, or with the flag this engine does take. Read as task
-      // text instead, a misspelt setting became part of the work's name while
-      // the check they asked to drop stayed on, and nothing said so.
-      // After the `--` delimiter nothing reaches here (the loop keeps it as
-      // theirs), and one quoted argument holding a sentence is not flag-shaped,
-      // so `--help flag for the reverser` is still what they asked for.
-      flags.untakenFlag ??= a;
-      wordTokens.push(a);
-      const value = args[i + 1];
-      if (value !== undefined && !value.startsWith("--")) {
-        flags.untakenFlagValue ??= value;
-        wordTokens.push(value);
-        i++;
-      }
     } else {
       // Among the person's own words a flag-shaped token is one of their words,
       // never noise (#847). Use the standard `--` delimiter when a task must
