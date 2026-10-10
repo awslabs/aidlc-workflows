@@ -1026,6 +1026,17 @@ every case where a record, a session id or a file is missing or unreadable. The 
 `aidlc/.aidlc-sessions/<session>.rules-held.json`, `.rules-delivered.json` and,
 on Kiro IDE, `.turn-open`.
 
+A delivery counts only when the reply could reach the agent whole. On Kiro IDE,
+the engine records a delivery as it prints the step, so a `next` or `continue`
+whose stdout the agent sent elsewhere (a pipe into any program, a `$(...)` or
+backtick capture, a `$x = ...` assignment, a discarded stream) would still be
+on record. The guard card notes every shell call it lets through, and the next
+card (catch-up, which stands in for Kiro's missing after-command card) reads
+that command's shape with the same parser the file-redirect refusal uses and
+forgets what the chat's last step named (`forgetRulesDelivered`), so the chat's
+next step carries the text again, once. Nothing is refused and nothing is shown;
+a redirect to a file is still refused before it runs (see the Kiro IDE guide).
+
 A harness whose host keeps less of one shell result declares a smaller budget as
 `directiveMaxBytes` in its `tools/data/harness.json`, and every directive stays
 at or under it. Copilot declares 19,000 bytes: VS Code's `run_in_terminal` tool
