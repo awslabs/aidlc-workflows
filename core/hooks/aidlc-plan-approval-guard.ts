@@ -84,7 +84,6 @@ import {
   guardStoodAsideLine,
   harnessDir,
   normalizeDriveLetter,
-  openReviewRequests,
   recordGuardStoodAside,
   hooksHealthDir,
   writeHookStatusFile,
@@ -110,7 +109,6 @@ import {
   resolveProjectFlag,
   resolveProjectDirFromHook,
   resolveWorkflowSelection,
-  reviewSectionVerdict,
   SKELETON_STANCES,
   stateFilePath,
   worktreesDir,
@@ -496,6 +494,22 @@ export function appendixBlockReason(mentioned: string[]): string {
   );
 }
 
+// The last clause of a refusal that waits on the plan: what `next` does with
+// it. With plan approval on, next asks the person. With it off for this work,
+// next starts the build without asking anyone, so the clause says that and
+// tells the agent not to ask for an approval nobody wants. The agent repeats
+// these words to the person, so the clause names no engine part and no
+// switch: the command it follows is already named once, and "it" is enough.
+function nextAfterPlanClause(planApprovalOff: boolean, handsOver: boolean): string {
+  if (planApprovalOff) {
+    return "plan approval is off for this work, so it starts the build without asking anyone; " +
+      "do not ask the person to approve the plan.";
+  }
+  return handsOver
+    ? "the engine asks the person to approve the plan, and the `next` after their answer hands over the build."
+    : "the engine asks the person to approve it before any code is written.";
+}
+
 // The block reason handed back to the conductor through the harness's
 // PreToolUse error channel. Self-explaining and redirecting: it names the
 // missing evidence and the exact stage steps that produce it, so the
@@ -504,6 +518,7 @@ export function blockReason(
   mentioned: string[],
   detail: string | null = null,
   targets: BriefTargets | null = null,
+  planApprovalOff = false,
 ): string {
   const scope =
     mentioned.length === 1
@@ -516,8 +531,7 @@ export function blockReason(
   return (
     `Code generation cannot start for ${scope} because its plan and test instructions are ` +
     `not approved yet.${detail ? ` Reason: ${detail.replace(/\.+$/, "")}.` : ""} Finish code-generation-plan.md and ` +
-    `unit-test-instructions.md, then run ${nextOnItsOwn()}: the engine asks the person to ` +
-    `approve the plan, and the \`next\` after their answer hands over the build. Then hand the ` +
+    `unit-test-instructions.md, then run ${nextOnItsOwn()}: ${nextAfterPlanClause(planApprovalOff, true)} Then hand the ` +
     `developer the output of ${briefCommand(mentioned, targets)} first, as printed: it names the one ` +
     "target and its Testing Contract."
   );
@@ -568,6 +582,7 @@ export function mutationBlockReason(
   unit: string | null,
   opaqueShell = false,
   detail: string | null = null,
+  planApprovalOff = false,
 ): string {
   const scope = unit === null ? "the zero-Unit stage-level implementation" : `unit ${unit}`;
   const action = opaqueShell
@@ -577,8 +592,7 @@ export function mutationBlockReason(
     `Code generation cannot ${action} for ${scope} because ` +
     `the plan, unit-test instructions, and current Testing Contract do not have a current ` +
     `matching approval.${detail ? ` Reason: ${detail.replace(/\.+$/, "")}.` : ""} Writes inside the selected code-generation record directory remain ` +
-    `available for planning. When the plan is ready, run ${nextOnItsOwn()}: the engine asks ` +
-    `the person to approve it before any code is written.`
+    `available for planning. When the plan is ready, run ${nextOnItsOwn()}: ${nextAfterPlanClause(planApprovalOff, false)}`
   );
 }
 
@@ -2313,56 +2327,6 @@ async function mutationIntent(
 
 // --- Main ---------------------------------------------------------------------
 
-// The one dispatch the hook records rather than judges: a brief handed to the
-// reviewer of an open review request that already reads as a verdict (the
-// engine's own verdict reader finds a rendered `**Verdict:** READY|NOT-READY`
-// line; the knowledge template's `READY | NOT-READY` line is not one). The row
-// names the reviewer, the verdict, the tool, and the open requests whose
-// review file the brief names (every open request of that reviewer when it
-// names none). Evidence only: a ledger that cannot be read or locked leaves
-// nothing behind, and the dispatch goes through either way.
-function recordDictatedReviewerDispatch(projectDir: string, parsed: ClaudeCodeHookInput): void {
-  try {
-    const toolName = parsed.tool_name ?? "";
-    if (!DISPATCH_TOOLS.has(toolName)) return;
-    const toolInput = parsed.tool_input ?? {};
-    const reviewer = typeof toolInput.subagent_type === "string" ? toolInput.subagent_type.trim() : "";
-    if (reviewer === "" || reviewer === GUARDED_AGENT) return;
-    const prompt = [toolInput.prompt, toolInput.description]
-      .filter((value): value is string => typeof value === "string")
-      .join("\n");
-    const verdict = reviewSectionVerdict(prompt);
-    if (verdict === null) return;
-    if (!existsSync(auditFilePath(projectDir))) return;
-    const open = openReviewRequests(readAuditShardEvents(projectDir))
-      .filter((request) => request.reviewer === reviewer);
-    if (open.length === 0) return;
-    const pasted = prompt.replaceAll("\\", "/");
-    const named = open.filter((request) => pasted.includes(request.reviewFile));
-    const requests = named.length > 0 ? named : open;
-    if (!acquireAuditLock(projectDir, 5, 50)) {
-      recordHookDrop(projectDir, HOOK_NAME, "audit lock contended; REVIEW_VERDICT_DICTATED row dropped");
-      return;
-    }
-    try {
-      appendAuditEntryUnlocked(
-        "REVIEW_VERDICT_DICTATED",
-        {
-          "Agent Type": reviewer,
-          Verdict: verdict,
-          Tool: toolName,
-          "Request Id": requests.map((request) => request.requestId).join(", "),
-        },
-        projectDir,
-      );
-    } finally {
-      releaseAuditLock(projectDir);
-    }
-  } catch (e) {
-    recordHookDrop(projectDir, HOOK_NAME, `reviewer dispatch verdict not recorded: ${errorMessage(e)}`);
-  }
-}
-
 // The off-switch is deterministic but no longer silent: while a workflow exists,
 // the first tool call that passes under it appends one GUARD_DISABLED row, and
 // consecutive calls append nothing until some other row lands in the active
@@ -2458,12 +2422,6 @@ async function evaluate(
   } catch {
     // Heartbeat failure is non-fatal - never let it affect the decision.
   }
-
-  // A reviewer dispatch whose brief already carries the verdict is recorded,
-  // never refused (the line may be the person's): `log review --verdict` reads
-  // the row and marks a verdict the reviewer then wrote as told, and the gate
-  // says so once. A record, not a fence: it stands before the off-switch.
-  recordDictatedReviewerDispatch(projectDir, parsed);
 
   // Deterministic off-switch: the Plan Approval fence is disabled, recorded once.
   if (resolveProjectFlag("AIDLC_DISABLE_PLAN_APPROVAL_GUARD") === "1") {
@@ -2853,6 +2811,20 @@ async function evaluate(
   // plan is asked about again by `next`, and the reason says so. The same words
   // refuse with the fence on and, where a lowered fence still refuses, with it
   // off; `detail` is then the evaluator's reason for the target it could not start.
+  // The last clause says what `next` does with the plan: with plan approval off
+  // for this work it starts the build without asking anyone, and a refusal that
+  // says the person will be asked is a wrong line the agent repeats to them. The
+  // setting is read only when refusing, off the path every other call takes; a
+  // setting that cannot be read keeps the asking wording, which is the stop's own.
+  let planApprovalOff = false;
+  if (verdict.block && !authorityFailure) {
+    try {
+      const { resolvePlanApprovalSetting } = await import("../tools/aidlc-guard-switch.ts");
+      planApprovalOff = resolvePlanApprovalSetting(projectDir, state).value === "off";
+    } catch {
+      planApprovalOff = false;
+    }
+  }
   const refusalProse = (detail: string | null): string =>
     authorityFailure
       ? authorityBlockReason(authorityFailure, standing, asked)
@@ -2861,12 +2833,13 @@ async function evaluate(
           blockedMutation.unit,
           blockedMutation.opaqueShell,
           detail ?? blockedMutation.detail,
+          planApprovalOff,
         )
       : verdict.appendixInBrief
       ? appendixBlockReason(verdict.mentioned)
       : handoffDefect
       ? handoffBlockReason(verdict.mentioned, handoffDefect, briefTargets)
-      : blockReason(verdict.mentioned, detail ?? receiptDetail(units, verdict.mentioned), briefTargets);
+      : blockReason(verdict.mentioned, detail ?? receiptDetail(units, verdict.mentioned), briefTargets, planApprovalOff);
 
   // The rules still arriving is about the delivery, not the plan, so it holds
   // under every Guard Policy and is said on its own: a lowered fence has

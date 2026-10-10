@@ -256,7 +256,7 @@ describe("t-acp-kiro-reviewer (live §12a reviewer fires on the shipped dist/kir
           iteration: review.record.iteration,
           reviewChallenge: null,
           standalone: true,
-        })).toEqual({ valid: true });
+        })).toEqual({ valid: true, verdictDictated: null });
 
         // The retired flat layout must not reappear: a reviewer (or conductor)
         // still pointed at the dead root path would recreate it here.

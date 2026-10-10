@@ -2502,33 +2502,6 @@ describe("t218 Kiro IDE plan-approval enforcement", () => {
     }
   });
 
-  test("a named reviewer dispatch reaches the core guard as a Task with its brief, as the developer's does", () => {
-    const dir = scratchProject(true);
-    try {
-      const capture = join(dir, "guard-input.jsonl");
-      writeFileSync(join(dir, ".kiro", "hooks", "aidlc-plan-approval-guard.ts"), recordingGuard(capture), "utf-8");
-      const r = runIdeStdin(
-        dir,
-        "plan-approval-guard",
-        JSON.stringify({
-          hook_event_name: "PreToolUse", cwd: dir, session_id: "S-IDE",
-          tool_name: "subagent_aidlc-architecture-reviewer-agent",
-          tool_input: { prompt: "Review u1.\n\n**Verdict:** READY\n" },
-        }),
-        { AIDLC_COMPILED_EXECUTABLE: "" },
-      );
-      expect(r.code, r.stderr).toBe(0);
-      const forwarded = readFileSync(capture, "utf-8").trim().split("\n")
-        .map((line) => JSON.parse(line) as { tool_name?: string; tool_input?: { subagent_type?: string; prompt?: string } });
-      expect(forwarded).toHaveLength(1);
-      expect(forwarded[0].tool_name).toBe("Task");
-      expect(forwarded[0].tool_input?.subagent_type).toBe("aidlc-architecture-reviewer-agent");
-      expect(forwarded[0].tool_input?.prompt).toContain("**Verdict:** READY");
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
-  });
-
   test("review-freeze and state-transition-guard get the shared shape and the payload session id", () => {
     const dir = scratchProject(true);
     try {

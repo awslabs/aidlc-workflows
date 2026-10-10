@@ -823,11 +823,9 @@ switch (target) {
       return 0;
     }
     const spawnInput: CodexSpawnAgentInput = codex.tool_input ?? {};
-    // Every named dispatch goes to the core guard, which judges only the
-    // developer's and records a reviewer brief that already carries its verdict.
     const target =
       typeof spawnInput.agent_type === "string" ? spawnInput.agent_type : "";
-    if (target === "") {
+    if (target !== "aidlc-developer-agent") {
       persistResponse("", 0);
       return 0;
     }

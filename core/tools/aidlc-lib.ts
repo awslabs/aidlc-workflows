@@ -16388,7 +16388,11 @@ export function reviewArtifactFingerprint(
  * issued one), with no later rendered H1 or H2. `appendix` is the terminal
  * `## Review` section of a legacy embedded review and must open with that
  * heading; a review record body (`standalone`) is the same section with the
- * heading optional, because it is the whole document.
+ * heading optional, because it is the whole document. A valid review also
+ * carries the reviewer's own `**Verdict Dictated:**` answer, read the same way
+ * (`verdictDictated`): `yes` or `no` when the section renders exactly one such
+ * value, else null. The line is the reviewer's statement, never authority: a
+ * missing, doubled or unreadable one refuses nothing.
  */
 export function validateReviewAppendix(
   appendix: Buffer,
@@ -16399,7 +16403,7 @@ export function validateReviewAppendix(
     reviewChallenge: string | null;
     standalone?: boolean;
   },
-): { valid: true } | { valid: false; reason: string; heading?: true } {
+): { valid: true; verdictDictated: ReviewVerdictDictated | null } | { valid: false; reason: string; heading?: true } {
   let text: string;
   try {
     text = new TextDecoder("utf-8", { fatal: true }).decode(appendix);
@@ -16494,7 +16498,14 @@ export function validateReviewAppendix(
           : "the reviewer appendix must contain exactly one Request Challenge line matching the request",
     };
   }
-  return { valid: true };
+  // The reviewer's own answer, as written: one rendered value that is `yes` or
+  // `no` (repeated word for word is one line, as above); anything else is no
+  // answer. Structure only: what the brief meant is the reviewer's reading.
+  const dictated = distinct(authority.verdictDictated);
+  const verdictDictated = dictated.length === 1 && (dictated[0] === "yes" || dictated[0] === "no")
+    ? (dictated[0] as ReviewVerdictDictated)
+    : null;
+  return { valid: true, verdictDictated };
 }
 
 type RenderedReviewAuthority = {
@@ -16506,6 +16517,7 @@ type RenderedReviewAuthority = {
   reviewers: string[];
   iterations: string[];
   requestChallenges: string[];
+  verdictDictated: string[];
 };
 
 const REVIEW_MARK_OPEN = "\u0001";
@@ -16595,6 +16607,7 @@ function renderReviewMarkdownAuthority(
     reviewers: renderedReviewFields(rendered, "Reviewer"),
     iterations: renderedReviewFields(rendered, "Iteration"),
     requestChallenges: renderedReviewFields(rendered, "Request Challenge"),
+    verdictDictated: renderedReviewFields(rendered, "Verdict Dictated"),
   };
 }
 
@@ -17632,26 +17645,6 @@ export function reviewerCompletionAfter(
   return latestReviewerRowAfter(events, "SUBAGENT_COMPLETED", reviewer, after);
 }
 
-/** The row the plan-approval guard writes when a reviewer dispatch's brief already carries a rendered verdict line. */
-export const REVIEW_VERDICT_DICTATED_EVENT = "REVIEW_VERDICT_DICTATED";
-
-/**
- * Whether a REVIEW_VERDICT_DICTATED row of `reviewer`, written after this
- * request's row and naming its id, carried `verdict`: the verdict being recorded
- * is the one the dispatch dictated. A row naming another request, an earlier
- * row, or the other verdict is not.
- */
-export function dispatchDictatedVerdict(
-  events: ReadonlyArray<AuditShardEvent>,
-  reviewer: string,
-  request: OpenReviewRequest,
-  verdict: ReviewVerdict,
-): boolean {
-  const row = latestReviewerRowAfter(events, REVIEW_VERDICT_DICTATED_EVENT, reviewer, request.row, (candidate) =>
-    (auditBlockField(candidate.block, "Request Id") ?? "").split(",").map((id) => id.trim()).includes(request.requestId));
-  return row !== null && auditBlockField(row.block, "Verdict") === verdict;
-}
-
 /** The SUBAGENT_COMPLETED field carrying `<review file>=<sha256 | absent>` per open request. */
 export const REVIEW_FILE_DIGEST_FIELD = "Review File Digest";
 /** The digest value of a review file the reviewer left unwritten. */
@@ -18006,10 +17999,15 @@ export function editedReviewNotice(stageName: string, unit?: string | null): str
   return `The review file for ${stageName}${unit ? ` (${unit})` : ""} was edited after the reviewer finished.`;
 }
 
-/** The REVIEW_COMPLETED field the logger writes, as `yes`, when the verdict it
- *  records is the one the reviewer's dispatch already carried (a
- *  REVIEW_VERDICT_DICTATED row for this request with that verdict): the verdict
- *  is on record as the dispatch's, not as the reviewer's own judgement. */
+/** The reviewer's own answer to whether its brief told it what to conclude:
+ *  the value of its review file's `**Verdict Dictated:**` line. */
+export type ReviewVerdictDictated = "yes" | "no";
+
+/** The REVIEW_COMPLETED field the logger writes with the reviewer's own
+ *  `**Verdict Dictated:**` answer as written (`yes` or `no`). `yes` puts the
+ *  verdict on record as one the brief named, not the reviewer's own judgement
+ *  alone; the person hears that once. No line, or one that does not read as a
+ *  single `yes` or `no`, writes no field. */
 export const REVIEW_DICTATED_FIELD = "Review Verdict Dictated";
 
 /** Whether a REVIEW_COMPLETED row records a verdict its dispatch dictated. Read

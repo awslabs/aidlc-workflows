@@ -125,7 +125,6 @@ import {
   editedReviewNotice,
   REVIEW_EDITED_FIELD,
   dictatedReviewNotice,
-  dispatchDictatedVerdict,
   REVIEW_DICTATED_FIELD,
   recordFileTargetOrThrow,
   relativeRecordDir,
@@ -4146,19 +4145,6 @@ function handleReview(args: string[]): void {
             verdictChangeNotices.push(notice);
           }
         }
-        // The verdict the reviewer's dispatch already carried (a rendered
-        // verdict line in its brief, recorded by the plan-approval guard as
-        // REVIEW_VERDICT_DICTATED) is not the reviewer's own judgement when the
-        // reviewer wrote that same verdict: the row says so, and the person
-        // hears it once (with the verdict here; at the gate under strict). A
-        // reviewer that wrote the other verdict judged for itself: nothing.
-        if (
-          request !== undefined &&
-          dispatchDictatedVerdict(events, flags.reviewer, request, verdict as ReviewVerdict)
-        ) {
-          fields[REVIEW_DICTATED_FIELD] = "yes";
-          verdictChangeNotices.push(dictatedReviewNotice(node.name, flags.unit));
-        }
       }
       let reviewBytes = body ?? snapshot.appendix;
       if (!incompleteFallback) {
@@ -4192,6 +4178,17 @@ function handleReview(args: string[]): void {
           refuseReview(
             `Refusing REVIEW_COMPLETED for "${flags.stage}": ${validity.reason}.`,
           );
+        }
+        // The reviewer's own answer to whether its brief told it what to
+        // conclude, recorded as written. `yes` is not the reviewer's judgement
+        // alone, and the person hears that once (with the verdict here; at the
+        // gate under strict). The reviewer read its brief for that; the tool
+        // reads only the line, and a missing or unreadable one records nothing.
+        if (validity.verdictDictated !== null) {
+          fields[REVIEW_DICTATED_FIELD] = validity.verdictDictated;
+          if (validity.verdictDictated === "yes") {
+            verdictChangeNotices.push(dictatedReviewNotice(node.name, flags.unit));
+          }
         }
       }
 

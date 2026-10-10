@@ -475,6 +475,48 @@ describe("t265a plan-approval decision table", () => {
     }
     expect(mutationBlockReason(null, false)).toContain("Code generation cannot modify workspace paths");
   });
+
+  // With plan approval off, `next` records the plan as built and starts the
+  // build without asking anyone, so a refusal that says the person will be
+  // asked is a wrong line the agent repeats to them. The clause names what
+  // next does and no switch (a refusal never offers to flip a setting).
+  test("with plan approval off, both refusals say next starts the build without asking, never that the person is asked", () => {
+    for (const reason of [mutationBlockReason(null, false, null, true), blockReason(["todo-core"], null, null, true)]) {
+      expect(reason).toContain("plan approval is off for this work, so it starts the build without asking anyone");
+      expect(reason).toContain("do not ask the person to approve the plan");
+      expect(reason).not.toContain("asks the person");
+      expect(reason).not.toContain("plan-approval off");
+    }
+    expect(mutationBlockReason(null, false)).toContain("the engine asks the person to approve it before any code is written");
+    expect(blockReason(["todo-core"])).toContain("the engine asks the person to approve the plan");
+  });
+
+  test("the shipped hook under plan approval off: a code write or a developer dispatch before next gets the off clause", () => {
+    for (const plan of [false, true]) {
+      const proj = scratchProject();
+      try {
+        seedState(proj, { planApproval: "off" });
+        seedUnit(proj, null, { plan, answer: null });
+        const refused = runHook(proj, WRITE(join(proj, "src", "x.ts")));
+        expect(refused.code, `plan=${plan}: ${refused.stderr}`).toBe(2);
+        expect(refused.stderr).toContain("plan approval is off for this work, so it starts the build without asking anyone");
+        expect(refused.stderr).not.toContain("asks the person");
+        expect(refused.stderr).not.toContain("ask the person to approve it");
+        if (plan) {
+          // The evaluator's reason on the same line says what to do and nothing false.
+          expect(refused.stderr).toContain("the plan is not approved yet; run next.");
+          const dispatched = runHook(proj, STAGE_DISPATCH(proj, "Build it."));
+          expect(dispatched.code, dispatched.stderr).toBe(2);
+          expect(dispatched.stderr).toContain("plan approval is off for this work, so it starts the build without asking anyone");
+          expect(dispatched.stderr).not.toContain("asks the person");
+        } else {
+          expect(refused.stderr).toContain("code-generation-plan.md is missing or empty");
+        }
+      } finally {
+        rmSync(proj, { recursive: true, force: true });
+      }
+    }
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -524,7 +566,12 @@ function scratchProject(): string {
     "aidlc-runtime-paths.ts",
     "aidlc-runtime-budget.ts",
     "aidlc-guard-fences.ts",
+    // The hook reads the plan approval setting when it refuses (the setting
+    // decides the refusal's last clause); the setting resolver and what it imports.
     "aidlc-guard-switch.ts",
+    "aidlc-question-store.ts",
+    "aidlc-recorded-switches.ts",
+    "aidlc-model-policy.ts",
     "aidlc-guard-operation.ts",
     "aidlc-reply-reader.ts",
     "aidlc-audit.ts",
@@ -561,11 +608,13 @@ function scratchProject(): string {
   return dir;
 }
 
-function seedState(proj: string, fields: { stage?: string; autonomy?: string } = {}): void {
+function seedState(proj: string, fields: { stage?: string; autonomy?: string; planApproval?: "off" } = {}): void {
   const stage = fields.stage ?? "code-generation";
   const autonomy = fields.autonomy
     ? `- **Construction Autonomy Mode**: ${fields.autonomy}\n`
     : "";
+  // The person's setting as the engine writes it: plans build without asking.
+  const planApproval = fields.planApproval ? "- **Plan Approval**: off (from scope poc)\n" : "";
   writeFileSync(
     join(proj, RECORD_REL, "aidlc-state.md"),
     `# AI-DLC State Tracking
@@ -573,7 +622,7 @@ function seedState(proj: string, fields: { stage?: string; autonomy?: string } =
 ## Project Information
 - **Project**: t265 fixture
 - **Scope**: poc
-${autonomy}
+${planApproval}${autonomy}
 ## Current Status
 - **Lifecycle Phase**: CONSTRUCTION
 - **Current Stage**: ${stage}
@@ -3053,7 +3102,7 @@ describe("t265b hook lifecycle", () => {
       // The documented numbered form is read; the section note is not printed.
       writeFileSync(questionsPath, `## Q1: Plan Approval\n\n${tags.join("\n")}\n\n[Answer]:\n`);
       expect(evaluateCodeGenerationApproval(proj, { unit: null }).reason).toBe(
-        "the plan is not approved yet; run next to ask the person to approve it",
+        "the plan is not approved yet; run next",
       );
       expect(fingerprint().stderr).not.toContain("no Plan Approval section yet");
 
